@@ -30,7 +30,7 @@ pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
 }
 
 fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
-    let rows = match &app.main_page().tab {
+    let rows = match &app.main_page().now_tab {
         MainPageTab::PlayList(state) => zebra_rows(&state.items, &app.colors),
         MainPageTab::FavoriteAlbum(state) => zebra_rows(&state.items, &app.colors),
         MainPageTab::FavoriteArtist(state) => zebra_rows(&state.items, &app.colors),
@@ -55,7 +55,7 @@ fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
         .rows(rows)
         .widths(vec![Constraint::Percentage(60), Constraint::Percentage(40)]);
 
-    let mut table_state = TableState::default().with_selected(app.get_main_tab_selected());
+    let mut table_state = TableState::default().with_selected(app.get_main_tab_selected_index());
 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
@@ -85,40 +85,36 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
         Constraint::Percentage(100),
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
-    frame.render_stateful_widget(StatefulImage::default(), cover_area, &mut cache.image[0]);
+    let now_tab = &app.main_page().now_tab;
+    match now_tab.get_selected_id() {
+        Some(id) => {
+            let tried_cached_image = match now_tab {
+                MainPageTab::PlayList(_) => cache.get_playlist_cover(id),
+                MainPageTab::FavoriteAlbum(_) => cache.get_album_cover(id),
+                MainPageTab::FavoriteArtist(_) => cache.get_artist_cover(id),
+            };
+            if let Some(cached_image) = tried_cached_image {
+                // 如果缓存中有图片，直接使用
+                frame.render_stateful_widget(StatefulImage::default(), cover_area, cached_image);
+            }
+        }
+        None => {}
+    };
 
     // 歌曲摘要渲染
-    if let MainPageTab::PlayList(state) = &app.main_page().tab {
-        if let Some(selected) = state.selected {
-            let playlist = &state.items[selected];
-            // 假设 PlayList 有 songs 字段
-            let song_lines: Vec<_> = playlist
-                .songs
-                .iter()
-                .take(10) // 只显示前10首
-                .enumerate()
-                .map(|(i, song)| {
-                    format!(
-                        "{:02}. {} - {} [{}]",
-                        i + 1,
-                        song.title,
-                        song.artist,
-                        format_duration(song.duration)
-                    )
-                })
-                .collect();
-
-            let text = ratatui::text::Text::from(song_lines.join("\n"));
-            let paragraph = ratatui::widgets::Paragraph::new(text)
-                .block(Block::default().title("歌曲列表").borders(Borders::ALL))
-                .wrap(ratatui::widgets::Wrap { trim: true });
-
-            frame.render_widget(paragraph, list_area);
-        }
-    }
-}
-
-// 辅助函数：格式化秒为 mm:ss
-fn format_duration(secs: u32) -> String {
-    format!("{:02}:{:02}", secs / 60, secs % 60)
+    let rows = app.get_selected_detail();
+    let table = Table::default()
+        .rows(rows)
+        .block(
+            Block::default()
+                .title(" 歌曲列表 ")
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .widths(vec![
+            Constraint::Percentage(20),
+            Constraint::Percentage(40),
+            Constraint::Percentage(40),
+        ]);
+    frame.render_widget(table, list_area);
 }

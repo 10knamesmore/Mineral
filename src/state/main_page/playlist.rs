@@ -4,7 +4,10 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
-use crate::state::{selectable::Selectable, song::Song};
+use crate::state::{
+    selectable::Selectable,
+    song::{Song, SongList},
+};
 
 pub(crate) struct PlayListState {
     pub(crate) items: Vec<PlayList>,    // 列表数据
@@ -14,9 +17,8 @@ pub(crate) struct PlayListState {
 pub(crate) struct PlayList {
     pub(crate) name: String,
     pub(crate) track_count: usize,
-    pub(crate) cover_path: String,
     pub(crate) songs: Vec<Song>,
-    // 可加 id, 创建时间等
+    pub(crate) id: u64, // 可加 id, 创建时间等
 }
 
 impl Selectable for PlayListState {
@@ -50,5 +52,11 @@ impl<'a> From<&'a PlayList> for Row<'a> {
             Cell::from(left),
             Cell::from(right).style(Style::default()),
         ])
+    }
+}
+
+impl SongList for PlayList {
+    fn get_song_list(&self) -> &[Song] {
+        &self.songs
     }
 }

@@ -1,4 +1,4 @@
-use app::App;
+use app::{App, data_generator};
 use std::io::Result;
 
 mod app;
@@ -10,7 +10,8 @@ mod util;
 fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     // let res = App::default().run(&mut terminal);
-    let res = app::test_data().test_run(&mut terminal);
+    //
+    let res = data_generator::test_struct_app().test_run(&mut terminal);
     ratatui::restore();
 
     res

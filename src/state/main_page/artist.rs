@@ -4,7 +4,10 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
-use crate::state::selectable::Selectable;
+use crate::state::{
+    selectable::Selectable,
+    song::{Song, SongList},
+};
 
 pub(crate) struct ArtistListState {
     pub(crate) items: Vec<Artist>,
@@ -15,6 +18,8 @@ pub(crate) struct Artist {
     pub(crate) name: String,
     pub(crate) followers: u32,
     pub(crate) cover_path: String,
+    pub(crate) songs: Vec<Song>,
+    pub(crate) id: u64,
 }
 
 impl Selectable for ArtistListState {
@@ -54,5 +59,11 @@ impl<'a> From<&'a Artist> for Row<'a> {
         )));
 
         Row::new(vec![name_cell, followers_cell])
+    }
+}
+
+impl SongList for Artist {
+    fn get_song_list(&self) -> &[Song] {
+        &self.songs
     }
 }

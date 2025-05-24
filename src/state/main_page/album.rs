@@ -5,7 +5,10 @@ use ratatui::{
 };
 use std::vec;
 
-use crate::state::selectable::Selectable;
+use crate::state::{
+    selectable::Selectable,
+    song::{Song, SongList},
+};
 
 pub(crate) struct AlbumListState {
     pub(crate) items: Vec<Album>,
@@ -18,6 +21,8 @@ pub(crate) struct Album {
     pub(crate) song_num: u32,
     pub(crate) title: String,
     pub(crate) year: u32,
+    pub(crate) id: u64,
+    pub(crate) songs: Vec<Song>,
 }
 
 impl Selectable for AlbumListState {
@@ -56,5 +61,11 @@ impl<'a> From<&'a Album> for Row<'a> {
             Cell::from(left),
             Cell::from(right).style(Style::default()),
         ])
+    }
+}
+
+impl SongList for Album {
+    fn get_song_list(&self) -> &[Song] {
+        &self.songs
     }
 }
