@@ -1,4 +1,3 @@
-pub(crate) mod detailed;
 pub(crate) mod main_page;
 pub(crate) mod selectable;
 pub(crate) mod song;

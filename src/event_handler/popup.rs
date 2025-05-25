@@ -13,7 +13,7 @@ pub(super) fn handle_confirm_exit(app: &mut App, event: Event) {
                 }
             }
         }
-        Event::Mouse(mouse_event) => {
+        Event::Mouse(_) => {
             todo!("可能会允许鼠标点击退出")
         }
         Event::Resize(_, _) => {

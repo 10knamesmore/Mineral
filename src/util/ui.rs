@@ -2,15 +2,11 @@ use ratatui::{style::Style, widgets::Row};
 
 use crate::app::TableColors;
 
-pub(crate) fn zebra_rows<'a, T>(items: &'a [T], colors: &TableColors) -> Vec<Row<'a>>
-where
-    &'a T: Into<Row<'a>>,
-{
+pub(crate) fn zebra_rows<'a>(items: Vec<Row<'a>>, colors: &TableColors) -> Vec<Row<'a>> {
     items
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(index, item)| {
-            let row: Row = item.into();
+        .map(|(index, row)| {
             let bg_color = if index % 2 == 0 {
                 colors.normal_row_color
             } else {

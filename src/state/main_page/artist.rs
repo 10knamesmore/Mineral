@@ -1,40 +1,16 @@
+use crate::state::song::{Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{Cell, Row},
 };
 
-use crate::state::{
-    selectable::Selectable,
-    song::{Song, SongList},
-};
-
-pub(crate) struct ArtistListState {
-    pub(crate) items: Vec<Artist>,
-    pub(crate) selected: Option<usize>,
-}
-
+#[derive(Debug, Default)]
 pub(crate) struct Artist {
     pub(crate) name: String,
     pub(crate) followers: u32,
-    pub(crate) cover_path: String,
     pub(crate) songs: Vec<Song>,
     pub(crate) id: u64,
-}
-
-impl Selectable for ArtistListState {
-    type Item = Artist;
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.selected
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = Some(index);
-    }
 }
 
 fn format_follower_count(followers: u32) -> String {

@@ -1,39 +1,16 @@
+use crate::state::song::{Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Cell, Row},
 };
 
-use crate::state::{
-    selectable::Selectable,
-    song::{Song, SongList},
-};
-
-pub(crate) struct PlayListState {
-    pub(crate) items: Vec<PlayList>,    // 列表数据
-    pub(crate) selected: Option<usize>, // 当前选中项
-}
-
+#[derive(Debug, Default)]
 pub(crate) struct PlayList {
     pub(crate) name: String,
     pub(crate) track_count: usize,
     pub(crate) songs: Vec<Song>,
     pub(crate) id: u64, // 可加 id, 创建时间等
-}
-
-impl Selectable for PlayListState {
-    type Item = PlayList;
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.selected
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = Some(index);
-    }
 }
 
 impl<'a> From<&'a PlayList> for Row<'a> {

@@ -1,8 +1,4 @@
 use derive_setters::Setters;
-use ratatui::{
-    layout::Alignment,
-    text::{Line, Text},
-};
 
 #[derive(Default, Debug)]
 pub(crate) enum NotifyUrgency {

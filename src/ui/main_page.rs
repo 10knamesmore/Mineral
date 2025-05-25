@@ -1,17 +1,16 @@
 use super::components::render_playback_control;
-use crate::app::{App, RenderCache};
-use crate::state::main_page::MainPageTab;
-use crate::util::layout::{aspect_fit_center, center};
-use crate::util::ui::zebra_rows;
-use ratatui::layout::Margin;
-use ratatui::style::Stylize;
+use crate::{
+    app::{App, RenderCache},
+    state::main_page::MainPageTab,
+    util::{layout::center, ui::zebra_rows},
+};
 use ratatui::{
     Frame,
-    layout::{self, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, HighlightSpacing, Row, Table, TableState},
+    layout::{self, Constraint, Direction, Layout, Margin},
+    style::{Color, Modifier, Style, Stylize},
+    widgets::{Block, BorderType, Borders, HighlightSpacing, Table, TableState},
 };
-use ratatui_image::{StatefulImage, picker::Picker};
+use ratatui_image::StatefulImage;
 
 pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
     // TEMP
@@ -30,11 +29,7 @@ pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
 }
 
 fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
-    let rows = match &app.main_page().now_tab {
-        MainPageTab::PlayList(state) => zebra_rows(&state.items, &app.colors),
-        MainPageTab::FavoriteAlbum(state) => zebra_rows(&state.items, &app.colors),
-        MainPageTab::FavoriteArtist(state) => zebra_rows(&state.items, &app.colors),
-    };
+    let rows = zebra_rows(app.get_main_tab_items_as_row(), &app.colors);
 
     let table = Table::default()
         .block(
@@ -85,13 +80,13 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
         Constraint::Percentage(100),
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
-    let now_tab = &app.main_page().now_tab;
-    if let Some(id) = now_tab.get_selected_id() {
-        let tried_cached_image = match now_tab {
-            MainPageTab::PlayList(_) => cache.get_playlist_cover(id),
-            MainPageTab::FavoriteAlbum(_) => cache.get_album_cover(id),
-            MainPageTab::FavoriteArtist(_) => cache.get_artist_cover(id),
+    if let Some(id) = app.main_page().get_selected_id() {
+        let tried_cached_image = match app.main_page().now_tab {
+            MainPageTab::PlayList => cache.get_playlist_cover(id),
+            MainPageTab::FavoriteAlbum => cache.get_album_cover(id),
+            MainPageTab::FavoriteArtist => cache.get_artist_cover(id),
         };
+
         if let Some(cached_image) = tried_cached_image {
             // 如果缓存中有图片，直接使用
             frame.render_stateful_widget(StatefulImage::default(), cover_area, cached_image);

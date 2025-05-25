@@ -25,20 +25,20 @@ pub(crate) trait Selectable {
         self.move_down_by(1);
     }
 
-    fn move_up_by(&mut self, gap: usize) {
+    fn move_up_by(&mut self, n: usize) {
         if let Some(index) = self.selected_index() {
-            if index >= gap {
-                self.select(index - gap);
+            if index >= n {
+                self.select(index - n);
             } else {
                 self.select(0);
             }
         }
     }
-    fn move_down_by(&mut self, gap: usize) {
+    fn move_down_by(&mut self, n: usize) {
         let items = self.items();
         if let Some(index) = self.selected_index() {
-            if index + gap < items.len() {
-                self.select(index + gap);
+            if index + n < items.len() {
+                self.select(index + n);
             } else if !items.is_empty() {
                 self.select(items.len() - 1);
             }

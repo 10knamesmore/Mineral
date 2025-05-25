@@ -22,7 +22,6 @@ use crate::{
     state::{
         Page, PopupState,
         main_page::{MainPageState, MainPageTab},
-        selectable::Selectable,
     },
     ui::render_ui,
     util::notification::{Notification, NotifyUrgency},
@@ -194,8 +193,8 @@ impl RenderCache {
     /// 尝试从网络加载图片（未实现）
     fn try_load_image_from_net(
         &mut self,
-        image_type: &ImageCacheType,
-        id: u64,
+        _image_type: &ImageCacheType,
+        _id: u64,
     ) -> Option<StatefulProtocol> {
         unimplemented!("尝试用ncm_api从网络加载图片到磁盘");
     }
@@ -339,43 +338,36 @@ impl App {
     }
 
     /// 获取主页面表格数据
-    pub(crate) fn get_main_tab_items(&self) -> Vec<Row> {
-        match &self.main_page.now_tab {
-            MainPageTab::PlayList(state) => state.items().iter().map(Row::from).collect(),
-            MainPageTab::FavoriteAlbum(state) => state.items().iter().map(Row::from).collect(),
-            MainPageTab::FavoriteArtist(state) => state.items().iter().map(Row::from).collect(),
-        }
+    pub(crate) fn get_main_tab_items_as_row(&self) -> Vec<Row> {
+        // BUGFIX
+        self.main_page.get_now_tab_items()
     }
 
     /// 获取主页面表格选中项
     pub(crate) fn get_main_tab_selected_index(&self) -> Option<usize> {
         match &self.main_page.now_tab {
-            MainPageTab::PlayList(state) => state.selected_index(),
-            MainPageTab::FavoriteAlbum(state) => state.selected_index(),
-            MainPageTab::FavoriteArtist(state) => state.selected_index(),
+            MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
+            MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
+            MainPageTab::FavoriteArtist => self.main_page.artist_state().selected_index(),
         }
     }
 
     /// 表格上移
-    pub(crate) fn table_move_up_by(&mut self, gap: usize) {
+    pub(crate) fn table_move_up_by(&mut self, n: usize) {
         match self.now_page {
-            Page::Main => match &mut self.main_page.now_tab {
-                MainPageTab::PlayList(state) => state.move_up_by(gap),
-                MainPageTab::FavoriteAlbum(state) => state.move_up_by(gap),
-                MainPageTab::FavoriteArtist(state) => state.move_up_by(gap),
-            },
+            Page::Main => {
+                self.main_page.now_tab_move_up_by(n);
+            }
             Page::Search => todo!(),
         }
     }
 
     /// 表格下移
-    pub(crate) fn table_move_down_by(&mut self, gap: usize) {
+    pub(crate) fn table_move_down_by(&mut self, n: usize) {
         match self.now_page {
-            Page::Main => match &mut self.main_page.now_tab {
-                MainPageTab::PlayList(state) => state.move_down_by(gap),
-                MainPageTab::FavoriteAlbum(state) => state.move_down_by(gap),
-                MainPageTab::FavoriteArtist(state) => state.move_down_by(gap),
-            },
+            Page::Main => {
+                self.main_page.now_tab_move_down_by(n);
+            }
             Page::Search => todo!(),
         }
     }
@@ -386,9 +378,10 @@ impl App {
     }
 
     /// 获取选中项详情
+    /// 根据当前的 Page, 交给对应
     pub(super) fn get_selected_detail(&self) -> Vec<Row> {
         match &self.now_page {
-            Page::Main => self.main_page.now_tab.get_selected_detail(),
+            Page::Main => self.main_page.get_selected_detail(),
             Page::Search => todo!(),
         }
     }
@@ -436,16 +429,13 @@ pub(super) mod data_generator {
         app::TableColors,
         state::{
             Page, PopupState,
-            main_page::{
-                MainPageState, MainPageTab,
-                playlist::{PlayList, PlayListState},
-            },
+            main_page::{MainPageState, playlist::PlayList},
             song::Song,
         },
     };
     use rand::{Rng, seq::SliceRandom};
     use ratatui_image::picker::Picker;
-    use std::{collections::HashMap, fmt::format};
+    use std::collections::HashMap;
 
     fn rand_artist_name(rng: &mut impl Rng) -> String {
         let pool = [
@@ -566,7 +556,7 @@ pub(super) mod data_generator {
 
         playlist_names
             .iter()
-            .zip(ids.into_iter())
+            .zip(ids)
             .map(|(name, id)| gen_playlist(id, name, &mut rng))
             .collect()
     }
@@ -575,17 +565,18 @@ pub(super) mod data_generator {
     pub(crate) fn test_struct_app() -> App {
         use std::collections::VecDeque;
 
+        use crate::state::main_page::{album::Album, artist::Artist};
+
         let play_list = gen_playlists();
 
         App {
             should_quit: false,
             now_page: Page::Main,
-            main_page: MainPageState {
-                now_tab: MainPageTab::PlayList(PlayListState {
-                    items: play_list,
-                    selected: Some(0),
-                }),
-            },
+            main_page: MainPageState::new(
+                play_list,
+                vec![Album::default()],
+                vec![Artist::default()],
+            ),
             notifications: VecDeque::new(),
             popup_state: PopupState::None,
             colors: TableColors::new(),

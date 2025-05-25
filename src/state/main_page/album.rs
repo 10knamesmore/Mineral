@@ -1,3 +1,4 @@
+use crate::state::song::{Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
@@ -5,39 +6,14 @@ use ratatui::{
 };
 use std::vec;
 
-use crate::state::{
-    selectable::Selectable,
-    song::{Song, SongList},
-};
-
-pub(crate) struct AlbumListState {
-    pub(crate) items: Vec<Album>,
-    pub(crate) selected: Option<usize>,
-}
-
+#[derive(Debug, Default)]
 pub(crate) struct Album {
     pub(crate) artist: String,
-    pub(crate) cover_path: String,
     pub(crate) song_num: u32,
     pub(crate) title: String,
     pub(crate) year: u32,
     pub(crate) id: u64,
     pub(crate) songs: Vec<Song>,
-}
-
-impl Selectable for AlbumListState {
-    type Item = Album;
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.selected
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = Some(index);
-    }
 }
 
 impl<'a> From<&'a Album> for Row<'a> {
