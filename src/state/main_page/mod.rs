@@ -2,6 +2,7 @@ use album::AlbumListState;
 use artist::ArtistListState;
 use playlist::PlayListState;
 use ratatui::{
+    layout::Alignment,
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Cell, Row},
@@ -71,20 +72,29 @@ impl MainPageTab {
             .iter()
             .enumerate()
             .map(|(i, song)| {
-                let index = Text::from(Line::from(Span::styled(
-                    format!("{:>2}", i + 1),
-                    Style::default().bold(),
-                )));
+                let index = Text::from(
+                    Line::from(Span::styled(
+                        format!("{:>2}", i + 1),
+                        Style::default().bold(),
+                    ))
+                    .alignment(Alignment::Left),
+                );
 
-                let song_name = Text::from(Line::from(Span::styled(
-                    &song.name,
-                    Style::default().fg(Color::LightBlue),
-                )));
+                let song_name = Text::from(
+                    Line::from(Span::styled(
+                        &song.name,
+                        Style::default().fg(Color::LightBlue),
+                    ))
+                    .alignment(Alignment::Center),
+                );
 
-                let duration = Text::from(Line::from(Span::styled(
-                    format_duration(song.duration),
-                    Style::default().fg(Color::Gray),
-                )));
+                let duration = Text::from(
+                    Line::from(Span::styled(
+                        format_duration(song.duration),
+                        Style::default().fg(Color::Gray),
+                    ))
+                    .alignment(Alignment::Right),
+                );
 
                 Row::new(vec![
                     Cell::from(index),

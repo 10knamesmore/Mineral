@@ -86,19 +86,16 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
     let now_tab = &app.main_page().now_tab;
-    match now_tab.get_selected_id() {
-        Some(id) => {
-            let tried_cached_image = match now_tab {
-                MainPageTab::PlayList(_) => cache.get_playlist_cover(id),
-                MainPageTab::FavoriteAlbum(_) => cache.get_album_cover(id),
-                MainPageTab::FavoriteArtist(_) => cache.get_artist_cover(id),
-            };
-            if let Some(cached_image) = tried_cached_image {
-                // 如果缓存中有图片，直接使用
-                frame.render_stateful_widget(StatefulImage::default(), cover_area, cached_image);
-            }
+    if let Some(id) = now_tab.get_selected_id() {
+        let tried_cached_image = match now_tab {
+            MainPageTab::PlayList(_) => cache.get_playlist_cover(id),
+            MainPageTab::FavoriteAlbum(_) => cache.get_album_cover(id),
+            MainPageTab::FavoriteArtist(_) => cache.get_artist_cover(id),
+        };
+        if let Some(cached_image) = tried_cached_image {
+            // 如果缓存中有图片，直接使用
+            frame.render_stateful_widget(StatefulImage::default(), cover_area, cached_image);
         }
-        None => {}
     };
 
     // 歌曲摘要渲染
@@ -116,5 +113,5 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
             Constraint::Percentage(40),
             Constraint::Percentage(40),
         ]);
-    frame.render_widget(table, list_area);
+    frame.render_widget(table, list_area.inner(Margin::new(1, 1)));
 }

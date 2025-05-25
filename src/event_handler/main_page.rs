@@ -20,6 +20,12 @@ pub(super) fn handle_main_page_event(app: &mut App, event: Event) {
             KeyCode::Enter | KeyCode::Char('l') => {
                 unimplemented!("Enter or 'l' key pressed");
             }
+            KeyCode::Char('H') => {
+                unimplemented!("切换主页面的 Page ")
+            }
+            KeyCode::Char('L') => {
+                unimplemented!("切换主页面的 Page ")
+            }
             _ => {}
         },
         Event::Mouse(_) => {

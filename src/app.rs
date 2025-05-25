@@ -84,9 +84,9 @@ pub(crate) struct RenderCache {
 
 /// 图片缓存类型
 enum ImageCacheType {
-    PlaylistCover,
-    AlbumCover,
-    ArtistCover,
+    Playlist,
+    Album,
+    Artist,
 }
 
 impl RenderCache {
@@ -124,7 +124,7 @@ impl RenderCache {
     /// # 返回
     /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
     pub(crate) fn get_playlist_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::PlaylistCover;
+        let image_type = ImageCacheType::Playlist;
 
         // 尝试获取缓存（短生命周期）
         if self.playlist_cover.contains_key(&id) {
@@ -143,7 +143,7 @@ impl RenderCache {
     /// # 返回
     /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
     pub(crate) fn get_album_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::AlbumCover;
+        let image_type = ImageCacheType::Album;
 
         // 尝试获取缓存（短生命周期）
         if self.album_cover.contains_key(&id) {
@@ -162,7 +162,7 @@ impl RenderCache {
     /// # 返回
     /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
     pub(crate) fn get_artist_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::ArtistCover;
+        let image_type = ImageCacheType::Artist;
 
         // 尝试获取缓存（短生命周期）
         if self.artist_cover.contains_key(&id) {
@@ -185,15 +185,7 @@ impl RenderCache {
     /// - `Option<StatefulProtocol>`: 返回一个 StatefulProtocol，如果加载成功则返回 Some，否则返回 None
     fn try_load_image(&mut self, image_type: ImageCacheType, id: u64) -> Option<StatefulProtocol> {
         if let Some(path) = self.if_image_cache_in_disk(&image_type, id) {
-            match self.load_image(path) {
-                Ok(image) => {
-                    // 将加载的图片添加到缓存中
-                    Some(image)
-                }
-
-                // 说明本地图片存在,但是加载失败
-                Err(_) => None,
-            }
+            self.load_image(path).ok()
         } else {
             self.try_load_image_from_net(&image_type, id)
         }
@@ -218,9 +210,9 @@ impl RenderCache {
     /// - `Option<String>`: 返回图片的路径，如果不存在则返回 None
     fn if_image_cache_in_disk(&self, image_type: &ImageCacheType, id: u64) -> Option<String> {
         let path = match image_type {
-            ImageCacheType::PlaylistCover => format!("{}images/playlist/", self.cache_path),
-            ImageCacheType::AlbumCover => format!("{}images/album/", self.cache_path),
-            ImageCacheType::ArtistCover => format!("{}images/artist/", self.cache_path),
+            ImageCacheType::Playlist => format!("{}images/playlist/", self.cache_path),
+            ImageCacheType::Album => format!("{}images/album/", self.cache_path),
+            ImageCacheType::Artist => format!("{}images/artist/", self.cache_path),
         };
 
         let prefix = format!("{}.", id);
@@ -388,7 +380,7 @@ impl App {
         }
     }
 
-    /// 获取主页面状态
+    /// 获取 MainPageState 的引用
     pub(crate) fn main_page(&self) -> &MainPageState {
         &self.main_page
     }
@@ -453,7 +445,7 @@ pub(super) mod data_generator {
     };
     use rand::{Rng, seq::SliceRandom};
     use ratatui_image::picker::Picker;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fmt::format};
 
     fn rand_artist_name(rng: &mut impl Rng) -> String {
         let pool = [
@@ -535,6 +527,11 @@ pub(super) mod data_generator {
             .collect()
     }
 
+    fn gen_unique_ids(amount: usize, rng: &mut impl Rng) -> Vec<u64> {
+        let pool: Vec<u64> = (0..100).collect();
+        pool.choose_multiple(rng, amount).cloned().collect()
+    }
+
     // 生成随机歌曲
     fn gen_song(id: u64, rng: &mut impl Rng) -> Song {
         Song {
@@ -547,39 +544,37 @@ pub(super) mod data_generator {
     }
 
     // 生成一个歌单
-    fn gen_playlist(i: usize, name: &str, rng: &mut impl Rng) -> PlayList {
+    fn gen_playlist(id: u64, name: &str, rng: &mut impl Rng) -> PlayList {
         let song_count = rng.gen_range(10..=20);
         let ids = gen_unique_ids(song_count, rng);
 
         let songs: Vec<Song> = ids.into_iter().map(|id| gen_song(id, rng)).collect();
 
         PlayList {
-            name: name.to_string(),
+            name: format!("{} - 测试歌单 ID:{}", name, id),
             track_count: songs.len(),
             songs,
-            id: i as u64,
+            id,
         }
-    }
-
-    fn gen_unique_ids(song_count: usize, rng: &mut impl Rng) -> Vec<u64> {
-        let pool: Vec<u64> = (0..100).collect();
-        pool.choose_multiple(rng, song_count).cloned().collect()
     }
 
     // 生成所有歌单
     fn gen_playlists() -> Vec<PlayList> {
         let mut rng = rand::thread_rng();
         let playlist_names = rand_playlist_names(&mut rng, 12);
+        let ids = gen_unique_ids(playlist_names.len(), &mut rng);
 
         playlist_names
             .iter()
-            .enumerate()
-            .map(|(index, name)| gen_playlist(index, name, &mut rng))
+            .zip(ids.into_iter())
+            .map(|(name, id)| gen_playlist(id, name, &mut rng))
             .collect()
     }
 
     #[cfg(debug_assertions)]
     pub(crate) fn test_struct_app() -> App {
+        use std::collections::VecDeque;
+
         let play_list = gen_playlists();
 
         App {
@@ -591,6 +586,7 @@ pub(super) mod data_generator {
                     selected: Some(0),
                 }),
             },
+            notifications: VecDeque::new(),
             popup_state: PopupState::None,
             colors: TableColors::new(),
         }
