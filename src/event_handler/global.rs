@@ -45,6 +45,9 @@ pub(super) fn handle_global_key(app: &mut App, event: &Event) -> bool {
                 KeyCode::Char('?') => {
                     todo!("全局帮助菜单")
                 }
+                KeyCode::Char('n') => {
+                    app.notify_debug("Test", "发送了一个Notification");
+                }
                 _ => {}
             }
         }

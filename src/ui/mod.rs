@@ -21,8 +21,13 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
 
     match app.should_popup() {
         PopupState::ConfirmExit => {
-            popup::popup_confirm_exit(frame);
+            popup::confirm_exit(frame);
         }
         PopupState::None => {}
+        PopupState::Notificacion => popup::notify(
+            app.first_notification()
+                .expect("程序内部错误: PopupState 为Notification 但当前队列中不存在消息 "),
+            frame,
+        ),
     }
 }

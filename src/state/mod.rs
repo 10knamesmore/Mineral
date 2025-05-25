@@ -1,7 +1,7 @@
-pub(crate) mod song;
 pub(crate) mod detailed;
 pub(crate) mod main_page;
 pub(crate) mod selectable;
+pub(crate) mod song;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Page {
@@ -14,5 +14,5 @@ pub(crate) enum Page {
 pub(crate) enum PopupState {
     None,
     ConfirmExit,
-    // TODO
+    Notificacion, // TODO
 }

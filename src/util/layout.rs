@@ -1,9 +1,26 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 
+/// 返回一个在父区域 `area` 中，**水平居中、垂直顶部对齐** 的子区域，
+/// 其大小由 `horizontal` 和 `vertical` 决定。
+pub(crate) fn top_center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
+    // 水平居中
+    let [area] = Layout::horizontal([horizontal])
+        .flex(Flex::Center)
+        .areas(area);
+
+    // 垂直顶部
+    let [area] = Layout::vertical([vertical]).flex(Flex::Start).areas(area);
+
+    area
+}
+
+/// 返回一个在父区域 `area` 中，**水平居中、垂直居中** 的子区域，
+/// 其大小由 `horizontal` 和 `vertical` 决定。
 pub(crate) fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
     let [area] = Layout::horizontal([horizontal])
         .flex(Flex::Center)
         .areas(area);
+
     let [area] = Layout::vertical([vertical]).flex(Flex::Center).areas(area);
 
     area

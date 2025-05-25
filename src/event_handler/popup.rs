@@ -22,3 +22,20 @@ pub(super) fn handle_confirm_exit(app: &mut App, event: Event) {
         _ => {}
     }
 }
+
+pub(super) fn handle_notification(app: &mut App, event: Event) {
+    match event {
+        Event::Key(key_event) => {
+            if let KeyEventKind::Press = key_event.kind {
+                match key_event.code {
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('Q') => {
+                        app.consume_first_notification()
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Event::Mouse(_) => app.consume_first_notification(),
+        _ => {}
+    }
+}

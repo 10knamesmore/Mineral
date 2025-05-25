@@ -25,6 +25,7 @@ use crate::{
         selectable::Selectable,
     },
     ui::render_ui,
+    util::notification::{Notification, NotifyUrgency},
 };
 use data_generator::test_render_cache;
 use ratatui::{
@@ -33,12 +34,11 @@ use ratatui::{
     style::Color,
     widgets::Row,
 };
-use ratatui_image::{Image, picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
-    io::{self, SeekFrom},
-    vec,
+    io::{self},
 };
 
 /// 表格配色方案
@@ -69,6 +69,7 @@ pub(crate) struct App {
     now_page: Page,
     main_page: MainPageState,
     popup_state: PopupState,
+    notifications: VecDeque<Notification>,
     pub(crate) colors: TableColors,
 }
 
@@ -398,6 +399,40 @@ impl App {
             Page::Main => self.main_page.now_tab.get_selected_detail(),
             Page::Search => todo!(),
         }
+    }
+
+    pub(crate) fn first_notification(&self) -> Option<&Notification> {
+        self.notifications.front()
+    }
+
+    pub(crate) fn consume_first_notification(&mut self) {
+        self.notifications.pop_front();
+        if self.notifications.is_empty() {
+            self.popup(PopupState::None);
+        }
+    }
+
+    fn notify_internal(&mut self, title: &str, msg: &str, urgency: NotifyUrgency) {
+        self.popup(PopupState::Notificacion);
+        self.notifications
+            .push_back(Notification::new(title, msg, urgency));
+    }
+
+    // 分别暴露四个等级的接口
+    pub(crate) fn notify_debug(&mut self, title: &str, msg: &str) {
+        self.notify_internal(title, msg, NotifyUrgency::Debug);
+    }
+
+    pub(crate) fn notify_info(&mut self, title: &str, msg: &str) {
+        self.notify_internal(title, msg, NotifyUrgency::Info);
+    }
+
+    pub(crate) fn notify_warning(&mut self, title: &str, msg: &str) {
+        self.notify_internal(title, msg, NotifyUrgency::Warning);
+    }
+
+    pub(crate) fn notify_error(&mut self, title: &str, msg: &str) {
+        self.notify_internal(title, msg, NotifyUrgency::Error);
     }
 }
 
