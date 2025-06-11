@@ -1,4 +1,4 @@
-use crate::state::song::{Song, SongList};
+use crate::state::{Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span},

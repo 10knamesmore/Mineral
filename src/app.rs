@@ -428,9 +428,8 @@ pub(super) mod data_generator {
         App,
         app::TableColors,
         state::{
-            Page, PopupState,
+            Page, PopupState, Song,
             main_page::{MainPageState, playlist::PlayList},
-            song::Song,
         },
     };
     use rand::{Rng, seq::SliceRandom};

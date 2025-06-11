@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::util::format::format_duration;
 
-use super::{selectable::Selectable, song::SongList};
+use super::{Selectable, SongList};
 
 pub(crate) mod album;
 pub(crate) mod artist;

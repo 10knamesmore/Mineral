@@ -1,3 +1,32 @@
+pub(crate) mod main_page;
+
+#[derive(Clone, Copy)]
+pub(crate) enum Page {
+    Main,
+    Search,
+    // TODO
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PopupState {
+    None,
+    ConfirmExit,
+    Notificacion, // TODO
+}
+
+#[derive(Debug, Clone)]
+pub struct Song {
+    pub id: u64,
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub duration: u32, // 秒
+}
+
+pub trait SongList {
+    fn get_song_list(&self) -> &[Song];
+}
+
 #[allow(dead_code)]
 pub(crate) trait Selectable {
     type Item;
