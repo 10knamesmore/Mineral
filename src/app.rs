@@ -36,8 +36,12 @@ use ratatui::{
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
     io::{self},
+};
+use std::{io::Cursor, path::Path};
+use tokio::{
+    fs,
+    sync::mpsc::{self},
 };
 
 /// 表格配色方案
@@ -72,14 +76,7 @@ pub(crate) struct App {
     pub(crate) colors: TableColors,
 }
 
-/// 图片缩略图缓存
-pub(crate) struct RenderCache {
-    picker: Picker,
-    cache_path: String,
-    playlist_cover: HashMap<u64, StatefulProtocol>,
-    album_cover: HashMap<u64, StatefulProtocol>,
-    artist_cover: HashMap<u64, StatefulProtocol>,
-}
+// ############### 图片缓存相关 ###################
 
 /// 图片缓存类型
 enum ImageCacheType {
@@ -88,115 +85,194 @@ enum ImageCacheType {
     Artist,
 }
 
+pub enum ImageState {
+    NotRequested,
+    Loading,
+    Loaded(StatefulProtocol),
+    Failed(String),
+}
+
+pub struct ImageLoadRequest {
+    image_type: ImageCacheType,
+    id: u64,
+}
+
+struct ImageloadResult {
+    image_type: ImageCacheType,
+    id: u64,
+    result: Result<StatefulProtocol, String>,
+}
+
+/// 图片缩略图缓存
+pub(crate) struct RenderCache {
+    playlist_cover: HashMap<u64, ImageState>,
+    album_cover: HashMap<u64, ImageState>,
+    artist_cover: HashMap<u64, ImageState>,
+
+    load_request_sender: mpsc::UnboundedSender<ImageLoadRequest>,
+    load_result_receiver: mpsc::UnboundedReceiver<ImageloadResult>,
+}
+
+// #############################################
+
 impl RenderCache {
     /// 创建新的 RenderCache
-    fn new() -> Self {
-        let picker = Picker::from_query_stdio().unwrap();
-        RenderCache {
-            picker,
-            cache_path: String::new(),
+    pub fn new(picker: Picker, cache_path: String) -> Self {
+        let (load_request_sender, load_request_receiver) = mpsc::unbounded_channel();
+        let (load_result_sender, load_result_receiver) = mpsc::unbounded_channel();
+
+        // let runtime_handle = tokio::runtime::Handle::current();
+
+        let cache_path_cloned = cache_path.clone();
+
+        tokio::spawn(async move {
+            Self::image_loader_task(
+                load_request_receiver,
+                load_result_sender,
+                cache_path_cloned,
+                picker,
+            )
+            .await;
+        });
+
+        Self {
             playlist_cover: HashMap::new(),
             album_cover: HashMap::new(),
             artist_cover: HashMap::new(),
+            load_request_sender,
+            load_result_receiver,
         }
     }
 
-    /// 创建默认 RenderCache，带错误处理
-    fn default() -> io::Result<Self> {
-        let picker = Picker::from_query_stdio()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Picker error: {}", e)))?;
+    pub(crate) fn get_playlist_cover(&mut self, id: u64) -> &mut ImageState {
+        self.poll_image_results();
 
-        Ok(RenderCache {
-            picker,
-            cache_path: String::new(),
-            playlist_cover: HashMap::new(),
-            album_cover: HashMap::new(),
-            artist_cover: HashMap::new(),
-        })
-    }
-
-    /// 获取歌单封面，自动缓存
-    ///
-    /// # 参数
-    /// - `id`: play_list ID
-    ///
-    /// # 返回
-    /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
-    pub(crate) fn get_playlist_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::Playlist;
-
-        // 尝试获取缓存（短生命周期）
-        if self.playlist_cover.contains_key(&id) {
-            return Some(self.playlist_cover.get_mut(&id).unwrap());
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.playlist_cover.entry(id) {
+            entry.insert(ImageState::Loading);
+            self.request_image_load(ImageCacheType::Playlist, id);
         }
 
-        self.try_load_image(image_type, id)
-            .map(|image| self.playlist_cover.entry(id).or_insert(image))
+        self.playlist_cover.get_mut(&id).unwrap()
     }
+    pub(crate) fn get_artist_cover(&mut self, id: u64) -> &mut ImageState {
+        self.poll_image_results();
 
-    /// 获取专辑封面，自动缓存
-    ///
-    /// # 参数
-    /// - `id`: album ID
-    ///
-    /// # 返回
-    /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
-    pub(crate) fn get_album_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::Album;
-
-        // 尝试获取缓存（短生命周期）
-        if self.album_cover.contains_key(&id) {
-            return self.album_cover.get_mut(&id);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.artist_cover.entry(id) {
+            entry.insert(ImageState::Loading);
+            self.request_image_load(ImageCacheType::Artist, id);
         }
 
-        self.try_load_image(image_type, id)
-            .map(|image| self.album_cover.entry(id).or_insert(image))
+        self.artist_cover.get_mut(&id).unwrap()
     }
+    pub(crate) fn get_album_cover(&mut self, id: u64) -> &mut ImageState {
+        self.poll_image_results();
 
-    /// 获取艺人封面，自动缓存
-    ///
-    /// # 参数
-    /// - `id`: artist ID
-    ///
-    /// # 返回
-    /// - `Option<&mut StatefulProtocol>`: 返回一个可变引用，指向缓存的 StatefulProtocol
-    pub(crate) fn get_artist_cover(&mut self, id: u64) -> Option<&mut StatefulProtocol> {
-        let image_type = ImageCacheType::Artist;
-
-        // 尝试获取缓存（短生命周期）
-        if self.artist_cover.contains_key(&id) {
-            return self.artist_cover.get_mut(&id);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.album_cover.entry(id) {
+            entry.insert(ImageState::Loading);
+            self.request_image_load(ImageCacheType::Album, id);
         }
 
-        self.try_load_image(image_type, id)
-            .map(|image| self.artist_cover.entry(id).or_insert(image))
+        self.album_cover.get_mut(&id).unwrap()
     }
 
-    /// 尝试加载图片（本地优先，失败则尝试网络）
-    /// 缓存会优先在本地查找，本地存在并解码成功, 则直接缓存到内存并返回.
-    /// 如果不存在则尝试从网络加载。
-    ///
-    /// # 参数
-    /// - `image_type`: 图片类型
-    /// - `id`: image_type 对应类型的 ID
-    ///
-    /// # 返回
-    /// - `Option<StatefulProtocol>`: 返回一个 StatefulProtocol，如果加载成功则返回 Some，否则返回 None
-    fn try_load_image(&mut self, image_type: ImageCacheType, id: u64) -> Option<StatefulProtocol> {
-        if let Some(path) = self.if_image_cache_in_disk(&image_type, id) {
-            self.load_image(path).ok()
-        } else {
-            self.try_load_image_from_net(&image_type, id)
+    fn request_image_load(&self, image_type: ImageCacheType, id: u64) {
+        let request = ImageLoadRequest { image_type, id };
+
+        if let Err(e) = self.load_request_sender.send(request) {
+            eprintln!("Failed to send image load request: {}", e)
         }
     }
 
-    /// 尝试从网络加载图片（未实现）
-    fn try_load_image_from_net(
-        &mut self,
-        _image_type: &ImageCacheType,
-        _id: u64,
-    ) -> Option<StatefulProtocol> {
-        unimplemented!("尝试用ncm_api从网络加载图片到磁盘");
+    // 轮询, 更新load结果到self
+    fn poll_image_results(&mut self) {
+        while let Ok(result) = self.load_result_receiver.try_recv() {
+            let state = match result.result {
+                Ok(image) => ImageState::Loaded(image),
+                Err(e) => ImageState::Failed(e),
+            };
+
+            match result.image_type {
+                ImageCacheType::Playlist => {
+                    self.playlist_cover.insert(result.id, state);
+                }
+                ImageCacheType::Album => {
+                    self.album_cover.insert(result.id, state);
+                }
+                ImageCacheType::Artist => {
+                    self.artist_cover.insert(result.id, state);
+                }
+            }
+        }
+    }
+
+    // 等待接收加载图片的请求
+    async fn image_loader_task(
+        mut request_receiver: mpsc::UnboundedReceiver<ImageLoadRequest>,
+        result_sender: mpsc::UnboundedSender<ImageloadResult>,
+        cache_path: String,
+        picker: Picker,
+    ) {
+        while let Some(request) = request_receiver.recv().await {
+            let result = Self::load_image_async(&cache_path, &picker, &request).await;
+
+            let load_result = ImageloadResult {
+                image_type: request.image_type,
+                id: request.id,
+                result,
+            };
+
+            if let Err(e) = result_sender.send(load_result) {
+                eprintln!("Failed to send image load result: {}", e);
+                break;
+            }
+        }
+    }
+
+    // 异步加载图片
+    async fn load_image_async(
+        cache_path: &str,
+        picker: &Picker,
+        request: &ImageLoadRequest,
+    ) -> Result<StatefulProtocol, String> {
+        let (image_type, id) = (&request.image_type, request.id);
+
+        match Self::try_get_img_path_from_disk(cache_path, image_type, id).await {
+            Ok(file_path_opt) => match file_path_opt {
+                Some(file_path) => {
+                    let data = tokio::fs::read(&file_path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    let format = image::guess_format(&data)
+                        .map_err(|e| format!("无法识别 {} 文件格式 {}", &file_path, e))?;
+                    let cursor = Cursor::new(data);
+
+                    let decoded_image = image::ImageReader::with_format(cursor, format)
+                        .decode()
+                        .map_err(|e| format!("文件 {} 解码时发生错误 {}", &file_path, e))?;
+
+                    let image = picker.new_resize_protocol(decoded_image);
+                    Ok(image)
+                }
+                None => match Self::try_get_img_path_from_net(cache_path, picker, image_type, id)
+                    .await
+                {
+                    Ok(_) => todo!(),
+                    Err(_) => todo!(),
+                },
+            },
+            Err(e) => Err(format!("读取图片的时候发生IO错误: {}", e)),
+        }
+    }
+
+    async fn try_get_img_path_from_net(
+        cache_path: &str,
+        picker: &Picker,
+        image_type: &ImageCacheType,
+        id: u64,
+    ) -> io::Result<StatefulProtocol> {
+        // TODO: 尝试通过api获取网络图片,并保存到本地,直接返回StatefulProtocol
+        todo!()
     }
 
     /// 尝试查找type为image_type的图片在磁盘上是否存在, 如果存在, 返回图片的路径
@@ -206,48 +282,45 @@ impl RenderCache {
     /// - `id`: image_type 对应类型的 ID
     ///
     /// # 返回
+    /// - `Err(e)`: 发生io错误
     /// - `Option<String>`: 返回图片的路径，如果不存在则返回 None
-    fn if_image_cache_in_disk(&self, image_type: &ImageCacheType, id: u64) -> Option<String> {
-        let path = match image_type {
-            ImageCacheType::Playlist => format!("{}images/playlist/", self.cache_path),
-            ImageCacheType::Album => format!("{}images/album/", self.cache_path),
-            ImageCacheType::Artist => format!("{}images/artist/", self.cache_path),
+    async fn try_get_img_path_from_disk(
+        cache_path: &str,
+        image_type: &ImageCacheType,
+        id: u64,
+    ) -> io::Result<Option<String>> {
+        // TODO: 对非UTF-8编码的文件系统的支持
+        let subdir = match image_type {
+            ImageCacheType::Playlist => "playlist",
+            ImageCacheType::Album => "album",
+            ImageCacheType::Artist => "artist",
         };
 
-        let prefix = format!("{}.", id);
-        if let Ok(entries) = fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let file_name = file_name.to_string_lossy();
+        let dir_path = Path::new(cache_path).join("images").join(subdir);
 
-                if file_name.starts_with(&prefix) {
-                    return Some(entry.path().to_string_lossy().to_string());
+        let prefix = format!("{}.", id);
+        let mut rd = fs::read_dir(&dir_path).await?;
+
+        while let Some(entry) = rd.next_entry().await? {
+            // 获取文件名，并检查是否为有效 UTF-8
+            let file_name_os = entry.file_name();
+
+            if let Some(file_name_str) = file_name_os.to_str() {
+                if file_name_str.starts_with(&prefix) {
+                    let full_path = entry.path();
+
+                    // 检查整个文件路径是否为有效UTF-8
+                    if let Some(path_str) = full_path.to_str() {
+                        return Ok(Some(path_str.to_string()));
+                    } else {
+                        // 文件路径不是有效 UTF-8 字符串
+                        continue;
+                    }
                 }
             }
         }
 
-        None
-    }
-
-    /// 加载图片并转为 StatefulProtocol
-    ///
-    /// # 参数
-    /// - `path`: 图片路径
-    ///
-    /// # 返回
-    /// - `io::Result<StatefulProtocol>`: 返回一个 StatefulProtocol，如果加载成功则返回 Ok，否则返回 Err
-    fn load_image(&self, path: String) -> io::Result<StatefulProtocol> {
-        let decoded_image = image::ImageReader::open(path)
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("加载图片时发生错误: {}", e))
-            })?
-            .decode()
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("解码图片时发生错误: {}", e))
-            })?;
-        let image = self.picker.new_resize_protocol(decoded_image);
-
-        Ok(image)
+        Ok(None)
     }
 }
 
@@ -292,7 +365,10 @@ impl App {
 
     /// 运行正式模式
     pub(crate) fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        let mut cache = RenderCache::default()?;
+        // HACK: 正式运行更改
+        let test_picker = Picker::from_query_stdio().unwrap();
+        let cache_dir = String::from("/home/wanger/Pictures/ncm_tui/");
+        let mut cache = RenderCache::new(test_picker, cache_dir);
         loop {
             if self.should_quit {
                 return Ok(());
@@ -434,7 +510,6 @@ pub(super) mod data_generator {
     };
     use rand::{Rng, seq::SliceRandom};
     use ratatui_image::picker::Picker;
-    use std::collections::HashMap;
 
     fn rand_artist_name(rng: &mut impl Rng) -> String {
         let pool = [
@@ -584,13 +659,8 @@ pub(super) mod data_generator {
 
     pub(crate) fn test_render_cache() -> RenderCache {
         let test_picker = Picker::from_query_stdio().unwrap();
+        let cache_dir = String::from("/home/wanger/Pictures/ncm_tui/");
 
-        RenderCache {
-            picker: test_picker,
-            cache_path: String::from("/home/wanger/Pictures/ncm_tui/"),
-            playlist_cover: HashMap::new(),
-            album_cover: HashMap::new(),
-            artist_cover: HashMap::new(),
-        }
+        RenderCache::new(test_picker, cache_dir)
     }
 }

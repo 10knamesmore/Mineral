@@ -8,6 +8,7 @@ use ratatui::{
     Frame,
     layout::{self, Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style, Stylize},
+    text::Text,
     widgets::{Block, BorderType, Borders, HighlightSpacing, Table, TableState},
 };
 use ratatui_image::StatefulImage;
@@ -87,9 +88,23 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
             MainPageTab::FavoriteArtist => cache.get_artist_cover(id),
         };
 
-        if let Some(cached_image) = tried_cached_image {
-            // 如果缓存中有图片，直接使用
-            frame.render_stateful_widget(StatefulImage::default(), cover_area, cached_image);
+        match tried_cached_image {
+            crate::app::ImageState::NotRequested => {
+                todo!("还没有发送load cache的申请, 理论上不会有这种情况")
+            }
+            crate::app::ImageState::Loading => {
+                // HACK: 优化正在时的表现
+                let place_holder_text = Text::from("图片加载中...");
+                frame.render_widget(place_holder_text, cover_area);
+            }
+            crate::app::ImageState::Loaded(cached_image) => {
+                frame.render_stateful_widget(StatefulImage::default(), area, cached_image);
+            }
+            crate::app::ImageState::Failed(e) => {
+                // HACK: 优化加载失败时的错误提醒
+                let place_holder_text = Text::from(format!("图片加载失败: {}", e));
+                frame.render_widget(place_holder_text, cover_area);
+            }
         }
     };
 

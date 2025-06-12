@@ -7,7 +7,8 @@ mod state;
 mod ui;
 mod util;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     // let res = App::default().run(&mut terminal);
     //
