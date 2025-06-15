@@ -43,3 +43,10 @@ impl SongList for Artist {
         &self.songs
     }
 }
+
+impl Artist {
+    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+        // HACK: 需要优化Artist的显示
+        self.songs.iter().map(|song| song.into()).collect()
+    }
+}

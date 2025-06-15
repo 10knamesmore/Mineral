@@ -45,3 +45,9 @@ impl SongList for Album {
         &self.songs
     }
 }
+
+impl Album {
+    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+        self.songs.iter().map(|song| song.into()).collect()
+    }
+}

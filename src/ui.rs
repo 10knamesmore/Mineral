@@ -3,7 +3,7 @@ use crate::{
     state::{Page, PopupState},
 };
 use main_page::*;
-use ratatui::Frame;
+use ratatui::{Frame, widgets::Widget};
 
 mod components;
 mod main_page;

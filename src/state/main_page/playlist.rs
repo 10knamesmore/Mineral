@@ -37,3 +37,8 @@ impl SongList for PlayList {
         &self.songs
     }
 }
+impl PlayList {
+    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+        self.songs.iter().map(|song| song.into()).collect()
+    }
+}

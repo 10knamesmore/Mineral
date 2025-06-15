@@ -1,3 +1,13 @@
+use std::fmt::Debug;
+
+use ratatui::{
+    style::{Color, Style, Stylize},
+    text::{Line, Text},
+    widgets::{Cell, Row},
+};
+
+use crate::{state::main_page::artist, util::format::format_duration};
+
 pub(crate) mod main_page;
 
 #[derive(Clone, Copy)]
@@ -23,8 +33,32 @@ pub struct Song {
     pub duration: u32, // 秒
 }
 
-pub trait SongList {
+pub trait SongList: Debug {
     fn get_song_list(&self) -> &[Song];
+}
+
+impl<'a> From<&'a Song> for Row<'a> {
+    fn from(song: &'a Song) -> Self {
+        let text_style = Style::default().fg(Color::DarkGray).bold();
+
+        let name_block = Text::from(vec![Line::styled(&song.name, text_style.clone())]);
+
+        let artist_block = Text::from(vec![Line::styled(&song.name, text_style.clone())]);
+
+        let album_block = Text::from(vec![Line::styled(&song.album, text_style.clone())]);
+
+        let duration_block = Text::from(vec![Line::styled(
+            format_duration(song.duration),
+            text_style,
+        )]);
+
+        Row::new(vec![
+            Cell::from(name_block),
+            Cell::from(artist_block),
+            Cell::from(album_block),
+            Cell::from(duration_block),
+        ])
+    }
 }
 
 #[allow(dead_code)]

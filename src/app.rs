@@ -20,8 +20,8 @@
 
 use crate::{
     state::{
-        Page, PopupState,
-        main_page::{MainPageState, MainPageTab},
+        Page, PopupState, Selectable,
+        main_page::{MainPageState, MainPageSubState, MainPageTab, album},
     },
     ui::render_ui,
     util::notification::{Notification, NotifyUrgency},
@@ -31,7 +31,7 @@ use ratatui::{
     DefaultTerminal,
     crossterm::event::{self},
     style::Color,
-    widgets::Row,
+    widgets::{Row, Table, Widget},
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
@@ -85,6 +85,8 @@ enum ImageCacheType {
     Artist,
 }
 
+// OPTIM: 尝试改为RefCell<StatefulProtocol>以更好的保证enum本身不可变,但内部变量可变
+// 详情见,not_requested(), get_now_cover()
 pub enum ImageState {
     NotRequested,
     Loading,
@@ -105,6 +107,7 @@ struct ImageloadResult {
 
 /// 图片缩略图缓存
 pub(crate) struct RenderCache {
+    not_requested_placeholder: ImageState,
     playlist_cover: HashMap<u64, ImageState>,
     album_cover: HashMap<u64, ImageState>,
     artist_cover: HashMap<u64, ImageState>,
@@ -136,12 +139,17 @@ impl RenderCache {
         });
 
         Self {
+            not_requested_placeholder: ImageState::NotRequested,
             playlist_cover: HashMap::new(),
             album_cover: HashMap::new(),
             artist_cover: HashMap::new(),
             load_request_sender,
             load_result_receiver,
         }
+    }
+
+    pub(crate) fn not_requested(&mut self) -> &mut ImageState {
+        &mut self.not_requested_placeholder
     }
 
     pub(crate) fn get_playlist_cover(&mut self, id: u64) -> &mut ImageState {
@@ -415,16 +423,25 @@ impl App {
 
     /// 获取主页面表格数据
     pub(crate) fn get_main_tab_items_as_row(&self) -> Vec<Row> {
-        // BUGFIX
         self.main_page.get_now_tab_items()
     }
 
     /// 获取主页面表格选中项
     pub(crate) fn get_main_tab_selected_index(&self) -> Option<usize> {
-        match &self.main_page.now_tab {
-            MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
-            MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
-            MainPageTab::FavoriteArtist => self.main_page.artist_state().selected_index(),
+        // match &self.main_page.now_state {
+        //     MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
+        //     MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
+        //     MainPageTab::FavoriteArtist => self.main_page.artist_state().selected_index(),
+        // }
+        match &self.main_page.now_state {
+            MainPageSubState::TabView(main_page_tab) => match main_page_tab {
+                MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
+                MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
+                MainPageTab::FavoriteArtist => self.main_page.artist_state().selected_index(),
+            },
+            MainPageSubState::ViewingPlayList(playlist) => playlist.selected_index(),
+            MainPageSubState::ViewingAlbum(album) => album.selected_index(),
+            MainPageSubState::ViewingArtist(artist) => artist.selected_index(),
         }
     }
 
@@ -455,7 +472,7 @@ impl App {
 
     /// 获取选中项详情
     /// 根据当前的 Page, 交给对应
-    pub(super) fn get_selected_detail(&self) -> Vec<Row> {
+    pub(super) fn get_selected_detail(&self) -> Option<Table> {
         match &self.now_page {
             Page::Main => self.main_page.get_selected_detail(),
             Page::Search => todo!(),

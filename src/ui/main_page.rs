@@ -82,16 +82,10 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
     if let Some(id) = app.main_page().get_selected_id() {
-        let tried_cached_image = match app.main_page().now_tab {
-            MainPageTab::PlayList => cache.get_playlist_cover(id),
-            MainPageTab::FavoriteAlbum => cache.get_album_cover(id),
-            MainPageTab::FavoriteArtist => cache.get_artist_cover(id),
-        };
+        let tried_cached_image = app.main_page().get_now_cover(cache);
 
         match tried_cached_image {
-            crate::app::ImageState::NotRequested => {
-                todo!("还没有发送load cache的申请, 理论上不会有这种情况")
-            }
+            crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
             crate::app::ImageState::Loading => {
                 // HACK: 优化正在时的表现
                 let place_holder_text = Text::from("图片加载中...");
@@ -109,19 +103,11 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     };
 
     // 歌曲摘要渲染
-    let rows = app.get_selected_detail();
-    let table = Table::default()
-        .rows(rows)
-        .block(
-            Block::default()
-                .title(" 歌曲列表 ")
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Yellow)),
-        )
-        .widths(vec![
-            Constraint::Percentage(20),
-            Constraint::Percentage(40),
-            Constraint::Percentage(40),
-        ]);
-    frame.render_widget(table, list_area.inner(Margin::new(1, 1)));
+    // TODO: 不能用trait object动态分发, 重构
+    match app.get_selected_detail() {
+        Some(detail_widget) => {
+            frame.render_widget(detail_widget, list_area.inner(Margin::new(1, 1)))
+        }
+        None => {}
+    }
 }
