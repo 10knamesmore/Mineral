@@ -1,4 +1,4 @@
-use crate::state::{Song, SongList};
+use crate::state::{HasId, Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
@@ -29,6 +29,12 @@ impl<'a> From<&'a PlayList> for Row<'a> {
             Cell::from(left),
             Cell::from(right).style(Style::default()),
         ])
+    }
+}
+
+impl HasId for PlayList {
+    fn id(&self) -> u64 {
+        self.id
     }
 }
 

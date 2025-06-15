@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
-use crate::{state::main_page::artist, util::format::format_duration};
+use crate::util::format::format_duration;
 
 pub(crate) mod main_page;
 
@@ -33,8 +33,18 @@ pub struct Song {
     pub duration: u32, // 秒
 }
 
+impl HasId for Song {
+    fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 pub trait SongList: Debug {
     fn get_song_list(&self) -> &[Song];
+}
+
+pub trait HasId {
+    fn id(&self) -> u64;
 }
 
 impl<'a> From<&'a Song> for Row<'a> {
@@ -63,11 +73,11 @@ impl<'a> From<&'a Song> for Row<'a> {
 
 #[allow(dead_code)]
 pub(crate) trait Selectable {
-    type Item;
+    type Item: HasId;
 
     fn items(&self) -> &[Self::Item];
     fn selected_index(&self) -> Option<usize>;
-    fn select(&mut self, index: usize);
+    fn _select(&mut self, index: usize);
 
     fn len(&self) -> usize {
         self.items().len()
@@ -91,9 +101,9 @@ pub(crate) trait Selectable {
     fn move_up_by(&mut self, n: usize) {
         if let Some(index) = self.selected_index() {
             if index >= n {
-                self.select(index - n);
+                self._select(index - n);
             } else {
-                self.select(0);
+                self._select(0);
             }
         }
     }
@@ -101,9 +111,9 @@ pub(crate) trait Selectable {
         let items = self.items();
         if let Some(index) = self.selected_index() {
             if index + n < items.len() {
-                self.select(index + n);
+                self._select(index + n);
             } else if !items.is_empty() {
-                self.select(items.len() - 1);
+                self._select(items.len() - 1);
             }
         }
     }

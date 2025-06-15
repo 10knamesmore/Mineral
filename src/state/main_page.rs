@@ -5,12 +5,12 @@ use ratatui::{
     layout::{Alignment, Constraint},
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Cell, Row, Table, Widget},
+    widgets::{Block, BorderType, Cell, Row, Table},
 };
 
 use crate::{
     app::{ImageState, RenderCache},
-    state::Song,
+    state::{HasId, Song},
     util::format::format_duration,
 };
 
@@ -28,17 +28,25 @@ pub(crate) struct MainPageState {
     artist_state: TabList<Artist>,
 }
 
-// TODO: 添加selected_id字段, 以免每次都要用get()方法再从items中获取
 #[derive(Debug, Default)]
 pub(crate) struct TabList<T> {
     items: Vec<T>,
     selected_idx: Option<usize>,
+    selected_id: Option<u64>,
 }
 
 impl<T> TabList<T> {
-    pub(crate) fn new(items: Vec<T>) -> Self {
+    pub(crate) fn new(items: Vec<T>) -> Self
+    where
+        T: HasId,
+    {
         Self {
             selected_idx: if items.is_empty() { None } else { Some(0) },
+            selected_id: if items.is_empty() {
+                None
+            } else {
+                Some(items.first().unwrap().id())
+            },
             items,
         }
     }
@@ -57,7 +65,10 @@ impl SongList for TabList<Song> {
     }
 }
 
-impl<T> Selectable for TabList<T> {
+impl<T> Selectable for TabList<T>
+where
+    T: HasId,
+{
     type Item = T;
 
     fn items(&self) -> &[Self::Item] {
@@ -68,8 +79,9 @@ impl<T> Selectable for TabList<T> {
         self.selected_idx
     }
 
-    fn select(&mut self, index: usize) {
+    fn _select(&mut self, index: usize) {
         self.selected_idx = Some(index);
+        self.selected_id = Some(self.items.get(index).unwrap().id());
     }
 }
 
@@ -101,53 +113,40 @@ impl MainPageState {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {
-                    Some(idx) => {
-                        let id = self
-                            .playlist_state
-                            .items
-                            .get(idx)
-                            .expect("out of bound!")
-                            .id;
+                    Some(_) => {
+                        // 如果selected_idx存在, 那么应当保证selected_id也存在
+                        let id = self.playlist_state.selected_id.unwrap();
                         cache.get_playlist_cover(id)
                     }
                     None => cache.not_requested(),
                 },
                 MainPageTab::FavoriteAlbum => match self.album_state.selected_idx {
-                    Some(idx) => {
-                        let id = self.album_state.items.get(idx).expect("out of bound!").id;
+                    Some(_) => {
+                        // 如果selected_idx存在, 那么应当保证selected_id也存在
+                        let id = self.album_state.selected_id.unwrap();
                         cache.get_album_cover(id)
                     }
                     None => cache.not_requested(),
                 },
-                MainPageTab::FavoriteArtist => todo!(),
+                MainPageTab::FavoriteArtist => match self.artist_state.selected_idx {
+                    Some(_) => {
+                        // 如果selected_idx存在, 那么应当保证selected_id也存在
+                        let id = self.artist_state.selected_id.unwrap();
+                        cache.get_artist_cover(id)
+                    }
+                    None => cache.not_requested(),
+                },
             },
             MainPageSubState::ViewingPlayList(_) => {
-                let idx = self
-                    .playlist_state
-                    .selected_idx
-                    .expect("已经选中了一个Playlist, 但是playlist_state.selected_idx仍然为None");
-                let id = self
-                    .playlist_state
-                    .items
-                    .get(idx)
-                    .expect("out of bound!")
-                    .id;
+                let id = self.playlist_state.selected_id.unwrap();
                 cache.get_playlist_cover(id)
             }
             MainPageSubState::ViewingAlbum(_) => {
-                let idx = self
-                    .album_state
-                    .selected_idx
-                    .expect("已经选中了一个Album, 但是album_state.selected_idx仍然为None");
-                let id = self.album_state.items.get(idx).expect("out of bound!").id;
+                let id = self.album_state.selected_id.unwrap();
                 cache.get_album_cover(id)
             }
             MainPageSubState::ViewingArtist(_) => {
-                let idx = self
-                    .artist_state
-                    .selected_idx
-                    .expect("已经选中了一个artist, 但是playlist_state.selected_idx仍然为None");
-                let id = self.artist_state.items.get(idx).expect("out of bound!").id;
+                let id = self.artist_state.selected_id.unwrap();
                 cache.get_album_cover(id)
             }
         }
@@ -362,51 +361,13 @@ impl MainPageState {
     pub(crate) fn get_selected_id(&self) -> Option<u64> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
-                MainPageTab::PlayList => self.playlist_state.selected_idx.and_then(|index| {
-                    self.playlist_state
-                        .items
-                        .get(index)
-                        .map(|playlist| playlist.id)
-                }),
-                MainPageTab::FavoriteAlbum => self
-                    .album_state
-                    .selected_idx
-                    .and_then(|index| self.album_state.items.get(index).map(|album| album.id)),
-                MainPageTab::FavoriteArtist => self
-                    .artist_state
-                    .selected_idx
-                    .and_then(|index| self.artist_state.items.get(index).map(|artist| artist.id)),
+                MainPageTab::PlayList => self.playlist_state.selected_id,
+                MainPageTab::FavoriteAlbum => self.album_state.selected_id,
+                MainPageTab::FavoriteArtist => self.artist_state.selected_id,
             },
-            MainPageSubState::ViewingPlayList(play_list) => {
-                let selected_idx = play_list.selected_idx?;
-                Some(
-                    play_list
-                        .items
-                        .get(selected_idx)
-                        .expect(&format!("程序内部错误! 对于当前playlist,想获取idx: {} 的 id ,but selected index out of bounds",selected_idx))
-                    .id
-                )
-            }
-            MainPageSubState::ViewingAlbum(album) => {
-                let selected_idx = album.selected_idx?;
-                Some(
-                    album
-                        .items
-                        .get(selected_idx)
-                        .expect(&format!("程序内部错误! 对于当前Album,想获取idx: {} 的 id ,but selected index out of bounds",selected_idx))
-                    .id
-                )
-            }
-            MainPageSubState::ViewingArtist(artist) => {
-                let selected_idx = artist.selected_idx?;
-                Some(
-                    artist
-                        .items
-                        .get(selected_idx)
-                        .expect(&format!("程序内部错误! 对于当前Artist,想获取idx: {} 的 id ,but selected index out of bounds",selected_idx))
-                    .id
-                )
-            }
+            MainPageSubState::ViewingPlayList(play_list) => play_list.selected_id,
+            MainPageSubState::ViewingAlbum(album) => album.selected_id,
+            MainPageSubState::ViewingArtist(artist) => artist.selected_id,
         }
     }
 

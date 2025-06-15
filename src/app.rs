@@ -21,7 +21,7 @@
 use crate::{
     state::{
         Page, PopupState, Selectable,
-        main_page::{MainPageState, MainPageSubState, MainPageTab, album},
+        main_page::{MainPageState, MainPageSubState, MainPageTab},
     },
     ui::render_ui,
     util::notification::{Notification, NotifyUrgency},
@@ -31,7 +31,7 @@ use ratatui::{
     DefaultTerminal,
     crossterm::event::{self},
     style::Color,
-    widgets::{Row, Table, Widget},
+    widgets::{Row, Table},
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
@@ -265,8 +265,8 @@ impl RenderCache {
                 None => match Self::try_get_img_path_from_net(cache_path, picker, image_type, id)
                     .await
                 {
-                    Ok(_) => todo!(),
-                    Err(_) => todo!(),
+                    Ok(_) => todo!("从net获取图片尚未实现"),
+                    Err(_) => todo!("从net获取图片尚未实现"),
                 },
             },
             Err(e) => Err(format!("读取图片的时候发生IO错误: {}", e)),
@@ -280,7 +280,7 @@ impl RenderCache {
         id: u64,
     ) -> io::Result<StatefulProtocol> {
         // TODO: 尝试通过api获取网络图片,并保存到本地,直接返回StatefulProtocol
-        todo!()
+        todo!("从net获取图片尚未实现")
     }
 
     /// 尝试查找type为image_type的图片在磁盘上是否存在, 如果存在, 返回图片的路径

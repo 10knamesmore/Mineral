@@ -1,7 +1,6 @@
 use super::components::render_playback_control;
 use crate::{
     app::{App, RenderCache},
-    state::main_page::MainPageTab,
     util::{layout::center, ui::zebra_rows},
 };
 use ratatui::{
@@ -103,11 +102,7 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     };
 
     // 歌曲摘要渲染
-    // TODO: 不能用trait object动态分发, 重构
-    match app.get_selected_detail() {
-        Some(detail_widget) => {
-            frame.render_widget(detail_widget, list_area.inner(Margin::new(1, 1)))
-        }
-        None => {}
+    if let Some(detail_widget) = app.get_selected_detail() {
+        frame.render_widget(detail_widget, list_area.inner(Margin::new(1, 1)))
     }
 }

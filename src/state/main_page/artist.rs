@@ -1,4 +1,4 @@
-use crate::state::{Song, SongList};
+use crate::state::{HasId, Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span},
@@ -38,6 +38,12 @@ impl<'a> From<&'a Artist> for Row<'a> {
     }
 }
 
+impl HasId for Artist {
+    fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 impl SongList for Artist {
     fn get_song_list(&self) -> &[Song] {
         &self.songs
@@ -45,7 +51,7 @@ impl SongList for Artist {
 }
 
 impl Artist {
-    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+    pub(crate) fn to_rows(&self) -> Vec<Row<'_>> {
         // HACK: 需要优化Artist的显示
         self.songs.iter().map(|song| song.into()).collect()
     }
