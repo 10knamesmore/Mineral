@@ -35,6 +35,7 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     io::{self},
 };
@@ -85,12 +86,10 @@ enum ImageCacheType {
     Artist,
 }
 
-// OPTIM: 尝试改为RefCell<StatefulProtocol>以更好的保证enum本身不可变,但内部变量可变
-// 详情见,not_requested(), get_now_cover()
 pub enum ImageState {
     NotRequested,
     Loading,
-    Loaded(StatefulProtocol),
+    Loaded(RefCell<StatefulProtocol>),
     Failed(String),
 }
 
@@ -148,11 +147,11 @@ impl RenderCache {
         }
     }
 
-    pub(crate) fn not_requested(&mut self) -> &mut ImageState {
+    pub(crate) fn not_requested(&mut self) -> &ImageState {
         &mut self.not_requested_placeholder
     }
 
-    pub(crate) fn get_playlist_cover(&mut self, id: u64) -> &mut ImageState {
+    pub(crate) fn get_playlist_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.playlist_cover.entry(id) {
@@ -160,9 +159,9 @@ impl RenderCache {
             self.request_image_load(ImageCacheType::Playlist, id);
         }
 
-        self.playlist_cover.get_mut(&id).unwrap()
+        self.playlist_cover.get(&id).unwrap()
     }
-    pub(crate) fn get_artist_cover(&mut self, id: u64) -> &mut ImageState {
+    pub(crate) fn get_artist_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.artist_cover.entry(id) {
@@ -170,9 +169,9 @@ impl RenderCache {
             self.request_image_load(ImageCacheType::Artist, id);
         }
 
-        self.artist_cover.get_mut(&id).unwrap()
+        self.artist_cover.get(&id).unwrap()
     }
-    pub(crate) fn get_album_cover(&mut self, id: u64) -> &mut ImageState {
+    pub(crate) fn get_album_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.album_cover.entry(id) {
@@ -180,7 +179,7 @@ impl RenderCache {
             self.request_image_load(ImageCacheType::Album, id);
         }
 
-        self.album_cover.get_mut(&id).unwrap()
+        self.album_cover.get(&id).unwrap()
     }
 
     fn request_image_load(&self, image_type: ImageCacheType, id: u64) {
@@ -195,7 +194,7 @@ impl RenderCache {
     fn poll_image_results(&mut self) {
         while let Ok(result) = self.load_result_receiver.try_recv() {
             let state = match result.result {
-                Ok(image) => ImageState::Loaded(image),
+                Ok(image) => ImageState::Loaded(RefCell::new(image)),
                 Err(e) => ImageState::Failed(e),
             };
 

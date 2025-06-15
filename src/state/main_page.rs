@@ -109,7 +109,7 @@ impl Default for MainPageSubState {
 
 impl MainPageState {
     // 当now_state的selected_idx为None的时候, 会返回NotRequested
-    pub(crate) fn get_now_cover<'a>(&self, cache: &'a mut RenderCache) -> &'a mut ImageState {
+    pub(crate) fn get_now_cover<'a>(&self, cache: &'a mut RenderCache) -> &'a ImageState {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {

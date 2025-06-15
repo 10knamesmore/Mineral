@@ -91,7 +91,11 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
                 frame.render_widget(place_holder_text, cover_area);
             }
             crate::app::ImageState::Loaded(cached_image) => {
-                frame.render_stateful_widget(StatefulImage::default(), area, cached_image);
+                frame.render_stateful_widget(
+                    StatefulImage::default(),
+                    area,
+                    &mut *cached_image.borrow_mut(),
+                );
             }
             crate::app::ImageState::Failed(e) => {
                 // HACK: 优化加载失败时的错误提醒
