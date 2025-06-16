@@ -7,11 +7,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-#[derive(Debug, Default, Setters)]
+#[derive(Debug, Default)]
 pub(crate) struct Popup<'a> {
-    #[setters(into)]
     title: Line<'a>,
-    #[setters(into)]
     content: Text<'a>,
     border_style: Style,
     title_style: Style,
@@ -19,24 +17,29 @@ pub(crate) struct Popup<'a> {
 }
 
 impl<'a> Popup<'a> {
-    pub fn get_title(&self) -> &Line<'a> {
-        &self.title
+    pub fn content(mut self, content: Text<'a>) -> Self {
+        self.content = content;
+        self
     }
 
-    pub fn get_content(&self) -> &Text<'a> {
-        &self.content
+    pub fn border_style(mut self, border_style: Style) -> Self {
+        self.border_style = border_style;
+        self
     }
 
-    pub fn get_border_style(&self) -> &Style {
-        &self.border_style
+    pub fn title_style(mut self, title_style: Style) -> Self {
+        self.title_style = title_style;
+        self
     }
 
-    pub fn get_title_style(&self) -> &Style {
-        &self.title_style
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
     }
 
-    pub fn get_style(&self) -> &Style {
-        &self.style
+    pub fn title(mut self, title: Line<'a>) -> Self {
+        self.title = title;
+        self
     }
 }
 

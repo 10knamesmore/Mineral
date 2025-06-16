@@ -60,7 +60,7 @@ impl<T> TabList<T> {
 }
 
 impl SongList for TabList<Song> {
-    fn get_song_list(&self) -> &[Song] {
+    fn songs(&self) -> &[Song] {
         &self.items
     }
 }
@@ -109,14 +109,14 @@ impl Default for MainPageSubState {
 
 impl MainPageState {
     // 当now_state的selected_idx为None的时候, 会返回NotRequested
-    pub(crate) fn get_now_cover<'a>(&self, cache: &'a mut RenderCache) -> &'a ImageState {
+    pub(crate) fn now_cover<'a>(&self, cache: &'a mut RenderCache) -> &'a ImageState {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {
                     Some(_) => {
                         // 如果selected_idx存在, 那么应当保证selected_id也存在
                         let id = self.playlist_state.selected_id.unwrap();
-                        cache.get_playlist_cover(id)
+                        cache.playlist_cover(id)
                     }
                     None => cache.not_requested(),
                 },
@@ -124,7 +124,7 @@ impl MainPageState {
                     Some(_) => {
                         // 如果selected_idx存在, 那么应当保证selected_id也存在
                         let id = self.album_state.selected_id.unwrap();
-                        cache.get_album_cover(id)
+                        cache.album_cover(id)
                     }
                     None => cache.not_requested(),
                 },
@@ -132,22 +132,22 @@ impl MainPageState {
                     Some(_) => {
                         // 如果selected_idx存在, 那么应当保证selected_id也存在
                         let id = self.artist_state.selected_id.unwrap();
-                        cache.get_artist_cover(id)
+                        cache.artist_cover(id)
                     }
                     None => cache.not_requested(),
                 },
             },
             MainPageSubState::ViewingPlayList(_) => {
                 let id = self.playlist_state.selected_id.unwrap();
-                cache.get_playlist_cover(id)
+                cache.playlist_cover(id)
             }
             MainPageSubState::ViewingAlbum(_) => {
                 let id = self.album_state.selected_id.unwrap();
-                cache.get_album_cover(id)
+                cache.album_cover(id)
             }
             MainPageSubState::ViewingArtist(_) => {
                 let id = self.artist_state.selected_id.unwrap();
-                cache.get_album_cover(id)
+                cache.artist_cover(id)
             }
         }
     }
@@ -162,7 +162,7 @@ impl MainPageState {
     }
 
     /// 根据目前的 tab 以及对应的 selected index 返回SongList
-    pub(crate) fn get_song_list(&self) -> Option<&dyn SongList> {
+    pub(crate) fn song_list(&self) -> Option<&dyn SongList> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => {
@@ -185,7 +185,7 @@ impl MainPageState {
     }
 
     /// 根据目前的 tab 返回对应的 列表(playlist,album,artist)
-    pub(crate) fn get_all_song_lists(&self) -> Option<Vec<&dyn SongList>> {
+    pub(crate) fn all_song_lists(&self) -> Option<Vec<&dyn SongList>> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => Some(
@@ -218,7 +218,7 @@ impl MainPageState {
     /// # 根据当前的state,返回对应的Rows
     ///  - 比如现在在浏览所有的PlayList, 就返回所有的playlist组成的row
     ///  - 比如现在在浏览某一个playlist, 就返回当前playlist里面的所有song组成的row
-    pub(crate) fn get_now_tab_items(&self) -> Vec<Row> {
+    pub(crate) fn now_tab_items(&self) -> Vec<Row> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.playlist_state.to_rows(),
@@ -236,7 +236,7 @@ impl MainPageState {
     /// 比如当前在 Tab 为PlayList, 就根据目前的 Selected, 返回选中的 PlayList
     /// 里面歌曲组成的列表摘要
     /// 如果是Playlist或Album等,就会返回None,因为在那些情况不应该使用这个函数
-    pub(crate) fn get_selected_detail(&self) -> Option<Table> {
+    pub(crate) fn selected_detail(&self) -> Option<Table> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {
@@ -354,7 +354,7 @@ impl MainPageState {
         T: SongList,
     {
         let songs_cell: Vec<Row> = songlist
-            .get_song_list()
+            .songs()
             .iter()
             .enumerate()
             .map(|(i, song)| {
@@ -437,11 +437,11 @@ impl MainPageState {
     ///
     /// # 示例
     /// ```rust
-    /// if let Some(id) = main_page_state.get_selected_id() {
+    /// if let Some(id) = main_page_state.selected_id() {
     ///     println!("当前选中的 ID 是 {}", id);
     /// }
     /// ```
-    pub(crate) fn get_selected_id(&self) -> Option<u64> {
+    pub(crate) fn selected_id(&self) -> Option<u64> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.playlist_state.selected_id,

@@ -40,7 +40,7 @@ impl HasId for Song {
 }
 
 pub trait SongList: Debug {
-    fn get_song_list(&self) -> &[Song];
+    fn songs(&self) -> &[Song];
 }
 
 pub trait HasId {

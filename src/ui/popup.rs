@@ -51,14 +51,14 @@ impl Widget for &Notification {
     where
         Self: Sized,
     {
-        let noti_title = match self.get_urgency() {
-            NotifyUrgency::Debug => format!("󰋽 DEBUG : {}", self.get_title()),
-            NotifyUrgency::Info => format!(" INFO : {}", self.get_title()),
-            NotifyUrgency::Warning => format!(" WARNING : {}", self.get_title()),
-            NotifyUrgency::Error => format!(" ERROR : {}", self.get_title()),
+        let noti_title = match self.urgency() {
+            NotifyUrgency::Debug => format!("󰋽 DEBUG : {}", self.title()),
+            NotifyUrgency::Info => format!(" INFO : {}", self.title()),
+            NotifyUrgency::Warning => format!(" WARNING : {}", self.title()),
+            NotifyUrgency::Error => format!(" ERROR : {}", self.title()),
         };
 
-        let urgency_color = match self.get_urgency() {
+        let urgency_color = match self.urgency() {
             NotifyUrgency::Debug => Color::Gray,
             NotifyUrgency::Info => Color::Blue,
             NotifyUrgency::Warning => Color::Yellow,
@@ -74,9 +74,7 @@ impl Widget for &Notification {
                         .add_modifier(Modifier::BOLD),
                 ),
             )
-            .content(
-                Text::from(self.get_content().as_str()).style(Style::default().fg(urgency_color)),
-            )
+            .content(Text::from(self.content().as_str()).style(Style::default().fg(urgency_color)))
             .border_style(Style::default().fg(urgency_color));
 
         popup.render(area, buf);

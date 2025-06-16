@@ -151,7 +151,7 @@ impl RenderCache {
         &mut self.not_requested_placeholder
     }
 
-    pub(crate) fn get_playlist_cover(&mut self, id: u64) -> &ImageState {
+    pub(crate) fn playlist_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.playlist_cover.entry(id) {
@@ -161,7 +161,7 @@ impl RenderCache {
 
         self.playlist_cover.get(&id).unwrap()
     }
-    pub(crate) fn get_artist_cover(&mut self, id: u64) -> &ImageState {
+    pub(crate) fn artist_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.artist_cover.entry(id) {
@@ -171,7 +171,7 @@ impl RenderCache {
 
         self.artist_cover.get(&id).unwrap()
     }
-    pub(crate) fn get_album_cover(&mut self, id: u64) -> &ImageState {
+    pub(crate) fn album_cover(&mut self, id: u64) -> &ImageState {
         self.poll_image_results();
 
         if let std::collections::hash_map::Entry::Vacant(entry) = self.album_cover.entry(id) {
@@ -243,7 +243,7 @@ impl RenderCache {
     ) -> Result<StatefulProtocol, String> {
         let (image_type, id) = (&request.image_type, request.id);
 
-        match Self::try_get_img_path_from_disk(cache_path, image_type, id).await {
+        match Self::try_path_from_disk(cache_path, image_type, id).await {
             Ok(file_path_opt) => match file_path_opt {
                 Some(file_path) => {
                     let data = tokio::fs::read(&file_path)
@@ -261,9 +261,7 @@ impl RenderCache {
                     let image = picker.new_resize_protocol(decoded_image);
                     Ok(image)
                 }
-                None => match Self::try_get_img_path_from_net(cache_path, picker, image_type, id)
-                    .await
-                {
+                None => match Self::try_from_net(cache_path, picker, image_type, id).await {
                     Ok(_) => todo!("从net获取图片尚未实现"),
                     Err(_) => todo!("从net获取图片尚未实现"),
                 },
@@ -272,7 +270,7 @@ impl RenderCache {
         }
     }
 
-    async fn try_get_img_path_from_net(
+    async fn try_from_net(
         cache_path: &str,
         picker: &Picker,
         image_type: &ImageCacheType,
@@ -291,7 +289,7 @@ impl RenderCache {
     /// # 返回
     /// - `Err(e)`: 发生io错误
     /// - `Option<String>`: 返回图片的路径，如果不存在则返回 None
-    async fn try_get_img_path_from_disk(
+    async fn try_path_from_disk(
         cache_path: &str,
         image_type: &ImageCacheType,
         id: u64,
@@ -421,12 +419,12 @@ impl App {
     }
 
     /// 获取主页面表格数据
-    pub(crate) fn get_main_tab_items_as_row(&self) -> Vec<Row> {
-        self.main_page.get_now_tab_items()
+    pub(crate) fn main_tab_items_as_row(&self) -> Vec<Row> {
+        self.main_page.now_tab_items()
     }
 
     /// 获取主页面表格选中项
-    pub(crate) fn get_main_tab_selected_index(&self) -> Option<usize> {
+    pub(crate) fn main_tab_selected_index(&self) -> Option<usize> {
         // match &self.main_page.now_state {
         //     MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
         //     MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
@@ -471,9 +469,9 @@ impl App {
 
     /// 获取选中项详情
     /// 根据当前的 Page, 交给对应
-    pub(super) fn get_selected_detail(&self) -> Option<Table> {
+    pub(super) fn selected_detail(&self) -> Option<Table> {
         match &self.now_page {
-            Page::Main => self.main_page.get_selected_detail(),
+            Page::Main => self.main_page.selected_detail(),
             Page::Search => todo!(),
         }
     }

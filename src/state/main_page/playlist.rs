@@ -40,7 +40,7 @@ impl HasId for PlayList {
 }
 
 impl SongList for PlayList {
-    fn get_song_list(&self) -> &[Song] {
+    fn songs(&self) -> &[Song] {
         &self.songs
     }
 }

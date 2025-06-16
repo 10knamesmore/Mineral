@@ -48,7 +48,7 @@ impl HasId for Album {
 }
 
 impl SongList for Album {
-    fn get_song_list(&self) -> &[Song] {
+    fn songs(&self) -> &[Song] {
         &self.songs
     }
 }

@@ -29,7 +29,7 @@ pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
 }
 
 fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
-    let rows = zebra_rows(app.get_main_tab_items_as_row(), &app.colors);
+    let rows = zebra_rows(app.main_tab_items_as_row(), &app.colors);
 
     let table = Table::default()
         .block(
@@ -50,7 +50,7 @@ fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
         .rows(rows)
         .widths(vec![Constraint::Percentage(60), Constraint::Percentage(40)]);
 
-    let mut table_state = TableState::default().with_selected(app.get_main_tab_selected_index());
+    let mut table_state = TableState::default().with_selected(app.main_tab_selected_index());
 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
@@ -80,8 +80,8 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
         Constraint::Percentage(100),
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
-    if let Some(id) = app.main_page().get_selected_id() {
-        let tried_cached_image = app.main_page().get_now_cover(cache);
+    if let Some(id) = app.main_page().selected_id() {
+        let tried_cached_image = app.main_page().now_cover(cache);
 
         match tried_cached_image {
             crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
@@ -106,7 +106,7 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     };
 
     // 歌曲摘要渲染
-    if let Some(detail_widget) = app.get_selected_detail() {
+    if let Some(detail_widget) = app.selected_detail() {
         frame.render_widget(detail_widget, list_area.inner(Margin::new(1, 1)))
     }
 }

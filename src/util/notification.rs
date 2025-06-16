@@ -1,5 +1,3 @@
-use derive_setters::Setters;
-
 #[derive(Default, Debug)]
 pub(crate) enum NotifyUrgency {
     Debug,
@@ -9,11 +7,9 @@ pub(crate) enum NotifyUrgency {
     Error,
 }
 
-#[derive(Debug, Default, Setters)]
+#[derive(Debug, Default)]
 pub(crate) struct Notification {
-    #[setters(into)]
     title: String,
-    #[setters(into)]
     content: String,
     urgency: NotifyUrgency,
 }
@@ -26,15 +22,15 @@ impl Notification {
             urgency,
         }
     }
-    pub(crate) fn get_urgency(&self) -> &NotifyUrgency {
+    pub(crate) fn urgency(&self) -> &NotifyUrgency {
         &self.urgency
     }
 
-    pub(crate) fn get_title(&self) -> &String {
+    pub(crate) fn title(&self) -> &String {
         &self.title
     }
 
-    pub(crate) fn get_content(&self) -> &String {
+    pub(crate) fn content(&self) -> &String {
         &self.content
     }
 }
