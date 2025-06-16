@@ -1,4 +1,4 @@
-use crate::state::{HasId, Song, SongList};
+use crate::state::{HasId, HasIntroduction, Introduction, Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
@@ -14,6 +14,7 @@ pub(crate) struct Album {
     pub(crate) year: u32,
     pub(crate) id: u64,
     pub(crate) songs: Vec<Song>,
+    introduction: Introduction,
 }
 
 impl<'a> From<&'a Album> for Row<'a> {
@@ -49,6 +50,12 @@ impl HasId for Album {
 impl SongList for Album {
     fn get_song_list(&self) -> &[Song] {
         &self.songs
+    }
+}
+
+impl HasIntroduction for Album {
+    fn introduction(&self) -> &Introduction {
+        &self.introduction
     }
 }
 

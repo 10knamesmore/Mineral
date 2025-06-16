@@ -1,4 +1,4 @@
-use crate::state::{HasId, Song, SongList};
+use crate::state::{HasId, HasIntroduction, Introduction, Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span},
@@ -11,6 +11,7 @@ pub(crate) struct Artist {
     pub(crate) followers: u32,
     pub(crate) songs: Vec<Song>,
     pub(crate) id: u64,
+    introduction: Introduction,
 }
 
 fn format_follower_count(followers: u32) -> String {
@@ -47,6 +48,12 @@ impl HasId for Artist {
 impl SongList for Artist {
     fn get_song_list(&self) -> &[Song] {
         &self.songs
+    }
+}
+
+impl HasIntroduction for Artist {
+    fn introduction(&self) -> &Introduction {
+        &self.introduction
     }
 }
 

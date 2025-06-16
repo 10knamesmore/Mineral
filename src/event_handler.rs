@@ -17,7 +17,7 @@ pub(crate) fn handle_event(app: &mut App, event: Event) {
         }
         PopupState::None => {
             if !handle_global_key(app, &event) {
-                match app.get_now_page() {
+                match app.now_page() {
                     Page::Main => {
                         main_page::handle_main_page_event(app, event);
                     }

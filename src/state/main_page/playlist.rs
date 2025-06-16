@@ -1,4 +1,4 @@
-use crate::state::{HasId, Song, SongList};
+use crate::state::{HasId, HasIntroduction, Introduction, Song, SongList};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
@@ -10,7 +10,8 @@ pub(crate) struct PlayList {
     pub(crate) name: String,
     pub(crate) track_count: usize,
     pub(crate) songs: Vec<Song>,
-    pub(crate) id: u64, // 可加 id, 创建时间等
+    pub(crate) id: u64,
+    pub(crate) introduction: Introduction,
 }
 
 impl<'a> From<&'a PlayList> for Row<'a> {
@@ -43,6 +44,13 @@ impl SongList for PlayList {
         &self.songs
     }
 }
+
+impl HasIntroduction for PlayList {
+    fn introduction(&self) -> &Introduction {
+        &self.introduction
+    }
+}
+
 impl PlayList {
     pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
         self.songs.iter().map(|song| song.into()).collect()

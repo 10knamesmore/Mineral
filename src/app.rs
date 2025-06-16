@@ -391,7 +391,7 @@ impl App {
     }
 
     /// 获取当前页面
-    pub(crate) fn get_now_page(&self) -> Page {
+    pub(crate) fn now_page(&self) -> Page {
         self.now_page
     }
 
@@ -489,13 +489,26 @@ impl App {
         }
     }
 
+    pub(crate) fn nav_forward(&mut self) {
+        match self.now_page {
+            Page::Main => self.main_page.nav_forward(),
+            Page::Search => todo!(),
+        }
+    }
+
+    pub(crate) fn nav_backward(&mut self) {
+        match self.now_page {
+            Page::Main => self.main_page.nav_backward(),
+            Page::Search => todo!(),
+        }
+    }
+
     fn notify_internal(&mut self, title: &str, msg: &str, urgency: NotifyUrgency) {
         self.popup(PopupState::Notificacion);
         self.notifications
             .push_back(Notification::new(title, msg, urgency));
     }
 
-    // 分别暴露四个等级的接口
     pub(crate) fn notify_debug(&mut self, title: &str, msg: &str) {
         self.notify_internal(title, msg, NotifyUrgency::Debug);
     }
@@ -520,7 +533,7 @@ pub(super) mod data_generator {
         App,
         app::TableColors,
         state::{
-            Page, PopupState, Song,
+            Introduction, Page, PopupState, Song,
             main_page::{MainPageState, playlist::PlayList},
         },
     };
@@ -607,6 +620,32 @@ pub(super) mod data_generator {
             .collect()
     }
 
+    fn rand_album_intro(rng: &mut impl Rng) -> String {
+        let intros = [
+            "一段穿越时空的声音旅程，唤起你内心最深的回忆。",
+            "用旋律讲述生活的细腻与浪漫，每一首都是心情的注脚。",
+            "融合多元风格，开启听觉新世界。",
+            "献给孤独时光的你，陪你走过每个夜晚。",
+            "在节奏中释放压力，在旋律中寻找自我。",
+            "捕捉城市的脉动，描绘喧嚣中的宁静。",
+            "一张专属于清晨与黄昏之间的音乐写真。",
+            "当代声音实验，挑战你的听觉边界。",
+            "民谣与电子的对话，传统与未来的交融。",
+            "低保真质感，记录最真实的情绪。",
+            "灵感来自旅途的每一次偶遇与别离。",
+            "用音乐串联记忆，构建属于你的声音档案馆。",
+            "轻盈旋律，宛如夏日微风轻拂心头。",
+            "节拍与情感交织，一场声波的深度潜行。",
+            "在每个不眠夜里，与你心灵相通。",
+            "静谧与激荡并存，一次音乐与灵魂的对话。",
+            "从过去到未来，用音符写下不朽篇章。",
+            "疗愈旋律抚慰心灵，找回内在的平静。",
+            "探索未知的声音维度，开启感官新篇。",
+            "音符跳动如心跳，是你未说出口的情绪。",
+        ];
+        intros.choose(rng).unwrap().to_string()
+    }
+
     fn gen_unique_ids(amount: usize, rng: &mut impl Rng) -> Vec<u64> {
         let pool: Vec<u64> = (0..100).collect();
         pool.choose_multiple(rng, amount).cloned().collect()
@@ -629,12 +668,14 @@ pub(super) mod data_generator {
         let ids = gen_unique_ids(song_count, rng);
 
         let songs: Vec<Song> = ids.into_iter().map(|id| gen_song(id, rng)).collect();
+        let introduction = Introduction::new(rand_album_intro(rng));
 
         PlayList {
             name: format!("{} - 测试歌单 ID:{}", name, id),
             track_count: songs.len(),
             songs,
             id,
+            introduction,
         }
     }
 

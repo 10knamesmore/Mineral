@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::{
     app::{ImageState, RenderCache},
-    state::{HasId, Song},
+    state::{HasId, HasIntroduction, Song},
     util::format::format_duration,
 };
 
@@ -20,7 +20,7 @@ pub(crate) mod album;
 pub(crate) mod artist;
 pub(crate) mod playlist;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct MainPageState {
     pub(crate) now_state: MainPageSubState,
     playlist_state: TabList<PlayList>,
@@ -28,7 +28,7 @@ pub(crate) struct MainPageState {
     artist_state: TabList<Artist>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TabList<T> {
     items: Vec<T>,
     selected_idx: Option<usize>,
@@ -151,6 +151,7 @@ impl MainPageState {
             }
         }
     }
+
     pub(crate) fn new(playlists: Vec<PlayList>, albums: Vec<Album>, artists: Vec<Artist>) -> Self {
         Self {
             now_state: MainPageSubState::default(),
@@ -242,10 +243,9 @@ impl MainPageState {
                     Some(index) => {
                         let selected_list = self
                             .playlist_state
-                            .items
-                            .get(index)
+                            .selected_item()
                             .unwrap_or_else(|| panic!("程序内部错误! 对于当前Playlist,想获取idx: {} 的 detail, but selected index out of bounds",index));
-                        Some(Self::get_detail_from_songlist(selected_list))
+                        Some(Self::detail_from_songlist(selected_list))
                     }
                     None => None,
                 },
@@ -253,10 +253,9 @@ impl MainPageState {
                     Some(index) => {
                         let selected_list = self
                                     .album_state
-                                    .items
-                                    .get(index)
+                                    .selected_item()
                                     .unwrap_or_else(|| panic!("程序内部错误! 对于当前Album,想获取idx: {} 的 detail ,but selected index out of bounds",index));
-                        Some(Self::get_detail_from_songlist(selected_list))
+                        Some(Self::detail_from_songlist(selected_list))
                     }
                     None => None,
                 },
@@ -264,22 +263,93 @@ impl MainPageState {
                     Some(index) => {
                         let selected_list = self
                                     .artist_state
-                                    .items
-                                    .get(index)
+                                    .selected_item()
                                     .unwrap_or_else(|| panic!("程序内部错误! 对于当前Album,想获取idx: {} 的 detail ,but selected index out of bounds",index));
-                        Some(Self::get_detail_from_songlist(selected_list))
+                        Some(Self::detail_from_songlist(selected_list))
                     }
                     None => None,
                 },
             },
-            MainPageSubState::ViewingPlayList(tab_list) => todo!(),
-            MainPageSubState::ViewingAlbum(tab_list) => todo!(),
-            MainPageSubState::ViewingArtist(tab_list) => todo!(),
+            MainPageSubState::ViewingPlayList(_) => Some(Self::detail_from_introuction(
+                self.playlist_state.selected_item()?,
+            )),
+            MainPageSubState::ViewingAlbum(_) => Some(Self::detail_from_introuction(
+                self.album_state.selected_item()?,
+            )),
+            MainPageSubState::ViewingArtist(_) => Some(Self::detail_from_introuction(
+                self.artist_state.selected_item()?,
+            )),
         }
     }
 
+    pub(crate) fn nav_forward(&mut self) {
+        match &self.now_state {
+            MainPageSubState::TabView(main_page_tab) => match main_page_tab {
+                MainPageTab::PlayList => {
+                    // HACK: 直接clone太不优雅了, 以后要重构
+                    let Some(item) = self.playlist_state.selected_item() else {
+                        return;
+                    };
+                    let playlist = TabList::new(item.songs.clone());
+                    self.now_state = MainPageSubState::ViewingPlayList(playlist);
+                }
+                MainPageTab::FavoriteAlbum => {
+                    let Some(item) = self.album_state.selected_item() else {
+                        return;
+                    };
+                    let album = TabList::new(item.songs.clone());
+                    self.now_state = MainPageSubState::ViewingAlbum(album);
+                }
+                MainPageTab::FavoriteArtist => {
+                    let Some(item) = self.artist_state.selected_item() else {
+                        return;
+                    };
+                    let artist = TabList::new(item.songs.clone());
+                    self.now_state = MainPageSubState::ViewingArtist(artist);
+                }
+            },
+            MainPageSubState::ViewingPlayList(_) => {
+                let Some(id) = self.playlist_state.selected_id else {
+                    return;
+                };
+                self.play(id);
+            }
+            MainPageSubState::ViewingAlbum(_) => {
+                let Some(id) = self.album_state.selected_id else {
+                    return;
+                };
+                self.play(id);
+            }
+            MainPageSubState::ViewingArtist(_) => {
+                let Some(id) = self.artist_state.selected_id else {
+                    return;
+                };
+                self.play(id);
+            }
+        }
+    }
+
+    pub(crate) fn nav_backward(&mut self) {
+        match &self.now_state {
+            MainPageSubState::TabView(_) => {}
+            MainPageSubState::ViewingPlayList(_) => {
+                self.now_state = MainPageSubState::TabView(MainPageTab::PlayList);
+            }
+            MainPageSubState::ViewingAlbum(_) => {
+                self.now_state = MainPageSubState::TabView(MainPageTab::FavoriteAlbum);
+            }
+            MainPageSubState::ViewingArtist(_) => {
+                self.now_state = MainPageSubState::TabView(MainPageTab::FavoriteArtist)
+            }
+        }
+    }
+
+    pub(super) fn play(&mut self, id: u64) {
+        todo!("播放歌曲")
+    }
+
     // 解析传入的 SongList, 根据其内部信息返回对应组成的Rows
-    fn get_detail_from_songlist<T>(songlist: &T) -> Table<'_>
+    fn detail_from_songlist<T>(songlist: &T) -> Table<'_>
     where
         T: SongList,
     {
@@ -334,6 +404,19 @@ impl MainPageState {
                 Constraint::Percentage(40),
             ]);
         table
+    }
+
+    fn detail_from_introuction<T>(intro: &T) -> Table
+    where
+        T: HasIntroduction,
+    {
+        // HACK: 修改具体样式
+        let intro = intro.introduction();
+        let desc = intro.desc();
+        let cell = vec![Cell::new(desc).style(Style::new())];
+        let row = vec![Row::new(cell)];
+
+        Table::default().rows(row)
     }
 
     /// 获取当前主页面状态下被选中项的 `id`。

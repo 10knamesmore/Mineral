@@ -10,7 +10,7 @@ mod main_page;
 mod popup;
 
 pub(crate) fn render_ui(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
-    match app.get_now_page() {
+    match app.now_page() {
         Page::Main => {
             draw_main_page(app, frame, cache);
         }

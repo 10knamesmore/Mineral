@@ -17,9 +17,8 @@ pub(super) fn handle_main_page_event(app: &mut App, event: Event) {
             KeyCode::Char('J') => {
                 app.table_move_down_by(5);
             }
-            KeyCode::Enter | KeyCode::Char('l') => {
-                unimplemented!("Enter or 'l' key pressed");
-            }
+            KeyCode::Enter | KeyCode::Char('l') => app.nav_forward(),
+            KeyCode::Char('h') => app.nav_backward(),
             KeyCode::Char('H') => {
                 unimplemented!("切换主页面的 Page ")
             }
