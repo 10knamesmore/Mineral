@@ -47,16 +47,6 @@ impl TableColors {
     }
 }
 
-/// 应用全局状态
-pub(crate) struct App {
-    should_quit: bool,
-    now_page: Page,
-    main_page: MainPageState,
-    popup_state: PopupState,
-    notifications: VecDeque<Notification>,
-    pub(crate) colors: TableColors,
-}
-
 // ############### 图片缓存相关 ###################
 
 /// 图片缓存类型
@@ -94,8 +84,6 @@ pub(crate) struct RenderCache {
     load_request_sender: mpsc::UnboundedSender<ImageLoadRequest>,
     load_result_receiver: mpsc::UnboundedReceiver<ImageloadResult>,
 }
-
-// #############################################
 
 impl RenderCache {
     /// 创建新的 RenderCache
@@ -307,6 +295,18 @@ impl RenderCache {
 
         Ok(None)
     }
+}
+
+// #############################################
+
+/// 应用全局状态
+pub(crate) struct App {
+    should_quit: bool,
+    now_page: Page,
+    main_page: MainPageState,
+    popup_state: PopupState,
+    notifications: VecDeque<Notification>,
+    pub(crate) colors: TableColors,
 }
 
 impl App {
