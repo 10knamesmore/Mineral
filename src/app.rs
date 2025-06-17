@@ -1,23 +1,3 @@
-//! # app.rs
-//!
-//! 本模块为 ncm-tui 的应用主入口，包含全局 App 状态、渲染缓存 RenderCache、主页面状态管理、图片缓存与加载、测试数据生成等核心功能。
-//!
-//! ## 主要结构体
-//! - [`App`]：应用全局状态，负责页面切换、弹窗、主页面状态、表格配色等。
-//! - [`RenderCache`]：图片缩略图缓存，支持歌单、专辑、艺人等多种类型的图片按需加载与缓存。
-//! - [`TableColors`]：表格配色方案。
-//!
-//! ## 主要功能
-//! - 页面切换与主页面状态管理
-//! - 表格数据与选中项管理
-//! - 图片缩略图的本地/网络加载与缓存
-//! - 测试数据与测试渲染缓存的生成
-//!
-//! ## 相关模块
-//! - [`state`]：应用状态定义
-//! - [`ui`]：UI 渲染
-//! - [`data_generator`]：测试数据生成工具
-
 use crate::{
     state::{
         Page, PopupState, Selectable,
@@ -330,50 +310,9 @@ impl RenderCache {
 }
 
 impl App {
-    // pub(crate) fn default() -> Self {
-    //     let picker = Picker::from_query_stdio().unwrap();
-    //
-    //     let mut image =
-    //         picker.new_resize_protocol(image::ImageReader::open("/home/wanger/Pictures/pic1.jpg"));
-    //     App {
-    //         should_quit: false,
-    //         main_page: MainPageState {
-    //             tab: MainPageTab::PlayList(PlayListState {
-    //                 items: Vec::new(),
-    //                 selected: None, // 当前选中项
-    //             }),
-    //         },
-    //         now_page: Page::Main,
-    //         popup_state: PopupState::None,
-    //         colors: TableColors::new(),
-    //         image: image::ImageReader::open("/home/wanger/Pictures/pic1.jpg")
-    //             .unwrap()
-    //             .decode()
-    //             .unwrap(),
-    //     }
-    // }
-    pub(crate) fn test_run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        let mut cache = test_render_cache();
-        loop {
-            if self.should_quit {
-                return Ok(());
-            }
-
-            terminal.draw(|frame| {
-                render_ui(self, frame, &mut cache);
-            })?;
-
-            let event = event::read()?;
-            crate::event_handler::handle_event(self, event);
-        }
-    }
-
-    /// 运行正式模式
     pub(crate) fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         // HACK: 正式运行更改
-        let test_picker = Picker::from_query_stdio().unwrap();
-        let cache_dir = String::from("/home/wanger/Pictures/ncm_tui/");
-        let mut cache = RenderCache::new(test_picker, cache_dir);
+        let mut cache = test_render_cache();
         loop {
             if self.should_quit {
                 return Ok(());
@@ -425,11 +364,6 @@ impl App {
 
     /// 获取主页面表格选中项
     pub(crate) fn main_tab_selected_index(&self) -> Option<usize> {
-        // match &self.main_page.now_state {
-        //     MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
-        //     MainPageTab::FavoriteAlbum => self.main_page.album_state().selected_index(),
-        //     MainPageTab::FavoriteArtist => self.main_page.artist_state().selected_index(),
-        // }
         match &self.main_page.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.main_page.playlist_state().selected_index(),
