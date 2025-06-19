@@ -472,7 +472,7 @@ pub mod data_generator {
         },
         App,
     };
-    use rand::{seq::SliceRandom, Rng};
+    use rand::{seq::IndexedRandom, Rng};
     use ratatui_image::picker::Picker;
 
     fn rand_artist_name(rng: &mut impl Rng) -> String {
@@ -593,13 +593,13 @@ pub mod data_generator {
             name: format!("测试歌曲ID:{}", id),
             artist: rand_artist_name(rng),
             album: rand_album_name(rng),
-            duration: rng.gen_range(120..=320),
+            duration: rng.random_range(120..=320),
         }
     }
 
     // 生成一个歌单
     fn gen_playlist(id: u64, name: &str, rng: &mut impl Rng) -> PlayList {
-        let song_count = rng.gen_range(10..=20);
+        let song_count = rng.random_range(10..=20);
         let ids = gen_unique_ids(song_count, rng);
 
         let songs: Vec<Song> = ids.into_iter().map(|id| gen_song(id, rng)).collect();
@@ -616,7 +616,7 @@ pub mod data_generator {
 
     // 生成所有歌单
     fn gen_playlists() -> Vec<PlayList> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let playlist_names = rand_playlist_names(&mut rng, 12);
         let ids = gen_unique_ids(playlist_names.len(), &mut rng);
 
