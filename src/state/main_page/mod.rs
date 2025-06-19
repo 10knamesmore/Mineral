@@ -108,6 +108,27 @@ impl Default for MainPageSubState {
 }
 
 impl MainPageState {
+    pub(crate) fn update_playlist<T>(&mut self, playlists: T)
+    where
+        T: Into<Vec<PlayList>>,
+    {
+        self.playlist_state = TabList::new(playlists.into());
+    }
+
+    pub(crate) fn update_album<T>(&mut self, albums: T)
+    where
+        T: Into<Vec<Album>>,
+    {
+        self.album_state = TabList::new(albums.into());
+    }
+
+    pub(crate) fn update_artist<T>(&mut self, artists: T)
+    where
+        T: Into<Vec<Artist>>,
+    {
+        self.artist_state = TabList::new(artists.into());
+    }
+
     // 当now_state的selected_idx为None的时候, 会返回NotRequested
     pub(crate) fn now_cover<'a>(&self, cache: &'a mut RenderCache) -> &'a ImageState {
         match &self.now_state {

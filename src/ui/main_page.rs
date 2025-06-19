@@ -1,18 +1,17 @@
-use super::components::render_playback_control;
 use crate::{
-    app::{App, RenderCache},
+    app::{Context, RenderCache},
     util::{layout::center, ui::zebra_rows},
 };
 use ratatui::{
-    Frame,
     layout::{self, Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style, Stylize},
     text::Text,
     widgets::{Block, BorderType, Borders, HighlightSpacing, Table, TableState},
+    Frame,
 };
 use ratatui_image::StatefulImage;
 
-pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
+pub fn draw_main_page(ctx: &Context, frame: &mut Frame, cache: &mut RenderCache) {
     // TEMP
     let [detail_area, playback_control_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -23,13 +22,13 @@ pub fn draw_main_page(app: &App, frame: &mut Frame, cache: &mut RenderCache) {
         .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
         .areas(detail_area);
 
-    render_table(app, frame, table_area);
-    render_detail(app, frame, detail_area, cache);
-    render_playback_control(app, frame, playback_control_area);
+    render_table(ctx, frame, table_area);
+    render_detail(ctx, frame, detail_area, cache);
+    render_playback_control(ctx, frame, playback_control_area);
 }
 
-fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
-    let rows = zebra_rows(app.main_tab_items_as_row(), &app.colors);
+fn render_table(ctx: &Context, frame: &mut Frame, area: layout::Rect) {
+    let rows = zebra_rows(ctx.main_tab_items_as_row(), &ctx.colors);
 
     let table = Table::default()
         .block(
@@ -50,12 +49,12 @@ fn render_table(app: &App, frame: &mut Frame, area: layout::Rect) {
         .rows(rows)
         .widths(vec![Constraint::Percentage(60), Constraint::Percentage(40)]);
 
-    let mut table_state = TableState::default().with_selected(app.main_tab_selected_index());
+    let mut table_state = TableState::default().with_selected(ctx.main_tab_selected_index());
 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut RenderCache) {
+fn render_detail(ctx: &Context, frame: &mut Frame, area: layout::Rect, cache: &mut RenderCache) {
     let block = Block::default()
         .title("Detail")
         .bg(Color::Black)
@@ -80,8 +79,8 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
         Constraint::Percentage(100),
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
-    if let Some(id) = app.main_page().selected_id() {
-        let tried_cached_image = app.main_page().now_cover(cache);
+    if let Some(id) = ctx.main_page().selected_id() {
+        let tried_cached_image = ctx.main_page().now_cover(cache);
 
         match tried_cached_image {
             crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
@@ -106,7 +105,17 @@ fn render_detail(app: &App, frame: &mut Frame, area: layout::Rect, cache: &mut R
     };
 
     // 歌曲摘要渲染
-    if let Some(detail_widget) = app.selected_detail() {
+    if let Some(detail_widget) = ctx.selected_detail() {
         frame.render_widget(detail_widget, list_area.inner(Margin::new(1, 1)))
     }
+}
+
+fn render_playback_control(_ctx: &Context, frame: &mut Frame, area: layout::Rect) {
+    let block = Block::default()
+        .title("Playback Control")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    frame.render_widget(block, area);
 }

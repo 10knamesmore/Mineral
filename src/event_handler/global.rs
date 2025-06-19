@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::{state::PopupState, App};
+use crate::{app::Context, state::PopupState};
 
 /// 处理全局快捷键事件。
 ///
@@ -31,18 +31,18 @@ use crate::{state::PopupState, App};
 ///
 /// 该函数只处理 `KeyEventKind::Press` 类型的按键事件，
 /// 忽略 `Release` 和 `Repeat` 类型。
-pub(super) fn handle_global_key(app: &mut App, key_event: &KeyEvent) -> bool {
+pub(super) fn handle_global_key(ctx: &mut Context, key_event: &KeyEvent) -> bool {
     if KeyEventKind::Press == key_event.kind {
         match key_event.code {
             KeyCode::Char('q') => {
-                app.popup(PopupState::ConfirmExit);
+                ctx.popup(PopupState::ConfirmExit);
                 return true;
             }
             KeyCode::Char('?') => {
                 todo!("全局帮助菜单")
             }
             KeyCode::Char('n') => {
-                app.notify_debug("Test", "发送了一个Notification");
+                ctx.notify_debug("Test", "发送了一个Notification");
             }
             _ => {}
         }
