@@ -10,7 +10,7 @@ mod util;
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut terminal = ratatui::init();
-    let res = data_generator::test_struct_app().run(&mut terminal);
+    let res = data_generator::test_struct_app().run(&mut terminal).await;
     ratatui::restore();
 
     res

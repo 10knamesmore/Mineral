@@ -1,13 +1,15 @@
 use global::handle_global_key;
-use ratatui::crossterm::event::Event;
 
 use crate::{App, state::Page, state::PopupState};
 
+mod app_events;
 mod global;
 mod main_page;
 mod popup;
 
-pub(crate) fn handle_event(app: &mut App, event: Event) {
+pub use app_events::*;
+
+pub(crate) fn handle_event(app: &mut App, event: AppEvent) {
     match app.should_popup() {
         PopupState::ConfirmExit => {
             popup::handle_confirm_exit(app, event);

@@ -1,6 +1,6 @@
-use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEventKind};
 
-use crate::{App, state::PopupState};
+use crate::{App, event_handler::AppEvent, state::PopupState};
 
 /// 处理全局快捷键事件。
 ///
@@ -34,8 +34,8 @@ use crate::{App, state::PopupState};
 ///
 /// 该函数只处理 `KeyEventKind::Press` 类型的按键事件，
 /// 忽略 `Release` 和 `Repeat` 类型。
-pub(super) fn handle_global_key(app: &mut App, event: &Event) -> bool {
-    if let Event::Key(key_event) = event {
+pub(super) fn handle_global_key(app: &mut App, event: &AppEvent) -> bool {
+    if let AppEvent::Key(key_event) = event {
         if key_event.kind == KeyEventKind::Press {
             match key_event.code {
                 KeyCode::Char('q') => {

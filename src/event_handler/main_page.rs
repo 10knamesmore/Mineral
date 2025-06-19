@@ -1,10 +1,10 @@
-use ratatui::crossterm::event::{Event, KeyCode};
+use crossterm::event::KeyCode;
 
-use crate::App;
+use crate::{App, event_handler::AppEvent};
 
-pub(super) fn handle_main_page_event(app: &mut App, event: Event) {
+pub(super) fn handle_main_page_event(app: &mut App, event: AppEvent) {
     match event {
-        Event::Key(key_event) => match key_event.code {
+        AppEvent::Key(key_event) => match key_event.code {
             KeyCode::Char('k') | KeyCode::Up => {
                 app.table_move_up_by(1);
             }
@@ -27,13 +27,7 @@ pub(super) fn handle_main_page_event(app: &mut App, event: Event) {
             }
             _ => {}
         },
-        Event::Mouse(_) => {
-            // TODO: 鼠标支持
-        }
-        Event::Paste(_) => {
-            // TODO: 粘贴支持
-        }
-        Event::Resize(_, _) => {
+        AppEvent::Resize(_, _) => {
             // TODO: 处理窗口大小变化
         }
         _ => {}

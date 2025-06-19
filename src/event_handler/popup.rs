@@ -1,10 +1,10 @@
-use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEventKind};
 
-use crate::{App, state::PopupState};
+use crate::{App, event_handler::AppEvent, state::PopupState};
 
-pub(super) fn handle_confirm_exit(app: &mut App, event: Event) {
+pub(super) fn handle_confirm_exit(app: &mut App, event: AppEvent) {
     match event {
-        Event::Key(key_event) => {
+        AppEvent::Key(key_event) => {
             if let KeyEventKind::Press = key_event.kind {
                 match key_event.code {
                     KeyCode::Char('y') | KeyCode::Char('q') => app.quit(),
@@ -13,19 +13,16 @@ pub(super) fn handle_confirm_exit(app: &mut App, event: Event) {
                 }
             }
         }
-        Event::Mouse(_) => {
-            todo!("可能会允许鼠标点击退出")
-        }
-        Event::Resize(_, _) => {
+        AppEvent::Resize(_, _) => {
             todo!("可能会处理Resize到比较小的时候,只显示播放进度等")
         }
         _ => {}
     }
 }
 
-pub(super) fn handle_notification(app: &mut App, event: Event) {
+pub(super) fn handle_notification(app: &mut App, event: AppEvent) {
     match event {
-        Event::Key(key_event) => {
+        AppEvent::Key(key_event) => {
             if let KeyEventKind::Press = key_event.kind {
                 match key_event.code {
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('Q') => {
@@ -35,7 +32,6 @@ pub(super) fn handle_notification(app: &mut App, event: Event) {
                 }
             }
         }
-        Event::Mouse(_) => app.consume_first_notification(),
         _ => {}
     }
 }

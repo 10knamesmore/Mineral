@@ -1,17 +1,18 @@
 use crate::{
+    app::Signals,
+    event_handler,
     state::{
-        Page, PopupState, Selectable,
         main_page::{MainPageState, MainPageSubState, MainPageTab},
+        Page, PopupState, Selectable,
     },
     ui::render_ui,
     util::notification::{Notification, NotifyUrgency},
 };
 use data_generator::test_render_cache;
 use ratatui::{
-    DefaultTerminal,
-    crossterm::event::{self},
     style::Color,
     widgets::{Row, Table},
+    DefaultTerminal,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
@@ -307,10 +308,11 @@ pub(crate) struct App {
     popup_state: PopupState,
     notifications: VecDeque<Notification>,
     pub(crate) colors: TableColors,
+    signals: Signals,
 }
 
 impl App {
-    pub(crate) fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         // HACK: 正式运行更改
         let mut cache = test_render_cache();
         loop {
@@ -322,8 +324,9 @@ impl App {
                 render_ui(self, frame, &mut cache);
             })?;
 
-            let event = event::read()?;
-            crate::event_handler::handle_event(self, event);
+            if let Some(event) = self.signals.rx.recv().await {
+                event_handler::handle_event(self, event);
+            }
         }
     }
 
@@ -403,7 +406,7 @@ impl App {
 
     /// 获取选中项详情
     /// 根据当前的 Page, 交给对应
-    pub(super) fn selected_detail(&self) -> Option<Table> {
+    pub(crate) fn selected_detail(&self) -> Option<Table> {
         match &self.now_page {
             Page::Main => self.main_page.selected_detail(),
             Page::Search => todo!(),
@@ -459,17 +462,17 @@ impl App {
 }
 
 /// 测试数据与测试渲染缓存生成工具
-pub(super) mod data_generator {
+pub mod data_generator {
     use super::RenderCache;
     use crate::{
-        App,
         app::TableColors,
         state::{
+            main_page::{playlist::PlayList, MainPageState},
             Introduction, Page, PopupState, Song,
-            main_page::{MainPageState, playlist::PlayList},
         },
+        App,
     };
-    use rand::{Rng, seq::SliceRandom};
+    use rand::{seq::SliceRandom, Rng};
     use ratatui_image::picker::Picker;
 
     fn rand_artist_name(rng: &mut impl Rng) -> String {
@@ -628,7 +631,10 @@ pub(super) mod data_generator {
     pub(crate) fn test_struct_app() -> App {
         use std::collections::VecDeque;
 
-        use crate::state::main_page::{album::Album, artist::Artist};
+        use crate::{
+            app::Signals,
+            state::main_page::{album::Album, artist::Artist},
+        };
 
         let play_list = gen_playlists();
 
@@ -643,6 +649,7 @@ pub(super) mod data_generator {
             notifications: VecDeque::new(),
             popup_state: PopupState::None,
             colors: TableColors::new(),
+            signals: Signals::start().unwrap(),
         }
     }
 

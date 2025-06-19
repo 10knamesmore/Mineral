@@ -1,4 +1,3 @@
-use derive_setters::Setters;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
