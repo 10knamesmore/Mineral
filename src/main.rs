@@ -1,6 +1,7 @@
 use app::{App, data_generator};
 use std::io::Result;
 
+mod api;
 mod app;
 mod event_handler;
 mod state;
