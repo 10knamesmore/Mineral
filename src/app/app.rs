@@ -1,6 +1,6 @@
 use crate::{
     app::Signals,
-    event_handler,
+    event_handler::{self, AppEvent},
     state::{
         main_page::{MainPageState, MainPageSubState, MainPageTab},
         Page, PopupState, Selectable,
@@ -43,7 +43,6 @@ impl TableColors {
 
 /// 应用全局状态
 pub(crate) struct App {
-    should_quit: bool,
     now_page: Page,
     main_page: MainPageState,
     popup_state: PopupState,
@@ -57,18 +56,19 @@ impl App {
         // HACK: 正式运行更改
         let mut cache = test_render_cache();
         loop {
-            if self.should_quit {
-                return Ok(());
-            }
-
             terminal.draw(|frame| {
                 render_ui(self, frame, &mut cache);
             })?;
 
             if let Some(event) = self.signals.rx.recv().await {
-                event_handler::handle_event(self, event);
+                match event {
+                    AppEvent::Quit => break,
+                    AppEvent::Key(key_event) => event_handler::dispatch_key(self, key_event),
+                    AppEvent::Resize(_, _) => todo!(),
+                }
             }
         }
+        Ok(())
     }
 
     /// 获取当前页面
@@ -79,16 +79,6 @@ impl App {
     /// 切换当前页面
     pub(crate) fn change_now_page(&mut self, target_page: Page) {
         self.now_page = target_page;
-    }
-
-    /// 是否退出
-    pub(crate) fn should_quit(&self) -> bool {
-        self.should_quit
-    }
-
-    /// 设置退出
-    pub(crate) fn quit(&mut self) {
-        self.should_quit = true
     }
 
     /// 是否弹窗
@@ -379,7 +369,6 @@ pub mod data_generator {
         let play_list = gen_playlists();
 
         App {
-            should_quit: false,
             now_page: Page::Main,
             main_page: MainPageState::new(
                 play_list,

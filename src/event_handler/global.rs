@@ -1,11 +1,8 @@
-use crossterm::event::{KeyCode, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::{App, event_handler::AppEvent, state::PopupState};
+use crate::{state::PopupState, App};
 
 /// 处理全局快捷键事件。
-///
-/// 该函数会检查传入的 [`Event`] 是否为按键事件（[`KeyEventKind::Press`]），
-/// 并根据按键执行相应的全局操作，例如：
 ///
 /// - `'q'`：弹出退出确认对话框（设置 [`PopupState::ConfirmExit`]）
 /// - `'?'`：触发帮助菜单（尚未实现）
@@ -16,7 +13,7 @@ use crate::{App, event_handler::AppEvent, state::PopupState};
 /// # 参数
 ///
 /// - `app`：可变引用，表示当前应用状态 [`App`]，用于修改 UI 状态或响应动作。
-/// - `event`：事件引用，表示当前待处理的终端事件。
+/// - `key_event`：事件引用，表示当前待处理的终端事件。
 ///
 /// # 返回
 ///
@@ -34,22 +31,20 @@ use crate::{App, event_handler::AppEvent, state::PopupState};
 ///
 /// 该函数只处理 `KeyEventKind::Press` 类型的按键事件，
 /// 忽略 `Release` 和 `Repeat` 类型。
-pub(super) fn handle_global_key(app: &mut App, event: &AppEvent) -> bool {
-    if let AppEvent::Key(key_event) = event {
-        if key_event.kind == KeyEventKind::Press {
-            match key_event.code {
-                KeyCode::Char('q') => {
-                    app.popup(PopupState::ConfirmExit);
-                    return true;
-                }
-                KeyCode::Char('?') => {
-                    todo!("全局帮助菜单")
-                }
-                KeyCode::Char('n') => {
-                    app.notify_debug("Test", "发送了一个Notification");
-                }
-                _ => {}
+pub(super) fn handle_global_key(app: &mut App, key_event: &KeyEvent) -> bool {
+    if KeyEventKind::Press == key_event.kind {
+        match key_event.code {
+            KeyCode::Char('q') => {
+                app.popup(PopupState::ConfirmExit);
+                return true;
             }
+            KeyCode::Char('?') => {
+                todo!("全局帮助菜单")
+            }
+            KeyCode::Char('n') => {
+                app.notify_debug("Test", "发送了一个Notification");
+            }
+            _ => {}
         }
     }
     false
