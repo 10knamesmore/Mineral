@@ -9,7 +9,10 @@ use urlqstring::QueryParams;
 use encrypt::*;
 use model::*;
 
-use crate::{api::parse::parse_song_info, app::Song};
+use crate::{
+    api::parse::{parse_album_info, parse_playlist_info, parse_song_info},
+    app::{Album, PlayList, Song},
+};
 
 mod encrypt;
 mod model;
@@ -271,5 +274,30 @@ impl NcmApi {
             .search(keywords, SearchType::Song, offset, limit)
             .await?;
         parse_song_info(res)
+    }
+
+    /// 返回的Album的songs可能为空
+    pub async fn search_album(
+        &self,
+        keywords: impl Into<String>,
+        offset: u16,
+        limit: u16,
+    ) -> Result<Vec<Album>> {
+        let res = self
+            .search(keywords, SearchType::Album, offset, limit)
+            .await?;
+        parse_album_info(res)
+    }
+
+    pub async fn search_playlist(
+        &self,
+        keywords: impl Into<String>,
+        offset: u16,
+        limit: u16,
+    ) -> Result<Vec<PlayList>> {
+        let res = self
+            .search(keywords, SearchType::Playlist, offset, limit)
+            .await?;
+        parse_playlist_info(res)
     }
 }

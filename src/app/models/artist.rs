@@ -1,6 +1,6 @@
 use crate::{
     app::Song,
-    state::{HasId, HasIntroduction, Introduction, SongList},
+    state::{HasDescription, HasId, SongList},
 };
 use ratatui::{
     style::{Color, Style, Stylize},
@@ -14,7 +14,7 @@ pub(crate) struct Artist {
     pub(crate) followers: u32,
     pub(crate) songs: Vec<Song>,
     pub(crate) id: u64,
-    introduction: Introduction,
+    description: String,
 }
 
 fn format_follower_count(followers: u32) -> String {
@@ -54,9 +54,9 @@ impl SongList for Artist {
     }
 }
 
-impl HasIntroduction for Artist {
-    fn introduction(&self) -> &Introduction {
-        &self.introduction
+impl HasDescription for Artist {
+    fn description(&self) -> &str {
+        &self.description
     }
 }
 

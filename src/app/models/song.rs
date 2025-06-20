@@ -14,11 +14,11 @@ pub struct Song {
     pub name: String,
 
     // TODO: 对多名artists的支持
-    pub artist_name: String,
     pub artist_id: u64,
+    pub artist_name: String,
 
-    pub album_name: String,
     pub album_id: u64,
+    pub album_name: String,
 
     pub pic_url: String,
 

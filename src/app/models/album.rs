@@ -1,6 +1,6 @@
 use crate::{
     app::Song,
-    state::{HasId, HasIntroduction, Introduction, SongList},
+    state::{HasDescription, HasId, SongList},
 };
 use ratatui::{
     style::{Color, Style, Stylize},
@@ -11,29 +11,34 @@ use std::vec;
 
 #[derive(Debug, Default)]
 pub(crate) struct Album {
-    pub(crate) artist: String,
-    pub(crate) song_num: u32,
-    pub(crate) title: String,
-    pub(crate) year: u32,
     pub(crate) id: u64,
+    pub(crate) name: String,
+
+    pub(crate) artist_id: u64,
+    pub(crate) artist_name: String,
+
+    pub(crate) description: String,
+    pub(crate) publish_time: u64,
+
+    pub(crate) pic_url: String,
+
     pub(crate) songs: Vec<Song>,
-    introduction: Introduction,
 }
 
 impl<'a> From<&'a Album> for Row<'a> {
     fn from(album: &'a Album) -> Self {
         let left = Text::from(vec![
             Line::from(vec![Span::styled(
-                format!("《{}》 ({})", album.title, album.year),
+                format!("《{}》 ({})", album.name, album.publish_time),
                 Style::default().fg(Color::DarkGray).bold(),
             )]),
-            Line::from(Span::raw(&album.artist)),
+            Line::from(Span::raw(&album.artist_name)),
         ]);
 
         let minutes = 99; // TODO
 
         let right = Text::from(Line::from(vec![Span::styled(
-            format!("{} 首 · {}min", &album.song_num, minutes),
+            format!("{} 首 · {}min", &album.songs.len(), minutes),
             Style::default().fg(Color::LightBlue),
         )]));
 
@@ -56,9 +61,9 @@ impl SongList for Album {
     }
 }
 
-impl HasIntroduction for Album {
-    fn introduction(&self) -> &Introduction {
-        &self.introduction
+impl HasDescription for Album {
+    fn description(&self) -> &str {
+        &self.description
     }
 }
 

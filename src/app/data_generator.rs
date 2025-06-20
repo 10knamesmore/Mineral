@@ -1,6 +1,5 @@
 use crate::{
     app::{PlayList, RenderCache, Song},
-    state::Introduction,
     App,
 };
 use rand::{seq::IndexedRandom, Rng};
@@ -138,14 +137,15 @@ fn gen_playlist(id: u64, name: &str, rng: &mut impl Rng) -> PlayList {
     let ids = gen_unique_ids(song_count, rng);
 
     let songs: Vec<Song> = ids.into_iter().map(|id| gen_song(id, rng)).collect();
-    let introduction = Introduction::new(rand_album_intro(rng));
+    let description = rand_album_intro(rng);
 
     PlayList {
         name: format!("{} - 测试歌单 ID:{}", name, id),
-        track_count: songs.len(),
+        track_count: songs.len() as u64,
         songs,
         id,
-        introduction,
+        description,
+        img_url: String::default(),
     }
 }
 

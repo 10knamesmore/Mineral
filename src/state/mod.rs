@@ -73,21 +73,6 @@ pub(crate) trait Selectable {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct Introduction {
-    description: String,
-}
-
-impl Introduction {
-    pub(crate) fn new(description: String) -> Introduction {
-        Introduction { description }
-    }
-
-    pub(crate) fn desc(&self) -> &str {
-        &self.description
-    }
-}
-
-pub(crate) trait HasIntroduction {
-    fn introduction(&self) -> &Introduction;
+pub(crate) trait HasDescription {
+    fn description(&self) -> &str;
 }

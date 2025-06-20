@@ -7,7 +7,7 @@ use ratatui::{
 
 use crate::{
     app::{Album, Artist, ImageState, PlayList, RenderCache},
-    state::{HasId, HasIntroduction, Song},
+    state::{HasDescription, HasId, Song},
     util::format::format_duration,
 };
 
@@ -422,11 +422,10 @@ impl MainPageState {
 
     fn detail_from_introuction<T>(intro: &T) -> Table
     where
-        T: HasIntroduction,
+        T: HasDescription,
     {
         // HACK: 修改具体样式
-        let intro = intro.introduction();
-        let desc = intro.desc();
+        let desc = intro.description();
         let cell = vec![Cell::new(desc).style(Style::new())];
         let row = vec![Row::new(cell)];
 
