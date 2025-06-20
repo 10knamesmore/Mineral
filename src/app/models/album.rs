@@ -1,4 +1,7 @@
-use crate::state::{HasId, HasIntroduction, Introduction, Song, SongList};
+use crate::{
+    app::Song,
+    state::{HasId, HasIntroduction, Introduction, SongList},
+};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},

@@ -1,10 +1,10 @@
 use crate::{
-    app::TableColors,
+    app::{
+        models::{Album, Artist, PlayList},
+        style::TableColors,
+    },
     state::{
-        main_page::{
-            album::Album, artist::Artist, playlist::PlayList, MainPageState, MainPageSubState,
-            MainPageTab,
-        },
+        main_page::{MainPageState, MainPageSubState, MainPageTab},
         Page, PopupState, Selectable,
     },
     util::notification::{Notification, NotifyUrgency},

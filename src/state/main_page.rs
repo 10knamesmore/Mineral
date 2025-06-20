@@ -1,6 +1,3 @@
-use album::Album;
-use artist::Artist;
-use playlist::PlayList;
 use ratatui::{
     layout::{Alignment, Constraint},
     style::{Color, Style, Stylize},
@@ -9,16 +6,12 @@ use ratatui::{
 };
 
 use crate::{
-    app::{ImageState, RenderCache},
+    app::{Album, Artist, ImageState, PlayList, RenderCache},
     state::{HasId, HasIntroduction, Song},
     util::format::format_duration,
 };
 
 use super::{Selectable, SongList};
-
-pub(crate) mod album;
-pub(crate) mod artist;
-pub(crate) mod playlist;
 
 #[derive(Debug)]
 pub(crate) struct MainPageState {

@@ -1,4 +1,7 @@
-use crate::state::{HasId, HasIntroduction, Introduction, Song, SongList};
+use crate::{
+    app::Song,
+    state::{HasId, HasIntroduction, Introduction, SongList},
+};
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
@@ -52,7 +55,7 @@ impl HasIntroduction for PlayList {
 }
 
 impl PlayList {
-    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+    pub(crate) fn to_rows(&self) -> Vec<Row> {
         self.songs.iter().map(|song| song.into()).collect()
     }
 }
