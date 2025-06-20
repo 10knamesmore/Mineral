@@ -1,10 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use isahc::{
+    config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
+};
+use lazy_static::lazy_static;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
 use urlqstring::QueryParams;
-
-use isahc::{
-    AsyncReadResponseExt, HttpClient, Request, config::Configurable, cookies::CookieJar, http::Uri,
-};
 
 use encrypt::*;
 use model::*;
@@ -34,6 +34,12 @@ const USER_AGENT_LIST: [&str; 14] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/13.1058",
 ];
+
+lazy_static! {
+    static ref UA_ANY: UserAgentType = UserAgentType::Any;
+    static ref UA_MOBILE: UserAgentType = UserAgentType::Mobile;
+    static ref UA_PC: UserAgentType = UserAgentType::PC;
+}
 
 pub struct NcmApi {
     client: HttpClient,
@@ -122,7 +128,7 @@ impl NcmApi {
         path: &str,
         params: HashMap<&str, &str>,
         cryptoapi: CryptoApi,
-        ua_type: &str,
+        ua_type: &UserAgentType,
         append_csrf: bool,
     ) -> Result<String> {
         let mut csrf = self.csrf.borrow().to_owned();
@@ -214,19 +220,15 @@ impl NcmApi {
         }
     }
 
-    fn choose_user_agent(ua_type: &str) -> &str {
-        // HACK: 有没有更换更优雅的方式
-        let index = if ua_type == "mobile" {
-            rand::random::<u16>() % 7
-        } else if ua_type == "pc" {
-            rand::random::<u16>() % 5 + 8
-        } else if !ua_type.is_empty() {
-            return ua_type;
-        } else {
-            rand::random::<u16>() % USER_AGENT_LIST.len() as u16
+    fn choose_user_agent(ua_type: &UserAgentType) -> &str {
+        let idx = match ua_type {
+            UserAgentType::Any => rand::random::<u16>() % USER_AGENT_LIST.len() as u16,
+            UserAgentType::Custom(ua) => return ua,
+            UserAgentType::Mobile => rand::random::<u16>() % 7,
+            UserAgentType::PC => rand::random::<u16>() % 5 + 8,
         };
 
-        USER_AGENT_LIST[index as usize]
+        USER_AGENT_LIST[idx as usize]
     }
 
     /// 搜索
@@ -254,7 +256,7 @@ impl NcmApi {
         params.insert("offset", &offset[..]);
         params.insert("limit", &limit[..]);
 
-        self.request(Method::Post, path, params, CryptoApi::Weapi, "", true)
+        self.request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
             .await
     }
 }

@@ -3,6 +3,13 @@ pub enum Method {
     Post,
 }
 
+pub enum UserAgentType {
+    Any,
+    Custom(String),
+    Mobile,
+    PC,
+}
+
 pub enum SearchType {
     Song,
     Album,
