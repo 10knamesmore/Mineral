@@ -13,17 +13,18 @@ pub struct Song {
 
     pub name: String,
 
-    pub artist: String,
+    // TODO: 对多名artists的支持
+    pub artist_name: String,
     pub artist_id: u64,
 
-    pub album: String,
+    pub album_name: String,
     pub album_id: u64,
 
     pub pic_url: String,
 
     pub song_url: String,
 
-    pub duration: u32, // 秒
+    pub duration: u64, // 秒
 }
 
 impl HasId for Song {
@@ -40,7 +41,7 @@ impl<'a> From<&'a Song> for Row<'a> {
 
         let artist_block = Text::from(vec![Line::styled(&song.name, text_style.clone())]);
 
-        let album_block = Text::from(vec![Line::styled(&song.album, text_style.clone())]);
+        let album_block = Text::from(vec![Line::styled(&song.album_name, text_style.clone())]);
 
         let duration_block = Text::from(vec![Line::styled(
             format_duration(song.duration),

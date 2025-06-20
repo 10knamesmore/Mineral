@@ -122,9 +122,9 @@ fn gen_song(id: u64, rng: &mut impl Rng) -> Song {
     Song {
         id,
         name: format!("测试歌曲ID:{}", id),
-        artist: rand_artist_name(rng),
+        artist_name: rand_artist_name(rng),
         artist_id: 0,
-        album: rand_album_name(rng),
+        album_name: rand_album_name(rng),
         album_id: 0,
         pic_url: String::new(),
         song_url: String::new(),

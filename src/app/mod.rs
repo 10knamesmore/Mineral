@@ -15,7 +15,6 @@ mod style;
 
 pub(crate) use cache::*;
 pub(crate) use context::*;
-pub(crate) use data_generator::test_struct_app;
 pub(crate) use models::*;
 pub(crate) use style::*;
 

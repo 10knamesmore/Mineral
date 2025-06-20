@@ -9,8 +9,11 @@ use urlqstring::QueryParams;
 use encrypt::*;
 use model::*;
 
+use crate::{api::parse::parse_song_info, app::Song};
+
 mod encrypt;
 mod model;
+mod parse;
 
 static BASE_URL: &str = "https://music.163.com";
 
@@ -207,8 +210,6 @@ impl NcmApi {
                     .body(body)
                     .unwrap();
 
-                dbg!(&request);
-
                 let mut response = self
                     .client
                     .send_async(request)
@@ -236,7 +237,7 @@ impl NcmApi {
     /// types: 1: 单曲, 10: 专辑, 100: 歌手, 1000: 歌单, 1002: 用户, 1004: MV, 1006: 歌词, 1009: 电台, 1014: 视频
     /// offset: 起始点
     /// limit: 数量
-    pub async fn search(
+    async fn search(
         &self,
         keywords: impl Into<String>,
         search_type: SearchType,
@@ -258,5 +259,17 @@ impl NcmApi {
 
         self.request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
             .await
+    }
+
+    pub async fn search_song(
+        &self,
+        keywords: impl Into<String>,
+        offset: u16,
+        limit: u16,
+    ) -> Result<Vec<Song>> {
+        let res = self
+            .search(keywords, SearchType::Song, offset, limit)
+            .await?;
+        parse_song_info(res)
     }
 }
