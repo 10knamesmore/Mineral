@@ -22,6 +22,33 @@ pub enum SearchType {
     Video,
 }
 
+pub enum BitRate {
+    Low,
+    Medium,
+    High,
+    SQ,
+    HR,
+}
+
+impl From<BitRate> for &str {
+    fn from(value: BitRate) -> Self {
+        match value {
+            BitRate::Low => "128000",
+            BitRate::Medium => "192000",
+            BitRate::High => "320000",
+            BitRate::SQ => "999000",
+            BitRate::HR => "1900000",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SongUrl {
+    pub id: u64,
+    pub url: String,
+    pub rate: u32,
+}
+
 impl From<SearchType> for String {
     fn from(value: SearchType) -> Self {
         let code = match value {

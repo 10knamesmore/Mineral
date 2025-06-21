@@ -3,20 +3,19 @@ use isahc::{
     config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
 };
 use lazy_static::lazy_static;
-use std::{cell::RefCell, collections::HashMap, time::Duration};
+use std::{cell::RefCell, collections::HashMap, fs::File, io::Write, time::Duration};
 use urlqstring::QueryParams;
 
-use encrypt::*;
-use model::*;
-
-use crate::{
-    api::parse::{parse_album_info, parse_playlist_info, parse_song_info},
-    app::{Album, PlayList, Song},
-};
+use crate::app::{Album, PlayList, Song};
 
 mod encrypt;
 mod model;
 mod parse;
+
+use encrypt::*;
+pub use model::BitRate;
+use model::*;
+use parse::*;
 
 static BASE_URL: &str = "https://music.163.com";
 
@@ -235,7 +234,7 @@ impl NcmApi {
         USER_AGENT_LIST[idx as usize]
     }
 
-    /// 搜索
+    /******************************************* 搜索功能相关 ****************************************/
     /// keywords: 关键词
     /// types: 1: 单曲, 10: 专辑, 100: 歌手, 1000: 歌单, 1002: 用户, 1004: MV, 1006: 歌词, 1009: 电台, 1014: 视频
     /// offset: 起始点
@@ -264,6 +263,9 @@ impl NcmApi {
             .await
     }
 
+    /// keywords: 关键词
+    /// offset: 起始点
+    /// limit: 数量
     pub async fn search_song(
         &self,
         keywords: impl Into<String>,
@@ -273,10 +275,13 @@ impl NcmApi {
         let res = self
             .search(keywords, SearchType::Song, offset, limit)
             .await?;
-        parse_song_info(res)
+        parse_song_search(res)
     }
 
-    /// 返回的Album的songs可能为空
+    /// keywords: 关键词
+    /// offset: 起始点
+    /// limit: 数量
+    /// WARN: 目前返回的 songs 为空
     pub async fn search_album(
         &self,
         keywords: impl Into<String>,
@@ -286,9 +291,13 @@ impl NcmApi {
         let res = self
             .search(keywords, SearchType::Album, offset, limit)
             .await?;
-        parse_album_info(res)
+        parse_album_search(res)
     }
 
+    /// keywords: 关键词
+    /// offset: 起始点
+    /// limit: 数量
+    /// WARN: 目前返回的 songs 为空
     pub async fn search_playlist(
         &self,
         keywords: impl Into<String>,
@@ -298,6 +307,108 @@ impl NcmApi {
         let res = self
             .search(keywords, SearchType::Playlist, offset, limit)
             .await?;
-        parse_playlist_info(res)
+        parse_playlist_search(res)
+    }
+    /**************************************************************************************************/
+    /// 根据 album_id 返回这个专辑里面的所有歌曲
+    /// WARN: 目前返回的歌曲的song_url 和 duration都为空
+    pub async fn songs_in_album(&self, album_id: u64) -> Result<Vec<Song>> {
+        let path = format!("/weapi/v1/album/{}", album_id);
+
+        let res = self
+            .request(
+                Method::Post,
+                &path,
+                HashMap::new(),
+                CryptoApi::Weapi,
+                &UA_ANY,
+                true,
+            )
+            .await?;
+
+        parse_songs_in_album(res)
+    }
+
+    /// 根据 playlist_id 返回这个歌单里面的所有歌曲
+    /// WARN: 目前返回的歌曲的song_url 和 duration都为空
+    pub async fn songs_in_playlist(&self, playlist_id: u64) -> Result<Vec<Song>> {
+        let csrf_token = self.csrf.borrow().to_owned();
+        let path = "/weapi/v6/playlist/detail";
+
+        let mut params = HashMap::new();
+        let playlist_id = playlist_id.to_string();
+        params.insert("id", playlist_id.as_str());
+        params.insert("offset", "0");
+        params.insert("total", "true");
+        params.insert("limit", "1000");
+        params.insert("n", "1000");
+        params.insert("csrf_token", &csrf_token);
+
+        let res = self
+            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .await?;
+        parse_songs_in_playlist(res)
+    }
+
+    /// 获取所有id对应的歌曲的集合
+    pub async fn songs_detail(&self, song_ids: &[u64]) -> Result<Vec<Song>> {
+        let path = "/weapi/v3/song/detail";
+        let mut params = HashMap::new();
+        let c = song_ids
+            .iter()
+            .map(|i| format!("{{\\\"id\\\":\\\"{}\\\"}}", i))
+            .collect::<Vec<String>>()
+            .join(",");
+        let c = format!("[{}]", c);
+        params.insert("c", &c[..]);
+
+        let result = self
+            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .await?;
+
+        let mut file = File::create("song_details.json").unwrap();
+        file.write_all(result.as_bytes()).unwrap();
+        todo!()
+    }
+
+    pub async fn song_urls(&self, song_ids: &[u64], br: BitRate) -> Result<Vec<SongUrl>> {
+        let path = "https://interface3.music.163.com/eapi/song/enhance/player/url";
+        let mut params = HashMap::new();
+        let ids = serde_json::to_string(song_ids)?;
+        params.insert("ids", ids.as_str());
+        params.insert("br", br.into());
+
+        let res = self
+            .request(Method::Post, path, params, CryptoApi::Eapi, &UA_ANY, true)
+            .await?;
+
+        parse_song_urls(res)
+    }
+
+    // TODO: freeTrial的解析
+    pub async fn songs_url(&self, ids: &[u64], br: &str) -> Result<Vec<SongUrl>> {
+        // WEBAPI
+        // let csrf_token = self.csrf.borrow().to_owned();
+        // let path = "/weapi/song/enhance/player/url/v1";
+        // let mut params = HashMap::new();
+        // let ids = serde_json::to_string(ids)?;
+        // params.insert("ids", ids.as_str());
+        // params.insert("level", "standard");
+        // params.insert("encodeType", "aac");
+        // params.insert("csrf_token", &csrf_token);
+        // let result = self
+        //     .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+        //     .await?;
+
+        // Eapi
+        let path = "https://interface3.music.163.com/eapi/song/enhance/player/url";
+        let mut params = HashMap::new();
+        let ids = serde_json::to_string(ids)?;
+        params.insert("ids", ids.as_str());
+        params.insert("br", br);
+        let result = self
+            .request(Method::Post, path, params, CryptoApi::Eapi, &UA_ANY, true)
+            .await?;
+        parse_song_urls(result)
     }
 }

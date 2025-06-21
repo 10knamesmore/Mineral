@@ -1,10 +1,12 @@
-use std::{fs::File, io::Write};
 
 use anyhow::{anyhow, Context, Ok, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::app::{Album, PlayList, Song};
+use crate::{
+    api::model::SongUrl,
+    app::{Album, PlayList, Song},
+};
 
 trait DeVal<'a>: Sized {
     fn dval(v: &'a Value) -> Result<Self>;
@@ -92,7 +94,7 @@ where
 }
 
 #[allow(unused)]
-pub(super) fn parse_song_info(json: String) -> anyhow::Result<Vec<Song>> {
+pub(super) fn parse_song_search(json: String) -> anyhow::Result<Vec<Song>> {
     let value: Value = serde_json::from_str(&json)?;
 
     let code: i64 = json_val!(&value, "code")?;
@@ -148,7 +150,7 @@ pub(super) fn parse_song_info(json: String) -> anyhow::Result<Vec<Song>> {
 }
 
 #[allow(unused)]
-pub(super) fn parse_album_info(json: String) -> anyhow::Result<Vec<Album>> {
+pub(super) fn parse_album_search(json: String) -> anyhow::Result<Vec<Album>> {
     let value: Value = serde_json::from_str(&json)?;
 
     let code: i64 = json_val!(&value, "code")?;
@@ -163,7 +165,7 @@ pub(super) fn parse_album_info(json: String) -> anyhow::Result<Vec<Album>> {
                     let artist_value: &Value = json_val!(album_value, "artist")?;
 
                     (
-                        json_val!(artist_value, "id").unwrap_or(0),
+                        json_val!(artist_value, "id").unwrap_or_default(),
                         json_val!(artist_value, "name").unwrap_or(String::from("未知Artist")),
                     )
                 };
@@ -188,11 +190,8 @@ pub(super) fn parse_album_info(json: String) -> anyhow::Result<Vec<Album>> {
 }
 
 #[allow(unused)]
-pub(super) fn parse_playlist_info(json: String) -> anyhow::Result<Vec<PlayList>> {
+pub(super) fn parse_playlist_search(json: String) -> anyhow::Result<Vec<PlayList>> {
     let value: Value = serde_json::from_str(&json)?;
-
-    let mut file = File::create("output.json").unwrap();
-    file.write_all(json.as_bytes()).unwrap();
 
     let code: i64 = json_val!(&value, "code")?;
 
@@ -214,6 +213,133 @@ pub(super) fn parse_playlist_info(json: String) -> anyhow::Result<Vec<PlayList>>
             .collect::<Result<_, _>>()?;
 
         Ok(playlists)
+    } else {
+        Err(anyhow!("api code 没有返回200"))
+    }
+}
+
+pub(super) fn parse_songs_in_album(json: String) -> anyhow::Result<Vec<Song>> {
+    let value: Value = serde_json::from_str(&json)?;
+
+    let code: i64 = json_val!(&value, "code")?;
+
+    if code == 200 {
+        let (artist_id, artist_name): (u64, String) = {
+            let artist_value: &Value = json_val!(&value, "album", "artist")?;
+
+            (
+                json_val!(artist_value, "id").unwrap_or_default(),
+                json_val!(artist_value, "name").unwrap_or(String::from("未知artist")),
+            )
+        };
+
+        let (album_id, album_name, pic_url): (u64, String, String) = {
+            let album_value: &Value = json_val!(&value, "album")?;
+            (
+                json_val!(album_value, "id").unwrap_or_default(),
+                json_val!(album_value, "name").unwrap_or(String::from("未知专辑名")),
+                json_val!(album_value, "picUrl").unwrap_or_default(),
+            )
+        };
+
+        let songs_value: &Vec<Value> = json_val!(&value, "songs")?;
+
+        let songs: Vec<Song> = songs_value
+            .iter()
+            .map(|song_value| -> Result<Song> {
+                Ok(Song {
+                    id: json_val!(song_value, "id")?,
+                    name: json_val!(song_value, "name").unwrap_or(String::from("未知歌名")),
+                    artist_id,
+                    artist_name: artist_name.clone(),
+                    album_id,
+                    album_name: album_name.clone(),
+                    pic_url: pic_url.clone(),
+                    song_url: String::default(),
+                    duration: json_val!(song_value, "dt")?,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(songs)
+    } else {
+        Err(anyhow!("api code 没有返回200"))
+    }
+}
+
+pub(super) fn parse_songs_in_playlist(json: String) -> anyhow::Result<Vec<Song>> {
+    let value: Value = serde_json::from_str(&json)?;
+
+    let code: i64 = json_val!(&value, "code")?;
+
+    if code == 200 {
+        let songs_value: &Vec<Value> = json_val!(&value, "playlist", "tracks")?;
+
+        let songs: Vec<Song> = songs_value
+            .iter()
+            .map(|song_value| -> Result<Song> {
+                let (artist_id, artist_name): (u64, String) = {
+                    let artists_value: &Vec<Value> = json_val!(song_value, "ar")?;
+                    if let Some(artist_value) = artists_value.first() {
+                        (
+                            json_val!(artist_value, "id").unwrap_or_default(),
+                            json_val!(artist_value, "name").unwrap_or(String::from("未知artist")),
+                        )
+                    } else {
+                        (0, String::new())
+                    }
+                };
+
+                let (album_id, album_name, pic_url): (u64, String, String) = {
+                    let album_value: &Value = json_val!(song_value, "al")?;
+
+                    (
+                        json_val!(album_value, "id").unwrap_or_default(),
+                        json_val!(album_value, "name").unwrap_or(String::from("未知专辑名")),
+                        json_val!(album_value, "picUrl").unwrap_or_default(),
+                    )
+                };
+
+                Ok(Song {
+                    id: json_val!(song_value, "id")?,
+                    name: json_val!(song_value, "name").unwrap_or(String::from("未知歌名")),
+                    artist_id,
+                    artist_name,
+                    album_id,
+                    album_name,
+                    pic_url,
+                    song_url: String::new(),
+                    duration: json_val!(song_value, "dt")?,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(songs)
+    } else {
+        Err(anyhow!("api code 没有返回200"))
+    }
+}
+
+pub(super) fn parse_song_urls(json: String) -> anyhow::Result<Vec<SongUrl>> {
+    let value: Value = serde_json::from_str(&json)?;
+
+    let code: i64 = json_val!(&value, "code")?;
+
+    if code == 200 {
+        let songs_value: &Vec<Value> = json_val!(&value, "data")?;
+
+        let song_urls: Vec<SongUrl> = songs_value
+            .iter()
+            .map(|song_value| -> Result<SongUrl> {
+                Ok(SongUrl {
+                    id: json_val!(song_value, "id")?,
+                    url: json_val!(song_value, "url")?,
+                    rate: json_val!(song_value, "br")?,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(song_urls)
     } else {
         Err(anyhow!("api code 没有返回200"))
     }
