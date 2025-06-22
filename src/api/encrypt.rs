@@ -1,35 +1,28 @@
-use base64::{Engine, engine::general_purpose};
-use lazy_static::lazy_static;
+use base64::{engine::general_purpose, Engine};
+use once_cell::sync::Lazy;
 use openssl::{
-    hash::{MessageDigest, hash},
+    hash::{hash, MessageDigest},
     rsa::{Padding, Rsa},
-    symm::{Cipher, encrypt},
+    symm::{encrypt, Cipher},
 };
 use urlqstring::QueryParams;
 
-// 使用lazy_static定义全局静态变量
-lazy_static! {
-    /// 初始化向量(IV)，用于AES加密
-    static ref IV: Vec<u8> = "0102030405060708".as_bytes().to_vec();
-
-    /// Linux API加密密钥
-    static ref LINUX_API_KEY: Vec<u8> = "rFgB&h#%2?^eDg:Q".as_bytes().to_vec();
-
-    /// 预设密钥，用于网页API的第一次AES加密
-    static ref PRESET_KEY: Vec<u8> = "0CoJUm6Qyw8W8jud".as_bytes().to_vec();
-
-    /// BASE62字符集，用于生成随机密钥
-    /// 包含a-z、A-Z、0-9共62个字符
-    static ref BASE62: Vec<u8> = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        .as_bytes()
-        .to_vec();
-
-    /// RSA公钥，用于加密客户端生成的随机密钥
-    static ref RSA_PUBLIC_KEY: Vec<u8> = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB\n-----END PUBLIC KEY-----".as_bytes().to_vec();
-
-    /// EAPI加密密钥，用于移动端API加密
-    static ref EAPIKEY: Vec<u8> = "e82ckenh8dichen8".as_bytes().to_vec();
-}
+/// 初始化向量(IV)，用于AES加密
+pub static IV: Lazy<Vec<u8>> = Lazy::new(|| b"0102030405060708".to_vec());
+/// Linux API加密密钥
+pub static LINUX_API_KEY: Lazy<Vec<u8>> = Lazy::new(|| b"rFgB&h#%2?^eDg:Q".to_vec());
+/// 预设密钥，用于网页API的第一次AES加密
+pub static PRESET_KEY: Lazy<Vec<u8>> = Lazy::new(|| b"0CoJUm6Qyw8W8jud".to_vec());
+/// BASE62字符集，用于生成随机密钥
+pub static BASE62: Lazy<Vec<u8>> =
+    Lazy::new(|| b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_vec());
+/// RSA公钥，用于加密客户端生成的随机密钥
+pub static RSA_PUBLIC_KEY: Lazy<Vec<u8>> = Lazy::new(|| {
+    b"-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB\n-----END PUBLIC KEY-----"
+        .to_vec()
+});
+/// EAPI加密密钥，用于移动端API加密
+pub static EAPIKEY: Lazy<Vec<u8>> = Lazy::new(|| b"e82ckenh8dichen8".to_vec());
 
 /// 加密算法实现结构体
 pub struct Crypto;

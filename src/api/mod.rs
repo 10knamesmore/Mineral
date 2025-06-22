@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use isahc::{
     config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
 };
-use lazy_static::lazy_static;
 use std::{cell::RefCell, collections::HashMap, fs::File, io::Write, time::Duration};
 use urlqstring::QueryParams;
 
@@ -39,12 +38,6 @@ const USER_AGENT_LIST: [&str; 14] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/13.1058",
 ];
-
-lazy_static! {
-    static ref UA_ANY: UserAgentType = UserAgentType::Any;
-    static ref UA_MOBILE: UserAgentType = UserAgentType::Mobile;
-    static ref UA_PC: UserAgentType = UserAgentType::PC;
-}
 
 pub struct NcmApi {
     client: HttpClient,
@@ -133,7 +126,7 @@ impl NcmApi {
         path: &str,
         params: HashMap<&str, &str>,
         cryptoapi: CryptoApi,
-        ua_type: &UserAgentType,
+        ua_type: UserAgentType,
         append_csrf: bool,
     ) -> Result<String> {
         let mut csrf = self.csrf.borrow().to_owned();
@@ -223,7 +216,7 @@ impl NcmApi {
         }
     }
 
-    fn choose_user_agent(ua_type: &UserAgentType) -> &str {
+    fn choose_user_agent(ua_type: UserAgentType) -> String {
         let idx = match ua_type {
             UserAgentType::Any => rand::random::<u16>() % USER_AGENT_LIST.len() as u16,
             UserAgentType::Custom(ua) => return ua,
@@ -231,7 +224,7 @@ impl NcmApi {
             UserAgentType::PC => rand::random::<u16>() % 5 + 8,
         };
 
-        USER_AGENT_LIST[idx as usize]
+        USER_AGENT_LIST[idx as usize].to_string()
     }
     /******************************************* 登陆功能相关 ****************************************/
     #[deprecated(note = "这个接口无法工作")]
@@ -253,7 +246,14 @@ impl NcmApi {
         };
 
         let res = self
-            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Weapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
         parse_login_info(res)
     }
@@ -264,7 +264,14 @@ impl NcmApi {
         params.insert("cellphone", &phone[..]);
         params.insert("ctcode", &ctcode[..]);
         let res = self
-            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Weapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
         to_captcha(res)
     }
@@ -274,7 +281,14 @@ impl NcmApi {
         let mut params = HashMap::new();
         params.insert("type", "1");
         let res = self
-            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Weapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
         to_login_qr(res)
     }
@@ -304,8 +318,15 @@ impl NcmApi {
         params.insert("offset", &offset[..]);
         params.insert("limit", &limit[..]);
 
-        self.request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
-            .await
+        self.request(
+            Method::Post,
+            path,
+            params,
+            CryptoApi::Weapi,
+            UserAgentType::Any,
+            true,
+        )
+        .await
     }
 
     /// keywords: 关键词
@@ -367,7 +388,7 @@ impl NcmApi {
                 &path,
                 HashMap::new(),
                 CryptoApi::Weapi,
-                &UA_ANY,
+                UserAgentType::Any,
                 true,
             )
             .await?;
@@ -391,7 +412,14 @@ impl NcmApi {
         params.insert("csrf_token", &csrf_token);
 
         let res = self
-            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Weapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
         parse_songs_in_playlist(res)
     }
@@ -409,7 +437,14 @@ impl NcmApi {
         params.insert("c", &c[..]);
 
         let result = self
-            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Weapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
 
         let mut file = File::create("song_details.json").unwrap();
@@ -426,7 +461,14 @@ impl NcmApi {
         params.insert("br", br.into());
 
         let res = self
-            .request(Method::Post, path, params, CryptoApi::Eapi, &UA_ANY, true)
+            .request(
+                Method::Post,
+                path,
+                params,
+                CryptoApi::Eapi,
+                UserAgentType::Any,
+                true,
+            )
             .await?;
 
         parse_song_urls(res)
