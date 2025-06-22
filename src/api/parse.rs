@@ -1,10 +1,11 @@
+use std::{fs::File, io::Write};
 
 use anyhow::{anyhow, Context, Ok, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    api::model::SongUrl,
+    api::model::{LoginInfo, LoginQrCode, Message, SongUrl},
     app::{Album, PlayList, Song},
 };
 
@@ -343,4 +344,37 @@ pub(super) fn parse_song_urls(json: String) -> anyhow::Result<Vec<SongUrl>> {
     } else {
         Err(anyhow!("api code 没有返回200"))
     }
+}
+
+pub(super) fn parse_login_info(json: String) -> anyhow::Result<LoginInfo> {
+    dbg!(json);
+    // let mut file = File::create("login_info.json").unwrap();
+    // file.write_all(json.as_bytes()).unwrap();
+    todo!()
+}
+
+pub(super) fn to_captcha(json: String) -> anyhow::Result<Message> {
+    let value: Value = serde_json::from_str(&json)?;
+    let code: i64 = json_val!(&value, "code")?;
+
+    if code == 200 {
+        Ok(Message { msg: None, code })
+    } else {
+        let msg: String = json_val!(&value, "message")?;
+        Ok(Message {
+            msg: Some(msg),
+            code,
+        })
+    }
+}
+
+macro_rules! file_write {
+    ($file_name : expr,$content : expr) => {
+        let mut file = File::create($file_name).unwrap();
+        file.write_all($content.as_bytes()).unwrap();
+    };
+}
+pub(super) fn to_login_qr(json: String) -> anyhow::Result<LoginQrCode> {
+    file_write!("login_qr.json", json);
+    todo!()
 }

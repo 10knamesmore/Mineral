@@ -233,6 +233,51 @@ impl NcmApi {
 
         USER_AGENT_LIST[idx as usize]
     }
+    /******************************************* 登陆功能相关 ****************************************/
+    #[deprecated(note = "这个接口无法工作")]
+    pub async fn login(&self, username: String, password: String) -> Result<LoginInfo> {
+        let mut params = HashMap::new();
+        let path = if username.len() == 11 && username.parse::<u64>().is_ok() {
+            params.insert("phone", &username[..]);
+            params.insert("password", &password[..]);
+            params.insert("rememberLogin", "true");
+            "/weapi/login/cellphone"
+        } else {
+            let client_token =
+                "1_jVUMqWEPke0/1/Vu56xCmJpo5vP1grjn_SOVVDzOc78w8OKLVZ2JH7IfkjSXqgfmh";
+            params.insert("username", &username[..]);
+            params.insert("password", &password[..]);
+            params.insert("rememberLogin", "true");
+            params.insert("clientToken", client_token);
+            "/weapi/login"
+        };
+
+        let res = self
+            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .await?;
+        parse_login_info(res)
+    }
+
+    pub async fn captcha(&self, ctcode: String, phone: String) -> Result<Message> {
+        let path = "/weapi/sms/captcha/sent";
+        let mut params = HashMap::new();
+        params.insert("cellphone", &phone[..]);
+        params.insert("ctcode", &ctcode[..]);
+        let res = self
+            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .await?;
+        to_captcha(res)
+    }
+
+    pub async fn login_qr(&self) -> Result<LoginQrCode> {
+        let path = "/weapi/login/qrcode/unikey";
+        let mut params = HashMap::new();
+        params.insert("type", "1");
+        let res = self
+            .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
+            .await?;
+        to_login_qr(res)
+    }
 
     /******************************************* 搜索功能相关 ****************************************/
     /// keywords: 关键词
@@ -310,6 +355,7 @@ impl NcmApi {
         parse_playlist_search(res)
     }
     /**************************************************************************************************/
+
     /// 根据 album_id 返回这个专辑里面的所有歌曲
     /// WARN: 目前返回的歌曲的song_url 和 duration都为空
     pub async fn songs_in_album(&self, album_id: u64) -> Result<Vec<Song>> {
@@ -371,6 +417,7 @@ impl NcmApi {
         todo!()
     }
 
+    // TODO: freeTrial的解析
     pub async fn song_urls(&self, song_ids: &[u64], br: BitRate) -> Result<Vec<SongUrl>> {
         let path = "https://interface3.music.163.com/eapi/song/enhance/player/url";
         let mut params = HashMap::new();
@@ -383,32 +430,5 @@ impl NcmApi {
             .await?;
 
         parse_song_urls(res)
-    }
-
-    // TODO: freeTrial的解析
-    pub async fn songs_url(&self, ids: &[u64], br: &str) -> Result<Vec<SongUrl>> {
-        // WEBAPI
-        // let csrf_token = self.csrf.borrow().to_owned();
-        // let path = "/weapi/song/enhance/player/url/v1";
-        // let mut params = HashMap::new();
-        // let ids = serde_json::to_string(ids)?;
-        // params.insert("ids", ids.as_str());
-        // params.insert("level", "standard");
-        // params.insert("encodeType", "aac");
-        // params.insert("csrf_token", &csrf_token);
-        // let result = self
-        //     .request(Method::Post, path, params, CryptoApi::Weapi, &UA_ANY, true)
-        //     .await?;
-
-        // Eapi
-        let path = "https://interface3.music.163.com/eapi/song/enhance/player/url";
-        let mut params = HashMap::new();
-        let ids = serde_json::to_string(ids)?;
-        params.insert("ids", ids.as_str());
-        params.insert("br", br);
-        let result = self
-            .request(Method::Post, path, params, CryptoApi::Eapi, &UA_ANY, true)
-            .await?;
-        parse_song_urls(result)
     }
 }

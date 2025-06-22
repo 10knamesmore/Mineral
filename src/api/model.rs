@@ -66,3 +66,26 @@ impl From<SearchType> for String {
         code.to_string()
     }
 }
+
+#[derive(Debug)]
+pub struct LoginInfo {
+    pub code: i32,
+    pub uid: u64,
+    pub nickname: String,
+    pub avatar_url: String,
+
+    pub vip_type: i32,
+    pub msg: String,
+}
+
+#[derive(Debug)]
+pub struct Message {
+    pub msg: Option<String>,
+    pub code: i64,
+}
+
+#[derive(Debug)]
+pub struct LoginQrCode {
+    pub url: String,
+    pub unikey: String,
+}
