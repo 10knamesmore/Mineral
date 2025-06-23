@@ -1,3 +1,6 @@
-pub(crate) fn format_duration(secs: u64) -> String {
-    format!("{:02}:{:02}", secs / 60, secs % 60)
+pub(crate) fn format_duration(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let minutes = total_secs / 60;
+    let seconds = total_secs % 60;
+    format!("{:02}:{:02}", minutes, seconds)
 }

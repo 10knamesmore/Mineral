@@ -49,7 +49,7 @@ impl App {
                                 AppEvent::Action(action).emit();
                             }
                         }
-                        AppEvent::Resize(_, _) => todo!(),
+                        AppEvent::Resize(_, _) => todo!("handle resize"),
                         AppEvent::Action(action) => self.handle(action).await,
                         AppEvent::Render => {
                             should_render = true;

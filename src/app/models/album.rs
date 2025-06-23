@@ -1,6 +1,7 @@
 use crate::{
     app::Song,
     state::{HasDescription, HasId, SongList},
+    util::format::format_duration,
 };
 use ratatui::{
     style::{Color, Style, Stylize},
@@ -35,10 +36,10 @@ impl<'a> From<&'a Album> for Row<'a> {
             Line::from(Span::raw(&album.artist_name)),
         ]);
 
-        let minutes = 99; // TODO
+        let duration: u64 = album.songs.iter().map(|song| song.duration).sum();
 
         let right = Text::from(Line::from(vec![Span::styled(
-            format!("{} 首 · {}min", &album.songs.len(), minutes),
+            format!("{} 首 · {}", &album.songs.len(), format_duration(duration)),
             Style::default().fg(Color::LightBlue),
         )]));
 
@@ -68,7 +69,7 @@ impl HasDescription for Album {
 }
 
 impl Album {
-    pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>> {
+    pub(crate) fn to_rows(&self) -> Vec<Row> {
         self.songs.iter().map(|song| song.into()).collect()
     }
 }

@@ -130,7 +130,7 @@ fn gen_song(id: u64, rng: &mut impl Rng) -> Song {
         album_id: 0,
         pic_url: String::new(),
         song_url: String::new(),
-        duration: rng.random_range(120..=320),
+        duration: rng.random_range(120000..=320000),
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::{
     app::Song,
     state::{HasDescription, HasId, SongList},
+    util::format::format_duration,
 };
 use ratatui::{
     style::{Color, Style, Stylize},
@@ -28,8 +29,14 @@ impl<'a> From<&'a PlayList> for Row<'a> {
             Style::default().bold(),
         )));
 
+        let duration: u64 = play_list.songs.iter().map(|song| song.duration).sum();
+
         let right = Text::from(Line::from(Span::styled(
-            format!("共 {} 首", &play_list.track_count),
+            format!(
+                "共 {} 首 · {}",
+                &play_list.track_count,
+                format_duration(duration)
+            ),
             Style::default().fg(Color::LightBlue),
         )));
 
