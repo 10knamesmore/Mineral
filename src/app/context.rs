@@ -7,7 +7,7 @@ use crate::{
         main_page::{MainPageState, MainPageSubState, MainPageTab},
         Page, PopupState, Selectable,
     },
-    util::notification::{Notification, NotifyUrgency},
+    util::notification::Notification,
 };
 use ratatui::widgets::{Row, Table};
 use std::collections::VecDeque;
@@ -22,26 +22,9 @@ pub struct Context {
 }
 
 impl Context {
-    fn notify_internal(&mut self, title: &str, msg: &str, urgency: NotifyUrgency) {
+    pub fn notify(&mut self, notification: Notification) {
         self.popup(PopupState::Notificacion);
-        self.notifications
-            .push_back(Notification::new(title, msg, urgency));
-    }
-
-    pub(crate) fn notify_debug(&mut self, title: &str, msg: &str) {
-        self.notify_internal(title, msg, NotifyUrgency::Debug);
-    }
-
-    pub(crate) fn notify_info(&mut self, title: &str, msg: &str) {
-        self.notify_internal(title, msg, NotifyUrgency::Info);
-    }
-
-    pub(crate) fn notify_warning(&mut self, title: &str, msg: &str) {
-        self.notify_internal(title, msg, NotifyUrgency::Warning);
-    }
-
-    pub(crate) fn notify_error(&mut self, title: &str, msg: &str) {
-        self.notify_internal(title, msg, NotifyUrgency::Error);
+        self.notifications.push_back(notification);
     }
 
     pub(crate) fn mut_main_page(&mut self) -> &mut MainPageState {
@@ -74,6 +57,7 @@ impl Context {
     }
 
     /// 获取主页面表格选中项
+    // TODO: 改掉这坨屎, 分到main_page里面
     pub(crate) fn main_tab_selected_index(&self) -> Option<usize> {
         match &self.main_page.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
@@ -84,26 +68,6 @@ impl Context {
             MainPageSubState::ViewingPlayList(playlist) => playlist.selected_index(),
             MainPageSubState::ViewingAlbum(album) => album.selected_index(),
             MainPageSubState::ViewingArtist(artist) => artist.selected_index(),
-        }
-    }
-
-    /// 表格上移
-    pub(crate) fn table_move_up_by(&mut self, n: usize) {
-        match self.now_page {
-            Page::Main => {
-                self.main_page.now_tab_move_up_by(n);
-            }
-            Page::Search => todo!(),
-        }
-    }
-
-    /// 表格下移
-    pub(crate) fn table_move_down_by(&mut self, n: usize) {
-        match self.now_page {
-            Page::Main => {
-                self.main_page.now_tab_move_down_by(n);
-            }
-            Page::Search => todo!(),
         }
     }
 
@@ -129,20 +93,6 @@ impl Context {
         self.notifications.pop_front();
         if self.notifications.is_empty() {
             self.popup(PopupState::None);
-        }
-    }
-
-    pub(crate) fn nav_forward(&mut self) {
-        match self.now_page {
-            Page::Main => self.main_page.nav_forward(),
-            Page::Search => todo!(),
-        }
-    }
-
-    pub(crate) fn nav_backward(&mut self) {
-        match self.now_page {
-            Page::Main => self.main_page.nav_backward(),
-            Page::Search => todo!(),
         }
     }
 }

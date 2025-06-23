@@ -1,6 +1,6 @@
 use crate::{
     app::{data_generator::test_render_cache, signals::Signals},
-    event_handler::{self, AppEvent},
+    event_handler::{self, handle_page_action, Action, AppEvent},
     ui::render_ui,
 };
 use ratatui::DefaultTerminal;
@@ -8,7 +8,7 @@ use std::io::{self};
 
 mod cache;
 mod context;
-mod data_generator;
+pub mod data_generator;
 mod models;
 mod signals;
 mod style;
@@ -34,15 +34,29 @@ impl App {
 
             if let Some(event) = self.signals.rx.recv().await {
                 match event {
-                    AppEvent::Quit => break,
+                    AppEvent::Action(Action::Quit) => break,
                     AppEvent::Key(key_event) => {
-                        event_handler::dispatch_key(&mut self.ctx, key_event)
+                        if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
+                            AppEvent::Action(action).emit();
+                        }
                     }
                     AppEvent::Resize(_, _) => todo!(),
+                    AppEvent::Action(action) => self.handle(action).await,
                 }
             }
         }
 
         Ok(())
+    }
+
+    async fn handle(&mut self, action: Action) {
+        match action {
+            Action::Quit => AppEvent::Action(Action::Quit).emit(),
+            Action::Help => todo!(),
+            Action::Notification(notification) => self.ctx.notify(notification),
+            Action::Page(page_action) => handle_page_action(&mut self.ctx, page_action),
+            Action::Popup(popup_action) => todo!(),
+            Action::PlaySelectedTrac => todo!("handle 播放"),
+        }
     }
 }

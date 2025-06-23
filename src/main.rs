@@ -1,7 +1,7 @@
 use app::App;
 use std::io::Result;
 
-use crate::app::test_struct_app;
+use crate::app::data_generator::test_struct_app;
 
 mod api;
 mod app;

@@ -11,10 +11,11 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::event_handler::AppEvent;
+use crate::event_handler::{Action, AppEvent};
 
 pub struct Signals {
-    pub tx: UnboundedSender<AppEvent>,
+    // 用 AppAction.emit()
+    tx: UnboundedSender<AppEvent>,
     pub rx: UnboundedReceiver<AppEvent>,
 
     term_stop_tx: Option<oneshot::Sender<()>>,
@@ -49,7 +50,7 @@ impl Signals {
             while let Some(signal) = signals.next().await {
                 match signal {
                     SIGHUP | SIGTERM | SIGINT | SIGQUIT => {
-                        if tx.send(AppEvent::Quit).is_err() {
+                        if tx.send(AppEvent::Action(Action::Quit)).is_err() {
                             break;
                         }
                     }

@@ -79,30 +79,28 @@ fn render_detail(ctx: &Context, frame: &mut Frame, area: layout::Rect, cache: &m
         Constraint::Percentage(100),
     );
     // frame.render_widget(Block::default().bg(Color::Blue), cover_area);
-    if let Some(id) = ctx.main_page().selected_id() {
-        let tried_cached_image = ctx.main_page().now_cover(cache);
+    let tried_cached_image = ctx.main_page().now_cover(cache);
 
-        match tried_cached_image {
-            crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
-            crate::app::ImageState::Loading => {
-                // HACK: 优化正在时的表现
-                let place_holder_text = Text::from("图片加载中...");
-                frame.render_widget(place_holder_text, cover_area);
-            }
-            crate::app::ImageState::Loaded(cached_image) => {
-                frame.render_stateful_widget(
-                    StatefulImage::default(),
-                    area,
-                    &mut *cached_image.borrow_mut(),
-                );
-            }
-            crate::app::ImageState::Failed(e) => {
-                // HACK: 优化加载失败时的错误提醒
-                let place_holder_text = Text::from(format!("图片加载失败: {}", e));
-                frame.render_widget(place_holder_text, cover_area);
-            }
+    match tried_cached_image {
+        crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
+        crate::app::ImageState::Loading => {
+            // HACK: 优化正在时的表现
+            let place_holder_text = Text::from("图片加载中...");
+            frame.render_widget(place_holder_text, cover_area);
         }
-    };
+        crate::app::ImageState::Loaded(cached_image) => {
+            frame.render_stateful_widget(
+                StatefulImage::default(),
+                area,
+                &mut *cached_image.borrow_mut(),
+            );
+        }
+        crate::app::ImageState::Failed(e) => {
+            // HACK: 优化加载失败时的错误提醒
+            let place_holder_text = Text::from(format!("图片加载失败: {}", e));
+            frame.render_widget(place_holder_text, cover_area);
+        }
+    }
 
     // 歌曲摘要渲染
     if let Some(detail_widget) = ctx.selected_detail() {

@@ -1,24 +1,28 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::{app::Context, event_handler::AppEvent, state::PopupState};
+use crate::event_handler::{action::PopupAction, Action};
 
-pub(super) fn handle_confirm_exit(ctx: &mut Context, key_event: KeyEvent) {
+pub(super) fn dispatch_confirm_exit(key_event: KeyEvent) -> Option<Action> {
     if let KeyEventKind::Press = key_event.kind {
         match key_event.code {
-            KeyCode::Char('y') | KeyCode::Char('q') => AppEvent::Quit.emit(),
-            KeyCode::Char('n') => ctx.popup(PopupState::None),
-            _ => {}
+            KeyCode::Char('y') | KeyCode::Char('q') => Some(Action::Popup(PopupAction::ConfirmYes)),
+            KeyCode::Char('n') => Some(Action::Popup(PopupAction::ConfirmNo)),
+            _ => None,
         }
+    } else {
+        None
     }
 }
 
-pub(super) fn handle_notification(ctx: &mut Context, key_event: KeyEvent) {
+pub(super) fn dispatch_notification(key_event: KeyEvent) -> Option<Action> {
     if let KeyEventKind::Press = key_event.kind {
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('Q') => {
-                ctx.consume_first_notification()
+                Some(Action::Popup(PopupAction::ClosePopup))
             }
-            _ => {}
+            _ => None,
         }
+    } else {
+        None
     }
 }

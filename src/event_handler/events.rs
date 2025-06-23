@@ -2,12 +2,14 @@ use crossterm::event::KeyEvent;
 use once_cell::sync::OnceCell;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::event_handler::Action;
+
 static TX: OnceCell<UnboundedSender<AppEvent>> = OnceCell::new();
 
 pub enum AppEvent {
-    Quit,
     Key(KeyEvent),
     Resize(u16, u16),
+    Action(Action),
 }
 
 impl AppEvent {

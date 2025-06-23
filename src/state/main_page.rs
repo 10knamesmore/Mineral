@@ -50,6 +50,10 @@ impl<T> TabList<T> {
     {
         self.items.iter().map(Row::from).collect()
     }
+
+    pub fn selected_id(&self) -> Option<u64> {
+        self.selected_id
+    }
 }
 
 impl SongList for TabList<Song> {
@@ -297,8 +301,8 @@ impl MainPageState {
     }
 
     pub(crate) fn nav_forward(&mut self) {
-        match &self.now_state {
-            MainPageSubState::TabView(main_page_tab) => match main_page_tab {
+        if let MainPageSubState::TabView(main_page_tab) = &self.now_state {
+            match main_page_tab {
                 MainPageTab::PlayList => {
                     // HACK: 直接clone太不优雅了, 以后要重构
                     let Some(item) = self.playlist_state.selected_item() else {
@@ -321,24 +325,6 @@ impl MainPageState {
                     let artist = TabList::new(item.songs.clone());
                     self.now_state = MainPageSubState::ViewingArtist(artist);
                 }
-            },
-            MainPageSubState::ViewingPlayList(_) => {
-                let Some(id) = self.playlist_state.selected_id else {
-                    return;
-                };
-                self.play(id);
-            }
-            MainPageSubState::ViewingAlbum(_) => {
-                let Some(id) = self.album_state.selected_id else {
-                    return;
-                };
-                self.play(id);
-            }
-            MainPageSubState::ViewingArtist(_) => {
-                let Some(id) = self.artist_state.selected_id else {
-                    return;
-                };
-                self.play(id);
             }
         }
     }
@@ -358,7 +344,7 @@ impl MainPageState {
         }
     }
 
-    pub(super) fn play(&mut self, id: u64) {
+    pub fn play(&mut self, id: u64) {
         todo!("播放歌曲")
     }
 
@@ -432,41 +418,6 @@ impl MainPageState {
         Table::default().rows(row)
     }
 
-    /// 获取当前主页面状态下被选中项的 `id`。
-    ///
-    /// 根据当前 `MainPageState` 的状态，提取当前选中的条目的 `u64` 类型 ID：
-    /// - 如果当前为 [`TabView`] 状态，则根据当前选中的标签页类型（播放列表 / 专辑 / 艺人）
-    ///   从对应的 `TabList<T>` 中提取被选中（播放列表 / 专辑 / 艺人）的 ID；
-    /// - 如果当前为某一播放列表 / 专辑 / 艺人详情页状态，则从该页中获取对应选中 Song 的 ID。
-    ///
-    /// # 返回值
-    /// 返回一个 `Option<u64>`：
-    /// - `Some(id)`：存在选中条目，返回其 ID；
-    /// - `None`：当前无选中状态或条目列表为空。
-    ///
-    /// # Panics
-    /// 如果当前处于某一详情页状态，并且内部记录的 `selected` 索引超出对应条目列表长度，
-    /// 将会触发 panic。这是一个逻辑错误，表示状态管理失效或未正确同步列表与索引。
-    ///
-    /// # 示例
-    /// ```rust
-    /// if let Some(id) = main_page_state.selected_id() {
-    ///     println!("当前选中的 ID 是 {}", id);
-    /// }
-    /// ```
-    pub(crate) fn selected_id(&self) -> Option<u64> {
-        match &self.now_state {
-            MainPageSubState::TabView(main_page_tab) => match main_page_tab {
-                MainPageTab::PlayList => self.playlist_state.selected_id,
-                MainPageTab::FavoriteAlbum => self.album_state.selected_id,
-                MainPageTab::FavoriteArtist => self.artist_state.selected_id,
-            },
-            MainPageSubState::ViewingPlayList(play_list) => play_list.selected_id,
-            MainPageSubState::ViewingAlbum(album) => album.selected_id,
-            MainPageSubState::ViewingArtist(artist) => artist.selected_id,
-        }
-    }
-
     pub(crate) fn playlist_state(&self) -> &TabList<PlayList> {
         &self.playlist_state
     }
@@ -480,11 +431,6 @@ impl MainPageState {
     }
 
     pub(crate) fn now_tab_move_up_by(&mut self, n: usize) {
-        // match self.now_state {
-        //     MainPageTab::PlayList => self.playlist_state.move_up_by(n),
-        //     MainPageTab::FavoriteAlbum => self.album_state.move_up_by(n),
-        //     MainPageTab::FavoriteArtist => self.artist_state.move_up_by(n),
-        // }
         match &mut self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.playlist_state.move_up_by(n),
@@ -498,11 +444,6 @@ impl MainPageState {
     }
 
     pub(crate) fn now_tab_move_down_by(&mut self, n: usize) {
-        // match self.now_state {
-        //     MainPageTab::PlayList => self.playlist_state.move_down_by(n),
-        //     MainPageTab::FavoriteAlbum => self.album_state.move_down_by(n),
-        //     MainPageTab::FavoriteArtist => self.artist_state.move_down_by(n),
-        // }
         match &mut self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.playlist_state.move_down_by(n),
