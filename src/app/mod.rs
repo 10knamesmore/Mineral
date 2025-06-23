@@ -1,6 +1,6 @@
 use crate::{
     app::{data_generator::test_render_cache, signals::Signals},
-    event_handler::{self, handle_page_action, Action, AppEvent, PopupAction},
+    event_handler::{self, handle_page_action, Action, AppEvent, PopupResponse},
     state::PopupState,
     ui::render_ui,
 };
@@ -59,20 +59,24 @@ impl App {
         match action {
             Action::Quit => {
                 self.ctx.popup(PopupState::ConfirmExit);
-                AppEvent::Render.emit();
             }
             Action::Help => todo!(),
             Action::Notification(notification) => {
                 self.ctx.notify(notification);
             }
             Action::Page(page_action) => handle_page_action(&mut self.ctx, page_action),
-            Action::Popup(popup_action) => {
-                if let PopupAction::ConfirmYes = popup_action {
-                    AppEvent::Exit.emit();
-                } else {
-                    AppEvent::Render.emit();
+            Action::PopupResponse(popup_response) => match popup_response {
+                PopupResponse::ConfirmExit { accepted } => {
+                    if accepted {
+                        AppEvent::Exit.emit();
+                    } else {
+                        self.ctx.popup(PopupState::None);
+                    }
                 }
-            }
+                PopupResponse::ClosePopup => {
+                    self.ctx.popup(PopupState::None);
+                }
+            },
             Action::PlaySelectedTrac => todo!("handle 播放"),
         }
     }

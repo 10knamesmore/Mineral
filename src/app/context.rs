@@ -3,6 +3,7 @@ use crate::{
         models::{Album, Artist, PlayList},
         style::TableColors,
     },
+    event_handler::AppEvent,
     state::{
         main_page::{MainPageState, MainPageSubState, MainPageTab},
         Page, PopupState, Selectable,
@@ -49,6 +50,7 @@ impl Context {
     /// 设置弹窗状态
     pub(crate) fn popup(&mut self, popup_state: PopupState) {
         self.popup_state = popup_state;
+        AppEvent::Render.emit();
     }
 
     /// 获取主页面表格数据

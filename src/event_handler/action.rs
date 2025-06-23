@@ -10,9 +10,8 @@ pub enum PageAction {
     LastPage,
 }
 
-pub enum PopupAction {
-    ConfirmYes,
-    ConfirmNo,
+pub enum PopupResponse {
+    ConfirmExit { accepted: bool },
     ClosePopup,
 }
 
@@ -25,7 +24,7 @@ pub enum Action {
     Notification(Notification),
 
     Page(PageAction),
-    Popup(PopupAction),
+    PopupResponse(PopupResponse),
 
     PlaySelectedTrac,
 }
