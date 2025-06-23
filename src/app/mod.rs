@@ -8,8 +8,10 @@ use ratatui::DefaultTerminal;
 use std::{
     io::{self},
     sync::Arc,
+    time::Duration,
 };
-use tokio::sync::Mutex;
+use tokio::time::{self};
+use tokio::{select, sync::Mutex};
 
 mod cache;
 mod context;
@@ -33,21 +35,36 @@ impl App {
         // HACK: 正式运行更改
         let cache: Arc<Mutex<RenderCache>> = test_render_cache();
 
-        while let Some(event) = self.signals.rx.recv().await {
-            match event {
-                AppEvent::Exit => break,
-                AppEvent::Key(key_event) => {
-                    if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
-                        AppEvent::Action(action).emit();
+        // 30hz
+        let mut render_interval = time::interval(Duration::from_millis(33));
+        let mut should_render = true;
+
+        loop {
+            select! {
+                Some(event) = self.signals.rx.recv() => {
+                    match event {
+                        AppEvent::Exit => break,
+                        AppEvent::Key(key_event) => {
+                            if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
+                                AppEvent::Action(action).emit();
+                            }
+                        }
+                        AppEvent::Resize(_, _) => todo!(),
+                        AppEvent::Action(action) => self.handle(action).await,
+                        AppEvent::Render => {
+                            should_render = true;
+                        }
                     }
                 }
-                AppEvent::Resize(_, _) => todo!(),
-                AppEvent::Action(action) => self.handle(action).await,
-                AppEvent::Render => {
-                    let mut cache_guard = cache.lock().await;
-                    terminal.draw(|frame| {
-                        render_ui(&self.ctx, frame, &mut cache_guard);
-                    })?;
+
+                _ = render_interval.tick() => {
+                    if should_render {
+                        should_render = false;
+                        let mut cache_guard = cache.lock().await;
+                        terminal.draw(|frame| {
+                            render_ui(&self.ctx, frame, &mut cache_guard);
+                        })?;
+                    }
                 }
             }
         }
