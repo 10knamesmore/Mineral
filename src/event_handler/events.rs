@@ -7,6 +7,7 @@ use crate::event_handler::Action;
 static TX: OnceCell<UnboundedSender<AppEvent>> = OnceCell::new();
 
 pub enum AppEvent {
+    Exit,
     Key(KeyEvent),
     Resize(u16, u16),
     Action(Action),

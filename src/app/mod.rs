@@ -1,6 +1,7 @@
 use crate::{
     app::{data_generator::test_render_cache, signals::Signals},
-    event_handler::{self, handle_page_action, Action, AppEvent},
+    event_handler::{self, handle_page_action, Action, AppEvent, PopupAction},
+    state::PopupState,
     ui::render_ui,
 };
 use ratatui::DefaultTerminal;
@@ -34,7 +35,7 @@ impl App {
 
             if let Some(event) = self.signals.rx.recv().await {
                 match event {
-                    AppEvent::Action(Action::Quit) => break,
+                    AppEvent::Exit => break,
                     AppEvent::Key(key_event) => {
                         if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
                             AppEvent::Action(action).emit();
@@ -51,11 +52,17 @@ impl App {
 
     async fn handle(&mut self, action: Action) {
         match action {
-            Action::Quit => AppEvent::Action(Action::Quit).emit(),
+            Action::Quit => {
+                self.ctx.popup(PopupState::ConfirmExit);
+            }
             Action::Help => todo!(),
             Action::Notification(notification) => self.ctx.notify(notification),
             Action::Page(page_action) => handle_page_action(&mut self.ctx, page_action),
-            Action::Popup(popup_action) => todo!(),
+            Action::Popup(popup_action) => {
+                if let PopupAction::ConfirmYes = popup_action {
+                    AppEvent::Exit.emit()
+                }
+            }
             Action::PlaySelectedTrac => todo!("handle 播放"),
         }
     }

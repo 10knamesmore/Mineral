@@ -5,7 +5,7 @@ mod global;
 mod main_page;
 mod popup;
 
-pub use action::Action;
+pub use action::*;
 pub use dispatcher::dispatch_key;
 pub use events::*;
 
