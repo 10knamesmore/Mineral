@@ -5,7 +5,11 @@ use crate::{
     ui::render_ui,
 };
 use ratatui::DefaultTerminal;
-use std::io::{self};
+use std::{
+    io::{self},
+    sync::Arc,
+};
+use tokio::sync::Mutex;
 
 mod cache;
 mod context;
@@ -27,22 +31,23 @@ pub(crate) struct App {
 impl App {
     pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         // HACK: 正式运行更改
-        let mut cache = test_render_cache();
-        loop {
-            terminal.draw(|frame| {
-                render_ui(&self.ctx, frame, &mut cache);
-            })?;
+        let cache: Arc<Mutex<RenderCache>> = test_render_cache();
 
-            if let Some(event) = self.signals.rx.recv().await {
-                match event {
-                    AppEvent::Exit => break,
-                    AppEvent::Key(key_event) => {
-                        if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
-                            AppEvent::Action(action).emit();
-                        }
+        while let Some(event) = self.signals.rx.recv().await {
+            match event {
+                AppEvent::Exit => break,
+                AppEvent::Key(key_event) => {
+                    if let Some(action) = event_handler::dispatch_key(&self.ctx, key_event) {
+                        AppEvent::Action(action).emit();
                     }
-                    AppEvent::Resize(_, _) => todo!(),
-                    AppEvent::Action(action) => self.handle(action).await,
+                }
+                AppEvent::Resize(_, _) => todo!(),
+                AppEvent::Action(action) => self.handle(action).await,
+                AppEvent::Render => {
+                    let mut cache_guard = cache.lock().await;
+                    terminal.draw(|frame| {
+                        render_ui(&self.ctx, frame, &mut cache_guard);
+                    })?;
                 }
             }
         }
@@ -54,13 +59,18 @@ impl App {
         match action {
             Action::Quit => {
                 self.ctx.popup(PopupState::ConfirmExit);
+                AppEvent::Render.emit();
             }
             Action::Help => todo!(),
-            Action::Notification(notification) => self.ctx.notify(notification),
+            Action::Notification(notification) => {
+                self.ctx.notify(notification);
+            }
             Action::Page(page_action) => handle_page_action(&mut self.ctx, page_action),
             Action::Popup(popup_action) => {
                 if let PopupAction::ConfirmYes = popup_action {
-                    AppEvent::Exit.emit()
+                    AppEvent::Exit.emit();
+                } else {
+                    AppEvent::Render.emit();
                 }
             }
             Action::PlaySelectedTrac => todo!("handle 播放"),

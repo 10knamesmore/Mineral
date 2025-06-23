@@ -16,4 +16,5 @@ pub fn handle_page_action(ctx: &mut Context, action: PageAction) {
         Page::Main => main_page::handle_page_action(ctx.mut_main_page(), action),
         Page::Search => todo!(),
     }
+    AppEvent::Render.emit();
 }

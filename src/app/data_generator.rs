@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use crate::{
     app::{PlayList, RenderCache, Song},
     App,
 };
 use rand::{seq::IndexedRandom, Rng};
 use ratatui_image::picker::Picker;
+use tokio::sync::Mutex;
 
 fn rand_artist_name(rng: &mut impl Rng) -> String {
     let pool = [
@@ -164,20 +167,24 @@ fn gen_playlists() -> Vec<PlayList> {
 
 #[cfg(debug_assertions)]
 pub(crate) fn test_struct_app() -> App {
-    use crate::app::{Context, Signals};
+    use crate::{
+        app::{Context, Signals},
+        event_handler::AppEvent,
+    };
 
     let playlists = gen_playlists();
 
     let mut ctx = Context::default();
     ctx.mut_main_page().update_playlist(playlists);
 
-    App {
-        ctx,
-        signals: Signals::start().unwrap(),
-    }
+    let signals = Signals::start().unwrap();
+    // 渲染第一帧
+    AppEvent::Render.emit();
+
+    App { ctx, signals }
 }
 
-pub(crate) fn test_render_cache() -> RenderCache {
+pub(crate) fn test_render_cache() -> Arc<Mutex<RenderCache>> {
     let test_picker = Picker::from_query_stdio().unwrap();
     let cache_dir = String::from("/home/wanger/Pictures/ncm_tui/");
 

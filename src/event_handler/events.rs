@@ -11,6 +11,7 @@ pub enum AppEvent {
     Key(KeyEvent),
     Resize(u16, u16),
     Action(Action),
+    Render,
 }
 
 impl AppEvent {

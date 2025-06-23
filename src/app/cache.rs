@@ -1,14 +1,20 @@
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     io::{self},
+    sync::Arc,
 };
 use std::{io::Cursor, path::Path};
 use tokio::{
     fs,
-    sync::mpsc::{self},
+    sync::{
+        mpsc::{self},
+        Mutex,
+    },
 };
+
+use crate::event_handler::AppEvent;
 
 enum ImageCacheType {
     Playlist,
@@ -42,13 +48,12 @@ pub(crate) struct RenderCache {
     artist_cover: HashMap<u64, ImageState>,
 
     load_request_sender: mpsc::UnboundedSender<ImageLoadRequest>,
-    load_result_receiver: mpsc::UnboundedReceiver<ImageloadResult>,
 }
 
 impl RenderCache {
-    pub fn new(picker: Picker, cache_path: String) -> Self {
+    pub fn new(picker: Picker, cache_path: String) -> Arc<Mutex<Self>> {
         let (load_request_sender, load_request_receiver) = mpsc::unbounded_channel();
-        let (load_result_sender, load_result_receiver) = mpsc::unbounded_channel();
+        let (load_result_sender, mut load_result_receiver) = mpsc::unbounded_channel();
 
         let cache_path_cloned = cache_path.clone();
 
@@ -62,14 +67,39 @@ impl RenderCache {
             .await;
         });
 
-        Self {
+        let cache = Arc::new(Mutex::new(RenderCache {
             not_requested_placeholder: ImageState::NotRequested,
             playlist_cover: HashMap::new(),
             album_cover: HashMap::new(),
             artist_cover: HashMap::new(),
             load_request_sender,
-            load_result_receiver,
-        }
+        }));
+
+        let cache_clone = cache.clone();
+        tokio::spawn(async move {
+            while let Some(result) = load_result_receiver.recv().await {
+                let state = match result.result {
+                    Ok(image) => ImageState::Loaded(RefCell::new(image)),
+                    Err(e) => ImageState::Failed(e),
+                };
+
+                let mut cache = cache_clone.lock().await;
+                match result.image_type {
+                    ImageCacheType::Playlist => {
+                        cache.playlist_cover.insert(result.id, state);
+                    }
+                    ImageCacheType::Album => {
+                        cache.album_cover.insert(result.id, state);
+                    }
+                    ImageCacheType::Artist => {
+                        cache.artist_cover.insert(result.id, state);
+                    }
+                }
+                AppEvent::Render.emit();
+            }
+        });
+
+        cache
     }
 
     pub(crate) fn not_requested(&mut self) -> &ImageState {
@@ -77,9 +107,7 @@ impl RenderCache {
     }
 
     pub(crate) fn playlist_cover(&mut self, id: u64) -> &ImageState {
-        self.poll_image_results();
-
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.playlist_cover.entry(id) {
+        if let Entry::Vacant(entry) = self.playlist_cover.entry(id) {
             entry.insert(ImageState::Loading);
             self.request_image_load(ImageCacheType::Playlist, id);
         }
@@ -87,9 +115,7 @@ impl RenderCache {
         self.playlist_cover.get(&id).unwrap()
     }
     pub(crate) fn artist_cover(&mut self, id: u64) -> &ImageState {
-        self.poll_image_results();
-
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.artist_cover.entry(id) {
+        if let Entry::Vacant(entry) = self.artist_cover.entry(id) {
             entry.insert(ImageState::Loading);
             self.request_image_load(ImageCacheType::Artist, id);
         }
@@ -97,9 +123,7 @@ impl RenderCache {
         self.artist_cover.get(&id).unwrap()
     }
     pub(crate) fn album_cover(&mut self, id: u64) -> &ImageState {
-        self.poll_image_results();
-
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.album_cover.entry(id) {
+        if let Entry::Vacant(entry) = self.album_cover.entry(id) {
             entry.insert(ImageState::Loading);
             self.request_image_load(ImageCacheType::Album, id);
         }
@@ -115,29 +139,7 @@ impl RenderCache {
         }
     }
 
-    // 轮询, 更新load结果到self
-    fn poll_image_results(&mut self) {
-        while let Ok(result) = self.load_result_receiver.try_recv() {
-            let state = match result.result {
-                Ok(image) => ImageState::Loaded(RefCell::new(image)),
-                Err(e) => ImageState::Failed(e),
-            };
-
-            match result.image_type {
-                ImageCacheType::Playlist => {
-                    self.playlist_cover.insert(result.id, state);
-                }
-                ImageCacheType::Album => {
-                    self.album_cover.insert(result.id, state);
-                }
-                ImageCacheType::Artist => {
-                    self.artist_cover.insert(result.id, state);
-                }
-            }
-        }
-    }
-
-    // 等待接收加载图片的请求
+    // 面对外部模块, 等待接收加载图片的请求
     async fn image_loader_task(
         mut request_receiver: mpsc::UnboundedReceiver<ImageLoadRequest>,
         result_sender: mpsc::UnboundedSender<ImageloadResult>,
@@ -195,6 +197,7 @@ impl RenderCache {
         }
     }
 
+    #[allow(unused)]
     async fn try_from_net(
         cache_path: &str,
         picker: &Picker,
