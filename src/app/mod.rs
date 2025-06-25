@@ -16,6 +16,7 @@ use tokio::{select, sync::Mutex};
 mod cache;
 mod context;
 pub mod data_generator;
+pub mod logger;
 mod models;
 mod signals;
 mod style;
@@ -42,6 +43,7 @@ impl App {
         loop {
             select! {
                 Some(event) = self.signals.rx.recv() => {
+                    tracing::trace!("接收Event: {}",&event);
                     match event {
                         AppEvent::Exit => break,
                         AppEvent::Key(key_event) => {

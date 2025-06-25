@@ -6,10 +6,17 @@ use crate::event_handler::Action;
 
 static TX: OnceCell<UnboundedSender<AppEvent>> = OnceCell::new();
 
+#[derive(Debug, strum_macros::Display)]
 pub enum AppEvent {
     Exit,
+
+    #[strum(to_string = "Key({0:?})")]
     Key(KeyEvent),
+
+    #[strum(to_string = "Resize({0}, {1})")]
     Resize(u16, u16),
+
+    #[strum(to_string = "Action({0})")]
     Action(Action),
     Render,
 }
