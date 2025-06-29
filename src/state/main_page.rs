@@ -44,6 +44,10 @@ impl<T> TabList<T> {
         }
     }
 
+    fn extend(&mut self, items: Vec<T>) {
+        self.items.extend(items);
+    }
+
     pub(crate) fn to_rows<'a>(&'a self) -> Vec<Row<'a>>
     where
         Row<'a>: From<&'a T>, // 这里声明 Row 可以从 &T 转换
@@ -109,21 +113,21 @@ impl MainPageState {
     where
         T: Into<Vec<PlayList>>,
     {
-        self.playlist_state = TabList::new(playlists.into());
+        self.playlist_state.extend(playlists.into());
     }
 
     pub(crate) fn update_album<T>(&mut self, albums: T)
     where
         T: Into<Vec<Album>>,
     {
-        self.album_state = TabList::new(albums.into());
+        self.album_state.extend(albums.into());
     }
 
     pub(crate) fn update_artist<T>(&mut self, artists: T)
     where
         T: Into<Vec<Artist>>,
     {
-        self.artist_state = TabList::new(artists.into());
+        self.artist_state.extend(artists.into());
     }
 
     // 当now_state的selected_idx为None的时候, 会返回NotRequested
@@ -133,8 +137,13 @@ impl MainPageState {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {
                     Some(_) => {
                         // 如果selected_idx存在, 那么应当保证selected_id也存在
-                        let id = self.playlist_state.selected_id.unwrap();
-                        cache.playlist_cover(id)
+                        // HACK: 粗暴判断如果浏览本地playlist就不渲染图片
+                        if self.playlist_state.selected_item().unwrap().local {
+                            cache.not_requested()
+                        } else {
+                            let id = self.playlist_state.selected_id.unwrap();
+                            cache.playlist_cover(id)
+                        }
                     }
                     None => cache.not_requested(),
                 },
@@ -156,8 +165,13 @@ impl MainPageState {
                 },
             },
             MainPageSubState::ViewingPlayList(_) => {
-                let id = self.playlist_state.selected_id.unwrap();
-                cache.playlist_cover(id)
+                // HACK:
+                if self.playlist_state.selected_item().unwrap().local {
+                    cache.not_requested()
+                } else {
+                    let id = self.playlist_state.selected_id.unwrap();
+                    cache.playlist_cover(id)
+                }
             }
             MainPageSubState::ViewingAlbum(_) => {
                 let id = self.album_state.selected_id.unwrap();

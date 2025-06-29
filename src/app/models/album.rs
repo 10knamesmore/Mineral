@@ -10,7 +10,7 @@ use ratatui::{
 };
 use std::vec;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Album {
     pub(crate) id: u64,
     pub(crate) name: String,

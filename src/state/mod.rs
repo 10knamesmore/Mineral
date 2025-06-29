@@ -59,6 +59,8 @@ pub(crate) trait Selectable {
             } else {
                 self._select(0);
             }
+        } else if !self.is_empty() {
+            self._select(self.len() - 1)
         }
     }
     fn move_down_by(&mut self, n: usize) {
@@ -69,6 +71,8 @@ pub(crate) trait Selectable {
             } else if !items.is_empty() {
                 self._select(items.len() - 1);
             }
+        } else if !self.is_empty() {
+            self._select(0)
         }
     }
 }

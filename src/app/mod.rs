@@ -1,5 +1,5 @@
 use crate::{
-    app::{data_generator::test_render_cache, signals::Signals},
+    app::{config::Config, data_generator::test_render_cache, signals::Signals},
     event_handler::{self, handle_page_action, Action, AppEvent, PopupResponse},
     state::PopupState,
     ui::render_ui,
@@ -14,6 +14,7 @@ use tokio::time::{self};
 use tokio::{select, sync::Mutex};
 
 mod cache;
+mod config;
 mod context;
 pub mod data_generator;
 pub mod logger;
@@ -29,12 +30,14 @@ pub(crate) use style::*;
 pub(crate) struct App {
     ctx: Context,
     signals: Signals,
+    cfg: &'static Config,
 }
 
 impl App {
     pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         // HACK: 正式运行更改
         let cache: Arc<Mutex<RenderCache>> = test_render_cache();
+        self.ctx.load_musics(self.cfg.music_dirs());
 
         // 30hz
         let mut render_interval = time::interval(Duration::from_millis(33));
@@ -97,6 +100,9 @@ impl App {
                 }
             },
             Action::PlaySelectedTrac => todo!("handle 播放"),
+            Action::LoadMusics => {
+                self.ctx.load_musics(self.cfg.music_dirs());
+            }
         }
     }
 }

@@ -38,4 +38,6 @@ pub enum Action {
     PopupResponse(PopupResponse),
 
     PlaySelectedTrac,
+
+    LoadMusics,
 }

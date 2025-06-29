@@ -203,6 +203,7 @@ pub(super) fn parse_playlist_search(json: String) -> anyhow::Result<Vec<PlayList
             .iter()
             .map(|playlist_value| -> Result<PlayList> {
                 Ok(PlayList {
+                    local: false,
                     id: json_val!(playlist_value, "id")?,
                     name: json_val!(playlist_value, "name").unwrap_or("未知歌单名".to_string()),
                     img_url: json_val!(playlist_value, "coverImgUrl").unwrap_or_default(),

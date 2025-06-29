@@ -143,6 +143,7 @@ fn gen_playlist(id: u64, name: &str, rng: &mut impl Rng) -> PlayList {
     let description = rand_album_intro(rng);
 
     PlayList {
+        local: true,
         name: format!("{} - 测试歌单 ID:{}", name, id),
         track_count: songs.len() as u64,
         songs,
@@ -168,7 +169,7 @@ fn gen_playlists() -> Vec<PlayList> {
 #[cfg(debug_assertions)]
 pub(crate) fn test_struct_app() -> App {
     use crate::{
-        app::{Context, Signals},
+        app::{config::Config, Context, Signals},
         event_handler::AppEvent,
     };
 
@@ -181,7 +182,11 @@ pub(crate) fn test_struct_app() -> App {
     // 渲染第一帧
     AppEvent::Render.emit();
 
-    App { ctx, signals }
+    App {
+        ctx,
+        signals,
+        cfg: Config::get(),
+    }
 }
 
 pub(crate) fn test_render_cache() -> Arc<Mutex<RenderCache>> {

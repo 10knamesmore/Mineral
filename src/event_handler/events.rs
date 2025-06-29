@@ -29,9 +29,10 @@ impl AppEvent {
     pub fn emit(self) {
         if let Some(tx) = TX.get() {
             let tx = tx.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(self);
-            });
+            let _ = tx.send(self);
+            // tokio::spawn(async move {
+            //     let _ = tx.send(self);
+            // });
         } else {
             eprintln!("AppEvent sender 没有被初始化!");
         }

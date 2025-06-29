@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Artist {
     pub(crate) name: String,
     pub(crate) followers: u32,

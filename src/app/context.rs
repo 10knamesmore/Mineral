@@ -2,6 +2,7 @@ use crate::{
     app::{
         models::{Album, Artist, PlayList},
         style::TableColors,
+        Song,
     },
     event_handler::AppEvent,
     state::{
@@ -11,7 +12,7 @@ use crate::{
     util::notification::Notification,
 };
 use ratatui::widgets::{Row, Table};
-use std::collections::VecDeque;
+use std::{any, collections::VecDeque, path::PathBuf};
 
 pub struct Context {
     now_page: Page,
@@ -97,17 +98,41 @@ impl Context {
             self.popup(PopupState::None);
         }
     }
+
+    pub fn load_musics(&mut self, music_dirs: &'static [PathBuf]) {
+        use std::fs;
+
+        let mut playlists = Vec::new();
+
+        for music_dir in music_dirs {
+            let read_dir = match fs::read_dir(music_dir) {
+                Ok(rd) => rd,
+                Err(e) => {
+                    tracing::warn!("读取目录 {:?} 出错: {:?}", music_dir, e);
+                    continue;
+                }
+            };
+
+            for entry in read_dir.filter_map(Result::ok) {
+                let path = entry.path();
+                match PlayList::from_path(&path) {
+                    Ok(playlist) => playlists.push(playlist),
+                    Err(e) => {
+                        tracing::warn!("加载播放列表 {:?} 时出错: {:?}", path, e);
+                    }
+                }
+            }
+        }
+
+        self.main_page.update_playlist(playlists);
+    }
 }
 
 impl Default for Context {
     fn default() -> Self {
         Self {
             now_page: Page::Main,
-            main_page: MainPageState::new(
-                vec![PlayList::default()],
-                vec![Album::default()],
-                vec![Artist::default()],
-            ),
+            main_page: MainPageState::new(Vec::new(), Vec::new(), Vec::new()),
             notifications: VecDeque::default(),
             popup_state: PopupState::None,
 
