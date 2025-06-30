@@ -3,6 +3,7 @@ use std::{
     cell::RefCell,
     collections::{hash_map::Entry, HashMap},
     io::{self},
+    path::PathBuf,
     sync::Arc,
 };
 use std::{io::Cursor, path::Path};
@@ -51,7 +52,7 @@ pub(crate) struct RenderCache {
 }
 
 impl RenderCache {
-    pub fn new(picker: Picker, cache_path: String) -> Arc<Mutex<Self>> {
+    pub fn new(picker: Picker, cache_path: PathBuf) -> Arc<Mutex<Self>> {
         let (load_request_sender, load_request_receiver) = mpsc::unbounded_channel();
         let (load_result_sender, mut load_result_receiver) = mpsc::unbounded_channel();
 
@@ -143,7 +144,7 @@ impl RenderCache {
     async fn image_loader_task(
         mut request_receiver: mpsc::UnboundedReceiver<ImageLoadRequest>,
         result_sender: mpsc::UnboundedSender<ImageloadResult>,
-        cache_path: String,
+        cache_path: PathBuf,
         picker: Picker,
     ) {
         while let Some(request) = request_receiver.recv().await {
@@ -164,7 +165,7 @@ impl RenderCache {
 
     // 异步加载图片
     async fn load_image_async(
-        cache_path: &str,
+        cache_path: &Path,
         picker: &Picker,
         request: &ImageLoadRequest,
     ) -> Result<StatefulProtocol, String> {
@@ -199,7 +200,7 @@ impl RenderCache {
 
     #[allow(unused)]
     async fn try_from_net(
-        cache_path: &str,
+        cache_path: &Path,
         picker: &Picker,
         image_type: &ImageCacheType,
         id: u64,
@@ -218,7 +219,7 @@ impl RenderCache {
     /// - `Err(e)`: 发生io错误
     /// - `Option<String>`: 返回图片的路径，如果不存在则返回 None
     async fn try_path_from_disk(
-        cache_path: &str,
+        cache_path: &Path,
         image_type: &ImageCacheType,
         id: u64,
     ) -> io::Result<Option<String>> {

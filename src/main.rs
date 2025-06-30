@@ -2,7 +2,7 @@
 use app::App;
 use std::path::Path;
 
-use crate::app::{data_generator::test_struct_app, logger};
+use crate::app::logger;
 
 mod api;
 mod app;
@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     logger::init(Path::new("logs").join("outputs.log")).unwrap();
 
     let mut terminal = ratatui::init();
-    let res = test_struct_app().run(&mut terminal).await;
+    let res = App::init()?.run(&mut terminal).await;
     ratatui::restore();
 
     res

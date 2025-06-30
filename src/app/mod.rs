@@ -1,14 +1,17 @@
 use crate::{
-    app::{config::Config, data_generator::test_render_cache, signals::Signals},
+    app::{config::Config, signals::Signals},
     event_handler::{self, handle_page_action, Action, AppEvent, PopupResponse},
     state::PopupState,
     ui::render_ui,
 };
+use anyhow::{Ok, Result};
 use once_cell::sync::OnceCell;
 use ratatui::DefaultTerminal;
+use ratatui_image::picker::Picker;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::{
     io::{self, BufReader},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -18,7 +21,6 @@ use tokio::{select, sync::Mutex};
 mod cache;
 mod config;
 mod context;
-pub mod data_generator;
 pub mod logger;
 mod models;
 mod signals;
@@ -42,11 +44,8 @@ pub(crate) struct App {
 impl App {
     pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         // HACK: 正式运行更改
-        let cache: Arc<Mutex<RenderCache>> = test_render_cache();
+        let cache: Arc<Mutex<RenderCache>> = Self::render_cache();
         self.ctx.load_musics(self.cfg.music_dirs());
-        let (stream, stream_handle) = OutputStream::try_default()?;
-        self.stream = Some(stream);
-        self.stream_handle = Some(stream_handle);
 
         // 30hz
         let mut render_interval = time::interval(Duration::from_millis(33));
@@ -145,5 +144,34 @@ impl App {
         self.sink = Some(sink);
 
         Ok(())
+    }
+
+    pub fn init() -> anyhow::Result<App> {
+        use anyhow::Context;
+
+        let ctx = crate::app::Context::default();
+        let cfg = crate::app::Config::get();
+        let signals = Signals::start().context("初始化程序信号时发生错误")?;
+
+        AppEvent::Render.emit();
+
+        let (stream, stream_handle) = OutputStream::try_default()?;
+
+        Ok(App {
+            ctx,
+            signals,
+            cfg,
+            stream: Some(stream),
+            stream_handle: Some(stream_handle),
+            sink: None,
+        })
+    }
+
+    fn render_cache() -> Arc<Mutex<RenderCache>> {
+        let picker = Picker::from_query_stdio().unwrap();
+        let home_path = Path::new(std::env!("HOME"));
+        let cache_path = home_path.join("Pictures/ncm_tui/");
+
+        RenderCache::new(picker, cache_path)
     }
 }
