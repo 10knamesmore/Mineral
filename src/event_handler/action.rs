@@ -1,4 +1,4 @@
-use crate::util::notification::Notification;
+use crate::{app::Song, util::notification::Notification};
 
 #[allow(unused)]
 #[derive(Debug, strum_macros::Display)]
@@ -40,4 +40,6 @@ pub enum Action {
     PlaySelectedTrac,
 
     LoadMusics,
+
+    PlaySong(Song),
 }

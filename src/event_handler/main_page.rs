@@ -1,8 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::{
-    event_handler::{action::PageAction, Action},
-    state::main_page::{MainPageState, MainPageSubState},
+    app::App,
+    event_handler::{action::PageAction, Action, AppEvent},
+    state::{
+        main_page::{MainPageState, MainPageSubState},
+        Selectable,
+    },
 };
 
 pub fn dispatch(key_event: KeyEvent) -> Option<Action> {
@@ -33,8 +37,8 @@ pub fn handle_page_action(state: &mut MainPageState, action: PageAction) {
             MainPageSubState::ViewingPlayList(tab_list)
             | MainPageSubState::ViewingAlbum(tab_list)
             | MainPageSubState::ViewingArtist(tab_list) => {
-                if let Some(id) = tab_list.selected_id() {
-                    state.play(id);
+                if let Some(song) = tab_list.selected_item() {
+                    AppEvent::Action(Action::PlaySong(song.clone())).emit();
                 }
             }
         },

@@ -130,6 +130,7 @@ fn gen_song(id: u64, rng: &mut impl Rng) -> Song {
         album_id: 0,
         pic_url: String::new(),
         song_url: String::new(),
+        local_path: None,
         duration: rng.random_range(120000..=320000),
     }
 }
@@ -186,6 +187,9 @@ pub(crate) fn test_struct_app() -> App {
         ctx,
         signals,
         cfg: Config::get(),
+        stream: None,
+        stream_handle: None,
+        sink: None,
     }
 }
 

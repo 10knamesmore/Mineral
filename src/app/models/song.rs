@@ -28,6 +28,8 @@ pub struct Song {
 
     pub song_url: String,
 
+    pub local_path: Option<String>,
+
     pub duration: u64, // 毫秒
 }
 
@@ -90,7 +92,7 @@ impl Song {
                             .album()
                             .as_deref()
                             .unwrap_or_else(|| {
-                                tracing::warn!("文件 {:?} 标签中没有 album", path);
+                                tracing::info!("文件 {:?} 标签中没有 album", path);
                                 "unknown"
                             })
                             .to_string();
@@ -119,6 +121,7 @@ impl Song {
             album_name,
             pic_url: String::default(),
             song_url: String::default(),
+            local_path: Some(path.to_string_lossy().to_string()),
             duration,
         })
     }

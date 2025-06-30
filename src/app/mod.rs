@@ -4,9 +4,11 @@ use crate::{
     state::PopupState,
     ui::render_ui,
 };
+use once_cell::sync::OnceCell;
 use ratatui::DefaultTerminal;
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::{
-    io::{self},
+    io::{self, BufReader},
     sync::Arc,
     time::Duration,
 };
@@ -31,13 +33,20 @@ pub(crate) struct App {
     ctx: Context,
     signals: Signals,
     cfg: &'static Config,
+
+    stream: Option<OutputStream>,
+    stream_handle: Option<OutputStreamHandle>,
+    sink: Option<Sink>,
 }
 
 impl App {
-    pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         // HACK: 正式运行更改
         let cache: Arc<Mutex<RenderCache>> = test_render_cache();
         self.ctx.load_musics(self.cfg.music_dirs());
+        let (stream, stream_handle) = OutputStream::try_default()?;
+        self.stream = Some(stream);
+        self.stream_handle = Some(stream_handle);
 
         // 30hz
         let mut render_interval = time::interval(Duration::from_millis(33));
@@ -103,6 +112,38 @@ impl App {
             Action::LoadMusics => {
                 self.ctx.load_musics(self.cfg.music_dirs());
             }
+            Action::PlaySong(song) => self
+                .play(&song)
+                .await
+                .unwrap_or_else(|e| tracing::warn!("播放歌曲 {} 时发生错误: {}", song.name, e)),
         }
+    }
+
+    pub async fn play(&mut self, song: &Song) -> anyhow::Result<()> {
+        if let Some(sink) = &self.sink {
+            sink.stop();
+        }
+
+        let stream_handle = self
+            .stream_handle
+            .as_ref()
+            .expect("stream_handle 未初始化!");
+
+        let path = song
+            .local_path
+            .as_ref()
+            .ok_or_else(|| todo!("无本地路径的歌曲"))
+            .unwrap();
+
+        let file = std::fs::File::open(path)?;
+        let source = Decoder::new(BufReader::new(file))?;
+
+        let sink = Sink::try_new(stream_handle)?;
+        sink.append(source);
+        sink.play();
+
+        self.sink = Some(sink);
+
+        Ok(())
     }
 }

@@ -31,7 +31,7 @@ pub fn init<P: AsRef<Path>>(log_path: P) -> Result<()> {
         .with_writer(non_blocking)
         .with_target(true)
         .with_thread_names(false)
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::DEBUG)
         .with_ansi(false)
         .finish();
 

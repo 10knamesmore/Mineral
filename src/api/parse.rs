@@ -139,6 +139,7 @@ pub(super) fn parse_song_search(json: String) -> anyhow::Result<Vec<Song>> {
                     album_name,
                     pic_url,
                     song_url: String::new(),
+                    local_path: None,
                     duration: json_val!(song_value, "duration")?,
                 })
             })
@@ -258,6 +259,7 @@ pub(super) fn parse_songs_in_album(json: String) -> anyhow::Result<Vec<Song>> {
                     album_name: album_name.clone(),
                     pic_url: pic_url.clone(),
                     song_url: String::default(),
+                    local_path: None,
                     duration: json_val!(song_value, "dt")?,
                 })
             })
@@ -311,6 +313,7 @@ pub(super) fn parse_songs_in_playlist(json: String) -> anyhow::Result<Vec<Song>>
                     album_name,
                     pic_url,
                     song_url: String::new(),
+                    local_path: None,
                     duration: json_val!(song_value, "dt")?,
                 })
             })

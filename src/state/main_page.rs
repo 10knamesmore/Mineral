@@ -277,6 +277,7 @@ impl MainPageState {
                             .playlist_state
                             .selected_item()
                             .unwrap_or_else(|| panic!("程序内部错误! 对于当前Playlist,想获取idx: {} 的 detail, but selected index out of bounds",index));
+                        tracing::debug!("{:?}", selected_list);
                         Some(Self::detail_from_songlist(selected_list))
                     }
                     None => None,
@@ -358,8 +359,11 @@ impl MainPageState {
         }
     }
 
-    pub fn play(&mut self, id: u64) {
-        todo!("播放歌曲")
+    pub fn play(&mut self, song: &Song) {
+        match &song.local_path {
+            Some(path) => todo!(),
+            None => todo!("远端api的歌曲"),
+        }
     }
 
     // 解析传入的 SongList, 根据其内部信息返回对应组成的Rows
