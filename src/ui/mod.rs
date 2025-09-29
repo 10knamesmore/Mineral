@@ -1,7 +1,4 @@
-use crate::{
-    app::RenderCache,
-    state::{app_state::AppState, Page, PopupState},
-};
+use crate::state::{app_state::AppState, cache::RenderCache, Page, PopupState};
 use main_page::*;
 use ratatui::Frame;
 

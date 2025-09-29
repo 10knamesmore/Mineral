@@ -1,6 +1,8 @@
 use crate::{
-    app::RenderCache,
-    state::app_state::AppState,
+    state::{
+        app_state::AppState,
+        cache::{ImageState, RenderCache},
+    },
     util::{layout::center, ui::zebra_rows},
 };
 use ratatui::{
@@ -88,20 +90,20 @@ fn render_detail(
     let tried_cached_image = app_state.main_page().now_cover(cache);
 
     match tried_cached_image {
-        crate::app::ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
-        crate::app::ImageState::Loading => {
+        ImageState::NotRequested => {} // MainPageState 的 selected_idx 为 None ,这时候不该渲染cover
+        ImageState::Loading => {
             // HACK: 优化正在时的表现
             let place_holder_text = Text::from("图片加载中...");
             frame.render_widget(place_holder_text, cover_area);
         }
-        crate::app::ImageState::Loaded(cached_image) => {
+        ImageState::Loaded(cached_image) => {
             frame.render_stateful_widget(
                 StatefulImage::default(),
                 area,
                 &mut *cached_image.borrow_mut(),
             );
         }
-        crate::app::ImageState::Failed(e) => {
+        ImageState::Failed(e) => {
             // HACK: 优化加载失败时的错误提醒
             let place_holder_text = Text::from(format!("图片加载失败: {}", e));
             frame.render_widget(place_holder_text, cover_area);

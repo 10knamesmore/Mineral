@@ -6,8 +6,11 @@ use ratatui::{
 };
 
 use crate::{
-    app::{Album, Artist, ImageState, PlayList, RenderCache},
-    state::{HasDescription, HasId, Song},
+    app::{Album, Artist, PlayList},
+    state::{
+        cache::{ImageState, RenderCache},
+        HasDescription, HasId, Song,
+    },
     util::format::format_duration,
 };
 

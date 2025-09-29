@@ -1,7 +1,7 @@
 use crate::{
     app::{config::Config, signals::Signals},
     event_handler::{self, handle_page_action, Action, AppEvent, PopupResponse},
-    state::{app_state::AppState, PopupState},
+    state::{app_state::AppState, cache::RenderCache, PopupState},
     ui::render_ui,
 };
 use anyhow::{Ok, Result};
@@ -18,14 +18,12 @@ use std::{
 use tokio::time::{self};
 use tokio::{select, sync::Mutex};
 
-mod cache;
 mod config;
 pub mod logger;
 mod models;
 mod signals;
 mod style;
 
-pub(crate) use cache::*;
 pub(crate) use models::*;
 pub(crate) use style::*;
 
