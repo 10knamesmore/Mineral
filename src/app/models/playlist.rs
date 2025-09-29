@@ -72,7 +72,7 @@ impl HasDescription for PlayList {
 }
 
 impl PlayList {
-    pub(crate) fn to_rows(&self) -> Vec<Row> {
+    pub(crate) fn to_rows(&self) -> Vec<Row<'_>> {
         self.songs.iter().map(|song| song.into()).collect()
     }
 

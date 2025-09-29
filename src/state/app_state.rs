@@ -1,9 +1,5 @@
 use crate::{
-    app::{
-        models::{Album, Artist, PlayList},
-        style::TableColors,
-        Song,
-    },
+    app::{PlayList, Song, TableColors},
     event_handler::AppEvent,
     state::{
         main_page::{MainPageState, MainPageSubState, MainPageTab},
@@ -14,7 +10,7 @@ use crate::{
 use ratatui::widgets::{Row, Table};
 use std::{any, collections::VecDeque, path::PathBuf};
 
-pub struct Context {
+pub struct AppState {
     now_page: Page,
     main_page: MainPageState,
     popup_state: PopupState,
@@ -23,7 +19,7 @@ pub struct Context {
     pub(crate) colors: TableColors,
 }
 
-impl Context {
+impl AppState {
     pub fn notify(&mut self, notification: Notification) {
         self.popup(PopupState::Notificacion);
         self.notifications.push_back(notification);
@@ -55,7 +51,7 @@ impl Context {
     }
 
     /// 获取主页面表格数据
-    pub(crate) fn main_tab_items_as_row(&self) -> Vec<Row> {
+    pub(crate) fn main_tab_items_as_row(&self) -> Vec<Row<'_>> {
         self.main_page.now_tab_items()
     }
 
@@ -81,7 +77,7 @@ impl Context {
 
     /// 获取选中项详情
     /// 根据当前的 Page, 交给对应
-    pub(crate) fn selected_detail(&self) -> Option<Table> {
+    pub(crate) fn selected_detail(&self) -> Option<Table<'_>> {
         match &self.now_page {
             Page::Main => self.main_page.selected_detail(),
             Page::Search => todo!(),
@@ -128,7 +124,7 @@ impl Context {
     }
 }
 
-impl Default for Context {
+impl Default for AppState {
     fn default() -> Self {
         Self {
             now_page: Page::Main,

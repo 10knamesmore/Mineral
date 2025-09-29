@@ -1,6 +1,7 @@
 use crate::app::Song;
 use std::fmt::Debug;
 
+pub(crate) mod app_state;
 pub(crate) mod main_page;
 
 #[derive(Clone, Copy)]

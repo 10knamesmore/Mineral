@@ -61,7 +61,7 @@ impl HasDescription for Artist {
 }
 
 impl Artist {
-    pub(crate) fn to_rows(&self) -> Vec<Row> {
+    pub(crate) fn to_rows(&self) -> Vec<Row<'_>> {
         // HACK: 需要优化Artist的显示
         self.songs.iter().map(|song| song.into()).collect()
     }
