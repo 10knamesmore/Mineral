@@ -198,12 +198,11 @@ impl RenderCache {
         }
     }
 
-    #[allow(unused)]
     async fn try_from_net(
-        cache_path: &Path,
-        picker: &Picker,
-        image_type: &ImageCacheType,
-        id: u64,
+        _cache_path: &Path,
+        _picker: &Picker,
+        _image_type: &ImageCacheType,
+        _id: u64,
     ) -> io::Result<StatefulProtocol> {
         // TODO: 尝试通过api获取网络图片,并保存到本地,直接返回StatefulProtocol
         todo!("从net获取图片尚未实现")

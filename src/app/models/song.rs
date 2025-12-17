@@ -1,5 +1,5 @@
 use crate::{state::HasId, util::format::format_duration};
-use std::{fmt::Debug, fs::DirEntry, path::PathBuf};
+use std::{fmt::Debug, path::PathBuf};
 
 use lofty::{
     file::{AudioFile, TaggedFileExt},

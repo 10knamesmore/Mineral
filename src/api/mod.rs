@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use isahc::{
     config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
@@ -411,7 +412,7 @@ impl NcmApi {
         params.insert("n", "1000");
         params.insert("csrf_token", &csrf_token);
 
-        let res = self
+        let _res = self
             .request(
                 Method::Post,
                 path,
@@ -421,7 +422,7 @@ impl NcmApi {
                 true,
             )
             .await?;
-        parse_songs_in_playlist(res)
+        todo!();
     }
 
     /// 获取所有id对应的歌曲的集合

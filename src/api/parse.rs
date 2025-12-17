@@ -94,7 +94,6 @@ where
     T::dval(current)
 }
 
-#[allow(unused)]
 pub(super) fn parse_song_search(json: String) -> anyhow::Result<Vec<Song>> {
     let value: Value = serde_json::from_str(&json)?;
 
@@ -227,57 +226,7 @@ pub(super) fn parse_songs_in_album(json: String) -> anyhow::Result<Vec<Song>> {
     let code: i64 = json_val!(&value, "code")?;
 
     if code == 200 {
-        let (artist_id, artist_name): (u64, String) = {
-            let artist_value: &Value = json_val!(&value, "album", "artist")?;
-
-            (
-                json_val!(artist_value, "id").unwrap_or_default(),
-                json_val!(artist_value, "name").unwrap_or(String::from("未知artist")),
-            )
-        };
-
-        let (album_id, album_name, pic_url): (u64, String, String) = {
-            let album_value: &Value = json_val!(&value, "album")?;
-            (
-                json_val!(album_value, "id").unwrap_or_default(),
-                json_val!(album_value, "name").unwrap_or(String::from("未知专辑名")),
-                json_val!(album_value, "picUrl").unwrap_or_default(),
-            )
-        };
-
         let songs_value: &Vec<Value> = json_val!(&value, "songs")?;
-
-        let songs: Vec<Song> = songs_value
-            .iter()
-            .map(|song_value| -> Result<Song> {
-                Ok(Song {
-                    id: json_val!(song_value, "id")?,
-                    name: json_val!(song_value, "name").unwrap_or(String::from("未知歌名")),
-                    artist_id,
-                    artist_name: artist_name.clone(),
-                    album_id,
-                    album_name: album_name.clone(),
-                    pic_url: pic_url.clone(),
-                    song_url: String::default(),
-                    local_path: None,
-                    duration: json_val!(song_value, "dt")?,
-                })
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(songs)
-    } else {
-        Err(anyhow!("api code 没有返回200"))
-    }
-}
-
-pub(super) fn parse_songs_in_playlist(json: String) -> anyhow::Result<Vec<Song>> {
-    let value: Value = serde_json::from_str(&json)?;
-
-    let code: i64 = json_val!(&value, "code")?;
-
-    if code == 200 {
-        let songs_value: &Vec<Value> = json_val!(&value, "playlist", "tracks")?;
 
         let songs: Vec<Song> = songs_value
             .iter()

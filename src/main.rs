@@ -1,4 +1,3 @@
-#![allow(unused)]
 use app::App;
 use std::path::Path;
 

@@ -1,16 +1,14 @@
-use std::{fs::DirEntry, path::PathBuf};
-
 use crate::{
     app::Song,
     state::{HasDescription, HasId, SongList},
     util::format::format_duration,
 };
-use anyhow::Context;
 use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Cell, Row},
 };
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct PlayList {
@@ -72,7 +70,7 @@ impl HasDescription for PlayList {
 }
 
 impl PlayList {
-    pub(crate) fn to_rows(&self) -> Vec<Row> {
+    pub(crate) fn to_rows(&self) -> Vec<Row<'_>> {
         self.songs.iter().map(|song| song.into()).collect()
     }
 

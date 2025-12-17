@@ -1,9 +1,5 @@
 use crate::{
-    app::{
-        models::{Album, Artist, PlayList},
-        style::TableColors,
-        Song,
-    },
+    app::{models::PlayList, style::TableColors},
     event_handler::AppEvent,
     state::{
         main_page::{MainPageState, MainPageSubState, MainPageTab},
@@ -12,7 +8,7 @@ use crate::{
     util::notification::Notification,
 };
 use ratatui::widgets::{Row, Table};
-use std::{any, collections::VecDeque, path::PathBuf};
+use std::{collections::VecDeque, path::PathBuf};
 
 pub struct Context {
     now_page: Page,
@@ -55,7 +51,7 @@ impl Context {
     }
 
     /// 获取主页面表格数据
-    pub(crate) fn main_tab_items_as_row(&self) -> Vec<Row> {
+    pub(crate) fn main_tab_items_as_row(&self) -> Vec<Row<'_>> {
         self.main_page.now_tab_items()
     }
 
@@ -81,7 +77,7 @@ impl Context {
 
     /// 获取选中项详情
     /// 根据当前的 Page, 交给对应
-    pub(crate) fn selected_detail(&self) -> Option<Table> {
+    pub(crate) fn selected_detail(&self) -> Option<Table<'_>> {
         match &self.now_page {
             Page::Main => self.main_page.selected_detail(),
             Page::Search => todo!(),

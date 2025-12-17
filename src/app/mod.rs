@@ -4,17 +4,11 @@ use crate::{
     state::PopupState,
     ui::render_ui,
 };
-use anyhow::{Ok, Result};
-use once_cell::sync::OnceCell;
+use anyhow::Ok;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::Picker;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
-use std::{
-    io::{self, BufReader},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{io::BufReader, path::Path, sync::Arc, time::Duration};
 use tokio::time::{self};
 use tokio::{select, sync::Mutex};
 

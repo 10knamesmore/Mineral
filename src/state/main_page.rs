@@ -250,7 +250,7 @@ impl MainPageState {
     /// # 根据当前的state,返回对应的Rows
     ///  - 比如现在在浏览所有的PlayList, 就返回所有的playlist组成的row
     ///  - 比如现在在浏览某一个playlist, 就返回当前playlist里面的所有song组成的row
-    pub(crate) fn now_tab_items(&self) -> Vec<Row> {
+    pub(crate) fn now_tab_items(&self) -> Vec<Row<'_>> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => self.playlist_state.to_rows(),
@@ -268,7 +268,7 @@ impl MainPageState {
     /// 比如当前在 Tab 为PlayList, 就根据目前的 Selected, 返回选中的 PlayList
     /// 里面歌曲组成的列表摘要
     /// 如果是Playlist或Album等,就会返回None,因为在那些情况不应该使用这个函数
-    pub(crate) fn selected_detail(&self) -> Option<Table> {
+    pub(crate) fn selected_detail(&self) -> Option<Table<'_>> {
         match &self.now_state {
             MainPageSubState::TabView(main_page_tab) => match main_page_tab {
                 MainPageTab::PlayList => match self.playlist_state.selected_idx {
@@ -424,7 +424,7 @@ impl MainPageState {
         table
     }
 
-    fn detail_from_introuction<T>(intro: &T) -> Table
+    fn detail_from_introuction<T>(intro: &T) -> Table<'_>
     where
         T: HasDescription,
     {

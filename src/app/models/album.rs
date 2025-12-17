@@ -69,7 +69,7 @@ impl HasDescription for Album {
 }
 
 impl Album {
-    pub(crate) fn to_rows(&self) -> Vec<Row> {
+    pub(crate) fn to_rows(&self) -> Vec<Row<'_>> {
         self.songs.iter().map(|song| song.into()).collect()
     }
 }
