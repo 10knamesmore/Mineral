@@ -1,5 +1,4 @@
 use app::App;
-use std::path::Path;
 
 use crate::app::logger;
 
@@ -10,9 +9,12 @@ mod state;
 mod ui;
 mod util;
 
+#[cfg(windows)]
+compile_error!("Windows暂不支持");
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    logger::init(Path::new("logs").join("outputs.log")).unwrap();
+    let _guard = logger::init().unwrap();
 
     let mut terminal = ratatui::init();
     let res = App::init()?.run(&mut terminal).await;
