@@ -5,7 +5,9 @@ use crate::{
 use main_page::*;
 use ratatui::Frame;
 
+mod componnents;
 mod main_page;
+mod page;
 mod popup;
 
 pub(crate) fn render_ui(ctx: &Context, frame: &mut Frame, cache: &mut RenderCache) {

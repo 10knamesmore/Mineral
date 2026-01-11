@@ -1,0 +1,33 @@
+[package]
+name = "mineral"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow            = "1.0"
+base64            = "0.22"
+mineral-config    = { path    = "../crates/mineral-config" }
+mineral-log       = { path    = "../crates/mineral-log" }
+crossterm         = { version = "0.29", features   = ["event-stream"] }
+derive_setters    = "0.1"
+futures-util      = "0.3"
+hex               = "0.4"
+image             = "0.25"
+isahc             = { version = "1.7", features    = ["cookies"] }
+libc              = "0.2"
+lofty             = "0.22"
+once_cell         = "1.21"
+openssl           = "0.10"
+rand              = "0.9"
+ratatui           = "0.29"
+ratatui-image     = "8.0"
+rodio             = "0.20"
+serde             = { version = "1.0", features    = ["derive"] }
+serde_json        = "1.0"
+signal-hook-tokio = { version = "0.3", features    = ["futures-v0_3"] }
+strum             = "0.27"
+strum_macros      = "0.27"
+time              = "0.3"
+tokio             = { version = "1.45.1", features = ["full"] }
+tracing           = "0.1"
+urlqstring        = "0.3.5"

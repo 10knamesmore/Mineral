@@ -1,12 +1,12 @@
 use anyhow::Context;
-use std::{fs, path::PathBuf};
+use std::fs;
 use tracing_appender::{non_blocking::WorkerGuard, rolling};
 use tracing_subscriber::EnvFilter;
 
-const APP_NAME: &str = env!("CARGO_PKG_NAME");
+const APP_NAME: &str = "mineral";
 
 pub fn init() -> anyhow::Result<WorkerGuard> {
-    let log_dir = log_dir_path();
+    let log_dir = mineral_platform::dir::logs_dir();
 
     fs::create_dir_all(&log_dir).with_context(|| format!("创建日志目录 {:?} 时失败", log_dir))?;
 
@@ -26,17 +26,4 @@ pub fn init() -> anyhow::Result<WorkerGuard> {
         .map_err(|e| anyhow::anyhow!("初始化日志系统失败: {}", e))?;
 
     Ok(guard)
-}
-
-/// 日志目录：
-///
-/// # Return:
-/// macOS/Linux: ~/.local/state/<app>/logs/
-fn log_dir_path() -> PathBuf {
-    let home = dirs::home_dir().expect("无法获取 HOME 目录（dirs::home_dir() 返回 None）");
-
-    home.join(".local")
-        .join("state")
-        .join(APP_NAME)
-        .join("logs")
 }

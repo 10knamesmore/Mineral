@@ -1,21 +1,23 @@
 use crate::{
-    app::{config::Config, signals::Signals},
+    app::signals::Signals,
     event_handler::{self, handle_page_action, Action, AppEvent, PopupResponse},
     state::PopupState,
     ui::render_ui,
 };
 use anyhow::Ok;
+use mineral_config::CONFIG;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::Picker;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::{io::BufReader, path::Path, sync::Arc, time::Duration};
-use tokio::time::{self};
-use tokio::{select, sync::Mutex};
+use tokio::{
+    select,
+    sync::Mutex,
+    time::{self},
+};
 
 mod cache;
-mod config;
 mod context;
-pub mod logger;
 mod models;
 mod signals;
 mod style;
@@ -28,7 +30,6 @@ pub(crate) use style::*;
 pub(crate) struct App {
     ctx: Context,
     signals: Signals,
-    cfg: &'static Config,
 
     stream: Option<OutputStream>,
     stream_handle: Option<OutputStreamHandle>,
@@ -39,7 +40,7 @@ impl App {
     pub(crate) async fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         // HACK: 正式运行更改
         let cache: Arc<Mutex<RenderCache>> = Self::render_cache();
-        self.ctx.load_musics(self.cfg.music_dirs());
+        self.ctx.load_musics(CONFIG.music_dirs());
 
         // 30hz
         let mut render_interval = time::interval(Duration::from_millis(33));
@@ -103,7 +104,7 @@ impl App {
             },
             Action::PlaySelectedTrac => todo!("handle 播放"),
             Action::LoadMusics => {
-                self.ctx.load_musics(self.cfg.music_dirs());
+                self.ctx.load_musics(CONFIG.music_dirs());
             }
             Action::PlaySong(song) => self
                 .play(&song)
@@ -144,7 +145,6 @@ impl App {
         use anyhow::Context;
 
         let ctx = crate::app::Context::default();
-        let cfg = crate::app::Config::get();
         let signals = Signals::start().context("初始化程序信号时发生错误")?;
 
         AppEvent::Render.emit();
@@ -154,7 +154,6 @@ impl App {
         Ok(App {
             ctx,
             signals,
-            cfg,
             stream: Some(stream),
             stream_handle: Some(stream_handle),
             sink: None,

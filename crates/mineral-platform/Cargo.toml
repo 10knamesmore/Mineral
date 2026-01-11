@@ -1,0 +1,7 @@
+[package]
+name = "mineral-platform"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+home = "0.5"
