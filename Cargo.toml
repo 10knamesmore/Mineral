@@ -4,3 +4,60 @@ resolver = "2"
 
 [workspace.metadata]
 name = "mineral"
+
+[workspace.dependencies]
+anyhow             = "1.0"
+base64             = "0.22"
+config_rs          = { package = "config", version  = "0.15" }
+crossterm          = { version = "0.29", features   = ["event-stream"] }
+derive-getters     = "0.5"
+derive_setters     = "0.1"
+futures-util       = "0.3"
+hex                = "0.4"
+image              = "0.25"
+isahc              = { version = "1.7", features    = ["cookies"] }
+libc               = "0.2"
+lofty              = "0.22"
+mineral-config     = { path    = "crates/mineral-config" }
+mineral-log        = { path    = "crates/mineral-log" }
+mineral-platform   = { path    = "crates/mineral-platform" }
+once_cell          = "1.21"
+openssl            = "0.10"
+rand               = "0.9"
+ratatui            = "0.29"
+ratatui-image      = "8.0"
+rodio              = "0.20"
+serde              = { version = "1.0", features    = ["derive"] }
+serde_json         = "1.0"
+signal-hook-tokio  = { version = "0.3", features    = ["futures-v0_3"] }
+strum              = "0.27"
+strum_macros       = "0.27"
+time               = "0.3"
+tokio              = { version = "1.45.1", features = ["full"] }
+tracing            = "0.1"
+tracing-appender   = "0.2"
+tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }
+urlqstring         = "0.3.5"
+
+
+[workspace.lints.clippy]
+# 避免先 format 再 push 到 String 的低效模式。
+format_push_string     = "deny"
+# 允许 if/else 分支相同（有时出于对称性/未来扩展）。
+if_same_then_else      = "allow"
+# 提醒隐式 clone（可能隐藏性能开销）。
+implicit_clone         = "deny"
+# 不应该忽视错误
+map_err_ignore         = "deny"
+# 不允许传值但未使用所有权的情况
+needless_pass_by_value = "deny"
+# 允许只有 len() 没有 is_empty()。
+len_without_is_empty   = "allow"
+# 允许 unsafe fn/trait 未写 # Safety 文档。
+missing_safety_doc     = "allow"
+# 允许模块与其父同名（如 foo/mod.rs 定义 foo）。
+module_inception       = "allow"
+# 不应该存在这种嵌套
+option_option         =  "deny"
+# 建议使用 `Self` 而不是显式类型名。
+use_self               = "deny"

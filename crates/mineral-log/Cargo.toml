@@ -4,12 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow             = "1.0"
-tracing-appender   = "0.2"
-mineral-platform = { path = "../mineral-platform" }
-tracing-subscriber = { version = "0.3", features = [
-    "fmt",
-    "local-time",
-    "chrono",
-    "env-filter",
-] }
+anyhow             = { workspace = true }
+tracing-appender   = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+mineral-platform = { workspace = true }
