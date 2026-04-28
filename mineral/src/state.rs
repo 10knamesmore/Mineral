@@ -5,6 +5,7 @@
 
 use mineral_model::{Playlist, Song};
 
+use crate::components::spectrum::SpectrumState;
 use crate::mock::{PlaylistKind, SongView};
 use crate::playback::Playback;
 
@@ -54,6 +55,8 @@ pub struct AppState {
     pub current: Option<Song>,
     /// 播放状态机(stage 4 引入)。
     pub playback: Playback,
+    /// 频谱状态(stage 5 引入,伪随机)。
+    pub spectrum: SpectrumState,
 }
 
 impl AppState {
@@ -70,6 +73,7 @@ impl AppState {
             search_q: String::new(),
             current: None,
             playback: Playback::new(),
+            spectrum: SpectrumState::new(),
         }
     }
 

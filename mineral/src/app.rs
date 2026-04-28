@@ -46,6 +46,7 @@ impl App {
             if self.last_tick.elapsed() >= tick_rate {
                 let dt = self.last_tick.elapsed();
                 self.state.playback.tick(dt);
+                self.state.spectrum.tick(self.state.playback.playing);
                 self.last_tick = Instant::now();
             }
         }

@@ -1,13 +1,13 @@
 //! 主帧渲染入口。
 
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::components::{sidebar, transport};
+use crate::components::{lyrics, sidebar, spectrum, transport};
 use crate::layout::{compute, Areas};
 use crate::theme::Theme;
 
@@ -26,9 +26,20 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
     if let Some(viz) = areas.viz {
-        paint_panel(frame, viz, "spectrum / lyrics", theme);
+        paint_viz(frame, viz, app, theme);
     }
     paint_cmd_bar(frame, areas.cmd_bar, theme);
+}
+
+fn paint_viz(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    if area.height <= 4 {
+        spectrum::draw(frame, area, &app.state.spectrum, theme);
+        return;
+    }
+    let [spec_area, lyr_area] =
+        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(area);
+    spectrum::draw(frame, spec_area, &app.state.spectrum, theme);
+    lyrics::draw(frame, lyr_area, theme);
 }
 
 fn paint_panel(frame: &mut Frame<'_>, area: Rect, title: &str, theme: &Theme) {
