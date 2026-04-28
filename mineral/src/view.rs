@@ -1,14 +1,11 @@
 //! 主帧渲染入口。
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 
 use crate::app::App;
 use crate::components::overlay::queue as queue_overlay;
-use crate::components::{cmd_bar, lyrics, sidebar, spectrum, top_status, transport};
+use crate::components::{cmd_bar, lyrics, now_playing, sidebar, spectrum, top_status, transport};
 use crate::layout::{compute, Areas};
 use crate::state::Focus;
 use crate::theme::Theme;
@@ -24,7 +21,7 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     top_status::draw(frame, areas.top_status, &app.state, theme);
     sidebar::draw(frame, areas.left, &app.state, theme);
     if let Some(right) = areas.right {
-        paint_panel(frame, right, "now playing", theme);
+        now_playing::draw(frame, right, &app.state, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
     if let Some(viz) = areas.viz {
@@ -55,13 +52,4 @@ fn paint_viz(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(area);
     spectrum::draw(frame, spec_area, &app.state.spectrum, theme);
     lyrics::draw(frame, lyr_area, theme);
-}
-
-fn paint_panel(frame: &mut Frame<'_>, area: Rect, title: &str, theme: &Theme) {
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(format!(" {title} ")).style(Style::new().fg(theme.subtext)));
-    frame.render_widget(block, area);
 }
