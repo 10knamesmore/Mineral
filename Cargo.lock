@@ -1040,8 +1040,10 @@ dependencies = [
  "color-eyre",
  "crossterm 0.29.0",
  "mineral-channel-mock",
+ "mineral-macros",
  "mineral-model",
  "ratatui",
+ "serde",
 ]
 
 [[package]]

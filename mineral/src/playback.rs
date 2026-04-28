@@ -53,50 +53,6 @@ impl PlayMode {
     }
 }
 
-/// Library 排序模式 — stage 4 仅展示 label,真实重排在 cmd bar 阶段串起来。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SortBy {
-    /// 按 mock 数据原始顺序。
-    #[default]
-    Default,
-    /// 按曲名。
-    Title,
-    /// 按艺人。
-    Artist,
-    /// 按播放次数。
-    Plays,
-    /// 按时长。
-    Length,
-    /// 按年份。
-    Year,
-}
-
-impl SortBy {
-    /// `s` 键循环到下一档。
-    pub fn cycle(self) -> Self {
-        match self {
-            Self::Default => Self::Title,
-            Self::Title => Self::Artist,
-            Self::Artist => Self::Plays,
-            Self::Plays => Self::Length,
-            Self::Length => Self::Year,
-            Self::Year => Self::Default,
-        }
-    }
-
-    /// 短标签。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Title => "title",
-            Self::Artist => "artist",
-            Self::Plays => "plays",
-            Self::Length => "length",
-            Self::Year => "year",
-        }
-    }
-}
-
 /// 播放状态
 #[derive(Clone, Debug)]
 pub struct Playback {
@@ -110,8 +66,6 @@ pub struct Playback {
     pub volume_pct: u8,
     /// 播放模式。
     pub mode: PlayMode,
-    /// 排序模式。
-    pub sort: SortBy,
     /// 输出设备名。
     pub device: String,
     /// 当前流的格式描述(mock)。
@@ -127,7 +81,6 @@ impl Playback {
             playing: false,
             volume_pct: 66,
             mode: PlayMode::Sequential,
-            sort: SortBy::Default,
             device: "HD-650".to_owned(),
             format: "24/96 flac".to_owned(),
         }

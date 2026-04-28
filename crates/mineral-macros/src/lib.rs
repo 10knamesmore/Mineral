@@ -25,7 +25,7 @@ pub use uuid;
 /// - `Clone, Debug, PartialEq, Eq, Hash, Default`
 /// - `serde::Serialize` / `serde::Deserialize`(`#[serde(transparent)]`)
 /// - `From<String>` / `From<&str>` / `From<$name> for String`
-/// - `Display` / `FromStr<Err = Infallible>`
+/// - `Display` / `FromStr<Err = Infallible>` / `Deref<Target = str>`
 /// - `new` / `as_str` / `into_string`
 ///
 /// # 使用要求
@@ -93,6 +93,15 @@ macro_rules! define_id {
             }
         }
 
+        impl ::std::ops::Deref for $name {
+            type Target = ::std::primitive::str;
+
+            #[inline]
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
         impl ::std::fmt::Display for $name {
             #[inline]
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -136,6 +145,7 @@ mod tests {
     fn from_and_display() {
         let id = SongId::from("abc");
         assert_eq!(id.as_str(), "abc");
+        assert_eq!(&*id, "abc");
         assert_eq!(id.to_string(), "abc");
         assert_eq!(String::from(id), String::from("abc"));
     }

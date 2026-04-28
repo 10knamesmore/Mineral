@@ -1,4 +1,4 @@
-//! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode·sort / device。
+//! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode / device。
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -36,7 +36,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     paint_now(frame, now, pb, theme);
     paint_progress(frame, prog, pb, theme);
     paint_controls(frame, ctrl, pb, theme);
-    paint_vol_mode_sort(frame, vms, pb, theme);
+    paint_vol_mode(frame, vms, pb, theme);
     paint_device(frame, dev, pb, theme);
 }
 
@@ -125,7 +125,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     );
 }
 
-fn paint_vol_mode_sort(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
     }
@@ -144,9 +144,6 @@ fn paint_vol_mode_sort(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: 
         Span::styled("   │   ", Style::new().fg(theme.surface1)),
         Span::styled("mode ", Style::new().fg(theme.overlay)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
-        Span::styled("   │   ", Style::new().fg(theme.surface1)),
-        Span::styled("sort ", Style::new().fg(theme.overlay)),
-        Span::styled(pb.sort.label(), Style::new().fg(theme.text)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }

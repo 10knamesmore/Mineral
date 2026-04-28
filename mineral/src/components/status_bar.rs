@@ -14,7 +14,7 @@ use crate::theme::Theme;
 
 /// 默认键位提示(非搜索态时左侧)。
 const KEYS_HINT: &str =
-    "j/k ↓↑ · h/l back/open · ↵ play · ␣ pause · m mode · s sort · / search · Tab queue · q quit";
+    "j/k ↓↑ · h/l back/open · ↵ play · ␣ pause · m mode · / search · Tab queue · q quit";
 
 /// 渲染状态行到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {

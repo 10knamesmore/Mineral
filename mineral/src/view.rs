@@ -6,7 +6,9 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::components::overlay::confirm as confirm_overlay;
 use crate::components::overlay::queue as queue_overlay;
-use crate::components::{lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport};
+use crate::components::{
+    lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport,
+};
 use crate::layout::{compute, Areas};
 use crate::state::Focus;
 use crate::theme::Theme;

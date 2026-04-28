@@ -116,7 +116,7 @@ impl App {
             return;
         }
 
-        // 全局 playback 键(Space / m / s / +- / ←→ / p / n)。
+        // 全局 playback 键(Space / m / +- / ←→ / p / n)。
         if self.handle_playback_key(key) {
             return;
         }
@@ -212,7 +212,6 @@ impl App {
         match key.code {
             KeyCode::Char(' ') => pb.play_pause(),
             KeyCode::Char('m') => pb.mode = pb.mode.cycle(),
-            KeyCode::Char('s') => pb.sort = pb.sort.cycle(),
             KeyCode::Char('+') | KeyCode::Char('=') => pb.nudge_volume(5),
             KeyCode::Char('-') | KeyCode::Char('_') => pb.nudge_volume(-5),
             KeyCode::Left => pb.seek(-5),

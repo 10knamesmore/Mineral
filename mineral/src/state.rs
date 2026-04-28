@@ -106,36 +106,38 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// 当前可见(可能被 search 过滤)的歌单列表。
+    /// 当前可见(被 search 过滤)的歌单列表。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         if self.search_q.is_empty() {
-            return self.playlists.iter().collect();
+            self.playlists.iter().collect()
+        } else {
+            let q = self.search_q.to_lowercase();
+            self.playlists
+                .iter()
+                .filter(|p| p.data.name.to_lowercase().contains(&q))
+                .collect()
         }
-        let q = self.search_q.to_lowercase();
-        self.playlists
-            .iter()
-            .filter(|p| p.data.name.to_lowercase().contains(&q))
-            .collect()
     }
 
-    /// 当前可见(可能被 search 过滤)的曲目列表。
+    /// 当前可见(被 search 过滤)的曲目列表。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
         let tracks = self.current_tracks();
         if self.search_q.is_empty() {
-            return tracks;
+            tracks
+        } else {
+            let q = self.search_q.to_lowercase();
+            tracks
+                .into_iter()
+                .filter(|sv| {
+                    sv.data.name.to_lowercase().contains(&q)
+                        || sv
+                            .data
+                            .artists
+                            .first()
+                            .is_some_and(|a| a.name.to_lowercase().contains(&q))
+                })
+                .collect()
         }
-        let q = self.search_q.to_lowercase();
-        tracks
-            .into_iter()
-            .filter(|sv| {
-                sv.data.name.to_lowercase().contains(&q)
-                    || sv
-                        .data
-                        .artists
-                        .first()
-                        .is_some_and(|a| a.name.to_lowercase().contains(&q))
-            })
-            .collect()
     }
 }
 
