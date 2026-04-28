@@ -1,10 +1,10 @@
 //! Playlists 视图渲染。
 
 use mineral_model::SourceKind;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::state::AppState;
@@ -22,15 +22,31 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
             search_badge(&state.search_q, theme),
         ]));
 
-    let items: Vec<ListItem<'_>> = state
+    let header = Row::new(vec![
+        Cell::from("name"),
+        Cell::from("source"),
+        Cell::from("length"),
+        Cell::from("items"),
+    ])
+    .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+
+    let rows: Vec<Row<'_>> = state
         .filtered_playlists()
         .into_iter()
-        .map(|p| ListItem::new(playlist_row(p, theme)))
+        .map(|p| build_row(p, theme))
         .collect();
 
-    let list = List::new(items)
+    let widths = [
+        Constraint::Min(12),
+        Constraint::Length(11),
+        Constraint::Length(8),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
         .block(block)
-        .highlight_style(
+        .row_highlight_style(
             Style::new()
                 .bg(theme.surface0)
                 .fg(theme.accent)
@@ -38,27 +54,24 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         )
         .highlight_symbol("▌ ");
 
-    let mut list_state = ListState::default();
-    list_state.select(Some(state.sel_playlist));
-    frame.render_stateful_widget(list, area, &mut list_state);
+    let mut table_state = TableState::default();
+    table_state.select(Some(state.sel_playlist));
+    frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn playlist_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Line<'a> {
+fn build_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Row<'a> {
     let total_min = p.total_duration_ms() / 60_000;
     let len_label = format!("{}h {:02}m", total_min / 60, total_min % 60);
     let count_label = format!("{} items", p.data.track_count);
 
-    Line::from(vec![
-        Span::styled(p.data.name.clone(), Style::new().fg(theme.text)),
-        Span::raw("  "),
-        Span::styled(
+    Row::new(vec![
+        Cell::from(Span::styled(p.data.name.clone(), Style::new().fg(theme.text))),
+        Cell::from(Span::styled(
             channel_label(p.data.source),
             channel_style(p.data.source, theme),
-        ),
-        Span::raw("  "),
-        Span::styled(len_label, Style::new().fg(theme.subtext)),
-        Span::raw("  "),
-        Span::styled(count_label, Style::new().fg(theme.overlay)),
+        )),
+        Cell::from(Span::styled(len_label, Style::new().fg(theme.subtext))),
+        Cell::from(Span::styled(count_label, Style::new().fg(theme.overlay))),
     ])
 }
 
