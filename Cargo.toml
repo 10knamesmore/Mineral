@@ -18,9 +18,6 @@ image              = "0.25"
 isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
 lofty              = "0.22"
-mineral-config     = { path    = "crates/mineral-config" }
-mineral-log        = { path    = "crates/mineral-log" }
-mineral-platform   = { path    = "crates/mineral-platform" }
 mineral-macros     = { path    = "crates/mineral-macros" }
 mineral-model      = { path    = "crates/mineral-model" }
 mineral-channel-core    = { path = "mineral-channel/core" }
@@ -57,24 +54,60 @@ tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chr
 urlqstring         = "0.3.5"
 
 
+[workspace.lints.rust]
+warnings    = "deny"
+unsafe_code = "forbid"
+missing_docs = "deny"
+
 [workspace.lints.clippy]
-# 避免先 format 再 push 到 String 的低效模式。
-format_push_string     = "deny"
-# 允许 if/else 分支相同（有时出于对称性/未来扩展）。
-if_same_then_else      = "allow"
-# 提醒隐式 clone（可能隐藏性能开销）。
+# --- 禁止 panic 类操作（必须用 allow 逐条豁免并注释理由） ---
+panic                 = "deny"
+unwrap_used           = "deny"
+expect_used           = "deny"
+indexing_slicing      = "deny"
+index_refutable_slice = "deny"
+
+# --- 数值安全 ---
+# 除零：编译器自带 unconditional_panic（默认 deny）覆盖常量除零。
+# arithmetic_side_effects 不单独启用 — 会拦截 `i += 1` 等安全操作，噪音过大。
+as_conversions = "deny"
+cast_lossless  = "deny"
+
+# --- 进程安全 ---
+exit       = "deny"
+mem_forget = "deny"
+
+# --- 错误处理 ---
+map_err_ignore = "deny"
+
+# --- 并发安全 ---
+mutex_integer       = "deny"
+maybe_infinite_iter = "deny"
+
+# --- 所有权与性能 ---
 implicit_clone         = "deny"
-# 不应该忽视错误
-map_err_ignore         = "deny"
-# 不允许传值但未使用所有权的情况
 needless_pass_by_value = "deny"
+
+# --- 代码清晰度 ---
+branches_sharing_code             = "deny"
+mismatching_type_param_order      = "deny"
+option_option                     = "deny"
+wildcard_imports                  = "deny"
+redundant_closure_for_method_calls = "deny"
+uninlined_format_args             = "deny"
+cloned_instead_of_copied          = "deny"
+manual_let_else                   = "deny"
+
+# --- 项目特化（保留原有偏好） ---
+# 避免先 format 再 push 到 String 的低效模式。
+format_push_string  = "deny"
+# 允许 if/else 分支相同（对称性/未来扩展）。
+if_same_then_else   = "allow"
 # 允许只有 len() 没有 is_empty()。
-len_without_is_empty   = "allow"
+len_without_is_empty = "allow"
 # 允许 unsafe fn/trait 未写 # Safety 文档。
-missing_safety_doc     = "allow"
-# 允许模块与其父同名（如 foo/mod.rs 定义 foo）。
-module_inception       = "allow"
-# 不应该存在这种嵌套
-option_option         =  "deny"
+missing_safety_doc  = "allow"
+# 允许模块与其父同名（foo/mod.rs 定义 foo）。
+module_inception    = "allow"
 # 建议使用 `Self` 而不是显式类型名。
-use_self               = "deny"
+use_self            = "deny"

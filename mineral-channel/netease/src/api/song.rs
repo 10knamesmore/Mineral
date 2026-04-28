@@ -18,10 +18,7 @@ use crate::transport::url::Crypto;
 
 /// 详情:`/weapi/v3/song/detail`。返回与 album.rs 一致的 `AlbumSongDto` 形态。
 pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<Song>> {
-    let c: Vec<serde_json::Value> = ids
-        .iter()
-        .map(|i| json!({ "id": i.as_str() }))
-        .collect();
+    let c: Vec<serde_json::Value> = ids.iter().map(|i| json!({ "id": i.as_str() })).collect();
     let mut p = serde_json::Map::new();
     p.insert("c".into(), json!(serde_json::to_string(&c)?));
 
@@ -82,7 +79,7 @@ async fn song_urls_v1(
     ids: &[SongId],
     quality: BitRate,
 ) -> Result<Vec<PlayUrl>> {
-    let id_list: Vec<&str> = ids.iter().map(|i| i.as_str()).collect();
+    let id_list: Vec<&str> = ids.iter().map(SongId::as_str).collect();
     let level = match quality {
         BitRate::Standard => "standard",
         BitRate::Higher => "higher",
@@ -113,10 +110,7 @@ async fn song_urls_legacy(
     ids: &[SongId],
     quality: BitRate,
 ) -> Result<Vec<PlayUrl>> {
-    let id_list: Vec<i64> = ids
-        .iter()
-        .filter_map(|i| i.as_str().parse().ok())
-        .collect();
+    let id_list: Vec<i64> = ids.iter().filter_map(|i| i.as_str().parse().ok()).collect();
     let br = match quality {
         BitRate::Standard => "128000",
         BitRate::Higher => "192000",

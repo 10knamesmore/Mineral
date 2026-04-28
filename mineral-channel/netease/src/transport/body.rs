@@ -17,9 +17,7 @@ pub fn maybe_zlib_decode(bytes: Vec<u8>) -> Vec<u8> {
 
 /// 解析 `code` 字段;若 JSON 没有 `code` 字段则按 200 处理(spec §2.5)。
 pub fn parse_code(json: &Value) -> i64 {
-    json.get("code")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(200)
+    json.get("code").and_then(Value::as_i64).unwrap_or(200)
 }
 
 /// 把 body 字节解码成 JSON Value(尝试 zlib 解压在前)。

@@ -136,4 +136,3 @@ pub async fn search_playlists(
         })
         .collect())
 }
-

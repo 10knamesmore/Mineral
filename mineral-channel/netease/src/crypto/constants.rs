@@ -21,8 +21,7 @@ pub const EAPI_MD5_INFIX: &str = "use";
 pub const EAPI_MD5_SUFFIX: &str = "md5forencrypt";
 
 /// 随机字符集(BASE62),用于生成 16 字节随机 key 和 deviceId 字符串。
-pub const STD_CHARS: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+pub const STD_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 /// RSA 公钥 PEM(PKIX 格式,1024 bit)。
 pub const RSA_PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----

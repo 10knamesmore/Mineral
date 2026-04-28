@@ -27,10 +27,12 @@ impl MediaUrl {
         Self::Local(p.into())
     }
 
+    /// 是否为远端 URL。
     pub fn is_remote(&self) -> bool {
         matches!(self, Self::Remote(_))
     }
 
+    /// 是否为本地路径。
     pub fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
     }
@@ -103,7 +105,11 @@ impl<'de> Deserialize<'de> for MediaUrl {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(d)?;
-        Ok(s.parse().expect("MediaUrl::from_str is infallible"))
+        // FromStr::Err = Infallible, so the Err arm is uninhabited.
+        match s.parse::<Self>() {
+            Ok(v) => Ok(v),
+            Err(never) => match never {},
+        }
     }
 }
 

@@ -5,6 +5,16 @@
 //! - [`define_uuid!`] 在 `define_id!` 基础上额外提供 `new_uuid()` 构造器,
 //!   内部值仍是 String,便于和 `define_id!` 类型零成本互转。
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 #[doc(hidden)]
 pub use uuid;
 
@@ -25,6 +35,7 @@ pub use uuid;
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
+        #[doc = concat!("`", stringify!($name), "` — String-backed ID newtype。")]
         #[derive(
             Clone,
             Debug,
@@ -36,19 +47,25 @@ macro_rules! define_id {
             ::serde::Deserialize,
         )]
         #[serde(transparent)]
-        pub struct $name(pub ::std::string::String);
+        pub struct $name(
+            /// 内部 String 值。
+            pub ::std::string::String,
+        );
 
         impl $name {
+            /// 从任何可转 `String` 的类型构造一个新 ID。
             #[inline]
             pub fn new(s: impl ::std::convert::Into<::std::string::String>) -> Self {
                 Self(s.into())
             }
 
+            /// 返回内部字符串的 `&str` 视图。
             #[inline]
             pub fn as_str(&self) -> &str {
                 &self.0
             }
 
+            /// 拆出内部 `String`,消费 self。
             #[inline]
             pub fn into_string(self) -> ::std::string::String {
                 self.0
@@ -142,6 +159,6 @@ mod tests {
     fn uuid_constructor_produces_valid_uuid() {
         let id = LocalSongId::new_uuid();
         let parsed = uuid::Uuid::parse_str(id.as_str());
-        assert!(parsed.is_ok(), "expected valid UUID, got {:?}", id);
+        assert!(parsed.is_ok(), "expected valid UUID, got {id:?}");
     }
 }

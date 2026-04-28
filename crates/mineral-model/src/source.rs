@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
+    /// 网易云音乐。
     Netease,
+    /// 本地文件系统(用户的 music 目录)。
     Local,
 }

@@ -7,10 +7,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BitRate {
+    /// 标准音质(~128 kbps)。
     Standard,
+    /// 较高音质(~320 kbps,默认)。
     #[default]
     Higher,
+    /// 极高音质(~640 kbps)。
     Exhigh,
+    /// 无损音质(FLAC)。
     Lossless,
+    /// Hi-Res 音质(>= 24bit/96kHz)。
     Hires,
 }

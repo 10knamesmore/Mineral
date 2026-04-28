@@ -1,3 +1,15 @@
+// reason: 联调 example 中常规使用 unwrap / clone / 闭包 map 等,与 crate 主体一致放开。
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::redundant_closure_for_method_calls,
+    clippy::implicit_clone,
+    clippy::needless_pass_by_value,
+    clippy::uninlined_format_args,
+    clippy::cloned_ref_to_slice_refs
+)]
+
 //! 网易云 channel 全面联调。
 //!
 //! 跑法(用 `cargo apitest` alias):
@@ -108,10 +120,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\n=== 2. 公开数据(MusicChannel API)===");
 
     // 用搜索结果驱动后续所有查询。
-    let song_ref = match ch
-        .search_songs("周杰伦", Page::new(0, 5))
-        .await
-    {
+    let song_ref = match ch.search_songs("周杰伦", Page::new(0, 5)).await {
         Ok(songs) => {
             let first = songs.first().cloned();
             report.push((
@@ -162,11 +171,7 @@ async fn main() -> anyhow::Result<()> {
                         MediaUrl::Remote(u) => u.scheme(),
                         MediaUrl::Local(_) => "local",
                     },
-                    if p.format.is_empty() {
-                        "?"
-                    } else {
-                        &p.format
-                    }
+                    if p.format.is_empty() { "?" } else { &p.format }
                 ),
                 None => "0 urls (可能需要登录)".into(),
             })
@@ -180,7 +185,11 @@ async fn main() -> anyhow::Result<()> {
                 "lrc={}, yrc={}, translation={}",
                 if l.lrc.is_some() { "Some" } else { "None" },
                 if l.yrc.is_some() { "Some" } else { "None" },
-                if l.translation.is_some() { "Some" } else { "None" },
+                if l.translation.is_some() {
+                    "Some"
+                } else {
+                    "None"
+                },
             ))
         })
         .await;
@@ -195,7 +204,8 @@ async fn main() -> anyhow::Result<()> {
         println!("(跳过:未设 NETEASE_MUSIC_U)");
     } else {
         let r = run("login (token refresh)", async {
-            ch.login(Credential::Cookie(cookie.clone().unwrap())).await?;
+            ch.login(Credential::Cookie(cookie.clone().unwrap()))
+                .await?;
             Ok("refreshed".into())
         })
         .await;
@@ -225,12 +235,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(format!("uid={uid}"))
         })
         .await;
-        let uid_str = r
-            .1
-            .as_ref()
-            .ok()
-            .and_then(|s| s.strip_prefix("uid="))
-            .map(str::to_owned);
+        let uid_str =
+            r.1.as_ref()
+                .ok()
+                .and_then(|s| s.strip_prefix("uid="))
+                .map(str::to_owned);
         report.push(r);
 
         if let Some(uid) = uid_str {

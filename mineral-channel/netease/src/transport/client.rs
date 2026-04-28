@@ -3,17 +3,14 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use isahc::{
-    config::Configurable,
-    cookies::CookieJar,
-    http::Uri,
-    AsyncReadResponseExt, HttpClient, Request,
+    config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
 };
 
 use crate::config::NeteaseConfig;
+use crate::crypto::{eapi, linuxapi, weapi};
 use crate::transport::body::{decode_response, parse_code};
 use crate::transport::headers::{pick_user_agent, UaKind, UA_LINUX};
 use crate::transport::url::{rewrite, Crypto};
-use crate::crypto::{eapi, linuxapi, weapi};
 
 const BASE_URL: &str = "https://music.163.com";
 const TIMEOUT_SECS: u64 = 100;
@@ -120,10 +117,7 @@ impl Transport {
         // 注入 csrf_token 到 weapi/eapi 的 params(linuxapi 不注入)
         let mut params = spec.params;
         if matches!(spec.crypto, Crypto::Weapi | Crypto::Eapi) {
-            params.insert(
-                "csrf_token".into(),
-                serde_json::Value::String(csrf.clone()),
-            );
+            params.insert("csrf_token".into(), serde_json::Value::String(csrf.clone()));
         }
 
         let url = rewrite(spec.path, spec.crypto);
@@ -164,10 +158,7 @@ impl Transport {
             .send_async(req)
             .await
             .map_err(|e| anyhow!("send: {e}"))?;
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| anyhow!("read body: {e}"))?;
+        let bytes = resp.bytes().await.map_err(|e| anyhow!("read body: {e}"))?;
 
         decode_response(bytes)
     }

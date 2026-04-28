@@ -84,24 +84,27 @@ pub async fn user_playlists(transport: &Transport, uid: &UserId) -> Result<Vec<P
     let mut out = Vec::new();
     if let Some(items) = arr.as_array() {
         for it in items {
-            let id = it.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+            let id = it
+                .get("id")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             let name = it
                 .get("name")
-                .and_then(|x| x.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
             let description = it
                 .get("description")
-                .and_then(|x| x.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
             let cover_url = it
                 .get("coverImgUrl")
-                .and_then(|x| x.as_str())
+                .and_then(serde_json::Value::as_str)
                 .and_then(parse_remote);
             let track_count = it
                 .get("trackCount")
-                .and_then(|x| x.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or_default();
             out.push(Playlist {
                 source: SourceKind::Netease,

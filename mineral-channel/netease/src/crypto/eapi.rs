@@ -1,7 +1,9 @@
 use md5::{Digest, Md5};
 
 use super::aes::aes_ecb_pkcs7_encrypt;
-use super::constants::{EAPI_KEY, EAPI_MD5_INFIX, EAPI_MD5_PREFIX, EAPI_MD5_SUFFIX, EAPI_SEPARATOR};
+use super::constants::{
+    EAPI_KEY, EAPI_MD5_INFIX, EAPI_MD5_PREFIX, EAPI_MD5_SUFFIX, EAPI_SEPARATOR,
+};
 
 /// EAPI 加密入口(spec §1.3)。
 ///
@@ -12,10 +14,8 @@ use super::constants::{EAPI_KEY, EAPI_MD5_INFIX, EAPI_MD5_PREFIX, EAPI_MD5_SUFFI
 /// `json_text` 是已经包含业务参数 + `header` 字段的 JSON 文本。
 pub fn eapi(url_logical_path: &str, json_text: &str) -> String {
     // 1. message = "nobody" + url + "use" + text + "md5forencrypt"
-    let message = format!(
-        "{}{}{}{}{}",
-        EAPI_MD5_PREFIX, url_logical_path, EAPI_MD5_INFIX, json_text, EAPI_MD5_SUFFIX,
-    );
+    let message =
+        format!("{EAPI_MD5_PREFIX}{url_logical_path}{EAPI_MD5_INFIX}{json_text}{EAPI_MD5_SUFFIX}");
 
     // 2. md5 hex 小写
     let mut hasher = Md5::new();
@@ -23,12 +23,7 @@ pub fn eapi(url_logical_path: &str, json_text: &str) -> String {
     let digest = hex::encode(hasher.finalize());
 
     // 3. data = url + sep + text + sep + digest
-    let data = format!(
-        "{url}{sep}{text}{sep}{digest}",
-        url = url_logical_path,
-        sep = EAPI_SEPARATOR,
-        text = json_text,
-    );
+    let data = format!("{url_logical_path}{EAPI_SEPARATOR}{json_text}{EAPI_SEPARATOR}{digest}");
 
     // 4. AES-128-ECB + PKCS7 + hex 大写
     let cipher = aes_ecb_pkcs7_encrypt(data.as_bytes(), EAPI_KEY);

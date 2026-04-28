@@ -3,6 +3,19 @@
 //! 用 openssl 作为"参考实现",和本 crate 的纯 Rust 加密三件套做 byte-for-byte 比对。
 //! 任何位错都会让这些测试爆,从而保证我们的实现和服务端能解出来的输入完全一致。
 
+// reason: 测试 harness 中常规使用 unwrap / as / format! 等,与 crate 主体一致放开。
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::as_conversions,
+    clippy::cast_lossless,
+    clippy::format_push_string,
+    clippy::uninlined_format_args,
+    clippy::redundant_closure_for_method_calls
+)]
+
 use mineral_channel_netease::crypto::__internal::{
     aes_cbc_pkcs7_encrypt, aes_ecb_pkcs7_encrypt, rsa_no_padding_encrypt, weapi_with_secret_key,
 };

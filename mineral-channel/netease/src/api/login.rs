@@ -48,9 +48,7 @@ pub async fn login_qr_get_key(transport: &Transport) -> Result<LoginQrCode> {
         .ok_or_else(|| anyhow!("qrcode/unikey response missing `unikey`"))?
         .to_owned();
     let chain_id = crate::device::generate_chain_id();
-    let url = format!(
-        "http://music.163.com/login?codekey={unikey}&chainId={chain_id}",
-    );
+    let url = format!("http://music.163.com/login?codekey={unikey}&chainId={chain_id}",);
     Ok(LoginQrCode { url, unikey })
 }
 
@@ -74,6 +72,6 @@ pub async fn login_qr_check(transport: &Transport, unikey: &str) -> Result<i64> 
         .await?;
     Ok(result
         .get("code")
-        .and_then(|x| x.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0))
 }
