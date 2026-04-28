@@ -113,3 +113,6 @@ missing_safety_doc  = "allow"
 module_inception    = "allow"
 # 建议使用 `Self` 而不是显式类型名。
 use_self            = "deny"
+
+# --- 体量约束（CLAUDE.md 体量约束节，函数级；阈值见 clippy.toml）---
+too_many_lines      = "deny"
