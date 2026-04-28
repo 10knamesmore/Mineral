@@ -4,6 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::components::overlay::confirm as confirm_overlay;
 use crate::components::overlay::queue as queue_overlay;
 use crate::components::{cmd_bar, lyrics, now_playing, sidebar, spectrum, top_status, transport};
 use crate::layout::{compute, Areas};
@@ -40,6 +41,10 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
             theme,
             app.state.focus == Focus::Queue,
         );
+    }
+
+    if app.state.confirm_open {
+        confirm_overlay::draw(frame, frame.area(), theme);
     }
 }
 

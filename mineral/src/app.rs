@@ -64,18 +64,24 @@ impl App {
     }
 
     fn handle_key(&mut self, key: &KeyEvent) {
-        // 最高优先级:cmd 模式吞掉所有键。
-        if self.state.cmd_mode.is_some() {
-            self.handle_cmd_key(key);
-            return;
-        }
-
-        // Ctrl-C 始终退出。
+        // Ctrl-C 强制退出(skip confirm)。
         if matches!(
             (key.modifiers, key.code),
             (KeyModifiers::CONTROL, KeyCode::Char('c'))
         ) {
             self.should_quit = true;
+            return;
+        }
+
+        // 最高 UI 优先级:cmd 模式吞掉所有键。
+        if self.state.cmd_mode.is_some() {
+            self.handle_cmd_key(key);
+            return;
+        }
+
+        // 其次:confirm modal。
+        if self.state.confirm_open {
+            self.handle_confirm_key(key);
             return;
         }
 
@@ -85,12 +91,12 @@ impl App {
             return;
         }
 
-        // q:queue 打开时关闭 queue,否则退出(stage 9 接 quit confirm)。
+        // q:queue 打开时关闭 queue,否则打开 quit confirm。
         if key.code == KeyCode::Char('q') {
             if self.state.queue_open {
                 self.close_queue();
             } else {
-                self.should_quit = true;
+                self.state.confirm_open = true;
             }
             return;
         }
@@ -127,6 +133,18 @@ impl App {
         match self.state.view {
             View::Playlists => self.handle_playlists_key(key),
             View::Library => self.handle_library_key(key),
+        }
+    }
+
+    fn handle_confirm_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                self.should_quit = true;
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                self.state.confirm_open = false;
+            }
+            _ => {}
         }
     }
 

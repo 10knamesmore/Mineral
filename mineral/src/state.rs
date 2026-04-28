@@ -84,6 +84,8 @@ pub struct AppState {
     pub cmd_buffer: String,
     /// 一条临时 hint(消息 + 失效时刻),由 tick 周期清理。
     pub hint: Option<(String, Instant)>,
+    /// quit confirm modal 是否打开(stage 9 引入)。
+    pub confirm_open: bool,
 }
 
 impl AppState {
@@ -108,6 +110,7 @@ impl AppState {
             cmd_mode: None,
             cmd_buffer: String::new(),
             hint: None,
+            confirm_open: false,
         }
     }
 

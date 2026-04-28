@@ -3,6 +3,7 @@
 //! 全部用 [`Flex::Center`] + Percentage + min/max clamp 计算位置,
 //! 不写死字符尺寸。
 
+pub mod confirm;
 pub mod queue;
 
 use ratatui::layout::Rect;
