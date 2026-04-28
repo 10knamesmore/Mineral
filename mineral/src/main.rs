@@ -10,7 +10,10 @@
 compile_error!("Windows 暂不支持");
 
 mod app;
+mod components;
 mod layout;
+mod mock;
+mod state;
 mod theme;
 mod tui;
 mod view;

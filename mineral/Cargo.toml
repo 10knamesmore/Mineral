@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-color-eyre = { workspace = true }
-crossterm  = { workspace = true }
-ratatui    = { workspace = true }
+color-eyre    = { workspace = true }
+crossterm     = { workspace = true }
+mineral-model = { workspace = true }
+ratatui       = { workspace = true }
 
 [lints]
 workspace = true
