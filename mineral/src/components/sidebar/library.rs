@@ -17,7 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         |p| format!("library / {}", p.data.name),
     );
 
-    let tracks = state.current_tracks();
+    let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
 
     let block = Block::new()

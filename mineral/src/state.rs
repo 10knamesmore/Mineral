@@ -3,8 +3,11 @@
 //! 阶段 3 引入左栏视图、选中索引、搜索关键字与 mock 数据;后续阶段会
 //! 增加 playback / queue / cmd_mode 等。
 
+use std::time::Instant;
+
 use mineral_model::{Playlist, Song};
 
+use crate::cmd::CmdMode;
 use crate::components::spectrum::SpectrumState;
 use crate::mock::{PlaylistKind, SongView};
 use crate::playback::Playback;
@@ -75,6 +78,12 @@ pub struct AppState {
     pub queue_sel: usize,
     /// 当前键盘焦点。
     pub focus: Focus,
+    /// 命令栏当前模式(stage 7 引入)。
+    pub cmd_mode: Option<CmdMode>,
+    /// 命令栏输入缓冲。
+    pub cmd_buffer: String,
+    /// 一条临时 hint(消息 + 失效时刻),由 tick 周期清理。
+    pub hint: Option<(String, Instant)>,
 }
 
 impl AppState {
@@ -96,6 +105,9 @@ impl AppState {
             queue_open: false,
             queue_sel: 0,
             focus: Focus::Left,
+            cmd_mode: None,
+            cmd_buffer: String::new(),
+            hint: None,
         }
     }
 
@@ -109,6 +121,38 @@ impl AppState {
         self.selected_playlist()
             .map(|p| crate::mock::decorate_songs(&p.data.songs))
             .unwrap_or_default()
+    }
+
+    /// 当前可见(可能被 search 过滤)的歌单列表。
+    pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
+        if self.search_q.is_empty() {
+            return self.playlists.iter().collect();
+        }
+        let q = self.search_q.to_lowercase();
+        self.playlists
+            .iter()
+            .filter(|p| p.data.name.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    /// 当前可见(可能被 search 过滤)的曲目列表。
+    pub fn filtered_tracks(&self) -> Vec<SongView> {
+        let tracks = self.current_tracks();
+        if self.search_q.is_empty() {
+            return tracks;
+        }
+        let q = self.search_q.to_lowercase();
+        tracks
+            .into_iter()
+            .filter(|sv| {
+                sv.data.name.to_lowercase().contains(&q)
+                    || sv
+                        .data
+                        .artists
+                        .first()
+                        .is_some_and(|a| a.name.to_lowercase().contains(&q))
+            })
+            .collect()
     }
 }
 

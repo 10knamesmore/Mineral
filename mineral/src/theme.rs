@@ -64,6 +64,32 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// 切 accent + accent_2 配色对。未识别的名称返回原主题不变。
+    ///
+    /// 支持的对(对应 Catppuccin Mocha 7 组):
+    /// `mauve` (mauve+sapphire,默认)、`rosewater`(rosewater+pink)、
+    /// `peach`(peach+yellow)、`green`(green+teal)、`sapphire`(sapphire+blue)、
+    /// `blue`(blue+lavender)、`lavender`(lavender+mauve)。
+    pub fn with_accent_pair(mut self, name: &str) -> Self {
+        let pair = match name {
+            "mauve" => Some((Color::Rgb(0xcb, 0xa6, 0xf7), Color::Rgb(0x74, 0xc7, 0xec))),
+            "rosewater" => Some((Color::Rgb(0xf5, 0xe0, 0xdc), Color::Rgb(0xf5, 0xc2, 0xe7))),
+            "peach" => Some((Color::Rgb(0xfa, 0xb3, 0x87), Color::Rgb(0xf9, 0xe2, 0xaf))),
+            "green" => Some((Color::Rgb(0xa6, 0xe3, 0xa1), Color::Rgb(0x94, 0xe2, 0xd5))),
+            "sapphire" => Some((Color::Rgb(0x74, 0xc7, 0xec), Color::Rgb(0x89, 0xb4, 0xfa))),
+            "blue" => Some((Color::Rgb(0x89, 0xb4, 0xfa), Color::Rgb(0xb4, 0xbe, 0xfe))),
+            "lavender" => Some((Color::Rgb(0xb4, 0xbe, 0xfe), Color::Rgb(0xcb, 0xa6, 0xf7))),
+            _ => None,
+        };
+        if let Some((a, a2)) = pair {
+            self.accent = a;
+            self.accent_2 = a2;
+        }
+        self
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::mocha_mauve()

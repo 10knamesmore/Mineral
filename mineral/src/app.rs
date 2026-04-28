@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::cmd::{self, CmdEffect, CmdMode};
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
@@ -47,6 +48,7 @@ impl App {
                 let dt = self.last_tick.elapsed();
                 self.state.playback.tick(dt);
                 self.state.spectrum.tick(self.state.playback.playing);
+                self.expire_hint();
                 self.last_tick = Instant::now();
             }
         }
@@ -62,6 +64,12 @@ impl App {
     }
 
     fn handle_key(&mut self, key: &KeyEvent) {
+        // 最高优先级:cmd 模式吞掉所有键。
+        if self.state.cmd_mode.is_some() {
+            self.handle_cmd_key(key);
+            return;
+        }
+
         // Ctrl-C 始终退出。
         if matches!(
             (key.modifiers, key.code),
@@ -97,6 +105,19 @@ impl App {
             return;
         }
 
+        // / 进入 search 模式,: 进入 command 模式。
+        if key.code == KeyCode::Char('/') {
+            self.state.cmd_mode = Some(CmdMode::Search);
+            self.state.cmd_buffer.clear();
+            self.state.search_q.clear();
+            return;
+        }
+        if key.code == KeyCode::Char(':') {
+            self.state.cmd_mode = Some(CmdMode::Command);
+            self.state.cmd_buffer.clear();
+            return;
+        }
+
         // 全局 playback 键(Space / m / s / +- / ←→ / p / n)。
         if self.handle_playback_key(key) {
             return;
@@ -106,6 +127,83 @@ impl App {
         match self.state.view {
             View::Playlists => self.handle_playlists_key(key),
             View::Library => self.handle_library_key(key),
+        }
+    }
+
+    fn handle_cmd_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.cmd_mode = None;
+                self.state.cmd_buffer.clear();
+                self.state.search_q.clear();
+            }
+            KeyCode::Enter => {
+                let mode = self.state.cmd_mode;
+                let buf = std::mem::take(&mut self.state.cmd_buffer);
+                self.state.cmd_mode = None;
+                if mode == Some(CmdMode::Command) {
+                    for eff in cmd::parse(&buf) {
+                        self.apply_effect(eff);
+                    }
+                }
+                // search 模式回车提交后保留 search_q 持续过滤(esc 才清)。
+            }
+            KeyCode::Backspace => {
+                self.state.cmd_buffer.pop();
+                if self.state.cmd_mode == Some(CmdMode::Search) {
+                    self.state.search_q.clone_from(&self.state.cmd_buffer);
+                    self.state.sel_playlist = 0;
+                    self.state.sel_track = 0;
+                }
+            }
+            KeyCode::Char(c) => {
+                self.state.cmd_buffer.push(c);
+                if self.state.cmd_mode == Some(CmdMode::Search) {
+                    self.state.search_q.clone_from(&self.state.cmd_buffer);
+                    self.state.sel_playlist = 0;
+                    self.state.sel_track = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_effect(&mut self, eff: CmdEffect) {
+        match eff {
+            CmdEffect::Quit => self.should_quit = true,
+            CmdEffect::SetMode(m) => {
+                self.state.playback.mode = m;
+                self.set_hint(format!("mode → {}", m.label()));
+            }
+            CmdEffect::SetSort(s) => {
+                self.state.playback.sort = s;
+                self.set_hint(format!("sort → {}", s.label()));
+            }
+            CmdEffect::SetAccent(name) => {
+                self.theme = self.theme.with_accent_pair(&name);
+                self.set_hint(format!("accent → {name}"));
+            }
+            CmdEffect::SetTheme(name) => {
+                self.set_hint(format!("theme '{name}' not yet supported"));
+            }
+            CmdEffect::Play(n) => {
+                let label = n.map_or_else(|| "current".to_owned(), |i| format!("#{i}"));
+                self.set_hint(format!(":play {label} not yet supported"));
+            }
+            CmdEffect::Hint(msg) => self.set_hint(msg),
+        }
+    }
+
+    fn set_hint(&mut self, msg: String) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        self.state.hint = Some((msg, deadline));
+    }
+
+    fn expire_hint(&mut self) {
+        if let Some((_, deadline)) = self.state.hint.as_ref() {
+            if Instant::now() > *deadline {
+                self.state.hint = None;
+            }
         }
     }
 

@@ -22,8 +22,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         ]));
 
     let items: Vec<ListItem<'_>> = state
-        .playlists
-        .iter()
+        .filtered_playlists()
+        .into_iter()
         .map(|p| ListItem::new(playlist_row(p, theme)))
         .collect();
 
