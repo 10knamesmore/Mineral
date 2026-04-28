@@ -4,31 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow            = { workspace = true }
-base64            = { workspace = true }
-crossterm         = { workspace = true }
-derive_setters    = { workspace = true }
-futures-util      = { workspace = true }
-hex               = { workspace = true }
-image             = { workspace = true }
-isahc             = { workspace = true }
-libc              = { workspace = true }
-lofty             = { workspace = true }
-once_cell         = { workspace = true }
-openssl           = { workspace = true }
-rand              = { workspace = true }
-ratatui           = { workspace = true }
-ratatui-image     = { workspace = true }
-rodio             = { workspace = true }
-serde             = { workspace = true }
-serde_json        = { workspace = true }
-signal-hook-tokio = { workspace = true }
-strum             = { workspace = true }
-strum_macros      = { workspace = true }
-time              = { workspace = true }
-tokio             = { workspace = true }
-tracing           = { workspace = true }
-urlqstring        = { workspace = true }
-
-mineral-config    = { workspace = true }
-mineral-log       = { workspace = true }
+anyhow    = { workspace = true }
+crossterm = { workspace = true }
+ratatui   = { workspace = true }
