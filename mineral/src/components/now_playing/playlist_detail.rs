@@ -8,8 +8,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::components::cover;
-use crate::state::PlaylistView;
 use crate::theme::Theme;
+use crate::view_model::{PlaylistKind, PlaylistView};
 
 /// 渲染歌单详情(right pane)到 `area`。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) {
@@ -68,19 +68,23 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) 
 }
 
 fn kind_label(p: &PlaylistView) -> String {
-    let kind = match p.kind {
-        crate::mock::PlaylistKind::System => "system",
-        crate::mock::PlaylistKind::Smart => "smart",
-        crate::mock::PlaylistKind::Genre => "genre",
-        crate::mock::PlaylistKind::User => "user",
-    };
-    format!("{} {}", p.kind.glyph(), kind)
+    p.kind.map_or_else(String::new, |k| {
+        let name = match k {
+            PlaylistKind::System => "system",
+            PlaylistKind::Smart => "smart",
+            PlaylistKind::Genre => "genre",
+            PlaylistKind::User => "user",
+        };
+        format!("{} {name}", k.glyph())
+    })
 }
 
 fn source_label(s: SourceKind) -> &'static str {
     match s {
         SourceKind::Netease => "♫ netease",
         SourceKind::Local => "□ local",
+        #[cfg(feature = "mock")]
+        SourceKind::Mock => "▒ mock",
     }
 }
 
@@ -88,5 +92,7 @@ fn source_color(s: SourceKind, theme: &Theme) -> Color {
     match s {
         SourceKind::Netease => theme.red,
         SourceKind::Local => theme.subtext,
+        #[cfg(feature = "mock")]
+        SourceKind::Mock => theme.overlay,
     }
 }

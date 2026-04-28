@@ -13,12 +13,12 @@ mod app;
 mod cmd;
 mod components;
 mod layout;
-mod mock;
 mod playback;
 mod state;
 mod theme;
 mod tui;
 mod view;
+mod view_model;
 
 use crate::app::App;
 use crate::tui::Tui;

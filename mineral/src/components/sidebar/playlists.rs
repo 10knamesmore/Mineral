@@ -7,8 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::state::{AppState, PlaylistView};
+use crate::state::AppState;
 use crate::theme::Theme;
+use crate::view_model::PlaylistView;
 
 /// 渲染 Playlists 视图到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
@@ -43,7 +44,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 }
 
 fn playlist_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Line<'a> {
-    let kind_glyph = p.kind.glyph();
+    let kind_glyph = p.kind.map_or("", |k| k.glyph());
     let total_min = p.total_duration_ms() / 60_000;
     let len_label = format!("{}h {:02}m", total_min / 60, total_min % 60);
     let count_label = format!("{} items", p.data.track_count);
@@ -67,6 +68,8 @@ fn channel_label(src: SourceKind) -> &'static str {
     match src {
         SourceKind::Netease => "♫ netease",
         SourceKind::Local => "□ local",
+        #[cfg(feature = "mock")]
+        SourceKind::Mock => "▒ mock",
     }
 }
 
@@ -74,6 +77,8 @@ fn channel_style(src: SourceKind, theme: &Theme) -> Style {
     match src {
         SourceKind::Netease => Style::new().fg(theme.red),
         SourceKind::Local => Style::new().fg(theme.subtext),
+        #[cfg(feature = "mock")]
+        SourceKind::Mock => Style::new().fg(theme.overlay),
     }
 }
 

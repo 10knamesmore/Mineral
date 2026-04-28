@@ -8,9 +8,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::components::cover;
-use crate::mock::SongView;
 use crate::playback::format_ms;
 use crate::theme::Theme;
+use crate::view_model::SongView;
 
 /// 渲染曲目详情(right pane)到 `area`。
 pub fn draw(

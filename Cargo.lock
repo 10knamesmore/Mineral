@@ -1023,6 +1023,7 @@ version = "0.1.0"
 dependencies = [
  "color-eyre",
  "crossterm 0.29.0",
+ "mineral-channel-mock",
  "mineral-model",
  "ratatui",
 ]
@@ -1037,6 +1038,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "mineral-channel-mock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "mineral-channel-core",
+ "mineral-model",
 ]
 
 [[package]]

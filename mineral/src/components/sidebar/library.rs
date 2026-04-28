@@ -6,9 +6,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::mock::SongView;
 use crate::state::AppState;
 use crate::theme::Theme;
+use crate::view_model::SongView;
 
 /// 渲染 Library 视图到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {

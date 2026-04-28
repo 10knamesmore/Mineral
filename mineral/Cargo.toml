@@ -3,11 +3,19 @@ name = "mineral"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+mock = [
+    "dep:mineral-channel-mock",
+    "mineral-channel-mock/mock",
+    "mineral-model/mock",
+]
+
 [dependencies]
-color-eyre    = { workspace = true }
-crossterm     = { workspace = true }
-mineral-model = { workspace = true }
-ratatui       = { workspace = true }
+color-eyre           = { workspace = true }
+crossterm            = { workspace = true }
+mineral-channel-mock = { workspace = true, optional = true }
+mineral-model        = { workspace = true }
+ratatui              = { workspace = true }
 
 [lints]
 workspace = true

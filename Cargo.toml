@@ -22,6 +22,7 @@ lofty              = "0.22"
 mineral-macros     = { path    = "crates/mineral-macros" }
 mineral-model      = { path    = "crates/mineral-model" }
 mineral-channel-core    = { path = "mineral-channel/core" }
+mineral-channel-mock    = { path = "mineral-channel/mock" }
 mineral-channel-netease = { path = "mineral-channel/netease" }
 uuid               = { version = "1", features = ["v4"] }
 async-trait        = "0.1"

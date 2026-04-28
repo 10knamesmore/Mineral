@@ -8,4 +8,7 @@ pub enum SourceKind {
     Netease,
     /// 本地文件系统(用户的 music 目录)。
     Local,
+    /// 占位 / 测试用伪 channel — 仅在启用 `mock` feature 时存在。
+    #[cfg(feature = "mock")]
+    Mock,
 }

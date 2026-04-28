@@ -3,6 +3,11 @@ name    = "mineral-model"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# 启用后会增加 `SourceKind::Mock` 变体,仅供 UI / 测试 / mineral-channel-mock
+# 构造伪数据,真实 channel 路径不会出现。
+mock = []
+
 [dependencies]
 mineral-macros = { workspace = true }
 serde          = { workspace = true }
