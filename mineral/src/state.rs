@@ -167,7 +167,6 @@ fn load_initial_data() -> (Vec<PlaylistView>, Vec<Vec<SongView>>) {
     for d in demos {
         playlists.push(PlaylistView {
             data: d.data.clone(),
-            kind: Some(map_kind(d.kind)),
         });
         tracks_cache.push(
             d.tracks
@@ -186,16 +185,4 @@ fn load_initial_data() -> (Vec<PlaylistView>, Vec<Vec<SongView>>) {
 #[cfg(not(feature = "mock"))]
 fn load_initial_data() -> (Vec<PlaylistView>, Vec<Vec<SongView>>) {
     (Vec::new(), Vec::new())
-}
-
-#[cfg(feature = "mock")]
-fn map_kind(k: mineral_channel_mock::PlaylistKind) -> crate::view_model::PlaylistKind {
-    use crate::view_model::PlaylistKind as V;
-    use mineral_channel_mock::PlaylistKind as M;
-    match k {
-        M::System => V::System,
-        M::Smart => V::Smart,
-        M::Genre => V::Genre,
-        M::User => V::User,
-    }
 }

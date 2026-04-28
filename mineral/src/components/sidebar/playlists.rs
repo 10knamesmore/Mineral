@@ -44,13 +44,11 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 }
 
 fn playlist_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Line<'a> {
-    let kind_glyph = p.kind.map_or("", |k| k.glyph());
     let total_min = p.total_duration_ms() / 60_000;
     let len_label = format!("{}h {:02}m", total_min / 60, total_min % 60);
     let count_label = format!("{} items", p.data.track_count);
 
     Line::from(vec![
-        Span::styled(format!("{kind_glyph} "), Style::new().fg(theme.accent_2)),
         Span::styled(p.data.name.clone(), Style::new().fg(theme.text)),
         Span::raw("  "),
         Span::styled(

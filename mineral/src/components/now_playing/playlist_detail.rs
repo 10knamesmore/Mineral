@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::components::cover;
 use crate::theme::Theme;
-use crate::view_model::{PlaylistKind, PlaylistView};
+use crate::view_model::PlaylistView;
 
 /// 渲染歌单详情(right pane)到 `area`。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) {
@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) 
 
     let [cover_area, kv_area, footer] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Length(1),
     ])
     .areas(inner);
@@ -49,11 +49,6 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) 
         ]),
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("kind:   ", Style::new().fg(theme.overlay)),
-            Span::styled(
-                format!("{:<10}", kind_label(p)),
-                Style::new().fg(theme.accent_2),
-            ),
             Span::styled("source: ", Style::new().fg(theme.overlay)),
             Span::styled(
                 source_label(p.data.source),
@@ -65,18 +60,6 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) 
 
     let help = Line::from(" ↵ open · h back ").style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(help), footer);
-}
-
-fn kind_label(p: &PlaylistView) -> String {
-    p.kind.map_or_else(String::new, |k| {
-        let name = match k {
-            PlaylistKind::System => "system",
-            PlaylistKind::Smart => "smart",
-            PlaylistKind::Genre => "genre",
-            PlaylistKind::User => "user",
-        };
-        format!("{} {name}", k.glyph())
-    })
 }
 
 fn source_label(s: SourceKind) -> &'static str {

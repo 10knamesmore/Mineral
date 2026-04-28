@@ -14,19 +14,6 @@ use mineral_model::{
     PlaylistId, Song, SongId, SourceKind, UserId,
 };
 
-/// mock channel 内部对一条歌单的额外标注(对应设计稿 ★ / ◆ / # / ♪ 字形)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlaylistKind {
-    /// 系统歌单(★)。
-    System,
-    /// 智能歌单(◆)。
-    Smart,
-    /// 流派歌单(#)。
-    Genre,
-    /// 用户歌单(♪)。
-    User,
-}
-
 /// 一首 mock 歌 + UI 装饰(loved / 累计播放次数)。
 #[derive(Clone, Debug)]
 pub struct DemoSong {
@@ -38,13 +25,11 @@ pub struct DemoSong {
     pub plays: u32,
 }
 
-/// 一条完整 demo 歌单:`Playlist` model + UI 类型 + 已 decorated 的曲目列表。
+/// 一条完整 demo 歌单:`Playlist` model + 已 decorated 的曲目列表。
 #[derive(Clone, Debug)]
 pub struct DemoPlaylist {
     /// 底层 model(`songs` 字段已填同 `tracks` 同序的曲目)。
     pub data: Playlist,
-    /// UI kind 标注。
-    pub kind: PlaylistKind,
     /// 装饰过的曲目(`tracks[i].data == data.songs[i]`)。
     pub tracks: Vec<DemoSong>,
 }
@@ -63,7 +48,7 @@ impl MockChannel {
         }
     }
 
-    /// 同步取所有 demo 歌单(包括 kind / loved / plays 等 UI 装饰)。
+    /// 同步取所有 demo 歌单(包括 loved / plays 等 UI 装饰)。
     pub fn demo_playlists(&self) -> &[DemoPlaylist] {
         &self.playlists
     }
@@ -169,20 +154,20 @@ const TITLES: &[&str] = &[
 
 fn build_demo_playlists() -> Vec<DemoPlaylist> {
     [
-        ("All Time Favorites", PlaylistKind::System, 24),
-        ("Recently Added", PlaylistKind::System, 12),
-        ("Loved", PlaylistKind::Smart, 18),
-        ("Late Night Drive", PlaylistKind::Genre, 16),
-        ("Synthwave", PlaylistKind::Genre, 22),
-        ("Ambient Focus", PlaylistKind::User, 10),
-        ("Workout Mix", PlaylistKind::User, 14),
+        ("All Time Favorites", 24),
+        ("Recently Added", 12),
+        ("Loved", 18),
+        ("Late Night Drive", 16),
+        ("Synthwave", 22),
+        ("Ambient Focus", 10),
+        ("Workout Mix", 14),
     ]
     .iter()
-    .map(|(name, kind, n)| build_one(name, *kind, *n))
+    .map(|(name, n)| build_one(name, *n))
     .collect()
 }
 
-fn build_one(name: &str, kind: PlaylistKind, count: usize) -> DemoPlaylist {
+fn build_one(name: &str, count: usize) -> DemoPlaylist {
     let songs = build_songs(name, "Various Artists", count);
     let tracks = decorate(&songs);
     let playlist = Playlist {
@@ -196,7 +181,6 @@ fn build_one(name: &str, kind: PlaylistKind, count: usize) -> DemoPlaylist {
     };
     DemoPlaylist {
         data: playlist,
-        kind,
         tracks,
     }
 }
