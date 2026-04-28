@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::components::sidebar;
+use crate::components::{sidebar, transport};
 use crate::layout::{compute, Areas};
 use crate::theme::Theme;
 
@@ -24,7 +24,7 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     if let Some(right) = areas.right {
         paint_panel(frame, right, "now playing", theme);
     }
-    paint_panel(frame, areas.transport, "transport", theme);
+    transport::draw(frame, areas.transport, &app.state.playback, theme);
     if let Some(viz) = areas.viz {
         paint_panel(frame, viz, "spectrum / lyrics", theme);
     }

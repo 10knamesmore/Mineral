@@ -6,6 +6,7 @@
 use mineral_model::{Playlist, Song};
 
 use crate::mock::{PlaylistKind, SongView};
+use crate::playback::Playback;
 
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +52,8 @@ pub struct AppState {
     pub search_q: String,
     /// 当前正在播放(用于 Library 视图行首 ♫ 标记)。
     pub current: Option<Song>,
+    /// 播放状态机(stage 4 引入)。
+    pub playback: Playback,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             lib_scroll: 0,
             search_q: String::new(),
             current: None,
+            playback: Playback::new(),
         }
     }
 

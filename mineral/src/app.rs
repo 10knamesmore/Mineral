@@ -15,7 +15,7 @@ pub struct App {
     pub should_quit: bool,
     /// 当前主题。
     pub theme: Theme,
-    /// 业务状态(视图、选中、mock 数据等)。
+    /// 业务状态(视图、选中、playback、mock 数据等)。
     pub state: AppState,
     /// 上一次 tick 时间。
     pub last_tick: Instant,
@@ -44,6 +44,8 @@ impl App {
                 self.handle_event(&event::read()?);
             }
             if self.last_tick.elapsed() >= tick_rate {
+                let dt = self.last_tick.elapsed();
+                self.state.playback.tick(dt);
                 self.last_tick = Instant::now();
             }
         }
@@ -66,10 +68,31 @@ impl App {
             self.should_quit = true;
             return;
         }
+        if self.handle_playback_key(key) {
+            return;
+        }
         match self.state.view {
             View::Playlists => self.handle_playlists_key(key),
             View::Library => self.handle_library_key(key),
         }
+    }
+
+    fn handle_playback_key(&mut self, key: &KeyEvent) -> bool {
+        let pb = &mut self.state.playback;
+        match key.code {
+            KeyCode::Char(' ') => pb.play_pause(),
+            KeyCode::Char('m') => pb.mode = pb.mode.cycle(),
+            KeyCode::Char('s') => pb.sort = pb.sort.cycle(),
+            KeyCode::Char('+') | KeyCode::Char('=') => pb.nudge_volume(5),
+            KeyCode::Char('-') | KeyCode::Char('_') => pb.nudge_volume(-5),
+            KeyCode::Left => pb.seek(-5),
+            KeyCode::Right => pb.seek(5),
+            KeyCode::Char('p') | KeyCode::Char('n') => {
+                // stage 4 mock — 没有 queue 概念,留空
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn handle_playlists_key(&mut self, key: &KeyEvent) {
@@ -87,7 +110,7 @@ impl App {
             KeyCode::Char('G') => {
                 self.state.sel_playlist = self.state.playlists.len().saturating_sub(1);
             }
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
+            KeyCode::Char('l') | KeyCode::Enter => {
                 self.state.view = View::Library;
                 self.state.sel_track = 0;
             }
@@ -111,7 +134,7 @@ impl App {
             KeyCode::Char('G') => {
                 self.state.sel_track = len.saturating_sub(1);
             }
-            KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc | KeyCode::Backspace => {
+            KeyCode::Char('h') | KeyCode::Esc | KeyCode::Backspace => {
                 self.state.view = View::Playlists;
             }
             KeyCode::Enter => {
@@ -121,7 +144,10 @@ impl App {
                     .get(self.state.sel_track)
                     .map(|sv| sv.data.clone())
                 {
-                    self.state.current = Some(s);
+                    self.state.current = Some(s.clone());
+                    self.state.playback.track = Some(s);
+                    self.state.playback.position_ms = 0;
+                    self.state.playback.playing = true;
                 }
             }
             _ => {}

@@ -13,6 +13,7 @@ mod app;
 mod components;
 mod layout;
 mod mock;
+mod playback;
 mod state;
 mod theme;
 mod tui;

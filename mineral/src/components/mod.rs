@@ -4,3 +4,4 @@
 //! transport / spectrum / lyrics / overlay 等。
 
 pub mod sidebar;
+pub mod transport;
