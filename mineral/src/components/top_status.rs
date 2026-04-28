@@ -28,7 +28,7 @@ fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme
         Span::styled("│  ", Style::new().fg(theme.surface1)),
         Span::styled("[1 playlists]", tab_style(active_pl, theme)),
         Span::raw("  "),
-        Span::styled("[2 library]", tab_style(active_lib, theme)),
+        Span::styled("[2 tracks]", tab_style(active_lib, theme)),
     ];
     if state.queue_open {
         spans.push(Span::raw("  "));

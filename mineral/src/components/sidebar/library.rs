@@ -13,8 +13,8 @@ use crate::view_model::SongView;
 /// 渲染 Library 视图到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let title = state.selected_playlist().map_or_else(
-        || "library".to_owned(),
-        |p| format!("library / {}", p.data.name),
+        || "tracks".to_owned(),
+        |p| format!("tracks / {}", p.data.name),
     );
 
     let tracks = state.filtered_tracks();
