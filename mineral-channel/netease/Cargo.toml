@@ -1,0 +1,44 @@
+[package]
+name    = "mineral-channel-netease"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mineral-model        = { workspace = true }
+mineral-channel-core = { workspace = true }
+
+# 加密
+aes        = { workspace = true }
+cbc        = { workspace = true }
+ecb        = { workspace = true }
+cipher     = { workspace = true }
+md-5       = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+base64     = { workspace = true }
+hex        = { workspace = true }
+
+# HTTP / cookie
+isahc      = { workspace = true }
+url        = { workspace = true }
+regex      = { workspace = true }
+flate2     = { workspace = true }
+
+# 序列化
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# 工具
+async-trait = { workspace = true }
+once_cell   = { workspace = true }
+rand        = { workspace = true }
+anyhow      = { workspace = true }
+thiserror   = { workspace = true }
+
+[dev-dependencies]
+# 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
+openssl = { workspace = true }
+tokio   = { workspace = true }
+
+[lints]
+workspace = true

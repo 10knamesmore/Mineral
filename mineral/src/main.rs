@@ -1,6 +1,5 @@
 use app::App;
 
-mod api;
 mod app;
 mod event_handler;
 mod state;

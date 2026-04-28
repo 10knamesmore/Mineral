@@ -1,0 +1,15 @@
+[package]
+name    = "mineral-channel-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mineral-model = { workspace = true }
+async-trait   = { workspace = true }
+thiserror     = { workspace = true }
+anyhow        = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+
+[lints]
+workspace = true
