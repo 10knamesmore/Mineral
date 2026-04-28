@@ -1,4 +1,4 @@
-//! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode / device。
+//! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode。
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -23,13 +23,12 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
         return;
     }
 
-    let [now, prog, ctrl, vms, _filler, dev] = Layout::vertical([
+    let [now, prog, ctrl, vms, _filler] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(1),
     ])
     .areas(inner);
 
@@ -37,7 +36,6 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     paint_progress(frame, prog, pb, theme);
     paint_controls(frame, ctrl, pb, theme);
     paint_vol_mode(frame, vms, pb, theme);
-    paint_device(frame, dev, pb, theme);
 }
 
 fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
@@ -145,17 +143,5 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::styled("mode ", Style::new().fg(theme.overlay)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-fn paint_device(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
-    if area.height == 0 {
-        return;
-    }
-    let line = Line::from(format!(
-        " ◯ output {} → coreaudio · {} ",
-        pb.device, pb.format
-    ))
-    .style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(line), area);
 }

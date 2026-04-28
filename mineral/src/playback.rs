@@ -66,14 +66,10 @@ pub struct Playback {
     pub volume_pct: u8,
     /// 播放模式。
     pub mode: PlayMode,
-    /// 输出设备名。
-    pub device: String,
-    /// 当前流的格式描述(mock)。
-    pub format: String,
 }
 
 impl Playback {
-    /// 默认 mock 播放状态(volume=66%, device="HD-650")。
+    /// 默认播放状态(volume=66%)。
     pub fn new() -> Self {
         Self {
             track: None,
@@ -81,8 +77,6 @@ impl Playback {
             playing: false,
             volume_pct: 66,
             mode: PlayMode::Sequential,
-            device: "HD-650".to_owned(),
-            format: "24/96 flac".to_owned(),
         }
     }
 

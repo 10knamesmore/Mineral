@@ -1,4 +1,4 @@
-//! 顶部状态行(1 行,无边框):左侧 tabs + 右侧 device · format · state。
+//! 顶部状态行(1 行,无边框):左侧 tabs + 右侧 playback state。
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -55,10 +55,6 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     let line = Line::from(vec![
         Span::styled(format!("{glyph} "), Style::new().fg(color)),
         Span::styled(label, Style::new().fg(theme.subtext)),
-        Span::raw("  "),
-        Span::styled(pb.device.clone(), Style::new().fg(theme.text)),
-        Span::styled(" · ", Style::new().fg(theme.surface1)),
-        Span::styled(pb.format.clone(), Style::new().fg(theme.subtext)),
         Span::raw(" "),
     ]);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
