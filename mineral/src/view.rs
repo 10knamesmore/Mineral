@@ -7,8 +7,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::components::overlay::queue as queue_overlay;
 use crate::components::{lyrics, sidebar, spectrum, transport};
 use crate::layout::{compute, Areas};
+use crate::state::Focus;
 use crate::theme::Theme;
 
 /// 渲染一帧:计算布局,填充各面板。
@@ -29,6 +31,19 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         paint_viz(frame, viz, app, theme);
     }
     paint_cmd_bar(frame, areas.cmd_bar, theme);
+
+    if app.state.queue_open {
+        let current_id = app.state.playback.track.as_ref().map(|t| &t.id);
+        queue_overlay::draw(
+            frame,
+            frame.area(),
+            &app.state.queue,
+            app.state.queue_sel,
+            current_id,
+            theme,
+            app.state.focus == Focus::Queue,
+        );
+    }
 }
 
 fn paint_viz(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {

@@ -18,6 +18,16 @@ pub enum View {
     Library,
 }
 
+/// 当前键盘焦点(用于浮层与主区域之间路由按键)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Focus {
+    /// 主区域(左栏 / library)。
+    #[default]
+    Left,
+    /// 浮动 queue 面板。
+    Queue,
+}
+
 /// 一条 mock 歌单 + UI 所需的额外展示字段(kind 等)。
 #[derive(Clone, Debug)]
 pub struct PlaylistView {
@@ -57,6 +67,14 @@ pub struct AppState {
     pub playback: Playback,
     /// 频谱状态(stage 5 引入,伪随机)。
     pub spectrum: SpectrumState,
+    /// 浮动 queue 当前曲目列表(stage 6 引入)。
+    pub queue: Vec<Song>,
+    /// queue 浮层是否显示。
+    pub queue_open: bool,
+    /// queue 浮层选中行。
+    pub queue_sel: usize,
+    /// 当前键盘焦点。
+    pub focus: Focus,
 }
 
 impl AppState {
@@ -74,6 +92,10 @@ impl AppState {
             current: None,
             playback: Playback::new(),
             spectrum: SpectrumState::new(),
+            queue: Vec::new(),
+            queue_open: false,
+            queue_sel: 0,
+            focus: Focus::Left,
         }
     }
 

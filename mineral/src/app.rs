@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::state::{AppState, View};
+use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
 use crate::view::draw;
@@ -62,19 +62,92 @@ impl App {
     }
 
     fn handle_key(&mut self, key: &KeyEvent) {
+        // Ctrl-C 始终退出。
         if matches!(
             (key.modifiers, key.code),
-            (KeyModifiers::CONTROL, KeyCode::Char('c')) | (_, KeyCode::Char('q'))
+            (KeyModifiers::CONTROL, KeyCode::Char('c'))
         ) {
             self.should_quit = true;
             return;
         }
+
+        // Tab 切换 queue 浮层。
+        if key.code == KeyCode::Tab {
+            self.toggle_queue();
+            return;
+        }
+
+        // q:queue 打开时关闭 queue,否则退出(stage 9 接 quit confirm)。
+        if key.code == KeyCode::Char('q') {
+            if self.state.queue_open {
+                self.close_queue();
+            } else {
+                self.should_quit = true;
+            }
+            return;
+        }
+
+        // queue focused 时,Esc 关闭 queue;其他键走 queue handler。
+        if self.state.focus == Focus::Queue {
+            if key.code == KeyCode::Esc {
+                self.close_queue();
+                return;
+            }
+            self.handle_queue_key(key);
+            return;
+        }
+
+        // 全局 playback 键(Space / m / s / +- / ←→ / p / n)。
         if self.handle_playback_key(key) {
             return;
         }
+
+        // 视图分派。
         match self.state.view {
             View::Playlists => self.handle_playlists_key(key),
             View::Library => self.handle_library_key(key),
+        }
+    }
+
+    fn toggle_queue(&mut self) {
+        self.state.queue_open = !self.state.queue_open;
+        self.state.focus = if self.state.queue_open {
+            Focus::Queue
+        } else {
+            Focus::Left
+        };
+    }
+
+    fn close_queue(&mut self) {
+        self.state.queue_open = false;
+        self.state.focus = Focus::Left;
+    }
+
+    fn handle_queue_key(&mut self, key: &KeyEvent) {
+        let len = self.state.queue.len();
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = len.saturating_sub(1);
+                self.state.queue_sel = self.state.queue_sel.saturating_add(1).min(max);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.state.queue_sel = self.state.queue_sel.saturating_sub(1);
+            }
+            KeyCode::Char('g') => {
+                self.state.queue_sel = 0;
+            }
+            KeyCode::Char('G') => {
+                self.state.queue_sel = len.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some(s) = self.state.queue.get(self.state.queue_sel).cloned() {
+                    self.state.current = Some(s.clone());
+                    self.state.playback.track = Some(s);
+                    self.state.playback.position_ms = 0;
+                    self.state.playback.playing = true;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -139,16 +212,14 @@ impl App {
                 self.state.view = View::Playlists;
             }
             KeyCode::Enter => {
-                if let Some(s) = self
-                    .state
-                    .current_tracks()
-                    .get(self.state.sel_track)
-                    .map(|sv| sv.data.clone())
-                {
+                let tracks = self.state.current_tracks();
+                if let Some(s) = tracks.get(self.state.sel_track).map(|sv| sv.data.clone()) {
                     self.state.current = Some(s.clone());
                     self.state.playback.track = Some(s);
                     self.state.playback.position_ms = 0;
                     self.state.playback.playing = true;
+                    self.state.queue = tracks.into_iter().map(|sv| sv.data).collect();
+                    self.state.queue_sel = self.state.sel_track;
                 }
             }
             _ => {}
