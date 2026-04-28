@@ -4,20 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-mock = [
-    "dep:mineral-channel-mock",
-    "mineral-channel-mock/mock",
-    "mineral-model/mock",
-]
+mock = ["mineral-tui/mock"]
 
 [dependencies]
+clap                 = { workspace = true }
 color-eyre           = { workspace = true }
-crossterm            = { workspace = true }
-mineral-channel-mock = { workspace = true, optional = true }
-mineral-macros       = { workspace = true }
-mineral-model        = { workspace = true }
-ratatui              = { workspace = true }
-serde                = { workspace = true }
+mineral-cli          = { path = "../crates/mineral-cli" }
+mineral-tui          = { path = "../crates/mineral-tui", default-features = false }
 
 [lints]
 workspace = true
