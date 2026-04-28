@@ -6,7 +6,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::components::overlay::confirm as confirm_overlay;
 use crate::components::overlay::queue as queue_overlay;
-use crate::components::{cmd_bar, lyrics, now_playing, sidebar, spectrum, top_status, transport};
+use crate::components::{lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport};
 use crate::layout::{compute, Areas};
 use crate::state::Focus;
 use crate::theme::Theme;
@@ -28,7 +28,7 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     if let Some(viz) = areas.viz {
         paint_viz(frame, viz, app, theme);
     }
-    cmd_bar::draw(frame, areas.cmd_bar, &app.state, theme);
+    status_bar::draw(frame, areas.status_bar, &app.state, theme);
 
     if app.state.queue_open {
         let current_id = app.state.playback.track.as_ref().map(|t| &t.id);

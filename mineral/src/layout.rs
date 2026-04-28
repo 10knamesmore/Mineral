@@ -5,9 +5,9 @@ use ratatui::layout::{Constraint, Layout, Rect};
 /// 当前布局模式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutMode {
-    /// 完整 6-面板布局(top status / left / right / transport / viz / cmd bar)。
+    /// 完整 6-面板布局(top status / left / right / transport / viz / status bar)。
     Full,
-    /// 紧凑模式(终端过小):仅 top status / left / transport / cmd bar。
+    /// 紧凑模式(终端过小):仅 top status / left / transport / status bar。
     Compact,
 }
 
@@ -29,8 +29,8 @@ pub struct Areas {
     pub transport: Rect,
     /// 底部右侧可视化区(spectrum + lyrics) — Compact 模式下为 `None`。
     pub viz: Option<Rect>,
-    /// 底部命令 / 帮助行(1 行)。
-    pub cmd_bar: Rect,
+    /// 底部 keys hint / 临时 hint / 搜索输入行(1 行)。
+    pub status_bar: Rect,
 }
 
 /// 紧凑模式触发宽度阈值。
@@ -48,7 +48,7 @@ pub fn compute(area: Rect) -> Areas {
 }
 
 fn compute_full(area: Rect) -> Areas {
-    let [top_status, body, cmd_bar] = Layout::vertical([
+    let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
@@ -73,12 +73,12 @@ fn compute_full(area: Rect) -> Areas {
         right: Some(right),
         transport,
         viz: Some(viz),
-        cmd_bar,
+        status_bar,
     }
 }
 
 fn compute_compact(area: Rect) -> Areas {
-    let [top_status, body, cmd_bar] = Layout::vertical([
+    let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
@@ -95,6 +95,6 @@ fn compute_compact(area: Rect) -> Areas {
         right: None,
         transport,
         viz: None,
-        cmd_bar,
+        status_bar,
     }
 }

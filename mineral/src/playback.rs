@@ -97,7 +97,7 @@ impl SortBy {
     }
 }
 
-/// 播放状态(mock)。
+/// 播放状态
 #[derive(Clone, Debug)]
 pub struct Playback {
     /// 当前曲目(没有就播不出来)。

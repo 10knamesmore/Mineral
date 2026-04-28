@@ -10,7 +10,6 @@
 compile_error!("Windows 暂不支持");
 
 mod app;
-mod cmd;
 mod components;
 mod layout;
 mod playback;

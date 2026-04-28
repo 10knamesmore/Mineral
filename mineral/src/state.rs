@@ -4,11 +4,8 @@
 //! `mock` feature 时被加载到 [`AppState`];否则两个 cache 都是空 `Vec`,
 //! UI 渲染层照样跑(只是看不到歌单)。
 
-use std::time::Instant;
-
 use mineral_model::Song;
 
-use crate::cmd::CmdMode;
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
@@ -65,12 +62,8 @@ pub struct AppState {
     pub queue_sel: usize,
     /// 当前键盘焦点。
     pub focus: Focus,
-    /// 命令栏当前模式。
-    pub cmd_mode: Option<CmdMode>,
-    /// 命令栏输入缓冲。
-    pub cmd_buffer: String,
-    /// 一条临时 hint(消息 + 失效时刻),由 tick 周期清理。
-    pub hint: Option<(String, Instant)>,
+    /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
+    pub search_mode: bool,
     /// quit confirm modal 是否打开。
     pub confirm_open: bool,
 }
@@ -95,9 +88,7 @@ impl AppState {
             queue_open: false,
             queue_sel: 0,
             focus: Focus::Left,
-            cmd_mode: None,
-            cmd_buffer: String::new(),
-            hint: None,
+            search_mode: false,
             confirm_open: false,
         }
     }
