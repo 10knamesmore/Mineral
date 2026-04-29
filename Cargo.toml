@@ -1,5 +1,15 @@
 [workspace]
-members = ["mineral", "crates/*", "mineral-channel/*"]
+members = [
+    "crates/mineral",
+    "crates/mineral-cli",
+    "crates/mineral-tui",
+    "crates/mineral-model",
+    "crates/mineral-macros",
+    "crates/mineral-paths",
+    "crates/mineral-channel/core",
+    "crates/mineral-channel/mock",
+    "crates/mineral-channel/netease",
+]
 resolver = "2"
 
 [workspace.metadata]
@@ -19,12 +29,14 @@ image              = "0.25"
 isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
 lofty              = "0.22"
-mineral-macros     = { path    = "crates/mineral-macros" }
-mineral-model      = { path    = "crates/mineral-model" }
-mineral-paths      = { path    = "crates/mineral-paths" }
-mineral-channel-core    = { path = "mineral-channel/core" }
-mineral-channel-mock    = { path = "mineral-channel/mock" }
-mineral-channel-netease = { path = "mineral-channel/netease" }
+mineral-cli             = { path = "crates/mineral-cli" }
+mineral-tui             = { path = "crates/mineral-tui", default-features = false }
+mineral-macros          = { path = "crates/mineral-macros" }
+mineral-model           = { path = "crates/mineral-model" }
+mineral-paths           = { path = "crates/mineral-paths" }
+mineral-channel-core    = { path = "crates/mineral-channel/core" }
+mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
+mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 uuid               = { version = "1", features = ["v4"] }
 async-trait        = "0.1"
 thiserror          = "1"

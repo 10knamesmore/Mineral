@@ -1,7 +1,4 @@
 //! `mineral channel ...` 子命令分发。
-//!
-//! 把 `channel` namespace 下的参数分发给具体 channel crate 自己暴露的 CLI；
-//! 本模块只持有 dispatch 表，不写任何业务逻辑。
 
 use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};

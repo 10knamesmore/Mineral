@@ -1,0 +1,16 @@
+[package]
+name = "mineral"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+mock = ["mineral-tui/mock"]
+
+[dependencies]
+clap        = { workspace = true }
+color-eyre  = { workspace = true }
+mineral-cli = { workspace = true }
+mineral-tui = { workspace = true }
+
+[lints]
+workspace = true

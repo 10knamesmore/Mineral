@@ -1,7 +1,4 @@
 //! 顶层 CLI 类型与运行入口。
-//!
-//! 把命令行参数解析成 [`Args`]，再按顶层 namespace 分发到 [`crate::subcommands`]。
-//! 所有具体业务都不在这里——这里只持有 tokio runtime 与 dispatch 表。
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
