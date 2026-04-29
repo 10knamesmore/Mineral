@@ -4,6 +4,7 @@
 //! 让 binary 上层可以面向 trait 编程。
 
 use async_trait::async_trait;
+use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
@@ -20,7 +21,7 @@ pub struct NeteaseChannel {
 }
 
 impl NeteaseChannel {
-    pub fn new(config: &NeteaseConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &NeteaseConfig) -> color_eyre::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
         })
@@ -29,16 +30,16 @@ impl NeteaseChannel {
     /// 用 `MUSIC_U` cookie 字符串构造一个已登录的 channel。
     ///
     /// `music_u` 通常从浏览器 `Application → Cookies → music.163.com` 复制。
-    pub fn with_cookie(config: &NeteaseConfig, music_u: &str) -> anyhow::Result<Self> {
+    pub fn with_cookie(config: &NeteaseConfig, music_u: &str) -> color_eyre::Result<Self> {
         let jar = CookieJar::new();
         let url = "https://music.163.com".parse().unwrap();
         let cookie = Cookie::builder("MUSIC_U", music_u)
             .domain("music.163.com")
             .path("/")
             .build()
-            .map_err(|e| anyhow::anyhow!("build cookie: {e}"))?;
+            .map_err(|e| eyre!("build cookie: {e}"))?;
         jar.set(cookie, &url)
-            .map_err(|e| anyhow::anyhow!("set cookie: {e}"))?;
+            .map_err(|e| eyre!("set cookie: {e}"))?;
         Ok(Self {
             transport: Transport::from_cookie_jar(config, jar)?,
         })
@@ -51,7 +52,7 @@ impl NeteaseChannel {
     }
 }
 
-fn map_err(e: anyhow::Error) -> Error {
+fn map_err(e: color_eyre::Report) -> Error {
     Error::Other(e)
 }
 

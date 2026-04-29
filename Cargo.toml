@@ -16,7 +16,6 @@ resolver = "2"
 name = "mineral"
 
 [workspace.dependencies]
-anyhow             = "1.0"
 color-eyre         = "0.6"
 base64             = "0.22"
 config_rs          = { package = "config", version  = "0.15" }

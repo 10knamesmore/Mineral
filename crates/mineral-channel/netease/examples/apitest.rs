@@ -50,7 +50,7 @@ use mineral_model::{BitRate, MediaUrl};
 use serde_json::json;
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> color_eyre::Result<()> {
     let cookie = std::env::var("NETEASE_MUSIC_U").ok();
 
     let ch = match cookie.as_deref() {
@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?;
         if code != 200 {
-            anyhow::bail!("code={code}, body={}", truncate(&body.to_string()));
+            color_eyre::eyre::bail!("code={code}, body={}", truncate(&body.to_string()));
         }
         let n = body
             .get("result")
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?;
         if code != 200 {
-            anyhow::bail!("code={code}, body={}", truncate(&body.to_string()));
+            color_eyre::eyre::bail!("code={code}, body={}", truncate(&body.to_string()));
         }
         let n = body
             .get("banners")
@@ -225,13 +225,13 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             let _ = &mut p;
             if code != 200 {
-                anyhow::bail!("code={code}");
+                color_eyre::eyre::bail!("code={code}");
             }
             let uid = body
                 .get("account")
                 .and_then(|x| x.get("id"))
                 .and_then(|x| x.as_i64())
-                .ok_or_else(|| anyhow::anyhow!("missing account.id"))?;
+                .ok_or_else(|| color_eyre::eyre::eyre!("missing account.id"))?;
             Ok(format!("uid={uid}"))
         })
         .await;
@@ -293,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run(
     name: &str,
-    fut: impl std::future::Future<Output = anyhow::Result<String>>,
+    fut: impl std::future::Future<Output = color_eyre::Result<String>>,
 ) -> (String, std::result::Result<String, String>) {
     print!("[ ] {name} ... ");
     std::io::stdout().flush().ok();

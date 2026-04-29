@@ -12,8 +12,6 @@ compile_error!("Windows 暂不支持");
 
 use std::path::PathBuf;
 
-use anyhow::Result;
-
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 mod platform;
@@ -22,7 +20,7 @@ mod platform;
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn config_dir() -> Result<PathBuf> {
+pub fn config_dir() -> color_eyre::Result<PathBuf> {
     platform::config_dir()
 }
 
@@ -30,7 +28,7 @@ pub fn config_dir() -> Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn data_dir() -> Result<PathBuf> {
+pub fn data_dir() -> color_eyre::Result<PathBuf> {
     platform::data_dir()
 }
 
@@ -38,7 +36,7 @@ pub fn data_dir() -> Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn cache_dir() -> Result<PathBuf> {
+pub fn cache_dir() -> color_eyre::Result<PathBuf> {
     platform::cache_dir()
 }
 
@@ -46,7 +44,6 @@ pub fn cache_dir() -> Result<PathBuf> {
 mod tests {
     use std::sync::Mutex;
 
-    use anyhow::Result;
     use tempfile::TempDir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -79,12 +76,12 @@ mod tests {
         }
     }
 
-    fn fake_home() -> Result<TempDir> {
+    fn fake_home() -> color_eyre::Result<TempDir> {
         Ok(tempfile::tempdir()?)
     }
 
     #[test]
-    fn data_dir_uses_xdg_when_set() -> Result<()> {
+    fn data_dir_uses_xdg_when_set() -> color_eyre::Result<()> {
         let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = fake_home()?;
         let xdg = tmp.path().join("xdg-data");
@@ -96,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_falls_back_when_xdg_unset() -> Result<()> {
+    fn data_dir_falls_back_when_xdg_unset() -> color_eyre::Result<()> {
         let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = fake_home()?;
         let _g1 = EnvGuard::set("HOME", tmp.path());

@@ -4,11 +4,13 @@
 //! 1. 先尝试 `SongUrlV1Service`(`/weapi/song/enhance/player/url/v1`,字符串等级)
 //! 2. 失败或返回试听片段(`freeTrialInfo` 非空)再降到 `SongUrlService`(`/api/song/enhance/player/url`,数字 br)
 
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::eyre;
 use mineral_model::{
     AlbumId, AlbumRef, ArtistId, ArtistRef, BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind,
 };
 use serde_json::json;
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
 use crate::dto::song::{AlbumSongDto, SongUrlDto};
@@ -32,7 +34,7 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
         .await?;
     let songs = v
         .get("songs")
-        .ok_or_else(|| anyhow!("songs_detail response missing `songs`"))?;
+        .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
     let dtos: Vec<AlbumSongDto> = serde_json::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
@@ -137,7 +139,7 @@ async fn song_urls_legacy(
 fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<PlayUrl>> {
     let data = v
         .get("data")
-        .ok_or_else(|| anyhow!("song url response missing `data`"))?;
+        .ok_or_else(|| eyre!("song url response missing `data`"))?;
     let dtos: Vec<SongUrlDto> = serde_json::from_value(data.clone())?;
     Ok(dtos
         .into_iter()

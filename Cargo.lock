@@ -1173,8 +1173,8 @@ dependencies = [
 name = "mineral-channel-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
+ "color-eyre",
  "mineral-model",
  "serde",
  "serde_json",
@@ -1185,7 +1185,6 @@ dependencies = [
 name = "mineral-channel-mock"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "mineral-channel-core",
  "mineral-model",
@@ -1196,12 +1195,12 @@ name = "mineral-channel-netease"
 version = "0.1.0"
 dependencies = [
  "aes",
- "anyhow",
  "async-trait",
  "base64",
  "cbc",
  "cipher",
  "clap",
+ "color-eyre",
  "ecb",
  "flate2",
  "hex",
@@ -1228,8 +1227,8 @@ dependencies = [
 name = "mineral-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
+ "color-eyre",
  "mineral-channel-netease",
  "tokio",
 ]
@@ -1257,7 +1256,7 @@ dependencies = [
 name = "mineral-paths"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "color-eyre",
  "tempfile",
 ]
 

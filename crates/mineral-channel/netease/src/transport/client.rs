@@ -1,10 +1,12 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use color_eyre::eyre::{eyre, WrapErr};
 use isahc::{
     config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
 };
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::config::NeteaseConfig;
 use crate::crypto::{eapi, linuxapi, weapi};
@@ -97,7 +99,7 @@ impl Transport {
         let value = self.request_lax(spec).await?;
         let code = parse_code(&value);
         if code != 200 {
-            return Err(anyhow!(
+            return Err(eyre!(
                 "api code {code}: {}",
                 value
                     .get("message")
@@ -151,14 +153,14 @@ impl Transport {
             .header("Referer", BASE_URL)
             .header("User-Agent", ua)
             .body(body)
-            .map_err(|e| anyhow!("build request: {e}"))?;
+            .map_err(|e| eyre!("build request: {e}"))?;
 
         let mut resp = self
             .client
             .send_async(req)
             .await
-            .map_err(|e| anyhow!("send: {e}"))?;
-        let bytes = resp.bytes().await.map_err(|e| anyhow!("read body: {e}"))?;
+            .map_err(|e| eyre!("send: {e}"))?;
+        let bytes = resp.bytes().await.map_err(|e| eyre!("read body: {e}"))?;
 
         decode_response(bytes)
     }

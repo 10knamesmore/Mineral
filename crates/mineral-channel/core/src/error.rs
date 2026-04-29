@@ -34,7 +34,7 @@ pub enum Error {
 
     /// 其他兜底错误。
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    Other(#[from] color_eyre::Report),
 }
 
 /// channel 操作的标准 `Result` 别名。

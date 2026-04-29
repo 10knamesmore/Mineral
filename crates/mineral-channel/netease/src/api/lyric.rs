@@ -1,9 +1,10 @@
 //! 歌词端点(spec §4.4):合并 LRC(`/api/song/lyric`,linuxapi)和
 //! YRC(`/api/song/lyric/v1`,eapi)两次调用。
 
-use anyhow::Result;
 use mineral_model::{Lyrics, SongId};
 use serde_json::json;
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;

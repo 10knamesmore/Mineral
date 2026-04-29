@@ -1,6 +1,5 @@
 //! `mineral channel ...` 子命令分发。
 
-use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};
 use mineral_channel_netease::cli::NeteaseCli;
 
@@ -26,7 +25,7 @@ pub enum ChannelCommand {
 ///
 /// # Return:
 ///   命令执行结果。
-pub async fn run(args: ChannelArgs) -> Result<()> {
+pub async fn run(args: ChannelArgs) -> color_eyre::Result<()> {
     match args.channel {
         ChannelCommand::Netease(cli) => mineral_channel_netease::cli::run(cli).await,
     }

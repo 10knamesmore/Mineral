@@ -1,7 +1,9 @@
 //! 专辑端点。
 
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::eyre;
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, SourceKind};
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
 use crate::dto::song::AlbumSongDto;
@@ -21,7 +23,7 @@ pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result
         .await?;
     let songs = raw
         .get("songs")
-        .ok_or_else(|| anyhow!("album response missing `songs`"))?;
+        .ok_or_else(|| eyre!("album response missing `songs`"))?;
     let dtos: Vec<AlbumSongDto> = serde_json::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()

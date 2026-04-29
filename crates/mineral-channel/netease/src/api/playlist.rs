@@ -1,10 +1,12 @@
 //! 歌单端点(spec §4.6 PlaylistDetail + UserPlaylist)。
 
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::eyre;
 use mineral_model::{
     AlbumId, AlbumRef, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId, SourceKind, UserId,
 };
 use serde_json::json;
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
 use crate::dto::song::AlbumSongDto;
@@ -34,7 +36,7 @@ pub async fn songs_in_playlist(transport: &Transport, id: &PlaylistId) -> Result
     let tracks = v
         .get("playlist")
         .and_then(|x| x.get("tracks"))
-        .ok_or_else(|| anyhow!("playlist response missing playlist.tracks"))?;
+        .ok_or_else(|| eyre!("playlist response missing playlist.tracks"))?;
     let dtos: Vec<AlbumSongDto> = serde_json::from_value(tracks.clone())?;
 
     Ok(dtos
@@ -79,7 +81,7 @@ pub async fn user_playlists(transport: &Transport, uid: &UserId) -> Result<Vec<P
         .await?;
     let arr = v
         .get("playlist")
-        .ok_or_else(|| anyhow!("user_playlists missing `playlist` array"))?;
+        .ok_or_else(|| eyre!("user_playlists missing `playlist` array"))?;
 
     let mut out = Vec::new();
     if let Some(items) = arr.as_array() {

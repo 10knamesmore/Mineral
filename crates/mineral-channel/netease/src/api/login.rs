@@ -4,8 +4,10 @@
 //! - `LoginRefreshService`(`/weapi/login/token/refresh`):用 jar 里的 `MUSIC_U` 续签
 //! - `LoginQRService`(`GetKey`/`CheckQR`):二维码登录
 
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::eyre;
 use serde_json::json;
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
@@ -45,7 +47,7 @@ pub async fn login_qr_get_key(transport: &Transport) -> Result<LoginQrCode> {
     let unikey = v
         .get("unikey")
         .and_then(|x| x.as_str())
-        .ok_or_else(|| anyhow!("qrcode/unikey response missing `unikey`"))?
+        .ok_or_else(|| eyre!("qrcode/unikey response missing `unikey`"))?
         .to_owned();
     let chain_id = crate::device::generate_chain_id();
     let url = format!("http://music.163.com/login?codekey={unikey}&chainId={chain_id}",);

@@ -1,6 +1,5 @@
 use std::io::Read;
 
-use anyhow::Result;
 use flate2::read::ZlibDecoder;
 use serde_json::Value;
 
@@ -21,7 +20,7 @@ pub fn parse_code(json: &Value) -> i64 {
 }
 
 /// 把 body 字节解码成 JSON Value(尝试 zlib 解压在前)。
-pub fn decode_response(bytes: Vec<u8>) -> Result<Value> {
+pub fn decode_response(bytes: Vec<u8>) -> color_eyre::Result<Value> {
     let bytes = maybe_zlib_decode(bytes);
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(serde_json::from_slice::<Value>(&bytes)?)
 }

@@ -7,8 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use clap::{Args as ClapArgs, Subcommand};
+use color_eyre::eyre::{eyre, WrapErr};
 use isahc::http::Uri;
 use qrcode::render::unicode;
 use qrcode::QrCode;
@@ -40,13 +40,13 @@ pub enum NeteaseCommand {
 }
 
 /// 执行解析后的网易云 CLI 命令。
-pub async fn run(cli: NeteaseCli) -> Result<()> {
+pub async fn run(cli: NeteaseCli) -> color_eyre::Result<()> {
     match cli.command {
         NeteaseCommand::Login => run_login().await,
     }
 }
 
-async fn run_login() -> Result<()> {
+async fn run_login() -> color_eyre::Result<()> {
     let channel = NeteaseChannel::new(&NeteaseConfig::default())?;
     let qr = login_qr_get_key(channel.transport()).await?;
     render_qr(&qr.url)?;
@@ -63,7 +63,7 @@ async fn run_login() -> Result<()> {
         match status {
             LOGIN_STATUS_WAIT_SCAN | LOGIN_STATUS_WAIT_CONFIRM => {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => return Err(anyhow!("二维码登录已取消")),
+                    _ = tokio::signal::ctrl_c() => return Err(eyre!("二维码登录已取消")),
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                 }
             }
@@ -76,16 +76,16 @@ async fn run_login() -> Result<()> {
                 return Ok(());
             }
             LOGIN_STATUS_EXPIRED => {
-                return Err(anyhow!("二维码已过期，请重新执行登录命令"));
+                return Err(eyre!("二维码已过期，请重新执行登录命令"));
             }
             other => {
-                return Err(anyhow!("未知二维码登录状态码: {other}"));
+                return Err(eyre!("未知二维码登录状态码: {other}"));
             }
         }
     }
 }
 
-fn render_qr(url: &str) -> Result<()> {
+fn render_qr(url: &str) -> color_eyre::Result<()> {
     let code = QrCode::new(url.as_bytes()).context("生成二维码失败")?;
     let rendered = code.render::<unicode::Dense1x2>().quiet_zone(true).build();
     println!("{rendered}");
@@ -101,26 +101,26 @@ fn print_status_hint(status: i64) {
     }
 }
 
-fn extract_music_u(channel: &NeteaseChannel) -> Result<String> {
+fn extract_music_u(channel: &NeteaseChannel) -> color_eyre::Result<String> {
     let jar = channel
         .transport()
         .cookie_jar()
-        .ok_or_else(|| anyhow!("二维码登录后未拿到 cookie jar"))?;
+        .ok_or_else(|| eyre!("二维码登录后未拿到 cookie jar"))?;
     let uri: Uri = NETEASE_BASE_URL.parse().context("parse netease base uri failed")?;
     let cookie = jar
         .get_by_name(&uri, "MUSIC_U")
-        .ok_or_else(|| anyhow!("二维码登录成功，但未在 cookie jar 中找到 MUSIC_U"))?;
+        .ok_or_else(|| eyre!("二维码登录成功，但未在 cookie jar 中找到 MUSIC_U"))?;
     Ok(cookie.value().to_owned())
 }
 
-fn credential_path() -> Result<PathBuf> {
+fn credential_path() -> color_eyre::Result<PathBuf> {
     Ok(mineral_paths::data_dir()?.join(NETEASE_CREDENTIAL_FILE))
 }
 
-fn write_credential_file(path: &Path, auth: &StoredNeteaseAuth) -> Result<()> {
+fn write_credential_file(path: &Path, auth: &StoredNeteaseAuth) -> color_eyre::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow!("netease 凭证路径缺少父目录"))?;
+        .ok_or_else(|| eyre!("netease 凭证路径缺少父目录"))?;
     fs::create_dir_all(parent)
         .with_context(|| format!("create credential dir failed: {}", parent.display()))?;
     let json = serde_json::to_string_pretty(auth).context("serialize netease auth failed")?;
@@ -136,12 +136,10 @@ struct StoredNeteaseAuth {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
-
     use super::{write_credential_file, StoredNeteaseAuth};
 
     #[test]
-    fn write_credential_file_persists_json() -> Result<()> {
+    fn write_credential_file_persists_json() -> color_eyre::Result<()> {
         let base = std::env::temp_dir().join(format!("mineral-netease-cli-test-{}", std::process::id()));
         let path = base.join("netease.json");
         let auth = StoredNeteaseAuth {

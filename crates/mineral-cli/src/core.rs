@@ -1,7 +1,7 @@
 //! 顶层 CLI 类型与运行入口。
 
-use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use color_eyre::eyre::WrapErr;
 use tokio::runtime::Runtime;
 
 use crate::subcommands::channel::{self, ChannelArgs};
@@ -29,13 +29,13 @@ pub enum Command {
 ///
 /// # Return:
 ///   命令执行结果。
-pub fn run(command: Command) -> Result<()> {
-    let runtime = Runtime::new().context("create tokio runtime failed")?;
+pub fn run(command: Command) -> color_eyre::Result<()> {
+    let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
     runtime.block_on(async move { run_async(command).await })?;
     Ok(())
 }
 
-async fn run_async(command: Command) -> Result<()> {
+async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Channel(args) => channel::run(args).await,
     }

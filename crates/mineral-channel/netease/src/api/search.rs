@@ -1,10 +1,12 @@
 //! 搜索端点。
 
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::eyre;
 use mineral_model::{
     Album, AlbumId, AlbumRef, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
 use serde_json::json;
+
+type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
 
@@ -48,7 +50,7 @@ pub async fn search_songs(
     let raw = search_raw(transport, keyword, 1, offset, limit).await?;
     let result = raw
         .get("result")
-        .ok_or_else(|| anyhow!("search response missing `result`"))?;
+        .ok_or_else(|| eyre!("search response missing `result`"))?;
     let parsed: SearchSongsResult = serde_json::from_value(result.clone())?;
     Ok(parsed
         .songs
@@ -85,7 +87,7 @@ pub async fn search_albums(
     let raw = search_raw(transport, keyword, 10, offset, limit).await?;
     let result = raw
         .get("result")
-        .ok_or_else(|| anyhow!("search response missing `result`"))?;
+        .ok_or_else(|| eyre!("search response missing `result`"))?;
     let parsed: SearchAlbumsResult = serde_json::from_value(result.clone())?;
     Ok(parsed
         .albums
@@ -120,7 +122,7 @@ pub async fn search_playlists(
     let raw = search_raw(transport, keyword, 1000, offset, limit).await?;
     let result = raw
         .get("result")
-        .ok_or_else(|| anyhow!("search response missing `result`"))?;
+        .ok_or_else(|| eyre!("search response missing `result`"))?;
     let parsed: SearchPlaylistsResult = serde_json::from_value(result.clone())?;
     Ok(parsed
         .playlists
