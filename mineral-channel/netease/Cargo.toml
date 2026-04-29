@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
+mineral-paths        = { workspace = true }
 
 # 加密
 aes        = { workspace = true }
@@ -34,11 +35,15 @@ once_cell   = { workspace = true }
 rand        = { workspace = true }
 anyhow      = { workspace = true }
 thiserror   = { workspace = true }
+tokio       = { workspace = true }
+
+# CLI（`cli` 子模块用）
+clap   = { workspace = true }
+qrcode = { workspace = true }
 
 [dev-dependencies]
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
 openssl = { workspace = true }
-tokio   = { workspace = true }
 
 [lints]
 workspace = true

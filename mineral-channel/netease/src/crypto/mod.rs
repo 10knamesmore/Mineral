@@ -2,9 +2,6 @@
 //!
 //! 三个公开入口都返回 `application/x-www-form-urlencoded` 的 form body 字符串,
 //! 可以直接作为 `POST` 的 body 发出。
-//!
-//! 实现严格对照 `musicfox/netease-api-rust-spec.md` §1,自检 harness 在
-//! `tests/crypto_vectors.rs`(用 openssl 作参考实现,做 byte-for-byte 比对)。
 
 mod aes;
 pub mod constants;

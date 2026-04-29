@@ -1,7 +1,7 @@
 use super::aes::aes_ecb_pkcs7_encrypt;
 use super::constants::LINUX_API_KEY;
 
-/// LINUXAPI 加密入口(spec §1.2)。
+/// LINUXAPI 加密入口
 ///
 /// `json_text` 是 `{"method":"POST","url":"...","params":{...}}` 序列化后的文本。
 /// 输出是 `eparams=<HEX_UPPER>` 形式的 form body。

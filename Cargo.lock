@@ -1201,6 +1201,7 @@ dependencies = [
  "base64",
  "cbc",
  "cipher",
+ "clap",
  "ecb",
  "flate2",
  "hex",
@@ -1208,10 +1209,12 @@ dependencies = [
  "md-5",
  "mineral-channel-core",
  "mineral-model",
+ "mineral-paths",
  "num-bigint",
  "num-traits",
  "once_cell",
  "openssl",
+ "qrcode",
  "rand",
  "regex",
  "serde",
@@ -1227,12 +1230,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "color-eyre",
- "isahc",
  "mineral-channel-netease",
- "qrcode",
- "serde",
- "serde_json",
  "tokio",
 ]
 
@@ -1253,6 +1251,14 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "mineral-paths"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tempfile",
 ]
 
 [[package]]
@@ -1909,6 +1915,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.2",
+ "once_cell",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -24,8 +24,6 @@ pub fn generate_sdevice_id() -> String {
 }
 
 /// 生成 `_ntes_nuid` / `NMTID` 用的 16 字符随机字符串的 hex(小写)形式。
-///
-/// 等价于 spec §2.3 注释里描述的 `hex.EncodeToString([]byte(RandStringRunes(16)))`。
 pub fn generate_ntes_nuid() -> String {
     let mut rng = rand::rng();
     let mut buf = [0u8; 16];

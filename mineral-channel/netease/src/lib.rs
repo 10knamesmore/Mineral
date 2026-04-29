@@ -36,6 +36,7 @@
 
 pub mod api;
 pub mod channel;
+pub mod cli;
 pub mod config;
 pub mod crypto;
 pub mod device;
