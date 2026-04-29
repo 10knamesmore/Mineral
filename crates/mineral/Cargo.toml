@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-mock = ["mineral-tui/mock"]
+mock = ["mineral-tui/mock", "dep:mineral-channel-mock"]
 
 [dependencies]
-clap        = { workspace = true }
-color-eyre  = { workspace = true }
-mineral-cli = { workspace = true }
-mineral-tui = { workspace = true }
+clap                    = { workspace = true }
+color-eyre              = { workspace = true }
+mineral-channel-core    = { workspace = true }
+mineral-channel-mock    = { workspace = true, optional = true }
+mineral-channel-netease = { workspace = true }
+mineral-cli             = { workspace = true }
+mineral-tui             = { workspace = true }
+tokio                   = { workspace = true }
 
 [lints]
 workspace = true

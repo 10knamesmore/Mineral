@@ -3,7 +3,9 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::loader::LoadEvent;
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
@@ -13,23 +15,35 @@ use crate::view::draw;
 pub struct App {
     /// 是否退出主循环。
     pub should_quit: bool,
+
     /// 当前主题。
     pub theme: Theme,
-    /// 业务状态(视图、选中、playback、mock 数据等)。
+
+    /// 业务状态(视图、选中、playback、加载缓存等)。
     pub state: AppState,
+
     /// 上一次 tick 时间。
     pub last_tick: Instant,
+
+    /// 后台加载任务推送过来的事件流;`None` 表示未挂载(未登录或 mock fallback)。
+    loader_rx: Option<UnboundedReceiver<LoadEvent>>,
 }
 
 impl App {
-    /// 构造默认 App(Mocha mauve 主题 + mock 数据)。
+    /// 构造默认 App(Mocha mauve 主题 + 空状态)。
     pub fn new() -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
-            state: AppState::new(),
+            state: AppState::empty(),
             last_tick: Instant::now(),
+            loader_rx: None,
         }
+    }
+
+    /// 接入后台加载事件流(`mineral-tui::run` 在 channel 可用时调用)。
+    pub fn attach_loader(&mut self, rx: UnboundedReceiver<LoadEvent>) {
+        self.loader_rx = Some(rx);
     }
 
     /// 同步主事件循环:绘制 → 等事件 / tick → 处理 → 重绘。
@@ -37,6 +51,7 @@ impl App {
         let tick_rate = Duration::from_millis(250);
 
         while !self.should_quit {
+            self.drain_loader();
             tui.draw(|f| draw(f, self))?;
 
             let timeout = tick_rate.saturating_sub(self.last_tick.elapsed());
@@ -51,6 +66,15 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn drain_loader(&mut self) {
+        let Some(rx) = self.loader_rx.as_mut() else {
+            return;
+        };
+        while let Ok(event) = rx.try_recv() {
+            self.state.apply(event);
+        }
     }
 
     fn handle_event(&mut self, ev: &Event) {
@@ -279,11 +303,5 @@ impl App {
             }
             _ => {}
         }
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
     }
 }

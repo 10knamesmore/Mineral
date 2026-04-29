@@ -131,6 +131,10 @@ impl MusicChannel for MockChannel {
         Ok(self.playlists.iter().map(|p| p.data.clone()).collect())
     }
 
+    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+        Ok(self.playlists.iter().map(|p| p.data.clone()).collect())
+    }
+
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {
         Err(Error::NotSupported)
     }

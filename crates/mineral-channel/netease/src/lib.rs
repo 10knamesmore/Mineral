@@ -8,7 +8,7 @@
 //! - [`crypto`] —— WEAPI / EAPI / LINUXAPI 三种加密(纯 Rust,有自检 harness)
 //! - [`device`] —— deviceId 池、sDeviceId、ChainID 等设备指纹
 //! - [`transport`] —— HTTP 请求 dispatcher,负责 URL 改写、UA、cookie、zlib 解压
-//! - [`dto`] —— 网易原生 JSON 结构(serde)
+//! - [`wire`] —— 网易原生 JSON 结构(serde)
 //! - [`api`] —— 端点封装(逻辑层)
 //! - [`channel`] —— 把 `api/` 的方法绑到 `MusicChannel` trait
 
@@ -38,10 +38,13 @@ pub mod api;
 pub mod channel;
 pub mod cli;
 pub mod config;
+pub mod credential;
 pub mod crypto;
 pub mod device;
-pub mod dto;
 pub mod transport;
+pub mod wire;
+
+pub use credential::{load_stored, StoredNeteaseAuth};
 
 pub mod convert;
 

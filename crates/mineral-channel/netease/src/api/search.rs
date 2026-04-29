@@ -9,11 +9,10 @@ use serde_json::json;
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
-
-use crate::dto::search::{SearchAlbumsResult, SearchPlaylistsResult, SearchSongsResult};
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
+use crate::wire::search::{SearchAlbumsResult, SearchPlaylistsResult, SearchSongsResult};
 
 const PATH: &str = "/weapi/search/get";
 

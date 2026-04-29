@@ -13,11 +13,14 @@ mock = [
 [dependencies]
 color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
+mineral-channel-core = { workspace = true }
 mineral-channel-mock = { workspace = true, optional = true }
 mineral-macros       = { workspace = true }
 mineral-model        = { workspace = true }
+mineral-paths        = { workspace = true }
 ratatui              = { workspace = true }
 serde                = { workspace = true }
+tokio                = { workspace = true }
 
 [lints]
 workspace = true

@@ -19,6 +19,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
     let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
+    let placeholder = slot_placeholder(state, theme);
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -44,11 +45,15 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     ])
     .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row<'_>> = tracks
-        .iter()
-        .enumerate()
-        .map(|(i, sv)| build_row(i, sv, state, theme))
-        .collect();
+    let rows: Vec<Row<'_>> = if let Some(row) = placeholder {
+        vec![row]
+    } else {
+        tracks
+            .iter()
+            .enumerate()
+            .map(|(i, sv)| build_row(i, sv, state, theme))
+            .collect()
+    };
 
     let widths = [
         Constraint::Length(4),
@@ -131,4 +136,17 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     } else {
         Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
     }
+}
+
+/// 选中歌单尚未拿到 tracks 时返回 loading 行,已到位返回 `None`(走正常 tracks 渲染)。
+fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
+    if state.current_tracks_slot().is_some() {
+        return None;
+    }
+    state.selected_playlist().map(|_| {
+        Row::new(vec![Cell::from(Span::styled(
+            "loading…",
+            Style::new().fg(theme.overlay),
+        ))])
+    })
 }

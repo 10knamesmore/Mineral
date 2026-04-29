@@ -6,10 +6,10 @@ use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, Source
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
-use crate::dto::song::AlbumSongDto;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
+use crate::wire::song::AlbumSong;
 
 pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result<Vec<Song>> {
     let path = format!("/weapi/v1/album/{}", album_id.as_str());
@@ -24,7 +24,7 @@ pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result
     let songs = raw
         .get("songs")
         .ok_or_else(|| eyre!("album response missing `songs`"))?;
-    let dtos: Vec<AlbumSongDto> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {

@@ -33,7 +33,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     let rows: Vec<Row<'_>> = state
         .filtered_playlists()
         .into_iter()
-        .map(|p| build_row(p, theme))
+        .map(|p| build_row(p, state, theme))
         .collect();
 
     let widths = [
@@ -59,9 +59,14 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn build_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Row<'a> {
-    let total_min = p.total_duration_ms() / 60_000;
-    let len_label = format!("{}h {:02}m", total_min / 60, total_min % 60);
+fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a> {
+    let total_ms = state.total_duration_ms_of(&p.data.id);
+    let len_label = if total_ms == 0 {
+        String::from("—")
+    } else {
+        let total_min = total_ms / 60_000;
+        format!("{}h {:02}m", total_min / 60, total_min % 60)
+    };
     let count_label = format!("{} items", p.data.track_count);
 
     Row::new(vec![

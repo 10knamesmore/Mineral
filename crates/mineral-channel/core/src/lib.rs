@@ -63,8 +63,23 @@ pub trait MusicChannel: Send + Sync {
     async fn login(&self, _credential: Credential) -> Result<()> {
         Err(Error::NotSupported)
     }
-    /// 拉取用户的歌单列表(需要登录,可选)。
+
+    /// 拉取指定 uid 用户的歌单列表(可选)。
+    ///
+    /// 用于"看其他人的歌单"等需要显式 uid 的场景;TUI 默认走 [`Self::my_playlists`]。
     async fn user_playlists(&self, _uid: &UserId) -> Result<Vec<Playlist>> {
+        Err(Error::NotSupported)
+    }
+
+    /// 拉取**该 channel 实例自身上下文中**的"我的歌单"。
+    ///
+    /// 这是 TUI 跨 channel 平等取数的入口:
+    /// - 网易云:实例内部已绑定登录用户 uid,内部转发给 [`Self::user_playlists`]。
+    /// - 本地:遍历配置里的扫描根。
+    /// - 没有"用户"概念或未登录时:返回 [`Error::NotSupported`]。
+    ///
+    /// TUI 看到 `NotSupported` 视为该 channel 不贡献歌单,正常继续从其他 channel 拉。
+    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
         Err(Error::NotSupported)
     }
 }

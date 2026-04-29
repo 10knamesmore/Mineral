@@ -8,11 +8,12 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::components::cover;
+use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::PlaylistView;
 
 /// 渲染歌单详情(right pane)到 `area`。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) {
+pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, state: &AppState, theme: &Theme) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -33,8 +34,13 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, theme: &Theme) 
 
     cover::render(frame, cover_area, &p.data.name, theme);
 
-    let total_min = p.total_duration_ms() / 60_000;
-    let len_label = format!("{}h {:02}m", total_min / 60, total_min % 60);
+    let total_ms = state.total_duration_ms_of(&p.data.id);
+    let len_label = if total_ms == 0 {
+        String::from("—")
+    } else {
+        let total_min = total_ms / 60_000;
+        format!("{}h {:02}m", total_min / 60, total_min % 60)
+    };
 
     let kv = vec![
         Line::from(vec![

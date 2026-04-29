@@ -13,12 +13,12 @@ use serde_json::json;
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
-use crate::dto::song::{AlbumSongDto, SongUrlDto};
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
+use crate::wire::song::{AlbumSong, SongUrl};
 
-/// 详情:`/weapi/v3/song/detail`。返回与 album.rs 一致的 `AlbumSongDto` 形态。
+/// 详情:`/weapi/v3/song/detail`。返回与 album.rs 一致的 `wire::song::AlbumSong` 形态。
 pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<Song>> {
     let c: Vec<serde_json::Value> = ids.iter().map(|i| json!({ "id": i.as_str() })).collect();
     let mut p = serde_json::Map::new();
@@ -35,7 +35,7 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
     let songs = v
         .get("songs")
         .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
-    let dtos: Vec<AlbumSongDto> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {
@@ -140,7 +140,7 @@ fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<Pl
     let data = v
         .get("data")
         .ok_or_else(|| eyre!("song url response missing `data`"))?;
-    let dtos: Vec<SongUrlDto> = serde_json::from_value(data.clone())?;
+    let dtos: Vec<SongUrl> = serde_json::from_value(data.clone())?;
     Ok(dtos
         .into_iter()
         .filter_map(|d| {

@@ -9,14 +9,14 @@ use serde_json::json;
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
-use crate::dto::song::AlbumSongDto;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
+use crate::wire::song::AlbumSong;
 
 /// 歌单内全部歌曲。
 ///
-/// 走 `/api/v6/playlist/detail`(linuxapi);响应里 `playlist.tracks` 是 `AlbumSongDto` 形态。
+/// 走 `/api/v6/playlist/detail`(linuxapi);响应里 `playlist.tracks` 是 `wire::song::AlbumSong` 形态。
 pub async fn songs_in_playlist(transport: &Transport, id: &PlaylistId) -> Result<Vec<Song>> {
     let mut p = serde_json::Map::new();
     p.insert("id".into(), json!(id.as_str()));
@@ -37,7 +37,7 @@ pub async fn songs_in_playlist(transport: &Transport, id: &PlaylistId) -> Result
         .get("playlist")
         .and_then(|x| x.get("tracks"))
         .ok_or_else(|| eyre!("playlist response missing playlist.tracks"))?;
-    let dtos: Vec<AlbumSongDto> = serde_json::from_value(tracks.clone())?;
+    let dtos: Vec<AlbumSong> = serde_json::from_value(tracks.clone())?;
 
     Ok(dtos
         .into_iter()

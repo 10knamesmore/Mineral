@@ -18,21 +18,52 @@ use crate::transport::Transport;
 
 pub struct NeteaseChannel {
     transport: Transport,
+
+    /// 当前实例绑定的登录用户 uid;`None` 时 `my_playlists` 返回 `NotSupported`。
+    user_id: Option<UserId>,
 }
 
 impl NeteaseChannel {
     pub fn new(config: &NeteaseConfig) -> color_eyre::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
+            user_id: None,
         })
     }
 
-    /// 用 `MUSIC_U` cookie 字符串构造一个已登录的 channel。
+    /// 仅用 `MUSIC_U` cookie 构造 channel,不绑 uid。
     ///
     /// `music_u` 通常从浏览器 `Application → Cookies → music.163.com` 复制。
+    /// 这种 channel 能跑 search / 详情类端点,但 [`MusicChannel::my_playlists`]
+    /// 因为不知道 uid 会返回 [`mineral_channel_core::Error::NotSupported`];
+    /// 同时绑 uid 的入口走 [`Self::with_credential`]。
     pub fn with_cookie(config: &NeteaseConfig, music_u: &str) -> color_eyre::Result<Self> {
+        Self::build(config, music_u, None)
+    }
+
+    /// 同时注入 `MUSIC_U` 与登录用户 uid,得到一个有「我的歌单」上下文的 channel。
+    ///
+    /// # Params:
+    ///   - `config`: HTTP 客户端配置
+    ///   - `music_u`: 网易云核心登录 cookie 值
+    ///   - `user_id`: 登录用户 uid(`my_playlists` 内部转发给 `user_playlists`)
+    pub fn with_credential(
+        config: &NeteaseConfig,
+        music_u: &str,
+        user_id: UserId,
+    ) -> color_eyre::Result<Self> {
+        Self::build(config, music_u, Some(user_id))
+    }
+
+    fn build(
+        config: &NeteaseConfig,
+        music_u: &str,
+        user_id: Option<UserId>,
+    ) -> color_eyre::Result<Self> {
         let jar = CookieJar::new();
-        let url = "https://music.163.com".parse().unwrap();
+        let url = "https://music.163.com"
+            .parse()
+            .map_err(|e| eyre!("parse netease base uri: {e}"))?;
         let cookie = Cookie::builder("MUSIC_U", music_u)
             .domain("music.163.com")
             .path("/")
@@ -42,6 +73,7 @@ impl NeteaseChannel {
             .map_err(|e| eyre!("set cookie: {e}"))?;
         Ok(Self {
             transport: Transport::from_cookie_jar(config, jar)?,
+            user_id,
         })
     }
 
@@ -128,5 +160,14 @@ impl MusicChannel for NeteaseChannel {
         api::playlist::user_playlists(&self.transport, uid)
             .await
             .map_err(map_err)
+    }
+
+    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+        match self.user_id.as_ref() {
+            Some(uid) => api::playlist::user_playlists(&self.transport, uid)
+                .await
+                .map_err(map_err),
+            None => Err(Error::NotSupported),
+        }
     }
 }

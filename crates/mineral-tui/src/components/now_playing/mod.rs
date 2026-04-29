@@ -17,7 +17,7 @@ pub mod track_detail;
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     match state.view {
         View::Playlists => match state.selected_playlist() {
-            Some(p) => playlist_detail::draw(frame, area, p, theme),
+            Some(p) => playlist_detail::draw(frame, area, p, state, theme),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {

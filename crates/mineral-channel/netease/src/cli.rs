@@ -3,8 +3,6 @@
 //! 顶层 [`mineral-cli`] 通过 [`NeteaseCli`] 把 `mineral channel netease ...` 这一支
 //! 整体转发到这里，具体的登录流程、二维码渲染、凭证写入都在本模块内闭环。
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Subcommand};
@@ -12,13 +10,13 @@ use color_eyre::eyre::{eyre, WrapErr};
 use isahc::http::Uri;
 use qrcode::render::unicode;
 use qrcode::QrCode;
-use serde::{Deserialize, Serialize};
 
 use crate::api::login::{login_qr_check, login_qr_get_key};
+use crate::api::user::account_uid;
+use crate::credential::{save, StoredNeteaseAuth};
 use crate::{NeteaseChannel, NeteaseConfig};
 
 const NETEASE_BASE_URL: &str = "https://music.163.com";
-const NETEASE_CREDENTIAL_FILE: &str = "netease.json";
 const LOGIN_STATUS_WAIT_SCAN: i64 = 801;
 const LOGIN_STATUS_WAIT_CONFIRM: i64 = 802;
 const LOGIN_STATUS_SUCCESS: i64 = 803;
@@ -69,9 +67,11 @@ async fn run_login() -> color_eyre::Result<()> {
             }
             LOGIN_STATUS_SUCCESS => {
                 let music_u = extract_music_u(&channel)?;
-                let auth = StoredNeteaseAuth { music_u };
-                let path = credential_path()?;
-                write_credential_file(&path, &auth)?;
+                let user_id = account_uid(channel.transport())
+                    .await
+                    .context("登录成功但未能拉到 userId")?;
+                let auth = StoredNeteaseAuth { music_u, user_id };
+                let path = save(&auth)?;
                 println!("登录成功，凭证已写入 {}", path.display());
                 return Ok(());
             }
@@ -113,48 +113,4 @@ fn extract_music_u(channel: &NeteaseChannel) -> color_eyre::Result<String> {
         .get_by_name(&uri, "MUSIC_U")
         .ok_or_else(|| eyre!("二维码登录成功，但未在 cookie jar 中找到 MUSIC_U"))?;
     Ok(cookie.value().to_owned())
-}
-
-fn credential_path() -> color_eyre::Result<PathBuf> {
-    Ok(mineral_paths::data_dir()?.join(NETEASE_CREDENTIAL_FILE))
-}
-
-fn write_credential_file(path: &Path, auth: &StoredNeteaseAuth) -> color_eyre::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("netease 凭证路径缺少父目录"))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create credential dir failed: {}", parent.display()))?;
-    let json = serde_json::to_string_pretty(auth).context("serialize netease auth failed")?;
-    fs::write(path, json)
-        .with_context(|| format!("write netease auth failed: {}", path.display()))?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredNeteaseAuth {
-    music_u: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{write_credential_file, StoredNeteaseAuth};
-
-    #[test]
-    fn write_credential_file_persists_json() -> color_eyre::Result<()> {
-        let base =
-            std::env::temp_dir().join(format!("mineral-netease-cli-test-{}", std::process::id()));
-        let path = base.join("netease.json");
-        let auth = StoredNeteaseAuth {
-            music_u: String::from("abc"),
-        };
-
-        write_credential_file(&path, &auth)?;
-
-        let raw = std::fs::read_to_string(&path)?;
-        assert!(raw.contains("\"music_u\": \"abc\""));
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir_all(&base);
-        Ok(())
-    }
 }
