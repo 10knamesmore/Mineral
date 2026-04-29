@@ -65,7 +65,10 @@ fn build_row<'a>(p: &'a PlaylistView, theme: &Theme) -> Row<'a> {
     let count_label = format!("{} items", p.data.track_count);
 
     Row::new(vec![
-        Cell::from(Span::styled(p.data.name.clone(), Style::new().fg(theme.text))),
+        Cell::from(Span::styled(
+            p.data.name.clone(),
+            Style::new().fg(theme.text),
+        )),
         Cell::from(Span::styled(
             channel_label(p.data.source),
             channel_style(p.data.source, theme),

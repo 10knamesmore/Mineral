@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use color_eyre::eyre::eyre;
 
 fn home_dir() -> color_eyre::Result<PathBuf> {
-    let h = std::env::var_os("HOME")
-        .ok_or_else(|| eyre!("HOME 未设置，无法确定 mineral 目录"))?;
+    let h = std::env::var_os("HOME").ok_or_else(|| eyre!("HOME 未设置，无法确定 mineral 目录"))?;
     Ok(PathBuf::from(h))
 }
 

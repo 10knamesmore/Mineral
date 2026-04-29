@@ -106,7 +106,9 @@ fn extract_music_u(channel: &NeteaseChannel) -> color_eyre::Result<String> {
         .transport()
         .cookie_jar()
         .ok_or_else(|| eyre!("二维码登录后未拿到 cookie jar"))?;
-    let uri: Uri = NETEASE_BASE_URL.parse().context("parse netease base uri failed")?;
+    let uri: Uri = NETEASE_BASE_URL
+        .parse()
+        .context("parse netease base uri failed")?;
     let cookie = jar
         .get_by_name(&uri, "MUSIC_U")
         .ok_or_else(|| eyre!("二维码登录成功，但未在 cookie jar 中找到 MUSIC_U"))?;
@@ -140,7 +142,8 @@ mod tests {
 
     #[test]
     fn write_credential_file_persists_json() -> color_eyre::Result<()> {
-        let base = std::env::temp_dir().join(format!("mineral-netease-cli-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mineral-netease-cli-test-{}", std::process::id()));
         let path = base.join("netease.json");
         let auth = StoredNeteaseAuth {
             music_u: String::from("abc"),

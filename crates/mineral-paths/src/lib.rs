@@ -1,11 +1,4 @@
 //! Mineral 跨平台路径解析。
-//!
-//! 仅暴露三个根目录：[`config_dir`] / [`data_dir`] / [`cache_dir`]，按 XDG 语义。
-//! 各个具体模块（如 channel 凭证）自行在这三个根之上 join 自己的相对路径——本 crate
-//! 不耦合任何业务命名。
-//!
-//! 实现按 OS 分文件（`linux.rs` / `macos.rs`），目前两个平台都走 XDG，但保留 dispatch
-//! 结构以便将来分叉。Windows 在编译期被拒绝。
 
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
@@ -82,7 +75,9 @@ mod tests {
 
     #[test]
     fn data_dir_uses_xdg_when_set() -> color_eyre::Result<()> {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = fake_home()?;
         let xdg = tmp.path().join("xdg-data");
         let _g1 = EnvGuard::set("HOME", tmp.path());
@@ -94,7 +89,9 @@ mod tests {
 
     #[test]
     fn data_dir_falls_back_when_xdg_unset() -> color_eyre::Result<()> {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = fake_home()?;
         let _g1 = EnvGuard::set("HOME", tmp.path());
         let _g2 = EnvGuard::unset("XDG_DATA_HOME");
