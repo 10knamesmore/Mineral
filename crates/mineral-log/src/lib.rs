@@ -1,4 +1,4 @@
-//! 文件日志:append 到 `<cache_dir>/mineral.log`。
+//! Mineral 文件日志:append 到 `<cache_dir>/mineral.log`。
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};

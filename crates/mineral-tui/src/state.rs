@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use mineral_model::{PlaylistId, Song};
+use mineral_task::TaskEvent;
 
 use crate::components::spectrum::SpectrumState;
-use crate::loader::LoadEvent;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
 
@@ -109,26 +109,27 @@ impl AppState {
         }
     }
 
-    /// 把后台事件应用到状态。
-    pub fn apply(&mut self, event: LoadEvent) {
+    /// 把任务事件应用到状态(只更新 UI 数据,fan-out 副作用由 [`crate::app::App`] 负责)。
+    pub fn apply(&mut self, event: &TaskEvent) {
         match event {
-            LoadEvent::PlaylistsBatch(items) => {
+            TaskEvent::PlaylistsFetched { playlists, .. } => {
                 self.playlists
-                    .extend(items.into_iter().map(|data| PlaylistView { data }));
+                    .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
                 if self.sel_playlist >= self.playlists.len() {
                     self.sel_playlist = 0;
                 }
             }
-            LoadEvent::PlaylistTracks { id, tracks } => {
+            TaskEvent::PlaylistTracksFetched { id, tracks } => {
                 let decorated = tracks
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|data| SongView {
                         data,
                         loved: false,
                         plays: 0,
                     })
                     .collect();
-                self.tracks_cache.insert(id, decorated);
+                self.tracks_cache.insert(id.clone(), decorated);
             }
         }
     }

@@ -4,10 +4,8 @@
 compile_error!("Windows 暂不支持");
 
 mod app;
-mod applog;
 mod components;
 mod layout;
-mod loader;
 mod playback;
 mod state;
 mod theme;
@@ -18,25 +16,38 @@ mod view_model;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
+use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
 
 use app::App;
-use loader::spawn_initial_load;
 use tui::Tui;
 
 /// 启动 TUI。
 ///
 /// # Params:
-///   - `channels`: 已构造好的所有音乐源。TUI 平等对待,逐个调用
-///     `MusicChannel::my_playlists` 拉取贡献。空 vec 也合法(纯 UI 演示)。
+///   - `channels`: 已构造好的所有音乐源。TUI 平等对待,扔给 [`Scheduler`] 后
+///     scheduler 会逐个 channel 拉 `my_playlists`。空 vec 也合法(纯 UI 演示)。
 ///
 /// # Return:
 ///   主循环正常退出返回 `Ok(())`;终端 raw mode / 渲染失败返回 `Err`。
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
-    let mut app = App::new();
-    app.attach_loader(spawn_initial_load(channels));
+    let scheduler = Scheduler::new(&channels);
+    submit_initial_loads(&scheduler, &channels);
+
+    let mut app = App::new(scheduler);
     let mut tui = Tui::new()?;
     tui.enter()?;
     let result = app.run(&mut tui);
     tui.exit()?;
     result
+}
+
+fn submit_initial_loads(scheduler: &Scheduler, channels: &[Arc<dyn MusicChannel>]) {
+    for ch in channels {
+        scheduler.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
+                source: ch.source(),
+            }),
+            Priority::User,
+        );
+    }
 }

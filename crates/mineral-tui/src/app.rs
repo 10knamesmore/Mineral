@@ -3,13 +3,16 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use tokio::sync::mpsc::UnboundedReceiver;
+use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind};
 
-use crate::loader::LoadEvent;
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
 use crate::view::draw;
+
+/// 启动期前 N 个歌单走 [`Priority::User`],之后走 [`Priority::Background`]——
+/// "可见区域优先"的 hack 实现(终端再高也到不了 64 行)。
+const VISIBLE_HINT: usize = 64;
 
 /// 应用顶层状态。
 pub struct App {
@@ -25,25 +28,23 @@ pub struct App {
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
-    /// 后台加载任务推送过来的事件流;`None` 表示未挂载(未登录或 mock fallback)。
-    loader_rx: Option<UnboundedReceiver<LoadEvent>>,
+    /// 任务调度器;UI 通过它提交 / 取消任务、拉事件。
+    scheduler: Scheduler,
 }
 
 impl App {
-    /// 构造默认 App(Mocha mauve 主题 + 空状态)。
-    pub fn new() -> Self {
+    /// 构造 App。
+    ///
+    /// # Params:
+    ///   - `scheduler`: 已构造的调度器,UI 持有共享引用
+    pub fn new(scheduler: Scheduler) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
             state: AppState::empty(),
             last_tick: Instant::now(),
-            loader_rx: None,
+            scheduler,
         }
-    }
-
-    /// 接入后台加载事件流(`mineral-tui::run` 在 channel 可用时调用)。
-    pub fn attach_loader(&mut self, rx: UnboundedReceiver<LoadEvent>) {
-        self.loader_rx = Some(rx);
     }
 
     /// 同步主事件循环:绘制 → 等事件 / tick → 处理 → 重绘。
@@ -51,7 +52,7 @@ impl App {
         let tick_rate = Duration::from_millis(250);
 
         while !self.should_quit {
-            self.drain_loader();
+            self.drain_task_events();
             tui.draw(|f| draw(f, self))?;
 
             let timeout = tick_rate.saturating_sub(self.last_tick.elapsed());
@@ -68,12 +69,34 @@ impl App {
         Ok(())
     }
 
-    fn drain_loader(&mut self) {
-        let Some(rx) = self.loader_rx.as_mut() else {
-            return;
-        };
-        while let Ok(event) = rx.try_recv() {
-            self.state.apply(event);
+    fn drain_task_events(&mut self) {
+        let events = self.scheduler.drain_events();
+        for ev in &events {
+            self.state.apply(ev);
+            if let TaskEvent::PlaylistsFetched { playlists, .. } = ev {
+                self.fanout_playlist_tracks(playlists);
+            }
+        }
+    }
+
+    /// 收到歌单批次后,逐条提交 `PlaylistTracks` 任务。前 [`VISIBLE_HINT`] 条
+    /// 用 User 优先级,余下用 Background;dedup 在 scheduler 内自动处理。
+    fn fanout_playlist_tracks(&self, playlists: &[mineral_model::Playlist]) {
+        let already_loaded = self.state.playlists.len().saturating_sub(playlists.len());
+        for (offset, p) in playlists.iter().enumerate() {
+            let idx = already_loaded + offset;
+            let priority = if idx < VISIBLE_HINT {
+                Priority::User
+            } else {
+                Priority::Background
+            };
+            self.scheduler.submit(
+                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
+                    source: p.source,
+                    id: p.id.clone(),
+                }),
+                priority,
+            );
         }
     }
 

@@ -2,6 +2,8 @@
 members = [
     "crates/mineral",
     "crates/mineral-cli",
+    "crates/mineral-log",
+    "crates/mineral-task",
     "crates/mineral-tui",
     "crates/mineral-model",
     "crates/mineral-macros",
@@ -29,6 +31,8 @@ isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
 lofty              = "0.22"
 mineral-cli             = { path = "crates/mineral-cli" }
+mineral-log             = { path = "crates/mineral-log" }
+mineral-task            = { path = "crates/mineral-task" }
 mineral-tui             = { path = "crates/mineral-tui", default-features = false }
 mineral-macros          = { path = "crates/mineral-macros" }
 mineral-model           = { path = "crates/mineral-model" }
@@ -64,6 +68,8 @@ strum              = "0.27"
 strum_macros       = "0.27"
 time               = "0.3"
 tokio              = { version = "1.45.1", features = ["full"] }
+tokio-util         = { version = "0.7" }
+parking_lot       = "0.12"
 tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }
