@@ -13,6 +13,7 @@ mineral-channel-core    = { workspace = true }
 mineral-channel-mock    = { workspace = true, optional = true }
 mineral-channel-netease = { workspace = true }
 mineral-cli             = { workspace = true }
+mineral-log             = { workspace = true }
 mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 

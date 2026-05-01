@@ -73,10 +73,7 @@ impl ChannelFetchLane {
     /// channel 没注册时,job 直接以 `Failed` 结束(目标 channel 不可达)。
     pub fn dispatch(&self, source: SourceKind, priority: Priority, job: Job) {
         let Some(senders) = self.senders.get(&source) else {
-            mineral_log::warn(
-                &format!("ChannelFetch/{source:?}"),
-                "no channel registered for this source",
-            );
+            mineral_log::warn!(target: "channel_fetch", ?source, "no channel registered");
             let _ = job.done_tx.send(TaskOutcome::Failed);
             return;
         };
@@ -186,9 +183,11 @@ async fn execute(
                 TaskOutcome::Ok
             }
             Err(e) => {
-                mineral_log::warn(
-                    &format!("ChannelFetch/{source:?}/my_playlists"),
-                    &e.to_string(),
+                mineral_log::warn!(
+                    target: "channel_fetch",
+                    ?source,
+                    op = "my_playlists",
+                    "{e}"
                 );
                 TaskOutcome::Failed
             }
@@ -203,9 +202,12 @@ async fn execute(
                     TaskOutcome::Ok
                 }
                 Err(e) => {
-                    mineral_log::warn(
-                        &format!("ChannelFetch/{source:?}/songs_in_playlist:{}", id.as_str()),
-                        &e.to_string(),
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        ?source,
+                        op = "songs_in_playlist",
+                        playlist_id = id.as_str(),
+                        "{e}"
                     );
                     TaskOutcome::Failed
                 }
@@ -223,17 +225,23 @@ async fn execute(
                         TaskOutcome::Ok
                     }
                     None => {
-                        mineral_log::warn(
-                            &format!("ChannelFetch/{source:?}/song_url:{}", song_id.as_str()),
-                            "channel returned empty url list",
+                        mineral_log::warn!(
+                            target: "channel_fetch",
+                            ?source,
+                            op = "song_url",
+                            song_id = song_id.as_str(),
+                            "channel returned empty url list"
                         );
                         TaskOutcome::Failed
                     }
                 },
                 Err(e) => {
-                    mineral_log::warn(
-                        &format!("ChannelFetch/{source:?}/song_url:{}", song_id.as_str()),
-                        &e.to_string(),
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        ?source,
+                        op = "song_url",
+                        song_id = song_id.as_str(),
+                        "{e}"
                     );
                     TaskOutcome::Failed
                 }

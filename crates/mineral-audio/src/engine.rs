@@ -34,7 +34,7 @@ pub(crate) fn run(
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
 ) {
     if let Err(e) = engine_main(cmd_rx, snapshot, ready_tx) {
-        mineral_log::warn("audio/engine", &format!("exited: {e:?}"));
+        mineral_log::warn!(target: "audio_engine", "exited: {e:?}");
     }
 }
 
@@ -90,7 +90,7 @@ fn engine_main(
                     }
                 }
                 Err(e) => {
-                    mineral_log::warn("audio/engine", &format!("command error: {e:?}"));
+                    mineral_log::warn!(target: "audio_engine", "command error: {e:?}");
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}

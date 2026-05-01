@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-color-eyre    = { workspace = true }
 mineral-paths = { workspace = true }
+
+color-eyre         = { workspace = true }
+tracing            = { workspace = true }
+tracing-appender   = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

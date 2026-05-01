@@ -11,6 +11,8 @@ use tokio::runtime::Runtime;
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    // _log_guard 必须持到 main 返回:drop 它会停后台 flush 线程,后续日志丢失。
+    let _log_guard = mineral_log::init().wrap_err("init log")?;
 
     let args = Args::parse();
     if let Some(command) = args.command {
