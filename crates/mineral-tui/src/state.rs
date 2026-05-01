@@ -131,6 +131,8 @@ impl AppState {
                     .collect();
                 self.tracks_cache.insert(id.clone(), decorated);
             }
+            // 由 App 直接 forward 给 audio,state 不存 url。
+            TaskEvent::PlayUrlReady { .. } => {}
         }
     }
 

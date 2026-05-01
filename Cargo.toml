@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/mineral",
+    "crates/mineral-audio",
     "crates/mineral-cli",
     "crates/mineral-log",
     "crates/mineral-task",
@@ -30,6 +31,7 @@ image              = "0.25"
 isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
 lofty              = "0.22"
+mineral-audio           = { path = "crates/mineral-audio" }
 mineral-cli             = { path = "crates/mineral-cli" }
 mineral-log             = { path = "crates/mineral-log" }
 mineral-task            = { path = "crates/mineral-task" }
@@ -58,7 +60,8 @@ openssl            = "0.10"
 rand               = "0.9"
 ratatui            = "0.29"
 ratatui-image      = "8.0"
-rodio              = "0.20"
+rodio              = { version = "0.20", default-features = false, features = ["symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }
+stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
 clap               = { version = "4.5", features = ["derive"] }
 qrcode             = "0.14"
 serde              = { version = "1.0", features    = ["derive"] }

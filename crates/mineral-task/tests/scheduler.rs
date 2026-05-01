@@ -5,7 +5,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mineral_channel_core::{Error, MusicChannel, Page, Result};
 use mineral_model::{
-    Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind,
+    Album, AlbumId, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId,
+    SourceKind,
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind, TaskOutcome};
 use tokio::sync::Semaphore;
@@ -71,8 +72,22 @@ impl MusicChannel for FakeChannel {
         self.maybe_wait().await;
         Ok(Vec::new())
     }
-    async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> Result<Vec<PlayUrl>> {
-        Err(Error::NotSupported)
+    async fn song_urls(&self, ids: &[SongId], _q: BitRate) -> Result<Vec<PlayUrl>> {
+        self.maybe_wait().await;
+        let id = ids
+            .first()
+            .cloned()
+            .ok_or(Error::Other(color_eyre::eyre::eyre!("empty ids")))?;
+        Ok(vec![PlayUrl {
+            source: SourceKind::Netease,
+            song_id: id,
+            url: MediaUrl::remote("https://example.com/a.mp3")
+                .map_err(|e| Error::Other(color_eyre::eyre::eyre!("{e}")))?,
+            bitrate_bps: 320_000,
+            quality: BitRate::Higher,
+            size: 0,
+            format: String::from("mp3"),
+        }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         Err(Error::NotSupported)
@@ -93,6 +108,13 @@ fn playlist_tracks_kind() -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
         source: SourceKind::Netease,
         id: PlaylistId::new("p1"),
+    })
+}
+
+fn song_url_kind(song: &str) -> TaskKind {
+    TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+        source: SourceKind::Netease,
+        song_id: SongId::new(song),
     })
 }
 
@@ -162,5 +184,35 @@ async fn escalate_replaces_background() -> color_eyre::Result<()> {
 
     gate.add_permits(1);
     assert_eq!(h_user.done().await, TaskOutcome::Ok);
+    Ok(())
+}
+
+#[tokio::test]
+async fn song_url_emits_play_url_ready() -> color_eyre::Result<()> {
+    let sched = Scheduler::new(&channels(None));
+    let h = sched.submit(song_url_kind("s1"), Priority::User);
+    assert_eq!(h.done().await, TaskOutcome::Ok);
+
+    let evs = sched.drain_events();
+    let found = evs.iter().any(|e| {
+        matches!(
+            e,
+            TaskEvent::PlayUrlReady { song_id, .. } if song_id.as_str() == "s1"
+        )
+    });
+    assert!(found, "expected PlayUrlReady, got {evs:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn song_url_dedup_returns_same_handle() -> color_eyre::Result<()> {
+    let gate = Arc::new(Semaphore::new(0));
+    let sched = Scheduler::new(&channels(Some(Arc::clone(&gate))));
+    let h1 = sched.submit(song_url_kind("s2"), Priority::User);
+    let h2 = sched.submit(song_url_kind("s2"), Priority::User);
+    assert_eq!(h1.id, h2.id);
+
+    gate.add_permits(1);
+    assert_eq!(h1.done().await, TaskOutcome::Ok);
     Ok(())
 }

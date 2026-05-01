@@ -1,6 +1,6 @@
 //! 任务种类与 dedup 键。
 
-use mineral_model::{PlaylistId, SourceKind};
+use mineral_model::{PlaylistId, SongId, SourceKind};
 
 use crate::lane::Lane;
 
@@ -45,6 +45,15 @@ pub enum ChannelFetchKind {
         /// 歌单 id。
         id: PlaylistId,
     },
+
+    /// 解析某首歌在指定 channel 下的播放 URL(用于 PlayPrep)。
+    SongUrl {
+        /// 目标 channel。
+        source: SourceKind,
+
+        /// 歌曲 id。
+        song_id: SongId,
+    },
 }
 
 impl ChannelFetchKind {
@@ -54,13 +63,18 @@ impl ChannelFetchKind {
             Self::PlaylistTracks { source, id } => {
                 format!("{source:?}:playlist_tracks:{}", id.as_str())
             }
+            Self::SongUrl { source, song_id } => {
+                format!("{source:?}:song_url:{}", song_id.as_str())
+            }
         }
     }
 
     /// 该任务针对的 channel(给 lane 路由 worker 用)。
     pub fn source(&self) -> SourceKind {
         match self {
-            Self::MyPlaylists { source } | Self::PlaylistTracks { source, .. } => *source,
+            Self::MyPlaylists { source }
+            | Self::PlaylistTracks { source, .. }
+            | Self::SongUrl { source, .. } => *source,
         }
     }
 }

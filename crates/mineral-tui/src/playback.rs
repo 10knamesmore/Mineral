@@ -1,10 +1,6 @@
-//! 播放状态机(mock,无真实音频) — 用 tick 推进 [`Playback::position_ms`]。
-//!
-//! 全部用整数算术(`u64` ms / `u8` 0..=100 vol),避开 `as` / 浮点精度问题,
-//! 渲染层把整数换成 `f64` ratio 喂 ratatui Gauge / 自绘进度条。
+//! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
-use std::time::Duration;
-
+use mineral_audio::AudioSnapshot;
 use mineral_model::Song;
 
 /// 播放循环模式。
@@ -53,7 +49,7 @@ impl PlayMode {
     }
 }
 
-/// 播放状态
+/// 播放视图模型;真值在 audio engine,这里只缓存 UI 当帧需要的字段。
 #[derive(Clone, Debug)]
 pub struct Playback {
     /// 当前曲目(没有就播不出来)。
@@ -80,7 +76,8 @@ impl Playback {
         }
     }
 
-    /// 当前曲目时长(ms),没有 track 时返回 0。
+    /// 当前曲目时长(ms),没有 track 时返回 0。优先取 song 元数据,因为 decoder
+    /// 探出 duration 比 song 元数据慢一帧、且部分容器探不出来。
     pub fn duration_ms(&self) -> u64 {
         self.track.as_ref().map_or(0, |t| t.duration_ms)
     }
@@ -95,47 +92,11 @@ impl Playback {
         u16::try_from(r.min(10_000)).unwrap_or(10_000)
     }
 
-    /// 把现实流逝的时间推进到播放进度上。
-    pub fn tick(&mut self, dt: Duration) {
-        if !self.playing {
-            return;
-        }
-        let dt_ms = u64::try_from(dt.as_millis()).unwrap_or(0);
-        let new_pos = self.position_ms.saturating_add(dt_ms);
-        let dur = self.duration_ms();
-        if dur > 0 && new_pos >= dur {
-            if self.mode == PlayMode::RepeatOne {
-                self.position_ms = 0;
-            } else {
-                self.position_ms = dur;
-                self.playing = false;
-            }
-        } else {
-            self.position_ms = new_pos;
-        }
-    }
-
-    /// 切换 play / pause(没有 track 时不动)。
-    pub fn play_pause(&mut self) {
-        if self.track.is_some() {
-            self.playing = !self.playing;
-        }
-    }
-
-    /// 调整音量(`delta` 单位 = 百分点,可正可负)。
-    pub fn nudge_volume(&mut self, delta: i8) {
-        let v = i32::from(self.volume_pct).saturating_add(i32::from(delta));
-        self.volume_pct = u8::try_from(v.clamp(0, 100)).unwrap_or(self.volume_pct);
-    }
-
-    /// 跳转(`delta_s` 单位 = 秒,可正可负)。
-    pub fn seek(&mut self, delta_s: i32) {
-        let dur = self.duration_ms();
-        let delta_ms = i64::from(delta_s).saturating_mul(1000);
-        let cur = i64::try_from(self.position_ms).unwrap_or(0);
-        let max = i64::try_from(dur).unwrap_or(0);
-        let new_ms = cur.saturating_add(delta_ms).clamp(0, max);
-        self.position_ms = u64::try_from(new_ms).unwrap_or(0);
+    /// 把 audio engine 的 snapshot 灌进 view-model。
+    pub fn apply_audio_snapshot(&mut self, snap: AudioSnapshot) {
+        self.position_ms = snap.position_ms;
+        self.playing = snap.playing;
+        self.volume_pct = snap.volume_pct;
     }
 }
 

@@ -1,6 +1,6 @@
 //! 任务推到 client 的事件载荷。
 
-use mineral_model::{Playlist, PlaylistId, Song, SourceKind};
+use mineral_model::{PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
@@ -24,5 +24,14 @@ pub enum TaskEvent {
 
         /// 曲目。
         tracks: Vec<Song>,
+    },
+
+    /// `SongUrl` 任务成功:可播放 URL 解析就绪。
+    PlayUrlReady {
+        /// 关联的歌曲 id。
+        song_id: SongId,
+
+        /// 解析出的播放 URL + 元信息。
+        play_url: PlayUrl,
     },
 }

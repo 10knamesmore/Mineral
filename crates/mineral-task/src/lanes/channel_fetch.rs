@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
-use mineral_model::SourceKind;
+use mineral_model::{BitRate, SourceKind};
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -205,6 +205,34 @@ async fn execute(
                 Err(e) => {
                     mineral_log::warn(
                         &format!("ChannelFetch/{source:?}/songs_in_playlist:{}", id.as_str()),
+                        &e.to_string(),
+                    );
+                    TaskOutcome::Failed
+                }
+            }
+        }
+        ChannelFetchKind::SongUrl { source, song_id } => {
+            let ids = [song_id.clone()];
+            match channel.song_urls(&ids, BitRate::Higher).await {
+                Ok(mut urls) => match urls.pop() {
+                    Some(play_url) => {
+                        event_tx.lock().push(TaskEvent::PlayUrlReady {
+                            song_id: song_id.clone(),
+                            play_url,
+                        });
+                        TaskOutcome::Ok
+                    }
+                    None => {
+                        mineral_log::warn(
+                            &format!("ChannelFetch/{source:?}/song_url:{}", song_id.as_str()),
+                            "channel returned empty url list",
+                        );
+                        TaskOutcome::Failed
+                    }
+                },
+                Err(e) => {
+                    mineral_log::warn(
+                        &format!("ChannelFetch/{source:?}/song_url:{}", song_id.as_str()),
                         &e.to_string(),
                     );
                     TaskOutcome::Failed

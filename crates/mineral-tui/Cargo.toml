@@ -13,6 +13,7 @@ mock = [
 [dependencies]
 color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
+mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-channel-mock = { workspace = true, optional = true }
 mineral-log          = { workspace = true }

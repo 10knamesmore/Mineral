@@ -15,6 +15,7 @@ mod view_model;
 
 use std::sync::Arc;
 
+use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
 
@@ -32,8 +33,9 @@ use tui::Tui;
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
     let scheduler = Scheduler::new(&channels);
     submit_initial_loads(&scheduler, &channels);
+    let audio = AudioHandle::spawn()?;
 
-    let mut app = App::new(scheduler);
+    let mut app = App::new(scheduler, audio);
     let mut tui = Tui::new()?;
     tui.enter()?;
     let result = app.run(&mut tui);
