@@ -5,16 +5,14 @@ use ratatui::layout::{Constraint, Layout, Rect};
 /// 当前布局模式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutMode {
-    /// 完整 6-面板布局(top status / left / right / transport / viz / status bar)。
+    /// 完整布局:左半 lyrics、右半 spectrum(上)+ transport(下),顶部 + 底部状态行。
     Full,
     /// 紧凑模式(终端过小):仅 top status / left / transport / status bar。
     Compact,
 }
 
 /// 主界面所有面板的位置矩形。
-///
-/// 阶段 2 只读 `mode` 决定后续阶段的分支(暂未消费),容忍 dead-code。
-#[allow(dead_code)] // reason: `mode` 字段在阶段 6 起用于焦点路由分支
+#[allow(dead_code)] // reason: `mode` 字段保留给后续焦点路由分支
 #[derive(Clone, Copy, Debug)]
 pub struct Areas {
     /// 实际选用的布局模式。
@@ -25,10 +23,12 @@ pub struct Areas {
     pub left: Rect,
     /// 右栏(now playing detail) — Compact 模式下为 `None`。
     pub right: Option<Rect>,
-    /// 底部左侧 transport 面板。
+    /// 底部左半:lyrics 面板,占满 bottom 全高 — Compact 模式下为 `None`。
+    pub lyrics: Option<Rect>,
+    /// 底部右半上:spectrum 可视化 — Compact 模式下为 `None`。
+    pub spectrum: Option<Rect>,
+    /// 底部右半下(Full)/ 底部全宽(Compact):transport 进度条。
     pub transport: Rect,
-    /// 底部右侧可视化区(spectrum + lyrics) — Compact 模式下为 `None`。
-    pub viz: Option<Rect>,
     /// 底部 keys hint / 临时 hint / 搜索输入行(1 行)。
     pub status_bar: Rect,
 }
@@ -62,17 +62,22 @@ fn compute_full(area: Rect) -> Areas {
         Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
             .areas(main_area);
 
-    let [transport, viz] =
-        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+    let [lyrics, right_col] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(bottom_area);
+
+    // 右半上下:spectrum 上、transport 下(transport ~7 行内容,固定高度优先,余给 spectrum)。
+    let [spectrum, transport] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(right_col);
 
     Areas {
         mode: LayoutMode::Full,
         top_status,
         left,
         right: Some(right),
+        lyrics: Some(lyrics),
+        spectrum: Some(spectrum),
         transport,
-        viz: Some(viz),
         status_bar,
     }
 }
@@ -93,8 +98,9 @@ fn compute_compact(area: Rect) -> Areas {
         top_status,
         left,
         right: None,
+        lyrics: None,
+        spectrum: None,
         transport,
-        viz: None,
         status_bar,
     }
 }
