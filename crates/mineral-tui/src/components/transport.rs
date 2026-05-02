@@ -134,6 +134,13 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     let filled = usize::from(pb.volume_pct) * BAR_W / 100;
     let fill = "█".repeat(filled);
     let empty = "░".repeat(BAR_W.saturating_sub(filled));
+    // PlayUrl 在 PlayUrlReady 或 prefetch 命中后写入,切歌瞬间清成 None。
+    // 没拿到时显 `—`,跟 transport 别处的「无值」表示一致。
+    let fmt_text = pb
+        .play_url
+        .as_ref()
+        .map(|pu| format!("{} {}kbps", pu.format, pu.bitrate_bps / 1000))
+        .unwrap_or_else(|| "—".to_owned());
     let line = Line::from(vec![
         Span::styled(" vol ", Style::new().fg(theme.overlay)),
         Span::styled(fill, Style::new().fg(theme.accent)),
@@ -145,6 +152,9 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::styled("   │   ", Style::new().fg(theme.surface1)),
         Span::styled("mode ", Style::new().fg(theme.overlay)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
+        Span::styled("   │   ", Style::new().fg(theme.surface1)),
+        Span::styled("fmt ", Style::new().fg(theme.overlay)),
+        Span::styled(fmt_text, Style::new().fg(theme.text)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }

@@ -26,7 +26,7 @@ pub fn draw(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(" now playing ").style(Style::new().fg(theme.subtext)));
+        .title(Line::from(" selected ").style(Style::new().fg(theme.subtext)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 4 || inner.width < 8 {

@@ -39,6 +39,6 @@ fn paint_empty(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(" now playing ").style(Style::new().fg(theme.subtext)));
+        .title(Line::from(" selected ").style(Style::new().fg(theme.subtext)));
     frame.render_widget(block, area);
 }

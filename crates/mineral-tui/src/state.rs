@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use image::DynamicImage;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{MediaUrl, PlayUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
@@ -101,9 +101,9 @@ pub struct AppState {
     /// quit confirm modal 是否打开。
     pub confirm_open: bool,
 
-    /// 预拉的下一首播放 URL(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
-    /// 不命中(用户切到别的歌 / 模式变了)就丢。
-    pub prefetched: Option<(SongId, MediaUrl)>,
+    /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
+    /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
+    pub prefetched: Option<PlayUrl>,
 
     /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
     /// 非 Shuffle 状态恒为 `None`。

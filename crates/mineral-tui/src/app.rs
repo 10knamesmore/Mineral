@@ -159,11 +159,12 @@ impl App {
                 TaskEvent::PlayUrlReady { song_id, play_url } => {
                     let want = self.state.playback.track.as_ref().map(|t| &t.id);
                     if want == Some(song_id) {
-                        // 当前歌的 URL 来了,直接播。
+                        // 当前歌的 URL 来了,直接播 + 留 PlayUrl 给 transport 显 format。
                         self.audio.play(play_url.url.clone());
+                        self.state.playback.play_url = Some(play_url.clone());
                     } else if Some(song_id) == self.prefetch_fired_for.as_ref() {
-                        // 预拉的 URL 命中:存进 cache,曲终切歌时直接用。
-                        self.state.prefetched = Some((song_id.clone(), play_url.url.clone()));
+                        // 预拉的 URL 命中:整 PlayUrl 进 cache,曲终切歌时连 format 一起用。
+                        self.state.prefetched = Some(play_url.clone());
                     }
                     // 其他 song_id:用户已切到别的歌或换了模式,旧 URL 直接丢。
                 }
@@ -200,18 +201,21 @@ impl App {
         self.last_seen_finished_seq = self.audio.snapshot().track_finished_seq;
         // 新歌允许再次预拉它的下一首。
         self.prefetch_fired_for = None;
+        // 切歌瞬间清旧 format,免得旧值短暂跟新歌错配。命中 prefetch / PlayUrlReady 后再写。
+        self.state.playback.play_url = None;
 
-        // 命中 prefetch:跳过 SongUrl 提交,直接把缓存的 URL 喂 audio。
+        // 命中 prefetch:跳过 SongUrl 提交,直接把缓存的 URL 喂 audio + 留 PlayUrl 给 format 显示。
         let cached = match self.state.prefetched.take() {
-            Some((id, url)) if id == song.id => Some(url),
+            Some(pu) if pu.song_id == song.id => Some(pu),
             other => {
-                // take 拿走后失配的 URL 已无人认领,丢掉(不放回)。
+                // take 拿走后失配的 PlayUrl 已无人认领,丢掉(不放回)。
                 drop(other);
                 None
             }
         };
-        if let Some(url) = cached {
-            self.audio.play(url);
+        if let Some(pu) = cached {
+            self.audio.play(pu.url.clone());
+            self.state.playback.play_url = Some(pu);
         } else {
             self.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {

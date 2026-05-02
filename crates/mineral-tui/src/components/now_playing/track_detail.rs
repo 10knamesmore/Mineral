@@ -28,7 +28,7 @@ pub fn draw(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(" now playing ").style(Style::new().fg(theme.subtext)));
+        .title(Line::from(" selected ").style(Style::new().fg(theme.subtext)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 4 || inner.width < 8 {
@@ -71,9 +71,6 @@ pub fn draw(
         ]),
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("format: ", Style::new().fg(theme.overlay)),
-            Span::styled("24/96 flac".to_string(), Style::new().fg(theme.text)),
-            Span::raw("   "),
             Span::styled("love: ", Style::new().fg(theme.overlay)),
             Span::styled(love_label, Style::new().fg(love_color)),
         ]),

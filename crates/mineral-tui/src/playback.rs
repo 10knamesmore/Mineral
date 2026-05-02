@@ -1,7 +1,7 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::Song;
+use mineral_model::{PlayUrl, Song};
 
 /// 播放循环模式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,6 +62,10 @@ pub struct Playback {
     pub volume_pct: u8,
     /// 播放模式。
     pub mode: PlayMode,
+
+    /// 当前曲目解析后的 PlayUrl(format / bitrate / size)。
+    /// 切歌时清成 `None`,PlayUrlReady 或 prefetch 命中后写入。transport 用它显 `fmt`。
+    pub play_url: Option<PlayUrl>,
 }
 
 impl Playback {
@@ -73,6 +77,7 @@ impl Playback {
             playing: false,
             volume_pct: 66,
             mode: PlayMode::Sequential,
+            play_url: None,
         }
     }
 
