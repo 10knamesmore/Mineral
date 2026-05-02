@@ -60,7 +60,7 @@ openssl            = "0.10"
 rand               = "0.9"
 ratatui            = "0.29"
 ratatui-image      = "8.0"
-rodio              = { version = "0.20", default-features = false, features = ["symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }
+rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }
 stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
 clap               = { version = "4.5", features = ["derive"] }
 qrcode             = "0.14"

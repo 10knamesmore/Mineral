@@ -1,4 +1,8 @@
-//! 引擎线程主体:owns `OutputStream` / `Sink` / 内嵌 tokio runtime,顺序处理命令并刷 snapshot。
+//! 引擎线程主体:owns rodio device sink + Player + 内嵌 tokio runtime。
+//!
+//! 命令通道处理 play/pause/resume/stop/set_volume(语义不可合并)。
+//! seek 单独走 [`crate::handle::AudioHandle`] → mailbox(latest-wins),engine 每个 tick
+//! `take()` 一次实际打 demuxer ——抗住长按 ←/→ 的 30Hz key-repeat。
 
 use std::io::BufReader;
 use std::sync::mpsc;
@@ -19,21 +23,33 @@ use stream_download::StreamDownload;
 use crate::command::AudioCommand;
 use crate::snapshot::AudioSnapshot;
 
-/// 命令通道空转间隔 / snapshot 刷新节拍。
-const TICK: Duration = Duration::from_millis(100);
+/// 命令通道空转间隔 / snapshot 刷新节拍 / seek mailbox drain 节拍。
+///
+/// 20ms 是经验值:OS 键盘 key-repeat 一般 ~30Hz(33ms 一次),20ms tick 能在
+/// 用户长按 ←/→ 时把 mailbox 几乎实时 drain → seek,感觉上接近连续(否则两次
+/// seek 之间的 tick 间隙会播放旧位置的几十 ms 音频,听感就是「跳一下播一下」)。
+/// 同样 stop 命令延迟 ≤20ms,切歌时旧曲尾巴可被压到 cpal 回调缓冲固有长度。
+/// termusic 用 5ms,我们留余量。
+const TICK: Duration = Duration::from_millis(20);
 
 /// 默认初始音量,与 UI 默认 66% 对齐。
 const DEFAULT_VOLUME_F32: f32 = 0.66;
 
+/// stream-download 起播前预拉的字节数。256 KB 在 320 kbps mp3 ≈ 6.4 秒缓冲,
+/// seek ±5s 命中已下载区间概率极高,cpal 回调线程不被网络等待阻塞。
+const PREFETCH_BYTES: u64 = 256 * 1024;
+
 /// 引擎线程入口。
 ///
 /// `ready_tx` 在引擎完成 sink/runtime 初始化后立刻汇报,UI 才返回 handle。
+/// `seek_mailbox` 是与 handle 共享的 latest-wins seek 目标位置。
 pub(crate) fn run(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
     snapshot: &Arc<Mutex<AudioSnapshot>>,
+    seek_mailbox: &Arc<Mutex<Option<Duration>>>,
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
 ) {
-    if let Err(e) = engine_main(cmd_rx, snapshot, ready_tx) {
+    if let Err(e) = engine_main(cmd_rx, snapshot, seek_mailbox, ready_tx) {
         mineral_log::warn!(target: "audio_engine", "exited: {e:?}");
     }
 }
@@ -41,27 +57,24 @@ pub(crate) fn run(
 fn engine_main(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
     snapshot: &Arc<Mutex<AudioSnapshot>>,
+    seek_mailbox: &Arc<Mutex<Option<Duration>>>,
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
 ) -> color_eyre::Result<()> {
-    let (_stream, stream_handle) = match rodio::OutputStream::try_default() {
-        Ok(v) => v,
-        Err(e) => {
-            let err = eyre!("rodio output stream: {e}");
-            let _ = ready_tx.send(Err(eyre!("rodio output stream: {e}")));
-            return Err(err);
-        }
-    };
-    let sink = match rodio::Sink::try_new(&stream_handle) {
+    let mut stream_handle = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(s) => s,
         Err(e) => {
-            let err = eyre!("rodio sink: {e}");
-            let _ = ready_tx.send(Err(eyre!("rodio sink: {e}")));
+            let err = eyre!("rodio device sink: {e}");
+            let _ = ready_tx.send(Err(eyre!("rodio device sink: {e}")));
             return Err(err);
         }
     };
-    sink.set_volume(DEFAULT_VOLUME_F32);
+    // 默认 drop 时会向 stderr 打一行 "Audio playback has finished",TUI 退出后会污染终端,关掉。
+    stream_handle.log_on_drop(false);
 
-    // multi_thread:stream-download 的下载后台 task 必须在独立 worker 上持续被 poll,
+    let player = rodio::Player::connect_new(stream_handle.mixer());
+    player.set_volume(DEFAULT_VOLUME_F32);
+
+    // multi_thread:stream-download 后台下载 task 必须在独立 worker 上持续被 poll,
     // 否则 block_on 一返回,reader.read 永远等不到字节,sink 一直空 → UI 一直 paused。
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -83,7 +96,7 @@ fn engine_main(
 
     loop {
         match cmd_rx.recv_timeout(TICK) {
-            Ok(cmd) => match handle_command(cmd, &sink, &rt) {
+            Ok(cmd) => match handle_command(cmd, &player, &rt) {
                 Ok(new_dur) => {
                     if let Some(d) = new_dur {
                         cur_duration_ms = d;
@@ -96,52 +109,59 @@ fn engine_main(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        update_snapshot(snapshot, &sink, cur_duration_ms);
+        drain_seek(seek_mailbox, &player);
+        update_snapshot(snapshot, &player, cur_duration_ms);
     }
     Ok(())
 }
 
-/// 处理一条命令。返回 `Some(duration_ms)` 表示曲目变了,sink 现在播这个新曲;
+/// 处理一条命令。返回 `Some(duration_ms)` 表示曲目变了,player 现在播这个新曲;
 /// `None` 表示 duration 没变(暂停/恢复/音量等)。
 fn handle_command(
     cmd: AudioCommand,
-    sink: &rodio::Sink,
+    player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
         AudioCommand::Play(url) => {
-            sink.stop();
-            let dur = append_decoded(sink, rt, url)?;
-            sink.play();
+            player.stop();
+            let dur = append_decoded(player, rt, url)?;
+            player.play();
             Ok(Some(dur))
         }
         AudioCommand::Pause => {
-            sink.pause();
+            player.pause();
             Ok(None)
         }
         AudioCommand::Resume => {
-            sink.play();
+            player.play();
             Ok(None)
         }
         AudioCommand::Stop => {
-            sink.stop();
+            player.stop();
             Ok(Some(0))
         }
-        AudioCommand::Seek(ms) => {
-            sink.try_seek(Duration::from_millis(ms))
-                .map_err(|e| eyre!("seek: {e}"))?;
-            Ok(None)
-        }
         AudioCommand::SetVolume(pct) => {
-            sink.set_volume(f32::from(pct) / 100.0);
+            player.set_volume(f32::from(pct) / 100.0);
             Ok(None)
         }
     }
 }
 
-/// 把 URL 解析成 decoder 并 append 到 sink。返回 decoder 探到的 duration(ms,0 = 未知)。
+/// mailbox 里有 pending seek 就 take 出来打一次 try_seek,latest-wins。
+/// 长按 ←/→ 时多次覆写只生效最后一次,避免堆积串行 seek 导致卡顿。
+fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Player) {
+    let Some(target) = seek_mailbox.lock().take() else {
+        return;
+    };
+    if let Err(e) = player.try_seek(target) {
+        mineral_log::warn!(target: "audio_engine", "seek to {target:?}: {e}");
+    }
+}
+
+/// 把 URL 解析成 decoder 并 append 到 player。返回 decoder 探到的 duration(ms,0 = 未知)。
 fn append_decoded(
-    sink: &rodio::Sink,
+    player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
     url: MediaUrl,
 ) -> color_eyre::Result<u64> {
@@ -151,13 +171,17 @@ fn append_decoded(
                 let stream = HttpStream::<Client>::create(u)
                     .await
                     .map_err(|e| eyre!("http stream: {e}"))?;
-                StreamDownload::from_stream(stream, TempStorageProvider::new(), Settings::default())
-                    .await
-                    .map_err(|e| eyre!("stream-download init: {e}"))
+                StreamDownload::from_stream(
+                    stream,
+                    TempStorageProvider::new(),
+                    Settings::default().prefetch_bytes(PREFETCH_BYTES),
+                )
+                .await
+                .map_err(|e| eyre!("stream-download init: {e}"))
             })?;
             let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
-            sink.append(decoder);
+            player.append(decoder);
             Ok(dur_ms)
         }
         MediaUrl::Local(p) => {
@@ -165,15 +189,19 @@ fn append_decoded(
             let reader = BufReader::new(file);
             let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
-            sink.append(decoder);
+            player.append(decoder);
             Ok(dur_ms)
         }
     }
 }
 
-fn update_snapshot(snapshot: &Arc<Mutex<AudioSnapshot>>, sink: &rodio::Sink, cur_duration_ms: u64) {
-    let pos_ms = duration_to_ms(sink.get_pos());
-    let playing = !sink.is_paused() && !sink.empty();
+fn update_snapshot(
+    snapshot: &Arc<Mutex<AudioSnapshot>>,
+    player: &rodio::Player,
+    cur_duration_ms: u64,
+) {
+    let pos_ms = duration_to_ms(player.get_pos());
+    let playing = !player.is_paused() && !player.empty();
     let mut g = snapshot.lock();
     g.playing = playing;
     g.position_ms = pos_ms;

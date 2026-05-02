@@ -12,8 +12,8 @@ pub(crate) enum AudioCommand {
     Resume,
     /// 停掉当前曲目并清空 sink。
     Stop,
-    /// 跳到绝对位置(ms)。
-    Seek(u64),
     /// 设置音量(0..=100)。
     SetVolume(u8),
+    // seek 不走 channel,走 [`crate::handle::AudioHandle`] 的 `Arc<Mutex<Option<Duration>>>`
+    // mailbox(latest-wins),engine 主循环每 tick `take()` 一次 —— 长按 ←/→ 时合并。
 }

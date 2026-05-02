@@ -3,6 +3,7 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use color_eyre::eyre::eyre;
 use mineral_model::MediaUrl;
@@ -12,10 +13,11 @@ use crate::command::AudioCommand;
 use crate::engine;
 use crate::snapshot::AudioSnapshot;
 
-/// 共享内部状态:命令发送端 + 与 engine 共用的 snapshot。
+/// 共享内部状态:命令通道 + snapshot + seek mailbox(latest-wins)。
 struct Inner {
     cmd_tx: mpsc::Sender<AudioCommand>,
     snapshot: Arc<Mutex<AudioSnapshot>>,
+    seek_mailbox: Arc<Mutex<Option<Duration>>>,
 }
 
 /// 音频引擎对外句柄。clone 廉价,跨线程安全。
@@ -33,11 +35,16 @@ impl AudioHandle {
             ..AudioSnapshot::default()
         }));
 
+        let seek_mailbox = Arc::new(Mutex::new(None::<Duration>));
+
         let (ready_tx, ready_rx) = mpsc::sync_channel::<color_eyre::Result<()>>(1);
         let snap_for_engine = Arc::clone(&snapshot);
+        let mailbox_for_engine = Arc::clone(&seek_mailbox);
         thread::Builder::new()
             .name(String::from("mineral-audio"))
-            .spawn(move || engine::run(&cmd_rx, &snap_for_engine, &ready_tx))
+            .spawn(move || {
+                engine::run(&cmd_rx, &snap_for_engine, &mailbox_for_engine, &ready_tx);
+            })
             .map_err(|e| eyre!("spawn audio thread: {e}"))?;
 
         match ready_rx.recv() {
@@ -47,7 +54,11 @@ impl AudioHandle {
         }
 
         Ok(Self {
-            inner: Arc::new(Inner { cmd_tx, snapshot }),
+            inner: Arc::new(Inner {
+                cmd_tx,
+                snapshot,
+                seek_mailbox,
+            }),
         })
     }
 
@@ -71,9 +82,11 @@ impl AudioHandle {
         self.send(AudioCommand::Stop);
     }
 
-    /// 跳到绝对位置(ms);部分容器 seek 不准是已知 trade-off。
+    /// 跳到绝对位置(ms)。语义是 latest-wins:多次连按只生效最后一次,
+    /// engine 主循环每 tick `take()` 一次实际打 demuxer。
+    /// 部分容器 seek 不准是已知 trade-off。
     pub fn seek(&self, position_ms: u64) {
-        self.send(AudioCommand::Seek(position_ms));
+        *self.inner.seek_mailbox.lock() = Some(Duration::from_millis(position_ms));
     }
 
     /// 设置音量百分比(0..=100)。本地立刻更新 snapshot,免 UI 闪一帧旧值。
