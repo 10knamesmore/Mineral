@@ -5,6 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::playback::{format_ms, Playback};
 use crate::theme::Theme;
@@ -112,8 +113,34 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     let [btn, lbl] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
     let play_glyph = if pb.playing { "⏸" } else { "▶" };
     let mode_glyph = pb.mode.glyph();
-    let buttons = format!("[⏮]   [{play_glyph}]   [⏭]   [{mode_glyph}]");
-    let labels = "p      ␣        n      m";
+    // (button, label) 槽列表。每个 label 在自己 button 的 cell 宽度内居中,
+    // 槽间固定 GAP 空格。两行 join 出来总宽相同,Center alignment 自然对齐。
+    // 解决之前 mode_glyph 宽度变化(→/⇄ 1-cell vs ↻∞/↻¹ 2-cell)导致 label 错位。
+    let slots: [(String, &str); 4] = [
+        ("[⏮]".to_owned(), "p"),
+        (format!("[{play_glyph}]"), "␣"),
+        ("[⏭]".to_owned(), "n"),
+        (format!("[{mode_glyph}]"), "m"),
+    ];
+    const GAP: usize = 3;
+    let gap = " ".repeat(GAP);
+    let mut buttons = String::new();
+    let mut labels = String::new();
+    for (i, (b, l)) in slots.iter().enumerate() {
+        if i > 0 {
+            buttons.push_str(&gap);
+            labels.push_str(&gap);
+        }
+        let bw = UnicodeWidthStr::width(b.as_str());
+        let lw = UnicodeWidthStr::width(*l);
+        let pad_total = bw.saturating_sub(lw);
+        let lpad = pad_total / 2;
+        let rpad = pad_total - lpad;
+        buttons.push_str(b);
+        labels.push_str(&" ".repeat(lpad));
+        labels.push_str(l);
+        labels.push_str(&" ".repeat(rpad));
+    }
     frame.render_widget(
         Paragraph::new(Line::from(buttons).style(Style::new().fg(theme.text)))
             .alignment(Alignment::Center),
