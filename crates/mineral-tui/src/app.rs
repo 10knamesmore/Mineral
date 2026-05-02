@@ -19,8 +19,14 @@ const VISIBLE_HINT: usize = 64;
 /// 音量步长(百分点);`+`/`-` 一次。
 const VOLUME_STEP: i16 = 5;
 
-/// seek 步长(秒);`←`/`→` 一次。
+/// 普通 seek 步长(秒);`←`/`→` 一次。
 const SEEK_STEP_S: i64 = 5;
+
+/// 大跨度 seek 步长(秒);`Shift+←`/`Shift+→` 一次。
+const SEEK_BIG_STEP_S: i64 = 30;
+
+/// 大跨度跳行步长(行);`Shift+J`/`Shift+K` 一次。j/k/箭头仍是 1。
+const ROW_BIG_STEP: usize = 7;
 
 /// 应用顶层状态。
 pub struct App {
@@ -348,13 +354,19 @@ impl App {
 
     fn handle_queue_key(&mut self, key: &KeyEvent) {
         let len = self.state.queue.len();
+        let max = len.saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let max = len.saturating_sub(1);
                 self.state.queue_sel = self.state.queue_sel.saturating_add(1).min(max);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.state.queue_sel = self.state.queue_sel.saturating_sub(1);
+            }
+            KeyCode::Char('J') => {
+                self.state.queue_sel = self.state.queue_sel.saturating_add(ROW_BIG_STEP).min(max);
+            }
+            KeyCode::Char('K') => {
+                self.state.queue_sel = self.state.queue_sel.saturating_sub(ROW_BIG_STEP);
             }
             KeyCode::Char('g') => {
                 self.state.queue_sel = 0;
@@ -372,6 +384,20 @@ impl App {
     }
 
     fn handle_playback_key(&mut self, key: &KeyEvent) -> bool {
+        // Shift+←/→ 走大跨度 seek;终端通常会原样把 SHIFT modifier 透出。
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Left => {
+                    self.seek_relative(-SEEK_BIG_STEP_S);
+                    return true;
+                }
+                KeyCode::Right => {
+                    self.seek_relative(SEEK_BIG_STEP_S);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char(' ') => self.toggle_play_pause(),
             KeyCode::Char('m') => self.state.playback.mode = self.state.playback.mode.cycle(),
@@ -428,13 +454,23 @@ impl App {
     }
 
     fn handle_playlists_key(&mut self, key: &KeyEvent) {
+        let max = self.state.playlists.len().saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let max = self.state.playlists.len().saturating_sub(1);
                 self.state.sel_playlist = self.state.sel_playlist.saturating_add(1).min(max);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.state.sel_playlist = self.state.sel_playlist.saturating_sub(1);
+            }
+            KeyCode::Char('J') => {
+                self.state.sel_playlist = self
+                    .state
+                    .sel_playlist
+                    .saturating_add(ROW_BIG_STEP)
+                    .min(max);
+            }
+            KeyCode::Char('K') => {
+                self.state.sel_playlist = self.state.sel_playlist.saturating_sub(ROW_BIG_STEP);
             }
             KeyCode::Char('g') => {
                 self.state.sel_playlist = 0;
@@ -452,13 +488,19 @@ impl App {
 
     fn handle_library_key(&mut self, key: &KeyEvent) {
         let len = self.state.current_tracks().len();
+        let max = len.saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let max = len.saturating_sub(1);
                 self.state.sel_track = self.state.sel_track.saturating_add(1).min(max);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.state.sel_track = self.state.sel_track.saturating_sub(1);
+            }
+            KeyCode::Char('J') => {
+                self.state.sel_track = self.state.sel_track.saturating_add(ROW_BIG_STEP).min(max);
+            }
+            KeyCode::Char('K') => {
+                self.state.sel_track = self.state.sel_track.saturating_sub(ROW_BIG_STEP);
             }
             KeyCode::Char('g') => {
                 self.state.sel_track = 0;
