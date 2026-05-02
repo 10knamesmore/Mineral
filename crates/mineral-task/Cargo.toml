@@ -11,6 +11,8 @@ mineral-model        = { workspace = true }
 async-trait  = { workspace = true }
 color-eyre   = { workspace = true }
 futures-util = { workspace = true }
+image        = { workspace = true }
+isahc        = { workspace = true }
 parking_lot  = { workspace = true }
 tokio        = { workspace = true }
 tokio-util   = { workspace = true }

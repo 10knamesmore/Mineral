@@ -13,6 +13,7 @@ mock = [
 [dependencies]
 color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
+image                = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-spectrum     = { workspace = true }
@@ -23,6 +24,7 @@ mineral-model        = { workspace = true }
 mineral-task         = { workspace = true }
 rand                 = { workspace = true }
 ratatui              = { workspace = true }
+ratatui-image        = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 tokio                = { workspace = true }

@@ -1,10 +1,14 @@
 //! 应用全局状态。`tracks_cache` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use image::DynamicImage;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
+use ratatui_image::protocol::StatefulProtocol;
 
 use crate::lrc;
 use crate::yrc::{self, YrcLine};
@@ -104,6 +108,21 @@ pub struct AppState {
     /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
     /// 非 Shuffle 状态恒为 `None`。
     pub original_queue: Option<Vec<Song>>,
+
+    /// 已拉好的封面原始图(URL → 解码后的 RGB 像素)。session 内一直留。
+    pub cover_cache: HashMap<MediaUrl, Arc<DynamicImage>>,
+
+    /// 在飞 fetch 集合,用于 dedup tick 重复请求。
+    pub cover_pending: HashSet<MediaUrl>,
+
+    /// 渲染用的 ratatui-image stateful protocol 缓存。`StatefulProtocol` 内部记编码状态
+    /// (kitty 的图片 id、sixel 编码缓冲等),render 复用就不会每帧重发图。
+    /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
+    pub cover_protocols: RefCell<HashMap<MediaUrl, StatefulProtocol>>,
+
+    /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
+    /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
+    pub tasks_running: usize,
 }
 
 impl AppState {
@@ -132,6 +151,10 @@ impl AppState {
             confirm_open: false,
             prefetched: None,
             original_queue: None,
+            cover_cache: HashMap::new(),
+            cover_pending: HashSet::new(),
+            cover_protocols: RefCell::new(HashMap::new()),
+            tasks_running: 0,
         }
     }
 
@@ -174,6 +197,13 @@ impl AppState {
                         self.yrc_cache.insert(song_id.clone(), parsed_yrc);
                     }
                 }
+            }
+            TaskEvent::CoverReady { url, image } => {
+                self.cover_pending.remove(url);
+                self.cover_cache.insert(url.clone(), Arc::clone(image));
+                // 如果之前已经为这张图建过 protocol(罕见),把缓存清掉,下次渲染重建
+                // —— 防止 cache miss 后又来到 CoverReady 导致旧 protocol 跟新图 desync。
+                self.cover_protocols.borrow_mut().remove(url);
             }
         }
     }

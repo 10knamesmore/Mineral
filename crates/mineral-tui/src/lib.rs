@@ -9,6 +9,7 @@ mod components;
 mod layout;
 mod lrc;
 mod playback;
+mod prefetch;
 mod state;
 mod theme;
 mod tui;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
+use ratatui_image::picker::Picker;
 
 use app::App;
 use tui::Tui;
@@ -38,9 +40,13 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     submit_initial_loads(&scheduler, &channels);
     let (audio, spectrum_tap) = AudioHandle::spawn()?;
 
-    let mut app = App::new(scheduler, audio, spectrum_tap);
     let mut tui = Tui::new()?;
     tui.enter()?;
+    // Picker::from_query_stdio 必须在进 alternate screen 之后、读 events 之前调,
+    // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
+    // font 用 halfblocks 渲染,不阻塞启动。
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+    let mut app = App::new(scheduler, audio, spectrum_tap, picker);
     let result = app.run(&mut tui);
     tui.exit()?;
     result

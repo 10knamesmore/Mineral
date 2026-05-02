@@ -12,6 +12,7 @@ use crate::id::{Priority, TaskId};
 use crate::kind::TaskKind;
 use crate::lane::Lane;
 use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
+use crate::lanes::cover_art::{CoverArtLane, Job as CoverArtJob};
 use crate::ongoing::{Bind, Ongoing};
 
 /// 进程内任务调度器入口。`Clone` 廉价(`Arc<Inner>`)。
@@ -24,6 +25,7 @@ struct Inner {
     ongoing: Arc<Ongoing>,
     events: Arc<Mutex<Vec<TaskEvent>>>,
     channel_fetch: ChannelFetchLane,
+    cover_art: CoverArtLane,
 }
 
 /// `Scheduler::snapshot` 的返回:当前 running 数与按 lane 的拆分。
@@ -45,11 +47,13 @@ impl Scheduler {
         let ongoing = Arc::new(Ongoing::new());
         let events = Arc::new(Mutex::new(Vec::<TaskEvent>::new()));
         let channel_fetch = ChannelFetchLane::spawn(channels, &ongoing, &events);
+        let cover_art = CoverArtLane::spawn(&ongoing, &events);
         Self {
             inner: Arc::new(Inner {
                 ongoing,
                 events,
                 channel_fetch,
+                cover_art,
             }),
         }
     }
@@ -95,6 +99,14 @@ impl Scheduler {
                         done_tx,
                     },
                 );
+            }
+            TaskKind::CoverArt { url } => {
+                self.inner.cover_art.dispatch(CoverArtJob {
+                    id,
+                    url,
+                    cancel: handle.cancel.clone(),
+                    done_tx,
+                });
             }
         }
     }

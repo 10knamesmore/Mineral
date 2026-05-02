@@ -22,7 +22,7 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     top_status::draw(frame, areas.top_status, &app.state, theme);
     sidebar::draw(frame, areas.left, &app.state, theme);
     if let Some(right) = areas.right {
-        now_playing::draw(frame, right, &app.state, theme);
+        now_playing::draw(frame, right, &app.state, &app.picker, theme);
     }
     if let Some(lyr) = areas.lyrics {
         lyrics::draw(frame, lyr, &app.state, theme);

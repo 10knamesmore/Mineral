@@ -6,14 +6,22 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
+use ratatui_image::picker::Picker;
 
-use crate::components::cover;
+use crate::components::cover_image;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::PlaylistView;
 
 /// 渲染歌单详情(right pane)到 `area`。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, state: &AppState, theme: &Theme) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    p: &PlaylistView,
+    state: &AppState,
+    picker: &Picker,
+    theme: &Theme,
+) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -32,7 +40,15 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, p: &PlaylistView, state: &AppStat
     ])
     .areas(inner);
 
-    cover::render(frame, cover_area, &p.data.name, theme);
+    cover_image::render_or_fallback(
+        frame,
+        cover_area,
+        p.data.cover_url.as_ref(),
+        state,
+        picker,
+        theme,
+        &p.data.name,
+    );
 
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {

@@ -6,9 +6,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
+use ratatui_image::picker::Picker;
 
-use crate::components::cover;
+use crate::components::cover_image;
 use crate::playback::format_ms;
+use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::SongView;
 
@@ -18,6 +20,8 @@ pub fn draw(
     area: Rect,
     sv: &SongView,
     current_id: Option<&SongId>,
+    state: &AppState,
+    picker: &Picker,
     theme: &Theme,
 ) {
     let block = Block::new()
@@ -43,7 +47,15 @@ pub fn draw(
         .album
         .as_ref()
         .map_or_else(|| sv.data.name.clone(), |a| a.name.clone());
-    cover::render(frame, cover_area, &seed, theme);
+    cover_image::render_or_fallback(
+        frame,
+        cover_area,
+        sv.data.cover_url.as_ref(),
+        state,
+        picker,
+        theme,
+        &seed,
+    );
 
     let len = format_ms(sv.data.duration_ms);
     let love_label = if sv.loved { "♥ loved" } else { "♡ —" };

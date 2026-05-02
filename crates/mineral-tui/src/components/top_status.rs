@@ -52,10 +52,19 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     } else {
         ("‖", theme.yellow, "paused")
     };
-    let line = Line::from(vec![
-        Span::styled(format!("{glyph} "), Style::new().fg(color)),
-        Span::styled(label, Style::new().fg(theme.subtext)),
-        Span::raw(" "),
-    ]);
-    frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
+    let mut spans = Vec::<Span<'_>>::new();
+    // 后台 task 计数:有任务在跑就显示「↓N」,跑完自动消失。
+    if state.tasks_running > 0 {
+        spans.push(Span::styled(
+            format!("↓{} ", state.tasks_running),
+            Style::new().fg(theme.peach),
+        ));
+    }
+    spans.push(Span::styled(format!("{glyph} "), Style::new().fg(color)));
+    spans.push(Span::styled(label, Style::new().fg(theme.subtext)));
+    spans.push(Span::raw(" "));
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
+        area,
+    );
 }

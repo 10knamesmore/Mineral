@@ -6,15 +6,12 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use mineral_audio::{AudioHandle, SpectrumTap};
 use mineral_model::{Song, SongId};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind};
+use ratatui_image::picker::Picker;
 
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
 use crate::view::draw;
-
-/// 启动期前 N 个歌单走 [`Priority::User`],之后走 [`Priority::Background`]——
-/// "可见区域优先"的 hack 实现(终端再高也到不了 64 行)。
-const VISIBLE_HINT: usize = 64;
 
 /// 音量步长(百分点);`+`/`-` 一次。
 const VOLUME_STEP: i16 = 5;
@@ -60,6 +57,10 @@ pub struct App {
     /// PCM tap:每 tick 拉一批样本喂给 [`crate::state::AppState::fft`]。
     spectrum_tap: SpectrumTap,
 
+    /// 终端图片协议探测结果(kitty / iTerm2 / sixel / halfblock fallback),
+    /// `Tui::enter` 进 alternate screen 后探测一次,后续封面渲染共用。
+    pub picker: Picker,
+
     /// 上次看到的 `AudioSnapshot::track_finished_seq`。tick 中检测到增长就触发
     /// auto-next。重置时机:`submit_play_song` 时同步对齐到当前 engine seq,
     /// 避免「新歌一上来就被旧 seq 误触发」。
@@ -77,7 +78,13 @@ impl App {
     ///   - `scheduler`: 已构造的调度器,UI 持有共享引用
     ///   - `audio`: 已启动的音频引擎句柄
     ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路
-    pub fn new(scheduler: Scheduler, audio: AudioHandle, spectrum_tap: SpectrumTap) -> Self {
+    ///   - `picker`: 终端图片协议能力(由 caller 在 Tui::enter 后探测好传入)
+    pub fn new(
+        scheduler: Scheduler,
+        audio: AudioHandle,
+        spectrum_tap: SpectrumTap,
+        picker: Picker,
+    ) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
@@ -86,6 +93,7 @@ impl App {
             scheduler,
             audio,
             spectrum_tap,
+            picker,
             last_seen_finished_seq: 0,
             prefetch_fired_for: None,
         }
@@ -114,6 +122,8 @@ impl App {
                     self.advance_after_track_end();
                 }
                 self.maybe_submit_prefetch();
+                crate::prefetch::tick(&mut self.state, &self.scheduler);
+                self.state.tasks_running = self.scheduler.snapshot().running;
                 self.last_tick = Instant::now();
             }
         }
@@ -142,8 +152,9 @@ impl App {
         for ev in &events {
             self.state.apply(ev);
             match ev {
-                TaskEvent::PlaylistsFetched { playlists, .. } => {
-                    self.fanout_playlist_tracks(playlists);
+                TaskEvent::PlaylistsFetched { .. } => {
+                    // 不再 fanout 全部 PlaylistTracks —— 改 prefetch::tick 按 sel
+                    // 周围 radius 持续提交,1000 歌单用户不再被刷出 1000 task。
                 }
                 TaskEvent::PlayUrlReady { song_id, play_url } => {
                     let want = self.state.playback.track.as_ref().map(|t| &t.id);
@@ -156,7 +167,9 @@ impl App {
                     }
                     // 其他 song_id:用户已切到别的歌或换了模式,旧 URL 直接丢。
                 }
-                TaskEvent::PlaylistTracksFetched { .. } | TaskEvent::LyricsReady { .. } => {}
+                TaskEvent::PlaylistTracksFetched { .. }
+                | TaskEvent::LyricsReady { .. }
+                | TaskEvent::CoverReady { .. } => {}
             }
         }
     }
@@ -378,27 +391,6 @@ impl App {
                 self.state.queue.get((cur + len - 1) % len).cloned()
             }
             PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
-        }
-    }
-
-    /// 收到歌单批次后,逐条提交 `PlaylistTracks` 任务。前 [`VISIBLE_HINT`] 条
-    /// 用 User 优先级,余下用 Background;dedup 在 scheduler 内自动处理。
-    fn fanout_playlist_tracks(&self, playlists: &[mineral_model::Playlist]) {
-        let already_loaded = self.state.playlists.len().saturating_sub(playlists.len());
-        for (offset, p) in playlists.iter().enumerate() {
-            let idx = already_loaded + offset;
-            let priority = if idx < VISIBLE_HINT {
-                Priority::User
-            } else {
-                Priority::Background
-            };
-            self.scheduler.submit(
-                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-                    source: p.source,
-                    id: p.id.clone(),
-                }),
-                priority,
-            );
         }
     }
 

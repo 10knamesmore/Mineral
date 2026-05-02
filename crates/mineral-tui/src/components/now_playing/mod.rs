@@ -6,6 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
+use ratatui_image::picker::Picker;
 
 use crate::state::{AppState, View};
 use crate::theme::Theme;
@@ -14,10 +15,10 @@ pub mod playlist_detail;
 pub mod track_detail;
 
 /// 渲染右栏。根据 [`AppState::view`] 选 playlist_detail / track_detail。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker, theme: &Theme) {
     match state.view {
         View::Playlists => match state.selected_playlist() {
-            Some(p) => playlist_detail::draw(frame, area, p, state, theme),
+            Some(p) => playlist_detail::draw(frame, area, p, state, picker, theme),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {
@@ -25,7 +26,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
             match tracks.get(state.sel_track) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
-                    track_detail::draw(frame, area, sv, current_id, theme);
+                    track_detail::draw(frame, area, sv, current_id, state, picker, theme);
                 }
                 None => paint_empty(frame, area, theme),
             }

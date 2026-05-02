@@ -1,6 +1,9 @@
 //! 任务推到 client 的事件载荷。
 
-use mineral_model::{Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use std::sync::Arc;
+
+use image::DynamicImage;
+use mineral_model::{Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
@@ -42,5 +45,14 @@ pub enum TaskEvent {
 
         /// 各格式歌词(LRC / yrc / 翻译 / 罗马音)。
         lyrics: Lyrics,
+    },
+
+    /// `CoverArt` 任务成功:封面图已 fetch + decode。
+    CoverReady {
+        /// 图片 URL,UI 端按它进 cover_cache。
+        url: MediaUrl,
+
+        /// 解码后的 RGB 图。`Arc` 让 cache 命中和 render 共享同一份像素。
+        image: Arc<DynamicImage>,
     },
 }
