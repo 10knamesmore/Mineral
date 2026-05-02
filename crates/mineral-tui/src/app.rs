@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_audio::AudioHandle;
-use mineral_model::Song;
+use mineral_model::{Song, SongId};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind};
 
 use crate::state::{AppState, Focus, View};
@@ -27,6 +27,11 @@ const SEEK_BIG_STEP_S: i64 = 30;
 
 /// 大跨度跳行步长(行);`Shift+J`/`Shift+K` 一次。j/k/箭头仍是 1。
 const ROW_BIG_STEP: usize = 7;
+
+/// auto-next 预拉触发距曲终的剩余时间(ms)。播放进度进入此窗口就开始拉下一首的
+/// SongUrl;5s 足够 SongUrl 200-500ms + stream-download 256KB prefetch_bytes 完成,
+/// 又不至于早到 URL 过期。
+const PREFETCH_LEAD_MS: u64 = 5_000;
 
 /// 应用顶层状态。
 pub struct App {
@@ -52,6 +57,10 @@ pub struct App {
     /// auto-next。重置时机:`submit_play_song` 时同步对齐到当前 engine seq,
     /// 避免「新歌一上来就被旧 seq 误触发」。
     last_seen_finished_seq: u64,
+
+    /// 已对哪首歌触发过预拉(避免同一首曲终前 tick 反复提交 SongUrl)。
+    /// `submit_play_song` 时重置,新歌可以再次预拉它的下一首。
+    prefetch_fired_for: Option<SongId>,
 }
 
 impl App {
@@ -69,6 +78,7 @@ impl App {
             scheduler,
             audio,
             last_seen_finished_seq: 0,
+            prefetch_fired_for: None,
         }
     }
 
@@ -94,6 +104,7 @@ impl App {
                     self.last_seen_finished_seq = snap.track_finished_seq;
                     self.advance_after_track_end();
                 }
+                self.maybe_submit_prefetch();
                 self.last_tick = Instant::now();
             }
         }
@@ -109,11 +120,15 @@ impl App {
                     self.fanout_playlist_tracks(playlists);
                 }
                 TaskEvent::PlayUrlReady { song_id, play_url } => {
-                    // 过滤过期 URL:用户已切歌,但旧 SongUrl 任务可能已在飞,回来时不应顶掉新歌。
                     let want = self.state.playback.track.as_ref().map(|t| &t.id);
                     if want == Some(song_id) {
+                        // 当前歌的 URL 来了,直接播。
                         self.audio.play(play_url.url.clone());
+                    } else if Some(song_id) == self.prefetch_fired_for.as_ref() {
+                        // 预拉的 URL 命中:存进 cache,曲终切歌时直接用。
+                        self.state.prefetched = Some((song_id.clone(), play_url.url.clone()));
                     }
+                    // 其他 song_id:用户已切到别的歌或换了模式,旧 URL 直接丢。
                 }
                 TaskEvent::PlaylistTracksFetched { .. } | TaskEvent::LyricsReady { .. } => {}
             }
@@ -143,13 +158,29 @@ impl App {
         // 把 last_seen_finished_seq 对齐到当前 engine seq —— audio.stop() 不会
         // 触发曲终,但避免极端情况下旧 seq 比新 snapshot 大造成误触发。
         self.last_seen_finished_seq = self.audio.snapshot().track_finished_seq;
-        self.scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-                source: song.source,
-                song_id: song.id.clone(),
-            }),
-            Priority::User,
-        );
+        // 新歌允许再次预拉它的下一首。
+        self.prefetch_fired_for = None;
+
+        // 命中 prefetch:跳过 SongUrl 提交,直接把缓存的 URL 喂 audio。
+        let cached = match self.state.prefetched.take() {
+            Some((id, url)) if id == song.id => Some(url),
+            other => {
+                // take 拿走后失配的 URL 已无人认领,丢掉(不放回)。
+                drop(other);
+                None
+            }
+        };
+        if let Some(url) = cached {
+            self.audio.play(url);
+        } else {
+            self.scheduler.submit(
+                TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+                    source: song.source,
+                    song_id: song.id.clone(),
+                }),
+                Priority::User,
+            );
+        }
         self.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
                 source: song.source,
@@ -157,6 +188,106 @@ impl App {
             }),
             Priority::User,
         );
+    }
+
+    /// 播放进度进入曲终前 [`PREFETCH_LEAD_MS`] 窗口时,提交下一首的 SongUrl(Background)。
+    /// 每首歌只触发一次。Shuffle 现在也走顺序 queue,next 可预测,不再排除。
+    fn maybe_submit_prefetch(&mut self) {
+        let pb = &self.state.playback;
+        let Some(cur_song) = pb.track.as_ref() else {
+            return;
+        };
+        let dur = pb.duration_ms();
+        if dur == 0 {
+            return;
+        }
+        if dur.saturating_sub(pb.position_ms) > PREFETCH_LEAD_MS {
+            return;
+        }
+        if self.prefetch_fired_for.as_ref() == Some(&cur_song.id) {
+            return;
+        }
+        let Some(next) = self.next_song() else {
+            return;
+        };
+        self.prefetch_fired_for = Some(cur_song.id.clone());
+        self.scheduler.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+                source: next.source,
+                song_id: next.id,
+            }),
+            Priority::Background,
+        );
+    }
+
+    /// 替换 queue:非 Shuffle 直接赋 + 按 target_id 设 queue_sel;Shuffle 则保存原序、
+    /// 洗牌、把 target swap 到 index 0。统一入口避免 Enter 新歌单 / 后续切歌需要在两种
+    /// 状态下手动维护。
+    fn set_queue(&mut self, new_queue: Vec<Song>, target_id: &SongId) {
+        if matches!(self.state.playback.mode, crate::playback::PlayMode::Shuffle) {
+            use rand::seq::SliceRandom;
+            let mut shuffled = new_queue.clone();
+            shuffled.shuffle(&mut rand::rng());
+            // target swap 到 index 0,保证当前歌在 queue 顶。
+            if let Some(pos) = shuffled.iter().position(|s| s.id == *target_id) {
+                shuffled.swap(0, pos);
+            }
+            self.state.original_queue = Some(new_queue);
+            self.state.queue = shuffled;
+            self.state.queue_sel = 0;
+        } else {
+            let sel = new_queue
+                .iter()
+                .position(|s| s.id == *target_id)
+                .unwrap_or(0);
+            self.state.queue = new_queue;
+            self.state.queue_sel = sel;
+            self.state.original_queue = None;
+        }
+    }
+
+    /// `m` 键循环播放模式;在进 / 退 Shuffle 边界处洗牌或还原。
+    fn cycle_play_mode(&mut self) {
+        use crate::playback::PlayMode;
+        let old = self.state.playback.mode;
+        let new = old.cycle();
+        self.state.playback.mode = new;
+        match (old, new) {
+            (m1, PlayMode::Shuffle) if m1 != PlayMode::Shuffle => self.enter_shuffle(),
+            (PlayMode::Shuffle, m2) if m2 != PlayMode::Shuffle => self.exit_shuffle(),
+            _ => {}
+        }
+    }
+
+    /// 进入 Shuffle:保存原序、洗牌、当前歌 swap 到 index 0、queue_sel = 0。
+    /// 之后正向推进就是「当前歌之后随机播」。
+    fn enter_shuffle(&mut self) {
+        use rand::seq::SliceRandom;
+        if self.state.queue.is_empty() {
+            return;
+        }
+        let original = self.state.queue.clone();
+        let cur_id = self.state.playback.track.as_ref().map(|t| t.id.clone());
+        self.state.queue.shuffle(&mut rand::rng());
+        if let Some(id) = cur_id {
+            if let Some(pos) = self.state.queue.iter().position(|s| s.id == id) {
+                self.state.queue.swap(0, pos);
+            }
+        }
+        self.state.queue_sel = 0;
+        self.state.original_queue = Some(original);
+    }
+
+    /// 退出 Shuffle:还原原序,queue_sel 落在当前歌在原序中的位置。
+    fn exit_shuffle(&mut self) {
+        let Some(original) = self.state.original_queue.take() else {
+            return;
+        };
+        let cur_id = self.state.playback.track.as_ref().map(|t| t.id.clone());
+        self.state.queue = original;
+        self.state.queue_sel = cur_id
+            .and_then(|id| self.state.queue.iter().position(|s| s.id == id))
+            .unwrap_or(0);
     }
 
     /// 一首自然播完后按 PlayMode 选下一首播。Sequential 到末尾就停。
@@ -167,6 +298,8 @@ impl App {
     }
 
     /// 按 PlayMode 选下一首。queue 空 / Sequential 到末尾返回 `None`。
+    /// Shuffle 这里跟 RepeatAll 一样按 queue 顺序推 + wrap —— queue 在进 Shuffle 时
+    /// 已经一次性洗过(见 [`Self::enter_shuffle`]),next 是确定性的。
     fn next_song(&self) -> Option<Song> {
         use crate::playback::PlayMode;
         let len = self.state.queue.len();
@@ -176,17 +309,15 @@ impl App {
         let cur = self.state.queue_sel.min(len - 1);
         match self.state.playback.mode {
             PlayMode::Sequential => self.state.queue.get(cur + 1).cloned(),
-            PlayMode::RepeatAll => self.state.queue.get((cur + 1) % len).cloned(),
-            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
-            PlayMode::Shuffle => {
-                use rand::seq::IteratorRandom;
-                self.state.queue.iter().choose(&mut rand::rng()).cloned()
+            PlayMode::RepeatAll | PlayMode::Shuffle => {
+                self.state.queue.get((cur + 1) % len).cloned()
             }
+            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
         }
     }
 
-    /// 按 PlayMode 选上一首。Sequential 到队首返回 `None`(避免「往回播」误操作)。
-    /// Shuffle 也是随机选(本期不做历史栈,见 BACKLOG)。
+    /// 按 PlayMode 选上一首。Sequential 到队首返回 `None`。Shuffle 在洗过的 queue 里
+    /// 顺序回退,真能回到「刚播过的那首」(不再是再随机)。
     fn prev_song(&self) -> Option<Song> {
         use crate::playback::PlayMode;
         let len = self.state.queue.len();
@@ -202,12 +333,10 @@ impl App {
                     self.state.queue.get(cur - 1).cloned()
                 }
             }
-            PlayMode::RepeatAll => self.state.queue.get((cur + len - 1) % len).cloned(),
-            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
-            PlayMode::Shuffle => {
-                use rand::seq::IteratorRandom;
-                self.state.queue.iter().choose(&mut rand::rng()).cloned()
+            PlayMode::RepeatAll | PlayMode::Shuffle => {
+                self.state.queue.get((cur + len - 1) % len).cloned()
             }
+            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
         }
     }
 
@@ -406,7 +535,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char(' ') => self.toggle_play_pause(),
-            KeyCode::Char('m') => self.state.playback.mode = self.state.playback.mode.cycle(),
+            KeyCode::Char('m') => self.cycle_play_mode(),
             KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_volume(VOLUME_STEP),
             KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-VOLUME_STEP),
             KeyCode::Left => self.seek_relative(-SEEK_STEP_S),
@@ -520,8 +649,8 @@ impl App {
             KeyCode::Enter => {
                 let tracks = self.state.current_tracks();
                 if let Some(s) = tracks.get(self.state.sel_track).map(|sv| sv.data.clone()) {
-                    self.state.queue = tracks.into_iter().map(|sv| sv.data).collect();
-                    self.state.queue_sel = self.state.sel_track;
+                    let new_queue: Vec<Song> = tracks.into_iter().map(|sv| sv.data).collect();
+                    self.set_queue(new_queue, &s.id);
                     self.submit_play_song(&s);
                 }
             }

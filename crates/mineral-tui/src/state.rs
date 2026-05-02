@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use mineral_model::{PlaylistId, Song, SongId};
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
 use mineral_task::TaskEvent;
 
 use crate::lrc;
@@ -92,6 +92,14 @@ pub struct AppState {
 
     /// quit confirm modal 是否打开。
     pub confirm_open: bool,
+
+    /// 预拉的下一首播放 URL(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
+    /// 不命中(用户切到别的歌 / 模式变了)就丢。
+    pub prefetched: Option<(SongId, MediaUrl)>,
+
+    /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
+    /// 非 Shuffle 状态恒为 `None`。
+    pub original_queue: Option<Vec<Song>>,
 }
 
 impl AppState {
@@ -117,6 +125,8 @@ impl AppState {
             focus: Focus::Left,
             search_mode: false,
             confirm_open: false,
+            prefetched: None,
+            original_queue: None,
         }
     }
 
