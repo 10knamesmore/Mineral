@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use image::DynamicImage;
 use mineral_model::{MediaUrl, PlayUrl, PlaylistId, Song, SongId, SourceKind};
@@ -133,7 +134,15 @@ pub struct AppState {
     /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
     pub liked_ids: FxHashMap<SourceKind, FxHashSet<SongId>>,
+
+    /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
+    /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
+    pub last_sel_change: Instant,
 }
+
+/// 选中变化后多久才允许 cover_image 构建新 protocol。yazi 用 30ms;mineral 用
+/// 80ms 略宽,适配 33ms tick。期间走程序化 fallback,稳态后再切真图。
+pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
 impl AppState {
     /// 构造空状态。所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充。
@@ -166,7 +175,13 @@ impl AppState {
             cover_protocols: RefCell::new(FxHashMap::default()),
             tasks_running: 0,
             liked_ids: FxHashMap::default(),
+            last_sel_change: Instant::now(),
         }
+    }
+
+    /// 距上次选中变化是否仍在 [`COVER_DEBOUNCE`] 防抖窗口内。
+    pub fn is_scrolling(&self) -> bool {
+        self.last_sel_change.elapsed() < COVER_DEBOUNCE
     }
 
     /// 给定一首歌,根据当前 `liked_ids` / 未来其他 user-data 装饰成 SongView。

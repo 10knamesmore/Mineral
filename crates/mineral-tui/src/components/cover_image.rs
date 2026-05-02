@@ -50,6 +50,15 @@ pub fn render_or_fallback(
     // 避免 cache 的 protocol 按旧 dims 编码导致溢出 / 截断。
     let mut protocols = state.cover_protocols.borrow_mut();
     let dims = (target.width, target.height);
+    // 滚动防抖:protocol 不在 cache 或 dims 变了都得重建(decode + base64/kitty
+    // 编码,render 线程上是百毫秒级开销)。如果用户还在快速 nav,**整个 cover
+    // 区留空**(连程序化封面都不画)—— 视觉上就是「滚的时候右栏图位空着」,稳
+    // 定 ≥ COVER_DEBOUNCE 后真图淡入。避开「每按一次 j 都重新编码全图」的卡顿,
+    // 同时不闪烁程序化色块。
+    let needs_build = protocols.get(url).is_none_or(|e| e.1 != dims);
+    if needs_build && state.is_scrolling() {
+        return;
+    }
     let entry = protocols
         .entry(url.clone())
         .or_insert_with(|| (picker.new_resize_protocol((*image).clone()), dims));

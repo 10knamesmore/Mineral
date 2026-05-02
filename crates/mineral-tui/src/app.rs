@@ -518,10 +518,12 @@ impl App {
             KeyCode::Backspace => {
                 self.state.search_q.pop();
                 self.reset_sel_for_search();
+                self.state.last_sel_change = Instant::now();
             }
             KeyCode::Char(c) => {
                 self.state.search_q.push(c);
                 self.reset_sel_for_search();
+                self.state.last_sel_change = Instant::now();
             }
             _ => {}
         }
@@ -639,6 +641,9 @@ impl App {
     }
 
     fn handle_playlists_key(&mut self, key: &KeyEvent) {
+        // 任何 key 都标记一次「正在 nav」—— cover_image 用来防抖,避免长按 j 时
+        // 每帧重建 protocol。代价仅一次 Instant::now()。
+        self.state.last_sel_change = Instant::now();
         // Esc 优先吃掉:有过滤词时清过滤,留在 Playlists,不走后续。
         if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
             self.state.search_q.clear();
@@ -697,6 +702,7 @@ impl App {
     }
 
     fn handle_library_key(&mut self, key: &KeyEvent) {
+        self.state.last_sel_change = Instant::now();
         // Esc 优先吃掉:有过滤词时清过滤,留在 Library,不回 Playlists。
         if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
             self.state.search_q.clear();
