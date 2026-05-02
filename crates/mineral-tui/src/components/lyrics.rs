@@ -97,6 +97,11 @@ fn paint_window(
     let height = usize::from(inner.height);
     let cur_idx = cur.unwrap_or(0);
     let center_row = height / 2;
+    // fade 用:从中心向两侧最远距离的较大者(窗口可能不对称)。
+    // 距离 1 时 fade 输入 num=0 → 满 subtext;最远时 num=denom → 满 surface1。
+    let max_dist = u64::try_from(center_row.max(height.saturating_sub(center_row + 1)))
+        .unwrap_or(0)
+        .max(1);
 
     for row in 0..height {
         // 把行号映射到 lines 的 index:row=center_row 对应 cur_idx。
@@ -118,18 +123,30 @@ fn paint_window(
 
         let is_center = Some(line_idx) == cur;
         let line: Line<'_> = if is_center {
+            // 中心行用 accent(mauve)区别于灰阶 fade,色相差让聚焦行一眼可辨。
             yrc.lines
                 .zip(yrc.cur)
                 .and_then(|(v, i)| v.get(i))
                 .map_or_else(
                     || {
                         Line::from(text.as_str())
-                            .style(Style::new().fg(theme.text).add_modifier(Modifier::BOLD))
+                            .style(Style::new().fg(theme.accent).add_modifier(Modifier::BOLD))
                     },
                     |yl| render_yrc_line(yl, yrc.position_ms, theme),
                 )
         } else {
-            Line::from(text.as_str()).style(Style::new().fg(theme.overlay))
+            // 距中心越远越淡入背景。dark 端用 surface0 比 surface1 更暗,
+            // 强化「中心聚焦、外围基本看不到」的对比。
+            let dist_signed =
+                isize::try_from(row).unwrap_or(0) - isize::try_from(center_row).unwrap_or(0);
+            let dist = u64::try_from(dist_signed.unsigned_abs()).unwrap_or(0);
+            let fade = lerp_color(
+                theme.subtext,
+                theme.surface0,
+                dist.saturating_sub(1),
+                max_dist.saturating_sub(1).max(1),
+            );
+            Line::from(text.as_str()).style(Style::new().fg(fade))
         };
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), row_area);
     }
@@ -173,7 +190,8 @@ fn push_char_spans<'a>(
             .saturating_add((i_u64 + 1) * total_dur / n_u64);
         let char_dur = char_end.saturating_sub(char_start).max(1);
         let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
-        let color = lerp_color(theme.overlay, theme.text, elapsed, char_dur);
+        // wipe 终点用 accent 跟 lrc 兜底中心行同色,中心行整体走 mauve 系。
+        let color = lerp_color(theme.overlay, theme.accent, elapsed, char_dur);
 
         let next_byte = byte_cursor.saturating_add(ch.len_utf8());
         let slice = yrc_char
