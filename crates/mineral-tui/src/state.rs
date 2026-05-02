@@ -269,8 +269,11 @@ impl AppState {
     }
 
     /// 返回当前选中歌单(Playlists 视图)的引用。
+    ///
+    /// `sel_playlist` 是 [`Self::filtered_playlists`] 的索引,过滤态下取的是用户实际
+    /// 看见的那一行(而不是 raw 列表上的同位置 —— 那条可能根本没显示)。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
-        self.playlists.get(self.sel_playlist)
+        self.filtered_playlists().get(self.sel_playlist).copied()
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。

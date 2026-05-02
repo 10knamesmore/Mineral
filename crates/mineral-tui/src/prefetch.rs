@@ -44,12 +44,11 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     };
     match state.view {
         View::Playlists => {
+            // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
+            let filtered = state.filtered_playlists();
             let sel = state.sel_playlist;
             let get = |i: usize| -> Option<&MediaUrl> {
-                state
-                    .playlists
-                    .get(i)
-                    .and_then(|p| p.data.cover_url.as_ref())
+                filtered.get(i).and_then(|p| p.data.cover_url.as_ref())
             };
             push_if_new(get(sel), &mut out);
             for d in 1..=RADIUS {
@@ -60,31 +59,27 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
             }
         }
         View::Library => {
-            // sel-first 走 filtered_tracks(尊重搜索),只 get(sel) 一次,
-            // 仍是 1 次 SongView Vec clone(<200 行典型 < 1ms)。
+            // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
+            // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
             let sel = state.sel_track;
             push_if_new(
                 filtered.get(sel).and_then(|sv| sv.data.cover_url.as_ref()),
                 &mut out,
             );
-            drop(filtered);
-            // 邻居走 raw slot,只借用,不 clone 整 Vec。
-            if let Some(tracks) = state.current_tracks_slot() {
-                for d in 1..=RADIUS {
-                    if let Some(idx) = sel.checked_sub(d) {
-                        push_if_new(
-                            tracks.get(idx).and_then(|sv| sv.data.cover_url.as_ref()),
-                            &mut out,
-                        );
-                    }
+            for d in 1..=RADIUS {
+                if let Some(idx) = sel.checked_sub(d) {
                     push_if_new(
-                        tracks
-                            .get(sel.saturating_add(d))
-                            .and_then(|sv| sv.data.cover_url.as_ref()),
+                        filtered.get(idx).and_then(|sv| sv.data.cover_url.as_ref()),
                         &mut out,
                     );
                 }
+                push_if_new(
+                    filtered
+                        .get(sel.saturating_add(d))
+                        .and_then(|sv| sv.data.cover_url.as_ref()),
+                    &mut out,
+                );
             }
         }
     }
@@ -105,9 +100,10 @@ fn request_playlist_tracks(state: &AppState, scheduler: &Scheduler) {
     if state.view != View::Playlists {
         return;
     }
+    let filtered = state.filtered_playlists();
     let sel = state.sel_playlist;
     let submit = |idx: usize| {
-        let Some(p) = state.playlists.get(idx) else {
+        let Some(p) = filtered.get(idx) else {
             return;
         };
         if state.tracks_cache.contains_key(&p.data.id) {

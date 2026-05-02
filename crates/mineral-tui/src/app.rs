@@ -631,7 +631,13 @@ impl App {
     }
 
     fn handle_playlists_key(&mut self, key: &KeyEvent) {
-        let max = self.state.playlists.len().saturating_sub(1);
+        // Esc 优先吃掉:有过滤词时清过滤,留在 Playlists,不走后续。
+        if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
+            self.state.search_q.clear();
+            self.state.sel_playlist = 0;
+            return;
+        }
+        let max = self.state.filtered_playlists().len().saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.state.sel_playlist = self.state.sel_playlist.saturating_add(1).min(max);
@@ -653,9 +659,28 @@ impl App {
                 self.state.sel_playlist = 0;
             }
             KeyCode::Char('G') => {
-                self.state.sel_playlist = self.state.playlists.len().saturating_sub(1);
+                self.state.sel_playlist = max;
             }
             KeyCode::Char('l') | KeyCode::Enter => {
+                // 进 Library 前清搜索词(跨视图过滤几乎不对位)。但 sel_playlist 是
+                // filtered 索引,清完 search_q 后 filtered 复原 raw,直接保留 sel
+                // 会指向另一条 playlist。先 remap 到 raw 列表上的位置。
+                if let Some(target_id) = self
+                    .state
+                    .filtered_playlists()
+                    .get(self.state.sel_playlist)
+                    .map(|p| p.data.id.clone())
+                {
+                    self.state.search_q.clear();
+                    if let Some(raw_idx) = self
+                        .state
+                        .playlists
+                        .iter()
+                        .position(|p| p.data.id == target_id)
+                    {
+                        self.state.sel_playlist = raw_idx;
+                    }
+                }
                 self.state.view = View::Library;
                 self.state.sel_track = 0;
             }
@@ -664,8 +689,13 @@ impl App {
     }
 
     fn handle_library_key(&mut self, key: &KeyEvent) {
-        let len = self.state.current_tracks().len();
-        let max = len.saturating_sub(1);
+        // Esc 优先吃掉:有过滤词时清过滤,留在 Library,不回 Playlists。
+        if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
+            self.state.search_q.clear();
+            self.state.sel_track = 0;
+            return;
+        }
+        let max = self.state.filtered_tracks().len().saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.state.sel_track = self.state.sel_track.saturating_add(1).min(max);
@@ -683,18 +713,30 @@ impl App {
                 self.state.sel_track = 0;
             }
             KeyCode::Char('G') => {
-                self.state.sel_track = len.saturating_sub(1);
+                self.state.sel_track = max;
             }
             KeyCode::Char('h') | KeyCode::Esc | KeyCode::Backspace => {
+                // 跨视图过滤词不对位(track 名 vs playlist 名),回 Playlists 时清掉。
+                // sel_playlist 一直是 raw 索引(进 Library 时已 remap),无需再调。
+                self.state.search_q.clear();
                 self.state.view = View::Playlists;
             }
             KeyCode::Enter => {
-                let tracks = self.state.current_tracks();
-                if let Some(s) = tracks.get(self.state.sel_track).map(|sv| sv.data.clone()) {
-                    let new_queue: Vec<Song> = tracks.into_iter().map(|sv| sv.data).collect();
-                    self.set_queue(new_queue, &s.id);
-                    self.submit_play_song(&s);
-                }
+                // 选中行走 filtered(用户看见的那首),queue 灌完整歌单 ——
+                // 过滤态下播完当前曲,next/prev 仍在整张歌单里走。
+                let filtered = self.state.filtered_tracks();
+                let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone())
+                else {
+                    return;
+                };
+                let new_queue: Vec<Song> = self
+                    .state
+                    .current_tracks()
+                    .into_iter()
+                    .map(|sv| sv.data)
+                    .collect();
+                self.set_queue(new_queue, &song.id);
+                self.submit_play_song(&song);
             }
             _ => {}
         }
