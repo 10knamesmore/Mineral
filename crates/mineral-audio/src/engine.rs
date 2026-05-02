@@ -34,8 +34,18 @@ use crate::tap::{SharedProd, TapSource};
 /// termusic 用 5ms,我们留余量。
 const TICK: Duration = Duration::from_millis(20);
 
-/// 默认初始音量,与 UI 默认 66% 对齐。
-const DEFAULT_VOLUME_F32: f32 = 0.66;
+/// 默认初始音量百分比,与 UI 默认 66% 对齐。换算成 cubic gain ≈ 0.287。
+const DEFAULT_VOLUME_PCT: u8 = 66;
+
+/// 把 0..=100 的 pct 映射成 rodio 的线性 gain(0.0..=1.0),走 cubic 感知曲线。
+///
+/// 人耳响度感大致是 PCM 增益的立方根关系 —— 线性 50% gain 听上去 ≈ "85% 响"。
+/// 用 `gain = (pct/100)^3` 反转:UI 显示 50% 时听上去也大约半响,音量条手感才"自然"。
+/// Spotify / VLC / Audacious 都用这条。
+fn pct_to_gain(pct: u8) -> f32 {
+    let p = f32::from(pct.min(100)) / 100.0;
+    p * p * p
+}
 
 /// stream-download 起播前预拉的字节数。256 KB 在 320 kbps mp3 ≈ 6.4 秒缓冲,
 /// seek ±5s 命中已下载区间概率极高,cpal 回调线程不被网络等待阻塞。
@@ -85,7 +95,7 @@ fn engine_main(
     stream_handle.log_on_drop(false);
 
     let player = rodio::Player::connect_new(stream_handle.mixer());
-    player.set_volume(DEFAULT_VOLUME_F32);
+    player.set_volume(pct_to_gain(DEFAULT_VOLUME_PCT));
 
     // multi_thread:stream-download 后台下载 task 必须在独立 worker 上持续被 poll,
     // 否则 block_on 一返回,reader.read 永远等不到字节,sink 一直空 → UI 一直 paused。
@@ -181,7 +191,7 @@ fn handle_command(
             Ok(Some(0))
         }
         AudioCommand::SetVolume(pct) => {
-            player.set_volume(f32::from(pct) / 100.0);
+            player.set_volume(pct_to_gain(pct));
             Ok(None)
         }
     }

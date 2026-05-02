@@ -14,7 +14,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::color::lerp_color;
+use crate::color::{lerp_color, rotate_hue};
 use crate::theme::Theme;
 
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
@@ -40,27 +40,80 @@ const SHOW_PEAK_CAP: bool = true;
 /// 是否显示 trail(peak 与 bar 之间的余韵 fade)。后续接 config 时改读配置。
 const SHOW_TRAIL: bool = true;
 
-/// 频谱状态:每根条的当前高度 + 对应的 peak 与 hold 计数。
+/// 是否启用色相缓慢漂移(整渐变在 HSV 色环上慢慢转一圈)。后续接 config 时改读配置。
+const HUE_ROTATE: bool = true;
+
+/// 色相旋转一整圈(360°)的 tick 数。30fps 下 1800 tick ≈ 60s,刚好"看着不静止
+/// 又不晃眼"。短了会让人头晕,长了一首歌都察觉不到。
+const HUE_CYCLE_TICKS: u32 = 1800;
+
+/// 是否启用 peak 弹簧物理(target 跳变时 pos 过冲 + 阻尼回弹)。后续接 config 时改读配置。
+const SPRING_PEAK: bool = true;
+
+/// 弹簧刚度。每 tick `force += STIFFNESS × (target - pos)`。0.35 attack 偏强,
+/// 跟得上 FFT 跳变;太大瞬间冲过头看着像 bug。
+const SPRING_STIFFNESS: f32 = 0.35;
+
+/// 速度阻尼。每 tick `force -= DAMPING × velocity`。
+/// 临界阻尼 c = 2·√k ≈ 1.18,这里 0.45 < 临界 → underdamped,2 次可见过冲后稳定。
+/// 加大就稳得快但失去"弹"的感觉,减小则振荡多到分散注意。
+const SPRING_DAMPING: f32 = 0.45;
+
+/// 频谱状态:每根条的当前高度 + peak target/hold/弹簧 pos+vel + 色相相位。
+///
+/// peak 拆两层:`peaks[i]` 是 hold/fall 状态机算出的"目标"高度,`peak_pos[i]`
+/// 是显示位置(弹簧追目标)。SPRING_PEAK=false 时 peak_pos 直接锁到 peaks。
 #[derive(Clone, Debug)]
 pub struct SpectrumState {
     /// 当前条高(平滑后),0..=[`SPECTRUM_RES`]。
     bars: [u16; SPECTRUM_BARS],
 
-    /// 每根条对应的 peak hold 高度,0..=[`SPECTRUM_RES`]。peak >= bar 恒成立。
+    /// peak 目标高度(hold/fall 状态机维护),0..=[`SPECTRUM_RES`]。peaks[i] >= bars[i] 恒成立。
     peaks: [u16; SPECTRUM_BARS],
 
-    /// 每根条剩余 hold tick 数。归零后 peak 开始下落。
+    /// 每根条剩余 hold tick 数。归零后 peak target 开始下落。
     peak_hold: [u8; SPECTRUM_BARS],
+
+    /// peak 显示位置(弹簧追 peaks 的 target)。可短暂超过 RES(过冲),渲染时 clamp。
+    peak_pos: [f32; SPECTRUM_BARS],
+
+    /// peak 弹簧速度。每 tick 由刚度 / 阻尼推进。
+    peak_vel: [f32; SPECTRUM_BARS],
+
+    /// 色相旋转相位,0..[`HUE_CYCLE_TICKS`]。每 tick +1,渲染时换算成度数。
+    hue_phase: u32,
 }
 
 impl SpectrumState {
-    /// 初始静默状态。所有条都在 baseline,peak 与 bar 同位。
+    /// 初始静默状态。所有条都在 baseline,peak target/pos 同位,弹簧速度 0,色相 0。
     pub fn new() -> Self {
         Self {
             bars: [BASELINE_MIN; SPECTRUM_BARS],
             peaks: [BASELINE_MIN; SPECTRUM_BARS],
             peak_hold: [0; SPECTRUM_BARS],
+            peak_pos: [f32::from(BASELINE_MIN); SPECTRUM_BARS],
+            peak_vel: [0.0; SPECTRUM_BARS],
+            hue_phase: 0,
         }
+    }
+
+    /// 当前色相旋转角度(度)。`HUE_ROTATE = false` 时恒 0。
+    #[allow(clippy::as_conversions)]
+    fn hue_deg(&self) -> f32 {
+        if !HUE_ROTATE {
+            return 0.0;
+        }
+        // u32 → f32 在这两个量级(< 1800)内精确,允许 as。
+        (self.hue_phase as f32) * 360.0 / (HUE_CYCLE_TICKS as f32)
+    }
+
+    /// `col` 列的弹簧后 peak 显示位置,clamp 到 `0..=RES` 再 round 成 u16。
+    /// 过冲时 raw `peak_pos` 会短暂超过 RES,这里截到上限不让条画出面板外。
+    #[allow(clippy::as_conversions)]
+    fn spring_peak_at(&self, col: usize) -> u16 {
+        let raw = self.peak_pos.get(col).copied().unwrap_or(0.0);
+        let clamped = raw.clamp(0.0, f32::from(SPECTRUM_RES));
+        clamped.round() as u16
     }
 
     /// 一次 tick:推进条高 + peak。
@@ -95,6 +148,32 @@ impl SpectrumState {
         }
         self.apply_baseline();
         self.advance_peaks();
+        self.advance_peak_spring();
+        if HUE_ROTATE {
+            self.hue_phase = (self.hue_phase + 1) % HUE_CYCLE_TICKS;
+        }
+    }
+
+    /// 弹簧推进:`peak_pos` 朝 `peaks` (target) 跑,带 [`SPRING_STIFFNESS`] / [`SPRING_DAMPING`]。
+    /// `SPRING_PEAK=false` 时直接锁定到 target,无过冲。
+    fn advance_peak_spring(&mut self) {
+        if !SPRING_PEAK {
+            for (pos, p) in self.peak_pos.iter_mut().zip(self.peaks.iter()) {
+                *pos = f32::from(*p);
+            }
+            return;
+        }
+        for ((pos, vel), p) in self
+            .peak_pos
+            .iter_mut()
+            .zip(self.peak_vel.iter_mut())
+            .zip(self.peaks.iter().copied())
+        {
+            let target = f32::from(p);
+            let force = SPRING_STIFFNESS * (target - *pos) - SPRING_DAMPING * *vel;
+            *vel += force;
+            *pos += *vel;
+        }
     }
 
     /// 把每根条托到 [`BASELINE_MIN`] 之上。静默 / 起播间隙都靠这条保住"面板没死"。
@@ -168,10 +247,14 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
     let max_units = u32::from(area.height) * 8;
     // 渐变跨度。0 → accent(底)、span → accent_2(顶)。area.height-1 给最顶格 100% accent_2。
     let grad_span = u64::from(area.height.saturating_sub(1)).max(1);
+    // 色相旋转后的渐变两端。每帧算一次,不进 col 循环。
+    let hue = state.hue_deg();
+    let palette_lo = rotate_hue(theme.accent, hue);
+    let palette_hi = rotate_hue(theme.accent_2, hue);
     let buf = frame.buffer_mut();
     for col in 0..bar_count {
         let bar = state.bars.get(col).copied().unwrap_or(0);
-        let peak = state.peaks.get(col).copied().unwrap_or(0);
+        let peak = state.spring_peak_at(col);
         let scaled = (u32::from(bar) * max_units) / u32::from(SPECTRUM_RES);
         let full = u16::try_from(scaled / 8).unwrap_or(0);
         let partial = u16::try_from(scaled % 8).unwrap_or(0);
@@ -190,8 +273,8 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
         let x = area.x + u16::try_from(col).unwrap_or(0) * bar_step;
         for row_from_bottom in 0..area.height {
             let row_color = lerp_color(
-                theme.accent,
-                theme.accent_2,
+                palette_lo,
+                palette_hi,
                 u64::from(row_from_bottom),
                 grad_span,
             );
