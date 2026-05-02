@@ -1810,6 +1810,7 @@ dependencies = [
  "mineral-macros",
  "mineral-model",
  "mineral-task",
+ "rand",
  "ratatui",
  "serde",
  "tokio",

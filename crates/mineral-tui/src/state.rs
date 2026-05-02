@@ -2,8 +2,10 @@
 
 use std::collections::HashMap;
 
-use mineral_model::{PlaylistId, Song};
+use mineral_model::{PlaylistId, Song, SongId};
 use mineral_task::TaskEvent;
+
+use crate::lrc;
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -41,6 +43,9 @@ pub struct AppState {
 
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks_cache: HashMap<PlaylistId, Vec<SongView>>,
+
+    /// 歌曲 id → 解析后的 LRC 行;不在 map 里表示还没拉到 / 拉失败。
+    pub lyrics_cache: HashMap<SongId, Vec<(u64, String)>>,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -92,6 +97,7 @@ impl AppState {
             view: View::Playlists,
             playlists: Vec::new(),
             tracks_cache: HashMap::new(),
+            lyrics_cache: HashMap::new(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -133,7 +139,23 @@ impl AppState {
             }
             // 由 App 直接 forward 给 audio,state 不存 url。
             TaskEvent::PlayUrlReady { .. } => {}
+            TaskEvent::LyricsReady { song_id, lyrics } => {
+                // 只用 lrc 字段;yrc / 翻译 / 罗马音留 backlog。空 LRC 也存空 vec,
+                // 让渲染层走「无歌词」分支(避免反复重试)。
+                let parsed = lyrics
+                    .lrc
+                    .as_deref()
+                    .map(lrc::parse_lrc)
+                    .unwrap_or_default();
+                self.lyrics_cache.insert(song_id.clone(), parsed);
+            }
         }
+    }
+
+    /// 当前曲目的歌词行(已解析按时间升序);未拉到时返回 `None`。
+    pub fn current_lyrics(&self) -> Option<&Vec<(u64, String)>> {
+        let song = self.playback.track.as_ref()?;
+        self.lyrics_cache.get(&song.id)
     }
 
     /// 返回当前选中歌单(Playlists 视图)的引用。

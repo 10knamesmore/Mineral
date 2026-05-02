@@ -58,5 +58,5 @@ fn paint_viz(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let [spec_area, lyr_area] =
         Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(area);
     spectrum::draw(frame, spec_area, &app.state.spectrum, theme);
-    lyrics::draw(frame, lyr_area, theme);
+    lyrics::draw(frame, lyr_area, &app.state, theme);
 }

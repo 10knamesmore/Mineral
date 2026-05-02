@@ -93,10 +93,11 @@ fn engine_main(
     let _ = ready_tx.send(Ok(()));
 
     let mut cur_duration_ms: u64 = 0;
+    let mut state = EngineState::default();
 
     loop {
         match cmd_rx.recv_timeout(TICK) {
-            Ok(cmd) => match handle_command(cmd, &player, &rt) {
+            Ok(cmd) => match handle_command(cmd, &player, &rt, &mut state) {
                 Ok(new_dur) => {
                     if let Some(d) = new_dur {
                         cur_duration_ms = d;
@@ -110,9 +111,20 @@ fn engine_main(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         drain_seek(seek_mailbox, &player);
-        update_snapshot(snapshot, &player, cur_duration_ms);
+        update_snapshot(snapshot, &player, cur_duration_ms, &mut state);
     }
     Ok(())
+}
+
+/// engine 跨 tick 的可变状态。
+#[derive(Default)]
+struct EngineState {
+    /// 上一次 tick sink 是否非空。用来检测「sink 从非空变空」的下降沿 = 曲终。
+    /// `Play` 时设 true,`Stop` 时设 false(stop 走「打断」语义,不算曲终)。
+    last_was_non_empty: bool,
+
+    /// 单调递增的曲终计数,每次自然曲终 +1,写进 snapshot。
+    finished_seq: u64,
 }
 
 /// 处理一条命令。返回 `Some(duration_ms)` 表示曲目变了,player 现在播这个新曲;
@@ -121,12 +133,17 @@ fn handle_command(
     cmd: AudioCommand,
     player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
+    state: &mut EngineState,
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
         AudioCommand::Play(url) => {
+            // 切歌前 stop 不该触发上一首的曲终事件 —— 用户主动换。
+            state.last_was_non_empty = false;
             player.stop();
             let dur = append_decoded(player, rt, url)?;
             player.play();
+            // 新曲已 append + play,后续 tick 看到 sink 非空就 latch 上。
+            state.last_was_non_empty = true;
             Ok(Some(dur))
         }
         AudioCommand::Pause => {
@@ -138,6 +155,8 @@ fn handle_command(
             Ok(None)
         }
         AudioCommand::Stop => {
+            // user-stop 也不该触发曲终。
+            state.last_was_non_empty = false;
             player.stop();
             Ok(Some(0))
         }
@@ -199,13 +218,30 @@ fn update_snapshot(
     snapshot: &Arc<Mutex<AudioSnapshot>>,
     player: &rodio::Player,
     cur_duration_ms: u64,
+    state: &mut EngineState,
 ) {
     let pos_ms = duration_to_ms(player.get_pos());
-    let playing = !player.is_paused() && !player.empty();
+    let is_paused = player.is_paused();
+    let is_empty = player.empty();
+    let playing = !is_paused && !is_empty;
+
+    // 下降沿:上一 tick 非空 + 这一 tick 空 = 自然曲终。
+    // user 主动 Stop / Play(切歌) 在 handle_command 里已把 last_was_non_empty 清为 false,
+    // 所以那条路径不会在这里被误判为「曲终」。
+    if state.last_was_non_empty && is_empty {
+        state.finished_seq += 1;
+        state.last_was_non_empty = false;
+    } else if !is_empty {
+        // sink 非空状态(刚 append 还在播,或 paused 但队列里有东西)持续 latch true,
+        // 让下次「真空」能被 detect 到。
+        state.last_was_non_empty = true;
+    }
+
     let mut g = snapshot.lock();
     g.playing = playing;
     g.position_ms = pos_ms;
     g.duration_ms = cur_duration_ms;
+    g.track_finished_seq = state.finished_seq;
     // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
 }
 

@@ -247,5 +247,24 @@ async fn execute(
                 }
             }
         }
+        ChannelFetchKind::Lyrics { source, song_id } => match channel.lyrics(song_id).await {
+            Ok(lyrics) => {
+                event_tx.lock().push(TaskEvent::LyricsReady {
+                    song_id: song_id.clone(),
+                    lyrics,
+                });
+                TaskOutcome::Ok
+            }
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "channel_fetch",
+                    ?source,
+                    op = "lyrics",
+                    song_id = song_id.as_str(),
+                    "{e}"
+                );
+                TaskOutcome::Failed
+            }
+        },
     }
 }

@@ -14,4 +14,9 @@ pub struct AudioSnapshot {
 
     /// 当前音量(0..=100)。
     pub volume_pct: u8,
+
+    /// 单调递增的「曲终事件 latch」。每次 sink 自然播完一首歌(非 user-stop)engine
+    /// 把它 +1。UI 维护 `last_seen_finished_seq`,看到增长就触发 advance —— 用 seq
+    /// 而非 transient bool 是为了让 UI 在 tick 间隙也能可靠捕获边界,不会漏。
+    pub track_finished_seq: u64,
 }

@@ -1,6 +1,6 @@
 //! 任务推到 client 的事件载荷。
 
-use mineral_model::{PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
@@ -33,5 +33,14 @@ pub enum TaskEvent {
 
         /// 解析出的播放 URL + 元信息。
         play_url: PlayUrl,
+    },
+
+    /// `Lyrics` 任务成功:歌词数据就绪。
+    LyricsReady {
+        /// 关联的歌曲 id。
+        song_id: SongId,
+
+        /// 各格式歌词(LRC / yrc / 翻译 / 罗马音)。
+        lyrics: Lyrics,
     },
 }

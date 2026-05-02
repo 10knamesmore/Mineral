@@ -90,7 +90,11 @@ impl MusicChannel for FakeChannel {
         }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
-        Err(Error::NotSupported)
+        self.maybe_wait().await;
+        Ok(Lyrics {
+            lrc: Some(String::from("[00:01.00]hello\n[00:02.50]world")),
+            ..Lyrics::default()
+        })
     }
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
         self.maybe_wait().await;
@@ -113,6 +117,13 @@ fn playlist_tracks_kind() -> TaskKind {
 
 fn song_url_kind(song: &str) -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+        source: SourceKind::Netease,
+        song_id: SongId::new(song),
+    })
+}
+
+fn lyrics_kind(song: &str) -> TaskKind {
+    TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
         source: SourceKind::Netease,
         song_id: SongId::new(song),
     })
@@ -214,5 +225,23 @@ async fn song_url_dedup_returns_same_handle() -> color_eyre::Result<()> {
 
     gate.add_permits(1);
     assert_eq!(h1.done().await, TaskOutcome::Ok);
+    Ok(())
+}
+
+#[tokio::test]
+async fn lyrics_emits_event() -> color_eyre::Result<()> {
+    let sched = Scheduler::new(&channels(None));
+    let h = sched.submit(lyrics_kind("s3"), Priority::User);
+    assert_eq!(h.done().await, TaskOutcome::Ok);
+
+    let evs = sched.drain_events();
+    let found = evs.iter().any(|e| {
+        matches!(
+            e,
+            TaskEvent::LyricsReady { song_id, lyrics }
+                if song_id.as_str() == "s3" && lyrics.lrc.as_deref().is_some_and(|s| s.contains("hello"))
+        )
+    });
+    assert!(found, "expected LyricsReady, got {evs:?}");
     Ok(())
 }

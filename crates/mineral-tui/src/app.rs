@@ -41,6 +41,11 @@ pub struct App {
 
     /// 音频引擎 handle;所有播放控制走它。
     audio: AudioHandle,
+
+    /// 上次看到的 `AudioSnapshot::track_finished_seq`。tick 中检测到增长就触发
+    /// auto-next。重置时机:`submit_play_song` 时同步对齐到当前 engine seq,
+    /// 避免「新歌一上来就被旧 seq 误触发」。
+    last_seen_finished_seq: u64,
 }
 
 impl App {
@@ -57,6 +62,7 @@ impl App {
             last_tick: Instant::now(),
             scheduler,
             audio,
+            last_seen_finished_seq: 0,
         }
     }
 
@@ -73,10 +79,13 @@ impl App {
                 self.handle_event(&event::read()?);
             }
             if self.last_tick.elapsed() >= tick_rate {
-                self.state
-                    .playback
-                    .apply_audio_snapshot(self.audio.snapshot());
+                let snap = self.audio.snapshot();
+                self.state.playback.apply_audio_snapshot(snap);
                 self.state.spectrum.tick(self.state.playback.playing);
+                if snap.track_finished_seq > self.last_seen_finished_seq {
+                    self.last_seen_finished_seq = snap.track_finished_seq;
+                    self.advance_after_track_end();
+                }
                 self.last_tick = Instant::now();
             }
         }
@@ -94,21 +103,34 @@ impl App {
                 TaskEvent::PlayUrlReady { play_url, .. } => {
                     self.audio.play(play_url.url.clone());
                 }
-                TaskEvent::PlaylistTracksFetched { .. } => {}
+                TaskEvent::PlaylistTracksFetched { .. } | TaskEvent::LyricsReady { .. } => {}
             }
         }
     }
 
-    /// Enter 一首歌:杀掉旧 PlayPrep + audio.stop,然后提交新 PlayPrep。
-    /// 收到 `PlayUrlReady` 后才真正出声。
+    /// Enter 一首歌:杀掉旧 PlayPrep + Lyrics 任务、audio.stop,然后提交新的
+    /// PlayPrep + Lyrics(都 User 优先级)。收到 `PlayUrlReady` 后才真正出声。
+    /// 同步把 `queue_sel` 对齐到这首歌在 queue 里的位置(不在则保持原值),
+    /// 让后续 prev/next/auto-next 有正确锚点。
     fn submit_play_song(&mut self, song: &Song) {
         self.scheduler.cancel_where(|k| {
-            matches!(k, TaskKind::ChannelFetch(ChannelFetchKind::SongUrl { .. }))
+            matches!(
+                k,
+                TaskKind::ChannelFetch(
+                    ChannelFetchKind::SongUrl { .. } | ChannelFetchKind::Lyrics { .. }
+                )
+            )
         });
         self.audio.stop();
         self.state.current = Some(song.clone());
         self.state.playback.track = Some(song.clone());
         self.state.playback.position_ms = 0;
+        if let Some(idx) = self.state.queue.iter().position(|s| s.id == song.id) {
+            self.state.queue_sel = idx;
+        }
+        // 把 last_seen_finished_seq 对齐到当前 engine seq —— audio.stop() 不会
+        // 触发曲终,但避免极端情况下旧 seq 比新 snapshot 大造成误触发。
+        self.last_seen_finished_seq = self.audio.snapshot().track_finished_seq;
         self.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                 source: song.source,
@@ -116,6 +138,65 @@ impl App {
             }),
             Priority::User,
         );
+        self.scheduler.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
+                source: song.source,
+                song_id: song.id.clone(),
+            }),
+            Priority::User,
+        );
+    }
+
+    /// 一首自然播完后按 PlayMode 选下一首播。Sequential 到末尾就停。
+    fn advance_after_track_end(&mut self) {
+        if let Some(next) = self.next_song() {
+            self.submit_play_song(&next);
+        }
+    }
+
+    /// 按 PlayMode 选下一首。queue 空 / Sequential 到末尾返回 `None`。
+    fn next_song(&self) -> Option<Song> {
+        use crate::playback::PlayMode;
+        let len = self.state.queue.len();
+        if len == 0 {
+            return None;
+        }
+        let cur = self.state.queue_sel.min(len - 1);
+        match self.state.playback.mode {
+            PlayMode::Sequential => self.state.queue.get(cur + 1).cloned(),
+            PlayMode::RepeatAll => self.state.queue.get((cur + 1) % len).cloned(),
+            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
+            PlayMode::Shuffle => {
+                use rand::seq::IteratorRandom;
+                self.state.queue.iter().choose(&mut rand::rng()).cloned()
+            }
+        }
+    }
+
+    /// 按 PlayMode 选上一首。Sequential 到队首返回 `None`(避免「往回播」误操作)。
+    /// Shuffle 也是随机选(本期不做历史栈,见 BACKLOG)。
+    fn prev_song(&self) -> Option<Song> {
+        use crate::playback::PlayMode;
+        let len = self.state.queue.len();
+        if len == 0 {
+            return None;
+        }
+        let cur = self.state.queue_sel.min(len - 1);
+        match self.state.playback.mode {
+            PlayMode::Sequential => {
+                if cur == 0 {
+                    None
+                } else {
+                    self.state.queue.get(cur - 1).cloned()
+                }
+            }
+            PlayMode::RepeatAll => self.state.queue.get((cur + len - 1) % len).cloned(),
+            PlayMode::RepeatOne => self.state.queue.get(cur).cloned(),
+            PlayMode::Shuffle => {
+                use rand::seq::IteratorRandom;
+                self.state.queue.iter().choose(&mut rand::rng()).cloned()
+            }
+        }
     }
 
     /// 收到歌单批次后,逐条提交 `PlaylistTracks` 任务。前 [`VISIBLE_HINT`] 条
@@ -298,8 +379,15 @@ impl App {
             KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-VOLUME_STEP),
             KeyCode::Left => self.seek_relative(-SEEK_STEP_S),
             KeyCode::Right => self.seek_relative(SEEK_STEP_S),
-            KeyCode::Char('p') | KeyCode::Char('n') => {
-                // 单曲模式下无 prev/next 概念;auto-next lane 那一期再说。
+            KeyCode::Char('p') => {
+                if let Some(s) = self.prev_song() {
+                    self.submit_play_song(&s);
+                }
+            }
+            KeyCode::Char('n') => {
+                if let Some(s) = self.next_song() {
+                    self.submit_play_song(&s);
+                }
             }
             _ => return false,
         }

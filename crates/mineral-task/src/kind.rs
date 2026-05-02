@@ -54,6 +54,15 @@ pub enum ChannelFetchKind {
         /// 歌曲 id。
         song_id: SongId,
     },
+
+    /// 拉某首歌的歌词。
+    Lyrics {
+        /// 目标 channel。
+        source: SourceKind,
+
+        /// 歌曲 id。
+        song_id: SongId,
+    },
 }
 
 impl ChannelFetchKind {
@@ -66,6 +75,9 @@ impl ChannelFetchKind {
             Self::SongUrl { source, song_id } => {
                 format!("{source:?}:song_url:{}", song_id.as_str())
             }
+            Self::Lyrics { source, song_id } => {
+                format!("{source:?}:lyrics:{}", song_id.as_str())
+            }
         }
     }
 
@@ -74,7 +86,8 @@ impl ChannelFetchKind {
         match self {
             Self::MyPlaylists { source }
             | Self::PlaylistTracks { source, .. }
-            | Self::SongUrl { source, .. } => *source,
+            | Self::SongUrl { source, .. }
+            | Self::Lyrics { source, .. } => *source,
         }
     }
 }

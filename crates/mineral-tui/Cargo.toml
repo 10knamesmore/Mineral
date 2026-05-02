@@ -20,6 +20,7 @@ mineral-log          = { workspace = true }
 mineral-macros       = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-task         = { workspace = true }
+rand                 = { workspace = true }
 ratatui              = { workspace = true }
 serde                = { workspace = true }
 tokio                = { workspace = true }
