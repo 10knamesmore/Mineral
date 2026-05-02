@@ -119,9 +119,12 @@ fn engine_main(
 /// engine 跨 tick 的可变状态。
 #[derive(Default)]
 struct EngineState {
-    /// 上一次 tick sink 是否非空。用来检测「sink 从非空变空」的下降沿 = 曲终。
-    /// `Play` 时设 true,`Stop` 时设 false(stop 走「打断」语义,不算曲终)。
-    last_was_non_empty: bool,
+    /// 是否「正在等一首歌自然结束」。`Play` 时 arm,`Stop` / 检测到自然曲终时 disarm。
+    ///
+    /// 关键:`player.stop()` 是异步的(rodio 5ms periodic_access 才真停 source),
+    /// Stop 命令返回后 sink 仍可能保留几个 ms 的 sound_count > 0。如果靠 `is_empty`
+    /// 的裸下降沿,Stop 后那段尾巴退潮会被误判为曲终。armed=false 直接跳过检测。
+    armed: bool,
 
     /// 单调递增的曲终计数,每次自然曲终 +1,写进 snapshot。
     finished_seq: u64,
@@ -137,13 +140,14 @@ fn handle_command(
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
         AudioCommand::Play(url) => {
-            // 切歌前 stop 不该触发上一首的曲终事件 —— 用户主动换。
-            state.last_was_non_empty = false;
+            // 切歌前先 disarm,旧曲尾巴的 sound_count 退潮不会被算成曲终。
+            state.armed = false;
             player.stop();
             let dur = append_decoded(player, rt, url)?;
             player.play();
-            // 新曲已 append + play,后续 tick 看到 sink 非空就 latch 上。
-            state.last_was_non_empty = true;
+            // append 内部已 fetch_add 把 sound_count 抬到 1,这里武装后下次 update_snapshot
+            // 看到的就是 !is_empty,不存在「armed 后第一 tick 就空」的 race。
+            state.armed = true;
             Ok(Some(dur))
         }
         AudioCommand::Pause => {
@@ -155,8 +159,8 @@ fn handle_command(
             Ok(None)
         }
         AudioCommand::Stop => {
-            // user-stop 也不该触发曲终。
-            state.last_was_non_empty = false;
+            // 用户主动 stop 不该触发曲终事件,直接 disarm。
+            state.armed = false;
             player.stop();
             Ok(Some(0))
         }
@@ -225,16 +229,11 @@ fn update_snapshot(
     let is_empty = player.empty();
     let playing = !is_paused && !is_empty;
 
-    // 下降沿:上一 tick 非空 + 这一 tick 空 = 自然曲终。
-    // user 主动 Stop / Play(切歌) 在 handle_command 里已把 last_was_non_empty 清为 false,
-    // 所以那条路径不会在这里被误判为「曲终」。
-    if state.last_was_non_empty && is_empty {
+    // 仅 armed 时检测「sink 变空」=曲终。armed=false 期间(用户主动 stop / 切歌后未到新 Play)
+    // 完全跳过,旧曲尾巴的 sound_count 退潮不会被误判。
+    if state.armed && is_empty {
         state.finished_seq += 1;
-        state.last_was_non_empty = false;
-    } else if !is_empty {
-        // sink 非空状态(刚 append 还在播,或 paused 但队列里有东西)持续 latch true,
-        // 让下次「真空」能被 detect 到。
-        state.last_was_non_empty = true;
+        state.armed = false;
     }
 
     let mut g = snapshot.lock();

@@ -106,8 +106,12 @@ impl App {
                 TaskEvent::PlaylistsFetched { playlists, .. } => {
                     self.fanout_playlist_tracks(playlists);
                 }
-                TaskEvent::PlayUrlReady { play_url, .. } => {
-                    self.audio.play(play_url.url.clone());
+                TaskEvent::PlayUrlReady { song_id, play_url } => {
+                    // 过滤过期 URL:用户已切歌,但旧 SongUrl 任务可能已在飞,回来时不应顶掉新歌。
+                    let want = self.state.playback.track.as_ref().map(|t| &t.id);
+                    if want == Some(song_id) {
+                        self.audio.play(play_url.url.clone());
+                    }
                 }
                 TaskEvent::PlaylistTracksFetched { .. } | TaskEvent::LyricsReady { .. } => {}
             }
