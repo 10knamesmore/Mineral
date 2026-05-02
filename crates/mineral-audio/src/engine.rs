@@ -13,6 +13,7 @@ use std::time::Duration;
 use color_eyre::eyre::eyre;
 use mineral_model::MediaUrl;
 use parking_lot::Mutex;
+use rodio::decoder::DecoderBuilder;
 use rodio::Source;
 use stream_download::http::reqwest::Client;
 use stream_download::http::HttpStream;
@@ -220,32 +221,52 @@ fn append_decoded(
 ) -> color_eyre::Result<u64> {
     match url {
         MediaUrl::Remote(u) => {
-            let reader = rt.block_on(async {
+            let (reader, byte_len) = rt.block_on(async {
                 let stream = HttpStream::<Client>::create(u)
                     .await
                     .map_err(|e| eyre!("http stream: {e}"))?;
-                StreamDownload::from_stream(
+                let len = stream.content_length();
+                let reader = StreamDownload::from_stream(
                     stream,
                     TempStorageProvider::new(),
                     Settings::default().prefetch_bytes(PREFETCH_BYTES),
                 )
                 .await
-                .map_err(|e| eyre!("stream-download init: {e}"))
+                .map_err(|e| eyre!("stream-download init: {e}"))?;
+                Ok::<_, color_eyre::Report>((reader, len))
             })?;
-            let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
+            let decoder = build_decoder(reader, byte_len)?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
             player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
             Ok(dur_ms)
         }
         MediaUrl::Local(p) => {
             let file = std::fs::File::open(&p).map_err(|e| eyre!("open {}: {e}", p.display()))?;
+            let byte_len = file.metadata().ok().map(|m| m.len());
             let reader = BufReader::new(file);
-            let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
+            let decoder = build_decoder(reader, byte_len)?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
             player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
             Ok(dur_ms)
         }
     }
+}
+
+/// 用 [`DecoderBuilder`] 构造 decoder,**`byte_len` 已知时一并塞进**。
+///
+/// 关键:rodio `Decoder::new()` 默认 `is_seekable=false`,Symphonia 在源不可
+/// 随机访问时只能向前 seek(后退会返 `ForwardOnly` → `RandomAccessNotSupported`)
+/// —— 表现就是按 ← 没反应。`with_byte_len` 会一并把 `is_seekable` 置 true。
+/// `byte_len` 未知时退化到默认行为(只能向前 seek),至少不比之前差。
+fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> color_eyre::Result<rodio::Decoder<R>>
+where
+    R: std::io::Read + std::io::Seek + Send + Sync + 'static,
+{
+    let mut builder = DecoderBuilder::new().with_data(reader);
+    if let Some(len) = byte_len {
+        builder = builder.with_byte_len(len);
+    }
+    builder.build().map_err(|e| eyre!("decode: {e}"))
 }
 
 fn update_snapshot(

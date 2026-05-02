@@ -5,7 +5,10 @@
 
 use std::io::{self, Stdout};
 
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, EnterAlternateScreen,
@@ -32,6 +35,14 @@ impl Tui {
     pub fn enter(&mut self) -> color_eyre::Result<()> {
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        // kitty keyboard protocol:让 Shift+arrow / Ctrl+组合键 都带显式 modifier 上来。
+        // 不开的话 kitty 默认把 Shift+Left 当裸 Left 报,丢了 SHIFT modifier
+        // → 大跨度 seek 不生效。不支持协议的终端(macOS Terminal / iTerm2 旧版)
+        // 会忽略该 escape sequence,无副作用,所以静默忽略错误。
+        let _ = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
         self.terminal.hide_cursor()?;
         self.terminal.clear()?;
 
@@ -70,6 +81,9 @@ impl Drop for Tui {
 /// 未初始化的情况下报错。
 fn restore_terminal() -> io::Result<()> {
     if is_raw_mode_enabled().unwrap_or(false) {
+        // 先 pop kitty keyboard protocol(没 push 成功的终端 ignore 即可),
+        // 再 LeaveAlternateScreen / 关 mouse capture / disable raw,顺序对称于 enter。
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
     }

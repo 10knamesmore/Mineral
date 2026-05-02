@@ -12,6 +12,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use ringbuf::traits::Producer;
 use ringbuf::HeapProd;
+use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 
 /// 共享 producer 别名:一个 engine 生命期内多次切歌共用同一个 ringbuf 写端。
@@ -101,5 +102,11 @@ where
 
     fn total_duration(&self) -> Option<Duration> {
         self.inner.total_duration()
+    }
+
+    /// 透传给 inner decoder。**关键**:不实现这条会回落到 `Source::try_seek` 的默认
+    /// 实现,直接返回 `SeekError::NotSupported`,导致 ←/→ 进度全失效。
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.inner.try_seek(pos)
     }
 }

@@ -33,6 +33,10 @@ const ROW_BIG_STEP: usize = 7;
 /// 又不至于早到 URL 过期。
 const PREFETCH_LEAD_MS: u64 = 5_000;
 
+/// `p` 键的「回开头 vs 上一首」分界(ms)。播放进度 > 阈值时按 p 回到本曲开头,
+/// 否则跳上一首。3s 是 iTunes / Apple Music / Spotify 的默认行为,误触概率极低。
+const PREV_RESTART_THRESHOLD_MS: u64 = 3_000;
+
 /// 应用顶层状态。
 pub struct App {
     /// 是否退出主循环。
@@ -338,6 +342,21 @@ impl App {
         }
     }
 
+    /// `p` 键行为:进度 > [`PREV_RESTART_THRESHOLD_MS`] 时回到本曲开头,
+    /// 否则跳上一首(对齐 iTunes / Spotify)。无 track 时直接 no-op。
+    fn prev_or_restart(&mut self) {
+        if self.state.playback.track.is_none() {
+            return;
+        }
+        if self.state.playback.position_ms > PREV_RESTART_THRESHOLD_MS {
+            self.audio.seek(0);
+            return;
+        }
+        if let Some(s) = self.prev_song() {
+            self.submit_play_song(&s);
+        }
+    }
+
     /// 按 PlayMode 选上一首。Sequential 到队首返回 `None`。Shuffle 在洗过的 queue 里
     /// 顺序回退,真能回到「刚播过的那首」(不再是再随机)。
     fn prev_song(&self) -> Option<Song> {
@@ -566,11 +585,7 @@ impl App {
             KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-VOLUME_STEP),
             KeyCode::Left => self.seek_relative(-SEEK_STEP_S),
             KeyCode::Right => self.seek_relative(SEEK_STEP_S),
-            KeyCode::Char('p') => {
-                if let Some(s) = self.prev_song() {
-                    self.submit_play_song(&s);
-                }
-            }
+            KeyCode::Char('p') => self.prev_or_restart(),
             KeyCode::Char('n') => {
                 if let Some(s) = self.next_song() {
                     self.submit_play_song(&s);
