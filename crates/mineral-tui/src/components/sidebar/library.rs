@@ -86,7 +86,7 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
     let num_cell = if is_current {
         Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
     } else {
-        Cell::from(format!("{}", idx + 1))
+        Cell::from(format!("{idx}"))
     };
 
     let title_cell = if sv.loved {

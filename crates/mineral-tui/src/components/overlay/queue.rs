@@ -85,7 +85,7 @@ fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &T
     let num = if is_current {
         Cell::from(Span::styled("▶", Style::new().fg(theme.accent)))
     } else {
-        Cell::from(format!("{}", idx + 1))
+        Cell::from(format!("{idx}"))
     };
     let artist = s
         .artists
