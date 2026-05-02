@@ -63,7 +63,7 @@ impl AudioHandle {
     pub fn spawn() -> color_eyre::Result<(Self, SpectrumTap)> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
         let snapshot = Arc::new(Mutex::new(AudioSnapshot {
-            volume_pct: 66,
+            volume_pct: 100,
             ..AudioSnapshot::default()
         }));
 

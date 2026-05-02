@@ -35,8 +35,8 @@ use crate::tap::{SharedProd, TapSource};
 /// termusic 用 5ms,我们留余量。
 const TICK: Duration = Duration::from_millis(20);
 
-/// 默认初始音量百分比,与 UI 默认 66% 对齐。换算成 cubic gain ≈ 0.287。
-const DEFAULT_VOLUME_PCT: u8 = 66;
+/// 默认初始音量百分比
+const DEFAULT_VOLUME_PCT: u8 = 100;
 
 /// 把 0..=100 的 pct 映射成 rodio 的线性 gain(0.0..=1.0),走 cubic 感知曲线。
 ///
