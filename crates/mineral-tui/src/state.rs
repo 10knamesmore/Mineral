@@ -17,6 +17,12 @@ use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
 
+/// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
+///
+/// dims 用于 invalidation —— 跟当前 area 不一致就重建 protocol,避免字号 / 终端
+/// 大小变了之后图按旧 dims 绘出来溢出 / 截断。
+pub type CoverProtocolEntry = (StatefulProtocol, (u16, u16));
+
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -118,7 +124,7 @@ pub struct AppState {
     /// 渲染用的 ratatui-image stateful protocol 缓存。`StatefulProtocol` 内部记编码状态
     /// (kitty 的图片 id、sixel 编码缓冲等),render 复用就不会每帧重发图。
     /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
-    pub cover_protocols: RefCell<FxHashMap<MediaUrl, StatefulProtocol>>,
+    pub cover_protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
 
     /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
     /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
