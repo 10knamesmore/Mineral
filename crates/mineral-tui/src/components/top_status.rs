@@ -22,13 +22,13 @@ fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme
     let active_lib = state.view == View::Library;
     let mut spans = vec![
         Span::styled(
-            "▌ tuimu v0.1.0  ",
+            "▌ mineral v0.1.0  ",
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled("│  ", Style::new().fg(theme.surface1)),
-        Span::styled("[1 playlists]", tab_style(active_pl, theme)),
+        Span::styled("[playlists]", tab_style(active_pl, theme)),
         Span::raw("  "),
-        Span::styled("[2 tracks]", tab_style(active_lib, theme)),
+        Span::styled("[tracks]", tab_style(active_lib, theme)),
     ];
     if state.queue_open {
         spans.push(Span::raw("  "));
