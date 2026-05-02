@@ -74,7 +74,9 @@ impl App {
 
     /// 同步主事件循环:绘制 → 等事件 / tick → 处理 → 重绘。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        let tick_rate = Duration::from_millis(250);
+        // 33ms ≈ 30fps:yrc 字符级 wipe 渐变需要逐帧重算颜色,250ms 看上去会一跳一跳。
+        // 终端渲染开销很小,30fps 在常规歌词长度下 <5% CPU,够顺滑。
+        let tick_rate = Duration::from_millis(33);
 
         while !self.should_quit {
             self.drain_task_events();

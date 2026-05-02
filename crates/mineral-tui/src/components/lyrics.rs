@@ -5,7 +5,7 @@
 //! 未唱的字 = `theme.overlay` dim。邻行无论是否有 yrc 都按整行 dim 渲染。
 
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
@@ -29,22 +29,39 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         return;
     }
 
-    let lyrics = state.current_lyrics();
-    let lines: Option<&Vec<(u64, String)>> = lyrics.filter(|v| !v.is_empty());
-    let Some(lines) = lines else {
-        draw_fallback(frame, inner, theme);
-        return;
-    };
-
-    let cur = lrc::current_index(lines, state.playback.position_ms);
+    let position_ms = state.playback.position_ms;
+    // 有 yrc 时整个窗口都从 yrc 推:中心行 + 上下行同源,index 唯一,wipe 不会跟邻行错位。
+    // 没 yrc 时回落到 lrc 行级整行高亮(原始路径)。
     let yrc_lines = state.current_yrc().filter(|v| !v.is_empty());
-    let yrc_cur = yrc_lines.and_then(|v| yrc::current_index(v, state.playback.position_ms));
-    let yrc = YrcCursor {
-        lines: yrc_lines,
-        cur: yrc_cur,
-        position_ms: state.playback.position_ms,
+    let (lines, cur, yrc) = if let Some(yl) = yrc_lines {
+        let lines: Vec<(u64, String)> = yl
+            .iter()
+            .map(|l| {
+                let text: String = l.chars.iter().map(|c| c.text.as_str()).collect();
+                (l.start_ms, text)
+            })
+            .collect();
+        let cur = yrc::current_index(yl, position_ms);
+        let yrc = YrcCursor {
+            lines: Some(yl),
+            cur,
+            position_ms,
+        };
+        (lines, cur, yrc)
+    } else {
+        let Some(lrc_lines) = state.current_lyrics().filter(|v| !v.is_empty()) else {
+            draw_fallback(frame, inner, theme);
+            return;
+        };
+        let cur = lrc::current_index(lrc_lines, position_ms);
+        let yrc = YrcCursor {
+            lines: None,
+            cur: None,
+            position_ms,
+        };
+        (lrc_lines.clone(), cur, yrc)
     };
-    paint_window(frame, inner, lines, cur, yrc, theme);
+    paint_window(frame, inner, &lines, cur, yrc, theme);
 }
 
 /// 渲染时传入的 yrc 上下文(打包以减少 paint_window 参数数)。
@@ -118,21 +135,81 @@ fn paint_window(
     }
 }
 
-/// 把 YRC 行按 `position_ms` 拆成 dim/高亮两段 Span 序列(KTV wipe)。
+/// 按 `position_ms` 把 YRC 行渲染成字符级渐变 Span 序列(KTV wipe)。
+///
+/// 网易 yrc 的 `YrcChar.text` 对中文是单字、对英文是整词,所以在 `YrcChar` 内再按
+/// `text.chars()` 等分时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
 fn render_yrc_line<'a>(yrc_line: &'a YrcLine, position_ms: u64, theme: &Theme) -> Line<'a> {
-    let sung = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
-    let unsung = Style::new().fg(theme.overlay);
-    let spans: Vec<Span<'_>> = yrc_line
-        .chars
-        .iter()
-        .map(|c| {
-            let style = if c.start_ms <= position_ms {
-                sung
-            } else {
-                unsung
-            };
-            Span::styled(c.text.as_str(), style)
-        })
-        .collect();
+    let mut spans = Vec::<Span<'a>>::new();
+    for c in &yrc_line.chars {
+        push_char_spans(&mut spans, c, position_ms, theme);
+    }
     Line::from(spans)
+}
+
+/// 把一个 `YrcChar` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
+fn push_char_spans<'a>(
+    out: &mut Vec<Span<'a>>,
+    yrc_char: &'a crate::yrc::YrcChar,
+    position_ms: u64,
+    theme: &Theme,
+) {
+    let n = yrc_char.text.chars().count();
+    let Ok(n_u64) = u64::try_from(n) else {
+        return;
+    };
+    if n_u64 == 0 {
+        return;
+    }
+    let total_dur = yrc_char.dur_ms.max(1);
+    let mut byte_cursor = 0usize;
+    for (i, ch) in yrc_char.text.chars().enumerate() {
+        let Ok(i_u64) = u64::try_from(i) else {
+            return;
+        };
+        let char_start = yrc_char.start_ms.saturating_add(i_u64 * total_dur / n_u64);
+        let char_end = yrc_char
+            .start_ms
+            .saturating_add((i_u64 + 1) * total_dur / n_u64);
+        let char_dur = char_end.saturating_sub(char_start).max(1);
+        let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
+        let color = lerp_color(theme.overlay, theme.text, elapsed, char_dur);
+
+        let next_byte = byte_cursor.saturating_add(ch.len_utf8());
+        let slice = yrc_char
+            .text
+            .get(byte_cursor..next_byte)
+            .unwrap_or_default();
+        byte_cursor = next_byte;
+
+        out.push(Span::styled(slice, Style::new().fg(color)));
+    }
+}
+
+/// 在两个 `Color::Rgb` 之间按 `num/denom` 整数比例 lerp。非 RGB 主题降级二态。
+fn lerp_color(from: Color, to: Color, num: u64, denom: u64) -> Color {
+    match (from, to) {
+        (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) => Color::Rgb(
+            lerp_byte(fr, tr, num, denom),
+            lerp_byte(fg, tg, num, denom),
+            lerp_byte(fb, tb, num, denom),
+        ),
+        _ => {
+            if num.saturating_mul(2) >= denom {
+                to
+            } else {
+                from
+            }
+        }
+    }
+}
+
+/// `(a*(d-n) + b*n) / d`,纯整数,不踩 `as_conversions` lint。
+fn lerp_byte(a: u8, b: u8, num: u64, denom: u64) -> u8 {
+    let denom = denom.max(1);
+    let num = num.min(denom);
+    let a64 = u64::from(a);
+    let b64 = u64::from(b);
+    let res = (a64 * (denom - num) + b64 * num) / denom;
+    u8::try_from(res).unwrap_or(0)
 }

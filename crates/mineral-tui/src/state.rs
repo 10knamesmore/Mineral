@@ -152,12 +152,25 @@ impl AppState {
                     .as_deref()
                     .map(lrc::parse_lrc)
                     .unwrap_or_default();
+                let raw_yrc_bytes = lyrics.yrc.as_deref().map(str::len).unwrap_or(0);
+                let parsed_yrc = lyrics
+                    .yrc
+                    .as_deref()
+                    .map(yrc::parse_yrc)
+                    .unwrap_or_default();
+                let yrc_first_ms = parsed_yrc.first().map(|l| l.start_ms);
+                mineral_log::info!(
+                    target: "yrc_lyrics",
+                    song_id = song_id.as_str(),
+                    lrc_lines = parsed_lrc.len(),
+                    yrc_lines = parsed_yrc.len(),
+                    raw_yrc_bytes,
+                    ?yrc_first_ms,
+                    "lyrics ready",
+                );
                 self.lyrics_cache.insert(song_id.clone(), parsed_lrc);
-                if let Some(raw_yrc) = lyrics.yrc.as_deref() {
-                    let parsed_yrc = yrc::parse_yrc(raw_yrc);
-                    if !parsed_yrc.is_empty() {
-                        self.yrc_cache.insert(song_id.clone(), parsed_yrc);
-                    }
+                if !parsed_yrc.is_empty() {
+                    self.yrc_cache.insert(song_id.clone(), parsed_yrc);
                 }
             }
         }
