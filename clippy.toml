@@ -1,0 +1,2 @@
+# 单函数行数上限。对应 CLAUDE.md「单函数 ≤ 300 行」。
+too-many-lines-threshold = 300

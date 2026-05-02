@@ -1,0 +1,6 @@
+[alias]
+# 全面联调网易云 channel:无登录 + (可选)登录态。
+# 用法:
+#   cargo apitest                                # 只跑无登录部分
+#   NETEASE_MUSIC_U=<浏览器 cookie> cargo apitest # 同时跑登录态用例
+apitest = "run -p mineral-channel-netease --example apitest"

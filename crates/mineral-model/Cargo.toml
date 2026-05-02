@@ -1,0 +1,23 @@
+[package]
+name        = "mineral-model"
+description = "跨 channel 的统一数据模型(Song / Playlist / Lyrics 等)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[features]
+# 启用后会增加 `SourceKind::Mock` 变体,仅供 UI / 测试 / mineral-channel-mock
+# 构造伪数据,真实 channel 路径不会出现。
+mock = []
+
+[dependencies]
+mineral-macros = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+url            = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,56 @@
+[package]
+name        = "mineral-channel-netease"
+description = "Mineral 的一个 channel 实现(加密 + cookie + 端点)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model        = { workspace = true }
+mineral-channel-core = { workspace = true }
+mineral-paths        = { workspace = true }
+
+# 加密
+aes        = { workspace = true }
+cbc        = { workspace = true }
+ecb        = { workspace = true }
+cipher     = { workspace = true }
+md-5       = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+base64     = { workspace = true }
+hex        = { workspace = true }
+
+# HTTP / cookie
+isahc      = { workspace = true }
+url        = { workspace = true }
+regex      = { workspace = true }
+flate2     = { workspace = true }
+
+# 序列化
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# 工具
+async-trait = { workspace = true }
+once_cell   = { workspace = true }
+rand        = { workspace = true }
+color-eyre  = { workspace = true }
+rustc-hash  = { workspace = true }
+thiserror   = { workspace = true }
+tokio       = { workspace = true }
+
+# CLI（`cli` 子模块用）
+clap   = { workspace = true }
+qrcode = { workspace = true }
+
+[dev-dependencies]
+# 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
+openssl  = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

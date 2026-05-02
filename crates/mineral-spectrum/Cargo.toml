@@ -1,0 +1,18 @@
+[package]
+name        = "mineral-spectrum"
+description = "音频频谱分析(realfft + 对数桶映射)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+realfft = { workspace = true }
+
+[dev-dependencies]
+color-eyre = { workspace = true }
+
+[lints]
+workspace = true

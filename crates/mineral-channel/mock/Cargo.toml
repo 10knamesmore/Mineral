@@ -1,0 +1,26 @@
+[package]
+name        = "mineral-channel-mock"
+description = "Mock channel(离线开发用,不打真实端点)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[features]
+default = []
+# 启用后会拉 mineral-model 的 mock feature(获得 SourceKind::Mock),
+# 整个 lib 才有内容。保持 default = [] 是为了让 `cargo clippy --workspace`
+# 默认不引入 mineral-model/mock,避免 workspace feature unification 让
+# mineral binary 在未显式启用 mock 时看到 SourceKind::Mock。
+mock = ["mineral-model/mock"]
+
+[dependencies]
+mineral-model        = { workspace = true }
+mineral-channel-core = { workspace = true }
+
+async-trait = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,40 @@
+[package]
+name        = "mineral-tui"
+description = "Mineral 的 ratatui TUI 前端"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[features]
+mock = [
+    "dep:mineral-channel-mock",
+    "mineral-channel-mock/mock",
+    "mineral-model/mock",
+]
+
+[dependencies]
+color-eyre           = { workspace = true }
+crossterm            = { workspace = true }
+image                = { workspace = true }
+mineral-audio        = { workspace = true }
+mineral-channel-core = { workspace = true }
+mineral-spectrum     = { workspace = true }
+mineral-channel-mock = { workspace = true, optional = true }
+mineral-log          = { workspace = true }
+mineral-macros       = { workspace = true }
+mineral-model        = { workspace = true }
+mineral-task         = { workspace = true }
+rand                 = { workspace = true }
+ratatui              = { workspace = true }
+ratatui-image        = { workspace = true }
+rustc-hash           = { workspace = true }
+unicode-width        = { workspace = true }
+serde                = { workspace = true }
+serde_json           = { workspace = true }
+tokio                = { workspace = true }
+
+[lints]
+workspace = true

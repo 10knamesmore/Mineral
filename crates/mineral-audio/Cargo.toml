@@ -1,0 +1,23 @@
+[package]
+name        = "mineral-audio"
+description = "音频播放引擎(rodio + symphonia + stream-download)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-log   = { workspace = true }
+mineral-model = { workspace = true }
+
+color-eyre      = { workspace = true }
+parking_lot     = { workspace = true }
+ringbuf         = { workspace = true }
+rodio           = { workspace = true }
+stream-download = { workspace = true }
+tokio           = { workspace = true }
+
+[lints]
+workspace = true

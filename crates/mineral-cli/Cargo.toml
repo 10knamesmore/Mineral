@@ -1,0 +1,18 @@
+[package]
+name        = "mineral-cli"
+description = "Mineral 命令行入口(login / debug 工具)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+clap                    = { workspace = true }
+color-eyre              = { workspace = true }
+mineral-channel-netease = { workspace = true }
+tokio                   = { workspace = true }
+
+[lints]
+workspace = true

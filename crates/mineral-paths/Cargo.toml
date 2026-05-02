@@ -1,0 +1,18 @@
+[package]
+name        = "mineral-paths"
+description = "标准化的配置 / 缓存 / 数据目录解析"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+color-eyre = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

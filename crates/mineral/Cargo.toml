@@ -1,0 +1,26 @@
+[package]
+name        = "mineral"
+description = "多源终端音乐播放器(ratatui),支持本地与云端音乐"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[features]
+mock = ["mineral-tui/mock", "dep:mineral-channel-mock"]
+
+[dependencies]
+clap                    = { workspace = true }
+color-eyre              = { workspace = true }
+mineral-channel-core    = { workspace = true }
+mineral-channel-mock    = { workspace = true, optional = true }
+mineral-channel-netease = { workspace = true }
+mineral-cli             = { workspace = true }
+mineral-log             = { workspace = true }
+mineral-tui             = { workspace = true }
+tokio                   = { workspace = true }
+
+[lints]
+workspace = true
