@@ -34,6 +34,7 @@ async-trait = { workspace = true }
 once_cell   = { workspace = true }
 rand        = { workspace = true }
 color-eyre  = { workspace = true }
+rustc-hash  = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true }
 

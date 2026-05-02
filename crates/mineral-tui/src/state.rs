@@ -1,7 +1,6 @@
 //! 应用全局状态。`tracks_cache` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use image::DynamicImage;
@@ -9,6 +8,7 @@ use mineral_model::{MediaUrl, PlayUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::lrc;
 use crate::yrc::{self, YrcLine};
@@ -48,13 +48,13 @@ pub struct AppState {
     pub playlists: Vec<PlaylistView>,
 
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
-    pub tracks_cache: HashMap<PlaylistId, Vec<SongView>>,
+    pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
 
     /// 歌曲 id → 解析后的 LRC 行;不在 map 里表示还没拉到 / 拉失败。
-    pub lyrics_cache: HashMap<SongId, Vec<(u64, String)>>,
+    pub lyrics_cache: FxHashMap<SongId, Vec<(u64, String)>>,
 
     /// 歌曲 id → 解析后的 YRC(逐字)行;有 yrc 才插入,渲染时优先于 LRC。
-    pub yrc_cache: HashMap<SongId, Vec<YrcLine>>,
+    pub yrc_cache: FxHashMap<SongId, Vec<YrcLine>>,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -110,15 +110,15 @@ pub struct AppState {
     pub original_queue: Option<Vec<Song>>,
 
     /// 已拉好的封面原始图(URL → 解码后的 RGB 像素)。session 内一直留。
-    pub cover_cache: HashMap<MediaUrl, Arc<DynamicImage>>,
+    pub cover_cache: FxHashMap<MediaUrl, Arc<DynamicImage>>,
 
     /// 在飞 fetch 集合,用于 dedup tick 重复请求。
-    pub cover_pending: HashSet<MediaUrl>,
+    pub cover_pending: FxHashSet<MediaUrl>,
 
     /// 渲染用的 ratatui-image stateful protocol 缓存。`StatefulProtocol` 内部记编码状态
     /// (kitty 的图片 id、sixel 编码缓冲等),render 复用就不会每帧重发图。
     /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
-    pub cover_protocols: RefCell<HashMap<MediaUrl, StatefulProtocol>>,
+    pub cover_protocols: RefCell<FxHashMap<MediaUrl, StatefulProtocol>>,
 
     /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
     /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
@@ -126,7 +126,7 @@ pub struct AppState {
 
     /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
-    pub liked_ids: HashMap<SourceKind, HashSet<SongId>>,
+    pub liked_ids: FxHashMap<SourceKind, FxHashSet<SongId>>,
 }
 
 impl AppState {
@@ -135,9 +135,9 @@ impl AppState {
         Self {
             view: View::Playlists,
             playlists: Vec::new(),
-            tracks_cache: HashMap::new(),
-            lyrics_cache: HashMap::new(),
-            yrc_cache: HashMap::new(),
+            tracks_cache: FxHashMap::default(),
+            lyrics_cache: FxHashMap::default(),
+            yrc_cache: FxHashMap::default(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -155,11 +155,11 @@ impl AppState {
             confirm_open: false,
             prefetched: None,
             original_queue: None,
-            cover_cache: HashMap::new(),
-            cover_pending: HashSet::new(),
-            cover_protocols: RefCell::new(HashMap::new()),
+            cover_cache: FxHashMap::default(),
+            cover_pending: FxHashSet::default(),
+            cover_protocols: RefCell::new(FxHashMap::default()),
             tasks_running: 0,
-            liked_ids: HashMap::new(),
+            liked_ids: FxHashMap::default(),
         }
     }
 

@@ -1,11 +1,11 @@
 //! ChannelFetch lane:per-channel 多 worker,两档优先级。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, SourceKind};
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -34,7 +34,7 @@ struct ChannelSenders {
 
 /// ChannelFetch lane:对外只暴露 [`ChannelFetchLane::dispatch`]。
 pub(crate) struct ChannelFetchLane {
-    senders: HashMap<SourceKind, ChannelSenders>,
+    senders: FxHashMap<SourceKind, ChannelSenders>,
 }
 
 impl ChannelFetchLane {
@@ -49,7 +49,7 @@ impl ChannelFetchLane {
         ongoing: &Arc<Ongoing>,
         event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
     ) -> Self {
-        let mut senders = HashMap::<SourceKind, ChannelSenders>::new();
+        let mut senders = FxHashMap::<SourceKind, ChannelSenders>::default();
         for ch in channels {
             let source = ch.source();
             if senders.contains_key(&source) {

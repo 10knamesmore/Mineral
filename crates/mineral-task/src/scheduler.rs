@@ -1,10 +1,10 @@
 //! 顶层入口:[`Scheduler`]。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
@@ -35,7 +35,7 @@ pub struct Snapshot {
     pub running: usize,
 
     /// 每个 lane 的 running 任务计数(无任务的 lane 不出现)。
-    pub by_lane: HashMap<Lane, usize>,
+    pub by_lane: FxHashMap<Lane, usize>,
 }
 
 impl Scheduler {

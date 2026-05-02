@@ -1,8 +1,7 @@
 //! 进行中任务的中央状态聚合。
 
-use std::collections::HashMap;
-
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::handle::{shared_done, SharedDone, TaskHandle};
@@ -37,8 +36,8 @@ pub(crate) struct Ongoing {
 }
 
 struct Inner {
-    tasks: HashMap<TaskId, TaskMeta>,
-    by_dedup: HashMap<DedupKey, TaskId>,
+    tasks: FxHashMap<TaskId, TaskMeta>,
+    by_dedup: FxHashMap<DedupKey, TaskId>,
 }
 
 /// 一次新提交的"绑定结果":要么 dedup 共享旧 handle,要么真新建一条。
@@ -58,8 +57,8 @@ impl Ongoing {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(Inner {
-                tasks: HashMap::new(),
-                by_dedup: HashMap::new(),
+                tasks: FxHashMap::default(),
+                by_dedup: FxHashMap::default(),
             }),
             ids: IdAllocator::default(),
         }
@@ -138,7 +137,7 @@ impl Ongoing {
     /// 当前 running 计数(含 enqueued 未真正开跑的)。
     pub fn snapshot(&self) -> SnapshotCounts {
         let inner = self.inner.lock();
-        let mut by_lane = HashMap::<Lane, usize>::new();
+        let mut by_lane = FxHashMap::<Lane, usize>::default();
         for meta in inner.tasks.values() {
             *by_lane.entry(meta.kind.lane()).or_insert(0) += 1;
         }
@@ -152,5 +151,5 @@ impl Ongoing {
 /// `Ongoing::snapshot` 的数据载荷。
 pub(crate) struct SnapshotCounts {
     pub running: usize,
-    pub by_lane: HashMap<Lane, usize>,
+    pub by_lane: FxHashMap<Lane, usize>,
 }

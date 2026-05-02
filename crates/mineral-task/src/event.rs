@@ -1,10 +1,10 @@
 //! 任务推到 client 的事件载荷。
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use image::DynamicImage;
 use mineral_model::{Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use rustc_hash::FxHashSet;
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
@@ -27,7 +27,7 @@ pub enum TaskEvent {
         source: SourceKind,
 
         /// 喜欢的歌曲 ID 集合。
-        ids: HashSet<SongId>,
+        ids: FxHashSet<SongId>,
     },
 
     /// `PlaylistTracks` 任务成功:某歌单内的曲目已到。

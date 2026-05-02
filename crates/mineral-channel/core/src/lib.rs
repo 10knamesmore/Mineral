@@ -14,7 +14,7 @@ pub use credential::Credential;
 pub use error::{Error, Result};
 pub use page::Page;
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
 use mineral_model::{
@@ -92,9 +92,9 @@ pub trait MusicChannel: Send + Sync {
 
     /// 当前用户喜欢(♥)的歌曲 ID 集合(read-only)。
     ///
-    /// `liked_song_ids` 是 user-data 类的第一个口子;返回 `HashSet` 而非 `Vec` 是因为
+    /// `liked_song_ids` 是 user-data 类的第一个口子;返回 `FxHashSet` 而非 `Vec` 是因为
     /// 调用方会做点查("这首歌 like 了吗")。channel 不支持/未登录时返回 [`Error::NotSupported`]。
-    async fn liked_song_ids(&self) -> Result<HashSet<SongId>> {
+    async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
         Err(Error::NotSupported)
     }
 }

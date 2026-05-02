@@ -25,6 +25,7 @@ mineral-task         = { workspace = true }
 rand                 = { workspace = true }
 ratatui              = { workspace = true }
 ratatui-image        = { workspace = true }
+rustc-hash           = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 tokio                = { workspace = true }

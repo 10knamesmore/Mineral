@@ -14,6 +14,7 @@ futures-util = { workspace = true }
 image        = { workspace = true }
 isahc        = { workspace = true }
 parking_lot  = { workspace = true }
+rustc-hash   = { workspace = true }
 tokio        = { workspace = true }
 tokio-util   = { workspace = true }
 

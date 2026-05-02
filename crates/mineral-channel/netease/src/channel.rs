@@ -3,8 +3,6 @@
 //! 把 `api/` 模块里的逻辑层方法绑到 `mineral_channel_core::MusicChannel` 这个 trait,
 //! 让 binary 上层可以面向 trait 编程。
 
-use std::collections::HashSet;
-
 use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
@@ -13,6 +11,7 @@ use mineral_model::{
     Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind,
     UserId,
 };
+use rustc_hash::FxHashSet;
 
 use crate::api;
 use crate::config::NeteaseConfig;
@@ -173,7 +172,7 @@ impl MusicChannel for NeteaseChannel {
         }
     }
 
-    async fn liked_song_ids(&self) -> Result<HashSet<SongId>> {
+    async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
         match self.user_id.as_ref() {
             Some(uid) => api::user::liked_song_ids(&self.transport, uid)
                 .await

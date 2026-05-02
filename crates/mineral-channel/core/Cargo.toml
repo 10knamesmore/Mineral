@@ -8,6 +8,7 @@ mineral-model = { workspace = true }
 async-trait   = { workspace = true }
 thiserror     = { workspace = true }
 color-eyre    = { workspace = true }
+rustc-hash    = { workspace = true }
 serde         = { workspace = true }
 serde_json    = { workspace = true }
 
