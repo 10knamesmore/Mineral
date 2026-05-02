@@ -13,6 +13,10 @@ use crate::view_model::PlaylistView;
 
 /// 渲染 Playlists 视图到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+    let rows_data = state.filtered_playlists();
+    let total = rows_data.len();
+    let pos = position_label(state.sel_playlist, total);
+
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -20,7 +24,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         .title(Line::from(vec![
             Span::styled(" playlists ", Style::new().fg(theme.subtext)),
             search_badge(&state.search_q, theme),
-        ]));
+        ]))
+        .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
 
     let header = Row::new(vec![
         Cell::from("name"),
@@ -30,8 +35,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     ])
     .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row<'_>> = state
-        .filtered_playlists()
+    let rows: Vec<Row<'_>> = rows_data
         .into_iter()
         .map(|p| build_row(p, state, theme))
         .collect();
@@ -106,5 +110,13 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
         Span::raw("")
     } else {
         Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
+    }
+}
+
+fn position_label(sel: usize, total: usize) -> String {
+    if total == 0 {
+        " 0 / 0 ".to_owned()
+    } else {
+        format!(" {} / {total} ", sel.saturating_add(1).min(total))
     }
 }

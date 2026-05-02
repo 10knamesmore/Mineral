@@ -20,6 +20,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
     let placeholder = slot_placeholder(state, theme);
+    let pos = position_label(state.sel_track, tracks.len());
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -29,6 +30,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
             Span::styled(format!(" {title} "), Style::new().fg(theme.subtext)),
             search_badge(&state.search_q, theme),
         ]))
+        .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
         .title_bottom(
             Line::from(format!("{total_min}m total"))
                 .right_aligned()
@@ -135,6 +137,14 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
         Span::raw("")
     } else {
         Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
+    }
+}
+
+fn position_label(sel: usize, total: usize) -> String {
+    if total == 0 {
+        " 0 / 0 ".to_owned()
+    } else {
+        format!(" {} / {total} ", sel.saturating_add(1).min(total))
     }
 }
 

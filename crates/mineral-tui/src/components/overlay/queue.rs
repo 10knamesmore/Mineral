@@ -30,6 +30,7 @@ pub fn draw(
     } else {
         theme.surface1
     };
+    let pos = position_label(sel, queue.len());
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -39,6 +40,7 @@ pub fn draw(
             Span::styled(" queue · floating ", Style::new().fg(theme.subtext)),
             Span::styled(" press q to close ", Style::new().fg(theme.overlay)),
         ]))
+        .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
         .title_bottom(
             Line::from(" ↵ play  ·  Tab/q/esc close ")
                 .right_aligned()
@@ -95,6 +97,14 @@ fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &T
     let track_str = format!("{} — {artist}", s.name);
     let len = format_ms(s.duration_ms);
     Row::new(vec![num, Cell::from(track_str), Cell::from(len)])
+}
+
+fn position_label(sel: usize, total: usize) -> String {
+    if total == 0 {
+        " 0 / 0 ".to_owned()
+    } else {
+        format!(" {} / {total} ", sel.saturating_add(1).min(total))
+    }
 }
 
 fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
