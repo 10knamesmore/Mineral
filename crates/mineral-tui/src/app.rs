@@ -407,10 +407,14 @@ impl App {
             return;
         }
 
-        // queue focused 时,Esc 关闭 queue;其他键走 queue handler。
+        // queue focused 时,Esc 关闭 queue;playback 全局键(空格 / n / p / m / 音量 /
+        // seek)优先消费,余下走 queue 内导航(j/k/Enter 等)。
         if self.state.focus == Focus::Queue {
             if key.code == KeyCode::Esc {
                 self.close_queue();
+                return;
+            }
+            if self.handle_playback_key(key) {
                 return;
             }
             self.handle_queue_key(key);
