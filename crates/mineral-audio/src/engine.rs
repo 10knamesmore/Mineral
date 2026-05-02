@@ -5,22 +5,22 @@
 //! `take()` 一次实际打 demuxer ——抗住长按 ←/→ 的 30Hz key-repeat。
 
 use std::io::BufReader;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
 use mineral_model::MediaUrl;
 use parking_lot::Mutex;
-use rodio::decoder::DecoderBuilder;
 use rodio::Source;
-use stream_download::http::reqwest::Client;
-use stream_download::http::HttpStream;
-use stream_download::source::SourceStream;
-use stream_download::storage::temp::TempStorageProvider;
+use rodio::decoder::DecoderBuilder;
 use stream_download::Settings;
 use stream_download::StreamDownload;
+use stream_download::http::HttpStream;
+use stream_download::http::reqwest::Client;
+use stream_download::source::SourceStream;
+use stream_download::storage::temp::TempStorageProvider;
 
 use crate::command::AudioCommand;
 use crate::snapshot::AudioSnapshot;

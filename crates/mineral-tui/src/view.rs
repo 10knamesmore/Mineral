@@ -8,7 +8,7 @@ use crate::components::overlay::queue as queue_overlay;
 use crate::components::{
     lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport,
 };
-use crate::layout::{compute, Areas};
+use crate::layout::{Areas, compute};
 use crate::state::Focus;
 
 /// 渲染一帧:计算布局,填充各面板。

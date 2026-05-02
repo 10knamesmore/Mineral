@@ -22,9 +22,9 @@
 //! mineral_log::warn!(target: "channel_fetch", ?source, "no channel registered");
 //! ```
 
-pub use tracing::{debug, error, event, info, instrument, span, trace, warn, Level};
+pub use tracing::{Level, debug, error, event, info, instrument, span, trace, warn};
 
-use color_eyre::eyre::{eyre, WrapErr};
+use color_eyre::eyre::{WrapErr, eyre};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 

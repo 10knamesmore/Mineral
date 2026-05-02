@@ -10,11 +10,11 @@
 
 use std::cell::Cell;
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::color::{lerp_color, rotate_hue};
 use crate::theme::Theme;

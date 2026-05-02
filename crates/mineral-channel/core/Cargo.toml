@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-channel-core"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-channel-core"
+description = "MusicChannel trait + 共享错误 / 类型"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [dependencies]
 mineral-model = { workspace = true }

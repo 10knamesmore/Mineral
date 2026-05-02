@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use color_eyre::eyre::{eyre, WrapErr};
+use color_eyre::eyre::{WrapErr, eyre};
 use isahc::{
-    config::Configurable, cookies::CookieJar, http::Uri, AsyncReadResponseExt, HttpClient, Request,
+    AsyncReadResponseExt, HttpClient, Request, config::Configurable, cookies::CookieJar, http::Uri,
 };
 
 type Result<T> = color_eyre::Result<T>;
@@ -11,8 +11,8 @@ type Result<T> = color_eyre::Result<T>;
 use crate::config::NeteaseConfig;
 use crate::crypto::{eapi, linuxapi, weapi};
 use crate::transport::body::{decode_response, parse_code};
-use crate::transport::headers::{pick_user_agent, UaKind, UA_LINUX};
-use crate::transport::url::{rewrite, Crypto};
+use crate::transport::headers::{UA_LINUX, UaKind, pick_user_agent};
+use crate::transport::url::{Crypto, rewrite};
 
 const BASE_URL: &str = "https://music.163.com";
 const TIMEOUT_SECS: u64 = 100;

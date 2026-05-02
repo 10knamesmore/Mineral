@@ -317,10 +317,10 @@ impl App {
         let original = self.state.queue.clone();
         let cur_id = self.state.playback.track.as_ref().map(|t| t.id.clone());
         self.state.queue.shuffle(&mut rand::rng());
-        if let Some(id) = cur_id {
-            if let Some(pos) = self.state.queue.iter().position(|s| s.id == id) {
-                self.state.queue.swap(0, pos);
-            }
+        if let Some(id) = cur_id
+            && let Some(pos) = self.state.queue.iter().position(|s| s.id == id)
+        {
+            self.state.queue.swap(0, pos);
         }
         self.state.queue_sel = 0;
         self.state.original_queue = Some(original);
@@ -404,10 +404,10 @@ impl App {
     }
 
     fn handle_event(&mut self, ev: &Event) {
-        if let Event::Key(key) = ev {
-            if key.kind == KeyEventKind::Press {
-                self.handle_key(key);
-            }
+        if let Event::Key(key) = ev
+            && key.kind == KeyEventKind::Press
+        {
+            self.handle_key(key);
         }
     }
 

@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-paths"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-paths"
+description = "标准化的配置 / 缓存 / 数据目录解析"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [dependencies]
 color-eyre = { workspace = true }

@@ -6,9 +6,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use isahc::config::Configurable;
 use isahc::AsyncReadResponseExt;
 use isahc::HttpClient;
+use isahc::config::Configurable;
 use mineral_model::MediaUrl;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};

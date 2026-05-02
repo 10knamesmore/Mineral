@@ -1,11 +1,11 @@
 //! 浮动 queue 面板。
 
 use mineral_model::{Song, SongId};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Row, Table, TableState};
-use ratatui::Frame;
 
 use crate::components::overlay::centered_rect;
 use crate::playback::format_ms;

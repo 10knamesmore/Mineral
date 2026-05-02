@@ -1,8 +1,8 @@
 //! UI 持有的 audio handle:线程安全、可 clone,所有方法都是非阻塞。
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 

@@ -1,11 +1,11 @@
 //! Playlists 视图右栏:程序化封面 + KV(tracks/length/source/...) + footer。
 
 use mineral_model::SourceKind;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 use ratatui_image::picker::Picker;
 
 use crate::components::cover_image;

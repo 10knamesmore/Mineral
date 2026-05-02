@@ -5,7 +5,7 @@ use std::sync::Arc;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use mineral_channel_core::MusicChannel;
-use mineral_channel_netease::{load_stored, NeteaseChannel, NeteaseConfig};
+use mineral_channel_netease::{NeteaseChannel, NeteaseConfig, load_stored};
 use mineral_cli::Args;
 use tokio::runtime::Runtime;
 

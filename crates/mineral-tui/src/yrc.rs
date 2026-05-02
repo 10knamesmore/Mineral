@@ -161,11 +161,7 @@ pub fn current_index(lines: &[YrcLine], position_ms: u64) -> Option<usize> {
         return None;
     }
     let pp = lines.partition_point(|l| l.start_ms <= position_ms);
-    if pp == 0 {
-        None
-    } else {
-        Some(pp - 1)
-    }
+    if pp == 0 { None } else { Some(pp - 1) }
 }
 
 #[cfg(test)]

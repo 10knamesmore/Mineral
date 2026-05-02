@@ -1,7 +1,12 @@
 [package]
-name = "mineral"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral"
+description = "多源终端音乐播放器(ratatui),支持本地与云端音乐"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [features]
 mock = ["mineral-tui/mock", "dep:mineral-channel-mock"]

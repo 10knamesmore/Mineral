@@ -1,7 +1,7 @@
 //! 任务句柄。
 
-use futures_util::future::{BoxFuture, Shared};
 use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 

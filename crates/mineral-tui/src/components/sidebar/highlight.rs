@@ -30,10 +30,10 @@ pub fn highlight<'a>(text: &str, q: &str, base: Style, theme: &Theme) -> Vec<Spa
     while let Some(rel) = hay.get(cursor..).and_then(|s| s.find(&needle)) {
         let abs = cursor.saturating_add(rel);
         let end = abs.saturating_add(needle.len());
-        if let Some(pre) = text.get(cursor..abs) {
-            if !pre.is_empty() {
-                out.push(Span::styled(pre.to_owned(), base));
-            }
+        if let Some(pre) = text.get(cursor..abs)
+            && !pre.is_empty()
+        {
+            out.push(Span::styled(pre.to_owned(), base));
         }
         let Some(hit_str) = text.get(abs..end) else {
             break;
@@ -41,10 +41,10 @@ pub fn highlight<'a>(text: &str, q: &str, base: Style, theme: &Theme) -> Vec<Spa
         out.push(Span::styled(hit_str.to_owned(), hit));
         cursor = end;
     }
-    if let Some(rest) = text.get(cursor..) {
-        if !rest.is_empty() {
-            out.push(Span::styled(rest.to_owned(), base));
-        }
+    if let Some(rest) = text.get(cursor..)
+        && !rest.is_empty()
+    {
+        out.push(Span::styled(rest.to_owned(), base));
     }
     out
 }

@@ -3,11 +3,11 @@
 //! - 非搜索态:左侧 keys hint + 右侧临时 hint(自动消)
 //! - 搜索态:bg surface0 + 左侧 `/` + 当前 search_q + 光标块 + 右侧 `↵ run · esc cancel`
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 
 use crate::state::AppState;
 use crate::theme::Theme;

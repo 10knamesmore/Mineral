@@ -67,10 +67,10 @@ pub async fn song_urls(
     ids: &[SongId],
     quality: BitRate,
 ) -> Result<Vec<PlayUrl>> {
-    if let Ok(out) = song_urls_v1(transport, ids, quality).await {
-        if !out.is_empty() {
-            return Ok(out);
-        }
+    if let Ok(out) = song_urls_v1(transport, ids, quality).await
+        && !out.is_empty()
+    {
+        return Ok(out);
     }
     song_urls_legacy(transport, ids, quality).await
 }

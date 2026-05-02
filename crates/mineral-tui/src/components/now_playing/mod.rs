@@ -1,11 +1,11 @@
 //! 右栏 Now Playing detail:Playlists 视图显示歌单 meta,Library 视图显示
 //! 当前选中曲目 meta;一律包含程序化封面 + KV 区。
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
-use ratatui::Frame;
 use ratatui_image::picker::Picker;
 
 use crate::state::{AppState, View};

@@ -23,7 +23,7 @@ use mineral_channel_netease::crypto::{eapi, linuxapi};
 
 use openssl::{
     rsa::{Padding, Rsa},
-    symm::{encrypt, Cipher},
+    symm::{Cipher, encrypt},
 };
 
 const PRESET_KEY: &[u8] = b"0CoJUm6Qyw8W8jud";

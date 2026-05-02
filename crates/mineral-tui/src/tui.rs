@@ -11,12 +11,12 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, EnterAlternateScreen,
-    LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    is_raw_mode_enabled,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Frame;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 /// 终端 backend 的 RAII 持有者。
 pub struct Tui {

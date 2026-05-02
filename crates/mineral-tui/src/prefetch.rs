@@ -36,10 +36,12 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     let cache = &state.cover_cache;
     let pending = &state.cover_pending;
     let push_if_new = |opt: Option<&MediaUrl>, out: &mut Vec<MediaUrl>| {
-        if let Some(u) = opt {
-            if !cache.contains_key(u) && !pending.contains(u) && !out.contains(u) {
-                out.push(u.clone());
-            }
+        if let Some(u) = opt
+            && !cache.contains_key(u)
+            && !pending.contains(u)
+            && !out.contains(u)
+        {
+            out.push(u.clone());
         }
     };
     match state.view {

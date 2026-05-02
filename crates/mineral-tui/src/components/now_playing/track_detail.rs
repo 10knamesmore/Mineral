@@ -1,11 +1,11 @@
 //! Library 视图右栏:程序化封面(以专辑名为种子) + KV + 底部 ▶ 当前曲目。
 
 use mineral_model::SongId;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 use ratatui_image::picker::Picker;
 
 use crate::components::cover_image;

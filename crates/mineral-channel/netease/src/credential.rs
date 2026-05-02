@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{eyre, WrapErr};
+use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::UserId;
 use serde::{Deserialize, Serialize};
 
@@ -82,7 +82,7 @@ fn read_from(path: &Path) -> color_eyre::Result<Option<StoredNeteaseAuth>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_from, write_to, StoredNeteaseAuth};
+    use super::{StoredNeteaseAuth, read_from, write_to};
     use mineral_model::UserId;
 
     #[test]

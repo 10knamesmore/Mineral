@@ -223,7 +223,7 @@ fn compute_bar_bins(sample_rate: u32, bar_count: usize) -> Vec<(usize, usize)> {
 mod tests {
     use color_eyre::eyre::eyre;
 
-    use super::{SpectrumComputer, FFT_SIZE};
+    use super::{FFT_SIZE, SpectrumComputer};
 
     /// 测试默认条数(跟原 `BARS` 常量一致,后续如果不再用 64 测试改这一处)。
     const TEST_BARS: usize = 64;

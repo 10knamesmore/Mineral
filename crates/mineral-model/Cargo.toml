@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-model"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-model"
+description = "跨 channel 的统一数据模型(Song / Playlist / Lyrics 等)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [features]
 # 启用后会增加 `SourceKind::Mock` 变体,仅供 UI / 测试 / mineral-channel-mock

@@ -3,9 +3,9 @@
 //! 每个字符存储 2 个逻辑像素(上 / 下),配合 `▀` 的 fg/bg 实现宽:高 = 1:2
 //! 的方形像素;cover 整体保持 ~2:1 字符比,方形视觉。
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::Frame;
 
 use crate::theme::Theme;
 

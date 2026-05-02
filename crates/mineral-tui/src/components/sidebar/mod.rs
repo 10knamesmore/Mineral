@@ -1,7 +1,7 @@
 //! 左栏:Playlists / Library 双视图渲染入口。
 
-use ratatui::layout::Rect;
 use ratatui::Frame;
+use ratatui::layout::Rect;
 
 use crate::state::{AppState, View};
 use crate::theme::Theme;

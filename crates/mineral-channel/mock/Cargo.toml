@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-channel-mock"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-channel-mock"
+description = "Mock channel(离线开发用,不打真实端点)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [features]
 default = []

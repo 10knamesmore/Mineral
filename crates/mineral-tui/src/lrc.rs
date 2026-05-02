@@ -92,11 +92,7 @@ pub fn current_index(lines: &[(u64, String)], position_ms: u64) -> Option<usize>
     }
     // 等价 partition_point(|x| x.0 <= position_ms) - 1
     let pp = lines.partition_point(|(t, _)| *t <= position_ms);
-    if pp == 0 {
-        None
-    } else {
-        Some(pp - 1)
-    }
+    if pp == 0 { None } else { Some(pp - 1) }
 }
 
 #[cfg(test)]

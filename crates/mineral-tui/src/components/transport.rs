@@ -1,13 +1,13 @@
 //! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode。
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::playback::{format_ms, Playback};
+use crate::playback::{Playback, format_ms};
 use crate::theme::Theme;
 
 /// 渲染 Transport 面板到给定 [`Rect`]。

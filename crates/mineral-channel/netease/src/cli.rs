@@ -6,14 +6,14 @@
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::eyre::{eyre, WrapErr};
+use color_eyre::eyre::{WrapErr, eyre};
 use isahc::http::Uri;
-use qrcode::render::unicode;
 use qrcode::QrCode;
+use qrcode::render::unicode;
 
 use crate::api::login::{login_qr_check, login_qr_get_key};
 use crate::api::user::account_uid;
-use crate::credential::{save, StoredNeteaseAuth};
+use crate::credential::{StoredNeteaseAuth, save};
 use crate::{NeteaseChannel, NeteaseConfig};
 
 const NETEASE_BASE_URL: &str = "https://music.163.com";

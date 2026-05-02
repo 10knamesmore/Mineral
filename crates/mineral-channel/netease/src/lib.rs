@@ -44,7 +44,7 @@ pub mod device;
 pub mod transport;
 pub mod wire;
 
-pub use credential::{load_stored, StoredNeteaseAuth};
+pub use credential::{StoredNeteaseAuth, load_stored};
 
 pub mod convert;
 

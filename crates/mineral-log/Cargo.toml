@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-log"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-log"
+description = "tracing-based 日志门面 + 文件 appender"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [dependencies]
 mineral-paths = { workspace = true }

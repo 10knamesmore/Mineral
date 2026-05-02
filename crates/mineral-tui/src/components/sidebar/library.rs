@@ -1,10 +1,10 @@
 //! Library 视图渲染:展示当前选中歌单内的曲目。
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
-use ratatui::Frame;
 
 use super::highlight::highlight;
 use crate::state::AppState;

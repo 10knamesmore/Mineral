@@ -1,10 +1,10 @@
 //! Quit 确认 modal:小尺寸居中,y/Enter 退出 / n/Esc 取消。
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::components::overlay::centered_rect;
 use crate::theme::Theme;

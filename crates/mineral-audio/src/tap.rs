@@ -5,13 +5,13 @@
 //! (用户视角:旧样本对可视化无价值)。`sample_rate` 在构造时写进
 //! `Arc<AtomicU32>`,UI 端按需读取,跟随每首曲目变化。
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use ringbuf::traits::Producer;
 use ringbuf::HeapProd;
+use ringbuf::traits::Producer;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 

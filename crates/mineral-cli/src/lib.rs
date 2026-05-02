@@ -3,4 +3,4 @@
 mod core;
 mod subcommands;
 
-pub use crate::core::{run, Args, Command};
+pub use crate::core::{Args, Command, run};

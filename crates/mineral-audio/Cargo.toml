@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-audio"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-audio"
+description = "音频播放引擎(rodio + symphonia + stream-download)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [dependencies]
 mineral-log   = { workspace = true }

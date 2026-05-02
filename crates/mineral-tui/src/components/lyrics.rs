@@ -4,11 +4,11 @@
 //! 有 YRC(逐字)时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
 //! 未唱的字 = `theme.overlay` dim。邻行无论是否有 yrc 都按整行 dim 渲染。
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::color::lerp_color;
 use crate::lrc;

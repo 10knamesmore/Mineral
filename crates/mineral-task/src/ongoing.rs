@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::handle::{shared_done, SharedDone, TaskHandle};
+use crate::handle::{SharedDone, TaskHandle, shared_done};
 use crate::id::{IdAllocator, Priority, TaskId};
 use crate::kind::{DedupKey, TaskKind};
 use crate::lane::Lane;

@@ -34,6 +34,7 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // reason: edition 2024 下 env::set_var/remove_var 是 unsafe,只在测试里用 EnvGuard 隔离
 mod tests {
     use std::sync::Mutex;
 
@@ -49,13 +50,15 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &std::path::Path) -> Self {
             let prev = std::env::var_os(key);
-            std::env::set_var(key, value);
+            // SAFETY: 单测整个用 ENV_LOCK 串行化,不会跟其他线程并发改 env。
+            unsafe { std::env::set_var(key, value) };
             Self { key, prev }
         }
 
         fn unset(key: &'static str) -> Self {
             let prev = std::env::var_os(key);
-            std::env::remove_var(key);
+            // SAFETY: 同 set,串行化保证。
+            unsafe { std::env::remove_var(key) };
             Self { key, prev }
         }
     }
@@ -63,8 +66,9 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             match self.prev.take() {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+                // SAFETY: 同上。Drop 在 lock guard 释放前执行(变量声明顺序保证)。
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
             }
         }
     }

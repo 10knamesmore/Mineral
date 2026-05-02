@@ -1,7 +1,12 @@
 [package]
-name    = "mineral-channel-netease"
-version = "0.1.0"
-edition = "2021"
+name        = "mineral-channel-netease"
+description = "Mineral 的一个 channel 实现(加密 + cookie + 端点)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
 
 [dependencies]
 mineral-model        = { workspace = true }
