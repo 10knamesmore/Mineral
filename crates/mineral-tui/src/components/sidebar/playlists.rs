@@ -44,7 +44,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         Constraint::Min(12),
         Constraint::Length(11),
         Constraint::Length(8),
-        Constraint::Length(10),
+        Constraint::Length(5),
     ];
 
     let table = Table::new(rows, widths)
@@ -69,9 +69,15 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
         String::from("—")
     } else {
         let total_min = total_ms / 60_000;
-        format!("{}h {:02}m", total_min / 60, total_min % 60)
+        let h = total_min / 60;
+        let m = total_min % 60;
+        if h == 0 {
+            format!("{m}m")
+        } else {
+            format!("{h}h {m:02}m")
+        }
     };
-    let count_label = format!("{} items", p.data.track_count);
+    let count_label = format!("{}", p.data.track_count);
 
     Row::new(vec![
         Cell::from(Span::styled(
