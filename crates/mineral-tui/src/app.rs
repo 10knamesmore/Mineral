@@ -494,6 +494,16 @@ impl App {
         }
     }
 
+    /// 搜索词每次变化后,把当前 view 的 sel 拉回 0。**只动当前 view 的 sel**:
+    /// Library 视图下 search_q 过滤的是 tracks,sel_playlist 不能跟着归零(否则
+    /// `selected_playlist()` 会指向另一条歌单,tracks 整个换成别的)。
+    fn reset_sel_for_search(&mut self) {
+        match self.state.view {
+            View::Playlists => self.state.sel_playlist = 0,
+            View::Library => self.state.sel_track = 0,
+        }
+    }
+
     fn handle_search_key(&mut self, key: &KeyEvent) {
         match key.code {
             // Esc: 清掉过滤词并退出输入态。
@@ -507,13 +517,11 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.state.search_q.pop();
-                self.state.sel_playlist = 0;
-                self.state.sel_track = 0;
+                self.reset_sel_for_search();
             }
             KeyCode::Char(c) => {
                 self.state.search_q.push(c);
-                self.state.sel_playlist = 0;
-                self.state.sel_track = 0;
+                self.reset_sel_for_search();
             }
             _ => {}
         }

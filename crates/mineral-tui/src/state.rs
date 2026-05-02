@@ -268,12 +268,18 @@ impl AppState {
         self.yrc_cache.get(&song.id)
     }
 
-    /// 返回当前选中歌单(Playlists 视图)的引用。
+    /// 返回当前选中歌单的引用。
     ///
-    /// `sel_playlist` 是 [`Self::filtered_playlists`] 的索引,过滤态下取的是用户实际
-    /// 看见的那一行(而不是 raw 列表上的同位置 —— 那条可能根本没显示)。
+    /// `sel_playlist` 的语义随 [`Self::view`] 切换:
+    /// - Playlists 视图:filtered 列表的索引,过滤词作用于 playlist 名,渲染、导航、
+    ///   selected_playlist 都对齐 filtered。
+    /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
+    ///   此时 search_q 作用于 tracks,跟 playlists 过滤无关。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
-        self.filtered_playlists().get(self.sel_playlist).copied()
+        match self.view {
+            View::Playlists => self.filtered_playlists().get(self.sel_playlist).copied(),
+            View::Library => self.playlists.get(self.sel_playlist),
+        }
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
