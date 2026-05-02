@@ -141,9 +141,11 @@ fn paint_window(
             let dist_signed =
                 isize::try_from(row).unwrap_or(0) - isize::try_from(center_row).unwrap_or(0);
             let dist = u64::try_from(dist_signed.unsigned_abs()).unwrap_or(0);
+            // 远端 endpoint 用 mantle(贴近面板背景),让最远行近乎融化进背景,
+            // 中心-外圈对比更强;近邻仍是 subtext,保持可读。
             let fade = lerp_color(
                 theme.subtext,
-                theme.surface0,
+                theme.mantle,
                 dist.saturating_sub(1),
                 max_dist.saturating_sub(1).max(1),
             );
@@ -191,8 +193,9 @@ fn push_char_spans<'a>(
             .saturating_add((i_u64 + 1) * total_dur / n_u64);
         let char_dur = char_end.saturating_sub(char_start).max(1);
         let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
-        // wipe 终点用 accent 跟 lrc 兜底中心行同色,中心行整体走 mauve 系。
-        let color = lerp_color(theme.overlay, theme.accent, elapsed, char_dur);
+        // wipe 起点用 subtext(跟 d=1 邻居同亮度,中心行未唱部分不再「比周围暗」);
+        // 终点 accent 跟 lrc 兜底中心行同色;整行加 BOLD 让最亮部分再亮一点。
+        let color = lerp_color(theme.subtext, theme.accent, elapsed, char_dur);
 
         let next_byte = byte_cursor.saturating_add(ch.len_utf8());
         let slice = yrc_char
@@ -201,6 +204,9 @@ fn push_char_spans<'a>(
             .unwrap_or_default();
         byte_cursor = next_byte;
 
-        out.push(Span::styled(slice, Style::new().fg(color)));
+        out.push(Span::styled(
+            slice,
+            Style::new().fg(color).add_modifier(Modifier::BOLD),
+        ));
     }
 }

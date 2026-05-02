@@ -69,13 +69,13 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// 默认播放状态(volume=66%)。
+    /// 默认播放状态
     pub fn new() -> Self {
         Self {
             track: None,
             position_ms: 0,
             playing: false,
-            volume_pct: 66,
+            volume_pct: 100,
             mode: PlayMode::Sequential,
             play_url: None,
         }

@@ -139,11 +139,15 @@ impl App {
         if let Some(slice) = buf.get(..n) {
             self.state.fft.push(slice);
         }
-        let bars = self.state.fft.compute(self.spectrum_tap.sample_rate());
+        let target_bars = self.state.spectrum.target_bars.get();
+        let bars = self
+            .state
+            .fft
+            .compute(self.spectrum_tap.sample_rate(), target_bars);
         self.state.spectrum.tick(
             self.state.playback.playing,
             self.state.playback.volume_pct,
-            bars.as_ref(),
+            bars.as_deref(),
         );
     }
 

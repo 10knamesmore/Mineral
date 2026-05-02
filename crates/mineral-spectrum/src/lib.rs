@@ -1,13 +1,11 @@
-//! 实时 PCM → 频谱条计算。caller 喂 mono f32 样本,本 crate 出 [`BARS`] 根条的高度
-//! (0..=[`RES`])。FFT 大小 / 窗函数 / 桶映射 / dB 标定全封装在内,UI 端只关心条数组。
+//! 实时 PCM → 频谱条计算。caller 喂 mono f32 样本 + 期望条数,本 crate 出对应根数的高度
+//! (0..=[`RES`])。FFT 大小 / 窗函数 / 桶映射 / dB 标定全封装在内,UI 端按 area.width
+//! 决定要几根条,本 crate 在 (sr, bar_count) 缓存桶映射,只在变化时重算。
 
 use std::sync::Arc;
 
 use realfft::num_complex::Complex32;
 use realfft::{RealFftPlanner, RealToComplex};
-
-/// 频谱条数。UI 渲染用同一个数。
-pub const BARS: usize = 64;
 
 /// 单根条的最大高度(1/8 字符 × 8)。UI 渲染用同一个数。
 pub const RES: u16 = 64;
@@ -56,11 +54,14 @@ pub struct SpectrumComputer {
     /// 预算 Hann 窗。
     hann: Box<[f32; FFT_SIZE]>,
 
-    /// 第 i 根条对应的 fft_out 区间 `[start, end)`。SR 变化时重算。
-    bar_bins: [(usize, usize); BARS],
+    /// 第 i 根条对应的 fft_out 区间 `[start, end)`。`(sr, bar_count)` 变化时重算。
+    bar_bins: Vec<(usize, usize)>,
 
     /// 上次算 `bar_bins` 时用的 SR。0 = 还没算过。
     cached_sr: u32,
+
+    /// 上次算 `bar_bins` 时用的 bar_count。0 = 还没算过。
+    cached_bars: usize,
 }
 
 impl SpectrumComputer {
@@ -80,8 +81,9 @@ impl SpectrumComputer {
             fft_in: Box::new([0.0_f32; FFT_SIZE]),
             fft_out: Box::new([Complex32::new(0.0, 0.0); FFT_BINS]),
             hann,
-            bar_bins: [(0, 0); BARS],
+            bar_bins: Vec::new(),
             cached_sr: 0,
+            cached_bars: 0,
         }
     }
 
@@ -102,17 +104,19 @@ impl SpectrumComputer {
     ///
     /// # Params:
     ///   - `sample_rate`: 当前 PCM 来源的采样率(Hz)。变化时重算桶映射。
+    ///   - `bar_count`: 期望的条数。变化时重算桶映射(对数等分到新条数)。
     ///
     /// # Return:
-    ///   - `Some([u16; BARS])`:窗满,出 64 根条的高度。
-    ///   - `None`:窗内样本数 < FFT_SIZE(刚开始播 / 切歌瞬间)。
-    pub fn compute(&mut self, sample_rate: u32) -> Option<[u16; BARS]> {
-        if self.filled < FFT_SIZE || sample_rate == 0 {
+    ///   - `Some(Vec<u16>)`:窗满,出 `bar_count` 根条的高度。
+    ///   - `None`:窗内样本数 < FFT_SIZE(刚开始播 / 切歌瞬间)或 `bar_count == 0`。
+    pub fn compute(&mut self, sample_rate: u32, bar_count: usize) -> Option<Vec<u16>> {
+        if self.filled < FFT_SIZE || sample_rate == 0 || bar_count == 0 {
             return None;
         }
-        if sample_rate != self.cached_sr {
-            self.bar_bins = compute_bar_bins(sample_rate);
+        if sample_rate != self.cached_sr || bar_count != self.cached_bars {
+            self.bar_bins = compute_bar_bins(sample_rate, bar_count);
             self.cached_sr = sample_rate;
+            self.cached_bars = bar_count;
         }
 
         // 环形缓冲的「最旧样本」就在 write_idx 位置,逻辑顺序是
@@ -135,7 +139,7 @@ impl SpectrumComputer {
             return None;
         }
 
-        let mut bars = [0u16; BARS];
+        let mut bars = vec![0u16; bar_count];
         for (i, (lo, hi)) in self.bar_bins.iter().copied().enumerate() {
             let Some(bar) = bars.get_mut(i) else { continue };
             *bar = bin_band_to_height(self.fft_out.as_slice(), lo, hi);
@@ -188,9 +192,9 @@ fn bin_band_to_height(bins: &[Complex32], lo: usize, hi: usize) -> u16 {
     }
 }
 
-/// 在 `[F_MIN, min(F_MAX, sr/2)]` 上对数等分 BARS 个桶,把每个桶映射到 `[lo, hi)` 的 bin index。
+/// 在 `[F_MIN, min(F_MAX, sr/2)]` 上对数等分 `bar_count` 个桶,把每个桶映射到 `[lo, hi)` 的 bin index。
 #[allow(clippy::as_conversions)]
-fn compute_bar_bins(sample_rate: u32) -> [(usize, usize); BARS] {
+fn compute_bar_bins(sample_rate: u32, bar_count: usize) -> Vec<(usize, usize)> {
     let nyquist = (sample_rate as f32) / 2.0;
     let f_hi = F_MAX.min(nyquist);
     let f_lo = F_MIN.min(f_hi);
@@ -199,10 +203,11 @@ fn compute_bar_bins(sample_rate: u32) -> [(usize, usize); BARS] {
     let bin_count = FFT_SIZE / 2 + 1;
     let hz_per_bin = (sample_rate as f32) / (FFT_SIZE as f32);
 
-    let mut out = [(0usize, 0usize); BARS];
+    let mut out = vec![(0usize, 0usize); bar_count];
+    let bars_f = (bar_count as f32).max(1.0);
     for (i, slot) in out.iter_mut().enumerate() {
-        let t0 = (i as f32) / (BARS as f32);
-        let t1 = ((i + 1) as f32) / (BARS as f32);
+        let t0 = (i as f32) / bars_f;
+        let t1 = ((i + 1) as f32) / bars_f;
         let f0 = (log_lo + (log_hi - log_lo) * t0).exp();
         let f1 = (log_lo + (log_hi - log_lo) * t1).exp();
         let b0 = (f0 / hz_per_bin).floor().max(0.0) as usize;
@@ -218,12 +223,15 @@ fn compute_bar_bins(sample_rate: u32) -> [(usize, usize); BARS] {
 mod tests {
     use color_eyre::eyre::eyre;
 
-    use super::{SpectrumComputer, BARS, FFT_SIZE};
+    use super::{SpectrumComputer, FFT_SIZE};
+
+    /// 测试默认条数(跟原 `BARS` 常量一致,后续如果不再用 64 测试改这一处)。
+    const TEST_BARS: usize = 64;
 
     #[test]
     fn empty_compute_returns_none() -> color_eyre::Result<()> {
         let mut sc = SpectrumComputer::new();
-        assert!(sc.compute(48_000).is_none());
+        assert!(sc.compute(48_000, TEST_BARS).is_none());
         Ok(())
     }
 
@@ -231,7 +239,9 @@ mod tests {
     fn zero_signal_all_bars_zero() -> color_eyre::Result<()> {
         let mut sc = SpectrumComputer::new();
         sc.push(&vec![0.0_f32; FFT_SIZE]);
-        let bars = sc.compute(48_000).ok_or_else(|| eyre!("expected Some"))?;
+        let bars = sc
+            .compute(48_000, TEST_BARS)
+            .ok_or_else(|| eyre!("expected Some"))?;
         for (i, b) in bars.iter().enumerate() {
             assert_eq!(*b, 0, "bar {i} should be 0 for silence");
         }
@@ -250,7 +260,9 @@ mod tests {
         }
         let mut sc = SpectrumComputer::new();
         sc.push(&samples);
-        let bars = sc.compute(sr).ok_or_else(|| eyre!("expected Some"))?;
+        let bars = sc
+            .compute(sr, TEST_BARS)
+            .ok_or_else(|| eyre!("expected Some"))?;
         let (peak_idx, &peak_val) = bars
             .iter()
             .enumerate()
@@ -261,7 +273,7 @@ mod tests {
             "1kHz peak expected mid-band, got bar {peak_idx}"
         );
         assert!(peak_val > 0, "peak should be > 0");
-        assert_eq!(bars.len(), BARS);
+        assert_eq!(bars.len(), TEST_BARS);
         Ok(())
     }
 }

@@ -8,6 +8,8 @@
 //! 2. **Baseline**:任何状态下条高都不低于 [`BASELINE_MIN`],面板永远不死寂。
 //!    pause 时条衰减到 baseline 停住,FFT 还没出第一窗时也是 baseline。
 
+use std::cell::Cell;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
@@ -20,8 +22,8 @@ use crate::theme::Theme;
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
 const SPECTRUM_RES: u16 = mineral_spectrum::RES;
 
-/// 内部条数(渲染时按 area.width 截取实际显示数)。
-const SPECTRUM_BARS: usize = mineral_spectrum::BARS;
+/// 首帧 / 重启时的默认条数。`paint_bars` 第一次跑后被实际 area.width 推算的值覆盖。
+const DEFAULT_BAR_COUNT: usize = 64;
 
 /// 任何状态下条的最小高度(1/8 字符单位)。3/64 ≈ 5%,屏上是一条薄但可辨的底线。
 const BASELINE_MIN: u16 = 3;
@@ -65,36 +67,54 @@ const SPRING_DAMPING: f32 = 0.45;
 /// 是显示位置(弹簧追目标)。SPRING_PEAK=false 时 peak_pos 直接锁到 peaks。
 #[derive(Clone, Debug)]
 pub struct SpectrumState {
-    /// 当前条高(平滑后),0..=[`SPECTRUM_RES`]。
-    bars: [u16; SPECTRUM_BARS],
+    /// 当前条高(平滑后),0..=[`SPECTRUM_RES`]。长度 = 当前 bar_count。
+    bars: Vec<u16>,
 
     /// peak 目标高度(hold/fall 状态机维护),0..=[`SPECTRUM_RES`]。peaks[i] >= bars[i] 恒成立。
-    peaks: [u16; SPECTRUM_BARS],
+    peaks: Vec<u16>,
 
     /// 每根条剩余 hold tick 数。归零后 peak target 开始下落。
-    peak_hold: [u8; SPECTRUM_BARS],
+    peak_hold: Vec<u8>,
 
     /// peak 显示位置(弹簧追 peaks 的 target)。可短暂超过 RES(过冲),渲染时 clamp。
-    peak_pos: [f32; SPECTRUM_BARS],
+    peak_pos: Vec<f32>,
 
     /// peak 弹簧速度。每 tick 由刚度 / 阻尼推进。
-    peak_vel: [f32; SPECTRUM_BARS],
+    peak_vel: Vec<f32>,
 
     /// 色相旋转相位,0..[`HUE_CYCLE_TICKS`]。每 tick +1,渲染时换算成度数。
     hue_phase: u32,
+
+    /// 渲染层根据 area.width 算出的目标条数,FFT compute 下一帧用它。
+    /// `Cell` 是因为 `paint_bars` 拿 `&SpectrumState`,这是「render → tick」反向通道。
+    pub target_bars: Cell<usize>,
 }
 
 impl SpectrumState {
     /// 初始静默状态。所有条都在 baseline,peak target/pos 同位,弹簧速度 0,色相 0。
     pub fn new() -> Self {
         Self {
-            bars: [BASELINE_MIN; SPECTRUM_BARS],
-            peaks: [BASELINE_MIN; SPECTRUM_BARS],
-            peak_hold: [0; SPECTRUM_BARS],
-            peak_pos: [f32::from(BASELINE_MIN); SPECTRUM_BARS],
-            peak_vel: [0.0; SPECTRUM_BARS],
+            bars: vec![BASELINE_MIN; DEFAULT_BAR_COUNT],
+            peaks: vec![BASELINE_MIN; DEFAULT_BAR_COUNT],
+            peak_hold: vec![0; DEFAULT_BAR_COUNT],
+            peak_pos: vec![f32::from(BASELINE_MIN); DEFAULT_BAR_COUNT],
+            peak_vel: vec![0.0; DEFAULT_BAR_COUNT],
             hue_phase: 0,
+            target_bars: Cell::new(DEFAULT_BAR_COUNT),
         }
+    }
+
+    /// 输入 bars 长度变化(终端 resize / 首次 tick)时,把所有 per-bar 状态 vec 调到同长度。
+    /// 缩短截断,扩张补 baseline。peak 状态丢一截在缩短时不可避免,resize 是低频事件不在意。
+    fn resize_state(&mut self, n: usize) {
+        if self.bars.len() == n {
+            return;
+        }
+        self.bars.resize(n, BASELINE_MIN);
+        self.peaks.resize(n, BASELINE_MIN);
+        self.peak_hold.resize(n, 0);
+        self.peak_pos.resize(n, f32::from(BASELINE_MIN));
+        self.peak_vel.resize(n, 0.0);
     }
 
     /// 当前色相旋转角度(度)。`HUE_ROTATE = false` 时恒 0。
@@ -126,7 +146,10 @@ impl SpectrumState {
     /// - `None` + `playing=false`:所有条按 `b - (b/4 + 1)` 衰减(指数+常数,落得快)。
     ///
     /// 然后无条件:1) 把条托底到 [`BASELINE_MIN`];2) 推进 peak 状态机。
-    pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16; SPECTRUM_BARS]>) {
+    pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16]>) {
+        if let Some(targets) = bars {
+            self.resize_state(targets.len());
+        }
         match (bars, playing) {
             (Some(targets), _) => {
                 let vol = u32::from(volume_pct.min(100));
@@ -242,8 +265,18 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
     if area.height == 0 {
         return;
     }
-    let bar_step: u16 = if area.width >= 64 { 2 } else { 1 };
-    let bar_count = usize::from(area.width / bar_step);
+    // 每根条恒 1 列。FFT 端按 area.width 对数等分桶映射,窗口越宽频率分辨率越细。
+    let bar_step: u16 = 1;
+    let bar_count = usize::from(area.width).max(1);
+    state.target_bars.set(bar_count);
+    let total_w = u16::try_from(bar_count)
+        .unwrap_or(0)
+        .saturating_mul(bar_step);
+    // 总宽除不尽时把剩余空格平分到两边,让 spectrum 视觉上居中,避免「左密右稀 / 右密左稀」。
+    let pad_left = area.width.saturating_sub(total_w) / 2;
+    // state.bars 长度可能跟新 bar_count 不一致(刚 resize 终端,新 FFT 还没出第一窗),
+    // 这一帧只渲染已有的部分,其余留空。下一帧 tick 后对齐。
+    let render_count = bar_count.min(state.bars.len()).max(1);
     let max_units = u32::from(area.height) * 8;
     // 渐变跨度。0 → accent(底)、span → accent_2(顶)。area.height-1 给最顶格 100% accent_2。
     let grad_span = u64::from(area.height.saturating_sub(1)).max(1);
@@ -252,7 +285,7 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
     let palette_lo = rotate_hue(theme.accent, hue);
     let palette_hi = rotate_hue(theme.accent_2, hue);
     let buf = frame.buffer_mut();
-    for col in 0..bar_count {
+    for col in 0..render_count {
         let bar = state.bars.get(col).copied().unwrap_or(0);
         let peak = state.spring_peak_at(col);
         let scaled = (u32::from(bar) * max_units) / u32::from(SPECTRUM_RES);
@@ -270,7 +303,7 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
         // trail_span 包含 peak 自身那格,作为 fade 分母:让最顶 trail 行刚好落在
         // 接近(但不到)peak cap 的色阶,色阶逐行递进,无密度跳变。
         let trail_span = u64::from(peak_row.saturating_sub(bar_top_row)).max(1);
-        let x = area.x + u16::try_from(col).unwrap_or(0) * bar_step;
+        let x = area.x + pad_left + u16::try_from(col).unwrap_or(0) * bar_step;
         for row_from_bottom in 0..area.height {
             let row_color = lerp_color(
                 palette_lo,
@@ -292,19 +325,23 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
                 continue;
             };
             let y = area.y + area.height.saturating_sub(1 + row_from_bottom);
-            buf.set_string(x, y, glyph, Style::new().fg(color));
+            for dx in 0..bar_step {
+                buf.set_string(x + dx, y, glyph, Style::new().fg(color));
+            }
         }
 
         // peak cap:▔ + theme.text + Bold,跟 bar / trail 的 mauve↔sapphire 拉开。
         // 仅当 peak 严格高于 bar 顶部所占的格才画,避免覆盖 partial glyph 丢失高度信息。
         if SHOW_PEAK_CAP && peak_row > bar_top_row && peak_row < area.height {
             let py = area.y + area.height.saturating_sub(1 + peak_row);
-            buf.set_string(
-                x,
-                py,
-                "▔",
-                Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-            );
+            for dx in 0..bar_step {
+                buf.set_string(
+                    x + dx,
+                    py,
+                    "▔",
+                    Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+                );
+            }
         }
     }
 }
