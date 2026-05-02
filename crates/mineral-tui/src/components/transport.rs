@@ -23,7 +23,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
         return;
     }
 
-    let [now, prog, ctrl, vms, _filler] = Layout::vertical([
+    let [now, meta, prog, ctrl, vms, _filler] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
@@ -33,6 +34,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     .areas(inner);
 
     paint_now(frame, now, pb, theme);
+    paint_meta(frame, meta, pb, theme);
     paint_progress(frame, prog, pb, theme);
     paint_controls(frame, ctrl, pb, theme);
     paint_vol_mode(frame, vms, pb, theme);
@@ -43,6 +45,15 @@ fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
         return;
     }
     let title = pb.track.as_ref().map_or("—", |t| t.name.as_str());
+    let line = Line::from(title.to_owned())
+        .style(Style::new().fg(theme.text).add_modifier(Modifier::BOLD));
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
+}
+
+fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+    if area.height == 0 {
+        return;
+    }
     let artist = pb
         .track
         .as_ref()
@@ -53,20 +64,12 @@ fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
         .as_ref()
         .and_then(|t| t.album.as_ref())
         .map_or("", |a| a.name.as_str());
-    let line = Line::from(vec![
-        Span::styled("now ", Style::new().fg(theme.overlay)),
-        Span::styled(
-            title.to_owned(),
-            Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" — {artist} · {album}"),
-            Style::new()
-                .fg(theme.subtext)
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    let line = Line::from(format!("{artist} · {album}")).style(
+        Style::new()
+            .fg(theme.subtext)
+            .add_modifier(Modifier::ITALIC),
+    );
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
 fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {

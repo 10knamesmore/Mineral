@@ -66,9 +66,9 @@ fn compute_full(area: Rect) -> Areas {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(bottom_area);
 
-    // 右半上下:spectrum 上、transport 下(transport ~7 行内容,固定高度优先,余给 spectrum)。
+    // 右半上下:spectrum 上、transport 下(transport 内容固定 6 行 + 边框 2 = 8,余给 spectrum)。
     let [spectrum, transport] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(right_col);
+        Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(right_col);
 
     Areas {
         mode: LayoutMode::Full,
