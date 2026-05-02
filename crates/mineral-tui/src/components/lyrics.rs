@@ -141,11 +141,11 @@ fn paint_window(
             let dist_signed =
                 isize::try_from(row).unwrap_or(0) - isize::try_from(center_row).unwrap_or(0);
             let dist = u64::try_from(dist_signed.unsigned_abs()).unwrap_or(0);
-            // 远端 endpoint 用 mantle(贴近面板背景),让最远行近乎融化进背景,
-            // 中心-外圈对比更强;近邻仍是 subtext,保持可读。
+            // 远端 endpoint 用 surface0 —— mantle 在透明终端上反而成「显眼的黑字」,
+            // surface1 又稍亮;surface0 中性偏暗,任何 bg 色下都是 fade-in-background。
             let fade = lerp_color(
                 theme.subtext,
-                theme.mantle,
+                theme.surface0,
                 dist.saturating_sub(1),
                 max_dist.saturating_sub(1).max(1),
             );
