@@ -168,6 +168,7 @@ impl App {
                     // 其他 song_id:用户已切到别的歌或换了模式,旧 URL 直接丢。
                 }
                 TaskEvent::PlaylistTracksFetched { .. }
+                | TaskEvent::LikedSongIdsFetched { .. }
                 | TaskEvent::LyricsReady { .. }
                 | TaskEvent::CoverReady { .. } => {}
             }

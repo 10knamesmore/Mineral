@@ -38,6 +38,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         );
 
     let header = Row::new(vec![
+        Cell::from(""),
         Cell::from("#"),
         Cell::from("title"),
         Cell::from("artist"),
@@ -58,6 +59,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     };
 
     let widths = [
+        Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Min(12),
         Constraint::Length(16),
@@ -85,20 +87,21 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) -> Row<'a> {
     let is_current = state.current.as_ref().is_some_and(|c| c.id == sv.data.id);
 
+    // 像 vim signcolumn 一样的 gutter:loved 显 ♥,否则空。永远占一格,
+    // 不抖动后续列。
+    let love_cell = if sv.loved {
+        Cell::from(Span::styled("♥", Style::new().fg(theme.red)))
+    } else {
+        Cell::from("")
+    };
+
     let num_cell = if is_current {
         Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
     } else {
         Cell::from(format!("{idx}"))
     };
 
-    let title_cell = if sv.loved {
-        Cell::from(Line::from(vec![
-            Span::styled("♥ ", Style::new().fg(theme.red)),
-            Span::raw(sv.data.name.clone()),
-        ]))
-    } else {
-        Cell::from(sv.data.name.clone())
-    };
+    let title_cell = Cell::from(sv.data.name.clone());
 
     let artist = sv
         .data
@@ -116,6 +119,7 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
     let len = format_duration(sv.data.duration_ms);
 
     Row::new(vec![
+        love_cell,
         num_cell,
         title_cell,
         Cell::from(Span::styled(artist, Style::new().fg(theme.subtext))),

@@ -54,11 +54,16 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
 
 fn submit_initial_loads(scheduler: &Scheduler, channels: &[Arc<dyn MusicChannel>]) {
     for ch in channels {
+        let source = ch.source();
         scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-                source: ch.source(),
-            }),
+            TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }),
             Priority::User,
+        );
+        // user-data 类是装饰,不阻塞用户 navigate,走 Background。
+        // channel 不支持(NotSupported)就静默失败一次,后续不重试。
+        scheduler.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::LikedSongIds { source }),
+            Priority::Background,
         );
     }
 }

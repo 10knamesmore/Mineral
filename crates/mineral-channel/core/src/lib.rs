@@ -14,6 +14,8 @@ pub use credential::Credential;
 pub use error::{Error, Result};
 pub use page::Page;
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
@@ -80,6 +82,19 @@ pub trait MusicChannel: Send + Sync {
     ///
     /// TUI 看到 `NotSupported` 视为该 channel 不贡献歌单,正常继续从其他 channel 拉。
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+        Err(Error::NotSupported)
+    }
+
+    // ---------- 用户数据 / 装饰(可选) ----------
+    // 这一组方法都是「同一登录用户视角下,跨歌曲的元信息」,bulk 一次拉满,
+    // 上层用来 decorate `SongView`。沿用 default `NotSupported` 模式。
+    // 后续按需追加(`user_play_counts` / 关注列表 / 个人评分等)。
+
+    /// 当前用户喜欢(♥)的歌曲 ID 集合(read-only)。
+    ///
+    /// `liked_song_ids` 是 user-data 类的第一个口子;返回 `HashSet` 而非 `Vec` 是因为
+    /// 调用方会做点查("这首歌 like 了吗")。channel 不支持/未登录时返回 [`Error::NotSupported`]。
+    async fn liked_song_ids(&self) -> Result<HashSet<SongId>> {
         Err(Error::NotSupported)
     }
 }

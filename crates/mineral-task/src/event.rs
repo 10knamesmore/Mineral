@@ -1,5 +1,6 @@
 //! 任务推到 client 的事件载荷。
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use image::DynamicImage;
@@ -18,6 +19,15 @@ pub enum TaskEvent {
 
         /// 拉到的歌单。
         playlists: Vec<Playlist>,
+    },
+
+    /// `LikedSongIds` 任务成功:某 channel 当前用户喜欢(♥)的歌曲 ID 集合已到。
+    LikedSongIdsFetched {
+        /// 来源 channel。
+        source: SourceKind,
+
+        /// 喜欢的歌曲 ID 集合。
+        ids: HashSet<SongId>,
     },
 
     /// `PlaylistTracks` 任务成功:某歌单内的曲目已到。

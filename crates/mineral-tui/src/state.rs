@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use image::DynamicImage;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
@@ -123,6 +123,10 @@ pub struct AppState {
     /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
     /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
     pub tasks_running: usize,
+
+    /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
+    /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
+    pub liked_ids: HashMap<SourceKind, HashSet<SongId>>,
 }
 
 impl AppState {
@@ -155,7 +159,45 @@ impl AppState {
             cover_pending: HashSet::new(),
             cover_protocols: RefCell::new(HashMap::new()),
             tasks_running: 0,
+            liked_ids: HashMap::new(),
         }
+    }
+
+    /// 给定一首歌,根据当前 `liked_ids` / 未来其他 user-data 装饰成 SongView。
+    /// 这是 user-data 写入 SongView 的**唯一入口**;新增 user-data 字段时只改这里。
+    fn decorate(&self, song: Song) -> SongView {
+        let loved = self
+            .liked_ids
+            .get(&song.source)
+            .is_some_and(|s| s.contains(&song.id));
+        SongView {
+            data: song,
+            loved,
+            plays: 0,
+        }
+    }
+
+    /// 某个 channel 的 user-data 到位 / 变化时,把 `tracks_cache` 里属于该 source
+    /// 的 SongView 全部按当前 `decorate` 重建一遍。
+    /// 跨 source 的歌单不动(decoration data 是 per-source 的)。
+    fn redecorate_for_source(&mut self, source: SourceKind) {
+        let cache = std::mem::take(&mut self.tracks_cache);
+        self.tracks_cache = cache
+            .into_iter()
+            .map(|(pid, tracks)| {
+                let next: Vec<SongView> = tracks
+                    .into_iter()
+                    .map(|sv| {
+                        if sv.data.source == source {
+                            self.decorate(sv.data)
+                        } else {
+                            sv
+                        }
+                    })
+                    .collect();
+                (pid, next)
+            })
+            .collect();
     }
 
     /// 把任务事件应用到状态(只更新 UI 数据,fan-out 副作用由 [`crate::app::App`] 负责)。
@@ -172,13 +214,13 @@ impl AppState {
                 let decorated = tracks
                     .iter()
                     .cloned()
-                    .map(|data| SongView {
-                        data,
-                        loved: false,
-                        plays: 0,
-                    })
+                    .map(|data| self.decorate(data))
                     .collect();
                 self.tracks_cache.insert(id.clone(), decorated);
+            }
+            TaskEvent::LikedSongIdsFetched { source, ids } => {
+                self.liked_ids.insert(*source, ids.clone());
+                self.redecorate_for_source(*source);
             }
             // 由 App 直接 forward 给 audio,state 不存 url。
             TaskEvent::PlayUrlReady { .. } => {}

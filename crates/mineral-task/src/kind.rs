@@ -45,6 +45,12 @@ pub enum ChannelFetchKind {
         source: SourceKind,
     },
 
+    /// 拉某 channel 当前用户喜欢的歌曲 ID 集合(♥ 装饰用)。
+    LikedSongIds {
+        /// 目标 channel。
+        source: SourceKind,
+    },
+
     /// 拉某 channel 某歌单内的曲目。
     PlaylistTracks {
         /// 目标 channel。
@@ -77,6 +83,7 @@ impl ChannelFetchKind {
     fn dedup_part(&self) -> String {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
+            Self::LikedSongIds { source } => format!("{source:?}:liked_song_ids"),
             Self::PlaylistTracks { source, id } => {
                 format!("{source:?}:playlist_tracks:{}", id.as_str())
             }
@@ -93,6 +100,7 @@ impl ChannelFetchKind {
     pub fn source(&self) -> SourceKind {
         match self {
             Self::MyPlaylists { source }
+            | Self::LikedSongIds { source }
             | Self::PlaylistTracks { source, .. }
             | Self::SongUrl { source, .. }
             | Self::Lyrics { source, .. } => *source,
