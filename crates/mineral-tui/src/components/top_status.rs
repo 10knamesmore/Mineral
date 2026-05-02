@@ -1,10 +1,10 @@
 //! 顶部状态行(1 行,无边框):左侧 tabs + 右侧 playback state。
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::state::{AppState, View};
 use crate::theme::Theme;
@@ -22,7 +22,7 @@ fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme
     let active_lib = state.view == View::Library;
     let mut spans = vec![
         Span::styled(
-            "▌ mineral v0.1.0  ",
+            format!("▌ mineral v{}  ", env!("CARGO_PKG_VERSION")),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled("│  ", Style::new().fg(theme.surface1)),

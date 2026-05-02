@@ -1,11 +1,11 @@
 //! Playlists 视图渲染。
 
 use mineral_model::SourceKind;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
-use ratatui::Frame;
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use super::highlight::highlight;
 use crate::state::AppState;
@@ -27,6 +27,14 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
             search_badge(&state.search_q, theme),
         ]))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
+
+    // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
+    // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
+    // 没 cookie / 拉失败 —— 直接给出 `mineral-cli login` 引导。
+    if state.playlists.is_empty() && state.search_q.is_empty() {
+        paint_empty_state(frame, area, state, theme, block);
+        return;
+    }
 
     let header = Row::new(vec![
         Cell::from("name"),
@@ -120,6 +128,56 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     } else {
         Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
     }
+}
+
+/// 全空 playlist 时画 block + 居中两行提示。loading / 未登录文案二选一。
+fn paint_empty_state(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    block: Block<'_>,
+) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let lines: Vec<Line<'_>> = if state.tasks_running > 0 {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "loading playlists…",
+                Style::new().fg(theme.subtext),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "尚未登录或拉取失败",
+                Style::new().fg(theme.subtext),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "请先在另一个终端跑:",
+                Style::new().fg(theme.overlay),
+            )),
+            Line::from(Span::styled(
+                "  mineral-cli login",
+                Style::new().fg(theme.peach).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "登录完成后重启本程序",
+                Style::new().fg(theme.overlay),
+            )),
+        ]
+    };
+    frame.render_widget(
+        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
+        inner,
+    );
 }
 
 fn position_label(sel: usize, total: usize) -> String {
