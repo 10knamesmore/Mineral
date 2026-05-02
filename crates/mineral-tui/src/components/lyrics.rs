@@ -1,15 +1,19 @@
 //! Lyrics 面板:按 [`crate::state::AppState::current_lyrics`] 渲染当前行 + 邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
+//!
+//! 有 YRC(逐字)时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
+//! 未唱的字 = `theme.overlay` dim。邻行无论是否有 yrc 都按整行 dim 渲染。
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::lrc;
 use crate::state::AppState;
 use crate::theme::Theme;
+use crate::yrc::{self, YrcLine};
 
 /// 渲染 lyrics 面板到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
@@ -33,7 +37,22 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     };
 
     let cur = lrc::current_index(lines, state.playback.position_ms);
-    paint_window(frame, inner, lines, cur, theme);
+    let yrc_lines = state.current_yrc().filter(|v| !v.is_empty());
+    let yrc_cur = yrc_lines.and_then(|v| yrc::current_index(v, state.playback.position_ms));
+    let yrc = YrcCursor {
+        lines: yrc_lines,
+        cur: yrc_cur,
+        position_ms: state.playback.position_ms,
+    };
+    paint_window(frame, inner, lines, cur, yrc, theme);
+}
+
+/// 渲染时传入的 yrc 上下文(打包以减少 paint_window 参数数)。
+#[derive(Clone, Copy)]
+struct YrcCursor<'a> {
+    lines: Option<&'a Vec<YrcLine>>,
+    cur: Option<usize>,
+    position_ms: u64,
 }
 
 fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
@@ -47,13 +66,15 @@ fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), text_area);
 }
 
-/// 渲染以 `cur` 为中心、上下各 `(area.height - 1) / 2` 行的歌词窗口,
-/// 当前行加粗且用 theme.text,邻行 dim。
+/// 渲染以 `cur` 为中心、上下各 `(area.height - 1) / 2` 行的歌词窗口。
+///
+/// 中心行(`row == center_row`)若有 yrc 走字级 wipe,否则整行高亮;邻行整行 dim。
 fn paint_window(
     frame: &mut Frame<'_>,
     inner: Rect,
     lines: &[(u64, String)],
     cur: Option<usize>,
+    yrc: YrcCursor<'_>,
     theme: &Theme,
 ) {
     let height = usize::from(inner.height);
@@ -75,14 +96,43 @@ fn paint_window(
             continue;
         };
 
-        let style = if Some(line_idx) == cur {
-            Style::new().fg(theme.text).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(theme.overlay)
-        };
         let row_u16 = u16::try_from(row).unwrap_or(0);
         let row_area = Rect::new(inner.x, inner.y + row_u16, inner.width, 1);
-        let line = Line::from(text.as_str()).style(style);
+
+        let is_center = Some(line_idx) == cur;
+        let line: Line<'_> = if is_center {
+            yrc.lines
+                .zip(yrc.cur)
+                .and_then(|(v, i)| v.get(i))
+                .map_or_else(
+                    || {
+                        Line::from(text.as_str())
+                            .style(Style::new().fg(theme.text).add_modifier(Modifier::BOLD))
+                    },
+                    |yl| render_yrc_line(yl, yrc.position_ms, theme),
+                )
+        } else {
+            Line::from(text.as_str()).style(Style::new().fg(theme.overlay))
+        };
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), row_area);
     }
+}
+
+/// 把 YRC 行按 `position_ms` 拆成 dim/高亮两段 Span 序列(KTV wipe)。
+fn render_yrc_line<'a>(yrc_line: &'a YrcLine, position_ms: u64, theme: &Theme) -> Line<'a> {
+    let sung = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
+    let unsung = Style::new().fg(theme.overlay);
+    let spans: Vec<Span<'_>> = yrc_line
+        .chars
+        .iter()
+        .map(|c| {
+            let style = if c.start_ms <= position_ms {
+                sung
+            } else {
+                unsung
+            };
+            Span::styled(c.text.as_str(), style)
+        })
+        .collect();
+    Line::from(spans)
 }

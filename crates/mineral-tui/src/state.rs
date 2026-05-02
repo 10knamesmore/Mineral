@@ -6,6 +6,7 @@ use mineral_model::{PlaylistId, Song, SongId};
 use mineral_task::TaskEvent;
 
 use crate::lrc;
+use crate::yrc::{self, YrcLine};
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -46,6 +47,9 @@ pub struct AppState {
 
     /// 歌曲 id → 解析后的 LRC 行;不在 map 里表示还没拉到 / 拉失败。
     pub lyrics_cache: HashMap<SongId, Vec<(u64, String)>>,
+
+    /// 歌曲 id → 解析后的 YRC(逐字)行;有 yrc 才插入,渲染时优先于 LRC。
+    pub yrc_cache: HashMap<SongId, Vec<YrcLine>>,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -98,6 +102,7 @@ impl AppState {
             playlists: Vec::new(),
             tracks_cache: HashMap::new(),
             lyrics_cache: HashMap::new(),
+            yrc_cache: HashMap::new(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -140,14 +145,20 @@ impl AppState {
             // 由 App 直接 forward 给 audio,state 不存 url。
             TaskEvent::PlayUrlReady { .. } => {}
             TaskEvent::LyricsReady { song_id, lyrics } => {
-                // 只用 lrc 字段;yrc / 翻译 / 罗马音留 backlog。空 LRC 也存空 vec,
-                // 让渲染层走「无歌词」分支(避免反复重试)。
-                let parsed = lyrics
+                // 翻译 / 罗马音的 UI 切换留 backlog。空 LRC 也存空 vec,让渲染层走「无歌词」
+                // 分支(避免反复重试)。yrc 仅在网易返回非空时插入,渲染时优先 yrc 兜底 lrc。
+                let parsed_lrc = lyrics
                     .lrc
                     .as_deref()
                     .map(lrc::parse_lrc)
                     .unwrap_or_default();
-                self.lyrics_cache.insert(song_id.clone(), parsed);
+                self.lyrics_cache.insert(song_id.clone(), parsed_lrc);
+                if let Some(raw_yrc) = lyrics.yrc.as_deref() {
+                    let parsed_yrc = yrc::parse_yrc(raw_yrc);
+                    if !parsed_yrc.is_empty() {
+                        self.yrc_cache.insert(song_id.clone(), parsed_yrc);
+                    }
+                }
             }
         }
     }
@@ -156,6 +167,12 @@ impl AppState {
     pub fn current_lyrics(&self) -> Option<&Vec<(u64, String)>> {
         let song = self.playback.track.as_ref()?;
         self.lyrics_cache.get(&song.id)
+    }
+
+    /// 当前曲目的 YRC 逐字行;无 yrc(网易未返回 / 非网易源)时返回 `None`。
+    pub fn current_yrc(&self) -> Option<&Vec<YrcLine>> {
+        let song = self.playback.track.as_ref()?;
+        self.yrc_cache.get(&song.id)
     }
 
     /// 返回当前选中歌单(Playlists 视图)的引用。

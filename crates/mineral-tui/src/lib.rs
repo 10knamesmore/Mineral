@@ -13,6 +13,7 @@ mod theme;
 mod tui;
 mod view;
 mod view_model;
+mod yrc;
 
 use std::sync::Arc;
 
