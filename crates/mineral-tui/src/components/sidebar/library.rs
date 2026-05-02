@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
 use ratatui::Frame;
 
+use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::SongView;
@@ -101,7 +102,13 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
         Cell::from(format!("{idx}"))
     };
 
-    let title_cell = Cell::from(sv.data.name.clone());
+    let q = state.search_q.as_str();
+    let title_cell = Cell::from(Line::from(highlight(
+        &sv.data.name,
+        q,
+        Style::new().fg(theme.text),
+        theme,
+    )));
 
     let artist = sv
         .data
@@ -122,8 +129,18 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
         love_cell,
         num_cell,
         title_cell,
-        Cell::from(Span::styled(artist, Style::new().fg(theme.subtext))),
-        Cell::from(Span::styled(album, Style::new().fg(theme.overlay))),
+        Cell::from(Line::from(highlight(
+            &artist,
+            q,
+            Style::new().fg(theme.subtext),
+            theme,
+        ))),
+        Cell::from(Line::from(highlight(
+            &album,
+            q,
+            Style::new().fg(theme.overlay),
+            theme,
+        ))),
         Cell::from(plays),
         Cell::from(len),
     ])

@@ -328,7 +328,12 @@ impl AppState {
                         || sv
                             .data
                             .artists
-                            .first()
+                            .iter()
+                            .any(|a| a.name.to_lowercase().contains(&q))
+                        || sv
+                            .data
+                            .album
+                            .as_ref()
                             .is_some_and(|a| a.name.to_lowercase().contains(&q))
                 })
                 .collect()

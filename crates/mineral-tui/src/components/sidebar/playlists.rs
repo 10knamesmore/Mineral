@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
 use ratatui::Frame;
 
+use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::PlaylistView;
@@ -80,10 +81,12 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
     let count_label = format!("{}", p.data.track_count);
 
     Row::new(vec![
-        Cell::from(Span::styled(
-            p.data.name.clone(),
+        Cell::from(Line::from(highlight(
+            &p.data.name,
+            &state.search_q,
             Style::new().fg(theme.text),
-        )),
+            theme,
+        ))),
         Cell::from(Span::styled(
             channel_label(p.data.source),
             channel_style(p.data.source, theme),
