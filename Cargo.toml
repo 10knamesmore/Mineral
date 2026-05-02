@@ -9,6 +9,7 @@ members = [
     "crates/mineral-model",
     "crates/mineral-macros",
     "crates/mineral-paths",
+    "crates/mineral-spectrum",
     "crates/mineral-channel/core",
     "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
@@ -39,6 +40,7 @@ mineral-tui             = { path = "crates/mineral-tui", default-features = fals
 mineral-macros          = { path = "crates/mineral-macros" }
 mineral-model           = { path = "crates/mineral-model" }
 mineral-paths           = { path = "crates/mineral-paths" }
+mineral-spectrum        = { path = "crates/mineral-spectrum" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
@@ -58,6 +60,8 @@ url                = "2"
 once_cell          = "1.21"
 openssl            = "0.10"
 rand               = "0.9"
+realfft            = "3"
+ringbuf            = "0.4"
 ratatui            = "0.29"
 ratatui-image      = "8.0"
 rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }

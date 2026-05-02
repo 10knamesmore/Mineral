@@ -7,6 +7,7 @@ mod command;
 mod engine;
 mod handle;
 mod snapshot;
+mod tap;
 
-pub use handle::AudioHandle;
+pub use handle::{AudioHandle, SpectrumTap};
 pub use snapshot::AudioSnapshot;

@@ -5,6 +5,7 @@
 //! `take()` 一次实际打 demuxer ——抗住长按 ←/→ 的 30Hz key-repeat。
 
 use std::io::BufReader;
+use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use stream_download::StreamDownload;
 
 use crate::command::AudioCommand;
 use crate::snapshot::AudioSnapshot;
+use crate::tap::{SharedProd, TapSource};
 
 /// 命令通道空转间隔 / snapshot 刷新节拍 / seek mailbox drain 节拍。
 ///
@@ -48,8 +50,17 @@ pub(crate) fn run(
     snapshot: &Arc<Mutex<AudioSnapshot>>,
     seek_mailbox: &Arc<Mutex<Option<Duration>>>,
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
+    tap_producer: &SharedProd,
+    sr_atomic: &Arc<AtomicU32>,
 ) {
-    if let Err(e) = engine_main(cmd_rx, snapshot, seek_mailbox, ready_tx) {
+    if let Err(e) = engine_main(
+        cmd_rx,
+        snapshot,
+        seek_mailbox,
+        ready_tx,
+        tap_producer,
+        sr_atomic,
+    ) {
         mineral_log::warn!(target: "audio_engine", "exited: {e:?}");
     }
 }
@@ -59,6 +70,8 @@ fn engine_main(
     snapshot: &Arc<Mutex<AudioSnapshot>>,
     seek_mailbox: &Arc<Mutex<Option<Duration>>>,
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
+    tap_producer: &SharedProd,
+    sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<()> {
     let mut stream_handle = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(s) => s,
@@ -97,7 +110,8 @@ fn engine_main(
 
     loop {
         match cmd_rx.recv_timeout(TICK) {
-            Ok(cmd) => match handle_command(cmd, &player, &rt, &mut state) {
+            Ok(cmd) => match handle_command(cmd, &player, &rt, &mut state, tap_producer, sr_atomic)
+            {
                 Ok(new_dur) => {
                     if let Some(d) = new_dur {
                         cur_duration_ms = d;
@@ -137,13 +151,15 @@ fn handle_command(
     player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
     state: &mut EngineState,
+    tap_producer: &SharedProd,
+    sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
         AudioCommand::Play(url) => {
             // 切歌前先 disarm,旧曲尾巴的 sound_count 退潮不会被算成曲终。
             state.armed = false;
             player.stop();
-            let dur = append_decoded(player, rt, url)?;
+            let dur = append_decoded(player, rt, url, tap_producer, sr_atomic)?;
             player.play();
             // append 内部已 fetch_add 把 sound_count 抬到 1,这里武装后下次 update_snapshot
             // 看到的就是 !is_empty,不存在「armed 后第一 tick 就空」的 race。
@@ -183,10 +199,14 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
 }
 
 /// 把 URL 解析成 decoder 并 append 到 player。返回 decoder 探到的 duration(ms,0 = 未知)。
+///
+/// `tap_producer` / `sr_atomic` 用于把 decoder 包成 [`TapSource`],PCM 旁路写进 ringbuf。
 fn append_decoded(
     player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
     url: MediaUrl,
+    tap_producer: &SharedProd,
+    sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64> {
     match url {
         MediaUrl::Remote(u) => {
@@ -204,7 +224,7 @@ fn append_decoded(
             })?;
             let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
-            player.append(decoder);
+            player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
             Ok(dur_ms)
         }
         MediaUrl::Local(p) => {
@@ -212,7 +232,7 @@ fn append_decoded(
             let reader = BufReader::new(file);
             let decoder = rodio::Decoder::new(reader).map_err(|e| eyre!("decode: {e}"))?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
-            player.append(decoder);
+            player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
             Ok(dur_ms)
         }
     }

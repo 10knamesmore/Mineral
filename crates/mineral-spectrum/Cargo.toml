@@ -1,0 +1,13 @@
+[package]
+name    = "mineral-spectrum"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+realfft = { workspace = true }
+
+[dev-dependencies]
+color-eyre = { workspace = true }
+
+[lints]
+workspace = true

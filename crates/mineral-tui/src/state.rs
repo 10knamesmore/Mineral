@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
+use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 
 use crate::lrc;
@@ -72,8 +73,11 @@ pub struct AppState {
     /// 播放状态机。
     pub playback: Playback,
 
-    /// 频谱状态(伪随机)。
+    /// 频谱状态(条高 + 平滑)。
     pub spectrum: SpectrumState,
+
+    /// 频谱 FFT 计算器:吃 PCM 样本,出 64 根条的目标高度。
+    pub fft: SpectrumComputer,
 
     /// 浮动 queue 当前曲目列表。
     pub queue: Vec<Song>,
@@ -119,6 +123,7 @@ impl AppState {
             current: None,
             playback: Playback::new(),
             spectrum: SpectrumState::new(),
+            fft: SpectrumComputer::new(),
             queue: Vec::new(),
             queue_open: false,
             queue_sel: 0,

@@ -4,6 +4,7 @@
 compile_error!("Windows 暂不支持");
 
 mod app;
+mod color;
 mod components;
 mod layout;
 mod lrc;
@@ -35,9 +36,9 @@ use tui::Tui;
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
     let scheduler = Scheduler::new(&channels);
     submit_initial_loads(&scheduler, &channels);
-    let audio = AudioHandle::spawn()?;
+    let (audio, spectrum_tap) = AudioHandle::spawn()?;
 
-    let mut app = App::new(scheduler, audio);
+    let mut app = App::new(scheduler, audio, spectrum_tap);
     let mut tui = Tui::new()?;
     tui.enter()?;
     let result = app.run(&mut tui);

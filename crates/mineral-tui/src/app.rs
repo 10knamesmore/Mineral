@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use mineral_audio::AudioHandle;
+use mineral_audio::{AudioHandle, SpectrumTap};
 use mineral_model::{Song, SongId};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind};
 
@@ -53,6 +53,9 @@ pub struct App {
     /// 音频引擎 handle;所有播放控制走它。
     audio: AudioHandle,
 
+    /// PCM tap:每 tick 拉一批样本喂给 [`crate::state::AppState::fft`]。
+    spectrum_tap: SpectrumTap,
+
     /// 上次看到的 `AudioSnapshot::track_finished_seq`。tick 中检测到增长就触发
     /// auto-next。重置时机:`submit_play_song` 时同步对齐到当前 engine seq,
     /// 避免「新歌一上来就被旧 seq 误触发」。
@@ -69,7 +72,8 @@ impl App {
     /// # Params:
     ///   - `scheduler`: 已构造的调度器,UI 持有共享引用
     ///   - `audio`: 已启动的音频引擎句柄
-    pub fn new(scheduler: Scheduler, audio: AudioHandle) -> Self {
+    ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路
+    pub fn new(scheduler: Scheduler, audio: AudioHandle, spectrum_tap: SpectrumTap) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
@@ -77,6 +81,7 @@ impl App {
             last_tick: Instant::now(),
             scheduler,
             audio,
+            spectrum_tap,
             last_seen_finished_seq: 0,
             prefetch_fired_for: None,
         }
@@ -99,7 +104,7 @@ impl App {
             if self.last_tick.elapsed() >= tick_rate {
                 let snap = self.audio.snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
-                self.state.spectrum.tick(self.state.playback.playing);
+                self.update_spectrum();
                 if snap.track_finished_seq > self.last_seen_finished_seq {
                     self.last_seen_finished_seq = snap.track_finished_seq;
                     self.advance_after_track_end();
@@ -109,6 +114,23 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// 把 audio 端 ringbuf 里的样本喂给 fft computer,算一窗,再喂给 spectrum 平滑器。
+    /// pop chunk 比一帧产出量(48kHz × 33ms ≈ 1584)略大,确保单 tick 能 drain。
+    fn update_spectrum(&mut self) {
+        const POP_CHUNK: usize = 2048;
+        let mut buf = [0_f32; POP_CHUNK];
+        let n = self.spectrum_tap.pop_into(&mut buf);
+        if let Some(slice) = buf.get(..n) {
+            self.state.fft.push(slice);
+        }
+        let bars = self.state.fft.compute(self.spectrum_tap.sample_rate());
+        self.state.spectrum.tick(
+            self.state.playback.playing,
+            self.state.playback.volume_pct,
+            bars.as_ref(),
+        );
     }
 
     fn drain_task_events(&mut self) {
