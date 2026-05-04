@@ -95,9 +95,6 @@ pub enum CancelFilter {
     /// 取消所有 [`TaskKind::ChannelFetch`] 任务,且其 `ChannelFetchKind` 命中给定 tag。
     /// 空 vec 等价 no-op。
     ChannelFetchKinds(Vec<ChannelFetchKindTag>),
-
-    /// 取消所有 [`TaskKind::CoverArt`] 任务。
-    CoverArt,
 }
 
 impl CancelFilter {
@@ -109,8 +106,6 @@ impl CancelFilter {
             (Self::ChannelFetchKinds(tags), TaskKind::ChannelFetch(k)) => {
                 tags.contains(&ChannelFetchKindTag::of(k))
             }
-            (Self::CoverArt, TaskKind::CoverArt { .. }) => true,
-            _ => false,
         }
     }
 }

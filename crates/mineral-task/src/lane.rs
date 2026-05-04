@@ -8,7 +8,4 @@ pub enum Lane {
     /// 按 channel 分 worker 池,跑 [`crate::ChannelFetchKind`] 系任务(my_playlists、
     /// songs_in_playlist 等)。
     ChannelFetch,
-
-    /// 单一 worker 池,跑 [`crate::TaskKind::CoverArt`](裸 HTTP fetch + 图片解码)。
-    CoverArt,
 }

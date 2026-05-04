@@ -9,7 +9,8 @@
 use mineral_audio::AudioSnapshot;
 use mineral_model::{PlaylistId, SongId, SourceKind};
 use mineral_server::{CancelFilter, ChannelFetchKindTag};
-use mineral_task::{ChannelFetchKind, Priority, TaskId, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskId, TaskKind};
+use rustc_hash::FxHashSet;
 
 fn round_trip<T>(v: &T) -> color_eyre::Result<T>
 where
@@ -51,9 +52,6 @@ fn task_kind_round_trip() -> color_eyre::Result<()> {
             source: SourceKind::Netease,
             song_id: SongId::new("s456".to_owned()),
         }),
-        TaskKind::CoverArt {
-            url: mineral_model::MediaUrl::remote("https://example.com/c.jpg")?,
-        },
     ];
     for k in &cases {
         let back = round_trip(k)?;
@@ -84,7 +82,6 @@ fn cancel_filter_round_trip() -> color_eyre::Result<()> {
             ChannelFetchKindTag::Lyrics,
         ]),
         CancelFilter::ChannelFetchKinds(vec![]),
-        CancelFilter::CoverArt,
     ];
     for f in &cases {
         let back = round_trip(f)?;
@@ -102,17 +99,33 @@ fn cancel_filter_matches_only_intended_kinds() -> color_eyre::Result<()> {
     let myplaylists = TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
         source: SourceKind::Netease,
     });
-    let cover = TaskKind::CoverArt {
-        url: mineral_model::MediaUrl::remote("https://example.com/c.jpg")?,
-    };
 
     let f = CancelFilter::ChannelFetchKinds(vec![ChannelFetchKindTag::SongUrl]);
     assert!(f.matches(&songurl));
     assert!(!f.matches(&myplaylists));
-    assert!(!f.matches(&cover));
+    Ok(())
+}
 
-    let f = CancelFilter::CoverArt;
-    assert!(!f.matches(&songurl));
-    assert!(f.matches(&cover));
+#[test]
+fn task_event_round_trip() -> color_eyre::Result<()> {
+    // TaskEvent 没派 PartialEq(Lyrics/Playlist 等也没),所以只测「能编+能 decode」。
+    let cases = vec![
+        TaskEvent::PlaylistsFetched {
+            source: SourceKind::Netease,
+            playlists: vec![],
+        },
+        TaskEvent::LikedSongIdsFetched {
+            source: SourceKind::Netease,
+            ids: FxHashSet::default(),
+        },
+        TaskEvent::PlaylistTracksFetched {
+            id: PlaylistId::new("p".to_owned()),
+            tracks: vec![],
+        },
+    ];
+    for ev in &cases {
+        let s = serde_json::to_string(ev)?;
+        let _back: TaskEvent = serde_json::from_str(&s)?;
+    }
     Ok(())
 }

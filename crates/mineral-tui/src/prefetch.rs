@@ -10,6 +10,7 @@ use mineral_model::MediaUrl;
 use mineral_server::ClientHandle;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
+use crate::cover::CoverFetcher;
 use crate::state::{AppState, View};
 
 /// 各 prefetch 默认半径。覆盖典型 viewport(~30 行)+ 几次 `Shift+J/K` 跳跃
@@ -18,17 +19,17 @@ use crate::state::{AppState, View};
 const RADIUS: usize = 64;
 
 /// 每 tick 调一次:封面 + 歌单 tracks 两路 prefetch。
-pub fn tick(state: &mut AppState, client: &ClientHandle) {
-    request_covers(state, client);
+pub fn tick(state: &mut AppState, client: &ClientHandle, covers: &CoverFetcher) {
+    request_covers(state, covers);
     request_playlist_tracks(state, client);
 }
 
 /// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面 URL,
-/// sel 优先 → 外扩 提交。
-fn request_covers(state: &mut AppState, client: &ClientHandle) {
+/// sel 优先 → 外扩 提交给 client 端 fetcher。
+fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
     let urls = collect_pending_covers(state);
     for url in urls {
-        ensure_cover(state, client, url);
+        ensure_cover(state, covers, url);
     }
 }
 
@@ -89,12 +90,12 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     out
 }
 
-fn ensure_cover(state: &mut AppState, client: &ClientHandle, url: MediaUrl) {
+fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
     if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
         return;
     }
     state.cover_pending.insert(url.clone());
-    client.submit_task(TaskKind::CoverArt { url }, Priority::User);
+    covers.request(url);
 }
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。

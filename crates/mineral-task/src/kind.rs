@@ -1,6 +1,6 @@
 //! 任务种类与 dedup 键。
 
-use mineral_model::{MediaUrl, PlaylistId, SongId, SourceKind};
+use mineral_model::{PlaylistId, SongId, SourceKind};
 use serde::{Deserialize, Serialize};
 
 use crate::lane::Lane;
@@ -10,12 +10,6 @@ use crate::lane::Lane;
 pub enum TaskKind {
     /// channel 数据拉取。
     ChannelFetch(ChannelFetchKind),
-
-    /// 拉取 + 解码一张封面图(裸 HTTP,跟 channel 无关)。
-    CoverArt {
-        /// 图片 URL,远端 / 本地都允许。
-        url: MediaUrl,
-    },
     // 后续:Search / PlayPrep / AuthRefresh / PrePreload / LocalScan
 }
 
@@ -24,7 +18,6 @@ impl TaskKind {
     pub fn lane(&self) -> Lane {
         match self {
             Self::ChannelFetch(_) => Lane::ChannelFetch,
-            Self::CoverArt { .. } => Lane::CoverArt,
         }
     }
 
@@ -32,7 +25,6 @@ impl TaskKind {
     pub fn dedup_key(&self) -> DedupKey {
         match self {
             Self::ChannelFetch(k) => DedupKey(format!("ChannelFetch:{}", k.dedup_part())),
-            Self::CoverArt { url } => DedupKey(format!("CoverArt:{url}")),
         }
     }
 }

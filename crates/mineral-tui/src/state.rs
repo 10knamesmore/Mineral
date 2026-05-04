@@ -261,13 +261,6 @@ impl AppState {
                     }
                 }
             }
-            TaskEvent::CoverReady { url, image } => {
-                self.cover_pending.remove(url);
-                self.cover_cache.insert(url.clone(), Arc::clone(image));
-                // 如果之前已经为这张图建过 protocol(罕见),把缓存清掉,下次渲染重建
-                // —— 防止 cache miss 后又来到 CoverReady 导致旧 protocol 跟新图 desync。
-                self.cover_protocols.borrow_mut().remove(url);
-            }
         }
     }
 

@@ -1,16 +1,14 @@
 //! 任务推到 client 的事件载荷。
 
-use std::sync::Arc;
-
-use image::DynamicImage;
-use mineral_model::{Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
 /// 失败任务不发 event(只在 [`crate::TaskHandle::done`] 上拿到 [`crate::TaskOutcome::Failed`]),
 /// 详细错误进 mineral-log。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
     PlaylistsFetched {
@@ -57,12 +55,4 @@ pub enum TaskEvent {
         lyrics: Lyrics,
     },
 
-    /// `CoverArt` 任务成功:封面图已 fetch + decode。
-    CoverReady {
-        /// 图片 URL,UI 端按它进 cover_cache。
-        url: MediaUrl,
-
-        /// 解码后的 RGB 图。`Arc` 让 cache 命中和 render 共享同一份像素。
-        image: Arc<DynamicImage>,
-    },
 }

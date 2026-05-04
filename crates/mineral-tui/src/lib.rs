@@ -6,6 +6,7 @@ compile_error!("Windows 暂不支持");
 mod app;
 mod color;
 mod components;
+mod cover;
 mod layout;
 mod lrc;
 mod playback;
@@ -49,6 +50,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
         .take_spectrum_tap()
         .ok_or_else(|| eyre!("Server::take_spectrum_tap 已被取走;TUI 期望第一次取得 tap"))?;
     let client = server.client();
+    let cover_fetcher = cover::CoverFetcher::spawn()?;
 
     let mut tui = Tui::new()?;
     tui.enter()?;
@@ -56,7 +58,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
     // font 用 halfblocks 渲染,不阻塞启动。
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
-    let mut app = App::new(client, spectrum_tap, picker);
+    let mut app = App::new(client, spectrum_tap, cover_fetcher, picker);
     let result = app.run(&mut tui);
     tui.exit()?;
 

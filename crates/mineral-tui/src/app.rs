@@ -9,6 +9,7 @@ use mineral_server::{CancelFilter, ChannelFetchKindTag, ClientHandle};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use ratatui_image::picker::Picker;
 
+use crate::cover::CoverFetcher;
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
@@ -58,6 +59,11 @@ pub struct App {
     /// SPSC consumer 不走 [`ClientHandle`],由 App 直接持有。
     spectrum_tap: SpectrumTap,
 
+    /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管;
+    /// 用户切到新 view 时 [`crate::prefetch`] 投递 URL,worker 后台拉,tick 时
+    /// `drain_ready()` 拿就绪图写进 [`AppState::cover_cache`]。
+    cover_fetcher: CoverFetcher,
+
     /// 终端图片协议探测结果(kitty / iTerm2 / sixel / halfblock fallback),
     /// `Tui::enter` 进 alternate screen 后探测一次,后续封面渲染共用。
     pub picker: Picker,
@@ -78,8 +84,14 @@ impl App {
     /// # Params:
     ///   - `client`: 跟 server 交互的 cheap-clone 句柄
     ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路(由 caller 从 server 取走后传入)
+    ///   - `cover_fetcher`: client 端 cover fetcher(由 caller spawn 后传入)
     ///   - `picker`: 终端图片协议能力(由 caller 在 Tui::enter 后探测好传入)
-    pub fn new(client: ClientHandle, spectrum_tap: SpectrumTap, picker: Picker) -> Self {
+    pub fn new(
+        client: ClientHandle,
+        spectrum_tap: SpectrumTap,
+        cover_fetcher: CoverFetcher,
+        picker: Picker,
+    ) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
@@ -87,6 +99,7 @@ impl App {
             last_tick: Instant::now(),
             client,
             spectrum_tap,
+            cover_fetcher,
             picker,
             last_seen_finished_seq: 0,
             prefetch_fired_for: None,
@@ -116,12 +129,23 @@ impl App {
                     self.advance_after_track_end();
                 }
                 self.maybe_submit_prefetch();
-                crate::prefetch::tick(&mut self.state, &self.client);
+                self.drain_ready_covers();
+                crate::prefetch::tick(&mut self.state, &self.client, &self.cover_fetcher);
                 self.state.tasks_running = self.client.task_snapshot().running;
                 self.last_tick = Instant::now();
             }
         }
         Ok(())
+    }
+
+    /// 把 cover_fetcher 就绪的图写进 cache + 清掉对应 protocol(下次渲染重建)。
+    /// 跟原来 `state::AppState::apply` 处理 `TaskEvent::CoverReady` 等价。
+    fn drain_ready_covers(&mut self) {
+        for (url, image) in self.cover_fetcher.drain_ready() {
+            self.state.cover_pending.remove(&url);
+            self.state.cover_cache.insert(url.clone(), image);
+            self.state.cover_protocols.borrow_mut().remove(&url);
+        }
     }
 
     /// 把 audio 端 ringbuf 里的样本喂给 fft computer,算一窗,再喂给 spectrum 平滑器。
@@ -168,8 +192,7 @@ impl App {
                 }
                 TaskEvent::PlaylistTracksFetched { .. }
                 | TaskEvent::LikedSongIdsFetched { .. }
-                | TaskEvent::LyricsReady { .. }
-                | TaskEvent::CoverReady { .. } => {}
+                | TaskEvent::LyricsReady { .. } => {}
             }
         }
     }
