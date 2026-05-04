@@ -3,9 +3,10 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use mineral_audio::{AudioHandle, SpectrumTap};
+use mineral_audio::SpectrumTap;
 use mineral_model::{Song, SongId};
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind};
+use mineral_server::ClientHandle;
+use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use ratatui_image::picker::Picker;
 
 use crate::state::{AppState, Focus, View};
@@ -48,13 +49,13 @@ pub struct App {
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
-    /// 任务调度器;UI 通过它提交 / 取消任务、拉事件。
-    scheduler: Scheduler,
-
-    /// 音频引擎 handle;所有播放控制走它。
-    audio: AudioHandle,
+    /// Server client handle:所有「调命令 / 拉 snapshot / 拉事件」都走它。
+    /// 当前是同进程,内部包 [`mineral_audio::AudioHandle`] + [`mineral_task::Scheduler`];
+    /// 未来 IPC 化时换实现不动签名。
+    client: ClientHandle,
 
     /// PCM tap:每 tick 拉一批样本喂给 [`crate::state::AppState::fft`]。
+    /// SPSC consumer 不走 [`ClientHandle`],由 App 直接持有。
     spectrum_tap: SpectrumTap,
 
     /// 终端图片协议探测结果(kitty / iTerm2 / sixel / halfblock fallback),
@@ -75,23 +76,16 @@ impl App {
     /// 构造 App。
     ///
     /// # Params:
-    ///   - `scheduler`: 已构造的调度器,UI 持有共享引用
-    ///   - `audio`: 已启动的音频引擎句柄
-    ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路
+    ///   - `client`: 跟 server 交互的 cheap-clone 句柄
+    ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路(由 caller 从 server 取走后传入)
     ///   - `picker`: 终端图片协议能力(由 caller 在 Tui::enter 后探测好传入)
-    pub fn new(
-        scheduler: Scheduler,
-        audio: AudioHandle,
-        spectrum_tap: SpectrumTap,
-        picker: Picker,
-    ) -> Self {
+    pub fn new(client: ClientHandle, spectrum_tap: SpectrumTap, picker: Picker) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
             state: AppState::empty(),
             last_tick: Instant::now(),
-            scheduler,
-            audio,
+            client,
             spectrum_tap,
             picker,
             last_seen_finished_seq: 0,
@@ -114,7 +108,7 @@ impl App {
                 self.handle_event(&event::read()?);
             }
             if self.last_tick.elapsed() >= tick_rate {
-                let snap = self.audio.snapshot();
+                let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
                 if snap.track_finished_seq > self.last_seen_finished_seq {
@@ -122,8 +116,8 @@ impl App {
                     self.advance_after_track_end();
                 }
                 self.maybe_submit_prefetch();
-                crate::prefetch::tick(&mut self.state, &self.scheduler);
-                self.state.tasks_running = self.scheduler.snapshot().running;
+                crate::prefetch::tick(&mut self.state, &self.client);
+                self.state.tasks_running = self.client.task_snapshot().running;
                 self.last_tick = Instant::now();
             }
         }
@@ -152,7 +146,7 @@ impl App {
     }
 
     fn drain_task_events(&mut self) {
-        let events = self.scheduler.drain_events();
+        let events = self.client.drain_task_events();
         for ev in &events {
             self.state.apply(ev);
             match ev {
@@ -164,7 +158,7 @@ impl App {
                     let want = self.state.playback.track.as_ref().map(|t| &t.id);
                     if want == Some(song_id) {
                         // 当前歌的 URL 来了,直接播 + 留 PlayUrl 给 transport 显 format。
-                        self.audio.play(play_url.url.clone());
+                        self.client.play(play_url.url.clone());
                         self.state.playback.play_url = Some(play_url.clone());
                     } else if Some(song_id) == self.prefetch_fired_for.as_ref() {
                         // 预拉的 URL 命中:整 PlayUrl 进 cache,曲终切歌时连 format 一起用。
@@ -185,7 +179,7 @@ impl App {
     /// 同步把 `queue_sel` 对齐到这首歌在 queue 里的位置(不在则保持原值),
     /// 让后续 prev/next/auto-next 有正确锚点。
     fn submit_play_song(&mut self, song: &Song) {
-        self.scheduler.cancel_where(|k| {
+        self.client.cancel_tasks_where(|k| {
             matches!(
                 k,
                 TaskKind::ChannelFetch(
@@ -193,7 +187,7 @@ impl App {
                 )
             )
         });
-        self.audio.stop();
+        self.client.stop();
         self.state.current = Some(song.clone());
         self.state.playback.track = Some(song.clone());
         self.state.playback.position_ms = 0;
@@ -202,7 +196,7 @@ impl App {
         }
         // 把 last_seen_finished_seq 对齐到当前 engine seq —— audio.stop() 不会
         // 触发曲终,但避免极端情况下旧 seq 比新 snapshot 大造成误触发。
-        self.last_seen_finished_seq = self.audio.snapshot().track_finished_seq;
+        self.last_seen_finished_seq = self.client.audio_snapshot().track_finished_seq;
         // 新歌允许再次预拉它的下一首。
         self.prefetch_fired_for = None;
         // 切歌瞬间清旧 format,免得旧值短暂跟新歌错配。命中 prefetch / PlayUrlReady 后再写。
@@ -218,10 +212,10 @@ impl App {
             }
         };
         if let Some(pu) = cached {
-            self.audio.play(pu.url.clone());
+            self.client.play(pu.url.clone());
             self.state.playback.play_url = Some(pu);
         } else {
-            self.scheduler.submit(
+            self.client.submit_task(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     source: song.source,
                     song_id: song.id.clone(),
@@ -229,7 +223,7 @@ impl App {
                 Priority::User,
             );
         }
-        self.scheduler.submit(
+        self.client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
                 source: song.source,
                 song_id: song.id.clone(),
@@ -259,7 +253,7 @@ impl App {
             return;
         };
         self.prefetch_fired_for = Some(cur_song.id.clone());
-        self.scheduler.submit(
+        self.client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                 source: next.source,
                 song_id: next.id,
@@ -371,7 +365,7 @@ impl App {
             return;
         }
         if self.state.playback.position_ms > PREV_RESTART_THRESHOLD_MS {
-            self.audio.seek(0);
+            self.client.seek(0);
             return;
         }
         if let Some(s) = self.prev_song() {
@@ -612,9 +606,9 @@ impl App {
             return;
         }
         if self.state.playback.playing {
-            self.audio.pause();
+            self.client.pause();
         } else {
-            self.audio.resume();
+            self.client.resume();
         }
     }
 
@@ -622,7 +616,7 @@ impl App {
         let cur = i16::from(self.state.playback.volume_pct);
         let new = cur.saturating_add(delta).clamp(0, 100);
         let pct = u8::try_from(new).unwrap_or(self.state.playback.volume_pct);
-        self.audio.set_volume(pct);
+        self.client.set_volume(pct);
         self.state.playback.volume_pct = pct;
     }
 
@@ -637,7 +631,7 @@ impl App {
             .saturating_add(delta_s.saturating_mul(1000))
             .clamp(0, max);
         let new_u = u64::try_from(new_ms).unwrap_or(0);
-        self.audio.seek(new_u);
+        self.client.seek(new_u);
     }
 
     fn handle_playlists_key(&mut self, key: &KeyEvent) {

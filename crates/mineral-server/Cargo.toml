@@ -1,0 +1,20 @@
+[package]
+name        = "mineral-server"
+description = "Mineral 后台 server:收纳 audio engine + task scheduler + channels,对外发 ClientHandle"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-audio        = { workspace = true }
+mineral-channel-core = { workspace = true }
+mineral-model        = { workspace = true }
+mineral-task         = { workspace = true }
+
+color-eyre = { workspace = true }
+
+[lints]
+workspace = true

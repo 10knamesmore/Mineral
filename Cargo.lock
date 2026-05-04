@@ -2107,6 +2107,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mineral-server"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "mineral-audio",
+ "mineral-channel-core",
+ "mineral-model",
+ "mineral-task",
+]
+
+[[package]]
 name = "mineral-spectrum"
 version = "0.1.0"
 dependencies = [
@@ -2145,6 +2156,7 @@ dependencies = [
  "mineral-log",
  "mineral-macros",
  "mineral-model",
+ "mineral-server",
  "mineral-spectrum",
  "mineral-task",
  "rand 0.9.4",

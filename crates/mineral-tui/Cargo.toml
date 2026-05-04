@@ -26,6 +26,7 @@ mineral-channel-mock = { workspace = true, optional = true }
 mineral-log          = { workspace = true }
 mineral-macros       = { workspace = true }
 mineral-model        = { workspace = true }
+mineral-server       = { workspace = true }
 mineral-task         = { workspace = true }
 rand                 = { workspace = true }
 ratatui              = { workspace = true }

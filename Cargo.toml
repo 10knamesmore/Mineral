@@ -9,6 +9,7 @@ members = [
     "crates/mineral-model",
     "crates/mineral-macros",
     "crates/mineral-paths",
+    "crates/mineral-server",
     "crates/mineral-spectrum",
     "crates/mineral-channel/core",
     "crates/mineral-channel/mock",
@@ -48,6 +49,7 @@ mineral-tui             = { path = "crates/mineral-tui", default-features = fals
 mineral-macros          = { path = "crates/mineral-macros" }
 mineral-model           = { path = "crates/mineral-model" }
 mineral-paths           = { path = "crates/mineral-paths" }
+mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }

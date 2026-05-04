@@ -7,7 +7,8 @@
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
 use mineral_model::MediaUrl;
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
+use mineral_server::ClientHandle;
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::state::{AppState, View};
 
@@ -17,17 +18,17 @@ use crate::state::{AppState, View};
 const RADIUS: usize = 64;
 
 /// 每 tick 调一次:封面 + 歌单 tracks 两路 prefetch。
-pub fn tick(state: &mut AppState, scheduler: &Scheduler) {
-    request_covers(state, scheduler);
-    request_playlist_tracks(state, scheduler);
+pub fn tick(state: &mut AppState, client: &ClientHandle) {
+    request_covers(state, client);
+    request_playlist_tracks(state, client);
 }
 
 /// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面 URL,
 /// sel 优先 → 外扩 提交。
-fn request_covers(state: &mut AppState, scheduler: &Scheduler) {
+fn request_covers(state: &mut AppState, client: &ClientHandle) {
     let urls = collect_pending_covers(state);
     for url in urls {
-        ensure_cover(state, scheduler, url);
+        ensure_cover(state, client, url);
     }
 }
 
@@ -88,17 +89,17 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     out
 }
 
-fn ensure_cover(state: &mut AppState, scheduler: &Scheduler, url: MediaUrl) {
+fn ensure_cover(state: &mut AppState, client: &ClientHandle, url: MediaUrl) {
     if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
         return;
     }
     state.cover_pending.insert(url.clone());
-    scheduler.submit(TaskKind::CoverArt { url }, Priority::User);
+    client.submit_task(TaskKind::CoverArt { url }, Priority::User);
 }
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
-fn request_playlist_tracks(state: &AppState, scheduler: &Scheduler) {
+fn request_playlist_tracks(state: &AppState, client: &ClientHandle) {
     if state.view != View::Playlists {
         return;
     }
@@ -111,7 +112,7 @@ fn request_playlist_tracks(state: &AppState, scheduler: &Scheduler) {
         if state.tracks_cache.contains_key(&p.data.id) {
             return;
         }
-        scheduler.submit(
+        client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
                 source: p.data.source,
                 id: p.data.id.clone(),
