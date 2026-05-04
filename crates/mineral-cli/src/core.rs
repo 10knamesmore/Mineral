@@ -1,10 +1,11 @@
 //! 顶层 CLI 类型与运行入口。
 
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
 
 use crate::subcommands::channel::{self, ChannelArgs};
+use crate::subcommands::status;
 
 /// `mineral` 二进制的顶层参数。
 #[derive(Debug, Parser)]
@@ -20,9 +21,17 @@ pub struct Args {
 pub enum Command {
     /// channel 维度的命令，按 channel 名再次分发。
     Channel(ChannelArgs),
+
+    /// 起后台 daemon(单 client 限制),bind unix socket 接受 client 连接。
+    /// 实现需要 channels,由 main.rs 拦截后调 [`crate::serve_run`]。
+    Serve,
+
+    /// 连 daemon 拉一次 audio 状态打印出来,用于验证 IPC 链路是否通。
+    Status,
 }
 
-/// 执行解析后的 CLI 命令。
+/// 执行解析后的 CLI 命令。**不处理 [`Command::Serve`]**——那个需要 channels,
+/// 由 caller(main.rs) 拦截后自己调 [`crate::serve_run`]。
 ///
 /// # Params:
 ///   - `command`: 已经从命令行解析出的顶层命令。
@@ -38,5 +47,7 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Channel(args) => channel::run(args).await,
+        Command::Status => status::run().await,
+        Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
     }
 }

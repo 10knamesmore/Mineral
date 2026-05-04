@@ -6,7 +6,7 @@ use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, NeteaseConfig, load_stored};
-use mineral_cli::Args;
+use mineral_cli::{Args, Command};
 use tokio::runtime::Runtime;
 
 fn main() -> color_eyre::Result<()> {
@@ -15,12 +15,19 @@ fn main() -> color_eyre::Result<()> {
     let _log_guard = mineral_log::init().wrap_err("init log")?;
 
     let args = Args::parse();
-    if let Some(command) = args.command {
-        return mineral_cli::run(command);
+    match args.command {
+        Some(Command::Serve) => {
+            // serve 需要 channels(daemon 持有的业务依赖),由 main 自己 build。
+            let channels = build_channels()?;
+            let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+            runtime.block_on(mineral_cli::serve_run(channels))
+        }
+        Some(command) => mineral_cli::run(command),
+        None => {
+            let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+            runtime.block_on(run_tui())
+        }
     }
-
-    let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
-    runtime.block_on(run_tui())
 }
 
 async fn run_tui() -> color_eyre::Result<()> {

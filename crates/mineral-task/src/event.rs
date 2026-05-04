@@ -54,5 +54,4 @@ pub enum TaskEvent {
         /// 各格式歌词(LRC / yrc / 翻译 / 罗马音)。
         lyrics: Lyrics,
     },
-
 }

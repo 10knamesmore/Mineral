@@ -17,7 +17,9 @@
 //!   破坏调用方。
 
 mod client;
+mod serve;
 mod server;
 
-pub use client::{CancelFilter, ChannelFetchKindTag, ClientHandle};
+pub use client::ClientHandle;
+pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use server::Server;

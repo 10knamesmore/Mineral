@@ -1,6 +1,6 @@
 [package]
-name        = "mineral-server"
-description = "Mineral 后台 server:收纳 audio engine + task scheduler + channels,对外发 ClientHandle"
+name        = "mineral-protocol"
+description = "Mineral client/server IPC 协议 — Request/Response enum + bincode + length-delimited framing"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -10,19 +10,19 @@ rust-version.workspace = true
 
 [dependencies]
 mineral-audio        = { workspace = true }
-mineral-channel-core = { workspace = true }
-mineral-log          = { workspace = true }
 mineral-model        = { workspace = true }
-mineral-protocol     = { workspace = true }
 mineral-task         = { workspace = true }
 
+bincode    = { workspace = true }
+bytes      = { workspace = true }
 color-eyre = { workspace = true }
 serde      = { workspace = true }
 tokio      = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
-rustc-hash = { workspace = true }
-serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "io-util"] }
 
 [lints]
 workspace = true

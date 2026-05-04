@@ -33,6 +33,17 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
     platform::cache_dir()
 }
 
+/// Runtime 目录(进程级生命周期的 ephemeral 文件，如 IPC unix socket)。
+///
+/// - **Linux**:`$XDG_RUNTIME_DIR/mineral`,缺时 `/tmp/mineral`
+/// - **macOS**:`$TMPDIR/mineral`,缺时 `/tmp/mineral`
+///
+/// # Return:
+///   解析得到的目录路径。本函数不创建目录。
+pub fn runtime_dir() -> color_eyre::Result<PathBuf> {
+    platform::runtime_dir()
+}
+
 #[cfg(test)]
 #[allow(unsafe_code)] // reason: edition 2024 下 env::set_var/remove_var 是 unsafe,只在测试里用 EnvGuard 隔离
 mod tests {

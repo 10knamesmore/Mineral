@@ -11,7 +11,12 @@ rust-version.workspace = true
 [dependencies]
 clap                    = { workspace = true }
 color-eyre              = { workspace = true }
+mineral-audio           = { workspace = true }
+mineral-channel-core    = { workspace = true }
 mineral-channel-netease = { workspace = true }
+mineral-paths           = { workspace = true }
+mineral-protocol        = { workspace = true }
+mineral-server          = { workspace = true }
 tokio                   = { workspace = true }
 
 [lints]

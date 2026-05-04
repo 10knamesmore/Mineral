@@ -27,3 +27,15 @@ pub(crate) fn data_dir() -> color_eyre::Result<PathBuf> {
 pub(crate) fn cache_dir() -> color_eyre::Result<PathBuf> {
     xdg("XDG_CACHE_HOME", ".cache")
 }
+
+/// macOS runtime 目录:`$TMPDIR/mineral`,或 fallback `/tmp/mineral`。
+///
+/// 用于 IPC unix socket 等「进程级生命周期」的 ephemeral 文件。
+/// macOS 没有 `XDG_RUNTIME_DIR`,但 shell 环境总会有 `TMPDIR`(通常
+/// `/var/folders/.../T/`)。调用方负责 `create_dir_all` 与权限收紧。
+pub(crate) fn runtime_dir() -> color_eyre::Result<PathBuf> {
+    if let Some(v) = std::env::var_os("TMPDIR").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(v).join("mineral"));
+    }
+    Ok(PathBuf::from("/tmp/mineral"))
+}

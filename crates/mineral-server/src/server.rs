@@ -5,8 +5,10 @@ use std::sync::Arc;
 use mineral_audio::{AudioHandle, SpectrumTap};
 use mineral_channel_core::MusicChannel;
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
+use tokio::net::UnixListener;
 
 use crate::client::ClientHandle;
+use crate::serve;
 
 /// 后台 server。`spawn` 启动 audio engine 线程 + scheduler worker,投递初始任务,
 /// 再把这些 handle 收纳起来对外发 [`ClientHandle`]。
@@ -67,6 +69,15 @@ impl Server {
     /// 命令再 drop。
     pub fn shutdown(self) {
         drop(self);
+    }
+
+    /// IPC accept loop:在给定 listener 上接受 client 连接,每条 connection
+    /// 跑 [`mineral_protocol::Request`] dispatch。**单 client 限制**——已有
+    /// connection 时,后续连进来的 client 立刻收到一条 `Response::Error` 后被关掉。
+    ///
+    /// 返回 `Ok(())` 仅在 listener 被 drop / 关闭时;否则一直循环。
+    pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
+        serve::run(listener, self.client()).await
     }
 }
 

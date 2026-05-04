@@ -290,6 +290,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2065,7 +2074,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "color-eyre",
+ "mineral-audio",
+ "mineral-channel-core",
  "mineral-channel-netease",
+ "mineral-paths",
+ "mineral-protocol",
+ "mineral-server",
  "tokio",
 ]
 
@@ -2108,17 +2122,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "mineral-protocol"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bytes",
+ "color-eyre",
+ "futures-util",
+ "mineral-audio",
+ "mineral-model",
+ "mineral-task",
+ "serde",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "mineral-server"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
  "mineral-audio",
  "mineral-channel-core",
+ "mineral-log",
  "mineral-model",
+ "mineral-protocol",
  "mineral-task",
  "rustc-hash",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
