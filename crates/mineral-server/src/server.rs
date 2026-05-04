@@ -23,9 +23,8 @@ pub struct Server {
     spectrum_tap: Option<SpectrumTap>,
 
     /// 注册到 server 的全部音乐源 handle。Scheduler 内部已经 clone 一份用于
-    /// lane 路由,这里再持一份是为了未来给 client 列「有哪些 source 可选」之类
-    /// 的元信息(以及让 `Server` 显式 own 入参)。
-    #[allow(dead_code, reason = "字段当前未读,后续 channel 元信息 API 会用到")]
+    /// lane 路由;这里保留一份给 [`Self::serve`] 在每条新 connection 建立时
+    /// 重跑 [`submit_initial_loads`](让新 client 能 drain 到基础数据 events)。
     channels: Vec<Arc<dyn MusicChannel>>,
 }
 
@@ -75,9 +74,17 @@ impl Server {
     /// 跑 [`mineral_protocol::Request`] dispatch。**单 client 限制**——已有
     /// connection 时,后续连进来的 client 立刻收到一条 `Response::Error` 后被关掉。
     ///
+    /// 每条新 connection 接受后,内部会重跑 [`submit_initial_loads`] 一次
+    /// (相当于「重新触发 PlaylistsFetched / LikedSongIdsFetched 等基础事件」),
+    /// 因为 `drain_task_events` 是消费式语义——上一个 client 把 events 拿走后,
+    /// 新 client 看不到历史。dedup 命中既存任务时无副作用。
+    ///
     /// 返回 `Ok(())` 仅在 listener 被 drop / 关闭时;否则一直循环。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
-        serve::run(listener, self.client()).await
+        let scheduler = self.scheduler.clone();
+        let channels = self.channels.clone();
+        let on_connect = move || submit_initial_loads(&scheduler, &channels);
+        serve::run(listener, self.client(), on_connect).await
     }
 }
 

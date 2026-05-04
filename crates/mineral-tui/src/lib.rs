@@ -11,6 +11,7 @@ mod layout;
 mod lrc;
 mod playback;
 mod prefetch;
+mod remote;
 mod state;
 mod theme;
 mod tui;
@@ -21,37 +22,54 @@ mod yrc;
 use std::sync::Arc;
 
 use color_eyre::eyre::eyre;
+use mineral_audio::SpectrumTap;
 use mineral_channel_core::MusicChannel;
-use mineral_server::Server;
+use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
 use app::App;
+use cover::CoverFetcher;
+use remote::RemoteClient;
 use tui::Tui;
-
-/// TUI 退出时是否一并关掉 server。
-///
-/// 单进程下 TUI 退 = 进程退 = server 也走,这条 const 实际无可观察差别;
-/// 留作「真正拆 daemon 之后」的开关——届时设 `false` 表示「仅关 client,
-/// 后台 server 继续播」(对齐 mpd / playerctl 那种行为)。当前写死 `true`,
-/// 与历史 UX 一致。
-const KILL_SERVER_ON_TUI_EXIT: bool = true;
 
 /// 启动 TUI。
 ///
-/// # Params:
-///   - `channels`: 已构造好的所有音乐源。TUI 平等对待,扔给 server 后
-///     scheduler 会逐个 channel 拉 `my_playlists`。空 vec 也合法(纯 UI 演示)。
+/// 两种模式:
+/// - **in-proc** (`connect = false`):TUI 自己 `Server::spawn`,持有 audio engine /
+///   scheduler / 等;关 TUI = 进程退 = server 跟着退。等价历史行为。
+/// - **connect** (`connect = true`):TUI 不起 server,只 [`RemoteClient::connect`] 到
+///   `mineral serve` 起的 daemon。关 TUI **不杀** daemon,音乐继续播。
 ///
-/// # Return:
-///   主循环正常退出返回 `Ok(())`;终端 raw mode / 渲染失败返回 `Err`。
-pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
-    let mut server = Server::spawn(channels)?;
-    let spectrum_tap = server
-        .take_spectrum_tap()
-        .ok_or_else(|| eyre!("Server::take_spectrum_tap 已被取走;TUI 期望第一次取得 tap"))?;
-    let client = server.client();
-    let cover_fetcher = cover::CoverFetcher::spawn()?;
+/// # Params:
+///   - `channels`: in-proc 模式下,已构造好的所有音乐源(空 vec 也合法,纯 UI 演示);
+///     connect 模式下忽略(channels 由 daemon 持有)。
+///   - `connect`: true → 连 daemon;false → 自起 server。
+pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, connect: bool) -> color_eyre::Result<()> {
+    let cover_fetcher = CoverFetcher::spawn()?;
 
+    if connect {
+        let socket = mineral_paths::runtime_dir()?.join("mineral.sock");
+        let client = RemoteClient::connect(&socket).await?;
+        run_app(Arc::new(client), None, cover_fetcher)
+    } else {
+        let mut server = Server::spawn(channels)?;
+        let spectrum_tap = server
+            .take_spectrum_tap()
+            .ok_or_else(|| eyre!("Server::take_spectrum_tap 已被取走;TUI 期望第一次取得 tap"))?;
+        let client = server.client();
+        let result = run_app(Arc::new(client), Some(spectrum_tap), cover_fetcher);
+        // in-proc 模式:进程退 = server 跟着 drop,无显式 shutdown 也行。
+        // server 保留到这里只为让 audio engine 跑完 TUI 主循环。
+        let _ = server;
+        result
+    }
+}
+
+fn run_app(
+    client: Arc<dyn Client>,
+    spectrum_tap: Option<SpectrumTap>,
+    cover_fetcher: CoverFetcher,
+) -> color_eyre::Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
     // Picker::from_query_stdio 必须在进 alternate screen 之后、读 events 之前调,
@@ -61,11 +79,5 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     let mut app = App::new(client, spectrum_tap, cover_fetcher, picker);
     let result = app.run(&mut tui);
     tui.exit()?;
-
-    if KILL_SERVER_ON_TUI_EXIT {
-        server.shutdown();
-    }
-    // false 分支:在真正拆双进程之前不可达。单进程下 server drop 不 drop 都
-    // 没意义——进程退出时 OS 会回收一切。等 daemon 化之后再实现 detach 逻辑。
     result
 }

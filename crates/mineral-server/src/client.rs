@@ -86,3 +86,83 @@ impl ClientHandle {
     }
 }
 
+/// Client → Server 调用面的抽象。
+///
+/// 现有两个实现:
+/// - [`ClientHandle`]:同进程,内部持 `Arc<AudioHandle>` + `Arc<Scheduler>`,直接转发
+/// - `mineral_tui::remote::RemoteClient`:跨进程,内部走 unix socket
+///
+/// **实现方约定**:全部方法 sync。fire-and-forget 类(`play` / `pause` / 等)立即返回;
+/// 返回值类(`audio_snapshot` / `submit_task` / `drain_task_events` / `task_snapshot`)
+/// 允许阻塞等内部 I/O,但调用方期望 < 1ms(30fps 一帧 33ms 预算下绰绰有余)。
+/// 出错时返回值类用「合理默认值」兜底(避免让上层处理一堆 Result)。
+pub trait Client: Send + Sync {
+    /// 切到这个 URL,从头播。
+    fn play(&self, url: MediaUrl);
+
+    /// 暂停。
+    fn pause(&self);
+
+    /// 从暂停恢复。
+    fn resume(&self);
+
+    /// 停止当前曲目。
+    fn stop(&self);
+
+    /// 跳到绝对位置(ms),latest-wins。
+    fn seek(&self, position_ms: u64);
+
+    /// 设置音量百分比(0..=100)。
+    fn set_volume(&self, pct: u8);
+
+    /// 拉一次音频快照。
+    fn audio_snapshot(&self) -> AudioSnapshot;
+
+    /// 提交一个任务,返回任务 id。
+    fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId;
+
+    /// 按 [`CancelFilter`] 批量取消。
+    fn cancel_tasks(&self, filter: CancelFilter);
+
+    /// 拉走 server 端积攒的所有任务事件。
+    fn drain_task_events(&self) -> Vec<TaskEvent>;
+
+    /// 当前 scheduler 状态快照。
+    fn task_snapshot(&self) -> Snapshot;
+}
+
+impl Client for ClientHandle {
+    fn play(&self, url: MediaUrl) {
+        Self::play(self, url);
+    }
+    fn pause(&self) {
+        Self::pause(self);
+    }
+    fn resume(&self) {
+        Self::resume(self);
+    }
+    fn stop(&self) {
+        Self::stop(self);
+    }
+    fn seek(&self, position_ms: u64) {
+        Self::seek(self, position_ms);
+    }
+    fn set_volume(&self, pct: u8) {
+        Self::set_volume(self, pct);
+    }
+    fn audio_snapshot(&self) -> AudioSnapshot {
+        Self::audio_snapshot(self)
+    }
+    fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {
+        Self::submit_task(self, kind, priority)
+    }
+    fn cancel_tasks(&self, filter: CancelFilter) {
+        Self::cancel_tasks(self, filter);
+    }
+    fn drain_task_events(&self) -> Vec<TaskEvent> {
+        Self::drain_task_events(self)
+    }
+    fn task_snapshot(&self) -> Snapshot {
+        Self::task_snapshot(self)
+    }
+}

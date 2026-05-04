@@ -1,11 +1,12 @@
 //! 顶层 [`App`] 状态与同步主事件循环。
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_audio::SpectrumTap;
 use mineral_model::{Song, SongId};
-use mineral_server::{CancelFilter, ChannelFetchKindTag, ClientHandle};
+use mineral_server::{CancelFilter, ChannelFetchKindTag, Client};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use ratatui_image::picker::Picker;
 
@@ -50,14 +51,15 @@ pub struct App {
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
-    /// Server client handle:所有「调命令 / 拉 snapshot / 拉事件」都走它。
-    /// 当前是同进程,内部包 [`mineral_audio::AudioHandle`] + [`mineral_task::Scheduler`];
-    /// 未来 IPC 化时换实现不动签名。
-    client: ClientHandle,
+    /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
+    /// 实现可能是同进程 `ClientHandle`,也可能是跨进程 `RemoteClient`(`--connect`),
+    /// 通过 [`Client`] trait 抽象。
+    client: Arc<dyn Client>,
 
     /// PCM tap:每 tick 拉一批样本喂给 [`crate::state::AppState::fft`]。
-    /// SPSC consumer 不走 [`ClientHandle`],由 App 直接持有。
-    spectrum_tap: SpectrumTap,
+    /// SPSC consumer **跨不了进程**;`--connect` 模式下为 `None`,spectrum 面板降级到
+    /// baseline(无动画)。
+    spectrum_tap: Option<SpectrumTap>,
 
     /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管;
     /// 用户切到新 view 时 [`crate::prefetch`] 投递 URL,worker 后台拉,tick 时
@@ -82,13 +84,13 @@ impl App {
     /// 构造 App。
     ///
     /// # Params:
-    ///   - `client`: 跟 server 交互的 cheap-clone 句柄
-    ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路(由 caller 从 server 取走后传入)
+    ///   - `client`: 跟 server 交互的句柄(in-proc `ClientHandle` 或 connect `RemoteClient`)
+    ///   - `spectrum_tap`: 音频引擎吐出的 PCM 旁路;in-proc 模式 `Some`,connect 模式 `None`
     ///   - `cover_fetcher`: client 端 cover fetcher(由 caller spawn 后传入)
     ///   - `picker`: 终端图片协议能力(由 caller 在 Tui::enter 后探测好传入)
     pub fn new(
-        client: ClientHandle,
-        spectrum_tap: SpectrumTap,
+        client: Arc<dyn Client>,
+        spectrum_tap: Option<SpectrumTap>,
         cover_fetcher: CoverFetcher,
         picker: Picker,
     ) -> Self {
@@ -130,7 +132,7 @@ impl App {
                 }
                 self.maybe_submit_prefetch();
                 self.drain_ready_covers();
-                crate::prefetch::tick(&mut self.state, &self.client, &self.cover_fetcher);
+                crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_running = self.client.task_snapshot().running;
                 self.last_tick = Instant::now();
             }
@@ -150,18 +152,26 @@ impl App {
 
     /// 把 audio 端 ringbuf 里的样本喂给 fft computer,算一窗,再喂给 spectrum 平滑器。
     /// pop chunk 比一帧产出量(48kHz × 33ms ≈ 1584)略大,确保单 tick 能 drain。
+    ///
+    /// connect 模式下 `spectrum_tap = None`(SPSC consumer 跨不了进程),不喂 PCM,
+    /// fft 内部 ring 永远空,bars 退化为静态 baseline。spectrum 面板仍每帧刷,
+    /// 只是无动画。
     fn update_spectrum(&mut self) {
         const POP_CHUNK: usize = 2048;
-        let mut buf = [0_f32; POP_CHUNK];
-        let n = self.spectrum_tap.pop_into(&mut buf);
-        if let Some(slice) = buf.get(..n) {
-            self.state.fft.push(slice);
+        if let Some(tap) = self.spectrum_tap.as_mut() {
+            let mut buf = [0_f32; POP_CHUNK];
+            let n = tap.pop_into(&mut buf);
+            if let Some(slice) = buf.get(..n) {
+                self.state.fft.push(slice);
+            }
         }
+        let sample_rate = self
+            .spectrum_tap
+            .as_ref()
+            .map(SpectrumTap::sample_rate)
+            .unwrap_or(0);
         let target_bars = self.state.spectrum.target_bars.get();
-        let bars = self
-            .state
-            .fft
-            .compute(self.spectrum_tap.sample_rate(), target_bars);
+        let bars = self.state.fft.compute(sample_rate, target_bars);
         self.state.spectrum.tick(
             self.state.playback.playing,
             self.state.playback.volume_pct,

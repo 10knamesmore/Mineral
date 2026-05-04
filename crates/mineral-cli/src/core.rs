@@ -14,6 +14,11 @@ pub struct Args {
     /// 可选的 CLI 命令；省略时由调用方启动 TUI。
     #[command(subcommand)]
     pub command: Option<Command>,
+
+    /// 启动 TUI 时连接已有 daemon (`mineral serve`),而不是 in-proc 起 server。
+    /// 关 TUI 不会停 daemon。仅在无子命令时生效。
+    #[arg(long)]
+    pub connect: bool,
 }
 
 /// 顶层命令分组（按 namespace 拆分）。

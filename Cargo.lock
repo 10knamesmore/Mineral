@@ -2193,6 +2193,8 @@ dependencies = [
  "mineral-log",
  "mineral-macros",
  "mineral-model",
+ "mineral-paths",
+ "mineral-protocol",
  "mineral-server",
  "mineral-spectrum",
  "mineral-task",

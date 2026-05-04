@@ -11,14 +11,12 @@ pub async fn run() -> color_eyre::Result<()> {
     let socket_path = mineral_paths::runtime_dir()
         .wrap_err("resolve runtime_dir")?
         .join("mineral.sock");
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "connect daemon socket {} (run `mineral serve` first?)",
-                socket_path.display()
-            )
-        })?;
+    let stream = UnixStream::connect(&socket_path).await.wrap_err_with(|| {
+        format!(
+            "connect daemon socket {} (run `mineral serve` first?)",
+            socket_path.display()
+        )
+    })?;
     let mut conn = framed(stream);
     send(&mut conn, &Request::AudioSnapshot).await?;
     let resp = recv::<Response, _>(&mut conn)
@@ -38,7 +36,10 @@ fn print_snapshot(snap: &AudioSnapshot) {
     println!("playing:    {}", snap.playing);
     println!("position:   {pos} / {dur}");
     println!("volume:     {} %", snap.volume_pct);
-    println!("finished:   {} (track_finished_seq)", snap.track_finished_seq);
+    println!(
+        "finished:   {} (track_finished_seq)",
+        snap.track_finished_seq
+    );
 }
 
 fn format_ms(ms: u64) -> String {

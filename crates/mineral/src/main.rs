@@ -25,14 +25,20 @@ fn main() -> color_eyre::Result<()> {
         Some(command) => mineral_cli::run(command),
         None => {
             let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
-            runtime.block_on(run_tui())
+            runtime.block_on(run_tui(args.connect))
         }
     }
 }
 
-async fn run_tui() -> color_eyre::Result<()> {
-    let channels = build_channels()?;
-    mineral_tui::run(channels).await
+async fn run_tui(connect: bool) -> color_eyre::Result<()> {
+    // connect 模式下 channels 由 daemon 持有,client 不需要;省去 build_channels 也省
+    // 去重复读凭证。
+    let channels = if connect {
+        Vec::new()
+    } else {
+        build_channels()?
+    };
+    mineral_tui::run(channels, connect).await
 }
 
 fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {

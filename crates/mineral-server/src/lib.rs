@@ -20,6 +20,6 @@ mod client;
 mod serve;
 mod server;
 
-pub use client::ClientHandle;
+pub use client::{Client, ClientHandle};
 pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use server::Server;

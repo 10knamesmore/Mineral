@@ -1,5 +1,6 @@
 //! 端到端 codec 测试:在 in-memory `DuplexStream` 上 framed → send → recv → 反序列化。
 
+use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, SongId, SourceKind};
 use mineral_protocol::{CancelFilter, ChannelFetchKindTag, Request, Response, framed, recv, send};
@@ -14,10 +15,13 @@ async fn round_trip_request_play() -> color_eyre::Result<()> {
 
     let url = MediaUrl::remote("https://example.com/song.mp3")?;
     send(&mut sender, &Request::Play(url.clone())).await?;
-    let got: Request = recv(&mut receiver).await?.expect("frame missing");
-    match got {
-        Request::Play(u) => assert_eq!(u, url),
-        other => panic!("unexpected variant: {other:?}"),
+    let got: Request = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    if let Request::Play(u) = got {
+        assert_eq!(u, url);
+    } else {
+        return Err(eyre!("unexpected variant: {got:?}"));
     }
     Ok(())
 }
@@ -37,13 +41,14 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
         &Request::SubmitTask(kind.clone(), Priority::User),
     )
     .await?;
-    let got: Request = recv(&mut receiver).await?.expect("frame missing");
-    match got {
-        Request::SubmitTask(k, p) => {
-            assert_eq!(k, kind);
-            assert_eq!(p, Priority::User);
-        }
-        other => panic!("unexpected variant: {other:?}"),
+    let got: Request = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    if let Request::SubmitTask(k, p) = got {
+        assert_eq!(k, kind);
+        assert_eq!(p, Priority::User);
+    } else {
+        return Err(eyre!("unexpected variant: {got:?}"));
     }
     Ok(())
 }
@@ -59,10 +64,13 @@ async fn round_trip_request_cancel_tasks() -> color_eyre::Result<()> {
         ChannelFetchKindTag::Lyrics,
     ]);
     send(&mut sender, &Request::CancelTasks(filter.clone())).await?;
-    let got: Request = recv(&mut receiver).await?.expect("frame missing");
-    match got {
-        Request::CancelTasks(f) => assert_eq!(f, filter),
-        other => panic!("unexpected variant: {other:?}"),
+    let got: Request = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    if let Request::CancelTasks(f) = got {
+        assert_eq!(f, filter);
+    } else {
+        return Err(eyre!("unexpected variant: {got:?}"));
     }
     Ok(())
 }
@@ -81,10 +89,13 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         track_finished_seq: 3,
     };
     send(&mut sender, &Response::AudioSnapshot(snap)).await?;
-    let got: Response = recv(&mut receiver).await?.expect("frame missing");
-    match got {
-        Response::AudioSnapshot(s) => assert_eq!(s, snap),
-        other => panic!("unexpected variant: {other:?}"),
+    let got: Response = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    if let Response::AudioSnapshot(s) = got {
+        assert_eq!(s, snap);
+    } else {
+        return Err(eyre!("unexpected variant: {got:?}"));
     }
     Ok(())
 }
@@ -97,10 +108,13 @@ async fn round_trip_response_error() -> color_eyre::Result<()> {
 
     let msg = "daemon busy: another client is connected";
     send(&mut sender, &Response::Error(msg.to_owned())).await?;
-    let got: Response = recv(&mut receiver).await?.expect("frame missing");
-    match got {
-        Response::Error(m) => assert_eq!(m, msg),
-        other => panic!("unexpected variant: {other:?}"),
+    let got: Response = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    if let Response::Error(m) = got {
+        assert_eq!(m, msg);
+    } else {
+        return Err(eyre!("unexpected variant: {got:?}"));
     }
     Ok(())
 }
@@ -114,13 +128,17 @@ async fn req_resp_pair_over_one_stream() -> color_eyre::Result<()> {
 
     // client → server: AudioSnapshot 请求
     send(&mut client, &Request::AudioSnapshot).await?;
-    let req: Request = recv(&mut server).await?.expect("server got nothing");
+    let req: Request = recv(&mut server)
+        .await?
+        .ok_or_else(|| eyre!("server got nothing"))?;
     assert!(matches!(req, Request::AudioSnapshot));
 
     // server → client: 回 snapshot
     let snap = AudioSnapshot::default();
     send(&mut server, &Response::AudioSnapshot(snap)).await?;
-    let resp: Response = recv(&mut client).await?.expect("client got nothing");
+    let resp: Response = recv(&mut client)
+        .await?
+        .ok_or_else(|| eyre!("client got nothing"))?;
     assert!(matches!(resp, Response::AudioSnapshot(_)));
     Ok(())
 }

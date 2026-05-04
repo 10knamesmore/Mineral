@@ -26,8 +26,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
 
 fn socket_path() -> color_eyre::Result<std::path::PathBuf> {
     let dir = mineral_paths::runtime_dir().wrap_err("resolve runtime_dir")?;
-    std::fs::create_dir_all(&dir)
-        .wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;
     Ok(dir.join("mineral.sock"))
 }
 

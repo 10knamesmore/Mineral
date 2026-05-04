@@ -7,7 +7,7 @@
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
 use mineral_model::MediaUrl;
-use mineral_server::ClientHandle;
+use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::cover::CoverFetcher;
@@ -19,7 +19,7 @@ use crate::state::{AppState, View};
 const RADIUS: usize = 64;
 
 /// 每 tick 调一次:封面 + 歌单 tracks 两路 prefetch。
-pub fn tick(state: &mut AppState, client: &ClientHandle, covers: &CoverFetcher) {
+pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
     request_playlist_tracks(state, client);
 }
@@ -100,7 +100,7 @@ fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
-fn request_playlist_tracks(state: &AppState, client: &ClientHandle) {
+fn request_playlist_tracks(state: &AppState, client: &dyn Client) {
     if state.view != View::Playlists {
         return;
     }

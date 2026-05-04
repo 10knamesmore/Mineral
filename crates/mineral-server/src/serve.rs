@@ -13,8 +13,21 @@ use tokio::net::{UnixListener, UnixStream};
 use crate::client::ClientHandle;
 
 /// Accept loop。返回 `Ok(())` 仅在 listener 被外部关闭时;否则一直循环。
-pub(crate) async fn run(listener: UnixListener, client: ClientHandle) -> color_eyre::Result<()> {
+///
+/// `on_connect` 在每条新 connection 被接受后立刻调用一次,调用方借此重新触发
+/// 「初始数据加载」(`MyPlaylists` / `LikedSongIds` 等)——必要的:`drain_task_events`
+/// 是消费式语义,首个 client 拿走 events 后 buffer 清空,新 client 看不到任何
+/// 历史 event 会显示「数据为空」假象。dedup 命中既存任务时无副作用。
+pub(crate) async fn run<F>(
+    listener: UnixListener,
+    client: ClientHandle,
+    on_connect: F,
+) -> color_eyre::Result<()>
+where
+    F: Fn() + Send + Sync + 'static,
+{
     let busy = Arc::new(AtomicBool::new(false));
+    let on_connect = Arc::new(on_connect);
     loop {
         let (stream, _addr) = listener
             .accept()
@@ -25,6 +38,7 @@ pub(crate) async fn run(listener: UnixListener, client: ClientHandle) -> color_e
             tokio::spawn(reject_busy(stream));
             continue;
         }
+        on_connect();
         let client = client.clone();
         let busy_clone = Arc::clone(&busy);
         tokio::spawn(async move {
