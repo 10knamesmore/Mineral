@@ -16,6 +16,7 @@ color-eyre      = { workspace = true }
 parking_lot     = { workspace = true }
 ringbuf         = { workspace = true }
 rodio           = { workspace = true }
+serde           = { workspace = true }
 stream-download = { workspace = true }
 tokio           = { workspace = true }
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use mineral_channel_core::MusicChannel;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
@@ -29,7 +30,7 @@ struct Inner {
 }
 
 /// `Scheduler::snapshot` 的返回:当前 running 数与按 lane 的拆分。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// 全部 lane 的 running 任务总数。
     pub running: usize,

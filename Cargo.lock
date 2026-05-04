@@ -1997,6 +1997,7 @@ dependencies = [
  "parking_lot",
  "ringbuf",
  "rodio",
+ "serde",
  "stream-download",
  "tokio",
 ]
@@ -2115,6 +2116,8 @@ dependencies = [
  "mineral-channel-core",
  "mineral-model",
  "mineral-task",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2139,6 +2142,7 @@ dependencies = [
  "mineral-model",
  "parking_lot",
  "rustc-hash",
+ "serde",
  "tokio",
  "tokio-util",
 ]

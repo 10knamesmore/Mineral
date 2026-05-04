@@ -20,6 +20,7 @@ image        = { workspace = true }
 isahc        = { workspace = true }
 parking_lot  = { workspace = true }
 rustc-hash   = { workspace = true }
+serde        = { workspace = true }
 tokio        = { workspace = true }
 tokio-util   = { workspace = true }
 

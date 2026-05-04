@@ -19,5 +19,5 @@
 mod client;
 mod server;
 
-pub use client::ClientHandle;
+pub use client::{CancelFilter, ChannelFetchKindTag, ClientHandle};
 pub use server::Server;

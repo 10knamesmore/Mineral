@@ -1,11 +1,12 @@
 //! 任务种类与 dedup 键。
 
 use mineral_model::{MediaUrl, PlaylistId, SongId, SourceKind};
+use serde::{Deserialize, Serialize};
 
 use crate::lane::Lane;
 
 /// 一个待调度任务的所有信息。具体业务参数挂在子枚举里。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskKind {
     /// channel 数据拉取。
     ChannelFetch(ChannelFetchKind),
@@ -37,7 +38,7 @@ impl TaskKind {
 }
 
 /// channel 数据拉取的具体形态。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChannelFetchKind {
     /// 拉某 channel 当前用户的歌单列表。
     MyPlaylists {
@@ -109,7 +110,7 @@ impl ChannelFetchKind {
 }
 
 /// 任务去重键(`Eq + Hash` 安全)。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DedupKey(String);
 
 impl std::fmt::Display for DedupKey {

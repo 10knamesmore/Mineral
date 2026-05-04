@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_audio::SpectrumTap;
 use mineral_model::{Song, SongId};
-use mineral_server::ClientHandle;
+use mineral_server::{CancelFilter, ChannelFetchKindTag, ClientHandle};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use ratatui_image::picker::Picker;
 
@@ -179,14 +179,11 @@ impl App {
     /// 同步把 `queue_sel` 对齐到这首歌在 queue 里的位置(不在则保持原值),
     /// 让后续 prev/next/auto-next 有正确锚点。
     fn submit_play_song(&mut self, song: &Song) {
-        self.client.cancel_tasks_where(|k| {
-            matches!(
-                k,
-                TaskKind::ChannelFetch(
-                    ChannelFetchKind::SongUrl { .. } | ChannelFetchKind::Lyrics { .. }
-                )
-            )
-        });
+        self.client
+            .cancel_tasks(CancelFilter::ChannelFetchKinds(vec![
+                ChannelFetchKindTag::SongUrl,
+                ChannelFetchKindTag::Lyrics,
+            ]));
         self.client.stop();
         self.state.current = Some(song.clone());
         self.state.playback.track = Some(song.clone());
