@@ -10,6 +10,7 @@ use mineral_model::{
 };
 use serde_json::json;
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
@@ -136,6 +137,7 @@ async fn song_urls_legacy(
     parse_song_url_data(&v, quality)
 }
 
+/// 把 v1 / legacy 两套响应里共有的 `data: [...]` 解析成 [`PlayUrl`] 列表。
 fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<PlayUrl>> {
     let data = v
         .get("data")

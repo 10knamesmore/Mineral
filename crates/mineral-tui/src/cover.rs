@@ -83,6 +83,7 @@ impl CoverFetcher {
     }
 }
 
+/// fetcher worker 主循环:从队列拉 URL → 抓 + 解码 + resize → push 到 ready buffer。
 async fn worker_loop(
     rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<MediaUrl>>>,
     ready: ReadyBuf,
@@ -102,6 +103,7 @@ async fn worker_loop(
     }
 }
 
+/// 抓 url 字节 → 解码成 image → 大图等比 resize 到 `COVER_MAX_DIM`。任一步失败返回 None。
 async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<DynamicImage> {
     let bytes = match read_bytes(url, client).await {
         Ok(b) => b,
@@ -131,6 +133,7 @@ async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<Dynamic
     Some(resized)
 }
 
+/// 抓出 cover 图的原始字节:Remote 走 HTTP,Local 走 fs。
 async fn read_bytes(url: &MediaUrl, client: &HttpClient) -> color_eyre::Result<Vec<u8>> {
     match url {
         MediaUrl::Remote(u) => {

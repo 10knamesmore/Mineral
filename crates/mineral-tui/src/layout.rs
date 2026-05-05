@@ -47,6 +47,7 @@ pub fn compute(area: Rect) -> Areas {
     }
 }
 
+/// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport),底部 1 行 status_bar。
 fn compute_full(area: Rect) -> Areas {
     let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),
@@ -82,6 +83,7 @@ fn compute_full(area: Rect) -> Areas {
     }
 }
 
+/// Compact 布局(窄/矮终端):顶/底各 1 行,中间 70/30 主-transport,无右侧歌词与频谱。
 fn compute_compact(area: Rect) -> Areas {
     let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),

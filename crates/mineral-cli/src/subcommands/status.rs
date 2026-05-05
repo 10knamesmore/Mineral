@@ -7,6 +7,7 @@ use mineral_audio::AudioSnapshot;
 use mineral_protocol::{Request, Response, framed, recv, send};
 use tokio::net::UnixStream;
 
+/// `mineral status` 入口:连 daemon socket → 发 [`Request::AudioSnapshot`] → 打印结果。
 pub async fn run() -> color_eyre::Result<()> {
     let socket_path = mineral_paths::runtime_dir()
         .wrap_err("resolve runtime_dir")?
@@ -30,6 +31,7 @@ pub async fn run() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 把 [`AudioSnapshot`] 按 key/value 形式打到 stdout。
 fn print_snapshot(snap: &AudioSnapshot) {
     let pos = format_ms(snap.position_ms);
     let dur = format_ms(snap.duration_ms);
@@ -42,6 +44,7 @@ fn print_snapshot(snap: &AudioSnapshot) {
     );
 }
 
+/// 把 ms 格式化成 `mm:ss`(小时被合并进分钟)。
 fn format_ms(ms: u64) -> String {
     let s = ms / 1000;
     let m = s / 60;

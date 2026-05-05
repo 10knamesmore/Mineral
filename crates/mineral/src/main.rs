@@ -30,6 +30,7 @@ fn main() -> color_eyre::Result<()> {
     }
 }
 
+/// 起 TUI:in-proc 模式自己 build channels;connect 模式跳过(daemon 持有)。
 async fn run_tui(connect: bool) -> color_eyre::Result<()> {
     // connect 模式下 channels 由 daemon 持有,client 不需要;省去 build_channels 也省
     // 去重复读凭证。
@@ -41,6 +42,7 @@ async fn run_tui(connect: bool) -> color_eyre::Result<()> {
     mineral_tui::run(channels, connect).await
 }
 
+/// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。
 fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
     if let Some(c) = build_netease()? {
@@ -51,6 +53,7 @@ fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     Ok(channels)
 }
 
+/// 读本地凭证 → 构造 [`NeteaseChannel`];没凭证返回 `Ok(None)`(尚未登录,正常)。
 fn build_netease() -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
     let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
         return Ok(None);
@@ -62,6 +65,7 @@ fn build_netease() -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
     Ok(Some(arc))
 }
 
+/// 构造一个永远在线的假数据 channel,离线开发用(`--features mock`)。
 #[cfg(feature = "mock")]
 fn build_mock() -> Arc<dyn MusicChannel> {
     Arc::new(mineral_channel_mock::MockChannel::new())

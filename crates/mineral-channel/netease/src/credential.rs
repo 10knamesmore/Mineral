@@ -56,6 +56,7 @@ pub fn load_stored() -> color_eyre::Result<Option<StoredNeteaseAuth>> {
     read_from(&path)
 }
 
+/// 把 `auth` 序列化成 JSON 写到 `path`,父目录不存在时自动创建。
 fn write_to(path: &Path, auth: &StoredNeteaseAuth) -> color_eyre::Result<()> {
     let parent = path
         .parent()
@@ -68,6 +69,7 @@ fn write_to(path: &Path, auth: &StoredNeteaseAuth) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 从 `path` 读凭证;文件不存在 → `Ok(None)`,其他 IO/解析失败 → `Err`。
 fn read_from(path: &Path) -> color_eyre::Result<Option<StoredNeteaseAuth>> {
     match fs::read_to_string(path) {
         Ok(text) => {

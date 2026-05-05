@@ -52,6 +52,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(opts).alignment(Alignment::Center), opts_area);
 }
 
+/// 在弹窗右下方画一层 (+2, +1) 偏移的暗色矩形,模拟"投影"立体感;clamp 在 area 内。
 fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     let off_x = panel.x.saturating_add(2);
     let off_y = panel.y.saturating_add(1);

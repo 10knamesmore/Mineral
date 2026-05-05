@@ -33,6 +33,7 @@ fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
     }
 }
 
+/// 收集当前 view 下「sel + 邻居 (±RADIUS)」中未 cache、未 pending 的封面 URL。
 fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     let mut out = Vec::<MediaUrl>::new();
     let cache = &state.cover_cache;
@@ -90,6 +91,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     out
 }
 
+/// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
 fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
     if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
         return;

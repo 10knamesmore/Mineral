@@ -1,105 +1,60 @@
-//! [`Server`]:audio engine + task scheduler + channels 的单进程收纳容器。
+//! [`Server`]:audio engine + scheduler + PlayerCore + PCM puller 的单进程收纳容器。
 
 use std::sync::Arc;
 
-use mineral_audio::{AudioHandle, SpectrumTap};
+use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
+use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
 use crate::client::ClientHandle;
+use crate::pcm::PcmPuller;
+use crate::player::PlayerCore;
 use crate::serve;
 
-/// 后台 server。`spawn` 启动 audio engine 线程 + scheduler worker,投递初始任务,
-/// 再把这些 handle 收纳起来对外发 [`ClientHandle`]。
+/// 后台 server。`spawn` 启动 audio engine + scheduler + PlayerCore + PCM puller,
+/// 投递初始任务,对外发 [`ClientHandle`]。
 pub struct Server {
-    /// audio engine 句柄(自身已是 Arc + channel-based,clone 廉价)。
-    audio: AudioHandle,
+    /// PlayerCore — 业务状态 + 自治 auto-next + events 中继。
+    player: PlayerCore,
 
-    /// task scheduler(同上,Arc + worker pool)。
-    scheduler: Scheduler,
-
-    /// PCM tap:SPSC consumer,唯一所有权。`take_spectrum_tap` 取走后变 None。
-    spectrum_tap: Option<SpectrumTap>,
-
-    /// 注册到 server 的全部音乐源 handle。Scheduler 内部已经 clone 一份用于
-    /// lane 路由;这里保留一份给 [`Self::serve`] 在每条新 connection 建立时
-    /// 重跑 [`submit_initial_loads`](让新 client 能 drain 到基础数据 events)。
-    channels: Vec<Arc<dyn MusicChannel>>,
+    /// PCM 中继 — 收纳 SpectrumTap,client 通过 pull_pcm 拉。
+    pcm: PcmPuller,
 }
 
 impl Server {
-    /// 启动 audio engine + scheduler,并按 channel 列表投递「初始拉数据」的任务
-    /// (每个 channel 一个 `MyPlaylists` + 一个 `LikedSongIds`)。
+    /// 启动 audio engine + scheduler + PlayerCore + PCM puller,投递初始任务。
     ///
     /// # Params:
-    ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法(纯 UI 演示)。
-    ///
-    /// # Return:
-    ///   audio engine 启动失败 / 默认输出设备不可用时返回 `Err`。
+    ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
     pub fn spawn(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<Self> {
         let scheduler = Scheduler::new(&channels);
-        submit_initial_loads(&scheduler, &channels);
         let (audio, spectrum_tap) = AudioHandle::spawn()?;
-        Ok(Self {
-            audio,
-            scheduler,
-            spectrum_tap: Some(spectrum_tap),
-            channels,
-        })
+        let player = PlayerCore::spawn(audio, scheduler, channels);
+        // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
+        player.refresh_initial_loads();
+        let pcm = PcmPuller::spawn(spectrum_tap);
+        Ok(Self { player, pcm })
     }
 
-    /// 取走 PCM tap;只能取一次,再次调用返回 `None`。
-    ///
-    /// SPSC consumer 不能 clone,所以 tap 必须由唯一持有者(当前是 TUI 的 spectrum
-    /// 渲染)拿走。未来 IPC 化时这条会被「server 推 PCM 流」替换。
-    pub fn take_spectrum_tap(&mut self) -> Option<SpectrumTap> {
-        self.spectrum_tap.take()
-    }
-
-    /// 拿一个 client handle。clone 廉价(内部都是 Arc),可任意复制给多处调用。
+    /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。
     pub fn client(&self) -> ClientHandle {
-        ClientHandle::new(self.audio.clone(), self.scheduler.clone())
+        ClientHandle::new(self.player.clone(), self.pcm.clone())
     }
 
-    /// 显式 shutdown。当前实现就是 drop 自身,利用 [`AudioHandle`] / [`Scheduler`]
-    /// 现有的 Drop 链(命令通道 close → engine 线程退出 / worker 线程感知)。
-    /// 未来如要严格控制顺序(比如先 stop 当前播放再退 engine),在这里加显式
-    /// 命令再 drop。
+    /// 显式 shutdown。drop 自身,利用 PlayerCore / AudioHandle / Scheduler 现有 Drop 链。
     pub fn shutdown(self) {
         drop(self);
     }
 
-    /// IPC accept loop:在给定 listener 上接受 client 连接,每条 connection
-    /// 跑 [`mineral_protocol::Request`] dispatch。**单 client 限制**——已有
-    /// connection 时,后续连进来的 client 立刻收到一条 `Response::Error` 后被关掉。
+    /// IPC accept loop:每条新 connection 跑 [`mineral_protocol::Request`] dispatch。
+    /// **单 client 限制**——已有 connection 时后续 incoming 立刻 `Response::Error`。
     ///
-    /// 每条新 connection 接受后,内部会重跑 [`submit_initial_loads`] 一次
-    /// (相当于「重新触发 PlaylistsFetched / LikedSongIdsFetched 等基础事件」),
-    /// 因为 `drain_task_events` 是消费式语义——上一个 client 把 events 拿走后,
-    /// 新 client 看不到历史。dedup 命中既存任务时无副作用。
-    ///
-    /// 返回 `Ok(())` 仅在 listener 被 drop / 关闭时;否则一直循环。
+    /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
+    /// (新 client 拿得到 PlaylistsFetched / LikedSongIdsFetched events)。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
-        let scheduler = self.scheduler.clone();
-        let channels = self.channels.clone();
-        let on_connect = move || submit_initial_loads(&scheduler, &channels);
+        let player = self.player.clone();
+        let on_connect = move || player.refresh_initial_loads();
         serve::run(listener, self.client(), on_connect).await
-    }
-}
-
-fn submit_initial_loads(scheduler: &Scheduler, channels: &[Arc<dyn MusicChannel>]) {
-    for ch in channels {
-        let source = ch.source();
-        scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }),
-            Priority::User,
-        );
-        // user-data 类是装饰,不阻塞用户 navigate,走 Background。
-        // channel 不支持(NotSupported)就静默失败一次,后续不重试。
-        scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::LikedSongIds { source }),
-            Priority::Background,
-        );
     }
 }

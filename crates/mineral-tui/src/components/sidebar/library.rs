@@ -85,6 +85,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
+/// 把一首歌组装成 library 表格的一行(loved 标记 / ♫ 当前歌 / 高亮搜索词)。
 fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) -> Row<'a> {
     let is_current = state.current.as_ref().is_some_and(|c| c.id == sv.data.id);
 
@@ -146,6 +147,7 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
     ])
 }
 
+/// 把时长 ms 格式化成 `m:ss`(library 行右侧使用)。
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     let m = secs / 60;
@@ -153,6 +155,7 @@ fn format_duration(ms: u64) -> String {
     format!("{m}:{s:02}")
 }
 
+/// 搜索 badge:`/q` 形式,空 query 不渲染。
 fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     if q.is_empty() {
         Span::raw("")
@@ -161,6 +164,7 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     }
 }
 
+/// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
 fn position_label(sel: usize, total: usize) -> String {
     if total == 0 {
         " 0 / 0 ".to_owned()

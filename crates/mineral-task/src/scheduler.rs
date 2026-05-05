@@ -18,12 +18,19 @@ use crate::ongoing::{Bind, Ongoing};
 /// 进程内任务调度器入口。`Clone` 廉价(`Arc<Inner>`)。
 #[derive(Clone)]
 pub struct Scheduler {
+    /// 共享内部状态(中央 ongoing / 事件 buffer / 各 lane)。
     inner: Arc<Inner>,
 }
 
+/// Scheduler 的真实状态,被 `Arc` 包起来共享。
 struct Inner {
+    /// 中央 ongoing 状态(任务表 + dedup 索引)。
     ongoing: Arc<Ongoing>,
+
+    /// 中央事件 buffer:lane worker 推、UI 主循环 [`Scheduler::drain_events`] 拉。
     events: Arc<Mutex<Vec<TaskEvent>>>,
+
+    /// ChannelFetch lane(per-channel worker 池)。
     channel_fetch: ChannelFetchLane,
 }
 
@@ -75,6 +82,7 @@ impl Scheduler {
         }
     }
 
+    /// 把新建任务路由到对应 lane(目前只有 ChannelFetch)。
     fn dispatch(
         &self,
         id: TaskId,

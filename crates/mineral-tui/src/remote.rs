@@ -13,8 +13,10 @@ use std::path::Path;
 
 use color_eyre::eyre::{WrapErr, eyre};
 use mineral_audio::AudioSnapshot;
-use mineral_model::MediaUrl;
-use mineral_protocol::{CancelFilter, Framed, Request, Response, framed, recv, send};
+use mineral_model::{MediaUrl, Song, SongId};
+use mineral_protocol::{
+    CancelFilter, Framed, PlayerSnapshot, Request, Response, framed, recv, send,
+};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use rustc_hash::FxHashMap;
@@ -23,12 +25,16 @@ use tokio::sync::mpsc;
 
 /// 一条等回复的请求。worker 收到后 framed.send → recv → reply_tx.send。
 struct Pending {
+    /// 待发送的请求。
     req: Request,
+
+    /// 同步 reply 通道发送端;worker 拿到 Response 后 send 一次。
     reply_tx: std::sync::mpsc::Sender<Response>,
 }
 
 /// TUI 端的远程 client。`Clone` 通过持 [`mpsc::UnboundedSender`] 廉价。
 pub struct RemoteClient {
+    /// 把 [`Pending`] 投递给后台 worker;worker drop 时 send 失败,sync 调用方拿到错误兜底。
     req_tx: mpsc::UnboundedSender<Pending>,
 }
 
@@ -59,6 +65,7 @@ impl RemoteClient {
     }
 }
 
+/// 后台 worker:串行收 [`Pending`],打 round-trip,把 Response 回写到 reply 通道。
 async fn worker(mut conn: Framed<UnixStream>, mut req_rx: mpsc::UnboundedReceiver<Pending>) {
     while let Some(p) = req_rx.recv().await {
         let resp = match round_trip(&mut conn, p.req).await {
@@ -72,6 +79,7 @@ async fn worker(mut conn: Framed<UnixStream>, mut req_rx: mpsc::UnboundedReceive
     }
 }
 
+/// 一次 send + recv;daemon 关连接时返回 `Err(...)`,由 worker 翻成 `Response::Error` 兜底。
 async fn round_trip(conn: &mut Framed<UnixStream>, req: Request) -> color_eyre::Result<Response> {
     send(conn, &req).await?;
     recv::<Response, _>(conn)
@@ -79,6 +87,7 @@ async fn round_trip(conn: &mut Framed<UnixStream>, req: Request) -> color_eyre::
         .ok_or_else(|| eyre!("daemon closed connection"))
 }
 
+/// 调用方收到非预期 Response 时的统一日志(协议层异常或对端 bug)。
 fn warn_unexpected(method: &'static str, resp: &Response) {
     mineral_log::warn!(target: "ipc", "{method}: unexpected response {resp:?}");
 }
@@ -142,6 +151,44 @@ impl Client for RemoteClient {
                     running: 0,
                     by_lane: FxHashMap::default(),
                 }
+            }
+        }
+    }
+
+    fn play_song(&self, song: Song) {
+        let _ = self.send_recv(Request::PlaySong(Box::new(song)));
+    }
+    fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
+        let _ = self.send_recv(Request::SetQueue { queue, target_id });
+    }
+    fn cycle_play_mode(&self) {
+        let _ = self.send_recv(Request::CyclePlayMode);
+    }
+    fn prev_or_restart(&self) {
+        let _ = self.send_recv(Request::PrevOrRestart);
+    }
+    fn next_song(&self) {
+        let _ = self.send_recv(Request::NextSong);
+    }
+    fn player_snapshot(&self) -> PlayerSnapshot {
+        match self.send_recv(Request::PlayerSnapshot) {
+            Response::PlayerSnapshot(s) => *s,
+            other => {
+                warn_unexpected("player_snapshot", &other);
+                PlayerSnapshot::default()
+            }
+        }
+    }
+
+    fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32) {
+        match self.send_recv(Request::PullPcm(n)) {
+            Response::PcmData {
+                samples,
+                sample_rate,
+            } => (samples, sample_rate),
+            other => {
+                warn_unexpected("pull_pcm", &other);
+                (Vec::new(), 0)
             }
         }
     }

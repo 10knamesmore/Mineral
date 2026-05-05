@@ -17,6 +17,8 @@
 //!   破坏调用方。
 
 mod client;
+mod pcm;
+mod player;
 mod serve;
 mod server;
 

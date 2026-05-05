@@ -26,6 +26,7 @@ impl std::fmt::Display for TaskId {
 pub(crate) struct IdAllocator(AtomicU64);
 
 impl IdAllocator {
+    /// 分配下一个 id(单调递增,Relaxed 足够)。
     pub(crate) fn next(&self) -> TaskId {
         TaskId(self.0.fetch_add(1, Ordering::Relaxed))
     }

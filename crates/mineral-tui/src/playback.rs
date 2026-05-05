@@ -2,52 +2,7 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{PlayUrl, Song};
-
-/// 播放循环模式。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlayMode {
-    /// 顺序播放(到底停止)。
-    #[default]
-    Sequential,
-    /// 随机播放(stage 4 仅 label,无实际洗牌)。
-    Shuffle,
-    /// 整列循环。
-    RepeatAll,
-    /// 单曲循环。
-    RepeatOne,
-}
-
-impl PlayMode {
-    /// `m` 键循环到下一档。
-    pub fn cycle(self) -> Self {
-        match self {
-            Self::Sequential => Self::Shuffle,
-            Self::Shuffle => Self::RepeatAll,
-            Self::RepeatAll => Self::RepeatOne,
-            Self::RepeatOne => Self::Sequential,
-        }
-    }
-
-    /// transport 模式按钮字形。
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Self::Sequential => "→",
-            Self::Shuffle => "⇄",
-            Self::RepeatAll => "↻∞",
-            Self::RepeatOne => "↻¹",
-        }
-    }
-
-    /// vol/mode/sort 行短标签。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sequential => "seq",
-            Self::Shuffle => "shuffle",
-            Self::RepeatAll => "repeat-all",
-            Self::RepeatOne => "repeat-one",
-        }
-    }
-}
+pub use mineral_protocol::PlayMode;
 
 /// 播放视图模型;真值在 audio engine,这里只缓存 UI 当帧需要的字段。
 #[derive(Clone, Debug)]

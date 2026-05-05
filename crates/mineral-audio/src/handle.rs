@@ -22,8 +22,13 @@ const TAP_CAPACITY: usize = 4096;
 
 /// 共享内部状态:命令通道 + snapshot + seek mailbox(latest-wins)。
 struct Inner {
+    /// 命令通道发送端,handle 把 [`AudioCommand`] 推给 engine 线程。
     cmd_tx: mpsc::Sender<AudioCommand>,
+
+    /// engine 周期性写入、UI tick 读取的最新播放状态。
     snapshot: Arc<Mutex<AudioSnapshot>>,
+
+    /// 最新待执行的 seek 目标位置;engine 每 tick `take()` 一次实际打 demuxer,长按 ←/→ 时只生效最后一次。
     seek_mailbox: Arc<Mutex<Option<Duration>>>,
 }
 
@@ -54,6 +59,7 @@ impl SpectrumTap {
 /// 音频引擎对外句柄。clone 廉价,跨线程安全。
 #[derive(Clone)]
 pub struct AudioHandle {
+    /// 共享内部状态(命令通道 / snapshot / seek mailbox)。
     inner: Arc<Inner>,
 }
 
@@ -152,6 +158,7 @@ impl AudioHandle {
         *self.inner.snapshot.lock()
     }
 
+    /// 内部统一的发送入口:engine 已退时静默忽略(UI 关闭路径合法)。
     fn send(&self, cmd: AudioCommand) {
         // engine 已退就忽略 —— UI 关闭路径上是合法的。
         let _ = self.inner.cmd_tx.send(cmd);

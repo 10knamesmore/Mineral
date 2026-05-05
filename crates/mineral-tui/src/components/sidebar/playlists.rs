@@ -72,6 +72,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
+/// 把一个歌单组装成 sidebar 表格行(名字 / 来源 channel / 总时长 / 曲目数)。
 fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a> {
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {
@@ -104,6 +105,7 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
     ])
 }
 
+/// 把 [`SourceKind`] 翻成「图标 + 名字」的短标签(playlists 列用)。
 fn channel_label(src: SourceKind) -> &'static str {
     match src {
         SourceKind::Netease => "♫ netease",
@@ -113,6 +115,7 @@ fn channel_label(src: SourceKind) -> &'static str {
     }
 }
 
+/// 把 [`SourceKind`] 映射到 channel 标签的染色。
 fn channel_style(src: SourceKind, theme: &Theme) -> Style {
     match src {
         SourceKind::Netease => Style::new().fg(theme.red),
@@ -122,6 +125,7 @@ fn channel_style(src: SourceKind, theme: &Theme) -> Style {
     }
 }
 
+/// 搜索 badge:`/q` 形式,空 query 不渲染。
 fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     if q.is_empty() {
         Span::raw("")
@@ -180,6 +184,7 @@ fn paint_empty_state(
     );
 }
 
+/// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
 fn position_label(sel: usize, total: usize) -> String {
     if total == 0 {
         " 0 / 0 ".to_owned()

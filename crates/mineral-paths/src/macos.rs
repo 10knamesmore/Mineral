@@ -4,11 +4,13 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::eyre;
 
+/// 解析 `$HOME`;未设(罕见)返回 `Err`。
 fn home_dir() -> color_eyre::Result<PathBuf> {
     let h = std::env::var_os("HOME").ok_or_else(|| eyre!("HOME 未设置，无法确定 mineral 目录"))?;
     Ok(PathBuf::from(h))
 }
 
+/// 通用 XDG 解析:`$<env>/mineral`,缺则 `$HOME/<fallback>/mineral`。
 fn xdg(env: &str, fallback: &str) -> color_eyre::Result<PathBuf> {
     if let Some(v) = std::env::var_os(env).filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(v).join("mineral"));
@@ -16,14 +18,17 @@ fn xdg(env: &str, fallback: &str) -> color_eyre::Result<PathBuf> {
     Ok(home_dir()?.join(fallback).join("mineral"))
 }
 
+/// `$XDG_CONFIG_HOME/mineral` 或 `~/.config/mineral`。
 pub(crate) fn config_dir() -> color_eyre::Result<PathBuf> {
     xdg("XDG_CONFIG_HOME", ".config")
 }
 
+/// `$XDG_DATA_HOME/mineral` 或 `~/.local/share/mineral`。
 pub(crate) fn data_dir() -> color_eyre::Result<PathBuf> {
     xdg("XDG_DATA_HOME", ".local/share")
 }
 
+/// `$XDG_CACHE_HOME/mineral` 或 `~/.cache/mineral`。
 pub(crate) fn cache_dir() -> color_eyre::Result<PathBuf> {
     xdg("XDG_CACHE_HOME", ".cache")
 }

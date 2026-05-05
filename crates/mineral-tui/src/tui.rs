@@ -20,6 +20,7 @@ use ratatui::backend::CrosstermBackend;
 
 /// 终端 backend 的 RAII 持有者。
 pub struct Tui {
+    /// ratatui 的终端 backend(crossterm),Drop 时自动还原。
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 

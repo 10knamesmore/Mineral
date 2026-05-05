@@ -41,6 +41,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     paint_vol_mode(frame, vms, pb, theme);
 }
 
+/// transport 顶行:居中显示当前曲名(无歌时 `—`)。
 fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -51,6 +52,7 @@ fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
+/// transport 第二行:`artist · album` 居中(灰斜体)。
 fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -73,6 +75,7 @@ fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
+/// 进度条:`elapsed ━━━●─── total`,宽度 < 12 或剩余空间不够时跳过。
 fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 || area.width < 12 {
         return;
@@ -106,6 +109,7 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// 控件区:`[⏮] [▶/⏸] [⏭] [mode]` 按钮 + 下方对应键位 label,等宽对齐避免抖动。
 fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height < 2 {
         return;
@@ -153,6 +157,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     );
 }
 
+/// 右下角:固定宽 10 的音量条 + 当前码率/格式标签。
 fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;

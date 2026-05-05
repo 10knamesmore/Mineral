@@ -159,3 +159,6 @@ use_self            = "deny"
 
 # --- 体量约束（CLAUDE.md 体量约束节，函数级；阈值见 clippy.toml）---
 too_many_lines      = "deny"
+
+# --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
+missing_docs_in_private_items = "deny"

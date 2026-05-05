@@ -11,8 +11,7 @@ use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::lrc;
-use crate::yrc::{self, YrcLine};
+use crate::yrc::YrcLine;
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -221,7 +220,9 @@ impl AppState {
             .collect();
     }
 
-    /// 把任务事件应用到状态(只更新 UI 数据,fan-out 副作用由 [`crate::app::App`] 负责)。
+    /// 把任务事件应用到状态。**4c 后**:server 端 PlayerCore 已 filter 掉
+    /// `PlayUrlReady` / `LyricsReady`(自己消化进 PlayerSnapshot),client 这里
+    /// 只剩 playlists / tracks / liked_ids 三类。
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::PlaylistsFetched { playlists, .. } => {
@@ -243,24 +244,8 @@ impl AppState {
                 self.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
             }
-            // 由 App 直接 forward 给 audio,state 不存 url。
-            TaskEvent::PlayUrlReady { .. } => {}
-            TaskEvent::LyricsReady { song_id, lyrics } => {
-                // 翻译 / 罗马音的 UI 切换留 backlog。空 LRC 也存空 vec,让渲染层走「无歌词」
-                // 分支(避免反复重试)。yrc 仅在网易返回非空时插入,渲染时优先 yrc 兜底 lrc。
-                let parsed_lrc = lyrics
-                    .lrc
-                    .as_deref()
-                    .map(lrc::parse_lrc)
-                    .unwrap_or_default();
-                self.lyrics_cache.insert(song_id.clone(), parsed_lrc);
-                if let Some(raw_yrc) = lyrics.yrc.as_deref() {
-                    let parsed_yrc = yrc::parse_yrc(raw_yrc);
-                    if !parsed_yrc.is_empty() {
-                        self.yrc_cache.insert(song_id.clone(), parsed_yrc);
-                    }
-                }
-            }
+            // server 已 filter,理论不会到 client。defensive:跳过。
+            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
         }
     }
 

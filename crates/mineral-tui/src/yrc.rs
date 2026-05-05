@@ -102,6 +102,7 @@ fn parse_json_line(line: &str) -> Option<YrcLine> {
     })
 }
 
+/// 解析单行 `[start,dur]文本(s,d)文本(s,d)...` 形式的 LRC-style YRC 行;格式不符返回 None。
 fn parse_lrc_style_line(line: &str) -> Option<YrcLine> {
     let rest = line.strip_prefix('[')?;
     let close = rest.find(']')?;

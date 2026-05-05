@@ -24,6 +24,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     server.serve(listener).await
 }
 
+/// 解析 daemon 监听用的 unix socket 路径,顺手把 `runtime_dir()` 创建出来。
 fn socket_path() -> color_eyre::Result<std::path::PathBuf> {
     let dir = mineral_paths::runtime_dir().wrap_err("resolve runtime_dir")?;
     std::fs::create_dir_all(&dir).wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;

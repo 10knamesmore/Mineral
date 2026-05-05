@@ -17,6 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     paint(frame, &areas, app);
 }
 
+/// 把 layout 计算出的各 area 分发给对应组件渲染。
 fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     let theme = &app.theme;
     top_status::draw(frame, areas.top_status, &app.state, theme);

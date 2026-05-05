@@ -68,11 +68,17 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 /// 渲染时传入的 yrc 上下文(打包以减少 paint_window 参数数)。
 #[derive(Clone, Copy)]
 struct YrcCursor<'a> {
+    /// 字级歌词行;`None` 表示没解析到 yrc(走 lrc 整行高亮)。
     lines: Option<&'a Vec<YrcLine>>,
+
+    /// 当前行 index(在 `lines` 中)。
     cur: Option<usize>,
+
+    /// 当前播放位置(ms),用于 wipe 进度计算。
     position_ms: u64,
 }
 
+/// 没歌词时居中渲染一行 `♪ no lyrics`(灰色 + 斜体)。
 fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
     let centered_y = inner.y + inner.height / 2;
     let text_area = Rect::new(inner.x, centered_y, inner.width, 1);

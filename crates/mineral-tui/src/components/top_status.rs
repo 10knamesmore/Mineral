@@ -17,6 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     paint_right(frame, right, state, theme);
 }
 
+/// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs,以及 queue 打开时的 `[3 queue]`。
 fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let active_pl = state.view == View::Playlists;
     let active_lib = state.view == View::Library;
@@ -37,6 +38,7 @@ fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// 选中态 tab → text 加粗,未选中态 → overlay 灰。
 fn tab_style(active: bool, theme: &Theme) -> Style {
     if active {
         Style::new().fg(theme.text).add_modifier(Modifier::BOLD)
@@ -45,6 +47,7 @@ fn tab_style(active: bool, theme: &Theme) -> Style {
     }
 }
 
+/// 右侧:可选 `↓N` 后台任务计数 + 播放/暂停状态 glyph + label。
 fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let pb = &state.playback;
     let (glyph, color, label) = if pb.playing {

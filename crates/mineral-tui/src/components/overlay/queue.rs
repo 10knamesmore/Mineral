@@ -82,6 +82,7 @@ pub fn draw(
     frame.render_stateful_widget(table, panel, &mut state);
 }
 
+/// 把一首歌组成 queue 表格的一行;当前播放歌行号位置显示 `▶`,否则显示 idx。
 fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &Theme) -> Row<'a> {
     let is_current = current_id.is_some_and(|cid| cid == &s.id);
     let num = if is_current {
@@ -99,6 +100,7 @@ fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &T
     Row::new(vec![num, Cell::from(track_str), Cell::from(len)])
 }
 
+/// 拼 ` n / total ` 的 footer 标签;空 queue 显示 `0 / 0`。
 fn position_label(sel: usize, total: usize) -> String {
     if total == 0 {
         " 0 / 0 ".to_owned()
@@ -107,6 +109,7 @@ fn position_label(sel: usize, total: usize) -> String {
     }
 }
 
+/// 在弹窗右下方画一层 (+2, +1) 偏移的暗色矩形,模拟"投影"立体感;clamp 在 area 内。
 fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     let off_x = panel.x.saturating_add(2);
     let off_y = panel.y.saturating_add(1);

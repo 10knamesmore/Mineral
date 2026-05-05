@@ -76,6 +76,7 @@ pub(crate) fn run(
     }
 }
 
+/// 引擎主循环:初始化 sink/runtime,失败时通过 `ready_tx` 上报,然后循环 recv 命令 + drain seek + 刷 snapshot。
 fn engine_main(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
     snapshot: &Arc<Mutex<AudioSnapshot>>,
@@ -269,6 +270,7 @@ where
     builder.build().map_err(|e| eyre!("decode: {e}"))
 }
 
+/// 把 player 当前播放状态拍进共享 snapshot,顺带在 armed 状态下检测「sink 变空 → 曲终」。
 fn update_snapshot(
     snapshot: &Arc<Mutex<AudioSnapshot>>,
     player: &rodio::Player,
@@ -295,6 +297,7 @@ fn update_snapshot(
     // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
 }
 
+/// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
 fn duration_to_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }

@@ -84,6 +84,7 @@ pub fn draw(
     frame.render_widget(Paragraph::new(help), footer);
 }
 
+/// 把 [`SourceKind`] 翻成「图标 + 名字」的短标签。
 fn source_label(s: SourceKind) -> &'static str {
     match s {
         SourceKind::Netease => "♫ netease",
@@ -93,6 +94,7 @@ fn source_label(s: SourceKind) -> &'static str {
     }
 }
 
+/// 把 [`SourceKind`] 映射到主题色,用于 source_label 染色。
 fn source_color(s: SourceKind, theme: &Theme) -> Color {
     match s {
         SourceKind::Netease => theme.red,

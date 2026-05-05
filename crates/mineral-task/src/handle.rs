@@ -27,7 +27,10 @@ pub struct TaskHandle {
     /// 任务 id。
     pub id: TaskId,
 
+    /// 协作式取消令牌,worker 在下一个 await 点感知。
     pub(crate) cancel: CancellationToken,
+
+    /// 终态 future,多个 waiter 可同时 await 拿到同一份 [`TaskOutcome`]。
     pub(crate) done: SharedDone,
 }
 

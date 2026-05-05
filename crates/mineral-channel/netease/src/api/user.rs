@@ -8,6 +8,7 @@ use mineral_model::{SongId, UserId};
 use rustc_hash::FxHashSet;
 use serde_json::json;
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::transport::client::{RequestSpec, Transport};

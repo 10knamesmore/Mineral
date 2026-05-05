@@ -10,7 +10,7 @@ use color_eyre::eyre::WrapErr;
 use mineral_protocol::{Request, Response, framed, recv, send};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::client::ClientHandle;
+use crate::client::{Client, ClientHandle};
 
 /// Accept loop。返回 `Ok(())` 仅在 listener 被外部关闭时;否则一直循环。
 ///
@@ -50,6 +50,8 @@ where
     }
 }
 
+/// 已有 client 在用,新连进来的 client 收一条 [`Response::Error`] 后被关掉。
+/// 失败也无所谓 —— 对方 socket 自己会 EOF。
 async fn reject_busy(stream: UnixStream) {
     let mut framed = framed(stream);
     let _ = send(
@@ -59,6 +61,8 @@ async fn reject_busy(stream: UnixStream) {
     .await;
 }
 
+/// 接管已 accept 的 connection,跑 req-resp 循环直到 client EOF 或写失败。
+/// 协议是严格 1:1 顺序的(每条 [`Request`] 必有一条 [`Response`])。
 async fn handle_connection(stream: UnixStream, client: &ClientHandle) -> color_eyre::Result<()> {
     let mut framed = framed(stream);
     while let Some(req) = recv::<Request, _>(&mut framed).await? {
@@ -68,6 +72,9 @@ async fn handle_connection(stream: UnixStream, client: &ClientHandle) -> color_e
     Ok(())
 }
 
+/// [`Request`] 到 [`Response`] 的纯函数 dispatch:每条 variant 对应一个 [`Client`]
+/// trait 方法调用,组装成预期的 Response variant。所有错误兜底走 trait 实现层
+/// (出错时返回值类用「合理默认值」),这里不应该再产生 [`Response::Error`]。
 fn dispatch(req: Request, client: &ClientHandle) -> Response {
     match req {
         Request::Play(url) => {
@@ -102,5 +109,33 @@ fn dispatch(req: Request, client: &ClientHandle) -> Response {
         }
         Request::DrainTaskEvents => Response::TaskEvents(client.drain_task_events()),
         Request::TaskSnapshot => Response::TaskSnapshot(client.task_snapshot()),
+        Request::PlaySong(song) => {
+            client.play_song(*song);
+            Response::Ok
+        }
+        Request::SetQueue { queue, target_id } => {
+            client.set_queue(queue, target_id);
+            Response::Ok
+        }
+        Request::CyclePlayMode => {
+            client.cycle_play_mode();
+            Response::Ok
+        }
+        Request::PrevOrRestart => {
+            client.prev_or_restart();
+            Response::Ok
+        }
+        Request::NextSong => {
+            client.next_song();
+            Response::Ok
+        }
+        Request::PlayerSnapshot => Response::PlayerSnapshot(Box::new(client.player_snapshot())),
+        Request::PullPcm(n) => {
+            let (samples, sample_rate) = client.pull_pcm(n);
+            Response::PcmData {
+                samples,
+                sample_rate,
+            }
+        }
     }
 }

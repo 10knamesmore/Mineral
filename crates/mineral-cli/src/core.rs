@@ -7,31 +7,34 @@ use tokio::runtime::Runtime;
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::status;
 
-/// `mineral` 二进制的顶层参数。
+/// 多源终端音乐播放器。无子命令时进入 TUI。
 #[derive(Debug, Parser)]
-#[command(name = "mineral")]
+#[command(
+    name = "mineral",
+    version,
+    about = "Mineral — 多源终端音乐播放器",
+    long_about = None,
+)]
 pub struct Args {
-    /// 可选的 CLI 命令；省略时由调用方启动 TUI。
+    /// 子命令;省略则进入 TUI。
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// 启动 TUI 时连接已有 daemon (`mineral serve`),而不是 in-proc 起 server。
-    /// 关 TUI 不会停 daemon。仅在无子命令时生效。
+    /// 连接到已经在跑的后台 daemon(由 `mineral serve` 起);关闭 TUI 时不停 daemon,音乐继续播。
     #[arg(long)]
     pub connect: bool,
 }
 
-/// 顶层命令分组（按 namespace 拆分）。
+/// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// channel 维度的命令，按 channel 名再次分发。
+    /// 管理音乐源(登录、调试)。
     Channel(ChannelArgs),
 
-    /// 起后台 daemon(单 client 限制),bind unix socket 接受 client 连接。
-    /// 实现需要 channels,由 main.rs 拦截后调 [`crate::serve_run`]。
+    /// 启动后台播放 daemon。退出 TUI 后音乐继续播,再开 TUI 用 `--connect` 接回。
     Serve,
 
-    /// 连 daemon 拉一次 audio 状态打印出来,用于验证 IPC 链路是否通。
+    /// 显示当前播放状态(连 daemon)。
     Status,
 }
 
@@ -49,6 +52,7 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Channel(args) => channel::run(args).await,

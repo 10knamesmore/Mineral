@@ -34,6 +34,7 @@ const DB_CEIL: f32 = 0.0;
 ///
 /// 大数组放进 `Box`:struct 本体只占指针,move / clone 不搬 16+KB 数据。
 pub struct SpectrumComputer {
+    /// realfft 计划。Arc 是因为 RealToComplex 是 trait object,SpectrumComputer 自身需要 Send/Sync。
     fft: Arc<dyn RealToComplex<f32>>,
 
     /// PCM 环形缓冲。`write_idx` 处是下一个写入位置,也是当前窗的「最旧样本」位置。

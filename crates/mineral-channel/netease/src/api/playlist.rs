@@ -6,6 +6,7 @@ use mineral_model::{
 };
 use serde_json::json;
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;

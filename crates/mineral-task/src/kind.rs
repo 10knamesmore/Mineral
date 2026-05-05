@@ -73,6 +73,7 @@ pub enum ChannelFetchKind {
 }
 
 impl ChannelFetchKind {
+    /// 产出 dedup key 的可变部分(channel + 子操作 + 关键参数)。
     fn dedup_part(&self) -> String {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),

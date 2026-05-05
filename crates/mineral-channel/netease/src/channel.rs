@@ -18,6 +18,7 @@ use crate::config::NeteaseConfig;
 use crate::transport::Transport;
 
 pub struct NeteaseChannel {
+    /// 网易云请求的 HTTP 通道(带 cookie jar、加密、UA 处理)。
     transport: Transport,
 
     /// 当前实例绑定的登录用户 uid;`None` 时 `my_playlists` 返回 `NotSupported`。
@@ -25,6 +26,7 @@ pub struct NeteaseChannel {
 }
 
 impl NeteaseChannel {
+    /// 构造一个未登录的 channel(只能跑公开端点)。需要登录态请走 [`Self::with_cookie`] / [`Self::with_credential`]。
     pub fn new(config: &NeteaseConfig) -> color_eyre::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
@@ -56,6 +58,7 @@ impl NeteaseChannel {
         Self::build(config, music_u, Some(user_id))
     }
 
+    /// `with_cookie` / `with_credential` 的共享实现:把 `MUSIC_U` 塞进 jar,再套一层 [`Transport`]。
     fn build(
         config: &NeteaseConfig,
         music_u: &str,
@@ -85,6 +88,7 @@ impl NeteaseChannel {
     }
 }
 
+/// 把 api 层的 `color_eyre::Report` 收敛到 channel-core 的 [`Error::Other`]。
 fn map_err(e: color_eyre::Report) -> Error {
     Error::Other(e)
 }

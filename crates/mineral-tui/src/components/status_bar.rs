@@ -25,6 +25,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     }
 }
 
+/// 搜索激活态:左侧画 `/q█`(光标方块),右侧给 `↵ run · esc cancel` 提示。
 fn paint_active(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     frame.render_widget(Block::new().style(Style::new().bg(theme.surface0)), area);
 
@@ -51,6 +52,7 @@ fn paint_active(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &The
     );
 }
 
+/// 平时状态栏:渲染常用快捷键提示行。
 fn paint_inactive(frame: &mut Frame<'_>, area: Rect, _state: &AppState, theme: &Theme) {
     let keys = Line::from(KEYS_HINT).style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(keys), area);

@@ -12,7 +12,9 @@
 mod cancel;
 mod codec;
 mod message;
+mod player;
 
 pub use cancel::{CancelFilter, ChannelFetchKindTag};
 pub use codec::{Framed, framed, recv, send};
 pub use message::{Request, Response};
+pub use player::{PlayMode, PlayerSnapshot};
