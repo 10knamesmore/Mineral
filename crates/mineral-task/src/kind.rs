@@ -102,6 +102,38 @@ impl ChannelFetchKind {
     }
 }
 
+/// [`ChannelFetchKind`] 的 wire-friendly 标签:无字段 enum,可哈希、可序列化。
+///
+/// 用于:跨进程「按种类砍一批」(见 `mineral_protocol::CancelFilter`)、按 kind 计数
+/// (见 [`crate::Snapshot::by_kind`])。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChannelFetchKindTag {
+    /// 对应 [`ChannelFetchKind::MyPlaylists`]。
+    MyPlaylists,
+    /// 对应 [`ChannelFetchKind::LikedSongIds`]。
+    LikedSongIds,
+    /// 对应 [`ChannelFetchKind::PlaylistTracks`]。
+    PlaylistTracks,
+    /// 对应 [`ChannelFetchKind::SongUrl`]。
+    SongUrl,
+    /// 对应 [`ChannelFetchKind::Lyrics`]。
+    Lyrics,
+}
+
+impl ChannelFetchKindTag {
+    /// 取一个具体 [`ChannelFetchKind`] 的标签。
+    #[must_use]
+    pub fn of(kind: &ChannelFetchKind) -> Self {
+        match kind {
+            ChannelFetchKind::MyPlaylists { .. } => Self::MyPlaylists,
+            ChannelFetchKind::LikedSongIds { .. } => Self::LikedSongIds,
+            ChannelFetchKind::PlaylistTracks { .. } => Self::PlaylistTracks,
+            ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
+            ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
+        }
+    }
+}
+
 /// 任务去重键(`Eq + Hash` 安全)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DedupKey(String);

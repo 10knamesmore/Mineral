@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
 use crate::id::{Priority, TaskId};
+use crate::kind::ChannelFetchKindTag;
 use crate::kind::TaskKind;
 use crate::lane::Lane;
 use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
@@ -34,7 +35,7 @@ struct Inner {
     channel_fetch: ChannelFetchLane,
 }
 
-/// `Scheduler::snapshot` 的返回:当前 running 数与按 lane 的拆分。
+/// `Scheduler::snapshot` 的返回:当前 running 数与按 lane / kind 的拆分。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// 全部 lane 的 running 任务总数。
@@ -42,6 +43,10 @@ pub struct Snapshot {
 
     /// 每个 lane 的 running 任务计数(无任务的 lane 不出现)。
     pub by_lane: FxHashMap<Lane, usize>,
+
+    /// `ChannelFetch` 任务按 [`ChannelFetchKindTag`] 细分(其它种类不在此 map)。
+    /// UI 用它做「`pl:1 tr:2 song:1 lyr:0 ♥:0`」级别的拆分显示。
+    pub by_kind: FxHashMap<ChannelFetchKindTag, usize>,
 }
 
 impl Scheduler {
@@ -132,6 +137,7 @@ impl Scheduler {
         Snapshot {
             running: counts.running,
             by_lane: counts.by_lane,
+            by_kind: counts.by_kind,
         }
     }
 }

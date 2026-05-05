@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::handle::{SharedDone, TaskHandle, shared_done};
 use crate::id::{IdAllocator, Priority, TaskId};
-use crate::kind::{DedupKey, TaskKind};
+use crate::kind::{ChannelFetchKindTag, DedupKey, TaskKind};
 use crate::lane::Lane;
 use crate::outcome::TaskOutcome;
 use tokio::sync::oneshot;
@@ -159,12 +159,18 @@ impl Ongoing {
     pub fn snapshot(&self) -> SnapshotCounts {
         let inner = self.inner.lock();
         let mut by_lane = FxHashMap::<Lane, usize>::default();
+        let mut by_kind = FxHashMap::<ChannelFetchKindTag, usize>::default();
         for meta in inner.tasks.values() {
             *by_lane.entry(meta.kind.lane()).or_insert(0) += 1;
+            // TaskKind 当前只有 ChannelFetch 一个 variant;新增其它种类时这里
+            // 自然要补 match 分支。`let` 解构是 irrefutable 的。
+            let TaskKind::ChannelFetch(k) = &meta.kind;
+            *by_kind.entry(ChannelFetchKindTag::of(k)).or_insert(0) += 1;
         }
         SnapshotCounts {
             running: inner.tasks.len(),
             by_lane,
+            by_kind,
         }
     }
 }
@@ -176,4 +182,7 @@ pub(crate) struct SnapshotCounts {
 
     /// 按 [`Lane`] 分桶的计数。
     pub by_lane: FxHashMap<Lane, usize>,
+
+    /// ChannelFetch 任务按 [`ChannelFetchKindTag`] 细分(其它 kind 不在此 map)。
+    pub by_kind: FxHashMap<ChannelFetchKindTag, usize>,
 }

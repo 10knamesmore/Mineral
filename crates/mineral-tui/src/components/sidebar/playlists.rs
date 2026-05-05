@@ -147,7 +147,7 @@ fn paint_empty_state(
     if inner.height == 0 || inner.width == 0 {
         return;
     }
-    let lines: Vec<Line<'_>> = if state.tasks_running > 0 {
+    let lines: Vec<Line<'_>> = if state.tasks_snapshot.running > 0 {
         vec![
             Line::from(""),
             Line::from(Span::styled(

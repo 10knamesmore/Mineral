@@ -6,13 +6,15 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use mineral_task::ChannelFetchKindTag;
+
 use crate::state::{AppState, View};
 use crate::theme::Theme;
 
 /// 渲染状态行到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let [left, right] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(40)]).areas(area);
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(60)]).areas(area);
     paint_left(frame, left, state, theme);
     paint_right(frame, right, state, theme);
 }
@@ -47,7 +49,10 @@ fn tab_style(active: bool, theme: &Theme) -> Style {
     }
 }
 
-/// 右侧:可选 `↓N` 后台任务计数 + 播放/暂停状态 glyph + label。
+/// 右侧:server tasks 按 [`ChannelFetchKindTag`] 拆分 + cover 计数 + 播放状态。
+///
+/// 显示样:`pl:1 tr:2 song:1 lyr:1 ♥:1 cover:7  ● playing`。各段 N>0 才显示。
+/// 全 0 时只剩 glyph,不会假装"什么都没在跑"——封面在跑就显示 cover:N。
 fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let pb = &state.playback;
     let (glyph, color, label) = if pb.playing {
@@ -56,10 +61,26 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         ("‖", theme.yellow, "paused")
     };
     let mut spans = Vec::<Span<'_>>::new();
-    // 后台 task 计数:有任务在跑就显示「↓N」,跑完自动消失。
-    if state.tasks_running > 0 {
+    let by = &state.tasks_snapshot.by_kind;
+    // 固定顺序渲染,避免 hashmap 迭代顺序抖动。
+    for (tag, label) in [
+        (ChannelFetchKindTag::MyPlaylists, "pl"),
+        (ChannelFetchKindTag::PlaylistTracks, "tr"),
+        (ChannelFetchKindTag::SongUrl, "song"),
+        (ChannelFetchKindTag::Lyrics, "lyr"),
+        (ChannelFetchKindTag::LikedSongIds, "♥"),
+    ] {
+        let n = by.get(&tag).copied().unwrap_or(0);
+        if n > 0 {
+            spans.push(Span::styled(
+                format!("{label}:{n} "),
+                Style::new().fg(theme.peach),
+            ));
+        }
+    }
+    if state.cover_loading > 0 {
         spans.push(Span::styled(
-            format!("↓{} ", state.tasks_running),
+            format!("cover:{} ", state.cover_loading),
             Style::new().fg(theme.peach),
         ));
     }

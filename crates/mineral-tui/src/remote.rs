@@ -150,6 +150,7 @@ impl Client for RemoteClient {
                 Snapshot {
                     running: 0,
                     by_lane: FxHashMap::default(),
+                    by_kind: FxHashMap::default(),
                 }
             }
         }

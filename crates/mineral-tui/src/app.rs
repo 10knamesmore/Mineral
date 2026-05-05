@@ -104,7 +104,8 @@ impl App {
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
                 crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
-                self.state.tasks_running = self.client.task_snapshot().running;
+                self.state.tasks_snapshot = self.client.task_snapshot();
+                self.state.cover_loading = self.state.cover_pending.len();
                 self.last_tick = Instant::now();
             }
         }

@@ -14,7 +14,8 @@ mod codec;
 mod message;
 mod player;
 
-pub use cancel::{CancelFilter, ChannelFetchKindTag};
+pub use cancel::CancelFilter;
 pub use codec::{Framed, framed, recv, send};
 pub use message::{Request, Response};
+pub use mineral_task::ChannelFetchKindTag;
 pub use player::{PlayMode, PlayerSnapshot};

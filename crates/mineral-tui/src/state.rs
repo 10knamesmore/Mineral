@@ -126,9 +126,16 @@ pub struct AppState {
     /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
     pub cover_protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
 
-    /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
-    /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
-    pub tasks_running: usize,
+    /// 后台 server scheduler 当前快照(每 tick 由 App 从 `Client::task_snapshot`
+    /// 灌入)。**只含**:server 端 ChannelFetch lane(playlists / tracks /
+    /// song-url / lyrics / liked)。封面是 client-local 的 [`CoverFetcher`],
+    /// 不在这里——见 [`Self::cover_loading`]。
+    /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
+    pub tasks_snapshot: mineral_task::Snapshot,
+
+    /// 当前 client-side cover_fetcher in-flight 数(等价 `cover_pending.len()`,
+    /// 每 tick 由 App 灌入)。
+    pub cover_loading: usize,
 
     /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
@@ -172,7 +179,12 @@ impl AppState {
             cover_cache: FxHashMap::default(),
             cover_pending: FxHashSet::default(),
             cover_protocols: RefCell::new(FxHashMap::default()),
-            tasks_running: 0,
+            tasks_snapshot: mineral_task::Snapshot {
+                running: 0,
+                by_lane: FxHashMap::default(),
+                by_kind: FxHashMap::default(),
+            },
+            cover_loading: 0,
             liked_ids: FxHashMap::default(),
             last_sel_change: Instant::now(),
         }
