@@ -11,8 +11,13 @@ use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
 use mineral_server::Server;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 
 /// daemon 入口。需要 caller 已 `tokio::Runtime::block_on` 或在 async ctx 中调。
+///
+/// accept loop 与关闭信号(SIGINT / SIGTERM)竞争:收到信号时主动停掉 server
+/// (走 [`Server::shutdown`] 的 Drop 链)并 unlink socket 文件,避免残留 stale
+/// socket 留给下次启动清理。
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
     let socket_path = socket_path()?;
     prepare_socket(&socket_path).await?;
@@ -21,7 +26,39 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     println!("mineral daemon listening on {}", socket_path.display());
 
     let server = Server::spawn(channels)?;
-    server.serve(listener).await
+    let outcome = tokio::select! {
+        result = server.serve(listener) => result,
+        result = shutdown_signal() => result.map(|()| {
+            mineral_log::info!(target: "ipc", "shutdown signal received, stopping daemon");
+        }),
+    };
+
+    // graceful 收尾:停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
+    server.shutdown();
+    if let Err(e) = std::fs::remove_file(&socket_path) {
+        mineral_log::warn!(
+            target: "ipc",
+            "remove socket {} on shutdown: {e}",
+            socket_path.display()
+        );
+    }
+    outcome
+}
+
+/// 等待第一个到达的关闭信号(SIGINT 或 SIGTERM)。
+///
+/// # Return:
+///   信号 handler 安装成功且收到信号 → `Ok(())`;安装失败 → `Err`。
+async fn shutdown_signal() -> color_eyre::Result<()> {
+    let mut term =
+        signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
+    let mut interrupt =
+        signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = interrupt.recv() => {}
+    }
+    Ok(())
 }
 
 /// 解析 daemon 监听用的 unix socket 路径,顺手把 `runtime_dir()` 创建出来。

@@ -2077,6 +2077,7 @@ dependencies = [
  "mineral-audio",
  "mineral-channel-core",
  "mineral-channel-netease",
+ "mineral-log",
  "mineral-paths",
  "mineral-protocol",
  "mineral-server",
