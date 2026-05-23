@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use mineral_audio::AudioSnapshot;
 use mineral_media::{MediaCommand, MediaConfig, MediaService, NowPlaying, PlaybackState};
-use mineral_model::{MediaUrl, Song, SongId};
+use mineral_model::{Lyrics, MediaUrl, Song, SongId};
 use mineral_protocol::PlayerSnapshot;
 
 use crate::player::PlayerCore;
@@ -73,36 +73,65 @@ fn dur_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// 歌词四路(逐字 / 行级原文 / 翻译 / 罗马音)的「是否非空」指纹。
+///
+/// 各路异步陆续到达,任一路从无到有都要重发 metadata,否则晚到的那路显示端收不到
+/// (切歌后 quickshell 只有 ~10s 轮询窗口)。用它和换歌一起判定是否重报。
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct LyricsPresence {
+    /// 逐字原文(`mineral:words`)是否非空。
+    words: bool,
+
+    /// 行级原文(`xesam:asText`)是否非空。
+    lrc: bool,
+
+    /// 行级翻译(`mineral:translation`)是否非空。
+    translation: bool,
+
+    /// 行级罗马音(`mineral:romanization`)是否非空。
+    romanization: bool,
+}
+
+impl LyricsPresence {
+    /// 从当前歌词快照算出四路存在性。`None`(还没拉到歌词)= 全空。
+    fn of(lyrics: Option<&Lyrics>) -> Self {
+        match lyrics {
+            None => Self::default(),
+            Some(l) => Self {
+                words: !l.words.is_empty(),
+                lrc: !l.lrc.is_empty(),
+                translation: !l.translation.is_empty(),
+                romanization: !l.romanization.is_empty(),
+            },
+        }
+    }
+}
+
 /// 周期把 metadata + playback 上报给系统媒体控件。
 ///
-/// metadata 仅在当前歌变化时重报;playback(状态 + 进度)每 tick 上报。
+/// metadata 在换歌、或任一路歌词从无到有时重报;playback(状态 + 进度)每 tick 上报。
 async fn report_loop(player: PlayerCore, service: MediaService) {
     let mut tick = tokio::time::interval(Duration::from_millis(REPORT_INTERVAL_MS));
     let mut last_song_id = Option::<SongId>::None;
-    let mut last_has_lyrics = false;
+    let mut last_presence = LyricsPresence::default();
     loop {
         tick.tick().await;
         let snap = player.snapshot();
         let audio = player.audio().snapshot();
 
-        // 歌词是异步拉取的,常比 current_song 晚到:song 没变但歌词从无到有时,
-        // 也要重发 metadata 把 xesam:asText 补上(显示端切歌后有 ~10s 轮询窗口)。
+        // 歌词在 channel 层已结构化清洗,这里只在确实要重发 metadata 时才序列化:
+        // 行级走标准 LRC,逐字走 quickshell 约定的 JSON(见 build_now_playing)。
         let cur_id = snap.current_song.as_ref().map(|s| s.id.clone());
-        let cur_lyrics = snap
-            .current_lyrics
-            .as_ref()
-            .and_then(|l| l.lrc.as_deref())
-            .map(clean_lrc);
-        let has_lyrics = cur_lyrics.is_some();
-        if cur_id != last_song_id || has_lyrics != last_has_lyrics {
+        let presence = LyricsPresence::of(snap.current_lyrics.as_ref());
+        if cur_id != last_song_id || presence != last_presence {
             if let Some(song) = &snap.current_song {
-                let now_playing = build_now_playing(song, cur_lyrics);
+                let now_playing = build_now_playing(song, snap.current_lyrics.as_ref());
                 if let Err(e) = service.set_now_playing(&now_playing) {
                     mineral_log::warn!(target: "media", "set_now_playing failed: {e}");
                 }
             }
             last_song_id = cur_id;
-            last_has_lyrics = has_lyrics;
+            last_presence = presence;
         }
 
         let (state, position) = playback_of(&snap, &audio);
@@ -125,8 +154,11 @@ fn playback_of(snap: &PlayerSnapshot, audio: &AudioSnapshot) -> (PlaybackState, 
     (state, Some(Duration::from_millis(audio.position_ms)))
 }
 
-/// [`Song`] + LRC 歌词 → 上报用的 [`NowPlaying`]。
-fn build_now_playing(song: &Song, lyrics: Option<String>) -> NowPlaying {
+/// [`Song`] + 结构化歌词 → 上报用的 [`NowPlaying`]。
+///
+/// 歌词原样以结构化形式塞进 [`NowPlaying`],序列化(LRC / JSON)推迟到 MPRIS 适配层
+/// (mineral-media)写 metadata 的最边界做。无歌词时各路为空。
+fn build_now_playing(song: &Song, lyrics: Option<&Lyrics>) -> NowPlaying {
     let artist = if song.artists.is_empty() {
         None
     } else {
@@ -137,25 +169,21 @@ fn build_now_playing(song: &Song, lyrics: Option<String>) -> NowPlaying {
             .collect::<Vec<_>>();
         Some(names.join(" / "))
     };
-    NowPlaying::builder()
+    let builder = NowPlaying::builder()
         .title(Some(song.name.clone()))
         .artist(artist)
         .album(song.album.as_ref().map(|a| a.name.clone()))
         .cover_url(song.cover_url.as_ref().map(cover_to_url))
-        .duration(Some(Duration::from_millis(song.duration_ms)))
-        .lyrics(lyrics)
-        .build()
-}
-
-/// 清洗网易原始 lrc:丢弃混入的 YRC 逐字 JSON 行(`{...}`),只留标准 LRC 文本。
-///
-/// 网易部分歌曲的 `lrc.lyric` 会把作词/作曲等元信息用 YRC JSON 行塞在开头,
-/// 显示端按 `[mm:ss.xx]` 解析时这些行是噪音,这里直接滤掉。
-fn clean_lrc(raw: &str) -> String {
-    raw.lines()
-        .filter(|line| !line.trim_start().starts_with('{'))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .duration(Some(Duration::from_millis(song.duration_ms)));
+    match lyrics {
+        None => builder.build(),
+        Some(l) => builder
+            .lrc(l.lrc.clone())
+            .words(l.words.clone())
+            .translation(l.translation.clone())
+            .romanization(l.romanization.clone())
+            .build(),
+    }
 }
 
 /// 封面 [`MediaUrl`] → MPRIS `artUrl` 字符串(本地路径补 `file://` 前缀)。

@@ -17,12 +17,10 @@ use mineral_task::TaskEvent;
 use ratatui_image::picker::Picker;
 
 use crate::cover::CoverFetcher;
-use crate::lrc;
 use crate::state::{AppState, Focus, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
 use crate::view::draw;
-use crate::yrc;
 
 /// 音量步长(百分点);`+`/`-` 一次。
 const VOLUME_STEP: i16 = 5;
@@ -122,22 +120,15 @@ impl App {
         self.state.queue = snap.queue;
         self.state.queue_sel = snap.queue_sel;
         self.state.original_queue = snap.original_queue;
-        // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。
+        // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
+        // 层已结构化清洗,这里直接收下结构化数据,不再解析。
         if let (Some(song_id), Some(lyrics)) = (snap.current_lyrics_song_id, snap.current_lyrics)
             && !self.state.lyrics_cache.contains_key(&song_id)
         {
-            let parsed_lrc = lyrics
-                .lrc
-                .as_deref()
-                .map(lrc::parse_lrc)
-                .unwrap_or_default();
-            self.state.lyrics_cache.insert(song_id.clone(), parsed_lrc);
-            if let Some(raw_yrc) = lyrics.yrc.as_deref() {
-                let parsed_yrc = yrc::parse_yrc(raw_yrc);
-                if !parsed_yrc.is_empty() {
-                    self.state.yrc_cache.insert(song_id, parsed_yrc);
-                }
+            if !lyrics.words.is_empty() {
+                self.state.words_cache.insert(song_id.clone(), lyrics.words);
             }
+            self.state.lyrics_cache.insert(song_id, lyrics.lrc);
         }
     }
 

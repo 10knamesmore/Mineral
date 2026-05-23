@@ -92,7 +92,7 @@ impl MusicChannel for FakeChannel {
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         self.maybe_wait().await;
         Ok(Lyrics {
-            lrc: Some(String::from("[00:01.00]hello\n[00:02.50]world")),
+            lrc: mineral_model::LrcLyric::parse("[00:01.00]hello\n[00:02.50]world"),
             ..Lyrics::default()
         })
     }
@@ -239,7 +239,7 @@ async fn lyrics_emits_event() -> color_eyre::Result<()> {
         matches!(
             e,
             TaskEvent::LyricsReady { song_id, lyrics }
-                if song_id.as_str() == "s3" && lyrics.lrc.as_deref().is_some_and(|s| s.contains("hello"))
+                if song_id.as_str() == "s3" && lyrics.lrc.iter().any(|l| l.text.contains("hello"))
         )
     });
     assert!(found, "expected LyricsReady, got {evs:?}");

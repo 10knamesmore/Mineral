@@ -8,7 +8,6 @@ mod color;
 mod components;
 mod cover;
 mod layout;
-mod lrc;
 mod playback;
 mod prefetch;
 mod remote;
@@ -17,7 +16,6 @@ mod theme;
 mod tui;
 mod view;
 mod view_model;
-mod yrc;
 
 use std::sync::Arc;
 

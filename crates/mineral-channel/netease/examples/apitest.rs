@@ -182,14 +182,10 @@ async fn main() -> color_eyre::Result<()> {
         let r = run("lyrics", async {
             let l = ch.lyrics(&song.id).await?;
             Ok(format!(
-                "lrc={}, yrc={}, translation={}",
-                if l.lrc.is_some() { "Some" } else { "None" },
-                if l.yrc.is_some() { "Some" } else { "None" },
-                if l.translation.is_some() {
-                    "Some"
-                } else {
-                    "None"
-                },
+                "lrc={} lines, words={} lines, translation={} lines",
+                l.lrc.len(),
+                l.words.len(),
+                l.translation.len(),
             ))
         })
         .await;

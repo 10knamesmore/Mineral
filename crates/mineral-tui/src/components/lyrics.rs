@@ -1,8 +1,8 @@
 //! Lyrics 面板:按 [`crate::state::AppState::current_lyrics`] 渲染当前行 + 邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
-//! 有 YRC(逐字)时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
-//! 未唱的字 = `theme.overlay` dim。邻行无论是否有 yrc 都按整行 dim 渲染。
+//! 有逐字歌词时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
+//! 未唱的字 = `theme.overlay` dim。邻行无论是否有逐字都按整行 dim 渲染。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -10,11 +10,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use mineral_model::{WordLine, WordLyric};
+
 use crate::color::lerp_color;
-use crate::lrc;
 use crate::state::AppState;
 use crate::theme::Theme;
-use crate::yrc::{self, YrcLine};
 
 /// 渲染 lyrics 面板到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
@@ -31,45 +31,49 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     }
 
     let position_ms = state.playback.position_ms;
-    // 有 yrc 时整个窗口都从 yrc 推:中心行 + 上下行同源,index 唯一,wipe 不会跟邻行错位。
-    // 没 yrc 时回落到 lrc 行级整行高亮(原始路径)。
-    let yrc_lines = state.current_yrc().filter(|v| !v.is_empty());
-    let (lines, cur, yrc) = if let Some(yl) = yrc_lines {
-        let lines: Vec<(u64, String)> = yl
+    // 有逐字时整个窗口都从逐字推:中心行 + 上下行同源,index 唯一,wipe 不会跟邻行错位。
+    // 没逐字时回落到 lrc 行级整行高亮(原始路径)。
+    let word_lines = state.current_words().filter(|v| !v.is_empty());
+    let (lines, cur, cursor) = if let Some(wl) = word_lines {
+        let lines: Vec<(u64, String)> = wl
             .iter()
             .map(|l| {
-                let text: String = l.chars.iter().map(|c| c.text.as_str()).collect();
+                let text: String = l.words.iter().map(|w| w.text.as_str()).collect();
                 (l.start_ms, text)
             })
             .collect();
-        let cur = yrc::current_index(yl, position_ms);
-        let yrc = YrcCursor {
-            lines: Some(yl),
+        let cur = wl.current_index(position_ms);
+        let cursor = WordCursor {
+            lines: Some(wl),
             cur,
             position_ms,
         };
-        (lines, cur, yrc)
+        (lines, cur, cursor)
     } else {
         let Some(lrc_lines) = state.current_lyrics().filter(|v| !v.is_empty()) else {
             draw_fallback(frame, inner, theme);
             return;
         };
-        let cur = lrc::current_index(lrc_lines, position_ms);
-        let yrc = YrcCursor {
+        let cur = lrc_lines.current_index(position_ms);
+        let lines: Vec<(u64, String)> = lrc_lines
+            .iter()
+            .map(|l| (l.time_ms, l.text.clone()))
+            .collect();
+        let cursor = WordCursor {
             lines: None,
             cur: None,
             position_ms,
         };
-        (lrc_lines.clone(), cur, yrc)
+        (lines, cur, cursor)
     };
-    paint_window(frame, inner, &lines, cur, yrc, theme);
+    paint_window(frame, inner, &lines, cur, cursor, theme);
 }
 
-/// 渲染时传入的 yrc 上下文(打包以减少 paint_window 参数数)。
+/// 渲染时传入的逐字上下文(打包以减少 paint_window 参数数)。
 #[derive(Clone, Copy)]
-struct YrcCursor<'a> {
-    /// 字级歌词行;`None` 表示没解析到 yrc(走 lrc 整行高亮)。
-    lines: Option<&'a Vec<YrcLine>>,
+struct WordCursor<'a> {
+    /// 逐字歌词行;`None` 表示没逐字(走 lrc 整行高亮)。
+    lines: Option<&'a WordLyric>,
 
     /// 当前行 index(在 `lines` 中)。
     cur: Option<usize>,
@@ -92,13 +96,13 @@ fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
 
 /// 渲染以 `cur` 为中心、上下各 `(area.height - 1) / 2` 行的歌词窗口。
 ///
-/// 中心行(`row == center_row`)若有 yrc 走字级 wipe,否则整行高亮;邻行整行 dim。
+/// 中心行(`row == center_row`)若有逐字走字级 wipe,否则整行高亮;邻行整行 dim。
 fn paint_window(
     frame: &mut Frame<'_>,
     inner: Rect,
     lines: &[(u64, String)],
     cur: Option<usize>,
-    yrc: YrcCursor<'_>,
+    cursor: WordCursor<'_>,
     theme: &Theme,
 ) {
     let height = usize::from(inner.height);
@@ -131,15 +135,16 @@ fn paint_window(
         let is_center = Some(line_idx) == cur;
         let line: Line<'_> = if is_center {
             // 中心行用 accent(mauve)区别于灰阶 fade,色相差让聚焦行一眼可辨。
-            yrc.lines
-                .zip(yrc.cur)
+            cursor
+                .lines
+                .zip(cursor.cur)
                 .and_then(|(v, i)| v.get(i))
                 .map_or_else(
                     || {
                         Line::from(text.as_str())
                             .style(Style::new().fg(theme.accent).add_modifier(Modifier::BOLD))
                     },
-                    |yl| render_yrc_line(yl, yrc.position_ms, theme),
+                    |wl| render_word_line(wl, cursor.position_ms, theme),
                 )
         } else {
             // 距中心越远越淡入背景。dark 端用 surface0 比 surface1 更暗,
@@ -161,40 +166,40 @@ fn paint_window(
     }
 }
 
-/// 按 `position_ms` 把 YRC 行渲染成字符级渐变 Span 序列(KTV wipe)。
+/// 按 `position_ms` 把逐字行渲染成字符级渐变 Span 序列(KTV wipe)。
 ///
-/// 网易 yrc 的 `YrcChar.text` 对中文是单字、对英文是整词,所以在 `YrcChar` 内再按
-/// `text.chars()` 等分时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
-fn render_yrc_line<'a>(yrc_line: &'a YrcLine, position_ms: u64, theme: &Theme) -> Line<'a> {
+/// `Word.text` 对中文是单字、对英文是整词,所以在 `Word` 内再按 `text.chars()` 等分
+/// 时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
+fn render_word_line<'a>(word_line: &'a WordLine, position_ms: u64, theme: &Theme) -> Line<'a> {
     let mut spans = Vec::<Span<'a>>::new();
-    for c in &yrc_line.chars {
-        push_char_spans(&mut spans, c, position_ms, theme);
+    for w in &word_line.words {
+        push_char_spans(&mut spans, w, position_ms, theme);
     }
     Line::from(spans)
 }
 
-/// 把一个 `YrcChar` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
+/// 把一个 `Word` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
 fn push_char_spans<'a>(
     out: &mut Vec<Span<'a>>,
-    yrc_char: &'a crate::yrc::YrcChar,
+    word: &'a mineral_model::Word,
     position_ms: u64,
     theme: &Theme,
 ) {
-    let n = yrc_char.text.chars().count();
+    let n = word.text.chars().count();
     let Ok(n_u64) = u64::try_from(n) else {
         return;
     };
     if n_u64 == 0 {
         return;
     }
-    let total_dur = yrc_char.dur_ms.max(1);
+    let total_dur = word.dur_ms.max(1);
     let mut byte_cursor = 0usize;
-    for (i, ch) in yrc_char.text.chars().enumerate() {
+    for (i, ch) in word.text.chars().enumerate() {
         let Ok(i_u64) = u64::try_from(i) else {
             return;
         };
-        let char_start = yrc_char.start_ms.saturating_add(i_u64 * total_dur / n_u64);
-        let char_end = yrc_char
+        let char_start = word.start_ms.saturating_add(i_u64 * total_dur / n_u64);
+        let char_end = word
             .start_ms
             .saturating_add((i_u64 + 1) * total_dur / n_u64);
         let char_dur = char_end.saturating_sub(char_start).max(1);
@@ -204,10 +209,7 @@ fn push_char_spans<'a>(
         let color = lerp_color(theme.subtext, theme.accent, elapsed, char_dur);
 
         let next_byte = byte_cursor.saturating_add(ch.len_utf8());
-        let slice = yrc_char
-            .text
-            .get(byte_cursor..next_byte)
-            .unwrap_or_default();
+        let slice = word.text.get(byte_cursor..next_byte).unwrap_or_default();
         byte_cursor = next_byte;
 
         out.push(Span::styled(

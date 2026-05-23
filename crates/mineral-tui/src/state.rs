@@ -11,7 +11,7 @@ use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::yrc::YrcLine;
+use mineral_model::{LrcLyric, WordLyric};
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -56,11 +56,11 @@ pub struct AppState {
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
 
-    /// 歌曲 id → 解析后的 LRC 行;不在 map 里表示还没拉到 / 拉失败。
-    pub lyrics_cache: FxHashMap<SongId, Vec<(u64, String)>>,
+    /// 歌曲 id → 行级 LRC;不在 map 里表示还没拉到 / 拉失败。
+    pub lyrics_cache: FxHashMap<SongId, LrcLyric>,
 
-    /// 歌曲 id → 解析后的 YRC(逐字)行;有 yrc 才插入,渲染时优先于 LRC。
-    pub yrc_cache: FxHashMap<SongId, Vec<YrcLine>>,
+    /// 歌曲 id → 逐字歌词;有逐字才插入,渲染时优先于 LRC。
+    pub words_cache: FxHashMap<SongId, WordLyric>,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -146,8 +146,7 @@ pub struct AppState {
     pub last_sel_change: Instant,
 }
 
-/// 选中变化后多久才允许 cover_image 构建新 protocol。yazi 用 30ms;mineral 用
-/// 80ms 略宽,适配 33ms tick。期间走程序化 fallback,稳态后再切真图。
+/// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
 pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
 impl AppState {
@@ -158,7 +157,7 @@ impl AppState {
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             lyrics_cache: FxHashMap::default(),
-            yrc_cache: FxHashMap::default(),
+            words_cache: FxHashMap::default(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -261,16 +260,16 @@ impl AppState {
         }
     }
 
-    /// 当前曲目的歌词行(已解析按时间升序);未拉到时返回 `None`。
-    pub fn current_lyrics(&self) -> Option<&Vec<(u64, String)>> {
+    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
+    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
         let song = self.playback.track.as_ref()?;
         self.lyrics_cache.get(&song.id)
     }
 
-    /// 当前曲目的 YRC 逐字行;无 yrc(网易未返回 / 非网易源)时返回 `None`。
-    pub fn current_yrc(&self) -> Option<&Vec<YrcLine>> {
+    /// 当前曲目的逐字歌词;无逐字(channel 未返回)时返回 `None`。
+    pub fn current_words(&self) -> Option<&WordLyric> {
         let song = self.playback.track.as_ref()?;
-        self.yrc_cache.get(&song.id)
+        self.words_cache.get(&song.id)
     }
 
     /// 返回当前选中歌单的引用。

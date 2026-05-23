@@ -2267,7 +2267,10 @@ version = "0.1.0"
 dependencies = [
  "color-eyre",
  "mineral-log",
+ "mineral-model",
  "mpris-server",
+ "serde",
+ "serde_json",
  "tokio",
  "typed-builder",
 ]
