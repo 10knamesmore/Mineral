@@ -6,7 +6,7 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
-use mineral_model::MediaUrl;
+use mineral_model::{MediaUrl, PlaylistId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
@@ -97,37 +97,50 @@ fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
         return;
     }
     state.cover_pending.insert(url.clone());
+    mineral_log::debug!(target: "prefetch", url = %url, "request cover");
     covers.request(url);
 }
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
-fn request_playlist_tracks(state: &AppState, client: &dyn Client) {
+fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     if state.view != View::Playlists {
         return;
     }
-    let filtered = state.filtered_playlists();
-    let sel = state.sel_playlist;
-    let submit = |idx: usize| {
-        let Some(p) = filtered.get(idx) else {
-            return;
-        };
-        if state.tracks_cache.contains_key(&p.data.id) {
-            return;
-        }
+    for (source, id) in collect_pending_tracks(state) {
+        mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?source, "request playlist tracks");
         client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-                source: p.data.source,
-                id: p.data.id.clone(),
+                source,
+                id: id.clone(),
             }),
             Priority::User,
         );
+        // 成败都记:失败歌单的 tracks_cache 永远不会被填,只有靠这里去重才不会
+        // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
+        state.tracks_requested.insert(id);
+    }
+}
+
+/// sel 周围 [`RADIUS`] 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
+fn collect_pending_tracks(state: &AppState) -> Vec<(SourceKind, PlaylistId)> {
+    let filtered = state.filtered_playlists();
+    let sel = state.sel_playlist;
+    let mut out = Vec::new();
+    let mut consider = |idx: usize| {
+        if let Some(p) = filtered.get(idx) {
+            let id = &p.data.id;
+            if !state.tracks_cache.contains_key(id) && !state.tracks_requested.contains(id) {
+                out.push((p.data.source, id.clone()));
+            }
+        }
     };
-    submit(sel);
+    consider(sel);
     for d in 1..=RADIUS {
         if let Some(idx) = sel.checked_sub(d) {
-            submit(idx);
+            consider(idx);
         }
-        submit(sel.saturating_add(d));
+        consider(sel.saturating_add(d));
     }
+    out
 }

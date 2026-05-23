@@ -56,6 +56,11 @@ pub struct AppState {
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
 
+    /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
+    /// 避免**失败**歌单(tracks_cache 永远不会被填)被每帧无限重提交而刷屏。
+    /// 对齐 cover 的 `cover_pending`。
+    pub tracks_requested: FxHashSet<PlaylistId>,
+
     /// 歌曲 id → 行级 LRC;不在 map 里表示还没拉到 / 拉失败。
     pub lyrics_cache: FxHashMap<SongId, LrcLyric>,
 
@@ -156,6 +161,7 @@ impl AppState {
             view: View::Playlists,
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
+            tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
             words_cache: FxHashMap::default(),
             sel_playlist: 0,
