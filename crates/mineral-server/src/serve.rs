@@ -21,12 +21,12 @@ use crate::client::{Client, ClientHandle};
 pub(crate) async fn run<F>(
     listener: UnixListener,
     client: ClientHandle,
+    busy: Arc<AtomicBool>,
     on_connect: F,
 ) -> color_eyre::Result<()>
 where
     F: Fn() + Send + Sync + 'static,
 {
-    let busy = Arc::new(AtomicBool::new(false));
     let on_connect = Arc::new(on_connect);
     loop {
         let (stream, _addr) = listener

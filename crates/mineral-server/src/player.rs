@@ -176,6 +176,11 @@ impl PlayerCore {
         self.inner.scheduler.snapshot()
     }
 
+    /// 心跳用:是否已预拉好下一首的播放 URL。
+    pub(crate) fn prefetched_ready(&self) -> bool {
+        self.inner.state.lock().prefetched.is_some()
+    }
+
     /// 直通:client submit 任务(playlists/tracks 类 prefetch)。
     pub fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {
         self.inner.scheduler.submit(kind, priority).id

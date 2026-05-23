@@ -87,6 +87,10 @@ impl App {
         // 启动时拉一次 PlayerSnapshot,让 in-proc / connect 都立即看到 server 状态。
         self.apply_player_snapshot(self.client.player_snapshot());
 
+        // client 侧 60s 心跳:报 server 看不到的 UI / 缓存状态(启动即首条)。
+        let mut last_heartbeat = Instant::now();
+        self.log_heartbeat();
+
         while !self.should_quit {
             self.drain_task_events();
             tui.draw(|f| draw(f, self))?;
@@ -105,9 +109,38 @@ impl App {
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.cover_loading = self.state.cover_pending.len();
                 self.last_tick = Instant::now();
+                if last_heartbeat.elapsed() >= Duration::from_secs(60) {
+                    self.log_heartbeat();
+                    last_heartbeat = Instant::now();
+                }
             }
         }
         Ok(())
+    }
+
+    /// client 侧心跳:把 server 看不到的 UI / 缓存状态打一条 info。大缓存
+    /// (tracks / cover / lyrics)都在 client 端,server 心跳报不了,这里补上。
+    fn log_heartbeat(&self) {
+        let s = &self.state;
+        let liked = s
+            .liked_ids
+            .values()
+            .fold(0_usize, |acc, set| acc + set.len());
+        mineral_log::info!(
+            target: "heartbeat",
+            view = ?s.view,
+            focus = ?s.focus,
+            playlists = s.playlists.len(),
+            tracks_cached = s.tracks_cache.len(),
+            tracks_requested = s.tracks_requested.len(),
+            lyrics_cached = s.lyrics_cache.len(),
+            words_cached = s.words_cache.len(),
+            covers_cached = s.cover_cache.len(),
+            covers_pending = s.cover_pending.len(),
+            liked,
+            queue_len = s.queue.len(),
+            "client status"
+        );
     }
 
     /// 把 server 的 PlayerSnapshot 灌进 AppState 镜像 — current_song / queue /
