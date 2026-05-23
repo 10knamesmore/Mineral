@@ -12,6 +12,7 @@ rust-version.workspace = true
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-log          = { workspace = true }
+mineral-media        = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-task         = { workspace = true }

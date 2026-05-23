@@ -42,6 +42,14 @@ impl Server {
         ClientHandle::new(self.player.clone(), self.pcm.clone())
     }
 
+    /// 接入系统媒体服务(Linux MPRIS):上报当前播放、响应媒体键 / 桌面控件。
+    ///
+    /// 仅 daemon 模式调用 —— 控制的是常驻播放。注册失败(无 D-Bus session 等)
+    /// 返回 `Err`,调用方应降级而非中止 daemon。
+    pub fn start_media_service(&self) -> color_eyre::Result<()> {
+        crate::media::start(self.player.clone())
+    }
+
     /// 显式 shutdown。drop 自身,利用 PlayerCore / AudioHandle / Scheduler 现有 Drop 链。
     pub fn shutdown(self) {
         drop(self);

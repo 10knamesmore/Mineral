@@ -26,6 +26,10 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     println!("mineral daemon listening on {}", socket_path.display());
 
     let server = Server::spawn(channels)?;
+    // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
+    if let Err(e) = server.start_media_service() {
+        mineral_log::warn!(target: "media", "system media service unavailable: {e}");
+    }
     let outcome = tokio::select! {
         result = server.serve(listener) => result,
         result = shutdown_signal() => result.map(|()| {
@@ -50,10 +54,8 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
 /// # Return:
 ///   信号 handler 安装成功且收到信号 → `Ok(())`;安装失败 → `Err`。
 async fn shutdown_signal() -> color_eyre::Result<()> {
-    let mut term =
-        signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
-    let mut interrupt =
-        signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
+    let mut term = signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
+    let mut interrupt = signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
     tokio::select! {
         _ = term.recv() => {}
         _ = interrupt.recv() => {}
