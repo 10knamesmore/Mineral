@@ -69,11 +69,16 @@ pub fn init() -> color_eyre::Result<WorkerGuard> {
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
     // 第三方噪音压制指令放在 base 之前:base(`RUST_LOG` 或缺省 `info`)里用户对同一
-    // target 的显式指令优先级更高,可覆盖这里的默认压制;而缺省的全局 `info` 不会盖掉
-    // 更具体的 per-target 指令,于是 symphonia / isahc 的刷屏被压住、其余照常 info。
+    // target 的显式指令优先级更高(per-target 比全局更具体),可覆盖这里的默认压制;
+    // 缺省 / 全局档位不会盖掉更具体的 per-target 压制。于是即便开全局 `debug`,这些
+    // 第三方库也只到 warn,不会淹没自己的埋点。涵盖两条噪音源:
+    //   - 解码:symphonia(mp3 underflow 刷屏)
+    //   - 网络:isahc(netease)、reqwest / hyper / hyper_util / stream_download(audio 流下载)
     let base = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned());
     let filter = EnvFilter::new(format!(
-        "symphonia=warn,symphonia_bundle_mp3=error,isahc=error,{base}"
+        "symphonia=warn,symphonia_bundle_mp3=error,\
+         isahc=error,reqwest=warn,hyper=warn,hyper_util=warn,stream_download=warn,\
+         {base}"
     ));
 
     tracing_subscriber::fmt()
