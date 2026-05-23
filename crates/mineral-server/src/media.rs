@@ -177,7 +177,7 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
             if let Some(song) = &snap.current_song {
                 let now_playing = build_now_playing(song, snap.current_lyrics.as_ref());
                 if let Err(e) = service.set_now_playing(&now_playing) {
-                    mineral_log::warn!(target: "media", "set_now_playing failed: {e}");
+                    mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_now_playing failed");
                 }
             }
             last_song_id = cur_id;
@@ -193,7 +193,7 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
                 && looks_like_seek(prev, audio.position_ms, elapsed_ms, last_playing)
                 && let Err(e) = service.notify_seek(Duration::from_millis(audio.position_ms))
             {
-                mineral_log::warn!(target: "media", "notify_seek failed: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "notify_seek failed");
             }
         }
         last_pos = Some(audio.position_ms);
@@ -204,17 +204,17 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
         // 首 tick(last_play_mode=None)必报一次,纠正 mpris-server 的默认 Off/None。
         if last_play_mode != Some(snap.play_mode) {
             if let Err(e) = service.set_shuffle(snap.play_mode.shuffle()) {
-                mineral_log::warn!(target: "media", "set_shuffle failed: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_shuffle failed");
             }
             if let Err(e) = service.set_loop(repeat_to_loop(snap.play_mode.repeat())) {
-                mineral_log::warn!(target: "media", "set_loop failed: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_loop failed");
             }
             last_play_mode = Some(snap.play_mode);
         }
 
         let (state, position) = playback_of(&snap, &audio);
         if let Err(e) = service.set_playback(state, position) {
-            mineral_log::warn!(target: "media", "set_playback failed: {e}");
+            mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_playback failed");
         }
     }
 }

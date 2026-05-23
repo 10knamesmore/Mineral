@@ -52,7 +52,7 @@ pub async fn search_songs(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchSongsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchSongsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .songs
         .into_iter()
@@ -89,7 +89,7 @@ pub async fn search_albums(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchAlbumsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchAlbumsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .albums
         .into_iter()
@@ -124,7 +124,7 @@ pub async fn search_playlists(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchPlaylistsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchPlaylistsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .playlists
         .into_iter()

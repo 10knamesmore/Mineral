@@ -29,6 +29,23 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
+/// 把错误渲染成**单行的完整 context 链**(eyre 的 `{:#}`),供日志 `error` 字段用。
+///
+/// 三种格式化的取舍:
+/// - `{}`(tracing `%e`):只最外层一条 message,`.wrap_err()` 加的 context 全丢,查问题看不全。
+/// - `{:?}`(tracing `?e`):color-eyre 的 Debug —— 带 ANSI 颜色 + `Location` + `Backtrace`,
+///   是给终端看的「报告」,塞进日志字段就是一坨噪音(还污染纯文本日志)。
+/// - `{:#}`(本函数):完整 context 链用 `: ` 串成单行,无颜色、无 backtrace —— 既全又干净。
+///
+/// # Params:
+///   - `e`: 任意实现 `Display` 的错误(eyre `Report` / `thiserror` enum / std error 皆可)。
+///
+/// # Return:
+///   形如 `顶层 context: 中层: 底层` 的单行字符串。
+pub fn chain(e: impl std::fmt::Display) -> String {
+    format!("{e:#}")
+}
+
 /// 滚动日志文件名前缀;tracing-appender 会附加 `.YYYY-MM-DD`。
 const LOG_FILE_PREFIX: &str = "mineral.log";
 

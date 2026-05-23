@@ -55,7 +55,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, connect: bool) -> color_e
         // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
         // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
         if let Err(e) = server.start_media_service() {
-            mineral_log::warn!(target: "media", "system media service unavailable: {e}");
+            mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
         }
         let client = server.client();
         let result = run_app(Arc::new(client), cover_fetcher);

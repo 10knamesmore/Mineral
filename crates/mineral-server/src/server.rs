@@ -28,12 +28,15 @@ impl Server {
     /// # Params:
     ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
     pub fn spawn(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<Self> {
+        mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels);
         let (audio, spectrum_tap) = AudioHandle::spawn()?;
+        mineral_log::debug!(target: "server", "audio engine ready");
         let player = PlayerCore::spawn(audio, scheduler, channels);
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
+        mineral_log::debug!(target: "server", "server components ready");
         Ok(Self { player, pcm })
     }
 

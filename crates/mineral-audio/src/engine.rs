@@ -72,7 +72,7 @@ pub(crate) fn run(
         tap_producer,
         sr_atomic,
     ) {
-        mineral_log::warn!(target: "audio_engine", "exited: {e:?}");
+        mineral_log::error!(target: "audio", error = mineral_log::chain(&e), "engine exited");
     }
 }
 
@@ -130,7 +130,7 @@ fn engine_main(
                     }
                 }
                 Err(e) => {
-                    mineral_log::warn!(target: "audio_engine", "command error: {e:?}");
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "command error");
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -206,7 +206,7 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
         return;
     };
     if let Err(e) = player.try_seek(target) {
-        mineral_log::warn!(target: "audio_engine", "seek to {target:?}: {e}");
+        mineral_log::warn!(target: "audio", seek_to = ?target, error = mineral_log::chain(&e), "seek failed");
     }
 }
 
@@ -220,6 +220,7 @@ fn append_decoded(
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64> {
+    mineral_log::info!(target: "audio", url = %url, "start decoding");
     match url {
         MediaUrl::Remote(u) => {
             let (reader, byte_len) = rt.block_on(async {

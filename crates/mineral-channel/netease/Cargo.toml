@@ -12,6 +12,7 @@ rust-version.workspace = true
 mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-paths        = { workspace = true }
+mineral-log          = { workspace = true }
 
 # 加密
 aes        = { workspace = true }
@@ -33,6 +34,7 @@ flate2     = { workspace = true }
 # 序列化
 serde      = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 
 # 工具
 async-trait = { workspace = true }

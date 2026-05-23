@@ -35,15 +35,17 @@ where
             .wrap_err("UnixListener::accept failed")?;
         if busy.swap(true, Ordering::AcqRel) {
             // 已经有 client 在用 → 立刻拒绝。失败也无所谓,client 自己会 EOF。
+            mineral_log::warn!(target: "ipc", "rejected new connection: single-client busy");
             tokio::spawn(reject_busy(stream));
             continue;
         }
         on_connect();
+        mineral_log::info!(target: "ipc", "client connected");
         let client = client.clone();
         let busy_clone = Arc::clone(&busy);
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, &client).await {
-                mineral_log::warn!(target: "ipc", "connection ended with error: {e}");
+                mineral_log::warn!(target: "ipc", error = mineral_log::chain(&e), "connection ended with error");
             }
             busy_clone.store(false, Ordering::Release);
         });
@@ -76,6 +78,9 @@ async fn handle_connection(stream: UnixStream, client: &ClientHandle) -> color_e
 /// trait 方法调用,组装成预期的 Response variant。所有错误兜底走 trait 实现层
 /// (出错时返回值类用「合理默认值」),这里不应该再产生 [`Response::Error`]。
 fn dispatch(req: Request, client: &ClientHandle) -> Response {
+    if let Some(name) = req_log_name(&req) {
+        mineral_log::debug!(target: "ipc", request = name, "handle request");
+    }
     match req {
         Request::Play(url) => {
             client.play(url);
@@ -137,5 +142,30 @@ fn dispatch(req: Request, client: &ClientHandle) -> Response {
                 sample_rate,
             }
         }
+    }
+}
+
+/// 请求的日志名;高频轮询类(snapshot / pcm / drain,TUI 每 tick 拉)返回 `None`
+/// 不记,避免刷屏。其余状态变更类返回 variant 名。
+fn req_log_name(req: &Request) -> Option<&'static str> {
+    match req {
+        Request::AudioSnapshot
+        | Request::PlayerSnapshot
+        | Request::TaskSnapshot
+        | Request::DrainTaskEvents
+        | Request::PullPcm(_) => None,
+        Request::Play(_) => Some("Play"),
+        Request::Pause => Some("Pause"),
+        Request::Resume => Some("Resume"),
+        Request::Stop => Some("Stop"),
+        Request::Seek(_) => Some("Seek"),
+        Request::SetVolume(_) => Some("SetVolume"),
+        Request::SubmitTask(..) => Some("SubmitTask"),
+        Request::CancelTasks(_) => Some("CancelTasks"),
+        Request::PlaySong(_) => Some("PlaySong"),
+        Request::SetQueue { .. } => Some("SetQueue"),
+        Request::CyclePlayMode => Some("CyclePlayMode"),
+        Request::PrevOrRestart => Some("PrevOrRestart"),
+        Request::NextSong => Some("NextSong"),
     }
 }

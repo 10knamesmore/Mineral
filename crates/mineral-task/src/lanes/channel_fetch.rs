@@ -134,6 +134,7 @@ async fn worker_loop(
             return; // 两个队列都关了
         };
         let id = job.id;
+        mineral_log::debug!(target: "channel_fetch", task_id = ?id, kind = ?job.kind, "worker start job");
         run_job(&channel, job, &event_tx).await;
         ongoing.remove(id);
     }
@@ -201,7 +202,8 @@ async fn execute(
                     target: "channel_fetch",
                     ?source,
                     op = "my_playlists",
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }
@@ -219,7 +221,8 @@ async fn execute(
                     target: "channel_fetch",
                     ?source,
                     op = "liked_song_ids",
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }
@@ -239,7 +242,8 @@ async fn execute(
                         ?source,
                         op = "songs_in_playlist",
                         playlist_id = id.as_str(),
-                        "{e}"
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
                     );
                     TaskOutcome::Failed
                 }
@@ -273,7 +277,8 @@ async fn execute(
                         ?source,
                         op = "song_url",
                         song_id = song_id.as_str(),
-                        "{e}"
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
                     );
                     TaskOutcome::Failed
                 }
@@ -293,7 +298,8 @@ async fn execute(
                     ?source,
                     op = "lyrics",
                     song_id = song_id.as_str(),
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }

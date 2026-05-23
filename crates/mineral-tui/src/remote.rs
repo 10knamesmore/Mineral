@@ -42,12 +42,14 @@ impl RemoteClient {
     /// 连 daemon socket,起后台 worker。caller 必须在 tokio runtime 里(`mineral-tui::run`
     /// 是 async fn,自然满足)。
     pub async fn connect(socket_path: &Path) -> color_eyre::Result<Self> {
+        mineral_log::debug!(target: "ipc", socket_path = %socket_path.display(), "connecting to daemon");
         let stream = UnixStream::connect(socket_path).await.wrap_err_with(|| {
             format!(
                 "connect daemon socket {} (run `mineral serve` first?)",
                 socket_path.display()
             )
         })?;
+        mineral_log::info!(target: "ipc", "connected to daemon");
         let conn = framed(stream);
         let (req_tx, req_rx) = mpsc::unbounded_channel::<Pending>();
         tokio::spawn(worker(conn, req_rx));
@@ -71,7 +73,7 @@ async fn worker(mut conn: Framed<UnixStream>, mut req_rx: mpsc::UnboundedReceive
         let resp = match round_trip(&mut conn, p.req).await {
             Ok(r) => r,
             Err(e) => {
-                mineral_log::warn!(target: "ipc", "round-trip failed: {e}");
+                mineral_log::warn!(target: "ipc", error = mineral_log::chain(&e), "round-trip failed");
                 Response::Error(format!("ipc: {e}"))
             }
         };
@@ -89,7 +91,7 @@ async fn round_trip(conn: &mut Framed<UnixStream>, req: Request) -> color_eyre::
 
 /// 调用方收到非预期 Response 时的统一日志(协议层异常或对端 bug)。
 fn warn_unexpected(method: &'static str, resp: &Response) {
-    mineral_log::warn!(target: "ipc", "{method}: unexpected response {resp:?}");
+    mineral_log::warn!(target: "ipc", method, response = ?resp, "unexpected response");
 }
 
 impl Client for RemoteClient {

@@ -42,6 +42,7 @@ pub fn credential_path() -> color_eyre::Result<PathBuf> {
 pub fn save(auth: &StoredNeteaseAuth) -> color_eyre::Result<PathBuf> {
     let path = credential_path()?;
     write_to(&path, auth)?;
+    mineral_log::info!(target: "credential", path = %path.display(), uid = auth.user_id.as_str(), "credential saved");
     Ok(path)
 }
 
@@ -53,7 +54,14 @@ pub fn save(auth: &StoredNeteaseAuth) -> color_eyre::Result<PathBuf> {
 ///   - `Err(_)`: 文件存在但读/解析失败(磁盘损坏、JSON schema 漂移等)
 pub fn load_stored() -> color_eyre::Result<Option<StoredNeteaseAuth>> {
     let path = credential_path()?;
-    read_from(&path)
+    let loaded = read_from(&path)?;
+    match &loaded {
+        Some(auth) => {
+            mineral_log::debug!(target: "credential", uid = auth.user_id.as_str(), "stored credential loaded");
+        }
+        None => mineral_log::debug!(target: "credential", "no stored credential (not logged in)"),
+    }
+    Ok(loaded)
 }
 
 /// 把 `auth` 序列化成 JSON 写到 `path`,父目录不存在时自动创建。

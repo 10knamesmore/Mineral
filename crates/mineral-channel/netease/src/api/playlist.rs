@@ -38,7 +38,7 @@ pub async fn songs_in_playlist(transport: &Transport, id: &PlaylistId) -> Result
         .get("playlist")
         .and_then(|x| x.get("tracks"))
         .ok_or_else(|| eyre!("playlist response missing playlist.tracks"))?;
-    let dtos: Vec<AlbumSong> = serde_json::from_value(tracks.clone())?;
+    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(tracks.clone())?;
 
     Ok(dtos
         .into_iter()

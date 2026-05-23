@@ -28,8 +28,9 @@ pub async fn login_refresh(transport: &Transport) -> Result<()> {
             params: serde_json::Map::new(),
             ua: UaKind::Pc,
         })
-        .await
-        .map(|_| ())
+        .await?;
+    mineral_log::info!(target: "login", "login token refreshed");
+    Ok(())
 }
 
 /// 调 `GetKey` 拿 unikey,拼出二维码 URL。
@@ -52,6 +53,7 @@ pub async fn login_qr_get_key(transport: &Transport) -> Result<LoginQrCode> {
         .to_owned();
     let chain_id = crate::device::generate_chain_id();
     let url = format!("http://music.163.com/login?codekey={unikey}&chainId={chain_id}",);
+    mineral_log::debug!(target: "login", unikey = unikey.as_str(), "qr key obtained");
     Ok(LoginQrCode { url, unikey })
 }
 
@@ -73,8 +75,11 @@ pub async fn login_qr_check(transport: &Transport, unikey: &str) -> Result<i64> 
             ua: UaKind::Pc,
         })
         .await?;
-    Ok(result
+    let code = result
         .get("code")
         .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0))
+        .unwrap_or(0);
+    // 801=等待扫码 802=待确认 803=成功 800=失效
+    mineral_log::debug!(target: "login", code, "qr check status");
+    Ok(code)
 }

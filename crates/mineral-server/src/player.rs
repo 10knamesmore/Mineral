@@ -193,6 +193,12 @@ impl PlayerCore {
 
     /// Enter 一首歌。等价历史 `App::submit_play_song`。
     pub fn play_song(&self, song: &Song) {
+        mineral_log::info!(
+            target: "player",
+            song_id = song.id.as_str(),
+            title = %song.name,
+            "play song"
+        );
         // 砍旧 SongUrl + Lyrics(切歌瞬间)
         self.inner.scheduler.cancel_where(|k| {
             matches!(
@@ -227,9 +233,11 @@ impl PlayerCore {
             .store(seq, Ordering::Relaxed);
 
         if let Some(pu) = cached_url {
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using prefetched url");
             self.inner.audio.play(pu.url.clone());
             self.inner.state.lock().play_url = Some(pu);
         } else {
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source, "submit SongUrl task");
             self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     source: song.source,
@@ -238,6 +246,7 @@ impl PlayerCore {
                 Priority::User,
             );
         }
+        mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source, "submit Lyrics task");
         self.inner.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
                 source: song.source,
@@ -250,6 +259,13 @@ impl PlayerCore {
     /// 替换 queue。等价历史 `App::set_queue`。
     pub fn set_queue(&self, new_queue: Vec<Song>, target_id: &SongId) {
         let mut st = self.inner.state.lock();
+        mineral_log::info!(
+            target: "player",
+            len = new_queue.len(),
+            target_id = target_id.as_str(),
+            mode = ?st.play_mode,
+            "set queue"
+        );
         if matches!(st.play_mode, PlayMode::Shuffle) {
             let mut shuffled = new_queue.clone();
             shuffled.shuffle(&mut rand::rng());
@@ -353,12 +369,16 @@ impl PlayerCore {
         let mut st = self.inner.state.lock();
         let want = st.current_song.as_ref().map(|t| &t.id);
         if want == Some(song_id) {
+            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
             self.inner.audio.play(play_url.url.clone());
             st.play_url = Some(play_url);
         } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
+            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
             st.prefetched = Some(play_url);
+        } else {
+            // 用户已切到别的歌,丢。
+            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
         }
-        // 其他 song_id:用户已切到别的歌,丢。
     }
 
     /// LyricsReady 命中当前歌 → 写入 current_lyrics + 配对 song_id;否则丢(只缓存当前歌)。
@@ -366,10 +386,13 @@ impl PlayerCore {
         let mut st = self.inner.state.lock();
         let want = st.current_song.as_ref().map(|t| &t.id);
         if want == Some(song_id) {
+            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "store", "lyrics ready");
             st.current_lyrics = Some(lyrics);
             st.current_lyrics_song_id = Some(song_id.clone());
+        } else {
+            // 非当前歌,无意义,丢(只缓存当前歌)。
+            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "lyrics ready");
         }
-        // 其他 song_id:无意义,丢(只缓存当前歌)。
     }
 
     /// auto-next:audio engine 自然播完 → 按 PlayMode 切下一首。
@@ -382,8 +405,22 @@ impl PlayerCore {
         self.inner
             .last_seen_finished_seq
             .store(snap.track_finished_seq, Ordering::Relaxed);
-        let next = next_in_queue(&self.inner.state.lock());
+        let (finished_id, mode, next) = {
+            let st = self.inner.state.lock();
+            (
+                st.current_song.as_ref().map(|s| s.id.clone()),
+                st.play_mode,
+                next_in_queue(&st),
+            )
+        };
         if let Some(s) = next {
+            mineral_log::info!(
+                target: "player",
+                finished_id = ?finished_id,
+                next_id = s.id.as_str(),
+                mode = ?mode,
+                "auto next"
+            );
             self.play_song(&s);
         }
     }
@@ -411,6 +448,7 @@ impl PlayerCore {
             return;
         };
         self.inner.state.lock().prefetch_fired_for = Some(cur_id);
+        mineral_log::debug!(target: "player", next_id = next.id.as_str(), source = ?next.source, "prefetch next");
         self.inner.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                 source: next.source,
@@ -442,6 +480,7 @@ fn apply_play_mode(st: &mut State, new: PlayMode) {
     if old == new {
         return;
     }
+    mineral_log::info!(target: "player", old = ?old, new = ?new, "play mode changed");
     st.play_mode = new;
     match (old == PlayMode::Shuffle, new == PlayMode::Shuffle) {
         (false, true) => enter_shuffle(st),

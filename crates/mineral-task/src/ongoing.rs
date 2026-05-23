@@ -100,6 +100,13 @@ impl Ongoing {
                     return Bind::Shared(existing.handle(existing_id));
                 }
                 // escalate:cancel 旧、走下面的新建路径。
+                mineral_log::info!(
+                    target: "scheduler",
+                    task_id = ?existing_id,
+                    old_priority = ?existing.priority,
+                    new_priority = ?priority,
+                    "escalate task priority"
+                );
                 existing.cancel.cancel();
             }
             inner.tasks.remove(&existing_id);
@@ -129,6 +136,7 @@ impl Ongoing {
     pub fn remove(&self, id: TaskId) {
         let mut inner = self.inner.lock();
         if let Some(meta) = inner.tasks.remove(&id) {
+            mineral_log::debug!(target: "scheduler", task_id = ?id, "task removed");
             let key = meta.kind.dedup_key();
             // 仅当 dedup 仍指向被摘的 id 时才移除,避免误清新建条目。
             if inner.by_dedup.get(&key) == Some(&id) {

@@ -19,32 +19,39 @@ use tokio::signal::unix::{SignalKind, signal};
 /// (走 [`Server::shutdown`] 的 Drop 链)并 unlink socket 文件,避免残留 stale
 /// socket 留给下次启动清理。
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
+    mineral_log::info!(target: "daemon", "starting mineral daemon");
     let socket_path = socket_path()?;
     prepare_socket(&socket_path).await?;
     let listener = UnixListener::bind(&socket_path)
         .wrap_err_with(|| format!("bind unix socket {}", socket_path.display()))?;
+    mineral_log::info!(target: "daemon", socket_path = %socket_path.display(), "unix socket bound");
     println!("mineral daemon listening on {}", socket_path.display());
 
     let server = Server::spawn(channels)?;
+    mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {
-        mineral_log::warn!(target: "media", "system media service unavailable: {e}");
+        mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
     }
     let outcome = tokio::select! {
         result = server.serve(listener) => result,
         result = shutdown_signal() => result.map(|()| {
-            mineral_log::info!(target: "ipc", "shutdown signal received, stopping daemon");
+            mineral_log::info!(target: "daemon", "shutdown signal received, stopping daemon");
         }),
     };
 
     // graceful 收尾:停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
+    mineral_log::info!(target: "daemon", "shutting down");
     server.shutdown();
     if let Err(e) = std::fs::remove_file(&socket_path) {
         mineral_log::warn!(
-            target: "ipc",
-            "remove socket {} on shutdown: {e}",
-            socket_path.display()
+            target: "daemon",
+            socket_path = %socket_path.display(),
+            error = mineral_log::chain(&e),
+            "remove socket on shutdown failed"
         );
+    } else {
+        mineral_log::debug!(target: "daemon", socket_path = %socket_path.display(), "socket cleaned up");
     }
     outcome
 }
@@ -78,14 +85,19 @@ fn socket_path() -> color_eyre::Result<std::path::PathBuf> {
 ///   - 连不上(ConnectionRefused / NotFound)→ 残留 socket 文件,删
 async fn prepare_socket(path: &std::path::Path) -> color_eyre::Result<()> {
     if !path.exists() {
+        mineral_log::debug!(target: "daemon", "socket path fresh, no cleanup needed");
         return Ok(());
     }
     match UnixStream::connect(path).await {
-        Ok(_) => bail!(
-            "another mineral daemon is already running at {}",
-            path.display()
-        ),
+        Ok(_) => {
+            mineral_log::error!(target: "daemon", socket_path = %path.display(), "another daemon already running");
+            bail!(
+                "another mineral daemon is already running at {}",
+                path.display()
+            )
+        }
         Err(_) => {
+            mineral_log::warn!(target: "daemon", socket_path = %path.display(), "removing stale socket");
             std::fs::remove_file(path)
                 .wrap_err_with(|| format!("remove stale socket {}", path.display()))?;
             Ok(())

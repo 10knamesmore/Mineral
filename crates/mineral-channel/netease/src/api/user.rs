@@ -56,7 +56,7 @@ pub async fn liked_song_ids(transport: &Transport, uid: &UserId) -> Result<FxHas
             ua: UaKind::Pc,
         })
         .await?;
-    let resp: LikeListResp = serde_json::from_value(v)?;
+    let resp: LikeListResp = crate::wire::de::from_value(v)?;
     Ok(resp
         .ids
         .into_iter()

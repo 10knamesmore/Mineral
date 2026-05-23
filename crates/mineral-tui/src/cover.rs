@@ -108,14 +108,14 @@ async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<Dynamic
     let bytes = match read_bytes(url, client).await {
         Ok(b) => b,
         Err(e) => {
-            mineral_log::warn!(target: "cover", url = %url, "fetch: {e}");
+            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "fetch failed");
             return None;
         }
     };
     let img = match image::load_from_memory(&bytes) {
         Ok(i) => i,
         Err(e) => {
-            mineral_log::warn!(target: "cover", url = %url, "decode: {e}");
+            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "decode failed");
             return None;
         }
     };

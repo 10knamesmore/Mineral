@@ -36,7 +36,7 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
     let songs = v
         .get("songs")
         .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {
@@ -142,7 +142,7 @@ fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<Pl
     let data = v
         .get("data")
         .ok_or_else(|| eyre!("song url response missing `data`"))?;
-    let dtos: Vec<SongUrl> = serde_json::from_value(data.clone())?;
+    let dtos: Vec<SongUrl> = crate::wire::de::from_value(data.clone())?;
     Ok(dtos
         .into_iter()
         .filter_map(|d| {

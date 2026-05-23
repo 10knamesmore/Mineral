@@ -110,17 +110,17 @@ impl Transport {
 
     /// 发请求并返回解析后的 JSON Value;`code != 200` 时返回 `Err`。
     pub async fn request(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
+        let endpoint = spec.path;
         let value = self.request_lax(spec).await?;
         let code = parse_code(&value);
         if code != 200 {
-            return Err(eyre!(
-                "api code {code}: {}",
-                value
-                    .get("message")
-                    .or_else(|| value.get("msg"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(no message)")
-            ));
+            let message = value
+                .get("message")
+                .or_else(|| value.get("msg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no message)");
+            mineral_log::warn!(target: "channel_netease", endpoint, code, message, "api error");
+            return Err(eyre!("api code {code}: {message}"));
         }
         Ok(value)
     }
@@ -128,6 +128,7 @@ impl Transport {
     /// 发请求并返回解析后的 JSON,**不**因为 `code != 200` 报错。
     /// 用于 `CheckQR` 等用 `code` 表达业务状态的端点。
     pub async fn request_lax(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
+        mineral_log::debug!(target: "channel_netease", path = spec.path, crypto = ?spec.crypto, "request");
         let csrf = self.csrf_token();
 
         // 注入 csrf_token 到 weapi/eapi 的 params(linuxapi 不注入)

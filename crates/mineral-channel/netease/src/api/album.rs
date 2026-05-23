@@ -25,7 +25,7 @@ pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result
     let songs = raw
         .get("songs")
         .ok_or_else(|| eyre!("album response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {

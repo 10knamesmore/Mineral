@@ -228,12 +228,12 @@ async fn apply_update(player: &Player, update: Update) {
     match update {
         Update::Metadata(now_playing) => {
             if let Err(e) = player.set_metadata(build_metadata(&now_playing)).await {
-                mineral_log::warn!(target: "media", "mpris set_metadata: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "mpris set_metadata");
             }
         }
         Update::Playback { status, position } => {
             if let Err(e) = player.set_playback_status(to_status(status)).await {
-                mineral_log::warn!(target: "media", "mpris set_playback_status: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "mpris set_playback_status");
             }
             if let Some(p) = position {
                 // set_position 同步:只更新 Position 属性内部值,不发 PropertiesChanged
@@ -244,17 +244,17 @@ async fn apply_update(player: &Player, update: Update) {
         Update::Seeked(position) => {
             // emit Seeked 信号(只发信号、不改 Position 属性,属性由上面的 set_position 维护)。
             if let Err(e) = player.seeked(duration_to_time(position)).await {
-                mineral_log::warn!(target: "media", "mpris seeked: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "mpris seeked");
             }
         }
         Update::Shuffle(shuffle) => {
             if let Err(e) = player.set_shuffle(shuffle).await {
-                mineral_log::warn!(target: "media", "mpris set_shuffle: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "mpris set_shuffle");
             }
         }
         Update::Loop(mode) => {
             if let Err(e) = player.set_loop_status(mode_to_loop_status(mode)).await {
-                mineral_log::warn!(target: "media", "mpris set_loop_status: {e}");
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "mpris set_loop_status");
             }
         }
     }

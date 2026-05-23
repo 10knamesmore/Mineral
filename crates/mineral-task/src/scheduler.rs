@@ -75,12 +75,16 @@ impl Scheduler {
     ///   - 否则按种类路由到对应 lane。
     pub fn submit(&self, kind: TaskKind, priority: Priority) -> TaskHandle {
         match self.inner.ongoing.bind(kind.clone(), priority) {
-            Bind::Shared(handle) => handle,
+            Bind::Shared(handle) => {
+                mineral_log::debug!(target: "scheduler", kind = ?kind, "submit deduped to existing task");
+                handle
+            }
             Bind::Fresh {
                 id,
                 handle,
                 done_tx,
             } => {
+                mineral_log::debug!(target: "scheduler", task_id = ?id, kind = ?kind, priority = ?priority, "submit new task");
                 self.dispatch(id, kind, priority, &handle, done_tx);
                 handle
             }
