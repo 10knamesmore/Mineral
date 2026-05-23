@@ -234,4 +234,40 @@ mod tests {
             })
         );
     }
+
+    // ───────────────── 真实数据 ─────────────────
+    // 下面几个用真打网易云存下来的原始 yrc 文本(`lyric_fixtures/*.yrc`)做断言,
+    // 既验证解析,也让人一眼看到网易逐字歌词到底长啥样:
+    //
+    //   - 开头几行是 credits(`{"t":..,"c":[{"tx":"作词: "},..]}`),纯 tx 无 tr,应被跳过;
+    //   - 正文每行 `[行起始ms,行时长ms](字起ms,字时长ms,0)字`,字时间是绝对毫秒;
+    //   - 英文按"词 + 尾随空格"切(`"How "`),中日文按单字切(`"迷"`)。
+
+    #[test]
+    fn real_english_word_by_word() {
+        // Mineral《The Last Word Is Rejoice》—— 项目名来源乐队,英文逐字。
+        let v = parse_yrc(include_str!("lyric_fixtures/rejoice.yrc"));
+        // 两行 credits 跳过,首行是 "How will I drink from that stream"。
+        assert_eq!(v.first().map(|l| l.start_ms), Some(91340));
+        assert_eq!(v[0].dur_ms, 5130);
+        // 英文按词切,尾随空格保留(渲染直接拼)。
+        assert_eq!(v[0].words[0].text, "How ");
+        assert_eq!(v[0].words[0].start_ms, 91340);
+        assert_eq!(v[0].words[0].dur_ms, 840);
+        // "How will I drink from that stream" = 7 个词单元。
+        assert_eq!(v[0].words.len(), 7);
+        assert_eq!(v[0].words.last().map(|w| w.text.as_str()), Some("stream"));
+    }
+
+    #[test]
+    fn real_japanese_word_by_word() {
+        // ひとひら《The Sound of Summer Coming》—— 日语逐字,按单字切。
+        let v = parse_yrc(include_str!("lyric_fixtures/hitohira.yrc"));
+        assert_eq!(v.first().map(|l| l.start_ms), Some(68490));
+        assert_eq!(v[0].words[0].text, "迷");
+        assert_eq!(v[0].words[0].dur_ms, 2540);
+        assert_eq!(v[0].words[1].text, "子");
+        // 阿拉伯数字也作为独立字单元出现(「2人」的 "2")。
+        assert!(v[0].words.iter().any(|w| w.text == "2"));
+    }
 }
