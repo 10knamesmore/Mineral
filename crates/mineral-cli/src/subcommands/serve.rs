@@ -11,7 +11,7 @@ use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
 use mineral_server::Server;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 /// daemon 入口。需要 caller 已 `tokio::Runtime::block_on` 或在 async ctx 中调。
 ///
@@ -20,7 +20,14 @@ use tokio::signal::unix::{SignalKind, signal};
 /// socket 留给下次启动清理。
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
-    let socket_path = socket_path()?;
+    // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
+    // backlog,无需 accept),并可能立刻请求退出。若此刻 handler 还没装(Server::spawn
+    // 的 audio 初始化耗时不短),SIGTERM 会走默认处置直接杀进程 —— stale socket 残留、
+    // audio / MPRIS 收尾全跳过。提前装好即可关掉这段竞态窗口。
+    let mut term = signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
+    let mut interrupt = signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
+
+    let socket_path = mineral_paths::socket_path()?;
     prepare_socket(&socket_path).await?;
     let listener = UnixListener::bind(&socket_path)
         .wrap_err_with(|| format!("bind unix socket {}", socket_path.display()))?;
@@ -35,9 +42,10 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     }
     let outcome = tokio::select! {
         result = server.serve(listener) => result,
-        result = shutdown_signal() => result.map(|()| {
+        () = wait_for_signal(&mut term, &mut interrupt) => {
             mineral_log::info!(target: "daemon", "shutdown signal received, stopping daemon");
-        }),
+            Ok(())
+        }
     };
 
     // graceful 收尾:停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
@@ -58,23 +66,17 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
 
 /// 等待第一个到达的关闭信号(SIGINT 或 SIGTERM)。
 ///
-/// # Return:
-///   信号 handler 安装成功且收到信号 → `Ok(())`;安装失败 → `Err`。
-async fn shutdown_signal() -> color_eyre::Result<()> {
-    let mut term = signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
-    let mut interrupt = signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
+/// handler 由 caller 在 bind socket **之前**就装好(`signal(...)` 调用时即安装),
+/// 这里只 `recv` 等触发,避免「socket 已可连但 handler 未就绪」的竞态。
+///
+/// # Params:
+///   - `term`: 已安装的 SIGTERM 信号流。
+///   - `interrupt`: 已安装的 SIGINT 信号流。
+async fn wait_for_signal(term: &mut Signal, interrupt: &mut Signal) {
     tokio::select! {
         _ = term.recv() => {}
         _ = interrupt.recv() => {}
     }
-    Ok(())
-}
-
-/// 解析 daemon 监听用的 unix socket 路径,顺手把 `runtime_dir()` 创建出来。
-fn socket_path() -> color_eyre::Result<std::path::PathBuf> {
-    let dir = mineral_paths::runtime_dir().wrap_err("resolve runtime_dir")?;
-    std::fs::create_dir_all(&dir).wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;
-    Ok(dir.join("mineral.sock"))
 }
 
 /// 检测 stale socket。

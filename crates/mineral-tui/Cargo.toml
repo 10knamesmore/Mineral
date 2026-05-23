@@ -32,6 +32,7 @@ mineral-paths        = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-server       = { workspace = true }
 mineral-task         = { workspace = true }
+nix                  = { workspace = true }
 rand                 = { workspace = true }
 ratatui              = { workspace = true }
 ratatui-image        = { workspace = true }
@@ -40,6 +41,10 @@ unicode-width        = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 tokio                = { workspace = true }
+
+[dev-dependencies]
+insta              = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

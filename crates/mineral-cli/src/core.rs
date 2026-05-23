@@ -20,9 +20,16 @@ pub struct Args {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// 连接到已经在跑的后台 daemon(由 `mineral serve` 起);关闭 TUI 时不停 daemon,音乐继续播。
-    #[arg(long)]
+    /// 强制连接到已经在跑的后台 daemon(由 `mineral serve` 起),连不上即报错;
+    /// 关闭 TUI 时不停 daemon,音乐继续播。默认(不带此 flag)会在没有 daemon 时
+    /// 自动 spawn 一个。
+    #[arg(long, conflicts_with = "in_proc")]
     pub connect: bool,
+
+    /// in-proc 模式:TUI 自己在同进程内起 server,不走 daemon / socket。
+    /// 调试与离线开发用;关闭 TUI = 进程退 = server 一起退。
+    #[arg(long)]
+    pub in_proc: bool,
 }
 
 /// 顶层子命令。

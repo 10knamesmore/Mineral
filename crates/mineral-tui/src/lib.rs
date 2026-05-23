@@ -7,10 +7,12 @@ mod app;
 mod color;
 mod components;
 mod cover;
+mod daemon;
 mod layout;
 mod playback;
 mod prefetch;
 mod remote;
+mod signal;
 mod state;
 mod theme;
 mod tui;
@@ -28,40 +30,63 @@ use cover::CoverFetcher;
 use remote::RemoteClient;
 use tui::Tui;
 
+/// TUI 的启动模式。决定 server 的来源与生命周期。
+pub enum Launch {
+    /// 默认:优先 attach 已有 daemon;没有则 spawn 一个独立 `mineral serve`
+    /// 子进程再 attach。client 退出时是否连带 kill 掉自己 spawn 的 daemon,由
+    /// daemon 模块内的 const 旋钮决定(当前 = 一起退)。
+    Auto,
+
+    /// 强制连已有 daemon(连不上即报错,**不** spawn)。
+    Connect,
+
+    /// in-proc:TUI 自己 `Server::spawn`,同进程持有 audio engine / scheduler /
+    /// PlayerCore;关 TUI = 进程退 = server 跟着退。调试 / 离线开发用。
+    InProc,
+}
+
 /// 启动 TUI。
 ///
-/// 两种模式:
-/// - **in-proc** (`connect = false`):TUI 自己 `Server::spawn`,持有 audio engine /
-///   scheduler / PlayerCore;关 TUI = 进程退 = server 跟着退。
-/// - **connect** (`connect = true`):TUI 不起 server,只 [`RemoteClient::connect`] 到
-///   `mineral serve` 起的 daemon。关 TUI **不杀** daemon,音乐继续播。
-///
-/// 两种模式下 spectrum 都走 `client.pull_pcm` —— PCM 中继统一在 server 内部,
-/// in-proc 也通过同一接口拉(零拷贝优势让位于接口统一)。
+/// 三种模式见 [`Launch`]。所有模式下 spectrum 都走 `client.pull_pcm` —— PCM 中继
+/// 统一在 server 内部,in-proc 也通过同一接口拉(零拷贝优势让位于接口统一)。
 ///
 /// # Params:
-///   - `channels`: in-proc 模式下已构造好的全部音乐源(空 vec 也合法);
-///     connect 模式下忽略(channels 由 daemon 持有)。
-///   - `connect`: true → 连 daemon;false → 自起 server。
-pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, connect: bool) -> color_eyre::Result<()> {
+///   - `channels`: 仅 [`Launch::InProc`] 用到(已构造好的全部音乐源,空 vec 也合法);
+///     `Auto` / `Connect` 下忽略 —— channels 由独立 daemon 进程自己持有。
+///   - `launch`: 启动模式。
+pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, launch: Launch) -> color_eyre::Result<()> {
     let cover_fetcher = CoverFetcher::spawn()?;
 
-    if connect {
-        let socket = mineral_paths::runtime_dir()?.join("mineral.sock");
-        let client = RemoteClient::connect(&socket).await?;
-        run_app(Arc::new(client), cover_fetcher)
-    } else {
-        let server = Server::spawn(channels)?;
-        // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
-        // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
-        if let Err(e) = server.start_media_service() {
-            mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
+    match launch {
+        Launch::Auto => {
+            let socket = mineral_paths::socket_path()?;
+            let (client, handle) = daemon::ensure(&socket).await?;
+            let result = run_app(Arc::new(client), cover_fetcher);
+            // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
+            // (handle 为 None)留着不动。
+            if let Some(handle) = handle {
+                handle.shutdown_if_owned();
+            }
+            result
         }
-        let client = server.client();
-        let result = run_app(Arc::new(client), cover_fetcher);
-        // in-proc 模式:进程退 = server 跟着 drop,无显式 shutdown 也行。
-        let _ = server;
-        result
+        Launch::Connect => {
+            let socket = mineral_paths::socket_path()?;
+            let client = RemoteClient::connect(&socket).await?;
+            run_app(Arc::new(client), cover_fetcher)
+        }
+        Launch::InProc => {
+            let server = Server::spawn(channels)?;
+            // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
+            // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
+            if let Err(e) = server.start_media_service() {
+                mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
+            }
+            let client = server.client();
+            let result = run_app(Arc::new(client), cover_fetcher);
+            // in-proc 模式:进程退 = server 跟着 drop,无显式 shutdown 也行。
+            let _ = server;
+            result
+        }
     }
 }
 

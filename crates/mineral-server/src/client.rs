@@ -86,6 +86,15 @@ pub trait Client: Send + Sync {
     // ---- PCM 流(client spectrum 用) ----
     /// 拉最多 N 个 PCM sample。返回 (samples, sample_rate);可能短于 N。
     fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32);
+
+    /// client 与 server 的链路是否仍可用。
+    ///
+    /// 同进程实现([`ClientHandle`])恒 `true`(client 与 server 同生共死)。
+    /// 跨进程实现(`RemoteClient`)在 daemon 断开后返回 `false`,UI 据此干净退出
+    /// 而非僵死在「所有请求兜底默认值」的状态。默认实现返回 `true`。
+    fn connected(&self) -> bool {
+        true
+    }
 }
 
 impl Client for ClientHandle {

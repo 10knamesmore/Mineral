@@ -5,6 +5,8 @@ compile_error!("Windows 暂不支持");
 
 use std::path::PathBuf;
 
+use color_eyre::eyre::WrapErr;
+
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 mod platform;
@@ -42,6 +44,20 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn runtime_dir() -> color_eyre::Result<PathBuf> {
     platform::runtime_dir()
+}
+
+/// IPC unix socket 的完整路径(`<runtime_dir>/mineral.sock`)。daemon bind、
+/// client connect、stale 检测全走这一处,避免各调用方重复拼接。
+///
+/// 与 [`runtime_dir`] 不同,本函数**会**把 `runtime_dir` 创建出来(socket 的父目录
+/// 必须存在才能 bind),调用方拿到路径即可直接用。
+///
+/// # Return:
+///   `<runtime_dir>/mineral.sock` 的绝对路径。
+pub fn socket_path() -> color_eyre::Result<PathBuf> {
+    let dir = runtime_dir().wrap_err("resolve runtime_dir for socket")?;
+    std::fs::create_dir_all(&dir).wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;
+    Ok(dir.join("mineral.sock"))
 }
 
 #[cfg(test)]

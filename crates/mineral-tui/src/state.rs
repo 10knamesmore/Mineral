@@ -112,6 +112,10 @@ pub struct AppState {
     /// quit confirm modal 是否打开。
     pub confirm_open: bool,
 
+    /// 与 daemon 的链路是否已断开(被单独 kill / crash)。置位后盖断连提示 modal,
+    /// 停在那等用户按键退出。
+    pub disconnected: bool,
+
     /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
     /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
     pub prefetched: Option<PlayUrl>,
@@ -179,6 +183,7 @@ impl AppState {
             focus: Focus::Left,
             search_mode: false,
             confirm_open: false,
+            disconnected: false,
             prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),

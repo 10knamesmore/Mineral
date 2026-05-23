@@ -4,6 +4,7 @@ use ratatui::Frame;
 
 use crate::app::App;
 use crate::components::overlay::confirm as confirm_overlay;
+use crate::components::overlay::disconnect as disconnect_overlay;
 use crate::components::overlay::queue as queue_overlay;
 use crate::components::{
     lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport,
@@ -49,5 +50,10 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 
     if app.state.confirm_open {
         confirm_overlay::draw(frame, frame.area(), theme);
+    }
+
+    // 断连提示盖在最上层(它一出现就只等用户按键退出,其余 overlay 不再交互)。
+    if app.state.disconnected {
+        disconnect_overlay::draw(frame, frame.area(), theme);
     }
 }

@@ -7,6 +7,7 @@ use color_eyre::eyre::WrapErr;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, NeteaseConfig, load_stored};
 use mineral_cli::{Args, Command};
+use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
 fn main() -> color_eyre::Result<()> {
@@ -25,21 +26,29 @@ fn main() -> color_eyre::Result<()> {
         Some(command) => mineral_cli::run(command),
         None => {
             let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
-            runtime.block_on(run_tui(args.connect))
+            runtime.block_on(run_tui(args.connect, args.in_proc))
         }
     }
 }
 
-/// 起 TUI:in-proc 模式自己 build channels;connect 模式跳过(daemon 持有)。
-async fn run_tui(connect: bool) -> color_eyre::Result<()> {
-    // connect 模式下 channels 由 daemon 持有,client 不需要;省去 build_channels 也省
-    // 去重复读凭证。
-    let channels = if connect {
-        Vec::new()
+/// 起 TUI:in-proc 模式自己 build channels;Auto / Connect 跳过(daemon 进程自己持有)。
+///
+/// `connect` 与 `in_proc` 由 clap `conflicts_with` 保证互斥,故三态映射安全。
+async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
+    let launch = if in_proc {
+        Launch::InProc
+    } else if connect {
+        Launch::Connect
     } else {
-        build_channels()?
+        Launch::Auto
     };
-    mineral_tui::run(channels, connect).await
+    // 只有 in-proc 模式 client 与 server 同进程,需要本地 channels;Auto / Connect 下
+    // channels 由独立 daemon 进程持有,省去 build_channels 也省去重复读凭证。
+    let channels = match launch {
+        Launch::InProc => build_channels()?,
+        Launch::Auto | Launch::Connect => Vec::new(),
+    };
+    mineral_tui::run(channels, launch).await
 }
 
 /// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。

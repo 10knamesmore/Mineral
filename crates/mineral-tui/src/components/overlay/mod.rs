@@ -4,6 +4,7 @@
 //! 不写死字符尺寸。
 
 pub mod confirm;
+pub mod disconnect;
 pub mod queue;
 
 use ratatui::layout::Rect;

@@ -7,6 +7,7 @@
 //! 高级意图。
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -91,7 +92,32 @@ impl App {
         let mut last_heartbeat = Instant::now();
         self.log_heartbeat();
 
+        // 退出信号 watcher:SIGTERM / SIGINT / SIGHUP 进来时不再 silent kill,而是由
+        // 后台 task 记日志 + 置标志,主循环据此走正常退出(`Tui::exit` 还原终端)。
+        let shutdown = crate::signal::spawn_watcher()?;
+
         while !self.should_quit {
+            if shutdown.load(Ordering::Acquire) {
+                self.should_quit = true;
+                break;
+            }
+            // daemon 被单独 kill / crash → 链路断开。不僵死在「请求全兜底默认值」的
+            // 状态:置断连态(记一条 error),进入下面的「显示话术 + 等按键退出」分支。
+            if !self.state.disconnected && !self.client.connected() {
+                mineral_log::error!(target: "tui", "daemon connection lost, awaiting key to exit");
+                self.state.disconnected = true;
+            }
+            if self.state.disconnected {
+                // 只渲染断连提示 + 等按键;daemon 没了,正常路径全是兜底默认值,跳过。
+                tui.draw(|f| draw(f, self))?;
+                if event::poll(tick_rate)?
+                    && let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press
+                {
+                    self.should_quit = true;
+                }
+                continue;
+            }
             self.drain_task_events();
             tui.draw(|f| draw(f, self))?;
 
