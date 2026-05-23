@@ -46,4 +46,10 @@ impl MediaService {
         let _ = (state, position);
         Ok(())
     }
+
+    /// 占位:no-op。
+    pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
+        let _ = position;
+        Ok(())
+    }
 }

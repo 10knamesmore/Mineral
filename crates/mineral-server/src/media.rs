@@ -6,7 +6,7 @@
 //! D-Bus 总线名。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mineral_audio::AudioSnapshot;
 use mineral_media::{MediaCommand, MediaConfig, MediaService, NowPlaying, PlaybackState};
@@ -17,6 +17,10 @@ use crate::player::PlayerCore;
 
 /// 状态上报循环的间隔。200ms 让 Position 跟手,显示端按它做逐行歌词同步才平滑
 const REPORT_INTERVAL_MS: u64 = 200;
+
+/// 判定 seek 跳变的阈值(ms)。实际位置偏离「线性外推预期」超过它就当作 seek。
+/// 取 1s:远大于 tick 抖动 / 采样误差,又远小于任何真实 seek 步长(最小 5s)。
+const SEEK_THRESHOLD_MS: u64 = 1000;
 
 /// 起系统媒体服务:注册控件、attach 命令回调、spawn 状态上报 task。
 ///
@@ -107,15 +111,33 @@ impl LyricsPresence {
     }
 }
 
+/// 实际位置偏离「线性外推预期」超过 [`SEEK_THRESHOLD_MS`] → 判定为 seek 跳变。
+///
+/// 正常播放时预期 = 上次位置 + 流逝时间(速率恒 1),实际≈预期;暂停时预期不前进。
+/// seek / `SetPosition` 让位置非线性跳变,偏差远超阈值。
+fn looks_like_seek(prev_ms: u64, actual_ms: u64, elapsed_ms: u64, was_playing: bool) -> bool {
+    let expected = if was_playing {
+        prev_ms.saturating_add(elapsed_ms)
+    } else {
+        prev_ms
+    };
+    actual_ms.abs_diff(expected) > SEEK_THRESHOLD_MS
+}
+
 /// 周期把 metadata + playback 上报给系统媒体控件。
 ///
-/// metadata 在换歌、或任一路歌词从无到有时重报;playback(状态 + 进度)每 tick 上报。
+/// metadata 在换歌、或任一路歌词从无到有时重报;playback(状态 + 进度)每 tick 上报;
+/// 检测到非线性位置跳变(seek)时补发 `Seeked` 信号(外推型客户端靠它重置基准)。
 async fn report_loop(player: PlayerCore, service: MediaService) {
     let mut tick = tokio::time::interval(Duration::from_millis(REPORT_INTERVAL_MS));
     let mut last_song_id = Option::<SongId>::None;
     let mut last_presence = LyricsPresence::default();
+    let mut last_pos = Option::<u64>::None;
+    let mut last_tick = Instant::now();
+    let mut last_playing = false;
     loop {
         tick.tick().await;
+        let now = Instant::now();
         let snap = player.snapshot();
         let audio = player.audio().snapshot();
 
@@ -133,6 +155,22 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
             last_song_id = cur_id;
             last_presence = presence;
         }
+
+        // 检测 seek:report_loop 是 snapshot 轮询拿不到事件,靠线性外推对比判定跳变,
+        // 跳变时补发 Seeked(只在有当前歌时;首 tick last_pos=None 不判定)。
+        if snap.current_song.is_some() {
+            let elapsed_ms =
+                u64::try_from(now.duration_since(last_tick).as_millis()).unwrap_or(u64::MAX);
+            if let Some(prev) = last_pos
+                && looks_like_seek(prev, audio.position_ms, elapsed_ms, last_playing)
+                && let Err(e) = service.notify_seek(Duration::from_millis(audio.position_ms))
+            {
+                mineral_log::warn!(target: "media", "notify_seek failed: {e}");
+            }
+        }
+        last_pos = Some(audio.position_ms);
+        last_tick = now;
+        last_playing = audio.playing;
 
         let (state, position) = playback_of(&snap, &audio);
         if let Err(e) = service.set_playback(state, position) {
@@ -191,5 +229,42 @@ fn cover_to_url(url: &MediaUrl) -> String {
     match url.as_remote() {
         Some(remote) => remote.as_str().to_owned(),
         None => format!("file://{url}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_seek;
+
+    #[test]
+    fn normal_playback_not_seek() {
+        // 一个 tick(200ms)位置正好前进 200ms → 预期=实际,不判 seek。
+        assert!(!looks_like_seek(
+            /*prev_ms*/ 10_000, /*actual_ms*/ 10_200, /*elapsed_ms*/ 200,
+            /*was_playing*/ true
+        ));
+    }
+
+    #[test]
+    fn jitter_within_threshold_not_seek() {
+        // tick 抖动 / 采样误差(实际比预期少 180ms)< 1s 阈值 → 不判 seek。
+        assert!(!looks_like_seek(10_000, 10_380, 200, true));
+    }
+
+    #[test]
+    fn seek_forward_is_seek() {
+        // 从 10s 跳到 70s,远超阈值 → 判 seek。
+        assert!(looks_like_seek(10_000, 70_000, 200, true));
+    }
+
+    #[test]
+    fn seek_backward_is_seek() {
+        assert!(looks_like_seek(60_000, 5_000, 200, true));
+    }
+
+    #[test]
+    fn paused_position_steady_not_seek() {
+        // 暂停:预期不前进(was_playing=false),位置也没动 → 不判 seek,即便流逝很久。
+        assert!(!looks_like_seek(10_000, 10_000, 5_000, false));
     }
 }

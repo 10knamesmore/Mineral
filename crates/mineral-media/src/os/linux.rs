@@ -35,6 +35,9 @@ enum Update {
         /// 当前进度;`None` 表示不更新位置。
         position: Option<Duration>,
     },
+
+    /// 发生了非线性位置跳变(seek),需 emit MPRIS `Seeked` 信号让外推型客户端重置基准。
+    Seeked(Duration),
 }
 
 /// 系统媒体服务句柄(Linux = MPRIS via mpris-server)。
@@ -88,6 +91,16 @@ impl MediaService {
                 status: state,
                 position,
             })
+            .map_err(|e| eyre!("mpris thread gone: {e}"))
+    }
+
+    /// 通知发生了非线性位置跳变(seek),emit MPRIS `Seeked` 信号。
+    ///
+    /// 正常线性播放**不要**调用(外推型客户端自行外推);只在 seek / `SetPosition`
+    /// 等跳变时调,让客户端把外推基准重置到 `position`。
+    pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
+        self.tx
+            .send(Update::Seeked(position))
             .map_err(|e| eyre!("mpris thread gone: {e}"))
     }
 }
@@ -196,9 +209,15 @@ async fn apply_update(player: &Player, update: Update) {
                 mineral_log::warn!(target: "media", "mpris set_playback_status: {e}");
             }
             if let Some(p) = position {
-                // set_position 是同步的:只更新 Position 属性内部值,不发
-                // PropertiesChanged(MPRIS 规范);客户端按需轮询读取。
+                // set_position 同步:只更新 Position 属性内部值,不发 PropertiesChanged
+                // (MPRIS 规范)。正常播放靠客户端外推;非线性跳变由 Update::Seeked 补信号。
                 player.set_position(duration_to_time(p));
+            }
+        }
+        Update::Seeked(position) => {
+            // emit Seeked 信号(只发信号、不改 Position 属性,属性由上面的 set_position 维护)。
+            if let Err(e) = player.seeked(duration_to_time(position)).await {
+                mineral_log::warn!(target: "media", "mpris seeked: {e}");
             }
         }
     }
