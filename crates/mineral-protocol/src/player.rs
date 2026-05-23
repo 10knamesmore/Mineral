@@ -55,6 +55,62 @@ impl PlayMode {
             Self::RepeatOne => "repeat-one",
         }
     }
+
+    /// 是否随机播放(queue 被洗过)。MPRIS `Shuffle` 维度。
+    #[must_use]
+    pub fn shuffle(self) -> bool {
+        matches!(self, Self::Shuffle)
+    }
+
+    /// 循环维度。MPRIS `LoopStatus` 维度。随机本就一直循环列表,故按 `All` 算。
+    #[must_use]
+    pub fn repeat(self) -> Repeat {
+        match self {
+            Self::Sequential => Repeat::Off,
+            Self::Shuffle | Self::RepeatAll => Repeat::All,
+            Self::RepeatOne => Repeat::One,
+        }
+    }
+
+    /// 改写「随机」维度、保「循环」维度不变,塌缩回四档之一。
+    #[must_use]
+    pub fn with_shuffle(self, shuffle: bool) -> Self {
+        Self::from_dimensions(shuffle, self.repeat())
+    }
+
+    /// 改写「循环」维度、保「随机」维度不变,塌缩回四档之一。
+    #[must_use]
+    pub fn with_repeat(self, repeat: Repeat) -> Self {
+        Self::from_dimensions(self.shuffle(), repeat)
+    }
+
+    /// (随机, 循环) 两维度塌缩回四档。
+    ///
+    /// mineral 只有四档,表达不了「随机 + 循环」同开:随机开时,整列循环被吸收进
+    /// `Shuffle`(随机本就一直循环),只有「随机 + 单曲循环」落到 `RepeatOne`。
+    fn from_dimensions(shuffle: bool, repeat: Repeat) -> Self {
+        match (shuffle, repeat) {
+            (false, Repeat::Off) => Self::Sequential,
+            (false, Repeat::All) => Self::RepeatAll,
+            (false, Repeat::One) => Self::RepeatOne,
+            (true, Repeat::One) => Self::RepeatOne,
+            (true, Repeat::Off | Repeat::All) => Self::Shuffle,
+        }
+    }
+}
+
+/// 循环维度,独立于「随机」维度;对应 MPRIS `LoopStatus`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Repeat {
+    /// 不循环(列表放完即止)。
+    #[default]
+    Off,
+
+    /// 单曲循环。
+    One,
+
+    /// 整列循环。
+    All,
 }
 
 /// Server 端持有的「播放上下文」快照,client 重连后立刻拉一份镜像到 UI。
@@ -83,4 +139,66 @@ pub struct PlayerSnapshot {
 
     /// 当前歌对应的 song_id,用于 client 端校验 lyrics 是否跟得上 current_song。
     pub current_lyrics_song_id: Option<SongId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlayMode, Repeat};
+
+    #[test]
+    fn dimensions_round_trip() {
+        for m in [
+            PlayMode::Sequential,
+            PlayMode::Shuffle,
+            PlayMode::RepeatAll,
+            PlayMode::RepeatOne,
+        ] {
+            assert_eq!(PlayMode::from_dimensions(m.shuffle(), m.repeat()), m);
+        }
+    }
+
+    #[test]
+    fn shuffle_on_repeat_all_or_off_is_shuffle() {
+        // 用户规则:随机本就一直循环,shuffle 开 + 整列循环(或不循环)都 == Shuffle。
+        assert_eq!(
+            PlayMode::from_dimensions(/*shuffle*/ true, Repeat::All),
+            PlayMode::Shuffle
+        );
+        assert_eq!(
+            PlayMode::from_dimensions(/*shuffle*/ true, Repeat::Off),
+            PlayMode::Shuffle
+        );
+    }
+
+    #[test]
+    fn shuffle_on_repeat_one_is_repeat_one() {
+        // 用户规则:shuffle 开 + 单曲循环 == RepeatOne。
+        assert_eq!(
+            PlayMode::from_dimensions(/*shuffle*/ true, Repeat::One),
+            PlayMode::RepeatOne
+        );
+    }
+
+    #[test]
+    fn with_shuffle_toggles_dimension() {
+        assert_eq!(PlayMode::Sequential.with_shuffle(true), PlayMode::Shuffle);
+        assert_eq!(PlayMode::RepeatAll.with_shuffle(true), PlayMode::Shuffle);
+        assert_eq!(PlayMode::Shuffle.with_shuffle(false), PlayMode::RepeatAll);
+    }
+
+    #[test]
+    fn with_repeat_changes_loop_dimension() {
+        assert_eq!(
+            PlayMode::Sequential.with_repeat(Repeat::One),
+            PlayMode::RepeatOne
+        );
+        assert_eq!(
+            PlayMode::Shuffle.with_repeat(Repeat::One),
+            PlayMode::RepeatOne
+        );
+        assert_eq!(
+            PlayMode::Sequential.with_repeat(Repeat::All),
+            PlayMode::RepeatAll
+        );
+    }
 }

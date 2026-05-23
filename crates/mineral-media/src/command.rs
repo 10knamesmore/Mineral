@@ -34,4 +34,23 @@ pub enum MediaCommand {
 
     /// 跳到绝对位置。
     SetPosition(Duration),
+
+    /// 设置随机播放开关(MPRIS `Shuffle` 属性写入)。
+    SetShuffle(bool),
+
+    /// 设置循环模式(MPRIS `LoopStatus` 属性写入)。
+    SetLoop(LoopMode),
+}
+
+/// 循环模式,对应 MPRIS `LoopStatus` 的三态;平台无关。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopMode {
+    /// 不循环。
+    None,
+
+    /// 单曲循环。
+    Track,
+
+    /// 整列循环。
+    Playlist,
 }

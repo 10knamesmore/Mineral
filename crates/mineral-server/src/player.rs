@@ -273,14 +273,14 @@ impl PlayerCore {
     /// `m` 键:PlayMode cycle + 进/退 Shuffle 边界处洗牌或还原。
     pub fn cycle_play_mode(&self) {
         let mut st = self.inner.state.lock();
-        let old = st.play_mode;
-        let new = old.cycle();
-        st.play_mode = new;
-        match (old, new) {
-            (m1, PlayMode::Shuffle) if m1 != PlayMode::Shuffle => enter_shuffle(&mut st),
-            (PlayMode::Shuffle, m2) if m2 != PlayMode::Shuffle => exit_shuffle(&mut st),
-            _ => {}
-        }
+        let new = st.play_mode.cycle();
+        apply_play_mode(&mut st, new);
+    }
+
+    /// 直接设目标 PlayMode(系统媒体控件按维度写 Shuffle/LoopStatus 后塌缩成的档)。
+    pub fn set_play_mode(&self, mode: PlayMode) {
+        let mut st = self.inner.state.lock();
+        apply_play_mode(&mut st, mode);
     }
 
     /// `p` 键:进度 > 阈值 → seek(0);否则跳上一首。
@@ -433,6 +433,20 @@ impl PlayerCore {
                 Priority::Background,
             );
         }
+    }
+}
+
+/// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。
+fn apply_play_mode(st: &mut State, new: PlayMode) {
+    let old = st.play_mode;
+    if old == new {
+        return;
+    }
+    st.play_mode = new;
+    match (old == PlayMode::Shuffle, new == PlayMode::Shuffle) {
+        (false, true) => enter_shuffle(st),
+        (true, false) => exit_shuffle(st),
+        _ => {}
     }
 }
 

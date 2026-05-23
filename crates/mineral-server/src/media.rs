@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mineral_audio::AudioSnapshot;
-use mineral_media::{MediaCommand, MediaConfig, MediaService, NowPlaying, PlaybackState};
+use mineral_media::{LoopMode, MediaCommand, MediaConfig, MediaService, NowPlaying, PlaybackState};
 use mineral_model::{Lyrics, MediaUrl, Song, SongId};
-use mineral_protocol::PlayerSnapshot;
+use mineral_protocol::{PlayMode, PlayerSnapshot, Repeat};
 
 use crate::player::PlayerCore;
 
@@ -69,6 +69,33 @@ fn handle_command(player: &PlayerCore, cmd: MediaCommand) {
             audio.seek(pos.saturating_sub(dur_ms(delta)));
         }
         MediaCommand::SetPosition(at) => audio.seek(dur_ms(at)),
+        // 控件只写单个维度;读当前 PlayMode、改对应维度、塌缩回四档(report_loop 随即回报真实档)。
+        MediaCommand::SetShuffle(on) => {
+            let mode = player.snapshot().play_mode;
+            player.set_play_mode(mode.with_shuffle(on));
+        }
+        MediaCommand::SetLoop(loop_mode) => {
+            let mode = player.snapshot().play_mode;
+            player.set_play_mode(mode.with_repeat(loop_to_repeat(loop_mode)));
+        }
+    }
+}
+
+/// MPRIS `LoopStatus`(平台无关 [`LoopMode`])→ [`Repeat`] 维度。
+fn loop_to_repeat(mode: LoopMode) -> Repeat {
+    match mode {
+        LoopMode::None => Repeat::Off,
+        LoopMode::Track => Repeat::One,
+        LoopMode::Playlist => Repeat::All,
+    }
+}
+
+/// [`Repeat`] 维度 → MPRIS `LoopStatus`(平台无关 [`LoopMode`])。
+fn repeat_to_loop(repeat: Repeat) -> LoopMode {
+    match repeat {
+        Repeat::Off => LoopMode::None,
+        Repeat::One => LoopMode::Track,
+        Repeat::All => LoopMode::Playlist,
     }
 }
 
@@ -135,6 +162,7 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
     let mut last_pos = Option::<u64>::None;
     let mut last_tick = Instant::now();
     let mut last_playing = false;
+    let mut last_play_mode = Option::<PlayMode>::None;
     loop {
         tick.tick().await;
         let now = Instant::now();
@@ -171,6 +199,18 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
         last_pos = Some(audio.position_ms);
         last_tick = now;
         last_playing = audio.playing;
+
+        // PlayMode 变化时把两维度回写 MPRIS Shuffle/LoopStatus(自动发 PropertiesChanged);
+        // 首 tick(last_play_mode=None)必报一次,纠正 mpris-server 的默认 Off/None。
+        if last_play_mode != Some(snap.play_mode) {
+            if let Err(e) = service.set_shuffle(snap.play_mode.shuffle()) {
+                mineral_log::warn!(target: "media", "set_shuffle failed: {e}");
+            }
+            if let Err(e) = service.set_loop(repeat_to_loop(snap.play_mode.repeat())) {
+                mineral_log::warn!(target: "media", "set_loop failed: {e}");
+            }
+            last_play_mode = Some(snap.play_mode);
+        }
 
         let (state, position) = playback_of(&snap, &audio);
         if let Err(e) = service.set_playback(state, position) {

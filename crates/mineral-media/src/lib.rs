@@ -13,7 +13,7 @@ mod config;
 mod os;
 mod state;
 
-pub use command::MediaCommand;
+pub use command::{LoopMode, MediaCommand};
 pub use config::MediaConfig;
 pub use os::MediaService;
 pub use state::{NowPlaying, PlaybackState};

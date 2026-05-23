@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::command::MediaCommand;
+use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
 
@@ -50,6 +50,18 @@ impl MediaService {
     /// 占位:no-op。
     pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
         let _ = position;
+        Ok(())
+    }
+
+    /// 占位:no-op。
+    pub fn set_shuffle(&self, shuffle: bool) -> color_eyre::Result<()> {
+        let _ = shuffle;
+        Ok(())
+    }
+
+    /// 占位:no-op。
+    pub fn set_loop(&self, mode: LoopMode) -> color_eyre::Result<()> {
+        let _ = mode;
         Ok(())
     }
 }

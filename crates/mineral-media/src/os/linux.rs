@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use color_eyre::eyre::eyre;
 use mineral_model::WordLyric;
-use mpris_server::{Metadata, PlaybackStatus, Player, Time};
+use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::command::MediaCommand;
+use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
 
@@ -38,6 +38,12 @@ enum Update {
 
     /// 发生了非线性位置跳变(seek),需 emit MPRIS `Seeked` 信号让外推型客户端重置基准。
     Seeked(Duration),
+
+    /// 更新随机播放开关(写 MPRIS `Shuffle` 属性,自动发 `PropertiesChanged`)。
+    Shuffle(bool),
+
+    /// 更新循环模式(写 MPRIS `LoopStatus` 属性,自动发 `PropertiesChanged`)。
+    Loop(LoopMode),
 }
 
 /// 系统媒体服务句柄(Linux = MPRIS via mpris-server)。
@@ -101,6 +107,20 @@ impl MediaService {
     pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
         self.tx
             .send(Update::Seeked(position))
+            .map_err(|e| eyre!("mpris thread gone: {e}"))
+    }
+
+    /// 上报随机播放开关(回写 MPRIS `Shuffle` 属性)。
+    pub fn set_shuffle(&self, shuffle: bool) -> color_eyre::Result<()> {
+        self.tx
+            .send(Update::Shuffle(shuffle))
+            .map_err(|e| eyre!("mpris thread gone: {e}"))
+    }
+
+    /// 上报循环模式(回写 MPRIS `LoopStatus` 属性)。
+    pub fn set_loop(&self, mode: LoopMode) -> color_eyre::Result<()> {
+        self.tx
+            .send(Update::Loop(mode))
             .map_err(|e| eyre!("mpris thread gone: {e}"))
     }
 }
@@ -194,6 +214,13 @@ fn wire_handlers(player: &Player, on_command: &Arc<dyn Fn(MediaCommand) + Send +
             position.as_micros(),
         )));
     });
+
+    let cb = Arc::clone(on_command);
+    player.connect_set_shuffle(move |_, shuffle: bool| cb(MediaCommand::SetShuffle(shuffle)));
+    let cb = Arc::clone(on_command);
+    player.connect_set_loop_status(move |_, status: LoopStatus| {
+        cb(MediaCommand::SetLoop(loop_status_to_mode(status)));
+    });
 }
 
 /// 应用一条状态更新到 player(set 失败只 warn,不影响播放)。
@@ -220,6 +247,34 @@ async fn apply_update(player: &Player, update: Update) {
                 mineral_log::warn!(target: "media", "mpris seeked: {e}");
             }
         }
+        Update::Shuffle(shuffle) => {
+            if let Err(e) = player.set_shuffle(shuffle).await {
+                mineral_log::warn!(target: "media", "mpris set_shuffle: {e}");
+            }
+        }
+        Update::Loop(mode) => {
+            if let Err(e) = player.set_loop_status(mode_to_loop_status(mode)).await {
+                mineral_log::warn!(target: "media", "mpris set_loop_status: {e}");
+            }
+        }
+    }
+}
+
+/// MPRIS `LoopStatus` → 平台无关 [`LoopMode`]。
+fn loop_status_to_mode(status: LoopStatus) -> LoopMode {
+    match status {
+        LoopStatus::None => LoopMode::None,
+        LoopStatus::Track => LoopMode::Track,
+        LoopStatus::Playlist => LoopMode::Playlist,
+    }
+}
+
+/// 平台无关 [`LoopMode`] → MPRIS `LoopStatus`。
+fn mode_to_loop_status(mode: LoopMode) -> LoopStatus {
+    match mode {
+        LoopMode::None => LoopStatus::None,
+        LoopMode::Track => LoopStatus::Track,
+        LoopMode::Playlist => LoopStatus::Playlist,
     }
 }
 
