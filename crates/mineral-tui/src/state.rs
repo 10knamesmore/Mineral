@@ -376,6 +376,17 @@ impl AppState {
             .unwrap_or(0)
     }
 
+    /// queue 浮层光标钳到合法范围(队列变短后防越界)。空队列归 0。
+    pub fn clamp_queue_sel(&mut self) {
+        self.queue_sel = self.queue_sel.min(self.queue.len().saturating_sub(1));
+    }
+
+    /// 当前在播歌在 queue 中的下标(打开浮层时把光标定位到此)。无在播曲返回 `None`。
+    pub fn queue_current_index(&self) -> Option<usize> {
+        let id = &self.playback.track.as_ref()?.id;
+        self.queue.iter().position(|s| &s.id == id)
+    }
+
     /// 当前可见(被 search 过滤)的歌单列表。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         if self.search_q.is_empty() {
@@ -413,5 +424,40 @@ impl AppState {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::endserenading;
+
+    use super::AppState;
+
+    /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
+    #[test]
+    fn queue_current_index_finds_playing() {
+        let mut s = AppState::empty();
+        let queue = endserenading(5);
+        s.playback.track = queue.get(2).cloned();
+        s.queue = queue;
+        assert_eq!(s.queue_current_index(), Some(2));
+
+        s.playback.track = None;
+        assert_eq!(s.queue_current_index(), None);
+    }
+
+    /// `clamp_queue_sel` 把越界光标钳到 `len-1`,空队列归 0。
+    #[test]
+    fn clamp_queue_sel_bounds_cursor() {
+        let mut s = AppState::empty();
+        s.queue = endserenading(3);
+        s.queue_sel = 9; // 越界
+        s.clamp_queue_sel();
+        assert_eq!(s.queue_sel, 2);
+
+        s.queue.clear();
+        s.queue_sel = 5;
+        s.clamp_queue_sel();
+        assert_eq!(s.queue_sel, 0, "空队列光标归 0");
     }
 }

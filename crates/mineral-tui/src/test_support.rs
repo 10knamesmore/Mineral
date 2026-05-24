@@ -4,8 +4,18 @@
 //! `assert_snap!`)来自 [`mineral_test`];本模块只保留依赖 TUI 私有类型
 //! (`AppState` / `SongView` / `PlaylistView`)的 fixture。
 
-use mineral_model::{Playlist, PlaylistId, SourceKind};
+use std::sync::Arc;
 
+use mineral_audio::AudioSnapshot;
+use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_protocol::{CancelFilter, PlayerSnapshot};
+use mineral_server::Client;
+use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use ratatui_image::picker::Picker;
+use rustc_hash::FxHashMap;
+
+use crate::app::App;
+use crate::cover::CoverFetcher;
 use crate::state::{AppState, LyricExtra, View};
 use crate::view_model::{PlaylistView, SongView};
 
@@ -122,4 +132,60 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
     s
+}
+
+/// no-op [`Client`]:所有调用静默吞掉、读取类返回默认值。供测试构造 [`App`] 而不接
+/// 真实 server / daemon。
+pub(crate) struct TestClient;
+
+impl Client for TestClient {
+    fn play(&self, _url: MediaUrl) {}
+    fn pause(&self) {}
+    fn resume(&self) {}
+    fn stop(&self) {}
+    fn seek(&self, _position_ms: u64) {}
+    fn set_volume(&self, _pct: u8) {}
+    fn audio_snapshot(&self) -> AudioSnapshot {
+        AudioSnapshot::default()
+    }
+    fn play_song(&self, _song: Song) {}
+    fn set_queue(&self, _queue: Vec<Song>, _target_id: SongId) {}
+    fn cycle_play_mode(&self) {}
+    fn prev_or_restart(&self) {}
+    fn next_song(&self) {}
+    fn player_snapshot(&self) -> PlayerSnapshot {
+        PlayerSnapshot::default()
+    }
+    fn submit_task(&self, _kind: TaskKind, _priority: Priority) -> TaskId {
+        TaskId::default()
+    }
+    fn cancel_tasks(&self, _filter: CancelFilter) {}
+    fn drain_task_events(&self) -> Vec<TaskEvent> {
+        Vec::new()
+    }
+    fn task_snapshot(&self) -> Snapshot {
+        Snapshot {
+            running: 0,
+            by_lane: FxHashMap::default(),
+            by_kind: FxHashMap::default(),
+        }
+    }
+    fn pull_pcm(&self, _n: usize) -> (Vec<f32>, u32) {
+        (Vec::new(), 0)
+    }
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
+/// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
+pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
+    let mut app = App::new(
+        Arc::new(TestClient),
+        CoverFetcher::disabled(),
+        Picker::from_fontsize((8, 16)),
+    );
+    let queue = endserenading(len);
+    app.state.playback.track = queue.get(current_idx).cloned();
+    app.state.current = queue.get(current_idx).cloned();
+    app.state.queue = queue;
+    app
 }

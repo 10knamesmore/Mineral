@@ -57,7 +57,15 @@ pub enum Launch {
 ///     `Auto` / `Connect` 下忽略 —— channels 由独立 daemon 进程自己持有。
 ///   - `launch`: 启动模式。
 pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, launch: Launch) -> color_eyre::Result<()> {
-    let cover_fetcher = CoverFetcher::spawn()?;
+    // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
+    // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
+    let cover_fetcher = CoverFetcher::spawn().unwrap_or_else(|e| {
+        mineral_log::warn!(
+            error = mineral_log::chain(&e),
+            "cover fetcher 起步失败,封面禁用"
+        );
+        CoverFetcher::disabled()
+    });
 
     match launch {
         Launch::Auto => {

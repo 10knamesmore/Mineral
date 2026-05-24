@@ -176,7 +176,9 @@ impl App {
         self.state.playback.play_url = snap.play_url;
         self.state.playback.mode = snap.play_mode;
         self.state.queue = snap.queue;
-        self.state.queue_sel = snap.queue_sel;
+        // 不灌 snap.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义不同于
+        // UI 光标;在播歌已由 ▶ 标记单独表达。queue_sel 是纯客户端光标,只钳防越界。
+        self.state.clamp_queue_sel();
         self.state.original_queue = snap.original_queue;
         // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
         // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
@@ -356,6 +358,8 @@ impl App {
     fn toggle_queue(&mut self) {
         self.state.queue_open = !self.state.queue_open;
         self.state.focus = if self.state.queue_open {
+            // 打开即把光标定位到在播歌(无在播曲落 0),之后用户可自由 j/k/g/G 移动。
+            self.state.queue_sel = self.state.queue_current_index().unwrap_or(0);
             Focus::Queue
         } else {
             Focus::Left
@@ -571,5 +575,93 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use mineral_protocol::PlayerSnapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::App;
+    use crate::components::overlay::queue as queue_overlay;
+    use crate::state::Focus;
+    use crate::test_support::{app_with_queue, assert_snap, endserenading};
+    use crate::theme::Theme;
+
+    /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 集成回归:开队列 → j/k/g/G 真的移动光标,且**不被 server snapshot tick 弹回**。
+    /// 这是本 bug 的核心 —— 此前 `apply_player_snapshot` 每帧用 server 的「在播锚点」
+    /// 覆盖 UI 光标,导致按键看似无效。
+    #[test]
+    fn queue_nav_moves_and_survives_snapshot_tick() -> color_eyre::Result<()> {
+        // queue 6 首,当前在播第 2 首(idx 2)。
+        let mut app = app_with_queue(6, /*current_idx*/ 2);
+
+        // 打开浮层:焦点切 Queue,光标定位到在播行。
+        app.toggle_queue();
+        assert_eq!(app.state.focus, Focus::Queue);
+        assert_eq!(app.state.queue_sel, 2, "打开时光标应落在在播歌");
+
+        // j 两次 → 4。
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.state.queue_sel, 4);
+
+        // 模拟一次 server tick:snapshot 带不同的 queue_sel(在播锚点 = 2)。
+        // 修复后 UI 光标不应被这个值覆盖。
+        let snap = PlayerSnapshot {
+            queue: endserenading(6),
+            queue_sel: 2,
+            ..Default::default()
+        };
+        app.apply_player_snapshot(snap);
+        assert_eq!(app.state.queue_sel, 4, "snapshot tick 不该弹回 UI 光标");
+
+        // k 一次 → 3;g → 0;G → 末行 5。
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.state.queue_sel, 3);
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.state.queue_sel, 0);
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.state.queue_sel, 5);
+
+        Ok(())
+    }
+
+    /// 渲染回归:光标(`▌`)移到第 4 行、在播(`▶`)在第 2 行 —— 二者落在不同行,
+    /// 证明 UI 光标与在播位置彻底解耦。
+    #[test]
+    fn queue_cursor_decoupled_from_playing_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(6, /*current_idx*/ 2);
+        app.toggle_queue();
+        press(&mut app, KeyCode::Char('G')); // → 5
+        press(&mut app, KeyCode::Char('k')); // → 4
+        assert_eq!(app.state.queue_sel, 4);
+
+        let current_id = app.state.playback.track.as_ref().map(|t| &t.id);
+        let mut t = Terminal::new(TestBackend::new(96, 28))?;
+        t.draw(|f| {
+            queue_overlay::draw(
+                f,
+                f.area(),
+                &app.state.queue,
+                app.state.queue_sel,
+                current_id,
+                &Theme::default(),
+                /*focused*/ true,
+            );
+        })?;
+        assert_snap!(
+            "queue 浮层:光标 ▌ 在第 4 行、在播 ▶ 在第 2 行(二者解耦)",
+            t.backend()
+        );
+        Ok(())
     }
 }

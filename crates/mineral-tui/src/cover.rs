@@ -70,6 +70,19 @@ impl CoverFetcher {
         Ok(Self { req_tx: tx, ready })
     }
 
+    /// 禁用态 fetcher:不起 worker、不建 isahc client,纯 null object。
+    ///
+    /// 用于封面降级场景——headless / 无网 / isahc 建不起来(TLS / 证书),或测试里
+    /// 不需要真抓图时。`request()` 静默丢弃(channel 无人收,send 失败已被忽略),
+    /// `drain_ready()` 恒空。与 [`CoverFetcher::spawn`] 不同,**不需要 tokio runtime**。
+    pub fn disabled() -> Self {
+        let (tx, _rx) = mpsc::unbounded_channel::<MediaUrl>();
+        Self {
+            req_tx: tx,
+            ready: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     /// 投递一次 fetch 请求。
     pub fn request(&self, url: MediaUrl) {
         // worker 全退出时这里 send 失败,忽略 —— 不该发生(tokio task 跟 fetcher
