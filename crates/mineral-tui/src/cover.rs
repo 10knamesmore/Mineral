@@ -1,6 +1,7 @@
 //! Client 端的封面图 fetcher。
 //!
-//! 4 个 tokio worker 共享一条 mpsc 队列,跑「裸 HTTP fetch + decode + resize」。
+//! 4 个 tokio worker 共享一条 mpsc 队列:worker 上 async 抓字节,解码+resize 经
+//! `spawn_blocking` 落到 blocking 线程池(CPU 密集,别占 runtime worker)。
 //! 跟 mineral-task 的 lane 不同,本 fetcher **归 client 所有** —— 封面是装饰性
 //! 资源,server 不该管。多 client 各持一个 fetcher,各 fetch 各 cache。
 //!
@@ -116,7 +117,10 @@ async fn worker_loop(
     }
 }
 
-/// 抓 url 字节 → 解码成 image → 大图等比 resize 到 `COVER_MAX_DIM`。任一步失败返回 None。
+/// 抓 url 字节(async)→ 把解码+resize 丢到 blocking 池跑 → 任一步失败返回 None。
+///
+/// 解码/缩放是 CPU 密集的同步活儿,不能占着 runtime worker(会挤掉 IPC 等 async 任务),
+/// 故经 [`tokio::task::spawn_blocking`] 落到专用 blocking 线程池;下载留在本 worker(async)。
 async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<DynamicImage> {
     let bytes = match read_bytes(url, client).await {
         Ok(b) => b,
@@ -125,13 +129,29 @@ async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<Dynamic
             return None;
         }
     };
-    let img = match image::load_from_memory(&bytes) {
-        Ok(i) => i,
-        Err(e) => {
+    match tokio::task::spawn_blocking(move || decode_resize(&bytes)).await {
+        Ok(Ok(img)) => Some(img),
+        Ok(Err(e)) => {
             mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "decode failed");
-            return None;
+            None
         }
-    };
+        Err(e) => {
+            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "decode task join failed");
+            None
+        }
+    }
+}
+
+/// 同步把字节解码成 image,大图等比 resize 到 `COVER_MAX_DIM` 之内。CPU 密集,由
+/// [`fetch_and_decode`] 经 `spawn_blocking` 调,**不要**直接在 async 上下文同步调用。
+///
+/// # Params:
+///   - `bytes`: 封面图原始字节(任意 image 支持的编码)
+///
+/// # Return:
+///   解码并(按需)缩放后的图;解码失败返回 `Err`。
+fn decode_resize(bytes: &[u8]) -> color_eyre::Result<DynamicImage> {
+    let img = image::load_from_memory(bytes).map_err(|e| eyre!("decode: {e}"))?;
     // resize 到 COVER_MAX_DIM 之内 —— 保持纵横比,Triangle 滤镜质量比 Nearest 好、
     // 比 Lanczos3 快一档,对缩略图够用。原图小于这个就直接用(no-op)。
     let resized = if img.width() > COVER_MAX_DIM || img.height() > COVER_MAX_DIM {
@@ -143,7 +163,7 @@ async fn fetch_and_decode(url: &MediaUrl, client: &HttpClient) -> Option<Dynamic
     } else {
         img
     };
-    Some(resized)
+    Ok(resized)
 }
 
 /// 抓出 cover 图的原始字节:Remote 走 HTTP,Local 走 fs。
@@ -160,5 +180,58 @@ async fn read_bytes(url: &MediaUrl, client: &HttpClient) -> color_eyre::Result<V
         MediaUrl::Local(p) => tokio::fs::read(p)
             .await
             .map_err(|e| eyre!("read file: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use image::{DynamicImage, ImageFormat, RgbImage};
+
+    use super::{COVER_MAX_DIM, decode_resize};
+
+    /// 把指定尺寸的纯色 RGB 图编码成 PNG 字节,供 `decode_resize` 测试喂入。
+    ///
+    /// # Params:
+    ///   - `w` / `h`: 目标宽高(像素)
+    ///
+    /// # Return:
+    ///   PNG 编码后的字节;编码失败返回 `Err`。
+    fn png_bytes(w: u32, h: u32) -> color_eyre::Result<Vec<u8>> {
+        let img = DynamicImage::ImageRgb8(RgbImage::new(w, h));
+        let mut buf = Cursor::new(Vec::<u8>::new());
+        img.write_to(&mut buf, ImageFormat::Png)
+            .map_err(|e| color_eyre::eyre::eyre!("encode png: {e}"))?;
+        Ok(buf.into_inner())
+    }
+
+    /// 大图(超过 `COVER_MAX_DIM`)被等比缩到上限之内。
+    #[test]
+    fn large_image_is_clamped() -> color_eyre::Result<()> {
+        let bytes = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
+        let img = decode_resize(&bytes)?;
+        assert!(
+            img.width() <= COVER_MAX_DIM && img.height() <= COVER_MAX_DIM,
+            "尺寸应被缩到 {COVER_MAX_DIM} 内,实际 {}x{}",
+            img.width(),
+            img.height()
+        );
+        Ok(())
+    }
+
+    /// 小图(小于 `COVER_MAX_DIM`)原样返回,不放大、不缩小。
+    #[test]
+    fn small_image_unchanged() -> color_eyre::Result<()> {
+        let bytes = png_bytes(/*w*/ 100, /*h*/ 100)?;
+        let img = decode_resize(&bytes)?;
+        assert_eq!((img.width(), img.height()), (100, 100));
+        Ok(())
+    }
+
+    /// 坏字节解码失败返回 `Err`,不 panic。
+    #[test]
+    fn garbage_bytes_error() {
+        assert!(decode_resize(b"not an image").is_err());
     }
 }
