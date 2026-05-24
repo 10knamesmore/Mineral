@@ -20,10 +20,28 @@ fn main() -> color_eyre::Result<()> {
         Some(Command::Serve) => run_daemon(),
         Some(command) => mineral_cli::run(command),
         None => {
-            let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+            let runtime = named_runtime("mineral-rt")?;
             runtime.block_on(run_tui(args.connect, args.in_proc))
         }
     }
+}
+
+/// 建一个具名的多线程 tokio runtime —— 行为等价默认 `Runtime::new()`(worker 数 =
+/// CPU 核数、enable_all),只是给线程起名,便于 `top -H` / perf 里把 mineral 的 tokio
+/// 线程跟 isahc-agent、`mineral-audio-rt` 等区分开。
+///
+/// # Params:
+///   - `name`: runtime 线程名(async worker 与 blocking 池线程共用此名 —— tokio 的
+///     builder 不单独区分二者)
+///
+/// # Return:
+///   构造好的 runtime;底层 builder 失败时冒泡。
+fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name(name)
+        .build()
+        .wrap_err("create tokio runtime failed")
 }
 
 /// daemon 入口(`mineral serve`):build channels → 起 runtime → serve。
@@ -33,7 +51,7 @@ fn main() -> color_eyre::Result<()> {
 /// 启动失败(如凭证解析失败)也能在日志里查到。
 fn run_daemon() -> color_eyre::Result<()> {
     let result = build_channels().and_then(|channels| {
-        let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+        let runtime = named_runtime("mineral-daemon-rt")?;
         runtime.block_on(mineral_cli::serve_run(channels))
     });
     if let Err(e) = &result {
