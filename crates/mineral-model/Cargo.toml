@@ -20,7 +20,9 @@ serde_json     = { workspace = true }
 url            = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+insta        = { workspace = true }
+mineral-test = { workspace = true }
+proptest     = { workspace = true }
 
 [lints]
 workspace = true

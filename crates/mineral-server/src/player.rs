@@ -564,26 +564,14 @@ fn _channels_meta_placeholder(_s: SourceKind) {}
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{Song, SongId, SourceKind};
+    use mineral_model::Song;
     use mineral_protocol::PlayMode;
+    use mineral_test::song;
+    use pretty_assertions::assert_eq;
 
     use super::{
         State, apply_play_mode, enter_shuffle, exit_shuffle, next_in_queue, prev_in_queue,
     };
-
-    /// 造一首最小 Song(id 即 name,其余取默认),便于断言。
-    fn song(id: &str) -> Song {
-        Song {
-            source: SourceKind::Local,
-            id: SongId::from(id),
-            name: id.to_owned(),
-            artists: Vec::new(),
-            album: None,
-            duration_ms: 0,
-            cover_url: None,
-            source_url: None,
-        }
-    }
 
     /// 造一个含队列的 State:queue=ids、queue_sel=sel、current=queue[sel]、mode。
     fn state_with(ids: &[&str], sel: usize, mode: PlayMode) -> State {

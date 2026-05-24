@@ -23,7 +23,9 @@ mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 
 [dev-dependencies]
-nix = { workspace = true }
+nix        = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 
 [lints]
 workspace = true

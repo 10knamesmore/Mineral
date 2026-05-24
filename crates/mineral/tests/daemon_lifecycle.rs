@@ -223,24 +223,23 @@ fn daemon_logs_shutdown_on_sigterm() -> color_eyre::Result<()> {
 #[test]
 fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn_null("nullstatus")?;
-    daemon.wait_ready()?;
 
-    // daemon 是单 client 设计(serve.rs):wait_ready 的探测连接释放 busy 标志有个
-    // 短窗口,与 `mineral status` 撞上会被「daemon busy」拒。重试到成功 / 超时。
+    // 不做独立的 wait_ready 探测连接 —— daemon 是单 client 设计(serve.rs),探测连接
+    // 释放 busy 标志的短窗口会跟紧接的 `mineral status` 撞成「daemon busy」。改成直接
+    // 重试 status:它本身就是就绪探测,连不上(daemon 未起)/ 瞬时 busy 都重试到成功,
+    // 全程只有这一个 client,无竞态。
     let deadline = Instant::now() + Duration::from_secs(10);
     let stdout = loop {
         let out = daemon.status_output()?;
         if out.status.success() {
             break String::from_utf8_lossy(&out.stdout).into_owned();
         }
-        let stderr = String::from_utf8_lossy(&out.stderr);
         if Instant::now() >= deadline {
-            bail!("status 始终未成功退出,最后 stderr:\n{stderr}");
+            bail!(
+                "status 始终未成功退出,最后 stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
-        assert!(
-            stderr.contains("busy"),
-            "status 非零退出但不是 busy(非预期),stderr:\n{stderr}"
-        );
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(

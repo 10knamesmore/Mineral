@@ -21,12 +21,15 @@ pub fn lerp_color(from: Color, to: Color, num: u64, denom: u64) -> Color {
 }
 
 /// `(a*(d-n) + b*n) / d`,纯整数,不踩 `as_conversions` lint。
+///
+/// 中间乘积用 `u128`:`255 * u64::MAX` 远超 `u64`,小输入(帧数 / 比例)行为不变,
+/// 大 `denom` 也不会溢出 panic。
 pub fn lerp_byte(a: u8, b: u8, num: u64, denom: u64) -> u8 {
-    let denom = denom.max(1);
-    let num = num.min(denom);
-    let a64 = u64::from(a);
-    let b64 = u64::from(b);
-    let res = (a64 * (denom - num) + b64 * num) / denom;
+    let denom = u128::from(denom.max(1));
+    let num = u128::from(num).min(denom);
+    let a128 = u128::from(a);
+    let b128 = u128::from(b);
+    let res = (a128 * (denom - num) + b128 * num) / denom;
     u8::try_from(res).unwrap_or(0)
 }
 
@@ -120,5 +123,23 @@ mod tests {
         assert_eq!(rotate_hue(red, 360.0), red);
         assert_eq!(rotate_hue(red, 180.0), Color::Rgb(0, 255, 255));
         assert_eq!(rotate_hue(Color::Red, 123.0), Color::Red);
+    }
+
+    use proptest::prelude::{any, proptest};
+
+    proptest! {
+        /// `lerp_byte` 结果恒在 [min(a,b), max(a,b)] 内(任意比例 / denom)。
+        #[test]
+        fn lerp_byte_in_range(a in any::<u8>(), b in any::<u8>(), num in any::<u64>(), denom in any::<u64>()) {
+            let r = lerp_byte(a, b, num, denom);
+            proptest::prop_assert!(r >= a.min(b) && r <= a.max(b));
+        }
+
+        /// `rotate_hue` 对 Rgb 输入恒返回 Rgb(任意角度都不 panic / 不掉变体 / 留在色彩域)。
+        #[test]
+        fn rotate_hue_keeps_rgb(r in any::<u8>(), g in any::<u8>(), b in any::<u8>(), deg in -1000.0_f32..1000.0) {
+            let out = rotate_hue(Color::Rgb(r, g, b), deg);
+            proptest::prop_assert!(matches!(out, Color::Rgb(..)));
+        }
     }
 }

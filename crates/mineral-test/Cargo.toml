@@ -1,0 +1,17 @@
+[package]
+name        = "mineral-test"
+description = "Mineral 内部测试辅助:共享 fixture / 快照断言宏 / proptest 生成器"
+publish     = false
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model = { workspace = true }
+proptest      = { workspace = true }
+
+[lints]
+workspace = true

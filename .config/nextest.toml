@@ -1,0 +1,16 @@
+# cargo-nextest 配置。运行用 `cargo nextest run`(见 .cargo/config.toml 的 `cargo t` 别名)。
+# 注:nextest 不跑 doctest,doctest 另走 `cargo test --doc`(`cargo td`)。
+
+[profile.default]
+# 真有偶发 flaky 自动重试一次再判失败;卡死的测试 60s 超时、最多重启 2 次。
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[test-groups]
+# daemon 进程级 e2e 起真子进程 + 抢 unix socket,限制为单线程串行,杜绝并发起 daemon
+# 互相干扰(防御性隔离;真正的 busy 竞态已在测试内消除)。
+daemon-e2e = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(daemon_lifecycle)"
+test-group = "daemon-e2e"

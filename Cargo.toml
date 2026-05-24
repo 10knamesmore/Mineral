@@ -13,6 +13,7 @@ members = [
     "crates/mineral-protocol",
     "crates/mineral-server",
     "crates/mineral-spectrum",
+    "crates/mineral-test",
     "crates/mineral-channel/core",
     "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
@@ -58,6 +59,7 @@ mineral-paths           = { path = "crates/mineral-paths" }
 mineral-protocol        = { path = "crates/mineral-protocol" }
 mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
+mineral-test            = { path = "crates/mineral-test" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
@@ -99,6 +101,10 @@ tokio              = { version = "1.45.1", features = ["full"] }
 tokio-util         = { version = "0.7", features = ["codec"] }
 parking_lot       = "0.12"
 insta              = { version = "1", features = ["filters"] }
+proptest           = "1"
+assert_cmd         = "2"
+predicates         = "3"
+pretty_assertions  = "1"
 tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }

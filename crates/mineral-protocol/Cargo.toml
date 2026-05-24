@@ -22,7 +22,10 @@ tokio-util = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "io-util"] }
+tokio             = { workspace = true, features = ["macros", "io-util"] }
+mineral-test      = { workspace = true }
+proptest          = { workspace = true }
+pretty_assertions = { workspace = true }
 
 [lints]
 workspace = true

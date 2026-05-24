@@ -151,4 +151,35 @@ mod tests {
     fn short_is_compact() {
         assert_eq!(compute(area(100, 23)).mode, LayoutMode::Compact);
     }
+
+    use proptest::prelude::proptest;
+
+    proptest! {
+        /// 任意尺寸:所有子区域都落在父 area 内(不越界 / 不 panic),且 Full/Compact 选择
+        /// 严格按 80×24 阈值。
+        #[test]
+        fn areas_fit_parent_and_mode_matches(w in 0u16..=600, h in 0u16..=600) {
+            let parent = area(w, h);
+            let a = compute(parent);
+            proptest::prop_assert_eq!(a.mode == LayoutMode::Full, w >= 80 && h >= 24);
+            let fits = |c: Rect| {
+                c.x >= parent.x
+                    && c.y >= parent.y
+                    && c.right() <= parent.right()
+                    && c.bottom() <= parent.bottom()
+            };
+            let rects = [
+                Some(a.top_status),
+                Some(a.left),
+                a.right,
+                a.lyrics,
+                a.spectrum,
+                Some(a.transport),
+                Some(a.status_bar),
+            ];
+            for r in rects.into_iter().flatten() {
+                proptest::prop_assert!(fits(r), "子区域 {:?} 越出父 {:?}", r, parent);
+            }
+        }
+    }
 }

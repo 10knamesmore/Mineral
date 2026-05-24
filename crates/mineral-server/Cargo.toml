@@ -24,8 +24,10 @@ serde       = { workspace = true }
 tokio       = { workspace = true }
 
 [dev-dependencies]
-rustc-hash = { workspace = true }
-serde_json = { workspace = true }
+mineral-test      = { workspace = true }
+pretty_assertions = { workspace = true }
+rustc-hash        = { workspace = true }
+serde_json        = { workspace = true }
 
 [lints]
 workspace = true

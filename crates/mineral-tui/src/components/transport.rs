@@ -197,7 +197,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::playback::Playback;
-    use crate::test_support::song;
+    use crate::test_support::{song, with_duration, with_name};
     use crate::theme::Theme;
 
     /// 无 track:transport 空态。
@@ -215,7 +215,10 @@ mod tests {
     fn transport_playing_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("1", "LoveLetterTypewriter", 225_000));
+        pb.track = Some(with_duration(
+            with_name(song("1"), "LoveLetterTypewriter"),
+            225_000,
+        ));
         pb.position_ms = 60_000;
         pb.playing = true;
         pb.volume_pct = 80;
@@ -232,7 +235,10 @@ mod tests {
     fn transport_paused_long_title_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("10", "TheLastWordIsRejoice", 309_000));
+        pb.track = Some(with_duration(
+            with_name(song("10"), "TheLastWordIsRejoice"),
+            309_000,
+        ));
         pb.position_ms = 30_000;
         pb.playing = false;
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
@@ -249,7 +255,10 @@ mod tests {
     fn transport_cjk_title_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("c6", "地球上最后一个EMO男孩", 240_000));
+        pb.track = Some(with_duration(
+            with_name(song("c6"), "地球上最后一个EMO男孩"),
+            240_000,
+        ));
         pb.position_ms = 60_000;
         pb.playing = true;
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;

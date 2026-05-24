@@ -2,12 +2,14 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+use mineral_model::{MediaUrl, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, framed, recv,
     send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
+use mineral_test::song;
+use pretty_assertions::assert_eq;
 use tokio::io::duplex;
 
 /// 把一个 [`Request`] 走 framed round-trip,断言收回的与发出的 Debug 等价
@@ -37,20 +39,6 @@ async fn resp_round_trips(resp: Response) -> color_eyre::Result<()> {
         .ok_or_else(|| eyre!("frame missing"))?;
     assert_eq!(format!("{got:?}"), want);
     Ok(())
-}
-
-/// 造一首最小 Song。
-fn song(id: &str) -> Song {
-    Song {
-        source: SourceKind::Netease,
-        id: SongId::new(id.to_owned()),
-        name: id.to_owned(),
-        artists: Vec::new(),
-        album: None,
-        duration_ms: 0,
-        cover_url: None,
-        source_url: None,
-    }
 }
 
 #[tokio::test]
@@ -253,4 +241,53 @@ async fn round_trip_player_snapshot_rich() -> color_eyre::Result<()> {
     };
     resp_round_trips(Response::PlayerSnapshot(Box::new(snap))).await?;
     Ok(())
+}
+
+/// 属性测试:随机 `Request` 经 bincode 编/解码 Debug 恒等。覆盖手写 example 测不到的
+/// 字段组合(尤其 Song-laden 的 PlaySong / SetQueue)。framing(length-delimited)是上游
+/// codec,不在此重测;序列化保真才是本仓的风险点。
+mod proptests {
+    use bincode::{deserialize, serialize};
+    use mineral_model::SongId;
+    use mineral_protocol::Request;
+    use mineral_test::arb_song;
+    use proptest::collection::vec;
+    use proptest::prelude::{Just, Strategy, any, prop_oneof, proptest};
+    use proptest::test_runner::TestCaseError;
+
+    /// 随机 `Request`:unit variant + 数值 variant + Song-laden variant。
+    fn arb_request() -> impl Strategy<Value = Request> {
+        prop_oneof![
+            Just(Request::Pause),
+            Just(Request::Resume),
+            Just(Request::Stop),
+            Just(Request::AudioSnapshot),
+            Just(Request::DrainTaskEvents),
+            Just(Request::TaskSnapshot),
+            Just(Request::CyclePlayMode),
+            Just(Request::PrevOrRestart),
+            Just(Request::NextSong),
+            Just(Request::PlayerSnapshot),
+            any::<u64>().prop_map(Request::Seek),
+            any::<u8>().prop_map(Request::SetVolume),
+            any::<usize>().prop_map(Request::PullPcm),
+            arb_song().prop_map(|s| Request::PlaySong(Box::new(s))),
+            (vec(arb_song(), 0..4), any::<String>()).prop_map(|(queue, target)| {
+                Request::SetQueue {
+                    queue,
+                    target_id: SongId::from(target.as_str()),
+                }
+            }),
+        ]
+    }
+
+    proptest! {
+        /// 任意 `Request` 经 bincode 往返后 Debug 恒等(`Request` 无 `PartialEq`,沿用 Debug 比较)。
+        #[test]
+        fn request_bincode_roundtrip(req in arb_request()) {
+            let bytes = serialize(&req).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let back: Request = deserialize(&bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            proptest::prop_assert_eq!(format!("{back:?}"), format!("{req:?}"));
+        }
+    }
 }

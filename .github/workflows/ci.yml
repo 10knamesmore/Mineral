@@ -30,6 +30,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # nextest 作运行器(进程隔离 + daemon e2e 串行组,见 .config/nextest.toml)。
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: fmt
         run: cargo fmt --all --check
 
@@ -38,6 +43,10 @@ jobs:
 
       # INSTA_UPDATE=no:快照不匹配 / 缺基准直接失败,绝不在 CI 写 .snap.new。
       - name: test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace
         env:
           INSTA_UPDATE: "no"
+
+      # nextest 不跑 doctest,单独兜底。
+      - name: doctest
+        run: cargo test --workspace --doc
