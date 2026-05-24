@@ -49,8 +49,11 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         .map(|p| build_row(p, state, theme))
         .collect();
 
+    // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
+    // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
+    // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
     let widths = [
-        Constraint::Min(12),
+        Constraint::Fill(1),
         Constraint::Length(11),
         Constraint::Length(8),
         Constraint::Length(5),
@@ -211,10 +214,18 @@ mod tests {
         assert_eq!(position_label(9, 3), " 3 / 3 ");
     }
 
-    // 注:含数据的多列列表快照(`playlists_list`)被移除 —— playlists 表格的
-    // `Constraint::Min(12)` 列在有 slack 时,ratatui 列宽求解器会给出多个合法解
-    // (列边界随机差 1),快照非确定。这其实是真实 app 里「列宽闪烁」的潜在 bug,
-    // 应作为独立修复(把列约束改成全确定性)而非在测试里掩盖。
+    /// 3 个混源歌单列表(name 列 Fill(1) 后列宽确定,不再 flaky)。
+    #[test]
+    fn playlists_list_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = crate::test_support::state_with_playlists();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "歌单列表:3 个混源歌单(EndSerenading / 本地)",
+            t.backend()
+        );
+        Ok(())
+    }
 
     /// 空列表(尚未加载 / 未登录)。
     #[test]

@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/sidebar/playlists.rs
+description: "歌单列表:3 个混源歌单(EndSerenading / 本地)"
+expression: t.backend()
+---
+"╭ playlists ───────────────────────────╮"
+"│  name      source      length   items│"
+"│▌ EndSerena ♫ netease   —        10   │"
+"│  The Power ♫ netease   —        8    │"
+"│  本地音乐  □ local     —        5    │" Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " ")]
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"╰ 1 / 3 ───────────────────────────────╯"
