@@ -4,5 +4,5 @@ TODO.md
 imgs/
 logs/
 .DS_Store
-# perf 采样产物(scripts/profile.sh)
-*-perf.data
+# 脚本/bin 生成的、可丢的中间物(perf.data / 火焰图 svg / samply 产物等)
+scratch/
