@@ -4,3 +4,5 @@ TODO.md
 imgs/
 logs/
 .DS_Store
+# perf 采样产物(scripts/profile.sh)
+*-perf.data

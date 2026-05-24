@@ -174,3 +174,10 @@ too_many_lines      = "deny"
 
 # --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
 missing_docs_in_private_items = "deny"
+
+# 性能剖析专用 profile:release 全部优化 + 完整 DWARF 符号,供 perf / 火焰图采到函数名。
+# 产物落在 target/profiling/,与正常 `--release`(target/release/,不带 DWARF)物理隔离,
+# 符号只在剖析这一种场景出现,不会进真正发布的二进制。用法见 `cargo profbuild`(.cargo/config.toml)。
+[profile.profiling]
+inherits = "release"
+debug = true

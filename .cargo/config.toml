@@ -12,3 +12,9 @@ apitest = "run -p mineral-channel-netease --example apitest"
 t    = "nextest run --workspace"
 td   = "test --workspace --doc"
 snap = "insta test --test-runner nextest --review"
+
+# 性能剖析专用 build:release 优化 + 完整 DWARF 符号(见 Cargo.toml [profile.profiling])。
+# 产物在 target/profiling/mineral,符号只为 perf / 火焰图,不污染 `--release`。
+#   cargo profbuild
+#   perf record -g --call-graph dwarf -p $(pgrep -xf target/profiling/mineral) -- sleep 20
+profbuild = "build --profile profiling -p mineral"
