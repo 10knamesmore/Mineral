@@ -177,8 +177,9 @@ pub struct AppState {
 /// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
 pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
-/// queue 浮层弹出/收起动画时长(tick 数)。30fps 下约 200ms,缩放台阶足够多又不拖沓。
-const QUEUE_ANIM_TICKS: u16 = 6;
+/// queue 浮层弹出/收起动画时长(tick 数)。动画期帧率恒为 60fps、每帧推进一步,
+/// 12 tick ≈ 200ms,缩放台阶足够细又不拖沓。
+const QUEUE_ANIM_TICKS: u16 = 12;
 
 impl AppState {
     /// 构造空状态。所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充。

@@ -35,6 +35,16 @@ const SEEK_BIG_STEP_S: i64 = 30;
 /// 大跨度跳行步长(行);`Shift+J`/`Shift+K` 一次。j/k/箭头仍是 1。
 const ROW_BIG_STEP: usize = 7;
 
+/// 有动画在跑时的帧间隔(≈60fps):重绘 + 逐帧推进浮层过渡 / 频谱插值。
+const FRAME_FAST: Duration = Duration::from_millis(16);
+
+/// 静止时的帧间隔(≈30fps):无动画,降频省 CPU / 唤醒。
+const FRAME_IDLE: Duration = Duration::from_millis(33);
+
+/// server 数据拉取节流(≈30Hz):audio/player/task snapshot、task events、prefetch。
+/// 与帧率解耦 —— 帧率提到 60Hz 时 daemon IPC 频率不跟着翻倍。
+const DATA_TICK: Duration = Duration::from_millis(33);
+
 /// 应用顶层状态。
 pub struct App {
     /// 是否退出主循环。
@@ -80,11 +90,13 @@ impl App {
         }
     }
 
-    /// 同步主事件循环:绘制 → 等事件 / tick → 处理 → 重绘。
+    /// 同步主事件循环:绘制 → 推进视觉动画 → (节流)拉数据 → 等事件 → 处理。
+    ///
+    /// 帧率动态:有动画在跑(浮层过渡 / 播放中频谱)时按 [`FRAME_FAST`] 重绘并逐帧
+    /// 推进动画+频谱;静止时回落 [`FRAME_IDLE`]。server 数据(audio/player/task
+    /// snapshot、task events、prefetch)恒按 [`DATA_TICK`] 节流,不随帧率提速 ——
+    /// 60Hz 只多花在重绘与视觉插值上,daemon IPC 频率不翻倍。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        // 33ms ≈ 30fps。
-        let tick_rate = Duration::from_millis(33);
-
         // 启动时拉一次 PlayerSnapshot,让 in-proc / connect 都立即看到 server 状态。
         self.apply_player_snapshot(self.client.player_snapshot());
 
@@ -110,7 +122,7 @@ impl App {
             if self.state.disconnected {
                 // 只渲染断连提示 + 等按键;daemon 没了,正常路径全是兜底默认值,跳过。
                 tui.draw(|f| draw(f, self))?;
-                if event::poll(tick_rate)?
+                if event::poll(FRAME_IDLE)?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
                 {
@@ -118,18 +130,19 @@ impl App {
                 }
                 continue;
             }
-            self.drain_task_events();
+
             tui.draw(|f| draw(f, self))?;
 
-            let timeout = tick_rate.saturating_sub(self.last_tick.elapsed());
-            if event::poll(timeout)? {
-                self.handle_event(&event::read()?);
-            }
-            if self.last_tick.elapsed() >= tick_rate {
+            // 每帧推进视觉动画:浮层过渡 + 频谱(含 PCM 拉取/FFT)。动画期帧率恒为
+            // FRAME_FAST,故 Transition 的固定步长时长稳定,无需 dt 化。
+            self.state.queue_anim.tick();
+            self.update_spectrum();
+
+            // server 数据按 DATA_TICK 节流,不随帧率提速。
+            if self.last_tick.elapsed() >= DATA_TICK {
+                self.drain_task_events();
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
-                self.update_spectrum();
-                self.state.queue_anim.tick();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
                 crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
@@ -141,8 +154,25 @@ impl App {
                     last_heartbeat = Instant::now();
                 }
             }
+
+            // 有动画(浮层过渡 / 播放中频谱)→ 60fps,否则降频。
+            let budget = if self.animating() {
+                FRAME_FAST
+            } else {
+                FRAME_IDLE
+            };
+            if event::poll(budget)? {
+                self.handle_event(&event::read()?);
+            }
         }
         Ok(())
+    }
+
+    /// 是否有需要高帧率重绘的视觉动画在跑(决定本轮帧预算)。
+    ///
+    /// 命中:浮层缩放/回弹过渡未结束,或正在播放(频谱持续律动)。
+    fn animating(&self) -> bool {
+        self.state.queue_anim.active() || self.state.playback.playing
     }
 
     /// client 侧心跳:把 server 看不到的 UI / 缓存状态打一条 info。大缓存
@@ -170,7 +200,7 @@ impl App {
     }
 
     /// 把 server 的 PlayerSnapshot 灌进 AppState 镜像 — current_song / queue /
-    /// play_mode / play_url / current_lyrics 等。每帧调一次。
+    /// play_mode / play_url / current_lyrics 等。每 `DATA_TICK` 调一次(数据节流)。
     fn apply_player_snapshot(&mut self, snap: PlayerSnapshot) {
         self.state.current = snap.current_song.clone();
         self.state.playback.track = snap.current_song;
