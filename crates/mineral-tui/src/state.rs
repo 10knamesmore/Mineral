@@ -11,7 +11,7 @@ use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use mineral_model::{LrcLyric, WordLyric};
+use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -44,6 +44,20 @@ pub enum Focus {
     Queue,
 }
 
+/// 歌词面板的副歌词显示档(翻译 / 罗马音),由 `t` 键循环切换。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LyricExtra {
+    /// 只显示原文(默认)。
+    #[default]
+    None,
+
+    /// 原文下叠加行级翻译。
+    Translation,
+
+    /// 原文下叠加行级罗马音。
+    Romanization,
+}
+
 /// 应用顶层状态。
 #[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
 pub struct AppState {
@@ -61,11 +75,12 @@ pub struct AppState {
     /// 对齐 cover 的 `cover_pending`。
     pub tracks_requested: FxHashSet<PlaylistId>,
 
-    /// 歌曲 id → 行级 LRC;不在 map 里表示还没拉到 / 拉失败。
-    pub lyrics_cache: FxHashMap<SongId, LrcLyric>,
+    /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /
+    /// 拉失败。channel 层已清洗,client 直接收整份,渲染时按需取各字段。
+    pub lyrics_cache: FxHashMap<SongId, Lyrics>,
 
-    /// 歌曲 id → 逐字歌词;有逐字才插入,渲染时优先于 LRC。
-    pub words_cache: FxHashMap<SongId, WordLyric>,
+    /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
+    pub lyric_extra: LyricExtra,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -167,7 +182,7 @@ impl AppState {
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
-            words_cache: FxHashMap::default(),
+            lyric_extra: LyricExtra::None,
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -271,16 +286,61 @@ impl AppState {
         }
     }
 
-    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
-    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
+    /// 当前曲目的完整歌词集合;未拉到时返回 `None`。
+    fn current_lyrics_set(&self) -> Option<&Lyrics> {
         let song = self.playback.track.as_ref()?;
         self.lyrics_cache.get(&song.id)
     }
 
+    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
+    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.lrc)
+    }
+
     /// 当前曲目的逐字歌词;无逐字(channel 未返回)时返回 `None`。
     pub fn current_words(&self) -> Option<&WordLyric> {
-        let song = self.playback.track.as_ref()?;
-        self.words_cache.get(&song.id)
+        self.current_lyrics_set().map(|l| &l.words)
+    }
+
+    /// 当前曲目的行级翻译;未拉到时返回 `None`。
+    pub fn current_translation(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.translation)
+    }
+
+    /// 当前曲目的行级罗马音;未拉到时返回 `None`。
+    pub fn current_romanization(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.romanization)
+    }
+
+    /// 当前曲目是否有任一副歌词(翻译 / 罗马音)可切换。无则歌词面板不显示 `t` 提示。
+    pub fn has_extra_lyrics(&self) -> bool {
+        self.current_translation().is_some_and(|l| !l.is_empty())
+            || self.current_romanization().is_some_and(|l| !l.is_empty())
+    }
+
+    /// 当前档对应的副歌词(`None` 档 / 该档为空都返回 `None`)。
+    pub fn current_extra_lyric(&self) -> Option<&LrcLyric> {
+        let extra = match self.lyric_extra {
+            LyricExtra::None => return None,
+            LyricExtra::Translation => self.current_translation(),
+            LyricExtra::Romanization => self.current_romanization(),
+        };
+        extra.filter(|l| !l.is_empty())
+    }
+
+    /// 循环副歌词档:`None → Translation → Romanization → None`,跳过当前歌为空的档。
+    /// 翻译 / 罗马音都缺时停在 `None`。
+    pub fn cycle_lyric_extra(&mut self) {
+        let has_trans = self.current_translation().is_some_and(|l| !l.is_empty());
+        let has_roma = self.current_romanization().is_some_and(|l| !l.is_empty());
+        self.lyric_extra = match self.lyric_extra {
+            LyricExtra::None if has_trans => LyricExtra::Translation,
+            LyricExtra::None if has_roma => LyricExtra::Romanization,
+            LyricExtra::None => LyricExtra::None,
+            LyricExtra::Translation if has_roma => LyricExtra::Romanization,
+            LyricExtra::Translation => LyricExtra::None,
+            LyricExtra::Romanization => LyricExtra::None,
+        };
     }
 
     /// 返回当前选中歌单的引用。

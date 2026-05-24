@@ -6,12 +6,13 @@
 
 use mineral_model::{Playlist, PlaylistId, SourceKind};
 
-use crate::state::{AppState, View};
+use crate::state::{AppState, LyricExtra, View};
 use crate::view_model::{PlaylistView, SongView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
-    assert_snap, chinese_football, endserenading, song, with_duration, with_name,
+    assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
+    qianzai_song, song, with_duration, with_name,
 };
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -65,6 +66,35 @@ pub(crate) fn state_with_tracks() -> AppState {
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s.sel_track = 1;
+    s
+}
+
+/// 造一个正在播《潜在表明》、缓存了 [`mineral_test::qianzai_lyrics`] 的 `AppState`,
+/// 供歌词面板 toggle / 标识快照用。`extra` 选副歌词档;`with_words` 为 false 时清掉逐字
+/// (走行级 LRC 渲染路径)。position 固定 62s,落在「太陽にあぶり出される…」一行中段。
+pub(crate) fn state_with_lyrics(extra: LyricExtra, with_words: bool) -> AppState {
+    let mut s = AppState::empty();
+    let track = qianzai_song();
+    let mut lyrics = qianzai_lyrics();
+    if !with_words {
+        lyrics.words = mineral_model::WordLyric::default();
+    }
+    s.lyrics_cache.insert(track.id.clone(), lyrics);
+    s.playback.track = Some(track);
+    s.playback.position_ms = 62_000;
+    s.lyric_extra = extra;
+    s
+}
+
+/// 造一个正在播《飞鱼转身》(只有原文 + 逐字、**无翻译 / 无罗马音**)的 `AppState`,
+/// 用于验证「无副歌词可切换时,右上不显示 `[t]` 提示」这一固定行为。position 固定 165s,
+/// 落在「它降落在你身旁」一行中段。
+pub(crate) fn state_with_lrc_only() -> AppState {
+    let mut s = AppState::empty();
+    let track = feiyu_song();
+    s.lyrics_cache.insert(track.id.clone(), feiyu_lyrics());
+    s.playback.track = Some(track);
+    s.playback.position_ms = 165_000;
     s
 }
 

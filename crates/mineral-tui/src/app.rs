@@ -160,7 +160,6 @@ impl App {
             tracks_cached = s.tracks_cache.len(),
             tracks_requested = s.tracks_requested.len(),
             lyrics_cached = s.lyrics_cache.len(),
-            words_cached = s.words_cache.len(),
             covers_cached = s.cover_cache.len(),
             covers_pending = s.cover_pending.len(),
             liked,
@@ -180,14 +179,11 @@ impl App {
         self.state.queue_sel = snap.queue_sel;
         self.state.original_queue = snap.original_queue;
         // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
-        // 层已结构化清洗,这里直接收下结构化数据,不再解析。
+        // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
         if let (Some(song_id), Some(lyrics)) = (snap.current_lyrics_song_id, snap.current_lyrics)
             && !self.state.lyrics_cache.contains_key(&song_id)
         {
-            if !lyrics.words.is_empty() {
-                self.state.words_cache.insert(song_id.clone(), lyrics.words);
-            }
-            self.state.lyrics_cache.insert(song_id, lyrics.lrc);
+            self.state.lyrics_cache.insert(song_id, lyrics);
         }
     }
 
@@ -273,6 +269,13 @@ impl App {
             } else {
                 self.state.confirm_open = true;
             }
+            return;
+        }
+
+        // `t`:循环歌词副语言(原文 → 翻译 → 罗马音 → 原文)。歌词面板全局可见,
+        // 故在任意焦点下生效。
+        if key.code == KeyCode::Char('t') {
+            self.state.cycle_lyric_extra();
             return;
         }
 

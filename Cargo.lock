@@ -2467,6 +2467,8 @@ version = "0.2.0"
 dependencies = [
  "mineral-model",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
