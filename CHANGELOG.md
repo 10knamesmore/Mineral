@@ -2,6 +2,46 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [Semver](https://semver.org/lang/zh-CN/)。
 
+## [0.2.0] — 2026-05-24
+
+client/server 架构落地:播放进 daemon,关 TUI 不停播;接入系统媒体服务;测试覆盖成体系。
+
+### 架构 — client / server 分离
+
+- 抽 `mineral-server`(audio + task + 播放上下文收成 `Server` / `ClientHandle`)与 `mineral-protocol`(IPC 协议 crate,Request/Response + length-delimited + bincode)。
+- `PlayerCore` 持播放上下文(队列 / 当前歌 / 歌词 / prefetch),daemon 自治 auto-next;PCM 走 wire —— 真正「关 TUI 不杀播放」。
+- TUI 走 unix socket 连 daemon;默认启动 = 优先 attach 已有 daemon,否则 **spawn 独立 daemon 进程**再 attach;保留 `--connect`(强制连)/ `--in-proc`(同进程调试);`KILL_SPAWNED_DAEMON_ON_EXIT` 旋钮决定退出时是否带走自起的 daemon(待 lua 配置接管)。
+- daemon graceful shutdown(收 SIGINT/SIGTERM 清 socket),信号 handler 提前到 bind 之前消除启动竞态。
+- client 断连(daemon 被单独 kill)不再僵死:检测断开 → 记日志 + 盖断连提示 modal,等按键退出;TUI 进程收 SIGTERM/INT/HUP 先记日志再走正常退出,不 silent dead。
+
+### 媒体集成(MPRIS)
+
+- 接入系统媒体服务 `org.mpris.MediaPlayer2`:上报当前播放、响应媒体键 / 桌面控件;`xesam:asText` 同步当前歌词(给 quickshell 等)。
+- Shuffle / LoopStatus 双向同步:4-variant `PlayMode` ↔(shuffle × repeat)二维无损塌缩。
+- seek 时补发 `Seeked` 信号。
+
+### 歌词
+
+- channel 层输出结构化歌词,消费方零解析;MPRIS / UI 共用。
+
+### 日志 / 可观测性
+
+- 全链路结构化埋点;错误统一 `mineral_log::chain`(完整 context 链、单行、无 ANSI / backtrace)。
+- 日志改人读单行格式(本地时间 + target + `file:line` + 字段),压低 symphonia / reqwest / hyper / stream-download 等第三方噪音。
+- 60s 心跳(server + client 双侧)上报内部状态;netease 反序列化走 `serde_path_to_error`,错误带字段路径。
+
+### TUI
+
+- `top_status` 后台任务按 `ChannelFetchKind` 拆分计数,cover loading 显真实数。
+- prefetch 失败的歌单不再每帧无限重提交(request-once dedup)。
+- `sidebar/playlists` 列宽改 `Constraint::Fill` 消除 ratatui 列宽求解非确定(帧间列宽闪烁)。
+
+### 测试
+
+- 覆盖从 ~12% 提到 145+ 测试:player 队列 / shuffle / 模式逻辑、纯逻辑函数(format / layout / color)、protocol codec round-trip、netease wire 与 LRC 解析、daemon 进程级 e2e(`CARGO_BIN_EXE`)、CLI 冒烟。
+- 引入 **insta 快照**:TUI 组件用 `TestBackend` 渲染 + `assert_snapshot!`(不依赖真 pty),解析层用 `assert_debug_snapshot!`;全部带中文 description,版本号用 `filters` 归一化。展示性 fixture 用真实曲目(Mineral《EndSerenading》/ Chinese Football / MyGO!!!!!《迷跡波》)。
+- CLAUDE.md 新增「测试约定」节。
+
 ## [0.1.0] — 2026-05-03
 
 首个 alpha 版本。从老仓库重写,把核心闭环跑通。
