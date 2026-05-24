@@ -111,43 +111,11 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 
 ## 测试约定
 
-### 用什么测什么
+**完整细则见 [`docs/testing.md`](docs/testing.md)**(选型矩阵 / `mineral-test` 共享库 / TUI 集成测试基建 / insta 约定 / CI)。TUI 测试通用方法论另见个人 `tui` skill。摘要:
 
-* **逻辑 / 算法 / 等价性** → 普通 `assert_eq!` / `assert!`。`next_in_queue`、`layout::compute`、`color` 数学、codec round-trip 这类,期望值写在断言里**表意最清晰**,**不要**为了统一上快照。
-* **渲染 / 结构化输出** → **`insta` 快照**:
-  - TUI 组件渲染:`ratatui::backend::TestBackend` 渲进内存 + `insta::assert_snapshot!`(**不依赖真 pty**,参考 `mineral-tui` 各 `components/*` 的 `#[cfg(test)]`)。
-  - 解析层(netease `wire`、`mineral-model` LRC 等"输入→结构体"):`insta::assert_debug_snapshot!(parsed)`,一次锁整个结构,字段增删/默认值变化全抓得到。
-* **性质 / 不变量(有清晰约束的纯函数)** → **`proptest` 属性测试**。声明"对任意输入恒成立"的性质,框架随机生成数百用例 + 失败自动收缩到最小反例。甜区:codec 编解码往返(`crates/mineral-protocol/tests/codec.rs` 的 `arb_request` round-trip)、解析器抗崩 + 自洽(`mineral-model` LRC:不 panic / 严出幂等)、`color` lerp 范围 / `layout::compute` 子区域不越界。失败种子存 `proptest-regressions/*.txt`,**进 git** 当永久回归用例(`color::lerp_byte` 的 u64 溢出就是这么钉住的)。**不适合**渲染 / IO / "输出就该长这样"——那些走 insta。
-* **CLI 黑盒 e2e** → **`assert_cmd` + `predicates`**:`Command::cargo_bin("mineral")?...assert().success().stdout(predicate::str::contains(...))`(见 `crates/mineral/tests/cli_smoke.rs`)。
-* **进程级 e2e** → `CARGO_BIN_EXE_<bin>` 起真二进制(见 `crates/mineral/tests/daemon_lifecycle.rs` 的 `Daemon` 框架:隔离 XDG + 子进程 + 读日志),覆盖 daemon 生命周期 / CLI 退出码 / socket 等。daemon 是**单 client**设计,测试里别用"探测连接 + 紧接真请求"两段式(busy 竞态);把就绪探测并进真请求的重试循环。
-
-### 共享测试库 `mineral-test`
-
-跨 crate 复用的测试零件收口在 **`mineral-test`** crate(普通 pub 库,各 crate 挂 **dev-dependency**):
-
-* `song(id)` + 函数式装饰 `with_artist` / `with_name` / `with_source` / `with_duration`(造 `Song`,不要再各 crate 各抄一份)。
-* 展示性 fixtures `endserenading(n)` / `chinese_football(n)`(真实曲目,CJK 测试用)。
-* 快照断言宏 `assert_snap!` / `assert_snap_debug!`(强制中文 `description`)。
-* proptest 生成器 `arb_song()`。
-
-**只放跨 crate 能复用的(纯 `mineral-model` 类型)**;依赖某 crate 私有类型的 fixture(如 TUI 的 `state_with_*` 依赖 `AppState` / `SongView`)留在该 crate 自己的 `#[cfg(test)] mod test_support`,用 `pub(crate) use mineral_test::…` re-export 共享零件。`mineral-test` 依赖 `mineral-model`,而 `mineral-model` 测试又 dev-dep `mineral-test`——**经 dev-dependency 的依赖环 Cargo 允许**(dev-dep 不进正常构建图)。
-
-### insta 用法约定
-
-* **所有快照断言必须带中文 `description`**,`cargo insta review` 时逐张显示、便于辨认。统一走 `mineral_test::assert_snap!("…", backend)`(Display)/ `assert_snap_debug!("…", parsed)`(Debug)——这两个宏内置 description,**不要**再手写裸 `insta::with_settings!{description}{…}`。需要 `filters` 等额外设置时才直接用 `with_settings!`。
-* **动态内容**(版本号 `mineral vX.Y.Z`、时间戳、UUID、临时路径等)用 `with_settings!({ filters => vec![(正则, "占位符")] }, …)` 归一化,否则每次变动都假失败。需要 workspace `insta` 开 `features = ["filters"]`(已开)。
-* **`.snap` 文件进 git**。新增/改动渲染后 `cargo insta review` **逐张人工确认**再接受;**严禁** `INSTA_UPDATE=always` 盲接受。CI 必须 `INSTA_UPDATE=no`(或 `cargo insta test --unreferenced=reject`)防止漏审 / 未提交快照蒙混过关。
-* HashMap 顺序不稳定用 `with_settings!({ sort_maps => true }, …)`;但 **ratatui `Table` 的 flex 列宽(`Constraint::Min` 有 slack 时)求解器本身非确定**,insta 治不了——这类表格快照会 flaky,得在生产侧改成确定性列约束(`sidebar/playlists` 表格就有这个潜在列宽闪烁 bug)。
-
-### 测试也守 workspace lints
-
-测试**不豁免** `Cargo.toml` 的 deny:无 `unwrap` / `expect` / `indexing_slicing`(用 `?` + `assert_*` + `.get()`),测试函数 / helper / 结构体字段一样要 `///`(`missing_docs_in_private_items`)。`#[cfg(test)] mod` 块不计入单文件 800 行上限。
-
-### CI / 本地 git hooks
-
-* **CI**(`.github/workflows/ci.yml`,PR + push main 触发,`main` 的 required check):装 `libasound2-dev`(alsa-sys **编译期**依赖,缺它 build 直接挂)+ `cargo-nextest` → `cargo fmt --all --check` → `cargo clippy --workspace --all-targets -- -D warnings` → `cargo nextest run --workspace`(`INSTA_UPDATE=no`)→ `cargo test --workspace --doc`。**不需要**真音频:audio engine 拿不到设备会降级 null 模式(见下「容易踩的点」),headless 照常起 daemon。
-* **本地 git hooks**(`.githooks/`,走 `core.hooksPath`):**pre-commit** 只 `cargo fmt --all --check`(秒级);**pre-push** 跑 `clippy -D warnings` + `cargo nextest run` + `cargo test --doc`。新 clone 后启用一次:`git config core.hooksPath .githooks`。
-* **Claude hooks**(`.claude/settings.json`):PostToolUse 跑 `check_file_size.py`(文件 ≤ 800 行);Stop 时 `cargo fmt`。
+* 运行器 **nextest**:`cargo t`(全仓)/ `cargo td`(doctest,nextest 不跑)/ `cargo snap`(改快照后 review)。
+* **选型一句话**:逻辑/等价性 → `assert_eq!`;渲染/解析结构 → **insta 快照**;纯函数不变量 → **proptest**;CLI → `assert_cmd`;进程 e2e → `CARGO_BIN_EXE_*`;TUI 交互 → 造 `App` + 喂真实 `KeyEvent` + 跨 tick(`test_support::app_with_queue` / `TestClient` 已就位)。
+* **硬规矩**:测试**不豁免** workspace lints(无 `unwrap`/`expect`/`indexing_slicing`,helper/字段一样要 `///`);快照必带中文 `description`(走 `mineral_test::assert_snap!`);`.snap` 进 git、`cargo insta review` 人工确认,**严禁 `INSTA_UPDATE=always` 盲接受**。`#[cfg(test)] mod` 不计入 800 行上限。
 
 ## 一些容易踩的点
 
@@ -155,6 +123,7 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 * **改动 `crypto/` 后必跑 `cargo test --test crypto_vectors`**,服务端解不出来不会立刻爆,而是返回 `code != 200` 的 JSON,排查成本高。
 * **TUI 错误恢复顺序**:`mineral/src/main.rs` 先 `color_eyre::install()`,再进 TUI;`mineral-tui` 的 `Tui::enter` 会取走当前 panic hook 并链式包一层,先 `restore_terminal()` 再调 prev。**不要**在 main 或 TUI 内部再装"裸"的 panic hook 绕过这条链——否则 panic 时彩色报告会被 alternate screen 吞掉,或者终端 raw mode 不恢复出现乱码。Result 冒泡走 `Tui::Drop` 的 `restore_terminal()`,顺序自然正确。
 * **音频无设备会降级 null 模式,不报错退出**:`mineral-audio` engine 拿不到默认输出设备(headless / 无声卡)时不 `return Err`,而是 warn + 置 `AudioSnapshot.backend = AudioBackend::Null` + 空跑(接受命令但不发声),daemon 照常 bind / serve / graceful shutdown。client 据此提示(CLI `status` 打 `backend: null`、TUI 顶栏 `⚠ 无音频设备`)。测试用 `AudioMode::ForceNull` / `MINERAL_AUDIO_NULL=1` env 确定性复现。**注**:`libasound2-dev` 是**编译期**依赖(alsa-sys),降级只省运行期声卡,省不了它。
+* **封面 fetcher 起不来也降级,不报错退出**:`CoverFetcher::spawn()`(isahc/TLS/证书问题)失败时 `mineral_tui::run` 不 `?` 冒泡,而是 warn + 退到 `CoverFetcher::disabled()`(null object:`request()` 静默丢、`drain_ready()` 恒空、**不依赖 tokio runtime**),封面不显示、其余照常。它也是 TUI 集成测试零依赖构造 `App` 的入口(见 [`docs/testing.md`](docs/testing.md))。
 * `cargo apitest` 会真打 `music.163.com`;离线环境会失败,这不是 bug。
 * TUI 离线开发默认走 `cargo run -p mineral --features mock`;不带 feature 跑也能起来,但 `playlists` / `tracks_cache` 都是空。
 * `.claude/hooks/check_file_size.py` 用大括号配平剔除 `#[cfg(test)] mod` 块,字符串字面量里出现 `{` / `}` 可能误判;真遇到再升级到 `syn` AST。
