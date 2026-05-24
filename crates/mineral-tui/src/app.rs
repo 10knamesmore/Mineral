@@ -129,6 +129,7 @@ impl App {
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
+                self.state.queue_anim.tick();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
                 crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
@@ -354,22 +355,24 @@ impl App {
         }
     }
 
-    /// 切换 queue overlay 的开关 + 同步焦点。
+    /// 切换 queue overlay 的开关 + 同步焦点 + 启动弹出/收起动画。
     fn toggle_queue(&mut self) {
-        self.state.queue_open = !self.state.queue_open;
-        self.state.focus = if self.state.queue_open {
+        if self.state.queue_open {
+            self.close_queue();
+        } else {
+            self.state.queue_open = true;
             // 打开即把光标定位到在播歌(无在播曲落 0),之后用户可自由 j/k/g/G 移动。
             self.state.queue_sel = self.state.queue_current_index().unwrap_or(0);
-            Focus::Queue
-        } else {
-            Focus::Left
-        };
+            self.state.focus = Focus::Queue;
+            self.state.queue_anim.enter();
+        }
     }
 
-    /// 强制关闭 queue overlay 并把焦点收回左侧。
+    /// 强制关闭 queue overlay 并把焦点收回左侧;触发收起动画(焦点即刻收回,动画纯视觉收尾)。
     fn close_queue(&mut self) {
         self.state.queue_open = false;
         self.state.focus = Focus::Left;
+        self.state.queue_anim.leave();
     }
 
     /// queue 焦点下的按键:vim 风格上下移动 + Enter 选择当前行播放。
@@ -648,15 +651,14 @@ mod tests {
         let current_id = app.state.playback.track.as_ref().map(|t| &t.id);
         let mut t = Terminal::new(TestBackend::new(96, 28))?;
         t.draw(|f| {
-            queue_overlay::draw(
-                f,
-                f.area(),
-                &app.state.queue,
-                app.state.queue_sel,
+            let render = queue_overlay::QueueRender {
+                queue: &app.state.queue,
+                sel: app.state.queue_sel,
                 current_id,
-                &Theme::default(),
-                /*focused*/ true,
-            );
+                focused: true,
+                scale: 1000,
+            };
+            queue_overlay::draw(f, f.area(), &render, &Theme::default());
         })?;
         assert_snap!(
             "queue 浮层:光标 ▌ 在第 4 行、在播 ▶ 在第 2 行(二者解耦)",

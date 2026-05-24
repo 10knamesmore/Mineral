@@ -35,17 +35,15 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     transport::draw(frame, areas.transport, &app.state.playback, theme);
     status_bar::draw(frame, areas.status_bar, &app.state, theme);
 
-    if app.state.queue_open {
-        let current_id = app.state.playback.track.as_ref().map(|t| &t.id);
-        queue_overlay::draw(
-            frame,
-            frame.area(),
-            &app.state.queue,
-            app.state.queue_sel,
-            current_id,
-            theme,
-            app.state.focus == Focus::Queue,
-        );
+    if app.state.queue_anim.active() {
+        let render = queue_overlay::QueueRender {
+            queue: &app.state.queue,
+            sel: app.state.queue_sel,
+            current_id: app.state.playback.track.as_ref().map(|t| &t.id),
+            focused: app.state.focus == Focus::Queue,
+            scale: app.state.queue_anim.eased(),
+        };
+        queue_overlay::draw(frame, frame.area(), &render, theme);
     }
 
     if app.state.confirm_open {

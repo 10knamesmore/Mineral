@@ -13,6 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
+use crate::anim::Transition;
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
@@ -118,6 +119,9 @@ pub struct AppState {
     /// queue 浮层选中行。
     pub queue_sel: usize,
 
+    /// queue 浮层缩放弹出/收起动画进度(纯 UI-local,逐 tick 推进,不被 server snapshot 覆盖)。
+    pub queue_anim: Transition,
+
     /// 当前键盘焦点。
     pub focus: Focus,
 
@@ -173,6 +177,9 @@ pub struct AppState {
 /// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
 pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
+/// queue 浮层弹出/收起动画时长(tick 数)。30fps 下约 200ms,缩放台阶足够多又不拖沓。
+const QUEUE_ANIM_TICKS: u16 = 6;
+
 impl AppState {
     /// 构造空状态。所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充。
     pub fn empty() -> Self {
@@ -195,6 +202,7 @@ impl AppState {
             queue: Vec::new(),
             queue_open: false,
             queue_sel: 0,
+            queue_anim: Transition::new(QUEUE_ANIM_TICKS),
             focus: Focus::Left,
             search_mode: false,
             confirm_open: false,

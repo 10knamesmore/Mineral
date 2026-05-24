@@ -3,6 +3,7 @@
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
+mod anim;
 mod app;
 mod color;
 mod components;

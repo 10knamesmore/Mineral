@@ -1,0 +1,25 @@
+---
+source: crates/mineral-tui/src/components/overlay/queue.rs
+description: "队列浮层:弹出动画半程(scale=500)空壳"
+expression: t.backend()
+---
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                    ╭ queue ───────────╮                    "
+"                    │                  │                    "
+"                    │                  │                    "
+"                    │                  │                    "
+"                    │                  │                    "
+"                    │                  │                    "
+"                    ╰ 1 / 3 /esc close ╯                    "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
