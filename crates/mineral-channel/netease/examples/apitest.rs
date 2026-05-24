@@ -171,7 +171,11 @@ async fn main() -> color_eyre::Result<()> {
                         MediaUrl::Remote(u) => u.scheme(),
                         MediaUrl::Local(_) => "local",
                     },
-                    if p.format.is_empty() { "?" } else { &p.format }
+                    if p.format.is_empty() {
+                        "?"
+                    } else {
+                        p.format.as_str()
+                    }
                 ),
                 None => "0 urls (可能需要登录)".into(),
             })

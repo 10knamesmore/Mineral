@@ -19,6 +19,8 @@ pub mod album;
 pub mod artist;
 /// 跨 channel 的归一化音质等级。
 pub mod bitrate;
+/// 音频容器格式(边缘字符串、内部枚举)。
+pub mod format;
 /// 各类资源(歌、专辑、艺人、歌单、用户)的 ID newtype。
 pub mod ids;
 /// 一首歌的歌词集合(行级 LRC、逐字、翻译、罗马音)。
@@ -41,6 +43,7 @@ pub mod url;
 pub use album::Album;
 pub use artist::Artist;
 pub use bitrate::BitRate;
+pub use format::AudioFormat;
 pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};
 pub use lyrics::{LrcLine, LrcLyric, Lyrics, Word, WordLine, WordLyric};
 pub use play_url::PlayUrl;

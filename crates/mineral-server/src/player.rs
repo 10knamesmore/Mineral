@@ -25,11 +25,14 @@ use std::time::Duration;
 
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
-use mineral_model::{PlayUrl, Song, SongId, SourceKind};
+use mineral_model::{BitRate, PlayUrl, Song, SongId, SourceKind};
 use mineral_protocol::{PlayMode, PlayerSnapshot};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
+
+/// 播放音质。后续接 config 时改读配置。
+const PLAYBACK_QUALITY: BitRate = BitRate::Lossless;
 
 /// auto-next 预拉触发距曲终的剩余时间(ms)。
 const PREFETCH_LEAD_MS: u64 = 5_000;
@@ -246,6 +249,7 @@ impl PlayerCore {
             self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     song_id: song.id.clone(),
+                    quality: PLAYBACK_QUALITY,
                 }),
                 Priority::User,
             );
@@ -453,7 +457,10 @@ impl PlayerCore {
         self.inner.state.lock().prefetch_fired_for = Some(cur_id);
         mineral_log::debug!(target: "player", next_id = next.id.as_str(), source = ?next.source(), "prefetch next");
         self.inner.scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl { song_id: next.id }),
+            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+                song_id: next.id,
+                quality: PLAYBACK_QUALITY,
+            }),
             Priority::Background,
         );
     }

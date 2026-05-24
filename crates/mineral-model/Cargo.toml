@@ -20,6 +20,7 @@ serde_json     = { workspace = true }
 url            = { workspace = true }
 
 [dev-dependencies]
+color-eyre   = { workspace = true }
 insta        = { workspace = true }
 mineral-test = { workspace = true }
 proptest     = { workspace = true }

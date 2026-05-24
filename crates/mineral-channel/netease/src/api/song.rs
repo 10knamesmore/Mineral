@@ -6,7 +6,8 @@
 
 use color_eyre::eyre::eyre;
 use mineral_model::{
-    AlbumId, AlbumRef, ArtistId, ArtistRef, BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind,
+    AlbumId, AlbumRef, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl, Song, SongId,
+    SourceKind,
 };
 use serde_json::json;
 
@@ -153,7 +154,7 @@ fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<Pl
                 bitrate_bps: d.br,
                 quality,
                 size: d.size,
-                format: d.format.unwrap_or_default(),
+                format: d.format.map(AudioFormat::from).unwrap_or_default(),
             })
         })
         .collect())

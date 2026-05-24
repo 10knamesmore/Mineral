@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
-use mineral_model::{BitRate, SourceKind};
+use mineral_model::SourceKind;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
@@ -247,9 +247,9 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::SongUrl { song_id } => {
+        ChannelFetchKind::SongUrl { song_id, quality } => {
             let ids = [song_id.clone()];
-            match channel.song_urls(&ids, BitRate::Higher).await {
+            match channel.song_urls(&ids, *quality).await {
                 Ok(mut urls) => match urls.pop() {
                     Some(play_url) => {
                         event_tx.lock().push(TaskEvent::PlayUrlReady {

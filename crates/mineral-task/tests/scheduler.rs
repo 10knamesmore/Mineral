@@ -84,7 +84,7 @@ impl MusicChannel for FakeChannel {
             bitrate_bps: 320_000,
             quality: BitRate::Higher,
             size: 0,
-            format: String::from("mp3"),
+            format: mineral_model::AudioFormat::Mp3,
         }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
@@ -115,6 +115,7 @@ fn playlist_tracks_kind() -> TaskKind {
 fn song_url_kind(song: &str) -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
         song_id: SongId::new(SourceKind::NETEASE, song),
+        quality: BitRate::Higher,
     })
 }
 

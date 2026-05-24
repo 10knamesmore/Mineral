@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{bitrate::BitRate, ids::SongId, source::SourceKind, url::MediaUrl};
+use crate::{
+    bitrate::BitRate, format::AudioFormat, ids::SongId, source::SourceKind, url::MediaUrl,
+};
 
 /// 一首歌的可播放 URL + 元信息。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,8 +17,8 @@ pub struct PlayUrl {
     pub quality: BitRate,
     /// 文件大小(bytes),拿不到给 0。
     pub size: u64,
-    /// 文件格式(`mp3` / `flac` 等),拿不到给空。
-    pub format: String,
+    /// 文件格式——channel 实际提供的容器格式(`mp3` / `flac` 等),拿不到为 `Other("")`。
+    pub format: AudioFormat,
 }
 
 impl PlayUrl {

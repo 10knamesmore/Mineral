@@ -7,7 +7,7 @@
 //! snapshot / filter」是否真能过 wire。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{PlaylistId, SongId, SourceKind};
+use mineral_model::{BitRate, PlaylistId, SongId, SourceKind};
 use mineral_server::{CancelFilter, ChannelFetchKindTag};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskId, TaskKind};
 use rustc_hash::FxHashSet;
@@ -46,6 +46,7 @@ fn task_kind_round_trip() -> color_eyre::Result<()> {
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
             song_id: SongId::new(SourceKind::NETEASE, "s456"),
+            quality: BitRate::Higher,
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
             song_id: SongId::new(SourceKind::NETEASE, "s456"),
@@ -92,6 +93,7 @@ fn cancel_filter_round_trip() -> color_eyre::Result<()> {
 fn cancel_filter_matches_only_intended_kinds() -> color_eyre::Result<()> {
     let songurl = TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
         song_id: SongId::new(SourceKind::NETEASE, "s"),
+        quality: BitRate::Higher,
     });
     let myplaylists = TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
         source: SourceKind::NETEASE,

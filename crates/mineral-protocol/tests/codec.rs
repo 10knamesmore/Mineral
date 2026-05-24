@@ -2,7 +2,7 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, SongId, SourceKind};
+use mineral_model::{BitRate, MediaUrl, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, framed, recv,
     send,
@@ -68,6 +68,7 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
 
     let kind = TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
         song_id: SongId::new(SourceKind::NETEASE, "12345"),
+        quality: BitRate::Higher,
     });
     send(
         &mut sender,

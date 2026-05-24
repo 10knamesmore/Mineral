@@ -2378,6 +2378,7 @@ dependencies = [
 name = "mineral-model"
 version = "0.2.0"
 dependencies = [
+ "color-eyre",
  "insta",
  "mineral-macros",
  "mineral-test",
@@ -2455,6 +2456,7 @@ dependencies = [
  "mineral-log",
  "mineral-model",
  "parking_lot",
+ "proptest",
  "rustc-hash",
  "serde",
  "tokio",
