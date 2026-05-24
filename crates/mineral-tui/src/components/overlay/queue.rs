@@ -171,10 +171,7 @@ fn position_label(sel: usize, total: usize) -> String {
     }
 }
 
-/// 以 `base` 中心为锚,按 `scale`(千分比)缩放出实际面板矩形。
-///
-/// `scale` 允许 `> 1000`(ease-out-back 进场的回弹过冲),此时面板短暂略大于
-/// `base`、仍以中心对齐;越出屏幕的部分由 ratatui 渲染时自行裁剪。
+/// 以 `base` 中心为锚,按 `scale`(千分比 `0..=1000`)缩放出实际面板矩形。
 fn scale_rect(base: Rect, scale: u16) -> Rect {
     let w = scaled_dim(base.width, scale);
     let h = scaled_dim(base.height, scale);
@@ -185,7 +182,7 @@ fn scale_rect(base: Rect, scale: u16) -> Rect {
     Rect::new(x, y, w, h)
 }
 
-/// 把一个维度按千分比缩放,纯整数定点(避免浮点强转)。`scale > 1000` 时结果大于 `dim`。
+/// 把一个维度按千分比缩放,纯整数定点(避免浮点强转)。
 fn scaled_dim(dim: u16, scale: u16) -> u16 {
     let v = u32::from(dim) * u32::from(scale) / u32::from(FULL_SCALE);
     u16::try_from(v).unwrap_or(dim)
