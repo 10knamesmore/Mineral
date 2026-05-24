@@ -3,7 +3,7 @@ source: crates/mineral-tui/src/components/lyrics.rs
 description: "歌词:行级 + 罗马音副行"
 expression: t.backend()
 ---
-"╭ lyrics · synced ─────────────────────────────────── 音 · [t] ╮" Hidden by multi-width symbols: [(55, " ")]
+"╭ lyrics · synced ─────────────────────────────────── ro · [t] ╮"
 "│                                                              │"
 "│                    深く 深く 潜ったままの                    │" Hidden by multi-width symbols: [(22, " "), (24, " "), (27, " "), (29, " "), (32, " "), (34, " "), (36, " "), (38, " "), (40, " "), (42, " ")]
 "│             fu ka ku fu ka ku  mo gu tta ma ma no            │"

@@ -126,9 +126,9 @@ fn title_left_spans(has_words: bool, has_lrc: bool, theme: &Theme) -> Vec<Span<'
     }
 }
 
-/// 右上提示:当前生效的副歌词档 + `[t]` 按键提示(方括号示意这是个按键)。`译` 用 green、
-/// `音` 用 peach 区分高亮,`[t]` 及分隔点用 overlay 弱化。没有任何副歌词可切换时返回空
-/// 序列(不显示提示)。
+/// 右上提示:当前生效的副歌词档 + `[t]` 按键提示(方括号示意这是个按键)。翻译标 `tr`
+/// (green)、罗马音标 `ro`(peach),均 bold + italic;`[t]` 及分隔点用 overlay 弱化。
+/// 没有任何副歌词可切换时返回空序列(不显示提示)。
 ///
 /// # Params:
 ///   - `has_extra`: 是否有任一副歌词(翻译 / 罗马音)可切换
@@ -136,7 +136,7 @@ fn title_left_spans(has_words: bool, has_lrc: bool, theme: &Theme) -> Vec<Span<'
 ///   - `theme`: 取色
 ///
 /// # Return:
-///   组成 ` 译 · [t] ` / ` [t] ` 的分色 Span 序列;无副歌词时为空。
+///   组成 ` tr · [t] ` / ` [t] ` 的分色 Span 序列;无副歌词时为空。
 fn title_right_spans(
     has_extra: bool,
     extra: Option<LyricExtra>,
@@ -146,21 +146,20 @@ fn title_right_spans(
         return Vec::new();
     }
     let key = Style::new().fg(theme.overlay);
-    let bold = Modifier::BOLD;
+    let mark = |color| {
+        Style::new()
+            .fg(color)
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::ITALIC)
+    };
     let mut spans = vec![Span::styled(" ", key)];
     match extra {
         Some(LyricExtra::Translation) => {
-            spans.push(Span::styled(
-                "译",
-                Style::new().fg(theme.green).add_modifier(bold),
-            ));
+            spans.push(Span::styled("tr", mark(theme.green)));
             spans.push(Span::styled(" · ", key));
         }
         Some(LyricExtra::Romanization) => {
-            spans.push(Span::styled(
-                "音",
-                Style::new().fg(theme.peach).add_modifier(bold),
-            ));
+            spans.push(Span::styled("ro", mark(theme.peach)));
             spans.push(Span::styled(" · ", key));
         }
         Some(LyricExtra::None) | None => {}
@@ -490,7 +489,7 @@ mod tests {
         );
         assert_eq!(
             text_of(&title_right_spans(true, Some(LyricExtra::Translation), &th)),
-            " 译 · [t] "
+            " tr · [t] "
         );
         assert_eq!(
             text_of(&title_right_spans(
@@ -498,7 +497,7 @@ mod tests {
                 Some(LyricExtra::Romanization),
                 &th
             )),
-            " 音 · [t] "
+            " ro · [t] "
         );
     }
 }
