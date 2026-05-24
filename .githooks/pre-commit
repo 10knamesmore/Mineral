@@ -1,0 +1,9 @@
+#!/bin/sh
+# 提交前:只跑 cargo fmt --check(秒级,挡未格式化的提交)。
+# clippy / test 这类重的留给 pre-push,保证日常小提交不卡。
+set -e
+echo "[pre-commit] cargo fmt --all --check"
+if ! cargo fmt --all --check; then
+    echo "[pre-commit] 有未格式化代码 —— 跑 \`cargo fmt\` 后重新提交。" >&2
+    exit 1
+fi
