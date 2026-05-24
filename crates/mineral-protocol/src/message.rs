@@ -82,6 +82,11 @@ pub enum Request {
     /// 拉最多 N 个 f32 PCM 样本(单声道,FFT 输入用)。
     /// 返回 [`Response::PcmData`]。
     PullPcm(usize),
+
+    // ---- 诊断 ----
+    /// 拉一次 daemon 进程信息(pid 等)。返回 [`Response::DaemonInfo`]。
+    /// 给运维 / 性能剖析定位 daemon 进程用(`mineral status` 会打出 pid)。
+    DaemonInfo,
 }
 
 /// Server → Client 应答。
@@ -111,6 +116,12 @@ pub enum Response {
         samples: Vec<f32>,
         /// 当前 audio 采样率(Hz);0 = 还没在播。client 用它驱动 fft。
         sample_rate: u32,
+    },
+
+    /// 对应 [`Request::DaemonInfo`]。
+    DaemonInfo {
+        /// daemon 进程 pid(`std::process::id()`)。
+        pid: u32,
     },
 
     /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。

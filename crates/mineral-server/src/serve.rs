@@ -142,6 +142,9 @@ fn dispatch(req: Request, client: &ClientHandle) -> Response {
                 sample_rate,
             }
         }
+        Request::DaemonInfo => Response::DaemonInfo {
+            pid: std::process::id(),
+        },
     }
 }
 
@@ -167,5 +170,6 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::CyclePlayMode => Some("CyclePlayMode"),
         Request::PrevOrRestart => Some("PrevOrRestart"),
         Request::NextSong => Some("NextSong"),
+        Request::DaemonInfo => Some("DaemonInfo"),
     }
 }
