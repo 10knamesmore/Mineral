@@ -561,3 +561,202 @@ fn prev_in_queue(st: &State) -> Option<Song> {
 /// 等后续真正用 channel 元信息时删除。
 #[allow(dead_code)]
 fn _channels_meta_placeholder(_s: SourceKind) {}
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::{Song, SongId, SourceKind};
+    use mineral_protocol::PlayMode;
+
+    use super::{
+        State, apply_play_mode, enter_shuffle, exit_shuffle, next_in_queue, prev_in_queue,
+    };
+
+    /// 造一首最小 Song(id 即 name,其余取默认),便于断言。
+    fn song(id: &str) -> Song {
+        Song {
+            source: SourceKind::Local,
+            id: SongId::from(id),
+            name: id.to_owned(),
+            artists: Vec::new(),
+            album: None,
+            duration_ms: 0,
+            cover_url: None,
+            source_url: None,
+        }
+    }
+
+    /// 造一个含队列的 State:queue=ids、queue_sel=sel、current=queue[sel]、mode。
+    fn state_with(ids: &[&str], sel: usize, mode: PlayMode) -> State {
+        let mut st = State::empty();
+        st.queue = ids.iter().map(|&i| song(i)).collect();
+        st.queue_sel = sel;
+        st.current_song = st.queue.get(sel).cloned();
+        st.play_mode = mode;
+        st
+    }
+
+    /// 取队列各歌 id(原序)。
+    fn ids(songs: &[Song]) -> Vec<&str> {
+        songs.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    /// 取队列各歌 id 并排序(用于「内容集合不变」断言,不看顺序)。
+    fn ids_sorted(songs: &[Song]) -> Vec<&str> {
+        let mut v = ids(songs);
+        v.sort_unstable();
+        v
+    }
+
+    /// next:Sequential 到尾返回 None,否则取下一首。
+    #[test]
+    fn next_sequential_stops_at_end() {
+        assert!(next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Sequential)).is_none());
+        assert_eq!(
+            next_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Sequential)),
+            Some(song("b"))
+        );
+    }
+
+    /// next:RepeatAll / Shuffle 在尾部环回到首,RepeatOne 原地。
+    #[test]
+    fn next_wraps_and_repeats_one() {
+        assert_eq!(
+            next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::RepeatAll)),
+            Some(song("a"))
+        );
+        assert_eq!(
+            next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Shuffle)),
+            Some(song("a"))
+        );
+        assert_eq!(
+            next_in_queue(&state_with(&["a", "b", "c"], 1, PlayMode::RepeatOne)),
+            Some(song("b"))
+        );
+    }
+
+    /// prev:Sequential 首位返回 None,否则取上一首。
+    #[test]
+    fn prev_sequential_stops_at_start() {
+        assert!(prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Sequential)).is_none());
+        assert_eq!(
+            prev_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Sequential)),
+            Some(song("b"))
+        );
+    }
+
+    /// prev:RepeatAll / Shuffle 在首部环回到尾,RepeatOne 原地。
+    #[test]
+    fn prev_wraps_and_repeats_one() {
+        assert_eq!(
+            prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::RepeatAll)),
+            Some(song("c"))
+        );
+        assert_eq!(
+            prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Shuffle)),
+            Some(song("c"))
+        );
+        assert_eq!(
+            prev_in_queue(&state_with(&["a", "b", "c"], 1, PlayMode::RepeatOne)),
+            Some(song("b"))
+        );
+    }
+
+    /// 空队列时 next / prev 都返回 None。
+    #[test]
+    fn empty_queue_has_no_neighbors() {
+        assert!(next_in_queue(&State::empty()).is_none());
+        assert!(prev_in_queue(&State::empty()).is_none());
+    }
+
+    /// queue_sel 越界被 clamp 到末位:Sequential next=None、prev=倒数第二首。
+    #[test]
+    fn out_of_bounds_sel_is_clamped() {
+        let st = state_with(&["a", "b"], 5, PlayMode::Sequential);
+        assert!(next_in_queue(&st).is_none());
+        assert_eq!(prev_in_queue(&st), Some(song("a")));
+    }
+
+    /// enter_shuffle:内容集合不变 + 当前歌置顶 + queue_sel=0 + original 存原序。
+    #[test]
+    fn enter_shuffle_keeps_all_and_pins_current() {
+        let mut st = state_with(&["a", "b", "c", "d"], 2, PlayMode::Sequential); // current=c
+        enter_shuffle(&mut st);
+        assert_eq!(st.queue.first().map(|s| s.id.as_str()), Some("c"));
+        assert_eq!(st.queue_sel, 0);
+        assert_eq!(ids_sorted(&st.queue), vec!["a", "b", "c", "d"]);
+        assert_eq!(
+            st.original_queue.as_deref().map(ids),
+            Some(vec!["a", "b", "c", "d"])
+        );
+    }
+
+    /// enter_shuffle:空队列 no-op,不设 original。
+    #[test]
+    fn enter_shuffle_empty_is_noop() {
+        let mut st = State::empty();
+        enter_shuffle(&mut st);
+        assert!(st.queue.is_empty());
+        assert!(st.original_queue.is_none());
+    }
+
+    /// exit_shuffle:从 original 还原原序,queue_sel 重定位到当前歌,清 original。
+    #[test]
+    fn exit_shuffle_restores_order_and_relocates_sel() {
+        let mut st = state_with(&["a", "b", "c", "d"], 0, PlayMode::Shuffle);
+        st.queue = vec![song("c"), song("a"), song("d"), song("b")];
+        st.queue_sel = 0;
+        st.current_song = Some(song("c"));
+        st.original_queue = Some(vec![song("a"), song("b"), song("c"), song("d")]);
+        exit_shuffle(&mut st);
+        assert_eq!(ids(&st.queue), vec!["a", "b", "c", "d"]);
+        assert_eq!(st.queue_sel, 2); // c 在原序的下标
+        assert!(st.original_queue.is_none());
+    }
+
+    /// exit_shuffle:没有 original 时 no-op。
+    #[test]
+    fn exit_shuffle_without_original_is_noop() {
+        let mut st = state_with(&["a", "b"], 1, PlayMode::Sequential);
+        st.original_queue = None;
+        exit_shuffle(&mut st);
+        assert_eq!(ids(&st.queue), vec!["a", "b"]);
+        assert_eq!(st.queue_sel, 1);
+    }
+
+    /// apply_play_mode:目标与当前相同时 no-op。
+    #[test]
+    fn apply_same_mode_is_noop() {
+        let mut st = state_with(&["a", "b"], 0, PlayMode::Sequential);
+        apply_play_mode(&mut st, PlayMode::Sequential);
+        assert_eq!(st.play_mode, PlayMode::Sequential);
+        assert!(st.original_queue.is_none());
+    }
+
+    /// apply_play_mode:进入 Shuffle 触发 enter(置顶 + 存 original),退回触发 exit(还原)。
+    #[test]
+    fn apply_enter_then_exit_shuffle() {
+        let mut st = state_with(&["a", "b", "c"], 1, PlayMode::Sequential); // current=b
+        apply_play_mode(&mut st, PlayMode::Shuffle);
+        assert_eq!(st.play_mode, PlayMode::Shuffle);
+        assert!(st.original_queue.is_some());
+        assert_eq!(st.queue.first().map(|s| s.id.as_str()), Some("b"));
+
+        apply_play_mode(&mut st, PlayMode::Sequential);
+        assert!(st.original_queue.is_none());
+        assert_eq!(ids(&st.queue), vec!["a", "b", "c"]);
+    }
+
+    /// apply_play_mode:两个非 Shuffle 模式间切换不动队列、不设 original。
+    #[test]
+    fn apply_between_non_shuffle_keeps_queue() {
+        let mut st = state_with(&["a", "b", "c"], 1, PlayMode::Sequential);
+        apply_play_mode(&mut st, PlayMode::RepeatAll);
+        assert_eq!(st.play_mode, PlayMode::RepeatAll);
+        assert_eq!(ids(&st.queue), vec!["a", "b", "c"]);
+        assert!(st.original_queue.is_none());
+
+        apply_play_mode(&mut st, PlayMode::RepeatOne);
+        assert_eq!(ids(&st.queue), vec!["a", "b", "c"]);
+        assert!(st.original_queue.is_none());
+    }
+}

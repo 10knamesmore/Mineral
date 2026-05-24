@@ -185,3 +185,50 @@ fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
         ))])
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::state::View;
+    use crate::theme::Theme;
+
+    /// 已选歌单 + 3 首曲目(CJK 歌名 / 收藏 / 当前在播标记)。
+    #[test]
+    fn library_with_tracks_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = crate::test_support::state_with_tracks();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 选中歌单但曲目未到(tracks_cache 空)→ loading 态。
+    #[test]
+    fn library_loading_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let mut state = crate::test_support::state_with_playlists();
+        state.view = View::Library;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("曲目列表:选中歌单但曲目未到(loading)", t.backend());
+        Ok(())
+    }
+
+    /// CJK 曲目(Chinese Football)在多列表格里的宽字符对齐 / 截断 —— 含最长的
+    /// 「不是人人都能穿十号球衣」。
+    #[test]
+    fn library_cjk_tracks_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = crate::test_support::state_with_cjk_tracks();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "曲目列表:CJK 曲目(Chinese Football)宽字符对齐",
+            t.backend()
+        );
+        Ok(())
+    }
+}

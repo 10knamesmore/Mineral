@@ -1,0 +1,21 @@
+---
+source: crates/mineral-channel/netease/src/wire/song.rs
+description: AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)
+expression: s
+---
+AlbumSong {
+    id: 7,
+    name: "詩超絆",
+    ar: [
+        Artist {
+            id: 1,
+            name: "MyGO!!!!!",
+        },
+    ],
+    al: Album {
+        id: 3,
+        name: "迷跡波",
+        pic_url: None,
+    },
+    dt: 233000,
+}

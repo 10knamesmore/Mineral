@@ -1,0 +1,6 @@
+---
+source: crates/mineral-tui/src/components/status_bar.rs
+description: "状态栏:搜索输入态(/春日影,CJK)"
+expression: t.backend()
+---
+" /春日影█                                                    ↵ run · esc cancel " Hidden by multi-width symbols: [(3, " "), (5, " "), (7, " ")]

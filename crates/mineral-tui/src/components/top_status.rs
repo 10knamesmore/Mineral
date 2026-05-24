@@ -92,3 +92,44 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::theme::Theme;
+
+    /// Playlists tab 态。
+    #[test]
+    fn top_status_playlists_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
+        let state = crate::test_support::state_with_playlists();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
+        insta::with_settings!({
+            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
+            description => "顶栏:Playlists 标签态(版本号已过滤)"
+        }, {
+            insta::assert_snapshot!(t.backend());
+        });
+        Ok(())
+    }
+
+    /// Library tab + queue 打开。
+    #[test]
+    fn top_status_library_queue_open_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
+        let mut state = crate::test_support::state_with_tracks();
+        state.queue_open = true;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
+        insta::with_settings!({
+            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
+            description => "顶栏:Library 标签 + 队列打开(版本号已过滤)"
+        }, {
+            insta::assert_snapshot!(t.backend());
+        });
+        Ok(())
+    }
+}

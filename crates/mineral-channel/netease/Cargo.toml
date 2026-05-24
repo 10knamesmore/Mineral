@@ -53,6 +53,7 @@ qrcode = { workspace = true }
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
 openssl  = { workspace = true }
 tempfile = "3"
+insta    = { workspace = true }
 
 [lints]
 workspace = true

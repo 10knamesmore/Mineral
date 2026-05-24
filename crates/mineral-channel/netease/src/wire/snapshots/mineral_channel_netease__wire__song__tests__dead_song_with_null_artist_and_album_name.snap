@@ -1,0 +1,20 @@
+---
+source: crates/mineral-channel/netease/src/wire/song.rs
+description: "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)"
+expression: songs
+---
+[
+    AlbumSong {
+        id: 1,
+        name: "张洲",
+        ar: [],
+        al: Album {
+            id: 0,
+            name: "",
+            pic_url: Some(
+                "http://p4.music.126.net/x.jpg",
+            ),
+        },
+        dt: 0,
+    },
+]

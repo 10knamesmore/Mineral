@@ -218,3 +218,22 @@ fn push_char_spans<'a>(
         ));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::state::AppState;
+    use crate::theme::Theme;
+
+    /// 无当前歌 / 无歌词缓存 → fallback 态。
+    #[test]
+    fn lyrics_fallback_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = AppState::empty();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("歌词:无当前歌 / 无缓存 → fallback", t.backend());
+        Ok(())
+    }
+}

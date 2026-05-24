@@ -68,3 +68,20 @@ fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     frame.render_widget(Clear, shadow);
     frame.render_widget(bg, shadow);
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::theme::Theme;
+
+    /// quit confirm modal 渲染快照。
+    #[test]
+    fn confirm_overlay_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
+        terminal.draw(|f| super::draw(f, f.area(), &Theme::default()))?;
+        crate::test_support::assert_snap!("退出确认 modal(y 确认 / n 取消)", terminal.backend());
+        Ok(())
+    }
+}

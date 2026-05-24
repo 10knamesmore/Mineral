@@ -122,7 +122,7 @@ pub struct SongUrl {
 
 #[cfg(test)]
 mod tests {
-    use super::AlbumSong;
+    use super::{AlbumSong, SearchSong};
     use crate::wire::de::from_value;
 
     #[test]
@@ -137,10 +137,43 @@ mod tests {
             "dt": 0
         }]);
         let songs: Vec<AlbumSong> = from_value(raw)?;
-        assert_eq!(songs.len(), 1);
-        assert_eq!(songs[0].name, "张洲");
-        assert!(songs[0].ar.is_empty(), "null 艺术家元素应被跳过");
-        assert_eq!(songs[0].al.name, "");
+        insta::with_settings!({ description => "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)" }, {
+            insta::assert_debug_snapshot!(songs);
+        });
+        Ok(())
+    }
+
+    /// SearchSong 正常解析:artists / album / duration 各字段到位。
+    #[test]
+    fn search_song_parses_artists_album_duration() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "id": 42,
+            "name": "壱雫空",
+            "artists": [{ "id": 1, "name": "MyGO!!!!!" }],
+            "album": { "id": 7, "name": "迷跡波", "picUrl": "http://p/x.jpg" },
+            "duration": 264_000
+        });
+        let s: SearchSong = from_value(raw)?;
+        insta::with_settings!({ description => "SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)" }, {
+            insta::assert_debug_snapshot!(s);
+        });
+        Ok(())
+    }
+
+    /// AlbumSong 正常解析:ar / al / dt(detail 端点字段名)各到位。
+    #[test]
+    fn album_song_parses_ar_al_dt() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "id": 7,
+            "name": "詩超絆",
+            "ar": [{ "id": 1, "name": "MyGO!!!!!" }],
+            "al": { "id": 3, "name": "迷跡波" },
+            "dt": 233_000
+        });
+        let s: AlbumSong = from_value(raw)?;
+        insta::with_settings!({ description => "AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)" }, {
+            insta::assert_debug_snapshot!(s);
+        });
         Ok(())
     }
 }

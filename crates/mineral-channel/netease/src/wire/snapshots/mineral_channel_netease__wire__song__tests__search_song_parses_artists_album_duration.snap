@@ -1,0 +1,23 @@
+---
+source: crates/mineral-channel/netease/src/wire/song.rs
+description: SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)
+expression: s
+---
+SearchSong {
+    id: 42,
+    name: "壱雫空",
+    artists: [
+        Artist {
+            id: 1,
+            name: "MyGO!!!!!",
+        },
+    ],
+    album: Album {
+        id: 7,
+        name: "迷跡波",
+        pic_url: Some(
+            "http://p/x.jpg",
+        ),
+    },
+    duration: 264000,
+}

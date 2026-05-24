@@ -369,3 +369,22 @@ fn paint_labels(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     let line = Line::from(format!("20Hz{spaces}20kHz")).style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(line), area);
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::SpectrumState;
+    use crate::theme::Theme;
+
+    /// 频谱 baseline(`SpectrumState::new()`,静默态)渲染快照。
+    #[test]
+    fn spectrum_baseline_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
+        let state = SpectrumState::new();
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("频谱静默基线(SpectrumState::new())", terminal.backend());
+        Ok(())
+    }
+}

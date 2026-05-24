@@ -55,7 +55,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         let theme = Theme::default();
         terminal.draw(|f| super::draw(f, f.area(), &theme))?;
-        insta::assert_snapshot!(terminal.backend());
+        crate::test_support::assert_snap!("daemon 断连提示 modal(等按键退出)", terminal.backend());
         Ok(())
     }
 }

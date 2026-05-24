@@ -98,7 +98,7 @@ typed-builder      = "0.20"
 tokio              = { version = "1.45.1", features = ["full"] }
 tokio-util         = { version = "0.7", features = ["codec"] }
 parking_lot       = "0.12"
-insta              = "1"
+insta              = { version = "1", features = ["filters"] }
 tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }

@@ -1,0 +1,19 @@
+---
+source: crates/mineral-channel/netease/src/wire/search.rs
+expression: r
+---
+SearchSongsResult {
+    songs: [
+        SearchSong {
+            id: 1,
+            name: "n",
+            artists: [],
+            album: Album {
+                id: 1,
+                name: "",
+                pic_url: None,
+            },
+            duration: 0,
+        },
+    ],
+}

@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/lyrics.rs
+description: "歌词:无当前歌 / 无缓存 → fallback"
+expression: t.backend()
+---
+"╭ lyrics · synced ─────────────────────╮"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│              ♪ no lyrics             │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"│                                      │"
+"╰──────────────────────────────────────╯"

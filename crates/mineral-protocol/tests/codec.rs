@@ -2,10 +2,56 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, SongId, SourceKind};
-use mineral_protocol::{CancelFilter, ChannelFetchKindTag, Request, Response, framed, recv, send};
-use mineral_task::{ChannelFetchKind, Priority, TaskKind};
+use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+use mineral_protocol::{
+    CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, framed, recv,
+    send,
+};
+use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use tokio::io::duplex;
+
+/// 把一个 [`Request`] 走 framed round-trip,断言收回的与发出的 Debug 等价
+/// (`Request` 不实现 `PartialEq`,但成功反序列化的 Debug 必然逐字段相同)。
+async fn req_round_trips(req: Request) -> color_eyre::Result<()> {
+    let (a, b) = duplex(64 * 1024);
+    let mut sender = framed(a);
+    let mut receiver = framed(b);
+    let want = format!("{req:?}");
+    send(&mut sender, &req).await?;
+    let got: Request = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    assert_eq!(format!("{got:?}"), want);
+    Ok(())
+}
+
+/// 同 [`req_round_trips`],[`Response`] 版。
+async fn resp_round_trips(resp: Response) -> color_eyre::Result<()> {
+    let (a, b) = duplex(64 * 1024);
+    let mut sender = framed(a);
+    let mut receiver = framed(b);
+    let want = format!("{resp:?}");
+    send(&mut sender, &resp).await?;
+    let got: Response = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    assert_eq!(format!("{got:?}"), want);
+    Ok(())
+}
+
+/// 造一首最小 Song。
+fn song(id: &str) -> Song {
+    Song {
+        source: SourceKind::Netease,
+        id: SongId::new(id.to_owned()),
+        name: id.to_owned(),
+        artists: Vec::new(),
+        album: None,
+        duration_ms: 0,
+        cover_url: None,
+        source_url: None,
+    }
+}
 
 #[tokio::test]
 async fn round_trip_request_play() -> color_eyre::Result<()> {
@@ -140,5 +186,70 @@ async fn req_resp_pair_over_one_stream() -> color_eyre::Result<()> {
         .await?
         .ok_or_else(|| eyre!("client got nothing"))?;
     assert!(matches!(resp, Response::AudioSnapshot(_)));
+    Ok(())
+}
+
+/// 简单 / 单元 Request variant 的 round-trip(无 payload 或标量 payload)。
+#[tokio::test]
+async fn round_trip_simple_requests() -> color_eyre::Result<()> {
+    req_round_trips(Request::Pause).await?;
+    req_round_trips(Request::Resume).await?;
+    req_round_trips(Request::Stop).await?;
+    req_round_trips(Request::Seek(12_345)).await?;
+    req_round_trips(Request::SetVolume(50)).await?;
+    req_round_trips(Request::CyclePlayMode).await?;
+    req_round_trips(Request::PrevOrRestart).await?;
+    req_round_trips(Request::NextSong).await?;
+    req_round_trips(Request::DrainTaskEvents).await?;
+    req_round_trips(Request::TaskSnapshot).await?;
+    req_round_trips(Request::PlayerSnapshot).await?;
+    req_round_trips(Request::PullPcm(256)).await?;
+    Ok(())
+}
+
+/// 带 Song payload 的 Request:PlaySong / SetQueue。
+#[tokio::test]
+async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
+    req_round_trips(Request::PlaySong(Box::new(song("s1")))).await?;
+    req_round_trips(Request::SetQueue {
+        queue: vec![song("s1"), song("s2")],
+        target_id: SongId::new("s2".to_owned()),
+    })
+    .await?;
+    Ok(())
+}
+
+/// Response variant 的 round-trip:Ok / TaskId / TaskEvents / TaskSnapshot / PcmData。
+#[tokio::test]
+async fn round_trip_responses() -> color_eyre::Result<()> {
+    resp_round_trips(Response::Ok).await?;
+    resp_round_trips(Response::TaskId(TaskId::default())).await?;
+    resp_round_trips(Response::TaskEvents(Vec::new())).await?;
+    resp_round_trips(Response::TaskSnapshot(Snapshot {
+        running: 2,
+        by_lane: Default::default(),
+        by_kind: Default::default(),
+    }))
+    .await?;
+    resp_round_trips(Response::PcmData {
+        samples: vec![0.0, 0.5, -0.5],
+        sample_rate: 44_100,
+    })
+    .await?;
+    Ok(())
+}
+
+/// 含非空 queue + Shuffle + original_queue 的 PlayerSnapshot 完整往返。
+#[tokio::test]
+async fn round_trip_player_snapshot_rich() -> color_eyre::Result<()> {
+    let snap = PlayerSnapshot {
+        queue: vec![song("a"), song("b"), song("c")],
+        queue_sel: 1,
+        play_mode: PlayMode::Shuffle,
+        original_queue: Some(vec![song("a"), song("b"), song("c")]),
+        current_song: Some(song("b")),
+        ..PlayerSnapshot::default()
+    };
+    resp_round_trips(Response::PlayerSnapshot(Box::new(snap))).await?;
     Ok(())
 }

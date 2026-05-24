@@ -77,3 +77,49 @@ pub struct SearchPlaylist {
     #[serde(default, rename = "trackCount")]
     pub track_count: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SearchSongsResult;
+    use crate::wire::de::from_value;
+
+    /// 正常解析歌曲列表(多首)。
+    #[test]
+    fn parses_song_list() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "songs": [
+                { "id": 1, "name": "迷星叫", "artists": [{ "id": 1, "name": "MyGO!!!!!" }],
+                  "album": { "id": 1, "name": "迷跡波" }, "duration": 248_000 },
+                { "id": 2, "name": "碧天伴走", "artists": [{ "id": 1, "name": "MyGO!!!!!" }],
+                  "album": { "id": 1, "name": "迷跡波" }, "duration": 256_000 }
+            ]
+        });
+        let r: SearchSongsResult = from_value(raw)?;
+        insta::with_settings!({ description => "搜索歌曲列表(MyGO 迷星叫 / 碧天伴走)解析结构" }, {
+            insta::assert_debug_snapshot!(r);
+        });
+        Ok(())
+    }
+
+    /// 缺 `songs` 字段(无命中)→ 空列表,不报错。
+    #[test]
+    fn missing_songs_field_is_empty() -> color_eyre::Result<()> {
+        let r: SearchSongsResult = from_value(serde_json::json!({}))?;
+        assert!(r.songs.is_empty());
+        Ok(())
+    }
+
+    /// 列表里出现 null 艺术家 / null 专辑名 → 跳过 / 空串,整体不失败。
+    #[test]
+    fn tolerates_null_artist_and_album_name() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "songs": [{ "id": 1, "name": "n", "artists": [null],
+                        "album": { "id": 1, "name": null }, "duration": 0 }]
+        });
+        let r: SearchSongsResult = from_value(raw)?;
+        insta::with_settings!({ description => "搜索列表容错:null 艺人跳过 + null 专辑名 → 空串" }, {
+            insta::assert_debug_snapshot!(r);
+        });
+        Ok(())
+    }
+}

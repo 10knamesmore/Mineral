@@ -173,6 +173,19 @@ mod tests {
         );
     }
 
+    /// 真实复杂 LRC(metadata 跳过 + 多时间戳展开 + CJK + 厘秒进位)解析出的整结构快照。
+    #[test]
+    fn parses_realistic_lrc_snapshot() {
+        let s = "[ti:春日影]\n[ar:MyGO!!!!!]\n\
+                 [00:00.00]迷星叫\n\
+                 [00:12.50]壱雫空\n\
+                 [00:15.20][00:48.30]碧天伴走\n\
+                 [01:00.999]名無声";
+        insta::with_settings!({ description => "真实 LRC:metadata 跳过、多时间戳展开、CJK、厘秒" }, {
+            insta::assert_debug_snapshot!(LrcLyric::parse(s).to_vec());
+        });
+    }
+
     #[test]
     fn parses_colon_centisecond_variant() {
         // 网易把厘秒也用冒号分隔的变体 [mm:ss:xx],应与点格式等价。

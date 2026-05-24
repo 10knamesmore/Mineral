@@ -73,3 +73,53 @@ pub fn format_ms(ms: u64) -> String {
     let s = secs % 60;
     format!("{m}:{s:02}")
 }
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::{Song, SongId, SourceKind};
+
+    use super::{Playback, format_ms};
+
+    /// 造一个带 track(指定时长 + 进度)的 Playback。
+    fn with_track(duration_ms: u64, position_ms: u64) -> Playback {
+        let mut pb = Playback::new();
+        pb.track = Some(Song {
+            source: SourceKind::Local,
+            id: SongId::from("t"),
+            name: "t".to_owned(),
+            artists: Vec::new(),
+            album: None,
+            duration_ms,
+            cover_url: None,
+            source_url: None,
+        });
+        pb.position_ms = position_ms;
+        pb
+    }
+
+    /// `format_ms`:秒 / 分进位与零填充。
+    #[test]
+    fn format_ms_cases() {
+        assert_eq!(format_ms(0), "0:00");
+        assert_eq!(format_ms(75_000), "1:15");
+        assert_eq!(format_ms(3_661_000), "61:01");
+    }
+
+    /// `ratio_bps`:0..=10000 basis points;无 track / dur 0 → 0;超出 clamp 到满。
+    #[test]
+    fn ratio_bps_cases() {
+        assert_eq!(Playback::new().ratio_bps(), 0);
+        assert_eq!(with_track(0, 100).ratio_bps(), 0);
+        assert_eq!(with_track(1000, 0).ratio_bps(), 0);
+        assert_eq!(with_track(1000, 500).ratio_bps(), 5000);
+        assert_eq!(with_track(1000, 1000).ratio_bps(), 10_000);
+        assert_eq!(with_track(1000, 5000).ratio_bps(), 10_000);
+    }
+
+    /// `duration_ms`:取 track 元数据,无 track → 0。
+    #[test]
+    fn duration_ms_from_track() {
+        assert_eq!(Playback::new().duration_ms(), 0);
+        assert_eq!(with_track(4242, 0).duration_ms(), 4242);
+    }
+}

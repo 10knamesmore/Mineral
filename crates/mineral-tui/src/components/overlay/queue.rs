@@ -125,3 +125,46 @@ fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     frame.render_widget(Clear, shadow);
     frame.render_widget(bg, shadow);
 }
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::SongId;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::test_support::endserenading;
+    use crate::theme::Theme;
+
+    /// 空 queue。
+    #[test]
+    fn queue_empty_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        t.draw(|f| super::draw(f, f.area(), &[], 0, None, &Theme::default(), true))?;
+        crate::test_support::assert_snap!("队列浮层:空队列", t.backend());
+        Ok(())
+    }
+
+    /// EndSerenading 前 3 曲 + 当前在播标记(Palisade)+ 聚焦。
+    #[test]
+    fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        let songs = endserenading(3);
+        let current = SongId::from("2");
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &songs,
+                0,
+                Some(&current),
+                &Theme::default(),
+                true,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:EndSerenading 前 3 曲,Palisade 当前在播(▶)+ 聚焦",
+            t.backend()
+        );
+        Ok(())
+    }
+}
