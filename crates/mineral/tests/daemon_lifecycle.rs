@@ -225,14 +225,24 @@ fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn_null("nullstatus")?;
     daemon.wait_ready()?;
 
-    let out = daemon.status_output()?;
-    assert!(
-        out.status.success(),
-        "status 应成功退出,实际 {:?},stderr:\n{}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // daemon 是单 client 设计(serve.rs):wait_ready 的探测连接释放 busy 标志有个
+    // 短窗口,与 `mineral status` 撞上会被「daemon busy」拒。重试到成功 / 超时。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let stdout = loop {
+        let out = daemon.status_output()?;
+        if out.status.success() {
+            break String::from_utf8_lossy(&out.stdout).into_owned();
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if Instant::now() >= deadline {
+            bail!("status 始终未成功退出,最后 stderr:\n{stderr}");
+        }
+        assert!(
+            stderr.contains("busy"),
+            "status 非零退出但不是 busy(非预期),stderr:\n{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(
         stdout.contains("backend:    null (no audio device)"),
         "status 应报告 null 后端,实际 stdout:\n{stdout}"
