@@ -1,9 +1,8 @@
 //! Playlists 视图右栏:程序化封面 + KV(tracks/length/source/...) + footer。
 
-use mineral_model::SourceKind;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
@@ -58,6 +57,7 @@ pub fn draw(
         format!("{}h {:02}m", total_min / 60, total_min % 60)
     };
 
+    let src = p.data.source();
     let kv = vec![
         Line::from(vec![
             Span::raw(" "),
@@ -73,8 +73,8 @@ pub fn draw(
             Span::raw(" "),
             Span::styled("source: ", Style::new().fg(theme.overlay)),
             Span::styled(
-                source_label(p.data.source),
-                Style::new().fg(source_color(p.data.source, theme)),
+                src.label(),
+                Style::new().fg(theme.source_color(src.palette())),
             ),
         ]),
     ];
@@ -82,24 +82,4 @@ pub fn draw(
 
     let help = Line::from(" ↵ open · h back ").style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(help), footer);
-}
-
-/// 把 [`SourceKind`] 翻成「图标 + 名字」的短标签。
-fn source_label(s: SourceKind) -> &'static str {
-    match s {
-        SourceKind::Netease => "♫ netease",
-        SourceKind::Local => "□ local",
-        #[cfg(feature = "mock")]
-        SourceKind::Mock => "▒ mock",
-    }
-}
-
-/// 把 [`SourceKind`] 映射到主题色,用于 source_label 染色。
-fn source_color(s: SourceKind, theme: &Theme) -> Color {
-    match s {
-        SourceKind::Netease => theme.red,
-        SourceKind::Local => theme.subtext,
-        #[cfg(feature = "mock")]
-        SourceKind::Mock => theme.overlay,
-    }
 }

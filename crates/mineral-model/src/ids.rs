@@ -1,7 +1,9 @@
 use mineral_macros::define_id;
 
-define_id!(SongId);
-define_id!(AlbumId);
-define_id!(ArtistId);
-define_id!(PlaylistId);
-define_id!(UserId);
+use crate::source::SourceKind;
+
+define_id!(SongId, SourceKind);
+define_id!(AlbumId, SourceKind);
+define_id!(ArtistId, SourceKind);
+define_id!(PlaylistId, SourceKind);
+define_id!(UserId, SourceKind);

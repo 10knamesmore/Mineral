@@ -210,7 +210,7 @@ impl AppState {
     fn decorate(&self, song: Song) -> SongView {
         let loved = self
             .liked_ids
-            .get(&song.source)
+            .get(&song.source())
             .is_some_and(|s| s.contains(&song.id));
         SongView {
             data: song,
@@ -230,7 +230,7 @@ impl AppState {
                 let next: Vec<SongView> = tracks
                     .into_iter()
                     .map(|sv| {
-                        if sv.data.source == source {
+                        if sv.data.source() == source {
                             self.decorate(sv.data)
                         } else {
                             sv

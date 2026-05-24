@@ -4,7 +4,7 @@
 //! 这是后续 `user_playlists` 必需的入参,把它独立抽出来,避免上层重复手抠 JSON。
 
 use color_eyre::eyre::eyre;
-use mineral_model::{SongId, UserId};
+use mineral_model::{SongId, SourceKind, UserId};
 use rustc_hash::FxHashSet;
 use serde_json::json;
 
@@ -37,7 +37,7 @@ pub async fn account_uid(transport: &Transport) -> Result<UserId> {
         .and_then(|x| x.get("id"))
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| eyre!("account response missing `account.id` (logged in?)"))?;
-    Ok(UserId::new(id.to_string()))
+    Ok(UserId::new(SourceKind::NETEASE, id.to_string()))
 }
 
 /// 当前用户喜欢(♥)的歌曲 ID 集合。
@@ -60,6 +60,6 @@ pub async fn liked_song_ids(transport: &Transport, uid: &UserId) -> Result<FxHas
     Ok(resp
         .ids
         .into_iter()
-        .map(|n| SongId::new(n.to_string()))
+        .map(|n| SongId::new(SourceKind::NETEASE, n.to_string()))
         .collect())
 }

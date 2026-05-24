@@ -43,19 +43,18 @@ pub async fn songs_in_playlist(transport: &Transport, id: &PlaylistId) -> Result
     Ok(dtos
         .into_iter()
         .map(|s| Song {
-            source: SourceKind::Netease,
-            id: SongId::new(s.id.to_string()),
+            id: SongId::new(SourceKind::NETEASE, s.id.to_string()),
             name: s.name,
             artists: s
                 .ar
                 .into_iter()
                 .map(|a| ArtistRef {
-                    id: ArtistId::new(a.id.to_string()),
+                    id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
                     name: a.name,
                 })
                 .collect(),
             album: Some(AlbumRef {
-                id: AlbumId::new(s.al.id.to_string()),
+                id: AlbumId::new(SourceKind::NETEASE, s.al.id.to_string()),
                 name: s.al.name,
             }),
             duration_ms: s.dt,
@@ -110,8 +109,7 @@ pub async fn user_playlists(transport: &Transport, uid: &UserId) -> Result<Vec<P
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or_default();
             out.push(Playlist {
-                source: SourceKind::Netease,
-                id: PlaylistId::new(id.to_string()),
+                id: PlaylistId::new(SourceKind::NETEASE, id.to_string()),
                 name,
                 description,
                 cover_url,

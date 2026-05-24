@@ -42,8 +42,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # INSTA_UPDATE=no:快照不匹配 / 缺基准直接失败,绝不在 CI 写 .snap.new。
+      # --no-fail-fast:不提前收手,一次跑完拿到完整失败清单(suite 很快,省时可忽略)。
       - name: test
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --no-fail-fast
         env:
           INSTA_UPDATE: "no"
 

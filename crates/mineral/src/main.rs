@@ -17,18 +17,29 @@ fn main() -> color_eyre::Result<()> {
 
     let args = Args::parse();
     match args.command {
-        Some(Command::Serve) => {
-            // serve 需要 channels(daemon 持有的业务依赖),由 main 自己 build。
-            let channels = build_channels()?;
-            let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
-            runtime.block_on(mineral_cli::serve_run(channels))
-        }
+        Some(Command::Serve) => run_daemon(),
         Some(command) => mineral_cli::run(command),
         None => {
             let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
             runtime.block_on(run_tui(args.connect, args.in_proc))
         }
     }
+}
+
+/// daemon 入口(`mineral serve`):build channels → 起 runtime → serve。
+///
+/// daemon 通常被 TUI 以 stderr 重定向的子进程方式拉起,返回的 `Err` 只会进 color-eyre
+/// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
+/// 启动失败(如凭证解析失败)也能在日志里查到。
+fn run_daemon() -> color_eyre::Result<()> {
+    let result = build_channels().and_then(|channels| {
+        let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+        runtime.block_on(mineral_cli::serve_run(channels))
+    });
+    if let Err(e) = &result {
+        mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
+    }
+    result
 }
 
 /// 起 TUI:in-proc 模式自己 build channels;Auto / Connect 跳过(daemon 进程自己持有)。
@@ -52,10 +63,19 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
 }
 
 /// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。
+///
+/// **单个 channel 失败不阻塞**:某源构建失败(如凭证损坏)只 warn + 跳过,不拖垮其他源
+/// 或 daemon;空 channels 也是合法状态(没登录任何源),由 TUI 空状态提示兜。
 fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
-    if let Some(c) = build_netease()? {
-        channels.push(c);
+    match build_netease() {
+        Ok(Some(c)) => channels.push(c),
+        Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),
+        Err(e) => mineral_log::warn!(
+            target: "channel",
+            error = mineral_log::chain(&e),
+            "netease channel 构建失败,跳过(不影响其他源 / daemon)"
+        ),
     }
     #[cfg(feature = "mock")]
     channels.push(build_mock());

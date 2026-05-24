@@ -93,7 +93,7 @@ fn read_from(path: &Path) -> color_eyre::Result<Option<StoredNeteaseAuth>> {
 #[cfg(test)]
 mod tests {
     use super::{StoredNeteaseAuth, read_from, write_to};
-    use mineral_model::UserId;
+    use mineral_model::{SourceKind, UserId};
 
     #[test]
     fn round_trip_via_disk() -> color_eyre::Result<()> {
@@ -101,7 +101,7 @@ mod tests {
         let path = dir.path().join("netease.json");
         let auth = StoredNeteaseAuth {
             music_u: String::from("opaque-token"),
-            user_id: UserId::new("12345"),
+            user_id: UserId::new(SourceKind::NETEASE, "12345"),
         };
 
         write_to(&path, &auth)?;
@@ -117,6 +117,24 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("does-not-exist.json");
         assert!(read_from(&path)?.is_none());
+        Ok(())
+    }
+
+    /// 钉住 ID 结构化后磁盘上的确切 schema:`user_id` 是 `{namespace,value}`,
+    /// 命中内置 `NETEASE` 常量。future serde 漂移(改回 transparent / 改字段名)会被抓。
+    #[test]
+    fn parses_new_format_credential() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("netease.json");
+        std::fs::write(
+            &path,
+            r#"{"music_u":"opaque-token","user_id":{"namespace":"netease","value":"349758847"}}"#,
+        )?;
+
+        let auth = read_from(&path)?.expect("new-format credential parses");
+        assert_eq!(auth.music_u, "opaque-token");
+        assert_eq!(auth.user_id, UserId::new(SourceKind::NETEASE, "349758847"));
+        assert_eq!(auth.user_id.namespace(), SourceKind::NETEASE);
         Ok(())
     }
 }

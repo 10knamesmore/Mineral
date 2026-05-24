@@ -10,10 +10,10 @@ rust-version.workspace = true
 
 [features]
 default = []
-# 启用后会拉 mineral-model 的 mock feature(获得 SourceKind::Mock),
+# 启用后会拉 mineral-model 的 mock feature(获得 SourceKind::MOCK),
 # 整个 lib 才有内容。保持 default = [] 是为了让 `cargo clippy --workspace`
 # 默认不引入 mineral-model/mock,避免 workspace feature unification 让
-# mineral binary 在未显式启用 mock 时看到 SourceKind::Mock。
+# mineral binary 在未显式启用 mock 时看到 SourceKind::MOCK。
 mock = ["mineral-model/mock"]
 
 [dependencies]

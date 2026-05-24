@@ -23,8 +23,7 @@ pub(crate) fn playlist_view(
 ) -> PlaylistView {
     PlaylistView {
         data: Playlist {
-            source,
-            id: PlaylistId::from(id),
+            id: PlaylistId::new(source, id),
             name: name.to_owned(),
             description: String::new(),
             cover_url: None,
@@ -39,9 +38,9 @@ pub(crate) fn playlist_view(
 pub(crate) fn state_with_playlists() -> AppState {
     let mut s = AppState::empty();
     s.playlists = vec![
-        playlist_view("p1", "EndSerenading", SourceKind::Netease, 10),
-        playlist_view("p2", "The Power of Failing", SourceKind::Netease, 8),
-        playlist_view("p3", "本地音乐", SourceKind::Local, 5),
+        playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
+        playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
+        playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
     s
 }
@@ -63,7 +62,8 @@ pub(crate) fn state_with_tracks() -> AppState {
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
-    s.tracks_cache.insert(PlaylistId::from("p1"), views);
+    s.tracks_cache
+        .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s.sel_track = 1;
     s
 }
@@ -75,7 +75,7 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
     s.playlists = vec![playlist_view(
         "cf",
         "Chinese Football",
-        SourceKind::Netease,
+        SourceKind::NETEASE,
         10,
     )];
     s.view = View::Library;
@@ -89,6 +89,7 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
-    s.tracks_cache.insert(PlaylistId::from("cf"), views);
+    s.tracks_cache
+        .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
     s
 }

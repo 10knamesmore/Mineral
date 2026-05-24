@@ -23,8 +23,7 @@ struct FakeChannel {
 impl FakeChannel {
     fn new(gate: Option<Arc<Semaphore>>) -> Self {
         let pl = Playlist {
-            source: SourceKind::Netease,
-            id: PlaylistId::new("p1"),
+            id: PlaylistId::new(SourceKind::NETEASE, "p1"),
             name: String::from("P1"),
             description: String::new(),
             cover_url: None,
@@ -50,7 +49,7 @@ impl FakeChannel {
 #[async_trait]
 impl MusicChannel for FakeChannel {
     fn source(&self) -> SourceKind {
-        SourceKind::Netease
+        SourceKind::NETEASE
     }
 
     async fn search_songs(&self, _q: &str, _p: Page) -> Result<Vec<Song>> {
@@ -79,7 +78,6 @@ impl MusicChannel for FakeChannel {
             .cloned()
             .ok_or(Error::Other(color_eyre::eyre::eyre!("empty ids")))?;
         Ok(vec![PlayUrl {
-            source: SourceKind::Netease,
             song_id: id,
             url: MediaUrl::remote("https://example.com/a.mp3")
                 .map_err(|e| Error::Other(color_eyre::eyre::eyre!("{e}")))?,
@@ -104,28 +102,25 @@ impl MusicChannel for FakeChannel {
 
 fn my_playlists_kind() -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-        source: SourceKind::Netease,
+        source: SourceKind::NETEASE,
     })
 }
 
 fn playlist_tracks_kind() -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-        source: SourceKind::Netease,
-        id: PlaylistId::new("p1"),
+        id: PlaylistId::new(SourceKind::NETEASE, "p1"),
     })
 }
 
 fn song_url_kind(song: &str) -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-        source: SourceKind::Netease,
-        song_id: SongId::new(song),
+        song_id: SongId::new(SourceKind::NETEASE, song),
     })
 }
 
 fn lyrics_kind(song: &str) -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
-        source: SourceKind::Netease,
-        song_id: SongId::new(song),
+        song_id: SongId::new(SourceKind::NETEASE, song),
     })
 }
 

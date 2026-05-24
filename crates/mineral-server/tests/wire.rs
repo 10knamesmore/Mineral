@@ -39,19 +39,16 @@ fn audio_snapshot_round_trip() -> color_eyre::Result<()> {
 fn task_kind_round_trip() -> color_eyre::Result<()> {
     let cases = vec![
         TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-            source: SourceKind::Netease,
+            source: SourceKind::NETEASE,
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-            source: SourceKind::Netease,
-            id: PlaylistId::new("p123".to_owned()),
+            id: PlaylistId::new(SourceKind::NETEASE, "p123"),
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-            source: SourceKind::Netease,
-            song_id: SongId::new("s456".to_owned()),
+            song_id: SongId::new(SourceKind::NETEASE, "s456"),
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
-            source: SourceKind::Netease,
-            song_id: SongId::new("s456".to_owned()),
+            song_id: SongId::new(SourceKind::NETEASE, "s456"),
         }),
     ];
     for k in &cases {
@@ -94,11 +91,10 @@ fn cancel_filter_round_trip() -> color_eyre::Result<()> {
 #[test]
 fn cancel_filter_matches_only_intended_kinds() -> color_eyre::Result<()> {
     let songurl = TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-        source: SourceKind::Netease,
-        song_id: SongId::new("s".to_owned()),
+        song_id: SongId::new(SourceKind::NETEASE, "s"),
     });
     let myplaylists = TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-        source: SourceKind::Netease,
+        source: SourceKind::NETEASE,
     });
 
     let f = CancelFilter::ChannelFetchKinds(vec![ChannelFetchKindTag::SongUrl]);
@@ -112,15 +108,15 @@ fn task_event_round_trip() -> color_eyre::Result<()> {
     // TaskEvent 没派 PartialEq(Lyrics/Playlist 等也没),所以只测「能编+能 decode」。
     let cases = vec![
         TaskEvent::PlaylistsFetched {
-            source: SourceKind::Netease,
+            source: SourceKind::NETEASE,
             playlists: vec![],
         },
         TaskEvent::LikedSongIdsFetched {
-            source: SourceKind::Netease,
+            source: SourceKind::NETEASE,
             ids: FxHashSet::default(),
         },
         TaskEvent::PlaylistTracksFetched {
-            id: PlaylistId::new("p".to_owned()),
+            id: PlaylistId::new(SourceKind::NETEASE, "p"),
             tracks: vec![],
         },
     ];

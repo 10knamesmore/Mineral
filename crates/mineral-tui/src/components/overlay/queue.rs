@@ -128,7 +128,7 @@ fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::SongId;
+    use mineral_model::{SongId, SourceKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -149,7 +149,7 @@ mod tests {
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
         let songs = endserenading(3);
-        let current = SongId::from("2");
+        let current = SongId::new(SourceKind::NETEASE, "2");
         t.draw(|f| {
             super::draw(
                 f,

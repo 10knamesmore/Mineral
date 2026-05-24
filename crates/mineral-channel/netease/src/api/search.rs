@@ -57,19 +57,18 @@ pub async fn search_songs(
         .songs
         .into_iter()
         .map(|s| Song {
-            source: SourceKind::Netease,
-            id: SongId::new(s.id.to_string()),
+            id: SongId::new(SourceKind::NETEASE, s.id.to_string()),
             name: s.name,
             artists: s
                 .artists
                 .into_iter()
                 .map(|a| ArtistRef {
-                    id: ArtistId::new(a.id.to_string()),
+                    id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
                     name: a.name,
                 })
                 .collect(),
             album: Some(AlbumRef {
-                id: AlbumId::new(s.album.id.to_string()),
+                id: AlbumId::new(SourceKind::NETEASE, s.album.id.to_string()),
                 name: s.album.name,
             }),
             duration_ms: s.duration,
@@ -94,14 +93,13 @@ pub async fn search_albums(
         .albums
         .into_iter()
         .map(|a| Album {
-            source: SourceKind::Netease,
-            id: AlbumId::new(a.id.to_string()),
+            id: AlbumId::new(SourceKind::NETEASE, a.id.to_string()),
             name: a.name,
             artists: a
                 .artist
                 .map(|x| {
                     vec![ArtistRef {
-                        id: ArtistId::new(x.id.to_string()),
+                        id: ArtistId::new(SourceKind::NETEASE, x.id.to_string()),
                         name: x.name,
                     }]
                 })
@@ -129,8 +127,7 @@ pub async fn search_playlists(
         .playlists
         .into_iter()
         .map(|p| Playlist {
-            source: SourceKind::Netease,
-            id: PlaylistId::new(p.id.to_string()),
+            id: PlaylistId::new(SourceKind::NETEASE, p.id.to_string()),
             name: p.name,
             description: p.description.unwrap_or_default(),
             cover_url: p.cover_img_url.as_deref().and_then(parse_remote),

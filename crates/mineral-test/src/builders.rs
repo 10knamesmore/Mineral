@@ -1,6 +1,6 @@
 //! [`Song`] 构造器:一个最小默认 + 一组函数式装饰,组合出测试要的形态。
 //!
-//! 设计成函数式装饰(`with_source(song("x"), SourceKind::Local)`)而非多参构造,
+//! 设计成函数式装饰(`with_source(song("x"), SourceKind::LOCAL)`)而非多参构造,
 //! 避免 `song("x", None, 0, ...)` 这种谜语调用。
 
 use mineral_model::{ArtistId, ArtistRef, Song, SongId, SourceKind};
@@ -14,8 +14,7 @@ use mineral_model::{ArtistId, ArtistRef, Song, SongId, SourceKind};
 ///   填好默认值的 `Song`,再用 `with_*` 装饰。
 pub fn song(id: &str) -> Song {
     Song {
-        source: SourceKind::Netease,
-        id: SongId::from(id),
+        id: SongId::new(SourceKind::NETEASE, id),
         name: id.to_owned(),
         artists: Vec::new(),
         album: None,
@@ -35,7 +34,7 @@ pub fn song(id: &str) -> Song {
 ///   `artists` 被替换为该艺人的 `Song`。
 pub fn with_artist(mut s: Song, artist: &str) -> Song {
     s.artists = vec![ArtistRef {
-        id: ArtistId::from(artist),
+        id: ArtistId::new(s.id.namespace(), artist),
         name: artist.to_owned(),
     }];
     s
@@ -54,16 +53,16 @@ pub fn with_name(mut s: Song, name: &str) -> Song {
     s
 }
 
-/// 改一首 `Song` 的来源 channel。
+/// 改一首 `Song` 的来源 channel(重建 `id` 的 namespace,裸值不变)。
 ///
 /// # Params:
 ///   - `s`: 原 `Song`
 ///   - `source`: 新来源
 ///
 /// # Return:
-///   `source` 被替换的 `Song`。
+///   `id.namespace()` 被替换的 `Song`(`source()` 随之变化)。
 pub fn with_source(mut s: Song, source: SourceKind) -> Song {
-    s.source = source;
+    s.id = SongId::new(source, s.id.value().to_owned());
     s
 }
 

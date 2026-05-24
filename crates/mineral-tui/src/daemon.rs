@@ -4,8 +4,9 @@
 //! 独立的 `mineral serve` 子进程再 attach。client 退出时是否连带 kill 掉「本次亲手
 //! spawn 的」daemon,由 [`KILL_SPAWNED_DAEMON_ON_EXIT`] 决定。
 
+use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use color_eyre::eyre::{WrapErr, bail};
@@ -48,23 +49,31 @@ pub(crate) async fn ensure(
         return Ok((client, None));
     }
     mineral_log::info!(target: "daemon", "no daemon running, spawning one");
-    let child = spawn_daemon()?;
+    let mut child = spawn_daemon()?;
     let pid = child.id();
-    let client = connect_with_retry(socket).await?;
+    let client = connect_with_retry(socket, &mut child).await?;
     mineral_log::info!(target: "daemon", pid, "spawned daemon ready");
     Ok((client, Some(DaemonHandle { child })))
 }
 
-/// spawn 后轮询重连,直到 daemon bind 好 socket(或超时 `bail!`)。
-async fn connect_with_retry(socket: &Path) -> color_eyre::Result<RemoteClient> {
+/// spawn 后轮询重连,直到 daemon bind 好 socket。
+///
+/// 每轮额外 `try_wait` 看 daemon 子进程是否已经退出——退了就立刻捞它的 stderr 把**真因**
+/// 内联进报错(不再干等到超时),避免出现「did not become ready」这种无信息量的超时。
+async fn connect_with_retry(socket: &Path, child: &mut Child) -> color_eyre::Result<RemoteClient> {
     let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
     loop {
         if let Ok(client) = RemoteClient::connect(socket).await {
             return Ok(client);
         }
+        if let Some(status) = child.try_wait().wrap_err("poll spawned daemon")? {
+            bail!("{}", daemon_died_report(child, status));
+        }
         if tokio::time::Instant::now() >= deadline {
+            let hint = mineral_log::log_dir()
+                .map_or_else(|_| String::new(), |d| format!(";详见日志 {}", d.display()));
             bail!(
-                "spawned daemon did not become ready within {}s (socket {})",
+                "spawned daemon did not become ready within {}s (socket {}){hint}",
                 SPAWN_TIMEOUT.as_secs(),
                 socket.display()
             );
@@ -73,17 +82,37 @@ async fn connect_with_retry(socket: &Path) -> color_eyre::Result<RemoteClient> {
     }
 }
 
+/// daemon 子进程启动即退出时,组装一条带它 stderr 真因的报错。
+///
+/// daemon 以 `stderr(piped)` spawn,退出后管道已关,读取不会阻塞;color-eyre 在非 tty
+/// 下输出无 ANSI,正好原样转述给用户。stderr 为空时退回「详见日志」提示。
+fn daemon_died_report(child: &mut Child, status: ExitStatus) -> String {
+    let mut captured = String::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut captured);
+    }
+    let trimmed = captured.trim();
+    if trimmed.is_empty() {
+        let hint = mineral_log::log_dir()
+            .map_or_else(|_| String::new(), |d| format!(",详见日志 {}", d.display()));
+        format!("daemon 启动即退出({status}),无 stderr 输出{hint}")
+    } else {
+        format!("daemon 启动即退出({status}):\n{trimmed}")
+    }
+}
+
 /// spawn 一个独立的 `mineral serve` 子进程(同一个二进制,自带相同 feature)。
 ///
-/// stdio 全 null 掉:daemon 的 `println!("listening...")` 不能漏进 TUI 的 alternate
-/// screen(daemon 自己仍写滚动日志文件,信息不丢)。
+/// stdin/stdout null 掉:daemon 的 `println!("listening...")` 不能漏进 TUI 的 alternate
+/// screen。**stderr 改 `piped`**:daemon 正常运行不写 stderr(日志走滚动文件),只有启动
+/// 失败时 color-eyre 报告会落到这里,被 [`daemon_died_report`] 捞出来内联进错误。
 fn spawn_daemon() -> color_eyre::Result<Child> {
     let exe = std::env::current_exe().wrap_err("locate current executable for daemon spawn")?;
     Command::new(&exe)
         .arg("serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .wrap_err_with(|| format!("spawn daemon: {} serve", exe.display()))
 }

@@ -96,7 +96,7 @@ fn map_err(e: color_eyre::Report) -> Error {
 #[async_trait]
 impl MusicChannel for NeteaseChannel {
     fn source(&self) -> SourceKind {
-        SourceKind::Netease
+        SourceKind::NETEASE
     }
 
     async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>> {

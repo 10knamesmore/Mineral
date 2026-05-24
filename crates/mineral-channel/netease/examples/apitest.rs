@@ -241,7 +241,10 @@ async fn main() -> color_eyre::Result<()> {
         if let Some(uid) = uid_str {
             let r = run("user_playlists", async {
                 let v = ch
-                    .user_playlists(&mineral_model::UserId::new(uid.clone()))
+                    .user_playlists(&mineral_model::UserId::new(
+                        mineral_model::SourceKind::NETEASE,
+                        uid.clone(),
+                    ))
                     .await?;
                 Ok(format!(
                     "{} playlists{}",
@@ -254,7 +257,10 @@ async fn main() -> color_eyre::Result<()> {
             .await;
             // 用 first playlist 跑 songs_in_playlist
             let first_playlist = ch
-                .user_playlists(&mineral_model::UserId::new(uid.clone()))
+                .user_playlists(&mineral_model::UserId::new(
+                    mineral_model::SourceKind::NETEASE,
+                    uid.clone(),
+                ))
                 .await
                 .ok()
                 .and_then(|v| v.into_iter().next());

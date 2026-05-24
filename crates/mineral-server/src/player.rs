@@ -242,19 +242,17 @@ impl PlayerCore {
             self.inner.audio.play(pu.url.clone());
             self.inner.state.lock().play_url = Some(pu);
         } else {
-            mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source, "submit SongUrl task");
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit SongUrl task");
             self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-                    source: song.source,
                     song_id: song.id.clone(),
                 }),
                 Priority::User,
             );
         }
-        mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source, "submit Lyrics task");
+        mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit Lyrics task");
         self.inner.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
-                source: song.source,
                 song_id: song.id.clone(),
             }),
             Priority::User,
@@ -453,12 +451,9 @@ impl PlayerCore {
             return;
         };
         self.inner.state.lock().prefetch_fired_for = Some(cur_id);
-        mineral_log::debug!(target: "player", next_id = next.id.as_str(), source = ?next.source, "prefetch next");
+        mineral_log::debug!(target: "player", next_id = next.id.as_str(), source = ?next.source(), "prefetch next");
         self.inner.scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-                source: next.source,
-                song_id: next.id,
-            }),
+            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl { song_id: next.id }),
             Priority::Background,
         );
     }

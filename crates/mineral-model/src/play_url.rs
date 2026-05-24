@@ -5,9 +5,7 @@ use crate::{bitrate::BitRate, ids::SongId, source::SourceKind, url::MediaUrl};
 /// 一首歌的可播放 URL + 元信息。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayUrl {
-    /// 来源 channel。
-    pub source: SourceKind,
-    /// 关联的歌曲 ID。
+    /// 关联的歌曲 ID(自带 namespace)。
     pub song_id: SongId,
     /// 播放地址:远端 stream URL 用 `Remote`,本地文件用 `Local`。
     pub url: MediaUrl,
@@ -19,4 +17,12 @@ pub struct PlayUrl {
     pub size: u64,
     /// 文件格式(`mp3` / `flac` 等),拿不到给空。
     pub format: String,
+}
+
+impl PlayUrl {
+    /// 来源 channel——派生自 [`PlayUrl::song_id`] 的 namespace。
+    #[inline]
+    pub fn source(&self) -> SourceKind {
+        self.song_id.namespace()
+    }
 }

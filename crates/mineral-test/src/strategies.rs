@@ -9,41 +9,39 @@ use proptest::prelude::{Just, Strategy, any, prop_oneof};
 
 /// 随机 `Song` 生成器:覆盖各来源、空/非空艺人、有无专辑、任意时长。
 ///
+/// 同一首歌的 song / artist / album id 共用所选 `source` 作 namespace,
+/// 故 `song.source() == song.id.namespace()` 恒成立(可被属性测试当不变量守护)。
 /// 不生成 `cover_url` / `source_url`(对 codec / 序列化往返不增信息;需要时另写策略)。
 ///
 /// # Return:
 ///   产出合法 `Song` 的 proptest [`Strategy`]。
 pub fn arb_song() -> impl Strategy<Value = Song> {
     (
-        prop_oneof![Just(SourceKind::Netease), Just(SourceKind::Local)],
+        prop_oneof![Just(SourceKind::NETEASE), Just(SourceKind::LOCAL)],
         any::<String>(),
         any::<String>(),
-        vec(arb_artist(), 0..3),
+        vec(any::<String>(), 0..3),
         option::of(any::<String>()),
         any::<u64>(),
     )
-        .prop_map(|(source, id, name, artists, album, duration_ms)| Song {
-            source,
-            id: SongId::from(id.as_str()),
-            name,
-            artists,
-            album: album.map(|n| AlbumRef {
-                id: AlbumId::from(n.as_str()),
-                name: n,
-            }),
-            duration_ms,
-            cover_url: None,
-            source_url: None,
-        })
-}
-
-/// 随机 `ArtistRef` 生成器(`id` 由名字派生)。
-///
-/// # Return:
-///   产出 `ArtistRef` 的 proptest [`Strategy`]。
-fn arb_artist() -> impl Strategy<Value = ArtistRef> {
-    any::<String>().prop_map(|name| ArtistRef {
-        id: ArtistId::from(name.as_str()),
-        name,
-    })
+        .prop_map(
+            |(source, id, name, artist_names, album, duration_ms)| Song {
+                id: SongId::new(source, id),
+                name,
+                artists: artist_names
+                    .into_iter()
+                    .map(|n| ArtistRef {
+                        id: ArtistId::new(source, n.as_str()),
+                        name: n,
+                    })
+                    .collect(),
+                album: album.map(|n| AlbumRef {
+                    id: AlbumId::new(source, n.as_str()),
+                    name: n,
+                }),
+                duration_ms,
+                cover_url: None,
+                source_url: None,
+            },
+        )
 }

@@ -6,7 +6,7 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
-use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+use mineral_model::{MediaUrl, PlaylistId};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
@@ -107,13 +107,10 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     if state.view != View::Playlists {
         return;
     }
-    for (source, id) in collect_pending_tracks(state) {
-        mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?source, "request playlist tracks");
+    for id in collect_pending_tracks(state) {
+        mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?id.namespace(), "request playlist tracks");
         client.submit_task(
-            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-                source,
-                id: id.clone(),
-            }),
+            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
             Priority::User,
         );
         // 成败都记:失败歌单的 tracks_cache 永远不会被填,只有靠这里去重才不会
@@ -123,7 +120,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
 }
 
 /// sel 周围 [`RADIUS`] 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
-fn collect_pending_tracks(state: &AppState) -> Vec<(SourceKind, PlaylistId)> {
+fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let filtered = state.filtered_playlists();
     let sel = state.sel_playlist;
     let mut out = Vec::new();
@@ -131,7 +128,7 @@ fn collect_pending_tracks(state: &AppState) -> Vec<(SourceKind, PlaylistId)> {
         if let Some(p) = filtered.get(idx) {
             let id = &p.data.id;
             if !state.tracks_cache.contains_key(id) && !state.tracks_requested.contains(id) {
-                out.push((p.data.source, id.clone()));
+                out.push(id.clone());
             }
         }
     };

@@ -24,7 +24,7 @@ tokio-util   = { workspace = true }
 
 [dev-dependencies]
 # 不引入 mineral-channel-mock —— 它的 `mock` feature 会被 cargo workspace unification
-# 推给 mineral-model,让其他没显式启 mock 的 crate 看到 SourceKind::Mock。
+# 推给 mineral-model,让其他没显式启 mock 的 crate 看到 SourceKind::MOCK。
 # 测试自己 in-place 写一个最小的 MusicChannel 实现就够。
 
 [lints]

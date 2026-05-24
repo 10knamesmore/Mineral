@@ -44,60 +44,48 @@ pub enum ChannelFetchKind {
         source: SourceKind,
     },
 
-    /// 拉某 channel 某歌单内的曲目。
+    /// 拉某歌单内的曲目(目标 channel 由 `id` 的 namespace 决定)。
     PlaylistTracks {
-        /// 目标 channel。
-        source: SourceKind,
-
-        /// 歌单 id。
+        /// 歌单 id(自带 namespace)。
         id: PlaylistId,
     },
 
-    /// 解析某首歌在指定 channel 下的播放 URL(用于 PlayPrep)。
+    /// 解析某首歌的播放 URL(用于 PlayPrep;目标 channel 由 `song_id` 的 namespace 决定)。
     SongUrl {
-        /// 目标 channel。
-        source: SourceKind,
-
-        /// 歌曲 id。
+        /// 歌曲 id(自带 namespace)。
         song_id: SongId,
     },
 
-    /// 拉某首歌的歌词。
+    /// 拉某首歌的歌词(目标 channel 由 `song_id` 的 namespace 决定)。
     Lyrics {
-        /// 目标 channel。
-        source: SourceKind,
-
-        /// 歌曲 id。
+        /// 歌曲 id(自带 namespace)。
         song_id: SongId,
     },
 }
 
 impl ChannelFetchKind {
     /// 产出 dedup key 的可变部分(channel + 子操作 + 关键参数)。
+    ///
+    /// 带 id 的形态用 `id.qualified()`(namespace 已在 id 内,自然带上来源);
+    /// 只有 source 的形态(无 id 可派生)仍显式拼 `{source:?}`。
     fn dedup_part(&self) -> String {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
             Self::LikedSongIds { source } => format!("{source:?}:liked_song_ids"),
-            Self::PlaylistTracks { source, id } => {
-                format!("{source:?}:playlist_tracks:{}", id.as_str())
-            }
-            Self::SongUrl { source, song_id } => {
-                format!("{source:?}:song_url:{}", song_id.as_str())
-            }
-            Self::Lyrics { source, song_id } => {
-                format!("{source:?}:lyrics:{}", song_id.as_str())
-            }
+            Self::PlaylistTracks { id } => format!("playlist_tracks:{}", id.qualified()),
+            Self::SongUrl { song_id } => format!("song_url:{}", song_id.qualified()),
+            Self::Lyrics { song_id } => format!("lyrics:{}", song_id.qualified()),
         }
     }
 
     /// 该任务针对的 channel(给 lane 路由 worker 用)。
+    ///
+    /// 带 id 的形态从 id 的 namespace 派生;只有 source 的形态直接返回。
     pub fn source(&self) -> SourceKind {
         match self {
-            Self::MyPlaylists { source }
-            | Self::LikedSongIds { source }
-            | Self::PlaylistTracks { source, .. }
-            | Self::SongUrl { source, .. }
-            | Self::Lyrics { source, .. } => *source,
+            Self::MyPlaylists { source } | Self::LikedSongIds { source } => *source,
+            Self::PlaylistTracks { id } => id.namespace(),
+            Self::SongUrl { song_id } | Self::Lyrics { song_id } => song_id.namespace(),
         }
     }
 }

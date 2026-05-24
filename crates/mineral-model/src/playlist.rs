@@ -5,9 +5,7 @@ use crate::{ids::PlaylistId, song::Song, source::SourceKind, url::MediaUrl};
 /// 一个歌单及其曲目。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Playlist {
-    /// 来源 channel。
-    pub source: SourceKind,
-    /// 歌单 ID(在 `source` 内唯一)。
+    /// 歌单 ID(自带 namespace,在其来源内唯一)。
     pub id: PlaylistId,
     /// 歌单名。
     pub name: String,
@@ -19,4 +17,12 @@ pub struct Playlist {
     pub track_count: u64,
     /// 已加载的曲目列表。
     pub songs: Vec<Song>,
+}
+
+impl Playlist {
+    /// 来源 channel——派生自 [`Playlist::id`] 的 namespace。
+    #[inline]
+    pub fn source(&self) -> SourceKind {
+        self.id.namespace()
+    }
 }

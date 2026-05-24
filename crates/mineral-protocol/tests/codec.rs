@@ -67,8 +67,7 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
     let mut receiver = framed(b);
 
     let kind = TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-        source: SourceKind::Netease,
-        song_id: SongId::new("12345".to_owned()),
+        song_id: SongId::new(SourceKind::NETEASE, "12345"),
     });
     send(
         &mut sender,
@@ -202,7 +201,7 @@ async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::PlaySong(Box::new(song("s1")))).await?;
     req_round_trips(Request::SetQueue {
         queue: vec![song("s1"), song("s2")],
-        target_id: SongId::new("s2".to_owned()),
+        target_id: SongId::new(SourceKind::NETEASE, "s2"),
     })
     .await?;
     Ok(())
@@ -248,7 +247,7 @@ async fn round_trip_player_snapshot_rich() -> color_eyre::Result<()> {
 /// codec,不在此重测;序列化保真才是本仓的风险点。
 mod proptests {
     use bincode::{deserialize, serialize};
-    use mineral_model::SongId;
+    use mineral_model::{SongId, SourceKind};
     use mineral_protocol::Request;
     use mineral_test::arb_song;
     use proptest::collection::vec;
@@ -275,7 +274,7 @@ mod proptests {
             (vec(arb_song(), 0..4), any::<String>()).prop_map(|(queue, target)| {
                 Request::SetQueue {
                     queue,
-                    target_id: SongId::from(target.as_str()),
+                    target_id: SongId::new(SourceKind::NETEASE, target.as_str()),
                 }
             }),
         ]

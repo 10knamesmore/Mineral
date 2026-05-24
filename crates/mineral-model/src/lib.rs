@@ -48,5 +48,5 @@ pub use playlist::Playlist;
 pub use refs::{AlbumRef, ArtistRef};
 pub use search::SearchKind;
 pub use song::Song;
-pub use source::SourceKind;
+pub use source::{PaletteRole, SourceKind};
 pub use url::MediaUrl;

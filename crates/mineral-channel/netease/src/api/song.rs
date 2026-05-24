@@ -40,19 +40,18 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
     Ok(dtos
         .into_iter()
         .map(|s| Song {
-            source: SourceKind::Netease,
-            id: SongId::new(s.id.to_string()),
+            id: SongId::new(SourceKind::NETEASE, s.id.to_string()),
             name: s.name,
             artists: s
                 .ar
                 .into_iter()
                 .map(|a| ArtistRef {
-                    id: ArtistId::new(a.id.to_string()),
+                    id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
                     name: a.name,
                 })
                 .collect(),
             album: Some(AlbumRef {
-                id: AlbumId::new(s.al.id.to_string()),
+                id: AlbumId::new(SourceKind::NETEASE, s.al.id.to_string()),
                 name: s.al.name,
             }),
             duration_ms: s.dt,
@@ -149,8 +148,7 @@ fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<Pl
             let url_str = d.url?;
             let url = MediaUrl::remote(&url_str).ok()?;
             Some(PlayUrl {
-                source: SourceKind::Netease,
-                song_id: SongId::new(d.id.to_string()),
+                song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
                 url,
                 bitrate_bps: d.br,
                 quality,
