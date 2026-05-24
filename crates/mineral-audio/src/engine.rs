@@ -23,7 +23,8 @@ use stream_download::source::SourceStream;
 use stream_download::storage::temp::TempStorageProvider;
 
 use crate::command::AudioCommand;
-use crate::snapshot::AudioSnapshot;
+use crate::handle::AudioMode;
+use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
 
 /// 命令通道空转间隔 / snapshot 刷新节拍 / seek mailbox drain 节拍。
@@ -63,6 +64,7 @@ pub(crate) fn run(
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
+    mode: AudioMode,
 ) {
     if let Err(e) = engine_main(
         cmd_rx,
@@ -71,11 +73,16 @@ pub(crate) fn run(
         ready_tx,
         tap_producer,
         sr_atomic,
+        mode,
     ) {
-        mineral_log::warn!(target: "audio_engine", "exited: {e:?}");
+        mineral_log::error!(target: "audio", error = mineral_log::chain(&e), "engine exited");
     }
 }
 
+/// 引擎主循环:初始化 sink/runtime,失败时通过 `ready_tx` 上报,然后循环 recv 命令 + drain seek + 刷 snapshot。
+///
+/// 无音频设备(或 [`AudioMode::ForceNull`])不算错:置 [`AudioBackend::Null`]、报 ready、进
+/// [`run_null_mode`] 空跑——daemon 照常 bind / serve / graceful shutdown,client 据 snapshot 提示降级。
 fn engine_main(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
     snapshot: &Arc<Mutex<AudioSnapshot>>,
@@ -83,14 +90,26 @@ fn engine_main(
     ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
+    mode: AudioMode,
 ) -> color_eyre::Result<()> {
-    let mut stream_handle = match rodio::DeviceSinkBuilder::open_default_sink() {
-        Ok(s) => s,
-        Err(e) => {
-            let err = eyre!("rodio device sink: {e}");
-            let _ = ready_tx.send(Err(eyre!("rodio device sink: {e}")));
-            return Err(err);
-        }
+    let sink = match mode {
+        AudioMode::ForceNull => None,
+        AudioMode::Auto => match rodio::DeviceSinkBuilder::open_default_sink() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "audio",
+                    error = mineral_log::chain(&eyre!("rodio device sink: {e}")),
+                    "no audio device; running in null mode (no sound)"
+                );
+                None
+            }
+        },
+    };
+    let Some(mut stream_handle) = sink else {
+        snapshot.lock().backend = AudioBackend::Null;
+        let _ = ready_tx.send(Ok(()));
+        return run_null_mode(cmd_rx);
     };
     // 默认 drop 时会向 stderr 打一行 "Audio playback has finished",TUI 退出后会污染终端,关掉。
     stream_handle.log_on_drop(false);
@@ -129,7 +148,7 @@ fn engine_main(
                     }
                 }
                 Err(e) => {
-                    mineral_log::warn!(target: "audio_engine", "command error: {e:?}");
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "command error");
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -138,6 +157,16 @@ fn engine_main(
         drain_seek(seek_mailbox, &player);
         update_snapshot(snapshot, &player, cur_duration_ms, &mut state);
     }
+    Ok(())
+}
+
+/// 无设备降级循环:没有 sink / runtime,只 drain 命令通道直到发送端全 drop。
+///
+/// 命令被静默丢弃(无处发声);`set_volume` 等仍由 handle 直接写 snapshot,不依赖此处。
+/// 关键是线程**一直活着**,daemon 不会因「audio 起不来」而退出。
+fn run_null_mode(cmd_rx: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()> {
+    // 命令静默丢弃(无 sink 可发声);recv 阻塞到发送端全 drop(daemon 退出)才返回。
+    while cmd_rx.recv().is_ok() {}
     Ok(())
 }
 
@@ -205,7 +234,7 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
         return;
     };
     if let Err(e) = player.try_seek(target) {
-        mineral_log::warn!(target: "audio_engine", "seek to {target:?}: {e}");
+        mineral_log::warn!(target: "audio", seek_to = ?target, error = mineral_log::chain(&e), "seek failed");
     }
 }
 
@@ -219,6 +248,7 @@ fn append_decoded(
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64> {
+    mineral_log::info!(target: "audio", url = %url, "start decoding");
     match url {
         MediaUrl::Remote(u) => {
             let (reader, byte_len) = rt.block_on(async {
@@ -269,6 +299,7 @@ where
     builder.build().map_err(|e| eyre!("decode: {e}"))
 }
 
+/// 把 player 当前播放状态拍进共享 snapshot,顺带在 armed 状态下检测「sink 变空 → 曲终」。
 fn update_snapshot(
     snapshot: &Arc<Mutex<AudioSnapshot>>,
     player: &rodio::Player,
@@ -295,6 +326,7 @@ fn update_snapshot(
     // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
 }
 
+/// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
 fn duration_to_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }

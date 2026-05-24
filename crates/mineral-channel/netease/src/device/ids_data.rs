@@ -1,5 +1,7 @@
 //! deviceId 池子集。
 
+/// 预置的 deviceId 候选池;`ids::global_device_id` 启动时从中采样一项,
+/// 进程内复用,模拟真实客户端"装机后 deviceId 不变"的行为。
 pub const DEVICE_ID_POOL: &[&str] = &[
     "AA9955F5FE37BA7EAF48F8EF0C9966B28293CC8D6415CCD93549",
     "B83C7D2E91E4F7AC59CFFB0E8F23DD6C1A745A7BFE91D2B83A11",

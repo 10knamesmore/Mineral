@@ -1,53 +1,8 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
-use mineral_audio::AudioSnapshot;
+use mineral_audio::{AudioBackend, AudioSnapshot};
 use mineral_model::{PlayUrl, Song};
-
-/// 播放循环模式。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlayMode {
-    /// 顺序播放(到底停止)。
-    #[default]
-    Sequential,
-    /// 随机播放(stage 4 仅 label,无实际洗牌)。
-    Shuffle,
-    /// 整列循环。
-    RepeatAll,
-    /// 单曲循环。
-    RepeatOne,
-}
-
-impl PlayMode {
-    /// `m` 键循环到下一档。
-    pub fn cycle(self) -> Self {
-        match self {
-            Self::Sequential => Self::Shuffle,
-            Self::Shuffle => Self::RepeatAll,
-            Self::RepeatAll => Self::RepeatOne,
-            Self::RepeatOne => Self::Sequential,
-        }
-    }
-
-    /// transport 模式按钮字形。
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Self::Sequential => "→",
-            Self::Shuffle => "⇄",
-            Self::RepeatAll => "↻∞",
-            Self::RepeatOne => "↻¹",
-        }
-    }
-
-    /// vol/mode/sort 行短标签。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sequential => "seq",
-            Self::Shuffle => "shuffle",
-            Self::RepeatAll => "repeat-all",
-            Self::RepeatOne => "repeat-one",
-        }
-    }
-}
+pub use mineral_protocol::PlayMode;
 
 /// 播放视图模型;真值在 audio engine,这里只缓存 UI 当帧需要的字段。
 #[derive(Clone, Debug)]
@@ -66,6 +21,9 @@ pub struct Playback {
     /// 当前曲目解析后的 PlayUrl(format / bitrate / size)。
     /// 切歌时清成 `None`,PlayUrlReady 或 prefetch 命中后写入。transport 用它显 `fmt`。
     pub play_url: Option<PlayUrl>,
+
+    /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
+    pub audio_backend: AudioBackend,
 }
 
 impl Playback {
@@ -78,6 +36,7 @@ impl Playback {
             volume_pct: 100,
             mode: PlayMode::Sequential,
             play_url: None,
+            audio_backend: AudioBackend::Device,
         }
     }
 
@@ -102,6 +61,7 @@ impl Playback {
         self.position_ms = snap.position_ms;
         self.playing = snap.playing;
         self.volume_pct = snap.volume_pct;
+        self.audio_backend = snap.backend;
     }
 }
 
@@ -117,4 +77,54 @@ pub fn format_ms(ms: u64) -> String {
     let m = secs / 60;
     let s = secs % 60;
     format!("{m}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::{Song, SongId, SourceKind};
+
+    use super::{Playback, format_ms};
+
+    /// 造一个带 track(指定时长 + 进度)的 Playback。
+    fn with_track(duration_ms: u64, position_ms: u64) -> Playback {
+        let mut pb = Playback::new();
+        pb.track = Some(Song {
+            source: SourceKind::Local,
+            id: SongId::from("t"),
+            name: "t".to_owned(),
+            artists: Vec::new(),
+            album: None,
+            duration_ms,
+            cover_url: None,
+            source_url: None,
+        });
+        pb.position_ms = position_ms;
+        pb
+    }
+
+    /// `format_ms`:秒 / 分进位与零填充。
+    #[test]
+    fn format_ms_cases() {
+        assert_eq!(format_ms(0), "0:00");
+        assert_eq!(format_ms(75_000), "1:15");
+        assert_eq!(format_ms(3_661_000), "61:01");
+    }
+
+    /// `ratio_bps`:0..=10000 basis points;无 track / dur 0 → 0;超出 clamp 到满。
+    #[test]
+    fn ratio_bps_cases() {
+        assert_eq!(Playback::new().ratio_bps(), 0);
+        assert_eq!(with_track(0, 100).ratio_bps(), 0);
+        assert_eq!(with_track(1000, 0).ratio_bps(), 0);
+        assert_eq!(with_track(1000, 500).ratio_bps(), 5000);
+        assert_eq!(with_track(1000, 1000).ratio_bps(), 10_000);
+        assert_eq!(with_track(1000, 5000).ratio_bps(), 10_000);
+    }
+
+    /// `duration_ms`:取 track 元数据,无 track → 0。
+    #[test]
+    fn duration_ms_from_track() {
+        assert_eq!(Playback::new().duration_ms(), 0);
+        assert_eq!(with_track(4242, 0).duration_ms(), 4242);
+    }
 }

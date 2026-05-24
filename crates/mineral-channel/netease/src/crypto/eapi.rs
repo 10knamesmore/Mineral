@@ -32,6 +32,7 @@ pub fn eapi(url_logical_path: &str, json_text: &str) -> String {
     format!("params={}", urlencode(&params))
 }
 
+/// 自实现的 percent-encode:RFC3986 unreserved 之外全部 `%XX`(大写),用于把 hex params 塞进 form body。
 fn urlencode(s: &str) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(s.len());

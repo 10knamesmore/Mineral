@@ -3,6 +3,7 @@
 use color_eyre::eyre::eyre;
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, SourceKind};
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
@@ -24,7 +25,7 @@ pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result
     let songs = raw
         .get("songs")
         .ok_or_else(|| eyre!("album response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {

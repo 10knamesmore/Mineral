@@ -6,6 +6,7 @@ use isahc::{
     AsyncReadResponseExt, HttpClient, Request, config::Configurable, cookies::CookieJar, http::Uri,
 };
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::config::NeteaseConfig;
@@ -14,20 +15,33 @@ use crate::transport::body::{decode_response, parse_code};
 use crate::transport::headers::{UA_LINUX, UaKind, pick_user_agent};
 use crate::transport::url::{Crypto, rewrite};
 
+/// 网易云 API 根 URL,所有请求都拼在此基础上。
 const BASE_URL: &str = "https://music.163.com";
+
+/// 单次请求的超时时长(秒);与 cmusic / NeteaseCloudMusicApi 保持一致。
 const TIMEOUT_SECS: u64 = 100;
 
 /// 一次请求的输入。
 pub struct RequestSpec<'a> {
+    /// service 写的逻辑路径(`/weapi/...` / `/eapi/...` / `/api/...`),URL 改写在内部完成。
     pub path: &'a str,
+
+    /// 加密方案:决定路径改写、body 编码、UA 选择策略。
     pub crypto: Crypto,
+
+    /// 业务参数;weapi/eapi 时本层会自动注入 `csrf_token`。
     pub params: serde_json::Map<String, serde_json::Value>,
+
+    /// UA 选择(`Any` 时按设备指纹随机,`Linux`/`Pc` 时强制对应 UA)。
     pub ua: UaKind,
 }
 
 /// HTTP 传输层:封装 isahc 客户端 + 全局 cookie jar + 加密 dispatcher。
 pub struct Transport {
+    /// 底层 isahc 客户端,持有连接池 + cookie jar。
     client: HttpClient,
+
+    /// 缓存的 `__csrf` 值,首次需要时从 cookie jar 读出并保存。
     csrf: Mutex<String>,
 }
 
@@ -96,17 +110,17 @@ impl Transport {
 
     /// 发请求并返回解析后的 JSON Value;`code != 200` 时返回 `Err`。
     pub async fn request(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
+        let endpoint = spec.path;
         let value = self.request_lax(spec).await?;
         let code = parse_code(&value);
         if code != 200 {
-            return Err(eyre!(
-                "api code {code}: {}",
-                value
-                    .get("message")
-                    .or_else(|| value.get("msg"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(no message)")
-            ));
+            let message = value
+                .get("message")
+                .or_else(|| value.get("msg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no message)");
+            mineral_log::warn!(target: "channel_netease", endpoint, code, message, "api error");
+            return Err(eyre!("api code {code}: {message}"));
         }
         Ok(value)
     }
@@ -114,6 +128,7 @@ impl Transport {
     /// 发请求并返回解析后的 JSON,**不**因为 `code != 200` 报错。
     /// 用于 `CheckQR` 等用 `code` 表达业务状态的端点。
     pub async fn request_lax(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
+        mineral_log::debug!(target: "channel_netease", path = spec.path, crypto = ?spec.crypto, "request");
         let csrf = self.csrf_token();
 
         // 注入 csrf_token 到 weapi/eapi 的 params(linuxapi 不注入)

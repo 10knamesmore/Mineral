@@ -22,5 +22,8 @@ mineral-log             = { workspace = true }
 mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 
+[dev-dependencies]
+nix = { workspace = true }
+
 [lints]
 workspace = true

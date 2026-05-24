@@ -82,6 +82,7 @@ pub fn draw(
     frame.render_stateful_widget(table, panel, &mut state);
 }
 
+/// 把一首歌组成 queue 表格的一行;当前播放歌行号位置显示 `▶`,否则显示 idx。
 fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &Theme) -> Row<'a> {
     let is_current = current_id.is_some_and(|cid| cid == &s.id);
     let num = if is_current {
@@ -99,6 +100,7 @@ fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &T
     Row::new(vec![num, Cell::from(track_str), Cell::from(len)])
 }
 
+/// 拼 ` n / total ` 的 footer 标签;空 queue 显示 `0 / 0`。
 fn position_label(sel: usize, total: usize) -> String {
     if total == 0 {
         " 0 / 0 ".to_owned()
@@ -107,6 +109,7 @@ fn position_label(sel: usize, total: usize) -> String {
     }
 }
 
+/// 在弹窗右下方画一层 (+2, +1) 偏移的暗色矩形,模拟"投影"立体感;clamp 在 area 内。
 fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     let off_x = panel.x.saturating_add(2);
     let off_y = panel.y.saturating_add(1);
@@ -121,4 +124,47 @@ fn paint_shadow(frame: &mut Frame<'_>, panel: Rect, area: Rect, theme: &Theme) {
     let bg = Block::new().style(Style::new().bg(theme.crust));
     frame.render_widget(Clear, shadow);
     frame.render_widget(bg, shadow);
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::SongId;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::test_support::endserenading;
+    use crate::theme::Theme;
+
+    /// 空 queue。
+    #[test]
+    fn queue_empty_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        t.draw(|f| super::draw(f, f.area(), &[], 0, None, &Theme::default(), true))?;
+        crate::test_support::assert_snap!("队列浮层:空队列", t.backend());
+        Ok(())
+    }
+
+    /// EndSerenading 前 3 曲 + 当前在播标记(Palisade)+ 聚焦。
+    #[test]
+    fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        let songs = endserenading(3);
+        let current = SongId::from("2");
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &songs,
+                0,
+                Some(&current),
+                &Theme::default(),
+                true,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:EndSerenading 前 3 曲,Palisade 当前在播(▶)+ 聚焦",
+            t.backend()
+        );
+        Ok(())
+    }
 }

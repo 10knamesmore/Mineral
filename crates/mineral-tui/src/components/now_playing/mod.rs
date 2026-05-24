@@ -34,6 +34,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker
     }
 }
 
+/// 没选中歌单 / 无 now-playing 时,渲染一个带标题的空 block 占位。
 fn paint_empty(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     let block = Block::new()
         .borders(Borders::ALL)

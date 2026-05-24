@@ -1,0 +1,41 @@
+---
+source: crates/mineral-channel/netease/src/wire/search.rs
+description: 搜索歌曲列表(MyGO 迷星叫 / 碧天伴走)解析结构
+expression: r
+---
+SearchSongsResult {
+    songs: [
+        SearchSong {
+            id: 1,
+            name: "迷星叫",
+            artists: [
+                Artist {
+                    id: 1,
+                    name: "MyGO!!!!!",
+                },
+            ],
+            album: Album {
+                id: 1,
+                name: "迷跡波",
+                pic_url: None,
+            },
+            duration: 248000,
+        },
+        SearchSong {
+            id: 2,
+            name: "碧天伴走",
+            artists: [
+                Artist {
+                    id: 1,
+                    name: "MyGO!!!!!",
+                },
+            ],
+            album: Album {
+                id: 1,
+                name: "迷跡波",
+                pic_url: None,
+            },
+            duration: 256000,
+        },
+    ],
+}

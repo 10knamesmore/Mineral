@@ -1,8 +1,10 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+/// 网易云 API 根 URL,用于把 service 写的相对路径补全成绝对 URL。
 const BASE_URL: &str = "https://music.163.com";
 
+/// 匹配 `/{xxx}api/` 这一段(`/api/` / `/weapi/` / `/eapi/` 等),用于按 [`Crypto`] 改写。
 static API_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"/\w*api/").unwrap());
 
 /// 加密类型。决定 URL 改写到哪个端点。

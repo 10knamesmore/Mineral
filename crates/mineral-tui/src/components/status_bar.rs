@@ -25,6 +25,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     }
 }
 
+/// 搜索激活态:左侧画 `/q█`(光标方块),右侧给 `↵ run · esc cancel` 提示。
 fn paint_active(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     frame.render_widget(Block::new().style(Style::new().bg(theme.surface0)), area);
 
@@ -51,7 +52,39 @@ fn paint_active(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &The
     );
 }
 
+/// 平时状态栏:渲染常用快捷键提示行。
 fn paint_inactive(frame: &mut Frame<'_>, area: Rect, _state: &AppState, theme: &Theme) {
     let keys = Line::from(KEYS_HINT).style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(keys), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::state::AppState;
+    use crate::theme::Theme;
+
+    /// 普通态:快捷键提示行。
+    #[test]
+    fn status_bar_inactive_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
+        let state = AppState::empty();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("状态栏:快捷键提示行", t.backend());
+        Ok(())
+    }
+
+    /// 搜索态:`/查询` 输入行(CJK)。
+    #[test]
+    fn status_bar_search_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
+        let mut state = AppState::empty();
+        state.search_mode = true;
+        state.search_q = "春日影".to_owned();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("状态栏:搜索输入态(/春日影,CJK)", t.backend());
+        Ok(())
+    }
 }

@@ -37,6 +37,7 @@ pub struct DemoPlaylist {
 /// mock channel 实现。预先在 `new()` 时构造好全部 demo 数据。
 #[derive(Clone, Debug)]
 pub struct MockChannel {
+    /// 全部预制 demo 歌单(及其曲目)。
     playlists: Vec<DemoPlaylist>,
 }
 
@@ -53,6 +54,7 @@ impl MockChannel {
         &self.playlists
     }
 
+    /// 按 id 查 demo 歌单(线性扫描,demo 数据规模够小)。
     fn find_playlist(&self, id: &PlaylistId) -> Option<&DemoPlaylist> {
         self.playlists.iter().find(|p| &p.data.id == id)
     }
@@ -156,6 +158,7 @@ const TITLES: &[&str] = &[
     "Quartz",
 ];
 
+/// 一次性构造全部 demo 歌单(名字与歌数预置在源码里)。
 fn build_demo_playlists() -> Vec<DemoPlaylist> {
     [
         ("All Time Favorites", 24),
@@ -171,6 +174,7 @@ fn build_demo_playlists() -> Vec<DemoPlaylist> {
     .collect()
 }
 
+/// 构造一个 demo 歌单:`count` 首歌 + 装饰(loved/plays)。
 fn build_one(name: &str, count: usize) -> DemoPlaylist {
     let songs = build_songs(name, "Various Artists", count);
     let tracks = decorate(&songs);
@@ -189,6 +193,7 @@ fn build_one(name: &str, count: usize) -> DemoPlaylist {
     }
 }
 
+/// 按指定 artist/album 名生成 `count` 首假歌(标题循环复用 TITLES 列表)。
 fn build_songs(album_name: &str, artist_name: &str, count: usize) -> Vec<Song> {
     let artist_ref = ArtistRef {
         id: ArtistId::new(format!("artist:{artist_name}")),
@@ -216,6 +221,7 @@ fn build_songs(album_name: &str, artist_name: &str, count: usize) -> Vec<Song> {
         .collect()
 }
 
+/// 给一组 song 附上装饰字段:每 3 首一个 loved,plays 按 idx 线性递增。
 fn decorate(songs: &[Song]) -> Vec<DemoSong> {
     songs
         .iter()

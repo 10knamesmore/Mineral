@@ -1,0 +1,28 @@
+[package]
+name        = "mineral-protocol"
+description = "Mineral client/server IPC 协议 — Request/Response enum + bincode + length-delimited framing"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-audio        = { workspace = true }
+mineral-model        = { workspace = true }
+mineral-task         = { workspace = true }
+
+bincode    = { workspace = true }
+bytes      = { workspace = true }
+color-eyre = { workspace = true }
+serde      = { workspace = true }
+tokio      = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "io-util"] }
+
+[lints]
+workspace = true

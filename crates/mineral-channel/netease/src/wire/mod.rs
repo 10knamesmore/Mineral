@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod common;
+pub mod de;
 pub mod search;
 pub mod song;
 pub mod user;

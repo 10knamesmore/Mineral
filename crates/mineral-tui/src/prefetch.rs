@@ -6,9 +6,11 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
-use mineral_model::MediaUrl;
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskKind};
+use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+use mineral_server::Client;
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
+use crate::cover::CoverFetcher;
 use crate::state::{AppState, View};
 
 /// 各 prefetch 默认半径。覆盖典型 viewport(~30 行)+ 几次 `Shift+J/K` 跳跃
@@ -17,20 +19,21 @@ use crate::state::{AppState, View};
 const RADIUS: usize = 64;
 
 /// 每 tick 调一次:封面 + 歌单 tracks 两路 prefetch。
-pub fn tick(state: &mut AppState, scheduler: &Scheduler) {
-    request_covers(state, scheduler);
-    request_playlist_tracks(state, scheduler);
+pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
+    request_covers(state, covers);
+    request_playlist_tracks(state, client);
 }
 
 /// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面 URL,
-/// sel 优先 → 外扩 提交。
-fn request_covers(state: &mut AppState, scheduler: &Scheduler) {
+/// sel 优先 → 外扩 提交给 client 端 fetcher。
+fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
     let urls = collect_pending_covers(state);
     for url in urls {
-        ensure_cover(state, scheduler, url);
+        ensure_cover(state, covers, url);
     }
 }
 
+/// 收集当前 view 下「sel + 邻居 (±RADIUS)」中未 cache、未 pending 的封面 URL。
 fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     let mut out = Vec::<MediaUrl>::new();
     let cache = &state.cover_cache;
@@ -88,42 +91,56 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
     out
 }
 
-fn ensure_cover(state: &mut AppState, scheduler: &Scheduler, url: MediaUrl) {
+/// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
+fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
     if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
         return;
     }
     state.cover_pending.insert(url.clone());
-    scheduler.submit(TaskKind::CoverArt { url }, Priority::User);
+    mineral_log::debug!(target: "prefetch", url = %url, "request cover");
+    covers.request(url);
 }
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
-fn request_playlist_tracks(state: &AppState, scheduler: &Scheduler) {
+fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     if state.view != View::Playlists {
         return;
     }
-    let filtered = state.filtered_playlists();
-    let sel = state.sel_playlist;
-    let submit = |idx: usize| {
-        let Some(p) = filtered.get(idx) else {
-            return;
-        };
-        if state.tracks_cache.contains_key(&p.data.id) {
-            return;
-        }
-        scheduler.submit(
+    for (source, id) in collect_pending_tracks(state) {
+        mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?source, "request playlist tracks");
+        client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
-                source: p.data.source,
-                id: p.data.id.clone(),
+                source,
+                id: id.clone(),
             }),
             Priority::User,
         );
+        // 成败都记:失败歌单的 tracks_cache 永远不会被填,只有靠这里去重才不会
+        // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
+        state.tracks_requested.insert(id);
+    }
+}
+
+/// sel 周围 [`RADIUS`] 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
+fn collect_pending_tracks(state: &AppState) -> Vec<(SourceKind, PlaylistId)> {
+    let filtered = state.filtered_playlists();
+    let sel = state.sel_playlist;
+    let mut out = Vec::new();
+    let mut consider = |idx: usize| {
+        if let Some(p) = filtered.get(idx) {
+            let id = &p.data.id;
+            if !state.tracks_cache.contains_key(id) && !state.tracks_requested.contains(id) {
+                out.push((p.data.source, id.clone()));
+            }
+        }
     };
-    submit(sel);
+    consider(sel);
     for d in 1..=RADIUS {
         if let Some(idx) = sel.checked_sub(d) {
-            submit(idx);
+            consider(idx);
         }
-        submit(sel.saturating_add(d));
+        consider(sel.saturating_add(d));
     }
+    out
 }

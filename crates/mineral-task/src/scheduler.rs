@@ -5,37 +5,48 @@ use std::sync::Arc;
 use mineral_channel_core::MusicChannel;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
 use crate::id::{Priority, TaskId};
+use crate::kind::ChannelFetchKindTag;
 use crate::kind::TaskKind;
 use crate::lane::Lane;
 use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
-use crate::lanes::cover_art::{CoverArtLane, Job as CoverArtJob};
 use crate::ongoing::{Bind, Ongoing};
 
 /// 进程内任务调度器入口。`Clone` 廉价(`Arc<Inner>`)。
 #[derive(Clone)]
 pub struct Scheduler {
+    /// 共享内部状态(中央 ongoing / 事件 buffer / 各 lane)。
     inner: Arc<Inner>,
 }
 
+/// Scheduler 的真实状态,被 `Arc` 包起来共享。
 struct Inner {
+    /// 中央 ongoing 状态(任务表 + dedup 索引)。
     ongoing: Arc<Ongoing>,
+
+    /// 中央事件 buffer:lane worker 推、UI 主循环 [`Scheduler::drain_events`] 拉。
     events: Arc<Mutex<Vec<TaskEvent>>>,
+
+    /// ChannelFetch lane(per-channel worker 池)。
     channel_fetch: ChannelFetchLane,
-    cover_art: CoverArtLane,
 }
 
-/// `Scheduler::snapshot` 的返回:当前 running 数与按 lane 的拆分。
-#[derive(Debug, Clone)]
+/// `Scheduler::snapshot` 的返回:当前 running 数与按 lane / kind 的拆分。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// 全部 lane 的 running 任务总数。
     pub running: usize,
 
     /// 每个 lane 的 running 任务计数(无任务的 lane 不出现)。
     pub by_lane: FxHashMap<Lane, usize>,
+
+    /// `ChannelFetch` 任务按 [`ChannelFetchKindTag`] 细分(其它种类不在此 map)。
+    /// UI 用它做「`pl:1 tr:2 song:1 lyr:0 ♥:0`」级别的拆分显示。
+    pub by_kind: FxHashMap<ChannelFetchKindTag, usize>,
 }
 
 impl Scheduler {
@@ -47,13 +58,11 @@ impl Scheduler {
         let ongoing = Arc::new(Ongoing::new());
         let events = Arc::new(Mutex::new(Vec::<TaskEvent>::new()));
         let channel_fetch = ChannelFetchLane::spawn(channels, &ongoing, &events);
-        let cover_art = CoverArtLane::spawn(&ongoing, &events);
         Self {
             inner: Arc::new(Inner {
                 ongoing,
                 events,
                 channel_fetch,
-                cover_art,
             }),
         }
     }
@@ -66,18 +75,23 @@ impl Scheduler {
     ///   - 否则按种类路由到对应 lane。
     pub fn submit(&self, kind: TaskKind, priority: Priority) -> TaskHandle {
         match self.inner.ongoing.bind(kind.clone(), priority) {
-            Bind::Shared(handle) => handle,
+            Bind::Shared(handle) => {
+                mineral_log::debug!(target: "scheduler", kind = ?kind, "submit deduped to existing task");
+                handle
+            }
             Bind::Fresh {
                 id,
                 handle,
                 done_tx,
             } => {
+                mineral_log::debug!(target: "scheduler", task_id = ?id, kind = ?kind, priority = ?priority, "submit new task");
                 self.dispatch(id, kind, priority, &handle, done_tx);
                 handle
             }
         }
     }
 
+    /// 把新建任务路由到对应 lane(目前只有 ChannelFetch)。
     fn dispatch(
         &self,
         id: TaskId,
@@ -99,14 +113,6 @@ impl Scheduler {
                         done_tx,
                     },
                 );
-            }
-            TaskKind::CoverArt { url } => {
-                self.inner.cover_art.dispatch(CoverArtJob {
-                    id,
-                    url,
-                    cancel: handle.cancel.clone(),
-                    done_tx,
-                });
             }
         }
     }
@@ -135,6 +141,7 @@ impl Scheduler {
         Snapshot {
             running: counts.running,
             by_lane: counts.by_lane,
+            by_kind: counts.by_kind,
         }
     }
 }

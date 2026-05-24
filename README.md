@@ -117,6 +117,7 @@ cargo run -p mineral --features mock
 - [ratatui](https://github.com/ratatui/ratatui) — 优秀的 Rust TUI 框架。
 - [yazi](https://github.com/sxyazi/yazi) — 终端文件管理器,图像渲染细节上学到很多。
 - [go-musicfox](https://github.com/go-musicfox/go-musicfox) — 设计与交互上的参考。
+- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) — 歌词解析的参考。
 - [termusic](https://github.com/tramhao/termusic) — 同类 Rust TUI 播放器,值得借鉴的工程实践。
 
 ## 许可证

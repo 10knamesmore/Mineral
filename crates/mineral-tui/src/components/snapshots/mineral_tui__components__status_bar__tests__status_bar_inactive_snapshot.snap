@@ -1,0 +1,6 @@
+---
+source: crates/mineral-tui/src/components/status_bar.rs
+description: "状态栏:快捷键提示行"
+expression: t.backend()
+---
+"j/k ↓↑ · h/l back/open · ↵ play · ␣ pause · m mode · / search · Tab queue · q qu"

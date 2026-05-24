@@ -10,6 +10,7 @@ use mineral_model::{
 };
 use serde_json::json;
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
@@ -35,7 +36,7 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
     let songs = v
         .get("songs")
         .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = serde_json::from_value(songs.clone())?;
+    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
     Ok(dtos
         .into_iter()
         .map(|s| Song {
@@ -136,11 +137,12 @@ async fn song_urls_legacy(
     parse_song_url_data(&v, quality)
 }
 
+/// 把 v1 / legacy 两套响应里共有的 `data: [...]` 解析成 [`PlayUrl`] 列表。
 fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<PlayUrl>> {
     let data = v
         .get("data")
         .ok_or_else(|| eyre!("song url response missing `data`"))?;
-    let dtos: Vec<SongUrl> = serde_json::from_value(data.clone())?;
+    let dtos: Vec<SongUrl> = crate::wire::de::from_value(data.clone())?;
     Ok(dtos
         .into_iter()
         .filter_map(|d| {

@@ -1,0 +1,16 @@
+---
+source: crates/mineral-tui/src/components/overlay/disconnect.rs
+expression: terminal.backend()
+---
+"                                                            "
+"                                                            "
+"          ╭ connection lost ─────────────────────╮          "
+"          │                                      │          "
+"          │  Lost connection to playback service │          "
+"          │                                      │          "
+"          │         Press any key to exit        │          "
+"          │                                      │          "
+"          ╰──────────────────────────────────────╯          "
+"                                                            "
+"                                                            "
+"                                                            "

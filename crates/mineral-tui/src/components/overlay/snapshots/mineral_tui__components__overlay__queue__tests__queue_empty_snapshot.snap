@@ -1,0 +1,25 @@
+---
+source: crates/mineral-tui/src/components/overlay/queue.rs
+description: "队列浮层:空队列"
+expression: t.backend()
+---
+"                                                            "
+"                                                            "
+"                                                            "
+"          ╭ queue · floating  press q to close ──╮          "
+"          │#   track                       len   │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          │                                      │          "
+"          ╰ 0 / 0 ─── ↵ play  ·  Tab/q/esc close ╯          "
+"                                                            "
+"                                                            "
+"                                                            "

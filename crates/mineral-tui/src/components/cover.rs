@@ -55,6 +55,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, seed: &str, theme: &Theme) {
     }
 }
 
+/// 在 `(x,y)` 处采样一个 8 索引调色盘的像素;按 hash 的高 2 位选 horizon/mondrian/concentric/stripes。
 fn pixel(h: u32, x: u16, y: u16, w: u16) -> u8 {
     let cx = u32::from(x);
     let cy = u32::from(y);
@@ -69,6 +70,7 @@ fn pixel(h: u32, x: u16, y: u16, w: u16) -> u8 {
     u8::try_from(v & 0xff).unwrap_or(0)
 }
 
+/// 「地平线」算法:上半天空 (accent/accent_2 间隔)、下半地面 (surface0/overlay 间隔)。
 fn horizon(cy: u32, cw: u32, h: u32) -> u32 {
     let mid = cw / 2;
     if cy < mid {
@@ -80,6 +82,7 @@ fn horizon(cy: u32, cw: u32, h: u32) -> u32 {
     }
 }
 
+/// 「蒙德里安」算法:把图分成 1/4 边长的方块,每块按 hash 取 0..8 的色号。
 fn mondrian(cx: u32, cy: u32, cw: u32, h: u32) -> u32 {
     let zw = (cw / 4).max(1);
     let zx = cx / zw;
@@ -88,6 +91,7 @@ fn mondrian(cx: u32, cy: u32, cw: u32, h: u32) -> u32 {
     key & 7
 }
 
+/// 「同心圆」算法:按到中心的 r² 分环,环号 ^ hash 决定色号。
 fn concentric(cx: u32, cy: u32, cw: u32, h: u32) -> u32 {
     let half = i32::try_from(cw / 2).unwrap_or(0);
     let dx = i32::try_from(cx).unwrap_or(0) - half;
@@ -97,11 +101,13 @@ fn concentric(cx: u32, cy: u32, cw: u32, h: u32) -> u32 {
     band ^ (h >> 16)
 }
 
+/// 「斜条纹」算法:`(cx + cy) mod 8` ^ hash 高位。
 fn stripes(cx: u32, cy: u32, h: u32) -> u32 {
     let v = (cx + cy) & 7;
     v ^ (h >> 8)
 }
 
+/// FNV-1a 32 位 hash,字符串 → 32 位 seed,各算法用它的不同位段做差异化。
 fn hash(s: &str) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
     for b in s.bytes() {

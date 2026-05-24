@@ -1,20 +1,15 @@
 //! 任务种类与 dedup 键。
 
-use mineral_model::{MediaUrl, PlaylistId, SongId, SourceKind};
+use mineral_model::{PlaylistId, SongId, SourceKind};
+use serde::{Deserialize, Serialize};
 
 use crate::lane::Lane;
 
 /// 一个待调度任务的所有信息。具体业务参数挂在子枚举里。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskKind {
     /// channel 数据拉取。
     ChannelFetch(ChannelFetchKind),
-
-    /// 拉取 + 解码一张封面图(裸 HTTP,跟 channel 无关)。
-    CoverArt {
-        /// 图片 URL,远端 / 本地都允许。
-        url: MediaUrl,
-    },
     // 后续:Search / PlayPrep / AuthRefresh / PrePreload / LocalScan
 }
 
@@ -23,7 +18,6 @@ impl TaskKind {
     pub fn lane(&self) -> Lane {
         match self {
             Self::ChannelFetch(_) => Lane::ChannelFetch,
-            Self::CoverArt { .. } => Lane::CoverArt,
         }
     }
 
@@ -31,13 +25,12 @@ impl TaskKind {
     pub fn dedup_key(&self) -> DedupKey {
         match self {
             Self::ChannelFetch(k) => DedupKey(format!("ChannelFetch:{}", k.dedup_part())),
-            Self::CoverArt { url } => DedupKey(format!("CoverArt:{url}")),
         }
     }
 }
 
 /// channel 数据拉取的具体形态。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChannelFetchKind {
     /// 拉某 channel 当前用户的歌单列表。
     MyPlaylists {
@@ -80,6 +73,7 @@ pub enum ChannelFetchKind {
 }
 
 impl ChannelFetchKind {
+    /// 产出 dedup key 的可变部分(channel + 子操作 + 关键参数)。
     fn dedup_part(&self) -> String {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
@@ -108,8 +102,40 @@ impl ChannelFetchKind {
     }
 }
 
+/// [`ChannelFetchKind`] 的 wire-friendly 标签:无字段 enum,可哈希、可序列化。
+///
+/// 用于:跨进程「按种类砍一批」(见 `mineral_protocol::CancelFilter`)、按 kind 计数
+/// (见 [`crate::Snapshot::by_kind`])。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChannelFetchKindTag {
+    /// 对应 [`ChannelFetchKind::MyPlaylists`]。
+    MyPlaylists,
+    /// 对应 [`ChannelFetchKind::LikedSongIds`]。
+    LikedSongIds,
+    /// 对应 [`ChannelFetchKind::PlaylistTracks`]。
+    PlaylistTracks,
+    /// 对应 [`ChannelFetchKind::SongUrl`]。
+    SongUrl,
+    /// 对应 [`ChannelFetchKind::Lyrics`]。
+    Lyrics,
+}
+
+impl ChannelFetchKindTag {
+    /// 取一个具体 [`ChannelFetchKind`] 的标签。
+    #[must_use]
+    pub fn of(kind: &ChannelFetchKind) -> Self {
+        match kind {
+            ChannelFetchKind::MyPlaylists { .. } => Self::MyPlaylists,
+            ChannelFetchKind::LikedSongIds { .. } => Self::LikedSongIds,
+            ChannelFetchKind::PlaylistTracks { .. } => Self::PlaylistTracks,
+            ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
+            ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
+        }
+    }
+}
+
 /// 任务去重键(`Eq + Hash` 安全)。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DedupKey(String);
 
 impl std::fmt::Display for DedupKey {

@@ -11,8 +11,7 @@ use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::lrc;
-use crate::yrc::{self, YrcLine};
+use mineral_model::{LrcLyric, WordLyric};
 
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
@@ -57,11 +56,16 @@ pub struct AppState {
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
 
-    /// 歌曲 id → 解析后的 LRC 行;不在 map 里表示还没拉到 / 拉失败。
-    pub lyrics_cache: FxHashMap<SongId, Vec<(u64, String)>>,
+    /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
+    /// 避免**失败**歌单(tracks_cache 永远不会被填)被每帧无限重提交而刷屏。
+    /// 对齐 cover 的 `cover_pending`。
+    pub tracks_requested: FxHashSet<PlaylistId>,
 
-    /// 歌曲 id → 解析后的 YRC(逐字)行;有 yrc 才插入,渲染时优先于 LRC。
-    pub yrc_cache: FxHashMap<SongId, Vec<YrcLine>>,
+    /// 歌曲 id → 行级 LRC;不在 map 里表示还没拉到 / 拉失败。
+    pub lyrics_cache: FxHashMap<SongId, LrcLyric>,
+
+    /// 歌曲 id → 逐字歌词;有逐字才插入,渲染时优先于 LRC。
+    pub words_cache: FxHashMap<SongId, WordLyric>,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -108,6 +112,10 @@ pub struct AppState {
     /// quit confirm modal 是否打开。
     pub confirm_open: bool,
 
+    /// 与 daemon 的链路是否已断开(被单独 kill / crash)。置位后盖断连提示 modal,
+    /// 停在那等用户按键退出。
+    pub disconnected: bool,
+
     /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
     /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
     pub prefetched: Option<PlayUrl>,
@@ -127,9 +135,16 @@ pub struct AppState {
     /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
     pub cover_protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
 
-    /// 后台 scheduler 当前 running 任务数(每 tick 由 App 从 `Scheduler::snapshot` 灌入)。
-    /// 给 top_status 显示「↓N」用,直观看到封面 / 歌词 / playlist 拉取进度。
-    pub tasks_running: usize,
+    /// 后台 server scheduler 当前快照(每 tick 由 App 从 `Client::task_snapshot`
+    /// 灌入)。**只含**:server 端 ChannelFetch lane(playlists / tracks /
+    /// song-url / lyrics / liked)。封面是 client-local 的 [`CoverFetcher`],
+    /// 不在这里——见 [`Self::cover_loading`]。
+    /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
+    pub tasks_snapshot: mineral_task::Snapshot,
+
+    /// 当前 client-side cover_fetcher in-flight 数(等价 `cover_pending.len()`,
+    /// 每 tick 由 App 灌入)。
+    pub cover_loading: usize,
 
     /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
@@ -140,8 +155,7 @@ pub struct AppState {
     pub last_sel_change: Instant,
 }
 
-/// 选中变化后多久才允许 cover_image 构建新 protocol。yazi 用 30ms;mineral 用
-/// 80ms 略宽,适配 33ms tick。期间走程序化 fallback,稳态后再切真图。
+/// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
 pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
 impl AppState {
@@ -151,8 +165,9 @@ impl AppState {
             view: View::Playlists,
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
+            tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
-            yrc_cache: FxHashMap::default(),
+            words_cache: FxHashMap::default(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -168,12 +183,18 @@ impl AppState {
             focus: Focus::Left,
             search_mode: false,
             confirm_open: false,
+            disconnected: false,
             prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),
             cover_pending: FxHashSet::default(),
             cover_protocols: RefCell::new(FxHashMap::default()),
-            tasks_running: 0,
+            tasks_snapshot: mineral_task::Snapshot {
+                running: 0,
+                by_lane: FxHashMap::default(),
+                by_kind: FxHashMap::default(),
+            },
+            cover_loading: 0,
             liked_ids: FxHashMap::default(),
             last_sel_change: Instant::now(),
         }
@@ -221,7 +242,9 @@ impl AppState {
             .collect();
     }
 
-    /// 把任务事件应用到状态(只更新 UI 数据,fan-out 副作用由 [`crate::app::App`] 负责)。
+    /// 把任务事件应用到状态。**4c 后**:server 端 PlayerCore 已 filter 掉
+    /// `PlayUrlReady` / `LyricsReady`(自己消化进 PlayerSnapshot),client 这里
+    /// 只剩 playlists / tracks / liked_ids 三类。
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::PlaylistsFetched { playlists, .. } => {
@@ -243,44 +266,21 @@ impl AppState {
                 self.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
             }
-            // 由 App 直接 forward 给 audio,state 不存 url。
-            TaskEvent::PlayUrlReady { .. } => {}
-            TaskEvent::LyricsReady { song_id, lyrics } => {
-                // 翻译 / 罗马音的 UI 切换留 backlog。空 LRC 也存空 vec,让渲染层走「无歌词」
-                // 分支(避免反复重试)。yrc 仅在网易返回非空时插入,渲染时优先 yrc 兜底 lrc。
-                let parsed_lrc = lyrics
-                    .lrc
-                    .as_deref()
-                    .map(lrc::parse_lrc)
-                    .unwrap_or_default();
-                self.lyrics_cache.insert(song_id.clone(), parsed_lrc);
-                if let Some(raw_yrc) = lyrics.yrc.as_deref() {
-                    let parsed_yrc = yrc::parse_yrc(raw_yrc);
-                    if !parsed_yrc.is_empty() {
-                        self.yrc_cache.insert(song_id.clone(), parsed_yrc);
-                    }
-                }
-            }
-            TaskEvent::CoverReady { url, image } => {
-                self.cover_pending.remove(url);
-                self.cover_cache.insert(url.clone(), Arc::clone(image));
-                // 如果之前已经为这张图建过 protocol(罕见),把缓存清掉,下次渲染重建
-                // —— 防止 cache miss 后又来到 CoverReady 导致旧 protocol 跟新图 desync。
-                self.cover_protocols.borrow_mut().remove(url);
-            }
+            // server 已 filter,理论不会到 client。defensive:跳过。
+            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
         }
     }
 
-    /// 当前曲目的歌词行(已解析按时间升序);未拉到时返回 `None`。
-    pub fn current_lyrics(&self) -> Option<&Vec<(u64, String)>> {
+    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
+    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
         let song = self.playback.track.as_ref()?;
         self.lyrics_cache.get(&song.id)
     }
 
-    /// 当前曲目的 YRC 逐字行;无 yrc(网易未返回 / 非网易源)时返回 `None`。
-    pub fn current_yrc(&self) -> Option<&Vec<YrcLine>> {
+    /// 当前曲目的逐字歌词;无逐字(channel 未返回)时返回 `None`。
+    pub fn current_words(&self) -> Option<&WordLyric> {
         let song = self.playback.track.as_ref()?;
-        self.yrc_cache.get(&song.id)
+        self.words_cache.get(&song.id)
     }
 
     /// 返回当前选中歌单的引用。

@@ -45,21 +45,26 @@ fn parse_public_key_pem(pem: &str) -> (BigUint, BigUint) {
     )
 }
 
+/// 极简 ASN.1 DER 游标:只覆盖 SEQUENCE / INTEGER / 通用 tag,够 SPKI 解码用。
 struct Parser<'a> {
+    /// 剩余未消费的 DER 字节。
     buf: &'a [u8],
 }
 
 impl<'a> Parser<'a> {
+    /// 创建游标。
     fn new(buf: &'a [u8]) -> Self {
         Self { buf }
     }
 
+    /// 读 1 字节并前移。
     fn read_byte(&mut self) -> u8 {
         let b = self.buf[0];
         self.buf = &self.buf[1..];
         b
     }
 
+    /// 读 ASN.1 长度字段(短/长两种形式)。
     fn read_len(&mut self) -> usize {
         let first = self.read_byte();
         if first & 0x80 == 0 {
@@ -74,6 +79,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 tag 是 `tag`,返回对应 value bytes(消费 tag+len+value)。
     fn expect_tag(&mut self, tag: u8) -> &'a [u8] {
         let t = self.read_byte();
         assert_eq!(t, tag, "expected tag {tag:#04x}, got {t:#04x}");
@@ -83,10 +89,12 @@ impl<'a> Parser<'a> {
         head
     }
 
+    /// 期望 SEQUENCE(0x30),返回内容。
     fn expect_seq(&mut self) -> &'a [u8] {
         self.expect_tag(0x30)
     }
 
+    /// 期望 INTEGER(0x02),去掉表达正数用的前导 0x00,返回净值字节。
     fn expect_integer(&mut self) -> &'a [u8] {
         let body = self.expect_tag(0x02);
         // 去掉前导 0x00(为表达正数避免被误认为负数)
@@ -98,6 +106,7 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// 进程内只解析一次的 RSA 公钥 (n, e)。
 static N_AND_E: Lazy<(BigUint, BigUint)> = Lazy::new(|| parse_public_key_pem(RSA_PUBLIC_KEY_PEM));
 
 /// 网易云风格的"无 padding RSA":

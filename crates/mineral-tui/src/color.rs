@@ -84,3 +84,41 @@ fn hsv_to_rgb(h_deg: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let to_byte = |f: f32| ((f + m) * 255.0).clamp(0.0, 255.0) as u8;
     (to_byte(r1), to_byte(g1), to_byte(b1))
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::Color;
+
+    use super::{lerp_byte, lerp_color, rotate_hue};
+
+    /// `lerp_byte`:端点 / 中点 / num 越界被 clamp 到 denom。
+    #[test]
+    fn lerp_byte_endpoints_and_midpoint() {
+        assert_eq!(lerp_byte(10, 20, 0, 1), 10);
+        assert_eq!(lerp_byte(10, 20, 1, 1), 20);
+        assert_eq!(lerp_byte(0, 255, 1, 2), 127);
+        assert_eq!(lerp_byte(0, 100, 5, 2), 100);
+    }
+
+    /// `lerp_color`:Rgb 逐分量 lerp;非 Rgb 降级二态(< 半 → from,≥ 半 → to)。
+    #[test]
+    fn lerp_color_rgb_and_fallback() {
+        let black = Color::Rgb(0, 0, 0);
+        let white = Color::Rgb(255, 255, 255);
+        assert_eq!(lerp_color(black, white, 0, 1), black);
+        assert_eq!(lerp_color(black, white, 1, 1), white);
+        assert_eq!(lerp_color(black, white, 1, 2), Color::Rgb(127, 127, 127));
+        assert_eq!(lerp_color(Color::Red, Color::Blue, 0, 1), Color::Red);
+        assert_eq!(lerp_color(Color::Red, Color::Blue, 1, 2), Color::Blue);
+    }
+
+    /// `rotate_hue`:0° / 360° 不变,180° 反相(红→青);非 Rgb 原样返回。
+    #[test]
+    fn rotate_hue_identity_and_opposite() {
+        let red = Color::Rgb(255, 0, 0);
+        assert_eq!(rotate_hue(red, 0.0), red);
+        assert_eq!(rotate_hue(red, 360.0), red);
+        assert_eq!(rotate_hue(red, 180.0), Color::Rgb(0, 255, 255));
+        assert_eq!(rotate_hue(Color::Red, 123.0), Color::Red);
+    }
+}

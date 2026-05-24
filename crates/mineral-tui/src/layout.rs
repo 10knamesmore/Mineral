@@ -47,6 +47,7 @@ pub fn compute(area: Rect) -> Areas {
     }
 }
 
+/// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport),底部 1 行 status_bar。
 fn compute_full(area: Rect) -> Areas {
     let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),
@@ -82,6 +83,7 @@ fn compute_full(area: Rect) -> Areas {
     }
 }
 
+/// Compact 布局(窄/矮终端):顶/底各 1 行,中间 70/30 主-transport,无右侧歌词与频谱。
 fn compute_compact(area: Rect) -> Areas {
     let [top_status, body, status_bar] = Layout::vertical([
         Constraint::Length(1),
@@ -102,5 +104,51 @@ fn compute_compact(area: Rect) -> Areas {
         spectrum: None,
         transport,
         status_bar,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+
+    use super::{LayoutMode, compute};
+
+    /// 造一个左上角原点、给定宽高的 area。
+    fn area(w: u16, h: u16) -> Rect {
+        Rect::new(0, 0, w, h)
+    }
+
+    /// 宽高都达标 → Full,right/lyrics/spectrum 都有,顶/底各 1 行。
+    #[test]
+    fn full_layout_above_thresholds() {
+        let a = compute(area(100, 40));
+        assert_eq!(a.mode, LayoutMode::Full);
+        assert!(a.right.is_some());
+        assert!(a.lyrics.is_some());
+        assert!(a.spectrum.is_some());
+        assert_eq!(a.top_status.height, 1);
+        assert_eq!(a.status_bar.height, 1);
+    }
+
+    /// 恰好 80x24(阈值下界)仍是 Full。
+    #[test]
+    fn boundary_80x24_is_full() {
+        assert_eq!(compute(area(80, 24)).mode, LayoutMode::Full);
+    }
+
+    /// 宽 < 80 → Compact,right/lyrics/spectrum 全 None。
+    #[test]
+    fn narrow_is_compact() {
+        let a = compute(area(79, 40));
+        assert_eq!(a.mode, LayoutMode::Compact);
+        assert!(a.right.is_none());
+        assert!(a.lyrics.is_none());
+        assert!(a.spectrum.is_none());
+    }
+
+    /// 高 < 24 → Compact。
+    #[test]
+    fn short_is_compact() {
+        assert_eq!(compute(area(100, 23)).mode, LayoutMode::Compact);
     }
 }

@@ -1,28 +1,52 @@
 //! 顶层 CLI 类型与运行入口。
 
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
 
 use crate::subcommands::channel::{self, ChannelArgs};
+use crate::subcommands::status;
 
-/// `mineral` 二进制的顶层参数。
+/// 多源终端音乐播放器。无子命令时进入 TUI。
 #[derive(Debug, Parser)]
-#[command(name = "mineral")]
+#[command(
+    name = "mineral",
+    version,
+    about = "Mineral — 多源终端音乐播放器",
+    long_about = None,
+)]
 pub struct Args {
-    /// 可选的 CLI 命令；省略时由调用方启动 TUI。
+    /// 子命令;省略则进入 TUI。
     #[command(subcommand)]
     pub command: Option<Command>,
+
+    /// 强制连接到已经在跑的后台 daemon(由 `mineral serve` 起),连不上即报错;
+    /// 关闭 TUI 时不停 daemon,音乐继续播。默认(不带此 flag)会在没有 daemon 时
+    /// 自动 spawn 一个。
+    #[arg(long, conflicts_with = "in_proc")]
+    pub connect: bool,
+
+    /// in-proc 模式:TUI 自己在同进程内起 server,不走 daemon / socket。
+    /// 调试与离线开发用;关闭 TUI = 进程退 = server 一起退。
+    #[arg(long)]
+    pub in_proc: bool,
 }
 
-/// 顶层命令分组（按 namespace 拆分）。
+/// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// channel 维度的命令，按 channel 名再次分发。
+    /// 管理音乐源(登录、调试)。
     Channel(ChannelArgs),
+
+    /// 启动后台播放 daemon。退出 TUI 后音乐继续播,再开 TUI 用 `--connect` 接回。
+    Serve,
+
+    /// 显示当前播放状态(连 daemon)。
+    Status,
 }
 
-/// 执行解析后的 CLI 命令。
+/// 执行解析后的 CLI 命令。**不处理 [`Command::Serve`]**——那个需要 channels,
+/// 由 caller(main.rs) 拦截后自己调 [`crate::serve_run`]。
 ///
 /// # Params:
 ///   - `command`: 已经从命令行解析出的顶层命令。
@@ -35,8 +59,11 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Channel(args) => channel::run(args).await,
+        Command::Status => status::run().await,
+        Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
     }
 }

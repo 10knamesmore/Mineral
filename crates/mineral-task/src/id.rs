@@ -2,8 +2,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
+
 /// 全进程唯一的任务 id。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(u64);
 
 impl TaskId {
@@ -24,13 +26,14 @@ impl std::fmt::Display for TaskId {
 pub(crate) struct IdAllocator(AtomicU64);
 
 impl IdAllocator {
+    /// 分配下一个 id(单调递增,Relaxed 足够)。
     pub(crate) fn next(&self) -> TaskId {
         TaskId(self.0.fetch_add(1, Ordering::Relaxed))
     }
 }
 
 /// 调度优先级。`User` 永远排在 `Background` 前面;`User` 之间 FIFO。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Priority {
     /// 后台任务(预热、扫盘等)。
     Background,

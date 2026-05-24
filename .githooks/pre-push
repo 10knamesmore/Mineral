@@ -1,0 +1,7 @@
+#!/bin/sh
+# 推送前:clippy + test 全跑(把关再分享,和 CI 的门一致)。
+set -e
+echo "[pre-push] cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+echo "[pre-push] cargo test --workspace (INSTA_UPDATE=no)"
+INSTA_UPDATE=no cargo test --workspace

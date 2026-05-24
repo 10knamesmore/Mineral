@@ -1,6 +1,31 @@
 //! 歌曲、艺术家、专辑相关的协议结构。
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// 把 `null` 收成空串。网易云对失效 / 下架歌曲会把 name 类字段(歌名 / 艺术家名 /
+/// 专辑名)返回 `null`,裸 `String` 反序列化会炸掉整批(已实锤:歌单 5036089714 的
+/// `[2].al.name` 为 null);`#[serde(default)]` 只兜底字段缺失、兜不住显式 `null`,
+/// 故这里把 `null` 与缺失统一收成空串。
+fn string_or_null<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(de)?.unwrap_or_default())
+}
+
+/// 反序列化 `Vec<T>`,跳过其中的 `null` 元素。网易云对失效 / 下架歌曲会在 `ar`
+/// (艺术家)数组里塞 `null`(已实锤:歌单 5036089714 的「张洲」`ar` 为 `[null]`),
+/// 裸 `Vec<Artist>` 会炸(`null` 不是 struct)。这里把 `null` 元素直接丢弃。
+fn vec_skip_null<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Vec::<Option<T>>::deserialize(de)?
+        .into_iter()
+        .flatten()
+        .collect())
+}
 
 /// 协议层艺术家结构（出现在搜索结果、歌曲详情等多个端点）。
 #[derive(Debug, Clone, Deserialize)]
@@ -9,7 +34,7 @@ pub struct Artist {
     pub id: i64,
 
     /// 艺术家名。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 }
 
@@ -20,7 +45,7 @@ pub struct Album {
     pub id: i64,
 
     /// 专辑名。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 
     /// 封面 URL（部分端点会缺）。
@@ -35,11 +60,11 @@ pub struct SearchSong {
     pub id: i64,
 
     /// 歌曲名。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 
     /// 艺术家列表。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "vec_skip_null")]
     pub artists: Vec<Artist>,
 
     /// 专辑信息。
@@ -57,11 +82,11 @@ pub struct AlbumSong {
     pub id: i64,
 
     /// 歌曲名。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 
     /// 艺术家列表（网易云在专辑/歌单 detail 端点用 `ar` 字段名）。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "vec_skip_null")]
     pub ar: Vec<Artist>,
 
     /// 专辑信息（同上，端点字段名为 `al`）。
@@ -93,4 +118,62 @@ pub struct SongUrl {
     /// 文件格式（如 `mp3` / `flac`），网易返回的字段名是 `type`。
     #[serde(default, rename = "type")]
     pub format: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AlbumSong, SearchSong};
+    use crate::wire::de::from_value;
+
+    #[test]
+    fn dead_song_with_null_artist_and_album_name() -> color_eyre::Result<()> {
+        // 真实数据:歌单 5036089714 第 3 首「张洲」——失效单曲,al.name 为 null
+        // 且 ar 为 [null](整个艺术家元素是 null)。两处都得容忍,否则整批反序列化失败。
+        let raw = serde_json::json!([{
+            "id": 1,
+            "name": "张洲",
+            "ar": [null],
+            "al": { "id": 0, "name": null, "picUrl": "http://p4.music.126.net/x.jpg" },
+            "dt": 0
+        }]);
+        let songs: Vec<AlbumSong> = from_value(raw)?;
+        insta::with_settings!({ description => "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)" }, {
+            insta::assert_debug_snapshot!(songs);
+        });
+        Ok(())
+    }
+
+    /// SearchSong 正常解析:artists / album / duration 各字段到位。
+    #[test]
+    fn search_song_parses_artists_album_duration() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "id": 42,
+            "name": "壱雫空",
+            "artists": [{ "id": 1, "name": "MyGO!!!!!" }],
+            "album": { "id": 7, "name": "迷跡波", "picUrl": "http://p/x.jpg" },
+            "duration": 264_000
+        });
+        let s: SearchSong = from_value(raw)?;
+        insta::with_settings!({ description => "SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)" }, {
+            insta::assert_debug_snapshot!(s);
+        });
+        Ok(())
+    }
+
+    /// AlbumSong 正常解析:ar / al / dt(detail 端点字段名)各到位。
+    #[test]
+    fn album_song_parses_ar_al_dt() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "id": 7,
+            "name": "詩超絆",
+            "ar": [{ "id": 1, "name": "MyGO!!!!!" }],
+            "al": { "id": 3, "name": "迷跡波" },
+            "dt": 233_000
+        });
+        let s: AlbumSong = from_value(raw)?;
+        insta::with_settings!({ description => "AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)" }, {
+            insta::assert_debug_snapshot!(s);
+        });
+        Ok(())
+    }
 }

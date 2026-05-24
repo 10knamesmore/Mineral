@@ -6,15 +6,15 @@ use mineral_channel_netease::cli::NeteaseCli;
 /// `channel` 子命令的参数。
 #[derive(Debug, ClapArgs)]
 pub struct ChannelArgs {
-    /// 选择具体 channel。
+    /// 选择音乐源。
     #[command(subcommand)]
     pub channel: ChannelCommand,
 }
 
-/// 各个 channel 自己暴露的 CLI 入口。
+/// 支持的音乐源。
 #[derive(Debug, Subcommand)]
 pub enum ChannelCommand {
-    /// 网易云 channel。
+    /// 网易云音乐(扫码登录、调试 API)。
     Netease(NeteaseCli),
 }
 

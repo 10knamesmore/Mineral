@@ -49,8 +49,11 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
         .map(|p| build_row(p, state, theme))
         .collect();
 
+    // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
+    // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
+    // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
     let widths = [
-        Constraint::Min(12),
+        Constraint::Fill(1),
         Constraint::Length(11),
         Constraint::Length(8),
         Constraint::Length(5),
@@ -72,6 +75,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
+/// 把一个歌单组装成 sidebar 表格行(名字 / 来源 channel / 总时长 / 曲目数)。
 fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a> {
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {
@@ -104,6 +108,7 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
     ])
 }
 
+/// 把 [`SourceKind`] 翻成「图标 + 名字」的短标签(playlists 列用)。
 fn channel_label(src: SourceKind) -> &'static str {
     match src {
         SourceKind::Netease => "♫ netease",
@@ -113,6 +118,7 @@ fn channel_label(src: SourceKind) -> &'static str {
     }
 }
 
+/// 把 [`SourceKind`] 映射到 channel 标签的染色。
 fn channel_style(src: SourceKind, theme: &Theme) -> Style {
     match src {
         SourceKind::Netease => Style::new().fg(theme.red),
@@ -122,6 +128,7 @@ fn channel_style(src: SourceKind, theme: &Theme) -> Style {
     }
 }
 
+/// 搜索 badge:`/q` 形式,空 query 不渲染。
 fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
     if q.is_empty() {
         Span::raw("")
@@ -143,7 +150,7 @@ fn paint_empty_state(
     if inner.height == 0 || inner.width == 0 {
         return;
     }
-    let lines: Vec<Line<'_>> = if state.tasks_running > 0 {
+    let lines: Vec<Line<'_>> = if state.tasks_snapshot.running > 0 {
         vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -180,10 +187,53 @@ fn paint_empty_state(
     );
 }
 
+/// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
 fn position_label(sel: usize, total: usize) -> String {
     if total == 0 {
         " 0 / 0 ".to_owned()
     } else {
         format!(" {} / {total} ", sel.saturating_add(1).min(total))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::position_label;
+    use crate::state::AppState;
+    use crate::theme::Theme;
+
+    /// `position_label`:1-based 当前位 / 总数;空列表 `0 / 0`;越界 clamp。
+    #[test]
+    fn position_label_cases() {
+        assert_eq!(position_label(0, 0), " 0 / 0 ");
+        assert_eq!(position_label(0, 3), " 1 / 3 ");
+        assert_eq!(position_label(2, 3), " 3 / 3 ");
+        assert_eq!(position_label(9, 3), " 3 / 3 ");
+    }
+
+    /// 3 个混源歌单列表(name 列 Fill(1) 后列宽确定,不再 flaky)。
+    #[test]
+    fn playlists_list_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = crate::test_support::state_with_playlists();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "歌单列表:3 个混源歌单(EndSerenading / 本地)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 空列表(尚未加载 / 未登录)。
+    #[test]
+    fn playlists_empty_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let state = AppState::empty();
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("歌单列表:空态(未加载 / 未登录)", t.backend());
+        Ok(())
     }
 }

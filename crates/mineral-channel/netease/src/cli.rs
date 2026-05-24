@@ -16,24 +16,33 @@ use crate::api::user::account_uid;
 use crate::credential::{StoredNeteaseAuth, save};
 use crate::{NeteaseChannel, NeteaseConfig};
 
+/// 网易云的根 URL,用于在 cookie jar 中按域名定位 MUSIC_U。
 const NETEASE_BASE_URL: &str = "https://music.163.com";
+
+/// 二维码状态:已生成、等待用户扫码。
 const LOGIN_STATUS_WAIT_SCAN: i64 = 801;
+
+/// 二维码状态:已扫码,等待用户在手机上点确认。
 const LOGIN_STATUS_WAIT_CONFIRM: i64 = 802;
+
+/// 二维码状态:登录成功,jar 中已写入 MUSIC_U。
 const LOGIN_STATUS_SUCCESS: i64 = 803;
+
+/// 二维码状态:已过期,需重新生成。
 const LOGIN_STATUS_EXPIRED: i64 = 800;
 
-/// 网易云 channel 的 CLI 入口（`mineral channel netease ...`）。
+/// 网易云音乐操作。
 #[derive(Debug, ClapArgs)]
 pub struct NeteaseCli {
-    /// 网易云下的具体子命令。
+    /// 选择操作。
     #[command(subcommand)]
     pub command: NeteaseCommand,
 }
 
-/// 支持的网易云 CLI 操作。
+/// 网易云音乐子命令。
 #[derive(Debug, Subcommand)]
 pub enum NeteaseCommand {
-    /// 终端二维码登录网易云。
+    /// 扫码登录(终端显示二维码,用网易云手机 App 扫码)。
     Login,
 }
 
@@ -44,6 +53,7 @@ pub async fn run(cli: NeteaseCli) -> color_eyre::Result<()> {
     }
 }
 
+/// `mineral channel netease login` 的主流程:取 unikey、终端渲染二维码、轮询状态、登录成功后写凭证。
 async fn run_login() -> color_eyre::Result<()> {
     let channel = NeteaseChannel::new(&NeteaseConfig::default())?;
     let qr = login_qr_get_key(channel.transport()).await?;
@@ -85,6 +95,7 @@ async fn run_login() -> color_eyre::Result<()> {
     }
 }
 
+/// 把 url 编成二维码并按 unicode dense 1x2 字符块输出到 stdout。
 fn render_qr(url: &str) -> color_eyre::Result<()> {
     let code = QrCode::new(url.as_bytes()).context("生成二维码失败")?;
     let rendered = code.render::<unicode::Dense1x2>().quiet_zone(true).build();
@@ -92,6 +103,7 @@ fn render_qr(url: &str) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 把轮询状态码翻成中文人话提示,过渡态打到 stderr,终态由调用方处理。
 fn print_status_hint(status: i64) {
     match status {
         LOGIN_STATUS_WAIT_SCAN => eprintln!("状态: 等待扫码"),
@@ -101,6 +113,7 @@ fn print_status_hint(status: i64) {
     }
 }
 
+/// 从 channel 持有的 cookie jar 里按 `NETEASE_BASE_URL` 取出 `MUSIC_U` 的值。
 fn extract_music_u(channel: &NeteaseChannel) -> color_eyre::Result<String> {
     let jar = channel
         .transport()

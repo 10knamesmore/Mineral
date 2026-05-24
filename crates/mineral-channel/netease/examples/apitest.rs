@@ -182,14 +182,10 @@ async fn main() -> color_eyre::Result<()> {
         let r = run("lyrics", async {
             let l = ch.lyrics(&song.id).await?;
             Ok(format!(
-                "lrc={}, yrc={}, translation={}",
-                if l.lrc.is_some() { "Some" } else { "None" },
-                if l.yrc.is_some() { "Some" } else { "None" },
-                if l.translation.is_some() {
-                    "Some"
-                } else {
-                    "None"
-                },
+                "lrc={} lines, words={} lines, translation={} lines",
+                l.lrc.len(),
+                l.words.len(),
+                l.translation.len(),
             ))
         })
         .await;
@@ -291,6 +287,7 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 跑一项测试:打印「执行中」前缀,await 完成后回写 `[✓]`/`[✗]` 行,返回 (name, result)。
 async fn run(
     name: &str,
     fut: impl std::future::Future<Output = color_eyre::Result<String>>,
@@ -305,6 +302,7 @@ async fn run(
     (name.to_owned(), r)
 }
 
+/// 把 report 末尾一条结果按统一格式重打到 stdout(用于离线/失败汇总后的回放)。
 fn print_last(report: &[(String, std::result::Result<String, String>)]) {
     if let Some((name, r)) = report.last() {
         match r {
@@ -314,6 +312,7 @@ fn print_last(report: &[(String, std::result::Result<String, String>)]) {
     }
 }
 
+/// 把过长的样本字符串裁到 200 字符 + `…`,避免输出炸屏。
 fn truncate(s: &str) -> String {
     if s.len() > 200 {
         format!("{}…", &s[..200])

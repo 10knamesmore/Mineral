@@ -12,6 +12,7 @@ rust-version.workspace = true
 mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-paths        = { workspace = true }
+mineral-log          = { workspace = true }
 
 # 加密
 aes        = { workspace = true }
@@ -33,6 +34,7 @@ flate2     = { workspace = true }
 # 序列化
 serde      = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 
 # 工具
 async-trait = { workspace = true }
@@ -51,6 +53,7 @@ qrcode = { workspace = true }
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
 openssl  = { workspace = true }
 tempfile = "3"
+insta    = { workspace = true }
 
 [lints]
 workspace = true

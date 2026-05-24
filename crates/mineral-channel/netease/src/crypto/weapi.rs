@@ -36,6 +36,7 @@ pub fn weapi_with_secret_key(
     form_urlencode(&[("params", &params), ("encSecKey", &enc_sec_key)])
 }
 
+/// 把 (k, v) 序列拼成 `k1=v1&k2=v2`,k/v 都先走 `urlencode`。
 fn form_urlencode(pairs: &[(&str, &str)]) -> String {
     let mut out = String::new();
     for (i, (k, v)) in pairs.iter().enumerate() {
@@ -49,6 +50,7 @@ fn form_urlencode(pairs: &[(&str, &str)]) -> String {
     out
 }
 
+/// 自实现的 percent-encode:RFC3986 unreserved 之外全部 `%XX`(大写)。
 fn urlencode(s: &str) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(s.len());

@@ -41,6 +41,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     paint_vol_mode(frame, vms, pb, theme);
 }
 
+/// transport 顶行:居中显示当前曲名(无歌时 `—`)。
 fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -51,6 +52,7 @@ fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
+/// transport 第二行:`artist · album` 居中(灰斜体)。
 fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -73,6 +75,7 @@ fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
+/// 进度条:`elapsed ━━━●─── total`,宽度 < 12 或剩余空间不够时跳过。
 fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 || area.width < 12 {
         return;
@@ -106,6 +109,7 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// 控件区:`[⏮] [▶/⏸] [⏭] [mode]` 按钮 + 下方对应键位 label,等宽对齐避免抖动。
 fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height < 2 {
         return;
@@ -153,6 +157,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     );
 }
 
+/// 右下角:固定宽 10 的音量条 + 当前码率/格式标签。
 fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -184,4 +189,74 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::styled(fmt_text, Style::new().fg(theme.text)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::playback::Playback;
+    use crate::test_support::song;
+    use crate::theme::Theme;
+
+    /// 无 track:transport 空态。
+    #[test]
+    fn transport_no_track_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let pb = Playback::new();
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:无曲目空态", t.backend());
+        Ok(())
+    }
+
+    /// 播放中:进度条 + 时间 + 音量(EndSerenading 首曲 LoveLetterTypewriter)。
+    #[test]
+    fn transport_playing_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(song("1", "LoveLetterTypewriter", 225_000));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        pb.volume_pct = 80;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 暂停 + 长歌名(EndSerenading 末曲 TheLastWordIsRejoice,验证长名对齐 / 截断)。
+    #[test]
+    fn transport_paused_long_title_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(song("10", "TheLastWordIsRejoice", 309_000));
+        pb.position_ms = 30_000;
+        pb.playing = false;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "播放栏:暂停 + 长歌名(TheLastWordIsRejoice)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// CJK 长歌名(Chinese Football《地球上最后一个EMO男孩》,中英混排)的宽字符
+    /// 居中对齐 / 截断。
+    #[test]
+    fn transport_cjk_title_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(song("c6", "地球上最后一个EMO男孩", 240_000));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
+            t.backend()
+        );
+        Ok(())
+    }
 }

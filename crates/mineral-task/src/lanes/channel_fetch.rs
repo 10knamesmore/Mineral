@@ -20,20 +20,31 @@ const WORKERS_PER_CHANNEL: usize = 8;
 
 /// 投递给 worker 的一次任务。
 pub(crate) struct Job {
+    /// 任务 id,worker 完成后用于从 [`Ongoing`] 移除。
     pub id: TaskId,
+
+    /// 业务参数。
     pub kind: ChannelFetchKind,
+
+    /// 取消令牌,被 cancel 后 worker 在下一个 await 点直接返回 `Cancelled`。
     pub cancel: CancellationToken,
+
+    /// 终态通知通道(写一次)。
     pub done_tx: oneshot::Sender<TaskOutcome>,
 }
 
 /// 单个 channel 的发送端句柄(暴露给 Scheduler)。
 struct ChannelSenders {
+    /// User 优先级队列发送端。
     user: mpsc::UnboundedSender<Job>,
+
+    /// Background 优先级队列发送端。
     background: mpsc::UnboundedSender<Job>,
 }
 
 /// ChannelFetch lane:对外只暴露 [`ChannelFetchLane::dispatch`]。
 pub(crate) struct ChannelFetchLane {
+    /// 每个 channel 一对发送端;`dispatch` 时按 [`SourceKind`] 路由。
     senders: FxHashMap<SourceKind, ChannelSenders>,
 }
 
@@ -110,6 +121,7 @@ fn spawn_worker_pool(
     }
 }
 
+/// 单个 worker 的主循环:从 user/bg 队列拉 job 跑完,然后从 ongoing 摘掉。两个队列都关时退出。
 async fn worker_loop(
     channel: Arc<dyn MusicChannel>,
     user: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
@@ -122,6 +134,7 @@ async fn worker_loop(
             return; // 两个队列都关了
         };
         let id = job.id;
+        mineral_log::debug!(target: "channel_fetch", task_id = ?id, kind = ?job.kind, "worker start job");
         run_job(&channel, job, &event_tx).await;
         ongoing.remove(id);
     }
@@ -149,6 +162,7 @@ async fn next_job(
     }
 }
 
+/// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
 async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
     let Job {
         id: _,
@@ -168,6 +182,7 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
     let _ = done_tx.send(outcome);
 }
 
+/// 真正调 channel 的实现:按 kind 分派,把结果包成 [`TaskEvent`] 写进事件 buffer,失败统一变 `Failed`。
 async fn execute(
     channel: &Arc<dyn MusicChannel>,
     kind: &ChannelFetchKind,
@@ -187,7 +202,8 @@ async fn execute(
                     target: "channel_fetch",
                     ?source,
                     op = "my_playlists",
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }
@@ -205,7 +221,8 @@ async fn execute(
                     target: "channel_fetch",
                     ?source,
                     op = "liked_song_ids",
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }
@@ -225,7 +242,8 @@ async fn execute(
                         ?source,
                         op = "songs_in_playlist",
                         playlist_id = id.as_str(),
-                        "{e}"
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
                     );
                     TaskOutcome::Failed
                 }
@@ -259,7 +277,8 @@ async fn execute(
                         ?source,
                         op = "song_url",
                         song_id = song_id.as_str(),
-                        "{e}"
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
                     );
                     TaskOutcome::Failed
                 }
@@ -279,7 +298,8 @@ async fn execute(
                     ?source,
                     op = "lyrics",
                     song_id = song_id.as_str(),
-                    "{e}"
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
                 );
                 TaskOutcome::Failed
             }

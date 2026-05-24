@@ -1,0 +1,29 @@
+[package]
+name        = "mineral-media"
+description = "系统媒体服务集成(MPRIS / 媒体键)的平台无关封装"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+color-eyre    = { workspace = true }
+mineral-log   = { workspace = true }
+mineral-model = { workspace = true }
+typed-builder = { workspace = true }
+
+# Linux 走 MPRIS:mpris-server(zbus 官方),支持设任意 metadata 字段
+# (含 xesam:asText 歌词)。它是 async 且 server task 为 !Send,故在专属线程
+# 的 current-thread runtime + LocalSet 里跑;tokio 仅 Linux 后端需要。
+# serde / serde_json 仅 Linux:把结构化逐字歌词序列化成 mineral:words 的 JSON。
+# 其它平台暂用 no-op stub,不引入这些依赖。
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = { version = "0.10", features = ["tokio"] }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tokio        = { workspace = true }
+
+[lints]
+workspace = true

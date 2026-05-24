@@ -8,7 +8,10 @@ members = [
     "crates/mineral-tui",
     "crates/mineral-model",
     "crates/mineral-macros",
+    "crates/mineral-media",
     "crates/mineral-paths",
+    "crates/mineral-protocol",
+    "crates/mineral-server",
     "crates/mineral-spectrum",
     "crates/mineral-channel/core",
     "crates/mineral-channel/mock",
@@ -20,7 +23,7 @@ resolver = "2"
 name = "mineral"
 
 [workspace.package]
-version     = "0.1.0"
+version     = "0.2.0"
 edition     = "2024"
 license     = "MIT"
 repository  = "https://github.com/10knamesmore/Mineral"
@@ -30,6 +33,8 @@ rust-version = "1.97"
 [workspace.dependencies]
 color-eyre         = "0.6"
 base64             = "0.22"
+bincode            = "1.3"
+bytes              = "1"
 config_rs          = { package = "config", version  = "0.15" }
 crossterm          = { version = "0.29", features   = ["event-stream"] }
 derive-getters     = "0.5"
@@ -39,6 +44,7 @@ hex                = "0.4"
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
+nix                = { version = "0.29", features = ["signal"] }
 lofty              = "0.22"
 mineral-audio           = { path = "crates/mineral-audio" }
 mineral-cli             = { path = "crates/mineral-cli" }
@@ -46,8 +52,11 @@ mineral-log             = { path = "crates/mineral-log" }
 mineral-task            = { path = "crates/mineral-task" }
 mineral-tui             = { path = "crates/mineral-tui", default-features = false }
 mineral-macros          = { path = "crates/mineral-macros" }
+mineral-media           = { path = "crates/mineral-media" }
 mineral-model           = { path = "crates/mineral-model" }
 mineral-paths           = { path = "crates/mineral-paths" }
+mineral-protocol        = { path = "crates/mineral-protocol" }
+mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
@@ -80,13 +89,16 @@ clap               = { version = "4.5", features = ["derive"] }
 qrcode             = "0.14"
 serde              = { version = "1.0", features    = ["derive"] }
 serde_json         = "1.0"
+serde_path_to_error = "0.1"
 signal-hook-tokio  = { version = "0.3", features    = ["futures-v0_3"] }
 strum              = "0.27"
 strum_macros       = "0.27"
 time               = "0.3"
+typed-builder      = "0.20"
 tokio              = { version = "1.45.1", features = ["full"] }
-tokio-util         = { version = "0.7" }
+tokio-util         = { version = "0.7", features = ["codec"] }
 parking_lot       = "0.12"
+insta              = { version = "1", features = ["filters"] }
 tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }
@@ -153,3 +165,6 @@ use_self            = "deny"
 
 # --- 体量约束（CLAUDE.md 体量约束节，函数级；阈值见 clippy.toml）---
 too_many_lines      = "deny"
+
+# --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
+missing_docs_in_private_items = "deny"

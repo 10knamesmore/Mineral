@@ -6,6 +6,7 @@ use mineral_model::{
 };
 use serde_json::json;
 
+/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
 use crate::convert::parse_remote;
@@ -14,6 +15,7 @@ use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
 use crate::wire::search::{SearchAlbumsResult, SearchPlaylistsResult, SearchSongsResult};
 
+/// 搜索 API 路径,所有 `search_*` 共用同一端点,通过 `stype` 区分类别。
 const PATH: &str = "/weapi/search/get";
 
 /// 搜索单曲。`stype` 1=单曲, 10=专辑, 1000=歌单。
@@ -50,7 +52,7 @@ pub async fn search_songs(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchSongsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchSongsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .songs
         .into_iter()
@@ -87,7 +89,7 @@ pub async fn search_albums(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchAlbumsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchAlbumsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .albums
         .into_iter()
@@ -122,7 +124,7 @@ pub async fn search_playlists(
     let result = raw
         .get("result")
         .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchPlaylistsResult = serde_json::from_value(result.clone())?;
+    let parsed: SearchPlaylistsResult = crate::wire::de::from_value(result.clone())?;
     Ok(parsed
         .playlists
         .into_iter()

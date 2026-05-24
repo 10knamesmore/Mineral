@@ -261,6 +261,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Th
     }
 }
 
+/// 渲染整个频谱条阵:每列一根柱 + 渐变色 + 余韵尾迹 + peak cap。
 fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Theme) {
     if area.height == 0 {
         return;
@@ -346,6 +347,7 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
     }
 }
 
+/// 把 0..=7 单位的剩余高度映射成 8 段块字符(`▁..▇`),用于顶部"半行"渲染。
 fn partial_glyph(units: u16) -> &'static str {
     match units {
         1 => "▁",
@@ -358,6 +360,7 @@ fn partial_glyph(units: u16) -> &'static str {
     }
 }
 
+/// 在频谱底下渲染一行 `20Hz ... 20kHz` 的频率范围标签;窗口太窄(<12)时跳过。
 fn paint_labels(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     if area.width < 12 {
         return;
@@ -365,4 +368,23 @@ fn paint_labels(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     let spaces = " ".repeat(usize::from(area.width).saturating_sub(9));
     let line = Line::from(format!("20Hz{spaces}20kHz")).style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(line), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::SpectrumState;
+    use crate::theme::Theme;
+
+    /// 频谱 baseline(`SpectrumState::new()`,静默态)渲染快照。
+    #[test]
+    fn spectrum_baseline_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
+        let state = SpectrumState::new();
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!("频谱静默基线(SpectrumState::new())", terminal.backend());
+        Ok(())
+    }
 }

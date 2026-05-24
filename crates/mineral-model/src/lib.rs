@@ -21,7 +21,7 @@ pub mod artist;
 pub mod bitrate;
 /// 各类资源(歌、专辑、艺人、歌单、用户)的 ID newtype。
 pub mod ids;
-/// 一首歌的歌词集合(LRC、YRC、翻译、罗马音)。
+/// 一首歌的歌词集合(行级 LRC、逐字、翻译、罗马音)。
 pub mod lyrics;
 /// 一首歌的可播放 URL + 元信息。
 pub mod play_url;
@@ -42,7 +42,7 @@ pub use album::Album;
 pub use artist::Artist;
 pub use bitrate::BitRate;
 pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};
-pub use lyrics::Lyrics;
+pub use lyrics::{LrcLine, LrcLyric, Lyrics, Word, WordLine, WordLyric};
 pub use play_url::PlayUrl;
 pub use playlist::Playlist;
 pub use refs::{AlbumRef, ArtistRef};
