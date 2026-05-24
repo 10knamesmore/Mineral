@@ -24,5 +24,6 @@ mod serve;
 mod server;
 
 pub use client::{Client, ClientHandle};
+pub use mineral_audio::AudioMode;
 pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use server::Server;

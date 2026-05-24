@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use mineral_audio::AudioHandle;
+use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
@@ -33,10 +33,14 @@ impl Server {
     ///
     /// # Params:
     ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
-    pub fn spawn(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<Self> {
+    ///   - `audio_mode`: 音频后端选择,见 [`AudioMode`];无设备时 `Auto` 会降级而非失败。
+    pub fn spawn(
+        channels: Vec<Arc<dyn MusicChannel>>,
+        audio_mode: AudioMode,
+    ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels);
-        let (audio, spectrum_tap) = AudioHandle::spawn()?;
+        let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode)?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let player = PlayerCore::spawn(audio, scheduler, channels);
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。

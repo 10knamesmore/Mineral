@@ -20,6 +20,17 @@ use crate::tap::SharedProd;
 /// PCM tap ringbuf 容量(f32 样本)。覆盖 2 个 2048-sample FFT 窗,UI 慢一帧不丢窗。
 const TAP_CAPACITY: usize = 4096;
 
+/// 引擎启动时的音频后端选择。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioMode {
+    /// 自动:尝试打开默认输出设备,失败则降级到 null(无声但引擎仍活)。
+    #[default]
+    Auto,
+
+    /// 强制 null:不碰设备,直接空跑。用于无音频环境 / e2e 测试确定性复现降级。
+    ForceNull,
+}
+
 /// 共享内部状态:命令通道 + snapshot + seek mailbox(latest-wins)。
 struct Inner {
     /// 命令通道发送端,handle 把 [`AudioCommand`] 推给 engine 线程。
@@ -65,8 +76,13 @@ pub struct AudioHandle {
 
 impl AudioHandle {
     /// 启动 engine 线程并返回 (handle, spectrum tap)。
-    /// 失败通常意味着默认输出设备不可用。
-    pub fn spawn() -> color_eyre::Result<(Self, SpectrumTap)> {
+    ///
+    /// # Params:
+    ///   - `mode`: [`AudioMode::Auto`] 拿不到设备时降级 null;[`AudioMode::ForceNull`] 直接空跑。
+    ///
+    /// # Return:
+    ///   `Err` 仅在引擎线程 spawn / runtime 构建等**真错**时返回;无音频设备**不**算错(降级)。
+    pub fn spawn(mode: AudioMode) -> color_eyre::Result<(Self, SpectrumTap)> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
         let snapshot = Arc::new(Mutex::new(AudioSnapshot {
             volume_pct: 100,
@@ -95,6 +111,7 @@ impl AudioHandle {
                     &ready_tx,
                     &prod_for_engine,
                     &sr_for_engine,
+                    mode,
                 );
             })
             .map_err(|e| eyre!("spawn audio thread: {e}"))?;
@@ -162,5 +179,44 @@ impl AudioHandle {
     fn send(&self, cmd: AudioCommand) {
         // engine 已退就忽略 —— UI 关闭路径上是合法的。
         let _ = self.inner.cmd_tx.send(cmd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::handle::AudioMode;
+    use crate::snapshot::AudioBackend;
+
+    use super::AudioHandle;
+
+    /// `ForceNull` 起得来、snapshot 标 `Null`,且无 sink 也接受命令、引擎线程不死。
+    ///
+    /// 无 env、无真音频设备,确定性复现降级路径。
+    #[test]
+    fn force_null_spawns_in_null_mode_and_accepts_commands() -> color_eyre::Result<()> {
+        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull)?;
+        assert_eq!(
+            handle.snapshot().backend,
+            AudioBackend::Null,
+            "ForceNull 应让 snapshot.backend == Null"
+        );
+
+        // 无 sink 也得吃命令、不 panic;set_volume 由 handle 直接写 snapshot。
+        handle.set_volume(50);
+        handle.pause();
+        handle.resume();
+        handle.stop();
+        assert_eq!(
+            handle.snapshot().volume_pct,
+            50,
+            "set_volume 应即时反映在 snapshot"
+        );
+
+        // 引擎线程仍活:发命令后短暂等待,snapshot 仍可读(锁没被毒化)。
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(handle.snapshot().backend, AudioBackend::Null);
+        Ok(())
     }
 }

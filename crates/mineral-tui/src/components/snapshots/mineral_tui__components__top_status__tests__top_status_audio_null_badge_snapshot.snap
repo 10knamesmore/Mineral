@@ -1,0 +1,6 @@
+---
+source: crates/mineral-tui/src/components/top_status.rs
+description: "顶栏:无音频设备降级徽标(版本号已过滤)"
+expression: t.backend()
+---
+"▌ mineral v[VERSION]  │                                      ⚠ 无音频设备  ‖ paused " Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (66, " "), (68, " ")]

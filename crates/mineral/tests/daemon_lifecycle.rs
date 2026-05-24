@@ -4,9 +4,10 @@
 //! 不需要 TUI / pty —— 只起 `mineral serve` 子进程,用 unix socket 探测;每个测试
 //! 隔离一套临时 XDG 目录,互不干扰、可并行。
 //!
-//! 注:daemon 起来会初始化 audio engine,无音频设备的 headless 环境下 rodio/cpal
-//! 仍能 spawn(降级),故本测试在 CI 上也应可跑;若某些极简环境连 spawn 都失败,
-//! 这两个用例会超时失败 —— 那是环境缺音频栈,不是回归。
+//! 注:audio engine 拿不到设备时**降级到 null 模式**(引擎空跑、daemon 照常 bind /
+//! serve / graceful shutdown),所以这些用例在 headless CI 上也稳跑,不依赖真音频栈。
+//! `daemon_status_reports_null_backend` 进一步用 `MINERAL_AUDIO_NULL` 强制降级,
+//! 在有声卡的开发机上也能确定性验证「engine null → IPC → CLI status 感知」整条链。
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -32,6 +33,16 @@ struct Daemon {
 impl Daemon {
     /// 起一个隔离环境的 daemon 子进程(不等它 ready)。
     fn spawn(tag: &str) -> color_eyre::Result<Self> {
+        Self::spawn_inner(tag, /*force_null*/ false)
+    }
+
+    /// 起一个**强制 null 音频后端**的 daemon(无视本机有无声卡),用于确定性验证降级。
+    fn spawn_null(tag: &str) -> color_eyre::Result<Self> {
+        Self::spawn_inner(tag, /*force_null*/ true)
+    }
+
+    /// `spawn` / `spawn_null` 的共同实现。
+    fn spawn_inner(tag: &str, force_null: bool) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
             "mineral-e2e-{}-{}-{}",
             tag,
@@ -40,15 +51,29 @@ impl Daemon {
         ));
         let runtime = root.join("runtime");
         std::fs::create_dir_all(&runtime).wrap_err("create isolated runtime dir")?;
-        let child = serve_command(&root)
-            .spawn()
-            .wrap_err("spawn `mineral serve`")?;
+        let mut cmd = serve_command(&root);
+        if force_null {
+            cmd.env("MINERAL_AUDIO_NULL", "1");
+        }
+        let child = cmd.spawn().wrap_err("spawn `mineral serve`")?;
         let socket = runtime.join("mineral/mineral.sock");
         Ok(Self {
             child,
             root,
             socket,
         })
+    }
+
+    /// 在同一隔离 XDG 环境下跑 `mineral status`,捕获其输出。
+    fn status_output(&self) -> color_eyre::Result<std::process::Output> {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
+        cmd.arg("status")
+            .env("XDG_RUNTIME_DIR", self.root.join("runtime"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("XDG_CONFIG_HOME", self.root.join("config"))
+            .env("XDG_DATA_HOME", self.root.join("data"))
+            .stdin(Stdio::null());
+        cmd.output().wrap_err("run `mineral status`")
     }
 
     /// 轮询直到 socket 可连(daemon ready),超时则报错。
@@ -189,6 +214,28 @@ fn daemon_logs_shutdown_on_sigterm() -> color_eyre::Result<()> {
     assert!(
         logs.contains("shutdown signal received") && logs.contains("shutting down"),
         "daemon 应记录收到信号 + 关停日志,实际:\n{logs}"
+    );
+    Ok(())
+}
+
+/// 强制 null 后端的 daemon:`mineral status` 应连上、退出码 0、且报告 backend 降级。
+/// 覆盖「engine null → AudioSnapshot.backend → IPC → CLI status 感知」整条链。
+#[test]
+fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn_null("nullstatus")?;
+    daemon.wait_ready()?;
+
+    let out = daemon.status_output()?;
+    assert!(
+        out.status.success(),
+        "status 应成功退出,实际 {:?},stderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("backend:    null (no audio device)"),
+        "status 应报告 null 后端,实际 stdout:\n{stdout}"
     );
     Ok(())
 }

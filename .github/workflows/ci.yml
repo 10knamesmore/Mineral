@@ -16,17 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # daemon 进程级 e2e(crates/mineral/tests/daemon_lifecycle.rs)会起真 daemon,
-      # 内部 AudioHandle::spawn 需要一个可用音频设备。headless runner 上用
-      # PulseAudio null sink + ALSA→pulse 路由顶上,否则 audio engine 起不来、e2e 失败。
-      - name: 准备 headless 音频(ALSA → PulseAudio null sink)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libasound2-plugins pulseaudio
-          printf 'pcm.!default pulse\nctl.!default pulse\n' | sudo tee /etc/asound.conf
-          pulseaudio --start --exit-idle-time=-1
-          pactl load-module module-null-sink sink_name=dummy
-
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy

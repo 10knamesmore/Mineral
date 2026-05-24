@@ -3,7 +3,7 @@
 //! 验证 IPC 链路是否通。daemon 没起 / socket 文件 stale → 友好报错。
 
 use color_eyre::eyre::{WrapErr, bail, eyre};
-use mineral_audio::AudioSnapshot;
+use mineral_audio::{AudioBackend, AudioSnapshot};
 use mineral_protocol::{Request, Response, framed, recv, send};
 use tokio::net::UnixStream;
 
@@ -24,24 +24,25 @@ pub async fn run() -> color_eyre::Result<()> {
         .await?
         .ok_or_else(|| eyre!("daemon closed connection unexpectedly"))?;
     match resp {
-        Response::AudioSnapshot(snap) => print_snapshot(&snap),
+        Response::AudioSnapshot(snap) => println!("{}", render_snapshot(&snap)),
         Response::Error(msg) => bail!("daemon error: {msg}"),
         other => bail!("unexpected response: {other:?}"),
     }
     Ok(())
 }
 
-/// 把 [`AudioSnapshot`] 按 key/value 形式打到 stdout。
-fn print_snapshot(snap: &AudioSnapshot) {
+/// 把 [`AudioSnapshot`] 渲染成多行 key/value 文本(由 caller 打到 stdout)。
+fn render_snapshot(snap: &AudioSnapshot) -> String {
     let pos = format_ms(snap.position_ms);
     let dur = format_ms(snap.duration_ms);
-    println!("playing:    {}", snap.playing);
-    println!("position:   {pos} / {dur}");
-    println!("volume:     {} %", snap.volume_pct);
-    println!(
-        "finished:   {} (track_finished_seq)",
-        snap.track_finished_seq
-    );
+    let backend = match snap.backend {
+        AudioBackend::Device => "device",
+        AudioBackend::Null => "null (no audio device)",
+    };
+    format!(
+        "playing:    {}\nposition:   {pos} / {dur}\nvolume:     {} %\nfinished:   {} (track_finished_seq)\nbackend:    {backend}",
+        snap.playing, snap.volume_pct, snap.track_finished_seq,
+    )
 }
 
 /// 把 ms 格式化成 `mm:ss`(小时被合并进分钟)。
@@ -50,4 +51,39 @@ fn format_ms(ms: u64) -> String {
     let m = s / 60;
     let s = s % 60;
     format!("{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_snapshot;
+    use mineral_audio::{AudioBackend, AudioSnapshot};
+
+    /// 正常后端:backend 行打 `device`。
+    #[test]
+    fn render_device_backend() {
+        let snap = AudioSnapshot {
+            backend: AudioBackend::Device,
+            ..AudioSnapshot::default()
+        };
+        let out = render_snapshot(&snap);
+        assert!(out.contains("backend:    device"), "实际:\n{out}");
+        assert!(
+            !out.contains("no audio device"),
+            "device 态不该提示无设备:\n{out}"
+        );
+    }
+
+    /// 降级后端:backend 行提示 `null (no audio device)`。
+    #[test]
+    fn render_null_backend() {
+        let snap = AudioSnapshot {
+            backend: AudioBackend::Null,
+            ..AudioSnapshot::default()
+        };
+        let out = render_snapshot(&snap);
+        assert!(
+            out.contains("backend:    null (no audio device)"),
+            "实际:\n{out}"
+        );
+    }
 }

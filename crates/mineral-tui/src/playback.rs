@@ -1,6 +1,6 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
-use mineral_audio::AudioSnapshot;
+use mineral_audio::{AudioBackend, AudioSnapshot};
 use mineral_model::{PlayUrl, Song};
 pub use mineral_protocol::PlayMode;
 
@@ -21,6 +21,9 @@ pub struct Playback {
     /// 当前曲目解析后的 PlayUrl(format / bitrate / size)。
     /// 切歌时清成 `None`,PlayUrlReady 或 prefetch 命中后写入。transport 用它显 `fmt`。
     pub play_url: Option<PlayUrl>,
+
+    /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
+    pub audio_backend: AudioBackend,
 }
 
 impl Playback {
@@ -33,6 +36,7 @@ impl Playback {
             volume_pct: 100,
             mode: PlayMode::Sequential,
             play_url: None,
+            audio_backend: AudioBackend::Device,
         }
     }
 
@@ -57,6 +61,7 @@ impl Playback {
         self.position_ms = snap.position_ms;
         self.playing = snap.playing;
         self.volume_pct = snap.volume_pct;
+        self.audio_backend = snap.backend;
     }
 }
 

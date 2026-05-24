@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use mineral_audio::AudioBackend;
 use mineral_task::ChannelFetchKindTag;
 
 use crate::state::{AppState, View};
@@ -61,6 +62,14 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         ("‖", theme.yellow, "paused")
     };
     let mut spans = Vec::<Span<'_>>::new();
+    // 无音频设备降级:常驻徽标提示「能浏览/编队列,但没声」。放右段最前(右对齐块的左侧),
+    // 真实终端任意宽度都可见(左段宽度随窗口缩放,放不下)。
+    if state.playback.audio_backend == AudioBackend::Null {
+        spans.push(Span::styled(
+            "⚠ 无音频设备  ",
+            Style::new().fg(theme.peach).add_modifier(Modifier::BOLD),
+        ));
+    }
     let by = &state.tasks_snapshot.by_kind;
     // 固定顺序渲染,避免 hashmap 迭代顺序抖动。
     for (tag, label) in [
@@ -127,6 +136,23 @@ mod tests {
         insta::with_settings!({
             filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
             description => "顶栏:Library 标签 + 队列打开(版本号已过滤)"
+        }, {
+            insta::assert_snapshot!(t.backend());
+        });
+        Ok(())
+    }
+
+    /// 无音频设备降级:顶栏常驻 `⚠ 无音频设备` 徽标。
+    #[test]
+    fn top_status_audio_null_badge_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
+        let mut state = crate::test_support::state_with_playlists();
+        state.playback.audio_backend = mineral_audio::AudioBackend::Null;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
+        insta::with_settings!({
+            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
+            description => "顶栏:无音频设备降级徽标(版本号已过滤)"
         }, {
             insta::assert_snapshot!(t.backend());
         });

@@ -9,5 +9,5 @@ mod handle;
 mod snapshot;
 mod tap;
 
-pub use handle::{AudioHandle, SpectrumTap};
-pub use snapshot::AudioSnapshot;
+pub use handle::{AudioHandle, AudioMode, SpectrumTap};
+pub use snapshot::{AudioBackend, AudioSnapshot};

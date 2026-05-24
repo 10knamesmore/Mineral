@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
-use mineral_server::Server;
+use mineral_server::{AudioMode, Server};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -34,7 +34,14 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     mineral_log::info!(target: "daemon", socket_path = %socket_path.display(), "unix socket bound");
     println!("mineral daemon listening on {}", socket_path.display());
 
-    let server = Server::spawn(channels)?;
+    // `MINERAL_AUDIO_NULL` 强制 null 后端(无设备 e2e / headless 确定性复现降级);
+    // 未设则 Auto(有设备真出声,无设备自动降级)。env 只在 binary 边缘读,lib 保持纯。
+    let audio_mode = if std::env::var_os("MINERAL_AUDIO_NULL").is_some() {
+        AudioMode::ForceNull
+    } else {
+        AudioMode::Auto
+    };
+    let server = Server::spawn(channels, audio_mode)?;
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {
