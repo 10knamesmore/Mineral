@@ -17,8 +17,10 @@ use mineral_server::Client;
 use mineral_task::TaskEvent;
 use ratatui_image::picker::Picker;
 
+use crate::anim::Transition;
+use crate::components::overlay::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
 use crate::cover::CoverFetcher;
-use crate::state::{AppState, Focus, View};
+use crate::state::{AppState, View};
 use crate::theme::Theme;
 use crate::tui::Tui;
 use crate::view::draw;
@@ -38,6 +40,9 @@ const ROW_BIG_STEP: usize = 7;
 /// 主循环帧间隔(≈60fps)。重绘 + 拉数据 + 推进动画/频谱统一这一个节奏。
 const TICK: Duration = Duration::from_millis(16);
 
+/// 退出收缩动画时长(tick 数);≈ 18 tick ≈ 300ms,边框从全屏收到中心。
+const QUIT_TICKS: u16 = 18;
+
 /// 应用顶层状态。
 pub struct App {
     /// 是否退出主循环。
@@ -48,6 +53,13 @@ pub struct App {
 
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
+
+    /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
+    pub(crate) overlays: OverlayStack,
+
+    /// 退出收缩动画:`Some` 表示正在播放「边框向中心收缩」退场,归零后真正退出。
+    /// `None` 为正常运行。仅正常退出(confirm)触发;Ctrl-C / 断连立即退,不走它。
+    pub(crate) quit_anim: Option<Transition>,
 
     /// 上一次 tick 时间。
     pub last_tick: Instant,
@@ -76,6 +88,8 @@ impl App {
             should_quit: false,
             theme: Theme::default(),
             state: AppState::empty(),
+            overlays: OverlayStack::new(),
+            quit_anim: None,
             last_tick: Instant::now(),
             client,
             cover_fetcher,
@@ -102,13 +116,14 @@ impl App {
                 break;
             }
             // daemon 被单独 kill / crash → 链路断开。不僵死在「请求全兜底默认值」的
-            // 状态:置断连态(记一条 error),进入下面的「显示话术 + 等按键退出」分支。
-            if !self.state.disconnected && !self.client.connected() {
+            // 状态:压入断连提示浮层(记一条 error),进入下面的「显示话术 + 等按键退出」分支。
+            if !self.overlays.is_disconnected() && !self.client.connected() {
                 mineral_log::error!(target: "tui", "daemon connection lost, awaiting key to exit");
-                self.state.disconnected = true;
+                self.overlays.push(OverlayKind::disconnect());
             }
-            if self.state.disconnected {
-                // 只渲染断连提示 + 等按键;daemon 没了,正常路径全是兜底默认值,跳过。
+            if self.overlays.is_disconnected() {
+                // 只渲染断连提示 + 推进其弹出动画 + 等按键退出;daemon 没了,正常路径全是
+                // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
                 tui.draw(|f| draw(f, self))?;
                 if event::poll(TICK)?
                     && let Event::Key(key) = event::read()?
@@ -116,6 +131,7 @@ impl App {
                 {
                     self.should_quit = true;
                 }
+                self.overlays.tick();
                 continue;
             }
 
@@ -126,11 +142,20 @@ impl App {
                 self.handle_event(&event::read()?);
             }
             if self.last_tick.elapsed() >= TICK {
+                // 退出收缩动画进行中:只推进它 + 重绘(上方 tui.draw),跳过后端同步;归零即退出。
+                if let Some(anim) = &mut self.quit_anim {
+                    anim.tick();
+                    if !anim.active() {
+                        self.should_quit = true;
+                    }
+                    self.last_tick = Instant::now();
+                    continue;
+                }
                 self.drain_task_events();
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
-                self.state.queue_anim.tick();
+                self.overlays.tick();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
                 crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
@@ -157,7 +182,6 @@ impl App {
         mineral_log::info!(
             target: "heartbeat",
             view = ?s.view,
-            focus = ?s.focus,
             playlists = s.playlists.len(),
             tracks_cached = s.tracks_cache.len(),
             tracks_requested = s.tracks_requested.len(),
@@ -179,8 +203,8 @@ impl App {
         self.state.playback.mode = snap.play_mode;
         self.state.queue = snap.queue;
         // 不灌 snap.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义不同于
-        // UI 光标;在播歌已由 ▶ 标记单独表达。queue_sel 是纯客户端光标,只钳防越界。
-        self.state.clamp_queue_sel();
+        // UI 光标;在播歌已由 ▶ 标记单独表达。queue 浮层光标是纯客户端态,只钳防越界。
+        self.overlays.clamp_queue(self.state.queue.len());
         self.state.original_queue = snap.original_queue;
         // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
         // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
@@ -241,9 +265,9 @@ impl App {
         }
     }
 
-    /// 顶层按键分发:Ctrl-C 永远退出,然后按当前 modal/focus/view 路由到具体 handler。
+    /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
     fn handle_key(&mut self, key: &KeyEvent) {
-        // Ctrl-C 强制退出(skip confirm)。
+        // Ctrl-C 强制退出(skip 一切)。
         if matches!(
             (key.modifiers, key.code),
             (KeyModifiers::CONTROL, KeyCode::Char('c'))
@@ -252,46 +276,41 @@ impl App {
             return;
         }
 
+        // 退出收缩动画进行中:吞掉所有其他按键(动画不可打断,Ctrl-C 已在上面强退)。
+        if self.quit_anim.is_some() {
+            return;
+        }
+
+        // 活跃浮层(栈顶未退场)优先吃键。Consumed 吞掉、Pass 半穿透给全局、Do 交意图执行。
+        if let Some(resp) = self.overlays.on_key(key, &self.state) {
+            match resp {
+                OverlayResponse::Consumed => {}
+                OverlayResponse::Pass => self.handle_overlay_passthrough(key),
+                OverlayResponse::Do(action) => self.run_overlay_action(action),
+            }
+            return;
+        }
+
+        // —— 以下:无活跃浮层 ——
         if self.state.search_mode {
             self.handle_search_key(key);
             return;
         }
 
-        if self.state.confirm_open {
-            self.handle_confirm_key(key);
-            return;
-        }
-
+        // Tab 开 queue(光标定位到在播歌);q 开退出确认。
         if key.code == KeyCode::Tab {
-            self.toggle_queue();
+            let sel = self.state.queue_current_index().unwrap_or(0);
+            self.overlays.push(OverlayKind::queue(sel));
             return;
         }
-
         if key.code == KeyCode::Char('q') {
-            if self.state.queue_open {
-                self.close_queue();
-            } else {
-                self.state.confirm_open = true;
-            }
+            self.overlays.push(OverlayKind::confirm());
             return;
         }
 
-        // `t`:循环歌词副语言(原文 → 翻译 → 罗马音 → 原文)。歌词面板全局可见,
-        // 故在任意焦点下生效。
+        // `t`:循环歌词副语言(原文 → 翻译 → 罗马音 → 原文)。歌词面板全局可见。
         if key.code == KeyCode::Char('t') {
             self.state.cycle_lyric_extra();
-            return;
-        }
-
-        if self.state.focus == Focus::Queue {
-            if key.code == KeyCode::Esc {
-                self.close_queue();
-                return;
-            }
-            if self.handle_playback_key(key) {
-                return;
-            }
-            self.handle_queue_key(key);
             return;
         }
 
@@ -311,17 +330,27 @@ impl App {
         }
     }
 
-    /// 退出确认弹窗的按键:y/Y/Enter 退出,n/N/Esc 关闭弹窗。
-    fn handle_confirm_key(&mut self, key: &KeyEvent) {
-        match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                self.should_quit = true;
+    /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
+    fn run_overlay_action(&mut self, action: OverlayAction) {
+        match action {
+            // 正常退出:不立即退,而是启动「边框向中心收缩」退场动画,归零后主循环再 break。
+            OverlayAction::Quit => self.quit_anim = Some(Transition::collapsing(QUIT_TICKS)),
+            OverlayAction::CloseTop => self.overlays.close_top(),
+            OverlayAction::PlayQueueIndex(i) => {
+                if let Some(song) = self.state.queue.get(i).cloned() {
+                    self.client.play_song(song);
+                }
             }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                self.state.confirm_open = false;
-            }
-            _ => {}
         }
+    }
+
+    /// 浮层放行(半穿透)的按键:queue 打开时仍可切歌词 / 控播放;其余键忽略。
+    fn handle_overlay_passthrough(&mut self, key: &KeyEvent) {
+        if key.code == KeyCode::Char('t') {
+            self.state.cycle_lyric_extra();
+            return;
+        }
+        let _ = self.handle_playback_key(key);
     }
 
     /// 搜索词每次变化后,把当前 view 的 sel 拉回 0。
@@ -351,58 +380,6 @@ impl App {
                 self.state.search_q.push(c);
                 self.reset_sel_for_search();
                 self.state.last_sel_change = Instant::now();
-            }
-            _ => {}
-        }
-    }
-
-    /// 切换 queue overlay 的开关 + 同步焦点 + 启动弹出/收起动画。
-    fn toggle_queue(&mut self) {
-        if self.state.queue_open {
-            self.close_queue();
-        } else {
-            self.state.queue_open = true;
-            // 打开即把光标定位到在播歌(无在播曲落 0),之后用户可自由 j/k/g/G 移动。
-            self.state.queue_sel = self.state.queue_current_index().unwrap_or(0);
-            self.state.focus = Focus::Queue;
-            self.state.queue_anim.enter();
-        }
-    }
-
-    /// 强制关闭 queue overlay 并把焦点收回左侧;触发收起动画(焦点即刻收回,动画纯视觉收尾)。
-    fn close_queue(&mut self) {
-        self.state.queue_open = false;
-        self.state.focus = Focus::Left;
-        self.state.queue_anim.leave();
-    }
-
-    /// queue 焦点下的按键:vim 风格上下移动 + Enter 选择当前行播放。
-    fn handle_queue_key(&mut self, key: &KeyEvent) {
-        let len = self.state.queue.len();
-        let max = len.saturating_sub(1);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.state.queue_sel = self.state.queue_sel.saturating_add(1).min(max);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.state.queue_sel = self.state.queue_sel.saturating_sub(1);
-            }
-            KeyCode::Char('J') => {
-                self.state.queue_sel = self.state.queue_sel.saturating_add(ROW_BIG_STEP).min(max);
-            }
-            KeyCode::Char('K') => {
-                self.state.queue_sel = self.state.queue_sel.saturating_sub(ROW_BIG_STEP);
-            }
-            KeyCode::Char('g') => {
-                self.state.queue_sel = 0;
-            }
-            KeyCode::Char('G') => {
-                self.state.queue_sel = len.saturating_sub(1);
-            }
-            KeyCode::Enter => {
-                if let Some(s) = self.state.queue.get(self.state.queue_sel).cloned() {
-                    self.client.play_song(s);
-                }
             }
             _ => {}
         }
@@ -586,85 +563,108 @@ impl App {
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_protocol::PlayerSnapshot;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     use super::App;
-    use crate::components::overlay::queue as queue_overlay;
-    use crate::state::Focus;
-    use crate::test_support::{app_with_queue, assert_snap, endserenading};
-    use crate::theme::Theme;
+    use crate::test_support::{app_with_queue, endserenading};
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
     }
 
-    /// 集成回归:开队列 → j/k/g/G 真的移动光标,且**不被 server snapshot tick 弹回**。
-    /// 这是本 bug 的核心 —— 此前 `apply_player_snapshot` 每帧用 server 的「在播锚点」
-    /// 覆盖 UI 光标,导致按键看似无效。
+    /// 集成回归:Tab 开队列 → 按键经 dispatch 路由到 queue 浮层移动光标,且**不被
+    /// server snapshot tick 弹回**。此前 `apply_player_snapshot` 每帧用 server 的
+    /// 「在播锚点」覆盖 UI 光标,导致按键看似无效;现在光标归 overlay 私有、只 clamp。
     #[test]
     fn queue_nav_moves_and_survives_snapshot_tick() -> color_eyre::Result<()> {
         // queue 6 首,当前在播第 2 首(idx 2)。
         let mut app = app_with_queue(6, /*current_idx*/ 2);
 
-        // 打开浮层:焦点切 Queue,光标定位到在播行。
-        app.toggle_queue();
-        assert_eq!(app.state.focus, Focus::Queue);
-        assert_eq!(app.state.queue_sel, 2, "打开时光标应落在在播歌");
+        // Tab 打开浮层:光标定位到在播行。
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.queue_sel(), Some(2), "打开时光标应落在在播歌");
 
         // j 两次 → 4。
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.queue_sel, 4);
+        assert_eq!(app.overlays.queue_sel(), Some(4));
 
         // 模拟一次 server tick:snapshot 带不同的 queue_sel(在播锚点 = 2)。
-        // 修复后 UI 光标不应被这个值覆盖。
+        // UI 光标不应被这个值覆盖(只 clamp 防越界)。
         let snap = PlayerSnapshot {
             queue: endserenading(6),
             queue_sel: 2,
             ..Default::default()
         };
         app.apply_player_snapshot(snap);
-        assert_eq!(app.state.queue_sel, 4, "snapshot tick 不该弹回 UI 光标");
+        assert_eq!(
+            app.overlays.queue_sel(),
+            Some(4),
+            "snapshot tick 不该弹回 UI 光标"
+        );
 
         // k 一次 → 3;g → 0;G → 末行 5。
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.state.queue_sel, 3);
+        assert_eq!(app.overlays.queue_sel(), Some(3));
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.queue_sel, 0);
+        assert_eq!(app.overlays.queue_sel(), Some(0));
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.queue_sel, 5);
+        assert_eq!(app.overlays.queue_sel(), Some(5));
 
         Ok(())
     }
 
-    /// 渲染回归:光标(`▌`)移到第 4 行、在播(`▶`)在第 2 行 —— 二者落在不同行,
-    /// 证明 UI 光标与在播位置彻底解耦。
+    /// 集成回归:Tab 开 queue → Esc 关闭(触发收起动画);q 在无浮层时开退出确认。
     #[test]
-    fn queue_cursor_decoupled_from_playing_snapshot() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(6, /*current_idx*/ 2);
-        app.toggle_queue();
-        press(&mut app, KeyCode::Char('G')); // → 5
-        press(&mut app, KeyCode::Char('k')); // → 4
-        assert_eq!(app.state.queue_sel, 4);
+    fn tab_opens_queue_esc_closes() {
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        // 无浮层时 q 开退出确认 —— 不应直接退出。
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.should_quit, "q 应开退出确认而非直接退出");
+        // n 取消(关闭确认)。
+        press(&mut app, KeyCode::Char('n'));
 
-        let current_id = app.state.playback.track.as_ref().map(|t| &t.id);
-        let mut t = Terminal::new(TestBackend::new(96, 28))?;
-        t.draw(|f| {
-            let render = queue_overlay::QueueRender {
-                queue: &app.state.queue,
-                sel: app.state.queue_sel,
-                current_id,
-                focused: true,
-                scale: 1000,
-            };
-            queue_overlay::draw(f, f.area(), &render, &Theme::default());
-        })?;
-        assert_snap!(
-            "queue 浮层:光标 ▌ 在第 4 行、在播 ▶ 在第 2 行(二者解耦)",
-            t.backend()
-        );
-        Ok(())
+        // Tab 开 queue,Esc 关闭后光标进入退场,不再接收导航。
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.queue_sel(), Some(0));
+        press(&mut app, KeyCode::Esc);
+        // 收起动画归零前推进若干 tick,最终栈清空、queue 不再存在。
+        for _ in 0..16 {
+            app.overlays.tick();
+        }
+        assert_eq!(app.overlays.queue_sel(), None, "Esc 后 queue 应收起并移除");
+    }
+
+    /// 退出收缩:q → confirm → y 不立即退,而是启动收缩动画;推进到归零后才退出。
+    #[test]
+    fn quit_plays_shrink_animation_then_exits() {
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        press(&mut app, KeyCode::Char('q'));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(!app.should_quit, "确认退出应先播收缩动画,不立即退");
+        assert!(app.quit_anim.is_some(), "应进入退出收缩动画态");
+
+        // 模拟主循环逐 tick 推进收缩动画,归零后置退出。
+        for _ in 0..40 {
+            if let Some(anim) = &mut app.quit_anim {
+                anim.tick();
+                if !anim.active() {
+                    app.should_quit = true;
+                }
+            }
+        }
+        assert!(app.should_quit, "收缩动画归零后应退出");
+    }
+
+    /// Ctrl-C 立即退出,不走收缩动画。
+    #[test]
+    fn ctrl_c_exits_immediately_without_animation() {
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.should_quit, "Ctrl-C 立即退出");
+        assert!(app.quit_anim.is_none(), "Ctrl-C 不走收缩动画");
     }
 }

@@ -34,6 +34,19 @@ impl Transition {
         }
     }
 
+    /// 构造一个**已完全展开**(满值)、即将收起的过渡:[`Self::tick`] 把进度从满推向 `0`。
+    /// 用于整屏退出收缩等「从满开始收」的场景(配合 [`Self::eased`] 得到加速收束感)。
+    ///
+    /// # Params:
+    ///   - `ticks`: 从满值走到 `0` 所需的 tick 数(决定时长)。
+    pub fn collapsing(ticks: u16) -> Self {
+        Self {
+            progress: FULL,
+            target: 0,
+            step: FULL.div_ceil(ticks.max(1)),
+        }
+    }
+
     /// 开始进场:目标置满,后续 [`Self::tick`] 把进度推向满值。
     pub fn enter(&mut self) {
         self.target = FULL;
@@ -56,6 +69,12 @@ impl Transition {
     /// 是否仍需渲染:进度未归零,或正朝进场推进。完全收起且无进场目标时为 `false`。
     pub fn active(&self) -> bool {
         self.progress > 0 || self.target > 0
+    }
+
+    /// 是否正朝收起推进(目标为零)。栈用它判定浮层"逻辑已关、视觉还在收尾",
+    /// 据此把键盘焦点收回、并在归零后真正移除。
+    pub fn leaving(&self) -> bool {
+        self.target == 0
     }
 
     /// 当前进度经 cubic ease-out 映射后的值,千分比 `0..=1000`。快进慢出,**无回弹/

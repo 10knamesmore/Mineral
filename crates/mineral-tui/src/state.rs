@@ -13,7 +13,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
-use crate::anim::Transition;
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
@@ -32,17 +31,6 @@ pub enum View {
 
     /// 已选歌单内的曲目列表。
     Library,
-}
-
-/// 当前键盘焦点(用于浮层与主区域之间路由按键)。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Focus {
-    /// 主区域(左栏 / library)。
-    #[default]
-    Left,
-
-    /// 浮动 queue 面板。
-    Queue,
 }
 
 /// 歌词面板的副歌词显示档(翻译 / 罗马音),由 `t` 键循环切换。
@@ -110,30 +98,11 @@ pub struct AppState {
     /// 频谱 FFT 计算器:吃 PCM 样本,出 64 根条的目标高度。
     pub fft: SpectrumComputer,
 
-    /// 浮动 queue 当前曲目列表。
+    /// 浮动 queue 当前曲目列表(后端权威态)。
     pub queue: Vec<Song>,
-
-    /// queue 浮层是否显示。
-    pub queue_open: bool,
-
-    /// queue 浮层选中行。
-    pub queue_sel: usize,
-
-    /// queue 浮层缩放弹出/收起动画进度(纯 UI-local,逐 tick 推进,不被 server snapshot 覆盖)。
-    pub queue_anim: Transition,
-
-    /// 当前键盘焦点。
-    pub focus: Focus,
 
     /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
     pub search_mode: bool,
-
-    /// quit confirm modal 是否打开。
-    pub confirm_open: bool,
-
-    /// 与 daemon 的链路是否已断开(被单独 kill / crash)。置位后盖断连提示 modal,
-    /// 停在那等用户按键退出。
-    pub disconnected: bool,
 
     /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
     /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
@@ -177,10 +146,6 @@ pub struct AppState {
 /// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
 pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
 
-/// queue 浮层弹出/收起动画时长(tick 数)。主循环 60fps、每 tick 推进一步,
-/// 12 tick ≈ 200ms,缩放台阶足够细又不拖沓。
-const QUEUE_ANIM_TICKS: u16 = 12;
-
 impl AppState {
     /// 构造空状态。所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充。
     pub fn empty() -> Self {
@@ -201,13 +166,7 @@ impl AppState {
             spectrum: SpectrumState::new(),
             fft: SpectrumComputer::new(),
             queue: Vec::new(),
-            queue_open: false,
-            queue_sel: 0,
-            queue_anim: Transition::new(QUEUE_ANIM_TICKS),
-            focus: Focus::Left,
             search_mode: false,
-            confirm_open: false,
-            disconnected: false,
             prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),
@@ -385,11 +344,6 @@ impl AppState {
             .unwrap_or(0)
     }
 
-    /// queue 浮层光标钳到合法范围(队列变短后防越界)。空队列归 0。
-    pub fn clamp_queue_sel(&mut self) {
-        self.queue_sel = self.queue_sel.min(self.queue.len().saturating_sub(1));
-    }
-
     /// 当前在播歌在 queue 中的下标(打开浮层时把光标定位到此)。无在播曲返回 `None`。
     pub fn queue_current_index(&self) -> Option<usize> {
         let id = &self.playback.track.as_ref()?.id;
@@ -453,20 +407,5 @@ mod tests {
 
         s.playback.track = None;
         assert_eq!(s.queue_current_index(), None);
-    }
-
-    /// `clamp_queue_sel` 把越界光标钳到 `len-1`,空队列归 0。
-    #[test]
-    fn clamp_queue_sel_bounds_cursor() {
-        let mut s = AppState::empty();
-        s.queue = endserenading(3);
-        s.queue_sel = 9; // 越界
-        s.clamp_queue_sel();
-        assert_eq!(s.queue_sel, 2);
-
-        s.queue.clear();
-        s.queue_sel = 5;
-        s.clamp_queue_sel();
-        assert_eq!(s.queue_sel, 0, "空队列光标归 0");
     }
 }

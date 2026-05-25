@@ -1,128 +1,158 @@
-//! 浮动 queue 面板。
+//! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
+use crossterm::event::{KeyCode, KeyEvent};
 use mineral_model::{Song, SongId};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Row, Table, TableState};
+use ratatui::widgets::{Block, Cell, Row, Table, TableState};
 
-use crate::components::overlay::centered_rect;
+use crate::components::overlay::component::{
+    Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
+};
 use crate::playback::format_ms;
+use crate::state::AppState;
 use crate::theme::Theme;
 
-/// 缩放进度满值(千分比)。等于 [`crate::anim::Transition::ease_out`] 的满值,
-/// 到此即「完全展开」,渲染完整表格;不足则只画缩放中的空壳。
-const FULL_SCALE: u16 = 1000;
+/// queue 大跳行数(`J` / `K` 一次)。j/k/箭头仍是 1。
+const ROW_BIG_STEP: usize = 7;
 
-/// queue 浮层一次渲染所需的全部输入。
+/// 浮动 queue 浮层。
 ///
-/// 单独打包是为了让 [`draw`] 参数收敛,字段都是渲染期借用/瞬时值,非持久配置。
-pub struct QueueRender<'a> {
-    /// 队列曲目(平铺顺序)。
-    pub queue: &'a [Song],
-
-    /// 光标选中行下标。
-    pub sel: usize,
-
-    /// 当前在播歌 id(该行行首标 `▶`);无在播为 `None`。
-    pub current_id: Option<&'a SongId>,
-
-    /// 浮层是否持有键盘焦点(决定边框色)。
-    pub focused: bool,
-
-    /// 缩放弹出进度(千分比 `0..=1000`,已缓动)。`< 1000` 时只画空壳。
-    pub scale: u16,
+/// 只持有 UI-local 光标 `sel`(永不被 server snapshot 覆盖,仅 clamp 防越界);
+/// 队列曲目是后端权威态,渲染 / 导航时从 [`AppState`] 读。
+pub(crate) struct QueueOverlay {
+    /// 光标选中行下标(UI-local)。
+    sel: usize,
 }
 
-/// 渲染 queue 浮层,以 `area`(主帧区域)为参考居中,按 `render.scale` 从中心缩放弹出。
-///
-/// # Params:
-///   - `render`: 本次渲染的数据与展示态,见 [`QueueRender`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, render: &QueueRender<'_>, theme: &Theme) {
-    let base = centered_rect(area, 60, 70, 40, 12, 96, 32);
-    let panel = scale_rect(base, render.scale);
-    // 缩放初期面板太小,画不出有意义的边框,直接跳过这一帧。
-    if panel.width < 4 || panel.height < 3 {
-        return;
+impl QueueOverlay {
+    /// 新建:光标定位到 `sel`(打开浮层时通常传在播歌下标)。
+    pub(crate) fn new(sel: usize) -> Self {
+        Self { sel }
     }
 
-    frame.render_widget(Clear, panel);
-    let block = panel_block(theme, render.focused, render.sel, render.queue.len());
+    /// 把光标钳到 `[0, len-1]`(队列变短后防越界);空队列归 0。
+    pub(crate) fn clamp(&mut self, len: usize) {
+        self.sel = self.sel.min(len.saturating_sub(1));
+    }
 
-    if render.scale >= FULL_SCALE {
-        draw_table(frame, panel, block, render, theme);
-    } else {
-        // 动画途中只画空壳(边框 + 背景),不画表格 —— 避免窄尺寸下表格 reflow 抖动。
-        frame.render_widget(block, panel);
+    /// 当前光标行(供栈聚合给集成测试断言)。
+    #[cfg(test)]
+    pub(crate) fn cursor(&self) -> usize {
+        self.sel
     }
 }
 
-/// 构造浮层外框:圆角边框 + 标题 + 底部位置/导航提示。
-fn panel_block<'a>(theme: &Theme, focused: bool, sel: usize, total: usize) -> Block<'a> {
-    let border_color = if focused {
-        theme.accent
-    } else {
-        theme.surface1
-    };
-    Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border_color))
-        .style(Style::new().bg(theme.mantle))
-        .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
-        .title_bottom(Line::from(position_label(sel, total)).style(Style::new().fg(theme.overlay)))
-        .title_bottom(
-            Line::from(" ↵ play  ·  Tab/q/esc close ")
-                .right_aligned()
-                .style(Style::new().fg(theme.overlay)),
-        )
-}
+impl Overlay for QueueOverlay {
+    fn chrome(&self) -> Chrome {
+        Chrome {
+            pct_w: 60,
+            pct_h: 70,
+            min_w: 40,
+            min_h: 12,
+            max_w: 96,
+            max_h: 32,
+            animated: true,
+        }
+    }
 
-/// 完全展开态:在 `panel` 内渲染带表头的曲目表格。
-fn draw_table(
-    frame: &mut Frame<'_>,
-    panel: Rect,
-    block: Block<'_>,
-    render: &QueueRender<'_>,
-    theme: &Theme,
-) {
-    let header = Row::new(vec![
-        Cell::from("#"),
-        Cell::from("title"),
-        Cell::from("artist"),
-        Cell::from("len"),
-    ])
-    .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+        let border_color = if focused {
+            theme.accent
+        } else {
+            theme.surface1
+        };
+        base_block(theme)
+            .border_style(Style::new().fg(border_color))
+            .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
+            .title_bottom(
+                Line::from(position_label(self.sel, ctx.queue.len()))
+                    .style(Style::new().fg(theme.overlay)),
+            )
+            .title_bottom(
+                Line::from(" ↵ play  ·  Tab/q/esc close ")
+                    .right_aligned()
+                    .style(Style::new().fg(theme.overlay)),
+            )
+    }
 
-    let rows: Vec<Row<'_>> = render
-        .queue
-        .iter()
-        .enumerate()
-        .map(|(i, s)| build_row(i, s, render.current_id, theme))
-        .collect();
+    fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, ctx: &AppState, theme: &Theme) {
+        let current_id = ctx.playback.track.as_ref().map(|t| &t.id);
+        let header = Row::new(vec![
+            Cell::from("#"),
+            Cell::from("title"),
+            Cell::from("artist"),
+            Cell::from("len"),
+        ])
+        .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
-    let widths = [
-        Constraint::Length(3),
-        Constraint::Min(10),
-        Constraint::Length(16),
-        Constraint::Length(6),
-    ];
+        let rows: Vec<Row<'_>> = ctx
+            .queue
+            .iter()
+            .enumerate()
+            .map(|(i, s)| build_row(i, s, current_id, theme))
+            .collect();
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(block)
-        .row_highlight_style(
-            Style::new()
-                .bg(theme.surface0)
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▌ ");
+        let widths = [
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(16),
+            Constraint::Length(6),
+        ];
 
-    let mut state = TableState::default();
-    state.select(Some(render.sel));
-    frame.render_stateful_widget(table, panel, &mut state);
+        let table = Table::new(rows, widths)
+            .header(header)
+            .row_highlight_style(
+                Style::new()
+                    .bg(theme.surface0)
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌ ");
+
+        let mut state = TableState::default();
+        state.select(Some(self.sel));
+        frame.render_stateful_widget(table, inner, &mut state);
+    }
+
+    fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
+        let len = ctx.queue.len();
+        let max = len.saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.sel = self.sel.saturating_add(1).min(max);
+                OverlayResponse::Consumed
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.sel = self.sel.saturating_sub(1);
+                OverlayResponse::Consumed
+            }
+            KeyCode::Char('J') => {
+                self.sel = self.sel.saturating_add(ROW_BIG_STEP).min(max);
+                OverlayResponse::Consumed
+            }
+            KeyCode::Char('K') => {
+                self.sel = self.sel.saturating_sub(ROW_BIG_STEP);
+                OverlayResponse::Consumed
+            }
+            KeyCode::Char('g') => {
+                self.sel = 0;
+                OverlayResponse::Consumed
+            }
+            KeyCode::Char('G') => {
+                self.sel = max;
+                OverlayResponse::Consumed
+            }
+            KeyCode::Enter => OverlayResponse::Do(OverlayAction::PlayQueueIndex(self.sel)),
+            KeyCode::Tab | KeyCode::Char('q') | KeyCode::Esc => {
+                OverlayResponse::Do(OverlayAction::CloseTop)
+            }
+            // 其余(空格 / m / ±/ ←→ / p / n / t)半穿透给全局键:queue 打开时仍可控播放、切歌词。
+            _ => OverlayResponse::Pass,
+        }
+    }
 }
 
 /// 把一首歌组成 queue 表格的一行。
@@ -171,65 +201,60 @@ fn position_label(sel: usize, total: usize) -> String {
     }
 }
 
-/// 以 `base` 中心为锚,按 `scale`(千分比 `0..=1000`)缩放出实际面板矩形。
-fn scale_rect(base: Rect, scale: u16) -> Rect {
-    let w = scaled_dim(base.width, scale);
-    let h = scaled_dim(base.height, scale);
-    let cx = base.x + base.width / 2;
-    let cy = base.y + base.height / 2;
-    let x = cx.saturating_sub(w / 2);
-    let y = cy.saturating_sub(h / 2);
-    Rect::new(x, y, w, h)
-}
-
-/// 把一个维度按千分比缩放,纯整数定点(避免浮点强转)。
-fn scaled_dim(dim: u16, scale: u16) -> u16 {
-    let v = u32::from(dim) * u32::from(scale) / u32::from(FULL_SCALE);
-    u16::try_from(v).unwrap_or(dim)
-}
-
 #[cfg(test)]
 mod tests {
-    use mineral_model::{SongId, SourceKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::QueueRender;
+    use super::QueueOverlay;
+    use crate::components::overlay::component::{
+        Overlay, OverlayAction, OverlayResponse, render_overlay,
+    };
+    use crate::state::AppState;
     use crate::test_support::endserenading;
     use crate::theme::Theme;
+
+    /// 造一个填了队列的 [`AppState`],并把在播歌设为下标 `current`(None 表示无在播)。
+    fn ctx_with_queue(len: usize, current: Option<usize>) -> AppState {
+        let mut s = AppState::empty();
+        let queue = endserenading(len);
+        s.playback.track = current.and_then(|i| queue.get(i).cloned());
+        s.queue = queue;
+        s
+    }
 
     /// 空 queue,完全展开。
     #[test]
     fn queue_empty_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let render = QueueRender {
-            queue: &[],
-            sel: 0,
-            current_id: None,
-            focused: true,
-            scale: 1000,
-        };
-        t.draw(|f| super::draw(f, f.area(), &render, &Theme::default()))?;
+        let ctx = AppState::empty();
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(
+                f,
+                f.area(),
+                &overlay,
+                /*scale*/ 1000,
+                /*focused*/ true,
+                &ctx,
+                &Theme::default(),
+            );
+        })?;
         crate::test_support::assert_snap!("队列浮层:空队列", t.backend());
         Ok(())
     }
 
-    /// EndSerenading 前 3 曲 + 当前在播标记(Palisade)+ 聚焦,完全展开。
+    /// EndSerenading 前 3 曲 + 当前在播标记(下标 1)+ 聚焦,完全展开。
     #[test]
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let songs = endserenading(3);
-        let current = SongId::new(SourceKind::NETEASE, "2");
-        let render = QueueRender {
-            queue: &songs,
-            sel: 0,
-            current_id: Some(&current),
-            focused: true,
-            scale: 1000,
-        };
-        t.draw(|f| super::draw(f, f.area(), &render, &Theme::default()))?;
+        let ctx = ctx_with_queue(3, Some(1));
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
         crate::test_support::assert_snap!(
-            "队列浮层:EndSerenading 前 3 曲,Palisade 当前在播(▶)+ 聚焦",
+            "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦",
             t.backend()
         );
         Ok(())
@@ -239,16 +264,86 @@ mod tests {
     #[test]
     fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let songs = endserenading(3);
-        let render = QueueRender {
-            queue: &songs,
-            sel: 0,
-            current_id: None,
-            focused: true,
-            scale: 500,
-        };
-        t.draw(|f| super::draw(f, f.area(), &render, &Theme::default()))?;
+        let ctx = ctx_with_queue(3, None);
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(
+                f,
+                f.area(),
+                &overlay,
+                /*scale*/ 500,
+                true,
+                &ctx,
+                &Theme::default(),
+            );
+        })?;
         crate::test_support::assert_snap!("队列浮层:弹出动画半程(scale=500)空壳", t.backend());
         Ok(())
+    }
+
+    /// 弹出动画 scale=510:宽高都落在非整 cell,四条边各有 1/8 块过渡(上/下沿下八分块、
+    /// 左/右沿左八分块、角点垂直近似),验证双轴平滑。
+    #[test]
+    fn queue_smooth_both_axes_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        let ctx = ctx_with_queue(3, None);
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(
+                f,
+                f.area(),
+                &overlay,
+                /*scale*/ 510,
+                true,
+                &ctx,
+                &Theme::default(),
+            );
+        })?;
+        crate::test_support::assert_snap!("队列浮层:弹出动画 scale=510 双轴 1/8 平滑", t.backend());
+        Ok(())
+    }
+
+    /// `clamp` 把越界光标钳到 `len-1`,空队列归 0。
+    #[test]
+    fn clamp_bounds_cursor() {
+        let mut o = QueueOverlay::new(9);
+        o.clamp(3);
+        assert_eq!(o.cursor(), 2);
+        o.clamp(0);
+        assert_eq!(o.cursor(), 0, "空队列光标归 0");
+    }
+
+    /// `on_key` 导航:j/k/g/G 移动光标并 `Consumed`;Enter 产出 `PlayQueueIndex`;
+    /// Tab/q/Esc 产出 `CloseTop`;空格 / t 半穿透 `Pass`。
+    #[test]
+    fn on_key_navigates_and_emits_actions() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let ctx = ctx_with_queue(6, None);
+        let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::empty());
+        let mut o = QueueOverlay::new(0);
+
+        assert!(matches!(
+            o.on_key(&key(KeyCode::Char('G')), &ctx),
+            OverlayResponse::Consumed
+        ));
+        assert_eq!(o.cursor(), 5, "G 跳末行");
+        assert!(matches!(
+            o.on_key(&key(KeyCode::Char('k')), &ctx),
+            OverlayResponse::Consumed
+        ));
+        assert_eq!(o.cursor(), 4);
+
+        assert!(matches!(
+            o.on_key(&key(KeyCode::Enter), &ctx),
+            OverlayResponse::Do(OverlayAction::PlayQueueIndex(4))
+        ));
+        assert!(matches!(
+            o.on_key(&key(KeyCode::Esc), &ctx),
+            OverlayResponse::Do(OverlayAction::CloseTop)
+        ));
+        assert!(matches!(
+            o.on_key(&key(KeyCode::Char(' ')), &ctx),
+            OverlayResponse::Pass
+        ));
     }
 }
