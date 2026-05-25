@@ -50,14 +50,54 @@ fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
 /// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
 /// 启动失败(如凭证解析失败)也能在日志里查到。
 fn run_daemon() -> color_eyre::Result<()> {
-    let result = build_channels().and_then(|channels| {
-        let runtime = named_runtime("mineral-daemon-rt")?;
-        runtime.block_on(mineral_cli::serve_run(channels))
+    let runtime = named_runtime("mineral-daemon-rt")?;
+    let result = runtime.block_on(async {
+        let persist = open_persist().await;
+        let channels = build_channels(persist.clone())?;
+        mineral_cli::serve_run(channels, persist).await
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
     }
     result
+}
+
+/// 打开持久化数据库;失败降级为 disabled(warn,不阻断 daemon)。
+///
+/// # Return:
+///   成功返回启用的句柄,失败或路径解析错误返回 disabled 句柄。
+async fn open_persist() -> mineral_persist::Persist {
+    match mineral_paths::data_dir() {
+        Ok(dir) => {
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                mineral_log::warn!(
+                    target: "daemon",
+                    error = mineral_log::chain(&e),
+                    "建数据目录失败,持久化降级"
+                );
+                return mineral_persist::Persist::disabled();
+            }
+            match mineral_persist::Persist::open(&dir.join("mineral.db")).await {
+                Ok(p) => p,
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "daemon",
+                        error = mineral_log::chain(&e),
+                        "打开持久化数据库失败,降级 disabled"
+                    );
+                    mineral_persist::Persist::disabled()
+                }
+            }
+        }
+        Err(e) => {
+            mineral_log::warn!(
+                target: "daemon",
+                error = mineral_log::chain(&e),
+                "定位数据目录失败,持久化降级"
+            );
+            mineral_persist::Persist::disabled()
+        }
+    }
 }
 
 /// 起 TUI:in-proc 模式自己 build channels;Auto / Connect 跳过(daemon 进程自己持有)。
@@ -73,20 +113,30 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
     };
     // 只有 in-proc 模式 client 与 server 同进程,需要本地 channels;Auto / Connect 下
     // channels 由独立 daemon 进程持有,省去 build_channels 也省去重复读凭证。
-    let channels = match launch {
-        Launch::InProc => build_channels()?,
-        Launch::Auto | Launch::Connect => Vec::new(),
+    // in-proc 模式下持久化降级为 disabled:调试路径无需落盘。
+    let (channels, persist) = match launch {
+        Launch::InProc => {
+            let p = mineral_persist::Persist::disabled();
+            let ch = build_channels(p.clone())?;
+            (ch, p)
+        }
+        Launch::Auto | Launch::Connect => (Vec::new(), mineral_persist::Persist::disabled()),
     };
-    mineral_tui::run(channels, launch).await
+    mineral_tui::run(channels, launch, persist).await
 }
 
 /// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。
 ///
 /// **单个 channel 失败不阻塞**:某源构建失败(如凭证损坏)只 warn + 跳过,不拖垮其他源
 /// 或 daemon;空 channels 也是合法状态(没登录任何源),由 TUI 空状态提示兜。
-fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
+///
+/// # Params:
+///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
+fn build_channels(
+    persist: mineral_persist::Persist,
+) -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
-    match build_netease() {
+    match build_netease(persist) {
         Ok(Some(c)) => channels.push(c),
         Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),
         Err(e) => mineral_log::warn!(
@@ -101,13 +151,22 @@ fn build_channels() -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
 }
 
 /// 读本地凭证 → 构造 [`NeteaseChannel`];没凭证返回 `Ok(None)`(尚未登录,正常)。
-fn build_netease() -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
+///
+/// # Params:
+///   - `persist`: 持久化句柄,传入 channel 供登录状态/统计落盘使用。
+fn build_netease(
+    persist: mineral_persist::Persist,
+) -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
     let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
         return Ok(None);
     };
-    let channel =
-        NeteaseChannel::with_credential(&NeteaseConfig::default(), &auth.music_u, auth.user_id)
-            .wrap_err("构造 NeteaseChannel 失败")?;
+    let channel = NeteaseChannel::with_credential(
+        &NeteaseConfig::default(),
+        &auth.music_u,
+        auth.user_id,
+        persist,
+    )
+    .wrap_err("构造 NeteaseChannel 失败")?;
     let arc: Arc<dyn MusicChannel> = Arc::new(channel);
     Ok(Some(arc))
 }

@@ -1,0 +1,8 @@
+---
+source: crates/mineral-tui/src/download_toast.rs
+description: "下载完成提示:✓3 ⊙2 ✗1(真下载/已存在/失败)"
+expression: t.backend()
+---
+"                   [ 下载完成 ✓3 ⊙2 ✗1 ]                    " Hidden by multi-width symbols: [(22, " "), (24, " "), (26, " "), (28, " ")]
+"                                                            "
+"                                                            "

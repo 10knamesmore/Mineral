@@ -4,8 +4,8 @@ use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
 use mineral_model::{BitRate, MediaUrl, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, framed, recv,
-    send,
+    CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, SongStatsWire,
+    framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use mineral_test::song;
@@ -122,6 +122,7 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         volume_pct: 77,
         track_finished_seq: 3,
         backend: mineral_audio::AudioBackend::Null,
+        download_complete: false,
     };
     send(&mut sender, &Response::AudioSnapshot(snap)).await?;
     let got: Response = recv(&mut receiver)
@@ -208,6 +209,28 @@ async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// love / 统计相关 Request 与 Response 的 round-trip。
+#[tokio::test]
+async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
+    req_round_trips(Request::ToggleLove(SongId::new(SourceKind::NETEASE, "123"))).await?;
+    req_round_trips(Request::QuerySongStats(SongId::new(
+        SourceKind::NETEASE,
+        "123",
+    )))
+    .await?;
+    resp_round_trips(Response::LoveToggled(true)).await?;
+    resp_round_trips(Response::SongStats(Some(SongStatsWire {
+        play_count: 3,
+        skip_count: 1,
+        total_listen_ms: 500_000,
+        last_played_at: Some(1_700_000_000_000),
+        loved: true,
+    })))
+    .await?;
+    resp_round_trips(Response::SongStats(None)).await?;
+    Ok(())
+}
+
 /// Response variant 的 round-trip:Ok / TaskId / TaskEvents / TaskSnapshot / PcmData。
 #[tokio::test]
 async fn round_trip_responses() -> color_eyre::Result<()> {
@@ -278,6 +301,12 @@ mod proptests {
                     target_id: SongId::new(SourceKind::NETEASE, target.as_str()),
                 }
             }),
+            any::<String>()
+                .prop_map(|s| Request::ToggleLove(SongId::new(SourceKind::NETEASE, s.as_str()))),
+            any::<String>().prop_map(|s| Request::QuerySongStats(SongId::new(
+                SourceKind::NETEASE,
+                s.as_str()
+            ))),
         ]
     }
 

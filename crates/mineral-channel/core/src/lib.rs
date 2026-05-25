@@ -97,4 +97,29 @@ pub trait MusicChannel: Send + Sync {
     async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
         Err(Error::NotSupported)
     }
+
+    /// 设置 / 取消一首歌的喜欢(♥)。
+    ///
+    /// 命令透传由 channel 自行决定:本地 channel 只写持久化;网易云既写持久化、
+    /// 又打远端红心接口。channel 不支持 / 未登录时返回 [`Error::NotSupported`]。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲
+    ///   - `loved`: `true` 喜欢、`false` 取消
+    async fn set_loved(&self, _id: &SongId, _loved: bool) -> Result<()> {
+        Err(Error::NotSupported)
+    }
+
+    /// 播放打点(fire-and-forget 语义):一首歌完整播完或被跳过时上报。
+    ///
+    /// channel 据此累计本地统计(播放次数 / 跳过 / 收听时长 / 历史),也可顺手做
+    /// 远端听歌打卡。默认 no-op(返回 `Ok`),不支持的 channel 静默忽略。
+    ///
+    /// # Params:
+    ///   - `id`: 歌曲
+    ///   - `completed`: 是否完整播完(`false` = 被跳过)
+    ///   - `listen_ms`: 本次收听毫秒
+    async fn on_played(&self, _id: &SongId, _completed: bool, _listen_ms: u64) -> Result<()> {
+        Ok(())
+    }
 }

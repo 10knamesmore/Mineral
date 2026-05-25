@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
-use mineral_protocol::{CancelFilter, PlayerSnapshot};
+use mineral_protocol::{CancelFilter, PlayerSnapshot, SongStatsWire};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use ratatui_image::picker::Picker;
@@ -173,6 +173,20 @@ impl Client for TestClient {
     fn pull_pcm(&self, _n: usize) -> (Vec<f32>, u32) {
         (Vec::new(), 0)
     }
+
+    fn toggle_love(&self, _id: SongId) -> bool {
+        false
+    }
+
+    fn query_song_stats(&self, _id: SongId) -> Option<SongStatsWire> {
+        None
+    }
+
+    fn download(&self, _target: mineral_protocol::DownloadTarget) {}
+
+    fn download_progress(&self) -> mineral_protocol::DownloadProgress {
+        mineral_protocol::DownloadProgress::default()
+    }
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
@@ -187,5 +201,40 @@ pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
     app.state.playback.track = queue.get(current_idx).cloned();
     app.state.current = queue.get(current_idx).cloned();
     app.state.queue = queue;
+    app
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:Library 视图,填《EndSerenading》前 `len`
+/// 首到歌单 `"p1"`,选中第 `sel_track` 首(从 0 起)。同步构造,不需 tokio runtime。
+pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
+    let mut app = App::new(
+        Arc::new(TestClient),
+        CoverFetcher::disabled(),
+        Picker::from_fontsize((8, 16)),
+    );
+    let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    app.state.playlists = vec![PlaylistView {
+        data: Playlist {
+            id: pid.clone(),
+            name: "EndSerenading".to_owned(),
+            description: String::new(),
+            cover_url: None,
+            track_count: u64::try_from(len).unwrap_or(0),
+            songs: Vec::new(),
+        },
+    }];
+    let tracks = endserenading(len);
+    let views = tracks
+        .iter()
+        .map(|t| SongView {
+            data: t.clone(),
+            loved: false,
+            plays: 0,
+        })
+        .collect::<Vec<SongView>>();
+    app.state.tracks_cache.insert(pid, views);
+    app.state.view = View::Library;
+    app.state.sel_playlist = 0;
+    app.state.sel_track = sel_track;
     app
 }

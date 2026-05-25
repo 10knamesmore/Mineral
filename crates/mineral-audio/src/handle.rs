@@ -138,7 +138,21 @@ impl AudioHandle {
 
     /// 切到这个 URL,从头播。已有曲目会被立刻打断。
     pub fn play(&self, url: MediaUrl) {
-        self.send(AudioCommand::Play(url));
+        self.send(AudioCommand::Play { url, capture: None });
+    }
+
+    /// 同 [`Self::play`],但把下载的字节捕获到 `capture` 路径(供播完后入缓存)。
+    ///
+    /// 仅对 `Remote` 有意义;`Local` 时 `capture` 被忽略。
+    ///
+    /// # Params:
+    ///   - `url`: 播放源
+    ///   - `capture`: 捕获落盘路径
+    pub fn play_capturing(&self, url: MediaUrl, capture: std::path::PathBuf) {
+        self.send(AudioCommand::Play {
+            url,
+            capture: Some(capture),
+        });
     }
 
     /// 暂停。

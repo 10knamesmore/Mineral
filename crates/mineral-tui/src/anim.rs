@@ -47,6 +47,20 @@ impl Transition {
         }
     }
 
+    /// 构造一个**完全收起**(零)、即将展开的过渡:[`Self::tick`] 把进度从 `0` 推向满值。
+    /// 用于整屏启动扩大等「从零开始展开」的场景(配合 [`Self::eased`] 得到加速铺开感),
+    /// 与 [`Self::collapsing`] 反向对称。
+    ///
+    /// # Params:
+    ///   - `ticks`: 从 `0` 走到满值所需的 tick 数(决定时长)。
+    pub fn expanding(ticks: u16) -> Self {
+        Self {
+            progress: 0,
+            target: FULL,
+            step: FULL.div_ceil(ticks.max(1)),
+        }
+    }
+
     /// 开始进场:目标置满,后续 [`Self::tick`] 把进度推向满值。
     pub fn enter(&mut self) {
         self.target = FULL;
@@ -77,6 +91,22 @@ impl Transition {
         self.target == 0
     }
 
+    /// 进度是否已抵达目标(转场收尾)。进场 settled 于满值、退场 settled 于 `0`;
+    /// 整屏转场据此判定「动画放完」——区别于 [`Self::active`](进场到顶后仍 active)。
+    pub fn settled(&self) -> bool {
+        self.progress == self.target
+    }
+
+    /// 进度处于起点(`0`)。视图过渡据此退化为「起始视图」,免去离屏合成开销。
+    pub fn at_min(&self) -> bool {
+        self.progress == 0
+    }
+
+    /// 进度处于满值终点。视图过渡据此退化为「目标视图」。
+    pub fn at_max(&self) -> bool {
+        self.progress == FULL
+    }
+
     /// 当前进度经 cubic ease-out 映射后的值,千分比 `0..=1000`。快进慢出,**无回弹/
     /// 过冲**;进场退场同一条曲线(进度单调 → 值单调),不会超过满值。
     pub fn eased(&self) -> u16 {
@@ -84,6 +114,25 @@ impl Transition {
         let inv = u32::from(FULL - self.progress);
         let cube = inv * inv * inv / (u32::from(FULL) * u32::from(FULL));
         u16::try_from(u32::from(FULL) - cube).unwrap_or(FULL)
+    }
+
+    /// 当前进度经 cubic **ease-in-out** 映射后的值,千分比 `0..=1000`。关于中点对称:
+    /// 两端减速、中段快。区别于 [`Self::eased`](单向 ease-out)——它对进度**增减两个
+    /// 方向都"减速到位"**,故左右 sweep 来回切换体感一致、无结尾冲刺。仍是进度的固定
+    /// 函数,打断反向时值连续不跳变。
+    pub fn eased_in_out(&self) -> u16 {
+        let p = u32::from(self.progress);
+        let full = u32::from(FULL);
+        let half = full / 2;
+        // p<半: 4p³;p≥半: 1 - (2-2p)³/2(归一化后)。全程 u32 定点:
+        // 4p³ < 4·500³ = 5e8、(2·FULL)³ 段 t³ ≤ 1e9,均不溢出。
+        let v = if p < half {
+            4 * p * p * p / (full * full)
+        } else {
+            let t = 2 * full - 2 * p; // 0..=FULL
+            full - t * t * t / (2 * full * full)
+        };
+        u16::try_from(v).unwrap_or(FULL)
     }
 }
 
@@ -139,5 +188,68 @@ mod tests {
         }
         assert_eq!(t.eased(), 0);
         assert!(!t.active());
+    }
+
+    /// 启动扩大:从 0 单调升到满值,非退场;到顶后 `settled`、缓动值为满。
+    #[test]
+    fn expanding_rises_to_full_not_leaving() {
+        let mut t = Transition::expanding(4);
+        assert!(!t.leaving(), "扩大是进场,不应判为 leaving");
+        assert!(!t.settled(), "起步未到目标");
+        assert_eq!(t.eased(), 0);
+        let mut prev = 0;
+        for _ in 0..4 {
+            t.tick();
+            let v = t.eased();
+            assert!(v >= prev, "expected monotonic rise: {v} >= {prev}");
+            assert!(v <= FULL, "must not overshoot past full: {v}");
+            prev = v;
+        }
+        assert!(t.settled(), "推满后应 settled");
+        assert_eq!(t.eased(), FULL);
+    }
+
+    /// ease-in-out:过端点(0/满)与中点(满/2),关于中点对称,且单调不过冲。
+    #[test]
+    fn eased_in_out_symmetric_and_monotonic() {
+        let mut t = Transition::new(FULL); // step=1,progress 可逐点走
+        t.enter();
+        assert_eq!(t.eased_in_out(), 0, "起点");
+        let mut prev = 0;
+        let mut samples = Vec::<u16>::new();
+        for _ in 0..FULL {
+            t.tick();
+            let v = t.eased_in_out();
+            assert!(v >= prev, "单调不降: {v} >= {prev}");
+            assert!(v <= FULL, "不过冲: {v}");
+            prev = v;
+            samples.push(v);
+        }
+        assert_eq!(t.eased_in_out(), FULL, "终点到满");
+        // 中点对称:f(p) + f(FULL-p) ≈ FULL(定点除法允许 ±2 误差)。
+        if let (Some(&lo), Some(&hi)) = (
+            samples.get(usize::from(FULL / 4 - 1)),
+            samples.get(usize::from(FULL - FULL / 4 - 1)),
+        ) {
+            let sum = u32::from(lo) + u32::from(hi);
+            assert!(
+                sum.abs_diff(u32::from(FULL)) <= 2,
+                "应关于中点对称: {lo} + {hi} ≈ {FULL}"
+            );
+        }
+    }
+
+    /// 退出收缩:从满值收到 0,是退场;到底后 `settled`、缓动值为 0。
+    #[test]
+    fn collapsing_settles_at_zero() {
+        let mut t = Transition::collapsing(4);
+        assert!(t.leaving(), "收缩是退场");
+        assert!(!t.settled(), "起步未到目标");
+        for _ in 0..4 {
+            t.tick();
+        }
+        assert!(t.settled(), "收到底后应 settled");
+        assert!(t.leaving());
+        assert_eq!(t.eased(), 0);
     }
 }

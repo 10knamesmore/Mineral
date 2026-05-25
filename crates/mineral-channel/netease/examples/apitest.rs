@@ -14,9 +14,14 @@
 //!
 //! 跑法(用 `cargo apitest` alias):
 //! ```bash
-//! cargo apitest                          # 只跑无登录部分
-//! NETEASE_MUSIC_U=<浏览器 cookie> cargo apitest   # 同时跑登录态用例
+//! cargo apitest                          # 优先用本地 netease.json 凭证,无则匿名
+//! NETEASE_MUSIC_U=<cookie> cargo apitest  # 无本地 json 时用 env 注入 cookie
 //! ```
+//!
+//! 凭证三级 fallback:
+//!   1. 本地 netease.json(完整凭证,带 uid)
+//!   2. 环境变量 NETEASE_MUSIC_U(只有 cookie,无 uid)
+//!   3. 匿名(无凭证)
 //!
 //! 输出形如:
 //! ```text
@@ -32,7 +37,7 @@
 //! [✓] lyrics                 ↳ lrc=Some, yrc=Some
 //!
 //! === 3. 登录态 ===
-//! (跳过:未设 NETEASE_MUSIC_U)
+//! (跳过:无登录凭证)
 //!
 //! === Summary === 7/7 passed
 //! ```
@@ -42,6 +47,7 @@
 use std::io::Write;
 
 use mineral_channel_core::{Credential, MusicChannel, Page};
+use mineral_channel_netease::credential::load_stored;
 use mineral_channel_netease::transport::client::RequestSpec;
 use mineral_channel_netease::transport::headers::UaKind;
 use mineral_channel_netease::transport::url::Crypto;
@@ -49,17 +55,61 @@ use mineral_channel_netease::{NeteaseChannel, NeteaseConfig};
 use mineral_model::{BitRate, MediaUrl};
 use serde_json::json;
 
+/// 凭证来源,用于决定 section 3/4 的行为。
+enum CredLevel {
+    /// 本地 netease.json,带 uid。
+    StoredJson,
+    /// 环境变量 NETEASE_MUSIC_U,无 uid。
+    EnvCookie,
+    /// 匿名,无任何凭证。
+    Anonymous,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> color_eyre::Result<()> {
-    let cookie = std::env::var("NETEASE_MUSIC_U").ok();
+    color_eyre::install().ok();
 
-    let ch = match cookie.as_deref() {
-        Some(c) if !c.is_empty() => {
-            println!("(NETEASE_MUSIC_U 已设置,会跑登录态用例)\n");
-            NeteaseChannel::with_cookie(&NeteaseConfig::default(), c)?
+    // --- 凭证三级 fallback ---
+    let (ch, cred_level) = {
+        // 1. 本地 netease.json
+        if let Some(auth) = load_stored()? {
+            println!("凭证: 本地 netease.json (uid={})\n", auth.user_id.as_str());
+            let ch = NeteaseChannel::with_credential(
+                &NeteaseConfig::default(),
+                &auth.music_u,
+                auth.user_id,
+                mineral_persist::Persist::disabled(),
+            )?;
+            (ch, CredLevel::StoredJson)
+        } else {
+            let env_cookie = std::env::var("NETEASE_MUSIC_U").ok();
+            match env_cookie.as_deref() {
+                // 2. 环境变量
+                Some(c) if !c.is_empty() => {
+                    println!("凭证: 环境变量 NETEASE_MUSIC_U\n");
+                    let ch = NeteaseChannel::with_cookie(
+                        &NeteaseConfig::default(),
+                        c,
+                        mineral_persist::Persist::disabled(),
+                    )?;
+                    (ch, CredLevel::EnvCookie)
+                }
+                // 3. 匿名
+                _ => {
+                    println!("凭证: 无(匿名)\n");
+                    let ch = NeteaseChannel::new(
+                        &NeteaseConfig::default(),
+                        mineral_persist::Persist::disabled(),
+                    )?;
+                    (ch, CredLevel::Anonymous)
+                }
+            }
         }
-        _ => NeteaseChannel::new(&NeteaseConfig::default())?,
     };
+
+    let has_cookie = !matches!(cred_level, CredLevel::Anonymous);
+    let has_uid = matches!(cred_level, CredLevel::StoredJson);
+
     let mut report: Vec<(String, std::result::Result<String, String>)> = Vec::new();
 
     // ---------------- 1. 无登录联调 ----------------
@@ -200,11 +250,12 @@ async fn main() -> color_eyre::Result<()> {
 
     // ---------------- 3. 登录态 ----------------
     println!("\n=== 3. 登录态 ===");
-    if cookie.as_deref().filter(|c| !c.is_empty()).is_none() {
-        println!("(跳过:未设 NETEASE_MUSIC_U)");
+    if !has_cookie {
+        println!("(跳过:无登录凭证)");
     } else {
+        let env_cookie = std::env::var("NETEASE_MUSIC_U").ok();
         let r = run("login (token refresh)", async {
-            ch.login(Credential::Cookie(cookie.clone().unwrap()))
+            ch.login(Credential::Cookie(env_cookie.clone().unwrap_or_default()))
                 .await?;
             Ok("refreshed".into())
         })
@@ -281,6 +332,14 @@ async fn main() -> color_eyre::Result<()> {
         }
     }
 
+    // ---------------- 4. Endserenading 歌单原始 JSON ----------------
+    println!("\n=== 4. Endserenading 歌单原始 JSON ===");
+    run_section4_endserenading(&ch, has_uid, &mut report).await?;
+
+    // ---------------- 5. limit=0 探测(B 方案轻量请求前提)----------------
+    println!("\n=== 5. limit=0 探测(对比 tracks 数 / body 大小)===");
+    probe_limit_zero(&ch, &mut report).await?;
+
     // ---------------- Summary ----------------
     let total = report.len();
     let pass = report.iter().filter(|(_, r)| r.is_ok()).count();
@@ -294,6 +353,183 @@ async fn main() -> color_eyre::Result<()> {
     if pass < total {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// 写死的 "Endserenading" 歌单 id(用户自己的私有歌单,基本不动)。
+///
+/// 运行时**直接 ping 这个固定 id**,不查本地 DB、不拉 `my_playlists` 列表
+/// (那样会依赖特定用户/运行时状态,别人跑就全 fail)。来源:
+/// `https://music.163.com/#/playlist?id=8411923778`。
+const ENDSERENADING_PLAYLIST_ID: &str = "8411923778";
+
+/// 探测用的公开歌单(网易云飙升榜,100 首,无需登录),用于对比 limit=0 vs limit=1000。
+const PROBE_PUBLIC_PLAYLIST_ID: &str = "19723756";
+
+/// 探测 `limit=0` 是否省掉 `tracks` 大头(B 方案"轻量版本请求"的前提)。
+///
+/// 对同一公开歌单分别用 `limit=0` / `limit=1000` 打 `/api/v6/playlist/detail`,
+/// 打印各自的 `tracks` 数、`trackIds` 数、`trackUpdateTime`、body 字节数。
+/// 判读:若 `limit=0` 那行 `tracks=0` 且 `trackIds` 仍全量、body 远小于 `limit=1000`,
+/// 则 `limit=0` 有效(轻请求确实省掉了完整曲目大头)。
+///
+/// # Params:
+///   - `ch`: 网易云 channel
+///   - `report`: 汇总表
+async fn probe_limit_zero(
+    ch: &NeteaseChannel,
+    report: &mut Vec<(String, std::result::Result<String, String>)>,
+) -> color_eyre::Result<()> {
+    for limit in ["0", "1000"] {
+        let mut p = serde_json::Map::new();
+        p.insert("id".into(), json!(PROBE_PUBLIC_PLAYLIST_ID));
+        p.insert("offset".into(), json!("0"));
+        p.insert("total".into(), json!("true"));
+        p.insert("limit".into(), json!(limit));
+        p.insert("n".into(), json!(limit));
+        let (code, body) = ch
+            .transport()
+            .ping(RequestSpec {
+                path: "/api/v6/playlist/detail",
+                crypto: Crypto::Linuxapi,
+                params: p,
+                ua: UaKind::Linux,
+            })
+            .await?;
+        let label = format!("probe limit={limit}");
+        if code != 200 {
+            let msg = format!("code={code}");
+            println!("[✗] {label:<20}  {msg}");
+            report.push((label, Err(msg)));
+            continue;
+        }
+        let playlist = body.get("playlist");
+        let arr_len = |key: &str| {
+            playlist
+                .and_then(|x| x.get(key))
+                .and_then(|x| x.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        };
+        let tut = playlist
+            .and_then(|x| x.get("trackUpdateTime"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(-1);
+        let detail = format!(
+            "tracks={}, trackIds={}, trackUpdateTime={tut}, body={}B",
+            arr_len("tracks"),
+            arr_len("trackIds"),
+            body.to_string().len()
+        );
+        println!("[✓] {label:<20}  {detail}");
+        report.push((label, Ok(detail)));
+    }
+    println!(
+        "→ 若 limit=0 那行 tracks=0 且 trackIds 仍全量、body 远小于 limit=1000,则 limit=0 有效(省 tracks)"
+    );
+    Ok(())
+}
+
+/// Section 4:对写死的 Endserenading 歌单打 playlist detail + 第一首 song detail,
+/// 各自 print 完整原始 JSON。私有歌单需登录凭证(带 uid)。
+async fn run_section4_endserenading(
+    ch: &NeteaseChannel,
+    has_uid: bool,
+    report: &mut Vec<(String, std::result::Result<String, String>)>,
+) -> color_eyre::Result<()> {
+    if !has_uid {
+        println!("(跳过:需登录凭证——Endserenading 是私有歌单)");
+        return Ok(());
+    }
+
+    // --- playlist detail 原始 JSON(写死 id,运行时不碰 DB)---
+    let mut p = serde_json::Map::new();
+    p.insert("id".into(), json!(ENDSERENADING_PLAYLIST_ID));
+    p.insert("offset".into(), json!("0"));
+    p.insert("total".into(), json!("true"));
+    p.insert("limit".into(), json!("1000"));
+    p.insert("n".into(), json!("1000"));
+    let (code, body) = ch
+        .transport()
+        .ping(RequestSpec {
+            path: "/api/v6/playlist/detail",
+            crypto: Crypto::Linuxapi,
+            params: p,
+            ua: UaKind::Linux,
+        })
+        .await?;
+    if code != 200 {
+        let msg = format!("code={code}, body={}", truncate(&body.to_string()));
+        println!("[✗] Endserenading: playlist_detail_v6  {msg}");
+        report.push(("Endserenading: playlist_detail_v6".into(), Err(msg)));
+        return Ok(());
+    }
+    println!("\n--- playlist detail 原始 JSON ---");
+    println!("{}", serde_json::to_string_pretty(&body)?);
+    let track_count = body
+        .get("playlist")
+        .and_then(|x| x.get("trackCount"))
+        .and_then(|x| x.as_i64())
+        .unwrap_or(-1);
+    report.push((
+        "Endserenading: playlist_detail_v6".into(),
+        Ok(format!("trackCount={track_count}")),
+    ));
+
+    // --- 取第一首歌 id(trackIds[0].id,退路 tracks[0].id)---
+    let first_song_id = body
+        .get("playlist")
+        .and_then(|x| x.get("trackIds"))
+        .and_then(|x| x.as_array())
+        .and_then(|a| a.first())
+        .and_then(|x| x.get("id"))
+        .and_then(|x| x.as_i64())
+        .or_else(|| {
+            body.get("playlist")
+                .and_then(|x| x.get("tracks"))
+                .and_then(|x| x.as_array())
+                .and_then(|a| a.first())
+                .and_then(|x| x.get("id"))
+                .and_then(|x| x.as_i64())
+        })
+        .map(|id| id.to_string());
+
+    // --- 第一首 song detail 原始 JSON ---
+    let Some(sid) = first_song_id else {
+        println!("(未能取到第一首歌 id,跳过 song detail)");
+        return Ok(());
+    };
+    let c = vec![json!({ "id": sid })];
+    let mut p = serde_json::Map::new();
+    p.insert("c".into(), json!(serde_json::to_string(&c)?));
+    let (code, body) = ch
+        .transport()
+        .ping(RequestSpec {
+            path: "/weapi/v3/song/detail",
+            crypto: Crypto::Weapi,
+            params: p,
+            ua: UaKind::Any,
+        })
+        .await?;
+    if code != 200 {
+        let msg = format!("code={code}, body={}", truncate(&body.to_string()));
+        println!("[✗] Endserenading: song_detail_v3  {msg}");
+        report.push(("Endserenading: song_detail_v3".into(), Err(msg)));
+        return Ok(());
+    }
+    println!("\n--- 第一首 song detail 原始 JSON ---");
+    println!("{}", serde_json::to_string_pretty(&body)?);
+    let name = body
+        .get("songs")
+        .and_then(|x| x.as_array())
+        .and_then(|a| a.first())
+        .and_then(|s| s.get("name"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("?");
+    report.push((
+        "Endserenading: song_detail_v3".into(),
+        Ok(format!("name=\"{name}\"")),
+    ));
     Ok(())
 }
 

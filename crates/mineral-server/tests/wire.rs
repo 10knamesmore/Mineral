@@ -29,6 +29,7 @@ fn audio_snapshot_round_trip() -> color_eyre::Result<()> {
         volume_pct: 77,
         track_finished_seq: 3,
         backend: mineral_audio::AudioBackend::Null,
+        download_complete: true,
     };
     let back = round_trip(&snap)?;
     assert_eq!(snap, back);

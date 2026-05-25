@@ -13,9 +13,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
+use crate::anim::Transition;
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
+
+/// Playlists ↔ Library 切换过渡时长(tick 数);≈ 18 tick ≈ 288ms,与整屏转场同速。
+const SWEEP_TICKS: u16 = 18;
 
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
 ///
@@ -50,8 +54,12 @@ pub enum LyricExtra {
 /// 应用顶层状态。
 #[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
 pub struct AppState {
-    /// 左栏当前视图。
+    /// 左栏当前视图。切换时立即设为目标值,供按键路由;渲染端的过渡位置看 [`Self::view_pos`]。
     pub view: View,
+
+    /// 左栏 Playlists ↔ Library 横向过渡位置:`0` = Playlists、满值 = Library。
+    /// 切到 Library 调 `enter`、回 Playlists 调 `leave`,中途再反向只改 target 不跳变。
+    pub view_pos: Transition,
 
     /// 已加载的歌单(跨 channel 合并;按到达顺序 append)。
     pub playlists: Vec<PlaylistView>,
@@ -151,6 +159,7 @@ impl AppState {
     pub fn empty() -> Self {
         Self {
             view: View::Playlists,
+            view_pos: Transition::new(SWEEP_TICKS),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),
@@ -202,6 +211,21 @@ impl AppState {
         }
     }
 
+    /// 本地乐观切换一首歌的喜欢态(翻转 `liked_ids` 并重装该源曲目)。
+    ///
+    /// 不等 server 确认——按键即时反馈;真实持久化由 `client.toggle_love` 触发,
+    /// 失败由下次 `LikedSongIdsFetched` fetch 纠正。
+    ///
+    /// # Params:
+    ///   - `song`: 目标歌曲
+    pub fn toggle_loved_local(&mut self, song: &Song) {
+        let set = self.liked_ids.entry(song.source()).or_default();
+        if !set.remove(&song.id) {
+            set.insert(song.id.clone());
+        }
+        self.redecorate_for_source(song.source());
+    }
+
     /// 某个 channel 的 user-data 到位 / 变化时,把 `tracks_cache` 里属于该 source
     /// 的 SongView 全部按当前 `decorate` 重建一遍。
     /// 跨 source 的歌单不动(decoration data 是 per-source 的)。
@@ -250,7 +274,10 @@ impl AppState {
                 self.redecorate_for_source(*source);
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
-            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
+            // Notice 在 drain_task_events 已单独路由到 toast,不会进这里;一并 defensive 跳过。
+            TaskEvent::PlayUrlReady { .. }
+            | TaskEvent::LyricsReady { .. }
+            | TaskEvent::Notice { .. } => {}
         }
     }
 

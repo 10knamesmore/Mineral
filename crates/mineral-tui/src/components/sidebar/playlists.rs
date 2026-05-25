@@ -1,18 +1,20 @@
 //! Playlists 视图渲染。
 
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
+};
 
 use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::PlaylistView;
 
-/// 渲染 Playlists 视图到给定 [`Rect`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+/// 渲染 Playlists 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
+pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
     let pos = position_label(state.sel_playlist, total);
@@ -31,7 +33,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
     if state.playlists.is_empty() && state.search_q.is_empty() {
-        paint_empty_state(frame, area, state, theme, block);
+        paint_empty_state(buf, area, state, theme, block);
         return;
     }
 
@@ -71,7 +73,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
     let mut table_state = TableState::default();
     table_state.select(Some(state.sel_playlist));
-    frame.render_stateful_widget(table, area, &mut table_state);
+    StatefulWidget::render(table, area, buf, &mut table_state);
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 / 来源 channel / 总时长 / 曲目数)。
@@ -119,14 +121,14 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
 
 /// 全空 playlist 时画 block + 居中两行提示。loading / 未登录文案二选一。
 fn paint_empty_state(
-    frame: &mut Frame<'_>,
+    buf: &mut Buffer,
     area: Rect,
     state: &AppState,
     theme: &Theme,
     block: Block<'_>,
 ) {
     let inner = block.inner(area);
-    frame.render_widget(block, area);
+    block.render(area, buf);
     if inner.height == 0 || inner.width == 0 {
         return;
     }
@@ -163,10 +165,9 @@ fn paint_empty_state(
             )),
         ]
     };
-    frame.render_widget(
-        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
-        inner,
-    );
+    Paragraph::new(lines)
+        .alignment(ratatui::layout::Alignment::Center)
+        .render(inner, buf);
 }
 
 /// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
@@ -201,7 +202,10 @@ mod tests {
     fn playlists_list_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = crate::test_support::state_with_playlists();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!(
             "歌单列表:3 个混源歌单(EndSerenading / 本地)",
             t.backend()
@@ -214,7 +218,10 @@ mod tests {
     fn playlists_empty_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = AppState::empty();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!("歌单列表:空态(未加载 / 未登录)", t.backend());
         Ok(())
     }

@@ -13,24 +13,18 @@ use crate::state::{AppState, View};
 use crate::theme::Theme;
 
 /// 渲染状态行到给定 [`Rect`]。`queue_open` 由浮层栈给出,决定是否显示 `[queue]` tab。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, queue_open: bool, theme: &Theme) {
+pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let [left, right] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(60)]).areas(area);
-    paint_left(frame, left, state, queue_open, theme);
+    paint_left(frame, left, state, theme);
     paint_right(frame, right, state, theme);
 }
 
-/// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs,以及 queue 打开时的 `[3 queue]`。
-fn paint_left(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    state: &AppState,
-    queue_open: bool,
-    theme: &Theme,
-) {
+/// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
+fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let active_pl = state.view == View::Playlists;
     let active_lib = state.view == View::Library;
-    let mut spans = vec![
+    let spans = vec![
         Span::styled(
             format!("▌ mineral v{}  ", env!("CARGO_PKG_VERSION")),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
@@ -40,10 +34,6 @@ fn paint_left(
         Span::raw("  "),
         Span::styled("[tracks]", tab_style(active_lib, theme)),
     ];
-    if queue_open {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("[3 queue]", tab_style(true, theme)));
-    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -120,15 +110,7 @@ mod tests {
     fn top_status_playlists_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_playlists();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                /*queue_open*/ false,
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
         insta::with_settings!({
             filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
@@ -144,15 +126,7 @@ mod tests {
     fn top_status_library_queue_open_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_tracks();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                /*queue_open*/ true,
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
         insta::with_settings!({
             filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
@@ -169,15 +143,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let mut state = crate::test_support::state_with_playlists();
         state.playback.audio_backend = mineral_audio::AudioBackend::Null;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                /*queue_open*/ false,
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
         insta::with_settings!({
             filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],

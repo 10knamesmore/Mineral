@@ -33,6 +33,14 @@ pub(crate) fn cache_dir() -> color_eyre::Result<PathBuf> {
     xdg("XDG_CACHE_HOME", ".cache")
 }
 
+/// 用户音乐目录:`$XDG_MUSIC_DIR` 或 `~/Music`(用户的通用音乐文件夹,**不含** mineral 子目录)。
+pub(crate) fn music_dir() -> color_eyre::Result<PathBuf> {
+    if let Some(v) = std::env::var_os("XDG_MUSIC_DIR").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(v));
+    }
+    Ok(home_dir()?.join("Music"))
+}
+
 /// Linux runtime 目录:`$XDG_RUNTIME_DIR/mineral`,或 fallback `/tmp/mineral`。
 ///
 /// 用于 IPC unix socket 等「进程级生命周期」的 ephemeral 文件。

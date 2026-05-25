@@ -49,6 +49,17 @@ fn bad_args_exit_nonzero() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// `mineral cache clean` 在全新隔离环境(无 db / 无缓存目录)下也能优雅成功并退出 0。
+#[test]
+fn cache_clean_succeeds_on_fresh_env() -> color_eyre::Result<()> {
+    mineral()?
+        .args(["cache", "clean"])
+        .assert()
+        .success()
+        .stdout(contains("已清理"));
+    Ok(())
+}
+
 /// `mineral status` 无 daemon → 非零退出,且 stderr 给出「先跑 mineral serve」的提示。
 #[test]
 fn status_without_daemon_errors_with_hint() -> color_eyre::Result<()> {

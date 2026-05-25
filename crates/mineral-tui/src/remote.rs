@@ -17,7 +17,8 @@ use color_eyre::eyre::{WrapErr, eyre};
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Song, SongId};
 use mineral_protocol::{
-    CancelFilter, Framed, PlayerSnapshot, Request, Response, framed, recv, send,
+    CancelFilter, DownloadProgress, DownloadTarget, Framed, PlayerSnapshot, Request, Response,
+    SongStatsWire, framed, recv, send,
 };
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
@@ -209,6 +210,35 @@ impl Client for RemoteClient {
             other => {
                 warn_unexpected("pull_pcm", &other);
                 (Vec::new(), 0)
+            }
+        }
+    }
+
+    fn toggle_love(&self, id: SongId) -> bool {
+        match self.send_recv(Request::ToggleLove(id)) {
+            Response::LoveToggled(new) => new,
+            // 错误/意外响应:保守返回 false(TUI 乐观值为准)
+            _ => false,
+        }
+    }
+
+    fn query_song_stats(&self, id: SongId) -> Option<SongStatsWire> {
+        match self.send_recv(Request::QuerySongStats(id)) {
+            Response::SongStats(stats) => stats,
+            _ => None,
+        }
+    }
+
+    fn download(&self, target: DownloadTarget) {
+        let _ = self.send_recv(Request::Download(target));
+    }
+
+    fn download_progress(&self) -> DownloadProgress {
+        match self.send_recv(Request::DownloadProgress) {
+            Response::DownloadProgress(p) => p,
+            other => {
+                warn_unexpected("download_progress", &other);
+                DownloadProgress::default()
             }
         }
     }

@@ -156,13 +156,6 @@ impl OverlayStack {
         }
     }
 
-    /// 栈内是否有 queue 浮层(顶栏据此显示 `[queue]` tab;含收起动画途中)。
-    pub(crate) fn queue_open(&self) -> bool {
-        self.stack
-            .iter()
-            .any(|m| matches!(m.kind, OverlayKind::Queue(_)))
-    }
-
     /// 栈内是否有断连提示(据此进入 fatal 模式:跳过后端同步、任意键退出)。
     pub(crate) fn is_disconnected(&self) -> bool {
         self.stack

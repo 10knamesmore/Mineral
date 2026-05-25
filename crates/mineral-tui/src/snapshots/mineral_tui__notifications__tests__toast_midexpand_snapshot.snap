@@ -1,0 +1,8 @@
+---
+source: crates/mineral-tui/src/notifications.rs
+description: "通知进场动画中途:括号区由中心横向展开"
+expression: t.backend()
+---
+"                            [ ]                             "
+"                                                            "
+"                                                            "

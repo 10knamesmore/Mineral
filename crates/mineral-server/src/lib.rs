@@ -17,9 +17,12 @@
 //!   破坏调用方。
 
 mod client;
+mod download;
 mod media;
+mod media_cache;
 mod pcm;
 mod player;
+mod queue;
 mod serve;
 mod server;
 

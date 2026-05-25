@@ -2,7 +2,9 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Song, SongId};
-use mineral_protocol::{CancelFilter, PlayerSnapshot};
+use mineral_protocol::{
+    CancelFilter, DownloadProgress, DownloadTarget, PlayerSnapshot, SongStatsWire,
+};
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 
 use crate::pcm::PcmPuller;
@@ -23,6 +25,56 @@ impl ClientHandle {
     /// 同进程构造,Server 启动后用持有的 `player` / `pcm` 直接拼成 handle。
     pub(crate) fn new(player: PlayerCore, pcm: PcmPuller) -> Self {
         Self { player, pcm }
+    }
+
+    /// 切换一首歌的 love(♥)状态:查当前态 → 经对应 channel `set_loved`
+    /// (本地 persist + 远端)→ 返回切换后的新态。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲 id;其 namespace 决定走哪个 channel / persist scope。
+    ///
+    /// # Return:
+    ///   切换后的新 loved 状态。
+    pub(crate) async fn toggle_love_async(&self, id: &SongId) -> color_eyre::Result<bool> {
+        let ns = id.namespace();
+        let current = self.player.persist().scope(ns).is_loved(id).await?;
+        let new = !current;
+        let channel = self
+            .player
+            .channel_for(ns)
+            .ok_or_else(|| color_eyre::eyre::eyre!("no channel for source {}", ns.name()))?
+            .clone();
+        channel
+            .set_loved(id, new)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("set_loved failed: {e}"))?;
+        Ok(new)
+    }
+
+    /// 查询一首歌的播放统计(persist),转成 protocol DTO。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲 id;其 namespace 决定 persist scope。
+    ///
+    /// # Return:
+    ///   命中返回 [`mineral_protocol::SongStatsWire`],无记录返回 `None`。
+    pub(crate) async fn query_song_stats_async(
+        &self,
+        id: &SongId,
+    ) -> color_eyre::Result<Option<mineral_protocol::SongStatsWire>> {
+        let stats = self
+            .player
+            .persist()
+            .scope(id.namespace())
+            .query_stats(id)
+            .await?;
+        Ok(stats.map(|s| mineral_protocol::SongStatsWire {
+            play_count: s.play_count,
+            skip_count: s.skip_count,
+            total_listen_ms: s.total_listen_ms,
+            last_played_at: s.last_played_at,
+            loved: s.loved,
+        }))
     }
 }
 
@@ -86,6 +138,38 @@ pub trait Client: Send + Sync {
     // ---- PCM 流(client spectrum 用) ----
     /// 拉最多 N 个 PCM sample。返回 (samples, sample_rate);可能短于 N。
     fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32);
+
+    // ---- 喜欢 / 统计 ----
+    /// 切换一首歌的喜欢(♥)状态,返回切换后的新 loved 态。
+    ///
+    /// daemon 模式经 IPC 拿到真实结果;in-proc 模式 fire-and-forget,返回值为乐观占位
+    /// (调用方 TUI 应自行乐观更新本地 loved 态,不强依赖此返回值)。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲 id。
+    ///
+    /// # Return:
+    ///   切换后的 loved 状态(daemon 模式为真实值;in-proc 为占位 `false`)。
+    fn toggle_love(&self, id: SongId) -> bool;
+
+    /// 查询一首歌的播放统计;无记录 / 不可用返回 `None`。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲 id。
+    ///
+    /// # Return:
+    ///   有记录时返回 [`SongStatsWire`],否则 `None`。
+    fn query_song_stats(&self, id: SongId) -> Option<SongStatsWire>;
+
+    /// 下载(永久导出 + 顺带填 cache)单曲 / 整张歌单。fire-and-forget,server 后台跑,
+    /// 进度 / 完成经 [`TaskEvent::Notice`] 回传(client 拉 task events 时取到)。
+    ///
+    /// # Params:
+    ///   - `target`: 下载目标(单曲 / 歌单)
+    fn download(&self, target: DownloadTarget);
+
+    /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。无下载时 `active == false`。
+    fn download_progress(&self) -> DownloadProgress;
 
     /// client 与 server 的链路是否仍可用。
     ///
@@ -161,5 +245,34 @@ impl Client for ClientHandle {
 
     fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32) {
         self.pcm.pull(n)
+    }
+
+    fn toggle_love(&self, id: SongId) -> bool {
+        // in-proc 降级:fire-and-forget 触发完整 toggle(查+翻转+set_loved),返回乐观占位。
+        // TUI 会乐观更新本地态,不依赖此返回值。
+        let this = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = this.toggle_love_async(&id).await {
+                mineral_log::warn!(
+                    target: "client",
+                    error = mineral_log::chain(&e),
+                    "in-proc toggle_love 失败"
+                );
+            }
+        });
+        false // 占位,不保证准确
+    }
+
+    fn query_song_stats(&self, _id: SongId) -> Option<SongStatsWire> {
+        // in-proc 调试模式不支持同步查统计(无法 block on async),返回 None。
+        None
+    }
+
+    fn download(&self, target: DownloadTarget) {
+        self.player.download(target);
+    }
+
+    fn download_progress(&self) -> DownloadProgress {
+        self.player.download_progress()
     }
 }

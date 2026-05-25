@@ -1,0 +1,8 @@
+---
+source: crates/mineral-tui/src/notifications.rs
+description: "通知堆叠:live(下载中)在上、flash(出错了)在下"
+expression: t.backend()
+---
+"                       [ 下载中 62% ]                       " Hidden by multi-width symbols: [(26, " "), (28, " "), (30, " ")]
+"                         [ 出错了 ]                         " Hidden by multi-width symbols: [(28, " "), (30, " "), (32, " ")]
+"                                                            "

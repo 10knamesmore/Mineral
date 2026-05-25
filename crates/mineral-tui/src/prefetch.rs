@@ -6,7 +6,7 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
-use mineral_model::{MediaUrl, PlaylistId};
+use mineral_model::{MediaUrl, PlaylistId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
@@ -24,27 +24,30 @@ pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_playlist_tracks(state, client);
 }
 
-/// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面 URL,
-/// sel 优先 → 外扩 提交给 client 端 fetcher。
+/// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面,
+/// sel 优先 → 外扩 提交给 client 端 fetcher。来源随封面一起带出(决定落盘子目录)。
 fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
-    let urls = collect_pending_covers(state);
-    for url in urls {
-        ensure_cover(state, covers, url);
+    let items = collect_pending_covers(state);
+    for (source, url) in items {
+        ensure_cover(state, covers, source, url);
     }
 }
 
-/// 收集当前 view 下「sel + 邻居 (±RADIUS)」中未 cache、未 pending 的封面 URL。
-fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
-    let mut out = Vec::<MediaUrl>::new();
+/// 收集当前 view 下「sel + 邻居 (±RADIUS)」中未 cache、未 pending 的 `(来源, 封面 URL)`。
+///
+/// 来源从所在条目的 id namespace 派生(歌单 / 歌曲都带源)。
+fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+    let mut out = Vec::<(SourceKind, MediaUrl)>::new();
     let cache = &state.cover_cache;
     let pending = &state.cover_pending;
-    let push_if_new = |opt: Option<&MediaUrl>, out: &mut Vec<MediaUrl>| {
-        if let Some(u) = opt
+    let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
+                       out: &mut Vec<(SourceKind, MediaUrl)>| {
+        if let Some((source, u)) = item
             && !cache.contains_key(u)
             && !pending.contains(u)
-            && !out.contains(u)
+            && !out.iter().any(|(_, existing)| existing == u)
         {
-            out.push(u.clone());
+            out.push((source, u.clone()));
         }
     };
     match state.view {
@@ -52,8 +55,13 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
             let sel = state.sel_playlist;
-            let get = |i: usize| -> Option<&MediaUrl> {
-                filtered.get(i).and_then(|p| p.data.cover_url.as_ref())
+            let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
+                filtered.get(i).and_then(|p| {
+                    p.data
+                        .cover_url
+                        .as_ref()
+                        .map(|u| (p.data.id.namespace(), u))
+                })
             };
             push_if_new(get(sel), &mut out);
             for d in 1..=RADIUS {
@@ -68,23 +76,20 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
             // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
             let sel = state.sel_track;
-            push_if_new(
-                filtered.get(sel).and_then(|sv| sv.data.cover_url.as_ref()),
-                &mut out,
-            );
+            let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
+                filtered.get(i).and_then(|sv| {
+                    sv.data
+                        .cover_url
+                        .as_ref()
+                        .map(|u| (sv.data.id.namespace(), u))
+                })
+            };
+            push_if_new(get(sel), &mut out);
             for d in 1..=RADIUS {
                 if let Some(idx) = sel.checked_sub(d) {
-                    push_if_new(
-                        filtered.get(idx).and_then(|sv| sv.data.cover_url.as_ref()),
-                        &mut out,
-                    );
+                    push_if_new(get(idx), &mut out);
                 }
-                push_if_new(
-                    filtered
-                        .get(sel.saturating_add(d))
-                        .and_then(|sv| sv.data.cover_url.as_ref()),
-                    &mut out,
-                );
+                push_if_new(get(sel.saturating_add(d)), &mut out);
             }
         }
     }
@@ -92,13 +97,14 @@ fn collect_pending_covers(state: &AppState) -> Vec<MediaUrl> {
 }
 
 /// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
-fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, url: MediaUrl) {
+/// `source` 随请求带给 fetcher(决定缓存落盘子目录)。
+fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind, url: MediaUrl) {
     if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
         return;
     }
     state.cover_pending.insert(url.clone());
-    mineral_log::debug!(target: "prefetch", url = %url, "request cover");
-    covers.request(url);
+    mineral_log::debug!(target: "prefetch", url = %url, source = ?source, "request cover");
+    covers.request(source, url);
 }
 
 /// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。

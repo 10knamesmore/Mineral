@@ -102,9 +102,14 @@ impl SourceKind {
         self.palette
     }
 
-    /// 按稳定 `name` 解析回一个来源:已知名字命中内置常量;未知名字(将来插件)
-    /// intern 成 `&'static str` 并给默认展示(label = name、`Faint`)。
-    fn from_name(name: &str) -> Self {
+    /// 按稳定 `name` 解析回一个来源。
+    ///
+    /// # Params:
+    ///   - `name`: 稳定标识(与 [`name`](Self::name) 对称)
+    ///
+    /// # Return:
+    ///   命中内置常量则返回之;未知名(将来插件) intern 成 `&'static str` 并给默认展示(label = name、`Faint`)。
+    pub fn from_name(name: &str) -> Self {
         match name {
             "netease" => Self::NETEASE,
             "local" => Self::LOCAL,
@@ -213,5 +218,19 @@ mod tests {
         assert_eq!(plugin.name(), "myplugin");
         assert_eq!(plugin.label(), "myplugin");
         assert_eq!(plugin.palette(), PaletteRole::Faint);
+    }
+
+    /// 内置名字往返:`from_name` 命中常量。
+    #[test]
+    fn from_name_roundtrips_builtins() {
+        assert_eq!(SourceKind::from_name("netease"), SourceKind::NETEASE);
+        assert_eq!(SourceKind::from_name("local"), SourceKind::LOCAL);
+    }
+
+    /// 未知名字 intern,`name()` 仍可取回原值。
+    #[test]
+    fn from_name_interns_unknown() {
+        let plugin = SourceKind::from_name("spotify");
+        assert_eq!(plugin.name(), "spotify");
     }
 }

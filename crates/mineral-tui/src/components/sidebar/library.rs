@@ -1,18 +1,18 @@
 //! Library 视图渲染:展示当前选中歌单内的曲目。
 
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, StatefulWidget, Table, TableState};
 
 use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::SongView;
 
-/// 渲染 Library 视图到给定 [`Rect`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+/// 渲染 Library 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
+pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let title = state.selected_playlist().map_or_else(
         || "tracks".to_owned(),
         |p| format!("tracks / {}", p.data.name),
@@ -82,7 +82,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
     let mut table_state = TableState::default();
     table_state.select(Some(state.sel_track));
-    frame.render_stateful_widget(table, area, &mut table_state);
+    StatefulWidget::render(table, area, buf, &mut table_state);
 }
 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / ♫ 当前歌 / 高亮搜索词)。
@@ -199,7 +199,10 @@ mod tests {
     fn library_with_tracks_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = crate::test_support::state_with_tracks();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!(
             "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
             t.backend()
@@ -213,7 +216,10 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_playlists();
         state.view = View::Library;
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!("曲目列表:选中歌单但曲目未到(loading)", t.backend());
         Ok(())
     }
@@ -224,7 +230,10 @@ mod tests {
     fn library_cjk_tracks_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = crate::test_support::state_with_cjk_tracks();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!(
             "曲目列表:CJK 曲目(Chinese Football)宽字符对齐",
             t.backend()

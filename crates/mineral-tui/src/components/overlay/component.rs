@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
+use crate::cells::{left_eighth, lower_eighth};
 use crate::state::AppState;
 use crate::theme::Theme;
 
@@ -280,33 +281,5 @@ fn vertical_eighth(
         (lower_eighth(vcov), Style::new().fg(fill))
     } else {
         (lower_eighth(8 - vcov), Style::new().fg(bg).bg(fill))
-    }
-}
-
-/// 底对齐下八分块:`n/8` 高(`n` ∈ `1..=8`,`8` → `█`)。
-fn lower_eighth(n: u32) -> &'static str {
-    match n {
-        1 => "▁",
-        2 => "▂",
-        3 => "▃",
-        4 => "▄",
-        5 => "▅",
-        6 => "▆",
-        7 => "▇",
-        _ => "█",
-    }
-}
-
-/// 左对齐左八分块:`n/8` 宽(`n` ∈ `1..=8`,`8` → `█`)。
-fn left_eighth(n: u32) -> &'static str {
-    match n {
-        1 => "▏",
-        2 => "▎",
-        3 => "▍",
-        4 => "▌",
-        5 => "▋",
-        6 => "▊",
-        7 => "▉",
-        _ => "█",
     }
 }

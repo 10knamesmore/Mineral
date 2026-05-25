@@ -54,4 +54,11 @@ pub enum TaskEvent {
         /// 各格式歌词(LRC / yrc / 翻译 / 罗马音)。
         lyrics: Lyrics,
     },
+
+    /// 一条给用户看的瞬时提示(非任务生命周期事件,借本通道回传 client 状态栏)。
+    /// 目前用于下载的「下载中 / 完成 / 失败」简提示。
+    Notice {
+        /// 人读文本(单行)。
+        text: String,
+    },
 }

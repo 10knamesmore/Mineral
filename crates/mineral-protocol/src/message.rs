@@ -4,11 +4,79 @@
 //! 调用方根据自己发的 `Request` 决定预期。错误统一走 [`Response::Error`]。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, Song};
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
 use crate::{CancelFilter, PlayerSnapshot};
+
+/// 下载进度快照(client 每 tick 轮询,驱动 top-center 进度弹窗)。
+///
+/// `active == false` 时其余字段无意义(无下载在跑),client 据此收起弹窗。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadProgress {
+    /// 当前是否有下载任务在跑。
+    pub active: bool,
+
+    /// 本批已完成首数。
+    pub done: usize,
+
+    /// 本批总首数(单曲为 1)。
+    pub total: usize,
+
+    /// 当前这首已下字节。
+    pub bytes_done: u64,
+
+    /// 当前这首总字节(拿不到为 0,进度条退化为 spinner 语义)。
+    pub bytes_total: u64,
+
+    /// 当前瞬时下载速度(字节/秒,已平滑)。
+    pub speed_bps: u64,
+
+    /// 队列中**还在等待**的批数(不含正在下的这批)。串行下载,>0 表示后面还排着。
+    pub queued: usize,
+
+    /// 已完成批次计数(每批下完 +1);client 据其增长触发一次「完成提示」。
+    pub result_seq: u64,
+
+    /// 最近完成那批**真正下载**的成功首数(配合 `result_seq` 读)。
+    pub last_ok: usize,
+
+    /// 最近完成那批**已存在跳过**的首数(配合 `result_seq` 读)。
+    pub last_skip: usize,
+
+    /// 最近完成那批的失败首数(配合 `result_seq` 读)。
+    pub last_fail: usize,
+}
+
+/// 下载目标:单曲(tracks 视图选中)或整张歌单(playlist 视图选中)。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DownloadTarget {
+    /// 下载一首歌。`Box` 避免 enum 体积膨胀(`Song` 较大)。
+    Song(Box<Song>),
+
+    /// 下载整张歌单的全部曲目(server 端自行拉 tracks)。
+    Playlist(PlaylistId),
+}
+
+/// 一首歌的播放统计快照(IPC 出参)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SongStatsWire {
+    /// 完整播放次数。
+    pub play_count: u32,
+
+    /// 跳过次数。
+    pub skip_count: u32,
+
+    /// 累计收听毫秒。
+    pub total_listen_ms: u64,
+
+    /// 最近播放 unix ms(无则 None)。
+    pub last_played_at: Option<i64>,
+
+    /// 是否 loved。
+    pub loved: bool,
+}
 
 /// Client → Server 命令。每条 [`Request`] 一定有一条对应的 [`Response`]。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,6 +155,21 @@ pub enum Request {
     /// 拉一次 daemon 进程信息(pid 等)。返回 [`Response::DaemonInfo`]。
     /// 给运维 / 性能剖析定位 daemon 进程用(`mineral status` 会打出 pid)。
     DaemonInfo,
+
+    // ---- love / 统计 ----
+    /// 切换一首歌的喜欢(♥)状态。返回 [`Response::LoveToggled`](切换后的新状态)。
+    ToggleLove(SongId),
+
+    /// 查询一首歌的播放统计。返回 [`Response::SongStats`]。
+    QuerySongStats(SongId),
+
+    // ---- 下载 ----
+    /// 下载(永久导出 + 顺带填 cache)单曲 / 整张歌单。fire-and-forget,server 后台跑。
+    /// 返回 [`Response::Ok`]。
+    Download(DownloadTarget),
+
+    /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。返回 [`Response::DownloadProgress`]。
+    DownloadProgress,
 }
 
 /// Server → Client 应答。
@@ -123,6 +206,15 @@ pub enum Response {
         /// daemon 进程 pid(`std::process::id()`)。
         pid: u32,
     },
+
+    /// 对应 [`Request::ToggleLove`]:切换后的新 loved 状态。
+    LoveToggled(bool),
+
+    /// 对应 [`Request::QuerySongStats`]:命中返回统计,无记录返回 None。
+    SongStats(Option<SongStatsWire>),
+
+    /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。
+    DownloadProgress(DownloadProgress),
 
     /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。
     Error(String),

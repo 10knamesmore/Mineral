@@ -41,6 +41,7 @@ pub mod config;
 pub mod credential;
 pub mod crypto;
 pub mod device;
+mod playlist_cache;
 pub mod transport;
 pub mod wire;
 

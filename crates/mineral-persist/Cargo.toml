@@ -1,0 +1,27 @@
+[package]
+name        = "mineral-persist"
+description = "本地持久化：结构态存储(sqlx/sqlite) + 内容寻址 blob 缓存"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+color-eyre  = { workspace = true }
+sqlx        = { workspace = true }
+serde       = { workspace = true }
+bincode     = { workspace = true }
+tokio       = { workspace = true }
+rustc-hash  = { workspace = true }
+parking_lot = { workspace = true }
+mineral-model = { workspace = true }
+mineral-paths = { workspace = true }
+mineral-log   = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

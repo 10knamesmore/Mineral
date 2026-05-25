@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
+use mineral_persist::Persist;
 use mineral_server::{AudioMode, Server};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
@@ -18,7 +19,11 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 /// accept loop 与关闭信号(SIGINT / SIGTERM)竞争:收到信号时主动停掉 server
 /// (走 [`Server::shutdown`] 的 Drop 链)并 unlink socket 文件,避免残留 stale
 /// socket 留给下次启动清理。
-pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()> {
+///
+/// # Params:
+///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
+///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
+pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, persist: Persist) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
     // backlog,无需 accept),并可能立刻请求退出。若此刻 handler 还没装(Server::spawn
@@ -41,7 +46,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>) -> color_eyre::Result<()>
     } else {
         AudioMode::Auto
     };
-    let server = Server::spawn(channels, audio_mode)?;
+    let server = Server::spawn(channels, audio_mode, persist)?;
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {

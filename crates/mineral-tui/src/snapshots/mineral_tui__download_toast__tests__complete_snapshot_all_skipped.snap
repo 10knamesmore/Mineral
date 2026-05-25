@@ -1,0 +1,8 @@
+---
+source: crates/mineral-tui/src/download_toast.rs
+description: "下载完成提示:整批已存在 → 已下载 ⊙2"
+expression: t.backend()
+---
+"                       [ 已下载 ⊙2 ]                        " Hidden by multi-width symbols: [(26, " "), (28, " "), (30, " ")]
+"                                                            "
+"                                                            "

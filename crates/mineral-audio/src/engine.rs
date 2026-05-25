@@ -6,7 +6,7 @@
 
 use std::io::BufReader;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use stream_download::source::SourceStream;
 use stream_download::storage::temp::TempStorageProvider;
 
 use crate::command::AudioCommand;
+use crate::file_storage::FileStorageProvider;
 use crate::handle::AudioMode;
 use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
@@ -137,11 +138,21 @@ fn engine_main(
 
     let mut cur_duration_ms: u64 = 0;
     let mut state = EngineState::default();
+    // capture 下载完成标记:waiter task 在 `wait_for_completion` 后 store 该曲的 gen;
+    // update_snapshot 比对当前 gen 算出 download_complete。
+    let download_done_gen = Arc::new(AtomicU64::new(0));
 
     loop {
         match cmd_rx.recv_timeout(TICK) {
-            Ok(cmd) => match handle_command(cmd, &player, &rt, &mut state, tap_producer, sr_atomic)
-            {
+            Ok(cmd) => match handle_command(
+                cmd,
+                &player,
+                &rt,
+                &mut state,
+                tap_producer,
+                sr_atomic,
+                &download_done_gen,
+            ) {
                 Ok(new_dur) => {
                     if let Some(d) = new_dur {
                         cur_duration_ms = d;
@@ -155,7 +166,13 @@ fn engine_main(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         drain_seek(seek_mailbox, &player);
-        update_snapshot(snapshot, &player, cur_duration_ms, &mut state);
+        update_snapshot(
+            snapshot,
+            &player,
+            cur_duration_ms,
+            &mut state,
+            &download_done_gen,
+        );
     }
     Ok(())
 }
@@ -182,6 +199,11 @@ struct EngineState {
 
     /// 单调递增的曲终计数,每次自然曲终 +1,写进 snapshot。
     finished_seq: u64,
+
+    /// 当前曲目的 capture 代号:每次 `Play`/`Stop` +1。capture 播放时把它交给 waiter;
+    /// waiter 在下载完成后 store 进 `download_done_gen`。`update_snapshot` 比对二者算
+    /// `download_complete`,从而只认「当前这首」的下载完成,旧曲的迟到信号被 gen 不匹配挡掉。
+    capture_gen: u64,
 }
 
 /// 处理一条命令。返回 `Some(duration_ms)` 表示曲目变了,player 现在播这个新曲;
@@ -193,13 +215,27 @@ fn handle_command(
     state: &mut EngineState,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
+    download_done_gen: &Arc<AtomicU64>,
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
-        AudioCommand::Play(url) => {
+        AudioCommand::Play { url, capture } => {
             // 切歌前先 disarm,旧曲尾巴的 sound_count 退潮不会被算成曲终。
             state.armed = false;
             player.stop();
-            let dur = append_decoded(player, rt, url, tap_producer, sr_atomic)?;
+            // 新曲 → 新 gen(让上一首的 download_complete 立即回落 false)。
+            state.capture_gen += 1;
+            let completion = capture
+                .is_some()
+                .then(|| (state.capture_gen, Arc::clone(download_done_gen)));
+            let dur = append_decoded(
+                player,
+                rt,
+                url,
+                capture,
+                completion,
+                tap_producer,
+                sr_atomic,
+            )?;
             player.play();
             // append 内部已 fetch_add 把 sound_count 抬到 1,这里武装后下次 update_snapshot
             // 看到的就是 !is_empty,不存在「armed 后第一 tick 就空」的 race。
@@ -218,6 +254,8 @@ fn handle_command(
             // 用户主动 stop 不该触发曲终事件,直接 disarm。
             state.armed = false;
             player.stop();
+            // 换 gen,使 download_complete 回落 false(没有曲目在播)。
+            state.capture_gen += 1;
             Ok(Some(0))
         }
         AudioCommand::SetVolume(pct) => {
@@ -240,36 +278,40 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
 
 /// 把 URL 解析成 decoder 并 append 到 player。返回 decoder 探到的 duration(ms,0 = 未知)。
 ///
+/// `capture` 非空且 `url` 为 `Remote` 时,用 [`FileStorageProvider`] 把下载字节落到该路径
+/// (供播完后入缓存);否则 `Remote` 走会自删的 [`TempStorageProvider`]。
 /// `tap_producer` / `sr_atomic` 用于把 decoder 包成 [`TapSource`],PCM 旁路写进 ringbuf。
 fn append_decoded(
     player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
     url: MediaUrl,
+    capture: Option<std::path::PathBuf>,
+    completion: Option<(u64, Arc<AtomicU64>)>,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64> {
-    mineral_log::info!(target: "audio", url = %url, "start decoding");
+    mineral_log::info!(target: "audio", url = %url, capture = ?capture, "start decoding");
     match url {
-        MediaUrl::Remote(u) => {
-            let (reader, byte_len) = rt.block_on(async {
-                let stream = HttpStream::<Client>::create(u)
-                    .await
-                    .map_err(|e| eyre!("http stream: {e}"))?;
-                let len = stream.content_length();
-                let reader = StreamDownload::from_stream(
-                    stream,
-                    TempStorageProvider::new(),
-                    Settings::default().prefetch_bytes(PREFETCH_BYTES),
-                )
-                .await
-                .map_err(|e| eyre!("stream-download init: {e}"))?;
-                Ok::<_, color_eyre::Report>((reader, len))
-            })?;
-            let decoder = build_decoder(reader, byte_len)?;
-            let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
-            player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
-            Ok(dur_ms)
-        }
+        MediaUrl::Remote(u) => match capture {
+            Some(path) => spawn_remote(
+                player,
+                rt,
+                u,
+                FileStorageProvider::new(path),
+                completion,
+                tap_producer,
+                sr_atomic,
+            ),
+            None => spawn_remote(
+                player,
+                rt,
+                u,
+                TempStorageProvider::new(),
+                /*completion*/ None,
+                tap_producer,
+                sr_atomic,
+            ),
+        },
         MediaUrl::Local(p) => {
             let file = std::fs::File::open(&p).map_err(|e| eyre!("open {}: {e}", p.display()))?;
             let byte_len = file.metadata().ok().map(|m| m.len());
@@ -280,6 +322,57 @@ fn append_decoded(
             Ok(dur_ms)
         }
     }
+}
+
+/// 用给定 `StorageProvider` 起 stream-download、构 decoder 并 append。`Remote` 两种 provider
+/// (会自删的 temp / 持久 capture)走同一条泛型路径,差别只在 `provider` 一个参数。
+///
+/// # Params:
+///   - `url`: 远端音频 URL
+///   - `provider`: stream-download 的存储后端
+///
+/// # Return:
+///   decoder 探到的 duration(ms,0 = 未知)。
+fn spawn_remote<P>(
+    player: &rodio::Player,
+    rt: &tokio::runtime::Runtime,
+    url: url::Url,
+    provider: P,
+    completion: Option<(u64, Arc<AtomicU64>)>,
+    tap_producer: &SharedProd,
+    sr_atomic: &Arc<AtomicU32>,
+) -> color_eyre::Result<u64>
+where
+    P: stream_download::storage::StorageProvider + 'static,
+    P::Reader: std::io::Read + std::io::Seek + Send + Sync + 'static,
+{
+    let (reader, byte_len) = rt.block_on(async {
+        let stream = HttpStream::<Client>::create(url)
+            .await
+            .map_err(|e| eyre!("http stream: {e}"))?;
+        let len = stream.content_length();
+        let reader = StreamDownload::from_stream(
+            stream,
+            provider,
+            Settings::default().prefetch_bytes(PREFETCH_BYTES),
+        )
+        .await
+        .map_err(|e| eyre!("stream-download init: {e}"))?;
+        Ok::<_, color_eyre::Report>((reader, len))
+    })?;
+    // capture 播放:拿 download handle,spawn 一个 waiter 等整段下完后 store 本曲 gen。
+    // 必须在 reader 被 decoder 消费前取 handle。
+    if let Some((track_gen, done_gen)) = completion {
+        let handle = reader.handle();
+        rt.spawn(async move {
+            handle.wait_for_completion().await;
+            done_gen.store(track_gen, Ordering::Release);
+        });
+    }
+    let decoder = build_decoder(reader, byte_len)?;
+    let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
+    player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
+    Ok(dur_ms)
 }
 
 /// 用 [`DecoderBuilder`] 构造 decoder,**`byte_len` 已知时一并塞进**。
@@ -305,6 +398,7 @@ fn update_snapshot(
     player: &rodio::Player,
     cur_duration_ms: u64,
     state: &mut EngineState,
+    download_done_gen: &Arc<AtomicU64>,
 ) {
     let pos_ms = duration_to_ms(player.get_pos());
     let is_paused = player.is_paused();
@@ -318,11 +412,16 @@ fn update_snapshot(
         state.armed = false;
     }
 
+    // 当前曲的 capture 下载完成 = waiter 已 store 本曲 gen。gen 不匹配(旧曲迟到 / 非 capture)→ false。
+    let download_complete =
+        state.capture_gen != 0 && download_done_gen.load(Ordering::Acquire) == state.capture_gen;
+
     let mut g = snapshot.lock();
     g.playing = playing;
     g.position_ms = pos_ms;
     g.duration_ms = cur_duration_ms;
     g.track_finished_seq = state.finished_seq;
+    g.download_complete = download_complete;
     // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
 }
 

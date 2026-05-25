@@ -55,7 +55,10 @@ pub async fn run(cli: NeteaseCli) -> color_eyre::Result<()> {
 
 /// `mineral channel netease login` 的主流程:取 unikey、终端渲染二维码、轮询状态、登录成功后写凭证。
 async fn run_login() -> color_eyre::Result<()> {
-    let channel = NeteaseChannel::new(&NeteaseConfig::default())?;
+    let channel = NeteaseChannel::new(
+        &NeteaseConfig::default(),
+        mineral_persist::Persist::disabled(),
+    )?;
     let qr = login_qr_get_key(channel.transport()).await?;
     render_qr(&qr.url)?;
     eprintln!("等待网易云 App 扫码并确认...");

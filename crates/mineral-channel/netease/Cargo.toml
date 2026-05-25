@@ -13,6 +13,7 @@ mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-log          = { workspace = true }
+mineral-persist      = { workspace = true }
 
 # 加密
 aes        = { workspace = true }
