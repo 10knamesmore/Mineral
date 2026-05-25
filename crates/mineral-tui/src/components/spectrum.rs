@@ -147,8 +147,11 @@ impl SpectrumState {
     ///
     /// 然后无条件:1) 把条托底到 [`BASELINE_MIN`];2) 推进 peak 状态机。
     pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16]>) {
-        if let Some(targets) = bars {
-            self.resize_state(targets.len());
+        match bars {
+            Some(targets) => self.resize_state(targets.len()),
+            // idle / 起播间隙没有 FFT 真值,仍把条数同步到渲染层反馈的面板宽度,
+            // 否则 baseline 只铺满初始 `DEFAULT_BAR_COUNT` 列、宽面板右侧空白。
+            None => self.resize_state(self.target_bars.get().max(1)),
         }
         match (bars, playing) {
             (Some(targets), _) => {
@@ -385,6 +388,52 @@ mod tests {
         let state = SpectrumState::new();
         terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         crate::test_support::assert_snap!("频谱静默基线(SpectrumState::new())", terminal.backend());
+        Ok(())
+    }
+
+    /// 生成长度 `w` 的确定性参差 bars(值域 8..=57),给"有音频"快照当 mock 频谱形状。
+    /// 纯整数运算,各列高度不同 → 渲染出"跳动"起伏;避免浮点转换 lint。
+    fn jagged_bars(w: usize) -> Vec<u16> {
+        (0..w)
+            .map(|i| u16::try_from(8 + (i * 13) % 50).unwrap_or(0))
+            .collect::<Vec<u16>>()
+    }
+
+    /// 有音频(mock bars)宽面板快照:内宽 78 > 64,验证柱条铺满整宽且高度参差。
+    /// 喂同一组 bars 多次 tick 让平滑 / 弹簧收敛到稳态,快照确定。
+    #[test]
+    fn spectrum_with_audio_full_width_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = SpectrumState::new();
+        // 先 draw 一帧让 paint_bars 把 target_bars 设成真实内宽。
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        let bars = jagged_bars(state.target_bars.get());
+        for _ in 0..30 {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "频谱有音频(mock bars,占满宽度有起伏)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// 无音频(idle)宽面板快照:内宽 78 > 64,验证 baseline 铺满整宽且各列等高无起伏。
+    /// tick 走 `None` 路径,本是宽面板右侧空白 bug 的现场,此处锁住修复后行为。
+    #[test]
+    fn spectrum_silent_full_width_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = SpectrumState::new();
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        for _ in 0..30 {
+            state.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "频谱无音频(idle baseline,占满宽度无起伏)",
+            terminal.backend()
+        );
         Ok(())
     }
 }
