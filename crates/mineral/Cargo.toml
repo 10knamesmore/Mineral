@@ -24,6 +24,11 @@ mineral-persist         = { workspace = true }
 mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 
+# macOS daemon 需在主线程养 NSApplication + run loop(系统媒体中心收录与命令派发的前提),
+# 故 binary 直接持有媒体 crate 的主线程入口;tokio 挪到后台线程。
+[target.'cfg(target_os = "macos")'.dependencies]
+mineral-media = { workspace = true }
+
 [dev-dependencies]
 nix        = { workspace = true }
 assert_cmd = { workspace = true }

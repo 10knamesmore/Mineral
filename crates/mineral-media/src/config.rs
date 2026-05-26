@@ -5,6 +5,10 @@ use typed_builder::TypedBuilder;
 /// [`crate::MediaService`] 初始化配置。
 ///
 /// 字段私有 + builder 构造,遵循「不暴露可被字面量直接构造的配置 struct」。
+///
+/// 字段目前仅 Linux(MPRIS)后端消费(总线名 / identity);非 Linux 后端不需要它们,
+/// 故对非 Linux 平台放开 `dead_code`。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, TypedBuilder)]
 #[non_exhaustive]
 pub struct MediaConfig {

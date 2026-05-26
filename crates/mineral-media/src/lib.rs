@@ -5,8 +5,9 @@
 //! ([`MediaCommand`])。
 //!
 //! 后端按平台选择:
-//! - **Linux**:MPRIS(`org.mpris.MediaPlayer2.*`),基于 souvlaki 的 zbus 后端。
-//! - **其它平台**:目前是 no-op stub(编译通过但不做事)。
+//! - **Linux**:MPRIS(`org.mpris.MediaPlayer2.*`)。
+//! - **macOS**:系统 Now Playing(MPNowPlayingInfoCenter / MPRemoteCommandCenter)。
+//! - **其它平台**:no-op stub(编译通过但不做事)。
 
 mod command;
 mod config;
@@ -17,3 +18,11 @@ pub use command::{LoopMode, MediaCommand};
 pub use config::MediaConfig;
 pub use os::MediaService;
 pub use state::{NowPlaying, PlaybackState};
+
+/// macOS 专属:主线程 NSApplication 句柄与 run loop 驱动入口。
+///
+/// 系统媒体中心只把命令派发到**主线程的 run loop**,且未打包二进制需主线程养起
+/// NSApplication 才会被收录。故 daemon 在主线程调 [`macos_init_app`] 起 NSApplication、
+/// 再调 [`macos_pump_until`] 阻塞 pump,后台线程跑 tokio。
+#[cfg(target_os = "macos")]
+pub use os::{MacApp, macos_init_app, macos_pump_until};
