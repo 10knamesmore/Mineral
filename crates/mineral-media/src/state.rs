@@ -22,6 +22,11 @@ pub enum PlaybackState {
 ///
 /// 字段私有 + builder 构造,避免外部用字面量直接拼。所有字段可选:拿不到的
 /// 信息留空即可。
+///
+/// 各字段是否被读取随平台后端而定:Linux 后端把全部字段映射进 metadata;非 Linux
+/// 后端只用其中一部分(封面走另一条字节通道、扩展歌词轨在系统媒体中心无对应面)。
+/// 故对非 Linux 平台放开未读字段的 `dead_code`,避免按平台裁剪 builder API。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, Default, TypedBuilder)]
 #[non_exhaustive]
 pub struct NowPlaying {

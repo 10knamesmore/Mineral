@@ -10,6 +10,8 @@ use mineral_cli::{Args, Command};
 use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
+mod os;
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     // _log_guard 必须持到 main 返回:drop 它会停后台 flush 线程,后续日志丢失。
@@ -17,7 +19,7 @@ fn main() -> color_eyre::Result<()> {
 
     let args = Args::parse();
     match args.command {
-        Some(Command::Serve) => run_daemon(),
+        Some(Command::Serve) => os::run_daemon(),
         Some(command) => mineral_cli::run(command),
         None => {
             let runtime = named_runtime("mineral-rt")?;
@@ -44,12 +46,15 @@ fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
         .wrap_err("create tokio runtime failed")
 }
 
-/// daemon 入口(`mineral serve`):build channels → 起 runtime → serve。
+/// 在 tokio runtime 上跑完整个 daemon 生命周期(build channels → serve → 优雅收尾)。
+///
+/// 平台无关的 daemon 主体;主线程归属(直接 block_on,还是让给系统 UI 后台跑)由
+/// [`os::run_daemon`] 按平台决定。
 ///
 /// daemon 通常被 TUI 以 stderr 重定向的子进程方式拉起,返回的 `Err` 只会进 color-eyre
 /// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
 /// 启动失败(如凭证解析失败)也能在日志里查到。
-fn run_daemon() -> color_eyre::Result<()> {
+pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
     let runtime = named_runtime("mineral-daemon-rt")?;
     let result = runtime.block_on(async {
         let persist = open_persist().await;
