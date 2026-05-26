@@ -9,7 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [features]
-# 启用后会增加 `SourceKind::Mock` 变体,仅供 UI / 测试 / mineral-channel-mock
+# 启用后会增加 `SourceKind::MOCK` 变体,仅供 UI / 测试 / mineral-channel-mock
 # 构造伪数据,真实 channel 路径不会出现。
 mock = []
 
@@ -20,7 +20,10 @@ serde_json     = { workspace = true }
 url            = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+color-eyre   = { workspace = true }
+insta        = { workspace = true }
+mineral-test = { workspace = true }
+proptest     = { workspace = true }
 
 [lints]
 workspace = true

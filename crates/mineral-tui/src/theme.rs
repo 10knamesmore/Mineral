@@ -2,6 +2,7 @@
 //!
 //! 所有 widget 渲染都从 [`Theme`] 取色,避免散落的硬编码 RGB。
 
+use mineral_model::PaletteRole;
 use ratatui::style::Color;
 
 /// 一组完整的 UI 颜色 token。
@@ -43,6 +44,17 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// 把一个来源的语义调色角色([`PaletteRole`])解析成本主题下的具体颜色。
+    ///
+    /// 来源(含将来插件源)只声明角色,颜色到这里才按主题落地——避免硬编码。
+    pub const fn source_color(&self, role: PaletteRole) -> Color {
+        match role {
+            PaletteRole::Accent => self.red,
+            PaletteRole::Muted => self.subtext,
+            PaletteRole::Faint => self.overlay,
+        }
+    }
+
     /// 默认主题:Catppuccin Mocha,accent = mauve / accent_2 = sapphire。
     pub const fn mocha_mauve() -> Self {
         Self {

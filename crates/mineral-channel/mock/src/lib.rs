@@ -3,7 +3,7 @@
 //!
 //! 整个 crate 的内容只在自身 `mock` feature 启用时存在;feature off 时
 //! lib 是空 stub。这保证 workspace 检查不会通过 feature unification 把
-//! `SourceKind::Mock` 渗透到不需要的 crate 里。
+//! `SourceKind::MOCK` 渗透到不需要的 crate 里。
 
 #![cfg(feature = "mock")]
 
@@ -69,7 +69,7 @@ impl Default for MockChannel {
 #[async_trait]
 impl MusicChannel for MockChannel {
     fn source(&self) -> SourceKind {
-        SourceKind::Mock
+        SourceKind::MOCK
     }
 
     async fn search_songs(&self, query: &str, _page: Page) -> Result<Vec<Song>> {
@@ -179,8 +179,7 @@ fn build_one(name: &str, count: usize) -> DemoPlaylist {
     let songs = build_songs(name, "Various Artists", count);
     let tracks = decorate(&songs);
     let playlist = Playlist {
-        source: SourceKind::Mock,
-        id: PlaylistId::new(name.to_owned()),
+        id: PlaylistId::new(SourceKind::MOCK, name.to_owned()),
         name: name.to_owned(),
         description: String::new(),
         cover_url: None,
@@ -196,17 +195,16 @@ fn build_one(name: &str, count: usize) -> DemoPlaylist {
 /// 按指定 artist/album 名生成 `count` 首假歌(标题循环复用 TITLES 列表)。
 fn build_songs(album_name: &str, artist_name: &str, count: usize) -> Vec<Song> {
     let artist_ref = ArtistRef {
-        id: ArtistId::new(format!("artist:{artist_name}")),
+        id: ArtistId::new(SourceKind::MOCK, format!("artist:{artist_name}")),
         name: artist_name.to_owned(),
     };
     let album_ref = AlbumRef {
-        id: AlbumId::new(format!("album:{album_name}")),
+        id: AlbumId::new(SourceKind::MOCK, format!("album:{album_name}")),
         name: album_name.to_owned(),
     };
     (0..count)
         .map(|i| Song {
-            source: SourceKind::Mock,
-            id: SongId::new(format!("{album_name}/{i}")),
+            id: SongId::new(SourceKind::MOCK, format!("{album_name}/{i}")),
             name: TITLES
                 .get(i % TITLES.len())
                 .copied()

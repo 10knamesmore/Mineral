@@ -89,8 +89,7 @@ mod tests {
     fn with_track(duration_ms: u64, position_ms: u64) -> Playback {
         let mut pb = Playback::new();
         pb.track = Some(Song {
-            source: SourceKind::Local,
-            id: SongId::from("t"),
+            id: SongId::new(SourceKind::LOCAL, "t"),
             name: "t".to_owned(),
             artists: Vec::new(),
             album: None,

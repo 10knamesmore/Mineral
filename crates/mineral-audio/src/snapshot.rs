@@ -36,4 +36,9 @@ pub struct AudioSnapshot {
     /// 音频输出后端形态。`Null` 表示无设备降级(命令被接受但不发声),
     /// client(CLI status / TUI 顶栏)据此提示用户。
     pub backend: AudioBackend,
+
+    /// 当前曲目的**远端字节是否已下完**(仅 capture 播放有意义;本地 / 非 capture 恒 false)。
+    /// 一完成即为 true,不必等播放结束——上层据此把 capture 文件 harvest 进缓存。切歌后
+    /// 在新曲下完前回落为 false。
+    pub download_complete: bool,
 }

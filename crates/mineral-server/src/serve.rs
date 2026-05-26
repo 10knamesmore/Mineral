@@ -68,16 +68,19 @@ async fn reject_busy(stream: UnixStream) {
 async fn handle_connection(stream: UnixStream, client: &ClientHandle) -> color_eyre::Result<()> {
     let mut framed = framed(stream);
     while let Some(req) = recv::<Request, _>(&mut framed).await? {
-        let resp = dispatch(req, client);
+        let resp = dispatch(req, client).await;
         send(&mut framed, &resp).await?;
     }
     Ok(())
 }
 
-/// [`Request`] 到 [`Response`] 的纯函数 dispatch:每条 variant 对应一个 [`Client`]
-/// trait 方法调用,组装成预期的 Response variant。所有错误兜底走 trait 实现层
-/// (出错时返回值类用「合理默认值」),这里不应该再产生 [`Response::Error`]。
-fn dispatch(req: Request, client: &ClientHandle) -> Response {
+/// [`Request`] 到 [`Response`] 的 dispatch:每条 variant 对应一个 [`Client`]
+/// trait 方法或 [`ClientHandle`] 固有方法调用,组装成预期的 Response variant。
+///
+/// sync trait 方法在出错时返回值类用「合理默认值」兜底,不产生 [`Response::Error`];
+/// love / 统计这类有真实失败语义的 async 方法出错时收敛成 [`Response::Error`]
+/// (经 [`mineral_log::chain`] 展开 context 链)。
+async fn dispatch(req: Request, client: &ClientHandle) -> Response {
     if let Some(name) = req_log_name(&req) {
         mineral_log::debug!(target: "ipc", request = name, "handle request");
     }
@@ -142,6 +145,22 @@ fn dispatch(req: Request, client: &ClientHandle) -> Response {
                 sample_rate,
             }
         }
+        Request::DaemonInfo => Response::DaemonInfo {
+            pid: std::process::id(),
+        },
+        Request::ToggleLove(id) => match client.toggle_love_async(&id).await {
+            Ok(new) => Response::LoveToggled(new),
+            Err(e) => Response::Error(mineral_log::chain(&e)),
+        },
+        Request::QuerySongStats(id) => match client.query_song_stats_async(&id).await {
+            Ok(stats) => Response::SongStats(stats),
+            Err(e) => Response::Error(mineral_log::chain(&e)),
+        },
+        Request::Download(target) => {
+            client.download(target);
+            Response::Ok
+        }
+        Request::DownloadProgress => Response::DownloadProgress(client.download_progress()),
     }
 }
 
@@ -153,6 +172,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         | Request::PlayerSnapshot
         | Request::TaskSnapshot
         | Request::DrainTaskEvents
+        | Request::DownloadProgress
         | Request::PullPcm(_) => None,
         Request::Play(_) => Some("Play"),
         Request::Pause => Some("Pause"),
@@ -167,5 +187,9 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::CyclePlayMode => Some("CyclePlayMode"),
         Request::PrevOrRestart => Some("PrevOrRestart"),
         Request::NextSong => Some("NextSong"),
+        Request::DaemonInfo => Some("DaemonInfo"),
+        Request::ToggleLove(_) => Some("ToggleLove"),
+        Request::QuerySongStats(_) => Some("QuerySongStats"),
+        Request::Download(_) => Some("Download"),
     }
 }

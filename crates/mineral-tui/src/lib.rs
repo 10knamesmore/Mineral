@@ -3,12 +3,16 @@
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
+mod anim;
 mod app;
+mod cells;
 mod color;
 mod components;
 mod cover;
 mod daemon;
+mod download_toast;
 mod layout;
+mod notifications;
 mod playback;
 mod prefetch;
 mod remote;
@@ -17,6 +21,7 @@ mod state;
 #[cfg(test)]
 mod test_support;
 mod theme;
+mod toast;
 mod tui;
 mod view;
 mod view_model;
@@ -24,6 +29,7 @@ mod view_model;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
+use mineral_persist::Persist;
 use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
@@ -56,8 +62,22 @@ pub enum Launch {
 ///   - `channels`: 仅 [`Launch::InProc`] 用到(已构造好的全部音乐源,空 vec 也合法);
 ///     `Auto` / `Connect` 下忽略 —— channels 由独立 daemon 进程自己持有。
 ///   - `launch`: 启动模式。
-pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, launch: Launch) -> color_eyre::Result<()> {
-    let cover_fetcher = CoverFetcher::spawn()?;
+///   - `persist`: 持久化句柄,仅 [`Launch::InProc`] 时透传给 [`Server::spawn`];
+///     `Auto` / `Connect` 下传入的句柄不被使用(daemon 进程自己持有 persist)。
+pub async fn run(
+    channels: Vec<Arc<dyn MusicChannel>>,
+    launch: Launch,
+    persist: Persist,
+) -> color_eyre::Result<()> {
+    // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
+    // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
+    let cover_fetcher = CoverFetcher::spawn().unwrap_or_else(|e| {
+        mineral_log::warn!(
+            error = mineral_log::chain(&e),
+            "cover fetcher 起步失败,封面禁用"
+        );
+        CoverFetcher::disabled()
+    });
 
     match launch {
         Launch::Auto => {
@@ -78,7 +98,7 @@ pub async fn run(channels: Vec<Arc<dyn MusicChannel>>, launch: Launch) -> color_
         }
         Launch::InProc => {
             // in-proc 调试:走 Auto,本机有声卡就真出声,没有则降级 null。
-            let server = Server::spawn(channels, mineral_server::AudioMode::Auto)?;
+            let server = Server::spawn(channels, mineral_server::AudioMode::Auto, persist)?;
             // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
             // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
             if let Err(e) = server.start_media_service() {

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
-use mineral_model::{BitRate, SourceKind};
+use mineral_model::SourceKind;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
@@ -227,31 +227,29 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::PlaylistTracks { source, id } => {
-            match channel.songs_in_playlist(id).await {
-                Ok(tracks) => {
-                    event_tx.lock().push(TaskEvent::PlaylistTracksFetched {
-                        id: id.clone(),
-                        tracks,
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        ?source,
-                        op = "songs_in_playlist",
-                        playlist_id = id.as_str(),
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    TaskOutcome::Failed
-                }
+        ChannelFetchKind::PlaylistTracks { id } => match channel.songs_in_playlist(id).await {
+            Ok(tracks) => {
+                event_tx.lock().push(TaskEvent::PlaylistTracksFetched {
+                    id: id.clone(),
+                    tracks,
+                });
+                TaskOutcome::Ok
             }
-        }
-        ChannelFetchKind::SongUrl { source, song_id } => {
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "channel_fetch",
+                    source = ?id.namespace(),
+                    op = "songs_in_playlist",
+                    playlist_id = id.as_str(),
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
+                );
+                TaskOutcome::Failed
+            }
+        },
+        ChannelFetchKind::SongUrl { song_id, quality } => {
             let ids = [song_id.clone()];
-            match channel.song_urls(&ids, BitRate::Higher).await {
+            match channel.song_urls(&ids, *quality).await {
                 Ok(mut urls) => match urls.pop() {
                     Some(play_url) => {
                         event_tx.lock().push(TaskEvent::PlayUrlReady {
@@ -263,7 +261,7 @@ async fn execute(
                     None => {
                         mineral_log::warn!(
                             target: "channel_fetch",
-                            ?source,
+                            source = ?song_id.namespace(),
                             op = "song_url",
                             song_id = song_id.as_str(),
                             "channel returned empty url list"
@@ -274,7 +272,7 @@ async fn execute(
                 Err(e) => {
                     mineral_log::warn!(
                         target: "channel_fetch",
-                        ?source,
+                        source = ?song_id.namespace(),
                         op = "song_url",
                         song_id = song_id.as_str(),
                         error = mineral_log::chain(&e),
@@ -284,7 +282,7 @@ async fn execute(
                 }
             }
         }
-        ChannelFetchKind::Lyrics { source, song_id } => match channel.lyrics(song_id).await {
+        ChannelFetchKind::Lyrics { song_id } => match channel.lyrics(song_id).await {
             Ok(lyrics) => {
                 event_tx.lock().push(TaskEvent::LyricsReady {
                     song_id: song_id.clone(),
@@ -295,7 +293,7 @@ async fn execute(
             Err(e) => {
                 mineral_log::warn!(
                     target: "channel_fetch",
-                    ?source,
+                    source = ?song_id.namespace(),
                     op = "lyrics",
                     song_id = song_id.as_str(),
                     error = mineral_log::chain(&e),

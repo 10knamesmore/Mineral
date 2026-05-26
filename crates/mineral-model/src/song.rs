@@ -10,9 +10,7 @@ use crate::{
 /// 一首歌曲的核心元数据。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Song {
-    /// 来源 channel。
-    pub source: SourceKind,
-    /// 歌曲 ID(在 `source` 内唯一)。
+    /// 歌曲 ID(自带 namespace,在其来源内唯一)。
     pub id: SongId,
     /// 歌名。
     pub name: String,
@@ -28,4 +26,12 @@ pub struct Song {
     /// 这首歌的"原始位置"——本地源就是音频文件路径(`Local`);
     /// 远端源若已下载到缓存可以填 `Local`,否则为 `None`,需走 `song_urls`。
     pub source_url: Option<MediaUrl>,
+}
+
+impl Song {
+    /// 来源 channel——派生自 [`Song::id`] 的 namespace。
+    #[inline]
+    pub fn source(&self) -> SourceKind {
+        self.id.namespace()
+    }
 }

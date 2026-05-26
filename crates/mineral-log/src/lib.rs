@@ -49,6 +49,14 @@ pub fn chain(e: impl std::fmt::Display) -> String {
 /// 滚动日志文件名前缀;tracing-appender 会附加 `.YYYY-MM-DD`。
 const LOG_FILE_PREFIX: &str = "mineral.log";
 
+/// 日志文件所在目录(`<cache_dir>`),给上层做「详见日志」类提示用。
+///
+/// # Return:
+///   日志目录路径;定位 cache dir 失败时返回 `Err`。
+pub fn log_dir() -> color_eyre::Result<std::path::PathBuf> {
+    mineral_paths::cache_dir().wrap_err("locate cache dir for log")
+}
+
 /// 安装全局日志 subscriber,返回的 [`WorkerGuard`] 必须持到进程退出
 /// (drop 它会停掉后台 flush 线程,后续日志静默丢失)。
 ///

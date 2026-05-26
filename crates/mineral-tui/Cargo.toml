@@ -29,6 +29,7 @@ mineral-log          = { workspace = true }
 mineral-macros       = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-paths        = { workspace = true }
+mineral-persist      = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-server       = { workspace = true }
 mineral-task         = { workspace = true }
@@ -44,6 +45,9 @@ tokio                = { workspace = true }
 
 [dev-dependencies]
 insta              = { workspace = true }
+mineral-test       = { workspace = true }
+proptest           = { workspace = true }
+pretty_assertions  = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

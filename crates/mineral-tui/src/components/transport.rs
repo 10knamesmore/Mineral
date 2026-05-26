@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -168,11 +168,18 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     let empty = "░".repeat(BAR_W.saturating_sub(filled));
     // PlayUrl 在 PlayUrlReady 或 prefetch 命中后写入,切歌瞬间清成 None。
     // 没拿到时显 `—`,跟 transport 别处的「无值」表示一致。
-    let fmt_text = pb
+    // 文本用 channel 实测的 format + bitrate;颜色按实测音质分级(见 fmt_tier_color)。
+    let (fmt_text, fmt_color) = pb
         .play_url
         .as_ref()
-        .map(|pu| format!("{} {}kbps", pu.format, pu.bitrate_bps / 1000))
-        .unwrap_or_else(|| "—".to_owned());
+        .map(|pu| {
+            let text = format!("{} {}kbps", pu.format, pu.bitrate_bps / 1000);
+            (
+                text,
+                fmt_tier_color(pu.format.is_lossless(), pu.bitrate_bps, theme),
+            )
+        })
+        .unwrap_or_else(|| ("—".to_owned(), theme.overlay));
     let line = Line::from(vec![
         Span::styled(" vol ", Style::new().fg(theme.overlay)),
         Span::styled(fill, Style::new().fg(theme.accent)),
@@ -186,19 +193,75 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
         Span::styled("   │   ", Style::new().fg(theme.surface1)),
         Span::styled("fmt ", Style::new().fg(theme.overlay)),
-        Span::styled(fmt_text, Style::new().fg(theme.text)),
+        Span::styled(fmt_text, Style::new().fg(fmt_color)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// 按 channel **实测**的格式(无损与否)+ 实际码率分 5 档配色。
+///
+/// 刻意不读 `PlayUrl::quality`——那是请求侧的归一化等级,channel 可「尽力提供」
+/// 返回完全不同的实际音质(如 local channel 无视请求)。显示音质必须以实测为准。
+fn fmt_tier_color(lossless: bool, bitrate_bps: u32, theme: &Theme) -> Color {
+    match (lossless, bitrate_bps) {
+        (true, b) if b >= 1_800_000 => theme.yellow, // Hi-Res 级无损(≈24bit/96k 起)
+        (true, _) => theme.accent,                   // 无损(FLAC/WAV/APE/ALAC)
+        (false, b) if b >= 320_000 => theme.green,   // 高码有损
+        (false, b) if b >= 192_000 => theme.text,    // 中码
+        _ => theme.overlay,                          // 低码 / 缺失
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
+    use super::fmt_tier_color;
     use crate::playback::Playback;
-    use crate::test_support::song;
+    use crate::test_support::{song, with_duration, with_name};
     use crate::theme::Theme;
+
+    /// 把档位颜色映射成「音质秩」(越高越好)——同一 lossless 类内,码率↑ 秩不该↓。
+    fn tier_rank(c: Color, theme: &Theme) -> u8 {
+        match c {
+            x if x == theme.yellow => 4, // Hi-Res 级无损
+            x if x == theme.accent => 3, // 普通无损
+            x if x == theme.green => 2,  // 高码有损
+            x if x == theme.text => 1,   // 中码有损
+            _ => 0,                      // 低码 / 缺失(overlay)
+        }
+    }
+
+    proptest! {
+        /// 无损只配 `{accent, yellow}`、有损只配 `{green, text, overlay}`——两类配色不串。
+        #[test]
+        fn prop_tier_color_partitioned(lossless in any::<bool>(), bitrate in 0u32..3_000_000) {
+            let theme = Theme::default();
+            let c = fmt_tier_color(lossless, bitrate, &theme);
+            if lossless {
+                prop_assert!(c == theme.accent || c == theme.yellow);
+            } else {
+                prop_assert!(c == theme.green || c == theme.text || c == theme.overlay);
+            }
+        }
+
+        /// 同一 lossless 类内,码率单调不降 ⇒ 档位秩单调不降(阈值排序无错位)。
+        #[test]
+        fn prop_tier_monotonic_in_bitrate(
+            lossless in any::<bool>(),
+            b1 in 0u32..3_000_000,
+            b2 in 0u32..3_000_000,
+        ) {
+            let (lo, hi) = if b1 <= b2 { (b1, b2) } else { (b2, b1) };
+            let theme = Theme::default();
+            let r_lo = tier_rank(fmt_tier_color(lossless, lo, &theme), &theme);
+            let r_hi = tier_rank(fmt_tier_color(lossless, hi, &theme), &theme);
+            prop_assert!(r_lo <= r_hi);
+        }
+    }
 
     /// 无 track:transport 空态。
     #[test]
@@ -215,7 +278,10 @@ mod tests {
     fn transport_playing_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("1", "LoveLetterTypewriter", 225_000));
+        pb.track = Some(with_duration(
+            with_name(song("1"), "LoveLetterTypewriter"),
+            225_000,
+        ));
         pb.position_ms = 60_000;
         pb.playing = true;
         pb.volume_pct = 80;
@@ -232,7 +298,10 @@ mod tests {
     fn transport_paused_long_title_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("10", "TheLastWordIsRejoice", 309_000));
+        pb.track = Some(with_duration(
+            with_name(song("10"), "TheLastWordIsRejoice"),
+            309_000,
+        ));
         pb.position_ms = 30_000;
         pb.playing = false;
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
@@ -249,7 +318,10 @@ mod tests {
     fn transport_cjk_title_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
-        pb.track = Some(song("c6", "地球上最后一个EMO男孩", 240_000));
+        pb.track = Some(with_duration(
+            with_name(song("c6"), "地球上最后一个EMO男孩"),
+            240_000,
+        ));
         pb.position_ms = 60_000;
         pb.playing = true;
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;

@@ -16,6 +16,6 @@ mod player;
 
 pub use cancel::CancelFilter;
 pub use codec::{Framed, framed, recv, send};
-pub use message::{Request, Response};
+pub use message::{DownloadProgress, DownloadTarget, Request, Response, SongStatsWire};
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{PlayMode, PlayerSnapshot, Repeat};

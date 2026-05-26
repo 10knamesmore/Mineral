@@ -19,11 +19,15 @@ mineral-channel-mock    = { workspace = true, optional = true }
 mineral-channel-netease = { workspace = true }
 mineral-cli             = { workspace = true }
 mineral-log             = { workspace = true }
+mineral-paths           = { workspace = true }
+mineral-persist         = { workspace = true }
 mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 
 [dev-dependencies]
-nix = { workspace = true }
+nix        = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 
 [lints]
 workspace = true

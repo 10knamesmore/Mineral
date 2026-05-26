@@ -5,9 +5,7 @@ use crate::{ids::AlbumId, refs::ArtistRef, song::Song, source::SourceKind, url::
 /// 一张专辑及其曲目。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Album {
-    /// 来源 channel。
-    pub source: SourceKind,
-    /// 专辑 ID(在 `source` 内唯一)。
+    /// 专辑 ID(自带 namespace,在其来源内唯一)。
     pub id: AlbumId,
     /// 专辑名。
     pub name: String,
@@ -21,4 +19,12 @@ pub struct Album {
     pub cover_url: Option<MediaUrl>,
     /// 曲目列表,顺序 = 专辑曲目顺序。
     pub songs: Vec<Song>,
+}
+
+impl Album {
+    /// 来源 channel——派生自 [`Album::id`] 的 namespace。
+    #[inline]
+    pub fn source(&self) -> SourceKind {
+        self.id.namespace()
+    }
 }

@@ -41,6 +41,36 @@ impl Daemon {
         Self::spawn_inner(tag, /*force_null*/ true)
     }
 
+    /// 起一个**注定启动失败**的 daemon:预埋一份旧透明格式的网易云凭证
+    /// (`user_id` 是裸字符串),结构化后的 `UserId` 解不出来 → daemon 在 build channels
+    /// 阶段就 `Err` 退出。用于验证「启动失败被写进日志 / 被 client 看见」。
+    fn spawn_failing_credential(tag: &str) -> color_eyre::Result<Self> {
+        let root = std::env::temp_dir().join(format!(
+            "mineral-e2e-{}-{}-{}",
+            tag,
+            std::process::id(),
+            unique_suffix()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).wrap_err("create isolated runtime dir")?;
+        let cred_dir = root.join("data/mineral");
+        std::fs::create_dir_all(&cred_dir).wrap_err("create credential dir")?;
+        // 旧格式:user_id 是裸字符串(结构化前的 `#[serde(transparent)]` 形态)。
+        std::fs::write(
+            cred_dir.join("netease.json"),
+            r#"{"music_u":"opaque-token","user_id":"349758847"}"#,
+        )
+        .wrap_err("seed legacy credential")?;
+        let child = serve_command(&root)
+            .spawn()
+            .wrap_err("spawn failing `mineral serve`")?;
+        let socket = root.join("runtime/mineral/mineral.sock");
+        Ok(Self {
+            child,
+            root,
+            socket,
+        })
+    }
+
     /// `spawn` / `spawn_null` 的共同实现。
     fn spawn_inner(tag: &str, force_null: bool) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
@@ -218,29 +248,56 @@ fn daemon_logs_shutdown_on_sigterm() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 单个 channel 凭证损坏时,daemon **不该整体退出**——只跳过该源 + 记 warn,照常 bind /
+/// serve。验证「单 channel 失败不阻塞 daemon」。
+#[test]
+fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn_failing_credential("badcred")?;
+
+    // 单 client 设计:不做独立 wait_ready 探测(探测连接释放 busy 的窗口会跟紧接的
+    // status 撞成 busy)。直接重试 status —— 它本身就是就绪探测,连不上 / 瞬时 busy
+    // 都重试到成功。能成功即证明坏凭证下 daemon 仍 bind + serve。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if daemon.status_output()?.status.success() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!("坏 netease 凭证下 daemon 始终未能正常 serve(应跳过该源照常起)");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let logs = daemon.read_logs()?;
+    assert!(
+        logs.contains("netease channel 构建失败,跳过"),
+        "应记 warn 跳过该源(而非整体崩),实际:\n{logs}"
+    );
+    Ok(())
+}
+
 /// 强制 null 后端的 daemon:`mineral status` 应连上、退出码 0、且报告 backend 降级。
 /// 覆盖「engine null → AudioSnapshot.backend → IPC → CLI status 感知」整条链。
 #[test]
 fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn_null("nullstatus")?;
-    daemon.wait_ready()?;
 
-    // daemon 是单 client 设计(serve.rs):wait_ready 的探测连接释放 busy 标志有个
-    // 短窗口,与 `mineral status` 撞上会被「daemon busy」拒。重试到成功 / 超时。
+    // 不做独立的 wait_ready 探测连接 —— daemon 是单 client 设计(serve.rs),探测连接
+    // 释放 busy 标志的短窗口会跟紧接的 `mineral status` 撞成「daemon busy」。改成直接
+    // 重试 status:它本身就是就绪探测,连不上(daemon 未起)/ 瞬时 busy 都重试到成功,
+    // 全程只有这一个 client,无竞态。
     let deadline = Instant::now() + Duration::from_secs(10);
     let stdout = loop {
         let out = daemon.status_output()?;
         if out.status.success() {
             break String::from_utf8_lossy(&out.stdout).into_owned();
         }
-        let stderr = String::from_utf8_lossy(&out.stderr);
         if Instant::now() >= deadline {
-            bail!("status 始终未成功退出,最后 stderr:\n{stderr}");
+            bail!(
+                "status 始终未成功退出,最后 stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
-        assert!(
-            stderr.contains("busy"),
-            "status 非零退出但不是 busy(非预期),stderr:\n{stderr}"
-        );
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(

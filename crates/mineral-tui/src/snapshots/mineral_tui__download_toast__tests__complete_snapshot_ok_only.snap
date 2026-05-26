@@ -1,0 +1,8 @@
+---
+source: crates/mineral-tui/src/download_toast.rs
+description: "下载完成提示:全成功 → 只 ✓5,无 ✗"
+expression: t.backend()
+---
+"                      [ 下载完成 ✓5 ]                       " Hidden by multi-width symbols: [(25, " "), (27, " "), (29, " "), (31, " ")]
+"                                                            "
+"                                                            "

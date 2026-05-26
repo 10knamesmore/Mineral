@@ -13,9 +13,11 @@ members = [
     "crates/mineral-protocol",
     "crates/mineral-server",
     "crates/mineral-spectrum",
+    "crates/mineral-test",
     "crates/mineral-channel/core",
     "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
+    "crates/mineral-persist",
 ]
 resolver = "2"
 
@@ -58,9 +60,11 @@ mineral-paths           = { path = "crates/mineral-paths" }
 mineral-protocol        = { path = "crates/mineral-protocol" }
 mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
+mineral-test            = { path = "crates/mineral-test" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
+mineral-persist         = { path = "crates/mineral-persist" }
 uuid               = { version = "1", features = ["v4"] }
 async-trait        = "0.1"
 thiserror          = "1"
@@ -85,6 +89,7 @@ ratatui            = "0.29"
 ratatui-image      = "8.0"
 rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }
 stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
+reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 clap               = { version = "4.5", features = ["derive"] }
 qrcode             = "0.14"
 serde              = { version = "1.0", features    = ["derive"] }
@@ -97,8 +102,13 @@ time               = "0.3"
 typed-builder      = "0.20"
 tokio              = { version = "1.45.1", features = ["full"] }
 tokio-util         = { version = "0.7", features = ["codec"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 parking_lot       = "0.12"
 insta              = { version = "1", features = ["filters"] }
+proptest           = "1"
+assert_cmd         = "2"
+predicates         = "3"
+pretty_assertions  = "1"
 tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }
@@ -168,3 +178,19 @@ too_many_lines      = "deny"
 
 # --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
 missing_docs_in_private_items = "deny"
+
+# 发布构建:在默认 release(opt-level=3)基础上压榨运行性能 + 顺手收体积。
+# 一次性代价是全量 release 编译明显变慢(lto + 单 codegen-unit)。panic 保留默认 unwind
+# (TUI panic hook 链恢复终端需要,见 mineral-tui)。
+[profile.release]
+lto = "thin"          # 跨 crate 链接时优化(thin:收益大、比 fat 快)
+codegen-units = 1     # 合并 codegen 单元,优化更彻底(牺牲并行编译)
+strip = true          # 剥符号表,显著减小产物体积
+
+# 性能剖析专用 profile:release 全部优化 + 完整 DWARF 符号,供 perf / 火焰图采到函数名。
+# 产物落在 target/profiling/,与正常 `--release`(target/release/,不带 DWARF)物理隔离,
+# 符号只在剖析这一种场景出现,不会进真正发布的二进制。用法见 `cargo profbuild`(.cargo/config.toml)。
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false         # 覆盖 release 的 strip:剖析要保住 DWARF 符号

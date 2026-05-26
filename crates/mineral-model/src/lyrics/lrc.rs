@@ -181,9 +181,10 @@ mod tests {
                  [00:12.50]壱雫空\n\
                  [00:15.20][00:48.30]碧天伴走\n\
                  [01:00.999]名無声";
-        insta::with_settings!({ description => "真实 LRC:metadata 跳过、多时间戳展开、CJK、厘秒" }, {
-            insta::assert_debug_snapshot!(LrcLyric::parse(s).to_vec());
-        });
+        mineral_test::assert_snap_debug!(
+            "真实 LRC:metadata 跳过、多时间戳展开、CJK、厘秒",
+            LrcLyric::parse(s).to_vec()
+        );
     }
 
     #[test]
@@ -265,5 +266,21 @@ mod tests {
         assert_eq!(lyric.current_index(1500), Some(0));
         assert_eq!(lyric.current_index(2000), Some(1));
         assert_eq!(lyric.current_index(5000), Some(2));
+    }
+
+    proptest::proptest! {
+        /// 任意字符串喂解析器都不 panic(脏输入鲁棒性)。
+        #[test]
+        fn parse_never_panics(s in ".*") {
+            let _ = LrcLyric::parse(&s).to_vec();
+        }
+
+        /// 严出幂等:解析→标准串→再解析→标准串,两次标准串相等(parser/serializer 自洽)。
+        #[test]
+        fn strict_output_is_idempotent(s in ".*") {
+            let once = LrcLyric::parse(&s).to_lrc_string();
+            let twice = LrcLyric::parse(&once).to_lrc_string();
+            proptest::prop_assert_eq!(once, twice);
+        }
     }
 }

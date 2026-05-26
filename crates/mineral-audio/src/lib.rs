@@ -5,6 +5,7 @@
 
 mod command;
 mod engine;
+mod file_storage;
 mod handle;
 mod snapshot;
 mod tap;

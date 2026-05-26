@@ -1,19 +1,20 @@
 //! Playlists 视图渲染。
 
-use mineral_model::SourceKind;
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
+};
 
 use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::view_model::PlaylistView;
 
-/// 渲染 Playlists 视图到给定 [`Rect`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+/// 渲染 Playlists 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
+pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
     let pos = position_label(state.sel_playlist, total);
@@ -30,9 +31,9 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
-    // 没 cookie / 拉失败 —— 直接给出 `mineral-cli login` 引导。
+    // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
     if state.playlists.is_empty() && state.search_q.is_empty() {
-        paint_empty_state(frame, area, state, theme, block);
+        paint_empty_state(buf, area, state, theme, block);
         return;
     }
 
@@ -72,7 +73,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
     let mut table_state = TableState::default();
     table_state.select(Some(state.sel_playlist));
-    frame.render_stateful_widget(table, area, &mut table_state);
+    StatefulWidget::render(table, area, buf, &mut table_state);
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 / 来源 channel / 总时长 / 曲目数)。
@@ -91,6 +92,7 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
         }
     };
     let count_label = format!("{}", p.data.track_count);
+    let src = p.data.source();
 
     Row::new(vec![
         Cell::from(Line::from(highlight(
@@ -100,32 +102,12 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
             theme,
         ))),
         Cell::from(Span::styled(
-            channel_label(p.data.source),
-            channel_style(p.data.source, theme),
+            src.label(),
+            Style::new().fg(theme.source_color(src.palette())),
         )),
         Cell::from(Span::styled(len_label, Style::new().fg(theme.subtext))),
         Cell::from(Span::styled(count_label, Style::new().fg(theme.overlay))),
     ])
-}
-
-/// 把 [`SourceKind`] 翻成「图标 + 名字」的短标签(playlists 列用)。
-fn channel_label(src: SourceKind) -> &'static str {
-    match src {
-        SourceKind::Netease => "♫ netease",
-        SourceKind::Local => "□ local",
-        #[cfg(feature = "mock")]
-        SourceKind::Mock => "▒ mock",
-    }
-}
-
-/// 把 [`SourceKind`] 映射到 channel 标签的染色。
-fn channel_style(src: SourceKind, theme: &Theme) -> Style {
-    match src {
-        SourceKind::Netease => Style::new().fg(theme.red),
-        SourceKind::Local => Style::new().fg(theme.subtext),
-        #[cfg(feature = "mock")]
-        SourceKind::Mock => Style::new().fg(theme.overlay),
-    }
 }
 
 /// 搜索 badge:`/q` 形式,空 query 不渲染。
@@ -139,14 +121,14 @@ fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
 
 /// 全空 playlist 时画 block + 居中两行提示。loading / 未登录文案二选一。
 fn paint_empty_state(
-    frame: &mut Frame<'_>,
+    buf: &mut Buffer,
     area: Rect,
     state: &AppState,
     theme: &Theme,
     block: Block<'_>,
 ) {
     let inner = block.inner(area);
-    frame.render_widget(block, area);
+    block.render(area, buf);
     if inner.height == 0 || inner.width == 0 {
         return;
     }
@@ -159,32 +141,33 @@ fn paint_empty_state(
             )),
         ]
     } else {
+        // 空 = 所有源都没产出(未登录 / 该源无歌单)。不写死单源:列一个登录示例,
+        // `例如` 体现多源可扩展;命令是完整子命令链(bin=mineral)。
         vec![
             Line::from(""),
             Line::from(Span::styled(
-                "尚未登录或拉取失败",
+                "还没有可用歌单",
                 Style::new().fg(theme.subtext),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "请先在另一个终端跑:",
+                "登录一个音乐源,例如:",
                 Style::new().fg(theme.overlay),
             )),
             Line::from(Span::styled(
-                "  mineral-cli login",
+                "  mineral channel netease login",
                 Style::new().fg(theme.peach).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "登录完成后重启本程序",
+                "登录后重启 mineral 生效",
                 Style::new().fg(theme.overlay),
             )),
         ]
     };
-    frame.render_widget(
-        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
-        inner,
-    );
+    Paragraph::new(lines)
+        .alignment(ratatui::layout::Alignment::Center)
+        .render(inner, buf);
 }
 
 /// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
@@ -219,7 +202,10 @@ mod tests {
     fn playlists_list_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = crate::test_support::state_with_playlists();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!(
             "歌单列表:3 个混源歌单(EndSerenading / 本地)",
             t.backend()
@@ -232,7 +218,10 @@ mod tests {
     fn playlists_empty_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = AppState::empty();
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
         crate::test_support::assert_snap!("歌单列表:空态(未加载 / 未登录)", t.backend());
         Ok(())
     }

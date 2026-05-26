@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
+use mineral_persist::Persist;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
 use crate::client::ClientHandle;
+use crate::media_cache::{MEDIA_CACHE_CAPACITY, MediaCache};
 use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
 use crate::serve;
@@ -34,15 +36,20 @@ impl Server {
     /// # Params:
     ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
     ///   - `audio_mode`: 音频后端选择,见 [`AudioMode`];无设备时 `Auto` 会降级而非失败。
+    ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
     pub fn spawn(
         channels: Vec<Arc<dyn MusicChannel>>,
         audio_mode: AudioMode,
+        persist: Persist,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels);
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode)?;
         mineral_log::debug!(target: "server", "audio engine ready");
-        let player = PlayerCore::spawn(audio, scheduler, channels);
+        let media_cache = open_media_cache();
+        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache);
+        // 读回上次会话 —— 本轮仅打日志确认能读到,不应用到播放状态(不自动恢复)。
+        tokio::spawn(log_last_session(player.clone()));
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
@@ -79,6 +86,38 @@ impl Server {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
         serve::run(listener, self.client(), Arc::clone(&self.busy), on_connect).await
+    }
+}
+
+/// 打开音频本体缓存;目录解析 / open 失败时 `warn` 并降级到 [`MediaCache::disabled`]
+/// (不阻断 daemon 启动,沿用封面缓存起不来也降级的处理)。
+fn open_media_cache() -> MediaCache {
+    match mineral_paths::audio_cache_dir()
+        .and_then(|dir| MediaCache::open(&dir, MEDIA_CACHE_CAPACITY))
+    {
+        Ok(cache) => cache,
+        Err(e) => {
+            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存打开失败,降级禁用");
+            MediaCache::disabled()
+        }
+    }
+}
+
+/// 启动时读回上次会话并打日志确认能读到 —— **不**应用到播放状态(本轮不自动恢复)。
+/// 读不到走 debug;读出错仅 warn,不影响 daemon 启动。
+async fn log_last_session(player: PlayerCore) {
+    match player.load_session().await {
+        Ok(Some(snap)) => mineral_log::info!(
+            target: "session",
+            queue_len = snap.queue.len(),
+            position_ms = snap.position_ms,
+            play_mode = %snap.play_mode,
+            "读到上次会话"
+        ),
+        Ok(None) => mineral_log::debug!(target: "session", "无历史会话"),
+        Err(e) => {
+            mineral_log::warn!(target: "session", error = mineral_log::chain(&e), "读取上次会话失败");
+        }
     }
 }
 

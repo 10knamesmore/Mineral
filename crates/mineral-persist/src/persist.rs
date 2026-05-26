@@ -1,0 +1,168 @@
+//! Persist 句柄与后端。
+
+use std::sync::Arc;
+
+use color_eyre::eyre::WrapErr;
+use mineral_log::{info, warn};
+use mineral_model::SourceKind;
+use sqlx::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
+
+use crate::db::schema::ensure_schema;
+use crate::db::{NamespaceStore, SessionStore};
+
+/// 持久化服务句柄。廉价 clone(内部 `Arc`)。
+///
+/// 打开失败时降级为 [`Persist::disabled`]:所有写静默成功、所有读返回空,
+/// 调用方(channel / server)无需特判,播放照常。
+#[derive(Clone)]
+pub struct Persist {
+    /// 内部后端(真实 sqlite 或降级 null)。
+    backend: Arc<Backend>,
+}
+
+/// 内部后端:真实 sqlite 或降级 null。
+enum Backend {
+    /// 真实 sqlite 连接池。
+    Sqlite(SqlitePool),
+
+    /// 降级:写丢弃、读空。
+    Disabled,
+}
+
+impl Persist {
+    /// 打开(或创建)数据库文件并建表。
+    ///
+    /// # Params:
+    ///   - `db_path`: sqlite 文件路径(不存在则创建)
+    ///
+    /// # Return:
+    ///   成功返回启用的句柄;失败返回 `Err`(调用方可改用 [`Self::disabled`] 降级)。
+    pub async fn open(db_path: &std::path::Path) -> color_eyre::Result<Self> {
+        info!(target: "persist", path = %db_path.display(), "打开持久化数据库");
+        let url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .wrap_err_with(|| format!("连接 sqlite 失败 path={}", db_path.display()))?;
+        ensure_schema(&pool).await?;
+        Ok(Self {
+            backend: Arc::new(Backend::Sqlite(pool)),
+        })
+    }
+
+    /// 降级句柄:不落盘、读空、写丢弃。
+    ///
+    /// # Return:
+    ///   一个永远成功但无副作用的 [`Persist`]。
+    pub fn disabled() -> Self {
+        warn!(target: "persist", "持久化降级为 no-op(disabled)");
+        Self {
+            backend: Arc::new(Backend::Disabled),
+        }
+    }
+
+    /// 取连接池(降级时为 `None`)。
+    ///
+    /// # Return:
+    ///   启用时为底层连接池,降级时为 `None`。
+    pub(crate) fn pool(&self) -> Option<&SqlitePool> {
+        match self.backend.as_ref() {
+            Backend::Sqlite(p) => Some(p),
+            Backend::Disabled => None,
+        }
+    }
+
+    /// 取某来源命名空间下的存储视图。
+    ///
+    /// # Params:
+    ///   - `source`: 来源标识(决定 namespace 过滤)
+    ///
+    /// # Return:
+    ///   绑定该 namespace 的 [`NamespaceStore`]。
+    pub fn scope(&self, source: SourceKind) -> NamespaceStore {
+        NamespaceStore::new(self.clone(), source)
+    }
+
+    /// 取全局会话存储。
+    ///
+    /// # Return:
+    ///   [`SessionStore`]。
+    pub fn session(&self) -> SessionStore {
+        SessionStore::new(self.clone())
+    }
+
+    /// 清空歌单缓存(`playlist_cache` + `playlist_tracks` 全部来源)。
+    ///
+    /// 只清可重建的歌单缓存，**不动**播放统计 / love / 历史 / 会话 / song_meta。
+    /// 降级句柄下 no-op。
+    ///
+    /// # Return:
+    ///   清理成功返回 `Ok(())`。
+    pub async fn clear_playlist_caches(&self) -> color_eyre::Result<()> {
+        let Some(pool) = self.pool() else {
+            return Ok(());
+        };
+        info!(target: "persist", "清理歌单缓存");
+        // 两表清理包进事务,避免中途失败留下半清状态(tracks 清了 cache 没清)。
+        let mut tx = pool
+            .begin()
+            .await
+            .wrap_err("开启 clear_playlist_caches 事务失败")?;
+        sqlx::query("DELETE FROM playlist_tracks")
+            .execute(&mut *tx)
+            .await
+            .wrap_err("清空 playlist_tracks 失败")?;
+        sqlx::query("DELETE FROM playlist_cache")
+            .execute(&mut *tx)
+            .await
+            .wrap_err("清空 playlist_cache 失败")?;
+        tx.commit()
+            .await
+            .wrap_err("提交 clear_playlist_caches 事务失败")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Persist;
+
+    #[tokio::test]
+    async fn open_creates_db_and_schema() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let p = Persist::open(&dir.path().join("t.db")).await?;
+        assert!(p.pool().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_has_no_pool() {
+        assert!(Persist::disabled().pool().is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_playlist_caches_keeps_user_data() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SongId, SourceKind};
+        let dir = tempfile::tempdir()?;
+        let p = Persist::open(&dir.path().join("t.db")).await?;
+        let s = p.scope(SourceKind::NETEASE);
+        // 写入：歌单缓存(应被清) + 播放统计/love(应保留)
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        let song = SongId::new(SourceKind::NETEASE, "s1");
+        s.put_playlist_cache(&pid, Some("歌单"), Some(1), std::slice::from_ref(&song))
+            .await?;
+        s.record_play(&song, 1000).await?;
+        s.set_loved(&song, true).await?;
+
+        p.clear_playlist_caches().await?;
+
+        // 歌单缓存没了
+        assert!(s.get_playlist_cache(&pid).await?.is_none());
+        // 但统计 + love 还在
+        assert!(s.query_stats(&song).await?.is_some());
+        assert!(s.is_loved(&song).await?);
+        Ok(())
+    }
+}

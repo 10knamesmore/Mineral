@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
 
+use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::status;
 
@@ -35,6 +36,13 @@ pub struct Args {
 /// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// 缓存管理(清理可重建缓存)。
+    Cache {
+        /// cache 下的具体子命令。
+        #[command(subcommand)]
+        cmd: CacheCommand,
+    },
+
     /// 管理音乐源(登录、调试)。
     Channel(ChannelArgs),
 
@@ -62,6 +70,7 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
 /// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
+        Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
         Command::Status => status::run().await,
         Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),

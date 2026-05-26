@@ -95,9 +95,7 @@ mod tests {
             ]
         });
         let r: SearchSongsResult = from_value(raw)?;
-        insta::with_settings!({ description => "搜索歌曲列表(MyGO 迷星叫 / 碧天伴走)解析结构" }, {
-            insta::assert_debug_snapshot!(r);
-        });
+        mineral_test::assert_snap_debug!("搜索歌曲列表(MyGO 迷星叫 / 碧天伴走)解析结构", r);
         Ok(())
     }
 
@@ -117,9 +115,7 @@ mod tests {
                         "album": { "id": 1, "name": null }, "duration": 0 }]
         });
         let r: SearchSongsResult = from_value(raw)?;
-        insta::with_settings!({ description => "搜索列表容错:null 艺人跳过 + null 专辑名 → 空串" }, {
-            insta::assert_debug_snapshot!(r);
-        });
+        mineral_test::assert_snap_debug!("搜索列表容错:null 艺人跳过 + null 专辑名 → 空串", r);
         Ok(())
     }
 }

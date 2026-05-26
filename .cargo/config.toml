@@ -4,3 +4,17 @@
 #   cargo apitest                                # 只跑无登录部分
 #   NETEASE_MUSIC_U=<浏览器 cookie> cargo apitest # 同时跑登录态用例
 apitest = "run -p mineral-channel-netease --example apitest"
+
+# 测试快捷方式(需 `cargo install cargo-nextest cargo-insta`):
+#   cargo t      跑全仓测试(nextest)
+#   cargo td     跑 doctest(nextest 不覆盖,单独兜)
+#   cargo snap   跑测试 + 进 insta 快照审阅(改了快照时用;绝不 accept-all)
+t    = "nextest run --workspace"
+td   = "test --workspace --doc"
+snap = "insta test --test-runner nextest --review"
+
+# 性能剖析专用 build:release 优化 + 完整 DWARF 符号(见 Cargo.toml [profile.profiling])。
+# 产物在 target/profiling/mineral,符号只为 perf / 火焰图,不污染 `--release`。
+#   cargo profbuild
+#   perf record -g --call-graph dwarf -p $(pgrep -xf target/profiling/mineral) -- sleep 20
+profbuild = "build --profile profiling -p mineral"

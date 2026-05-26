@@ -11,11 +11,15 @@ use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use mineral_model::{LrcLyric, WordLyric};
+use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
+use crate::anim::Transition;
 use crate::components::spectrum::SpectrumState;
 use crate::playback::Playback;
 use crate::view_model::{PlaylistView, SongView};
+
+/// Playlists ↔ Library 切换过渡时长(tick 数);≈ 18 tick ≈ 288ms,与整屏转场同速。
+const SWEEP_TICKS: u16 = 18;
 
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
 ///
@@ -33,22 +37,29 @@ pub enum View {
     Library,
 }
 
-/// 当前键盘焦点(用于浮层与主区域之间路由按键)。
+/// 歌词面板的副歌词显示档(翻译 / 罗马音),由 `t` 键循环切换。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Focus {
-    /// 主区域(左栏 / library)。
+pub enum LyricExtra {
+    /// 只显示原文(默认)。
     #[default]
-    Left,
+    None,
 
-    /// 浮动 queue 面板。
-    Queue,
+    /// 原文下叠加行级翻译。
+    Translation,
+
+    /// 原文下叠加行级罗马音。
+    Romanization,
 }
 
 /// 应用顶层状态。
 #[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
 pub struct AppState {
-    /// 左栏当前视图。
+    /// 左栏当前视图。切换时立即设为目标值,供按键路由;渲染端的过渡位置看 [`Self::view_pos`]。
     pub view: View,
+
+    /// 左栏 Playlists ↔ Library 横向过渡位置:`0` = Playlists、满值 = Library。
+    /// 切到 Library 调 `enter`、回 Playlists 调 `leave`,中途再反向只改 target 不跳变。
+    pub view_pos: Transition,
 
     /// 已加载的歌单(跨 channel 合并;按到达顺序 append)。
     pub playlists: Vec<PlaylistView>,
@@ -61,11 +72,12 @@ pub struct AppState {
     /// 对齐 cover 的 `cover_pending`。
     pub tracks_requested: FxHashSet<PlaylistId>,
 
-    /// 歌曲 id → 行级 LRC;不在 map 里表示还没拉到 / 拉失败。
-    pub lyrics_cache: FxHashMap<SongId, LrcLyric>,
+    /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /
+    /// 拉失败。channel 层已清洗,client 直接收整份,渲染时按需取各字段。
+    pub lyrics_cache: FxHashMap<SongId, Lyrics>,
 
-    /// 歌曲 id → 逐字歌词;有逐字才插入,渲染时优先于 LRC。
-    pub words_cache: FxHashMap<SongId, WordLyric>,
+    /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
+    pub lyric_extra: LyricExtra,
 
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
@@ -94,27 +106,11 @@ pub struct AppState {
     /// 频谱 FFT 计算器:吃 PCM 样本,出 64 根条的目标高度。
     pub fft: SpectrumComputer,
 
-    /// 浮动 queue 当前曲目列表。
+    /// 浮动 queue 当前曲目列表(后端权威态)。
     pub queue: Vec<Song>,
-
-    /// queue 浮层是否显示。
-    pub queue_open: bool,
-
-    /// queue 浮层选中行。
-    pub queue_sel: usize,
-
-    /// 当前键盘焦点。
-    pub focus: Focus,
 
     /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
     pub search_mode: bool,
-
-    /// quit confirm modal 是否打开。
-    pub confirm_open: bool,
-
-    /// 与 daemon 的链路是否已断开(被单独 kill / crash)。置位后盖断连提示 modal,
-    /// 停在那等用户按键退出。
-    pub disconnected: bool,
 
     /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
     /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
@@ -163,11 +159,12 @@ impl AppState {
     pub fn empty() -> Self {
         Self {
             view: View::Playlists,
+            view_pos: Transition::new(SWEEP_TICKS),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
-            words_cache: FxHashMap::default(),
+            lyric_extra: LyricExtra::None,
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,
@@ -178,12 +175,7 @@ impl AppState {
             spectrum: SpectrumState::new(),
             fft: SpectrumComputer::new(),
             queue: Vec::new(),
-            queue_open: false,
-            queue_sel: 0,
-            focus: Focus::Left,
             search_mode: false,
-            confirm_open: false,
-            disconnected: false,
             prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),
@@ -210,13 +202,28 @@ impl AppState {
     fn decorate(&self, song: Song) -> SongView {
         let loved = self
             .liked_ids
-            .get(&song.source)
+            .get(&song.source())
             .is_some_and(|s| s.contains(&song.id));
         SongView {
             data: song,
             loved,
             plays: 0,
         }
+    }
+
+    /// 本地乐观切换一首歌的喜欢态(翻转 `liked_ids` 并重装该源曲目)。
+    ///
+    /// 不等 server 确认——按键即时反馈;真实持久化由 `client.toggle_love` 触发,
+    /// 失败由下次 `LikedSongIdsFetched` fetch 纠正。
+    ///
+    /// # Params:
+    ///   - `song`: 目标歌曲
+    pub fn toggle_loved_local(&mut self, song: &Song) {
+        let set = self.liked_ids.entry(song.source()).or_default();
+        if !set.remove(&song.id) {
+            set.insert(song.id.clone());
+        }
+        self.redecorate_for_source(song.source());
     }
 
     /// 某个 channel 的 user-data 到位 / 变化时,把 `tracks_cache` 里属于该 source
@@ -230,7 +237,7 @@ impl AppState {
                 let next: Vec<SongView> = tracks
                     .into_iter()
                     .map(|sv| {
-                        if sv.data.source == source {
+                        if sv.data.source() == source {
                             self.decorate(sv.data)
                         } else {
                             sv
@@ -267,20 +274,68 @@ impl AppState {
                 self.redecorate_for_source(*source);
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
-            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
+            // Notice 在 drain_task_events 已单独路由到 toast,不会进这里;一并 defensive 跳过。
+            TaskEvent::PlayUrlReady { .. }
+            | TaskEvent::LyricsReady { .. }
+            | TaskEvent::Notice { .. } => {}
         }
     }
 
-    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
-    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
+    /// 当前曲目的完整歌词集合;未拉到时返回 `None`。
+    fn current_lyrics_set(&self) -> Option<&Lyrics> {
         let song = self.playback.track.as_ref()?;
         self.lyrics_cache.get(&song.id)
     }
 
+    /// 当前曲目的行级歌词(按时间升序);未拉到时返回 `None`。
+    pub fn current_lyrics(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.lrc)
+    }
+
     /// 当前曲目的逐字歌词;无逐字(channel 未返回)时返回 `None`。
     pub fn current_words(&self) -> Option<&WordLyric> {
-        let song = self.playback.track.as_ref()?;
-        self.words_cache.get(&song.id)
+        self.current_lyrics_set().map(|l| &l.words)
+    }
+
+    /// 当前曲目的行级翻译;未拉到时返回 `None`。
+    pub fn current_translation(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.translation)
+    }
+
+    /// 当前曲目的行级罗马音;未拉到时返回 `None`。
+    pub fn current_romanization(&self) -> Option<&LrcLyric> {
+        self.current_lyrics_set().map(|l| &l.romanization)
+    }
+
+    /// 当前曲目是否有任一副歌词(翻译 / 罗马音)可切换。无则歌词面板不显示 `t` 提示。
+    pub fn has_extra_lyrics(&self) -> bool {
+        self.current_translation().is_some_and(|l| !l.is_empty())
+            || self.current_romanization().is_some_and(|l| !l.is_empty())
+    }
+
+    /// 当前档对应的副歌词(`None` 档 / 该档为空都返回 `None`)。
+    pub fn current_extra_lyric(&self) -> Option<&LrcLyric> {
+        let extra = match self.lyric_extra {
+            LyricExtra::None => return None,
+            LyricExtra::Translation => self.current_translation(),
+            LyricExtra::Romanization => self.current_romanization(),
+        };
+        extra.filter(|l| !l.is_empty())
+    }
+
+    /// 循环副歌词档:`None → Translation → Romanization → None`,跳过当前歌为空的档。
+    /// 翻译 / 罗马音都缺时停在 `None`。
+    pub fn cycle_lyric_extra(&mut self) {
+        let has_trans = self.current_translation().is_some_and(|l| !l.is_empty());
+        let has_roma = self.current_romanization().is_some_and(|l| !l.is_empty());
+        self.lyric_extra = match self.lyric_extra {
+            LyricExtra::None if has_trans => LyricExtra::Translation,
+            LyricExtra::None if has_roma => LyricExtra::Romanization,
+            LyricExtra::None => LyricExtra::None,
+            LyricExtra::Translation if has_roma => LyricExtra::Romanization,
+            LyricExtra::Translation => LyricExtra::None,
+            LyricExtra::Romanization => LyricExtra::None,
+        };
     }
 
     /// 返回当前选中歌单的引用。
@@ -314,6 +369,12 @@ impl AppState {
             .get(id)
             .map(|tracks| tracks.iter().map(|sv| sv.data.duration_ms).sum())
             .unwrap_or(0)
+    }
+
+    /// 当前在播歌在 queue 中的下标(打开浮层时把光标定位到此)。无在播曲返回 `None`。
+    pub fn queue_current_index(&self) -> Option<usize> {
+        let id = &self.playback.track.as_ref()?.id;
+        self.queue.iter().position(|s| &s.id == id)
     }
 
     /// 当前可见(被 search 过滤)的歌单列表。
@@ -353,5 +414,25 @@ impl AppState {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::endserenading;
+
+    use super::AppState;
+
+    /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
+    #[test]
+    fn queue_current_index_finds_playing() {
+        let mut s = AppState::empty();
+        let queue = endserenading(5);
+        s.playback.track = queue.get(2).cloned();
+        s.queue = queue;
+        assert_eq!(s.queue_current_index(), Some(2));
+
+        s.playback.track = None;
+        assert_eq!(s.queue_current_index(), None);
     }
 }

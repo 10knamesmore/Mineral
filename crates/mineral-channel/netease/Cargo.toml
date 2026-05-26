@@ -13,6 +13,7 @@ mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-log          = { workspace = true }
+mineral-persist      = { workspace = true }
 
 # 加密
 aes        = { workspace = true }
@@ -51,9 +52,10 @@ qrcode = { workspace = true }
 
 [dev-dependencies]
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
-openssl  = { workspace = true }
-tempfile = "3"
-insta    = { workspace = true }
+openssl      = { workspace = true }
+tempfile     = "3"
+insta        = { workspace = true }
+mineral-test = { workspace = true }
 
 [lints]
 workspace = true

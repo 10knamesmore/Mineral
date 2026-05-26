@@ -3,17 +3,30 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::state::{AppState, View};
+use crate::state::AppState;
 use crate::theme::Theme;
 
 mod highlight;
 pub mod library;
 pub mod playlists;
+mod sweep;
 
-/// 根据 [`AppState::view`] 选择对应渲染器。
+/// 渲染左栏。过渡位置 [`AppState::view_pos`] 在端点时直接画对应单视图(零开销),中途则
+/// 走 [`sweep`] 离屏合成出 Playlists ↔ Library 的横向过渡帧。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    match state.view {
-        View::Playlists => playlists::draw(frame, area, state, theme),
-        View::Library => library::draw(frame, area, state, theme),
+    let vp = &state.view_pos;
+    if vp.at_min() {
+        playlists::render_to(frame.buffer_mut(), area, state, theme);
+    } else if vp.at_max() {
+        library::render_to(frame.buffer_mut(), area, state, theme);
+    } else {
+        sweep::draw(
+            frame.buffer_mut(),
+            area,
+            state,
+            theme,
+            vp.eased_in_out(),
+            sweep::VIEW_SWEEP,
+        );
     }
 }

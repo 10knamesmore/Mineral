@@ -35,6 +35,32 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
     platform::cache_dir()
 }
 
+/// 音频 blob 缓存目录(`<cache_dir>/audio`)。
+///
+/// # Return:
+///   解析得到的目录路径。本函数不创建目录。
+pub fn audio_cache_dir() -> color_eyre::Result<PathBuf> {
+    Ok(cache_dir()?.join("audio"))
+}
+
+/// 封面 blob 缓存目录(`<cache_dir>/cover`)。
+///
+/// # Return:
+///   解析得到的目录路径。本函数不创建目录。
+pub fn cover_cache_dir() -> color_eyre::Result<PathBuf> {
+    Ok(cache_dir()?.join("cover"))
+}
+
+/// 下载导出目录(`<music_dir>/mineral`,music_dir = `$XDG_MUSIC_DIR` 或 `~/Music`)。
+///
+/// 永久保存的「下载的音乐」落这里,可被其他播放器 / 文件管理器直接使用,**不**受缓存 LRU 驱逐。
+///
+/// # Return:
+///   解析得到的目录路径。本函数不创建目录。
+pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
+    Ok(platform::music_dir()?.join("mineral"))
+}
+
 /// Runtime 目录(进程级生命周期的 ephemeral 文件，如 IPC unix socket)。
 ///
 /// - **Linux**:`$XDG_RUNTIME_DIR/mineral`,缺时 `/tmp/mineral`

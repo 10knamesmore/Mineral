@@ -137,9 +137,10 @@ mod tests {
             "dt": 0
         }]);
         let songs: Vec<AlbumSong> = from_value(raw)?;
-        insta::with_settings!({ description => "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)" }, {
-            insta::assert_debug_snapshot!(songs);
-        });
+        mineral_test::assert_snap_debug!(
+            "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)",
+            songs
+        );
         Ok(())
     }
 
@@ -154,9 +155,7 @@ mod tests {
             "duration": 264_000
         });
         let s: SearchSong = from_value(raw)?;
-        insta::with_settings!({ description => "SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)" }, {
-            insta::assert_debug_snapshot!(s);
-        });
+        mineral_test::assert_snap_debug!("SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)", s);
         Ok(())
     }
 
@@ -171,9 +170,10 @@ mod tests {
             "dt": 233_000
         });
         let s: AlbumSong = from_value(raw)?;
-        insta::with_settings!({ description => "AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)" }, {
-            insta::assert_debug_snapshot!(s);
-        });
+        mineral_test::assert_snap_debug!(
+            "AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)",
+            s
+        );
         Ok(())
     }
 }
