@@ -24,7 +24,7 @@ use crate::media_cache::MediaCache;
 use crate::queue::{next_in_queue, play_mode_str, prev_in_queue};
 
 /// 播放音质。后续接 config 时改读配置。
-const PLAYBACK_QUALITY: BitRate = BitRate::Lossless;
+const PLAYBACK_QUALITY: BitRate = BitRate::Exhigh;
 
 /// auto-next 预拉触发距曲终的剩余时间(ms)。
 const PREFETCH_LEAD_MS: u64 = 5_000;

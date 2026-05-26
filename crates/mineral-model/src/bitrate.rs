@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 pub enum BitRate {
     /// 标准音质(~128 kbps)。
     Standard,
-    /// 较高音质(~320 kbps,默认)。
-    #[default]
+    /// 较高音质(~190 kbps)。
     Higher,
-    /// 极高音质(~640 kbps)。
+    /// 极高音质(~320 kbps)。
+    #[default]
     Exhigh,
     /// 无损音质(FLAC)。
     Lossless,
