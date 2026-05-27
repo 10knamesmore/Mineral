@@ -23,10 +23,14 @@ struct Daemon {
     /// `mineral serve` 子进程。
     child: Child,
 
-    /// 隔离用的临时根目录(XDG_* 全指到这下面)。
+    /// 隔离用的临时根目录(XDG_CONFIG/DATA/CACHE 全指到这下面)。
     root: PathBuf,
 
-    /// daemon 监听的 socket 路径(`<runtime>/mineral/mineral.sock`)。
+    /// socket 目录(经 `MINERAL_SOCKET_DIR` 注入)。与 `root` 分开且**短**:macOS 的
+    /// `$TMPDIR` 本就很长,socket 全路径要压在 `sun_path`(104)以内,不能嵌进长名的 `root`。
+    sock_dir: PathBuf,
+
+    /// daemon 监听的 socket 路径(`<sock_dir>/mineral.sock`)。
     socket: PathBuf,
 }
 
@@ -51,7 +55,7 @@ impl Daemon {
             std::process::id(),
             unique_suffix()
         ));
-        std::fs::create_dir_all(root.join("runtime")).wrap_err("create isolated runtime dir")?;
+        let sock_dir = short_sock_dir();
         let cred_dir = root.join("data/mineral");
         std::fs::create_dir_all(&cred_dir).wrap_err("create credential dir")?;
         // 旧格式:user_id 是裸字符串(结构化前的 `#[serde(transparent)]` 形态)。
@@ -60,13 +64,14 @@ impl Daemon {
             r#"{"music_u":"opaque-token","user_id":"349758847"}"#,
         )
         .wrap_err("seed legacy credential")?;
-        let child = serve_command(&root)
+        let child = serve_command(&root, &sock_dir)
             .spawn()
             .wrap_err("spawn failing `mineral serve`")?;
-        let socket = root.join("runtime/mineral/mineral.sock");
+        let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
             root,
+            sock_dir,
             socket,
         })
     }
@@ -79,29 +84,31 @@ impl Daemon {
             std::process::id(),
             unique_suffix()
         ));
-        let runtime = root.join("runtime");
-        std::fs::create_dir_all(&runtime).wrap_err("create isolated runtime dir")?;
-        let mut cmd = serve_command(&root);
+        let sock_dir = short_sock_dir();
+        std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
+        let mut cmd = serve_command(&root, &sock_dir);
         if force_null {
             cmd.env("MINERAL_AUDIO_NULL", "1");
         }
         let child = cmd.spawn().wrap_err("spawn `mineral serve`")?;
-        let socket = runtime.join("mineral/mineral.sock");
+        let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
             root,
+            sock_dir,
             socket,
         })
     }
 
-    /// 在同一隔离 XDG 环境下跑 `mineral status`,捕获其输出。
+    /// 在同一隔离环境下跑 `mineral status`,捕获其输出(与 daemon 共享 `MINERAL_SOCKET_DIR`
+    /// 才能连上同一 socket)。
     fn status_output(&self) -> color_eyre::Result<std::process::Output> {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
         cmd.arg("status")
-            .env("XDG_RUNTIME_DIR", self.root.join("runtime"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            .env("MINERAL_SOCKET_DIR", &self.sock_dir)
             .stdin(Stdio::null());
         cmd.output().wrap_err("run `mineral status`")
     }
@@ -147,21 +154,29 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        // 兜底清理:SIGKILL(测试若已 graceful 退,kill 命中 zombie 也无妨)+ 收尸 + 删目录。
+        // 兜底清理:SIGKILL(测试若已 graceful 退,kill 命中 zombie 也无妨)+ 收尸 + 删两处临时目录。
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.root);
+        let _ = std::fs::remove_dir_all(&self.sock_dir);
     }
 }
 
-/// 构造一条隔离 XDG 环境的 `mineral serve` 命令(stdio 全 null)。
-fn serve_command(root: &std::path::Path) -> Command {
+/// 短 socket 目录 `$TMPDIR/mnl-<pid>-<suffix>`:刻意**短**,跟长名 `root` 分开,
+/// 让 socket 全路径压在 `sun_path`(macOS 104)以内。
+fn short_sock_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("mnl-{}-{}", std::process::id(), unique_suffix()))
+}
+
+/// 构造一条隔离环境的 `mineral serve` 命令:XDG 配置/数据/缓存指向 `root`,socket 经
+/// `MINERAL_SOCKET_DIR` 指向 `sock_dir`(两端共用即连同一 socket)。stdio 全 null。
+fn serve_command(root: &std::path::Path, sock_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
     cmd.arg("serve")
-        .env("XDG_RUNTIME_DIR", root.join("runtime"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_DATA_HOME", root.join("data"))
+        .env("MINERAL_SOCKET_DIR", sock_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -215,8 +230,8 @@ fn second_daemon_is_refused() -> color_eyre::Result<()> {
     let first = Daemon::spawn("refuse")?;
     first.wait_ready()?;
 
-    // 复用 first 的隔离环境起第二个 → 撞同一个 socket。
-    let status = serve_command(&first.root)
+    // 复用 first 的隔离环境(含同一 sock_dir)起第二个 → 撞同一个 socket。
+    let status = serve_command(&first.root, &first.sock_dir)
         .status()
         .wrap_err("run second `mineral serve`")?;
     assert!(
