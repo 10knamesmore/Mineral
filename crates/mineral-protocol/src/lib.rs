@@ -18,4 +18,4 @@ pub use cancel::CancelFilter;
 pub use codec::{Framed, framed, recv, send};
 pub use message::{DownloadProgress, DownloadTarget, Request, Response, SongStatsWire};
 pub use mineral_task::ChannelFetchKindTag;
-pub use player::{PlayMode, PlayerSnapshot, Repeat};
+pub use player::{PlayMode, PlaybackOrigin, PlayerSnapshot, Repeat};

@@ -21,6 +21,7 @@ mineral-task         = { workspace = true }
 
 color-eyre   = { workspace = true }
 futures-util = { workspace = true }
+lofty        = { workspace = true }
 parking_lot  = { workspace = true }
 rand         = { workspace = true }
 reqwest      = { workspace = true }

@@ -2,7 +2,7 @@
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
 use mineral_model::{PlayUrl, Song, SongId};
-use mineral_protocol::{PlayMode, PlayerSnapshot};
+use mineral_protocol::{PlayMode, PlaybackOrigin, PlayerSnapshot};
 
 use crate::download::Capturing;
 
@@ -13,6 +13,9 @@ pub(crate) struct State {
 
     /// 当前歌的播放 URL(从 SongUrlReady 写入)。
     pub(crate) play_url: Option<PlayUrl>,
+
+    /// 当前在播音频的来源(下载 / 缓存 / 远端);切歌时由 `play_song` 写入。
+    pub(crate) play_origin: Option<PlaybackOrigin>,
 
     /// 当前队列(顺序模式 = 原序;shuffle 模式 = 洗过)。
     pub(crate) queue: Vec<Song>,
@@ -49,6 +52,7 @@ impl State {
         Self {
             current_song: None,
             play_url: None,
+            play_origin: None,
             queue: Vec::new(),
             queue_sel: 0,
             original_queue: None,
@@ -69,6 +73,7 @@ impl State {
         PlayerSnapshot {
             current_song: self.current_song.clone(),
             play_url: self.play_url.clone(),
+            play_origin: self.play_origin,
             queue: self.queue.clone(),
             queue_sel: self.queue_sel,
             original_queue: self.original_queue.clone(),

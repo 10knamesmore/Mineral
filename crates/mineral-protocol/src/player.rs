@@ -113,6 +113,19 @@ pub enum Repeat {
     All,
 }
 
+/// 当前在播音频的来源。transport 据此显徽标;`None` = 未知(从未播 / 重连初帧)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaybackOrigin {
+    /// 下载导出库(永久,文件系统即真相)。
+    Download,
+
+    /// 音频本体缓存(LRU,可被淘汰)。
+    Cache,
+
+    /// 远端流(可能边播边 capture 入缓存)。
+    Remote,
+}
+
 /// Server 端持有的「播放上下文」快照,client 重连后立刻拉一份镜像到 UI。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
@@ -121,6 +134,10 @@ pub struct PlayerSnapshot {
 
     /// 当前歌的播放 URL 元信息(format / bitrate);transport 用。
     pub play_url: Option<PlayUrl>,
+
+    /// 当前在播音频的来源(下载 / 缓存 / 远端);`None` = 未知。
+    #[serde(default)]
+    pub play_origin: Option<PlaybackOrigin>,
 
     /// 当前 queue 列表。
     pub queue: Vec<Song>,

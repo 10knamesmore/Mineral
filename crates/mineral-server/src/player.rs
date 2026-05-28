@@ -14,7 +14,9 @@ use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
 use mineral_persist::{ServerStore, SessionSnapshot};
-use mineral_protocol::{DownloadProgress, DownloadTarget, PlayMode, PlayerSnapshot};
+use mineral_protocol::{
+    DownloadProgress, DownloadTarget, PlayMode, PlaybackOrigin, PlayerSnapshot,
+};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
@@ -285,6 +287,10 @@ impl PlayerCore {
             song,
             PLAYBACK_QUALITY,
         );
+        // 来源:本地命中 → cache/download(resolve 已分辨);否则(prefetch / fetch)→ 远端。
+        let origin = local_hit
+            .as_ref()
+            .map_or(PlaybackOrigin::Remote, |&(_, _, o)| o);
 
         let (cached_url, interrupted) = {
             let mut st = self.inner.state.lock();
@@ -293,6 +299,7 @@ impl PlayerCore {
                 st.queue_sel = idx;
             }
             st.play_url = None;
+            st.play_origin = Some(origin);
             st.current_lyrics = None;
             st.current_lyrics_song_id = None;
             st.prefetch_fired_for = None;
@@ -319,9 +326,12 @@ impl PlayerCore {
             .last_seen_finished_seq
             .store(seq, Ordering::Relaxed);
 
-        if let Some((path, quality)) = local_hit {
-            mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), "本地命中,跳过网络");
+        if let Some((path, quality, _)) = local_hit {
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), origin = ?origin, "本地命中,跳过网络");
+            // 本地播也填 play_url(format 取扩展名、bitrate 取 size/时长 实测均值),transport 才显 fmt。
+            let pu = crate::resolve::local_play_url(song, &path, quality);
             self.inner.audio.play(MediaUrl::Local(path));
+            self.inner.state.lock().play_url = Some(pu);
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using prefetched url");
             download::play_capturing(self, song, &pu, PLAYBACK_QUALITY);
@@ -747,7 +757,7 @@ mod tests {
         SourceKind,
     };
     use mineral_persist::ServerStore;
-    use mineral_protocol::PlayMode;
+    use mineral_protocol::{PlayMode, PlaybackOrigin};
     use mineral_task::Scheduler;
     use mineral_test::song;
     use parking_lot::Mutex;
@@ -1201,6 +1211,21 @@ mod tests {
         drain_spawned().await;
 
         assert!(core.load_session().await?.is_some(), "save 后应能读到会话");
+        Ok(())
+    }
+
+    /// play_song 无本地副本(media_cache disabled + music_dir None)→ 走远端,
+    /// snapshot.play_origin == Remote(验证 play_song → State → snapshot 接线)。
+    #[tokio::test]
+    async fn play_song_without_local_marks_remote() -> color_eyre::Result<()> {
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let core = core_with(calls)?;
+        core.play_song(&song("a"));
+        assert_eq!(
+            core.snapshot().play_origin,
+            Some(PlaybackOrigin::Remote),
+            "无本地副本应标记为远端"
+        );
         Ok(())
     }
 }
