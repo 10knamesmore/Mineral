@@ -746,6 +746,7 @@ fn exit_shuffle(st: &mut State) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
 
@@ -753,12 +754,13 @@ mod tests {
     use mineral_audio::{AudioHandle, AudioMode};
     use mineral_channel_core::{Error, MusicChannel, Page, Result as ChannelResult};
     use mineral_model::{
-        Album, AlbumId, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
-        SourceKind,
+        Album, AlbumId, AlbumRef, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song,
+        SongId, SourceKind,
     };
     use mineral_persist::ServerStore;
     use mineral_protocol::{PlayMode, PlaybackOrigin};
     use mineral_task::Scheduler;
+    use mineral_test::mock::{UrlChannel, serve_once};
     use mineral_test::song;
     use parking_lot::Mutex;
     use pretty_assertions::assert_eq;
@@ -767,6 +769,7 @@ mod tests {
         DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, enter_shuffle,
         exit_shuffle, next_in_queue, play_mode_str, prev_in_queue,
     };
+    use crate::download::download_song;
     use crate::state::State;
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
@@ -860,8 +863,32 @@ mod tests {
         calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>,
         persist: ServerStore,
     ) -> color_eyre::Result<PlayerCore> {
-        let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel { calls });
-        let channels = vec![channel];
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel { calls })];
+        core_with_channels(
+            channels,
+            persist,
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )
+    }
+
+    /// 用注入的 channels + download 根目录 + 真实 [`MediaCache`] 组装 [`PlayerCore`],
+    /// 端到端测下载 / 本地播放解析。
+    ///
+    /// # Params:
+    ///   - `channels`: 注入的音乐源(下载测试传 [`UrlChannel`])。
+    ///   - `persist`: 持久化句柄。
+    ///   - `music_dir`: 下载导出根目录(`None` = 下载不可用)。
+    ///   - `media_cache`: 注入的音频缓存(`disabled` 或真实)。
+    ///
+    /// # Return:
+    ///   组装好的 [`PlayerCore`]。
+    fn core_with_channels(
+        channels: Vec<Arc<dyn MusicChannel>>,
+        persist: ServerStore,
+        music_dir: Option<PathBuf>,
+        media_cache: MediaCache,
+    ) -> color_eyre::Result<PlayerCore> {
         let scheduler = Scheduler::new(&channels);
         let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull)?;
         let inner = Arc::new(Inner {
@@ -869,9 +896,9 @@ mod tests {
             scheduler,
             channels,
             persist,
-            media_cache: Arc::new(MediaCache::disabled()),
+            media_cache: Arc::new(media_cache),
             http: None,
-            music_dir: None,
+            music_dir,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -1226,6 +1253,72 @@ mod tests {
             Some(PlaybackOrigin::Remote),
             "无本地副本应标记为远端"
         );
+        Ok(())
+    }
+
+    /// 一首带专辑的测试歌曲(库路径取 album/title)。
+    fn song_with_album(id: &str, name: &str, album: &str) -> Song {
+        Song {
+            id: SongId::new(SourceKind::NETEASE, id),
+            name: name.to_owned(),
+            artists: Vec::new(),
+            album: Some(AlbumRef {
+                id: AlbumId::new(SourceKind::NETEASE, "0"),
+                name: album.to_owned(),
+            }),
+            duration_ms: 1000,
+            cover_url: None,
+            source_url: None,
+        }
+    }
+
+    /// 端到端:**真下载**一首(走进程内 HTTP server)→ **再播放** → 应解析到刚下载的文件
+    /// (`origin=Download` / `quality=Lossless`,零网络、不进缓存)。
+    ///
+    /// 这是「下载的歌就该从下载库播」这条业务规则的端到端守卫:跨 download → resolve →
+    /// State → snapshot 全链路。若下载又顺手填了缓存,play_song 会命中缓存副本(`origin=Cache`)
+    /// → 此测试变红。
+    #[tokio::test]
+    async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let media_cache =
+            MediaCache::open(&persist, dir.path().join("cache"), 1_000_000_000).await?;
+        let music_dir = dir.path().join("music");
+        let s = song_with_album("1", "捕风", "野泳");
+
+        // 1. 真下载到 music_dir(走进程内 HTTP server)。
+        let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
+        let dl_channel = UrlChannel { url };
+        let http = reqwest::Client::new();
+        let progress = Arc::new(Mutex::new(DownloadProgress::default()));
+        download_song(
+            &dl_channel,
+            &http,
+            &music_dir,
+            &s,
+            BitRate::Lossless,
+            &progress,
+        )
+        .await?;
+
+        // 2. 用同一 music_dir + media_cache 起 core,播放。
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel { calls })];
+        let core = core_with_channels(channels, persist, Some(music_dir), media_cache)?;
+        core.play_song(&s);
+
+        // 3. 应解析到刚下载的 lossless。
+        let snap = core.snapshot();
+        assert_eq!(
+            snap.play_origin,
+            Some(PlaybackOrigin::Download),
+            "下载的歌应从下载库播放,而非缓存 / 网络"
+        );
+        let pu = snap
+            .play_url
+            .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应填 play_url"))?;
+        assert_eq!(pu.quality, BitRate::Lossless, "命中音质应为 lossless");
         Ok(())
     }
 }

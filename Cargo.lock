@@ -2626,10 +2626,15 @@ dependencies = [
 name = "mineral-test"
 version = "0.3.0"
 dependencies = [
+ "async-trait",
+ "color-eyre",
+ "mineral-channel-core",
  "mineral-model",
  "proptest",
  "serde",
  "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]
