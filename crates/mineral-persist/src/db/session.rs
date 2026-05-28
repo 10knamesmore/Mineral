@@ -4,7 +4,7 @@ use color_eyre::eyre::WrapErr;
 use mineral_log::debug;
 use mineral_model::{SongId, SourceKind};
 
-use crate::Persist;
+use crate::ServerStore;
 use crate::db::time::now_ms;
 
 /// `session_state` 单例行的列投影:`(cur_namespace, cur_song_value, position_ms, play_mode, volume)`。
@@ -32,7 +32,7 @@ pub struct SessionSnapshot {
 /// 全局会话存储(单例行 id=0)。
 pub struct SessionStore {
     /// 顶层句柄。
-    persist: Persist,
+    persist: ServerStore,
 }
 
 impl SessionStore {
@@ -40,7 +40,7 @@ impl SessionStore {
     ///
     /// # Params:
     ///   - `persist`: 顶层句柄
-    pub(crate) fn new(persist: Persist) -> Self {
+    pub(crate) fn new(persist: ServerStore) -> Self {
         Self { persist }
     }
 
@@ -139,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn session_save_load_roundtrip() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let snap = SessionSnapshot {
             current: Some(SongId::new(SourceKind::NETEASE, "123")),
             position_ms: 42_000,
@@ -170,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn session_load_empty_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         assert!(p.session().load().await?.is_none());
         Ok(())
     }
@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn session_save_overwrites_queue() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s1 = SessionSnapshot {
             current: None,
             position_ms: 0,

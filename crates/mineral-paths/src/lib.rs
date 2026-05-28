@@ -6,7 +6,7 @@
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod socket;
 mod xdg;
@@ -51,14 +51,34 @@ pub fn cover_cache_dir() -> color_eyre::Result<PathBuf> {
     Ok(cache_dir()?.join("cover"))
 }
 
-/// 下载导出目录(`<music_dir>/mineral`,music_dir = `$XDG_MUSIC_DIR` 或 `~/Music`)。
+/// 下载导出目录。永久保存的「下载的音乐」落这里,可被其他播放器 / 文件管理器直接使用,
+/// **不**受缓存 LRU 驱逐。
 ///
-/// 永久保存的「下载的音乐」落这里,可被其他播放器 / 文件管理器直接使用,**不**受缓存 LRU 驱逐。
+/// 解析优先级:
+/// 1. `$MINERAL_DOWNLOAD_DIR`(**绝对路径**)→ 直接用它(不再追加 `mineral` 子目录);
+///    相对值忽略(相对 daemon cwd 易出意外,与 XDG / `$MINERAL_SOCKET_DIR` 的绝对要求一致);
+/// 2. 否则 `<music_dir>/mineral`(music_dir = `$XDG_MUSIC_DIR` 或 `~/Music`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
+    if let Some(v) = std::env::var_os("MINERAL_DOWNLOAD_DIR").filter(|v| !v.is_empty())
+        && Path::new(&v).is_absolute()
+    {
+        return Ok(PathBuf::from(v));
+    }
     Ok(xdg::music_dir()?.join("mineral"))
+}
+
+/// 客户端(TUI)持久化数据库文件(`<data_dir>/tui.db`)。
+///
+/// 与 server 的 `mineral.db` 同目录的另一个 sqlite 文件,存纯客户端态(当前:封面缓存索引)。
+/// 放 data_dir(持久),封面文件本体仍落 [`cover_cache_dir`](可被清理)。
+///
+/// # Return:
+///   解析得到的文件路径。本函数不创建目录。
+pub fn tui_db() -> color_eyre::Result<PathBuf> {
+    Ok(data_dir()?.join("tui.db"))
 }
 
 /// Runtime 目录(进程级生命周期的 ephemeral 文件,如 IPC unix socket)。
@@ -215,6 +235,35 @@ mod tests {
         let _g = EnvGuard::set("MINERAL_SOCKET_DIR", &deep);
 
         assert!(super::socket_path().is_err(), "超长 socket 路径应报错");
+        Ok(())
+    }
+
+    /// `$MINERAL_DOWNLOAD_DIR` 显式覆盖:原样用,不追加 mineral 子目录。
+    #[test]
+    fn music_export_dir_uses_env_override_verbatim() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let custom = tmp.path().join("my-downloads");
+        let _g = EnvGuard::set("MINERAL_DOWNLOAD_DIR", &custom);
+
+        assert_eq!(super::music_export_dir()?, custom);
+        Ok(())
+    }
+
+    /// 无覆盖时落 `<music_dir>/mineral`(music_dir 缺 XDG_MUSIC_DIR → `~/Music`)。
+    #[test]
+    fn music_export_dir_falls_back_to_music_subdir() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let _g1 = EnvGuard::set("HOME", tmp.path());
+        let _g2 = EnvGuard::unset("MINERAL_DOWNLOAD_DIR");
+        let _g3 = EnvGuard::unset("XDG_MUSIC_DIR");
+
+        assert_eq!(super::music_export_dir()?, tmp.path().join("Music/mineral"));
         Ok(())
     }
 }

@@ -37,16 +37,23 @@ async fn clean() -> color_eyre::Result<()> {
     std::fs::create_dir_all(&data_dir)
         .wrap_err_with(|| format!("create data dir {}", data_dir.display()))?;
     let db_path = data_dir.join("mineral.db");
-    let persist = mineral_persist::Persist::open(&db_path).await?;
+    let persist = mineral_persist::ServerStore::open(&db_path).await?;
     persist.clear_playlist_caches().await?;
 
-    // 2) 音频 + 封面 blob 缓存(capacity 在此无意义,clear 不依赖它,传 0)。
-    let audio =
-        mineral_persist::BlobCache::open(&mineral_paths::audio_cache_dir()?, /*capacity*/ 0)?;
-    audio.clear()?;
-    let cover =
-        mineral_persist::BlobCache::open(&mineral_paths::cover_cache_dir()?, /*capacity*/ 0)?;
-    cover.clear()?;
+    // 2) 音频缓存索引(`audio_cache` 表在 mineral.db;capacity 在此无意义,clear 不依赖它)。
+    persist
+        .audio_cache(mineral_paths::audio_cache_dir()?, /*capacity*/ 0)
+        .await?
+        .clear()
+        .await?;
+
+    // 3) 封面缓存索引(`cover_cache` 表在 client 的 tui.db;db 父目录即 data_dir,上面已建)。
+    mineral_persist::ClientStore::open(&mineral_paths::tui_db()?)
+        .await?
+        .cover_cache(mineral_paths::cover_cache_dir()?, /*capacity*/ 0)
+        .await?
+        .clear()
+        .await?;
 
     println!("已清理音频 / 封面 / 歌单缓存(播放统计、喜欢、历史已保留)");
     Ok(())

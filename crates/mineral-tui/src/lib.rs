@@ -29,7 +29,7 @@ mod view_model;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
-use mineral_persist::Persist;
+use mineral_persist::ServerStore;
 use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
@@ -67,11 +67,11 @@ pub enum Launch {
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     launch: Launch,
-    persist: Persist,
+    persist: ServerStore,
 ) -> color_eyre::Result<()> {
     // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
     // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
-    let cover_fetcher = CoverFetcher::spawn().unwrap_or_else(|e| {
+    let cover_fetcher = CoverFetcher::spawn().await.unwrap_or_else(|e| {
         mineral_log::warn!(
             error = mineral_log::chain(&e),
             "cover fetcher 起步失败,封面禁用"
@@ -98,7 +98,7 @@ pub async fn run(
         }
         Launch::InProc => {
             // in-proc 调试:走 Auto,本机有声卡就真出声,没有则降级 null。
-            let server = Server::spawn(channels, mineral_server::AudioMode::Auto, persist)?;
+            let server = Server::spawn(channels, mineral_server::AudioMode::Auto, persist).await?;
             // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
             // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
             if let Err(e) = server.start_media_service() {

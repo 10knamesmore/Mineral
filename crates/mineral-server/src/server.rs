@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
-use mineral_persist::Persist;
+use mineral_persist::{CacheIndex, ServerStore};
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
@@ -37,17 +37,25 @@ impl Server {
     ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
     ///   - `audio_mode`: 音频后端选择,见 [`AudioMode`];无设备时 `Auto` 会降级而非失败。
     ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
-    pub fn spawn(
+    pub async fn spawn(
         channels: Vec<Arc<dyn MusicChannel>>,
         audio_mode: AudioMode,
-        persist: Persist,
+        persist: ServerStore,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels);
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode)?;
         mineral_log::debug!(target: "server", "audio engine ready");
-        let media_cache = open_media_cache();
-        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache);
+        let media_cache = open_media_cache(&persist).await;
+        let download_index = open_download_index(&persist).await;
+        let player = PlayerCore::spawn(
+            audio,
+            scheduler,
+            channels,
+            persist,
+            media_cache,
+            download_index,
+        );
         // 读回上次会话 —— 本轮仅打日志确认能读到,不应用到播放状态(不自动恢复)。
         tokio::spawn(log_last_session(player.clone()));
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
@@ -89,16 +97,40 @@ impl Server {
     }
 }
 
-/// 打开音频本体缓存;目录解析 / open 失败时 `warn` 并降级到 [`MediaCache::disabled`]
-/// (不阻断 daemon 启动,沿用封面缓存起不来也降级的处理)。
-fn open_media_cache() -> MediaCache {
-    match mineral_paths::audio_cache_dir()
-        .and_then(|dir| MediaCache::open(&dir, MEDIA_CACHE_CAPACITY))
-    {
+/// 打开音频本体缓存(`audio_cache` 表落 `persist` 的 `mineral.db`);目录解析 / open 失败时
+/// `warn` 并降级到 [`MediaCache::disabled`](不阻断 daemon 启动)。
+async fn open_media_cache(persist: &ServerStore) -> MediaCache {
+    let dir = match mineral_paths::audio_cache_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存目录解析失败,降级禁用");
+            return MediaCache::disabled();
+        }
+    };
+    match MediaCache::open(persist, dir, MEDIA_CACHE_CAPACITY).await {
         Ok(cache) => cache,
         Err(e) => {
             mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存打开失败,降级禁用");
             MediaCache::disabled()
+        }
+    }
+}
+
+/// 打开下载导出索引(`download_export` 表,不驱逐);路径解析 / open 失败时 `warn` 并降级到
+/// [`CacheIndex::disabled`](不阻断 daemon 启动)。
+async fn open_download_index(persist: &ServerStore) -> CacheIndex {
+    let root = match mineral_paths::music_export_dir() {
+        Ok(r) => r,
+        Err(e) => {
+            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "下载导出目录解析失败,降级禁用");
+            return CacheIndex::disabled();
+        }
+    };
+    match persist.download_export(root).await {
+        Ok(idx) => idx,
+        Err(e) => {
+            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "下载索引打开失败,降级禁用");
+            CacheIndex::disabled()
         }
     }
 }

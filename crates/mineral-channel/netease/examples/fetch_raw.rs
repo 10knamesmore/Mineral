@@ -154,12 +154,12 @@ fn build_channel() -> Result<NeteaseChannel> {
                 &cfg,
                 &auth.music_u,
                 auth.user_id,
-                mineral_persist::Persist::disabled(),
+                mineral_persist::ServerStore::disabled(),
             )
         }
         None => {
             eprintln!("(未登录:匿名访问,仅公开端点可用;如需登录态请先 channel login)");
-            NeteaseChannel::new(&cfg, mineral_persist::Persist::disabled())
+            NeteaseChannel::new(&cfg, mineral_persist::ServerStore::disabled())
         }
     }
 }

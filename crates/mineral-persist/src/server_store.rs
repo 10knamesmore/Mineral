@@ -1,4 +1,4 @@
-//! Persist 句柄与后端。
+//! ServerStore 句柄与后端。
 
 use std::sync::Arc;
 
@@ -6,17 +6,17 @@ use color_eyre::eyre::WrapErr;
 use mineral_log::{info, warn};
 use mineral_model::SourceKind;
 use sqlx::SqlitePool;
-use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::CacheIndex;
 use crate::db::schema::ensure_schema;
 use crate::db::{NamespaceStore, SessionStore};
 
 /// 持久化服务句柄。廉价 clone(内部 `Arc`)。
 ///
-/// 打开失败时降级为 [`Persist::disabled`]:所有写静默成功、所有读返回空,
+/// 打开失败时降级为 [`ServerStore::disabled`]:所有写静默成功、所有读返回空,
 /// 调用方(channel / server)无需特判,播放照常。
 #[derive(Clone)]
-pub struct Persist {
+pub struct ServerStore {
     /// 内部后端(真实 sqlite 或降级 null)。
     backend: Arc<Backend>,
 }
@@ -30,7 +30,7 @@ enum Backend {
     Disabled,
 }
 
-impl Persist {
+impl ServerStore {
     /// 打开(或创建)数据库文件并建表。
     ///
     /// # Params:
@@ -39,13 +39,8 @@ impl Persist {
     /// # Return:
     ///   成功返回启用的句柄;失败返回 `Err`(调用方可改用 [`Self::disabled`] 降级)。
     pub async fn open(db_path: &std::path::Path) -> color_eyre::Result<Self> {
-        info!(target: "persist", path = %db_path.display(), "打开持久化数据库");
-        let url = format!("sqlite://{}?mode=rwc", db_path.display());
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .wrap_err_with(|| format!("连接 sqlite 失败 path={}", db_path.display()))?;
+        info!(target: "persist", path = %db_path.display(), "打开 server 数据库");
+        let pool = crate::pool::connect(db_path).await?;
         ensure_schema(&pool).await?;
         Ok(Self {
             backend: Arc::new(Backend::Sqlite(pool)),
@@ -55,7 +50,7 @@ impl Persist {
     /// 降级句柄:不落盘、读空、写丢弃。
     ///
     /// # Return:
-    ///   一个永远成功但无副作用的 [`Persist`]。
+    ///   一个永远成功但无副作用的 [`ServerStore`]。
     pub fn disabled() -> Self {
         warn!(target: "persist", "持久化降级为 no-op(disabled)");
         Self {
@@ -93,6 +88,58 @@ impl Persist {
         SessionStore::new(self.clone())
     }
 
+    /// 音频本体缓存索引(`audio_cache` 表,LRU 驱逐)。播放命中本地副本走它。
+    ///
+    /// # Params:
+    ///   - `root`: 缓存文件根目录(`relpath` 相对它)
+    ///   - `capacity`: 容量上限字节(LRU 满了驱逐最旧)
+    ///
+    /// # Return:
+    ///   就绪索引;降级句柄返回 [`CacheIndex::disabled`];建表 / 载入失败返回 `Err`。
+    pub async fn audio_cache(
+        &self,
+        root: std::path::PathBuf,
+        capacity: u64,
+    ) -> color_eyre::Result<CacheIndex> {
+        self.cache_index("audio_cache", root, Some(capacity)).await
+    }
+
+    /// 下载导出索引(`download_export` 表,**不驱逐**——永久副本)。
+    ///
+    /// # Params:
+    ///   - `root`: 下载导出根目录(`relpath` 相对它)
+    ///
+    /// # Return:
+    ///   就绪索引;降级句柄返回 [`CacheIndex::disabled`];建表 / 载入失败返回 `Err`。
+    pub async fn download_export(
+        &self,
+        root: std::path::PathBuf,
+    ) -> color_eyre::Result<CacheIndex> {
+        self.cache_index("download_export", root, /*capacity*/ None)
+            .await
+    }
+
+    /// 在本库内打开(或新建)一张文件缓存索引表(复用本连接池)。
+    ///
+    /// # Params:
+    ///   - `table`: 索引表名(由具名方法静态选定)
+    ///   - `root`: 文件根目录
+    ///   - `capacity`: 容量上限字节;`None` 不驱逐
+    ///
+    /// # Return:
+    ///   就绪索引;降级句柄返回 [`CacheIndex::disabled`]。
+    async fn cache_index(
+        &self,
+        table: &'static str,
+        root: std::path::PathBuf,
+        capacity: Option<u64>,
+    ) -> color_eyre::Result<CacheIndex> {
+        match self.pool() {
+            Some(pool) => CacheIndex::open(pool.clone(), table, root, capacity).await,
+            None => Ok(CacheIndex::disabled()),
+        }
+    }
+
     /// 清空歌单缓存(`playlist_cache` + `playlist_tracks` 全部来源)。
     ///
     /// 只清可重建的歌单缓存，**不动**播放统计 / love / 历史 / 会话 / song_meta。
@@ -127,26 +174,26 @@ impl Persist {
 
 #[cfg(test)]
 mod tests {
-    use super::Persist;
+    use super::ServerStore;
 
     #[tokio::test]
     async fn open_creates_db_and_schema() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = Persist::open(&dir.path().join("t.db")).await?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
         assert!(p.pool().is_some());
         Ok(())
     }
 
     #[test]
     fn disabled_has_no_pool() {
-        assert!(Persist::disabled().pool().is_none());
+        assert!(ServerStore::disabled().pool().is_none());
     }
 
     #[tokio::test]
     async fn clear_playlist_caches_keeps_user_data() -> color_eyre::Result<()> {
         use mineral_model::{PlaylistId, SongId, SourceKind};
         let dir = tempfile::tempdir()?;
-        let p = Persist::open(&dir.path().join("t.db")).await?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         // 写入：歌单缓存(应被清) + 播放统计/love(应保留)
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");

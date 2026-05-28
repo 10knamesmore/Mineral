@@ -22,7 +22,7 @@ use isahc::AsyncReadResponseExt;
 use isahc::HttpClient;
 use isahc::config::Configurable;
 use mineral_model::{MediaUrl, SourceKind};
-use mineral_persist::BlobCache;
+use mineral_persist::{CacheIndex, ClientStore};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -76,19 +76,19 @@ pub struct CoverFetcher {
 
 /// 封面磁盘缓存句柄(可缺):命中省一次网络往返。`None` 表示缓存不可用
 /// (目录 / open 失败),直连网络。worker 间共享。
-type CoverCache = Option<Arc<BlobCache>>;
+type CoverCache = Option<Arc<CacheIndex>>;
 
 impl CoverFetcher {
     /// 起 4 worker。caller 必须在 tokio runtime 里(`mineral_tui::run` 是 async fn,
     /// 自然满足);失败通常意味着 isahc 客户端建不起来(系统证书 / TLS 问题等)。
-    pub fn spawn() -> color_eyre::Result<Self> {
+    pub async fn spawn() -> color_eyre::Result<Self> {
         let (tx, rx) = mpsc::unbounded_channel::<(SourceKind, MediaUrl)>();
         let client = HttpClient::builder()
             .timeout(HTTP_TIMEOUT)
             .build()
             .map_err(|e| eyre!("isahc client init failed: {e}"))?;
         // 磁盘缓存是优化项:目录解析 / open 失败不致命,降级成直连网络不缓存。
-        let cache = Self::open_cache();
+        let cache = Self::open_cache().await;
         let ready = Arc::new(Mutex::new(Vec::<(MediaUrl, Arc<DynamicImage>)>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
         for _ in 0..WORKERS {
@@ -103,20 +103,35 @@ impl CoverFetcher {
         Ok(Self { req_tx: tx, ready })
     }
 
-    /// 打开封面磁盘缓存。目录解析或 `BlobCache::open` 失败时 warn + 返回 `None`
-    /// (降级成不缓存),不让 fetcher 起步失败。
+    /// 打开封面磁盘缓存(`cover_cache` 表落 client 的 `tui.db`,文件落 `cover_cache_dir`)。
+    /// 目录解析 / open 失败时 warn + 返回 `None`(降级成不缓存),不让 fetcher 起步失败。
     ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
-    fn open_cache() -> CoverCache {
-        let dir = match mineral_paths::cover_cache_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存目录不可用,降级不缓存");
+    async fn open_cache() -> CoverCache {
+        let (db, dir) = match (mineral_paths::tui_db(), mineral_paths::cover_cache_dir()) {
+            (Ok(db), Ok(dir)) => (db, dir),
+            (Err(e), _) | (_, Err(e)) => {
+                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存路径不可用,降级不缓存");
                 return None;
             }
         };
-        match BlobCache::open(&dir, COVER_CACHE_CAPACITY) {
+        // sqlite mode=rwc 只建文件不建父目录,fresh env 下需先确保 data_dir 存在。
+        if let Some(parent) = db.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            let e = color_eyre::Report::new(e);
+            mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "建 tui.db 目录失败,降级不缓存");
+            return None;
+        }
+        let store = match ClientStore::open(&db).await {
+            Ok(s) => s,
+            Err(e) => {
+                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "打开 tui.db 失败,降级不缓存");
+                return None;
+            }
+        };
+        match store.cover_cache(dir, COVER_CACHE_CAPACITY).await {
             Ok(c) => Some(Arc::new(c)),
             Err(e) => {
                 mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存打开失败,降级不缓存");
@@ -191,7 +206,7 @@ async fn fetch_and_decode(
     source: SourceKind,
     url: &MediaUrl,
     client: &HttpClient,
-    cache: Option<&Arc<BlobCache>>,
+    cache: Option<&Arc<CacheIndex>>,
 ) -> Option<DynamicImage> {
     match url {
         MediaUrl::Remote(u) => {
@@ -234,7 +249,7 @@ async fn fetch_and_decode(
 ///
 /// # Return:
 ///   命中且可读返回字节,否则 `None`。
-async fn cached_read(key: &str, cache: Option<&Arc<BlobCache>>) -> Option<Vec<u8>> {
+async fn cached_read(key: &str, cache: Option<&Arc<CacheIndex>>) -> Option<Vec<u8>> {
     // get 只 stat,可直接同步调。
     let path = cache?.get(key)?;
     match tokio::fs::read(&path).await {
@@ -350,7 +365,7 @@ async fn pack_blocking(
 ///   - `bytes`: 落盘字节
 ///   - `ext`: 扩展名
 fn store_best_effort(
-    cache: &Arc<BlobCache>,
+    cache: &Arc<CacheIndex>,
     source: SourceKind,
     key: &str,
     bytes: Vec<u8>,
@@ -359,11 +374,29 @@ fn store_best_effort(
     let cache = Arc::clone(cache);
     let subdir = source.name().to_owned();
     let key = key.to_owned();
-    tokio::task::spawn_blocking(move || {
-        if let Err(e) = cache.put(&subdir, &key, &bytes, ext) {
+    let file_name = cover_file_name(&key, ext);
+    // put_bytes 要 await DB 写穿透,内部把写盘下沉到 spawn_blocking;这里用 async task 即可。
+    tokio::spawn(async move {
+        if let Err(e) = cache.put_bytes(&key, &bytes, &subdir, &file_name).await {
             mineral_log::warn!(target: "cover", key = %key, error = mineral_log::chain(&e), "封面写缓存失败");
         }
     });
+}
+
+/// 封面落盘文件名:`<key 哈希>.<ext>`。封面键是 URL,无可读标题,用哈希定一个稳定短名
+/// (`CacheIndex` 仍以 URL 为索引键,文件名只需唯一)。
+///
+/// # Params:
+///   - `key`: 缓存键(= URL 串)
+///   - `ext`: 扩展名(不含点)
+///
+/// # Return:
+///   形如 `1a2b3c4d5e6f7890.jpg`。
+fn cover_file_name(key: &str, ext: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    format!("{:016x}.{ext}", h.finish())
 }
 
 /// 按存储模式决定落盘字节与扩展名。
@@ -416,9 +449,12 @@ mod tests {
     use std::sync::Arc;
 
     use image::{DynamicImage, ImageFormat, RgbImage};
-    use mineral_persist::BlobCache;
+    use mineral_persist::ClientStore;
 
-    use super::{COVER_MAX_DIM, CoverStorageMode, bytes_for_cache, cached_read, decode_resize};
+    use super::{
+        COVER_MAX_DIM, CoverStorageMode, bytes_for_cache, cached_read, cover_file_name,
+        decode_resize,
+    };
 
     /// 把指定尺寸的纯色 RGB 图编码成 PNG 字节,供 `decode_resize` 测试喂入。
     ///
@@ -529,14 +565,19 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or_default()
         ));
-        let cache = Arc::new(BlobCache::open(&dir, 1024 * 1024)?);
+        std::fs::create_dir_all(&dir)?;
+        let files = dir.join("files");
+        let store = ClientStore::open(&dir.join("cover.db")).await?;
+        let cache = Arc::new(store.cover_cache(files, 1024 * 1024).await?);
         let key = "http://192.0.2.1/cover.jpg";
-        cache.put(
-            /*subdir*/ "netease",
-            key,
-            b"cached-cover-bytes",
-            /*ext*/ "jpg",
-        )?;
+        cache
+            .put_bytes(
+                key,
+                b"cached-cover-bytes",
+                /*subdir*/ "netease",
+                &cover_file_name(key, "jpg"),
+            )
+            .await?;
 
         let bytes = cached_read(key, Some(&cache)).await;
         assert_eq!(

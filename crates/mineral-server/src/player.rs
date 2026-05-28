@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
-use mineral_persist::{Persist, SessionSnapshot};
+use mineral_persist::{CacheIndex, ServerStore, SessionSnapshot};
 use mineral_protocol::{DownloadProgress, DownloadTarget, PlayMode, PlayerSnapshot};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
@@ -22,6 +22,7 @@ use rand::seq::SliceRandom;
 use crate::download::{self, Capturing};
 use crate::media_cache::MediaCache;
 use crate::queue::{next_in_queue, play_mode_str, prev_in_queue};
+use crate::state::State;
 
 /// 播放音质。后续接 config 时改读配置。
 const PLAYBACK_QUALITY: BitRate = BitRate::Exhigh;
@@ -38,78 +39,6 @@ const TICK_INTERVAL_MS: u64 = 20;
 /// 会话「位置刷新」的节流间隔:background_loop 每隔这么久落盘一次 position。
 /// 状态变化(切歌/换队列/改模式)有各自的即时 save,这里只为周期刷新进度。
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(15);
-
-/// 服务端持有的「播放上下文」内部状态。`PlayerCore` 用 `Mutex<State>` 包它。
-///
-/// `pub(crate)` 是为了让 [`crate::queue`] 的队列计算函数直接读 queue/queue_sel/play_mode。
-pub(crate) struct State {
-    /// 当前在播的歌。
-    current_song: Option<Song>,
-
-    /// 当前歌的播放 URL(从 SongUrlReady 写入)。
-    play_url: Option<PlayUrl>,
-
-    /// 当前队列(顺序模式 = 原序;shuffle 模式 = 洗过)。
-    pub(crate) queue: Vec<Song>,
-
-    /// 当前歌在 `queue` 中的下标。
-    pub(crate) queue_sel: usize,
-
-    /// shuffle 切换前的原始顺序,关 shuffle 时还原用;非 shuffle 模式下为 `None`。
-    original_queue: Option<Vec<Song>>,
-
-    /// 当前播放模式(顺序 / 单曲 / 列表循环 / shuffle)。
-    pub(crate) play_mode: PlayMode,
-
-    /// 当前歌的歌词(从 LyricsReady 写入)。
-    current_lyrics: Option<mineral_model::Lyrics>,
-
-    /// 当前 lyrics 配对的歌 id(对不上 current_song 时不返回)。
-    current_lyrics_song_id: Option<SongId>,
-
-    /// 已预拉的下一首播放 URL。
-    prefetched: Option<PlayUrl>,
-
-    /// 已对哪首歌触发过预拉(本歌只 fire 一次)。
-    prefetch_fired_for: Option<SongId>,
-
-    /// 当前正在 capture(边播边落盘)的曲;自然播完 → 入缓存,中途打断 → 删残件。
-    /// 命中缓存直接本地播时为 `None`(无需 capture)。
-    capturing: Option<Capturing>,
-}
-
-impl State {
-    /// 空 State,所有字段取默认/空值。
-    fn empty() -> Self {
-        Self {
-            current_song: None,
-            play_url: None,
-            queue: Vec::new(),
-            queue_sel: 0,
-            original_queue: None,
-            play_mode: PlayMode::default(),
-            current_lyrics: None,
-            current_lyrics_song_id: None,
-            prefetched: None,
-            prefetch_fired_for: None,
-            capturing: None,
-        }
-    }
-
-    /// 从内部 State 拷出一份 [`PlayerSnapshot`] 给 client(廉价 clone)。
-    fn snapshot(&self) -> PlayerSnapshot {
-        PlayerSnapshot {
-            current_song: self.current_song.clone(),
-            play_url: self.play_url.clone(),
-            queue: self.queue.clone(),
-            queue_sel: self.queue_sel,
-            original_queue: self.original_queue.clone(),
-            play_mode: self.play_mode,
-            current_lyrics: self.current_lyrics.clone(),
-            current_lyrics_song_id: self.current_lyrics_song_id.clone(),
-        }
-    }
-}
 
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
 #[derive(Clone)]
@@ -130,10 +59,14 @@ struct Inner {
     channels: Vec<Arc<dyn MusicChannel>>,
 
     /// 持久化句柄(廉价 clone,Arc 内部)。
-    persist: Persist,
+    persist: ServerStore,
 
     /// 音频本体缓存(命中直接本地播、播完入缓存);禁用环境为 null-object。
     media_cache: Arc<MediaCache>,
+
+    /// 下载导出的身份索引(已下载的歌 → 导出相对路径);播放解析据此命中永久副本、
+    /// 跳过网络;禁用环境为 null-object。
+    download_index: Arc<CacheIndex>,
 
     /// 下载用的 HTTP client(整段 GET);构建失败为 `None`(下载不可用)。
     http: Option<reqwest::Client>,
@@ -172,12 +105,14 @@ impl PlayerCore {
     ///   - `channels`: 已注入的全部音乐源 handle。
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
+    ///   - `download_index`: 下载导出索引;无持久化环境传 [`CacheIndex::disabled`]。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
         channels: Vec<Arc<dyn MusicChannel>>,
-        persist: Persist,
+        persist: ServerStore,
         media_cache: MediaCache,
+        download_index: CacheIndex,
     ) -> Self {
         let (http, music_dir) = crate::download::open_env();
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -187,6 +122,7 @@ impl PlayerCore {
             channels,
             persist,
             media_cache: Arc::new(media_cache),
+            download_index: Arc::new(download_index),
             http,
             music_dir,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
@@ -245,6 +181,11 @@ impl PlayerCore {
         &self.inner.media_cache
     }
 
+    /// 下载导出索引句柄引用(下载完成登记、播放解析命中在 [`crate::download`] / 本模块复用)。
+    pub(crate) fn download_index(&self) -> &Arc<CacheIndex> {
+        &self.inner.download_index
+    }
+
     /// 下载用 HTTP client;构建失败为 `None`(下载不可用)。
     pub(crate) fn http(&self) -> Option<&reqwest::Client> {
         self.inner.http.as_ref()
@@ -301,8 +242,8 @@ impl PlayerCore {
     /// 持久化句柄引用,供 [`crate::client::ClientHandle`] 查 love / 统计。
     ///
     /// # Return:
-    ///   内部 [`Persist`] 句柄引用。
-    pub(crate) fn persist(&self) -> &Persist {
+    ///   内部 [`ServerStore`] 句柄引用。
+    pub(crate) fn persist(&self) -> &ServerStore {
         &self.inner.persist
     }
 
@@ -347,8 +288,14 @@ impl PlayerCore {
         let prev_download_complete = self.inner.audio.snapshot().download_complete;
         self.inner.audio.stop();
 
-        // 命中本地音频缓存?(离线/重听 → 直接本地播,跳过整条 SongUrl 网络路径)
-        let cache_hit = self.inner.media_cache.get(&song.id, PLAYBACK_QUALITY);
+        // 命中本地副本?(cache 或 download 导出,音质 >= PLAYBACK_QUALITY)
+        // → 直接本地播,跳过整条 SongUrl 网络路径。
+        let local_hit = crate::resolve::resolve_local(
+            &self.inner.media_cache,
+            &self.inner.download_index,
+            song,
+            PLAYBACK_QUALITY,
+        );
 
         let (cached_url, interrupted) = {
             let mut st = self.inner.state.lock();
@@ -383,8 +330,8 @@ impl PlayerCore {
             .last_seen_finished_seq
             .store(seq, Ordering::Relaxed);
 
-        if let Some(path) = cache_hit {
-            mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "cache_hit", "media cache hit");
+        if let Some((path, quality)) = local_hit {
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), "本地命中,跳过网络");
             self.inner.audio.play(MediaUrl::Local(path));
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using prefetched url");
@@ -810,7 +757,7 @@ mod tests {
         Album, AlbumId, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
         SourceKind,
     };
-    use mineral_persist::Persist;
+    use mineral_persist::{CacheIndex, ServerStore};
     use mineral_protocol::PlayMode;
     use mineral_task::Scheduler;
     use mineral_test::song;
@@ -818,9 +765,10 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::{
-        DownloadProgress, Inner, MediaCache, PlayerCore, State, apply_play_mode, enter_shuffle,
+        DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, enter_shuffle,
         exit_shuffle, next_in_queue, play_mode_str, prev_in_queue,
     };
+    use crate::state::State;
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
     /// `source()` 报 `NETEASE`,与 [`mineral_test::song`] 的来源对齐,确保被路由命中。
@@ -898,10 +846,10 @@ mod tests {
     /// # Return:
     ///   组装好的 [`PlayerCore`]。
     fn core_with(calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>) -> color_eyre::Result<PlayerCore> {
-        core_with_persist(calls, Persist::disabled())
+        core_with_persist(calls, ServerStore::disabled())
     }
 
-    /// 同 [`core_with`],但允许注入指定 [`Persist`](会话持久化测试用真库)。
+    /// 同 [`core_with`],但允许注入指定 [`ServerStore`](会话持久化测试用真库)。
     ///
     /// # Params:
     ///   - `calls`: 共享的 on_played 调用记录。
@@ -911,7 +859,7 @@ mod tests {
     ///   组装好的 [`PlayerCore`]。
     fn core_with_persist(
         calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>,
-        persist: Persist,
+        persist: ServerStore,
     ) -> color_eyre::Result<PlayerCore> {
         let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel { calls });
         let channels = vec![channel];
@@ -923,6 +871,7 @@ mod tests {
             channels,
             persist,
             media_cache: Arc::new(MediaCache::disabled()),
+            download_index: Arc::new(CacheIndex::disabled()),
             http: None,
             music_dir: None,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
@@ -1214,7 +1163,7 @@ mod tests {
     #[tokio::test]
     async fn load_session_empty_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("t.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
         let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
         let core = core_with_persist(calls, persist)?;
         assert!(core.load_session().await?.is_none(), "空库应读不到会话");
@@ -1228,7 +1177,7 @@ mod tests {
     #[tokio::test]
     async fn save_then_load_roundtrips_queue_and_current() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("t.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
         let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
         let core = core_with_persist(calls, persist.clone())?;
 
@@ -1256,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn spawn_save_session_persists_something() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("t.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
         let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
         let core = core_with_persist(calls, persist)?;
 

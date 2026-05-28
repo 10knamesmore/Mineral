@@ -13,7 +13,7 @@
 //! 脏数据;整张全缺则视作未命中,触发全拉。
 
 use mineral_model::{PlaylistId, Song, SongId, SourceKind};
-use mineral_persist::Persist;
+use mineral_persist::ServerStore;
 
 /// 版本比对决策:本地缓存能否直接复用(免全拉)。纯函数,便于单测。
 ///
@@ -44,7 +44,7 @@ fn cache_is_current(cached: Option<i64>, remote: i64) -> bool {
 /// # Return:
 ///   命中且能重建出至少一首返回 `Some(Vec<Song>)`,否则 `None`。
 pub async fn try_rebuild_if_current(
-    persist: &Persist,
+    persist: &ServerStore,
     id: &PlaylistId,
     remote_tut: i64,
     remote_track_ids: &[String],
@@ -86,7 +86,7 @@ pub async fn try_rebuild_if_current(
 ///
 /// # Return:
 ///   有缓存且能重建出至少一首返回 `Some(Vec<Song>)`,否则 `None`。
-pub async fn try_load_stale(persist: &Persist, id: &PlaylistId) -> Option<Vec<Song>> {
+pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Vec<Song>> {
     let store = persist.scope(SourceKind::NETEASE);
     let entry = match store.get_playlist_cache(id).await {
         Ok(Some(e)) => e,
@@ -108,7 +108,7 @@ pub async fn try_load_stale(persist: &Persist, id: &PlaylistId) -> Option<Vec<So
 ///
 /// # Return:
 ///   重建出的歌曲(保序);全缺时为空 vec。
-async fn rebuild(persist: &Persist, track_ids: &[SongId]) -> Vec<Song> {
+async fn rebuild(persist: &ServerStore, track_ids: &[SongId]) -> Vec<Song> {
     let store = persist.scope(SourceKind::NETEASE);
     let mut out = Vec::with_capacity(track_ids.len());
     for sid in track_ids {
@@ -134,7 +134,7 @@ async fn rebuild(persist: &Persist, track_ids: &[SongId]) -> Vec<Song> {
 ///   - `track_update_time`: 远端版本戳(`trackUpdateTime`,可空)
 ///   - `songs`: 远端拉到的歌曲
 pub async fn store(
-    persist: &Persist,
+    persist: &ServerStore,
     id: &PlaylistId,
     name: Option<&str>,
     track_update_time: Option<i64>,
@@ -159,7 +159,7 @@ pub async fn store(
 #[cfg(test)]
 mod tests {
     use mineral_model::{PlaylistId, SourceKind};
-    use mineral_persist::Persist;
+    use mineral_persist::ServerStore;
 
     use super::{cache_is_current, store, try_load_stale, try_rebuild_if_current};
 
@@ -182,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn rebuild_uses_remote_order_when_version_matches() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("test.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
 
         // 写入时顺序 1,2,3,版本戳 700
@@ -210,7 +210,7 @@ mod tests {
     #[tokio::test]
     async fn version_mismatch_misses() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("test.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
         store(
             &persist,
@@ -235,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn rebuild_miss_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("test.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "999");
         assert!(
             try_rebuild_if_current(&persist, &id, 1, &["x".to_owned()])
@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn stale_rebuilds_in_cached_order() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("test.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
         let songs = vec![mineral_test::song("10001"), mineral_test::song("10002")];
         store(&persist, &id, Some("我的歌单"), Some(700), &songs).await;

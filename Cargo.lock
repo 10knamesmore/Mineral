@@ -2498,14 +2498,12 @@ dependencies = [
 name = "mineral-persist"
 version = "0.3.0"
 dependencies = [
- "bincode",
  "color-eyre",
  "mineral-log",
  "mineral-model",
  "mineral-paths",
  "parking_lot",
  "rustc-hash",
- "serde",
  "sqlx",
  "tempfile",
  "tokio",

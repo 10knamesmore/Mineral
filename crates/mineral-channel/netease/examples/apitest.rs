@@ -78,7 +78,7 @@ async fn main() -> color_eyre::Result<()> {
                 &NeteaseConfig::default(),
                 &auth.music_u,
                 auth.user_id,
-                mineral_persist::Persist::disabled(),
+                mineral_persist::ServerStore::disabled(),
             )?;
             (ch, CredLevel::StoredJson)
         } else {
@@ -90,7 +90,7 @@ async fn main() -> color_eyre::Result<()> {
                     let ch = NeteaseChannel::with_cookie(
                         &NeteaseConfig::default(),
                         c,
-                        mineral_persist::Persist::disabled(),
+                        mineral_persist::ServerStore::disabled(),
                     )?;
                     (ch, CredLevel::EnvCookie)
                 }
@@ -99,7 +99,7 @@ async fn main() -> color_eyre::Result<()> {
                     println!("凭证: 无(匿名)\n");
                     let ch = NeteaseChannel::new(
                         &NeteaseConfig::default(),
-                        mineral_persist::Persist::disabled(),
+                        mineral_persist::ServerStore::disabled(),
                     )?;
                     (ch, CredLevel::Anonymous)
                 }

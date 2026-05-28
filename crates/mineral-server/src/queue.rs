@@ -5,7 +5,7 @@
 use mineral_model::Song;
 use mineral_protocol::PlayMode;
 
-use crate::player::State;
+use crate::state::State;
 
 /// [`PlayMode`] → 稳定字符串(Debug 名,如 `"Sequential"`)。本轮不 parse 回来。
 ///
