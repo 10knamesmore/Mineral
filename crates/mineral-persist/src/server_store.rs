@@ -21,6 +21,15 @@ pub struct ServerStore {
     backend: Arc<Backend>,
 }
 
+/// 歌单缓存计数(只读统计 / 清理回执)。只读返回 DTO,字段全 `pub`。
+pub struct PlaylistCacheStats {
+    /// `playlist_cache` 行数(缓存的歌单数)。
+    pub playlists: u64,
+
+    /// `playlist_tracks` 行数(总曲目行数)。
+    pub tracks: u64,
+}
+
 /// 内部后端:真实 sqlite 或降级 null。
 enum Backend {
     /// 真实 sqlite 连接池。
@@ -107,23 +116,60 @@ impl ServerStore {
         }
     }
 
+    /// 歌单缓存计数(只读)。供 CLI `cache status` 展示用。
+    ///
+    /// # Return:
+    ///   启用态返回 `playlist_cache` / `playlist_tracks` 行数;降级句柄返回全 0。
+    pub async fn playlist_cache_stats(&self) -> color_eyre::Result<PlaylistCacheStats> {
+        let Some(pool) = self.pool() else {
+            return Ok(PlaylistCacheStats {
+                playlists: 0,
+                tracks: 0,
+            });
+        };
+        let (playlists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_cache")
+            .fetch_one(pool)
+            .await
+            .wrap_err("统计 playlist_cache 行数失败")?;
+        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_tracks")
+            .fetch_one(pool)
+            .await
+            .wrap_err("统计 playlist_tracks 行数失败")?;
+        Ok(PlaylistCacheStats {
+            playlists: u64::try_from(playlists).unwrap_or(0),
+            tracks: u64::try_from(tracks).unwrap_or(0),
+        })
+    }
+
     /// 清空歌单缓存(`playlist_cache` + `playlist_tracks` 全部来源)。
     ///
     /// 只清可重建的歌单缓存，**不动**播放统计 / love / 历史 / 会话 / song_meta。
     /// 降级句柄下 no-op。
     ///
     /// # Return:
-    ///   清理成功返回 `Ok(())`。
-    pub async fn clear_playlist_caches(&self) -> color_eyre::Result<()> {
+    ///   清理成功返回被清掉的计数(清理前 `playlist_cache` / `playlist_tracks` 行数);降级返回全 0。
+    pub async fn clear_playlist_caches(&self) -> color_eyre::Result<PlaylistCacheStats> {
         let Some(pool) = self.pool() else {
-            return Ok(());
+            return Ok(PlaylistCacheStats {
+                playlists: 0,
+                tracks: 0,
+            });
         };
         info!(target: "persist", "清理歌单缓存");
         // 两表清理包进事务,避免中途失败留下半清状态(tracks 清了 cache 没清)。
+        // 先在同一事务里 COUNT 出清理前计数作为回执,再 DELETE,保证回执与实际删除一致。
         let mut tx = pool
             .begin()
             .await
             .wrap_err("开启 clear_playlist_caches 事务失败")?;
+        let (playlists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_cache")
+            .fetch_one(&mut *tx)
+            .await
+            .wrap_err("统计 playlist_cache 行数失败")?;
+        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_tracks")
+            .fetch_one(&mut *tx)
+            .await
+            .wrap_err("统计 playlist_tracks 行数失败")?;
         sqlx::query("DELETE FROM playlist_tracks")
             .execute(&mut *tx)
             .await
@@ -135,7 +181,10 @@ impl ServerStore {
         tx.commit()
             .await
             .wrap_err("提交 clear_playlist_caches 事务失败")?;
-        Ok(())
+        Ok(PlaylistCacheStats {
+            playlists: u64::try_from(playlists).unwrap_or(0),
+            tracks: u64::try_from(tracks).unwrap_or(0),
+        })
     }
 }
 
@@ -170,10 +219,22 @@ mod tests {
         s.record_play(&song, 1000).await?;
         s.set_loved(&song, true).await?;
 
-        p.clear_playlist_caches().await?;
+        // 清理前计数:1 个歌单、1 条曲目。
+        let before = p.playlist_cache_stats().await?;
+        assert_eq!(before.playlists, 1);
+        assert_eq!(before.tracks, 1);
+
+        // 清理回执 = 清理前计数。
+        let removed = p.clear_playlist_caches().await?;
+        assert_eq!(removed.playlists, 1);
+        assert_eq!(removed.tracks, 1);
 
         // 歌单缓存没了
         assert!(s.get_playlist_cache(&pid).await?.is_none());
+        // 清后计数归零
+        let after = p.playlist_cache_stats().await?;
+        assert_eq!(after.playlists, 0);
+        assert_eq!(after.tracks, 0);
         // 但统计 + love 还在
         assert!(s.query_stats(&song).await?.is_some());
         assert!(s.is_loved(&song).await?);

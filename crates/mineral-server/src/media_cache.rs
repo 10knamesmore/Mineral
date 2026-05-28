@@ -10,11 +10,6 @@ use std::path::PathBuf;
 use mineral_model::{AudioFormat, BitRate, Song, SongId};
 use mineral_persist::{CacheIndex, ServerStore};
 
-/// 音频缓存容量上限:10 GiB。LRU 满了自动驱逐最久未播。
-///
-/// 暂为常量(配置系统落地后改读配置,与封面 `COVER_STORAGE` 约定一致)。
-pub const MEDIA_CACHE_CAPACITY: u64 = 10 * 1024 * 1024 * 1024;
-
 /// 单段文件名 / 目录名的最大字节数(留余量,远低于 255 上限)。
 const SEGMENT_MAX_BYTES: usize = 200;
 
@@ -253,9 +248,10 @@ mod tests {
 
     use mineral_persist::ServerStore;
 
+    use mineral_config::AUDIO_CACHE_CAPACITY;
+
     use super::{
-        MEDIA_CACHE_CAPACITY, MediaCache, cache_key, ext_for, library_relpath, sanitize_segment,
-        truncate_bytes,
+        MediaCache, cache_key, ext_for, library_relpath, sanitize_segment, truncate_bytes,
     };
 
     /// 起一个临时 DB 上的启用态 MediaCache(缓存文件落 `dir`)。
@@ -264,7 +260,7 @@ mod tests {
         dir: std::path::PathBuf,
     ) -> color_eyre::Result<MediaCache> {
         let persist = ServerStore::open(db).await?;
-        MediaCache::open(&persist, dir, MEDIA_CACHE_CAPACITY).await
+        MediaCache::open(&persist, dir, AUDIO_CACHE_CAPACITY).await
     }
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {

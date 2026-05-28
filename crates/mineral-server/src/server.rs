@@ -10,8 +10,10 @@ use mineral_persist::ServerStore;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
+use mineral_config::AUDIO_CACHE_CAPACITY;
+
 use crate::client::ClientHandle;
-use crate::media_cache::{MEDIA_CACHE_CAPACITY, MediaCache};
+use crate::media_cache::MediaCache;
 use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
 use crate::serve;
@@ -99,7 +101,7 @@ async fn open_media_cache(persist: &ServerStore) -> MediaCache {
             return MediaCache::disabled();
         }
     };
-    match MediaCache::open(persist, dir, MEDIA_CACHE_CAPACITY).await {
+    match MediaCache::open(persist, dir, AUDIO_CACHE_CAPACITY).await {
         Ok(cache) => cache,
         Err(e) => {
             mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存打开失败,降级禁用");

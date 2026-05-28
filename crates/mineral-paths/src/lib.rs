@@ -35,7 +35,7 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
     xdg::cache_dir()
 }
 
-/// 音频 blob 缓存目录(`<cache_dir>/audio`)。
+/// 音频缓存目录(`<cache_dir>/audio`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
@@ -43,7 +43,7 @@ pub fn audio_cache_dir() -> color_eyre::Result<PathBuf> {
     Ok(cache_dir()?.join("audio"))
 }
 
-/// 封面 blob 缓存目录(`<cache_dir>/cover`)。
+/// 封面缓存目录(`<cache_dir>/cover`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。

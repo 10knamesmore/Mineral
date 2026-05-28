@@ -18,6 +18,7 @@ members = [
     "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
     "crates/mineral-persist",
+    "crates/mineral-config",
 ]
 resolver = "2"
 
@@ -65,6 +66,7 @@ mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 mineral-persist         = { path = "crates/mineral-persist" }
+mineral-config          = { path = "crates/mineral-config" }
 uuid               = { version = "1", features = ["v4"] }
 async-trait        = "0.1"
 thiserror          = "1"
@@ -85,6 +87,7 @@ realfft            = "3"
 ringbuf            = "0.4"
 rustc-hash         = "2"
 unicode-width      = "0.2"
+comfy-table        = "7"
 ratatui            = "0.29"
 ratatui-image      = "8.0"
 rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac"] }

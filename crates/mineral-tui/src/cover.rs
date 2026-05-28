@@ -32,9 +32,6 @@ const WORKERS: usize = 4;
 /// HTTP 客户端 timeout。封面比 audio 流小得多,30s 足够慢网兜底。
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 封面磁盘缓存容量上限(字节)。
-const COVER_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024;
-
 /// 解码后 resize 到此最大边(像素),保持比例。
 ///
 /// 终端 cell 典型 8×16 px,cover 面板大概 30 cols × 15 rows ≈ 240×240 px;
@@ -131,7 +128,10 @@ impl CoverFetcher {
                 return None;
             }
         };
-        match store.cover_cache(dir, COVER_CACHE_CAPACITY).await {
+        match store
+            .cover_cache(dir, mineral_config::COVER_CACHE_CAPACITY)
+            .await
+        {
             Ok(c) => Some(Arc::new(c)),
             Err(e) => {
                 mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存打开失败,降级不缓存");

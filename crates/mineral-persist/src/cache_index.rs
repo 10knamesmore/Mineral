@@ -66,6 +66,35 @@ pub struct CacheIndex {
     backend: Option<Backend>,
 }
 
+/// 缓存内容的只读统计快照(供 CLI 展示 / 清理回执)。
+///
+/// `entries` 的 `relpath` 语义(来源 / 音质 / 格式)由写入方的落盘布局决定,
+/// [`CacheIndex`] 不解析;消费方据 `root` + `relpath` 自行 stat(如取 mtime)。
+///
+/// 只读返回 DTO:字段全 `pub` 供消费方读 / 在测试中构造,不是配置 struct。
+pub struct CacheStats {
+    /// 文件根目录;`None` = 降级态(无后端)。
+    pub root: Option<PathBuf>,
+
+    /// 每条目的相对路径与字节数。
+    pub entries: Vec<CacheEntryStat>,
+
+    /// 当前总字节(= `entries` 字节之和)。
+    pub total_bytes: u64,
+
+    /// 容量上限(字节);`None` = 不驱逐。
+    pub capacity: Option<u64>,
+}
+
+/// 单条缓存项的统计。只读返回 DTO,字段全 `pub`。
+pub struct CacheEntryStat {
+    /// 相对 `root` 的文件路径(`<subdir>/<file_name>`)。
+    pub relpath: String,
+
+    /// 文件字节数。
+    pub bytes: u64,
+}
+
 impl CacheIndex {
     /// 在给定连接池上打开(或新建)一张索引表并载入内存镜像 + 启动对账。
     ///
@@ -273,28 +302,78 @@ impl CacheIndex {
         backend.evict_to_capacity().await
     }
 
+    /// 当前索引内容的只读快照(读内存镜像,不触盘)。供 CLI `cache status` 展示用。
+    ///
+    /// # Return:
+    ///   启用态返回各条目 + 总字节 + 容量;降级态返回空快照(`root` / `capacity` 均 `None`)。
+    pub fn snapshot(&self) -> CacheStats {
+        let Some(backend) = self.backend.as_ref() else {
+            return CacheStats {
+                root: None,
+                entries: Vec::new(),
+                total_bytes: 0,
+                capacity: None,
+            };
+        };
+        let idx = backend.index.lock();
+        let entries = idx
+            .map
+            .values()
+            .map(|e| CacheEntryStat {
+                relpath: e.relpath.clone(),
+                bytes: e.bytes,
+            })
+            .collect::<Vec<_>>();
+        CacheStats {
+            root: Some(backend.root.clone()),
+            entries,
+            total_bytes: idx.total_bytes,
+            capacity: backend.capacity,
+        }
+    }
+
     /// 清空整张索引:删所有文件 + `DELETE FROM <table>` + 清镜像。供 CLI「清理缓存」用。
     ///
     /// # Return:
-    ///   成功返回 `Ok(())`;单文件删除失败不致命(尽力而为)。
-    pub async fn clear(&self) -> color_eyre::Result<()> {
+    ///   成功返回清理前的内容快照(条目 / 总字节 = 释放量);单文件删除失败不致命(尽力而为)。
+    ///   降级态返回空快照。
+    pub async fn clear(&self) -> color_eyre::Result<CacheStats> {
         let Some(backend) = self.backend.as_ref() else {
-            return Ok(());
+            return Ok(CacheStats {
+                root: None,
+                entries: Vec::new(),
+                total_bytes: 0,
+                capacity: None,
+            });
         };
-        let files: Vec<String> = {
+        let (entries, total_bytes) = {
             let mut idx = backend.index.lock();
+            let total_bytes = idx.total_bytes;
             idx.total_bytes = 0;
             idx.clock = 0;
-            idx.map.drain().map(|(_, e)| e.relpath).collect()
+            let entries = idx
+                .map
+                .drain()
+                .map(|(_, e)| CacheEntryStat {
+                    relpath: e.relpath,
+                    bytes: e.bytes,
+                })
+                .collect::<Vec<_>>();
+            (entries, total_bytes)
         };
-        for rel in files {
-            drop(std::fs::remove_file(backend.root.join(&rel)));
+        for entry in &entries {
+            drop(std::fs::remove_file(backend.root.join(&entry.relpath)));
         }
         sqlx::query(&format!("DELETE FROM {}", backend.table))
             .execute(&backend.pool)
             .await
             .wrap_err_with(|| format!("清空缓存索引表失败 table={}", backend.table))?;
-        Ok(())
+        Ok(CacheStats {
+            root: Some(backend.root.clone()),
+            entries,
+            total_bytes,
+            capacity: backend.capacity,
+        })
     }
 }
 
@@ -678,16 +757,55 @@ mod tests {
         Ok(())
     }
 
-    /// clear:删文件 + 清表 + 清镜像。
+    /// clear:删文件 + 清表 + 清镜像;返回清理前的内容快照(条目 + 释放字节)。
     #[tokio::test]
     async fn clear_removes_everything() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
         let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
-        idx.record_file("k", &make_src(d.path(), "a", b"x")?, "s", "a.bin")
+        idx.record_file("k", &make_src(d.path(), "a", b"hello")?, "s", "a.bin")
             .await?;
-        idx.clear().await?;
+        let removed = idx.clear().await?;
+        assert_eq!(removed.entries.len(), 1, "应回执 1 条被清条目");
+        assert_eq!(removed.total_bytes, 5, "释放字节 = 文件大小");
+        assert_eq!(
+            removed.entries.first().map(|e| e.relpath.as_str()),
+            Some("s/a.bin")
+        );
         assert!(idx.get("k").is_none());
+        assert_eq!(idx.snapshot().total_bytes, 0, "清后快照应为空");
+        Ok(())
+    }
+
+    /// snapshot:只读返回当前条目 / 总字节 / 容量,且与实际写入吻合。
+    #[tokio::test]
+    async fn snapshot_reports_entries_and_capacity() -> color_eyre::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path().join("root");
+        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        idx.record_file("k1", &make_src(d.path(), "a", b"123")?, "s", "a.bin")
+            .await?;
+        idx.record_file("k2", &make_src(d.path(), "b", b"45")?, "s", "b.bin")
+            .await?;
+        let snap = idx.snapshot();
+        assert_eq!(snap.entries.len(), 2);
+        assert_eq!(snap.total_bytes, 5, "3 + 2 字节");
+        assert_eq!(snap.capacity, Some(1_000_000));
+        assert!(snap.root.is_some());
+        Ok(())
+    }
+
+    /// 降级态 snapshot / clear 均返回空快照,不触盘不报错。
+    #[tokio::test]
+    async fn disabled_snapshot_is_empty() -> color_eyre::Result<()> {
+        let idx = CacheIndex::disabled();
+        let snap = idx.snapshot();
+        assert!(snap.root.is_none());
+        assert!(snap.entries.is_empty());
+        assert_eq!(snap.total_bytes, 0);
+        assert_eq!(snap.capacity, None);
+        let removed = idx.clear().await?;
+        assert!(removed.entries.is_empty());
         Ok(())
     }
 }
