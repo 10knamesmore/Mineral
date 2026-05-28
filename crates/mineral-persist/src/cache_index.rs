@@ -654,14 +654,14 @@ mod tests {
         Ok(())
     }
 
-    /// record(文件已置)+ 不驱逐(capacity None,永久导出语义)。
+    /// record(文件已置)+ 不驱逐(capacity None,永久副本语义)。
     #[tokio::test]
     async fn record_path_no_evict() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
         std::fs::create_dir_all(root.join("sub"))?;
         std::fs::write(root.join("sub/x.flac"), b"BIGFLAC")?;
-        let idx = CacheIndex::open(mem_pool().await?, "download_export", root, None).await?;
+        let idx = CacheIndex::open(mem_pool().await?, "no_evict", root, None).await?;
         idx.record("ne:1:lossless", "sub/x.flac", 7).await?;
         assert!(idx.get("ne:1:lossless").is_some());
         Ok(())

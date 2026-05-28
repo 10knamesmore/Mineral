@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
-use mineral_persist::{CacheIndex, ServerStore};
+use mineral_persist::ServerStore;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
@@ -47,15 +47,7 @@ impl Server {
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode)?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist).await;
-        let download_index = open_download_index(&persist).await;
-        let player = PlayerCore::spawn(
-            audio,
-            scheduler,
-            channels,
-            persist,
-            media_cache,
-            download_index,
-        );
+        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache);
         // 读回上次会话 —— 本轮仅打日志确认能读到,不应用到播放状态(不自动恢复)。
         tokio::spawn(log_last_session(player.clone()));
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
@@ -112,25 +104,6 @@ async fn open_media_cache(persist: &ServerStore) -> MediaCache {
         Err(e) => {
             mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存打开失败,降级禁用");
             MediaCache::disabled()
-        }
-    }
-}
-
-/// 打开下载导出索引(`download_export` 表,不驱逐);路径解析 / open 失败时 `warn` 并降级到
-/// [`CacheIndex::disabled`](不阻断 daemon 启动)。
-async fn open_download_index(persist: &ServerStore) -> CacheIndex {
-    let root = match mineral_paths::music_export_dir() {
-        Ok(r) => r,
-        Err(e) => {
-            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "下载导出目录解析失败,降级禁用");
-            return CacheIndex::disabled();
-        }
-    };
-    match persist.download_export(root).await {
-        Ok(idx) => idx,
-        Err(e) => {
-            mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "下载索引打开失败,降级禁用");
-            CacheIndex::disabled()
         }
     }
 }

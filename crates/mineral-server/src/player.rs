@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
-use mineral_persist::{CacheIndex, ServerStore, SessionSnapshot};
+use mineral_persist::{ServerStore, SessionSnapshot};
 use mineral_protocol::{DownloadProgress, DownloadTarget, PlayMode, PlayerSnapshot};
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
@@ -64,14 +64,11 @@ struct Inner {
     /// 音频本体缓存(命中直接本地播、播完入缓存);禁用环境为 null-object。
     media_cache: Arc<MediaCache>,
 
-    /// 下载导出的身份索引(已下载的歌 → 导出相对路径);播放解析据此命中永久副本、
-    /// 跳过网络;禁用环境为 null-object。
-    download_index: Arc<CacheIndex>,
-
     /// 下载用的 HTTP client(整段 GET);构建失败为 `None`(下载不可用)。
     http: Option<reqwest::Client>,
 
-    /// 永久下载导出根目录(`~/Music/mineral`);解析失败为 `None`(下载不可用)。
+    /// 永久下载导出根目录(`~/Music/mineral`);播放解析据此**直接探盘**命中已下载副本、
+    /// 跳过网络;解析失败为 `None`(下载不可用)。
     music_dir: Option<PathBuf>,
 
     /// 下载进度共享态:下载任务实时写,client(TUI 弹窗 / CLI status)轮询读。
@@ -105,14 +102,12 @@ impl PlayerCore {
     ///   - `channels`: 已注入的全部音乐源 handle。
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
-    ///   - `download_index`: 下载导出索引;无持久化环境传 [`CacheIndex::disabled`]。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
         channels: Vec<Arc<dyn MusicChannel>>,
         persist: ServerStore,
         media_cache: MediaCache,
-        download_index: CacheIndex,
     ) -> Self {
         let (http, music_dir) = crate::download::open_env();
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -122,7 +117,6 @@ impl PlayerCore {
             channels,
             persist,
             media_cache: Arc::new(media_cache),
-            download_index: Arc::new(download_index),
             http,
             music_dir,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
@@ -179,11 +173,6 @@ impl PlayerCore {
     /// 音频本体缓存句柄引用(下载 / capture 编排在 [`crate::download`] 复用)。
     pub(crate) fn media_cache(&self) -> &Arc<MediaCache> {
         &self.inner.media_cache
-    }
-
-    /// 下载导出索引句柄引用(下载完成登记、播放解析命中在 [`crate::download`] / 本模块复用)。
-    pub(crate) fn download_index(&self) -> &Arc<CacheIndex> {
-        &self.inner.download_index
     }
 
     /// 下载用 HTTP client;构建失败为 `None`(下载不可用)。
@@ -292,7 +281,7 @@ impl PlayerCore {
         // → 直接本地播,跳过整条 SongUrl 网络路径。
         let local_hit = crate::resolve::resolve_local(
             &self.inner.media_cache,
-            &self.inner.download_index,
+            self.inner.music_dir.as_deref(),
             song,
             PLAYBACK_QUALITY,
         );
@@ -757,7 +746,7 @@ mod tests {
         Album, AlbumId, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
         SourceKind,
     };
-    use mineral_persist::{CacheIndex, ServerStore};
+    use mineral_persist::ServerStore;
     use mineral_protocol::PlayMode;
     use mineral_task::Scheduler;
     use mineral_test::song;
@@ -871,7 +860,6 @@ mod tests {
             channels,
             persist,
             media_cache: Arc::new(MediaCache::disabled()),
-            download_index: Arc::new(CacheIndex::disabled()),
             http: None,
             music_dir: None,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),

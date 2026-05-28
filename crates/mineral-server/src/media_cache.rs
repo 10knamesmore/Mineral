@@ -126,18 +126,36 @@ pub(crate) fn library_relpath(
     quality: BitRate,
     format: &AudioFormat,
 ) -> (String, String) {
+    let (subdir, stem) = library_dir_and_stem(song, quality);
+    let ext_seg = sanitize_segment(&ext_for(format, quality), "bin");
+    (subdir, format!("{stem}.{ext_seg}"))
+}
+
+/// 一首歌在库里的「专辑目录 + 文件名主干(不含扩展名)」= `<source>/<quality>/<album>` + `<title>`。
+/// 与 [`library_relpath`] 同一套命名,只是不带扩展名——供下载导出**按文件系统反查**:磁盘上
+/// 扩展名未知时,定位到专辑目录后按主干匹配文件(见 [`crate::resolve`])。
+///
+/// # Params:
+///   - `song`: 歌曲(取来源 / 专辑 / 标题)
+///   - `quality`: 音质(目录层)
+///
+/// # Return:
+///   `(subdir, title_stem)`,各段已 sanitize。
+pub(crate) fn library_dir_and_stem(song: &Song, quality: BitRate) -> (String, String) {
     let album = song.album.as_ref().map(|a| a.name.as_str());
     let title = if song.name.is_empty() {
         song.id.as_str()
     } else {
         song.name.as_str()
     };
-    let ext = ext_for(format, quality);
-    media_relpath(song.source().name(), album, title, quality, &ext)
+    (
+        library_subdir(song.source().name(), album, quality),
+        sanitize_segment(title, "_untitled"),
+    )
 }
 
-/// 缓存 / 下载导出索引键:`{song_id.qualified()}:{quality}`,全局唯一、每音质独立。
-/// 音频缓存(`audio_cache`)与下载导出(`download_export`)共用同一键格式(各自独立表)。
+/// 音频缓存索引键:`{song_id.qualified()}:{quality}`,全局唯一、每音质独立(`audio_cache` 表用)。
+/// 下载导出不走索引(按文件系统路径反查,见 [`crate::resolve`]),故无需此键。
 ///
 /// # Params:
 ///   - `song_id`: 歌曲 ID
@@ -149,31 +167,19 @@ pub(crate) fn cache_key(song_id: &SongId, quality: BitRate) -> String {
     format!("{}:{}", song_id.qualified(), quality.as_str())
 }
 
-/// 组库内相对落点 `(subdir, file_name)`:`<source>/<quality>/<album>` + `<title>.<ext>`,各段已 sanitize。
+/// 库内专辑目录 `<source>/<quality>/<album>`(各段已 sanitize;`album` 为 `None` / 空 → `_unknown`)。
 ///
 /// # Params:
 ///   - `source`: 来源名(如 `netease`)
-///   - `album`: 专辑名(`None` / 空 → `_unknown`)
-///   - `title`: 歌名(空 → `_untitled`)
+///   - `album`: 专辑名
 ///   - `quality`: 音质(目录层)
-///   - `ext`: 扩展名(空 → `bin`)
 ///
 /// # Return:
-///   `(subdir, file_name)`,如 `("netease/lossless/晴天专辑", "晴天.flac")`。
-fn media_relpath(
-    source: &str,
-    album: Option<&str>,
-    title: &str,
-    quality: BitRate,
-    ext: &str,
-) -> (String, String) {
+///   形如 `netease/lossless/叶惠美`。
+fn library_subdir(source: &str, album: Option<&str>, quality: BitRate) -> String {
     let source_seg = sanitize_segment(source, "_unknown");
     let album_seg = sanitize_segment(album.unwrap_or(""), "_unknown");
-    let title_seg = sanitize_segment(title, "_untitled");
-    let ext_seg = sanitize_segment(ext, "bin");
-    let subdir = format!("{source_seg}/{}/{album_seg}", quality.as_str());
-    let file_name = format!("{title_seg}.{ext_seg}");
-    (subdir, file_name)
+    format!("{source_seg}/{}/{album_seg}", quality.as_str())
 }
 
 /// 扩展名:优先用实际格式,空(拿不到格式)按音质兜底无损 `flac` / 有损 `mp3`。
@@ -248,7 +254,7 @@ mod tests {
     use mineral_persist::ServerStore;
 
     use super::{
-        MEDIA_CACHE_CAPACITY, MediaCache, cache_key, ext_for, media_relpath, sanitize_segment,
+        MEDIA_CACHE_CAPACITY, MediaCache, cache_key, ext_for, library_relpath, sanitize_segment,
         truncate_bytes,
     };
 
@@ -293,15 +299,17 @@ mod tests {
 
     #[test]
     fn relpath_is_readable_library_layout() {
-        let (subdir, file) =
-            media_relpath("netease", Some("叶惠美"), "晴天", BitRate::Lossless, "flac");
+        let s = song("186016", "晴天", Some("叶惠美"));
+        let (subdir, file) = library_relpath(&s, BitRate::Lossless, &AudioFormat::Flac);
         assert_eq!(subdir, "netease/lossless/叶惠美");
         assert_eq!(file, "晴天.flac");
     }
 
     #[test]
     fn relpath_falls_back_on_empty_album_and_title() {
-        let (subdir, file) = media_relpath("netease", None, "", BitRate::Higher, "mp3");
+        // 专辑缺失 → _unknown;标题 sanitize 后为空(全空白)→ _untitled。
+        let s = song("186016", "   ", None);
+        let (subdir, file) = library_relpath(&s, BitRate::Higher, &AudioFormat::Mp3);
         assert_eq!(subdir, "netease/higher/_unknown");
         assert_eq!(file, "_untitled.mp3");
     }

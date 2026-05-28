@@ -101,41 +101,8 @@ impl ServerStore {
         root: std::path::PathBuf,
         capacity: u64,
     ) -> color_eyre::Result<CacheIndex> {
-        self.cache_index("audio_cache", root, Some(capacity)).await
-    }
-
-    /// 下载导出索引(`download_export` 表,**不驱逐**——永久副本)。
-    ///
-    /// # Params:
-    ///   - `root`: 下载导出根目录(`relpath` 相对它)
-    ///
-    /// # Return:
-    ///   就绪索引;降级句柄返回 [`CacheIndex::disabled`];建表 / 载入失败返回 `Err`。
-    pub async fn download_export(
-        &self,
-        root: std::path::PathBuf,
-    ) -> color_eyre::Result<CacheIndex> {
-        self.cache_index("download_export", root, /*capacity*/ None)
-            .await
-    }
-
-    /// 在本库内打开(或新建)一张文件缓存索引表(复用本连接池)。
-    ///
-    /// # Params:
-    ///   - `table`: 索引表名(由具名方法静态选定)
-    ///   - `root`: 文件根目录
-    ///   - `capacity`: 容量上限字节;`None` 不驱逐
-    ///
-    /// # Return:
-    ///   就绪索引;降级句柄返回 [`CacheIndex::disabled`]。
-    async fn cache_index(
-        &self,
-        table: &'static str,
-        root: std::path::PathBuf,
-        capacity: Option<u64>,
-    ) -> color_eyre::Result<CacheIndex> {
         match self.pool() {
-            Some(pool) => CacheIndex::open(pool.clone(), table, root, capacity).await,
+            Some(pool) => CacheIndex::open(pool.clone(), "audio_cache", root, Some(capacity)).await,
             None => Ok(CacheIndex::disabled()),
         }
     }
