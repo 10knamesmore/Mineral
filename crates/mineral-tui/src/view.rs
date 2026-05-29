@@ -6,9 +6,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
 use crate::app::App;
-use crate::components::{
-    lyrics, now_playing, sidebar, spectrum, status_bar, top_status, transport,
-};
+use crate::components::{lyrics, now_playing, sidebar, spectrum, top_status, transport};
 use crate::layout::{Areas, compute};
 use crate::theme::Theme;
 
@@ -39,7 +37,6 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
-    status_bar::draw(frame, areas.status_bar, &app.state, theme);
 
     // topbar 通知层(下载进度 / 一次性消息):自 top_status 行起向下堆叠,top-center 展开。转场期间不画。
     if app.transition.is_none() {

@@ -8,6 +8,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
 };
 
+use super::badge::search_badge;
 use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -19,14 +20,14 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let total = rows_data.len();
     let pos = position_label(state.sel_playlist, total);
 
+    let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
+    title_spans.extend(search_badge(state, theme));
+
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(vec![
-            Span::styled(" playlists ", Style::new().fg(theme.subtext)),
-            search_badge(&state.search_q, theme),
-        ]))
+        .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
@@ -108,15 +109,6 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
         Cell::from(Span::styled(len_label, Style::new().fg(theme.subtext))),
         Cell::from(Span::styled(count_label, Style::new().fg(theme.overlay))),
     ])
-}
-
-/// 搜索 badge:`/q` 形式,空 query 不渲染。
-fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
-    if q.is_empty() {
-        Span::raw("")
-    } else {
-        Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
-    }
 }
 
 /// 全空 playlist 时画 block + 居中两行提示。loading / 未登录文案二选一。
@@ -210,6 +202,21 @@ mod tests {
             "歌单列表:3 个混源歌单(EndSerenading / 本地)",
             t.backend()
         );
+        Ok(())
+    }
+
+    /// 搜索输入态:标题挂 `/查询█`(末尾光标方块,表示正在输入)。
+    #[test]
+    fn playlists_search_active_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let mut state = crate::test_support::state_with_playlists();
+        state.search_mode = true;
+        state.search_q = "春日影".to_owned();
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!("歌单列表:搜索输入态(标题 /春日影█)", t.backend());
         Ok(())
     }
 

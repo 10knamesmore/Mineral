@@ -397,7 +397,8 @@ impl App {
         }
     }
 
-    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace/字符更新词并复位 sel。
+    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
+    /// 命令行行为),字符追加词;改词后复位 sel。
     fn handle_search_key(&mut self, key: &KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -408,6 +409,11 @@ impl App {
                 self.state.search_mode = false;
             }
             KeyCode::Backspace => {
+                // vim 行为:query 已空时再删一次 = 退出搜索(等价 Esc)。
+                if self.state.search_q.is_empty() {
+                    self.state.search_mode = false;
+                    return;
+                }
                 self.state.search_q.pop();
                 self.reset_sel_for_search();
                 self.state.last_sel_change = Instant::now();
@@ -756,6 +762,32 @@ mod tests {
         )));
         assert!(app.should_quit, "Ctrl-C 立即退出");
         assert!(app.transition.is_none(), "Ctrl-C 不走转场动画");
+    }
+
+    /// vim 命令行行为:`/` 进搜索,删到空仍在搜索态,空 query 上再删一次才退出。
+    #[test]
+    fn search_backspace_on_empty_query_exits() {
+        let mut app = app_with_library(3, /*sel_track*/ 0);
+
+        // `/` 进入搜索输入态,query 起始为空。
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.state.search_mode, "`/` 应进入搜索态");
+        assert!(app.state.search_q.is_empty());
+
+        // 输入两个字符。
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.state.search_q, "ab");
+
+        // 退格逐字符删;删到空时仍停在搜索态(不提前退出)。
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.state.search_q.is_empty());
+        assert!(app.state.search_mode, "删到空时仍应在搜索态");
+
+        // 空 query 上再删一次 → 退出搜索。
+        press(&mut app, KeyCode::Backspace);
+        assert!(!app.state.search_mode, "空 query 上退格应退出搜索");
     }
 
     /// Library 视图按 `f` 乐观切换选中曲目的 ♥ 状态,不依赖真实 server。

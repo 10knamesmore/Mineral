@@ -29,8 +29,6 @@ pub struct Areas {
     pub spectrum: Option<Rect>,
     /// 底部右半下(Full)/ 底部全宽(Compact):transport 进度条。
     pub transport: Rect,
-    /// 底部 keys hint / 临时 hint / 搜索输入行(1 行)。
-    pub status_bar: Rect,
 }
 
 /// 紧凑模式触发宽度阈值。
@@ -47,14 +45,10 @@ pub fn compute(area: Rect) -> Areas {
     }
 }
 
-/// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport),底部 1 行 status_bar。
+/// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport)。
 fn compute_full(area: Rect) -> Areas {
-    let [top_status, body, status_bar] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let [top_status, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
     let [main_area, bottom_area] =
         Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(body);
@@ -79,18 +73,13 @@ fn compute_full(area: Rect) -> Areas {
         lyrics: Some(lyrics),
         spectrum: Some(spectrum),
         transport,
-        status_bar,
     }
 }
 
-/// Compact 布局(窄/矮终端):顶/底各 1 行,中间 70/30 主-transport,无右侧歌词与频谱。
+/// Compact 布局(窄/矮终端):顶部 1 行,中间 70/30 主-transport,无右侧歌词与频谱。
 fn compute_compact(area: Rect) -> Areas {
-    let [top_status, body, status_bar] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let [top_status, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
     let [left, transport] =
         Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(body);
@@ -103,7 +92,6 @@ fn compute_compact(area: Rect) -> Areas {
         lyrics: None,
         spectrum: None,
         transport,
-        status_bar,
     }
 }
 
@@ -127,7 +115,6 @@ mod tests {
         assert!(a.lyrics.is_some());
         assert!(a.spectrum.is_some());
         assert_eq!(a.top_status.height, 1);
-        assert_eq!(a.status_bar.height, 1);
     }
 
     /// 恰好 80x24(阈值下界)仍是 Full。
@@ -175,7 +162,6 @@ mod tests {
                 a.lyrics,
                 a.spectrum,
                 Some(a.transport),
-                Some(a.status_bar),
             ];
             for r in rects.into_iter().flatten() {
                 proptest::prop_assert!(fits(r), "子区域 {:?} 越出父 {:?}", r, parent);

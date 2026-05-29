@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, StatefulWidget, Table, TableState};
 
+use super::badge::search_badge;
 use super::highlight::highlight;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -23,14 +24,17 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let placeholder = slot_placeholder(state, theme);
     let pos = position_label(state.sel_track, tracks.len());
 
+    let mut title_spans = vec![Span::styled(
+        format!(" {title} "),
+        Style::new().fg(theme.subtext),
+    )];
+    title_spans.extend(search_badge(state, theme));
+
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(vec![
-            Span::styled(format!(" {title} "), Style::new().fg(theme.subtext)),
-            search_badge(&state.search_q, theme),
-        ]))
+        .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
         .title_bottom(
             Line::from(format!("{total_min}m total"))
@@ -153,15 +157,6 @@ fn format_duration(ms: u64) -> String {
     let m = secs / 60;
     let s = secs % 60;
     format!("{m}:{s:02}")
-}
-
-/// 搜索 badge:`/q` 形式,空 query 不渲染。
-fn search_badge<'a>(q: &'a str, theme: &Theme) -> Span<'a> {
-    if q.is_empty() {
-        Span::raw("")
-    } else {
-        Span::styled(format!("/{q}"), Style::new().fg(theme.peach))
-    }
 }
 
 /// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。

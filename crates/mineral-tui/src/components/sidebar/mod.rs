@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use crate::state::AppState;
 use crate::theme::Theme;
 
+mod badge;
 mod highlight;
 pub mod library;
 pub mod playlists;
