@@ -1,7 +1,5 @@
 # Changelog
 
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [Semver](https://semver.org/lang/zh-CN/)。
-
 ## [0.4.1] — 2026-05-30
 
 修缓存 / 下载库重播不显示音频格式。
