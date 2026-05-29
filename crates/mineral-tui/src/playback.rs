@@ -2,7 +2,7 @@
 
 use mineral_audio::{AudioBackend, AudioSnapshot};
 use mineral_model::{PlayUrl, Song};
-pub use mineral_protocol::PlayMode;
+pub use mineral_protocol::{PlayMode, PlaybackOrigin};
 
 /// 播放视图模型;真值在 audio engine,这里只缓存 UI 当帧需要的字段。
 #[derive(Clone, Debug)]
@@ -22,6 +22,9 @@ pub struct Playback {
     /// 切歌时清成 `None`,PlayUrlReady 或 prefetch 命中后写入。transport 用它显 `fmt`。
     pub play_url: Option<PlayUrl>,
 
+    /// 当前在播音频的来源(下载 / 缓存 / 远端);transport 用它显来源徽标。`None` = 未知。
+    pub play_origin: Option<PlaybackOrigin>,
+
     /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
     pub audio_backend: AudioBackend,
 }
@@ -36,6 +39,7 @@ impl Playback {
             volume_pct: 100,
             mode: PlayMode::Sequential,
             play_url: None,
+            play_origin: None,
             audio_backend: AudioBackend::Device,
         }
     }

@@ -8,7 +8,7 @@ use mineral_model::{
     AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, PlaylistId, Song, SongId, SourceKind,
 };
 
-use crate::Persist;
+use crate::ServerStore;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
 
 /// 一首歌的聚合统计(出参)。
@@ -64,10 +64,10 @@ pub struct PlaylistCacheEntry {
     pub track_values: Vec<SongId>,
 }
 
-/// 绑定单一来源 namespace 的结构态视图。降级 Persist 下所有方法 no-op/空。
+/// 绑定单一来源 namespace 的结构态视图。降级 ServerStore 下所有方法 no-op/空。
 pub struct NamespaceStore {
     /// 顶层句柄(经 `persist.pool()` 取连接池)。
-    persist: Persist,
+    persist: ServerStore,
 
     /// 本视图绑定的来源(用 `source.name()` 做 namespace 过滤)。
     source: SourceKind,
@@ -79,13 +79,13 @@ impl NamespaceStore {
     /// # Params:
     ///   - `persist`: 顶层句柄
     ///   - `source`: 绑定的来源
-    pub(crate) fn new(persist: Persist, source: SourceKind) -> Self {
+    pub(crate) fn new(persist: ServerStore, source: SourceKind) -> Self {
         Self { persist, source }
     }
 
     /// upsert 一首歌的元数据(song_meta + 重写 song_artists 保序)。
     ///
-    /// 降级 Persist 下静默 no-op。艺人列表按 [`Song::artists`] 顺序整体重写
+    /// 降级 ServerStore 下静默 no-op。艺人列表按 [`Song::artists`] 顺序整体重写
     /// (先删后插),`position` 即列表下标。
     ///
     /// # Params:
@@ -621,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_meta_then_get_roundtrips() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let song = Song {
             id: SongId::new(SourceKind::NETEASE, "123"),
@@ -649,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_meta_preserves_artist_order_and_clears_stale() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "777");
 
@@ -724,7 +724,7 @@ mod tests {
     #[tokio::test]
     async fn get_meta_miss_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         assert!(
             s.get_meta(&SongId::new(SourceKind::NETEASE, "nope"))
@@ -737,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn play_then_skip_accumulates() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "123");
         s.record_play(&id, 200_000).await?;
@@ -758,7 +758,7 @@ mod tests {
     #[tokio::test]
     async fn query_stats_miss_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         assert!(
             s.query_stats(&SongId::new(SourceKind::NETEASE, "x"))
@@ -771,7 +771,7 @@ mod tests {
     #[tokio::test]
     async fn love_toggle_and_list() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "123");
         assert!(!s.is_loved(&id).await?);
@@ -787,7 +787,7 @@ mod tests {
     #[tokio::test]
     async fn loved_ids_isolated_by_source() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let netease = p.scope(SourceKind::NETEASE);
         let local = p.scope(SourceKind::LOCAL);
         netease
@@ -801,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn history_push_and_recent() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "123");
         s.push_history(&id, /*completed*/ true, 200_000).await?;
@@ -824,7 +824,7 @@ mod tests {
     #[tokio::test]
     async fn prune_history_removes_old() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "123");
         s.push_history(&id, /*completed*/ true, 100).await?;
@@ -837,7 +837,7 @@ mod tests {
     #[tokio::test]
     async fn playlist_cache_roundtrip() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let pid = mineral_model::PlaylistId::new(SourceKind::NETEASE, "p1");
         let songs = vec![
@@ -863,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn playlist_cache_returns_namespaced_song_ids() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::LOCAL);
         let pid = mineral_model::PlaylistId::new(SourceKind::LOCAL, "p1");
         let tracks = vec![
@@ -889,7 +889,7 @@ mod tests {
     #[tokio::test]
     async fn playlist_cache_overwrite_clears_old_tracks() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let pid = mineral_model::PlaylistId::new(SourceKind::NETEASE, "p1");
         s.put_playlist_cache(
@@ -922,7 +922,7 @@ mod tests {
     #[tokio::test]
     async fn playlist_cache_miss_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let p = crate::Persist::open(&dir.path().join("t.db")).await?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let pid = mineral_model::PlaylistId::new(SourceKind::NETEASE, "absent");
         assert!(s.get_playlist_cache(&pid).await?.is_none());

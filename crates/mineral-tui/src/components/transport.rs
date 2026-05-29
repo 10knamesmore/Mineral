@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::playback::{Playback, format_ms};
+use crate::playback::{Playback, PlaybackOrigin, format_ms};
 use crate::theme::Theme;
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
@@ -180,6 +180,10 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
             )
         })
         .unwrap_or_else(|| ("—".to_owned(), theme.overlay));
+    // 来源已知 → 来源字形(上色)作 fmt 前缀;未知 → 退回旧的 `fmt` 文字标签。
+    let (badge_glyph, badge_color) = pb
+        .play_origin
+        .map_or(("fmt", theme.overlay), |o| origin_badge(o, theme));
     let line = Line::from(vec![
         Span::styled(" vol ", Style::new().fg(theme.overlay)),
         Span::styled(fill, Style::new().fg(theme.accent)),
@@ -192,10 +196,26 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::styled("mode ", Style::new().fg(theme.overlay)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
         Span::styled("   │   ", Style::new().fg(theme.surface1)),
-        Span::styled("fmt ", Style::new().fg(theme.overlay)),
+        Span::styled(format!("{badge_glyph} "), Style::new().fg(badge_color)),
         Span::styled(fmt_text, Style::new().fg(fmt_color)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// 来源徽标:字形 + 颜色。download=绿(永久在库)/ cache=蓝(LRU 临时)/ remote=灰(网络流)。
+///
+/// # Params:
+///   - `origin`: 当前在播音频的来源
+///   - `theme`: 取色主题
+///
+/// # Return:
+///   `(字形, 颜色)`。
+fn origin_badge(origin: PlaybackOrigin, theme: &Theme) -> (&'static str, Color) {
+    match origin {
+        PlaybackOrigin::Download => ("↓", theme.green),
+        PlaybackOrigin::Cache => ("◆", theme.accent_2),
+        PlaybackOrigin::Remote => ("○", theme.overlay),
+    }
 }
 
 /// 按 channel **实测**的格式(无损与否)+ 实际码率分 5 档配色。
@@ -219,10 +239,33 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
+    use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
+
     use super::fmt_tier_color;
-    use crate::playback::Playback;
+    use crate::playback::{Playback, PlaybackOrigin};
     use crate::test_support::{song, with_duration, with_name};
     use crate::theme::Theme;
+
+    /// 造一个「播放中 + 指定来源 + PlayUrl」的 Playback,供来源徽标快照。
+    fn pb_with_origin(origin: PlaybackOrigin, format: AudioFormat, bitrate_bps: u32) -> Playback {
+        let track = with_duration(with_name(song("1"), "捕风"), 225_000);
+        let song_id = track.id.clone();
+        let mut pb = Playback::new();
+        pb.track = Some(track);
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        pb.volume_pct = 80;
+        pb.play_origin = Some(origin);
+        pb.play_url = Some(PlayUrl {
+            song_id,
+            url: MediaUrl::Local("/x".into()),
+            bitrate_bps,
+            quality: BitRate::Lossless,
+            size: 0,
+            format,
+        });
+        pb
+    }
 
     /// 把档位颜色映射成「音质秩」(越高越好)——同一 lossless 类内,码率↑ 秩不该↓。
     fn tier_rank(c: Color, theme: &Theme) -> u8 {
@@ -329,6 +372,54 @@ mod tests {
             "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
             t.backend()
         );
+        Ok(())
+    }
+
+    /// 来源徽标的 (字形, 颜色) 映射——文本快照不记颜色,这里把三态钉死。
+    #[test]
+    fn origin_badge_maps_glyph_and_color() {
+        let theme = Theme::default();
+        assert_eq!(
+            super::origin_badge(PlaybackOrigin::Download, &theme),
+            ("↓", theme.green)
+        );
+        assert_eq!(
+            super::origin_badge(PlaybackOrigin::Cache, &theme),
+            ("◆", theme.accent_2)
+        );
+        assert_eq!(
+            super::origin_badge(PlaybackOrigin::Remote, &theme),
+            ("○", theme.overlay)
+        );
+    }
+
+    /// 来源徽标:download(↓ 绿,FLAC 999kbps)。
+    #[test]
+    fn transport_origin_download_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let pb = pb_with_origin(PlaybackOrigin::Download, AudioFormat::Flac, 999_000);
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:来源徽标 download(↓ 绿)", t.backend());
+        Ok(())
+    }
+
+    /// 来源徽标:cache(◆ 蓝,FLAC 999kbps)。
+    #[test]
+    fn transport_origin_cache_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let pb = pb_with_origin(PlaybackOrigin::Cache, AudioFormat::Flac, 999_000);
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:来源徽标 cache(◆ 蓝)", t.backend());
+        Ok(())
+    }
+
+    /// 来源徽标:remote(○ 灰,MP3 320kbps)。
+    #[test]
+    fn transport_origin_remote_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let pb = pb_with_origin(PlaybackOrigin::Remote, AudioFormat::Mp3, 320_000);
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
         Ok(())
     }
 }

@@ -173,11 +173,17 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
         // 行级走标准 LRC,逐字走 quickshell 约定的 JSON(见 build_now_playing)。
         let cur_id = snap.current_song.as_ref().map(|s| s.id.clone());
         let presence = LyricsPresence::of(snap.current_lyrics.as_ref());
-        if cur_id != last_song_id || presence != last_presence {
+        let song_changed = cur_id != last_song_id;
+        if song_changed || presence != last_presence {
             if let Some(song) = &snap.current_song {
                 let now_playing = build_now_playing(song, snap.current_lyrics.as_ref());
                 if let Err(e) = service.set_now_playing(&now_playing) {
                     mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_now_playing failed");
+                }
+                // 新歌:异步拉封面字节,到手后补进系统媒体中心(其余平台用 cover_url 字符串,无需字节)。
+                #[cfg(target_os = "macos")]
+                if song_changed {
+                    spawn_artwork_fetch(service.clone(), song.cover_url.clone());
                 }
             }
             last_song_id = cur_id;
@@ -270,6 +276,57 @@ fn cover_to_url(url: &MediaUrl) -> String {
         Some(remote) => remote.as_str().to_owned(),
         None => format!("file://{url}"),
     }
+}
+
+/// 异步拉取封面字节并补进系统媒体中心(macOS)。失败只 warn / debug,不影响播放。
+///
+/// 系统媒体中心要的是真图片数据(不能只给 URL),故新歌时单独拉一次字节投给后端。
+#[cfg(target_os = "macos")]
+fn spawn_artwork_fetch(service: MediaService, cover: Option<MediaUrl>) {
+    let Some(cover) = cover else {
+        return;
+    };
+    tokio::spawn(async move {
+        match load_cover_bytes(&cover).await {
+            Ok(bytes) => {
+                if let Err(e) = service.set_artwork(&bytes) {
+                    mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_artwork failed");
+                }
+            }
+            Err(e) => {
+                mineral_log::debug!(target: "media", error = mineral_log::chain(&e), "拉取封面字节失败,跳过 artwork");
+            }
+        }
+    });
+}
+
+/// 取封面字节:远程走一次性 HTTP GET,本地直接读文件。
+#[cfg(target_os = "macos")]
+async fn load_cover_bytes(cover: &MediaUrl) -> color_eyre::Result<Vec<u8>> {
+    use color_eyre::eyre::{WrapErr, eyre};
+
+    if let Some(remote) = cover.as_remote() {
+        let client = reqwest::Client::builder()
+            .build()
+            .wrap_err("构造封面 http client")?;
+        let bytes = client
+            .get(remote.as_str())
+            .send()
+            .await
+            .wrap_err("发起封面请求")?
+            .error_for_status()
+            .wrap_err("封面响应状态码非 2xx")?
+            .bytes()
+            .await
+            .wrap_err("读取封面字节")?;
+        return Ok(bytes.to_vec());
+    }
+    if let Some(path) = cover.as_local() {
+        return tokio::fs::read(path)
+            .await
+            .wrap_err_with(|| format!("读取本地封面 {}", path.display()));
+    }
+    Err(eyre!("cover url 既非远程也非本地"))
 }
 
 #[cfg(test)]

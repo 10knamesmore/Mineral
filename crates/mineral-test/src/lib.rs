@@ -6,6 +6,8 @@
 //!   [`with_source`] / [`with_duration`]。
 //! - 展示性 fixtures [`endserenading`] / [`chinese_football`] / [`qianzai_lyrics`]。
 //! - proptest 生成器 [`arb_song`]。
+//! - 测试 mock 命名空间 [`mock`]:进程内 HTTP server [`mock::serve_once`] + 喂直链的
+//!   [`mock::UrlChannel`](按需在 `mock/` 下扩充其他 mock)。
 //!
 //! 用法:作为各 crate 的 **dev-dependency** 引入。仅 crate-private 的测试零件(依赖某
 //! crate 内部类型的,如 TUI 的 `AppState` fixture)仍留在各 crate 自己的 `test_support`。
@@ -14,6 +16,9 @@ mod builders;
 mod fixtures;
 mod lyrics;
 mod strategies;
+
+/// 测试 mock 的命名空间(每类 mock 各占一文件)。
+pub mod mock;
 
 // macros 模块里的宏经 `#[macro_export]` 挂在 crate 根,无需在此 re-export。
 mod macros;

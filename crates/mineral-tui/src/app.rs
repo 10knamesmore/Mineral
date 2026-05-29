@@ -234,6 +234,7 @@ impl App {
         self.state.current = snap.current_song.clone();
         self.state.playback.track = snap.current_song;
         self.state.playback.play_url = snap.play_url;
+        self.state.playback.play_origin = snap.play_origin;
         self.state.playback.mode = snap.play_mode;
         self.state.queue = snap.queue;
         // 不灌 snap.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义不同于

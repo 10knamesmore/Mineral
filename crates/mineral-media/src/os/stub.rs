@@ -1,7 +1,4 @@
-//! 非 Linux 平台的 MediaService 占位:暂不接入系统媒体服务,所有操作 no-op。
-//!
-//! TODO(macos): 用 souvlaki 的 MPNowPlaying 后端实现,注意它要求在主线程跑
-//! run loop 来 pump 事件,与无 GUI 的 daemon 进程需额外协调。
+//! 无系统媒体集成的平台占位:所有操作 no-op,使上层在该平台仍可编译运行。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +7,7 @@ use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
 
-/// 系统媒体服务句柄(非 Linux 占位)。
+/// 系统媒体服务句柄(无集成平台的占位)。
 pub struct MediaService {
     /// 占位字段,使 stub 与真实实现保持「持有资源」的形态一致。
     _private: (),

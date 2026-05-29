@@ -57,7 +57,7 @@ pub async fn run(cli: NeteaseCli) -> color_eyre::Result<()> {
 async fn run_login() -> color_eyre::Result<()> {
     let channel = NeteaseChannel::new(
         &NeteaseConfig::default(),
-        mineral_persist::Persist::disabled(),
+        mineral_persist::ServerStore::disabled(),
     )?;
     let qr = login_qr_get_key(channel.transport()).await?;
     render_qr(&qr.url)?;

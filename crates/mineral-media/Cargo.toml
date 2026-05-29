@@ -25,5 +25,17 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 tokio        = { workspace = true }
 
+# macOS 走系统 Now Playing:MPNowPlayingInfoCenter(上报曲目)+ MPRemoteCommandCenter
+# (收播放控制 / 媒体键)。经 objc2 安全绑定调用 Objective-C 框架,所有 FFI 收在
+# os/macos 模块的 #[allow(unsafe_code)] 边界内。NSApplication / NSRunLoop 用于在主线程
+# 养起 run loop —— 系统媒体中心只把命令派发到主 run loop,这是上报能被收录的前提。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2                  = "0.6"
+block2                 = "0.6"
+objc2-core-foundation  = { version = "0.3", features = ["CFCGTypes"] }
+objc2-foundation       = { version = "0.3", features = ["NSString", "NSDictionary", "NSArray", "NSValue", "NSRunLoop", "NSDate", "NSData", "NSThread"] }
+objc2-app-kit          = { version = "0.3", features = ["NSApplication", "NSResponder", "NSImage", "NSRunningApplication", "objc2-core-foundation"] }
+objc2-media-player     = { version = "0.3", features = ["MPNowPlayingInfoCenter", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPRemoteControlTypes", "MPMediaItem", "block2", "objc2-app-kit", "objc2-core-foundation"] }
+
 [lints]
 workspace = true

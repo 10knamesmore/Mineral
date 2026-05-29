@@ -1,0 +1,14 @@
+[package]
+name        = "mineral-config"
+description = "Mineral 运行期策略常量(缓存容量等)的单一真相源"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

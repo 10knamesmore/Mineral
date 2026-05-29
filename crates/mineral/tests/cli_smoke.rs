@@ -49,14 +49,28 @@ fn bad_args_exit_nonzero() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// `mineral cache clean` 在全新隔离环境(无 db / 无缓存目录)下也能优雅成功并退出 0。
+/// `mineral cache clean` 在全新隔离环境(无 db / 无缓存目录)下也能优雅成功并退出 0,
+/// 并打出「前后对比 + 总释放」报告。
 #[test]
 fn cache_clean_succeeds_on_fresh_env() -> color_eyre::Result<()> {
     mineral()?
         .args(["cache", "clean"])
         .assert()
         .success()
-        .stdout(contains("已清理"));
+        .stdout(contains("已清空"))
+        .stdout(contains("共释放"));
+    Ok(())
+}
+
+/// `mineral cache status` 在全新隔离环境下也能优雅成功并退出 0,打出三区域汇总。
+#[test]
+fn cache_status_succeeds_on_fresh_env() -> color_eyre::Result<()> {
+    mineral()?
+        .args(["cache", "status"])
+        .assert()
+        .success()
+        .stdout(contains("音频"))
+        .stdout(contains("歌单"));
     Ok(())
 }
 

@@ -1,8 +1,8 @@
-//! 不依赖播放的下载:给定 [`Song`] → `song_urls` 拿直链 → 整段 HTTP GET → **永久导出** + **顺带填 cache**。
+//! 不依赖播放的下载:给定 [`Song`] → `song_urls` 拿直链 → 整段 HTTP GET → **永久导出**。
 //!
 //! 这是可复用单元——键位下载单曲 / 歌单批量、将来 gapless 预下载都调 [`download_song`]:
-//! 导出落 `<music_dir>/<source>/<quality>/<album>/<title>.<ext>`(永久、不受缓存 LRU 驱逐),同时塞进
-//! [`MediaCache`](重听本地命中、gapless 预备)。
+//! 导出落 `<music_dir>/<source>/<quality>/<album>/<title>.<ext>`(永久、不受缓存 LRU 驱逐);
+//! 播放解析(见 [`crate::resolve`])直接探测该目录命中,**无需再复制进缓存**。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use mineral_protocol::{DownloadProgress, DownloadTarget};
 use parking_lot::Mutex;
 use tokio::io::AsyncWriteExt;
 
-use crate::media_cache::{MediaCache, library_relpath};
+use crate::media_cache::library_relpath;
 use crate::player::PlayerCore;
 
 /// 速度刷新节流间隔:每隔这么久才重算一次瞬时速度 + 写进度态。
@@ -54,30 +54,37 @@ pub(crate) fn open_env() -> (Option<reqwest::Client>, Option<PathBuf>) {
     (http, music_dir)
 }
 
-/// 下载一首歌:**流式** GET(边下边写、边算速度写进度)→ 永久导出 → 顺带填 cache。
-/// 目标导出文件已存在则跳过(幂等)。
+/// 下载一首歌:**流式** GET(边下边写、边算速度写进度)→ 永久导出。
+/// 该歌该音质已在导出库(文件系统即真相)则跳过,连直链都不取(按文件存在幂等)。
+///
+/// 不再复制进缓存:导出目录本身即播放解析的命中源(见 [`crate::resolve`]),复制只会徒增
+/// 双份存储、并让播放走 LRU 副本而非永久文件。
 ///
 /// # Params:
 ///   - `channel`: 该曲来源的 channel(取直链)
 ///   - `http`: 复用的 HTTP client
-///   - `media_cache`: 音频缓存(禁用时只导出、不填)
 ///   - `music_dir`: 永久导出根目录(如 `~/Music/mineral`)
 ///   - `song`: 要下载的歌
 ///   - `quality`: 下载音质
 ///   - `progress`: 下载进度共享态(本函数实时写 `bytes_done`/`bytes_total`/`speed_bps`)
 ///
 /// # Return:
-///   下载成功 → `Ok(Downloaded)`;目标已存在 → `Ok(Skipped)`;取链 / 网络 / 写盘失败 → `Err`。
+///   下载成功 → `Ok(Downloaded)`;已下载 → `Ok(Skipped)`;取链 / 网络 / 写盘失败 → `Err`。
 pub(crate) async fn download_song(
     channel: &dyn MusicChannel,
     http: &reqwest::Client,
-    media_cache: &MediaCache,
     music_dir: &Path,
     song: &Song,
     quality: BitRate,
     progress: &Arc<Mutex<DownloadProgress>>,
 ) -> color_eyre::Result<DownloadOutcome> {
-    // 1. 取直链 + 实际格式(格式定扩展名,得在算导出路径前拿到)。
+    // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
+    if crate::resolve::probe_export(music_dir, song, quality).is_some() {
+        mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
+        return Ok(DownloadOutcome::Skipped);
+    }
+
+    // 2. 取直链 + 实际格式(格式定扩展名,得在算导出路径前拿到)。
     let urls = channel
         .song_urls(std::slice::from_ref(&song.id), quality)
         .await
@@ -87,11 +94,9 @@ pub(crate) async fn download_song(
         .next()
         .ok_or_else(|| eyre!("无可用播放 URL: {}", song.id.qualified()))?;
     let (subdir, file_name) = library_relpath(song, quality, &play_url.format);
+    // 命名即身份:不做 ` (N)` 去重——同名直接落同一路径(本曲重下已被上面的幂等挡住;同源同专辑
+    // 同名的另一首歌会与之共用一个文件,概率极低,换来「文件系统即唯一真相」)。
     let export = music_dir.join(&subdir).join(&file_name);
-    if export.is_file() {
-        mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已导出,跳过");
-        return Ok(DownloadOutcome::Skipped);
-    }
     let remote = match play_url.url {
         MediaUrl::Remote(u) => u,
         MediaUrl::Local(p) => {
@@ -99,7 +104,7 @@ pub(crate) async fn download_song(
         }
     };
 
-    // 2. 流式下载到 `<export>.part`,边写边更新进度 / 速度。
+    // 3. 流式下载到 `<export>.part-dl`,边写边更新进度 / 速度。
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -108,16 +113,11 @@ pub(crate) async fn download_song(
     let part = export.with_extension("part-dl");
     stream_to_file(http, remote, &part, progress).await?;
 
-    // 3. 完成 → rename 为正式导出(永久)。
+    // 4. 完成 → rename 为正式导出(永久)。
     tokio::fs::rename(&part, &export)
         .await
         .wrap_err_with(|| format!("rename 导出失败 {}", export.display()))?;
     mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
-
-    // 4. 顺带填 cache(失败仅 warn,不影响已成功的永久导出)。
-    if let Err(e) = fill_cache(media_cache, song, quality, &play_url.format, &export).await {
-        mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "下载后填 cache 失败");
-    }
     Ok(DownloadOutcome::Downloaded)
 }
 
@@ -192,39 +192,6 @@ async fn stream_to_file(
     Ok(())
 }
 
-/// 把已导出的文件拷一份塞进 [`MediaCache`](导出是永久主体,cache 是可被 LRU 驱逐的副本)。
-/// 缓存禁用(`capture_path` 为 `None`)时静默跳过。
-///
-/// # Params:
-///   - `media_cache`: 音频缓存
-///   - `song`: 歌曲
-///   - `quality`: 入库音质
-///   - `format`: 实际格式
-///   - `export`: 已落盘的永久导出文件(从它复制到 cache)
-///
-/// # Return:
-///   成功 / 缓存禁用返回 `Ok(())`。
-async fn fill_cache(
-    media_cache: &MediaCache,
-    song: &Song,
-    quality: BitRate,
-    format: &AudioFormat,
-    export: &Path,
-) -> color_eyre::Result<()> {
-    let Some(tmp) = media_cache.capture_path(&song.id, quality) else {
-        return Ok(());
-    };
-    if let Some(parent) = tmp.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .wrap_err_with(|| format!("创建 cache tmp 目录失败 {}", parent.display()))?;
-    }
-    tokio::fs::copy(export, &tmp)
-        .await
-        .wrap_err_with(|| format!("复制到 cache tmp 失败 {}", tmp.display()))?;
-    media_cache.put_played(song, quality, format, &tmp)
-}
-
 /// 一首正在 capture(边播边落盘)的曲的上下文:播完 / 下完后据此入缓存,中途打断则删 `path`。
 pub(crate) struct Capturing {
     /// 在播的歌(组库路径取 source / album / title)。
@@ -271,15 +238,22 @@ pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, qua
 ///   - `cap`: 该曲的 capture 上下文
 pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
     let cache = Arc::clone(player.media_cache());
-    tokio::task::spawn_blocking(move || match std::fs::metadata(&cap.path) {
-        Ok(m) if m.len() > 0 => {
-            if let Err(e) = cache.put_played(&cap.song, cap.quality, &cap.format, &cap.path) {
-                mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
+    // async task(非 spawn_blocking):put_played 要 await DB 写穿透;入库内部的大拷贝由它自己
+    // 再下沉到 spawn_blocking。metadata 是一次快速 stat,async 里直接调可接受。
+    tokio::spawn(async move {
+        match std::fs::metadata(&cap.path) {
+            Ok(m) if m.len() > 0 => {
+                if let Err(e) = cache
+                    .put_played(&cap.song, cap.quality, &cap.format, &cap.path)
+                    .await
+                {
+                    mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
+                }
             }
-        }
-        _ => {
-            mineral_log::debug!(target: "player", "capture 文件缺失/空,不入缓存");
-            drop(std::fs::remove_file(&cap.path));
+            _ => {
+                mineral_log::debug!(target: "player", "capture 文件缺失/空,不入缓存");
+                drop(std::fs::remove_file(&cap.path));
+            }
         }
     });
 }
@@ -343,7 +317,6 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
         let outcome = download_song(
             channel.as_ref(),
             http,
-            player.media_cache(),
             music_dir,
             song,
             DOWNLOAD_QUALITY,
@@ -402,5 +375,75 @@ async fn collect_songs(player: &PlayerCore, target: &DownloadTarget) -> Result<V
                 "下载失败: 拉歌单曲目失败".to_owned()
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mineral_model::{AlbumId, AlbumRef, BitRate, Song, SongId, SourceKind};
+    use mineral_persist::ServerStore;
+    use mineral_protocol::DownloadProgress;
+    use mineral_test::mock::{UrlChannel, serve_once};
+    use parking_lot::Mutex;
+
+    use super::{DownloadOutcome, download_song};
+    use crate::media_cache::MediaCache;
+    use crate::resolve::probe_export;
+
+    /// 一首带专辑的测试歌曲。
+    fn song() -> Song {
+        Song {
+            id: SongId::new(SourceKind::NETEASE, "1"),
+            name: "t".to_owned(),
+            artists: Vec::new(),
+            album: Some(AlbumRef {
+                id: AlbumId::new(SourceKind::NETEASE, "0"),
+                name: "A".to_owned(),
+            }),
+            duration_ms: 0,
+            cover_url: None,
+            source_url: None,
+        }
+    }
+
+    /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache
+    /// (否则双份存储,且播放会走 LRU 缓存副本而非永久下载文件)。带 `fill_cache` 时此断言变红。
+    // multi_thread:走真实 TCP I/O(serve_once 的 server 任务 + reqwest client),单线程
+    // runtime 下两者靠协作调度,重负载时偶发连接重置 → flaky;给 server 独立 worker 线程。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_does_not_populate_cache() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let media_cache =
+            MediaCache::open(&persist, dir.path().join("cache"), 1_000_000_000).await?;
+        let music_dir = dir.path().join("music");
+
+        let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
+        let channel = UrlChannel { url };
+        let http = reqwest::Client::new();
+        let progress = Arc::new(Mutex::new(DownloadProgress::default()));
+        let s = song();
+
+        let outcome = download_song(
+            &channel,
+            &http,
+            &music_dir,
+            &s,
+            BitRate::Lossless,
+            &progress,
+        )
+        .await?;
+        assert!(matches!(outcome, DownloadOutcome::Downloaded), "应真正下载");
+        assert!(
+            probe_export(&music_dir, &s, BitRate::Lossless).is_some(),
+            "永久下载文件应已落盘"
+        );
+        assert!(
+            media_cache.get(&s.id, BitRate::Lossless).is_none(),
+            "下载不应填充 audio cache(避免双份 + 播放走缓存副本)"
+        );
+        Ok(())
     }
 }

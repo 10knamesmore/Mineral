@@ -11,7 +11,7 @@ use mineral_model::{
     Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind,
     UserId,
 };
-use mineral_persist::Persist;
+use mineral_persist::ServerStore;
 use rustc_hash::FxHashSet;
 
 use crate::api;
@@ -27,8 +27,8 @@ pub struct NeteaseChannel {
     /// 当前实例绑定的登录用户 uid;`None` 时 `my_playlists` 返回 `NotSupported`。
     user_id: Option<UserId>,
 
-    /// 本地持久化句柄;降级(`Persist::disabled()`)时所有读写 no-op,播放不受影响。
-    persist: Persist,
+    /// 本地持久化句柄;降级(`ServerStore::disabled()`)时所有读写 no-op,播放不受影响。
+    persist: ServerStore,
 }
 
 impl NeteaseChannel {
@@ -36,8 +36,8 @@ impl NeteaseChannel {
     ///
     /// # Params:
     ///   - `config`: HTTP 客户端配置
-    ///   - `persist`: 持久化句柄;传 [`Persist::disabled()`] 可跳过本地落盘
-    pub fn new(config: &NeteaseConfig, persist: Persist) -> color_eyre::Result<Self> {
+    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
+    pub fn new(config: &NeteaseConfig, persist: ServerStore) -> color_eyre::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
             user_id: None,
@@ -55,11 +55,11 @@ impl NeteaseChannel {
     /// # Params:
     ///   - `config`: HTTP 客户端配置
     ///   - `music_u`: 网易云核心登录 cookie 值
-    ///   - `persist`: 持久化句柄;传 [`Persist::disabled()`] 可跳过本地落盘
+    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
     pub fn with_cookie(
         config: &NeteaseConfig,
         music_u: &str,
-        persist: Persist,
+        persist: ServerStore,
     ) -> color_eyre::Result<Self> {
         Self::build(config, music_u, None, persist)
     }
@@ -70,12 +70,12 @@ impl NeteaseChannel {
     ///   - `config`: HTTP 客户端配置
     ///   - `music_u`: 网易云核心登录 cookie 值
     ///   - `user_id`: 登录用户 uid(`my_playlists` 内部转发给 `user_playlists`)
-    ///   - `persist`: 持久化句柄;传 [`Persist::disabled()`] 可跳过本地落盘
+    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
     pub fn with_credential(
         config: &NeteaseConfig,
         music_u: &str,
         user_id: UserId,
-        persist: Persist,
+        persist: ServerStore,
     ) -> color_eyre::Result<Self> {
         Self::build(config, music_u, Some(user_id), persist)
     }
@@ -91,7 +91,7 @@ impl NeteaseChannel {
         config: &NeteaseConfig,
         music_u: &str,
         user_id: Option<UserId>,
-        persist: Persist,
+        persist: ServerStore,
     ) -> color_eyre::Result<Self> {
         let jar = CookieJar::new();
         let url = "https://music.163.com"
@@ -338,7 +338,7 @@ impl MusicChannel for NeteaseChannel {
 mod tests {
     use mineral_channel_core::MusicChannel;
     use mineral_model::{SongId, SourceKind};
-    use mineral_persist::Persist;
+    use mineral_persist::ServerStore;
 
     use crate::NeteaseChannel;
     use crate::config::NeteaseConfig;
@@ -348,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn liked_song_ids_falls_back_to_local_when_no_remote() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let persist = Persist::open(&dir.path().join("test.db")).await?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
 
         // 写两首本地 loved
         let id_a = SongId::new(SourceKind::NETEASE, "10001");

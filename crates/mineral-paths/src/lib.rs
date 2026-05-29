@@ -1,41 +1,41 @@
 //! Mineral 跨平台路径解析。
+//!
+//! config / data / cache / 音乐目录在所有 unix(含 **macOS**)统一走 XDG(见 [`xdg`]);
+//! runtime / IPC socket 因平台差异(macOS 无 `XDG_RUNTIME_DIR`)单独处理(见 [`socket`])。
 
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::WrapErr;
+mod socket;
+mod xdg;
 
-#[cfg_attr(target_os = "linux", path = "linux.rs")]
-#[cfg_attr(target_os = "macos", path = "macos.rs")]
-mod platform;
-
-/// 配置根目录（`$XDG_CONFIG_HOME/mineral` 或 `~/.config/mineral`）。
+/// 配置根目录(`$XDG_CONFIG_HOME/mineral` 或 `~/.config/mineral`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn config_dir() -> color_eyre::Result<PathBuf> {
-    platform::config_dir()
+    xdg::config_dir()
 }
 
-/// 数据根目录（`$XDG_DATA_HOME/mineral` 或 `~/.local/share/mineral`）。
+/// 数据根目录(`$XDG_DATA_HOME/mineral` 或 `~/.local/share/mineral`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn data_dir() -> color_eyre::Result<PathBuf> {
-    platform::data_dir()
+    xdg::data_dir()
 }
 
-/// 缓存根目录（`$XDG_CACHE_HOME/mineral` 或 `~/.cache/mineral`）。
+/// 缓存根目录(`$XDG_CACHE_HOME/mineral` 或 `~/.cache/mineral`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn cache_dir() -> color_eyre::Result<PathBuf> {
-    platform::cache_dir()
+    xdg::cache_dir()
 }
 
-/// 音频 blob 缓存目录(`<cache_dir>/audio`)。
+/// 音频缓存目录(`<cache_dir>/audio`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
@@ -43,7 +43,7 @@ pub fn audio_cache_dir() -> color_eyre::Result<PathBuf> {
     Ok(cache_dir()?.join("audio"))
 }
 
-/// 封面 blob 缓存目录(`<cache_dir>/cover`)。
+/// 封面缓存目录(`<cache_dir>/cover`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
@@ -51,39 +51,56 @@ pub fn cover_cache_dir() -> color_eyre::Result<PathBuf> {
     Ok(cache_dir()?.join("cover"))
 }
 
-/// 下载导出目录(`<music_dir>/mineral`,music_dir = `$XDG_MUSIC_DIR` 或 `~/Music`)。
+/// 下载导出目录。永久保存的「下载的音乐」落这里,可被其他播放器 / 文件管理器直接使用,
+/// **不**受缓存 LRU 驱逐。
 ///
-/// 永久保存的「下载的音乐」落这里,可被其他播放器 / 文件管理器直接使用,**不**受缓存 LRU 驱逐。
+/// 解析优先级:
+/// 1. `$MINERAL_DOWNLOAD_DIR`(**绝对路径**)→ 直接用它(不再追加 `mineral` 子目录);
+///    相对值忽略(相对 daemon cwd 易出意外,与 XDG / `$MINERAL_SOCKET_DIR` 的绝对要求一致);
+/// 2. 否则 `<music_dir>/mineral`(music_dir = `$XDG_MUSIC_DIR` 或 `~/Music`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
-    Ok(platform::music_dir()?.join("mineral"))
+    if let Some(v) = std::env::var_os("MINERAL_DOWNLOAD_DIR").filter(|v| !v.is_empty())
+        && Path::new(&v).is_absolute()
+    {
+        return Ok(PathBuf::from(v));
+    }
+    Ok(xdg::music_dir()?.join("mineral"))
 }
 
-/// Runtime 目录(进程级生命周期的 ephemeral 文件，如 IPC unix socket)。
+/// 客户端(TUI)持久化数据库文件(`<data_dir>/tui.db`)。
 ///
-/// - **Linux**:`$XDG_RUNTIME_DIR/mineral`,缺时 `/tmp/mineral`
-/// - **macOS**:`$TMPDIR/mineral`,缺时 `/tmp/mineral`
+/// 与 server 的 `mineral.db` 同目录的另一个 sqlite 文件,存纯客户端态(当前:封面缓存索引)。
+/// 放 data_dir(持久),封面文件本体仍落 [`cover_cache_dir`](可被清理)。
+///
+/// # Return:
+///   解析得到的文件路径。本函数不创建目录。
+pub fn tui_db() -> color_eyre::Result<PathBuf> {
+    Ok(data_dir()?.join("tui.db"))
+}
+
+/// Runtime 目录(进程级生命周期的 ephemeral 文件,如 IPC unix socket)。
+///
+/// 优先级:`$MINERAL_SOCKET_DIR` → `$XDG_RUNTIME_DIR/mineral` → `$TMPDIR`(或 `/tmp`)`/mineral-<uid>`。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
 pub fn runtime_dir() -> color_eyre::Result<PathBuf> {
-    platform::runtime_dir()
+    socket::runtime_dir()
 }
 
 /// IPC unix socket 的完整路径(`<runtime_dir>/mineral.sock`)。daemon bind、
 /// client connect、stale 检测全走这一处,避免各调用方重复拼接。
 ///
-/// 与 [`runtime_dir`] 不同,本函数**会**把 `runtime_dir` 创建出来(socket 的父目录
-/// 必须存在才能 bind),调用方拿到路径即可直接用。
+/// 与 [`runtime_dir`] 不同,本函数**会**创建 runtime 目录(收紧 `0700` + 校验属主)
+/// 并检查 `sun_path` 长度,调用方拿到路径即可直接用。
 ///
 /// # Return:
-///   `<runtime_dir>/mineral.sock` 的绝对路径。
+///   `<runtime_dir>/mineral.sock` 的绝对路径;目录创建/属主校验失败或路径超长返回 `Err`。
 pub fn socket_path() -> color_eyre::Result<PathBuf> {
-    let dir = runtime_dir().wrap_err("resolve runtime_dir for socket")?;
-    std::fs::create_dir_all(&dir).wrap_err_with(|| format!("mkdir -p {}", dir.display()))?;
-    Ok(dir.join("mineral.sock"))
+    socket::socket_path()
 }
 
 #[cfg(test)]
@@ -95,8 +112,12 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// 进程级 env 改动的 RAII 守卫:构造时设/清,Drop 时还原。配合 [`ENV_LOCK`] 串行化。
     struct EnvGuard {
+        /// 被改的 env key。
         key: &'static str,
+
+        /// 改前的原值(还原用)。
         prev: Option<std::ffi::OsString>,
     }
 
@@ -154,6 +175,95 @@ mod tests {
         let _g2 = EnvGuard::unset("XDG_DATA_HOME");
 
         assert_eq!(super::data_dir()?, tmp.path().join(".local/share/mineral"));
+        Ok(())
+    }
+
+    /// 相对路径的 `$XDG_*_HOME` 按 XDG 规范当未设(必须绝对)。
+    #[test]
+    fn xdg_ignores_relative_value() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let _g1 = EnvGuard::set("HOME", tmp.path());
+        // 相对路径:应被忽略,退回 $HOME/.config。
+        let _g2 = EnvGuard::set("XDG_CONFIG_HOME", std::path::Path::new("relative/dir"));
+
+        assert_eq!(super::config_dir()?, tmp.path().join(".config/mineral"));
+        Ok(())
+    }
+
+    /// macOS 同样走 XDG:config 落 `~/.config/mineral`(非 `~/Library/...`)。
+    #[test]
+    fn config_falls_back_to_dot_config() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let _g1 = EnvGuard::set("HOME", tmp.path());
+        let _g2 = EnvGuard::unset("XDG_CONFIG_HOME");
+
+        assert_eq!(super::config_dir()?, tmp.path().join(".config/mineral"));
+        Ok(())
+    }
+
+    /// `$MINERAL_SOCKET_DIR` 显式覆盖:socket 落 `<它>/mineral.sock`,且目录被创建。
+    #[test]
+    fn socket_path_honors_explicit_override() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let sock_dir = tmp.path().join("sock");
+        let _g = EnvGuard::set("MINERAL_SOCKET_DIR", &sock_dir);
+
+        let sock = super::socket_path()?;
+        assert_eq!(sock, sock_dir.join("mineral.sock"));
+        assert!(sock_dir.is_dir(), "socket_path 应创建 runtime 目录");
+        Ok(())
+    }
+
+    /// socket 路径超 `sun_path` 上限 → 报错而非截断。
+    #[test]
+    fn socket_path_rejects_overlong() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        // 造一个必然超 104/108 字节的深目录(绝对路径)。
+        let deep = tmp.path().join("x".repeat(200));
+        let _g = EnvGuard::set("MINERAL_SOCKET_DIR", &deep);
+
+        assert!(super::socket_path().is_err(), "超长 socket 路径应报错");
+        Ok(())
+    }
+
+    /// `$MINERAL_DOWNLOAD_DIR` 显式覆盖:原样用,不追加 mineral 子目录。
+    #[test]
+    fn music_export_dir_uses_env_override_verbatim() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let custom = tmp.path().join("my-downloads");
+        let _g = EnvGuard::set("MINERAL_DOWNLOAD_DIR", &custom);
+
+        assert_eq!(super::music_export_dir()?, custom);
+        Ok(())
+    }
+
+    /// 无覆盖时落 `<music_dir>/mineral`(music_dir 缺 XDG_MUSIC_DIR → `~/Music`)。
+    #[test]
+    fn music_export_dir_falls_back_to_music_subdir() -> color_eyre::Result<()> {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = fake_home()?;
+        let _g1 = EnvGuard::set("HOME", tmp.path());
+        let _g2 = EnvGuard::unset("MINERAL_DOWNLOAD_DIR");
+        let _g3 = EnvGuard::unset("XDG_MUSIC_DIR");
+
+        assert_eq!(super::music_export_dir()?, tmp.path().join("Music/mineral"));
         Ok(())
     }
 }

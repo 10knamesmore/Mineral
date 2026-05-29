@@ -23,8 +23,10 @@ mod media_cache;
 mod pcm;
 mod player;
 mod queue;
+mod resolve;
 mod serve;
 mod server;
+mod state;
 
 pub use client::{Client, ClientHandle};
 pub use mineral_audio::AudioMode;

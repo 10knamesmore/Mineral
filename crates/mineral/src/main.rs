@@ -10,6 +10,8 @@ use mineral_cli::{Args, Command};
 use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
+mod os;
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     // _log_guard 必须持到 main 返回:drop 它会停后台 flush 线程,后续日志丢失。
@@ -17,7 +19,7 @@ fn main() -> color_eyre::Result<()> {
 
     let args = Args::parse();
     match args.command {
-        Some(Command::Serve) => run_daemon(),
+        Some(Command::Serve) => os::run_daemon(),
         Some(command) => mineral_cli::run(command),
         None => {
             let runtime = named_runtime("mineral-rt")?;
@@ -44,12 +46,15 @@ fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
         .wrap_err("create tokio runtime failed")
 }
 
-/// daemon 入口(`mineral serve`):build channels → 起 runtime → serve。
+/// 在 tokio runtime 上跑完整个 daemon 生命周期(build channels → serve → 优雅收尾)。
+///
+/// 平台无关的 daemon 主体;主线程归属(直接 block_on,还是让给系统 UI 后台跑)由
+/// [`os::run_daemon`] 按平台决定。
 ///
 /// daemon 通常被 TUI 以 stderr 重定向的子进程方式拉起,返回的 `Err` 只会进 color-eyre
 /// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
 /// 启动失败(如凭证解析失败)也能在日志里查到。
-fn run_daemon() -> color_eyre::Result<()> {
+pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
     let runtime = named_runtime("mineral-daemon-rt")?;
     let result = runtime.block_on(async {
         let persist = open_persist().await;
@@ -66,7 +71,7 @@ fn run_daemon() -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   成功返回启用的句柄,失败或路径解析错误返回 disabled 句柄。
-async fn open_persist() -> mineral_persist::Persist {
+async fn open_persist() -> mineral_persist::ServerStore {
     match mineral_paths::data_dir() {
         Ok(dir) => {
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -75,9 +80,9 @@ async fn open_persist() -> mineral_persist::Persist {
                     error = mineral_log::chain(&e),
                     "建数据目录失败,持久化降级"
                 );
-                return mineral_persist::Persist::disabled();
+                return mineral_persist::ServerStore::disabled();
             }
-            match mineral_persist::Persist::open(&dir.join("mineral.db")).await {
+            match mineral_persist::ServerStore::open(&dir.join("mineral.db")).await {
                 Ok(p) => p,
                 Err(e) => {
                     mineral_log::warn!(
@@ -85,7 +90,7 @@ async fn open_persist() -> mineral_persist::Persist {
                         error = mineral_log::chain(&e),
                         "打开持久化数据库失败,降级 disabled"
                     );
-                    mineral_persist::Persist::disabled()
+                    mineral_persist::ServerStore::disabled()
                 }
             }
         }
@@ -95,7 +100,7 @@ async fn open_persist() -> mineral_persist::Persist {
                 error = mineral_log::chain(&e),
                 "定位数据目录失败,持久化降级"
             );
-            mineral_persist::Persist::disabled()
+            mineral_persist::ServerStore::disabled()
         }
     }
 }
@@ -116,11 +121,11 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
     // in-proc 模式下持久化降级为 disabled:调试路径无需落盘。
     let (channels, persist) = match launch {
         Launch::InProc => {
-            let p = mineral_persist::Persist::disabled();
+            let p = mineral_persist::ServerStore::disabled();
             let ch = build_channels(p.clone())?;
             (ch, p)
         }
-        Launch::Auto | Launch::Connect => (Vec::new(), mineral_persist::Persist::disabled()),
+        Launch::Auto | Launch::Connect => (Vec::new(), mineral_persist::ServerStore::disabled()),
     };
     mineral_tui::run(channels, launch, persist).await
 }
@@ -133,7 +138,7 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
 /// # Params:
 ///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
 fn build_channels(
-    persist: mineral_persist::Persist,
+    persist: mineral_persist::ServerStore,
 ) -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
     match build_netease(persist) {
@@ -155,7 +160,7 @@ fn build_channels(
 /// # Params:
 ///   - `persist`: 持久化句柄,传入 channel 供登录状态/统计落盘使用。
 fn build_netease(
-    persist: mineral_persist::Persist,
+    persist: mineral_persist::ServerStore,
 ) -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
     let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
         return Ok(None);
