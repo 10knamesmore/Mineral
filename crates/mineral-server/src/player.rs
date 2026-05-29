@@ -1278,7 +1278,9 @@ mod tests {
     /// 这是「下载的歌就该从下载库播」这条业务规则的端到端守卫:跨 download → resolve →
     /// State → snapshot 全链路。若下载又顺手填了缓存,play_song 会命中缓存副本(`origin=Cache`)
     /// → 此测试变红。
-    #[tokio::test]
+    // multi_thread:走真实 TCP I/O(serve_once + reqwest)且起 audio engine,二者在单线程
+    // runtime 下都脆(协作调度 / engine 需多线程),重负载时 flaky;给独立 worker 线程。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let persist = ServerStore::open(&dir.path().join("t.db")).await?;

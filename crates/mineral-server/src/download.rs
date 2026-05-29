@@ -410,7 +410,9 @@ mod tests {
 
     /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache
     /// (否则双份存储,且播放会走 LRU 缓存副本而非永久下载文件)。带 `fill_cache` 时此断言变红。
-    #[tokio::test]
+    // multi_thread:走真实 TCP I/O(serve_once 的 server 任务 + reqwest client),单线程
+    // runtime 下两者靠协作调度,重负载时偶发连接重置 → flaky;给 server 独立 worker 线程。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn download_does_not_populate_cache() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let persist = ServerStore::open(&dir.path().join("t.db")).await?;
