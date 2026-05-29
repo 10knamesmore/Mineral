@@ -15,6 +15,7 @@ use mineral_model::Song;
 use mineral_protocol::{DownloadTarget, PlayerSnapshot};
 use mineral_server::Client;
 use mineral_task::TaskEvent;
+use ratatui::layout::Position;
 use ratatui_image::picker::Picker;
 
 use crate::anim::Transition;
@@ -83,6 +84,11 @@ pub struct App {
 
     /// 终端图片协议探测结果。
     pub picker: Picker,
+
+    /// 进 alternate screen 前捕获的终端光标位置,作为整屏 expand/collapse 的缩放锚点:
+    /// expand 从此点铺开、collapse 收回此点(对得上 `LeaveAlternateScreen` 后光标实际
+    /// 回到的行)。无 TTY 时为 `None`,缩放退化回屏幕居中。
+    pub(crate) launch_anchor: Option<Position>,
 }
 
 impl App {
@@ -92,7 +98,14 @@ impl App {
     ///   - `client`: 跟 server 交互的句柄
     ///   - `cover_fetcher`: client 端 cover fetcher
     ///   - `picker`: 终端图片协议能力
-    pub fn new(client: Arc<dyn Client>, cover_fetcher: CoverFetcher, picker: Picker) -> Self {
+    ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
+    ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
+    pub fn new(
+        client: Arc<dyn Client>,
+        cover_fetcher: CoverFetcher,
+        picker: Picker,
+        launch_anchor: Option<Position>,
+    ) -> Self {
         Self {
             should_quit: false,
             theme: Theme::default(),
@@ -105,6 +118,7 @@ impl App {
             notifications: Notifications::new(),
             download_notifier: DownloadNotifier::new(),
             picker,
+            launch_anchor,
         }
     }
 

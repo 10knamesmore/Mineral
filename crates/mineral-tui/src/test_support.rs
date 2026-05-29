@@ -196,6 +196,7 @@ pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
         Arc::new(TestClient),
         CoverFetcher::disabled(),
         Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
     );
     let queue = endserenading(len);
     app.state.playback.track = queue.get(current_idx).cloned();
@@ -211,6 +212,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
         Arc::new(TestClient),
         CoverFetcher::disabled(),
         Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
     );
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
     app.state.playlists = vec![PlaylistView {

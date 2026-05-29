@@ -122,7 +122,7 @@ fn run_app(client: Arc<dyn Client>, cover_fetcher: CoverFetcher) -> color_eyre::
     // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
     // font 用 halfblocks 渲染,不阻塞启动。
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
-    let mut app = App::new(client, cover_fetcher, picker);
+    let mut app = App::new(client, cover_fetcher, picker, tui.launch_cursor());
     let result = app.run(&mut tui);
     tui.exit()?;
     result
