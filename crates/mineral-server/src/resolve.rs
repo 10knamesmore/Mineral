@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use lofty::file::AudioFile;
+use lofty::probe::Probe;
 use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song};
 use mineral_protocol::PlaybackOrigin;
 
@@ -84,9 +85,6 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
     None
 }
 
-/// [`detect_file_type`] 读取文件首段的字节数,够 lofty 判所有容器签名。
-const HEAD_PROBE_BYTES: u64 = 128;
-
 /// 为本地命中的文件构造 [`PlayUrl`],供 transport 显 format / bitrate。
 ///
 /// format 与 bitrate 都按**文件内容**经 lofty 读出(见 [`probe_format_bitrate`],不信文件名
@@ -134,7 +132,16 @@ fn probe_format_bitrate(path: &Path) -> (AudioFormat, Option<u32>) {
     (file_type_to_format(ft), read_bitrate_kbps(path, ft))
 }
 
-/// 按 magic bytes 判容器类型(读首段字节交 [`lofty::file::FileType::from_buffer`])。
+/// 按**文件内容**判容器类型,走 lofty 的 [`Probe`](先读 ID3 标签再认底层帧)。
+///
+/// 两个关键选择:
+///
+/// - **不用** [`lofty::file::FileType::from_buffer`]:它一旦见到 `ID3` 前缀就返回 `None`
+///   (无论给多少字节),而 NetEase exhigh 等 FFmpeg 转码的 mp3 恰是「ID3 标签 + MPEG 帧」结构,
+///   会被它整片漏判。[`Probe::guess_file_type`] 会跳过标签再认帧,带标签的文件也判得对。
+/// - 走 [`Probe::new`](reader)而非 [`Probe::open`](path):后者在内容认不出时**回退文件扩展名**,
+///   违背「只认内容、不信扩展名」(缓存文件名本就按 format 推,信扩展名会循环依赖);前者无路径、
+///   纯按内容判,认不出即 `None`。
 ///
 /// # Params:
 ///   - `path`: 本地文件绝对路径
@@ -142,14 +149,11 @@ fn probe_format_bitrate(path: &Path) -> (AudioFormat, Option<u32>) {
 /// # Return:
 ///   识别出的类型,打开 / 读取 / 识别失败为 `None`。
 fn detect_file_type(path: &Path) -> Option<lofty::file::FileType> {
-    use std::io::Read;
-    let mut head = Vec::new();
-    std::fs::File::open(path)
+    let file = std::fs::File::open(path).ok()?;
+    Probe::new(std::io::BufReader::new(file))
+        .guess_file_type()
         .ok()?
-        .take(HEAD_PROBE_BYTES)
-        .read_to_end(&mut head)
-        .ok()?;
-    lofty::file::FileType::from_buffer(&head)
+        .file_type()
 }
 
 /// 以**已知类型**(不经扩展名猜测)解析属性,取音频码率(kbps)。
@@ -162,7 +166,7 @@ fn detect_file_type(path: &Path) -> Option<lofty::file::FileType> {
 ///   码率 kbps;解析失败 / lofty 未提供为 `None`。
 fn read_bitrate_kbps(path: &Path, ft: lofty::file::FileType) -> Option<u32> {
     let file = std::fs::File::open(path).ok()?;
-    lofty::probe::Probe::new(std::io::BufReader::new(file))
+    Probe::new(std::io::BufReader::new(file))
         .set_file_type(ft)
         .read()
         .ok()?
@@ -471,6 +475,44 @@ mod tests {
         v.extend_from_slice(&data.to_le_bytes()); // data chunk size
         v.resize(v.len() + data_len, 0u8);
         v
+    }
+
+    /// 构造「ID3v2.4 标签 + 一个 MPEG-1 Layer III 帧」的最小 mp3 字节,复刻 NetEase exhigh
+    /// (FFmpeg `Lavf` 转码)产物:**首字节是 `ID3`,真正的 MPEG 同步头在标签之后**。
+    ///
+    /// 这正是 lofty `FileType::from_buffer` 认不出(见 ID3 前缀即返回 None,与缓冲区大小无关)、
+    /// 必须改走 `Probe` 的场景。帧头 `FF FB 90 00` = MPEG1 / Layer III / 128kbps / 44100Hz / stereo。
+    fn id3_prefixed_mp3() -> Vec<u8> {
+        let mut v = Vec::new();
+        // ID3v2.4 头(10B):"ID3" + 版本 04 00 + flags 00 + synchsafe size = 35。
+        v.extend_from_slice(b"ID3");
+        v.extend_from_slice(&[0x04, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x23]); // synchsafe 35
+        v.resize(v.len() + 35, 0u8); // 35B 标签体(内容无关紧要)
+        // MPEG-1 Layer III 帧头 + 帧体补零至帧长(144*128000/44100 ≈ 417B)。
+        v.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+        v.resize(v.len() + 417 - 4, 0u8);
+        v
+    }
+
+    /// 回归(本次 bug):ID3 前缀的 mp3(缓存 / 下载库里 NetEase exhigh 的样子)经 `local_play_url`
+    /// 应判出 `Mp3`——旧实现用 `from_buffer` 见 ID3 即 None、format 落空,本测试守住改走 `Probe` 后的行为。
+    #[tokio::test]
+    async fn local_play_url_detects_id3_prefixed_mp3() -> color_eyre::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path().join("music");
+        let s = song("1", "环岛", Some("夜晚做决定"));
+        let bytes = id3_prefixed_mp3();
+        // 坐实旧路径为何失效:from_buffer 见 ID3 前缀直接认不出(与字节多少无关)。
+        assert!(
+            lofty::file::FileType::from_buffer(&bytes).is_none(),
+            "from_buffer 对 ID3 前缀应返回 None(正是本 bug 根因)"
+        );
+
+        let abs = put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, &bytes)?;
+        let pu = local_play_url(&s, &abs, BitRate::Exhigh);
+        assert_eq!(pu.format, AudioFormat::Mp3, "ID3 前缀的 mp3 应判 Mp3");
+        Ok(())
     }
 
     /// 杀手锏:format 与 bitrate 都按**内容**(lofty)、不信扩展名——WAV 内容写进 `.flac`

@@ -328,7 +328,7 @@ impl PlayerCore {
 
         if let Some((path, quality, _)) = local_hit {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), origin = ?origin, "本地命中,跳过网络");
-            // 本地播也填 play_url(format 取扩展名、bitrate 取 size/时长 实测均值),transport 才显 fmt。
+            // 本地播也填 play_url(format / bitrate 按文件内容经 lofty 读出,见 resolve),transport 才显 fmt。
             let pu = crate::resolve::local_play_url(song, &path, quality);
             self.inner.audio.play(MediaUrl::Local(path));
             self.inner.state.lock().play_url = Some(pu);
