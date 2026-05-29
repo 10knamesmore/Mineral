@@ -2,6 +2,47 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [Semver](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] — 2026-05-30
+
+修缓存 / 下载库重播不显示音频格式。
+
+### 修复
+
+- 本地命中(缓存 / 下载库)重播时,`PlayUrl.format` 改走 lofty `Probe`(按文件内容、跳过 ID3 标签再认底层帧)。旧实现用 `FileType::from_buffer`,一见 `ID3` 前缀即整片漏判,NetEase exhigh 等 FFmpeg 转码的 mp3 格式显示为空(FLAC 因 magic 在偏移 0 不受影响)。走 `Probe::new`(reader,无路径)而非 `Probe::open`,保住「只认内容、不信扩展名」契约。下载库里带 ID3 的 mp3 同样修复。
+
+## [0.4.0] — 2026-05-30
+
+本地缓存 / 下载库体系成型(文件系统为真相、sqlite 索引);macOS 系统媒体集成。
+
+### 缓存 / 下载库
+
+- 缓存索引迁移到 **sqlite 写穿透**,弃用 BlobCache / bincode。
+- 下载库改以**文件系统为真相**,移除 `download_export` 索引——历史下载 / 换机拷库 / 手动放入的文件一律可见,不受索引漂移影响。
+- 下载不再复制进缓存;缓存仅由「边播边 capture」自然形成,职责分离;补端到端测「下载 → 播放走下载库」。
+- 本地优先解析:播放前按音质从高到低查缓存 / 下载库,命中则跳过整条网络取链路径(同音质优先缓存,更高音质优先下载库)。
+- `mineral cache status` 子命令查看缓存占用;`clean` 展示清理效果。
+
+### 媒体集成
+
+- macOS 系统 Now Playing 集成:Control Center + 媒体键(配合既有 MPRIS,双平台系统媒体控制就绪)。
+
+### TUI
+
+- 播放栏标记播放来源(cache / download / remote);本地播放显示真实 format / bitrate。
+- 统一详情视图封面高度,消除 playlist / tracks 切换时的封面跳变。
+
+### 路径 / 平台
+
+- 统一跨平台 XDG 目录解析,加固 socket 路径解析。
+
+### 其他
+
+- 默认播放音质 Lossless → Exhigh(默认 `BitRate` 亦由 Higher 改 Exhigh)。
+
+### 测试
+
+- 真实 TCP I/O 测试改 multi_thread runtime,消除全仓并发 flaky。
+
 ## [0.2.0] — 2026-05-24
 
 client/server 架构落地:播放进 daemon,关 TUI 不停播;接入系统媒体服务;测试覆盖成体系。
