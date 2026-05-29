@@ -6,7 +6,7 @@
 
 use std::io::BufReader;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -17,6 +17,8 @@ use rodio::Source;
 use rodio::decoder::DecoderBuilder;
 use stream_download::Settings;
 use stream_download::StreamDownload;
+use stream_download::StreamPhase;
+use stream_download::StreamState;
 use stream_download::http::HttpStream;
 use stream_download::http::reqwest::Client;
 use stream_download::source::SourceStream;
@@ -53,6 +55,51 @@ fn pct_to_gain(pct: u8) -> f32 {
 /// stream-download 起播前预拉的字节数。256 KB 在 320 kbps mp3 ≈ 6.4 秒缓冲,
 /// seek ±5s 命中已下载区间概率极高,cpal 回调线程不被网络等待阻塞。
 const PREFETCH_BYTES: u64 = 256 * 1024;
+
+/// 引擎跨线程共享的下载 / 缓冲进度,在 [`engine_main`] 创建一次。下载侧(进度回调 / 完成
+/// waiter)写,[`update_snapshot`] 读。代号字段与 [`EngineState::stream_gen`] 比对,挡掉切歌后
+/// 旧流的迟到信号。
+#[derive(Default)]
+struct SharedProgress {
+    /// capture 整段下完后 waiter store 的曲目代号(与 `stream_gen` 比对算 `download_complete`)。
+    done_gen: AtomicU64,
+
+    /// `buffer_bps` 当前对应的流代号;回调写前先比对,旧流的迟到回调直接 no-op。
+    buffer_gen: AtomicU64,
+
+    /// 当前流已缓冲比例(0..=10000 basis points)。
+    buffer_bps: AtomicU16,
+}
+
+/// 穿过 [`append_decoded`] / [`spawn_remote`] 的进度上下文:当前流代号 + 共享载体 + 是否追踪
+/// 整段下完(仅 capture 需要)。把若干进度参数收成一个,避免函数参数数越过 clippy 阈值。
+#[derive(Clone, Copy)]
+struct ProgressCtx<'a> {
+    /// 本次播放的流代号(每次 `Play` / `Stop` 自增)。
+    stream_gen: u64,
+
+    /// 共享进度载体。
+    shared: &'a Arc<SharedProgress>,
+
+    /// 是否 spawn waiter 等整段下完(capture 播放才需要,用于 `download_complete`)。
+    track_completion: bool,
+}
+
+/// 已缓冲字节占总字节的比例(0..=10000 basis points)。
+///
+/// # Params:
+///   - `buffered`: 已下载 / 已缓冲的字节数
+///   - `total`: 总字节数;`0` 表示长度未知(无 `Content-Length`)
+///
+/// # Return:
+///   basis points,`total == 0` 时返回 `0`,超出 clamp 到满。
+fn buffered_bps(buffered: u64, total: u64) -> u16 {
+    if total == 0 {
+        return 0;
+    }
+    let bps = buffered.saturating_mul(10_000) / total;
+    u16::try_from(bps.min(10_000)).unwrap_or(10_000)
+}
 
 /// 引擎线程入口。
 ///
@@ -138,9 +185,9 @@ fn engine_main(
 
     let mut cur_duration_ms: u64 = 0;
     let mut state = EngineState::default();
-    // capture 下载完成标记:waiter task 在 `wait_for_completion` 后 store 该曲的 gen;
-    // update_snapshot 比对当前 gen 算出 download_complete。
-    let download_done_gen = Arc::new(AtomicU64::new(0));
+    // 下载侧共享进度:capture 完成 waiter store 完成代号、流式下载回调写缓冲比例;
+    // update_snapshot 按 stream_gen 比对后采信,算 download_complete / buffered_bps。
+    let progress = Arc::new(SharedProgress::default());
 
     loop {
         match cmd_rx.recv_timeout(TICK) {
@@ -151,7 +198,7 @@ fn engine_main(
                 &mut state,
                 tap_producer,
                 sr_atomic,
-                &download_done_gen,
+                &progress,
             ) {
                 Ok(new_dur) => {
                     if let Some(d) = new_dur {
@@ -166,13 +213,7 @@ fn engine_main(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         drain_seek(seek_mailbox, &player);
-        update_snapshot(
-            snapshot,
-            &player,
-            cur_duration_ms,
-            &mut state,
-            &download_done_gen,
-        );
+        update_snapshot(snapshot, &player, cur_duration_ms, &mut state, &progress);
     }
     Ok(())
 }
@@ -200,10 +241,11 @@ struct EngineState {
     /// 单调递增的曲终计数,每次自然曲终 +1,写进 snapshot。
     finished_seq: u64,
 
-    /// 当前曲目的 capture 代号:每次 `Play`/`Stop` +1。capture 播放时把它交给 waiter;
-    /// waiter 在下载完成后 store 进 `download_done_gen`。`update_snapshot` 比对二者算
-    /// `download_complete`,从而只认「当前这首」的下载完成,旧曲的迟到信号被 gen 不匹配挡掉。
-    capture_gen: u64,
+    /// 当前流的代号:每次 `Play`/`Stop` +1。交给下载侧(进度回调 + capture 完成 waiter),
+    /// 它们写 [`SharedProgress`] 前先比对此代号,只有「当前这首」的信号被采纳——切歌后旧流
+    /// 的迟到回调 / 迟到完成因代号不匹配被挡掉。`update_snapshot` 据此算 `download_complete`
+    /// 并采信 `buffer_bps`。
+    stream_gen: u64,
 }
 
 /// 处理一条命令。返回 `Some(duration_ms)` 表示曲目变了,player 现在播这个新曲;
@@ -215,27 +257,26 @@ fn handle_command(
     state: &mut EngineState,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
-    download_done_gen: &Arc<AtomicU64>,
+    progress: &Arc<SharedProgress>,
 ) -> color_eyre::Result<Option<u64>> {
     match cmd {
         AudioCommand::Play { url, capture } => {
             // 切歌前先 disarm,旧曲尾巴的 sound_count 退潮不会被算成曲终。
             state.armed = false;
             player.stop();
-            // 新曲 → 新 gen(让上一首的 download_complete 立即回落 false)。
-            state.capture_gen += 1;
-            let completion = capture
-                .is_some()
-                .then(|| (state.capture_gen, Arc::clone(download_done_gen)));
-            let dur = append_decoded(
-                player,
-                rt,
-                url,
-                capture,
-                completion,
-                tap_producer,
-                sr_atomic,
-            )?;
+            // 新流 → 新代号:旧流的进度回调 / 完成信号立即失效,download_complete 回落 false。
+            state.stream_gen += 1;
+            // 起播即把缓冲归零并绑定新代号;远端由下载回调 ramp,本地在 append_decoded 直接置满。
+            progress
+                .buffer_gen
+                .store(state.stream_gen, Ordering::Release);
+            progress.buffer_bps.store(0, Ordering::Release);
+            let ctx = ProgressCtx {
+                stream_gen: state.stream_gen,
+                shared: progress,
+                track_completion: capture.is_some(),
+            };
+            let dur = append_decoded(player, rt, url, capture, ctx, tap_producer, sr_atomic)?;
             player.play();
             // append 内部已 fetch_add 把 sound_count 抬到 1,这里武装后下次 update_snapshot
             // 看到的就是 !is_empty,不存在「armed 后第一 tick 就空」的 race。
@@ -254,8 +295,12 @@ fn handle_command(
             // 用户主动 stop 不该触发曲终事件,直接 disarm。
             state.armed = false;
             player.stop();
-            // 换 gen,使 download_complete 回落 false(没有曲目在播)。
-            state.capture_gen += 1;
+            // 换代号,使 download_complete 回落 false;同时清缓冲——没有曲目在播,overlay 应消失。
+            state.stream_gen += 1;
+            progress
+                .buffer_gen
+                .store(state.stream_gen, Ordering::Release);
+            progress.buffer_bps.store(0, Ordering::Release);
             Ok(Some(0))
         }
         AudioCommand::SetVolume(pct) => {
@@ -281,12 +326,13 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
 /// `capture` 非空且 `url` 为 `Remote` 时,用 [`FileStorageProvider`] 把下载字节落到该路径
 /// (供播完后入缓存);否则 `Remote` 走会自删的 [`TempStorageProvider`]。
 /// `tap_producer` / `sr_atomic` 用于把 decoder 包成 [`TapSource`],PCM 旁路写进 ringbuf。
+/// `progress` 把流代号 + 共享进度载体带给远端下载侧;本地播放无下载,直接把缓冲置满。
 fn append_decoded(
     player: &rodio::Player,
     rt: &tokio::runtime::Runtime,
     url: MediaUrl,
     capture: Option<std::path::PathBuf>,
-    completion: Option<(u64, Arc<AtomicU64>)>,
+    progress: ProgressCtx<'_>,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64> {
@@ -298,7 +344,7 @@ fn append_decoded(
                 rt,
                 u,
                 FileStorageProvider::new(path),
-                completion,
+                progress,
                 tap_producer,
                 sr_atomic,
             ),
@@ -307,7 +353,7 @@ fn append_decoded(
                 rt,
                 u,
                 TempStorageProvider::new(),
-                /*completion*/ None,
+                progress,
                 tap_producer,
                 sr_atomic,
             ),
@@ -319,6 +365,8 @@ fn append_decoded(
             let decoder = build_decoder(reader, byte_len)?;
             let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
             player.append(TapSource::new(decoder, Arc::clone(tap_producer), sr_atomic));
+            // 本地文件无网络下载:整段立即可播,缓冲恒满(代号已在 Play 时绑定)。
+            progress.shared.buffer_bps.store(10_000, Ordering::Release);
             Ok(dur_ms)
         }
     }
@@ -338,7 +386,7 @@ fn spawn_remote<P>(
     rt: &tokio::runtime::Runtime,
     url: url::Url,
     provider: P,
-    completion: Option<(u64, Arc<AtomicU64>)>,
+    progress: ProgressCtx<'_>,
     tap_producer: &SharedProd,
     sr_atomic: &Arc<AtomicU32>,
 ) -> color_eyre::Result<u64>
@@ -346,27 +394,45 @@ where
     P: stream_download::storage::StorageProvider + 'static,
     P::Reader: std::io::Read + std::io::Seek + Send + Sync + 'static,
 {
-    let (reader, byte_len) = rt.block_on(async {
+    let stream_gen = progress.stream_gen;
+    // 缓冲回调用:每来一块就把「已下字节 / 总字节」写进共享进度。content_length 在 stream
+    // 建好后、from_stream 之前才知道,故 Settings 必须在 async 块内、拿到 len 之后构造。
+    let buffer = Arc::clone(progress.shared);
+    let (reader, byte_len) = rt.block_on(async move {
         let stream = HttpStream::<Client>::create(url)
             .await
             .map_err(|e| eyre!("http stream: {e}"))?;
         let len = stream.content_length();
-        let reader = StreamDownload::from_stream(
-            stream,
-            provider,
-            Settings::default().prefetch_bytes(PREFETCH_BYTES),
-        )
-        .await
-        .map_err(|e| eyre!("stream-download init: {e}"))?;
+        let total = len.unwrap_or(0);
+        let settings = Settings::default()
+            .prefetch_bytes(PREFETCH_BYTES)
+            .on_progress(
+                move |_stream: &HttpStream<Client>, state: StreamState, _cancel| {
+                    // 切歌后旧流的迟到回调(代号不匹配)直接忽略,不污染当前曲缓冲。
+                    if buffer.buffer_gen.load(Ordering::Acquire) != stream_gen {
+                        return;
+                    }
+                    let bps = match state.phase {
+                        // 长度未知(无 Content-Length)时 buffered_bps 恒 0,下完瞬间补满。
+                        StreamPhase::Complete => 10_000,
+                        _ => buffered_bps(state.current_position, total),
+                    };
+                    buffer.buffer_bps.store(bps, Ordering::Release);
+                },
+            );
+        let reader = StreamDownload::from_stream(stream, provider, settings)
+            .await
+            .map_err(|e| eyre!("stream-download init: {e}"))?;
         Ok::<_, color_eyre::Report>((reader, len))
     })?;
-    // capture 播放:拿 download handle,spawn 一个 waiter 等整段下完后 store 本曲 gen。
+    // capture 播放:拿 download handle,spawn 一个 waiter 等整段下完后 store 本曲代号。
     // 必须在 reader 被 decoder 消费前取 handle。
-    if let Some((track_gen, done_gen)) = completion {
+    if progress.track_completion {
         let handle = reader.handle();
+        let done = Arc::clone(progress.shared);
         rt.spawn(async move {
             handle.wait_for_completion().await;
-            done_gen.store(track_gen, Ordering::Release);
+            done.done_gen.store(stream_gen, Ordering::Release);
         });
     }
     let decoder = build_decoder(reader, byte_len)?;
@@ -398,7 +464,7 @@ fn update_snapshot(
     player: &rodio::Player,
     cur_duration_ms: u64,
     state: &mut EngineState,
-    download_done_gen: &Arc<AtomicU64>,
+    progress: &Arc<SharedProgress>,
 ) {
     let pos_ms = duration_to_ms(player.get_pos());
     let is_paused = player.is_paused();
@@ -412,9 +478,9 @@ fn update_snapshot(
         state.armed = false;
     }
 
-    // 当前曲的 capture 下载完成 = waiter 已 store 本曲 gen。gen 不匹配(旧曲迟到 / 非 capture)→ false。
+    // 当前曲的 capture 下载完成 = waiter 已 store 本曲代号。代号不匹配(旧曲迟到 / 非 capture)→ false。
     let download_complete =
-        state.capture_gen != 0 && download_done_gen.load(Ordering::Acquire) == state.capture_gen;
+        state.stream_gen != 0 && progress.done_gen.load(Ordering::Acquire) == state.stream_gen;
 
     let mut g = snapshot.lock();
     g.playing = playing;
@@ -422,10 +488,40 @@ fn update_snapshot(
     g.duration_ms = cur_duration_ms;
     g.track_finished_seq = state.finished_seq;
     g.download_complete = download_complete;
+    // 下载侧的进度回调按当前代号写入,这里直接采信(切歌时已在 Play/Stop 归零)。
+    g.buffered_bps = progress.buffer_bps.load(Ordering::Acquire);
     // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
 }
 
 /// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
 fn duration_to_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::buffered_bps;
+
+    /// `buffered_bps`:0 / 一半 / 满 / 超界 clamp;`total == 0`(长度未知)恒 0。
+    #[test]
+    fn buffered_bps_cases() {
+        assert_eq!(buffered_bps(0, 1000), 0);
+        assert_eq!(buffered_bps(500, 1000), 5_000);
+        assert_eq!(buffered_bps(1000, 1000), 10_000);
+        // 已下超过总长(理论不该发生)clamp 到满,不溢出。
+        assert_eq!(buffered_bps(2000, 1000), 10_000);
+        // 长度未知:无法算比例,返回 0(由完成回调在 Complete 时补满)。
+        assert_eq!(buffered_bps(123, 0), 0);
+        assert_eq!(buffered_bps(0, 0), 0);
+    }
+
+    /// 极大字节数不因 `* 10_000` 溢出 / panic,结果始终 ≤ 满格;现实 GB 量级整段缓冲 = 满格。
+    #[test]
+    fn buffered_bps_no_overflow_on_huge_bytes() {
+        // 病态量级(saturating_mul 兜底,不 panic);具体值无意义,只要 clamp 在范围内。
+        assert!(buffered_bps(u64::MAX, u64::MAX) <= 10_000);
+        assert!(buffered_bps(u64::MAX, 1) <= 10_000);
+        // 现实量级(2 GB)整段下完 = 满格,saturating 不触发。
+        assert_eq!(buffered_bps(2_000_000_000, 2_000_000_000), 10_000);
+    }
 }

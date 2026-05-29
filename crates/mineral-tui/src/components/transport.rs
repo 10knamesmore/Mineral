@@ -99,14 +99,49 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
             "●",
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ));
-        let track = "─".repeat(bar_w.saturating_sub(filled).saturating_sub(1));
-        spans.push(Span::styled(track, Style::new().fg(theme.surface0)));
+        // 播放头之后的轨道再分两段:已缓冲(亮)+ 未缓冲(暗)。同一 `─` 字形仅靠颜色区分,
+        // cell 数守恒,布局不抖。overlay(中灰)比 surface0 明显亮一大档但不抢已播的亮蓝,
+        // 形成「已播亮蓝 > 已缓冲中灰 > 未缓冲暗灰」的三级层次,缓冲进度即这段亮轨道的长度。
+        let (buffered, unbuffered) = split_buffered_track(bar_w, filled, pb.buffered_bps);
+        if buffered > 0 {
+            spans.push(Span::styled(
+                "─".repeat(buffered),
+                Style::new().fg(theme.overlay),
+            ));
+        }
+        if unbuffered > 0 {
+            spans.push(Span::styled(
+                "─".repeat(unbuffered),
+                Style::new().fg(theme.surface0),
+            ));
+        }
     }
     spans.push(Span::styled(
         format!(" {total} "),
         Style::new().fg(theme.subtext),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// 播放头之后的轨道按缓冲进度拆成 `(已缓冲亮段, 未缓冲暗段)` 的 cell 数。
+///
+/// 缓冲位永远不早于播放头(已播部分必然已缓冲),两段之和恒等于 `bar_w - filled - 1`
+/// ——即原本整条未播放轨道的长度,故不改变进度条总宽,布局不抖。
+///
+/// # Params:
+///   - `bar_w`: 进度条总 cell 宽
+///   - `filled`: 已播放实心 cell 数,调用方保证 `< bar_w`
+///   - `buffered_bps`: 已缓冲比例(0..=10000 basis points)
+///
+/// # Return:
+///   `(亮段 cell 数, 暗段 cell 数)`,二者之和 = `bar_w - filled - 1`。
+fn split_buffered_track(bar_w: usize, filled: usize, buffered_bps: u16) -> (usize, usize) {
+    let track_len = bar_w.saturating_sub(filled).saturating_sub(1);
+    let buffered_cells = bar_w.saturating_mul(usize::from(buffered_bps)) / 10_000;
+    let bright = buffered_cells
+        .saturating_sub(filled.saturating_add(1))
+        .min(track_len);
+    (bright, track_len - bright)
 }
 
 /// 控件区:`[⏮] [▶/⏸] [⏭] [mode]` 按钮 + 下方对应键位 label,等宽对齐避免抖动。
@@ -241,7 +276,7 @@ mod tests {
 
     use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
 
-    use super::fmt_tier_color;
+    use super::{fmt_tier_color, split_buffered_track};
     use crate::playback::{Playback, PlaybackOrigin};
     use crate::test_support::{song, with_duration, with_name};
     use crate::theme::Theme;
@@ -304,6 +339,36 @@ mod tests {
             let r_hi = tier_rank(fmt_tier_color(lossless, hi, &theme), &theme);
             prop_assert!(r_lo <= r_hi);
         }
+
+        /// 亮段 + 暗段恒等于「播放头之后的轨道长度」(`bar_w - filled - 1`),
+        /// 即缓冲 overlay 永不改变进度条总宽——布局不会因缓冲值抖动。
+        #[test]
+        fn prop_split_track_conserves_width(
+            bar_w in 1usize..200,
+            filled in 0usize..200,
+            bps in 0u16..=10_000,
+        ) {
+            prop_assume!(filled < bar_w);
+            let (bright, dim) = split_buffered_track(bar_w, filled, bps);
+            prop_assert_eq!(bright + dim, bar_w - filled - 1);
+            // 缓冲比例单调:bps↑ ⇒ 亮段不减。
+            let (bright_more, _) = split_buffered_track(bar_w, filled, bps.saturating_add(1).min(10_000));
+            prop_assert!(bright_more >= bright);
+        }
+    }
+
+    /// `split_buffered_track`:满格全亮 / 缓冲≤已播则无亮段 / 半缓冲分两段。
+    #[test]
+    fn split_buffered_track_cases() {
+        // bar_w=11,filled=2(播放头占 1),轨道 = 11-2-1 = 8 cell。
+        // 满缓冲:整条轨道都亮。
+        assert_eq!(split_buffered_track(11, 2, 10_000), (8, 0));
+        // 零缓冲:全暗(等价改动前行为)。
+        assert_eq!(split_buffered_track(11, 2, 0), (0, 8));
+        // 缓冲 50% → buffered_cells = 5;亮段 = 5-(2+1)=2,暗段 = 8-2=6。
+        assert_eq!(split_buffered_track(11, 2, 5_000), (2, 6));
+        // 缓冲落在播放头之内(25% → buffered_cells=2 ≤ filled+1)→ 无亮段。
+        assert_eq!(split_buffered_track(11, 2, 2_500), (0, 8));
     }
 
     /// 无 track:transport 空态。
@@ -420,6 +485,57 @@ mod tests {
         let pb = pb_with_origin(PlaybackOrigin::Remote, AudioFormat::Mp3, 320_000);
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
+        Ok(())
+    }
+
+    /// 缓冲 overlay 的颜色:播放头之后先一段 overlay(已缓冲,中灰)再一段 surface0(未缓冲,
+    /// 暗灰),两色不交错且都非空。文本快照不记前景色,故这里直接读 `cell.fg` 钉死颜色与顺序。
+    #[test]
+    fn transport_buffer_overlay_colors() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(with_name(song("1"), "Buffering"), 225_000));
+        pb.position_ms = 60_000; // ≈26.7% 已播
+        pb.playing = true;
+        pb.buffered_bps = 6_000; // 60% 已缓冲:介于已播与满之间 → 亮暗两段都该出现
+        t.draw(|f| super::draw(f, f.area(), &pb, &theme))?;
+
+        // 圆角边框的上下边也是 `─` 且同为 surface1,故不能全局扫字形。先用唯一的填充字符
+        // `━` 定位进度条所在行,只在该行内取 `─` 轨道,避开边框。
+        let buf = t.backend().buffer();
+        let w = usize::from(buf.area.width);
+        let prog_row = buf
+            .content
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.symbol() == "━")
+            .map(|(i, _)| i / w)
+            .ok_or_else(|| color_eyre::eyre::eyre!("未找到进度条行(无 ━ 填充)"))?;
+        let track: Vec<Color> = buf
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| i / w == prog_row && c.symbol() == "─")
+            .map(|(_, c)| c.fg)
+            .collect();
+
+        let bright = track.iter().filter(|c| **c == theme.overlay).count();
+        let dim = track.iter().filter(|c| **c == theme.surface0).count();
+        assert!(bright > 0, "应有已缓冲亮段(overlay):{track:?}");
+        assert!(dim > 0, "缓冲未满应有未缓冲暗段(surface0):{track:?}");
+        assert_eq!(
+            bright + dim,
+            track.len(),
+            "轨道只该是 surface0/overlay 两色"
+        );
+
+        // 亮段必须全部排在暗段之前——缓冲连续紧随播放头,不交错。
+        let last_bright = track.iter().rposition(|c| *c == theme.overlay);
+        let first_dim = track.iter().position(|c| *c == theme.surface0);
+        if let (Some(lb), Some(fd)) = (last_bright, first_dim) {
+            assert!(lb < fd, "亮段应全部在暗段之前:{track:?}");
+        }
         Ok(())
     }
 }

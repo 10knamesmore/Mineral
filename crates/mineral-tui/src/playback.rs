@@ -27,6 +27,10 @@ pub struct Playback {
 
     /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
     pub audio_backend: AudioBackend,
+
+    /// 当前曲目已缓冲比例(0..=10000 basis points)。本地 / 已缓存恒满;远端流式播放时
+    /// 随下载推进。transport 进度条据此在播放头之后画一段更亮的「已缓冲」轨道。
+    pub buffered_bps: u16,
 }
 
 impl Playback {
@@ -41,6 +45,7 @@ impl Playback {
             play_url: None,
             play_origin: None,
             audio_backend: AudioBackend::Device,
+            buffered_bps: 0,
         }
     }
 
@@ -66,6 +71,7 @@ impl Playback {
         self.playing = snap.playing;
         self.volume_pct = snap.volume_pct;
         self.audio_backend = snap.backend;
+        self.buffered_bps = snap.buffered_bps;
     }
 }
 
@@ -129,5 +135,23 @@ mod tests {
     fn duration_ms_from_track() {
         assert_eq!(Playback::new().duration_ms(), 0);
         assert_eq!(with_track(4242, 0).duration_ms(), 4242);
+    }
+
+    /// `apply_audio_snapshot`:position / playing / volume / backend / buffered_bps 全量灌入。
+    #[test]
+    fn apply_snapshot_propagates_buffered_bps() {
+        let mut pb = Playback::new();
+        let snap = mineral_audio::AudioSnapshot {
+            playing: true,
+            position_ms: 12_000,
+            volume_pct: 55,
+            buffered_bps: 7_500,
+            ..mineral_audio::AudioSnapshot::default()
+        };
+        pb.apply_audio_snapshot(snap);
+        assert!(pb.playing);
+        assert_eq!(pb.position_ms, 12_000);
+        assert_eq!(pb.volume_pct, 55);
+        assert_eq!(pb.buffered_bps, 7_500);
     }
 }

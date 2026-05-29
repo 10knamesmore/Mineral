@@ -41,4 +41,9 @@ pub struct AudioSnapshot {
     /// 一完成即为 true,不必等播放结束——上层据此把 capture 文件 harvest 进缓存。切歌后
     /// 在新曲下完前回落为 false。
     pub download_complete: bool,
+
+    /// 当前曲目已缓冲到的比例(0..=10000 basis points)。本地 / 已完整缓存恒 10000;
+    /// 远端流式播放时由 stream-download 的下载进度回调驱动,随已下字节占总字节推进。
+    /// 总长未知(无 Content-Length)时维持 0,直到整段下完跳 10000。切歌瞬间回落 0。
+    pub buffered_bps: u16,
 }

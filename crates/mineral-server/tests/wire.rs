@@ -30,6 +30,7 @@ fn audio_snapshot_round_trip() -> color_eyre::Result<()> {
         track_finished_seq: 3,
         backend: mineral_audio::AudioBackend::Null,
         download_complete: true,
+        buffered_bps: 6_000,
     };
     let back = round_trip(&snap)?;
     assert_eq!(snap, back);
