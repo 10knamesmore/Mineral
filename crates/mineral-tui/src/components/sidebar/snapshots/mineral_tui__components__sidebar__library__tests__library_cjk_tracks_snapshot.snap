@@ -4,11 +4,11 @@ description: "曲目列表:CJK 曲目(Chinese Football)宽字符对齐"
 expression: t.backend()
 ---
 "╭ tracks / Chinese Football ───────────╮"
-"│    # title        arti albu play len │"
-"│▌   ♫ 守门员       Chin      0    3:53│" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " ")]
-"│    1 飞鱼转身     Chin      0    3:53│" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " "), (14, " ")]
-"│    2 400米        Chin      0    3:53│" Hidden by multi-width symbols: [(11, " ")]
-"│    3 不是人人都能 Chin      0    3:53│" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " "), (14, " "), (16, " "), (18, " ")]
+"│    # title        artist album len   │"
+"│▌   ♫ 守门员       Chines       3:53  │" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " ")]
+"│    1 飞鱼转身     Chines       3:53  │" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " "), (14, " ")]
+"│    2 400米        Chines       3:53  │" Hidden by multi-width symbols: [(11, " ")]
+"│    3 不是人人都能 Chines       3:53  │" Hidden by multi-width symbols: [(8, " "), (10, " "), (12, " "), (14, " "), (16, " "), (18, " ")]
 "│                                      │"
 "│                                      │"
 "│                                      │"

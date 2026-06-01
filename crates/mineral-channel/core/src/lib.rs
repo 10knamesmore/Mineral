@@ -110,6 +110,22 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
+    /// 拉取该 channel 远端记录的「当前用户对这首歌的真实累计播放次数」。
+    ///
+    /// 语义上**与本地 persist 统计无关**:这是音乐源服务端的事实(如网易云
+    /// 网页 + App + 本客户端的全渠道累计),而非本地这台机器上播了几次。
+    /// 默认 [`Error::NotSupported`](而非 `Ok(0)`),让上层能区分「该源无此能力 /
+    /// 未登录」(不显示)与「确实播了 0 次」(显示 0)。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌曲
+    ///
+    /// # Return:
+    ///   远端累计播放次数;不支持 / 未登录返回 [`Error::NotSupported`]。
+    async fn remote_play_count(&self, _id: &SongId) -> Result<u32> {
+        Err(Error::NotSupported)
+    }
+
     /// 播放打点(fire-and-forget 语义):一首歌完整播完或被跳过时上报。
     ///
     /// channel 据此累计本地统计(播放次数 / 跳过 / 收听时长 / 历史),也可顺手做

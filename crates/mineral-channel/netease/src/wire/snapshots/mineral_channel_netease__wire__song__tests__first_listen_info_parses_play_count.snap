@@ -1,0 +1,16 @@
+---
+source: crates/mineral-channel/netease/src/wire/song.rs
+description: "回忆坐标:data.musicTotalPlayDto.playCount=18 解析"
+expression: info
+---
+FirstListenInfo {
+    data: Some(
+        FirstListenData {
+            music_total_play: Some(
+                MusicTotalPlay {
+                    play_count: 18,
+                },
+            ),
+        },
+    ),
+}

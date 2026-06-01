@@ -48,7 +48,6 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         Cell::from("title"),
         Cell::from("artist"),
         Cell::from("album"),
-        Cell::from("plays"),
         Cell::from("len"),
     ])
     .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
@@ -69,7 +68,6 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         Constraint::Min(12),
         Constraint::Length(16),
         Constraint::Length(14),
-        Constraint::Length(6),
         Constraint::Length(6),
     ];
 
@@ -127,7 +125,6 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
         .as_ref()
         .map(|a| a.name.clone())
         .unwrap_or_default();
-    let plays = format!("{}", sv.plays);
     let len = format_duration(sv.data.duration_ms);
 
     Row::new(vec![
@@ -146,7 +143,6 @@ fn build_row<'a>(idx: usize, sv: &'a SongView, state: &AppState, theme: &Theme) 
             Style::new().fg(theme.overlay),
             theme,
         ))),
-        Cell::from(plays),
         Cell::from(len),
     ])
 }

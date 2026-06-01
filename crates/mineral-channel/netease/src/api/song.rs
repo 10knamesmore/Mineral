@@ -18,7 +18,7 @@ use crate::convert::parse_remote;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
-use crate::wire::song::{AlbumSong, SongUrl};
+use crate::wire::song::{AlbumSong, FirstListenInfo, SongUrl};
 
 /// 详情:`/weapi/v3/song/detail`。返回与 album.rs 一致的 `wire::song::AlbumSong` 形态。
 pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<Song>> {
@@ -176,6 +176,36 @@ pub async fn like_song(transport: &Transport, id: &SongId, like: bool) -> Result
         })
         .await?;
     Ok(())
+}
+
+/// 拉取当前用户对一首歌的真实累计播放次数(回忆坐标 eapi 端点)。
+///
+/// 走 `/api/content/activity/music/first/listen/info`,eapi 加密,需登录态(MUSIC_U)。
+/// 响应取 `data.musicTotalPlayDto.playCount`;无记录 / 字段缺失计 0。
+///
+/// # Params:
+///   - `transport`: 网易云请求通道(须带登录 cookie)
+///   - `id`: 目标歌曲,取裸值作 `songId`
+///
+/// # Return:
+///   累计播放次数;接口 code≠200 或网络错误返回 `Err`。
+pub async fn remote_play_count(transport: &Transport, id: &SongId) -> Result<u32> {
+    let mut p = serde_json::Map::new();
+    p.insert("songId".into(), json!(id.as_str()));
+    let v = transport
+        .request(RequestSpec {
+            path: "/api/content/activity/music/first/listen/info",
+            crypto: Crypto::Eapi,
+            params: p,
+            ua: UaKind::Pc,
+        })
+        .await?;
+    let info: FirstListenInfo = crate::wire::de::from_value(v)?;
+    Ok(info
+        .data
+        .and_then(|d| d.music_total_play)
+        .map(|m| m.play_count)
+        .unwrap_or_default())
 }
 
 /// 把 v1 / legacy 两套响应里共有的 `data: [...]` 解析成 [`PlayUrl`] 列表。

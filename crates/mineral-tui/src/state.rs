@@ -146,6 +146,14 @@ pub struct AppState {
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
     pub liked_ids: FxHashMap<SourceKind, FxHashSet<SongId>>,
 
+    /// 歌曲 id → 远端真实累计播放次数;装饰 `SongView.plays` 用。
+    /// 缺 id = 还没查到 / 查失败(渲染成 `None`)。
+    pub play_counts: FxHashMap<SongId, u32>,
+
+    /// 已提交过 `RemotePlayCount` 请求的歌曲(成败都记)。停留防抖据此去重,
+    /// 避免同一首歌反复打回忆坐标接口。
+    pub play_count_requested: FxHashSet<SongId>,
+
     /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
     /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
     pub last_sel_change: Instant,
@@ -188,6 +196,8 @@ impl AppState {
             },
             cover_loading: 0,
             liked_ids: FxHashMap::default(),
+            play_counts: FxHashMap::default(),
+            play_count_requested: FxHashSet::default(),
             last_sel_change: Instant::now(),
         }
     }
@@ -204,10 +214,11 @@ impl AppState {
             .liked_ids
             .get(&song.source())
             .is_some_and(|s| s.contains(&song.id));
+        let plays = self.play_counts.get(&song.id).copied();
         SongView {
             data: song,
             loved,
-            plays: 0,
+            plays,
         }
     }
 
@@ -272,6 +283,10 @@ impl AppState {
             TaskEvent::LikedSongIdsFetched { source, ids } => {
                 self.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
+            }
+            TaskEvent::RemotePlayCountFetched { song_id, count } => {
+                self.play_counts.insert(song_id.clone(), *count);
+                self.redecorate_for_source(song_id.namespace());
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
             // Notice 在 drain_task_events 已单独路由到 toast,不会进这里;一并 defensive 跳过。

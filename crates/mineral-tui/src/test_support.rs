@@ -69,7 +69,7 @@ pub(crate) fn state_with_tracks() -> AppState {
         .map(|(i, t)| SongView {
             data: t.clone(),
             loved: i == 1,
-            plays: plays.get(i).copied().unwrap_or(0),
+            plays: plays.get(i).copied(),
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
@@ -125,7 +125,7 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
         .map(|t| SongView {
             data: t.clone(),
             loved: false,
-            plays: 0,
+            plays: None,
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
@@ -231,7 +231,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
         .map(|t| SongView {
             data: t.clone(),
             loved: false,
-            plays: 0,
+            plays: None,
         })
         .collect::<Vec<SongView>>();
     app.state.tracks_cache.insert(pid, views);

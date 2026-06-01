@@ -302,5 +302,28 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
+        ChannelFetchKind::RemotePlayCount { song_id } => {
+            match channel.remote_play_count(song_id).await {
+                Ok(count) => {
+                    event_tx.lock().push(TaskEvent::RemotePlayCountFetched {
+                        song_id: song_id.clone(),
+                        count,
+                    });
+                    TaskOutcome::Ok
+                }
+                Err(e) => {
+                    // 装饰性尽力查询:未登录 / 不支持 / 网络失败都无害,debug 即可,不污染 warn。
+                    mineral_log::debug!(
+                        target: "channel_fetch",
+                        source = ?song_id.namespace(),
+                        op = "remote_play_count",
+                        song_id = song_id.as_str(),
+                        error = mineral_log::chain(&e),
+                        "remote play count unavailable"
+                    );
+                    TaskOutcome::Failed
+                }
+            }
+        }
     }
 }

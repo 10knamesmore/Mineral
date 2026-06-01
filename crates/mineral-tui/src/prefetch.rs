@@ -6,7 +6,9 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
-use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+use std::time::Duration;
+
+use mineral_model::{MediaUrl, PlaylistId, SongId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
@@ -18,10 +20,15 @@ use crate::state::{AppState, View};
 /// 后续接 config 时再分开调。
 const RADIUS: usize = 64;
 
-/// 每 tick 调一次:封面 + 歌单 tracks 两路 prefetch。
+/// 选中某首歌停留超过此窗口,才查它的远端真实播放次数。比 [`crate::state::COVER_DEBOUNCE`]
+/// 长得多 —— 回忆坐标单首一请求且可能撞风控,只在用户「停下来看」时才打。后续按手感调。
+const PLAY_COUNT_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch。
 pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
     request_playlist_tracks(state, client);
+    request_play_count(state, client);
 }
 
 /// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面,
@@ -123,6 +130,42 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
         // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
         state.tracks_requested.insert(id);
     }
+}
+
+/// 选中某首歌停留超过 [`PLAY_COUNT_DEBOUNCE`] 后,查它的远端真实累计播放次数。
+///
+/// 只查当前选中那一首(回忆坐标单首一请求,且只在 selected 详情展示);停留防抖
+/// 避免翻列表时为掠过的歌打满 API。`play_count_requested` 成败都记,不反复打同一首。
+/// 不预判来源能力 —— 不支持的源任务在 lane 里静默失败(debug),不把 channel 能力硬编码进 UI。
+fn request_play_count(state: &mut AppState, client: &dyn Client) {
+    if state.view != View::Library {
+        return;
+    }
+    if state.last_sel_change.elapsed() < PLAY_COUNT_DEBOUNCE {
+        return;
+    }
+    let Some(id) = selected_track_id(state) else {
+        return;
+    };
+    if state.play_count_requested.contains(&id) {
+        return;
+    }
+    mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "request remote play count");
+    client.submit_task(
+        TaskKind::ChannelFetch(ChannelFetchKind::RemotePlayCount {
+            song_id: id.clone(),
+        }),
+        Priority::User,
+    );
+    state.play_count_requested.insert(id);
+}
+
+/// 当前 Library 选中行的歌曲 id(filtered 索引);无选中 / 空列表返回 `None`。
+fn selected_track_id(state: &AppState) -> Option<SongId> {
+    state
+        .filtered_tracks()
+        .get(state.sel_track)
+        .map(|sv| sv.data.id.clone())
 }
 
 /// sel 周围 [`RADIUS`] 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。

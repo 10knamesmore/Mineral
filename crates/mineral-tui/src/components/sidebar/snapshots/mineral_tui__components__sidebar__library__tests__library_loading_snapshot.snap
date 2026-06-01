@@ -4,7 +4,7 @@ description: "曲目列表:选中歌单但曲目未到(loading)"
 expression: t.backend()
 ---
 "╭ tracks / EndSerenading ──────────────╮"
-"│    # title        arti albu play len │"
+"│    # title        artist album len   │"
 "│▌ l                                   │"
 "│                                      │"
 "│                                      │"

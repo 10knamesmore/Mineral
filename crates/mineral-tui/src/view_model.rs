@@ -14,7 +14,7 @@ pub struct PlaylistView {
 }
 
 /// 一首歌 + UI 装饰(`loved` / `plays`),channel 不提供时给默认值
-/// (`false` / `0`)。
+/// (`false` / `None`)。
 #[derive(Clone, Debug)]
 pub struct SongView {
     /// 底层 model。
@@ -23,6 +23,7 @@ pub struct SongView {
     /// 是否已收藏。
     pub loved: bool,
 
-    /// 累计播放次数。
-    pub plays: u32,
+    /// 远端真实累计播放次数;
+    /// `None` = 未知 / 未登录 / 未查到 / 该源不支持。
+    pub plays: Option<u32>,
 }

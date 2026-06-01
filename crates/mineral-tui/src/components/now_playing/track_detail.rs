@@ -60,6 +60,10 @@ pub fn draw(
     let len = format_ms(sv.data.duration_ms);
     let love_label = if sv.loved { "♥ loved" } else { "♡ —" };
     let love_color = if sv.loved { theme.red } else { theme.overlay };
+    let plays_label = match sv.plays {
+        Some(n) => n.to_string(),
+        None => "—".to_owned(),
+    };
 
     let kv = vec![
         Line::from(vec![
@@ -67,7 +71,7 @@ pub fn draw(
             Span::styled("length: ", Style::new().fg(theme.overlay)),
             Span::styled(format!("{len:<10}"), Style::new().fg(theme.text)),
             Span::styled("plays:  ", Style::new().fg(theme.overlay)),
-            Span::styled(format!("{}", sv.plays), Style::new().fg(theme.text)),
+            Span::styled(plays_label, Style::new().fg(theme.text)),
         ]),
         Line::from(vec![
             Span::raw(" "),
