@@ -15,6 +15,7 @@ use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
+use crate::render::anim::Transition;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistView, SongView};
@@ -272,5 +273,31 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
     app.state.view = View::Library;
     app.state.sel_playlist = 0;
     app.state.sel_track = sel_track;
+    app
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
+/// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
+pub(crate) fn app_in_fullscreen() -> App {
+    let mut app = App::new(
+        Arc::new(TestClient),
+        CoverFetcher::disabled(),
+        Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
+    );
+    let track = qianzai_song();
+    app.state
+        .lyrics_cache
+        .insert(track.id.clone(), qianzai_lyrics());
+    app.state.playback.track = Some(track.clone());
+    app.state.playback.position_ms = 62_000;
+    app.state.current = Some(track);
+    app.state.queue = endserenading(3);
+    // 稳态全屏:fullscreen_pos 一步推到满值(step=1000)。
+    let mut fs = Transition::new(1);
+    fs.enter();
+    fs.tick();
+    app.state.fullscreen_pos = fs;
+    app.state.fullscreen = true;
     app
 }

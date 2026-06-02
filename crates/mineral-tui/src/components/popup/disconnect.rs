@@ -27,6 +27,7 @@ impl Overlay for DisconnectOverlay {
             max_w: 64,
             max_h: 9,
             animated: true,
+            dock: false,
         }
     }
 

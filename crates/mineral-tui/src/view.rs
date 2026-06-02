@@ -1,29 +1,48 @@
 //! 主帧渲染入口。
 
 use ratatui::Frame;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use crate::components::layout::compute::{Areas, compute};
+use crate::components::layout::compute::{Areas, compute, compute_fullscreen};
 use crate::components::layout::{
-    lyrics, now_playing, sidebar, spectrum, top_status, transform, transport,
+    cover, cover_image, lyrics, now_playing, sidebar, spectrum, top_status, transform, transport,
 };
 
-/// 渲染一帧:计算布局,填充各面板;整屏转场(启动扩大 / 退出收缩)进行时叠加缩放边框。
+/// 渲染一帧:浏览态走常规 paint;全屏态 / 形变中走全屏 paint(几何由 `compute_fullscreen`
+/// 与 `morph_areas` 给出)。通知 / 浮层叠在最上(整屏转场期间不画);最后叠启动 / 退出缩放边框。
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
-    let areas = compute(frame.area());
-    paint(frame, &areas, app);
+    let theme = &app.theme;
+    let normal = compute(frame.area());
+
+    if app.state.fullscreen_pos.at_min() {
+        paint(frame, &normal, app);
+    } else {
+        let full = compute_fullscreen(frame.area());
+        let areas = if app.state.fullscreen_pos.at_max() {
+            full
+        } else {
+            transform::morph_areas(&normal, &full, app.state.fullscreen_pos.eased_in_out())
+        };
+        paint_fullscreen(frame, &areas, app);
+    }
+
+    // topbar 通知层 / 浮层栈:整屏转场(启动扩大 / 退出收缩)期间不画;全屏形变不抑制。
+    // 通知锚点恒用常规顶栏行(全屏顶栏已收掉,仍从屏顶向下堆叠)。
+    if app.transition.is_none() {
+        app.notifications.render(frame, normal.top_status, theme);
+        app.overlays.render(frame, frame.area(), &app.state, theme);
+    }
+
     if let Some(anim) = &app.transition {
-        transform::clip_scaled(
-            frame,
-            frame.area(),
-            anim.eased(),
-            app.launch_anchor,
-            &app.theme,
-        );
+        transform::clip_scaled(frame, frame.area(), anim.eased(), app.launch_anchor, theme);
     }
 }
 
-/// 把 layout 计算出的各 area 分发给对应组件渲染。
+/// 常规(浏览态)布局:把各 area 分发给对应组件渲染。
 fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     let theme = &app.theme;
     top_status::draw(frame, areas.top_status, &app.state, theme);
@@ -38,16 +57,74 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
+}
 
-    // topbar 通知层(下载进度 / 一次性消息):自 top_status 行起向下堆叠,top-center 展开。转场期间不画。
-    if app.transition.is_none() {
-        app.notifications.render(frame, areas.top_status, theme);
+/// 全屏 / 形变布局:消失面板渲进收缩 rect(小到自动空白)→ spectrum → transport → cover
+/// → lyrics(歌词最后画,对穿交错时压在封面上保持可读)。
+fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+    let theme = &app.theme;
+    if let Some(r) = nonempty(areas.top_status) {
+        top_status::draw(frame, r, &app.state, theme);
     }
+    if let Some(r) = nonempty(areas.left) {
+        sidebar::draw(frame, r, &app.state, theme);
+    }
+    if let Some(r) = areas.right.and_then(nonempty) {
+        now_playing::draw(frame, r, &app.state, &app.picker, theme);
+    }
+    if let Some(spec) = areas.spectrum.and_then(nonempty) {
+        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+    }
+    transport::draw(frame, areas.transport, &app.state.playback, theme);
+    if let Some(c) = areas.cover.and_then(nonempty) {
+        draw_fullscreen_cover(frame, c, app);
+    }
+    if let Some(lyr) = areas.lyrics.and_then(nonempty) {
+        lyrics::draw(frame, lyr, &app.state, theme);
+    }
+}
 
-    // 浮层栈:整屏转场动画期间不画(此时缩放的是主界面整体,不带浮层)。
-    if app.transition.is_none() {
-        app.overlays.render(frame, frame.area(), &app.state, theme);
+/// 全屏独立封面:跟**在播曲**;形变中画程序化色块(便宜),稳态全屏才上真图(避免形变期
+/// 每帧尺寸变导致 protocol 重编码)。无在播曲时叠居中 `暂无播放` 提示。
+fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let track = app.state.playback.track.as_ref();
+    let seed = track.map_or_else(
+        || "mineral".to_owned(),
+        |t| {
+            t.album
+                .as_ref()
+                .map_or_else(|| t.name.clone(), |a| a.name.clone())
+        },
+    );
+    if app.state.fullscreen_pos.at_max() {
+        cover_image::render_or_fallback(
+            frame,
+            area,
+            track.and_then(|t| t.cover_url.as_ref()),
+            &app.state,
+            &app.picker,
+            theme,
+            &seed,
+        );
+    } else {
+        cover::render(frame, area, &seed, theme);
     }
+    if track.is_none() {
+        let y = area.y + area.height / 2;
+        let strip = Rect::new(area.x, y, area.width, 1);
+        let line = Line::from("暂无播放").style(
+            Style::new()
+                .fg(theme.overlay)
+                .add_modifier(Modifier::ITALIC),
+        );
+        frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), strip);
+    }
+}
+
+/// 非空矩形过滤:宽高都 > 0 才返回 `Some`,供 `.and_then` 链跳过零面积面板。
+fn nonempty(r: Rect) -> Option<Rect> {
+    (r.width > 0 && r.height > 0).then_some(r)
 }
 
 #[cfg(test)]
@@ -57,7 +134,76 @@ mod tests {
     use ratatui::layout::Position;
 
     use crate::render::anim::Transition;
-    use crate::test_support::app_with_queue;
+    use crate::test_support::{app_in_fullscreen, app_with_queue};
+
+    /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**重建封面协议。
+    ///
+    /// 旧 bug:morph 每帧 now_playing 尺寸变 → `cover_image` 按新 dims 重建有状态 kitty
+    /// 协议(churn),稳态落地后占位符指向终端已无的 image id → 封面整块空白、按 url 粘死
+    /// (进全屏再退回 / 重选同曲都不渲染)。修复后形变期 `cover_image` 早退,缓存条目的
+    /// dims 在整段形变中保持稳态值不变。dims 追踪与具体协议类型无关,故用默认 picker 即可
+    /// 确定性复现。
+    #[test]
+    fn fullscreen_morph_keeps_cover_protocol_stable() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0);
+
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .tracks_cache
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.clone());
+        }
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+        app.state.cover_cache.insert(url.clone(), Arc::new(img));
+        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正建出协议条目。
+        app.state.last_sel_change = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+
+        // 稳态老布局:渲一帧建出封面协议条目,记录其稳态 dims。
+        t.draw(|f| super::draw(f, &app))?;
+        let steady_dims = app
+            .state
+            .cover_protocols
+            .borrow()
+            .get(&url)
+            .map(|entry| entry.1);
+        assert!(steady_dims.is_some(), "稳态老布局应已建出封面协议条目");
+
+        // 进入全屏,推进若干形变帧(均未抵达满值,保持 !settled)。每帧后协议 dims 必须
+        // 仍是稳态值 —— 证明 now_playing 消失面板没有在形变中重建协议。
+        app.state.fullscreen_pos.enter();
+        for _ in 0..5 {
+            app.state.fullscreen_pos.tick();
+            assert!(!app.state.fullscreen_pos.settled(), "测试需停留在形变中途");
+            t.draw(|f| super::draw(f, &app))?;
+            let dims_now = app
+                .state
+                .cover_protocols
+                .borrow()
+                .get(&url)
+                .map(|entry| entry.1);
+            assert_eq!(
+                dims_now, steady_dims,
+                "形变期封面协议被重建(churn),dims 漂移"
+            );
+        }
+        Ok(())
+    }
 
     /// 退出收缩动画中途一帧:边框已向内收,框外清成背景、框内保留界面内容。
     #[test]
@@ -114,6 +260,40 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!("退出收缩朝左下锚点:收缩框偏左下、非居中", t.backend());
+        Ok(())
+    }
+
+    /// 全屏稳态一帧:只剩 cover(左)/ lyrics(右)/ spectrum + transport(贴底通栏),
+    /// 顶栏 / 侧栏 / now_playing 全部退场。
+    #[test]
+    fn fullscreen_steady_snapshot() -> color_eyre::Result<()> {
+        let app = app_in_fullscreen();
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "全屏稳态:cover 左 / lyrics 右 / spectrum+transport 贴底",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏形变中途一帧:封面右→左、歌词左→右对穿,消失面板收缩中。
+    #[test]
+    fn fullscreen_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_in_fullscreen();
+        // 覆盖成形变中途:expanding 推进 9 tick(约半程,未到满)。
+        let mut anim = Transition::expanding(18);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.fullscreen_pos = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "全屏形变中途:封面右→左、歌词左→右对穿、消失面板收缩",
+            t.backend()
+        );
         Ok(())
     }
 }

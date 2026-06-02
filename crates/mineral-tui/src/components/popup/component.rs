@@ -39,7 +39,33 @@ pub(crate) struct Chrome {
 
     /// 是否播放中心缩放弹出/收起动画;`false` 则瞬时显示。
     pub(crate) animated: bool,
+
+    /// 是否贴非封面侧停靠(抽屉式):`true` 走「贴边 + 仅水平 grow」,停靠侧由当前布局决定
+    /// (全屏贴右 / 否则贴左)以避开封面;`false` 居中弹出(对话框)。
+    pub(crate) dock: bool,
 }
+
+/// 停靠浮层(抽屉式)避开封面的那一侧。
+#[derive(Clone, Copy)]
+enum Dock {
+    /// 贴左(old layout:封面在右栏)。
+    Left,
+
+    /// 贴右(全屏:封面在左半)。
+    Right,
+}
+
+/// 左停靠(old layout,封面在右栏)宽度百分比。
+const DOCK_LEFT_PCT: u16 = 36;
+
+/// 右停靠(全屏,封面在左)宽度百分比。
+const DOCK_RIGHT_PCT: u16 = 46;
+
+/// 全屏右停靠的高度百分比(垂直居中)。
+const DOCK_FS_H_PCT: u16 = 90;
+
+/// old layout 顶栏行数:左停靠浮层从其下顶对齐,盖住其下的 playlist / lyrics,只留顶栏。
+const DOCK_TOPBAR: u16 = 1;
 
 /// 浮层对一次按键的响应。
 pub(crate) enum OverlayResponse {
@@ -144,7 +170,16 @@ pub(crate) fn render_overlay<O: Overlay>(
     theme: &Theme,
 ) {
     let c = overlay.chrome();
-    let base = centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h);
+    // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
+    let dock = c.dock.then_some(if ctx.fullscreen {
+        Dock::Right
+    } else {
+        Dock::Left
+    });
+    let base = match dock {
+        Some(d) => dock_rect(area, d),
+        None => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
+    };
     if scale >= FULL_SCALE {
         // 完全展开:整 cell 外框 + 内容。
         if base.width < 4 || base.height < 3 {
@@ -156,8 +191,106 @@ pub(crate) fn render_overlay<O: Overlay>(
         frame.render_widget(block, base);
         overlay.render_content(frame, inner, ctx, theme);
     } else {
-        // 动画途中:画一个从中心按 1/8 精度平滑膨胀的色块(无边框 / 无内容,避免 reflow)。
-        draw_shell(frame, base, scale, theme);
+        // 动画途中(无边框 / 无内容,避免 reflow):停靠浮层走「贴边 + 仅水平 grow」,
+        // 居中浮层走「中心双轴缩放」。
+        match dock {
+            Some(d) => draw_h_grow_shell(frame, base, d, scale, theme),
+            None => draw_shell(frame, base, scale, theme),
+        }
+    }
+}
+
+/// 计算停靠浮层「完全展开」矩形,按侧分别布局(避开另一侧的封面):
+///   - 左停靠(old layout):贴左缘、从顶栏下**顶对齐 + 满高**,盖住其下 playlist / lyrics,只留顶栏;
+///   - 右停靠(全屏):贴右缘、垂直居中、占 [`DOCK_FS_H_PCT`] 高(较高)。
+fn dock_rect(area: Rect, dock: Dock) -> Rect {
+    match dock {
+        Dock::Left => {
+            let w = pct_of(area.width, DOCK_LEFT_PCT);
+            let top = DOCK_TOPBAR.min(area.height);
+            Rect::new(area.x, area.y + top, w, area.height.saturating_sub(top))
+        }
+        Dock::Right => {
+            let w = pct_of(area.width, DOCK_RIGHT_PCT);
+            let h = pct_of(area.height, DOCK_FS_H_PCT);
+            let y = area.y + area.height.saturating_sub(h) / 2;
+            Rect::new(area.right().saturating_sub(w), y, w, h)
+        }
+    }
+}
+
+/// 按百分比取尺寸,钳到 `[0, total]`(不碰 `as` 强转)。
+fn pct_of(total: u16, p: u16) -> u16 {
+    u16::try_from(u32::from(total) * u32::from(p) / 100)
+        .unwrap_or(total)
+        .min(total)
+}
+
+/// 停靠浮层的进退场动画:满高不变,只在水平方向从停靠边缘按 `scale`(千分比)长出 / 收回,
+/// 生长边用 1/8 cell 八分块平滑(对齐 [`draw_shell`] 的精度)。长满后由 [`render_overlay`]
+/// 切成带边框面板 + 内容。
+fn draw_h_grow_shell(frame: &mut Frame<'_>, full: Rect, dock: Dock, scale: u16, theme: &Theme) {
+    if full.width == 0 || full.height == 0 {
+        return;
+    }
+    let full_w_e = u32::from(full.width) * 8;
+    let cur_w_e = full_w_e * u32::from(scale) / u32::from(FULL_SCALE);
+    // 太窄画不出有意义面板,跳过这一帧。
+    if cur_w_e < 8 {
+        return;
+    }
+
+    // 1/8 坐标系:停靠边缘固定,生长边按 cur_w_e 推进。
+    let left_edge_e = u32::from(full.x) * 8;
+    let right_edge_e = u32::from(full.right()) * 8;
+    let (left_e, right_e) = match dock {
+        Dock::Left => (left_edge_e, left_edge_e + cur_w_e),
+        Dock::Right => (right_edge_e.saturating_sub(cur_w_e), right_edge_e),
+    };
+    let col0 = left_e / 8;
+    let col1 = right_e.div_ceil(8);
+
+    // 先 Clear 包围盒(满高),防底层 UI 从边缘格透出。
+    let outer = Rect::new(
+        u16::try_from(col0).unwrap_or(full.x),
+        full.y,
+        u16::try_from(col1.saturating_sub(col0)).unwrap_or(0),
+        full.height,
+    );
+    frame.render_widget(Clear, outer);
+
+    // 体色随 scale 从骨架色 surface1 渐变到完成态面板体色 mantle,切带边框面板时体色连续。
+    let fill = crate::render::color::lerp_color(
+        theme.surface1,
+        theme.mantle,
+        u64::from(scale),
+        u64::from(FULL_SCALE),
+    );
+    let bg = theme.base;
+    let y1 = full.y.saturating_add(full.height);
+    let buf = frame.buffer_mut();
+    for col in col0..col1 {
+        let c_lo = col * 8;
+        let c_hi = c_lo + 8;
+        let hcov = right_e.min(c_hi).saturating_sub(left_e.max(c_lo));
+        if hcov == 0 {
+            continue;
+        }
+        let (glyph, style) = if hcov >= 8 {
+            ("█", Style::new().fg(fill))
+        } else {
+            // 分数生长边:左停靠生长边在右(左对齐填充);右停靠生长边在左(反色右对齐填充)。
+            match dock {
+                Dock::Left => (left_eighth(hcov), Style::new().fg(fill)),
+                Dock::Right => (left_eighth(8 - hcov), Style::new().fg(bg).bg(fill)),
+            }
+        };
+        let Ok(x) = u16::try_from(col) else {
+            continue;
+        };
+        for y in full.y..y1 {
+            buf.set_string(x, y, glyph, style);
+        }
     }
 }
 

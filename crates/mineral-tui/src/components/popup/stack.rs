@@ -15,8 +15,8 @@ use crate::render::anim::Transition;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 
-/// 弹出 / 收起动画时长(tick 数)。主循环 60fps、每 tick 推进一步,12 tick ≈ 200ms。
-const ANIM_TICKS: u16 = 12;
+/// 弹出 / 收起动画时长(tick 数)。主循环 60fps、每 tick 推进一步,18 tick ≈ 300ms。
+const ANIM_TICKS: u16 = 18;
 
 /// 不动画时用的"一帧到位"时长。
 const INSTANT_TICKS: u16 = 1;
@@ -154,6 +154,11 @@ impl OverlayStack {
             let focused = Some(i) == top;
             render_overlay(frame, area, &m.kind, m.anim.eased(), focused, ctx, theme);
         }
+    }
+
+    /// 当前栈内浮层数(含正在退场、尚未被 [`Self::tick`] 移除的)。
+    pub(crate) fn len(&self) -> usize {
+        self.stack.len()
     }
 
     /// 栈内是否有断连提示(据此进入 fatal 模式:跳过后端同步、任意键退出)。

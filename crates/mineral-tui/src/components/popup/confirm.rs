@@ -26,13 +26,14 @@ impl Overlay for ConfirmOverlay {
             max_w: 64,
             max_h: 9,
             animated: true,
+            dock: false,
         }
     }
 
     fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
         base_block(theme)
             .border_style(Style::new().fg(theme.accent))
-            .title(Line::from(" quit tuimu? ").style(Style::new().fg(theme.subtext)))
+            .title(Line::from(" quit mineral? ").style(Style::new().fg(theme.subtext)))
     }
 
     fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, _ctx: &AppState, theme: &Theme) {

@@ -184,7 +184,8 @@ impl App {
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
                 self.state.view_pos.tick();
-                self.overlays.tick();
+                self.state.fullscreen_pos.tick();
+                self.tick_overlays();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
@@ -202,6 +203,22 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// 推进浮层动画一拍;并处理「全屏下浮层刚被移除」的封面残影。
+    ///
+    /// 居中浮层(如 quit 确认)在全屏时会压住左侧封面的中段。kitty 协议把整行 unicode
+    /// 占位符打包在该行**最左 cell**、其余 cell `set_skip(true)`,而 ratatui 的 buffer diff
+    /// 跳过未变 cell —— 浮层只盖了封面中段、没碰最左驱动 cell,关闭后那几行不会自行重发,
+    /// 中段残留浮层底色(残影)。这里在浮层(退场动画放完)真正出栈的那一拍,清一次封面协议
+    /// 缓存:下一帧 `cover_image` 按需重建、重新 transmit + 全量 re-place,残影消除。只在出栈
+    /// 瞬间清一次(非每帧),不触发每帧重新解码 / base64 编码的卡顿。
+    fn tick_overlays(&mut self) {
+        let before = self.overlays.len();
+        self.overlays.tick();
+        if self.state.fullscreen && self.overlays.len() < before {
+            self.state.cover_protocols.borrow_mut().clear();
+        }
     }
 
     /// 推进整屏转场动画一帧。`settled()`(进度抵达目标)时收尾:退出转场(`leaving()`)置
@@ -345,6 +362,13 @@ impl App {
             return;
         }
 
+        // `z`:进/退全屏(toggle);Tab/q/t/playback 在全屏照常流转,
+        // 仅屏蔽搜索 `/` 与列表导航(见下方两处 `!self.state.fullscreen` 闸)。
+        if key.code == KeyCode::Char('z') {
+            self.toggle_fullscreen();
+            return;
+        }
+
         // Tab 开 queue(光标定位到在播歌);q 开退出确认。
         if key.code == KeyCode::Tab {
             let sel = self.state.queue_current_index().unwrap_or(0);
@@ -362,7 +386,7 @@ impl App {
             return;
         }
 
-        if key.code == KeyCode::Char('/') {
+        if !self.state.fullscreen && key.code == KeyCode::Char('/') {
             self.state.search_mode = true;
             self.state.search_q.clear();
             return;
@@ -372,9 +396,22 @@ impl App {
             return;
         }
 
-        match self.state.view {
-            View::Playlists => self.handle_playlists_key(key),
-            View::Library => self.handle_library_key(key),
+        // 全屏态屏蔽列表导航(屏上无列表);浏览态才路由到对应 view。
+        if !self.state.fullscreen {
+            match self.state.view {
+                View::Playlists => self.handle_playlists_key(key),
+                View::Library => self.handle_library_key(key),
+            }
+        }
+    }
+
+    /// 切换全屏播放态:翻转 `fullscreen` 标志并驱动形变进退场(`eased_in_out`,可中途反向)。
+    fn toggle_fullscreen(&mut self) {
+        self.state.fullscreen = !self.state.fullscreen;
+        if self.state.fullscreen {
+            self.state.fullscreen_pos.enter();
+        } else {
+            self.state.fullscreen_pos.leave();
         }
     }
 
@@ -662,6 +699,52 @@ mod tests {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
     }
 
+    /// 回归:全屏下关闭居中浮层(quit 确认)后,封面协议缓存被清空 —— 据此下一帧重建并全量
+    /// re-place,消除「居中浮层压过封面中段、关闭后 kitty 行不自重发」留下的残影。
+    #[test]
+    fn fullscreen_overlay_close_clears_cover_protocol() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::test_support::app_in_fullscreen;
+
+        let mut app = app_in_fullscreen();
+        assert!(app.state.fullscreen, "前置:已稳态进入全屏");
+
+        // 模拟封面已渲染:塞一个协议缓存条目。
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
+        let proto = app.picker.new_resize_protocol(img);
+        app.state
+            .cover_protocols
+            .borrow_mut()
+            .insert(url, (proto, (10, 10)));
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "前置:封面协议条目已就位"
+        );
+
+        // 开一个居中浮层(quit 确认)并推满进场动画。开着的全程 len 不减,协议缓存不应被动。
+        app.overlays.push(super::OverlayKind::confirm());
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "浮层开着时(未出栈)不应清空封面协议"
+        );
+
+        // 关闭并推满退场动画 → 浮层出栈 → 该拍清空封面协议。
+        app.overlays.close_top();
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        assert!(
+            app.state.cover_protocols.borrow().is_empty(),
+            "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
+        );
+        Ok(())
+    }
+
     /// 集成回归:Tab 开队列 → 按键经 dispatch 路由到 queue 浮层移动光标,且**不被
     /// server snapshot tick 弹回**。此前 `apply_player_snapshot` 每帧用 server 的
     /// 「在播锚点」覆盖 UI 光标,导致按键看似无效;现在光标归 overlay 私有、只 clamp。
@@ -864,5 +947,52 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// `z` 进/退全屏(toggle):进场目标置满(非 leaving),再按退场目标归零(leaving)。
+    #[test]
+    fn z_toggles_fullscreen() {
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        assert!(!app.state.fullscreen, "初始非全屏");
+
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen, "z 进全屏");
+        assert!(!app.state.fullscreen_pos.leaving(), "进场:形变目标置满");
+
+        press(&mut app, KeyCode::Char('z'));
+        assert!(!app.state.fullscreen, "再按 z 退全屏");
+        assert!(app.state.fullscreen_pos.leaving(), "退场:形变目标归零");
+    }
+
+    /// 全屏态屏蔽列表导航 + 搜索 `/`;
+    #[test]
+    fn fullscreen_blocks_nav_and_search() {
+        let mut app = app_with_library(5, /*sel_track*/ 2);
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen);
+
+        // j / g 导航被吞,选中不变。
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.state.sel_track, 2, "全屏屏蔽列表导航");
+
+        // `/` 不进搜索态。
+        press(&mut app, KeyCode::Char('/'));
+        assert!(!app.state.search_mode, "全屏屏蔽搜索 `/`");
+    }
+
+    /// 全屏态内 `Tab` 仍打开 queue 浮层(浮层是独立层),光标落在在播歌。
+    #[test]
+    fn fullscreen_tab_still_opens_queue() {
+        let mut app = app_with_queue(4, /*current_idx*/ 1);
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.overlays.queue_sel(),
+            Some(1),
+            "全屏内 Tab 仍开 queue,光标在在播歌"
+        );
     }
 }

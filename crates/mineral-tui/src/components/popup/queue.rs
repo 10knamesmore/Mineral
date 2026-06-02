@@ -55,6 +55,7 @@ impl Overlay for QueueOverlay {
             max_w: 96,
             max_h: 32,
             animated: true,
+            dock: true,
         }
     }
 
@@ -308,7 +309,7 @@ mod tests {
         Ok(())
     }
 
-    /// 小终端(backend=60)浮层被钳到 min_w=40 → inner 38 < 44 → Song 档:
+    /// 小终端(backend=60)停靠浮层宽 = 左 64% ≈ 38 → inner < 44 → Song 档:
     /// 只剩 # / title / len,artist 省去。
     #[test]
     fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
@@ -325,7 +326,7 @@ mod tests {
         Ok(())
     }
 
-    /// 弹出动画半程(scale=500):只画缩放后的空壳边框,无表格内容。
+    /// 贴边水平 grow 半程(scale=500):只画从停靠边缘水平长出的满高空壳,无表格内容。
     #[test]
     fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
@@ -342,14 +343,17 @@ mod tests {
                 &Theme::default(),
             );
         })?;
-        crate::test_support::assert_snap!("队列浮层:弹出动画半程(scale=500)空壳", t.backend());
+        crate::test_support::assert_snap!(
+            "队列浮层:贴边水平 grow 半程(scale=500)满高空壳",
+            t.backend()
+        );
         Ok(())
     }
 
-    /// 弹出动画 scale=510:宽高都落在非整 cell,四条边各有 1/8 块过渡(上/下沿下八分块、
-    /// 左/右沿左八分块、角点垂直近似),验证双轴平滑。
+    /// 水平 grow scale=505:生长边(右)落在非整 cell,用左八分块 1/8 平滑过渡,
+    /// 验证水平 grow 不一格一格跳。
     #[test]
-    fn queue_smooth_both_axes_snapshot() -> color_eyre::Result<()> {
+    fn queue_h_grow_smooth_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         let ctx = ctx_with_queue(3, None);
         let overlay = QueueOverlay::new(0);
@@ -358,13 +362,30 @@ mod tests {
                 f,
                 f.area(),
                 &overlay,
-                /*scale*/ 510,
+                /*scale*/ 505,
                 true,
                 &ctx,
                 &Theme::default(),
             );
         })?;
-        crate::test_support::assert_snap!("队列浮层:弹出动画 scale=510 双轴 1/8 平滑", t.backend());
+        crate::test_support::assert_snap!(
+            "队列浮层:贴边水平 grow(scale=505)生长边 1/8 八分块平滑",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏布局下停靠右半(`fullscreen=true`),完全展开:浮层贴右缘、避开左侧封面。
+    #[test]
+    fn queue_fullscreen_dock_right_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = ctx_with_queue(3, Some(1));
+        ctx.fullscreen = true;
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!("队列浮层:全屏布局停靠右半(避开左侧封面)", t.backend());
         Ok(())
     }
 

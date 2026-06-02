@@ -21,6 +21,9 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 /// Playlists ↔ Library 切换过渡时长(tick 数);≈ 18 tick ≈ 288ms,与整屏转场同速。
 const SWEEP_TICKS: u16 = 18;
 
+/// 全屏播放进退场形变时长(tick 数);≈ 18 tick ≈ 288ms,与 sidebar sweep 同速。
+const FULLSCREEN_TICKS: u16 = 18;
+
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
 ///
 /// dims 用于 invalidation —— 跟当前 area 不一致就重建 protocol,避免字号 / 终端
@@ -60,6 +63,13 @@ pub struct AppState {
     /// 左栏 Playlists ↔ Library 横向过渡位置:`0` = Playlists、满值 = Library。
     /// 切到 Library 调 `enter`、回 Playlists 调 `leave`,中途再反向只改 target 不跳变。
     pub view_pos: Transition,
+
+    /// 是否处于全屏播放态。切换时立即设为目标值供按键路由;渲染端的形变进度看 [`Self::fullscreen_pos`]。
+    pub fullscreen: bool,
+
+    /// 全屏播放进退场形变进度:`0` = 浏览态、满值 = 全屏。进调 `enter`、退调 `leave`,
+    /// 中途再反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
+    pub fullscreen_pos: Transition,
 
     /// 已加载的歌单(跨 channel 合并;按到达顺序 append)。
     pub playlists: Vec<PlaylistView>,
@@ -168,6 +178,8 @@ impl AppState {
         Self {
             view: View::Playlists,
             view_pos: Transition::new(SWEEP_TICKS),
+            fullscreen: false,
+            fullscreen_pos: Transition::new(FULLSCREEN_TICKS),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),

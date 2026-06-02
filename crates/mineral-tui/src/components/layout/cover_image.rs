@@ -42,6 +42,15 @@ pub fn render_or_fallback(
         cover::render(frame, target, fallback_seed, theme);
         return;
     };
+    // 全屏形变期:此处的唯一调用方是正在收缩 / 生长的 now_playing 消失面板,其尺寸逐帧
+    // 变。若在形变中驱动有状态封面协议,会每帧按新 dims `new_resize_protocol` 重建 ——
+    // kitty 每次重建分配新 image id 并在移动位置 transmit,稳态落地后占位符指向的 id 已被
+    // 后续帧覆盖 / 终端不再持有,封面整块空白且按 url 粘死(重选同曲 dims 不变不再重建,
+    // 永不重发)。形变期一律让位给 `draw_fullscreen_cover` 的程序化封面,真图只在两端稳态
+    // 渲染。
+    if !state.fullscreen_pos.settled() {
+        return;
+    }
     let Some(image) = state.cover_cache.get(url).cloned() else {
         cover::render(frame, target, fallback_seed, theme);
         return;
