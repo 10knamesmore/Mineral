@@ -4,10 +4,10 @@ description: "Cover 中途:曲目从右覆盖、左缘竖线"
 expression: t.backend()
 ---
 "╭ playlists ────────╭ tracks / EndSerena"
-"│  name      source │    # title        "
-"│▌ EndSerena ♫ netea│    ♫ LoveLetterTy "
-"│  The Power ♫ netea│▌ ♥ 1 Palisade     "
-"│  本地音乐  □ local│    2 Gjs          " Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " ")]
+"│  name      source │    #    title     "
+"│▌ EndSerena ♫ netea│    ♫    LoveLetter"
+"│  The Power ♫ netea│▌ ♥ 1    Palisade  "
+"│  本地音乐  □ local│    2    Gjs       " Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " ")]
 "│                   │                   "
 "│                   │                   "
 "│                   │                   "

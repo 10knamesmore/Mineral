@@ -80,27 +80,20 @@ impl Overlay for QueueOverlay {
 
     fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, ctx: &AppState, theme: &Theme) {
         let current_id = ctx.playback.track.as_ref().map(|t| &t.id);
-        let header = Row::new(vec![
-            Cell::from("#"),
-            Cell::from("title"),
-            Cell::from("artist"),
-            Cell::from("len"),
-        ])
-        .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+        // 按浮层内宽选列档:窄浮层放不下 artist 时退到「歌本身」(# title len)。
+        let cols = QueueCols::for_width(inner.width);
+
+        let header = Row::new(cols.header_cells())
+            .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
         let rows: Vec<Row<'_>> = ctx
             .queue
             .iter()
             .enumerate()
-            .map(|(i, s)| build_row(i, s, current_id, theme))
+            .map(|(i, s)| build_row(i, s, current_id, theme, cols))
             .collect();
 
-        let widths = [
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(16),
-            Constraint::Length(6),
-        ];
+        let widths = cols.widths();
 
         let table = Table::new(rows, widths)
             .header(header)
@@ -155,12 +148,64 @@ impl Overlay for QueueOverlay {
     }
 }
 
+/// queue 表格的列档,按浮层内宽选(见 [`QueueCols::for_width`])。
+#[derive(Clone, Copy)]
+enum QueueCols {
+    /// 宽档:# / title / artist / len,文本列比例 Fill(3:2)。
+    Full,
+
+    /// 窄档:# / title / len —— artist 放不下,退到「歌本身」。
+    Song,
+}
+
+impl QueueCols {
+    /// 按浮层内宽 `width` 选档。阈值 44:低于此 title/artist 各分不到约 14 格,
+    /// 退到只剩歌名。
+    fn for_width(width: u16) -> Self {
+        if width < 44 { Self::Song } else { Self::Full }
+    }
+
+    /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
+    fn header_cells(self) -> Vec<Cell<'static>> {
+        let mut cells = vec![Cell::from("#"), Cell::from("title")];
+        if matches!(self, Self::Full) {
+            cells.push(Cell::from("artist"));
+        }
+        cells.push(Cell::from("len"));
+        cells
+    }
+
+    /// 列宽约束:`#` / len 定宽,文本列比例 Fill。
+    fn widths(self) -> Vec<Constraint> {
+        match self {
+            Self::Full => vec![
+                Constraint::Length(3),
+                Constraint::Fill(3),
+                Constraint::Fill(2),
+                Constraint::Length(6),
+            ],
+            Self::Song => vec![
+                Constraint::Length(3),
+                Constraint::Fill(1),
+                Constraint::Length(6),
+            ],
+        }
+    }
+}
+
 /// 把一首歌组成 queue 表格的一行。
 ///
 /// 当前在播行:行首 `▶` + 整行 `accent` 前景(与选中行的「背景块」区分);其余行
 /// 序号用暗色,歌名用主文本色,艺术家用次要色,层级分明。选中行的高亮背景由
 /// Table 的 `row_highlight_style` 叠加,与在播前景着色天然兼容(背景块视觉优先)。
-fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &Theme) -> Row<'a> {
+/// `cols` 决定列集:窄档省去 artist。
+fn build_row<'a>(
+    idx: usize,
+    s: &'a Song,
+    current_id: Option<&SongId>,
+    theme: &Theme,
+    cols: QueueCols,
+) -> Row<'a> {
     let is_current = current_id.is_some_and(|cid| cid == &s.id);
     let (lead, title_fg, sub_fg) = if is_current {
         (
@@ -176,20 +221,22 @@ fn build_row<'a>(idx: usize, s: &'a Song, current_id: Option<&SongId>, theme: &T
         )
     };
 
-    let artist = s
-        .artists
-        .first()
-        .map_or_else(|| "—".to_owned(), |a| a.name.clone());
-
-    Row::new(vec![
+    let mut cells = vec![
         Cell::from(lead),
         Cell::from(Span::styled(s.name.clone(), Style::new().fg(title_fg))),
-        Cell::from(Span::styled(artist, Style::new().fg(sub_fg))),
-        Cell::from(Span::styled(
-            format_ms(s.duration_ms),
-            Style::new().fg(sub_fg),
-        )),
-    ])
+    ];
+    if matches!(cols, QueueCols::Full) {
+        let artist = s
+            .artists
+            .first()
+            .map_or_else(|| "—".to_owned(), |a| a.name.clone());
+        cells.push(Cell::from(Span::styled(artist, Style::new().fg(sub_fg))));
+    }
+    cells.push(Cell::from(Span::styled(
+        format_ms(s.duration_ms),
+        Style::new().fg(sub_fg),
+    )));
+    Row::new(cells)
 }
 
 /// 拼 ` n / total ` 的 footer 标签;空 queue 显示 `0 / 0`。
@@ -245,9 +292,10 @@ mod tests {
     }
 
     /// EndSerenading 前 3 曲 + 当前在播标记(下标 1)+ 聚焦,完全展开。
+    /// backend=100 → 浮层够宽落 Full 档(# / title / artist / len)。
     #[test]
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let ctx = ctx_with_queue(3, Some(1));
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
@@ -255,6 +303,23 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 小终端(backend=60)浮层被钳到 min_w=40 → inner 38 < 44 → Song 档:
+    /// 只剩 # / title / len,artist 省去。
+    #[test]
+    fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(60, 20))?;
+        let ctx = ctx_with_queue(3, Some(1));
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:窄浮层退到 Song 档(只剩歌名,无 artist)",
             t.backend()
         );
         Ok(())

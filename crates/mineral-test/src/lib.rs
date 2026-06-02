@@ -23,7 +23,7 @@ pub mod mock;
 // macros 模块里的宏经 `#[macro_export]` 挂在 crate 根,无需在此 re-export。
 mod macros;
 
-pub use builders::{song, with_artist, with_duration, with_name, with_source};
+pub use builders::{song, with_album, with_artist, with_duration, with_name, with_source};
 pub use fixtures::{chinese_football, endserenading};
 pub use lyrics::{feiyu_lyrics, feiyu_song, qianzai_lyrics, qianzai_song};
 pub use strategies::arb_song;

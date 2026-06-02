@@ -22,7 +22,7 @@ use crate::view_model::{PlaylistView, SongView};
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
     assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
-    qianzai_song, song, with_duration, with_name,
+    qianzai_song, song, with_album, with_artist, with_duration, with_name,
 };
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -131,6 +131,40 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
     s.current = tracks.first().cloned();
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
+    s
+}
+
+/// 填 3 首**带 artist + album** 的曲目(短英文 / 长英文 / CJK 混排),专用于验证
+/// Full 档 album 列「有内容」时的多列渲染 —— 其余 fixture 的 album 多为空,覆盖不到。
+/// 每曲 3:30,选中第 0 首(当前在播)。
+pub(crate) fn state_with_album() -> AppState {
+    let mut s = AppState::empty();
+    s.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
+    s.view = View::Library;
+
+    let make = |name: &str, artist: &str, album: &str| {
+        with_album(
+            with_artist(with_duration(with_name(song(name), name), 210_000), artist),
+            album,
+        )
+    };
+    let tracks = [
+        make("Bones", "HONNE", "no song"),
+        make("Location Unknown", "HONNE", "Warm on a Cold Night"),
+        make("无", "草东没有派对", "丑奴儿"),
+    ];
+
+    let views = tracks
+        .iter()
+        .map(|t| SongView {
+            data: t.clone(),
+            loved: false,
+            plays: None,
+        })
+        .collect::<Vec<SongView>>();
+    s.current = tracks.first().cloned();
+    s.tracks_cache
+        .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s
 }
 
