@@ -15,9 +15,9 @@ use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
-use crate::cover::CoverFetcher;
-use crate::state::{AppState, LyricExtra, View};
-use crate::view_model::{PlaylistView, SongView};
+use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::state::{AppState, LyricExtra, View};
+use crate::runtime::view_model::{PlaylistView, SongView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{

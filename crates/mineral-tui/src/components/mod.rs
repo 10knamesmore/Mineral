@@ -1,11 +1,5 @@
-//! UI 组件子树。
+//! UI 组件子树,按渲染层级分组:平铺基本层、浮层、通知层。
 
-pub mod cover;
-pub mod cover_image;
-pub mod lyrics;
-pub mod now_playing;
-pub mod overlay;
-pub mod sidebar;
-pub mod spectrum;
-pub mod top_status;
-pub mod transport;
+pub mod layout;
+pub mod popup;
+pub mod toast;

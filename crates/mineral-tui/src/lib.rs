@@ -3,28 +3,14 @@
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
-mod anim;
 mod app;
-mod cells;
-mod color;
 mod components;
-mod cover;
-mod daemon;
-mod download_toast;
-mod layout;
-mod notifications;
-mod playback;
-mod prefetch;
-mod remote;
-mod signal;
-mod state;
+mod render;
+mod runtime;
 #[cfg(test)]
 mod test_support;
-mod theme;
-mod toast;
 mod tui;
 mod view;
-mod view_model;
 
 use std::sync::Arc;
 
@@ -34,8 +20,8 @@ use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
 use app::App;
-use cover::CoverFetcher;
-use remote::RemoteClient;
+use runtime::cover_fetch::CoverFetcher;
+use runtime::remote::RemoteClient;
 use tui::Tui;
 
 /// TUI 的启动模式。决定 server 的来源与生命周期。
@@ -82,7 +68,7 @@ pub async fn run(
     match launch {
         Launch::Auto => {
             let socket = mineral_paths::socket_path()?;
-            let (client, handle) = daemon::ensure(&socket).await?;
+            let (client, handle) = runtime::daemon::ensure(&socket).await?;
             let result = run_app(Arc::new(client), cover_fetcher);
             // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
             // (handle 为 None)留着不动。

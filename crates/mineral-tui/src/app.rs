@@ -18,13 +18,13 @@ use mineral_task::TaskEvent;
 use ratatui::layout::Position;
 use ratatui_image::picker::Picker;
 
-use crate::anim::Transition;
-use crate::components::overlay::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
-use crate::cover::CoverFetcher;
-use crate::download_toast::DownloadNotifier;
-use crate::notifications::Notifications;
-use crate::state::{AppState, View};
-use crate::theme::Theme;
+use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
+use crate::components::toast::download_toast::DownloadNotifier;
+use crate::components::toast::notifications::Notifications;
+use crate::render::anim::Transition;
+use crate::render::theme::Theme;
+use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::state::{AppState, View};
 use crate::tui::Tui;
 use crate::view::draw;
 
@@ -136,7 +136,7 @@ impl App {
 
         // 退出信号 watcher:SIGTERM / SIGINT / SIGHUP 进来时不再 silent kill,而是由
         // 后台 task 记日志 + 置标志,主循环据此走正常退出(`Tui::exit` 还原终端)。
-        let shutdown = crate::signal::spawn_watcher()?;
+        let shutdown = crate::runtime::signal::spawn_watcher()?;
 
         while !self.should_quit {
             if shutdown.load(Ordering::Acquire) {
@@ -187,7 +187,7 @@ impl App {
                 self.overlays.tick();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
-                crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
+                crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.cover_loading = self.state.cover_pending.len();
                 // 每帧把下载进度喂进通知层(翻译成常驻进度 / 完成 flash),再推进所有通知动画。
@@ -654,7 +654,7 @@ mod tests {
     use mineral_model::SourceKind;
 
     use super::{App, TRANSITION_TICKS};
-    use crate::anim::Transition;
+    use crate::render::anim::Transition;
     use crate::test_support::{app_with_library, app_with_queue, endserenading};
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
