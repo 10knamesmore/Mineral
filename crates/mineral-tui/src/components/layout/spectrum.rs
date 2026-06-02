@@ -14,7 +14,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::render::color::{lerp_color, rotate_hue};
 use crate::render::theme::Theme;
@@ -253,15 +253,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Th
         return;
     }
 
-    let labels_h = if inner.height >= 3 { 1 } else { 0 };
-    let bars_h = inner.height.saturating_sub(labels_h);
-    let bars_area = Rect::new(inner.x, inner.y, inner.width, bars_h);
+    let bars_area = Rect::new(inner.x, inner.y, inner.width, inner.height);
     paint_bars(frame, bars_area, state, theme);
-
-    if labels_h == 1 {
-        let label_area = Rect::new(inner.x, inner.y + bars_h, inner.width, 1);
-        paint_labels(frame, label_area, theme);
-    }
 }
 
 /// 渲染整个频谱条阵:每列一根柱 + 渐变色 + 余韵尾迹 + peak cap。
@@ -361,16 +354,6 @@ fn partial_glyph(units: u16) -> &'static str {
         6 => "▆",
         _ => "▇",
     }
-}
-
-/// 在频谱底下渲染一行 `20Hz ... 20kHz` 的频率范围标签;窗口太窄(<12)时跳过。
-fn paint_labels(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-    if area.width < 12 {
-        return;
-    }
-    let spaces = " ".repeat(usize::from(area.width).saturating_sub(9));
-    let line = Line::from(format!("20Hz{spaces}20kHz")).style(Style::new().fg(theme.overlay));
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 #[cfg(test)]
