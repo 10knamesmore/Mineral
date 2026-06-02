@@ -7,6 +7,7 @@ mod command;
 mod engine;
 mod file_storage;
 mod handle;
+mod queue_slots;
 mod snapshot;
 mod tap;
 

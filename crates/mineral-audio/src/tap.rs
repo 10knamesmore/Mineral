@@ -2,11 +2,10 @@
 //! 供 UI 端的 spectrum FFT 消费。
 //!
 //! `Iterator::next` 在 cpal mixer 回调链路上,**绝对不能阻塞**:满了就丢
-//! (用户视角:旧样本对可视化无价值)。`sample_rate` 在构造时写进
-//! `Arc<AtomicU32>`,UI 端按需读取,跟随每首曲目变化。
+//! (用户视角:旧样本对可视化无价值)。采样率原子**不**在此维护——gapless 预排会提前
+//! 把下一曲 decoder append 进队列,若在构造时就写 sr 原子会让频谱提前切到下一曲采样率;
+//! 故 sr 原子的写入时机交由引擎在起播 / 边界轮转处精确控制。
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -14,6 +13,7 @@ use ringbuf::HeapProd;
 use ringbuf::traits::Producer;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
+use std::sync::Arc;
 
 /// 共享 producer 别名:一个 engine 生命期内多次切歌共用同一个 ringbuf 写端。
 ///
@@ -44,9 +44,8 @@ impl<S> TapSource<S>
 where
     S: Source<Item = f32>,
 {
-    /// 包装 `inner`,把它的 sample_rate 写进 `sr_atomic` 供 UI 端读取。
-    pub(crate) fn new(inner: S, producer: SharedProd, sr_atomic: &Arc<AtomicU32>) -> Self {
-        sr_atomic.store(u32::from(inner.sample_rate()), Ordering::Relaxed);
+    /// 包装 `inner`(采样率由引擎另行在合适时机写 sr 原子,见模块注释)。
+    pub(crate) fn new(inner: S, producer: SharedProd) -> Self {
         let channels = u16::from(inner.channels());
         Self {
             inner,

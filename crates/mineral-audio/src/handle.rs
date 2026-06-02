@@ -155,6 +155,30 @@ impl AudioHandle {
         });
     }
 
+    /// 预排下一曲(无 capture),供当前曲播完后无缝接续。
+    ///
+    /// 仅 `Remote` 走链下建流;不打断当前播放。缓冲不及时可用 [`Self::clear_next`] 撤销。
+    pub fn append_next(&self, url: MediaUrl) {
+        self.send(AudioCommand::AppendNext { url, capture: None });
+    }
+
+    /// 同 [`Self::append_next`],但把下载字节捕获到 `capture` 路径(供播完入缓存)。
+    ///
+    /// # Params:
+    ///   - `url`: 下一曲播放源(仅 `Remote` 时 capture 生效)
+    ///   - `capture`: 捕获落盘路径
+    pub fn append_next_capturing(&self, url: MediaUrl, capture: std::path::PathBuf) {
+        self.send(AudioCommand::AppendNext {
+            url,
+            capture: Some(capture),
+        });
+    }
+
+    /// 撤销尚未 append 的待建下一曲(已 append 则无效)。
+    pub fn clear_next(&self) {
+        self.send(AudioCommand::ClearNext);
+    }
+
     /// 暂停。
     pub fn pause(&self) {
         self.send(AudioCommand::Pause);
@@ -200,6 +224,8 @@ impl AudioHandle {
 mod tests {
     use std::time::Duration;
 
+    use mineral_model::MediaUrl;
+
     use crate::handle::AudioMode;
     use crate::snapshot::AudioBackend;
 
@@ -221,6 +247,9 @@ mod tests {
         handle.set_volume(50);
         handle.pause();
         handle.resume();
+        // gapless 预排命令也得被接受、不 panic(null 模式静默丢弃)。
+        handle.append_next(MediaUrl::remote("https://example.com/next.mp3")?);
+        handle.clear_next();
         handle.stop();
         assert_eq!(
             handle.snapshot().volume_pct,

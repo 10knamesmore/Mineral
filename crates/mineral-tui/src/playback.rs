@@ -137,6 +137,23 @@ mod tests {
         assert_eq!(with_track(4242, 0).duration_ms(), 4242);
     }
 
+    /// gapless 无缝边界:current_song 翻成新曲 + position 归零时,进度条按**新曲**时长重缩放
+    /// (分母取 `Song.duration_ms` 元数据),证明边界处 `position_ms` 的跳变是纯观感、不会出现
+    /// 「新位置 ÷ 旧时长」的错配。守卫 gapless 依赖的这条耦合。
+    #[test]
+    fn ratio_rescales_cleanly_across_gapless_track_flip() {
+        // 旧曲:200s,播到 180s → 9000 bps。
+        let mut pb = with_track(200_000, 180_000);
+        assert_eq!(pb.ratio_bps(), 9_000);
+        // 无缝边界:翻成新曲(100s),position 重置到 0。
+        pb.track = with_track(100_000, 0).track;
+        pb.position_ms = 0;
+        assert_eq!(pb.ratio_bps(), 0, "翻新曲后进度条应从头");
+        // 新曲播到 50s:按新曲 100s 分母 → 5000(而非旧曲 200s 的 2500)。
+        pb.position_ms = 50_000;
+        assert_eq!(pb.ratio_bps(), 5_000, "进度应按新曲时长重缩放,非旧曲");
+    }
+
     /// `apply_audio_snapshot`:position / playing / volume / backend / buffered_bps 全量灌入。
     #[test]
     fn apply_snapshot_propagates_buffered_bps() {

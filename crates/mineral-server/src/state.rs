@@ -35,15 +35,16 @@ pub(crate) struct State {
     /// 当前 lyrics 配对的歌 id(对不上 current_song 时不返回)。
     pub(crate) current_lyrics_song_id: Option<SongId>,
 
-    /// 已预拉的下一首播放 URL。
-    pub(crate) prefetched: Option<PlayUrl>,
-
-    /// 已对哪首歌触发过预拉(本歌只 fire 一次)。
+    /// 正在预拉(已发起 SongUrl 任务、URL 尚未回来)的下一曲 id;URL 到达时据此认领。
+    /// 切歌 / 采纳后复位,避免对同一 next 重复预拉。
     pub(crate) prefetch_fired_for: Option<SongId>,
 
     /// 当前正在 capture(边播边落盘)的曲;自然播完 → 入缓存,中途打断 → 删残件。
     /// 命中缓存直接本地播时为 `None`(无需 capture)。
     pub(crate) capturing: Option<Capturing>,
+
+    /// 已预排进 rodio 队列、等当前曲播完无缝接续的下一曲及其记账(gapless)。
+    pub(crate) queued: Option<crate::gapless::Queued>,
 }
 
 impl State {
@@ -59,9 +60,9 @@ impl State {
             play_mode: PlayMode::default(),
             current_lyrics: None,
             current_lyrics_song_id: None,
-            prefetched: None,
             prefetch_fired_for: None,
             capturing: None,
+            queued: None,
         }
     }
 

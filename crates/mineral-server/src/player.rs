@@ -22,15 +22,17 @@ use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 
 use crate::download::{self, Capturing};
+use crate::gapless;
 use crate::media_cache::MediaCache;
 use crate::queue::{next_in_queue, play_mode_str, prev_in_queue};
 use crate::state::State;
 
 /// 播放音质。后续接 config 时改读配置。
-const PLAYBACK_QUALITY: BitRate = BitRate::Exhigh;
+pub(crate) const PLAYBACK_QUALITY: BitRate = BitRate::Exhigh;
 
-/// auto-next 预拉触发距曲终的剩余时间(ms)。
-const PREFETCH_LEAD_MS: u64 = 5_000;
+/// gapless 预排触发距曲终的剩余时间(ms)。10s 窗口给下一曲充裕的链下建流 + 预缓冲时间,
+/// 配合「宁可有间隙不卡顿」的取舍,真正退化成 gap 的概率更低。
+pub(crate) const PREFETCH_LEAD_MS: u64 = 10_000;
 
 /// `p` 键的「回开头 vs 上一首」分界(ms)。
 const PREV_RESTART_THRESHOLD_MS: u64 = 3_000;
@@ -238,9 +240,35 @@ impl PlayerCore {
         &self.inner.persist
     }
 
-    /// 心跳用:是否已预拉好下一首的播放 URL。
+    /// 心跳用:是否已预排好下一首(gapless)。
     pub(crate) fn prefetched_ready(&self) -> bool {
-        self.inner.state.lock().prefetched.is_some()
+        self.inner.state.lock().queued.is_some()
+    }
+
+    /// 在锁内对播放状态跑一个闭包并返回其结果(gapless 编排在 [`crate::gapless`] 复用)。
+    /// **不要**在闭包里再调本方法 —— `parking_lot::Mutex` 不可重入。
+    ///
+    /// # Params:
+    ///   - `f`: 在 `&mut State` 上执行的闭包
+    pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        f(&mut self.inner.state.lock())
+    }
+
+    /// gapless 边界推进读已见 finished_seq(与 snapshot 的比对)。
+    pub(crate) fn last_seen_finished_seq(&self) -> u64 {
+        self.inner.last_seen_finished_seq.load(Ordering::Relaxed)
+    }
+
+    /// gapless 边界推进写已见 finished_seq(消费掉一次曲终事件)。
+    pub(crate) fn set_last_seen_finished_seq(&self, seq: u64) {
+        self.inner
+            .last_seen_finished_seq
+            .store(seq, Ordering::Relaxed);
+    }
+
+    /// 底层 audio handle 的播放状态快照(gapless 编排读 finished_seq / playing / 下完标记)。
+    pub(crate) fn audio_snapshot(&self) -> mineral_audio::AudioSnapshot {
+        self.inner.audio.snapshot()
     }
 
     /// 直通:client submit 任务(playlists/tracks 类 prefetch)。
@@ -292,7 +320,7 @@ impl PlayerCore {
             .as_ref()
             .map_or(PlaybackOrigin::Remote, |&(_, _, o)| o);
 
-        let (cached_url, interrupted) = {
+        let (cached_url, interrupted, stale_queued) = {
             let mut st = self.inner.state.lock();
             st.current_song = Some(song.clone());
             if let Some(idx) = st.queue.iter().position(|s| s.id == song.id) {
@@ -305,12 +333,14 @@ impl PlayerCore {
             st.prefetch_fired_for = None;
             // 打断上一首未完成的 capture(残件待删)。
             let interrupted = st.capturing.take();
-            // 命中 prefetch 的 take 出来,留 None。
-            let pre = match st.prefetched.take() {
-                Some(pu) if pu.song_id == song.id => Some(pu),
-                _ => None,
+            // 已预排的下一曲(gapless):命中目标则复用其 URL(引擎里的预排 decoder 已被上面的
+            // audio.stop() 清掉,只省一次取链);否则丢弃,其半截 capture 残件待删。
+            let queued = st.queued.take();
+            let (cached_url, stale_queued) = match queued {
+                Some(q) if q.song.id == song.id => (q.play_url, None),
+                other => (None, other),
             };
-            (pre, interrupted)
+            (cached_url, interrupted, stale_queued)
         };
         if let Some(cap) = interrupted {
             // 切歌时若该曲已下完(且 harvest 轮询还没来得及处理)→ 照样入缓存;否则是 half,删残件。
@@ -319,6 +349,10 @@ impl PlayerCore {
             } else {
                 drop(std::fs::remove_file(&cap.path));
             }
+        }
+        if let Some(cap) = stale_queued.and_then(|q| q.capturing) {
+            // 被丢弃的预排曲:删其半截 capture 残件。
+            drop(std::fs::remove_file(&cap.path));
         }
         // 对齐 finished_seq,防止 audio.stop() 极端时序下被旧 seq 误触发。
         let seq = self.inner.audio.snapshot().track_finished_seq;
@@ -333,7 +367,7 @@ impl PlayerCore {
             self.inner.audio.play(MediaUrl::Local(path));
             self.inner.state.lock().play_url = Some(pu);
         } else if let Some(pu) = cached_url {
-            mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using prefetched url");
+            mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using queued url");
             download::play_capturing(self, song, &pu, PLAYBACK_QUALITY);
             self.inner.state.lock().play_url = Some(pu);
         } else {
@@ -385,7 +419,12 @@ impl PlayerCore {
                 st.queue_sel = sel;
                 st.original_queue = None;
             }
+            // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
+            st.queued = None;
+            st.prefetch_fired_for = None;
         }
+        // 取消引擎里尚未 append 的待建预排(已 append 的无法摘除,会自然播完后由边界兜底)。
+        self.inner.audio.clear_next();
         self.spawn_save_session();
     }
 
@@ -459,7 +498,7 @@ impl PlayerCore {
     ///   - `id`: 歌曲
     ///   - `completed`: 是否完整播完(false=跳过)
     ///   - `listen_ms`: 本次收听毫秒
-    fn spawn_on_played(&self, id: SongId, completed: bool, listen_ms: u64) {
+    pub(crate) fn spawn_on_played(&self, id: SongId, completed: bool, listen_ms: u64) {
         let Some(channel) = self.channel_for(id.namespace()) else {
             return;
         };
@@ -494,7 +533,7 @@ impl PlayerCore {
 
     /// fire-and-forget 落盘当前会话:snapshot 在 spawn **前**组装好(锁不跨 await),
     /// owned move 进 task;失败仅 warn。降级 persist 下 save 自动 no-op。
-    fn spawn_save_session(&self) {
+    pub(crate) fn spawn_save_session(&self) {
         let snap = self.snapshot_session();
         let persist = self.inner.persist.clone();
         tokio::spawn(async move {
@@ -520,22 +559,10 @@ impl PlayerCore {
         loop {
             tick.tick().await;
             self.consume_events_once();
-            self.check_harvest_ready();
-            self.check_auto_next();
-            self.check_prefetch();
+            gapless::check_harvest(&self);
+            gapless::check_advance(&self);
+            gapless::check_prefetch(&self);
             self.check_session_save();
-        }
-    }
-
-    /// harvest:当前曲的远端字节一下完(engine `download_complete`)就把 capture 文件入缓存,
-    /// **不等播放结束**。已 harvest(capturing 被取走)后再 tick 是 no-op。
-    fn check_harvest_ready(&self) {
-        if !self.inner.audio.snapshot().download_complete {
-            return;
-        }
-        let cap = self.inner.state.lock().capturing.take();
-        if let Some(cap) = cap {
-            download::spawn_harvest(self, cap);
         }
     }
 
@@ -576,25 +603,40 @@ impl PlayerCore {
         }
     }
 
-    /// PlayUrlReady 命中当前歌 → audio.play + 写 play_url;命中已发起预拉的下一首 → 塞 prefetched;否则丢。
+    /// PlayUrlReady 命中当前歌 → audio.play + 写 play_url;命中正在预拉的下一首 → gapless 预排;否则丢。
     fn handle_play_url_ready(&self, song_id: &SongId, play_url: PlayUrl) {
-        let mut st = self.inner.state.lock();
-        let want = st.current_song.as_ref().map(|t| &t.id);
-        if want == Some(song_id) {
-            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
-            // 起播并 capture(供播完入缓存);需先放锁,helper 内部要再锁。
-            let song = st.current_song.clone();
-            st.play_url = Some(play_url.clone());
-            drop(st);
-            if let Some(song) = song {
-                download::play_capturing(self, &song, &play_url, PLAYBACK_QUALITY);
+        // 先在锁内分类(三选一),放锁后再做会重新加锁的动作(play_capturing / gapless 预排)。
+        enum Route {
+            Current(Option<Box<Song>>),
+            Prefetch,
+            Drop,
+        }
+        let route = {
+            let mut st = self.inner.state.lock();
+            let want = st.current_song.as_ref().map(|t| &t.id);
+            if want == Some(song_id) {
+                st.play_url = Some(play_url.clone());
+                Route::Current(st.current_song.clone().map(Box::new))
+            } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
+                Route::Prefetch
+            } else {
+                Route::Drop
             }
-        } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
-            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
-            st.prefetched = Some(play_url);
-        } else {
-            // 用户已切到别的歌,丢。
-            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
+        };
+        match route {
+            Route::Current(song) => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
+                if let Some(song) = song {
+                    download::play_capturing(self, &song, &play_url, PLAYBACK_QUALITY);
+                }
+            }
+            Route::Prefetch => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
+                gapless::on_prefetch_url_ready(self, song_id, play_url);
+            }
+            Route::Drop => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
+            }
         }
     }
 
@@ -610,78 +652,6 @@ impl PlayerCore {
             // 非当前歌,无意义,丢(只缓存当前歌)。
             mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "lyrics ready");
         }
-    }
-
-    /// auto-next:audio engine 自然播完 → 按 PlayMode 切下一首。
-    fn check_auto_next(&self) {
-        let snap = self.inner.audio.snapshot();
-        let last = self.inner.last_seen_finished_seq.load(Ordering::Relaxed);
-        if snap.track_finished_seq <= last {
-            return;
-        }
-        self.inner
-            .last_seen_finished_seq
-            .store(snap.track_finished_seq, Ordering::Relaxed);
-        let (finished_id, mode, next) = {
-            let st = self.inner.state.lock();
-            (
-                st.current_song.as_ref().map(|s| s.id.clone()),
-                st.play_mode,
-                next_in_queue(&st),
-            )
-        };
-        // 自然播完:听了整首。duration 未知(decoder 未填)时退用 position。
-        if let Some(finished) = finished_id.clone() {
-            let listen_ms = if snap.duration_ms == 0 {
-                snap.position_ms
-            } else {
-                snap.duration_ms
-            };
-            self.spawn_on_played(finished, /*completed*/ true, listen_ms);
-        }
-        if let Some(s) = next {
-            mineral_log::info!(
-                target: "player",
-                finished_id = ?finished_id,
-                next_id = s.id.as_str(),
-                mode = ?mode,
-                "auto next"
-            );
-            self.play_song(&s);
-        }
-    }
-
-    /// prefetch:进度进入曲终前窗口时,submit 下一首 SongUrl(Background)。
-    fn check_prefetch(&self) {
-        let snap = self.inner.audio.snapshot();
-        if snap.duration_ms == 0 {
-            return;
-        }
-        if snap.duration_ms.saturating_sub(snap.position_ms) > PREFETCH_LEAD_MS {
-            return;
-        }
-        let (cur_id, next) = {
-            let st = self.inner.state.lock();
-            let Some(cur) = st.current_song.as_ref() else {
-                return;
-            };
-            if st.prefetch_fired_for.as_ref() == Some(&cur.id) {
-                return;
-            }
-            (cur.id.clone(), next_in_queue(&st))
-        };
-        let Some(next) = next else {
-            return;
-        };
-        self.inner.state.lock().prefetch_fired_for = Some(cur_id);
-        mineral_log::debug!(target: "player", next_id = next.id.as_str(), source = ?next.source(), "prefetch next");
-        self.inner.scheduler.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-                song_id: next.id,
-                quality: PLAYBACK_QUALITY,
-            }),
-            Priority::Background,
-        );
     }
 
     /// 重新提交 PlaylistsFetched / LikedSongIdsFetched 任务(给新 client 用)。
@@ -1238,6 +1208,31 @@ mod tests {
         drain_spawned().await;
 
         assert!(core.load_session().await?.is_some(), "save 后应能读到会话");
+        Ok(())
+    }
+
+    /// play_song(手动切歌)应清掉过期的 gapless 预排(`queued`),防止跨切歌泄漏预排状态。
+    #[tokio::test]
+    async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let core = core_with(calls)?;
+        {
+            let mut st = core.inner.state.lock();
+            st.queue = vec![song("a"), song("b")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+            st.queued = Some(crate::gapless::Queued {
+                song: song("b"),
+                play_url: None,
+                origin: PlaybackOrigin::Remote,
+                capturing: None,
+            });
+        }
+        core.play_song(&song("a"));
+        assert!(
+            core.inner.state.lock().queued.is_none(),
+            "手动切歌应清掉过期预排"
+        );
         Ok(())
     }
 

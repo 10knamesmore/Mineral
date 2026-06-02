@@ -18,6 +18,7 @@
 
 mod client;
 mod download;
+mod gapless;
 mod media;
 mod media_cache;
 mod pcm;

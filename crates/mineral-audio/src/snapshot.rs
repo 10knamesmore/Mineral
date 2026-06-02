@@ -46,4 +46,20 @@ pub struct AudioSnapshot {
     /// 远端流式播放时由 stream-download 的下载进度回调驱动,随已下字节占总字节推进。
     /// 总长未知(无 Content-Length)时维持 0,直到整段下完跳 10000。切歌瞬间回落 0。
     pub buffered_bps: u16,
+
+    /// 当前曲目身份令牌:每次起播 / 无缝边界轮转 +1。上层认它的**值变化**判定换曲——
+    /// 比单调 `track_finished_seq` 的边沿更稳:漏一个 tick 也不会丢轨(值对不上就重新对齐)。
+    pub current_track_token: u64,
+
+    /// 已预排的下一曲时长(ms);未预排 / 未知为 0。
+    pub next_duration_ms: u64,
+
+    /// 已预排的下一曲缓冲比例(0..=10000 basis points);未预排为 0。
+    pub next_buffered_bps: u16,
+
+    /// 已预排的下一曲是否缓冲到「可无缝接续」(已 append 进 rodio 队列即为 true)。
+    pub next_ready: bool,
+
+    /// 已预排的下一曲远端字节是否已下完(capture 预排有意义;否则 false)。
+    pub next_download_complete: bool,
 }
