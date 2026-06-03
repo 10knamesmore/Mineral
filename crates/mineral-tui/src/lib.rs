@@ -3,28 +3,14 @@
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
 
-mod anim;
 mod app;
-mod cells;
-mod color;
 mod components;
-mod cover;
-mod daemon;
-mod download_toast;
-mod layout;
-mod notifications;
-mod playback;
-mod prefetch;
-mod remote;
-mod signal;
-mod state;
+mod render;
+mod runtime;
 #[cfg(test)]
 mod test_support;
-mod theme;
-mod toast;
 mod tui;
 mod view;
-mod view_model;
 
 use std::sync::Arc;
 
@@ -34,8 +20,9 @@ use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
 use app::App;
-use cover::CoverFetcher;
-use remote::RemoteClient;
+use runtime::cover_encode::CoverEncoder;
+use runtime::cover_fetch::CoverFetcher;
+use runtime::remote::RemoteClient;
 use tui::Tui;
 
 /// TUI 的启动模式。决定 server 的来源与生命周期。
@@ -82,7 +69,7 @@ pub async fn run(
     match launch {
         Launch::Auto => {
             let socket = mineral_paths::socket_path()?;
-            let (client, handle) = daemon::ensure(&socket).await?;
+            let (client, handle) = runtime::daemon::ensure(&socket).await?;
             let result = run_app(Arc::new(client), cover_fetcher);
             // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
             // (handle 为 None)留着不动。
@@ -122,7 +109,16 @@ fn run_app(client: Arc<dyn Client>, cover_fetcher: CoverFetcher) -> color_eyre::
     // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
     // font 用 halfblocks 渲染,不阻塞启动。
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
-    let mut app = App::new(client, cover_fetcher, picker);
+    // 编码器 worker 在此 spawn(run_app 跑在 tokio runtime 线程上,满足 tokio::spawn)。
+    // picker 克隆给 worker,封面 resize + kitty 编码即落 worker 的 spawn_blocking,不卡渲染。
+    let cover_encoder = CoverEncoder::spawn(&picker);
+    let mut app = App::new(
+        client,
+        cover_fetcher,
+        cover_encoder,
+        picker,
+        tui.launch_cursor(),
+    );
     let result = app.run(&mut tui);
     tui.exit()?;
     result

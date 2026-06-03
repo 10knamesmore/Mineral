@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/popup/confirm.rs
+description: 退出确认 modal(y 确认 / n 取消)
+expression: terminal.backend()
+---
+"                                                            "
+"                                                            "
+"            ╭ quit mineral? ───────────────────╮            "
+"            │                                  │            "
+"            │ exit playback and close session? │            "
+"            │                                  │            "
+"            │ [ y ] yes      [ n / esc ] cancel│            "
+"            │                                  │            "
+"            ╰──────────────────────────────────╯            "
+"                                                            "
+"                                                            "
+"                                                            "

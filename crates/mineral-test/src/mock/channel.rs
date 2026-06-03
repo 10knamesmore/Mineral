@@ -53,6 +53,7 @@ impl MusicChannel for UrlChannel {
             quality,
             size: 0,
             format: AudioFormat::Flac,
+            bit_depth: Some(24),
         }])
     }
 

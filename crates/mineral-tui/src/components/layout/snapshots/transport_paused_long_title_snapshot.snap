@@ -1,0 +1,13 @@
+---
+source: crates/mineral-tui/src/components/layout/transport.rs
+description: "播放栏:暂停 + 长歌名(TheLastWordIsRejoice)"
+expression: t.backend()
+---
+"╭ transport ─────────────────────────────────────╮"
+"│              TheLastWordIsRejoice              │"
+"│                        ·                       │"
+"│ 0:30 ━━━●──────────────────────────────── 5:09 │"
+"│              [⏮]   [▶]   [⏭]   [→]             │"
+"│               p     ␣     n     m              │"
+"│ vol ██████████     mode seq              fmt — │"
+"╰────────────────────────────────────────────────╯"

@@ -316,6 +316,16 @@ impl MusicChannel for NeteaseChannel {
         Ok(())
     }
 
+    /// 远端真实累计播放次数:登录(有 uid)才查回忆坐标;未登录返回 [`Error::NotSupported`]。
+    async fn remote_play_count(&self, id: &SongId) -> Result<u32> {
+        if self.user_id.is_none() {
+            return Err(Error::NotSupported);
+        }
+        api::song::remote_play_count(&self.transport, id)
+            .await
+            .map_err(Error::Other)
+    }
+
     async fn on_played(&self, id: &SongId, completed: bool, listen_ms: u64) -> Result<()> {
         let store = self.persist.scope(SourceKind::NETEASE);
         if completed {

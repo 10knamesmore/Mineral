@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/sidebar/library.rs
+description: "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)"
+expression: t.backend()
+---
+"╭ tracks / EndSerenading ──────────────────────────────────────────────────────╮"
+"│    #    title                      artist            album             len   │"
+"│    ♫    LoveLetterTypewriter       Mineral                             3:45  │"
+"│▌ ♥ 1    Palisade                   Mineral                             4:31  │"
+"│    2    Gjs                        Mineral                             4:46  │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"╰ 2 / 3 ──────────────────────────────────────────────────────────────13m total╯"

@@ -1,15 +1,5 @@
-//! UI 组件子树。
-//!
-//! 阶段 3:仅 sidebar(playlists / library)。后续阶段会陆续加入
-//! transport / spectrum / lyrics / overlay 等。
+//! UI 组件子树,按渲染层级分组:平铺基本层、浮层、通知层。
 
-pub mod cover;
-pub mod cover_image;
-pub mod lyrics;
-pub mod now_playing;
-pub mod overlay;
-pub mod sidebar;
-pub mod spectrum;
-pub mod status_bar;
-pub mod top_status;
-pub mod transport;
+pub mod layout;
+pub mod popup;
+pub mod toast;

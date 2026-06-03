@@ -15,15 +15,17 @@ use mineral_model::Song;
 use mineral_protocol::{DownloadTarget, PlayerSnapshot};
 use mineral_server::Client;
 use mineral_task::TaskEvent;
+use ratatui::layout::Position;
 use ratatui_image::picker::Picker;
 
-use crate::anim::Transition;
-use crate::components::overlay::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
-use crate::cover::CoverFetcher;
-use crate::download_toast::DownloadNotifier;
-use crate::notifications::Notifications;
-use crate::state::{AppState, View};
-use crate::theme::Theme;
+use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
+use crate::components::toast::download_toast::DownloadNotifier;
+use crate::components::toast::notifications::Notifications;
+use crate::render::anim::Transition;
+use crate::render::theme::Theme;
+use crate::runtime::cover_encode::CoverEncoder;
+use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::state::{AppState, View};
 use crate::tui::Tui;
 use crate::view::draw;
 
@@ -75,6 +77,10 @@ pub struct App {
     /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管。
     cover_fetcher: CoverFetcher,
 
+    /// Client 端 cover 编码器:把封面 resize + kitty 编码挪出渲染线程(worker 上跑),
+    /// `drain` 回填 `cover_protocols`。与 `cover_fetcher` 互补成完整异步封面管线。
+    cover_encoder: CoverEncoder,
+
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
     pub(crate) notifications: Notifications,
 
@@ -83,6 +89,11 @@ pub struct App {
 
     /// 终端图片协议探测结果。
     pub picker: Picker,
+
+    /// 进 alternate screen 前捕获的终端光标位置,作为整屏 expand/collapse 的缩放锚点:
+    /// expand 从此点铺开、collapse 收回此点(对得上 `LeaveAlternateScreen` 后光标实际
+    /// 回到的行)。无 TTY 时为 `None`,缩放退化回屏幕居中。
+    pub(crate) launch_anchor: Option<Position>,
 }
 
 impl App {
@@ -92,19 +103,32 @@ impl App {
     ///   - `client`: 跟 server 交互的句柄
     ///   - `cover_fetcher`: client 端 cover fetcher
     ///   - `picker`: 终端图片协议能力
-    pub fn new(client: Arc<dyn Client>, cover_fetcher: CoverFetcher, picker: Picker) -> Self {
+    ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
+    ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
+    pub fn new(
+        client: Arc<dyn Client>,
+        cover_fetcher: CoverFetcher,
+        cover_encoder: CoverEncoder,
+        picker: Picker,
+        launch_anchor: Option<Position>,
+    ) -> Self {
+        let mut state = AppState::empty();
+        // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
+        state.cover_encode_tx = cover_encoder.sender();
         Self {
             should_quit: false,
             theme: Theme::default(),
-            state: AppState::empty(),
+            state,
             overlays: OverlayStack::new(),
             transition: None,
             last_tick: Instant::now(),
             client,
             cover_fetcher,
+            cover_encoder,
             notifications: Notifications::new(),
             download_notifier: DownloadNotifier::new(),
             picker,
+            launch_anchor,
         }
     }
 
@@ -122,7 +146,7 @@ impl App {
 
         // 退出信号 watcher:SIGTERM / SIGINT / SIGHUP 进来时不再 silent kill,而是由
         // 后台 task 记日志 + 置标志,主循环据此走正常退出(`Tui::exit` 还原终端)。
-        let shutdown = crate::signal::spawn_watcher()?;
+        let shutdown = crate::runtime::signal::spawn_watcher()?;
 
         while !self.should_quit {
             if shutdown.load(Ordering::Acquire) {
@@ -170,10 +194,13 @@ impl App {
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
                 self.state.view_pos.tick();
-                self.overlays.tick();
+                self.state.fullscreen_pos.tick();
+                self.tick_overlays();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
-                crate::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
+                self.sync_spectrum_palette();
+                self.drain_ready_protocols();
+                crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.cover_loading = self.state.cover_pending.len();
                 // 每帧把下载进度喂进通知层(翻译成常驻进度 / 完成 flash),再推进所有通知动画。
@@ -188,6 +215,25 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// 推进浮层动画一拍;并处理「全屏下居中浮层刚被移除」的封面残影。
+    ///
+    /// 居中浮层(如 quit 确认)在全屏时会压住左侧封面的中段。kitty 协议把整行 unicode
+    /// 占位符打包在该行**最左 cell**、其余 cell `set_skip(true)`,而 ratatui 的 buffer diff
+    /// 跳过未变 cell —— 浮层只盖了封面中段、没碰最左驱动 cell,关闭后那几行不会自行重发,
+    /// 中段残留浮层底色(残影)。故在该居中浮层(退场动画放完)真正出栈的那一拍,清一次封面
+    /// 协议缓存:下一帧 `cover_image` 按需重建、重新 transmit + 全量 re-place,残影消除。
+    ///
+    /// **仅对居中浮层做此事**:停靠浮层(queue 贴右)不压封面,清它纯属白白触发封面重新解码
+    /// / base64 编码(几十毫秒、卡掉一帧),故停靠浮层出栈不刷新。
+    fn tick_overlays(&mut self) {
+        let before = self.overlays.len();
+        let closing_centered = self.overlays.any_leaving_centered();
+        self.overlays.tick();
+        if self.state.fullscreen && closing_centered && self.overlays.len() < before {
+            self.state.cover_protocols.borrow_mut().clear();
+        }
     }
 
     /// 推进整屏转场动画一帧。`settled()`(进度抵达目标)时收尾:退出转场(`leaving()`)置
@@ -250,12 +296,71 @@ impl App {
         }
     }
 
-    /// 把 cover_fetcher 就绪的图写进 cache + 清掉对应 protocol(下次渲染重建)。
+    /// 把 cover_fetcher 就绪的图写进 cache + 色板写进 `cover_palettes` + 清掉对应 protocol
+    /// (下次渲染重建)。取色失败(`palette = None`)只是不落色板,图照常缓存显示。
     fn drain_ready_covers(&mut self) {
-        for (url, image) in self.cover_fetcher.drain_ready() {
-            self.state.cover_pending.remove(&url);
-            self.state.cover_cache.insert(url.clone(), image);
-            self.state.cover_protocols.borrow_mut().remove(&url);
+        for ready in self.cover_fetcher.drain_ready() {
+            self.state.cover_pending.remove(&ready.url);
+            if let Some(palette) = ready.palette {
+                self.state.cover_palettes.insert(ready.url.clone(), palette);
+            }
+            self.state
+                .cover_cache
+                .insert(ready.url.clone(), ready.image);
+            self.state.cover_protocols.borrow_mut().remove(&ready.url);
+        }
+    }
+
+    /// 协调当前播放封面的频谱配色:新封面取色就绪则从**当前可见配色**缓动过去,否则保持现状。
+    ///
+    /// 身份判定(`cover_url` 变化、色带是否就绪)全在此(app 层);频谱只收
+    /// `begin_cover_transition` / `clear_cover` 两个命令,不持有歌曲 / URL 身份。
+    ///
+    /// - 当前封面与 `spectrum_cover` 一致 → 不动。
+    /// - 当前封面变了 + 色带已就绪 → `begin_cover_transition`(从上一张封面 / hue 起步),记下 key。
+    /// - 当前封面变了 + 图已到但**取色失败**(在 `cover_cache` 却不在 `cover_palettes`)→ 回退 hue,标记已处理。
+    /// - 当前封面变了 + 图还在抓 → **保持当前可见态**(上一张封面继续显示),下个 tick 再看。
+    ///   这是"红专辑换蓝专辑 → 红→蓝"的关键:抓图途中不回退 hue,等蓝就绪直接红→蓝。
+    /// - 无当前歌 / 无封面 → 回退 hue。
+    fn sync_spectrum_palette(&mut self) {
+        let cur = self
+            .state
+            .current
+            .as_ref()
+            .and_then(|s| s.cover_url.clone());
+        let Some(url) = cur else {
+            if self.state.spectrum_cover.is_some() {
+                self.state.spectrum.clear_cover();
+                self.state.spectrum_cover = None;
+            }
+            return;
+        };
+        if self.state.spectrum_cover.as_ref() == Some(&url) {
+            return;
+        }
+        if let Some(palette) = self.state.cover_palettes.get(&url).cloned() {
+            self.state.spectrum.begin_cover_transition(palette);
+            self.state.spectrum_cover = Some(url);
+        } else if self.state.cover_cache.contains_key(&url) {
+            // 图已回但无色板 = 取色失败:回退 hue,标记已处理(不再每帧重试)。
+            self.state.spectrum.clear_cover();
+            self.state.spectrum_cover = Some(url);
+        }
+        // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
+    }
+
+    /// 把编码 worker 就绪的封面协议装回 `cover_protocols`,并出 `cover_encode_pending`。
+    /// 之后帧渲染该封面即命中已编码协议、直接 place,不再在渲染线程上 resize / 编码。
+    fn drain_ready_protocols(&mut self) {
+        for r in self.cover_encoder.drain_ready() {
+            self.state
+                .cover_encode_pending
+                .borrow_mut()
+                .remove(&(r.url.clone(), r.dims));
+            self.state
+                .cover_protocols
+                .borrow_mut()
+                .insert(r.url, (r.protocol, r.dims));
         }
     }
 
@@ -331,6 +436,13 @@ impl App {
             return;
         }
 
+        // `z`:进/退全屏(toggle);Tab/q/t/playback 在全屏照常流转,
+        // 仅屏蔽搜索 `/` 与列表导航(见下方两处 `!self.state.fullscreen` 闸)。
+        if key.code == KeyCode::Char('z') {
+            self.toggle_fullscreen();
+            return;
+        }
+
         // Tab 开 queue(光标定位到在播歌);q 开退出确认。
         if key.code == KeyCode::Tab {
             let sel = self.state.queue_current_index().unwrap_or(0);
@@ -348,7 +460,7 @@ impl App {
             return;
         }
 
-        if key.code == KeyCode::Char('/') {
+        if !self.state.fullscreen && key.code == KeyCode::Char('/') {
             self.state.search_mode = true;
             self.state.search_q.clear();
             return;
@@ -358,9 +470,22 @@ impl App {
             return;
         }
 
-        match self.state.view {
-            View::Playlists => self.handle_playlists_key(key),
-            View::Library => self.handle_library_key(key),
+        // 全屏态屏蔽列表导航(屏上无列表);浏览态才路由到对应 view。
+        if !self.state.fullscreen {
+            match self.state.view {
+                View::Playlists => self.handle_playlists_key(key),
+                View::Library => self.handle_library_key(key),
+            }
+        }
+    }
+
+    /// 切换全屏播放态:翻转 `fullscreen` 标志并驱动形变进退场(`eased_in_out`,可中途反向)。
+    fn toggle_fullscreen(&mut self) {
+        self.state.fullscreen = !self.state.fullscreen;
+        if self.state.fullscreen {
+            self.state.fullscreen_pos.enter();
+        } else {
+            self.state.fullscreen_pos.leave();
         }
     }
 
@@ -397,7 +522,8 @@ impl App {
         }
     }
 
-    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace/字符更新词并复位 sel。
+    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
+    /// 命令行行为),字符追加词;改词后复位 sel。
     fn handle_search_key(&mut self, key: &KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -408,6 +534,11 @@ impl App {
                 self.state.search_mode = false;
             }
             KeyCode::Backspace => {
+                // vim 行为:query 已空时再删一次 = 退出搜索(等价 Esc)。
+                if self.state.search_q.is_empty() {
+                    self.state.search_mode = false;
+                    return;
+                }
                 self.state.search_q.pop();
                 self.reset_sel_for_search();
                 self.state.last_sel_change = Instant::now();
@@ -631,15 +762,139 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_protocol::PlayerSnapshot;
 
-    use mineral_model::SourceKind;
+    use mineral_model::{MediaUrl, SourceKind};
 
     use super::{App, TRANSITION_TICKS};
-    use crate::anim::Transition;
+    use crate::render::anim::Transition;
+    use crate::render::palette::{CoverPalette, Rgb};
     use crate::test_support::{app_with_library, app_with_queue, endserenading};
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 回归(红→蓝路径之二):换歌后新封面**还在抓取**时,频谱保持上一张封面,
+    /// **不**回退到 hue——这样等新色板就绪能直接红→蓝,而非 hue→蓝。
+    #[test]
+    fn sync_spectrum_holds_previous_cover_until_new_palette_ready() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let red = MediaUrl::remote("https://example.com/red.jpg")?;
+        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
+        // 当前在播这首歌封面是 blue,但频谱上一张应用的是 red。
+        if let Some(song) = app.state.current.as_mut() {
+            song.cover_url = Some(blue);
+        }
+        app.state.spectrum_cover = Some(red.clone());
+        // blue 的色板 / 图都还没到 —— sync 应原地保持(不清、不抢先标记)。
+        app.sync_spectrum_palette();
+        assert_eq!(
+            app.state.spectrum_cover.as_ref(),
+            Some(&red),
+            "抓图途中应保持上一张封面"
+        );
+        Ok(())
+    }
+
+    /// 回归(红→蓝路径之一):新封面色板就绪即触发过渡并记下其 key。
+    #[test]
+    fn sync_spectrum_begins_transition_when_palette_ready() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
+        if let Some(song) = app.state.current.as_mut() {
+            song.cover_url = Some(blue.clone());
+        }
+        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        app.state.cover_palettes.insert(blue.clone(), palette);
+        app.sync_spectrum_palette();
+        assert_eq!(
+            app.state.spectrum_cover.as_ref(),
+            Some(&blue),
+            "色板就绪应记下并触发过渡"
+        );
+        Ok(())
+    }
+
+    /// 回归:全屏下关闭居中浮层(quit 确认)后,封面协议缓存被清空 —— 据此下一帧重建并全量
+    /// re-place,消除「居中浮层压过封面中段、关闭后 kitty 行不自重发」留下的残影。
+    #[test]
+    fn fullscreen_overlay_close_clears_cover_protocol() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::test_support::app_in_fullscreen;
+
+        let mut app = app_in_fullscreen();
+        assert!(app.state.fullscreen, "前置:已稳态进入全屏");
+
+        // 模拟封面已渲染:塞一个协议缓存条目。
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
+        let proto = app.picker.new_resize_protocol(img);
+        app.state
+            .cover_protocols
+            .borrow_mut()
+            .insert(url, (proto, (10, 10)));
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "前置:封面协议条目已就位"
+        );
+
+        // 开一个居中浮层(quit 确认)并推满进场动画。开着的全程 len 不减,协议缓存不应被动。
+        app.overlays.push(super::OverlayKind::confirm());
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "浮层开着时(未出栈)不应清空封面协议"
+        );
+
+        // 关闭并推满退场动画 → 浮层出栈 → 该拍清空封面协议。
+        app.overlays.close_top();
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        assert!(
+            app.state.cover_protocols.borrow().is_empty(),
+            "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
+        );
+        Ok(())
+    }
+
+    /// 回归:全屏下关闭**停靠**浮层(queue,贴右不碰封面)**不应**清空封面协议 —— 清了会白白
+    /// 触发封面重新解码 / base64 编码,造成关闭动画途中全局卡顿。
+    #[test]
+    fn fullscreen_queue_close_keeps_cover_protocol() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::test_support::app_in_fullscreen;
+
+        let mut app = app_in_fullscreen();
+
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
+        let proto = app.picker.new_resize_protocol(img);
+        app.state
+            .cover_protocols
+            .borrow_mut()
+            .insert(url, (proto, (10, 10)));
+
+        // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
+        app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        app.overlays.close_top();
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
+        );
+        Ok(())
     }
 
     /// 集成回归:Tab 开队列 → 按键经 dispatch 路由到 queue 浮层移动光标,且**不被
@@ -758,6 +1013,32 @@ mod tests {
         assert!(app.transition.is_none(), "Ctrl-C 不走转场动画");
     }
 
+    /// vim 命令行行为:`/` 进搜索,删到空仍在搜索态,空 query 上再删一次才退出。
+    #[test]
+    fn search_backspace_on_empty_query_exits() {
+        let mut app = app_with_library(3, /*sel_track*/ 0);
+
+        // `/` 进入搜索输入态,query 起始为空。
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.state.search_mode, "`/` 应进入搜索态");
+        assert!(app.state.search_q.is_empty());
+
+        // 输入两个字符。
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.state.search_q, "ab");
+
+        // 退格逐字符删;删到空时仍停在搜索态(不提前退出)。
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.state.search_q.is_empty());
+        assert!(app.state.search_mode, "删到空时仍应在搜索态");
+
+        // 空 query 上再删一次 → 退出搜索。
+        press(&mut app, KeyCode::Backspace);
+        assert!(!app.state.search_mode, "空 query 上退格应退出搜索");
+    }
+
     /// Library 视图按 `f` 乐观切换选中曲目的 ♥ 状态,不依赖真实 server。
     /// 第一次按:`loved` 从 false → true;再按一次:true → false。
     #[test]
@@ -818,5 +1099,52 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// `z` 进/退全屏(toggle):进场目标置满(非 leaving),再按退场目标归零(leaving)。
+    #[test]
+    fn z_toggles_fullscreen() {
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        assert!(!app.state.fullscreen, "初始非全屏");
+
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen, "z 进全屏");
+        assert!(!app.state.fullscreen_pos.leaving(), "进场:形变目标置满");
+
+        press(&mut app, KeyCode::Char('z'));
+        assert!(!app.state.fullscreen, "再按 z 退全屏");
+        assert!(app.state.fullscreen_pos.leaving(), "退场:形变目标归零");
+    }
+
+    /// 全屏态屏蔽列表导航 + 搜索 `/`;
+    #[test]
+    fn fullscreen_blocks_nav_and_search() {
+        let mut app = app_with_library(5, /*sel_track*/ 2);
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen);
+
+        // j / g 导航被吞,选中不变。
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.state.sel_track, 2, "全屏屏蔽列表导航");
+
+        // `/` 不进搜索态。
+        press(&mut app, KeyCode::Char('/'));
+        assert!(!app.state.search_mode, "全屏屏蔽搜索 `/`");
+    }
+
+    /// 全屏态内 `Tab` 仍打开 queue 浮层(浮层是独立层),光标落在在播歌。
+    #[test]
+    fn fullscreen_tab_still_opens_queue() {
+        let mut app = app_with_queue(4, /*current_idx*/ 1);
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.overlays.queue_sel(),
+            Some(1),
+            "全屏内 Tab 仍开 queue,光标在在播歌"
+        );
     }
 }

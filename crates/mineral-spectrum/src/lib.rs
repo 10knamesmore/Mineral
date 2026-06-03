@@ -22,11 +22,20 @@ const F_MIN: f32 = 20.0;
 /// 频率轴上界(Hz)。SR/2 不足时取 SR/2。
 const F_MAX: f32 = 20_000.0;
 
+/// 频率轴对数化程度。桶映射在「线性」与「对数」频率轴之间按此插值:1.0 = 纯对数
+/// (每 octave 等宽),略小于 1 让低频每根条占更宽的频带、尽量各占一个 FFT bin,
+/// 不再多根共享同一 bin —— 低频的「宽平顶」收掉,bin 级起伏显出来。
+const LOG_AXIS_BLEND: f32 = 0.92;
+
 /// dB 标定下界。低于此值映射到 0。
-const DB_FLOOR: f32 = -60.0;
+const DB_FLOOR: f32 = -65.0;
 
 /// dB 标定上界。高于此值 clamp 到顶。
-const DB_CEIL: f32 = 0.0;
+const DB_CEIL: f32 = -6.0;
+
+/// 频带取值时峰值(max)的占比,其余给均值:`(1 - PEAK_MIX)·均值 + PEAK_MIX·峰值`。
+/// 0.0 = 纯均值(抹平)、1.0 = 纯峰值(尖刺最跳、最躁)、0.5 = 各半。占比越高动态越强。
+const PEAK_MIX: f32 = 0.5;
 
 /// 频谱计算器:维持一个滑动窗口的 PCM 环形缓冲,UI 一调 [`Self::compute`] 就出最新一窗的条高。
 ///
@@ -163,7 +172,9 @@ fn hann_at(i: usize) -> f32 {
     0.5 - 0.5 * x.cos()
 }
 
-/// 把 `[lo, hi)` 区间内的复数 bin 算 magnitude 均值,做 dB 标定后映射到 `0..=RES`。
+/// 把 `[lo, hi)` 区间内的复数 bin 取 magnitude 的「均值 + 峰值」混合(各半),做 dB 标定后映射到 `0..=RES`。
+///
+/// 混合而非纯均值:峰值让频带里的尖刺「蹦」出来、动态更强;均值兜住整体能量,不至于像纯峰值那么躁。
 #[allow(clippy::as_conversions)]
 fn bin_band_to_height(bins: &[Complex32], lo: usize, hi: usize) -> u16 {
     if hi <= lo {
@@ -173,13 +184,14 @@ fn bin_band_to_height(bins: &[Complex32], lo: usize, hi: usize) -> u16 {
     if slice.is_empty() {
         return 0;
     }
-    let sum: f32 = slice
-        .iter()
-        .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-        .sum();
+    let (sum, peak) = slice.iter().fold((0.0_f32, 0.0_f32), |(s, p), c| {
+        let mag = (c.re * c.re + c.im * c.im).sqrt();
+        (s + mag, p.max(mag))
+    });
     let mean = sum / (slice.len() as f32);
+    let mixed = (1.0 - PEAK_MIX) * mean + PEAK_MIX * peak;
     // FFT 输出未归一化:除 FFT_SIZE/2 把 0..1 输入大致映射到 0..1 magnitude。
-    let normalized = mean / ((FFT_SIZE as f32) * 0.5);
+    let normalized = mixed / ((FFT_SIZE as f32) * 0.5);
     let db = 20.0 * (normalized + 1e-9).log10();
     let clamped = db.clamp(DB_FLOOR, DB_CEIL);
     let frac = (clamped - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
@@ -193,9 +205,24 @@ fn bin_band_to_height(bins: &[Complex32], lo: usize, hi: usize) -> u16 {
     }
 }
 
-/// 在 `[F_MIN, min(F_MAX, sr/2)]` 上对数等分 `bar_count` 个桶,把每个桶映射到 `[lo, hi)` 的 bin index。
-#[allow(clippy::as_conversions)]
+/// 在 `[F_MIN, min(F_MAX, sr/2)]` 上近对数等分 `bar_count` 个桶,把每个桶映射到 `[lo, hi)` 的 bin index。
+///
+/// 频率轴的对数化程度由 [`LOG_AXIS_BLEND`] 控制(线性↔对数插值)。
 fn compute_bar_bins(sample_rate: u32, bar_count: usize) -> Vec<(usize, usize)> {
+    compute_bar_bins_blend(sample_rate, bar_count, LOG_AXIS_BLEND)
+}
+
+/// 同 [`compute_bar_bins`],但把对数化程度 `blend` 显式传入。
+///
+/// # Params:
+///   - `sample_rate`: PCM 采样率(Hz)。
+///   - `bar_count`: 期望条数。
+///   - `blend`: 频率轴对数化程度,`1.0` 为纯对数,越小越偏线性。见 [`LOG_AXIS_BLEND`]。
+///
+/// # Return:
+///   每根条对应的 `[lo, hi)` bin 区间。
+#[allow(clippy::as_conversions)]
+fn compute_bar_bins_blend(sample_rate: u32, bar_count: usize, blend: f32) -> Vec<(usize, usize)> {
     let nyquist = (sample_rate as f32) / 2.0;
     let f_hi = F_MAX.min(nyquist);
     let f_lo = F_MIN.min(f_hi);
@@ -204,13 +231,20 @@ fn compute_bar_bins(sample_rate: u32, bar_count: usize) -> Vec<(usize, usize)> {
     let bin_count = FFT_SIZE / 2 + 1;
     let hz_per_bin = (sample_rate as f32) / (FFT_SIZE as f32);
 
+    // 归一化位置 t∈[0,1] → 频率:对数映射 exp(lerp(log_lo, log_hi)) 与线性映射按 blend 插值。
+    let warp = |t: f32| {
+        let log = (log_lo + (log_hi - log_lo) * t).exp();
+        let lin = f_lo + (f_hi - f_lo) * t;
+        (1.0 - blend) * lin + blend * log
+    };
+
     let mut out = vec![(0usize, 0usize); bar_count];
     let bars_f = (bar_count as f32).max(1.0);
     for (i, slot) in out.iter_mut().enumerate() {
         let t0 = (i as f32) / bars_f;
         let t1 = ((i + 1) as f32) / bars_f;
-        let f0 = (log_lo + (log_hi - log_lo) * t0).exp();
-        let f1 = (log_lo + (log_hi - log_lo) * t1).exp();
+        let f0 = warp(t0);
+        let f1 = warp(t1);
         let b0 = (f0 / hz_per_bin).floor().max(0.0) as usize;
         let b1 = (f1 / hz_per_bin).ceil().max(0.0) as usize;
         let b0_clamped = b0.min(bin_count.saturating_sub(1));
@@ -223,6 +257,7 @@ fn compute_bar_bins(sample_rate: u32, bar_count: usize) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use color_eyre::eyre::eyre;
+    use realfft::num_complex::Complex32;
 
     use super::{FFT_SIZE, SpectrumComputer};
 
@@ -269,12 +304,60 @@ mod tests {
             .enumerate()
             .max_by_key(|(_, v)| **v)
             .ok_or_else(|| eyre!("empty bars"))?;
+        // LOG_AXIS_BLEND=0.92(掺 8% 线性)把中频左移:1kHz 落 bar ~26(纯对数时 ~36,见
+        // blend_shifts_* 锁方向)。范围按 blend 设计区间 [0.88,0.96] 的落点漂移取 22..=32。
         assert!(
-            (28..=44).contains(&peak_idx),
-            "1kHz peak expected mid-band, got bar {peak_idx}"
+            (22..=32).contains(&peak_idx),
+            "1kHz peak expected mid-band (blend=0.92 ⇒ ~bar 26), got bar {peak_idx}"
         );
         assert!(peak_val > 0, "peak should be > 0");
         assert_eq!(bars.len(), TEST_BARS);
+        Ok(())
+    }
+
+    /// `blend < 1` 应把低频铺开:1kHz 对应的 bin 在近对数轴上落到比纯对数更靠左的条。
+    /// 锁住 [`super::LOG_AXIS_BLEND`] 的方向性,避免日后误调成 `> 1` 或把线性/对数插值写反。
+    #[test]
+    #[allow(clippy::as_conversions)]
+    fn blend_shifts_mid_freq_left_vs_pure_log() -> color_eyre::Result<()> {
+        let sr: u32 = 48_000;
+        let bars: usize = 120;
+        let blended = super::compute_bar_bins_blend(sr, bars, super::LOG_AXIS_BLEND);
+        let pure = super::compute_bar_bins_blend(sr, bars, 1.0 /*blend*/);
+
+        let hz_per_bin = (sr as f32) / (FFT_SIZE as f32);
+        let target_bin = (1000.0 / hz_per_bin) as usize;
+        // 第一根「上界 bin 越过 target」的条:bins 的 hi 随 index 单调不减,position 取最左。
+        let first_reaching = |v: &[(usize, usize)]| {
+            v.iter()
+                .position(|(_, hi)| *hi > target_bin)
+                .ok_or_else(|| eyre!("no bar reaches bin {target_bin}"))
+        };
+        let i_blend = first_reaching(&blended)?;
+        let i_pure = first_reaching(&pure)?;
+        assert!(
+            i_blend < i_pure,
+            "blend 应让 1kHz 落到更靠左的条:blend@{i_blend} 未小于 pure@{i_pure}"
+        );
+        Ok(())
+    }
+
+    /// 同样总能量,集中在一个 bin vs 均摊到整带:含峰值的混合统计应让「集中」的更高。
+    /// 纯均值会让两者等高 —— 这条锁住 `bin_band_to_height` 用的是「均值 + 峰值」混合而非纯均值。
+    #[test]
+    fn mixed_stat_rewards_spiky_band_over_flat() -> color_eyre::Result<()> {
+        let n: usize = 16;
+        let mut spiky = vec![Complex32::new(0.0, 0.0); n];
+        if let Some(c) = spiky.get_mut(0) {
+            *c = Complex32::new(1024.0, 0.0);
+        }
+        let flat = vec![Complex32::new(64.0, 0.0); n];
+        let h_spiky = super::bin_band_to_height(&spiky, 0 /*lo*/, n);
+        let h_flat = super::bin_band_to_height(&flat, 0 /*lo*/, n);
+        assert!(
+            h_spiky > h_flat,
+            "混合统计应奖励集中能量:spiky {h_spiky} 未高于 flat {h_flat}"
+        );
         Ok(())
     }
 }

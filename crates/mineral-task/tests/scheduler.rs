@@ -85,6 +85,7 @@ impl MusicChannel for FakeChannel {
             quality: BitRate::Higher,
             size: 0,
             format: mineral_model::AudioFormat::Mp3,
+            bit_depth: None,
         }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {

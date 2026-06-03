@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/sidebar/sweep.rs
+description: "Push 中途:歌单左移、曲目从右补入"
+expression: t.backend()
+---
+"───────────────────╮╭ tracks / EndSerena"
+"     length   items││    #    title     "
+"se   13m      10   ││    ♫    LoveLetter"
+"se   —        8    ││▌ ♥ 1    Palisade  "
+"     —        5    ││    2    Gjs       "
+"                   ││                   "
+"                   ││                   "
+"                   ││                   "
+"                   ││                   "
+"                   ││                   "
+"                   ││                   "
+"───────────────────╯╰ 2 / 3 ────────────"

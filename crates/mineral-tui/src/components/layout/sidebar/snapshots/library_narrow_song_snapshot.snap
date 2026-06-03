@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/sidebar/library.rs
+description: "曲目列表:窄面板退到 Song 档(只剩歌名,无 artist/album)"
+expression: t.backend()
+---
+"╭ tracks / EndSerenading ──────────────────╮"
+"│    #    title                      len   │"
+"│    ♫    LoveLetterTypewriter       3:45  │"
+"│▌ ♥ 1    Palisade                   4:31  │"
+"│    2    Gjs                        4:46  │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"╰ 2 / 3 ──────────────────────────13m total╯"

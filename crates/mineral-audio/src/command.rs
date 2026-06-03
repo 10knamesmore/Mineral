@@ -17,6 +17,20 @@ pub(crate) enum AudioCommand {
         /// 捕获落盘路径(`Remote` + 想缓存时给)。
         capture: Option<PathBuf>,
     },
+    /// 预排下一曲:在当前曲播完前把它的 decoder 排进 rodio 队列,实现无缝接续。
+    ///
+    /// 与 [`Self::Play`] 的区别:**不**打断当前曲、**不** `stop()`/`play()`,只 `append`。
+    /// 远端源的建流 / 预缓冲在引擎 runtime 上**链下**进行,就绪后才 append,避免阻塞命令线程。
+    /// `capture` 语义同 [`Self::Play`](仅 `Remote` 落盘供入缓存)。
+    AppendNext {
+        /// 下一曲播放源。
+        url: MediaUrl,
+
+        /// 捕获落盘路径(`Remote` + 想缓存时给)。
+        capture: Option<PathBuf>,
+    },
+    /// 撤销「尚未 append 进队列」的待建下一曲(缓冲不及预期时的回退;已 append 则无效)。
+    ClearNext,
     /// 暂停当前曲目。
     Pause,
     /// 从暂停态恢复。

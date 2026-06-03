@@ -55,6 +55,15 @@ pub enum TaskEvent {
         lyrics: Lyrics,
     },
 
+    /// `RemotePlayCount` 任务成功:某首歌的远端真实累计播放次数已到。
+    RemotePlayCountFetched {
+        /// 关联的歌曲 id。
+        song_id: SongId,
+
+        /// 远端累计播放次数。
+        count: u32,
+    },
+
     /// 一条给用户看的瞬时提示(非任务生命周期事件,借本通道回传 client 状态栏)。
     /// 目前用于下载的「下载中 / 完成 / 失败」简提示。
     Notice {

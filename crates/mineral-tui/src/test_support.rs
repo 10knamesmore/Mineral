@@ -15,14 +15,16 @@ use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
-use crate::cover::CoverFetcher;
-use crate::state::{AppState, LyricExtra, View};
-use crate::view_model::{PlaylistView, SongView};
+use crate::render::anim::Transition;
+use crate::runtime::cover_encode::CoverEncoder;
+use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::state::{AppState, LyricExtra, View};
+use crate::runtime::view_model::{PlaylistView, SongView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
     assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
-    qianzai_song, song, with_duration, with_name,
+    qianzai_song, song, with_album, with_artist, with_duration, with_name,
 };
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -69,7 +71,7 @@ pub(crate) fn state_with_tracks() -> AppState {
         .map(|(i, t)| SongView {
             data: t.clone(),
             loved: i == 1,
-            plays: plays.get(i).copied().unwrap_or(0),
+            plays: plays.get(i).copied(),
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
@@ -125,12 +127,46 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
         .map(|t| SongView {
             data: t.clone(),
             loved: false,
-            plays: 0,
+            plays: None,
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
+    s
+}
+
+/// 填 3 首**带 artist + album** 的曲目(短英文 / 长英文 / CJK 混排),专用于验证
+/// Full 档 album 列「有内容」时的多列渲染 —— 其余 fixture 的 album 多为空,覆盖不到。
+/// 每曲 3:30,选中第 0 首(当前在播)。
+pub(crate) fn state_with_album() -> AppState {
+    let mut s = AppState::empty();
+    s.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
+    s.view = View::Library;
+
+    let make = |name: &str, artist: &str, album: &str| {
+        with_album(
+            with_artist(with_duration(with_name(song(name), name), 210_000), artist),
+            album,
+        )
+    };
+    let tracks = [
+        make("Bones", "HONNE", "no song"),
+        make("Location Unknown", "HONNE", "Warm on a Cold Night"),
+        make("无", "草东没有派对", "丑奴儿"),
+    ];
+
+    let views = tracks
+        .iter()
+        .map(|t| SongView {
+            data: t.clone(),
+            loved: false,
+            plays: None,
+        })
+        .collect::<Vec<SongView>>();
+    s.current = tracks.first().cloned();
+    s.tracks_cache
+        .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s
 }
 
@@ -195,7 +231,9 @@ pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
     let mut app = App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
     );
     let queue = endserenading(len);
     app.state.playback.track = queue.get(current_idx).cloned();
@@ -210,7 +248,9 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
     let mut app = App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
     );
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
     app.state.playlists = vec![PlaylistView {
@@ -229,12 +269,39 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
         .map(|t| SongView {
             data: t.clone(),
             loved: false,
-            plays: 0,
+            plays: None,
         })
         .collect::<Vec<SongView>>();
     app.state.tracks_cache.insert(pid, views);
     app.state.view = View::Library;
     app.state.sel_playlist = 0;
     app.state.sel_track = sel_track;
+    app
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
+/// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
+pub(crate) fn app_in_fullscreen() -> App {
+    let mut app = App::new(
+        Arc::new(TestClient),
+        CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
+        Picker::from_fontsize((8, 16)),
+        /*launch_anchor*/ None,
+    );
+    let track = qianzai_song();
+    app.state
+        .lyrics_cache
+        .insert(track.id.clone(), qianzai_lyrics());
+    app.state.playback.track = Some(track.clone());
+    app.state.playback.position_ms = 62_000;
+    app.state.current = Some(track);
+    app.state.queue = endserenading(3);
+    // 稳态全屏:fullscreen_pos 一步推到满值(step=1000)。
+    let mut fs = Transition::new(1);
+    fs.enter();
+    fs.tick();
+    app.state.fullscreen_pos = fs;
+    app.state.fullscreen = true;
     app
 }

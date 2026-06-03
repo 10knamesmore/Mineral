@@ -85,11 +85,11 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
     None
 }
 
-/// 为本地命中的文件构造 [`PlayUrl`],供 transport 显 format / bitrate。
+/// 为本地命中的文件构造 [`PlayUrl`],供 transport 显 format / bitrate / 位深。
 ///
-/// format 与 bitrate 都按**文件内容**经 lofty 读出(见 [`probe_format_bitrate`],不信文件名
+/// format、bitrate、位深都按**文件内容**经 lofty 读出(见 [`probe_format_props`],不信文件名
 /// 扩展名)。lofty 取不到 bitrate 时回退「文件大小 / 时长」的均值估算;时长未知(0)或 stat 失败
-/// 时 bitrate 记 0。
+/// 时 bitrate 记 0。位深仅无损容器有值,有损 / 取不到为 `None`。
 ///
 /// # Params:
 ///   - `song`: 命中的歌曲(取 id 与时长)
@@ -97,10 +97,10 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
 ///   - `quality`: 命中的音质档
 ///
 /// # Return:
-///   填好 format / bitrate / size / quality 的 `PlayUrl`(`url` = `Local(path)`)。
+///   填好 format / bitrate / 位深 / size / quality 的 `PlayUrl`(`url` = `Local(path)`)。
 pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> PlayUrl {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let (format, probed_kbps) = probe_format_bitrate(path);
+    let (format, probed_kbps, bit_depth) = probe_format_props(path);
     let bitrate_bps = probed_kbps
         .and_then(|kbps| kbps.checked_mul(1000))
         .or_else(|| est_bitrate_bps(size, song.duration_ms))
@@ -112,24 +112,26 @@ pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> Play
         quality,
         size,
         format,
+        bit_depth,
     }
 }
 
 /// 按**文件内容**(经 lofty)读出 `(格式, 码率kbps)`——全程不碰扩展名。
 ///
-/// 先用 [`detect_file_type`] 按 magic bytes 判容器类型,再以该类型解析属性取 bitrate。任一步
-/// 失败回退 `(空格式, None)`。
+/// 先用 [`detect_file_type`] 按 magic bytes 判容器类型,再以该类型解析属性取 bitrate 与位深。
+/// 任一步失败回退 `(空格式, None, None)`。
 ///
 /// # Params:
 ///   - `path`: 本地文件绝对路径
 ///
 /// # Return:
-///   `(格式, 码率kbps)`;识别失败为 `(AudioFormat::default(), None)`。
-fn probe_format_bitrate(path: &Path) -> (AudioFormat, Option<u32>) {
+///   `(格式, 码率kbps, 位深bit)`;识别失败为 `(AudioFormat::default(), None, None)`。
+fn probe_format_props(path: &Path) -> (AudioFormat, Option<u32>, Option<u8>) {
     let Some(ft) = detect_file_type(path) else {
-        return (AudioFormat::default(), None);
+        return (AudioFormat::default(), None, None);
     };
-    (file_type_to_format(ft), read_bitrate_kbps(path, ft))
+    let (kbps, bit_depth) = read_audio_props(path, ft);
+    (file_type_to_format(ft), kbps, bit_depth)
 }
 
 /// 按**文件内容**判容器类型,走 lofty 的 [`Probe`](先读 ID3 标签再认底层帧)。
@@ -156,22 +158,28 @@ fn detect_file_type(path: &Path) -> Option<lofty::file::FileType> {
         .file_type()
 }
 
-/// 以**已知类型**(不经扩展名猜测)解析属性,取音频码率(kbps)。
+/// 以**已知类型**(不经扩展名猜测)一次解析出音频 `(码率kbps, 位深bit)`。
+///
+/// 单次 lofty `read()` 同时取两者:位深仅无损容器(FLAC / WAV / APE 等)有值,有损为 `None`。
 ///
 /// # Params:
 ///   - `path`: 本地文件绝对路径
 ///   - `ft`: 已由内容判出的容器类型
 ///
 /// # Return:
-///   码率 kbps;解析失败 / lofty 未提供为 `None`。
-fn read_bitrate_kbps(path: &Path, ft: lofty::file::FileType) -> Option<u32> {
-    let file = std::fs::File::open(path).ok()?;
-    Probe::new(std::io::BufReader::new(file))
+///   `(码率kbps, 位深bit)`;各自解析失败 / lofty 未提供为 `None`。
+fn read_audio_props(path: &Path, ft: lofty::file::FileType) -> (Option<u32>, Option<u8>) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return (None, None);
+    };
+    let Ok(tagged) = Probe::new(std::io::BufReader::new(file))
         .set_file_type(ft)
         .read()
-        .ok()?
-        .properties()
-        .audio_bitrate()
+    else {
+        return (None, None);
+    };
+    let props = tagged.properties();
+    (props.audio_bitrate(), props.bit_depth())
 }
 
 /// 「文件大小 / 时长」估算码率(bps),作 lofty 取不到 bitrate 时的兜底。

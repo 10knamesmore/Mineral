@@ -3,7 +3,7 @@
 //! 设计成函数式装饰(`with_source(song("x"), SourceKind::LOCAL)`)而非多参构造,
 //! 避免 `song("x", None, 0, ...)` 这种谜语调用。
 
-use mineral_model::{ArtistId, ArtistRef, Song, SongId, SourceKind};
+use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, SourceKind};
 
 /// 造一首最小 `Song`:来源 `Netease`、`name == id`、时长 0、无艺人/专辑/封面。
 ///
@@ -37,6 +37,22 @@ pub fn with_artist(mut s: Song, artist: &str) -> Song {
         id: ArtistId::new(s.id.namespace(), artist),
         name: artist.to_owned(),
     }];
+    s
+}
+
+/// 给一首 `Song` 挂上专辑(`id == name`,namespace 随歌曲走)。
+///
+/// # Params:
+///   - `s`: 原 `Song`
+///   - `album`: 专辑名
+///
+/// # Return:
+///   `album` 被设为该专辑 ref 的 `Song`。
+pub fn with_album(mut s: Song, album: &str) -> Song {
+    s.album = Some(AlbumRef {
+        id: AlbumId::new(s.id.namespace(), album),
+        name: album.to_owned(),
+    });
     s
 }
 

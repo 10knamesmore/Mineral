@@ -120,9 +120,36 @@ pub struct SongUrl {
     pub format: Option<String>,
 }
 
+/// 回忆坐标端点（`/api/content/activity/music/first/listen/info`）响应。
+///
+/// 只取 `data.musicTotalPlayDto.playCount` = 当前用户对该曲的真实累计播放次数;
+/// 未登录 / 无记录时 `data` 可能缺失,故各级都用 `Option` 容忍。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstListenInfo {
+    /// 业务数据块（未登录 / 无记录时可能整块缺失）。
+    #[serde(default)]
+    pub data: Option<FirstListenData>,
+}
+
+/// 回忆坐标 `data` 块,本结构只关心累计播放统计。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstListenData {
+    /// 累计播放统计（字段名 `musicTotalPlayDto`，可能缺）。
+    #[serde(default, rename = "musicTotalPlayDto")]
+    pub music_total_play: Option<MusicTotalPlay>,
+}
+
+/// 累计播放统计块,本结构只取 `playCount`。
+#[derive(Debug, Clone, Deserialize)]
+pub struct MusicTotalPlay {
+    /// 累计播放次数（字段名 `playCount`）。
+    #[serde(default, rename = "playCount")]
+    pub play_count: u32,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AlbumSong, SearchSong};
+    use super::{AlbumSong, FirstListenInfo, SearchSong};
     use crate::wire::de::from_value;
 
     #[test]
@@ -174,6 +201,29 @@ mod tests {
             "AlbumSong detail 端点(ar/al/dt 字段名)解析(MyGO 詩超絆 / 迷跡波)",
             s
         );
+        Ok(())
+    }
+
+    /// 回忆坐标:正常返回时取出 `musicTotalPlayDto.playCount`。
+    #[test]
+    fn first_listen_info_parses_play_count() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "code": 200,
+            "data": {
+                "musicTotalPlayDto": { "playCount": 18, "duration": 42 }
+            }
+        });
+        let info: FirstListenInfo = from_value(raw)?;
+        mineral_test::assert_snap_debug!("回忆坐标:data.musicTotalPlayDto.playCount=18 解析", info);
+        Ok(())
+    }
+
+    /// 回忆坐标:未登录 / 无记录时 `data` 缺失,应得 `None` 而非反序列化失败。
+    #[test]
+    fn first_listen_info_tolerates_missing_data() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({ "code": 200 });
+        let info: FirstListenInfo = from_value(raw)?;
+        assert!(info.data.is_none(), "data 缺失应解析成 None");
         Ok(())
     }
 }

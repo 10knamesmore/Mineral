@@ -1,0 +1,289 @@
+//! 视口 prefetch:按 `sel ± [`RADIUS`]` 提前 fetch 用户即将看到的数据。
+//!
+//! 两件:
+//! - **cover**:封面在右栏 focus 时显示
+//! - **tracks**:歌单的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
+//!
+//! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
+
+use std::time::Duration;
+
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_server::Client;
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
+
+use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::state::{AppState, View};
+
+/// 各 prefetch 默认半径。覆盖典型 viewport(~30 行)+ 几次 `Shift+J/K` 跳跃
+/// (每次 7 行)的 lookahead。两件 prefetch(cover / playlist tracks)统一用同一值,
+/// 后续接 config 时再分开调。
+const RADIUS: usize = 64;
+
+/// 在播曲封面 prefetch 半径,沿**播放队列**(`state.queue`,而非浏览列表)。在播曲与浏览
+/// 选中解耦——全屏直接渲染在播曲、自动切歌也要让接下来几首封面就绪——故独立给它一个小
+/// lookahead;3 ≈ 覆盖接下来几次自动切歌,不跟 [`RADIUS`] 的视口语义混用。
+const PLAYBACK_COVER_RADIUS: usize = 3;
+
+/// 选中某首歌停留超过此窗口,才查它的远端真实播放次数。比 [`crate::runtime::state::COVER_DEBOUNCE`]
+/// 长得多 —— 回忆坐标单首一请求且可能撞风控,只在用户「停下来看」时才打。后续按手感调。
+const PLAY_COUNT_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch。
+pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
+    request_covers(state, covers);
+    request_playlist_tracks(state, client);
+    request_play_count(state, client);
+}
+
+/// 看 view 决定的 sel 周围 [`RADIUS`] 内未 cache / pending 的封面,
+/// sel 优先 → 外扩 提交给 client 端 fetcher。来源随封面一起带出(决定落盘子目录)。
+fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
+    let items = collect_pending_covers(state);
+    for (source, url) in items {
+        ensure_cover(state, covers, source, url);
+    }
+}
+
+/// 收集未 cache、未 pending 的 `(来源, 封面 URL)`,两条轴:浏览选中 sel ±[`RADIUS`]
+/// (随 view 取歌单 / 歌曲列表),以及在播曲 ±[`PLAYBACK_COVER_RADIUS`](沿播放队列)。
+/// 后者与 view 无关——全屏渲染的是在播曲,且自动切歌的下一首也要先就绪。
+///
+/// 来源从所在条目的 id namespace 派生(歌单 / 歌曲都带源)。
+fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+    let mut out = Vec::<(SourceKind, MediaUrl)>::new();
+    let cache = &state.cover_cache;
+    let pending = &state.cover_pending;
+    let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
+                       out: &mut Vec<(SourceKind, MediaUrl)>| {
+        if let Some((source, u)) = item
+            && !cache.contains_key(u)
+            && !pending.contains(u)
+            && !out.iter().any(|(_, existing)| existing == u)
+        {
+            out.push((source, u.clone()));
+        }
+    };
+    match state.view {
+        View::Playlists => {
+            // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
+            let filtered = state.filtered_playlists();
+            let sel = state.sel_playlist;
+            let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
+                filtered.get(i).and_then(|p| {
+                    p.data
+                        .cover_url
+                        .as_ref()
+                        .map(|u| (p.data.id.namespace(), u))
+                })
+            };
+            push_if_new(get(sel), &mut out);
+            for d in 1..=RADIUS {
+                if let Some(idx) = sel.checked_sub(d) {
+                    push_if_new(get(idx), &mut out);
+                }
+                push_if_new(get(sel.saturating_add(d)), &mut out);
+            }
+        }
+        View::Library => {
+            // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
+            // clone <200 行 typical, <1ms),保持索引语义一致。
+            let filtered = state.filtered_tracks();
+            let sel = state.sel_track;
+            let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
+                filtered.get(i).and_then(|sv| {
+                    sv.data
+                        .cover_url
+                        .as_ref()
+                        .map(|u| (sv.data.id.namespace(), u))
+                })
+            };
+            push_if_new(get(sel), &mut out);
+            for d in 1..=RADIUS {
+                if let Some(idx) = sel.checked_sub(d) {
+                    push_if_new(get(idx), &mut out);
+                }
+                push_if_new(get(sel.saturating_add(d)), &mut out);
+            }
+        }
+    }
+
+    // 在播曲与浏览选中解耦:全屏直接渲染在播曲,自动切歌也要让接下来几首封面就绪。沿
+    // `state.queue`(已应用 shuffle 的有效播放顺序)给在播曲 ±[`PLAYBACK_COVER_RADIUS`]
+    // 预取;在播曲自身即便不在队列(单首试听 / 队列刚换)也单独保一张。
+    if let Some(track) = state.playback.track.as_ref() {
+        push_if_new(song_cover(track), &mut out);
+    }
+    if let Some(pos) = state.queue_current_index() {
+        for d in 1..=PLAYBACK_COVER_RADIUS {
+            if let Some(idx) = pos.checked_sub(d)
+                && let Some(s) = state.queue.get(idx)
+            {
+                push_if_new(song_cover(s), &mut out);
+            }
+            if let Some(s) = state.queue.get(pos.saturating_add(d)) {
+                push_if_new(song_cover(s), &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// 从一首歌取 `(来源, 封面 URL)`;无封面返回 `None`。来源由 id namespace 派生。
+fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
+    s.cover_url.as_ref().map(|u| (s.id.namespace(), u))
+}
+
+/// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
+/// `source` 随请求带给 fetcher(决定缓存落盘子目录)。
+fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind, url: MediaUrl) {
+    if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
+        return;
+    }
+    state.cover_pending.insert(url.clone());
+    mineral_log::debug!(target: "prefetch", url = %url, source = ?source, "request cover");
+    covers.request(source, url);
+}
+
+/// 看 sel_playlist 周围 [`RADIUS`] 内未 cache 的歌单,提交 PlaylistTracks。
+/// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
+fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
+    if state.view != View::Playlists {
+        return;
+    }
+    for id in collect_pending_tracks(state) {
+        mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?id.namespace(), "request playlist tracks");
+        client.submit_task(
+            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
+            Priority::User,
+        );
+        // 成败都记:失败歌单的 tracks_cache 永远不会被填,只有靠这里去重才不会
+        // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
+        state.tracks_requested.insert(id);
+    }
+}
+
+/// 选中某首歌停留超过 [`PLAY_COUNT_DEBOUNCE`] 后,查它的远端真实累计播放次数。
+///
+/// 只查当前选中那一首(回忆坐标单首一请求,且只在 selected 详情展示);停留防抖
+/// 避免翻列表时为掠过的歌打满 API。`play_count_requested` 成败都记,不反复打同一首。
+/// 不预判来源能力 —— 不支持的源任务在 lane 里静默失败(debug),不把 channel 能力硬编码进 UI。
+fn request_play_count(state: &mut AppState, client: &dyn Client) {
+    if state.view != View::Library {
+        return;
+    }
+    if state.last_sel_change.elapsed() < PLAY_COUNT_DEBOUNCE {
+        return;
+    }
+    let Some(id) = selected_track_id(state) else {
+        return;
+    };
+    if state.play_count_requested.contains(&id) {
+        return;
+    }
+    mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "request remote play count");
+    client.submit_task(
+        TaskKind::ChannelFetch(ChannelFetchKind::RemotePlayCount {
+            song_id: id.clone(),
+        }),
+        Priority::User,
+    );
+    state.play_count_requested.insert(id);
+}
+
+/// 当前 Library 选中行的歌曲 id(filtered 索引);无选中 / 空列表返回 `None`。
+fn selected_track_id(state: &AppState) -> Option<SongId> {
+    state
+        .filtered_tracks()
+        .get(state.sel_track)
+        .map(|sv| sv.data.id.clone())
+}
+
+/// sel 周围 [`RADIUS`] 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
+fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
+    let filtered = state.filtered_playlists();
+    let sel = state.sel_playlist;
+    let mut out = Vec::new();
+    let mut consider = |idx: usize| {
+        if let Some(p) = filtered.get(idx) {
+            let id = &p.data.id;
+            if !state.tracks_cache.contains_key(id) && !state.tracks_requested.contains(id) {
+                out.push(id.clone());
+            }
+        }
+    };
+    consider(sel);
+    for d in 1..=RADIUS {
+        if let Some(idx) = sel.checked_sub(d) {
+            consider(idx);
+        }
+        consider(sel.saturating_add(d));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+
+    use super::{PLAYBACK_COVER_RADIUS, collect_pending_covers};
+    use crate::runtime::state::{AppState, View};
+
+    /// 造一首带封面 URL 的歌:id = `s{i}`、cover = `https://cover/{i}.jpg`。
+    fn song_with_cover(i: usize) -> color_eyre::Result<Song> {
+        Ok(Song {
+            id: SongId::new(SourceKind::NETEASE, format!("s{i}")),
+            name: format!("song {i}"),
+            artists: Vec::new(),
+            album: None,
+            duration_ms: 1000,
+            cover_url: Some(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?),
+            source_url: None,
+        })
+    }
+
+    /// 收集结果里是否含某序号歌的封面 URL。
+    fn collected_has(state: &AppState, i: usize) -> color_eyre::Result<bool> {
+        let want = MediaUrl::remote(&format!("https://cover/{i}.jpg"))?;
+        Ok(collect_pending_covers(state)
+            .iter()
+            .any(|(_, u)| *u == want))
+    }
+
+    /// 在播曲及其播放队列 ±[`PLAYBACK_COVER_RADIUS`] 邻居的封面进入 prefetch 集合。
+    /// 刻意停在 Playlists 视图(per-view 路径只看歌单封面、此处无),隔离出在播曲这条线。
+    #[test]
+    fn collects_playing_track_and_queue_neighbors() -> color_eyre::Result<()> {
+        let mut state = AppState::empty();
+        state.view = View::Playlists;
+        let queue = (0..10)
+            .map(song_with_cover)
+            .collect::<color_eyre::Result<Vec<Song>>>()?;
+        state.playback.track = queue.get(5).cloned();
+        state.queue = queue;
+
+        // 在播曲 idx 5,半径 3 → idx 2..=8 应全部入集。
+        for i in 2..=8 {
+            assert!(
+                collected_has(&state, i)?,
+                "在播曲 ±{PLAYBACK_COVER_RADIUS}:queue[{i}] 封面应进 prefetch"
+            );
+        }
+        // 窗口外(idx 1 / idx 9)不应入集。
+        assert!(!collected_has(&state, 1)?, "窗口外 queue[1] 不应入集");
+        assert!(!collected_has(&state, 9)?, "窗口外 queue[9] 不应入集");
+        Ok(())
+    }
+
+    /// 在播曲即便不在队列(单首试听 / 队列已换),仍应单独保住它自己的封面。
+    #[test]
+    fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
+        let mut state = AppState::empty();
+        state.view = View::Playlists;
+        state.queue = Vec::new();
+        state.playback.track = Some(song_with_cover(42)?);
+
+        assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");
+        Ok(())
+    }
+}

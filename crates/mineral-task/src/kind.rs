@@ -64,6 +64,12 @@ pub enum ChannelFetchKind {
         /// 歌曲 id(自带 namespace)。
         song_id: SongId,
     },
+
+    /// 拉某首歌的远端真实累计播放次数(目标 channel 由 `song_id` 的 namespace 决定)。
+    RemotePlayCount {
+        /// 歌曲 id(自带 namespace)。
+        song_id: SongId,
+    },
 }
 
 impl ChannelFetchKind {
@@ -80,6 +86,9 @@ impl ChannelFetchKind {
                 format!("song_url:{}:{quality:?}", song_id.qualified())
             }
             Self::Lyrics { song_id } => format!("lyrics:{}", song_id.qualified()),
+            Self::RemotePlayCount { song_id } => {
+                format!("remote_play_count:{}", song_id.qualified())
+            }
         }
     }
 
@@ -90,7 +99,9 @@ impl ChannelFetchKind {
         match self {
             Self::MyPlaylists { source } | Self::LikedSongIds { source } => *source,
             Self::PlaylistTracks { id } => id.namespace(),
-            Self::SongUrl { song_id, .. } | Self::Lyrics { song_id } => song_id.namespace(),
+            Self::SongUrl { song_id, .. }
+            | Self::Lyrics { song_id }
+            | Self::RemotePlayCount { song_id } => song_id.namespace(),
         }
     }
 }
@@ -111,6 +122,8 @@ pub enum ChannelFetchKindTag {
     SongUrl,
     /// 对应 [`ChannelFetchKind::Lyrics`]。
     Lyrics,
+    /// 对应 [`ChannelFetchKind::RemotePlayCount`]。
+    RemotePlayCount,
 }
 
 impl ChannelFetchKindTag {
@@ -123,6 +136,7 @@ impl ChannelFetchKindTag {
             ChannelFetchKind::PlaylistTracks { .. } => Self::PlaylistTracks,
             ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
             ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
+            ChannelFetchKind::RemotePlayCount { .. } => Self::RemotePlayCount,
         }
     }
 }
