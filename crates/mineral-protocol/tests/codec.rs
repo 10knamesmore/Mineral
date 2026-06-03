@@ -130,6 +130,7 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         next_buffered_bps: 6_000,
         next_ready: true,
         next_download_complete: true,
+        sample_rate_hz: 44_100,
     };
     send(&mut sender, &Response::AudioSnapshot(snap)).await?;
     let got: Response = recv(&mut receiver)

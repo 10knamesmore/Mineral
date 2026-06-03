@@ -1,5 +1,6 @@
 //! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode。
 
+use mineral_model::AudioFormat;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -192,34 +193,24 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     );
 }
 
-/// 右下角:固定宽 10 的音量条 + 当前码率/格式标签。
+/// vms 行:vol / mode / fmt 三块三等分铺开(分别左 / 居中 / 右对齐)。fmt 段 =
+/// format + 位深 + 采样率 + 码率,各缺失即省略(见 [`fmt_spec_label`])。
 fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
     }
+    let [vol_area, mode_area, fmt_area] = Layout::horizontal([
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+    ])
+    .areas(area);
+
     const BAR_W: usize = 10;
     let filled = usize::from(pb.volume_pct) * BAR_W / 100;
     let fill = "█".repeat(filled);
     let empty = "░".repeat(BAR_W.saturating_sub(filled));
-    // PlayUrl 在 PlayUrlReady 或 prefetch 命中后写入,切歌瞬间清成 None。
-    // 没拿到时显 `—`,跟 transport 别处的「无值」表示一致。
-    // 文本用 channel 实测的 format + bitrate;颜色按实测音质分级(见 fmt_tier_color)。
-    let (fmt_text, fmt_color) = pb
-        .play_url
-        .as_ref()
-        .map(|pu| {
-            let text = format!("{} {}kbps", pu.format, pu.bitrate_bps / 1000);
-            (
-                text,
-                fmt_tier_color(pu.format.is_lossless(), pu.bitrate_bps, theme),
-            )
-        })
-        .unwrap_or_else(|| ("—".to_owned(), theme.overlay));
-    // 来源已知 → 来源字形(上色)作 fmt 前缀;未知 → 退回旧的 `fmt` 文字标签。
-    let (badge_glyph, badge_color) = pb
-        .play_origin
-        .map_or(("fmt", theme.overlay), |o| origin_badge(o, theme));
-    let line = Line::from(vec![
+    let vol = Line::from(vec![
         Span::styled(" vol ", Style::new().fg(theme.overlay)),
         Span::styled(fill, Style::new().fg(theme.accent)),
         Span::styled(empty, Style::new().fg(theme.surface0)),
@@ -227,14 +218,92 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
             format!(" {}%", pb.volume_pct),
             Style::new().fg(theme.subtext),
         ),
-        Span::styled("   │   ", Style::new().fg(theme.surface1)),
+    ]);
+    frame.render_widget(Paragraph::new(vol).alignment(Alignment::Left), vol_area);
+
+    let mode = Line::from(vec![
         Span::styled("mode ", Style::new().fg(theme.overlay)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
-        Span::styled("   │   ", Style::new().fg(theme.surface1)),
-        Span::styled(format!("{badge_glyph} "), Style::new().fg(badge_color)),
-        Span::styled(fmt_text, Style::new().fg(fmt_color)),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(mode).alignment(Alignment::Center), mode_area);
+
+    // PlayUrl 在 PlayUrlReady / prefetch 命中后写入,切歌瞬间清 None;没拿到时整段显 `—`。
+    // 采样率取 engine 实测(pb.sample_rate_hz),与 format / bitrate(PlayUrl 实测)同为「当前在播」口径。
+    let (text, color) = pb
+        .play_url
+        .as_ref()
+        .map(|pu| {
+            (
+                fmt_spec_label(&pu.format, pu.bit_depth, pb.sample_rate_hz, pu.bitrate_bps),
+                fmt_tier_color(pu.format.is_lossless(), pu.bitrate_bps, theme),
+            )
+        })
+        .unwrap_or_else(|| ("—".to_owned(), theme.overlay));
+    // 来源已知 → 来源字形(上色)作前缀;未知 → 退回 `fmt` 文字标签。
+    let (badge_glyph, badge_color) = pb
+        .play_origin
+        .map_or(("fmt", theme.overlay), |o| origin_badge(o, theme));
+    let fmt = Line::from(vec![
+        Span::styled(format!("{badge_glyph} "), Style::new().fg(badge_color)),
+        Span::styled(text, Style::new().fg(color)),
+        Span::raw(" "),
+    ]);
+    frame.render_widget(Paragraph::new(fmt).alignment(Alignment::Right), fmt_area);
+}
+
+/// 把 channel 实测的 format / 位深 / 采样率 / 码率拼成 fmt 段文本,如 `FLAC 24bit/96kHz 999kbps`。
+///
+/// 位深仅本地无损有值、采样率未起播为 0,各自缺失即省略对应片段——故网易云 mp3 退到
+/// `MP3 44.1kHz 320kbps`、刚切歌(采样率未探出)退到 `FLAC 999kbps`。
+///
+/// # Params:
+///   - `format`: 实测容器格式
+///   - `bit_depth`: 位深(bit),无损实测有值,否则 `None`
+///   - `sample_rate_hz`: engine 实测采样率(Hz),`0` 表示未探出
+///   - `bitrate_bps`: 实测码率(bps)
+///
+/// # Return:
+///   拼好的 fmt 段文本。
+fn fmt_spec_label(
+    format: &AudioFormat,
+    bit_depth: Option<u8>,
+    sample_rate_hz: u32,
+    bitrate_bps: u32,
+) -> String {
+    let mut specs = Vec::<String>::new();
+    if let Some(bits) = bit_depth {
+        specs.push(format!("{bits}bit"));
+    }
+    if let Some(khz) = fmt_sample_rate(sample_rate_hz) {
+        specs.push(khz);
+    }
+    let kbps = bitrate_bps / 1000;
+    if specs.is_empty() {
+        format!("{format} {kbps}kbps")
+    } else {
+        format!("{format} {} {kbps}kbps", specs.join("/"))
+    }
+}
+
+/// 采样率(Hz)→ 紧凑 kHz 文本:`44100`→`44.1kHz`、`48000`→`48kHz`、`96000`→`96kHz`。
+///
+/// 整除 1000 显整数、否则留 1 位小数;`0`(未起播 / 未探出)→ `None`(调用方据此省略采样率段)。
+///
+/// # Params:
+///   - `hz`: 采样率(Hz)
+///
+/// # Return:
+///   kHz 文本,`0` 为 `None`。
+fn fmt_sample_rate(hz: u32) -> Option<String> {
+    if hz == 0 {
+        return None;
+    }
+    let khz = f64::from(hz) / 1000.0;
+    if hz.is_multiple_of(1000) {
+        Some(format!("{khz:.0}kHz"))
+    } else {
+        Some(format!("{khz:.1}kHz"))
+    }
 }
 
 /// 来源徽标:字形 + 颜色。download=绿(永久在库)/ cache=蓝(LRU 临时)/ remote=灰(网络流)。
@@ -276,13 +345,18 @@ mod tests {
 
     use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
 
-    use super::{fmt_tier_color, split_buffered_track};
+    use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
     use crate::render::theme::Theme;
     use crate::runtime::playback::{Playback, PlaybackOrigin};
     use crate::test_support::{song, with_duration, with_name};
 
     /// 造一个「播放中 + 指定来源 + PlayUrl」的 Playback,供来源徽标快照。
-    fn pb_with_origin(origin: PlaybackOrigin, format: AudioFormat, bitrate_bps: u32) -> Playback {
+    fn pb_with_origin(
+        origin: PlaybackOrigin,
+        format: AudioFormat,
+        bitrate_bps: u32,
+        bit_depth: Option<u8>,
+    ) -> Playback {
         let track = with_duration(with_name(song("1"), "捕风"), 225_000);
         let song_id = track.id.clone();
         let mut pb = Playback::new();
@@ -298,6 +372,7 @@ mod tests {
             quality: BitRate::Lossless,
             size: 0,
             format,
+            bit_depth,
         });
         pb
     }
@@ -369,6 +444,62 @@ mod tests {
         assert_eq!(split_buffered_track(11, 2, 5_000), (2, 6));
         // 缓冲落在播放头之内(25% → buffered_cells=2 ≤ filled+1)→ 无亮段。
         assert_eq!(split_buffered_track(11, 2, 2_500), (0, 8));
+    }
+
+    /// `fmt_sample_rate`:0→None;整除 1000 显整数、否则留 1 位小数;覆盖常见档位。
+    #[test]
+    fn fmt_sample_rate_cases() {
+        assert_eq!(fmt_sample_rate(0), None);
+        assert_eq!(fmt_sample_rate(44_100).as_deref(), Some("44.1kHz"));
+        assert_eq!(fmt_sample_rate(48_000).as_deref(), Some("48kHz"));
+        assert_eq!(fmt_sample_rate(96_000).as_deref(), Some("96kHz"));
+        assert_eq!(fmt_sample_rate(88_200).as_deref(), Some("88.2kHz"));
+        assert_eq!(fmt_sample_rate(192_000).as_deref(), Some("192kHz"));
+    }
+
+    /// `fmt_spec_label`:位深 / 采样率各缺失即省略对应段,format 经 Display 落小写。
+    #[test]
+    fn fmt_spec_label_cases() {
+        // 本地无损:位深 + 采样率全有。
+        assert_eq!(
+            fmt_spec_label(&AudioFormat::Flac, Some(24), 96_000, 999_000),
+            "flac 24bit/96kHz 999kbps"
+        );
+        // 流式有损:无位深、有采样率。
+        assert_eq!(
+            fmt_spec_label(&AudioFormat::Mp3, None, 44_100, 320_000),
+            "mp3 44.1kHz 320kbps"
+        );
+        // 刚切歌:采样率未探出(0)且无位深 → 退到 format + 码率。
+        assert_eq!(
+            fmt_spec_label(&AudioFormat::Flac, None, 0, 999_000),
+            "flac 999kbps"
+        );
+        // 仅位深(采样率未探出):位深段独立成立,不带 `/`。
+        assert_eq!(
+            fmt_spec_label(&AudioFormat::Flac, Some(16), 0, 999_000),
+            "flac 16bit 999kbps"
+        );
+    }
+
+    /// fmt 段含位深 + 采样率的完整渲染:本地无损(↓ 绿,flac 24bit/96kHz 999kbps),
+    /// 且 vol / mode / fmt 三块三等分铺开。
+    #[test]
+    fn transport_fmt_bit_hz_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let mut pb = pb_with_origin(
+            PlaybackOrigin::Download,
+            AudioFormat::Flac,
+            999_000,
+            /*bit_depth*/ Some(24),
+        );
+        pb.sample_rate_hz = 96_000;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "播放栏:fmt 含位深+采样率(flac 24bit/96kHz)",
+            t.backend()
+        );
+        Ok(())
     }
 
     /// 无 track:transport 空态。
@@ -462,7 +593,12 @@ mod tests {
     #[test]
     fn transport_origin_download_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
-        let pb = pb_with_origin(PlaybackOrigin::Download, AudioFormat::Flac, 999_000);
+        let pb = pb_with_origin(
+            PlaybackOrigin::Download,
+            AudioFormat::Flac,
+            999_000,
+            /*bit_depth*/ None,
+        );
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 download(↓ 绿)", t.backend());
         Ok(())
@@ -472,7 +608,12 @@ mod tests {
     #[test]
     fn transport_origin_cache_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
-        let pb = pb_with_origin(PlaybackOrigin::Cache, AudioFormat::Flac, 999_000);
+        let pb = pb_with_origin(
+            PlaybackOrigin::Cache,
+            AudioFormat::Flac,
+            999_000,
+            /*bit_depth*/ None,
+        );
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 cache(◆ 蓝)", t.backend());
         Ok(())
@@ -482,7 +623,12 @@ mod tests {
     #[test]
     fn transport_origin_remote_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
-        let pb = pb_with_origin(PlaybackOrigin::Remote, AudioFormat::Mp3, 320_000);
+        let pb = pb_with_origin(
+            PlaybackOrigin::Remote,
+            AudioFormat::Mp3,
+            320_000,
+            /*bit_depth*/ None,
+        );
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
         Ok(())

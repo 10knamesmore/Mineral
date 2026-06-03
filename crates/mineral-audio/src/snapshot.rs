@@ -62,4 +62,8 @@ pub struct AudioSnapshot {
 
     /// 已预排的下一曲远端字节是否已下完(capture 预排有意义;否则 false)。
     pub next_download_complete: bool,
+
+    /// 当前曲目采样率(Hz),由 decoder 解出后写入;无缝边界轮转时切到下一曲的值。
+    /// 没在播 / 未探出为 0。transport 据此在 fmt 段显采样率(如 `44.1kHz`)。
+    pub sample_rate_hz: u32,
 }

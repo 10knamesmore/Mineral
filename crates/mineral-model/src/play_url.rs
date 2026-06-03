@@ -19,6 +19,9 @@ pub struct PlayUrl {
     pub size: u64,
     /// 文件格式——channel 实际提供的容器格式(`mp3` / `flac` 等),拿不到为 `Other("")`。
     pub format: AudioFormat,
+    /// 位深(bits per sample),如 16 / 24。仅本地无损文件经实测有值;流式来源的接口不返回
+    /// 位深、有损格式(mp3/aac)亦无此概念,这些情形均为 `None`(显示侧据此省略位深段)。
+    pub bit_depth: Option<u8>,
 }
 
 impl PlayUrl {

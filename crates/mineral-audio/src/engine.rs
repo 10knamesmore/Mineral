@@ -310,6 +310,10 @@ impl<'a> Engine<'a> {
         self.head.next.occupied = false;
         self.player.stop();
         self.pending_next_gen = 0;
+        // 切歌即让采样率失效:流式 build 阻塞期间 snapshot 不刷新,不清零会残留上一首采样率
+        // 直到本首 decoder 建好后才更新。此刻已 stop、无 PCM 喂频谱,清零安全。
+        self.cur_sample_rate = 0;
+        self.sr_atomic.store(0, Ordering::Relaxed);
 
         let track_gen = self.next_gen();
         let idx = 0;
@@ -525,6 +529,7 @@ impl<'a> Engine<'a> {
         g.next_buffered_bps = f.next_buffered_bps;
         g.next_ready = f.next_ready;
         g.next_download_complete = f.next_download_complete;
+        g.sample_rate_hz = self.cur_sample_rate;
         // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
     }
 }

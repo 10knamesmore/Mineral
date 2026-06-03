@@ -304,9 +304,11 @@ mod tests {
             .enumerate()
             .max_by_key(|(_, v)| **v)
             .ok_or_else(|| eyre!("empty bars"))?;
+        // LOG_AXIS_BLEND=0.92(掺 8% 线性)把中频左移:1kHz 落 bar ~26(纯对数时 ~36,见
+        // blend_shifts_* 锁方向)。范围按 blend 设计区间 [0.88,0.96] 的落点漂移取 22..=32。
         assert!(
-            (28..=44).contains(&peak_idx),
-            "1kHz peak expected mid-band, got bar {peak_idx}"
+            (22..=32).contains(&peak_idx),
+            "1kHz peak expected mid-band (blend=0.92 ⇒ ~bar 26), got bar {peak_idx}"
         );
         assert!(peak_val > 0, "peak should be > 0");
         assert_eq!(bars.len(), TEST_BARS);

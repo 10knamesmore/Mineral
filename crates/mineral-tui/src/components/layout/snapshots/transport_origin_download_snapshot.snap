@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-tui/src/components/transport.rs
+source: crates/mineral-tui/src/components/layout/transport.rs
 description: "播放栏:来源徽标 download(↓ 绿)"
 expression: t.backend()
 ---
@@ -9,5 +9,5 @@ expression: t.backend()
 "│ 1:00 ━━━━━━━━━━━━━●──────────────────────────────────── 3:45 │"
 "│                     [⏮]   [⏸]   [⏭]   [→]                    │"
 "│                      p     ␣     n     m                     │"
-"│ vol ████████░░ 80%   │   mode seq   │   ↓ flac 999kbps       │"
+"│ vol ████████░░ 80%        mode seq            ↓ flac 999kbps │"
 "╰──────────────────────────────────────────────────────────────╯"

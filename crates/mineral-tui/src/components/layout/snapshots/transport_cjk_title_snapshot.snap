@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-tui/src/components/transport.rs
+source: crates/mineral-tui/src/components/layout/transport.rs
 description: "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)"
 expression: t.backend()
 ---
@@ -9,5 +9,5 @@ expression: t.backend()
 "│ 1:00 ━━━━━━━━━●────────────────────────── 4:00 │"
 "│              [⏮]   [⏸]   [⏭]   [→]             │"
 "│               p     ␣     n     m              │"
-"│ vol ██████████ 100%   │   mode seq   │   fmt — │"
+"│ vol ██████████     mode seq              fmt — │"
 "╰────────────────────────────────────────────────╯"

@@ -36,6 +36,7 @@ fn audio_snapshot_round_trip() -> color_eyre::Result<()> {
         next_buffered_bps: 6_000,
         next_ready: true,
         next_download_complete: true,
+        sample_rate_hz: 44_100,
     };
     let back = round_trip(&snap)?;
     assert_eq!(snap, back);

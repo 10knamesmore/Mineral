@@ -31,6 +31,9 @@ pub struct Playback {
     /// 当前曲目已缓冲比例(0..=10000 basis points)。本地 / 已缓存恒满;远端流式播放时
     /// 随下载推进。transport 进度条据此在播放头之后画一段更亮的「已缓冲」轨道。
     pub buffered_bps: u16,
+
+    /// 当前曲目采样率(Hz),由 audio engine 实测灌入;0 = 未在播 / 未探出。transport 在 fmt 段显示。
+    pub sample_rate_hz: u32,
 }
 
 impl Playback {
@@ -46,6 +49,7 @@ impl Playback {
             play_origin: None,
             audio_backend: AudioBackend::Device,
             buffered_bps: 0,
+            sample_rate_hz: 0,
         }
     }
 
@@ -72,6 +76,7 @@ impl Playback {
         self.volume_pct = snap.volume_pct;
         self.audio_backend = snap.backend;
         self.buffered_bps = snap.buffered_bps;
+        self.sample_rate_hz = snap.sample_rate_hz;
     }
 }
 

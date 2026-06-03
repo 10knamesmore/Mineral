@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-tui/src/components/transport.rs
+source: crates/mineral-tui/src/components/layout/transport.rs
 description: "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)"
 expression: t.backend()
 ---
@@ -9,5 +9,5 @@ expression: t.backend()
 "│ 1:00 ━━━━━━━━━●────────────────────────── 3:45 │"
 "│              [⏮]   [⏸]   [⏭]   [→]             │"
 "│               p     ␣     n     m              │"
-"│ vol ████████░░ 80%   │   mode seq   │   fmt —  │"
+"│ vol ████████░░     mode seq              fmt — │"
 "╰────────────────────────────────────────────────╯"

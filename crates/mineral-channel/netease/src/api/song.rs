@@ -226,6 +226,8 @@ fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<Pl
                 quality,
                 size: d.size,
                 format: d.format.map(AudioFormat::from).unwrap_or_default(),
+                // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
+                bit_depth: None,
             })
         })
         .collect())
