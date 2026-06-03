@@ -3,4 +3,5 @@
 pub mod anim;
 pub mod cells;
 pub mod color;
+pub mod palette;
 pub mod theme;

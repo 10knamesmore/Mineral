@@ -17,6 +17,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::render::color::{lerp_color, rotate_hue};
+use crate::render::palette::{ColumnColors, CoverPalette};
 use crate::render::theme::Theme;
 
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
@@ -61,6 +62,13 @@ const HUE_ROTATE: bool = true;
 /// 又不晃眼"。短了会让人头晕,长了一首歌都察觉不到。
 const HUE_CYCLE_TICKS: u32 = 1800;
 
+/// 封面就绪后,从当前可见配色缓动到封面色场的过渡时长(tick)。
+const COVER_FADE_TICKS: u32 = 300;
+
+/// 2D 色场的纵向采样偏移(‰):顶端点比底端点沿色带多偏向高频多少。
+/// 200‰ 在底/顶之间拉开一档明度层次,延续"底暗顶亮"的气质。
+const COVER_VSHIFT_PERMILLE: u32 = 200;
+
 /// 是否启用 peak 弹簧物理(target 跳变时 pos 过冲 + 阻尼回弹)。后续接 config 时改读配置。
 const SPRING_PEAK: bool = true;
 
@@ -72,6 +80,89 @@ const SPRING_STIFFNESS: f32 = 0.35;
 /// 临界阻尼 c = 2·√k ≈ 1.18,这里 0.45 < 临界 → underdamped,2 次可见过冲后稳定。
 /// 加大就稳得快但失去"弹"的感觉,减小则振荡多到分散注意。
 const SPRING_DAMPING: f32 = 0.45;
+
+/// 频谱配色状态机:无封面时沿 hue 漂移,当前播放封面取色就绪后缓动到封面色场再静止。
+///
+/// 命令只有 [`SpectrumState::begin_cover_transition`] / [`SpectrumState::clear_cover`] 两个,
+/// "当前是哪张封面"的身份判定全在 app 层,故本态机能脱离播放器单测。
+#[derive(Clone, Debug)]
+enum SpectrumColor {
+    /// 默认 / 无封面:全列同色,沿用 `hue_phase` 驱动的色相漂移(现状逐像素等价)。
+    Hue,
+
+    /// 封面就绪:从**切换那刻的可见配色**缓动到封面色场。`frame` 0→[`COVER_FADE_TICKS`]。
+    ///
+    /// 起点存整个上一态,故红专辑换蓝专辑时起点是红、不是 hue 初始色。
+    Transition {
+        /// 过渡起点态(切换那刻的可见配色)。begin 时已扁平化为 `Hue` / `CoverFixed`,
+        /// 不嵌套 `Transition`,故起点端点计算最多递归一层、不会无限。
+        from: Box<Self>,
+
+        /// `from` 为 `Hue` 时的固定色相角(冻结时刻的 `hue_deg()`);`from` 为 `CoverFixed` 时无用。
+        frozen_hue_deg: f32,
+
+        /// 目标封面色场。
+        to: CoverPalette,
+
+        /// 已过渡帧数,推进到 [`COVER_FADE_TICKS`] 转入 [`Self::CoverFixed`]。
+        frame: u32,
+    },
+
+    /// 过渡完成:静止显示封面色场,不再随 tick 变化(hue 停转)。
+    CoverFixed {
+        /// 静止显示的封面色场。
+        palette: CoverPalette,
+    },
+}
+
+impl SpectrumColor {
+    /// 算第 `col` 列(共 `bar_count` 列)的底/顶端点色,垂直 lerp 逻辑由调用方不变沿用。
+    ///
+    /// - `Hue`:全列同色 `rotate_hue(accent, hue) → rotate_hue(accent_2, hue)`(零回归)。
+    /// - `CoverFixed`:沿封面色带按频率位置取底/顶端点(见 [`CoverPalette::column_endpoints`])。
+    /// - `Transition`:起点 = `from` 态该列端点(`Hue` 起点全列同色、`CoverFixed` 起点沿色带),
+    ///   终点 = 目标色场该列端点,按 `frame/COVER_FADE_TICKS` 整数定点逐端点 lerp。
+    ///
+    /// # Params:
+    ///   - `col`: 列序号(从 0 起)
+    ///   - `bar_count`: 总列数
+    ///   - `hue_deg`: 当前 `Hue` 态色相角(仅 `Hue` 态用)
+    ///   - `theme`: 取 `accent` / `accent_2` 端点
+    ///
+    /// # Return:
+    ///   该列底 / 顶端点色。
+    fn column_endpoints(
+        &self,
+        col: usize,
+        bar_count: usize,
+        hue_deg: f32,
+        theme: &Theme,
+    ) -> ColumnColors {
+        match self {
+            Self::Hue => ColumnColors {
+                bottom: rotate_hue(theme.accent, hue_deg),
+                top: rotate_hue(theme.accent_2, hue_deg),
+            },
+            Self::CoverFixed { palette } => {
+                palette.column_endpoints(col, bar_count, COVER_VSHIFT_PERMILLE)
+            }
+            Self::Transition {
+                from,
+                frozen_hue_deg,
+                to,
+                frame,
+            } => {
+                let start = from.column_endpoints(col, bar_count, *frozen_hue_deg, theme);
+                let end = to.column_endpoints(col, bar_count, COVER_VSHIFT_PERMILLE);
+                let prog = u64::from(*frame).saturating_mul(1000) / u64::from(COVER_FADE_TICKS);
+                ColumnColors {
+                    bottom: lerp_color(start.bottom, end.bottom, prog, 1000),
+                    top: lerp_color(start.top, end.top, prog, 1000),
+                }
+            }
+        }
+    }
+}
 
 /// 频谱状态:每根条的当前高度 + peak target/hold/弹簧 pos+vel + 色相相位。
 ///
@@ -94,8 +185,11 @@ pub struct SpectrumState {
     /// peak 弹簧速度。每 tick 由刚度 / 阻尼推进。
     peak_vel: Vec<f32>,
 
-    /// 色相旋转相位,0..[`HUE_CYCLE_TICKS`]。每 tick +1,渲染时换算成度数。
+    /// 色相旋转相位,0..[`HUE_CYCLE_TICKS`]。仅 `Hue` 态每 tick +1,渲染时换算成度数。
     hue_phase: u32,
+
+    /// 配色状态机。默认 `Hue`(漂移),封面取色就绪后由 app 层命令切到过渡 / 静止。
+    color: SpectrumColor,
 
     /// 渲染层根据 area.width 算出的目标条数,FFT compute 下一帧用它。
     /// `Cell` 是因为 `paint_bars` 拿 `&SpectrumState`,这是「render → tick」反向通道。
@@ -112,6 +206,7 @@ impl SpectrumState {
             peak_pos: vec![f32::from(BASELINE_MIN); DEFAULT_BAR_COUNT],
             peak_vel: vec![0.0; DEFAULT_BAR_COUNT],
             hue_phase: 0,
+            color: SpectrumColor::Hue,
             target_bars: Cell::new(DEFAULT_BAR_COUNT),
         }
     }
@@ -188,9 +283,76 @@ impl SpectrumState {
         self.apply_baseline();
         self.advance_peaks();
         self.advance_peak_spring();
-        if HUE_ROTATE {
-            self.hue_phase = (self.hue_phase + 1) % HUE_CYCLE_TICKS;
+        self.advance_color();
+    }
+
+    /// 推进配色状态机一拍(替换原先裸 `hue_phase` 自增):
+    ///
+    /// - `Hue`:`HUE_ROTATE` 时 `hue_phase` 自增、绕 [`HUE_CYCLE_TICKS`] 取模。
+    /// - `Transition`:`frame += 1`,到 [`COVER_FADE_TICKS`] 转 `CoverFixed`(hue 停转)。
+    /// - `CoverFixed`:不动。
+    ///
+    /// 用 `mem::replace` 取出当前态再写回,避免在 `match` 内 move `palette`(无 clone)。
+    fn advance_color(&mut self) {
+        match std::mem::replace(&mut self.color, SpectrumColor::Hue) {
+            SpectrumColor::Hue => {
+                if HUE_ROTATE {
+                    self.hue_phase = (self.hue_phase + 1) % HUE_CYCLE_TICKS;
+                }
+                // color 已被换回 Hue,无需再写。
+            }
+            SpectrumColor::Transition {
+                from,
+                frozen_hue_deg,
+                to,
+                frame,
+            } => {
+                let next = frame + 1;
+                self.color = if next >= COVER_FADE_TICKS {
+                    SpectrumColor::CoverFixed { palette: to }
+                } else {
+                    SpectrumColor::Transition {
+                        from,
+                        frozen_hue_deg,
+                        to,
+                        frame: next,
+                    }
+                };
+            }
+            SpectrumColor::CoverFixed { palette } => {
+                self.color = SpectrumColor::CoverFixed { palette };
+            }
         }
+    }
+
+    /// 命令:封面取色就绪,从**当前可见配色**缓动到封面色场 `to`。
+    ///
+    /// 起点 = 切换那刻的整个可见态:`Hue` 漂移则从当前 hue 单色起步;已是 `CoverFixed`
+    /// (上一张封面)则**从那张封面的色场起步**(红专辑换蓝专辑 → 红→蓝,而非 hue 初始色)。
+    /// 已在 `Transition`(换歌打断)时把它压成"行将抵达的目标色场"作起点,避免 `from` 无限嵌套。
+    ///
+    /// # Params:
+    ///   - `to`: 目标封面色场
+    pub fn begin_cover_transition(&mut self, to: CoverPalette) {
+        let frozen_hue_deg = self.hue_deg();
+        // 取出当前可见态作起点(占位换成 Hue);Transition 起点扁平化为其目标 CoverFixed。
+        let from = match std::mem::replace(&mut self.color, SpectrumColor::Hue) {
+            SpectrumColor::Transition { to: prev_to, .. } => {
+                Box::new(SpectrumColor::CoverFixed { palette: prev_to })
+            }
+            visible => Box::new(visible),
+        };
+        self.color = SpectrumColor::Transition {
+            from,
+            frozen_hue_deg,
+            to,
+            frame: 0,
+        };
+    }
+
+    /// 命令:无封面 / 取色失败,回到 `Hue` 漂移(`hue_phase` 从当前值继续,不重置)。
+    pub fn clear_cover(&mut self) {
+        self.color = SpectrumColor::Hue;
     }
 
     /// 弹簧推进:`peak_pos` 朝 `peaks` (target) 跑,带 [`SPRING_STIFFNESS`] / [`SPRING_DAMPING`]。
@@ -290,12 +452,15 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
     let max_units = u32::from(area.height) * 8;
     // 渐变跨度。0 → accent(底)、span → accent_2(顶)。area.height-1 给最顶格 100% accent_2。
     let grad_span = u64::from(area.height.saturating_sub(1)).max(1);
-    // 色相旋转后的渐变两端。每帧算一次,不进 col 循环。
+    // 当前 hue 漂移角度(`Hue` 态全列共用、`Transition` 起点用)。封面态各列端点不同,
+    // 故端点计算下沉进 col 循环。
     let hue = state.hue_deg();
-    let palette_lo = rotate_hue(theme.accent, hue);
-    let palette_hi = rotate_hue(theme.accent_2, hue);
     let buf = frame.buffer_mut();
     for col in 0..render_count {
+        // 该列底/顶端点色:`Hue` 态全列同色(与旧实现逐像素等价),封面态沿频率轴铺色。
+        let endpoints = state.color.column_endpoints(col, render_count, hue, theme);
+        let palette_lo = endpoints.bottom;
+        let palette_hi = endpoints.top;
         let bar = state.bars.get(col).copied().unwrap_or(0);
         let peak = state.spring_peak_at(col);
         let scaled = (u32::from(bar) * max_units) / u32::from(SPECTRUM_RES);
@@ -373,9 +538,21 @@ fn partial_glyph(units: u16) -> &'static str {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
-    use super::SpectrumState;
+    use super::{COVER_FADE_TICKS, SpectrumColor, SpectrumState};
+    use crate::render::palette::{CoverPalette, Rgb};
     use crate::render::theme::Theme;
+
+    /// 固定 3 色板(暗蓝 / 中红 / 亮黄绿,明度拉开),注入态机 / 色场 / 快照测试。
+    fn fixed_palette() -> color_eyre::Result<CoverPalette> {
+        CoverPalette::new(vec![
+            Rgb::new(20, 20, 120),
+            Rgb::new(200, 40, 40),
+            Rgb::new(180, 220, 60),
+        ])
+        .ok_or_else(|| color_eyre::eyre::eyre!("非空应构造成功"))
+    }
 
     /// 频谱 baseline(`SpectrumState::new()`,静默态)渲染快照。
     #[test]
@@ -431,5 +608,244 @@ mod tests {
             terminal.backend()
         );
         Ok(())
+    }
+
+    /// `begin_cover_transition` 后 tick [`COVER_FADE_TICKS`] 次,落到 `CoverFixed`(静止)。
+    #[test]
+    fn cover_transition_settles_to_fixed() -> color_eyre::Result<()> {
+        let mut s = SpectrumState::new();
+        s.begin_cover_transition(fixed_palette()?);
+        assert!(
+            matches!(s.color, SpectrumColor::Transition { .. }),
+            "begin 后应进 Transition"
+        );
+        for _ in 0..COVER_FADE_TICKS {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        assert!(
+            matches!(s.color, SpectrumColor::CoverFixed { .. }),
+            "过渡满应转入 CoverFixed"
+        );
+        Ok(())
+    }
+
+    /// `clear_cover` 把任意态拉回 `Hue` 漂移。
+    #[test]
+    fn clear_cover_returns_to_hue() -> color_eyre::Result<()> {
+        let mut s = SpectrumState::new();
+        s.begin_cover_transition(fixed_palette()?);
+        s.clear_cover();
+        assert!(matches!(s.color, SpectrumColor::Hue), "clear 后应回 Hue");
+        Ok(())
+    }
+
+    /// `Hue` 态 tick 推进 `hue_phase`;`CoverFixed` 态 tick 不改色(端点两帧一致)。
+    #[test]
+    fn hue_advances_but_coverfixed_is_frozen() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let mut s = SpectrumState::new();
+        let before = s.hue_phase;
+        s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        assert_ne!(s.hue_phase, before, "Hue 态 hue_phase 应自增");
+
+        s.begin_cover_transition(fixed_palette()?);
+        for _ in 0..COVER_FADE_TICKS {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        let ep1 = s.color.column_endpoints(2, 16, s.hue_deg(), &theme);
+        s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        let ep2 = s.color.column_endpoints(2, 16, s.hue_deg(), &theme);
+        assert_eq!(ep1, ep2, "CoverFixed 态 tick 不应改色");
+        Ok(())
+    }
+
+    /// `Hue` 态:所有列端点相同(与旧单色实现等价,零回归)。
+    #[test]
+    fn hue_columns_are_uniform() {
+        let theme = Theme::default();
+        let color = SpectrumColor::Hue;
+        let first = color.column_endpoints(
+            /*col*/ 0, /*bar_count*/ 16, /*hue*/ 30.0, &theme,
+        );
+        let mid = color.column_endpoints(
+            /*col*/ 8, /*bar_count*/ 16, /*hue*/ 30.0, &theme,
+        );
+        let last = color.column_endpoints(
+            /*col*/ 15, /*bar_count*/ 16, /*hue*/ 30.0, &theme,
+        );
+        assert_eq!(first, mid);
+        assert_eq!(mid, last);
+    }
+
+    /// `CoverFixed` 态:底色沿频率轴推进,首列 ≠ 末列。
+    #[test]
+    fn coverfixed_columns_span_frequency() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let color = SpectrumColor::CoverFixed {
+            palette: fixed_palette()?,
+        };
+        let first = color.column_endpoints(
+            /*col*/ 0, /*bar_count*/ 16, /*hue*/ 0.0, &theme,
+        );
+        let last = color.column_endpoints(
+            /*col*/ 15, /*bar_count*/ 16, /*hue*/ 0.0, &theme,
+        );
+        assert_ne!(first.bottom, last.bottom, "底色应沿频率轴变化");
+        Ok(())
+    }
+
+    /// `Transition`(从 `Hue` 起步)态:`frame=0` 等于 frozen-hue 起点,`frame=COVER_FADE_TICKS`
+    /// 等于 `CoverFixed`。
+    #[test]
+    fn transition_endpoints_match_start_and_end() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let palette = fixed_palette()?;
+        let frozen = 42.0_f32;
+
+        let at_start = SpectrumColor::Transition {
+            from: Box::new(SpectrumColor::Hue),
+            frozen_hue_deg: frozen,
+            to: palette.clone(),
+            frame: 0,
+        };
+        // 起点 = 该列在 frozen_hue_deg 下的 Hue 端点(外层 hue 参数被 Transition 忽略,只用 from)。
+        let hue_start = SpectrumColor::Hue
+            .column_endpoints(/*col*/ 3, /*bar_count*/ 16, frozen, &theme);
+        assert_eq!(
+            at_start.column_endpoints(
+                /*col*/ 3, /*bar_count*/ 16, /*hue*/ 999.0, &theme
+            ),
+            hue_start,
+            "progress=0 应等于 frozen hue 端点"
+        );
+
+        let at_end = SpectrumColor::Transition {
+            from: Box::new(SpectrumColor::Hue),
+            frozen_hue_deg: frozen,
+            to: palette.clone(),
+            frame: COVER_FADE_TICKS,
+        };
+        let fixed = SpectrumColor::CoverFixed { palette };
+        assert_eq!(
+            at_end.column_endpoints(
+                /*col*/ 3, /*bar_count*/ 16, /*hue*/ 0.0, &theme
+            ),
+            fixed.column_endpoints(
+                /*col*/ 3, /*bar_count*/ 16, /*hue*/ 0.0, &theme
+            ),
+            "progress=1 应等于 CoverFixed 端点"
+        );
+        Ok(())
+    }
+
+    /// 红→蓝:已在 `CoverFixed`(红)时换新色板(蓝),过渡**起点端点 = 红色场**(非 hue 初始色)。
+    /// 锁住"当前可见色 → 新色"的预期。
+    #[test]
+    fn transition_from_cover_starts_at_previous_cover() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let red = CoverPalette::new(vec![
+            Rgb::new(120, 20, 20),
+            Rgb::new(200, 40, 40),
+            Rgb::new(240, 90, 90),
+        ])
+        .ok_or_else(|| color_eyre::eyre::eyre!("红色板非空"))?;
+        let blue = CoverPalette::new(vec![
+            Rgb::new(20, 20, 120),
+            Rgb::new(40, 40, 200),
+            Rgb::new(90, 90, 240),
+        ])
+        .ok_or_else(|| color_eyre::eyre::eyre!("蓝色板非空"))?;
+        let mut s = SpectrumState::new();
+        // 先进入红色场静止。
+        s.begin_cover_transition(red.clone());
+        for _ in 0..COVER_FADE_TICKS {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        assert!(
+            matches!(s.color, SpectrumColor::CoverFixed { .. }),
+            "应先静止在红"
+        );
+
+        // 换蓝:刚切(frame=0)那刻起点端点应等于红色场,而不是 hue。
+        s.begin_cover_transition(blue);
+        let at_start =
+            s.color
+                .column_endpoints(/*col*/ 3, /*bar_count*/ 16, s.hue_deg(), &theme);
+        let red_endpoints = SpectrumColor::CoverFixed { palette: red }.column_endpoints(
+            /*col*/ 3, /*bar_count*/ 16, /*hue*/ 0.0, &theme,
+        );
+        assert_eq!(
+            at_start, red_endpoints,
+            "红→蓝起点应是红色场,不是 hue 初始色"
+        );
+        Ok(())
+    }
+
+    /// 集成:`paint_bars` 真的把 per-column 端点接到了渲染。
+    ///
+    /// 字形快照(`assert_snap!` 走 Display)只抓字符、不抓颜色,故颜色覆盖落在这里:
+    /// 直接读渲染后 buffer 底行最左 / 最右 cell 的前景色。`Hue` 态全列同色 → 两端相等;
+    /// `CoverFixed` 态沿频率轴铺色 → 两端不等。
+    #[test]
+    fn paint_bars_wires_per_column_color() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = SpectrumState::new();
+        // 先渲一帧让 target_bars = 真实内宽,再喂音频让条形铺满底行。
+        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        let bars = jagged_bars(state.target_bars.get());
+        for _ in 0..30 {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+
+        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        let hue = bottom_row_edges(terminal.backend())?;
+        assert_eq!(hue.left, hue.right, "Hue 态全列同色,底行两端前景应相等");
+
+        // 注入固定色板并推到静止,沿频率轴铺色。
+        state.begin_cover_transition(fixed_palette()?);
+        for _ in 0..COVER_FADE_TICKS {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        let cover = bottom_row_edges(terminal.backend())?;
+        assert_ne!(
+            cover.left, cover.right,
+            "CoverFixed 态沿频率轴铺色,底行两端前景应不同"
+        );
+        Ok(())
+    }
+
+    /// 频谱底行两端列的前景色(测试比较用,命名字段替代 `(Color, Color)`)。
+    struct RowEdges {
+        /// 最左列(低频)前景。
+        left: Color,
+
+        /// 最右列(高频)前景。
+        right: Color,
+    }
+
+    /// 读频谱底行(最底边框上一行)最左 / 最右列 cell 的前景色。
+    ///
+    /// # Params:
+    ///   - `backend`: 已渲染的 `TestBackend`
+    ///
+    /// # Return:
+    ///   两端列前景;cell 缺失返回 `Err`。
+    fn bottom_row_edges(backend: &TestBackend) -> color_eyre::Result<RowEdges> {
+        let buf = backend.buffer();
+        let area = *buf.area();
+        let y = area.height.saturating_sub(2); // 底部边框上一行
+        let left_x = area.x + 1; // 左边框右一列
+        let right_x = area.x + area.width.saturating_sub(2); // 右边框左一列
+        let left = buf
+            .cell((left_x, y))
+            .ok_or_else(|| color_eyre::eyre::eyre!("最左 cell 缺失"))?
+            .fg;
+        let right = buf
+            .cell((right_x, y))
+            .ok_or_else(|| color_eyre::eyre::eyre!("最右 cell 缺失"))?
+            .fg;
+        Ok(RowEdges { left, right })
     }
 }

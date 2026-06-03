@@ -26,6 +26,9 @@ use mineral_persist::{CacheIndex, ClientStore};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+use crate::render::palette::CoverPalette;
+use crate::runtime::cover_colors::extract_palette;
+
 /// 单一 worker 池的并发度。封面图都是几十 KB,4 路够覆盖快速翻 selection。
 const WORKERS: usize = 4;
 
@@ -59,8 +62,44 @@ enum CoverStorageMode {
 /// 当前封面磁盘存储模式。配置系统接入后改为读配置,这里是唯一切换点。
 const COVER_STORAGE: CoverStorageMode = CoverStorageMode::Raw;
 
+/// worker 完成一张封面的产物:图必有,色板尽力而为。
+///
+/// `ReadyBuf` 的元素从元组升成结构体,遵守"跨边界优先结构化"约定;`palette` 为
+/// `Option` 让取色失败不挡封面图本身回传(取色是封面的附属信息)。
+pub struct CoverReady {
+    /// 封面来源 URL(= 缓存键 / drain 回填键)。
+    pub url: MediaUrl,
+
+    /// 解码 + resize 后的内存图(≤ [`COVER_MAX_DIM`])。
+    pub image: Arc<DynamicImage>,
+
+    /// 从图提取的频谱色板;取色失败为 `None`(频谱回退 hue 漂移)。
+    pub palette: Option<CoverPalette>,
+}
+
+/// 解码产物:内存图 + 尽力而为的频谱色板。一次 `spawn_blocking` 内算完(都是 CPU 活儿)。
+struct DecodedCover {
+    /// 解码 + resize 后的内存图。
+    image: DynamicImage,
+
+    /// 从图提取的频谱色板(取色失败为 `None`)。
+    palette: Option<CoverPalette>,
+}
+
+/// `pack_blocking` 的产物:解码结果 + 写回缓存的字节 + 扩展名。命名字段替代三元组。
+struct PackedCover {
+    /// 解码 + 取色结果。
+    decoded: DecodedCover,
+
+    /// 写回磁盘缓存的字节(按 [`COVER_STORAGE`] 决定原图 / 重编码)。
+    store_bytes: Vec<u8>,
+
+    /// 缓存文件扩展名。
+    ext: &'static str,
+}
+
 /// 就绪 buffer 类型别名。worker 端 push、client tick 端 drain。
-type ReadyBuf = Arc<Mutex<Vec<(MediaUrl, Arc<DynamicImage>)>>>;
+type ReadyBuf = Arc<Mutex<Vec<CoverReady>>>;
 
 /// Client 端封面 fetcher。`spawn` 起 4 worker;`request` 投递;`drain_ready` 拉就绪。
 pub struct CoverFetcher {
@@ -86,7 +125,7 @@ impl CoverFetcher {
             .map_err(|e| eyre!("isahc client init failed: {e}"))?;
         // 磁盘缓存是优化项:目录解析 / open 失败不致命,降级成直连网络不缓存。
         let cache = Self::open_cache().await;
-        let ready = Arc::new(Mutex::new(Vec::<(MediaUrl, Arc<DynamicImage>)>::new()));
+        let ready = Arc::new(Mutex::new(Vec::<CoverReady>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
         for _ in 0..WORKERS {
             let rx = Arc::clone(&rx);
@@ -160,8 +199,8 @@ impl CoverFetcher {
         let _ = self.req_tx.send((source, url));
     }
 
-    /// 把就绪的图拿走。client 主循环 tick 调一次。
-    pub fn drain_ready(&self) -> Vec<(MediaUrl, Arc<DynamicImage>)> {
+    /// 把就绪的封面(图 + 色板)拿走。client 主循环 tick 调一次。
+    pub fn drain_ready(&self) -> Vec<CoverReady> {
         std::mem::take(&mut *self.ready.lock())
     }
 }
@@ -181,8 +220,12 @@ async fn worker_loop(
                 None => return, // 队列关了
             }
         };
-        if let Some(img) = fetch_and_decode(source, &url, &client, cache.as_ref()).await {
-            ready.lock().push((url, Arc::new(img)));
+        if let Some(decoded) = fetch_and_decode(source, &url, &client, cache.as_ref()).await {
+            ready.lock().push(CoverReady {
+                url,
+                image: Arc::new(decoded.image),
+                palette: decoded.palette,
+            });
         }
     }
 }
@@ -201,13 +244,13 @@ async fn worker_loop(
 ///   - `cache`: 磁盘缓存(可缺;`None` 直连不缓存)
 ///
 /// # Return:
-///   解码后的图;任一步失败返回 `None`。
+///   解码后的图 + 色板;任一步失败返回 `None`。
 async fn fetch_and_decode(
     source: SourceKind,
     url: &MediaUrl,
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
-) -> Option<DynamicImage> {
+) -> Option<DecodedCover> {
     match url {
         MediaUrl::Remote(u) => {
             let key = u.as_str();
@@ -221,11 +264,11 @@ async fn fetch_and_decode(
                     return None;
                 }
             };
-            let (img, store_bytes, ext) = pack_blocking(url, raw).await?;
+            let packed = pack_blocking(url, raw).await?;
             if let Some(cache) = cache {
-                store_best_effort(cache, source, key, store_bytes, ext);
+                store_best_effort(cache, source, key, packed.store_bytes, packed.ext);
             }
-            Some(img)
+            Some(packed.decoded)
         }
         MediaUrl::Local(p) => {
             let bytes = match tokio::fs::read(p).await {
@@ -285,10 +328,16 @@ async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>>
 ///   - `bytes`: 待解码字节
 ///
 /// # Return:
-///   解码后的图;失败返回 `None`(已打日志)。
-async fn decode_blocking(url: &MediaUrl, bytes: Vec<u8>) -> Option<DynamicImage> {
-    match tokio::task::spawn_blocking(move || decode_resize(&bytes)).await {
-        Ok(Ok(img)) => Some(img),
+///   解码后的图 + 色板;失败返回 `None`(已打日志)。
+async fn decode_blocking(url: &MediaUrl, bytes: Vec<u8>) -> Option<DecodedCover> {
+    let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
+        let image = decode_resize(&bytes)?;
+        let palette = extract_palette(&image);
+        Ok(DecodedCover { image, palette })
+    })
+    .await;
+    match decoded {
+        Ok(Ok(decoded)) => Some(decoded),
         Ok(Err(e)) => {
             mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "decode failed");
             None
@@ -331,15 +380,17 @@ fn decode_resize(bytes: &[u8]) -> color_eyre::Result<DynamicImage> {
 ///   - `raw`: 下载到的原始字节
 ///
 /// # Return:
-///   `(内存图, 落盘字节, 扩展名)`;解码 / 编码 / join 失败返回 `None`(已打日志)。
-async fn pack_blocking(
-    url: &MediaUrl,
-    raw: Vec<u8>,
-) -> Option<(DynamicImage, Vec<u8>, &'static str)> {
-    let packed = tokio::task::spawn_blocking(move || -> color_eyre::Result<_> {
-        let img = decode_resize(&raw)?;
-        let (store_bytes, ext) = bytes_for_cache(COVER_STORAGE, &raw, &img)?;
-        Ok((img, store_bytes, ext))
+///   [`PackedCover`](内存图 + 色板 + 落盘字节 + 扩展名);解码 / 编码 / join 失败返回 `None`(已打日志)。
+async fn pack_blocking(url: &MediaUrl, raw: Vec<u8>) -> Option<PackedCover> {
+    let packed = tokio::task::spawn_blocking(move || -> color_eyre::Result<PackedCover> {
+        let image = decode_resize(&raw)?;
+        let (store_bytes, ext) = bytes_for_cache(COVER_STORAGE, &raw, &image)?;
+        let palette = extract_palette(&image);
+        Ok(PackedCover {
+            decoded: DecodedCover { image, palette },
+            store_bytes,
+            ext,
+        })
     })
     .await;
     match packed {

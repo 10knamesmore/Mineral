@@ -116,6 +116,10 @@ tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features    = ["fmt", "local-time", "chrono", "env-filter"] }
 urlqstring         = "0.3.5"
+# 封面取色:palette 提供 Lab 感知色空间 + sRGB↔Lab 转换;kmeans_colors 在其上跑 k-means。
+# 都关 default-features —— kmeans_colors 默认带 `app`(structopt/image 的命令行 binary),只要库。
+palette            = { version = "0.7", default-features = false, features = ["std"] }
+kmeans_colors      = { version = "0.7", default-features = false, features = ["palette_color"] }
 
 
 [workspace.lints.rust]

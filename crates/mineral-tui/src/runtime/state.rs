@@ -16,6 +16,7 @@ use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::Transition;
+use crate::render::palette::CoverPalette;
 use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
@@ -135,6 +136,14 @@ pub struct AppState {
     /// 已拉好的封面原始图(URL → 解码后的 RGB 像素)。session 内一直留。
     pub cover_cache: FxHashMap<MediaUrl, Arc<DynamicImage>>,
 
+    /// 已取色的封面色板(URL → 频谱 2D 色场的重点色,Lab 明度升序)。
+    /// 缺 key = 没取到色(取色失败 / 还没回传)。session 内一直留,顺手缓存复用。
+    pub cover_palettes: FxHashMap<MediaUrl, CoverPalette>,
+
+    /// 上次已应用到频谱的封面 key(频谱当前色场对应哪张封面)。
+    /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_spectrum_palette` 身份判定用。
+    pub spectrum_cover: Option<MediaUrl>,
+
     /// 在飞 fetch 集合,用于 dedup tick 重复请求。
     pub cover_pending: FxHashSet<MediaUrl>,
 
@@ -210,6 +219,8 @@ impl AppState {
             prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),
+            cover_palettes: FxHashMap::default(),
+            spectrum_cover: None,
             cover_pending: FxHashSet::default(),
             cover_protocols: RefCell::new(FxHashMap::default()),
             // 默认禁用:无接收端的 sender(投递即丢)。真实 worker 由 `App::new` 注入

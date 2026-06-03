@@ -20,6 +20,8 @@ color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
 image                = { workspace = true }
 isahc                = { workspace = true }
+kmeans_colors        = { workspace = true }
+palette              = { workspace = true }
 parking_lot          = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }

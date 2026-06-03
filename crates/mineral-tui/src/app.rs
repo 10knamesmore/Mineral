@@ -198,6 +198,7 @@ impl App {
                 self.tick_overlays();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
+                self.sync_spectrum_palette();
                 self.drain_ready_protocols();
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
@@ -295,13 +296,57 @@ impl App {
         }
     }
 
-    /// 把 cover_fetcher 就绪的图写进 cache + 清掉对应 protocol(下次渲染重建)。
+    /// 把 cover_fetcher 就绪的图写进 cache + 色板写进 `cover_palettes` + 清掉对应 protocol
+    /// (下次渲染重建)。取色失败(`palette = None`)只是不落色板,图照常缓存显示。
     fn drain_ready_covers(&mut self) {
-        for (url, image) in self.cover_fetcher.drain_ready() {
-            self.state.cover_pending.remove(&url);
-            self.state.cover_cache.insert(url.clone(), image);
-            self.state.cover_protocols.borrow_mut().remove(&url);
+        for ready in self.cover_fetcher.drain_ready() {
+            self.state.cover_pending.remove(&ready.url);
+            if let Some(palette) = ready.palette {
+                self.state.cover_palettes.insert(ready.url.clone(), palette);
+            }
+            self.state
+                .cover_cache
+                .insert(ready.url.clone(), ready.image);
+            self.state.cover_protocols.borrow_mut().remove(&ready.url);
         }
+    }
+
+    /// 协调当前播放封面的频谱配色:新封面取色就绪则从**当前可见配色**缓动过去,否则保持现状。
+    ///
+    /// 身份判定(`cover_url` 变化、色带是否就绪)全在此(app 层);频谱只收
+    /// `begin_cover_transition` / `clear_cover` 两个命令,不持有歌曲 / URL 身份。
+    ///
+    /// - 当前封面与 `spectrum_cover` 一致 → 不动。
+    /// - 当前封面变了 + 色带已就绪 → `begin_cover_transition`(从上一张封面 / hue 起步),记下 key。
+    /// - 当前封面变了 + 图已到但**取色失败**(在 `cover_cache` 却不在 `cover_palettes`)→ 回退 hue,标记已处理。
+    /// - 当前封面变了 + 图还在抓 → **保持当前可见态**(上一张封面继续显示),下个 tick 再看。
+    ///   这是"红专辑换蓝专辑 → 红→蓝"的关键:抓图途中不回退 hue,等蓝就绪直接红→蓝。
+    /// - 无当前歌 / 无封面 → 回退 hue。
+    fn sync_spectrum_palette(&mut self) {
+        let cur = self
+            .state
+            .current
+            .as_ref()
+            .and_then(|s| s.cover_url.clone());
+        let Some(url) = cur else {
+            if self.state.spectrum_cover.is_some() {
+                self.state.spectrum.clear_cover();
+                self.state.spectrum_cover = None;
+            }
+            return;
+        };
+        if self.state.spectrum_cover.as_ref() == Some(&url) {
+            return;
+        }
+        if let Some(palette) = self.state.cover_palettes.get(&url).cloned() {
+            self.state.spectrum.begin_cover_transition(palette);
+            self.state.spectrum_cover = Some(url);
+        } else if self.state.cover_cache.contains_key(&url) {
+            // 图已回但无色板 = 取色失败:回退 hue,标记已处理(不再每帧重试)。
+            self.state.spectrum.clear_cover();
+            self.state.spectrum_cover = Some(url);
+        }
+        // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
     }
 
     /// 把编码 worker 就绪的封面协议装回 `cover_protocols`,并出 `cover_encode_pending`。
@@ -717,15 +762,58 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_protocol::PlayerSnapshot;
 
-    use mineral_model::SourceKind;
+    use mineral_model::{MediaUrl, SourceKind};
 
     use super::{App, TRANSITION_TICKS};
     use crate::render::anim::Transition;
+    use crate::render::palette::{CoverPalette, Rgb};
     use crate::test_support::{app_with_library, app_with_queue, endserenading};
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 回归(红→蓝路径之二):换歌后新封面**还在抓取**时,频谱保持上一张封面,
+    /// **不**回退到 hue——这样等新色板就绪能直接红→蓝,而非 hue→蓝。
+    #[test]
+    fn sync_spectrum_holds_previous_cover_until_new_palette_ready() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let red = MediaUrl::remote("https://example.com/red.jpg")?;
+        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
+        // 当前在播这首歌封面是 blue,但频谱上一张应用的是 red。
+        if let Some(song) = app.state.current.as_mut() {
+            song.cover_url = Some(blue);
+        }
+        app.state.spectrum_cover = Some(red.clone());
+        // blue 的色板 / 图都还没到 —— sync 应原地保持(不清、不抢先标记)。
+        app.sync_spectrum_palette();
+        assert_eq!(
+            app.state.spectrum_cover.as_ref(),
+            Some(&red),
+            "抓图途中应保持上一张封面"
+        );
+        Ok(())
+    }
+
+    /// 回归(红→蓝路径之一):新封面色板就绪即触发过渡并记下其 key。
+    #[test]
+    fn sync_spectrum_begins_transition_when_palette_ready() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
+        if let Some(song) = app.state.current.as_mut() {
+            song.cover_url = Some(blue.clone());
+        }
+        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        app.state.cover_palettes.insert(blue.clone(), palette);
+        app.sync_spectrum_palette();
+        assert_eq!(
+            app.state.spectrum_cover.as_ref(),
+            Some(&blue),
+            "色板就绪应记下并触发过渡"
+        );
+        Ok(())
     }
 
     /// 回归:全屏下关闭居中浮层(quit 确认)后,封面协议缓存被清空 —— 据此下一帧重建并全量
