@@ -10,11 +10,13 @@ use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
+use tokio::sync::mpsc;
 
 use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::Transition;
+use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -141,6 +143,15 @@ pub struct AppState {
     /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
     pub cover_protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
 
+    /// 封面编码请求发送端(投递给 [`crate::runtime::cover_encode::CoverEncoder`] 的 worker)。
+    /// 渲染处未命中已编码协议时投一次,把 resize + base64 编码挪出渲染线程。禁用态(测试 /
+    /// 无 runtime)是个无接收端的 sender,投递静默丢弃。
+    pub cover_encode_tx: mpsc::UnboundedSender<EncodeRequest>,
+
+    /// 在飞编码 `(URL, 维度)` 集合,渲染处据此 dedup —— 同一封面同尺寸只投一次,等结果回填。
+    /// 用 `RefCell` 因渲染拿 `&AppState`。
+    pub cover_encode_pending: RefCell<FxHashSet<(MediaUrl, (u16, u16))>>,
+
     /// 后台 server scheduler 当前快照(每 tick 由 App 从 `Client::task_snapshot`
     /// 灌入)。**只含**:server 端 ChannelFetch lane(playlists / tracks /
     /// song-url / lyrics / liked)。封面是 client-local 的 [`CoverFetcher`],
@@ -201,6 +212,10 @@ impl AppState {
             cover_cache: FxHashMap::default(),
             cover_pending: FxHashSet::default(),
             cover_protocols: RefCell::new(FxHashMap::default()),
+            // 默认禁用:无接收端的 sender(投递即丢)。真实 worker 由 `App::new` 注入
+            // `CoverEncoder::sender()` 覆盖此字段。
+            cover_encode_tx: mpsc::unbounded_channel().0,
+            cover_encode_pending: RefCell::new(FxHashSet::default()),
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
                 by_lane: FxHashMap::default(),

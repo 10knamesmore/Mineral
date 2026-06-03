@@ -1,11 +1,9 @@
-//! 封面渲染分发:有真图 → ratatui-image stateful protocol,缺失 / 拉失败 /
-//! 无 cover_url → 程序化封面。
+//! 封面渲染分发:命中已编码协议 → place 真图;缺失 / 拉失败 / 无 cover_url → 程序化封面。
 //!
-//! prefetch 触发逻辑在 [`crate::runtime::prefetch`] 模块。
-//!
-//! `StatefulProtocol` cache 的好处:kitty 协议下"图传一次记 id 后续按 id 重画",
-//! 重发图等于重新分配 id + 流大 base64,体感变慢且终端积累状态。共享 cached 状态
-//! 能避免每帧重发。
+//! prefetch(拉图)触发逻辑在 [`crate::runtime::prefetch`];resize + kitty 编码**不在此处
+//! 同步做**,而是投递给 [`crate::runtime::cover_encode::CoverEncoder`] 的 worker 离线跑,
+//! 渲染线程只命中已编码协议直接 place(`StatefulProtocol` 内部记 kitty image id,同尺寸
+//! 渲染只重发占位符、不重编码)。把百毫秒级的 resize/base64 挪出渲染线程,切歌 / 关浮层不卡帧。
 
 use mineral_model::MediaUrl;
 use ratatui::Frame;
@@ -16,6 +14,7 @@ use ratatui_image::picker::Picker;
 
 use crate::components::layout::cover;
 use crate::render::theme::Theme;
+use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::state::AppState;
 
 /// 优先 ratatui-image 真图;cache miss / 无 url / 协议不支持时,回退到
@@ -52,33 +51,43 @@ pub fn render_or_fallback(
         return;
     }
     let Some(image) = state.cover_cache.get(url).cloned() else {
+        // 还没拉到图:程序化占位(fetch worker 完成后进 cover_cache,后续帧再走编码)。
         cover::render(frame, target, fallback_seed, theme);
         return;
     };
-    // 借 cell mut 拿到 / 建 stateful protocol。dims 跟上次渲染不一致时重建,
-    // 避免 cache 的 protocol 按旧 dims 编码导致溢出 / 截断。
-    let mut protocols = state.cover_protocols.borrow_mut();
     let dims = (target.width, target.height);
-    // 滚动防抖:protocol 不在 cache 或 dims 变了都得重建(decode + base64/kitty
-    // 编码,render 线程上是百毫秒级开销)。如果用户还在快速 nav,**整个 cover
-    // 区留空**(连程序化封面都不画)—— 视觉上就是「滚的时候右栏图位空着」,稳
-    // 定 ≥ COVER_DEBOUNCE 后真图淡入。避开「每按一次 j 都重新编码全图」的卡顿,
-    // 同时不闪烁程序化色块。
-    let needs_build = protocols.get(url).is_none_or(|e| e.1 != dims);
-    if needs_build && state.is_scrolling() {
+    // 命中已编码协议(同尺寸)→ 直接 place。`StatefulProtocol` 内部记着 kitty image id,
+    // 同尺寸渲染 `needs_resize` 返回 `None`,只重发占位符不重编码,渲染线程零开销。
+    {
+        let mut protocols = state.cover_protocols.borrow_mut();
+        if let Some(entry) = protocols.get_mut(url)
+            && entry.1 == dims
+        {
+            let widget = StatefulImage::default()
+                .resize(Resize::Scale(Some(image::imageops::FilterType::Triangle)));
+            frame.render_stateful_widget(widget, target, &mut entry.0);
+            return;
+        }
+    }
+    // 未命中(无缓存协议 / 尺寸变了):**不在渲染线程编码**(resize + base64 是百毫秒级,
+    // 会卡帧),改投递给 [`CoverEncoder`] 的 worker 离线编码。
+    //
+    // - 滚动中:留空,既不闪程序化色块也不投递 —— 避免给 worker 灌一堆滚过即弃的图,
+    //   稳定 ≥ COVER_DEBOUNCE 后再编码淡入(沿用旧的「滚时图位空着」体感)。
+    // - 稳定后:按 `(url, dims)` 去重投递一次,在途期间画程序化占位;worker 完成后主循环
+    //   `drain_ready_protocols` 装回 `cover_protocols`,下一帧命中上真图。
+    if state.is_scrolling() {
         return;
     }
-    let entry = protocols
-        .entry(url.clone())
-        .or_insert_with(|| (picker.new_resize_protocol((*image).clone()), dims));
-    if entry.1 != dims {
-        *entry = (picker.new_resize_protocol((*image).clone()), dims);
+    let key = (url.clone(), dims);
+    if state.cover_encode_pending.borrow_mut().insert(key) {
+        let _ = state.cover_encode_tx.send(EncodeRequest {
+            url: url.clone(),
+            image,
+            target,
+        });
     }
-    // Scale 模式:即使源图 < area px 也会按 area 重采样铺满(Fit 不会向上放大)。
-    // target 已是视觉正方 + source 是方图,Scale 不会真的拉伸变形。
-    let widget =
-        StatefulImage::default().resize(Resize::Scale(Some(image::imageops::FilterType::Triangle)));
-    frame.render_stateful_widget(widget, target, &mut entry.0);
+    cover::render(frame, target, fallback_seed, theme);
 }
 
 /// 在 `area` 内算出「视觉正方形」的 sub-area:按 cell 像素比把方图横向铺满。

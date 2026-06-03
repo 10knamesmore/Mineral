@@ -23,6 +23,7 @@ use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
 use crate::render::anim::Transition;
 use crate::render::theme::Theme;
+use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::state::{AppState, View};
 use crate::tui::Tui;
@@ -76,6 +77,10 @@ pub struct App {
     /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管。
     cover_fetcher: CoverFetcher,
 
+    /// Client 端 cover 编码器:把封面 resize + kitty 编码挪出渲染线程(worker 上跑),
+    /// `drain` 回填 `cover_protocols`。与 `cover_fetcher` 互补成完整异步封面管线。
+    cover_encoder: CoverEncoder,
+
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
     pub(crate) notifications: Notifications,
 
@@ -103,18 +108,23 @@ impl App {
     pub fn new(
         client: Arc<dyn Client>,
         cover_fetcher: CoverFetcher,
+        cover_encoder: CoverEncoder,
         picker: Picker,
         launch_anchor: Option<Position>,
     ) -> Self {
+        let mut state = AppState::empty();
+        // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
+        state.cover_encode_tx = cover_encoder.sender();
         Self {
             should_quit: false,
             theme: Theme::default(),
-            state: AppState::empty(),
+            state,
             overlays: OverlayStack::new(),
             transition: None,
             last_tick: Instant::now(),
             client,
             cover_fetcher,
+            cover_encoder,
             notifications: Notifications::new(),
             download_notifier: DownloadNotifier::new(),
             picker,
@@ -188,6 +198,7 @@ impl App {
                 self.tick_overlays();
                 self.apply_player_snapshot(self.client.player_snapshot());
                 self.drain_ready_covers();
+                self.drain_ready_protocols();
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.cover_loading = self.state.cover_pending.len();
@@ -205,18 +216,21 @@ impl App {
         Ok(())
     }
 
-    /// 推进浮层动画一拍;并处理「全屏下浮层刚被移除」的封面残影。
+    /// 推进浮层动画一拍;并处理「全屏下居中浮层刚被移除」的封面残影。
     ///
     /// 居中浮层(如 quit 确认)在全屏时会压住左侧封面的中段。kitty 协议把整行 unicode
     /// 占位符打包在该行**最左 cell**、其余 cell `set_skip(true)`,而 ratatui 的 buffer diff
     /// 跳过未变 cell —— 浮层只盖了封面中段、没碰最左驱动 cell,关闭后那几行不会自行重发,
-    /// 中段残留浮层底色(残影)。这里在浮层(退场动画放完)真正出栈的那一拍,清一次封面协议
-    /// 缓存:下一帧 `cover_image` 按需重建、重新 transmit + 全量 re-place,残影消除。只在出栈
-    /// 瞬间清一次(非每帧),不触发每帧重新解码 / base64 编码的卡顿。
+    /// 中段残留浮层底色(残影)。故在该居中浮层(退场动画放完)真正出栈的那一拍,清一次封面
+    /// 协议缓存:下一帧 `cover_image` 按需重建、重新 transmit + 全量 re-place,残影消除。
+    ///
+    /// **仅对居中浮层做此事**:停靠浮层(queue 贴右)不压封面,清它纯属白白触发封面重新解码
+    /// / base64 编码(几十毫秒、卡掉一帧),故停靠浮层出栈不刷新。
     fn tick_overlays(&mut self) {
         let before = self.overlays.len();
+        let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
-        if self.state.fullscreen && self.overlays.len() < before {
+        if self.state.fullscreen && closing_centered && self.overlays.len() < before {
             self.state.cover_protocols.borrow_mut().clear();
         }
     }
@@ -287,6 +301,21 @@ impl App {
             self.state.cover_pending.remove(&url);
             self.state.cover_cache.insert(url.clone(), image);
             self.state.cover_protocols.borrow_mut().remove(&url);
+        }
+    }
+
+    /// 把编码 worker 就绪的封面协议装回 `cover_protocols`,并出 `cover_encode_pending`。
+    /// 之后帧渲染该封面即命中已编码协议、直接 place,不再在渲染线程上 resize / 编码。
+    fn drain_ready_protocols(&mut self) {
+        for r in self.cover_encoder.drain_ready() {
+            self.state
+                .cover_encode_pending
+                .borrow_mut()
+                .remove(&(r.url.clone(), r.dims));
+            self.state
+                .cover_protocols
+                .borrow_mut()
+                .insert(r.url, (r.protocol, r.dims));
         }
     }
 
@@ -741,6 +770,41 @@ mod tests {
         assert!(
             app.state.cover_protocols.borrow().is_empty(),
             "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
+        );
+        Ok(())
+    }
+
+    /// 回归:全屏下关闭**停靠**浮层(queue,贴右不碰封面)**不应**清空封面协议 —— 清了会白白
+    /// 触发封面重新解码 / base64 编码,造成关闭动画途中全局卡顿。
+    #[test]
+    fn fullscreen_queue_close_keeps_cover_protocol() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::test_support::app_in_fullscreen;
+
+        let mut app = app_in_fullscreen();
+
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
+        let proto = app.picker.new_resize_protocol(img);
+        app.state
+            .cover_protocols
+            .borrow_mut()
+            .insert(url, (proto, (10, 10)));
+
+        // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
+        app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+        app.overlays.close_top();
+        for _ in 0..40 {
+            app.tick_overlays();
+        }
+
+        assert!(
+            !app.state.cover_protocols.borrow().is_empty(),
+            "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
         );
         Ok(())
     }

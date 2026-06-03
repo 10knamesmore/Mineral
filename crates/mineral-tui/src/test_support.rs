@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 
 use crate::app::App;
 use crate::render::anim::Transition;
+use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistView, SongView};
@@ -230,6 +231,7 @@ pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
     let mut app = App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
     );
@@ -246,6 +248,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
     let mut app = App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
     );
@@ -282,6 +285,7 @@ pub(crate) fn app_in_fullscreen() -> App {
     let mut app = App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
+        CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
     );

@@ -161,6 +161,14 @@ impl OverlayStack {
         self.stack.len()
     }
 
+    /// 是否有正在退场的「居中(非停靠)」浮层。居中浮层会压住全屏封面,出栈后需刷新封面消
+    /// 残影;停靠浮层贴边、不碰封面,出栈无需刷新(否则白白触发封面重编码卡顿)。
+    pub(crate) fn any_leaving_centered(&self) -> bool {
+        self.stack
+            .iter()
+            .any(|m| m.anim.leaving() && !m.kind.chrome().dock)
+    }
+
     /// 栈内是否有断连提示(据此进入 fatal 模式:跳过后端同步、任意键退出)。
     pub(crate) fn is_disconnected(&self) -> bool {
         self.stack

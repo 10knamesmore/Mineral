@@ -136,15 +136,14 @@ mod tests {
     use crate::render::anim::Transition;
     use crate::test_support::{app_in_fullscreen, app_with_queue};
 
-    /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**重建封面协议。
+    /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**派发封面编码请求。
     ///
-    /// 旧 bug:morph 每帧 now_playing 尺寸变 → `cover_image` 按新 dims 重建有状态 kitty
-    /// 协议(churn),稳态落地后占位符指向终端已无的 image id → 封面整块空白、按 url 粘死
-    /// (进全屏再退回 / 重选同曲都不渲染)。修复后形变期 `cover_image` 早退,缓存条目的
-    /// dims 在整段形变中保持稳态值不变。dims 追踪与具体协议类型无关,故用默认 picker 即可
-    /// 确定性复现。
+    /// 封面编码已离线(投递给 `CoverEncoder` worker);若形变中逐帧 now_playing 尺寸变
+    /// 还照常派发,会按逐帧漂移的 dims **flood 编码器**(churn,且稳态落地后占位符乱套留
+    /// 残影)。修复:形变期(`!settled`)`cover_image` 早退,不派发。这里验证整段形变中
+    /// `cover_encode_pending` 不新增——只保留稳态那次派发。
     #[test]
-    fn fullscreen_morph_keeps_cover_protocol_stable() -> color_eyre::Result<()> {
+    fn fullscreen_morph_does_not_dispatch_cover_encode() -> color_eyre::Result<()> {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
@@ -167,39 +166,29 @@ mod tests {
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state.cover_cache.insert(url.clone(), Arc::new(img));
-        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正建出协议条目。
+        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发一次编码。
         app.state.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
 
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
 
-        // 稳态老布局:渲一帧建出封面协议条目,记录其稳态 dims。
+        // 稳态老布局:渲一帧 → 派发一次封面编码(稳态 dims)。记录此刻 pending 快照。
         t.draw(|f| super::draw(f, &app))?;
-        let steady_dims = app
-            .state
-            .cover_protocols
-            .borrow()
-            .get(&url)
-            .map(|entry| entry.1);
-        assert!(steady_dims.is_some(), "稳态老布局应已建出封面协议条目");
+        let steady_pending = app.state.cover_encode_pending.borrow().clone();
+        assert_eq!(steady_pending.len(), 1, "稳态老布局应恰好派发一次封面编码");
 
-        // 进入全屏,推进若干形变帧(均未抵达满值,保持 !settled)。每帧后协议 dims 必须
-        // 仍是稳态值 —— 证明 now_playing 消失面板没有在形变中重建协议。
+        // 进入全屏,推进若干形变帧(均 `!settled`)。每帧后 pending 必须与稳态快照一致 ——
+        // 证明 now_playing 消失面板没有在形变中按漂移 dims 追加派发。
         app.state.fullscreen_pos.enter();
         for _ in 0..5 {
             app.state.fullscreen_pos.tick();
             assert!(!app.state.fullscreen_pos.settled(), "测试需停留在形变中途");
             t.draw(|f| super::draw(f, &app))?;
-            let dims_now = app
-                .state
-                .cover_protocols
-                .borrow()
-                .get(&url)
-                .map(|entry| entry.1);
             assert_eq!(
-                dims_now, steady_dims,
-                "形变期封面协议被重建(churn),dims 漂移"
+                *app.state.cover_encode_pending.borrow(),
+                steady_pending,
+                "形变期不应追加封面编码派发(churn)"
             );
         }
         Ok(())
