@@ -107,6 +107,10 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
             theme,
             &seed,
         );
+        // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
+        // 直接 place,消掉切歌瞬间的程序化占位闪。形变期(非 at_max)绝不预热——那会按
+        // 逐帧漂移 dims 编码(churn)。
+        prewarm_upcoming(app, area);
     } else {
         cover::render(frame, area, &seed, theme);
     }
@@ -119,6 +123,28 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .add_modifier(Modifier::ITALIC),
         );
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), strip);
+    }
+}
+
+/// 全屏预热沿播放队列**向前看**的首数(forward-only)。先死 1 —— 自动切歌的唯一目标、
+/// kitty transmit 成本最小;后续接 config / 实测要更激进时只调这一处。
+const PREWARM_AHEAD: usize = 1;
+
+/// 全屏稳态:给在播曲之后 [`PREWARM_AHEAD`] 首(图已就绪者)的封面按当前尺寸提前编码,
+/// 自动切歌时协议已就绪、直接 place 无闪。无在播 / 队尾越界 / 该首无封面 → 跳过。
+fn prewarm_upcoming(app: &App, area: Rect) {
+    let Some(pos) = app.state.queue_current_index() else {
+        return;
+    };
+    for d in 1..=PREWARM_AHEAD {
+        if let Some(url) = app
+            .state
+            .queue
+            .get(pos.saturating_add(d))
+            .and_then(|s| s.cover_url.as_ref())
+        {
+            cover_image::prewarm(&app.state, &app.picker, area, url);
+        }
     }
 }
 
@@ -263,6 +289,50 @@ mod tests {
             "全屏稳态:cover 左 / lyrics 右 / spectrum+transport 贴底",
             t.backend()
         );
+        Ok(())
+    }
+
+    /// 全屏稳态:下一首(queue 中在播曲的紧邻后继)的封面应被**提前编码**——其 (url, dims)
+    /// 进 `cover_encode_pending`。这样自动切歌时协议已就绪、直接 place,不闪程序化占位。
+    #[test]
+    fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        // 给队列每首塞封面 URL;在播曲(queue[0])与下一首(queue[1])的图放进 cache
+        // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
+        for i in 0..3 {
+            let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
+            if let Some(s) = app.state.queue.get_mut(i) {
+                s.cover_url = Some(url.clone());
+            }
+            if i <= 1 {
+                let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+                app.state.cover_cache.insert(url, Arc::new(img));
+            }
+        }
+        // 重新同步在播曲(带上刚塞的封面 URL)。
+        app.state.playback.track = app.state.queue.first().cloned();
+        // 稳态全屏:fullscreen_pos 一步推到满值。
+        let mut fs = Transition::new(1);
+        fs.enter();
+        fs.tick();
+        app.state.fullscreen_pos = fs;
+        app.state.fullscreen = true;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
+        let warmed = app
+            .state
+            .cover_encode_pending
+            .borrow()
+            .iter()
+            .any(|(u, _)| *u == next_url);
+        assert!(warmed, "全屏稳态应提前编码下一首封面");
         Ok(())
     }
 

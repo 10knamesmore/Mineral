@@ -5,6 +5,9 @@
 //! 渲染线程只命中已编码协议直接 place(`StatefulProtocol` 内部记 kitty image id,同尺寸
 //! 渲染只重发占位符、不重编码)。把百毫秒级的 resize/base64 挪出渲染线程,切歌 / 关浮层不卡帧。
 
+use std::sync::Arc;
+
+use image::DynamicImage;
 use mineral_model::MediaUrl;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -79,7 +82,14 @@ pub fn render_or_fallback(
     if state.is_scrolling() {
         return;
     }
-    let key = (url.clone(), dims);
+    request_cover_encode(state, url, image, target);
+    cover::render(frame, target, fallback_seed, theme);
+}
+
+/// 未命中已编码协议时,按 `(url, dims)` 去重投递一次离线编码请求(`image` 来自
+/// `cover_cache`)。worker 完成后主循环 `drain_ready_protocols` 装回 `cover_protocols`。
+fn request_cover_encode(state: &AppState, url: &MediaUrl, image: Arc<DynamicImage>, target: Rect) {
+    let key = (url.clone(), (target.width, target.height));
     if state.cover_encode_pending.borrow_mut().insert(key) {
         let _ = state.cover_encode_tx.send(EncodeRequest {
             url: url.clone(),
@@ -87,7 +97,32 @@ pub fn render_or_fallback(
             target,
         });
     }
-    cover::render(frame, target, fallback_seed, theme);
+}
+
+/// 预热一张封面:把 `url`(图须已在 `cover_cache`)在 `area` 对应的封面尺寸下**提前编码**,
+/// 使其真正渲染时协议已就绪、直接 place 无闪。已编码(同尺寸)/ 图未就绪 → 无操作,不渲染。
+///
+/// 仅供尺寸稳定的场景调用(全屏稳态封面区固定)——预编码的 dims 须与目标真正渲染时一致才命中。
+///
+/// # Params:
+///   - `area`: 目标封面区域(与真正渲染处同一 `area`,内部走相同的视觉正方换算)
+///   - `url`: 待预热封面 URL
+pub fn prewarm(state: &AppState, picker: &Picker, area: Rect, url: &MediaUrl) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let target = square_subarea(area, picker.font_size());
+    if target.width == 0 || target.height == 0 {
+        return;
+    }
+    let dims = (target.width, target.height);
+    if matches!(state.cover_protocols.borrow().get(url), Some(e) if e.1 == dims) {
+        return;
+    }
+    let Some(image) = state.cover_cache.get(url).cloned() else {
+        return;
+    };
+    request_cover_encode(state, url, image, target);
 }
 
 /// 在 `area` 内算出「视觉正方形」的 sub-area:按 cell 像素比把方图横向铺满。
