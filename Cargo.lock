@@ -2414,7 +2414,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "mineral"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-audio"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "mineral-log",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-channel-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-channel-mock"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "mineral-channel-core",
@@ -2474,7 +2474,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-channel-netease"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "aes",
  "async-trait",
@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2535,11 +2535,11 @@ dependencies = [
 
 [[package]]
 name = "mineral-config"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "mineral-log"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "mineral-paths",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-macros"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-media"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "block2",
  "color-eyre",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-model"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "insta",
@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-paths"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "nix",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-persist"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "mineral-log",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-protocol"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "bincode",
  "bytes",
@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-server"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-spectrum"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "realfft",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-task"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-test"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "mineral-tui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "color-eyre",
  "crossterm 0.29.0",
