@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-tui/src/components/spectrum.rs
+source: crates/mineral-tui/src/components/layout/spectrum.rs
 description: "频谱无音频(idle baseline,占满宽度无起伏)"
 expression: terminal.backend()
 ---
@@ -10,6 +10,6 @@ expression: terminal.backend()
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
-"│▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂│"
-"│20Hz                                                                     20kHz│"
+"│                                                                              │"
+"│▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃│"
 "╰──────────────────────────────────────────────────────────────────────────────╯"

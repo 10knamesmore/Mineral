@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-tui/src/components/spectrum.rs
+source: crates/mineral-tui/src/components/layout/spectrum.rs
 description: "频谱静默基线(SpectrumState::new())"
 expression: terminal.backend()
 ---
@@ -10,6 +10,6 @@ expression: terminal.backend()
 "│                                      │"
 "│                                      │"
 "│                                      │"
-"│▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂│"
-"│20Hz                             20kHz│"
+"│                                      │"
+"│▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃│"
 "╰──────────────────────────────────────╯"
