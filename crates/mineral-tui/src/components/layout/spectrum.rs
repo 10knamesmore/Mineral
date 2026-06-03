@@ -28,6 +28,18 @@ const DEFAULT_BAR_COUNT: usize = 64;
 /// 任何状态下条的最小高度(1/8 字符单位)。3/64 ≈ 5%,屏上是一条薄但可辨的底线。
 const BASELINE_MIN: u16 = 3;
 
+/// 上升平滑(attack)旧值权重:条高 EMA `(旧×ATTACK_OLD + 新×ATTACK_NEW) / 两者之和`。
+const ATTACK_OLD: u32 = 7;
+
+/// 上升平滑(attack)新值权重。占比越大越跟手、越跳;当前 7:3,新值占 30%。
+const ATTACK_NEW: u32 = 3;
+
+/// 静默/暂停时条高每 tick 的衰减除数:先减 `b / DECAY_DIV`(指数部分,大值落得快)。
+const DECAY_DIV: u16 = 4;
+
+/// 见 [`DECAY_DIV`]:衰减的常数项,叠加在指数项上,保证小值也能落到底、不卡半空。
+const DECAY_STEP: u16 = 1;
+
 /// 新 peak 跟涨后,在原位 hold 多少 tick 才开始下落。30fps 下 12 tick ≈ 400ms。
 /// 太短看不出"悬浮"感,太长则跟不上下一个 peak。
 const PEAK_HOLD_TICKS: u8 = 12;
@@ -141,9 +153,9 @@ impl SpectrumState {
     /// `volume_pct` 用于把 FFT 真值按 `vol/100` 缩放 —— 听感上"音量越大、条越高"。
     /// FFT tap 在 rodio set_volume 之前,信号本身不随音量变,所以这里 UI 层手动配。
     ///
-    /// - `Some(targets)`:FFT 真值,按音量缩放后 7:3 平滑写进当前条高(attack 平滑、避免抖动)。
+    /// - `Some(targets)`:FFT 真值,按音量缩放后按 [`ATTACK_OLD`]:[`ATTACK_NEW`] 平滑写进当前条高(attack 平滑、避免抖动)。
     /// - `None` + `playing=true`:FFT 还没出第一个窗(刚开播 / 切歌 ~43ms),保持当前值。
-    /// - `None` + `playing=false`:所有条按 `b - (b/4 + 1)` 衰减(指数+常数,落得快)。
+    /// - `None` + `playing=false`:所有条按 [`DECAY_DIV`]/[`DECAY_STEP`] 衰减(指数+常数,落得快)。
     ///
     /// 然后无条件:1) 把条托底到 [`BASELINE_MIN`];2) 推进 peak 状态机。
     pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16]>) {
@@ -159,13 +171,14 @@ impl SpectrumState {
                 for (b, t) in self.bars.iter_mut().zip(targets.iter()) {
                     let scaled = u32::from(*t) * vol / 100;
                     let target = u16::try_from(scaled).unwrap_or(*t);
-                    let blended = (u32::from(*b) * 7 + u32::from(target) * 3) / 10;
+                    let blended = (u32::from(*b) * ATTACK_OLD + u32::from(target) * ATTACK_NEW)
+                        / (ATTACK_OLD + ATTACK_NEW);
                     *b = u16::try_from(blended).unwrap_or(*b);
                 }
             }
             (None, false) => {
                 for b in &mut self.bars {
-                    *b = b.saturating_sub(*b / 4 + 1);
+                    *b = b.saturating_sub(*b / DECAY_DIV + DECAY_STEP);
                 }
             }
             (None, true) => {
