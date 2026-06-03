@@ -43,7 +43,7 @@ const MIN_FULL_HEIGHT: u16 = 24;
 /// 全屏布局左列(cover 上 + transport 下)占宽百分比;歌词占右列剩余。
 const FS_LEFT_PCT: u16 = 44;
 /// 全屏布局底部 spectrum 通栏高度(比常规略高,留足频谱动态)。
-const FS_SPECTRUM_HEIGHT: u16 = 10;
+const FS_SPECTRUM_HEIGHT: u16 = 14;
 /// 全屏布局 transport 条高度(内容 6 行 + 边框 2,同 Full 布局);置于左列 cover 之下。
 const FS_TRANSPORT_HEIGHT: u16 = 8;
 
