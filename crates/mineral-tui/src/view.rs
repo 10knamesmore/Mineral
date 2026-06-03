@@ -51,7 +51,7 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         now_playing::draw(frame, right, &app.state, &app.picker, theme);
     }
     if let Some(lyr) = areas.lyrics {
-        lyrics::draw(frame, lyr, &app.state, theme);
+        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
     }
     if let Some(spec) = areas.spectrum {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
@@ -80,7 +80,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         draw_fullscreen_cover(frame, c, app);
     }
     if let Some(lyr) = areas.lyrics.and_then(nonempty) {
-        lyrics::draw(frame, lyr, &app.state, theme);
+        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Immersive);
     }
 }
 

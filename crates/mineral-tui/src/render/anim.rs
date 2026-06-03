@@ -121,24 +121,64 @@ impl Transition {
     /// 方向都"减速到位"**,故左右 sweep 来回切换体感一致、无结尾冲刺。仍是进度的固定
     /// 函数,打断反向时值连续不跳变。
     pub fn eased_in_out(&self) -> u16 {
-        let p = u32::from(self.progress);
-        let full = u32::from(FULL);
-        let half = full / 2;
-        // p<半: 4p³;p≥半: 1 - (2-2p)³/2(归一化后)。全程 u32 定点:
-        // 4p³ < 4·500³ = 5e8、(2·FULL)³ 段 t³ ≤ 1e9,均不溢出。
-        let v = if p < half {
-            4 * p * p * p / (full * full)
-        } else {
-            let t = 2 * full - 2 * p; // 0..=FULL
-            full - t * t * t / (2 * full * full)
-        };
-        u16::try_from(v).unwrap_or(FULL)
+        ease_in_out(self.progress)
     }
+}
+
+/// cubic **ease-in-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比
+/// (`0..=1000`)。关于中点对称——两端减速、中段快,对进度增减两个方向都"减速到位"。
+/// 单调不过冲。[`Transition::eased_in_out`] 与歌词平滑滚动共用这一条曲线。
+///
+/// # Params:
+///   - `progress`: 线性进度千分比,`0..=1000`(超出按上界处理)。
+///
+/// # Return:
+///   缓动后的千分比,`0..=1000`。
+pub fn ease_in_out(progress: u16) -> u16 {
+    let p = u32::from(progress.min(FULL));
+    let full = u32::from(FULL);
+    let half = full / 2;
+    // p<半: 4p³;p≥半: 1 - (2-2p)³/2(归一化后)。全程 u32 定点:
+    // 4p³ < 4·500³ = 5e8、(2·FULL)³ 段 t³ ≤ 1e9,均不溢出。
+    let v = if p < half {
+        4 * p * p * p / (full * full)
+    } else {
+        let t = 2 * full - 2 * p; // 0..=FULL
+        full - t * t * t / (2 * full * full)
+    };
+    u16::try_from(v).unwrap_or(FULL)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL, Transition};
+    use super::{FULL, Transition, ease_in_out};
+
+    /// 自由函数 `ease_in_out`:端点(0/满)、中点(过 0.5,0.5),全程单调不过冲。
+    /// 与 [`Transition::eased_in_out`] 同一条曲线(后者委托它)。
+    #[test]
+    fn free_ease_in_out_endpoints_and_monotonic() {
+        assert_eq!(ease_in_out(0), 0, "起点");
+        assert_eq!(ease_in_out(FULL), FULL, "终点");
+        assert_eq!(ease_in_out(FULL / 2), FULL / 2, "cubic ease-in-out 过中点");
+        let mut prev = 0;
+        for p in 0..=FULL {
+            let v = ease_in_out(p);
+            assert!(v >= prev, "单调不降: p={p} v={v} prev={prev}");
+            assert!(v <= FULL, "不过冲: {v}");
+            prev = v;
+        }
+    }
+
+    /// `Transition::eased_in_out` 与自由函数对任意进度一致(委托关系守卫)。
+    #[test]
+    fn method_delegates_to_free_fn() {
+        let mut t = Transition::new(FULL);
+        t.enter();
+        for _ in 0..FULL {
+            t.tick();
+            assert_eq!(t.eased_in_out(), ease_in_out(t.progress));
+        }
+    }
 
     /// 新建即收起态:不 active,缓动值为 0。
     #[test]
