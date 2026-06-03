@@ -1,0 +1,125 @@
+name: release
+
+# 网页手动触发:Actions → release → Run workflow → 填版本号 x.y.z → Run。
+# 一键完成:门禁(fmt/clippy/test)→ 生成 CHANGELOG → bump 版本 → 发布 commit 落 dev
+# → main 快进到 dev → 打带注解 tag → GitHub Release。dev 不 reset(详见 CONTRIBUTING.md)。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号 x.y.z(不含 v 前缀,如 0.4.3)"
+        required: true
+        type: string
+      headline:
+        description: "tag / Release 标题的一句话(可空)"
+        required: false
+        type: string
+
+# 需要推 commit / tag 到 dev 与 main,并建 Release。
+# 注意:若 main 开了分支保护(要求 PR / 状态检查),需在保护规则里放行
+# github-actions[bot],否则下面 push origin main 会被拒。
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev(全历史 + tags,供 ff-merge 与 git-cliff)
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: 校验版本号格式
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号应为 x.y.z"; exit 1; }
+
+      # ALSA 开发头文件是编译期依赖(rodio/cpal → alsa-sys),与 ci.yml 同。
+      - name: 安装 ALSA 开发库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,git-cliff
+
+      # —— 门禁:与 ci.yml 同口径。dev 直接提交不经 PR,这里是发布前对 dev HEAD 的第一道 CI ——
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo nextest run --workspace --no-fail-fast
+        env:
+          INSTA_UPDATE: "no"
+      - name: doctest
+        run: cargo test --workspace --doc
+
+      # —— 生成 CHANGELOG:只渲染上个 tag 之后的 feat/fix/perf,prepend,不动历史条目 ——
+      - name: CHANGELOG
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git cliff --unreleased --tag "v${VERSION}" --prepend CHANGELOG.md
+
+      # —— bump 版本(单点:根 Cargo.toml [workspace.package] version)+ 最小化刷 Cargo.lock ——
+      - name: bump 版本
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i -E "s/^(version[[:space:]]*=[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Cargo.toml
+          grep -E '^version' Cargo.toml
+          cargo check --workspace   # 仅同步 Cargo.lock 里 mineral* 版本,不动依赖 pin
+
+      # —— 发布 commit 落 dev ——
+      - name: commit + push dev
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git commit -m "chore(release): ${VERSION}"
+          git push origin dev
+
+      # —— main 快进到 dev + 带注解 tag(铁律:ff-only,绝不 squash)——
+      - name: ff-merge main + tag
+        env:
+          VERSION: ${{ inputs.version }}
+          HEADLINE: ${{ inputs.headline }}
+        run: |
+          git checkout main
+          git merge --ff-only dev
+          MSG="Release ${VERSION}"
+          [ -n "$HEADLINE" ] && MSG="${MSG}:${HEADLINE}"
+          git tag -a "v${VERSION}" -m "$MSG"
+          git push origin main --tags
+
+      # —— GitHub Release:正文取 CHANGELOG 顶部那一版块 ——
+      - name: GitHub Release
+        env:
+          VERSION: ${{ inputs.version }}
+          HEADLINE: ${{ inputs.headline }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          awk '/^## \[/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
+          TITLE="v${VERSION}"
+          [ -n "$HEADLINE" ] && TITLE="${TITLE} — ${HEADLINE}"
+          gh release create "v${VERSION}" --title "$TITLE" --notes-file RELEASE_NOTES.md

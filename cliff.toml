@@ -1,0 +1,46 @@
+# git-cliff:从 dev 上的 Conventional Commits 自动生成 CHANGELOG。
+#
+# 用法(发布前,在 dev 上,需先 `cargo install git-cliff`):
+#   git cliff --unreleased --tag vX.Y.Z --prepend CHANGELOG.md
+# 只渲染「未发布」区间(上个 tag 之后的 commit)成一个新版块,prepend 到 CHANGELOG 顶部,
+# 不动历史手写条目。生成后**手工润色**(commit 主题偏简,过一遍措辞)再 commit。
+
+[changelog]
+header = "# Changelog\n"
+# Tera 模板。版本头用 `## [x.y.z] — YYYY-MM-DD`(em-dash,与历史条目一致);
+# 组按 `<!-- N -->` 前缀排序后 striptags 去掉注释显示中文组名。
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [未发布]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}
+{% endfor %}\
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+# 只保留**用户可感知**的类型;其余(refactor/test/chore/docs/ci/style/build…)一律跳过。
+# 约定:用户能感知的改动就该打成 feat/fix,而不是 refactor —— 按用户影响选 type,
+# changelog 自然正确(细则见 CONTRIBUTING.md)。
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->功能" },
+  { message = "^fix", group = "<!-- 1 -->修复" },
+  { message = "^perf", group = "<!-- 2 -->性能" },
+  { message = ".*", skip = true },
+]
+
+# 只输出匹配到分组的 commit(skip 的不计入)。
+filter_commits = true
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
