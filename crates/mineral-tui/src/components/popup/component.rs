@@ -55,16 +55,11 @@ enum Dock {
     Right,
 }
 
-/// 左停靠(old layout,封面在右栏)宽度百分比。
-const DOCK_LEFT_PCT: u16 = 36;
+/// 停靠浮层宽度百分比。左右停靠**同宽同高**,仅镜像贴边侧。
+const DOCK_W_PCT: u16 = 36;
 
-/// 右停靠(全屏,封面在左)宽度百分比。
-const DOCK_RIGHT_PCT: u16 = 46;
-
-/// 全屏右停靠的高度百分比(垂直居中)。
-const DOCK_FS_H_PCT: u16 = 90;
-
-/// old layout 顶栏行数:左停靠浮层从其下顶对齐,盖住其下的 playlist / lyrics,只留顶栏。
+/// 顶栏行数:停靠浮层从其下顶对齐 + 满高,盖住其下面板(old layout 留顶栏;全屏无顶栏,
+/// 留同样 1 行保持左右停靠等高)。
 const DOCK_TOPBAR: u16 = 1;
 
 /// 浮层对一次按键的响应。
@@ -200,23 +195,17 @@ pub(crate) fn render_overlay<O: Overlay>(
     }
 }
 
-/// 计算停靠浮层「完全展开」矩形,按侧分别布局(避开另一侧的封面):
-///   - 左停靠(old layout):贴左缘、从顶栏下**顶对齐 + 满高**,盖住其下 playlist / lyrics,只留顶栏;
-///   - 右停靠(全屏):贴右缘、垂直居中、占 [`DOCK_FS_H_PCT`] 高(较高)。
+/// 计算停靠浮层「完全展开」矩形:左右**同宽([`DOCK_W_PCT`])同高**(从顶栏下顶对齐 +
+/// 满高),只在贴边侧不同 —— old layout 贴左、全屏贴右,均避开另一侧的封面。
 fn dock_rect(area: Rect, dock: Dock) -> Rect {
-    match dock {
-        Dock::Left => {
-            let w = pct_of(area.width, DOCK_LEFT_PCT);
-            let top = DOCK_TOPBAR.min(area.height);
-            Rect::new(area.x, area.y + top, w, area.height.saturating_sub(top))
-        }
-        Dock::Right => {
-            let w = pct_of(area.width, DOCK_RIGHT_PCT);
-            let h = pct_of(area.height, DOCK_FS_H_PCT);
-            let y = area.y + area.height.saturating_sub(h) / 2;
-            Rect::new(area.right().saturating_sub(w), y, w, h)
-        }
-    }
+    let w = pct_of(area.width, DOCK_W_PCT);
+    let top = DOCK_TOPBAR.min(area.height);
+    let h = area.height.saturating_sub(top);
+    let x = match dock {
+        Dock::Left => area.x,
+        Dock::Right => area.right().saturating_sub(w),
+    };
+    Rect::new(x, area.y + top, w, h)
 }
 
 /// 按百分比取尺寸,钳到 `[0, total]`(不碰 `as` 强转)。
