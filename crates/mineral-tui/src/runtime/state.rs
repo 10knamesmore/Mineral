@@ -18,6 +18,7 @@ use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::Transition;
 use crate::render::palette::CoverPalette;
 use crate::runtime::cover_encode::EncodeRequest;
+use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -187,6 +188,15 @@ pub struct AppState {
     /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
     /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
     pub last_sel_change: Instant,
+
+    /// 本地搜索的模糊匹配器(fzf 风格子序列 + 中文拼音/首字母联合)。
+    /// `&self` 路径下要复用 buffer,因此包 `RefCell`,与 `cover_protocols` 同理。
+    pub matcher: RefCell<FuzzyMatcher>,
+
+    /// 文本 → 预处理 [`MatchableText`] 的缓存。键是原始文本(歌名 / 艺人名 / 专辑名 /
+    /// 歌单名),session 内长留;规模(每条 ~几百字节,总量上限 ≈ 已加载曲目数 × 3)
+    /// 远低于其它 cache。换源 / 重启自然清掉。
+    pub matchable_cache: RefCell<FxHashMap<String, Arc<MatchableText>>>,
 }
 
 /// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
@@ -237,6 +247,8 @@ impl AppState {
             play_counts: FxHashMap::default(),
             play_count_requested: FxHashSet::default(),
             last_sel_change: Instant::now(),
+            matcher: RefCell::new(FuzzyMatcher::new()),
+            matchable_cache: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -431,48 +443,93 @@ impl AppState {
     }
 
     /// 当前可见(被 search 过滤)的歌单列表。
+    ///
+    /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
+    /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         if self.search_q.is_empty() {
-            self.playlists.iter().collect()
-        } else {
-            let q = self.search_q.to_lowercase();
-            self.playlists
-                .iter()
-                .filter(|p| p.data.name.to_lowercase().contains(&q))
-                .collect()
+            return self.playlists.iter().collect();
         }
+        self.sync_query();
+        let mut scored: Vec<(u32, &PlaylistView)> = self
+            .playlists
+            .iter()
+            .filter_map(|p| self.match_for(&p.data.name).map(|m| (m.score, p)))
+            .collect();
+        // sort_by_key 是 stable:同分项保持原序。
+        scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
+        scored.into_iter().map(|(_, p)| p).collect()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。
+    ///
+    /// 命中规则:歌名 / 任一艺人 / 专辑名取最高分作为该曲分数。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
         let tracks = self.current_tracks();
         if self.search_q.is_empty() {
-            tracks
-        } else {
-            let q = self.search_q.to_lowercase();
-            tracks
-                .into_iter()
-                .filter(|sv| {
-                    sv.data.name.to_lowercase().contains(&q)
-                        || sv
-                            .data
-                            .artists
-                            .iter()
-                            .any(|a| a.name.to_lowercase().contains(&q))
-                        || sv
-                            .data
-                            .album
-                            .as_ref()
-                            .is_some_and(|a| a.name.to_lowercase().contains(&q))
-                })
-                .collect()
+            return tracks;
         }
+        self.sync_query();
+        let mut scored: Vec<(u32, SongView)> = tracks
+            .into_iter()
+            .filter_map(|sv| {
+                let name = self.match_for(&sv.data.name).map(|m| m.score);
+                let artist = sv
+                    .data
+                    .artists
+                    .iter()
+                    .filter_map(|a| self.match_for(&a.name).map(|m| m.score))
+                    .max();
+                let album = sv
+                    .data
+                    .album
+                    .as_ref()
+                    .and_then(|a| self.match_for(&a.name).map(|m| m.score));
+                let best = name.into_iter().chain(artist).chain(album).max()?;
+                Some((best, sv))
+            })
+            .collect();
+        scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
+        scored.into_iter().map(|(_, sv)| sv).collect()
+    }
+
+    /// 把当前 `search_q` 同步给内部 matcher。空 query 也会被推下去,使 matcher 失活。
+    /// 同 query 重复调用是无开销 no-op(matcher 内部判等)。
+    pub fn sync_query(&self) {
+        self.matcher.borrow_mut().set_query(&self.search_q);
+    }
+
+    /// 对单段文本跑一次匹配,返回 score + 已映射回原文 char 下标的 `hits`。
+    ///
+    /// 空 query / 不命中都返回 `None`。每帧渲染时按需调用(已带 MatchableText 缓存
+    /// + matcher buffer 复用,开销可忽略)。
+    pub fn match_for(&self, text: &str) -> Option<Match> {
+        if self.search_q.is_empty() {
+            return None;
+        }
+        self.sync_query();
+        let mt = self.matchable_for(text);
+        self.matcher.borrow_mut().score(&mt)
+    }
+
+    /// 拿 / 构造 一份预处理过的 `MatchableText`。首次见到的文本会算一次拼音。
+    fn matchable_for(&self, text: &str) -> Arc<MatchableText> {
+        if let Some(mt) = self.matchable_cache.borrow().get(text) {
+            return Arc::clone(mt);
+        }
+        let mt = MatchableText::new(text);
+        self.matchable_cache
+            .borrow_mut()
+            .insert(text.to_owned(), Arc::clone(&mt));
+        mt
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::endserenading;
+    use mineral_model::SourceKind;
+
+    use crate::test_support::{endserenading, playlist_view};
 
     use super::AppState;
 
@@ -487,5 +544,76 @@ mod tests {
 
         s.playback.track = None;
         assert_eq!(s.queue_current_index(), None);
+    }
+
+    /// 首字母 query `cry` 只命中「春日影」,其它歌单淘汰。
+    #[test]
+    fn filtered_playlists_initials_pinyin() {
+        let mut s = AppState::empty();
+        s.playlists = vec![
+            playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
+            playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
+            playlist_view("c", "春日影", SourceKind::NETEASE, 1),
+        ];
+        s.search_q = "cry".to_owned();
+        let names: Vec<&str> = s
+            .filtered_playlists()
+            .iter()
+            .map(|p| p.data.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["春日影"]);
+    }
+
+    /// 全拼 query `chunying` 命中「春日影」(子序列覆盖 chun + ying)。
+    #[test]
+    fn filtered_playlists_full_pinyin() {
+        let mut s = AppState::empty();
+        s.playlists = vec![
+            playlist_view("a", "春日影", SourceKind::NETEASE, 1),
+            playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
+        ];
+        s.search_q = "chunying".to_owned();
+        let names: Vec<&str> = s
+            .filtered_playlists()
+            .iter()
+            .map(|p| p.data.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["春日影"]);
+    }
+
+    /// ASCII fuzzy:`my` 命中含 m+y 子序列的项,连续命中(MyGO)排在散开(Ave Mujica)前。
+    #[test]
+    fn filtered_playlists_consecutive_ranks_first() {
+        let mut s = AppState::empty();
+        s.playlists = vec![
+            playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
+            playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
+        ];
+        s.search_q = "my".to_owned();
+        let names: Vec<&str> = s
+            .filtered_playlists()
+            .iter()
+            .map(|p| p.data.name.as_str())
+            .collect();
+        assert_eq!(names.first().copied(), Some("MyGO!!!!!"));
+    }
+
+    /// `match_for` 命中拼音/首字母时,hits 反向映射回原文 Han 字符下标。
+    #[test]
+    fn match_for_returns_original_indices() -> color_eyre::Result<()> {
+        let mut s = AppState::empty();
+        s.search_q = "cry".to_owned();
+        let m = s
+            .match_for("春日影")
+            .ok_or_else(|| color_eyre::eyre::eyre!("cry 应命中春日影"))?;
+        assert_eq!(m.hits.as_slice(), &[0u32, 1, 2]);
+        Ok(())
+    }
+
+    /// 空 query 时 `match_for` 直接返回 `None`,fast path。
+    #[test]
+    fn match_for_empty_query_returns_none() {
+        let s = AppState::empty();
+        assert!(s.match_for("春日影").is_none());
     }
 }

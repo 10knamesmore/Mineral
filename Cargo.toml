@@ -120,6 +120,9 @@ urlqstring         = "0.3.5"
 # 都关 default-features —— kmeans_colors 默认带 `app`(structopt/image 的命令行 binary),只要库。
 palette            = { version = "0.7", default-features = false, features = ["std"] }
 kmeans_colors      = { version = "0.7", default-features = false, features = ["palette_color"] }
+nucleo-matcher     = "0.3"
+pinyin             = { version = "0.11", default-features = false, features = ["plain"] }
+smallvec           = "1"
 
 
 [workspace.lints.rust]

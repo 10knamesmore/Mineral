@@ -9,7 +9,7 @@ use ratatui::widgets::{
 };
 
 use super::badge::search_badge;
-use super::highlight::highlight;
+use super::highlight::highlight_indices;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
@@ -95,10 +95,11 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
     let count_label = format!("{}", p.data.track_count);
     let src = p.data.source();
 
+    let name_hits = state.match_for(&p.data.name).map(|m| m.hits);
     Row::new(vec![
-        Cell::from(Line::from(highlight(
+        Cell::from(Line::from(highlight_indices(
             &p.data.name,
-            &state.search_q,
+            name_hits.as_deref().unwrap_or(&[]),
             Style::new().fg(theme.text),
             theme,
         ))),
@@ -217,6 +218,54 @@ mod tests {
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
         })?;
         crate::test_support::assert_snap!("歌单列表:搜索输入态(标题 /春日影█)", t.backend());
+        Ok(())
+    }
+
+    /// 拼音首字母搜索:输入 `cry` → 命中「春日影」,Han 三字均高亮(反向映射)。
+    #[test]
+    fn playlists_search_pinyin_initials_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        let mut state = AppState::empty();
+        state.playlists = vec![
+            crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
+            crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
+        ];
+        state.search_q = "cry".to_owned();
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "歌单列表:首字母 cry 命中「春日影」(汉字三字均高亮)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全拼搜索:输入 `chunying` → 命中「春日影」,春 + 影 高亮(日的 ri 未命中)。
+    #[test]
+    fn playlists_search_pinyin_full_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        let mut state = AppState::empty();
+        state.playlists = vec![crate::test_support::playlist_view(
+            "a",
+            "春日影",
+            SourceKind::NETEASE,
+            1,
+        )];
+        state.search_q = "chunying".to_owned();
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "歌单列表:全拼 chunying 命中「春日影」(春 + 影 高亮)",
+            t.backend()
+        );
         Ok(())
     }
 

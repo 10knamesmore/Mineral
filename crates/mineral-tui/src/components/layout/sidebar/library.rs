@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, StatefulWidget, Table, TableState};
 
 use super::badge::search_badge;
-use super::highlight::highlight;
+use super::highlight::highlight_indices;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
@@ -150,10 +150,10 @@ fn build_row<'a>(
         Cell::from(format!("{idx}"))
     };
 
-    let q = state.search_q.as_str();
-    let title_cell = Cell::from(Line::from(highlight(
+    let name_hits = state.match_for(&sv.data.name).map(|m| m.hits);
+    let title_cell = Cell::from(Line::from(highlight_indices(
         &sv.data.name,
-        q,
+        name_hits.as_deref().unwrap_or(&[]),
         Style::new().fg(theme.text),
         theme,
     )));
@@ -174,15 +174,17 @@ fn build_row<'a>(
             .as_ref()
             .map(|a| a.name.clone())
             .unwrap_or_default();
-        cells.push(Cell::from(Line::from(highlight(
+        let artist_hits = state.match_for(&artist).map(|m| m.hits);
+        let album_hits = state.match_for(&album).map(|m| m.hits);
+        cells.push(Cell::from(Line::from(highlight_indices(
             &artist,
-            q,
+            artist_hits.as_deref().unwrap_or(&[]),
             Style::new().fg(theme.subtext),
             theme,
         ))));
-        cells.push(Cell::from(Line::from(highlight(
+        cells.push(Cell::from(Line::from(highlight_indices(
             &album,
-            q,
+            album_hits.as_deref().unwrap_or(&[]),
             Style::new().fg(theme.overlay),
             theme,
         ))));

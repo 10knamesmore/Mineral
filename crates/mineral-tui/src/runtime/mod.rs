@@ -4,6 +4,7 @@ pub mod cover_colors;
 pub mod cover_encode;
 pub mod cover_fetch;
 pub mod daemon;
+pub mod filter;
 pub mod playback;
 pub mod prefetch;
 pub mod remote;
