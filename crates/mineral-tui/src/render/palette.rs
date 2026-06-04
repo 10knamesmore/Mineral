@@ -171,7 +171,7 @@ impl CoverPalette {
 ///
 /// # Return:
 ///   位置千分比 `0..=1000`。
-fn column_permille(col: usize, bar_count: usize) -> u32 {
+pub(crate) fn column_permille(col: usize, bar_count: usize) -> u32 {
     if bar_count <= 1 {
         return 0;
     }

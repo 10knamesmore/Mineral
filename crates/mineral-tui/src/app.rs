@@ -339,7 +339,9 @@ impl App {
             return;
         }
         if let Some(palette) = self.state.cover_palettes.get(&url).cloned() {
-            self.state.spectrum.begin_cover_transition(palette);
+            self.state
+                .spectrum
+                .begin_cover_transition(palette, &self.theme);
             self.state.spectrum_cover = Some(url);
         } else if self.state.cover_cache.contains_key(&url) {
             // 图已回但无色板 = 取色失败:回退 hue,标记已处理(不再每帧重试)。

@@ -12,12 +12,12 @@ use std::cell::Cell;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::render::color::{lerp_color, rotate_hue};
-use crate::render::palette::{ColumnColors, CoverPalette};
+use crate::render::palette::{ColumnColors, CoverPalette, Rgb, column_permille};
 use crate::render::theme::Theme;
 
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
@@ -69,6 +69,10 @@ const COVER_FADE_TICKS: u32 = 300;
 /// 200‰ 在底/顶之间拉开一档明度层次,延续"底暗顶亮"的气质。
 const COVER_VSHIFT_PERMILLE: u32 = 200;
 
+/// 打断快照沿频率轴的采样点数(65 点 = 64 段,15.625‰/段)。色场本身是分段线性渐变
+/// (色板 swatch ≤ 6),这个密度下弦差不足一个可辨色阶;烘焙只在打断那刻发生一次。
+const SNAPSHOT_SAMPLES: usize = 65;
+
 /// 是否启用 peak 弹簧物理(target 跳变时 pos 过冲 + 阻尼回弹)。后续接 config 时改读配置。
 const SPRING_PEAK: bool = true;
 
@@ -94,8 +98,9 @@ enum SpectrumColor {
     ///
     /// 起点存整个上一态,故红专辑换蓝专辑时起点是红、不是 hue 初始色。
     Transition {
-        /// 过渡起点态(切换那刻的可见配色)。begin 时已扁平化为 `Hue` / `CoverFixed`,
-        /// 不嵌套 `Transition`,故起点端点计算最多递归一层、不会无限。
+        /// 过渡起点态(切换那刻的可见配色)。begin 时已经 [`Self::freeze`] 冻结为
+        /// `Hue` / `CoverFixed` / `Snapshot` 等扁平态,不嵌套 `Transition`,
+        /// 故起点端点计算最多递归一层、不会无限。
         from: Box<Self>,
 
         /// `from` 为 `Hue` 时的固定色相角(冻结时刻的 `hue_deg()`);`from` 为 `CoverFixed` 时无用。
@@ -113,6 +118,17 @@ enum SpectrumColor {
         /// 静止显示的封面色场。
         palette: CoverPalette,
     },
+
+    /// 打断快照:过渡中途再次换目标时,"打断那刻"的可见色场沿频率轴均匀采
+    /// [`SNAPSHOT_SAMPLES`] 点烘焙成的底/顶两条色带(见 [`Self::freeze`])。
+    /// 只作 [`Self::Transition`] 的起点,正常流程不驻留顶层。
+    Snapshot {
+        /// 各列柱底色构成的色带(频率轴均匀采样)。
+        bottom: CoverPalette,
+
+        /// 各列柱顶色构成的色带。烘焙时已含纵向偏移效果,取色不再加 vshift。
+        top: CoverPalette,
+    },
 }
 
 impl SpectrumColor {
@@ -120,6 +136,7 @@ impl SpectrumColor {
     ///
     /// - `Hue`:全列同色 `rotate_hue(accent, hue) → rotate_hue(accent_2, hue)`(零回归)。
     /// - `CoverFixed`:沿封面色带按频率位置取底/顶端点(见 [`CoverPalette::column_endpoints`])。
+    /// - `Snapshot`:底/顶两条烘焙色带按频率位置各自采样(顶带已含 vshift,不再偏移)。
     /// - `Transition`:起点 = `from` 态该列端点(`Hue` 起点全列同色、`CoverFixed` 起点沿色带),
     ///   终点 = 目标色场该列端点,按 `frame/COVER_FADE_TICKS` 整数定点逐端点 lerp。
     ///
@@ -146,6 +163,13 @@ impl SpectrumColor {
             Self::CoverFixed { palette } => {
                 palette.column_endpoints(col, bar_count, COVER_VSHIFT_PERMILLE)
             }
+            Self::Snapshot { bottom, top } => {
+                let tx = column_permille(col, bar_count);
+                ColumnColors {
+                    bottom: bottom.sample(tx),
+                    top: top.sample(tx),
+                }
+            }
             Self::Transition {
                 from,
                 frozen_hue_deg,
@@ -160,6 +184,42 @@ impl SpectrumColor {
                     top: lerp_color(start.top, end.top, prog, 1000),
                 }
             }
+        }
+    }
+
+    /// 把当前可见态冻结成可作过渡起点的**扁平**态:
+    ///
+    /// - `Hue` / `CoverFixed` / `Snapshot`:无随帧推进的内部进度,原样返回(精确)。
+    /// - `Transition`(换歌打断):把打断那刻的可见色场沿频率轴均匀采 [`SNAPSHOT_SAMPLES`]
+    ///   点,烘焙成底/顶两条色带([`Self::Snapshot`])——新过渡从可见中间色继续渐变,
+    ///   不跳回打断目标。任一采样点非真彩(`Color::Rgb`)时无法入带,退化为打断目标色场
+    ///   (与真彩路径相比只少了中间色连续性,行为同旧实现)。
+    ///
+    /// # Params:
+    ///   - `theme`: 过渡起点为 `Hue` 时换算端点色用
+    ///
+    /// # Return:
+    ///   扁平态(恒不含 `Transition`)。
+    fn freeze(self, theme: &Theme) -> Self {
+        let Self::Transition { ref to, .. } = self else {
+            return self;
+        };
+        let fallback = to.clone();
+        let mut bottoms = Vec::with_capacity(SNAPSHOT_SAMPLES);
+        let mut tops = Vec::with_capacity(SNAPSHOT_SAMPLES);
+        for col in 0..SNAPSHOT_SAMPLES {
+            // Transition 的端点计算只用内部 frozen_hue_deg,外层 hue 参数不参与。
+            let ep = self.column_endpoints(col, SNAPSHOT_SAMPLES, /*hue_deg*/ 0.0, theme);
+            let (Color::Rgb(br, bg, bb), Color::Rgb(tr, tg, tb)) = (ep.bottom, ep.top) else {
+                return Self::CoverFixed { palette: fallback };
+            };
+            bottoms.push(Rgb::new(br, bg, bb));
+            tops.push(Rgb::new(tr, tg, tb));
+        }
+        match (CoverPalette::new(bottoms), CoverPalette::new(tops)) {
+            (Some(bottom), Some(top)) => Self::Snapshot { bottom, top },
+            // SNAPSHOT_SAMPLES > 0,两条带恒非空;留作类型穷尽。
+            _ => Self::CoverFixed { palette: fallback },
         }
     }
 }
@@ -322,6 +382,10 @@ impl SpectrumState {
             SpectrumColor::CoverFixed { palette } => {
                 self.color = SpectrumColor::CoverFixed { palette };
             }
+            SpectrumColor::Snapshot { bottom, top } => {
+                // 快照只作过渡起点,正常流程不驻留顶层;防御性写回、不推进。
+                self.color = SpectrumColor::Snapshot { bottom, top };
+            }
         }
     }
 
@@ -329,19 +393,16 @@ impl SpectrumState {
     ///
     /// 起点 = 切换那刻的整个可见态:`Hue` 漂移则从当前 hue 单色起步;已是 `CoverFixed`
     /// (上一张封面)则**从那张封面的色场起步**(红专辑换蓝专辑 → 红→蓝,而非 hue 初始色)。
-    /// 已在 `Transition`(换歌打断)时把它压成"行将抵达的目标色场"作起点,避免 `from` 无限嵌套。
+    /// 已在 `Transition`(换歌打断)时把打断那刻的可见中间色烘焙成快照作起点
+    /// (见 [`SpectrumColor::freeze`])——颜色从中间态继续渐变,不跳回打断前的目标色场。
     ///
     /// # Params:
     ///   - `to`: 目标封面色场
-    pub fn begin_cover_transition(&mut self, to: CoverPalette) {
+    ///   - `theme`: 冻结起点时换算 `Hue` 端点色用
+    pub fn begin_cover_transition(&mut self, to: CoverPalette, theme: &Theme) {
         let frozen_hue_deg = self.hue_deg();
-        // 取出当前可见态作起点(占位换成 Hue);Transition 起点扁平化为其目标 CoverFixed。
-        let from = match std::mem::replace(&mut self.color, SpectrumColor::Hue) {
-            SpectrumColor::Transition { to: prev_to, .. } => {
-                Box::new(SpectrumColor::CoverFixed { palette: prev_to })
-            }
-            visible => Box::new(visible),
-        };
+        // 取出当前可见态、冻结成扁平起点(占位换成 Hue)。
+        let from = Box::new(std::mem::replace(&mut self.color, SpectrumColor::Hue).freeze(theme));
         self.color = SpectrumColor::Transition {
             from,
             frozen_hue_deg,
@@ -540,7 +601,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
-    use super::{COVER_FADE_TICKS, SpectrumColor, SpectrumState};
+    use super::{COVER_FADE_TICKS, SNAPSHOT_SAMPLES, SpectrumColor, SpectrumState};
     use crate::render::palette::{CoverPalette, Rgb};
     use crate::render::theme::Theme;
 
@@ -614,7 +675,7 @@ mod tests {
     #[test]
     fn cover_transition_settles_to_fixed() -> color_eyre::Result<()> {
         let mut s = SpectrumState::new();
-        s.begin_cover_transition(fixed_palette()?);
+        s.begin_cover_transition(fixed_palette()?, &Theme::default());
         assert!(
             matches!(s.color, SpectrumColor::Transition { .. }),
             "begin 后应进 Transition"
@@ -633,7 +694,7 @@ mod tests {
     #[test]
     fn clear_cover_returns_to_hue() -> color_eyre::Result<()> {
         let mut s = SpectrumState::new();
-        s.begin_cover_transition(fixed_palette()?);
+        s.begin_cover_transition(fixed_palette()?, &Theme::default());
         s.clear_cover();
         assert!(matches!(s.color, SpectrumColor::Hue), "clear 后应回 Hue");
         Ok(())
@@ -648,7 +709,7 @@ mod tests {
         s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         assert_ne!(s.hue_phase, before, "Hue 态 hue_phase 应自增");
 
-        s.begin_cover_transition(fixed_palette()?);
+        s.begin_cover_transition(fixed_palette()?, &theme);
         for _ in 0..COVER_FADE_TICKS {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
@@ -757,7 +818,7 @@ mod tests {
         .ok_or_else(|| color_eyre::eyre::eyre!("蓝色板非空"))?;
         let mut s = SpectrumState::new();
         // 先进入红色场静止。
-        s.begin_cover_transition(red.clone());
+        s.begin_cover_transition(red.clone(), &theme);
         for _ in 0..COVER_FADE_TICKS {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
@@ -767,7 +828,7 @@ mod tests {
         );
 
         // 换蓝:刚切(frame=0)那刻起点端点应等于红色场,而不是 hue。
-        s.begin_cover_transition(blue);
+        s.begin_cover_transition(blue, &theme);
         let at_start =
             s.color
                 .column_endpoints(/*col*/ 3, /*bar_count*/ 16, s.hue_deg(), &theme);
@@ -778,6 +839,72 @@ mod tests {
             at_start, red_endpoints,
             "红→蓝起点应是红色场,不是 hue 初始色"
         );
+        Ok(())
+    }
+
+    /// 打断回归:红→蓝过渡走到一半再换目标,新过渡起点 = 打断那刻的可见中间色
+    /// (烘焙快照),而非跳回打断前的目标(蓝)。`bar_count` 取 [`SNAPSHOT_SAMPLES`]
+    /// 让列位置正落在采样网格上,端点可逐列**精确**比较(无插值弦差)。
+    #[test]
+    fn interrupting_transition_starts_from_visible_mix() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let red = CoverPalette::new(vec![
+            Rgb::new(120, 20, 20),
+            Rgb::new(200, 40, 40),
+            Rgb::new(240, 90, 90),
+        ])
+        .ok_or_else(|| color_eyre::eyre::eyre!("红色板非空"))?;
+        let blue = CoverPalette::new(vec![
+            Rgb::new(20, 20, 120),
+            Rgb::new(40, 40, 200),
+            Rgb::new(90, 90, 240),
+        ])
+        .ok_or_else(|| color_eyre::eyre::eyre!("蓝色板非空"))?;
+        let mut s = SpectrumState::new();
+        // 静止在红,再向蓝过渡到半程:可见色 = 红蓝中间色。
+        s.begin_cover_transition(red.clone(), &theme);
+        for _ in 0..COVER_FADE_TICKS {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        s.begin_cover_transition(blue.clone(), &theme);
+        for _ in 0..COVER_FADE_TICKS / 2 {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        let visible = (0..SNAPSHOT_SAMPLES)
+            .map(|col| {
+                s.color
+                    .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme)
+            })
+            .collect::<Vec<_>>();
+        // 半程中间色应不同于打断目标(蓝),否则下面的连续性断言空洞无意义。
+        let blue_first = SpectrumColor::CoverFixed { palette: blue }.column_endpoints(
+            /*col*/ 0,
+            SNAPSHOT_SAMPLES,
+            /*hue*/ 0.0,
+            &theme,
+        );
+        let visible_first = visible
+            .first()
+            .copied()
+            .ok_or_else(|| color_eyre::eyre::eyre!("采样非空"))?;
+        assert_ne!(visible_first, blue_first, "半程中间色应不同于打断目标");
+
+        // 半程打断、换回红:起点应是烘焙快照,frame=0 端点逐列等于打断前可见色(不跳变)。
+        s.begin_cover_transition(red, &theme);
+        assert!(
+            matches!(
+                &s.color,
+                SpectrumColor::Transition { from, .. }
+                    if matches!(from.as_ref(), SpectrumColor::Snapshot { .. })
+            ),
+            "打断后的过渡起点应是烘焙快照"
+        );
+        for (col, want) in visible.iter().enumerate() {
+            let got = s
+                .color
+                .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme);
+            assert_eq!(got, *want, "col={col} 打断后起点应与打断前可见色连续");
+        }
         Ok(())
     }
 
@@ -803,7 +930,7 @@ mod tests {
         assert_eq!(hue.left, hue.right, "Hue 态全列同色,底行两端前景应相等");
 
         // 注入固定色板并推到静止,沿频率轴铺色。
-        state.begin_cover_transition(fixed_palette()?);
+        state.begin_cover_transition(fixed_palette()?, &theme);
         for _ in 0..COVER_FADE_TICKS {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
