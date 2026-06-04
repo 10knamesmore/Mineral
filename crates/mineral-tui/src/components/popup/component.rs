@@ -75,6 +75,10 @@ pub(crate) enum OverlayResponse {
 }
 
 /// 浮层产生、由 App 执行的意图。
+///
+/// 浮层私有动作,**不并入** `runtime::action::Action`:以浮层私有光标为参数的意图
+/// (如 [`Self::PlayQueueIndex`])没法用「dispatch 时查 `AppState`」的范式表达。
+/// 与主 keymap 统一的是 dispatch 入口与动作概念,非枚举合一。
 #[derive(Clone, Copy)]
 pub(crate) enum OverlayAction {
     /// 退出程序。

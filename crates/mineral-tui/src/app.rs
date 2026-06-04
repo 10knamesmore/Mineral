@@ -23,23 +23,13 @@ use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
 use crate::render::anim::Transition;
 use crate::render::theme::Theme;
+use crate::runtime::action::{Action, SeekDelta, SelectionMove, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, View};
 use crate::tui::Tui;
 use crate::view::draw;
-
-/// 音量步长(百分点);`+`/`-` 一次。
-const VOLUME_STEP: i16 = 5;
-
-/// 普通 seek 步长(秒);`←`/`→` 一次。
-const SEEK_STEP_S: i64 = 5;
-
-/// 大跨度 seek 步长(秒);`Shift+←`/`Shift+→` 一次。
-const SEEK_BIG_STEP_S: i64 = 30;
-
-/// 大跨度跳行步长(行);`Shift+J`/`Shift+K` 一次。j/k/箭头仍是 1。
-const ROW_BIG_STEP: usize = 7;
 
 /// 主循环帧间隔(≈60fps)。重绘 + 拉数据 + 推进动画/频谱统一这一个节奏。
 const TICK: Duration = Duration::from_millis(16);
@@ -57,6 +47,9 @@ pub struct App {
 
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
+
+    /// 键 → 动作绑定表。本期 [`Keymap::builtin`];config 落地后从这里换注入。
+    keymap: Keymap,
 
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
     pub(crate) overlays: OverlayStack,
@@ -119,6 +112,7 @@ impl App {
             should_quit: false,
             theme: Theme::default(),
             state,
+            keymap: Keymap::builtin(),
             overlays: OverlayStack::new(),
             transition: None,
             last_tick: Instant::now(),
@@ -438,46 +432,32 @@ impl App {
             return;
         }
 
-        // `z`:进/退全屏(toggle);Tab/q/t/playback 在全屏照常流转,
-        // 仅屏蔽搜索 `/` 与列表导航(见下方两处 `!self.state.fullscreen` 闸)。
-        if key.code == KeyCode::Char('z') {
-            self.toggle_fullscreen();
-            return;
+        // 查表得意图、dispatch 执行。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)在各
+        // 执行器开头判,保证「键 → 行为」中段可被 config 表替换而闸语义不动。
+        if let Some(action) = chord_from_event(key).and_then(|c| self.keymap.lookup(c)) {
+            self.dispatch(action);
         }
+    }
 
-        // Tab 开 queue(光标定位到在播歌);q 开退出确认。
-        if key.code == KeyCode::Tab {
-            let sel = self.state.queue_current_index().unwrap_or(0);
-            self.overlays.push(OverlayKind::queue(sel));
-            return;
-        }
-        if key.code == KeyCode::Char('q') {
-            self.overlays.push(OverlayKind::confirm());
-            return;
-        }
-
-        // `t`:循环歌词副语言(原文 → 翻译 → 罗马音 → 原文)。歌词面板全局可见。
-        if key.code == KeyCode::Char('t') {
-            self.state.cycle_lyric_extra();
-            return;
-        }
-
-        if !self.state.fullscreen && key.code == KeyCode::Char('/') {
-            self.state.search_mode = true;
-            self.state.search_q.clear();
-            return;
-        }
-
-        if self.handle_playback_key(key) {
-            return;
-        }
-
-        // 全屏态屏蔽列表导航(屏上无列表);浏览态才路由到对应 view。
-        if !self.state.fullscreen {
-            match self.state.view {
-                View::Playlists => self.handle_playlists_key(key),
-                View::Library => self.handle_library_key(key),
-            }
+    /// 执行一个查表命中的 [`Action`]:每分支一行调用对应执行器,逻辑都在执行器里。
+    fn dispatch(&mut self, action: Action) {
+        match action {
+            Action::ToggleFullscreen => self.toggle_fullscreen(),
+            Action::OpenQueue => self.open_queue(),
+            Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
+            Action::CycleLyricExtra => self.state.cycle_lyric_extra(),
+            Action::EnterSearch => self.enter_search(),
+            Action::MoveSelection(mv) => self.move_selection(mv),
+            Action::ActivateSelection => self.activate_selection(),
+            Action::BackOrClearSearch => self.back_or_clear_search(),
+            Action::TogglePlayPause => self.toggle_play_pause(),
+            Action::CyclePlayMode => self.client.cycle_play_mode(),
+            Action::NudgeVolume(VolumeDelta(delta)) => self.nudge_volume(delta),
+            Action::SeekRelative(SeekDelta(secs)) => self.seek_relative(secs),
+            Action::PrevOrRestart => self.client.prev_or_restart(),
+            Action::NextSong => self.client.next_song(),
+            Action::ToggleLoveSelection => self.toggle_love_selection(),
+            Action::DownloadSelection => self.download_selection(),
         }
     }
 
@@ -507,13 +487,43 @@ impl App {
         }
     }
 
-    /// 浮层放行(半穿透)的按键:queue 打开时仍可切歌词 / 控播放;其余键忽略。
+    /// 浮层放行(半穿透)的按键:queue 打开时仍可切歌词 / 控播放;其余动作忽略。
     fn handle_overlay_passthrough(&mut self, key: &KeyEvent) {
-        if key.code == KeyCode::Char('t') {
-            self.state.cycle_lyric_extra();
+        let Some(action) = chord_from_event(key).and_then(|c| self.keymap.lookup(c)) else {
+            return;
+        };
+        if Self::passes_overlay(action) {
+            self.dispatch(action);
+        }
+    }
+
+    /// 半穿透白名单:歌词切换 + 播放控制族;列表 / 视图 / 浮层动作不穿透。
+    fn passes_overlay(action: Action) -> bool {
+        matches!(
+            action,
+            Action::CycleLyricExtra
+                | Action::TogglePlayPause
+                | Action::CyclePlayMode
+                | Action::NudgeVolume(_)
+                | Action::SeekRelative(_)
+                | Action::PrevOrRestart
+                | Action::NextSong
+        )
+    }
+
+    /// 打开浮动播放队列,光标定位到在播歌(无在播落 0)。
+    fn open_queue(&mut self) {
+        let sel = self.state.queue_current_index().unwrap_or(0);
+        self.overlays.push(OverlayKind::queue(sel));
+    }
+
+    /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。
+    fn enter_search(&mut self) {
+        if self.state.fullscreen {
             return;
         }
-        let _ = self.handle_playback_key(key);
+        self.state.search_mode = true;
+        self.state.search_q.clear();
     }
 
     /// 搜索词每次变化后,把当前 view 的 sel 拉回 0。
@@ -554,35 +564,6 @@ impl App {
         }
     }
 
-    /// 与播放控制相关的全局按键(空格/m/+/-/方向/p/n)。返回 true 表示按键已被消化。
-    fn handle_playback_key(&mut self, key: &KeyEvent) -> bool {
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Left => {
-                    self.seek_relative(-SEEK_BIG_STEP_S);
-                    return true;
-                }
-                KeyCode::Right => {
-                    self.seek_relative(SEEK_BIG_STEP_S);
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        match key.code {
-            KeyCode::Char(' ') => self.toggle_play_pause(),
-            KeyCode::Char('m') => self.client.cycle_play_mode(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_volume(VOLUME_STEP),
-            KeyCode::Char('-') | KeyCode::Char('_') => self.nudge_volume(-VOLUME_STEP),
-            KeyCode::Left => self.seek_relative(-SEEK_STEP_S),
-            KeyCode::Right => self.seek_relative(SEEK_STEP_S),
-            KeyCode::Char('p') => self.client.prev_or_restart(),
-            KeyCode::Char('n') => self.client.next_song(),
-            _ => return false,
-        }
-        true
-    }
-
     /// 空格键:有当前曲目时在 pause/resume 间切换;没歌时无动作。
     fn toggle_play_pause(&mut self) {
         if self.state.playback.track.is_none() {
@@ -619,49 +600,38 @@ impl App {
         self.client.seek(new_u);
     }
 
-    /// Playlists view 的按键:vim 风格上下移动 + Enter/l 进入选中歌单的 Library。
-    fn handle_playlists_key(&mut self, key: &KeyEvent) {
-        self.state.last_sel_change = Instant::now();
-        if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
-            self.state.search_q.clear();
-            self.state.sel_playlist = 0;
+    /// 列表光标移动,按当前 view 落到 `sel_playlist` / `sel_track`,越界钳首末行;
+    /// 全屏态屏蔽(屏上无列表)。
+    fn move_selection(&mut self, mv: SelectionMove) {
+        if self.state.fullscreen {
             return;
         }
-        let max = self.state.filtered_playlists().len().saturating_sub(1);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.state.sel_playlist = self.state.sel_playlist.saturating_add(1).min(max);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.state.sel_playlist = self.state.sel_playlist.saturating_sub(1);
-            }
-            KeyCode::Char('J') => {
-                self.state.sel_playlist = self
-                    .state
-                    .sel_playlist
-                    .saturating_add(ROW_BIG_STEP)
-                    .min(max);
-            }
-            KeyCode::Char('K') => {
-                self.state.sel_playlist = self.state.sel_playlist.saturating_sub(ROW_BIG_STEP);
-            }
-            KeyCode::Char('g') => {
-                self.state.sel_playlist = 0;
-            }
-            KeyCode::Char('G') => {
-                self.state.sel_playlist = max;
-            }
-            KeyCode::Char('d') => {
-                let id = self
-                    .state
-                    .filtered_playlists()
-                    .get(self.state.sel_playlist)
-                    .map(|p| p.data.id.clone());
-                if let Some(id) = id {
-                    self.client.download(DownloadTarget::Playlist(id));
-                }
-            }
-            KeyCode::Char('l') | KeyCode::Enter => {
+        self.state.last_sel_change = Instant::now();
+        let max = match self.state.view {
+            View::Playlists => self.state.filtered_playlists().len().saturating_sub(1),
+            View::Library => self.state.filtered_tracks().len().saturating_sub(1),
+        };
+        let sel = match self.state.view {
+            View::Playlists => &mut self.state.sel_playlist,
+            View::Library => &mut self.state.sel_track,
+        };
+        *sel = match mv {
+            SelectionMove::Down(n) => sel.saturating_add(n).min(max),
+            SelectionMove::Up(n) => sel.saturating_sub(n),
+            SelectionMove::First => 0,
+            SelectionMove::Last => max,
+        };
+    }
+
+    /// 在当前视图「进入」:Playlists 进选中歌单的 Library;Library 设 queue 并播放选中曲。
+    /// 全屏态屏蔽。
+    fn activate_selection(&mut self) {
+        if self.state.fullscreen {
+            return;
+        }
+        self.state.last_sel_change = Instant::now();
+        match self.state.view {
+            View::Playlists => {
                 if let Some(target_id) = self
                     .state
                     .filtered_playlists()
@@ -682,44 +652,7 @@ impl App {
                 self.state.view_pos.enter();
                 self.state.sel_track = 0;
             }
-            _ => {}
-        }
-    }
-
-    /// Library view 的按键:vim 风格上下 + h/Esc/Backspace 回 Playlists + Enter 设 queue 并播放。
-    fn handle_library_key(&mut self, key: &KeyEvent) {
-        self.state.last_sel_change = Instant::now();
-        if matches!(key.code, KeyCode::Esc) && !self.state.search_q.is_empty() {
-            self.state.search_q.clear();
-            self.state.sel_track = 0;
-            return;
-        }
-        let max = self.state.filtered_tracks().len().saturating_sub(1);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.state.sel_track = self.state.sel_track.saturating_add(1).min(max);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.state.sel_track = self.state.sel_track.saturating_sub(1);
-            }
-            KeyCode::Char('J') => {
-                self.state.sel_track = self.state.sel_track.saturating_add(ROW_BIG_STEP).min(max);
-            }
-            KeyCode::Char('K') => {
-                self.state.sel_track = self.state.sel_track.saturating_sub(ROW_BIG_STEP);
-            }
-            KeyCode::Char('g') => {
-                self.state.sel_track = 0;
-            }
-            KeyCode::Char('G') => {
-                self.state.sel_track = max;
-            }
-            KeyCode::Char('h') | KeyCode::Esc | KeyCode::Backspace => {
-                self.state.search_q.clear();
-                self.state.view = View::Playlists;
-                self.state.view_pos.leave();
-            }
-            KeyCode::Enter => {
+            View::Library => {
                 let filtered = self.state.filtered_tracks();
                 let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone())
                 else {
@@ -735,16 +668,58 @@ impl App {
                 self.client.set_queue(new_queue, song.id.clone());
                 self.client.play_song(song);
             }
-            KeyCode::Char('f') => {
-                let filtered = self.state.filtered_tracks();
-                if let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone()) {
-                    // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
-                    self.client.toggle_love(song.id.clone());
-                    // 乐观翻转:♥ 立即变,不等 server 确认。
-                    self.state.toggle_loved_local(&song);
+        }
+    }
+
+    /// 在当前视图「返回」:搜索非空先清词(选中复位),否则 Library 回 Playlists、
+    /// Playlists 无处可回即无操作。全屏态屏蔽。
+    fn back_or_clear_search(&mut self) {
+        if self.state.fullscreen {
+            return;
+        }
+        self.state.last_sel_change = Instant::now();
+        if !self.state.search_q.is_empty() {
+            self.state.search_q.clear();
+            self.reset_sel_for_search();
+            return;
+        }
+        if matches!(self.state.view, View::Library) {
+            self.state.view = View::Playlists;
+            self.state.view_pos.leave();
+        }
+    }
+
+    /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
+    fn toggle_love_selection(&mut self) {
+        if self.state.fullscreen || !matches!(self.state.view, View::Library) {
+            return;
+        }
+        let filtered = self.state.filtered_tracks();
+        if let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone()) {
+            // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
+            self.client.toggle_love(song.id.clone());
+            // 乐观翻转:♥ 立即变,不等 server 确认。
+            self.state.toggle_loved_local(&song);
+        }
+    }
+
+    /// 下载当前视图选中项:Playlists 整张歌单 / Library 单曲。全屏态屏蔽。
+    fn download_selection(&mut self) {
+        if self.state.fullscreen {
+            return;
+        }
+        match self.state.view {
+            View::Playlists => {
+                let id = self
+                    .state
+                    .filtered_playlists()
+                    .get(self.state.sel_playlist)
+                    .map(|p| p.data.id.clone());
+                if let Some(id) = id {
+                    self.client.download(DownloadTarget::Playlist(id));
                 }
             }
-            KeyCode::Char('d') => {
+            View::Library => {
                 let song = self
                     .state
                     .filtered_tracks()
@@ -754,7 +729,6 @@ impl App {
                     self.client.download(DownloadTarget::Song(Box::new(song)));
                 }
             }
-            _ => {}
         }
     }
 }
@@ -1101,6 +1075,127 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// 列表导航逐键回归:j/k/J/K/g/G 在 Library 与 Playlists 两个视图移动选中,
+    /// 大跨步长 7、越界钳到首末行。
+    #[test]
+    fn j_k_navigate_in_playlists_and_library() {
+        // Library:10 首,从 0 起。
+        let mut app = app_with_library(10, /*sel_track*/ 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.state.sel_track, 1, "j 下移一行");
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.state.sel_track, 8, "J 大跨下移 7 行");
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.state.sel_track, 9, "下移越界钳到末行");
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.state.sel_track, 2, "K 大跨上移 7 行");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.state.sel_track, 1, "k 上移一行");
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.state.sel_track, 0, "g 跳首行");
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.state.sel_track, 9, "G 跳末行");
+
+        // Playlists:3 张歌单,同一组键作用于 sel_playlist。
+        let mut app = app_with_library(3, /*sel_track*/ 0);
+        app.state.view = crate::runtime::state::View::Playlists;
+        app.state.playlists = vec![
+            crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
+            crate::test_support::playlist_view("p2", "B", SourceKind::NETEASE, 1),
+            crate::test_support::playlist_view("p3", "C", SourceKind::NETEASE, 1),
+        ];
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.state.sel_playlist, 1, "j 下移一行");
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.state.sel_playlist, 2, "G 跳末行");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.state.sel_playlist, 1, "k 上移一行");
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.state.sel_playlist, 0, "g 跳首行");
+    }
+
+    /// 音量 / seek 逐键回归:`+`/`=`/`-`/`_` 走本地乐观值(±5 钳 0..=100);
+    /// `←`/`→`/`Shift+←`/`Shift+→` 只发 server 命令,本地 position 无回显。
+    #[test]
+    fn volume_and_seek_via_keymap() {
+        let mut app = app_with_queue(1, /*current_idx*/ 0);
+        app.state.playback.volume_pct = 50;
+        press(&mut app, KeyCode::Char('+'));
+        assert_eq!(app.state.playback.volume_pct, 55, "+ 加 5");
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!(app.state.playback.volume_pct, 60, "= 与 + 同义");
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.state.playback.volume_pct, 55, "- 减 5");
+        press(&mut app, KeyCode::Char('_'));
+        assert_eq!(app.state.playback.volume_pct, 50, "_ 与 - 同义");
+
+        // seek 是 server 往返,本地 position 不乐观回显;此处只确认按键被消化不 panic。
+        app.state.playback.position_ms = 60_000;
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Right);
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::SHIFT,
+        )));
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(
+            app.state.playback.position_ms, 60_000,
+            "seek 无本地回显(等 snapshot)"
+        );
+    }
+
+    /// Playlists 视图 `l` 进 Library;Library 视图 Enter 触发 set_queue+play
+    /// (TestClient no-op,断 view 流转与不 panic)。
+    #[test]
+    fn l_enters_library_enter_plays() {
+        let mut app = app_with_library(3, /*sel_track*/ 2);
+        app.state.view = crate::runtime::state::View::Playlists;
+        app.state.sel_playlist = 0;
+
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Library,
+            "l 应进 Library"
+        );
+        assert_eq!(app.state.sel_track, 0, "进 Library 选中复位到首行");
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Library,
+            "Enter 播放不切视图"
+        );
+    }
+
+    /// `d` 按视图分流下载意图(Playlists→歌单 / Library→单曲),TestClient no-op:
+    /// 断不 panic、选中与视图不变(不验 Client 调用细节,见 sub00 §10 spy 裁决)。
+    #[test]
+    fn d_downloads_selection_by_view() {
+        let mut app = app_with_library(3, /*sel_track*/ 1);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.state.sel_track, 1, "Library d 不动选中");
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Library,
+            "Library d 不切视图"
+        );
+
+        let mut app = app_with_library(3, /*sel_track*/ 0);
+        app.state.view = crate::runtime::state::View::Playlists;
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.state.sel_playlist, 0, "Playlists d 不动选中");
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Playlists,
+            "Playlists d 不切视图"
+        );
     }
 
     /// `z` 进/退全屏(toggle):进场目标置满(非 leaving),再按退场目标归零(leaving)。
