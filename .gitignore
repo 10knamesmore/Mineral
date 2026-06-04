@@ -1,5 +1,6 @@
 /target
 .vscode
+.nvim.lua
 TODO.md
 imgs/
 logs/
