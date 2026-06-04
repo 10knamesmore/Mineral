@@ -2536,6 +2536,9 @@ dependencies = [
 [[package]]
 name = "mineral-config"
 version = "0.4.2"
+dependencies = [
+ "color-eyre",
+]
 
 [[package]]
 name = "mineral-log"
