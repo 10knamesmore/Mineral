@@ -2,9 +2,9 @@
 //!
 //! **4c 重构后**:player 业务(submit_play_song / next/prev/cycle_mode / queue 管理 /
 //! auto-next / prefetch)整体搬到 server (`mineral_server::PlayerCore`)。App 退化
-//! 为「转发用户意图 + 渲染 server snapshot」。每帧 tick 拉一次 PlayerSnapshot 灌
-//! 进 AppState 镜像;按键直接转 `client.play_song / cycle_play_mode / ...` 等
-//! 高级意图。
+//! 为「转发用户意图 + 渲染 server 状态镜像」。每帧 tick 做一次版本门控同步
+//! (PlayerSync,报已持版本、只收落后的重段)灌进 AppState 镜像;按键直接转
+//! `client.play_song / cycle_play_mode / ...` 等高级意图。
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_model::Song;
-use mineral_protocol::{DownloadTarget, PlayerSnapshot};
+use mineral_protocol::{DownloadTarget, PlayerSync};
 use mineral_server::Client;
 use mineral_task::TaskEvent;
 use ratatui::layout::Position;
@@ -128,8 +128,10 @@ impl App {
 
     /// 同步主事件循环:绘制 → 等事件 → 每 [`TICK`] 拉数据 + 推进动画/频谱。固定 ~60fps。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        // 启动时拉一次 PlayerSnapshot,让 in-proc / connect 都立即看到 server 状态。
-        self.apply_player_snapshot(self.client.player_snapshot());
+        // 启动时同步一次(versions 初始为 0 → 必然全量),in-proc / connect 都立即
+        // 看到 server 状态;与 tick 路径同一条 sync 通道,无特殊分支。
+        let sync = self.client.player_sync(self.state.versions);
+        self.apply_player_sync(sync);
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
         self.transition = Some(Transition::expanding(TRANSITION_TICKS));
@@ -190,7 +192,8 @@ impl App {
                 self.state.view_pos.tick();
                 self.state.fullscreen_pos.tick();
                 self.tick_overlays();
-                self.apply_player_snapshot(self.client.player_snapshot());
+                let sync = self.client.player_sync(self.state.versions);
+                self.apply_player_sync(sync);
                 self.drain_ready_covers();
                 self.sync_spectrum_palette();
                 self.drain_ready_protocols();
@@ -268,25 +271,33 @@ impl App {
         );
     }
 
-    /// 把 server 的 PlayerSnapshot 灌进 AppState 镜像 — current_song / queue /
-    /// play_mode / play_url / current_lyrics 等。每 `TICK` 调一次。
-    fn apply_player_snapshot(&mut self, snap: PlayerSnapshot) {
-        self.state.current = snap.current_song.clone();
-        self.state.playback.track = snap.current_song;
-        self.state.playback.play_url = snap.play_url;
-        self.state.playback.play_origin = snap.play_origin;
-        self.state.playback.mode = snap.play_mode;
-        self.state.queue = snap.queue;
-        // 不灌 snap.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义不同于
-        // UI 光标;在播歌已由 ▶ 标记单独表达。queue 浮层光标是纯客户端态,只钳防越界。
-        self.overlays.clamp_queue(self.state.queue.len());
-        self.state.original_queue = snap.original_queue;
-        // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
-        // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
-        if let (Some(song_id), Some(lyrics)) = (snap.current_lyrics_song_id, snap.current_lyrics)
-            && !self.state.lyrics_cache.contains_key(&song_id)
-        {
-            self.state.lyrics_cache.insert(song_id, lyrics);
+    /// 把 server 的版本门控同步灌进 AppState 镜像。每 `TICK` 调一次。
+    ///
+    /// 核心语义:**重段缺席 ≠ 清空**——`None` 表示「与已有版本一致」,镜像原地保持;
+    /// 只有 `Some` 才整体替换。轻段(play_mode / play_origin)每 tick 照常灌。
+    fn apply_player_sync(&mut self, sync: PlayerSync) {
+        self.state.versions = sync.versions;
+        self.state.playback.play_origin = sync.play_origin;
+        self.state.playback.mode = sync.play_mode;
+        if let Some(q) = sync.queue {
+            self.state.queue = q.queue;
+            self.state.original_queue = q.original_queue;
+            // 不灌 sync.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义
+            // 不同于 UI 光标;在播歌已由 ▶ 标记单独表达。queue 浮层光标是纯客户端态,
+            // 只钳防越界。
+            self.overlays.clamp_queue(self.state.queue.len());
+        }
+        if let Some(c) = sync.current {
+            self.state.current = c.current_song.clone();
+            self.state.playback.track = c.current_song;
+            self.state.playback.play_url = c.play_url;
+            // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
+            // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
+            if let (Some(song_id), Some(lyrics)) = (c.current_lyrics_song_id, c.current_lyrics)
+                && !self.state.lyrics_cache.contains_key(&song_id)
+            {
+                self.state.lyrics_cache.insert(song_id, lyrics);
+            }
         }
     }
 
@@ -736,7 +747,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use mineral_protocol::PlayerSnapshot;
+    use mineral_protocol::{PlayerSync, QueueSync};
 
     use mineral_model::{MediaUrl, SourceKind};
 
@@ -874,7 +885,7 @@ mod tests {
     }
 
     /// 集成回归:Tab 开队列 → 按键经 dispatch 路由到 queue 浮层移动光标,且**不被
-    /// server snapshot tick 弹回**。此前 `apply_player_snapshot` 每帧用 server 的
+    /// server sync tick 弹回**。此前 apply 每帧用 server 的
     /// 「在播锚点」覆盖 UI 光标,导致按键看似无效;现在光标归 overlay 私有、只 clamp。
     #[test]
     fn queue_nav_moves_and_survives_snapshot_tick() -> color_eyre::Result<()> {
@@ -890,18 +901,21 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.overlays.queue_sel(), Some(4));
 
-        // 模拟一次 server tick:snapshot 带不同的 queue_sel(在播锚点 = 2)。
+        // 模拟一次 server tick:sync 带不同的 queue_sel(在播锚点 = 2)+ queue 重段。
         // UI 光标不应被这个值覆盖(只 clamp 防越界)。
-        let snap = PlayerSnapshot {
-            queue: endserenading(6),
+        let sync = PlayerSync {
+            queue: Some(QueueSync {
+                queue: endserenading(6),
+                original_queue: None,
+            }),
             queue_sel: 2,
             ..Default::default()
         };
-        app.apply_player_snapshot(snap);
+        app.apply_player_sync(sync);
         assert_eq!(
             app.overlays.queue_sel(),
             Some(4),
-            "snapshot tick 不该弹回 UI 光标"
+            "sync tick 不该弹回 UI 光标"
         );
 
         // k 一次 → 3;g → 0;G → 末行 5。
@@ -913,6 +927,43 @@ mod tests {
         assert_eq!(app.overlays.queue_sel(), Some(5));
 
         Ok(())
+    }
+
+    /// 版本门控的关键语义回归:重段缺席(版本一致的稳态 tick)= 「与已有一致」,
+    /// **不是清空** —— queue / current 镜像必须原地保持。
+    #[test]
+    fn light_only_sync_keeps_queue_and_current() {
+        let mut app = app_with_queue(6, /*current_idx*/ 2);
+        let queue_before = app.state.queue.len();
+        let current_before = app.state.current.clone();
+        assert!(current_before.is_some(), "前置:有在播歌");
+
+        // 稳态 tick:两重段都缺席,只有轻段。
+        app.apply_player_sync(PlayerSync::default());
+
+        assert_eq!(app.state.queue.len(), queue_before, "queue 不得被清空");
+        assert_eq!(app.state.current, current_before, "current 不得被清空");
+    }
+
+    /// 带重段的 sync 正常替换镜像 + 记录版本号供下次回报。
+    #[test]
+    fn sync_with_sections_replaces_and_records_versions() {
+        let mut app = app_with_queue(2, /*current_idx*/ 0);
+        let sync = PlayerSync {
+            versions: mineral_protocol::PlayerVersions {
+                queue: 7,
+                current: 9,
+            },
+            queue: Some(QueueSync {
+                queue: endserenading(4),
+                original_queue: None,
+            }),
+            ..Default::default()
+        };
+        app.apply_player_sync(sync);
+        assert_eq!(app.state.queue.len(), 4, "queue 重段应整体替换");
+        assert_eq!(app.state.versions.queue, 7);
+        assert_eq!(app.state.versions.current, 9);
     }
 
     /// 集成回归:Tab 开 queue → Esc 关闭(触发收起动画);q 在无浮层时开退出确认。

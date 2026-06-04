@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
-use mineral_protocol::{CancelFilter, PlayerSnapshot, SongStatsWire};
+use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions, SongStatsWire};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use ratatui_image::picker::Picker;
@@ -189,8 +189,8 @@ impl Client for TestClient {
     fn cycle_play_mode(&self) {}
     fn prev_or_restart(&self) {}
     fn next_song(&self) {}
-    fn player_snapshot(&self) -> PlayerSnapshot {
-        PlayerSnapshot::default()
+    fn player_sync(&self, _known: PlayerVersions) -> PlayerSync {
+        PlayerSync::default()
     }
     fn submit_task(&self, _kind: TaskKind, _priority: Priority) -> TaskId {
         TaskId::default()

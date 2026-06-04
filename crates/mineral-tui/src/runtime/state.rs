@@ -123,6 +123,10 @@ pub struct AppState {
     /// 浮动 queue 当前曲目列表(后端权威态)。
     pub queue: Vec<Song>,
 
+    /// 上次已应用的 server 状态版本号(每 tick 随 PlayerSync 回报;0 = 还没同步过,
+    /// 首次同步必然全量)。
+    pub versions: mineral_protocol::PlayerVersions,
+
     /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
     pub search_mode: bool,
 
@@ -225,6 +229,7 @@ impl AppState {
             spectrum: SpectrumState::new(),
             fft: SpectrumComputer::new(),
             queue: Vec::new(),
+            versions: mineral_protocol::PlayerVersions::default(),
             search_mode: false,
             prefetched: None,
             original_queue: None,
@@ -311,7 +316,7 @@ impl AppState {
     }
 
     /// 把任务事件应用到状态。**4c 后**:server 端 PlayerCore 已 filter 掉
-    /// `PlayUrlReady` / `LyricsReady`(自己消化进 PlayerSnapshot),client 这里
+    /// `PlayUrlReady` / `LyricsReady`(自己消化进 PlayerSync 的 current 重段),client 这里
     /// 只剩 playlists / tracks / liked_ids 三类。
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {

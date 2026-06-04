@@ -89,6 +89,7 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     st.current_lyrics = None;
     st.current_lyrics_song_id = None;
     st.prefetch_fired_for = None;
+    st.bump_current();
     old_id
 }
 

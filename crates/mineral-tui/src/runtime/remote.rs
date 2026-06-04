@@ -17,8 +17,8 @@ use color_eyre::eyre::{WrapErr, eyre};
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Song, SongId};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, Framed, PlayerSnapshot, Request, Response,
-    SongStatsWire, framed, recv, send,
+    CancelFilter, DownloadProgress, DownloadTarget, Framed, PlayerSync, PlayerVersions, Request,
+    Response, SongStatsWire, framed, recv, send,
 };
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
@@ -191,12 +191,13 @@ impl Client for RemoteClient {
     fn next_song(&self) {
         let _ = self.send_recv(Request::NextSong);
     }
-    fn player_snapshot(&self) -> PlayerSnapshot {
-        match self.send_recv(Request::PlayerSnapshot) {
-            Response::PlayerSnapshot(s) => *s,
+    fn player_sync(&self, known: PlayerVersions) -> PlayerSync {
+        match self.send_recv(Request::PlayerSync(known)) {
+            Response::PlayerSync(s) => *s,
             other => {
-                warn_unexpected("player_snapshot", &other);
-                PlayerSnapshot::default()
+                warn_unexpected("player_sync", &other);
+                // default 的两个重段是 None(=「与已有一致」),异常时不会把镜像清空。
+                PlayerSync::default()
             }
         }
     }

@@ -15,7 +15,7 @@ use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
 use mineral_persist::{ServerStore, SessionSnapshot};
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, PlayMode, PlaybackOrigin, PlayerSnapshot,
+    DownloadProgress, DownloadTarget, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
@@ -141,9 +141,10 @@ impl PlayerCore {
         me
     }
 
-    /// PlayerSnapshot — client 重连时拉一份灌进 UI 镜像。
-    pub fn snapshot(&self) -> PlayerSnapshot {
-        self.inner.state.lock().snapshot()
+    /// 版本门控同步:client 报已持版本号,仅落后部分以重段返回(语义见 [`PlayerSync`])。
+    /// `known = 0` 时等价旧的全量 snapshot,启动 / tick 同一条路径。
+    pub fn sync(&self, known: PlayerVersions) -> PlayerSync {
+        self.inner.state.lock().sync(known)
     }
 
     /// 内部 AudioHandle 引用 — 给 [`crate::client::ClientHandle`] 转发 pause/seek
@@ -331,6 +332,7 @@ impl PlayerCore {
             st.current_lyrics = None;
             st.current_lyrics_song_id = None;
             st.prefetch_fired_for = None;
+            st.bump_current();
             // 打断上一首未完成的 capture(残件待删)。
             let interrupted = st.capturing.take();
             // 已预排的下一曲(gapless):命中目标则复用其 URL(引擎里的预排 decoder 已被上面的
@@ -365,11 +367,15 @@ impl PlayerCore {
             // 本地播也填 play_url(format / bitrate 按文件内容经 lofty 读出,见 resolve),transport 才显 fmt。
             let pu = crate::resolve::local_play_url(song, &path, quality);
             self.inner.audio.play(MediaUrl::Local(path));
-            self.inner.state.lock().play_url = Some(pu);
+            let mut st = self.inner.state.lock();
+            st.play_url = Some(pu);
+            st.bump_current();
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using queued url");
             download::play_capturing(self, song, &pu, PLAYBACK_QUALITY);
-            self.inner.state.lock().play_url = Some(pu);
+            let mut st = self.inner.state.lock();
+            st.play_url = Some(pu);
+            st.bump_current();
         } else {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit SongUrl task");
             self.inner.scheduler.submit(
@@ -422,6 +428,7 @@ impl PlayerCore {
             // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
             st.queued = None;
             st.prefetch_fired_for = None;
+            st.bump_queue();
         }
         // 取消引擎里尚未 append 的待建预排(已 append 的无法摘除,会自然播完后由边界兜底)。
         self.inner.audio.clear_next();
@@ -616,6 +623,7 @@ impl PlayerCore {
             let want = st.current_song.as_ref().map(|t| &t.id);
             if want == Some(song_id) {
                 st.play_url = Some(play_url.clone());
+                st.bump_current();
                 Route::Current(st.current_song.clone().map(Box::new))
             } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
                 Route::Prefetch
@@ -648,6 +656,7 @@ impl PlayerCore {
             mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "store", "lyrics ready");
             st.current_lyrics = Some(lyrics);
             st.current_lyrics_song_id = Some(song_id.clone());
+            st.bump_current();
         } else {
             // 非当前歌,无意义,丢(只缓存当前歌)。
             mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "lyrics ready");
@@ -700,6 +709,7 @@ fn enter_shuffle(st: &mut State) {
     }
     st.queue_sel = 0;
     st.original_queue = Some(original);
+    st.bump_queue();
 }
 
 /// 退出 shuffle:从 `original_queue` 还原顺序,`queue_sel` 重新定位到当前歌。
@@ -712,6 +722,7 @@ fn exit_shuffle(st: &mut State) {
     st.queue_sel = cur_id
         .and_then(|id| st.queue.iter().position(|s| s.id == id))
         .unwrap_or(0);
+    st.bump_queue();
 }
 
 #[cfg(test)]
@@ -728,7 +739,7 @@ mod tests {
         SongId, SourceKind,
     };
     use mineral_persist::ServerStore;
-    use mineral_protocol::{PlayMode, PlaybackOrigin};
+    use mineral_protocol::{PlayMode, PlaybackOrigin, PlayerVersions};
     use mineral_task::Scheduler;
     use mineral_test::mock::{UrlChannel, serve_once};
     use mineral_test::song;
@@ -902,6 +913,19 @@ mod tests {
         songs.iter().map(|s| s.id.as_str()).collect()
     }
 
+    /// 造一个指向 example.com 的远端 [`PlayUrl`](版本 bump 测试用)。
+    fn test_play_url(id: &str) -> color_eyre::Result<PlayUrl> {
+        Ok(PlayUrl {
+            song_id: SongId::new(SourceKind::NETEASE, id),
+            url: mineral_model::MediaUrl::remote(&format!("https://example.com/{id}.mp3"))?,
+            bitrate_bps: 320_000,
+            quality: BitRate::Higher,
+            size: 0,
+            format: mineral_model::AudioFormat::Mp3,
+            bit_depth: None,
+        })
+    }
+
     /// 取队列各歌 id 并排序(用于「内容集合不变」断言,不看顺序)。
     fn ids_sorted(songs: &[Song]) -> Vec<&str> {
         let mut v = ids(songs);
@@ -1032,6 +1056,108 @@ mod tests {
         apply_play_mode(&mut st, PlayMode::Sequential);
         assert_eq!(st.play_mode, PlayMode::Sequential);
         assert!(st.original_queue.is_none());
+    }
+
+    /// enter/exit shuffle 必须推进 queue_version(漏 bump = client 永远看不到洗牌结果)。
+    #[test]
+    fn shuffle_boundaries_bump_queue_version() {
+        let mut st = state_with(&["a", "b", "c"], 1, PlayMode::Sequential);
+        let v0 = st.queue_version;
+        apply_play_mode(&mut st, PlayMode::Shuffle);
+        assert_eq!(st.queue_version, v0 + 1, "进 Shuffle 洗牌后应 bump");
+        apply_play_mode(&mut st, PlayMode::Sequential);
+        assert_eq!(st.queue_version, v0 + 2, "退 Shuffle 还原后应 bump");
+    }
+
+    /// shuffle 边界的 no-op 路径(空队列进入 / 无 original 退出)不得虚涨版本。
+    #[test]
+    fn noop_shuffle_paths_do_not_bump() {
+        let mut empty = State::empty();
+        let v0 = empty.queue_version;
+        enter_shuffle(&mut empty);
+        assert_eq!(empty.queue_version, v0, "空队列进 Shuffle 是 no-op");
+
+        let mut st = state_with(&["a", "b"], 1, PlayMode::Sequential);
+        let v1 = st.queue_version;
+        exit_shuffle(&mut st);
+        assert_eq!(st.queue_version, v1, "无 original 退 Shuffle 是 no-op");
+    }
+
+    /// 非 Shuffle 边界的模式切换(RepeatAll → RepeatOne)不动 queue,不得 bump。
+    #[test]
+    fn mode_change_without_queue_mutation_does_not_bump() {
+        let mut st = state_with(&["a", "b"], 0, PlayMode::RepeatAll);
+        let v0 = st.queue_version;
+        apply_play_mode(&mut st, PlayMode::RepeatOne);
+        assert_eq!(st.queue_version, v0);
+    }
+
+    /// set_queue(两种模式)必须推进 queue_version。
+    #[tokio::test]
+    async fn set_queue_bumps_queue_version() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        let v0 = core.sync(PlayerVersions::default()).versions.queue;
+        core.set_queue(
+            vec![song("a"), song("b")],
+            &SongId::new(SourceKind::NETEASE, "a"),
+        );
+        let v1 = core.sync(PlayerVersions::default()).versions.queue;
+        assert_eq!(v1, v0 + 1, "顺序模式 set_queue 应 bump");
+
+        core.set_play_mode(PlayMode::Shuffle); // 进 Shuffle 本身也 bump 一次
+        let v2 = core.sync(PlayerVersions::default()).versions.queue;
+        core.set_queue(
+            vec![song("c"), song("d")],
+            &SongId::new(SourceKind::NETEASE, "c"),
+        );
+        let v3 = core.sync(PlayerVersions::default()).versions.queue;
+        assert_eq!(v3, v2 + 1, "Shuffle 模式 set_queue 应 bump");
+        Ok(())
+    }
+
+    /// play_song 清旧上下文 + 写新 current_song,必须推进 current_version。
+    #[tokio::test]
+    async fn play_song_bumps_current_version() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        let v0 = core.sync(PlayerVersions::default()).versions.current;
+        core.play_song(&song("a"));
+        let v1 = core.sync(PlayerVersions::default()).versions.current;
+        assert_eq!(v1, v0 + 1);
+        Ok(())
+    }
+
+    /// LyricsReady 命中当前歌写入歌词 → bump;不命中丢弃 → 不 bump。
+    #[tokio::test]
+    async fn lyrics_ready_bumps_only_on_store() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        let v0 = core.sync(PlayerVersions::default()).versions.current;
+
+        core.handle_lyrics_ready(&SongId::new(SourceKind::NETEASE, "x"), Lyrics::default());
+        let v1 = core.sync(PlayerVersions::default()).versions.current;
+        assert_eq!(v1, v0, "非当前歌的歌词被丢弃,不应 bump");
+
+        core.handle_lyrics_ready(&SongId::new(SourceKind::NETEASE, "a"), Lyrics::default());
+        let v2 = core.sync(PlayerVersions::default()).versions.current;
+        assert_eq!(v2, v0 + 1, "命中当前歌写入歌词应 bump");
+        Ok(())
+    }
+
+    /// PlayUrlReady 命中当前歌写 play_url → bump;不命中任何路由 → 不 bump。
+    #[tokio::test]
+    async fn play_url_ready_bumps_only_on_current() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        let v0 = core.sync(PlayerVersions::default()).versions.current;
+
+        core.handle_play_url_ready(&SongId::new(SourceKind::NETEASE, "x"), test_play_url("x")?);
+        let v1 = core.sync(PlayerVersions::default()).versions.current;
+        assert_eq!(v1, v0, "无人认领的 URL 被丢弃,不应 bump");
+
+        core.handle_play_url_ready(&SongId::new(SourceKind::NETEASE, "a"), test_play_url("a")?);
+        let v2 = core.sync(PlayerVersions::default()).versions.current;
+        assert_eq!(v2, v0 + 1, "命中当前歌写 play_url 应 bump");
+        Ok(())
     }
 
     /// apply_play_mode:进入 Shuffle 触发 enter(置顶 + 存 original),退回触发 exit(还原)。
@@ -1244,7 +1370,7 @@ mod tests {
         let core = core_with(calls)?;
         core.play_song(&song("a"));
         assert_eq!(
-            core.snapshot().play_origin,
+            core.sync(PlayerVersions::default()).play_origin,
             Some(PlaybackOrigin::Remote),
             "无本地副本应标记为远端"
         );
@@ -1306,13 +1432,15 @@ mod tests {
         core.play_song(&s);
 
         // 3. 应解析到刚下载的 lossless。
-        let snap = core.snapshot();
+        let sync = core.sync(PlayerVersions::default());
         assert_eq!(
-            snap.play_origin,
+            sync.play_origin,
             Some(PlaybackOrigin::Download),
             "下载的歌应从下载库播放,而非缓存 / 网络"
         );
-        let pu = snap
+        let pu = sync
+            .current
+            .ok_or_else(|| color_eyre::eyre::eyre!("known=0 应返回 current 重段"))?
             .play_url
             .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应填 play_url"))?;
         assert_eq!(pu.quality, BitRate::Lossless, "命中音质应为 lossless");

@@ -137,7 +137,7 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.next_song();
             Response::Ok
         }
-        Request::PlayerSnapshot => Response::PlayerSnapshot(Box::new(client.player_snapshot())),
+        Request::PlayerSync(known) => Response::PlayerSync(Box::new(client.player_sync(known))),
         Request::PullPcm(n) => {
             let (samples, sample_rate) = client.pull_pcm(n);
             Response::PcmData {
@@ -169,7 +169,7 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
 fn req_log_name(req: &Request) -> Option<&'static str> {
     match req {
         Request::AudioSnapshot
-        | Request::PlayerSnapshot
+        | Request::PlayerSync(_)
         | Request::TaskSnapshot
         | Request::DrainTaskEvents
         | Request::DownloadProgress

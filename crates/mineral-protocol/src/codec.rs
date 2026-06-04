@@ -21,6 +21,9 @@ pub fn framed<T: AsyncRead + AsyncWrite>(stream: T) -> Framed<T> {
 
 /// 把一条 serde-serializable 消息编码成 [`Bytes`] 发出去。
 ///
+/// 用 `serialize_into` 直写 `Vec` 单遍完成:`bincode::serialize` 内部会先跑一遍
+/// SizeChecker 预算长度再真序列化,大 payload 等于序列化两遍(profiling 可见)。
+///
 /// # Errors
 /// bincode 序列化失败 / 写 stream 失败。
 pub async fn send<T, S>(stream: &mut Framed<S>, msg: &T) -> color_eyre::Result<()>
@@ -28,7 +31,8 @@ where
     T: Serialize,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let bytes = bincode::serialize(msg).wrap_err("bincode encode")?;
+    let mut bytes = Vec::new();
+    bincode::serialize_into(&mut bytes, msg).wrap_err("bincode encode")?;
     stream
         .send(Bytes::from(bytes))
         .await

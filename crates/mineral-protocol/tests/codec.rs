@@ -4,8 +4,8 @@ use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
 use mineral_model::{BitRate, MediaUrl, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ChannelFetchKindTag, PlayMode, PlayerSnapshot, Request, Response, SongStatsWire,
-    framed, recv, send,
+    CancelFilter, ChannelFetchKindTag, CurrentSync, PlayMode, PlayerSync, PlayerVersions,
+    QueueSync, Request, Response, SongStatsWire, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use mineral_test::song;
@@ -200,7 +200,11 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::NextSong).await?;
     req_round_trips(Request::DrainTaskEvents).await?;
     req_round_trips(Request::TaskSnapshot).await?;
-    req_round_trips(Request::PlayerSnapshot).await?;
+    req_round_trips(Request::PlayerSync(PlayerVersions {
+        queue: 3,
+        current: 7,
+    }))
+    .await?;
     req_round_trips(Request::PullPcm(256)).await?;
     Ok(())
 }
@@ -259,18 +263,47 @@ async fn round_trip_responses() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 含非空 queue + Shuffle + original_queue 的 PlayerSnapshot 完整往返。
+/// 双重段齐发(Shuffle + original_queue + current)的 PlayerSync 完整往返。
 #[tokio::test]
-async fn round_trip_player_snapshot_rich() -> color_eyre::Result<()> {
-    let snap = PlayerSnapshot {
-        queue: vec![song("a"), song("b"), song("c")],
+async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
+    let sync = PlayerSync {
+        versions: PlayerVersions {
+            queue: 4,
+            current: 9,
+        },
         queue_sel: 1,
         play_mode: PlayMode::Shuffle,
-        original_queue: Some(vec![song("a"), song("b"), song("c")]),
-        current_song: Some(song("b")),
-        ..PlayerSnapshot::default()
+        play_origin: None,
+        queue: Some(QueueSync {
+            queue: vec![song("a"), song("b"), song("c")],
+            original_queue: Some(vec![song("a"), song("b"), song("c")]),
+        }),
+        current: Some(CurrentSync {
+            current_song: Some(song("b")),
+            play_url: None,
+            current_lyrics: None,
+            current_lyrics_song_id: None,
+        }),
     };
-    resp_round_trips(Response::PlayerSnapshot(Box::new(snap))).await?;
+    resp_round_trips(Response::PlayerSync(Box::new(sync))).await?;
+    Ok(())
+}
+
+/// 轻段-only(版本一致,两重段缺席)的 PlayerSync 往返:稳态 tick 的主路径。
+#[tokio::test]
+async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
+    let sync = PlayerSync {
+        versions: PlayerVersions {
+            queue: 4,
+            current: 9,
+        },
+        queue_sel: 2,
+        play_mode: PlayMode::RepeatAll,
+        play_origin: None,
+        queue: None,
+        current: None,
+    };
+    resp_round_trips(Response::PlayerSync(Box::new(sync))).await?;
     Ok(())
 }
 
@@ -280,7 +313,7 @@ async fn round_trip_player_snapshot_rich() -> color_eyre::Result<()> {
 mod proptests {
     use bincode::{deserialize, serialize};
     use mineral_model::{SongId, SourceKind};
-    use mineral_protocol::Request;
+    use mineral_protocol::{PlayerVersions, Request};
     use mineral_test::arb_song;
     use proptest::collection::vec;
     use proptest::prelude::{Just, Strategy, any, prop_oneof, proptest};
@@ -298,7 +331,9 @@ mod proptests {
             Just(Request::CyclePlayMode),
             Just(Request::PrevOrRestart),
             Just(Request::NextSong),
-            Just(Request::PlayerSnapshot),
+            (any::<u64>(), any::<u64>()).prop_map(|(queue, current)| {
+                Request::PlayerSync(PlayerVersions { queue, current })
+            }),
             any::<u64>().prop_map(Request::Seek),
             any::<u8>().prop_map(Request::SetVolume),
             any::<usize>().prop_map(Request::PullPcm),

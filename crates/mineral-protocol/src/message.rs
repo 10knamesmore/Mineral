@@ -8,7 +8,7 @@ use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
-use crate::{CancelFilter, PlayerSnapshot};
+use crate::{CancelFilter, PlayerSync, PlayerVersions};
 
 /// 下载进度快照(client 每 tick 轮询,驱动 top-center 进度弹窗)。
 ///
@@ -142,9 +142,10 @@ pub enum Request {
     /// `n` 键:按当前 mode 切下一首。返回 [`Response::Ok`]。
     NextSong,
 
-    /// 拉一份 PlayerSnapshot;client 启动 / 重连时灌进 UI。
-    /// 返回 [`Response::PlayerSnapshot`]。
-    PlayerSnapshot,
+    /// 版本门控的播放状态同步:client 报自己已有的版本号(0 = 一无所有),
+    /// server 仅在版本落后时附带对应重段。启动与每 tick 同一条路径。
+    /// 返回 [`Response::PlayerSync`]。
+    PlayerSync(PlayerVersions),
 
     // ---- PCM 流 ----
     /// 拉最多 N 个 f32 PCM 样本(单声道,FFT 输入用)。
@@ -190,8 +191,8 @@ pub enum Response {
     /// 对应 [`Request::TaskSnapshot`]。
     TaskSnapshot(Snapshot),
 
-    /// 对应 [`Request::PlayerSnapshot`]。`Box` 避免 enum 体积膨胀。
-    PlayerSnapshot(Box<PlayerSnapshot>),
+    /// 对应 [`Request::PlayerSync`]。`Box` 避免 enum 体积膨胀。
+    PlayerSync(Box<PlayerSync>),
 
     /// 对应 [`Request::PullPcm`]。
     PcmData {

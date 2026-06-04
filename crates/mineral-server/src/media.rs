@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::AudioSnapshot;
 use mineral_media::{LoopMode, MediaCommand, MediaConfig, MediaService, NowPlaying, PlaybackState};
 use mineral_model::{Lyrics, MediaUrl, Song, SongId};
-use mineral_protocol::{PlayMode, PlayerSnapshot, Repeat};
+use mineral_protocol::{PlayMode, Repeat};
 
 use crate::player::PlayerCore;
 
@@ -71,11 +71,11 @@ fn handle_command(player: &PlayerCore, cmd: MediaCommand) {
         MediaCommand::SetPosition(at) => audio.seek(dur_ms(at)),
         // 控件只写单个维度;读当前 PlayMode、改对应维度、塌缩回四档(report_loop 随即回报真实档)。
         MediaCommand::SetShuffle(on) => {
-            let mode = player.snapshot().play_mode;
+            let mode = player.with_state(|st| st.play_mode);
             player.set_play_mode(mode.with_shuffle(on));
         }
         MediaCommand::SetLoop(loop_mode) => {
-            let mode = player.snapshot().play_mode;
+            let mode = player.with_state(|st| st.play_mode);
             player.set_play_mode(mode.with_repeat(loop_to_repeat(loop_mode)));
         }
     }
@@ -166,17 +166,25 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
     loop {
         tick.tick().await;
         let now = Instant::now();
-        let snap = player.snapshot();
+        // in-process 直读 State 需要的三个字段(歌 + 歌词 + 模式),不再拉含整个
+        // queue 的全量快照(queue 这里用不上,clone 它纯浪费)。
+        let (current_song, current_lyrics, play_mode) = player.with_state(|st| {
+            (
+                st.current_song.clone(),
+                st.current_lyrics.clone(),
+                st.play_mode,
+            )
+        });
         let audio = player.audio().snapshot();
 
         // 歌词在 channel 层已结构化清洗,这里只在确实要重发 metadata 时才序列化:
         // 行级走标准 LRC,逐字走 quickshell 约定的 JSON(见 build_now_playing)。
-        let cur_id = snap.current_song.as_ref().map(|s| s.id.clone());
-        let presence = LyricsPresence::of(snap.current_lyrics.as_ref());
+        let cur_id = current_song.as_ref().map(|s| s.id.clone());
+        let presence = LyricsPresence::of(current_lyrics.as_ref());
         let song_changed = cur_id != last_song_id;
         if song_changed || presence != last_presence {
-            if let Some(song) = &snap.current_song {
-                let now_playing = build_now_playing(song, snap.current_lyrics.as_ref());
+            if let Some(song) = &current_song {
+                let now_playing = build_now_playing(song, current_lyrics.as_ref());
                 if let Err(e) = service.set_now_playing(&now_playing) {
                     mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_now_playing failed");
                 }
@@ -192,7 +200,7 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
 
         // 检测 seek:report_loop 是 snapshot 轮询拿不到事件,靠线性外推对比判定跳变,
         // 跳变时补发 Seeked(只在有当前歌时;首 tick last_pos=None 不判定)。
-        if snap.current_song.is_some() {
+        if current_song.is_some() {
             let elapsed_ms =
                 u64::try_from(now.duration_since(last_tick).as_millis()).unwrap_or(u64::MAX);
             if let Some(prev) = last_pos
@@ -208,26 +216,29 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
 
         // PlayMode 变化时把两维度回写 MPRIS Shuffle/LoopStatus(自动发 PropertiesChanged);
         // 首 tick(last_play_mode=None)必报一次,纠正 mpris-server 的默认 Off/None。
-        if last_play_mode != Some(snap.play_mode) {
-            if let Err(e) = service.set_shuffle(snap.play_mode.shuffle()) {
+        if last_play_mode != Some(play_mode) {
+            if let Err(e) = service.set_shuffle(play_mode.shuffle()) {
                 mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_shuffle failed");
             }
-            if let Err(e) = service.set_loop(repeat_to_loop(snap.play_mode.repeat())) {
+            if let Err(e) = service.set_loop(repeat_to_loop(play_mode.repeat())) {
                 mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_loop failed");
             }
-            last_play_mode = Some(snap.play_mode);
+            last_play_mode = Some(play_mode);
         }
 
-        let (state, position) = playback_of(&snap, &audio);
+        let (state, position) = playback_of(current_song.as_ref(), &audio);
         if let Err(e) = service.set_playback(state, position) {
             mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "set_playback failed");
         }
     }
 }
 
-/// 从快照算出上报用的 [`PlaybackState`] 与进度;无当前歌 = `Stopped`。
-fn playback_of(snap: &PlayerSnapshot, audio: &AudioSnapshot) -> (PlaybackState, Option<Duration>) {
-    if snap.current_song.is_none() {
+/// 从当前歌 + 音频快照算出上报用的 [`PlaybackState`] 与进度;无当前歌 = `Stopped`。
+fn playback_of(
+    current_song: Option<&Song>,
+    audio: &AudioSnapshot,
+) -> (PlaybackState, Option<Duration>) {
+    if current_song.is_none() {
         return (PlaybackState::Stopped, None);
     }
     let state = if audio.playing {

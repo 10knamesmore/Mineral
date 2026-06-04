@@ -3,7 +3,7 @@
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Song, SongId};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, PlayerSnapshot, SongStatsWire,
+    CancelFilter, DownloadProgress, DownloadTarget, PlayerSync, PlayerVersions, SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 
@@ -122,8 +122,9 @@ pub trait Client: Send + Sync {
     /// `n` 键:按 PlayMode 切下一首。
     fn next_song(&self);
 
-    /// 拉一份 PlayerSnapshot;client 启动 / 重连时灌进 UI。
-    fn player_snapshot(&self) -> PlayerSnapshot;
+    /// 版本门控的播放状态同步:`known` 是 client 已持有的版本号(0 = 一无所有),
+    /// server 仅对落后部分附带重段。启动与每 tick 同一条路径(语义见 [`PlayerSync`])。
+    fn player_sync(&self, known: PlayerVersions) -> PlayerSync;
 
     // ---- 任务调度(直通,playlists/tracks 类 prefetch 用) ----
     /// 提交一个任务,返回任务 id。
@@ -226,8 +227,8 @@ impl Client for ClientHandle {
     fn next_song(&self) {
         self.player.next_song();
     }
-    fn player_snapshot(&self) -> PlayerSnapshot {
-        self.player.snapshot()
+    fn player_sync(&self, known: PlayerVersions) -> PlayerSync {
+        self.player.sync(known)
     }
 
     fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {

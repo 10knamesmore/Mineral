@@ -1,7 +1,7 @@
 //! 播放循环模式 + Server 端持有的播放状态快照。
 //!
 //! `PlayMode` 历史在 mineral-tui::playback;搬来这里因为 server 端也要决定
-//! `next_song` / `prev_song`,且需要走 wire(`PlayerSnapshot` 的字段)。
+//! `next_song` / `prev_song`,且需要走 wire([`PlayerSync`] 的字段)。
 //! glyph / label 这两个 UI 字面量跟着挪过来 —— 字符画放 protocol 不优雅,
 //! 但避免 mineral-tui 跨 crate 加 inherent impl 的麻烦,**够用**。
 
@@ -126,30 +126,63 @@ pub enum PlaybackOrigin {
     Remote,
 }
 
-/// Server 端持有的「播放上下文」快照,client 重连后立刻拉一份镜像到 UI。
+/// Client 已持有的播放状态版本号,随 [`crate::Request::PlayerSync`] 上报。
+///
+/// `0` = 一无所有(启动初次同步);server 端版本从 1 起步、per-process 单调递增,
+/// 故 0 必然不匹配、必然换回全量重段。版本号只在单条连接内有意义(断链即退出,
+/// 无跨连接陈旧版本问题)。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct PlayerVersions {
+    /// queue + original_queue 的版本。
+    pub queue: u64,
+
+    /// current_song / play_url / lyrics 的版本。
+    pub current: u64,
+}
+
+/// 每 tick 的播放状态同步应答:轻段恒有(<100B),重段仅 client 版本落后时附带。
+///
+/// 重段缺席(`None`)语义是「与你已有的一致」,**不是清空** —— client 必须保持
+/// 上次应用的镜像不动。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct PlayerSnapshot {
+pub struct PlayerSync {
+    /// server 当前版本;client 收下后于下次请求回报。
+    pub versions: PlayerVersions,
+
+    /// queue 中「当前歌」的位置(server 的 prev/next 锚点,非 UI 光标)。轻段。
+    pub queue_sel: usize,
+
+    /// 当前播放模式。轻段。
+    pub play_mode: PlayMode,
+
+    /// 当前在播音频的来源(下载 / 缓存 / 远端);`None` = 未知。轻段。
+    pub play_origin: Option<PlaybackOrigin>,
+
+    /// 重段 1:client 的 queue 版本落后时才 `Some`。
+    pub queue: Option<QueueSync>,
+
+    /// 重段 2:client 的 current 版本落后时才 `Some`。
+    pub current: Option<CurrentSync>,
+}
+
+/// [`PlayerSync`] 的 queue 重段:整队列 + shuffle 原序,随 `queue` 版本整体更替。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct QueueSync {
+    /// 当前 queue 列表(顺序模式 = 原序;shuffle 模式 = 洗过)。
+    pub queue: Vec<Song>,
+
+    /// Shuffle 进入时保存的原序;非 Shuffle 状态恒 `None`。
+    pub original_queue: Option<Vec<Song>>,
+}
+
+/// [`PlayerSync`] 的 current 重段:当前歌上下文,随 `current` 版本整体更替。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CurrentSync {
     /// 当前在播的歌(`None` 表示从未播过 / 已 stop)。
     pub current_song: Option<Song>,
 
     /// 当前歌的播放 URL 元信息(format / bitrate);transport 用。
     pub play_url: Option<PlayUrl>,
-
-    /// 当前在播音频的来源(下载 / 缓存 / 远端);`None` = 未知。
-    #[serde(default)]
-    pub play_origin: Option<PlaybackOrigin>,
-
-    /// 当前 queue 列表。
-    pub queue: Vec<Song>,
-
-    /// queue 中「当前歌」的位置(用于 prev/next 锚点)。
-    pub queue_sel: usize,
-
-    /// Shuffle 进入时保存的原序;非 Shuffle 状态恒 `None`。
-    pub original_queue: Option<Vec<Song>>,
-
-    /// 当前播放模式。
-    pub play_mode: PlayMode,
 
     /// 当前歌的歌词原文(server 端缓存最新一首)。client 拿来解析成行。
     pub current_lyrics: Option<mineral_model::Lyrics>,

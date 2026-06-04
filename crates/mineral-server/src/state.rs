@@ -2,7 +2,9 @@
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
 use mineral_model::{PlayUrl, Song, SongId};
-use mineral_protocol::{PlayMode, PlaybackOrigin, PlayerSnapshot};
+use mineral_protocol::{
+    CurrentSync, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
+};
 
 use crate::download::Capturing;
 
@@ -45,6 +47,13 @@ pub(crate) struct State {
 
     /// 已预排进 rodio 队列、等当前曲播完无缝接续的下一曲及其记账(gapless)。
     pub(crate) queued: Option<crate::gapless::Queued>,
+
+    /// queue + original_queue 的版本号。从 1 起步(0 = client 一无所有),变更处
+    /// 经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否附带 queue 重段。
+    pub(crate) queue_version: u64,
+
+    /// current_song / play_url / lyrics 的版本号,语义同 `queue_version`。
+    pub(crate) current_version: u64,
 }
 
 impl State {
@@ -63,24 +72,130 @@ impl State {
             prefetch_fired_for: None,
             capturing: None,
             queued: None,
+            queue_version: 1,
+            current_version: 1,
         }
     }
 
-    /// 从内部 State 拷出一份 [`PlayerSnapshot`] 给 client(廉价 clone)。
+    /// 版本门控同步:轻段恒出,重段仅在 `known` 落后于本端版本时 clone 附带。
+    ///
+    /// 与版本号读取在同一把锁内(caller 持锁调用),无「版本与数据错位」竞态。
+    ///
+    /// # Params:
+    ///   - `known`: client 已持有的版本号(0 = 一无所有)
     ///
     /// # Return:
-    ///   当前播放上下文的快照。
-    pub(crate) fn snapshot(&self) -> PlayerSnapshot {
-        PlayerSnapshot {
+    ///   组装好的 [`PlayerSync`]。
+    pub(crate) fn sync(&self, known: PlayerVersions) -> PlayerSync {
+        let queue = (known.queue != self.queue_version).then(|| QueueSync {
+            queue: self.queue.clone(),
+            original_queue: self.original_queue.clone(),
+        });
+        let current = (known.current != self.current_version).then(|| CurrentSync {
             current_song: self.current_song.clone(),
             play_url: self.play_url.clone(),
-            play_origin: self.play_origin,
-            queue: self.queue.clone(),
-            queue_sel: self.queue_sel,
-            original_queue: self.original_queue.clone(),
-            play_mode: self.play_mode,
             current_lyrics: self.current_lyrics.clone(),
             current_lyrics_song_id: self.current_lyrics_song_id.clone(),
+        });
+        PlayerSync {
+            versions: PlayerVersions {
+                queue: self.queue_version,
+                current: self.current_version,
+            },
+            queue_sel: self.queue_sel,
+            play_mode: self.play_mode,
+            play_origin: self.play_origin,
+            queue,
+            current,
         }
+    }
+
+    /// queue / original_queue 发生变更后调用,推进版本号让 client 下次同步收到重段。
+    pub(crate) fn bump_queue(&mut self) {
+        self.queue_version += 1;
+    }
+
+    /// current_song / play_url / lyrics 发生变更后调用,推进版本号。
+    pub(crate) fn bump_current(&mut self) {
+        self.current_version += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::eyre::eyre;
+    use mineral_protocol::{PlayMode, PlayerVersions};
+    use mineral_test::song;
+    use pretty_assertions::assert_eq;
+
+    use super::State;
+
+    /// 造一个有 queue + current 的 State(版本仍是初始 1/1)。
+    fn populated() -> State {
+        let mut st = State::empty();
+        st.queue = vec![song("a"), song("b")];
+        st.queue_sel = 1;
+        st.current_song = Some(song("b"));
+        st.play_mode = PlayMode::RepeatAll;
+        st
+    }
+
+    /// known=0(client 一无所有)必然落后 → 两重段全量返回,轻段字段同出。
+    #[test]
+    fn sync_zero_versions_gets_full_payload() -> color_eyre::Result<()> {
+        let st = populated();
+        let sync = st.sync(PlayerVersions::default());
+        assert_eq!(sync.versions.queue, 1);
+        assert_eq!(sync.versions.current, 1);
+        assert_eq!(sync.queue_sel, 1);
+        assert_eq!(sync.play_mode, PlayMode::RepeatAll);
+        let q = sync.queue.ok_or_else(|| eyre!("queue 重段应存在"))?;
+        assert_eq!(q.queue.len(), 2);
+        assert!(q.original_queue.is_none());
+        let c = sync.current.ok_or_else(|| eyre!("current 重段应存在"))?;
+        assert_eq!(c.current_song, Some(song("b")));
+        Ok(())
+    }
+
+    /// 版本一致 → 两重段都缺席(稳态 tick 的主路径,payload 仅轻段)。
+    #[test]
+    fn sync_matching_versions_light_only() {
+        let st = populated();
+        let sync = st.sync(PlayerVersions {
+            queue: 1,
+            current: 1,
+        });
+        assert!(sync.queue.is_none());
+        assert!(sync.current.is_none());
+        assert_eq!(sync.queue_sel, 1);
+        assert_eq!(sync.play_mode, PlayMode::RepeatAll);
+    }
+
+    /// 仅 queue 版本落后 → 只发 queue 重段,current 缺席。
+    #[test]
+    fn sync_stale_queue_only_sends_queue_section() {
+        let mut st = populated();
+        st.bump_queue();
+        let sync = st.sync(PlayerVersions {
+            queue: 1,
+            current: 1,
+        });
+        assert_eq!(sync.versions.queue, 2);
+        assert!(sync.queue.is_some());
+        assert!(sync.current.is_none());
+    }
+
+    /// 仅 current 版本落后 → 只发 current 重段,queue 缺席。
+    #[test]
+    fn sync_stale_current_only_sends_current_section() {
+        let mut st = populated();
+        st.bump_current();
+        let sync = st.sync(PlayerVersions {
+            queue: 1,
+            current: 1,
+        });
+        assert_eq!(sync.versions.current, 2);
+        assert!(sync.queue.is_none());
+        assert!(sync.current.is_some());
     }
 }

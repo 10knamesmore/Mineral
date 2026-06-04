@@ -138,13 +138,25 @@ async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>) {
     let mut tick = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
     loop {
         tick.tick().await;
-        let snap = player.snapshot();
+        // in-process 直读 State 摘日志字段,不走含整队列 clone 的全量快照。
+        let (song_id, play_mode, queue_len, queue_sel, format, bitrate_kbps, lyrics_loaded) =
+            player.with_state(|st| {
+                (
+                    st.current_song
+                        .as_ref()
+                        .map_or_else(|| "-".to_owned(), |s| s.id.as_str().to_owned()),
+                    st.play_mode,
+                    st.queue.len(),
+                    st.queue_sel,
+                    st.play_url
+                        .as_ref()
+                        .map_or_else(|| "-".to_owned(), |p| p.format.as_str().to_owned()),
+                    st.play_url.as_ref().map_or(0_u32, |p| p.bitrate_bps / 1000),
+                    st.current_lyrics.is_some(),
+                )
+            });
         let audio = player.audio().snapshot();
         let tasks = player.task_snapshot();
-        let (format, bitrate_kbps) = snap
-            .play_url
-            .as_ref()
-            .map_or(("-", 0_u32), |p| (p.format.as_str(), p.bitrate_bps / 1000));
         mineral_log::info!(
             target: "heartbeat",
             uptime_s = start.elapsed().as_secs(),
@@ -153,13 +165,13 @@ async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>) {
             position_ms = audio.position_ms,
             duration_ms = audio.duration_ms,
             volume_pct = audio.volume_pct,
-            song_id = snap.current_song.as_ref().map_or("-", |s| s.id.as_str()),
-            play_mode = ?snap.play_mode,
-            queue_len = snap.queue.len(),
-            queue_sel = snap.queue_sel,
+            song_id,
+            play_mode = ?play_mode,
+            queue_len,
+            queue_sel,
             format,
             bitrate_kbps,
-            lyrics_loaded = snap.current_lyrics.is_some(),
+            lyrics_loaded,
             prefetched = player.prefetched_ready(),
             tasks_running = tasks.running,
             tasks_by_kind = ?tasks.by_kind,
