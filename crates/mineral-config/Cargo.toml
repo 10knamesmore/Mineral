@@ -1,6 +1,6 @@
 [package]
 name        = "mineral-config"
-description = "Mineral 运行期策略常量(缓存容量等)的单一真相源"
+description = "Mineral 用户配置(Lua):default.lua 内置 + 用户 config.lua 深合并落成强类型 Config"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -9,7 +9,21 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-color-eyre = { workspace = true }
+color-eyre          = { workspace = true }
+mlua                = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+serde_path_to_error = { workspace = true }
+derive-getters      = { workspace = true }
+num-traits          = { workspace = true }
+mineral-paths       = { workspace = true }
+mineral-model       = { workspace = true }
+mineral-log         = { workspace = true }
+
+[dev-dependencies]
+mineral-test = { workspace = true }
+insta        = { workspace = true }
+proptest     = { workspace = true }
 
 [lints]
 workspace = true

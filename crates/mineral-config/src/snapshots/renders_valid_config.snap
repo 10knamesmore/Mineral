@@ -1,0 +1,15 @@
+---
+source: crates/mineral-config/src/check.rs
+description: "config check:默认有效配置(无警告,无色)"
+expression: out
+---
+Mineral 配置诊断
+  音量: 100
+  音频后端: auto
+  音频缓存(字节): 10737418240
+  封面缓存(字节): 1073741824
+  下载音质: lossless
+  下载目录: /home/user/Music/mineral (默认)
+  网易云超时(秒): 100
+  gapless 预取(ms): 10000
+配置有效,无警告。

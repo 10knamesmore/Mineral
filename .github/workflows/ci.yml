@@ -38,6 +38,14 @@ jobs:
       - name: fmt
         run: cargo fmt --all --check
 
+      # Lua 资产(default.lua / merge.lua / meta stub 等)格式:读根 stylua.toml(2 空格)。
+      - name: lua fmt (stylua)
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check crates/
+
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

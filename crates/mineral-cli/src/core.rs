@@ -6,6 +6,7 @@ use tokio::runtime::Runtime;
 
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
+use crate::subcommands::config::{self, ConfigCommand};
 use crate::subcommands::status;
 
 /// 多源终端音乐播放器。无子命令时进入 TUI。
@@ -46,6 +47,13 @@ pub enum Command {
     /// 管理音乐源(登录、调试)。
     Channel(ChannelArgs),
 
+    /// 用户配置(生成模板 / 校验)。
+    Config {
+        /// config 下的具体子命令。
+        #[command(subcommand)]
+        cmd: ConfigCommand,
+    },
+
     /// 启动后台播放 daemon。退出 TUI 后音乐继续播,再开 TUI 用 `--connect` 接回。
     Serve,
 
@@ -72,6 +80,7 @@ async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
+        Command::Config { cmd } => config::run(cmd).await,
         Command::Status => status::run().await,
         Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
     }

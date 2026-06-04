@@ -1,0 +1,35 @@
+//! 强类型配置 schema:顶层 [`Config`] 与各域子段。
+
+mod animation;
+mod audio;
+mod behavior;
+mod cache;
+mod config;
+mod cover;
+mod daemon;
+mod download;
+mod keys;
+mod layout;
+mod lyrics;
+mod prefetch;
+mod sources;
+mod spectrum;
+mod theme;
+mod toast;
+
+pub use animation::{AnimationConfig, SweepStyle};
+pub use audio::{AudioConfig, BackendKind};
+pub use behavior::BehaviorConfig;
+pub use cache::CacheConfig;
+pub use config::{Config, TuiConfig};
+pub use cover::{CoverConfig, CoverStorageMode, KmeansConfig};
+pub use daemon::DaemonConfig;
+pub use download::DownloadConfig;
+pub use keys::{KeyBinding, KeysConfig};
+pub use layout::LayoutConfig;
+pub use lyrics::LyricsConfig;
+pub use prefetch::PrefetchConfig;
+pub use sources::{NeteaseSection, SourcesConfig};
+pub use spectrum::SpectrumConfig;
+pub use theme::{HexColor, RolesConfig, ThemeConfig, TokenName};
+pub use toast::ToastConfig;

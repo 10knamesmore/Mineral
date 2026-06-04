@@ -1,0 +1,506 @@
+---
+source: crates/mineral-config/src/loader/pipeline.rs
+description: 默认配置全量(default.lua → Config)
+expression: "format!(\"{cfg:#?}\")"
+---
+Config {
+    tui: TuiConfig {
+        theme: ThemeConfig {
+            base: HexColor {
+                r: 30,
+                g: 30,
+                b: 46,
+            },
+            mantle: HexColor {
+                r: 24,
+                g: 24,
+                b: 37,
+            },
+            crust: HexColor {
+                r: 17,
+                g: 17,
+                b: 27,
+            },
+            surface0: HexColor {
+                r: 49,
+                g: 50,
+                b: 68,
+            },
+            surface1: HexColor {
+                r: 69,
+                g: 71,
+                b: 90,
+            },
+            overlay: HexColor {
+                r: 108,
+                g: 112,
+                b: 134,
+            },
+            subtext: HexColor {
+                r: 166,
+                g: 173,
+                b: 200,
+            },
+            text: HexColor {
+                r: 205,
+                g: 214,
+                b: 244,
+            },
+            accent: HexColor {
+                r: 203,
+                g: 166,
+                b: 247,
+            },
+            accent_2: HexColor {
+                r: 116,
+                g: 199,
+                b: 236,
+            },
+            red: HexColor {
+                r: 243,
+                g: 139,
+                b: 168,
+            },
+            yellow: HexColor {
+                r: 249,
+                g: 226,
+                b: 175,
+            },
+            green: HexColor {
+                r: 166,
+                g: 227,
+                b: 161,
+            },
+            peach: HexColor {
+                r: 250,
+                g: 179,
+                b: 135,
+            },
+            roles: RolesConfig {
+                accent: TokenName {
+                    name: "red",
+                },
+                muted: TokenName {
+                    name: "subtext",
+                },
+                faint: TokenName {
+                    name: "overlay",
+                },
+            },
+        },
+        keys: KeysConfig {
+            play_pause: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            ' ',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            next: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'n',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            prev: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'p',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            toggle_fullscreen: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'z',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            open_queue: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Tab,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            quit: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'q',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            cycle_lyric: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            't',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            enter_search: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            '/',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            activate: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'l',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Enter,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            back: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'h',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Esc,
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Backspace,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            cycle_mode: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'm',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            volume_up: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            '+',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Char(
+                            '=',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            volume_down: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            '-',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Char(
+                            '_',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            seek_forward: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Right,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            seek_backward: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Left,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            seek_forward_big: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Right,
+                        shift: true,
+                        ctrl: false,
+                    },
+                ],
+            },
+            seek_backward_big: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Left,
+                        shift: true,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_down: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'j',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Down,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_up: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'k',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Up,
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_down_big: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'J',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_up_big: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'K',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_first: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'g',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            move_last: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'G',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            love: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'f',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            download: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'd',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+        },
+        behavior: BehaviorConfig {
+            volume_step: 5,
+            seek_step_secs: 5,
+            seek_big_step_secs: 30,
+            list_jump_rows: 7,
+            kill_spawned_daemon_on_exit: true,
+        },
+        spectrum: SpectrumConfig {
+            show_peak_cap: true,
+            show_trail: true,
+            hue_rotate: true,
+            spring_peak: true,
+            baseline_min: 3,
+            attack_old: 7,
+            attack_new: 3,
+            decay_div: 4,
+            decay_step: 1,
+            peak_hold_ticks: 12,
+            peak_fall_per_tick: 2,
+            hue_cycle_ticks: 1800,
+            cover_fade_ticks: 300,
+            cover_vshift_permille: 200,
+            spring_stiffness: 0.35,
+            spring_damping: 0.45,
+        },
+        cover: CoverConfig {
+            http_timeout_secs: 30,
+            max_dim: 384,
+            jpeg_quality: 100,
+            storage: Raw,
+            debounce_ms: 80,
+            download_workers: 4,
+            encode_workers: 2,
+            kmeans: KmeansConfig {
+                swatches: 6,
+                seed: 1592639710,
+                max_iter: 20,
+                converge: 5.0,
+                l_min: 8.0,
+                l_max: 92.0,
+                chroma_min: 8.0,
+                min_valid_pixels_pct: 5,
+            },
+        },
+        prefetch: PrefetchConfig {
+            radius: 64,
+            playback_cover_radius: 3,
+            play_count_debounce_ms: 500,
+            prewarm_ahead: 1,
+            channel_workers_per: 8,
+        },
+        lyrics: LyricsConfig {
+            line_gap: 1,
+            scroll_ms: 280,
+        },
+        animation: AnimationConfig {
+            frame_tick_ms: 16,
+            transition_ticks: 18,
+            sweep_ticks: 18,
+            fullscreen_ticks: 18,
+            popup_anim_ticks: 18,
+            toast_anim_ticks: 6,
+            view_sweep: Push,
+        },
+        toast: ToastConfig {
+            flash_ttl_secs: 4,
+        },
+        layout: LayoutConfig {
+            min_full_width: 80,
+            min_full_height: 24,
+            fs_left_pct: 44,
+            fs_spectrum_height: 14,
+            fs_transport_height: 8,
+            dock_w_pct: 36,
+        },
+    },
+    audio: AudioConfig {
+        volume: 100,
+        backend: Auto,
+        playback_quality: Exhigh,
+        engine_tick_ms: 20,
+        prefetch_bytes: 262144,
+        tap_capacity: 4096,
+    },
+    cache: CacheConfig {
+        audio_capacity: 10737418240,
+        cover_capacity: 1073741824,
+    },
+    download: DownloadConfig {
+        quality: Lossless,
+        dir: None,
+    },
+    sources: SourcesConfig {
+        netease: NeteaseSection {
+            timeout_secs: 100,
+            proxy: None,
+            max_connections: 0,
+        },
+    },
+    daemon: DaemonConfig {
+        gapless_prefetch_ms: 10000,
+        prev_restart_threshold_ms: 3000,
+        player_tick_ms: 20,
+        session_save_secs: 15,
+        heartbeat_secs: 60,
+        report_interval_ms: 200,
+        seek_threshold_ms: 1000,
+        download_speed_tick_ms: 150,
+    },
+}

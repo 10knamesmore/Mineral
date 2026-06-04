@@ -1,0 +1,16 @@
+---
+source: crates/mineral-config/src/check.rs
+description: "config check:含一条字段路径警告(已回落默认,无色)"
+expression: out
+---
+Mineral 配置诊断
+  音量: 100
+  音频后端: auto
+  音频缓存(字节): 10737418240
+  封面缓存(字节): 1073741824
+  下载音质: lossless
+  下载目录: /home/user/Music/mineral (默认)
+  网易云超时(秒): 100
+  gapless 预取(ms): 10000
+有 1 条警告(已回落默认):
+  - config.lua 字段 `audio.volume` 错误,已回落默认:invalid type: string "loud", expected u8
