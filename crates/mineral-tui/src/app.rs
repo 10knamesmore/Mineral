@@ -21,7 +21,7 @@ use ratatui_image::picker::Picker;
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
 use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
-use crate::render::anim::Transition;
+use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SeekDelta, SelectionMove, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
@@ -59,7 +59,8 @@ pub struct App {
     /// 主循环帧间隔(配置 `animation.frame_tick_ms`,默认 ≈60fps)。
     frame_tick: Duration,
 
-    /// 整屏转场动画时长(tick,配置 `animation.transition_ticks`);扩大与收缩同速对称。
+    /// 整屏转场动画时长(tick,由配置 `animation.transition_ms` 按帧率折算);
+    /// 扩大与收缩同速对称。
     transition_ticks: u16,
 
     /// client 侧心跳间隔(配置 `daemon.heartbeat_secs`)。
@@ -113,13 +114,15 @@ impl App {
         let tui_cfg = cfg.tui();
         let theme = Arc::new(Theme::from_config(tui_cfg.theme()));
         let keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        let overlays = OverlayStack::new(*tui_cfg.animation().popup_anim_ticks());
+        let anim = tui_cfg.animation();
+        let tick_ms = *anim.frame_tick_ms();
+        let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
         let notifications = Notifications::new(
             *tui_cfg.toast().flash_ttl_secs(),
-            *tui_cfg.animation().toast_anim_ticks(),
+            ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
-        let frame_tick = Duration::from_millis(*tui_cfg.animation().frame_tick_ms());
-        let transition_ticks = *tui_cfg.animation().transition_ticks();
+        let frame_tick = Duration::from_millis(tick_ms);
+        let transition_ticks = ticks16_from_ms(*anim.transition_ms(), tick_ms);
         let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
         let mut state = AppState::new(cfg);
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
@@ -778,7 +781,7 @@ mod tests {
 
     use super::App;
 
-    /// 测试对照值 = default.lua 的 `animation.transition_ticks`。
+    /// 测试对照值 = default.lua 的 `animation.transition_ms`(288)÷ `frame_tick_ms`(16)。
     const TRANSITION_TICKS: u16 = 18;
     use crate::render::anim::Transition;
     use crate::render::palette::{CoverPalette, Rgb};

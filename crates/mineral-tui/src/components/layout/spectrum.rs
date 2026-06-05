@@ -1,7 +1,9 @@
 //! Spectrum 频谱面板:FFT 真值条 + peak hold cap 装饰 + baseline 兜底。
 //!
 //! 数据由 [`mineral_spectrum::SpectrumComputer`] 算出 64 根条目标高度,
-//! [`SpectrumState::tick`] 7:3 平滑写入。装饰两件:
+//! [`SpectrumState::tick`] 按效果器 ADSR 包络写入:attack(上升)/ decay(播放中
+//! 余韵滑落)/ release(暂停释音落 0),sustain 即 FFT 实时值。时长旋钮均为毫秒,
+//! 构造时按 `animation.frame_tick_ms` 折算成每拍系数,与帧率解耦。装饰两件:
 //!
 //! 1. **Peak cap**:每根条记一个 peak,瞬间跟涨,顶部 hold 一段时间再缓慢下落。
 //!    渲染为浅色 ▔ 横线浮在条顶上方一格,经典 KTV / Winamp 风格。
@@ -16,6 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 
+use crate::render::anim::{ticks16_from_ms, ticks32_from_ms};
 use crate::render::color::{lerp_color, rotate_hue};
 use crate::render::palette::{ColumnColors, CoverPalette, Rgb, column_permille};
 use crate::render::theme::Theme;
@@ -50,7 +53,8 @@ enum SpectrumColor {
     /// 默认 / 无封面:全列同色,沿用 `hue_phase` 驱动的色相漂移(现状逐像素等价)。
     Hue,
 
-    /// 封面就绪:从**切换那刻的可见配色**缓动到封面色场。`frame` 0→[`COVER_FADE_TICKS`]。
+    /// 封面就绪:从**切换那刻的可见配色**缓动到封面色场。`frame` 0→过渡拍数
+    /// (`cover_fade_ms` 按帧率折算)。
     ///
     /// 起点存整个上一态,故红专辑换蓝专辑时起点是红、不是 hue 初始色。
     Transition {
@@ -65,7 +69,7 @@ enum SpectrumColor {
         /// 目标封面色场。
         to: CoverPalette,
 
-        /// 已过渡帧数,推进到 [`COVER_FADE_TICKS`] 转入 [`Self::CoverFixed`]。
+        /// 已过渡帧数,推进到过渡拍数(`cover_fade_ms` 折算)转入 [`Self::CoverFixed`]。
         frame: u32,
     },
 
@@ -181,20 +185,65 @@ impl SpectrumColor {
     }
 }
 
+/// 时间制旋钮(`*_ms`)按 `frame_tick_ms` 折算后的运行时值(构造时算一次,热路径直读)。
+#[derive(Clone, Copy, Debug)]
+struct Timing {
+    /// 起音(上升)每 tick EMA 系数,来自 `attack_ms`。
+    alpha_attack: f32,
+
+    /// 衰减(播放中下落)每 tick EMA 系数,来自 `decay_ms`。
+    alpha_decay: f32,
+
+    /// 释音(暂停落 0)每 tick EMA 系数,来自 `release_ms`。
+    alpha_release: f32,
+
+    /// peak 悬停拍数,来自 `peak_hold_ms`。
+    peak_hold_ticks: u16,
+
+    /// peak 每 tick 下落量(1/8 字符单位),来自 `peak_fall_ms`(满程时长)。
+    peak_fall_per_tick: f32,
+
+    /// 色相一圈拍数,来自 `hue_cycle_ms`。
+    hue_cycle_ticks: u32,
+
+    /// 封面色场过渡拍数,来自 `cover_fade_ms`。
+    fade_ticks: u32,
+}
+
+impl Timing {
+    /// 从配置 + 帧间隔折算全部运行时值。
+    ///
+    /// # Params:
+    ///   - `cfg`: 频谱旋钮(时间制)
+    ///   - `tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`)
+    fn derive(cfg: &mineral_config::SpectrumConfig, tick_ms: u64) -> Self {
+        Self {
+            alpha_attack: alpha_from_t90(*cfg.attack_ms(), tick_ms),
+            alpha_decay: alpha_from_t90(*cfg.decay_ms(), tick_ms),
+            alpha_release: alpha_from_t90(*cfg.release_ms(), tick_ms),
+            peak_hold_ticks: ticks16_from_ms(*cfg.peak_hold_ms(), tick_ms),
+            peak_fall_per_tick: fall_per_tick(*cfg.peak_fall_ms(), tick_ms),
+            hue_cycle_ticks: ticks32_from_ms(*cfg.hue_cycle_ms(), tick_ms),
+            fade_ticks: ticks32_from_ms(*cfg.cover_fade_ms(), tick_ms),
+        }
+    }
+}
+
 /// 频谱状态:每根条的当前高度 + peak target/hold/弹簧 pos+vel + 色相相位。
 ///
 /// peak 拆两层:`peaks[i]` 是 hold/fall 状态机算出的"目标"高度,`peak_pos[i]`
 /// 是显示位置(弹簧追目标)。SPRING_PEAK=false 时 peak_pos 直接锁到 peaks。
 #[derive(Clone, Debug)]
 pub struct SpectrumState {
-    /// 当前条高(平滑后),0..=[`SPECTRUM_RES`]。长度 = 当前 bar_count。
-    bars: Vec<u16>,
+    /// 当前条高(ADSR 包络,f32 收敛精确无整数截断),0..=[`SPECTRUM_RES`]。
+    /// 长度 = 当前 bar_count;渲染经 [`Self::bar_at`] 收整。
+    bars: Vec<f32>,
 
     /// peak 目标高度(hold/fall 状态机维护),0..=[`SPECTRUM_RES`]。peaks[i] >= bars[i] 恒成立。
-    peaks: Vec<u16>,
+    peaks: Vec<f32>,
 
     /// 每根条剩余 hold tick 数。归零后 peak target 开始下落。
-    peak_hold: Vec<u8>,
+    peak_hold: Vec<u16>,
 
     /// peak 显示位置(弹簧追 peaks 的 target)。可短暂超过 RES(过冲),渲染时 clamp。
     peak_pos: Vec<f32>,
@@ -214,6 +263,9 @@ pub struct SpectrumState {
 
     /// 频谱旋钮(平滑/衰减/peak 物理/观感开关),构造时由配置注入。
     cfg: mineral_config::SpectrumConfig,
+
+    /// 时间制旋钮折算后的运行时拍数/系数(构造时由 `cfg` + 帧间隔派生)。
+    timing: Timing,
 }
 
 impl SpectrumState {
@@ -221,18 +273,22 @@ impl SpectrumState {
     ///
     /// # Params:
     ///   - `cfg`: 频谱旋钮(配置 `tui.spectrum` 段)
-    pub fn new(cfg: mineral_config::SpectrumConfig) -> Self {
-        let baseline = *cfg.baseline_min();
+    ///   - `frame_tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`);
+    ///     时间制旋钮(`*_ms`)按它折算成拍数与每拍系数
+    pub fn new(cfg: mineral_config::SpectrumConfig, frame_tick_ms: u64) -> Self {
+        let baseline = f32::from(*cfg.baseline_min());
+        let timing = Timing::derive(&cfg, frame_tick_ms);
         Self {
             bars: vec![baseline; DEFAULT_BAR_COUNT],
             peaks: vec![baseline; DEFAULT_BAR_COUNT],
             peak_hold: vec![0; DEFAULT_BAR_COUNT],
-            peak_pos: vec![f32::from(baseline); DEFAULT_BAR_COUNT],
+            peak_pos: vec![baseline; DEFAULT_BAR_COUNT],
             peak_vel: vec![0.0; DEFAULT_BAR_COUNT],
             hue_phase: 0,
             color: SpectrumColor::Hue,
             target_bars: Cell::new(DEFAULT_BAR_COUNT),
             cfg,
+            timing,
         }
     }
 
@@ -240,7 +296,7 @@ impl SpectrumState {
     fn color_params(&self) -> ColorParams {
         ColorParams {
             vshift_permille: *self.cfg.cover_vshift_permille(),
-            fade_ticks: *self.cfg.cover_fade_ticks(),
+            fade_ticks: self.timing.fade_ticks,
         }
     }
 
@@ -250,11 +306,11 @@ impl SpectrumState {
         if self.bars.len() == n {
             return;
         }
-        let baseline = *self.cfg.baseline_min();
+        let baseline = f32::from(*self.cfg.baseline_min());
         self.bars.resize(n, baseline);
         self.peaks.resize(n, baseline);
         self.peak_hold.resize(n, 0);
-        self.peak_pos.resize(n, f32::from(baseline));
+        self.peak_pos.resize(n, baseline);
         self.peak_vel.resize(n, 0.0);
     }
 
@@ -265,7 +321,7 @@ impl SpectrumState {
             return 0.0;
         }
         // u32 → f32 在这两个量级(典型 < 数千 tick)内精确,允许 as。
-        (self.hue_phase as f32) * 360.0 / (*self.cfg.hue_cycle_ticks() as f32).max(1.0)
+        (self.hue_phase as f32) * 360.0 / (self.timing.hue_cycle_ticks as f32).max(1.0)
     }
 
     /// `col` 列的弹簧后 peak 显示位置,clamp 到 `0..=RES` 再 round 成 u16。
@@ -277,14 +333,25 @@ impl SpectrumState {
         clamped.round() as u16
     }
 
+    /// `col` 列的条高收整(渲染用):clamp 到 `0..=RES` 再 round 成 u16。
+    /// 内部包络是 f32(收敛精确、无整数截断),只在渲染口收整。
+    #[allow(clippy::as_conversions)]
+    fn bar_at(&self, col: usize) -> u16 {
+        let raw = self.bars.get(col).copied().unwrap_or(0.0);
+        let clamped = raw.clamp(0.0, f32::from(SPECTRUM_RES));
+        clamped.round() as u16
+    }
+
     /// 一次 tick:推进条高 + peak。
     ///
     /// `volume_pct` 用于把 FFT 真值按 `vol/100` 缩放 —— 听感上"音量越大、条越高"。
     /// FFT tap 在 rodio set_volume 之前,信号本身不随音量变,所以这里 UI 层手动配。
     ///
-    /// - `Some(targets)`:FFT 真值,按音量缩放后按 `attack_old`:`attack_new` 平滑写进当前条高(attack 平滑、避免抖动)。
-    /// - `None` + `playing=true`:FFT 还没出第一个窗(刚开播 / 切歌 ~43ms),保持当前值。
-    /// - `None` + `playing=false`:所有条按 `decay_div`/`decay_step` 衰减(指数+常数,落得快)。
+    /// 条高走效果器 ADSR 包络(`b += α × (target − b)`,α 由时间制旋钮折算):
+    /// - `Some(targets)`:FFT 真值(= sustain),上升用 attack(快、贴鼓点),
+    ///   下落用 decay(慢、余韵滑落)——快攻慢放,延迟与动画感分属两个旋钮。
+    /// - `None` + `playing=true`:FFT 还没出第一个窗(刚开播 / 切歌),保持当前值。
+    /// - `None` + `playing=false`:释音(release),所有条滑向 0(由 baseline 兜底)。
     ///
     /// 然后无条件:1) 把条托底到 `baseline_min`;2) 推进 peak 状态机。
     pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16]>) {
@@ -296,20 +363,21 @@ impl SpectrumState {
         }
         match (bars, playing) {
             (Some(targets), _) => {
-                let vol = u32::from(volume_pct.min(100));
-                let (old_w, new_w) = (*self.cfg.attack_old(), *self.cfg.attack_new());
+                let vol = f32::from(volume_pct.min(100));
                 for (b, t) in self.bars.iter_mut().zip(targets.iter()) {
-                    let scaled = u32::from(*t) * vol / 100;
-                    let target = u16::try_from(scaled).unwrap_or(*t);
-                    let blended = (u32::from(*b) * old_w + u32::from(target) * new_w)
-                        / (old_w + new_w).max(1);
-                    *b = u16::try_from(blended).unwrap_or(*b);
+                    let target = f32::from(*t) * vol / 100.0;
+                    // 不对称包络:涨用 attack(贴鼓点),跌用 decay(余韵)。
+                    let alpha = if target > *b {
+                        self.timing.alpha_attack
+                    } else {
+                        self.timing.alpha_decay
+                    };
+                    *b += alpha * (target - *b);
                 }
             }
             (None, false) => {
-                let (div, step) = (*self.cfg.decay_div(), *self.cfg.decay_step());
                 for b in &mut self.bars {
-                    *b = b.saturating_sub(*b / div.max(1) + step);
+                    *b -= self.timing.alpha_release * *b;
                 }
             }
             (None, true) => {
@@ -333,7 +401,7 @@ impl SpectrumState {
         match std::mem::replace(&mut self.color, SpectrumColor::Hue) {
             SpectrumColor::Hue => {
                 if *self.cfg.hue_rotate() {
-                    self.hue_phase = (self.hue_phase + 1) % (*self.cfg.hue_cycle_ticks()).max(1);
+                    self.hue_phase = (self.hue_phase + 1) % self.timing.hue_cycle_ticks.max(1);
                 }
                 // color 已被换回 Hue,无需再写。
             }
@@ -344,7 +412,7 @@ impl SpectrumState {
                 frame,
             } => {
                 let next = frame + 1;
-                self.color = if next >= *self.cfg.cover_fade_ticks() {
+                self.color = if next >= self.timing.fade_ticks {
                     SpectrumColor::CoverFixed { palette: to }
                 } else {
                     SpectrumColor::Transition {
@@ -399,18 +467,17 @@ impl SpectrumState {
     fn advance_peak_spring(&mut self) {
         if !*self.cfg.spring_peak() {
             for (pos, p) in self.peak_pos.iter_mut().zip(self.peaks.iter()) {
-                *pos = f32::from(*p);
+                *pos = *p;
             }
             return;
         }
         let (stiffness, damping) = (*self.cfg.spring_stiffness(), *self.cfg.spring_damping());
-        for ((pos, vel), p) in self
+        for ((pos, vel), target) in self
             .peak_pos
             .iter_mut()
             .zip(self.peak_vel.iter_mut())
             .zip(self.peaks.iter().copied())
         {
-            let target = f32::from(p);
             let force = stiffness * (target - *pos) - damping * *vel;
             *vel += force;
             *pos += *vel;
@@ -419,7 +486,7 @@ impl SpectrumState {
 
     /// 把每根条托到 `baseline_min` 之上。静默 / 起播间隙都靠这条保住"面板没死"。
     fn apply_baseline(&mut self) {
-        let baseline = *self.cfg.baseline_min();
+        let baseline = f32::from(*self.cfg.baseline_min());
         for b in &mut self.bars {
             if *b < baseline {
                 *b = baseline;
@@ -428,9 +495,9 @@ impl SpectrumState {
     }
 
     /// 推进每根 peak:跟涨瞬间归位 + 重置 hold;否则 hold 倒计时;
-    /// hold 归零后按 `peak_fall_per_tick` 下落,但不跌破当前 bar。
+    /// hold 归零后按 `peak_fall_ms` 折算的每拍量下落,但不跌破当前 bar。
     fn advance_peaks(&mut self) {
-        let (hold_ticks, fall) = (*self.cfg.peak_hold_ticks(), *self.cfg.peak_fall_per_tick());
+        let (hold_ticks, fall) = (self.timing.peak_hold_ticks, self.timing.peak_fall_per_tick);
         for ((b, p), h) in self
             .bars
             .iter()
@@ -444,10 +511,49 @@ impl SpectrumState {
             } else if *h > 0 {
                 *h -= 1;
             } else {
-                *p = p.saturating_sub(fall).max(b);
+                *p = (*p - fall).max(b);
             }
         }
     }
+}
+
+/// `t90`(到位 90% 所需毫秒)→ 每 tick EMA 系数 α:`α = 1 − 0.1^(tick/t90)`。
+/// 定义性质:经过 `t90/tick` 拍后残差恰为 10%。`t90 ≤ tick` 时一拍内就该到位,
+/// 直接取 1.0(瞬时,无平滑)。
+///
+/// # Params:
+///   - `t90_ms`: 到位 90% 所需毫秒(配置 `attack_ms` / `decay_ms` / `release_ms`)
+///   - `tick_ms`: 主循环帧间隔(毫秒)
+///
+/// # Return:
+///   每 tick 追赶系数,`0.0 < α ≤ 1.0`。
+#[allow(clippy::as_conversions)] // 纯数值换算:u64 tick(≤ t90 ≤ u32::MAX)在 f64 内精确
+fn alpha_from_t90(t90_ms: u32, tick_ms: u64) -> f32 {
+    let tick = tick_ms.max(1);
+    if u64::from(t90_ms) <= tick {
+        return 1.0;
+    }
+    let ratio = (tick as f64) / f64::from(t90_ms);
+    (1.0 - 0.1_f64.powf(ratio)) as f32
+}
+
+/// peak 满程下落时长(ms)→ 每 tick 下落量(1/8 字符单位):`RES × tick / fall_ms`。
+/// `fall_ms ≤ tick` 时一拍落满程(取 RES)。
+///
+/// # Params:
+///   - `fall_ms`: 从满高([`SPECTRUM_RES`])落到 0 的满程毫秒数(配置 `peak_fall_ms`)
+///   - `tick_ms`: 主循环帧间隔(毫秒)
+///
+/// # Return:
+///   每 tick 下落量,`0.0 < v ≤ RES`。
+#[allow(clippy::as_conversions)] // 纯数值换算:量级 ≤ u32::MAX,f64 内精确
+fn fall_per_tick(fall_ms: u32, tick_ms: u64) -> f32 {
+    let tick = tick_ms.max(1);
+    if u64::from(fall_ms) <= tick {
+        return f32::from(SPECTRUM_RES);
+    }
+    let v = f64::from(SPECTRUM_RES) * (tick as f64) / f64::from(fall_ms);
+    v as f32
 }
 
 /// 渲染频谱到给定 [`Rect`]。
@@ -500,7 +606,7 @@ fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &
                 .column_endpoints(col, render_count, hue, theme, state.color_params());
         let palette_lo = endpoints.bottom;
         let palette_hi = endpoints.top;
-        let bar = state.bars.get(col).copied().unwrap_or(0);
+        let bar = state.bar_at(col);
         let peak = state.spring_peak_at(col);
         let scaled = (u32::from(bar) * max_units) / u32::from(SPECTRUM_RES);
         let full = u16::try_from(scaled / 8).unwrap_or(0);
@@ -582,25 +688,155 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
-    use super::{ColorParams, SNAPSHOT_SAMPLES, SpectrumColor, SpectrumState};
+    use super::{
+        ColorParams, SNAPSHOT_SAMPLES, SpectrumColor, SpectrumState, alpha_from_t90, fall_per_tick,
+    };
     use crate::render::palette::{CoverPalette, Rgb};
     use crate::render::theme::Theme;
 
-    /// 测试对照值 = default.lua 的 `spectrum.cover_fade_ticks`。
-    const COVER_FADE_TICKS: u32 = 300;
+    /// 测试用主循环帧间隔(= default.lua 的 `animation.frame_tick_ms`)。
+    const TICK_MS: u64 = 16;
 
-    /// 以 defaults 配置构造频谱态(= 接线前硬编码旋钮)。
+    /// 纯函数测试([`cp`] / `Transition` 端点)用的任意固定过渡拍数,**不**追 default.lua;
+    /// 走真实 `SpectrumState` 的测试一律读 `state.timing.fade_ticks`,与默认值解耦。
+    const CP_FADE_TICKS: u32 = 300;
+
+    /// `alpha_from_t90`:定义性质(t90/tick 拍后残差 10%)、瞬时退化、单调性。
+    #[test]
+    #[allow(clippy::as_conversions)]
+    fn alpha_from_t90_definition_and_degenerate() {
+        // 定义性质:α(t90, tick) 满足 (1-α)^(t90/tick) ≈ 0.1。
+        for (t90, tick) in [(30_u32, 16_u64), (100, 16), (200, 16), (160, 16)] {
+            let a = f64::from(alpha_from_t90(t90, tick));
+            let residual = (1.0 - a).powf(f64::from(t90) / (tick as f64));
+            assert!(
+                (residual - 0.1).abs() < 1e-3,
+                "t90={t90} tick={tick}: 残差应 ≈0.1,得 {residual}"
+            );
+        }
+        // t90 ≤ tick → 瞬时。
+        assert!((alpha_from_t90(16, 16) - 1.0).abs() < f32::EPSILON);
+        assert!((alpha_from_t90(1, 16) - 1.0).abs() < f32::EPSILON);
+        // 单调:t90 越大 α 越小(越慢)。
+        assert!(alpha_from_t90(30, 16) > alpha_from_t90(100, 16));
+        assert!(alpha_from_t90(100, 16) > alpha_from_t90(200, 16));
+    }
+
+    /// `fall_per_tick`:默认值精确换算(512ms→2.0/拍)、`fall_ms ≤ tick` 一拍落满。
+    #[test]
+    fn fall_per_tick_exact_and_degenerate() {
+        assert!(
+            (fall_per_tick(512, TICK_MS) - 2.0).abs() < 1e-6,
+            "512ms 满程 @16ms/拍 = 2.0/拍"
+        );
+        assert!(
+            (fall_per_tick(0, TICK_MS) - f32::from(super::SPECTRUM_RES)).abs() < f32::EPSILON,
+            "0ms 一拍落满程"
+        );
+    }
+
+    /// 以 defaults 配置构造频谱态(帧间隔 = [`TICK_MS`])。
     fn spectrum_state() -> color_eyre::Result<SpectrumState> {
         Ok(SpectrumState::new(
             mineral_config::Config::defaults()?.tui().spectrum().clone(),
+            TICK_MS,
         ))
     }
 
-    /// 色场计算参数(测试对照值 = default.lua 默认)。
+    /// 不对称包络方向性:上升走 attack(30ms,快)、播放中下落走 decay(100ms,慢)。
+    /// 同量级距离一拍的幅度,上升应明显大于下落 —— 锁住"快攻慢放"。
+    #[test]
+    fn envelope_attack_faster_than_decay() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.bars.len();
+        let high = vec![64_u16; n];
+        let low = vec![0_u16; n];
+        let before_rise = s.bars.first().copied().unwrap_or(0.0);
+        s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        let rise = s.bars.first().copied().unwrap_or(0.0) - before_rise;
+        // 推到顶附近,再喂低目标一拍取下落幅度。
+        for _ in 0..50 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        }
+        let before_fall = s.bars.first().copied().unwrap_or(0.0);
+        s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&low));
+        let fall = before_fall - s.bars.first().copied().unwrap_or(0.0);
+        assert!(
+            rise > fall * 1.5,
+            "attack(30ms)应明显快于 decay(100ms): rise={rise} fall={fall}"
+        );
+        Ok(())
+    }
+
+    /// 释音慢于衰减:暂停(release 200ms)一拍的下落幅度应小于播放中向 0 目标
+    /// (decay 100ms)一拍的下落幅度 —— 锁住三系数各接各的旋钮。
+    #[test]
+    fn envelope_release_slower_than_decay() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.bars.len();
+        let high = vec![64_u16; n];
+        let low = vec![0_u16; n];
+        for _ in 0..50 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        }
+        let before = s.bars.first().copied().unwrap_or(0.0);
+        s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&low));
+        let fall_decay = before - s.bars.first().copied().unwrap_or(0.0);
+
+        let mut s2 = spectrum_state()?;
+        for _ in 0..50 {
+            s2.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        }
+        let before2 = s2.bars.first().copied().unwrap_or(0.0);
+        s2.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        let fall_release = before2 - s2.bars.first().copied().unwrap_or(0.0);
+        assert!(
+            fall_release < fall_decay,
+            "release(200ms)一拍 {fall_release} 应慢于 decay(100ms)一拍 {fall_decay}"
+        );
+        Ok(())
+    }
+
+    /// f32 包络收敛精确:持续喂同一目标,条高收敛到精确目标值。
+    /// 旧整数定点 `(b·old+t·new)/(old+new)` 因整除截断卡在 ~95% 平台,锁住不回退。
+    #[test]
+    fn envelope_converges_to_exact_target() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.bars.len();
+        let high = vec![64_u16; n];
+        for _ in 0..100 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        }
+        let b = s.bars.first().copied().unwrap_or(0.0);
+        assert!((b - 64.0).abs() < 0.5, "应收敛到精确目标 64,得 {b}");
+        Ok(())
+    }
+
+    /// 释音收敛:暂停后条高滑向 0、由 baseline(3)兜底停住,面板不死寂。
+    #[test]
+    fn release_settles_at_baseline() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.bars.len();
+        let high = vec![64_u16; n];
+        for _ in 0..50 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&high));
+        }
+        for _ in 0..200 {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        let b = s.bars.first().copied().unwrap_or(0.0);
+        assert!(
+            (b - 3.0).abs() < f32::EPSILON,
+            "释音后应停在 baseline=3,得 {b}"
+        );
+        Ok(())
+    }
+
+    /// 色场计算参数(任意固定值,纯函数测试用,不依赖 default.lua)。
     fn cp() -> ColorParams {
         ColorParams {
             vshift_permille: 200,
-            fade_ticks: COVER_FADE_TICKS,
+            fade_ticks: CP_FADE_TICKS,
         }
     }
 
@@ -670,7 +906,7 @@ mod tests {
         Ok(())
     }
 
-    /// `begin_cover_transition` 后 tick [`COVER_FADE_TICKS`] 次,落到 `CoverFixed`(静止)。
+    /// `begin_cover_transition` 后 tick 过渡拍数次,落到 `CoverFixed`(静止)。
     #[test]
     fn cover_transition_settles_to_fixed() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
@@ -679,7 +915,7 @@ mod tests {
             matches!(s.color, SpectrumColor::Transition { .. }),
             "begin 后应进 Transition"
         );
-        for _ in 0..COVER_FADE_TICKS {
+        for _ in 0..s.timing.fade_ticks {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
         assert!(
@@ -709,7 +945,7 @@ mod tests {
         assert_ne!(s.hue_phase, before, "Hue 态 hue_phase 应自增");
 
         s.begin_cover_transition(fixed_palette()?, &theme);
-        for _ in 0..COVER_FADE_TICKS {
+        for _ in 0..s.timing.fade_ticks {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
         let ep1 = s.color.column_endpoints(2, 16, s.hue_deg(), &theme, cp());
@@ -774,7 +1010,7 @@ mod tests {
         Ok(())
     }
 
-    /// `Transition`(从 `Hue` 起步)态:`frame=0` 等于 frozen-hue 起点,`frame=COVER_FADE_TICKS`
+    /// `Transition`(从 `Hue` 起步)态:`frame=0` 等于 frozen-hue 起点,`frame=CP_FADE_TICKS`
     /// 等于 `CoverFixed`。
     #[test]
     fn transition_endpoints_match_start_and_end() -> color_eyre::Result<()> {
@@ -812,7 +1048,7 @@ mod tests {
             from: Box::new(SpectrumColor::Hue),
             frozen_hue_deg: frozen,
             to: palette.clone(),
-            frame: COVER_FADE_TICKS,
+            frame: CP_FADE_TICKS,
         };
         let fixed = SpectrumColor::CoverFixed { palette };
         assert_eq!(
@@ -855,7 +1091,7 @@ mod tests {
         let mut s = spectrum_state()?;
         // 先进入红色场静止。
         s.begin_cover_transition(red.clone(), &theme);
-        for _ in 0..COVER_FADE_TICKS {
+        for _ in 0..s.timing.fade_ticks {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
         assert!(
@@ -907,17 +1143,20 @@ mod tests {
         let mut s = spectrum_state()?;
         // 静止在红,再向蓝过渡到半程:可见色 = 红蓝中间色。
         s.begin_cover_transition(red.clone(), &theme);
-        for _ in 0..COVER_FADE_TICKS {
+        for _ in 0..s.timing.fade_ticks {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
         s.begin_cover_transition(blue.clone(), &theme);
-        for _ in 0..COVER_FADE_TICKS / 2 {
+        for _ in 0..s.timing.fade_ticks / 2 {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
+        // 采样真实 state 的中途 Transition 端点必须用 state 自己的色场参数
+        // (进度分母 = timing.fade_ticks),与 freeze 烘焙的口径一致;用 cp() 会失谐。
+        let p = s.color_params();
         let visible = (0..SNAPSHOT_SAMPLES)
             .map(|col| {
                 s.color
-                    .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme, cp())
+                    .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme, p)
             })
             .collect::<Vec<_>>();
         // 半程中间色应不同于打断目标(蓝),否则下面的连续性断言空洞无意义。
@@ -926,7 +1165,7 @@ mod tests {
             SNAPSHOT_SAMPLES,
             /*hue*/ 0.0,
             &theme,
-            cp(),
+            p,
         );
         let visible_first = visible
             .first()
@@ -947,7 +1186,7 @@ mod tests {
         for (col, want) in visible.iter().enumerate() {
             let got = s
                 .color
-                .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme, cp());
+                .column_endpoints(col, SNAPSHOT_SAMPLES, s.hue_deg(), &theme, p);
             assert_eq!(got, *want, "col={col} 打断后起点应与打断前可见色连续");
         }
         Ok(())
@@ -976,7 +1215,7 @@ mod tests {
 
         // 注入固定色板并推到静止,沿频率轴铺色。
         state.begin_cover_transition(fixed_palette()?, &theme);
-        for _ in 0..COVER_FADE_TICKS {
+        for _ in 0..state.timing.fade_ticks {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
         terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;

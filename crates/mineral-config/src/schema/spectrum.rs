@@ -1,7 +1,12 @@
-//! 频谱面板段(挂在 `TuiConfig` 下):观感开关 + 平滑/衰减 + peak 物理。
+//! 频谱面板段(挂在 `TuiConfig` 下):观感开关 + ADSR 包络 + peak 物理。
 //!
 //! 仅承载强类型旋钮;真正读取在 client 接线处。频谱结构性常量(分辨率契约 / 首帧占位 /
 //! 色场采样精度)与 DSP 核心(FFT/频率/动态范围)**不**在此——它们是算法内参。
+//!
+//! 所有时长旋钮均为**毫秒**,运行时按 `animation.frame_tick_ms` 折算成拍数——
+//! 与帧率解耦,改帧率不改手感。条高动态沿用效果器 ADSR 模型:attack(起音,上升)、
+//! decay(衰减,播放中向更低目标回落 = 余韵)、release(释音,暂停时落向 0);
+//! sustain 即 FFT 实时值本身,无旋钮。
 
 use serde::Deserialize;
 
@@ -48,36 +53,36 @@ pub struct SpectrumConfig {
     /// 任何状态下条的最小高度(1/8 字符单位)。
     baseline_min: u16,
 
-    /// 上升平滑(attack)旧值权重。
-    attack_old: u32,
+    /// 起音(attack):条高**上升**到位 90% 所需毫秒。越小越跟手(鼓点立即顶上),
+    /// 越大越钝;≤ 帧间隔时退化为瞬时。
+    attack_ms: u32,
 
-    /// 上升平滑(attack)新值权重。
-    attack_new: u32,
+    /// 衰减(decay):播放中条高**向更低目标回落** 90% 所需毫秒(余韵滑落时长)。
+    /// 动画感主要来自这里——比 `attack_ms` 大才有"快攻慢放"的运动轨迹。
+    decay_ms: u32,
 
-    /// 静默/暂停时条高每 tick 衰减除数(指数项)。
-    decay_div: u16,
+    /// 释音(release):暂停/无信号时条高落向 0(止于 `baseline_min`)90% 所需毫秒。
+    release_ms: u32,
 
-    /// 衰减常数项(叠加在指数项上)。
-    decay_step: u16,
+    /// 新 peak 跟涨后在原位悬停的毫秒数。
+    peak_hold_ms: u32,
 
-    /// 新 peak 跟涨后在原位 hold 多少 tick 才下落。
-    peak_hold_ticks: u8,
+    /// peak 悬停结束后,从满高(64 单位)落到 0 的满程毫秒数。
+    peak_fall_ms: u32,
 
-    /// hold 结束后每 tick peak 下落多少单位。
-    peak_fall_per_tick: u16,
+    /// 色相旋转一整圈(360°)的毫秒数。
+    hue_cycle_ms: u32,
 
-    /// 色相旋转一整圈(360°)的 tick 数。
-    hue_cycle_ticks: u32,
-
-    /// 封面就绪后从当前配色缓动到封面色场的过渡时长(tick)。
-    cover_fade_ticks: u32,
+    /// 封面就绪后从当前配色缓动到封面色场的过渡毫秒数。
+    cover_fade_ms: u32,
 
     /// 色场纵向采样偏移(‰):顶端比底端沿色带多偏向高频多少。
     cover_vshift_permille: u32,
 
     /// 弹簧刚度(每 tick `force += stiffness × (target - pos)`)。
+    /// **注**:弹簧是无量纲系数制,与 `animation.frame_tick_ms` 耦合——改帧率会改弹簧手感。
     spring_stiffness: f32,
 
-    /// 弹簧阻尼(每 tick `force -= damping × velocity`)。
+    /// 弹簧阻尼(每 tick `force -= damping × velocity`)。同上,与帧率耦合。
     spring_damping: f32,
 }

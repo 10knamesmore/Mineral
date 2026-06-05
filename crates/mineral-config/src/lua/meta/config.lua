@@ -115,8 +115,10 @@
 ---@field list_jump_rows? integer 列表大步跳行的行数;≥1
 ---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
 
----频谱面板。tick = 一帧(时长 = animation.frame_tick_ms);条高单位是 1/8 字符格,
----满高 64(8 行 × 8)。fft_size/dB 标定是 DSP 参数,其余是纯观感,放心乱调。
+---频谱面板。条高单位是 1/8 字符格,满高 64(8 行 × 8)。所有时长旋钮均为毫秒,
+---运行时按 animation.frame_tick_ms 折算,与帧率解耦。条高动态是效果器 ADSR 模型:
+---attack 起音(上升)/ decay 衰减(播放中余韵)/ release 释音(暂停落 0),
+---sustain = FFT 实时值本身无旋钮。fft_size/dB 标定是 DSP 参数,其余纯观感放心乱调。
 ---@class mineral.SpectrumConfig
 ---@field fft_size? integer FFT 窗大小,样本数,建议 2 的幂。大 = 低频细节多但瞬态钝、起播首窗慢(4096@48kHz ≈ 85ms);小 = 跟手但低频糊。**外键:audio.tap_capacity 须 ≥ 2 × 此值**,否则 UI 卡一帧就丢样本出毛刺
 ---@field f_min? number 频率轴下界,Hz;低于此的能量不显示
@@ -130,14 +132,13 @@
 ---@field hue_rotate? boolean 无封面色时整体色相是否缓慢漂移
 ---@field spring_peak? boolean peak 是否带弹簧物理(过冲 + 回弹);false = 直接吸附
 ---@field baseline_min? integer 任何状态下条的最小高度,1/8 字符单位,0-64;0 = 静默时面板全空
----@field attack_old? integer 条高上升平滑的旧值权重;与 attack_new 构成 EMA 比例,新值占比越大越跟手也越抖
----@field attack_new? integer 上升平滑的新值权重
----@field decay_div? integer 静默/暂停时每 tick 衰减的指数除数,≥1;越小落得越快
----@field decay_step? integer 衰减的常数项,叠加在指数项上保证小值也能落底
----@field peak_hold_ticks? integer 新 peak 在原位悬停的 tick 数,0-255
----@field peak_fall_per_tick? integer 悬停结束后 peak 每 tick 下落的 1/8 格数
----@field hue_cycle_ticks? integer 色相转满一圈(360°)的 tick 数;越小转得越快
----@field cover_fade_ticks? integer 封面取色就绪后,从当前配色缓动到封面色场的 tick 数
+---@field attack_ms? integer 起音:条高上升 90% 到位的毫秒数;越小越贴鼓点,≤帧间隔则瞬时
+---@field decay_ms? integer 衰减:播放中条高向更低目标回落 90% 的毫秒数(余韵);比 attack_ms 大才有"快攻慢放"的动画感
+---@field release_ms? integer 释音:暂停/无信号时条高落向 baseline 的 90% 毫秒数
+---@field peak_hold_ms? integer 新 peak 在原位悬停的毫秒数
+---@field peak_fall_ms? integer 悬停结束后 peak 从满高(64)落到 0 的满程毫秒数
+---@field hue_cycle_ms? integer 色相转满一圈(360°)的毫秒数;越小转得越快
+---@field cover_fade_ms? integer 封面取色就绪后,从当前配色缓动到封面色场的毫秒数
 ---@field cover_vshift_permille? integer 封面色场顶端相对底端沿色带的偏移,千分比 0-1000;拉开条底/条顶明度层次
 ---@field spring_stiffness? number 弹簧刚度,每 tick force += k×(目标-当前);0.1-1.0 合理,太大瞬间过冲像 bug
 ---@field spring_damping? number 弹簧速度阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹
@@ -177,15 +178,15 @@
 ---@field line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
 ---@field scroll_ms? integer 切行时整列平移 + 高亮淡入的过渡时长,毫秒;超过此窗口直接吸附
 
----动画。tick 时长 = frame_tick_ms,故「N tick ≈ N × frame_tick_ms 毫秒」;
----各 *_ticks 设为 1 即近似关闭该动画(一帧到位)。
+---动画。各时长均为毫秒,运行时按 frame_tick_ms 折算成拍数(四舍五入、至少一拍);
+---设为 0 即近似关闭该动画(一帧到位)。改 frame_tick_ms 不改各动画真实时长。
 ---@class mineral.AnimationConfig
 ---@field frame_tick_ms? integer 主循环帧间隔,毫秒;16 ≈ 60fps,越小越流畅越费 CPU
----@field transition_ticks? integer 启动扩大 / 退出收缩整屏转场的 tick 数
----@field sweep_ticks? integer 侧栏 歌单↔曲目 切换扫入的 tick 数
----@field fullscreen_ticks? integer 全屏播放态进退场形变的 tick 数
----@field popup_anim_ticks? integer 浮层(队列 / 确认框)弹出收起的 tick 数
----@field toast_anim_ticks? integer 顶栏通知横向展开收起的 tick 数
+---@field transition_ms? integer 启动扩大 / 退出收缩整屏转场的毫秒数
+---@field sweep_ms? integer 侧栏 歌单↔曲目 切换扫入的毫秒数
+---@field fullscreen_ms? integer 全屏播放态进退场形变的毫秒数
+---@field popup_anim_ms? integer 浮层(队列 / 确认框)弹出收起的毫秒数
+---@field toast_anim_ms? integer 顶栏通知横向展开收起的毫秒数
 ---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
 
 ---顶栏通知。

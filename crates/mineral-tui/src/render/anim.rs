@@ -125,6 +125,28 @@ impl Transition {
     }
 }
 
+/// 动画时长(毫秒)→ tick 数:按主循环帧间隔四舍五入,至少 1(0ms 也占一拍,
+/// 语义 = "一帧到位")。配置面只写毫秒,运行时统一经此换算 —— 改 `frame_tick_ms`
+/// 不改动画的真实时长。
+///
+/// # Params:
+///   - `ms`: 动画时长(毫秒)
+///   - `tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`)
+///
+/// # Return:
+///   tick 数,`1..=u32::MAX`。
+pub(crate) fn ticks32_from_ms(ms: u32, tick_ms: u64) -> u32 {
+    let tick = tick_ms.max(1);
+    let n = (u64::from(ms) + tick / 2) / tick;
+    u32::try_from(n.max(1)).unwrap_or(u32::MAX)
+}
+
+/// [`ticks32_from_ms`] 的 u16 收窄版,喂 [`Transition::new`] 等 u16 拍数构造口
+/// (超界饱和到 `u16::MAX`)。
+pub(crate) fn ticks16_from_ms(ms: u32, tick_ms: u64) -> u16 {
+    u16::try_from(ticks32_from_ms(ms, tick_ms)).unwrap_or(u16::MAX)
+}
+
 /// cubic **ease-in-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比
 /// (`0..=1000`)。关于中点对称——两端减速、中段快,对进度增减两个方向都"减速到位"。
 /// 单调不过冲。[`Transition::eased_in_out`] 与歌词平滑滚动共用这一条曲线。
@@ -151,7 +173,21 @@ pub fn ease_in_out(progress: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL, Transition, ease_in_out};
+    use super::{FULL, Transition, ease_in_out, ticks16_from_ms};
+
+    /// `ticks16_from_ms`:默认值精确换算(288/16=18、96/16=6)、四舍五入、
+    /// 下限 1、超界饱和到 `u16::MAX`、`tick_ms=0` 不除零。
+    #[test]
+    fn ticks16_from_ms_rounds_floors_and_saturates() {
+        assert_eq!(ticks16_from_ms(288, 16), 18, "默认 transition_ms 精确换算");
+        assert_eq!(ticks16_from_ms(96, 16), 6, "默认 toast_anim_ms 精确换算");
+        assert_eq!(ticks16_from_ms(100, 16), 6, "6.25 拍应四舍五入到 6");
+        assert_eq!(ticks16_from_ms(104, 16), 7, "6.5 拍应四舍五入到 7");
+        assert_eq!(ticks16_from_ms(0, 16), 1, "0ms 也占一拍(一帧到位)");
+        assert_eq!(ticks16_from_ms(5, 16), 1, "不足半拍也至少 1");
+        assert_eq!(ticks16_from_ms(u32::MAX, 1), u16::MAX, "超界饱和");
+        assert_eq!(ticks16_from_ms(160, 0), 160, "tick_ms=0 按 1ms 兜底不除零");
+    }
 
     /// 自由函数 `ease_in_out`:端点(0/满)、中点(过 0.5,0.5),全程单调不过冲。
     /// 与 [`Transition::eased_in_out`] 同一条曲线(后者委托它)。

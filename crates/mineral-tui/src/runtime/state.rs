@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use mineral_model::{LrcLyric, Lyrics, WordLyric};
 
 use crate::components::layout::spectrum::SpectrumState;
-use crate::render::anim::Transition;
+use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::palette::CoverPalette;
 use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
@@ -209,11 +209,12 @@ impl AppState {
     ///   - `cfg`: 已加载的全局配置(`Arc` 共享,渲染/运行时模块经 `state.cfg` 读)
     pub fn new(cfg: Arc<mineral_config::Config>) -> Self {
         let anim = cfg.tui().animation();
+        let tick_ms = *anim.frame_tick_ms();
         Self {
             view: View::Playlists,
-            view_pos: Transition::new(*anim.sweep_ticks()),
+            view_pos: Transition::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: false,
-            fullscreen_pos: Transition::new(*anim.fullscreen_ticks()),
+            fullscreen_pos: Transition::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),
@@ -226,7 +227,7 @@ impl AppState {
             search_q: String::new(),
             current: None,
             playback: Playback::new(),
-            spectrum: SpectrumState::new(cfg.tui().spectrum().clone()),
+            spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
             queue: Vec::new(),
             versions: mineral_protocol::PlayerVersions::default(),

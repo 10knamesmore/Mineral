@@ -12,22 +12,23 @@ use serde::Deserialize;
 #[non_exhaustive]
 pub struct AnimationConfig {
     /// 主循环帧间隔(毫秒,≈ 60fps);重绘 / 拉数据 / 推进动画统一这一节奏。
+    /// 它是所有时长旋钮(`*_ms`)折算成拍数的分母——改它不改各动画的真实时长。
     frame_tick_ms: u64,
 
-    /// 整屏转场动画时长(tick)。
-    transition_ticks: u16,
+    /// 整屏转场动画时长(毫秒)。
+    transition_ms: u32,
 
-    /// 侧栏曲目扫入动画时长(tick)。
-    sweep_ticks: u16,
+    /// 侧栏曲目扫入动画时长(毫秒)。
+    sweep_ms: u32,
 
-    /// 全屏进退动画时长(tick)。
-    fullscreen_ticks: u16,
+    /// 全屏进退动画时长(毫秒)。
+    fullscreen_ms: u32,
 
-    /// 浮层进出动画时长(tick)。
-    popup_anim_ticks: u16,
+    /// 浮层进出动画时长(毫秒)。
+    popup_anim_ms: u32,
 
-    /// toast 进出动画时长(tick)。
-    toast_anim_ticks: u16,
+    /// toast 进出动画时长(毫秒)。
+    toast_anim_ms: u32,
 
     /// 侧栏曲目扫入风格。
     view_sweep: SweepStyle,

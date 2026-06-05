@@ -224,7 +224,7 @@ mod tests {
     use super::{LiveSlot, Notifications, text_item};
     use crate::render::theme::Theme;
 
-    /// 测试对照值 = default.lua 默认(flash_ttl_secs=4 / toast_anim_ticks=6)。
+    /// 测试对照值 = default.lua 默认(flash_ttl_secs=4 / toast_anim_ms=96 ÷ 16ms = 6 拍)。
     const FLASH_TTL: Duration = Duration::from_secs(4);
 
     /// 同上:toast 动画 tick 数默认。
