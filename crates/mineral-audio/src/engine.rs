@@ -32,22 +32,10 @@ use stream_download::storage::temp::TempStorageProvider;
 
 use crate::command::AudioCommand;
 use crate::file_storage::FileStorageProvider;
-use crate::handle::AudioMode;
+use crate::handle::{AudioMode, EngineParams};
 use crate::queue_slots::{Boundary, PlayHead, SharedProgress, Slot};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
-
-/// 命令通道空转间隔 / snapshot 刷新节拍 / seek mailbox drain 节拍。
-///
-/// 20ms 是经验值:OS 键盘 key-repeat 一般 ~30Hz(33ms 一次),20ms tick 能在
-/// 用户长按 ←/→ 时把 mailbox 几乎实时 drain → seek,感觉上接近连续(否则两次
-/// seek 之间的 tick 间隙会播放旧位置的几十 ms 音频,听感就是「跳一下播一下」)。
-/// 同样 stop 命令延迟 ≤20ms,切歌时旧曲尾巴可被压到 cpal 回调缓冲固有长度。
-/// termusic 用 5ms,我们留余量。
-const TICK: Duration = Duration::from_millis(20);
-
-/// 默认初始音量百分比
-const DEFAULT_VOLUME_PCT: u8 = 100;
 
 /// 把 0..=100 的 pct 映射成 rodio 的线性 gain(0.0..=1.0),走 cubic 感知曲线。
 ///
@@ -58,10 +46,6 @@ fn pct_to_gain(pct: u8) -> f32 {
     let p = f32::from(pct.min(100)) / 100.0;
     p * p * p
 }
-
-/// stream-download 起播前预拉的字节数。256 KB 在 320 kbps mp3 ≈ 6.4 秒缓冲,
-/// seek ±5s 命中已下载区间概率极高,cpal 回调线程不被网络等待阻塞。
-const PREFETCH_BYTES: u64 = 256 * 1024;
 
 /// `Read + Seek + Send + Sync` 的对象安全别名:把不同 `StorageProvider` 的 reader
 /// (远端流 / 本地文件)装箱成同一类型,链下建好的下一曲 reader 经统一通道交回引擎线程。
@@ -105,28 +89,33 @@ fn buffered_bps(buffered: u64, total: u64) -> u16 {
     u16::try_from(bps.min(10_000)).unwrap_or(10_000)
 }
 
+/// handle ↔ engine 的共享接线:snapshot / seek mailbox / ready 上报 / PCM tap。
+/// 收成一个结构体跨线程整体移交,避免引擎入口参数爆炸。
+pub(crate) struct EngineIo {
+    /// engine 周期性写入、UI tick 读取的最新播放状态。
+    pub(crate) snapshot: Arc<Mutex<AudioSnapshot>>,
+
+    /// 与 handle 共享的 latest-wins seek 目标位置。
+    pub(crate) seek_mailbox: Arc<Mutex<Option<Duration>>>,
+
+    /// 引擎完成 sink/runtime 初始化后立刻汇报,UI 才返回 handle。
+    pub(crate) ready_tx: mpsc::SyncSender<color_eyre::Result<()>>,
+
+    /// PCM tap 共享写端。
+    pub(crate) tap_producer: SharedProd,
+
+    /// 当前出声曲目的采样率原子(UI spectrum 读)。
+    pub(crate) sr_atomic: Arc<AtomicU32>,
+}
+
 /// 引擎线程入口。
-///
-/// `ready_tx` 在引擎完成 sink/runtime 初始化后立刻汇报,UI 才返回 handle。
-/// `seek_mailbox` 是与 handle 共享的 latest-wins seek 目标位置。
 pub(crate) fn run(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
-    snapshot: &Arc<Mutex<AudioSnapshot>>,
-    seek_mailbox: &Arc<Mutex<Option<Duration>>>,
-    ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
-    tap_producer: &SharedProd,
-    sr_atomic: &Arc<AtomicU32>,
+    io: &EngineIo,
     mode: AudioMode,
+    params: &EngineParams,
 ) {
-    if let Err(e) = engine_main(
-        cmd_rx,
-        snapshot,
-        seek_mailbox,
-        ready_tx,
-        tap_producer,
-        sr_atomic,
-        mode,
-    ) {
+    if let Err(e) = engine_main(cmd_rx, io, mode, params) {
         mineral_log::error!(target: "audio", error = mineral_log::chain(&e), "engine exited");
     }
 }
@@ -138,12 +127,9 @@ pub(crate) fn run(
 /// [`run_null_mode`] 空跑——daemon 照常 bind / serve / graceful shutdown,client 据 snapshot 提示降级。
 fn engine_main(
     cmd_rx: &mpsc::Receiver<AudioCommand>,
-    snapshot: &Arc<Mutex<AudioSnapshot>>,
-    seek_mailbox: &Arc<Mutex<Option<Duration>>>,
-    ready_tx: &mpsc::SyncSender<color_eyre::Result<()>>,
-    tap_producer: &SharedProd,
-    sr_atomic: &Arc<AtomicU32>,
+    io: &EngineIo,
     mode: AudioMode,
+    params: &EngineParams,
 ) -> color_eyre::Result<()> {
     let sink = match mode {
         AudioMode::ForceNull => None,
@@ -160,15 +146,15 @@ fn engine_main(
         },
     };
     let Some(mut stream_handle) = sink else {
-        snapshot.lock().backend = AudioBackend::Null;
-        let _ = ready_tx.send(Ok(()));
+        io.snapshot.lock().backend = AudioBackend::Null;
+        let _ = io.ready_tx.send(Ok(()));
         return run_null_mode(cmd_rx);
     };
     // 默认 drop 时会向 stderr 打一行 "Audio playback has finished",TUI 退出后会污染终端,关掉。
     stream_handle.log_on_drop(false);
 
     let player = rodio::Player::connect_new(stream_handle.mixer());
-    player.set_volume(pct_to_gain(DEFAULT_VOLUME_PCT));
+    player.set_volume(pct_to_gain(*params.initial_volume()));
 
     // multi_thread:stream-download 后台下载 task 必须在独立 worker 上持续被 poll,
     // 否则 block_on 一返回,reader.read 永远等不到字节,sink 一直空 → UI 一直 paused。
@@ -182,24 +168,31 @@ fn engine_main(
         Ok(r) => r,
         Err(e) => {
             let err = eyre!("tokio runtime: {e}");
-            let _ = ready_tx.send(Err(eyre!("tokio runtime: {e}")));
+            let _ = io.ready_tx.send(Err(eyre!("tokio runtime: {e}")));
             return Err(err);
         }
     };
 
-    let _ = ready_tx.send(Ok(()));
+    let _ = io.ready_tx.send(Ok(()));
 
-    let mut engine = Engine::new(&player, &rt, tap_producer, sr_atomic);
+    let tick = Duration::from_millis(*params.tick_ms());
+    let mut engine = Engine::new(
+        &player,
+        &rt,
+        &io.tap_producer,
+        &io.sr_atomic,
+        *params.prefetch_bytes(),
+    );
 
     loop {
-        match cmd_rx.recv_timeout(TICK) {
+        match cmd_rx.recv_timeout(tick) {
             Ok(cmd) => engine.handle_command(cmd),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         engine.drain_next_built();
-        drain_seek(seek_mailbox, &player);
-        engine.update_snapshot(snapshot);
+        drain_seek(&io.seek_mailbox, &player);
+        engine.update_snapshot(&io.snapshot);
     }
     Ok(())
 }
@@ -251,6 +244,9 @@ struct Engine<'a> {
 
     /// 已预排下一曲的采样率(append 时记下,等轮转成当前曲才写 `sr_atomic`)。
     next_sample_rate: u32,
+
+    /// 流式播放起播前预拉的字节数(配置 `audio.prefetch_bytes`)。
+    prefetch_bytes: u64,
 }
 
 impl<'a> Engine<'a> {
@@ -260,6 +256,7 @@ impl<'a> Engine<'a> {
         rt: &'a tokio::runtime::Runtime,
         tap_producer: &SharedProd,
         sr_atomic: &Arc<AtomicU32>,
+        prefetch_bytes: u64,
     ) -> Self {
         let (next_built_tx, next_built_rx) = mpsc::channel();
         Self {
@@ -275,6 +272,7 @@ impl<'a> Engine<'a> {
             pending_next_gen: 0,
             cur_sample_rate: 0,
             next_sample_rate: 0,
+            prefetch_bytes,
         }
     }
 
@@ -362,8 +360,9 @@ impl<'a> Engine<'a> {
             MediaUrl::Remote(u) => {
                 let tx = self.next_built_tx.clone();
                 let progress = Arc::clone(&self.progress);
+                let prefetch_bytes = self.prefetch_bytes;
                 self.rt.spawn(async move {
-                    match create_stream(u, capture, track_gen, idx, progress).await {
+                    match create_stream(u, capture, track_gen, idx, progress, prefetch_bytes).await {
                         Ok((reader, byte_len)) => {
                             let _ = tx.send(NextBuilt {
                                 reader,
@@ -436,9 +435,14 @@ impl<'a> Engine<'a> {
         let (reader, byte_len, local) = match url {
             MediaUrl::Remote(u) => {
                 let progress = Arc::clone(&self.progress);
-                let (reader, byte_len) = self
-                    .rt
-                    .block_on(create_stream(u, capture, track_gen, idx, progress))?;
+                let (reader, byte_len) = self.rt.block_on(create_stream(
+                    u,
+                    capture,
+                    track_gen,
+                    idx,
+                    progress,
+                    self.prefetch_bytes,
+                ))?;
                 (reader, byte_len, false)
             }
             MediaUrl::Local(p) => {
@@ -561,6 +565,7 @@ fn open_local(p: &std::path::Path) -> color_eyre::Result<(Box<dyn ReadSeek>, Opt
 ///   - `stream_gen`: 本流代号
 ///   - `progress_idx`: 写入的进度槽下标
 ///   - `progress`: 双槽共享进度
+///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
 ///
 /// # Return:
 ///   `(装箱 reader, 字节长度)`;字节长度 `None` 表示无 `Content-Length`。
@@ -570,6 +575,7 @@ async fn create_stream(
     stream_gen: u64,
     progress_idx: usize,
     progress: Arc<SharedProgress>,
+    prefetch_bytes: u64,
 ) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)> {
     match capture {
         Some(path) => {
@@ -580,6 +586,7 @@ async fn create_stream(
                 progress_idx,
                 progress,
                 /*track_completion*/ true,
+                prefetch_bytes,
             )
             .await
         }
@@ -591,6 +598,7 @@ async fn create_stream(
                 progress_idx,
                 progress,
                 /*track_completion*/ false,
+                prefetch_bytes,
             )
             .await
         }
@@ -601,6 +609,7 @@ async fn create_stream(
 ///
 /// # Params:
 ///   - `track_completion`: 是否 spawn waiter 等整段下完(capture 才需,用于 `download_complete`)
+///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
 async fn stream_with_provider<P>(
     url: url::Url,
     provider: P,
@@ -608,6 +617,7 @@ async fn stream_with_provider<P>(
     progress_idx: usize,
     progress: Arc<SharedProgress>,
     track_completion: bool,
+    prefetch_bytes: u64,
 ) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)>
 where
     P: StorageProvider + 'static,
@@ -620,7 +630,7 @@ where
     let total = len.unwrap_or(0);
     let prog = Arc::clone(&progress);
     let settings = Settings::default()
-        .prefetch_bytes(PREFETCH_BYTES)
+        .prefetch_bytes(prefetch_bytes)
         .on_progress(
             move |_stream: &HttpStream<Client>, state: StreamState, _cancel| {
                 // 切歌 / 换预排后旧流的迟到回调(代号不匹配)直接忽略,不污染当前缓冲。

@@ -248,8 +248,6 @@ mod tests {
 
     use mineral_persist::ServerStore;
 
-    use mineral_config::AUDIO_CACHE_CAPACITY;
-
     use super::{
         MediaCache, cache_key, ext_for, library_relpath, sanitize_segment, truncate_bytes,
     };
@@ -260,7 +258,8 @@ mod tests {
         dir: std::path::PathBuf,
     ) -> color_eyre::Result<MediaCache> {
         let persist = ServerStore::open(db).await?;
-        MediaCache::open(&persist, dir, AUDIO_CACHE_CAPACITY).await
+        let capacity = *mineral_config::Config::defaults()?.cache().audio_capacity();
+        MediaCache::open(&persist, dir, capacity).await
     }
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {

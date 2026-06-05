@@ -368,7 +368,11 @@ mod tests {
         store.set_loved(&id_b, /*loved*/ true).await?;
 
         // 构造匿名 channel(无登录态 → 远端不会被调用)
-        let config = NeteaseConfig::default();
+        let config = NeteaseConfig::builder()
+            .max_connections(0)
+            .proxy(None)
+            .timeout_secs(100)
+            .build();
         let channel = NeteaseChannel::new(&config, persist)?;
 
         let ids = channel.liked_song_ids().await?;

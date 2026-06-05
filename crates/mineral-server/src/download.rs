@@ -19,9 +19,6 @@ use tokio::io::AsyncWriteExt;
 use crate::media_cache::library_relpath;
 use crate::player::PlayerCore;
 
-/// 速度刷新节流间隔:每隔这么久才重算一次瞬时速度 + 写进度态。
-const SPEED_TICK: Duration = Duration::from_millis(150);
-
 /// 一首下载的结局(`Err` 另表失败):区分「真正下载」与「已存在跳过」,供完成提示分流统计。
 pub(crate) enum DownloadOutcome {
     /// 真正流式下载并永久导出。
@@ -31,24 +28,32 @@ pub(crate) enum DownloadOutcome {
     Skipped,
 }
 
-/// 下载音质。后续接 config 时改读配置(与播放音质各自独立)。
-const DOWNLOAD_QUALITY: BitRate = BitRate::Lossless;
-
-/// 解析下载环境:HTTP client(整段 GET 用)+ 永久导出根目录(`~/Music/mineral`)。
+/// 解析下载环境:HTTP client(整段 GET 用)+ 永久导出根目录。
 /// 任一不可用时对应项为 `None`(下载整体降级为「不可用」,只 warn 不阻断启动)。
+///
+/// 导出目录优先级:env(`MINERAL_DOWNLOAD_DIR`,由 `mineral_paths` 内部消化)>
+/// config(`download.dir`)> 平台默认(`~/Music/mineral`)。env 命中短路 config。
+///
+/// # Params:
+///   - `config_dir`: 配置的下载目录(`download.dir`;`None` = 未配置)
 ///
 /// # Return:
 ///   `(http, music_dir)`,各自失败为 `None`。
-pub(crate) fn open_env() -> (Option<reqwest::Client>, Option<PathBuf>) {
+pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, Option<PathBuf>) {
     let http = reqwest::Client::builder().build().ok();
     if http.is_none() {
         mineral_log::warn!(target: "download", "HTTP client 构建失败,下载不可用");
     }
-    let music_dir = match mineral_paths::music_export_dir() {
-        Ok(d) => Some(d),
-        Err(e) => {
-            mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "解析音乐导出目录失败,下载不可用");
-            None
+    let env_override = std::env::var_os("MINERAL_DOWNLOAD_DIR").is_some_and(|v| !v.is_empty());
+    let music_dir = if !env_override && let Some(d) = config_dir {
+        Some(d.to_path_buf())
+    } else {
+        match mineral_paths::music_export_dir() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "解析音乐导出目录失败,下载不可用");
+                None
+            }
         }
     };
     (http, music_dir)
@@ -67,6 +72,7 @@ pub(crate) fn open_env() -> (Option<reqwest::Client>, Option<PathBuf>) {
 ///   - `song`: 要下载的歌
 ///   - `quality`: 下载音质
 ///   - `progress`: 下载进度共享态(本函数实时写 `bytes_done`/`bytes_total`/`speed_bps`)
+///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
 ///
 /// # Return:
 ///   下载成功 → `Ok(Downloaded)`;已下载 → `Ok(Skipped)`;取链 / 网络 / 写盘失败 → `Err`。
@@ -77,6 +83,7 @@ pub(crate) async fn download_song(
     song: &Song,
     quality: BitRate,
     progress: &Arc<Mutex<DownloadProgress>>,
+    speed_tick: Duration,
 ) -> color_eyre::Result<DownloadOutcome> {
     // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
@@ -111,7 +118,7 @@ pub(crate) async fn download_song(
             .wrap_err_with(|| format!("创建导出目录失败 {}", parent.display()))?;
     }
     let part = export.with_extension("part-dl");
-    stream_to_file(http, remote, &part, progress).await?;
+    stream_to_file(http, remote, &part, progress, speed_tick).await?;
 
     // 4. 完成 → rename 为正式导出(永久)。
     tokio::fs::rename(&part, &export)
@@ -121,7 +128,7 @@ pub(crate) async fn download_song(
     Ok(DownloadOutcome::Downloaded)
 }
 
-/// 流式把 `url` 下载到 `dst`,逐 chunk 写盘并按 [`SPEED_TICK`] 节流更新 `progress` 的
+/// 流式把 `url` 下载到 `dst`,逐 chunk 写盘并按 `speed_tick` 节流更新 `progress` 的
 /// `bytes_done` / `bytes_total` / 平滑 `speed_bps`(整数 EMA)。
 ///
 /// # Params:
@@ -129,6 +136,7 @@ pub(crate) async fn download_song(
 ///   - `url`: 直链
 ///   - `dst`: 目标(临时)文件
 ///   - `progress`: 进度共享态
+///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
 ///
 /// # Return:
 ///   下完返回 `Ok(())`。
@@ -137,6 +145,7 @@ async fn stream_to_file(
     url: url::Url,
     dst: &Path,
     progress: &Arc<Mutex<DownloadProgress>>,
+    speed_tick: Duration,
 ) -> color_eyre::Result<()> {
     let resp = http
         .get(url)
@@ -167,7 +176,7 @@ async fn stream_to_file(
             .wrap_err("写下载临时文件失败")?;
         done = done.saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
         let dt = win_start.elapsed();
-        if dt >= SPEED_TICK {
+        if dt >= speed_tick {
             let dt_ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX).max(1);
             let inst = done.saturating_sub(win_bytes).saturating_mul(1000) / dt_ms;
             // 整数 EMA:0.6 旧 + 0.4 新,首样本直接采用。
@@ -319,8 +328,9 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
             http,
             music_dir,
             song,
-            DOWNLOAD_QUALITY,
+            player.download_quality(),
             player.progress_handle(),
+            player.download_speed_tick(),
         )
         .await;
         let mut p = player.progress_handle().lock();
@@ -388,6 +398,8 @@ mod tests {
     use mineral_test::mock::{UrlChannel, serve_once};
     use parking_lot::Mutex;
 
+    use std::time::Duration;
+
     use super::{DownloadOutcome, download_song};
     use crate::media_cache::MediaCache;
     use crate::resolve::probe_export;
@@ -433,6 +445,7 @@ mod tests {
             &s,
             BitRate::Lossless,
             &progress,
+            /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
         assert!(matches!(outcome, DownloadOutcome::Downloaded), "应真正下载");

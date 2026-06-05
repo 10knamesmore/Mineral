@@ -5,7 +5,6 @@ use std::time::SystemTime;
 
 use clap::Subcommand;
 use color_eyre::eyre::WrapErr;
-use mineral_config::{AUDIO_CACHE_CAPACITY, COVER_CACHE_CAPACITY};
 use mineral_persist::{CacheStats, ClientStore, ServerStore};
 
 use super::render::{self, AudioEntry, AudioInput, CoverInput};
@@ -46,6 +45,9 @@ pub async fn run(command: CacheCommand) -> color_eyre::Result<()> {
 /// # Return:
 ///   渲染并打印成功返回 `Ok(())`。
 async fn status(detail: bool) -> color_eyre::Result<()> {
+    // CLI 离线自 eval 配置取容量(与 daemon 同一真相源);用户配置坏已在 loader 降级默认。
+    let (config, _warnings) =
+        mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
     // sqlite `mode=rwc` 只建文件不建父目录,fresh env 下需先确保 data_dir 存在。
     let data_dir = mineral_paths::data_dir()?;
     std::fs::create_dir_all(&data_dir)
@@ -53,7 +55,10 @@ async fn status(detail: bool) -> color_eyre::Result<()> {
 
     let persist = ServerStore::open(&data_dir.join("mineral.db")).await?;
     let audio_stats = persist
-        .audio_cache(mineral_paths::audio_cache_dir()?, AUDIO_CACHE_CAPACITY)
+        .audio_cache(
+            mineral_paths::audio_cache_dir()?,
+            *config.cache().audio_capacity(),
+        )
         .await?
         .snapshot();
     let audio = build_audio_input(audio_stats);
@@ -61,7 +66,10 @@ async fn status(detail: bool) -> color_eyre::Result<()> {
 
     let cover_stats = ClientStore::open(&mineral_paths::tui_db()?)
         .await?
-        .cover_cache(mineral_paths::cover_cache_dir()?, COVER_CACHE_CAPACITY)
+        .cover_cache(
+            mineral_paths::cover_cache_dir()?,
+            *config.cache().cover_capacity(),
+        )
         .await?
         .snapshot();
     let cover = CoverInput {

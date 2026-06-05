@@ -17,6 +17,7 @@
 //!   破坏调用方。
 
 mod client;
+mod config;
 mod download;
 mod gapless;
 mod media;
@@ -30,6 +31,7 @@ mod server;
 mod state;
 
 pub use client::{Client, ClientHandle};
+pub use config::{ServerConfig, resolve_audio_mode};
 pub use mineral_audio::AudioMode;
 pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use server::Server;

@@ -1,7 +1,7 @@
 ---@type mineral.Config
 -- Mineral 用户配置。只需写要覆盖的字段,其余回落默认(深合并,数组整体替换)。
 -- 编辑器补全 / 类型检查依赖同目录 lua/meta 下的 stub(本文件由 `mineral config init` 生成)。
--- 完整可覆盖字段见 lua/meta/config.lua。
+-- 完整可覆盖字段见 lua/meta/config.lua;各字段默认值见同目录 default.lua(仅参考,程序不读)。
 return {
   -- 示例:把初始音量调到 80
   -- audio = { volume = 80 },

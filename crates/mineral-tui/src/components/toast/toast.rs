@@ -12,9 +12,6 @@ use ratatui::widgets::{Clear, Paragraph};
 use crate::render::anim::Transition;
 use crate::render::theme::Theme;
 
-/// 进 / 出场动画 tick 数。
-const ANIM_TICKS: u16 = 6;
-
 /// 一段可放进 [`Toast`] 的内容:自报宽度、自渲染。实现方决定怎么画。
 pub(crate) trait ToastItem {
     /// 期望内容宽度(字符,**不含**两侧括号);决定括号区总宽与居中。
@@ -40,9 +37,13 @@ pub(crate) struct Toast {
 
 impl Toast {
     /// 新建一个收起态、无内容的提示条。
-    pub(crate) fn new() -> Self {
+    /// 新建收起态 toast。
+    ///
+    /// # Params:
+    ///   - `anim_ticks`: 进 / 出场动画 tick 数(配置 `animation.toast_anim_ticks`)
+    pub(crate) fn new(anim_ticks: u16) -> Self {
         Self {
-            anim: Transition::new(ANIM_TICKS),
+            anim: Transition::new(anim_ticks),
             item: None,
         }
     }

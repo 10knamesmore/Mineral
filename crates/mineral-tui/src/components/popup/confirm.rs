@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn confirm_overlay_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
-        let ctx = AppState::empty();
+        let ctx = AppState::test_default()?;
         let overlay = ConfirmOverlay;
         terminal.draw(|f| {
             render_overlay(

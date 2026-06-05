@@ -47,18 +47,19 @@ pub enum NeteaseCommand {
 }
 
 /// 执行解析后的网易云 CLI 命令。
-pub async fn run(cli: NeteaseCli) -> color_eyre::Result<()> {
+///
+/// # Params:
+///   - `cli`: 已解析的子命令
+///   - `config`: 网易云构造参数(由调用方自配置派生;代理/超时对登录同样生效)
+pub async fn run(cli: NeteaseCli, config: &NeteaseConfig) -> color_eyre::Result<()> {
     match cli.command {
-        NeteaseCommand::Login => run_login().await,
+        NeteaseCommand::Login => run_login(config).await,
     }
 }
 
 /// `mineral channel netease login` 的主流程:取 unikey、终端渲染二维码、轮询状态、登录成功后写凭证。
-async fn run_login() -> color_eyre::Result<()> {
-    let channel = NeteaseChannel::new(
-        &NeteaseConfig::default(),
-        mineral_persist::ServerStore::disabled(),
-    )?;
+async fn run_login(config: &NeteaseConfig) -> color_eyre::Result<()> {
+    let channel = NeteaseChannel::new(config, mineral_persist::ServerStore::disabled())?;
     let qr = login_qr_get_key(channel.transport()).await?;
     render_qr(&qr.url)?;
     eprintln!("等待网易云 App 扫码并确认...");

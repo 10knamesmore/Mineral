@@ -10,9 +10,8 @@ use mineral_persist::ServerStore;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
-use mineral_config::AUDIO_CACHE_CAPACITY;
-
 use crate::client::ClientHandle;
+use crate::config::ServerConfig;
 use crate::media_cache::MediaCache;
 use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
@@ -37,26 +36,32 @@ impl Server {
     ///
     /// # Params:
     ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
-    ///   - `audio_mode`: 音频后端选择,见 [`AudioMode`];无设备时 `Auto` 会降级而非失败。
+    ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
     ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
+    ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
     pub async fn spawn(
         channels: Vec<Arc<dyn MusicChannel>>,
         audio_mode: AudioMode,
         persist: ServerStore,
+        config: ServerConfig,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
-        let scheduler = Scheduler::new(&channels);
-        let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode)?;
+        let scheduler = Scheduler::new(&channels, *config.channel_workers_per());
+        let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
-        let media_cache = open_media_cache(&persist).await;
-        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache);
+        let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
+        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache, &config);
         // 读回上次会话 —— 本轮仅打日志确认能读到,不应用到播放状态(不自动恢复)。
         tokio::spawn(log_last_session(player.clone()));
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
         let busy = Arc::new(AtomicBool::new(false));
-        tokio::spawn(heartbeat(player.clone(), Arc::clone(&busy)));
+        tokio::spawn(heartbeat(
+            player.clone(),
+            Arc::clone(&busy),
+            *config.daemon().heartbeat_secs(),
+        ));
         mineral_log::debug!(target: "server", "server components ready");
         Ok(Self { player, pcm, busy })
     }
@@ -93,7 +98,11 @@ impl Server {
 
 /// 打开音频本体缓存(`audio_cache` 表落 `persist` 的 `mineral.db`);目录解析 / open 失败时
 /// `warn` 并降级到 [`MediaCache::disabled`](不阻断 daemon 启动)。
-async fn open_media_cache(persist: &ServerStore) -> MediaCache {
+///
+/// # Params:
+///   - `persist`: 持久化句柄
+///   - `capacity`: 缓存容量上限(字节,配置 `cache.audio_capacity`)
+async fn open_media_cache(persist: &ServerStore, capacity: u64) -> MediaCache {
     let dir = match mineral_paths::audio_cache_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -101,7 +110,7 @@ async fn open_media_cache(persist: &ServerStore) -> MediaCache {
             return MediaCache::disabled();
         }
     };
-    match MediaCache::open(persist, dir, AUDIO_CACHE_CAPACITY).await {
+    match MediaCache::open(persist, dir, capacity).await {
         Ok(cache) => cache,
         Err(e) => {
             mineral_log::warn!(target: "server", error = mineral_log::chain(&e), "音频缓存打开失败,降级禁用");
@@ -128,14 +137,14 @@ async fn log_last_session(player: PlayerCore) {
     }
 }
 
-/// 心跳间隔。
-const HEARTBEAT_SECS: u64 = 60;
-
-/// 心跳:每 [`HEARTBEAT_SECS`] 秒把内部状态快照打一条 info,供事后回溯间歇性问题
+/// 心跳:每 `interval_secs` 秒把内部状态快照打一条 info,供事后回溯间歇性问题
 /// (出问题时往往没提前开 debug,有心跳就能看到那个时间点系统在干嘛)。
-async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>) {
+///
+/// # Params:
+///   - `interval_secs`: 心跳间隔(秒,配置 `daemon.heartbeat_secs`)
+async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>, interval_secs: u64) {
     let start = Instant::now();
-    let mut tick = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
+    let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
     loop {
         tick.tick().await;
         // in-process 直读 State 摘日志字段,不走含整队列 clone 的全量快照。

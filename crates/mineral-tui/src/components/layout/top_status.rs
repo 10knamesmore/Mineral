@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn top_status_playlists_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let state = crate::test_support::state_with_playlists();
+        let state = crate::test_support::state_with_playlists()?;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
         insta::with_settings!({
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn top_status_library_queue_open_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let state = crate::test_support::state_with_tracks();
+        let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
         insta::with_settings!({
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn top_status_audio_null_badge_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let mut state = crate::test_support::state_with_playlists();
+        let mut state = crate::test_support::state_with_playlists()?;
         state.playback.audio_backend = mineral_audio::AudioBackend::Null;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。

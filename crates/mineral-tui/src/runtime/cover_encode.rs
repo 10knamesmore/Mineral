@@ -25,9 +25,6 @@ use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, ResizeEncodeRender};
 use tokio::sync::mpsc;
 
-/// 编码 worker 数。编码按「选中稳定」节奏触发,2 路够覆盖快速来回切。
-const WORKERS: usize = 2;
-
 /// 一次封面编码请求:把 `image` 编码成适配 `target` 区域的 kitty 协议。
 pub struct EncodeRequest {
     /// 封面 URL —— 结果回填 `cover_protocols` 的 key。
@@ -65,13 +62,17 @@ pub struct CoverEncoder {
 }
 
 impl CoverEncoder {
-    /// 起 [`WORKERS`] 个编码 worker。caller 必须在 tokio runtime 里(`run_app` 跑在
+    /// 起 `workers` 个编码 worker。caller 必须在 tokio runtime 里(`run_app` 跑在
     /// runtime 线程上,满足);`picker` 决定终端图片协议(kitty / sixel / halfblocks)。
-    pub fn spawn(picker: &Picker) -> Self {
+    ///
+    /// # Params:
+    ///   - `picker`: 终端图片协议能力
+    ///   - `workers`: worker 数(配置 `cover.encode_workers`)
+    pub fn spawn(picker: &Picker, workers: usize) -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<EncodeRequest>();
         let ready = Arc::new(Mutex::new(Vec::<EncodeResult>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
-        for _ in 0..WORKERS {
+        for _ in 0..workers.max(1) {
             let rx = Arc::clone(&rx);
             let ready = Arc::clone(&ready);
             let picker = picker.clone();
@@ -182,7 +183,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn encodes_and_drains() -> color_eyre::Result<()> {
         let picker = Picker::from_fontsize((8, 16));
-        let encoder = CoverEncoder::spawn(&picker);
+        let encoder = CoverEncoder::spawn(&picker, /*workers*/ 2);
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let image = Arc::new(image::DynamicImage::ImageRgba8(image::RgbaImage::new(

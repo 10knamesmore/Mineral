@@ -15,9 +15,6 @@ use crate::kind::ChannelFetchKind;
 use crate::ongoing::Ongoing;
 use crate::outcome::TaskOutcome;
 
-/// 每个 channel 的 worker 数(per-priority queue 共享)。
-const WORKERS_PER_CHANNEL: usize = 8;
-
 /// 投递给 worker 的一次任务。
 pub(crate) struct Job {
     /// 任务 id,worker 完成后用于从 [`Ongoing`] 移除。
@@ -55,10 +52,12 @@ impl ChannelFetchLane {
     ///   - `channels`: 源 channel 列表,按 `source()` 去重后入 lane
     ///   - `ongoing`: 共享的中央状态(worker 完成时 `remove(id)`)
     ///   - `event_tx`: 中央事件 buffer 的发送端
+    ///   - `workers_per_channel`: 每个 channel 的 worker 数(user/bg 两级队列共享)
     pub fn spawn(
         channels: &[Arc<dyn MusicChannel>],
         ongoing: &Arc<Ongoing>,
         event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
+        workers_per_channel: usize,
     ) -> Self {
         let mut senders = FxHashMap::<SourceKind, ChannelSenders>::default();
         for ch in channels {
@@ -68,7 +67,7 @@ impl ChannelFetchLane {
             }
             let (user_tx, user_rx) = mpsc::unbounded_channel::<Job>();
             let (bg_tx, bg_rx) = mpsc::unbounded_channel::<Job>();
-            spawn_worker_pool(ch, user_rx, bg_rx, ongoing, event_tx);
+            spawn_worker_pool(ch, user_rx, bg_rx, ongoing, event_tx, workers_per_channel);
             senders.insert(
                 source,
                 ChannelSenders {
@@ -96,7 +95,7 @@ impl ChannelFetchLane {
     }
 }
 
-/// 给一个 channel 起 [`WORKERS_PER_CHANNEL`] 个 worker,共享 user/bg 两个队列。
+/// 给一个 channel 起 `workers_per_channel` 个 worker,共享 user/bg 两个队列。
 ///
 /// user/bg 两个 mpsc 用 `Arc<Mutex<Receiver>>` 共享给所有 worker —— `mpsc::Receiver`
 /// 不能直接 clone,但 worker 是后台 task,持锁等待是可接受的(每次 await 都释放)。
@@ -106,10 +105,11 @@ fn spawn_worker_pool(
     bg_rx: mpsc::UnboundedReceiver<Job>,
     ongoing: &Arc<Ongoing>,
     event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
+    workers_per_channel: usize,
 ) {
     let user = Arc::new(tokio::sync::Mutex::new(user_rx));
     let bg = Arc::new(tokio::sync::Mutex::new(bg_rx));
-    for _ in 0..WORKERS_PER_CHANNEL {
+    for _ in 0..workers_per_channel {
         let channel = Arc::clone(channel);
         let user = Arc::clone(&user);
         let bg = Arc::clone(&bg);

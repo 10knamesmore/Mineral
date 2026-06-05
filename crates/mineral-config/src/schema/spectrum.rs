@@ -12,6 +12,27 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SpectrumConfig {
+    /// FFT 窗大小(样本)。**外键**:`audio.tap_capacity` 须 ≥ 2 × 此值。
+    fft_size: usize,
+
+    /// 频率轴下界(Hz)。
+    f_min: f32,
+
+    /// 频率轴上界(Hz);超过奈奎斯特时取奈奎斯特。
+    f_max: f32,
+
+    /// 频率轴对数化程度(0 线性 ..= 1 纯对数)。
+    log_axis_blend: f32,
+
+    /// dB 标定下界(低于此条高为 0)。
+    db_floor: f32,
+
+    /// dB 标定上界(高于此满高);必须 > `db_floor`。
+    db_ceil: f32,
+
+    /// 频带统计中峰值的占比(0 纯均值 ..= 1 纯峰值)。
+    peak_mix: f32,
+
     /// 是否显示 peak cap(`▔` 浮在条顶)。
     show_peak_cap: bool,
 

@@ -2,7 +2,7 @@
 //!
 //! `mineral` 直接启动(无 flag)走这里:优先 attach 已有 daemon,没有就 spawn 一个
 //! 独立的 `mineral serve` 子进程再 attach。client 退出时是否连带 kill 掉「本次亲手
-//! spawn 的」daemon,由 [`KILL_SPAWNED_DAEMON_ON_EXIT`] 决定。
+//! spawn 的」daemon,由配置 `tui.behavior.kill_spawned_daemon_on_exit` 决定。
 
 use std::io::Read;
 use std::path::Path;
@@ -14,15 +14,6 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
 use crate::runtime::remote::RemoteClient;
-
-/// client 退出时,是否 kill 掉本次亲手 spawn 的 daemon。
-///
-/// - `true`(当前):client 退出 = daemon 一起退,贴合「单进程播放器」直觉。
-/// - `false`(将来 lua 配置接管):退出后 daemon 续命,下次启动 attach 回去,音乐不断。
-///
-/// 只对**本次启动亲手 spawn** 的 daemon 生效;attach 已有 daemon 时(不持
-/// [`DaemonHandle`])永不 kill —— 那是别人的 daemon。
-const KILL_SPAWNED_DAEMON_ON_EXIT: bool = true;
 
 /// spawn 后等 daemon bind socket 的轮询间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -38,11 +29,14 @@ const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// # Params:
 ///   - `socket`: daemon 监听的 unix socket 路径(见 `mineral_paths::socket_path`)。
+///   - `kill_on_exit`: client 退出时是否 kill 本次亲手 spawn 的 daemon
+///     (配置 `tui.behavior.kill_spawned_daemon_on_exit`;`false` = 续命后台播放)。
 ///
 /// # Return:
 ///   连好的 [`RemoteClient`] + 可选的 [`DaemonHandle`](仅自己 spawn 时 `Some`)。
 pub(crate) async fn ensure(
     socket: &Path,
+    kill_on_exit: bool,
 ) -> color_eyre::Result<(RemoteClient, Option<DaemonHandle>)> {
     if let Ok(client) = RemoteClient::connect(socket).await {
         mineral_log::info!(target: "daemon", "attached to existing daemon");
@@ -53,7 +47,25 @@ pub(crate) async fn ensure(
     let pid = child.id();
     let client = connect_with_retry(socket, &mut child).await?;
     mineral_log::info!(target: "daemon", pid, "spawned daemon ready");
-    Ok((client, Some(DaemonHandle { child })))
+    Ok((
+        client,
+        Some(DaemonHandle {
+            child,
+            kill_on_exit,
+        }),
+    ))
+}
+
+/// 退出时是否应当结束 daemon:仅「本次亲手 spawn」且配置开关为 true。
+///
+/// # Params:
+///   - `kill_on_exit`: 配置开关(`tui.behavior.kill_spawned_daemon_on_exit`)
+///   - `spawned`: 本次是否亲手 spawn(attach 已有 daemon 为 false)
+///
+/// # Return:
+///   true = SIGTERM 结束 daemon;false = detach 续命 / 不归我们管。
+pub(crate) fn should_kill_spawned(kill_on_exit: bool, spawned: bool) -> bool {
+    kill_on_exit && spawned
 }
 
 /// spawn 后轮询重连,直到 daemon bind 好 socket。
@@ -117,21 +129,23 @@ fn spawn_daemon() -> color_eyre::Result<Child> {
         .wrap_err_with(|| format!("spawn daemon: {} serve", exe.display()))
 }
 
-/// 本次启动亲手 spawn 的 daemon 子进程句柄。持有它 = 退出时按
-/// [`KILL_SPAWNED_DAEMON_ON_EXIT`] 决定 daemon 去留。
+/// 本次启动亲手 spawn 的 daemon 子进程句柄。持有它 = 退出时按配置开关决定 daemon 去留。
 pub(crate) struct DaemonHandle {
     /// spawn 出来的 `mineral serve` 子进程。
     child: Child,
+
+    /// client 退出时是否 kill(配置 `tui.behavior.kill_spawned_daemon_on_exit`)。
+    kill_on_exit: bool,
 }
 
 impl DaemonHandle {
-    /// client 退出后调用:按 [`KILL_SPAWNED_DAEMON_ON_EXIT`] 决定是否结束 daemon。
+    /// client 退出后调用:按配置开关决定是否结束 daemon。
     ///
     /// kill 走 SIGTERM(而非 SIGKILL)以触发 daemon 的 graceful 收尾(停 audio
     /// engine、清 socket 文件),再 `wait` 回收僵尸进程。`false` 时直接 detach:
     /// 父进程退出后子进程被 init 收养,继续后台播放。
     pub(crate) fn shutdown_if_owned(mut self) {
-        if !KILL_SPAWNED_DAEMON_ON_EXIT {
+        if !should_kill_spawned(self.kill_on_exit, /*spawned*/ true) {
             mineral_log::info!(target: "daemon", pid = self.child.id(), "detaching spawned daemon, keeps playing");
             return;
         }
@@ -149,5 +163,31 @@ impl DaemonHandle {
         if let Err(e) = self.child.wait() {
             mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "wait for daemon exit failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_kill_spawned;
+
+    /// 开关 × 是否自拉起的判定矩阵:仅「开关开 + 亲手 spawn」才杀。
+    #[test]
+    fn kill_matrix() {
+        assert!(
+            !should_kill_spawned(/*kill_on_exit*/ false, /*spawned*/ true),
+            "续命开关关 → 不杀"
+        );
+        assert!(
+            should_kill_spawned(/*kill_on_exit*/ true, /*spawned*/ true),
+            "默认:自拉起 + 开关开 → 杀"
+        );
+        assert!(
+            !should_kill_spawned(/*kill_on_exit*/ true, /*spawned*/ false),
+            "attach 别人的 daemon → 永不杀"
+        );
+        assert!(
+            !should_kill_spawned(/*kill_on_exit*/ false, /*spawned*/ false),
+            "两否 → 不杀"
+        );
     }
 }

@@ -16,15 +16,3 @@ pub use check::render_check;
 pub use init::{InitOutcome, run_init};
 pub use loader::{ConfigWarning, inject_noop_host, load};
 pub use schema::*;
-
-/// 音频本体缓存容量上限:10 GiB。LRU 满了自动驱逐最久未播。
-///
-/// 过渡常量:与 `default.lua` 的 `cache.audio_capacity` 同值(守卫测试钉死),
-/// 供接线前的旧调用方;接线 PR 改读 [`Config`] 后删除。
-pub const AUDIO_CACHE_CAPACITY: u64 = 10 * 1024 * 1024 * 1024;
-
-/// 封面磁盘缓存容量上限:1 GiB。LRU 满了自动驱逐最旧。
-///
-/// 过渡常量:与 `default.lua` 的 `cache.cover_capacity` 同值(守卫测试钉死),
-/// 供接线前的旧调用方;接线 PR 改读 [`Config`] 后删除。
-pub const COVER_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024;

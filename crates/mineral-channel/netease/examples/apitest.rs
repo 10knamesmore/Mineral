@@ -52,6 +52,16 @@ use mineral_channel_netease::transport::client::RequestSpec;
 use mineral_channel_netease::transport::headers::UaKind;
 use mineral_channel_netease::transport::url::Crypto;
 use mineral_channel_netease::{NeteaseChannel, NeteaseConfig};
+
+/// example 用的基线参数(无配置语境,写死;生产默认见 mineral-config 的 default.lua)。
+fn netease_config() -> NeteaseConfig {
+    NeteaseConfig::builder()
+        .max_connections(0)
+        .proxy(None)
+        .timeout_secs(100)
+        .build()
+}
+
 use mineral_model::{BitRate, MediaUrl};
 use serde_json::json;
 
@@ -75,7 +85,7 @@ async fn main() -> color_eyre::Result<()> {
         if let Some(auth) = load_stored()? {
             println!("凭证: 本地 netease.json (uid={})\n", auth.user_id.as_str());
             let ch = NeteaseChannel::with_credential(
-                &NeteaseConfig::default(),
+                &netease_config(),
                 &auth.music_u,
                 auth.user_id,
                 mineral_persist::ServerStore::disabled(),
@@ -88,7 +98,7 @@ async fn main() -> color_eyre::Result<()> {
                 Some(c) if !c.is_empty() => {
                     println!("凭证: 环境变量 NETEASE_MUSIC_U\n");
                     let ch = NeteaseChannel::with_cookie(
-                        &NeteaseConfig::default(),
+                        &netease_config(),
                         c,
                         mineral_persist::ServerStore::disabled(),
                     )?;
@@ -98,7 +108,7 @@ async fn main() -> color_eyre::Result<()> {
                 _ => {
                     println!("凭证: 无(匿名)\n");
                     let ch = NeteaseChannel::new(
-                        &NeteaseConfig::default(),
+                        &netease_config(),
                         mineral_persist::ServerStore::disabled(),
                     )?;
                     (ch, CredLevel::Anonymous)

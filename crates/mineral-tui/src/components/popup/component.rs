@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
 use crate::render::cells::{left_eighth, lower_eighth};
 use crate::render::theme::Theme;
+use crate::runtime::action::Action;
 use crate::runtime::state::AppState;
 
 /// 缩放进度满值(千分比)。到此即完全展开、渲染内容;不足只画外框空壳。
@@ -54,9 +55,6 @@ enum Dock {
     /// 贴右(全屏:封面在左半)。
     Right,
 }
-
-/// 停靠浮层宽度百分比。左右停靠**同宽同高**,仅镜像贴边侧。
-const DOCK_W_PCT: u16 = 36;
 
 /// 顶栏行数:停靠浮层从其下顶对齐 + 满高,盖住其下面板(old layout 留顶栏;全屏无顶栏,
 /// 留同样 1 行保持左右停靠等高)。
@@ -115,6 +113,15 @@ pub(crate) trait Overlay {
     /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 只读后端态(如队列长度,用于
     /// 钳制光标);浮层与 `AppState` 是 App 的平级字段,可同时借用。
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse;
+
+    /// 处理一个已查表命中的全局 [`Action`]。返回 `None` 表示本浮层不认这个动作,
+    /// 分发器回落到 [`Self::on_key`](裸键路径,浮层私有键)。默认全部不认。
+    ///
+    /// 与主 keymap 统一的是 dispatch 入口与动作概念(导航族经此跟随键位重映射与
+    /// behavior 步长);浮层私有意图仍走 [`OverlayAction`],不并入全局枚举。
+    fn on_action(&mut self, _action: Action, _ctx: &AppState) -> Option<OverlayResponse> {
+        None
+    }
 }
 
 /// 统一外框底 Block:圆角边框 + mantle 背景。各 overlay 在此之上加 title / 边框色,
@@ -176,7 +183,7 @@ pub(crate) fn render_overlay<O: Overlay>(
         Dock::Left
     });
     let base = match dock {
-        Some(d) => dock_rect(area, d),
+        Some(d) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
         None => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
     };
     if scale >= FULL_SCALE {
@@ -199,10 +206,11 @@ pub(crate) fn render_overlay<O: Overlay>(
     }
 }
 
-/// 计算停靠浮层「完全展开」矩形:左右**同宽([`DOCK_W_PCT`])同高**(从顶栏下顶对齐 +
-/// 满高),只在贴边侧不同 —— old layout 贴左、全屏贴右,均避开另一侧的封面。
-fn dock_rect(area: Rect, dock: Dock) -> Rect {
-    let w = pct_of(area.width, DOCK_W_PCT);
+/// 计算停靠浮层「完全展开」矩形:左右**同宽(配置 `tui.layout.dock_w_pct`)同高**
+/// (从顶栏下顶对齐 + 满高),只在贴边侧不同 —— old layout 贴左、全屏贴右,
+/// 均避开另一侧的封面。
+fn dock_rect(area: Rect, dock: Dock, dock_w_pct: u16) -> Rect {
+    let w = pct_of(area.width, dock_w_pct);
     let top = DOCK_TOPBAR.min(area.height);
     let h = area.height.saturating_sub(top);
     let x = match dock {

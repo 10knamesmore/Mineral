@@ -291,7 +291,7 @@ mod tests {
             speed_bps: 2_516_582,
             ..DownloadProgress::default()
         };
-        let mut toast = Toast::new();
+        let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || download(dp.clone()), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn complete_snapshot() -> color_eyre::Result<()> {
         let theme = Theme::default();
-        let mut toast = Toast::new();
+        let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(3, 2, 1), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn complete_snapshot_ok_only() -> color_eyre::Result<()> {
         let theme = Theme::default();
-        let mut toast = Toast::new();
+        let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(5, 0, 0), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn complete_snapshot_all_skipped() -> color_eyre::Result<()> {
         let theme = Theme::default();
-        let mut toast = Toast::new();
+        let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(0, 2, 0), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;

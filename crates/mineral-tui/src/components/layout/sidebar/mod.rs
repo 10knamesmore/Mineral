@@ -27,7 +27,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
             state,
             theme,
             vp.eased_in_out(),
-            sweep::VIEW_SWEEP,
+            *state.cfg.tui().animation().view_sweep(),
         );
     }
 }

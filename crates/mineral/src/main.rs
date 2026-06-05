@@ -5,7 +5,7 @@ use std::sync::Arc;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use mineral_channel_core::MusicChannel;
-use mineral_channel_netease::{NeteaseChannel, NeteaseConfig, load_stored};
+use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
 use mineral_tui::Launch;
 use tokio::runtime::Runtime;
@@ -57,9 +57,11 @@ fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
 pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
     let runtime = named_runtime("mineral-daemon-rt")?;
     let result = runtime.block_on(async {
+        let (config, warnings) = load_config()?;
+        log_config_warnings(&warnings);
         let persist = open_persist().await;
-        let channels = build_channels(persist.clone())?;
-        mineral_cli::serve_run(channels, persist).await
+        let channels = build_channels(persist.clone(), config.sources())?;
+        mineral_cli::serve_run(channels, persist, config).await
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
@@ -119,15 +121,32 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
     // 只有 in-proc 模式 client 与 server 同进程,需要本地 channels;Auto / Connect 下
     // channels 由独立 daemon 进程持有,省去 build_channels 也省去重复读凭证。
     // in-proc 模式下持久化降级为 disabled:调试路径无需落盘。
+    let (config, warnings) = load_config()?;
+    log_config_warnings(&warnings);
     let (channels, persist) = match launch {
         Launch::InProc => {
             let p = mineral_persist::ServerStore::disabled();
-            let ch = build_channels(p.clone())?;
+            let ch = build_channels(p.clone(), config.sources())?;
             (ch, p)
         }
         Launch::Auto | Launch::Connect => (Vec::new(), mineral_persist::ServerStore::disabled()),
     };
-    mineral_tui::run(channels, launch, persist).await
+    mineral_tui::run(channels, launch, persist, config, warnings).await
+}
+
+/// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;
+/// 用户 `config.lua` 的错误已在 loader 内降级为 warnings,不会让加载失败。
+fn load_config() -> color_eyre::Result<(mineral_config::Config, Vec<mineral_config::ConfigWarning>)>
+{
+    let dir = mineral_paths::config_dir().wrap_err("解析配置目录失败")?;
+    mineral_config::load(&dir.join("config.lua")).wrap_err("加载用户配置失败")
+}
+
+/// 把配置降级告警逐条落日志(daemon 无 UI,日志是唯一出口;TUI 另有 toast)。
+fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
+    for w in warnings {
+        mineral_log::warn!(target: "config", warning = %w, "用户配置降级");
+    }
 }
 
 /// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。
@@ -137,11 +156,13 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
+///   - `sources`: 音乐源段配置(netease 的 timeout / proxy / 并发)。
 fn build_channels(
     persist: mineral_persist::ServerStore,
+    sources: &mineral_config::SourcesConfig,
 ) -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
-    match build_netease(persist) {
+    match build_netease(persist, sources.netease()) {
         Ok(Some(c)) => channels.push(c),
         Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),
         Err(e) => mineral_log::warn!(
@@ -156,22 +177,21 @@ fn build_channels(
 }
 
 /// 读本地凭证 → 构造 [`NeteaseChannel`];没凭证返回 `Ok(None)`(尚未登录,正常)。
+/// 早返回在构造 `NeteaseConfig` 之前 —— config 注入不改未登录降级路径。
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄,传入 channel 供登录状态/统计落盘使用。
+///   - `netease`: 网易云源段配置(timeout / proxy / 并发)。
 fn build_netease(
     persist: mineral_persist::ServerStore,
+    netease: &mineral_config::NeteaseSection,
 ) -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
     let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
         return Ok(None);
     };
-    let channel = NeteaseChannel::with_credential(
-        &NeteaseConfig::default(),
-        &auth.music_u,
-        auth.user_id,
-        persist,
-    )
-    .wrap_err("构造 NeteaseChannel 失败")?;
+    let nc = mineral_cli::netease_config_from(netease);
+    let channel = NeteaseChannel::with_credential(&nc, &auth.music_u, auth.user_id, persist)
+        .wrap_err("构造 NeteaseChannel 失败")?;
     let arc: Arc<dyn MusicChannel> = Arc::new(channel);
     Ok(Some(arc))
 }

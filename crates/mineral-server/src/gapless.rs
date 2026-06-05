@@ -12,7 +12,7 @@ use mineral_protocol::PlaybackOrigin;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::download::Capturing;
-use crate::player::{PLAYBACK_QUALITY, PREFETCH_LEAD_MS, PlayerCore};
+use crate::player::PlayerCore;
 use crate::queue::next_in_queue;
 use crate::state::State;
 
@@ -93,14 +93,14 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     old_id
 }
 
-/// gapless 预排:进入曲终前窗口([`PREFETCH_LEAD_MS`])时,据下一曲来源预排 decoder 进引擎队列
+/// gapless 预排:进入曲终前窗口(配置 `daemon.gapless_prefetch_ms`)时,据下一曲来源预排 decoder 进引擎队列
 /// ——本地命中 / RepeatOne 直排,远端先取链 → [`on_prefetch_url_ready`] 再排。本曲只触发一次。
 pub(crate) fn check_prefetch(player: &PlayerCore) {
     let snap = player.audio_snapshot();
     if snap.duration_ms == 0 {
         return;
     }
-    if snap.duration_ms.saturating_sub(snap.position_ms) > PREFETCH_LEAD_MS {
+    if snap.duration_ms.saturating_sub(snap.position_ms) > player.gapless_prefetch_ms() {
         return;
     }
     let (cur_id, next) = player.with_state(|st| {
@@ -132,14 +132,14 @@ pub(crate) fn check_prefetch(player: &PlayerCore) {
         player.media_cache(),
         player.music_dir(),
         &next,
-        PLAYBACK_QUALITY,
+        player.playback_quality(),
     ) {
         queue_local_next(player, next, path, quality, origin);
     } else {
         player.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                 song_id: next.id,
-                quality: PLAYBACK_QUALITY,
+                quality: player.playback_quality(),
             }),
             Priority::Background,
         );
@@ -197,7 +197,7 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
     };
     match player
         .media_cache()
-        .capture_path(&next.id, PLAYBACK_QUALITY)
+        .capture_path(&next.id, player.playback_quality())
     {
         Some(path) => {
             player
@@ -205,7 +205,7 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
                 .append_next_capturing(play_url.url.clone(), path.clone());
             let cap = Capturing {
                 song: next.clone(),
-                quality: PLAYBACK_QUALITY,
+                quality: player.playback_quality(),
                 format: play_url.format.clone(),
                 path,
             };

@@ -11,42 +11,21 @@ use palette::{FromColor, IntoColor, Lab, Srgb};
 
 use crate::render::palette::{CoverPalette, Rgb};
 
-/// k-means 簇数 = 取出的重点色上限。6 个色沿频率轴铺开,既有层次又不糊成一片。
-const COVER_SWATCHES: usize = 6;
-
-/// k-means 初始中心的随机种子。**固定值是硬要求**:不固定则同封面每次取色结果不同、
-/// 颜色会跳,违反"过渡完就静止"。取任意固定整数即可。
-const COVER_KMEANS_SEED: u64 = 0x5EED_C0DE;
-
-/// k-means 最大迭代次数(库推荐量级)。封面色块少,20 次足够收敛。
-const COVER_KMEANS_MAX_ITER: usize = 20;
-
-/// k-means 收敛阈值。`palette` 文档对 Lab 空间推荐 5.0。
-const COVER_KMEANS_CONVERGE: f32 = 5.0;
-
-/// 丢弃近黑像素的 Lab 明度下限(L ∈ 0..=100)。避免纯黑背景霸占色板。
-const L_MIN: f32 = 8.0;
-
-/// 丢弃近白像素的 Lab 明度上限。避免纯白背景霸占色板。
-const L_MAX: f32 = 92.0;
-
-/// 丢弃近灰像素的 Lab 彩度下限(`√(a²+b²)`)。灰背景对沿频率铺色没有贡献。
-const CHROMA_MIN: f32 = 8.0;
-
-/// 过滤后有效像素占比低于此(%)则放弃过滤、改用全部像素。黑白 / 低饱和封面也得有色。
-const MIN_VALID_PIXELS_PCT: usize = 5;
-
 /// 从一张封面图提取频谱色板(Lab 明度升序的重点色)。
 ///
 /// 流程:像素整块转 Lab → 丢近黑/近白/近灰(有效像素过少则回退不过滤)→ k-means 聚类
 /// (固定 seed,确定性)→ 按 Lab 明度升序转回 sRGB。
 ///
 /// # Params:
-///   - `img`: 已解码(且 worker 已 resize 到 ≤ `COVER_MAX_DIM`)的封面图
+///   - `img`: 已解码(且 worker 已 resize 到配置上限内)的封面图
+///   - `k`: k-means 取色旋钮(配置 `tui.cover.kmeans` 段)
 ///
 /// # Return:
 ///   `Some(CoverPalette)`;尺寸为 0 / 有效像素为 0 / 聚类无结果时 `None`。
-pub fn extract_palette(img: &DynamicImage) -> Option<CoverPalette> {
+pub fn extract_palette(
+    img: &DynamicImage,
+    k: &mineral_config::KmeansConfig,
+) -> Option<CoverPalette> {
     let rgb = img.to_rgb8();
     if rgb.width() == 0 || rgb.height() == 0 {
         return None;
@@ -61,10 +40,14 @@ pub fn extract_palette(img: &DynamicImage) -> Option<CoverPalette> {
     }
 
     // 丢近黑 / 近白 / 近灰,避免背景色霸占色板。
-    let filtered: Vec<Lab> = all_lab.iter().copied().filter(is_vivid).collect();
+    let filtered: Vec<Lab> = all_lab
+        .iter()
+        .copied()
+        .filter(|lab| is_vivid(lab, k))
+        .collect();
     // 有效像素太少(黑白 / 低饱和封面)则不过滤,用全部像素兜底。
     let valid_pct = filtered.len().saturating_mul(100) / all_lab.len();
-    let samples: &[Lab] = if valid_pct < MIN_VALID_PIXELS_PCT {
+    let samples: &[Lab] = if valid_pct < *k.min_valid_pixels_pct() {
         &all_lab
     } else {
         &filtered
@@ -74,12 +57,12 @@ pub fn extract_palette(img: &DynamicImage) -> Option<CoverPalette> {
     }
 
     let result = get_kmeans(
-        COVER_SWATCHES,
-        COVER_KMEANS_MAX_ITER,
-        COVER_KMEANS_CONVERGE,
+        *k.swatches(),
+        *k.max_iter(),
+        *k.converge(),
         false, /*verbose*/
         samples,
-        COVER_KMEANS_SEED,
+        *k.seed(),
     );
     // `sort_indexed_colors` 内置丢弃空簇 + 按 L 暗→亮排序,正好是"低频暗→高频亮"。
     let sorted = Lab::sort_indexed_colors(&result.centroids, &result.indices);
@@ -87,16 +70,16 @@ pub fn extract_palette(img: &DynamicImage) -> Option<CoverPalette> {
     CoverPalette::new(swatches)
 }
 
-/// 像素是否"有色":明度在 [`L_MIN`]..=[`L_MAX`] 且彩度 ≥ [`CHROMA_MIN`]。
+/// 像素是否"有色":明度在 `l_min..=l_max` 且彩度 ≥ `chroma_min`(配置 kmeans 段)。
 ///
 /// # Params:
 ///   - `lab`: 像素的 Lab 颜色
 ///
 /// # Return:
 ///   既不近黑/近白、也不近灰则 `true`。
-fn is_vivid(lab: &Lab) -> bool {
+fn is_vivid(lab: &Lab, k: &mineral_config::KmeansConfig) -> bool {
     let chroma = (lab.a * lab.a + lab.b * lab.b).sqrt();
-    lab.l >= L_MIN && lab.l <= L_MAX && chroma >= CHROMA_MIN
+    lab.l >= *k.l_min() && lab.l <= *k.l_max() && chroma >= *k.chroma_min()
 }
 
 /// 把一个 Lab 簇心转回 sRGB [`Rgb`]。`palette` 内部做 gamma 编码 + clamp,
@@ -117,8 +100,20 @@ mod tests {
     use image::{DynamicImage, RgbImage};
     use palette::{IntoColor, Lab, Srgb};
 
-    use super::{COVER_SWATCHES, extract_palette};
+    use super::extract_palette;
     use crate::render::palette::Rgb;
+
+    /// 测试对照值 = default.lua 的 `cover.kmeans.swatches`。
+    const COVER_SWATCHES: usize = 6;
+
+    /// defaults 配置的 kmeans 段(= 接线前硬编码常量)。
+    fn kcfg() -> color_eyre::Result<mineral_config::KmeansConfig> {
+        Ok(mineral_config::Config::defaults()?
+            .tui()
+            .cover()
+            .kmeans()
+            .clone())
+    }
 
     /// 造一张横向均分 `bands` 色块的封面图(60×60),供取色测试喂入。
     ///
@@ -153,7 +148,8 @@ mod tests {
             Rgb::new(200, 40, 40),
             Rgb::new(180, 220, 60),
         ])?;
-        let pal = extract_palette(&img).ok_or_else(|| color_eyre::eyre::eyre!("应取出色板"))?;
+        let pal =
+            extract_palette(&img, &kcfg()?).ok_or_else(|| color_eyre::eyre::eyre!("应取出色板"))?;
         let sw = pal.swatches();
         assert!(
             (2..=COVER_SWATCHES).contains(&sw.len()),
@@ -173,7 +169,7 @@ mod tests {
     #[test]
     fn near_black_falls_back_to_all_pixels() -> color_eyre::Result<()> {
         let img = banded_image(&[Rgb::new(2, 2, 2)])?;
-        let pal = extract_palette(&img)
+        let pal = extract_palette(&img, &kcfg()?)
             .ok_or_else(|| color_eyre::eyre::eyre!("黑白封面应走回退给出色板"))?;
         assert!(!pal.swatches().is_empty(), "回退后色板应非空");
         Ok(())
@@ -181,8 +177,9 @@ mod tests {
 
     /// 尺寸为 0 的图返回 `None`,不 panic。
     #[test]
-    fn empty_image_returns_none() {
+    fn empty_image_returns_none() -> color_eyre::Result<()> {
         let img = DynamicImage::ImageRgb8(RgbImage::new(0, 0));
-        assert!(extract_palette(&img).is_none());
+        assert!(extract_palette(&img, &kcfg()?).is_none());
+        Ok(())
     }
 }

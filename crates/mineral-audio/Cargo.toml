@@ -13,12 +13,14 @@ mineral-log   = { workspace = true }
 mineral-model = { workspace = true }
 
 color-eyre      = { workspace = true }
+derive-getters  = { workspace = true }
 parking_lot     = { workspace = true }
 ringbuf         = { workspace = true }
 rodio           = { workspace = true }
 serde           = { workspace = true }
 stream-download = { workspace = true }
 tokio           = { workspace = true }
+typed-builder   = { workspace = true }
 url             = { workspace = true }
 
 [dev-dependencies]

@@ -1,6 +1,6 @@
 //! Mineral 异步任务调度库。
 //!
-//! 进程内库,使用方 `Scheduler::new(channels)` 拿到一个 handle,在自己进程里
+//! 进程内库,使用方 `Scheduler::new(channels, workers_per_channel)` 拿到一个 handle,在自己进程里
 //! 提交 / 取消 / 拉事件。库本身不知道使用方是 TUI 还是 daemon。
 //!
 //! 入口:[`Scheduler`]。

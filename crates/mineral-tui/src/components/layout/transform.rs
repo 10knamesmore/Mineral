@@ -192,10 +192,11 @@ mod tests {
 
     /// 形变端点:t=0 各保留面板回常规位、t=1000 抵达全屏位,消失面板在全屏端收成零面积。
     #[test]
-    fn morph_endpoints_match_normal_and_full() {
+    fn morph_endpoints_match_normal_and_full() -> color_eyre::Result<()> {
+        let cfg = mineral_config::Config::defaults()?.tui().layout().clone();
         let area = Rect::new(0, 0, 100, 40);
-        let normal = compute(area);
-        let full = compute_fullscreen(area);
+        let normal = compute(area, &cfg);
+        let full = compute_fullscreen(area, &cfg);
 
         let m0 = morph_areas(&normal, &full, /*t*/ 0);
         assert_eq!(m0.transport, normal.transport, "t=0 transport 回常规位");
@@ -208,5 +209,6 @@ mod tests {
         assert_eq!(m1.lyrics, full.lyrics, "t=1000 lyrics 抵全屏右半");
         assert_eq!(m1.left.width, 0, "t=1000 左栏收零宽");
         assert_eq!(m1.left.height, 0, "t=1000 左栏收零高");
+        Ok(())
     }
 }

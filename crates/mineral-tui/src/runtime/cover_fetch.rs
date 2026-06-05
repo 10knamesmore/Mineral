@@ -1,6 +1,6 @@
 //! Client 端的封面图 fetcher。
 //!
-//! 4 个 tokio worker 共享一条 mpsc 队列:worker 上 async 抓字节,解码+resize 经
+//! 若干 tokio worker(数量 = 配置 `cover.download_workers`)共享一条 mpsc 队列:worker 上 async 抓字节,解码+resize 经
 //! `spawn_blocking` 落到 blocking 线程池(CPU 密集,别占 runtime worker)。
 //! 跟 mineral-task 的 lane 不同,本 fetcher **归 client 所有** —— 封面是装饰性
 //! 资源,server 不该管。多 client 各持一个 fetcher,各 fetch 各 cache。
@@ -21,6 +21,7 @@ use image::DynamicImage;
 use isahc::AsyncReadResponseExt;
 use isahc::HttpClient;
 use isahc::config::Configurable;
+use mineral_config::{CoverConfig, CoverStorageMode};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::{CacheIndex, ClientStore};
 use parking_lot::Mutex;
@@ -28,39 +29,6 @@ use tokio::sync::mpsc;
 
 use crate::render::palette::CoverPalette;
 use crate::runtime::cover_colors::extract_palette;
-
-/// 单一 worker 池的并发度。封面图都是几十 KB,4 路够覆盖快速翻 selection。
-const WORKERS: usize = 4;
-
-/// HTTP 客户端 timeout。封面比 audio 流小得多,30s 足够慢网兜底。
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// 解码后 resize 到此最大边(像素),保持比例。
-///
-/// 终端 cell 典型 8×16 px,cover 面板大概 30 cols × 15 rows ≈ 240×240 px;
-/// 384 远超显示需求,留点余量给高 DPI / 大字号。原图常常 1024×1024(网易裸 URL),
-/// resize 到 384 内存降 ~7x,RGBA 256KB/张 vs 1.5MB+。视觉上完全无损。
-const COVER_MAX_DIM: u32 = 384;
-
-/// Resized 模式重编码 JPEG 的质量(0–100)。缩略图用,85 视觉无损且够小。
-const COVER_JPEG_QUALITY: u8 = 85;
-
-/// 封面磁盘缓存的存储形态。配置系统落地前由 [`COVER_STORAGE`] 选定,两种都实现。
-#[derive(Clone, Copy)]
-enum CoverStorageMode {
-    /// 原始下载字节:无损原图,扩展名按字节嗅探(jpg/png/webp)。
-    Raw,
-
-    /// `decode_resize` 后重编码 JPEG:体积小,但锁定 ≤[`COVER_MAX_DIM`]。
-    ///
-    /// 当前 [`COVER_STORAGE`] 选 `Raw` 故非 test 构建不构造它(由 `bytes_for_cache` 测试覆盖);
-    /// 配置系统接入后会被选用,届时移除本 allow。
-    #[allow(dead_code)]
-    Resized,
-}
-
-/// 当前封面磁盘存储模式。配置系统接入后改为读配置,这里是唯一切换点。
-const COVER_STORAGE: CoverStorageMode = CoverStorageMode::Raw;
 
 /// worker 完成一张封面的产物:图必有,色板尽力而为。
 ///
@@ -70,7 +38,7 @@ pub struct CoverReady {
     /// 封面来源 URL(= 缓存键 / drain 回填键)。
     pub url: MediaUrl,
 
-    /// 解码 + resize 后的内存图(≤ [`COVER_MAX_DIM`])。
+    /// 解码 + resize 后的内存图(≤ 配置 `cover.max_dim`)。
     pub image: Arc<DynamicImage>,
 
     /// 从图提取的频谱色板;取色失败为 `None`(频谱回退 hue 漂移)。
@@ -91,7 +59,7 @@ struct PackedCover {
     /// 解码 + 取色结果。
     decoded: DecodedCover,
 
-    /// 写回磁盘缓存的字节(按 [`COVER_STORAGE`] 决定原图 / 重编码)。
+    /// 写回磁盘缓存的字节(按配置 `cover.storage` 决定原图 / 重编码)。
     store_bytes: Vec<u8>,
 
     /// 缓存文件扩展名。
@@ -101,7 +69,7 @@ struct PackedCover {
 /// 就绪 buffer 类型别名。worker 端 push、client tick 端 drain。
 type ReadyBuf = Arc<Mutex<Vec<CoverReady>>>;
 
-/// Client 端封面 fetcher。`spawn` 起 4 worker;`request` 投递;`drain_ready` 拉就绪。
+/// Client 端封面 fetcher。`spawn` 起 worker 池;`request` 投递;`drain_ready` 拉就绪。
 pub struct CoverFetcher {
     /// 待 fetch 的 `(来源, URL)` 队列。worker 从此抢占式拉;来源决定落盘子目录。
     req_tx: mpsc::UnboundedSender<(SourceKind, MediaUrl)>,
@@ -115,25 +83,32 @@ pub struct CoverFetcher {
 type CoverCache = Option<Arc<CacheIndex>>;
 
 impl CoverFetcher {
-    /// 起 4 worker。caller 必须在 tokio runtime 里(`mineral_tui::run` 是 async fn,
-    /// 自然满足);失败通常意味着 isahc 客户端建不起来(系统证书 / TLS 问题等)。
-    pub async fn spawn() -> color_eyre::Result<Self> {
+    /// 起 worker 池(数量 = `cfg.download_workers`)。caller 必须在 tokio runtime 里
+    /// (`mineral_tui::run` 是 async fn,自然满足);失败通常意味着 isahc 客户端建不起来
+    /// (系统证书 / TLS 问题等)。
+    ///
+    /// # Params:
+    ///   - `cfg`: 封面段配置(timeout / 尺寸 / 存储形态 / 并发 / kmeans)
+    ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `cache.cover_capacity`)
+    pub async fn spawn(cfg: CoverConfig, cover_capacity: u64) -> color_eyre::Result<Self> {
         let (tx, rx) = mpsc::unbounded_channel::<(SourceKind, MediaUrl)>();
         let client = HttpClient::builder()
-            .timeout(HTTP_TIMEOUT)
+            .timeout(Duration::from_secs(*cfg.http_timeout_secs()))
             .build()
             .map_err(|e| eyre!("isahc client init failed: {e}"))?;
         // 磁盘缓存是优化项:目录解析 / open 失败不致命,降级成直连网络不缓存。
-        let cache = Self::open_cache().await;
+        let cache = Self::open_cache(cover_capacity).await;
         let ready = Arc::new(Mutex::new(Vec::<CoverReady>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
-        for _ in 0..WORKERS {
+        let cfg = Arc::new(cfg);
+        for _ in 0..(*cfg.download_workers()).max(1) {
             let rx = Arc::clone(&rx);
             let ready = Arc::clone(&ready);
             let client = client.clone();
             let cache = cache.clone();
+            let cfg = Arc::clone(&cfg);
             tokio::spawn(async move {
-                worker_loop(rx, ready, client, cache).await;
+                worker_loop(rx, ready, client, cache, cfg).await;
             });
         }
         Ok(Self { req_tx: tx, ready })
@@ -142,9 +117,12 @@ impl CoverFetcher {
     /// 打开封面磁盘缓存(`cover_cache` 表落 client 的 `tui.db`,文件落 `cover_cache_dir`)。
     /// 目录解析 / open 失败时 warn + 返回 `None`(降级成不缓存),不让 fetcher 起步失败。
     ///
+    /// # Params:
+    ///   - `capacity`: 缓存容量上限(字节,配置 `cache.cover_capacity`)
+    ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
-    async fn open_cache() -> CoverCache {
+    async fn open_cache(capacity: u64) -> CoverCache {
         let (db, dir) = match (mineral_paths::tui_db(), mineral_paths::cover_cache_dir()) {
             (Ok(db), Ok(dir)) => (db, dir),
             (Err(e), _) | (_, Err(e)) => {
@@ -167,10 +145,7 @@ impl CoverFetcher {
                 return None;
             }
         };
-        match store
-            .cover_cache(dir, mineral_config::COVER_CACHE_CAPACITY)
-            .await
-        {
+        match store.cover_cache(dir, capacity).await {
             Ok(c) => Some(Arc::new(c)),
             Err(e) => {
                 mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存打开失败,降级不缓存");
@@ -211,6 +186,7 @@ async fn worker_loop(
     ready: ReadyBuf,
     client: HttpClient,
     cache: CoverCache,
+    cfg: Arc<CoverConfig>,
 ) {
     loop {
         let (source, url) = {
@@ -220,7 +196,7 @@ async fn worker_loop(
                 None => return, // 队列关了
             }
         };
-        if let Some(decoded) = fetch_and_decode(source, &url, &client, cache.as_ref()).await {
+        if let Some(decoded) = fetch_and_decode(source, &url, &client, cache.as_ref(), &cfg).await {
             ready.lock().push(CoverReady {
                 url,
                 image: Arc::new(decoded.image),
@@ -233,7 +209,7 @@ async fn worker_loop(
 /// 取一张封面并解码成内存图,优先磁盘缓存。
 ///
 /// 命中:读盘字节(可能是原图或 resize 成品,都合法)→ 解码。未命中(仅 Remote):下载 →
-/// 解码 → 按 [`COVER_STORAGE`] 决定落盘内容写回缓存(`<source>/<hash>.<ext>`)。
+/// 解码 → 按配置 `cover.storage` 决定落盘内容写回缓存(`<source>/<hash>.<ext>`)。
 /// 解码/缩放/重编码是 CPU 密集活儿,经 [`tokio::task::spawn_blocking`] 落 blocking 池,
 /// 不占 runtime worker。Local:直接读盘解码,不进缓存。
 ///
@@ -242,6 +218,7 @@ async fn worker_loop(
 ///   - `url`: 封面来源 URL
 ///   - `client`: isahc 客户端(Remote 走它)
 ///   - `cache`: 磁盘缓存(可缺;`None` 直连不缓存)
+///   - `cfg`: 封面段配置(尺寸 / 存储形态 / kmeans)
 ///
 /// # Return:
 ///   解码后的图 + 色板;任一步失败返回 `None`。
@@ -250,12 +227,13 @@ async fn fetch_and_decode(
     url: &MediaUrl,
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
+    cfg: &Arc<CoverConfig>,
 ) -> Option<DecodedCover> {
     match url {
         MediaUrl::Remote(u) => {
             let key = u.as_str();
             if let Some(bytes) = cached_read(key, cache).await {
-                return decode_blocking(url, bytes).await;
+                return decode_blocking(url, bytes, cfg).await;
             }
             let raw = match download(client, key).await {
                 Ok(b) => b,
@@ -264,7 +242,7 @@ async fn fetch_and_decode(
                     return None;
                 }
             };
-            let packed = pack_blocking(url, raw).await?;
+            let packed = pack_blocking(url, raw, cfg).await?;
             if let Some(cache) = cache {
                 store_best_effort(cache, source, key, packed.store_bytes, packed.ext);
             }
@@ -279,7 +257,7 @@ async fn fetch_and_decode(
                     return None;
                 }
             };
-            decode_blocking(url, bytes).await
+            decode_blocking(url, bytes, cfg).await
         }
     }
 }
@@ -326,13 +304,19 @@ async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>>
 /// # Params:
 ///   - `url`: 仅用于日志
 ///   - `bytes`: 待解码字节
+///   - `cfg`: 封面段配置(resize 上限 + kmeans)
 ///
 /// # Return:
 ///   解码后的图 + 色板;失败返回 `None`(已打日志)。
-async fn decode_blocking(url: &MediaUrl, bytes: Vec<u8>) -> Option<DecodedCover> {
+async fn decode_blocking(
+    url: &MediaUrl,
+    bytes: Vec<u8>,
+    cfg: &Arc<CoverConfig>,
+) -> Option<DecodedCover> {
+    let cfg = Arc::clone(cfg);
     let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
-        let image = decode_resize(&bytes)?;
-        let palette = extract_palette(&image);
+        let image = decode_resize(&bytes, *cfg.max_dim())?;
+        let palette = extract_palette(&image, cfg.kmeans());
         Ok(DecodedCover { image, palette })
     })
     .await;
@@ -349,24 +333,21 @@ async fn decode_blocking(url: &MediaUrl, bytes: Vec<u8>) -> Option<DecodedCover>
     }
 }
 
-/// 同步把字节解码成 image,大图等比 resize 到 `COVER_MAX_DIM` 之内。CPU 密集,由
+/// 同步把字节解码成 image,大图等比 resize 到 `max_dim` 之内。CPU 密集,由
 /// [`fetch_and_decode`] 经 `spawn_blocking` 调,**不要**直接在 async 上下文同步调用。
 ///
 /// # Params:
 ///   - `bytes`: 封面图原始字节(任意 image 支持的编码)
+///   - `max_dim`: resize 最大边(像素,配置 `cover.max_dim`)
 ///
 /// # Return:
 ///   解码并(按需)缩放后的图;解码失败返回 `Err`。
-fn decode_resize(bytes: &[u8]) -> color_eyre::Result<DynamicImage> {
+fn decode_resize(bytes: &[u8], max_dim: u32) -> color_eyre::Result<DynamicImage> {
     let img = image::load_from_memory(bytes).map_err(|e| eyre!("decode: {e}"))?;
-    // resize 到 COVER_MAX_DIM 之内 —— 保持纵横比,Triangle 滤镜质量比 Nearest 好、
+    // resize 到 max_dim 之内 —— 保持纵横比,Triangle 滤镜质量比 Nearest 好、
     // 比 Lanczos3 快一档,对缩略图够用。原图小于这个就直接用(no-op)。
-    let resized = if img.width() > COVER_MAX_DIM || img.height() > COVER_MAX_DIM {
-        img.resize(
-            COVER_MAX_DIM,
-            COVER_MAX_DIM,
-            image::imageops::FilterType::Triangle,
-        )
+    let resized = if img.width() > max_dim || img.height() > max_dim {
+        img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle)
     } else {
         img
     };
@@ -378,14 +359,21 @@ fn decode_resize(bytes: &[u8]) -> color_eyre::Result<DynamicImage> {
 /// # Params:
 ///   - `url`: 仅用于日志
 ///   - `raw`: 下载到的原始字节
+///   - `cfg`: 封面段配置(resize 上限 / 存储形态 / JPEG 质量 / kmeans)
 ///
 /// # Return:
 ///   [`PackedCover`](内存图 + 色板 + 落盘字节 + 扩展名);解码 / 编码 / join 失败返回 `None`(已打日志)。
-async fn pack_blocking(url: &MediaUrl, raw: Vec<u8>) -> Option<PackedCover> {
+async fn pack_blocking(
+    url: &MediaUrl,
+    raw: Vec<u8>,
+    cfg: &Arc<CoverConfig>,
+) -> Option<PackedCover> {
+    let cfg = Arc::clone(cfg);
     let packed = tokio::task::spawn_blocking(move || -> color_eyre::Result<PackedCover> {
-        let image = decode_resize(&raw)?;
-        let (store_bytes, ext) = bytes_for_cache(COVER_STORAGE, &raw, &image)?;
-        let palette = extract_palette(&image);
+        let image = decode_resize(&raw, *cfg.max_dim())?;
+        let (store_bytes, ext) =
+            bytes_for_cache(*cfg.storage(), &raw, &image, *cfg.jpeg_quality())?;
+        let palette = extract_palette(&image, cfg.kmeans());
         Ok(PackedCover {
             decoded: DecodedCover { image, palette },
             store_bytes,
@@ -456,9 +444,10 @@ fn cover_file_name(key: &str, ext: &str) -> String {
 /// - [`CoverStorageMode::Resized`] → `(重编码 JPEG, "jpg")`,复用已解码的 `img`,不二次解码。
 ///
 /// # Params:
-///   - `mode`: 存储模式
+///   - `mode`: 存储模式(配置 `cover.storage`)
 ///   - `raw`: 原始下载字节
 ///   - `img`: 已 `decode_resize` 的内存图
+///   - `jpeg_quality`: Resized 模式重编码 JPEG 的质量(0–100,配置 `cover.jpeg_quality`)
 ///
 /// # Return:
 ///   `(落盘字节, 扩展名)`;JPEG 编码失败返回 `Err`。
@@ -466,17 +455,19 @@ fn bytes_for_cache(
     mode: CoverStorageMode,
     raw: &[u8],
     img: &DynamicImage,
+    jpeg_quality: u8,
 ) -> color_eyre::Result<(Vec<u8>, &'static str)> {
     match mode {
-        CoverStorageMode::Raw => Ok((raw.to_vec(), sniff_ext(raw))),
         CoverStorageMode::Resized => {
             let mut buf = Cursor::new(Vec::<u8>::new());
             let encoder =
-                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, COVER_JPEG_QUALITY);
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, jpeg_quality);
             img.write_with_encoder(encoder)
                 .map_err(|e| eyre!("jpeg encode: {e}"))?;
             Ok((buf.into_inner(), "jpg"))
         }
+        // CoverStorageMode 是 #[non_exhaustive]:未来新形态接线前按 Raw(无损)兜底。
+        CoverStorageMode::Raw | _ => Ok((raw.to_vec(), sniff_ext(raw))),
     }
 }
 
@@ -502,10 +493,13 @@ mod tests {
     use image::{DynamicImage, ImageFormat, RgbImage};
     use mineral_persist::ClientStore;
 
-    use super::{
-        COVER_MAX_DIM, CoverStorageMode, bytes_for_cache, cached_read, cover_file_name,
-        decode_resize,
-    };
+    use super::{CoverStorageMode, bytes_for_cache, cached_read, cover_file_name, decode_resize};
+
+    /// 测试入参:resize 上限(= default.lua 的 `cover.max_dim`)。
+    const COVER_MAX_DIM: u32 = 384;
+
+    /// 测试入参:Resized 模式 JPEG 质量(任意合法值即可,函数行为与具体值无关)。
+    const COVER_JPEG_QUALITY: u8 = 85;
 
     /// 把指定尺寸的纯色 RGB 图编码成 PNG 字节,供 `decode_resize` 测试喂入。
     ///
@@ -541,8 +535,8 @@ mod tests {
     #[test]
     fn bytes_for_cache_raw_keeps_png() -> color_eyre::Result<()> {
         let png = png_bytes(/*w*/ 10, /*h*/ 10)?;
-        let img = decode_resize(&png)?;
-        let (bytes, ext) = bytes_for_cache(CoverStorageMode::Raw, &png, &img)?;
+        let img = decode_resize(&png, COVER_MAX_DIM)?;
+        let (bytes, ext) = bytes_for_cache(CoverStorageMode::Raw, &png, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "png");
         assert_eq!(bytes, png, "Raw 应原样落盘下载字节");
         Ok(())
@@ -552,8 +546,8 @@ mod tests {
     #[test]
     fn bytes_for_cache_raw_sniffs_jpeg() -> color_eyre::Result<()> {
         let jpg = jpeg_bytes(/*w*/ 10, /*h*/ 10)?;
-        let img = decode_resize(&jpg)?;
-        let (_, ext) = bytes_for_cache(CoverStorageMode::Raw, &jpg, &img)?;
+        let img = decode_resize(&jpg, COVER_MAX_DIM)?;
+        let (_, ext) = bytes_for_cache(CoverStorageMode::Raw, &jpg, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "jpg");
         Ok(())
     }
@@ -562,8 +556,9 @@ mod tests {
     #[test]
     fn bytes_for_cache_resized_reencodes_jpeg_within_max_dim() -> color_eyre::Result<()> {
         let png = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
-        let img = decode_resize(&png)?; // 已 resize 到 ≤384
-        let (bytes, ext) = bytes_for_cache(CoverStorageMode::Resized, &png, &img)?;
+        let img = decode_resize(&png, COVER_MAX_DIM)?; // 已 resize 到 ≤384
+        let (bytes, ext) =
+            bytes_for_cache(CoverStorageMode::Resized, &png, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "jpg");
         let back = image::load_from_memory(&bytes)
             .map_err(|e| color_eyre::eyre::eyre!("decode back: {e}"))?;
@@ -580,7 +575,7 @@ mod tests {
     #[test]
     fn large_image_is_clamped() -> color_eyre::Result<()> {
         let bytes = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
-        let img = decode_resize(&bytes)?;
+        let img = decode_resize(&bytes, COVER_MAX_DIM)?;
         assert!(
             img.width() <= COVER_MAX_DIM && img.height() <= COVER_MAX_DIM,
             "尺寸应被缩到 {COVER_MAX_DIM} 内,实际 {}x{}",
@@ -594,7 +589,7 @@ mod tests {
     #[test]
     fn small_image_unchanged() -> color_eyre::Result<()> {
         let bytes = png_bytes(/*w*/ 100, /*h*/ 100)?;
-        let img = decode_resize(&bytes)?;
+        let img = decode_resize(&bytes, COVER_MAX_DIM)?;
         assert_eq!((img.width(), img.height()), (100, 100));
         Ok(())
     }
@@ -602,7 +597,7 @@ mod tests {
     /// 坏字节解码失败返回 `Err`,不 panic。
     #[test]
     fn garbage_bytes_error() {
-        assert!(decode_resize(b"not an image").is_err());
+        assert!(decode_resize(b"not an image", COVER_MAX_DIM).is_err());
     }
 
     /// 缓存命中时 `cached_read` 直读缓存文件返回字节(结构上不碰网络——它不收 client)。

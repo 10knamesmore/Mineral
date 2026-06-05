@@ -1,4 +1,4 @@
-//! 预取段(挂在 `TuiConfig` 下):各 lookahead 半径 + 去抖 + 抓取并发。
+//! 预取段(挂在 `TuiConfig` 下):各 lookahead 半径 + 去抖。
 
 use serde::Deserialize;
 
@@ -20,7 +20,4 @@ pub struct PrefetchConfig {
 
     /// 全屏预热沿播放队列向前看的首数。
     prewarm_ahead: usize,
-
-    /// 每个 channel 的并发抓取 worker 数。
-    channel_workers_per: usize,
 }

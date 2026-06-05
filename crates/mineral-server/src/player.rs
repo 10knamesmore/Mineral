@@ -27,23 +27,6 @@ use crate::media_cache::MediaCache;
 use crate::queue::{next_in_queue, play_mode_str, prev_in_queue};
 use crate::state::State;
 
-/// 播放音质。后续接 config 时改读配置。
-pub(crate) const PLAYBACK_QUALITY: BitRate = BitRate::Exhigh;
-
-/// gapless 预排触发距曲终的剩余时间(ms)。10s 窗口给下一曲充裕的链下建流 + 预缓冲时间,
-/// 配合「宁可有间隙不卡顿」的取舍,真正退化成 gap 的概率更低。
-pub(crate) const PREFETCH_LEAD_MS: u64 = 10_000;
-
-/// `p` 键的「回开头 vs 上一首」分界(ms)。
-const PREV_RESTART_THRESHOLD_MS: u64 = 3_000;
-
-/// 长跑 task 的醒来间隔。20ms 远小于 client 30fps tick,事件最坏延迟 ~50ms。
-const TICK_INTERVAL_MS: u64 = 20;
-
-/// 会话「位置刷新」的节流间隔:background_loop 每隔这么久落盘一次 position。
-/// 状态变化(切歌/换队列/改模式)有各自的即时 save,这里只为周期刷新进度。
-const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(15);
-
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
 #[derive(Clone)]
 pub struct PlayerCore {
@@ -93,8 +76,35 @@ struct Inner {
     /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
     client_events: Mutex<Vec<TaskEvent>>,
 
-    /// 上次「周期 position 刷新」落盘时刻;background_loop 按 [`SESSION_SAVE_INTERVAL`] 节流。
+    /// 上次「周期 position 刷新」落盘时刻;background_loop 按 `session_save` 节流。
     last_session_save: Mutex<Instant>,
+
+    /// 在线播放音质(配置 `audio.playback_quality`,独立于下载音质)。
+    playback_quality: BitRate,
+
+    /// gapless 预排触发距曲终的剩余时间(ms,配置 `daemon.gapless_prefetch_ms`)。
+    gapless_prefetch_ms: u64,
+
+    /// `p` 键的「回开头 vs 上一首」分界(ms,配置 `daemon.prev_restart_threshold_ms`)。
+    prev_restart_threshold_ms: u64,
+
+    /// 长跑后台 task 的醒来间隔(ms,配置 `daemon.player_tick_ms`)。
+    player_tick_ms: u64,
+
+    /// 会话「位置刷新」的节流间隔(配置 `daemon.session_save_secs`)。
+    session_save: Duration,
+
+    /// 下载音质(配置 `download.quality`,与播放音质各自独立)。
+    download_quality: BitRate,
+
+    /// 下载测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)。
+    download_speed_tick: Duration,
+
+    /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
+    media_report_interval_ms: u64,
+
+    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `daemon.seek_threshold_ms`)。
+    media_seek_threshold_ms: u64,
 }
 
 impl PlayerCore {
@@ -106,14 +116,16 @@ impl PlayerCore {
     ///   - `channels`: 已注入的全部音乐源 handle。
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
+    ///   - `config`: daemon 配置切片(音质 / gapless 窗口 / 各间隔 / 下载目录)。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
         channels: Vec<Arc<dyn MusicChannel>>,
         persist: ServerStore,
         media_cache: MediaCache,
+        config: &crate::config::ServerConfig,
     ) -> Self {
-        let (http, music_dir) = crate::download::open_env();
+        let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             audio,
@@ -130,6 +142,15 @@ impl PlayerCore {
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
             last_session_save: Mutex::new(Instant::now()),
+            playback_quality: *config.playback_quality(),
+            gapless_prefetch_ms: *config.daemon().gapless_prefetch_ms(),
+            prev_restart_threshold_ms: *config.daemon().prev_restart_threshold_ms(),
+            player_tick_ms: *config.daemon().player_tick_ms(),
+            session_save: Duration::from_secs(*config.daemon().session_save_secs()),
+            download_quality: *config.download().quality(),
+            download_speed_tick: Duration::from_millis(*config.daemon().download_speed_tick_ms()),
+            media_report_interval_ms: *config.daemon().report_interval_ms(),
+            media_seek_threshold_ms: *config.daemon().seek_threshold_ms(),
         });
         let me = Self { inner };
         let bg = me.clone();
@@ -193,6 +214,36 @@ impl PlayerCore {
     /// 下载进度共享态句柄(下载任务实时写入)。
     pub(crate) fn progress_handle(&self) -> &Arc<Mutex<DownloadProgress>> {
         &self.inner.download_progress
+    }
+
+    /// 在线播放音质(配置 `audio.playback_quality`)。
+    pub(crate) fn playback_quality(&self) -> BitRate {
+        self.inner.playback_quality
+    }
+
+    /// gapless 预排触发距曲终的剩余时间(ms,配置 `daemon.gapless_prefetch_ms`)。
+    pub(crate) fn gapless_prefetch_ms(&self) -> u64 {
+        self.inner.gapless_prefetch_ms
+    }
+
+    /// 下载音质(配置 `download.quality`)。
+    pub(crate) fn download_quality(&self) -> BitRate {
+        self.inner.download_quality
+    }
+
+    /// 下载测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)。
+    pub(crate) fn download_speed_tick(&self) -> Duration {
+        self.inner.download_speed_tick
+    }
+
+    /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
+    pub(crate) fn media_report_interval_ms(&self) -> u64 {
+        self.inner.media_report_interval_ms
+    }
+
+    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `daemon.seek_threshold_ms`)。
+    pub(crate) fn media_seek_threshold_ms(&self) -> u64 {
+        self.inner.media_seek_threshold_ms
     }
 
     /// 当前下载进度快照(client 轮询:TUI 弹窗 / CLI status)。
@@ -308,13 +359,13 @@ impl PlayerCore {
         let prev_download_complete = self.inner.audio.snapshot().download_complete;
         self.inner.audio.stop();
 
-        // 命中本地副本?(cache 或 download 导出,音质 >= PLAYBACK_QUALITY)
+        // 命中本地副本?(cache 或 download 导出,音质 >= 配置的播放音质)
         // → 直接本地播,跳过整条 SongUrl 网络路径。
         let local_hit = crate::resolve::resolve_local(
             &self.inner.media_cache,
             self.inner.music_dir.as_deref(),
             song,
-            PLAYBACK_QUALITY,
+            self.inner.playback_quality,
         );
         // 来源:本地命中 → cache/download(resolve 已分辨);否则(prefetch / fetch)→ 远端。
         let origin = local_hit
@@ -372,7 +423,7 @@ impl PlayerCore {
             st.bump_current();
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using queued url");
-            download::play_capturing(self, song, &pu, PLAYBACK_QUALITY);
+            download::play_capturing(self, song, &pu, self.inner.playback_quality);
             let mut st = self.inner.state.lock();
             st.play_url = Some(pu);
             st.bump_current();
@@ -381,7 +432,7 @@ impl PlayerCore {
             self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     song_id: song.id.clone(),
-                    quality: PLAYBACK_QUALITY,
+                    quality: self.inner.playback_quality,
                 }),
                 Priority::User,
             );
@@ -462,7 +513,7 @@ impl PlayerCore {
             if st.current_song.is_none() {
                 return;
             }
-            if pos > PREV_RESTART_THRESHOLD_MS {
+            if pos > self.inner.prev_restart_threshold_ms {
                 drop(st);
                 // 回开头不算切歌/跳过,不打点。
                 self.inner.audio.seek(0);
@@ -562,7 +613,7 @@ impl PlayerCore {
 
     /// 长跑后台 loop:每 tick 一次 events drain + harvest + auto-next + prefetch 检查。
     async fn background_loop(self) {
-        let mut tick = tokio::time::interval(Duration::from_millis(TICK_INTERVAL_MS));
+        let mut tick = tokio::time::interval(Duration::from_millis(self.inner.player_tick_ms));
         loop {
             tick.tick().await;
             self.consume_events_once();
@@ -573,12 +624,12 @@ impl PlayerCore {
         }
     }
 
-    /// 节流落盘:距上次周期 save 超过 [`SESSION_SAVE_INTERVAL`] 才 save 一次(主要刷新 position)。
+    /// 节流落盘:距上次周期 save 超过配置的 `session_save` 间隔才 save 一次(主要刷新 position)。
     /// 状态变化类 save 走各自的即时 [`Self::spawn_save_session`],此处只补周期进度。
     fn check_session_save(&self) {
         {
             let mut last = self.inner.last_session_save.lock();
-            if last.elapsed() < SESSION_SAVE_INTERVAL {
+            if last.elapsed() < self.inner.session_save {
                 return;
             }
             *last = Instant::now();
@@ -635,7 +686,7 @@ impl PlayerCore {
             Route::Current(song) => {
                 mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
                 if let Some(song) = song {
-                    download::play_capturing(self, &song, &play_url, PLAYBACK_QUALITY);
+                    download::play_capturing(self, &song, &play_url, self.inner.playback_quality);
                 }
             }
             Route::Prefetch => {
@@ -730,6 +781,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use mineral_audio::{AudioHandle, AudioMode};
@@ -870,8 +922,10 @@ mod tests {
         music_dir: Option<PathBuf>,
         media_cache: MediaCache,
     ) -> color_eyre::Result<PlayerCore> {
-        let scheduler = Scheduler::new(&channels);
-        let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull)?;
+        // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
+        let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
+        let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
+        let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
         let inner = Arc::new(Inner {
             audio,
             scheduler,
@@ -887,6 +941,15 @@ mod tests {
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
             last_session_save: Mutex::new(std::time::Instant::now()),
+            playback_quality: *cfg.playback_quality(),
+            gapless_prefetch_ms: *cfg.daemon().gapless_prefetch_ms(),
+            prev_restart_threshold_ms: *cfg.daemon().prev_restart_threshold_ms(),
+            player_tick_ms: *cfg.daemon().player_tick_ms(),
+            session_save: Duration::from_secs(*cfg.daemon().session_save_secs()),
+            download_quality: *cfg.download().quality(),
+            download_speed_tick: Duration::from_millis(*cfg.daemon().download_speed_tick_ms()),
+            media_report_interval_ms: *cfg.daemon().report_interval_ms(),
+            media_seek_threshold_ms: *cfg.daemon().seek_threshold_ms(),
         });
         Ok(PlayerCore { inner })
     }
@@ -1422,6 +1485,7 @@ mod tests {
             &s,
             BitRate::Lossless,
             &progress,
+            /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
 

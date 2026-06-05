@@ -23,8 +23,8 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
-    assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
-    qianzai_song, song, with_album, with_artist, with_duration, with_name,
+    assert_snap, assert_snap_debug, chinese_football, endserenading, feiyu_lyrics, feiyu_song,
+    qianzai_lyrics, qianzai_song, song, with_album, with_artist, with_duration, with_name,
 };
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -48,20 +48,20 @@ pub(crate) fn playlist_view(
 
 /// 造一个填了歌单的 `AppState`(view = Playlists,选中第 0 个):Mineral 两张专辑
 /// + 一个本地歌单。
-pub(crate) fn state_with_playlists() -> AppState {
-    let mut s = AppState::empty();
+pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
     s.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
-    s
+    Ok(s)
 }
 
 /// 在 [`state_with_playlists`] 基础上进入《EndSerenading》、填前 3 首(含收藏 /
 /// 当前在播标记),view = Library,选中第 1 首。
-pub(crate) fn state_with_tracks() -> AppState {
-    let mut s = state_with_playlists();
+pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
+    let mut s = state_with_playlists()?;
     s.view = View::Library;
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
@@ -78,14 +78,17 @@ pub(crate) fn state_with_tracks() -> AppState {
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s.sel_track = 1;
-    s
+    Ok(s)
 }
 
 /// 造一个正在播《潜在表明》、缓存了 [`mineral_test::qianzai_lyrics`] 的 `AppState`,
 /// 供歌词面板 toggle / 标识快照用。`extra` 选副歌词档;`with_words` 为 false 时清掉逐字
 /// (走行级 LRC 渲染路径)。position 固定 62s,落在「太陽にあぶり出される…」一行中段。
-pub(crate) fn state_with_lyrics(extra: LyricExtra, with_words: bool) -> AppState {
-    let mut s = AppState::empty();
+pub(crate) fn state_with_lyrics(
+    extra: LyricExtra,
+    with_words: bool,
+) -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
     let track = qianzai_song();
     let mut lyrics = qianzai_lyrics();
     if !with_words {
@@ -95,25 +98,25 @@ pub(crate) fn state_with_lyrics(extra: LyricExtra, with_words: bool) -> AppState
     s.playback.track = Some(track);
     s.playback.position_ms = 62_000;
     s.lyric_extra = extra;
-    s
+    Ok(s)
 }
 
 /// 造一个正在播《飞鱼转身》(只有原文 + 逐字、**无翻译 / 无罗马音**)的 `AppState`,
 /// 用于验证「无副歌词可切换时,右上不显示 `[t]` 提示」这一固定行为。position 固定 165s,
 /// 落在「它降落在你身旁」一行中段。
-pub(crate) fn state_with_lrc_only() -> AppState {
-    let mut s = AppState::empty();
+pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
     let track = feiyu_song();
     s.lyrics_cache.insert(track.id.clone(), feiyu_lyrics());
     s.playback.track = Some(track);
     s.playback.position_ms = 165_000;
-    s
+    Ok(s)
 }
 
 /// 进入「Chinese Football」歌单、填前 4 首(含最长的「不是人人都能穿十号球衣」),
 /// 专用于 CJK 宽字符在多列表格里的对齐 / 截断快照。
-pub(crate) fn state_with_cjk_tracks() -> AppState {
-    let mut s = AppState::empty();
+pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
     s.playlists = vec![playlist_view(
         "cf",
         "Chinese Football",
@@ -133,14 +136,14 @@ pub(crate) fn state_with_cjk_tracks() -> AppState {
     s.current = tracks.first().cloned();
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
-    s
+    Ok(s)
 }
 
 /// 填 3 首**带 artist + album** 的曲目(短英文 / 长英文 / CJK 混排),专用于验证
 /// Full 档 album 列「有内容」时的多列渲染 —— 其余 fixture 的 album 多为空,覆盖不到。
 /// 每曲 3:30,选中第 0 首(当前在播)。
-pub(crate) fn state_with_album() -> AppState {
-    let mut s = AppState::empty();
+pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
     s.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
     s.view = View::Library;
 
@@ -167,7 +170,7 @@ pub(crate) fn state_with_album() -> AppState {
     s.current = tracks.first().cloned();
     s.tracks_cache
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
-    s
+    Ok(s)
 }
 
 /// no-op [`Client`]:所有调用静默吞掉、读取类返回默认值。供测试构造 [`App`] 而不接
@@ -225,33 +228,34 @@ impl Client for TestClient {
     }
 }
 
-/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
-/// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
-pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> App {
-    let mut app = App::new(
+/// 以 defaults 配置(= 接线前硬编码常量)造一个接 [`TestClient`] + 禁用封面的裸 [`App`]。
+fn test_app() -> color_eyre::Result<App> {
+    let cfg = Arc::new(mineral_config::Config::defaults()?);
+    Ok(App::new(
         Arc::new(TestClient),
         CoverFetcher::disabled(),
         CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
-    );
+        cfg,
+    ))
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
+/// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
+pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> color_eyre::Result<App> {
+    let mut app = test_app()?;
     let queue = endserenading(len);
     app.state.playback.track = queue.get(current_idx).cloned();
     app.state.current = queue.get(current_idx).cloned();
     app.state.queue = queue;
-    app
+    Ok(app)
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:Library 视图,填《EndSerenading》前 `len`
 /// 首到歌单 `"p1"`,选中第 `sel_track` 首(从 0 起)。同步构造,不需 tokio runtime。
-pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
-    let mut app = App::new(
-        Arc::new(TestClient),
-        CoverFetcher::disabled(),
-        CoverEncoder::disabled(),
-        Picker::from_fontsize((8, 16)),
-        /*launch_anchor*/ None,
-    );
+pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
+    let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
     app.state.playlists = vec![PlaylistView {
         data: Playlist {
@@ -276,19 +280,13 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> App {
     app.state.view = View::Library;
     app.state.sel_playlist = 0;
     app.state.sel_track = sel_track;
-    app
+    Ok(app)
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
 /// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
-pub(crate) fn app_in_fullscreen() -> App {
-    let mut app = App::new(
-        Arc::new(TestClient),
-        CoverFetcher::disabled(),
-        CoverEncoder::disabled(),
-        Picker::from_fontsize((8, 16)),
-        /*launch_anchor*/ None,
-    );
+pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
+    let mut app = test_app()?;
     let track = qianzai_song();
     app.state
         .lyrics_cache
@@ -303,5 +301,5 @@ pub(crate) fn app_in_fullscreen() -> App {
     fs.tick();
     app.state.fullscreen_pos = fs;
     app.state.fullscreen = true;
-    app
+    Ok(app)
 }

@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn library_with_tracks_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
-        let state = crate::test_support::state_with_tracks();
+        let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn library_loading_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
-        let mut state = crate::test_support::state_with_playlists();
+        let mut state = crate::test_support::state_with_playlists()?;
         state.view = View::Library;
         t.draw(|f| {
             let area = f.area();
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn library_cjk_tracks_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
-        let state = crate::test_support::state_with_cjk_tracks();
+        let state = crate::test_support::state_with_cjk_tracks()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn library_narrow_song_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(44, 12))?;
-        let state = crate::test_support::state_with_tracks();
+        let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn library_album_tracks_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
-        let state = crate::test_support::state_with_album();
+        let state = crate::test_support::state_with_album()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());

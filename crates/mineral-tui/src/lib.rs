@@ -55,22 +55,33 @@ pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     launch: Launch,
     persist: ServerStore,
+    config: mineral_config::Config,
+    warnings: Vec<mineral_config::ConfigWarning>,
 ) -> color_eyre::Result<()> {
+    // 用户配置降级告警:先落日志,启动后再经通知层 toast 呈现(run_app 内)。
+    for w in &warnings {
+        mineral_log::warn!(target: "config", warning = %w, "用户配置降级");
+    }
+    let cfg = Arc::new(config);
     // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
     // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
-    let cover_fetcher = CoverFetcher::spawn().await.unwrap_or_else(|e| {
-        mineral_log::warn!(
-            error = mineral_log::chain(&e),
-            "cover fetcher 起步失败,封面禁用"
-        );
-        CoverFetcher::disabled()
-    });
+    let cover_fetcher =
+        CoverFetcher::spawn(cfg.tui().cover().clone(), *cfg.cache().cover_capacity())
+            .await
+            .unwrap_or_else(|e| {
+                mineral_log::warn!(
+                    error = mineral_log::chain(&e),
+                    "cover fetcher 起步失败,封面禁用"
+                );
+                CoverFetcher::disabled()
+            });
 
     match launch {
         Launch::Auto => {
             let socket = mineral_paths::socket_path()?;
-            let (client, handle) = runtime::daemon::ensure(&socket).await?;
-            let result = run_app(Arc::new(client), cover_fetcher);
+            let kill_on_exit = *cfg.tui().behavior().kill_spawned_daemon_on_exit();
+            let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
+            let result = run_app(Arc::new(client), cover_fetcher, cfg, &warnings);
             // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
             // (handle 为 None)留着不动。
             if let Some(handle) = handle {
@@ -81,18 +92,29 @@ pub async fn run(
         Launch::Connect => {
             let socket = mineral_paths::socket_path()?;
             let client = RemoteClient::connect(&socket).await?;
-            run_app(Arc::new(client), cover_fetcher)
+            run_app(Arc::new(client), cover_fetcher, cfg, &warnings)
         }
         Launch::InProc => {
-            // in-proc 调试:走 Auto,本机有声卡就真出声,没有则降级 null。
-            let server = Server::spawn(channels, mineral_server::AudioMode::Auto, persist).await?;
+            // in-proc 调试:env > config 同 daemon 路径 resolve(本 crate 直接被 binary 调,
+            // 视作 binary 边缘);有声卡真出声,没有则降级 null。
+            let audio_mode = mineral_server::resolve_audio_mode(
+                std::env::var_os("MINERAL_AUDIO_NULL").is_some(),
+                *cfg.audio().backend(),
+            );
+            let server = Server::spawn(
+                channels,
+                audio_mode,
+                persist,
+                mineral_server::ServerConfig::from_config(&cfg),
+            )
+            .await?;
             // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;
             // 无 D-Bus session 时降级。进程退 = server drop = MPRIS 注销。
             if let Err(e) = server.start_media_service() {
                 mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
             }
             let client = server.client();
-            let result = run_app(Arc::new(client), cover_fetcher);
+            let result = run_app(Arc::new(client), cover_fetcher, cfg, &warnings);
             // in-proc 模式:进程退 = server 跟着 drop,无显式 shutdown 也行。
             let _ = server;
             result
@@ -102,7 +124,16 @@ pub async fn run(
 
 /// 拿到一个 client(in-proc 或 remote 都行),进 alternate screen,起 ratatui-image picker,
 /// 跑 [`App::run`] 直到退出,最后还原终端。
-fn run_app(client: Arc<dyn Client>, cover_fetcher: CoverFetcher) -> color_eyre::Result<()> {
+///
+/// # Params:
+///   - `cfg`: 已加载的全局配置(主题 / 键表 / 各段手感在 `App::new` 内落地)
+///   - `warnings`: 配置降级告警,启动后经通知层 toast 呈现
+fn run_app(
+    client: Arc<dyn Client>,
+    cover_fetcher: CoverFetcher,
+    cfg: Arc<mineral_config::Config>,
+    warnings: &[mineral_config::ConfigWarning],
+) -> color_eyre::Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
     // Picker::from_query_stdio 必须在进 alternate screen 之后、读 events 之前调,
@@ -111,14 +142,19 @@ fn run_app(client: Arc<dyn Client>, cover_fetcher: CoverFetcher) -> color_eyre::
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
     // 编码器 worker 在此 spawn(run_app 跑在 tokio runtime 线程上,满足 tokio::spawn)。
     // picker 克隆给 worker,封面 resize + kitty 编码即落 worker 的 spawn_blocking,不卡渲染。
-    let cover_encoder = CoverEncoder::spawn(&picker);
+    let cover_encoder = CoverEncoder::spawn(&picker, *cfg.tui().cover().encode_workers());
     let mut app = App::new(
         client,
         cover_fetcher,
         cover_encoder,
         picker,
         tui.launch_cursor(),
+        cfg,
     );
+    // 配置降级告警 toast:用户改坏 config.lua 时启动即看见(与日志双轨)。
+    for w in warnings {
+        app.notifications.flash_text(format!("{w}"));
+    }
     let result = app.run(&mut tui);
     tui.exit()?;
     result

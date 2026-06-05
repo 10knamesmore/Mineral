@@ -2,188 +2,242 @@
 -- Mineral 配置类型 stub(LuaCATS)。这是 default.lua / config.lua 的注解真相源。
 -- 字段集与 Rust `Config` 一一对应(守卫测试钉死);改字段两边同步。
 --
+-- ## 怎么填
+-- - 任何字段都可省略:省略 = 用默认值(深合并)。只写你想改的。
+-- - 各字段的**默认值**见配置目录下的 `default.lua`(由 `config init` 一并放置,
+--   仅供参考——程序不读取那份文件,改它无效;要改配置写 config.lua)。
+-- - 数组值(如键绑定)是**整体替换**,不与默认值合并。
+-- - 整数字段写 Lua 数字即可;`10 * 1024 ^ 3` 这类幂运算产生的小数会被自动取整。
+-- - 填错(类型不对 / 未知字段 / 超出取值集合)不会让程序崩:整份配置回落默认,
+--   启动时给一条告警。改完跑 `mineral config check` 可离线验证。
+-- - 生效方式:**重启生效,无热重载**。`tui.*` 段重启 TUI 即可;顶层段(audio /
+--   cache / download / sources / daemon)由 daemon 进程持有——默认退出 TUI 会带走
+--   自拉起的 daemon,重开即全量生效;若 daemon 续命或独立启动,需重启 daemon。
+--
 -- 所有 ---@field 标为可选(`?`):从配置消费方看没有必填字段——任何字段省略都合法
 -- (深合并回落 default.lua)。故 partial 的用户 config.lua 不触发 missing-fields,
 -- 同时保留字段名补全与值类型检查。default.lua 的完整性由 Rust 守卫测试钉死,不靠 LSP。
 
+---顶层配置表。config.lua 必须 `return` 一个本类型的表。
 ---@class mineral.Config
----@field tui? mineral.TuiConfig
----@field audio? mineral.AudioConfig
----@field cache? mineral.CacheConfig
----@field download? mineral.DownloadConfig
----@field sources? mineral.SourcesConfig
----@field daemon? mineral.DaemonConfig
+---@field tui? mineral.TuiConfig TUI client 专属段(主题 / 键位 / 交互手感 / 各面板观感)
+---@field audio? mineral.AudioConfig 音频引擎段(音量 / 后端 / 播放音质 / 引擎内参)
+---@field cache? mineral.CacheConfig 磁盘缓存容量段
+---@field download? mineral.DownloadConfig 下载段(音质 / 目录)
+---@field sources? mineral.SourcesConfig 音乐源段(网易云等)
+---@field daemon? mineral.DaemonConfig daemon 后端节拍段(gapless / 各间隔)
 
+---TUI client 命名空间:只影响终端界面,改后重启 TUI 生效。
 ---@class mineral.TuiConfig
----@field theme? mineral.ThemeConfig
----@field keys? mineral.KeysConfig
----@field behavior? mineral.BehaviorConfig
----@field spectrum? mineral.SpectrumConfig
----@field cover? mineral.CoverConfig
----@field prefetch? mineral.PrefetchConfig
----@field lyrics? mineral.LyricsConfig
----@field animation? mineral.AnimationConfig
----@field toast? mineral.ToastConfig
----@field layout? mineral.LayoutConfig
+---@field theme? mineral.ThemeConfig 主题色板(14 色 token + 3 个语义角色)
+---@field keys? mineral.KeysConfig 键位重映射(动作 → 键)
+---@field behavior? mineral.BehaviorConfig 交互手感(步长 / 跳行 / daemon 续命)
+---@field spectrum? mineral.SpectrumConfig 频谱面板观感与动态
+---@field cover? mineral.CoverConfig 封面抓取 / 缓存 / 取色
+---@field prefetch? mineral.PrefetchConfig 数据预取范围与节流
+---@field lyrics? mineral.LyricsConfig 歌词面板行距与滚动
+---@field animation? mineral.AnimationConfig 各动画时长与帧率
+---@field toast? mineral.ToastConfig 顶栏通知停留时长
+---@field layout? mineral.LayoutConfig 布局门槛与分区尺寸
 
+---主题色板。色值一律 "#rrggbb" 六位十六进制(必须带 `#`,如 "#cba6f7");
+---默认主题是 Catppuccin Mocha,想整体换主题就把 14 个 token 全写一遍。
 ---@class mineral.ThemeConfig
----@field base? string  "#rrggbb" 主背景
----@field mantle? string  "#rrggbb" 次背景
----@field crust? string  "#rrggbb" 第三背景
----@field surface0? string  "#rrggbb" 行选中 / 进度条 track
----@field surface1? string  "#rrggbb" 未聚焦边框 / 分隔线
----@field overlay? string  "#rrggbb" 暗淡文本
----@field subtext? string  "#rrggbb" 三级文本
----@field text? string  "#rrggbb" 主文本
----@field accent? string  "#rrggbb" 主强调色
----@field accent_2? string  "#rrggbb" 副强调色
----@field red? string  "#rrggbb"
----@field yellow? string  "#rrggbb"
----@field green? string  "#rrggbb"
----@field peach? string  "#rrggbb"
----@field roles? mineral.RolesConfig
+---@field base? string "#rrggbb" 主背景
+---@field mantle? string "#rrggbb" 次背景:嵌套面板 / 浮层底
+---@field crust? string "#rrggbb" 第三背景:底部 transport 条
+---@field surface0? string "#rrggbb" 行选中背景 / 进度条轨道
+---@field surface1? string "#rrggbb" 未聚焦边框 / 分隔线
+---@field overlay? string "#rrggbb" 暗淡文本 / 二级标签
+---@field subtext? string "#rrggbb" 三级文本 / metadata
+---@field text? string "#rrggbb" 主文本
+---@field accent? string "#rrggbb" 主强调色:选中 / 聚焦边框 / 在播标记
+---@field accent_2? string "#rrggbb" 副强调色:进度条填充 / 频谱顶段
+---@field red? string "#rrggbb" 错误 / 删除 / love 标记
+---@field yellow? string "#rrggbb" 暂停指示
+---@field green? string "#rrggbb" 播放指示
+---@field peach? string "#rrggbb" 命令 / 搜索前缀
+---@field roles? mineral.RolesConfig 语义角色 → token 名映射
 
+---语义角色映射:来源徽标等只声明角色,这里决定角色落到哪个 token 色。
+---取值必须是 14 个 token 名之一:base / mantle / crust / surface0 / surface1 /
+---overlay / subtext / text / accent / accent_2 / red / yellow / green / peach。
 ---@class mineral.RolesConfig
----@field accent? string  token 名(14 token 之一)
----@field muted? string  token 名
----@field faint? string  token 名
+---@field accent? string 来源强调角色落到哪个 token
+---@field muted? string 来源次要角色
+---@field faint? string 来源最弱角色
 
--- 键绑定值:单键字符串(如 "space")或键数组(如 { "n", "j" },整体替换)。
+-- 键绑定值:单键字符串(如 "space")或键数组(如 { "n", "j" });数组**整体替换**默认绑定。
+--
+-- 键语法(`KeyChord` 解析):
+-- - 单字符键原样写:"j"、"/"、"+";**大小写有别**,"J" 即 Shift+j,不必写 "Shift+j"。
+-- - 命名键(大小写不敏感):space / tab / enter / esc(或 escape)/ backspace /
+--   Left / Right / Up / Down。
+-- - 修饰前缀:"Shift+Left"、"Ctrl+x"、"Ctrl+Shift+Right";仅支持 Shift / Ctrl,
+--   且 Shift 只对非字符键有意义(字符键的 Shift 已编码在字符本身)。
+-- - F1-F12 / Home / End / PageUp 等暂不支持。
 ---@alias mineral.KeyBinding string|string[]
 
+---键位重映射:方向是「动作 → 键」。给某动作写新键即完全替换其默认键;
+---写空数组 `{}` 表示解绑该动作。两个动作绑同一键时后写的生效,不会报错——自己留意。
 ---@class mineral.KeysConfig
----@field play_pause? mineral.KeyBinding  暂停 / 恢复
----@field next? mineral.KeyBinding  下一首
----@field prev? mineral.KeyBinding  上一首 / 回开头
----@field toggle_fullscreen? mineral.KeyBinding  进 / 退全屏
----@field open_queue? mineral.KeyBinding  打开播放队列
----@field quit? mineral.KeyBinding  退出确认
----@field cycle_lyric? mineral.KeyBinding  循环歌词副语言
----@field enter_search? mineral.KeyBinding  进入搜索
----@field activate? mineral.KeyBinding  进入 / 播放选中
----@field back? mineral.KeyBinding  返回 / 清搜索
----@field cycle_mode? mineral.KeyBinding  循环播放模式
----@field volume_up? mineral.KeyBinding  音量增
----@field volume_down? mineral.KeyBinding  音量减
----@field seek_forward? mineral.KeyBinding  快进
----@field seek_backward? mineral.KeyBinding  快退
----@field seek_forward_big? mineral.KeyBinding  大步快进
----@field seek_backward_big? mineral.KeyBinding  大步快退
----@field move_down? mineral.KeyBinding  下移一行
----@field move_up? mineral.KeyBinding  上移一行
----@field move_down_big? mineral.KeyBinding  大步下移
----@field move_up_big? mineral.KeyBinding  大步上移
----@field move_first? mineral.KeyBinding  跳首行
----@field move_last? mineral.KeyBinding  跳末行
----@field love? mineral.KeyBinding  切换 ♥
----@field download? mineral.KeyBinding  下载选中
+---@field play_pause? mineral.KeyBinding 暂停 / 恢复
+---@field next? mineral.KeyBinding 下一首
+---@field prev? mineral.KeyBinding 上一首 / 回开头(分界见 daemon.prev_restart_threshold_ms)
+---@field toggle_fullscreen? mineral.KeyBinding 进 / 退全屏播放态
+---@field open_queue? mineral.KeyBinding 打开播放队列;队列开着时再按 = 关闭
+---@field quit? mineral.KeyBinding 打开退出确认
+---@field cycle_lyric? mineral.KeyBinding 循环歌词副语言:原文 → 翻译 → 罗马音
+---@field enter_search? mineral.KeyBinding 进入搜索输入(全屏态屏蔽)
+---@field activate? mineral.KeyBinding 进入歌单 / 播放选中曲
+---@field back? mineral.KeyBinding 返回上级 / 清搜索词
+---@field cycle_mode? mineral.KeyBinding 循环播放模式
+---@field volume_up? mineral.KeyBinding 音量增(步长见 behavior.volume_step)
+---@field volume_down? mineral.KeyBinding 音量减
+---@field seek_forward? mineral.KeyBinding 快进(步长见 behavior.seek_step_secs)
+---@field seek_backward? mineral.KeyBinding 快退
+---@field seek_forward_big? mineral.KeyBinding 大步快进(步长见 behavior.seek_big_step_secs)
+---@field seek_backward_big? mineral.KeyBinding 大步快退
+---@field move_down? mineral.KeyBinding 列表光标下移一行
+---@field move_up? mineral.KeyBinding 列表光标上移一行
+---@field move_down_big? mineral.KeyBinding 大步下移(行数见 behavior.list_jump_rows)
+---@field move_up_big? mineral.KeyBinding 大步上移
+---@field move_first? mineral.KeyBinding 跳首行
+---@field move_last? mineral.KeyBinding 跳末行
+---@field love? mineral.KeyBinding 切换选中曲的 ♥
+---@field download? mineral.KeyBinding 下载选中曲 / 歌单
 
+---交互手感旋钮。
 ---@class mineral.BehaviorConfig
----@field volume_step? integer  单次音量步长(百分点)
----@field seek_step_secs? integer  单次 seek 步长(秒)
----@field seek_big_step_secs? integer  大步 seek(秒)
----@field list_jump_rows? integer  列表大步跳行数
----@field kill_spawned_daemon_on_exit? boolean  退出时是否杀自拉起的 daemon
+---@field volume_step? integer 单次音量增减步长,百分点;1-100 合理,音量本身钳在 0-100
+---@field seek_step_secs? integer 单次 seek 步长,秒;≥1
+---@field seek_big_step_secs? integer 大步 seek 步长,秒
+---@field list_jump_rows? integer 列表大步跳行的行数;≥1
+---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
 
+---频谱面板。tick = 一帧(时长 = animation.frame_tick_ms);条高单位是 1/8 字符格,
+---满高 64(8 行 × 8)。fft_size/dB 标定是 DSP 参数,其余是纯观感,放心乱调。
 ---@class mineral.SpectrumConfig
----@field show_peak_cap? boolean  是否显示 peak cap
----@field show_trail? boolean  是否显示 trail 余韵
----@field hue_rotate? boolean  是否色相漂移
----@field spring_peak? boolean  是否启用 peak 弹簧
----@field baseline_min? integer  条最小高度(1/8 字符单位)
----@field attack_old? integer  上升平滑旧值权重
----@field attack_new? integer  上升平滑新值权重
----@field decay_div? integer  衰减除数(指数项)
----@field decay_step? integer  衰减常数项
----@field peak_hold_ticks? integer  peak 悬停 tick
----@field peak_fall_per_tick? integer  peak 每 tick 下落单位
----@field hue_cycle_ticks? integer  色相转一圈的 tick
----@field cover_fade_ticks? integer  封面配色过渡 tick
----@field cover_vshift_permille? integer  色场纵向偏移(‰)
----@field spring_stiffness? number  弹簧刚度
----@field spring_damping? number  弹簧阻尼
+---@field fft_size? integer FFT 窗大小,样本数,建议 2 的幂。大 = 低频细节多但瞬态钝、起播首窗慢(4096@48kHz ≈ 85ms);小 = 跟手但低频糊。**外键:audio.tap_capacity 须 ≥ 2 × 此值**,否则 UI 卡一帧就丢样本出毛刺
+---@field f_min? number 频率轴下界,Hz;低于此的能量不显示
+---@field f_max? number 频率轴上界,Hz;超过采样率一半时自动取一半
+---@field log_axis_blend? number 频率轴对数化程度 0-1:1 = 纯对数(每 octave 等宽),0 = 线性;略小于 1 可收掉低频「宽平顶」
+---@field db_floor? number dB 标定下界,低于此条高为 0;抬高 = 砍安静细节整体变矮,降低 = 噪声底也可见。须 < db_ceil
+---@field db_ceil? number dB 标定上界,高于此满高;与 db_floor 共同决定显示动态范围
+---@field peak_mix? number 频带统计中峰值占比 0-1:0 = 纯均值(平),1 = 纯峰值(躁);中间值兼顾动态与稳定
+---@field show_peak_cap? boolean 是否显示 peak cap(浮在条顶的 ▔)
+---@field show_trail? boolean 是否显示 peak 与条之间的余韵渐隐
+---@field hue_rotate? boolean 无封面色时整体色相是否缓慢漂移
+---@field spring_peak? boolean peak 是否带弹簧物理(过冲 + 回弹);false = 直接吸附
+---@field baseline_min? integer 任何状态下条的最小高度,1/8 字符单位,0-64;0 = 静默时面板全空
+---@field attack_old? integer 条高上升平滑的旧值权重;与 attack_new 构成 EMA 比例,新值占比越大越跟手也越抖
+---@field attack_new? integer 上升平滑的新值权重
+---@field decay_div? integer 静默/暂停时每 tick 衰减的指数除数,≥1;越小落得越快
+---@field decay_step? integer 衰减的常数项,叠加在指数项上保证小值也能落底
+---@field peak_hold_ticks? integer 新 peak 在原位悬停的 tick 数,0-255
+---@field peak_fall_per_tick? integer 悬停结束后 peak 每 tick 下落的 1/8 格数
+---@field hue_cycle_ticks? integer 色相转满一圈(360°)的 tick 数;越小转得越快
+---@field cover_fade_ticks? integer 封面取色就绪后,从当前配色缓动到封面色场的 tick 数
+---@field cover_vshift_permille? integer 封面色场顶端相对底端沿色带的偏移,千分比 0-1000;拉开条底/条顶明度层次
+---@field spring_stiffness? number 弹簧刚度,每 tick force += k×(目标-当前);0.1-1.0 合理,太大瞬间过冲像 bug
+---@field spring_damping? number 弹簧速度阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹
 
+---封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
 ---@class mineral.CoverConfig
----@field http_timeout_secs? integer  封面下载超时(秒)
----@field max_dim? integer  封面缓存最大边(px)
----@field jpeg_quality? integer  封面 JPEG 质量(0-100)
----@field storage? "raw"|"resized"  封面存储模式
----@field debounce_ms? integer  封面切换去抖(ms)
----@field download_workers? integer  封面下载并发
----@field encode_workers? integer  封面编码并发
----@field kmeans? mineral.KmeansConfig
+---@field http_timeout_secs? integer 单张封面下载超时,秒
+---@field max_dim? integer 解码后等比缩放到的最大边,像素;终端显示 ~240px 足够,大了费内存
+---@field jpeg_quality? integer JPEG 重编码质量 1-100;**仅 storage = "resized" 时生效**
+---@field storage? "raw"|"resized" 磁盘缓存存什么:"raw" = 原始下载字节(无损,体积大);"resized" = 缩放后重编码 JPEG(省盘,锁定 ≤ max_dim)
+---@field debounce_ms? integer 列表滚动停稳多久才开始渲染真图,毫秒;期间显示程序化色块占位
+---@field download_workers? integer 封面下载并发 worker 数,≥1
+---@field encode_workers? integer 封面终端协议编码并发 worker 数,≥1
+---@field kmeans? mineral.KmeansConfig 取色(频谱封面配色)参数
 
+---k-means 封面取色。除非取出的色不满意,一般不用动。
 ---@class mineral.KmeansConfig
----@field swatches? integer  色板色数(聚类 k)
----@field seed? integer  kmeans 随机种子
----@field max_iter? integer  最大迭代次数
----@field converge? number  收敛阈值
----@field l_min? number  明度下限(Lab L)
----@field l_max? number  明度上限(Lab L)
----@field chroma_min? number  彩度下限
----@field min_valid_pixels_pct? integer  有效像素占比下限(%)
+---@field swatches? integer 取出的重点色上限(聚类 k),≥1;色多层次细、色少更整体
+---@field seed? integer 聚类随机种子,任意固定整数;**必须固定**,否则同一封面每次取色不同、颜色会跳
+---@field max_iter? integer 最大迭代次数;封面色块少,库推荐量级即可收敛
+---@field converge? number 收敛阈值,Lab 空间推荐 5.0
+---@field l_min? number 丢弃近黑像素的明度下限,Lab L 0-100;避免黑背景霸占色板
+---@field l_max? number 丢弃近白像素的明度上限,Lab L 0-100
+---@field chroma_min? number 丢弃近灰像素的彩度下限 √(a²+b²);灰底对配色无贡献
+---@field min_valid_pixels_pct? integer 过滤后有效像素占比低于此(%)则放弃过滤改用全部像素,0-100;保证黑白封面也有色
 
+---预取:提前抓用户即将看到的数据,用网络/内存开销换流畅度。
 ---@class mineral.PrefetchConfig
----@field radius? integer  通用预取半径
----@field playback_cover_radius? integer  在播曲封面预取半径
----@field play_count_debounce_ms? integer  播放计数查询去抖(ms)
----@field prewarm_ahead? integer  全屏预热前瞻首数
----@field channel_workers_per? integer  每 channel 抓取并发
+---@field radius? integer 浏览列表选中行上下各预取多少条(封面 + 歌单曲目);覆盖一屏 + 几次大跳即可
+---@field playback_cover_radius? integer 沿播放队列给在播曲前后各预取几张封面,服务自动切歌
+---@field play_count_debounce_ms? integer 选中某曲停留超过此毫秒数才查它的远端播放次数;太小翻列表会打满 API
+---@field prewarm_ahead? integer 全屏稳态提前编码接下来几首的封面,消自动切歌瞬间的占位闪;每首一份终端图开销
 
+---歌词面板。
 ---@class mineral.LyricsConfig
----@field line_gap? integer  全屏歌词行距
----@field scroll_ms? integer  歌词滚动过渡(ms)
+---@field line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
+---@field scroll_ms? integer 切行时整列平移 + 高亮淡入的过渡时长,毫秒;超过此窗口直接吸附
 
+---动画。tick 时长 = frame_tick_ms,故「N tick ≈ N × frame_tick_ms 毫秒」;
+---各 *_ticks 设为 1 即近似关闭该动画(一帧到位)。
 ---@class mineral.AnimationConfig
----@field frame_tick_ms? integer  主循环帧间隔(ms,≈60fps)
----@field transition_ticks? integer  整屏转场时长(tick)
----@field sweep_ticks? integer  侧栏曲目扫入时长(tick)
----@field fullscreen_ticks? integer  全屏进退时长(tick)
----@field popup_anim_ticks? integer  浮层进出时长(tick)
----@field toast_anim_ticks? integer  toast 进出时长(tick)
----@field view_sweep? "push"|"cover"  侧栏扫入风格
+---@field frame_tick_ms? integer 主循环帧间隔,毫秒;16 ≈ 60fps,越小越流畅越费 CPU
+---@field transition_ticks? integer 启动扩大 / 退出收缩整屏转场的 tick 数
+---@field sweep_ticks? integer 侧栏 歌单↔曲目 切换扫入的 tick 数
+---@field fullscreen_ticks? integer 全屏播放态进退场形变的 tick 数
+---@field popup_anim_ticks? integer 浮层(队列 / 确认框)弹出收起的 tick 数
+---@field toast_anim_ticks? integer 顶栏通知横向展开收起的 tick 数
+---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
 
+---顶栏通知。
 ---@class mineral.ToastConfig
----@field flash_ttl_secs? integer  通知停留时长(秒)
+---@field flash_ttl_secs? integer 一次性通知(下载完成 / 配置告警等)停留秒数
 
+---布局。单位是终端字符格:宽 = 列数,高 = 行数。
 ---@class mineral.LayoutConfig
----@field min_full_width? integer  完整布局最小宽(列)
----@field min_full_height? integer  完整布局最小高(行)
----@field fs_left_pct? integer  全屏左栏占比(%)
----@field fs_spectrum_height? integer  全屏频谱高(行)
----@field fs_transport_height? integer  全屏 transport 高(行)
----@field dock_w_pct? integer  浮层 dock 宽占比(%)
+---@field min_full_width? integer 终端宽不足此列数退紧凑布局(无歌词/频谱面板)
+---@field min_full_height? integer 终端高不足此行数退紧凑布局
+---@field fs_left_pct? integer 全屏态左栏(封面+transport)占宽百分比 0-100,余下归歌词
+---@field fs_spectrum_height? integer 全屏态底部频谱通栏高,行
+---@field fs_transport_height? integer 全屏态 transport 条高,行;内容 6 行 + 边框 2
+---@field dock_w_pct? integer 停靠浮层(播放队列)占屏宽百分比 0-100
 
+---音频引擎(daemon 持有,改后需重启 daemon)。
 ---@class mineral.AudioConfig
----@field volume? integer  初始音量 0-100
----@field backend? "auto"|"null"  音频后端
----@field playback_quality? "standard"|"higher"|"exhigh"|"lossless"|"hires"  在线播放音质
----@field engine_tick_ms? integer  音频引擎主循环 tick(ms)
----@field prefetch_bytes? integer  流式起播预拉字节
----@field tap_capacity? integer  FFT tap 环形缓冲容量
+---@field volume? integer 启动时的初始音量百分比 0-100,超出截到 100;运行期音量不落盘,每次启动回到此值
+---@field backend? "auto"|"null" "auto" = 打开默认声卡,失败自动降级无声空跑;"null" = 强制无声(无声卡环境/调试)。环境变量 MINERAL_AUDIO_NULL 优先于本字段
+---@field playback_quality? "standard"|"higher"|"exhigh"|"lossless"|"hires" 在线播放音质;高音质更耗流量,源没有对应档会回落
+---@field engine_tick_ms? integer 引擎主循环节拍,毫秒;影响 seek/停止响应延迟,不建议动
+---@field prefetch_bytes? integer 流式起播前预拉的字节数;大了起播慢但 seek 命中缓冲概率高
+---@field tap_capacity? integer 频谱 PCM 采样环形缓冲容量,样本数。**外键:须 ≥ 2 × tui.spectrum.fft_size**(双窗余量,UI 卡一帧不丢样本);改 fft_size 时同步改这里
 
+---磁盘缓存容量(LRU,满了自动驱逐)。改小不会立刻删文件,下次写入时才驱逐。
 ---@class mineral.CacheConfig
----@field audio_capacity? integer  音频缓存上限(字节)
----@field cover_capacity? integer  封面缓存上限(字节)
+---@field audio_capacity? integer 音频本体缓存上限,字节;可写算式如 10 * 1024 ^ 3
+---@field cover_capacity? integer 封面缓存上限,字节
 
+---下载(永久导出,不受缓存容量约束)。
 ---@class mineral.DownloadConfig
----@field quality? "standard"|"higher"|"exhigh"|"lossless"|"hires"  下载音质
----@field dir? string  下载目录(nil = 默认导出目录)
+---@field quality? "standard"|"higher"|"exhigh"|"lossless"|"hires" 下载音质,与播放音质相互独立
+---@field dir? string 下载导出目录,绝对路径;省略 = 平台默认(~/Music/mineral)。环境变量 MINERAL_DOWNLOAD_DIR 优先于本字段
 
+---音乐源。
 ---@class mineral.SourcesConfig
----@field netease? mineral.NeteaseSection
+---@field netease? mineral.NeteaseSection 网易云
 
+---网易云源的网络参数。
 ---@class mineral.NeteaseSection
----@field timeout_secs? integer  请求超时(秒)
----@field proxy? string|false  代理 URL,或 false 禁用
----@field max_connections? integer  最大并发(0 = 不限)
+---@field timeout_secs? integer 单次 API 请求超时,秒
+---@field proxy? string|false 代理 URL(如 "socks5://127.0.0.1:1080" 或 "http://..."),或 false = 不走代理;不接受 true
+---@field max_connections? integer 到网易云的最大并发连接数,0 = 不限
 
+---daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动;
+---改后需重启 daemon 生效。
 ---@class mineral.DaemonConfig
----@field gapless_prefetch_ms? integer  gapless 预取提前量(毫秒)
----@field prev_restart_threshold_ms? integer  prev 回开头 vs 上一首分界(ms)
----@field player_tick_ms? integer  player 主循环醒来间隔(ms)
----@field session_save_secs? integer  会话位置刷新节流(秒)
----@field heartbeat_secs? integer  client 心跳间隔(秒)
----@field report_interval_ms? integer  播放进度上报间隔(ms)
----@field seek_threshold_ms? integer  判定 seek 的跳变阈值(ms)
----@field download_speed_tick_ms? integer  下载测速刷新周期(ms)
+---@field gapless_prefetch_ms? integer 距当前曲结束多少毫秒开始预排下一曲(无缝衔接窗口);太小可能退化出间隙
+---@field prev_restart_threshold_ms? integer prev 键的分界,毫秒:播放进度超过此值按「回开头」,否则「上一首」
+---@field player_tick_ms? integer 播放核心后台循环醒来间隔,毫秒;影响自动切歌/事件转发延迟
+---@field session_save_secs? integer 播放进度周期落盘的节流间隔,秒;切歌等状态变化另有即时落盘
+---@field heartbeat_secs? integer 状态心跳日志间隔,秒;daemon 与 TUI 各打一条,供事后排查
+---@field report_interval_ms? integer 向系统媒体控件(MPRIS)上报播放进度的间隔,毫秒;影响桌面歌词/控件同步平滑度
+---@field seek_threshold_ms? integer 进度偏离线性预期超过此毫秒数判定为 seek(供媒体控件上报);需远大于节拍抖动、远小于最小 seek 步长
+---@field download_speed_tick_ms? integer 下载测速刷新节流,毫秒
+---@field channel_workers_per? integer 每个音乐源的后台任务并发 worker 数,≥1;大了抓取快但更容易撞源限流

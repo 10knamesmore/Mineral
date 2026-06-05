@@ -18,9 +18,6 @@ use crate::transport::url::{Crypto, rewrite};
 /// 网易云 API 根 URL,所有请求都拼在此基础上。
 const BASE_URL: &str = "https://music.163.com";
 
-/// 单次请求的超时时长(秒);与 cmusic / NeteaseCloudMusicApi 保持一致。
-const TIMEOUT_SECS: u64 = 100;
-
 /// 一次请求的输入。
 pub struct RequestSpec<'a> {
     /// service 写的逻辑路径(`/weapi/...` / `/eapi/...` / `/api/...`),URL 改写在内部完成。
@@ -48,10 +45,10 @@ pub struct Transport {
 impl Transport {
     pub fn new(config: &NeteaseConfig) -> Result<Self> {
         let mut builder = HttpClient::builder()
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .max_connections(config.max_connections)
+            .timeout(Duration::from_secs(*config.timeout_secs()))
+            .max_connections(*config.max_connections())
             .cookies();
-        if let Some(p) = config.proxy.as_deref() {
+        if let Some(p) = config.proxy().as_deref() {
             builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
         }
         let client = builder.build().context("build isahc client failed")?;
@@ -63,11 +60,11 @@ impl Transport {
 
     pub fn from_cookie_jar(config: &NeteaseConfig, jar: CookieJar) -> Result<Self> {
         let mut builder = HttpClient::builder()
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .max_connections(config.max_connections)
+            .timeout(Duration::from_secs(*config.timeout_secs()))
+            .max_connections(*config.max_connections())
             .cookies()
             .cookie_jar(jar);
-        if let Some(p) = config.proxy.as_deref() {
+        if let Some(p) = config.proxy().as_deref() {
             builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
         }
         let client = builder.build().context("build isahc client failed")?;

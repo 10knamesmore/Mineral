@@ -54,10 +54,12 @@ impl Scheduler {
     ///
     /// # Params:
     ///   - `channels`: 注入的所有 channel(用于 ChannelFetch lane 路由)
-    pub fn new(channels: &[Arc<dyn MusicChannel>]) -> Self {
+    ///   - `workers_per_channel`: 每个 channel 的任务 worker 数(配置 `daemon.channel_workers_per`)
+    pub fn new(channels: &[Arc<dyn MusicChannel>], workers_per_channel: usize) -> Self {
         let ongoing = Arc::new(Ongoing::new());
         let events = Arc::new(Mutex::new(Vec::<TaskEvent>::new()));
-        let channel_fetch = ChannelFetchLane::spawn(channels, &ongoing, &events);
+        let channel_fetch =
+            ChannelFetchLane::spawn(channels, &ongoing, &events, workers_per_channel);
         Self {
             inner: Arc::new(Inner {
                 ongoing,

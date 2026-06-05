@@ -22,12 +22,6 @@ use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
-/// Playlists ↔ Library 切换过渡时长(tick 数);≈ 18 tick ≈ 288ms,与整屏转场同速。
-const SWEEP_TICKS: u16 = 18;
-
-/// 全屏播放进退场形变时长(tick 数);≈ 18 tick ≈ 288ms,与 sidebar sweep 同速。
-const FULLSCREEN_TICKS: u16 = 18;
-
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
 ///
 /// dims 用于 invalidation —— 跟当前 area 不一致就重建 protocol,避免字号 / 终端
@@ -201,19 +195,25 @@ pub struct AppState {
     /// 歌单名),session 内长留;规模(每条 ~几百字节,总量上限 ≈ 已加载曲目数 × 3)
     /// 远低于其它 cache。换源 / 重启自然清掉。
     pub matchable_cache: RefCell<FxHashMap<String, Arc<MatchableText>>>,
+
+    /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
+    /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
+    pub cfg: Arc<mineral_config::Config>,
 }
 
-/// 选中变化后多久才允许 cover_image 构建新 protocol。期间走程序化 fallback,稳态后再切真图。
-pub const COVER_DEBOUNCE: Duration = Duration::from_millis(80);
-
 impl AppState {
-    /// 构造空状态。所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充。
-    pub fn empty() -> Self {
+    /// 构造空状态(所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充);
+    /// 过渡时长 / 频谱旋钮 / 各段手感由注入的配置落地。
+    ///
+    /// # Params:
+    ///   - `cfg`: 已加载的全局配置(`Arc` 共享,渲染/运行时模块经 `state.cfg` 读)
+    pub fn new(cfg: Arc<mineral_config::Config>) -> Self {
+        let anim = cfg.tui().animation();
         Self {
             view: View::Playlists,
-            view_pos: Transition::new(SWEEP_TICKS),
+            view_pos: Transition::new(*anim.sweep_ticks()),
             fullscreen: false,
-            fullscreen_pos: Transition::new(FULLSCREEN_TICKS),
+            fullscreen_pos: Transition::new(*anim.fullscreen_ticks()),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_requested: FxHashSet::default(),
@@ -226,8 +226,8 @@ impl AppState {
             search_q: String::new(),
             current: None,
             playback: Playback::new(),
-            spectrum: SpectrumState::new(),
-            fft: SpectrumComputer::new(),
+            spectrum: SpectrumState::new(cfg.tui().spectrum().clone()),
+            fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
             queue: Vec::new(),
             versions: mineral_protocol::PlayerVersions::default(),
             search_mode: false,
@@ -254,12 +254,20 @@ impl AppState {
             last_sel_change: Instant::now(),
             matcher: RefCell::new(FuzzyMatcher::new()),
             matchable_cache: RefCell::new(FxHashMap::default()),
+            cfg,
         }
     }
 
-    /// 距上次选中变化是否仍在 [`COVER_DEBOUNCE`] 防抖窗口内。
+    /// 测试构造:defaults 配置(= 接线前硬编码常量)的空状态。
+    #[cfg(test)]
+    pub(crate) fn test_default() -> color_eyre::Result<Self> {
+        Ok(Self::new(Arc::new(mineral_config::Config::defaults()?)))
+    }
+
+    /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
     pub fn is_scrolling(&self) -> bool {
-        self.last_sel_change.elapsed() < COVER_DEBOUNCE
+        self.last_sel_change.elapsed()
+            < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 
     /// 给定一首歌,根据当前 `liked_ids` / 未来其他 user-data 装饰成 SongView。
@@ -530,6 +538,26 @@ impl AppState {
     }
 }
 
+/// 把配置的频谱段映射成 DSP 参数([`mineral_spectrum::SpectrumParams`])。
+/// mineral-spectrum 是叶子 crate 不依赖配置,在此(消费侧)做一次显式映射。
+///
+/// # Params:
+///   - `cfg`: 频谱段配置
+///
+/// # Return:
+///   DSP 参数。
+fn spectrum_params(cfg: &mineral_config::SpectrumConfig) -> mineral_spectrum::SpectrumParams {
+    mineral_spectrum::SpectrumParams::builder()
+        .fft_size(*cfg.fft_size())
+        .f_min(*cfg.f_min())
+        .f_max(*cfg.f_max())
+        .log_axis_blend(*cfg.log_axis_blend())
+        .db_floor(*cfg.db_floor())
+        .db_ceil(*cfg.db_ceil())
+        .peak_mix(*cfg.peak_mix())
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use mineral_model::SourceKind;
@@ -540,8 +568,8 @@ mod tests {
 
     /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
     #[test]
-    fn queue_current_index_finds_playing() {
-        let mut s = AppState::empty();
+    fn queue_current_index_finds_playing() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
         let queue = endserenading(5);
         s.playback.track = queue.get(2).cloned();
         s.queue = queue;
@@ -549,12 +577,13 @@ mod tests {
 
         s.playback.track = None;
         assert_eq!(s.queue_current_index(), None);
+        Ok(())
     }
 
     /// 首字母 query `cry` 只命中「春日影」,其它歌单淘汰。
     #[test]
-    fn filtered_playlists_initials_pinyin() {
-        let mut s = AppState::empty();
+    fn filtered_playlists_initials_pinyin() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
         s.playlists = vec![
             playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
@@ -567,12 +596,13 @@ mod tests {
             .map(|p| p.data.name.as_str())
             .collect();
         assert_eq!(names, vec!["春日影"]);
+        Ok(())
     }
 
     /// 全拼 query `chunying` 命中「春日影」(子序列覆盖 chun + ying)。
     #[test]
-    fn filtered_playlists_full_pinyin() {
-        let mut s = AppState::empty();
+    fn filtered_playlists_full_pinyin() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
         s.playlists = vec![
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
@@ -584,12 +614,13 @@ mod tests {
             .map(|p| p.data.name.as_str())
             .collect();
         assert_eq!(names, vec!["春日影"]);
+        Ok(())
     }
 
     /// ASCII fuzzy:`my` 命中含 m+y 子序列的项,连续命中(MyGO)排在散开(Ave Mujica)前。
     #[test]
-    fn filtered_playlists_consecutive_ranks_first() {
-        let mut s = AppState::empty();
+    fn filtered_playlists_consecutive_ranks_first() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
         s.playlists = vec![
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
@@ -601,12 +632,13 @@ mod tests {
             .map(|p| p.data.name.as_str())
             .collect();
         assert_eq!(names.first().copied(), Some("MyGO!!!!!"));
+        Ok(())
     }
 
     /// `match_for` 命中拼音/首字母时,hits 反向映射回原文 Han 字符下标。
     #[test]
     fn match_for_returns_original_indices() -> color_eyre::Result<()> {
-        let mut s = AppState::empty();
+        let mut s = AppState::test_default()?;
         s.search_q = "cry".to_owned();
         let m = s
             .match_for("春日影")
@@ -617,8 +649,9 @@ mod tests {
 
     /// 空 query 时 `match_for` 直接返回 `None`,fast path。
     #[test]
-    fn match_for_empty_query_returns_none() {
-        let s = AppState::empty();
+    fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
+        let s = AppState::test_default()?;
         assert!(s.match_for("春日影").is_none());
+        Ok(())
     }
 }

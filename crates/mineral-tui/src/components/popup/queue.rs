@@ -1,6 +1,6 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use mineral_model::{Song, SongId};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
@@ -12,11 +12,9 @@ use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
 use crate::render::theme::Theme;
+use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::playback::format_ms;
 use crate::runtime::state::AppState;
-
-/// queue 大跳行数(`J` / `K` 一次)。j/k/箭头仍是 1。
-const ROW_BIG_STEP: usize = 7;
 
 /// 浮动 queue 浮层。
 ///
@@ -111,40 +109,33 @@ impl Overlay for QueueOverlay {
         frame.render_stateful_widget(table, inner, &mut state);
     }
 
-    fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
-        let len = ctx.queue.len();
-        let max = len.saturating_sub(1);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.sel = self.sel.saturating_add(1).min(max);
-                OverlayResponse::Consumed
+    fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+        // 导航/激活/关闭全走 on_action(跟随键位重映射与 behavior 步长);
+        // 未映射裸键半穿透给全局(播放控制族,白名单在 App::passes_overlay)。
+        OverlayResponse::Pass
+    }
+
+    fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+        let max = ctx.queue.len().saturating_sub(1);
+        match action {
+            Action::MoveSelection(mv) => {
+                self.sel = match mv {
+                    SelectionMove::Down(n) => self.sel.saturating_add(n).min(max),
+                    SelectionMove::Up(n) => self.sel.saturating_sub(n),
+                    SelectionMove::First => 0,
+                    SelectionMove::Last => max,
+                };
+                Some(OverlayResponse::Consumed)
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.sel = self.sel.saturating_sub(1);
-                OverlayResponse::Consumed
+            Action::ActivateSelection => {
+                Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(self.sel)))
             }
-            KeyCode::Char('J') => {
-                self.sel = self.sel.saturating_add(ROW_BIG_STEP).min(max);
-                OverlayResponse::Consumed
+            // 开关键语义:queue 已开,open_queue(toggle)/ quit / back 都收敛为关闭本浮层。
+            Action::OpenQueue | Action::OpenQuitConfirm | Action::BackOrClearSearch => {
+                Some(OverlayResponse::Do(OverlayAction::CloseTop))
             }
-            KeyCode::Char('K') => {
-                self.sel = self.sel.saturating_sub(ROW_BIG_STEP);
-                OverlayResponse::Consumed
-            }
-            KeyCode::Char('g') => {
-                self.sel = 0;
-                OverlayResponse::Consumed
-            }
-            KeyCode::Char('G') => {
-                self.sel = max;
-                OverlayResponse::Consumed
-            }
-            KeyCode::Enter => OverlayResponse::Do(OverlayAction::PlayQueueIndex(self.sel)),
-            KeyCode::Tab | KeyCode::Char('q') | KeyCode::Esc => {
-                OverlayResponse::Do(OverlayAction::CloseTop)
-            }
-            // 其余(空格 / m / ±/ ←→ / p / n / t)半穿透给全局键:queue 打开时仍可控播放、切歌词。
-            _ => OverlayResponse::Pass,
+            // 其余(播放控制族等)不认 → 回落 on_key(Pass 半穿透)。
+            _ => None,
         }
     }
 }
@@ -259,23 +250,24 @@ mod tests {
         Overlay, OverlayAction, OverlayResponse, render_overlay,
     };
     use crate::render::theme::Theme;
+    use crate::runtime::action::{Action, SelectionMove};
     use crate::runtime::state::AppState;
     use crate::test_support::endserenading;
 
     /// 造一个填了队列的 [`AppState`],并把在播歌设为下标 `current`(None 表示无在播)。
-    fn ctx_with_queue(len: usize, current: Option<usize>) -> AppState {
-        let mut s = AppState::empty();
+    fn ctx_with_queue(len: usize, current: Option<usize>) -> color_eyre::Result<AppState> {
+        let mut s = AppState::test_default()?;
         let queue = endserenading(len);
         s.playback.track = current.and_then(|i| queue.get(i).cloned());
         s.queue = queue;
-        s
+        Ok(s)
     }
 
     /// 空 queue,完全展开。
     #[test]
     fn queue_empty_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = AppState::empty();
+        let ctx = AppState::test_default()?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(
@@ -297,7 +289,7 @@ mod tests {
     #[test]
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let ctx = ctx_with_queue(3, Some(1));
+        let ctx = ctx_with_queue(3, Some(1))?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
@@ -314,7 +306,7 @@ mod tests {
     #[test]
     fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = ctx_with_queue(3, Some(1));
+        let ctx = ctx_with_queue(3, Some(1))?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
@@ -330,7 +322,7 @@ mod tests {
     #[test]
     fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = ctx_with_queue(3, None);
+        let ctx = ctx_with_queue(3, None)?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(
@@ -355,7 +347,7 @@ mod tests {
     #[test]
     fn queue_h_grow_smooth_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
-        let ctx = ctx_with_queue(3, None);
+        let ctx = ctx_with_queue(3, None)?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(
@@ -379,7 +371,7 @@ mod tests {
     #[test]
     fn queue_fullscreen_dock_right_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = ctx_with_queue(3, Some(1));
+        let mut ctx = ctx_with_queue(3, Some(1))?;
         ctx.fullscreen = true;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
@@ -402,34 +394,49 @@ mod tests {
     /// `on_key` 导航:j/k/g/G 移动光标并 `Consumed`;Enter 产出 `PlayQueueIndex`;
     /// Tab/q/Esc 产出 `CloseTop`;空格 / t 半穿透 `Pass`。
     #[test]
-    fn on_key_navigates_and_emits_actions() {
+    fn on_key_navigates_and_emits_actions() -> color_eyre::Result<()> {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let ctx = ctx_with_queue(6, None);
-        let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::empty());
+        let ctx = ctx_with_queue(6, None)?;
         let mut o = QueueOverlay::new(0);
 
+        // 导航/激活/关闭走 on_action(语义动作,跟随键位重映射与 behavior 步长)。
         assert!(matches!(
-            o.on_key(&key(KeyCode::Char('G')), &ctx),
-            OverlayResponse::Consumed
+            o.on_action(Action::MoveSelection(SelectionMove::Last), &ctx),
+            Some(OverlayResponse::Consumed)
         ));
-        assert_eq!(o.cursor(), 5, "G 跳末行");
+        assert_eq!(o.cursor(), 5, "Last 跳末行");
         assert!(matches!(
-            o.on_key(&key(KeyCode::Char('k')), &ctx),
-            OverlayResponse::Consumed
+            o.on_action(Action::MoveSelection(SelectionMove::Up(1)), &ctx),
+            Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 4);
+        assert!(matches!(
+            o.on_action(Action::MoveSelection(SelectionMove::Down(3)), &ctx),
+            Some(OverlayResponse::Consumed)
+        ));
+        assert_eq!(
+            o.cursor(),
+            5,
+            "大步下移越界钳到末行(步长来自注入,不再本地 const)"
+        );
 
         assert!(matches!(
-            o.on_key(&key(KeyCode::Enter), &ctx),
-            OverlayResponse::Do(OverlayAction::PlayQueueIndex(4))
+            o.on_action(Action::ActivateSelection, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(5)))
+        ));
+        // 开关键族(open_queue/quit/back)收敛为关闭本浮层。
+        assert!(matches!(
+            o.on_action(Action::BackOrClearSearch, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::CloseTop))
         ));
         assert!(matches!(
-            o.on_key(&key(KeyCode::Esc), &ctx),
-            OverlayResponse::Do(OverlayAction::CloseTop)
+            o.on_action(Action::OpenQueue, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::CloseTop))
         ));
-        assert!(matches!(
-            o.on_key(&key(KeyCode::Char(' ')), &ctx),
-            OverlayResponse::Pass
-        ));
+        // 播放控制族不认 → None(回落裸键 Pass 半穿透)。
+        assert!(o.on_action(Action::TogglePlayPause, &ctx).is_none());
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty());
+        assert!(matches!(o.on_key(&space, &ctx), OverlayResponse::Pass));
+        Ok(())
     }
 }

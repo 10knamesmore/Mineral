@@ -58,6 +58,13 @@ return {
       kill_spawned_daemon_on_exit = true,
     },
     spectrum = {
+      fft_size = 4096,
+      f_min = 20,
+      f_max = 20000,
+      log_axis_blend = 0.92,
+      db_floor = -65.0,
+      db_ceil = -6.0,
+      peak_mix = 0.5,
       show_peak_cap = true,
       show_trail = true,
       hue_rotate = true,
@@ -99,7 +106,6 @@ return {
       playback_cover_radius = 3,
       play_count_debounce_ms = 500,
       prewarm_ahead = 1,
-      channel_workers_per = 8,
     },
     lyrics = {
       line_gap = 1,
@@ -133,10 +139,10 @@ return {
     playback_quality = "exhigh", -- standard | higher | exhigh | lossless | hires
     engine_tick_ms = 20,
     prefetch_bytes = 256 * 1024,
-    tap_capacity = 4096,
+    tap_capacity = 8192, -- 须 ≥ 2 × tui.spectrum.fft_size,否则 UI 卡帧丢样本出毛刺
   },
   cache = {
-    audio_capacity = 10 * 1024 ^ 3, -- 字节;Lua 可编程性:不需要 "10GiB" 字符串解析
+    audio_capacity = 10 * 1024 ^ 3,
     cover_capacity = 1 * 1024 ^ 3,
   },
   download = {
@@ -159,5 +165,6 @@ return {
     report_interval_ms = 200,
     seek_threshold_ms = 1000,
     download_speed_tick_ms = 150,
+    channel_workers_per = 8,
   },
 }

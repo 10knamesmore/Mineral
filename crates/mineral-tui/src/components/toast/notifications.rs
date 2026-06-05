@@ -17,8 +17,6 @@ use crate::components::toast::toast::{Toast, ToastItem};
 use crate::render::theme::Theme;
 
 /// 一次性通知存活时长;[`Notifications::flash`] 推送的条目超过它后自动退场。
-const FLASH_TTL: Duration = Duration::from_secs(4);
-
 /// 常驻进度源标识。仿 [`mineral_model::SourceKind`] 范式:newtype + 关联常量,
 /// `Copy`、强类型、**开放**(未来加源只追加常量,通知层零改)。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,7 +31,7 @@ impl LiveSlot {
 enum Life {
     /// 一次性:到 `deadline` 自动退场。
     Flash {
-        /// 退场时刻(推送时 = `now + FLASH_TTL`)。
+        /// 退场时刻(推送时 = `now + flash_ttl`)。
         deadline: Instant,
     },
 
@@ -57,27 +55,39 @@ struct Entry {
 pub(crate) struct Notifications {
     /// 当前所有通知;渲染时按 live 在上、flash 在下排布。
     entries: Vec<Entry>,
+
+    /// 一次性通知的展示时长(配置 `toast.flash_ttl_secs`)。
+    flash_ttl: Duration,
+
+    /// toast 进 / 出场动画 tick 数(配置 `animation.toast_anim_ticks`)。
+    anim_ticks: u16,
 }
 
 impl Notifications {
     /// 新建空通知管理器。
-    pub(crate) fn new() -> Self {
+    ///
+    /// # Params:
+    ///   - `flash_ttl_secs`: 一次性通知展示秒数(配置 `toast.flash_ttl_secs`)
+    ///   - `toast_anim_ticks`: toast 进 / 出场动画 tick 数(配置 `animation.toast_anim_ticks`)
+    pub(crate) fn new(flash_ttl_secs: u64, toast_anim_ticks: u16) -> Self {
         Self {
             entries: Vec::new(),
+            flash_ttl: Duration::from_secs(flash_ttl_secs),
+            anim_ticks: toast_anim_ticks,
         }
     }
 
-    /// 推一条一次性通知(`deadline = now + FLASH_TTL`)。多次调用 = 多条堆叠。
+    /// 推一条一次性通知(`deadline = now + flash_ttl`)。多次调用 = 多条堆叠。
     ///
     /// # Params:
     ///   - `item`: 要显示的内容
     pub(crate) fn flash(&mut self, item: Box<dyn ToastItem>) {
-        let mut toast = Toast::new();
+        let mut toast = Toast::new(self.anim_ticks);
         toast.set(Some(item));
         self.entries.push(Entry {
             toast,
             life: Life::Flash {
-                deadline: Instant::now() + FLASH_TTL,
+                deadline: Instant::now() + self.flash_ttl,
             },
         });
     }
@@ -102,7 +112,7 @@ impl Notifications {
             Some(entry) => entry.toast.set(item),
             None => {
                 if let Some(item) = item {
-                    let mut toast = Toast::new();
+                    let mut toast = Toast::new(self.anim_ticks);
                     toast.set(Some(item));
                     self.entries.push(Entry {
                         toast,
@@ -211,8 +221,21 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{FLASH_TTL, LiveSlot, Notifications, text_item};
+    use super::{LiveSlot, Notifications, text_item};
     use crate::render::theme::Theme;
+
+    /// 测试对照值 = default.lua 默认(flash_ttl_secs=4 / toast_anim_ticks=6)。
+    const FLASH_TTL: Duration = Duration::from_secs(4);
+
+    /// 同上:toast 动画 tick 数默认。
+    const ANIM_TICKS: u16 = 6;
+
+    /// 以默认旋钮构造通知管理器。
+    fn notifications() -> Notifications {
+        Notifications::new(
+            /*flash_ttl_secs*/ 4, /*toast_anim_ticks*/ ANIM_TICKS,
+        )
+    }
 
     /// 推进 n 帧(每帧刷新同一 live 内容,模拟持续展开)。
     fn run(n: &mut Notifications, frames: usize) {
@@ -225,7 +248,7 @@ mod tests {
     #[test]
     fn stack_live_above_flash_snapshot() -> color_eyre::Result<()> {
         let theme = Theme::default();
-        let mut n = Notifications::new();
+        let mut n = notifications();
         n.flash_text("出错了".to_owned());
         for _ in 0..8 {
             n.set_live(LiveSlot::DOWNLOAD, Some(text_item("下载中 62%".to_owned())));
@@ -247,7 +270,7 @@ mod tests {
     /// 同 slot 二次 `set_live(Some)` 只刷新、不新增条目。
     #[test]
     fn set_live_same_slot_refreshes_not_duplicates() -> color_eyre::Result<()> {
-        let mut n = Notifications::new();
+        let mut n = notifications();
         n.set_live(LiveSlot::DOWNLOAD, Some(text_item("10%".to_owned())));
         n.set_live(LiveSlot::DOWNLOAD, Some(text_item("20%".to_owned())));
         assert_eq!(n.entries.len(), 1);
@@ -257,7 +280,7 @@ mod tests {
     /// `set_live(slot, None)` 触发退场,动画归零后条目被清理。
     #[test]
     fn set_live_none_retires_and_clears() -> color_eyre::Result<()> {
-        let mut n = Notifications::new();
+        let mut n = notifications();
         n.set_live(LiveSlot::DOWNLOAD, Some(text_item("进行中".to_owned())));
         run(&mut n, 8); // 展开
         assert_eq!(n.entries.len(), 1);
@@ -270,7 +293,7 @@ mod tests {
     /// flash 超过 TTL 后退场,归零后条目被清理。
     #[test]
     fn flash_expires_and_clears() -> color_eyre::Result<()> {
-        let mut n = Notifications::new();
+        let mut n = notifications();
         n.flash_text("瞬时".to_owned());
         run(&mut n, 8); // 展开(未过期)
         assert_eq!(n.entries.len(), 1);
@@ -284,7 +307,7 @@ mod tests {
     #[test]
     fn toast_midexpand_snapshot() -> color_eyre::Result<()> {
         let theme = Theme::default();
-        let mut n = Notifications::new();
+        let mut n = notifications();
         for _ in 0..2 {
             n.set_live(
                 LiveSlot::DOWNLOAD,

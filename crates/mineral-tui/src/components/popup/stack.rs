@@ -13,10 +13,8 @@ use crate::components::popup::disconnect::DisconnectOverlay;
 use crate::components::popup::queue::QueueOverlay;
 use crate::render::anim::Transition;
 use crate::render::theme::Theme;
+use crate::runtime::action::Action;
 use crate::runtime::state::AppState;
-
-/// 弹出 / 收起动画时长(tick 数)。主循环 60fps、每 tick 推进一步,18 tick ≈ 300ms。
-const ANIM_TICKS: u16 = 18;
 
 /// 不动画时用的"一帧到位"时长。
 const INSTANT_TICKS: u16 = 1;
@@ -82,6 +80,14 @@ impl Overlay for OverlayKind {
             Self::Disconnect(o) => o.on_key(key, ctx),
         }
     }
+
+    fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+        match self {
+            Self::Queue(o) => o.on_action(action, ctx),
+            Self::Confirm(o) => o.on_action(action, ctx),
+            Self::Disconnect(o) => o.on_action(action, ctx),
+        }
+    }
 }
 
 /// 一个挂载在栈上的浮层:具体浮层 + 框架托管的动画进度。
@@ -95,9 +101,13 @@ struct Mounted {
 
 impl Mounted {
     /// 挂载一个浮层并立即启动进场:按 `chrome().animated` 决定播动画还是一帧到位。
-    fn new(kind: OverlayKind) -> Self {
+    ///
+    /// # Params:
+    ///   - `kind`: 要挂载的浮层
+    ///   - `anim_ticks`: 弹出 / 收起动画时长(tick,配置 `animation.popup_anim_ticks`)
+    fn new(kind: OverlayKind, anim_ticks: u16) -> Self {
         let ticks = if kind.chrome().animated {
-            ANIM_TICKS
+            anim_ticks
         } else {
             INSTANT_TICKS
         };
@@ -111,17 +121,26 @@ impl Mounted {
 pub(crate) struct OverlayStack {
     /// 自底向上的浮层(末尾 = 最上层)。
     stack: Vec<Mounted>,
+
+    /// 弹出 / 收起动画时长(tick,配置 `animation.popup_anim_ticks`)。
+    anim_ticks: u16,
 }
 
 impl OverlayStack {
     /// 新建空栈。
-    pub(crate) fn new() -> Self {
-        Self { stack: Vec::new() }
+    ///
+    /// # Params:
+    ///   - `anim_ticks`: 弹出 / 收起动画时长(tick,配置 `animation.popup_anim_ticks`)
+    pub(crate) fn new(anim_ticks: u16) -> Self {
+        Self {
+            stack: Vec::new(),
+            anim_ticks,
+        }
     }
 
     /// 压入一个浮层并启动进场动画。
     pub(crate) fn push(&mut self, kind: OverlayKind) {
-        self.stack.push(Mounted::new(kind));
+        self.stack.push(Mounted::new(kind, self.anim_ticks));
     }
 
     /// 关闭栈顶浮层:触发收起动画,延迟到归零后由 [`Self::tick`] 真正移除。
@@ -139,12 +158,30 @@ impl OverlayStack {
         self.stack.retain(|m| m.anim.active());
     }
 
-    /// 把按键路由到活跃栈顶(最上面一个未在退场的浮层)。
+    /// 把一次按键路由到活跃栈顶(最上面一个未在退场的浮层):先试已查表的全局动作
+    /// ([`Overlay::on_action`],导航族经此跟随键位重映射),不认再走裸键
+    /// ([`Overlay::on_key`],浮层私有键)。
+    ///
+    /// # Params:
+    ///   - `key`: 原始按键事件(裸键路径用)
+    ///   - `action`: 主 keymap 查表结果(未命中为 `None`)
+    ///   - `ctx`: 只读后端态
     ///
     /// # Return:
     ///   `None` = 无活跃浮层,按键应走主视图;`Some(resp)` = 活跃栈顶的响应。
-    pub(crate) fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> Option<OverlayResponse> {
-        self.active_top_mut().map(|m| m.kind.on_key(key, ctx))
+    pub(crate) fn dispatch_key(
+        &mut self,
+        key: &KeyEvent,
+        action: Option<Action>,
+        ctx: &AppState,
+    ) -> Option<OverlayResponse> {
+        let top = self.active_top_mut()?;
+        if let Some(a) = action
+            && let Some(resp) = top.kind.on_action(a, ctx)
+        {
+            return Some(resp);
+        }
+        Some(top.kind.on_key(key, ctx))
     }
 
     /// 自底向上渲染所有浮层;活跃栈顶标记为 `focused`(影响边框色)。

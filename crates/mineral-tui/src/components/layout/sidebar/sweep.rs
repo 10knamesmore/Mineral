@@ -1,31 +1,16 @@
 //! 左栏 Playlists ↔ Library 切换的横向过渡合成。
 //!
 //! 两个视图各渲染到一块和左栏等大的离屏 [`Buffer`],再按过渡进度把列搬运 / 拼接进目标
-//! 区域。`Push` 让两块一起平移、`Cover` 让新视图从右覆盖旧视图。过渡风格编译期 [`VIEW_SWEEP`]
-//! 选定,运行时切换待配置系统。
+//! 区域。`Push` 让两块一起平移、`Cover` 让新视图从右覆盖旧视图。过渡风格由配置
+//! `tui.animation.view_sweep` 选定([`SweepStyle`],调用方从 `state.cfg` 取传入)。
 
+use mineral_config::SweepStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::{library, playlists};
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
-
-/// 左栏切换过渡风格。
-// reason: 两种风格都是实装,由编译期 `VIEW_SWEEP` 选定;未选中的那个在非 test 构建里
-// "从未构造",但改一行 const 即启用 —— 配置备选项,非死代码。
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SweepStyle {
-    /// 推入栈:曲目从右滑入,同时把歌单往左推走;返回反向。
-    Push,
-
-    /// 覆盖滑入:歌单原地不动,曲目从右盖上(左缘竖线由 Library 自带边框自然形成)。
-    Cover,
-}
-
-/// 当前采用的过渡风格。配置系统接入前的唯一切换点(改这一处即可换 Push / Cover)。
-pub const VIEW_SWEEP: SweepStyle = SweepStyle::Push;
 
 /// 缓动进度满值(千分比),对齐 [`crate::render::anim::Transition::eased`]。
 const FULL: u32 = 1000;
@@ -63,14 +48,6 @@ pub fn draw(
 
     for c in 0..w {
         let (src, src_c) = match style {
-            // 旧视图整体左移 advance,新视图从右补入。
-            SweepStyle::Push => {
-                if c + advance < w {
-                    (&pl, c + advance)
-                } else {
-                    (&lib, c + advance - w)
-                }
-            }
             // 旧视图不动;新视图占据最右 advance 列(其左边框落在分界列 = 覆盖左缘)。
             SweepStyle::Cover => {
                 let split = w - advance;
@@ -78,6 +55,15 @@ pub fn draw(
                     (&pl, c)
                 } else {
                     (&lib, c - split)
+                }
+            }
+            // 旧视图整体左移 advance,新视图从右补入。
+            // SweepStyle 是 #[non_exhaustive]:未来新风格接线前按 Push 兜底。
+            SweepStyle::Push | _ => {
+                if c + advance < w {
+                    (&pl, c + advance)
+                } else {
+                    (&lib, c + advance - w)
                 }
             }
         };
@@ -111,14 +97,14 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::SweepStyle;
     use crate::render::anim::Transition;
     use crate::render::theme::Theme;
     use crate::runtime::state::View;
+    use mineral_config::SweepStyle;
 
     /// 把一帧 sweep 合成画到 `TestBackend` 并返回其快照串。
     fn render_sweep(eased: u16, style: SweepStyle) -> color_eyre::Result<String> {
-        let mut state = crate::test_support::state_with_tracks();
+        let mut state = crate::test_support::state_with_tracks()?;
         // sweep 同屏要两视图都有内容:playlists 与选中歌单的 tracks。
         state.view = View::Library;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
@@ -140,7 +126,7 @@ mod tests {
     #[test]
     fn push_midframe_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let mut state = crate::test_support::state_with_tracks();
+        let mut state = crate::test_support::state_with_tracks()?;
         state.view = View::Library;
         t.draw(|f| {
             let area = f.area();
@@ -161,7 +147,7 @@ mod tests {
     #[test]
     fn cover_midframe_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let mut state = crate::test_support::state_with_tracks();
+        let mut state = crate::test_support::state_with_tracks()?;
         state.view = View::Library;
         t.draw(|f| {
             let area = f.area();
@@ -182,7 +168,7 @@ mod tests {
     /// 两种 style 在端点结果相同(无中途叠加)。
     #[test]
     fn endpoints_degenerate_to_single_view() -> color_eyre::Result<()> {
-        let state = crate::test_support::state_with_tracks();
+        let state = crate::test_support::state_with_tracks()?;
         // eased=0:渲染 = 纯 Playlists(与 playlists::render_to 一致)。
         let mut tp = Terminal::new(TestBackend::new(40, 12))?;
         tp.draw(|f| {
@@ -203,7 +189,7 @@ mod tests {
 
         // eased=满值:渲染 = 纯 Library。
         let mut tl = Terminal::new(TestBackend::new(40, 12))?;
-        let mut lib_state = crate::test_support::state_with_tracks();
+        let mut lib_state = crate::test_support::state_with_tracks()?;
         lib_state.view = View::Library;
         tl.draw(|f| {
             let area = f.area();

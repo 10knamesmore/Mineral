@@ -2470,6 +2470,7 @@ dependencies = [
  "mineral-channel-mock",
  "mineral-channel-netease",
  "mineral-cli",
+ "mineral-config",
  "mineral-log",
  "mineral-media",
  "mineral-paths",
@@ -2485,6 +2486,7 @@ name = "mineral-audio"
 version = "0.4.2"
 dependencies = [
  "color-eyre",
+ "derive-getters",
  "mineral-log",
  "mineral-model",
  "parking_lot",
@@ -2494,6 +2496,7 @@ dependencies = [
  "stream-download",
  "tempfile",
  "tokio",
+ "typed-builder",
  "url",
 ]
 
@@ -2530,6 +2533,7 @@ dependencies = [
  "cipher",
  "clap",
  "color-eyre",
+ "derive-getters",
  "ecb",
  "flate2",
  "hex",
@@ -2556,6 +2560,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "typed-builder",
  "url",
 ]
 
@@ -2702,7 +2707,9 @@ version = "0.4.2"
 dependencies = [
  "async-trait",
  "color-eyre",
+ "derive-getters",
  "futures-util",
+ "insta",
  "lofty",
  "mineral-audio",
  "mineral-channel-core",
@@ -2724,6 +2731,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "typed-builder",
  "url",
 ]
 
@@ -2732,7 +2740,9 @@ name = "mineral-spectrum"
 version = "0.4.2"
 dependencies = [
  "color-eyre",
+ "derive-getters",
  "realfft",
+ "typed-builder",
 ]
 
 [[package]]
@@ -2806,6 +2816,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
  "unicode-width 0.2.0",

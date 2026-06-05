@@ -76,7 +76,7 @@ pub fn render_or_fallback(
     // 会卡帧),改投递给 [`CoverEncoder`] 的 worker 离线编码。
     //
     // - 滚动中:留空,既不闪程序化色块也不投递 —— 避免给 worker 灌一堆滚过即弃的图,
-    //   稳定 ≥ COVER_DEBOUNCE 后再编码淡入(沿用旧的「滚时图位空着」体感)。
+    //   稳定 ≥ cover.debounce_ms 后再编码淡入(沿用旧的「滚时图位空着」体感)。
     // - 稳定后:按 `(url, dims)` 去重投递一次,在途期间画程序化占位;worker 完成后主循环
     //   `drain_ready_protocols` 装回 `cover_protocols`,下一帧命中上真图。
     if state.is_scrolling() {

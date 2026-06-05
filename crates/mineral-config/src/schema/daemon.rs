@@ -34,4 +34,7 @@ pub struct DaemonConfig {
 
     /// 下载测速刷新周期(毫秒)。
     download_speed_tick_ms: u64,
+
+    /// 每个 channel 的任务 worker 数(user/bg 两级队列共享)。
+    channel_workers_per: usize,
 }

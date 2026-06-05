@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn playlists_list_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let state = crate::test_support::state_with_playlists();
+        let state = crate::test_support::state_with_playlists()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn playlists_search_active_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let mut state = crate::test_support::state_with_playlists();
+        let mut state = crate::test_support::state_with_playlists()?;
         state.search_mode = true;
         state.search_q = "春日影".to_owned();
         t.draw(|f| {
@@ -226,7 +226,7 @@ mod tests {
     fn playlists_search_pinyin_initials_snapshot() -> color_eyre::Result<()> {
         use mineral_model::SourceKind;
 
-        let mut state = AppState::empty();
+        let mut state = AppState::test_default()?;
         state.playlists = vec![
             crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
@@ -249,7 +249,7 @@ mod tests {
     fn playlists_search_pinyin_full_snapshot() -> color_eyre::Result<()> {
         use mineral_model::SourceKind;
 
-        let mut state = AppState::empty();
+        let mut state = AppState::test_default()?;
         state.playlists = vec![crate::test_support::playlist_view(
             "a",
             "春日影",
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn playlists_empty_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let state = AppState::empty();
+        let state = AppState::test_default()?;
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());

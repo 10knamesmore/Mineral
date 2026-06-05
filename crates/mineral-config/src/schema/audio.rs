@@ -28,7 +28,7 @@ pub struct AudioConfig {
     /// 流式播放起播前预拉的字节数。
     prefetch_bytes: u64,
 
-    /// FFT tap 环形缓冲容量(采样点)。
+    /// FFT tap 环形缓冲容量(采样点)。**外键**:须 ≥ 2 × `tui.spectrum.fft_size`。
     tap_capacity: usize,
 }
 

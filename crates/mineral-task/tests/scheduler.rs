@@ -133,7 +133,7 @@ fn channels(gate: Option<Arc<Semaphore>>) -> Vec<Arc<dyn MusicChannel>> {
 
 #[tokio::test]
 async fn submit_and_done_ok() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None));
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
     let h = sched.submit(my_playlists_kind(), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 
@@ -149,7 +149,7 @@ async fn submit_and_done_ok() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn cancel_yields_cancelled() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(gate)));
+    let sched = Scheduler::new(&channels(Some(gate)), /*workers_per_channel*/ 8);
     let h = sched.submit(my_playlists_kind(), Priority::User);
     h.cancel();
     assert_eq!(h.done().await, TaskOutcome::Cancelled);
@@ -159,7 +159,10 @@ async fn cancel_yields_cancelled() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn dedup_returns_same_handle() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(Arc::clone(&gate))));
+    let sched = Scheduler::new(
+        &channels(Some(Arc::clone(&gate))),
+        /*workers_per_channel*/ 8,
+    );
     let h1 = sched.submit(my_playlists_kind(), Priority::User);
     let h2 = sched.submit(my_playlists_kind(), Priority::User);
     assert_eq!(h1.id, h2.id);
@@ -172,7 +175,7 @@ async fn dedup_returns_same_handle() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn cancel_where_batch() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(gate)));
+    let sched = Scheduler::new(&channels(Some(gate)), /*workers_per_channel*/ 8);
     let h1 = sched.submit(my_playlists_kind(), Priority::User);
     let h2 = sched.submit(playlist_tracks_kind(), Priority::User);
     sched.cancel_where(|k| matches!(k, TaskKind::ChannelFetch(_)));
@@ -184,7 +187,10 @@ async fn cancel_where_batch() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn escalate_replaces_background() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(Arc::clone(&gate))));
+    let sched = Scheduler::new(
+        &channels(Some(Arc::clone(&gate))),
+        /*workers_per_channel*/ 8,
+    );
     let h_bg = sched.submit(my_playlists_kind(), Priority::Background);
     let h_user = sched.submit(my_playlists_kind(), Priority::User);
     assert_ne!(h_bg.id, h_user.id);
@@ -197,7 +203,7 @@ async fn escalate_replaces_background() -> color_eyre::Result<()> {
 
 #[tokio::test]
 async fn song_url_emits_play_url_ready() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None));
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
     let h = sched.submit(song_url_kind("s1"), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 
@@ -215,7 +221,10 @@ async fn song_url_emits_play_url_ready() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn song_url_dedup_returns_same_handle() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(Arc::clone(&gate))));
+    let sched = Scheduler::new(
+        &channels(Some(Arc::clone(&gate))),
+        /*workers_per_channel*/ 8,
+    );
     let h1 = sched.submit(song_url_kind("s2"), Priority::User);
     let h2 = sched.submit(song_url_kind("s2"), Priority::User);
     assert_eq!(h1.id, h2.id);
@@ -227,7 +236,7 @@ async fn song_url_dedup_returns_same_handle() -> color_eyre::Result<()> {
 
 #[tokio::test]
 async fn lyrics_emits_event() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None));
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
     let h = sched.submit(lyrics_kind("s3"), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 

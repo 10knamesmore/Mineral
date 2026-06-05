@@ -146,7 +146,11 @@ async fn main() -> Result<()> {
 
 /// 用已存登录态构造 channel;未登录则匿名(仅公开端点可用)。
 fn build_channel() -> Result<NeteaseChannel> {
-    let cfg = NeteaseConfig::default();
+    let cfg = NeteaseConfig::builder()
+        .max_connections(0)
+        .proxy(None)
+        .timeout_secs(100)
+        .build();
     match load_stored()? {
         Some(auth) => {
             eprintln!("(用已存登录态 user_id={})", auth.user_id.as_str());

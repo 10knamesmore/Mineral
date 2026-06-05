@@ -17,8 +17,23 @@ use crate::engine;
 use crate::snapshot::AudioSnapshot;
 use crate::tap::SharedProd;
 
-/// PCM tap ringbuf 容量(f32 样本)。覆盖 2 个 2048-sample FFT 窗,UI 慢一帧不丢窗。
-const TAP_CAPACITY: usize = 4096;
+/// 音频引擎启动参数(来自用户配置 `audio` 段;生产构造方为 daemon 启动链)。
+#[non_exhaustive]
+#[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]
+pub struct EngineParams {
+    /// 初始音量百分比(0..=100,内部 clamp)。
+    initial_volume: u8,
+
+    /// 引擎主循环 tick 间隔(毫秒):命令空转 / snapshot 刷新 / seek drain 节拍。
+    tick_ms: u64,
+
+    /// 流式播放起播前预拉的字节数。
+    prefetch_bytes: u64,
+
+    /// PCM tap ringbuf 容量(f32 样本)。**外键**:须 ≥ 2 × 频谱 FFT 窗大小
+    /// (配置 `tui.spectrum.fft_size`)——双窗余量,UI 卡一帧不丢样本。
+    tap_capacity: usize,
+}
 
 /// 引擎启动时的音频后端选择。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,40 +94,36 @@ impl AudioHandle {
     ///
     /// # Params:
     ///   - `mode`: [`AudioMode::Auto`] 拿不到设备时降级 null;[`AudioMode::ForceNull`] 直接空跑。
+    ///   - `params`: 引擎启动参数(初始音量 / tick / prefetch / tap 容量),来自配置。
     ///
     /// # Return:
     ///   `Err` 仅在引擎线程 spawn / runtime 构建等**真错**时返回;无音频设备**不**算错(降级)。
-    pub fn spawn(mode: AudioMode) -> color_eyre::Result<(Self, SpectrumTap)> {
+    pub fn spawn(mode: AudioMode, params: EngineParams) -> color_eyre::Result<(Self, SpectrumTap)> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
         let snapshot = Arc::new(Mutex::new(AudioSnapshot {
-            volume_pct: 100,
+            volume_pct: (*params.initial_volume()).min(100),
             ..AudioSnapshot::default()
         }));
 
         let seek_mailbox = Arc::new(Mutex::new(None::<Duration>));
 
-        let rb = HeapRb::<f32>::new(TAP_CAPACITY);
+        let rb = HeapRb::<f32>::new(*params.tap_capacity());
         let (producer, consumer) = rb.split();
         let shared_prod: SharedProd = Arc::new(Mutex::new(producer));
         let sr_atomic = Arc::new(AtomicU32::new(0));
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<color_eyre::Result<()>>(1);
-        let snap_for_engine = Arc::clone(&snapshot);
-        let mailbox_for_engine = Arc::clone(&seek_mailbox);
-        let prod_for_engine = Arc::clone(&shared_prod);
-        let sr_for_engine = Arc::clone(&sr_atomic);
+        let io = engine::EngineIo {
+            snapshot: Arc::clone(&snapshot),
+            seek_mailbox: Arc::clone(&seek_mailbox),
+            ready_tx,
+            tap_producer: Arc::clone(&shared_prod),
+            sr_atomic: Arc::clone(&sr_atomic),
+        };
         thread::Builder::new()
             .name(String::from("mineral-audio"))
             .spawn(move || {
-                engine::run(
-                    &cmd_rx,
-                    &snap_for_engine,
-                    &mailbox_for_engine,
-                    &ready_tx,
-                    &prod_for_engine,
-                    &sr_for_engine,
-                    mode,
-                );
+                engine::run(&cmd_rx, &io, mode, &params);
             })
             .map_err(|e| eyre!("spawn audio thread: {e}"))?;
 
@@ -229,14 +240,36 @@ mod tests {
     use crate::handle::AudioMode;
     use crate::snapshot::AudioBackend;
 
-    use super::AudioHandle;
+    use super::{AudioHandle, EngineParams};
+
+    /// 测试基线参数(任意合理值;生产默认的唯一真相源是 mineral-config 的 default.lua)。
+    fn params(initial_volume: u8) -> EngineParams {
+        EngineParams::builder()
+            .initial_volume(initial_volume)
+            .tick_ms(20)
+            .prefetch_bytes(256 * 1024)
+            .tap_capacity(8192)
+            .build()
+    }
+
+    /// 逐旋钮生效:注入初始音量反映在 snapshot。
+    #[test]
+    fn initial_volume_injection_lands_in_snapshot() -> color_eyre::Result<()> {
+        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(30))?;
+        assert_eq!(
+            handle.snapshot().volume_pct,
+            30,
+            "注入初始音量应入 snapshot"
+        );
+        Ok(())
+    }
 
     /// `ForceNull` 起得来、snapshot 标 `Null`,且无 sink 也接受命令、引擎线程不死。
     ///
     /// 无 env、无真音频设备,确定性复现降级路径。
     #[test]
     fn force_null_spawns_in_null_mode_and_accepts_commands() -> color_eyre::Result<()> {
-        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull)?;
+        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(100))?;
         assert_eq!(
             handle.snapshot().backend,
             AudioBackend::Null,

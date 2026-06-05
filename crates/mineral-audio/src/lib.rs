@@ -11,5 +11,5 @@ mod queue_slots;
 mod snapshot;
 mod tap;
 
-pub use handle::{AudioHandle, AudioMode, SpectrumTap};
+pub use handle::{AudioHandle, AudioMode, EngineParams, SpectrumTap};
 pub use snapshot::{AudioBackend, AudioSnapshot};

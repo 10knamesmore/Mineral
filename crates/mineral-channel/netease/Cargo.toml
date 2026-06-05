@@ -15,6 +15,10 @@ mineral-paths        = { workspace = true }
 mineral-log          = { workspace = true }
 mineral-persist      = { workspace = true }
 
+# 配置 struct 约定:builder 构造 + getter 读取
+typed-builder  = { workspace = true }
+derive-getters = { workspace = true }
+
 # 加密
 aes        = { workspace = true }
 cbc        = { workspace = true }

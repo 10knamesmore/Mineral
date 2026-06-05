@@ -93,6 +93,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
             cursor,
             extra,
             motion,
+            line_gap: *state.cfg.tui().lyrics().line_gap(),
+            scroll_ms: *state.cfg.tui().lyrics().scroll_ms(),
         },
         theme,
     );
@@ -266,14 +268,6 @@ pub enum LyricMode {
     Immersive,
 }
 
-/// 全屏沉浸态行与行之间垫的空行数。空行把相邻行的视觉行距从 1 拉到 ≥2,使单行推进的
-/// 缓动锚点经过中间整数行 → 垂直方向出现可见滚动(而非瞬跳)。`Compact` 态恒为 0。
-const LYRIC_LINE_GAP: usize = 1;
-
-/// 当前行切换后,整列平移 + 高亮交叉淡入的过渡时长(ms)。`position_ms` 越过此窗口即吸附
-/// 到位(故 seek 远跳不慢滚)。
-const LYRIC_SCROLL_MS: u64 = 280;
-
 /// 进度满值(千分比),与 [`crate::render::anim`] 同范式定点。
 const SCROLL_FULL: u16 = 1000;
 
@@ -335,6 +329,12 @@ struct WindowInput<'a> {
 
     /// 呈现模式:决定行间距与高亮过渡。
     motion: LyricMode,
+
+    /// Immersive 模式的行间距(行,配置 `tui.lyrics.line_gap`)。
+    line_gap: usize,
+
+    /// 行切换缓动平移时长(ms,配置 `tui.lyrics.scroll_ms`)。
+    scroll_ms: u64,
 }
 
 /// 渲染以 `cur` 为中心、上下展开的歌词窗口。
@@ -350,9 +350,11 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
         cursor,
         extra,
         motion,
+        line_gap,
+        scroll_ms,
     } = input;
     let gap = match motion {
-        LyricMode::Immersive => LYRIC_LINE_GAP,
+        LyricMode::Immersive => line_gap,
         LyricMode::Compact => 0,
     };
     // 展开成视觉行序列;记当前行(居中基准)与上一行(平移 / 交叉淡入端)所在视觉行。
@@ -393,7 +395,7 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
                     .position_ms
                     .saturating_sub(lines.get(c).map_or(0, |(t, _)| *t))
             });
-            let eased = ease_in_out(scroll_progress(elapsed, LYRIC_SCROLL_MS));
+            let eased = ease_in_out(scroll_progress(elapsed, scroll_ms));
             let anchor = scroll_anchor(prev_center, cur_center, eased);
             (anchor, eased, cur.filter(|&c| c > 0).map(|c| c - 1))
         }
@@ -625,7 +627,7 @@ mod tests {
     #[test]
     fn lyrics_fallback_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
-        let state = AppState::empty();
+        let state = AppState::test_default()?;
         t.draw(|f| {
             super::draw(
                 f,
@@ -646,7 +648,7 @@ mod tests {
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
-        );
+        )?;
         t.draw(|f| {
             super::draw(
                 f,
@@ -667,7 +669,7 @@ mod tests {
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Romanization,
             /*with_words*/ false,
-        );
+        )?;
         t.draw(|f| {
             super::draw(
                 f,
@@ -685,7 +687,7 @@ mod tests {
     #[test]
     fn lyrics_no_extra_hides_hint_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
-        let state = crate::test_support::state_with_lrc_only();
+        let state = crate::test_support::state_with_lrc_only()?;
         t.draw(|f| {
             super::draw(
                 f,
@@ -707,7 +709,7 @@ mod tests {
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
-        );
+        )?;
         t.draw(|f| {
             super::draw(
                 f,
@@ -730,7 +732,7 @@ mod tests {
         let mut state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
-        );
+        )?;
         state.playback.position_ms = 66_510;
         t.draw(|f| {
             super::draw(

@@ -9,7 +9,9 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-realfft = { workspace = true }
+derive-getters = { workspace = true }
+realfft        = { workspace = true }
+typed-builder  = { workspace = true }
 
 [dev-dependencies]
 color-eyre = { workspace = true }

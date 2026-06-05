@@ -31,24 +31,18 @@ use crate::runtime::state::{AppState, View};
 use crate::tui::Tui;
 use crate::view::draw;
 
-/// 主循环帧间隔(≈60fps)。重绘 + 拉数据 + 推进动画/频谱统一这一个节奏。
-const TICK: Duration = Duration::from_millis(16);
-
-/// 整屏转场动画时长(tick 数);≈ 18 tick ≈ 300ms。启动扩大与退出收缩同速对称。
-const TRANSITION_TICKS: u16 = 18;
-
 /// 应用顶层状态。
 pub struct App {
     /// 是否退出主循环。
     pub should_quit: bool,
 
-    /// 当前主题。
-    pub theme: Theme,
+    /// 当前主题(`Arc` 共享:future 热重载时整体换,渲染处只读引用)。
+    pub theme: std::sync::Arc<Theme>,
 
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
 
-    /// 键 → 动作绑定表。本期 [`Keymap::builtin`];config 落地后从这里换注入。
+    /// 键 → 动作绑定表(由配置 keys/behavior 段落地)。
     keymap: Keymap,
 
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
@@ -61,6 +55,15 @@ pub struct App {
 
     /// 上一次 tick 时间。
     pub last_tick: Instant,
+
+    /// 主循环帧间隔(配置 `animation.frame_tick_ms`,默认 ≈60fps)。
+    frame_tick: Duration,
+
+    /// 整屏转场动画时长(tick,配置 `animation.transition_ticks`);扩大与收缩同速对称。
+    transition_ticks: u16,
+
+    /// client 侧心跳间隔(配置 `daemon.heartbeat_secs`)。
+    heartbeat: Duration,
 
     /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
     /// 实现可能是同进程 `ClientHandle`,也可能是跨进程 `RemoteClient`,通过
@@ -90,7 +93,7 @@ pub struct App {
 }
 
 impl App {
-    /// 构造 App。
+    /// 构造 App:主题 / 键表 / 各段手感由注入的配置一次性落地。
     ///
     /// # Params:
     ///   - `client`: 跟 server 交互的句柄
@@ -98,35 +101,52 @@ impl App {
     ///   - `picker`: 终端图片协议能力
     ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
     ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
+    ///   - `cfg`: 已加载的全局配置(`Arc` 共享只读)
     pub fn new(
         client: Arc<dyn Client>,
         cover_fetcher: CoverFetcher,
         cover_encoder: CoverEncoder,
         picker: Picker,
         launch_anchor: Option<Position>,
+        cfg: Arc<mineral_config::Config>,
     ) -> Self {
-        let mut state = AppState::empty();
+        let tui_cfg = cfg.tui();
+        let theme = Arc::new(Theme::from_config(tui_cfg.theme()));
+        let keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
+        let overlays = OverlayStack::new(*tui_cfg.animation().popup_anim_ticks());
+        let notifications = Notifications::new(
+            *tui_cfg.toast().flash_ttl_secs(),
+            *tui_cfg.animation().toast_anim_ticks(),
+        );
+        let frame_tick = Duration::from_millis(*tui_cfg.animation().frame_tick_ms());
+        let transition_ticks = *tui_cfg.animation().transition_ticks();
+        let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
+        let mut state = AppState::new(cfg);
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
         state.cover_encode_tx = cover_encoder.sender();
         Self {
             should_quit: false,
-            theme: Theme::default(),
+            theme,
             state,
-            keymap: Keymap::builtin(),
-            overlays: OverlayStack::new(),
+            keymap,
+            overlays,
             transition: None,
             last_tick: Instant::now(),
+            frame_tick,
+            transition_ticks,
+            heartbeat,
             client,
             cover_fetcher,
             cover_encoder,
-            notifications: Notifications::new(),
+            notifications,
             download_notifier: DownloadNotifier::new(),
             picker,
             launch_anchor,
         }
     }
 
-    /// 同步主事件循环:绘制 → 等事件 → 每 [`TICK`] 拉数据 + 推进动画/频谱。固定 ~60fps。
+    /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
+    /// (节奏由配置 `animation.frame_tick_ms` 决定,默认 ~60fps)。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         // 启动时同步一次(versions 初始为 0 → 必然全量),in-proc / connect 都立即
         // 看到 server 状态;与 tick 路径同一条 sync 通道,无特殊分支。
@@ -134,9 +154,9 @@ impl App {
         self.apply_player_sync(sync);
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
-        self.transition = Some(Transition::expanding(TRANSITION_TICKS));
+        self.transition = Some(Transition::expanding(self.transition_ticks));
 
-        // client 侧 60s 心跳:报 server 看不到的 UI / 缓存状态(启动即首条)。
+        // client 侧心跳(间隔 = daemon.heartbeat_secs):报 server 看不到的 UI / 缓存状态(启动即首条)。
         let mut last_heartbeat = Instant::now();
         self.log_heartbeat();
 
@@ -161,7 +181,7 @@ impl App {
                 // 清掉转场:本分支不推进它,启动即断连否则会把扩大动画卡在空屏。
                 self.transition = None;
                 tui.draw(|f| draw(f, self))?;
-                if event::poll(TICK)?
+                if event::poll(self.frame_tick)?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
                 {
@@ -173,11 +193,11 @@ impl App {
 
             tui.draw(|f| draw(f, self))?;
 
-            let timeout = TICK.saturating_sub(self.last_tick.elapsed());
+            let timeout = self.frame_tick.saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {
                 self.handle_event(&event::read()?);
             }
-            if self.last_tick.elapsed() >= TICK {
+            if self.last_tick.elapsed() >= self.frame_tick {
                 // 转场动画(启动扩大 / 退出收缩)进行中:只推进它 + 重绘(上方 tui.draw),
                 // 跳过后端同步;退出转场归零即退,启动转场推满即转入正常运行。
                 if self.transition.is_some() {
@@ -205,7 +225,7 @@ impl App {
                 self.download_notifier.feed(&mut self.notifications, &dp);
                 self.notifications.tick();
                 self.last_tick = Instant::now();
-                if last_heartbeat.elapsed() >= Duration::from_secs(60) {
+                if last_heartbeat.elapsed() >= self.heartbeat {
                     self.log_heartbeat();
                     last_heartbeat = Instant::now();
                 }
@@ -373,8 +393,9 @@ impl App {
 
     /// 把 client.pull_pcm 拿到的样本喂给 fft computer。in-proc 和 connect 走同一路径。
     fn update_spectrum(&mut self) {
-        const POP_CHUNK: usize = 2048;
-        let (samples, sample_rate) = self.client.pull_pcm(POP_CHUNK);
+        // 每 tick 最多拉一个 FFT 窗的样本:正常一帧只来几百样本,卡顿后一帧即可补满整窗。
+        let pop_chunk = self.state.fft.window_size();
+        let (samples, sample_rate) = self.client.pull_pcm(pop_chunk);
         if !samples.is_empty() {
             self.state.fft.push(&samples);
         }
@@ -427,12 +448,16 @@ impl App {
             return;
         }
 
+        // 查一次表,全程复用:浮层在顶时导航族动作经 on_action 进浮层(跟随键位重映射
+        // 与 behavior 步长),浮层不认或未命中再走浮层裸键;无浮层走全局 dispatch。
+        let action = chord_from_event(key).and_then(|c| self.keymap.lookup(c));
+
         // 活跃浮层(栈顶未退场)优先吃键。Consumed 吞掉、Pass 半穿透给全局、Do 交意图执行。
-        if let Some(resp) = self.overlays.on_key(key, &self.state) {
+        if let Some(resp) = self.overlays.dispatch_key(key, action, &self.state) {
             match resp {
                 OverlayResponse::Consumed => {}
                 OverlayResponse::Pass => self.handle_overlay_passthrough(key),
-                OverlayResponse::Do(action) => self.run_overlay_action(action),
+                OverlayResponse::Do(overlay_action) => self.run_overlay_action(overlay_action),
             }
             return;
         }
@@ -443,9 +468,9 @@ impl App {
             return;
         }
 
-        // 查表得意图、dispatch 执行。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)在各
+        // dispatch 执行查表意图。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)在各
         // 执行器开头判,保证「键 → 行为」中段可被 config 表替换而闸语义不动。
-        if let Some(action) = chord_from_event(key).and_then(|c| self.keymap.lookup(c)) {
+        if let Some(action) = action {
             self.dispatch(action);
         }
     }
@@ -487,7 +512,7 @@ impl App {
         match action {
             // 正常退出:不立即退,而是启动「边框向中心收缩」退场动画,归零后主循环再 break。
             OverlayAction::Quit => {
-                self.transition = Some(Transition::collapsing(TRANSITION_TICKS));
+                self.transition = Some(Transition::collapsing(self.transition_ticks));
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::PlayQueueIndex(i) => {
@@ -751,7 +776,10 @@ mod tests {
 
     use mineral_model::{MediaUrl, SourceKind};
 
-    use super::{App, TRANSITION_TICKS};
+    use super::App;
+
+    /// 测试对照值 = default.lua 的 `animation.transition_ticks`。
+    const TRANSITION_TICKS: u16 = 18;
     use crate::render::anim::Transition;
     use crate::render::palette::{CoverPalette, Rgb};
     use crate::test_support::{app_with_library, app_with_queue, endserenading};
@@ -765,7 +793,7 @@ mod tests {
     /// **不**回退到 hue——这样等新色板就绪能直接红→蓝,而非 hue→蓝。
     #[test]
     fn sync_spectrum_holds_previous_cover_until_new_palette_ready() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let red = MediaUrl::remote("https://example.com/red.jpg")?;
         let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
         // 当前在播这首歌封面是 blue,但频谱上一张应用的是 red。
@@ -786,7 +814,7 @@ mod tests {
     /// 回归(红→蓝路径之一):新封面色板就绪即触发过渡并记下其 key。
     #[test]
     fn sync_spectrum_begins_transition_when_palette_ready() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0);
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
         if let Some(song) = app.state.current.as_mut() {
             song.cover_url = Some(blue.clone());
@@ -811,7 +839,7 @@ mod tests {
 
         use crate::test_support::app_in_fullscreen;
 
-        let mut app = app_in_fullscreen();
+        let mut app = app_in_fullscreen()?;
         assert!(app.state.fullscreen, "前置:已稳态进入全屏");
 
         // 模拟封面已渲染:塞一个协议缓存条目。
@@ -857,7 +885,7 @@ mod tests {
 
         use crate::test_support::app_in_fullscreen;
 
-        let mut app = app_in_fullscreen();
+        let mut app = app_in_fullscreen()?;
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
@@ -890,7 +918,7 @@ mod tests {
     #[test]
     fn queue_nav_moves_and_survives_snapshot_tick() -> color_eyre::Result<()> {
         // queue 6 首,当前在播第 2 首(idx 2)。
-        let mut app = app_with_queue(6, /*current_idx*/ 2);
+        let mut app = app_with_queue(6, /*current_idx*/ 2)?;
 
         // Tab 打开浮层:光标定位到在播行。
         press(&mut app, KeyCode::Tab);
@@ -932,8 +960,8 @@ mod tests {
     /// 版本门控的关键语义回归:重段缺席(版本一致的稳态 tick)= 「与已有一致」,
     /// **不是清空** —— queue / current 镜像必须原地保持。
     #[test]
-    fn light_only_sync_keeps_queue_and_current() {
-        let mut app = app_with_queue(6, /*current_idx*/ 2);
+    fn light_only_sync_keeps_queue_and_current() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(6, /*current_idx*/ 2)?;
         let queue_before = app.state.queue.len();
         let current_before = app.state.current.clone();
         assert!(current_before.is_some(), "前置:有在播歌");
@@ -943,12 +971,13 @@ mod tests {
 
         assert_eq!(app.state.queue.len(), queue_before, "queue 不得被清空");
         assert_eq!(app.state.current, current_before, "current 不得被清空");
+        Ok(())
     }
 
     /// 带重段的 sync 正常替换镜像 + 记录版本号供下次回报。
     #[test]
-    fn sync_with_sections_replaces_and_records_versions() {
-        let mut app = app_with_queue(2, /*current_idx*/ 0);
+    fn sync_with_sections_replaces_and_records_versions() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(2, /*current_idx*/ 0)?;
         let sync = PlayerSync {
             versions: mineral_protocol::PlayerVersions {
                 queue: 7,
@@ -964,12 +993,13 @@ mod tests {
         assert_eq!(app.state.queue.len(), 4, "queue 重段应整体替换");
         assert_eq!(app.state.versions.queue, 7);
         assert_eq!(app.state.versions.current, 9);
+        Ok(())
     }
 
     /// 集成回归:Tab 开 queue → Esc 关闭(触发收起动画);q 在无浮层时开退出确认。
     #[test]
-    fn tab_opens_queue_esc_closes() {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+    fn tab_opens_queue_esc_closes() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         // 无浮层时 q 开退出确认 —— 不应直接退出。
         press(&mut app, KeyCode::Char('q'));
         assert!(!app.should_quit, "q 应开退出确认而非直接退出");
@@ -985,12 +1015,13 @@ mod tests {
             app.overlays.tick();
         }
         assert_eq!(app.overlays.queue_sel(), None, "Esc 后 queue 应收起并移除");
+        Ok(())
     }
 
     /// 退出收缩:q → confirm → y 不立即退,而是启动收缩动画;推进到归零后才退出。
     #[test]
-    fn quit_plays_shrink_animation_then_exits() {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+    fn quit_plays_shrink_animation_then_exits() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('q'));
         press(&mut app, KeyCode::Char('y'));
         assert!(!app.should_quit, "确认退出应先播收缩动画,不立即退");
@@ -1007,12 +1038,13 @@ mod tests {
         }
         assert!(app.should_quit, "收缩动画归零后应退出");
         assert!(app.transition.is_none(), "收尾后转场应清空");
+        Ok(())
     }
 
     /// 启动扩大:进入扩大转场(非退场),推进到满后清空转场、不退出、转入正常运行。
     #[test]
-    fn startup_expand_plays_then_runs_normally() {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+    fn startup_expand_plays_then_runs_normally() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         app.transition = Some(Transition::expanding(TRANSITION_TICKS));
         assert!(
             matches!(&app.transition, Some(t) if !t.leaving()),
@@ -1026,24 +1058,26 @@ mod tests {
         }
         assert!(app.transition.is_none(), "扩大动画结束应清空转场");
         assert!(!app.should_quit, "启动动画结束不应退出");
+        Ok(())
     }
 
     /// Ctrl-C 立即退出,不走转场动画。
     #[test]
-    fn ctrl_c_exits_immediately_without_animation() {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+    fn ctrl_c_exits_immediately_without_animation() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
         )));
         assert!(app.should_quit, "Ctrl-C 立即退出");
         assert!(app.transition.is_none(), "Ctrl-C 不走转场动画");
+        Ok(())
     }
 
     /// vim 命令行行为:`/` 进搜索,删到空仍在搜索态,空 query 上再删一次才退出。
     #[test]
-    fn search_backspace_on_empty_query_exits() {
-        let mut app = app_with_library(3, /*sel_track*/ 0);
+    fn search_backspace_on_empty_query_exits() -> color_eyre::Result<()> {
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
 
         // `/` 进入搜索输入态,query 起始为空。
         press(&mut app, KeyCode::Char('/'));
@@ -1064,6 +1098,7 @@ mod tests {
         // 空 query 上再删一次 → 退出搜索。
         press(&mut app, KeyCode::Backspace);
         assert!(!app.state.search_mode, "空 query 上退格应退出搜索");
+        Ok(())
     }
 
     /// Library 视图按 `f` 乐观切换选中曲目的 ♥ 状态,不依赖真实 server。
@@ -1071,7 +1106,7 @@ mod tests {
     #[test]
     fn pressing_f_toggles_loved_optimistically() -> color_eyre::Result<()> {
         // 3 首曲目,选中第 0 首(初始 loved=false,TestClient::toggle_love 是 no-op)。
-        let mut app = app_with_library(3, /*sel_track*/ 0);
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
 
         // 取第 0 首曲目 id,用于后续断言 liked_ids。
         let song_id = app
@@ -1131,9 +1166,9 @@ mod tests {
     /// 列表导航逐键回归:j/k/J/K/g/G 在 Library 与 Playlists 两个视图移动选中,
     /// 大跨步长 7、越界钳到首末行。
     #[test]
-    fn j_k_navigate_in_playlists_and_library() {
+    fn j_k_navigate_in_playlists_and_library() -> color_eyre::Result<()> {
         // Library:10 首,从 0 起。
-        let mut app = app_with_library(10, /*sel_track*/ 0);
+        let mut app = app_with_library(10, /*sel_track*/ 0)?;
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.state.sel_track, 1, "j 下移一行");
         press(&mut app, KeyCode::Char('J'));
@@ -1151,7 +1186,7 @@ mod tests {
         assert_eq!(app.state.sel_track, 9, "G 跳末行");
 
         // Playlists:3 张歌单,同一组键作用于 sel_playlist。
-        let mut app = app_with_library(3, /*sel_track*/ 0);
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
         app.state.view = crate::runtime::state::View::Playlists;
         app.state.playlists = vec![
             crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
@@ -1166,13 +1201,14 @@ mod tests {
         assert_eq!(app.state.sel_playlist, 1, "k 上移一行");
         press(&mut app, KeyCode::Char('g'));
         assert_eq!(app.state.sel_playlist, 0, "g 跳首行");
+        Ok(())
     }
 
     /// 音量 / seek 逐键回归:`+`/`=`/`-`/`_` 走本地乐观值(±5 钳 0..=100);
     /// `←`/`→`/`Shift+←`/`Shift+→` 只发 server 命令,本地 position 无回显。
     #[test]
-    fn volume_and_seek_via_keymap() {
-        let mut app = app_with_queue(1, /*current_idx*/ 0);
+    fn volume_and_seek_via_keymap() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(1, /*current_idx*/ 0)?;
         app.state.playback.volume_pct = 50;
         press(&mut app, KeyCode::Char('+'));
         assert_eq!(app.state.playback.volume_pct, 55, "+ 加 5");
@@ -1199,13 +1235,14 @@ mod tests {
             app.state.playback.position_ms, 60_000,
             "seek 无本地回显(等 snapshot)"
         );
+        Ok(())
     }
 
     /// Playlists 视图 `l` 进 Library;Library 视图 Enter 触发 set_queue+play
     /// (TestClient no-op,断 view 流转与不 panic)。
     #[test]
-    fn l_enters_library_enter_plays() {
-        let mut app = app_with_library(3, /*sel_track*/ 2);
+    fn l_enters_library_enter_plays() -> color_eyre::Result<()> {
+        let mut app = app_with_library(3, /*sel_track*/ 2)?;
         app.state.view = crate::runtime::state::View::Playlists;
         app.state.sel_playlist = 0;
 
@@ -1223,13 +1260,14 @@ mod tests {
             crate::runtime::state::View::Library,
             "Enter 播放不切视图"
         );
+        Ok(())
     }
 
     /// `d` 按视图分流下载意图(Playlists→歌单 / Library→单曲),TestClient no-op:
     /// 断不 panic、选中与视图不变(不验 Client 调用细节,见 sub00 §10 spy 裁决)。
     #[test]
-    fn d_downloads_selection_by_view() {
-        let mut app = app_with_library(3, /*sel_track*/ 1);
+    fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
+        let mut app = app_with_library(3, /*sel_track*/ 1)?;
         press(&mut app, KeyCode::Char('d'));
         assert_eq!(app.state.sel_track, 1, "Library d 不动选中");
         assert_eq!(
@@ -1238,7 +1276,7 @@ mod tests {
             "Library d 不切视图"
         );
 
-        let mut app = app_with_library(3, /*sel_track*/ 0);
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
         app.state.view = crate::runtime::state::View::Playlists;
         press(&mut app, KeyCode::Char('d'));
         assert_eq!(app.state.sel_playlist, 0, "Playlists d 不动选中");
@@ -1247,12 +1285,13 @@ mod tests {
             crate::runtime::state::View::Playlists,
             "Playlists d 不切视图"
         );
+        Ok(())
     }
 
     /// `z` 进/退全屏(toggle):进场目标置满(非 leaving),再按退场目标归零(leaving)。
     #[test]
-    fn z_toggles_fullscreen() {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+    fn z_toggles_fullscreen() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         assert!(!app.state.fullscreen, "初始非全屏");
 
         press(&mut app, KeyCode::Char('z'));
@@ -1262,12 +1301,13 @@ mod tests {
         press(&mut app, KeyCode::Char('z'));
         assert!(!app.state.fullscreen, "再按 z 退全屏");
         assert!(app.state.fullscreen_pos.leaving(), "退场:形变目标归零");
+        Ok(())
     }
 
     /// 全屏态屏蔽列表导航 + 搜索 `/`;
     #[test]
-    fn fullscreen_blocks_nav_and_search() {
-        let mut app = app_with_library(5, /*sel_track*/ 2);
+    fn fullscreen_blocks_nav_and_search() -> color_eyre::Result<()> {
+        let mut app = app_with_library(5, /*sel_track*/ 2)?;
         press(&mut app, KeyCode::Char('z'));
         assert!(app.state.fullscreen);
 
@@ -1279,12 +1319,13 @@ mod tests {
         // `/` 不进搜索态。
         press(&mut app, KeyCode::Char('/'));
         assert!(!app.state.search_mode, "全屏屏蔽搜索 `/`");
+        Ok(())
     }
 
     /// 全屏态内 `Tab` 仍打开 queue 浮层(浮层是独立层),光标落在在播歌。
     #[test]
-    fn fullscreen_tab_still_opens_queue() {
-        let mut app = app_with_queue(4, /*current_idx*/ 1);
+    fn fullscreen_tab_still_opens_queue() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(4, /*current_idx*/ 1)?;
         press(&mut app, KeyCode::Char('z'));
         assert!(app.state.fullscreen);
 
@@ -1294,5 +1335,6 @@ mod tests {
             Some(1),
             "全屏内 Tab 仍开 queue,光标在在播歌"
         );
+        Ok(())
     }
 }

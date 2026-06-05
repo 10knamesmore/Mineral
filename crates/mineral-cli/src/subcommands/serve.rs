@@ -10,7 +10,7 @@ use std::sync::Arc;
 use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
-use mineral_server::{AudioMode, Server};
+use mineral_server::{Server, ServerConfig, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -23,9 +23,11 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 /// # Params:
 ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
+///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
+    config: mineral_config::Config,
 ) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
@@ -43,13 +45,18 @@ pub async fn run(
     println!("mineral daemon listening on {}", socket_path.display());
 
     // `MINERAL_AUDIO_NULL` 强制 null 后端(无设备 e2e / headless 确定性复现降级);
-    // 未设则 Auto(有设备真出声,无设备自动降级)。env 只在 binary 边缘读,lib 保持纯。
-    let audio_mode = if std::env::var_os("MINERAL_AUDIO_NULL").is_some() {
-        AudioMode::ForceNull
-    } else {
-        AudioMode::Auto
-    };
-    let server = Server::spawn(channels, audio_mode, persist).await?;
+    // 否则按 config 的 `audio.backend` 落(env 命中短路 config)。env 只在 binary 边缘读。
+    let audio_mode = resolve_audio_mode(
+        std::env::var_os("MINERAL_AUDIO_NULL").is_some(),
+        *config.audio().backend(),
+    );
+    let server = Server::spawn(
+        channels,
+        audio_mode,
+        persist,
+        ServerConfig::from_config(&config),
+    )
+    .await?;
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {

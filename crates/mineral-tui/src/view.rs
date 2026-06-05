@@ -16,12 +16,13 @@ use crate::components::layout::{
 /// 与 `morph_areas` 给出)。通知 / 浮层叠在最上(整屏转场期间不画);最后叠启动 / 退出缩放边框。
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let theme = &app.theme;
-    let normal = compute(frame.area());
+    let layout_cfg = app.state.cfg.tui().layout();
+    let normal = compute(frame.area(), layout_cfg);
 
     if app.state.fullscreen_pos.at_min() {
         paint(frame, &normal, app);
     } else {
-        let full = compute_fullscreen(frame.area());
+        let full = compute_fullscreen(frame.area(), layout_cfg);
         let areas = if app.state.fullscreen_pos.at_max() {
             full
         } else {
@@ -126,17 +127,13 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 }
 
-/// 全屏预热沿播放队列**向前看**的首数(forward-only)。先死 1 —— 自动切歌的唯一目标、
-/// kitty transmit 成本最小;后续接 config / 实测要更激进时只调这一处。
-const PREWARM_AHEAD: usize = 1;
-
-/// 全屏稳态:给在播曲之后 [`PREWARM_AHEAD`] 首(图已就绪者)的封面按当前尺寸提前编码,
+/// 全屏稳态:给在播曲之后 `prefetch.prewarm_ahead` 首(图已就绪者)的封面按当前尺寸提前编码,
 /// 自动切歌时协议已就绪、直接 place 无闪。无在播 / 队尾越界 / 该首无封面 → 跳过。
 fn prewarm_upcoming(app: &App, area: Rect) {
     let Some(pos) = app.state.queue_current_index() else {
         return;
     };
-    for d in 1..=PREWARM_AHEAD {
+    for d in 1..=*app.state.cfg.tui().prefetch().prewarm_ahead() {
         if let Some(url) = app
             .state
             .queue
@@ -177,7 +174,7 @@ mod tests {
 
         use crate::test_support::app_with_library;
 
-        let mut app = app_with_library(3, /*sel_track*/ 0);
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
 
         let url = MediaUrl::remote("https://x.y/cover.jpg")?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
@@ -223,7 +220,7 @@ mod tests {
     /// 退出收缩动画中途一帧:边框已向内收,框外清成背景、框内保留界面内容。
     #[test]
     fn quit_shrink_midframe_snapshot() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         // collapsing(18) 推进 12 tick → 收到约 70%,边框明显内收。
         let mut anim = Transition::collapsing(18);
         for _ in 0..12 {
@@ -243,7 +240,7 @@ mod tests {
     /// 启动扩大动画中途一帧:边框由中心向外扩,框外仍清成背景、框内已露界面内容。
     #[test]
     fn startup_expand_midframe_snapshot() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         // expanding(18) 推进 6 tick → 扩到约 30%,边框尚小、由中心向外。
         let mut anim = Transition::expanding(18);
         for _ in 0..6 {
@@ -264,7 +261,7 @@ mod tests {
     /// —— 上方/右侧清空区明显大于下方/左侧,验证「朝光标真实位置收」。
     #[test]
     fn collapse_toward_anchor_snapshot() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         app.launch_anchor = Some(Position { x: 4, y: 20 });
         let mut anim = Transition::collapsing(18);
         for _ in 0..12 {
@@ -282,7 +279,7 @@ mod tests {
     /// 顶栏 / 侧栏 / now_playing 全部退场。
     #[test]
     fn fullscreen_steady_snapshot() -> color_eyre::Result<()> {
-        let app = app_in_fullscreen();
+        let app = app_in_fullscreen()?;
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
@@ -300,7 +297,7 @@ mod tests {
 
         use mineral_model::MediaUrl;
 
-        let mut app = app_with_queue(3, /*current_idx*/ 0);
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         // 给队列每首塞封面 URL;在播曲(queue[0])与下一首(queue[1])的图放进 cache
         // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
         for i in 0..3 {
@@ -339,7 +336,7 @@ mod tests {
     /// 全屏形变中途一帧:封面右→左、歌词左→右对穿,消失面板收缩中。
     #[test]
     fn fullscreen_morph_midframe_snapshot() -> color_eyre::Result<()> {
-        let mut app = app_in_fullscreen();
+        let mut app = app_in_fullscreen()?;
         // 覆盖成形变中途:expanding 推进 9 tick(约半程,未到满)。
         let mut anim = Transition::expanding(18);
         for _ in 0..9 {

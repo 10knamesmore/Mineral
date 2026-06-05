@@ -20,17 +20,20 @@ mineral-persist      = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-task         = { workspace = true }
 
-color-eyre   = { workspace = true }
-futures-util = { workspace = true }
+color-eyre     = { workspace = true }
+derive-getters = { workspace = true }
+futures-util   = { workspace = true }
 lofty        = { workspace = true }
 parking_lot  = { workspace = true }
 rand         = { workspace = true }
 reqwest      = { workspace = true }
-serde       = { workspace = true }
-tokio       = { workspace = true }
-url         = { workspace = true }
+serde         = { workspace = true }
+tokio         = { workspace = true }
+typed-builder = { workspace = true }
+url           = { workspace = true }
 
 [dev-dependencies]
+insta             = { workspace = true }
 mineral-test      = { workspace = true }
 async-trait       = { workspace = true }
 pretty_assertions = { workspace = true }

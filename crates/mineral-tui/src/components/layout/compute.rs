@@ -35,21 +35,13 @@ pub struct Areas {
     pub transport: Rect,
 }
 
-/// 紧凑模式触发宽度阈值。
-const MIN_FULL_WIDTH: u16 = 80;
-/// 紧凑模式触发高度阈值。
-const MIN_FULL_HEIGHT: u16 = 24;
-
-/// 全屏布局左列(cover 上 + transport 下)占宽百分比;歌词占右列剩余。
-const FS_LEFT_PCT: u16 = 44;
-/// 全屏布局底部 spectrum 通栏高度(比常规略高,留足频谱动态)。
-const FS_SPECTRUM_HEIGHT: u16 = 14;
-/// 全屏布局 transport 条高度(内容 6 行 + 边框 2,同 Full 布局);置于左列 cover 之下。
-const FS_TRANSPORT_HEIGHT: u16 = 8;
-
 /// 按当前可用 [`Rect`] 计算各面板位置。
-pub fn compute(area: Rect) -> Areas {
-    if area.width < MIN_FULL_WIDTH || area.height < MIN_FULL_HEIGHT {
+///
+/// # Params:
+///   - `area`: 可用区域
+///   - `cfg`: 布局段(完整布局门槛,配置 `tui.layout`)
+pub fn compute(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+    if area.width < *cfg.min_full_width() || area.height < *cfg.min_full_height() {
         compute_compact(area)
     } else {
         compute_full(area)
@@ -119,19 +111,25 @@ fn compute_compact(area: Rect) -> Areas {
 /// [ transport][        ]
 /// [     spectrum       ]
 /// ```
-pub fn compute_fullscreen(area: Rect) -> Areas {
-    let [body, spectrum] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(FS_SPECTRUM_HEIGHT)]).areas(area);
+pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+    let [body, spectrum] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(*cfg.fs_spectrum_height()),
+    ])
+    .areas(area);
 
+    let left_pct = (*cfg.fs_left_pct()).min(100);
     let [left_col, lyrics] = Layout::horizontal([
-        Constraint::Percentage(FS_LEFT_PCT),
-        Constraint::Percentage(100 - FS_LEFT_PCT),
+        Constraint::Percentage(left_pct),
+        Constraint::Percentage(100 - left_pct),
     ])
     .areas(body);
 
-    let [cover, transport] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(FS_TRANSPORT_HEIGHT)])
-            .areas(left_col);
+    let [cover, transport] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(*cfg.fs_transport_height()),
+    ])
+    .areas(left_col);
 
     let zero = Rect::new(area.x, area.y, 0, 0);
     Areas {
@@ -157,43 +155,57 @@ mod tests {
         Rect::new(0, 0, w, h)
     }
 
+    /// defaults 配置的布局段(= 接线前硬编码阈值/尺寸)。
+    fn layout_cfg() -> color_eyre::Result<mineral_config::LayoutConfig> {
+        Ok(mineral_config::Config::defaults()?.tui().layout().clone())
+    }
+
     /// 宽高都达标 → Full,right/lyrics/spectrum 都有,顶/底各 1 行。
     #[test]
-    fn full_layout_above_thresholds() {
-        let a = compute(area(100, 40));
+    fn full_layout_above_thresholds() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        let a = compute(area(100, 40), &cfg);
         assert_eq!(a.mode, LayoutMode::Full);
         assert!(a.right.is_some());
         assert!(a.lyrics.is_some());
         assert!(a.spectrum.is_some());
         assert_eq!(a.top_status.height, 1);
+        Ok(())
     }
 
     /// 恰好 80x24(阈值下界)仍是 Full。
     #[test]
-    fn boundary_80x24_is_full() {
-        assert_eq!(compute(area(80, 24)).mode, LayoutMode::Full);
+    fn boundary_80x24_is_full() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        assert_eq!(compute(area(80, 24), &cfg).mode, LayoutMode::Full);
+        Ok(())
     }
 
     /// 宽 < 80 → Compact,right/lyrics/spectrum 全 None。
     #[test]
-    fn narrow_is_compact() {
-        let a = compute(area(79, 40));
+    fn narrow_is_compact() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        let a = compute(area(79, 40), &cfg);
         assert_eq!(a.mode, LayoutMode::Compact);
         assert!(a.right.is_none());
         assert!(a.lyrics.is_none());
         assert!(a.spectrum.is_none());
+        Ok(())
     }
 
     /// 高 < 24 → Compact。
     #[test]
-    fn short_is_compact() {
-        assert_eq!(compute(area(100, 23)).mode, LayoutMode::Compact);
+    fn short_is_compact() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        assert_eq!(compute(area(100, 23), &cfg).mode, LayoutMode::Compact);
+        Ok(())
     }
 
     /// 全屏布局:左列上 cover / 下 transport,右列 lyrics 通高,spectrum 全宽贴底,消失面板零面积。
     #[test]
     fn fullscreen_layout_panels() -> color_eyre::Result<()> {
-        let a = compute_fullscreen(area(100, 40));
+        let cfg = layout_cfg()?;
+        let a = compute_fullscreen(area(100, 40), &cfg);
         let cover = a
             .cover
             .ok_or_else(|| color_eyre::eyre::eyre!("全屏缺 cover"))?;
@@ -239,8 +251,11 @@ mod tests {
         /// 严格按 80×24 阈值。
         #[test]
         fn areas_fit_parent_and_mode_matches(w in 0u16..=600, h in 0u16..=600) {
+            let Ok(cfg) = layout_cfg() else {
+                return Err(proptest::test_runner::TestCaseError::fail("defaults 不可用"));
+            };
             let parent = area(w, h);
-            let a = compute(parent);
+            let a = compute(parent, &cfg);
             proptest::prop_assert_eq!(a.mode == LayoutMode::Full, w >= 80 && h >= 24);
             let fits = |c: Rect| {
                 c.x >= parent.x
@@ -264,8 +279,11 @@ mod tests {
         /// 全屏布局任意尺寸下子区都落在父 area 内(不越界 / 不 panic)。
         #[test]
         fn fullscreen_areas_fit_parent(w in 0u16..=600, h in 0u16..=600) {
+            let Ok(cfg) = layout_cfg() else {
+                return Err(proptest::test_runner::TestCaseError::fail("defaults 不可用"));
+            };
             let parent = area(w, h);
-            let a = compute_fullscreen(parent);
+            let a = compute_fullscreen(parent, &cfg);
             let fits = |c: Rect| {
                 c.x >= parent.x
                     && c.y >= parent.y
