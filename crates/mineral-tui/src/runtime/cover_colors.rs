@@ -13,8 +13,10 @@ use crate::render::palette::{CoverPalette, Rgb};
 
 /// 从一张封面图提取频谱色板(Lab 明度升序的重点色)。
 ///
-/// 流程:像素整块转 Lab → 丢近黑/近白/近灰(有效像素过少则回退不过滤)→ k-means 聚类
-/// (固定 seed,确定性)→ 按 Lab 明度升序转回 sRGB。
+/// 流程:缩到 `kmeans.sample_dim` 采样图(取色不需要全分辨率;box filter 确定性 +
+/// 固定 seed,取色仍确定,色板数值与全分辨率聚类略有差异、频谱配色视觉无感)→ 像素整块转 Lab →
+/// 丢近黑/近白/近灰(有效像素过少则回退不过滤)→ k-means 聚类(固定 seed,确定性)
+/// → 按 Lab 明度升序转回 sRGB。
 ///
 /// # Params:
 ///   - `img`: 已解码(且 worker 已 resize 到配置上限内)的封面图
@@ -26,7 +28,13 @@ pub fn extract_palette(
     img: &DynamicImage,
     k: &mineral_config::KmeansConfig,
 ) -> Option<CoverPalette> {
-    let rgb = img.to_rgb8();
+    // 大图先降采样:聚类只看颜色分布,sample_dim² 样本足够;box filter 极快且确定。
+    let dim = (*k.sample_dim()).max(1);
+    let rgb = if img.width() > dim || img.height() > dim {
+        img.thumbnail(dim, dim).to_rgb8()
+    } else {
+        img.to_rgb8()
+    };
     if rgb.width() == 0 || rgb.height() == 0 {
         return None;
     }
@@ -123,11 +131,16 @@ mod tests {
     /// # Return:
     ///   填好的 `DynamicImage`;`bands` 为空返回 `Err`。
     fn banded_image(bands: &[Rgb]) -> color_eyre::Result<DynamicImage> {
+        banded_image_sized(bands, /*dim*/ 60)
+    }
+
+    /// 同 [`banded_image`] 但指定边长(方图)。
+    fn banded_image_sized(bands: &[Rgb], dim: u32) -> color_eyre::Result<DynamicImage> {
         let n = u32::try_from(bands.len())?;
         if n == 0 {
             return Err(color_eyre::eyre::eyre!("bands 不能为空"));
         }
-        let (w, h) = (60_u32, 60_u32);
+        let (w, h) = (dim, dim);
         let mut img = RgbImage::new(w, h);
         for (x, _y, px) in img.enumerate_pixels_mut() {
             let band = (x * n / w).min(n - 1);
@@ -172,6 +185,47 @@ mod tests {
         let pal = extract_palette(&img, &kcfg()?)
             .ok_or_else(|| color_eyre::eyre::eyre!("黑白封面应走回退给出色板"))?;
         assert!(!pal.swatches().is_empty(), "回退后色板应非空");
+        Ok(())
+    }
+
+    /// 384² 大图(> 采样边长)走 thumbnail 降采样路径:色板非空 + Lab 明度仍严格升序。
+    #[test]
+    fn large_image_palette_still_ordered() -> color_eyre::Result<()> {
+        let img = banded_image_sized(
+            &[
+                Rgb::new(20, 20, 120),
+                Rgb::new(200, 40, 40),
+                Rgb::new(180, 220, 60),
+            ],
+            /*dim*/ 384,
+        )?;
+        let pal = extract_palette(&img, &kcfg()?)
+            .ok_or_else(|| color_eyre::eyre::eyre!("大图应取出色板"))?;
+        let sw = pal.swatches();
+        assert!(sw.len() >= 2, "应聚出 ≥2 色,实际 {}", sw.len());
+        let mut prev = f32::MIN;
+        for c in sw {
+            let lab: Lab = Srgb::new(c.r, c.g, c.b).into_format::<f32>().into_color();
+            assert!(lab.l > prev, "明度应严格升序:{} 不大于 {prev}", lab.l);
+            prev = lab.l;
+        }
+        Ok(())
+    }
+
+    /// 取色确定性:同一张大图调两次,色板逐字节相等(thumbnail 是确定性 box filter,
+    /// k-means seed 固定)。频谱「过渡完就静止」依赖这一点。
+    #[test]
+    fn palette_is_deterministic() -> color_eyre::Result<()> {
+        let img = banded_image_sized(
+            &[Rgb::new(20, 20, 120), Rgb::new(200, 40, 40)],
+            /*dim*/ 384,
+        )?;
+        let k = kcfg()?;
+        let a =
+            extract_palette(&img, &k).ok_or_else(|| color_eyre::eyre::eyre!("第一次应取出色板"))?;
+        let b =
+            extract_palette(&img, &k).ok_or_else(|| color_eyre::eyre::eyre!("第二次应取出色板"))?;
+        assert_eq!(a.swatches(), b.swatches(), "两次取色应逐 swatch 相等");
         Ok(())
     }
 

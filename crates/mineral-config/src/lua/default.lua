@@ -86,11 +86,12 @@ return {
       http_timeout_secs = 30,
       max_dim = 384,
       jpeg_quality = 100,
-      storage = "raw", -- "raw" | "resized"
+      storage = "resized", -- "raw" | "resized";resized = 缓存命中只解 ≤max_dim 小图,CPU 大降
       debounce_ms = 80,
       download_workers = 4,
       encode_workers = 2,
       kmeans = {
+        sample_dim = 64, -- 取色采样边长:64² ≈ 4 千像素,够聚类、极省 CPU
         swatches = 6,
         seed = 0x5EEDC0DE,
         max_iter = 20,

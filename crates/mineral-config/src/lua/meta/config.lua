@@ -155,6 +155,7 @@
 
 ---k-means 封面取色。除非取出的色不满意,一般不用动。
 ---@class mineral.KmeansConfig
+---@field sample_dim? integer 取色前先缩到的采样边长,像素;聚类只看颜色分布,64 足够,调大只费 CPU
 ---@field swatches? integer 取出的重点色上限(聚类 k),≥1;色多层次细、色少更整体
 ---@field seed? integer 聚类随机种子,任意固定整数;**必须固定**,否则同一封面每次取色不同、颜色会跳
 ---@field max_iter? integer 最大迭代次数;封面色块少,库推荐量级即可收敛

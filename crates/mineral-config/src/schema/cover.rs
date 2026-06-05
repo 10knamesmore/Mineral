@@ -55,6 +55,9 @@ pub enum CoverStorageMode {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct KmeansConfig {
+    /// 取色前先缩到的采样边长(像素);聚类只看颜色分布,无需全分辨率。
+    sample_dim: u32,
+
     /// 提取的色板色数(聚类数 k)。
     swatches: usize,
 

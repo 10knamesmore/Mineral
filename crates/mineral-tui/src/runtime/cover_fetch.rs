@@ -52,6 +52,9 @@ struct DecodedCover {
 
     /// 从图提取的频谱色板(取色失败为 `None`)。
     palette: Option<CoverPalette>,
+
+    /// 解码时原图被缩过(见 [`DecodedImage::clamped`];自愈回写判定用)。
+    clamped: bool,
 }
 
 /// `pack_blocking` 的产物:解码结果 + 写回缓存的字节 + 扩展名。命名字段替代三元组。
@@ -233,7 +236,23 @@ async fn fetch_and_decode(
         MediaUrl::Remote(u) => {
             let key = u.as_str();
             if let Some(bytes) = cached_read(key, cache).await {
-                return decode_blocking(url, bytes, cfg).await;
+                let decoded = decode_blocking(url, bytes, cfg).await?;
+                // 旧缓存自愈:Raw 时代存的原图(解码时被缩过)在 Resized 模式下重编码
+                // 覆盖回写同 key,每条至多触发一次(升级后解码不再 clamped)。
+                // ⚠️ 同 key 原地覆盖复用原 relpath,旧扩展名不变(读回靠字节嗅探,无害)。
+                if decoded.clamped
+                    && matches!(*cfg.storage(), CoverStorageMode::Resized)
+                    && let Some(cache) = cache
+                {
+                    upgrade_cached_best_effort(
+                        cache,
+                        source,
+                        key,
+                        decoded.image.clone(),
+                        *cfg.jpeg_quality(),
+                    );
+                }
+                return Some(decoded);
             }
             let raw = match download(client, key).await {
                 Ok(b) => b,
@@ -315,9 +334,13 @@ async fn decode_blocking(
 ) -> Option<DecodedCover> {
     let cfg = Arc::clone(cfg);
     let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
-        let image = decode_resize(&bytes, *cfg.max_dim())?;
+        let DecodedImage { image, clamped } = decode_resize(&bytes, *cfg.max_dim())?;
         let palette = extract_palette(&image, cfg.kmeans());
-        Ok(DecodedCover { image, palette })
+        Ok(DecodedCover {
+            image,
+            palette,
+            clamped,
+        })
     })
     .await;
     match decoded {
@@ -333,6 +356,16 @@ async fn decode_blocking(
     }
 }
 
+/// [`decode_resize`] 的产物:内存图 + 是否真的缩过(供旧缓存自愈判定)。
+struct DecodedImage {
+    /// 解码并(按需)缩放后的图。
+    image: DynamicImage,
+
+    /// 原图超过 `max_dim` 被缩过。`true` 说明缓存里躺的还是大图(Raw 时代存量),
+    /// Resized 模式下触发一次重编码回写自愈。
+    clamped: bool,
+}
+
 /// 同步把字节解码成 image,大图等比 resize 到 `max_dim` 之内。CPU 密集,由
 /// [`fetch_and_decode`] 经 `spawn_blocking` 调,**不要**直接在 async 上下文同步调用。
 ///
@@ -341,17 +374,18 @@ async fn decode_blocking(
 ///   - `max_dim`: resize 最大边(像素,配置 `cover.max_dim`)
 ///
 /// # Return:
-///   解码并(按需)缩放后的图;解码失败返回 `Err`。
-fn decode_resize(bytes: &[u8], max_dim: u32) -> color_eyre::Result<DynamicImage> {
+///   解码并(按需)缩放后的图 + 是否缩过;解码失败返回 `Err`。
+fn decode_resize(bytes: &[u8], max_dim: u32) -> color_eyre::Result<DecodedImage> {
     let img = image::load_from_memory(bytes).map_err(|e| eyre!("decode: {e}"))?;
     // resize 到 max_dim 之内 —— 保持纵横比,Triangle 滤镜质量比 Nearest 好、
     // 比 Lanczos3 快一档,对缩略图够用。原图小于这个就直接用(no-op)。
-    let resized = if img.width() > max_dim || img.height() > max_dim {
+    let clamped = img.width() > max_dim || img.height() > max_dim;
+    let image = if clamped {
         img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle)
     } else {
         img
     };
-    Ok(resized)
+    Ok(DecodedImage { image, clamped })
 }
 
 /// 在 blocking 池解码 + (按存储模式)算出落盘字节,一次跑完(都是 CPU)。
@@ -370,12 +404,16 @@ async fn pack_blocking(
 ) -> Option<PackedCover> {
     let cfg = Arc::clone(cfg);
     let packed = tokio::task::spawn_blocking(move || -> color_eyre::Result<PackedCover> {
-        let image = decode_resize(&raw, *cfg.max_dim())?;
+        let DecodedImage { image, clamped } = decode_resize(&raw, *cfg.max_dim())?;
         let (store_bytes, ext) =
             bytes_for_cache(*cfg.storage(), &raw, &image, *cfg.jpeg_quality())?;
         let palette = extract_palette(&image, cfg.kmeans());
         Ok(PackedCover {
-            decoded: DecodedCover { image, palette },
+            decoded: DecodedCover {
+                image,
+                palette,
+                clamped,
+            },
             store_bytes,
             ext,
         })
@@ -458,17 +496,62 @@ fn bytes_for_cache(
     jpeg_quality: u8,
 ) -> color_eyre::Result<(Vec<u8>, &'static str)> {
     match mode {
-        CoverStorageMode::Resized => {
-            let mut buf = Cursor::new(Vec::<u8>::new());
-            let encoder =
-                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, jpeg_quality);
-            img.write_with_encoder(encoder)
-                .map_err(|e| eyre!("jpeg encode: {e}"))?;
-            Ok((buf.into_inner(), "jpg"))
-        }
+        CoverStorageMode::Resized => Ok((encode_jpeg(img, jpeg_quality)?, "jpg")),
         // CoverStorageMode 是 #[non_exhaustive]:未来新形态接线前按 Raw(无损)兜底。
         CoverStorageMode::Raw | _ => Ok((raw.to_vec(), sniff_ext(raw))),
     }
+}
+
+/// 把内存图重编码成 JPEG 字节(Resized 落盘 / 旧缓存自愈共用)。
+///
+/// # Params:
+///   - `img`: 已解码(≤ max_dim)的内存图
+///   - `quality`: JPEG 质量 1-100(配置 `cover.jpeg_quality`)
+///
+/// # Return:
+///   JPEG 字节;编码失败返回 `Err`。
+fn encode_jpeg(img: &DynamicImage, quality: u8) -> color_eyre::Result<Vec<u8>> {
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+    img.write_with_encoder(encoder)
+        .map_err(|e| eyre!("jpeg encode: {e}"))?;
+    Ok(buf.into_inner())
+}
+
+/// 旧缓存自愈:把已解码的(≤ max_dim)图重编码 JPEG 后覆盖回写同 key。
+/// 编码落 blocking 池、写盘走 [`store_best_effort`];任一步失败只 warn,
+/// 本次显示不受影响(下次命中再试)。
+///
+/// # Params:
+///   - `cache`: 磁盘缓存
+///   - `source`: 来源(子目录;同 key 覆盖时实际复用原 relpath)
+///   - `key`: 缓存键(= URL 串)
+///   - `image`: 已解码缩放的图(clone 进后台,一次性自愈可接受)
+///   - `jpeg_quality`: JPEG 质量(配置 `cover.jpeg_quality`)
+fn upgrade_cached_best_effort(
+    cache: &Arc<CacheIndex>,
+    source: SourceKind,
+    key: &str,
+    image: DynamicImage,
+    jpeg_quality: u8,
+) {
+    let cache = Arc::clone(cache);
+    let key_owned = key.to_owned();
+    tokio::spawn(async move {
+        let encoded = tokio::task::spawn_blocking(move || encode_jpeg(&image, jpeg_quality)).await;
+        match encoded {
+            Ok(Ok(bytes)) => {
+                mineral_log::debug!(target: "cover", key = %key_owned, bytes = bytes.len(), "旧缓存自愈:重编码回写");
+                store_best_effort(&cache, source, &key_owned, bytes, /*ext*/ "jpg");
+            }
+            Ok(Err(e)) => {
+                mineral_log::warn!(target: "cover", key = %key_owned, error = mineral_log::chain(&e), "自愈重编码失败");
+            }
+            Err(e) => {
+                mineral_log::warn!(target: "cover", key = %key_owned, error = mineral_log::chain(&e), "自愈编码 task join 失败");
+            }
+        }
+    });
 }
 
 /// 按魔数嗅探图片格式的扩展名,认不出退 `"img"`。不信 URL 后缀。
@@ -491,9 +574,40 @@ mod tests {
     use std::sync::Arc;
 
     use image::{DynamicImage, ImageFormat, RgbImage};
+    use mineral_config::CoverConfig;
+    use mineral_model::{MediaUrl, SourceKind};
     use mineral_persist::ClientStore;
 
-    use super::{CoverStorageMode, bytes_for_cache, cached_read, cover_file_name, decode_resize};
+    use super::{
+        CoverStorageMode, bytes_for_cache, cached_read, cover_file_name, decode_resize,
+        fetch_and_decode,
+    };
+
+    /// 测试用封面段配置(storage 可选;其余为测试基线值,生产默认见 default.lua)。
+    fn cover_cfg(storage: &str) -> color_eyre::Result<Arc<CoverConfig>> {
+        let cfg: CoverConfig = serde_json::from_value(serde_json::json!({
+            "http_timeout_secs": 30, "max_dim": 384, "jpeg_quality": 85,
+            "storage": storage, "debounce_ms": 80,
+            "download_workers": 1, "encode_workers": 1,
+            "kmeans": {
+                "sample_dim": 64, "swatches": 6, "seed": 1, "max_iter": 20, "converge": 5.0,
+                "l_min": 8.0, "l_max": 92.0, "chroma_min": 8.0, "min_valid_pixels_pct": 5,
+            },
+        }))?;
+        Ok(Arc::new(cfg))
+    }
+
+    /// PID + 纳秒后缀的唯一临时目录。
+    fn temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "mineral-cover-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ))
+    }
 
     /// 测试入参:resize 上限(= default.lua 的 `cover.max_dim`)。
     const COVER_MAX_DIM: u32 = 384;
@@ -535,7 +649,7 @@ mod tests {
     #[test]
     fn bytes_for_cache_raw_keeps_png() -> color_eyre::Result<()> {
         let png = png_bytes(/*w*/ 10, /*h*/ 10)?;
-        let img = decode_resize(&png, COVER_MAX_DIM)?;
+        let img = decode_resize(&png, COVER_MAX_DIM)?.image;
         let (bytes, ext) = bytes_for_cache(CoverStorageMode::Raw, &png, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "png");
         assert_eq!(bytes, png, "Raw 应原样落盘下载字节");
@@ -546,7 +660,7 @@ mod tests {
     #[test]
     fn bytes_for_cache_raw_sniffs_jpeg() -> color_eyre::Result<()> {
         let jpg = jpeg_bytes(/*w*/ 10, /*h*/ 10)?;
-        let img = decode_resize(&jpg, COVER_MAX_DIM)?;
+        let img = decode_resize(&jpg, COVER_MAX_DIM)?.image;
         let (_, ext) = bytes_for_cache(CoverStorageMode::Raw, &jpg, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "jpg");
         Ok(())
@@ -556,7 +670,7 @@ mod tests {
     #[test]
     fn bytes_for_cache_resized_reencodes_jpeg_within_max_dim() -> color_eyre::Result<()> {
         let png = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
-        let img = decode_resize(&png, COVER_MAX_DIM)?; // 已 resize 到 ≤384
+        let img = decode_resize(&png, COVER_MAX_DIM)?.image; // 已 resize 到 ≤384
         let (bytes, ext) =
             bytes_for_cache(CoverStorageMode::Resized, &png, &img, COVER_JPEG_QUALITY)?;
         assert_eq!(ext, "jpg");
@@ -571,26 +685,28 @@ mod tests {
         Ok(())
     }
 
-    /// 大图(超过 `COVER_MAX_DIM`)被等比缩到上限之内。
+    /// 大图(超过 `COVER_MAX_DIM`)被等比缩到上限之内,并带 `clamped` 标记(自愈判定源)。
     #[test]
     fn large_image_is_clamped() -> color_eyre::Result<()> {
         let bytes = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
-        let img = decode_resize(&bytes, COVER_MAX_DIM)?;
+        let decoded = decode_resize(&bytes, COVER_MAX_DIM)?;
+        assert!(decoded.clamped, "1024² 应标记 clamped");
         assert!(
-            img.width() <= COVER_MAX_DIM && img.height() <= COVER_MAX_DIM,
+            decoded.image.width() <= COVER_MAX_DIM && decoded.image.height() <= COVER_MAX_DIM,
             "尺寸应被缩到 {COVER_MAX_DIM} 内,实际 {}x{}",
-            img.width(),
-            img.height()
+            decoded.image.width(),
+            decoded.image.height()
         );
         Ok(())
     }
 
-    /// 小图(小于 `COVER_MAX_DIM`)原样返回,不放大、不缩小。
+    /// 小图(小于 `COVER_MAX_DIM`)原样返回,不放大、不缩小,且不标 `clamped`。
     #[test]
     fn small_image_unchanged() -> color_eyre::Result<()> {
         let bytes = png_bytes(/*w*/ 100, /*h*/ 100)?;
-        let img = decode_resize(&bytes, COVER_MAX_DIM)?;
-        assert_eq!((img.width(), img.height()), (100, 100));
+        let decoded = decode_resize(&bytes, COVER_MAX_DIM)?;
+        assert!(!decoded.clamped, "300² 以下不应标 clamped");
+        assert_eq!((decoded.image.width(), decoded.image.height()), (100, 100));
         Ok(())
     }
 
@@ -603,14 +719,7 @@ mod tests {
     /// 缓存命中时 `cached_read` 直读缓存文件返回字节(结构上不碰网络——它不收 client)。
     #[tokio::test]
     async fn cached_read_hits_disk() -> color_eyre::Result<()> {
-        let dir = std::env::temp_dir().join(format!(
-            "mineral-cover-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ));
+        let dir = temp_dir();
         std::fs::create_dir_all(&dir)?;
         let files = dir.join("files");
         let store = ClientStore::open(&dir.join("cover.db")).await?;
@@ -631,6 +740,115 @@ mod tests {
             Some(&b"cached-cover-bytes"[..]),
             "命中应直读缓存文件"
         );
+        drop(cache);
+        drop(std::fs::remove_dir_all(&dir));
+        Ok(())
+    }
+
+    /// 旧缓存自愈:Raw 时代存的 1024² 原图,在 Resized 模式下命中一次后被重编码
+    /// ≤max_dim JPEG 覆盖回写;再命中不再触发回写(字节不变)。
+    /// 自愈在后台 task + blocking 池跑,需 multi_thread runtime + 轮询等待。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_raw_cache_entry_self_heals_to_resized() -> color_eyre::Result<()> {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir)?;
+        let store = ClientStore::open(&dir.join("cover.db")).await?;
+        let cache = Arc::new(
+            store
+                .cover_cache(dir.join("files"), 64 * 1024 * 1024)
+                .await?,
+        );
+
+        // 预放 Raw 时代的存量:1024² PNG 原图。
+        let key = "http://192.0.2.1/big-cover.png";
+        let raw_png = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
+        cache
+            .put_bytes(
+                key,
+                &raw_png,
+                /*subdir*/ "netease",
+                &cover_file_name(key, "png"),
+            )
+            .await?;
+        let url = MediaUrl::remote(key)?;
+        let cfg = cover_cfg("resized")?;
+        // 命中路径不发请求,client 只是签名需要。
+        let client = isahc::HttpClient::new().map_err(|e| color_eyre::eyre::eyre!("isahc: {e}"))?;
+
+        // 第一次命中:解码显示照常,后台触发自愈回写。
+        let decoded = fetch_and_decode(SourceKind::NETEASE, &url, &client, Some(&cache), &cfg)
+            .await
+            .ok_or_else(|| color_eyre::eyre::eyre!("命中应解码成功"))?;
+        assert!(decoded.clamped, "存量原图首次命中应为 clamped");
+
+        // 等后台编码 + 写盘完成:轮询缓存文件直到字节变小且可解码为 ≤384。
+        let path = cache
+            .get(key)
+            .ok_or_else(|| color_eyre::eyre::eyre!("缓存条目应仍在"))?;
+        let mut healed = Vec::<u8>::new();
+        for _ in 0..200 {
+            let bytes = tokio::fs::read(&path).await?;
+            if bytes.len() < raw_png.len()
+                && let Ok(img) = image::load_from_memory(&bytes)
+                && img.width() <= 384
+            {
+                healed = bytes;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!healed.is_empty(), "缓存应在时限内被自愈回写为 ≤384 小图");
+
+        // 第二次命中:不再 clamped,也不再回写(字节保持不变)。
+        let decoded = fetch_and_decode(SourceKind::NETEASE, &url, &client, Some(&cache), &cfg)
+            .await
+            .ok_or_else(|| color_eyre::eyre::eyre!("自愈后命中应解码成功"))?;
+        assert!(!decoded.clamped, "自愈后不应再 clamped");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let after = tokio::fs::read(&path).await?;
+        assert_eq!(after, healed, "二次命中不应再次回写");
+
+        drop(cache);
+        drop(std::fs::remove_dir_all(&dir));
+        Ok(())
+    }
+
+    /// Raw 模式下存量原图命中**不**触发回写(自愈仅 Resized 模式)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn raw_mode_does_not_rewrite_cache() -> color_eyre::Result<()> {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir)?;
+        let store = ClientStore::open(&dir.join("cover.db")).await?;
+        let cache = Arc::new(
+            store
+                .cover_cache(dir.join("files"), 64 * 1024 * 1024)
+                .await?,
+        );
+        let key = "http://192.0.2.1/big-raw.png";
+        let raw_png = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
+        cache
+            .put_bytes(
+                key,
+                &raw_png,
+                /*subdir*/ "netease",
+                &cover_file_name(key, "png"),
+            )
+            .await?;
+        let url = MediaUrl::remote(key)?;
+        let cfg = cover_cfg("raw")?;
+        let client = isahc::HttpClient::new().map_err(|e| color_eyre::eyre::eyre!("isahc: {e}"))?;
+
+        let decoded = fetch_and_decode(SourceKind::NETEASE, &url, &client, Some(&cache), &cfg)
+            .await
+            .ok_or_else(|| color_eyre::eyre::eyre!("命中应解码成功"))?;
+        assert!(decoded.clamped);
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let path = cache
+            .get(key)
+            .ok_or_else(|| color_eyre::eyre::eyre!("缓存条目应仍在"))?;
+        let after = tokio::fs::read(&path).await?;
+        assert_eq!(after, raw_png, "Raw 模式不应改写缓存");
+
         drop(cache);
         drop(std::fs::remove_dir_all(&dir));
         Ok(())

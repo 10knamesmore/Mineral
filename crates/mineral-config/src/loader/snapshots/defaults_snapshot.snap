@@ -430,11 +430,12 @@ Config {
             http_timeout_secs: 30,
             max_dim: 384,
             jpeg_quality: 100,
-            storage: Raw,
+            storage: Resized,
             debounce_ms: 80,
             download_workers: 4,
             encode_workers: 2,
             kmeans: KmeansConfig {
+                sample_dim: 64,
                 swatches: 6,
                 seed: 1592639710,
                 max_iter: 20,
