@@ -30,6 +30,7 @@ use stream_download::source::SourceStream;
 use stream_download::storage::StorageProvider;
 use stream_download::storage::temp::TempStorageProvider;
 
+use crate::bps::Bps;
 use crate::command::AudioCommand;
 use crate::file_storage::FileStorageProvider;
 use crate::handle::{AudioMode, EngineParams};
@@ -71,22 +72,6 @@ struct NextBuilt {
 
     /// 本地源:无网络下载,append 后直接把缓冲置满。
     local_full: bool,
-}
-
-/// 已缓冲字节占总字节的比例(0..=10000 basis points)。
-///
-/// # Params:
-///   - `buffered`: 已下载 / 已缓冲的字节数
-///   - `total`: 总字节数;`0` 表示长度未知(无 `Content-Length`)
-///
-/// # Return:
-///   basis points,`total == 0` 时返回 `0`,超出 clamp 到满。
-fn buffered_bps(buffered: u64, total: u64) -> u16 {
-    if total == 0 {
-        return 0;
-    }
-    let bps = buffered.saturating_mul(10_000) / total;
-    u16::try_from(bps.min(10_000)).unwrap_or(10_000)
 }
 
 /// handle ↔ engine 的共享接线:snapshot / seek mailbox / ready 上报 / PCM tap。
@@ -321,7 +306,7 @@ impl<'a> Engine<'a> {
             self.progress
                 .slot(idx)
                 .buffer_bps
-                .store(10_000, Ordering::Release);
+                .store(Bps::FULL.get(), Ordering::Release);
         }
         self.player.play();
         self.cur_sample_rate = sr;
@@ -489,7 +474,7 @@ impl<'a> Engine<'a> {
                         self.progress
                             .slot(built.progress_idx)
                             .buffer_bps
-                            .store(10_000, Ordering::Release);
+                            .store(Bps::FULL.get(), Ordering::Release);
                     }
                     self.head.arm_next(Slot {
                         stream_gen: built.stream_gen,
@@ -639,11 +624,11 @@ where
                     return;
                 }
                 let bps = match state.phase {
-                    // 长度未知(无 Content-Length)时 buffered_bps 恒 0,下完瞬间补满。
-                    StreamPhase::Complete => 10_000,
-                    _ => buffered_bps(state.current_position, total),
+                    // 长度未知(无 Content-Length)时比例恒零,下完瞬间补满。
+                    StreamPhase::Complete => Bps::FULL,
+                    _ => Bps::ratio(state.current_position, total),
                 };
-                slot.buffer_bps.store(bps, Ordering::Release);
+                slot.buffer_bps.store(bps.get(), Ordering::Release);
             },
         );
     let reader = StreamDownload::from_stream(stream, provider, settings)
@@ -684,32 +669,4 @@ where
 /// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
 fn duration_to_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::buffered_bps;
-
-    /// `buffered_bps`:0 / 一半 / 满 / 超界 clamp;`total == 0`(长度未知)恒 0。
-    #[test]
-    fn buffered_bps_cases() {
-        assert_eq!(buffered_bps(0, 1000), 0);
-        assert_eq!(buffered_bps(500, 1000), 5_000);
-        assert_eq!(buffered_bps(1000, 1000), 10_000);
-        // 已下超过总长(理论不该发生)clamp 到满,不溢出。
-        assert_eq!(buffered_bps(2000, 1000), 10_000);
-        // 长度未知:无法算比例,返回 0(由完成回调在 Complete 时补满)。
-        assert_eq!(buffered_bps(123, 0), 0);
-        assert_eq!(buffered_bps(0, 0), 0);
-    }
-
-    /// 极大字节数不因 `* 10_000` 溢出 / panic,结果始终 ≤ 满格;现实 GB 量级整段缓冲 = 满格。
-    #[test]
-    fn buffered_bps_no_overflow_on_huge_bytes() {
-        // 病态量级(saturating_mul 兜底,不 panic);具体值无意义,只要 clamp 在范围内。
-        assert!(buffered_bps(u64::MAX, u64::MAX) <= 10_000);
-        assert!(buffered_bps(u64::MAX, 1) <= 10_000);
-        // 现实量级(2 GB)整段下完 = 满格,saturating 不触发。
-        assert_eq!(buffered_bps(2_000_000_000, 2_000_000_000), 10_000);
-    }
 }

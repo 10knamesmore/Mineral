@@ -8,6 +8,8 @@
 
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
+use crate::bps::Bps;
+
 /// 一个播放槽承载的引擎侧记账信息(decoder 已 append 进 rodio 队列后)。
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Slot {
@@ -166,16 +168,16 @@ impl SharedProgress {
         if idx == 1 { b } else { a }
     }
 
-    /// 读某播放槽的缓冲比例 + 是否下完(未占用槽恒 0 / false)。
+    /// 读某播放槽的缓冲比例 + 是否下完(未占用槽恒零 / false)。
     ///
     /// # Params:
     ///   - `slot`: 目标播放槽(读它的 `progress_idx` / `stream_gen`)。
-    fn read(&self, slot: &Slot) -> (u16, bool) {
+    fn read(&self, slot: &Slot) -> (Bps, bool) {
         if !slot.occupied {
-            return (0, false);
+            return (Bps::ZERO, false);
         }
         let p = self.slot(slot.progress_idx);
-        let bps = p.buffer_bps.load(Ordering::Acquire);
+        let bps = Bps::new(p.buffer_bps.load(Ordering::Acquire));
         let done = slot.stream_gen != 0 && p.done_gen.load(Ordering::Acquire) == slot.stream_gen;
         (bps, done)
     }
@@ -193,8 +195,8 @@ pub(crate) struct GaplessFields {
     /// 当前曲时长(ms;未占用为 0)。
     pub(crate) duration_ms: u64,
 
-    /// 当前曲缓冲比例(basis points)。
-    pub(crate) buffered_bps: u16,
+    /// 当前曲缓冲比例。
+    pub(crate) buffered_bps: Bps,
 
     /// 当前曲远端是否下完。
     pub(crate) download_complete: bool,
@@ -202,8 +204,8 @@ pub(crate) struct GaplessFields {
     /// 下一曲时长(ms;未预排为 0)。
     pub(crate) next_duration_ms: u64,
 
-    /// 下一曲缓冲比例(basis points)。
-    pub(crate) next_buffered_bps: u16,
+    /// 下一曲缓冲比例。
+    pub(crate) next_buffered_bps: Bps,
 
     /// 下一曲是否已预排到可无缝接续(= next 槽已占用)。
     pub(crate) next_ready: bool,
@@ -216,7 +218,7 @@ pub(crate) struct GaplessFields {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use super::{Boundary, GaplessFields, PlayHead, SharedProgress, Slot};
+    use super::{Boundary, Bps, GaplessFields, PlayHead, SharedProgress, Slot};
 
     /// 起播令牌从 0 → 1,cur 占用、next 空。
     #[test]
@@ -334,10 +336,10 @@ mod tests {
                 current_track_token: 1,
                 track_finished_seq: 0,
                 duration_ms: 1000,
-                buffered_bps: 4000,
+                buffered_bps: Bps::new(4000),
                 download_complete: true,
                 next_duration_ms: 2000,
-                next_buffered_bps: 8000,
+                next_buffered_bps: Bps::new(8000),
                 next_ready: true,
                 next_download_complete: false,
             }
@@ -353,10 +355,10 @@ mod tests {
         progress.slot(0).buffer_bps.store(9999, Ordering::Release);
         let f = head.snapshot_fields(&progress);
         assert_eq!(f.duration_ms, 0);
-        assert_eq!(f.buffered_bps, 0, "未占用 cur 缓冲应归零");
+        assert_eq!(f.buffered_bps, Bps::ZERO, "未占用 cur 缓冲应归零");
         assert!(!f.download_complete);
         assert!(!f.next_ready, "未预排 next_ready 应 false");
-        assert_eq!(f.next_buffered_bps, 0);
+        assert_eq!(f.next_buffered_bps, Bps::ZERO);
     }
 
     /// 用户主动 stop(把 cur 释放成未武装)后,sink 尾巴退潮 len→0 不应被误判曲终。

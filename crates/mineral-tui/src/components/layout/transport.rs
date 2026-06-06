@@ -1,5 +1,6 @@
 //! Transport 面板:now-line / 进度条 / 控制按钮 / vol·mode。
 
+use mineral_audio::Bps;
 use mineral_model::AudioFormat;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -89,7 +90,7 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     if bar_w == 0 {
         return;
     }
-    let filled = bar_w * usize::from(pb.ratio_bps()) / 10_000;
+    let filled = pb.ratio_bps().of(bar_w);
     let fill = "━".repeat(filled);
     let mut spans = vec![
         Span::styled(format!(" {elapsed} "), Style::new().fg(theme.accent)),
@@ -132,14 +133,14 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
 /// # Params:
 ///   - `bar_w`: 进度条总 cell 宽
 ///   - `filled`: 已播放实心 cell 数,调用方保证 `< bar_w`
-///   - `buffered_bps`: 已缓冲比例(0..=10000 basis points)
+///   - `buffered`: 已缓冲比例
 ///
 /// # Return:
 ///   `(亮段 cell 数, 暗段 cell 数)`,二者之和 = `bar_w - filled - 1`。
-fn split_buffered_track(bar_w: usize, filled: usize, buffered_bps: u16) -> (usize, usize) {
+fn split_buffered_track(bar_w: usize, filled: usize, buffered: Bps) -> (usize, usize) {
     let track_len = bar_w.saturating_sub(filled).saturating_sub(1);
-    let buffered_cells = bar_w.saturating_mul(usize::from(buffered_bps)) / 10_000;
-    let bright = buffered_cells
+    let bright = buffered
+        .of(bar_w)
         .saturating_sub(filled.saturating_add(1))
         .min(track_len);
     (bright, track_len - bright)
@@ -373,6 +374,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
+    use mineral_audio::Bps;
     use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
 
     use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
@@ -454,10 +456,10 @@ mod tests {
             bps in 0u16..=10_000,
         ) {
             prop_assume!(filled < bar_w);
-            let (bright, dim) = split_buffered_track(bar_w, filled, bps);
+            let (bright, dim) = split_buffered_track(bar_w, filled, Bps::new(bps));
             prop_assert_eq!(bright + dim, bar_w - filled - 1);
             // 缓冲比例单调:bps↑ ⇒ 亮段不减。
-            let (bright_more, _) = split_buffered_track(bar_w, filled, bps.saturating_add(1).min(10_000));
+            let (bright_more, _) = split_buffered_track(bar_w, filled, Bps::new(bps.saturating_add(1)));
             prop_assert!(bright_more >= bright);
         }
     }
@@ -467,13 +469,13 @@ mod tests {
     fn split_buffered_track_cases() {
         // bar_w=11,filled=2(播放头占 1),轨道 = 11-2-1 = 8 cell。
         // 满缓冲:整条轨道都亮。
-        assert_eq!(split_buffered_track(11, 2, 10_000), (8, 0));
+        assert_eq!(split_buffered_track(11, 2, Bps::FULL), (8, 0));
         // 零缓冲:全暗(等价改动前行为)。
-        assert_eq!(split_buffered_track(11, 2, 0), (0, 8));
+        assert_eq!(split_buffered_track(11, 2, Bps::ZERO), (0, 8));
         // 缓冲 50% → buffered_cells = 5;亮段 = 5-(2+1)=2,暗段 = 8-2=6。
-        assert_eq!(split_buffered_track(11, 2, 5_000), (2, 6));
+        assert_eq!(split_buffered_track(11, 2, Bps::new(5_000)), (2, 6));
         // 缓冲落在播放头之内(25% → buffered_cells=2 ≤ filled+1)→ 无亮段。
-        assert_eq!(split_buffered_track(11, 2, 2_500), (0, 8));
+        assert_eq!(split_buffered_track(11, 2, Bps::new(2_500)), (0, 8));
     }
 
     /// `fmt_sample_rate`:0→None;整除 1000 显整数、否则留 1 位小数;覆盖常见档位。
@@ -631,7 +633,7 @@ mod tests {
         pb.playing = true;
         pb.volume_pct = 80;
         pb.prefetch.ready = true;
-        pb.prefetch.buffered_bps = 4_000;
+        pb.prefetch.buffered_bps = Bps::new(4_000);
         t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:gapless prefetch 标记(⏭ 右侧 ⇣)", t.backend());
         Ok(())
@@ -661,7 +663,7 @@ mod tests {
         assert_eq!(marker_fg(&pb, &theme)?, None, "Idle 不该画 ⇣");
         // 已预排、字节未稳:暗色拉取中。
         pb.prefetch.ready = true;
-        pb.prefetch.buffered_bps = 4_000;
+        pb.prefetch.buffered_bps = Bps::new(4_000);
         assert_eq!(
             marker_fg(&pb, &theme)?,
             Some(theme.overlay),
@@ -746,7 +748,7 @@ mod tests {
         pb.track = Some(with_duration(with_name(song("1"), "Buffering"), 225_000));
         pb.position_ms = 60_000; // ≈26.7% 已播
         pb.playing = true;
-        pb.buffered_bps = 6_000; // 60% 已缓冲:介于已播与满之间 → 亮暗两段都该出现
+        pb.buffered_bps = Bps::new(6_000); // 60% 已缓冲:介于已播与满之间 → 亮暗两段都该出现
         t.draw(|f| super::draw(f, f.area(), &pb, &theme))?;
 
         // 圆角边框的上下边也是 `─` 且同为 surface1,故不能全局扫字形。先用唯一的填充字符

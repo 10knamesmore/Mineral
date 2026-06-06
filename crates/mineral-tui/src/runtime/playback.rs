@@ -1,6 +1,6 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
-use mineral_audio::{AudioBackend, AudioSnapshot};
+use mineral_audio::{AudioBackend, AudioSnapshot, Bps};
 use mineral_model::{PlayUrl, Song};
 pub use mineral_protocol::{PlayMode, PlaybackOrigin};
 
@@ -28,9 +28,9 @@ pub struct Playback {
     /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
     pub audio_backend: AudioBackend,
 
-    /// 当前曲目已缓冲比例(0..=10000 basis points)。本地 / 已缓存恒满;远端流式播放时
-    /// 随下载推进。transport 进度条据此在播放头之后画一段更亮的「已缓冲」轨道。
-    pub buffered_bps: u16,
+    /// 当前曲目已缓冲比例。本地 / 已缓存恒满;远端流式播放时随下载推进。
+    /// transport 进度条据此在播放头之后画一段更亮的「已缓冲」轨道。
+    pub buffered_bps: Bps,
 
     /// 当前曲目采样率(Hz),由 audio engine 实测灌入;0 = 未在播 / 未探出。transport 在 fmt 段显示。
     pub sample_rate_hz: u32,
@@ -45,8 +45,8 @@ pub struct Prefetch {
     /// 是否已预排进引擎队列(prefetch 已 append)。
     pub ready: bool,
 
-    /// 缓冲比例(0..=10000 basis points;未预排恒 0)。
-    pub buffered_bps: u16,
+    /// 缓冲比例(未预排恒零)。
+    pub buffered_bps: Bps,
 
     /// 远端字节是否已下完(仅 capture 流会置 true;本地曲恒 false,
     /// 其「就绪」由缓冲已满表达,见 [`Prefetch::stage`])。
@@ -57,7 +57,7 @@ impl Prefetch {
     /// 归纳预排阶段(transport prefetch 标记的判定口径)。
     ///
     /// 「就绪」= 字节下完 **或** 缓冲已满:`download_complete` 仅 capture 流的 waiter
-    /// 会置 true,本地曲 / 纯流式靠 `buffered_bps == 10000`(本地 append 即满)兜住,
+    /// 会置 true,本地曲 / 纯流式靠缓冲满格(本地 append 即满)兜住,
     /// 否则它们会永远卡在「拉取中」。
     ///
     /// # Return:
@@ -65,7 +65,7 @@ impl Prefetch {
     pub fn stage(&self) -> PrefetchStage {
         if !self.ready {
             PrefetchStage::Idle
-        } else if self.download_complete || self.buffered_bps == 10_000 {
+        } else if self.download_complete || self.buffered_bps.is_full() {
             PrefetchStage::Ready
         } else {
             PrefetchStage::Fetching
@@ -98,7 +98,7 @@ impl Playback {
             play_url: None,
             play_origin: None,
             audio_backend: AudioBackend::Device,
-            buffered_bps: 0,
+            buffered_bps: Bps::ZERO,
             sample_rate_hz: 0,
             prefetch: Prefetch::default(),
         }
@@ -110,14 +110,9 @@ impl Playback {
         self.track.as_ref().map_or(0, |t| t.duration_ms)
     }
 
-    /// 进度比例,0..=10000 basis points(渲染层除以 10000.0 得 f64)。
-    pub fn ratio_bps(&self) -> u16 {
-        let dur = self.duration_ms();
-        if dur == 0 {
-            return 0;
-        }
-        let r = self.position_ms.saturating_mul(10_000) / dur;
-        u16::try_from(r.min(10_000)).unwrap_or(10_000)
+    /// 播放进度比例(已播 ms / 总时长 ms;无 track / 时长未知恒零)。
+    pub fn ratio_bps(&self) -> Bps {
+        Bps::ratio(self.position_ms, self.duration_ms())
     }
 
     /// 把 audio engine 的 snapshot 灌进 view-model。
@@ -152,6 +147,7 @@ pub fn format_ms(ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use mineral_audio::Bps;
     use mineral_model::{Song, SongId, SourceKind};
 
     use super::{Playback, format_ms};
@@ -180,15 +176,15 @@ mod tests {
         assert_eq!(format_ms(3_661_000), "61:01");
     }
 
-    /// `ratio_bps`:0..=10000 basis points;无 track / dur 0 → 0;超出 clamp 到满。
+    /// `ratio_bps`:无 track / dur 0 → 零;超出 clamp 到满。
     #[test]
     fn ratio_bps_cases() {
-        assert_eq!(Playback::new().ratio_bps(), 0);
-        assert_eq!(with_track(0, 100).ratio_bps(), 0);
-        assert_eq!(with_track(1000, 0).ratio_bps(), 0);
-        assert_eq!(with_track(1000, 500).ratio_bps(), 5000);
-        assert_eq!(with_track(1000, 1000).ratio_bps(), 10_000);
-        assert_eq!(with_track(1000, 5000).ratio_bps(), 10_000);
+        assert_eq!(Playback::new().ratio_bps(), Bps::ZERO);
+        assert_eq!(with_track(0, 100).ratio_bps(), Bps::ZERO);
+        assert_eq!(with_track(1000, 0).ratio_bps(), Bps::ZERO);
+        assert_eq!(with_track(1000, 500).ratio_bps(), Bps::new(5000));
+        assert_eq!(with_track(1000, 1000).ratio_bps(), Bps::FULL);
+        assert_eq!(with_track(1000, 5000).ratio_bps(), Bps::FULL);
     }
 
     /// `duration_ms`:取 track 元数据,无 track → 0。
@@ -205,14 +201,18 @@ mod tests {
     fn ratio_rescales_cleanly_across_gapless_track_flip() {
         // 旧曲:200s,播到 180s → 9000 bps。
         let mut pb = with_track(200_000, 180_000);
-        assert_eq!(pb.ratio_bps(), 9_000);
+        assert_eq!(pb.ratio_bps(), Bps::new(9_000));
         // 无缝边界:翻成新曲(100s),position 重置到 0。
         pb.track = with_track(100_000, 0).track;
         pb.position_ms = 0;
-        assert_eq!(pb.ratio_bps(), 0, "翻新曲后进度条应从头");
+        assert_eq!(pb.ratio_bps(), Bps::ZERO, "翻新曲后进度条应从头");
         // 新曲播到 50s:按新曲 100s 分母 → 5000(而非旧曲 200s 的 2500)。
         pb.position_ms = 50_000;
-        assert_eq!(pb.ratio_bps(), 5_000, "进度应按新曲时长重缩放,非旧曲");
+        assert_eq!(
+            pb.ratio_bps(),
+            Bps::new(5_000),
+            "进度应按新曲时长重缩放,非旧曲"
+        );
     }
 
     /// `apply_audio_snapshot`:position / playing / volume / backend / buffered_bps 全量灌入。
@@ -223,14 +223,14 @@ mod tests {
             playing: true,
             position_ms: 12_000,
             volume_pct: 55,
-            buffered_bps: 7_500,
+            buffered_bps: Bps::new(7_500),
             ..mineral_audio::AudioSnapshot::default()
         };
         pb.apply_audio_snapshot(snap);
         assert!(pb.playing);
         assert_eq!(pb.position_ms, 12_000);
         assert_eq!(pb.volume_pct, 55);
-        assert_eq!(pb.buffered_bps, 7_500);
+        assert_eq!(pb.buffered_bps, Bps::new(7_500));
     }
 
     /// `apply_audio_snapshot`:next_* 预排字段聚合灌进 `prefetch`(transport 标记的数据源)。
@@ -239,13 +239,13 @@ mod tests {
         let mut pb = Playback::new();
         let snap = mineral_audio::AudioSnapshot {
             next_ready: true,
-            next_buffered_bps: 6_000,
+            next_buffered_bps: Bps::new(6_000),
             next_download_complete: true,
             ..mineral_audio::AudioSnapshot::default()
         };
         pb.apply_audio_snapshot(snap);
         assert!(pb.prefetch.ready);
-        assert_eq!(pb.prefetch.buffered_bps, 6_000);
+        assert_eq!(pb.prefetch.buffered_bps, Bps::new(6_000));
         assert!(pb.prefetch.download_complete);
     }
 
@@ -259,14 +259,14 @@ mod tests {
         assert_eq!(pf.stage(), PrefetchStage::Idle);
         // 已预排、远端字节还在拉 → 拉取中。
         pf.ready = true;
-        pf.buffered_bps = 4_000;
+        pf.buffered_bps = Bps::new(4_000);
         assert_eq!(pf.stage(), PrefetchStage::Fetching);
         // capture 字节下完 → 就绪。
         pf.download_complete = true;
         assert_eq!(pf.stage(), PrefetchStage::Ready);
         // 本地 / 纯流式:done_gen 不写,但缓冲已满 → 同样就绪。
         pf.download_complete = false;
-        pf.buffered_bps = 10_000;
+        pf.buffered_bps = Bps::FULL;
         assert_eq!(pf.stage(), PrefetchStage::Ready);
     }
 }
