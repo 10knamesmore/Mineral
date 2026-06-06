@@ -34,6 +34,56 @@ pub struct Playback {
 
     /// 当前曲目采样率(Hz),由 audio engine 实测灌入;0 = 未在播 / 未探出。transport 在 fmt 段显示。
     pub sample_rate_hz: u32,
+
+    /// 下一曲 gapless 预排状态。transport 据此显预排标记。
+    pub prefetch: Prefetch,
+}
+
+/// 下一曲 gapless 预排状态:audio snapshot next_* 字段在 view-model 侧的聚合。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Prefetch {
+    /// 是否已预排进引擎队列(prefetch 已 append)。
+    pub ready: bool,
+
+    /// 缓冲比例(0..=10000 basis points;未预排恒 0)。
+    pub buffered_bps: u16,
+
+    /// 远端字节是否已下完(仅 capture 流会置 true;本地曲恒 false,
+    /// 其「就绪」由缓冲已满表达,见 [`Prefetch::stage`])。
+    pub download_complete: bool,
+}
+
+impl Prefetch {
+    /// 归纳预排阶段(transport prefetch 标记的判定口径)。
+    ///
+    /// 「就绪」= 字节下完 **或** 缓冲已满:`download_complete` 仅 capture 流的 waiter
+    /// 会置 true,本地曲 / 纯流式靠 `buffered_bps == 10000`(本地 append 即满)兜住,
+    /// 否则它们会永远卡在「拉取中」。
+    ///
+    /// # Return:
+    ///   当前 [`PrefetchStage`]。
+    pub fn stage(&self) -> PrefetchStage {
+        if !self.ready {
+            PrefetchStage::Idle
+        } else if self.download_complete || self.buffered_bps == 10_000 {
+            PrefetchStage::Ready
+        } else {
+            PrefetchStage::Fetching
+        }
+    }
+}
+
+/// 下一曲 gapless 预排在 UI 视角的阶段,由 [`Prefetch::stage`] 归纳。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefetchStage {
+    /// 未预排(或预排尚未 append 进队列)。
+    Idle,
+
+    /// 已预排进队列,远端字节仍在拉取。
+    Fetching,
+
+    /// 已就绪:字节下完(capture)或缓冲已满(本地 / 纯流式),曲终可无缝接续。
+    Ready,
 }
 
 impl Playback {
@@ -50,6 +100,7 @@ impl Playback {
             audio_backend: AudioBackend::Device,
             buffered_bps: 0,
             sample_rate_hz: 0,
+            prefetch: Prefetch::default(),
         }
     }
 
@@ -77,6 +128,11 @@ impl Playback {
         self.audio_backend = snap.backend;
         self.buffered_bps = snap.buffered_bps;
         self.sample_rate_hz = snap.sample_rate_hz;
+        self.prefetch = Prefetch {
+            ready: snap.next_ready,
+            buffered_bps: snap.next_buffered_bps,
+            download_complete: snap.next_download_complete,
+        };
     }
 }
 
@@ -175,5 +231,42 @@ mod tests {
         assert_eq!(pb.position_ms, 12_000);
         assert_eq!(pb.volume_pct, 55);
         assert_eq!(pb.buffered_bps, 7_500);
+    }
+
+    /// `apply_audio_snapshot`:next_* 预排字段聚合灌进 `prefetch`(transport 标记的数据源)。
+    #[test]
+    fn apply_snapshot_propagates_prefetch() {
+        let mut pb = Playback::new();
+        let snap = mineral_audio::AudioSnapshot {
+            next_ready: true,
+            next_buffered_bps: 6_000,
+            next_download_complete: true,
+            ..mineral_audio::AudioSnapshot::default()
+        };
+        pb.apply_audio_snapshot(snap);
+        assert!(pb.prefetch.ready);
+        assert_eq!(pb.prefetch.buffered_bps, 6_000);
+        assert!(pb.prefetch.download_complete);
+    }
+
+    /// `Prefetch::stage` 三态归纳:未预排 → Idle;已预排未稳 → Fetching;
+    /// 字节下完(capture)或缓冲已满(本地曲 append 即满 / 纯流式拉完)→ Ready。
+    #[test]
+    fn prefetch_stage_cases() {
+        use super::{Prefetch, PrefetchStage};
+        let mut pf = Prefetch::default();
+        // 未预排:即便残留缓冲值也不算(engine 未占用槽恒 0,这里防御性钉死语义)。
+        assert_eq!(pf.stage(), PrefetchStage::Idle);
+        // 已预排、远端字节还在拉 → 拉取中。
+        pf.ready = true;
+        pf.buffered_bps = 4_000;
+        assert_eq!(pf.stage(), PrefetchStage::Fetching);
+        // capture 字节下完 → 就绪。
+        pf.download_complete = true;
+        assert_eq!(pf.stage(), PrefetchStage::Ready);
+        // 本地 / 纯流式:done_gen 不写,但缓冲已满 → 同样就绪。
+        pf.download_complete = false;
+        pf.buffered_bps = 10_000;
+        assert_eq!(pf.stage(), PrefetchStage::Ready);
     }
 }

@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::theme::Theme;
-use crate::runtime::playback::{Playback, PlaybackOrigin, format_ms};
+use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage, format_ms};
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
@@ -146,6 +146,8 @@ fn split_buffered_track(bar_w: usize, filled: usize, buffered_bps: u16) -> (usiz
 }
 
 /// 控件区:`[⏮] [▶/⏸] [⏭] [mode]` 按钮 + 下方对应键位 label,等宽对齐避免抖动。
+/// 下一曲已预排(gapless prefetch)时,`[⏭]` 右侧 GAP 的第一格画 `⇣` 标记
+/// (见 [`prefetch_marker`])——占用本就存在的空格 cell,总宽不变、出现/消失不挪动按钮。
 fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height < 2 {
         return;
@@ -164,11 +166,21 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     ];
     const GAP: usize = 3;
     let gap = " ".repeat(GAP);
-    let mut buttons = String::new();
+    let marker = prefetch_marker(pb.prefetch.stage(), theme);
+    let mut buttons = Vec::<Span<'_>>::new();
     let mut labels = String::new();
     for (i, (b, l)) in slots.iter().enumerate() {
         if i > 0 {
-            buttons.push_str(&gap);
+            // [⏭] 之后(mode 槽之前)的 gap:第一格让给 prefetch 标记,余下补空格;
+            // 无标记时整段照旧空格,文本/宽度与标记态完全一致。
+            if i == 3
+                && let Some((glyph, color)) = marker
+            {
+                buttons.push(Span::styled(glyph, Style::new().fg(color)));
+                buttons.push(Span::raw(" ".repeat(GAP - 1)));
+            } else {
+                buttons.push(Span::raw(gap.clone()));
+            }
             labels.push_str(&gap);
         }
         let bw = UnicodeWidthStr::width(b.as_str());
@@ -176,7 +188,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         let pad_total = bw.saturating_sub(lw);
         let lpad = pad_total / 2;
         let rpad = pad_total - lpad;
-        buttons.push_str(b);
+        buttons.push(Span::raw(b.clone()));
         labels.push_str(&" ".repeat(lpad));
         labels.push_str(l);
         labels.push_str(&" ".repeat(rpad));
@@ -191,6 +203,24 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
             .alignment(Alignment::Center),
         lbl,
     );
+}
+
+/// gapless prefetch 标记:字形 + 颜色;未预排 → `None`(不画)。
+///
+/// 字形恒 `⇣`(1 cell)只换色——拉取中暗(overlay)、就绪亮(green),状态切换布局不抖。
+///
+/// # Params:
+///   - `stage`: 预排阶段(见 [`crate::runtime::playback::Prefetch::stage`])
+///   - `theme`: 取色主题
+///
+/// # Return:
+///   `(字形, 颜色)`;`Idle` 为 `None`。
+fn prefetch_marker(stage: PrefetchStage, theme: &Theme) -> Option<(&'static str, Color)> {
+    match stage {
+        PrefetchStage::Idle => None,
+        PrefetchStage::Fetching => Some(("⇣", theme.overlay)),
+        PrefetchStage::Ready => Some(("⇣", theme.green)),
+    }
 }
 
 /// vms 行:vol / mode / fmt 三块三等分铺开(分别左 / 居中 / 右对齐)。fmt 段 =
@@ -568,6 +598,78 @@ mod tests {
             "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
             t.backend()
         );
+        Ok(())
+    }
+
+    /// prefetch 标记的 (字形, 颜色) 映射——未预排无标记;拉取中暗(overlay)、就绪亮(green),
+    /// 字形恒 `⇣` 只换色,布局不抖。
+    #[test]
+    fn prefetch_marker_maps_glyph_and_color() {
+        use crate::runtime::playback::PrefetchStage;
+        let theme = Theme::default();
+        assert_eq!(super::prefetch_marker(PrefetchStage::Idle, &theme), None);
+        assert_eq!(
+            super::prefetch_marker(PrefetchStage::Fetching, &theme),
+            Some(("⇣", theme.overlay))
+        );
+        assert_eq!(
+            super::prefetch_marker(PrefetchStage::Ready, &theme),
+            Some(("⇣", theme.green))
+        );
+    }
+
+    /// prefetch 标记渲染:next 已预排时 `[⏭]` 右侧 gap 第一格画 `⇣`,按钮行总宽不变。
+    #[test]
+    fn transport_prefetch_marker_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(
+            with_name(song("1"), "LoveLetterTypewriter"),
+            225_000,
+        ));
+        pb.position_ms = 220_000; // 曲终临近,prefetch 已触发
+        pb.playing = true;
+        pb.volume_pct = 80;
+        pb.prefetch.ready = true;
+        pb.prefetch.buffered_bps = 4_000;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:gapless prefetch 标记(⏭ 右侧 ⇣)", t.backend());
+        Ok(())
+    }
+
+    /// prefetch 标记颜色随阶段切换:拉取中 overlay → 就绪 green;未预排不画 `⇣`。
+    /// 文本快照不记前景色,这里直接读 `⇣` cell 的 fg 钉死。
+    #[test]
+    fn transport_prefetch_marker_colors() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        /// 渲染一帧,取 `⇣` cell 的前景色(无标记则 None)。
+        fn marker_fg(pb: &Playback, theme: &Theme) -> color_eyre::Result<Option<Color>> {
+            let mut t = Terminal::new(TestBackend::new(50, 8))?;
+            t.draw(|f| super::draw(f, f.area(), pb, theme))?;
+            Ok(t.backend()
+                .buffer()
+                .content
+                .iter()
+                .find(|c| c.symbol() == "⇣")
+                .map(|c| c.fg))
+        }
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(with_name(song("1"), "Prefetching"), 225_000));
+        pb.position_ms = 220_000;
+        pb.playing = true;
+        // 未预排:无标记。
+        assert_eq!(marker_fg(&pb, &theme)?, None, "Idle 不该画 ⇣");
+        // 已预排、字节未稳:暗色拉取中。
+        pb.prefetch.ready = true;
+        pb.prefetch.buffered_bps = 4_000;
+        assert_eq!(
+            marker_fg(&pb, &theme)?,
+            Some(theme.overlay),
+            "Fetching 应 overlay"
+        );
+        // 字节下完:亮色就绪。
+        pb.prefetch.download_complete = true;
+        assert_eq!(marker_fg(&pb, &theme)?, Some(theme.green), "Ready 应 green");
         Ok(())
     }
 
