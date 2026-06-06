@@ -63,6 +63,10 @@ pub enum Event {
         /// 变更的键(开放 key 或一等字段名,如 `rating`)。
         key: String,
     },
+
+    /// 脚本已热重载(config.lua 变更、新 VM 顶上)。client 据此重拉
+    /// `ScriptBinds` 合 keymap(daemon 重载完成是 bind 表就绪的权威信号)。
+    ScriptReloaded,
 }
 
 impl Event {
@@ -74,7 +78,8 @@ impl Event {
             Self::PropertyChanged { .. } => Subscription::Property,
             Self::TrackFinished { .. }
             | Self::DownloadCompleted { .. }
-            | Self::StoreChanged { .. } => Subscription::Lifecycle,
+            | Self::StoreChanged { .. }
+            | Self::ScriptReloaded => Subscription::Lifecycle,
         }
     }
 }

@@ -40,12 +40,20 @@ function mineral.on(event, fn) end
 --- 按键瞬间 client 正在展示的视图(与 Rust `ViewKind` 由守卫测试钉死同步)。
 ---@alias mineral.ViewKind "playlists"|"tracks"|"queue"|"fullscreen"|"search"
 
+--- 选中歌单的轻量引用。
+---@class mineral.PlaylistRef
+---@field id string  歌单 id(`namespace:value`)
+---@field name string  歌单名
+
 --- 动作回调收到的上下文(按键瞬间采集;CLI 等无界面触发面为空表,字段全 nil)。
+--- 只携带 daemon 不知道的 client 侧信息;播放器态(音量/进度/队列)用 `mineral.get`。
 ---@class mineral.ActionCtx
 ---@field view mineral.ViewKind|nil  按键时所在视图
----@field selected_song_id string|nil  列表光标选中的歌(队列浮层取光标条目)
----@field selected_playlist_id string|nil  选中 / 所在的歌单
----@field now_playing_id string|nil  在播的歌(停止态 nil)
+---@field selected_song mineral.Song|nil  列表光标选中的歌(队列浮层取光标条目)
+---@field selected_playlist mineral.PlaylistRef|nil  选中 / 所在的歌单
+---@field now_playing mineral.Song|nil  在播的歌(停止态 nil)
+---@field selected_loved boolean|nil  选中歌的 ♥ 态(无选中 / 未知为 nil)
+---@field search_query string|nil  当前搜索 / 过滤词(空词为 nil)
 
 --- 注册具名动作(物理键解耦,多 client 共用触发面)。重名 / 空名报错。
 --- 触发面:TUI `tui.keys.script` 绑键(ctx 带按键上下文)/ CLI `mineral action <name>`(ctx 空表)。
@@ -53,10 +61,11 @@ function mineral.on(event, fn) end
 ---@param fn fun(ctx: mineral.ActionCtx): nil
 function mineral.action(name, fn) end
 
---- 语法糖:匿名动作 + keys 表追加。**尚未实现**:当前调用只记一条
---- warn 日志并被忽略,不注册任何东西。
----@param key string
----@param fn fun(ctx: table): nil
+--- 语法糖:匿名动作 + 键位一步绑定(= `mineral.action(内部名, fn)` +
+--- 键合进 TUI keymap)。键字符串文法与 `tui.keys` 一致(nvim 表示法,如 "X" / "<C-g>");
+--- 非法键名在 TUI 侧 warn 跳过,不影响其余绑定。
+---@param key string  键字符串,如 "X" / "<C-g>"
+---@param fn fun(ctx: mineral.ActionCtx): nil
 function mineral.bind(key, fn) end
 
 --- 可观测属性名(字符串枚举;与 Rust `PropKey` 由守卫测试钉死同步)。
@@ -214,7 +223,9 @@ function mineral.timer.every(ms, fn) end
 mineral.ui = {}
 
 --- 推送 toast 到 client(同 id 替换不堆叠)。
----@param msg string
+--- msg 是 `print` 式宽容:任意值经 tostring 显示;**nil 静默跳过**
+--- (`toast(ctx.search_query)` 这类可空链无词时安静,不报错)。
+---@param msg any  显示内容(nil 跳过;非字符串经 tostring)
 ---@param opts? { kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }  ttl_secs 缺省用 client 配置(toast.flash_ttl_secs)
 function mineral.ui.toast(msg, opts) end
 

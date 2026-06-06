@@ -9,6 +9,7 @@ pub mod filter;
 pub mod keymap;
 pub mod playback;
 pub mod prefetch;
+pub(crate) mod reload;
 pub mod remote;
 pub mod signal;
 pub mod state;

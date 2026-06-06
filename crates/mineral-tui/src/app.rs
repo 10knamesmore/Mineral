@@ -14,7 +14,6 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use mineral_model::Song;
 use mineral_protocol::PlayerSync;
 use mineral_server::Client;
-use mineral_task::TaskEvent;
 use ratatui::layout::Position;
 use ratatui_image::picker::Picker;
 
@@ -96,6 +95,9 @@ pub struct App {
     /// UI 偏好句柄:启动初值在 `App::new` 落地,运行时改动(`t` 键切歌词副轨档)
     /// fire-and-forget 落盘。
     ui_prefs: UiPrefs,
+
+    /// config.lua 的 mtime 监视器(热重载 keymap / theme)。
+    config_watch: crate::runtime::reload::ConfigWatch,
 }
 
 impl App {
@@ -120,7 +122,9 @@ impl App {
     ) -> Self {
         let tui_cfg = cfg.tui();
         let theme = Arc::new(Theme::from_config(tui_cfg.theme()));
-        let keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
+        let mut keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
+        // 脚本 `mineral.bind` 的键合进查表(daemon 模式拉真表;in-proc 恒空)。
+        keymap.append_script_binds(&client.script_binds());
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
@@ -155,6 +159,7 @@ impl App {
             picker,
             launch_anchor,
             ui_prefs,
+            config_watch: crate::runtime::reload::ConfigWatch::new(),
         }
     }
 
@@ -220,6 +225,10 @@ impl App {
                 }
                 self.drain_task_events();
                 self.drain_push_events();
+                // config.lua 热重载(内部限频 1s 才真 stat)。
+                if self.config_watch.changed() {
+                    self.reload_config();
+                }
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
@@ -423,25 +432,27 @@ impl App {
     }
 
     /// 把 server 端积攒的 task events 拉过来 apply 到 [`AppState`]。
+    /// (瞬时提示不走这条通道 —— daemon 经 [`Self::drain_push_events`] 的
+    /// `Event::Toast` 推送。)
     fn drain_task_events(&mut self) {
         let events = self.client.drain_task_events();
         for ev in &events {
-            // Notice 是给状态栏看的瞬时提示(如下载进度),不进 AppState 数据;其余照常 apply。
-            match ev {
-                TaskEvent::Notice { text } => {
-                    self.notifications.flash_text(text.clone());
-                }
-                _ => self.state.apply(ev),
-            }
+            self.state.apply(ev);
         }
     }
 
     /// 取走 server 主动推送的 event 缓冲并逐条消费(与轮询式
-    /// [`Self::drain_task_events`] 是两条通道;翻译逻辑在
-    /// [`crate::components::toast::push::apply_event`])。
+    /// [`Self::drain_task_events`] 是两条通道)。`ScriptReloaded` 在这里
+    /// 分流(刷新脚本 bind 键),其余进通知层翻译
+    /// ([`crate::components::toast::push::apply_event`])。
     fn drain_push_events(&mut self) {
         for ev in self.client.drain_events() {
-            crate::components::toast::push::apply_event(&mut self.notifications, ev);
+            match ev {
+                mineral_protocol::Event::ScriptReloaded => self.refresh_script_binds(),
+                other => {
+                    crate::components::toast::push::apply_event(&mut self.notifications, other);
+                }
+            }
         }
     }
 

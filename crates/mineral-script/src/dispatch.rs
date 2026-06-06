@@ -54,6 +54,9 @@ pub(crate) fn run_loop(
             Ok(ScriptMsg::Resolve { query, value }) => {
                 resolve_query(lua, host, watchdog, query, &value);
             }
+            Ok(ScriptMsg::GetBinds { reply }) => {
+                let _ = reply.send(host.events.lock().binds.clone());
+            }
             Ok(ScriptMsg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -106,7 +109,14 @@ fn invoke_action(
                 error = mineral_log::chain(&e),
                 "script action failed"
             );
-            ActionOutcome::Failed(mineral_log::chain(&e))
+            // 回执只给首行(toast / CLI stderr 的人读信息);
+            // mlua 错误的 traceback 多行,完整链已进上面的日志。
+            let first_line = mineral_log::chain(&e)
+                .lines()
+                .next()
+                .unwrap_or("脚本错误(详见日志)")
+                .to_owned();
+            ActionOutcome::Failed(first_line)
         }
     }
 }
@@ -251,22 +261,32 @@ fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &mlua::Error)
 
 /// 按键上下文在 Lua 侧的投影:蛇形字段名,缺席字段不设(Lua 读出 nil)。
 ///
-/// `view` 用 [`mineral_protocol::ViewKind::script_name`] 蛇形名;id 一律
-/// `qualified()` 字符串,可直接回喂 `mineral.player.play` / `mineral.store.*`。
+/// `view` 用 [`mineral_protocol::ViewKind::script_name`] 蛇形名;歌投影成
+/// [`song_table`](`{id, title, duration_ms}`,id 可直接回喂 player / store API),
+/// 歌单投影成 `{id, name}`。
 fn ctx_table(lua: &Lua, ctx: Option<&mineral_protocol::KeyContext>) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
     let Some(ctx) = ctx else {
         return Ok(table);
     };
     table.set("view", ctx.view().script_name())?;
-    if let Some(id) = ctx.selected_song_id() {
-        table.set("selected_song_id", id.qualified())?;
+    if let Some(song) = ctx.selected_song() {
+        table.set("selected_song", song_table(lua, song)?)?;
     }
-    if let Some(id) = ctx.selected_playlist_id() {
-        table.set("selected_playlist_id", id.qualified())?;
+    if let Some(playlist) = ctx.selected_playlist() {
+        let entry = lua.create_table()?;
+        entry.set("id", playlist.id.qualified())?;
+        entry.set("name", playlist.name.clone())?;
+        table.set("selected_playlist", entry)?;
     }
-    if let Some(id) = ctx.now_playing_id() {
-        table.set("now_playing_id", id.qualified())?;
+    if let Some(song) = ctx.now_playing() {
+        table.set("now_playing", song_table(lua, song)?)?;
+    }
+    if let Some(loved) = ctx.selected_loved() {
+        table.set("selected_loved", *loved)?;
+    }
+    if let Some(query) = ctx.search_query() {
+        table.set("search_query", query.clone())?;
     }
     Ok(table)
 }

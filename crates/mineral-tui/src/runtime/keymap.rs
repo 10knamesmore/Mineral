@@ -158,6 +158,35 @@ impl Keymap {
         self.script_names.get(slot.0).map(String::as_str)
     }
 
+    /// 把 daemon 拉回的 `mineral.bind` 表追加进查表(槽位排在配置
+    /// `keys.script` 之后)。键字符串解析失败的条目 warn 跳过、不占槽位,
+    /// 不拖死其余绑定。
+    ///
+    /// # Params:
+    ///   - `binds`: bind 表(注册顺序)
+    pub fn append_script_binds(&mut self, binds: &[mineral_protocol::ScriptBind]) {
+        for bind in binds {
+            let chord = match mineral_config::keys::KeyChord::parse(&bind.key) {
+                Ok(chord) => chord,
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "tui",
+                        key = bind.key,
+                        action = bind.action,
+                        error = mineral_log::chain(&e),
+                        "mineral.bind 的键解析失败,跳过该绑定"
+                    );
+                    continue;
+                }
+            };
+            self.table.insert(
+                chord,
+                Action::InvokeScript(ScriptSlot(self.script_names.len())),
+            );
+            self.script_names.push(bind.action.clone());
+        }
+    }
+
     /// 查表。
     ///
     /// # Params:
@@ -184,37 +213,37 @@ mod tests {
         vec![
             // ---- 全局(handle_key 直连段) ----
             ("z", Action::ToggleFullscreen),
-            ("tab", Action::OpenQueue),
+            ("<Tab>", Action::OpenQueue),
             ("q", Action::OpenQuitConfirm),
             ("t", Action::CycleLyricExtra),
             ("/", Action::EnterSearch),
             // ---- 播放控制(handle_playback_key) ----
-            ("space", Action::TogglePlayPause),
+            ("<Space>", Action::TogglePlayPause),
             ("m", Action::CyclePlayMode),
             ("+", Action::NudgeVolume(VolumeDelta(5))),
             ("=", Action::NudgeVolume(VolumeDelta(5))),
             ("-", Action::NudgeVolume(VolumeDelta(-5))),
             ("_", Action::NudgeVolume(VolumeDelta(-5))),
-            ("Left", Action::SeekRelative(SeekDelta(-5))),
-            ("Right", Action::SeekRelative(SeekDelta(5))),
-            ("Shift+Left", Action::SeekRelative(SeekDelta(-30))),
-            ("Shift+Right", Action::SeekRelative(SeekDelta(30))),
+            ("<Left>", Action::SeekRelative(SeekDelta(-5))),
+            ("<Right>", Action::SeekRelative(SeekDelta(5))),
+            ("<S-Left>", Action::SeekRelative(SeekDelta(-30))),
+            ("<S-Right>", Action::SeekRelative(SeekDelta(30))),
             ("p", Action::PrevOrRestart),
             ("n", Action::NextSong),
             // ---- 列表视图(handle_playlists_key / handle_library_key 归一) ----
             ("j", Action::MoveSelection(SelectionMove::Down(1))),
-            ("Down", Action::MoveSelection(SelectionMove::Down(1))),
+            ("<Down>", Action::MoveSelection(SelectionMove::Down(1))),
             ("k", Action::MoveSelection(SelectionMove::Up(1))),
-            ("Up", Action::MoveSelection(SelectionMove::Up(1))),
+            ("<Up>", Action::MoveSelection(SelectionMove::Up(1))),
             ("J", Action::MoveSelection(SelectionMove::Down(7))),
             ("K", Action::MoveSelection(SelectionMove::Up(7))),
             ("g", Action::MoveSelection(SelectionMove::First)),
             ("G", Action::MoveSelection(SelectionMove::Last)),
             ("l", Action::ActivateSelection),
-            ("enter", Action::ActivateSelection),
+            ("<CR>", Action::ActivateSelection),
             ("h", Action::BackOrClearSearch),
-            ("esc", Action::BackOrClearSearch),
-            ("backspace", Action::BackOrClearSearch),
+            ("<Esc>", Action::BackOrClearSearch),
+            ("<BS>", Action::BackOrClearSearch),
             ("f", Action::ToggleLoveSelection),
             ("d", Action::DownloadSelection),
         ]
@@ -257,7 +286,7 @@ mod tests {
         assert_eq!(chord_from_event(&ev), Some(KeyChord::parse("+")?));
         // 非字符键保留 SHIFT。
         let ev = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT);
-        assert_eq!(chord_from_event(&ev), Some(KeyChord::parse("Shift+Left")?));
+        assert_eq!(chord_from_event(&ev), Some(KeyChord::parse("<S-Left>")?));
         // 无关修饰(如 META)丢弃,不影响命中。
         let ev = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::META);
         assert_eq!(chord_from_event(&ev), Some(KeyChord::parse("j")?));
@@ -300,13 +329,64 @@ mod tests {
             Some(Action::NudgeVolume(VolumeDelta(10)))
         );
         assert_eq!(
-            km.lookup(KeyChord::parse("Left")?),
+            km.lookup(KeyChord::parse("<Left>")?),
             Some(Action::SeekRelative(SeekDelta(-15)))
         );
         assert_eq!(
             km.lookup(KeyChord::parse("J")?),
             Some(Action::MoveSelection(SelectionMove::Down(3)))
         );
+        Ok(())
+    }
+
+    /// daemon 拉回的 bind 表合进 keymap:键命中 InvokeScript 新槽位、槽位
+    /// 解析回内部名;非法键字符串跳过该条不拖死其余。
+    #[test]
+    fn script_binds_append_after_config_slots() -> color_eyre::Result<()> {
+        use mineral_protocol::ScriptBind;
+
+        use super::super::action::ScriptSlot;
+        let dir = tempfile::tempdir()?;
+        let user = dir.path().join("config.lua");
+        // 配置里已有一个 keys.script 槽位,bind 槽位必须排在其后不串位。
+        std::fs::write(
+            &user,
+            "return { tui = { keys = { script = { [\"my.first\"] = \"X\" } } } }",
+        )?;
+        let (cfg, warnings) = mineral_config::load(&user)?;
+        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
+        let mut km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
+        km.append_script_binds(&[
+            ScriptBind {
+                key: "<C-g>".to_owned(),
+                action: "bind#1".to_owned(),
+            },
+            ScriptBind {
+                key: "不是键".to_owned(),
+                action: "bind#2".to_owned(),
+            },
+            ScriptBind {
+                key: "B".to_owned(),
+                action: "bind#3".to_owned(),
+            },
+        ]);
+        let hit = km.lookup(KeyChord::parse("<C-g>")?);
+        let Some(Action::InvokeScript(slot)) = hit else {
+            color_eyre::eyre::bail!("<C-g> 应命中 InvokeScript,实得 {hit:?}");
+        };
+        assert_eq!(km.script_action(slot), Some("bind#1"));
+        let hit = km.lookup(KeyChord::parse("B")?);
+        let Some(Action::InvokeScript(slot)) = hit else {
+            color_eyre::eyre::bail!("非法键跳过后,B 仍应命中,实得 {hit:?}");
+        };
+        assert_eq!(km.script_action(slot), Some("bind#3"));
+        // 配置槽位不被 bind 追加破坏。
+        let hit = km.lookup(KeyChord::parse("X")?);
+        let Some(Action::InvokeScript(slot)) = hit else {
+            color_eyre::eyre::bail!("配置 keys.script 槽位应保留,实得 {hit:?}");
+        };
+        assert_eq!(km.script_action(slot), Some("my.first"));
+        assert_eq!(km.script_action(ScriptSlot(3)), None, "非法键不占槽位");
         Ok(())
     }
 
@@ -323,7 +403,11 @@ mod tests {
             km.lookup(KeyChord::parse("x")?),
             Some(Action::TogglePlayPause)
         );
-        assert_eq!(km.lookup(KeyChord::parse("space")?), None, "旧键被整体替换");
+        assert_eq!(
+            km.lookup(KeyChord::parse("<Space>")?),
+            None,
+            "旧键被整体替换"
+        );
         Ok(())
     }
 }

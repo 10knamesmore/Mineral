@@ -3,7 +3,8 @@
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Song, SongId};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, PlayerSync, PlayerVersions, SongStatsWire,
+    CancelFilter, DownloadProgress, DownloadTarget, Event, PlayerSync, PlayerVersions,
+    SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 
@@ -19,12 +20,24 @@ pub struct ClientHandle {
 
     /// PCM 旁路读端,频谱 UI 用。
     pcm: PcmPuller,
+
+    /// event hub 订阅端(in-proc 推送通路:Toast / StoreChanged 等;
+    /// 多 clone 共享同一订阅,与「单 client」语义一致)。
+    events: std::sync::Arc<parking_lot::Mutex<tokio::sync::broadcast::Receiver<Event>>>,
 }
 
 impl ClientHandle {
     /// 同进程构造,Server 启动后用持有的 `player` / `pcm` 直接拼成 handle。
-    pub(crate) fn new(player: PlayerCore, pcm: PcmPuller) -> Self {
-        Self { player, pcm }
+    pub(crate) fn new(
+        player: PlayerCore,
+        pcm: PcmPuller,
+        events: tokio::sync::broadcast::Receiver<Event>,
+    ) -> Self {
+        Self {
+            player,
+            pcm,
+            events: std::sync::Arc::new(parking_lot::Mutex::new(events)),
+        }
     }
 
     /// 切换一首歌的 love(♥)状态:查当前态 → 经对应 channel `set_loved`
@@ -103,6 +116,14 @@ impl ClientHandle {
             .await?;
         self.player.notify().store_changed(id, key);
         Ok(())
+    }
+
+    /// 拉取脚本 bind 表(serve 层处理 `ScriptBinds` 用);无脚本 / 线程退出为空。
+    pub(crate) async fn script_binds_async(&self) -> Vec<mineral_protocol::ScriptBind> {
+        let Some(script) = self.player.script_sender() else {
+            return Vec::new();
+        };
+        script.script_binds().await.unwrap_or_default()
     }
 
     /// per-song 数值自增(serve 层处理 `StoreInc` 用);成功推 `StoreChanged`。
@@ -250,6 +271,15 @@ pub trait Client: Send + Sync {
         Some("脚本动作不可用(当前 client 不支持)".to_owned())
     }
 
+    /// 拉取脚本 `mineral.bind` 的键绑定表(client 启动 / 配置重载后调,
+    /// 合进自己的 keymap)。
+    ///
+    /// 默认空(in-proc 调试模式不起脚本线程,空表即正确语义);daemon 模式
+    /// 经 IPC 拿真表。
+    fn script_binds(&self) -> Vec<mineral_protocol::ScriptBind> {
+        Vec::new()
+    }
+
     /// 查询一首歌的播放统计;无记录 / 不可用返回 `None`。
     ///
     /// # Params:
@@ -346,6 +376,21 @@ impl Client for ClientHandle {
     }
     fn drain_task_events(&self) -> Vec<TaskEvent> {
         self.player.drain_client_events()
+    }
+
+    fn drain_events(&self) -> Vec<Event> {
+        let mut rx = self.events.lock();
+        let mut events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(event) => events.push(event),
+                // 积压被挤掉(in-proc 每 tick drain,正常到不了):跳过继续收。
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    mineral_log::warn!(target: "client", skipped, "event hub 积压,推送被丢弃");
+                }
+                Err(_empty_or_closed) => return events,
+            }
+        }
     }
     fn task_snapshot(&self) -> Snapshot {
         self.player.task_snapshot()

@@ -250,6 +250,65 @@ async fn store_survives_daemon_restart() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 热重载:daemon 运行中改写 config.lua,新 action 生效、旧 action 退役,
+/// 无需重启(mtime 轮询 1s + 重载执行,轮询等待)。
+#[test]
+fn hot_reload_swaps_actions_without_restart() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn(
+        "reload",
+        Some(
+            r#"
+            mineral.action("gen.one", function(ctx) end)
+            return {}
+            "#,
+        ),
+    )?;
+    daemon.wait_ready()?;
+    let ok = daemon.action_output("gen.one")?;
+    assert!(ok.status.success(), "初代 action 应可触发");
+
+    // 改写 config.lua:换一代 action。
+    let cfg_path = daemon.root.join("config/mineral/config.lua");
+    std::fs::write(
+        &cfg_path,
+        r#"
+        mineral.action("gen.two", function(ctx) end)
+        -- 重载播种守卫:新 VM 顶层 get 必须立即读到 daemon 当前属性
+        -- (无在播 = "stopped"),不等下次属性真变更。
+        if mineral.get("player.state") == "stopped" then
+            mineral.action("props.seeded", function(ctx) end)
+        end
+        return {}
+        "#,
+    )?;
+    // 等热重载生效(mtime 轮询 1s + 换线程;放宽到 10s)。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let new_gen = daemon.action_output("gen.two")?;
+        if new_gen.status.success() {
+            break;
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "热重载超时:gen.two 未生效,stderr: {}",
+                String::from_utf8_lossy(&new_gen.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // 新一代生效后,旧一代必须已整体退役(注册表原子换)。
+    let old_gen = daemon.action_output("gen.one")?;
+    assert!(!old_gen.status.success(), "旧 action 应随重载退役");
+    // 播种守卫:props.seeded 注册成功 = 重载时新 VM 读到了当前属性值。
+    let seeded = daemon.action_output("props.seeded")?;
+    assert!(
+        seeded.status.success(),
+        "重载后顶层 mineral.get 应读到播种属性,stderr: {}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+    Ok(())
+}
+
 /// 无 config.lua 的 daemon:脚本未启用,触发任何动作都报人读错误。
 #[test]
 fn action_without_script_reports_disabled() -> color_eyre::Result<()> {

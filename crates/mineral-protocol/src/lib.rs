@@ -31,7 +31,7 @@ pub use frame::{Frame, RequestId};
 pub use handshake::{
     ClientInfo, PkgVersion, RejectReason, ServerHello, Subscription, client_handshake,
 };
-pub use key::{KeyContext, ViewKind};
+pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
 pub use message::{DownloadProgress, DownloadTarget, Request, Response, SongStatsWire};
 pub use mineral_task::ChannelFetchKindTag;
 pub use oneshot::OneshotClient;

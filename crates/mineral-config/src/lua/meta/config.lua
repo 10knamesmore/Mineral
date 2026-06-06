@@ -68,15 +68,15 @@
 ---@field muted? string 来源次要角色
 ---@field faint? string 来源最弱角色
 
--- 键绑定值:单键字符串(如 "space")或键数组(如 { "n", "j" });数组**整体替换**默认绑定。
+-- 键绑定值:单键字符串(如 "<Space>")或键数组(如 { "n", "j" });数组**整体替换**默认绑定。
 --
--- 键语法(`KeyChord` 解析):
--- - 单字符键原样写:"j"、"/"、"+";**大小写有别**,"J" 即 Shift+j,不必写 "Shift+j"。
--- - 命名键(大小写不敏感):space / tab / enter / esc(或 escape)/ backspace /
---   Left / Right / Up / Down。
--- - 修饰前缀:"Shift+Left"、"Ctrl+x"、"Ctrl+Shift+Right";仅支持 Shift / Ctrl,
---   且 Shift 只对非字符键有意义(字符键的 Shift 已编码在字符本身)。
--- - F1-F12 / Home / End / PageUp 等暂不支持。
+-- 键语法(nvim 表示法,`KeyChord` 解析):
+-- - 单字符键原样写:"j"、"/"、"+";**大小写有别**,"J" 即 Shift+j,不必写 "<S-j>"。
+-- - 特殊键用尖括号(键名大小写不敏感):"<Space>" / "<Tab>" / "<CR>"(或 <Enter>
+--   / <Return>)/ "<Esc>" / "<BS>" / "<Left>" / "<Right>" / "<Up>" / "<Down>"。
+-- - 修饰前缀:"<S-Left>"、"<C-x>"、"<C-S-Right>";仅支持 C-(Ctrl)/ S-(Shift),
+--   且 S- 只对非字符键有意义(字符键的 Shift 已编码在字符本身)。
+-- - <A->(Alt)/ F1-F12 / Home / End / PageUp 等暂不支持。
 ---@alias mineral.KeyBinding string|string[]
 
 ---键位重映射:方向是「动作 → 键」。给某动作写新键即完全替换其默认键;

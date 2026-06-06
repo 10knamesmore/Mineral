@@ -319,6 +319,12 @@ pub(crate) enum ScriptMsg {
         value: ResolveValue,
     },
 
+    /// 拉取 `mineral.bind` 的键绑定表(daemon 处理 `Request::ScriptBinds` 用)。
+    GetBinds {
+        /// bind 表回执(接收端 drop 时静默丢)。
+        reply: tokio::sync::oneshot::Sender<Vec<mineral_protocol::ScriptBind>>,
+    },
+
     /// 优雅停机:主循环退出,线程结束。
     Stop,
 }
@@ -336,22 +342,61 @@ pub enum ActionOutcome {
     Failed(String),
 }
 
-/// daemon 侧持有的事件投递句柄(fire-and-forget)。
+/// daemon 侧持有的脚本投递句柄(fire-and-forget),带**热重载间接层**:
+/// 内层是当前脚本线程的消息入口,[`Self::attach`] 在重载时原子换新,
+/// 持有者(Notifier / 泵)无感。未挂线程(无脚本 / 重载窗口)时投递静默丢、
+/// 查询立即回"未启用"。
 ///
-/// 发送失败(脚本线程已退出)静默丢弃 —— 脚本是旁路增强,不反压播放主链路。
-/// 内部是 `std::sync::mpsc`(无界,send 永不阻塞):消费端在脚本线程,
+/// 内层是 `std::sync::mpsc`(无界,send 永不阻塞):消费端在脚本线程,
 /// 需要 `recv_timeout` 驱动 timer 心跳,tokio 通道给不了。
 #[derive(Clone, Debug)]
-pub struct ScriptSender(pub(crate) std::sync::mpsc::Sender<ScriptMsg>);
+pub struct ScriptSender {
+    /// 当前脚本线程的消息入口;`None` = 未挂(无脚本 / 重载换 VM 的窗口)。
+    inner: std::sync::Arc<parking_lot::RwLock<Option<std::sync::mpsc::Sender<ScriptMsg>>>>,
+}
 
 impl ScriptSender {
+    /// 建一个未挂线程的句柄(daemon 装配期先建,脚本线程起来后 [`Self::attach`])。
+    #[must_use]
+    pub fn detached() -> Self {
+        Self {
+            inner: std::sync::Arc::new(parking_lot::RwLock::new(None)),
+        }
+    }
+
+    /// 把(新)脚本线程的消息入口挂进来(启动 / 热重载换 VM 后调)。
+    pub(crate) fn attach(&self, tx: std::sync::mpsc::Sender<ScriptMsg>) {
+        *self.inner.write() = Some(tx);
+    }
+
+    /// 摘掉当前线程入口(重载 eval 失败弃新 VM 时**不**调——保留旧线程)。
+    pub fn detach(&self) {
+        *self.inner.write() = None;
+    }
+
+    /// 是否挂着活线程(daemon 报"脚本未启用"的判断点)。
+    #[must_use]
+    pub fn is_attached(&self) -> bool {
+        self.inner.read().is_some()
+    }
+
+    /// 向当前线程投一条消息;未挂 / 线程已退出时把消息原样还给调用方
+    /// (Box 压扁 Err 体积,消息只在失败路径装箱)。
+    fn try_send(&self, msg: ScriptMsg) -> Result<(), Box<ScriptMsg>> {
+        let guard = self.inner.read();
+        match guard.as_ref() {
+            Some(tx) => tx.send(msg).map_err(|failed| Box::new(failed.0)),
+            None => Err(Box::new(msg)),
+        }
+    }
+
     /// 投递一个事件给脚本线程。
     ///
     /// # Params:
     ///   - `event`: 要投递的事件
     pub fn send(&self, event: ScriptEvent) {
-        // 接收端 Drop(脚本线程退出)时丢弃即可,不是错误。
-        let _ = self.0.send(ScriptMsg::Event(event));
+        // 未挂 / 线程退出:丢弃即可,不是错误(脚本是旁路增强)。
+        let _ = self.try_send(ScriptMsg::Event(event));
     }
 
     /// 回投一次异步查询的结果(daemon 泵完成 [`ScriptCmd`] 查询后调)。
@@ -360,12 +405,31 @@ impl ScriptSender {
     ///   - `query`: 查询句柄(随查询命令带出的那个)
     ///   - `value`: 查询结果
     pub fn resolve(&self, query: QueryId, value: ResolveValue) {
-        let _ = self.0.send(ScriptMsg::Resolve { query, value });
+        let _ = self.try_send(ScriptMsg::Resolve { query, value });
+    }
+
+    /// 拉取 `mineral.bind` 的键绑定表。
+    ///
+    /// 未挂 / 线程已退出时,回执立即就绪为空表(client 合并空表 = 无 bind)。
+    ///
+    /// # Return:
+    ///   oneshot 接收端;`await` 得到注册顺序的 bind 表。
+    #[must_use]
+    pub fn script_binds(
+        &self,
+    ) -> tokio::sync::oneshot::Receiver<Vec<mineral_protocol::ScriptBind>> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if let Err(failed) = self.try_send(ScriptMsg::GetBinds { reply })
+            && let ScriptMsg::GetBinds { reply } = *failed
+        {
+            let _ = reply.send(Vec::new());
+        }
+        rx
     }
 
     /// 调用一个具名动作,返回结果回执的接收端。
     ///
-    /// 脚本线程已退出时,回执立即就绪为 [`ActionOutcome::Failed`]。
+    /// 未挂 / 线程已退出时,回执立即就绪为 [`ActionOutcome::Failed`]。
     ///
     /// # Params:
     ///   - `name`: 动作注册名
@@ -380,11 +444,10 @@ impl ScriptSender {
         ctx: Option<mineral_protocol::KeyContext>,
     ) -> tokio::sync::oneshot::Receiver<ActionOutcome> {
         let (reply, rx) = tokio::sync::oneshot::channel();
-        if let Err(send_failed) = self.0.send(ScriptMsg::Action { name, ctx, reply }) {
-            // 线程已退出:取回 reply 端立即回执失败,调用方不会空等。
-            if let ScriptMsg::Action { reply, .. } = send_failed.0 {
-                let _ = reply.send(ActionOutcome::Failed("脚本线程已退出".to_owned()));
-            }
+        if let Err(failed) = self.try_send(ScriptMsg::Action { name, ctx, reply })
+            && let ScriptMsg::Action { reply, .. } = *failed
+        {
+            let _ = reply.send(ActionOutcome::Failed("脚本未启用或线程已退出".to_owned()));
         }
         rx
     }

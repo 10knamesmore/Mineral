@@ -32,10 +32,13 @@ pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
                 None => notifications.flash_for(item, ttl),
             }
         }
+        // ScriptReloaded 在 App::drain_push_events 已分流(刷新 bind 键),
+        // 这里只是穷尽兜底。
         Event::PropertyChanged { .. }
         | Event::TrackFinished { .. }
         | Event::DownloadCompleted { .. }
-        | Event::StoreChanged { .. } => {}
+        | Event::StoreChanged { .. }
+        | Event::ScriptReloaded => {}
     }
 }
 

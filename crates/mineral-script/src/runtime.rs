@@ -20,31 +20,33 @@ pub struct ScriptRuntime {
 }
 
 impl ScriptRuntime {
-    /// 把已装 API、已 eval 用户脚本的 VM 移交给专用线程,启动主循环。
+    /// 把已装 API、已 eval 用户脚本的 VM 移交给专用线程,启动主循环,
+    /// 并把消息入口挂进 `sender`(daemon 各处持有的间接句柄从此指向本线程)。
     ///
     /// # Params:
     ///   - `lua`: 目标 VM(`mlua::Lua` 是 `Send + !Sync`,随线程独占)
     ///   - `host`: 宿主句柄(与 daemon 侧共享注册表 / 通道)
     ///   - `watchdog`: 回调看门狗参数
+    ///   - `sender`: daemon 侧投递句柄(spawn 成功即 attach;热重载复用同一个)
     ///
     /// # Return:
-    ///   线程句柄;OS 线程创建失败时为 `Err`。
-    pub fn spawn(lua: Lua, host: ScriptHost, watchdog: WatchdogConfig) -> color_eyre::Result<Self> {
+    ///   线程句柄;OS 线程创建失败时为 `Err`(`sender` 保持原挂接不动)。
+    pub fn spawn(
+        lua: Lua,
+        host: ScriptHost,
+        watchdog: WatchdogConfig,
+        sender: &ScriptSender,
+    ) -> color_eyre::Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("mineral-script".to_owned())
             .spawn(move || dispatch::run_loop(&lua, &host, &watchdog, &rx))
             .wrap_err("spawn mineral-script thread")?;
+        sender.attach(tx.clone());
         Ok(Self {
             tx,
             handle: Some(handle),
         })
-    }
-
-    /// daemon 侧的事件投递句柄(可任意克隆)。
-    #[must_use]
-    pub fn sender(&self) -> ScriptSender {
-        ScriptSender(self.tx.clone())
     }
 }
 
@@ -80,18 +82,23 @@ mod tests {
             .build()
     }
 
-    /// 装 API + eval 脚本 + 移交线程,返回 (runtime, push 接收端)。
+    /// 装 API + eval 脚本 + 移交线程,返回 (runtime, 投递句柄, push 接收端)。
     fn spawn_with_script(
         script: &str,
-    ) -> color_eyre::Result<(ScriptRuntime, tokio::sync::mpsc::UnboundedReceiver<Event>)> {
+    ) -> color_eyre::Result<(
+        ScriptRuntime,
+        ScriptSender,
+        tokio::sync::mpsc::UnboundedReceiver<Event>,
+    )> {
         let (cmd_tx, _cmd_rx) = unbounded_channel();
         let (push_tx, push_rx) = unbounded_channel();
         let host = ScriptHost::new(cmd_tx, push_tx);
         let lua = Lua::new();
         install_api(&lua, &host)?;
         lua.load(script).exec()?;
-        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog())?;
-        Ok((runtime, push_rx))
+        let sender = ScriptSender::detached();
+        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?;
+        Ok((runtime, sender, push_rx))
     }
 
     /// drop runtime(Stop + join)后排干 push 通道。
@@ -109,7 +116,7 @@ mod tests {
 
     #[test]
     fn track_finished_reaches_lua_callback() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.on("track_finished", function(args)
                 local s = args.song
@@ -118,7 +125,7 @@ mod tests {
             "#,
         )?;
         let song = with_duration(song("42"), /*duration_ms*/ 1500);
-        runtime.sender().send(ScriptEvent::TrackFinished {
+        sender.send(ScriptEvent::TrackFinished {
             song: Box::new(song.clone()),
             reason: TrackFinishedReason::Eof,
         });
@@ -138,14 +145,14 @@ mod tests {
 
     #[test]
     fn download_completed_passes_path() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.on("download_completed", function(args)
                 mineral.ui.toast(args.path, { id = "dl" })
             end)
             "#,
         )?;
-        runtime.sender().send(ScriptEvent::DownloadCompleted {
+        sender.send(ScriptEvent::DownloadCompleted {
             song: Box::new(song("7")),
             path: std::path::PathBuf::from("/tmp/out.flac"),
         });
@@ -164,13 +171,13 @@ mod tests {
 
     #[test]
     fn failing_callback_reports_error_toast_and_spares_others() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.on("track_finished", function() error("boom") end)
             mineral.on("track_finished", function() mineral.ui.toast("still alive") end)
             "#,
         )?;
-        runtime.sender().send(ScriptEvent::TrackFinished {
+        sender.send(ScriptEvent::TrackFinished {
             song: Box::new(song("1")),
             reason: TrackFinishedReason::Skip,
         });
@@ -204,14 +211,14 @@ mod tests {
     #[test]
     fn property_changed_reaches_observer_and_updates_cache() -> color_eyre::Result<()> {
         use crate::message::{PropKey, PropValue};
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.observe("player.volume", function(v)
                 mineral.ui.toast("vol=" .. v, { id = "vol" })
             end)
             "#,
         )?;
-        runtime.sender().send(ScriptEvent::PropertyChanged {
+        sender.send(ScriptEvent::PropertyChanged {
             key: PropKey::PlayerVolume,
             value: PropValue::Int(55),
         });
@@ -231,13 +238,12 @@ mod tests {
     #[test]
     fn invoke_action_round_trips_outcomes() -> color_eyre::Result<()> {
         use crate::message::ActionOutcome;
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.action("my.toast", function(ctx) mineral.ui.toast("acted") end)
             mineral.action("my.boom", function(ctx) error("nope") end)
             "#,
         )?;
-        let sender = runtime.sender();
         let done = sender
             .invoke_action("my.toast".to_owned(), /*ctx*/ None)
             .blocking_recv()?;
@@ -252,6 +258,10 @@ mod tests {
         assert!(
             matches!(failed, ActionOutcome::Failed(ref e) if e.contains("nope")),
             "实得 {failed:?}"
+        );
+        assert!(
+            matches!(failed, ActionOutcome::Failed(ref e) if !e.contains('\n')),
+            "回执错误必须单行(traceback 进日志,不进 toast):实得 {failed:?}"
         );
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
@@ -269,27 +279,34 @@ mod tests {
 
     #[test]
     fn invoke_action_exposes_ctx_fields_to_lua() -> color_eyre::Result<()> {
-        use mineral_model::{SongId, SourceKind};
-        use mineral_protocol::{KeyContext, ViewKind};
+        use mineral_model::{PlaylistId, SourceKind};
+        use mineral_protocol::{KeyContext, PlaylistRef, ViewKind};
 
         use crate::message::ActionOutcome;
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.action("show.ctx", function(ctx)
                 local view = ctx.view or "none"
-                local sel = ctx.selected_song_id or "none"
-                local np = ctx.now_playing_id or "none"
-                mineral.ui.toast(view .. "/" .. sel .. "/" .. np)
+                local sel = ctx.selected_song and ctx.selected_song.title or "none"
+                local pl = ctx.selected_playlist and ctx.selected_playlist.name or "none"
+                local np = ctx.now_playing and ctx.now_playing.id or "none"
+                local loved = tostring(ctx.selected_loved)
+                local q = ctx.search_query or "none"
+                mineral.ui.toast(view .. "/" .. sel .. "/" .. pl .. "/" .. np .. "/" .. loved .. "/" .. q)
             end)
             "#,
         )?;
-        let sender = runtime.sender();
         // TUI 触发:带上下文,字段进 ctx 表
         let ctx = KeyContext::builder()
             .view(ViewKind::Tracks)
-            .selected_song_id(Some(SongId::new(SourceKind::NETEASE, "11")))
-            .selected_playlist_id(None)
-            .now_playing_id(Some(SongId::new(SourceKind::NETEASE, "22")))
+            .selected_song(Some(Box::new(song("11"))))
+            .selected_playlist(Some(PlaylistRef {
+                id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+                name: "日常".to_owned(),
+            }))
+            .now_playing(Some(Box::new(song("22"))))
+            .selected_loved(Some(true))
+            .search_query(Some("雨".to_owned()))
             .build();
         let done = sender
             .invoke_action("show.ctx".to_owned(), Some(ctx))
@@ -308,13 +325,14 @@ mod tests {
                 other => format!("{other:?}"),
             })
             .collect::<Vec<String>>();
+        let sel_title = song("11").name;
         assert_eq!(
             contents,
             vec![
-                "tracks/netease:11/netease:22".to_owned(),
-                "none/none/none".to_owned(),
+                format!("tracks/{sel_title}/日常/netease:22/true/雨"),
+                "none/none/none/none/nil/none".to_owned(),
             ],
-            "ctx 字段按蛇形名进表;无 ctx 时空表"
+            "ctx 字段按蛇形名进表(歌/歌单是子表);无 ctx 时空表"
         );
         Ok(())
     }
@@ -325,6 +343,7 @@ mod tests {
         script: &str,
     ) -> color_eyre::Result<(
         ScriptRuntime,
+        ScriptSender,
         tokio::sync::mpsc::UnboundedReceiver<crate::ScriptCmd>,
         tokio::sync::mpsc::UnboundedReceiver<Event>,
     )> {
@@ -334,14 +353,15 @@ mod tests {
         let lua = Lua::new();
         install_api(&lua, &host)?;
         lua.load(script).exec()?;
-        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog())?;
-        Ok((runtime, cmd_rx, push_rx))
+        let sender = ScriptSender::detached();
+        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?;
+        Ok((runtime, sender, cmd_rx, push_rx))
     }
 
     #[test]
     fn store_get_resolves_callback_with_value() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
-        let (runtime, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.store.get("netease:1", "plugin.x", function(v, err)
                 mineral.ui.toast(tostring(v) .. "/" .. tostring(err))
@@ -356,7 +376,7 @@ mod tests {
         assert_eq!(song.qualified(), "netease:1");
         assert_eq!(key, "plugin.x");
         // 模拟 daemon 泵回投结果
-        runtime.sender().resolve(
+        sender.resolve(
             query,
             ResolveValue::Store(mineral_protocol::StoreValue::Int(7)),
         );
@@ -377,7 +397,7 @@ mod tests {
     fn store_set_and_inc_emit_structured_cmds() -> color_eyre::Result<()> {
         use crate::message::ScriptCmd;
         use mineral_protocol::StoreValue;
-        let (runtime, mut cmd_rx, _push_rx) = spawn_with_cmds(
+        let (runtime, _sender, mut cmd_rx, _push_rx) = spawn_with_cmds(
             r#"
             mineral.store.set("netease:2", "plugin.s", "文本")
             mineral.store.set("netease:2", "plugin.b", true)
@@ -418,7 +438,7 @@ mod tests {
     #[test]
     fn resolve_error_passes_nil_and_message() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
-        let (runtime, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.store.inc("netease:3", "plugin.s", 1, function(v, err)
                 mineral.ui.toast(tostring(v) .. "/" .. tostring(err))
@@ -432,9 +452,7 @@ mod tests {
         else {
             color_eyre::eyre::bail!("期望带回调的 StoreInc,实得 {cmd:?}");
         };
-        runtime
-            .sender()
-            .resolve(query, ResolveValue::Error("不能自增".to_owned()));
+        sender.resolve(query, ResolveValue::Error("不能自增".to_owned()));
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
@@ -452,7 +470,7 @@ mod tests {
     #[test]
     fn queue_list_resolves_song_array() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
-        let (runtime, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.queue.list(function(q, err)
                 mineral.ui.toast(#q .. ":" .. q[1].title .. ":" .. q[2].id)
@@ -466,7 +484,7 @@ mod tests {
         let (first, second) = (song("1"), song("2"));
         let songs = vec![first.clone(), second.clone()];
         let want = format!("2:{}:{}", first.name, second.id.qualified());
-        runtime.sender().resolve(query, ResolveValue::Songs(songs));
+        sender.resolve(query, ResolveValue::Songs(songs));
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
@@ -485,7 +503,7 @@ mod tests {
     fn library_apis_emit_cmds_and_resolve() -> color_eyre::Result<()> {
         use crate::message::{PlaylistBrief, ResolveValue, ScriptCmd};
         use mineral_model::{PlaylistId, SourceKind};
-        let (runtime, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.library.playlists(function(ps, err)
                 mineral.ui.toast(ps[1].id .. ":" .. ps[1].name .. ":" .. ps[1].track_count)
@@ -518,7 +536,7 @@ mod tests {
                 loved: false,
             }
         );
-        runtime.sender().resolve(
+        sender.resolve(
             query,
             ResolveValue::Playlists(vec![PlaylistBrief {
                 id: PlaylistId::new(SourceKind::NETEASE, "p1"),
@@ -558,7 +576,7 @@ mod tests {
 
     #[test]
     fn timer_after_fires_exactly_once() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, _sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.timer.after(20, function() mineral.ui.toast("dinged") end)
             "#,
@@ -586,7 +604,7 @@ mod tests {
 
     #[test]
     fn timer_every_repeats_and_kill_stops() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, _sender, mut push_rx) = spawn_with_script(
             r#"
             local t
             local n = 0
@@ -611,7 +629,7 @@ mod tests {
 
     #[test]
     fn timer_stop_freezes_and_resume_continues() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script(
+        let (runtime, _sender, mut push_rx) = spawn_with_script(
             r#"
             local t = mineral.timer.every(15, function() mineral.ui.toast("beat") end)
             t:stop()
@@ -637,13 +655,36 @@ mod tests {
     }
 
     #[test]
+    fn script_binds_round_trip_via_sender() -> color_eyre::Result<()> {
+        use mineral_protocol::ScriptBind;
+        let (_runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.bind("X", function() mineral.ui.toast("bound") end)
+            "#,
+        )?;
+        let binds = sender.script_binds().blocking_recv()?;
+        assert_eq!(
+            binds,
+            vec![ScriptBind {
+                key: "X".to_owned(),
+                action: "bind#1".to_owned(),
+            }]
+        );
+        // bind 的匿名动作经触发链可调(复用 action 通道)。
+        let done = sender
+            .invoke_action("bind#1".to_owned(), /*ctx*/ None)
+            .blocking_recv()?;
+        assert_eq!(done, crate::message::ActionOutcome::Done);
+        Ok(())
+    }
+
+    #[test]
     fn drop_joins_thread_gracefully() -> color_eyre::Result<()> {
-        let (runtime, mut push_rx) = spawn_with_script("-- 无注册")?;
-        runtime.sender().send(ScriptEvent::TrackFinished {
+        let (runtime, sender, mut push_rx) = spawn_with_script("-- 无注册")?;
+        sender.send(ScriptEvent::TrackFinished {
             song: Box::new(song("9")),
             reason: TrackFinishedReason::Stop,
         });
-        let sender = runtime.sender();
         let events = drain_after_stop(runtime, &mut push_rx);
         assert!(events.is_empty(), "无注册回调,不该有任何推送");
         // 线程已 join:再投递只是静默丢,不 panic 不阻塞。

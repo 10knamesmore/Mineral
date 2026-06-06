@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn single_key_parses() -> color_eyre::Result<()> {
-        let b: KeyBinding = serde_json::from_value(serde_json::json!("space"))?;
+        let b: KeyBinding = serde_json::from_value(serde_json::json!("<Space>"))?;
         assert_eq!(b.chords(), &[KeyChord::plain(Key::Char(' '))]);
         Ok(())
     }

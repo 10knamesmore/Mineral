@@ -1,25 +1,38 @@
-//! `mineral.bind(key, fn)`:匿名动作 + 键位追加的语法糖。**尚未实现**。
+//! `mineral.bind(key, fn)`:匿名动作 + 键位绑定的语法糖。
 //!
-//! 推迟原因:键位追加要动 keys 配置切片与 client 下发链(热重载同通道),
-//! 归 Phase 2 的热重载一并落。这里挂 warn + no-op —— 报错会让整个脚本
-//! eval 失败弃 VM,过狠。
+//! 等价于 `mineral.action(内部名, fn)` + 把「key → 内部名」记进 bind 表;
+//! client(TUI)经 `Request::ScriptBinds` 拉表,把键合进自己的 keymap。
+//! 键字符串文法与 `tui.keys` 一致(nvim 表示法:`"X"` / `"<C-g>"`),**解析在 client 侧**
+//! ——daemon 不感知键盘,这里只存字符串。
 
+use std::sync::Arc;
+
+use mineral_protocol::ScriptBind;
 use mlua::{Lua, Table};
 
 use crate::host::ScriptHost;
 
-/// 把 `bind`(占位)挂到 `mineral` 表上。
+/// 把 `bind` 挂到 `mineral` 表上。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
 ///   - `mineral`: 全局 `mineral` 表
-///   - `host`: 宿主句柄(占位实现不消费,签名与同族一致)
+///   - `host`: 宿主句柄(闭包捕获其注册表)
 pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
-    let _ = host;
+    let events = Arc::clone(&host.events);
     mineral.set(
         "bind",
-        lua.create_function(|_lua, (key, _func): (String, mlua::Function)| {
-            mineral_log::warn!(target: "script", key, "mineral.bind 尚未实现,本次注册被忽略");
+        lua.create_function(move |lua, (key, func): (String, mlua::Function)| {
+            if key.is_empty() {
+                return Err(mlua::Error::RuntimeError(
+                    "bind key must be non-empty".to_owned(),
+                ));
+            }
+            let registry_key = Arc::new(lua.create_registry_value(func)?);
+            let mut registry = events.lock();
+            let action = registry.next_bind_name();
+            registry.actions.insert(action.clone(), registry_key);
+            registry.binds.push(ScriptBind { key, action });
             Ok(())
         })?,
     )
@@ -27,15 +40,52 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
 
 #[cfg(test)]
 mod tests {
+    use mineral_protocol::ScriptBind;
+
     use crate::api::test_support::vm_with_host;
 
     #[test]
-    fn bind_is_noop_placeholder() -> color_eyre::Result<()> {
+    fn bind_registers_anonymous_action_and_records_key() -> color_eyre::Result<()> {
         let (lua, host) = vm_with_host()?;
-        // 不报错、不注册 —— 只留一条 warn 日志。
-        lua.load(r#"mineral.bind("<C-s>", function() end)"#)
-            .exec()?;
-        assert!(host.events.lock().actions.is_empty());
+        lua.load(
+            r#"
+            mineral.bind("X", function() end)
+            mineral.bind("<C-g>", function() end)
+            "#,
+        )
+        .exec()?;
+        let registry = host.events.lock();
+        assert_eq!(
+            registry.binds,
+            vec![
+                ScriptBind {
+                    key: "X".to_owned(),
+                    action: "bind#1".to_owned(),
+                },
+                ScriptBind {
+                    key: "<C-g>".to_owned(),
+                    action: "bind#2".to_owned(),
+                },
+            ],
+            "bind 表按注册顺序记录 key → 内部名"
+        );
+        assert!(
+            registry.actions.contains_key("bind#1") && registry.actions.contains_key("bind#2"),
+            "匿名 fn 必须以内部名进动作注册表(触发链复用 action)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bind_empty_key_is_lua_error() -> color_eyre::Result<()> {
+        let (lua, host) = vm_with_host()?;
+        assert!(
+            lua.load(r#"mineral.bind("", function() end)"#)
+                .exec()
+                .is_err(),
+            "空键必须报 Lua 错"
+        );
+        assert!(host.events.lock().binds.is_empty());
         Ok(())
     }
 }

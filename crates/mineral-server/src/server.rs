@@ -104,13 +104,17 @@ impl Server {
     ///
     /// # Params:
     ///   - `pumps`: [`crate::ScriptParts::spawn_runtime`] 拆出的泵接线件
-    pub fn attach_script_pumps(&self, pumps: crate::ScriptPumps) {
-        pumps.start(self.player.clone(), self.events.clone());
+    pub fn attach_script_pumps(&self, pumps: crate::ScriptPumps) -> crate::ScriptReloadParts {
+        pumps.start(self.player.clone(), self.events.clone())
     }
 
     /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。
     pub fn client(&self) -> ClientHandle {
-        ClientHandle::new(self.player.clone(), self.pcm.clone())
+        ClientHandle::new(
+            self.player.clone(),
+            self.pcm.clone(),
+            self.events.subscribe(),
+        )
     }
 
     /// 接入系统媒体服务(Linux MPRIS):上报当前播放、响应媒体键 / 桌面控件。

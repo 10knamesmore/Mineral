@@ -505,7 +505,7 @@ Config {
         prev_restart_threshold_ms: 3000,
         player_tick_ms: 20,
         session_save_secs: 15,
-        heartbeat_secs: 60,
+        heartbeat_secs: 180,
         report_interval_ms: 200,
         seek_threshold_ms: 1000,
         download_speed_tick_ms: 150,

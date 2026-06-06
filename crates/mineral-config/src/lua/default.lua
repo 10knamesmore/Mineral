@@ -24,25 +24,27 @@ return {
         },
         keys = {
             -- 方向是【动作 → 键】;值为单键或键数组(数组整体替换)。
-            play_pause = "space",
+            -- 键写法与 nvim 对齐:单字符直接写("j" / "G" / "+"),
+            -- 特殊键 / 修饰用尖括号("<Space>" / "<CR>" / "<C-g>" / "<S-Left>")。
+            play_pause = "<Space>",
             next = "n",
             prev = "p",
             toggle_fullscreen = "z",
-            open_queue = "tab",
+            open_queue = "<Tab>",
             quit = "q",
             cycle_lyric = "t",
             enter_search = "/",
-            activate = { "l", "enter" },
-            back = { "h", "esc", "backspace" },
+            activate = { "l", "<CR>" },
+            back = { "h", "<Esc>", "<BS>" },
             cycle_mode = "m",
             volume_up = { "+", "=" },
             volume_down = { "-", "_" },
-            seek_forward = "Right",
-            seek_backward = "Left",
-            seek_forward_big = "Shift+Right",
-            seek_backward_big = "Shift+Left",
-            move_down = { "j", "Down" },
-            move_up = { "k", "Up" },
+            seek_forward = "<Right>",
+            seek_backward = "<Left>",
+            seek_forward_big = "<S-Right>",
+            seek_backward_big = "<S-Left>",
+            move_down = { "j", "<Down>" },
+            move_up = { "k", "<Up>" },
             move_down_big = "J",
             move_up_big = "K",
             move_first = "g",
@@ -174,7 +176,7 @@ return {
         prev_restart_threshold_ms = 3000, -- prev 键分界:进度超过此值回曲首,否则上一首
         player_tick_ms = 20, -- 播放核心后台循环间隔;影响自动切歌/事件转发延迟
         session_save_secs = 15, -- 播放进度周期落盘节流,秒;切歌等另有即时落盘
-        heartbeat_secs = 60, -- 状态心跳日志间隔,秒;daemon 与 TUI 各打一条供排查
+        heartbeat_secs = 180, -- 状态心跳日志间隔,秒;daemon 与 TUI 各打一条供排查
         report_interval_ms = 200, -- 向系统媒体控件(MPRIS)上报进度的间隔
         seek_threshold_ms = 1000, -- 进度偏离线性预期超过此值判定为 seek(供 MPRIS 上报)
         download_speed_tick_ms = 150, -- 下载测速刷新节流

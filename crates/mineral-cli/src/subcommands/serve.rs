@@ -25,11 +25,13 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
 ///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
 ///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
+///   - `config_path`: 用户 config.lua 路径(热重载 mtime 轮询的目标)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
     config: mineral_config::Config,
     script: mineral_server::ScriptParts,
+    config_path: std::path::PathBuf,
 ) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
@@ -63,19 +65,20 @@ pub async fn run(
             *config.script().watchdog_hard_wall_ms(),
         ))
         .build();
-    let (script_runtime, pumps) = script.spawn_runtime(watchdog);
-    let script_sender = script_runtime
-        .as_ref()
-        .map(mineral_script::ScriptRuntime::sender);
+    // 投递句柄是热重载间接层:daemon 恒持有(初始无脚本也可经重载升级为有)。
+    let script_sender = mineral_script::ScriptSender::detached();
+    let (script_runtime, pumps) = script.spawn_runtime(watchdog, &script_sender);
     let server = Server::spawn(
         channels,
         audio_mode,
         persist,
         ServerConfig::from_config(&config),
-        script_sender,
+        Some(script_sender.clone()),
     )
     .await?;
-    server.attach_script_pumps(pumps);
+    let reload_parts = server.attach_script_pumps(pumps);
+    // config.lua 热重载:mtime 轮询,变更即重 eval 换脚本线程(失败保留旧)。
+    mineral_server::spawn_script_reloader(config_path, script_runtime, script_sender, reload_parts);
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {

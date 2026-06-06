@@ -2,8 +2,8 @@
 //!
 //! 自有表示,不绑定任何输入后端:这里只建模**键盘语义**(字符 / 方向 / Enter 等),
 //! 不含任何 UI 框架类型。每个有键盘输入的 client(终端 / 浏览器 / 编辑器宿主)各自
-//! 负责把自家原生按键事件归一到 [`KeyChord`];config 字符串(`"space"` /
-//! `"Shift+Left"`)经 [`KeyChord::parse`] 落到同一表示,两侧在此汇合。
+//! 负责把自家原生按键事件归一到 [`KeyChord`];config 字符串(nvim 表示法:
+//! `"<Space>"` / `"<S-Left>"`)经 [`KeyChord::parse`] 落到同一表示,两侧在此汇合。
 //! 无键盘形态的 client 与本模块无关。
 
 use color_eyre::eyre::bail;
@@ -120,38 +120,53 @@ impl KeyChord {
         Self { ctrl: true, ..self }
     }
 
-    /// 解析键字符串:`[修饰+]*键名`,修饰支持 `Shift` / `Ctrl`(大小写不敏感),
-    /// 键名为单字符(大小写敏感)或具名键(`space` / `left` / `esc` 等,大小写不敏感)。
+    /// 解析键字符串(**nvim 表示法**):
+    /// - 单字符原样(大小写有别):`j` / `G` / `/` / `+`
+    /// - 特殊键与修饰一律尖括号:`<Space>` / `<CR>` / `<Esc>` / `<Tab>` / `<BS>` /
+    ///   `<Left>` 等;修饰 `C-`(Ctrl)/ `S-`(Shift),可组合(`<C-S-Left>`)。
+    ///   键名与修饰字母大小写不敏感,`<CR>` 有别名 `<Enter>` / `<Return>`。
     ///
     /// # Params:
-    ///   - `s`: 键字符串,如 `"j"` / `"space"` / `"Shift+Left"`
+    ///   - `s`: 键字符串,如 `"j"` / `"<Space>"` / `"<C-g>"` / `"<S-Left>"`
     ///
     /// # Return:
-    ///   归一化和弦;空串 / 未知键名 / 未知修饰返回 `Err`
+    ///   归一化和弦;空串 / 未知键名 / 未支持修饰(Alt 等)返回 `Err`
     pub fn parse(s: &str) -> color_eyre::Result<Self> {
-        // 字面 `+` 自身就是键名,不参与修饰分隔。
-        if s == "+" {
-            return Ok(Self::plain(Key::Char('+')));
+        // 裸单字符:原样收(大小写 / 符号位形即语义)。
+        let mut chars = s.chars();
+        if let (Some(c), None) = (chars.next(), chars.next())
+            && c != '<'
+        {
+            return Ok(Self::plain(Key::Char(c)));
         }
+        let Some(inner) = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')) else {
+            bail!(
+                "无法解析键 `{s}`:单字符直接写(如 `j`),特殊键 / 修饰用 nvim 尖括号(如 `<Space>` / `<C-g>` / `<S-Left>`)"
+            );
+        };
+        // 末段是键名,前面的 `X-` 段是修饰;键名本身可以是 `-`(nvim `<C-->`,
+        // 双连字符);单 `-` 结尾(如 `<S->`)是缺键名。
+        let (mods, name) = if let Some(stripped) = inner.strip_suffix("--") {
+            (stripped, "-")
+        } else if inner.ends_with('-') {
+            bail!("缺键名:`{s}`");
+        } else {
+            match inner.rfind('-') {
+                Some(idx) => inner.split_at(idx + 1),
+                None => ("", inner),
+            }
+        };
         let mut shift = false;
         let mut ctrl = false;
-        let mut key: Option<Key> = None;
-        let mut parts = s.split('+').peekable();
-        while let Some(part) = parts.next() {
-            // 非末段 = 修饰;末段 = 键名。
-            if parts.peek().is_some() {
-                match part.to_ascii_lowercase().as_str() {
-                    "shift" => shift = true,
-                    "ctrl" => ctrl = true,
-                    _ => bail!("未知修饰 `{part}`(支持 Shift / Ctrl):`{s}`"),
-                }
-            } else {
-                key = Some(parse_key_name(part, s)?);
+        for part in mods.split('-').filter(|p| !p.is_empty()) {
+            match part.to_ascii_lowercase().as_str() {
+                "c" => ctrl = true,
+                "s" => shift = true,
+                "a" | "m" => bail!("Alt/Meta 修饰未支持:`{s}`"),
+                _ => bail!("未知修饰 `{part}-`(支持 `C-` / `S-`):`{s}`"),
             }
         }
-        let Some(key) = key else {
-            bail!("缺键名:`{s}`");
-        };
+        let key = parse_key_name(name, s)?;
         let base = if shift {
             Self::shifted(key)
         } else {
@@ -162,31 +177,38 @@ impl KeyChord {
 }
 
 impl std::fmt::Display for KeyChord {
-    /// 规范字符串形式(与 [`KeyChord::parse`] 互逆):`Ctrl+` 前缀 → `Shift+` 前缀 → 键名;
-    /// 空格显示为 `space`,其余字符键原样。
+    /// 规范字符串形式(nvim 表示法,与 [`KeyChord::parse`] 互逆):
+    /// 无修饰字符键原样(空格 `<Space>`),其余 `<[C-][S-]键名>`(`<C-g>` / `<C-S-Left>`)。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self.key {
+            Key::Char(' ') => "Space".to_owned(),
+            Key::Char(c) => c.to_string(),
+            Key::Left => "Left".to_owned(),
+            Key::Right => "Right".to_owned(),
+            Key::Up => "Up".to_owned(),
+            Key::Down => "Down".to_owned(),
+            Key::Tab => "Tab".to_owned(),
+            Key::Enter => "CR".to_owned(),
+            Key::Esc => "Esc".to_owned(),
+            Key::Backspace => "BS".to_owned(),
+        };
+        // 无修饰的裸字符键不加尖括号(空格除外:裸空格不可读)。
+        let bare = !self.ctrl && !self.shift && matches!(self.key, Key::Char(c) if c != ' ');
+        if bare {
+            return write!(f, "{name}");
+        }
+        write!(f, "<")?;
         if self.ctrl {
-            write!(f, "Ctrl+")?;
+            write!(f, "C-")?;
         }
         if self.shift {
-            write!(f, "Shift+")?;
+            write!(f, "S-")?;
         }
-        match self.key {
-            Key::Char(' ') => write!(f, "space"),
-            Key::Char(c) => write!(f, "{c}"),
-            Key::Left => write!(f, "Left"),
-            Key::Right => write!(f, "Right"),
-            Key::Up => write!(f, "Up"),
-            Key::Down => write!(f, "Down"),
-            Key::Tab => write!(f, "Tab"),
-            Key::Enter => write!(f, "Enter"),
-            Key::Esc => write!(f, "Esc"),
-            Key::Backspace => write!(f, "Backspace"),
-        }
+        write!(f, "{name}>")
     }
 }
 
-/// 解析单个键名段:单字符(大小写敏感)或具名键(大小写不敏感)。
+/// 解析尖括号内的键名段:单字符(大小写敏感)或具名键(大小写不敏感)。
 ///
 /// # Params:
 ///   - `part`: 键名段
@@ -206,11 +228,11 @@ fn parse_key_name(part: &str, whole: &str) -> color_eyre::Result<Key> {
         "up" => Key::Up,
         "down" => Key::Down,
         "tab" => Key::Tab,
-        "enter" => Key::Enter,
+        "cr" | "enter" | "return" => Key::Enter,
         "esc" | "escape" => Key::Esc,
-        "backspace" => Key::Backspace,
+        "bs" | "backspace" => Key::Backspace,
         "" => bail!("缺键名:`{whole}`"),
-        _ => bail!("未知键名 `{part}`:`{whole}`"),
+        _ => bail!("未知键名 `<{part}>`:`{whole}`"),
     };
     Ok(key)
 }
@@ -224,24 +246,27 @@ mod tests {
         assert_eq!(KeyChord::parse("j")?, KeyChord::plain(Key::Char('j')));
         assert_eq!(KeyChord::parse("G")?, KeyChord::plain(Key::Char('G')));
         assert_eq!(KeyChord::parse("/")?, KeyChord::plain(Key::Char('/')));
-        // 字面 `+` 不被当成修饰分隔符。
         assert_eq!(KeyChord::parse("+")?, KeyChord::plain(Key::Char('+')));
+        assert_eq!(KeyChord::parse("-")?, KeyChord::plain(Key::Char('-')));
         Ok(())
     }
 
     #[test]
-    fn parse_named_keys_case_insensitive() -> color_eyre::Result<()> {
-        assert_eq!(KeyChord::parse("space")?, KeyChord::plain(Key::Char(' ')));
-        assert_eq!(KeyChord::parse("Left")?, KeyChord::plain(Key::Left));
-        assert_eq!(KeyChord::parse("right")?, KeyChord::plain(Key::Right));
-        assert_eq!(KeyChord::parse("up")?, KeyChord::plain(Key::Up));
-        assert_eq!(KeyChord::parse("Down")?, KeyChord::plain(Key::Down));
-        assert_eq!(KeyChord::parse("tab")?, KeyChord::plain(Key::Tab));
-        assert_eq!(KeyChord::parse("Enter")?, KeyChord::plain(Key::Enter));
-        assert_eq!(KeyChord::parse("esc")?, KeyChord::plain(Key::Esc));
-        assert_eq!(KeyChord::parse("escape")?, KeyChord::plain(Key::Esc));
+    fn parse_named_keys_nvim_style_case_insensitive() -> color_eyre::Result<()> {
+        assert_eq!(KeyChord::parse("<Space>")?, KeyChord::plain(Key::Char(' ')));
+        assert_eq!(KeyChord::parse("<Left>")?, KeyChord::plain(Key::Left));
+        assert_eq!(KeyChord::parse("<right>")?, KeyChord::plain(Key::Right));
+        assert_eq!(KeyChord::parse("<Up>")?, KeyChord::plain(Key::Up));
+        assert_eq!(KeyChord::parse("<down>")?, KeyChord::plain(Key::Down));
+        assert_eq!(KeyChord::parse("<Tab>")?, KeyChord::plain(Key::Tab));
+        assert_eq!(KeyChord::parse("<CR>")?, KeyChord::plain(Key::Enter));
+        assert_eq!(KeyChord::parse("<cr>")?, KeyChord::plain(Key::Enter));
+        assert_eq!(KeyChord::parse("<Enter>")?, KeyChord::plain(Key::Enter));
+        assert_eq!(KeyChord::parse("<Return>")?, KeyChord::plain(Key::Enter));
+        assert_eq!(KeyChord::parse("<Esc>")?, KeyChord::plain(Key::Esc));
+        assert_eq!(KeyChord::parse("<BS>")?, KeyChord::plain(Key::Backspace));
         assert_eq!(
-            KeyChord::parse("Backspace")?,
+            KeyChord::parse("<Backspace>")?,
             KeyChord::plain(Key::Backspace)
         );
         Ok(())
@@ -249,30 +274,41 @@ mod tests {
 
     #[test]
     fn parse_shift_modifier() -> color_eyre::Result<()> {
-        assert_eq!(KeyChord::parse("Shift+Left")?, KeyChord::shifted(Key::Left));
-        // 修饰名大小写不敏感。
-        assert_eq!(
-            KeyChord::parse("shift+right")?,
-            KeyChord::shifted(Key::Right)
-        );
+        assert_eq!(KeyChord::parse("<S-Left>")?, KeyChord::shifted(Key::Left));
+        // 修饰字母大小写不敏感。
+        assert_eq!(KeyChord::parse("<s-right>")?, KeyChord::shifted(Key::Right));
         // 字母字符键 + Shift 归一为大写字符、丢弃 SHIFT。
-        assert_eq!(KeyChord::parse("Shift+j")?, KeyChord::plain(Key::Char('J')));
+        assert_eq!(KeyChord::parse("<S-j>")?, KeyChord::plain(Key::Char('J')));
         Ok(())
     }
 
     #[test]
     fn parse_ctrl_modifier() -> color_eyre::Result<()> {
-        assert_eq!(KeyChord::parse("Ctrl+c")?, KeyChord::ctrl(Key::Char('c')));
-        assert_eq!(KeyChord::parse("ctrl+Left")?, KeyChord::ctrl(Key::Left));
+        assert_eq!(KeyChord::parse("<C-c>")?, KeyChord::ctrl(Key::Char('c')));
+        assert_eq!(KeyChord::parse("<c-Left>")?, KeyChord::ctrl(Key::Left));
+        // 组合修饰(非字符键)。
+        assert_eq!(
+            KeyChord::parse("<C-S-Left>")?,
+            KeyChord::shifted(Key::Left).with_ctrl()
+        );
+        // 键名本身是 `-`(nvim `<C-->` 写法)。
+        assert_eq!(KeyChord::parse("<C-->")?, KeyChord::ctrl(Key::Char('-')));
         Ok(())
     }
 
     #[test]
     fn parse_rejects_invalid() {
         assert!(KeyChord::parse("").is_err(), "空串应报错");
-        assert!(KeyChord::parse("foo").is_err(), "未知键名应报错");
-        assert!(KeyChord::parse("Shift+").is_err(), "缺键名应报错");
-        assert!(KeyChord::parse("Alt+x").is_err(), "不支持的修饰应报错");
+        assert!(KeyChord::parse("foo").is_err(), "多字符裸键名应报错");
+        assert!(KeyChord::parse("<S->").is_err(), "缺键名应报错");
+        assert!(KeyChord::parse("<A-x>").is_err(), "Alt 未建模应报错");
+        assert!(KeyChord::parse("<foo>").is_err(), "未知键名应报错");
+        assert!(KeyChord::parse("<Left").is_err(), "尖括号不闭合应报错");
+        assert!(
+            KeyChord::parse("Shift+Left").is_err(),
+            "旧文法已退役,应报错引导 nvim 写法"
+        );
+        assert!(KeyChord::parse("space").is_err(), "裸具名键已退役");
     }
 
     #[test]
@@ -298,6 +334,7 @@ mod tests {
             KeyChord::ctrl(Key::Char('c')),
             KeyChord::shifted(Key::Right).with_ctrl(),
             KeyChord::plain(Key::Esc),
+            KeyChord::ctrl(Key::Char('-')),
         ] {
             assert_eq!(
                 KeyChord::parse(&chord.to_string())?,
@@ -306,6 +343,18 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn display_uses_nvim_notation() {
+        assert_eq!(KeyChord::plain(Key::Char(' ')).to_string(), "<Space>");
+        assert_eq!(KeyChord::plain(Key::Enter).to_string(), "<CR>");
+        assert_eq!(KeyChord::ctrl(Key::Char('g')).to_string(), "<C-g>");
+        assert_eq!(
+            KeyChord::shifted(Key::Left).with_ctrl().to_string(),
+            "<C-S-Left>"
+        );
+        assert_eq!(KeyChord::plain(Key::Char('J')).to_string(), "J");
     }
 
     #[test]
@@ -318,12 +367,7 @@ mod tests {
         assert_eq!(
             KeyChord::shifted(Key::Char('+')),
             KeyChord::plain(Key::Char('+')),
-            "符号字符键的 SHIFT 应直接丢弃(位形由字符表达)"
-        );
-        assert_ne!(
-            KeyChord::shifted(Key::Left),
-            KeyChord::plain(Key::Left),
-            "非字符键保留 SHIFT 区分"
+            "非字母字符 + Shift 同样丢 SHIFT 位(位形在字符里)"
         );
     }
 }

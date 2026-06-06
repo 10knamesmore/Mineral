@@ -211,6 +211,10 @@ pub enum Request {
         /// 增量(可负)。
         delta: i64,
     },
+
+    /// 拉取脚本 `mineral.bind` 产生的键绑定表(client 启动 / 配置重载后调,
+    /// 合进自己的 keymap)。返回 [`Response::ScriptBinds`](无脚本为空)。
+    ScriptBinds,
 }
 
 /// Server → Client 应答。
@@ -259,6 +263,9 @@ pub enum Response {
 
     /// 对应 [`Request::StoreGet`] / [`Request::StoreInc`]:标量值(未命中 `Nil`)。
     StoreValue(crate::StoreValue),
+
+    /// 对应 [`Request::ScriptBinds`]:脚本 bind 表(注册顺序;无脚本为空)。
+    ScriptBinds(Vec<crate::ScriptBind>),
 
     /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。
     Error(String),

@@ -29,40 +29,57 @@ impl App {
     ///
     /// view 判定优先级对齐 `handle_key` 的吃键顺序:队列浮层 > 搜索态 > 全屏 >
     /// 主视图映射(`Playlists` → Playlists,`Library` → Tracks)。选中歌只在
-    /// 「有歌列表光标」的视图采(Library 列表 / 队列浮层光标),其余为 `None`。
+    /// 「有歌列表光标」的视图采(Library 列表 / 队列浮层光标),其余为 `None`;
+    /// `selected_loved` 随选中歌给(♥ 装饰缓存),`search_query` 空词为 `None`。
     pub(crate) fn collect_key_context(&self) -> mineral_protocol::KeyContext {
-        use mineral_protocol::{KeyContext, ViewKind};
-        let now_playing_id = self.state.current.as_ref().map(|s| s.id.clone());
-        let selected_playlist_id = self.state.selected_playlist().map(|p| p.data.id.clone());
-        if let Some(cursor) = self.overlays.active_queue_cursor() {
-            return KeyContext::builder()
-                .view(ViewKind::Queue)
-                .selected_song_id(self.state.queue.get(cursor).map(|s| s.id.clone()))
-                .selected_playlist_id(selected_playlist_id)
-                .now_playing_id(now_playing_id)
-                .build();
-        }
-        let (view, selected_song_id) = if self.state.search_mode {
-            (ViewKind::Search, None)
-        } else if self.state.fullscreen {
-            (ViewKind::Fullscreen, None)
+        use mineral_protocol::{KeyContext, PlaylistRef, ViewKind};
+        let now_playing = self.state.current.clone().map(Box::new);
+        let selected_playlist = self.state.selected_playlist().map(|p| PlaylistRef {
+            id: p.data.id.clone(),
+            name: p.data.name.clone(),
+        });
+        let search_query = if self.state.search_q.is_empty() {
+            None
         } else {
-            match self.state.view {
-                View::Playlists => (ViewKind::Playlists, None),
-                View::Library => (
-                    ViewKind::Tracks,
-                    self.state
-                        .filtered_tracks()
-                        .get(self.state.sel_track)
-                        .map(|sv| sv.data.id.clone()),
-                ),
-            }
+            Some(self.state.search_q.clone())
         };
+        // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
+        // Library 列表取选中行(SongView 已装饰)。
+        let (view, selected_song, selected_loved) =
+            if let Some(cursor) = self.overlays.active_queue_cursor() {
+                let song = self.state.queue.get(cursor).cloned();
+                let loved = song.as_ref().map(|s| {
+                    self.state
+                        .liked_ids
+                        .get(&s.id.namespace())
+                        .is_some_and(|ids| ids.contains(&s.id))
+                });
+                (ViewKind::Queue, song, loved)
+            } else if self.state.search_mode {
+                (ViewKind::Search, None, None)
+            } else if self.state.fullscreen {
+                (ViewKind::Fullscreen, None, None)
+            } else {
+                match self.state.view {
+                    View::Playlists => (ViewKind::Playlists, None, None),
+                    View::Library => {
+                        let sel = self
+                            .state
+                            .filtered_tracks()
+                            .into_iter()
+                            .nth(self.state.sel_track);
+                        let loved = sel.as_ref().map(|sv| sv.loved);
+                        (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
+                    }
+                }
+            };
         KeyContext::builder()
             .view(view)
-            .selected_song_id(selected_song_id)
-            .selected_playlist_id(selected_playlist_id)
-            .now_playing_id(now_playing_id)
+            .selected_song(selected_song.map(Box::new))
+            .selected_playlist(selected_playlist)
+            .now_playing(now_playing)
+            .selected_loved(selected_loved)
+            .search_query(search_query)
             .build()
     }
 
@@ -168,15 +185,23 @@ mod tests {
             .filtered_tracks()
             .get(1)
             .map(|sv| sv.data.id.clone());
-        assert_eq!(ctx.selected_song_id().clone(), want_sel);
+        assert_eq!(ctx.selected_song().as_ref().map(|s| s.id.clone()), want_sel);
+        assert_eq!(
+            *ctx.selected_loved(),
+            Some(false),
+            "选中歌的 ♥ 态随投影给(测试装饰默认 false)"
+        );
         assert!(
-            ctx.selected_playlist_id().is_some(),
-            "Library 视图下所在歌单也算选中"
+            ctx.selected_playlist()
+                .as_ref()
+                .is_some_and(|p| !p.name.is_empty()),
+            "Library 视图下所在歌单也算选中,且带名字"
         );
         assert_eq!(
-            ctx.now_playing_id().clone(),
+            ctx.now_playing().as_ref().map(|s| s.id.clone()),
             app.state.current.as_ref().map(|s| s.id.clone())
         );
+        assert_eq!(*ctx.search_query(), None, "无过滤词为 None");
         Ok(())
     }
 
@@ -188,9 +213,9 @@ mod tests {
         app.state.current = None;
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Playlists);
-        assert_eq!(*ctx.selected_song_id(), None);
-        assert!(ctx.selected_playlist_id().is_some());
-        assert_eq!(*ctx.now_playing_id(), None, "停止态在播为 None");
+        assert!(ctx.selected_song().is_none());
+        assert!(ctx.selected_playlist().is_some());
+        assert!(ctx.now_playing().is_none(), "停止态在播为 None");
         Ok(())
     }
 
@@ -203,9 +228,14 @@ mod tests {
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Queue);
         assert_eq!(
-            ctx.selected_song_id().clone(),
+            ctx.selected_song().as_ref().map(|s| s.id.clone()),
             app.state.queue.get(2).map(|s| s.id.clone()),
             "浮层光标所指条目算选中"
+        );
+        assert_eq!(
+            *ctx.selected_loved(),
+            Some(false),
+            "队列条目 ♥ 态查 liked_ids 缓存(测试无 liked 记录 = false)"
         );
         Ok(())
     }
@@ -217,9 +247,9 @@ mod tests {
         app.state.fullscreen = true;
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Fullscreen);
-        assert_eq!(*ctx.selected_song_id(), None);
+        assert!(ctx.selected_song().is_none());
         assert_eq!(
-            ctx.now_playing_id().clone(),
+            ctx.now_playing().as_ref().map(|s| s.id.clone()),
             app.state.current.as_ref().map(|s| s.id.clone())
         );
         Ok(())

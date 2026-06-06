@@ -295,13 +295,18 @@ pub(crate) async fn worker(
 ///   - `target`: 下载目标
 async fn process_target(player: &PlayerCore, target: DownloadTarget) {
     let (Some(http), Some(music_dir)) = (player.http(), player.music_dir()) else {
-        player.push_notice("下载不可用(无 HTTP client / 音乐目录)".to_owned());
+        player.notify().toast(
+            mineral_protocol::ToastKind::Warn,
+            "下载不可用(无 HTTP client / 音乐目录)".to_owned(),
+        );
         return;
     };
     let songs = match collect_songs(player, &target).await {
         Ok(s) => s,
         Err(text) => {
-            player.push_notice(text);
+            player
+                .notify()
+                .toast(mineral_protocol::ToastKind::Warn, text);
             return;
         }
     };

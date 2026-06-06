@@ -1,25 +1,26 @@
 ---
 source: crates/mineral-tui/src/runtime/keymap.rs
-description: "默认键位绑定表(和弦 → 动作,字典序;config 落地前的唯一真相源)"
+description: "默认键位绑定表(和弦 → 动作,字典序;default.lua keys/behavior 落地产物)"
 expression: "lines.join(\"\\n\")"
 ---
 + → NudgeVolume(VolumeDelta(5))
 - → NudgeVolume(VolumeDelta(-5))
 / → EnterSearch
+<BS> → BackOrClearSearch
+<CR> → ActivateSelection
+<Down> → MoveSelection(Down(1))
+<Esc> → BackOrClearSearch
+<Left> → SeekRelative(SeekDelta(-5))
+<Right> → SeekRelative(SeekDelta(5))
+<S-Left> → SeekRelative(SeekDelta(-30))
+<S-Right> → SeekRelative(SeekDelta(30))
+<Space> → TogglePlayPause
+<Tab> → OpenQueue
+<Up> → MoveSelection(Up(1))
 = → NudgeVolume(VolumeDelta(5))
-Backspace → BackOrClearSearch
-Down → MoveSelection(Down(1))
-Enter → ActivateSelection
-Esc → BackOrClearSearch
 G → MoveSelection(Last)
 J → MoveSelection(Down(7))
 K → MoveSelection(Up(7))
-Left → SeekRelative(SeekDelta(-5))
-Right → SeekRelative(SeekDelta(5))
-Shift+Left → SeekRelative(SeekDelta(-30))
-Shift+Right → SeekRelative(SeekDelta(30))
-Tab → OpenQueue
-Up → MoveSelection(Up(1))
 _ → NudgeVolume(VolumeDelta(-5))
 d → DownloadSelection
 f → ToggleLoveSelection
@@ -32,6 +33,5 @@ m → CyclePlayMode
 n → NextSong
 p → PrevOrRestart
 q → OpenQuitConfirm
-space → TogglePlayPause
 t → CycleLyricExtra
 z → ToggleFullscreen

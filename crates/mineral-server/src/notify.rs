@@ -65,6 +65,20 @@ impl Notifier {
         }
     }
 
+    /// 推一条匿名 toast 给订阅 client(下载不可用 / 失败等 daemon 侧提示)。
+    ///
+    /// # Params:
+    ///   - `kind`: 视觉级别
+    ///   - `content`: 单行人读文本
+    pub(crate) fn toast(&self, kind: mineral_protocol::ToastKind, content: String) {
+        let _ = self.events.send(Event::Toast {
+            kind,
+            content,
+            id: None,
+            ttl_secs: None,
+        });
+    }
+
     /// per-song 持久 KV 某键变更:wire `StoreChanged`(粗粒度,只报歌 + 键)。
     ///
     /// 脚本路不投递 —— store 写本就发自脚本 / client,变更方已知值;
@@ -180,11 +194,13 @@ mod tests {
 
     #[test]
     fn wire_lane_carries_events_in_order() -> color_eyre::Result<()> {
+        use mineral_protocol::ToastKind;
         let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
         let notifier = Notifier::new(events_tx, /*script*/ None);
         let s = song("1");
         notifier.track_finished(&s, FinishReason::Eof);
         notifier.property_changed(PropKey::PlayerVolume, &PropValue::Int(42));
+        notifier.toast(ToastKind::Warn, "下载不可用".to_owned());
         assert_eq!(
             events_rx.try_recv()?,
             Event::TrackFinished {
@@ -197,6 +213,15 @@ mod tests {
             Event::PropertyChanged {
                 prop: mineral_protocol::PropName::PLAYER_VOLUME,
                 value: mineral_protocol::PropValue::Int(42),
+            }
+        );
+        assert_eq!(
+            events_rx.try_recv()?,
+            Event::Toast {
+                kind: ToastKind::Warn,
+                content: "下载不可用".to_owned(),
+                id: None,
+                ttl_secs: None,
             }
         );
         Ok(())

@@ -289,13 +289,20 @@ pub(crate) fn text_item(text: String) -> Box<dyn ToastItem> {
 
 /// 用一段文本 + 语义级别构造通知内容(boxed)。
 ///
+/// toast 是单行渲染:多行输入(如带 traceback 的错误)只取首行——否则
+/// 宽度按整串计算,括号被撑满全屏、内容显示成空白。
+///
 /// # Params:
-///   - `text`: 单行提示
+///   - `text`: 提示文本(多行时截取首行)
 ///   - `tint`: 语义级别(决定前景色)
 ///
 /// # Return:
 ///   boxed [`ToastItem`]。
 pub(crate) fn tinted_text_item(text: String, tint: TextTint) -> Box<dyn ToastItem> {
+    let text = match text.find('\n') {
+        Some(idx) => text.get(..idx).unwrap_or_default().to_owned(),
+        None => text,
+    };
     Box::new(TextItem { text, tint })
 }
 
@@ -328,6 +335,15 @@ mod tests {
 
     use super::{LiveSlot, Notifications, text_item};
     use crate::render::theme::Theme;
+
+    /// 多行内容(如带 traceback 的错误)只取首行:宽度按首行算,
+    /// 不被换行后的长尾撑满全屏。
+    #[test]
+    fn multiline_text_item_keeps_first_line_only() {
+        let item = text_item("首行错误\nstack traceback:\n\t[C]: in ?".to_owned());
+        let single = text_item("首行错误".to_owned());
+        assert_eq!(item.width(), single.width(), "多行内容的宽度应等于首行宽度");
+    }
 
     /// 测试对照值 = default.lua 默认(flash_ttl_secs=4 / toast_anim_ms=96 ÷ 16ms = 6 拍)。
     const FLASH_TTL: Duration = Duration::from_secs(4);

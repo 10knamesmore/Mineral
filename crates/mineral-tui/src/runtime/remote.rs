@@ -67,8 +67,13 @@ impl RemoteClient {
             )
         })?;
         let mut conn = framed(stream);
-        // 握手:TUI 默认只订 Toast(Property/Lifecycle 暂无消费场景,轮询是权威值来源)。
-        client_handshake(&mut conn, ClientInfo::new(vec![Subscription::Toast])).await?;
+        // 握手:订 Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键;
+        // 其余生命周期事件收到即忽略)。Property 暂无消费场景,轮询是权威值来源。
+        client_handshake(
+            &mut conn,
+            ClientInfo::new(vec![Subscription::Toast, Subscription::Lifecycle]),
+        )
+        .await?;
         mineral_log::info!(target: "ipc", "connected to daemon");
         let (req_tx, req_rx) = mpsc::unbounded_channel::<Pending>();
         let connected = Arc::new(AtomicBool::new(true));
@@ -315,6 +320,14 @@ impl Client for RemoteClient {
         }
     }
 
+    fn script_binds(&self) -> Vec<mineral_protocol::ScriptBind> {
+        match self.send_recv(Request::ScriptBinds) {
+            Response::ScriptBinds(binds) => binds,
+            // 错误/意外响应:空表兜底(等于无 bind)。
+            _ => Vec::new(),
+        }
+    }
+
     fn toggle_love(&self, id: SongId) -> bool {
         match self.send_recv(Request::ToggleLove(id)) {
             Response::LoveToggled(new) => new,
@@ -416,8 +429,8 @@ mod tests {
         assert!(info.version_matches(), "测试两端同 build,版本应一致");
         assert_eq!(
             info.subscriptions,
-            vec![Subscription::Toast],
-            "TUI 默认订阅集应只含 Toast"
+            vec![Subscription::Toast, Subscription::Lifecycle],
+            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)"
         );
         send(&mut conn, &Frame::Hello(ServerHello::accept())).await?;
         then(conn).await

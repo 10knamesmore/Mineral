@@ -17,7 +17,24 @@ pub(crate) struct PropsWatch {
     last: Mutex<FxHashMap<PropKey, PropValue>>,
 }
 
+impl PropsWatch {
+    /// 当前已下发属性值的快照(热重载播种新 VM 的属性缓存用)。
+    fn snapshot(&self) -> Vec<(PropKey, PropValue)> {
+        self.last
+            .lock()
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect()
+    }
+}
+
 impl PlayerCore {
+    /// 属性树当前值快照(热重载起新 VM 前播种其缓存,经
+    /// [`ScriptHost::seed_props`](mineral_script::ScriptHost::seed_props))。
+    pub(crate) fn props_snapshot(&self) -> Vec<(PropKey, PropValue)> {
+        self.inner.props.snapshot()
+    }
+
     /// 采样六属性、与上次值比较,变更逐项下发。background_loop 每 tick 调一次。
     pub(crate) fn check_props(&self) {
         let snap = self.inner.audio.snapshot();

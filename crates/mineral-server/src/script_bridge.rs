@@ -5,21 +5,24 @@
 //! [`Server`](crate::Server) 起(只需 VM + host),其投递句柄再喂给
 //! Server 的事件出口 —— 无环。
 
+use std::sync::Arc;
+
 use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
 use mineral_script::{
-    PlaylistBrief, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime, WatchdogConfig,
+    PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime,
+    ScriptSender, WatchdogConfig,
 };
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::player::PlayerCore;
 
 /// daemon 入口(main)装配、`serve` 层消费的脚本部件包。
 ///
 /// `vm` 为 `None` 表示无用户脚本(文件缺失 / eval 失败已降级),此时只有
-/// 泵在跑(命令通道无生产者、推送通道无生产者,等于闲置)。
+/// 泵在跑;热重载发现 config.lua 后仍可升级为有脚本。
 pub struct ScriptParts {
     /// eval 过用户脚本的 VM(无脚本为 `None`)。
     vm: Option<Lua>,
@@ -27,8 +30,14 @@ pub struct ScriptParts {
     /// 宿主句柄(与 VM 内 API 闭包共享注册表)。
     host: ScriptHost,
 
+    /// 脚本 → daemon 的命令出口发送端(热重载给新 host 复用同一通道)。
+    cmd_tx: UnboundedSender<ScriptCmd>,
+
     /// 脚本 → daemon 的命令出口接收端。
     cmd_rx: UnboundedReceiver<ScriptCmd>,
+
+    /// 脚本 → client 的推送出口发送端(热重载给新 host 复用同一通道)。
+    push_tx: UnboundedSender<Event>,
 
     /// 脚本 → client 的推送出口接收端。
     push_rx: UnboundedReceiver<Event>,
@@ -40,53 +49,65 @@ impl ScriptParts {
     /// # Params:
     ///   - `vm`: `load_with_vm` 交还的 VM
     ///   - `host`: 与 `install_api` 同一个宿主句柄
+    ///   - `cmd_tx`: 命令通道发送端(与 `host` 内同源,热重载复用)
     ///   - `cmd_rx`: 命令通道接收端
+    ///   - `push_tx`: 推送通道发送端(同上)
     ///   - `push_rx`: 推送通道接收端
     #[must_use]
     pub fn new(
         vm: Option<Lua>,
         host: ScriptHost,
+        cmd_tx: UnboundedSender<ScriptCmd>,
         cmd_rx: UnboundedReceiver<ScriptCmd>,
+        push_tx: UnboundedSender<Event>,
         push_rx: UnboundedReceiver<Event>,
     ) -> Self {
         Self {
             vm,
             host,
+            cmd_tx,
             cmd_rx,
+            push_tx,
             push_rx,
         }
     }
 
-    /// 起脚本线程(若有 VM)。须在 [`Server::spawn`](crate::Server::spawn)
-    /// **之前**调用,返回的 runtime 句柄由调用方持有到 daemon 退出
-    /// (Drop = 停机 + join);spawn 失败降级无脚本(warn)。
+    /// 起脚本线程(若有 VM),消息入口挂进 `sender`。须在
+    /// [`Server::spawn`](crate::Server::spawn) **之前**调用;spawn 失败降级无脚本(warn)。
     ///
     /// # Params:
     ///   - `watchdog`: 回调看门狗参数(配置 `script` 段派生)
+    ///   - `sender`: daemon 侧投递句柄(装配期 `ScriptSender::detached()` 先建)
     ///
     /// # Return:
-    ///   `(runtime, rest)`:runtime 为 `None` 表示无脚本;rest 是泵接线件。
+    ///   `(runtime, rest)`:runtime 为 `None` 表示无脚本;rest 是泵 + 热重载接线件。
     #[must_use]
-    pub fn spawn_runtime(self, watchdog: WatchdogConfig) -> (Option<ScriptRuntime>, ScriptPumps) {
-        let runtime =
-            self.vm.and_then(
-                |lua| match ScriptRuntime::spawn(lua, self.host.clone(), watchdog) {
-                    Ok(runtime) => Some(runtime),
-                    Err(e) => {
-                        mineral_log::warn!(
-                            target: "script",
-                            error = mineral_log::chain(&e),
-                            "脚本线程启动失败,降级无脚本"
-                        );
-                        None
-                    }
-                },
-            );
+    pub fn spawn_runtime(
+        self,
+        watchdog: WatchdogConfig,
+        sender: &ScriptSender,
+    ) -> (Option<ScriptRuntime>, ScriptPumps) {
+        let runtime = self.vm.and_then(|lua| {
+            match ScriptRuntime::spawn(lua, self.host.clone(), watchdog, sender) {
+                Ok(runtime) => Some(runtime),
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "script",
+                        error = mineral_log::chain(&e),
+                        "脚本线程启动失败,降级无脚本"
+                    );
+                    None
+                }
+            }
+        });
         (
             runtime,
             ScriptPumps {
                 cmd_rx: self.cmd_rx,
                 push_rx: self.push_rx,
+                cmd_tx: self.cmd_tx,
+                push_tx: self.push_tx,
+                watchdog,
             },
         )
     }
@@ -99,6 +120,36 @@ pub struct ScriptPumps {
 
     /// 推送通道接收端。
     push_rx: UnboundedReceiver<Event>,
+
+    /// 命令通道发送端(透传给热重载件,新 host 复用同一通道,泵不动)。
+    cmd_tx: UnboundedSender<ScriptCmd>,
+
+    /// 推送通道发送端(同上;重载结果 toast 也走它)。
+    push_tx: UnboundedSender<Event>,
+
+    /// 看门狗参数(热重载起新线程复用)。
+    watchdog: WatchdogConfig,
+}
+
+/// 属性值快照源:重载起新 VM 前取 daemon 当前属性,播种其缓存
+/// (经 [`ScriptHost::seed_props`];daemon 只下发 diff,不播种则新 VM
+/// 的 observe 回放 / 顶层 get 要等属性下次真变更)。
+pub(crate) type PropsSnapshot = Arc<dyn Fn() -> Vec<(PropKey, PropValue)> + Send + Sync>;
+
+/// [`ScriptPumps::start`] 拆出的热重载接线件(交给
+/// [`crate::script_reload::spawn_script_reloader`])。
+pub struct ScriptReloadParts {
+    /// 命令通道发送端(重载的新 host 用)。
+    pub(crate) cmd_tx: UnboundedSender<ScriptCmd>,
+
+    /// 推送通道发送端(重载的新 host 用 + 结果 toast 出口)。
+    pub(crate) push_tx: UnboundedSender<Event>,
+
+    /// 看门狗参数(重载起新线程用)。
+    pub(crate) watchdog: WatchdogConfig,
+
+    /// 属性值快照源(重载播种新 VM 的属性缓存)。
+    pub(crate) props_snapshot: PropsSnapshot,
 }
 
 impl ScriptPumps {
@@ -107,11 +158,25 @@ impl ScriptPumps {
     /// # Params:
     ///   - `player`: 命令执行面
     ///   - `sink`: event hub 发送端
-    pub(crate) fn start(self, player: PlayerCore, sink: broadcast::Sender<Event>) {
+    ///
+    /// # Return:
+    ///   热重载接线件(daemon 入口交给 reloader)。
+    pub(crate) fn start(
+        self,
+        player: PlayerCore,
+        sink: broadcast::Sender<Event>,
+    ) -> ScriptReloadParts {
         let Self {
             mut cmd_rx,
             mut push_rx,
+            cmd_tx,
+            push_tx,
+            watchdog,
         } = self;
+        let props_snapshot: PropsSnapshot = {
+            let player = player.clone();
+            Arc::new(move || player.props_snapshot())
+        };
         tokio::spawn(async move {
             while let Some(event) = push_rx.recv().await {
                 // 无订阅者 send 失败即丢(advisory)。
@@ -123,6 +188,12 @@ impl ScriptPumps {
                 apply_cmd(&player, cmd);
             }
         });
+        ScriptReloadParts {
+            cmd_tx,
+            push_tx,
+            watchdog,
+            props_snapshot,
+        }
     }
 }
 

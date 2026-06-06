@@ -5,8 +5,8 @@ use mineral_audio::AudioSnapshot;
 use mineral_model::{BitRate, MediaUrl, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ChannelFetchKindTag, CurrentSync, KeyContext, PlayMode, PlayerSync,
-    PlayerVersions, QueueSync, Request, Response, SongStatsWire, StoreValue, ViewKind, framed,
-    recv, send,
+    PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind, SongStatsWire,
+    StoreValue, ViewKind, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use mineral_test::song;
@@ -243,9 +243,14 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     // TUI 触发:带按键瞬间上下文(builder 构造,getter 读;字段全 Some + 全 None 各一)
     let ctx = KeyContext::builder()
         .view(ViewKind::Tracks)
-        .selected_song_id(Some(id.clone()))
-        .selected_playlist_id(Some(PlaylistId::new(SourceKind::NETEASE, "p1")))
-        .now_playing_id(Some(id))
+        .selected_song(Some(Box::new(song("31"))))
+        .selected_playlist(Some(PlaylistRef {
+            id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+            name: "日常".to_owned(),
+        }))
+        .now_playing(Some(Box::new(song("32"))))
+        .selected_loved(Some(true))
+        .search_query(Some("雨".to_owned()))
         .build();
     req_round_trips(Request::InvokeAction {
         name: "my.rate".to_owned(),
@@ -254,15 +259,36 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     .await?;
     let empty = KeyContext::builder()
         .view(ViewKind::Search)
-        .selected_song_id(None)
-        .selected_playlist_id(None)
-        .now_playing_id(None)
+        .selected_song(None)
+        .selected_playlist(None)
+        .now_playing(None)
+        .selected_loved(None)
+        .search_query(None)
         .build();
     req_round_trips(Request::InvokeAction {
         name: "my.global".to_owned(),
         ctx: Some(empty),
     })
     .await?;
+    Ok(())
+}
+
+/// 脚本 bind 表拉取:请求无参,应答携带 key→动作名列表。
+#[tokio::test]
+async fn round_trip_script_binds() -> color_eyre::Result<()> {
+    req_round_trips(Request::ScriptBinds).await?;
+    resp_round_trips(Response::ScriptBinds(vec![
+        ScriptBind {
+            key: "X".to_owned(),
+            action: "bind#1".to_owned(),
+        },
+        ScriptBind {
+            key: "<C-g>".to_owned(),
+            action: "bind#2".to_owned(),
+        },
+    ]))
+    .await?;
+    resp_round_trips(Response::ScriptBinds(Vec::new())).await?;
     Ok(())
 }
 

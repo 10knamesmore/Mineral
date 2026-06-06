@@ -27,12 +27,18 @@ pub(crate) fn install(lua: &Lua, ui: &Table, host: &ScriptHost) -> mlua::Result<
     let push = host.push.clone();
     ui.set(
         "toast",
-        lua.create_function(move |_lua, (msg, opts): (String, Option<Table>)| {
+        lua.create_function(move |_lua, (msg, opts): (mlua::Value, Option<Table>)| {
+            // `print` 式宽容:任意值经 tostring 显示;nil 静默跳过——
+            // `toast(ctx.search_query)` 这类可空链无词时安静,不炸回调。
+            let content = match msg {
+                mlua::Value::Nil => return Ok(()),
+                other => other.to_string()?,
+            };
             let opts = parse_opts(opts.as_ref())?;
             // 接收端关闭(daemon 停机)时静默丢,脚本不感知。
             let _ = push.send(Event::Toast {
                 kind: opts.kind,
-                content: msg,
+                content,
                 id: opts.id,
                 ttl_secs: opts.ttl_secs,
             });
@@ -127,6 +133,31 @@ mod tests {
             .exec();
         assert!(result.is_err(), "未知 kind 必须报 Lua 错,不静默降级");
         assert!(push_rx.try_recv().is_err(), "报错时不得发出 toast");
+        Ok(())
+    }
+
+    #[test]
+    fn toast_accepts_any_value_and_skips_nil() -> color_eyre::Result<()> {
+        let (lua, mut push_rx) = vm_with_push()?;
+        lua.load(
+            r#"
+            mineral.ui.toast(nil)          -- nil 静默跳过,不报错不显示
+            mineral.ui.toast(42)           -- 数字经 tostring
+            mineral.ui.toast(true)         -- boolean 经 tostring
+            "#,
+        )
+        .exec()?;
+        let first = push_rx.try_recv()?;
+        assert!(
+            matches!(first, Event::Toast { ref content, .. } if content == "42"),
+            "nil 跳过后第一条应是 42,实得 {first:?}"
+        );
+        let second = push_rx.try_recv()?;
+        assert!(
+            matches!(second, Event::Toast { ref content, .. } if content == "true"),
+            "实得 {second:?}"
+        );
+        assert!(push_rx.try_recv().is_err(), "nil 不该产生事件");
         Ok(())
     }
 

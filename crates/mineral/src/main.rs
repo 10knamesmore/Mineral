@@ -61,17 +61,18 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
         // eval 成功的 VM 随 ScriptParts 移交脚本线程(失败已降级纯默认 + 无脚本)。
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = mineral_script::ScriptHost::new(cmd_tx, push_tx);
+        let host = mineral_script::ScriptHost::new(cmd_tx.clone(), push_tx.clone());
         let dir = mineral_paths::config_dir().wrap_err("解析配置目录失败")?;
-        let (config, warnings, vm) = mineral_config::load_with_vm(&dir.join("config.lua"), |lua| {
+        let config_path = dir.join("config.lua");
+        let (config, warnings, vm) = mineral_config::load_with_vm(&config_path, |lua| {
             mineral_script::install_api(lua, &host).map_err(color_eyre::Report::new)
         })
         .wrap_err("加载用户配置失败")?;
         log_config_warnings(&warnings);
-        let script = mineral_server::ScriptParts::new(vm, host, cmd_rx, push_rx);
+        let script = mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
         let persist = open_persist().await;
         let channels = build_channels(persist.clone(), config.sources())?;
-        mineral_cli::serve_run(channels, persist, config, script).await
+        mineral_cli::serve_run(channels, persist, config, script, config_path).await
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");

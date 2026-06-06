@@ -380,10 +380,7 @@ impl AppState {
                 self.redecorate_for_source(song_id.namespace());
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
-            // Notice 在 drain_task_events 已单独路由到 toast,不会进这里;一并 defensive 跳过。
-            TaskEvent::PlayUrlReady { .. }
-            | TaskEvent::LyricsReady { .. }
-            | TaskEvent::Notice { .. } => {}
+            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
         }
     }
 

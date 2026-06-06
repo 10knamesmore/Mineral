@@ -271,14 +271,6 @@ impl PlayerCore {
         self.inner.state.lock().capturing = Some(cap);
     }
 
-    /// 推一条瞬时提示给 client 状态栏(借 client_events 通道)。
-    pub(crate) fn push_notice(&self, text: String) {
-        self.inner
-            .client_events
-            .lock()
-            .push(TaskEvent::Notice { text });
-    }
-
     /// 把下载目标入队:单 worker 串行消费,聚合进同一进度会话(再点一个 → total 累加,如 2/21→2/24)。
     pub(crate) fn download(&self, target: DownloadTarget) {
         // 入队即记账:新会话(pending 0→1)重置计数;单曲已知数立刻 +1(歌单数等 worker 拉到再加)。

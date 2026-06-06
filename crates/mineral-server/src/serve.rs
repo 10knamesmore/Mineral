@@ -318,6 +318,7 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
                 Err(e) => Response::Error(mineral_log::chain(&e)),
             }
         }
+        Request::ScriptBinds => Response::ScriptBinds(client.script_binds_async().await),
         Request::ToggleLove(id) => match client.toggle_love_async(&id).await {
             Ok(new) => Response::LoveToggled(new),
             Err(e) => Response::Error(mineral_log::chain(&e)),
@@ -362,6 +363,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::StoreGet { .. } => Some("StoreGet"),
         Request::StoreSet { .. } => Some("StoreSet"),
         Request::StoreInc { .. } => Some("StoreInc"),
+        Request::ScriptBinds => Some("ScriptBinds"),
         Request::ToggleLove(_) => Some("ToggleLove"),
         Request::QuerySongStats(_) => Some("QuerySongStats"),
         Request::Download(_) => Some("Download"),

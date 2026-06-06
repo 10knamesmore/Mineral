@@ -36,9 +36,22 @@ pub(crate) struct EventRegistry {
     /// `observe` 注册时有值即回放、`mineral.get` 同源读。
     pub(crate) props: FxHashMap<PropKey, PropValue>,
 
-    /// 具名动作(`mineral.action`,重名注册报 Lua 错)。
-    /// 触发面(client → daemon → 这里)是 PR-4 的事,本期只注册。
+    /// 具名动作(`mineral.action` 注册;`mineral.bind` 的匿名 fn 以内部名进表)。
     pub(crate) actions: FxHashMap<String, Arc<mlua::RegistryKey>>,
+
+    /// `mineral.bind` 产生的键绑定表(注册顺序;client 经 `ScriptBinds` 拉取)。
+    pub(crate) binds: Vec<mineral_protocol::ScriptBind>,
+
+    /// bind 内部名计数器([`Self::next_bind_name`] 用)。
+    next_bind: u64,
+}
+
+impl EventRegistry {
+    /// 生成下一个 bind 匿名动作的内部名(`bind#1` 起,与用户 action 名隔开)。
+    pub(crate) fn next_bind_name(&mut self) -> String {
+        self.next_bind = self.next_bind.wrapping_add(1);
+        format!("bind#{}", self.next_bind)
+    }
 }
 
 /// 在途异步查询表:查询类 API(`store.get` 等)把 Lua 回调挂在这里,
@@ -105,6 +118,21 @@ impl ScriptHost {
         }
     }
 
+    /// 播种属性缓存(热重载起新 VM 前,entries 取 daemon 侧当前值)。
+    ///
+    /// 须在 eval 用户脚本**之前**调用:`observe` 注册时的回放与顶层
+    /// `mineral.get` 读的都是这份缓存,而 daemon 只下发 diff —— 不播种的话
+    /// 新 VM 要等属性下次真变更才恢复,部分属性可能永不再变。
+    ///
+    /// # Params:
+    ///   - `entries`: 属性当前值快照(重复键后写赢)
+    pub fn seed_props(&self, entries: Vec<(PropKey, PropValue)>) {
+        let mut registry = self.events.lock();
+        for (key, value) in entries {
+            registry.props.insert(key, value);
+        }
+    }
+
     /// 把一个 Lua 回调挂入在途查询表,返回随命令带出的回投句柄。
     ///
     /// # Params:
@@ -149,4 +177,31 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
     api::timer::install(lua, &mineral, host)?;
 
     lua.globals().set("mineral", mineral)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::test_support::vm_with_host;
+    use crate::message::{PropKey, PropValue};
+
+    /// 热重载播种:seed 后 observe 注册立即回放、顶层 get 同源可读 ——
+    /// 新 VM 不必等 daemon 下一次属性真变更(diff 下发可能永不再来)。
+    #[test]
+    fn seeded_props_replay_to_observe_and_get() -> color_eyre::Result<()> {
+        let (lua, host) = vm_with_host()?;
+        host.seed_props(vec![
+            (PropKey::PlayerVolume, PropValue::Int(42)),
+            (PropKey::PlayerState, PropValue::Str("stopped".to_owned())),
+        ]);
+        lua.load(
+            r#"
+            assert(mineral.get("player.volume") == 42, "get 必须读到播种值")
+            seen = nil
+            mineral.observe("player.state", function(v) seen = v end)
+            assert(seen == "stopped", "observe 注册必须回放播种值")
+            "#,
+        )
+        .exec()?;
+        Ok(())
+    }
 }
