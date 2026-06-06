@@ -87,6 +87,39 @@ impl PlayMode {
         }
     }
 
+    /// 脚本边界的蛇形稳定名(Lua 生态惯例),与 [`Self::from_script_name`] 对偶。
+    ///
+    /// 与 [`Self::name`](落库格式,变体名形式)是**两套**字符串:落库的不能动
+    /// (存量会话库),脚本面(`mineral.player.set_mode` / 属性树 `player.mode`
+    /// 的值)统一用这套蛇形。
+    #[must_use]
+    pub fn script_name(self) -> &'static str {
+        match self {
+            Self::Sequential => "sequential",
+            Self::Shuffle => "shuffle",
+            Self::RepeatAll => "repeat_all",
+            Self::RepeatOne => "repeat_one",
+        }
+    }
+
+    /// 从 [`Self::script_name`] 的蛇形名解析回来。
+    ///
+    /// # Params:
+    ///   - `name`: 蛇形名字符串(脚本侧输入)
+    ///
+    /// # Return:
+    ///   对应档位;未知名为 `None`,调用方报脚本错误。
+    #[must_use]
+    pub fn from_script_name(name: &str) -> Option<Self> {
+        match name {
+            "sequential" => Some(Self::Sequential),
+            "shuffle" => Some(Self::Shuffle),
+            "repeat_all" => Some(Self::RepeatAll),
+            "repeat_one" => Some(Self::RepeatOne),
+            _ => None,
+        }
+    }
+
     /// 是否随机播放(queue 被洗过)。MPRIS `Shuffle` 维度。
     #[must_use]
     pub fn shuffle(self) -> bool {

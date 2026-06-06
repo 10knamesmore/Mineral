@@ -1,0 +1,29 @@
+[package]
+name        = "mineral-script"
+description = "daemon 内嵌 Lua 脚本运行时:专用线程 + 事件分发 + watchdog"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-log      = { workspace = true }
+mineral-model    = { workspace = true }
+mineral-protocol = { workspace = true }
+
+color-eyre     = { workspace = true }
+derive-getters = { workspace = true }
+mlua           = { workspace = true }
+parking_lot    = { workspace = true }
+rustc-hash     = { workspace = true }
+tokio          = { workspace = true }
+typed-builder  = { workspace = true }
+
+[dev-dependencies]
+mineral-test      = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

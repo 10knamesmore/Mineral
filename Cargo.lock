@@ -2475,6 +2475,8 @@ dependencies = [
  "mineral-media",
  "mineral-paths",
  "mineral-persist",
+ "mineral-script",
+ "mineral-server",
  "mineral-tui",
  "nix",
  "predicates",
@@ -2580,6 +2582,7 @@ dependencies = [
  "mineral-paths",
  "mineral-persist",
  "mineral-protocol",
+ "mineral-script",
  "mineral-server",
  "mineral-test",
  "tokio",
@@ -2599,6 +2602,7 @@ dependencies = [
  "mlua",
  "num-traits",
  "proptest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -2653,6 +2657,7 @@ dependencies = [
  "mineral-macros",
  "mineral-test",
  "proptest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "url",
@@ -2696,10 +2701,29 @@ dependencies = [
  "mineral-test",
  "pretty_assertions",
  "proptest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "mineral-script"
+version = "0.4.2"
+dependencies = [
+ "color-eyre",
+ "derive-getters",
+ "mineral-log",
+ "mineral-model",
+ "mineral-protocol",
+ "mineral-test",
+ "mlua",
+ "parking_lot",
+ "pretty_assertions",
+ "rustc-hash",
+ "tokio",
+ "typed-builder",
 ]
 
 [[package]]
@@ -2722,8 +2746,10 @@ dependencies = [
  "mineral-paths",
  "mineral-persist",
  "mineral-protocol",
+ "mineral-script",
  "mineral-task",
  "mineral-test",
+ "num-traits",
  "parking_lot",
  "pretty_assertions",
  "rand 0.9.4",
