@@ -23,6 +23,7 @@ use app::App;
 use runtime::cover_encode::CoverEncoder;
 use runtime::cover_fetch::CoverFetcher;
 use runtime::remote::RemoteClient;
+use runtime::ui_prefs::{UiPrefs, open_client_store};
 use tui::Tui;
 
 /// TUI 的启动模式。决定 server 的来源与生命周期。
@@ -63,25 +64,32 @@ pub async fn run(
         mineral_log::warn!(target: "config", warning = %w, "用户配置降级");
     }
     let cfg = Arc::new(config);
+    // tui.db 一次打开,封面缓存索引与 UI 偏好共用一个连接池;打不开整体降级
+    // (封面不缓存、偏好不存不读),其余照常。
+    let store = open_client_store().await;
+    let ui_prefs = UiPrefs::load(store.clone()).await;
     // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
     // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
-    let cover_fetcher =
-        CoverFetcher::spawn(cfg.tui().cover().clone(), *cfg.cache().cover_capacity())
-            .await
-            .unwrap_or_else(|e| {
-                mineral_log::warn!(
-                    error = mineral_log::chain(&e),
-                    "cover fetcher 起步失败,封面禁用"
-                );
-                CoverFetcher::disabled()
-            });
+    let cover_fetcher = CoverFetcher::spawn(
+        cfg.tui().cover().clone(),
+        *cfg.cache().cover_capacity(),
+        store,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        mineral_log::warn!(
+            error = mineral_log::chain(&e),
+            "cover fetcher 起步失败,封面禁用"
+        );
+        CoverFetcher::disabled()
+    });
 
     match launch {
         Launch::Auto => {
             let socket = mineral_paths::socket_path()?;
             let kill_on_exit = *cfg.tui().behavior().kill_spawned_daemon_on_exit();
             let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
-            let result = run_app(Arc::new(client), cover_fetcher, cfg, &warnings);
+            let result = run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings);
             // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
             // (handle 为 None)留着不动。
             if let Some(handle) = handle {
@@ -92,7 +100,7 @@ pub async fn run(
         Launch::Connect => {
             let socket = mineral_paths::socket_path()?;
             let client = RemoteClient::connect(&socket).await?;
-            run_app(Arc::new(client), cover_fetcher, cfg, &warnings)
+            run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings)
         }
         Launch::InProc => {
             // in-proc 调试:env > config 同 daemon 路径 resolve(本 crate 直接被 binary 调,
@@ -114,7 +122,7 @@ pub async fn run(
                 mineral_log::warn!(target: "media", error = mineral_log::chain(&e), "system media service unavailable");
             }
             let client = server.client();
-            let result = run_app(Arc::new(client), cover_fetcher, cfg, &warnings);
+            let result = run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings);
             // in-proc 模式:进程退 = server 跟着 drop,无显式 shutdown 也行。
             let _ = server;
             result
@@ -126,11 +134,13 @@ pub async fn run(
 /// 跑 [`App::run`] 直到退出,最后还原终端。
 ///
 /// # Params:
+///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档等,`App::new` 内落地)
 ///   - `cfg`: 已加载的全局配置(主题 / 键表 / 各段手感在 `App::new` 内落地)
 ///   - `warnings`: 配置降级告警,启动后经通知层 toast 呈现
 fn run_app(
     client: Arc<dyn Client>,
     cover_fetcher: CoverFetcher,
+    ui_prefs: UiPrefs,
     cfg: Arc<mineral_config::Config>,
     warnings: &[mineral_config::ConfigWarning],
 ) -> color_eyre::Result<()> {
@@ -150,6 +160,7 @@ fn run_app(
         picker,
         tui.launch_cursor(),
         cfg,
+        ui_prefs,
     );
     // 配置降级告警 toast:用户改坏 config.lua 时启动即看见(与日志双轨)。
     for w in warnings {

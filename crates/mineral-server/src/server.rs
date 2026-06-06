@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
+use mineral_protocol::PlayMode;
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
 
@@ -51,8 +52,9 @@ impl Server {
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
         let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache, &config);
-        // 读回上次会话 —— 本轮仅打日志确认能读到,不应用到播放状态(不自动恢复)。
-        tokio::spawn(log_last_session(player.clone()));
+        // 读回上次会话:恢复播放模式(其余字段仅打日志,不自动恢复队列/进度)。
+        // 同步 await:保证在 serve / 首次 PlayerSync 之前生效,client 一连上看到的就是恢复后的模式。
+        restore_last_session(&player).await;
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
@@ -119,17 +121,35 @@ async fn open_media_cache(persist: &ServerStore, capacity: u64) -> MediaCache {
     }
 }
 
-/// 启动时读回上次会话并打日志确认能读到 —— **不**应用到播放状态(本轮不自动恢复)。
-/// 读不到走 debug;读出错仅 warn,不影响 daemon 启动。
-async fn log_last_session(player: PlayerCore) {
+/// 启动时读回上次会话:**恢复播放模式**,其余字段(队列 / 进度 / 音量)仅打日志不应用
+/// (不自动恢复播放)。模式名解析不出(脏数据)warn 后保持默认;读不到走 debug;
+/// 读出错仅 warn,不影响 daemon 启动。
+async fn restore_last_session(player: &PlayerCore) {
     match player.load_session().await {
-        Ok(Some(snap)) => mineral_log::info!(
-            target: "session",
-            queue_len = snap.queue.len(),
-            position_ms = snap.position_ms,
-            play_mode = %snap.play_mode,
-            "读到上次会话"
-        ),
+        Ok(Some(snap)) => {
+            let restored = match PlayMode::from_name(&snap.play_mode) {
+                Some(mode) => {
+                    player.restore_play_mode(mode);
+                    true
+                }
+                None => {
+                    mineral_log::warn!(
+                        target: "session",
+                        play_mode = %snap.play_mode,
+                        "上次会话播放模式无法解析,保持默认"
+                    );
+                    false
+                }
+            };
+            mineral_log::info!(
+                target: "session",
+                queue_len = snap.queue.len(),
+                position_ms = snap.position_ms,
+                play_mode = %snap.play_mode,
+                restored_play_mode = restored,
+                "读到上次会话"
+            );
+        }
         Ok(None) => mineral_log::debug!(target: "session", "无历史会话"),
         Err(e) => {
             mineral_log::warn!(target: "session", error = mineral_log::chain(&e), "读取上次会话失败");

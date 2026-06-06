@@ -12,4 +12,5 @@ pub mod prefetch;
 pub mod remote;
 pub mod signal;
 pub mod state;
+pub mod ui_prefs;
 pub mod view_model;

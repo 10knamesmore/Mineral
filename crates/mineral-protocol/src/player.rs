@@ -56,6 +56,37 @@ impl PlayMode {
         }
     }
 
+    /// 稳定字符串名(会话持久化用),与 [`Self::from_name`] 对偶。
+    ///
+    /// 值与历史上落库的 Debug 名一致(`"Sequential"` 等),存量会话库无缝。
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sequential => "Sequential",
+            Self::Shuffle => "Shuffle",
+            Self::RepeatAll => "RepeatAll",
+            Self::RepeatOne => "RepeatOne",
+        }
+    }
+
+    /// 从 [`Self::name`] 的稳定名解析回来。
+    ///
+    /// # Params:
+    ///   - `name`: 稳定名字符串(落库值)
+    ///
+    /// # Return:
+    ///   对应档位;未知名(脏数据 / 未来新档回退旧版)为 `None`,调用方自行降级。
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Sequential" => Some(Self::Sequential),
+            "Shuffle" => Some(Self::Shuffle),
+            "RepeatAll" => Some(Self::RepeatAll),
+            "RepeatOne" => Some(Self::RepeatOne),
+            _ => None,
+        }
+    }
+
     /// 是否随机播放(queue 被洗过)。MPRIS `Shuffle` 维度。
     #[must_use]
     pub fn shuffle(self) -> bool {
@@ -250,5 +281,25 @@ mod tests {
             PlayMode::Sequential.with_repeat(Repeat::All),
             PlayMode::RepeatAll
         );
+    }
+
+    /// `name` / `from_name` 对偶:四档 round-trip;且 `name` 与 Debug 名一致
+    /// (历史会话库存的是 Debug 名,守住存量兼容)。
+    #[test]
+    fn play_mode_name_round_trips_and_matches_debug() {
+        let mut m = PlayMode::Sequential;
+        for _ in 0..4 {
+            assert_eq!(PlayMode::from_name(m.name()), Some(m));
+            assert_eq!(m.name(), format!("{m:?}"), "name 应与历史 Debug 落库值一致");
+            m = m.cycle();
+        }
+    }
+
+    /// `from_name`:未知名(脏数据)返回 `None`,不 panic 不猜。
+    #[test]
+    fn play_mode_from_name_rejects_garbage() {
+        assert_eq!(PlayMode::from_name(""), None);
+        assert_eq!(PlayMode::from_name("sequential"), None, "大小写敏感");
+        assert_eq!(PlayMode::from_name("Shuffle "), None, "不容忍空白");
     }
 }

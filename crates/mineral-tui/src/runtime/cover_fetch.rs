@@ -93,14 +93,19 @@ impl CoverFetcher {
     /// # Params:
     ///   - `cfg`: 封面段配置(timeout / 尺寸 / 存储形态 / 并发 / kmeans)
     ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `cache.cover_capacity`)
-    pub async fn spawn(cfg: CoverConfig, cover_capacity: u64) -> color_eyre::Result<Self> {
+    ///   - `store`: 共享的 `tui.db` 句柄(与 UI 偏好共用连接池;`None` = 降级不缓存)
+    pub async fn spawn(
+        cfg: CoverConfig,
+        cover_capacity: u64,
+        store: Option<Arc<ClientStore>>,
+    ) -> color_eyre::Result<Self> {
         let (tx, rx) = mpsc::unbounded_channel::<(SourceKind, MediaUrl)>();
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(*cfg.http_timeout_secs()))
             .build()
             .map_err(|e| eyre!("isahc client init failed: {e}"))?;
-        // 磁盘缓存是优化项:目录解析 / open 失败不致命,降级成直连网络不缓存。
-        let cache = Self::open_cache(cover_capacity).await;
+        // 磁盘缓存是优化项:store 不可用 / 目录解析失败不致命,降级成直连网络不缓存。
+        let cache = Self::open_cache(store, cover_capacity).await;
         let ready = Arc::new(Mutex::new(Vec::<CoverReady>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
         let cfg = Arc::new(cfg);
@@ -117,34 +122,22 @@ impl CoverFetcher {
         Ok(Self { req_tx: tx, ready })
     }
 
-    /// 打开封面磁盘缓存(`cover_cache` 表落 client 的 `tui.db`,文件落 `cover_cache_dir`)。
-    /// 目录解析 / open 失败时 warn + 返回 `None`(降级成不缓存),不让 fetcher 起步失败。
+    /// 打开封面磁盘缓存(`cover_cache` 表落共享的 `tui.db`,文件落 `cover_cache_dir`)。
+    /// store 不可用 / 目录解析 / open 失败时 warn + 返回 `None`(降级成不缓存),
+    /// 不让 fetcher 起步失败。
     ///
     /// # Params:
+    ///   - `store`: 共享的 `tui.db` 句柄(`None` = 上游已降级)
     ///   - `capacity`: 缓存容量上限(字节,配置 `cache.cover_capacity`)
     ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
-    async fn open_cache(capacity: u64) -> CoverCache {
-        let (db, dir) = match (mineral_paths::tui_db(), mineral_paths::cover_cache_dir()) {
-            (Ok(db), Ok(dir)) => (db, dir),
-            (Err(e), _) | (_, Err(e)) => {
-                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存路径不可用,降级不缓存");
-                return None;
-            }
-        };
-        // sqlite mode=rwc 只建文件不建父目录,fresh env 下需先确保 data_dir 存在。
-        if let Some(parent) = db.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            let e = color_eyre::Report::new(e);
-            mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "建 tui.db 目录失败,降级不缓存");
-            return None;
-        }
-        let store = match ClientStore::open(&db).await {
-            Ok(s) => s,
+    async fn open_cache(store: Option<Arc<ClientStore>>, capacity: u64) -> CoverCache {
+        let store = store?;
+        let dir = match mineral_paths::cover_cache_dir() {
+            Ok(dir) => dir,
             Err(e) => {
-                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "打开 tui.db 失败,降级不缓存");
+                mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面缓存目录不可用,降级不缓存");
                 return None;
             }
         };

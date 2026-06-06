@@ -52,6 +52,33 @@ pub enum LyricExtra {
     Romanization,
 }
 
+impl LyricExtra {
+    /// 稳定字符串名(UI 偏好持久化用),与 [`Self::from_name`] 对偶。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Translation => "translation",
+            Self::Romanization => "romanization",
+        }
+    }
+
+    /// 从 [`Self::name`] 的稳定名解析回来。
+    ///
+    /// # Params:
+    ///   - `name`: 稳定名字符串(落库值)
+    ///
+    /// # Return:
+    ///   对应档位;未知名(脏数据)为 `None`,调用方降级到默认档。
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "none" => Some(Self::None),
+            "translation" => Some(Self::Translation),
+            "romanization" => Some(Self::Romanization),
+            _ => None,
+        }
+    }
+}
+
 /// 应用顶层状态。
 #[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
 pub struct AppState {

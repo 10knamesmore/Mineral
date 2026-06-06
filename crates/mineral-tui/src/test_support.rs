@@ -238,6 +238,7 @@ fn test_app() -> color_eyre::Result<App> {
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
         cfg,
+        crate::runtime::ui_prefs::UiPrefs::disabled(),
     ))
 }
 

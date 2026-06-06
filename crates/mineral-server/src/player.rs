@@ -505,6 +505,16 @@ impl PlayerCore {
         self.spawn_save_session();
     }
 
+    /// 启动时恢复上次会话的播放模式:只写模式标志,不走 [`Self::set_play_mode`] 的
+    /// 洗牌/还原边界(此刻队列为空,无可洗),也不回写会话(快照其余字段原样)。
+    ///
+    /// # Params:
+    ///   - `mode`: 上次会话解析出的播放模式
+    pub fn restore_play_mode(&self, mode: PlayMode) {
+        let mut st = self.inner.state.lock();
+        st.play_mode = mode;
+    }
+
     /// `p` 键:进度 > 阈值 → seek(0);否则跳上一首。
     pub fn prev_or_restart(&self) {
         let pos = self.inner.audio.snapshot().position_ms;
@@ -626,6 +636,9 @@ impl PlayerCore {
 
     /// 节流落盘:距上次周期 save 超过配置的 `session_save` 间隔才 save 一次(主要刷新 position)。
     /// 状态变化类 save 走各自的即时 [`Self::spawn_save_session`],此处只补周期进度。
+    ///
+    /// **空态守卫**:无当前曲且队列为空(如 daemon 刚启动还没人播)不落盘——空态没有
+    /// 进度可刷,落盘只会用空快照覆盖上次会话的队列/进度,那是将来队列恢复要吃的数据。
     fn check_session_save(&self) {
         {
             let mut last = self.inner.last_session_save.lock();
@@ -633,6 +646,12 @@ impl PlayerCore {
                 return;
             }
             *last = Instant::now();
+        }
+        {
+            let st = self.inner.state.lock();
+            if st.current_song.is_none() && st.queue.is_empty() {
+                return;
+            }
         }
         self.spawn_save_session();
     }
@@ -1381,6 +1400,69 @@ mod tests {
         assert!(snap.queue.contains(&song("a").id), "队列应含 a");
         assert_eq!(snap.current, Some(song("a").id), "当前歌应为 a");
         assert_eq!(snap.play_mode, "Shuffle", "模式应为 Shuffle");
+        Ok(())
+    }
+
+    /// 启动恢复路径:落库的模式名经 `PlayMode::from_name` 解析 + `restore_play_mode`
+    /// 写回——只动模式标志,不触发洗牌边界(队列空、original_queue 不被置),不回写会话。
+    #[tokio::test]
+    async fn restore_play_mode_sets_flag_without_shuffle_side_effects() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let core = core_with_persist(calls, persist.clone())?;
+
+        // 模拟上一次会话:Shuffle 模式落盘。
+        core.cycle_play_mode(); // Sequential → Shuffle
+        persist.session().save(&core.snapshot_session()).await?;
+
+        // 模拟下一次启动:新 core 读回会话,解析模式名并恢复。
+        let calls2 = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let fresh = core_with_persist(calls2, persist)?;
+        let snap = fresh
+            .load_session()
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("应读回会话"))?;
+        let mode = PlayMode::from_name(&snap.play_mode)
+            .ok_or_else(|| color_eyre::eyre::eyre!("落库模式名应可解析: {}", snap.play_mode))?;
+        fresh.restore_play_mode(mode);
+
+        let st = fresh.inner.state.lock();
+        assert_eq!(st.play_mode, PlayMode::Shuffle, "模式标志应恢复");
+        assert!(st.queue.is_empty(), "恢复不带队列");
+        assert!(
+            st.original_queue.is_none(),
+            "restore 不该触发 enter_shuffle 的洗牌/存原序边界"
+        );
+        Ok(())
+    }
+
+    /// 周期落盘的空态守卫:daemon 空闲(无当前曲、空队列)时跳过,上次会话的队列
+    /// 不被空快照覆盖——那是将来队列恢复要吃的数据。
+    #[tokio::test]
+    async fn periodic_save_skips_empty_state_preserving_last_session() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        // 上次会话:真实队列同步落盘。
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let core = core_with_persist(calls, persist.clone())?;
+        core.set_queue(vec![song("a"), song("b")], &song("a").id);
+        persist.session().save(&core.snapshot_session()).await?;
+
+        // 模拟新启动:空态 core,把节流窗口拨到已过期再触发周期检查。
+        let calls2 = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let fresh = core_with_persist(calls2, persist)?;
+        if let Some(past) = std::time::Instant::now().checked_sub(Duration::from_secs(60)) {
+            *fresh.inner.last_session_save.lock() = past;
+        }
+        fresh.check_session_save();
+        drain_spawned().await;
+
+        let snap = fresh
+            .load_session()
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("应读回会话"))?;
+        assert_eq!(snap.queue.len(), 2, "空态周期落盘应跳过,上次队列应保留");
         Ok(())
     }
 

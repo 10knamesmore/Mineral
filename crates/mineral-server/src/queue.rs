@@ -7,15 +7,15 @@ use mineral_protocol::PlayMode;
 
 use crate::state::State;
 
-/// [`PlayMode`] → 稳定字符串(Debug 名,如 `"Sequential"`)。本轮不 parse 回来。
+/// [`PlayMode`] → 稳定字符串(如 `"Sequential"`),启动恢复经 `PlayMode::from_name` 解析回来。
 ///
 /// # Params:
 ///   - `mode`: 播放模式
 ///
 /// # Return:
-///   稳定的 Debug 名字符串。
+///   稳定名字符串(与历史 Debug 落库值一致)。
 pub(crate) fn play_mode_str(mode: PlayMode) -> String {
-    format!("{mode:?}")
+    mode.name().to_owned()
 }
 
 /// 按 [`PlayMode`] 计算「下一首」:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。

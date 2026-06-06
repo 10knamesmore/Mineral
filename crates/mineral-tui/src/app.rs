@@ -28,6 +28,7 @@ use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, View};
+use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
 
@@ -91,6 +92,10 @@ pub struct App {
     /// expand 从此点铺开、collapse 收回此点(对得上 `LeaveAlternateScreen` 后光标实际
     /// 回到的行)。无 TTY 时为 `None`,缩放退化回屏幕居中。
     pub(crate) launch_anchor: Option<Position>,
+
+    /// UI 偏好句柄:启动初值在 `App::new` 落地,运行时改动(`t` 键切歌词副轨档)
+    /// fire-and-forget 落盘。
+    ui_prefs: UiPrefs,
 }
 
 impl App {
@@ -103,6 +108,7 @@ impl App {
     ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
     ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
     ///   - `cfg`: 已加载的全局配置(`Arc` 共享只读)
+    ///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档在此落进 state)
     pub fn new(
         client: Arc<dyn Client>,
         cover_fetcher: CoverFetcher,
@@ -110,6 +116,7 @@ impl App {
         picker: Picker,
         launch_anchor: Option<Position>,
         cfg: Arc<mineral_config::Config>,
+        ui_prefs: UiPrefs,
     ) -> Self {
         let tui_cfg = cfg.tui();
         let theme = Arc::new(Theme::from_config(tui_cfg.theme()));
@@ -127,6 +134,8 @@ impl App {
         let mut state = AppState::new(cfg);
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
         state.cover_encode_tx = cover_encoder.sender();
+        // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
+        state.lyric_extra = ui_prefs.initial_lyric_extra();
         Self {
             should_quit: false,
             theme,
@@ -145,6 +154,7 @@ impl App {
             download_notifier: DownloadNotifier::new(),
             picker,
             launch_anchor,
+            ui_prefs,
         }
     }
 
@@ -484,7 +494,7 @@ impl App {
             Action::ToggleFullscreen => self.toggle_fullscreen(),
             Action::OpenQueue => self.open_queue(),
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
-            Action::CycleLyricExtra => self.state.cycle_lyric_extra(),
+            Action::CycleLyricExtra => self.cycle_lyric_extra(),
             Action::EnterSearch => self.enter_search(),
             Action::MoveSelection(mv) => self.move_selection(mv),
             Action::ActivateSelection => self.activate_selection(),
@@ -508,6 +518,12 @@ impl App {
         } else {
             self.state.fullscreen_pos.leave();
         }
+    }
+
+    /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
+    fn cycle_lyric_extra(&mut self) {
+        self.state.cycle_lyric_extra();
+        self.ui_prefs.save_lyric_extra(self.state.lyric_extra);
     }
 
     /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
