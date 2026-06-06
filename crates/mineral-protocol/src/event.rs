@@ -1,7 +1,8 @@
 //! server → client 主动推送的事件类型与属性树的协议面(observe 的 wire 形状)。
 
-use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
+
+use rustc_hash::FxHashSet;
 
 use serde::de::Deserializer;
 use serde::ser::Serializer;
@@ -114,7 +115,7 @@ impl PropName {
     /// 播放进度(整秒,daemon 侧整秒边界节流)。
     pub const PLAYER_POSITION: Self = Self("player.position");
 
-    /// 播放模式(`PlayMode` 的稳定名,如 `"Sequential"`)。
+    /// 播放模式(`PlayMode::script_name` 的蛇形名,如 `"sequential"`)。
     pub const PLAYER_MODE: Self = Self("player.mode");
 
     /// 队列长度。
@@ -165,8 +166,8 @@ impl<'de> Deserialize<'de> for PropName {
 /// 仅在反序列化遇到未知属性名时走到;属性集合有界,泄漏有界。
 /// (与 `mineral_model::source` 的 intern 同款实现 —— 各 crate 私有,不共享池。)
 fn intern(s: &str) -> &'static str {
-    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    static POOL: OnceLock<Mutex<FxHashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(FxHashSet::default()));
     // 中毒锁也能取回内部数据,不 panic。
     let mut guard = pool
         .lock()

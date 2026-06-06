@@ -1,6 +1,7 @@
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
+
+use rustc_hash::FxHashSet;
 
 use serde::de::Deserializer;
 use serde::ser::Serializer;
@@ -127,8 +128,8 @@ impl SourceKind {
 ///
 /// 仅在反序列化遇到未知来源名时走到;来源集合极小,泄漏有界。
 fn intern(s: &str) -> &'static str {
-    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    static POOL: OnceLock<Mutex<FxHashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(FxHashSet::default()));
     // 中毒锁也能取回内部数据,不 panic。
     let mut guard = pool
         .lock()
@@ -179,7 +180,7 @@ impl<'de> Deserialize<'de> for SourceKind {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     use super::{PaletteRole, SourceKind};
 
@@ -189,7 +190,7 @@ mod tests {
         let canonical = SourceKind::NETEASE;
         let relabeled = SourceKind::from_static("netease", "别的 label", PaletteRole::Faint);
         assert_eq!(canonical, relabeled, "同 name 即同一来源");
-        let mut by_source = HashMap::new();
+        let mut by_source = FxHashMap::default();
         by_source.insert(canonical, 1_u8);
         assert_eq!(
             by_source.get(&relabeled),

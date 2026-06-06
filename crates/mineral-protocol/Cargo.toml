@@ -16,6 +16,7 @@ mineral-task         = { workspace = true }
 bincode    = { workspace = true }
 bytes      = { workspace = true }
 color-eyre = { workspace = true }
+rustc-hash = { workspace = true }
 serde      = { workspace = true }
 tokio      = { workspace = true }
 tokio-util = { workspace = true }
