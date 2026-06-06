@@ -219,6 +219,7 @@ impl App {
                     continue;
                 }
                 self.drain_task_events();
+                self.drain_push_events();
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
@@ -432,6 +433,15 @@ impl App {
                 }
                 _ => self.state.apply(ev),
             }
+        }
+    }
+
+    /// 取走 server 主动推送的 event 缓冲并逐条消费(与轮询式
+    /// [`Self::drain_task_events`] 是两条通道;翻译逻辑在
+    /// [`crate::components::toast::push::apply_event`])。
+    fn drain_push_events(&mut self) {
+        for ev in self.client.drain_events() {
+            crate::components::toast::push::apply_event(&mut self.notifications, ev);
         }
     }
 

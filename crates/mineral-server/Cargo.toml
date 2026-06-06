@@ -20,6 +20,7 @@ mineral-persist      = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-task         = { workspace = true }
 
+bytes          = { workspace = true }
 color-eyre     = { workspace = true }
 derive-getters = { workspace = true }
 futures-util   = { workspace = true }

@@ -19,6 +19,32 @@ pub fn framed<T: AsyncRead + AsyncWrite>(stream: T) -> Framed<T> {
     LengthDelimitedCodec::new().framed(stream)
 }
 
+/// 把消息编码成一帧负载字节(单遍 `serialize_into`,不含长度前缀——那是
+/// [`Framed`] 的事)。`Framed` 被 split 成 sink/stream 两半后无法走 [`send`],
+/// 两端的 writer/reader task 用本函数 + [`decode`] 手动过 codec。
+///
+/// # Params:
+///   - `msg`: 要编码的消息
+///
+/// # Errors
+/// bincode 序列化失败。
+pub fn encode<T: Serialize>(msg: &T) -> color_eyre::Result<Bytes> {
+    let mut bytes = Vec::new();
+    bincode::serialize_into(&mut bytes, msg).wrap_err("bincode encode")?;
+    Ok(Bytes::from(bytes))
+}
+
+/// 从一帧负载字节解码消息([`encode`] 的对偶)。
+///
+/// # Params:
+///   - `frame`: 一帧负载(已被 [`Framed`] 剥掉长度前缀)
+///
+/// # Errors
+/// bincode 反序列化失败。
+pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> color_eyre::Result<T> {
+    bincode::deserialize(frame).wrap_err("bincode decode")
+}
+
 /// 把一条 serde-serializable 消息编码成 [`Bytes`] 发出去。
 ///
 /// 用 `serialize_into` 直写 `Vec` 单遍完成:`bincode::serialize` 内部会先跑一遍
@@ -31,12 +57,7 @@ where
     T: Serialize,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut bytes = Vec::new();
-    bincode::serialize_into(&mut bytes, msg).wrap_err("bincode encode")?;
-    stream
-        .send(Bytes::from(bytes))
-        .await
-        .wrap_err("framed send")
+    stream.send(encode(msg)?).await.wrap_err("framed send")
 }
 
 /// 收一条消息并 bincode 反序列化。
@@ -52,6 +73,5 @@ where
         return Ok(None);
     };
     let frame: BytesMut = frame.wrap_err("framed recv")?;
-    let msg: T = bincode::deserialize(&frame).wrap_err("bincode decode")?;
-    Ok(Some(msg))
+    Ok(Some(decode(&frame)?))
 }

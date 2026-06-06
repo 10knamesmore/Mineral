@@ -24,8 +24,11 @@ const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// 确保有一个可用 daemon 并连上它。
 ///
 /// 1. 先试连 `socket`:连得上 → attach 已有 daemon,返回 `(client, None)`。
-/// 2. 连不上 → spawn 独立 `mineral serve` 子进程,轮询重连直到 ready,返回
-///    `(client, Some(handle))`;超时 [`SPAWN_TIMEOUT`] 仍连不上则 `bail!`。
+/// 2. **连不上**(socket 不存在 / 没人听)→ spawn 独立 `mineral serve` 子进程,
+///    轮询重连直到 ready,返回 `(client, Some(handle))`;超时 [`SPAWN_TIMEOUT`]
+///    仍连不上则 `bail!`。
+/// 3. **被拒**(busy / 版本不匹配——daemon 活着但握手拒绝)→ 直接冒泡人话错误,
+///    **不** spawn(socket 被占着,拉新 daemon 只会 bind 失败)。
 ///
 /// # Params:
 ///   - `socket`: daemon 监听的 unix socket 路径(见 `mineral_paths::socket_path`)。
@@ -38,9 +41,14 @@ pub(crate) async fn ensure(
     socket: &Path,
     kill_on_exit: bool,
 ) -> color_eyre::Result<(RemoteClient, Option<DaemonHandle>)> {
-    if let Ok(client) = RemoteClient::connect(socket).await {
-        mineral_log::info!(target: "daemon", "attached to existing daemon");
-        return Ok((client, None));
+    match RemoteClient::connect(socket).await {
+        Ok(client) => {
+            mineral_log::info!(target: "daemon", "attached to existing daemon");
+            return Ok((client, None));
+        }
+        // daemon 活着但拒绝(busy / 版本)→ 人话错误直接冒泡,不 spawn。
+        Err(e) if !unreachable_socket(&e) => return Err(e),
+        Err(_) => {}
     }
     mineral_log::info!(target: "daemon", "no daemon running, spawning one");
     let mut child = spawn_daemon()?;
@@ -54,6 +62,17 @@ pub(crate) async fn ensure(
             kill_on_exit,
         }),
     ))
+}
+
+/// 连接失败是否属于「socket 不可达」(文件不存在 / 没人听)——只有这类失败才该
+/// 走 spawn 路径;其余(握手被拒等)说明 daemon 活着,错误应原样冒泡给用户。
+fn unreachable_socket(e: &color_eyre::Report) -> bool {
+    e.downcast_ref::<std::io::Error>().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        )
+    })
 }
 
 /// 退出时是否应当结束 daemon:仅「本次亲手 spawn」且配置开关为 true。
@@ -72,11 +91,15 @@ pub(crate) fn should_kill_spawned(kill_on_exit: bool, spawned: bool) -> bool {
 ///
 /// 每轮额外 `try_wait` 看 daemon 子进程是否已经退出——退了就立刻捞它的 stderr 把**真因**
 /// 内联进报错(不再干等到超时),避免出现「did not become ready」这种无信息量的超时。
+/// 连上但被拒(busy / 版本)同样立即报错,不重试到超时。
 async fn connect_with_retry(socket: &Path, child: &mut Child) -> color_eyre::Result<RemoteClient> {
     let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
     loop {
-        if let Ok(client) = RemoteClient::connect(socket).await {
-            return Ok(client);
+        match RemoteClient::connect(socket).await {
+            Ok(client) => return Ok(client),
+            // daemon 活着但拒绝 → 重试无意义,人话错误直接冒泡。
+            Err(e) if !unreachable_socket(&e) => return Err(e),
+            Err(_) => {}
         }
         if let Some(status) = child.try_wait().wrap_err("poll spawned daemon")? {
             bail!("{}", daemon_died_report(child, status));

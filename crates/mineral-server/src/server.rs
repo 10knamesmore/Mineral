@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
-use mineral_protocol::PlayMode;
+use mineral_protocol::{Event, PlayMode};
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
+use tokio::sync::broadcast;
 
 use crate::client::ClientHandle;
 use crate::config::ServerConfig;
@@ -30,6 +31,11 @@ pub struct Server {
     /// 单 client 占用标志,与 [`serve::run`] 的 accept loop 共享:心跳据此报
     /// `client_connected`(daemon 当前有没有 TUI 连着)。
     busy: Arc<AtomicBool>,
+
+    /// Event 推送 hub:生产者(脚本运行时 / 将来的 daemon 内事件源)经
+    /// [`Server::event_sink`] 拿发送端;每条 client 连接握手后 subscribe,按
+    /// 订阅集过滤下发。无订阅者时 send 失败即丢(advisory 语义)。
+    events: broadcast::Sender<Event>,
 }
 
 impl Server {
@@ -59,13 +65,27 @@ impl Server {
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
         let busy = Arc::new(AtomicBool::new(false));
+        // 容量按「单 client + advisory 语义」取小;积压时 event_pump 收 Lagged 丢弃。
+        let (events, _) = broadcast::channel::<Event>(/*capacity*/ 256);
         tokio::spawn(heartbeat(
             player.clone(),
             Arc::clone(&busy),
             *config.daemon().heartbeat_secs(),
         ));
         mineral_log::debug!(target: "server", "server components ready");
-        Ok(Self { player, pcm, busy })
+        Ok(Self {
+            player,
+            pcm,
+            busy,
+            events,
+        })
+    }
+
+    /// Event 推送 hub 的发送端(clone 廉价)。生产者(脚本运行时 / 测试)往里
+    /// send,所有已连接且订阅了对应类别的 client 都会收到;无 client 时 send
+    /// 返回 `Err`,按 advisory 语义丢弃即可。
+    pub fn event_sink(&self) -> broadcast::Sender<Event> {
+        self.events.clone()
     }
 
     /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。
@@ -86,15 +106,23 @@ impl Server {
         drop(self);
     }
 
-    /// IPC accept loop:每条新 connection 跑 [`mineral_protocol::Request`] dispatch。
-    /// **单 client 限制**——已有 connection 时后续 incoming 立刻 `Response::Error`。
+    /// IPC accept loop:每条新 connection 走握手守门 + [`mineral_protocol::Frame`]
+    /// 管线(id 配对应答 + 订阅过滤的 Event 下推)。**单 client 限制**——已有
+    /// connection 时后续 incoming 不等握手直接收 `Hello { Busy }`。
     ///
     /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
     /// (新 client 拿得到 PlaylistsFetched / LikedSongIdsFetched events)。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
-        serve::run(listener, self.client(), Arc::clone(&self.busy), on_connect).await
+        serve::run(
+            listener,
+            self.client(),
+            Arc::clone(&self.busy),
+            self.events.clone(),
+            on_connect,
+        )
+        .await
     }
 }
 

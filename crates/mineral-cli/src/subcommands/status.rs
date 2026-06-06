@@ -1,50 +1,30 @@
 //! `mineral status` — connect daemon socket,拉一次 audio snapshot 打印。
 //!
-//! 验证 IPC 链路是否通。daemon 没起 / socket 文件 stale → 友好报错。
+//! 验证 IPC 链路是否通。daemon 没起 / socket 文件 stale / 版本不匹配 → 友好报错
+//! (握手与配对语义在 [`OneshotClient`] 内)。
 
-use color_eyre::eyre::{WrapErr, bail, eyre};
+use color_eyre::eyre::bail;
 use mineral_audio::{AudioBackend, AudioSnapshot};
-use mineral_protocol::{DownloadProgress, Request, Response, framed, recv, send};
-use tokio::net::UnixStream;
+use mineral_protocol::{DownloadProgress, OneshotClient, Request, Response};
 
-/// `mineral status` 入口:连 daemon socket → 发 [`Request::AudioSnapshot`] → 打印结果。
+/// `mineral status` 入口:连 daemon socket(含握手)→ 依次拉快照 / pid / 下载进度 → 打印。
 pub async fn run() -> color_eyre::Result<()> {
-    let socket_path = mineral_paths::runtime_dir()
-        .wrap_err("resolve runtime_dir")?
-        .join("mineral.sock");
-    let stream = UnixStream::connect(&socket_path).await.wrap_err_with(|| {
-        format!(
-            "connect daemon socket {} (run `mineral serve` first?)",
-            socket_path.display()
-        )
-    })?;
-    let mut conn = framed(stream);
+    let socket_path = mineral_paths::socket_path()?;
+    let mut client = OneshotClient::connect(&socket_path).await?;
 
-    send(&mut conn, &Request::AudioSnapshot).await?;
-    let snap = match recv::<Response, _>(&mut conn)
-        .await?
-        .ok_or_else(|| eyre!("daemon closed connection unexpectedly"))?
-    {
+    let snap = match client.request(Request::AudioSnapshot).await? {
         Response::AudioSnapshot(snap) => snap,
         Response::Error(msg) => bail!("daemon error: {msg}"),
         other => bail!("unexpected response: {other:?}"),
     };
 
-    send(&mut conn, &Request::DaemonInfo).await?;
-    let pid = match recv::<Response, _>(&mut conn)
-        .await?
-        .ok_or_else(|| eyre!("daemon closed connection unexpectedly"))?
-    {
+    let pid = match client.request(Request::DaemonInfo).await? {
         Response::DaemonInfo { pid } => pid,
         Response::Error(msg) => bail!("daemon error: {msg}"),
         other => bail!("unexpected response: {other:?}"),
     };
 
-    send(&mut conn, &Request::DownloadProgress).await?;
-    let progress = match recv::<Response, _>(&mut conn)
-        .await?
-        .ok_or_else(|| eyre!("daemon closed connection unexpectedly"))?
-    {
+    let progress = match client.request(Request::DownloadProgress).await? {
         Response::DownloadProgress(p) => p,
         Response::Error(msg) => bail!("daemon error: {msg}"),
         other => bail!("unexpected response: {other:?}"),

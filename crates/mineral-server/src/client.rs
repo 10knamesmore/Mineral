@@ -180,6 +180,16 @@ pub trait Client: Send + Sync {
     fn connected(&self) -> bool {
         true
     }
+
+    /// 拉走 server 主动推送的 [`mineral_protocol::Event`](与轮询式
+    /// [`Self::drain_task_events`] 是两条通道:这条是握手订阅后 server 随时下推、
+    /// client 侧缓冲,每 tick drain)。
+    ///
+    /// 跨进程实现(`RemoteClient`)返回缓冲的推送;同进程 / 测试实现用默认空
+    /// (in-proc 无推送通道,Phase 1 也没有 daemon 内生产者面向 in-proc)。
+    fn drain_events(&self) -> Vec<mineral_protocol::Event> {
+        Vec::new()
+    }
 }
 
 impl Client for ClientHandle {

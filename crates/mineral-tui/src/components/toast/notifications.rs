@@ -1,6 +1,7 @@
 //! topbar 通知层:多条 [`crate::components::toast::toast::Toast`] 的**堆叠管理器** + 通用纯文本内容 [`TextItem`]。
 //!
-//! 对外只有两个语义入口:[`Notifications::flash`](一次性、TTL 自动退场)与
+//! 对外三个语义入口:[`Notifications::flash`](一次性、TTL 自动退场)、
+//! [`Notifications::flash_keyed`](同 key 顶替不堆叠 + 续 TTL,高频更新类提示用)与
 //! [`Notifications::set_live`](按 [`LiveSlot`] 标识的常驻进度源,显式置 `None` 才退场)。
 //! 多条并存时垂直堆叠:**live 区在上、flash 区在下**,每条复用单条 [`crate::components::toast::toast::Toast`]
 //! 的居中括号 + 独立进出场动画。本层不持有任何业务语义 —— 「显示什么」由调用方喂 [`ToastItem`]。
@@ -33,6 +34,10 @@ enum Life {
     Flash {
         /// 退场时刻(推送时 = `now + flash_ttl`)。
         deadline: Instant,
+
+        /// 顶替键:同 key 的后续 [`Notifications::flash_keyed`] 替换本条内容并
+        /// 续 TTL;`None` 为匿名 flash,不参与顶替。
+        key: Option<String>,
     },
 
     /// 常驻源:由调用方显式 [`Notifications::set_live`] 置 `None` 才退场。
@@ -88,8 +93,49 @@ impl Notifications {
             toast,
             life: Life::Flash {
                 deadline: Instant::now() + self.flash_ttl,
+                key: None,
             },
         });
+    }
+
+    /// 推一条**带顶替键**的一次性通知:同 key 的存活条目被替换内容并续 TTL
+    /// (退场中也复活),不存在则新建。高频更新类提示(脚本音量观察等)用它防刷屏。
+    ///
+    /// # Params:
+    ///   - `key`: 顶替键
+    ///   - `item`: 要显示的内容
+    pub(crate) fn flash_keyed(&mut self, key: String, item: Box<dyn ToastItem>) {
+        self.flash_keyed_at(key, item, Instant::now());
+    }
+
+    /// [`Self::flash_keyed`] 实现体;`now` 可注入(测试确定性,与
+    /// [`Self::prune_expired`] 同款手法)。
+    fn flash_keyed_at(&mut self, key: String, item: Box<dyn ToastItem>, now: Instant) {
+        let deadline = now + self.flash_ttl;
+        let found = self
+            .entries
+            .iter_mut()
+            .find(|e| matches!(&e.life, Life::Flash { key: Some(k), .. } if *k == key));
+        match found {
+            Some(entry) => {
+                entry.toast.set(Some(item));
+                entry.life = Life::Flash {
+                    deadline,
+                    key: Some(key),
+                };
+            }
+            None => {
+                let mut toast = Toast::new(self.anim_ticks);
+                toast.set(Some(item));
+                self.entries.push(Entry {
+                    toast,
+                    life: Life::Flash {
+                        deadline,
+                        key: Some(key),
+                    },
+                });
+            }
+        }
     }
 
     /// 便捷:推一条一次性纯文本通知(内部构造 [`TextItem`])。
@@ -130,6 +176,12 @@ impl Notifications {
             .find(|e| matches!(e.life, Life::Live { slot: s } if s == slot))
     }
 
+    /// 当前条目数(含退场动画中的)。仅测试断言用。
+    #[cfg(test)]
+    pub(crate) fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     /// 每帧推进:① 过期 flash 触发退场;② 推进每条动画;③ 移除已休眠(退场归零)的条目。
     pub(crate) fn tick(&mut self) {
         self.prune_expired(Instant::now());
@@ -145,7 +197,7 @@ impl Notifications {
     ///   - `now`: 当前时刻(测试可注入)
     fn prune_expired(&mut self, now: Instant) {
         for entry in &mut self.entries {
-            if let Life::Flash { deadline } = entry.life
+            if let Life::Flash { deadline, .. } = entry.life
                 && now >= deadline
             {
                 entry.toast.set(None);
@@ -181,13 +233,29 @@ impl Notifications {
     }
 }
 
+/// 纯文本通知的语义级别 → 渲染时映射主题色(普通 `text` / 警告 `yellow` / 错误 `red`)。
+#[derive(Clone, Copy)]
+pub(crate) enum TextTint {
+    /// 普通信息。
+    Normal,
+
+    /// 警告。
+    Warn,
+
+    /// 错误。
+    Error,
+}
+
 /// 通用纯文本通知内容。
 pub(crate) struct TextItem {
     /// 提示文本。
     text: String,
+
+    /// 语义级别(决定前景色)。
+    tint: TextTint,
 }
 
-/// 用一段文本构造通知内容(boxed)。
+/// 用一段文本构造通知内容(boxed,普通级别)。
 ///
 /// # Params:
 ///   - `text`: 单行提示
@@ -195,7 +263,19 @@ pub(crate) struct TextItem {
 /// # Return:
 ///   boxed [`ToastItem`]。
 pub(crate) fn text_item(text: String) -> Box<dyn ToastItem> {
-    Box::new(TextItem { text })
+    tinted_text_item(text, TextTint::Normal)
+}
+
+/// 用一段文本 + 语义级别构造通知内容(boxed)。
+///
+/// # Params:
+///   - `text`: 单行提示
+///   - `tint`: 语义级别(决定前景色)
+///
+/// # Return:
+///   boxed [`ToastItem`]。
+pub(crate) fn tinted_text_item(text: String, tint: TextTint) -> Box<dyn ToastItem> {
+    Box::new(TextItem { text, tint })
 }
 
 impl ToastItem for TextItem {
@@ -206,9 +286,13 @@ impl ToastItem for TextItem {
     }
 
     fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+        let fg = match self.tint {
+            TextTint::Normal => theme.text,
+            TextTint::Warn => theme.yellow,
+            TextTint::Error => theme.red,
+        };
         frame.render_widget(
-            Paragraph::new(format!(" {} ", self.text))
-                .style(Style::new().fg(theme.text).bg(theme.base)),
+            Paragraph::new(format!(" {} ", self.text)).style(Style::new().fg(fg).bg(theme.base)),
             area,
         );
     }
@@ -287,6 +371,49 @@ mod tests {
         n.set_live(LiveSlot::DOWNLOAD, /*item*/ None);
         run(&mut n, 8); // 退场归零
         assert!(n.entries.is_empty(), "退场后应被清理");
+        Ok(())
+    }
+
+    /// flash_keyed:同 key 顶替不堆叠;不同 key / 匿名 flash 各自独立堆叠。
+    #[test]
+    fn flash_keyed_same_key_replaces_not_stacks() -> color_eyre::Result<()> {
+        let mut n = notifications();
+        n.flash_keyed("vol".to_owned(), text_item("音量 31".to_owned()));
+        n.flash_keyed("vol".to_owned(), text_item("音量 32".to_owned()));
+        n.flash_keyed("vol".to_owned(), text_item("音量 33".to_owned()));
+        assert_eq!(n.entries.len(), 1, "同 key 应顶替为一条");
+
+        n.flash_keyed("mode".to_owned(), text_item("shuffle".to_owned()));
+        assert_eq!(n.entries.len(), 2, "不同 key 各自一条");
+
+        n.flash_text("匿名提示".to_owned());
+        n.flash_text("匿名提示".to_owned());
+        assert_eq!(n.entries.len(), 4, "匿名 flash 不参与顶替,照常堆叠");
+        Ok(())
+    }
+
+    /// flash_keyed 顶替时续命:刷新把 deadline 推后,老 deadline 过点后仍存活,
+    /// 新 deadline 过点后才退场。
+    #[test]
+    fn flash_keyed_refreshes_deadline() -> color_eyre::Result<()> {
+        let mut n = notifications();
+        let t0 = Instant::now();
+        n.flash_keyed_at("vol".to_owned(), text_item("音量 31".to_owned()), t0);
+        // 2 秒后顶替:deadline 应推后到 t0+2+TTL。
+        n.flash_keyed_at(
+            "vol".to_owned(),
+            text_item("音量 32".to_owned()),
+            t0 + Duration::from_secs(2),
+        );
+        run(&mut n, 8); // 展开
+        // 老 deadline(t0+TTL)已过、新 deadline(t0+2+TTL)未到 → 应仍存活。
+        n.prune_expired(t0 + FLASH_TTL + Duration::from_secs(1));
+        run(&mut n, 8);
+        assert_eq!(n.entries.len(), 1, "续命后老 deadline 过点不该退场");
+        // 新 deadline 过点 → 退场清理。
+        n.prune_expired(t0 + Duration::from_secs(2) + FLASH_TTL + Duration::from_secs(1));
+        run(&mut n, 8);
+        assert!(n.entries.is_empty(), "新 deadline 过点应清理");
         Ok(())
     }
 

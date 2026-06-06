@@ -2697,6 +2697,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]
@@ -2706,6 +2707,7 @@ name = "mineral-server"
 version = "0.4.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "color-eyre",
  "derive-getters",
  "futures-util",
@@ -2784,6 +2786,7 @@ version = "0.4.2"
 dependencies = [
  "color-eyre",
  "crossterm 0.29.0",
+ "futures-util",
  "image",
  "insta",
  "isahc",

@@ -2,4 +2,5 @@
 
 pub mod download_toast;
 pub mod notifications;
+pub mod push;
 pub mod toast;
