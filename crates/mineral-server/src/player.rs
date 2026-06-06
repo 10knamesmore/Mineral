@@ -206,6 +206,11 @@ impl PlayerCore {
         self.inner.channels.iter().find(|ch| ch.source() == source)
     }
 
+    /// 已注入的全部音乐源(脚本 `library.playlists` 跨源聚合用)。
+    pub(crate) fn channels(&self) -> &[Arc<dyn MusicChannel>] {
+        &self.inner.channels
+    }
+
     /// 音频本体缓存句柄引用(下载 / capture 编排在 [`crate::download`] 复用)。
     pub(crate) fn media_cache(&self) -> &Arc<MediaCache> {
         &self.inner.media_cache
@@ -439,13 +444,33 @@ impl PlayerCore {
             st.bump_current();
         } else {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit SongUrl task");
-            self.inner.scheduler.submit(
+            let handle = self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     song_id: song.id.clone(),
                     quality: self.inner.playback_quality,
                 }),
                 Priority::User,
             );
+            // player 级播放失败信号:取链失败 = 这首播不下去,提升为
+            // `track_finished("error")`(脚本 / 订阅 client 可见)。
+            // Cancelled(切歌砍任务)不报;迟到失败再校验一道当前曲。
+            let player = self.clone();
+            let failed_song = song.clone();
+            tokio::spawn(async move {
+                if !matches!(handle.done().await, mineral_task::TaskOutcome::Failed) {
+                    return;
+                }
+                let still_current = player.with_state(|st| {
+                    st.current_song
+                        .as_ref()
+                        .is_some_and(|s| s.id == failed_song.id)
+                });
+                if still_current {
+                    player
+                        .notify()
+                        .track_finished(&failed_song, mineral_protocol::FinishReason::Error);
+                }
+            });
         }
         mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit Lyrics task");
         self.inner.scheduler.submit(
@@ -775,9 +800,13 @@ mod tests {
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
     /// `source()` 报 `NETEASE`,与 [`mineral_test::song`] 的来源对齐,确保被路由命中。
+    #[derive(Default)]
     struct RecordingChannel {
         /// 已记录的 on_played 调用:(歌曲 id、是否完播、收听毫秒)。
         calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>,
+
+        /// `song_urls` 失败前的人为延迟(竞态敏感的测试用它撑开时序窗口)。
+        url_delay: Option<Duration>,
     }
 
     #[async_trait]
@@ -819,6 +848,9 @@ mod tests {
             _ids: &[SongId],
             _quality: BitRate,
         ) -> ChannelResult<Vec<PlayUrl>> {
+            if let Some(delay) = self.url_delay {
+                tokio::time::sleep(delay).await;
+            }
             Err(Error::NotSupported)
         }
 
@@ -864,7 +896,10 @@ mod tests {
         calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>,
         persist: ServerStore,
     ) -> color_eyre::Result<PlayerCore> {
-        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel { calls })];
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+            calls,
+            url_delay: None,
+        })];
         core_with_channels(
             channels,
             persist,
@@ -890,6 +925,34 @@ mod tests {
         music_dir: Option<PathBuf>,
         media_cache: MediaCache,
     ) -> color_eyre::Result<PlayerCore> {
+        core_with_events(
+            channels,
+            persist,
+            music_dir,
+            media_cache,
+            // 测试出口:event hub 无订阅者(send 即丢)。
+            tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        )
+    }
+
+    /// 同 [`core_with_channels`],但允许注入 event hub 发送端(事件断言用)。
+    ///
+    /// # Params:
+    ///   - `channels`: 注入的音乐源。
+    ///   - `persist`: 持久化句柄。
+    ///   - `music_dir`: 下载导出根目录。
+    ///   - `media_cache`: 注入的音频缓存。
+    ///   - `events`: event hub 发送端(测试持接收端断言推送)。
+    ///
+    /// # Return:
+    ///   组装好的 [`PlayerCore`]。
+    fn core_with_events(
+        channels: Vec<Arc<dyn MusicChannel>>,
+        persist: ServerStore,
+        music_dir: Option<PathBuf>,
+        media_cache: MediaCache,
+        events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
+    ) -> color_eyre::Result<PlayerCore> {
         // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
         let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
         let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
@@ -905,11 +968,8 @@ mod tests {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            // 测试出口:event hub 无订阅者(send 即丢)、无脚本。
-            notify: crate::notify::Notifier::new(
-                tokio::sync::broadcast::channel(/*capacity*/ 8).0,
-                /*script*/ None,
-            ),
+            // 无脚本(脚本路由 mineral-script 的 runtime 测试与 daemon e2e 覆盖)。
+            notify: crate::notify::Notifier::new(events, /*script*/ None),
             props: crate::props::PropsWatch::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
@@ -1437,6 +1497,77 @@ mod tests {
         Ok(())
     }
 
+    /// SongUrl 取链失败 → player 级播放失败信号:wire 推 `TrackFinished{reason: Error}`
+    /// (RecordingChannel 的 `song_urls` 恒 `Err`,任务必然 `Failed`)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn play_song_url_failure_notifies_error() -> color_eyre::Result<()> {
+        use mineral_protocol::{Event, FinishReason};
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+            calls,
+            url_delay: None,
+        })];
+        let core = core_with_events(
+            channels,
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            events_tx,
+        )?;
+        let target = song("e1");
+        core.play_song(&target);
+        // SongUrl 任务在 worker 上跑失败 → 监视 task 报 Error;轮询等事件(带超时)。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match events_rx.try_recv() {
+                Ok(Event::TrackFinished { song_id, reason }) => {
+                    assert_eq!(song_id, target.id);
+                    assert_eq!(reason, FinishReason::Error);
+                    return Ok(());
+                }
+                Ok(_other) => {}
+                Err(_empty) => {
+                    if std::time::Instant::now() > deadline {
+                        color_eyre::eyre::bail!("超时未收到 TrackFinished(Error)");
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+    }
+
+    /// 取链失败但用户已切走(失败的不是当前曲)→ 不报 Error(防迟到误报)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_url_failure_does_not_notify() -> color_eyre::Result<()> {
+        use mineral_protocol::Event;
+        let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
+        // 失败前人为延迟:保证「切走」必然发生在任务失败之前,时序确定不 flaky。
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+            calls,
+            url_delay: Some(Duration::from_millis(200)),
+        })];
+        let core = core_with_events(
+            channels,
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            events_tx,
+        )?;
+        core.play_song(&song("e1"));
+        // 立即切走:当前曲不再是 e1,e1 的失败(或被 cancel)不该报。
+        core.with_state(|st| st.current_song = Some(song("e2")));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while let Ok(event) = events_rx.try_recv() {
+            assert!(
+                !matches!(event, Event::TrackFinished { ref song_id, .. } if song_id == &song("e1").id),
+                "已切走的失败不该报 TrackFinished,实得 {event:?}"
+            );
+        }
+        Ok(())
+    }
+
     /// play_song(手动切歌)应清掉过期的 gapless 预排(`queued`),防止跨切歌泄漏预排状态。
     #[tokio::test]
     async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
@@ -1528,7 +1659,10 @@ mod tests {
 
         // 2. 用同一 music_dir + media_cache 起 core,播放。
         let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
-        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel { calls })];
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+            calls,
+            url_delay: None,
+        })];
         let core = core_with_channels(channels, persist, Some(music_dir), media_cache)?;
         core.play_song(&s);
 

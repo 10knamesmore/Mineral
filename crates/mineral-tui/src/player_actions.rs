@@ -17,11 +17,53 @@ impl App {
         let Some(name) = self.keymap.script_action(slot).map(str::to_owned) else {
             return;
         };
-        if let Some(err) = self.client.invoke_action(&name) {
+        let ctx = self.collect_key_context();
+        if let Some(err) = self.client.invoke_action(&name, Some(ctx)) {
             use crate::components::toast::notifications::{TextTint, tinted_text_item};
             self.notifications
                 .flash(tinted_text_item(err, TextTint::Error));
         }
+    }
+
+    /// 采集按键瞬间的上下文快照(脚本动作的 `ctx` 实参)。
+    ///
+    /// view 判定优先级对齐 `handle_key` 的吃键顺序:队列浮层 > 搜索态 > 全屏 >
+    /// 主视图映射(`Playlists` → Playlists,`Library` → Tracks)。选中歌只在
+    /// 「有歌列表光标」的视图采(Library 列表 / 队列浮层光标),其余为 `None`。
+    pub(crate) fn collect_key_context(&self) -> mineral_protocol::KeyContext {
+        use mineral_protocol::{KeyContext, ViewKind};
+        let now_playing_id = self.state.current.as_ref().map(|s| s.id.clone());
+        let selected_playlist_id = self.state.selected_playlist().map(|p| p.data.id.clone());
+        if let Some(cursor) = self.overlays.active_queue_cursor() {
+            return KeyContext::builder()
+                .view(ViewKind::Queue)
+                .selected_song_id(self.state.queue.get(cursor).map(|s| s.id.clone()))
+                .selected_playlist_id(selected_playlist_id)
+                .now_playing_id(now_playing_id)
+                .build();
+        }
+        let (view, selected_song_id) = if self.state.search_mode {
+            (ViewKind::Search, None)
+        } else if self.state.fullscreen {
+            (ViewKind::Fullscreen, None)
+        } else {
+            match self.state.view {
+                View::Playlists => (ViewKind::Playlists, None),
+                View::Library => (
+                    ViewKind::Tracks,
+                    self.state
+                        .filtered_tracks()
+                        .get(self.state.sel_track)
+                        .map(|sv| sv.data.id.clone()),
+                ),
+            }
+        };
+        KeyContext::builder()
+            .view(view)
+            .selected_song_id(selected_song_id)
+            .selected_playlist_id(selected_playlist_id)
+            .now_playing_id(now_playing_id)
+            .build()
     }
 
     /// 空格键:有当前曲目时在 pause/resume 间切换;没歌时无动作。
@@ -101,5 +143,85 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_protocol::ViewKind;
+
+    use crate::test_support::{app_with_library, app_with_queue};
+
+    /// Library 视图:view 映射 Tracks,选中歌 / 所在歌单 / 在播全采到。
+    #[test]
+    fn keyctx_library_view_collects_selection() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 1)?;
+        app.state.current = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|sv| sv.data.clone());
+        let ctx = app.collect_key_context();
+        assert_eq!(*ctx.view(), ViewKind::Tracks);
+        let want_sel = app
+            .state
+            .filtered_tracks()
+            .get(1)
+            .map(|sv| sv.data.id.clone());
+        assert_eq!(ctx.selected_song_id().clone(), want_sel);
+        assert!(
+            ctx.selected_playlist_id().is_some(),
+            "Library 视图下所在歌单也算选中"
+        );
+        assert_eq!(
+            ctx.now_playing_id().clone(),
+            app.state.current.as_ref().map(|s| s.id.clone())
+        );
+        Ok(())
+    }
+
+    /// Playlists 视图:选中歌单命中、选中歌为 None。
+    #[test]
+    fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
+        app.state.view = crate::runtime::state::View::Playlists;
+        app.state.current = None;
+        let ctx = app.collect_key_context();
+        assert_eq!(*ctx.view(), ViewKind::Playlists);
+        assert_eq!(*ctx.selected_song_id(), None);
+        assert!(ctx.selected_playlist_id().is_some());
+        assert_eq!(*ctx.now_playing_id(), None, "停止态在播为 None");
+        Ok(())
+    }
+
+    /// 队列浮层开着:view 报 Queue,选中歌取浮层光标所指的队列条目。
+    #[test]
+    fn keyctx_queue_overlay_selects_cursor_entry() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 3, /*current_idx*/ 0)?;
+        app.overlays
+            .push(crate::components::popup::OverlayKind::queue(/*sel*/ 2));
+        let ctx = app.collect_key_context();
+        assert_eq!(*ctx.view(), ViewKind::Queue);
+        assert_eq!(
+            ctx.selected_song_id().clone(),
+            app.state.queue.get(2).map(|s| s.id.clone()),
+            "浮层光标所指条目算选中"
+        );
+        Ok(())
+    }
+
+    /// 全屏态:view 报 Fullscreen,无列表选中,在播照常。
+    #[test]
+    fn keyctx_fullscreen_reports_now_playing() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 2, /*current_idx*/ 1)?;
+        app.state.fullscreen = true;
+        let ctx = app.collect_key_context();
+        assert_eq!(*ctx.view(), ViewKind::Fullscreen);
+        assert_eq!(*ctx.selected_song_id(), None);
+        assert_eq!(
+            ctx.now_playing_id().clone(),
+            app.state.current.as_ref().map(|s| s.id.clone())
+        );
+        Ok(())
     }
 }

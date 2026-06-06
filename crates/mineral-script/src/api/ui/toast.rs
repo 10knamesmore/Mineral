@@ -1,63 +1,60 @@
-//! `mineral.ui.toast` 与 `mineral.log.{info,warn}`:脚本对用户 / 日志的
-//! 两条出声通道。
+//! `mineral.ui.toast(msg, opts)`:推送 toast 到 client(同 id 顶替不堆叠)。
 
 use mineral_protocol::{Event, ToastKind};
 use mlua::{Lua, Table};
 
 use crate::host::ScriptHost;
 
-/// 把 `ui` / `log` 两张子表挂到 `mineral` 表上。
+/// `toast` 的已解析 opts(Lua 表 → 强类型边界)。
+struct ToastOpts {
+    /// 视觉级别(缺省 `Info`)。
+    kind: ToastKind,
+
+    /// 顶替键(同 id 替换不堆叠;缺省不参与顶替)。
+    id: Option<String>,
+
+    /// 展示秒数(缺省用 client 配置 `toast.flash_ttl_secs`)。
+    ttl_secs: Option<u64>,
+}
+
+/// 把 `toast` 挂到 `ui` 子表上。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
-///   - `host`: 宿主句柄(toast 闭包捕获其 push 出口)
-pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
-    let ui = lua.create_table()?;
+///   - `ui`: `mineral.ui` 子表
+///   - `host`: 宿主句柄(闭包捕获其推送出口)
+pub(crate) fn install(lua: &Lua, ui: &Table, host: &ScriptHost) -> mlua::Result<()> {
     let push = host.push.clone();
     ui.set(
         "toast",
         lua.create_function(move |_lua, (msg, opts): (String, Option<Table>)| {
-            let (kind, id) = parse_toast_opts(opts.as_ref())?;
+            let opts = parse_opts(opts.as_ref())?;
             // 接收端关闭(daemon 停机)时静默丢,脚本不感知。
             let _ = push.send(Event::Toast {
-                kind,
+                kind: opts.kind,
                 content: msg,
-                id,
+                id: opts.id,
+                ttl_secs: opts.ttl_secs,
             });
             Ok(())
         })?,
-    )?;
-    mineral.set("ui", ui)?;
-
-    let log = lua.create_table()?;
-    log.set(
-        "info",
-        lua.create_function(|_lua, msg: String| {
-            mineral_log::info!(target: "script", "{msg}");
-            Ok(())
-        })?,
-    )?;
-    log.set(
-        "warn",
-        lua.create_function(|_lua, msg: String| {
-            mineral_log::warn!(target: "script", "{msg}");
-            Ok(())
-        })?,
-    )?;
-    mineral.set("log", log)
+    )
 }
 
-/// 解析 toast 的可选 opts 表:`{ kind?: "info"|"warn"|"error", id?: string }`。
+/// 解析 opts 表:`{ kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }`。
 ///
 /// # Params:
 ///   - `opts`: Lua 侧第二个实参(省略为 `None`)
 ///
 /// # Return:
-///   `(kind, id)`;kind 缺省 `Info`,未知 kind 名报 Lua 错(不静默降级)。
-fn parse_toast_opts(opts: Option<&Table>) -> mlua::Result<(ToastKind, Option<String>)> {
+///   解析后的 [`ToastOpts`];未知 kind 名 / 负 ttl 报 Lua 错(不静默降级)。
+fn parse_opts(opts: Option<&Table>) -> mlua::Result<ToastOpts> {
     let Some(opts) = opts else {
-        return Ok((ToastKind::Info, None));
+        return Ok(ToastOpts {
+            kind: ToastKind::Info,
+            id: None,
+            ttl_secs: None,
+        });
     };
     let kind = match opts.get::<Option<String>>("kind")?.as_deref() {
         None | Some("info") => ToastKind::Info,
@@ -70,31 +67,27 @@ fn parse_toast_opts(opts: Option<&Table>) -> mlua::Result<(ToastKind, Option<Str
         }
     };
     let id = opts.get::<Option<String>>("id")?;
-    Ok((kind, id))
+    let ttl_secs = opts
+        .get::<Option<i64>>("ttl_secs")?
+        .map(|raw| {
+            u64::try_from(raw).map_err(|_negative| {
+                mlua::Error::RuntimeError(format!("toast ttl_secs must be >= 0, got {raw}"))
+            })
+        })
+        .transpose()?;
+    Ok(ToastOpts { kind, id, ttl_secs })
 }
 
 #[cfg(test)]
 mod tests {
     use mineral_protocol::{Event, ToastKind};
-    use mlua::Lua;
-    use tokio::sync::mpsc::unbounded_channel;
 
-    use crate::host::{ScriptHost, install_api};
-
-    /// 装好 API 的 VM + push 接收端。
-    fn vm_with_push() -> color_eyre::Result<(Lua, tokio::sync::mpsc::UnboundedReceiver<Event>)> {
-        let (cmd_tx, _cmd_rx) = unbounded_channel();
-        let (push_tx, push_rx) = unbounded_channel();
-        let host = ScriptHost::new(cmd_tx, push_tx);
-        let lua = Lua::new();
-        install_api(&lua, &host)?;
-        Ok((lua, push_rx))
-    }
+    use crate::api::test_support::vm_with_push;
 
     #[test]
     fn toast_with_opts_reaches_push_sink() -> color_eyre::Result<()> {
         let (lua, mut push_rx) = vm_with_push()?;
-        lua.load(r#"mineral.ui.toast("hello", { kind = "warn", id = "greet" })"#)
+        lua.load(r#"mineral.ui.toast("hello", { kind = "warn", id = "greet", ttl_secs = 10 })"#)
             .exec()?;
         let event = push_rx.try_recv()?;
         assert_eq!(
@@ -103,6 +96,7 @@ mod tests {
                 kind: ToastKind::Warn,
                 content: "hello".to_owned(),
                 id: Some("greet".to_owned()),
+                ttl_secs: Some(10),
             }
         );
         Ok(())
@@ -119,6 +113,7 @@ mod tests {
                 kind: ToastKind::Info,
                 content: "plain".to_owned(),
                 id: None,
+                ttl_secs: None,
             }
         );
         Ok(())
@@ -136,10 +131,13 @@ mod tests {
     }
 
     #[test]
-    fn log_calls_do_not_error() -> color_eyre::Result<()> {
-        let (lua, _push_rx) = vm_with_push()?;
-        lua.load(r#"mineral.log.info("i"); mineral.log.warn("w")"#)
-            .exec()?;
+    fn toast_invalid_ttl_is_lua_error() -> color_eyre::Result<()> {
+        let (lua, mut push_rx) = vm_with_push()?;
+        let result = lua
+            .load(r#"mineral.ui.toast("x", { ttl_secs = -1 })"#)
+            .exec();
+        assert!(result.is_err(), "负 ttl 必须报 Lua 错");
+        assert!(push_rx.try_recv().is_err(), "报错时不得发出 toast");
         Ok(())
     }
 }

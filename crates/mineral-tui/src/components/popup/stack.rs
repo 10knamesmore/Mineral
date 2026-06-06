@@ -206,6 +206,15 @@ impl OverlayStack {
             .any(|m| m.anim.leaving() && !m.kind.chrome().dock)
     }
 
+    /// 活跃栈顶是队列浮层时返回其光标下标(脚本动作的 ctx 采集用),否则 `None`。
+    pub(crate) fn active_queue_cursor(&self) -> Option<usize> {
+        let top = self.active_top_index()?;
+        match self.stack.get(top).map(|m| &m.kind) {
+            Some(OverlayKind::Queue(q)) => Some(q.cursor()),
+            _ => None,
+        }
+    }
+
     /// 栈内是否有断连提示(据此进入 fatal 模式:跳过后端同步、任意键退出)。
     pub(crate) fn is_disconnected(&self) -> bool {
         self.stack

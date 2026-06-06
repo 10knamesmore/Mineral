@@ -14,7 +14,10 @@ pub async fn run(name: &str) -> color_eyre::Result<()> {
     let socket_path = mineral_paths::socket_path()?;
     let mut client = OneshotClient::connect(&socket_path).await?;
     match client
-        .request(Request::InvokeAction(name.to_owned()))
+        .request(Request::InvokeAction {
+            name: name.to_owned(),
+            ctx: None, // CLI 无界面,采不到按键上下文
+        })
         .await?
     {
         Response::Ok => {

@@ -13,14 +13,16 @@ mineral-audio        = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-task         = { workspace = true }
 
-bincode    = { workspace = true }
-bytes      = { workspace = true }
-color-eyre = { workspace = true }
-rustc-hash = { workspace = true }
-serde      = { workspace = true }
-tokio      = { workspace = true }
-tokio-util = { workspace = true }
-futures-util = { workspace = true }
+bincode        = { workspace = true }
+bytes          = { workspace = true }
+color-eyre     = { workspace = true }
+derive-getters = { workspace = true }
+rustc-hash     = { workspace = true }
+serde          = { workspace = true }
+tokio          = { workspace = true }
+tokio-util     = { workspace = true }
+futures-util   = { workspace = true }
+typed-builder  = { workspace = true }
 
 [dev-dependencies]
 tokio             = { workspace = true, features = ["macros", "io-util"] }

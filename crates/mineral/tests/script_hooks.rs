@@ -27,6 +27,9 @@ struct Daemon {
 
     /// daemon 监听的 socket 路径。
     socket: PathBuf,
+
+    /// Drop 时是否清目录(`stop_keep_data` 置 false 保留数据给下一只)。
+    cleanup: bool,
 }
 
 impl Daemon {
@@ -39,6 +42,12 @@ impl Daemon {
             std::process::id(),
             unique_suffix()
         ));
+        Self::spawn_in(root, config_lua)
+    }
+
+    /// 在指定 root 下起 daemon(跨重启持久性测试:第二只复用第一只的数据目录)。
+    /// `config_lua` 为 `None` 时保留 root 内既有 config(若有)。
+    fn spawn_in(root: PathBuf, config_lua: Option<&str>) -> color_eyre::Result<Self> {
         let sock_dir =
             std::env::temp_dir().join(format!("mnls-{}-{}", std::process::id(), unique_suffix()));
         std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
@@ -64,7 +73,17 @@ impl Daemon {
             root,
             sock_dir,
             socket,
+            cleanup: true,
         })
+    }
+
+    /// 停掉 daemon 但保留数据目录(跨重启持久性测试用),返回 root 供第二只复用。
+    fn stop_keep_data(mut self) -> PathBuf {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.sock_dir);
+        self.cleanup = false;
+        self.root.clone()
     }
 
     /// 轮询直到 socket 可连(daemon ready),超时则报错。
@@ -97,8 +116,10 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.root);
-        let _ = std::fs::remove_dir_all(&self.sock_dir);
+        if self.cleanup {
+            let _ = std::fs::remove_dir_all(&self.root);
+            let _ = std::fs::remove_dir_all(&self.sock_dir);
+        }
     }
 }
 
@@ -145,6 +166,87 @@ fn registered_action_runs_and_failures_surface() -> color_eyre::Result<()> {
         stderr.contains("kapow"),
         "错误应带回调失败信息,实得: {stderr}"
     );
+    Ok(())
+}
+
+/// 经 wire 读一条 per-song 持久值(连 socket → 握手 → `StoreGet`)。
+async fn store_get(
+    socket: &std::path::Path,
+    song: mineral_model::SongId,
+    key: &str,
+) -> color_eyre::Result<mineral_protocol::StoreValue> {
+    use mineral_protocol::{OneshotClient, Request, Response};
+    let mut client = OneshotClient::connect(socket).await?;
+    match client
+        .request(Request::StoreGet {
+            song,
+            key: key.to_owned(),
+        })
+        .await?
+    {
+        Response::StoreValue(value) => Ok(value),
+        other => bail!("unexpected response: {other:?}"),
+    }
+}
+
+/// 轮询 store 值直到等于期望(脚本 inc 是异步落库)或超时。
+async fn wait_store_int(
+    socket: &std::path::Path,
+    song: &mineral_model::SongId,
+    key: &str,
+    want: i64,
+) -> color_eyre::Result<()> {
+    use mineral_protocol::StoreValue;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        // 连接失败也重试:单 client daemon,上一个 CLI 进程断开与 busy 清理有竞窗。
+        match store_get(socket, song.clone(), key).await {
+            Ok(got) if got == StoreValue::Int(want) => return Ok(()),
+            Ok(got) if Instant::now() > deadline => {
+                bail!("store 值未达期望 {want},实得 {got:?}")
+            }
+            Err(e) if Instant::now() > deadline => {
+                return Err(e.wrap_err("store_get 直到超时仍失败"));
+            }
+            Ok(_) | Err(_) => {}
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 脚本 `store.inc` 落库持久:同一数据目录重启 daemon 后值仍在。
+/// 顺带穿一遍 wire 的 `StoreGet` dispatch(rust 侧直连 socket 断言)。
+#[tokio::test]
+async fn store_survives_daemon_restart() -> color_eyre::Result<()> {
+    use mineral_model::{SongId, SourceKind};
+    let song = SongId::new(SourceKind::NETEASE, "42");
+    let first = Daemon::spawn(
+        "store",
+        Some(
+            r#"
+            mineral.action("e2e.bump", function(ctx)
+                mineral.store.inc("netease:42", "plugin.n", 1)
+            end)
+            return {}
+            "#,
+        ),
+    )?;
+    first.wait_ready()?;
+    let bumped = first.action_output("e2e.bump")?;
+    assert!(
+        bumped.status.success(),
+        "bump 应成功,stderr: {}",
+        String::from_utf8_lossy(&bumped.stderr)
+    );
+    let bumped = first.action_output("e2e.bump")?;
+    assert!(bumped.status.success(), "第二次 bump 应成功");
+    wait_store_int(&first.socket, &song, "plugin.n", /*want*/ 2).await?;
+
+    // 杀第一只、保留数据目录,同 root 起第二只 → 值持久
+    let root = first.stop_keep_data();
+    let second = Daemon::spawn_in(root, /*config_lua*/ None)?;
+    second.wait_ready()?;
+    wait_store_int(&second.socket, &song, "plugin.n", /*want*/ 2).await?;
     Ok(())
 }
 

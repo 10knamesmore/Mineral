@@ -37,9 +37,20 @@ mineral = {}
 ---@overload fun(event: "download_completed", fn: fun(args: mineral.DownloadCompletedArgs))
 function mineral.on(event, fn) end
 
+--- 按键瞬间 client 正在展示的视图(与 Rust `ViewKind` 由守卫测试钉死同步)。
+---@alias mineral.ViewKind "playlists"|"tracks"|"queue"|"fullscreen"|"search"
+
+--- 动作回调收到的上下文(按键瞬间采集;CLI 等无界面触发面为空表,字段全 nil)。
+---@class mineral.ActionCtx
+---@field view mineral.ViewKind|nil  按键时所在视图
+---@field selected_song_id string|nil  列表光标选中的歌(队列浮层取光标条目)
+---@field selected_playlist_id string|nil  选中 / 所在的歌单
+---@field now_playing_id string|nil  在播的歌(停止态 nil)
+
 --- 注册具名动作(物理键解耦,多 client 共用触发面)。重名 / 空名报错。
+--- 触发面:TUI `tui.keys.script` 绑键(ctx 带按键上下文)/ CLI `mineral action <name>`(ctx 空表)。
 ---@param name string  动作注册名,如 "my.skip_short"
----@param fn fun(ctx: table): nil
+---@param fn fun(ctx: mineral.ActionCtx): nil
 function mineral.action(name, fn) end
 
 --- 语法糖:匿名动作 + keys 表追加。**尚未实现**:当前调用只记一条
@@ -112,12 +123,99 @@ function mineral.player.set_mode(mode) end
 ---@param song_id string
 function mineral.player.play(song_id) end
 
+--- per-song 持久 KV 的标量值(`nil` 写入 = 删除该 key)。
+---@alias mineral.StoreValue integer|number|string|boolean|nil
+
+---@class mineral.store
+mineral.store = {}
+
+--- 读 per-song 持久值(回调风格,不阻塞脚本线程)。
+--- 成功 `fn(值, nil)`(未命中值为 nil);失败 `fn(nil, 错误串)`。
+---@param song_id string  歌曲 id(`namespace:value` 全限定形式)
+---@param key string  开放键(建议带 `.` 前缀,如 "plugin.skipcount")
+---@param fn fun(value: mineral.StoreValue, err: string|nil): nil
+function mineral.store.get(song_id, key, fn) end
+
+--- 写 per-song 持久值(fire-and-forget;`nil` 删除该 key)。
+--- 保留键(`local_play_count` / `rating` / `last_played`)拒写。
+---@param song_id string
+---@param key string
+---@param value mineral.StoreValue
+function mineral.store.set(song_id, key, value) end
+
+--- per-song 数值自增(key 不存在以 delta 起步;现有值非整数报错)。
+--- 带回调时 `fn(自增后的值, nil)` / `fn(nil, 错误串)`。
+---@param song_id string
+---@param key string
+---@param delta integer  增量(可负)
+---@param fn? fun(value: integer|nil, err: string|nil): nil
+function mineral.store.inc(song_id, key, delta, fn) end
+
+---@class mineral.queue
+mineral.queue = {}
+
+--- 读当前播放队列(回调风格;数组顺序即队列顺序)。
+--- 跳播用 `mineral.player.play(song.id)`。队列编辑是规划中的能力,本期只读。
+---@param fn fun(songs: mineral.Song[], err: string|nil): nil
+function mineral.queue.list(fn) end
+
+--- 歌单的轻量投影(`library.playlists` 出参;曲目另经 `library.tracks` 拉)。
+---@class mineral.PlaylistBrief
+---@field id string  歌单 id(`namespace:value`)
+---@field name string  歌单名
+---@field track_count integer  曲目数
+
+---@class mineral.library
+mineral.library = {}
+
+--- 读用户歌单列表(跨源聚合;某源拉取失败跳过该源,不整体失败)。
+---@param fn fun(playlists: mineral.PlaylistBrief[], err: string|nil): nil
+function mineral.library.playlists(fn) end
+
+--- 读指定歌单的曲目。
+---@param playlist_id string  歌单 id(`namespace:value`)
+---@param fn fun(songs: mineral.Song[], err: string|nil): nil
+function mineral.library.tracks(playlist_id, fn) end
+
+--- 设/取消一首歌的 love(♥)。fire-and-forget(本地 persist + 远端)。
+---@param song_id string
+---@param loved boolean
+function mineral.library.love(song_id, loved) end
+
+--- 定时器句柄(`timer.after` / `timer.every` 返回)。
+---@class mineral.Timer
+local Timer = {}
+
+--- 暂停:冻结剩余计时(已暂停 / 已注销 no-op)。
+function Timer:stop() end
+
+--- 续跑:从冻结的剩余计时处继续。
+function Timer:resume() end
+
+--- 注销(幂等;一次性 `after` 触发后自动注销)。
+function Timer:kill() end
+
+---@class mineral.timer
+mineral.timer = {}
+
+--- 一次性定时器:`ms` 毫秒后触发一次(回调与事件回调同受看门狗保护)。
+---@param ms integer
+---@param fn fun(): nil
+---@return mineral.Timer
+function mineral.timer.after(ms, fn) end
+
+--- 周期定时器:每 `ms` 毫秒触发(慢回调不会重入 —— 脚本线程串行)。
+---@param ms integer
+---@param fn fun(): nil
+---@return mineral.Timer
+function mineral.timer.every(ms, fn) end
+
 ---@class mineral.ui
 mineral.ui = {}
 
 --- 推送 toast 到 client(同 id 替换不堆叠)。
 ---@param msg string
----@param opts? { kind?: "info"|"warn"|"error", id?: string }
+---@param opts? { kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }  ttl_secs 缺省用 client 配置(toast.flash_ttl_secs)
 function mineral.ui.toast(msg, opts) end
 
 ---@class mineral.log

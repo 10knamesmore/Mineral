@@ -175,7 +175,42 @@ pub enum Request {
     // ---- 脚本 ----
     /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
     /// 未注册 / 脚本未启用 / 回调失败返回 [`Response::Error`]。
-    InvokeAction(String),
+    InvokeAction {
+        /// 动作注册名(config.lua 里 `mineral.action` 的第一个参数)。
+        name: String,
+
+        /// 按键瞬间的 client 上下文(TUI 采集;CLI 等无界面触发面为 `None`)。
+        ctx: Option<crate::KeyContext>,
+    },
+
+    // ---- per-song 持久 KV ----
+    /// 读 per-song 持久值(开放 key)。返回 [`Response::StoreValue`](未命中 `Nil`)。
+    StoreGet {
+        /// 目标歌。
+        song: SongId,
+        /// 开放键(如 `plugin.skipcount`)。
+        key: String,
+    },
+
+    /// 写 per-song 持久值(开放 key;`Nil` 删除)。返回 [`Response::Ok`]。
+    StoreSet {
+        /// 目标歌。
+        song: SongId,
+        /// 开放键。
+        key: String,
+        /// 标量值。
+        value: crate::StoreValue,
+    },
+
+    /// per-song 数值自增。返回 [`Response::StoreValue`](自增后的值)。
+    StoreInc {
+        /// 目标歌。
+        song: SongId,
+        /// 开放键。
+        key: String,
+        /// 增量(可负)。
+        delta: i64,
+    },
 }
 
 /// Server → Client 应答。
@@ -221,6 +256,9 @@ pub enum Response {
 
     /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。
     DownloadProgress(DownloadProgress),
+
+    /// 对应 [`Request::StoreGet`] / [`Request::StoreInc`]:标量值(未命中 `Nil`)。
+    StoreValue(crate::StoreValue),
 
     /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。
     Error(String),

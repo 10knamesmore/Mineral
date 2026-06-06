@@ -36,8 +36,7 @@ impl QueueOverlay {
         self.sel = self.sel.min(len.saturating_sub(1));
     }
 
-    /// 当前光标行(供栈聚合给集成测试断言)。
-    #[cfg(test)]
+    /// 当前光标行(脚本动作 ctx 采集 / 集成测试断言用)。
     pub(crate) fn cursor(&self) -> usize {
         self.sel
     }

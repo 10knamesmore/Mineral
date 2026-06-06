@@ -298,10 +298,26 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
         Request::DaemonInfo => Response::DaemonInfo {
             pid: std::process::id(),
         },
-        Request::InvokeAction(name) => match client.invoke_action_async(&name).await {
+        Request::InvokeAction { name, ctx } => match client.invoke_action_async(&name, ctx).await {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error(mineral_log::chain(&e)),
         },
+        Request::StoreGet { song, key } => match client.store_get_async(&song, &key).await {
+            Ok(value) => Response::StoreValue(value),
+            Err(e) => Response::Error(mineral_log::chain(&e)),
+        },
+        Request::StoreSet { song, key, value } => {
+            match client.store_set_async(&song, &key, &value).await {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error(mineral_log::chain(&e)),
+            }
+        }
+        Request::StoreInc { song, key, delta } => {
+            match client.store_inc_async(&song, &key, delta).await {
+                Ok(value) => Response::StoreValue(value),
+                Err(e) => Response::Error(mineral_log::chain(&e)),
+            }
+        }
         Request::ToggleLove(id) => match client.toggle_love_async(&id).await {
             Ok(new) => Response::LoveToggled(new),
             Err(e) => Response::Error(mineral_log::chain(&e)),
@@ -342,7 +358,10 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::PrevOrRestart => Some("PrevOrRestart"),
         Request::NextSong => Some("NextSong"),
         Request::DaemonInfo => Some("DaemonInfo"),
-        Request::InvokeAction(_) => Some("InvokeAction"),
+        Request::InvokeAction { .. } => Some("InvokeAction"),
+        Request::StoreGet { .. } => Some("StoreGet"),
+        Request::StoreSet { .. } => Some("StoreSet"),
+        Request::StoreInc { .. } => Some("StoreInc"),
         Request::ToggleLove(_) => Some("ToggleLove"),
         Request::QuerySongStats(_) => Some("QuerySongStats"),
         Request::Download(_) => Some("Download"),

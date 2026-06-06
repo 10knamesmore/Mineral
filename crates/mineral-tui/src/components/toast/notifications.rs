@@ -87,12 +87,21 @@ impl Notifications {
     /// # Params:
     ///   - `item`: 要显示的内容
     pub(crate) fn flash(&mut self, item: Box<dyn ToastItem>) {
+        self.flash_for(item, /*ttl*/ None);
+    }
+
+    /// 同 [`Self::flash`],但可覆盖展示时长(脚本 toast 的 `ttl_secs`)。
+    ///
+    /// # Params:
+    ///   - `item`: 要显示的内容
+    ///   - `ttl`: 展示时长;`None` 用配置默认(`toast.flash_ttl_secs`)
+    pub(crate) fn flash_for(&mut self, item: Box<dyn ToastItem>, ttl: Option<Duration>) {
         let mut toast = Toast::new(self.anim_ticks);
         toast.set(Some(item));
         self.entries.push(Entry {
             toast,
             life: Life::Flash {
-                deadline: Instant::now() + self.flash_ttl,
+                deadline: Instant::now() + ttl.unwrap_or(self.flash_ttl),
                 key: None,
             },
         });
@@ -104,14 +113,26 @@ impl Notifications {
     /// # Params:
     ///   - `key`: 顶替键
     ///   - `item`: 要显示的内容
-    pub(crate) fn flash_keyed(&mut self, key: String, item: Box<dyn ToastItem>) {
-        self.flash_keyed_at(key, item, Instant::now());
+    ///   - `ttl`: 展示时长;`None` 用配置默认(`toast.flash_ttl_secs`)
+    pub(crate) fn flash_keyed_for(
+        &mut self,
+        key: String,
+        item: Box<dyn ToastItem>,
+        ttl: Option<Duration>,
+    ) {
+        self.flash_keyed_at(key, item, ttl, Instant::now());
     }
 
-    /// [`Self::flash_keyed`] 实现体;`now` 可注入(测试确定性,与
+    /// [`Self::flash_keyed_for`] 实现体;`now` 可注入(测试确定性,与
     /// [`Self::prune_expired`] 同款手法)。
-    fn flash_keyed_at(&mut self, key: String, item: Box<dyn ToastItem>, now: Instant) {
-        let deadline = now + self.flash_ttl;
+    fn flash_keyed_at(
+        &mut self,
+        key: String,
+        item: Box<dyn ToastItem>,
+        ttl: Option<Duration>,
+        now: Instant,
+    ) {
+        let deadline = now + ttl.unwrap_or(self.flash_ttl);
         let found = self
             .entries
             .iter_mut()
@@ -378,17 +399,57 @@ mod tests {
     #[test]
     fn flash_keyed_same_key_replaces_not_stacks() -> color_eyre::Result<()> {
         let mut n = notifications();
-        n.flash_keyed("vol".to_owned(), text_item("音量 31".to_owned()));
-        n.flash_keyed("vol".to_owned(), text_item("音量 32".to_owned()));
-        n.flash_keyed("vol".to_owned(), text_item("音量 33".to_owned()));
+        n.flash_keyed_for(
+            "vol".to_owned(),
+            text_item("音量 31".to_owned()),
+            /*ttl*/ None,
+        );
+        n.flash_keyed_for(
+            "vol".to_owned(),
+            text_item("音量 32".to_owned()),
+            /*ttl*/ None,
+        );
+        n.flash_keyed_for(
+            "vol".to_owned(),
+            text_item("音量 33".to_owned()),
+            /*ttl*/ None,
+        );
         assert_eq!(n.entries.len(), 1, "同 key 应顶替为一条");
 
-        n.flash_keyed("mode".to_owned(), text_item("shuffle".to_owned()));
+        n.flash_keyed_for(
+            "mode".to_owned(),
+            text_item("shuffle".to_owned()),
+            /*ttl*/ None,
+        );
         assert_eq!(n.entries.len(), 2, "不同 key 各自一条");
 
         n.flash_text("匿名提示".to_owned());
         n.flash_text("匿名提示".to_owned());
         assert_eq!(n.entries.len(), 4, "匿名 flash 不参与顶替,照常堆叠");
+        Ok(())
+    }
+
+    /// per-toast TTL 覆盖:`ttl = Some(0)` 的条目 deadline 即推送时刻,
+    /// 一拍后就该进退场;同时推的默认 TTL(4s)条目仍存活。
+    #[test]
+    fn flash_keyed_ttl_override_expires_early() -> color_eyre::Result<()> {
+        let mut n = notifications();
+        let t0 = Instant::now();
+        n.flash_keyed_at(
+            "instant".to_owned(),
+            text_item("瞬间".to_owned()),
+            Some(Duration::ZERO),
+            t0,
+        );
+        n.flash_keyed_at(
+            "normal".to_owned(),
+            text_item("正常".to_owned()),
+            /*ttl*/ None,
+            t0,
+        );
+        // 推够拍数:ttl=0 的走完退场动画被移除,默认 TTL 的远未到期仍在。
+        run(&mut n, 16);
+        assert_eq!(n.entry_count(), 1, "短 ttl 应已退场,默认 ttl 仍存活");
         Ok(())
     }
 
@@ -398,11 +459,17 @@ mod tests {
     fn flash_keyed_refreshes_deadline() -> color_eyre::Result<()> {
         let mut n = notifications();
         let t0 = Instant::now();
-        n.flash_keyed_at("vol".to_owned(), text_item("音量 31".to_owned()), t0);
+        n.flash_keyed_at(
+            "vol".to_owned(),
+            text_item("音量 31".to_owned()),
+            /*ttl*/ None,
+            t0,
+        );
         // 2 秒后顶替:deadline 应推后到 t0+2+TTL。
         n.flash_keyed_at(
             "vol".to_owned(),
             text_item("音量 32".to_owned()),
+            /*ttl*/ None,
             t0 + Duration::from_secs(2),
         );
         run(&mut n, 8); // 展开

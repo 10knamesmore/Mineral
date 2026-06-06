@@ -14,9 +14,10 @@ sqlx        = { workspace = true }
 tokio       = { workspace = true }
 rustc-hash  = { workspace = true }
 parking_lot = { workspace = true }
-mineral-model = { workspace = true }
-mineral-paths = { workspace = true }
-mineral-log   = { workspace = true }
+mineral-model    = { workspace = true }
+mineral-paths    = { workspace = true }
+mineral-log      = { workspace = true }
+mineral-protocol = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

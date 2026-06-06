@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS song_stats (
     skip_count INTEGER NOT NULL DEFAULT 0,
     total_listen_ms INTEGER NOT NULL DEFAULT 0,
     last_played_at INTEGER, loved_at INTEGER,
+    rating INTEGER,
     PRIMARY KEY (namespace, song_value));
 
 CREATE TABLE IF NOT EXISTS play_history (
@@ -64,3 +65,14 @@ CREATE TABLE IF NOT EXISTS session_queue (
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL
     );
+
+CREATE TABLE IF NOT EXISTS song_kv (
+    namespace TEXT NOT NULL,
+    song_value TEXT NOT NULL,
+    key TEXT NOT NULL,
+    -- 标量值:类型标签 + 候选列只填其一(bool 落 int_val),读出按 vtype 重建。
+    vtype TEXT NOT NULL,
+    int_val INTEGER,
+    real_val REAL,
+    text_val TEXT,
+    PRIMARY KEY (namespace, song_value, key));

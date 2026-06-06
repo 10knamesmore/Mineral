@@ -55,11 +55,79 @@ impl ClientHandle {
     ///
     /// # Params:
     ///   - `name`: 动作注册名
+    ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
     ///
     /// # Return:
     ///   成功为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`。
-    pub(crate) async fn invoke_action_async(&self, name: &str) -> color_eyre::Result<()> {
-        self.player.invoke_script_action(name).await
+    pub(crate) async fn invoke_action_async(
+        &self,
+        name: &str,
+        ctx: Option<mineral_protocol::KeyContext>,
+    ) -> color_eyre::Result<()> {
+        self.player.invoke_script_action(name, ctx).await
+    }
+
+    /// 读 per-song 持久值(serve 层处理 `StoreGet` 用)。未命中返回 `Nil`。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌;其 namespace 决定 persist scope
+    ///   - `key`: 开放键
+    pub(crate) async fn store_get_async(
+        &self,
+        id: &SongId,
+        key: &str,
+    ) -> color_eyre::Result<mineral_protocol::StoreValue> {
+        self.player
+            .persist()
+            .scope(id.namespace())
+            .kv_get(id, key)
+            .await
+    }
+
+    /// 写 per-song 持久值(serve 层处理 `StoreSet` 用);写成功推 `StoreChanged`。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌
+    ///   - `key`: 开放键(保留键拒写,错误冒泡给 client)
+    ///   - `value`: 标量值(`Nil` 删除)
+    pub(crate) async fn store_set_async(
+        &self,
+        id: &SongId,
+        key: &str,
+        value: &mineral_protocol::StoreValue,
+    ) -> color_eyre::Result<()> {
+        self.player
+            .persist()
+            .scope(id.namespace())
+            .kv_set(id, key, value)
+            .await?;
+        self.player.notify().store_changed(id, key);
+        Ok(())
+    }
+
+    /// per-song 数值自增(serve 层处理 `StoreInc` 用);成功推 `StoreChanged`。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌
+    ///   - `key`: 开放键
+    ///   - `delta`: 增量(可负)
+    ///
+    /// # Return:
+    ///   自增后的值。
+    pub(crate) async fn store_inc_async(
+        &self,
+        id: &SongId,
+        key: &str,
+        delta: i64,
+    ) -> color_eyre::Result<mineral_protocol::StoreValue> {
+        let value = self
+            .player
+            .persist()
+            .scope(id.namespace())
+            .kv_inc(id, key, delta)
+            .await?;
+        self.player.notify().store_changed(id, key);
+        Ok(value)
     }
 
     /// 查询一首歌的播放统计(persist),转成 protocol DTO。
@@ -168,12 +236,17 @@ pub trait Client: Send + Sync {
     ///
     /// # Params:
     ///   - `name`: 动作注册名。
+    ///   - `ctx`: 按键瞬间的 client 上下文(无界面 / 采不到传 `None`)。
     ///
     /// # Return:
     ///   `None` = 已受理 / 成功;`Some(err)` = daemon 报错(未注册 / 脚本未启用 /
     ///   执行失败),client 应提示用户。
-    fn invoke_action(&self, name: &str) -> Option<String> {
-        let _ = name;
+    fn invoke_action(
+        &self,
+        name: &str,
+        ctx: Option<mineral_protocol::KeyContext>,
+    ) -> Option<String> {
+        let _ = (name, ctx);
         Some("脚本动作不可用(当前 client 不支持)".to_owned())
     }
 

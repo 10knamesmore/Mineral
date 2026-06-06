@@ -48,6 +48,7 @@ fn toast_event() -> Event {
         kind: ToastKind::Warn,
         content: "音量 42".to_owned(),
         id: Some("vol".to_owned()),
+        ttl_secs: None,
     }
 }
 
@@ -93,6 +94,7 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
         kind: ToastKind::Info,
         content: "一次性提示".to_owned(),
         id: None,
+        ttl_secs: None,
     }))
     .await?;
     frame_round_trips(Frame::Event(Event::PropertyChanged {
@@ -107,6 +109,11 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
     .await?;
     frame_round_trips(Frame::Event(Event::DownloadCompleted {
         song_id: SongId::new(SourceKind::NETEASE, "456"),
+    }))
+    .await?;
+    frame_round_trips(Frame::Event(Event::StoreChanged {
+        song_id: SongId::new(SourceKind::NETEASE, "789"),
+        key: "plugin.skipcount".to_owned(),
     }))
     .await?;
     Ok(())
@@ -380,8 +387,18 @@ mod proptests {
             Just(FinishReason::Stop),
         ];
         prop_oneof![
-            (kind, any::<String>(), option::of(any::<String>()))
-                .prop_map(|(kind, content, id)| Event::Toast { kind, content, id }),
+            (
+                kind,
+                any::<String>(),
+                option::of(any::<String>()),
+                option::of(any::<u64>())
+            )
+                .prop_map(|(kind, content, id, ttl_secs)| Event::Toast {
+                    kind,
+                    content,
+                    id,
+                    ttl_secs,
+                }),
             (arb_prop_name(), arb_prop_value())
                 .prop_map(|(prop, value)| Event::PropertyChanged { prop, value }),
             (arb_song(), reason).prop_map(|(s, reason)| Event::TrackFinished {

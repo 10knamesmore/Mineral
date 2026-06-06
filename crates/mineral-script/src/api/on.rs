@@ -1,4 +1,4 @@
-//! `mineral.on(name, fn)`:离散生命周期事件的回调注册。
+//! `mineral.on(event, fn)`:离散生命周期事件的回调注册。
 //!
 //! 合法事件名是**封闭集合**([`EVENT_NAMES`]),运行期未知名直接报 Lua 错;
 //! 编辑期由 `mineral-config` 分发的 LuaCATS stub(`meta/mineral.lua` 的
@@ -15,7 +15,7 @@ use crate::host::ScriptHost;
 /// meta stub 的 `mineral.EventName` 别名加字面量(守卫测试会逼你同步)。
 pub(crate) const EVENT_NAMES: [&str; 2] = ["track_finished", "download_completed"];
 
-/// 把 `on` 函数挂到 `mineral` 表上。
+/// 把 `on` 挂到 `mineral` 表上。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
@@ -45,20 +45,8 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc::unbounded_channel;
-
     use super::EVENT_NAMES;
-    use crate::host::{ScriptHost, install_api};
-
-    /// 装好 API 的 VM + 宿主句柄。
-    fn vm_with_host() -> color_eyre::Result<(mlua::Lua, ScriptHost)> {
-        let (cmd_tx, _cmd_rx) = unbounded_channel();
-        let (push_tx, _push_rx) = unbounded_channel();
-        let host = ScriptHost::new(cmd_tx, push_tx);
-        let lua = mlua::Lua::new();
-        install_api(&lua, &host)?;
-        Ok((lua, host))
-    }
+    use crate::api::test_support::vm_with_host;
 
     #[test]
     fn on_registers_callbacks_in_order() -> color_eyre::Result<()> {

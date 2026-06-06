@@ -7,7 +7,9 @@
 
 use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
-use mineral_script::{ScriptCmd, ScriptHost, ScriptRuntime, WatchdogConfig};
+use mineral_script::{
+    PlaylistBrief, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime, WatchdogConfig,
+};
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -124,6 +126,20 @@ impl ScriptPumps {
     }
 }
 
+/// 一次查询失败的统一收口:回投 `Error`(脚本回调收 `(nil, err)`)。
+fn resolve_err(player: &PlayerCore, query: QueryId, e: &color_eyre::Report) {
+    if let Some(sender) = player.script_sender() {
+        sender.resolve(query, ResolveValue::Error(mineral_log::chain(e)));
+    }
+}
+
+/// 把一条查询结果回投脚本线程(无脚本时静默丢——查询本就发不出来)。
+fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
+    if let Some(sender) = player.script_sender() {
+        sender.resolve(query, value);
+    }
+}
+
 /// 把一条脚本命令落到 player 执行面(与 client Request 同一些方法)。
 fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
     match cmd {
@@ -178,6 +194,131 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
                     "download: 不在当前队列,忽略"
                 ),
             }
+        }
+        ScriptCmd::QueueList { query } => {
+            // 内存快照,同步取;经 resolve 回投保持与其他查询一致的回调路径。
+            let songs = player.with_state(|st| st.queue.clone());
+            resolve_ok(player, query, ResolveValue::Songs(songs));
+        }
+        ScriptCmd::StoreGet { song, key, query } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let scope = player.persist().scope(song.namespace());
+                match scope.kv_get(&song, &key).await {
+                    Ok(value) => resolve_ok(&player, query, ResolveValue::Store(value)),
+                    Err(e) => resolve_err(&player, query, &e),
+                }
+            });
+        }
+        ScriptCmd::StoreSet { song, key, value } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let scope = player.persist().scope(song.namespace());
+                match scope.kv_set(&song, &key, &value).await {
+                    Ok(()) => player.notify().store_changed(&song, &key),
+                    Err(e) => mineral_log::warn!(
+                        target: "script",
+                        song_id = song.qualified(),
+                        key,
+                        error = mineral_log::chain(&e),
+                        "store.set 失败"
+                    ),
+                }
+            });
+        }
+        ScriptCmd::StoreInc {
+            song,
+            key,
+            delta,
+            query,
+        } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let scope = player.persist().scope(song.namespace());
+                match scope.kv_inc(&song, &key, delta).await {
+                    Ok(value) => {
+                        player.notify().store_changed(&song, &key);
+                        if let Some(query) = query {
+                            resolve_ok(&player, query, ResolveValue::Store(value));
+                        }
+                    }
+                    Err(e) => match query {
+                        Some(query) => resolve_err(&player, query, &e),
+                        None => mineral_log::warn!(
+                            target: "script",
+                            song_id = song.qualified(),
+                            key,
+                            error = mineral_log::chain(&e),
+                            "store.inc 失败"
+                        ),
+                    },
+                }
+            });
+        }
+        ScriptCmd::LibraryPlaylists { query } => {
+            // channel 调用可能打网络,spawn 不卡泵(后续 player 命令照常)。
+            let player = player.clone();
+            tokio::spawn(async move {
+                let mut briefs = Vec::new();
+                for channel in player.channels() {
+                    match channel.my_playlists().await {
+                        Ok(playlists) => {
+                            briefs.extend(playlists.into_iter().map(|p| PlaylistBrief {
+                                id: p.id,
+                                name: p.name,
+                                track_count: p.track_count,
+                            }))
+                        }
+                        Err(e) => mineral_log::warn!(
+                            target: "script",
+                            source = channel.source().name(),
+                            error = %e,
+                            "library.playlists: 该源拉取失败,跳过"
+                        ),
+                    }
+                }
+                resolve_ok(&player, query, ResolveValue::Playlists(briefs));
+            });
+        }
+        ScriptCmd::LibraryTracks { playlist, query } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let Some(channel) = player.channel_for(playlist.namespace()).cloned() else {
+                    let e = color_eyre::eyre::eyre!(
+                        "no channel for source {}",
+                        playlist.namespace().name()
+                    );
+                    resolve_err(&player, query, &e);
+                    return;
+                };
+                match channel.songs_in_playlist(&playlist).await {
+                    Ok(songs) => resolve_ok(&player, query, ResolveValue::Songs(songs)),
+                    Err(e) => {
+                        resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
+                    }
+                }
+            });
+        }
+        ScriptCmd::SetLoved { song, loved } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let Some(channel) = player.channel_for(song.namespace()).cloned() else {
+                    mineral_log::warn!(
+                        target: "script",
+                        song_id = song.qualified(),
+                        "love: 无对应 channel,忽略"
+                    );
+                    return;
+                };
+                if let Err(e) = channel.set_loved(&song, loved).await {
+                    mineral_log::warn!(
+                        target: "script",
+                        song_id = song.qualified(),
+                        error = %e,
+                        "love 失败"
+                    );
+                }
+            });
         }
     }
 }

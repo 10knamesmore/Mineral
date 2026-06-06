@@ -6,7 +6,7 @@ use mineral_protocol::{Event, ToastKind};
 use crate::components::toast::notifications::{Notifications, TextTint, tinted_text_item};
 
 /// 消费一条 server 推送:Toast 按 kind 上色进通知层(`id: Some` 走
-/// [`Notifications::flash_keyed`] 同 id 顶替,`None` 走堆叠 flash);
+/// 同 id 顶替,`None` 走堆叠;`ttl_secs: Some` 覆盖默认展示时长);
 /// 其余类别 TUI 未订阅,收到(订阅集将来变化)也安全忽略——轮询仍是权威值来源。
 ///
 /// # Params:
@@ -14,21 +14,28 @@ use crate::components::toast::notifications::{Notifications, TextTint, tinted_te
 ///   - `event`: server 推送的事件
 pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
     match event {
-        Event::Toast { kind, content, id } => {
+        Event::Toast {
+            kind,
+            content,
+            id,
+            ttl_secs,
+        } => {
             let tint = match kind {
                 ToastKind::Info => TextTint::Normal,
                 ToastKind::Warn => TextTint::Warn,
                 ToastKind::Error => TextTint::Error,
             };
             let item = tinted_text_item(content, tint);
+            let ttl = ttl_secs.map(std::time::Duration::from_secs);
             match id {
-                Some(key) => notifications.flash_keyed(key, item),
-                None => notifications.flash(item),
+                Some(key) => notifications.flash_keyed_for(key, item, ttl),
+                None => notifications.flash_for(item, ttl),
             }
         }
         Event::PropertyChanged { .. }
         | Event::TrackFinished { .. }
-        | Event::DownloadCompleted { .. } => {}
+        | Event::DownloadCompleted { .. }
+        | Event::StoreChanged { .. } => {}
     }
 }
 
@@ -50,6 +57,7 @@ mod tests {
             kind: ToastKind::Info,
             content: content.to_owned(),
             id: id.map(str::to_owned),
+            ttl_secs: None,
         }
     }
 

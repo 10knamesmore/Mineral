@@ -6,7 +6,6 @@
 
 use mineral_model::{Song, SongId};
 use mineral_protocol::PlayMode;
-use tokio::sync::mpsc::UnboundedSender;
 
 /// daemon 投递给脚本线程的事件。携带 daemon 侧已有的完整模型
 /// (如整个 [`Song`]),投影成 Lua table 的裁剪发生在 dispatch 层。
@@ -186,6 +185,111 @@ pub enum ScriptCmd {
 
     /// 下载指定歌曲。
     Download(SongId),
+
+    /// 读 per-song 持久值;结果以 [`ResolveValue::Store`] 回投 `query`。
+    StoreGet {
+        /// 目标歌。
+        song: SongId,
+
+        /// 开放键。
+        key: String,
+
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
+    /// 写 per-song 持久值(`Nil` 删除)。fire-and-forget,失败只记日志。
+    StoreSet {
+        /// 目标歌。
+        song: SongId,
+
+        /// 开放键。
+        key: String,
+
+        /// 标量值。
+        value: mineral_protocol::StoreValue,
+    },
+
+    /// per-song 数值自增;带 `query` 时回投自增后的值。
+    StoreInc {
+        /// 目标歌。
+        song: SongId,
+
+        /// 开放键。
+        key: String,
+
+        /// 增量(可负)。
+        delta: i64,
+
+        /// 结果回投句柄(脚本侧没传回调则为 `None`,失败只记日志)。
+        query: Option<QueryId>,
+    },
+
+    /// 读当前播放队列;结果以 [`ResolveValue::Songs`] 回投 `query`。
+    QueueList {
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
+    /// 读用户歌单列表;结果以 [`ResolveValue::Playlists`] 回投 `query`。
+    LibraryPlaylists {
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
+    /// 读指定歌单的曲目;结果以 [`ResolveValue::Songs`] 回投 `query`。
+    LibraryTracks {
+        /// 目标歌单。
+        playlist: mineral_model::PlaylistId,
+
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
+    /// 设/取消一首歌的 love。fire-and-forget,失败只记日志。
+    SetLoved {
+        /// 目标歌。
+        song: SongId,
+
+        /// true=喜欢,false=取消。
+        loved: bool,
+    },
+}
+
+/// 一次异步查询的回投句柄:脚本侧把 Lua 回调挂进 pending 表拿到它,
+/// daemon 泵完成查询后凭它回投结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct QueryId(pub(crate) u64);
+
+/// 异步查询的结果(结构化;Lua 值的转换在脚本线程的 dispatch 层)。
+///
+/// 失败统一走 [`Self::Error`],Lua 回调收 `(nil, err)`。
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolveValue {
+    /// per-song 持久值(`store.get` / `store.inc`)。
+    Store(mineral_protocol::StoreValue),
+
+    /// 歌曲列表(`queue.list` / `library.tracks`),按序投影成 Lua 数组。
+    Songs(Vec<Song>),
+
+    /// 歌单列表(`library.playlists`)。
+    Playlists(Vec<PlaylistBrief>),
+
+    /// 查询失败(人读信息)。
+    Error(String),
+}
+
+/// 歌单在脚本侧的轻量投影(不携带曲目,曲目另经 `library.tracks` 拉)。
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaylistBrief {
+    /// 歌单 id(Lua 侧用 `qualified()` 字符串)。
+    pub id: mineral_model::PlaylistId,
+
+    /// 歌单名。
+    pub name: String,
+
+    /// 曲目数。
+    pub track_count: u64,
 }
 
 /// 脚本线程主循环消费的信封:事件投递、动作调用或停机。
@@ -199,8 +303,20 @@ pub(crate) enum ScriptMsg {
         /// 动作注册名。
         name: String,
 
+        /// 按键瞬间的 client 上下文(无界面触发面为 `None`,回调收空表)。
+        ctx: Option<mineral_protocol::KeyContext>,
+
         /// 调用结果回执(接收端 drop 时静默丢)。
         reply: tokio::sync::oneshot::Sender<ActionOutcome>,
+    },
+
+    /// 一次异步查询的结果回投(daemon 泵完成 [`ScriptCmd`] 查询后发回)。
+    Resolve {
+        /// 查询句柄(对应 pending 表里的 Lua 回调)。
+        query: QueryId,
+
+        /// 查询结果。
+        value: ResolveValue,
     },
 
     /// 优雅停机:主循环退出,线程结束。
@@ -223,8 +339,10 @@ pub enum ActionOutcome {
 /// daemon 侧持有的事件投递句柄(fire-and-forget)。
 ///
 /// 发送失败(脚本线程已退出)静默丢弃 —— 脚本是旁路增强,不反压播放主链路。
+/// 内部是 `std::sync::mpsc`(无界,send 永不阻塞):消费端在脚本线程,
+/// 需要 `recv_timeout` 驱动 timer 心跳,tokio 通道给不了。
 #[derive(Clone, Debug)]
-pub struct ScriptSender(pub(crate) UnboundedSender<ScriptMsg>);
+pub struct ScriptSender(pub(crate) std::sync::mpsc::Sender<ScriptMsg>);
 
 impl ScriptSender {
     /// 投递一个事件给脚本线程。
@@ -236,19 +354,33 @@ impl ScriptSender {
         let _ = self.0.send(ScriptMsg::Event(event));
     }
 
+    /// 回投一次异步查询的结果(daemon 泵完成 [`ScriptCmd`] 查询后调)。
+    ///
+    /// # Params:
+    ///   - `query`: 查询句柄(随查询命令带出的那个)
+    ///   - `value`: 查询结果
+    pub fn resolve(&self, query: QueryId, value: ResolveValue) {
+        let _ = self.0.send(ScriptMsg::Resolve { query, value });
+    }
+
     /// 调用一个具名动作,返回结果回执的接收端。
     ///
     /// 脚本线程已退出时,回执立即就绪为 [`ActionOutcome::Failed`]。
     ///
     /// # Params:
     ///   - `name`: 动作注册名
+    ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面传 `None`)
     ///
     /// # Return:
     ///   oneshot 接收端;`await` 得到调用结果。
     #[must_use]
-    pub fn invoke_action(&self, name: String) -> tokio::sync::oneshot::Receiver<ActionOutcome> {
+    pub fn invoke_action(
+        &self,
+        name: String,
+        ctx: Option<mineral_protocol::KeyContext>,
+    ) -> tokio::sync::oneshot::Receiver<ActionOutcome> {
         let (reply, rx) = tokio::sync::oneshot::channel();
-        if let Err(send_failed) = self.0.send(ScriptMsg::Action { name, reply }) {
+        if let Err(send_failed) = self.0.send(ScriptMsg::Action { name, ctx, reply }) {
             // 线程已退出:取回 reply 端立即回执失败,调用方不会空等。
             if let ScriptMsg::Action { reply, .. } = send_failed.0 {
                 let _ = reply.send(ActionOutcome::Failed("脚本线程已退出".to_owned()));
@@ -281,6 +413,34 @@ mod tests {
         .map(|reason| format!("\"{}\"", reason.as_str()))
         .join("|");
         let alias = format!("---@alias mineral.FinishReason {literals}");
+        assert!(
+            meta.contains(&alias),
+            "meta stub 缺少与 Rust 一致的别名行:`{alias}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn meta_stub_view_kind_alias_matches_rust() -> color_eyre::Result<()> {
+        use color_eyre::eyre::WrapErr;
+        use mineral_protocol::ViewKind;
+        // meta/mineral.lua 的 `mineral.ViewKind` 字符串枚举必须与
+        // Rust 侧 `script_name` 的全部取值逐字一致(顺序也钉死)。
+        let meta_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mineral-config/src/lua/meta/mineral.lua"
+        );
+        let meta = std::fs::read_to_string(meta_path).wrap_err("read meta/mineral.lua")?;
+        let literals = [
+            ViewKind::Playlists,
+            ViewKind::Tracks,
+            ViewKind::Queue,
+            ViewKind::Fullscreen,
+            ViewKind::Search,
+        ]
+        .map(|view| format!("\"{}\"", view.script_name()))
+        .join("|");
+        let alias = format!("---@alias mineral.ViewKind {literals}");
         assert!(
             meta.contains(&alias),
             "meta stub 缺少与 Rust 一致的别名行:`{alias}`"

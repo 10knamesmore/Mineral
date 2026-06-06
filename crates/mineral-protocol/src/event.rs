@@ -26,6 +26,9 @@ pub enum Event {
 
         /// 顶替键:同 id 的存活提示被替换内容并续命;`None` 不参与顶替。
         id: Option<String>,
+
+        /// 展示时长(秒);`None` 用 client 配置默认(`toast.flash_ttl_secs`)。
+        ttl_secs: Option<u64>,
     },
 
     /// 属性树某项变更。「订阅即回放 + 末值合并」语义在 daemon 侧实现,此处只是线格式。
@@ -51,6 +54,15 @@ pub enum Event {
         /// 下载完成的歌曲 id。
         song_id: mineral_model::SongId,
     },
+
+    /// per-song 持久 KV 某键变更(粗粒度:只报「哪首歌的哪个键」,值按需重读)。
+    StoreChanged {
+        /// 变更的歌曲 id。
+        song_id: mineral_model::SongId,
+
+        /// 变更的键(开放 key 或一等字段名,如 `rating`)。
+        key: String,
+    },
 }
 
 impl Event {
@@ -60,7 +72,9 @@ impl Event {
         match self {
             Self::Toast { .. } => Subscription::Toast,
             Self::PropertyChanged { .. } => Subscription::Property,
-            Self::TrackFinished { .. } | Self::DownloadCompleted { .. } => Subscription::Lifecycle,
+            Self::TrackFinished { .. }
+            | Self::DownloadCompleted { .. }
+            | Self::StoreChanged { .. } => Subscription::Lifecycle,
         }
     }
 }

@@ -83,6 +83,16 @@ impl NamespaceStore {
         Self { persist, source }
     }
 
+    /// 底层连接池(降级 ServerStore 为 `None`;同 crate 扩展方法用,如 song_kv)。
+    pub(crate) fn pool(&self) -> Option<&sqlx::SqlitePool> {
+        self.persist.pool()
+    }
+
+    /// 本视图的 namespace 过滤值(= `source.name()`)。
+    pub(crate) fn namespace(&self) -> &str {
+        self.source.name()
+    }
+
     /// upsert 一首歌的元数据(song_meta + 重写 song_artists 保序)。
     ///
     /// 降级 ServerStore 下静默 no-op。艺人列表按 [`Song::artists`] 顺序整体重写

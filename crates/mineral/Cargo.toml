@@ -33,9 +33,12 @@ tokio                   = { workspace = true }
 mineral-media = { workspace = true }
 
 [dev-dependencies]
-nix        = { workspace = true }
-assert_cmd = { workspace = true }
-predicates = { workspace = true }
+nix              = { workspace = true }
+assert_cmd       = { workspace = true }
+predicates       = { workspace = true }
+mineral-model    = { workspace = true }
+mineral-protocol = { workspace = true }
+tokio            = { workspace = true }
 
 [lints]
 workspace = true

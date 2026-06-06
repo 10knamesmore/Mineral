@@ -301,8 +301,15 @@ impl Client for RemoteClient {
         }
     }
 
-    fn invoke_action(&self, name: &str) -> Option<String> {
-        match self.send_recv(Request::InvokeAction(name.to_owned())) {
+    fn invoke_action(
+        &self,
+        name: &str,
+        ctx: Option<mineral_protocol::KeyContext>,
+    ) -> Option<String> {
+        match self.send_recv(Request::InvokeAction {
+            name: name.to_owned(),
+            ctx,
+        }) {
             Response::Error(e) => Some(e),
             _ => None,
         }
@@ -517,6 +524,7 @@ mod tests {
                     kind: ToastKind::Info,
                     content: "插队事件".to_owned(),
                     id: None,
+                    ttl_secs: None,
                 }),
             )
             .await?;
@@ -623,6 +631,7 @@ mod tests {
             kind: ToastKind::Info,
             content: "hub 直推".to_owned(),
             id: None,
+            ttl_secs: None,
         });
 
         // 轮询等推送穿过 serve → socket → worker 缓冲(有界等待,防 flaky)。

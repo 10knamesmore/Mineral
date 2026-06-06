@@ -15,6 +15,7 @@ mod server_store;
 pub use cache_index::{CacheEntryStat, CacheIndex, CacheStats};
 pub use client_store::ClientStore;
 pub use db::{
-    HistoryEntry, NamespaceStore, PlaylistCacheEntry, SessionSnapshot, SessionStore, SongStats,
+    HistoryEntry, NamespaceStore, PlaylistCacheEntry, RESERVED_KEYS, SessionSnapshot, SessionStore,
+    SongStats,
 };
 pub use server_store::{PlaylistCacheStats, ServerStore};

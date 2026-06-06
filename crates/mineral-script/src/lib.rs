@@ -19,7 +19,8 @@ pub use mlua;
 
 pub use host::{ScriptHost, install_api};
 pub use message::{
-    ActionOutcome, PropKey, PropValue, ScriptCmd, ScriptEvent, ScriptSender, TrackFinishedReason,
+    ActionOutcome, PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd,
+    ScriptEvent, ScriptSender, TrackFinishedReason,
 };
 pub use runtime::ScriptRuntime;
 pub use watchdog::WatchdogConfig;

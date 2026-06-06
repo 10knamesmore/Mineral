@@ -65,6 +65,21 @@ impl Notifier {
         }
     }
 
+    /// per-song 持久 KV 某键变更:wire `StoreChanged`(粗粒度,只报歌 + 键)。
+    ///
+    /// 脚本路不投递 —— store 写本就发自脚本 / client,变更方已知值;
+    /// 真有跨方观察需求时再议(避免脚本自己写自己收的回声)。
+    ///
+    /// # Params:
+    ///   - `song_id`: 变更的歌
+    ///   - `key`: 变更的键
+    pub(crate) fn store_changed(&self, song_id: &mineral_model::SongId, key: &str) {
+        let _ = self.events.send(Event::StoreChanged {
+            song_id: song_id.clone(),
+            key: key.to_owned(),
+        });
+    }
+
     /// 属性树某项变更:wire `PropertyChanged` + 脚本 `PropertyChanged`。
     ///
     /// # Params:
@@ -119,19 +134,29 @@ impl PlayerCore {
         &self.inner.notify
     }
 
+    /// 脚本投递句柄(查询泵回投结果用);未启用脚本为 `None`。
+    pub(crate) fn script_sender(&self) -> Option<mineral_script::ScriptSender> {
+        self.inner.notify.script.clone()
+    }
+
     /// 触发脚本具名动作并等待结果(daemon 处理 `Request::InvokeAction` 用)。
     ///
     /// # Params:
     ///   - `name`: 动作注册名
+    ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
     ///
     /// # Return:
     ///   回调执行完成为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`(人读信息)。
-    pub(crate) async fn invoke_script_action(&self, name: &str) -> color_eyre::Result<()> {
+    pub(crate) async fn invoke_script_action(
+        &self,
+        name: &str,
+        ctx: Option<mineral_protocol::KeyContext>,
+    ) -> color_eyre::Result<()> {
         use color_eyre::eyre::bail;
         let Some(script) = &self.inner.notify.script else {
             bail!("脚本未启用(无 config.lua 或脚本加载失败)");
         };
-        match script.invoke_action(name.to_owned()).await {
+        match script.invoke_action(name.to_owned(), ctx).await {
             Ok(mineral_script::ActionOutcome::Done) => Ok(()),
             Ok(mineral_script::ActionOutcome::NotFound) => {
                 bail!("动作 {name:?} 未注册(检查 config.lua 的 mineral.action)")

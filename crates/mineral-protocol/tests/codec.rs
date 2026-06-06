@@ -2,10 +2,11 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{BitRate, MediaUrl, SongId, SourceKind};
+use mineral_model::{BitRate, MediaUrl, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ChannelFetchKindTag, CurrentSync, PlayMode, PlayerSync, PlayerVersions,
-    QueueSync, Request, Response, SongStatsWire, framed, recv, send,
+    CancelFilter, ChannelFetchKindTag, CurrentSync, KeyContext, PlayMode, PlayerSync,
+    PlayerVersions, QueueSync, Request, Response, SongStatsWire, StoreValue, ViewKind, framed,
+    recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use mineral_test::song;
@@ -206,6 +207,62 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     }))
     .await?;
     req_round_trips(Request::PullPcm(256)).await?;
+    Ok(())
+}
+
+/// store 读写与脚本动作触发(含 ctx)的 round-trip。
+#[tokio::test]
+async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
+    let id = SongId::new(SourceKind::NETEASE, "31");
+    req_round_trips(Request::StoreGet {
+        song: id.clone(),
+        key: "plugin.x".to_owned(),
+    })
+    .await?;
+    req_round_trips(Request::StoreSet {
+        song: id.clone(),
+        key: "plugin.x".to_owned(),
+        value: StoreValue::Text("值".to_owned()),
+    })
+    .await?;
+    req_round_trips(Request::StoreInc {
+        song: id.clone(),
+        key: "plugin.n".to_owned(),
+        delta: -3,
+    })
+    .await?;
+    resp_round_trips(Response::StoreValue(StoreValue::Real(2.5))).await?;
+    resp_round_trips(Response::StoreValue(StoreValue::Nil)).await?;
+
+    // CLI 触发:无 ctx
+    req_round_trips(Request::InvokeAction {
+        name: "my.skip".to_owned(),
+        ctx: None,
+    })
+    .await?;
+    // TUI 触发:带按键瞬间上下文(builder 构造,getter 读;字段全 Some + 全 None 各一)
+    let ctx = KeyContext::builder()
+        .view(ViewKind::Tracks)
+        .selected_song_id(Some(id.clone()))
+        .selected_playlist_id(Some(PlaylistId::new(SourceKind::NETEASE, "p1")))
+        .now_playing_id(Some(id))
+        .build();
+    req_round_trips(Request::InvokeAction {
+        name: "my.rate".to_owned(),
+        ctx: Some(ctx),
+    })
+    .await?;
+    let empty = KeyContext::builder()
+        .view(ViewKind::Search)
+        .selected_song_id(None)
+        .selected_playlist_id(None)
+        .now_playing_id(None)
+        .build();
+    req_round_trips(Request::InvokeAction {
+        name: "my.global".to_owned(),
+        ctx: Some(empty),
+    })
+    .await?;
     Ok(())
 }
 
