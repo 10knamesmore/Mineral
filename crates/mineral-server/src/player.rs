@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
-use mineral_persist::{ServerStore, SessionSnapshot};
+use mineral_persist::ServerStore;
 use mineral_protocol::{
     DownloadProgress, DownloadTarget, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
@@ -24,20 +24,20 @@ use rand::seq::SliceRandom;
 use crate::download::{self, Capturing};
 use crate::gapless;
 use crate::media_cache::MediaCache;
-use crate::queue::{next_in_queue, play_mode_str, prev_in_queue};
+use crate::queue::{next_in_queue, prev_in_queue};
 use crate::state::State;
 
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
 #[derive(Clone)]
 pub struct PlayerCore {
     /// 共享内部状态(audio handle / scheduler / 注入 channel / 播放上下文)。
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
 /// `PlayerCore` 的真实状态。
-struct Inner {
+pub(crate) struct Inner {
     /// 底层音频引擎句柄。
-    audio: AudioHandle,
+    pub(crate) audio: AudioHandle,
 
     /// 任务调度器(用于提交 SongUrl / Lyrics / Playlists 等)。
     scheduler: Scheduler,
@@ -46,7 +46,7 @@ struct Inner {
     channels: Vec<Arc<dyn MusicChannel>>,
 
     /// 持久化句柄(廉价 clone,Arc 内部)。
-    persist: ServerStore,
+    pub(crate) persist: ServerStore,
 
     /// 音频本体缓存(命中直接本地播、播完入缓存);禁用环境为 null-object。
     media_cache: Arc<MediaCache>,
@@ -67,8 +67,14 @@ struct Inner {
     /// 未完成的下载批数(入队 +1、批处理完 -1);0→1 开新会话、归 0 结束会话并出完成提示。
     download_pending: Arc<std::sync::atomic::AtomicUsize>,
 
+    /// 事件通知双路出口(event hub + 脚本线程)。
+    pub(crate) notify: crate::notify::Notifier,
+
+    /// 属性 diff 的上次值缓存(background_loop 每 tick 比对)。
+    pub(crate) props: crate::props::PropsWatch,
+
     /// 播放上下文(队列/当前歌/歌词/预拉状态)。
-    state: Mutex<State>,
+    pub(crate) state: Mutex<State>,
 
     /// 已转发给 client 的最新 finished seq;auto-next 监听它。
     last_seen_finished_seq: AtomicU64,
@@ -77,7 +83,7 @@ struct Inner {
     client_events: Mutex<Vec<TaskEvent>>,
 
     /// 上次「周期 position 刷新」落盘时刻;background_loop 按 `session_save` 节流。
-    last_session_save: Mutex<Instant>,
+    pub(crate) last_session_save: Mutex<Instant>,
 
     /// 在线播放音质(配置 `audio.playback_quality`,独立于下载音质)。
     playback_quality: BitRate,
@@ -92,7 +98,7 @@ struct Inner {
     player_tick_ms: u64,
 
     /// 会话「位置刷新」的节流间隔(配置 `daemon.session_save_secs`)。
-    session_save: Duration,
+    pub(crate) session_save: Duration,
 
     /// 下载音质(配置 `download.quality`,与播放音质各自独立)。
     download_quality: BitRate,
@@ -117,6 +123,7 @@ impl PlayerCore {
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
     ///   - `config`: daemon 配置切片(音质 / gapless 窗口 / 各间隔 / 下载目录)。
+    ///   - `notify`: 事件通知双路出口(event hub + 脚本线程)。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
@@ -124,6 +131,7 @@ impl PlayerCore {
         persist: ServerStore,
         media_cache: MediaCache,
         config: &crate::config::ServerConfig,
+        notify: crate::notify::Notifier,
     ) -> Self {
         let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -138,6 +146,8 @@ impl PlayerCore {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify,
+            props: crate::props::PropsWatch::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
@@ -518,7 +528,7 @@ impl PlayerCore {
     /// `p` 键:进度 > 阈值 → seek(0);否则跳上一首。
     pub fn prev_or_restart(&self) {
         let pos = self.inner.audio.snapshot().position_ms;
-        let (old_id, prev) = {
+        let (old, prev) = {
             let st = self.inner.state.lock();
             if st.current_song.is_none() {
                 return;
@@ -529,14 +539,14 @@ impl PlayerCore {
                 self.inner.audio.seek(0);
                 return;
             }
-            (
-                st.current_song.as_ref().map(|s| s.id.clone()),
-                prev_in_queue(&st),
-            )
+            (st.current_song.clone(), prev_in_queue(&st))
         };
         if let Some(s) = prev {
-            if let Some(old) = old_id {
-                self.spawn_on_played(old, /*completed*/ false, pos);
+            if let Some(old) = old {
+                self.spawn_on_played(old.id.clone(), /*completed*/ false, pos);
+                self.inner
+                    .notify
+                    .track_finished(&old, mineral_protocol::FinishReason::Skip);
             }
             self.play_song(&s);
         }
@@ -545,16 +555,16 @@ impl PlayerCore {
     /// `n` 键:按 PlayMode 切下一首。
     pub fn next_song(&self) {
         let position_ms = self.inner.audio.snapshot().position_ms;
-        let (old_id, next) = {
+        let (old, next) = {
             let st = self.inner.state.lock();
-            (
-                st.current_song.as_ref().map(|s| s.id.clone()),
-                next_in_queue(&st),
-            )
+            (st.current_song.clone(), next_in_queue(&st))
         };
         if let Some(s) = next {
-            if let Some(old) = old_id {
-                self.spawn_on_played(old, /*completed*/ false, position_ms);
+            if let Some(old) = old {
+                self.spawn_on_played(old.id.clone(), /*completed*/ false, position_ms);
+                self.inner
+                    .notify
+                    .track_finished(&old, mineral_protocol::FinishReason::Skip);
             }
             self.play_song(&s);
         }
@@ -578,47 +588,6 @@ impl PlayerCore {
         });
     }
 
-    // ---- 会话持久化(存储 + 读取,本轮不做自动恢复) ----
-
-    /// 从当前播放上下文组装一份 [`SessionSnapshot`](锁不跨 await,调用方在锁内取完即用)。
-    ///
-    /// 队列存裸 [`SongId`] 保序;current 取 `current_song.id`;position / volume 读
-    /// audio snapshot(`volume_pct` 0..=100 → `f64` 0.0..=1.0);play_mode 存 Debug 名稳定串。
-    ///
-    /// # Return:
-    ///   组装好的 [`SessionSnapshot`]。
-    fn snapshot_session(&self) -> SessionSnapshot {
-        let audio = self.inner.audio.snapshot();
-        let st = self.inner.state.lock();
-        SessionSnapshot {
-            current: st.current_song.as_ref().map(|s| s.id.clone()),
-            position_ms: audio.position_ms,
-            play_mode: play_mode_str(st.play_mode),
-            volume: f64::from(audio.volume_pct) / 100.0,
-            queue: st.queue.iter().map(|s| s.id.clone()).collect(),
-        }
-    }
-
-    /// fire-and-forget 落盘当前会话:snapshot 在 spawn **前**组装好(锁不跨 await),
-    /// owned move 进 task;失败仅 warn。降级 persist 下 save 自动 no-op。
-    pub(crate) fn spawn_save_session(&self) {
-        let snap = self.snapshot_session();
-        let persist = self.inner.persist.clone();
-        tokio::spawn(async move {
-            if let Err(e) = persist.session().save(&snap).await {
-                mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "会话保存失败");
-            }
-        });
-    }
-
-    /// 读回上次会话快照(不应用到播放状态,本轮仅供启动日志确认能读到)。
-    ///
-    /// # Return:
-    ///   上次会话;无历史 / 降级 persist 返回 `Ok(None)`。
-    pub(crate) async fn load_session(&self) -> color_eyre::Result<Option<SessionSnapshot>> {
-        self.inner.persist.session().load().await
-    }
-
     // ---- 长跑后台 task ----
 
     /// 长跑后台 loop:每 tick 一次 events drain + harvest + auto-next + prefetch 检查。
@@ -630,30 +599,9 @@ impl PlayerCore {
             gapless::check_harvest(&self);
             gapless::check_advance(&self);
             gapless::check_prefetch(&self);
+            self.check_props();
             self.check_session_save();
         }
-    }
-
-    /// 节流落盘:距上次周期 save 超过配置的 `session_save` 间隔才 save 一次(主要刷新 position)。
-    /// 状态变化类 save 走各自的即时 [`Self::spawn_save_session`],此处只补周期进度。
-    ///
-    /// **空态守卫**:无当前曲且队列为空(如 daemon 刚启动还没人播)不落盘——空态没有
-    /// 进度可刷,落盘只会用空快照覆盖上次会话的队列/进度,那是将来队列恢复要吃的数据。
-    fn check_session_save(&self) {
-        {
-            let mut last = self.inner.last_session_save.lock();
-            if last.elapsed() < self.inner.session_save {
-                return;
-            }
-            *last = Instant::now();
-        }
-        {
-            let st = self.inner.state.lock();
-            if st.current_song.is_none() && st.queue.is_empty() {
-                return;
-            }
-        }
-        self.spawn_save_session();
     }
 
     /// 一次 drain scheduler events,分类:PlayUrlReady/LyricsReady 内部消化、
@@ -819,9 +767,10 @@ mod tests {
 
     use super::{
         DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, enter_shuffle,
-        exit_shuffle, next_in_queue, play_mode_str, prev_in_queue,
+        exit_shuffle, next_in_queue, prev_in_queue,
     };
     use crate::download::download_song;
+    use crate::queue::play_mode_str;
     use crate::state::State;
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
@@ -956,6 +905,12 @@ mod tests {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            // 测试出口:event hub 无订阅者(send 即丢)、无脚本。
+            notify: crate::notify::Notifier::new(
+                tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+                /*script*/ None,
+            ),
+            props: crate::props::PropsWatch::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),

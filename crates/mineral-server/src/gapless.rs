@@ -265,22 +265,18 @@ pub(crate) fn check_advance(player: &PlayerCore) {
         crate::download::spawn_harvest(player, cap);
     }
 
-    let (old_id, old_dur, has_queued) = player.with_state(|st| {
-        let cur = st.current_song.as_ref();
-        (
-            cur.map(|s| s.id.clone()),
-            cur.map(|s| s.duration_ms).unwrap_or(0),
-            st.queued.is_some(),
-        )
-    });
+    let (old, has_queued) = player.with_state(|st| (st.current_song.clone(), st.queued.is_some()));
     // 自然播完 = 听了整首;duration 未知时退用 position。
-    let listen_ms = if old_dur == 0 {
-        snap.position_ms
-    } else {
-        old_dur
-    };
-    if let Some(old) = old_id {
-        player.spawn_on_played(old, /*completed*/ true, listen_ms);
+    if let Some(old) = old {
+        let listen_ms = if old.duration_ms == 0 {
+            snap.position_ms
+        } else {
+            old.duration_ms
+        };
+        player.spawn_on_played(old.id.clone(), /*completed*/ true, listen_ms);
+        player
+            .notify()
+            .track_finished(&old, mineral_protocol::FinishReason::Eof);
     }
 
     let action = decide_advance(/*finished_advanced*/ true, snap.playing, has_queued);

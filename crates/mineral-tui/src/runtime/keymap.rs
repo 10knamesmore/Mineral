@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mineral_config::keys::{Key, KeyChord};
 use rustc_hash::FxHashMap;
 
-use super::action::{Action, SeekDelta, SelectionMove, VolumeDelta};
+use super::action::{Action, ScriptSlot, SeekDelta, SelectionMove, VolumeDelta};
 
 /// 把一个 crossterm 按键事件归一到 [`KeyChord`]:只保留 SHIFT / CONTROL 修饰
 /// (其余视为终端噪声丢弃),字符键的 SHIFT 由 [`KeyChord`] 的构造不变量吸收。
@@ -46,6 +46,10 @@ pub fn chord_from_event(key: &KeyEvent) -> Option<KeyChord> {
 pub struct Keymap {
     /// 归一和弦 → 动作。一对一(单动作);多键映同动作即多条目。
     table: FxHashMap<KeyChord, Action>,
+
+    /// 脚本动作名表:`Action::InvokeScript` 的槽位 → 注册名
+    /// (Action 须 `Copy`,名字进不了枚举,经此表间接)。
+    script_names: Vec<String>,
 }
 
 impl Keymap {
@@ -66,7 +70,11 @@ impl Keymap {
         let seek = i64::from(*behavior.seek_step_secs());
         let seek_big = i64::from(*behavior.seek_big_step_secs());
         let jump = usize::from(*behavior.list_jump_rows());
-        let pairs: Vec<(&mineral_config::KeyBinding, Action)> = vec![
+        // 脚本动作绑定:开放映射按名排序保证槽位确定性。
+        let mut script_bindings = keys.script().iter().collect::<Vec<_>>();
+        script_bindings.sort_by(|a, b| a.0.cmp(b.0));
+        let mut script_names = Vec::with_capacity(script_bindings.len());
+        let mut pairs: Vec<(&mineral_config::KeyBinding, Action)> = vec![
             (keys.toggle_fullscreen(), Action::ToggleFullscreen),
             (keys.open_queue(), Action::OpenQueue),
             (keys.quit(), Action::OpenQuitConfirm),
@@ -111,9 +119,18 @@ impl Keymap {
             (keys.love(), Action::ToggleLoveSelection),
             (keys.download(), Action::DownloadSelection),
         ];
-        Self::from_entries(pairs.into_iter().flat_map(|(binding, action)| {
+        for (name, binding) in script_bindings {
+            pairs.push((
+                binding,
+                Action::InvokeScript(ScriptSlot(script_names.len())),
+            ));
+            script_names.push(name.clone());
+        }
+        let mut keymap = Self::from_entries(pairs.into_iter().flat_map(|(binding, action)| {
             binding.chords().iter().copied().map(move |c| (c, action))
-        }))
+        }));
+        keymap.script_names = script_names;
+        keymap
     }
 
     /// 从绑定序列构造底层查表(供 [`Self::from_config`] 与测试直喂)。
@@ -126,7 +143,19 @@ impl Keymap {
     pub fn from_entries(entries: impl IntoIterator<Item = (KeyChord, Action)>) -> Self {
         Self {
             table: entries.into_iter().collect::<FxHashMap<_, _>>(),
+            script_names: Vec::new(),
         }
+    }
+
+    /// 槽位 → 脚本动作注册名(`Action::InvokeScript` 的执行点用)。
+    ///
+    /// # Params:
+    ///   - `slot`: 查表命中的槽位
+    ///
+    /// # Return:
+    ///   对应注册名;槽位越界(理论不可达)为 `None`。
+    pub fn script_action(&self, slot: ScriptSlot) -> Option<&str> {
+        self.script_names.get(slot.0).map(String::as_str)
     }
 
     /// 查表。

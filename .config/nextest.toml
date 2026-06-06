@@ -14,3 +14,7 @@ daemon-e2e = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = "binary(daemon_lifecycle)"
 test-group = "daemon-e2e"
+
+[[profile.default.overrides]]
+filter = "binary(script_hooks)"
+test-group = "daemon-e2e"

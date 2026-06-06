@@ -21,10 +21,10 @@ use crate::player::PlayerCore;
 
 /// 一首下载的结局(`Err` 另表失败):区分「真正下载」与「已存在跳过」,供完成提示分流统计。
 pub(crate) enum DownloadOutcome {
-    /// 真正流式下载并永久导出。
-    Downloaded,
+    /// 真正流式下载并永久导出(携带落盘路径,完成事件下发用)。
+    Downloaded(PathBuf),
 
-    /// 目标文件已存在,幂等跳过。
+    /// 目标文件已存在,幂等跳过(**不**触发完成事件)。
     Skipped,
 }
 
@@ -125,7 +125,7 @@ pub(crate) async fn download_song(
         .await
         .wrap_err_with(|| format!("rename 导出失败 {}", export.display()))?;
     mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
-    Ok(DownloadOutcome::Downloaded)
+    Ok(DownloadOutcome::Downloaded(export))
 }
 
 /// 流式把 `url` 下载到 `dst`,逐 chunk 写盘并按 `speed_tick` 节流更新 `progress` 的
@@ -336,7 +336,12 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
         let mut p = player.progress_handle().lock();
         p.done += 1;
         match outcome {
-            Ok(DownloadOutcome::Downloaded) => p.last_ok += 1,
+            Ok(DownloadOutcome::Downloaded(path)) => {
+                p.last_ok += 1;
+                drop(p);
+                player.notify().download_completed(song, &path);
+                p = player.progress_handle().lock();
+            }
             Ok(DownloadOutcome::Skipped) => p.last_skip += 1,
             Err(e) => {
                 drop(p);
@@ -448,7 +453,10 @@ mod tests {
             /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
-        assert!(matches!(outcome, DownloadOutcome::Downloaded), "应真正下载");
+        assert!(
+            matches!(outcome, DownloadOutcome::Downloaded(_)),
+            "应真正下载"
+        );
         assert!(
             probe_export(&music_dir, &s, BitRate::Lossless).is_some(),
             "永久下载文件应已落盘"

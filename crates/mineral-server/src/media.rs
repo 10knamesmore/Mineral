@@ -52,7 +52,7 @@ fn handle_command(player: &PlayerCore, cmd: MediaCommand) {
         }
         MediaCommand::Next => player.next_song(),
         MediaCommand::Previous => player.prev_or_restart(),
-        MediaCommand::Stop => audio.stop(),
+        MediaCommand::Stop => player.stop_playback(),
         MediaCommand::SeekForward(delta) => {
             let pos = audio.snapshot().position_ms;
             audio.seek(pos.saturating_add(dur_ms(delta)));

@@ -46,18 +46,31 @@ impl Server {
     ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
     ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
     ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
+    ///   - `script`: 脚本线程投递句柄(daemon 启用脚本时传 `Some`,其余 `None`)。
     pub async fn spawn(
         channels: Vec<Arc<dyn MusicChannel>>,
         audio_mode: AudioMode,
         persist: ServerStore,
         config: ServerConfig,
+        script: Option<mineral_script::ScriptSender>,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels, *config.channel_workers_per());
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
-        let player = PlayerCore::spawn(audio, scheduler, channels, persist, media_cache, &config);
+        // 容量按「单 client + advisory 语义」取小;积压时 event_pump 收 Lagged 丢弃。
+        let (events, _) = broadcast::channel::<Event>(/*capacity*/ 256);
+        let notify = crate::notify::Notifier::new(events.clone(), script);
+        let player = PlayerCore::spawn(
+            audio,
+            scheduler,
+            channels,
+            persist,
+            media_cache,
+            &config,
+            notify,
+        );
         // 读回上次会话:恢复播放模式(其余字段仅打日志,不自动恢复队列/进度)。
         // 同步 await:保证在 serve / 首次 PlayerSync 之前生效,client 一连上看到的就是恢复后的模式。
         restore_last_session(&player).await;
@@ -65,8 +78,6 @@ impl Server {
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
         let busy = Arc::new(AtomicBool::new(false));
-        // 容量按「单 client + advisory 语义」取小;积压时 event_pump 收 Lagged 丢弃。
-        let (events, _) = broadcast::channel::<Event>(/*capacity*/ 256);
         tokio::spawn(heartbeat(
             player.clone(),
             Arc::clone(&busy),
@@ -86,6 +97,15 @@ impl Server {
     /// 返回 `Err`,按 advisory 语义丢弃即可。
     pub fn event_sink(&self) -> broadcast::Sender<Event> {
         self.events.clone()
+    }
+
+    /// 接上脚本双泵(命令 → player 执行面;推送 → event hub)。daemon 入口在
+    /// [`Server::spawn`] 之后调一次;无脚本时泵闲置无害。
+    ///
+    /// # Params:
+    ///   - `pumps`: [`crate::ScriptParts::spawn_runtime`] 拆出的泵接线件
+    pub fn attach_script_pumps(&self, pumps: crate::ScriptPumps) {
+        pumps.start(self.player.clone(), self.events.clone());
     }
 
     /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。

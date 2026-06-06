@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_model::Song;
-use mineral_protocol::{DownloadTarget, PlayerSync};
+use mineral_protocol::PlayerSync;
 use mineral_server::Client;
 use mineral_task::TaskEvent;
 use ratatui::layout::Position;
@@ -44,7 +44,7 @@ pub struct App {
     pub state: AppState,
 
     /// 键 → 动作绑定表(由配置 keys/behavior 段落地)。
-    keymap: Keymap,
+    pub(crate) keymap: Keymap,
 
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
     pub(crate) overlays: OverlayStack,
@@ -70,7 +70,7 @@ pub struct App {
     /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
     /// 实现可能是同进程 `ClientHandle`,也可能是跨进程 `RemoteClient`,通过
     /// [`Client`] trait 抽象。**player 业务在 server 端**;App 只 forward 意图。
-    client: Arc<dyn Client>,
+    pub(crate) client: Arc<dyn Client>,
 
     /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管。
     cover_fetcher: CoverFetcher,
@@ -517,6 +517,7 @@ impl App {
             Action::NextSong => self.client.next_song(),
             Action::ToggleLoveSelection => self.toggle_love_selection(),
             Action::DownloadSelection => self.download_selection(),
+            Action::InvokeScript(slot) => self.invoke_script_action(slot),
         }
     }
 
@@ -629,42 +630,6 @@ impl App {
         }
     }
 
-    /// 空格键:有当前曲目时在 pause/resume 间切换;没歌时无动作。
-    fn toggle_play_pause(&mut self) {
-        if self.state.playback.track.is_none() {
-            return;
-        }
-        if self.state.playback.playing {
-            self.client.pause();
-        } else {
-            self.client.resume();
-        }
-    }
-
-    /// 在当前音量上加/减 `delta`,clamp 到 0..=100,本地立即更新避免 UI 滞后。
-    fn nudge_volume(&mut self, delta: i16) {
-        let cur = i16::from(self.state.playback.volume_pct);
-        let new = cur.saturating_add(delta).clamp(0, 100);
-        let pct = u8::try_from(new).unwrap_or(self.state.playback.volume_pct);
-        self.client.set_volume(pct);
-        self.state.playback.volume_pct = pct;
-    }
-
-    /// 相对当前位置跳 `delta_s` 秒,clamp 到 [0, duration]。
-    fn seek_relative(&mut self, delta_s: i64) {
-        let dur_ms = self.state.playback.duration_ms();
-        if dur_ms == 0 {
-            return;
-        }
-        let cur = i64::try_from(self.state.playback.position_ms).unwrap_or(0);
-        let max = i64::try_from(dur_ms).unwrap_or(0);
-        let new_ms = cur
-            .saturating_add(delta_s.saturating_mul(1000))
-            .clamp(0, max);
-        let new_u = u64::try_from(new_ms).unwrap_or(0);
-        self.client.seek(new_u);
-    }
-
     /// 列表光标移动,按当前 view 落到 `sel_playlist` / `sel_track`,越界钳首末行;
     /// 全屏态屏蔽(屏上无列表)。
     fn move_selection(&mut self, mv: SelectionMove) {
@@ -751,49 +716,6 @@ impl App {
         if matches!(self.state.view, View::Library) {
             self.state.view = View::Playlists;
             self.state.view_pos.leave();
-        }
-    }
-
-    /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
-    fn toggle_love_selection(&mut self) {
-        if self.state.fullscreen || !matches!(self.state.view, View::Library) {
-            return;
-        }
-        let filtered = self.state.filtered_tracks();
-        if let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone()) {
-            // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
-            self.client.toggle_love(song.id.clone());
-            // 乐观翻转:♥ 立即变,不等 server 确认。
-            self.state.toggle_loved_local(&song);
-        }
-    }
-
-    /// 下载当前视图选中项:Playlists 整张歌单 / Library 单曲。全屏态屏蔽。
-    fn download_selection(&mut self) {
-        if self.state.fullscreen {
-            return;
-        }
-        match self.state.view {
-            View::Playlists => {
-                let id = self
-                    .state
-                    .filtered_playlists()
-                    .get(self.state.sel_playlist)
-                    .map(|p| p.data.id.clone());
-                if let Some(id) = id {
-                    self.client.download(DownloadTarget::Playlist(id));
-                }
-            }
-            View::Library => {
-                let song = self
-                    .state
-                    .filtered_tracks()
-                    .get(self.state.sel_track)
-                    .map(|sv| sv.data.clone());
-                if let Some(song) = song {
-                    self.client.download(DownloadTarget::Song(Box::new(song)));
-                }
-            }
         }
     }
 }

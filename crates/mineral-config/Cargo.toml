@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 color-eyre          = { workspace = true }
 mlua                = { workspace = true }
+rustc-hash          = { workspace = true }
 serde               = { workspace = true }
 serde_json          = { workspace = true }
 serde_path_to_error = { workspace = true }

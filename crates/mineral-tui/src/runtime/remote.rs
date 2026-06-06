@@ -301,6 +301,13 @@ impl Client for RemoteClient {
         }
     }
 
+    fn invoke_action(&self, name: &str) -> Option<String> {
+        match self.send_recv(Request::InvokeAction(name.to_owned())) {
+            Response::Error(e) => Some(e),
+            _ => None,
+        }
+    }
+
     fn toggle_love(&self, id: SongId) -> bool {
         match self.send_recv(Request::ToggleLove(id)) {
             Response::LoveToggled(new) => new,
@@ -590,6 +597,7 @@ mod tests {
             mineral_server::AudioMode::ForceNull,
             mineral_persist::ServerStore::disabled(),
             mineral_server::ServerConfig::from_config(&cfg),
+            /*script*/ None,
         )
         .await?;
         let (listener, sock) = temp_listener()?;

@@ -5,6 +5,6 @@ mod pipeline;
 mod stub;
 mod warning;
 
-pub use pipeline::load;
+pub use pipeline::{load, load_with_vm};
 pub use stub::inject_noop_host;
 pub use warning::ConfigWarning;

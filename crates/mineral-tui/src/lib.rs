@@ -5,6 +5,7 @@ compile_error!("Windows 暂不支持");
 
 mod app;
 mod components;
+mod player_actions;
 mod render;
 mod runtime;
 #[cfg(test)]
@@ -114,6 +115,7 @@ pub async fn run(
                 audio_mode,
                 persist,
                 mineral_server::ServerConfig::from_config(&cfg),
+                /*script*/ None,
             )
             .await?;
             // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;

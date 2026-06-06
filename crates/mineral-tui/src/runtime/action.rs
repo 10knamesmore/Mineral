@@ -65,6 +65,10 @@ pub enum Action {
 
     /// 下载当前视图选中项(Library→单曲 / Playlists→整张歌单)。
     DownloadSelection,
+
+    /// 触发脚本具名动作(`tui.keys.script` 绑定)。槽位经
+    /// `Keymap::script_action` 解析回注册名(Action 须 `Copy`,名字不内嵌)。
+    InvokeScript(ScriptSlot),
 }
 
 /// 列表光标的一次移动。归一 j/k(±1)与 J/K(大跨)与 g/G(首 / 末)。
@@ -82,6 +86,10 @@ pub enum SelectionMove {
     /// 跳末行。
     Last,
 }
+
+/// 脚本动作槽位:`Keymap` 内 `script_names` 表的索引。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptSlot(pub usize);
 
 /// 音量增量(百分点;可负)。newtype 避免 dispatch 出现裸 `i16` 谜语参数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

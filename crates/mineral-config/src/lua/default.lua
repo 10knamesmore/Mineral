@@ -49,6 +49,9 @@ return {
             move_last = "G",
             love = "f",
             download = "d",
+            -- 脚本动作绑定:`mineral.action` 注册名 → 键(默认无)。
+            -- 例:script = { ["my.skip_short"] = "X" }
+            script = {},
         },
         behavior = {
             volume_step = 5, -- 单次音量增减,百分点
@@ -176,5 +179,11 @@ return {
         seek_threshold_ms = 1000, -- 进度偏离线性预期超过此值判定为 seek(供 MPRIS 上报)
         download_speed_tick_ms = 150, -- 下载测速刷新节流
         channel_workers_per = 8, -- 每个音乐源的后台并发 worker;大 = 抓取快但易撞限流
+    },
+    -- 脚本运行时(config.lua 顶层的 mineral.* 调用在 daemon 内真实生效)。
+    script = {
+        watchdog_instruction_interval = 2000, -- 每多少条 Lua VM 指令查一次墙钟;小 = 灵敏但开销大
+        watchdog_soft_wall_ms = 100, -- 回调超过此时长记 warn 日志,继续跑
+        watchdog_hard_wall_ms = 1000, -- 回调超过此时长被中断(只杀本次调用,脚本仍存活)
     },
 }

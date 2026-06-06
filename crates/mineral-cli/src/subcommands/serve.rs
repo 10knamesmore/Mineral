@@ -24,10 +24,12 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
 ///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
+///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
     config: mineral_config::Config,
+    script: mineral_server::ScriptParts,
 ) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
@@ -50,13 +52,30 @@ pub async fn run(
         std::env::var_os("MINERAL_AUDIO_NULL").is_some(),
         *config.audio().backend(),
     );
+    // 脚本线程先于 Server 起(只需 VM + host);其投递句柄喂给 Server 的事件
+    // 出口。runtime 句柄持有到本函数结束 —— Drop = 停机 + join。
+    let watchdog = mineral_script::WatchdogConfig::builder()
+        .instruction_interval(*config.script().watchdog_instruction_interval())
+        .soft_wall(std::time::Duration::from_millis(
+            *config.script().watchdog_soft_wall_ms(),
+        ))
+        .hard_wall(std::time::Duration::from_millis(
+            *config.script().watchdog_hard_wall_ms(),
+        ))
+        .build();
+    let (script_runtime, pumps) = script.spawn_runtime(watchdog);
+    let script_sender = script_runtime
+        .as_ref()
+        .map(mineral_script::ScriptRuntime::sender);
     let server = Server::spawn(
         channels,
         audio_mode,
         persist,
         ServerConfig::from_config(&config),
+        script_sender,
     )
     .await?;
+    server.attach_script_pumps(pumps);
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {

@@ -5,6 +5,7 @@
 //! 字段集 = 内建动作展开后的稳定命令名;每字段值为单键或键数组(数组整体替换)。
 //! 键字符串 → 和弦的解析复用 [`crate::keys::KeyChord::parse`],不在此重复定义。
 
+use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
 use crate::keys::KeyChord;
@@ -92,6 +93,11 @@ pub struct KeysConfig {
 
     /// 下载当前视图选中项。
     download: KeyBinding,
+
+    /// 脚本动作绑定:`mineral.action` 注册名 → 键(开放映射,默认空)。
+    /// 与内建动作不同,这里的键集合由用户脚本决定,client 触发时经
+    /// daemon 转投脚本线程执行。
+    script: FxHashMap<String, KeyBinding>,
 }
 
 /// 一个动作的键绑定:单键(`"space"`)或键数组(`{"n", "j"}`)。

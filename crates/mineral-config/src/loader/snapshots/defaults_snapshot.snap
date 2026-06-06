@@ -393,6 +393,7 @@ Config {
                     },
                 ],
             },
+            script: {},
         },
         behavior: BehaviorConfig {
             volume_step: 5,
@@ -509,5 +510,10 @@ Config {
         seek_threshold_ms: 1000,
         download_speed_tick_ms: 150,
         channel_workers_per: 8,
+    },
+    script: ScriptConfig {
+        watchdog_instruction_interval: 2000,
+        watchdog_soft_wall_ms: 100,
+        watchdog_hard_wall_ms: 1000,
     },
 }

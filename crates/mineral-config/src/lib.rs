@@ -14,5 +14,5 @@ mod schema;
 
 pub use check::render_check;
 pub use init::{InitOutcome, run_init};
-pub use loader::{ConfigWarning, inject_noop_host, load};
+pub use loader::{ConfigWarning, inject_noop_host, load, load_with_vm};
 pub use schema::*;

@@ -171,6 +171,11 @@ pub enum Request {
 
     /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。返回 [`Response::DownloadProgress`]。
     DownloadProgress,
+
+    // ---- 脚本 ----
+    /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
+    /// 未注册 / 脚本未启用 / 回调失败返回 [`Response::Error`]。
+    InvokeAction(String),
 }
 
 /// Server → Client 应答。

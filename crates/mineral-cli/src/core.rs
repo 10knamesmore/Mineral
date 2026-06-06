@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
 
+use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
@@ -37,6 +38,12 @@ pub struct Args {
 /// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// 触发 config.lua 里 `mineral.action` 注册的具名动作(连 daemon)。
+    Action {
+        /// 动作注册名,如 "my.skip_short"。
+        name: String,
+    },
+
     /// 缓存管理(清理可重建缓存)。
     Cache {
         /// cache 下的具体子命令。
@@ -78,6 +85,7 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
 /// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
+        Command::Action { name } => action::run(&name).await,
         Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,

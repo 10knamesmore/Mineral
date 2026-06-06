@@ -26,6 +26,7 @@
 ---@field download? mineral.DownloadConfig 下载段(音质 / 目录)
 ---@field sources? mineral.SourcesConfig 音乐源段(网易云等)
 ---@field daemon? mineral.DaemonConfig daemon 后端节拍段(gapless / 各间隔)
+---@field script? mineral.ScriptConfig 脚本运行时段(watchdog 双阈值)
 
 ---TUI client 命名空间:只影响终端界面,改后重启 TUI 生效。
 ---@class mineral.TuiConfig
@@ -106,6 +107,7 @@
 ---@field move_last? mineral.KeyBinding 跳末行
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥
 ---@field download? mineral.KeyBinding 下载选中曲 / 歌单
+---@field script? table<string, mineral.KeyBinding> 脚本动作绑定:mineral.action 注册名 → 键
 
 ---交互手感旋钮。
 ---@class mineral.BehaviorConfig
@@ -243,3 +245,9 @@
 ---@field seek_threshold_ms? integer 进度偏离线性预期超过此毫秒数判定为 seek(供媒体控件上报);需远大于节拍抖动、远小于最小 seek 步长
 ---@field download_speed_tick_ms? integer 下载测速刷新节流,毫秒
 ---@field channel_workers_per? integer 每个音乐源的后台任务并发 worker 数,≥1;大了抓取快但更容易撞源限流
+
+---脚本运行时(config.lua 顶层的 mineral.* 调用在 daemon 内真实生效)。
+---@class mineral.ScriptConfig
+---@field watchdog_instruction_interval? integer 每多少条 Lua VM 指令查一次墙钟;小 = 灵敏但开销大
+---@field watchdog_soft_wall_ms? integer 回调超过此毫秒数记 warn 日志,继续跑
+---@field watchdog_hard_wall_ms? integer 回调超过此毫秒数被中断(只杀本次调用,脚本仍存活)

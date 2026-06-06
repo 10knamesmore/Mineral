@@ -16,6 +16,7 @@ use super::keys::KeysConfig;
 use super::layout::LayoutConfig;
 use super::lyrics::LyricsConfig;
 use super::prefetch::PrefetchConfig;
+use super::script::ScriptConfig;
 use super::sources::SourcesConfig;
 use super::spectrum::SpectrumConfig;
 use super::theme::ThemeConfig;
@@ -46,6 +47,9 @@ pub struct Config {
 
     /// daemon 段。
     daemon: DaemonConfig,
+
+    /// 脚本运行时段(watchdog 双阈值)。
+    script: ScriptConfig,
 }
 
 /// TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是

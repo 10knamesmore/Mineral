@@ -51,6 +51,17 @@ impl ClientHandle {
         Ok(new)
     }
 
+    /// 触发脚本具名动作并等待结果(serve 层处理 `InvokeAction` 用)。
+    ///
+    /// # Params:
+    ///   - `name`: 动作注册名
+    ///
+    /// # Return:
+    ///   成功为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`。
+    pub(crate) async fn invoke_action_async(&self, name: &str) -> color_eyre::Result<()> {
+        self.player.invoke_script_action(name).await
+    }
+
     /// 查询一首歌的播放统计(persist),转成 protocol DTO。
     ///
     /// # Params:
@@ -153,6 +164,19 @@ pub trait Client: Send + Sync {
     ///   切换后的 loved 状态(daemon 模式为真实值;in-proc 为占位 `false`)。
     fn toggle_love(&self, id: SongId) -> bool;
 
+    /// 触发脚本具名动作(`mineral.action` 注册)。
+    ///
+    /// # Params:
+    ///   - `name`: 动作注册名。
+    ///
+    /// # Return:
+    ///   `None` = 已受理 / 成功;`Some(err)` = daemon 报错(未注册 / 脚本未启用 /
+    ///   执行失败),client 应提示用户。
+    fn invoke_action(&self, name: &str) -> Option<String> {
+        let _ = name;
+        Some("脚本动作不可用(当前 client 不支持)".to_owned())
+    }
+
     /// 查询一首歌的播放统计;无记录 / 不可用返回 `None`。
     ///
     /// # Params:
@@ -210,7 +234,7 @@ impl Client for ClientHandle {
         self.player.audio().resume();
     }
     fn stop(&self) {
-        self.player.audio().stop();
+        self.player.stop_playback();
     }
     fn seek(&self, position_ms: u64) {
         self.player.audio().seek(position_ms);

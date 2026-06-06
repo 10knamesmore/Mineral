@@ -22,6 +22,8 @@ mineral-config          = { workspace = true }
 mineral-log             = { workspace = true }
 mineral-paths           = { workspace = true }
 mineral-persist         = { workspace = true }
+mineral-script          = { workspace = true }
+mineral-server          = { workspace = true }
 mineral-tui             = { workspace = true }
 tokio                   = { workspace = true }
 
