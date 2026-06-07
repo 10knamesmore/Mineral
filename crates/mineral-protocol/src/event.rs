@@ -67,6 +67,16 @@ pub enum Event {
     /// 脚本已热重载(config.lua 变更、新 VM 顶上)。client 据此重拉
     /// `ScriptBinds` 合 keymap(daemon 重载完成是 bind 表就绪的权威信号)。
     ScriptReloaded,
+
+    /// 自定义事件总线消息(脚本 `mineral.emit` 扇出)。daemon 零解释、
+    /// 原样转发;语义契约在用户自己的两端(脚本 ↔ 外部 client)之间。
+    BusMessage {
+        /// 事件名(用户命名空间,建议 `插件名.事件` 形)。
+        name: String,
+
+        /// 开放载荷(树形自描述,见 [`BusValue`])。
+        payload: BusValue,
+    },
 }
 
 impl Event {
@@ -80,8 +90,38 @@ impl Event {
             | Self::DownloadCompleted { .. }
             | Self::StoreChanged { .. }
             | Self::ScriptReloaded => Subscription::Lifecycle,
+            Self::BusMessage { .. } => Subscription::Bus,
         }
     }
+}
+
+/// 自定义事件总线的开放载荷:用户自定义结构,daemon 零解释转发。
+///
+/// 树形自描述值,bincode 可编解码(不依赖 `deserialize_any`,故**不用**
+/// `serde_json::Value`);Lua table ↔ 本类型的转换在脚本 crate 的 VM 边界。
+/// `Map` 用有序键值对(非 hash 容器):编码确定、保留脚本侧构造顺序。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum BusValue {
+    /// 空。
+    Nil,
+
+    /// 布尔。
+    Bool(bool),
+
+    /// 整数。
+    Int(i64),
+
+    /// 浮点(Lua number 的非整数形)。
+    Float(f64),
+
+    /// 字符串。
+    Str(String),
+
+    /// 数组。
+    Array(Vec<Self>),
+
+    /// 字符串键映射(有序键值对)。
+    Map(Vec<(String, Self)>),
 }
 
 /// Toast 视觉级别。

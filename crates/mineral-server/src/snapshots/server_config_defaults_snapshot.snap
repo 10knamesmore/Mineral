@@ -28,4 +28,6 @@ ServerConfig {
         download_speed_tick_ms: 150,
         channel_workers_per: 8,
     },
+    hook_timeout_ms: 2000,
+    spawn_max_concurrent: 8,
 }

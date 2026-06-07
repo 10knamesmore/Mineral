@@ -20,6 +20,7 @@ mod client;
 mod config;
 mod download;
 mod gapless;
+mod hook_bridge;
 mod media;
 mod media_cache;
 mod notify;

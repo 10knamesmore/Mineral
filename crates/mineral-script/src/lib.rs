@@ -10,17 +10,21 @@
 
 mod api;
 mod dispatch;
+mod hooks;
 mod host;
 mod message;
+mod proc;
 mod runtime;
 mod watchdog;
 
 pub use mlua;
 
+pub use hooks::{HookContext, HookDecision, HookKind, RewriteSpec};
 pub use host::{ScriptHost, install_api};
 pub use message::{
     ActionOutcome, PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd,
     ScriptEvent, ScriptSender, TrackFinishedReason,
 };
+pub use proc::{SpawnId, SpawnResult, SpawnSpec, run_child};
 pub use runtime::ScriptRuntime;
 pub use watchdog::WatchdogConfig;

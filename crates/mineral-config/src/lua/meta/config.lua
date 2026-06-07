@@ -251,3 +251,5 @@
 ---@field watchdog_instruction_interval? integer 每多少条 Lua VM 指令查一次墙钟;小 = 灵敏但开销大
 ---@field watchdog_soft_wall_ms? integer 回调超过此毫秒数记 warn 日志,继续跑
 ---@field watchdog_hard_wall_ms? integer 回调超过此毫秒数被中断(只杀本次调用,脚本仍存活)
+---@field hook_timeout_ms? integer before_play/before_download 拦截 hook 的软超时,毫秒;超时按放行处理并记 warn,播放/下载不被慢 hook 卡住
+---@field spawn_max_concurrent? integer mineral.spawn 子进程并发上限,防脚本 fork 炸;0 = 不限

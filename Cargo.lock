@@ -2726,6 +2726,7 @@ dependencies = [
  "mlua",
  "parking_lot",
  "pretty_assertions",
+ "proptest",
  "rustc-hash",
  "tokio",
  "typed-builder",

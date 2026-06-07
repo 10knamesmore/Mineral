@@ -184,8 +184,10 @@ impl ScriptPumps {
             }
         });
         tokio::spawn(async move {
+            // 在跑子进程表归泵任务所有,随泵同生命周期。
+            let spawns = SpawnTable::new(player.spawn_max_concurrent());
             while let Some(cmd) = cmd_rx.recv().await {
-                apply_cmd(&player, cmd);
+                apply_cmd(&player, cmd, &spawns);
             }
         });
         ScriptReloadParts {
@@ -193,6 +195,34 @@ impl ScriptPumps {
             push_tx,
             watchdog,
             props_snapshot,
+        }
+    }
+}
+
+/// `mineral.spawn` 的在跑子进程表:id → kill 信号发送端。
+///
+/// 完成 / 被杀即移除;并发闸按表长判断(`max == 0` 不限)。
+struct SpawnTable {
+    /// 在跑子进程。
+    running: Arc<
+        parking_lot::Mutex<
+            rustc_hash::FxHashMap<mineral_script::SpawnId, tokio::sync::oneshot::Sender<()>>,
+        >,
+    >,
+
+    /// 并发上限(配置 `script.spawn_max_concurrent`)。
+    max: usize,
+}
+
+impl SpawnTable {
+    /// 建空表。
+    ///
+    /// # Params:
+    ///   - `max`: 并发上限(0 = 不限)
+    fn new(max: usize) -> Self {
+        Self {
+            running: Arc::new(parking_lot::Mutex::new(rustc_hash::FxHashMap::default())),
+            max,
         }
     }
 }
@@ -211,8 +241,55 @@ fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
     }
 }
 
+/// 跑一次 `library.search` 并回投结果。
+///
+/// 限定源:查不到对应 channel / 该源失败都回 `(nil, err)`。
+/// 不限定:跨全部源聚合,单源失败 warn 跳过(与 `library.playlists` 同语义)。
+///
+/// # Params:
+///   - `term`: 关键词
+///   - `source`: 限定源(`None` = 全源聚合)
+///   - `page`: 分页
+///   - `query`: 回投句柄
+async fn resolve_search(
+    player: &PlayerCore,
+    term: String,
+    source: Option<mineral_model::SourceKind>,
+    page: mineral_channel_core::Page,
+    query: QueryId,
+) {
+    match source {
+        Some(source) => {
+            let Some(channel) = player.channel_for(source).cloned() else {
+                let e = color_eyre::eyre::eyre!("no channel for source {}", source.name());
+                resolve_err(player, query, &e);
+                return;
+            };
+            match channel.search_songs(&term, page).await {
+                Ok(songs) => resolve_ok(player, query, ResolveValue::Songs(songs)),
+                Err(e) => resolve_err(player, query, &color_eyre::eyre::eyre!("{e}")),
+            }
+        }
+        None => {
+            let mut songs = Vec::new();
+            for channel in player.channels() {
+                match channel.search_songs(&term, page).await {
+                    Ok(hits) => songs.extend(hits),
+                    Err(e) => mineral_log::warn!(
+                        target: "script",
+                        source = channel.source().name(),
+                        error = %e,
+                        "library.search: 该源搜索失败,跳过"
+                    ),
+                }
+            }
+            resolve_ok(player, query, ResolveValue::Songs(songs));
+        }
+    }
+}
+
 /// 把一条脚本命令落到 player 执行面(与 client Request 同一些方法)。
-fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
+fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
     match cmd {
         ScriptCmd::Toggle => {
             if player.audio_snapshot().playing {
@@ -369,6 +446,48 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
                     }
                 }
             });
+        }
+        ScriptCmd::LibrarySearch {
+            term,
+            source,
+            offset,
+            limit,
+            query,
+        } => {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let page = mineral_channel_core::Page::new(offset, limit);
+                resolve_search(&player, term, source, page, query).await;
+            });
+        }
+        ScriptCmd::Spawn { id, spec, query } => {
+            let over_limit = spawns.max != 0 && spawns.running.lock().len() >= spawns.max;
+            if over_limit {
+                let e = color_eyre::eyre::eyre!(
+                    "spawn 并发超限(script.spawn_max_concurrent = {})",
+                    spawns.max
+                );
+                resolve_err(player, query, &e);
+            } else {
+                let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+                spawns.running.lock().insert(id, kill_tx);
+                let player = player.clone();
+                let running = Arc::clone(&spawns.running);
+                tokio::spawn(async move {
+                    let result = mineral_script::run_child(spec, kill_rx).await;
+                    running.lock().remove(&id);
+                    match result {
+                        Ok(done) => resolve_ok(&player, query, ResolveValue::Spawn(done)),
+                        Err(e) => resolve_err(&player, query, &e),
+                    }
+                });
+            }
+        }
+        ScriptCmd::SpawnKill { id } => {
+            // 已退出 / 未知 id:发送端缺席,no-op。
+            if let Some(kill) = spawns.running.lock().remove(&id) {
+                let _ = kill.send(());
+            }
         }
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();

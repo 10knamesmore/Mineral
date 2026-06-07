@@ -37,6 +37,72 @@ mineral = {}
 ---@overload fun(event: "download_completed", fn: fun(args: mineral.DownloadCompletedArgs))
 function mineral.on(event, fn) end
 
+--- 同步拦截点名(与 Rust `HookKind` 由守卫测试钉死同步)。
+---@alias mineral.HookName "before_play"|"before_download"
+
+--- 同步拦截回调的 ctx。
+---@class mineral.HookCtx
+---@field song mineral.Song  触发拦截的歌
+---@field url string  原始播放 / 下载 URL
+---@field quality string  原始音质名(standard/higher/exhigh/lossless/hires)
+---@field kind mineral.HookName  拦截点名
+
+--- 同步拦截回调的改写返回值(字段全可选,只给要改的)。
+---@class mineral.HookReturn
+---@field url? string  改写后的 URL
+---@field quality? string  改写后的音质名
+---@field skip? string  跳过本次,值为原因(给了 skip 则忽略 url/quality)
+
+--- 注册同步拦截 hook:daemon 在起播前(`before_play`)/ 下载写盘前
+--- (`before_download`)同步等待回调裁决。返回值:`nil`(或 `true`)放行;
+--- `false` 或 `{ skip = "原因" }` 跳过本次(播放跳下一首 / 下载记 skip);
+--- `{ url = ?, quality = ? }` 改写后继续。改写过的播放流不入缓存。
+--- **回调要快**:超过 `script.hook_timeout_ms`(默认 2000ms)按放行处理。
+--- 同一拦截点可注册多个,按注册顺序调用,首个非放行返回值短路生效。
+---@param name mineral.HookName
+---@param fn fun(ctx: mineral.HookCtx): nil|boolean|mineral.HookReturn
+function mineral.hook(name, fn) end
+
+--- 子进程句柄(`mineral.spawn` 返回)。
+---@class mineral.SpawnHandle
+local SpawnHandle = {}
+
+--- 中止子进程(SIGKILL;已退出 no-op)。
+function SpawnHandle:kill() end
+
+--- 子进程结束后的结果(`mineral.spawn` 回调入参)。
+---@class mineral.SpawnResult
+---@field code? integer  退出码;被信号终止(含 kill)时为 nil
+---@field stdout string  标准输出
+---@field stderr string  标准错误
+---@field killed boolean  是否被 `handle:kill()` 中止
+
+--- 起一个异步子进程,退出后回调 `fn(result, nil)`;spawn 本身失败
+--- (可执行不存在 / 超并发上限 `script.spawn_max_concurrent`)回调收
+--- `(nil, err)`。`args` 是字符串数组(首元素为可执行文件),不经 shell。
+---@param args string[]  命令与参数,如 `{"curl", "-s", url}`
+---@param opts? { cwd?: string, env?: table<string, string> }  工作目录 / 环境变量
+---@param fn fun(result: mineral.SpawnResult|nil, err: string|nil): nil
+---@return mineral.SpawnHandle handle
+---@overload fun(args: string[], fn: fun(result: mineral.SpawnResult|nil, err: string|nil): nil): mineral.SpawnHandle
+function mineral.spawn(args, opts, fn) end
+
+--- 总线载荷:标量与嵌套 table(数组形或字符串键映射,可混嵌套不可同层混用;
+--- 不支持 function/userdata,嵌套上限 8 层)。
+---@alias mineral.BusPayload nil|boolean|number|string|table
+
+--- 发一条自定义总线消息:本 VM 的 `on_message` 订阅者同步收到,
+--- 订阅 Bus 类别的外部 client 经 daemon 原样转发收到(daemon 零解释)。
+--- 命名建议 `插件名.事件` 形,避免与他人脚本撞名。
+---@param name string  消息名
+---@param payload? mineral.BusPayload  载荷
+function mineral.emit(name, payload) end
+
+--- 订阅自定义总线消息(按名精确匹配;同名可多订,注册顺序调用)。
+---@param name string  消息名
+---@param fn fun(payload: mineral.BusPayload): nil
+function mineral.on_message(name, fn) end
+
 --- 按键瞬间 client 正在展示的视图(与 Rust `ViewKind` 由守卫测试钉死同步)。
 ---@alias mineral.ViewKind "playlists"|"tracks"|"queue"|"fullscreen"|"search"
 
@@ -185,6 +251,15 @@ function mineral.library.playlists(fn) end
 ---@param playlist_id string  歌单 id(`namespace:value`)
 ---@param fn fun(songs: mineral.Song[], err: string|nil): nil
 function mineral.library.tracks(playlist_id, fn) end
+
+--- 按关键词搜索歌曲(异步回调)。
+--- `opts.source` 省略 = 跨全部源聚合(单源失败跳过该源);
+--- 指定则只搜该源,无对应源时回调收 `(nil, err)`。
+---@param query string  关键词
+---@param opts? { source?: string, offset?: integer, limit?: integer }  搜索选项(offset 默认 0,limit 默认 30)
+---@param fn fun(songs: mineral.Song[]|nil, err: string|nil): nil
+---@overload fun(query: string, fn: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
+function mineral.library.search(query, opts, fn) end
 
 --- 设/取消一首歌的 love(♥)。fire-and-forget(本地 persist + 远端)。
 ---@param song_id string

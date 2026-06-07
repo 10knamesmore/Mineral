@@ -111,6 +111,12 @@ pub(crate) struct Inner {
 
     /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `daemon.seek_threshold_ms`)。
     media_seek_threshold_ms: u64,
+
+    /// 同步拦截 hook 软超时(配置 `script.hook_timeout_ms`)。
+    hook_timeout: Duration,
+
+    /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
+    spawn_max_concurrent: usize,
 }
 
 impl PlayerCore {
@@ -161,6 +167,8 @@ impl PlayerCore {
             download_speed_tick: Duration::from_millis(*config.daemon().download_speed_tick_ms()),
             media_report_interval_ms: *config.daemon().report_interval_ms(),
             media_seek_threshold_ms: *config.daemon().seek_threshold_ms(),
+            hook_timeout: Duration::from_millis(*config.hook_timeout_ms()),
+            spawn_max_concurrent: *config.spawn_max_concurrent(),
         });
         let me = Self { inner };
         let bg = me.clone();
@@ -244,6 +252,32 @@ impl PlayerCore {
     /// 下载音质(配置 `download.quality`)。
     pub(crate) fn download_quality(&self) -> BitRate {
         self.inner.download_quality
+    }
+
+    /// 同步拦截 hook 软超时(配置 `script.hook_timeout_ms`)。
+    pub(crate) fn hook_timeout(&self) -> Duration {
+        self.inner.hook_timeout
+    }
+
+    /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
+    pub(crate) fn spawn_max_concurrent(&self) -> usize {
+        self.inner.spawn_max_concurrent
+    }
+
+    /// 回填当前曲的 `play_url` 并 bump(拦截桥起播 / 改写后调)。
+    ///
+    /// 同值幂等:`handle_play_url_ready` 已在锁内写过原值,放行路径这里
+    /// 不再重复 bump;改写路径值变了才 bump。
+    ///
+    /// # Params:
+    ///   - `pu`: 生效的播放 URL(放行 = 原 URL,改写 = 改写后)
+    pub(crate) fn set_play_url(&self, pu: PlayUrl) {
+        let mut st = self.inner.state.lock();
+        if st.play_url.as_ref() == Some(&pu) {
+            return;
+        }
+        st.play_url = Some(pu);
+        st.bump_current();
     }
 
     /// 下载测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)。
@@ -430,10 +464,8 @@ impl PlayerCore {
             st.bump_current();
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using queued url");
-            download::play_capturing(self, song, &pu, self.inner.playback_quality);
-            let mut st = self.inner.state.lock();
-            st.play_url = Some(pu);
-            st.bump_current();
+            // 拦截桥:无脚本同步直走(play_capturing + 回填 play_url),有脚本异步裁决。
+            crate::hook_bridge::before_play(self, song, pu);
         } else {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit SongUrl task");
             let handle = self.inner.scheduler.submit(
@@ -670,7 +702,9 @@ impl PlayerCore {
             Route::Current(song) => {
                 mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
                 if let Some(song) = song {
-                    download::play_capturing(self, &song, &play_url, self.inner.playback_quality);
+                    // 拦截桥:无脚本同步直走,有脚本异步裁决(play_url 已在锁内写过,
+                    // 桥内回填同值幂等;改写时回填改写值)。
+                    crate::hook_bridge::before_play(self, &song, play_url);
                 }
             }
             Route::Prefetch => {
@@ -924,7 +958,47 @@ mod tests {
             media_cache,
             // 测试出口:event hub 无订阅者(send 即丢)。
             tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+            /*script*/ None,
         )
+    }
+
+    /// 组装带脚本线程的 [`PlayerCore`](hook 拦截桥测试用):eval 给定脚本,
+    /// 投递句柄接进 Notifier。返回的 runtime 须由调用方持有(drop 即停脚本线程)。
+    ///
+    /// # Params:
+    ///   - `script`: 要 eval 的用户脚本(注册 hook 等)。
+    ///
+    /// # Return:
+    ///   `(core, runtime)`。
+    fn core_with_script(
+        script: &str,
+    ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+        use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = mineral_script::mlua::Lua::new();
+        install_api(&lua, &host)?;
+        lua.load(script).exec()?;
+        let sender = ScriptSender::detached();
+        let watchdog = mineral_script::WatchdogConfig::builder()
+            .instruction_interval(10_000)
+            .soft_wall(Duration::from_millis(200))
+            .hard_wall(Duration::from_secs(1))
+            .build();
+        let runtime = ScriptRuntime::spawn(lua, host, watchdog, &sender)?;
+        let core = core_with_events(
+            vec![Arc::new(RecordingChannel {
+                calls: Arc::default(),
+                url_delay: None,
+            })],
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+            Some(sender),
+        )?;
+        Ok((core, runtime))
     }
 
     /// 同 [`core_with_channels`],但允许注入 event hub 发送端(事件断言用)。
@@ -944,6 +1018,7 @@ mod tests {
         music_dir: Option<PathBuf>,
         media_cache: MediaCache,
         events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
+        script: Option<mineral_script::ScriptSender>,
     ) -> color_eyre::Result<PlayerCore> {
         // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
         let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
@@ -960,8 +1035,8 @@ mod tests {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            // 无脚本(脚本路由 mineral-script 的 runtime 测试与 daemon e2e 覆盖)。
-            notify: crate::notify::Notifier::new(events, /*script*/ None),
+            // 多数测试无脚本;hook 拦截测试经 `core_with_script` 注入。
+            notify: crate::notify::Notifier::new(events, script),
             props: crate::props::PropsWatch::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
@@ -976,6 +1051,8 @@ mod tests {
             download_speed_tick: Duration::from_millis(*cfg.daemon().download_speed_tick_ms()),
             media_report_interval_ms: *cfg.daemon().report_interval_ms(),
             media_seek_threshold_ms: *cfg.daemon().seek_threshold_ms(),
+            hook_timeout: Duration::from_millis(*cfg.hook_timeout_ms()),
+            spawn_max_concurrent: *cfg.spawn_max_concurrent(),
         });
         Ok(PlayerCore { inner })
     }
@@ -1020,6 +1097,105 @@ mod tests {
         let mut v = ids(songs);
         v.sort_unstable();
         v
+    }
+
+    /// 轮询断言:在 deadline 内反复检查谓词(hook 拦截是 spawn 的异步任务)。
+    async fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            if pred() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    /// before_play 改写:hook 返回 {url, quality} → 起播用改写值、play_url 回填改写值。
+    #[tokio::test]
+    async fn before_play_rewrite_replaces_url_and_quality() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx)
+                return { url = "https://fallback.example/b.flac", quality = "standard" }
+            end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        let rewritten = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url
+                    .as_ref()
+                    .is_some_and(|pu| pu.url.to_string() == "https://fallback.example/b.flac")
+            })
+        })
+        .await;
+        assert!(rewritten, "play_url 应回填改写后的 URL");
+        core.with_state(|st| {
+            assert_eq!(
+                st.play_url.as_ref().map(|pu| pu.quality),
+                Some(BitRate::Standard),
+                "音质应一并改写"
+            );
+        });
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_play 跳过:hook 返回 false → 不起播本曲,推进到下一首。
+    #[tokio::test]
+    async fn before_play_skip_advances_to_next() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            local skipped = false
+            mineral.hook("before_play", function(ctx)
+                -- 只跳第一次(下一首放行,避免连锁)
+                if not skipped then
+                    skipped = true
+                    return false
+                end
+            end)
+            "#,
+        )?;
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+        });
+        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        let advanced = wait_until(|| {
+            core.with_state(|st| {
+                st.current_song
+                    .as_ref()
+                    .is_some_and(|s| s.id.as_str() == "b")
+            })
+        })
+        .await;
+        assert!(advanced, "skip 后应推进到下一首");
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_play 放行(无 hook 命中):走原 capture 起播路径,play_url 回填原值。
+    #[tokio::test]
+    async fn before_play_continue_keeps_original() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script("-- 无 hook")?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        let original = test_play_url("a")?;
+        let want = original.url.to_string();
+        crate::hook_bridge::before_play(&core, &song("a"), original);
+        let kept = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url
+                    .as_ref()
+                    .is_some_and(|pu| pu.url.to_string() == want)
+            })
+        })
+        .await;
+        assert!(kept, "放行应回填原 URL");
+        drop(runtime);
+        Ok(())
     }
 
     /// next:Sequential 到尾返回 None,否则取下一首。
@@ -1506,6 +1682,7 @@ mod tests {
             /*music_dir*/ None,
             MediaCache::disabled(),
             events_tx,
+            /*script*/ None,
         )?;
         let target = song("e1");
         core.play_song(&target);
@@ -1546,6 +1723,7 @@ mod tests {
             /*music_dir*/ None,
             MediaCache::disabled(),
             events_tx,
+            /*script*/ None,
         )?;
         core.play_song(&song("e1"));
         // 立即切走:当前曲不再是 e1,e1 的失败(或被 cancel)不该报。
@@ -1640,8 +1818,11 @@ mod tests {
         let progress = Arc::new(Mutex::new(DownloadProgress::default()));
         download_song(
             &dl_channel,
-            &http,
-            &music_dir,
+            &crate::download::DownloadEnv {
+                http: &http,
+                music_dir: &music_dir,
+                hooks: &crate::hook_bridge::HookGate::disabled(),
+            },
             &s,
             BitRate::Lossless,
             &progress,

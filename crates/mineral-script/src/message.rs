@@ -246,6 +246,24 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
+    /// 按关键词搜索歌曲;结果以 [`ResolveValue::Songs`] 回投 `query`。
+    LibrarySearch {
+        /// 搜索关键词。
+        term: String,
+
+        /// 限定源;`None` = 跨全部源聚合(单源失败跳过该源)。
+        source: Option<mineral_model::SourceKind>,
+
+        /// 起始偏移(从 0 起)。
+        offset: u32,
+
+        /// 单页返回上限。
+        limit: u32,
+
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
     /// 设/取消一首歌的 love。fire-and-forget,失败只记日志。
     SetLoved {
         /// 目标歌。
@@ -253,6 +271,24 @@ pub enum ScriptCmd {
 
         /// true=喜欢,false=取消。
         loved: bool,
+    },
+
+    /// 起一个子进程;结束后以 [`ResolveValue::Spawn`] 回投 `query`。
+    Spawn {
+        /// 脚本侧分配的标识(`handle:kill()` 经它路由)。
+        id: crate::proc::SpawnId,
+
+        /// 结构化参数。
+        spec: crate::proc::SpawnSpec,
+
+        /// 结果回投句柄。
+        query: QueryId,
+    },
+
+    /// 中止一个在跑的子进程(已退出 / 未知 id 为 no-op)。
+    SpawnKill {
+        /// 目标子进程标识。
+        id: crate::proc::SpawnId,
     },
 }
 
@@ -274,6 +310,9 @@ pub enum ResolveValue {
 
     /// 歌单列表(`library.playlists`)。
     Playlists(Vec<PlaylistBrief>),
+
+    /// 子进程结束(`mineral.spawn` 回调)。
+    Spawn(crate::proc::SpawnResult),
 
     /// 查询失败(人读信息)。
     Error(String),
@@ -323,6 +362,18 @@ pub(crate) enum ScriptMsg {
     GetBinds {
         /// bind 表回执(接收端 drop 时静默丢)。
         reply: tokio::sync::oneshot::Sender<Vec<mineral_protocol::ScriptBind>>,
+    },
+
+    /// 同步拦截:跑一类 hook 并回执裁决(daemon 侧带墙钟超时 await)。
+    Intercept {
+        /// 拦截点类别。
+        kind: crate::hooks::HookKind,
+
+        /// 入参快照。
+        ctx: crate::hooks::HookContext,
+
+        /// 裁决回执(接收端超时放弃时静默丢)。
+        reply: tokio::sync::oneshot::Sender<crate::hooks::HookDecision>,
     },
 
     /// 优雅停机:主循环退出,线程结束。
@@ -425,6 +476,56 @@ impl ScriptSender {
             let _ = reply.send(Vec::new());
         }
         rx
+    }
+
+    /// 同步拦截:把入参快照投给脚本线程并等裁决,墙钟超时放行。
+    ///
+    /// 一切异常路径(未挂线程 / 线程退出 / 超时)都返回
+    /// [`HookDecision::Continue`](crate::HookDecision::Continue) —— 拦截失败
+    /// 不致命,播放 / 下载照常推进,超时与线程退出各记一条 warn。
+    ///
+    /// # Params:
+    ///   - `kind`: 拦截点类别
+    ///   - `ctx`: 入参快照
+    ///   - `timeout`: 软超时(配置 `script.hook_timeout_ms`)
+    ///
+    /// # Return:
+    ///   裁决结果。
+    pub async fn intercept(
+        &self,
+        kind: crate::hooks::HookKind,
+        ctx: crate::hooks::HookContext,
+        timeout: std::time::Duration,
+    ) -> crate::hooks::HookDecision {
+        use crate::hooks::HookDecision;
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if self
+            .try_send(ScriptMsg::Intercept { kind, ctx, reply })
+            .is_err()
+        {
+            // 无脚本线程:拦截天然不存在,静默放行(不是异常)。
+            return HookDecision::Continue;
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_dropped)) => {
+                mineral_log::warn!(
+                    target: "script",
+                    hook = kind.as_str(),
+                    "脚本线程退出,拦截放行"
+                );
+                HookDecision::Continue
+            }
+            Err(_elapsed) => {
+                mineral_log::warn!(
+                    target: "script",
+                    hook = kind.as_str(),
+                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    "拦截 hook 超时,放行"
+                );
+                HookDecision::Continue
+            }
+        }
     }
 
     /// 调用一个具名动作,返回结果回执的接收端。

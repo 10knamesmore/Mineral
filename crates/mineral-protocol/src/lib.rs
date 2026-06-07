@@ -26,7 +26,7 @@ mod store;
 
 pub use cancel::CancelFilter;
 pub use codec::{Framed, decode, encode, framed, recv, send};
-pub use event::{Event, FinishReason, PropName, PropValue, ToastKind};
+pub use event::{BusValue, Event, FinishReason, PropName, PropValue, ToastKind};
 pub use frame::{Frame, RequestId};
 pub use handshake::{
     ClientInfo, PkgVersion, RejectReason, ServerHello, Subscription, client_handshake,

@@ -32,6 +32,13 @@ pub(crate) struct EventRegistry {
     /// 属性观察者(`mineral.observe`,按属性键分桶)。
     pub(crate) observers: FxHashMap<PropKey, Vec<Arc<mlua::RegistryKey>>>,
 
+    /// 同步拦截 hook(`mineral.hook`,按拦截点分桶;注册顺序调用,首个
+    /// 非放行裁决短路生效)。
+    pub(crate) hooks: FxHashMap<crate::hooks::HookKind, Vec<Arc<mlua::RegistryKey>>>,
+
+    /// 自定义总线订阅者(`mineral.on_message`,按消息名分桶)。
+    pub(crate) bus_subs: FxHashMap<String, Vec<Arc<mlua::RegistryKey>>>,
+
     /// 属性当前值缓存:daemon 每次投递 `PropertyChanged` 时更新;
     /// `observe` 注册时有值即回放、`mineral.get` 同源读。
     pub(crate) props: FxHashMap<PropKey, PropValue>,
@@ -44,6 +51,9 @@ pub(crate) struct EventRegistry {
 
     /// bind 内部名计数器([`Self::next_bind_name`] 用)。
     next_bind: u64,
+
+    /// spawn 标识计数器([`Self::next_spawn_id`] 用)。
+    next_spawn: u64,
 }
 
 impl EventRegistry {
@@ -51,6 +61,12 @@ impl EventRegistry {
     pub(crate) fn next_bind_name(&mut self) -> String {
         self.next_bind = self.next_bind.wrapping_add(1);
         format!("bind#{}", self.next_bind)
+    }
+
+    /// 分配下一个 spawn 标识(`handle:kill()` 路由用)。
+    pub(crate) fn next_spawn_id(&mut self) -> crate::proc::SpawnId {
+        self.next_spawn = self.next_spawn.wrapping_add(1);
+        crate::proc::SpawnId(self.next_spawn)
     }
 }
 
@@ -161,11 +177,15 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
 
     // 顶层函数(与 api/ 顶层文件一一对应)。
     api::on::install(lua, &mineral, host)?;
+    api::hook::install(lua, &mineral, host)?;
     api::action::install(lua, &mineral, host)?;
     api::bind::install(lua, &mineral, host)?;
     api::observe::install(lua, &mineral, host)?;
     api::get::install(lua, &mineral, host)?;
     api::download::install(lua, &mineral, host)?;
+    api::spawn::install(lua, &mineral, host)?;
+    api::emit::install(lua, &mineral, host)?;
+    api::on_message::install(lua, &mineral, host)?;
 
     // 子表(与 api/ 子目录一一对应;各目录根的 install 内部再分发到单函数文件)。
     api::player::install(lua, &mineral, host)?;

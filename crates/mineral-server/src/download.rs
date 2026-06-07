@@ -59,6 +59,20 @@ pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, O
     (http, music_dir)
 }
 
+/// 下载环境:HTTP client + 导出根目录 + 脚本拦截门
+/// (`process_target` 从 [`PlayerCore`] 取齐,单测各自注入)。
+#[derive(Clone, Copy)]
+pub(crate) struct DownloadEnv<'a> {
+    /// 复用的 HTTP client。
+    pub(crate) http: &'a reqwest::Client,
+
+    /// 永久导出根目录(如 `~/Music/mineral`)。
+    pub(crate) music_dir: &'a Path,
+
+    /// 脚本拦截门(`before_download`;无脚本恒放行)。
+    pub(crate) hooks: &'a crate::hook_bridge::HookGate,
+}
+
 /// 下载一首歌:**流式** GET(边下边写、边算速度写进度)→ 永久导出。
 /// 该歌该音质已在导出库(文件系统即真相)则跳过,连直链都不取(按文件存在幂等)。
 ///
@@ -71,20 +85,26 @@ pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, O
 ///   - `music_dir`: 永久导出根目录(如 `~/Music/mineral`)
 ///   - `song`: 要下载的歌
 ///   - `quality`: 下载音质
+///   - `env`: 下载环境(HTTP client + 导出根目录 + 脚本拦截门)
 ///   - `progress`: 下载进度共享态(本函数实时写 `bytes_done`/`bytes_total`/`speed_bps`)
 ///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
 ///
 /// # Return:
-///   下载成功 → `Ok(Downloaded)`;已下载 → `Ok(Skipped)`;取链 / 网络 / 写盘失败 → `Err`。
+///   下载成功 → `Ok(Downloaded)`;已下载 / 脚本跳过 → `Ok(Skipped)`;
+///   取链 / 网络 / 写盘失败 → `Err`。
 pub(crate) async fn download_song(
     channel: &dyn MusicChannel,
-    http: &reqwest::Client,
-    music_dir: &Path,
+    env: &DownloadEnv<'_>,
     song: &Song,
     quality: BitRate,
     progress: &Arc<Mutex<DownloadProgress>>,
     speed_tick: Duration,
 ) -> color_eyre::Result<DownloadOutcome> {
+    let DownloadEnv {
+        http,
+        music_dir,
+        hooks,
+    } = *env;
     // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
@@ -96,10 +116,41 @@ pub(crate) async fn download_song(
         .song_urls(std::slice::from_ref(&song.id), quality)
         .await
         .map_err(|e| eyre!("song_urls: {e}"))?;
-    let play_url = urls
+    let mut play_url = urls
         .into_iter()
         .next()
         .ok_or_else(|| eyre!("无可用播放 URL: {}", song.id.qualified()))?;
+
+    // 2.5 脚本拦截:before_download(取链后、算导出路径 / 写盘前)。
+    let mut quality = quality;
+    match hooks.before_download(song, &play_url).await {
+        mineral_script::HookDecision::Continue => {}
+        mineral_script::HookDecision::Rewrite(spec) => {
+            if let Some(url) = spec.new_url() {
+                play_url.url = url.clone();
+            }
+            if let Some(new_quality) = spec.new_quality() {
+                play_url.quality = new_quality;
+                // 导出路径按音质标注,改写音质要一并体现。
+                quality = new_quality;
+            }
+            mineral_log::info!(
+                target: "script",
+                song_id = song.id.as_str(),
+                url = %play_url.url,
+                "before_download 改写下载直链"
+            );
+        }
+        mineral_script::HookDecision::Skip { reason } => {
+            mineral_log::info!(
+                target: "script",
+                song_id = song.id.as_str(),
+                reason,
+                "before_download 跳过本曲"
+            );
+            return Ok(DownloadOutcome::Skipped);
+        }
+    }
     let (subdir, file_name) = library_relpath(song, quality, &play_url.format);
     // 命名即身份:不做 ` (N)` 去重——同名直接落同一路径(本曲重下已被上面的幂等挡住;同源同专辑
     // 同名的另一首歌会与之共用一个文件,概率极低,换来「文件系统即唯一真相」)。
@@ -321,6 +372,12 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
     else {
         return;
     };
+    let hooks = player.hook_gate();
+    let env = DownloadEnv {
+        http,
+        music_dir,
+        hooks: &hooks,
+    };
     for song in &songs {
         {
             let mut p = player.progress_handle().lock();
@@ -330,8 +387,7 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
         }
         let outcome = download_song(
             channel.as_ref(),
-            http,
-            music_dir,
+            &env,
             song,
             player.download_quality(),
             player.progress_handle(),
@@ -450,8 +506,11 @@ mod tests {
 
         let outcome = download_song(
             &channel,
-            &http,
-            &music_dir,
+            &super::DownloadEnv {
+                http: &http,
+                music_dir: &music_dir,
+                hooks: &crate::hook_bridge::HookGate::disabled(),
+            },
             &s,
             BitRate::Lossless,
             &progress,
@@ -470,6 +529,113 @@ mod tests {
             media_cache.get(&s.id, BitRate::Lossless).is_none(),
             "下载不应填充 audio cache(避免双份 + 播放走缓存副本)"
         );
+        Ok(())
+    }
+
+    /// eval 给定脚本并把投递句柄包成拦截门(download hook 测试用)。
+    /// 返回的 runtime 须由调用方持有(drop 即停脚本线程)。
+    fn script_gate(
+        script: &str,
+    ) -> color_eyre::Result<(mineral_script::ScriptRuntime, crate::hook_bridge::HookGate)> {
+        use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = mineral_script::mlua::Lua::new();
+        install_api(&lua, &host)?;
+        lua.load(script).exec()?;
+        let sender = ScriptSender::detached();
+        let watchdog = mineral_script::WatchdogConfig::builder()
+            .instruction_interval(10_000)
+            .soft_wall(Duration::from_millis(200))
+            .hard_wall(Duration::from_secs(1))
+            .build();
+        let runtime = ScriptRuntime::spawn(lua, host, watchdog, &sender)?;
+        let gate = crate::hook_bridge::HookGate::with_sender(sender, Duration::from_secs(5));
+        Ok((runtime, gate))
+    }
+
+    /// before_download 跳过:hook 返回 {skip=...} → Skipped,不落盘、不发请求。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_skipped_by_hook() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let music_dir = dir.path().join("music");
+        // 直链指向无人监听的端口:skip 生效就不会有任何网络请求。
+        let channel = UrlChannel {
+            url: "http://127.0.0.1:9/dead.flac".parse()?,
+        };
+        let (runtime, gate) = script_gate(
+            r#"
+            mineral.hook("before_download", function(ctx)
+                return { skip = "脚本拒绝" }
+            end)
+            "#,
+        )?;
+        let outcome = download_song(
+            &channel,
+            &super::DownloadEnv {
+                http: &reqwest::Client::new(),
+                music_dir: &music_dir,
+                hooks: &gate,
+            },
+            &song(),
+            BitRate::Lossless,
+            &Arc::new(Mutex::new(DownloadProgress::default())),
+            /*speed_tick*/ Duration::from_millis(150),
+        )
+        .await?;
+        assert!(
+            matches!(outcome, DownloadOutcome::Skipped),
+            "hook 跳过应记 Skipped"
+        );
+        assert!(
+            probe_export(&music_dir, &song(), BitRate::Lossless).is_none(),
+            "跳过不应落盘"
+        );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_download 改写:原直链死地址,hook 改写到真 server + 降音质 →
+    /// 下载成功且导出路径按改写后音质标注。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_rewritten_by_hook() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let music_dir = dir.path().join("music");
+        let live = serve_once(b"FAKEFLACDATA".to_vec()).await?;
+        // 原直链是死地址:下载成功本身就证明改写生效。
+        let channel = UrlChannel {
+            url: "http://127.0.0.1:9/dead.flac".parse()?,
+        };
+        let (runtime, gate) = script_gate(&format!(
+            r#"
+            mineral.hook("before_download", function(ctx)
+                return {{ url = "{live}", quality = "standard" }}
+            end)
+            "#
+        ))?;
+        let outcome = download_song(
+            &channel,
+            &super::DownloadEnv {
+                http: &reqwest::Client::new(),
+                music_dir: &music_dir,
+                hooks: &gate,
+            },
+            &song(),
+            BitRate::Lossless,
+            &Arc::new(Mutex::new(DownloadProgress::default())),
+            /*speed_tick*/ Duration::from_millis(150),
+        )
+        .await?;
+        assert!(
+            matches!(outcome, DownloadOutcome::Downloaded(_)),
+            "改写到活地址应下载成功"
+        );
+        assert!(
+            probe_export(&music_dir, &song(), BitRate::Standard).is_some(),
+            "导出路径应按改写后的音质(standard)标注"
+        );
+        drop(runtime);
         Ok(())
     }
 }

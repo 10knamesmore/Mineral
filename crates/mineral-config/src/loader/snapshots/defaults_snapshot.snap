@@ -515,5 +515,7 @@ Config {
         watchdog_instruction_interval: 2000,
         watchdog_soft_wall_ms: 100,
         watchdog_hard_wall_ms: 1000,
+        hook_timeout_ms: 2000,
+        spawn_max_concurrent: 8,
     },
 }

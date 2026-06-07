@@ -4,6 +4,7 @@
 
 pub(crate) mod love;
 pub(crate) mod playlists;
+pub(crate) mod search;
 pub(crate) mod tracks;
 
 use mlua::{Lua, Table};
@@ -20,6 +21,7 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
     let library = lua.create_table()?;
     playlists::install(lua, &library, host)?;
     tracks::install(lua, &library, host)?;
+    search::install(lua, &library, host)?;
     love::install(lua, &library, host)?;
     mineral.set("library", library)
 }

@@ -20,4 +20,11 @@ pub struct ScriptConfig {
 
     /// 看门狗硬阈值(毫秒):回调超过被中断(只杀本次调用,VM 保留)。
     watchdog_hard_wall_ms: u64,
+
+    /// 同步拦截 hook(`before_play` / `before_download`)软超时(毫秒):
+    /// 超时未回执按放行处理 + warn,播放 / 下载不被慢 hook 卡住。
+    hook_timeout_ms: u64,
+
+    /// `mineral.spawn` 子进程并发上限(防脚本 fork 炸);0 = 不限。
+    spawn_max_concurrent: usize,
 }

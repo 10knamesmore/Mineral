@@ -8,13 +8,17 @@
 pub(crate) mod action;
 pub(crate) mod bind;
 pub(crate) mod download;
+pub(crate) mod emit;
 pub(crate) mod get;
+pub(crate) mod hook;
 pub(crate) mod library;
 pub(crate) mod log;
 pub(crate) mod observe;
 pub(crate) mod on;
+pub(crate) mod on_message;
 pub(crate) mod player;
 pub(crate) mod queue;
+pub(crate) mod spawn;
 pub(crate) mod store;
 pub(crate) mod timer;
 pub(crate) mod ui;

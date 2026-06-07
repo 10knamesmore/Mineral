@@ -557,6 +557,387 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn library_search_emits_cmd_and_resolves() -> color_eyre::Result<()> {
+        use crate::message::{ResolveValue, ScriptCmd};
+        use mineral_model::SourceKind;
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+            r#"
+            mineral.library.search("雨", function(songs, err)
+                mineral.ui.toast(#songs .. "/" .. tostring(err))
+            end)
+            mineral.library.search("雪", { source = "netease", offset = 10, limit = 5 },
+                function(songs, err) end)
+            "#,
+        )?;
+        // 双形态:无 opts 走默认分页,有 opts 逐字段透传
+        let first = cmd_rx.try_recv()?;
+        let ScriptCmd::LibrarySearch {
+            term,
+            source,
+            offset,
+            limit,
+            query,
+        } = first
+        else {
+            color_eyre::eyre::bail!("期望 LibrarySearch,实得 {first:?}");
+        };
+        assert_eq!(term, "雨");
+        assert_eq!(source, None);
+        assert_eq!((offset, limit), (0, 30), "缺省分页 = offset 0 / limit 30");
+        let second = cmd_rx.try_recv()?;
+        let ScriptCmd::LibrarySearch {
+            term,
+            source,
+            offset,
+            limit,
+            ..
+        } = second
+        else {
+            color_eyre::eyre::bail!("期望 LibrarySearch,实得 {second:?}");
+        };
+        assert_eq!(term, "雪");
+        assert_eq!(source, Some(SourceKind::NETEASE));
+        assert_eq!((offset, limit), (10, 5));
+        // 模拟 daemon 泵回投命中
+        sender.resolve(query, ResolveValue::Songs(vec![song("1"), song("2")]));
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: "2/nil".to_owned(),
+                id: None,
+                ttl_secs: None,
+            }],
+            "search 回调收 (songs, nil)"
+        );
+        Ok(())
+    }
+
+    /// 拦截测试用的入参快照(固定歌 + 远端 URL)。
+    fn hook_ctx() -> color_eyre::Result<crate::hooks::HookContext> {
+        use color_eyre::eyre::WrapErr;
+        let target = song("1");
+        let play_url = mineral_model::PlayUrl {
+            song_id: target.id.clone(),
+            url: "https://example.com/a.flac"
+                .parse::<mineral_model::MediaUrl>()
+                .wrap_err("parse url")?,
+            bitrate_bps: 0,
+            quality: mineral_model::BitRate::Exhigh,
+            size: 0,
+            format: mineral_model::AudioFormat::Flac,
+            bit_depth: None,
+        };
+        Ok(crate::hooks::HookContext::new(target, play_url))
+    }
+
+    #[tokio::test]
+    async fn intercept_detached_sender_continues() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        // 未挂线程:拦截天然不存在,立即放行(不等超时)。
+        let sender = ScriptSender::detached();
+        let decision = sender
+            .intercept(
+                HookKind::BeforePlay,
+                hook_ctx()?,
+                std::time::Duration::from_secs(60),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Continue);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn intercept_no_hooks_registered_continues() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        // 有脚本但未注册 hook:脚本线程立即回执放行。
+        let (runtime, sender, _push_rx) = spawn_with_script("-- 无 hook")?;
+        let decision = sender
+            .intercept(
+                HookKind::BeforeDownload,
+                hook_ctx()?,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Continue);
+        drop(runtime);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn intercept_timeout_falls_back_to_continue() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        // 挂一条没人消费的通道:回执永不到 → 墙钟超时放行。
+        let sender = ScriptSender::detached();
+        let (tx, rx) = std::sync::mpsc::channel();
+        sender.attach(tx);
+        let started = std::time::Instant::now();
+        let decision = sender
+            .intercept(
+                HookKind::BeforePlay,
+                hook_ctx()?,
+                std::time::Duration::from_millis(50),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Continue, "超时必须放行");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(50),
+            "放行必须等满软超时"
+        );
+        drop(rx);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hook_rewrite_returns_structured_spec() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx)
+                -- ctx 字段可读:据原音质决定改写
+                if ctx.quality == "exhigh" then
+                    return { url = "https://fallback.example/b.flac", quality = "standard" }
+                end
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept(
+                HookKind::BeforePlay,
+                hook_ctx()?,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        let HookDecision::Rewrite(spec) = decision else {
+            color_eyre::eyre::bail!("期望 Rewrite,实得 {decision:?}");
+        };
+        assert_eq!(
+            spec.new_url().map(ToString::to_string),
+            Some("https://fallback.example/b.flac".to_owned())
+        );
+        assert_eq!(spec.new_quality(), Some(mineral_model::BitRate::Standard));
+        drop(runtime);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hook_skip_and_short_circuit() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_download", function(ctx)
+                return { skip = "网络探测失败:" .. ctx.kind }
+            end)
+            -- 第二个 hook 不应被调到(首个非放行短路)
+            mineral.hook("before_download", function(ctx)
+                mineral.ui.toast("不该出现")
+                return nil
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept(
+                HookKind::BeforeDownload,
+                hook_ctx()?,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        assert_eq!(
+            decision,
+            HookDecision::Skip {
+                reason: "网络探测失败:before_download".to_owned()
+            }
+        );
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(events, vec![], "短路后第二个 hook 不应被调用");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hook_false_skips_and_errors_fall_through() -> color_eyre::Result<()> {
+        use crate::hooks::{HookDecision, HookKind};
+        // 三连注册:Lua 错误 → 放行继续走下一个;非法返回值 → 同;false → 跳过。
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx) error("炸") end)
+            mineral.hook("before_play", function(ctx) return 42 end)
+            mineral.hook("before_play", function(ctx) return false end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept(
+                HookKind::BeforePlay,
+                hook_ctx()?,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        assert_eq!(
+            decision,
+            HookDecision::Skip {
+                reason: "脚本跳过".to_owned()
+            },
+            "前两个失败 hook 按放行跳过,第三个 false 生效"
+        );
+        // 两次失败各推一条 error toast(同 id 顶替)。
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(events.len(), 2, "两个失败 hook 各报一条 error toast");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hook_unknown_name_is_script_error() -> color_eyre::Result<()> {
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let (push_tx, _push_rx) = unbounded_channel();
+        let host = crate::host::ScriptHost::new(cmd_tx, push_tx);
+        let lua = Lua::new();
+        install_api(&lua, &host)?;
+        let result = lua
+            .load(r#"mineral.hook("after_play", function() end)"#)
+            .exec();
+        assert!(result.is_err(), "未知 hook 名必须当场报错");
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_emits_cmd_and_resolves_result() -> color_eyre::Result<()> {
+        use crate::message::{ResolveValue, ScriptCmd};
+        use crate::proc::SpawnResult;
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+            r#"
+            local h = mineral.spawn({"echo", "hi"}, { cwd = "/tmp", env = { K = "V" } },
+                function(res, err)
+                    mineral.ui.toast(res.code .. "/" .. res.stdout .. "/" .. tostring(res.killed))
+                end)
+            h:kill()
+            "#,
+        )?;
+        let first = cmd_rx.try_recv()?;
+        let ScriptCmd::Spawn { id, spec, query } = first else {
+            color_eyre::eyre::bail!("期望 Spawn,实得 {first:?}");
+        };
+        assert_eq!(spec.program(), "echo");
+        let kill = cmd_rx.try_recv()?;
+        let ScriptCmd::SpawnKill { id: kill_id } = kill else {
+            color_eyre::eyre::bail!("期望 SpawnKill,实得 {kill:?}");
+        };
+        assert_eq!(kill_id, id, "kill 必须路由到同一 spawn");
+        // 模拟 daemon 泵回投结果
+        sender.resolve(
+            query,
+            ResolveValue::Spawn(SpawnResult {
+                code: Some(0),
+                stdout: "hi\n".to_owned(),
+                stderr: String::new(),
+                killed: false,
+            }),
+        );
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: "0/hi\n/false".to_owned(),
+                id: None,
+                ttl_secs: None,
+            }],
+            "spawn 回调收结构化结果 table"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_empty_args_is_script_error() -> color_eyre::Result<()> {
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let (push_tx, _push_rx) = unbounded_channel();
+        let host = crate::host::ScriptHost::new(cmd_tx, push_tx);
+        let lua = Lua::new();
+        install_api(&lua, &host)?;
+        let result = lua.load(r#"mineral.spawn({}, function() end)"#).exec();
+        assert!(result.is_err(), "空 args 必须当场报错");
+        Ok(())
+    }
+
+    #[test]
+    fn emit_loops_back_and_pushes_bus_event() -> color_eyre::Result<()> {
+        use mineral_protocol::BusValue;
+        let (runtime, _sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.on_message("my.ping", function(p)
+                mineral.ui.toast(p.tag .. "/" .. p.list[2])
+            end)
+            mineral.emit("my.ping", { tag = "钠", list = { 10, 20 } })
+            mineral.emit("no.subscriber", 42)
+            "#,
+        )?;
+        let mut events = drain_after_stop(runtime, &mut push_rx);
+        // Lua table 的 pairs 不保序:Map 载荷排序后再比对(集合等价)。
+        for event in &mut events {
+            if let Event::BusMessage {
+                payload: BusValue::Map(entries),
+                ..
+            } = event
+            {
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+        }
+        assert_eq!(
+            events,
+            vec![
+                // emit 先下推 client(结构化载荷),再同步自环(toast 是自环副产物,
+                // 但 toast 走同一 push 通道,顺序在 BusMessage 之后)。
+                Event::BusMessage {
+                    name: "my.ping".to_owned(),
+                    payload: BusValue::Map(vec![
+                        (
+                            "list".to_owned(),
+                            BusValue::Array(vec![BusValue::Int(10), BusValue::Int(20)]),
+                        ),
+                        ("tag".to_owned(), BusValue::Str("钠".to_owned())),
+                    ]),
+                },
+                Event::Toast {
+                    kind: ToastKind::Info,
+                    content: "钠/20".to_owned(),
+                    id: None,
+                    ttl_secs: None,
+                },
+                Event::BusMessage {
+                    name: "no.subscriber".to_owned(),
+                    payload: BusValue::Int(42),
+                },
+            ],
+            "emit 双路:下推结构化 BusMessage + 本 VM 同步自环"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn emit_subscriber_error_does_not_bubble_to_emitter() -> color_eyre::Result<()> {
+        let (runtime, _sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.on_message("my.bad", function(p) error("炸") end)
+            mineral.on_message("my.bad", function(p) mineral.ui.toast("第二个照常") end)
+            mineral.emit("my.bad")
+            mineral.ui.toast("emit 之后还活着")
+            "#,
+        )?;
+        let events = drain_after_stop(runtime, &mut push_rx);
+        let toasts = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Toast { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<&str>>();
+        assert!(
+            toasts.contains(&"第二个照常") && toasts.contains(&"emit 之后还活着"),
+            "订阅者出错不影响其余订阅者与 emit 调用方,实得 {toasts:?}"
+        );
+        Ok(())
+    }
+
     /// 在 `deadline` 内轮询 push 通道直到收满 `n` 条(或超时返回已收的)。
     fn wait_events(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,

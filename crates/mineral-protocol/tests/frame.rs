@@ -4,9 +4,9 @@
 use color_eyre::eyre::eyre;
 use mineral_model::{SongId, SourceKind};
 use mineral_protocol::{
-    ClientInfo, Event, FinishReason, Frame, OneshotClient, PkgVersion, PropName, PropValue,
-    RejectReason, Request, RequestId, Response, ServerHello, Subscription, ToastKind, framed, recv,
-    send,
+    BusValue, ClientInfo, Event, FinishReason, Frame, OneshotClient, PkgVersion, PropName,
+    PropValue, RejectReason, Request, RequestId, Response, ServerHello, Subscription, ToastKind,
+    framed, recv, send,
 };
 use pretty_assertions::assert_eq;
 use tokio::io::duplex;
@@ -134,6 +134,19 @@ fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
     dual_codec_roundtrip(&Event::DownloadCompleted {
         song_id: SongId::new(SourceKind::NETEASE, "2"),
     })?;
+    dual_codec_roundtrip(&Event::BusMessage {
+        name: "my.refresh".to_owned(),
+        payload: BusValue::Map(vec![
+            ("ok".to_owned(), BusValue::Bool(true)),
+            ("n".to_owned(), BusValue::Int(-3)),
+            ("f".to_owned(), BusValue::Float(2.5)),
+            ("s".to_owned(), BusValue::Str("文".to_owned())),
+            (
+                "list".to_owned(),
+                BusValue::Array(vec![BusValue::Nil, BusValue::Int(1)]),
+            ),
+        ]),
+    })?;
     dual_codec_roundtrip(&ClientInfo::new(vec![Subscription::Lifecycle]))?;
     dual_codec_roundtrip(&ServerHello::reject(RejectReason::VersionMismatch))?;
     Ok(())
@@ -201,6 +214,14 @@ fn event_subscription_mapping() {
         }
         .subscription(),
         Subscription::Lifecycle
+    );
+    assert_eq!(
+        Event::BusMessage {
+            name: "my.x".to_owned(),
+            payload: BusValue::Nil,
+        }
+        .subscription(),
+        Subscription::Bus
     );
 }
 

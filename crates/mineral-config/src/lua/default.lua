@@ -187,5 +187,7 @@ return {
         watchdog_instruction_interval = 2000, -- 每多少条 Lua VM 指令查一次墙钟;小 = 灵敏但开销大
         watchdog_soft_wall_ms = 100, -- 回调超过此时长记 warn 日志,继续跑
         watchdog_hard_wall_ms = 1000, -- 回调超过此时长被中断(只杀本次调用,脚本仍存活)
+        hook_timeout_ms = 2000, -- before_play/before_download 拦截 hook 软超时;超时放行 + warn,不卡播放
+        spawn_max_concurrent = 8, -- mineral.spawn 子进程并发上限,防脚本 fork 炸;0 = 不限
     },
 }

@@ -201,4 +201,8 @@ pub enum Subscription {
 
     /// 生命周期事件(曲终 / 下载完成)。
     Lifecycle,
+
+    /// 自定义事件总线([`Event::BusMessage`](crate::Event::BusMessage),
+    /// 脚本 / 外部 client 自定义消息;内置 TUI 不订阅)。
+    Bus,
 }

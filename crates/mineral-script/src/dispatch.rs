@@ -57,6 +57,10 @@ pub(crate) fn run_loop(
             Ok(ScriptMsg::GetBinds { reply }) => {
                 let _ = reply.send(host.events.lock().binds.clone());
             }
+            Ok(ScriptMsg::Intercept { kind, ctx, reply }) => {
+                // 回执接收端 drop(daemon 侧超时放弃)时静默丢。
+                let _ = reply.send(run_hooks(lua, host, watchdog, kind, &ctx));
+            }
             Ok(ScriptMsg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -158,6 +162,17 @@ fn resolve_query(
                 }
                 (mlua::Value::Table(list), mlua::Value::Nil)
             }
+            ResolveValue::Spawn(result) => {
+                let entry = lua.create_table()?;
+                // 被信号终止(含 kill)无退出码:字段缺席,Lua 读出 nil。
+                if let Some(code) = result.code {
+                    entry.set("code", code)?;
+                }
+                entry.set("stdout", result.stdout.clone())?;
+                entry.set("stderr", result.stderr.clone())?;
+                entry.set("killed", result.killed)?;
+                (mlua::Value::Table(entry), mlua::Value::Nil)
+            }
             ResolveValue::Error(msg) => (
                 mlua::Value::Nil,
                 mlua::Value::String(lua.create_string(msg)?),
@@ -218,6 +233,113 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
     }
 }
 
+/// 跑一类同步拦截 hook:按注册顺序调用,首个非放行裁决短路生效。
+///
+/// 回调收 ctx table(`song` / `url` / `quality` / `kind`),返回值解释:
+/// `nil`(或 `true`)= 放行;`false` / `{ skip = 原因 }` = 跳过;
+/// `{ url = ?, quality = ? }` = 改写。Lua 错误 / 非法返回值按放行处理
+/// (拦截失败不致命),记日志 + error toast。
+fn run_hooks(
+    lua: &Lua,
+    host: &ScriptHost,
+    watchdog: &WatchdogConfig,
+    kind: crate::hooks::HookKind,
+    ctx: &crate::hooks::HookContext,
+) -> crate::hooks::HookDecision {
+    use crate::hooks::HookDecision;
+    // 锁内只克隆 Arc 列表,锁外调回调(回调里再注册不撞锁)。
+    let callbacks = host
+        .events
+        .lock()
+        .hooks
+        .get(&kind)
+        .cloned()
+        .unwrap_or_default();
+    for key in &callbacks {
+        let outcome = hook_ctx_table(lua, kind, ctx).and_then(|args| {
+            let func = lua.registry_value::<mlua::Function>(key)?;
+            call_guarded::<_, mlua::Value>(lua, watchdog, &func, args)
+        });
+        match outcome {
+            Ok(value) => match interpret_hook_return(&value) {
+                Ok(HookDecision::Continue) => {}
+                Ok(decision) => return decision,
+                Err(msg) => {
+                    report_callback_failure(host, kind.as_str(), &mlua::Error::runtime(msg));
+                }
+            },
+            Err(e) => report_callback_failure(host, kind.as_str(), &e),
+        }
+    }
+    HookDecision::Continue
+}
+
+/// 拦截回调的 ctx table:`song`(最小投影)+ `url`(字符串)+
+/// `quality`(音质名)+ `kind`(hook 名)。
+fn hook_ctx_table(
+    lua: &Lua,
+    kind: crate::hooks::HookKind,
+    ctx: &crate::hooks::HookContext,
+) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("song", song_table(lua, ctx.song())?)?;
+    table.set("url", ctx.original().url.to_string())?;
+    table.set("quality", ctx.original().quality.as_str())?;
+    table.set("kind", kind.as_str())?;
+    Ok(table)
+}
+
+/// 把 hook 回调的 Lua 返回值解释成裁决;非法形态报 `Err`(按放行处理)。
+fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecision, String> {
+    use crate::hooks::{HookDecision, RewriteSpec};
+    match value {
+        mlua::Value::Nil | mlua::Value::Boolean(true) => Ok(HookDecision::Continue),
+        mlua::Value::Boolean(false) => Ok(HookDecision::Skip {
+            reason: "脚本跳过".to_owned(),
+        }),
+        mlua::Value::Table(table) => {
+            if let Some(reason) = table
+                .get::<Option<String>>("skip")
+                .map_err(|e| format!("hook 返回值 skip 字段非法: {e}"))?
+            {
+                return Ok(HookDecision::Skip { reason });
+            }
+            let new_url = table
+                .get::<Option<String>>("url")
+                .map_err(|e| format!("hook 返回值 url 字段非法: {e}"))?
+                .map(|raw| {
+                    raw.parse::<mineral_model::MediaUrl>()
+                        .map_err(|e| format!("hook 返回的 url 解析失败: {e}"))
+                })
+                .transpose()?;
+            let new_quality = table
+                .get::<Option<String>>("quality")
+                .map_err(|e| format!("hook 返回值 quality 字段非法: {e}"))?
+                .map(|raw| parse_bitrate(&raw))
+                .transpose()?;
+            if new_url.is_none() && new_quality.is_none() {
+                return Err("hook 返回 table 但无 url / quality / skip 字段".to_owned());
+            }
+            Ok(HookDecision::Rewrite(RewriteSpec {
+                new_url,
+                new_quality,
+            }))
+        }
+        other => Err(format!(
+            "hook 返回值须是 nil / boolean / table,实得 {}",
+            other.type_name()
+        )),
+    }
+}
+
+/// 按音质名解析 [`mineral_model::BitRate`](与 `as_str` 对偶);未知名报错。
+fn parse_bitrate(raw: &str) -> Result<mineral_model::BitRate, String> {
+    mineral_model::BitRate::ALL
+        .into_iter()
+        .find(|q| q.as_str() == raw)
+        .ok_or_else(|| format!("未知音质名 `{raw}`(可选:standard/higher/exhigh/lossless/hires)"))
+}
+
 /// 依次调用一桶回调;实参由 `make_args` 现做(每个回调独立一份,互不污染)。
 ///
 /// # Params:
@@ -244,7 +366,8 @@ fn invoke_all<A: mlua::IntoLuaMulti>(
 }
 
 /// 回调失败的统一出口:完整链进日志,提示进 client toast。
-fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &mlua::Error) {
+/// (`emit` 自环调订阅者也走这里,故 `pub(crate)`。)
+pub(crate) fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &mlua::Error) {
     mineral_log::error!(
         target: "script",
         event = event_name,

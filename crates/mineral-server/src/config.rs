@@ -26,6 +26,12 @@ pub struct ServerConfig {
 
     /// daemon 段(gapless 窗口 + 各间隔节拍)。
     daemon: DaemonConfig,
+
+    /// 同步拦截 hook 软超时(毫秒,配置 `script.hook_timeout_ms`)。
+    hook_timeout_ms: u64,
+
+    /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
+    spawn_max_concurrent: usize,
 }
 
 impl ServerConfig {
@@ -52,6 +58,8 @@ impl ServerConfig {
             .channel_workers_per(*cfg.daemon().channel_workers_per())
             .download(cfg.download().clone())
             .daemon(cfg.daemon().clone())
+            .hook_timeout_ms(*cfg.script().hook_timeout_ms())
+            .spawn_max_concurrent(*cfg.script().spawn_max_concurrent())
             .build()
     }
 }
