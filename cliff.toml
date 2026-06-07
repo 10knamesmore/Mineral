@@ -8,17 +8,18 @@
 [changelog]
 header = "# Changelog\n"
 # Tera 模板。版本头用 `## [x.y.z] — YYYY-MM-DD`(em-dash,与历史条目一致);
-# 组按 `<!-- N -->` 前缀排序后 striptags 去掉注释显示中文组名。
+# 组按 `<!-- N -->` 前缀排序后 striptags 去掉注释显示英文组名(见 commit_parsers)。
+# 每条尾随短 hash,链到 GitHub commit 页可直接点过去。
 body = """
 {% if version %}\
 ## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
 {% else %}\
-## [未发布]
+## [Unreleased]
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits %}
-- {{ commit.message | upper_first }}
+- {{ commit.message | upper_first }} ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/10knamesmore/Mineral/commit/{{ commit.id }}))
 {% endfor %}\
 {% endfor %}
 """
@@ -34,9 +35,9 @@ split_commits = false
 # 约定:用户能感知的改动就该打成 feat/fix,而不是 refactor —— 按用户影响选 type,
 # changelog 自然正确(细则见 CONTRIBUTING.md)。
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->功能" },
-  { message = "^fix", group = "<!-- 1 -->修复" },
-  { message = "^perf", group = "<!-- 2 -->性能" },
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
   { message = ".*", skip = true },
 ]
 
