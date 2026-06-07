@@ -34,19 +34,19 @@ jobs:
     name: release
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout dev(全历史 + tags,供 ff-merge 与 git-cliff)
+      - name: Checkout dev
         uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
 
-      - name: 校验版本号格式
+      - name: validate version format
         env:
           VERSION: ${{ inputs.version }}
         run: echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号应为 x.y.z"; exit 1; }
 
       # ALSA 开发头文件是编译期依赖(rodio/cpal → alsa-sys),与 ci.yml 同。
-      - name: 安装 ALSA 开发库
+      - name: install ALSA dev dep
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
@@ -80,7 +80,7 @@ jobs:
         run: git cliff --unreleased --tag "v${VERSION}" --prepend CHANGELOG.md
 
       # —— bump 版本(单点:根 Cargo.toml [workspace.package] version)+ 最小化刷 Cargo.lock ——
-      - name: bump 版本
+      - name: bump version
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -123,3 +123,30 @@ jobs:
           TITLE="v${VERSION}"
           [ -n "$HEADLINE" ] && TITLE="${TITLE} — ${HEADLINE}"
           gh release create "v${VERSION}" --title "$TITLE" --notes-file RELEASE_NOTES.md
+
+  aur-publish:
+    name: aur-publish
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: render PKGBUILD
+        env:
+          VERSION: ${{ inputs.version }}
+        run: sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+
+      - name: publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        with:
+          pkgname: mineral
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
+          test: false
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_username: wanger
+          commit_email: 310779211wym@gmail.com
+          commit_message: "update to ${{ inputs.version }}"
