@@ -375,23 +375,31 @@ end)
 ### 切歌桌面通知(跨平台)
 
 ```lua
-local os = mineral.sys.os
+-- 注意别写 `local os = ...`:会遮蔽 Lua 标准库 os(os.date / os.time)
+local sys_os = mineral.sys.os
 local app_name = mineral.sys.name
 local version = mineral.sys.version
 
 mineral.on("track_started", function(args)
-  if os == "linux" then
-    mineral.spawn(
-      {
-        "notify-send",
-        "-a",
-        app_name .. " " .. version:str(),
-        "♪ 正在播放",
-        args.song.title .. " - " .. args.song.album,
-      },
-      function() end
-    )
+  -- album 拿不到时是 nil,拼接前要兜底
+  local body = args.song.title .. " - " .. (args.song.album or "未知专辑")
+  local cmd
+  if sys_os == "macos" then
+    cmd = {
+      "osascript",
+      "-e",
+      ('display notification %q with title %q'):format(body, app_name),
+    }
+  else
+    cmd = {
+      "notify-send",
+      "-a",
+      app_name .. " " .. version:str(),
+      "♪ 正在播放",
+      body,
+    }
   end
+  mineral.spawn(cmd, function() end)
 end)
 ```
 
