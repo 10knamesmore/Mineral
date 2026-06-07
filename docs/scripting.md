@@ -38,7 +38,6 @@ return {
 | -------------- | --------------------------------------------------------------------------------------------- |
 | 歌曲 / 歌单 id | 全限定字符串 `"namespace:value"`(如 `"netease:123"`),回调给出的 id 可直接回喂任何 API         |
 | 异步回调风格   | 查询类 API 不阻塞脚本线程,结果回调 `fn(value, err)`:成功 `err` 为 `nil`,失败 `value` 为 `nil` |
-| Song 投影      | 事件 / 查询里的歌曲是投影表:`{ id, title, duration_ms, artists, album, cover_url, source_url }`(artists 为名字数组;后三者拿不到为 nil) |
 | 音质名         | `"standard" \| "higher" \| "exhigh" \| "lossless" \| "hires"`                                 |
 
 ---
@@ -49,10 +48,10 @@ return {
 
 离散生命周期事件,回调收单一 args table:
 
-| 事件                   | args                                                    | 时机                                                                                 |
-| ---------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `"track_started"`      | `{ song }`                                              | 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;同曲重启 / 单曲循环不重复触发) |
-| `"track_finished"`     | `{ song, reason }`,reason ∈ `eof / skip / error / stop` | 一首歌结束(自然播完 / 切歌 / 出错 / 停止)                                            |
+| 事件                   | args                                                                                  | 时机                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `"track_started"`      | `{ song }`                                                                            | 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;同曲重启 / 单曲循环不重复触发) |
+| `"track_finished"`     | `{ song, reason }`,reason ∈ `eof / skip / error / stop`                               | 一首歌结束(自然播完 / 切歌 / 出错 / 停止)                                            |
 | `"download_completed"` | `{ song, path, quality, format }`(quality 为有效音质名;format 如 `"flac"`,拿不到 nil) | 一首歌下载落盘完成(已存在跳过不触发)                                                 |
 
 ```lua
@@ -376,15 +375,23 @@ end)
 ### 切歌桌面通知(跨平台)
 
 ```lua
+local os = mineral.sys.os
+local app_name = mineral.sys.name
+local version = mineral.sys.version
+
 mineral.on("track_started", function(args)
-    local cmd
-    if mineral.sys.os == "macos" then
-        cmd = { "osascript", "-e",
-            ('display notification %q with title "Mineral"'):format(args.song.title) }
-    else
-        cmd = { "notify-send", "♪ 正在播放", args.song.title }
-    end
-    mineral.spawn(cmd, function() end)
+  if os == "linux" then
+    mineral.spawn(
+      {
+        "notify-send",
+        "-a",
+        app_name .. " " .. version:str(),
+        "♪ 正在播放",
+        args.song.title .. " - " .. args.song.album,
+      },
+      function() end
+    )
+  end
 end)
 ```
 
@@ -417,9 +424,18 @@ end)
 终端尺寸是脚本可观察的属性,UI 旋钮可以被 session 级覆盖:
 
 ```lua
-mineral.observe("terminal", function(t)
-    mineral.ui.override("lyrics.fullscreen_line_gap",
-        (t and t.cols > 200) and 2 or nil)   -- nil = 撤销,回落配置值
+mineral.observe("terminal", function(terminal)
+  if terminal == nil then
+    return
+  end
+
+  if terminal.cols > 200 then
+    mineral.ui.override("lyrics.fullscreen_line_gap", 2)
+    mineral.ui.override("lyrics.compact_line_gap", 1)
+  else
+    mineral.ui.override("lyrics.fullscreen_line_gap", nil)
+    mineral.ui.override("lyrics.compact_line_gap", nil)
+  end
 end)
 ```
 

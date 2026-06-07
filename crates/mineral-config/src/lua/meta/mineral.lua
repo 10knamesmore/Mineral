@@ -6,7 +6,7 @@
 ---@class mineral
 mineral = {}
 
---- 事件 / 查询回调里的歌曲投影。
+--- 事件 / 查询回调里的歌曲
 ---@class mineral.Song
 ---@field id string  全局唯一 id(`namespace:value`,如 "netease:123"),可直接回喂 player API
 ---@field title string  歌名

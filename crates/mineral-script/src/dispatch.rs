@@ -431,10 +431,9 @@ fn ctx_table(lua: &Lua, ctx: Option<&mineral_protocol::KeyContext>) -> mlua::Res
     Ok(table)
 }
 
-/// `Song` 在 Lua 侧的最小投影:`{ id, title, duration_ms }`。
+/// `Song` 在 Lua 侧的投影
 ///
 /// id 用 `qualified()`(全局唯一,可直接回喂 `mineral.player.play`);
-/// 完整字段集(artists / album / cover)的归一化投影是 TODO(sub05)。
 fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
     table.set("id", song.id.qualified())?;
