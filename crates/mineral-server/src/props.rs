@@ -61,10 +61,15 @@ impl PlayerCore {
     }
 
     /// 采样全部属性、与上次值比较,变更逐项下发。background_loop 每 tick 调一次。
+    ///
+    /// 在播曲目真变更且新值是实曲时,顺带发脚本事件 `track_started`——
+    /// 与 `player.song` 属性同源,远端起播 / 本地命中 / gapless 推进全覆盖
+    /// (同曲重启 / 单曲循环不重复触发)。
     pub(crate) fn check_props(&self) {
         let snap = self.inner.audio.snapshot();
-        let (song, mode, queue_len) = self.with_state(|st| {
+        let (current, song, mode, queue_len) = self.with_state(|st| {
             (
+                st.current_song.clone(),
                 st.current_song.as_ref().map(|s| s.id.qualified()),
                 st.play_mode,
                 st.queue.len(),
@@ -108,12 +113,20 @@ impl PlayerCore {
             ),
             (PropKey::Terminal, terminal),
         ];
+        let mut started = None;
         let mut last = self.inner.props.last.lock();
         for (key, value) in entries {
             if last.get(&key) != Some(&value) {
+                if key == PropKey::PlayerSong && current.is_some() {
+                    started = current.clone();
+                }
                 self.inner.notify.property_changed(key, &value);
                 last.insert(key, value);
             }
+        }
+        drop(last);
+        if let Some(song) = started {
+            self.inner.notify.track_started(&song);
         }
     }
 }

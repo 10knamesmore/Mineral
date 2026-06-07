@@ -192,6 +192,14 @@ fn resolve_query(
 /// 零破坏,LSP 侧由 meta stub 的 per-event `@class` + `@overload` 给强类型。
 fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event: ScriptEvent) {
     match event {
+        ScriptEvent::TrackStarted { song } => {
+            let callbacks = host.events.lock().track_started.clone();
+            invoke_all(lua, host, watchdog, &callbacks, "track_started", |lua| {
+                let args = lua.create_table()?;
+                args.set("song", song_table(lua, &song)?)?;
+                Ok(args)
+            });
+        }
         ScriptEvent::TrackFinished { song, reason } => {
             // 锁内只克隆 Arc 列表,锁外调回调 —— 回调里再 `mineral.on` 不死锁。
             let callbacks = host.events.lock().track_finished.clone();

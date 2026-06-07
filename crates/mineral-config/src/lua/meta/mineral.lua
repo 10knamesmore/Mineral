@@ -15,6 +15,10 @@ mineral = {}
 --- 曲目结束原因(与 Rust `TrackFinishedReason` 由守卫测试钉死同步)。
 ---@alias mineral.FinishReason "eof"|"skip"|"error"|"stop"
 
+--- `track_started` 回调的 args。
+---@class mineral.TrackStartedArgs
+---@field song mineral.Song  开始播放的歌
+
 --- `track_finished` 回调的 args。
 ---@class mineral.TrackFinishedArgs
 ---@field song mineral.Song  结束的歌
@@ -26,13 +30,16 @@ mineral = {}
 ---@field path string  落盘路径
 
 --- `mineral.on` 的合法事件名(字符串枚举;与 Rust 事件墙由守卫测试钉死同步)。
----@alias mineral.EventName "track_finished"|"download_completed"
+---@alias mineral.EventName "track_started"|"track_finished"|"download_completed"
 
 --- 订阅离散生命周期事件。回调统一收单一 args table(nvim autocmd 风格,
 --- 以后加字段零破坏);按事件名字面量分派出对应的 args 类型(LuaLS 走主签名
 --- 兜底时 args 为 union,字段补全给并集)。
+--- `track_started` = 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;
+--- 同曲重启 / 单曲循环不重复触发)——切歌通知等观察类需求用它,别用 hook。
 ---@param event mineral.EventName
----@param fn fun(args: mineral.TrackFinishedArgs|mineral.DownloadCompletedArgs): nil
+---@param fn fun(args: mineral.TrackStartedArgs|mineral.TrackFinishedArgs|mineral.DownloadCompletedArgs): nil
+---@overload fun(event: "track_started", fn: fun(args: mineral.TrackStartedArgs))
 ---@overload fun(event: "track_finished", fn: fun(args: mineral.TrackFinishedArgs))
 ---@overload fun(event: "download_completed", fn: fun(args: mineral.DownloadCompletedArgs))
 function mineral.on(event, fn) end

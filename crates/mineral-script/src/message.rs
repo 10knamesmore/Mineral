@@ -11,6 +11,13 @@ use mineral_protocol::PlayMode;
 /// (如整个 [`Song`]),投影成 Lua table 的裁剪发生在 dispatch 层。
 #[derive(Clone, Debug)]
 pub enum ScriptEvent {
+    /// 在播曲目变更(与 `player.song` 属性同源:远端起播 / 本地命中 /
+    /// gapless 推进全覆盖;同曲重启不重复触发)。
+    TrackStarted {
+        /// 开始播放的歌曲。
+        song: Box<Song>,
+    },
+
     /// 一首歌结束(必带 reason,与 wire 的 `FinishReason` 同构)。
     TrackFinished {
         /// 结束的歌曲。

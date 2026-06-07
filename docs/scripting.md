@@ -25,12 +25,12 @@ end)
 
 ## 通用约定
 
-| 约定 | 说明 |
-|---|---|
-| 歌曲 / 歌单 id | 全限定字符串 `"namespace:value"`(如 `"netease:123"`),回调给出的 id 可直接回喂任何 API |
-| 异步回调风格 | 查询类 API 不阻塞脚本线程,结果回调 `fn(value, err)`:成功 `err` 为 `nil`,失败 `value` 为 `nil` |
-| Song 投影 | 事件 / 查询里的歌曲是轻量投影:`{ id, title, duration_ms }` |
-| 音质名 | `"standard" \| "higher" \| "exhigh" \| "lossless" \| "hires"` |
+| 约定           | 说明                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| 歌曲 / 歌单 id | 全限定字符串 `"namespace:value"`(如 `"netease:123"`),回调给出的 id 可直接回喂任何 API         |
+| 异步回调风格   | 查询类 API 不阻塞脚本线程,结果回调 `fn(value, err)`:成功 `err` 为 `nil`,失败 `value` 为 `nil` |
+| Song 投影      | 事件 / 查询里的歌曲是轻量投影:`{ id, title, duration_ms }`                                    |
+| 音质名         | `"standard" \| "higher" \| "exhigh" \| "lossless" \| "hires"`                                 |
 
 ---
 
@@ -40,10 +40,11 @@ end)
 
 离散生命周期事件,回调收单一 args table:
 
-| 事件 | args | 时机 |
-|---|---|---|
-| `"track_finished"` | `{ song, reason }`,reason ∈ `eof / skip / error / stop` | 一首歌结束(自然播完 / 切歌 / 出错 / 停止) |
-| `"download_completed"` | `{ song, path }` | 一首歌下载落盘完成(已存在跳过不触发) |
+| 事件                   | args                                                    | 时机                                      |
+| ---------------------- | ------------------------------------------------------- | ----------------------------------------- |
+| `"track_started"`      | `{ song }`                                              | 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;同曲重启 / 单曲循环不重复触发) |
+| `"track_finished"`     | `{ song, reason }`,reason ∈ `eof / skip / error / stop` | 一首歌结束(自然播完 / 切歌 / 出错 / 停止) |
+| `"download_completed"` | `{ song, path }`                                        | 一首歌下载落盘完成(已存在跳过不触发)      |
 
 ```lua
 mineral.on("track_finished", function(args)
@@ -57,15 +58,15 @@ end)
 
 持续状态的订阅与读取。**订阅即回放**(注册时有当前值立刻调一次);高频变化合并只回末值。
 
-| 属性 | 回调值类型 | 说明 |
-|---|---|---|
-| `"player.song"` | `string \| nil` | 在播歌的 id,无在播为 nil |
-| `"player.state"` | `"playing" \| "paused" \| "stopped"` | 播放态 |
-| `"player.volume"` | integer | 音量 0-100 |
-| `"player.position"` | integer | 播放进度(整秒) |
-| `"player.mode"` | `"sequential" \| "shuffle" \| "repeat_all" \| "repeat_one"` | 循环模式 |
-| `"queue.length"` | integer | 队列长度 |
-| `"terminal"` | `{ rows, cols, fullscreen } \| nil` | 终端尺寸与全屏态;无 client 在线为 nil |
+| 属性                | 回调值类型                                                  | 说明                                  |
+| ------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `"player.song"`     | `string \| nil`                                             | 在播歌的 id,无在播为 nil              |
+| `"player.state"`    | `"playing" \| "paused" \| "stopped"`                        | 播放态                                |
+| `"player.volume"`   | integer                                                     | 音量 0-100                            |
+| `"player.position"` | integer                                                     | 播放进度(整秒)                        |
+| `"player.mode"`     | `"sequential" \| "shuffle" \| "repeat_all" \| "repeat_one"` | 循环模式                              |
+| `"queue.length"`    | integer                                                     | 队列长度                              |
+| `"terminal"`        | `{ rows, cols, fullscreen } \| nil`                         | 终端尺寸与全屏态;无 client 在线为 nil |
 
 `mineral.get(prop)` 同步读当前值(还没推送过为 `nil`)。
 
@@ -91,14 +92,14 @@ end)
 
 回调的 `ctx` 携带按键瞬间的 client 上下文(CLI 触发时全为 `nil`):
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `view` | `"playlists" \| "tracks" \| "queue" \| "fullscreen" \| "search"` | 按键时所在视图 |
-| `selected_song` | Song | 列表光标选中的歌 |
-| `selected_playlist` | `{ id, name }` | 选中 / 所在歌单 |
-| `now_playing` | Song | 在播的歌 |
-| `selected_loved` | boolean | 选中歌的 ♥ 态 |
-| `search_query` | string | 当前搜索词 |
+| 字段                | 类型                                                             | 说明             |
+| ------------------- | ---------------------------------------------------------------- | ---------------- |
+| `view`              | `"playlists" \| "tracks" \| "queue" \| "fullscreen" \| "search"` | 按键时所在视图   |
+| `selected_song`     | Song                                                             | 列表光标选中的歌 |
+| `selected_playlist` | `{ id, name }`                                                   | 选中 / 所在歌单  |
+| `now_playing`       | Song                                                             | 在播的歌         |
+| `selected_loved`    | boolean                                                          | 选中歌的 ♥ 态    |
+| `search_query`      | string                                                           | 当前搜索词       |
 
 播放器自身的状态(音量 / 进度 / 模式)不在 ctx 里——用 `mineral.get`。
 
@@ -121,18 +122,18 @@ mineral.timer.after(5000, function() mineral.ui.toast("5 秒到") end)
 
 播放 / 下载链路上的**同步**裁决点——daemon 拿到 URL 后、真正使用前,等你的返回值:
 
-| 拦截点 | 时机 |
-|---|---|
-| `"before_play"` | 远端解析出播放 URL 后、起播前 |
-| `"before_download"` | 取到下载直链后、写盘前 |
+| 拦截点              | 时机                          |
+| ------------------- | ----------------------------- |
+| `"before_play"`     | 远端解析出播放 URL 后、起播前 |
+| `"before_download"` | 取到下载直链后、写盘前        |
 
 回调收 `ctx = { song, url, quality, kind }`,返回值契约:
 
-| 返回 | 效果 |
-|---|---|
-| `nil` 或 `true` | 放行,原样继续 |
-| `false` 或 `{ skip = "原因" }` | 跳过本次(播放跳下一首并 toast 原因;下载记 skip) |
-| `{ url = "...", quality = "..." }` | 改写后继续(字段都可选,只给要改的) |
+| 返回                               | 效果                                            |
+| ---------------------------------- | ----------------------------------------------- |
+| `nil` 或 `true`                    | 放行,原样继续                                   |
+| `false` 或 `{ skip = "原因" }`     | 跳过本次(播放跳下一首并 toast 原因;下载记 skip) |
+| `{ url = "...", quality = "..." }` | 改写后继续(字段都可选,只给要改的)               |
 
 ```lua
 -- 拒播 30 秒以下的短音频(广告/试听残片)
@@ -148,7 +149,7 @@ end)
 - **回调要快**:超过 `script.hook_timeout_ms`(默认 2000ms)按放行处理,不会卡死播放
 - 同一拦截点可注册多个,按注册顺序调用,**首个非放行返回短路生效**
 - 改写过的播放流**不进缓存**(缓存按原曲入键,改写内容自负)
-- 本地缓存命中与 gapless 预排路径不过 hook(前者是你自己的文件,后者 decoder 已就绪)
+- 本地缓存命中与 gapless 预排路径不过 hook(前者是你自己的文件,后者 decoder 已就绪、物理上没有拦截窗口)——hook 是**拦截点**不是观察点,「每次开始播放做点什么」请用 `on("track_started")`,它全路径覆盖
 
 ### 自定义总线 `mineral.emit` / `mineral.on_message`
 
@@ -227,10 +228,10 @@ mineral.ui.toast("出事了", { kind = "error", ttl_secs = 10 })
 
 session 级覆盖 TUI 渲染旋钮(不写配置文件,daemon 重启即清;`value = nil` 撤销回落配置值):
 
-| key | 类型 | 旋钮 |
-|---|---|---|
-| `"lyrics.fullscreen_line_gap"` | integer ≥ 0 | 全屏歌词行间距 |
-| `"lyrics.compact_line_gap"` | integer ≥ 0 | 非全屏歌词行间距 |
+| key                            | 类型        | 旋钮             |
+| ------------------------------ | ----------- | ---------------- |
+| `"lyrics.fullscreen_line_gap"` | integer ≥ 0 | 全屏歌词行间距   |
+| `"lyrics.compact_line_gap"`    | integer ≥ 0 | 非全屏歌词行间距 |
 
 ```lua
 -- 终端宽度自适应:超 200 列拉开全屏歌词行距
@@ -267,8 +268,6 @@ local handle = mineral.spawn(
 ---
 
 ## Recipes
-
-写 recipe 的原则:**别复刻内置功能**。下载有 `d`、love 有 `f`、播放/跳过统计 daemon 原生就记——脚本的价值在「内置做不到的组合」:同步拦截裁决、跨重启的自定义记忆、与系统/外部服务联动、时间驱动行为。
 
 ### 睡眠定时器(按一下设定,再按取消)
 
@@ -343,15 +342,15 @@ end)
 ### 切歌桌面通知
 
 ```lua
-mineral.hook("before_play", function(ctx)
-    mineral.spawn({ "notify-send", "♪ 正在播放", ctx.song.title },
+mineral.on("track_started", function(args)
+    mineral.spawn({ "notify-send", "♪ 正在播放", args.song.title },
         function() end)
-    -- 不返回任何值 = 放行,hook 只是顺路观察
 end)
 ```
 
-注:`before_play` 只在远端解析路径触发——本地缓存命中和 gapless
-预排的自动切歌不经过它,这两类切歌不会有通知(属设计取舍)。
+`track_started` 与 `player.song` 属性同源:远端起播、本地缓存命中、
+gapless 自动推进全覆盖。同曲重启(`p` 回开头、单曲循环)不重复触发——
+对通知场景这正是想要的行为。
 
 ### 下载自动同步到 NAS
 
@@ -414,13 +413,13 @@ end)
 
 ## 运行时配置(`config.lua` 的 `script` 段)
 
-| 旋钮 | 默认 | 说明 |
-|---|---|---|
+| 旋钮                            | 默认 | 说明                                         |
+| ------------------------------- | ---- | -------------------------------------------- |
 | `watchdog_instruction_interval` | 2000 | 每多少条 VM 指令查一次墙钟;小 = 灵敏但开销大 |
-| `watchdog_soft_wall_ms` | 100 | 回调超此时长记 warn,继续跑 |
-| `watchdog_hard_wall_ms` | 1000 | 回调超此时长被中断(只杀本次调用) |
-| `hook_timeout_ms` | 2000 | 拦截 hook 软超时;超时按放行处理 |
-| `spawn_max_concurrent` | 8 | 子进程并发上限;0 = 不限 |
+| `watchdog_soft_wall_ms`         | 100  | 回调超此时长记 warn,继续跑                   |
+| `watchdog_hard_wall_ms`         | 1000 | 回调超此时长被中断(只杀本次调用)             |
+| `hook_timeout_ms`               | 2000 | 拦截 hook 软超时;超时按放行处理              |
+| `spawn_max_concurrent`          | 8    | 子进程并发上限;0 = 不限                      |
 
 ## 排错
 

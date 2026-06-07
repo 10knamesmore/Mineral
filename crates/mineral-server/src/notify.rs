@@ -30,6 +30,20 @@ impl Notifier {
         Self { events, script }
     }
 
+    /// 在播曲目变更:仅脚本路(wire 侧 client 经 `PlayerSync` / 属性订阅
+    /// 自取,无需事件)。触发面在属性采样处,远端 / 本地命中 / gapless
+    /// 推进全覆盖。
+    ///
+    /// # Params:
+    ///   - `song`: 开始播放的歌(脚本路携带整首做投影)
+    pub(crate) fn track_started(&self, song: &Song) {
+        if let Some(script) = &self.script {
+            script.send(ScriptEvent::TrackStarted {
+                song: Box::new(song.clone()),
+            });
+        }
+    }
+
     /// 一首歌结束:wire `TrackFinished` + 脚本 `track_finished`。
     ///
     /// # Params:

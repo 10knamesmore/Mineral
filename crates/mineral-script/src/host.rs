@@ -23,6 +23,9 @@ use crate::message::{PropKey, PropValue};
 /// 也不会撞 parking_lot 的不可重入死锁。
 #[derive(Debug, Default)]
 pub(crate) struct EventRegistry {
+    /// `track_started` 回调。
+    pub(crate) track_started: Vec<Arc<mlua::RegistryKey>>,
+
     /// `track_finished` 回调。
     pub(crate) track_finished: Vec<Arc<mlua::RegistryKey>>,
 

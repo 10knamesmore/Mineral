@@ -115,6 +115,33 @@ mod tests {
     }
 
     #[test]
+    fn track_started_reaches_lua_callback() -> color_eyre::Result<()> {
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.on("track_started", function(args)
+                mineral.ui.toast("start:" .. args.song.id .. "/" .. args.song.title)
+            end)
+            "#,
+        )?;
+        let song = song("7");
+        sender.send(ScriptEvent::TrackStarted {
+            song: Box::new(song.clone()),
+        });
+        let events = drain_after_stop(runtime, &mut push_rx);
+        let expected = format!("start:{}/{}", song.id.qualified(), song.name);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: expected,
+                id: None,
+                ttl_secs: None,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn track_finished_reaches_lua_callback() -> color_eyre::Result<()> {
         let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"

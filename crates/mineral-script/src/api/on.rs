@@ -13,7 +13,7 @@ use crate::host::ScriptHost;
 /// `mineral.on` 接受的全部事件名。新增事件:加变体进
 /// [`EventRegistry`](crate::host::EventRegistry)、这里加名字、
 /// meta stub 的 `mineral.EventName` 别名加字面量(守卫测试会逼你同步)。
-pub(crate) const EVENT_NAMES: [&str; 2] = ["track_finished", "download_completed"];
+pub(crate) const EVENT_NAMES: [&str; 3] = ["track_started", "track_finished", "download_completed"];
 
 /// 把 `on` 挂到 `mineral` 表上。
 ///
@@ -29,6 +29,7 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
             let key = Arc::new(lua.create_registry_value(func)?);
             let mut registry = events.lock();
             match name.as_str() {
+                "track_started" => registry.track_started.push(key),
                 "track_finished" => registry.track_finished.push(key),
                 "download_completed" => registry.download_completed.push(key),
                 other => {
@@ -55,11 +56,13 @@ mod tests {
             r#"
             mineral.on("track_finished", function() end)
             mineral.on("track_finished", function() end)
+            mineral.on("track_started", function() end)
             mineral.on("download_completed", function() end)
             "#,
         )
         .exec()?;
         let registry = host.events.lock();
+        assert_eq!(registry.track_started.len(), 1);
         assert_eq!(registry.track_finished.len(), 2);
         assert_eq!(registry.download_completed.len(), 1);
         Ok(())
@@ -69,10 +72,11 @@ mod tests {
     fn unknown_event_name_is_lua_error() -> color_eyre::Result<()> {
         let (lua, host) = vm_with_host()?;
         let result = lua
-            .load(r#"mineral.on("track_started", function() end)"#)
+            .load(r#"mineral.on("queue_cleared", function() end)"#)
             .exec();
         assert!(result.is_err(), "未知事件名必须报 Lua 错");
         let registry = host.events.lock();
+        assert!(registry.track_started.is_empty());
         assert!(registry.track_finished.is_empty());
         assert!(registry.download_completed.is_empty());
         Ok(())
