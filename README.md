@@ -13,7 +13,9 @@
 
 名字取自 [Mineral](<https://en.wikipedia.org/wiki/Mineral_(band)>) —— 90 年代得州的 emo / post-rock 乐队。
 
-<img src="assets/screenshot-library.png" alt="Mineral library view" width="800"/>
+<img src="assets/screenshot-library.png" alt="Mineral 曲库视图:歌单 / 封面 / 歌词 / 频谱" width="800"/>
+
+<img src="assets/screenshot-immersive.png" alt="Mineral 全屏沉浸态:封面 / 逐字歌词 / 频谱" width="800"/>
 
 </div>
 
