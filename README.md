@@ -5,7 +5,6 @@
 **多源终端音乐播放器 —— 简洁,音乐为中心**
 
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/10knamesmore/Mineral?style=flat-square)](https://github.com/10knamesmore/Mineral/releases)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
@@ -19,7 +18,7 @@
 
 </div>
 
-## ✨ 特性
+## 特性
 
 - **多源融合** — `MusicChannel` trait 统一抽象搜索 / 详情 / 播放 URL / 歌词 / 用户数据;平铺数据模型跨源直接合并展示,新增音乐源不污染模型
 - **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接**
@@ -46,8 +45,8 @@ paru -S mineral   # 或 yay -S mineral
 ### Cargo(任意平台,从源码安装)
 
 ```bash
-# 最新发布版
-cargo install --locked --git https://github.com/10knamesmore/Mineral --tag v0.5.0 mineral
+# 最新发布版(crates.io)
+cargo install --locked mineral
 
 # 跟随主分支
 cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
