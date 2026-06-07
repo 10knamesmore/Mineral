@@ -1254,7 +1254,7 @@ mod tests {
     }
 
     /// `d` 按视图分流下载意图(Playlists→歌单 / Library→单曲),TestClient no-op:
-    /// 断不 panic、选中与视图不变(不验 Client 调用细节,见 sub00 §10 spy 裁决)。
+    /// 断不 panic、选中与视图不变(不验 Client 调用细节)。
     #[test]
     fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 1)?;

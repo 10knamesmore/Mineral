@@ -12,13 +12,22 @@
 
 ## Hello World
 
+`config.lua` 整个文件是一个 Lua chunk:**脚本写在顶层、`return` 之前**(Lua 的 `return` 必须是最后一条语句);`return` 的表是纯配置数据,里面不放 `mineral.*` 调用。
+
 ```lua
 -- ~/.config/mineral/config.lua
--- (配置表 return 之外的顶层代码就是脚本)
 
+-- ① 脚本:顶层 mineral.* 调用,文件被 eval 时立即执行(注册回调 / 绑键)
 mineral.bind("X", function(ctx)
     mineral.ui.toast("你按了 X,当前视图:" .. (ctx.view or "?"))
 end)
+
+-- ② 配置:最后 return 配置表(只写想改的;全默认就 return {})
+return {
+    tui = {
+        behavior = { volume_step = 10 },
+    },
+}
 ```
 
 保存后(daemon 在跑则热重载,否则下次启动生效),TUI 里按 `X` 即见 toast。
@@ -29,7 +38,7 @@ end)
 | -------------- | --------------------------------------------------------------------------------------------- |
 | 歌曲 / 歌单 id | 全限定字符串 `"namespace:value"`(如 `"netease:123"`),回调给出的 id 可直接回喂任何 API         |
 | 异步回调风格   | 查询类 API 不阻塞脚本线程,结果回调 `fn(value, err)`:成功 `err` 为 `nil`,失败 `value` 为 `nil` |
-| Song 投影      | 事件 / 查询里的歌曲是轻量投影:`{ id, title, duration_ms }`                                    |
+| Song 投影      | 事件 / 查询里的歌曲是投影表:`{ id, title, duration_ms, artists, album, cover_url, source_url }`(artists 为名字数组;后三者拿不到为 nil) |
 | 音质名         | `"standard" \| "higher" \| "exhigh" \| "lossless" \| "hires"`                                 |
 
 ---
@@ -40,11 +49,11 @@ end)
 
 离散生命周期事件,回调收单一 args table:
 
-| 事件                   | args                                                    | 时机                                      |
-| ---------------------- | ------------------------------------------------------- | ----------------------------------------- |
+| 事件                   | args                                                    | 时机                                                                                 |
+| ---------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `"track_started"`      | `{ song }`                                              | 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;同曲重启 / 单曲循环不重复触发) |
-| `"track_finished"`     | `{ song, reason }`,reason ∈ `eof / skip / error / stop` | 一首歌结束(自然播完 / 切歌 / 出错 / 停止) |
-| `"download_completed"` | `{ song, path }`                                        | 一首歌下载落盘完成(已存在跳过不触发)      |
+| `"track_finished"`     | `{ song, reason }`,reason ∈ `eof / skip / error / stop` | 一首歌结束(自然播完 / 切歌 / 出错 / 停止)                                            |
+| `"download_completed"` | `{ song, path, quality, format }`(quality 为有效音质名;format 如 `"flac"`,拿不到 nil) | 一首歌下载落盘完成(已存在跳过不触发)                                                 |
 
 ```lua
 mineral.on("track_finished", function(args)
@@ -265,6 +274,31 @@ local handle = mineral.spawn(
 
 `mineral.log.info(msg)` / `mineral.log.warn(msg)` 写进 daemon 日志(`~/.cache/mineral/mineral.log`),排错主通道。
 
+### 系统信息 `mineral.sys`
+
+host 独有的常量信息(加载时灌入,运行期不变):
+
+```lua
+mineral.sys.os         -- "linux" | "macos"
+mineral.sys.arch       -- "x86_64" / "aarch64"
+mineral.sys.hostname   -- 主机名(双机共享一份 config.lua 时分叉用)
+mineral.sys.version    -- { major = 0, minor = 5, patch = 0 }(结构化,共享配置做兼容分叉)
+
+mineral.sys.paths.config   -- ~/.config/mineral
+mineral.sys.paths.data     -- ~/.local/share/mineral(脚本自己的持久文件放这)
+mineral.sys.paths.cache    -- ~/.cache/mineral
+mineral.sys.paths.log      -- ~/.cache/mineral/mineral.log
+mineral.sys.paths.socket   -- daemon IPC socket
+```
+
+配置写大了可以按文件拆分:
+
+```lua
+dofile(mineral.sys.paths.config .. "/lua/my_plugin.lua")
+```
+
+两个有意的「没有」:时间日期**用 Lua 标准库**(`os.time()` 实时时间戳、`os.date("*t")` 实时结构化表,不做重复 API);**不提供 cwd**——脚本跑在 daemon 里,daemon 的 cwd 取决于谁拉起它(终端 / systemd),无稳定语义,文件操作用 `paths.*`、子进程工作目录用 `spawn` 的 `opts.cwd`。
+
 ---
 
 ## Recipes
@@ -339,12 +373,18 @@ mineral.on("track_finished", function(args)
 end)
 ```
 
-### 切歌桌面通知
+### 切歌桌面通知(跨平台)
 
 ```lua
 mineral.on("track_started", function(args)
-    mineral.spawn({ "notify-send", "♪ 正在播放", args.song.title },
-        function() end)
+    local cmd
+    if mineral.sys.os == "macos" then
+        cmd = { "osascript", "-e",
+            ('display notification %q with title "Mineral"'):format(args.song.title) }
+    else
+        cmd = { "notify-send", "♪ 正在播放", args.song.title }
+    end
+    mineral.spawn(cmd, function() end)
 end)
 ```
 
@@ -352,18 +392,23 @@ end)
 gapless 自动推进全覆盖。同曲重启(`p` 回开头、单曲循环)不重复触发——
 对通知场景这正是想要的行为。
 
-### 下载自动同步到 NAS
+### 下载自动同步到 NAS(按歌手 / 专辑归档)
+
+`download_completed` 的 args 带齐了归档要素:`song.artists` / `song.album` /
+`quality` / `format`,远端目录结构随你组织:
 
 ```lua
 mineral.on("download_completed", function(args)
-    mineral.spawn(
-        { "rsync", "-a", args.path, "nas:/music/mineral/" },
-        function(r, err)
-            if err or (r and r.code ~= 0) then
-                mineral.ui.toast("同步 NAS 失败:" .. args.song.title,
-                    { kind = "warn" })
-            end
-        end)
+    local s = args.song
+    local dest = ("nas:/music/%s/%s/"):format(
+        s.artists[1] or "未知歌手",
+        s.album or "未知专辑")
+    mineral.spawn({ "rsync", "-a", args.path, dest }, function(r, err)
+        if err or (r and r.code ~= 0) then
+            mineral.ui.toast(("同步 NAS 失败:%s(%s)"):format(s.title, args.quality),
+                { kind = "warn" })
+        end
+    end)
 end)
 ```
 

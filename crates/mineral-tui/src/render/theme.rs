@@ -68,7 +68,7 @@ impl Theme {
     /// 从配置切片落地主题:14 token 各取一色,3 个角色按 token 名 resolve 成具体色。
     ///
     /// # Params:
-    ///   - `cfg`: 主题配置切片(sub01 已校验:hex 合法、token 名 ∈ 14 集合)
+    ///   - `cfg`: 主题配置切片
     ///
     /// # Return:
     ///   落地后的 [`Theme`]。
@@ -99,7 +99,7 @@ impl Theme {
         t
     }
 
-    /// 按 token 名取对应字段色。名字集合由 sub01 反序列化校验(∈ 14 token),
+    /// 按 token 名取对应字段色。
     /// 未知名按穷尽兜底回 `text`(不该发生)。
     fn token_by_name(&self, name: &str) -> Color {
         match name {
