@@ -10,9 +10,10 @@
 -- - 整数字段写 Lua 数字即可;`10 * 1024 ^ 3` 这类幂运算产生的小数会被自动取整。
 -- - 填错(类型不对 / 未知字段 / 超出取值集合)不会让程序崩:整份配置回落默认,
 --   启动时给一条告警。改完跑 `mineral config check` 可离线验证。
--- - 生效方式:**重启生效,无热重载**。`tui.*` 段重启 TUI 即可;顶层段(audio /
---   cache / download / sources / daemon)由 daemon 进程持有——默认退出 TUI 会带走
---   自拉起的 daemon,重开即全量生效;若 daemon 续命或独立启动,需重启 daemon。
+-- - 生效方式:**主题 / 键位 / 脚本保存即热重载**(theme / keys / behavior 由 TUI
+--   热应用;顶层 mineral.* 脚本由 daemon 重载)。其余段(audio / cache / download /
+--   sources / daemon 节拍与 TUI 构造期参数如动画时长 / 布局)重启对应进程生效——
+--   默认退出 TUI 会带走自拉起的 daemon,重开即全量生效;daemon 续命时需重启 daemon。
 --
 -- 所有 ---@field 标为可选(`?`):从配置消费方看没有必填字段——任何字段省略都合法
 -- (深合并回落 default.lua)。故 partial 的用户 config.lua 不触发 missing-fields,

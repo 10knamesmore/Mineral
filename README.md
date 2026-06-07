@@ -1,91 +1,189 @@
+<div align="center">
+
 # Mineral
 
-本项目基于 `简洁`, `音乐为中心` 的出发点构建
+**多源终端音乐播放器 —— 简洁,音乐为中心**
 
-- 名字取自 [Mineral](https://en.wikipedia.org/wiki/Mineral_(band)) —— 90 年代得州的 emo / post-rock 乐队。
+[![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/10knamesmore/Mineral?style=flat-square)](https://github.com/10knamesmore/Mineral/releases)
+[![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
+![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blueviolet?style=flat-square)
 
-![Mineral library view](assets/screenshot-library.png)
+名字取自 [Mineral](https://en.wikipedia.org/wiki/Mineral_(band)) —— 90 年代得州的 emo / post-rock 乐队。
 
-## 特性
+<img src="assets/screenshot-library.png" alt="Mineral library view" width="800"/>
 
-- **多源融合**:`MusicChannel` trait 统一抽象搜索、详情、播放 URL、歌词、用户数据;新增 channel 不污染数据模型。
-- **真实播放栈**:rodio + symphonia + stream-download,支持 mp3 / aac / m4a / flac;seek、auto-next、Shuffle、循环模式齐全。
-- **歌词**:LRC 行级显示 + YRC 字符级 wipe 渐变(逐字),Apple Music 风格 fade。
-- **频谱**:realfft 真值 + peak hold 弹簧物理 + HSV 色相缓慢漂移。
-- **封面**:ratatui-image,kitty / iTerm2 / sixel / halfblock 自适配,字号变化按 dims 重建,滚动期间自动防抖避免卡顿。
-- **任务调度**:优先级 lane(User / Background) + 取消 + dedup,封面 / 歌单 / 歌词分别走自己的 worker。
-- **平铺数据模型**:`Song` / `Playlist` / `Album` / `Lyrics` 都是平铺字段 + `SourceKind` 标签,跨 channel 直接合并展示。
+</div>
 
-## 构建
+## ✨ 特性
 
-需要 stable Rust(`rust-version >= 1.78`)。
+- 🎵 **多源融合** — `MusicChannel` trait 统一抽象搜索 / 详情 / 播放 URL / 歌词 / 用户数据;平铺数据模型跨源直接合并展示,新增音乐源不污染模型
+- 🔊 **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接**
+- 👻 **daemon 后台播放** — 播放核心独立进程,退出 TUI 音乐不停;重开 TUI 无缝接回当前进度
+- 🖥️ **全屏沉浸态** — `z` 一键进出:封面 / 逐字歌词 / 频谱的沉浸布局,Apple Music 风格行间平移与字级 wipe
+- 📊 **频谱** — realfft 真值 + ADSR 包络 + peak 弹簧物理;封面取色铺满频率轴
+- 🖼️ **封面** — kitty / iTerm2 / sixel / halfblock 自适配,异步解码编码不卡渲染
+- ⚙️ **Lua 配置** — 单文件 `config.lua`,深合并默认值,LSP 补全 / 类型检查开箱即用;主题、键位、手感全量可调,保存即热重载
+- 🧩 **Lua 脚本系统** — 配置文件就是脚本:事件订阅、属性观察、自定义键位动作、播放拦截改写、子进程、定时器、per-song 持久 KV…(见 [脚本指南](./docs/scripting.md))
+- ⌨️ **键位重映射** — nvim 键表示法(`<C-g>` / `<S-Left>`),动作 → 键全量可改
+- 💾 **缓存与下载** — 边播边缓存(LRU 容量上限)+ 永久下载导出;本地命中跳过网络
+- 🔍 **搜索过滤** — fuzzy 匹配 + 拼音(全拼 / 首字母)
+- ❤️ **love 与统计** — 喜欢标记双向同步,本地播放统计
 
-```bash
-# 构建整个 workspace
-cargo build --release
+## 安装
 
-# 仅构建 TUI binary
-cargo build -p mineral --release
-```
-
-## 运行
-
-```bash
-# 真实数据源(需要先 login,见下)
-cargo run -p mineral --release
-
-# 离线开发:跑 mock channel 拿假数据,不打任何网络端点
-cargo run -p mineral --release --features mock
-```
-
-首次启动若 sidebar 提示 `尚未登录或拉取失败`,在另一个终端执行 login:
+### Arch Linux(AUR)
 
 ```bash
-cargo run -p mineral -- channel netease login
+paru -S mineral   # 或 yay -S mineral
 ```
 
-会打印一张终端二维码,用对应 App 扫码确认即可。凭证写入 `<data_dir>/netease.json`,后续启动 TUI 自动读取。
+### Cargo(任意平台,从源码安装)
 
-## 路径
+```bash
+# 最新发布版
+cargo install --locked --git https://github.com/10knamesmore/Mineral --tag v0.5.0 mineral
 
-遵循 XDG Base Directory:
+# 跟随主分支
+cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
+```
 
-| 用途 | 路径 |
+需要 Rust ≥ 1.96 与下列系统依赖。
+
+<details>
+<summary><b>源码构建依赖(点开)</b></summary>
+
+| 平台 | 依赖 |
 |---|---|
-| 配置 | `$XDG_CONFIG_HOME/mineral`(默认 `~/.config/mineral`) |
-| 数据(凭证、缓存歌单等) | `$XDG_DATA_HOME/mineral`(默认 `~/.local/share/mineral`) |
-| 缓存(封面、流式下载) | `$XDG_CACHE_HOME/mineral`(默认 `~/.cache/mineral`) |
-| 日志 | `<cache_dir>/mineral.log` |
+| Arch Linux | `pacman -S alsa-lib openssl pkgconf` |
+| Debian / Ubuntu | `apt install libasound2-dev libssl-dev pkg-config` |
+| macOS | 无额外依赖(音频走 CoreAudio) |
+
+> [!NOTE]
+> ALSA 头文件是**编译期**依赖;运行期无声卡(headless)会自动降级为静默模式,不会报错退出。
+
+```bash
+git clone https://github.com/10knamesmore/Mineral && cd Mineral
+cargo build --release            # 产物在 target/release/mineral
+```
+
+</details>
+
+## 快速上手
+
+```bash
+mineral                          # 启动 TUI(没有 daemon 会自动拉起)
+mineral channel netease login    # 终端二维码,App 扫码登录
+```
+
+首次启动 sidebar 若提示未登录,跑上面第二条即可;凭证落盘后以后自动读取。
+
+<details>
+<summary><b>daemon 模式详解(点开)</b></summary>
+
+播放核心跑在独立 daemon 进程,TUI 只是它的一个 client:
+
+| 用法 | 行为 |
+|---|---|
+| `mineral`(默认) | 没有 daemon 就自动拉起一个;**退出 TUI 时带走自己拉起的 daemon** |
+| 后台续命 | 配置 `tui.behavior.kill_spawned_daemon_on_exit = false` 后,退出 TUI 音乐继续播,下次启动自动接回 |
+| `mineral --connect` | 只连接已有 daemon(`mineral serve` 起的),连不上报错;退出不停音乐 |
+| `mineral serve` | 手动起常驻 daemon |
+| `mineral --in-proc` | 单进程模式,不走 daemon / socket(调试用) |
+| `mineral status` | 命令行查看当前播放状态 |
+
+</details>
+
+## 配置
+
+```bash
+mineral config init    # 生成 config.lua 模板 + default.lua 参考 + 编辑器类型注解
+mineral config check   # 离线校验配置
+```
+
+- 配置就一个文件:`~/.config/mineral/config.lua`,**只写想改的字段**,其余深合并默认值
+- 全部字段与默认值见同目录生成的 `default.lua`(纯参考,程序不读它)
+- 装了 [lua-language-server](https://github.com/LuaLS/lua-language-server) 的编辑器自动获得字段补全、类型检查、悬浮文档
+- 填错不会崩:整份回落默认 + 启动告警
+- **热重载**:主题 / 键位 / 脚本保存即生效;音频引擎、daemon 节拍等底层段重启生效
+
+## Lua 脚本
+
+`config.lua` 不只是配置——它跑在 daemon 内嵌的 Lua VM 里,顶层的 `mineral.*` 调用即是脚本。事件订阅、播放拦截、per-song 持久 KV、子进程、定时器组合起来,能做内置功能做不到的事:
+
+```lua
+-- 睡眠定时器:按 S 设 30 分钟后停播,再按取消
+local sleep
+mineral.bind("S", function()
+    if sleep then
+        sleep:kill(); sleep = nil
+        mineral.ui.toast("睡眠定时器已取消", { id = "sleep" })
+    else
+        sleep = mineral.timer.after(30 * 60 * 1000, function()
+            mineral.player.stop(); sleep = nil
+        end)
+        mineral.ui.toast("30 分钟后停止播放", { id = "sleep" })
+    end
+end)
+
+-- 烂歌自动跳:手动跳过 3 次的歌,以后起播直接跳
+local skips = {}
+mineral.on("track_finished", function(args)
+    if args.reason ~= "skip" then return end
+    mineral.store.inc(args.song.id, "plugin.skips", 1, function(n)
+        skips[args.song.id] = n
+    end)
+end)
+mineral.hook("before_play", function(ctx)
+    if (skips[ctx.song.id] or 0) >= 3 then
+        return { skip = "跳过 3 次,自动拉黑" }
+    end
+end)
+```
+
+完整 API、运行时契约与更多 recipe(scrobble 上报、切歌桌面通知、下载自动同步 NAS、宽屏自适应行距…)见 **[docs/scripting.md](./docs/scripting.md)**。脚本错误被隔离,不会拖垮播放。
 
 ## 快捷键
 
-### 全局
+以下是默认键位,**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。
+
+<details open>
+<summary><b>全局</b></summary>
 
 | 键 | 动作 |
 |---|---|
-| `q` | 退出(带确认) |
 | `Space` | 播放 / 暂停 |
 | `n` / `p` | 下一首 / 上一首(`p` 在播放 > 3s 时回到本曲开头) |
-| `←` / `→` | 后退 / 前进 5s |
-| `Shift+←` / `Shift+→` | 后退 / 前进 30s |
+| `←` / `→` | 后退 / 前进 5s(`Shift` 加持 30s) |
 | `+` / `-` | 音量 ±5 |
-| `m` | 循环模式切换(顺序 / 单曲 / Shuffle) |
-| `3` | 打开 / 关闭 queue 浮层 |
+| `m` | 循环模式:顺序 → 随机 → 列表循环 → 单曲循环 |
+| `z` | 进 / 退全屏沉浸态 |
+| `Tab` | 播放队列浮层 |
+| `t` | 歌词副轨:原文 → 翻译 → 罗马音 |
+| `q` | 退出(带确认) |
 
-### 列表(playlists / library)
+</details>
+
+<details>
+<summary><b>列表(playlists / library)</b></summary>
 
 | 键 | 动作 |
 |---|---|
-| `j` / `k` 或 `↓` / `↑` | 上下移动 1 行 |
-| `Shift+J` / `Shift+K` | 上下移动 7 行 |
+| `j` / `k`(或 `↓` / `↑`) | 上下移动 1 行 |
+| `J` / `K` | 上下移动 7 行 |
 | `g` / `G` | 跳到首 / 末 |
-| `l` / `Enter`(playlists) | 进入选中歌单 |
-| `h` / `Backspace`(library) | 回到 playlists |
-| `Enter`(library) | 播放选中曲 + 整张歌单进 queue |
-| `/` | 进入搜索过滤(playlists 按名,library 按名 / 艺术家 / 专辑) |
-| `Esc` | 有过滤词时清过滤(留在当前视图);否则 library → playlists |
+| `l` / `Enter` | 进入歌单 / 播放选中曲(整张歌单进队列) |
+| `h` / `Esc` / `Backspace` | 返回上级 / 清搜索词 |
+| `/` | 搜索过滤(fuzzy + 拼音) |
+| `f` | 切换选中曲 ♥ |
+| `d` | 下载选中曲 / 歌单 |
 
-### 搜索输入态
+</details>
+
+<details>
+<summary><b>搜索输入态</b></summary>
 
 | 键 | 动作 |
 |---|---|
@@ -93,32 +191,41 @@ cargo run -p mineral -- channel netease login
 | `Enter` | 退出输入态,过滤词保留 |
 | `Esc` | 清过滤词 + 退出输入态 |
 
+</details>
+
+## 路径
+
+遵循 XDG Base Directory:
+
+| 用途 | 路径 |
+|---|---|
+| 配置 | `~/.config/mineral/config.lua` |
+| 数据(凭证、统计、per-song KV) | `~/.local/share/mineral` |
+| 缓存(封面、音频流缓存) | `~/.cache/mineral` |
+| 下载导出 | `~/Music/mineral`(`download.dir` 可改) |
+| 日志 | `~/.cache/mineral/mineral.log` |
+
 ## 开发
 
 ```bash
-# 跑所有测试
-cargo test --workspace
-
-# 加密 byte-for-byte 比对(改 crypto 必跑)
-cargo test --test crypto_vectors
-
-# 格式化 + 严格 lint(CI 用)
-cargo fmt --check
+cargo t                                   # = nextest run --workspace
+cargo td                                  # doctest(nextest 不跑,单独兜)
 cargo clippy --workspace --all-targets -- -D warnings
-
-# 跑 TUI(离线 mock 模式)
-cargo run -p mineral --features mock
+cargo fmt --check
+cargo run -p mineral --features mock      # 离线开发:mock 数据源,零网络
 ```
+
+测试体系细则见 [docs/testing.md](./docs/testing.md)。
 
 ## 致谢
 
 感谢以下项目带来的启发与参考:
 
-- [ratatui](https://github.com/ratatui/ratatui) — 优秀的 Rust TUI 框架。
-- [yazi](https://github.com/sxyazi/yazi) — 终端文件管理器,图像渲染细节上学到很多。
-- [go-musicfox](https://github.com/go-musicfox/go-musicfox) — 设计与交互上的参考。
-- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) — 歌词解析的参考。
-- [termusic](https://github.com/tramhao/termusic) — 同类 Rust TUI 播放器,值得借鉴的工程实践。
+- [ratatui](https://github.com/ratatui/ratatui) — 优秀的 Rust TUI 框架
+- [yazi](https://github.com/sxyazi/yazi) — 终端文件管理器,图像渲染细节上学到很多
+- [go-musicfox](https://github.com/go-musicfox/go-musicfox) — 设计与交互上的参考
+- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) — 歌词解析的参考
+- [termusic](https://github.com/tramhao/termusic) — 同类 Rust TUI 播放器,值得借鉴的工程实践
 
 ## 许可证
 
