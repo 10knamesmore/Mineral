@@ -93,7 +93,15 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
             cursor,
             extra,
             motion,
-            line_gap: *state.cfg.tui().lyrics().line_gap(),
+            // 行间距:脚本覆盖优先,无覆盖回落配置值。
+            fullscreen_line_gap: state
+                .ui_overrides
+                .fullscreen_line_gap
+                .unwrap_or(*state.cfg.tui().lyrics().fullscreen_line_gap()),
+            compact_line_gap: state
+                .ui_overrides
+                .compact_line_gap
+                .unwrap_or(*state.cfg.tui().lyrics().compact_line_gap()),
             scroll_ms: *state.cfg.tui().lyrics().scroll_ms(),
         },
         theme,
@@ -330,8 +338,11 @@ struct WindowInput<'a> {
     /// 呈现模式:决定行间距与高亮过渡。
     motion: LyricMode,
 
-    /// Immersive 模式的行间距(行,配置 `tui.lyrics.line_gap`)。
-    line_gap: usize,
+    /// Immersive 模式的行间距(行,配置 `tui.lyrics.fullscreen_line_gap`,可被脚本覆盖)。
+    fullscreen_line_gap: usize,
+
+    /// Compact 模式的行间距(行,配置 `tui.lyrics.compact_line_gap`,可被脚本覆盖)。
+    compact_line_gap: usize,
 
     /// 行切换缓动平移时长(ms,配置 `tui.lyrics.scroll_ms`)。
     scroll_ms: u64,
@@ -350,12 +361,13 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
         cursor,
         extra,
         motion,
-        line_gap,
+        fullscreen_line_gap,
+        compact_line_gap,
         scroll_ms,
     } = input;
     let gap = match motion {
-        LyricMode::Immersive => line_gap,
-        LyricMode::Compact => 0,
+        LyricMode::Immersive => fullscreen_line_gap,
+        LyricMode::Compact => compact_line_gap,
     };
     // 展开成视觉行序列;记当前行(居中基准)与上一行(平移 / 交叉淡入端)所在视觉行。
     let mut cells = Vec::<Cell>::new();
@@ -659,6 +671,33 @@ mod tests {
             )
         })?;
         crate::test_support::assert_snap!("歌词:逐字 + 翻译副行(所有可见行)", t.backend());
+        Ok(())
+    }
+
+    /// 脚本覆盖 `lyrics.compact_line_gap = 1`:Compact 模式行间出现空行
+    /// (配置默认 0 紧排;覆盖只改渲染态,不碰配置)。
+    #[test]
+    fn lyrics_compact_gap_override_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 14))?;
+        let mut state =
+            crate::test_support::state_with_lyrics(LyricExtra::None, /*with_words*/ false)?;
+        state.ui_overrides.apply(
+            "lyrics.compact_line_gap",
+            Some(&mineral_protocol::BusValue::Int(1)),
+        );
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &state,
+                &Theme::default(),
+                super::LyricMode::Compact,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "歌词:脚本覆盖 compact_line_gap=1 → 行间垫空行",
+            t.backend()
+        );
         Ok(())
     }
 

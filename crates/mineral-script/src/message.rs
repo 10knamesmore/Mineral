@@ -91,17 +91,21 @@ pub enum PropKey {
 
     /// 队列长度。
     QueueLength,
+
+    /// 终端 UI 状态(复合属性:rows/cols/fullscreen;无 client 在线为 none)。
+    Terminal,
 }
 
 impl PropKey {
     /// 全部属性键(`mineral.observe` 错误信息 / meta 守卫测试用)。
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::PlayerSong,
         Self::PlayerState,
         Self::PlayerVolume,
         Self::PlayerPosition,
         Self::PlayerMode,
         Self::QueueLength,
+        Self::Terminal,
     ];
 
     /// 按属性名解析(与 [`Self::as_str`] 对偶);未知名为 `None`。
@@ -120,6 +124,7 @@ impl PropKey {
             "player.position" => Some(Self::PlayerPosition),
             "player.mode" => Some(Self::PlayerMode),
             "queue.length" => Some(Self::QueueLength),
+            "terminal" => Some(Self::Terminal),
             _ => None,
         }
     }
@@ -134,6 +139,7 @@ impl PropKey {
             Self::PlayerPosition => "player.position",
             Self::PlayerMode => "player.mode",
             Self::QueueLength => "queue.length",
+            Self::Terminal => "terminal",
         }
     }
 }
@@ -142,11 +148,18 @@ impl PropKey {
 /// 理由同 [`TrackFinishedReason`]。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PropValue {
+    /// 布尔(terminal 的 fullscreen 字段)。
+    Bool(bool),
+
     /// 整数(volume / position 整秒 / queue.length)。
     Int(i64),
 
     /// 字符串(state / mode 名 / song 的 qualified id)。
     Str(String),
+
+    /// 复合结构(有序键值对,如 `terminal`)。递归用自身而非 BusValue:
+    /// BusValue 带 Float 无 `Eq`,会破坏属性缓存的 diff / 回放语义。
+    Table(Vec<(String, Self)>),
 
     /// 缺省 / 空(如无在播歌)。
     None,
@@ -289,6 +302,18 @@ pub enum ScriptCmd {
     SpawnKill {
         /// 目标子进程标识。
         id: crate::proc::SpawnId,
+    },
+
+    /// session 级 UI 旋钮覆盖(`mineral.ui.override`)。daemon 零解释:
+    /// 记 opaque 表 + 转发 [`Event::UiOverride`](mineral_protocol::Event::UiOverride),
+    /// key→旋钮映射在 client 边缘。
+    UiOverride {
+        /// 旋钮键(约定 = 配置路径,如 `lyrics.fullscreen_line_gap`)。
+        key: String,
+
+        /// 覆盖值;`None` = 撤销(Lua 侧传 nil)。`Some(Nil)` 不出现,
+        /// API 层把 nil 收敛成 `None`,避免「覆盖成 Nil」与「撤销」两义。
+        value: Option<mineral_protocol::BusValue>,
     },
 }
 

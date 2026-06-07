@@ -215,6 +215,20 @@ pub enum Request {
     /// 拉取脚本 `mineral.bind` 产生的键绑定表(client 启动 / 配置重载后调,
     /// 合进自己的 keymap)。返回 [`Response::ScriptBinds`](无脚本为空)。
     ScriptBinds,
+
+    // ---- UI 状态上报 ----
+    /// client 上报终端 UI 状态(resize / 全屏切换时发)。daemon 灌属性树
+    /// `terminal` 复合属性供脚本 observe;多 client 后写赢。返回 [`Response::Ok`]。
+    TerminalState {
+        /// 终端行数。
+        rows: u16,
+
+        /// 终端列数。
+        cols: u16,
+
+        /// 是否处于全屏播放态。
+        fullscreen: bool,
+    },
 }
 
 /// Server → Client 应答。

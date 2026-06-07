@@ -102,8 +102,21 @@ async fn handle_connection(
     // Response 与 Event 汇同一条 mpsc → 唯一 writer 串行写 sink,杜绝并发写。
     let (out_tx, out_rx) = mpsc::unbounded_channel::<Frame>();
     tokio::spawn(write_loop(sink, out_rx));
+    // 订阅 UiOverride 的 client 先收覆盖表重放,再进实时流(pump 还没起,
+    // 重放帧必然先入队;events_rx 在握手前已订阅,期间的变更不丢——
+    // 快照与缓冲间可能重复一条,client 侧 last-wins 幂等)。
+    if subscriptions.contains(&Subscription::UiOverride) {
+        for (key, value) in client.ui_overrides_snapshot() {
+            let _ = out_tx.send(Frame::Event(Event::UiOverride {
+                key,
+                value: Some(value),
+            }));
+        }
+    }
     let pump = tokio::spawn(event_pump(events_rx, subscriptions, out_tx.clone()));
     let result = read_loop(stream, client, &out_tx).await;
+    // client 断开:清终端上报,`terminal` 属性回 None(脚本可感知离线)。
+    client.clear_terminal_state();
     // 收尾:推送泵立停、放掉本端 out_tx。writer **不 await**——飞行中的 dispatch
     // task(如 love 的远端打点,可达数秒)还持着 out_tx clone,等它们结束才轮到
     // writer 退出;把 busy 的释放拖到慢 dispatch 之后,会让紧接着重连的 client
@@ -332,6 +345,14 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             Response::Ok
         }
         Request::DownloadProgress => Response::DownloadProgress(client.download_progress()),
+        Request::TerminalState {
+            rows,
+            cols,
+            fullscreen,
+        } => {
+            client.report_terminal_state(rows, cols, fullscreen);
+            Response::Ok
+        }
     }
 }
 
@@ -344,6 +365,8 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         | Request::TaskSnapshot
         | Request::DrainTaskEvents
         | Request::DownloadProgress
+        // 拖动 resize 会连发,不记。
+        | Request::TerminalState { .. }
         | Request::PullPcm(_) => None,
         Request::Play(_) => Some("Play"),
         Request::Pause => Some("Pause"),

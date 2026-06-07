@@ -35,6 +35,7 @@ mod serve;
 mod server;
 mod session;
 mod state;
+mod ui_override;
 
 pub use client::{Client, ClientHandle};
 pub use config::{ServerConfig, resolve_audio_mode};

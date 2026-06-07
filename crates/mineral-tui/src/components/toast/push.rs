@@ -32,15 +32,17 @@ pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
                 None => notifications.flash_for(item, ttl),
             }
         }
-        // ScriptReloaded 在 App::drain_push_events 已分流(刷新 bind 键),
-        // 这里只是穷尽兜底。BusMessage 是用户自定义消息,内置 TUI 不订阅
-        // 也不解释(语义契约在用户脚本与其外部工具之间)。
+        // ScriptReloaded / UiOverride 在 App::drain_push_events 已分流
+        // (前者刷新 bind 键、后者落旋钮覆盖),这里只是穷尽兜底。
+        // BusMessage 是用户自定义消息,内置 TUI 不订阅也不解释
+        // (语义契约在用户脚本与其外部工具之间)。
         Event::PropertyChanged { .. }
         | Event::TrackFinished { .. }
         | Event::DownloadCompleted { .. }
         | Event::StoreChanged { .. }
         | Event::ScriptReloaded
-        | Event::BusMessage { .. } => {}
+        | Event::BusMessage { .. }
+        | Event::UiOverride { .. } => {}
     }
 }
 

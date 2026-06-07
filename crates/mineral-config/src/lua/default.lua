@@ -118,7 +118,8 @@ return {
             prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
         },
         lyrics = {
-            line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳
+            fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳
+            compact_line_gap = 0, -- 非全屏紧凑态歌词行间空行数
             scroll_ms = 280, -- 切行整列平移 + 高亮淡入的过渡时长
         },
         -- 动画。时长均为毫秒(按 frame_tick_ms 折算成拍,至少一拍);0 ≈ 一帧到位。

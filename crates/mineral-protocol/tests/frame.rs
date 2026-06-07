@@ -116,6 +116,16 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
         key: "plugin.skipcount".to_owned(),
     }))
     .await?;
+    frame_round_trips(Frame::Event(Event::UiOverride {
+        key: "lyrics.fullscreen_line_gap".to_owned(),
+        value: Some(BusValue::Int(2)),
+    }))
+    .await?;
+    frame_round_trips(Frame::Event(Event::UiOverride {
+        key: "lyrics.fullscreen_line_gap".to_owned(),
+        value: None,
+    }))
+    .await?;
     Ok(())
 }
 
@@ -146,6 +156,18 @@ fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
                 BusValue::Array(vec![BusValue::Nil, BusValue::Int(1)]),
             ),
         ]),
+    })?;
+    dual_codec_roundtrip(&Event::PropertyChanged {
+        prop: PropName::TERMINAL,
+        value: PropValue::Table(vec![
+            ("rows".to_owned(), PropValue::Int(50)),
+            ("cols".to_owned(), PropValue::Int(220)),
+            ("fullscreen".to_owned(), PropValue::Bool(true)),
+        ]),
+    })?;
+    dual_codec_roundtrip(&Event::UiOverride {
+        key: "lyrics.compact_line_gap".to_owned(),
+        value: Some(BusValue::Int(1)),
     })?;
     dual_codec_roundtrip(&ClientInfo::new(vec![Subscription::Lifecycle]))?;
     dual_codec_roundtrip(&ServerHello::reject(RejectReason::VersionMismatch))?;
@@ -183,6 +205,7 @@ fn prop_name_from_name_roundtrips_builtins() {
         PropName::PLAYER_POSITION,
         PropName::PLAYER_MODE,
         PropName::QUEUE_LENGTH,
+        PropName::TERMINAL,
     ] {
         assert_eq!(PropName::from_name(name.as_str()), name);
     }
@@ -222,6 +245,14 @@ fn event_subscription_mapping() {
         }
         .subscription(),
         Subscription::Bus
+    );
+    assert_eq!(
+        Event::UiOverride {
+            key: "lyrics.fullscreen_line_gap".to_owned(),
+            value: None,
+        }
+        .subscription(),
+        Subscription::UiOverride
     );
 }
 

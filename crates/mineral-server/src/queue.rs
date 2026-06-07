@@ -1,9 +1,11 @@
-//! 队列计算:按 [`PlayMode`] 推「下一首 / 上一首」,以及 PlayMode 的稳定字符串化。
+//! 队列计算:按 [`PlayMode`] 推「下一首 / 上一首」、PlayMode 的稳定字符串化,
+//! 以及进 / 退 shuffle 边界的洗牌 / 还原。
 //!
-//! 都是只读 [`State`] 的纯函数;进 / 退 shuffle 的洗牌还原(改 State)留在 player 内。
+//! 全部是面向 [`State`] 的自由函数(shuffle 三件改 State,其余只读)。
 
 use mineral_model::Song;
 use mineral_protocol::PlayMode;
+use rand::seq::SliceRandom;
 
 use crate::state::State;
 
@@ -62,4 +64,54 @@ pub(crate) fn prev_in_queue(st: &State) -> Option<Song> {
         PlayMode::RepeatAll | PlayMode::Shuffle => st.queue.get((cur + len - 1) % len).cloned(),
         PlayMode::RepeatOne => st.queue.get(cur).cloned(),
     }
+}
+
+/// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。
+///
+/// # Params:
+///   - `st`: 播放状态(写 play_mode,边界处改 queue)
+///   - `new`: 目标模式
+pub(crate) fn apply_play_mode(st: &mut State, new: PlayMode) {
+    let old = st.play_mode;
+    if old == new {
+        return;
+    }
+    mineral_log::info!(target: "player", old = ?old, new = ?new, "play mode changed");
+    st.play_mode = new;
+    match (old == PlayMode::Shuffle, new == PlayMode::Shuffle) {
+        (false, true) => enter_shuffle(st),
+        (true, false) => exit_shuffle(st),
+        _ => {}
+    }
+}
+
+/// 进入 shuffle:存原序到 `original_queue`,洗牌后把当前歌挪到 0 位、`queue_sel = 0`。
+pub(crate) fn enter_shuffle(st: &mut State) {
+    if st.queue.is_empty() {
+        return;
+    }
+    let original = st.queue.clone();
+    let cur_id = st.current_song.as_ref().map(|t| t.id.clone());
+    st.queue.shuffle(&mut rand::rng());
+    if let Some(id) = cur_id
+        && let Some(pos) = st.queue.iter().position(|s| s.id == id)
+    {
+        st.queue.swap(0, pos);
+    }
+    st.queue_sel = 0;
+    st.original_queue = Some(original);
+    st.bump_queue();
+}
+
+/// 退出 shuffle:从 `original_queue` 还原顺序,`queue_sel` 重新定位到当前歌。
+pub(crate) fn exit_shuffle(st: &mut State) {
+    let Some(original) = st.original_queue.take() else {
+        return;
+    };
+    let cur_id = st.current_song.as_ref().map(|t| t.id.clone());
+    st.queue = original;
+    st.queue_sel = cur_id
+        .and_then(|id| st.queue.iter().position(|s| s.id == id))
+        .unwrap_or(0);
+    st.bump_queue();
 }

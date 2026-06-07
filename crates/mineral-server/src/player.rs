@@ -24,7 +24,7 @@ use rand::seq::SliceRandom;
 use crate::download::{self, Capturing};
 use crate::gapless;
 use crate::media_cache::MediaCache;
-use crate::queue::{next_in_queue, prev_in_queue};
+use crate::queue::{apply_play_mode, next_in_queue, prev_in_queue};
 use crate::state::State;
 
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
@@ -72,6 +72,13 @@ pub(crate) struct Inner {
 
     /// 属性 diff 的上次值缓存(background_loop 每 tick 比对)。
     pub(crate) props: crate::props::PropsWatch,
+
+    /// client 上报的终端 UI 状态(`Request::TerminalState` 写、断开清;
+    /// check_props 每 tick 采样灌 `terminal` 属性)。
+    pub(crate) ui_state: Mutex<Option<crate::props::TerminalReport>>,
+
+    /// 脚本 UI 旋钮覆盖表(opaque:只存 + 转发 + 握手重放,不解释 key)。
+    pub(crate) ui_overrides: crate::ui_override::UiOverrides,
 
     /// 播放上下文(队列/当前歌/歌词/预拉状态)。
     pub(crate) state: Mutex<State>,
@@ -154,6 +161,8 @@ impl PlayerCore {
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             notify,
             props: crate::props::PropsWatch::default(),
+            ui_state: Mutex::new(None),
+            ui_overrides: crate::ui_override::UiOverrides::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
@@ -748,52 +757,6 @@ impl PlayerCore {
     }
 }
 
-/// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。
-fn apply_play_mode(st: &mut State, new: PlayMode) {
-    let old = st.play_mode;
-    if old == new {
-        return;
-    }
-    mineral_log::info!(target: "player", old = ?old, new = ?new, "play mode changed");
-    st.play_mode = new;
-    match (old == PlayMode::Shuffle, new == PlayMode::Shuffle) {
-        (false, true) => enter_shuffle(st),
-        (true, false) => exit_shuffle(st),
-        _ => {}
-    }
-}
-
-/// 进入 shuffle:存原序到 `original_queue`,洗牌后把当前歌挪到 0 位、`queue_sel = 0`。
-fn enter_shuffle(st: &mut State) {
-    if st.queue.is_empty() {
-        return;
-    }
-    let original = st.queue.clone();
-    let cur_id = st.current_song.as_ref().map(|t| t.id.clone());
-    st.queue.shuffle(&mut rand::rng());
-    if let Some(id) = cur_id
-        && let Some(pos) = st.queue.iter().position(|s| s.id == id)
-    {
-        st.queue.swap(0, pos);
-    }
-    st.queue_sel = 0;
-    st.original_queue = Some(original);
-    st.bump_queue();
-}
-
-/// 退出 shuffle:从 `original_queue` 还原顺序,`queue_sel` 重新定位到当前歌。
-fn exit_shuffle(st: &mut State) {
-    let Some(original) = st.original_queue.take() else {
-        return;
-    };
-    let cur_id = st.current_song.as_ref().map(|t| t.id.clone());
-    st.queue = original;
-    st.queue_sel = cur_id
-        .and_then(|id| st.queue.iter().position(|s| s.id == id))
-        .unwrap_or(0);
-    st.bump_queue();
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -817,11 +780,11 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::{
-        DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, enter_shuffle,
-        exit_shuffle, next_in_queue, prev_in_queue,
+        DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, next_in_queue,
+        prev_in_queue,
     };
     use crate::download::download_song;
-    use crate::queue::play_mode_str;
+    use crate::queue::{enter_shuffle, exit_shuffle, play_mode_str};
     use crate::state::State;
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
@@ -1038,6 +1001,8 @@ mod tests {
             // 多数测试无脚本;hook 拦截测试经 `core_with_script` 注入。
             notify: crate::notify::Notifier::new(events, script),
             props: crate::props::PropsWatch::default(),
+            ui_state: Mutex::new(None),
+            ui_overrides: crate::ui_override::UiOverrides::default(),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
@@ -1852,6 +1817,114 @@ mod tests {
             .play_url
             .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应填 play_url"))?;
         assert_eq!(pu.quality, BitRate::Lossless, "命中音质应为 lossless");
+        Ok(())
+    }
+
+    /// 造一个带 event hub 接收端的 core(UI 覆盖 / 属性下发断言用)。
+    fn core_with_hub() -> color_eyre::Result<(
+        PlayerCore,
+        tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
+    )> {
+        let (events_tx, events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 16);
+        let core = core_with_events(
+            Vec::new(),
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            events_tx,
+            /*script*/ None,
+        )?;
+        Ok((core, events_rx))
+    }
+
+    /// apply_ui_override:存表 + 转发;同值重写与撤销不存在的 key 都不发事件。
+    #[tokio::test]
+    async fn ui_override_stores_forwards_and_diffs() -> color_eyre::Result<()> {
+        use mineral_protocol::{BusValue, Event};
+        let (core, mut events_rx) = core_with_hub()?;
+        core.apply_ui_override(
+            "lyrics.fullscreen_line_gap".to_owned(),
+            Some(BusValue::Int(2)),
+        );
+        assert_eq!(
+            events_rx.try_recv()?,
+            Event::UiOverride {
+                key: "lyrics.fullscreen_line_gap".to_owned(),
+                value: Some(BusValue::Int(2)),
+            }
+        );
+        // 同值重写:不发。
+        core.apply_ui_override(
+            "lyrics.fullscreen_line_gap".to_owned(),
+            Some(BusValue::Int(2)),
+        );
+        assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
+        // 撤销不存在的 key:不发。
+        core.apply_ui_override("no.such".to_owned(), None);
+        assert!(events_rx.try_recv().is_err(), "撤销不存在的 key 不得下发");
+        // 快照只含在表的键。
+        assert_eq!(
+            core.ui_overrides_snapshot(),
+            vec![("lyrics.fullscreen_line_gap".to_owned(), BusValue::Int(2))]
+        );
+        // 真撤销:发 None + 表清空。
+        core.apply_ui_override("lyrics.fullscreen_line_gap".to_owned(), None);
+        assert_eq!(
+            events_rx.try_recv()?,
+            Event::UiOverride {
+                key: "lyrics.fullscreen_line_gap".to_owned(),
+                value: None,
+            }
+        );
+        assert!(core.ui_overrides_snapshot().is_empty(), "撤销后表应为空");
+        Ok(())
+    }
+
+    /// terminal 属性:上报后 check_props 下发 Table,断开清除后回 None。
+    #[tokio::test]
+    async fn terminal_prop_follows_report_and_clear() -> color_eyre::Result<()> {
+        use mineral_protocol::Event;
+        let (core, mut events_rx) = core_with_hub()?;
+        core.set_terminal_state(crate::props::TerminalReport {
+            rows: 50,
+            cols: 220,
+            fullscreen: true,
+        });
+        core.check_props();
+        let terminal_of = |rx: &mut tokio::sync::broadcast::Receiver<Event>| {
+            // check_props 首轮全量产出,滤出 terminal 一项。
+            let mut found = None;
+            while let Ok(ev) = rx.try_recv() {
+                if let Event::PropertyChanged { prop, value } = ev
+                    && prop == mineral_protocol::PropName::TERMINAL
+                {
+                    found = Some(value);
+                }
+            }
+            found
+        };
+        assert_eq!(
+            terminal_of(&mut events_rx),
+            Some(mineral_protocol::PropValue::Table(vec![
+                ("rows".to_owned(), mineral_protocol::PropValue::Int(50)),
+                ("cols".to_owned(), mineral_protocol::PropValue::Int(220)),
+                (
+                    "fullscreen".to_owned(),
+                    mineral_protocol::PropValue::Bool(true)
+                ),
+            ]))
+        );
+        // 值不变:下一 tick 不再下发。
+        core.check_props();
+        assert_eq!(terminal_of(&mut events_rx), None, "同值不得重复下发");
+        // 断开清除:回 None。
+        core.clear_terminal_state();
+        core.check_props();
+        assert_eq!(
+            terminal_of(&mut events_rx),
+            Some(mineral_protocol::PropValue::None),
+            "断开后 terminal 属性应回 None"
+        );
         Ok(())
     }
 }

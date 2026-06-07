@@ -77,6 +77,17 @@ pub enum Event {
         /// 开放载荷(树形自描述,见 [`BusValue`])。
         payload: BusValue,
     },
+
+    /// 脚本对某 UI 旋钮的 session 级覆盖(`mineral.ui.override`)。daemon
+    /// 零解释:只存表 + 转发 + 新 client 握手重放;key→旋钮的类型化映射在
+    /// client 边缘做,未知 key client 侧 warn + 丢。
+    UiOverride {
+        /// 旋钮键(约定 = 配置路径,如 `lyrics.fullscreen_line_gap`)。
+        key: String,
+
+        /// 覆盖值;`None` = 撤销覆盖,client 回落自己的配置值。
+        value: Option<BusValue>,
+    },
 }
 
 impl Event {
@@ -91,6 +102,7 @@ impl Event {
             | Self::StoreChanged { .. }
             | Self::ScriptReloaded => Subscription::Lifecycle,
             Self::BusMessage { .. } => Subscription::Bus,
+            Self::UiOverride { .. } => Subscription::UiOverride,
         }
     }
 }
@@ -180,6 +192,9 @@ impl PropName {
     /// 队列长度。
     pub const QUEUE_LENGTH: Self = Self("queue.length");
 
+    /// 终端 UI 状态(复合属性:`rows` / `cols` / `fullscreen`;无 client 在线为 `None`)。
+    pub const TERMINAL: Self = Self("terminal");
+
     /// 按名字解析:命中内置常量则返回之,未知名 intern 成 `&'static str`(开放命名空间)。
     ///
     /// # Params:
@@ -196,6 +211,7 @@ impl PropName {
             "player.position" => Self::PLAYER_POSITION,
             "player.mode" => Self::PLAYER_MODE,
             "queue.length" => Self::QUEUE_LENGTH,
+            "terminal" => Self::TERMINAL,
             other => Self(intern(other)),
         }
     }
@@ -255,6 +271,11 @@ pub enum PropValue {
 
     /// 字符串(state / mode 名 / song 的 qualified id)。
     Str(String),
+
+    /// 复合结构(有序键值对,如 `terminal` 的 rows/cols/fullscreen)。
+    /// 递归用自身而非 [`BusValue`] 是有意的:BusValue 带 `Float` 无 `Eq`,
+    /// 会破坏属性树「与上次值比较只发真变更」的 diff 语义。
+    Table(Vec<(String, Self)>),
 
     /// 缺省 / 空(如无在播歌)。
     None,

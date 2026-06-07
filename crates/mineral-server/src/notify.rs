@@ -94,6 +94,16 @@ impl Notifier {
         });
     }
 
+    /// 转发一条 UI 旋钮覆盖给订阅 client(脚本路不投递:覆盖发自脚本,
+    /// 变更方已知值)。
+    ///
+    /// # Params:
+    ///   - `key`: 旋钮键(opaque,daemon 不解释)
+    ///   - `value`: 覆盖值;`None` = 撤销
+    pub(crate) fn ui_override(&self, key: String, value: Option<mineral_protocol::BusValue>) {
+        let _ = self.events.send(Event::UiOverride { key, value });
+    }
+
     /// 属性树某项变更:wire `PropertyChanged` + 脚本 `PropertyChanged`。
     ///
     /// # Params:
@@ -123,11 +133,18 @@ fn to_script_reason(reason: FinishReason) -> TrackFinishedReason {
     }
 }
 
-/// 脚本内部属性值 → wire 形(同构映射;脚本侧无 Bool,六属性也不产 Bool)。
+/// 脚本内部属性值 → wire 形(同构映射,`Table` 递归)。
 fn to_wire_value(value: &PropValue) -> mineral_protocol::PropValue {
     match value {
+        PropValue::Bool(b) => mineral_protocol::PropValue::Bool(*b),
         PropValue::Int(n) => mineral_protocol::PropValue::Int(*n),
         PropValue::Str(s) => mineral_protocol::PropValue::Str(s.clone()),
+        PropValue::Table(entries) => mineral_protocol::PropValue::Table(
+            entries
+                .iter()
+                .map(|(key, item)| (key.clone(), to_wire_value(item)))
+                .collect(),
+        ),
         PropValue::None => mineral_protocol::PropValue::None,
     }
 }

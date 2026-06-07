@@ -118,6 +118,16 @@ impl ClientHandle {
         Ok(())
     }
 
+    /// 覆盖表快照(serve 层握手订阅 `UiOverride` 时逐条重放)。
+    pub(crate) fn ui_overrides_snapshot(&self) -> Vec<(String, mineral_protocol::BusValue)> {
+        self.player.ui_overrides_snapshot()
+    }
+
+    /// client 断开时清空终端状态(serve 层连接收尾调;`terminal` 属性回 None)。
+    pub(crate) fn clear_terminal_state(&self) {
+        self.player.clear_terminal_state();
+    }
+
     /// 拉取脚本 bind 表(serve 层处理 `ScriptBinds` 用);无脚本 / 线程退出为空。
     pub(crate) async fn script_binds_async(&self) -> Vec<mineral_protocol::ScriptBind> {
         let Some(script) = self.player.script_sender() else {
@@ -299,6 +309,19 @@ pub trait Client: Send + Sync {
     /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。无下载时 `active == false`。
     fn download_progress(&self) -> DownloadProgress;
 
+    /// 上报终端 UI 状态(resize / 全屏切换时调;值没变 client 侧应去抖不发)。
+    /// daemon 灌属性树 `terminal` 复合属性供脚本 observe。fire-and-forget。
+    ///
+    /// 默认 no-op(无界面 / 测试 client 不上报)。
+    ///
+    /// # Params:
+    ///   - `rows`: 终端行数
+    ///   - `cols`: 终端列数
+    ///   - `fullscreen`: 是否处于全屏播放态
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
+        let _ = (rows, cols, fullscreen);
+    }
+
     /// client 与 server 的链路是否仍可用。
     ///
     /// 同进程实现([`ClientHandle`])恒 `true`(client 与 server 同生共死)。
@@ -427,5 +450,14 @@ impl Client for ClientHandle {
 
     fn download_progress(&self) -> DownloadProgress {
         self.player.download_progress()
+    }
+
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
+        self.player
+            .set_terminal_state(crate::props::TerminalReport {
+                rows,
+                cols,
+                fullscreen,
+            });
     }
 }

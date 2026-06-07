@@ -10,7 +10,10 @@ use serde::Deserialize;
 #[non_exhaustive]
 pub struct LyricsConfig {
     /// 全屏沉浸态行与行之间垫的空行数(`0` = 紧凑)。
-    line_gap: usize,
+    fullscreen_line_gap: usize,
+
+    /// 非全屏紧凑态行与行之间垫的空行数(`0` = 紧凑)。
+    compact_line_gap: usize,
 
     /// 当前行切换后整列平移 + 高亮交叉淡入的过渡时长(毫秒)。
     scroll_ms: u64,

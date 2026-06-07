@@ -177,7 +177,8 @@
 
 ---歌词面板。
 ---@class mineral.LyricsConfig
----@field line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
+---@field fullscreen_line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
+---@field compact_line_gap? integer 非全屏紧凑态行与行之间垫的空行数,≥0
 ---@field scroll_ms? integer 切行时整列平移 + 高亮淡入的过渡时长,毫秒;超过此窗口直接吸附
 
 ---动画。各时长均为毫秒,运行时按 frame_tick_ms 折算成拍数(四舍五入、至少一拍);

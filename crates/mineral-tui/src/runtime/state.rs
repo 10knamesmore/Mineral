@@ -114,6 +114,10 @@ pub struct AppState {
     /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
     pub lyric_extra: LyricExtra,
 
+    /// 脚本下发的 session 级旋钮覆盖(`Event::UiOverride` 落地;渲染处
+    /// 有覆盖读覆盖、无覆盖读配置)。
+    pub ui_overrides: crate::runtime::ui_override::UiOverrides,
+
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
 
@@ -247,6 +251,7 @@ impl AppState {
             tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
             lyric_extra: LyricExtra::None,
+            ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             sel_playlist: 0,
             side_scroll: 0,
             sel_track: 0,

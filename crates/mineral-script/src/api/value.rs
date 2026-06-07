@@ -8,18 +8,27 @@ use mlua::{IntoLua, Lua};
 
 use crate::message::{PropKey, PropValue};
 
-/// 把属性值转成 Lua 值:`Int` → integer、`Str` → string、`None` → nil。
+/// 把属性值转成 Lua 值:`Int` → integer、`Str` → string、`Bool` → boolean、
+/// `Table` → table(递归)、`None` → nil。
 ///
 /// # Params:
-///   - `lua`: 目标 VM(string 需要在 VM 里分配)
+///   - `lua`: 目标 VM(string / table 需要在 VM 里分配)
 ///   - `value`: 属性值
 ///
 /// # Return:
 ///   对应的 Lua 值;VM 分配失败时为 `Err`。
 pub(crate) fn prop_to_lua(lua: &Lua, value: &PropValue) -> mlua::Result<mlua::Value> {
     match value {
+        PropValue::Bool(b) => Ok(mlua::Value::Boolean(*b)),
         PropValue::Int(n) => (*n).into_lua(lua),
         PropValue::Str(s) => s.as_str().into_lua(lua),
+        PropValue::Table(entries) => {
+            let table = lua.create_table()?;
+            for (key, item) in entries {
+                table.set(key.as_str(), prop_to_lua(lua, item)?)?;
+            }
+            Ok(mlua::Value::Table(table))
+        }
         PropValue::None => Ok(mlua::Value::Nil),
     }
 }
@@ -149,7 +158,7 @@ pub(crate) fn lua_to_bus(
     use mineral_protocol::BusValue;
     if depth > BUS_MAX_DEPTH {
         return Err(mlua::Error::RuntimeError(format!(
-            "emit payload 嵌套超过 {BUS_MAX_DEPTH} 层(循环引用?)"
+            "payload 嵌套超过 {BUS_MAX_DEPTH} 层(循环引用?)"
         )));
     }
     match value {
@@ -160,7 +169,7 @@ pub(crate) fn lua_to_bus(
         mlua::Value::String(s) => Ok(BusValue::Str(s.to_str()?.to_owned())),
         mlua::Value::Table(table) => lua_table_to_bus(table, depth),
         other => Err(mlua::Error::RuntimeError(format!(
-            "emit payload 不支持 {} 类型(可用:nil/boolean/number/string/table)",
+            "payload 不支持 {} 类型(可用:nil/boolean/number/string/table)",
             other.type_name()
         ))),
     }
@@ -179,7 +188,7 @@ fn lua_table_to_bus(table: &mlua::Table, depth: u8) -> mlua::Result<mineral_prot
             mlua::Value::String(s) => strs.push((s.to_str()?.to_owned(), item)),
             other => {
                 return Err(mlua::Error::RuntimeError(format!(
-                    "emit payload 的 table 键须是字符串或整数,实得 {}",
+                    "payload 的 table 键须是字符串或整数,实得 {}",
                     other.type_name()
                 )));
             }
@@ -196,7 +205,7 @@ fn lua_table_to_bus(table: &mlua::Table, depth: u8) -> mlua::Result<mineral_prot
                 .all(|(idx, &(i, _))| i64::try_from(idx.wrapping_add(1)) == Ok(i));
             if !consecutive {
                 return Err(mlua::Error::runtime(
-                    "emit payload 的整数键须是 1..=n 连续数组形",
+                    "payload 的整数键须是 1..=n 连续数组形",
                 ));
             }
             Ok(BusValue::Array(
@@ -205,7 +214,7 @@ fn lua_table_to_bus(table: &mlua::Table, depth: u8) -> mlua::Result<mineral_prot
         }
         (true, false) => Ok(BusValue::Map(strs)),
         (false, false) => Err(mlua::Error::runtime(
-            "emit payload 的 table 不能混用数组与字符串键",
+            "payload 的 table 不能混用数组与字符串键",
         )),
     }
 }

@@ -135,7 +135,13 @@ function mineral.action(name, fn) end
 function mineral.bind(key, fn) end
 
 --- 可观测属性名(字符串枚举;与 Rust `PropKey` 由守卫测试钉死同步)。
----@alias mineral.PropName "player.song"|"player.state"|"player.volume"|"player.position"|"player.mode"|"queue.length"
+---@alias mineral.PropName "player.song"|"player.state"|"player.volume"|"player.position"|"player.mode"|"queue.length"|"terminal"
+
+--- 终端 UI 状态(`terminal` 复合属性的值;无 client 在线时整体为 nil)。
+---@class mineral.TerminalState
+---@field rows integer  终端行数
+---@field cols integer  终端列数
+---@field fullscreen boolean  是否处于全屏播放态
 
 --- 播放循环模式的蛇形稳定名(与 Rust `PlayMode::script_name` 由守卫测试钉死同步)。
 ---@alias mineral.PlayMode "sequential"|"shuffle"|"repeat_all"|"repeat_one"
@@ -153,6 +159,7 @@ function mineral.bind(key, fn) end
 ---@overload fun(prop: "player.position", fn: fun(value: integer))
 ---@overload fun(prop: "player.mode", fn: fun(value: mineral.PlayMode))
 ---@overload fun(prop: "queue.length", fn: fun(value: integer))
+---@overload fun(prop: "terminal", fn: fun(value: mineral.TerminalState|nil))
 function mineral.observe(prop, fn) end
 
 --- 读属性树当前值(daemon 尚未推送过该属性时为 nil)。
@@ -164,6 +171,7 @@ function mineral.observe(prop, fn) end
 ---@overload fun(prop: "player.position"): integer|nil
 ---@overload fun(prop: "player.mode"): mineral.PlayMode|nil
 ---@overload fun(prop: "queue.length"): integer|nil
+---@overload fun(prop: "terminal"): mineral.TerminalState|nil
 function mineral.get(prop) end
 
 --- 下载指定歌曲(id 用 `namespace:value` 全限定形式,如 "netease:123")。
@@ -303,6 +311,14 @@ mineral.ui = {}
 ---@param msg any  显示内容(nil 跳过;非字符串经 tostring)
 ---@param opts? { kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }  ttl_secs 缺省用 client 配置(toast.flash_ttl_secs)
 function mineral.ui.toast(msg, opts) end
+
+--- session 级 UI 旋钮覆盖(daemon 重启即清,不写配置文件)。
+--- key 约定 = 配置路径(如 "lyrics.fullscreen_line_gap" / "lyrics.compact_line_gap");
+--- daemon 零解释转发,未知 key 由 client 边缘 warn + 丢。
+--- `value = nil` 撤销覆盖,client 回落自己的配置值。
+---@param key string  旋钮键,如 "lyrics.fullscreen_line_gap"
+---@param value mineral.BusPayload|nil  覆盖值;nil = 撤销
+function mineral.ui.override(key, value) end
 
 ---@class mineral.log
 mineral.log = {}

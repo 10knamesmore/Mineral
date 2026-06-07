@@ -68,10 +68,15 @@ impl RemoteClient {
         })?;
         let mut conn = framed(stream);
         // 握手:订 Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键;
-        // 其余生命周期事件收到即忽略)。Property 暂无消费场景,轮询是权威值来源。
+        // 其余生命周期事件收到即忽略)+ UiOverride(脚本旋钮覆盖,含握手重放)。
+        // Property 暂无消费场景,轮询是权威值来源。
         client_handshake(
             &mut conn,
-            ClientInfo::new(vec![Subscription::Toast, Subscription::Lifecycle]),
+            ClientInfo::new(vec![
+                Subscription::Toast,
+                Subscription::Lifecycle,
+                Subscription::UiOverride,
+            ]),
         )
         .await?;
         mineral_log::info!(target: "ipc", "connected to daemon");
@@ -347,6 +352,14 @@ impl Client for RemoteClient {
         let _ = self.send_recv(Request::Download(target));
     }
 
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
+        let _ = self.send_recv(Request::TerminalState {
+            rows,
+            cols,
+            fullscreen,
+        });
+    }
+
     fn download_progress(&self) -> DownloadProgress {
         match self.send_recv(Request::DownloadProgress) {
             Response::DownloadProgress(p) => p,
@@ -429,8 +442,12 @@ mod tests {
         assert!(info.version_matches(), "测试两端同 build,版本应一致");
         assert_eq!(
             info.subscriptions,
-            vec![Subscription::Toast, Subscription::Lifecycle],
-            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)"
+            vec![
+                Subscription::Toast,
+                Subscription::Lifecycle,
+                Subscription::UiOverride,
+            ],
+            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)+ UiOverride(脚本旋钮覆盖)"
         );
         send(&mut conn, &Frame::Hello(ServerHello::accept())).await?;
         then(conn).await

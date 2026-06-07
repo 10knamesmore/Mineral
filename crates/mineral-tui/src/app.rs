@@ -98,6 +98,9 @@ pub struct App {
 
     /// config.lua 的 mtime 监视器(热重载 keymap / theme)。
     config_watch: crate::runtime::reload::ConfigWatch,
+
+    /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen)`(去抖:值没变不发)。
+    last_terminal_report: Option<(u16, u16, bool)>,
 }
 
 impl App {
@@ -160,6 +163,7 @@ impl App {
             launch_anchor,
             ui_prefs,
             config_watch: crate::runtime::reload::ConfigWatch::new(),
+            last_terminal_report: None,
         }
     }
 
@@ -177,6 +181,9 @@ impl App {
         // client 侧心跳(间隔 = daemon.heartbeat_secs):报 server 看不到的 UI / 缓存状态(启动即首条)。
         let mut last_heartbeat = Instant::now();
         self.log_heartbeat();
+
+        // 启动上报一次终端状态(此后 Resize / 全屏切换增量上报)。
+        self.report_terminal_state();
 
         // 退出信号 watcher:SIGTERM / SIGINT / SIGHUP 进来时不再 silent kill,而是由
         // 后台 task 记日志 + 置标志,主循环据此走正常退出(`Tui::exit` 还原终端)。
@@ -449,6 +456,9 @@ impl App {
         for ev in self.client.drain_events() {
             match ev {
                 mineral_protocol::Event::ScriptReloaded => self.refresh_script_binds(),
+                mineral_protocol::Event::UiOverride { key, value } => {
+                    self.state.ui_overrides.apply(&key, value.as_ref());
+                }
                 other => {
                     crate::components::toast::push::apply_event(&mut self.notifications, other);
                 }
@@ -456,13 +466,30 @@ impl App {
         }
     }
 
-    /// 处理一个 crossterm 事件;目前只关心 KeyEvent 的按下边沿。
+    /// 处理一个 crossterm 事件:KeyEvent 的按下边沿走按键分发;Resize 上报
+    /// daemon(脚本经 `terminal` 属性观察终端尺寸)。
     fn handle_event(&mut self, ev: &Event) {
-        if let Event::Key(key) = ev
-            && key.kind == KeyEventKind::Press
-        {
-            self.handle_key(key);
+        match ev {
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Resize(..) => self.report_terminal_state(),
+            _ => {}
         }
+    }
+
+    /// 上报终端 UI 状态(尺寸 + 全屏态)给 daemon,灌属性树 `terminal` 供脚本
+    /// observe。值没变去抖不发;无 TTY(测试)拿不到尺寸静默跳过。
+    /// 调用点:启动 / Resize / 全屏切换。
+    fn report_terminal_state(&mut self) {
+        let Ok((cols, rows)) = crossterm::terminal::size() else {
+            return;
+        };
+        let snapshot = (rows, cols, self.state.fullscreen);
+        if self.last_terminal_report == Some(snapshot) {
+            return;
+        }
+        self.last_terminal_report = Some(snapshot);
+        self.client
+            .report_terminal_state(rows, cols, self.state.fullscreen);
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
@@ -535,6 +562,7 @@ impl App {
     /// 切换全屏播放态:翻转 `fullscreen` 标志并驱动形变进退场(`eased_in_out`,可中途反向)。
     fn toggle_fullscreen(&mut self) {
         self.state.fullscreen = !self.state.fullscreen;
+        self.report_terminal_state();
         if self.state.fullscreen {
             self.state.fullscreen_pos.enter();
         } else {

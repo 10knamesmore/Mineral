@@ -205,4 +205,9 @@ pub enum Subscription {
     /// 自定义事件总线([`Event::BusMessage`](crate::Event::BusMessage),
     /// 脚本 / 外部 client 自定义消息;内置 TUI 不订阅)。
     Bus,
+
+    /// 脚本 UI 旋钮覆盖([`Event::UiOverride`](crate::Event::UiOverride),
+    /// 内置 TUI 订阅;订阅时握手后重放当前覆盖全表。与 [`Self::Bus`] 不合并:
+    /// 覆盖有记表 + 重放语义,bus 是 fire-and-forget)。
+    UiOverride,
 }

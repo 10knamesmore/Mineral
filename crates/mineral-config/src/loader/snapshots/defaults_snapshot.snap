@@ -453,7 +453,8 @@ Config {
             prewarm_ahead: 1,
         },
         lyrics: LyricsConfig {
-            line_gap: 1,
+            fullscreen_line_gap: 1,
+            compact_line_gap: 0,
             scroll_ms: 280,
         },
         animation: AnimationConfig {

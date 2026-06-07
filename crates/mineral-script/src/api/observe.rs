@@ -82,6 +82,30 @@ mod tests {
     }
 
     #[test]
+    fn observe_terminal_replays_table_value() -> color_eyre::Result<()> {
+        let (lua, host) = vm_with_host()?;
+        host.events.lock().props.insert(
+            PropKey::Terminal,
+            PropValue::Table(vec![
+                ("rows".to_owned(), PropValue::Int(50)),
+                ("cols".to_owned(), PropValue::Int(220)),
+                ("fullscreen".to_owned(), PropValue::Bool(true)),
+            ]),
+        );
+        lua.load(
+            r#"
+            mineral.observe("terminal", function(t)
+                assert(t.rows == 50, "rows 必须是 50")
+                assert(t.cols == 220, "cols 必须是 220")
+                assert(t.fullscreen == true, "fullscreen 必须是 true")
+            end)
+            "#,
+        )
+        .exec()?;
+        Ok(())
+    }
+
+    #[test]
     fn unknown_property_is_lua_error() -> color_eyre::Result<()> {
         let (lua, _host) = vm_with_host()?;
         assert!(

@@ -489,6 +489,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 let _ = kill.send(());
             }
         }
+        ScriptCmd::UiOverride { key, value } => player.apply_ui_override(key, value),
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();
             tokio::spawn(async move {
