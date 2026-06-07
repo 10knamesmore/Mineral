@@ -1,4 +1,49 @@
 # Changelog
+## [0.5.0] — 2026-06-07
+
+### 功能
+
+- Sidebar 搜索接 fuzzy 匹配 + 拼音(全拼/首字母)过滤
+
+- 中央 Action 枚举 + Keymap 默认表(键位可配前置,PR-A 纯增)
+
+- Lua 用户配置 sub01 — loader + schema + config CLI
+
+- Sub02 全量声明旋钮接线 — default.lua 单一真相源
+
+- ADSR 时间制包络 — 快攻慢放,全配置面时长旋钮 ms 化
+
+- Transport gapless prefetch 标记 — ⏭ 旁 ⇣ 拉取中暗/就绪亮
+
+- 跨重启恢复 play_mode + 歌词副轨档,周期落盘加空态守卫
+
+- 协议切 Frame 管线 — request-id 配对 + Event 交错下推 + 版本守门握手
+
+- Mineral-script crate — Lua VM 专用线程 + watchdog + 脚本 API 面
+
+- 脚本运行时接线 — 同 VM 加载配置 + 事件双路下发 + action 触发链
+
+- 脚本生态数据面+触发面 — store/queue/library/timer + action ctx + error reason
+
+- 脚本生命周期 — 热重载 + bind + nvim 键语法 + Notice 退役
+
+- 强力位四件套 — library.search + 同步拦截 hook + spawn + bus
+
+- Client UI 通路 — terminal 复合属性 + ui.override 旋钮覆盖
+
+- Track_started 事件 — track_finished 的对偶
+
+- Mineral.sys 命名空间 + Song 投影丰富 + download 事件携带音质/格式
+
+### 修复
+
+- 频谱过渡被打断时从可见中间色继续渐变,不再跳变
+
+### 性能
+
+- PlayerSync 版本门控同步替换 PlayerSnapshot 全量轮询
+
+- 缓存存加工后产物 + 64px 取色,封面管线 CPU 大降
 
 ## [0.4.2] — 2026-06-03
 
