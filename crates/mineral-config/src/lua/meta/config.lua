@@ -223,7 +223,7 @@
 ---下载(永久导出,不受缓存容量约束)。
 ---@class mineral.DownloadConfig
 ---@field quality? "standard"|"higher"|"exhigh"|"lossless"|"hires" 下载音质,与播放音质相互独立
----@field dir? string 下载导出目录,绝对路径;省略 = 平台默认(~/Music/mineral)。环境变量 MINERAL_DOWNLOAD_DIR 优先于本字段
+---@field dir? string 下载导出目录,绝对路径;省略 = 平台默认(~/Music/mineral)
 
 ---音乐源。
 ---@class mineral.SourcesConfig

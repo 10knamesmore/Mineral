@@ -21,8 +21,17 @@ use crate::player::PlayerCore;
 
 /// 一首下载的结局(`Err` 另表失败):区分「真正下载」与「已存在跳过」,供完成提示分流统计。
 pub(crate) enum DownloadOutcome {
-    /// 真正流式下载并永久导出(携带落盘路径,完成事件下发用)。
-    Downloaded(PathBuf),
+    /// 真正流式下载并永久导出(完成事件下发用)。
+    Downloaded {
+        /// 落盘路径。
+        path: PathBuf,
+
+        /// 实际下载音质(hook 改写后的有效值)。
+        quality: mineral_model::BitRate,
+
+        /// 容器格式(channel 实际提供;拿不到为 `Other("")`)。
+        format: mineral_model::AudioFormat,
+    },
 
     /// 目标文件已存在,幂等跳过(**不**触发完成事件)。
     Skipped,
@@ -31,8 +40,8 @@ pub(crate) enum DownloadOutcome {
 /// 解析下载环境:HTTP client(整段 GET 用)+ 永久导出根目录。
 /// 任一不可用时对应项为 `None`(下载整体降级为「不可用」,只 warn 不阻断启动)。
 ///
-/// 导出目录优先级:env(`MINERAL_DOWNLOAD_DIR`,由 `mineral_paths` 内部消化)>
-/// config(`download.dir`)> 平台默认(`~/Music/mineral`)。env 命中短路 config。
+/// 导出目录优先级:config(`download.dir`)> 平台默认(`~/Music/mineral`)。
+/// config.lua 是唯一用户真相源,不设环境变量逃逸口。
 ///
 /// # Params:
 ///   - `config_dir`: 配置的下载目录(`download.dir`;`None` = 未配置)
@@ -44,8 +53,7 @@ pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, O
     if http.is_none() {
         mineral_log::warn!(target: "download", "HTTP client 构建失败,下载不可用");
     }
-    let env_override = std::env::var_os("MINERAL_DOWNLOAD_DIR").is_some_and(|v| !v.is_empty());
-    let music_dir = if !env_override && let Some(d) = config_dir {
+    let music_dir = if let Some(d) = config_dir {
         Some(d.to_path_buf())
     } else {
         match mineral_paths::music_export_dir() {
@@ -176,7 +184,11 @@ pub(crate) async fn download_song(
         .await
         .wrap_err_with(|| format!("rename 导出失败 {}", export.display()))?;
     mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
-    Ok(DownloadOutcome::Downloaded(export))
+    Ok(DownloadOutcome::Downloaded {
+        path: export,
+        quality,
+        format: play_url.format.clone(),
+    })
 }
 
 /// 流式把 `url` 下载到 `dst`,逐 chunk 写盘并按 `speed_tick` 节流更新 `progress` 的
@@ -397,10 +409,16 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
         let mut p = player.progress_handle().lock();
         p.done += 1;
         match outcome {
-            Ok(DownloadOutcome::Downloaded(path)) => {
+            Ok(DownloadOutcome::Downloaded {
+                path,
+                quality,
+                format,
+            }) => {
                 p.last_ok += 1;
                 drop(p);
-                player.notify().download_completed(song, &path);
+                player
+                    .notify()
+                    .download_completed(song, &path, quality, &format);
                 p = player.progress_handle().lock();
             }
             Ok(DownloadOutcome::Skipped) => p.last_skip += 1,
@@ -518,7 +536,7 @@ mod tests {
         )
         .await?;
         assert!(
-            matches!(outcome, DownloadOutcome::Downloaded(_)),
+            matches!(outcome, DownloadOutcome::Downloaded { .. }),
             "应真正下载"
         );
         assert!(
@@ -628,7 +646,7 @@ mod tests {
         )
         .await?;
         assert!(
-            matches!(outcome, DownloadOutcome::Downloaded(_)),
+            matches!(outcome, DownloadOutcome::Downloaded { .. }),
             "改写到活地址应下载成功"
         );
         assert!(

@@ -137,7 +137,8 @@ mod tests {
             "meta stub 缺少与 Rust 一致的别名行:`{alias}`"
         );
         for key in PropKey::ALL {
-            let observe_overload = format!("---@overload fun(prop: \"{}\", fn:", key.as_str());
+            let observe_overload =
+                format!("---@overload fun(prop: \"{}\", on_change:", key.as_str());
             assert!(
                 meta.contains(&observe_overload),
                 "meta stub 缺少属性 {:?} 的 observe @overload 分派行",

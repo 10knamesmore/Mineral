@@ -210,7 +210,12 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
                 Ok(args)
             });
         }
-        ScriptEvent::DownloadCompleted { song, path } => {
+        ScriptEvent::DownloadCompleted {
+            song,
+            path,
+            quality,
+            format,
+        } => {
             let callbacks = host.events.lock().download_completed.clone();
             invoke_all(
                 lua,
@@ -222,6 +227,10 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
                     let args = lua.create_table()?;
                     args.set("song", song_table(lua, &song)?)?;
                     args.set("path", path.display().to_string())?;
+                    args.set("quality", quality.as_str())?;
+                    // 拿不到格式(Other(""))→ 缺席为 nil,不给空串。
+                    let fmt = format.as_str();
+                    args.set("format", (!fmt.is_empty()).then(|| fmt.to_owned()))?;
                     Ok(args)
                 },
             );
@@ -431,5 +440,20 @@ fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
     table.set("id", song.id.qualified())?;
     table.set("title", song.name.clone())?;
     table.set("duration_ms", song.duration_ms)?;
+    table.set(
+        "artists",
+        lua.create_sequence_from(song.artists.iter().map(|a| a.name.clone()))?,
+    )?;
+    // Option 字段拿不到 → 缺席(Lua 侧读出 nil)。
+    table.set("album", song.album.as_ref().map(|a| a.name.clone()))?;
+    // MediaUrl 统一投影成字符串:远端 = http(s) URL,本地 = 绝对路径。
+    table.set(
+        "cover_url",
+        song.cover_url.as_ref().map(ToString::to_string),
+    )?;
+    table.set(
+        "source_url",
+        song.source_url.as_ref().map(ToString::to_string),
+    )?;
     Ok(table)
 }

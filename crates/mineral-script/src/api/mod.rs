@@ -20,6 +20,7 @@ pub(crate) mod player;
 pub(crate) mod queue;
 pub(crate) mod spawn;
 pub(crate) mod store;
+pub(crate) mod sys;
 pub(crate) mod timer;
 pub(crate) mod ui;
 pub(crate) mod value;

@@ -34,6 +34,12 @@ pub enum ScriptEvent {
 
         /// 落盘路径。
         path: std::path::PathBuf,
+
+        /// 实际下载音质(hook 改写后的有效值)。
+        quality: mineral_model::BitRate,
+
+        /// 容器格式(channel 实际提供;拿不到为 `Other("")`,Lua 侧投影成 nil)。
+        format: mineral_model::AudioFormat,
     },
 
     /// 属性树某项变更(PR-3 接 `mineral.observe` 后真正消费;变体先定形)。

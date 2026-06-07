@@ -194,6 +194,7 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
     api::player::install(lua, &mineral, host)?;
     api::ui::install(lua, &mineral, host)?;
     api::log::install(lua, &mineral)?;
+    api::sys::install(lua, &mineral)?;
     api::store::install(lua, &mineral, host)?;
     api::queue::install(lua, &mineral, host)?;
     api::library::install(lua, &mineral, host)?;

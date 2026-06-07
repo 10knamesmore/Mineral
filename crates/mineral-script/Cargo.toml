@@ -11,11 +11,14 @@ rust-version.workspace = true
 [dependencies]
 mineral-log      = { workspace = true }
 mineral-model    = { workspace = true }
+mineral-paths    = { workspace = true }
 mineral-protocol = { workspace = true }
 
 color-eyre     = { workspace = true }
 derive-getters = { workspace = true }
 mlua           = { workspace = true }
+# workspace 统一声明只开 signal;sys.rs 取主机名需要 hostname(features 可加性合并)。
+nix            = { workspace = true, features = ["hostname"] }
 parking_lot    = { workspace = true }
 rustc-hash     = { workspace = true }
 tokio          = { workspace = true }

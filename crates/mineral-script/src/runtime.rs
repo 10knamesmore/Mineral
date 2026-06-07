@@ -66,7 +66,7 @@ impl Drop for ScriptRuntime {
 #[cfg(test)]
 mod tests {
     use mineral_protocol::{Event, ToastKind};
-    use mineral_test::{song, with_duration};
+    use mineral_test::{endserenading, song, with_duration};
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
@@ -123,7 +123,7 @@ mod tests {
             end)
             "#,
         )?;
-        let song = song("7");
+        let song = first_track()?;
         sender.send(ScriptEvent::TrackStarted {
             song: Box::new(song.clone()),
         });
@@ -139,6 +139,13 @@ mod tests {
             }]
         );
         Ok(())
+    }
+
+    /// 《EndSerenading》首曲(LoveLetterTypewriter,艺人 Mineral)。
+    fn first_track() -> color_eyre::Result<mineral_model::Song> {
+        endserenading(1)
+            .pop()
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应至少给一首"))
     }
 
     #[test]
@@ -171,25 +178,58 @@ mod tests {
     }
 
     #[test]
-    fn download_completed_passes_path() -> color_eyre::Result<()> {
+    fn download_completed_passes_path_quality_format() -> color_eyre::Result<()> {
         let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.on("download_completed", function(args)
-                mineral.ui.toast(args.path, { id = "dl" })
+                mineral.ui.toast(args.path .. "/" .. args.quality .. "/" .. args.format, { id = "dl" })
             end)
             "#,
         )?;
         sender.send(ScriptEvent::DownloadCompleted {
-            song: Box::new(song("7")),
-            path: std::path::PathBuf::from("/tmp/out.flac"),
+            song: Box::new(first_track()?),
+            path: std::path::PathBuf::from("/tmp/LoveLetterTypewriter.flac"),
+            quality: mineral_model::BitRate::Lossless,
+            format: mineral_model::AudioFormat::Flac,
         });
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "/tmp/out.flac".to_owned(),
+                content: "/tmp/LoveLetterTypewriter.flac/lossless/flac".to_owned(),
                 id: Some("dl".to_owned()),
+                ttl_secs: None,
+            }]
+        );
+        Ok(())
+    }
+
+    /// Song 投影携带 artists / album / cover_url(Option 字段缺席为 nil)。
+    #[test]
+    fn song_projection_carries_artists_album_and_urls() -> color_eyre::Result<()> {
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.on("track_started", function(args)
+                local s = args.song
+                mineral.ui.toast(table.concat(s.artists, ",") .. "/" .. tostring(s.album)
+                    .. "/" .. tostring(s.cover_url) .. "/" .. tostring(s.source_url))
+            end)
+            "#,
+        )?;
+        let mut s = first_track()?;
+        s.album = Some(mineral_model::AlbumRef {
+            id: mineral_model::AlbumId::new(mineral_model::SourceKind::NETEASE, "es"),
+            name: "EndSerenading".to_owned(),
+        });
+        sender.send(ScriptEvent::TrackStarted { song: Box::new(s) });
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: "Mineral/EndSerenading/nil/nil".to_owned(),
+                id: None,
                 ttl_secs: None,
             }]
         );

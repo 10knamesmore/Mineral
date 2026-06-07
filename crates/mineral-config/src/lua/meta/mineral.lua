@@ -6,11 +6,15 @@
 ---@class mineral
 mineral = {}
 
---- 事件回调里的歌曲投影(最小字段集;完整归一化投影是 sub05 的事)。
+--- 事件 / 查询回调里的歌曲投影。
 ---@class mineral.Song
 ---@field id string  全局唯一 id(`namespace:value`,如 "netease:123"),可直接回喂 player API
 ---@field title string  歌名
 ---@field duration_ms integer  时长(毫秒),拿不到为 0
+---@field artists string[]  艺术家名列表(主艺人在前;可能为空数组)
+---@field album string|nil  专辑名(单曲 / 拿不到为 nil)
+---@field cover_url string|nil  封面:远端 = http(s) URL,本地源 = 文件路径;拿不到为 nil
+---@field source_url string|nil  原始位置:本地源 = 音频文件路径;远端未缓存为 nil
 
 --- 曲目结束原因(与 Rust `TrackFinishedReason` 由守卫测试钉死同步)。
 ---@alias mineral.FinishReason "eof"|"skip"|"error"|"stop"
@@ -28,6 +32,8 @@ mineral = {}
 ---@class mineral.DownloadCompletedArgs
 ---@field song mineral.Song  下载完成的歌
 ---@field path string  落盘路径
+---@field quality "standard"|"higher"|"exhigh"|"lossless"|"hires"  实际下载音质(hook 改写后的有效值)
+---@field format string|nil  容器格式(如 "flac" / "mp3";拿不到为 nil)
 
 --- `mineral.on` 的合法事件名(字符串枚举;与 Rust 事件墙由守卫测试钉死同步)。
 ---@alias mineral.EventName "track_started"|"track_finished"|"download_completed"
@@ -38,11 +44,11 @@ mineral = {}
 --- `track_started` = 在播曲目变更(远端起播 / 本地命中 / gapless 推进全覆盖;
 --- 同曲重启 / 单曲循环不重复触发)——切歌通知等观察类需求用它,别用 hook。
 ---@param event mineral.EventName
----@param fn fun(args: mineral.TrackStartedArgs|mineral.TrackFinishedArgs|mineral.DownloadCompletedArgs): nil
----@overload fun(event: "track_started", fn: fun(args: mineral.TrackStartedArgs))
----@overload fun(event: "track_finished", fn: fun(args: mineral.TrackFinishedArgs))
----@overload fun(event: "download_completed", fn: fun(args: mineral.DownloadCompletedArgs))
-function mineral.on(event, fn) end
+---@param handler fun(args: mineral.TrackStartedArgs|mineral.TrackFinishedArgs|mineral.DownloadCompletedArgs): nil
+---@overload fun(event: "track_started", handler: fun(args: mineral.TrackStartedArgs))
+---@overload fun(event: "track_finished", handler: fun(args: mineral.TrackFinishedArgs))
+---@overload fun(event: "download_completed", handler: fun(args: mineral.DownloadCompletedArgs))
+function mineral.on(event, handler) end
 
 --- 同步拦截点名(与 Rust `HookKind` 由守卫测试钉死同步)。
 ---@alias mineral.HookName "before_play"|"before_download"
@@ -67,8 +73,8 @@ function mineral.on(event, fn) end
 --- **回调要快**:超过 `script.hook_timeout_ms`(默认 2000ms)按放行处理。
 --- 同一拦截点可注册多个,按注册顺序调用,首个非放行返回值短路生效。
 ---@param name mineral.HookName
----@param fn fun(ctx: mineral.HookCtx): nil|boolean|mineral.HookReturn
-function mineral.hook(name, fn) end
+---@param interceptor fun(ctx: mineral.HookCtx): nil|boolean|mineral.HookReturn
+function mineral.hook(name, interceptor) end
 
 --- 子进程句柄(`mineral.spawn` 返回)。
 ---@class mineral.SpawnHandle
@@ -84,15 +90,15 @@ function SpawnHandle:kill() end
 ---@field stderr string  标准错误
 ---@field killed boolean  是否被 `handle:kill()` 中止
 
---- 起一个异步子进程,退出后回调 `fn(result, nil)`;spawn 本身失败
+--- 起一个异步子进程,退出后回调 `on_exit(result, nil)`;spawn 本身失败
 --- (可执行不存在 / 超并发上限 `script.spawn_max_concurrent`)回调收
 --- `(nil, err)`。`args` 是字符串数组(首元素为可执行文件),不经 shell。
 ---@param args string[]  命令与参数,如 `{"curl", "-s", url}`
 ---@param opts? { cwd?: string, env?: table<string, string> }  工作目录 / 环境变量
----@param fn fun(result: mineral.SpawnResult|nil, err: string|nil): nil
+---@param on_exit fun(result: mineral.SpawnResult|nil, err: string|nil): nil
 ---@return mineral.SpawnHandle handle
----@overload fun(args: string[], fn: fun(result: mineral.SpawnResult|nil, err: string|nil): nil): mineral.SpawnHandle
-function mineral.spawn(args, opts, fn) end
+---@overload fun(args: string[], on_exit: fun(result: mineral.SpawnResult|nil, err: string|nil): nil): mineral.SpawnHandle
+function mineral.spawn(args, opts, on_exit) end
 
 --- 总线载荷:标量与嵌套 table(数组形或字符串键映射,可混嵌套不可同层混用;
 --- 不支持 function/userdata,嵌套上限 8 层)。
@@ -107,8 +113,8 @@ function mineral.emit(name, payload) end
 
 --- 订阅自定义总线消息(按名精确匹配;同名可多订,注册顺序调用)。
 ---@param name string  消息名
----@param fn fun(payload: mineral.BusPayload): nil
-function mineral.on_message(name, fn) end
+---@param handler fun(payload: mineral.BusPayload): nil
+function mineral.on_message(name, handler) end
 
 --- 按键瞬间 client 正在展示的视图(与 Rust `ViewKind` 由守卫测试钉死同步)。
 ---@alias mineral.ViewKind "playlists"|"tracks"|"queue"|"fullscreen"|"search"
@@ -131,15 +137,15 @@ function mineral.on_message(name, fn) end
 --- 注册具名动作(物理键解耦,多 client 共用触发面)。重名 / 空名报错。
 --- 触发面:TUI `tui.keys.script` 绑键(ctx 带按键上下文)/ CLI `mineral action <name>`(ctx 空表)。
 ---@param name string  动作注册名,如 "my.skip_short"
----@param fn fun(ctx: mineral.ActionCtx): nil
-function mineral.action(name, fn) end
+---@param handler fun(ctx: mineral.ActionCtx): nil
+function mineral.action(name, handler) end
 
---- 语法糖:匿名动作 + 键位一步绑定(= `mineral.action(内部名, fn)` +
+--- 语法糖:匿名动作 + 键位一步绑定(= `mineral.action(内部名, handler)` +
 --- 键合进 TUI keymap)。键字符串文法与 `tui.keys` 一致(nvim 表示法,如 "X" / "<C-g>");
 --- 非法键名在 TUI 侧 warn 跳过,不影响其余绑定。
 ---@param key string  键字符串,如 "X" / "<C-g>"
----@param fn fun(ctx: mineral.ActionCtx): nil
-function mineral.bind(key, fn) end
+---@param handler fun(ctx: mineral.ActionCtx): nil
+function mineral.bind(key, handler) end
 
 --- 可观测属性名(字符串枚举;与 Rust `PropKey` 由守卫测试钉死同步)。
 ---@alias mineral.PropName "player.song"|"player.state"|"player.volume"|"player.position"|"player.mode"|"queue.length"|"terminal"
@@ -159,15 +165,15 @@ function mineral.bind(key, fn) end
 --- 订阅属性树变更(订阅即回放当前值;高频变化合并只回末值)。
 --- 回调收裸值;按属性名字面量分派出对应的值类型。
 ---@param prop mineral.PropName
----@param fn fun(value: any): nil
----@overload fun(prop: "player.song", fn: fun(value: string|nil))
----@overload fun(prop: "player.state", fn: fun(value: mineral.PlayerState))
----@overload fun(prop: "player.volume", fn: fun(value: integer))
----@overload fun(prop: "player.position", fn: fun(value: integer))
----@overload fun(prop: "player.mode", fn: fun(value: mineral.PlayMode))
----@overload fun(prop: "queue.length", fn: fun(value: integer))
----@overload fun(prop: "terminal", fn: fun(value: mineral.TerminalState|nil))
-function mineral.observe(prop, fn) end
+---@param on_change fun(value: any): nil
+---@overload fun(prop: "player.song", on_change: fun(value: string|nil))
+---@overload fun(prop: "player.state", on_change: fun(value: mineral.PlayerState))
+---@overload fun(prop: "player.volume", on_change: fun(value: integer))
+---@overload fun(prop: "player.position", on_change: fun(value: integer))
+---@overload fun(prop: "player.mode", on_change: fun(value: mineral.PlayMode))
+---@overload fun(prop: "queue.length", on_change: fun(value: integer))
+---@overload fun(prop: "terminal", on_change: fun(value: mineral.TerminalState|nil))
+function mineral.observe(prop, on_change) end
 
 --- 读属性树当前值(daemon 尚未推送过该属性时为 nil)。
 ---@param prop mineral.PropName
@@ -220,11 +226,11 @@ function mineral.player.play(song_id) end
 mineral.store = {}
 
 --- 读 per-song 持久值(回调风格,不阻塞脚本线程)。
---- 成功 `fn(值, nil)`(未命中值为 nil);失败 `fn(nil, 错误串)`。
+--- 成功 `on_value(值, nil)`(未命中值为 nil);失败 `on_value(nil, 错误串)`。
 ---@param song_id string  歌曲 id(`namespace:value` 全限定形式)
 ---@param key string  开放键(建议带 `.` 前缀,如 "plugin.skipcount")
----@param fn fun(value: mineral.StoreValue, err: string|nil): nil
-function mineral.store.get(song_id, key, fn) end
+---@param on_value fun(value: mineral.StoreValue, err: string|nil): nil
+function mineral.store.get(song_id, key, on_value) end
 
 --- 写 per-song 持久值(fire-and-forget;`nil` 删除该 key)。
 --- 保留键(`local_play_count` / `rating` / `last_played`)拒写。
@@ -234,20 +240,20 @@ function mineral.store.get(song_id, key, fn) end
 function mineral.store.set(song_id, key, value) end
 
 --- per-song 数值自增(key 不存在以 delta 起步;现有值非整数报错)。
---- 带回调时 `fn(自增后的值, nil)` / `fn(nil, 错误串)`。
+--- 带回调时 `on_value(自增后的值, nil)` / `on_value(nil, 错误串)`。
 ---@param song_id string
 ---@param key string
 ---@param delta integer  增量(可负)
----@param fn? fun(value: integer|nil, err: string|nil): nil
-function mineral.store.inc(song_id, key, delta, fn) end
+---@param on_value? fun(value: integer|nil, err: string|nil): nil
+function mineral.store.inc(song_id, key, delta, on_value) end
 
 ---@class mineral.queue
 mineral.queue = {}
 
 --- 读当前播放队列(回调风格;数组顺序即队列顺序)。
 --- 跳播用 `mineral.player.play(song.id)`。队列编辑是规划中的能力,本期只读。
----@param fn fun(songs: mineral.Song[], err: string|nil): nil
-function mineral.queue.list(fn) end
+---@param on_songs fun(songs: mineral.Song[], err: string|nil): nil
+function mineral.queue.list(on_songs) end
 
 --- 歌单的轻量投影(`library.playlists` 出参;曲目另经 `library.tracks` 拉)。
 ---@class mineral.PlaylistBrief
@@ -259,22 +265,22 @@ function mineral.queue.list(fn) end
 mineral.library = {}
 
 --- 读用户歌单列表(跨源聚合;某源拉取失败跳过该源,不整体失败)。
----@param fn fun(playlists: mineral.PlaylistBrief[], err: string|nil): nil
-function mineral.library.playlists(fn) end
+---@param on_playlists fun(playlists: mineral.PlaylistBrief[], err: string|nil): nil
+function mineral.library.playlists(on_playlists) end
 
 --- 读指定歌单的曲目。
 ---@param playlist_id string  歌单 id(`namespace:value`)
----@param fn fun(songs: mineral.Song[], err: string|nil): nil
-function mineral.library.tracks(playlist_id, fn) end
+---@param on_songs fun(songs: mineral.Song[], err: string|nil): nil
+function mineral.library.tracks(playlist_id, on_songs) end
 
 --- 按关键词搜索歌曲(异步回调)。
 --- `opts.source` 省略 = 跨全部源聚合(单源失败跳过该源);
 --- 指定则只搜该源,无对应源时回调收 `(nil, err)`。
 ---@param query string  关键词
 ---@param opts? { source?: string, offset?: integer, limit?: integer }  搜索选项(offset 默认 0,limit 默认 30)
----@param fn fun(songs: mineral.Song[]|nil, err: string|nil): nil
----@overload fun(query: string, fn: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
-function mineral.library.search(query, opts, fn) end
+---@param on_songs fun(songs: mineral.Song[]|nil, err: string|nil): nil
+---@overload fun(query: string, on_songs: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
+function mineral.library.search(query, opts, on_songs) end
 
 --- 设/取消一首歌的 love(♥)。fire-and-forget(本地 persist + 远端)。
 ---@param song_id string
@@ -299,15 +305,15 @@ mineral.timer = {}
 
 --- 一次性定时器:`ms` 毫秒后触发一次(回调与事件回调同受看门狗保护)。
 ---@param ms integer
----@param fn fun(): nil
+---@param callback fun(): nil
 ---@return mineral.Timer
-function mineral.timer.after(ms, fn) end
+function mineral.timer.after(ms, callback) end
 
 --- 周期定时器:每 `ms` 毫秒触发(慢回调不会重入 —— 脚本线程串行)。
 ---@param ms integer
----@param fn fun(): nil
+---@param callback fun(): nil
 ---@return mineral.Timer
-function mineral.timer.every(ms, fn) end
+function mineral.timer.every(ms, callback) end
 
 ---@class mineral.ui
 mineral.ui = {}
@@ -326,6 +332,40 @@ function mineral.ui.toast(msg, opts) end
 ---@param key string  旋钮键,如 "lyrics.fullscreen_line_gap"
 ---@param value mineral.BusPayload|nil  覆盖值;nil = 撤销
 function mineral.ui.override(key, value) end
+
+--- mineral 版本(结构化三分量,与发布版本同步;共享配置做兼容分叉用)。
+---@class mineral.SysVersion
+---@field major integer
+---@field minor integer
+---@field patch integer
+local SysVersion = {}
+
+--- 拼回 `"x.y.z"` 字符串形(日志 / toast 拼串用)。
+---@return string
+function SysVersion:str() end
+
+--- 关键路径(daemon 视角解析;极端环境单项解析失败时该字段为 nil)。
+--- 用例:`dofile(mineral.sys.paths.config .. "/lua/my_plugin.lua")` 拆分配置、
+--- 往 data 写脚本自己的持久文件、spawn 处理 log。
+---@class mineral.SysPaths
+---@field config string  配置目录(~/.config/mineral)
+---@field data string  数据目录(~/.local/share/mineral)
+---@field cache string  缓存目录(~/.cache/mineral)
+---@field log string  日志文件(<cache>/mineral.log)
+---@field socket string  daemon IPC socket 路径
+
+--- host 独有的系统信息(常量,加载时灌入)。时间日期用 Lua 标准库:
+--- `os.time()` 实时时间戳、`os.date("*t")` 实时结构化表,不做重复 API。
+--- 有意不给 cwd:daemon 的 cwd 取决于谁拉起它,无稳定语义——文件操作用
+--- `paths.*`,子进程工作目录用 `mineral.spawn` 的 `opts.cwd`。
+---@class mineral.sys
+---@field name "Mineral"  应用展示名(外部上报 / 通知标题拼串用)
+---@field os "linux"|"macos"  编译目标操作系统
+---@field arch string  CPU 架构,如 "x86_64" / "aarch64"
+---@field hostname string  主机名(双机共享配置分叉用)
+---@field version mineral.SysVersion  mineral 版本
+---@field paths mineral.SysPaths  关键路径
+mineral.sys = {}
 
 ---@class mineral.log
 mineral.log = {}
