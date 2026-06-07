@@ -331,6 +331,14 @@ pub trait Client: Send + Sync {
         true
     }
 
+    /// 请求 daemon 优雅退出(TUI「退出并停止 daemon」用)。
+    ///
+    /// 默认 no-op——同进程实现([`ClientHandle`])下 TUI 与 server 同生共死,
+    /// 进程退 = server drop,不存在可独立停掉的 daemon。跨进程实现
+    /// (`RemoteClient`)经 IPC 发 `Request::Shutdown`;断连时静默失败
+    /// (调用方已在退出路径上,无从补救也无需提示)。
+    fn request_daemon_shutdown(&self) {}
+
     /// 拉走 server 主动推送的 [`mineral_protocol::Event`](与轮询式
     /// [`Self::drain_task_events`] 是两条通道:这条是握手订阅后 server 随时下推、
     /// client 侧缓冲,每 tick drain)。

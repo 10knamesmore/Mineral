@@ -103,14 +103,26 @@ impl Daemon {
     /// 在同一隔离环境下跑 `mineral status`,捕获其输出(与 daemon 共享 `MINERAL_SOCKET_DIR`
     /// 才能连上同一 socket)。
     fn status_output(&self) -> color_eyre::Result<std::process::Output> {
+        self.cli_output("status")
+    }
+
+    /// 在同一隔离环境下跑 `mineral stop`,捕获其输出。
+    fn stop_output(&self) -> color_eyre::Result<std::process::Output> {
+        self.cli_output("stop")
+    }
+
+    /// 在同一隔离环境下跑任意单参数 CLI 子命令(与 daemon 共享 `MINERAL_SOCKET_DIR`
+    /// 才能连上同一 socket)。
+    fn cli_output(&self, subcommand: &str) -> color_eyre::Result<std::process::Output> {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-        cmd.arg("status")
+        cmd.arg(subcommand)
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("MINERAL_SOCKET_DIR", &self.sock_dir)
             .stdin(Stdio::null());
-        cmd.output().wrap_err("run `mineral status`")
+        cmd.output()
+            .wrap_err_with(|| format!("run `mineral {subcommand}`"))
     }
 
     /// 轮询直到 socket 可连(daemon ready),超时则报错。
@@ -287,6 +299,83 @@ fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
     assert!(
         logs.contains("netease channel 构建失败,跳过"),
         "应记 warn 跳过该源(而非整体崩),实际:\n{logs}"
+    );
+    Ok(())
+}
+
+/// `mineral stop`:经 IPC 请求 daemon 优雅退出。覆盖「CLI → Request::Shutdown →
+/// dispatch → serve select → graceful 收尾」整条链:进程退出、socket 被清理、
+/// 日志可见关停原因。
+#[test]
+fn daemon_stops_on_ipc_shutdown() -> color_eyre::Result<()> {
+    let mut daemon = Daemon::spawn_null("ipcstop")?;
+
+    // 与 status 测试相反,stop **必须**先 wait_ready:它对「连不上」是幂等成功
+    // (确保不在跑的语义),daemon 未 bind 时拿它当就绪探测会假阳性通过。
+    // ready 之后再重试 —— 探测连接释放 busy 的短窗里 stop 可能被拒,重试兜住。
+    daemon.wait_ready()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = daemon.stop_output()?;
+        if out.status.success() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "stop 始终未成功,最后 stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    daemon.wait_for_exit()?;
+    assert!(
+        !daemon.socket.exists(),
+        "IPC shutdown 应与 SIGTERM 同样 unlink socket 文件"
+    );
+    let logs = daemon.read_logs()?;
+    assert!(
+        logs.contains("shutdown requested via IPC") && logs.contains("shutting down"),
+        "daemon 应记录 IPC 关停请求 + 关停日志,实际:\n{logs}"
+    );
+    Ok(())
+}
+
+/// daemon 没在跑时 `mineral stop` 是幂等成功(exit 0 + 人话提示):语义是
+/// 「确保 daemon 不在跑」,脚本里可无脑调用。
+#[test]
+fn stop_without_daemon_succeeds_idempotently() -> color_eyre::Result<()> {
+    // 隔离环境但**不**起 daemon:socket 目录存在而 socket 文件不存在。
+    let root = std::env::temp_dir().join(format!(
+        "mineral-e2e-stopidem-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let sock_dir = short_sock_dir();
+    std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
+    let out = Command::new(env!("CARGO_BIN_EXE_mineral"))
+        .arg("stop")
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("MINERAL_SOCKET_DIR", &sock_dir)
+        .stdin(Stdio::null())
+        .output()
+        .wrap_err("run `mineral stop`")?;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&sock_dir);
+
+    assert!(
+        out.status.success(),
+        "无 daemon 时 stop 应幂等成功,实际 {:?},stderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("没有在跑的 daemon"),
+        "应人话提示无 daemon,实际 stdout:\n{stdout}"
     );
     Ok(())
 }

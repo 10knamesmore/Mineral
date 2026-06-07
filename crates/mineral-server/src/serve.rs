@@ -16,7 +16,7 @@ use mineral_protocol::{
     encode, framed, recv, send,
 };
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc};
 
 use crate::client::{Client, ClientHandle};
 
@@ -26,12 +26,16 @@ use crate::client::{Client, ClientHandle};
 /// 「初始数据加载」(`MyPlaylists` / `LikedSongIds` 等)——必要的:`drain_task_events`
 /// 是消费式语义,首个 client 拿走 events 后 buffer 清空,新 client 看不到任何
 /// 历史 event 会显示「数据为空」假象。dedup 命中既存任务时无副作用。
+///
+/// `shutdown` 是 daemon 级关停通知:client 发 [`Request::Shutdown`] 时在此
+/// 唤醒,由 daemon 入口的 select 接走、走与 SIGTERM 相同的 graceful 收尾。
 pub(crate) async fn run<F>(
     listener: UnixListener,
     client: ClientHandle,
     busy: Arc<AtomicBool>,
     events: broadcast::Sender<Event>,
     on_connect: F,
+    shutdown: Arc<Notify>,
 ) -> color_eyre::Result<()>
 where
     F: Fn() + Send + Sync + 'static,
@@ -53,11 +57,12 @@ where
         let client = client.clone();
         let busy_guard = BusyGuard(Arc::clone(&busy));
         let events = events.clone();
+        let shutdown = Arc::clone(&shutdown);
         tokio::spawn(async move {
             // 守卫持有到 task 结束:正常返回与 panic unwind 都复位 busy,
             // 杜绝 daemon 因一次连接事故永久拒连。
             let _busy_guard = busy_guard;
-            if let Err(e) = handle_connection(stream, &client, &events).await {
+            if let Err(e) = handle_connection(stream, &client, &events, &shutdown).await {
                 mineral_log::warn!(target: "ipc", error = mineral_log::chain(&e), "connection ended with error");
             }
         });
@@ -90,6 +95,7 @@ async fn handle_connection(
     stream: UnixStream,
     client: &ClientHandle,
     events: &broadcast::Sender<Event>,
+    shutdown: &Arc<Notify>,
 ) -> color_eyre::Result<()> {
     let mut conn = framed(stream);
     // 在回 Hello 之前就订阅 hub:保证「client 收到 Hello」之后产生的事件零窗口
@@ -114,7 +120,7 @@ async fn handle_connection(
         }
     }
     let pump = tokio::spawn(event_pump(events_rx, subscriptions, out_tx.clone()));
-    let result = read_loop(stream, client, &out_tx).await;
+    let result = read_loop(stream, client, &out_tx, shutdown).await;
     // client 断开:清终端上报,`terminal` 属性回 None(脚本可感知离线)。
     client.clear_terminal_state();
     // 收尾:推送泵立停、放掉本端 out_tx。writer **不 await**——飞行中的 dispatch
@@ -213,6 +219,7 @@ async fn read_loop(
     mut stream: SplitStream<Framed<UnixStream>>,
     client: &ClientHandle,
     out: &mpsc::UnboundedSender<Frame>,
+    shutdown: &Arc<Notify>,
 ) -> color_eyre::Result<()> {
     while let Some(frame) = stream.next().await {
         let bytes = frame.wrap_err("framed recv")?;
@@ -220,6 +227,8 @@ async fn read_loop(
             Frame::Request { id, req } => {
                 let client = client.clone();
                 let out = out.clone();
+                let shutdown = Arc::clone(shutdown);
+                let is_shutdown = matches!(req, Request::Shutdown);
                 tokio::spawn(async move {
                     let resp = dispatch(req, &client).await;
                     // send 失败 = 连接已收尾,应答丢弃即可。
@@ -227,6 +236,12 @@ async fn read_loop(
                         id,
                         resp: Box::new(resp),
                     });
+                    // ack 先入队、再唤醒关停:给 writer 把应答写出去的机会。
+                    // 尽力而为——client 侧不依赖这条 ack(连接被关、读到 EOF
+                    // 同样视为 daemon 正在退)。
+                    if is_shutdown {
+                        shutdown.notify_one();
+                    }
                 });
             }
             other => {
@@ -353,6 +368,12 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.report_terminal_state(rows, cols, fullscreen);
             Response::Ok
         }
+        // 实际唤醒在 read_loop 的 dispatch task 里(ack 入队之后),这里只
+        // ack + 留痕;e2e 据这行日志断言关停原因。
+        Request::Shutdown => {
+            mineral_log::info!(target: "ipc", "shutdown requested via IPC");
+            Response::Ok
+        }
     }
 }
 
@@ -390,5 +411,6 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::ToggleLove(_) => Some("ToggleLove"),
         Request::QuerySongStats(_) => Some("QuerySongStats"),
         Request::Download(_) => Some("Download"),
+        Request::Shutdown => Some("Shutdown"),
     }
 }

@@ -374,6 +374,12 @@ impl Client for RemoteClient {
         self.connected.load(Ordering::Acquire)
     }
 
+    fn request_daemon_shutdown(&self) {
+        // daemon ack 后立即开始收尾;应答可能没写完连接就关,Error 兜底
+        // 也视为已投递(`send_recv` 对断连返回 Error,不会卡死)。
+        let _ = self.send_recv(Request::Shutdown);
+    }
+
     fn drain_events(&self) -> Vec<Event> {
         std::mem::take(&mut *self.events.lock().unwrap_or_else(PoisonError::into_inner))
     }

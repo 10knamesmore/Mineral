@@ -53,6 +53,11 @@ pub struct App {
     /// 退出仅正常退出(confirm)触发;Ctrl-C / 断连立即退,不走它。
     pub(crate) transition: Option<Transition>,
 
+    /// Shift+Q「退出并停止 daemon」标记:置位后退出收缩动画收尾时向 daemon 投递
+    /// shutdown(无视 `kill_spawned_daemon_on_exit` 旋钮与 Auto/Connect 模式;
+    /// in-proc 的 client 实现是 no-op)。普通退出 / Ctrl-C / 断连不置位。
+    stop_daemon_on_quit: bool,
+
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
@@ -150,6 +155,7 @@ impl App {
             keymap,
             overlays,
             transition: None,
+            stop_daemon_on_quit: false,
             last_tick: Instant::now(),
             frame_tick,
             transition_ticks,
@@ -292,6 +298,11 @@ impl App {
         anim.tick();
         if anim.settled() {
             if anim.leaving() {
+                // Shift+Q 的「退出并停止 daemon」在动画收尾时才真正投递——
+                // 与退出同一时点;Ctrl-C / 断连不经此路径,不会误杀。
+                if self.stop_daemon_on_quit {
+                    self.client.request_daemon_shutdown();
+                }
                 self.should_quit = true;
             }
             self.transition = None;
@@ -506,6 +517,16 @@ impl App {
         // 整屏转场动画进行中(启动扩大 / 退出收缩):吞掉所有其他按键(动画不可打断,
         // Ctrl-C 已在上面强退)。
         if self.transition.is_some() {
+            return;
+        }
+
+        // Shift+Q 硬编码逃生口:退出 + 停掉 daemon。不进 keymap(不可重映射、压过
+        // 用户绑定)、压过浮层(确认 / queue 开着也直接退);唯独让位文本输入——
+        // 搜索态的大写 Q 是搜索词,不是退出意图。只看 `Char('Q')` 不看 modifier:
+        // 部分终端报大写字符时不附带 SHIFT。
+        if !self.state.search_mode && key.code == KeyCode::Char('Q') {
+            self.stop_daemon_on_quit = true;
+            self.transition = Some(Transition::collapsing(self.transition_ticks));
             return;
         }
 
@@ -772,7 +793,9 @@ mod tests {
     const TRANSITION_TICKS: u16 = 18;
     use crate::render::anim::Transition;
     use crate::render::palette::{CoverPalette, Rgb};
-    use crate::test_support::{app_with_library, app_with_queue, endserenading};
+    use crate::test_support::{
+        app_with_library, app_with_queue, app_with_queue_probed, endserenading,
+    };
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
@@ -1061,6 +1084,98 @@ mod tests {
         )));
         assert!(app.should_quit, "Ctrl-C 立即退出");
         assert!(app.transition.is_none(), "Ctrl-C 不走转场动画");
+        Ok(())
+    }
+
+    /// Shift+Q(硬编码,不可重映射):跳过确认浮层直接进退出收缩动画;
+    /// 动画收尾时向 daemon 投递一次 shutdown 请求。
+    #[test]
+    fn shift_q_quits_with_animation_and_requests_daemon_stop() -> color_eyre::Result<()> {
+        let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT,
+        )));
+        assert!(
+            matches!(&app.transition, Some(t) if t.leaving()),
+            "Shift+Q 应直接进入退出(收缩)转场,不弹确认"
+        );
+        assert!(!app.should_quit, "应先播收缩动画,不立即退");
+
+        for _ in 0..40 {
+            if app.transition.is_some() {
+                app.tick_transition();
+            }
+        }
+        assert!(app.should_quit, "收缩动画归零后应退出");
+        assert_eq!(
+            shutdowns.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "退出收尾应恰好投递一次 daemon shutdown"
+        );
+        Ok(())
+    }
+
+    /// 搜索输入态的大写 'Q' 是搜索词,不触发 Shift+Q 退出(硬编码键让位文本输入)。
+    #[test]
+    fn shift_q_in_search_mode_types_into_query() -> color_eyre::Result<()> {
+        let (mut app, shutdowns) = {
+            let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
+            app.state.view = crate::runtime::state::View::Library;
+            (app, shutdowns)
+        };
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.state.search_mode, "前置:已进搜索态");
+
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.state.search_q, "Q", "大写 Q 应进搜索词");
+        assert!(app.transition.is_none(), "搜索态不该触发退出转场");
+        assert!(!app.should_quit);
+        assert_eq!(
+            shutdowns.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "不该投递 daemon shutdown"
+        );
+        Ok(())
+    }
+
+    /// 确认浮层开着时 Shift+Q 仍然生效(压过浮层的 y/n 等待),直接进退出转场。
+    #[test]
+    fn shift_q_overrides_confirm_overlay() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Char('q')); // 开退出确认浮层
+        app.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT,
+        )));
+        assert!(
+            matches!(&app.transition, Some(t) if t.leaving()),
+            "浮层开着 Shift+Q 也应直接进入退出转场"
+        );
+        Ok(())
+    }
+
+    /// 普通退出(q → y)不投递 daemon shutdown —— 杀 daemon 只属于 Shift+Q 路径
+    /// (Auto 模式自有 `kill_spawned_daemon_on_exit` 旋钮收尾,不经 IPC)。
+    #[test]
+    fn normal_quit_keeps_daemon_alive() -> color_eyre::Result<()> {
+        let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Char('q'));
+        press(&mut app, KeyCode::Char('y'));
+        for _ in 0..40 {
+            if app.transition.is_some() {
+                app.tick_transition();
+            }
+        }
+        assert!(app.should_quit, "前置:正常退出完成");
+        assert_eq!(
+            shutdowns.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "正常退出不该投递 daemon shutdown"
+        );
         Ok(())
     }
 

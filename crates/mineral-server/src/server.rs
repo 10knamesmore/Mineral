@@ -10,7 +10,7 @@ use mineral_persist::ServerStore;
 use mineral_protocol::{Event, PlayMode};
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 
 use crate::client::ClientHandle;
 use crate::config::ServerConfig;
@@ -36,6 +36,11 @@ pub struct Server {
     /// [`Server::event_sink`] 拿发送端;每条 client 连接握手后 subscribe,按
     /// 订阅集过滤下发。无订阅者时 send 失败即丢(advisory 语义)。
     events: broadcast::Sender<Event>,
+
+    /// daemon 级关停通知:client 经 IPC 发 `Request::Shutdown` 时唤醒,daemon
+    /// 入口经 [`Server::shutdown_requested`] 等待。`Notify` 自带 permit 语义,
+    /// 先 notify 后 await 也不丢;重复 Shutdown 幂等。
+    shutdown: Arc<Notify>,
 }
 
 impl Server {
@@ -89,6 +94,7 @@ impl Server {
             pcm,
             busy,
             events,
+            shutdown: Arc::new(Notify::new()),
         })
     }
 
@@ -130,6 +136,13 @@ impl Server {
         drop(self);
     }
 
+    /// 等待 client 经 IPC 发来的 daemon 关停请求([`mineral_protocol::Request::Shutdown`])。
+    /// daemon 入口把它与 accept loop / 信号一起 select,任一唤醒即走 graceful 收尾。
+    /// `Notify` 带 permit:请求先于本调用到达也不丢。
+    pub async fn shutdown_requested(&self) {
+        self.shutdown.notified().await;
+    }
+
     /// IPC accept loop:每条新 connection 走握手守门 + [`mineral_protocol::Frame`]
     /// 管线(id 配对应答 + 订阅过滤的 Event 下推)。**单 client 限制**——已有
     /// connection 时后续 incoming 不等握手直接收 `Hello { Busy }`。
@@ -145,6 +158,7 @@ impl Server {
             Arc::clone(&self.busy),
             self.events.clone(),
             on_connect,
+            Arc::clone(&self.shutdown),
         )
         .await
     }

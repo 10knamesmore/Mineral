@@ -90,6 +90,12 @@ pub async fn run(
             mineral_log::info!(target: "daemon", "shutdown signal received, stopping daemon");
             Ok(())
         }
+        // client 经 IPC 请求关停(`mineral stop` / TUI 的「退出并停止 daemon」),
+        // 与信号路径走完全相同的下方收尾。
+        () = server.shutdown_requested() => {
+            mineral_log::info!(target: "daemon", "shutdown requested by client, stopping daemon");
+            Ok(())
+        }
     };
 
     // graceful 收尾:停 server(Drop 链停 audio engine / scheduler)+ 清 socket。

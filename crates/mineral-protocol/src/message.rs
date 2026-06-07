@@ -229,6 +229,13 @@ pub enum Request {
         /// 是否处于全屏播放态。
         fullscreen: bool,
     },
+
+    // ---- 生命周期 ----
+    /// 请求 daemon 优雅退出:先回 [`Response::Ok`] ack,随后走与 SIGTERM
+    /// 完全相同的收尾(停 server、清 socket)。`mineral stop` 与 TUI 的
+    /// 「退出并停止 daemon」(Shift+Q)都走这条;对 attach 模式它是唯一通路
+    /// (client 没有 daemon 的 pid,发不了信号)。
+    Shutdown,
 }
 
 /// Server → Client 应答。

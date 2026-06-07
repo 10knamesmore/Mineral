@@ -5,6 +5,7 @@
 //! (`AppState` / `SongView` / `PlaylistView`)的 fixture。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
@@ -175,7 +176,11 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
 
 /// no-op [`Client`]:所有调用静默吞掉、读取类返回默认值。供测试构造 [`App`] 而不接
 /// 真实 server / daemon。
-pub(crate) struct TestClient;
+#[derive(Default)]
+pub(crate) struct TestClient {
+    /// `request_daemon_shutdown` 调用计数(Shift+Q「退出并停止 daemon」路径断言用)。
+    pub(crate) daemon_shutdowns: Arc<AtomicUsize>,
+}
 
 impl Client for TestClient {
     fn play(&self, _url: MediaUrl) {}
@@ -226,13 +231,22 @@ impl Client for TestClient {
     fn download_progress(&self) -> mineral_protocol::DownloadProgress {
         mineral_protocol::DownloadProgress::default()
     }
+
+    fn request_daemon_shutdown(&self) {
+        self.daemon_shutdowns.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// 以 defaults 配置(= 接线前硬编码常量)造一个接 [`TestClient`] + 禁用封面的裸 [`App`]。
 fn test_app() -> color_eyre::Result<App> {
+    test_app_with(Arc::new(TestClient::default()))
+}
+
+/// 同 [`test_app`],client 由调用方注入(需要探针 / 自定义剧本的测试用)。
+fn test_app_with(client: Arc<dyn Client>) -> color_eyre::Result<App> {
     let cfg = Arc::new(mineral_config::Config::defaults()?);
     Ok(App::new(
-        Arc::new(TestClient),
+        client,
         CoverFetcher::disabled(),
         CoverEncoder::disabled(),
         Picker::from_fontsize((8, 16)),
@@ -242,15 +256,35 @@ fn test_app() -> color_eyre::Result<App> {
     ))
 }
 
-/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
-/// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
-pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> color_eyre::Result<App> {
-    let mut app = test_app()?;
+/// 把《EndSerenading》前 `len` 首灌进 queue,当前在播设为第 `current_idx` 首。
+fn fill_queue(app: &mut App, len: usize, current_idx: usize) {
     let queue = endserenading(len);
     app.state.playback.track = queue.get(current_idx).cloned();
     app.state.current = queue.get(current_idx).cloned();
     app.state.queue = queue;
+}
+
+/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
+/// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
+pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> color_eyre::Result<App> {
+    let mut app = test_app()?;
+    fill_queue(&mut app, len, current_idx);
     Ok(app)
+}
+
+/// 同 [`app_with_queue`],额外返回 [`TestClient`] 的 daemon shutdown 请求计数器
+/// (Shift+Q「退出并停止 daemon」路径断言用)。
+pub(crate) fn app_with_queue_probed(
+    len: usize,
+    current_idx: usize,
+) -> color_eyre::Result<(App, Arc<AtomicUsize>)> {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = TestClient {
+        daemon_shutdowns: Arc::clone(&counter),
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    fill_queue(&mut app, len, current_idx);
+    Ok((app, counter))
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:Library 视图,填《EndSerenading》前 `len`

@@ -207,6 +207,7 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     }))
     .await?;
     req_round_trips(Request::PullPcm(256)).await?;
+    req_round_trips(Request::Shutdown).await?;
     Ok(())
 }
 
@@ -414,6 +415,7 @@ mod proptests {
             Just(Request::CyclePlayMode),
             Just(Request::PrevOrRestart),
             Just(Request::NextSong),
+            Just(Request::Shutdown),
             (any::<u64>(), any::<u64>()).prop_map(|(queue, current)| {
                 Request::PlayerSync(PlayerVersions { queue, current })
             }),

@@ -95,6 +95,7 @@ mineral channel netease login    # 终端二维码,App 扫码登录
 | `mineral serve`     | 手动起常驻 daemon                                                                               |
 | `mineral --in-proc` | 单进程模式,不走 daemon / socket(调试用)                                                         |
 | `mineral status`    | 命令行查看当前播放状态                                                                          |
+| `mineral stop`      | 让 daemon 优雅退出;没在跑时也算成功(幂等)                                                      |
 
 </details>
 
@@ -167,6 +168,7 @@ end)
 | `Tab`     | 播放队列浮层                                    |
 | `t`       | 歌词副轨:原文 → 翻译 → 罗马音                   |
 | `q`       | 退出(带确认)                                    |
+| `Q`       | 退出并停止 daemon(不确认;硬编码,不可重映射)    |
 
 </details>
 

@@ -8,7 +8,7 @@ use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
-use crate::subcommands::status;
+use crate::subcommands::{status, stop};
 
 /// 多源终端音乐播放器。无子命令时进入 TUI。
 #[derive(Debug, Parser)]
@@ -44,14 +44,14 @@ pub enum Command {
         name: String,
     },
 
-    /// 缓存管理(清理可重建缓存)。
+    /// 缓存管理
     Cache {
         /// cache 下的具体子命令。
         #[command(subcommand)]
         cmd: CacheCommand,
     },
 
-    /// 管理音乐源(登录、调试)。
+    /// 管理音乐源
     Channel(ChannelArgs),
 
     /// 用户配置(生成模板 / 校验)。
@@ -61,11 +61,14 @@ pub enum Command {
         cmd: ConfigCommand,
     },
 
-    /// 启动后台播放 daemon。退出 TUI 后音乐继续播,再开 TUI 用 `--connect` 接回。
+    /// 启动后台播放 daemon。
     Serve,
 
     /// 显示当前播放状态(连 daemon)。
     Status,
+
+    /// 请求后台 daemon 优雅退出;
+    Stop,
 }
 
 /// 执行解析后的 CLI 命令。**不处理 [`Command::Serve`]**——那个需要 channels,
@@ -90,6 +93,7 @@ async fn run_async(command: Command) -> color_eyre::Result<()> {
         Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,
         Command::Status => status::run().await,
+        Command::Stop => stop::run().await,
         Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
     }
 }

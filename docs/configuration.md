@@ -91,6 +91,11 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `download` | `d` | 下载选中曲 / 歌单 |
 | `script` | `{}` | 脚本动作绑定:`mineral.action` 注册名 → 键,如 `script = { ["my.skip_short"] = "X" }` |
 
+两个**硬编码键不在表内、不可重映射**(任何配置下都存在的逃生口):
+
+- `<C-c>` — 立即退出 TUI(跳过动画与确认;不动 daemon)
+- `Q`(Shift+q)— 退出 TUI **并停止 daemon**(不确认;无视 `kill_spawned_daemon_on_exit`,attach 的 daemon 也停)。搜索输入态例外:大写 Q 是搜索词
+
 ## tui.behavior — 交互手感
 
 | 字段 | 默认 | 说明 |
@@ -99,7 +104,7 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `seek_step_secs` | 5 | 单次 seek 步长,秒 |
 | `seek_big_step_secs` | 30 | 大步 seek(Shift),秒 |
 | `list_jump_rows` | 7 | 列表大步跳行数(`J`/`K`) |
-| `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀 |
+| `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 不杀(想连 daemon 一起退用 `Q`,它无视本旋钮) |
 
 ## tui.spectrum — 频谱面板
 
