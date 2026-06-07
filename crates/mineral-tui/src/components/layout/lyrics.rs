@@ -394,7 +394,7 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
         }
     }
     // 首行 / 前奏(无上一行)→ prev 落回 cur,锚点不滚动。
-    if !cur.is_some_and(|c| c > 0) {
+    if cur.is_none_or(|c| c == 0) {
         prev_center = cur_center;
     }
 
