@@ -1,6 +1,5 @@
 ---@meta
 -- Mineral host API 类型 stub(LuaCATS)。随程序分发,供编辑器补全 / 类型检查。
--- Phase 0:这些 API 在 TUI/CLI 进程为 no-op;daemon VM 落地后承载真实行为。
 -- 不要 require 本文件,它只供 LSP 读取。
 
 ---@class mineral

@@ -108,6 +108,10 @@
 ---@field move_last? mineral.KeyBinding 跳末行
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥
 ---@field download? mineral.KeyBinding 下载选中曲 / 歌单
+---@field lyric_line_down? mineral.KeyBinding 全屏歌词逐行下滚(行数见 lyrics.line_scroll_rows)
+---@field lyric_line_up? mineral.KeyBinding 全屏歌词逐行上滚(行数见 lyrics.line_scroll_rows)
+---@field lyric_page_down? mineral.KeyBinding 全屏歌词翻页下滚(行数见 lyrics.page_scroll_rows)
+---@field lyric_page_up? mineral.KeyBinding 全屏歌词翻页上滚(行数见 lyrics.page_scroll_rows)
 ---@field script? table<string, mineral.KeyBinding> 脚本动作绑定:mineral.action 注册名 → 键
 
 ---交互手感旋钮。
@@ -181,6 +185,9 @@
 ---@field fullscreen_line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
 ---@field compact_line_gap? integer 非全屏紧凑态行与行之间垫的空行数,≥0
 ---@field scroll_ms? integer 切行时整列平移 + 高亮淡入的过渡时长,毫秒;超过此窗口直接吸附
+---@field line_scroll_rows? integer 单行档(<C-d>/<C-u>)一次滚的行数,≥1
+---@field page_scroll_rows? integer 多行档(<C-f>/<C-b>)一次滚的行数,≥1
+---@field reattach_ms? integer 有时间戳歌手动滚走后空闲多久(毫秒)自动回到跟随;无时间戳歌不回
 
 ---动画。各时长均为毫秒,运行时按 frame_tick_ms 折算成拍数(四舍五入、至少一拍);
 ---设为 0 即近似关闭该动画(一帧到位)。改 frame_tick_ms 不改各动画真实时长。

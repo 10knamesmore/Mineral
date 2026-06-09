@@ -393,6 +393,50 @@ Config {
                     },
                 ],
             },
+            lyric_line_down: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'd',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            lyric_line_up: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'u',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            lyric_page_down: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'f',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            lyric_page_up: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'b',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
             script: {},
         },
         behavior: BehaviorConfig {
@@ -456,6 +500,9 @@ Config {
             fullscreen_line_gap: 1,
             compact_line_gap: 0,
             scroll_ms: 280,
+            line_scroll_rows: 1,
+            page_scroll_rows: 10,
+            reattach_ms: 4000,
         },
         animation: AnimationConfig {
             frame_tick_ms: 16,

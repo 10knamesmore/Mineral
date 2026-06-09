@@ -51,6 +51,10 @@ return {
       move_last = "G",
       love = "f",
       download = "d",
+      lyric_line_down = "<C-d>",
+      lyric_line_up = "<C-u>",
+      lyric_page_down = "<C-f>",
+      lyric_page_up = "<C-b>",
       -- 脚本动作绑定:`mineral.action` 注册名 → 键(默认无)。
       -- 例:script = { ["my.skip_short"] = "X" }
       script = {},
@@ -121,6 +125,9 @@ return {
       fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳
       compact_line_gap = 0, -- 非全屏紧凑态歌词行间空行数
       scroll_ms = 280, -- 切行整列平移 + 高亮淡入的过渡时长
+      line_scroll_rows = 1, -- 单行档(<C-d>/<C-u>)一次滚的行数
+      page_scroll_rows = 10, -- 多行档(<C-f>/<C-b>)一次滚的行数
+      reattach_ms = 4000, -- 有时间戳歌手动滚走后多久空闲自动回到跟随;无时间戳歌不回
     },
     -- 动画。时长均为毫秒(按 frame_tick_ms 折算成拍,至少一拍);0 ≈ 一帧到位。
     animation = {

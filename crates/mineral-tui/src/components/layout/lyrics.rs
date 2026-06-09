@@ -1,4 +1,4 @@
-//! Lyrics 面板:按 [`crate::runtime::state::AppState::current_lyrics`] 渲染当前行 + 邻近行,
+//! Lyrics 面板:按 [`crate::runtime::state::AppState::current_lines`] 渲染当前行 + 邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
 //! 有逐字歌词时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
@@ -13,7 +13,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use mineral_model::{LrcLyric, WordLine, WordLyric};
+use mineral_model::{LyricLine, Word};
 
 use crate::render::anim::ease_in_out;
 use crate::render::color::lerp_color;
@@ -26,8 +26,7 @@ use crate::runtime::state::{AppState, LyricExtra};
 ///   - `motion`: 呈现模式。[`LyricMode::Compact`] 给嵌入面板(紧凑 + 瞬时高亮);
 ///     [`LyricMode::Immersive`] 给全屏(行间距 + 缓动平移 + 高亮交叉淡入)。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
-    let word_lines = state.current_words().filter(|v| !v.is_empty());
-    let lrc_lines = state.current_lyrics().filter(|v| !v.is_empty());
+    let lines = state.current_lines().filter(|v| !v.is_empty());
     let extra = state.current_extra_lyric();
 
     let block = Block::new()
@@ -35,8 +34,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
         .title(Line::from(title_left_spans(
-            word_lines.is_some(),
-            lrc_lines.is_some(),
+            lines.is_some_and(mineral_model::has_words),
+            lines.is_some_and(mineral_model::has_timed),
             theme,
         )))
         .title_top(
@@ -54,43 +53,20 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         return;
     }
 
-    let position_ms = state.playback.position_ms;
-    // 有逐字时整个窗口都从逐字推:中心行 + 上下行同源,index 唯一,wipe 不会跟邻行错位。
-    // 没逐字时回落到 lrc 行级整行高亮(原始路径)。
-    let (lines, cur, cursor) = if let Some(wl) = word_lines {
-        let lines: Vec<(u64, String)> = wl
-            .iter()
-            .map(|l| {
-                let text: String = l.words.iter().map(|w| w.text.as_str()).collect();
-                (l.start_ms, text)
-            })
-            .collect();
-        let cur = wl.current_index(position_ms);
-        let cursor = WordCursor {
-            lines: Some(wl),
-            position_ms,
-        };
-        (lines, cur, cursor)
-    } else {
-        let Some(lrc) = lrc_lines else {
-            draw_fallback(frame, inner, theme);
-            return;
-        };
-        let cur = lrc.current_index(position_ms);
-        let lines: Vec<(u64, String)> = lrc.iter().map(|l| (l.time_ms, l.text.clone())).collect();
-        let cursor = WordCursor {
-            lines: None,
-            position_ms,
-        };
-        (lines, cur, cursor)
+    // 单一行序列:逐字行字级 wipe、其余整行;有时间戳行驱动定位,无时间戳行静态参与渐暗。
+    let Some(lines) = lines else {
+        draw_fallback(frame, inner, theme);
+        return;
     };
+    let position_ms = state.playback.position_ms;
+    let cur = mineral_model::current_line(lines, position_ms);
     paint_window(
         frame,
         inner,
         WindowInput {
-            lines: &lines,
+            lines,
             cur,
-            cursor,
+            position_ms,
             extra,
             motion,
             // 行间距:脚本覆盖优先,无覆盖回落配置值。
@@ -103,6 +79,15 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
                 .compact_line_gap
                 .unwrap_or(*state.cfg.tui().lyrics().compact_line_gap()),
             scroll_ms: *state.cfg.tui().lyrics().scroll_ms(),
+            // 手动滚动是全屏沉浸态专属;紧凑面板恒附着,不继承脱离偏移。
+            manual_anchor_milli: match motion {
+                LyricMode::Immersive => state.manual_lyric_anchor_milli(),
+                LyricMode::Compact => None,
+            },
+            manual_focus: match motion {
+                LyricMode::Immersive => state.manual_lyric_focus_line(),
+                LyricMode::Compact => None,
+            },
         },
         theme,
     );
@@ -195,16 +180,6 @@ fn title_right_spans(
     spans
 }
 
-/// 渲染时传入的逐字上下文(打包以减少 paint_window 参数数)。
-#[derive(Clone, Copy)]
-struct WordCursor<'a> {
-    /// 逐字歌词行;`None` 表示没逐字(走 lrc 整行高亮)。
-    lines: Option<&'a WordLyric>,
-
-    /// 当前播放位置(ms),用于 wipe 进度计算。
-    position_ms: u64,
-}
-
 /// 一个视觉行:原文行(`Primary`)、其下方的副歌词(`Secondary`),或行间空行(`Spacer`)。
 enum Cell {
     /// 原文行,引用 `lines` 中的索引。
@@ -239,31 +214,22 @@ fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
 /// 抖动且**方向不定**(有时早、有时晚),故取与原文行时间**最接近**的一条,而非
 /// `current_index` 的「≤ t 的最后一条」(后者在副歌词时间戳偏晚时会错配到上一句)。
 /// 行数 / 索引也不保证与原文一致(原文有空白间奏行),所以不能按索引硬配对。
-fn secondary_text(extra: Option<&LrcLyric>, time_ms: u64) -> Option<String> {
+fn secondary_text(extra: Option<&[LyricLine]>, time_ms: u64) -> Option<String> {
     let e = extra?;
     let i = nearest_index(e, time_ms)?;
-    e.get(i).map(|l| l.text.clone()).filter(|t| !t.is_empty())
+    e.get(i)
+        .map(|l| l.kind.text().into_owned())
+        .filter(|t| !t.is_empty())
 }
 
-/// 找时间戳与 `t` 最接近的行 index(候选只可能是 `≤ t` 的最后一条与 `> t` 的第一条)。
-fn nearest_index(lines: &LrcLyric, t: u64) -> Option<usize> {
-    if lines.is_empty() {
-        return None;
-    }
-    let pp = lines.partition_point(|l| l.time_ms <= t);
-    let before = pp.checked_sub(1);
-    let after = (pp < lines.len()).then_some(pp);
-    let dist = |i: usize| -> u64 {
-        lines
-            .get(i)
-            .map_or(u64::MAX, |l| l.time_ms.max(t) - l.time_ms.min(t))
-    };
-    match (before, after) {
-        (Some(b), Some(a)) => Some(if dist(b) <= dist(a) { b } else { a }),
-        (Some(b), None) => Some(b),
-        (None, Some(a)) => Some(a),
-        (None, None) => None,
-    }
+/// 找时间戳与 `t` 最接近的带时间戳行 index(无时间戳的行不参与对齐)。
+fn nearest_index(lines: &[LyricLine], t: u64) -> Option<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| l.time_ms.map(|ts| (i, ts)))
+        .min_by_key(|(_, ts)| ts.abs_diff(t))
+        .map(|(i, _)| i)
 }
 
 /// 歌词呈现模式。决定行间距与高亮过渡——同一个 [`draw`] 给两处调用方复用。
@@ -320,20 +286,50 @@ fn scroll_anchor(prev_center: usize, cur_center: usize, eased: u16) -> usize {
     prev_center.saturating_add(usize::try_from(offset).unwrap_or(0))
 }
 
+/// 把手动滚动的 milli-line 锚点(原文行号 × 1000)映射成 `cells` 中的整数行索引。
+///
+/// 取相邻两原文行的 cell 位置按小数部分线性插值落到整行;终端无亚格滚动,平滑感来自
+/// 状态层逐 tick 缓动推进 milli 值,使这个整数锚点在 cells 间逐格前移(行间有空行时
+/// 尤为顺滑)。锚点超界钳到首 / 末行。
+///
+/// # Params:
+///   - `primary_cell`: 各原文行 → 其在 `cells` 中的视觉行索引
+///   - `milli`: 缓动锚点(milli-line)
+///
+/// # Return:
+///   居中锚点应落的 `cells` 索引。
+fn manual_cell_anchor(primary_cell: &[usize], milli: i64) -> usize {
+    let Some(max_line) = primary_cell.len().checked_sub(1) else {
+        return 0;
+    };
+    let milli = milli.max(0);
+    let i = usize::try_from(milli / 1000).unwrap_or(0).min(max_line);
+    let frac = milli - i64::try_from(i).unwrap_or(0) * 1000; // 0..=1000
+    let c0 = primary_cell.get(i).copied().unwrap_or(0);
+    let c1 = primary_cell
+        .get((i + 1).min(max_line))
+        .copied()
+        .unwrap_or(c0);
+    let span = i64::try_from(c1.saturating_sub(c0)).unwrap_or(0);
+    // round(c0 + span·frac/1000):分子 +500 四舍五入。
+    let offset = (span.saturating_mul(frac) + 500) / 1000;
+    c0.saturating_add(usize::try_from(offset).unwrap_or(0))
+}
+
 /// 渲染一个歌词窗口所需的内容输入(打包以压参数数)。
 #[derive(Clone, Copy)]
 struct WindowInput<'a> {
-    /// 展开后的原文行序列:`(行起始时间 ms, 文本)`。
-    lines: &'a [(u64, String)],
+    /// 原文行序列。
+    lines: &'a [LyricLine],
 
-    /// 当前行在 `lines` 中的索引;`None` = 前奏未进首句。
+    /// 当前行在 `lines` 中的索引;`None` = 前奏未进首句 / 全无时间戳。
     cur: Option<usize>,
 
-    /// 逐字 wipe 上下文(含 position_ms)。
-    cursor: WordCursor<'a>,
+    /// 当前播放位置(ms),用于逐字 wipe 进度。
+    position_ms: u64,
 
     /// 副歌词档(翻译 / 罗马音);`None` = 不显示副行。
-    extra: Option<&'a LrcLyric>,
+    extra: Option<&'a [LyricLine]>,
 
     /// 呈现模式:决定行间距与高亮过渡。
     motion: LyricMode,
@@ -346,6 +342,13 @@ struct WindowInput<'a> {
 
     /// 行切换缓动平移时长(ms,配置 `tui.lyrics.scroll_ms`)。
     scroll_ms: u64,
+
+    /// 手动滚动「脱离播放」的缓动锚点(milli-line = 原文行号 × 1000);`None` = 附着态
+    /// (居中跟随播放)。仅全屏沉浸态可能为 `Some`,紧凑面板恒 `None`。
+    manual_anchor_milli: Option<i64>,
+
+    /// 脱离态锚定的原文行(手动浏览焦点,渲染半程高亮);`None` = 附着态。
+    manual_focus: Option<usize>,
 }
 
 /// 渲染以 `cur` 为中心、上下展开的歌词窗口。
@@ -358,27 +361,32 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
     let WindowInput {
         lines,
         cur,
-        cursor,
+        position_ms,
         extra,
         motion,
         fullscreen_line_gap,
         compact_line_gap,
         scroll_ms,
+        manual_anchor_milli,
+        manual_focus,
     } = input;
     let gap = match motion {
         LyricMode::Immersive => fullscreen_line_gap,
         LyricMode::Compact => compact_line_gap,
     };
-    // 展开成视觉行序列;记当前行(居中基准)与上一行(平移 / 交叉淡入端)所在视觉行。
+    // 展开成视觉行序列;记当前行(居中基准)、上一行(平移 / 交叉淡入端)及每条原文行
+    // 所在视觉行(`primary_cell`,手动滚动把 milli-line 锚点映射回 cell 用)。
     let mut cells = Vec::<Cell>::new();
+    let mut primary_cell = Vec::<usize>::with_capacity(lines.len());
     let mut cur_center = 0usize;
     let mut prev_center = 0usize;
-    for (idx, (time_ms, primary)) in lines.iter().enumerate() {
+    for (idx, line) in lines.iter().enumerate() {
         // 非首行前垫空行,把相邻行视觉行距拉开(Compact 时 gap=0,退化回紧贴)。
         for _ in 0..(if idx > 0 { gap } else { 0 }) {
             cells.push(Cell::Spacer);
         }
         let here = cells.len();
+        primary_cell.push(here);
         if Some(idx) == cur {
             cur_center = here;
         }
@@ -386,9 +394,10 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
             prev_center = here;
         }
         cells.push(Cell::Primary { line_idx: idx });
-        // 空白间奏行(原文无字)不配副歌词。
-        if !primary.is_empty()
-            && let Some(text) = secondary_text(extra, *time_ms)
+        // 空白间奏行 / 无时间戳行不配副歌词(无时间轴可对齐)。
+        if let Some(t) = line.time_ms
+            && !line.kind.text().is_empty()
+            && let Some(text) = secondary_text(extra, t)
         {
             cells.push(Cell::Secondary { text });
         }
@@ -398,25 +407,33 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
         prev_center = cur_center;
     }
 
-    // 缓动进度 + 居中锚点。Compact 恒到位(prog 满、无 prev),退化回瞬时居中。
-    let (anchor, eased, prev_active) = match motion {
-        LyricMode::Compact => (cur_center, SCROLL_FULL, None),
+    // 高亮交叉淡入进度(当前行淡入 / 上一行退场),只由播放驱动 —— 脱离态下播放照常推进,
+    // 高亮 / wipe 仍跟随。Compact 恒到位(prog 满、无 prev),退化回瞬时高亮。
+    let (eased, prev_active) = match motion {
+        LyricMode::Compact => (SCROLL_FULL, None),
         LyricMode::Immersive => {
             let elapsed = cur.map_or(0, |c| {
-                cursor
-                    .position_ms
-                    .saturating_sub(lines.get(c).map_or(0, |(t, _)| *t))
+                position_ms.saturating_sub(lines.get(c).and_then(|l| l.time_ms).unwrap_or(0))
             });
             let eased = ease_in_out(scroll_progress(elapsed, scroll_ms));
-            let anchor = scroll_anchor(prev_center, cur_center, eased);
-            (anchor, eased, cur.filter(|&c| c > 0).map(|c| c - 1))
+            (eased, cur.filter(|&c| c > 0).map(|c| c - 1))
         }
+    };
+    // 居中锚点:脱离态居中在手动缓动锚点(milli-line,播放不参与);附着态跟随播放
+    // (Immersive 走逐行时间驱动平移、Compact 瞬时居中)。
+    let anchor = match manual_anchor_milli {
+        Some(milli) => manual_cell_anchor(&primary_cell, milli),
+        None => match motion {
+            LyricMode::Compact => cur_center,
+            LyricMode::Immersive => scroll_anchor(prev_center, cur_center, eased),
+        },
     };
     let ctx = CellCtx {
         cur,
         prev: prev_active,
+        focus: manual_focus,
         eased,
-        cursor,
+        position_ms,
     };
 
     let height = usize::from(inner.height);
@@ -456,26 +473,29 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
 
 /// 渲染一个视觉行所需的高亮上下文(打包以压参数数)。
 #[derive(Clone, Copy)]
-struct CellCtx<'a> {
+struct CellCtx {
     /// 当前行 line index;`None` = 前奏未进首句。
     cur: Option<usize>,
 
     /// 上一行 line index(交叉淡入的退场端);`None` = 无上一行 / Compact 不淡入。
     prev: Option<usize>,
 
+    /// 脱离态锚定行(手动浏览焦点);`None` = 附着态。当前行优先于焦点行。
+    focus: Option<usize>,
+
     /// 已缓动进度千分比:当前行淡入程度,上一行按 `1000 - eased` 退场。
     eased: u16,
 
-    /// 逐字 wipe 上下文。
-    cursor: WordCursor<'a>,
+    /// 当前播放位置(ms),用于逐字 wipe 进度。
+    position_ms: u64,
 }
 
 /// 把一个视觉行渲成 [`Line`]:当前行高亮 / wipe,上一行交叉淡出,其余原文行按距中心 dim,
 /// 副歌词行恒 muted,空行渲空。
 fn render_cell<'a>(
     cell: &'a Cell,
-    lines: &'a [(u64, String)],
-    ctx: CellCtx<'a>,
+    lines: &'a [LyricLine],
+    ctx: CellCtx,
     dist: u64,
     denom: u64,
     theme: &Theme,
@@ -488,19 +508,23 @@ fn render_cell<'a>(
             Line::from(text.as_str()).style(Style::new().fg(color).add_modifier(Modifier::ITALIC))
         }
         Cell::Primary { line_idx } => {
-            let text = lines.get(*line_idx).map_or("", |(_, t)| t.as_str());
+            let line = lines.get(*line_idx);
             // 当前行有逐字 → 字级 wipe(自带 subtext→accent 渐变,天然承担"淡入")。
             if Some(*line_idx) == ctx.cur
-                && let Some(wl) = ctx.cursor.lines.and_then(|v| v.get(*line_idx))
+                && let Some(words) = line.map(|l| l.kind.words()).filter(|w| !w.is_empty())
             {
-                return render_word_line(wl, ctx.cursor.position_ms, theme);
+                return render_word_line(words, ctx.position_ms, theme);
             }
+            let text = line.map(|l| l.kind.text().into_owned()).unwrap_or_default();
             // 其余统一按 emphasis 在距离淡色与 accent 间插值:当前行 e=eased 升入 accent、
-            // 上一行 e=1000-eased 从 accent 退出、其它 e=0 即原距离淡色(行为不变)。
+            // 上一行 e=1000-eased 从 accent 退出、脱离态锚定行恒半程(介于 now-playing
+            // 与普通渐暗之间,标记手动浏览焦点)、其它 e=0 即原距离淡色。
             let emphasis = if Some(*line_idx) == ctx.cur {
                 ctx.eased
             } else if Some(*line_idx) == ctx.prev {
                 SCROLL_FULL.saturating_sub(ctx.eased)
+            } else if Some(*line_idx) == ctx.focus {
+                SCROLL_FULL / 2
             } else {
                 0
             };
@@ -514,7 +538,8 @@ fn render_cell<'a>(
             );
             let mut style = Style::new().fg(color);
             // 过半激活才加粗:加粗在 eased 跨半时从上一行交到当前行,避免切换瞬间闪一下。
-            if emphasis >= SCROLL_FULL / 2 {
+            // 恰为半程的焦点行不加粗,与满 accent + Bold 的 now-playing 行拉开层级。
+            if emphasis > SCROLL_FULL / 2 {
                 style = style.add_modifier(Modifier::BOLD);
             }
             Line::from(text).style(style)
@@ -526,21 +551,16 @@ fn render_cell<'a>(
 ///
 /// `Word.text` 对中文是单字、对英文是整词,所以在 `Word` 内再按 `text.chars()` 等分
 /// 时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
-fn render_word_line<'a>(word_line: &'a WordLine, position_ms: u64, theme: &Theme) -> Line<'a> {
+fn render_word_line<'a>(words: &'a [Word], position_ms: u64, theme: &Theme) -> Line<'a> {
     let mut spans = Vec::<Span<'a>>::new();
-    for w in &word_line.words {
+    for w in words {
         push_char_spans(&mut spans, w, position_ms, theme);
     }
     Line::from(spans)
 }
 
 /// 把一个 `Word` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
-fn push_char_spans<'a>(
-    out: &mut Vec<Span<'a>>,
-    word: &'a mineral_model::Word,
-    position_ms: u64,
-    theme: &Theme,
-) {
+fn push_char_spans<'a>(out: &mut Vec<Span<'a>>, word: &'a Word, position_ms: u64, theme: &Theme) {
     let n = word.text.chars().count();
     let Ok(n_u64) = u64::try_from(n) else {
         return;
@@ -759,6 +779,33 @@ mod tests {
             )
         })?;
         crate::test_support::assert_snap!("全屏歌词:稳态(当前行居中 + 行间距)", t.backend());
+        Ok(())
+    }
+
+    /// 全屏沉浸 + 手动下滚:在自动锚点上叠加偏移,当前行离开正中、窗口整体上移露出后文
+    /// (对照上方稳态帧)。synced 歌仍按播放位置算 now-playing 高亮。
+    #[test]
+    fn lyrics_immersive_manual_scroll_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 20))?;
+        let mut state = crate::test_support::state_with_lyrics(
+            LyricExtra::Translation,
+            /*with_words*/ true,
+        )?;
+        // 脱离播放、锚定在当前播放行下方 2 行(已 settle):当前行仍在窗内但离开正中。
+        state.debug_scroll_lyrics_to_settled(2);
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &state,
+                &Theme::default(),
+                super::LyricMode::Immersive,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "全屏歌词:脱离播放手动下滚 2 行(居中在锚定行,当前行离开正中)",
+            t.backend()
+        );
         Ok(())
     }
 

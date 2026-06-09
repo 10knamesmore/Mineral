@@ -94,6 +94,18 @@ pub struct KeysConfig {
     /// 下载当前视图选中项。
     download: KeyBinding,
 
+    /// 全屏歌词逐行下滚(行数见 `lyrics.line_scroll_rows`)。
+    lyric_line_down: KeyBinding,
+
+    /// 全屏歌词逐行上滚(行数见 `lyrics.line_scroll_rows`)。
+    lyric_line_up: KeyBinding,
+
+    /// 全屏歌词翻页下滚(行数见 `lyrics.page_scroll_rows`)。
+    lyric_page_down: KeyBinding,
+
+    /// 全屏歌词翻页上滚(行数见 `lyrics.page_scroll_rows`)。
+    lyric_page_up: KeyBinding,
+
     /// 脚本动作绑定:`mineral.action` 注册名 → 键(开放映射,默认空)。
     /// 与内建动作不同,这里的键集合由用户脚本决定,client 触发时经
     /// daemon 转投脚本线程执行。

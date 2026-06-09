@@ -3,4 +3,5 @@
 mod lrc;
 mod types;
 
-pub use types::{LrcLine, LrcLyric, Lyrics, Word, WordLine, WordLyric};
+pub use lrc::{current_line, has_timed, has_words, parse_lrc, to_lrc_string};
+pub use types::{LineKind, LyricLine, Lyrics, Word};

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_model::WordLyric;
+use mineral_model::{LyricLine, to_lrc_string};
 use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -301,23 +301,21 @@ fn build_metadata(now_playing: &NowPlaying) -> Metadata {
         builder = builder.length(duration_to_time(duration));
     }
     let mut metadata = builder.build();
-    if !now_playing.lrc.is_empty() {
-        let _ = metadata.set("xesam:asText", Some(now_playing.lrc.to_lrc_string()));
+    // 原文带时间戳行 → 标准 LRC(xesam:asText);其中逐字行 → JSON(mineral:words)。
+    let astext = to_lrc_string(&now_playing.original);
+    if !astext.is_empty() {
+        let _ = metadata.set("xesam:asText", Some(astext));
     }
-    if let Some(json) = serialize_words(&now_playing.words) {
+    if let Some(json) = serialize_words(&now_playing.original) {
         let _ = metadata.set("mineral:words", Some(json));
     }
-    if !now_playing.translation.is_empty() {
-        let _ = metadata.set(
-            "mineral:translation",
-            Some(now_playing.translation.to_lrc_string()),
-        );
+    let translation = to_lrc_string(&now_playing.translation);
+    if !translation.is_empty() {
+        let _ = metadata.set("mineral:translation", Some(translation));
     }
-    if !now_playing.romanization.is_empty() {
-        let _ = metadata.set(
-            "mineral:romanization",
-            Some(now_playing.romanization.to_lrc_string()),
-        );
+    let romanization = to_lrc_string(&now_playing.romanization);
+    if !romanization.is_empty() {
+        let _ = metadata.set("mineral:romanization", Some(romanization));
     }
     metadata
 }
@@ -345,17 +343,17 @@ struct WordCellDto {
     text: String,
 }
 
-/// 逐字歌词 → `mineral:words` 的 JSON 字符串;空歌词返回 `None`(不发该 key)。
-fn serialize_words(words: &WordLyric) -> Option<String> {
-    if words.is_empty() {
-        return None;
-    }
-    let dto = words
+/// 原文里的逐字行 → `mineral:words` 的 JSON 字符串;无逐字行返回 `None`(不发该 key)。
+/// 纯文本行(行级 / credits / 无时间戳)不进逐字轨。
+fn serialize_words(lines: &[LyricLine]) -> Option<String> {
+    let dto = lines
         .iter()
+        .filter(|l| !l.kind.words().is_empty())
         .map(|line| WordsLineDto {
-            start: line.start_ms,
+            start: line.time_ms.unwrap_or(0),
             words: line
-                .words
+                .kind
+                .words()
                 .iter()
                 .map(|w| WordCellDto {
                     start: w.start_ms,
@@ -365,6 +363,9 @@ fn serialize_words(words: &WordLyric) -> Option<String> {
                 .collect(),
         })
         .collect::<Vec<_>>();
+    if dto.is_empty() {
+        return None;
+    }
     serde_json::to_string(&dto).ok()
 }
 
@@ -392,7 +393,7 @@ fn micros_to_duration(micros: i64) -> Duration {
 mod tests {
     use super::serialize_words;
     use color_eyre::eyre::eyre;
-    use mineral_model::{Word, WordLine, WordLyric};
+    use mineral_model::{LineKind, LyricLine, Word};
     use serde_json::Value;
 
     fn word(start_ms: u64, dur_ms: u64, text: &str) -> Word {
@@ -404,21 +405,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_words_serialize_to_none() {
-        // 空逐字 → None,build_metadata 据此不发 mineral:words key。
-        assert_eq!(serialize_words(&WordLyric::default()), None);
+    fn non_word_lines_serialize_to_none() {
+        // 空 / 仅纯文本行 → None,build_metadata 据此不发 mineral:words key。
+        assert_eq!(serialize_words(&[]), None);
+        assert_eq!(serialize_words(&[LyricLine::timed(0, "纯文本")]), None);
     }
 
     #[test]
     fn words_serialize_to_quickshell_schema() -> color_eyre::Result<()> {
         // 字段名 / 层级 / 整数毫秒 / 保留空格 —— 严格对齐 quickshell 契约。
-        let lyric: WordLyric = vec![WordLine {
-            start_ms: 11_350,
-            dur_ms: 1020,
-            words: vec![word(11_350, 300, "How "), word(11_650, 720, "will")],
-        }]
-        .into();
-        let json = serialize_words(&lyric).ok_or_else(|| eyre!("expected Some json"))?;
+        let lines = vec![LyricLine {
+            time_ms: Some(11_350),
+            kind: LineKind::Words {
+                dur_ms: 1020,
+                words: vec![word(11_350, 300, "How "), word(11_650, 720, "will")],
+            },
+        }];
+        let json = serialize_words(&lines).ok_or_else(|| eyre!("expected Some json"))?;
         let v: Value = serde_json::from_str(&json)?;
 
         // 顶层数组,行有 start + words,无行级 duration 字段。

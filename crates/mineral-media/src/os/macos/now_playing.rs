@@ -70,12 +70,9 @@ impl MacNowPlaying {
                 secs(duration),
             );
         }
-        if !np.lrc.is_empty() {
-            put_str(
-                &info,
-                unsafe { MPMediaItemPropertyLyrics },
-                &np.lrc.to_lrc_string(),
-            );
+        let lrc = mineral_model::to_lrc_string(&np.original);
+        if !lrc.is_empty() {
+            put_str(&info, unsafe { MPMediaItemPropertyLyrics }, &lrc);
         }
         // 标成音乐类型:系统据此选 Control Center 的展示样式。
         let music = isize::try_from(MPMediaType::Music.0).unwrap_or(1);

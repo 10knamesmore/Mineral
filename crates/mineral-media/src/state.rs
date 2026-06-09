@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use mineral_model::{LrcLyric, WordLyric};
+use mineral_model::LyricLine;
 use typed_builder::TypedBuilder;
 
 /// 播放状态(上报给系统媒体控件)。
@@ -50,22 +50,19 @@ pub struct NowPlaying {
     #[builder(default)]
     pub(crate) duration: Option<Duration>,
 
-    /// 行级原文歌词。空 = 无。序列化成标准 LRC 透传到 MPRIS `xesam:asText`,
-    /// 标准客户端可直接读它配合 position 做逐行同步高亮。
+    /// 原文歌词:行级 / 逐字 / 有时间 / 无时间混在一条序列里。空 = 无。
+    /// 带时间戳行序列化成标准 LRC 透传到 MPRIS `xesam:asText`(标准客户端配合 position 做
+    /// 逐行同步);其中逐字行另序列化成 JSON 透传到自定义 key `mineral:words`(可编程显示端
+    /// 如 quickshell 做逐字 wipe;缺失时回退 `xesam:asText`)。
     #[builder(default)]
-    pub(crate) lrc: LrcLyric,
-
-    /// 逐字原文歌词。空 = 无。序列化成 JSON 透传到自定义 key `mineral:words`,
-    /// 可编程显示端(如 quickshell)解析后做逐字 wipe 高亮;缺失时回退 `xesam:asText`。
-    #[builder(default)]
-    pub(crate) words: WordLyric,
+    pub(crate) original: Vec<LyricLine>,
 
     /// 行级翻译。空 = 无。序列化成标准 LRC 透传到 `mineral:translation`,
     /// 与原文共享时间轴做双行展示。
     #[builder(default)]
-    pub(crate) translation: LrcLyric,
+    pub(crate) translation: Vec<LyricLine>,
 
     /// 行级罗马音。空 = 无。序列化成标准 LRC 透传到 `mineral:romanization`。
     #[builder(default)]
-    pub(crate) romanization: LrcLyric,
+    pub(crate) romanization: Vec<LyricLine>,
 }

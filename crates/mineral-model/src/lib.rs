@@ -45,7 +45,9 @@ pub use artist::Artist;
 pub use bitrate::BitRate;
 pub use format::AudioFormat;
 pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};
-pub use lyrics::{LrcLine, LrcLyric, Lyrics, Word, WordLine, WordLyric};
+pub use lyrics::{
+    LineKind, LyricLine, Lyrics, Word, current_line, has_timed, has_words, parse_lrc, to_lrc_string,
+};
 pub use play_url::PlayUrl;
 pub use playlist::Playlist;
 pub use refs::{AlbumRef, ArtistRef};

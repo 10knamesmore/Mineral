@@ -247,6 +247,7 @@ impl App {
                 self.update_spectrum();
                 self.state.view_pos.tick();
                 self.state.fullscreen_pos.tick();
+                self.state.tick_lyric_scroll();
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.versions);
                 self.apply_player_sync(sync);
@@ -564,6 +565,7 @@ impl App {
             Action::OpenQueue => self.open_queue(),
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
+            Action::ScrollLyrics(scroll) => self.state.scroll_lyrics(scroll),
             Action::EnterSearch => self.enter_search(),
             Action::MoveSelection(mv) => self.move_selection(mv),
             Action::ActivateSelection => self.activate_selection(),

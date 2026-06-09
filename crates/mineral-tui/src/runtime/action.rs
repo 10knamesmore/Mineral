@@ -29,6 +29,10 @@ pub enum Action {
     /// 循环歌词副语言(原文 → 翻译 → 罗马音)。
     CycleLyricExtra,
 
+    /// 全屏歌词手动滚动(逐行 / 翻页档行数见 `lyrics.line_scroll_rows` / `page_scroll_rows`);
+    /// 仅全屏态生效。
+    ScrollLyrics(LyricScroll),
+
     /// 进入搜索输入态(全屏态屏蔽)。
     EnterSearch,
 
@@ -85,6 +89,23 @@ pub enum SelectionMove {
 
     /// 跳末行。
     Last,
+}
+
+/// 歌词手动滚动的方向 + 档位。每档行数在执行点从 `lyrics` 配置取(逐行档 `line_scroll_rows`、
+/// 翻页档 `page_scroll_rows`),不内嵌枚举。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LyricScroll {
+    /// 逐行上滚。
+    LineUp,
+
+    /// 逐行下滚。
+    LineDown,
+
+    /// 翻页上滚。
+    PageUp,
+
+    /// 翻页下滚。
+    PageDown,
 }
 
 /// 脚本动作槽位:`Keymap` 内 `script_names` 表的索引。

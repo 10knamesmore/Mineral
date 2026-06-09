@@ -122,8 +122,8 @@ impl LyricsPresence {
         match lyrics {
             None => Self::default(),
             Some(l) => Self {
-                words: !l.words.is_empty(),
-                lrc: !l.lrc.is_empty(),
+                words: mineral_model::has_words(&l.original),
+                lrc: mineral_model::has_timed(&l.original),
                 translation: !l.translation.is_empty(),
                 romanization: !l.romanization.is_empty(),
             },
@@ -279,8 +279,7 @@ fn build_now_playing(song: &Song, lyrics: Option<&Lyrics>) -> NowPlaying {
     match lyrics {
         None => builder.build(),
         Some(l) => builder
-            .lrc(l.lrc.clone())
-            .words(l.words.clone())
+            .original(l.original.clone())
             .translation(l.translation.clone())
             .romanization(l.romanization.clone())
             .build(),

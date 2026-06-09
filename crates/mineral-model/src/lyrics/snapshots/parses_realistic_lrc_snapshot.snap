@@ -1,27 +1,47 @@
 ---
 source: crates/mineral-model/src/lyrics/lrc.rs
 description: "真实 LRC:metadata 跳过、多时间戳展开、CJK、厘秒"
-expression: "LrcLyric::parse(s).to_vec()"
+expression: parse_lrc(s)
 ---
 [
-    LrcLine {
-        time_ms: 0,
-        text: "迷星叫",
+    LyricLine {
+        time_ms: Some(
+            0,
+        ),
+        kind: Plain(
+            "迷星叫",
+        ),
     },
-    LrcLine {
-        time_ms: 12500,
-        text: "壱雫空",
+    LyricLine {
+        time_ms: Some(
+            12500,
+        ),
+        kind: Plain(
+            "壱雫空",
+        ),
     },
-    LrcLine {
-        time_ms: 15200,
-        text: "碧天伴走",
+    LyricLine {
+        time_ms: Some(
+            15200,
+        ),
+        kind: Plain(
+            "碧天伴走",
+        ),
     },
-    LrcLine {
-        time_ms: 48300,
-        text: "碧天伴走",
+    LyricLine {
+        time_ms: Some(
+            48300,
+        ),
+        kind: Plain(
+            "碧天伴走",
+        ),
     },
-    LrcLine {
-        time_ms: 60999,
-        text: "名無声",
+    LyricLine {
+        time_ms: Some(
+            60999,
+        ),
+        kind: Plain(
+            "名無声",
+        ),
     },
 ]
