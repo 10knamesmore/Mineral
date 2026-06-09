@@ -16,14 +16,17 @@ fn unique_suffix() -> u128 {
 }
 
 /// 构造一条隔离 XDG 环境的 `mineral` 命令(runtime 指向空临时目录 → status 必连不上)。
+///
+/// socket 不走 XDG 隔离目录:macOS 的 `temp_dir()` 在 `/var/folders/<xx>/<长哈希>/T/` 下,
+/// 叠加唯一后缀后 `<runtime>/mineral/mineral.sock` 会顶破 AF_UNIX `sun_path` 上限
+/// (104 字节),status 报「路径过长」而非预期行为。改经 `$MINERAL_SOCKET_DIR` 指到
+/// `/tmp` 下的短路径——同样每用例唯一,「连不上真 daemon」的隔离保证不变。
 fn mineral() -> color_eyre::Result<Command> {
-    let root = std::env::temp_dir().join(format!(
-        "mineral-cli-{}-{}",
-        std::process::id(),
-        unique_suffix()
-    ));
+    let suffix = format!("{}-{}", std::process::id(), unique_suffix());
+    let root = std::env::temp_dir().join(format!("mineral-cli-{suffix}"));
     let mut cmd = Command::cargo_bin("mineral").wrap_err("locate mineral binary")?;
-    cmd.env("XDG_RUNTIME_DIR", root.join("runtime"))
+    cmd.env("MINERAL_SOCKET_DIR", format!("/tmp/mineral-cli-{suffix}"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_DATA_HOME", root.join("data"));
