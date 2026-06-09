@@ -17,7 +17,6 @@ use mineral_model::{LyricLine, Lyrics};
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::palette::CoverPalette;
-use crate::runtime::action::LyricScroll;
 use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
@@ -80,41 +79,9 @@ impl LyricExtra {
     }
 }
 
-/// 全屏歌词「脱离播放」的手动滚动态。
-///
-/// detach 后窗口居中锚点由用户控制——播放推进不再驱动居中(高亮 / wipe 仍按真实播放
-/// 位置走);锚点在 `from_milli` → `to_milli` 间按 cubic ease-out 平移,得到平滑滚动。
-/// synced 歌空闲超时把目标切回当前播放行,**回锚同样走这条平移通道**。
-struct LyricGlide {
-    /// 平移起点(milli-line = 原文行号 × 1000)。每设新目标时置为当前动画位置,故连按 /
-    /// 中途回锚都从眼前位置接着滑、不跳。
-    from_milli: i64,
+mod lyric_glide;
 
-    /// 平移目标(milli-line)。滚动键 = 用户锚定行;回锚 = 当前播放行。
-    to_milli: i64,
-
-    /// `from` → `to` 的缓动进度(`expanding`:0 起步推满)。
-    glide: Transition,
-
-    /// 是否处于回锚平移(目标已切回播放行);settle 后清回附着态。
-    reattaching: bool,
-
-    /// 手动滚动后的空闲拍数;synced 据此超时触发回锚(无时间戳歌不回)。
-    idle: u16,
-}
-
-impl LyricGlide {
-    /// 当前缓动锚点位置(milli-line):在 `from` → `to` 间按已缓动进度线性插值。
-    fn pos_milli(&self) -> i64 {
-        let eased = i64::from(self.glide.eased());
-        self.from_milli + (self.to_milli - self.from_milli) * eased / 1000
-    }
-
-    /// 当前锚定的目标行(整数 line index)。
-    fn target_line(&self) -> i64 {
-        self.to_milli / 1000
-    }
-}
+use lyric_glide::LyricGlide;
 
 /// 应用顶层状态。
 #[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
@@ -486,142 +453,6 @@ impl AppState {
         };
     }
 
-    /// 全屏手动滚动歌词:按方向 + 档位(逐行 / 翻页)行数移动锚定行,**脱离播放**(播放推进
-    /// 不再驱动居中);非全屏不接管(键不被吞,但无效果)。
-    ///
-    /// 锚定行钳到 `[0, 内容行数-1]`;锚点位置从当前动画位置平滑滑向新目标——连按 / 中途
-    /// 反向都从眼前位置接着滑,不跳变。
-    ///
-    /// # Params:
-    ///   - `scroll`: 方向 + 档位
-    pub(crate) fn scroll_lyrics(&mut self, scroll: LyricScroll) {
-        if !self.fullscreen {
-            return;
-        }
-        let len = self.current_lines().map_or(0, <[LyricLine]>::len);
-        let Some(max_line) = len.checked_sub(1).and_then(|m| i64::try_from(m).ok()) else {
-            return;
-        };
-        let lyrics = self.cfg.tui().lyrics();
-        let line = i64::try_from(*lyrics.line_scroll_rows()).unwrap_or(0);
-        let page = i64::try_from(*lyrics.page_scroll_rows()).unwrap_or(0);
-        let delta = match scroll {
-            LyricScroll::LineDown => line,
-            LyricScroll::LineUp => -line,
-            LyricScroll::PageDown => page,
-            LyricScroll::PageUp => -page,
-        };
-        // 基准:已脱离则用现有目标行,否则用播放当前行(脱离瞬间锚在眼前)。
-        let base = match &self.lyric_scroll {
-            Some(g) => g.target_line(),
-            None => self.current_line_anchor(),
-        };
-        let from_milli = self
-            .lyric_scroll
-            .as_ref()
-            .map_or(base * 1000, LyricGlide::pos_milli);
-        let target = base.saturating_add(delta).clamp(0, max_line);
-        let glide = Transition::expanding(self.glide_ticks());
-        self.lyric_scroll = Some(LyricGlide {
-            from_milli,
-            to_milli: target * 1000,
-            glide,
-            reattaching: false,
-            idle: 0,
-        });
-    }
-
-    /// 每帧推进歌词滚动生命周期:换歌清脱离态;推进缓动平移(手动滚动 / 回锚共用);
-    /// 有时间戳歌手动滚走后空闲超时平滑回锚到当前播放行,无时间戳歌停在手动位置不回
-    /// (无锚点可回)。
-    pub(crate) fn tick_lyric_scroll(&mut self) {
-        let changed =
-            self.playback.track.as_ref().map(|s| &s.id) != self.lyric_scroll_song.as_ref();
-        if changed {
-            self.lyric_scroll_song = self.playback.track.as_ref().map(|s| s.id.clone());
-            self.lyric_scroll = None;
-            return;
-        }
-        if self.lyric_scroll.is_none() {
-            return;
-        }
-        // 借用 lyric_scroll 前先把依赖 &self 的量算好,避免重叠借用。
-        let synced = self.current_lines().is_some_and(mineral_model::has_timed);
-        let reattach_ticks = ticks16_from_ms(
-            *self.cfg.tui().lyrics().reattach_ms(),
-            *self.cfg.tui().animation().frame_tick_ms(),
-        );
-        let cur_line = self.current_line_anchor();
-        let glide_ticks = self.glide_ticks();
-        let Some(g) = self.lyric_scroll.as_mut() else {
-            return;
-        };
-        g.glide.tick();
-        // 无时间戳歌:无播放锚点可回,停在手动位置(缓动已推进,仍平滑)。
-        if !synced {
-            return;
-        }
-        if g.reattaching {
-            if g.glide.settled() {
-                self.lyric_scroll = None;
-            }
-            return;
-        }
-        g.idle = g.idle.saturating_add(1);
-        if g.idle >= reattach_ticks {
-            // 启动回锚平移:目标切回当前播放行,从眼前位置平滑滑回。
-            let from_milli = g.pos_milli();
-            *g = LyricGlide {
-                from_milli,
-                to_milli: cur_line * 1000,
-                glide: Transition::expanding(glide_ticks),
-                reattaching: true,
-                idle: 0,
-            };
-        }
-    }
-
-    /// 当前播放位置对应的原文行索引(无时间戳 / 未进首句时落 `0`),作整数锚定行用。
-    fn current_line_anchor(&self) -> i64 {
-        self.current_lines()
-            .and_then(|lines| mineral_model::current_line(lines, self.playback.position_ms))
-            .and_then(|i| i64::try_from(i).ok())
-            .unwrap_or(0)
-    }
-
-    /// 手动滚动 / 回锚平移的缓动拍数(复用 `tui.lyrics.scroll_ms` 过渡时长)。
-    fn glide_ticks(&self) -> u16 {
-        let scroll_ms = u32::try_from(*self.cfg.tui().lyrics().scroll_ms()).unwrap_or(u32::MAX);
-        ticks16_from_ms(scroll_ms, *self.cfg.tui().animation().frame_tick_ms())
-    }
-
-    /// 全屏手动滚动当前的缓动锚点(milli-line = 原文行号 × 1000);`None` = 附着态
-    /// (渲染跟随播放)。仅全屏沉浸态读取——紧凑面板恒附着,不吃手动偏移。
-    pub(crate) fn manual_lyric_anchor_milli(&self) -> Option<i64> {
-        self.lyric_scroll.as_ref().map(LyricGlide::pos_milli)
-    }
-
-    /// 脱离态当前锚定的原文行(渲染端给它半程高亮,标记手动浏览焦点);`None` = 附着态。
-    /// 回锚平移期间目标即播放行,与 now-playing 高亮自然合一。
-    pub(crate) fn manual_lyric_focus_line(&self) -> Option<usize> {
-        self.lyric_scroll
-            .as_ref()
-            .and_then(|g| usize::try_from(g.target_line()).ok())
-    }
-
-    /// 测试辅助:把手动滚动直接置于「已 settle」状态,锚定在当前播放行 + `delta` 行。
-    #[cfg(test)]
-    pub(crate) fn debug_scroll_lyrics_to_settled(&mut self, delta: i64) {
-        let line = self.current_line_anchor().saturating_add(delta).max(0);
-        self.lyric_scroll = Some(LyricGlide {
-            from_milli: line * 1000,
-            to_milli: line * 1000,
-            glide: Transition::expanding(1),
-            reattaching: false,
-            idle: 0,
-        });
-    }
-
     /// 返回当前选中歌单的引用。
     ///
     /// `sel_playlist` 的语义随 [`Self::view`] 切换:
@@ -766,127 +597,11 @@ fn spectrum_params(cfg: &mineral_config::SpectrumConfig) -> mineral_spectrum::Sp
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{LyricLine, Lyrics, SourceKind};
-    use mineral_test::{feiyu_song, qianzai_song};
+    use mineral_model::SourceKind;
 
-    use crate::runtime::action::LyricScroll;
     use crate::test_support::{endserenading, playlist_view};
 
     use super::AppState;
-
-    /// 造一个全屏、缓存了 `original` 行(指定时间态)的 `AppState`,供手动滚动测试。
-    fn fullscreen_with(original: Vec<LyricLine>) -> color_eyre::Result<AppState> {
-        let mut s = AppState::test_default()?;
-        let song = qianzai_song();
-        s.lyrics_cache.insert(
-            song.id.clone(),
-            Lyrics {
-                original,
-                ..Lyrics::default()
-            },
-        );
-        s.playback.track = Some(song);
-        s.fullscreen = true;
-        Ok(s)
-    }
-
-    /// 20 行带时间戳(synced)。
-    fn timed_lines() -> Vec<LyricLine> {
-        (0..20u64)
-            .map(|i| LyricLine::timed(i * 1000, "x"))
-            .collect()
-    }
-
-    /// 20 行无时间戳(unsynced)。
-    fn untimed_lines() -> Vec<LyricLine> {
-        (0..20).map(|_| LyricLine::untimed("x")).collect()
-    }
-
-    /// 锚定目标行(整数 line index);附着态返回 `None`。
-    fn target(s: &AppState) -> Option<i64> {
-        s.lyric_scroll.as_ref().map(super::LyricGlide::target_line)
-    }
-
-    #[test]
-    fn scroll_lyrics_gated_on_fullscreen() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(timed_lines())?;
-        s.fullscreen = false;
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert!(s.lyric_scroll.is_none(), "非全屏不接管滚动");
-        s.fullscreen = true;
-        // position 0 → 当前播放行 0;翻页 = page_scroll_rows(10) → 锚定行 10。
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10), "全屏翻页锚定行 = 0 + 10");
-        s.scroll_lyrics(LyricScroll::LineUp);
-        assert_eq!(target(&s), Some(9), "逐行上滚 = line_scroll_rows(1)");
-        Ok(())
-    }
-
-    #[test]
-    fn scroll_lyrics_clamps_to_content() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(timed_lines())?;
-        for _ in 0..5 {
-            s.scroll_lyrics(LyricScroll::PageDown);
-        }
-        assert_eq!(target(&s), Some(19), "累加钳到末行(20 行 → 行号 19)");
-        Ok(())
-    }
-
-    #[test]
-    fn synced_reattaches_after_timeout() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(timed_lines())?;
-        s.tick_lyric_scroll(); // 先注册当前歌
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10), "脱离锚定行 10");
-        for _ in 0..3000 {
-            s.tick_lyric_scroll();
-        }
-        assert!(
-            s.lyric_scroll.is_none(),
-            "synced 歌空闲超时平滑回锚后归附着"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn unsynced_never_reattaches() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(untimed_lines())?;
-        s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        for _ in 0..3000 {
-            s.tick_lyric_scroll();
-        }
-        assert_eq!(target(&s), Some(10), "无时间戳歌停在手动锚定行 10 不回锚");
-        Ok(())
-    }
-
-    #[test]
-    fn song_change_resets_scroll() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(untimed_lines())?;
-        s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10));
-        s.playback.track = Some(feiyu_song());
-        s.tick_lyric_scroll();
-        assert!(s.lyric_scroll.is_none(), "换歌清脱离态");
-        Ok(())
-    }
-
-    #[test]
-    fn manual_scroll_does_not_drift_with_playback() -> color_eyre::Result<()> {
-        // detach 后推进播放位置 + tick,锚点目标行不应被播放推动(完全独立)。
-        let mut s = fullscreen_with(timed_lines())?;
-        s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10));
-        // 播放推进到第 5 行附近,但仍在 reattach 超时窗口内。
-        for step in 1..50u64 {
-            s.playback.position_ms = step * 1000;
-            s.tick_lyric_scroll();
-        }
-        assert_eq!(target(&s), Some(10), "脱离态锚点不随播放漂移");
-        Ok(())
-    }
 
     /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
     #[test]

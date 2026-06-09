@@ -188,6 +188,8 @@
 ---@field line_scroll_rows? integer 单行档(<C-d>/<C-u>)一次滚的行数,≥1
 ---@field page_scroll_rows? integer 多行档(<C-f>/<C-b>)一次滚的行数,≥1
 ---@field reattach_ms? integer 有时间戳歌手动滚走后空闲多久(毫秒)自动回到跟随;无时间戳歌不回
+---@field overshoot_damping? integer 滚到头再滚时画面多滑出一点再弹回;滑出距离 = 超出行数 ÷ 此值,越大弹得越轻
+---@field overshoot_max_permille? integer 单次过冲上限,行的千分比(1500 = 1.5 行);0 = 关闭回弹
 
 ---动画。各时长均为毫秒,运行时按 frame_tick_ms 折算成拍数(四舍五入、至少一拍);
 ---设为 0 即近似关闭该动画(一帧到位)。改 frame_tick_ms 不改各动画真实时长。

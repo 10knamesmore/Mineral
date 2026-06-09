@@ -503,6 +503,8 @@ Config {
             line_scroll_rows: 1,
             page_scroll_rows: 10,
             reattach_ms: 4000,
+            overshoot_damping: 1,
+            overshoot_max_permille: 6000,
         },
         animation: AnimationConfig {
             frame_tick_ms: 16,

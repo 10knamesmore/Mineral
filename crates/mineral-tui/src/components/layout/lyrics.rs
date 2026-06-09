@@ -290,30 +290,38 @@ fn scroll_anchor(prev_center: usize, cur_center: usize, eased: u16) -> usize {
 ///
 /// 取相邻两原文行的 cell 位置按小数部分线性插值落到整行;终端无亚格滚动,平滑感来自
 /// 状态层逐 tick 缓动推进 milli 值,使这个整数锚点在 cells 间逐格前移(行间有空行时
-/// 尤为顺滑)。锚点超界钳到首 / 末行。
+/// 尤为顺滑)。锚点越出内容界(边界过冲)时沿首 / 末段行距向界外线性外推,画出
+/// rubber-band 的"滚出去"帧——返回值因此可为负或超过末 cell,渲染循环对界外行渲空。
 ///
 /// # Params:
 ///   - `primary_cell`: 各原文行 → 其在 `cells` 中的视觉行索引
-///   - `milli`: 缓动锚点(milli-line)
+///   - `milli`: 缓动锚点(milli-line,过冲时越出 `[0, 行数-1]`)
 ///
 /// # Return:
-///   居中锚点应落的 `cells` 索引。
-fn manual_cell_anchor(primary_cell: &[usize], milli: i64) -> usize {
+///   居中锚点应落的 `cells` 带符号索引。
+fn manual_cell_anchor(primary_cell: &[usize], milli: i64) -> isize {
     let Some(max_line) = primary_cell.len().checked_sub(1) else {
         return 0;
     };
-    let milli = milli.max(0);
-    let i = usize::try_from(milli / 1000).unwrap_or(0).min(max_line);
-    let frac = milli - i64::try_from(i).unwrap_or(0) * 1000; // 0..=1000
-    let c0 = primary_cell.get(i).copied().unwrap_or(0);
-    let c1 = primary_cell
-        .get((i + 1).min(max_line))
-        .copied()
-        .unwrap_or(c0);
-    let span = i64::try_from(c1.saturating_sub(c0)).unwrap_or(0);
-    // round(c0 + span·frac/1000):分子 +500 四舍五入。
-    let offset = (span.saturating_mul(frac) + 500) / 1000;
-    c0.saturating_add(usize::try_from(offset).unwrap_or(0))
+    let max_line = i64::try_from(max_line).unwrap_or(0);
+    // 段下标夹到 [0, max-1]:界内即 milli 所在整行;过冲时落在首 / 末段,frac 越出
+    // [0, 1000] 即沿该段行距外推。
+    let i = milli.div_euclid(1000).clamp(0, (max_line - 1).max(0));
+    let frac = milli - i * 1000;
+    let cell_at = |idx: i64| {
+        usize::try_from(idx)
+            .ok()
+            .and_then(|u| primary_cell.get(u).copied())
+            .and_then(|c| i64::try_from(c).ok())
+            .unwrap_or(0)
+    };
+    let c0 = cell_at(i);
+    // 单行歌词无相邻段可量行距,外推步长兜底 1 cell/行。
+    let span = (cell_at((i + 1).min(max_line)) - c0).max(1);
+    // round(c0 + span·frac/1000):+500 后向下取整 = 四舍五入;div_euclid 保证负 frac
+    // 也朝同一方向取整(截断除法会在 0 附近不对称)。
+    let offset = (span.saturating_mul(frac) + 500).div_euclid(1000);
+    isize::try_from(c0 + offset).unwrap_or(0)
 }
 
 /// 渲染一个歌词窗口所需的内容输入(打包以压参数数)。
@@ -419,14 +427,15 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
             (eased, cur.filter(|&c| c > 0).map(|c| c - 1))
         }
     };
-    // 居中锚点:脱离态居中在手动缓动锚点(milli-line,播放不参与);附着态跟随播放
-    // (Immersive 走逐行时间驱动平移、Compact 瞬时居中)。
+    // 居中锚点:脱离态居中在手动缓动锚点(milli-line,播放不参与;过冲时为界外带符号
+    // 索引);附着态跟随播放(Immersive 走逐行时间驱动平移、Compact 瞬时居中)。
     let anchor = match manual_anchor_milli {
         Some(milli) => manual_cell_anchor(&primary_cell, milli),
-        None => match motion {
+        None => isize::try_from(match motion {
             LyricMode::Compact => cur_center,
             LyricMode::Immersive => scroll_anchor(prev_center, cur_center, eased),
-        },
+        })
+        .unwrap_or(0),
     };
     let ctx = CellCtx {
         cur,
@@ -446,9 +455,8 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
 
     for row in 0..height {
         // 把行号映射到 cells 的 index:row=center_row 对应缓动锚点 anchor。
-        let cell_idx_signed = isize::try_from(row).unwrap_or(0)
-            - isize::try_from(center_row).unwrap_or(0)
-            + isize::try_from(anchor).unwrap_or(0);
+        let cell_idx_signed =
+            isize::try_from(row).unwrap_or(0) - isize::try_from(center_row).unwrap_or(0) + anchor;
         if cell_idx_signed < 0 {
             continue;
         }
@@ -611,7 +619,7 @@ mod tests {
     }
     use crate::render::theme::Theme;
 
-    use super::{scroll_anchor, scroll_progress};
+    use super::{manual_cell_anchor, scroll_anchor, scroll_progress};
 
     /// `scroll_progress`:elapsed/window 定点千分比,`elapsed >= window` 饱和到 1000。
     #[test]
@@ -653,6 +661,30 @@ mod tests {
             last = a;
         }
         assert_eq!(last, cur, "扫到满进度应抵达当前行");
+    }
+
+    /// `manual_cell_anchor`:界内插值不变;越界沿首 / 末段行距外推(rubber-band 过冲帧),
+    /// 顶部为负、底部越过末 cell。
+    #[test]
+    fn manual_cell_anchor_extrapolates_overscroll() {
+        let cells = [0usize, 3, 6]; // 3 行,相邻行距 3
+        assert_eq!(manual_cell_anchor(&cells, 1000), 3, "界内整行直达");
+        assert_eq!(manual_cell_anchor(&cells, 1500), 5, "界内半程插值(round)");
+        assert_eq!(
+            manual_cell_anchor(&cells, -500),
+            -1,
+            "顶部过冲:负锚点(首段行距外推)"
+        );
+        assert_eq!(
+            manual_cell_anchor(&cells, 2500),
+            8,
+            "底部过冲:越过末 cell(末段行距外推)"
+        );
+        assert_eq!(
+            manual_cell_anchor(&[0], -1000),
+            -1,
+            "单行歌词兜底步长 1 cell/行"
+        );
     }
 
     /// 无当前歌 / 无歌词缓存 → fallback 态。
@@ -804,6 +836,65 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "全屏歌词:脱离播放手动下滚 2 行(居中在锚定行,当前行离开正中)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏沉浸 + 顶部过冲:锚点滚出内容上界(rubber-band 中帧),首行被推到中心下方、
+    /// 上方露空白;弹回由状态层驱动,渲染只画当帧锚点。
+    #[test]
+    fn lyrics_immersive_overscroll_top_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 20))?;
+        let mut state = crate::test_support::state_with_lyrics(
+            LyricExtra::Translation,
+            /*with_words*/ true,
+        )?;
+        state.debug_scroll_lyrics_to_milli(-1500);
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &state,
+                &Theme::default(),
+                super::LyricMode::Immersive,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "全屏歌词:顶部过冲帧(首行离开上界,上方露空白)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏沉浸 + 底部过冲:锚点越过末行(rubber-band 中帧),末行升到中心上方、
+    /// 下方露空白。
+    #[test]
+    fn lyrics_immersive_overscroll_bottom_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 20))?;
+        let mut state = crate::test_support::state_with_lyrics(
+            LyricExtra::Translation,
+            /*with_words*/ true,
+        )?;
+        let max_line = i64::try_from(
+            state
+                .current_lines()
+                .map_or(0, <[mineral_model::LyricLine]>::len)
+                .saturating_sub(1),
+        )
+        .unwrap_or(0);
+        state.debug_scroll_lyrics_to_milli(max_line * 1000 + 1500);
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &state,
+                &Theme::default(),
+                super::LyricMode::Immersive,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "全屏歌词:底部过冲帧(末行越过中心,下方露空白)",
             t.backend()
         );
         Ok(())

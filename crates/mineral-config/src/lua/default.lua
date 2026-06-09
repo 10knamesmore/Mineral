@@ -128,6 +128,8 @@ return {
       line_scroll_rows = 1, -- 单行档(<C-d>/<C-u>)一次滚的行数
       page_scroll_rows = 10, -- 多行档(<C-f>/<C-b>)一次滚的行数
       reattach_ms = 4000, -- 有时间戳歌手动滚走后多久空闲自动回到跟随;无时间戳歌不回
+      overshoot_damping = 1, -- 滚到头再滚,画面多滑出(超出行数 ÷ 此值)再弹回;越大弹得越轻
+      overshoot_max_permille = 6 * 1000, -- 单次过冲上限,行的千分比(x * 1000 = x 行);0 = 关闭回弹
     },
     -- 动画。时长均为毫秒(按 frame_tick_ms 折算成拍,至少一拍);0 ≈ 一帧到位。
     animation = {
