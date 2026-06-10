@@ -224,13 +224,50 @@ mineral.store.set("netease:123", "plugin.note", nil)   -- nil = 删除
 
 ### 提示 `mineral.ui.toast(msg, opts?)`
 
+单行 toast(顶栏一次性提示)。`msg` 是 `print` 式宽容:任意值经 `tostring` 显示,`nil` 静默跳过;也可传 **span 数组**得行内样式(见下「样式 span」)。
+
 ```lua
 mineral.ui.toast("hello")                                    -- 一次性堆叠
 mineral.ui.toast("音量 80", { id = "vol" })                  -- 同 id 顶替不堆叠
 mineral.ui.toast("出事了", { kind = "error", ttl_secs = 10 })
+mineral.ui.toast({ "音量 ", { "42", fg = "accent", bold = true } })  -- 行内样式
 ```
 
-`msg` 是 `print` 式宽容:任意值经 tostring;`nil` 静默跳过。
+`opts` 均可省:`kind`(`"info"` | `"warn"` | `"error"`,缺省 `info`)/ `id`(同 id 顶替不堆叠)/ `ttl_secs`(展示秒数,缺省用 `tui.toast.flash_ttl_secs`)。
+
+### 多行卡片 `mineral.ui.card(opts)`
+
+驻留通知卡片:多行 body、可带标题,用户按 `x` 关闭才退场(给了 `ttl_secs` 则到时自动退场,边框随剩余时间变暗倒计时)。同 `id` 顶替不堆叠。
+
+```lua
+mineral.ui.card {
+    title    = "更新要点",         -- 可省;字符串或 span 数组,画进卡片边框
+    kind     = "warn",            -- info|warn|error,缺省 info
+    id       = "scrobble.fail",   -- 可省;同 id 顶替
+    ttl_secs = 8,                 -- 可省;到时自动退场,缺省驻留(按 x 关)
+    body = {                      -- 必填,每项一行:
+        "纯文本行",                -- 字符串(内嵌 \n 拆成多行)
+        { "前缀 ", { "高亮", fg = "accent", bold = true } },  -- 或 span 数组(行内混排)
+    },
+}
+```
+
+`body` 必填;缺 body / 负 `ttl_secs` / 未知 `kind` / 未知 `fg` 都报 Lua 错(不静默降级)。关闭键 `x` 是默认动作 `dismiss_notice`,可在 `tui.keys` 重映射。
+
+### 样式 span(toast / card 共用)
+
+一个 span 是**字符串**(纯文本)或**表** `{ text, fg?, bold?, italic?, underline?, dim?, align? }`——`text` 写在位置 `1`:
+
+| 字段 | 取值 | 说明 |
+| ----------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `[1]` | string | span 文本(必填,位置参数) |
+| `fg` | 主题角色名或 `"#rrggbb"` | 角色:`text` / `subtext` / `overlay` / `accent` / `red` / `yellow` / `green` / `peach`(随主题联动);或 `#rrggbb` 直给固定色 |
+| `bold` / `italic` / `underline` / `dim` | boolean | 字体效果,缺省 `false` |
+| `align` | `"left"` / `"center"` / `"right"` | 整行语境的三段对齐(缺省 `left`;toast / 卡片标题等非整行语境忽略) |
+
+```lua
+{ "普通 ", { "强调", fg = "accent", bold = true }, { "靠右", align = "right" } }
+```
 
 ### UI 旋钮覆盖 `mineral.ui.override(key, value)`
 
@@ -278,10 +315,12 @@ local handle = mineral.spawn(
 host 独有的常量信息(加载时灌入,运行期不变):
 
 ```lua
+mineral.sys.name       -- "Mineral"(应用展示名;通知标题 / User-Agent / 上报拼串用)
 mineral.sys.os         -- "linux" | "macos"
 mineral.sys.arch       -- "x86_64" / "aarch64"
 mineral.sys.hostname   -- 主机名(双机共享一份 config.lua 时分叉用)
-mineral.sys.version    -- { major = 0, minor = 5, patch = 0 }(结构化,共享配置做兼容分叉)
+mineral.sys.version    -- { major, minor, patch } 结构化版本(共享配置做兼容分叉)
+mineral.sys.version:str() -- 拼回 "x.y.z" 字符串(日志 / toast 拼串用)
 
 mineral.sys.paths.config   -- ~/.config/mineral
 mineral.sys.paths.data     -- ~/.local/share/mineral(脚本自己的持久文件放这)

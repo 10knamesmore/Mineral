@@ -57,6 +57,13 @@ mineral config check   # 离线校验(语法 / 未知字段 / 类型)
 roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 ```
 
+`search_hit` 子表是搜索命中字符的高亮样式(叠加在所在列的基础样式之上):
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `color` | `"peach"` | 命中字符色:上面 14 个 token 名之一(随主题联动)或 `"#rrggbb"` 直给固定色 |
+| `modifiers` | `["bold", "underline", "italic"]` | 叠加的字体效果,数组**整体替换**;可选 `bold` / `italic` / `underline` / `dim` / `reversed` / `crossed_out`;空数组 = 仅变色 |
+
 ## tui.keys — 键位重映射
 
 方向是「**动作 → 键**」:给某动作写新键即完全替换其默认键;写空数组 `{}` 解绑。两个动作绑同一键时后写的生效(不报错,自己留意)。
@@ -89,6 +96,9 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `move_first` / `move_last` | `g` / `G` | 跳首 / 末行 |
 | `love` | `f` | 切换选中曲 ♥ |
 | `download` | `d` | 下载选中曲 / 歌单 |
+| `dismiss_notice` | `x` | 关最早一张驻留通知卡片(连按逐条关) |
+| `scroll_line_down` / `scroll_line_up` | `<C-d>` / `<C-u>` | 逐行滚:全屏态滚歌词,浏览态滚列表视口(行数见 `behavior.line_scroll_rows`) |
+| `scroll_page_down` / `scroll_page_up` | `<C-f>` / `<C-b>` | 翻页滚(行数见 `behavior.page_scroll_rows`) |
 | `script` | `{}` | 脚本动作绑定:`mineral.action` 注册名 → 键,如 `script = { ["my.skip_short"] = "X" }` |
 
 两个**硬编码键不在表内、不可重映射**(任何配置下都存在的逃生口):
@@ -104,7 +114,11 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `seek_step_secs` | 5 | 单次 seek 步长,秒 |
 | `seek_big_step_secs` | 30 | 大步 seek(Shift),秒 |
 | `list_jump_rows` | 7 | 列表大步跳行数(`J`/`K`) |
+| `scrolloff` | 3 | 光标与列表视口上下边缘保持的最小行距(nvim `scrolloff`);光标在安全区内移动时视口不动,0 = 贴边才滚 |
+| `line_scroll_rows` | 1 | 单行档滚动(`<C-d>`/`<C-u>`)一次行数,列表与全屏歌词共用 |
+| `page_scroll_rows` | 15 | 翻页档滚动(`<C-f>`/`<C-b>`)一次行数 |
 | `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 不杀(想连 daemon 一起退用 `Q`,它无视本旋钮) |
+| `remember_track_pos` | `"session"` | 歌单内光标位置记忆:`"off"` 不记 / `"session"` 本次运行内 / `"persist"` 整表落 `tui.db` 跨重启;搜索命中定位(`search.locate_on_enter`)优先于记忆位置 |
 
 ## tui.spectrum — 频谱面板
 
@@ -189,6 +203,20 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `play_count_debounce_ms` | 500 | 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API |
 | `prewarm_ahead` | 1 | 全屏稳态提前编码后几首封面,消自动切歌的占位闪 |
 
+## tui.search — 本地过滤搜索
+
+`/` 触发的本地过滤。`deep` 打开后,Playlists 视图的搜索词会穿透到歌单内歌曲(歌名 / 艺人 / 专辑),进搜索态时后台补拉未缓存歌单的曲目,命中字符按 `theme.search_hit` 高亮。改后重启 TUI 生效(`theme.search_hit` 在 `tui.theme` 段下,保存即热重载)。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `deep` | `true` | Playlists 视图搜索是否穿透到歌单内歌曲(总开关) |
+| `deep_weights.name` | 0.6 | 深度搜索歌名命中分折扣 0~1,0 = 该字段不参与匹配 |
+| `deep_weights.artist` | 0.5 | 艺人名命中分折扣(多艺人取最高,0 = 关闭) |
+| `deep_weights.album` | 0.4 | 专辑名命中分折扣(0 = 关闭) |
+| `locate_on_enter` | `true` | 深度命中行 `Enter` 进歌单后光标是否直接定位到命中歌(`false` = 仍从头看) |
+
+歌单最终分 = max(歌单名分, 歌单内最佳歌曲分);单曲分 = 各字段加权分取最高。
+
 ## tui.lyrics — 歌词面板
 
 | 字段 | 默认 | 说明 |
@@ -196,6 +224,9 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `fullscreen_line_gap` | 1 | 全屏沉浸态行间空行数;0 = 紧排但滚动变瞬跳 |
 | `compact_line_gap` | 0 | 非全屏紧凑态行间空行数 |
 | `scroll_ms` | 280 | 切行整列平移 + 高亮交叉淡入的过渡时长;超过此窗口直接吸附 |
+| `reattach_ms` | 4000 | 有时间戳歌手动滚走后空闲多久(毫秒)自动平滑回到跟随当前行;无时间戳歌不回锚 |
+| `overshoot_damping` | 1 | 沉浸滚动撞首 / 末行的 rubber-band 过冲阻尼:过冲 = 超出行数 ÷ 此值,越大弹得越轻;0 视作 1 |
+| `overshoot_max_permille` | 6000 | 单次过冲上限,行的千分比(6000 = 6 行);0 = 关闭边界回弹 |
 
 两个 `*_line_gap` 可被脚本 `mineral.ui.override` 做 session 级覆盖(见[脚本指南](./scripting.md))。
 
@@ -208,9 +239,10 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `frame_tick_ms` | 16 | 主循环帧间隔;16 ≈ 60fps,越小越流畅越费 CPU,是所有 `*_ms` 折算的分母 |
 | `transition_ms` | 288 | 启动扩大 / 退出收缩整屏转场(以光标真实位置为缩放锚点) |
 | `sweep_ms` | 288 | 侧栏 歌单↔曲目 切换扫入 |
+| `list_scroll_ms` | 280 | 列表视口滚动平移(`<C-d>` 族与 `scrolloff` 触发的滚动) |
 | `fullscreen_ms` | 288 | 全屏播放态进退场形变 |
 | `popup_anim_ms` | 288 | 浮层(队列 / 确认框)弹出收起 |
-| `toast_anim_ms` | 96 | 顶栏通知横向展开收起 |
+| `toast_anim_ms` | 288 | 顶栏通知横向展开收起 |
 | `view_sweep` | `"push"` | 侧栏切换风格:`"push"` = 新旧视图一起平移;`"cover"` = 新视图从右盖上 |
 
 ## tui.toast — 顶栏通知
