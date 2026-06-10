@@ -393,7 +393,7 @@ Config {
                     },
                 ],
             },
-            lyric_line_down: KeyBinding {
+            scroll_line_down: KeyBinding {
                 chords: [
                     KeyChord {
                         key: Char(
@@ -404,7 +404,7 @@ Config {
                     },
                 ],
             },
-            lyric_line_up: KeyBinding {
+            scroll_line_up: KeyBinding {
                 chords: [
                     KeyChord {
                         key: Char(
@@ -415,7 +415,7 @@ Config {
                     },
                 ],
             },
-            lyric_page_down: KeyBinding {
+            scroll_page_down: KeyBinding {
                 chords: [
                     KeyChord {
                         key: Char(
@@ -426,7 +426,7 @@ Config {
                     },
                 ],
             },
-            lyric_page_up: KeyBinding {
+            scroll_page_up: KeyBinding {
                 chords: [
                     KeyChord {
                         key: Char(
@@ -444,6 +444,9 @@ Config {
             seek_step_secs: 5,
             seek_big_step_secs: 30,
             list_jump_rows: 7,
+            scrolloff: 3,
+            line_scroll_rows: 1,
+            page_scroll_rows: 15,
             kill_spawned_daemon_on_exit: true,
         },
         spectrum: SpectrumConfig {
@@ -500,8 +503,6 @@ Config {
             fullscreen_line_gap: 1,
             compact_line_gap: 0,
             scroll_ms: 280,
-            line_scroll_rows: 1,
-            page_scroll_rows: 10,
             reattach_ms: 4000,
             overshoot_damping: 1,
             overshoot_max_permille: 6000,
@@ -510,6 +511,7 @@ Config {
             frame_tick_ms: 16,
             transition_ms: 288,
             sweep_ms: 288,
+            list_scroll_ms: 280,
             fullscreen_ms: 288,
             popup_anim_ms: 288,
             toast_anim_ms: 96,

@@ -11,7 +11,6 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use mineral_model::Song;
 use mineral_protocol::PlayerSync;
 use mineral_server::Client;
 use ratatui::layout::Position;
@@ -22,14 +21,16 @@ use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
-use crate::runtime::action::{Action, SeekDelta, SelectionMove, VolumeDelta};
+use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
-use crate::runtime::state::{AppState, View};
+use crate::runtime::state::AppState;
 use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
+
+mod nav;
 
 /// 应用顶层状态。
 pub struct App {
@@ -565,7 +566,7 @@ impl App {
             Action::OpenQueue => self.open_queue(),
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
-            Action::ScrollLyrics(scroll) => self.state.scroll_lyrics(scroll),
+            Action::Scroll(step) => self.scroll(step),
             Action::EnterSearch => self.enter_search(),
             Action::MoveSelection(mv) => self.move_selection(mv),
             Action::ActivateSelection => self.activate_selection(),
@@ -643,142 +644,6 @@ impl App {
     fn open_queue(&mut self) {
         let sel = self.state.queue_current_index().unwrap_or(0);
         self.overlays.push(OverlayKind::queue(sel));
-    }
-
-    /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。
-    fn enter_search(&mut self) {
-        if self.state.fullscreen {
-            return;
-        }
-        self.state.search_mode = true;
-        self.state.search_q.clear();
-    }
-
-    /// 搜索词每次变化后,把当前 view 的 sel 拉回 0。
-    fn reset_sel_for_search(&mut self) {
-        match self.state.view {
-            View::Playlists => self.state.sel_playlist = 0,
-            View::Library => self.state.sel_track = 0,
-        }
-    }
-
-    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
-    /// 命令行行为),字符追加词;改词后复位 sel。
-    fn handle_search_key(&mut self, key: &KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.state.search_mode = false;
-                self.state.search_q.clear();
-            }
-            KeyCode::Enter => {
-                self.state.search_mode = false;
-            }
-            KeyCode::Backspace => {
-                // vim 行为:query 已空时再删一次 = 退出搜索(等价 Esc)。
-                if self.state.search_q.is_empty() {
-                    self.state.search_mode = false;
-                    return;
-                }
-                self.state.search_q.pop();
-                self.reset_sel_for_search();
-                self.state.last_sel_change = Instant::now();
-            }
-            KeyCode::Char(c) => {
-                self.state.search_q.push(c);
-                self.reset_sel_for_search();
-                self.state.last_sel_change = Instant::now();
-            }
-            _ => {}
-        }
-    }
-
-    /// 列表光标移动,按当前 view 落到 `sel_playlist` / `sel_track`,越界钳首末行;
-    /// 全屏态屏蔽(屏上无列表)。
-    fn move_selection(&mut self, mv: SelectionMove) {
-        if self.state.fullscreen {
-            return;
-        }
-        self.state.last_sel_change = Instant::now();
-        let max = match self.state.view {
-            View::Playlists => self.state.filtered_playlists().len().saturating_sub(1),
-            View::Library => self.state.filtered_tracks().len().saturating_sub(1),
-        };
-        let sel = match self.state.view {
-            View::Playlists => &mut self.state.sel_playlist,
-            View::Library => &mut self.state.sel_track,
-        };
-        *sel = match mv {
-            SelectionMove::Down(n) => sel.saturating_add(n).min(max),
-            SelectionMove::Up(n) => sel.saturating_sub(n),
-            SelectionMove::First => 0,
-            SelectionMove::Last => max,
-        };
-    }
-
-    /// 在当前视图「进入」:Playlists 进选中歌单的 Library;Library 设 queue 并播放选中曲。
-    /// 全屏态屏蔽。
-    fn activate_selection(&mut self) {
-        if self.state.fullscreen {
-            return;
-        }
-        self.state.last_sel_change = Instant::now();
-        match self.state.view {
-            View::Playlists => {
-                if let Some(target_id) = self
-                    .state
-                    .filtered_playlists()
-                    .get(self.state.sel_playlist)
-                    .map(|p| p.data.id.clone())
-                {
-                    self.state.search_q.clear();
-                    if let Some(raw_idx) = self
-                        .state
-                        .playlists
-                        .iter()
-                        .position(|p| p.data.id == target_id)
-                    {
-                        self.state.sel_playlist = raw_idx;
-                    }
-                }
-                self.state.view = View::Library;
-                self.state.view_pos.enter();
-                self.state.sel_track = 0;
-            }
-            View::Library => {
-                let filtered = self.state.filtered_tracks();
-                let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone())
-                else {
-                    return;
-                };
-                let new_queue: Vec<Song> = self
-                    .state
-                    .current_tracks()
-                    .into_iter()
-                    .map(|sv| sv.data)
-                    .collect();
-                // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。
-                self.client.set_queue(new_queue, song.id.clone());
-                self.client.play_song(song);
-            }
-        }
-    }
-
-    /// 在当前视图「返回」:搜索非空先清词(选中复位),否则 Library 回 Playlists、
-    /// Playlists 无处可回即无操作。全屏态屏蔽。
-    fn back_or_clear_search(&mut self) {
-        if self.state.fullscreen {
-            return;
-        }
-        self.state.last_sel_change = Instant::now();
-        if !self.state.search_q.is_empty() {
-            self.state.search_q.clear();
-            self.reset_sel_for_search();
-            return;
-        }
-        if matches!(self.state.view, View::Library) {
-            self.state.view = View::Playlists;
-            self.state.view_pos.leave();
-        }
     }
 }
 
@@ -1181,33 +1046,6 @@ mod tests {
         Ok(())
     }
 
-    /// vim 命令行行为:`/` 进搜索,删到空仍在搜索态,空 query 上再删一次才退出。
-    #[test]
-    fn search_backspace_on_empty_query_exits() -> color_eyre::Result<()> {
-        let mut app = app_with_library(3, /*sel_track*/ 0)?;
-
-        // `/` 进入搜索输入态,query 起始为空。
-        press(&mut app, KeyCode::Char('/'));
-        assert!(app.state.search_mode, "`/` 应进入搜索态");
-        assert!(app.state.search_q.is_empty());
-
-        // 输入两个字符。
-        press(&mut app, KeyCode::Char('a'));
-        press(&mut app, KeyCode::Char('b'));
-        assert_eq!(app.state.search_q, "ab");
-
-        // 退格逐字符删;删到空时仍停在搜索态(不提前退出)。
-        press(&mut app, KeyCode::Backspace);
-        press(&mut app, KeyCode::Backspace);
-        assert!(app.state.search_q.is_empty());
-        assert!(app.state.search_mode, "删到空时仍应在搜索态");
-
-        // 空 query 上再删一次 → 退出搜索。
-        press(&mut app, KeyCode::Backspace);
-        assert!(!app.state.search_mode, "空 query 上退格应退出搜索");
-        Ok(())
-    }
-
     /// Library 视图按 `f` 乐观切换选中曲目的 ♥ 状态,不依赖真实 server。
     /// 第一次按:`loved` 从 false → true;再按一次:true → false。
     #[test]
@@ -1270,47 +1108,6 @@ mod tests {
         Ok(())
     }
 
-    /// 列表导航逐键回归:j/k/J/K/g/G 在 Library 与 Playlists 两个视图移动选中,
-    /// 大跨步长 7、越界钳到首末行。
-    #[test]
-    fn j_k_navigate_in_playlists_and_library() -> color_eyre::Result<()> {
-        // Library:10 首,从 0 起。
-        let mut app = app_with_library(10, /*sel_track*/ 0)?;
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_track, 1, "j 下移一行");
-        press(&mut app, KeyCode::Char('J'));
-        assert_eq!(app.state.sel_track, 8, "J 大跨下移 7 行");
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_track, 9, "下移越界钳到末行");
-        press(&mut app, KeyCode::Char('K'));
-        assert_eq!(app.state.sel_track, 2, "K 大跨上移 7 行");
-        press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.state.sel_track, 1, "k 上移一行");
-        press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_track, 0, "g 跳首行");
-        press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.sel_track, 9, "G 跳末行");
-
-        // Playlists:3 张歌单,同一组键作用于 sel_playlist。
-        let mut app = app_with_library(3, /*sel_track*/ 0)?;
-        app.state.view = crate::runtime::state::View::Playlists;
-        app.state.playlists = vec![
-            crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
-            crate::test_support::playlist_view("p2", "B", SourceKind::NETEASE, 1),
-            crate::test_support::playlist_view("p3", "C", SourceKind::NETEASE, 1),
-        ];
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_playlist, 1, "j 下移一行");
-        press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.sel_playlist, 2, "G 跳末行");
-        press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.state.sel_playlist, 1, "k 上移一行");
-        press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_playlist, 0, "g 跳首行");
-        Ok(())
-    }
-
     /// 音量 / seek 逐键回归:`+`/`=`/`-`/`_` 走本地乐观值(±5 钳 0..=100);
     /// `←`/`→`/`Shift+←`/`Shift+→` 只发 server 命令,本地 position 无回显。
     #[test]
@@ -1341,31 +1138,6 @@ mod tests {
         assert_eq!(
             app.state.playback.position_ms, 60_000,
             "seek 无本地回显(等 snapshot)"
-        );
-        Ok(())
-    }
-
-    /// Playlists 视图 `l` 进 Library;Library 视图 Enter 触发 set_queue+play
-    /// (TestClient no-op,断 view 流转与不 panic)。
-    #[test]
-    fn l_enters_library_enter_plays() -> color_eyre::Result<()> {
-        let mut app = app_with_library(3, /*sel_track*/ 2)?;
-        app.state.view = crate::runtime::state::View::Playlists;
-        app.state.sel_playlist = 0;
-
-        press(&mut app, KeyCode::Char('l'));
-        assert_eq!(
-            app.state.view,
-            crate::runtime::state::View::Library,
-            "l 应进 Library"
-        );
-        assert_eq!(app.state.sel_track, 0, "进 Library 选中复位到首行");
-
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(
-            app.state.view,
-            crate::runtime::state::View::Library,
-            "Enter 播放不切视图"
         );
         Ok(())
     }
@@ -1408,24 +1180,6 @@ mod tests {
         press(&mut app, KeyCode::Char('z'));
         assert!(!app.state.fullscreen, "再按 z 退全屏");
         assert!(app.state.fullscreen_pos.leaving(), "退场:形变目标归零");
-        Ok(())
-    }
-
-    /// 全屏态屏蔽列表导航 + 搜索 `/`;
-    #[test]
-    fn fullscreen_blocks_nav_and_search() -> color_eyre::Result<()> {
-        let mut app = app_with_library(5, /*sel_track*/ 2)?;
-        press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen);
-
-        // j / g 导航被吞,选中不变。
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_track, 2, "全屏屏蔽列表导航");
-
-        // `/` 不进搜索态。
-        press(&mut app, KeyCode::Char('/'));
-        assert!(!app.state.search_mode, "全屏屏蔽搜索 `/`");
         Ok(())
     }
 

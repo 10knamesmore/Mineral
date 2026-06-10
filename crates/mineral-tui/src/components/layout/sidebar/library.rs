@@ -120,8 +120,22 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         )
         .highlight_symbol("▌ ");
 
-    let mut table_state = TableState::default();
-    table_state.select(Some(state.sel_track));
+    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
+    let viewport = usize::from(area.height.saturating_sub(3));
+    let offset = state.scroll_track.render_offset(
+        state.sel_track,
+        tracks.len(),
+        viewport,
+        state.scrolloff(),
+        state.list_glide_ticks(),
+    );
+    let mut table_state = TableState::default()
+        .with_offset(offset)
+        .with_selected(Some(crate::runtime::scroll::pin_cursor(
+            state.sel_track,
+            offset,
+            viewport,
+        )));
     StatefulWidget::render(table, area, buf, &mut table_state);
 }
 
@@ -232,7 +246,104 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::render::theme::Theme;
-    use crate::runtime::state::View;
+    use crate::runtime::state::{AppState, View};
+
+    /// 用本视图渲染入口画一帧(`60×12` ⇒ body 视口 = 12 - 边框 2 - 表头 1 = 9 行)。
+    fn draw_lib(t: &mut Terminal<TestBackend>, state: &AppState) -> color_eyre::Result<()> {
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, state, &Theme::default());
+        })?;
+        Ok(())
+    }
+
+    /// 取 buffer 第 `y` 行拼成字符串(首个 body 行在 y=2:边框 0 + 表头 1 之后)。
+    fn row(t: &Terminal<TestBackend>, y: u16) -> String {
+        let buf = t.backend().buffer();
+        (0..buf.area.width)
+            .filter_map(|x| buf.cell((x, y)).map(ratatui::buffer::Cell::symbol))
+            .collect()
+    }
+
+    /// nvim 手感回归:G 滚到底后向上走,光标在 scrolloff 安全区内时视口纹丝不动
+    /// (修掉「光标钉死视口底边、列表粘着光标滚」的旧行为);越过安全边界才上滚。
+    #[test]
+    fn library_bottom_then_up_keeps_viewport() -> color_eyre::Result<()> {
+        let mut app = crate::test_support::app_with_long_library(30, /*sel_track*/ 29)?;
+        let mut t = Terminal::new(TestBackend::new(60, 12))?;
+        // 收敛到底:offset = len - 视口 = 21(glide 默认 ≈18 拍,放足 40 帧)。
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        let bottom_first = row(&t, 2);
+        // 安全区 [offset+3, offset+9-1-3] = [24, 26]:逐行上移视口不滚。
+        for sel in (24..=28).rev() {
+            app.state.sel_track = sel;
+            draw_lib(&mut t, &app.state)?;
+            assert_eq!(
+                row(&t, 2),
+                bottom_first,
+                "sel={sel} 在安全区内,视口不应滚动"
+            );
+        }
+        // 越过上安全边界:视口开始上滚,首行变化。
+        app.state.sel_track = 23;
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        assert_ne!(row(&t, 2), bottom_first, "越过安全边界视口应上滚");
+        Ok(())
+    }
+
+    /// `G`/`gg` 首末行大跳的视口平移也走缓动:跳转后的首帧停在中间位置
+    /// (既非起点也非终点),多帧后才收敛——证明大跳不是瞬跳。
+    #[test]
+    fn library_jump_first_last_animates() -> color_eyre::Result<()> {
+        let mut app = crate::test_support::app_with_long_library(30, /*sel_track*/ 0)?;
+        let mut t = Terminal::new(TestBackend::new(60, 12))?;
+        draw_lib(&mut t, &app.state)?;
+        let top_first = row(&t, 2);
+
+        // G 跳末行:首帧视口应离开顶部但未到底(缓动中段)。
+        app.state.sel_track = 29;
+        draw_lib(&mut t, &app.state)?;
+        let mid = row(&t, 2);
+        assert_ne!(mid, top_first, "G 跳转首帧视口应已起步");
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        let bottom_first = row(&t, 2);
+        assert_ne!(mid, bottom_first, "G 跳转首帧不应一步到底(应是缓动中段)");
+
+        // gg 跳回首行:同样多帧缓动收敛回顶。
+        app.state.sel_track = 0;
+        draw_lib(&mut t, &app.state)?;
+        let mid_back = row(&t, 2);
+        assert_ne!(mid_back, bottom_first, "gg 跳转首帧视口应已起步");
+        assert_ne!(mid_back, top_first, "gg 跳转首帧不应一步到顶");
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        assert_eq!(row(&t, 2), top_first, "gg 多帧后收敛回顶");
+        Ok(())
+    }
+
+    /// scrolloff 边距:从顶下移越过安全区后,选中行稳定停在距视口底 `scrolloff`(3)行处。
+    #[test]
+    fn library_scrolloff_margin_at_bottom_edge() -> color_eyre::Result<()> {
+        let mut app = crate::test_support::app_with_long_library(30, /*sel_track*/ 0)?;
+        let mut t = Terminal::new(TestBackend::new(60, 12))?;
+        draw_lib(&mut t, &app.state)?;
+        // 下移到 10:offset 收敛到 10+3+1-9 = 5,选中行落在 y = 2 + (10-5) = 7,
+        // 距 body 末行(y=10)恰 3 行。
+        app.state.sel_track = 10;
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        let sel_row = (2..=10_u16).find(|&y| row(&t, y).contains('▌'));
+        assert_eq!(sel_row, Some(7), "选中行应停在距视口底 scrolloff 行处");
+        Ok(())
+    }
 
     /// 已选歌单 + 3 首曲目(CJK 歌名 / 收藏 / 当前在播标记)。
     #[test]

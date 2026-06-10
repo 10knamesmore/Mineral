@@ -18,12 +18,6 @@ pub struct LyricsConfig {
     /// 当前行切换后整列平移 + 高亮交叉淡入的过渡时长(毫秒)。
     scroll_ms: u64,
 
-    /// 单行档手动滚动一次移动的行数(`<C-d>` / `<C-u>`)。不依赖终端实际高度。
-    line_scroll_rows: usize,
-
-    /// 多行档手动滚动一次移动的行数(`<C-f>` / `<C-b>`)。
-    page_scroll_rows: usize,
-
     /// 有时间戳歌手动滚走后,空闲多久(毫秒)自动平滑回到跟随当前行。无时间戳歌不回锚。
     reattach_ms: u32,
 

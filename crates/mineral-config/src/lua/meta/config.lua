@@ -108,10 +108,10 @@
 ---@field move_last? mineral.KeyBinding 跳末行
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥
 ---@field download? mineral.KeyBinding 下载选中曲 / 歌单
----@field lyric_line_down? mineral.KeyBinding 全屏歌词逐行下滚(行数见 lyrics.line_scroll_rows)
----@field lyric_line_up? mineral.KeyBinding 全屏歌词逐行上滚(行数见 lyrics.line_scroll_rows)
----@field lyric_page_down? mineral.KeyBinding 全屏歌词翻页下滚(行数见 lyrics.page_scroll_rows)
----@field lyric_page_up? mineral.KeyBinding 全屏歌词翻页上滚(行数见 lyrics.page_scroll_rows)
+---@field scroll_line_down? mineral.KeyBinding 逐行下滚:全屏滚歌词,浏览态滚列表视口(行数见 behavior.line_scroll_rows)
+---@field scroll_line_up? mineral.KeyBinding 逐行上滚(行数见 behavior.line_scroll_rows)
+---@field scroll_page_down? mineral.KeyBinding 翻页下滚(行数见 behavior.page_scroll_rows)
+---@field scroll_page_up? mineral.KeyBinding 翻页上滚(行数见 behavior.page_scroll_rows)
 ---@field script? table<string, mineral.KeyBinding> 脚本动作绑定:mineral.action 注册名 → 键
 
 ---交互手感旋钮。
@@ -120,6 +120,9 @@
 ---@field seek_step_secs? integer 单次 seek 步长,秒;≥1
 ---@field seek_big_step_secs? integer 大步 seek 步长,秒
 ---@field list_jump_rows? integer 列表大步跳行的行数;≥1
+---@field scrolloff? integer 光标与列表视口上下边缘的最小行距(nvim 'scrolloff');0 = 贴边才滚,≥半视口时光标近似居中
+---@field line_scroll_rows? integer 单行档滚动(<C-d>/<C-u>)一次滚的行数,≥1;列表与全屏歌词共用
+---@field page_scroll_rows? integer 翻页档滚动(<C-f>/<C-b>)一次滚的行数,≥1
 ---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
 
 ---频谱面板。条高单位是 1/8 字符格,满高 64(8 行 × 8)。所有时长旋钮均为毫秒,
@@ -185,8 +188,6 @@
 ---@field fullscreen_line_gap? integer 全屏沉浸态行与行之间垫的空行数,≥0;0 = 紧排但滚动变瞬跳
 ---@field compact_line_gap? integer 非全屏紧凑态行与行之间垫的空行数,≥0
 ---@field scroll_ms? integer 切行时整列平移 + 高亮淡入的过渡时长,毫秒;超过此窗口直接吸附
----@field line_scroll_rows? integer 单行档(<C-d>/<C-u>)一次滚的行数,≥1
----@field page_scroll_rows? integer 多行档(<C-f>/<C-b>)一次滚的行数,≥1
 ---@field reattach_ms? integer 有时间戳歌手动滚走后空闲多久(毫秒)自动回到跟随;无时间戳歌不回
 ---@field overshoot_damping? integer 滚到头再滚时画面多滑出一点再弹回;滑出距离 = 超出行数 ÷ 此值,越大弹得越轻
 ---@field overshoot_max_permille? integer 单次过冲上限,行的千分比(1500 = 1.5 行);0 = 关闭回弹
@@ -197,6 +198,7 @@
 ---@field frame_tick_ms? integer 主循环帧间隔,毫秒;16 ≈ 60fps,越小越流畅越费 CPU
 ---@field transition_ms? integer 启动扩大 / 退出收缩整屏转场的毫秒数
 ---@field sweep_ms? integer 侧栏 歌单↔曲目 切换扫入的毫秒数
+---@field list_scroll_ms? integer 列表视口滚动平移的毫秒数(<C-d> 族与 scrolloff 触发的滚动)
 ---@field fullscreen_ms? integer 全屏播放态进退场形变的毫秒数
 ---@field popup_anim_ms? integer 浮层(队列 / 确认框)弹出收起的毫秒数
 ---@field toast_anim_ms? integer 顶栏通知横向展开收起的毫秒数

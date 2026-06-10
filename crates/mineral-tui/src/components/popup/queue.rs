@@ -14,6 +14,8 @@ use crate::components::popup::component::{
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::playback::format_ms;
+use crate::runtime::scroll;
+use crate::runtime::scroll::ListScroll;
 use crate::runtime::state::AppState;
 
 /// 浮动 queue 浮层。
@@ -23,12 +25,18 @@ use crate::runtime::state::AppState;
 pub(crate) struct QueueOverlay {
     /// 光标选中行下标(UI-local)。
     sel: usize,
+
+    /// 队列表格的视口滚动态(nvim 手感 + 缓动平移)。
+    scroll: ListScroll,
 }
 
 impl QueueOverlay {
     /// 新建:光标定位到 `sel`(打开浮层时通常传在播歌下标)。
     pub(crate) fn new(sel: usize) -> Self {
-        Self { sel }
+        let scroll = ListScroll::new();
+        // 视口直接落在光标附近(渲染端按 scrolloff 钳),不从队首长程滑过来。
+        scroll.snap_to(sel);
+        Self { sel, scroll }
     }
 
     /// 把光标钳到 `[0, len-1]`(队列变短后防越界);空队列归 0。
@@ -103,8 +111,18 @@ impl Overlay for QueueOverlay {
             )
             .highlight_symbol("▌ ");
 
-        let mut state = TableState::default();
-        state.select(Some(self.sel));
+        // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
+        let viewport = usize::from(inner.height.saturating_sub(1));
+        let offset = self.scroll.render_offset(
+            self.sel,
+            ctx.queue.len(),
+            viewport,
+            ctx.scrolloff(),
+            ctx.list_glide_ticks(),
+        );
+        let mut state = TableState::default()
+            .with_offset(offset)
+            .with_selected(Some(scroll::pin_cursor(self.sel, offset, viewport)));
         frame.render_stateful_widget(table, inner, &mut state);
     }
 
@@ -123,6 +141,18 @@ impl Overlay for QueueOverlay {
                     SelectionMove::Up(n) => self.sel.saturating_sub(n),
                     SelectionMove::First => 0,
                     SelectionMove::Last => max,
+                };
+                Some(OverlayResponse::Consumed)
+            }
+            // `<C-d>` 族:视口目标与光标同移 n 行(vim 语义),边界由渲染端统一钳。
+            Action::Scroll(step) => {
+                let delta = scroll::step_delta(step, ctx.cfg.tui().behavior());
+                let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
+                self.scroll.nudge(delta, ctx.list_glide_ticks());
+                self.sel = if delta > 0 {
+                    self.sel.saturating_add(rows).min(max)
+                } else {
+                    self.sel.saturating_sub(rows)
                 };
                 Some(OverlayResponse::Consumed)
             }
@@ -377,6 +407,32 @@ mod tests {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
         })?;
         crate::test_support::assert_snap!("队列浮层:全屏布局停靠右半(避开左侧封面)", t.backend());
+        Ok(())
+    }
+
+    /// `<C-d>` 族滚动动作:翻页档移 `page_scroll_rows`、单行档移 `line_scroll_rows`
+    /// (步长随默认配置算,调默认值不该改这条测试),越界钳首末行,均被 `Consumed`。
+    #[test]
+    fn scroll_action_pages_queue_cursor() -> color_eyre::Result<()> {
+        use crate::runtime::action::ScrollStep;
+        // EndSerenading fixture 只有 10 首,翻页步长不止 10 行,队列要更长。
+        let mut ctx = AppState::test_default()?;
+        ctx.queue = (0..100)
+            .map(|i| mineral_test::song(&format!("q{i}")))
+            .collect();
+        let page = *ctx.cfg.tui().behavior().page_scroll_rows();
+        let line = *ctx.cfg.tui().behavior().line_scroll_rows();
+        let mut o = QueueOverlay::new(0);
+        assert!(matches!(
+            o.on_action(Action::Scroll(ScrollStep::PageDown), &ctx),
+            Some(OverlayResponse::Consumed)
+        ));
+        assert_eq!(o.cursor(), page, "翻页档下移 page_scroll_rows");
+        o.on_action(Action::Scroll(ScrollStep::LineDown), &ctx);
+        assert_eq!(o.cursor(), page + line, "单行档下移 line_scroll_rows");
+        o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
+        o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
+        assert_eq!(o.cursor(), 0, "上滚越界钳到首行");
         Ok(())
     }
 

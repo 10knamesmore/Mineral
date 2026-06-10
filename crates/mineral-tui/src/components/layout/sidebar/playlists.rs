@@ -72,8 +72,22 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         )
         .highlight_symbol("▌ ");
 
-    let mut table_state = TableState::default();
-    table_state.select(Some(state.sel_playlist));
+    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
+    let viewport = usize::from(area.height.saturating_sub(3));
+    let offset = state.scroll_playlist.render_offset(
+        state.sel_playlist,
+        total,
+        viewport,
+        state.scrolloff(),
+        state.list_glide_ticks(),
+    );
+    let mut table_state = TableState::default()
+        .with_offset(offset)
+        .with_selected(Some(crate::runtime::scroll::pin_cursor(
+            state.sel_playlist,
+            offset,
+            viewport,
+        )));
     StatefulWidget::render(table, area, buf, &mut table_state);
 }
 

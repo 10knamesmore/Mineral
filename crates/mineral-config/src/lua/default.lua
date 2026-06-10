@@ -51,10 +51,10 @@ return {
       move_last = "G",
       love = "f",
       download = "d",
-      lyric_line_down = "<C-d>",
-      lyric_line_up = "<C-u>",
-      lyric_page_down = "<C-f>",
-      lyric_page_up = "<C-b>",
+      scroll_line_down = "<C-d>",
+      scroll_line_up = "<C-u>",
+      scroll_page_down = "<C-f>",
+      scroll_page_up = "<C-b>",
       -- 脚本动作绑定:`mineral.action` 注册名 → 键(默认无)。
       -- 例:script = { ["my.skip_short"] = "X" }
       script = {},
@@ -64,6 +64,9 @@ return {
       seek_step_secs = 5, -- 单次 seek 步长,秒
       seek_big_step_secs = 30, -- 大步 seek(Shift),秒
       list_jump_rows = 7, -- 列表大步跳行数(J/K)
+      scrolloff = 3, -- 光标与列表视口上下边缘的最小行距(nvim 'scrolloff');0 = 贴边才滚
+      line_scroll_rows = 1, -- 单行档滚动(<C-d>/<C-u>)一次滚的行数;列表与全屏歌词共用
+      page_scroll_rows = 15, -- 翻页档滚动(<C-f>/<C-b>)一次滚的行数
       kill_spawned_daemon_on_exit = true, -- 退出 TUI 连带关掉自己拉起的 daemon;false = 续命后台播放
     },
     -- 频谱面板。时长旋钮均为毫秒,按 animation.frame_tick_ms 折算成拍,与帧率解耦。
@@ -125,8 +128,6 @@ return {
       fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳
       compact_line_gap = 0, -- 非全屏紧凑态歌词行间空行数
       scroll_ms = 280, -- 切行整列平移 + 高亮淡入的过渡时长
-      line_scroll_rows = 1, -- 单行档(<C-d>/<C-u>)一次滚的行数
-      page_scroll_rows = 10, -- 多行档(<C-f>/<C-b>)一次滚的行数
       reattach_ms = 4000, -- 有时间戳歌手动滚走后多久空闲自动回到跟随;无时间戳歌不回
       overshoot_damping = 1, -- 滚到头再滚,画面多滑出(超出行数 ÷ 此值)再弹回;越大弹得越轻
       overshoot_max_permille = 6 * 1000, -- 单次过冲上限,行的千分比(x * 1000 = x 行);0 = 关闭回弹
@@ -136,6 +137,7 @@ return {
       frame_tick_ms = 16, -- 主循环帧间隔;16 ≈ 60fps,越小越流畅越费 CPU,是所有 *_ms 折算的分母
       transition_ms = 288, -- 启动扩大 / 退出收缩整屏转场
       sweep_ms = 288, -- 侧栏 歌单↔曲目 切换扫入
+      list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
       fullscreen_ms = 288, -- 全屏进退场形变
       popup_anim_ms = 288, -- 浮层(队列 / 确认框)弹出收起
       toast_anim_ms = 96, -- 顶栏通知横向展开收起

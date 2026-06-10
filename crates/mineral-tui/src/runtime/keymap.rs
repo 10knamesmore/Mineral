@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mineral_config::keys::{Key, KeyChord};
 use rustc_hash::FxHashMap;
 
-use super::action::{Action, LyricScroll, ScriptSlot, SeekDelta, SelectionMove, VolumeDelta};
+use super::action::{Action, ScriptSlot, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
 
 /// 把一个 crossterm 按键事件归一到 [`KeyChord`]:只保留 SHIFT / CONTROL 修饰
 /// (其余视为终端噪声丢弃),字符键的 SHIFT 由 [`KeyChord`] 的构造不变量吸收。
@@ -119,21 +119,15 @@ impl Keymap {
             (keys.love(), Action::ToggleLoveSelection),
             (keys.download(), Action::DownloadSelection),
             (
-                keys.lyric_line_down(),
-                Action::ScrollLyrics(LyricScroll::LineDown),
+                keys.scroll_line_down(),
+                Action::Scroll(ScrollStep::LineDown),
             ),
+            (keys.scroll_line_up(), Action::Scroll(ScrollStep::LineUp)),
             (
-                keys.lyric_line_up(),
-                Action::ScrollLyrics(LyricScroll::LineUp),
+                keys.scroll_page_down(),
+                Action::Scroll(ScrollStep::PageDown),
             ),
-            (
-                keys.lyric_page_down(),
-                Action::ScrollLyrics(LyricScroll::PageDown),
-            ),
-            (
-                keys.lyric_page_up(),
-                Action::ScrollLyrics(LyricScroll::PageUp),
-            ),
+            (keys.scroll_page_up(), Action::Scroll(ScrollStep::PageUp)),
         ];
         for (name, binding) in script_bindings {
             pairs.push((
@@ -220,7 +214,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use mineral_config::keys::KeyChord;
 
-    use super::super::action::{Action, LyricScroll, SeekDelta, SelectionMove, VolumeDelta};
+    use super::super::action::{Action, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
     use super::{Keymap, chord_from_event};
 
     /// 默认表的全部预期绑定(键字符串 → 动作),与重构前 `app.rs` 散落 match 逐键对齐。
@@ -263,10 +257,10 @@ mod tests {
             ("f", Action::ToggleLoveSelection),
             ("d", Action::DownloadSelection),
             // ---- 全屏歌词手动滚动:单行档 = nvim halfpage 键,多行档 = fullpage 键 ----
-            ("<C-d>", Action::ScrollLyrics(LyricScroll::LineDown)),
-            ("<C-u>", Action::ScrollLyrics(LyricScroll::LineUp)),
-            ("<C-f>", Action::ScrollLyrics(LyricScroll::PageDown)),
-            ("<C-b>", Action::ScrollLyrics(LyricScroll::PageUp)),
+            ("<C-d>", Action::Scroll(ScrollStep::LineDown)),
+            ("<C-u>", Action::Scroll(ScrollStep::LineUp)),
+            ("<C-f>", Action::Scroll(ScrollStep::PageDown)),
+            ("<C-b>", Action::Scroll(ScrollStep::PageUp)),
         ]
     }
 

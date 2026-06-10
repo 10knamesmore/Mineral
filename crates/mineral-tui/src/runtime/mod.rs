@@ -11,6 +11,7 @@ pub mod playback;
 pub mod prefetch;
 pub(crate) mod reload;
 pub mod remote;
+pub(crate) mod scroll;
 pub mod signal;
 pub mod state;
 pub mod ui_override;

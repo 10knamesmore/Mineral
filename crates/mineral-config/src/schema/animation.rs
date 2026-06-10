@@ -21,6 +21,9 @@ pub struct AnimationConfig {
     /// 侧栏曲目扫入动画时长(毫秒)。
     sweep_ms: u32,
 
+    /// 列表视口滚动平移时长(毫秒)。
+    list_scroll_ms: u32,
+
     /// 全屏进退动画时长(毫秒)。
     fullscreen_ms: u32,
 

@@ -324,6 +324,27 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     Ok(app)
 }
 
+/// 同 [`app_with_library`],但填 `len` 首程序化生成的可区分曲目——EndSerenading
+/// fixture 只有 10 首,超过一屏的滚动类测试用这个。
+pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
+    let mut app = app_with_library(/*len*/ 0, /*sel_track*/ 0)?;
+    let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    let views = (0..len)
+        .map(|i| {
+            let mut s = mineral_test::song(&format!("t{i}"));
+            s.name = format!("Track {i:02}");
+            SongView {
+                data: s,
+                loved: false,
+                plays: None,
+            }
+        })
+        .collect::<Vec<SongView>>();
+    app.state.tracks_cache.insert(pid, views);
+    app.state.sel_track = sel_track;
+    Ok(app)
+}
+
 /// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
 /// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
 pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {

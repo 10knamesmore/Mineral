@@ -1,6 +1,7 @@
 //! TUI 交互手感段(挂在 `TuiConfig` 下,经 `cfg.tui().behavior()` 取)。
 //!
-//! const 审计补录的交互旋钮:音量/seek 步长、列表大步跳行、自拉起 daemon 的退出续命。
+//! const 审计补录的交互旋钮:音量/seek 步长、列表大步跳行、滚动步长与边距、
+//! 自拉起 daemon 的退出续命。
 //! 命令名 + 这些步长参数组装成可执行动作是 client 接线的事;本段只承载强类型值。
 
 use serde::Deserialize;
@@ -23,6 +24,15 @@ pub struct BehaviorConfig {
 
     /// 列表大步跳行的行数。
     list_jump_rows: u16,
+
+    /// 光标与列表视口上下边缘保持的最小行距(nvim `scrolloff`;`0` = 贴边才滚)。
+    scrolloff: u16,
+
+    /// 单行档滚动(`<C-d>` / `<C-u>`)一次移动的行数。列表与全屏歌词共用。
+    line_scroll_rows: usize,
+
+    /// 翻页档滚动(`<C-f>` / `<C-b>`)一次移动的行数。
+    page_scroll_rows: usize,
 
     /// TUI 退出时是否杀掉自己拉起的 daemon;`false` = 自拉起的 daemon 续命。
     kill_spawned_daemon_on_exit: bool,

@@ -29,9 +29,9 @@ pub enum Action {
     /// 循环歌词副语言(原文 → 翻译 → 罗马音)。
     CycleLyricExtra,
 
-    /// 全屏歌词手动滚动(逐行 / 翻页档行数见 `lyrics.line_scroll_rows` / `page_scroll_rows`);
-    /// 仅全屏态生效。
-    ScrollLyrics(LyricScroll),
+    /// 滚动(逐行 / 翻页档行数见 `behavior.line_scroll_rows` / `page_scroll_rows`),
+    /// 按上下文路由:全屏滚歌词,浏览态滚列表视口(光标与视口同移),queue 浮层滚队列。
+    Scroll(ScrollStep),
 
     /// 进入搜索输入态(全屏态屏蔽)。
     EnterSearch,
@@ -91,10 +91,10 @@ pub enum SelectionMove {
     Last,
 }
 
-/// 歌词手动滚动的方向 + 档位。每档行数在执行点从 `lyrics` 配置取(逐行档 `line_scroll_rows`、
+/// 滚动的方向 + 档位。每档行数在执行点从 `behavior` 配置取(逐行档 `line_scroll_rows`、
 /// 翻页档 `page_scroll_rows`),不内嵌枚举。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LyricScroll {
+pub enum ScrollStep {
     /// 逐行上滚。
     LineUp,
 

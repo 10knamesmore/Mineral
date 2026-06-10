@@ -2,7 +2,7 @@
 //! synced 歌空闲超时回锚。
 
 use crate::render::anim::{Transition, ticks16_from_ms};
-use crate::runtime::action::LyricScroll;
+use crate::runtime::action::ScrollStep;
 
 use super::AppState;
 
@@ -73,7 +73,7 @@ impl AppState {
     ///
     /// # Params:
     ///   - `scroll`: 方向 + 档位
-    pub(crate) fn scroll_lyrics(&mut self, scroll: LyricScroll) {
+    pub(crate) fn scroll_lyrics(&mut self, scroll: ScrollStep) {
         if !self.fullscreen {
             return;
         }
@@ -84,13 +84,14 @@ impl AppState {
             return;
         };
         let lyrics = self.cfg.tui().lyrics();
-        let line = i64::try_from(*lyrics.line_scroll_rows()).unwrap_or(0);
-        let page = i64::try_from(*lyrics.page_scroll_rows()).unwrap_or(0);
+        let behavior = self.cfg.tui().behavior();
+        let line = i64::try_from(*behavior.line_scroll_rows()).unwrap_or(0);
+        let page = i64::try_from(*behavior.page_scroll_rows()).unwrap_or(0);
         let delta = match scroll {
-            LyricScroll::LineDown => line,
-            LyricScroll::LineUp => -line,
-            LyricScroll::PageDown => page,
-            LyricScroll::PageUp => -page,
+            ScrollStep::LineDown => line,
+            ScrollStep::LineUp => -line,
+            ScrollStep::PageDown => page,
+            ScrollStep::PageUp => -page,
         };
         // 基准:已脱离则用现有目标行,否则用播放当前行(脱离瞬间锚在眼前)。
         let base = match &self.lyric_scroll {
@@ -246,7 +247,7 @@ mod tests {
     use mineral_model::{LyricLine, Lyrics};
     use mineral_test::{feiyu_song, qianzai_song};
 
-    use crate::runtime::action::LyricScroll;
+    use crate::runtime::action::ScrollStep;
     use crate::runtime::state::AppState;
 
     use super::LyricGlide;
@@ -296,18 +297,23 @@ mod tests {
         s.lyric_scroll.as_ref().map(|g| g.to_milli)
     }
 
+    /// 步长随默认配置算(`behavior.page_scroll_rows` / `line_scroll_rows` 是手感旋钮,
+    /// 调默认值不该改这条测试);前提:一页步长不超过 20 行 fixture 的末行。
     #[test]
     fn scroll_lyrics_gated_on_fullscreen() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let line = i64::try_from(*s.cfg.tui().behavior().line_scroll_rows())?;
+        assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
         s.fullscreen = false;
-        s.scroll_lyrics(LyricScroll::PageDown);
+        s.scroll_lyrics(ScrollStep::PageDown);
         assert!(s.lyric_scroll.is_none(), "非全屏不接管滚动");
         s.fullscreen = true;
-        // position 0 → 当前播放行 0;翻页 = page_scroll_rows(10) → 锚定行 10。
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10), "全屏翻页锚定行 = 0 + 10");
-        s.scroll_lyrics(LyricScroll::LineUp);
-        assert_eq!(target(&s), Some(9), "逐行上滚 = line_scroll_rows(1)");
+        // position 0 → 当前播放行 0;翻页锚定到 0 + page。
+        s.scroll_lyrics(ScrollStep::PageDown);
+        assert_eq!(target(&s), Some(page), "全屏翻页锚定行 = 0 + page");
+        s.scroll_lyrics(ScrollStep::LineUp);
+        assert_eq!(target(&s), Some(page - line), "逐行上滚 = line_scroll_rows");
         Ok(())
     }
 
@@ -315,32 +321,35 @@ mod tests {
     fn scroll_lyrics_clamps_to_content() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
         for _ in 0..5 {
-            s.scroll_lyrics(LyricScroll::PageDown);
+            s.scroll_lyrics(ScrollStep::PageDown);
         }
         assert_eq!(target(&s), Some(19), "累加钳到末行(20 行 → 行号 19)");
         Ok(())
     }
 
-    /// 期望值随默认配置算(damping / 上限是手感旋钮,调默认值不该改这条测试)。
+    /// 期望值随默认配置算(damping / 上限 / 翻页步长是手感旋钮,调默认值不该改这条测试)。
     #[test]
     fn boundary_press_overshoots_with_damping() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
         let damping = i64::from(*s.cfg.tui().lyrics().overshoot_damping()).max(1);
         let cap = i64::from(*s.cfg.tui().lyrics().overshoot_max_permille());
-        s.scroll_lyrics(LyricScroll::PageDown); // 0 → 10,界内无过冲
-        assert_eq!(to_milli(&s), Some(10_000), "界内滚动无过冲");
-        s.scroll_lyrics(LyricScroll::PageDown); // raw 20 → clamp 19,超出 1 行
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        assert!(page <= 19 && page * 2 > 19, "前提:一页在界内、两页撞底");
+        s.scroll_lyrics(ScrollStep::PageDown); // 0 → page,界内无过冲
+        assert_eq!(to_milli(&s), Some(page * 1000), "界内滚动无过冲");
+        s.scroll_lyrics(ScrollStep::PageDown); // raw 2*page → clamp 19
         assert_eq!(target(&s), Some(19), "锚定行仍钳在末行");
+        let over_first = page * 2 - 19;
         assert_eq!(
             to_milli(&s),
-            Some(19_000 + (1000 / damping).min(cap)),
-            "超出 1 行 → 过冲 = 1000/damping(不超上限)"
+            Some(19_000 + (over_first * 1000 / damping).min(cap)),
+            "超出 {over_first} 行 → 过冲 = 超出量/damping(不超上限)"
         );
-        s.scroll_lyrics(LyricScroll::PageDown); // 已在末行,整页 10 行全是超出量
+        s.scroll_lyrics(ScrollStep::PageDown); // 已在末行,整页全是超出量
         assert_eq!(
             to_milli(&s),
-            Some(19_000 + (10_000 / damping).min(cap)),
-            "超出 10 行 → 过冲 = 10000/damping(不超上限),比逐行撞墙弹得远"
+            Some(19_000 + (page * 1000 / damping).min(cap)),
+            "超出整页 → 过冲更大(不超上限),比逐行撞墙弹得远"
         );
         Ok(())
     }
@@ -350,7 +359,7 @@ mod tests {
         let mut s = fullscreen_with(timed_lines())?;
         let damping = i64::from(*s.cfg.tui().lyrics().overshoot_damping()).max(1);
         let cap = i64::from(*s.cfg.tui().lyrics().overshoot_max_permille());
-        s.scroll_lyrics(LyricScroll::LineUp); // 行 0 再上滚:超出 -1 行
+        s.scroll_lyrics(ScrollStep::LineUp); // 行 0 再上滚:超出 -1 行
         assert_eq!(target(&s), Some(0), "锚定行钳在首行");
         assert_eq!(
             to_milli(&s),
@@ -375,7 +384,7 @@ mod tests {
         let (cfg, warnings) = loaded?;
         assert!(warnings.is_empty(), "覆盖配置应干净落型: {warnings:?}");
         let mut s = fullscreen_with_cfg(AppState::new(std::sync::Arc::new(cfg)), timed_lines())?;
-        s.scroll_lyrics(LyricScroll::LineUp); // 行 0 再上滚:阻尼后 333 → 夹到 100
+        s.scroll_lyrics(ScrollStep::LineUp); // 行 0 再上滚:阻尼后 333 → 夹到 100
         assert_eq!(to_milli(&s), Some(-100), "过冲被配置上限夹住");
         Ok(())
     }
@@ -385,8 +394,8 @@ mod tests {
         // 无时间戳歌隔离回锚路径:settle 后若仍停在过冲点说明没弹回。
         let mut s = fullscreen_with(untimed_lines())?;
         s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        s.scroll_lyrics(LyricScroll::PageDown); // 撞底过冲
+        s.scroll_lyrics(ScrollStep::PageDown);
+        s.scroll_lyrics(ScrollStep::PageDown); // 撞底过冲
         for _ in 0..200 {
             s.tick_lyric_scroll();
         }
@@ -403,7 +412,7 @@ mod tests {
     fn synced_overshoot_still_reattaches() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
         s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::LineUp); // 顶部过冲
+        s.scroll_lyrics(ScrollStep::LineUp); // 顶部过冲
         for _ in 0..3000 {
             s.tick_lyric_scroll();
         }
@@ -414,9 +423,10 @@ mod tests {
     #[test]
     fn synced_reattaches_after_timeout() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         s.tick_lyric_scroll(); // 先注册当前歌
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10), "脱离锚定行 10");
+        s.scroll_lyrics(ScrollStep::PageDown);
+        assert_eq!(target(&s), Some(page), "脱离锚定行 = 一页步长");
         for _ in 0..3000 {
             s.tick_lyric_scroll();
         }
@@ -430,21 +440,23 @@ mod tests {
     #[test]
     fn unsynced_never_reattaches() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(untimed_lines())?;
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
+        s.scroll_lyrics(ScrollStep::PageDown);
         for _ in 0..3000 {
             s.tick_lyric_scroll();
         }
-        assert_eq!(target(&s), Some(10), "无时间戳歌停在手动锚定行 10 不回锚");
+        assert_eq!(target(&s), Some(page), "无时间戳歌停在手动锚定行不回锚");
         Ok(())
     }
 
     #[test]
     fn song_change_resets_scroll() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(untimed_lines())?;
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10));
+        s.scroll_lyrics(ScrollStep::PageDown);
+        assert_eq!(target(&s), Some(page));
         s.playback.track = Some(feiyu_song());
         s.tick_lyric_scroll();
         assert!(s.lyric_scroll.is_none(), "换歌清脱离态");
@@ -455,15 +467,16 @@ mod tests {
     fn manual_scroll_does_not_drift_with_playback() -> color_eyre::Result<()> {
         // detach 后推进播放位置 + tick,锚点目标行不应被播放推动(完全独立)。
         let mut s = fullscreen_with(timed_lines())?;
+        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
-        s.scroll_lyrics(LyricScroll::PageDown);
-        assert_eq!(target(&s), Some(10));
+        s.scroll_lyrics(ScrollStep::PageDown);
+        assert_eq!(target(&s), Some(page));
         // 播放推进到第 5 行附近,但仍在 reattach 超时窗口内。
         for step in 1..50u64 {
             s.playback.position_ms = step * 1000;
             s.tick_lyric_scroll();
         }
-        assert_eq!(target(&s), Some(10), "脱离态锚点不随播放漂移");
+        assert_eq!(target(&s), Some(page), "脱离态锚点不随播放漂移");
         Ok(())
     }
 }

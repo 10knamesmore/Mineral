@@ -7,10 +7,10 @@ expression: "lines.join(\"\\n\")"
 - → NudgeVolume(VolumeDelta(-5))
 / → EnterSearch
 <BS> → BackOrClearSearch
-<C-b> → ScrollLyrics(PageUp)
-<C-d> → ScrollLyrics(LineDown)
-<C-f> → ScrollLyrics(PageDown)
-<C-u> → ScrollLyrics(LineUp)
+<C-b> → Scroll(PageUp)
+<C-d> → Scroll(LineDown)
+<C-f> → Scroll(PageDown)
+<C-u> → Scroll(LineUp)
 <CR> → ActivateSelection
 <Down> → MoveSelection(Down(1))
 <Esc> → BackOrClearSearch

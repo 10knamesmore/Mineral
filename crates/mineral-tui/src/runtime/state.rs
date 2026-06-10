@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use image::DynamicImage;
-use mineral_model::{MediaUrl, PlayUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use ratatui_image::protocol::StatefulProtocol;
@@ -20,6 +20,7 @@ use crate::render::palette::CoverPalette;
 use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
+use crate::runtime::scroll::ListScroll;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
@@ -84,7 +85,6 @@ mod lyric_glide;
 use lyric_glide::LyricGlide;
 
 /// 应用顶层状态。
-#[allow(dead_code)] // reason: side_scroll / lib_scroll 在阶段 7 搜索过滤时会被读取
 pub struct AppState {
     /// 左栏当前视图。切换时立即设为目标值,供按键路由;渲染端的过渡位置看 [`Self::view_pos`]。
     pub view: View,
@@ -131,14 +131,14 @@ pub struct AppState {
     /// Playlists 视图当前选中行。
     pub sel_playlist: usize,
 
-    /// Playlists 视图垂直滚动偏移。
-    pub side_scroll: usize,
+    /// Playlists 列表的视口滚动态(nvim 手感 + 缓动平移)。
+    pub scroll_playlist: ListScroll,
 
     /// Library 视图当前选中行。
     pub sel_track: usize,
 
-    /// Library 视图垂直滚动偏移。
-    pub lib_scroll: usize,
+    /// Library 列表的视口滚动态。
+    pub scroll_track: ListScroll,
 
     /// 搜索关键字。
     pub search_q: String,
@@ -164,10 +164,6 @@ pub struct AppState {
 
     /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
     pub search_mode: bool,
-
-    /// 预拉的下一首 PlayUrl(auto-next prefetch)。曲终瞬间命中就免去 SongUrl 等待。
-    /// 不命中(用户切到别的歌 / 模式变了)就丢。`PlayUrl.song_id` 自带,不再额外打元组。
-    pub prefetched: Option<PlayUrl>,
 
     /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
     /// 非 Shuffle 状态恒为 `None`。
@@ -265,9 +261,9 @@ impl AppState {
             lyric_scroll_song: None,
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             sel_playlist: 0,
-            side_scroll: 0,
+            scroll_playlist: ListScroll::new(),
             sel_track: 0,
-            lib_scroll: 0,
+            scroll_track: ListScroll::new(),
             search_q: String::new(),
             current: None,
             playback: Playback::new(),
@@ -276,7 +272,6 @@ impl AppState {
             queue: Vec::new(),
             versions: mineral_protocol::PlayerVersions::default(),
             search_mode: false,
-            prefetched: None,
             original_queue: None,
             cover_cache: FxHashMap::default(),
             cover_palettes: FxHashMap::default(),
@@ -313,6 +308,17 @@ impl AppState {
     pub fn is_scrolling(&self) -> bool {
         self.last_sel_change.elapsed()
             < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
+    }
+
+    /// 光标与列表视口上下边缘的最小行距(配置 `behavior.scrolloff`)。
+    pub(crate) fn scrolloff(&self) -> usize {
+        usize::from(*self.cfg.tui().behavior().scrolloff())
+    }
+
+    /// 列表视口滚动平移的缓动拍数(配置 `animation.list_scroll_ms` 折算)。
+    pub(crate) fn list_glide_ticks(&self) -> u16 {
+        let anim = self.cfg.tui().animation();
+        ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms())
     }
 
     /// 给定一首歌,根据当前 `liked_ids` / 未来其他 user-data 装饰成 SongView。
