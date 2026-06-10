@@ -1,0 +1,57 @@
+name: aur-publish
+
+# 手动兜底:为一个**已经发布的 tag** 单独把包推到 AUR。
+#
+# 正常发版用 release.yml —— 它已含 AUR 步骤(release + AUR 一条龙)。本工作流只在主路
+# 覆盖不到时用:
+#   - 某版发布时 aur-publish job 还没进默认分支(如 0.5.1,其 release run 里压根没这个 job);
+#   - 想给某个旧 tag 重推 / 补发。
+# 注:若是 release.yml 里 aur-publish 这一步**失败**(job 存在但跑挂了),优先去那次 run
+# 点 "Re-run failed jobs" 单独重跑该 job,不必用本工作流。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "已发布的版本号 x.y.z(不含 v;须已有对应 tag vX.Y.Z)"
+        required: true
+        type: string
+
+# 只读仓库;推 AUR 走 SSH key,不需要 GitHub 写权限。
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-publish
+  cancel-in-progress: false
+
+jobs:
+  aur-publish:
+    name: aur-publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: validate version format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号应为 x.y.z"; exit 1; }
+
+      - name: checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: render PKGBUILD
+        env:
+          VERSION: ${{ inputs.version }}
+        run: sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+
+      - name: publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        with:
+          pkgname: mineral
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
+          test: false
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_username: wanger
+          commit_email: 310779211wym@gmail.com
+          commit_message: "update to ${{ inputs.version }}"
