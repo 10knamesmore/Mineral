@@ -122,13 +122,19 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
     let viewport = usize::from(area.height.saturating_sub(3));
-    let offset = state.scroll_track.render_offset(
-        state.sel_track,
-        tracks.len(),
-        viewport,
-        state.scrolloff(),
-        state.list_glide_ticks(),
-    );
+    // 全屏 morph 中面板 rect 是插值瞬态:只读展示,收缩中的 viewport 不得改写
+    // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
+    let offset = if state.fullscreen_pos.at_min() {
+        state.scroll_track.render_offset(
+            state.sel_track,
+            tracks.len(),
+            viewport,
+            state.scrolloff(),
+            state.list_glide_ticks(),
+        )
+    } else {
+        state.scroll_track.frozen_offset(tracks.len(), viewport)
+    };
     let mut table_state = TableState::default()
         .with_offset(offset)
         .with_selected(Some(crate::runtime::scroll::pin_cursor(
@@ -299,6 +305,49 @@ mod tests {
             draw_lib(&mut t, &app.state)?;
         }
         assert_ne!(row(&t, 2), bottom_first, "越过安全边界视口应上滚");
+        Ok(())
+    }
+
+    /// 全屏 morph 回归:形变中面板以插值瞬态 rect 渲染,期间滚动目标不得被
+    /// 收缩中的 viewport 改写——回浏览态后视口首行与进全屏前一致(选中行屏上
+    /// 位置不变、无平移)。
+    #[test]
+    fn fullscreen_morph_keeps_scroll_target() -> color_eyre::Result<()> {
+        use crate::render::anim::Transition;
+
+        let mut app = crate::test_support::app_with_long_library(60, /*sel_track*/ 40)?;
+        let mut t = Terminal::new(TestBackend::new(60, 24))?;
+        for _ in 0..40 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        let before = app.state.scroll_track.target_rows();
+        assert!(before > 0, "前置:视口已滚到深处");
+
+        // 进入 morph(fullscreen_pos 离开 at_min),面板高度逐帧收缩地渲染。
+        let mut fs = Transition::new(8);
+        fs.enter();
+        fs.tick();
+        app.state.fullscreen_pos = fs;
+        for h in (2..20_u16).rev() {
+            let mut small = Terminal::new(TestBackend::new(60, h))?;
+            draw_lib(&mut small, &app.state)?;
+        }
+        assert_eq!(
+            app.state.scroll_track.target_rows(),
+            before,
+            "morph 期间滚动目标不得被瞬态 viewport 改写"
+        );
+
+        // 回浏览态:渲染收敛后仍在原 offset(无重定目标 = 无平移)。
+        app.state.fullscreen_pos = Transition::new(8);
+        for _ in 0..10 {
+            draw_lib(&mut t, &app.state)?;
+        }
+        assert_eq!(
+            app.state.scroll_track.target_rows(),
+            before,
+            "回浏览态视口首行应与进全屏前一致"
+        );
         Ok(())
     }
 

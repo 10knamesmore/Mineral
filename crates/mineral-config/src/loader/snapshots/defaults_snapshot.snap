@@ -460,6 +460,7 @@ Config {
             line_scroll_rows: 1,
             page_scroll_rows: 15,
             kill_spawned_daemon_on_exit: true,
+            remember_track_pos: Session,
         },
         spectrum: SpectrumConfig {
             fft_size: 4096,

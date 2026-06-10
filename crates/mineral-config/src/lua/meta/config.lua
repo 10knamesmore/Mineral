@@ -131,6 +131,7 @@
 ---@field line_scroll_rows? integer 单行档滚动(<C-d>/<C-u>)一次滚的行数,≥1;列表与全屏歌词共用
 ---@field page_scroll_rows? integer 翻页档滚动(<C-f>/<C-b>)一次滚的行数,≥1
 ---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
+---@field remember_track_pos? "off"|"session"|"persist" 歌单内光标位置记忆:off 不记;session 本次运行内记住;persist 落盘跨重启保留。搜索命中定位(search.locate_on_enter)优先于记忆位置
 
 ---频谱面板。条高单位是 1/8 字符格,满高 64(8 行 × 8)。所有时长旋钮均为毫秒,
 ---运行时按 animation.frame_tick_ms 折算,与帧率解耦。条高动态是效果器 ADSR 模型:

@@ -90,6 +90,11 @@ struct Glide {
 
     /// 缓动进度(`expanding`:0 起步推满)。
     glide: Transition,
+
+    /// `snap_to` 后的首帧标记:snap 目标可能越界(viewport 只有渲染端知道),
+    /// 首帧的 clamp 修正也直接落位不走缓动——「不该有滚动感」的场合连边界修正
+    /// 都不该有滚动感。
+    snap_pending: bool,
 }
 
 impl Glide {
@@ -122,6 +127,7 @@ impl ListScroll {
                 from_milli: 0,
                 to_milli: 0,
                 glide: Transition::expanding(1),
+                snap_pending: false,
             }),
         }
     }
@@ -151,11 +157,18 @@ impl ListScroll {
         let target = usize::try_from(g.to_milli / 1000).unwrap_or(0);
         let new_target = clamp_offset(target, sel, len, viewport, scrolloff);
         if new_target != target {
-            g.retarget(milli(new_target), glide_ticks);
-            // 新平移当帧就推进一拍:光标行是瞬时移动的,视口同帧起步才不显拖沓,
-            // 且 glide_ticks 拍后恰好到位(否则整段平移多占一帧)。
-            g.glide.tick();
+            if g.snap_pending {
+                // snap 的边界修正同样瞬时落位(见 `Glide::snap_pending`)。
+                g.from_milli = milli(new_target);
+                g.to_milli = g.from_milli;
+            } else {
+                g.retarget(milli(new_target), glide_ticks);
+                // 新平移当帧就推进一拍:光标行是瞬时移动的,视口同帧起步才不显拖沓,
+                // 且 glide_ticks 拍后恰好到位(否则整段平移多占一帧)。
+                g.glide.tick();
+            }
         }
+        g.snap_pending = false;
         // 平移途中的位置可能停留在旧的(已失效的)offset 区间,统一钳回当前上界。
         let pos = usize::try_from((g.pos_milli().max(0) + 500) / 1000).unwrap_or(0);
         pos.min(len.saturating_sub(viewport))
@@ -174,9 +187,11 @@ impl ListScroll {
             .max(0)
             .saturating_mul(1000);
         g.retarget(target, glide_ticks);
+        g.snap_pending = false;
     }
 
     /// 无动画立刻落位(视图切换重置等「不该有滚动感」的场合)。
+    /// 下一帧渲染的边界修正(目标越界时)同样瞬时,不引入平移。
     ///
     /// # Params:
     ///   - `rows`: 目标视口首行
@@ -184,6 +199,30 @@ impl ListScroll {
         let mut g = self.glide.borrow_mut();
         g.from_milli = milli(rows);
         g.to_milli = g.from_milli;
+        g.snap_pending = true;
+    }
+
+    /// 只读展示 offset:不推进动画、不改目标,仅把当前位置钳进本帧边界。
+    /// 全屏 morph 等**瞬态几何**期间渲染用——收缩中的 viewport 拿去跑
+    /// [`Self::render_offset`] 会把跨帧持久的滚动目标永久改写(clamp 满足约束即
+    /// 幂等,回到常规几何后不会自己滚回来),表现为「回来后选中行换了屏上位置
+    /// 还带一段平移」。
+    ///
+    /// # Params:
+    ///   - `len`: 列表总行数
+    ///   - `viewport`: 本帧视口行数
+    ///
+    /// # Return:
+    ///   本帧视口首行。
+    pub(crate) fn frozen_offset(&self, len: usize, viewport: usize) -> usize {
+        let g = self.glide.borrow();
+        let pos = usize::try_from((g.pos_milli().max(0) + 500) / 1000).unwrap_or(0);
+        pos.min(len.saturating_sub(viewport))
+    }
+
+    /// 当前滚动目标(视口首行)。位置记忆记录「光标的屏上相对行」时读取。
+    pub(crate) fn target_rows(&self) -> usize {
+        usize::try_from(self.glide.borrow().to_milli / 1000).unwrap_or(0)
     }
 }
 
@@ -384,6 +423,51 @@ mod tests {
         s.nudge(50, 2);
         s.snap_to(0);
         assert_eq!(s.render_offset(0, 100, 10, 3, 2), 0, "snap 后立刻在顶");
+    }
+
+    /// snap 目标越界(下界方向:光标在 snap 视口的下方)时,首帧 clamp 修正
+    /// 同样瞬时落位——位置恢复进场不该出现一段莫名平移(终端变矮后恢复必触发)。
+    #[test]
+    fn snap_then_clamp_corrects_instantly() {
+        let s = ListScroll::new();
+        s.snap_to(0);
+        // sel=50 不在 [0, 9] 视口内 → clamp 修正到 50+3+1-10=44;须首帧到位。
+        assert_eq!(s.render_offset(50, 100, 10, 3, 8), 44, "首帧瞬时落位");
+        assert_eq!(s.render_offset(50, 100, 10, 3, 8), 44, "之后稳定");
+    }
+
+    /// snap 后用户先滚动(nudge)再渲染:snap 的瞬时落位标记失效,正常走缓动。
+    #[test]
+    fn nudge_after_snap_restores_glide() {
+        let s = ListScroll::new();
+        s.snap_to(0);
+        s.nudge(40, 8);
+        let first = s.render_offset(43, 100, 10, 3, 8);
+        assert!(first < 40, "nudge 应缓动而非瞬跳: {first}");
+    }
+
+    /// 冻结展示:不推动画、不改目标——全屏 morph 的瞬态小 viewport 不得把
+    /// 跨帧持久的滚动目标改写掉(改写后回常规几何不会自己滚回来)。
+    #[test]
+    fn frozen_offset_does_not_mutate_target() {
+        let s = ListScroll::new();
+        for _ in 0..8 {
+            s.render_offset(
+                /*sel*/ 50, /*len*/ 100, /*viewport*/ 30, /*scrolloff*/ 3, 2,
+            );
+        }
+        assert_eq!(s.target_rows(), 24, "前置:收敛到 50+3+1-30");
+        // morph:viewport 逐帧收缩的只读展示。
+        for vp in (1..20).rev() {
+            let off = s.frozen_offset(100, vp);
+            assert!(off <= 100 - vp, "展示值钳进本帧边界");
+        }
+        assert_eq!(s.target_rows(), 24, "冻结路径不得改目标");
+        assert_eq!(
+            s.render_offset(50, 100, 30, 3, 2),
+            24,
+            "回到常规几何无重定目标、无平移"
+        );
     }
 
     /// 列表缩短(搜索过滤)后,残留的深 offset 被渲染端钳回新上界。

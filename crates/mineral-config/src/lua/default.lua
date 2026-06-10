@@ -72,6 +72,7 @@ return {
       line_scroll_rows = 1, -- 单行档滚动(<C-d>/<C-u>)一次滚的行数;列表与全屏歌词共用
       page_scroll_rows = 15, -- 翻页档滚动(<C-f>/<C-b>)一次滚的行数
       kill_spawned_daemon_on_exit = true, -- 退出 TUI 连带关掉自己拉起的 daemon;false = 续命后台播放
+      remember_track_pos = "session", -- 歌单内光标位置记忆:"off" 不记 | "session" 本次运行内 | "persist" 跨重启落盘
     },
     -- 频谱面板。时长旋钮均为毫秒,按 animation.frame_tick_ms 折算成拍,与帧率解耦。
     -- 条高动态 = 效果器 ADSR 包络:attack 起音 / decay 衰减(余韵) / release 释音,

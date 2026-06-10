@@ -8,9 +8,13 @@ use std::sync::Arc;
 use mineral_persist::ClientStore;
 
 use crate::runtime::state::LyricExtra;
+use crate::runtime::track_pos::{self, TrackPosMap};
 
 /// 歌词副轨档的偏好键(`ui_prefs` 表)。
 const LYRIC_EXTRA_KEY: &str = "lyric_extra";
+
+/// 歌单内光标位置记忆表的偏好键(`ui_prefs` 表,值为整表 JSON)。
+const TRACK_POS_KEY: &str = "track_positions";
 
 /// UI 偏好句柄:启动读一次初值,运行时改动 fire-and-forget 落盘。
 pub struct UiPrefs {
@@ -19,6 +23,9 @@ pub struct UiPrefs {
 
     /// 启动时读回的歌词副轨档(禁用 / 读失败 / 脏值 = 默认原文档)。
     initial_lyric_extra: LyricExtra,
+
+    /// 启动时读回的歌单内光标位置记忆表(禁用 / 读失败 / 脏 JSON = 空表)。
+    initial_track_pos: TrackPosMap,
 }
 
 impl UiPrefs {
@@ -31,6 +38,7 @@ impl UiPrefs {
     ///   就绪句柄(读失败不冒泡,对应偏好落默认值)。
     pub async fn load(store: Option<Arc<ClientStore>>) -> Self {
         let mut initial = LyricExtra::default();
+        let mut initial_track_pos = TrackPosMap::default();
         if let Some(s) = &store {
             match s.get_pref(LYRIC_EXTRA_KEY).await {
                 Ok(Some(v)) => match LyricExtra::from_name(&v) {
@@ -44,10 +52,23 @@ impl UiPrefs {
                     mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "读歌词副轨档偏好失败,用默认");
                 }
             }
+            match s.get_pref(TRACK_POS_KEY).await {
+                Ok(Some(raw)) => match track_pos::decode(&raw) {
+                    Ok(map) => initial_track_pos = map,
+                    Err(e) => {
+                        mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "歌单位置记忆表无法解析,用空表");
+                    }
+                },
+                Ok(None) => {}
+                Err(e) => {
+                    mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "读歌单位置记忆表失败,用空表");
+                }
+            }
         }
         Self {
             store,
             initial_lyric_extra: initial,
+            initial_track_pos,
         }
     }
 
@@ -58,12 +79,18 @@ impl UiPrefs {
         Self {
             store: None,
             initial_lyric_extra: LyricExtra::default(),
+            initial_track_pos: TrackPosMap::default(),
         }
     }
 
     /// 启动时读回的歌词副轨档初值。
     pub fn initial_lyric_extra(&self) -> LyricExtra {
         self.initial_lyric_extra
+    }
+
+    /// 启动时读回的歌单内光标位置记忆表初值。
+    pub fn initial_track_pos(&self) -> &TrackPosMap {
+        &self.initial_track_pos
     }
 
     /// 把歌词副轨档落盘(fire-and-forget,失败仅 warn)。
@@ -81,6 +108,33 @@ impl UiPrefs {
         handle.spawn(async move {
             if let Err(e) = store.set_pref(LYRIC_EXTRA_KEY, extra.name()).await {
                 mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "歌词副轨档落盘失败");
+            }
+        });
+    }
+
+    /// 把歌单内光标位置记忆表整表落盘(fire-and-forget,失败仅 warn)。
+    ///
+    /// 表规模 ~ 歌单数(几十条),整写无压力;在 tokio runtime 外调用静默跳过,
+    /// 与 [`Self::save_lyric_extra`] 同策略。
+    ///
+    /// # Params:
+    ///   - `map`: 当前内存表
+    pub fn save_track_positions(&self, map: &TrackPosMap) {
+        let Some(store) = &self.store else { return };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let raw = match track_pos::encode(map) {
+            Ok(raw) => raw,
+            Err(e) => {
+                mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "歌单位置记忆表序列化失败,放弃本次落盘");
+                return;
+            }
+        };
+        let store = Arc::clone(store);
+        handle.spawn(async move {
+            if let Err(e) = store.set_pref(TRACK_POS_KEY, &raw).await {
+                mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "歌单位置记忆表落盘失败");
             }
         });
     }
@@ -159,6 +213,48 @@ mod tests {
         );
 
         assert_eq!(UiPrefs::disabled().initial_lyric_extra(), LyricExtra::None);
+        Ok(())
+    }
+
+    /// `save_track_positions` fire-and-forget 落盘后,新一轮 `load` 读回同一张表;
+    /// 落库脏 JSON 时降级空表。
+    #[tokio::test]
+    async fn track_positions_round_trip_and_dirty_fallback() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        use crate::runtime::track_pos::{TrackPos, TrackPosMap};
+
+        let dir = tempfile::tempdir()?;
+        let store = Arc::new(ClientStore::open(&dir.path().join("tui.db")).await?);
+        let prefs = UiPrefs::load(Some(Arc::clone(&store))).await;
+        assert!(prefs.initial_track_pos().is_empty(), "未写过应为空表");
+
+        let mut map = TrackPosMap::default();
+        map.insert(
+            PlaylistId::new(SourceKind::NETEASE, "p1"),
+            TrackPos {
+                song_id: mineral_test::song("甲").id,
+                index: 7,
+                screen_row: 0,
+            },
+        );
+        prefs.save_track_positions(&map);
+        // fire-and-forget 的 spawn 需要让出执行;轮询直到写入可见。
+        let mut seen = None;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+            seen = store.get_pref(super::TRACK_POS_KEY).await?;
+            if seen.is_some() {
+                break;
+            }
+        }
+        assert!(seen.is_some(), "整表 JSON 应已落库");
+        let reloaded = UiPrefs::load(Some(Arc::clone(&store))).await;
+        assert_eq!(reloaded.initial_track_pos(), &map);
+
+        store.set_pref(super::TRACK_POS_KEY, "not json").await?;
+        let dirty = UiPrefs::load(Some(store)).await;
+        assert!(dirty.initial_track_pos().is_empty(), "脏 JSON 应降级空表");
         Ok(())
     }
 

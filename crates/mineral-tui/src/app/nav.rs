@@ -12,6 +12,7 @@ use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use crate::runtime::action::{ScrollStep, SelectionMove};
 use crate::runtime::scroll;
 use crate::runtime::state::View;
+use crate::runtime::track_pos::{PendingRestore, TrackPos};
 
 use super::App;
 
@@ -155,7 +156,11 @@ impl App {
         self.state.last_sel_change = Instant::now();
         match self.state.view {
             View::Playlists => {
+                // 上一次进歌单挂的延迟恢复(曲目未到就退出来了)就此作废。
+                self.state.pending_track_restore = None;
                 let mut sel_track = 0usize;
+                // 记忆恢复时的屏上相对行;None = 默认落位(光标上方留 scrolloff)。
+                let mut screen_anchor: Option<usize> = None;
                 if let Some(target_id) = self
                     .state
                     .filtered_playlists()
@@ -177,24 +182,41 @@ impl App {
                     {
                         self.state.sel_playlist = raw_idx;
                     }
-                    if let Some(song_id) = locate
-                        && let Some(idx) = self
-                            .state
+                    if let Some(idx) = locate.and_then(|song_id| {
+                        self.state
                             .tracks_cache
                             .get(&target_id)
                             .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
-                    {
+                    }) {
                         sel_track = idx;
+                    } else if self.state.track_memory().enabled()
+                        && let Some(pos) = self.state.track_pos.get(&target_id).cloned()
+                    {
+                        // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),
+                        // 走到这里说明无命中。曲目还没拉到时挂 pending,
+                        // 等 `PlaylistTracksFetched` 补落位。
+                        if let Some(tracks) = self.state.tracks_cache.get(&target_id) {
+                            sel_track = pos.resolve(tracks);
+                            // 恢复屏上相对位置:该行回到离开时的视口行,
+                            // 而非统一顶到 scrolloff 位。
+                            screen_anchor = Some(pos.screen_row);
+                        } else {
+                            self.state.pending_track_restore = Some(PendingRestore {
+                                playlist: target_id.clone(),
+                                pos,
+                            });
+                        }
                     }
                 }
                 self.state.view = View::Library;
                 self.state.view_pos.enter();
                 self.state.sel_track = sel_track;
-                // 视口直接落位(命中歌上方留 scrolloff;无命中即从头看),
-                // 不从上张歌单的深处滑回来。
+                // 视口直接落位(记忆按屏上相对行还原;命中歌上方留 scrolloff;
+                // 无命中即从头看),不从上张歌单的深处滑回来。
+                let anchor = screen_anchor.unwrap_or_else(|| self.state.scrolloff());
                 self.state
                     .scroll_track
-                    .snap_to(sel_track.saturating_sub(self.state.scrolloff()));
+                    .snap_to(sel_track.saturating_sub(anchor));
             }
             View::Library => {
                 let filtered = self.state.filtered_tracks();
@@ -228,8 +250,55 @@ impl App {
             return;
         }
         if matches!(self.state.view, View::Library) {
+            self.remember_track_pos();
+            self.state.pending_track_restore = None;
             self.state.view = View::Playlists;
             self.state.view_pos.leave();
+        }
+    }
+
+    /// 把 Library 当前光标记入位置记忆表(`behavior.remember_track_pos` 非 off);
+    /// persist 档随手把整表 fire-and-forget 落盘。
+    ///
+    /// 曲目未就绪 / 空歌单时不记,**保留旧记忆**——进了还没加载完的歌单就退出来,
+    /// 不该把上次的有效位置抹成空。搜索过滤态下 `sel_track` 指向 filtered 列表,
+    /// 记忆统一锚定到 raw 下标(恢复时无过滤)。
+    pub(super) fn remember_track_pos(&mut self) {
+        if !self.state.track_memory().enabled() || self.state.view != View::Library {
+            return;
+        }
+        let Some(pid) = self.state.selected_playlist().map(|p| p.data.id.clone()) else {
+            return;
+        };
+        let Some(song_id) = self
+            .state
+            .filtered_tracks()
+            .get(self.state.sel_track)
+            .map(|sv| sv.data.id.clone())
+        else {
+            return;
+        };
+        let index = self
+            .state
+            .current_tracks()
+            .iter()
+            .position(|sv| sv.data.id == song_id)
+            .unwrap_or(self.state.sel_track);
+        // 屏上相对行:光标减当前滚动目标(渲染端维护的视口首行)。
+        let screen_row = self
+            .state
+            .sel_track
+            .saturating_sub(self.state.scroll_track.target_rows());
+        self.state.track_pos.insert(
+            pid,
+            TrackPos {
+                song_id,
+                index,
+                screen_row,
+            },
+        );
+        if self.state.track_memory().persists() {
+            self.ui_prefs.save_track_positions(&self.state.track_pos);
         }
     }
 }
@@ -530,6 +599,184 @@ mod tests {
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
         assert!(tasks.is_empty(), "deep 关闭时不应提交补拉");
+        Ok(())
+    }
+
+    /// 位置记忆(默认 session 档):进歌单移动光标后退出再进,光标恢复原位
+    /// (而非复位第 0 行),视口 snap 不残留动画。
+    #[test]
+    fn reenter_restores_remembered_position() -> color_eyre::Result<()> {
+        let mut app = app_with_library(10, /*sel_track*/ 0)?;
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_eq!(app.state.sel_track, 3, "前置:光标已下移");
+
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Playlists,
+            "h 退回 Playlists"
+        );
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.state.sel_track, 3, "再进同一歌单应恢复原位");
+        Ok(())
+    }
+
+    /// 相对位置记忆(端到端,经真实渲染):离开时光标在屏上第 N 行,再进恢复后
+    /// 仍在第 N 行——而非统一顶到 scrolloff 位。
+    #[test]
+    fn reenter_restores_screen_relative_position() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::test_support::app_with_long_library(100, /*sel_track*/ 0)?;
+        // fixture 只设了 view 标志;sidebar 按 view_pos 端点选画哪个视图,推到 Library 端。
+        app.state.view_pos.enter();
+        for _ in 0..40 {
+            app.state.view_pos.tick();
+        }
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        app.state.sel_track = 50;
+        // 渲染若干帧让视口收敛(光标深处 → offset > 0,光标落在视口下安全边界)。
+        for _ in 0..40 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        let off = app.state.scroll_track.target_rows();
+        assert!(off > 0 && off <= 50, "前置:视口已滚到深处: {off}");
+        let row_before = 50_usize.saturating_sub(off);
+
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('l'));
+        for _ in 0..5 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        assert_eq!(app.state.sel_track, 50, "光标恢复原行");
+        let row_after = 50_usize.saturating_sub(app.state.scroll_track.target_rows());
+        assert_eq!(row_after, row_before, "屏上相对行应与离开时一致");
+        Ok(())
+    }
+
+    /// 旋钮关闭:`remember_track_pos = "off"` 时退出再进恒回第 0 行。
+    #[test]
+    fn remember_off_returns_to_top() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            "return { tui = { behavior = { remember_track_pos = \"off\" } } }",
+        )?;
+        let mut app = app_with_library(10, /*sel_track*/ 0)?;
+        app.reload_config_from(&path);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.state.sel_track, 0, "off 档不记不恢复");
+        Ok(())
+    }
+
+    /// 双锚恢复:记忆锚定 song_id,歌单头部删一首后再进,光标仍指向同一首歌
+    /// (下标顺移),而不是停在过时的旧下标上。
+    #[test]
+    fn memory_anchors_by_song_id_across_mutation() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+
+        let mut app = app_with_library(10, /*sel_track*/ 0)?;
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        press(&mut app, KeyCode::Char('h'));
+
+        // 歌单第 0 首被删(模拟远端歌单变动后重新拉取)。
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(tracks) = app.state.tracks_cache.get_mut(&pid)
+            && !tracks.is_empty()
+        {
+            tracks.remove(0);
+        }
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.state.sel_track, 4, "同一首歌删行后顺移到 4");
+        Ok(())
+    }
+
+    /// 优先级:深度搜索命中定位压过记忆位置——记忆说在第 0 行,命中歌在第 2 行,
+    /// 进歌单应落在命中歌上。
+    #[test]
+    fn deep_hit_beats_remembered_position() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+
+        use crate::runtime::track_pos::TrackPos;
+        use crate::runtime::view_model::SongView;
+        use crate::test_support::{song, with_name};
+
+        let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
+        let views = ["甲", "乙", "春日影"]
+            .into_iter()
+            .map(|n| SongView {
+                data: with_name(song(n), n),
+                loved: false,
+                plays: None,
+            })
+            .collect::<Vec<SongView>>();
+        app.state.tracks_cache.insert(pid.clone(), views);
+        app.state.tracks_generation = 1;
+        app.state.track_pos.insert(
+            pid,
+            TrackPos {
+                song_id: song("甲").id,
+                index: 0,
+                screen_row: 0,
+            },
+        );
+
+        press(&mut app, KeyCode::Char('/'));
+        for c in "春日影".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state.sel_track, 2, "深度命中应压过记忆位置");
+        Ok(())
+    }
+
+    /// 曲目未就绪:进还没拉到曲目的歌单,先挂 pending(光标暂落 0),
+    /// 不直接用过时下标硬恢复。
+    #[test]
+    fn enter_uncached_playlist_parks_pending_restore() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+
+        use crate::runtime::track_pos::TrackPos;
+        use crate::test_support::song;
+
+        let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        app.state.track_pos.insert(
+            pid.clone(),
+            TrackPos {
+                song_id: song("丙").id,
+                index: 2,
+                screen_row: 0,
+            },
+        );
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.state.sel_track, 0, "曲目未到先停第 0 行");
+        assert!(
+            app.state
+                .pending_track_restore
+                .as_ref()
+                .is_some_and(|p| p.playlist == pid),
+            "应挂起该歌单的 pending 恢复"
+        );
+
+        // 退出再进别处之前,pending 不应泄漏到后续进入。
+        press(&mut app, KeyCode::Char('h'));
+        assert!(
+            app.state.pending_track_restore.is_none(),
+            "退出 Library 应作废 pending"
+        );
         Ok(())
     }
 

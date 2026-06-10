@@ -15,6 +15,7 @@ pub mod remote;
 pub(crate) mod scroll;
 pub mod signal;
 pub mod state;
+pub mod track_pos;
 pub mod ui_override;
 pub mod ui_prefs;
 pub mod view_model;

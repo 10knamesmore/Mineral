@@ -36,4 +36,34 @@ pub struct BehaviorConfig {
 
     /// TUI 退出时是否杀掉自己拉起的 daemon;`false` = 自拉起的 daemon 续命。
     kill_spawned_daemon_on_exit: bool,
+
+    /// 歌单内光标位置记忆档:退出曲目列表时记住位置,下次进入恢复。
+    remember_track_pos: TrackPosMemory,
+}
+
+/// 歌单内光标位置记忆的生效档位。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum TrackPosMemory {
+    /// 不记不恢复,每次进歌单回到第 0 行。
+    Off,
+
+    /// 只在本次运行内记忆,关掉 TUI 即忘。
+    Session,
+
+    /// 记忆并落盘,跨重启保留。
+    Persist,
+}
+
+impl TrackPosMemory {
+    /// 是否启用记忆(`Session` / `Persist`)。
+    pub fn enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// 是否要落盘(仅 `Persist`)。
+    pub fn persists(self) -> bool {
+        matches!(self, Self::Persist)
+    }
 }

@@ -21,7 +21,7 @@ mod toast;
 
 pub use animation::{AnimationConfig, SweepStyle};
 pub use audio::{AudioConfig, BackendKind};
-pub use behavior::BehaviorConfig;
+pub use behavior::{BehaviorConfig, TrackPosMemory};
 pub use cache::CacheConfig;
 pub use config::{Config, TuiConfig};
 pub use cover::{CoverConfig, CoverStorageMode, KmeansConfig};

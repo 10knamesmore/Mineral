@@ -21,6 +21,7 @@ use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
 use crate::runtime::scroll::ListScroll;
+use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
@@ -143,6 +144,14 @@ pub struct AppState {
 
     /// Library 列表的视口滚动态。
     pub scroll_track: ListScroll,
+
+    /// 各歌单的光标位置记忆(`behavior.remember_track_pos` 非 off 时退出 Library
+    /// 记录、再进恢复;persist 档启动时灌入落盘值)。
+    pub track_pos: TrackPosMap,
+
+    /// 进歌单时曲目未就绪而挂起的位置恢复;`PlaylistTracksFetched` 到达时若用户
+    /// 还停在该歌单且光标未动过则补落位,否则作废。
+    pub pending_track_restore: Option<PendingRestore>,
 
     /// 搜索关键字。
     pub search_q: String,
@@ -273,6 +282,8 @@ impl AppState {
             scroll_playlist: ListScroll::new(),
             sel_track: 0,
             scroll_track: ListScroll::new(),
+            track_pos: TrackPosMap::default(),
+            pending_track_restore: None,
             search_q: String::new(),
             current: None,
             playback: Playback::new(),
@@ -323,6 +334,46 @@ impl AppState {
     /// 光标与列表视口上下边缘的最小行距(配置 `behavior.scrolloff`)。
     pub(crate) fn scrolloff(&self) -> usize {
         usize::from(*self.cfg.tui().behavior().scrolloff())
+    }
+
+    /// 歌单内光标位置记忆档(配置 `behavior.remember_track_pos`)。
+    pub(crate) fn track_memory(&self) -> mineral_config::TrackPosMemory {
+        *self.cfg.tui().behavior().remember_track_pos()
+    }
+
+    /// 曲目到达时兑现挂起的位置恢复(进歌单时曲目还没拉到的延迟落位)。
+    ///
+    /// 仅当用户仍停在该歌单的 Library 视图、且光标未被动过(还在进入时的第 0 行)
+    /// 才落位——不抢用户操作;无论是否落位,匹配歌单的 pending 都就此消费。
+    ///
+    /// # Params:
+    ///   - `id`: 刚落 cache 的歌单
+    fn apply_pending_restore(&mut self, id: &PlaylistId) {
+        if self
+            .pending_track_restore
+            .as_ref()
+            .is_none_or(|p| &p.playlist != id)
+        {
+            return;
+        }
+        let Some(pending) = self.pending_track_restore.take() else {
+            return;
+        };
+        let still_there = self.view == View::Library
+            && self
+                .selected_playlist()
+                .is_some_and(|p| p.data.id == pending.playlist);
+        if !still_there || self.sel_track != 0 {
+            return;
+        }
+        let Some(tracks) = self.tracks_cache.get(&pending.playlist) else {
+            return;
+        };
+        let sel = pending.pos.resolve(tracks);
+        self.sel_track = sel;
+        // 与 activate 的即时恢复同语义:按屏上相对行还原视口。
+        self.scroll_track
+            .snap_to(sel.saturating_sub(pending.pos.screen_row));
     }
 
     /// 列表视口滚动平移的缓动拍数(配置 `animation.list_scroll_ms` 折算)。
@@ -404,6 +455,7 @@ impl AppState {
                     .collect();
                 self.tracks_cache.insert(id.clone(), decorated);
                 self.tracks_generation = self.tracks_generation.wrapping_add(1);
+                self.apply_pending_restore(id);
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
                 self.liked_ids.insert(*source, ids.clone());
@@ -735,6 +787,118 @@ mod tests {
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
         assert!(s.match_for("春日影").is_none());
+        Ok(())
+    }
+
+    /// 挂着 pending 时曲目到达:用户仍停在该歌单且光标未动 → 按双锚补落位,
+    /// pending 消费掉。
+    #[test]
+    fn pending_restore_lands_when_tracks_arrive() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+        use mineral_task::TaskEvent;
+
+        use crate::runtime::state::View;
+        use crate::runtime::track_pos::{PendingRestore, TrackPos};
+        use crate::test_support::{endserenading, state_with_playlists};
+
+        let mut s = state_with_playlists()?;
+        s.view = View::Library;
+        s.sel_playlist = 0; // p1
+        s.sel_track = 0;
+        let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
+        let tracks = endserenading(5);
+        let anchor = tracks
+            .get(2)
+            .map(|t| t.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 3 首"))?;
+        s.pending_track_restore = Some(PendingRestore {
+            playlist: pid.clone(),
+            pos: TrackPos {
+                song_id: anchor,
+                index: 2,
+                screen_row: 0,
+            },
+        });
+
+        s.apply(&TaskEvent::PlaylistTracksFetched { id: pid, tracks });
+        assert_eq!(s.sel_track, 2, "曲目到达后应补落位到记忆行");
+        assert!(s.pending_track_restore.is_none(), "pending 应被消费");
+        Ok(())
+    }
+
+    /// 用户在曲目到达前已自己动过光标:不抢操作,pending 静默作废。
+    #[test]
+    fn pending_restore_yields_to_user_movement() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+        use mineral_task::TaskEvent;
+
+        use crate::runtime::state::View;
+        use crate::runtime::track_pos::{PendingRestore, TrackPos};
+        use crate::test_support::{endserenading, state_with_playlists};
+
+        let mut s = state_with_playlists()?;
+        s.view = View::Library;
+        s.sel_playlist = 0;
+        s.sel_track = 1; // 已离开进入时的第 0 行
+        let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
+        let tracks = endserenading(5);
+        let anchor = tracks
+            .get(3)
+            .map(|t| t.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 4 首"))?;
+        s.pending_track_restore = Some(PendingRestore {
+            playlist: pid.clone(),
+            pos: TrackPos {
+                song_id: anchor,
+                index: 3,
+                screen_row: 0,
+            },
+        });
+
+        s.apply(&TaskEvent::PlaylistTracksFetched { id: pid, tracks });
+        assert_eq!(s.sel_track, 1, "用户已动光标,不得抢落位");
+        assert!(s.pending_track_restore.is_none(), "pending 仍应被消费");
+        Ok(())
+    }
+
+    /// 别的歌单先到:pending 不消费、不落位,继续等目标歌单。
+    #[test]
+    fn pending_restore_ignores_other_playlists() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+        use mineral_task::TaskEvent;
+
+        use crate::runtime::state::View;
+        use crate::runtime::track_pos::{PendingRestore, TrackPos};
+        use crate::test_support::{endserenading, state_with_playlists};
+
+        let mut s = state_with_playlists()?;
+        s.view = View::Library;
+        s.sel_playlist = 0;
+        s.sel_track = 0;
+        let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
+        let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
+        let tracks = endserenading(5);
+        let anchor = tracks
+            .first()
+            .map(|t| t.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 为空"))?;
+        s.pending_track_restore = Some(PendingRestore {
+            playlist: target.clone(),
+            pos: TrackPos {
+                song_id: anchor,
+                index: 0,
+                screen_row: 0,
+            },
+        });
+
+        s.apply(&TaskEvent::PlaylistTracksFetched { id: other, tracks });
+        assert_eq!(s.sel_track, 0);
+        assert!(
+            s.pending_track_restore
+                .as_ref()
+                .is_some_and(|p| p.playlist == target),
+            "非目标歌单到达不应消费 pending"
+        );
         Ok(())
     }
 }

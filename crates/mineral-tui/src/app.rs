@@ -149,6 +149,9 @@ impl App {
         state.cover_encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.lyric_extra = ui_prefs.initial_lyric_extra();
+        // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
+        // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
+        state.track_pos = ui_prefs.initial_track_pos().clone();
         Self {
             should_quit: false,
             theme,
@@ -528,6 +531,10 @@ impl App {
         // 部分终端报大写字符时不附带 SHIFT。
         if !self.state.search_mode && key.code == KeyCode::Char('Q') {
             self.stop_daemon_on_quit = true;
+            // 还停在 Library 内就退出:位置没经过「返回」记录,这里补记。放在转场
+            // 起点而非收尾——fire-and-forget 落盘借收缩动画的时长完成,收尾才写
+            // 会跟进程退出赛跑。Ctrl-C 强退不经此路径,不保证。
+            self.remember_track_pos();
             self.transition = Some(Transition::collapsing(self.transition_ticks));
             return;
         }
@@ -604,7 +611,9 @@ impl App {
     fn run_overlay_action(&mut self, action: OverlayAction) {
         match action {
             // 正常退出:不立即退,而是启动「边框向中心收缩」退场动画,归零后主循环再 break。
+            // 补记 Library 内的光标位置,时点理由见 Shift+Q 路径。
             OverlayAction::Quit => {
+                self.remember_track_pos();
                 self.transition = Some(Transition::collapsing(self.transition_ticks));
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
@@ -918,6 +927,24 @@ mod tests {
         }
         assert!(app.should_quit, "收缩动画归零后应退出");
         assert!(app.transition.is_none(), "收尾后转场应清空");
+        Ok(())
+    }
+
+    /// 退出补记:还停在 Library 内走 q→y 退出,光标位置在转场起点记入记忆表
+    /// (否则没经过「返回」的位置会随退出丢失)。
+    #[test]
+    fn quit_records_track_position_from_library() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        let mut app = app_with_library(10, /*sel_track*/ 4)?;
+        press(&mut app, KeyCode::Char('q'));
+        press(&mut app, KeyCode::Char('y'));
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        assert_eq!(
+            app.state.track_pos.get(&pid).map(|p| p.index),
+            Some(4),
+            "退出转场起点应补记 Library 光标位置"
+        );
         Ok(())
     }
 
