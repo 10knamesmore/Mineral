@@ -420,6 +420,8 @@ mod tests {
                 dur_ms: 1020,
                 words: vec![word(11_350, 300, "How "), word(11_650, 720, "will")],
             },
+            translation: None,
+            romanization: None,
         }];
         let json = serialize_words(&lines).ok_or_else(|| eyre!("expected Some json"))?;
         let v: Value = serde_json::from_str(&json)?;
