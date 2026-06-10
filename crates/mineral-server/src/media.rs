@@ -122,10 +122,10 @@ impl LyricsPresence {
         match lyrics {
             None => Self::default(),
             Some(l) => Self {
-                words: mineral_model::has_words(&l.original),
-                lrc: mineral_model::has_timed(&l.original),
-                translation: !l.translation.is_empty(),
-                romanization: !l.romanization.is_empty(),
+                words: mineral_model::has_words(&l.lines),
+                lrc: mineral_model::has_timed(&l.lines),
+                translation: l.has_translation(),
+                romanization: l.has_romanization(),
             },
         }
     }
@@ -278,10 +278,11 @@ fn build_now_playing(song: &Song, lyrics: Option<&Lyrics>) -> NowPlaying {
         .duration(Some(Duration::from_millis(song.duration_ms)));
     match lyrics {
         None => builder.build(),
+        // 翻译 / 罗马音轨从合并行重建:时间戳取原文行的,与 asText 严格对齐。
         Some(l) => builder
-            .original(l.original.clone())
-            .translation(l.translation.clone())
-            .romanization(l.romanization.clone())
+            .original(l.lines.clone())
+            .translation(l.translation_lines())
+            .romanization(l.romanization_lines())
             .build(),
     }
 }

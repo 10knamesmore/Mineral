@@ -94,7 +94,7 @@ pub(crate) fn state_with_lyrics(
     let mut lyrics = qianzai_lyrics();
     if !with_words {
         // 清掉逐字时间轴,降级成行级渲染路径(保留行级时间戳与整行文本)。
-        for line in &mut lyrics.original {
+        for line in &mut lyrics.lines {
             if !line.kind.words().is_empty() {
                 let text = line.kind.text().into_owned();
                 line.kind = mineral_model::LineKind::Plain(text);

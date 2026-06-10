@@ -263,13 +263,8 @@ mod tests {
         original: Vec<LyricLine>,
     ) -> color_eyre::Result<AppState> {
         let song = qianzai_song();
-        s.lyrics_cache.insert(
-            song.id.clone(),
-            Lyrics {
-                original,
-                ..Lyrics::default()
-            },
-        );
+        s.lyrics_cache
+            .insert(song.id.clone(), Lyrics { lines: original });
         s.playback.track = Some(song);
         s.fullscreen = true;
         Ok(s)

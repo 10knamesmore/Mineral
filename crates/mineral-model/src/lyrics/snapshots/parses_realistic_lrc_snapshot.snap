@@ -11,6 +11,8 @@ expression: parse_lrc(s)
         kind: Plain(
             "迷星叫",
         ),
+        translation: None,
+        romanization: None,
     },
     LyricLine {
         time_ms: Some(
@@ -19,6 +21,8 @@ expression: parse_lrc(s)
         kind: Plain(
             "壱雫空",
         ),
+        translation: None,
+        romanization: None,
     },
     LyricLine {
         time_ms: Some(
@@ -27,6 +31,8 @@ expression: parse_lrc(s)
         kind: Plain(
             "碧天伴走",
         ),
+        translation: None,
+        romanization: None,
     },
     LyricLine {
         time_ms: Some(
@@ -35,6 +41,8 @@ expression: parse_lrc(s)
         kind: Plain(
             "碧天伴走",
         ),
+        translation: None,
+        romanization: None,
     },
     LyricLine {
         time_ms: Some(
@@ -43,5 +51,7 @@ expression: parse_lrc(s)
         kind: Plain(
             "名無声",
         ),
+        translation: None,
+        romanization: None,
     },
 ]

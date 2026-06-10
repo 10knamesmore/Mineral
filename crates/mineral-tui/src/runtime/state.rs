@@ -476,42 +476,38 @@ impl AppState {
         self.lyrics_cache.get(&song.id)
     }
 
-    /// 当前曲目的原文歌词序列(行级 / 逐字 / 有时间 / 无时间混排);未拉到时返回 `None`。
+    /// 当前曲目的歌词行序列(行级 / 逐字 / 有时间 / 无时间混排,翻译 / 罗马音已内嵌在
+    /// 各行上);未拉到时返回 `None`。
     pub fn current_lines(&self) -> Option<&[LyricLine]> {
-        self.current_lyrics_set().map(|l| l.original.as_slice())
-    }
-
-    /// 当前曲目的行级翻译;未拉到时返回 `None`。
-    pub fn current_translation(&self) -> Option<&[LyricLine]> {
-        self.current_lyrics_set().map(|l| l.translation.as_slice())
-    }
-
-    /// 当前曲目的行级罗马音;未拉到时返回 `None`。
-    pub fn current_romanization(&self) -> Option<&[LyricLine]> {
-        self.current_lyrics_set().map(|l| l.romanization.as_slice())
+        self.current_lyrics_set().map(|l| l.lines.as_slice())
     }
 
     /// 当前曲目是否有任一副歌词(翻译 / 罗马音)可切换。无则歌词面板不显示 `t` 提示。
     pub fn has_extra_lyrics(&self) -> bool {
-        self.current_translation().is_some_and(|l| !l.is_empty())
-            || self.current_romanization().is_some_and(|l| !l.is_empty())
+        self.current_lyrics_set()
+            .is_some_and(|l| l.has_translation() || l.has_romanization())
     }
 
-    /// 当前档对应的副歌词(`None` 档 / 该档为空都返回 `None`)。
-    pub fn current_extra_lyric(&self) -> Option<&[LyricLine]> {
-        let extra = match self.lyric_extra {
-            LyricExtra::None => return None,
-            LyricExtra::Translation => self.current_translation(),
-            LyricExtra::Romanization => self.current_romanization(),
-        };
-        extra.filter(|l| !l.is_empty())
+    /// 当前生效的副歌词档(当前歌确有该档数据才算生效;`None` 档 / 该档无数据返回 `None`)。
+    pub fn active_lyric_extra(&self) -> Option<LyricExtra> {
+        let l = self.current_lyrics_set()?;
+        match self.lyric_extra {
+            LyricExtra::None => None,
+            LyricExtra::Translation if l.has_translation() => Some(LyricExtra::Translation),
+            LyricExtra::Romanization if l.has_romanization() => Some(LyricExtra::Romanization),
+            LyricExtra::Translation | LyricExtra::Romanization => None,
+        }
     }
 
     /// 循环副歌词档:`None → Translation → Romanization → None`,跳过当前歌为空的档。
     /// 翻译 / 罗马音都缺时停在 `None`。
     pub fn cycle_lyric_extra(&mut self) {
-        let has_trans = self.current_translation().is_some_and(|l| !l.is_empty());
-        let has_roma = self.current_romanization().is_some_and(|l| !l.is_empty());
+        let has_trans = self
+            .current_lyrics_set()
+            .is_some_and(Lyrics::has_translation);
+        let has_roma = self
+            .current_lyrics_set()
+            .is_some_and(Lyrics::has_romanization);
         self.lyric_extra = match self.lyric_extra {
             LyricExtra::None if has_trans => LyricExtra::Translation,
             LyricExtra::None if has_roma => LyricExtra::Romanization,

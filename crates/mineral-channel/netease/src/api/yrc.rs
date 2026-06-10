@@ -94,6 +94,8 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
                 dur_ms: total_dur,
                 words,
             },
+            translation: None,
+            romanization: None,
         });
     }
 
@@ -111,6 +113,8 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
     Some(LyricLine {
         time_ms: dto.t,
         kind: LineKind::Plain(text),
+        translation: None,
+        romanization: None,
     })
 }
 
@@ -146,6 +150,8 @@ fn parse_lrc_style_line(line: &str) -> Option<LyricLine> {
     Some(LyricLine {
         time_ms: Some(start_ms),
         kind: LineKind::Words { dur_ms, words },
+        translation: None,
+        romanization: None,
     })
 }
 
@@ -175,6 +181,8 @@ mod tests {
         LyricLine {
             time_ms: Some(start),
             kind: LineKind::Words { dur_ms: dur, words },
+            translation: None,
+            romanization: None,
         }
     }
 

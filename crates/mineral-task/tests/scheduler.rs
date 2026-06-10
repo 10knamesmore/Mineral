@@ -91,8 +91,7 @@ impl MusicChannel for FakeChannel {
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         self.maybe_wait().await;
         Ok(Lyrics {
-            original: mineral_model::parse_lrc("[00:01.00]hello\n[00:02.50]world"),
-            ..Lyrics::default()
+            lines: mineral_model::parse_lrc("[00:01.00]hello\n[00:02.50]world"),
         })
     }
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
@@ -247,7 +246,7 @@ async fn lyrics_emits_event() -> color_eyre::Result<()> {
             TaskEvent::LyricsReady { song_id, lyrics }
                 if song_id.as_str() == "s3"
                     && lyrics
-                        .original
+                        .lines
                         .iter()
                         .any(|l| l.kind.text().contains("hello"))
         )

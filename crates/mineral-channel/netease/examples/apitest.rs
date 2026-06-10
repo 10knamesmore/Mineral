@@ -246,13 +246,13 @@ async fn main() -> color_eyre::Result<()> {
         let r = run("lyrics", async {
             let l = ch.lyrics(&song.id).await?;
             Ok(format!(
-                "original={} lines ({} 逐字), translation={} lines",
-                l.original.len(),
-                l.original
+                "lines={} ({} 逐字), translated={} lines",
+                l.lines.len(),
+                l.lines
                     .iter()
                     .filter(|x| !x.kind.words().is_empty())
                     .count(),
-                l.translation.len(),
+                l.lines.iter().filter(|x| x.translation.is_some()).count(),
             ))
         })
         .await;

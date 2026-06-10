@@ -57,6 +57,8 @@ fn parse_mpris_words(json: &str) -> Vec<LyricLine> {
             LyricLine {
                 time_ms: Some(line.start),
                 kind: LineKind::Words { dur_ms, words },
+                translation: None,
+                romanization: None,
             }
         })
         .collect()
@@ -64,17 +66,17 @@ fn parse_mpris_words(json: &str) -> Vec<LyricLine> {
 
 /// 《潜在表明》的完整歌词:逐字原文 + 行级翻译 + 行级罗马音,三者齐全。
 ///
-/// 各行时间戳精确对齐(原文 0.1s 量级偏差源自真实数据,与翻译 / 罗马音不完全相等,
-/// 正好覆盖「按时间对齐而非索引硬配对」的渲染路径)。
+/// 副轨时间戳与原文有 0.1s 量级偏差(源自真实数据),正好覆盖装配期「按时间互最近邻
+/// 配对而非索引硬配对」的路径。
 ///
 /// # Return:
 ///   数据齐全的 [`Lyrics`]。
 pub fn qianzai_lyrics() -> Lyrics {
-    Lyrics {
-        original: parse_mpris_words(include_str!("../data/qianzai/words.json")),
-        translation: mineral_model::parse_lrc(include_str!("../data/qianzai/translation.lrc")),
-        romanization: mineral_model::parse_lrc(include_str!("../data/qianzai/romanization.lrc")),
-    }
+    Lyrics::assemble(
+        parse_mpris_words(include_str!("../data/qianzai/words.json")),
+        &mineral_model::parse_lrc(include_str!("../data/qianzai/translation.lrc")),
+        &mineral_model::parse_lrc(include_str!("../data/qianzai/romanization.lrc")),
+    )
 }
 
 /// 《潜在表明》对应的 [`Song`](MyGO!!!!! / 专辑《迷跡波》/ 262s),与
@@ -92,13 +94,13 @@ pub fn qianzai_song() -> Song {
 /// 覆盖「无副歌词可切换」的场景(歌词面板据此不显示 `t` 提示)。
 ///
 /// # Return:
-///   `translation` / `romanization` 均为空的 [`Lyrics`]。
+///   全行 `translation` / `romanization` 均为 `None` 的 [`Lyrics`]。
 pub fn feiyu_lyrics() -> Lyrics {
-    Lyrics {
-        original: parse_mpris_words(include_str!("../data/feiyu/words.json")),
-        translation: Vec::new(),
-        romanization: Vec::new(),
-    }
+    Lyrics::assemble(
+        parse_mpris_words(include_str!("../data/feiyu/words.json")),
+        /*translation*/ &[],
+        /*romanization*/ &[],
+    )
 }
 
 /// 《飞鱼转身》对应的 [`Song`](Chinese Football / 384s),与 [`feiyu_lyrics`] 配对用。

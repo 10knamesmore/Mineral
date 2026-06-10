@@ -130,6 +130,8 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
     Some(LyricLine {
         time_ms: parsed.t,
         kind: LineKind::Plain(text),
+        translation: None,
+        romanization: None,
     })
 }
 
@@ -417,6 +419,8 @@ mod tests {
                     text: "hi".to_owned(),
                 }],
             },
+            translation: None,
+            romanization: None,
         };
         assert!(!has_timed(&[plain("x")]));
         assert!(has_timed(&[timed(1, "x")]));

@@ -27,7 +27,7 @@ use crate::runtime::state::{AppState, LyricExtra};
 ///     [`LyricMode::Immersive`] 给全屏(行间距 + 缓动平移 + 高亮交叉淡入)。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
     let lines = state.current_lines().filter(|v| !v.is_empty());
-    let extra = state.current_extra_lyric();
+    let extra = state.active_lyric_extra();
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -39,12 +39,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
             theme,
         )))
         .title_top(
-            Line::from(title_right_spans(
-                state.has_extra_lyrics(),
-                extra.map(|_| state.lyric_extra),
-                theme,
-            ))
-            .right_aligned(),
+            Line::from(title_right_spans(state.has_extra_lyrics(), extra, theme)).right_aligned(),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -210,26 +205,13 @@ fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), text_area);
 }
 
-/// 按时间对齐取某原文行对应的副歌词文本。翻译 / 罗马音逐行时间戳与原文有 ~0.1s 量级
-/// 抖动且**方向不定**(有时早、有时晚),故取与原文行时间**最接近**的一条,而非
-/// `current_index` 的「≤ t 的最后一条」(后者在副歌词时间戳偏晚时会错配到上一句)。
-/// 行数 / 索引也不保证与原文一致(原文有空白间奏行),所以不能按索引硬配对。
-fn secondary_text(extra: Option<&[LyricLine]>, time_ms: u64) -> Option<String> {
-    let e = extra?;
-    let i = nearest_index(e, time_ms)?;
-    e.get(i)
-        .map(|l| l.kind.text().into_owned())
-        .filter(|t| !t.is_empty())
-}
-
-/// 找时间戳与 `t` 最接近的带时间戳行 index(无时间戳的行不参与对齐)。
-fn nearest_index(lines: &[LyricLine], t: u64) -> Option<usize> {
-    lines
-        .iter()
-        .enumerate()
-        .filter_map(|(i, l)| l.time_ms.map(|ts| (i, ts)))
-        .min_by_key(|(_, ts)| ts.abs_diff(t))
-        .map(|(i, _)| i)
+/// 取某行已配对的副歌词文本
+fn secondary_text(line: &LyricLine, extra: LyricExtra) -> Option<&str> {
+    match extra {
+        LyricExtra::None => None,
+        LyricExtra::Translation => line.translation.as_deref(),
+        LyricExtra::Romanization => line.romanization.as_deref(),
+    }
 }
 
 /// 歌词呈现模式。决定行间距与高亮过渡——同一个 [`draw`] 给两处调用方复用。
@@ -336,8 +318,8 @@ struct WindowInput<'a> {
     /// 当前播放位置(ms),用于逐字 wipe 进度。
     position_ms: u64,
 
-    /// 副歌词档(翻译 / 罗马音);`None` = 不显示副行。
-    extra: Option<&'a [LyricLine]>,
+    /// 生效的副歌词档(翻译 / 罗马音);`None` = 不显示副行。
+    extra: Option<LyricExtra>,
 
     /// 呈现模式:决定行间距与高亮过渡。
     motion: LyricMode,
@@ -402,12 +384,10 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
             prev_center = here;
         }
         cells.push(Cell::Primary { line_idx: idx });
-        // 空白间奏行 / 无时间戳行不配副歌词(无时间轴可对齐)。
-        if let Some(t) = line.time_ms
-            && !line.kind.text().is_empty()
-            && let Some(text) = secondary_text(extra, t)
-        {
-            cells.push(Cell::Secondary { text });
+        if let Some(text) = extra.and_then(|e| secondary_text(line, e)) {
+            cells.push(Cell::Secondary {
+                text: text.to_owned(),
+            });
         }
     }
     // 首行 / 前奏(无上一行)→ prev 落回 cur,锚点不滚动。

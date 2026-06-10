@@ -20,7 +20,8 @@ fn lyric_text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 ///
 /// 原文取舍:逐字 yrc 在则用 yrc(自带 credits 纯文本行);否则取两路 lrc 中**行数更多**
 /// 的一份(v1 的 JSON 行格式解析等价于 linuxapi 的标准格式,取多者防坏数据覆盖好数据)。
-/// 翻译 / 罗马音是行级,逐字版 `ytlrc` / `yromalrc` 优先,退回 `tlyric` / `romalrc`。
+/// 翻译 / 罗马音是行级,逐字版 `ytlrc` / `yromalrc` 优先,退回 `tlyric` / `romalrc`;
+/// 最终经 [`Lyrics::assemble`] 按时间配对进原文各行。
 ///
 /// # Params:
 ///   - `transport`: 已配置加密的传输层
@@ -29,7 +30,8 @@ fn lyric_text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 /// # Return:
 ///   装配好的 [`Lyrics`];任一路失败按缺省(空)处理。
 pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Lyrics> {
-    let mut out = Lyrics::default();
+    let mut translation = Vec::<LyricLine>::new();
+    let mut romanization = Vec::<LyricLine>::new();
     let mut lrc_linux = Vec::<LyricLine>::new();
     let mut lrc_v1 = Vec::<LyricLine>::new();
     let mut yrc_lines = Vec::<LyricLine>::new();
@@ -53,7 +55,7 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Ly
             lrc_linux = parse_lrc(s);
         }
         if let Some(s) = lyric_text(&v, "tlyric") {
-            out.translation = parse_lrc(s);
+            translation = parse_lrc(s);
         }
     }
 
@@ -80,15 +82,15 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Ly
             lrc_v1 = parse_lrc(s);
         }
         if let Some(s) = lyric_text(&v, "ytlrc").or_else(|| lyric_text(&v, "tlyric")) {
-            out.translation = parse_lrc(s);
+            translation = parse_lrc(s);
         }
         if let Some(s) = lyric_text(&v, "yromalrc").or_else(|| lyric_text(&v, "romalrc")) {
-            out.romanization = parse_lrc(s);
+            romanization = parse_lrc(s);
         }
     }
 
     // 装配原文:yrc 优先(含 credits);否则取行数更多的 lrc(防坏覆盖好)。
-    out.original = if !yrc_lines.is_empty() {
+    let original = if !yrc_lines.is_empty() {
         yrc_lines
     } else if lrc_v1.len() >= lrc_linux.len() {
         lrc_v1
@@ -96,7 +98,7 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Ly
         lrc_linux
     };
 
-    Ok(out)
+    Ok(Lyrics::assemble(original, &translation, &romanization))
 }
 
 #[cfg(test)]
