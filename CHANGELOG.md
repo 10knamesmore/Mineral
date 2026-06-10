@@ -1,4 +1,35 @@
 # Changelog
+## [0.5.1] — 2026-06-10
+
+### Breaking Changes
+
+- 歌词单轨化,翻译/罗马音装配期互最近邻配对 ([`2df781d`](https://github.com/10knamesmore/Mineral/commit/2df781d3499dfe0673e77ee259dd8f04fb5dd058))
+
+### Features
+
+- IPC 优雅停止 — mineral stop 命令 + TUI Shift+Q ([`c91beee`](https://github.com/10knamesmore/Mineral/commit/c91beeeb8c152178d16007d87e8d947d313b824c))
+
+- 统一歌词模型 + 全屏沉浸手动滚动 ([`ab7ecdd`](https://github.com/10knamesmore/Mineral/commit/ab7ecddacf491d954f9a8223635fc0265747cc11))
+
+- 沉浸滚动边界 rubber-band 回弹 ([`7ef3320`](https://github.com/10knamesmore/Mineral/commit/7ef3320dac0c65678586dd05500caf420a55391a))
+
+- 列表 nvim 滚动手感 + scrolloff + 平滑视口滚动 ([`ba264d5`](https://github.com/10knamesmore/Mineral/commit/ba264d54f57c8f2f2e236983c5ec33fd2710e60e))
+
+- Playlists 深度搜索 + 命中样式/定位可配 ([`1ef25f1`](https://github.com/10knamesmore/Mineral/commit/1ef25f1ae8419ab62e01a18e2ed2b6c4c7322399))
+
+- 歌单内光标位置记忆 + 屏上相对位置精确还原 ([`a769d63`](https://github.com/10knamesmore/Mineral/commit/a769d638475fde3cad015b9ed6fe8faefc36e999))
+
+- 多行通知卡片 + 通用样式 span + TTL 边框倒计时 ([`7584469`](https://github.com/10knamesmore/Mineral/commit/758446924a564a1e867f4f612f975a03aeeca8f0))
+
+- 浮层/卡片进出场内容跟动(离屏窗口搬运替代纯色空壳) ([`dd7de87`](https://github.com/10knamesmore/Mineral/commit/dd7de876ec9b234431a4356c95292859a4ddd1d1))
+
+### Bug Fixes
+
+- Cli_smoke 在 macOS 上 socket 路径超长误报 ([`0f5651f`](https://github.com/10knamesmore/Mineral/commit/0f5651faf887bb2eda3482ab90082df41d036f3d))
+
+- 容忍网易 t=-1 无时间轴哨兵(JSON 负 t + 畸形 [00:00.00-1]) ([`cf59006`](https://github.com/10knamesmore/Mineral/commit/cf59006833e9e7875255c6598bbbc222bc380c7e))
+
+- Linux MPRIS 测试补齐 LyricLine 单轨化新增字段 ([`c808640`](https://github.com/10knamesmore/Mineral/commit/c80864086db32163620db8a47b64e0fbed41e2f0))
 ## [0.5.0] — 2026-06-07
 
 ### 功能
