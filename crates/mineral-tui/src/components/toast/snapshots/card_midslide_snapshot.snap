@@ -1,13 +1,13 @@
 ---
 source: crates/mineral-tui/src/components/toast/card.rs
-description: "卡片 SlideInRight 中途:纯色空壳自右缘向左滑入,左缘八分块平滑"
+description: "卡片 SlideInRight 中途:真内容随前沿向左滑入,左前沿八分块幕布线"
 expression: t.backend()
 ---
 "                                                                                "
-"                                                    ▌██████████████████████████ "
-"                                                    ▌██████████████████████████ "
-"                                                    ▌██████████████████████████ "
-"                                                    ▌██████████████████████████ "
+"                                                    ▌╭ ⚠ v0.9.0 要点 ────────── " Hidden by multi-width symbols: [(65, " "), (67, " ")]
+"                                                    ▌│ 新增配置 toast.position  " Hidden by multi-width symbols: [(56, " "), (58, " "), (60, " "), (62, " ")]
+"                                                    ▌│ 旧键 search.style 改名   " Hidden by multi-width symbols: [(56, " "), (58, " "), (74, " "), (76, " ")]
+"                                                    ▌╰────────────────────── x  "
 "                                                                                "
 "                                                                                "
 "                                                                                "

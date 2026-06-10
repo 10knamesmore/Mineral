@@ -6,11 +6,14 @@
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
-use crate::render::cells::{left_eighth, lower_eighth};
+use crate::render::blit::{self, EdgeColors, HAnchor};
+use crate::render::cells::left_eighth;
+use crate::render::cells::lower_eighth;
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
 use crate::runtime::state::AppState;
@@ -106,9 +109,10 @@ pub(crate) trait Overlay {
     ///   - `focused`: 是否持有键盘焦点(栈顶且未在退场),影响边框色
     fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static>;
 
-    /// 把内容画进外框内部 `inner`。仅完全展开(`scale >= FULL_SCALE`)时调用;
-    /// 动画途中只画空壳,避免窄尺寸下内容 reflow 抖动。
-    fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, ctx: &AppState, theme: &Theme);
+    /// 把内容画进 `buf` 的外框内部 `inner`。`inner` 恒为**完全展开**尺寸 —— 动画途中
+    /// 内容先按满尺寸渲染到离屏缓冲再按进度搬运可见窗口(不随动画逐帧 reflow),
+    /// 实现方不必关心进度。面向 [`Buffer`] 而非 `Frame`,离屏与上屏共用一个入口。
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme);
 
     /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 只读后端态(如队列长度,用于
     /// 钳制光标);浮层与 `AppState` 是 App 的平级字段,可同时借用。
@@ -157,7 +161,8 @@ pub(crate) fn centered_rect(
     Rect::new(x, y, w, h)
 }
 
-/// 渲染一个浮层:居中 → 完全展开画外框 + 内容;动画途中画 1/8 块平滑色块。
+/// 渲染一个浮层:居中 → 完全展开画外框 + 内容;动画途中内容按满尺寸离屏渲染,
+/// 可见窗口随进度推进(停靠 = 滑入、居中 = 中心揭开),前沿 1/8 块平滑。
 ///
 /// # Params:
 ///   - `overlay`: 要渲染的浮层
@@ -195,15 +200,33 @@ pub(crate) fn render_overlay<O: Overlay>(
         let block = overlay.block(ctx, theme, focused);
         let inner = block.inner(base);
         frame.render_widget(block, base);
-        overlay.render_content(frame, inner, ctx, theme);
+        overlay.render_content(frame.buffer_mut(), inner, ctx, theme);
     } else {
-        // 动画途中(无边框 / 无内容,避免 reflow):停靠浮层走「贴边 + 仅水平 grow」,
-        // 居中浮层走「中心双轴缩放」。
+        // 动画途中:停靠浮层滑入(内容随前沿平移),居中浮层中心揭开(内容定格)。
+        // 离屏渲染在此统一做(动画头几帧被几何 guard 跳过时白渲一次,面积小、可忽略)。
+        let off = render_offscreen(base, overlay, focused, ctx, theme);
         match dock {
-            Some(d) => draw_h_grow_shell(frame, base, d, scale, theme),
-            None => draw_shell(frame, base, scale, theme),
+            Some(d) => draw_dock_slide(frame, base, d, scale, &off, theme),
+            None => draw_center_reveal(frame, base, scale, &off, theme),
         }
     }
+}
+
+/// 把浮层按完全展开尺寸渲染到与 `full` 等大的离屏缓冲(坐标系与屏幕一致)。
+/// 动画途中每帧重渲一次 —— 区域小、动画短,代价与 sidebar sweep 同量级。
+fn render_offscreen<O: Overlay>(
+    full: Rect,
+    overlay: &O,
+    focused: bool,
+    ctx: &AppState,
+    theme: &Theme,
+) -> Buffer {
+    let mut buf = Buffer::empty(full);
+    let block = overlay.block(ctx, theme, focused);
+    let inner = block.inner(full);
+    block.render(full, &mut buf);
+    overlay.render_content(&mut buf, inner, ctx, theme);
+    buf
 }
 
 /// 计算停靠浮层「完全展开」矩形:左右**同宽(配置 `tui.layout.dock_w_pct`)同高**
@@ -227,82 +250,44 @@ fn pct_of(total: u16, p: u16) -> u16 {
         .min(total)
 }
 
-/// 停靠浮层的进退场动画:满高不变,只在水平方向从停靠边缘按 `scale`(千分比)长出 / 收回,
-/// 生长边用 1/8 cell 八分块平滑(对齐 [`draw_shell`] 的精度)。长满后由 [`render_overlay`]
-/// 切成带边框面板 + 内容。
-fn draw_h_grow_shell(frame: &mut Frame<'_>, full: Rect, dock: Dock, scale: u16, theme: &Theme) {
+/// 停靠浮层的进退场动画:满高不变,真实面板(`off` = 满尺寸离屏渲染)沿水平方向从
+/// 停靠边缘滑入 / 滑出 —— 内容随前沿整格平移、前沿侧的边框最先进场,前沿分数格用
+/// 1/8 八分块平滑(体色 mantle)。长满后由 [`render_overlay`] 切回直绘路径。
+fn draw_dock_slide(
+    frame: &mut Frame<'_>,
+    full: Rect,
+    dock: Dock,
+    scale: u16,
+    off: &Buffer,
+    theme: &Theme,
+) {
     if full.width == 0 || full.height == 0 {
         return;
     }
-    let full_w_e = u32::from(full.width) * 8;
-    let cur_w_e = full_w_e * u32::from(scale) / u32::from(FULL_SCALE);
+    let cur_w_e = u32::from(full.width) * 8 * u32::from(scale) / u32::from(FULL_SCALE);
     // 太窄画不出有意义面板,跳过这一帧。
     if cur_w_e < 8 {
         return;
     }
-
-    // 1/8 坐标系:停靠边缘固定,生长边按 cur_w_e 推进。
-    let left_edge_e = u32::from(full.x) * 8;
-    let right_edge_e = u32::from(full.right()) * 8;
-    let (left_e, right_e) = match dock {
-        Dock::Left => (left_edge_e, left_edge_e + cur_w_e),
-        Dock::Right => (right_edge_e.saturating_sub(cur_w_e), right_edge_e),
+    let anchor = match dock {
+        Dock::Left => HAnchor::Left,
+        Dock::Right => HAnchor::Right,
     };
-    let col0 = left_e / 8;
-    let col1 = right_e.div_ceil(8);
-
-    // 先 Clear 包围盒(满高),防底层 UI 从边缘格透出。
-    let outer = Rect::new(
-        u16::try_from(col0).unwrap_or(full.x),
-        full.y,
-        u16::try_from(col1.saturating_sub(col0)).unwrap_or(0),
-        full.height,
-    );
-    frame.render_widget(Clear, outer);
-
-    // 体色随 scale 从骨架色 surface1 渐变到完成态面板体色 mantle,切带边框面板时体色连续。
-    let fill = crate::render::color::lerp_color(
-        theme.surface1,
-        theme.mantle,
-        u64::from(scale),
-        u64::from(FULL_SCALE),
-    );
-    let bg = theme.base;
-    let y1 = full.y.saturating_add(full.height);
-    let buf = frame.buffer_mut();
-    for col in col0..col1 {
-        let c_lo = col * 8;
-        let c_hi = c_lo + 8;
-        let hcov = right_e.min(c_hi).saturating_sub(left_e.max(c_lo));
-        if hcov == 0 {
-            continue;
-        }
-        let (glyph, style) = if hcov >= 8 {
-            ("█", Style::new().fg(fill))
-        } else {
-            // 分数生长边:左停靠生长边在右(左对齐填充);右停靠生长边在左(反色右对齐填充)。
-            match dock {
-                Dock::Left => (left_eighth(hcov), Style::new().fg(fill)),
-                Dock::Right => (left_eighth(8 - hcov), Style::new().fg(bg).bg(fill)),
-            }
-        };
-        let Ok(x) = u16::try_from(col) else {
-            continue;
-        };
-        for y in full.y..y1 {
-            buf.set_string(x, y, glyph, style);
-        }
-    }
+    let edge = EdgeColors {
+        fill: theme.mantle,
+        bg: theme.base,
+    };
+    blit::slide_h(frame.buffer_mut(), off, full, cur_w_e, anchor, edge);
 }
 
-/// 动画途中的平滑"空壳":以 `base` 中心为锚,按 `scale` 缩放出一个色块,**宽高都到
-/// 1/8 cell 精度**,消除整格缩放的台阶感。
+/// 居中浮层的进退场动画:真实面板(`off` = 满尺寸离屏渲染)以 `base` 中心为锚,按
+/// `scale` 拉开一个窗口**原位揭出**内容(reveal,内容定格终位),窗口宽高都到 1/8 cell
+/// 精度 —— 完全覆盖的整格直接搬运离屏内容,四沿分数格画体色八分块补亚格平滑。
 ///
 /// 终端 block 字符只在「底对齐」(下八分块)/「左对齐」(左八分块)两个方向有完整 8 档,
 /// 顶沿 / 右沿用 `fg`/`bg` 反色补齐;四角的双轴分数格按垂直近似(水平略溢出 ≤ 7/8,
-/// 缩放途中肉眼基本无感)。到 `scale >= FULL_SCALE` 时由 [`render_overlay`] 切回带边框
-/// 的整 cell 面板 + 内容。
-fn draw_shell(frame: &mut Frame<'_>, base: Rect, scale: u16, theme: &Theme) {
+/// 缩放途中肉眼基本无感)。到 `scale >= FULL_SCALE` 时由 [`render_overlay`] 切回直绘。
+fn draw_center_reveal(frame: &mut Frame<'_>, base: Rect, scale: u16, off: &Buffer, theme: &Theme) {
     // 1/8 cell 单位下的当前尺寸(中心缩放)。
     let full_w_e = u32::from(base.width) * 8;
     let full_h_e = u32::from(base.height) * 8;
@@ -335,16 +320,25 @@ fn draw_shell(frame: &mut Frame<'_>, base: Rect, scale: u16, theme: &Theme) {
     );
     frame.render_widget(Clear, outer);
 
-    // 色块体色随 scale 从骨架色 surface1 渐变到完成态面板体色 mantle:到位(scale→FULL)
-    // 时已等于 base_block 的背景,切成带边框面板时体色连续,只剩边框 / 内容淡入,不突变。
-    let fill = crate::render::color::lerp_color(
-        theme.surface1,
-        theme.mantle,
-        u64::from(scale),
-        u64::from(FULL_SCALE),
-    );
-    let bg = theme.base;
+    // 完全覆盖的整格窗口:离屏内容原位揭出(内容定格,边框在窗口长到满前不可见)。
+    let in_c0 = u16::try_from(left_e.div_ceil(8)).unwrap_or(base.x);
+    let in_c1 = u16::try_from(right_e / 8).unwrap_or(base.x);
+    let in_r0 = u16::try_from(top_e.div_ceil(8)).unwrap_or(base.y);
+    let in_r1 = u16::try_from(bottom_e / 8).unwrap_or(base.y);
     let buf = frame.buffer_mut();
+    if in_c1 > in_c0 && in_r1 > in_r0 {
+        blit::copy_window(
+            buf,
+            off,
+            Rect::new(in_c0, in_r0, in_c1 - in_c0, in_r1 - in_r0),
+            in_c0,
+            in_r0,
+        );
+    }
+
+    // 四沿分数格:体色八分块补亚格平滑。
+    let fill = theme.mantle;
+    let bg = theme.base;
     for col in col0..col1 {
         let c_lo = col * 8;
         let c_hi = c_lo + 8;
@@ -358,12 +352,13 @@ fn draw_shell(frame: &mut Frame<'_>, base: Rect, scale: u16, theme: &Theme) {
             let r_lo = row * 8;
             let r_hi = r_lo + 8;
             let vcov = bottom_e.min(r_hi).saturating_sub(top_e.max(r_lo));
-            if vcov == 0 {
+            if vcov == 0 || (hcov >= 8 && vcov >= 8) {
+                // 整格已被离屏内容覆盖。
                 continue;
             }
             // 面板向下延伸过本 cell → 覆盖下部(底对齐,上沿);否则覆盖上部(顶对齐,下沿,反色)。
             let bottom_aligned = bottom_e >= r_hi;
-            let (glyph, style) = shell_cell(hcov, vcov, paint_left_part, bottom_aligned, fill, bg);
+            let (glyph, style) = edge_cell(hcov, vcov, paint_left_part, bottom_aligned, fill, bg);
             let (Ok(x), Ok(y)) = (u16::try_from(col), u16::try_from(row)) else {
                 continue;
             };
@@ -372,11 +367,12 @@ fn draw_shell(frame: &mut Frame<'_>, base: Rect, scale: u16, theme: &Theme) {
     }
 }
 
-/// 选一格的块字符 + 样式。`hcov` / `vcov` 是该 cell 被面板覆盖的 1/8 单位数(`1..=8`)。
+/// 选一个**边缘**分数格的块字符 + 样式。`hcov` / `vcov` 是该 cell 被面板覆盖的
+/// 1/8 单位数(至少一轴 `< 8`;双满格走离屏搬运,不进这里)。
 ///
-/// 内部格 `█`;纯垂直 / 水平边用对应方向八分块(顶 / 右沿走 `fg`/`bg` 反色补齐);
+/// 纯垂直 / 水平边用对应方向八分块(顶 / 右沿走 `fg`/`bg` 反色补齐);
 /// 双轴分数的角格按垂直近似。
-fn shell_cell(
+fn edge_cell(
     hcov: u32,
     vcov: u32,
     paint_left_part: bool,
@@ -384,14 +380,10 @@ fn shell_cell(
     fill: Color,
     bg: Color,
 ) -> (&'static str, Style) {
-    let h_full = hcov >= 8;
-    let v_full = vcov >= 8;
-    if h_full && v_full {
-        ("█", Style::new().fg(fill))
-    } else if h_full {
+    if hcov >= 8 {
         // 纯垂直边(上 / 下沿)。
         vertical_eighth(vcov, bottom_aligned, fill, bg)
-    } else if v_full {
+    } else if vcov >= 8 {
         // 纯水平边(左 / 右沿)。
         if paint_left_part {
             (left_eighth(hcov), Style::new().fg(fill))

@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/popup/confirm.rs
+description: "退出确认 modal 中心揭开中途(scale=700):内容定格自中心露出"
+expression: terminal.backend()
+---
+"                                                            "
+"                                                            "
+"                                                            "
+"                 ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇                 "
+"                 ▌ playback and close sess▋                 "
+"                 ▌                        ▋                 "
+"                 ▌] yes      [ n / esc ] c▋                 "
+"                 ▌                        ▋                 "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "

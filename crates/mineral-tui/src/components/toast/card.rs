@@ -10,14 +10,16 @@ use std::time::{Duration, Instant};
 
 use mineral_protocol::{SpanAlign, SpanFg, TextSpan};
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::components::toast::notifications::TextTint;
 use crate::render::anim::Transition;
+use crate::render::blit::{self, EdgeColors, HAnchor};
 use crate::render::theme::Theme;
 
 /// 把一段纯文本升成无样式单 span 行(标题等单行语境的便捷构造)。
@@ -199,9 +201,9 @@ impl Card {
             .saturating_add(2)
     }
 
-    /// 在 `slot`(完全展开尺寸的目标位)渲染:进出场途中沿 `motion` 方向画
-    /// 1/8 cell 精度的纯色空壳(无边框 / 无内容,消除整格台阶与 reflow 抖动,
-    /// 与浮层弹出动画同范式),到位后切真卡片。
+    /// 在 `slot`(完全展开尺寸的目标位)渲染:进出场途中把真卡片按满尺寸离屏渲染,
+    /// 可见窗口沿 `motion` 方向随进度推进(ExpandDown 原位揭出 / SlideInRight 随
+    /// 前沿平移,与浮层弹出动画同范式),前沿分数格画 1/8 八分块;到位后切直绘。
     ///
     /// # Params:
     ///   - `frame`: 目标帧
@@ -224,13 +226,41 @@ impl Card {
         }
         let eased = self.anim.eased_in_out();
         if eased < 1000 {
+            let mut off = Buffer::empty(slot);
+            self.render_full(&mut off, slot, close_hint, theme, now);
+            // 卡体色与屏幕底色同为 base,体色前沿块会隐形 —— 前沿用骨架色 surface1
+            // 作可见的"幕布线"(与 TTL 蔓延的暗端同色,视觉语言统一)。
+            let edge = EdgeColors {
+                fill: theme.surface1,
+                bg: theme.base,
+            };
+            let buf = frame.buffer_mut();
             match motion {
-                CardMotion::ExpandDown => draw_v_grow_shell(frame, slot, eased, theme),
-                CardMotion::SlideInRight => draw_h_grow_shell(frame, slot, eased, theme),
+                CardMotion::ExpandDown => {
+                    let cur_h_e = u32::from(slot.height) * 8 * u32::from(eased) / 1000;
+                    blit::reveal_v_top(buf, &off, slot, cur_h_e, edge);
+                }
+                CardMotion::SlideInRight => {
+                    let cur_w_e = u32::from(slot.width) * 8 * u32::from(eased) / 1000;
+                    blit::slide_h(buf, &off, slot, cur_w_e, HAnchor::Right, edge);
+                }
             }
             return;
         }
-        let area = slot;
+        frame.render_widget(Clear, slot);
+        self.render_full(frame.buffer_mut(), slot, close_hint, theme, now);
+    }
+
+    /// 把完全展开的卡片画进 `buf` 的 `area`:外框 + 标题 + body 行 + TTL 边框蔓延。
+    /// 上屏直绘与进出场离屏渲染共用此入口(不含 Clear,调用方各自处理)。
+    fn render_full(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        close_hint: &str,
+        theme: &Theme,
+        now: Instant,
+    ) {
         let accent = self.accent_color(theme);
         let mut block = Block::new()
             .borders(Borders::ALL)
@@ -260,8 +290,7 @@ impl Card {
             );
         }
         let inner = block.inner(area);
-        frame.render_widget(Clear, area);
-        frame.render_widget(block, area);
+        block.render(area, buf);
         // 部分展开时只画放得下的行;行内按 span 段位三组布局,超宽截断。
         for (i, spans) in self.body.iter().take(usize::from(inner.height)).enumerate() {
             let row = Rect::new(
@@ -270,11 +299,11 @@ impl Card {
                 inner.width,
                 1,
             );
-            render_line(frame, row, spans, theme);
+            render_line(buf, row, spans, theme);
         }
         let progress = self.burn_progress(now);
         if progress > 0 {
-            decay_border(frame.buffer_mut(), area, progress, accent, theme);
+            decay_border(buf, area, progress, accent, theme);
         }
     }
 
@@ -315,11 +344,11 @@ const GROUP_GAP: u16 = 2;
 /// 只发生在调用方塞超宽内容时)。
 ///
 /// # Params:
-///   - `frame`: 目标帧
+///   - `buf`: 目标缓冲
 ///   - `row`: 该行的内区(高 1)
 ///   - `spans`: 行内 spans
 ///   - `theme`: 配色(fg 角色落色)
-fn render_line(frame: &mut Frame<'_>, row: Rect, spans: &[TextSpan], theme: &Theme) {
+fn render_line(buf: &mut Buffer, row: Rect, spans: &[TextSpan], theme: &Theme) {
     if row.width == 0 || row.height == 0 {
         return;
     }
@@ -336,7 +365,7 @@ fn render_line(frame: &mut Frame<'_>, row: Rect, spans: &[TextSpan], theme: &The
         if group.is_empty() {
             continue;
         }
-        frame.render_widget(Line::from(group).alignment(alignment), row);
+        Line::from(group).alignment(alignment).render(row, buf);
     }
 }
 
@@ -413,99 +442,6 @@ fn line_width(spans: &[TextSpan]) -> u16 {
         .saturating_add(GROUP_GAP.saturating_mul(groups.saturating_sub(1)))
 }
 
-/// ExpandDown 的进退场空壳:顶边锚定,高度按 `scale`(千分比)向下长出 / 收回,
-/// 生长的底缘用 1/8 cell 八分块平滑(反色补齐:cell 上部实心、下部露背景)。
-/// 体色随 scale 从骨架色 surface1 渐变到卡片体色 base,到位切真卡片时体色连续。
-fn draw_v_grow_shell(frame: &mut Frame<'_>, full: Rect, scale: u16, theme: &Theme) {
-    if full.width == 0 || full.height == 0 {
-        return;
-    }
-    let full_h_e = u32::from(full.height) * 8;
-    let cur_h_e = full_h_e * u32::from(scale) / 1000;
-    // 不足一格画不出有意义的面板,跳过这一帧。
-    if cur_h_e < 8 {
-        return;
-    }
-    let top_e = u32::from(full.y) * 8;
-    let bottom_e = top_e + cur_h_e;
-    let row1 = bottom_e.div_ceil(8);
-    let rows = u16::try_from(row1.saturating_sub(u32::from(full.y))).unwrap_or(full.height);
-    frame.render_widget(Clear, Rect::new(full.x, full.y, full.width, rows));
-
-    let fill = shell_fill(scale, theme);
-    let bg = theme.base;
-    let buf = frame.buffer_mut();
-    for row in u32::from(full.y)..row1 {
-        let r_lo = row * 8;
-        let vcov = bottom_e.min(r_lo + 8).saturating_sub(top_e.max(r_lo));
-        if vcov == 0 {
-            continue;
-        }
-        let (glyph, style) = if vcov >= 8 {
-            ("█", Style::new().fg(fill))
-        } else {
-            // 生长底缘:cell 上部 vcov/8 实心 → 反色画下部 (8-vcov)/8 的"背景"。
-            (
-                crate::render::cells::lower_eighth(8 - vcov),
-                Style::new().fg(bg).bg(fill),
-            )
-        };
-        let Ok(y) = u16::try_from(row) else {
-            continue;
-        };
-        for x in full.x..full.right() {
-            buf.set_string(x, y, glyph, style);
-        }
-    }
-}
-
-/// SlideInRight 的进退场空壳:右缘锚定,宽度按 `scale`(千分比)自右向左滑入 / 滑出,
-/// 生长的左缘用 1/8 cell 八分块平滑(反色补齐:cell 右部实心、左部露背景)。
-fn draw_h_grow_shell(frame: &mut Frame<'_>, full: Rect, scale: u16, theme: &Theme) {
-    if full.width == 0 || full.height == 0 {
-        return;
-    }
-    let full_w_e = u32::from(full.width) * 8;
-    let cur_w_e = full_w_e * u32::from(scale) / 1000;
-    if cur_w_e < 8 {
-        return;
-    }
-    let right_e = u32::from(full.right()) * 8;
-    let left_e = right_e.saturating_sub(cur_w_e);
-    let col0 = left_e / 8;
-    let x0 = u16::try_from(col0).unwrap_or(full.x);
-    frame.render_widget(
-        Clear,
-        Rect::new(x0, full.y, full.right().saturating_sub(x0), full.height),
-    );
-
-    let fill = shell_fill(scale, theme);
-    let bg = theme.base;
-    let buf = frame.buffer_mut();
-    for col in col0..u32::from(full.right()) {
-        let c_lo = col * 8;
-        let hcov = right_e.min(c_lo + 8).saturating_sub(left_e.max(c_lo));
-        if hcov == 0 {
-            continue;
-        }
-        let (glyph, style) = if hcov >= 8 {
-            ("█", Style::new().fg(fill))
-        } else {
-            // 生长左缘:cell 右部 hcov/8 实心 → 反色画左部 (8-hcov)/8 的"背景"。
-            (
-                crate::render::cells::left_eighth(8 - hcov),
-                Style::new().fg(bg).bg(fill),
-            )
-        };
-        let Ok(x) = u16::try_from(col) else {
-            continue;
-        };
-        for y in full.y..full.bottom() {
-            buf.set_string(x, y, glyph, style);
-        }
-    }
-}
-
 /// 边框线符集(Rounded):倒计时蔓延只重染这些 cell,标题 / 底边提示等
 /// 画在边框上的文字保持原色可读。
 fn is_border_glyph(symbol: &str) -> bool {
@@ -571,17 +507,6 @@ fn decay_border(
         // 底边内段接左边之后,向右与右下角汇合。
         paint(x, bottom, u64::from(area.height - 1) + u64::from(x - left));
     }
-}
-
-/// 空壳体色:随 `scale` 从骨架色 surface1 渐变到卡片体色 base,
-/// 到位(scale→1000)时与真卡片背景一致,切换不突变。
-fn shell_fill(scale: u16, theme: &Theme) -> Color {
-    crate::render::color::lerp_color(
-        theme.surface1,
-        theme.base,
-        u64::from(scale),
-        /*den*/ 1000,
-    )
 }
 
 /// 级别 → 标题前缀符号(Normal 无符号)。
@@ -665,8 +590,8 @@ mod tests {
         Ok(())
     }
 
-    /// ExpandDown 进场中途:1/8 cell 空壳从顶边向下长出,底缘是反色八分块,
-    /// 无边框无内容。
+    /// ExpandDown 进场中途:真卡片内容(边框 + 标题)自顶向下原位揭出,
+    /// 底缘是 1/8 八分块幕布线,未揭到的行不可见。
     #[test]
     fn card_midexpand_snapshot() -> color_eyre::Result<()> {
         let mut card = warn_card();
@@ -675,13 +600,14 @@ mod tests {
         }
         let t = draw(&card, CardMotion::ExpandDown)?;
         crate::test_support::assert_snap!(
-            "卡片 ExpandDown 中途:纯色空壳自顶向下长出,底缘八分块平滑",
+            "卡片 ExpandDown 中途:真内容自顶向下揭出,底缘八分块幕布线",
             t.backend()
         );
         Ok(())
     }
 
-    /// SlideInRight 进场中途:1/8 cell 空壳右缘锚定向左滑入,左缘是反色八分块。
+    /// SlideInRight 进场中途:真卡片左侧列(含左边框)贴右缘滑入,内容随前沿
+    /// 平移,左前沿是 1/8 八分块幕布线。
     #[test]
     fn card_midslide_snapshot() -> color_eyre::Result<()> {
         let mut card = warn_card();
@@ -690,7 +616,7 @@ mod tests {
         }
         let t = draw(&card, CardMotion::SlideInRight)?;
         crate::test_support::assert_snap!(
-            "卡片 SlideInRight 中途:纯色空壳自右缘向左滑入,左缘八分块平滑",
+            "卡片 SlideInRight 中途:真内容随前沿向左滑入,左前沿八分块幕布线",
             t.backend()
         );
         Ok(())

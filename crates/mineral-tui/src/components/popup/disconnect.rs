@@ -2,11 +2,11 @@
 //! 盖在最上层,居中显示话术 +「按任意键退出」,停在那等用户按键。
 
 use crossterm::event::KeyEvent;
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
@@ -37,7 +37,7 @@ impl Overlay for DisconnectOverlay {
             .title(Line::from(" connection lost ").style(Style::new().fg(theme.red)))
     }
 
-    fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
         if inner.height < 3 || inner.width < 12 {
             return;
         }
@@ -46,14 +46,18 @@ impl Overlay for DisconnectOverlay {
         let msg_area = Rect::new(inner.x, mid_y.saturating_sub(1), inner.width, 1);
         let msg =
             Line::from("Lost connection to playback service").style(Style::new().fg(theme.text));
-        frame.render_widget(Paragraph::new(msg).alignment(Alignment::Center), msg_area);
+        Paragraph::new(msg)
+            .alignment(Alignment::Center)
+            .render(msg_area, buf);
 
         // 下半:退出提示(居中,弱化色)。
         let hint_y = mid_y.saturating_add(1).min(inner.y + inner.height - 1);
         let hint_area = Rect::new(inner.x, hint_y, inner.width, 1);
         let hint = Line::from("Press any key to exit")
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::DIM));
-        frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), hint_area);
+        Paragraph::new(hint)
+            .alignment(Alignment::Center)
+            .render(hint_area, buf);
     }
 
     fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {

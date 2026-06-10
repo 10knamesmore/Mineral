@@ -2,11 +2,11 @@
 
 use crossterm::event::KeyEvent;
 use mineral_model::{Song, SongId};
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, Cell, Row, StatefulWidget, Table, TableState};
 
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
@@ -84,7 +84,7 @@ impl Overlay for QueueOverlay {
             )
     }
 
-    fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         let current_id = ctx.playback.track.as_ref().map(|t| &t.id);
         // 按浮层内宽选列档:窄浮层放不下 artist 时退到「歌本身」(# title len)。
         let cols = QueueCols::for_width(inner.width);
@@ -123,7 +123,7 @@ impl Overlay for QueueOverlay {
         let mut state = TableState::default()
             .with_offset(offset)
             .with_selected(Some(scroll::pin_cursor(self.sel, offset, viewport)));
-        frame.render_stateful_widget(table, inner, &mut state);
+        StatefulWidget::render(table, inner, buf, &mut state);
     }
 
     fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
@@ -347,7 +347,8 @@ mod tests {
         Ok(())
     }
 
-    /// 贴边水平 grow 半程(scale=500):只画从停靠边缘水平长出的满高空壳,无表格内容。
+    /// 贴边滑入半程(scale=500):真面板右侧列(含右边框)贴左缘滑入,表格内容
+    /// 随前沿平移可见,左边框尚未进场。
     #[test]
     fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
@@ -365,14 +366,14 @@ mod tests {
             );
         })?;
         crate::test_support::assert_snap!(
-            "队列浮层:贴边水平 grow 半程(scale=500)满高空壳",
+            "队列浮层:贴边滑入半程(scale=500)内容随前沿平移",
             t.backend()
         );
         Ok(())
     }
 
-    /// 水平 grow scale=505:生长边(右)落在非整 cell,用左八分块 1/8 平滑过渡,
-    /// 验证水平 grow 不一格一格跳。
+    /// 滑入 scale=505:前沿(右)落在非整 cell,用左八分块 1/8 平滑过渡,
+    /// 验证滑入不一格一格跳。
     #[test]
     fn queue_h_grow_smooth_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
@@ -390,7 +391,7 @@ mod tests {
             );
         })?;
         crate::test_support::assert_snap!(
-            "队列浮层:贴边水平 grow(scale=505)生长边 1/8 八分块平滑",
+            "队列浮层:贴边滑入(scale=505)前沿 1/8 八分块平滑",
             t.backend()
         );
         Ok(())

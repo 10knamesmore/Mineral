@@ -4,6 +4,7 @@
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
 
@@ -65,11 +66,11 @@ impl Overlay for OverlayKind {
         }
     }
 
-    fn render_content(&self, frame: &mut Frame<'_>, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         match self {
-            Self::Queue(o) => o.render_content(frame, inner, ctx, theme),
-            Self::Confirm(o) => o.render_content(frame, inner, ctx, theme),
-            Self::Disconnect(o) => o.render_content(frame, inner, ctx, theme),
+            Self::Queue(o) => o.render_content(buf, inner, ctx, theme),
+            Self::Confirm(o) => o.render_content(buf, inner, ctx, theme),
+            Self::Disconnect(o) => o.render_content(buf, inner, ctx, theme),
         }
     }
 

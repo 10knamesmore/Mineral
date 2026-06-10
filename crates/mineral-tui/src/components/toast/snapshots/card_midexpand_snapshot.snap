@@ -1,12 +1,12 @@
 ---
 source: crates/mineral-tui/src/components/toast/card.rs
-description: "卡片 ExpandDown 中途:纯色空壳自顶向下长出,底缘八分块平滑"
+description: "卡片 ExpandDown 中途:真内容自顶向下揭出,底缘八分块幕布线"
 expression: t.backend()
 ---
 "                                                                                "
-"                                                    ███████████████████████████ "
-"                                                    ███████████████████████████ "
-"                                                    ███████████████████████████ "
+"                                                    ╭ ⚠ v0.9.0 要点 ──────────╮ " Hidden by multi-width symbols: [(64, " "), (66, " ")]
+"                                                    │ 新增配置 toast.position │ " Hidden by multi-width symbols: [(55, " "), (57, " "), (59, " "), (61, " ")]
+"                                                    │ 旧键 search.style 改名  │ " Hidden by multi-width symbols: [(55, " "), (57, " "), (73, " "), (75, " ")]
 "                                                    ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅ "
 "                                                                                "
 "                                                                                "
