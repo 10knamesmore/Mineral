@@ -57,11 +57,12 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
         tr: Option<Vec<u64>>,
     }
 
-    /// 一行(行起始 `t` + 字单元序列 `c`)。
+    /// 一行(行起始 `t` + 字单元序列 `c`)。`t` 用 i64:纯器乐歌的 credits 行
+    /// t=-1(无时间轴哨兵),用 u64 会让整行反序列化失败被静默丢掉。
     #[derive(serde::Deserialize)]
     struct LineDto {
         #[serde(default)]
-        t: Option<u64>,
+        t: Option<i64>,
 
         #[serde(default)]
         c: Vec<WordDto>,
@@ -71,7 +72,9 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
     if dto.c.is_empty() {
         return None;
     }
-    let start = dto.t.unwrap_or(0);
+    // 负 t = 无时间轴,credits 路径落成无时间戳行。
+    let time_ms = dto.t.and_then(|v| u64::try_from(v).ok());
+    let start = time_ms.unwrap_or(0);
 
     // 字全带 tr → 逐字行。
     if dto.c.iter().all(|w| w.tr.is_some()) {
@@ -111,7 +114,7 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
         return None;
     }
     Some(LyricLine {
-        time_ms: dto.t,
+        time_ms,
         kind: LineKind::Plain(text),
         translation: None,
         romanization: None,
@@ -234,6 +237,13 @@ mod tests {
     fn empty_and_blank_input() {
         assert!(parse_yrc("").is_empty());
         assert!(parse_yrc("\n\n  \n").is_empty());
+    }
+
+    #[test]
+    fn negative_t_credits_kept_untimed() {
+        // 纯器乐歌的 credits 行 t=-1(无时间轴哨兵),保留为无时间戳行,不整行丢弃。
+        let s = r#"{"t":-1,"c":[{"tx":"作词: "},{"tx":"某某"}]}"#;
+        assert_eq!(parse_yrc(s), vec![LyricLine::untimed("作词: 某某")]);
     }
 
     #[test]

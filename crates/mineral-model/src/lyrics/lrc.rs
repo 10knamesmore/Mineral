@@ -103,11 +103,12 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
         tx: String,
     }
 
-    /// 一个富文本行。
+    /// 一个富文本行。`t` 用 i64:纯器乐歌的 credits 行 t=-1(无时间轴哨兵),
+    /// 用 u64 会让整行反序列化失败被静默丢掉。
     #[derive(Deserialize)]
     struct JsonLine {
         #[serde(default)]
-        t: Option<u64>,
+        t: Option<i64>,
 
         #[serde(default)]
         c: Vec<Seg>,
@@ -128,7 +129,8 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
         return None;
     }
     Some(LyricLine {
-        time_ms: parsed.t,
+        // 负 t = 无时间轴,落成无时间戳行(文本保留,不参与时间定位)。
+        time_ms: parsed.t.and_then(|v| u64::try_from(v).ok()),
         kind: LineKind::Plain(text),
         translation: None,
         romanization: None,
@@ -156,6 +158,11 @@ fn parse_text_line(raw: &str, last_time: &mut u64, out: &mut Vec<(u64, LyricLine
                 stamps.push(ms);
                 rest = after.trim_start();
             }
+            // 形如 `[00:00.00-1]` 的畸形时间戳(见 is_negative_timestamp):剥掉不记
+            // 时间,行落成无时间戳(stamps 仍空时)。
+            None if is_negative_timestamp(inside) => {
+                rest = after.trim_start();
+            }
             // 第一个非时间戳括号:停,余下整体交给文本 / meta 判定。
             None => break,
         }
@@ -173,6 +180,17 @@ fn parse_text_line(raw: &str, last_time: &mut u64, out: &mut Vec<(u64, LyricLine
         return;
     }
     out.push((*last_time, LyricLine::untimed(text)));
+}
+
+/// 是否是 `00:00.00-1` 这种畸形时间戳:网易把负毫秒(纯器乐歌 credits 的无时间轴哨兵
+/// t=-1)经无符号格式化输出,负数尾巴拼在厘秒后。`-` 前是合法时间戳、后是纯数字即命中;
+/// `[Verse 1]` 等无时间戳形状的标记不受影响。
+fn is_negative_timestamp(s: &str) -> bool {
+    s.rsplit_once('-').is_some_and(|(head, tail)| {
+        !tail.is_empty()
+            && tail.bytes().all(|b| b.is_ascii_digit())
+            && parse_timestamp(head).is_some()
+    })
 }
 
 /// 整行是否是已知 LRC meta tag(`[ti:]`/`[ar:]`/`[al:]`/`[by:]`/`[offset:]` 等),是则整
@@ -356,6 +374,25 @@ mod tests {
     fn handles_empty_and_blank_lines() {
         assert!(parse_lrc("").is_empty());
         assert!(parse_lrc("\n\n  \n").is_empty());
+    }
+
+    #[test]
+    fn negative_t_json_line_is_untimed() {
+        // 网易给纯器乐歌(如 Charmer《Split Plate》)的 credits 行 t=-1(无时间轴哨兵),
+        // 应解析成无时间戳行,不能因 u64 反序列化失败把整行静默丢掉。
+        let s = r#"{"t":-1,"c":[{"tx":"作词: "},{"tx":"Someone"}]}"#;
+        assert_eq!(parse_lrc(s), vec![plain("作词: Someone")]);
+    }
+
+    #[test]
+    fn malformed_negative_timestamp_is_stripped() {
+        // 同一首歌走老接口时,服务端把 t=-1 格式化成畸形 `[00:00.00-1]`(负毫秒拼进
+        // 厘秒位)。应剥掉括号当无时间戳行,不能把畸形时间戳当正文渲染出去。
+        let s = "[00:00.00-1] 作词 : Someone\n[00:00.00-1] 作曲 : Someone";
+        assert_eq!(
+            parse_lrc(s),
+            vec![plain("作词 : Someone"), plain("作曲 : Someone")]
+        );
     }
 
     // ───────────────── 严出 / 定位 ─────────────────
