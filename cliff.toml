@@ -31,10 +31,13 @@ conventional_commits = true
 filter_unconventional = true
 split_commits = false
 
-# 只保留**用户可感知**的类型;其余(refactor/test/chore/docs/ci/style/build…)一律跳过。
-# 约定:用户能感知的改动就该打成 feat/fix,而不是 refactor —— 按用户影响选 type,
-# changelog 自然正确(细则见 CONTRIBUTING.md)。
+# 保留**用户可感知**的类型 + 任何破坏性提交;其余(test/chore/docs/ci/style/build…)跳过。
+# 约定:用户能感知的改动就该打成 feat/fix 而非 refactor —— 按用户影响选 type。但带 `!` 的
+# 破坏性提交(即便 type 是 refactor)永远先归 Breaking Changes 置顶,不靠人每次记得改 type:
+# 「内部重构但破坏 daemon↔client wire 兼容」这类必须在 changelog 现身(细则见 CONTRIBUTING.md)。
+# 第一条规则匹配 `type!:` / `type(scope)!:` 形态;feat!/fix! 也归此组(破坏性优先于分类)。
 commit_parsers = [
+  { message = "^[a-z]+(\\(.+?\\))?!", group = "<!-- -1 -->Breaking Changes" },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
