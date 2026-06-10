@@ -297,7 +297,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
-            toast.render(f, area, &theme);
+            toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
         crate::test_support::assert_snap!(
             "下载进度条 toast:展开到位,[进度条 % 速度 done/total](聚合计数 2/24)",
@@ -317,7 +317,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
-            toast.render(f, area, &theme);
+            toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
         crate::test_support::assert_snap!("下载完成提示:✓3 ⊙2 ✗1(真下载/已存在/失败)", t.backend());
         Ok(())
@@ -333,7 +333,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
-            toast.render(f, area, &theme);
+            toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
         crate::test_support::assert_snap!("下载完成提示:全成功 → 只 ✓5", t.backend());
         Ok(())
@@ -349,7 +349,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
-            toast.render(f, area, &theme);
+            toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
         crate::test_support::assert_snap!("下载完成提示:整批已存在 → 已下载 ⊙2", t.backend());
         Ok(())

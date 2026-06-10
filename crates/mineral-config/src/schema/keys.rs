@@ -94,6 +94,9 @@ pub struct KeysConfig {
     /// 下载当前视图选中项。
     download: KeyBinding,
 
+    /// 关最早一张驻留通知卡片(连按逐条关)。
+    dismiss_notice: KeyBinding,
+
     /// 逐行下滚(行数见 `behavior.line_scroll_rows`):全屏滚歌词,浏览态滚列表视口。
     scroll_line_down: KeyBinding,
 

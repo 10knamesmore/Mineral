@@ -147,6 +147,15 @@ pub(crate) fn ticks16_from_ms(ms: u32, tick_ms: u64) -> u16 {
     u16::try_from(ticks32_from_ms(ms, tick_ms)).unwrap_or(u16::MAX)
 }
 
+/// 在 `a`、`b` 间按千分比 `t`(`0..=1000`)定点插值:`a + (b-a)*t/1000`。全程 `i32`,
+/// 不碰 `as` 强转;结果 clamp 进 `u16` 范围。布局形变的矩形插值与通知层的
+/// 锚点过渡共用这一个实现。
+pub(crate) fn lerp_u16(a: u16, b: u16, t: u16) -> u16 {
+    let (a, b, t) = (i32::from(a), i32::from(b), i32::from(t.min(1000)));
+    let v = a + (b - a) * t / 1000;
+    u16::try_from(v.clamp(0, i32::from(u16::MAX))).unwrap_or(0)
+}
+
 /// cubic **ease-in-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比
 /// (`0..=1000`)。关于中点对称——两端减速、中段快,对进度增减两个方向都"减速到位"。
 /// 单调不过冲。[`Transition::eased_in_out`] 与歌词平滑滚动共用这一条曲线。

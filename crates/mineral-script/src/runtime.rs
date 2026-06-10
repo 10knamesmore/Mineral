@@ -65,7 +65,7 @@ impl Drop for ScriptRuntime {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, ToastKind};
+    use mineral_protocol::{Event, TextSpan, ToastKind};
     use mineral_test::{endserenading, song, with_duration};
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -101,6 +101,11 @@ mod tests {
         Ok((runtime, sender, push_rx))
     }
 
+    /// 把 toast 的 spans 内容拼回纯文本(断言用)。
+    fn flat(content: &[TextSpan]) -> String {
+        content.iter().map(|s| s.text.as_str()).collect::<String>()
+    }
+
     /// drop runtime(Stop + join)后排干 push 通道。
     fn drain_after_stop(
         runtime: ScriptRuntime,
@@ -133,7 +138,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: expected,
+                content: vec![TextSpan::plain(expected)],
                 id: None,
                 ttl_secs: None,
             }]
@@ -169,7 +174,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: expected,
+                content: vec![TextSpan::plain(expected)],
                 id: None,
                 ttl_secs: None,
             }]
@@ -197,7 +202,9 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "/tmp/LoveLetterTypewriter.flac/lossless/flac".to_owned(),
+                content: vec![TextSpan::plain(
+                    "/tmp/LoveLetterTypewriter.flac/lossless/flac"
+                )],
                 id: Some("dl".to_owned()),
                 ttl_secs: None,
             }]
@@ -228,7 +235,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "Mineral/EndSerenading/nil/nil".to_owned(),
+                content: vec![TextSpan::plain("Mineral/EndSerenading/nil/nil")],
                 id: None,
                 ttl_secs: None,
             }]
@@ -256,7 +263,7 @@ mod tests {
             *first,
             Event::Toast {
                 kind: ToastKind::Error,
-                content: "脚本 track_finished 回调出错,详见日志".to_owned(),
+                content: vec![TextSpan::plain("脚本 track_finished 回调出错,详见日志")],
                 id: Some("script.error".to_owned()),
                 ttl_secs: None,
             },
@@ -266,7 +273,7 @@ mod tests {
             *second,
             Event::Toast {
                 kind: ToastKind::Info,
-                content: "still alive".to_owned(),
+                content: vec![TextSpan::plain("still alive")],
                 id: None,
                 ttl_secs: None,
             },
@@ -294,7 +301,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "vol=55".to_owned(),
+                content: vec![TextSpan::plain("vol=55")],
                 id: Some("vol".to_owned()),
                 ttl_secs: None,
             }]
@@ -335,7 +342,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "acted".to_owned(),
+                content: vec![TextSpan::plain("acted")],
                 id: None,
                 ttl_secs: None,
             }],
@@ -388,7 +395,7 @@ mod tests {
         let contents = events
             .iter()
             .map(|e| match e {
-                Event::Toast { content, .. } => content.clone(),
+                Event::Toast { content, .. } => flat(content),
                 other => format!("{other:?}"),
             })
             .collect::<Vec<String>>();
@@ -452,7 +459,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "7/nil".to_owned(),
+                content: vec![TextSpan::plain("7/nil")],
                 id: None,
                 ttl_secs: None,
             }]
@@ -525,7 +532,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "nil/不能自增".to_owned(),
+                content: vec![TextSpan::plain("nil/不能自增")],
                 id: None,
                 ttl_secs: None,
             }],
@@ -557,7 +564,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: want,
+                content: vec![TextSpan::plain(want)],
                 id: None,
                 ttl_secs: None,
             }],
@@ -616,7 +623,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "netease:p1:日常:42".to_owned(),
+                content: vec![TextSpan::plain("netease:p1:日常:42")],
                 id: None,
                 ttl_secs: None,
             }]
@@ -673,7 +680,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "2/nil".to_owned(),
+                content: vec![TextSpan::plain("2/nil")],
                 id: None,
                 ttl_secs: None,
             }],
@@ -905,7 +912,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "0/hi\n/false".to_owned(),
+                content: vec![TextSpan::plain("0/hi\n/false")],
                 id: None,
                 ttl_secs: None,
             }],
@@ -966,7 +973,7 @@ mod tests {
                 },
                 Event::Toast {
                     kind: ToastKind::Info,
-                    content: "钠/20".to_owned(),
+                    content: vec![TextSpan::plain("钠/20")],
                     id: None,
                     ttl_secs: None,
                 },
@@ -994,12 +1001,13 @@ mod tests {
         let toasts = events
             .iter()
             .filter_map(|e| match e {
-                Event::Toast { content, .. } => Some(content.as_str()),
+                Event::Toast { content, .. } => Some(flat(content)),
                 _ => None,
             })
-            .collect::<Vec<&str>>();
+            .collect::<Vec<String>>();
         assert!(
-            toasts.contains(&"第二个照常") && toasts.contains(&"emit 之后还活着"),
+            toasts.iter().any(|t| t == "第二个照常")
+                && toasts.iter().any(|t| t == "emit 之后还活着"),
             "订阅者出错不影响其余订阅者与 emit 调用方,实得 {toasts:?}"
         );
         Ok(())
@@ -1038,7 +1046,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: "dinged".to_owned(),
+                content: vec![TextSpan::plain("dinged")],
                 id: None,
                 ttl_secs: None,
             }]

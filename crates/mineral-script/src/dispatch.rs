@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use mineral_model::Song;
-use mineral_protocol::{Event, ToastKind};
+use mineral_protocol::{Event, TextSpan, ToastKind};
 use mlua::Lua;
 
 use crate::host::ScriptHost;
@@ -393,7 +393,9 @@ pub(crate) fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &m
     );
     let _ = host.push.send(Event::Toast {
         kind: ToastKind::Error,
-        content: format!("脚本 {event_name} 回调出错,详见日志"),
+        content: vec![TextSpan::plain(format!(
+            "脚本 {event_name} 回调出错,详见日志"
+        ))],
         id: Some(SCRIPT_ERROR_TOAST_ID.to_owned()),
         ttl_secs: None,
     });

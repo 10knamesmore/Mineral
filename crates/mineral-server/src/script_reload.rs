@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mineral_protocol::{Event, ToastKind};
+use mineral_protocol::{Event, TextSpan, ToastKind};
 use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -138,7 +138,7 @@ fn reload_once(
 fn toast(push_tx: &UnboundedSender<Event>, kind: ToastKind, content: String) {
     let _ = push_tx.send(Event::Toast {
         kind,
-        content,
+        content: vec![TextSpan::plain(content)],
         id: Some("script.reload".to_owned()),
         ttl_secs: None,
     });

@@ -5,8 +5,8 @@ use color_eyre::eyre::eyre;
 use mineral_model::{SongId, SourceKind};
 use mineral_protocol::{
     BusValue, ClientInfo, Event, FinishReason, Frame, OneshotClient, PkgVersion, PropName,
-    PropValue, RejectReason, Request, RequestId, Response, ServerHello, Subscription, ToastKind,
-    framed, recv, send,
+    PropValue, RejectReason, Request, RequestId, Response, ServerHello, SpanAlign, SpanFg,
+    Subscription, TextSpan, ToastKind, framed, recv, send,
 };
 use pretty_assertions::assert_eq;
 use tokio::io::duplex;
@@ -46,9 +46,43 @@ async fn frame_round_trips(frame: Frame) -> color_eyre::Result<()> {
 fn toast_event() -> Event {
     Event::Toast {
         kind: ToastKind::Warn,
-        content: "音量 42".to_owned(),
+        content: vec![TextSpan::plain("音量 42")],
         id: Some("vol".to_owned()),
         ttl_secs: None,
+    }
+}
+
+/// 一条样例 Card 事件:标题 + 两行 body,第二行带样式 spans(角色色 + RGB + 修饰位)。
+fn card_event() -> Event {
+    Event::Card {
+        kind: ToastKind::Warn,
+        id: Some("release.notes".to_owned()),
+        title: vec![TextSpan::plain("v0.9.0 要点")],
+        ttl_secs: None,
+        body: vec![
+            vec![TextSpan::plain("新增配置 toast.position")],
+            vec![
+                TextSpan::plain("旧键 "),
+                TextSpan {
+                    text: "search.style".to_owned(),
+                    fg: Some(SpanFg::Accent),
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                    dim: false,
+                    align: SpanAlign::Center,
+                },
+                TextSpan {
+                    text: " 改名".to_owned(),
+                    fg: Some(SpanFg::Rgb(0xcc, 0x66, 0x00)),
+                    bold: false,
+                    italic: true,
+                    underline: true,
+                    dim: true,
+                    align: SpanAlign::Right,
+                },
+            ],
+        ],
     }
 }
 
@@ -92,9 +126,18 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
     frame_round_trips(Frame::Event(toast_event())).await?;
     frame_round_trips(Frame::Event(Event::Toast {
         kind: ToastKind::Info,
-        content: "一次性提示".to_owned(),
+        content: vec![TextSpan::plain("一次性提示")],
         id: None,
         ttl_secs: None,
+    }))
+    .await?;
+    frame_round_trips(Frame::Event(card_event())).await?;
+    frame_round_trips(Frame::Event(Event::Card {
+        kind: ToastKind::Info,
+        id: None,
+        title: Vec::new(),
+        body: Vec::new(),
+        ttl_secs: Some(8),
     }))
     .await?;
     frame_round_trips(Frame::Event(Event::PropertyChanged {
@@ -133,6 +176,7 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
 #[test]
 fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
     dual_codec_roundtrip(&toast_event())?;
+    dual_codec_roundtrip(&card_event())?;
     dual_codec_roundtrip(&Event::PropertyChanged {
         prop: PropName::PLAYER_STATE,
         value: PropValue::Str("playing".to_owned()),
@@ -215,6 +259,11 @@ fn prop_name_from_name_roundtrips_builtins() {
 #[test]
 fn event_subscription_mapping() {
     assert_eq!(toast_event().subscription(), Subscription::Toast);
+    assert_eq!(
+        card_event().subscription(),
+        Subscription::Toast,
+        "卡片与 flash 同属 Toast 订阅类别,client 一次握手全收"
+    );
     assert_eq!(
         Event::PropertyChanged {
             prop: PropName::QUEUE_LENGTH,
@@ -395,7 +444,7 @@ async fn oneshot_rejected_handshake_bails() -> color_eyre::Result<()> {
 mod proptests {
     use mineral_protocol::{
         ClientInfo, Event, FinishReason, Frame, PropName, PropValue, RejectReason, Request,
-        RequestId, Response, ServerHello, Subscription, ToastKind,
+        RequestId, Response, ServerHello, SpanAlign, SpanFg, Subscription, TextSpan, ToastKind,
     };
     use mineral_test::arb_song;
     use proptest::option;
@@ -425,30 +474,93 @@ mod proptests {
         ]
     }
 
-    /// 随机 Event(四变体全覆盖)。
-    fn arb_event() -> impl Strategy<Value = Event> {
-        let kind = prop_oneof![
+    /// 随机 ToastKind(三变体)。
+    fn arb_kind() -> impl Strategy<Value = ToastKind> {
+        prop_oneof![
             Just(ToastKind::Info),
             Just(ToastKind::Warn),
             Just(ToastKind::Error)
+        ]
+    }
+
+    /// 随机 SpanFg:全部主题角色 + 任意 RGB。
+    fn arb_span_fg() -> impl Strategy<Value = SpanFg> {
+        prop_oneof![
+            Just(SpanFg::Text),
+            Just(SpanFg::Subtext),
+            Just(SpanFg::Overlay),
+            Just(SpanFg::Accent),
+            Just(SpanFg::Red),
+            Just(SpanFg::Yellow),
+            Just(SpanFg::Green),
+            Just(SpanFg::Peach),
+            any::<(u8, u8, u8)>().prop_map(|(r, g, b)| SpanFg::Rgb(r, g, b)),
+        ]
+    }
+
+    /// 随机 TextSpan(任意文本 + 任意样式 / 段位组合)。
+    fn arb_card_span() -> impl Strategy<Value = TextSpan> {
+        let align = prop_oneof![
+            Just(SpanAlign::Left),
+            Just(SpanAlign::Center),
+            Just(SpanAlign::Right),
         ];
+        (
+            any::<String>(),
+            option::of(arb_span_fg()),
+            any::<[bool; 4]>(),
+            align,
+        )
+            .prop_map(
+                |(text, fg, [bold, italic, underline, dim], align)| TextSpan {
+                    text,
+                    fg,
+                    bold,
+                    italic,
+                    underline,
+                    dim,
+                    align,
+                },
+            )
+    }
+
+    /// 随机 Event(五变体全覆盖)。
+    fn arb_event() -> impl Strategy<Value = Event> {
         let reason = prop_oneof![
             Just(FinishReason::Eof),
             Just(FinishReason::Skip),
             Just(FinishReason::Error),
             Just(FinishReason::Stop),
         ];
+        let line = || proptest::collection::vec(arb_card_span(), 0..4);
+        let body = proptest::collection::vec(line(), 0..4);
         prop_oneof![
             (
-                kind,
-                any::<String>(),
+                arb_kind(),
+                line(),
                 option::of(any::<String>()),
-                option::of(any::<u64>())
+                option::of(any::<u64>()),
             )
-                .prop_map(|(kind, content, id, ttl_secs)| Event::Toast {
+                .prop_map(|(kind, content, id, ttl_secs)| {
+                    Event::Toast {
+                        kind,
+                        content,
+                        id,
+                        ttl_secs,
+                    }
+                }),
+            (
+                arb_kind(),
+                option::of(any::<String>()),
+                line(),
+                body,
+                option::of(any::<u64>()),
+            )
+                .prop_map(|(kind, id, title, body, ttl_secs)| Event::Card {
                     kind,
-                    content,
                     id,
+                    title,
+                    body,
                     ttl_secs,
                 }),
             (arb_prop_name(), arb_prop_value())

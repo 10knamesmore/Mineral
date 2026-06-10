@@ -118,6 +118,7 @@ impl Keymap {
             (keys.back(), Action::BackOrClearSearch),
             (keys.love(), Action::ToggleLoveSelection),
             (keys.download(), Action::DownloadSelection),
+            (keys.dismiss_notice(), Action::DismissNotice),
             (
                 keys.scroll_line_down(),
                 Action::Scroll(ScrollStep::LineDown),
@@ -207,6 +208,23 @@ impl Keymap {
     pub fn lookup(&self, chord: KeyChord) -> Option<Action> {
         self.table.get(&chord).copied()
     }
+
+    /// 反查某动作绑定的键(UI 提示用,如卡片底边的关闭键)。多键绑同一动作时
+    /// 取显示串字典序最小的一个,保证提示跨帧 / 跨次启动稳定。
+    ///
+    /// # Params:
+    ///   - `action`: 目标动作
+    ///
+    /// # Return:
+    ///   绑定键和弦;该动作未绑定任何键为 `None`。
+    pub fn hint_chord(&self, action: Action) -> Option<KeyChord> {
+        self.table
+            .iter()
+            .filter(|(_, a)| **a == action)
+            .map(|(c, _)| (c.to_string(), *c))
+            .min_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, c)| c)
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +274,7 @@ mod tests {
             ("<BS>", Action::BackOrClearSearch),
             ("f", Action::ToggleLoveSelection),
             ("d", Action::DownloadSelection),
+            ("x", Action::DismissNotice),
             // ---- 全屏歌词手动滚动:单行档 = nvim halfpage 键,多行档 = fullpage 键 ----
             ("<C-d>", Action::Scroll(ScrollStep::LineDown)),
             ("<C-u>", Action::Scroll(ScrollStep::LineUp)),
@@ -287,7 +306,26 @@ mod tests {
     fn unbound_key_returns_none() -> color_eyre::Result<()> {
         let km = default_keymap()?;
         assert_eq!(km.lookup(KeyChord::parse("!")?), None);
-        assert_eq!(km.lookup(KeyChord::parse("x")?), None);
+        assert_eq!(km.lookup(KeyChord::parse("?")?), None);
+        Ok(())
+    }
+
+    /// 键反查:默认表 DismissNotice → "x";多键动作(activate = l/<CR>)取字典序
+    /// 最小的显示串,提示稳定;未绑定动作反查无果。
+    #[test]
+    fn hint_chord_reverse_lookup() -> color_eyre::Result<()> {
+        let km = default_keymap()?;
+        assert_eq!(
+            km.hint_chord(Action::DismissNotice),
+            Some(KeyChord::parse("x")?)
+        );
+        assert_eq!(
+            km.hint_chord(Action::ActivateSelection),
+            Some(KeyChord::parse("<CR>")?),
+            "\"<CR>\" 字典序小于 \"l\""
+        );
+        let empty = Keymap::from_entries(std::iter::empty());
+        assert_eq!(empty.hint_chord(Action::DismissNotice), None);
         Ok(())
     }
 
@@ -405,17 +443,17 @@ mod tests {
         Ok(())
     }
 
-    /// keys 重映射生效:play_pause 改绑 "x" 后,space 不再命中、x 命中(数组整体替换)。
+    /// keys 重映射生效:play_pause 改绑 "w" 后,space 不再命中、w 命中(数组整体替换)。
     #[test]
     fn key_remap_takes_effect() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let user = dir.path().join("config.lua");
-        std::fs::write(&user, "return { tui = { keys = { play_pause = \"x\" } } }")?;
+        std::fs::write(&user, "return { tui = { keys = { play_pause = \"w\" } } }")?;
         let (cfg, warnings) = mineral_config::load(&user)?;
         assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
         let km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
         assert_eq!(
-            km.lookup(KeyChord::parse("x")?),
+            km.lookup(KeyChord::parse("w")?),
             Some(Action::TogglePlayPause)
         );
         assert_eq!(

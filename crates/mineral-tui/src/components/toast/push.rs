@@ -1,13 +1,16 @@
-//! server 主动推送([`Event`])到通知层的翻译:Toast 进 [`Notifications`]
-//! (带 id 顶替 / 无 id 堆叠),其余类别 TUI 未订阅、安全忽略。
+//! server 主动推送([`Event`])到通知层的翻译:Toast 进单行 flash、Card 进
+//! 多行卡片(都带 id 顶替 / 无 id 堆叠),其余类别 TUI 未订阅、安全忽略。
 
 use mineral_protocol::{Event, ToastKind};
 
-use crate::components::toast::notifications::{Notifications, TextTint, tinted_text_item};
+use crate::components::toast::notifications::{Notifications, TextTint, tinted_spans_item};
 
-/// 消费一条 server 推送:Toast 按 kind 上色进通知层(`id: Some` 走
-/// 同 id 顶替,`None` 走堆叠;`ttl_secs: Some` 覆盖默认展示时长);
-/// 其余类别 TUI 未订阅,收到(订阅集将来变化)也安全忽略——轮询仍是权威值来源。
+/// 消费一条 server 推送:
+///   - Toast 按 kind 上色进单行 flash(`id: Some` 顶替 / `None` 堆叠;
+///     `ttl_secs: Some` 覆盖默认展示时长);
+///   - Card 进多行卡片(同款 id 语义;`ttl_secs: Some` 到时自动退场,
+///     `None` 驻留到用户显式关闭);
+///   - 其余类别 TUI 未订阅,收到(订阅集将来变化)也安全忽略——轮询仍是权威值来源。
 ///
 /// # Params:
 ///   - `notifications`: 通知层
@@ -20,17 +23,27 @@ pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
             id,
             ttl_secs,
         } => {
-            let tint = match kind {
-                ToastKind::Info => TextTint::Normal,
-                ToastKind::Warn => TextTint::Warn,
-                ToastKind::Error => TextTint::Error,
-            };
-            let item = tinted_text_item(content, tint);
+            let item = tinted_spans_item(content, tint_of(kind));
             let ttl = ttl_secs.map(std::time::Duration::from_secs);
             match id {
                 Some(key) => notifications.flash_keyed_for(key, item, ttl),
                 None => notifications.flash_for(item, ttl),
             }
+        }
+        Event::Card {
+            kind,
+            id,
+            title,
+            body,
+            ttl_secs,
+        } => {
+            notifications.push_card(
+                tint_of(kind),
+                title,
+                body,
+                id,
+                ttl_secs.map(std::time::Duration::from_secs),
+            );
         }
         // ScriptReloaded / UiOverride 在 App::drain_push_events 已分流
         // (前者刷新 bind 键、后者落旋钮覆盖),这里只是穷尽兜底。
@@ -46,9 +59,18 @@ pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
     }
 }
 
+/// 协议视觉级别 → 通知层语义级别。
+fn tint_of(kind: ToastKind) -> TextTint {
+    match kind {
+        ToastKind::Info => TextTint::Normal,
+        ToastKind::Warn => TextTint::Warn,
+        ToastKind::Error => TextTint::Error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, PropName, PropValue, ToastKind};
+    use mineral_protocol::{Event, PropName, PropValue, TextSpan, ToastKind};
 
     use super::apply_event;
     use crate::components::toast::notifications::Notifications;
@@ -62,10 +84,29 @@ mod tests {
     fn toast(content: &str, id: Option<&str>) -> Event {
         Event::Toast {
             kind: ToastKind::Info,
-            content: content.to_owned(),
+            content: vec![TextSpan::plain(content)],
             id: id.map(str::to_owned),
             ttl_secs: None,
         }
+    }
+
+    /// Card 事件进卡片区:同 id 顶替、无 id 堆叠。
+    #[test]
+    fn card_event_reaches_card_area_with_id_semantics() {
+        let card = |id: Option<&str>| Event::Card {
+            kind: ToastKind::Warn,
+            id: id.map(str::to_owned),
+            title: vec![TextSpan::plain("要点")],
+            body: vec![vec![TextSpan::plain("第一行")]],
+            ttl_secs: None,
+        };
+        let mut n = notifications();
+        apply_event(&mut n, card(Some("release")));
+        apply_event(&mut n, card(Some("release")));
+        assert_eq!(n.card_count(), 1, "同 id 应顶替");
+        apply_event(&mut n, card(/*id*/ None));
+        assert_eq!(n.card_count(), 2, "无 id 应堆叠");
+        assert_eq!(n.entry_count(), 0, "卡片不该混进单行区");
     }
 
     /// Toast 的 id 语义:同 id 顶替为一条、无 id 堆叠、不同 id 各自一条。

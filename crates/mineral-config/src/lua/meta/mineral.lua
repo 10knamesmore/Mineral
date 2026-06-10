@@ -317,12 +317,34 @@ function mineral.timer.every(ms, callback) end
 ---@class mineral.ui
 mineral.ui = {}
 
---- 推送 toast 到 client(同 id 替换不堆叠)。
+--- 一段行内文本 + 样式(文本放位置 1),toast / card 标题 / card body 通用。
+--- fg 取主题角色名(随主题落色)或 "#rrggbb" 直给;样式缺省 = 所在语境默认色。
+--- align 把同一行的 spans 分成左/中/右三段(`|左段  中段  右段|`),段内按原顺序连排
+--- (toast / 卡片标题等非整行语境忽略 align)。
+---@class mineral.Span
+---@field [1] string  文本内容
+---@field fg? "text"|"subtext"|"overlay"|"accent"|"red"|"yellow"|"green"|"peach"|string
+---@field bold? boolean
+---@field italic? boolean
+---@field underline? boolean
+---@field dim? boolean
+---@field align? "left"|"center"|"right"
+
+--- 推送单行 toast 到 client(同 id 替换不堆叠;多行内容截首行)。
 --- msg 是 `print` 式宽容:任意值经 tostring 显示;**nil 静默跳过**
---- (`toast(ctx.search_query)` 这类可空链无词时安静,不报错)。
----@param msg any  显示内容(nil 跳过;非字符串经 tostring)
+--- (`toast(ctx.search_query)` 这类可空链无词时安静,不报错);
+--- 传 span 数组得行内样式,如 `{ "音量 ", { "42", fg = "accent", bold = true } }`。
+---@param msg any|(string|mineral.Span)[]  显示内容(nil 跳过;表按 span 数组解析;其余经 tostring)
 ---@param opts? { kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }  ttl_secs 缺省用 client 配置(toast.flash_ttl_secs)
 function mineral.ui.toast(msg, opts) end
+
+--- 推送多行通知卡片到 client(同 id 替换不堆叠)。
+--- title 是字符串或 span 数组(画进边框);body 每项是一行:字符串(整行默认样式,
+--- 内嵌 `\n` 拆成多行)或 span 数组(行内混排样式)。
+--- `ttl_secs` 给了到时自动退场,边框暗色随剩余时间自左上向右下蔓延(倒计时指示);
+--- 缺省驻留,用户按关闭键才消失。
+---@param opts { title?: string|(string|mineral.Span)[], kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer, body: (string|(string|mineral.Span)[])[] }
+function mineral.ui.card(opts) end
 
 --- session 级 UI 旋钮覆盖(daemon 重启即清,不写配置文件)。
 --- key 约定 = 配置路径(如 "lyrics.fullscreen_line_gap" / "lyrics.compact_line_gap");

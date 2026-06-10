@@ -4,7 +4,7 @@
 //! [`Notifier`] 的具名方法,不直接摸 broadcast / channel。
 
 use mineral_model::Song;
-use mineral_protocol::{Event, FinishReason};
+use mineral_protocol::{Event, FinishReason, TextSpan};
 use mineral_script::{PropKey, PropValue, ScriptEvent, ScriptSender, TrackFinishedReason};
 use tokio::sync::broadcast;
 
@@ -97,7 +97,7 @@ impl Notifier {
     pub(crate) fn toast(&self, kind: mineral_protocol::ToastKind, content: String) {
         let _ = self.events.send(Event::Toast {
             kind,
-            content,
+            content: vec![TextSpan::plain(content)],
             id: None,
             ttl_secs: None,
         });
@@ -224,7 +224,7 @@ impl PlayerCore {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, FinishReason};
+    use mineral_protocol::{Event, FinishReason, TextSpan};
     use mineral_script::{PropKey, PropValue, TrackFinishedReason};
     use mineral_test::song;
 
@@ -260,7 +260,7 @@ mod tests {
             events_rx.try_recv()?,
             Event::Toast {
                 kind: ToastKind::Warn,
-                content: "下载不可用".to_owned(),
+                content: vec![TextSpan::plain("下载不可用")],
                 id: None,
                 ttl_secs: None,
             }

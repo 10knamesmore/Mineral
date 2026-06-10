@@ -1,0 +1,13 @@
+---
+source: crates/mineral-tui/src/components/toast/notifications.rs
+description: "z 切换中点:卡片在居中与右上之间,非必要 flash 收缩半宽"
+expression: t.backend()
+---
+"                         [ 普通提]                          " Hidden by multi-width symbols: [(28, " "), (30, " "), (32, " ")]
+"                                     ╭ 迁移 ──╮             " Hidden by multi-width symbols: [(40, " "), (42, " ")]
+"                                     │ body   │             "
+"                                     ╰───── x ╯             "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "

@@ -1,0 +1,13 @@
+---
+source: crates/mineral-tui/src/components/toast/notifications.rs
+description: "immersive:仅 Error flash 与卡片,右贴边、第 2 行起;下载/普通提示被抑制"
+expression: t.backend()
+---
+"                                                            "
+"                                               [ 播放失败 ] " Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (56, " ")]
+"                        ╭ ✗ 配置重载失败 ─────────────────╮ " Hidden by multi-width symbols: [(29, " "), (31, " "), (33, " "), (35, " "), (37, " "), (39, " ")]
+"                        │ config.lua:17 字段 audio.volume │ " Hidden by multi-width symbols: [(41, " "), (43, " ")]
+"                        ╰────────────────────────────── x ╯ "
+"                                                            "
+"                                                            "
+"                                                            "

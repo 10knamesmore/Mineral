@@ -405,6 +405,17 @@ Config {
                     },
                 ],
             },
+            dismiss_notice: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'x',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
             scroll_line_down: KeyBinding {
                 chords: [
                     KeyChord {
@@ -536,7 +547,7 @@ Config {
             list_scroll_ms: 280,
             fullscreen_ms: 288,
             popup_anim_ms: 288,
-            toast_anim_ms: 96,
+            toast_anim_ms: 288,
             view_sweep: Push,
         },
         toast: ToastConfig {

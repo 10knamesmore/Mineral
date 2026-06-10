@@ -16,18 +16,40 @@ use crate::Subscription;
 /// 下发按握手订阅集过滤(见 [`Event::subscription`]),client 不订阅的类别不会上 wire。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Event {
-    /// 瞬时提示。`id` 相同则替换不堆叠(nvim `msg_show` 语义);`None` 为一次性堆叠。
+    /// 瞬时提示(单行 flash,TTL 自动退场)。`id` 相同则替换不堆叠
+    /// (nvim `msg_show` 语义);`None` 为一次性堆叠。
     Toast {
         /// 视觉级别。
         kind: ToastKind,
 
-        /// 单行人读文本。
-        content: String,
+        /// 人读内容(行内 spans,纯文本即单个全默认 span)。单行语义:
+        /// span 文本内嵌换行时 client 截首行。
+        content: Vec<TextSpan>,
 
         /// 顶替键:同 id 的存活提示被替换内容并续命;`None` 不参与顶替。
         id: Option<String>,
 
         /// 展示时长(秒);`None` 用 client 配置默认(`toast.flash_ttl_secs`)。
+        ttl_secs: Option<u64>,
+    },
+
+    /// 多行通知卡片(标题与 body 都带行内样式)。`id` 相同则替换不堆叠
+    /// (与 [`Event::Toast`] 同款顶替语义)。
+    Card {
+        /// 视觉级别(client 据此选边框 / 标题色)。
+        kind: ToastKind,
+
+        /// 顶替键:同 id 的存活卡片被替换内容(退场中复活);`None` 不参与顶替。
+        id: Option<String>,
+
+        /// 标题(client 画进卡片边框,行内 spans);空 = 不画。
+        title: Vec<TextSpan>,
+
+        /// 卡片正文:外层 = 行,内层 = 行内 spans。
+        body: Vec<Vec<TextSpan>>,
+
+        /// 展示时长(秒):`Some` 到时自动退场(与 toast 同款);
+        /// `None` 驻留,用户显式关闭才退场。
         ttl_secs: Option<u64>,
     },
 
@@ -95,7 +117,7 @@ impl Event {
     #[must_use]
     pub fn subscription(&self) -> Subscription {
         match self {
-            Self::Toast { .. } => Subscription::Toast,
+            Self::Toast { .. } | Self::Card { .. } => Subscription::Toast,
             Self::PropertyChanged { .. } => Subscription::Property,
             Self::TrackFinished { .. }
             | Self::DownloadCompleted { .. }
@@ -134,6 +156,101 @@ pub enum BusValue {
 
     /// 字符串键映射(有序键值对)。
     Map(Vec<(String, Self)>),
+}
+
+/// 一段行内文本 + 样式(样式全缺省 = 正文默认、靠左),通知类载荷
+/// (toast 内容 / 卡片标题 / 卡片 body)通用的文本单元。
+///
+/// 样式是协议面的**语义**描述:fg 用主题角色(client 按当前主题落色),
+/// 修饰位逐项布尔 —— 不在 wire 上传终端转义序列。`align` 把同一行的 spans
+/// 分成左 / 中 / 右三段(`|左段    中段    右段|`),段内按原顺序连排
+/// (单行 flash / 卡片标题这类非整行语境忽略 `align`)。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextSpan {
+    /// 文本内容。
+    pub text: String,
+
+    /// 前景色;`None` 用正文默认色。
+    pub fg: Option<SpanFg>,
+
+    /// 加粗。
+    pub bold: bool,
+
+    /// 斜体。
+    pub italic: bool,
+
+    /// 下划线。
+    pub underline: bool,
+
+    /// 弱化(降亮度)。
+    pub dim: bool,
+
+    /// 行内水平段位(缺省靠左)。
+    pub align: SpanAlign,
+}
+
+impl TextSpan {
+    /// 纯文本 span(无任何样式、靠左)。
+    ///
+    /// # Params:
+    ///   - `text`: 文本内容
+    #[must_use]
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            fg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            dim: false,
+            align: SpanAlign::Left,
+        }
+    }
+}
+
+/// span 的行内水平段位:同一行按段位分三组各自对齐。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpanAlign {
+    /// 贴行左缘(缺省)。
+    #[default]
+    Left,
+
+    /// 行内居中。
+    Center,
+
+    /// 贴行右缘。
+    Right,
+}
+
+/// span 前景色:主题角色(client 按当前主题落色,换主题不破相)或直给 RGB。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpanFg {
+    /// 正文色。
+    Text,
+
+    /// 次级文本。
+    Subtext,
+
+    /// 弱化 / 提示。
+    Overlay,
+
+    /// 强调色。
+    Accent,
+
+    /// 红(错误 / 危险)。
+    Red,
+
+    /// 黄(警告)。
+    Yellow,
+
+    /// 绿(成功)。
+    Green,
+
+    /// 橙(柔和强调)。
+    Peach,
+
+    /// 直给 RGB(不随主题)。
+    Rgb(u8, u8, u8),
 }
 
 /// Toast 视觉级别。

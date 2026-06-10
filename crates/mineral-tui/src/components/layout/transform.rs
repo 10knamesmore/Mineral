@@ -8,6 +8,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
 use crate::components::layout::compute::Areas;
+use crate::render::anim::lerp_u16;
 use crate::render::theme::Theme;
 
 /// 收缩进度满值(千分比),对齐 [`crate::render::anim::Transition::eased`] 的满值。
@@ -155,16 +156,6 @@ fn lerp_rect(a: Rect, b: Rect, t: u16) -> Rect {
         lerp_u16(a.width, b.width, t),
         lerp_u16(a.height, b.height, t),
     )
-}
-
-/// 在 `a`、`b` 间按千分比 `t`(`0..=1000`)定点插值:`a + (b-a)*t/1000`。全程 `i32`,
-/// 不碰 `as` 强转;结果 clamp 进 `u16` 范围。
-fn lerp_u16(a: u16, b: u16, t: u16) -> u16 {
-    let a = i32::from(a);
-    let b = i32::from(b);
-    let t = i32::from(t);
-    let v = a + (b - a) * t / 1000;
-    u16::try_from(v.clamp(0, i32::from(u16::MAX))).unwrap_or_default()
 }
 
 #[cfg(test)]

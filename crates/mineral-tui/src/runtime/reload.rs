@@ -13,6 +13,10 @@ use std::time::{Duration, Instant, SystemTime};
 /// mtime 轮询间隔(独立于帧率:配置文件是人手保存,1s 粒度足够)。
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// 配置重载问题卡(警告 / 失败共用)的顶替键:重复重载顶替不刷屏,
+/// 干净重载主动撤卡。
+const RELOAD_CARD_ID: &str = "config.reload";
+
 /// config.lua 的 mtime 监视器(App 持有,主循环每帧喂)。
 pub(crate) struct ConfigWatch {
     /// 监视目标(config.lua 路径;解析失败时为 `None`,监视禁用)。
@@ -71,14 +75,58 @@ impl crate::app::App {
         self.reload_config_from(&dir.join("config.lua"));
     }
 
+    /// 启动期配置提示(`run` 在 `App::new` 后调一次):
+    ///   - `config_path` 不存在 → 驻留卡提醒 `mineral config init`(每次启动都提醒,
+    ///     直到用户真的生成配置);
+    ///   - 启动加载的降级告警 → 与热重载同一张警告卡(同 id,改好后热重载自动撤)。
+    ///
+    /// # Params:
+    ///   - `config_path`: config.lua 路径(解析失败给 `None`,跳过缺失检查)
+    ///   - `warnings`: 启动加载产生的降级告警
+    pub(crate) fn notify_startup_config(
+        &mut self,
+        config_path: Option<&std::path::Path>,
+        warnings: &[mineral_config::ConfigWarning],
+    ) {
+        use crate::components::toast::card::{plain_body, plain_line};
+        use crate::components::toast::notifications::TextTint;
+        if let Some(path) = config_path
+            && !path.exists()
+        {
+            self.notifications.push_card(
+                TextTint::Normal,
+                plain_line("config not found"),
+                plain_body(vec![
+                    "run `mineral config init` to create one".to_owned(),
+                    format!("path: {}", path.display()),
+                ]),
+                Some("config.init".to_owned()),
+                /*ttl*/ None,
+            );
+        }
+        if !warnings.is_empty() {
+            let lines = warnings.iter().map(ToString::to_string);
+            self.notifications.push_card(
+                TextTint::Warn,
+                plain_line("config.lua warnings"),
+                plain_body(lines),
+                Some(RELOAD_CARD_ID.to_owned()),
+                /*ttl*/ None,
+            );
+        }
+    }
+
     /// 从指定路径重读配置并热应用 keymap / theme(路径可注入,单测用)。
     ///
     /// 加载失败(IO / 全文件 eval 失败回落默认也算成功路径,由 loader 语义
-    /// 决定)时保留现行配置并 toast 提示;切片级 warning 逐条提示。
+    /// 决定)时保留现行配置,弹驻留错误卡(错误链逐层一行);切片级 warning
+    /// 聚合成一张驻留警告卡。问题卡共用顶替键 [`RELOAD_CARD_ID`]:重复重载
+    /// 顶替不刷屏,干净重载(无警告)主动撤卡——用户修好配置卡自动消失。
     ///
     /// # Params:
     ///   - `path`: config.lua 路径
     pub(crate) fn reload_config_from(&mut self, path: &std::path::Path) {
+        use crate::components::toast::card::{plain_body, plain_line};
         use crate::components::toast::notifications::{TextTint, tinted_text_item};
         let (cfg, warnings) = match mineral_config::load(path) {
             Ok(loaded) => loaded,
@@ -88,17 +136,32 @@ impl crate::app::App {
                     error = mineral_log::chain(&e),
                     "配置重载失败,保留现行配置"
                 );
-                self.notifications.flash(tinted_text_item(
-                    "配置重载失败,保留现行配置(详见日志)".to_owned(),
+                let mut lines = e.chain().map(ToString::to_string).collect::<Vec<String>>();
+                lines.push("keeping current config".to_owned());
+                self.notifications.push_card(
                     TextTint::Error,
-                ));
+                    plain_line("config reload failed"),
+                    plain_body(lines),
+                    Some(RELOAD_CARD_ID.to_owned()),
+                    /*ttl*/ None,
+                );
                 return;
             }
         };
-        for warning in &warnings {
-            mineral_log::warn!(target: "tui", warning = %warning, "配置重载 warning");
-            self.notifications
-                .flash(tinted_text_item(warning.to_string(), TextTint::Warn));
+        if warnings.is_empty() {
+            self.notifications.dismiss_card_by_id(RELOAD_CARD_ID);
+        } else {
+            for warning in &warnings {
+                mineral_log::warn!(target: "tui", warning = %warning, "配置重载 warning");
+            }
+            let lines = warnings.iter().map(ToString::to_string);
+            self.notifications.push_card(
+                TextTint::Warn,
+                plain_line("config.lua warnings"),
+                plain_body(lines),
+                Some(RELOAD_CARD_ID.to_owned()),
+                /*ttl*/ None,
+            );
         }
         let cfg = std::sync::Arc::new(cfg);
         self.theme =
@@ -116,12 +179,13 @@ impl crate::app::App {
         self.rebuild_keymap();
     }
 
-    /// 以现行配置重建 keymap 并合入 daemon 的 bind 表。
+    /// 以现行配置重建 keymap 并合入 daemon 的 bind 表;卡片关闭键提示随表刷新。
     fn rebuild_keymap(&mut self) {
         let tui_cfg = self.state.cfg.tui();
         let mut keymap =
             crate::runtime::keymap::Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
         keymap.append_script_binds(&self.client.script_binds());
+        self.notice_hint = Self::compose_notice_hint(&keymap);
         self.keymap = keymap;
     }
 }
@@ -142,7 +206,7 @@ mod tests {
         std::fs::write(
             &path,
             r##"return { tui = {
-                keys = { play_pause = "x" },
+                keys = { play_pause = "w" },
                 theme = { accent = "#ff0000" },
             } }"##,
         )?;
@@ -155,7 +219,7 @@ mod tests {
         );
         app.reload_config_from(&path);
         assert_eq!(
-            app.keymap.lookup(KeyChord::parse("x")?),
+            app.keymap.lookup(KeyChord::parse("w")?),
             Some(Action::TogglePlayPause),
             "重载后新键生效"
         );
@@ -169,7 +233,7 @@ mod tests {
         Ok(())
     }
 
-    /// 加载失败(IO 错误:路径是目录)保留现行配置,toast 报错。
+    /// 加载失败(IO 错误:路径是目录)保留现行配置,弹驻留错误卡。
     #[test]
     fn reload_failure_keeps_current_config() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -179,6 +243,74 @@ mod tests {
             app.keymap.lookup(KeyChord::parse("<Space>")?),
             Some(Action::TogglePlayPause),
             "失败时键表不动"
+        );
+        assert!(
+            app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            "失败应弹驻留错误卡"
+        );
+        Ok(())
+    }
+
+    /// 启动期:config.lua 缺失 → init 提醒卡;文件存在 → 不弹;
+    /// 启动降级告警 → 与热重载同 id 的警告卡。
+    #[test]
+    fn startup_notifies_missing_config_and_warnings() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let missing = dir.path().join("config.lua");
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.notify_startup_config(Some(&missing), /*warnings*/ &[]);
+        assert!(
+            app.notifications.has_live_card("config.init"),
+            "缺配置应弹 init 提醒卡"
+        );
+
+        std::fs::write(&missing, "return {}")?;
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.notify_startup_config(Some(&missing), /*warnings*/ &[]);
+        assert!(
+            !app.notifications.has_live_card("config.init"),
+            "配置存在不该提醒 init"
+        );
+
+        // 真实坏配置产出的 warnings → 与热重载同一张警告卡。
+        std::fs::write(
+            &missing,
+            r#"return { tui = { behavior = { volume_step = "loud" } } }"#,
+        )?;
+        let (_cfg, warnings) = mineral_config::load(&missing)?;
+        assert!(!warnings.is_empty(), "坏字段应产出 warning");
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.notify_startup_config(Some(&missing), &warnings);
+        assert!(
+            app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            "启动降级告警应进警告卡"
+        );
+        Ok(())
+    }
+
+    /// 坏字段配置:警告升级为驻留卡(同 id 顶替不堆叠);修好后干净重载主动撤卡。
+    #[test]
+    fn reload_warning_card_replaces_then_clears_on_clean_reload() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            r#"return { tui = { behavior = { volume_step = "loud" } } }"#,
+        )?;
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.reload_config_from(&path);
+        assert!(
+            app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            "坏字段应弹警告卡"
+        );
+        app.reload_config_from(&path);
+        assert_eq!(app.notifications.card_count(), 1, "重复重载同 id 顶替");
+
+        std::fs::write(&path, "return {}")?;
+        app.reload_config_from(&path);
+        assert!(
+            !app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            "干净重载应撤卡"
         );
         Ok(())
     }

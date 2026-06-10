@@ -395,7 +395,7 @@ mod tests {
     use color_eyre::eyre::eyre;
     use mineral_protocol::{
         ClientInfo, Event, Frame, PkgVersion, RejectReason, Request, Response, ServerHello,
-        Subscription, ToastKind, framed, recv, send,
+        Subscription, TextSpan, ToastKind, framed, recv, send,
     };
     use mineral_server::Client;
     use tokio::net::{UnixListener, UnixStream};
@@ -558,7 +558,7 @@ mod tests {
                 &mut conn,
                 &Frame::Event(Event::Toast {
                     kind: ToastKind::Info,
-                    content: "插队事件".to_owned(),
+                    content: vec![TextSpan::plain("插队事件")],
                     id: None,
                     ttl_secs: None,
                 }),
@@ -614,7 +614,7 @@ mod tests {
         assert!(
             matches!(
                 events.first(),
-                Some(Event::Toast { content, .. }) if content == "插队事件"
+                Some(Event::Toast { content, .. }) if *content == vec![TextSpan::plain("插队事件")]
             ),
             "缓冲的应是插队 Toast,实际 {events:?}"
         );
@@ -665,7 +665,7 @@ mod tests {
         });
         let _ = sink.send(Event::Toast {
             kind: ToastKind::Info,
-            content: "hub 直推".to_owned(),
+            content: vec![TextSpan::plain("hub 直推")],
             id: None,
             ttl_secs: None,
         });
@@ -686,7 +686,7 @@ mod tests {
         assert!(
             matches!(
                 events.first(),
-                Some(Event::Toast { content, .. }) if content == "hub 直推"
+                Some(Event::Toast { content, .. }) if *content == vec![TextSpan::plain("hub 直推")]
             ),
             "应是 hub 推的 Toast,实际 {events:?}"
         );

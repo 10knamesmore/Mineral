@@ -55,6 +55,7 @@ return {
       move_last = "G",
       love = "f",
       download = "d",
+      dismiss_notice = "x",
       scroll_line_down = "<C-d>",
       scroll_line_up = "<C-u>",
       scroll_page_down = "<C-f>",
@@ -157,7 +158,7 @@ return {
       list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
       fullscreen_ms = 288, -- 全屏进退场形变
       popup_anim_ms = 288, -- 浮层(队列 / 确认框)弹出收起
-      toast_anim_ms = 96, -- 顶栏通知横向展开收起
+      toast_anim_ms = 288, -- 顶栏通知横向展开收起
       view_sweep = "push", -- "push" | "cover":侧栏切换是新旧一起平移还是从右盖上
     },
     toast = {

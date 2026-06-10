@@ -1,0 +1,13 @@
+---
+source: crates/mineral-tui/src/components/toast/notifications.rs
+description: "常规模式:flash 居中在上,驻留卡片接在其下居中"
+expression: t.backend()
+---
+"                        [ 音量 32 ]                         " Hidden by multi-width symbols: [(27, " "), (29, " ")]
+"                ╭ ⚠ v0.9.0 要点 ──────────╮                 " Hidden by multi-width symbols: [(28, " "), (30, " ")]
+"                │ 新增配置 toast.position │                 " Hidden by multi-width symbols: [(19, " "), (21, " "), (23, " "), (25, " ")]
+"                │ 旧键 search.style 改名  │                 " Hidden by multi-width symbols: [(19, " "), (21, " "), (37, " "), (39, " ")]
+"                ╰────────────────────── x ╯                 "
+"                                                            "
+"                                                            "
+"                                                            "

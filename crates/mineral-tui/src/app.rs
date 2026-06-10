@@ -46,6 +46,10 @@ pub struct App {
     /// 键 → 动作绑定表(由配置 keys/behavior 段落地)。
     pub(crate) keymap: Keymap,
 
+    /// 驻留卡片底边的关闭键提示(如 `x 关闭`),由 keymap 反查合成,随 keymap 重建刷新;
+    /// 未绑定为空串(卡片不画 footer)。
+    pub(crate) notice_hint: String,
+
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
     pub(crate) overlays: OverlayStack,
 
@@ -152,11 +156,13 @@ impl App {
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
         state.track_pos = ui_prefs.initial_track_pos().clone();
+        let notice_hint = Self::compose_notice_hint(&keymap);
         Self {
             should_quit: false,
             theme,
             state,
             keymap,
+            notice_hint,
             overlays,
             transition: None,
             stop_daemon_on_quit: false,
@@ -586,8 +592,23 @@ impl App {
             Action::NextSong => self.client.next_song(),
             Action::ToggleLoveSelection => self.toggle_love_selection(),
             Action::DownloadSelection => self.download_selection(),
+            Action::DismissNotice => self.dismiss_notice(),
             Action::InvokeScript(slot) => self.invoke_script_action(slot),
         }
+    }
+
+    /// 关最早一张驻留通知卡片(连按逐条关;无卡空操作)。
+    fn dismiss_notice(&mut self) {
+        let _ = self.notifications.dismiss_card();
+    }
+
+    /// 由 keymap 反查 [`Action::DismissNotice`] 绑定键,合成卡片底边提示
+    /// (裸键名,如 `x`);用户解绑后为空串(卡片不画 footer)。
+    pub(crate) fn compose_notice_hint(keymap: &Keymap) -> String {
+        keymap
+            .hint_chord(Action::DismissNotice)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
     }
 
     /// 切换全屏播放态:翻转 `fullscreen` 标志并驱动形变进退场(`eased_in_out`,可中途反向)。
@@ -635,7 +656,7 @@ impl App {
         }
     }
 
-    /// 半穿透白名单:歌词切换 + 播放控制族;列表 / 视图 / 浮层动作不穿透。
+    /// 半穿透白名单:歌词切换 + 播放控制族 + 通知卡关闭;列表 / 视图 / 浮层动作不穿透。
     fn passes_overlay(action: Action) -> bool {
         matches!(
             action,
@@ -646,6 +667,7 @@ impl App {
                 | Action::SeekRelative(_)
                 | Action::PrevOrRestart
                 | Action::NextSong
+                | Action::DismissNotice
         )
     }
 

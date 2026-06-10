@@ -164,10 +164,11 @@ fn run_app(
         cfg,
         ui_prefs,
     );
-    // 配置降级告警 toast:用户改坏 config.lua 时启动即看见(与日志双轨)。
-    for w in warnings {
-        app.notifications.flash_text(format!("{w}"));
-    }
+    // 启动期配置提示卡:config.lua 缺失提醒 init;降级告警与日志双轨呈现。
+    let config_path = mineral_paths::config_dir()
+        .ok()
+        .map(|d| d.join("config.lua"));
+    app.notify_startup_config(config_path.as_deref(), warnings);
     let result = app.run(&mut tui);
     tui.exit()?;
     result

@@ -32,9 +32,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 
     // topbar 通知层 / 浮层栈:整屏转场(启动扩大 / 退出收缩)期间不画;全屏形变不抑制。
-    // 通知锚点恒用常规顶栏行(全屏顶栏已收掉,仍从屏顶向下堆叠)。
+    // 通知锚点恒用常规顶栏行(全屏顶栏已收掉,仍从屏顶向下堆叠)。沉浸进度直接喂
+    // 形变缓动值:z 切换期间通知锚点随布局连续插值(居中 ↔ 右上),不瞬移。
     if app.transition.is_none() {
-        app.notifications.render(frame, normal.top_status, theme);
+        app.notifications.render(
+            frame,
+            normal.top_status,
+            theme,
+            app.state.fullscreen_pos.eased_in_out(),
+            &app.notice_hint,
+        );
         app.overlays.render(frame, frame.area(), &app.state, theme);
     }
 

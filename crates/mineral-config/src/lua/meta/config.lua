@@ -115,6 +115,7 @@
 ---@field move_last? mineral.KeyBinding 跳末行
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥
 ---@field download? mineral.KeyBinding 下载选中曲 / 歌单
+---@field dismiss_notice? mineral.KeyBinding 关最早一张驻留通知卡片(连按逐条关)
 ---@field scroll_line_down? mineral.KeyBinding 逐行下滚:全屏滚歌词,浏览态滚列表视口(行数见 behavior.line_scroll_rows)
 ---@field scroll_line_up? mineral.KeyBinding 逐行上滚(行数见 behavior.line_scroll_rows)
 ---@field scroll_page_down? mineral.KeyBinding 翻页下滚(行数见 behavior.page_scroll_rows)

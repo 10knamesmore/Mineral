@@ -1,8 +1,10 @@
-//! `mineral.ui.toast(msg, opts)`:推送 toast 到 client(同 id 顶替不堆叠)。
+//! `mineral.ui.toast(msg, opts)`:推送单行 toast 到 client(同 id 顶替不堆叠)。
+//! msg 接受任意值(tostring)或 span 数组(行内样式,与 `ui.card` 同一词表)。
 
-use mineral_protocol::{Event, ToastKind};
+use mineral_protocol::{Event, TextSpan, ToastKind};
 use mlua::{Lua, Table};
 
+use crate::api::ui::span::parse_line;
 use crate::host::ScriptHost;
 
 /// `toast` 的已解析 opts(Lua 表 → 强类型边界)。
@@ -30,9 +32,11 @@ pub(crate) fn install(lua: &Lua, ui: &Table, host: &ScriptHost) -> mlua::Result<
         lua.create_function(move |_lua, (msg, opts): (mlua::Value, Option<Table>)| {
             // `print` 式宽容:任意值经 tostring 显示;nil 静默跳过——
             // `toast(ctx.search_query)` 这类可空链无词时安静,不炸回调。
+            // 表按 span 数组解析(行内样式,与 card body 的一行同形)。
             let content = match msg {
                 mlua::Value::Nil => return Ok(()),
-                other => other.to_string()?,
+                mlua::Value::Table(line) => parse_line(&line)?,
+                other => vec![TextSpan::plain(other.to_string()?)],
             };
             let opts = parse_opts(opts.as_ref())?;
             // 接收端关闭(daemon 停机)时静默丢,脚本不感知。
@@ -45,6 +49,25 @@ pub(crate) fn install(lua: &Lua, ui: &Table, host: &ScriptHost) -> mlua::Result<
             Ok(())
         })?,
     )
+}
+
+/// 解析 kind 名:`"info"` / `"warn"` / `"error"`(缺省 `Info`)。
+/// toast 与 card 共用这一词表。
+///
+/// # Params:
+///   - `name`: Lua 侧 `kind` 字段值(省略为 `None`)
+///
+/// # Return:
+///   对应级别;未知名报 Lua 错(不静默降级)。
+pub(super) fn parse_kind(name: Option<&str>) -> mlua::Result<ToastKind> {
+    match name {
+        None | Some("info") => Ok(ToastKind::Info),
+        Some("warn") => Ok(ToastKind::Warn),
+        Some("error") => Ok(ToastKind::Error),
+        Some(other) => Err(mlua::Error::RuntimeError(format!(
+            "unknown kind {other:?}, expected \"info\" | \"warn\" | \"error\""
+        ))),
+    }
 }
 
 /// 解析 opts 表:`{ kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer }`。
@@ -62,16 +85,7 @@ fn parse_opts(opts: Option<&Table>) -> mlua::Result<ToastOpts> {
             ttl_secs: None,
         });
     };
-    let kind = match opts.get::<Option<String>>("kind")?.as_deref() {
-        None | Some("info") => ToastKind::Info,
-        Some("warn") => ToastKind::Warn,
-        Some("error") => ToastKind::Error,
-        Some(other) => {
-            return Err(mlua::Error::RuntimeError(format!(
-                "unknown toast kind {other:?}, expected \"info\" | \"warn\" | \"error\""
-            )));
-        }
-    };
+    let kind = parse_kind(opts.get::<Option<String>>("kind")?.as_deref())?;
     let id = opts.get::<Option<String>>("id")?;
     let ttl_secs = opts
         .get::<Option<i64>>("ttl_secs")?
@@ -86,7 +100,7 @@ fn parse_opts(opts: Option<&Table>) -> mlua::Result<ToastOpts> {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, ToastKind};
+    use mineral_protocol::{Event, SpanFg, TextSpan, ToastKind};
 
     use crate::api::test_support::vm_with_push;
 
@@ -100,7 +114,7 @@ mod tests {
             event,
             Event::Toast {
                 kind: ToastKind::Warn,
-                content: "hello".to_owned(),
+                content: vec![TextSpan::plain("hello")],
                 id: Some("greet".to_owned()),
                 ttl_secs: Some(10),
             }
@@ -117,7 +131,7 @@ mod tests {
             event,
             Event::Toast {
                 kind: ToastKind::Info,
-                content: "plain".to_owned(),
+                content: vec![TextSpan::plain("plain")],
                 id: None,
                 ttl_secs: None,
             }
@@ -149,15 +163,45 @@ mod tests {
         .exec()?;
         let first = push_rx.try_recv()?;
         assert!(
-            matches!(first, Event::Toast { ref content, .. } if content == "42"),
+            matches!(first, Event::Toast { ref content, .. } if *content == vec![TextSpan::plain("42")]),
             "nil 跳过后第一条应是 42,实得 {first:?}"
         );
         let second = push_rx.try_recv()?;
         assert!(
-            matches!(second, Event::Toast { ref content, .. } if content == "true"),
+            matches!(second, Event::Toast { ref content, .. } if *content == vec![TextSpan::plain("true")]),
             "实得 {second:?}"
         );
         assert!(push_rx.try_recv().is_err(), "nil 不该产生事件");
+        Ok(())
+    }
+
+    #[test]
+    fn toast_accepts_span_array_msg() -> color_eyre::Result<()> {
+        let (lua, mut push_rx) = vm_with_push()?;
+        lua.load(r#"mineral.ui.toast({ "音量 ", { "42", fg = "accent", bold = true } })"#)
+            .exec()?;
+        let event = push_rx.try_recv()?;
+        assert_eq!(
+            event,
+            Event::Toast {
+                kind: ToastKind::Info,
+                content: vec![
+                    TextSpan::plain("音量 "),
+                    TextSpan {
+                        text: "42".to_owned(),
+                        fg: Some(SpanFg::Accent),
+                        bold: true,
+                        italic: false,
+                        underline: false,
+                        dim: false,
+                        align: mineral_protocol::SpanAlign::Left,
+                    },
+                ],
+                id: None,
+                ttl_secs: None,
+            },
+            "span 数组 msg 应解析成行内样式"
+        );
         Ok(())
     }
 

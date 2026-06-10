@@ -1,0 +1,15 @@
+---
+source: crates/mineral-tui/src/components/toast/card.rs
+description: "卡片行内三段布局:左贴左、中居中、右贴右"
+expression: t.backend()
+---
+"                                                                                "
+"                                                        ╭ 对齐 ───────────────╮ " Hidden by multi-width symbols: [(59, " "), (61, " ")]
+"                                                        │ 左左    中     右右 │ " Hidden by multi-width symbols: [(59, " "), (61, " "), (67, " "), (74, " "), (76, " ")]
+"                                                        │ 满宽参照行————————— │ " Hidden by multi-width symbols: [(59, " "), (61, " "), (63, " "), (65, " "), (67, " ")]
+"                                                        ╰────────────────── x ╯ "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

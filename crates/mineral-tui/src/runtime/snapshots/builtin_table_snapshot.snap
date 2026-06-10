@@ -38,4 +38,5 @@ n → NextSong
 p → PrevOrRestart
 q → OpenQuitConfirm
 t → CycleLyricExtra
+x → DismissNotice
 z → ToggleFullscreen
