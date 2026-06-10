@@ -4,8 +4,8 @@
 //! `assert_snap!`)来自 [`mineral_test`];本模块只保留依赖 TUI 私有类型
 //! (`AppState` / `SongView` / `PlaylistView`)的 fixture。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
@@ -186,6 +186,9 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
 pub(crate) struct TestClient {
     /// `request_daemon_shutdown` 调用计数(Shift+Q「退出并停止 daemon」路径断言用)。
     pub(crate) daemon_shutdowns: Arc<AtomicUsize>,
+
+    /// `submit_task` 收到的任务序列(深度搜索全量补拉等提交路径断言用)。
+    pub(crate) submitted: Arc<Mutex<Vec<TaskKind>>>,
 }
 
 impl Client for TestClient {
@@ -206,7 +209,10 @@ impl Client for TestClient {
     fn player_sync(&self, _known: PlayerVersions) -> PlayerSync {
         PlayerSync::default()
     }
-    fn submit_task(&self, _kind: TaskKind, _priority: Priority) -> TaskId {
+    fn submit_task(&self, kind: TaskKind, _priority: Priority) -> TaskId {
+        if let Ok(mut v) = self.submitted.lock() {
+            v.push(kind);
+        }
         TaskId::default()
     }
     fn cancel_tasks(&self, _filter: CancelFilter) {}
@@ -287,10 +293,29 @@ pub(crate) fn app_with_queue_probed(
     let counter = Arc::new(AtomicUsize::new(0));
     let client = TestClient {
         daemon_shutdowns: Arc::clone(&counter),
+        ..TestClient::default()
     };
     let mut app = test_app_with(Arc::new(client))?;
     fill_queue(&mut app, len, current_idx);
     Ok((app, counter))
+}
+
+/// 造一个停在 Playlists 视图、填 [`state_with_playlists`] 同款三歌单(曲目均未缓存)
+/// 的 [`App`],额外返回 [`TestClient`] 的 submit_task 任务记录(深度搜索补拉断言用)。
+pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<Vec<TaskKind>>>)> {
+    let submitted = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        submitted: Arc::clone(&submitted),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    app.state.playlists = vec![
+        playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
+        playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
+        playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
+    ];
+    app.state.view = View::Playlists;
+    Ok((app, submitted))
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:Library 视图,填《EndSerenading》前 `len`

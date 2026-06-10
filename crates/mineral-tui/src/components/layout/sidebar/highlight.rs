@@ -6,7 +6,7 @@
 //! 由 `filter::FuzzyMatcher` 反向映射出 —— 既覆盖原文段直接命中,也覆盖
 //! 拼音 / 首字母命中后映射回的汉字位置。
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::render::theme::Theme;
@@ -14,7 +14,8 @@ use crate::render::theme::Theme;
 /// 按 char 下标把 `text` 切片成 base / hit Span 序列。
 ///
 /// `hits` 为空 → 整段 `base` 样式。
-/// 命中段:`base` + peach + bold + underlined。
+/// 命中段:`base` 上叠加主题的 `search_hit` 样式(色 + 字体效果,Lua
+/// `tui.theme.search_hit` 可配)。
 ///
 /// 连续 hit 合并为单段;非 hit 段同样合并 —— 减少 ratatui Span 数量,渲染更快。
 pub fn highlight_indices<'a>(
@@ -27,8 +28,8 @@ pub fn highlight_indices<'a>(
         return vec![Span::styled(text.to_owned(), base)];
     }
     let hit_style = base
-        .fg(theme.peach)
-        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        .fg(theme.search_hit_color)
+        .add_modifier(theme.search_hit_modifier);
 
     let mut out = Vec::<Span<'a>>::new();
     let mut buf = String::new();

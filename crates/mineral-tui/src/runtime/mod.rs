@@ -5,6 +5,7 @@ pub mod cover_colors;
 pub mod cover_encode;
 pub mod cover_fetch;
 pub mod daemon;
+pub mod deep_search;
 pub mod filter;
 pub mod keymap;
 pub mod playback;

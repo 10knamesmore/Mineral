@@ -17,6 +17,7 @@ use super::layout::LayoutConfig;
 use super::lyrics::LyricsConfig;
 use super::prefetch::PrefetchConfig;
 use super::script::ScriptConfig;
+use super::search::SearchConfig;
 use super::sources::SourcesConfig;
 use super::spectrum::SpectrumConfig;
 use super::theme::ThemeConfig;
@@ -78,6 +79,9 @@ pub struct TuiConfig {
 
     /// 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
     prefetch: PrefetchConfig,
+
+    /// 搜索段(深度搜索开关与权重)。
+    search: SearchConfig,
 
     /// 歌词段(行距 + 滚动手感)。
     lyrics: LyricsConfig,

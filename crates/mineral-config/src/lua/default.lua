@@ -21,6 +21,10 @@ return {
       green = "#a6e3a1",
       peach = "#fab387",
       roles = { accent = "red", muted = "subtext", faint = "overlay" }, -- 语义角色 → token 名(来源徽标等用)
+      search_hit = { -- 搜索命中字符的样式(列表高亮)
+        color = "peach", -- token 名(随主题联动)或 "#rrggbb"(固定色)
+        modifiers = { "bold", "underline", "italic" }, -- 叠加效果,数组整体替换;可选 bold/italic/underline/dim/reversed/crossed_out
+      },
     },
     keys = {
       -- 方向是【动作 → 键】;值为单键或键数组(数组整体替换)。
@@ -123,6 +127,18 @@ return {
       playback_cover_radius = 3, -- 沿播放队列给在播曲前后各预取几张封面
       play_count_debounce_ms = 500, -- 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API
       prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
+    },
+    -- 本地过滤搜索(`/`)。
+    search = {
+      deep = true, -- Playlists 视图搜索词穿透到歌单内歌曲;进搜索态时后台补拉未缓存歌单的曲目
+      -- 字段级命中分折扣 0~1,0 = 该字段不参与;歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
+      -- 单曲分 = max(name × 歌名分, artist × 艺人分, album × 专辑分)
+      deep_weights = {
+        name = 0.6, -- 歌名
+        artist = 0.5, -- 艺人(多艺人取最高)
+        album = 0.4, -- 专辑
+      },
+      locate_on_enter = true, -- 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
     },
     lyrics = {
       fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳

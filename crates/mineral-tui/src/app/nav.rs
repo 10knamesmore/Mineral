@@ -5,8 +5,9 @@
 
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent};
-use mineral_model::Song;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mineral_model::{PlaylistId, Song};
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::action::{ScrollStep, SelectionMove};
 use crate::runtime::scroll;
@@ -22,6 +23,34 @@ impl App {
         }
         self.state.search_mode = true;
         self.state.search_q.clear();
+        self.request_deep_search_tracks();
+    }
+
+    /// 深度搜索的数据保障:Playlists 视图进搜索态时,把所有未拉取的歌单曲目一次性
+    /// 以 Background 优先级补齐(不抢视口 prefetch 的 User 档)。结果渐进到达,
+    /// 过滤结果逐帧变全。`tracks_requested` 成败都记,失败歌单不会反复重提交。
+    fn request_deep_search_tracks(&mut self) {
+        if self.state.view != View::Playlists || !*self.state.cfg.tui().search().deep() {
+            return;
+        }
+        let pending: Vec<PlaylistId> = self
+            .state
+            .playlists
+            .iter()
+            .map(|p| &p.data.id)
+            .filter(|id| {
+                !self.state.tracks_cache.contains_key(*id)
+                    && !self.state.tracks_requested.contains(*id)
+            })
+            .cloned()
+            .collect();
+        for id in pending {
+            self.client.submit_task(
+                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
+                Priority::Background,
+            );
+            self.state.tracks_requested.insert(id);
+        }
     }
 
     /// 搜索词每次变化后,把当前 view 的 sel 拉回 0(视口同步落位,逐字输入不滑屏)。
@@ -40,6 +69,9 @@ impl App {
 
     /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
     /// 命令行行为),字符追加词;改词后复位 sel。
+    ///
+    /// 带 CONTROL 的字符键一律吞掉不当输入——否则 `<C-d>` 族滚动键在搜索态会把
+    /// 裸字符塞进 query。
     pub(super) fn handle_search_key(&mut self, key: &KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -59,6 +91,7 @@ impl App {
                 self.reset_sel_for_search();
                 self.state.last_sel_change = Instant::now();
             }
+            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
             KeyCode::Char(c) => {
                 self.state.search_q.push(c);
                 self.reset_sel_for_search();
@@ -122,12 +155,19 @@ impl App {
         self.state.last_sel_change = Instant::now();
         match self.state.view {
             View::Playlists => {
+                let mut sel_track = 0usize;
                 if let Some(target_id) = self
                     .state
                     .filtered_playlists()
                     .get(self.state.sel_playlist)
                     .map(|p| p.data.id.clone())
                 {
+                    // 深度命中行:进歌单后光标直接落到命中歌(搜索 → 定位闭环,
+                    // `search.locate_on_enter` 可关)。必须在清词前取——
+                    // deep_hit_for 对空 query 恒 None。
+                    let locate = (*self.state.cfg.tui().search().locate_on_enter())
+                        .then(|| self.state.deep_hit_for(&target_id).map(|h| h.song_id))
+                        .flatten();
                     self.state.search_q.clear();
                     if let Some(raw_idx) = self
                         .state
@@ -137,12 +177,24 @@ impl App {
                     {
                         self.state.sel_playlist = raw_idx;
                     }
+                    if let Some(song_id) = locate
+                        && let Some(idx) = self
+                            .state
+                            .tracks_cache
+                            .get(&target_id)
+                            .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
+                    {
+                        sel_track = idx;
+                    }
                 }
                 self.state.view = View::Library;
                 self.state.view_pos.enter();
-                self.state.sel_track = 0;
-                // 新进一张歌单从头看:视口直接落位,不从上张歌单的深处滑回来。
-                self.state.scroll_track.snap_to(0);
+                self.state.sel_track = sel_track;
+                // 视口直接落位(命中歌上方留 scrolloff;无命中即从头看),
+                // 不从上张歌单的深处滑回来。
+                self.state
+                    .scroll_track
+                    .snap_to(sel_track.saturating_sub(self.state.scrolloff()));
             }
             View::Library => {
                 let filtered = self.state.filtered_tracks();
@@ -318,6 +370,166 @@ mod tests {
         app.state.fullscreen = true;
         ctrl(&mut app, 'f');
         assert_eq!(app.state.sel_track, 0, "全屏态 C-f 路由去歌词,列表光标不动");
+        Ok(())
+    }
+
+    /// 搜索输入态的 CONTROL 组合字符键(如 `<C-d>` 滚动)不得把裸字符泄漏进 query。
+    #[test]
+    fn search_ctrl_combos_do_not_leak_chars() -> color_eyre::Result<()> {
+        fn ctrl(app: &mut App, c: char) {
+            app.handle_event(&Event::Key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::CONTROL,
+            )));
+        }
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        press(&mut app, KeyCode::Char('/'));
+        for c in "ab".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        ctrl(&mut app, 'd');
+        ctrl(&mut app, 'u');
+        assert_eq!(app.state.search_q, "ab", "CONTROL 组合不进 query");
+        assert!(app.state.search_mode, "也不退出搜索态");
+        Ok(())
+    }
+
+    /// 深度命中定位:Playlists 视图搜到歌单内的歌后 Enter 进歌单,光标直接落在
+    /// 命中歌上(而非第 0 行)。
+    #[test]
+    fn enter_on_deep_hit_locates_song_in_library() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+
+        use crate::runtime::view_model::SongView;
+        use crate::test_support::{song, with_name};
+
+        let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
+        let views = ["甲", "乙", "春日影"]
+            .into_iter()
+            .map(|n| SongView {
+                data: with_name(song(n), n),
+                loved: false,
+                plays: None,
+            })
+            .collect::<Vec<SongView>>();
+        app.state.tracks_cache.insert(pid, views);
+        app.state.tracks_generation = 1;
+
+        press(&mut app, KeyCode::Char('/'));
+        for c in "春日影".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter); // 提交过滤,保留词
+        press(&mut app, KeyCode::Enter); // activate 选中歌单
+        assert_eq!(
+            app.state.view,
+            crate::runtime::state::View::Library,
+            "Enter 应进 Library"
+        );
+        assert_eq!(app.state.sel_track, 2, "光标应落在命中歌「春日影」上");
+        assert!(app.state.search_q.is_empty(), "进歌单后清词(现状语义)");
+        Ok(())
+    }
+
+    /// 配置旋钮:`search.locate_on_enter = false` 时,深度命中行 Enter 进歌单
+    /// 仍从第 0 行开始(不定位)。
+    #[test]
+    fn locate_on_enter_disabled_keeps_top() -> color_eyre::Result<()> {
+        use mineral_model::PlaylistId;
+
+        use crate::runtime::view_model::SongView;
+        use crate::test_support::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            "return { tui = { search = { locate_on_enter = false } } }",
+        )?;
+        let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
+        app.reload_config_from(&path);
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
+        let views = ["甲", "乙", "春日影"]
+            .into_iter()
+            .map(|n| SongView {
+                data: with_name(song(n), n),
+                loved: false,
+                plays: None,
+            })
+            .collect::<Vec<SongView>>();
+        app.state.tracks_cache.insert(pid, views);
+        app.state.tracks_generation = 1;
+
+        press(&mut app, KeyCode::Char('/'));
+        for c in "春日影".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state.sel_track, 0, "旋钮关闭:不定位,从头看");
+        Ok(())
+    }
+
+    /// 深度搜索数据保障:Playlists 视图按 `/`,所有未缓存歌单的 PlaylistTracks 一次性
+    /// 提交;再次进搜索态不重复提交(`tracks_requested` 去重);Library 视图按 `/` 不提交。
+    #[test]
+    fn slash_in_playlists_requests_uncached_tracks() -> color_eyre::Result<()> {
+        use mineral_task::{ChannelFetchKind, TaskKind};
+
+        let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
+        press(&mut app, KeyCode::Char('/'));
+        {
+            let tasks = submitted
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
+            let track_fetches = tasks
+                .iter()
+                .filter(|k| {
+                    matches!(
+                        k,
+                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { .. })
+                    )
+                })
+                .count();
+            assert_eq!(track_fetches, 3, "三个未缓存歌单各提交一次");
+        }
+
+        // 退出搜索再进:tracks_requested 已记录,不重复提交。
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('/'));
+        {
+            let tasks = submitted
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
+            assert_eq!(tasks.len(), 3, "重复进搜索态不应重复提交");
+        }
+
+        // Library 视图按 `/` 不触发补拉(深度搜索只服务 Playlists 过滤)。
+        press(&mut app, KeyCode::Esc);
+        app.state.view = crate::runtime::state::View::Library;
+        app.state.tracks_requested.clear();
+        press(&mut app, KeyCode::Char('/'));
+        let tasks = submitted
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
+        assert_eq!(tasks.len(), 3, "Library 视图进搜索态不应提交补拉");
+        Ok(())
+    }
+
+    /// 配置总开关:`search.deep = false` 时按 `/` 不触发任何补拉。
+    #[test]
+    fn slash_respects_deep_disabled() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(&path, "return { tui = { search = { deep = false } } }")?;
+        let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
+        app.reload_config_from(&path);
+        press(&mut app, KeyCode::Char('/'));
+        let tasks = submitted
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
+        assert!(tasks.is_empty(), "deep 关闭时不应提交补拉");
         Ok(())
     }
 

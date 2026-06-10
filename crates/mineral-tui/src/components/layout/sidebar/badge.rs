@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, View};
 
 /// 把搜索态渲染成可拼进面板标题的 [`Span`] 序列。
 ///
@@ -15,6 +15,7 @@ use crate::runtime::state::AppState;
 /// # Return:
 ///   - 输入态(`search_mode`):`/q█`(末尾光标方块,表示正在输入)
 ///   - 非输入态但有词:`/q`(已提交、仍在过滤的词)
+///   - 任一搜索态下深度索引在飞:再缀 ` ⟳n`(见 [`indexing_count`])
 ///   - 无词且非输入态:空序列(标题不挂 badge)
 pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
     if !state.search_mode && state.search_q.is_empty() {
@@ -30,5 +31,26 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
             Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
         ));
     }
+    if let Some(n) = indexing_count(state) {
+        spans.push(Span::styled(
+            format!(" ⟳{n}"),
+            Style::new().fg(theme.overlay),
+        ));
+    }
     spans
+}
+
+/// 深度索引在飞的歌单数:Playlists 视图 + deep 开启 + PlaylistTracks 任务计数 > 0。
+/// 不在此状态返回 `None`(badge 不缀)。搜不到时用户据此区分「真没有」和「还没拉完」。
+pub fn indexing_count(state: &AppState) -> Option<usize> {
+    if state.view != View::Playlists || !*state.cfg.tui().search().deep() {
+        return None;
+    }
+    let n = state
+        .tasks_snapshot
+        .by_kind
+        .get(&mineral_task::ChannelFetchKindTag::PlaylistTracks)
+        .copied()
+        .unwrap_or(0);
+    (n > 0).then_some(n)
 }

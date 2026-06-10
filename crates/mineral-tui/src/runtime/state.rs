@@ -106,6 +106,10 @@ pub struct AppState {
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
 
+    /// `tracks_cache` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
+    /// 纯装饰重建([`Self::redecorate_for_source`])不动文本,不 bump。
+    pub tracks_generation: u64,
+
     /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
     /// 避免**失败**歌单(tracks_cache 永远不会被填)被每帧无限重提交而刷屏。
     /// 对齐 cover 的 `cover_pending`。
@@ -233,6 +237,10 @@ pub struct AppState {
     /// 远低于其它 cache。换源 / 重启自然清掉。
     pub matchable_cache: RefCell<FxHashMap<String, Arc<MatchableText>>>,
 
+    /// Playlists 深度搜索(搜索词穿透到歌单内歌曲)的结果缓存。按
+    /// `(query, tracks 版本, 权重)` 失效,渲染帧只读;`RefCell` 与 matcher 同理。
+    pub deep_search: RefCell<crate::runtime::deep_search::DeepSearchCache>,
+
     /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
     pub cfg: Arc<mineral_config::Config>,
@@ -254,6 +262,7 @@ impl AppState {
             fullscreen_pos: Transition::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
+            tracks_generation: 0,
             tracks_requested: FxHashSet::default(),
             lyrics_cache: FxHashMap::default(),
             lyric_extra: LyricExtra::None,
@@ -294,6 +303,7 @@ impl AppState {
             last_sel_change: Instant::now(),
             matcher: RefCell::new(FuzzyMatcher::new()),
             matchable_cache: RefCell::new(FxHashMap::default()),
+            deep_search: RefCell::new(crate::runtime::deep_search::DeepSearchCache::default()),
             cfg,
         }
     }
@@ -393,6 +403,7 @@ impl AppState {
                     .map(|data| self.decorate(data))
                     .collect();
                 self.tracks_cache.insert(id.clone(), decorated);
+                self.tracks_generation = self.tracks_generation.wrapping_add(1);
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
                 self.liked_ids.insert(*source, ids.clone());
@@ -507,14 +518,43 @@ impl AppState {
             return self.playlists.iter().collect();
         }
         self.sync_query();
-        let mut scored: Vec<(u32, &PlaylistView)> = self
+        crate::runtime::deep_search::ensure(self);
+        let deep = self.deep_search.borrow();
+        let mut scored: Vec<(f64, &PlaylistView)> = self
             .playlists
             .iter()
-            .filter_map(|p| self.match_for(&p.data.name).map(|m| (m.score, p)))
+            .filter_map(|p| {
+                let name = self.match_for(&p.data.name).map(|m| f64::from(m.score));
+                let inner = deep.score_of(&p.data.id);
+                let best = match (name, inner) {
+                    (Some(n), Some(i)) => n.max(i),
+                    (Some(n), None) => n,
+                    (None, Some(i)) => i,
+                    (None, None) => return None,
+                };
+                Some((best, p))
+            })
             .collect();
-        // sort_by_key 是 stable:同分项保持原序。
-        scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
+        // total_cmp 全序 + sort_by 稳定:同分项保持原序。
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         scored.into_iter().map(|(_, p)| p).collect()
+    }
+
+    /// 某歌单的深度命中展示载荷(克隆一份给渲染)。空 query / 无命中返回 `None`。
+    ///
+    /// 调用前提:本帧已有人调过 [`Self::filtered_playlists`](渲染路径必然满足),
+    /// 缓存已就绪;这里不再 ensure,避免渲染端反复触发指纹比较。
+    pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<crate::runtime::deep_search::DeepHit> {
+        if self.search_q.is_empty() {
+            return None;
+        }
+        self.deep_search.borrow().hit_of(id).cloned()
+    }
+
+    /// 当前过滤结果里是否存在任何深度命中。渲染端据此决定 match 列要不要占位——
+    /// 全员只命中歌单名时不挤压 name 列宽。调用前提同 [`Self::deep_hit_for`]。
+    pub fn has_deep_hits(&self) -> bool {
+        !self.search_q.is_empty() && self.deep_search.borrow().has_hits()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。

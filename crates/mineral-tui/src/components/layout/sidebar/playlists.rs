@@ -38,28 +38,45 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         return;
     }
 
-    let header = Row::new(vec![
-        Cell::from("name"),
+    // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
+    // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
+    if total == 0 && !state.search_q.is_empty() {
+        paint_no_match(buf, area, state, theme, block);
+        return;
+    }
+
+    // 确有深度命中时多一列「match」展示歌单内命中歌曲;纯歌单名命中 / 空 query
+    // 不占位,不挤压 name 列宽。
+    let show_match = state.has_deep_hits();
+    let mut header_cells = vec![Cell::from("name")];
+    if show_match {
+        header_cells.push(Cell::from("match"));
+    }
+    header_cells.extend([
         Cell::from("source"),
         Cell::from("length"),
         Cell::from("items"),
-    ])
-    .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+    ]);
+    let header =
+        Row::new(header_cells).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row<'_>> = rows_data
         .into_iter()
-        .map(|p| build_row(p, state, theme))
+        .map(|p| build_row(p, state, theme, show_match))
         .collect();
 
     // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
     // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
     // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
-    let widths = [
-        Constraint::Fill(1),
+    let mut widths = vec![Constraint::Fill(1)];
+    if show_match {
+        widths.push(Constraint::Fill(1));
+    }
+    widths.extend([
         Constraint::Length(11),
         Constraint::Length(8),
         Constraint::Length(5),
-    ];
+    ]);
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -91,8 +108,13 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     StatefulWidget::render(table, area, buf, &mut table_state);
 }
 
-/// 把一个歌单组装成 sidebar 表格行(名字 / 来源 channel / 总时长 / 曲目数)。
-fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a> {
+/// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 channel / 总时长 / 曲目数)。
+fn build_row<'a>(
+    p: &'a PlaylistView,
+    state: &AppState,
+    theme: &Theme,
+    show_match: bool,
+) -> Row<'a> {
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {
         String::from("—")
@@ -110,20 +132,60 @@ fn build_row<'a>(p: &'a PlaylistView, state: &AppState, theme: &Theme) -> Row<'a
     let src = p.data.source();
 
     let name_hits = state.match_for(&p.data.name).map(|m| m.hits);
-    Row::new(vec![
-        Cell::from(Line::from(highlight_indices(
-            &p.data.name,
-            name_hits.as_deref().unwrap_or(&[]),
-            Style::new().fg(theme.text),
-            theme,
-        ))),
+    let mut cells = vec![Cell::from(Line::from(highlight_indices(
+        &p.data.name,
+        name_hits.as_deref().unwrap_or(&[]),
+        Style::new().fg(theme.text),
+        theme,
+    )))];
+    if show_match {
+        cells.push(deep_hit_cell(p, state, theme));
+    }
+    cells.extend([
         Cell::from(Span::styled(
             src.label(),
             Style::new().fg(theme.source_color(src.palette())),
         )),
         Cell::from(Span::styled(len_label, Style::new().fg(theme.subtext))),
         Cell::from(Span::styled(count_label, Style::new().fg(theme.overlay))),
+    ]);
+    Row::new(cells)
+}
+
+/// 深度命中列:`♪ 歌名 · 艺人/专辑`(命中字符同款高亮)+ `+n` 计数;
+/// 该歌单无歌曲命中时为空白格。
+fn deep_hit_cell<'a>(p: &PlaylistView, state: &AppState, theme: &Theme) -> Cell<'a> {
+    let Some(hit) = state.deep_hit_for(&p.data.id) else {
+        return Cell::from("");
+    };
+    let mut spans = highlight_indices(&hit.line, &hit.hits, Style::new().fg(theme.subtext), theme);
+    if hit.extra > 0 {
+        spans.push(Span::styled(
+            format!(" +{}", hit.extra),
+            Style::new().fg(theme.overlay),
+        ));
+    }
+    Cell::from(Line::from(spans))
+}
+
+/// 搜索零命中时画 block + 居中提示;深度索引在飞时改提示「索引中」。
+fn paint_no_match(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme, block: Block<'_>) {
+    let inner = block.inner(area);
+    block.render(area, buf);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let text = if let Some(n) = super::badge::indexing_count(state) {
+        format!("索引中({n} 个歌单)…")
+    } else {
+        "无匹配".to_owned()
+    };
+    Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(text, Style::new().fg(theme.overlay))),
     ])
+    .alignment(ratatui::layout::Alignment::Center)
+    .render(inner, buf);
 }
 
 /// 全空 playlist 时画 block + 居中两行提示。loading / 未登录文案二选一。
@@ -278,6 +340,76 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:全拼 chunying 命中「春日影」(春 + 影 高亮)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 深度命中:歌单名均不含搜索词,p2 内「春日影 · CRYCHIC」命中 → 该歌单被捞出,
+    /// match 列展示 `♪ 春日影 · CRYCHIC`(命中字符同款高亮)。
+    #[test]
+    fn playlists_search_deep_hit_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        use crate::runtime::view_model::SongView;
+        use crate::test_support::{song, with_artist, with_name};
+
+        let mut state = crate::test_support::state_with_playlists()?;
+        let track = with_artist(with_name(song("s1"), "春日影"), "CRYCHIC");
+        state.tracks_cache.insert(
+            PlaylistId::new(SourceKind::NETEASE, "p2"),
+            vec![SongView {
+                data: track,
+                loved: false,
+                plays: None,
+            }],
+        );
+        state.tracks_generation = 1;
+        state.search_q = "春日".to_owned();
+
+        let mut t = Terminal::new(TestBackend::new(64, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "歌单列表:深度命中(match 列展示 ♪ 春日影 · CRYCHIC,命中高亮)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 搜索零命中(无在飞索引):居中「无匹配」提示而非纯空白。
+    #[test]
+    fn playlists_search_no_match_snapshot() -> color_eyre::Result<()> {
+        let mut state = crate::test_support::state_with_playlists()?;
+        state.search_q = "zzz".to_owned();
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!("歌单列表:搜索零命中(居中「无匹配」)", t.backend());
+        Ok(())
+    }
+
+    /// 搜索零命中 + 深度索引在飞:badge 缀 ⟳n,居中提示「索引中」——
+    /// 此刻搜不到 ≠ 真没有。
+    #[test]
+    fn playlists_search_indexing_snapshot() -> color_eyre::Result<()> {
+        let mut state = crate::test_support::state_with_playlists()?;
+        state.search_q = "zzz".to_owned();
+        state
+            .tasks_snapshot
+            .by_kind
+            .insert(mineral_task::ChannelFetchKindTag::PlaylistTracks, 3);
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "歌单列表:零命中且索引在飞(badge ⟳3 + 居中「索引中」)",
             t.backend()
         );
         Ok(())

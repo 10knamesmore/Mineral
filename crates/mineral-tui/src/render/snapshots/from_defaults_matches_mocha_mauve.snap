@@ -89,4 +89,10 @@ Theme {
         112,
         134,
     ),
+    search_hit_color: Rgb(
+        250,
+        179,
+        135,
+    ),
+    search_hit_modifier: BOLD | ITALIC | UNDERLINED,
 }

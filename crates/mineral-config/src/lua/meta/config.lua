@@ -37,6 +37,7 @@
 ---@field spectrum? mineral.SpectrumConfig 频谱面板观感与动态
 ---@field cover? mineral.CoverConfig 封面抓取 / 缓存 / 取色
 ---@field prefetch? mineral.PrefetchConfig 数据预取范围与节流
+---@field search? mineral.SearchConfig 本地过滤搜索(深度搜索开关与字段权重)
 ---@field lyrics? mineral.LyricsConfig 歌词面板行距与滚动
 ---@field animation? mineral.AnimationConfig 各动画时长与帧率
 ---@field toast? mineral.ToastConfig 顶栏通知停留时长
@@ -60,6 +61,12 @@
 ---@field green? string "#rrggbb" 播放指示
 ---@field peach? string "#rrggbb" 命令 / 搜索前缀
 ---@field roles? mineral.RolesConfig 语义角色 → token 名映射
+---@field search_hit? mineral.SearchHitConfig 搜索命中字符的样式(列表高亮)
+
+---搜索命中字符的样式,在所在列的基础样式上叠加。
+---@class mineral.SearchHitConfig
+---@field color? string 高亮色:14 个 token 名之一(如 "peach",随主题联动)或 "#rrggbb"(固定色)
+---@field modifiers? ("bold"|"italic"|"underline"|"dim"|"reversed"|"crossed_out")[] 叠加的字体效果;数组整体替换,空数组 = 仅变色;实际效果取决于终端支持
 
 ---语义角色映射:来源徽标等只声明角色,这里决定角色落到哪个 token 色。
 ---取值必须是 14 个 token 名之一:base / mantle / crust / surface0 / surface1 /
@@ -182,6 +189,20 @@
 ---@field playback_cover_radius? integer 沿播放队列给在播曲前后各预取几张封面,服务自动切歌
 ---@field play_count_debounce_ms? integer 选中某曲停留超过此毫秒数才查它的远端播放次数;太小翻列表会打满 API
 ---@field prewarm_ahead? integer 全屏稳态提前编码接下来几首的封面,消自动切歌瞬间的占位闪;每首一份终端图开销
+
+---本地过滤搜索(`/`)。deep 打开后 Playlists 视图的搜索词穿透到歌单内歌曲,
+---进搜索态时后台补拉未缓存歌单的曲目。
+---@class mineral.SearchConfig
+---@field deep? boolean Playlists 视图搜索是否穿透到歌单内歌曲(总开关)
+---@field deep_weights? mineral.DeepWeights 字段级命中分折扣
+---@field locate_on_enter? boolean 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
+
+---深度搜索的字段级权重,每项 0~1(越界 clamp),0 = 该字段不参与;
+---歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),单曲分 = 各字段加权分取最高。
+---@class mineral.DeepWeights
+---@field name? number 歌名命中分折扣
+---@field artist? number 艺人名命中分折扣(多艺人取最高)
+---@field album? number 专辑名命中分折扣
 
 ---歌词面板。
 ---@class mineral.LyricsConfig

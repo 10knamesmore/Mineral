@@ -87,6 +87,18 @@ Config {
                     name: "overlay",
                 },
             },
+            search_hit: SearchHitConfig {
+                color: Token(
+                    TokenName {
+                        name: "peach",
+                    },
+                ),
+                modifiers: [
+                    Bold,
+                    Underline,
+                    Italic,
+                ],
+            },
         },
         keys: KeysConfig {
             play_pause: KeyBinding {
@@ -498,6 +510,15 @@ Config {
             playback_cover_radius: 3,
             play_count_debounce_ms: 500,
             prewarm_ahead: 1,
+        },
+        search: SearchConfig {
+            deep: true,
+            deep_weights: DeepWeights {
+                name: 0.6,
+                artist: 0.5,
+                album: 0.4,
+            },
+            locate_on_enter: true,
         },
         lyrics: LyricsConfig {
             fullscreen_line_gap: 1,

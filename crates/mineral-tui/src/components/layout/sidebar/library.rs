@@ -224,20 +224,27 @@ fn position_label(sel: usize, total: usize) -> String {
     }
 }
 
-/// 选中歌单尚未拿到 tracks 时返回 loading 行,已到位返回 `None`(走正常 tracks 渲染)。
+/// 选中歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
+/// 「无匹配」行;正常情况返回 `None`(走 tracks 渲染)。
 fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
-    if state.current_tracks_slot().is_some() {
-        return None;
-    }
-    state.selected_playlist().map(|_| {
-        // 占位文本落在 title 列(前两格留给 gutter / #),避免被 Length(1) 的 gutter 截成
-        // 单字。两档列集的第 3 列都是 title,故位置通用。
+    // 占位文本落在 title 列(前两格留给 gutter / #),避免被 Length(1) 的 gutter 截成
+    // 单字。两档列集的第 3 列都是 title,故位置通用。
+    let placeholder_row = |text: &'static str| {
         Row::new(vec![
             Cell::from(""),
             Cell::from(""),
-            Cell::from(Span::styled("loading…", Style::new().fg(theme.overlay))),
+            Cell::from(Span::styled(text, Style::new().fg(theme.overlay))),
         ])
-    })
+    };
+    if state.current_tracks_slot().is_none() {
+        return state
+            .selected_playlist()
+            .map(|_| placeholder_row("loading…"));
+    }
+    if !state.search_q.is_empty() && state.filtered_tracks().is_empty() {
+        return Some(placeholder_row("无匹配"));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -372,6 +379,17 @@ mod tests {
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
         })?;
         crate::test_support::assert_snap!("曲目列表:选中歌单但曲目未到(loading)", t.backend());
+        Ok(())
+    }
+
+    /// 曲目已到位但搜索零命中 → 表内「无匹配」占位行(而非纯空白)。
+    #[test]
+    fn library_search_no_match_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        let mut state = crate::test_support::state_with_tracks()?;
+        state.search_q = "zzz".to_owned();
+        draw_lib(&mut t, &state)?;
+        crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
         Ok(())
     }
 

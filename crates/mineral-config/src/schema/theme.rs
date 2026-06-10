@@ -63,6 +63,75 @@ pub struct ThemeConfig {
 
     /// 语义角色 → token 名映射(accent / muted / faint)。
     roles: RolesConfig,
+
+    /// 搜索命中字符的样式(色 + 叠加字体效果)。
+    search_hit: SearchHitConfig,
+}
+
+/// 搜索命中字符的样式:在所在列的基础样式上叠加。
+///
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
+#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SearchHitConfig {
+    /// 高亮色:token 名(`"peach"` 等)或裸 `"#rrggbb"`。
+    color: ColorRef,
+
+    /// 叠加的字体效果(数组整体替换;空数组 = 仅变色)。
+    modifiers: Vec<TextStyle>,
+}
+
+/// 一处颜色引用:既可指向 14 个主题 token 之一(随主题联动),也可直接给
+/// `#rrggbb`(脱离 token 体系的固定色)。以 `#` 前缀区分两种写法。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ColorRef {
+    /// 指向主题 token(如 `"peach"`),client 接线处按 token 名 resolve。
+    Token(TokenName),
+
+    /// 直接色值。
+    Hex(HexColor),
+}
+
+impl<'de> Deserialize<'de> for ColorRef {
+    /// `#` 开头按 [`HexColor`] 解析,否则按 [`TokenName`] 校验;两边的格式错误
+    /// 原样冒出(经 `serde_path_to_error` 带字段路径)。
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::IntoDeserializer;
+
+        let raw = String::deserialize(deserializer)?;
+        if raw.starts_with('#') {
+            HexColor::deserialize(raw.into_deserializer()).map(Self::Hex)
+        } else {
+            TokenName::deserialize(raw.into_deserializer()).map(Self::Token)
+        }
+    }
+}
+
+/// 可叠加的字体效果。终端实际渲染效果取决于终端模拟器支持(如部分终端无斜体)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextStyle {
+    /// 加粗。
+    Bold,
+
+    /// 斜体。
+    Italic,
+
+    /// 下划线。
+    Underline,
+
+    /// 暗淡。
+    Dim,
+
+    /// 反色(前景背景互换)。
+    Reversed,
+
+    /// 删除线。
+    CrossedOut,
 }
 
 /// 语义角色 → token 名映射。值是同表 14 个 token 之一的名字(如 `"red"`),
@@ -222,6 +291,44 @@ mod tests {
         assert!(
             serde_json::from_value::<TokenName>(serde_json::json!("mauve")).is_err(),
             "非 token 名应报错"
+        );
+        Ok(())
+    }
+
+    /// ColorRef 双写法:`#` 前缀走 hex,否则按 token 名校验;两边的非法值都报错。
+    #[test]
+    fn color_ref_parses_token_and_hex() -> color_eyre::Result<()> {
+        use super::ColorRef;
+
+        let t: ColorRef = serde_json::from_value(serde_json::json!("peach"))?;
+        assert!(matches!(t, ColorRef::Token(ref n) if n.as_str() == "peach"));
+        let h: ColorRef = serde_json::from_value(serde_json::json!("#102030"))?;
+        assert!(matches!(h, ColorRef::Hex(c) if (c.r(), c.g(), c.b()) == (0x10, 0x20, 0x30)));
+        assert!(
+            serde_json::from_value::<ColorRef>(serde_json::json!("mauve")).is_err(),
+            "非 token 名应报错"
+        );
+        assert!(
+            serde_json::from_value::<ColorRef>(serde_json::json!("#12345")).is_err(),
+            "位数不足的 hex 应报错"
+        );
+        Ok(())
+    }
+
+    /// TextStyle 按 snake_case 字符串解析,未知效果名报错。
+    #[test]
+    fn text_style_parses_known_rejects_unknown() -> color_eyre::Result<()> {
+        use super::TextStyle;
+
+        let s: Vec<TextStyle> =
+            serde_json::from_value(serde_json::json!(["bold", "italic", "crossed_out"]))?;
+        assert_eq!(
+            s,
+            vec![TextStyle::Bold, TextStyle::Italic, TextStyle::CrossedOut]
+        );
+        assert!(
+            serde_json::from_value::<TextStyle>(serde_json::json!("blink")).is_err(),
+            "未知效果名应报错"
         );
         Ok(())
     }

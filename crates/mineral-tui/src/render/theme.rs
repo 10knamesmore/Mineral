@@ -3,7 +3,7 @@
 //! 所有 widget 渲染都从 [`Theme`] 取色,避免散落的硬编码 RGB。
 
 use mineral_model::PaletteRole;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 /// 一组完整的 UI 颜色 token。
 ///
@@ -50,6 +50,13 @@ pub struct Theme {
 
     /// 来源 Faint 角色落地色。
     role_faint: Color,
+
+    /// 搜索命中字符的高亮色(构造时按配置 `theme.search_hit.color` resolve:
+    /// token 名随主题联动,`#rrggbb` 为固定色)。
+    pub search_hit_color: Color,
+
+    /// 搜索命中字符叠加的字体效果(`theme.search_hit.modifiers` 折叠)。
+    pub search_hit_modifier: Modifier,
 }
 
 impl Theme {
@@ -92,10 +99,21 @@ impl Theme {
             role_accent: Color::Reset,
             role_muted: Color::Reset,
             role_faint: Color::Reset,
+            search_hit_color: Color::Reset,
+            search_hit_modifier: Modifier::empty(),
         };
         t.role_accent = t.token_by_name(cfg.roles().accent().as_str());
         t.role_muted = t.token_by_name(cfg.roles().muted().as_str());
         t.role_faint = t.token_by_name(cfg.roles().faint().as_str());
+        t.search_hit_color = match cfg.search_hit().color() {
+            mineral_config::ColorRef::Token(name) => t.token_by_name(name.as_str()),
+            mineral_config::ColorRef::Hex(h) => c(h),
+        };
+        t.search_hit_modifier = cfg
+            .search_hit()
+            .modifiers()
+            .iter()
+            .fold(Modifier::empty(), |acc, m| acc | modifier_of(*m));
         t
     }
 
@@ -146,7 +164,25 @@ impl Theme {
             role_accent: Color::Rgb(0xf3, 0x8b, 0xa8),
             role_muted: Color::Rgb(0xa6, 0xad, 0xc8),
             role_faint: Color::Rgb(0x6c, 0x70, 0x86),
+            // search_hit 与 default.lua 的 `{ color = "peach",
+            // modifiers = { "bold", "underline", "italic" } }` 对齐。
+            search_hit_color: Color::Rgb(0xfa, 0xb3, 0x87),
+            search_hit_modifier: Modifier::BOLD
+                .union(Modifier::UNDERLINED)
+                .union(Modifier::ITALIC),
         }
+    }
+}
+
+/// 配置层字体效果 → ratatui [`Modifier`] 的接线映射。
+fn modifier_of(style: mineral_config::TextStyle) -> Modifier {
+    match style {
+        mineral_config::TextStyle::Bold => Modifier::BOLD,
+        mineral_config::TextStyle::Italic => Modifier::ITALIC,
+        mineral_config::TextStyle::Underline => Modifier::UNDERLINED,
+        mineral_config::TextStyle::Dim => Modifier::DIM,
+        mineral_config::TextStyle::Reversed => Modifier::REVERSED,
+        mineral_config::TextStyle::CrossedOut => Modifier::CROSSED_OUT,
     }
 }
 
@@ -194,6 +230,35 @@ mod tests {
         assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
         let t = Theme::from_config(cfg.tui().theme());
         assert_eq!(t.source_color(PaletteRole::Accent), t.green);
+        Ok(())
+    }
+
+    /// 逐旋钮生效:search_hit 改成固定 hex 色 + 仅斜体,落地字段跟着变;
+    /// token 写法(默认 peach)随主题联动由 defaults 守卫覆盖。
+    #[test]
+    fn search_hit_override_takes_effect() -> color_eyre::Result<()> {
+        use ratatui::style::Modifier;
+
+        let dir = tempfile::tempdir()?;
+        let user = dir.path().join("config.lua");
+        std::fs::write(
+            &user,
+            r##"return { tui = { theme = { search_hit = {
+                color = "#102030", modifiers = { "italic" },
+            } } } }"##,
+        )?;
+        let (cfg, warnings) = mineral_config::load(&user)?;
+        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
+        let t = Theme::from_config(cfg.tui().theme());
+        assert_eq!(
+            t.search_hit_color,
+            ratatui::style::Color::Rgb(0x10, 0x20, 0x30)
+        );
+        assert_eq!(
+            t.search_hit_modifier,
+            Modifier::ITALIC,
+            "仅斜体,不带默认 bold"
+        );
         Ok(())
     }
 
