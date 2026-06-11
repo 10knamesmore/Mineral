@@ -2510,11 +2510,14 @@ version = "0.5.1"
 dependencies = [
  "async-trait",
  "color-eyre",
+ "derive-getters",
  "mineral-model",
  "rustc-hash",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+ "typed-builder",
 ]
 
 [[package]]
@@ -2522,8 +2525,11 @@ name = "mineral-channel-mock"
 version = "0.5.1"
 dependencies = [
  "async-trait",
+ "color-eyre",
  "mineral-channel-core",
  "mineral-model",
+ "parking_lot",
+ "tokio",
 ]
 
 [[package]]

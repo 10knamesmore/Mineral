@@ -2,18 +2,21 @@
 
 use color_eyre::eyre::eyre;
 use mineral_model::{
-    Album, AlbumId, AlbumRef, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId, SourceKind,
+    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId,
+    SourceKind,
 };
 use serde_json::json;
 
 /// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
-use crate::convert::parse_remote;
+use crate::convert::{parse_remote, parse_remote_opt};
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
-use crate::wire::search::{SearchAlbumsResult, SearchPlaylistsResult, SearchSongsResult};
+use crate::wire::search::{
+    SearchAlbumsResult, SearchArtistsResult, SearchPlaylistsResult, SearchSongsResult,
+};
 
 /// 搜索 API 路径,所有 `search_*` 共用同一端点,通过 `stype` 区分类别。
 const PATH: &str = "/weapi/search/get";
@@ -107,6 +110,32 @@ pub async fn search_albums(
             description: a.description,
             publish_time_ms: a.publish_time,
             cover_url: a.pic_url.as_deref().and_then(parse_remote),
+            songs: Vec::new(),
+        })
+        .collect())
+}
+
+pub async fn search_artists(
+    transport: &Transport,
+    keyword: &str,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<Artist>> {
+    let raw = search_raw(transport, keyword, 100, offset, limit).await?;
+    let result = raw
+        .get("result")
+        .ok_or_else(|| eyre!("search response missing `result`"))?;
+    let parsed: SearchArtistsResult = crate::wire::de::from_value(result.clone())?;
+    Ok(parsed
+        .artists
+        .into_iter()
+        .map(|a| Artist {
+            id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
+            name: a.name,
+            // 搜索结果不带简介/粉丝数,详情按需走 artist_detail
+            description: String::new(),
+            follower_count: 0,
+            avatar_url: parse_remote_opt(a.pic_url.as_deref()),
             songs: Vec::new(),
         })
         .collect())

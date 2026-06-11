@@ -1,0 +1,34 @@
+---
+source: crates/mineral-channel/netease/src/wire/artist.rs
+description: 歌手详情(Beyond + 热门曲海阔天空)解析结构
+expression: r
+---
+ArtistDetailResult {
+    artist: ArtistInfo {
+        id: 11127,
+        name: "Beyond",
+        pic_url: Some(
+            "https://p1.music.126.net/x.jpg",
+        ),
+        brief_desc: "香港摇滚乐队",
+        fans_count: 8900000,
+    },
+    hot_songs: [
+        AlbumSong {
+            id: 1,
+            name: "海阔天空",
+            ar: [
+                Artist {
+                    id: 11127,
+                    name: "Beyond",
+                },
+            ],
+            al: Album {
+                id: 9,
+                name: "乐与怒",
+                pic_url: None,
+            },
+            dt: 323000,
+        },
+    ],
+}

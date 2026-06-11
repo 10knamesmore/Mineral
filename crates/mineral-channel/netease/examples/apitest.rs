@@ -261,6 +261,9 @@ async fn main() -> color_eyre::Result<()> {
         eprintln!("跳过 songs_detail/album/url/lyrics(因为 search_songs 没产出歌曲)");
     }
 
+    // 歌手三连:搜索 → 详情 → 专辑列表(全部匿名可用)
+    run_artist_readonly(&ch, &mut report).await;
+
     // ---------------- 3. 登录态 ----------------
     println!("\n=== 3. 登录态 ===");
     if !has_cookie {
@@ -353,6 +356,10 @@ async fn main() -> color_eyre::Result<()> {
     println!("\n=== 5. limit=0 探测(对比 tracks 数 / body 大小)===");
     probe_limit_zero(&ch, &mut report).await?;
 
+    // ---------------- 6. 歌单写操作(危险,双重 opt-in)----------------
+    println!("\n=== 6. 歌单写操作 ===");
+    run_section6_playlist_write(&ch, has_cookie, &mut report).await;
+
     // ---------------- Summary ----------------
     let total = report.len();
     let pass = report.iter().filter(|(_, r)| r.is_ok()).count();
@@ -367,6 +374,168 @@ async fn main() -> color_eyre::Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// 歌手只读三连:搜索 → 详情(简介 + 热门曲)→ 专辑列表,全部匿名可用。
+async fn run_artist_readonly(
+    ch: &NeteaseChannel,
+    report: &mut Vec<(String, Result<String, String>)>,
+) {
+    let artist_ref = match ch.search_artists("Beyond", Page::new(0, 5)).await {
+        Ok(artists) => {
+            let first = artists.first().cloned();
+            report.push((
+                "search_artists".into(),
+                Ok(format!(
+                    "{} hits{}",
+                    artists.len(),
+                    first
+                        .as_ref()
+                        .map(|a| format!(", first: \"{}\"", a.name))
+                        .unwrap_or_default()
+                )),
+            ));
+            print_last(report);
+            first
+        }
+        Err(e) => {
+            report.push(("search_artists".into(), Err(e.to_string())));
+            print_last(report);
+            None
+        }
+    };
+
+    let Some(artist) = artist_ref else {
+        eprintln!("跳过 artist_detail/artist_albums(因为 search_artists 没产出歌手)");
+        return;
+    };
+    let r = run("artist_detail", async {
+        let a = ch.artist_detail(&artist.id).await?;
+        Ok(format!(
+            "\"{}\", {} hot songs, desc {} chars",
+            a.name,
+            a.songs.len(),
+            a.description.chars().count()
+        ))
+    })
+    .await;
+    report.push(r);
+
+    let r = run("artist_albums", async {
+        let v = ch.artist_albums(&artist.id, Page::new(0, 10)).await?;
+        Ok(format!(
+            "{} albums{}",
+            v.len(),
+            v.first()
+                .map(|a| format!(", first: \"{}\"", a.name))
+                .unwrap_or_default()
+        ))
+    })
+    .await;
+    report.push(r);
+}
+
+/// 歌单写操作全回路:建单 → 改名 → 改描述 → 加歌 → 删歌 → 删单(自清理)。
+///
+/// **会真实修改账号数据**,需要双重 opt-in:登录 cookie + `NETEASE_WRITE_TEST=1`。
+/// 缺一即跳过——`cargo apitest` 常规跑永远不会碰到写端点。
+/// 每步之间 sleep 1s 降低风控(512)概率;若中途失败,残留的临时歌单
+/// (名字带 "mineral-apitest" 前缀)需手动去网易云删除。
+async fn run_section6_playlist_write(
+    ch: &NeteaseChannel,
+    has_cookie: bool,
+    report: &mut Vec<(String, Result<String, String>)>,
+) {
+    if !has_cookie || std::env::var("NETEASE_WRITE_TEST").as_deref() != Ok("1") {
+        println!("(跳过:写操作需登录 cookie + NETEASE_WRITE_TEST=1 双重 opt-in)");
+        return;
+    }
+    let pause = || tokio::time::sleep(std::time::Duration::from_secs(1));
+
+    let created = match ch.create_playlist("mineral-apitest 临时歌单").await {
+        Ok(p) => {
+            report.push((
+                "create_playlist".into(),
+                Ok(format!("id={}", p.id.as_str())),
+            ));
+            print_last(report);
+            p
+        }
+        Err(e) => {
+            report.push(("create_playlist".into(), Err(e.to_string())));
+            print_last(report);
+            return;
+        }
+    };
+    pause().await;
+
+    let r = run("rename_playlist", async {
+        ch.rename_playlist(&created.id, "mineral-apitest 改名后").await?;
+        Ok("renamed".into())
+    })
+    .await;
+    report.push(r);
+    pause().await;
+
+    let r = run("set_playlist_description", async {
+        ch.set_playlist_description(&created.id, "apitest 自动创建,跑完即删")
+            .await?;
+        Ok("desc updated".into())
+    })
+    .await;
+    report.push(r);
+    pause().await;
+
+    // 拿一首公开歌做加/删素材
+    let donor = ch
+        .search_songs("海阔天空", Page::new(0, 1))
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next());
+    if let Some(song) = donor {
+        let r = run("playlist_add_songs", async {
+            ch.playlist_add_songs(&created.id, std::slice::from_ref(&song.id))
+                .await?;
+            Ok(format!("added \"{}\"", song.name))
+        })
+        .await;
+        report.push(r);
+        pause().await;
+
+        let r = run("playlist_add_songs (重复→502)", async {
+            match ch
+                .playlist_add_songs(&created.id, std::slice::from_ref(&song.id))
+                .await
+            {
+                Err(mineral_channel_core::Error::Api { code: 502, .. }) => {
+                    Ok("dup correctly rejected with 502".into())
+                }
+                Err(e) => color_eyre::eyre::bail!("expected Api 502, got: {e}"),
+                Ok(()) => color_eyre::eyre::bail!("expected Api 502, got Ok"),
+            }
+        })
+        .await;
+        report.push(r);
+        pause().await;
+
+        let r = run("playlist_remove_songs", async {
+            ch.playlist_remove_songs(&created.id, std::slice::from_ref(&song.id))
+                .await?;
+            Ok("removed".into())
+        })
+        .await;
+        report.push(r);
+        pause().await;
+    } else {
+        eprintln!("跳过加/删歌(search_songs 没产出素材)");
+    }
+
+    let r = run("delete_playlist", async {
+        ch.delete_playlist(&created.id).await?;
+        Ok("cleaned up".into())
+    })
+    .await;
+    report.push(r);
 }
 
 /// 写死的 "Endserenading" 歌单 id(用户自己的私有歌单,基本不动)。

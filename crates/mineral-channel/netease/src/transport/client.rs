@@ -11,6 +11,7 @@ type Result<T> = color_eyre::Result<T>;
 
 use crate::config::NeteaseConfig;
 use crate::crypto::{eapi, linuxapi, weapi};
+use crate::error::ApiCodeError;
 use crate::transport::body::{decode_response, parse_code};
 use crate::transport::headers::{UA_LINUX, UaKind, pick_user_agent};
 use crate::transport::url::{Crypto, rewrite};
@@ -117,7 +118,12 @@ impl Transport {
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no message)");
             mineral_log::warn!(target: "channel_netease", endpoint, code, message, "api error");
-            return Err(eyre!("api code {code}: {message}"));
+            // 结构化携带 code,channel 边界 downcast 映射(301/512/...);
+            // 别改回 eyre! 字符串——downcast 链断了映射就退化成 Other
+            return Err(color_eyre::Report::new(ApiCodeError {
+                code,
+                message: message.to_owned(),
+            }));
         }
         Ok(value)
     }

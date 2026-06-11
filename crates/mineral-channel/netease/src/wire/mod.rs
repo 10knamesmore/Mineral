@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+pub mod artist;
 pub mod common;
 pub mod de;
 pub mod search;

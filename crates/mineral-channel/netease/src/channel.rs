@@ -8,11 +8,13 @@ use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
-    Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId,
-    SourceKind, UserId,
+    Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind,
+    Song, SongId, SourceKind, UserId,
 };
 use mineral_persist::ServerStore;
 use rustc_hash::FxHashSet;
+
+use crate::error::ApiCodeError;
 
 use crate::api;
 use crate::config::NeteaseConfig;
@@ -118,9 +120,24 @@ impl NeteaseChannel {
     }
 }
 
-/// 把 api 层的 `color_eyre::Report` 收敛到 channel-core 的 [`Error::Other`]。
+/// 把 api 层的 `color_eyre::Report` 收敛到 channel-core 错误。
+///
+/// 携带 [`ApiCodeError`] 的按 code 结构化映射:301 → `AuthRequired`、
+/// 512(风控/歌单容量,远端不区分)→ `RateLimited`、其余透传 `Api`
+/// (含加歌重复的 502,由 TUI 翻译成"已在歌单中");纯网络/解析类
+/// Report 落 `Error::Other` 兜底。
 fn map_err(e: color_eyre::Report) -> Error {
-    Error::Other(e)
+    match e.downcast_ref::<ApiCodeError>() {
+        Some(api) => match api.code {
+            301 => Error::AuthRequired,
+            512 => Error::RateLimited,
+            _ => Error::Api {
+                code: api.code,
+                message: api.message.clone(),
+            },
+        },
+        None => Error::Other(e),
+    }
 }
 
 #[async_trait]
@@ -130,10 +147,14 @@ impl MusicChannel for NeteaseChannel {
     }
 
     fn caps(&self) -> ChannelCaps {
-        // playlist_edit / Artist 搜索随对应端点落地翻开,声明必须与当前真实能力一致
         ChannelCaps::builder()
-            .searchable(vec![SearchKind::Song, SearchKind::Album, SearchKind::Playlist])
-            .playlist_edit(false)
+            .searchable(vec![
+                SearchKind::Song,
+                SearchKind::Album,
+                SearchKind::Playlist,
+                SearchKind::Artist,
+            ])
+            .playlist_edit(true)
             .build()
     }
 
@@ -151,6 +172,60 @@ impl MusicChannel for NeteaseChannel {
 
     async fn search_playlists(&self, query: &str, page: Page) -> Result<Vec<Playlist>> {
         api::search::search_playlists(&self.transport, query, page.offset, page.limit)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn search_artists(&self, query: &str, page: Page) -> Result<Vec<Artist>> {
+        api::search::search_artists(&self.transport, query, page.offset, page.limit)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
+        api::artist::artist_detail(&self.transport, id)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
+        api::artist::artist_albums(&self.transport, id, page.offset, page.limit)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn create_playlist(&self, name: &str) -> Result<Playlist> {
+        api::playlist_edit::create_playlist(&self.transport, name)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn delete_playlist(&self, id: &PlaylistId) -> Result<()> {
+        api::playlist_edit::delete_playlist(&self.transport, id)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn playlist_add_songs(&self, id: &PlaylistId, songs: &[SongId]) -> Result<()> {
+        api::playlist_edit::playlist_add_songs(&self.transport, id, songs)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn playlist_remove_songs(&self, id: &PlaylistId, songs: &[SongId]) -> Result<()> {
+        api::playlist_edit::playlist_remove_songs(&self.transport, id, songs)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn rename_playlist(&self, id: &PlaylistId, name: &str) -> Result<()> {
+        api::playlist_edit::rename_playlist(&self.transport, id, name)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn set_playlist_description(&self, id: &PlaylistId, desc: &str) -> Result<()> {
+        api::playlist_edit::set_playlist_description(&self.transport, id, desc)
             .await
             .map_err(map_err)
     }
@@ -354,12 +429,50 @@ impl MusicChannel for NeteaseChannel {
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::MusicChannel;
+    use color_eyre::eyre::{WrapErr, eyre};
+    use mineral_channel_core::{Error, MusicChannel};
     use mineral_model::{SongId, SourceKind};
     use mineral_persist::ServerStore;
 
     use crate::NeteaseChannel;
     use crate::config::NeteaseConfig;
+    use crate::error::ApiCodeError;
+
+    /// `map_err` 对携带 [`ApiCodeError`] 的 Report 按 code 结构化映射;
+    /// 普通 Report 落 `Error::Other` 兜底。
+    #[test]
+    fn map_err_translates_api_codes() {
+        let f = |code: i64| {
+            super::map_err(color_eyre::Report::new(ApiCodeError {
+                code,
+                message: String::from("m"),
+            }))
+        };
+        assert!(matches!(f(301), Error::AuthRequired));
+        assert!(matches!(f(512), Error::RateLimited));
+        assert!(matches!(f(502), Error::Api { code: 502, .. }));
+        assert!(matches!(f(405), Error::Api { code: 405, .. }));
+        assert!(matches!(
+            super::map_err(eyre!("plain network-ish error")),
+            Error::Other(_)
+        ));
+    }
+
+    /// api 层 `.wrap_err(..)` 加过上下文后,downcast 仍沿 source 链命中,
+    /// 映射不退化(防"格式化成字符串再 eyre!"一类的回归)。
+    #[test]
+    fn map_err_survives_wrap_err_context() -> color_eyre::Result<()> {
+        let res: color_eyre::Result<()> = Err(color_eyre::Report::new(ApiCodeError {
+            code: 301,
+            message: String::new(),
+        }));
+        let e = res
+            .wrap_err("fetch user playlists")
+            .err()
+            .ok_or_else(|| eyre!("expected err"))?;
+        assert!(matches!(super::map_err(e), Error::AuthRequired));
+        Ok(())
+    }
 
     /// 匿名 channel(未登录,`user_id = None`)调用 `liked_song_ids` 时
     /// 应降级读本地 persist 的 `loved_ids`,返回本地写入的两首 id。

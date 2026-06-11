@@ -47,6 +47,29 @@ pub struct SearchAlbum {
     pub pic_url: Option<String>,
 }
 
+/// `/weapi/search/get` type=100（歌手）的响应。
+#[derive(Debug, Deserialize)]
+pub struct SearchArtistsResult {
+    /// 命中的歌手列表。
+    #[serde(default)]
+    pub artists: Vec<SearchArtist>,
+}
+
+/// 搜索结果里出现的歌手。
+#[derive(Debug, Deserialize)]
+pub struct SearchArtist {
+    /// 歌手 ID。
+    pub id: i64,
+
+    /// 歌手名。
+    #[serde(default)]
+    pub name: String,
+
+    /// 头像 URL。
+    #[serde(default, rename = "picUrl")]
+    pub pic_url: Option<String>,
+}
+
 /// `/weapi/search/get` type=1000（歌单）的响应。
 #[derive(Debug, Deserialize)]
 pub struct SearchPlaylistsResult {
@@ -104,6 +127,20 @@ mod tests {
     fn missing_songs_field_is_empty() -> color_eyre::Result<()> {
         let r: SearchSongsResult = from_value(serde_json::json!({}))?;
         assert!(r.songs.is_empty());
+        Ok(())
+    }
+
+    /// 正常解析歌手列表(stype=100)。
+    #[test]
+    fn parses_artist_list() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "artists": [
+                { "id": 11127, "name": "Beyond", "picUrl": "https://p1.music.126.net/x.jpg" },
+                { "id": 12345, "name": "Beyond乐队" }
+            ]
+        });
+        let r: super::SearchArtistsResult = from_value(raw)?;
+        mineral_test::assert_snap_debug!("搜索歌手列表(Beyond / Beyond乐队)解析结构", r);
         Ok(())
     }
 

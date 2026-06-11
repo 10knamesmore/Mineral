@@ -1,0 +1,71 @@
+---
+source: crates/mineral-channel/netease/src/api/artist.rs
+description: 歌手详情映射成统一 Artist(Beyond + 1 热门曲)
+expression: model
+---
+Artist {
+    id: ArtistId {
+        namespace: netease,
+        value: IdString(
+            "11127",
+        ),
+    },
+    name: "Beyond",
+    description: "香港摇滚乐队",
+    follower_count: 42,
+    avatar_url: Some(
+        Remote(
+            Url {
+                scheme: "https",
+                cannot_be_a_base: false,
+                username: "",
+                password: None,
+                host: Some(
+                    Domain(
+                        "p1.music.126.net",
+                    ),
+                ),
+                port: None,
+                path: "/x.jpg",
+                query: None,
+                fragment: None,
+            },
+        ),
+    ),
+    songs: [
+        Song {
+            id: SongId {
+                namespace: netease,
+                value: IdString(
+                    "1",
+                ),
+            },
+            name: "海阔天空",
+            artists: [
+                ArtistRef {
+                    id: ArtistId {
+                        namespace: netease,
+                        value: IdString(
+                            "11127",
+                        ),
+                    },
+                    name: "Beyond",
+                },
+            ],
+            album: Some(
+                AlbumRef {
+                    id: AlbumId {
+                        namespace: netease,
+                        value: IdString(
+                            "9",
+                        ),
+                    },
+                    name: "乐与怒",
+                },
+            ),
+            duration_ms: 323000,
+            cover_url: None,
+            source_url: None,
+        },
+    ],
+}

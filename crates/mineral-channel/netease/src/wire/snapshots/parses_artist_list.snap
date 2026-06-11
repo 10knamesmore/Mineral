@@ -1,0 +1,21 @@
+---
+source: crates/mineral-channel/netease/src/wire/search.rs
+description: 搜索歌手列表(Beyond / Beyond乐队)解析结构
+expression: r
+---
+SearchArtistsResult {
+    artists: [
+        SearchArtist {
+            id: 11127,
+            name: "Beyond",
+            pic_url: Some(
+                "https://p1.music.126.net/x.jpg",
+            ),
+        },
+        SearchArtist {
+            id: 12345,
+            name: "Beyond乐队",
+            pic_url: None,
+        },
+    ],
+}

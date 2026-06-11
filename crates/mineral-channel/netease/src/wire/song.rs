@@ -1,31 +1,8 @@
 //! 歌曲、艺术家、专辑相关的协议结构。
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
-/// 把 `null` 收成空串。网易云对失效 / 下架歌曲会把 name 类字段(歌名 / 艺术家名 /
-/// 专辑名)返回 `null`,裸 `String` 反序列化会炸掉整批(已实锤:歌单 5036089714 的
-/// `[2].al.name` 为 null);`#[serde(default)]` 只兜底字段缺失、兜不住显式 `null`,
-/// 故这里把 `null` 与缺失统一收成空串。
-fn string_or_null<'de, D>(de: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(de)?.unwrap_or_default())
-}
-
-/// 反序列化 `Vec<T>`,跳过其中的 `null` 元素。网易云对失效 / 下架歌曲会在 `ar`
-/// (艺术家)数组里塞 `null`(已实锤:歌单 5036089714 的「张洲」`ar` 为 `[null]`),
-/// 裸 `Vec<Artist>` 会炸(`null` 不是 struct)。这里把 `null` 元素直接丢弃。
-fn vec_skip_null<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Ok(Vec::<Option<T>>::deserialize(de)?
-        .into_iter()
-        .flatten()
-        .collect())
-}
+use super::de::{string_or_null, vec_skip_null};
 
 /// 协议层艺术家结构（出现在搜索结果、歌曲详情等多个端点）。
 #[derive(Debug, Clone, Deserialize)]

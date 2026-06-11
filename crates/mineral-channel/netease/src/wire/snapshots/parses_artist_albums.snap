@@ -1,0 +1,30 @@
+---
+source: crates/mineral-channel/netease/src/wire/artist.rs
+description: 歌手专辑列表(乐与怒/继续革命)解析结构
+expression: r
+---
+ArtistAlbumsResult {
+    hot_albums: [
+        ArtistAlbum {
+            id: 9,
+            name: "乐与怒",
+            pic_url: Some(
+                "https://p1.music.126.net/a.jpg",
+            ),
+            publish_time: 736185600000,
+            artist: Some(
+                Artist {
+                    id: 11127,
+                    name: "Beyond",
+                },
+            ),
+        },
+        ArtistAlbum {
+            id: 8,
+            name: "继续革命",
+            pic_url: None,
+            publish_time: 715000000000,
+            artist: None,
+        },
+    ],
+}
