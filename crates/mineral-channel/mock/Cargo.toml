@@ -21,6 +21,11 @@ mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tokio      = { workspace = true }
+color-eyre = { workspace = true }
 
 [lints]
 workspace = true

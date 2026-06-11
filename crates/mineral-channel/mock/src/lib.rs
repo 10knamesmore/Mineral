@@ -7,7 +7,10 @@
 
 #![cfg(feature = "mock")]
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use async_trait::async_trait;
+use parking_lot::RwLock;
 use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, BitRate, Lyrics, PlayUrl, Playlist,
@@ -34,29 +37,32 @@ pub struct DemoPlaylist {
     pub tracks: Vec<DemoSong>,
 }
 
-/// mock channel 实现。预先在 `new()` 时构造好全部 demo 数据。
-#[derive(Clone, Debug)]
+/// mock channel 实现。预制 demo 数据在 `new()` 时构造,歌单写操作就地
+/// 修改内存(进程退出即丢,mock 不做持久化)。
+#[derive(Debug)]
 pub struct MockChannel {
-    /// 全部预制 demo 歌单(及其曲目)。
-    playlists: Vec<DemoPlaylist>,
+    /// 全部歌单(预制 demo + 运行期用户新建)。
+    playlists: RwLock<Vec<DemoPlaylist>>,
+
+    /// 建单自增序号:同名歌单也要有不同 id。
+    next_playlist_seq: AtomicU64,
 }
 
 impl MockChannel {
     /// 构造 mock channel(数据是常量,瞬时完成)。
     pub fn new() -> Self {
         Self {
-            playlists: build_demo_playlists(),
+            playlists: RwLock::new(build_demo_playlists()),
+            next_playlist_seq: AtomicU64::new(0),
         }
     }
+}
 
-    /// 同步取所有 demo 歌单(包括 loved / plays 等 UI 装饰)。
-    pub fn demo_playlists(&self) -> &[DemoPlaylist] {
-        &self.playlists
-    }
-
-    /// 按 id 查 demo 歌单(线性扫描,demo 数据规模够小)。
-    fn find_playlist(&self, id: &PlaylistId) -> Option<&DemoPlaylist> {
-        self.playlists.iter().find(|p| &p.data.id == id)
+/// 歌单不存在时的统一错误(mock 自拟 404,形态对齐 netease 的 `Error::Api`)。
+fn missing_playlist(id: &PlaylistId) -> Error {
+    Error::Api {
+        code: 404,
+        message: format!("歌单不存在: {}", id.qualified()),
     }
 }
 
@@ -73,10 +79,9 @@ impl MusicChannel for MockChannel {
     }
 
     fn caps(&self) -> ChannelCaps {
-        // playlist_edit 随内存写操作落地翻开,声明必须与当前真实能力一致
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Song, SearchKind::Playlist])
-            .playlist_edit(false)
+            .playlist_edit(true)
             .build()
     }
 
@@ -84,6 +89,7 @@ impl MusicChannel for MockChannel {
         let q = query.to_lowercase();
         Ok(self
             .playlists
+            .read()
             .iter()
             .flat_map(|p| p.tracks.iter().map(|t| t.data.clone()))
             .filter(|s| s.name.to_lowercase().contains(&q))
@@ -98,6 +104,7 @@ impl MusicChannel for MockChannel {
         let q = query.to_lowercase();
         Ok(self
             .playlists
+            .read()
             .iter()
             .filter(|p| p.data.name.to_lowercase().contains(&q))
             .map(|p| p.data.clone())
@@ -107,6 +114,7 @@ impl MusicChannel for MockChannel {
     async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
         Ok(self
             .playlists
+            .read()
             .iter()
             .flat_map(|p| p.tracks.iter().map(|t| &t.data))
             .filter(|s| ids.iter().any(|id| id == &s.id))
@@ -120,7 +128,10 @@ impl MusicChannel for MockChannel {
 
     async fn songs_in_playlist(&self, id: &PlaylistId) -> Result<Vec<Song>> {
         Ok(self
-            .find_playlist(id)
+            .playlists
+            .read()
+            .iter()
+            .find(|p| &p.data.id == id)
             .map(|p| p.tracks.iter().map(|t| t.data.clone()).collect())
             .unwrap_or_default())
     }
@@ -138,15 +149,118 @@ impl MusicChannel for MockChannel {
     }
 
     async fn user_playlists(&self, _uid: &UserId) -> Result<Vec<Playlist>> {
-        Ok(self.playlists.iter().map(|p| p.data.clone()).collect())
+        Ok(self.playlists.read().iter().map(|p| p.data.clone()).collect())
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
-        Ok(self.playlists.iter().map(|p| p.data.clone()).collect())
+        Ok(self.playlists.read().iter().map(|p| p.data.clone()).collect())
     }
 
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {
         Err(Error::NotSupported)
+    }
+
+    async fn create_playlist(&self, name: &str) -> Result<Playlist> {
+        let seq = self.next_playlist_seq.fetch_add(1, Ordering::Relaxed);
+        let playlist = Playlist {
+            id: PlaylistId::new(SourceKind::MOCK, format!("user-{seq}")),
+            name: name.to_owned(),
+            description: String::new(),
+            cover_url: None,
+            track_count: 0,
+            songs: Vec::new(),
+        };
+        self.playlists.write().push(DemoPlaylist {
+            data: playlist.clone(),
+            tracks: Vec::new(),
+        });
+        Ok(playlist)
+    }
+
+    async fn delete_playlist(&self, id: &PlaylistId) -> Result<()> {
+        let mut lists = self.playlists.write();
+        let before = lists.len();
+        lists.retain(|p| &p.data.id != id);
+        if lists.len() == before {
+            return Err(missing_playlist(id));
+        }
+        Ok(())
+    }
+
+    async fn playlist_add_songs(&self, id: &PlaylistId, songs: &[SongId]) -> Result<()> {
+        let mut lists = self.playlists.write();
+        // 素材从全库 resolve(加进新歌单的歌必然在某个 demo 歌单里有 meta)
+        let resolved = songs
+            .iter()
+            .map(|sid| {
+                lists
+                    .iter()
+                    .flat_map(|p| p.tracks.iter())
+                    .find(|t| &t.data.id == sid)
+                    .map(|t| t.data.clone())
+                    .ok_or_else(|| Error::Api {
+                        code: 404,
+                        message: format!("歌曲不存在: {}", sid.qualified()),
+                    })
+            })
+            .collect::<Result<Vec<Song>>>()?;
+        let target = lists
+            .iter_mut()
+            .find(|p| &p.data.id == id)
+            .ok_or_else(|| missing_playlist(id))?;
+        // 模拟网易云"歌曲已存在"语义:任一重复则整批拒绝,内容不变
+        if resolved
+            .iter()
+            .any(|s| target.data.songs.iter().any(|e| e.id == s.id))
+        {
+            return Err(Error::Api {
+                code: 502,
+                message: String::from("歌曲已存在"),
+            });
+        }
+        for song in resolved {
+            target.data.songs.push(song.clone());
+            target.tracks.push(DemoSong {
+                data: song,
+                loved: false,
+                plays: 0,
+            });
+        }
+        target.data.track_count = u64::try_from(target.data.songs.len()).unwrap_or(0);
+        Ok(())
+    }
+
+    async fn playlist_remove_songs(&self, id: &PlaylistId, songs: &[SongId]) -> Result<()> {
+        let mut lists = self.playlists.write();
+        let target = lists
+            .iter_mut()
+            .find(|p| &p.data.id == id)
+            .ok_or_else(|| missing_playlist(id))?;
+        // 不在歌单里的歌宽容忽略(对齐"删除是幂等清理"的远端体感)
+        target.data.songs.retain(|s| !songs.contains(&s.id));
+        target.tracks.retain(|t| !songs.contains(&t.data.id));
+        target.data.track_count = u64::try_from(target.data.songs.len()).unwrap_or(0);
+        Ok(())
+    }
+
+    async fn rename_playlist(&self, id: &PlaylistId, name: &str) -> Result<()> {
+        let mut lists = self.playlists.write();
+        let target = lists
+            .iter_mut()
+            .find(|p| &p.data.id == id)
+            .ok_or_else(|| missing_playlist(id))?;
+        target.data.name = name.to_owned();
+        Ok(())
+    }
+
+    async fn set_playlist_description(&self, id: &PlaylistId, desc: &str) -> Result<()> {
+        let mut lists = self.playlists.write();
+        let target = lists
+            .iter_mut()
+            .find(|p| &p.data.id == id)
+            .ok_or_else(|| missing_playlist(id))?;
+        target.data.description = desc.to_owned();
+        Ok(())
     }
 }
 

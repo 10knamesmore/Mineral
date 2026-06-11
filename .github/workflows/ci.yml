@@ -56,6 +56,11 @@ jobs:
         env:
           INSTA_UPDATE: "no"
 
+      # mock crate 整体 feature 门控,workspace 默认构建不含(防 SourceKind::MOCK
+      # 经 feature unification 渗透),其测试需显式 -F mock 单独跑。
+      - name: test (mock channel)
+        run: cargo nextest run -p mineral-channel-mock -F mock --no-fail-fast
+
       # nextest 不跑 doctest,单独兜底。
       - name: doctest
         run: cargo test --workspace --doc
