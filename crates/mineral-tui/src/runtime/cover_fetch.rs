@@ -8,7 +8,7 @@
 //! 设计取舍:
 //! - **不做 cancel**:用户切走时积压 fetch 仍跑完,结果进 cache 放着;下次显示直接命中。
 //!   减一条复杂度,跟现在(server 端 cancel 后的 cache 命中行为)对齐。
-//! - **不做内部 dedup**:dedup 由 caller(`prefetch::ensure_cover` 用 `state.cover_pending`
+//! - **不做内部 dedup**:dedup 由 caller(`prefetch::ensure_cover` 用 `state.covers.pending`
 //!   集合)做。fetcher 单纯 FIFO worker pool。
 //! - **错误静默**:fetch / decode 失败只打日志,不推 result,UI 自然显示 fallback。
 

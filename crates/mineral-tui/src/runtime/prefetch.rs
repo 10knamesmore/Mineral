@@ -38,8 +38,8 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     let radius = *state.cfg.tui().prefetch().radius();
     let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
-    let cache = &state.cover_cache;
-    let pending = &state.cover_pending;
+    let cache = &state.covers.cache;
+    let pending = &state.covers.pending;
     let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
                        out: &mut Vec<(SourceKind, MediaUrl)>| {
         if let Some((source, u)) = item
@@ -123,10 +123,10 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 /// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
 /// `source` 随请求带给 fetcher(决定缓存落盘子目录)。
 fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind, url: MediaUrl) {
-    if state.cover_cache.contains_key(&url) || state.cover_pending.contains(&url) {
+    if state.covers.cache.contains_key(&url) || state.covers.pending.contains(&url) {
         return;
     }
-    state.cover_pending.insert(url.clone());
+    state.covers.pending.insert(url.clone());
     mineral_log::debug!(target: "prefetch", url = %url, source = ?source, "request cover");
     covers.request(source, url);
 }

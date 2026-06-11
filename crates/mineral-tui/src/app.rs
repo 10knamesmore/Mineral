@@ -85,7 +85,7 @@ pub struct App {
     cover_fetcher: CoverFetcher,
 
     /// Client 端 cover 编码器:把封面 resize + kitty 编码挪出渲染线程(worker 上跑),
-    /// `drain` 回填 `cover_protocols`。与 `cover_fetcher` 互补成完整异步封面管线。
+    /// `drain` 回填 `covers.protocols`。与 `cover_fetcher` 互补成完整异步封面管线。
     cover_encoder: CoverEncoder,
 
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
@@ -150,7 +150,7 @@ impl App {
         let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
         let mut state = AppState::new(cfg);
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
-        state.cover_encode_tx = cover_encoder.sender();
+        state.covers.encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.lyric_extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
@@ -262,12 +262,12 @@ impl App {
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.versions);
                 self.apply_player_sync(sync);
-                self.drain_ready_covers();
+                self.state.covers.drain_ready_covers(&self.cover_fetcher);
                 self.sync_spectrum_palette();
-                self.drain_ready_protocols();
+                self.state.covers.drain_ready_protocols(&self.cover_encoder);
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
-                self.state.cover_loading = self.state.cover_pending.len();
+                self.state.covers.loading = self.state.covers.pending.len();
                 // 每帧把下载进度喂进通知层(翻译成常驻进度 / 完成 flash),再推进所有通知动画。
                 let dp = self.client.download_progress();
                 self.download_notifier.feed(&mut self.notifications, &dp);
@@ -297,7 +297,7 @@ impl App {
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
         if self.state.fullscreen && closing_centered && self.overlays.len() < before {
-            self.state.cover_protocols.borrow_mut().clear();
+            self.state.covers.protocols.borrow_mut().clear();
         }
     }
 
@@ -336,8 +336,8 @@ impl App {
             tracks_cached = s.tracks_cache.len(),
             tracks_requested = s.tracks_requested.len(),
             lyrics_cached = s.lyrics_cache.len(),
-            covers_cached = s.cover_cache.len(),
-            covers_pending = s.cover_pending.len(),
+            covers_cached = s.covers.cache.len(),
+            covers_pending = s.covers.pending.len(),
             liked,
             queue_len = s.queue.len(),
             "client status"
@@ -374,21 +374,6 @@ impl App {
         }
     }
 
-    /// 把 cover_fetcher 就绪的图写进 cache + 色板写进 `cover_palettes` + 清掉对应 protocol
-    /// (下次渲染重建)。取色失败(`palette = None`)只是不落色板,图照常缓存显示。
-    fn drain_ready_covers(&mut self) {
-        for ready in self.cover_fetcher.drain_ready() {
-            self.state.cover_pending.remove(&ready.url);
-            if let Some(palette) = ready.palette {
-                self.state.cover_palettes.insert(ready.url.clone(), palette);
-            }
-            self.state
-                .cover_cache
-                .insert(ready.url.clone(), ready.image);
-            self.state.cover_protocols.borrow_mut().remove(&ready.url);
-        }
-    }
-
     /// 协调当前播放封面的频谱配色:新封面取色就绪则从**当前可见配色**缓动过去,否则保持现状。
     ///
     /// 身份判定(`cover_url` 变化、色带是否就绪)全在此(app 层);频谱只收
@@ -396,7 +381,7 @@ impl App {
     ///
     /// - 当前封面与 `spectrum_cover` 一致 → 不动。
     /// - 当前封面变了 + 色带已就绪 → `begin_cover_transition`(从上一张封面 / hue 起步),记下 key。
-    /// - 当前封面变了 + 图已到但**取色失败**(在 `cover_cache` 却不在 `cover_palettes`)→ 回退 hue,标记已处理。
+    /// - 当前封面变了 + 图已到但**取色失败**(在 `covers.cache` 却不在 `covers.palettes`)→ 回退 hue,标记已处理。
     /// - 当前封面变了 + 图还在抓 → **保持当前可见态**(上一张封面继续显示),下个 tick 再看。
     ///   这是"红专辑换蓝专辑 → 红→蓝"的关键:抓图途中不回退 hue,等蓝就绪直接红→蓝。
     /// - 无当前歌 / 无封面 → 回退 hue。
@@ -407,41 +392,26 @@ impl App {
             .as_ref()
             .and_then(|s| s.cover_url.clone());
         let Some(url) = cur else {
-            if self.state.spectrum_cover.is_some() {
+            if self.state.covers.spectrum_cover.is_some() {
                 self.state.spectrum.clear_cover();
-                self.state.spectrum_cover = None;
+                self.state.covers.spectrum_cover = None;
             }
             return;
         };
-        if self.state.spectrum_cover.as_ref() == Some(&url) {
+        if self.state.covers.spectrum_cover.as_ref() == Some(&url) {
             return;
         }
-        if let Some(palette) = self.state.cover_palettes.get(&url).cloned() {
+        if let Some(palette) = self.state.covers.palettes.get(&url).cloned() {
             self.state
                 .spectrum
                 .begin_cover_transition(palette, &self.theme);
-            self.state.spectrum_cover = Some(url);
-        } else if self.state.cover_cache.contains_key(&url) {
+            self.state.covers.spectrum_cover = Some(url);
+        } else if self.state.covers.cache.contains_key(&url) {
             // 图已回但无色板 = 取色失败:回退 hue,标记已处理(不再每帧重试)。
             self.state.spectrum.clear_cover();
-            self.state.spectrum_cover = Some(url);
+            self.state.covers.spectrum_cover = Some(url);
         }
         // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
-    }
-
-    /// 把编码 worker 就绪的封面协议装回 `cover_protocols`,并出 `cover_encode_pending`。
-    /// 之后帧渲染该封面即命中已编码协议、直接 place,不再在渲染线程上 resize / 编码。
-    fn drain_ready_protocols(&mut self) {
-        for r in self.cover_encoder.drain_ready() {
-            self.state
-                .cover_encode_pending
-                .borrow_mut()
-                .remove(&(r.url.clone(), r.dims));
-            self.state
-                .cover_protocols
-                .borrow_mut()
-                .insert(r.url, (r.protocol, r.dims));
-        }
     }
 
     /// 把 client.pull_pcm 拿到的样本喂给 fft computer。in-proc 和 connect 走同一路径。
@@ -725,11 +695,11 @@ mod tests {
         if let Some(song) = app.state.current.as_mut() {
             song.cover_url = Some(blue);
         }
-        app.state.spectrum_cover = Some(red.clone());
+        app.state.covers.spectrum_cover = Some(red.clone());
         // blue 的色板 / 图都还没到 —— sync 应原地保持(不清、不抢先标记)。
         app.sync_spectrum_palette();
         assert_eq!(
-            app.state.spectrum_cover.as_ref(),
+            app.state.covers.spectrum_cover.as_ref(),
             Some(&red),
             "抓图途中应保持上一张封面"
         );
@@ -746,10 +716,10 @@ mod tests {
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.cover_palettes.insert(blue.clone(), palette);
+        app.state.covers.palettes.insert(blue.clone(), palette);
         app.sync_spectrum_palette();
         assert_eq!(
-            app.state.spectrum_cover.as_ref(),
+            app.state.covers.spectrum_cover.as_ref(),
             Some(&blue),
             "色板就绪应记下并触发过渡"
         );
@@ -772,11 +742,12 @@ mod tests {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
         let proto = app.picker.new_resize_protocol(img);
         app.state
-            .cover_protocols
+            .covers
+            .protocols
             .borrow_mut()
             .insert(url, (proto, (10, 10)));
         assert!(
-            !app.state.cover_protocols.borrow().is_empty(),
+            !app.state.covers.protocols.borrow().is_empty(),
             "前置:封面协议条目已就位"
         );
 
@@ -786,7 +757,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            !app.state.cover_protocols.borrow().is_empty(),
+            !app.state.covers.protocols.borrow().is_empty(),
             "浮层开着时(未出栈)不应清空封面协议"
         );
 
@@ -796,7 +767,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            app.state.cover_protocols.borrow().is_empty(),
+            app.state.covers.protocols.borrow().is_empty(),
             "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
         );
         Ok(())
@@ -816,7 +787,8 @@ mod tests {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
         let proto = app.picker.new_resize_protocol(img);
         app.state
-            .cover_protocols
+            .covers
+            .protocols
             .borrow_mut()
             .insert(url, (proto, (10, 10)));
 
@@ -831,7 +803,7 @@ mod tests {
         }
 
         assert!(
-            !app.state.cover_protocols.borrow().is_empty(),
+            !app.state.covers.protocols.borrow().is_empty(),
             "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
         );
         Ok(())

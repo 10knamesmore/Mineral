@@ -4,31 +4,24 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use image::DynamicImage;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
-use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::sync::mpsc;
 
 use mineral_model::{LyricLine, Lyrics};
 
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::{Transition, ticks16_from_ms};
-use crate::render::palette::CoverPalette;
-use crate::runtime::cover_encode::EncodeRequest;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
 use crate::runtime::scroll::ListScroll;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
-/// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
-///
-/// dims 用于 invalidation —— 跟当前 area 不一致就重建 protocol,避免字号 / 终端
-/// 大小变了之后图按旧 dims 绘出来溢出 / 截断。
-pub type CoverProtocolEntry = (StatefulProtocol, (u16, u16));
+mod covers;
+
+pub use covers::CoverHub;
 
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +114,7 @@ pub struct AppState {
 
     /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
     /// 避免**失败**歌单(tracks_cache 永远不会被填)被每帧无限重提交而刷屏。
-    /// 对齐 cover 的 `cover_pending`。
+    /// 对齐 cover 的 `covers.pending`。
     pub tracks_requested: FxHashSet<PlaylistId>,
 
     /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /
@@ -190,44 +183,15 @@ pub struct AppState {
     /// 非 Shuffle 状态恒为 `None`。
     pub original_queue: Option<Vec<Song>>,
 
-    /// 已拉好的封面原始图(URL → 解码后的 RGB 像素)。session 内一直留。
-    pub cover_cache: FxHashMap<MediaUrl, Arc<DynamicImage>>,
-
-    /// 已取色的封面色板(URL → 频谱 2D 色场的重点色,Lab 明度升序)。
-    /// 缺 key = 没取到色(取色失败 / 还没回传)。session 内一直留,顺手缓存复用。
-    pub cover_palettes: FxHashMap<MediaUrl, CoverPalette>,
-
-    /// 上次已应用到频谱的封面 key(频谱当前色场对应哪张封面)。
-    /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_spectrum_palette` 身份判定用。
-    pub spectrum_cover: Option<MediaUrl>,
-
-    /// 在飞 fetch 集合,用于 dedup tick 重复请求。
-    pub cover_pending: FxHashSet<MediaUrl>,
-
-    /// 渲染用的 ratatui-image stateful protocol 缓存。`StatefulProtocol` 内部记编码状态
-    /// (kitty 的图片 id、sixel 编码缓冲等),render 复用就不会每帧重发图。
-    /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
-    pub cover_protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
-
-    /// 封面编码请求发送端(投递给 [`crate::runtime::cover_encode::CoverEncoder`] 的 worker)。
-    /// 渲染处未命中已编码协议时投一次,把 resize + base64 编码挪出渲染线程。禁用态(测试 /
-    /// 无 runtime)是个无接收端的 sender,投递静默丢弃。
-    pub cover_encode_tx: mpsc::UnboundedSender<EncodeRequest>,
-
-    /// 在飞编码 `(URL, 维度)` 集合,渲染处据此 dedup —— 同一封面同尺寸只投一次,等结果回填。
-    /// 用 `RefCell` 因渲染拿 `&AppState`。
-    pub cover_encode_pending: RefCell<FxHashSet<(MediaUrl, (u16, u16))>>,
+    /// 封面管线状态(原图/色板缓存、在飞集合、已编码协议)。
+    pub covers: CoverHub,
 
     /// 后台 server scheduler 当前快照(每 tick 由 App 从 `Client::task_snapshot`
     /// 灌入)。**只含**:server 端 ChannelFetch lane(playlists / tracks /
     /// song-url / lyrics / liked)。封面是 client-local 的 [`CoverFetcher`],
-    /// 不在这里——见 [`Self::cover_loading`]。
+    /// 不在这里——见 [`CoverHub::loading`]。
     /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
     pub tasks_snapshot: mineral_task::Snapshot,
-
-    /// 当前 client-side cover_fetcher in-flight 数(等价 `cover_pending.len()`,
-    /// 每 tick 由 App 灌入)。
-    pub cover_loading: usize,
 
     /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
@@ -246,7 +210,7 @@ pub struct AppState {
     pub last_sel_change: Instant,
 
     /// 本地搜索的模糊匹配器(fzf 风格子序列 + 中文拼音/首字母联合)。
-    /// `&self` 路径下要复用 buffer,因此包 `RefCell`,与 `cover_protocols` 同理。
+    /// `&self` 路径下要复用 buffer,因此包 `RefCell`,与 `covers.protocols` 同理。
     pub matcher: RefCell<FuzzyMatcher>,
 
     /// 文本 → 预处理 [`MatchableText`] 的缓存。键是原始文本(歌名 / 艺人名 / 专辑名 /
@@ -303,21 +267,12 @@ impl AppState {
             versions: mineral_protocol::PlayerVersions::default(),
             search_mode: false,
             original_queue: None,
-            cover_cache: FxHashMap::default(),
-            cover_palettes: FxHashMap::default(),
-            spectrum_cover: None,
-            cover_pending: FxHashSet::default(),
-            cover_protocols: RefCell::new(FxHashMap::default()),
-            // 默认禁用:无接收端的 sender(投递即丢)。真实 worker 由 `App::new` 注入
-            // `CoverEncoder::sender()` 覆盖此字段。
-            cover_encode_tx: mpsc::unbounded_channel().0,
-            cover_encode_pending: RefCell::new(FxHashSet::default()),
+            covers: CoverHub::new(),
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
                 by_lane: FxHashMap::default(),
                 by_kind: FxHashMap::default(),
             },
-            cover_loading: 0,
             liked_ids: FxHashMap::default(),
             play_counts: FxHashMap::default(),
             play_count_requested: FxHashSet::default(),

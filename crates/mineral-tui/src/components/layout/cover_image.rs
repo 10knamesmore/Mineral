@@ -53,8 +53,8 @@ pub fn render_or_fallback(
     if !state.fullscreen_pos.settled() {
         return;
     }
-    let Some(image) = state.cover_cache.get(url).cloned() else {
-        // 还没拉到图:程序化占位(fetch worker 完成后进 cover_cache,后续帧再走编码)。
+    let Some(image) = state.covers.cache.get(url).cloned() else {
+        // 还没拉到图:程序化占位(fetch worker 完成后进 covers.cache,后续帧再走编码)。
         cover::render(frame, target, fallback_seed, theme);
         return;
     };
@@ -62,7 +62,7 @@ pub fn render_or_fallback(
     // 命中已编码协议(同尺寸)→ 直接 place。`StatefulProtocol` 内部记着 kitty image id,
     // 同尺寸渲染 `needs_resize` 返回 `None`,只重发占位符不重编码,渲染线程零开销。
     {
-        let mut protocols = state.cover_protocols.borrow_mut();
+        let mut protocols = state.covers.protocols.borrow_mut();
         if let Some(entry) = protocols.get_mut(url)
             && entry.1 == dims
         {
@@ -78,7 +78,7 @@ pub fn render_or_fallback(
     // - 滚动中:留空,既不闪程序化色块也不投递 —— 避免给 worker 灌一堆滚过即弃的图,
     //   稳定 ≥ cover.debounce_ms 后再编码淡入(沿用旧的「滚时图位空着」体感)。
     // - 稳定后:按 `(url, dims)` 去重投递一次,在途期间画程序化占位;worker 完成后主循环
-    //   `drain_ready_protocols` 装回 `cover_protocols`,下一帧命中上真图。
+    //   `drain_ready_protocols` 装回 `covers.protocols`,下一帧命中上真图。
     if state.is_scrolling() {
         return;
     }
@@ -87,11 +87,11 @@ pub fn render_or_fallback(
 }
 
 /// 未命中已编码协议时,按 `(url, dims)` 去重投递一次离线编码请求(`image` 来自
-/// `cover_cache`)。worker 完成后主循环 `drain_ready_protocols` 装回 `cover_protocols`。
+/// `covers.cache`)。worker 完成后主循环 `drain_ready_protocols` 装回 `covers.protocols`。
 fn request_cover_encode(state: &AppState, url: &MediaUrl, image: Arc<DynamicImage>, target: Rect) {
     let key = (url.clone(), (target.width, target.height));
-    if state.cover_encode_pending.borrow_mut().insert(key) {
-        let _ = state.cover_encode_tx.send(EncodeRequest {
+    if state.covers.encode_pending.borrow_mut().insert(key) {
+        let _ = state.covers.encode_tx.send(EncodeRequest {
             url: url.clone(),
             image,
             target,
@@ -99,7 +99,7 @@ fn request_cover_encode(state: &AppState, url: &MediaUrl, image: Arc<DynamicImag
     }
 }
 
-/// 预热一张封面:把 `url`(图须已在 `cover_cache`)在 `area` 对应的封面尺寸下**提前编码**,
+/// 预热一张封面:把 `url`(图须已在 `covers.cache`)在 `area` 对应的封面尺寸下**提前编码**,
 /// 使其真正渲染时协议已就绪、直接 place 无闪。已编码(同尺寸)/ 图未就绪 → 无操作,不渲染。
 ///
 /// 仅供尺寸稳定的场景调用(全屏稳态封面区固定)——预编码的 dims 须与目标真正渲染时一致才命中。
@@ -116,10 +116,10 @@ pub fn prewarm(state: &AppState, picker: &Picker, area: Rect, url: &MediaUrl) {
         return;
     }
     let dims = (target.width, target.height);
-    if matches!(state.cover_protocols.borrow().get(url), Some(e) if e.1 == dims) {
+    if matches!(state.covers.protocols.borrow().get(url), Some(e) if e.1 == dims) {
         return;
     }
-    let Some(image) = state.cover_cache.get(url).cloned() else {
+    let Some(image) = state.covers.cache.get(url).cloned() else {
         return;
     };
     request_cover_encode(state, url, image, target);

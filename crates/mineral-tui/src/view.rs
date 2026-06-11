@@ -171,7 +171,7 @@ mod tests {
     /// 封面编码已离线(投递给 `CoverEncoder` worker);若形变中逐帧 now_playing 尺寸变
     /// 还照常派发,会按逐帧漂移的 dims **flood 编码器**(churn,且稳态落地后占位符乱套留
     /// 残影)。修复:形变期(`!settled`)`cover_image` 早退,不派发。这里验证整段形变中
-    /// `cover_encode_pending` 不新增——只保留稳态那次派发。
+    /// `covers.encode_pending` 不新增——只保留稳态那次派发。
     #[test]
     fn fullscreen_morph_does_not_dispatch_cover_encode() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -195,7 +195,7 @@ mod tests {
             app.state.playback.track = Some(sv.data.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.cover_cache.insert(url.clone(), Arc::new(img));
+        app.state.covers.cache.insert(url.clone(), Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发一次编码。
         app.state.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -205,7 +205,7 @@ mod tests {
 
         // 稳态老布局:渲一帧 → 派发一次封面编码(稳态 dims)。记录此刻 pending 快照。
         t.draw(|f| super::draw(f, &app))?;
-        let steady_pending = app.state.cover_encode_pending.borrow().clone();
+        let steady_pending = app.state.covers.encode_pending.borrow().clone();
         assert_eq!(steady_pending.len(), 1, "稳态老布局应恰好派发一次封面编码");
 
         // 进入全屏,推进若干形变帧(均 `!settled`)。每帧后 pending 必须与稳态快照一致 ——
@@ -216,7 +216,7 @@ mod tests {
             assert!(!app.state.fullscreen_pos.settled(), "测试需停留在形变中途");
             t.draw(|f| super::draw(f, &app))?;
             assert_eq!(
-                *app.state.cover_encode_pending.borrow(),
+                *app.state.covers.encode_pending.borrow(),
                 steady_pending,
                 "形变期不应追加封面编码派发(churn)"
             );
@@ -297,7 +297,7 @@ mod tests {
     }
 
     /// 全屏稳态:下一首(queue 中在播曲的紧邻后继)的封面应被**提前编码**——其 (url, dims)
-    /// 进 `cover_encode_pending`。这样自动切歌时协议已就绪、直接 place,不闪程序化占位。
+    /// 进 `covers.encode_pending`。这样自动切歌时协议已就绪、直接 place,不闪程序化占位。
     #[test]
     fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -314,7 +314,7 @@ mod tests {
             }
             if i <= 1 {
                 let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-                app.state.cover_cache.insert(url, Arc::new(img));
+                app.state.covers.cache.insert(url, Arc::new(img));
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
@@ -332,7 +332,8 @@ mod tests {
         let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
         let warmed = app
             .state
-            .cover_encode_pending
+            .covers
+            .encode_pending
             .borrow()
             .iter()
             .any(|(u, _)| *u == next_url);

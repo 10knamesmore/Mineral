@@ -8,11 +8,11 @@
 //!   不阻塞。
 //! - worker 在 `spawn_blocking` 上做 resize + 编码(CPU 密集,别占 runtime worker),完成
 //!   塞进 ready buffer。
-//! - 主循环 tick `drain_ready()` 把就绪协议装回 `cover_protocols`,之后帧才上真图。
+//! - 主循环 tick `drain_ready()` 把就绪协议装回 `covers.protocols`,之后帧才上真图。
 //!
 //! 与 [`crate::runtime::cover_fetch`] 同构(request → worker → ready → drain),互补成
 //! 「拉取 + 解码」与「resize + 编码」两段都离线的完整异步封面管线。去重由 caller(渲染处的
-//! `cover_encode_pending` 集合)做;错误静默(编码失败这张图不显示,UI 留占位)。
+//! `covers.encode_pending` 集合)做;错误静默(编码失败这张图不显示,UI 留占位)。
 
 use std::sync::Arc;
 
@@ -27,10 +27,10 @@ use tokio::sync::mpsc;
 
 /// 一次封面编码请求:把 `image` 编码成适配 `target` 区域的 kitty 协议。
 pub struct EncodeRequest {
-    /// 封面 URL —— 结果回填 `cover_protocols` 的 key。
+    /// 封面 URL —— 结果回填 `covers.protocols` 的 key。
     pub url: MediaUrl,
 
-    /// 待编码的已解码图(来自 `cover_cache`,worker 内 resize)。
+    /// 待编码的已解码图(来自 `covers.cache`,worker 内 resize)。
     pub image: Arc<DynamicImage>,
 
     /// 目标渲染区域。决定编码尺寸;`(width, height)` 同时作维度键。
@@ -42,7 +42,7 @@ pub struct EncodeResult {
     /// 对应请求的封面 URL。
     pub url: MediaUrl,
 
-    /// 编码所用维度(`target` 的 `(width, height)`),作 `cover_protocols` 维度键。
+    /// 编码所用维度(`target` 的 `(width, height)`),作 `covers.protocols` 维度键。
     pub dims: (u16, u16),
 
     /// 编码好的有状态协议(渲染线程只需 place,不再重编码)。
@@ -101,7 +101,7 @@ impl CoverEncoder {
         self.req_tx.clone()
     }
 
-    /// 把就绪协议拿走。主循环 tick 调一次,装回 `cover_protocols`。
+    /// 把就绪协议拿走。主循环 tick 调一次,装回 `covers.protocols`。
     pub fn drain_ready(&self) -> Vec<EncodeResult> {
         std::mem::take(&mut *self.ready.lock())
     }

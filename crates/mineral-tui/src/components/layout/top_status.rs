@@ -124,9 +124,9 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
             ));
         }
     }
-    if state.cover_loading > 0 {
+    if state.covers.loading > 0 {
         spans.push(Span::styled(
-            format!("cover:{} ", state.cover_loading),
+            format!("cover:{} ", state.covers.loading),
             Style::new().fg(theme.peach),
         ));
     }
