@@ -51,7 +51,7 @@ pub(crate) fn playlist_view(
 /// + 一个本地歌单。
 pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
-    s.playlists = vec![
+    s.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
@@ -76,7 +76,8 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
-    s.tracks_cache
+    s.library
+        .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     s.sel_track = 1;
     Ok(s)
@@ -101,7 +102,7 @@ pub(crate) fn state_with_lyrics(
             }
         }
     }
-    s.lyrics_cache.insert(track.id.clone(), lyrics);
+    s.library.lyrics.insert(track.id.clone(), lyrics);
     s.playback.track = Some(track);
     s.playback.position_ms = 62_000;
     s.lyric_extra = extra;
@@ -114,7 +115,7 @@ pub(crate) fn state_with_lyrics(
 pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     let track = feiyu_song();
-    s.lyrics_cache.insert(track.id.clone(), feiyu_lyrics());
+    s.library.lyrics.insert(track.id.clone(), feiyu_lyrics());
     s.playback.track = Some(track);
     s.playback.position_ms = 165_000;
     Ok(s)
@@ -124,7 +125,7 @@ pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
 /// 专用于 CJK 宽字符在多列表格里的对齐 / 截断快照。
 pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
-    s.playlists = vec![playlist_view(
+    s.library.playlists = vec![playlist_view(
         "cf",
         "Chinese Football",
         SourceKind::NETEASE,
@@ -141,7 +142,8 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
-    s.tracks_cache
+    s.library
+        .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
     Ok(s)
 }
@@ -151,7 +153,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
 /// 每曲 3:30,选中第 0 首(当前在播)。
 pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
-    s.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
+    s.library.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
     s.view = View::Library;
 
     let make = |name: &str, artist: &str, album: &str| {
@@ -175,7 +177,8 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
         })
         .collect::<Vec<SongView>>();
     s.current = tracks.first().cloned();
-    s.tracks_cache
+    s.library
+        .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
     Ok(s)
 }
@@ -309,7 +312,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
         ..TestClient::default()
     };
     let mut app = test_app_with(Arc::new(client))?;
-    app.state.playlists = vec![
+    app.state.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
@@ -323,7 +326,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
 pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    app.state.playlists = vec![PlaylistView {
+    app.state.library.playlists = vec![PlaylistView {
         data: Playlist {
             id: pid.clone(),
             name: "EndSerenading".to_owned(),
@@ -342,7 +345,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
             plays: None,
         })
         .collect::<Vec<SongView>>();
-    app.state.tracks_cache.insert(pid, views);
+    app.state.library.tracks.insert(pid, views);
     app.state.view = View::Library;
     app.state.sel_playlist = 0;
     app.state.sel_track = sel_track;
@@ -365,7 +368,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
             }
         })
         .collect::<Vec<SongView>>();
-    app.state.tracks_cache.insert(pid, views);
+    app.state.library.tracks.insert(pid, views);
     app.state.sel_track = sel_track;
     Ok(app)
 }
@@ -376,7 +379,8 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     let mut app = test_app()?;
     let track = qianzai_song();
     app.state
-        .lyrics_cache
+        .library
+        .lyrics
         .insert(track.id.clone(), qianzai_lyrics());
     app.state.playback.track = Some(track.clone());
     app.state.playback.position_ms = 62_000;

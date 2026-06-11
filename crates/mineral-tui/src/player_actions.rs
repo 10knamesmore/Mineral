@@ -50,6 +50,7 @@ impl App {
                 let song = self.state.queue.get(cursor).cloned();
                 let loved = song.as_ref().map(|s| {
                     self.state
+                        .library
                         .liked_ids
                         .get(&s.id.namespace())
                         .is_some_and(|ids| ids.contains(&s.id))

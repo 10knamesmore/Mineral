@@ -326,16 +326,17 @@ impl App {
     fn log_heartbeat(&self) {
         let s = &self.state;
         let liked = s
+            .library
             .liked_ids
             .values()
             .fold(0_usize, |acc, set| acc + set.len());
         mineral_log::info!(
             target: "heartbeat",
             view = ?s.view,
-            playlists = s.playlists.len(),
-            tracks_cached = s.tracks_cache.len(),
-            tracks_requested = s.tracks_requested.len(),
-            lyrics_cached = s.lyrics_cache.len(),
+            playlists = s.library.playlists.len(),
+            tracks_cached = s.library.tracks.len(),
+            tracks_requested = s.library.tracks_requested.len(),
+            lyrics_cached = s.library.lyrics.len(),
             covers_cached = s.covers.cache.len(),
             covers_pending = s.covers.pending.len(),
             liked,
@@ -367,9 +368,9 @@ impl App {
             // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
             // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
             if let (Some(song_id), Some(lyrics)) = (c.current_lyrics_song_id, c.current_lyrics)
-                && !self.state.lyrics_cache.contains_key(&song_id)
+                && !self.state.library.lyrics.contains_key(&song_id)
             {
-                self.state.lyrics_cache.insert(song_id, lyrics);
+                self.state.library.lyrics.insert(song_id, lyrics);
             }
         }
     }
@@ -1099,6 +1100,7 @@ mod tests {
         // 初始 loved = false。
         assert!(
             !app.state
+                .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
                 .is_some_and(|s| s.contains(&song_id)),
@@ -1109,6 +1111,7 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         assert!(
             app.state
+                .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
                 .is_some_and(|s| s.contains(&song_id)),
@@ -1125,6 +1128,7 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         assert!(
             !app.state
+                .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
                 .is_some_and(|s| s.contains(&song_id)),

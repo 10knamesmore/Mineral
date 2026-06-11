@@ -4,7 +4,7 @@
 //! `(query, tracks 版本, 权重)` 缓存在 [`AppState::deep_search`],只在按键 /
 //! 数据到达 / 配置热重载时重算,渲染帧只读。
 //!
-//! 覆盖范围 = `tracks_cache` 已有的歌单;未拉到曲目的歌单只参与歌单名匹配
+//! 覆盖范围 = `library.tracks` 已有的歌单;未拉到曲目的歌单只参与歌单名匹配
 //! (全量补拉由进搜索态时的 [`crate::app::App`] 触发,结果渐进到达后经
 //! `tracks_generation` 失效自然并入)。
 
@@ -66,7 +66,7 @@ struct CacheKey {
     /// 构建时的搜索词。
     query: String,
 
-    /// 构建时的 `tracks_cache` 内容版本。
+    /// 构建时的 `library.tracks` 内容版本。
     generation: u64,
 
     /// `[name, artist, album]` 权重位模式。
@@ -83,7 +83,7 @@ impl CacheKey {
         let w = cfg.deep_weights();
         Self {
             query: state.search.query.clone(),
-            generation: state.tracks_generation,
+            generation: state.library.tracks_generation,
             weights: [
                 w.name().to_bits(),
                 w.artist().to_bits(),
@@ -98,7 +98,7 @@ impl CacheKey {
         let cfg = state.cfg.tui().search();
         let w = cfg.deep_weights();
         self.deep == *cfg.deep()
-            && self.generation == state.tracks_generation
+            && self.generation == state.library.tracks_generation
             && self.weights
                 == [
                     w.name().to_bits(),
@@ -130,14 +130,14 @@ pub fn ensure(state: &AppState) {
     };
 }
 
-/// 全量重建:对 `tracks_cache` 内每首歌按字段权重打分,每歌单留最佳一首 + 命中计数。
+/// 全量重建:对 `library.tracks` 内每首歌按字段权重打分,每歌单留最佳一首 + 命中计数。
 fn build(state: &AppState) -> FxHashMap<PlaylistId, DeepHit> {
     let w = state.cfg.tui().search().deep_weights();
     let wn = f64::from(w.name().clamp(0.0, 1.0));
     let wa = f64::from(w.artist().clamp(0.0, 1.0));
     let wal = f64::from(w.album().clamp(0.0, 1.0));
     let mut out = FxHashMap::default();
-    for (pid, tracks) in &state.tracks_cache {
+    for (pid, tracks) in &state.library.tracks {
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
         for sv in tracks {
@@ -276,7 +276,7 @@ mod tests {
         PlaylistId::new(SourceKind::NETEASE, "p2")
     }
 
-    /// 把裸 Song 列表包成 SongView 塞进某歌单的 tracks_cache 并 bump 版本。
+    /// 把裸 Song 列表包成 SongView 塞进某歌单的 library.tracks 并 bump 版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
         let views = tracks
             .into_iter()
@@ -286,8 +286,8 @@ mod tests {
                 plays: None,
             })
             .collect::<Vec<SongView>>();
-        s.tracks_cache.insert(id.clone(), views);
-        s.tracks_generation = s.tracks_generation.wrapping_add(1);
+        s.library.tracks.insert(id.clone(), views);
+        s.library.tracks_generation = s.library.tracks_generation.wrapping_add(1);
     }
 
     /// 标准夹具:[`state_with_playlists`] 的 p2 塞两首歌——
@@ -365,7 +365,7 @@ mod tests {
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
         let mut s = AppState::new(Arc::new(cfg));
-        s.playlists = vec![playlist_view(
+        s.library.playlists = vec![playlist_view(
             "p2",
             "The Power of Failing",
             SourceKind::NETEASE,
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn name_match_outranks_weighted_song_match() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.playlists = vec![
+        s.library.playlists = vec![
             // 故意把「歌内命中」的歌单放在前面,排序若不生效会按原序输出。
             playlist_view("inner", "other", SourceKind::NETEASE, 1),
             playlist_view("named", "春日影", SourceKind::NETEASE, 1),

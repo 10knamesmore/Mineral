@@ -417,7 +417,7 @@ mod tests {
         Ok(())
     }
 
-    /// 选中歌单但曲目未到(tracks_cache 空)→ loading 态。
+    /// 选中歌单但曲目未到(library.tracks 空)→ loading 态。
     #[test]
     fn library_loading_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;

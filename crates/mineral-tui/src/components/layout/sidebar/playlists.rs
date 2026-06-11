@@ -33,7 +33,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
-    if state.playlists.is_empty() && state.search.query.is_empty() {
+    if state.library.playlists.is_empty() && state.search.query.is_empty() {
         paint_empty_state(buf, area, state, theme, block);
         return;
     }
@@ -308,7 +308,7 @@ mod tests {
         use mineral_model::SourceKind;
 
         let mut state = AppState::test_default()?;
-        state.playlists = vec![
+        state.library.playlists = vec![
             crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
         ];
@@ -331,7 +331,7 @@ mod tests {
         use mineral_model::SourceKind;
 
         let mut state = AppState::test_default()?;
-        state.playlists = vec![crate::test_support::playlist_view(
+        state.library.playlists = vec![crate::test_support::playlist_view(
             "a",
             "春日影",
             SourceKind::NETEASE,
@@ -361,7 +361,7 @@ mod tests {
 
         let mut state = crate::test_support::state_with_playlists()?;
         let track = with_artist(with_name(song("s1"), "春日影"), "CRYCHIC");
-        state.tracks_cache.insert(
+        state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p2"),
             vec![SongView {
                 data: track,
@@ -369,7 +369,7 @@ mod tests {
                 plays: None,
             }],
         );
-        state.tracks_generation = 1;
+        state.library.tracks_generation = 1;
         state.search.query = "春日".to_owned();
 
         let mut t = Terminal::new(TestBackend::new(64, 12))?;

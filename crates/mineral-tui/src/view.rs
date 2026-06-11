@@ -187,7 +187,8 @@ mod tests {
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         if let Some(sv) = app
             .state
-            .tracks_cache
+            .library
+            .tracks
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {

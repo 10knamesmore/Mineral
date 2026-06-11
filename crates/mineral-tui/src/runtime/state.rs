@@ -1,4 +1,4 @@
-//! 应用全局状态。`tracks_cache` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
+//! 应用全局状态。`library.tracks` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use mineral_model::{PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use mineral_model::{LyricLine, Lyrics};
 
@@ -18,9 +18,11 @@ use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
 mod covers;
+mod library;
 mod search;
 
 pub use covers::CoverHub;
+pub use library::LibraryData;
 pub use search::SearchState;
 
 /// 左栏当前展示的视图。
@@ -102,24 +104,8 @@ pub struct AppState {
     /// 中途再反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
     pub fullscreen_pos: Transition,
 
-    /// 已加载的歌单(跨 channel 合并;按到达顺序 append)。
-    pub playlists: Vec<PlaylistView>,
-
-    /// 歌单 id → 曲目;不在 map 里表示还没拉到。
-    pub tracks_cache: FxHashMap<PlaylistId, Vec<SongView>>,
-
-    /// `tracks_cache` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
-    /// 纯装饰重建([`Self::redecorate_for_source`])不动文本,不 bump。
-    pub tracks_generation: u64,
-
-    /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
-    /// 避免**失败**歌单(tracks_cache 永远不会被填)被每帧无限重提交而刷屏。
-    /// 对齐 cover 的 `covers.pending`。
-    pub tracks_requested: FxHashSet<PlaylistId>,
-
-    /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /
-    /// 拉失败。channel 层已清洗,client 直接收整份,渲染时按需取各字段。
-    pub lyrics_cache: FxHashMap<SongId, Lyrics>,
+    /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
+    pub library: LibraryData,
 
     /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
     pub lyric_extra: LyricExtra,
@@ -190,18 +176,6 @@ pub struct AppState {
     /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
     pub tasks_snapshot: mineral_task::Snapshot,
 
-    /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
-    /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
-    pub liked_ids: FxHashMap<SourceKind, FxHashSet<SongId>>,
-
-    /// 歌曲 id → 远端真实累计播放次数;装饰 `SongView.plays` 用。
-    /// 缺 id = 还没查到 / 查失败(渲染成 `None`)。
-    pub play_counts: FxHashMap<SongId, u32>,
-
-    /// 已提交过 `RemotePlayCount` 请求的歌曲(成败都记)。停留防抖据此去重,
-    /// 避免同一首歌反复打回忆坐标接口。
-    pub play_count_requested: FxHashSet<SongId>,
-
     /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
     /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
     pub last_sel_change: Instant,
@@ -227,11 +201,7 @@ impl AppState {
             fullscreen_pos: Transition::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             focused: true,
             focus_fade: Transition::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
-            playlists: Vec::new(),
-            tracks_cache: FxHashMap::default(),
-            tracks_generation: 0,
-            tracks_requested: FxHashSet::default(),
-            lyrics_cache: FxHashMap::default(),
+            library: LibraryData::new(),
             lyric_extra: LyricExtra::None,
             lyric_scroll: None,
             lyric_scroll_song: None,
@@ -256,9 +226,6 @@ impl AppState {
                 by_lane: FxHashMap::default(),
                 by_kind: FxHashMap::default(),
             },
-            liked_ids: FxHashMap::default(),
-            play_counts: FxHashMap::default(),
-            play_count_requested: FxHashSet::default(),
             last_sel_change: Instant::now(),
             cfg,
         }
@@ -311,7 +278,7 @@ impl AppState {
         if !still_there || self.sel_track != 0 {
             return;
         }
-        let Some(tracks) = self.tracks_cache.get(&pending.playlist) else {
+        let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
             return;
         };
         let sel = pending.pos.resolve(tracks);
@@ -327,14 +294,15 @@ impl AppState {
         ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms())
     }
 
-    /// 给定一首歌,根据当前 `liked_ids` / 未来其他 user-data 装饰成 SongView。
+    /// 给定一首歌,根据当前 `library.liked_ids` / 未来其他 user-data 装饰成 SongView。
     /// 这是 user-data 写入 SongView 的**唯一入口**;新增 user-data 字段时只改这里。
     fn decorate(&self, song: Song) -> SongView {
         let loved = self
+            .library
             .liked_ids
             .get(&song.source())
             .is_some_and(|s| s.contains(&song.id));
-        let plays = self.play_counts.get(&song.id).copied();
+        let plays = self.library.play_counts.get(&song.id).copied();
         SongView {
             data: song,
             loved,
@@ -342,7 +310,7 @@ impl AppState {
         }
     }
 
-    /// 本地乐观切换一首歌的喜欢态(翻转 `liked_ids` 并重装该源曲目)。
+    /// 本地乐观切换一首歌的喜欢态(翻转 `library.liked_ids` 并重装该源曲目)。
     ///
     /// 不等 server 确认——按键即时反馈;真实持久化由 `client.toggle_love` 触发,
     /// 失败由下次 `LikedSongIdsFetched` fetch 纠正。
@@ -350,19 +318,19 @@ impl AppState {
     /// # Params:
     ///   - `song`: 目标歌曲
     pub fn toggle_loved_local(&mut self, song: &Song) {
-        let set = self.liked_ids.entry(song.source()).or_default();
+        let set = self.library.liked_ids.entry(song.source()).or_default();
         if !set.remove(&song.id) {
             set.insert(song.id.clone());
         }
         self.redecorate_for_source(song.source());
     }
 
-    /// 某个 channel 的 user-data 到位 / 变化时,把 `tracks_cache` 里属于该 source
+    /// 某个 channel 的 user-data 到位 / 变化时,把 `library.tracks` 里属于该 source
     /// 的 SongView 全部按当前 `decorate` 重建一遍。
     /// 跨 source 的歌单不动(decoration data 是 per-source 的)。
     fn redecorate_for_source(&mut self, source: SourceKind) {
-        let cache = std::mem::take(&mut self.tracks_cache);
-        self.tracks_cache = cache
+        let cache = std::mem::take(&mut self.library.tracks);
+        self.library.tracks = cache
             .into_iter()
             .map(|(pid, tracks)| {
                 let next: Vec<SongView> = tracks
@@ -386,9 +354,10 @@ impl AppState {
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::PlaylistsFetched { playlists, .. } => {
-                self.playlists
+                self.library
+                    .playlists
                     .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
-                if self.sel_playlist >= self.playlists.len() {
+                if self.sel_playlist >= self.library.playlists.len() {
                     self.sel_playlist = 0;
                 }
             }
@@ -398,16 +367,16 @@ impl AppState {
                     .cloned()
                     .map(|data| self.decorate(data))
                     .collect();
-                self.tracks_cache.insert(id.clone(), decorated);
-                self.tracks_generation = self.tracks_generation.wrapping_add(1);
+                self.library.tracks.insert(id.clone(), decorated);
+                self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
                 self.apply_pending_restore(id);
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
-                self.liked_ids.insert(*source, ids.clone());
+                self.library.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
             }
             TaskEvent::RemotePlayCountFetched { song_id, count } => {
-                self.play_counts.insert(song_id.clone(), *count);
+                self.library.play_counts.insert(song_id.clone(), *count);
                 self.redecorate_for_source(song_id.namespace());
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
@@ -418,7 +387,7 @@ impl AppState {
     /// 当前曲目的完整歌词集合;未拉到时返回 `None`。
     fn current_lyrics_set(&self) -> Option<&Lyrics> {
         let song = self.playback.track.as_ref()?;
-        self.lyrics_cache.get(&song.id)
+        self.library.lyrics.get(&song.id)
     }
 
     /// 当前曲目的歌词行序列(行级 / 逐字 / 有时间 / 无时间混排,翻译 / 罗马音已内嵌在
@@ -473,14 +442,14 @@ impl AppState {
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
         match self.view {
             View::Playlists => self.filtered_playlists().get(self.sel_playlist).copied(),
-            View::Library => self.playlists.get(self.sel_playlist),
+            View::Library => self.library.playlists.get(self.sel_playlist),
         }
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
     pub fn current_tracks_slot(&self) -> Option<&Vec<SongView>> {
         self.selected_playlist()
-            .and_then(|p| self.tracks_cache.get(&p.data.id))
+            .and_then(|p| self.library.tracks.get(&p.data.id))
     }
 
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
@@ -490,7 +459,8 @@ impl AppState {
 
     /// 给定歌单的总时长(ms);槽位未到位时返回 0。
     pub fn total_duration_ms_of(&self, id: &PlaylistId) -> u64 {
-        self.tracks_cache
+        self.library
+            .tracks
             .get(id)
             .map(|tracks| tracks.iter().map(|sv| sv.data.duration_ms).sum())
             .unwrap_or(0)
@@ -508,12 +478,13 @@ impl AppState {
     /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         if self.search.query.is_empty() {
-            return self.playlists.iter().collect();
+            return self.library.playlists.iter().collect();
         }
         self.search.sync_query();
         crate::runtime::deep_search::ensure(self);
         let deep = self.search.deep_cache.borrow();
         let mut scored: Vec<(f64, &PlaylistView)> = self
+            .library
             .playlists
             .iter()
             .filter_map(|p| {
@@ -632,7 +603,7 @@ mod tests {
     #[test]
     fn filtered_playlists_initials_pinyin() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.playlists = vec![
+        s.library.playlists = vec![
             playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
@@ -651,7 +622,7 @@ mod tests {
     #[test]
     fn filtered_playlists_full_pinyin() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.playlists = vec![
+        s.library.playlists = vec![
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
@@ -669,7 +640,7 @@ mod tests {
     #[test]
     fn filtered_playlists_consecutive_ranks_first() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.playlists = vec![
+        s.library.playlists = vec![
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];

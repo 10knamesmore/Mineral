@@ -36,12 +36,13 @@ impl App {
         }
         let pending: Vec<PlaylistId> = self
             .state
+            .library
             .playlists
             .iter()
             .map(|p| &p.data.id)
             .filter(|id| {
-                !self.state.tracks_cache.contains_key(*id)
-                    && !self.state.tracks_requested.contains(*id)
+                !self.state.library.tracks.contains_key(*id)
+                    && !self.state.library.tracks_requested.contains(*id)
             })
             .cloned()
             .collect();
@@ -50,7 +51,7 @@ impl App {
                 TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
                 Priority::Background,
             );
-            self.state.tracks_requested.insert(id);
+            self.state.library.tracks_requested.insert(id);
         }
     }
 
@@ -176,6 +177,7 @@ impl App {
                     self.state.search.query.clear();
                     if let Some(raw_idx) = self
                         .state
+                        .library
                         .playlists
                         .iter()
                         .position(|p| p.data.id == target_id)
@@ -184,7 +186,8 @@ impl App {
                     }
                     if let Some(idx) = locate.and_then(|song_id| {
                         self.state
-                            .tracks_cache
+                            .library
+                            .tracks
                             .get(&target_id)
                             .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
                     }) {
@@ -195,7 +198,7 @@ impl App {
                         // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),
                         // 走到这里说明无命中。曲目还没拉到时挂 pending,
                         // 等 `PlaylistTracksFetched` 补落位。
-                        if let Some(tracks) = self.state.tracks_cache.get(&target_id) {
+                        if let Some(tracks) = self.state.library.tracks.get(&target_id) {
                             sel_track = pos.resolve(tracks);
                             // 恢复屏上相对位置:该行回到离开时的视口行,
                             // 而非统一顶到 scrolloff 位。
@@ -341,7 +344,7 @@ mod tests {
         // Playlists:3 张歌单,同一组键作用于 sel_playlist。
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
         app.state.view = crate::runtime::state::View::Playlists;
-        app.state.playlists = vec![
+        app.state.library.playlists = vec![
             crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("p2", "B", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("p3", "C", SourceKind::NETEASE, 1),
@@ -482,8 +485,8 @@ mod tests {
                 plays: None,
             })
             .collect::<Vec<SongView>>();
-        app.state.tracks_cache.insert(pid, views);
-        app.state.tracks_generation = 1;
+        app.state.library.tracks.insert(pid, views);
+        app.state.library.tracks_generation = 1;
 
         press(&mut app, KeyCode::Char('/'));
         for c in "春日影".chars() {
@@ -527,8 +530,8 @@ mod tests {
                 plays: None,
             })
             .collect::<Vec<SongView>>();
-        app.state.tracks_cache.insert(pid, views);
-        app.state.tracks_generation = 1;
+        app.state.library.tracks.insert(pid, views);
+        app.state.library.tracks_generation = 1;
 
         press(&mut app, KeyCode::Char('/'));
         for c in "春日影".chars() {
@@ -577,7 +580,7 @@ mod tests {
         // Library 视图按 `/` 不触发补拉(深度搜索只服务 Playlists 过滤)。
         press(&mut app, KeyCode::Esc);
         app.state.view = crate::runtime::state::View::Library;
-        app.state.tracks_requested.clear();
+        app.state.library.tracks_requested.clear();
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
             .lock()
@@ -691,7 +694,7 @@ mod tests {
 
         // 歌单第 0 首被删(模拟远端歌单变动后重新拉取)。
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-        if let Some(tracks) = app.state.tracks_cache.get_mut(&pid)
+        if let Some(tracks) = app.state.library.tracks.get_mut(&pid)
             && !tracks.is_empty()
         {
             tracks.remove(0);
@@ -721,8 +724,8 @@ mod tests {
                 plays: None,
             })
             .collect::<Vec<SongView>>();
-        app.state.tracks_cache.insert(pid.clone(), views);
-        app.state.tracks_generation = 1;
+        app.state.library.tracks.insert(pid.clone(), views);
+        app.state.library.tracks_generation = 1;
         app.state.track_pos.insert(
             pid,
             TrackPos {

@@ -143,9 +143,9 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
             Priority::User,
         );
-        // 成败都记:失败歌单的 tracks_cache 永远不会被填,只有靠这里去重才不会
+        // 成败都记:失败歌单的 library.tracks 永远不会被填,只有靠这里去重才不会
         // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
-        state.tracks_requested.insert(id);
+        state.library.tracks_requested.insert(id);
     }
 }
 
@@ -166,7 +166,7 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
     let Some(id) = selected_track_id(state) else {
         return;
     };
-    if state.play_count_requested.contains(&id) {
+    if state.library.play_count_requested.contains(&id) {
         return;
     }
     mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "request remote play count");
@@ -176,7 +176,7 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
         }),
         Priority::User,
     );
-    state.play_count_requested.insert(id);
+    state.library.play_count_requested.insert(id);
 }
 
 /// 当前 Library 选中行的歌曲 id(filtered 索引);无选中 / 空列表返回 `None`。
@@ -196,7 +196,9 @@ fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {
             let id = &p.data.id;
-            if !state.tracks_cache.contains_key(id) && !state.tracks_requested.contains(id) {
+            if !state.library.tracks.contains_key(id)
+                && !state.library.tracks_requested.contains(id)
+            {
                 out.push(id.clone());
             }
         }
