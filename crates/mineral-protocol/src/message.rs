@@ -228,6 +228,10 @@ pub enum Request {
 
         /// 是否处于全屏播放态。
         fullscreen: bool,
+
+        /// 终端窗口是否持有输入焦点(终端经 focus 事件上报;不支持
+        /// mode 1004 的终端收不到事件,client 恒报 `true`)。
+        focused: bool,
     },
 
     // ---- 生命周期 ----

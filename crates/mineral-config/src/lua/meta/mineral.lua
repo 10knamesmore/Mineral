@@ -154,6 +154,7 @@ function mineral.bind(key, handler) end
 ---@field rows integer  终端行数
 ---@field cols integer  终端列数
 ---@field fullscreen boolean  是否处于全屏播放态
+---@field focused boolean  终端窗口是否持有输入焦点(终端不支持 focus 事件时恒 true)
 
 --- 播放循环模式的蛇形稳定名(与 Rust `PlayMode::script_name` 由守卫测试钉死同步)。
 ---@alias mineral.PlayMode "sequential"|"shuffle"|"repeat_all"|"repeat_one"

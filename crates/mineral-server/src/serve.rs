@@ -364,8 +364,9 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             rows,
             cols,
             fullscreen,
+            focused,
         } => {
-            client.report_terminal_state(rows, cols, fullscreen);
+            client.report_terminal_state(rows, cols, fullscreen, focused);
             Response::Ok
         }
         // 实际唤醒在 read_loop 的 dispatch task 里(ack 入队之后),这里只

@@ -33,6 +33,9 @@ pub struct AnimationConfig {
     /// toast 进出动画时长(毫秒)。
     toast_anim_ms: u32,
 
+    /// 终端失焦/聚焦时顶栏变灰的淡入淡出时长(毫秒)。
+    focus_fade_ms: u32,
+
     /// 侧栏曲目扫入风格。
     view_sweep: SweepStyle,
 }

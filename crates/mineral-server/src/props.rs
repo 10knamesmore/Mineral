@@ -22,6 +22,9 @@ pub(crate) struct TerminalReport {
 
     /// 是否处于全屏播放态。
     pub(crate) fullscreen: bool,
+
+    /// 终端窗口是否持有输入焦点。
+    pub(crate) focused: bool,
 }
 
 /// 上次下发值的缓存:首轮全量产出(下游借此拿到初值),此后只发真变更。
@@ -80,6 +83,7 @@ impl PlayerCore {
                 ("rows".to_owned(), PropValue::Int(i64::from(t.rows))),
                 ("cols".to_owned(), PropValue::Int(i64::from(t.cols))),
                 ("fullscreen".to_owned(), PropValue::Bool(t.fullscreen)),
+                ("focused".to_owned(), PropValue::Bool(t.focused)),
             ])
         });
         let state = if song.is_none() {

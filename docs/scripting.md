@@ -74,7 +74,7 @@ end)
 | `"player.position"` | integer                                                     | 播放进度(整秒)                        |
 | `"player.mode"`     | `"sequential" \| "shuffle" \| "repeat_all" \| "repeat_one"` | 循环模式                              |
 | `"queue.length"`    | integer                                                     | 队列长度                              |
-| `"terminal"`        | `{ rows, cols, fullscreen } \| nil`                         | 终端尺寸与全屏态;无 client 在线为 nil |
+| `"terminal"`        | `{ rows, cols, fullscreen, focused } \| nil`                | 终端尺寸/全屏态/输入焦点;无 client 在线为 nil。终端不支持 focus 事件时 `focused` 恒 true |
 
 `mineral.get(prop)` 同步读当前值(还没推送过为 `nil`)。
 

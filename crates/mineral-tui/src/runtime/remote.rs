@@ -352,11 +352,12 @@ impl Client for RemoteClient {
         let _ = self.send_recv(Request::Download(target));
     }
 
-    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
         let _ = self.send_recv(Request::TerminalState {
             rows,
             cols,
             fullscreen,
+            focused,
         });
     }
 

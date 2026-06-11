@@ -243,6 +243,7 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `fullscreen_ms` | 288 | 全屏播放态进退场形变 |
 | `popup_anim_ms` | 288 | 浮层(队列 / 确认框)弹出收起 |
 | `toast_anim_ms` | 288 | 顶栏通知横向展开收起 |
+| `focus_fade_ms` | 288 | 终端失焦/聚焦时顶栏变灰 + `◌ not focused` 徽标的淡入淡出(tmux 内需 `set -g focus-events on`;不支持 focus 事件的终端恒按聚焦渲染) |
 | `view_sweep` | `"push"` | 侧栏切换风格:`"push"` = 新旧视图一起平移;`"cover"` = 新视图从右盖上 |
 
 ## tui.toast — 顶栏通知

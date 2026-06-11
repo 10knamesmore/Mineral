@@ -97,6 +97,14 @@ pub struct AppState {
     /// 是否处于全屏播放态。切换时立即设为目标值供按键路由;渲染端的形变进度看 [`Self::fullscreen_pos`]。
     pub fullscreen: bool,
 
+    /// 终端窗口是否持有输入焦点(focus 事件维护)。初始 `true`:mode 1004 只报变化
+    /// 不可查询,不支持的终端永远收不到事件,降级方向必须是「恒聚焦」而非反向。
+    pub focused: bool,
+
+    /// 顶栏失焦变灰进度:`0` = 聚焦、满值 = 完全变灰。失焦调 `enter`、聚焦调 `leave`,
+    /// 中途反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
+    pub focus_fade: Transition,
+
     /// 全屏播放进退场形变进度:`0` = 浏览态、满值 = 全屏。进调 `enter`、退调 `leave`,
     /// 中途再反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
     pub fullscreen_pos: Transition,
@@ -269,6 +277,8 @@ impl AppState {
             view_pos: Transition::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: false,
             fullscreen_pos: Transition::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            focused: true,
+            focus_fade: Transition::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             playlists: Vec::new(),
             tracks_cache: FxHashMap::default(),
             tracks_generation: 0,

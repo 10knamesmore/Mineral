@@ -159,6 +159,7 @@ return {
       fullscreen_ms = 288, -- 全屏进退场形变
       popup_anim_ms = 288, -- 浮层(队列 / 确认框)弹出收起
       toast_anim_ms = 288, -- 顶栏通知横向展开收起
+      focus_fade_ms = 288, -- 终端失焦/聚焦时顶栏变灰的淡入淡出
       view_sweep = "push", -- "push" | "cover":侧栏切换是新旧一起平移还是从右盖上
     },
     toast = {

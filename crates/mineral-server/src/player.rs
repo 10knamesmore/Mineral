@@ -1889,6 +1889,7 @@ mod tests {
             rows: 50,
             cols: 220,
             fullscreen: true,
+            focused: true,
         });
         core.check_props();
         let terminal_of = |rx: &mut tokio::sync::broadcast::Receiver<Event>| {
@@ -1910,6 +1911,10 @@ mod tests {
                 ("cols".to_owned(), mineral_protocol::PropValue::Int(220)),
                 (
                     "fullscreen".to_owned(),
+                    mineral_protocol::PropValue::Bool(true)
+                ),
+                (
+                    "focused".to_owned(),
                     mineral_protocol::PropValue::Bool(true)
                 ),
             ]))

@@ -109,8 +109,8 @@ pub struct App {
     /// config.lua 的 mtime 监视器(热重载 keymap / theme)。
     config_watch: crate::runtime::reload::ConfigWatch,
 
-    /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen)`(去抖:值没变不发)。
-    last_terminal_report: Option<(u16, u16, bool)>,
+    /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen, focused)`(去抖:值没变不发)。
+    last_terminal_report: Option<(u16, u16, bool, bool)>,
 }
 
 impl App {
@@ -257,6 +257,7 @@ impl App {
                 self.update_spectrum();
                 self.state.view_pos.tick();
                 self.state.fullscreen_pos.tick();
+                self.state.focus_fade.tick();
                 self.state.tick_lyric_scroll();
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.versions);
@@ -488,30 +489,43 @@ impl App {
         }
     }
 
-    /// 处理一个 crossterm 事件:KeyEvent 的按下边沿走按键分发;Resize 上报
-    /// daemon(脚本经 `terminal` 属性观察终端尺寸)。
+    /// 处理一个 crossterm 事件:KeyEvent 的按下边沿走按键分发;Resize / focus
+    /// 变化上报 daemon(脚本经 `terminal` 属性观察终端尺寸与焦点)。
     fn handle_event(&mut self, ev: &Event) {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
             Event::Resize(..) => self.report_terminal_state(),
+            Event::FocusGained => self.set_focus(/*focused*/ true),
+            Event::FocusLost => self.set_focus(/*focused*/ false),
             _ => {}
         }
     }
 
-    /// 上报终端 UI 状态(尺寸 + 全屏态)给 daemon,灌属性树 `terminal` 供脚本
+    /// focus 事件落地:记状态、起顶栏变灰淡入/淡出、上报 daemon。
+    fn set_focus(&mut self, focused: bool) {
+        self.state.focused = focused;
+        if focused {
+            self.state.focus_fade.leave();
+        } else {
+            self.state.focus_fade.enter();
+        }
+        self.report_terminal_state();
+    }
+
+    /// 上报终端 UI 状态(尺寸 + 全屏态 + 焦点)给 daemon,灌属性树 `terminal` 供脚本
     /// observe。值没变去抖不发;无 TTY(测试)拿不到尺寸静默跳过。
-    /// 调用点:启动 / Resize / 全屏切换。
+    /// 调用点:启动 / Resize / 全屏切换 / focus 变化。
     fn report_terminal_state(&mut self) {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
             return;
         };
-        let snapshot = (rows, cols, self.state.fullscreen);
+        let snapshot = (rows, cols, self.state.fullscreen, self.state.focused);
         if self.last_terminal_report == Some(snapshot) {
             return;
         }
         self.last_terminal_report = Some(snapshot);
         self.client
-            .report_terminal_state(rows, cols, self.state.fullscreen);
+            .report_terminal_state(rows, cols, self.state.fullscreen, self.state.focused);
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。

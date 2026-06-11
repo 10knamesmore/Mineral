@@ -318,8 +318,9 @@ pub trait Client: Send + Sync {
     ///   - `rows`: 终端行数
     ///   - `cols`: 终端列数
     ///   - `fullscreen`: 是否处于全屏播放态
-    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
-        let _ = (rows, cols, fullscreen);
+    ///   - `focused`: 终端窗口是否持有输入焦点
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
+        let _ = (rows, cols, fullscreen, focused);
     }
 
     /// client 与 server 的链路是否仍可用。
@@ -460,12 +461,13 @@ impl Client for ClientHandle {
         self.player.download_progress()
     }
 
-    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool) {
+    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
         self.player
             .set_terminal_state(crate::props::TerminalReport {
                 rows,
                 cols,
                 fullscreen,
+                focused,
             });
     }
 }

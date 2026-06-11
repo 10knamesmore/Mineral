@@ -1,0 +1,7 @@
+---
+source: crates/mineral-tui/src/components/layout/top_status.rs
+assertion_line: 239
+description: "顶栏:终端失焦徽标(版本号已过滤)"
+expression: t.backend()
+---
+"▌ mineral v[VERSION]  │                                     ◌ not focused  ‖ paused "

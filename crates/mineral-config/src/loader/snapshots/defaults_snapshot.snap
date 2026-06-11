@@ -548,6 +548,7 @@ Config {
             fullscreen_ms: 288,
             popup_anim_ms: 288,
             toast_anim_ms: 288,
+            focus_fade_ms: 288,
             view_sweep: Push,
         },
         toast: ToastConfig {

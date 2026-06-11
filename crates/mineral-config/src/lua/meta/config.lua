@@ -225,6 +225,7 @@
 ---@field fullscreen_ms? integer 全屏播放态进退场形变的毫秒数
 ---@field popup_anim_ms? integer 浮层(队列 / 确认框)弹出收起的毫秒数
 ---@field toast_anim_ms? integer 顶栏通知横向展开收起的毫秒数
+---@field focus_fade_ms? integer 终端失焦/聚焦时顶栏变灰的淡入淡出毫秒数
 ---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
 
 ---顶栏通知。

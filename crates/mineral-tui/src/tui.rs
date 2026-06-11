@@ -6,8 +6,8 @@
 use std::io::{self, Stdout};
 
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -48,7 +48,14 @@ impl Tui {
         self.launch_cursor = crossterm::cursor::position()
             .ok()
             .map(|(x, y)| Position { x, y });
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        // focus 事件(mode 1004):FocusGained/FocusLost 驱动顶栏失焦变灰。
+        // 不支持的终端忽略该序列、永不发事件,UI 恒按聚焦渲染。
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableFocusChange
+        )?;
         // kitty keyboard protocol:让 Shift+arrow / Ctrl+组合键 都带显式 modifier 上来。
         // 不开的话 kitty 默认把 Shift+Left 当裸 Left 报,丢了 SHIFT modifier
         // → 大跨度 seek 不生效。不支持协议的终端(macOS Terminal / iTerm2 旧版)
@@ -104,7 +111,12 @@ fn restore_terminal() -> io::Result<()> {
         // 再 LeaveAlternateScreen / 关 mouse capture / disable raw,顺序对称于 enter。
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         disable_raw_mode()?;
-        execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+        execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableFocusChange
+        )?;
     }
     Ok(())
 }
