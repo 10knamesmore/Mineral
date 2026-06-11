@@ -18,7 +18,7 @@ use crate::runtime::view_model::PlaylistView;
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
-    let pos = position_label(state.sel_playlist, total);
+    let pos = position_label(state.nav.sel_playlist, total);
 
     let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
     title_spans.extend(search_badge(state, theme));
@@ -93,20 +93,20 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let viewport = usize::from(area.height.saturating_sub(3));
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,理由同 library。
     let offset = if state.fullscreen_pos.at_min() {
-        state.scroll_playlist.render_offset(
-            state.sel_playlist,
+        state.nav.scroll_playlist.render_offset(
+            state.nav.sel_playlist,
             total,
             viewport,
             state.scrolloff(),
             state.list_glide_ticks(),
         )
     } else {
-        state.scroll_playlist.frozen_offset(total, viewport)
+        state.nav.scroll_playlist.frozen_offset(total, viewport)
     };
     let mut table_state = TableState::default()
         .with_offset(offset)
         .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.sel_playlist,
+            state.nav.sel_playlist,
             offset,
             viewport,
         )));

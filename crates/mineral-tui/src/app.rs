@@ -155,7 +155,7 @@ impl App {
         state.lyric_extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
-        state.track_pos = ui_prefs.initial_track_pos().clone();
+        state.nav.track_pos = ui_prefs.initial_track_pos().clone();
         let notice_hint = Self::compose_notice_hint(&keymap);
         Self {
             should_quit: false,
@@ -950,7 +950,7 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         assert_eq!(
-            app.state.track_pos.get(&pid).map(|p| p.index),
+            app.state.nav.track_pos.get(&pid).map(|p| p.index),
             Some(4),
             "退出转场起点应补记 Library 光标位置"
         );
@@ -1187,7 +1187,7 @@ mod tests {
     fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 1)?;
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.sel_track, 1, "Library d 不动选中");
+        assert_eq!(app.state.nav.sel_track, 1, "Library d 不动选中");
         assert_eq!(
             app.state.view,
             crate::runtime::state::View::Library,
@@ -1197,7 +1197,7 @@ mod tests {
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
         app.state.view = crate::runtime::state::View::Playlists;
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.sel_playlist, 0, "Playlists d 不动选中");
+        assert_eq!(app.state.nav.sel_playlist, 0, "Playlists d 不动选中");
         assert_eq!(
             app.state.view,
             crate::runtime::state::View::Playlists,

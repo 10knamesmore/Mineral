@@ -59,12 +59,12 @@ impl App {
     fn reset_sel_for_search(&mut self) {
         match self.state.view {
             View::Playlists => {
-                self.state.sel_playlist = 0;
-                self.state.scroll_playlist.snap_to(0);
+                self.state.nav.sel_playlist = 0;
+                self.state.nav.scroll_playlist.snap_to(0);
             }
             View::Library => {
-                self.state.sel_track = 0;
-                self.state.scroll_track.snap_to(0);
+                self.state.nav.sel_track = 0;
+                self.state.nav.scroll_track.snap_to(0);
             }
         }
     }
@@ -91,32 +91,32 @@ impl App {
                 }
                 self.state.search.query.pop();
                 self.reset_sel_for_search();
-                self.state.last_sel_change = Instant::now();
+                self.state.nav.last_sel_change = Instant::now();
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
             KeyCode::Char(c) => {
                 self.state.search.query.push(c);
                 self.reset_sel_for_search();
-                self.state.last_sel_change = Instant::now();
+                self.state.nav.last_sel_change = Instant::now();
             }
             _ => {}
         }
     }
 
-    /// 列表光标移动,按当前 view 落到 `sel_playlist` / `sel_track`,越界钳首末行;
+    /// 列表光标移动,按当前 view 落到 `nav.sel_playlist` / `nav.sel_track`,越界钳首末行;
     /// 全屏态屏蔽(屏上无列表)。
     pub(super) fn move_selection(&mut self, mv: SelectionMove) {
         if self.state.fullscreen {
             return;
         }
-        self.state.last_sel_change = Instant::now();
+        self.state.nav.last_sel_change = Instant::now();
         let max = match self.state.view {
             View::Playlists => self.state.filtered_playlists().len().saturating_sub(1),
             View::Library => self.state.filtered_tracks().len().saturating_sub(1),
         };
         let sel = match self.state.view {
-            View::Playlists => &mut self.state.sel_playlist,
-            View::Library => &mut self.state.sel_track,
+            View::Playlists => &mut self.state.nav.sel_playlist,
+            View::Library => &mut self.state.nav.sel_track,
         };
         *sel = match mv {
             SelectionMove::Down(n) => sel.saturating_add(n).min(max),
@@ -137,8 +137,8 @@ impl App {
         let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
         let ticks = self.state.list_glide_ticks();
         let list = match self.state.view {
-            View::Playlists => &self.state.scroll_playlist,
-            View::Library => &self.state.scroll_track,
+            View::Playlists => &self.state.nav.scroll_playlist,
+            View::Library => &self.state.nav.scroll_track,
         };
         list.nudge(delta, ticks);
         self.move_selection(if delta > 0 {
@@ -154,18 +154,18 @@ impl App {
         if self.state.fullscreen {
             return;
         }
-        self.state.last_sel_change = Instant::now();
+        self.state.nav.last_sel_change = Instant::now();
         match self.state.view {
             View::Playlists => {
                 // 上一次进歌单挂的延迟恢复(曲目未到就退出来了)就此作废。
-                self.state.pending_track_restore = None;
+                self.state.nav.pending_track_restore = None;
                 let mut sel_track = 0usize;
                 // 记忆恢复时的屏上相对行;None = 默认落位(光标上方留 scrolloff)。
                 let mut screen_anchor: Option<usize> = None;
                 if let Some(target_id) = self
                     .state
                     .filtered_playlists()
-                    .get(self.state.sel_playlist)
+                    .get(self.state.nav.sel_playlist)
                     .map(|p| p.data.id.clone())
                 {
                     // 深度命中行:进歌单后光标直接落到命中歌(搜索 → 定位闭环,
@@ -182,7 +182,7 @@ impl App {
                         .iter()
                         .position(|p| p.data.id == target_id)
                     {
-                        self.state.sel_playlist = raw_idx;
+                        self.state.nav.sel_playlist = raw_idx;
                     }
                     if let Some(idx) = locate.and_then(|song_id| {
                         self.state
@@ -193,7 +193,7 @@ impl App {
                     }) {
                         sel_track = idx;
                     } else if self.state.track_memory().enabled()
-                        && let Some(pos) = self.state.track_pos.get(&target_id).cloned()
+                        && let Some(pos) = self.state.nav.track_pos.get(&target_id).cloned()
                     {
                         // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),
                         // 走到这里说明无命中。曲目还没拉到时挂 pending,
@@ -204,7 +204,7 @@ impl App {
                             // 而非统一顶到 scrolloff 位。
                             screen_anchor = Some(pos.screen_row);
                         } else {
-                            self.state.pending_track_restore = Some(PendingRestore {
+                            self.state.nav.pending_track_restore = Some(PendingRestore {
                                 playlist: target_id.clone(),
                                 pos,
                             });
@@ -213,17 +213,20 @@ impl App {
                 }
                 self.state.view = View::Library;
                 self.state.view_pos.enter();
-                self.state.sel_track = sel_track;
+                self.state.nav.sel_track = sel_track;
                 // 视口直接落位(记忆按屏上相对行还原;命中歌上方留 scrolloff;
                 // 无命中即从头看),不从上张歌单的深处滑回来。
                 let anchor = screen_anchor.unwrap_or_else(|| self.state.scrolloff());
                 self.state
+                    .nav
                     .scroll_track
                     .snap_to(sel_track.saturating_sub(anchor));
             }
             View::Library => {
                 let filtered = self.state.filtered_tracks();
-                let Some(song) = filtered.get(self.state.sel_track).map(|sv| sv.data.clone())
+                let Some(song) = filtered
+                    .get(self.state.nav.sel_track)
+                    .map(|sv| sv.data.clone())
                 else {
                     return;
                 };
@@ -246,7 +249,7 @@ impl App {
         if self.state.fullscreen {
             return;
         }
-        self.state.last_sel_change = Instant::now();
+        self.state.nav.last_sel_change = Instant::now();
         if !self.state.search.query.is_empty() {
             self.state.search.query.clear();
             self.reset_sel_for_search();
@@ -254,7 +257,7 @@ impl App {
         }
         if matches!(self.state.view, View::Library) {
             self.remember_track_pos();
-            self.state.pending_track_restore = None;
+            self.state.nav.pending_track_restore = None;
             self.state.view = View::Playlists;
             self.state.view_pos.leave();
         }
@@ -264,7 +267,7 @@ impl App {
     /// persist 档随手把整表 fire-and-forget 落盘。
     ///
     /// 曲目未就绪 / 空歌单时不记,**保留旧记忆**——进了还没加载完的歌单就退出来,
-    /// 不该把上次的有效位置抹成空。搜索过滤态下 `sel_track` 指向 filtered 列表,
+    /// 不该把上次的有效位置抹成空。搜索过滤态下 `nav.sel_track` 指向 filtered 列表,
     /// 记忆统一锚定到 raw 下标(恢复时无过滤)。
     pub(super) fn remember_track_pos(&mut self) {
         if !self.state.track_memory().enabled() || self.state.view != View::Library {
@@ -276,7 +279,7 @@ impl App {
         let Some(song_id) = self
             .state
             .filtered_tracks()
-            .get(self.state.sel_track)
+            .get(self.state.nav.sel_track)
             .map(|sv| sv.data.id.clone())
         else {
             return;
@@ -286,13 +289,14 @@ impl App {
             .current_tracks()
             .iter()
             .position(|sv| sv.data.id == song_id)
-            .unwrap_or(self.state.sel_track);
+            .unwrap_or(self.state.nav.sel_track);
         // 屏上相对行:光标减当前滚动目标(渲染端维护的视口首行)。
         let screen_row = self
             .state
+            .nav
             .sel_track
-            .saturating_sub(self.state.scroll_track.target_rows());
-        self.state.track_pos.insert(
+            .saturating_sub(self.state.nav.scroll_track.target_rows());
+        self.state.nav.track_pos.insert(
             pid,
             TrackPos {
                 song_id,
@@ -301,7 +305,8 @@ impl App {
             },
         );
         if self.state.track_memory().persists() {
-            self.ui_prefs.save_track_positions(&self.state.track_pos);
+            self.ui_prefs
+                .save_track_positions(&self.state.nav.track_pos);
         }
     }
 }
@@ -326,20 +331,20 @@ mod tests {
         // Library:10 首,从 0 起。
         let mut app = app_with_library(10, /*sel_track*/ 0)?;
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_track, 1, "j 下移一行");
+        assert_eq!(app.state.nav.sel_track, 1, "j 下移一行");
         press(&mut app, KeyCode::Char('J'));
-        assert_eq!(app.state.sel_track, 8, "J 大跨下移 7 行");
+        assert_eq!(app.state.nav.sel_track, 8, "J 大跨下移 7 行");
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_track, 9, "下移越界钳到末行");
+        assert_eq!(app.state.nav.sel_track, 9, "下移越界钳到末行");
         press(&mut app, KeyCode::Char('K'));
-        assert_eq!(app.state.sel_track, 2, "K 大跨上移 7 行");
+        assert_eq!(app.state.nav.sel_track, 2, "K 大跨上移 7 行");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.state.sel_track, 1, "k 上移一行");
+        assert_eq!(app.state.nav.sel_track, 1, "k 上移一行");
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_track, 0, "g 跳首行");
+        assert_eq!(app.state.nav.sel_track, 0, "g 跳首行");
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.sel_track, 9, "G 跳末行");
+        assert_eq!(app.state.nav.sel_track, 9, "G 跳末行");
 
         // Playlists:3 张歌单,同一组键作用于 sel_playlist。
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
@@ -350,13 +355,13 @@ mod tests {
             crate::test_support::playlist_view("p3", "C", SourceKind::NETEASE, 1),
         ];
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.state.sel_playlist, 1, "j 下移一行");
+        assert_eq!(app.state.nav.sel_playlist, 1, "j 下移一行");
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.sel_playlist, 2, "G 跳末行");
+        assert_eq!(app.state.nav.sel_playlist, 2, "G 跳末行");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.state.sel_playlist, 1, "k 上移一行");
+        assert_eq!(app.state.nav.sel_playlist, 1, "k 上移一行");
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_playlist, 0, "g 跳首行");
+        assert_eq!(app.state.nav.sel_playlist, 0, "g 跳首行");
         Ok(())
     }
 
@@ -366,7 +371,7 @@ mod tests {
     fn l_enters_library_enter_plays() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 2)?;
         app.state.view = crate::runtime::state::View::Playlists;
-        app.state.sel_playlist = 0;
+        app.state.nav.sel_playlist = 0;
 
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(
@@ -374,7 +379,7 @@ mod tests {
             crate::runtime::state::View::Library,
             "l 应进 Library"
         );
-        assert_eq!(app.state.sel_track, 0, "进 Library 选中复位到首行");
+        assert_eq!(app.state.nav.sel_track, 0, "进 Library 选中复位到首行");
 
         press(&mut app, KeyCode::Enter);
         assert_eq!(
@@ -426,22 +431,28 @@ mod tests {
         let page = *app.state.cfg.tui().behavior().page_scroll_rows();
         let line = *app.state.cfg.tui().behavior().line_scroll_rows();
         ctrl(&mut app, 'f');
-        assert_eq!(app.state.sel_track, page, "C-f 翻页下移 page_scroll_rows");
+        assert_eq!(
+            app.state.nav.sel_track, page,
+            "C-f 翻页下移 page_scroll_rows"
+        );
         ctrl(&mut app, 'd');
         assert_eq!(
-            app.state.sel_track,
+            app.state.nav.sel_track,
             page + line,
             "C-d 单行档下移 line_scroll_rows"
         );
         ctrl(&mut app, 'u');
         ctrl(&mut app, 'b');
-        assert_eq!(app.state.sel_track, 0, "C-u/C-b 对称滚回顶");
+        assert_eq!(app.state.nav.sel_track, 0, "C-u/C-b 对称滚回顶");
         ctrl(&mut app, 'b');
-        assert_eq!(app.state.sel_track, 0, "顶部再上滚钳住不越界");
+        assert_eq!(app.state.nav.sel_track, 0, "顶部再上滚钳住不越界");
 
         app.state.fullscreen = true;
         ctrl(&mut app, 'f');
-        assert_eq!(app.state.sel_track, 0, "全屏态 C-f 路由去歌词,列表光标不动");
+        assert_eq!(
+            app.state.nav.sel_track, 0,
+            "全屏态 C-f 路由去歌词,列表光标不动"
+        );
         Ok(())
     }
 
@@ -499,7 +510,7 @@ mod tests {
             crate::runtime::state::View::Library,
             "Enter 应进 Library"
         );
-        assert_eq!(app.state.sel_track, 2, "光标应落在命中歌「春日影」上");
+        assert_eq!(app.state.nav.sel_track, 2, "光标应落在命中歌「春日影」上");
         assert!(app.state.search.query.is_empty(), "进歌单后清词(现状语义)");
         Ok(())
     }
@@ -539,7 +550,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.state.sel_track, 0, "旋钮关闭:不定位,从头看");
+        assert_eq!(app.state.nav.sel_track, 0, "旋钮关闭:不定位,从头看");
         Ok(())
     }
 
@@ -613,7 +624,7 @@ mod tests {
         for _ in 0..3 {
             press(&mut app, KeyCode::Char('j'));
         }
-        assert_eq!(app.state.sel_track, 3, "前置:光标已下移");
+        assert_eq!(app.state.nav.sel_track, 3, "前置:光标已下移");
 
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(
@@ -622,7 +633,7 @@ mod tests {
             "h 退回 Playlists"
         );
         press(&mut app, KeyCode::Char('l'));
-        assert_eq!(app.state.sel_track, 3, "再进同一歌单应恢复原位");
+        assert_eq!(app.state.nav.sel_track, 3, "再进同一歌单应恢复原位");
         Ok(())
     }
 
@@ -640,12 +651,12 @@ mod tests {
             app.state.view_pos.tick();
         }
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
-        app.state.sel_track = 50;
+        app.state.nav.sel_track = 50;
         // 渲染若干帧让视口收敛(光标深处 → offset > 0,光标落在视口下安全边界)。
         for _ in 0..40 {
             t.draw(|f| crate::view::draw(f, &app))?;
         }
-        let off = app.state.scroll_track.target_rows();
+        let off = app.state.nav.scroll_track.target_rows();
         assert!(off > 0 && off <= 50, "前置:视口已滚到深处: {off}");
         let row_before = 50_usize.saturating_sub(off);
 
@@ -654,8 +665,8 @@ mod tests {
         for _ in 0..5 {
             t.draw(|f| crate::view::draw(f, &app))?;
         }
-        assert_eq!(app.state.sel_track, 50, "光标恢复原行");
-        let row_after = 50_usize.saturating_sub(app.state.scroll_track.target_rows());
+        assert_eq!(app.state.nav.sel_track, 50, "光标恢复原行");
+        let row_after = 50_usize.saturating_sub(app.state.nav.scroll_track.target_rows());
         assert_eq!(row_after, row_before, "屏上相对行应与离开时一致");
         Ok(())
     }
@@ -676,7 +687,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Char('h'));
         press(&mut app, KeyCode::Char('l'));
-        assert_eq!(app.state.sel_track, 0, "off 档不记不恢复");
+        assert_eq!(app.state.nav.sel_track, 0, "off 档不记不恢复");
         Ok(())
     }
 
@@ -700,7 +711,7 @@ mod tests {
             tracks.remove(0);
         }
         press(&mut app, KeyCode::Char('l'));
-        assert_eq!(app.state.sel_track, 4, "同一首歌删行后顺移到 4");
+        assert_eq!(app.state.nav.sel_track, 4, "同一首歌删行后顺移到 4");
         Ok(())
     }
 
@@ -726,7 +737,7 @@ mod tests {
             .collect::<Vec<SongView>>();
         app.state.library.tracks.insert(pid.clone(), views);
         app.state.library.tracks_generation = 1;
-        app.state.track_pos.insert(
+        app.state.nav.track_pos.insert(
             pid,
             TrackPos {
                 song_id: song("甲").id,
@@ -741,7 +752,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.state.sel_track, 2, "深度命中应压过记忆位置");
+        assert_eq!(app.state.nav.sel_track, 2, "深度命中应压过记忆位置");
         Ok(())
     }
 
@@ -756,7 +767,7 @@ mod tests {
 
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-        app.state.track_pos.insert(
+        app.state.nav.track_pos.insert(
             pid.clone(),
             TrackPos {
                 song_id: song("丙").id,
@@ -765,9 +776,10 @@ mod tests {
             },
         );
         press(&mut app, KeyCode::Char('l'));
-        assert_eq!(app.state.sel_track, 0, "曲目未到先停第 0 行");
+        assert_eq!(app.state.nav.sel_track, 0, "曲目未到先停第 0 行");
         assert!(
             app.state
+                .nav
                 .pending_track_restore
                 .as_ref()
                 .is_some_and(|p| p.playlist == pid),
@@ -777,7 +789,7 @@ mod tests {
         // 退出再进别处之前,pending 不应泄漏到后续进入。
         press(&mut app, KeyCode::Char('h'));
         assert!(
-            app.state.pending_track_restore.is_none(),
+            app.state.nav.pending_track_restore.is_none(),
             "退出 Library 应作废 pending"
         );
         Ok(())
@@ -793,7 +805,7 @@ mod tests {
         // j / g 导航被吞,选中不变。
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.sel_track, 2, "全屏屏蔽列表导航");
+        assert_eq!(app.state.nav.sel_track, 2, "全屏屏蔽列表导航");
 
         // `/` 不进搜索态。
         press(&mut app, KeyCode::Char('/'));

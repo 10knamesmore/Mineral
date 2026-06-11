@@ -54,7 +54,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
-            let sel = state.sel_playlist;
+            let sel = state.nav.sel_playlist;
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|p| {
                     p.data
@@ -75,7 +75,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
             // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
-            let sel = state.sel_track;
+            let sel = state.nav.sel_track;
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|sv| {
                     sv.data
@@ -160,7 +160,7 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.last_sel_change.elapsed() < debounce {
+    if state.nav.last_sel_change.elapsed() < debounce {
         return;
     }
     let Some(id) = selected_track_id(state) else {
@@ -183,7 +183,7 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
 fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
-        .get(state.sel_track)
+        .get(state.nav.sel_track)
         .map(|sv| sv.data.id.clone())
 }
 
@@ -191,7 +191,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let radius = *state.cfg.tui().prefetch().radius();
     let filtered = state.filtered_playlists();
-    let sel = state.sel_playlist;
+    let sel = state.nav.sel_playlist;
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {

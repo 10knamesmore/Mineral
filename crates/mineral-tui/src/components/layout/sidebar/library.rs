@@ -71,7 +71,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
     let placeholder = slot_placeholder(state, theme);
-    let pos = position_label(state.sel_track, tracks.len());
+    let pos = position_label(state.nav.sel_track, tracks.len());
 
     let mut title_spans = vec![Span::styled(
         format!(" {title} "),
@@ -125,20 +125,20 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,收缩中的 viewport 不得改写
     // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
     let offset = if state.fullscreen_pos.at_min() {
-        state.scroll_track.render_offset(
-            state.sel_track,
+        state.nav.scroll_track.render_offset(
+            state.nav.sel_track,
             tracks.len(),
             viewport,
             state.scrolloff(),
             state.list_glide_ticks(),
         )
     } else {
-        state.scroll_track.frozen_offset(tracks.len(), viewport)
+        state.nav.scroll_track.frozen_offset(tracks.len(), viewport)
     };
     let mut table_state = TableState::default()
         .with_offset(offset)
         .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.sel_track,
+            state.nav.sel_track,
             offset,
             viewport,
         )));
@@ -291,7 +291,7 @@ mod tests {
         let bottom_first = row(&t, 2);
         // 安全区 [offset+3, offset+9-1-3] = [24, 26]:逐行上移视口不滚。
         for sel in (24..=28).rev() {
-            app.state.sel_track = sel;
+            app.state.nav.sel_track = sel;
             draw_lib(&mut t, &app.state)?;
             assert_eq!(
                 row(&t, 2),
@@ -300,7 +300,7 @@ mod tests {
             );
         }
         // 越过上安全边界:视口开始上滚,首行变化。
-        app.state.sel_track = 23;
+        app.state.nav.sel_track = 23;
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
@@ -320,7 +320,7 @@ mod tests {
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
-        let before = app.state.scroll_track.target_rows();
+        let before = app.state.nav.scroll_track.target_rows();
         assert!(before > 0, "前置:视口已滚到深处");
 
         // 进入 morph(fullscreen_pos 离开 at_min),面板高度逐帧收缩地渲染。
@@ -333,7 +333,7 @@ mod tests {
             draw_lib(&mut small, &app.state)?;
         }
         assert_eq!(
-            app.state.scroll_track.target_rows(),
+            app.state.nav.scroll_track.target_rows(),
             before,
             "morph 期间滚动目标不得被瞬态 viewport 改写"
         );
@@ -344,7 +344,7 @@ mod tests {
             draw_lib(&mut t, &app.state)?;
         }
         assert_eq!(
-            app.state.scroll_track.target_rows(),
+            app.state.nav.scroll_track.target_rows(),
             before,
             "回浏览态视口首行应与进全屏前一致"
         );
@@ -361,7 +361,7 @@ mod tests {
         let top_first = row(&t, 2);
 
         // G 跳末行:首帧视口应离开顶部但未到底(缓动中段)。
-        app.state.sel_track = 29;
+        app.state.nav.sel_track = 29;
         draw_lib(&mut t, &app.state)?;
         let mid = row(&t, 2);
         assert_ne!(mid, top_first, "G 跳转首帧视口应已起步");
@@ -372,7 +372,7 @@ mod tests {
         assert_ne!(mid, bottom_first, "G 跳转首帧不应一步到底(应是缓动中段)");
 
         // gg 跳回首行:同样多帧缓动收敛回顶。
-        app.state.sel_track = 0;
+        app.state.nav.sel_track = 0;
         draw_lib(&mut t, &app.state)?;
         let mid_back = row(&t, 2);
         assert_ne!(mid_back, bottom_first, "gg 跳转首帧视口应已起步");
@@ -392,7 +392,7 @@ mod tests {
         draw_lib(&mut t, &app.state)?;
         // 下移到 10:offset 收敛到 10+3+1-9 = 5,选中行落在 y = 2 + (10-5) = 7,
         // 距 body 末行(y=10)恰 3 行。
-        app.state.sel_track = 10;
+        app.state.nav.sel_track = 10;
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }

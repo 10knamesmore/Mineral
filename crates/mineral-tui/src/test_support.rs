@@ -79,7 +79,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     s.library
         .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
-    s.sel_track = 1;
+    s.nav.sel_track = 1;
     Ok(s)
 }
 
@@ -347,8 +347,8 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
     app.state.view = View::Library;
-    app.state.sel_playlist = 0;
-    app.state.sel_track = sel_track;
+    app.state.nav.sel_playlist = 0;
+    app.state.nav.sel_track = sel_track;
     Ok(app)
 }
 
@@ -369,7 +369,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
         })
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
-    app.state.sel_track = sel_track;
+    app.state.nav.sel_track = sel_track;
     Ok(app)
 }
 

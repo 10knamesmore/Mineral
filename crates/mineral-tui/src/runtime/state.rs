@@ -1,7 +1,7 @@
 //! 应用全局状态。`library.tracks` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mineral_model::{PlaylistId, Song, SongId, SourceKind};
 use mineral_spectrum::SpectrumComputer;
@@ -13,16 +13,16 @@ use mineral_model::{LyricLine, Lyrics};
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::runtime::playback::Playback;
-use crate::runtime::scroll::ListScroll;
-use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
 mod covers;
 mod library;
+mod nav;
 mod search;
 
 pub use covers::CoverHub;
 pub use library::LibraryData;
+pub use nav::NavState;
 pub use search::SearchState;
 
 /// 左栏当前展示的视图。
@@ -120,25 +120,8 @@ pub struct AppState {
     /// 有覆盖读覆盖、无覆盖读配置)。
     pub ui_overrides: crate::runtime::ui_override::UiOverrides,
 
-    /// Playlists 视图当前选中行。
-    pub sel_playlist: usize,
-
-    /// Playlists 列表的视口滚动态(nvim 手感 + 缓动平移)。
-    pub scroll_playlist: ListScroll,
-
-    /// Library 视图当前选中行。
-    pub sel_track: usize,
-
-    /// Library 列表的视口滚动态。
-    pub scroll_track: ListScroll,
-
-    /// 各歌单的光标位置记忆(`behavior.remember_track_pos` 非 off 时退出 Library
-    /// 记录、再进恢复;persist 档启动时灌入落盘值)。
-    pub track_pos: TrackPosMap,
-
-    /// 进歌单时曲目未就绪而挂起的位置恢复;`PlaylistTracksFetched` 到达时若用户
-    /// 还停在该歌单且光标未动过则补落位,否则作废。
-    pub pending_track_restore: Option<PendingRestore>,
+    /// 列表浏览态(两个列表的光标 + 视口滚动、跨歌单位置记忆、选中变化时刻)。
+    pub nav: NavState,
 
     /// 搜索状态(查询串 / 输入态 + 模糊匹配基建)。
     pub search: SearchState,
@@ -176,10 +159,6 @@ pub struct AppState {
     /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
     pub tasks_snapshot: mineral_task::Snapshot,
 
-    /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
-    /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
-    pub last_sel_change: Instant,
-
     /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
     pub cfg: Arc<mineral_config::Config>,
@@ -206,12 +185,7 @@ impl AppState {
             lyric_scroll: None,
             lyric_scroll_song: None,
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
-            sel_playlist: 0,
-            scroll_playlist: ListScroll::new(),
-            sel_track: 0,
-            scroll_track: ListScroll::new(),
-            track_pos: TrackPosMap::default(),
-            pending_track_restore: None,
+            nav: NavState::new(),
             search: SearchState::new(),
             current: None,
             playback: Playback::new(),
@@ -226,7 +200,6 @@ impl AppState {
                 by_lane: FxHashMap::default(),
                 by_kind: FxHashMap::default(),
             },
-            last_sel_change: Instant::now(),
             cfg,
         }
     }
@@ -239,7 +212,7 @@ impl AppState {
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
     pub fn is_scrolling(&self) -> bool {
-        self.last_sel_change.elapsed()
+        self.nav.last_sel_change.elapsed()
             < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 
@@ -262,29 +235,31 @@ impl AppState {
     ///   - `id`: 刚落 cache 的歌单
     fn apply_pending_restore(&mut self, id: &PlaylistId) {
         if self
+            .nav
             .pending_track_restore
             .as_ref()
             .is_none_or(|p| &p.playlist != id)
         {
             return;
         }
-        let Some(pending) = self.pending_track_restore.take() else {
+        let Some(pending) = self.nav.pending_track_restore.take() else {
             return;
         };
         let still_there = self.view == View::Library
             && self
                 .selected_playlist()
                 .is_some_and(|p| p.data.id == pending.playlist);
-        if !still_there || self.sel_track != 0 {
+        if !still_there || self.nav.sel_track != 0 {
             return;
         }
         let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
             return;
         };
         let sel = pending.pos.resolve(tracks);
-        self.sel_track = sel;
+        self.nav.sel_track = sel;
         // 与 activate 的即时恢复同语义:按屏上相对行还原视口。
-        self.scroll_track
+        self.nav
+            .scroll_track
             .snap_to(sel.saturating_sub(pending.pos.screen_row));
     }
 
@@ -357,8 +332,8 @@ impl AppState {
                 self.library
                     .playlists
                     .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
-                if self.sel_playlist >= self.library.playlists.len() {
-                    self.sel_playlist = 0;
+                if self.nav.sel_playlist >= self.library.playlists.len() {
+                    self.nav.sel_playlist = 0;
                 }
             }
             TaskEvent::PlaylistTracksFetched { id, tracks } => {
@@ -434,15 +409,18 @@ impl AppState {
 
     /// 返回当前选中歌单的引用。
     ///
-    /// `sel_playlist` 的语义随 [`Self::view`] 切换:
+    /// `nav.sel_playlist` 的语义随 [`Self::view`] 切换:
     /// - Playlists 视图:filtered 列表的索引,过滤词作用于 playlist 名,渲染、导航、
     ///   selected_playlist 都对齐 filtered。
     /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
     ///   此时 search.query 作用于 tracks,跟 playlists 过滤无关。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
         match self.view {
-            View::Playlists => self.filtered_playlists().get(self.sel_playlist).copied(),
-            View::Library => self.library.playlists.get(self.sel_playlist),
+            View::Playlists => self
+                .filtered_playlists()
+                .get(self.nav.sel_playlist)
+                .copied(),
+            View::Library => self.library.playlists.get(self.nav.sel_playlist),
         }
     }
 
@@ -688,15 +666,15 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.view = View::Library;
-        s.sel_playlist = 0; // p1
-        s.sel_track = 0;
+        s.nav.sel_playlist = 0; // p1
+        s.nav.sel_track = 0;
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
             .get(2)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 3 首"))?;
-        s.pending_track_restore = Some(PendingRestore {
+        s.nav.pending_track_restore = Some(PendingRestore {
             playlist: pid.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -706,8 +684,8 @@ mod tests {
         });
 
         s.apply(&TaskEvent::PlaylistTracksFetched { id: pid, tracks });
-        assert_eq!(s.sel_track, 2, "曲目到达后应补落位到记忆行");
-        assert!(s.pending_track_restore.is_none(), "pending 应被消费");
+        assert_eq!(s.nav.sel_track, 2, "曲目到达后应补落位到记忆行");
+        assert!(s.nav.pending_track_restore.is_none(), "pending 应被消费");
         Ok(())
     }
 
@@ -723,15 +701,15 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.view = View::Library;
-        s.sel_playlist = 0;
-        s.sel_track = 1; // 已离开进入时的第 0 行
+        s.nav.sel_playlist = 0;
+        s.nav.sel_track = 1; // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
             .get(3)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 4 首"))?;
-        s.pending_track_restore = Some(PendingRestore {
+        s.nav.pending_track_restore = Some(PendingRestore {
             playlist: pid.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -741,8 +719,8 @@ mod tests {
         });
 
         s.apply(&TaskEvent::PlaylistTracksFetched { id: pid, tracks });
-        assert_eq!(s.sel_track, 1, "用户已动光标,不得抢落位");
-        assert!(s.pending_track_restore.is_none(), "pending 仍应被消费");
+        assert_eq!(s.nav.sel_track, 1, "用户已动光标,不得抢落位");
+        assert!(s.nav.pending_track_restore.is_none(), "pending 仍应被消费");
         Ok(())
     }
 
@@ -758,8 +736,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.view = View::Library;
-        s.sel_playlist = 0;
-        s.sel_track = 0;
+        s.nav.sel_playlist = 0;
+        s.nav.sel_track = 0;
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
         let tracks = endserenading(5);
@@ -767,7 +745,7 @@ mod tests {
             .first()
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 为空"))?;
-        s.pending_track_restore = Some(PendingRestore {
+        s.nav.pending_track_restore = Some(PendingRestore {
             playlist: target.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -777,9 +755,10 @@ mod tests {
         });
 
         s.apply(&TaskEvent::PlaylistTracksFetched { id: other, tracks });
-        assert_eq!(s.sel_track, 0);
+        assert_eq!(s.nav.sel_track, 0);
         assert!(
-            s.pending_track_restore
+            s.nav
+                .pending_track_restore
                 .as_ref()
                 .is_some_and(|p| p.playlist == target),
             "非目标歌单到达不应消费 pending"
