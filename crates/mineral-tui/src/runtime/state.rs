@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use mineral_model::{LyricLine, Lyrics};
 
 use crate::components::layout::spectrum::SpectrumState;
-use crate::render::anim::{Toggle, Transition, ticks16_from_ms};
+use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -21,6 +21,7 @@ mod lyric_view;
 mod nav;
 mod player;
 mod search;
+mod view_switch;
 
 pub use covers::CoverHub;
 pub use library::LibraryData;
@@ -28,6 +29,7 @@ pub use lyric_view::LyricView;
 pub use nav::NavState;
 pub use player::PlayerMirror;
 pub use search::SearchState;
+pub use view_switch::ViewSwitch;
 
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,12 +86,9 @@ mod lyric_glide;
 
 /// 应用顶层状态。
 pub struct AppState {
-    /// 左栏当前视图。切换时立即设为目标值,供按键路由;渲染端的过渡位置看 [`Self::view_pos`]。
-    pub view: View,
-
-    /// 左栏 Playlists ↔ Library 横向过渡位置:`0` = Playlists、满值 = Library。
-    /// 切到 Library 调 `enter`、回 Playlists 调 `leave`,中途再反向只改 target 不跳变。
-    pub view_pos: Transition,
+    /// 左栏视图切换:Playlists ↔ Library 两态 + 横向过渡,由 [`ViewSwitch`] 合一。
+    /// `current()` 给路由 / 选中语义、`eased_in_out()` 给渲染;`== View::X` 直接可比。
+    pub view: ViewSwitch,
 
     /// 全屏播放态:逻辑开关(供按键路由)+ 进退场形变进度(供渲染),由 [`Toggle`] 合一。
     /// `on()` = 全屏、`eased_in_out()` = 形变位置。
@@ -153,8 +152,7 @@ impl AppState {
         let anim = cfg.tui().animation();
         let tick_ms = *anim.frame_tick_ms();
         Self {
-            view: View::Playlists,
-            view_pos: Transition::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
+            view: ViewSwitch::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
@@ -392,7 +390,7 @@ impl AppState {
     /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
     ///   此时 search.query 作用于 tracks,跟 playlists 过滤无关。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
-        match self.view {
+        match self.view.current() {
             View::Playlists => self
                 .filtered_playlists()
                 .get(self.nav.sel_playlist)
@@ -642,7 +640,7 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view = View::Library;
+        s.view.switch_to(View::Library);
         s.nav.sel_playlist = 0; // p1
         s.nav.sel_track = 0;
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
@@ -677,7 +675,7 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view = View::Library;
+        s.view.switch_to(View::Library);
         s.nav.sel_playlist = 0;
         s.nav.sel_track = 1; // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
@@ -712,7 +710,7 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view = View::Library;
+        s.view.switch_to(View::Library);
         s.nav.sel_playlist = 0;
         s.nav.sel_track = 0;
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");

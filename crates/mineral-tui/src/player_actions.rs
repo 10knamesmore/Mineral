@@ -61,7 +61,7 @@ impl App {
             } else if self.state.fullscreen.on() {
                 (ViewKind::Fullscreen, None, None)
             } else {
-                match self.state.view {
+                match self.state.view.current() {
                     View::Playlists => (ViewKind::Playlists, None, None),
                     View::Library => {
                         let sel = self
@@ -122,7 +122,7 @@ impl App {
 
     /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
     pub(crate) fn toggle_love_selection(&mut self) {
-        if self.state.fullscreen.on() || !matches!(self.state.view, View::Library) {
+        if self.state.fullscreen.on() || !matches!(self.state.view.current(), View::Library) {
             return;
         }
         let filtered = self.state.filtered_tracks();
@@ -142,7 +142,7 @@ impl App {
         if self.state.fullscreen.on() {
             return;
         }
-        match self.state.view {
+        match self.state.view.current() {
             View::Playlists => {
                 let id = self
                     .state
@@ -213,7 +213,9 @@ mod tests {
     #[test]
     fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.view = crate::runtime::state::View::Playlists;
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Playlists);
         app.state.player.current = None;
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Playlists);

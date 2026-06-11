@@ -16,7 +16,7 @@ pub mod track_detail;
 
 /// 渲染右栏。根据 [`AppState::view`] 选 playlist_detail / track_detail。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker, theme: &Theme) {
-    match state.view {
+    match state.view.current() {
         View::Playlists => match state.selected_playlist() {
             Some(p) => playlist_detail::draw(frame, area, p, state, picker, theme),
             None => paint_empty(frame, area, theme),

@@ -57,7 +57,7 @@ impl App {
 
     /// 搜索词每次变化后,把当前 view 的 sel 拉回 0(视口同步落位,逐字输入不滑屏)。
     fn reset_sel_for_search(&mut self) {
-        match self.state.view {
+        match self.state.view.current() {
             View::Playlists => {
                 self.state.nav.sel_playlist = 0;
                 self.state.nav.scroll_playlist.snap_to(0);
@@ -110,11 +110,11 @@ impl App {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
-        let max = match self.state.view {
+        let max = match self.state.view.current() {
             View::Playlists => self.state.filtered_playlists().len().saturating_sub(1),
             View::Library => self.state.filtered_tracks().len().saturating_sub(1),
         };
-        let sel = match self.state.view {
+        let sel = match self.state.view.current() {
             View::Playlists => &mut self.state.nav.sel_playlist,
             View::Library => &mut self.state.nav.sel_track,
         };
@@ -136,7 +136,7 @@ impl App {
         let delta = scroll::step_delta(step, self.state.cfg.tui().behavior());
         let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
         let ticks = self.state.list_glide_ticks();
-        let list = match self.state.view {
+        let list = match self.state.view.current() {
             View::Playlists => &self.state.nav.scroll_playlist,
             View::Library => &self.state.nav.scroll_track,
         };
@@ -155,7 +155,7 @@ impl App {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
-        match self.state.view {
+        match self.state.view.current() {
             View::Playlists => {
                 // 上一次进歌单挂的延迟恢复(曲目未到就退出来了)就此作废。
                 self.state.nav.pending_track_restore = None;
@@ -211,8 +211,7 @@ impl App {
                         }
                     }
                 }
-                self.state.view = View::Library;
-                self.state.view_pos.enter();
+                self.state.view.switch_to(View::Library);
                 self.state.nav.sel_track = sel_track;
                 // 视口直接落位(记忆按屏上相对行还原;命中歌上方留 scrolloff;
                 // 无命中即从头看),不从上张歌单的深处滑回来。
@@ -255,11 +254,10 @@ impl App {
             self.reset_sel_for_search();
             return;
         }
-        if matches!(self.state.view, View::Library) {
+        if matches!(self.state.view.current(), View::Library) {
             self.remember_track_pos();
             self.state.nav.pending_track_restore = None;
-            self.state.view = View::Playlists;
-            self.state.view_pos.leave();
+            self.state.view.switch_to(View::Playlists);
         }
     }
 
@@ -348,7 +346,9 @@ mod tests {
 
         // Playlists:3 张歌单,同一组键作用于 sel_playlist。
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
-        app.state.view = crate::runtime::state::View::Playlists;
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Playlists);
         app.state.library.playlists = vec![
             crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("p2", "B", SourceKind::NETEASE, 1),
@@ -370,7 +370,9 @@ mod tests {
     #[test]
     fn l_enters_library_enter_plays() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 2)?;
-        app.state.view = crate::runtime::state::View::Playlists;
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Playlists);
         app.state.nav.sel_playlist = 0;
 
         press(&mut app, KeyCode::Char('l'));
@@ -590,7 +592,9 @@ mod tests {
 
         // Library 视图按 `/` 不触发补拉(深度搜索只服务 Playlists 过滤)。
         press(&mut app, KeyCode::Esc);
-        app.state.view = crate::runtime::state::View::Library;
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Library);
         app.state.library.tracks_requested.clear();
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
@@ -645,10 +649,12 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = crate::test_support::app_with_long_library(100, /*sel_track*/ 0)?;
-        // fixture 只设了 view 标志;sidebar 按 view_pos 端点选画哪个视图,推到 Library 端。
-        app.state.view_pos.enter();
+        // sidebar 按 view 过渡端点选画哪个视图,推到 Library 端(at_max)。
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Library);
         for _ in 0..40 {
-            app.state.view_pos.tick();
+            app.state.view.tick();
         }
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         app.state.nav.sel_track = 50;

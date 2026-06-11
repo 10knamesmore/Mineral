@@ -50,7 +50,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             out.push((source, u.clone()));
         }
     };
-    match state.view {
+    match state.view.current() {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn collects_playing_track_and_queue_neighbors() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.view = View::Playlists;
+        state.view.switch_to(View::Playlists);
         let queue = (0..10)
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.view = View::Playlists;
+        state.view.switch_to(View::Playlists);
         state.player.queue = Vec::new();
         state.playback.track = Some(song_with_cover(42)?);
 

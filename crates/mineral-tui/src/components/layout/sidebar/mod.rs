@@ -12,10 +12,10 @@ pub mod library;
 pub mod playlists;
 mod sweep;
 
-/// 渲染左栏。过渡位置 [`AppState::view_pos`] 在端点时直接画对应单视图(零开销),中途则
+/// 渲染左栏。过渡位置 [`AppState::view`] 在端点时直接画对应单视图(零开销),中途则
 /// 走 [`sweep`] 离屏合成出 Playlists ↔ Library 的横向过渡帧。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    let vp = &state.view_pos;
+    let vp = &state.view;
     if vp.at_min() {
         playlists::render_to(frame.buffer_mut(), area, state, theme);
     } else if vp.at_max() {

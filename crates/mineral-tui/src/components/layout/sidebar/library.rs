@@ -426,7 +426,7 @@ mod tests {
     fn library_loading_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.view = View::Library;
+        state.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());

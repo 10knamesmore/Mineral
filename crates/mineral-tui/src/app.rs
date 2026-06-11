@@ -255,7 +255,7 @@ impl App {
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
-                self.state.view_pos.tick();
+                self.state.view.tick();
                 self.state.fullscreen.tick();
                 self.state.dim.tick();
                 self.state.tick_lyric_scroll();
@@ -1026,7 +1026,9 @@ mod tests {
     fn shift_q_in_search_mode_types_into_query() -> color_eyre::Result<()> {
         let (mut app, shutdowns) = {
             let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
-            app.state.view = crate::runtime::state::View::Library;
+            app.state
+                .view
+                .switch_to(crate::runtime::state::View::Library);
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
@@ -1197,7 +1199,9 @@ mod tests {
         );
 
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
-        app.state.view = crate::runtime::state::View::Playlists;
+        app.state
+            .view
+            .switch_to(crate::runtime::state::View::Playlists);
         press(&mut app, KeyCode::Char('d'));
         assert_eq!(app.state.nav.sel_playlist, 0, "Playlists d 不动选中");
         assert_eq!(

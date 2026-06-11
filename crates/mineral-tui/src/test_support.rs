@@ -63,7 +63,7 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
 /// 当前在播标记),view = Library,选中第 1 首。
 pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     let mut s = state_with_playlists()?;
-    s.view = View::Library;
+    s.view.switch_to(View::Library);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
     let views = tracks
@@ -131,7 +131,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
         SourceKind::NETEASE,
         10,
     )];
-    s.view = View::Library;
+    s.view.switch_to(View::Library);
     let tracks = chinese_football(4);
     let views = tracks
         .iter()
@@ -154,7 +154,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
 pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     s.library.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
-    s.view = View::Library;
+    s.view.switch_to(View::Library);
 
     let make = |name: &str, artist: &str, album: &str| {
         with_album(
@@ -317,7 +317,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
-    app.state.view = View::Playlists;
+    app.state.view.switch_to(View::Playlists);
     Ok((app, submitted))
 }
 
@@ -346,7 +346,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
         })
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
-    app.state.view = View::Library;
+    app.state.view.switch_to(View::Library);
     app.state.nav.sel_playlist = 0;
     app.state.nav.sel_track = sel_track;
     Ok(app)
