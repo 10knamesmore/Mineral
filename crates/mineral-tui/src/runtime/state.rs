@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mineral_model::{PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{PlaylistId, Song, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
 use rustc_hash::FxHashMap;
@@ -17,12 +17,14 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 
 mod covers;
 mod library;
+mod lyric_view;
 mod nav;
 mod player;
 mod search;
 
 pub use covers::CoverHub;
 pub use library::LibraryData;
+pub use lyric_view::LyricView;
 pub use nav::NavState;
 pub use player::PlayerMirror;
 pub use search::SearchState;
@@ -80,8 +82,6 @@ impl LyricExtra {
 
 mod lyric_glide;
 
-use lyric_glide::LyricGlide;
-
 /// 应用顶层状态。
 pub struct AppState {
     /// 左栏当前视图。切换时立即设为目标值,供按键路由;渲染端的过渡位置看 [`Self::view_pos`]。
@@ -109,14 +109,8 @@ pub struct AppState {
     /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
     pub library: LibraryData,
 
-    /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
-    pub lyric_extra: LyricExtra,
-
-    /// 全屏歌词手动滚动的「脱离播放」态;`None` = 附着态(渲染跟随播放,逐行时间驱动平滑)。
-    lyric_scroll: Option<LyricGlide>,
-
-    /// 手动滚动绑定的歌;换歌即清滚动偏移。
-    lyric_scroll_song: Option<SongId>,
+    /// 歌词面板显示态(副歌词档 + 全屏手动滚动脱离态)。
+    pub lyric_view: LyricView,
 
     /// 脚本下发的 session 级旋钮覆盖(`Event::UiOverride` 落地;渲染处
     /// 有覆盖读覆盖、无覆盖读配置)。
@@ -172,9 +166,7 @@ impl AppState {
             focused: true,
             focus_fade: Transition::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
-            lyric_extra: LyricExtra::None,
-            lyric_scroll: None,
-            lyric_scroll_song: None,
+            lyric_view: LyricView::new(),
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             nav: NavState::new(),
             search: SearchState::new(),
@@ -368,7 +360,7 @@ impl AppState {
     /// 当前生效的副歌词档(当前歌确有该档数据才算生效;`None` 档 / 该档无数据返回 `None`)。
     pub fn active_lyric_extra(&self) -> Option<LyricExtra> {
         let l = self.current_lyrics_set()?;
-        match self.lyric_extra {
+        match self.lyric_view.extra {
             LyricExtra::None => None,
             LyricExtra::Translation if l.has_translation() => Some(LyricExtra::Translation),
             LyricExtra::Romanization if l.has_romanization() => Some(LyricExtra::Romanization),
@@ -385,7 +377,7 @@ impl AppState {
         let has_roma = self
             .current_lyrics_set()
             .is_some_and(Lyrics::has_romanization);
-        self.lyric_extra = match self.lyric_extra {
+        self.lyric_view.extra = match self.lyric_view.extra {
             LyricExtra::None if has_trans => LyricExtra::Translation,
             LyricExtra::None if has_roma => LyricExtra::Romanization,
             LyricExtra::None => LyricExtra::None,

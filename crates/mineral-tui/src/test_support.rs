@@ -105,7 +105,7 @@ pub(crate) fn state_with_lyrics(
     s.library.lyrics.insert(track.id.clone(), lyrics);
     s.playback.track = Some(track);
     s.playback.position_ms = 62_000;
-    s.lyric_extra = extra;
+    s.lyric_view.extra = extra;
     Ok(s)
 }
 

@@ -28,7 +28,7 @@ enum GlidePhase {
 /// 位置走);锚点在 `from_milli` → `to_milli` 间按 cubic ease-out 平移,得到平滑滚动。
 /// synced 歌空闲超时把目标切回当前播放行,**回锚同样走这条平移通道**;边界过冲的弹回
 /// 也是——同一条曲线,只是目标不同。
-pub(super) struct LyricGlide {
+pub(crate) struct LyricGlide {
     /// 平移起点(milli-line = 原文行号 × 1000)。每设新目标时置为当前动画位置,故连按 /
     /// 中途回锚都从眼前位置接着滑、不跳。
     from_milli: i64,
@@ -94,12 +94,13 @@ impl AppState {
             ScrollStep::PageUp => -page,
         };
         // 基准:已脱离则用现有目标行,否则用播放当前行(脱离瞬间锚在眼前)。
-        let base = match &self.lyric_scroll {
+        let base = match &self.lyric_view.scroll {
             Some(g) => g.target_line(),
             None => self.current_line_anchor(),
         };
         let from_milli = self
-            .lyric_scroll
+            .lyric_view
+            .scroll
             .as_ref()
             .map_or(base * 1000, LyricGlide::pos_milli);
         let raw = base.saturating_add(delta);
@@ -118,7 +119,7 @@ impl AppState {
             }
         };
         let glide = Transition::expanding(self.glide_ticks());
-        self.lyric_scroll = Some(LyricGlide {
+        self.lyric_view.scroll = Some(LyricGlide {
             from_milli,
             to_milli: clamped * 1000 + overshoot_milli,
             glide,
@@ -132,16 +133,16 @@ impl AppState {
     /// 到当前播放行,无时间戳歌停在手动位置不回(无锚点可回)。
     pub(crate) fn tick_lyric_scroll(&mut self) {
         let changed =
-            self.playback.track.as_ref().map(|s| &s.id) != self.lyric_scroll_song.as_ref();
+            self.playback.track.as_ref().map(|s| &s.id) != self.lyric_view.scroll_song.as_ref();
         if changed {
-            self.lyric_scroll_song = self.playback.track.as_ref().map(|s| s.id.clone());
-            self.lyric_scroll = None;
+            self.lyric_view.scroll_song = self.playback.track.as_ref().map(|s| s.id.clone());
+            self.lyric_view.scroll = None;
             return;
         }
-        if self.lyric_scroll.is_none() {
+        if self.lyric_view.scroll.is_none() {
             return;
         }
-        // 借用 lyric_scroll 前先把依赖 &self 的量算好,避免重叠借用。
+        // 借用 lyric_view.scroll 前先把依赖 &self 的量算好,避免重叠借用。
         let synced = self.current_lines().is_some_and(mineral_model::has_timed);
         let reattach_ticks = ticks16_from_ms(
             *self.cfg.tui().lyrics().reattach_ms(),
@@ -149,7 +150,7 @@ impl AppState {
         );
         let cur_line = self.current_line_anchor();
         let glide_ticks = self.glide_ticks();
-        let Some(g) = self.lyric_scroll.as_mut() else {
+        let Some(g) = self.lyric_view.scroll.as_mut() else {
             return;
         };
         g.glide.tick();
@@ -174,7 +175,7 @@ impl AppState {
         }
         if g.phase == GlidePhase::Reattach {
             if g.glide.settled() {
-                self.lyric_scroll = None;
+                self.lyric_view.scroll = None;
             }
             return;
         }
@@ -210,13 +211,14 @@ impl AppState {
     /// (渲染跟随播放)。仅全屏沉浸态读取——紧凑面板恒附着,不吃手动偏移。
     /// 过冲段 / 弹回中锚点可短暂越出 `[0, 内容行数-1]`,渲染端沿行距外推画出回弹帧。
     pub(crate) fn manual_lyric_anchor_milli(&self) -> Option<i64> {
-        self.lyric_scroll.as_ref().map(LyricGlide::pos_milli)
+        self.lyric_view.scroll.as_ref().map(LyricGlide::pos_milli)
     }
 
     /// 脱离态当前锚定的原文行(渲染端给它半程高亮,标记手动浏览焦点);`None` = 附着态。
     /// 回锚平移期间目标即播放行,与 now-playing 高亮自然合一。
     pub(crate) fn manual_lyric_focus_line(&self) -> Option<usize> {
-        self.lyric_scroll
+        self.lyric_view
+            .scroll
             .as_ref()
             .and_then(|g| usize::try_from(g.target_line()).ok())
     }
@@ -232,7 +234,7 @@ impl AppState {
     /// 模拟过冲中帧供渲染快照)。
     #[cfg(test)]
     pub(crate) fn debug_scroll_lyrics_to_milli(&mut self, milli: i64) {
-        self.lyric_scroll = Some(LyricGlide {
+        self.lyric_view.scroll = Some(LyricGlide {
             from_milli: milli,
             to_milli: milli,
             glide: Transition::expanding(1),
@@ -285,12 +287,12 @@ mod tests {
 
     /// 锚定目标行(整数 line index);附着态返回 `None`。
     fn target(s: &AppState) -> Option<i64> {
-        s.lyric_scroll.as_ref().map(LyricGlide::target_line)
+        s.lyric_view.scroll.as_ref().map(LyricGlide::target_line)
     }
 
     /// 平移目标(milli-line,过冲时越出内容界);附着态返回 `None`。
     fn to_milli(s: &AppState) -> Option<i64> {
-        s.lyric_scroll.as_ref().map(|g| g.to_milli)
+        s.lyric_view.scroll.as_ref().map(|g| g.to_milli)
     }
 
     /// 步长随默认配置算(`behavior.page_scroll_rows` / `line_scroll_rows` 是手感旋钮,
@@ -303,7 +305,7 @@ mod tests {
         assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
         s.fullscreen = false;
         s.scroll_lyrics(ScrollStep::PageDown);
-        assert!(s.lyric_scroll.is_none(), "非全屏不接管滚动");
+        assert!(s.lyric_view.scroll.is_none(), "非全屏不接管滚动");
         s.fullscreen = true;
         // position 0 → 当前播放行 0;翻页锚定到 0 + page。
         s.scroll_lyrics(ScrollStep::PageDown);
@@ -412,7 +414,10 @@ mod tests {
         for _ in 0..3000 {
             s.tick_lyric_scroll();
         }
-        assert!(s.lyric_scroll.is_none(), "过冲弹回后空闲超时仍正常回锚");
+        assert!(
+            s.lyric_view.scroll.is_none(),
+            "过冲弹回后空闲超时仍正常回锚"
+        );
         Ok(())
     }
 
@@ -427,7 +432,7 @@ mod tests {
             s.tick_lyric_scroll();
         }
         assert!(
-            s.lyric_scroll.is_none(),
+            s.lyric_view.scroll.is_none(),
             "synced 歌空闲超时平滑回锚后归附着"
         );
         Ok(())
@@ -455,7 +460,7 @@ mod tests {
         assert_eq!(target(&s), Some(page));
         s.playback.track = Some(feiyu_song());
         s.tick_lyric_scroll();
-        assert!(s.lyric_scroll.is_none(), "换歌清脱离态");
+        assert!(s.lyric_view.scroll.is_none(), "换歌清脱离态");
         Ok(())
     }
 

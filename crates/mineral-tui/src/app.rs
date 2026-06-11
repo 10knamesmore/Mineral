@@ -152,7 +152,7 @@ impl App {
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
         state.covers.encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
-        state.lyric_extra = ui_prefs.initial_lyric_extra();
+        state.lyric_view.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
         state.nav.track_pos = ui_prefs.initial_track_pos().clone();
@@ -611,7 +611,7 @@ impl App {
     /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
     fn cycle_lyric_extra(&mut self) {
         self.state.cycle_lyric_extra();
-        self.ui_prefs.save_lyric_extra(self.state.lyric_extra);
+        self.ui_prefs.save_lyric_extra(self.state.lyric_view.extra);
     }
 
     /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
