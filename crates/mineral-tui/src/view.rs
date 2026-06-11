@@ -143,6 +143,7 @@ fn prewarm_upcoming(app: &App, area: Rect) {
     for d in 1..=*app.state.cfg.tui().prefetch().prewarm_ahead() {
         if let Some(url) = app
             .state
+            .player
             .queue
             .get(pos.saturating_add(d))
             .and_then(|s| s.cover_url.as_ref())
@@ -310,7 +311,7 @@ mod tests {
         // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
         for i in 0..3 {
             let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
-            if let Some(s) = app.state.queue.get_mut(i) {
+            if let Some(s) = app.state.player.queue.get_mut(i) {
                 s.cover_url = Some(url.clone());
             }
             if i <= 1 {
@@ -319,7 +320,7 @@ mod tests {
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
-        app.state.playback.track = app.state.queue.first().cloned();
+        app.state.playback.track = app.state.player.queue.first().cloned();
         // 稳态全屏:fullscreen_pos 一步推到满值。
         let mut fs = Transition::new(1);
         fs.enter();

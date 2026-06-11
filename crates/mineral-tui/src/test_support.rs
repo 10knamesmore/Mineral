@@ -75,7 +75,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
             plays: plays.get(i).copied(),
         })
         .collect::<Vec<SongView>>();
-    s.current = tracks.first().cloned();
+    s.player.current = tracks.first().cloned();
     s.library
         .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
@@ -141,7 +141,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
             plays: None,
         })
         .collect::<Vec<SongView>>();
-    s.current = tracks.first().cloned();
+    s.player.current = tracks.first().cloned();
     s.library
         .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
@@ -176,7 +176,7 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
             plays: None,
         })
         .collect::<Vec<SongView>>();
-    s.current = tracks.first().cloned();
+    s.player.current = tracks.first().cloned();
     s.library
         .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
@@ -275,8 +275,8 @@ fn test_app_with(client: Arc<dyn Client>) -> color_eyre::Result<App> {
 fn fill_queue(app: &mut App, len: usize, current_idx: usize) {
     let queue = endserenading(len);
     app.state.playback.track = queue.get(current_idx).cloned();
-    app.state.current = queue.get(current_idx).cloned();
-    app.state.queue = queue;
+    app.state.player.current = queue.get(current_idx).cloned();
+    app.state.player.queue = queue;
 }
 
 /// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
@@ -384,8 +384,8 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
         .insert(track.id.clone(), qianzai_lyrics());
     app.state.playback.track = Some(track.clone());
     app.state.playback.position_ms = 62_000;
-    app.state.current = Some(track);
-    app.state.queue = endserenading(3);
+    app.state.player.current = Some(track);
+    app.state.player.queue = endserenading(3);
     // 稳态全屏:fullscreen_pos 一步推到满值(step=1000)。
     let mut fs = Transition::new(1);
     fs.enter();

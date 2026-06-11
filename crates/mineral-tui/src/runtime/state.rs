@@ -18,11 +18,13 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 mod covers;
 mod library;
 mod nav;
+mod player;
 mod search;
 
 pub use covers::CoverHub;
 pub use library::LibraryData;
 pub use nav::NavState;
+pub use player::PlayerMirror;
 pub use search::SearchState;
 
 /// 左栏当前展示的视图。
@@ -126,8 +128,8 @@ pub struct AppState {
     /// 搜索状态(查询串 / 输入态 + 模糊匹配基建)。
     pub search: SearchState,
 
-    /// 当前正在播放(用于 Library 视图行首 ♫ 标记)。
-    pub current: Option<Song>,
+    /// server 权威播放态镜像(在播歌 / 队列 / 洗牌备份 / 同步版本号)。
+    pub player: PlayerMirror,
 
     /// 播放状态机。
     pub playback: Playback,
@@ -137,17 +139,6 @@ pub struct AppState {
 
     /// 频谱 FFT 计算器:吃 PCM 样本,出 64 根条的目标高度。
     pub fft: SpectrumComputer,
-
-    /// 浮动 queue 当前曲目列表(后端权威态)。
-    pub queue: Vec<Song>,
-
-    /// 上次已应用的 server 状态版本号(每 tick 随 PlayerSync 回报;0 = 还没同步过,
-    /// 首次同步必然全量)。
-    pub versions: mineral_protocol::PlayerVersions,
-
-    /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
-    /// 非 Shuffle 状态恒为 `None`。
-    pub original_queue: Option<Vec<Song>>,
 
     /// 封面管线状态(原图/色板缓存、在飞集合、已编码协议)。
     pub covers: CoverHub,
@@ -187,13 +178,10 @@ impl AppState {
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             nav: NavState::new(),
             search: SearchState::new(),
-            current: None,
+            player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
-            queue: Vec::new(),
-            versions: mineral_protocol::PlayerVersions::default(),
-            original_queue: None,
             covers: CoverHub::new(),
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
@@ -447,7 +435,7 @@ impl AppState {
     /// 当前在播歌在 queue 中的下标(打开浮层时把光标定位到此)。无在播曲返回 `None`。
     pub fn queue_current_index(&self) -> Option<usize> {
         let id = &self.playback.track.as_ref()?.id;
-        self.queue.iter().position(|s| &s.id == id)
+        self.player.queue.iter().position(|s| &s.id == id)
     }
 
     /// 当前可见(被 search 过滤)的歌单列表。
@@ -569,7 +557,7 @@ mod tests {
         let mut s = AppState::test_default()?;
         let queue = endserenading(5);
         s.playback.track = queue.get(2).cloned();
-        s.queue = queue;
+        s.player.queue = queue;
         assert_eq!(s.queue_current_index(), Some(2));
 
         s.playback.track = None;

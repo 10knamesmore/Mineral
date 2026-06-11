@@ -33,7 +33,7 @@ impl App {
     /// `selected_loved` 随选中歌给(♥ 装饰缓存),`search_query` 空词为 `None`。
     pub(crate) fn collect_key_context(&self) -> mineral_protocol::KeyContext {
         use mineral_protocol::{KeyContext, PlaylistRef, ViewKind};
-        let now_playing = self.state.current.clone().map(Box::new);
+        let now_playing = self.state.player.current.clone().map(Box::new);
         let selected_playlist = self.state.selected_playlist().map(|p| PlaylistRef {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
@@ -47,7 +47,7 @@ impl App {
         // Library 列表取选中行(SongView 已装饰)。
         let (view, selected_song, selected_loved) =
             if let Some(cursor) = self.overlays.active_queue_cursor() {
-                let song = self.state.queue.get(cursor).cloned();
+                let song = self.state.player.queue.get(cursor).cloned();
                 let loved = song.as_ref().map(|s| {
                     self.state
                         .library
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn keyctx_library_view_collects_selection() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 1)?;
-        app.state.current = app
+        app.state.player.current = app
             .state
             .filtered_tracks()
             .first()
@@ -203,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state.current.as_ref().map(|s| s.id.clone())
+            app.state.player.current.as_ref().map(|s| s.id.clone())
         );
         assert_eq!(*ctx.search_query(), None, "无过滤词为 None");
         Ok(())
@@ -214,7 +214,7 @@ mod tests {
     fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
         app.state.view = crate::runtime::state::View::Playlists;
-        app.state.current = None;
+        app.state.player.current = None;
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Playlists);
         assert!(ctx.selected_song().is_none());
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(*ctx.view(), ViewKind::Queue);
         assert_eq!(
             ctx.selected_song().as_ref().map(|s| s.id.clone()),
-            app.state.queue.get(2).map(|s| s.id.clone()),
+            app.state.player.queue.get(2).map(|s| s.id.clone()),
             "浮层光标所指条目算选中"
         );
         assert_eq!(
@@ -254,7 +254,7 @@ mod tests {
         assert!(ctx.selected_song().is_none());
         assert_eq!(
             ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state.current.as_ref().map(|s| s.id.clone())
+            app.state.player.current.as_ref().map(|s| s.id.clone())
         );
         Ok(())
     }

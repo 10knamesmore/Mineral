@@ -154,7 +154,11 @@ fn build_row<'a>(
     theme: &Theme,
     layout: TrackLayout,
 ) -> Row<'a> {
-    let is_current = state.current.as_ref().is_some_and(|c| c.id == sv.data.id);
+    let is_current = state
+        .player
+        .current
+        .as_ref()
+        .is_some_and(|c| c.id == sv.data.id);
 
     // 像 vim signcolumn 一样的 gutter:loved 显 ♥,否则空。永远占一格,
     // 不抖动后续列。

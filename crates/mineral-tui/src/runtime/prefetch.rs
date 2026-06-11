@@ -95,7 +95,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     }
 
     // 在播曲与浏览选中解耦:全屏直接渲染在播曲,自动切歌也要让接下来几首封面就绪。沿
-    // `state.queue`(已应用 shuffle 的有效播放顺序)给在播曲 ± `playback_cover_radius`
+    // `state.player.queue`(已应用 shuffle 的有效播放顺序)给在播曲 ± `playback_cover_radius`
     // 预取;在播曲自身即便不在队列(单首试听 / 队列刚换)也单独保一张。
     if let Some(track) = state.playback.track.as_ref() {
         push_if_new(song_cover(track), &mut out);
@@ -103,11 +103,11 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     if let Some(pos) = state.queue_current_index() {
         for d in 1..=playback_radius {
             if let Some(idx) = pos.checked_sub(d)
-                && let Some(s) = state.queue.get(idx)
+                && let Some(s) = state.player.queue.get(idx)
             {
                 push_if_new(song_cover(s), &mut out);
             }
-            if let Some(s) = state.queue.get(pos.saturating_add(d)) {
+            if let Some(s) = state.player.queue.get(pos.saturating_add(d)) {
                 push_if_new(song_cover(s), &mut out);
             }
         }
@@ -251,7 +251,7 @@ mod tests {
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
         state.playback.track = queue.get(5).cloned();
-        state.queue = queue;
+        state.player.queue = queue;
 
         // 在播曲 idx 5,半径 3 → idx 2..=8 应全部入集。
         for i in 2..=8 {
@@ -271,7 +271,7 @@ mod tests {
     fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
         state.view = View::Playlists;
-        state.queue = Vec::new();
+        state.player.queue = Vec::new();
         state.playback.track = Some(song_with_cover(42)?);
 
         assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");

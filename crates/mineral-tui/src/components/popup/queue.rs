@@ -74,7 +74,7 @@ impl Overlay for QueueOverlay {
             .border_style(Style::new().fg(border_color))
             .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
             .title_bottom(
-                Line::from(position_label(self.sel, ctx.queue.len()))
+                Line::from(position_label(self.sel, ctx.player.queue.len()))
                     .style(Style::new().fg(theme.overlay)),
             )
             .title_bottom(
@@ -93,6 +93,7 @@ impl Overlay for QueueOverlay {
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
         let rows: Vec<Row<'_>> = ctx
+            .player
             .queue
             .iter()
             .enumerate()
@@ -115,7 +116,7 @@ impl Overlay for QueueOverlay {
         let viewport = usize::from(inner.height.saturating_sub(1));
         let offset = self.scroll.render_offset(
             self.sel,
-            ctx.queue.len(),
+            ctx.player.queue.len(),
             viewport,
             ctx.scrolloff(),
             ctx.list_glide_ticks(),
@@ -133,7 +134,7 @@ impl Overlay for QueueOverlay {
     }
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
-        let max = ctx.queue.len().saturating_sub(1);
+        let max = ctx.player.queue.len().saturating_sub(1);
         match action {
             Action::MoveSelection(mv) => {
                 self.sel = match mv {
@@ -288,7 +289,7 @@ mod tests {
         let mut s = AppState::test_default()?;
         let queue = endserenading(len);
         s.playback.track = current.and_then(|i| queue.get(i).cloned());
-        s.queue = queue;
+        s.player.queue = queue;
         Ok(s)
     }
 
@@ -418,7 +419,7 @@ mod tests {
         use crate::runtime::action::ScrollStep;
         // EndSerenading fixture 只有 10 首,翻页步长不止 10 行,队列要更长。
         let mut ctx = AppState::test_default()?;
-        ctx.queue = (0..100)
+        ctx.player.queue = (0..100)
             .map(|i| mineral_test::song(&format!("q{i}")))
             .collect();
         let page = *ctx.cfg.tui().behavior().page_scroll_rows();

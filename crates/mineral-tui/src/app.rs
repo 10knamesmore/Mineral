@@ -188,7 +188,7 @@ impl App {
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         // 启动时同步一次(versions 初始为 0 → 必然全量),in-proc / connect 都立即
         // 看到 server 状态;与 tick 路径同一条 sync 通道,无特殊分支。
-        let sync = self.client.player_sync(self.state.versions);
+        let sync = self.client.player_sync(self.state.player.versions);
         self.apply_player_sync(sync);
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
@@ -260,7 +260,7 @@ impl App {
                 self.state.focus_fade.tick();
                 self.state.tick_lyric_scroll();
                 self.tick_overlays();
-                let sync = self.client.player_sync(self.state.versions);
+                let sync = self.client.player_sync(self.state.player.versions);
                 self.apply_player_sync(sync);
                 self.state.covers.drain_ready_covers(&self.cover_fetcher);
                 self.sync_spectrum_palette();
@@ -340,7 +340,7 @@ impl App {
             covers_cached = s.covers.cache.len(),
             covers_pending = s.covers.pending.len(),
             liked,
-            queue_len = s.queue.len(),
+            queue_len = s.player.queue.len(),
             "client status"
         );
     }
@@ -350,19 +350,19 @@ impl App {
     /// 核心语义:**重段缺席 ≠ 清空**——`None` 表示「与已有版本一致」,镜像原地保持;
     /// 只有 `Some` 才整体替换。轻段(play_mode / play_origin)每 tick 照常灌。
     fn apply_player_sync(&mut self, sync: PlayerSync) {
-        self.state.versions = sync.versions;
+        self.state.player.versions = sync.versions;
         self.state.playback.play_origin = sync.play_origin;
         self.state.playback.mode = sync.play_mode;
         if let Some(q) = sync.queue {
-            self.state.queue = q.queue;
-            self.state.original_queue = q.original_queue;
+            self.state.player.queue = q.queue;
+            self.state.player.original_queue = q.original_queue;
             // 不灌 sync.queue_sel —— 那是 server 的「在播位置锚点」(prev/next 用),语义
             // 不同于 UI 光标;在播歌已由 ▶ 标记单独表达。queue 浮层光标是纯客户端态,
             // 只钳防越界。
-            self.overlays.clamp_queue(self.state.queue.len());
+            self.overlays.clamp_queue(self.state.player.queue.len());
         }
         if let Some(c) = sync.current {
-            self.state.current = c.current_song.clone();
+            self.state.player.current = c.current_song.clone();
             self.state.playback.track = c.current_song;
             self.state.playback.play_url = c.play_url;
             // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
@@ -389,6 +389,7 @@ impl App {
     fn sync_spectrum_palette(&mut self) {
         let cur = self
             .state
+            .player
             .current
             .as_ref()
             .and_then(|s| s.cover_url.clone());
@@ -624,7 +625,7 @@ impl App {
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::PlayQueueIndex(i) => {
-                if let Some(song) = self.state.queue.get(i).cloned() {
+                if let Some(song) = self.state.player.queue.get(i).cloned() {
                     self.client.play_song(song);
                 }
             }
@@ -693,7 +694,7 @@ mod tests {
         let red = MediaUrl::remote("https://example.com/red.jpg")?;
         let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
         // 当前在播这首歌封面是 blue,但频谱上一张应用的是 red。
-        if let Some(song) = app.state.current.as_mut() {
+        if let Some(song) = app.state.player.current.as_mut() {
             song.cover_url = Some(blue);
         }
         app.state.covers.spectrum_cover = Some(red.clone());
@@ -712,7 +713,7 @@ mod tests {
     fn sync_spectrum_begins_transition_when_palette_ready() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
-        if let Some(song) = app.state.current.as_mut() {
+        if let Some(song) = app.state.player.current.as_mut() {
             song.cover_url = Some(blue.clone());
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
@@ -860,15 +861,22 @@ mod tests {
     #[test]
     fn light_only_sync_keeps_queue_and_current() -> color_eyre::Result<()> {
         let mut app = app_with_queue(6, /*current_idx*/ 2)?;
-        let queue_before = app.state.queue.len();
-        let current_before = app.state.current.clone();
+        let queue_before = app.state.player.queue.len();
+        let current_before = app.state.player.current.clone();
         assert!(current_before.is_some(), "前置:有在播歌");
 
         // 稳态 tick:两重段都缺席,只有轻段。
         app.apply_player_sync(PlayerSync::default());
 
-        assert_eq!(app.state.queue.len(), queue_before, "queue 不得被清空");
-        assert_eq!(app.state.current, current_before, "current 不得被清空");
+        assert_eq!(
+            app.state.player.queue.len(),
+            queue_before,
+            "queue 不得被清空"
+        );
+        assert_eq!(
+            app.state.player.current, current_before,
+            "current 不得被清空"
+        );
         Ok(())
     }
 
@@ -888,9 +896,9 @@ mod tests {
             ..Default::default()
         };
         app.apply_player_sync(sync);
-        assert_eq!(app.state.queue.len(), 4, "queue 重段应整体替换");
-        assert_eq!(app.state.versions.queue, 7);
-        assert_eq!(app.state.versions.current, 9);
+        assert_eq!(app.state.player.queue.len(), 4, "queue 重段应整体替换");
+        assert_eq!(app.state.player.versions.queue, 7);
+        assert_eq!(app.state.player.versions.current, 9);
         Ok(())
     }
 
