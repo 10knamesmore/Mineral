@@ -25,7 +25,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 /// 终端失焦时整行前景向背景色渐变(满进度混 [`UNFOCUS_BLEND_PERMILLE`]),
 /// 渲染后整行后处理,与「画什么」解耦。聚焦稳态(进度 0)零开销跳过。
 fn dim_unfocused(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    let t = state.focus_fade.eased_in_out();
+    let t = state.dim.eased_in_out();
     if t == 0 {
         return;
     }
@@ -87,7 +87,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     let mut spans = Vec::<Span<'_>>::new();
     // 失焦徽标:随 focus_fade 进度从背景色淡入到 overlay 灰,与整行变灰
     // ([`dim_unfocused`])同一进度源,文字与底色同步浮现/消隐。
-    let fade = state.focus_fade.eased_in_out();
+    let fade = state.dim.eased_in_out();
     if fade > 0 {
         spans.push(Span::styled(
             "◌ not focused  ",
@@ -201,15 +201,15 @@ mod tests {
         let theme = Theme::default();
         let mut state = crate::test_support::state_with_playlists()?;
         let focused = origin_fg(&state, &theme)?;
-        state.focused = false;
-        state.focus_fade.enter();
+        state.dim.set(true);
+        state.dim.set(true);
         // 默认 288ms / 16ms tick = 18 拍;9 拍是中途帧。
         for _ in 0..9 {
-            state.focus_fade.tick();
+            state.dim.tick();
         }
         let mid = origin_fg(&state, &theme)?;
         for _ in 0..30 {
-            state.focus_fade.tick();
+            state.dim.tick();
         }
         let settled = origin_fg(&state, &theme)?;
         assert_ne!(mid, focused, "中途帧应已偏离聚焦色");
@@ -223,10 +223,10 @@ mod tests {
     fn top_status_unfocused_badge_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.focused = false;
-        state.focus_fade.enter();
+        state.dim.set(true);
+        state.dim.set(true);
         for _ in 0..30 {
-            state.focus_fade.tick();
+            state.dim.tick();
         }
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
         // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。

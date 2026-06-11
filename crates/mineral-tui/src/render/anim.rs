@@ -125,6 +125,66 @@ impl Transition {
     }
 }
 
+/// 二态开关 + 过渡。**逻辑「开/关」不单独存,从内部 [`Transition`] 的目标方向派生**——
+/// `enter` 朝「开」(满值)、`leave` 朝「关」(`0`),故 `target` 即逻辑态,渲染读 eased 进度。
+///
+/// 用于「立即翻转的逻辑标志 + 缓动到位的渲染位置」这一组合(全屏进退 / 失焦变灰等):
+/// 标志供按键路由 / 上报,位置供渲染;两者由同一 `Transition` 表达,消除「bool 与
+/// 动画目标必须手动保持同步」的冗余。
+#[derive(Clone, Copy, Debug)]
+pub struct Toggle(Transition);
+
+impl Toggle {
+    /// 构造一个停在「关」(`0`)的开关。`ticks` 为从关到开所需拍数(决定时长)。
+    pub fn new(ticks: u16) -> Self {
+        Self(Transition::new(ticks))
+    }
+
+    /// 逻辑态:是否「开」(目标朝满值)。立即反映 [`Self::set`],不等动画放完。
+    pub fn on(&self) -> bool {
+        !self.0.leaving()
+    }
+
+    /// 置逻辑态:`true` 朝「开」推进、`false` 朝「关」。中途反向只改目标不跳变。
+    pub fn set(&mut self, on: bool) {
+        if on {
+            self.0.enter();
+        } else {
+            self.0.leave();
+        }
+    }
+
+    /// 翻转逻辑态。
+    pub fn toggle(&mut self) {
+        self.set(!self.on());
+    }
+
+    /// 推进过渡一拍。
+    pub fn tick(&mut self) {
+        self.0.tick();
+    }
+
+    /// 当前进度经 ease-in-out 映射的渲染值,千分比 `0..=1000`。
+    pub fn eased_in_out(&self) -> u16 {
+        self.0.eased_in_out()
+    }
+
+    /// 进度处于「关」端点(`0`):渲染可退化为单态、跳过离屏合成。
+    pub fn at_min(&self) -> bool {
+        self.0.at_min()
+    }
+
+    /// 进度处于「开」端点(满值):渲染可退化为目标单态。
+    pub fn at_max(&self) -> bool {
+        self.0.at_max()
+    }
+
+    /// 过渡是否已抵达目标(动画放完,稳态)。
+    pub fn settled(&self) -> bool {
+        self.0.settled()
+    }
+}
+
 /// 动画时长(毫秒)→ tick 数:按主循环帧间隔四舍五入,至少 1(0ms 也占一拍,
 /// 语义 = "一帧到位")。配置面只写毫秒,运行时统一经此换算 —— 改 `frame_tick_ms`
 /// 不改动画的真实时长。

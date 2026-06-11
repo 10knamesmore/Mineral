@@ -58,7 +58,7 @@ impl App {
                 (ViewKind::Queue, song, loved)
             } else if self.state.search.typing {
                 (ViewKind::Search, None, None)
-            } else if self.state.fullscreen {
+            } else if self.state.fullscreen.on() {
                 (ViewKind::Fullscreen, None, None)
             } else {
                 match self.state.view {
@@ -122,7 +122,7 @@ impl App {
 
     /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
     pub(crate) fn toggle_love_selection(&mut self) {
-        if self.state.fullscreen || !matches!(self.state.view, View::Library) {
+        if self.state.fullscreen.on() || !matches!(self.state.view, View::Library) {
             return;
         }
         let filtered = self.state.filtered_tracks();
@@ -139,7 +139,7 @@ impl App {
 
     /// 下载当前视图选中项:Playlists 整张歌单 / Library 单曲。全屏态屏蔽。
     pub(crate) fn download_selection(&mut self) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             return;
         }
         match self.state.view {
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn keyctx_fullscreen_reports_now_playing() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 2, /*current_idx*/ 1)?;
-        app.state.fullscreen = true;
+        app.state.fullscreen.set(true);
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Fullscreen);
         assert!(ctx.selected_song().is_none());

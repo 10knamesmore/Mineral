@@ -256,8 +256,8 @@ impl App {
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
                 self.state.view_pos.tick();
-                self.state.fullscreen_pos.tick();
-                self.state.focus_fade.tick();
+                self.state.fullscreen.tick();
+                self.state.dim.tick();
                 self.state.tick_lyric_scroll();
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.player.versions);
@@ -296,7 +296,7 @@ impl App {
         let before = self.overlays.len();
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
-        if self.state.fullscreen && closing_centered && self.overlays.len() < before {
+        if self.state.fullscreen.on() && closing_centered && self.overlays.len() < before {
             self.state.covers.protocols.borrow_mut().clear();
         }
     }
@@ -473,14 +473,9 @@ impl App {
         }
     }
 
-    /// focus 事件落地:记状态、起顶栏变灰淡入/淡出、上报 daemon。
+    /// focus 事件落地:起顶栏变灰淡入/淡出(`dim` 开 = 未聚焦)、上报 daemon。
     fn set_focus(&mut self, focused: bool) {
-        self.state.focused = focused;
-        if focused {
-            self.state.focus_fade.leave();
-        } else {
-            self.state.focus_fade.enter();
-        }
+        self.state.dim.set(!focused);
         self.report_terminal_state();
     }
 
@@ -491,13 +486,17 @@ impl App {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
             return;
         };
-        let snapshot = (rows, cols, self.state.fullscreen, self.state.focused);
+        let snapshot = (rows, cols, self.state.fullscreen.on(), self.state.focused());
         if self.last_terminal_report == Some(snapshot) {
             return;
         }
         self.last_terminal_report = Some(snapshot);
-        self.client
-            .report_terminal_state(rows, cols, self.state.fullscreen, self.state.focused);
+        self.client.report_terminal_state(
+            rows,
+            cols,
+            self.state.fullscreen.on(),
+            self.state.focused(),
+        );
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
@@ -597,15 +596,10 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// 切换全屏播放态:翻转 `fullscreen` 标志并驱动形变进退场(`eased_in_out`,可中途反向)。
+    /// 切换全屏播放态:翻转开关并驱动形变进退场(`eased_in_out`,可中途反向)。
     fn toggle_fullscreen(&mut self) {
-        self.state.fullscreen = !self.state.fullscreen;
+        self.state.fullscreen.toggle();
         self.report_terminal_state();
-        if self.state.fullscreen {
-            self.state.fullscreen_pos.enter();
-        } else {
-            self.state.fullscreen_pos.leave();
-        }
     }
 
     /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
@@ -737,7 +731,7 @@ mod tests {
         use crate::test_support::app_in_fullscreen;
 
         let mut app = app_in_fullscreen()?;
-        assert!(app.state.fullscreen, "前置:已稳态进入全屏");
+        assert!(app.state.fullscreen.on(), "前置:已稳态进入全屏");
 
         // 模拟封面已渲染:塞一个协议缓存条目。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
@@ -1218,15 +1212,13 @@ mod tests {
     #[test]
     fn z_toggles_fullscreen() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        assert!(!app.state.fullscreen, "初始非全屏");
+        assert!(!app.state.fullscreen.on(), "初始非全屏");
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen, "z 进全屏");
-        assert!(!app.state.fullscreen_pos.leaving(), "进场:形变目标置满");
+        assert!(app.state.fullscreen.on(), "z 进全屏(开关 + 形变目标合一)");
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(!app.state.fullscreen, "再按 z 退全屏");
-        assert!(app.state.fullscreen_pos.leaving(), "退场:形变目标归零");
+        assert!(!app.state.fullscreen.on(), "再按 z 退全屏");
         Ok(())
     }
 
@@ -1235,7 +1227,7 @@ mod tests {
     fn fullscreen_tab_still_opens_queue() -> color_eyre::Result<()> {
         let mut app = app_with_queue(4, /*current_idx*/ 1)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen);
+        assert!(app.state.fullscreen.on());
 
         press(&mut app, KeyCode::Tab);
         assert_eq!(

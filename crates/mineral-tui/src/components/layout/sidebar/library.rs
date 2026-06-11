@@ -124,7 +124,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let viewport = usize::from(area.height.saturating_sub(3));
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,收缩中的 viewport 不得改写
     // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
-    let offset = if state.fullscreen_pos.at_min() {
+    let offset = if state.fullscreen.at_min() {
         state.nav.scroll_track.render_offset(
             state.nav.sel_track,
             tracks.len(),
@@ -317,7 +317,7 @@ mod tests {
     /// 位置不变、无平移)。
     #[test]
     fn fullscreen_morph_keeps_scroll_target() -> color_eyre::Result<()> {
-        use crate::render::anim::Transition;
+        use crate::render::anim::Toggle;
 
         let mut app = crate::test_support::app_with_long_library(60, /*sel_track*/ 40)?;
         let mut t = Terminal::new(TestBackend::new(60, 24))?;
@@ -327,11 +327,11 @@ mod tests {
         let before = app.state.nav.scroll_track.target_rows();
         assert!(before > 0, "前置:视口已滚到深处");
 
-        // 进入 morph(fullscreen_pos 离开 at_min),面板高度逐帧收缩地渲染。
-        let mut fs = Transition::new(8);
-        fs.enter();
+        // 进入 morph(fullscreen 离开 at_min),面板高度逐帧收缩地渲染。
+        let mut fs = Toggle::new(8);
+        fs.set(true);
         fs.tick();
-        app.state.fullscreen_pos = fs;
+        app.state.fullscreen = fs;
         for h in (2..20_u16).rev() {
             let mut small = Terminal::new(TestBackend::new(60, h))?;
             draw_lib(&mut small, &app.state)?;
@@ -343,7 +343,7 @@ mod tests {
         );
 
         // 回浏览态:渲染收敛后仍在原 offset(无重定目标 = 无平移)。
-        app.state.fullscreen_pos = Transition::new(8);
+        app.state.fullscreen = Toggle::new(8);
         for _ in 0..10 {
             draw_lib(&mut t, &app.state)?;
         }

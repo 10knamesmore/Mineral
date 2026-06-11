@@ -19,14 +19,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let layout_cfg = app.state.cfg.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
 
-    if app.state.fullscreen_pos.at_min() {
+    if app.state.fullscreen.at_min() {
         paint(frame, &normal, app);
     } else {
         let full = compute_fullscreen(frame.area(), layout_cfg);
-        let areas = if app.state.fullscreen_pos.at_max() {
+        let areas = if app.state.fullscreen.at_max() {
             full
         } else {
-            transform::morph_areas(&normal, &full, app.state.fullscreen_pos.eased_in_out())
+            transform::morph_areas(&normal, &full, app.state.fullscreen.eased_in_out())
         };
         paint_fullscreen(frame, &areas, app);
     }
@@ -39,7 +39,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             frame,
             normal.top_status,
             theme,
-            app.state.fullscreen_pos.eased_in_out(),
+            app.state.fullscreen.eased_in_out(),
             &app.notice_hint,
         );
         app.overlays.render(frame, frame.area(), &app.state, theme);
@@ -105,7 +105,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .map_or_else(|| t.name.clone(), |a| a.name.clone())
         },
     );
-    if app.state.fullscreen_pos.at_max() {
+    if app.state.fullscreen.at_max() {
         cover_image::render_or_fallback(
             frame,
             area,
@@ -164,7 +164,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Position;
 
-    use crate::render::anim::Transition;
+    use crate::render::anim::{Toggle, Transition};
     use crate::test_support::{app_in_fullscreen, app_with_queue};
 
     /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**派发封面编码请求。
@@ -212,10 +212,10 @@ mod tests {
 
         // 进入全屏,推进若干形变帧(均 `!settled`)。每帧后 pending 必须与稳态快照一致 ——
         // 证明 now_playing 消失面板没有在形变中按漂移 dims 追加派发。
-        app.state.fullscreen_pos.enter();
+        app.state.fullscreen.set(true);
         for _ in 0..5 {
-            app.state.fullscreen_pos.tick();
-            assert!(!app.state.fullscreen_pos.settled(), "测试需停留在形变中途");
+            app.state.fullscreen.tick();
+            assert!(!app.state.fullscreen.settled(), "测试需停留在形变中途");
             t.draw(|f| super::draw(f, &app))?;
             assert_eq!(
                 *app.state.covers.encode_pending.borrow(),
@@ -321,12 +321,11 @@ mod tests {
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
         app.state.playback.track = app.state.player.queue.first().cloned();
-        // 稳态全屏:fullscreen_pos 一步推到满值。
-        let mut fs = Transition::new(1);
-        fs.enter();
+        // 稳态全屏:一步推到满值。
+        let mut fs = Toggle::new(1);
+        fs.set(true);
         fs.tick();
-        app.state.fullscreen_pos = fs;
-        app.state.fullscreen = true;
+        app.state.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -348,11 +347,12 @@ mod tests {
     fn fullscreen_morph_midframe_snapshot() -> color_eyre::Result<()> {
         let mut app = app_in_fullscreen()?;
         // 覆盖成形变中途:expanding 推进 9 tick(约半程,未到满)。
-        let mut anim = Transition::expanding(18);
+        let mut anim = Toggle::new(18);
+        anim.set(true);
         for _ in 0..9 {
             anim.tick();
         }
-        app.state.fullscreen_pos = anim;
+        app.state.fullscreen = anim;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;

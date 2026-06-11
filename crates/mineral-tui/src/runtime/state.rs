@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use mineral_model::{LyricLine, Lyrics};
 
 use crate::components::layout::spectrum::SpectrumState;
-use crate::render::anim::{Transition, ticks16_from_ms};
+use crate::render::anim::{Toggle, Transition, ticks16_from_ms};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -91,20 +91,14 @@ pub struct AppState {
     /// 切到 Library 调 `enter`、回 Playlists 调 `leave`,中途再反向只改 target 不跳变。
     pub view_pos: Transition,
 
-    /// 是否处于全屏播放态。切换时立即设为目标值供按键路由;渲染端的形变进度看 [`Self::fullscreen_pos`]。
-    pub fullscreen: bool,
+    /// 全屏播放态:逻辑开关(供按键路由)+ 进退场形变进度(供渲染),由 [`Toggle`] 合一。
+    /// `on()` = 全屏、`eased_in_out()` = 形变位置。
+    pub fullscreen: Toggle,
 
-    /// 终端窗口是否持有输入焦点(focus 事件维护)。初始 `true`:mode 1004 只报变化
-    /// 不可查询,不支持的终端永远收不到事件,降级方向必须是「恒聚焦」而非反向。
-    pub focused: bool,
-
-    /// 顶栏失焦变灰进度:`0` = 聚焦、满值 = 完全变灰。失焦调 `enter`、聚焦调 `leave`,
-    /// 中途反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
-    pub focus_fade: Transition,
-
-    /// 全屏播放进退场形变进度:`0` = 浏览态、满值 = 全屏。进调 `enter`、退调 `leave`,
-    /// 中途再反向只改 target 不跳变(与 [`Self::view_pos`] 同范式)。
-    pub fullscreen_pos: Transition,
+    /// 顶栏失焦变灰:`on()` = 已变灰(终端未聚焦)、`eased_in_out()` = 变灰深度。
+    /// 终端聚焦态由 [`Self::focused`] 反读;初始 `off`(聚焦)——mode 1004 只报变化、
+    /// 不支持的终端永不发事件,降级方向必须是「恒聚焦」。
+    pub dim: Toggle,
 
     /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
     pub library: LibraryData,
@@ -161,10 +155,8 @@ impl AppState {
         Self {
             view: View::Playlists,
             view_pos: Transition::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
-            fullscreen: false,
-            fullscreen_pos: Transition::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
-            focused: true,
-            focus_fade: Transition::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
+            fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
             lyric_view: LyricView::new(),
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
@@ -188,6 +180,11 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn test_default() -> color_eyre::Result<Self> {
         Ok(Self::new(Arc::new(mineral_config::Config::defaults()?)))
+    }
+
+    /// 终端是否持有输入焦点。从 [`Self::dim`] 反读(变灰 = 未聚焦);上报 daemon 用。
+    pub fn focused(&self) -> bool {
+        !self.dim.on()
     }
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。

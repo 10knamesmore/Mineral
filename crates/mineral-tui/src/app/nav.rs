@@ -19,7 +19,7 @@ use super::App;
 impl App {
     /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。
     pub(super) fn enter_search(&mut self) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             return;
         }
         self.state.search.typing = true;
@@ -106,7 +106,7 @@ impl App {
     /// 列表光标移动,按当前 view 落到 `nav.sel_playlist` / `nav.sel_track`,越界钳首末行;
     /// 全屏态屏蔽(屏上无列表)。
     pub(super) fn move_selection(&mut self, mv: SelectionMove) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
@@ -129,7 +129,7 @@ impl App {
     /// `<C-d>` 族滚动按上下文路由:全屏滚歌词;浏览态滚当前列表——视口目标与光标同移
     /// n 行(vim `<C-d>` 语义,保持光标的屏上相对位置),文档首尾边界由渲染端统一钳。
     pub(super) fn scroll(&mut self, step: ScrollStep) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             self.state.scroll_lyrics(step);
             return;
         }
@@ -151,7 +151,7 @@ impl App {
     /// 在当前视图「进入」:Playlists 进选中歌单的 Library;Library 设 queue 并播放选中曲。
     /// 全屏态屏蔽。
     pub(super) fn activate_selection(&mut self) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
@@ -246,7 +246,7 @@ impl App {
     /// 在当前视图「返回」:搜索非空先清词(选中复位),否则 Library 回 Playlists、
     /// Playlists 无处可回即无操作。全屏态屏蔽。
     pub(super) fn back_or_clear_search(&mut self) {
-        if self.state.fullscreen {
+        if self.state.fullscreen.on() {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
@@ -447,7 +447,7 @@ mod tests {
         ctrl(&mut app, 'b');
         assert_eq!(app.state.nav.sel_track, 0, "顶部再上滚钳住不越界");
 
-        app.state.fullscreen = true;
+        app.state.fullscreen.set(true);
         ctrl(&mut app, 'f');
         assert_eq!(
             app.state.nav.sel_track, 0,
@@ -800,7 +800,7 @@ mod tests {
     fn fullscreen_blocks_nav_and_search() -> color_eyre::Result<()> {
         let mut app = app_with_library(5, /*sel_track*/ 2)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen);
+        assert!(app.state.fullscreen.on());
 
         // j / g 导航被吞,选中不变。
         press(&mut app, KeyCode::Char('j'));

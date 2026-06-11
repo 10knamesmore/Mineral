@@ -182,7 +182,7 @@ pub(crate) fn render_overlay<O: Overlay>(
 ) {
     let c = overlay.chrome();
     // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
-    let dock = c.dock.then_some(if ctx.fullscreen {
+    let dock = c.dock.then_some(if ctx.fullscreen.on() {
         Dock::Right
     } else {
         Dock::Left

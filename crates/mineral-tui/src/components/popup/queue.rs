@@ -403,7 +403,7 @@ mod tests {
     fn queue_fullscreen_dock_right_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = ctx_with_queue(3, Some(1))?;
-        ctx.fullscreen = true;
+        ctx.fullscreen.set(true);
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());

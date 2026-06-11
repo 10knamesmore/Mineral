@@ -74,7 +74,7 @@ impl AppState {
     /// # Params:
     ///   - `scroll`: 方向 + 档位
     pub(crate) fn scroll_lyrics(&mut self, scroll: ScrollStep) {
-        if !self.fullscreen {
+        if !self.fullscreen.on() {
             return;
         }
         let len = self
@@ -269,7 +269,7 @@ mod tests {
             .lyrics
             .insert(song.id.clone(), Lyrics { lines: original });
         s.playback.track = Some(song);
-        s.fullscreen = true;
+        s.fullscreen.set(true);
         Ok(s)
     }
 
@@ -303,10 +303,10 @@ mod tests {
         let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         let line = i64::try_from(*s.cfg.tui().behavior().line_scroll_rows())?;
         assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
-        s.fullscreen = false;
+        s.fullscreen.set(false);
         s.scroll_lyrics(ScrollStep::PageDown);
         assert!(s.lyric_view.scroll.is_none(), "非全屏不接管滚动");
-        s.fullscreen = true;
+        s.fullscreen.set(true);
         // position 0 → 当前播放行 0;翻页锚定到 0 + page。
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page), "全屏翻页锚定行 = 0 + page");

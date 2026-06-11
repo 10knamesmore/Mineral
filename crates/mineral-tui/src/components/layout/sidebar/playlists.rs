@@ -92,7 +92,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
     let viewport = usize::from(area.height.saturating_sub(3));
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,理由同 library。
-    let offset = if state.fullscreen_pos.at_min() {
+    let offset = if state.fullscreen.at_min() {
         state.nav.scroll_playlist.render_offset(
             state.nav.sel_playlist,
             total,

@@ -50,7 +50,7 @@ pub fn render_or_fallback(
     // 后续帧覆盖 / 终端不再持有,封面整块空白且按 url 粘死(重选同曲 dims 不变不再重建,
     // 永不重发)。形变期一律让位给 `draw_fullscreen_cover` 的程序化封面,真图只在两端稳态
     // 渲染。
-    if !state.fullscreen_pos.settled() {
+    if !state.fullscreen.settled() {
         return;
     }
     let Some(image) = state.covers.cache.get(url).cloned() else {

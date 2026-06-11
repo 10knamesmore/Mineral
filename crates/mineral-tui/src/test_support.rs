@@ -16,7 +16,7 @@ use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
-use crate::render::anim::Transition;
+use crate::render::anim::Toggle;
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
@@ -386,11 +386,10 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     app.state.playback.position_ms = 62_000;
     app.state.player.current = Some(track);
     app.state.player.queue = endserenading(3);
-    // 稳态全屏:fullscreen_pos 一步推到满值(step=1000)。
-    let mut fs = Transition::new(1);
-    fs.enter();
+    // 稳态全屏:一步推到满值(step=1000)。
+    let mut fs = Toggle::new(1);
+    fs.set(true);
     fs.tick();
-    app.state.fullscreen_pos = fs;
-    app.state.fullscreen = true;
+    app.state.fullscreen = fs;
     Ok(app)
 }
