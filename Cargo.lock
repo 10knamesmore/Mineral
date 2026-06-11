@@ -2706,6 +2706,7 @@ dependencies = [
  "derive-getters",
  "futures-util",
  "mineral-audio",
+ "mineral-channel-core",
  "mineral-model",
  "mineral-task",
  "mineral-test",

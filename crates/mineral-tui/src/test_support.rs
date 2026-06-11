@@ -206,6 +206,11 @@ impl Client for TestClient {
     }
     fn play_song(&self, _song: Song) {}
     fn set_queue(&self, _queue: Vec<Song>, _target_id: SongId) {}
+    fn queue_insert_next(&self, _song: Song) {}
+    fn queue_append(&self, _song: Song) {}
+    fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
+        Vec::new()
+    }
     fn cycle_play_mode(&self) {}
     fn prev_or_restart(&self) {}
     fn next_song(&self) {}

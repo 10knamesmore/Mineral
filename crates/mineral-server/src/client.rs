@@ -1,7 +1,8 @@
 //! [`Client`] trait + [`ClientHandle`](trait 的同进程实现)。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, Song, SongId};
+use mineral_channel_core::ChannelCaps;
+use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, DownloadProgress, DownloadTarget, Event, PlayerSync, PlayerVersions,
     SongStatsWire,
@@ -223,6 +224,15 @@ pub trait Client: Send + Sync {
     /// 替换 queue + 设当前位置。Shuffle 模式下 server 端洗牌。
     fn set_queue(&self, queue: Vec<Song>, target_id: SongId);
 
+    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
+    fn queue_insert_next(&self, song: Song);
+
+    /// 追加到队列末尾,不动播放上下文与当前曲。
+    fn queue_append(&self, song: Song);
+
+    /// 全部已注册 channel 的能力声明(启动握手拉一次,断连重连后再拉)。
+    fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)>;
+
     /// `m` 键:cycle PlayMode。
     fn cycle_play_mode(&self);
 
@@ -386,6 +396,15 @@ impl Client for ClientHandle {
     }
     fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
         self.player.set_queue(queue, &target_id);
+    }
+    fn queue_insert_next(&self, song: Song) {
+        self.player.queue_insert_next(song);
+    }
+    fn queue_append(&self, song: Song) {
+        self.player.queue_append(song);
+    }
+    fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
+        self.player.channel_caps()
     }
     fn cycle_play_mode(&self) {
         self.player.cycle_play_mode();

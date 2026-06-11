@@ -115,3 +115,27 @@ pub(crate) fn exit_shuffle(st: &mut State) {
         .unwrap_or(0);
     st.bump_queue();
 }
+
+/// 插播:`song` 插到当前曲之后;shuffle 模式下同步插入 `original_queue` 的
+/// 当前曲之后(退出 shuffle 时位置仍合理)。不动 `queue_sel` 与当前曲。
+pub(crate) fn insert_next(st: &mut State, song: Song) {
+    let cur_id = st.current_song.as_ref().map(|s| s.id.clone());
+    let pos = (st.queue_sel + 1).min(st.queue.len());
+    st.queue.insert(pos, song.clone());
+    if let Some(orig) = st.original_queue.as_mut() {
+        let at = cur_id
+            .and_then(|id| orig.iter().position(|s| s.id == id))
+            .map_or(orig.len(), |i| i + 1);
+        orig.insert(at, song);
+    }
+    st.bump_queue();
+}
+
+/// 追加到队列末尾;shuffle 模式下同步追加 `original_queue`。
+pub(crate) fn append(st: &mut State, song: Song) {
+    st.queue.push(song.clone());
+    if let Some(orig) = st.original_queue.as_mut() {
+        orig.push(song);
+    }
+    st.bump_queue();
+}

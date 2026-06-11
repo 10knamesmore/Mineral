@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 列表查询的分页参数。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Page {
     /// 起始偏移(从 0 起)。
     pub offset: u32,

@@ -40,7 +40,7 @@ pub(crate) struct Inner {
     pub(crate) audio: AudioHandle,
 
     /// 任务调度器(用于提交 SongUrl / Lyrics / Playlists 等)。
-    scheduler: Scheduler,
+    pub(crate) scheduler: Scheduler,
 
     /// 已注入的 channel 列表(用于按 [`SourceKind`] 路由)。
     channels: Vec<Arc<dyn MusicChannel>>,
@@ -87,7 +87,7 @@ pub(crate) struct Inner {
     last_seen_finished_seq: AtomicU64,
 
     /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
-    client_events: Mutex<Vec<TaskEvent>>,
+    pub(crate) client_events: Mutex<Vec<TaskEvent>>,
 
     /// 上次「周期 position 刷新」落盘时刻;background_loop 按 `session_save` 节流。
     pub(crate) last_session_save: Mutex<Instant>,
@@ -554,6 +554,41 @@ impl PlayerCore {
         self.spawn_save_session();
     }
 
+    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
+    pub fn queue_insert_next(&self, song: Song) {
+        {
+            let mut st = self.inner.state.lock();
+            crate::queue::insert_next(&mut st, song);
+            // 下一首变了:作废已排的 gapless 预排,让 check_prefetch 重排
+            st.queued = None;
+            st.prefetch_fired_for = None;
+        }
+        self.inner.audio.clear_next();
+        self.spawn_save_session();
+    }
+
+    /// 追加到队列末尾,不动播放上下文与当前曲。
+    /// 当前曲恰在尾部时"下一首"会变,保守作废预排(与插播同样处理)。
+    pub fn queue_append(&self, song: Song) {
+        {
+            let mut st = self.inner.state.lock();
+            crate::queue::append(&mut st, song);
+            st.queued = None;
+            st.prefetch_fired_for = None;
+        }
+        self.inner.audio.clear_next();
+        self.spawn_save_session();
+    }
+
+    /// 全部已注册 channel 的能力声明(按注册顺序)。
+    pub fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
+        self.inner
+            .channels
+            .iter()
+            .map(|ch| (ch.source(), ch.caps()))
+            .collect()
+    }
+
     /// `m` 键:PlayMode cycle + 进/退 Shuffle 边界处洗牌或还原。
     pub fn cycle_play_mode(&self) {
         {
@@ -659,85 +694,6 @@ impl PlayerCore {
             gapless::check_prefetch(&self);
             self.check_props();
             self.check_session_save();
-        }
-    }
-
-    /// 一次 drain scheduler events,分类:PlayUrlReady/LyricsReady 内部消化、
-    /// 其余 push 到 client_events buffer。
-    fn consume_events_once(&self) {
-        let events = self.inner.scheduler.drain_events();
-        if events.is_empty() {
-            return;
-        }
-        let mut forward = Vec::with_capacity(events.len());
-        for ev in events {
-            match ev {
-                TaskEvent::PlayUrlReady { song_id, play_url } => {
-                    self.handle_play_url_ready(&song_id, play_url);
-                }
-                TaskEvent::LyricsReady { song_id, lyrics } => {
-                    self.handle_lyrics_ready(&song_id, lyrics);
-                }
-                other => forward.push(other),
-            }
-        }
-        if !forward.is_empty() {
-            self.inner.client_events.lock().extend(forward);
-        }
-    }
-
-    /// PlayUrlReady 命中当前歌 → audio.play + 写 play_url;命中正在预拉的下一首 → gapless 预排;否则丢。
-    fn handle_play_url_ready(&self, song_id: &SongId, play_url: PlayUrl) {
-        // 先在锁内分类(三选一),放锁后再做会重新加锁的动作(play_capturing / gapless 预排)。
-        enum Route {
-            Current(Option<Box<Song>>),
-            Prefetch,
-            Drop,
-        }
-        let route = {
-            let mut st = self.inner.state.lock();
-            let want = st.current_song.as_ref().map(|t| &t.id);
-            if want == Some(song_id) {
-                st.play_url = Some(play_url.clone());
-                st.bump_current();
-                Route::Current(st.current_song.clone().map(Box::new))
-            } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
-                Route::Prefetch
-            } else {
-                Route::Drop
-            }
-        };
-        match route {
-            Route::Current(song) => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
-                if let Some(song) = song {
-                    // 拦截桥:无脚本同步直走,有脚本异步裁决(play_url 已在锁内写过,
-                    // 桥内回填同值幂等;改写时回填改写值)。
-                    crate::hook_bridge::before_play(self, &song, play_url);
-                }
-            }
-            Route::Prefetch => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
-                gapless::on_prefetch_url_ready(self, song_id, play_url);
-            }
-            Route::Drop => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
-            }
-        }
-    }
-
-    /// LyricsReady 命中当前歌 → 写入 current_lyrics + 配对 song_id;否则丢(只缓存当前歌)。
-    fn handle_lyrics_ready(&self, song_id: &SongId, lyrics: mineral_model::Lyrics) {
-        let mut st = self.inner.state.lock();
-        let want = st.current_song.as_ref().map(|t| &t.id);
-        if want == Some(song_id) {
-            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "store", "lyrics ready");
-            st.current_lyrics = Some(lyrics);
-            st.current_lyrics_song_id = Some(song_id.clone());
-            st.bump_current();
-        } else {
-            // 非当前歌,无意义,丢(只缓存当前歌)。
-            mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "lyrics ready");
         }
     }
 
@@ -1937,6 +1893,154 @@ mod tests {
             Some(mineral_protocol::PropValue::None),
             "断开后 terminal 属性应回 None"
         );
+        Ok(())
+    }
+
+    /// 插播插到当前位置后、追加进末尾,当前位置不动;shuffle 下 original_queue 同步。
+    #[tokio::test]
+    async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        core.set_queue(
+            vec![song("a"), song("b")],
+            &SongId::new(SourceKind::NETEASE, "a"),
+        );
+        core.queue_insert_next(song("c"));
+        core.queue_append(song("d"));
+        {
+            let st = core.inner.state.lock();
+            let ids = st
+                .queue
+                .iter()
+                .map(|s| s.id.as_str().to_owned())
+                .collect::<Vec<String>>();
+            assert_eq!(ids, ["a", "c", "b", "d"]);
+            assert_eq!(st.queue_sel, 0);
+        }
+        core.set_play_mode(PlayMode::Shuffle);
+        core.queue_insert_next(song("e"));
+        {
+            let st = core.inner.state.lock();
+            let orig = st
+                .original_queue
+                .as_ref()
+                .ok_or_else(|| color_eyre::eyre::eyre!("shuffle 后应有 original_queue"))?;
+            assert!(
+                orig.iter().any(|s| s.id.as_str() == "e"),
+                "original_queue 应同步插入"
+            );
+            assert!(st.queue.iter().any(|s| s.id.as_str() == "e"));
+        }
+        Ok(())
+    }
+
+    /// 只支持建单/列单的写桩 channel(写收敛链路测试用)。
+    struct WritableChannel;
+
+    #[async_trait]
+    impl MusicChannel for WritableChannel {
+        fn source(&self) -> SourceKind {
+            SourceKind::NETEASE
+        }
+
+        fn caps(&self) -> ChannelCaps {
+            ChannelCaps::builder()
+                .searchable(Vec::new())
+                .playlist_edit(true)
+                .build()
+        }
+
+        async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Song>> {
+            Err(Error::NotSupported)
+        }
+        async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Album>> {
+            Err(Error::NotSupported)
+        }
+        async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Playlist>> {
+            Err(Error::NotSupported)
+        }
+        async fn songs_detail(&self, _ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+            Err(Error::NotSupported)
+        }
+        async fn songs_in_album(&self, _id: &AlbumId) -> ChannelResult<Vec<Song>> {
+            Err(Error::NotSupported)
+        }
+        async fn songs_in_playlist(&self, _id: &PlaylistId) -> ChannelResult<Vec<Song>> {
+            Err(Error::NotSupported)
+        }
+        async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> ChannelResult<Vec<PlayUrl>> {
+            Err(Error::NotSupported)
+        }
+        async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {
+            Err(Error::NotSupported)
+        }
+
+        async fn create_playlist(&self, name: &str) -> ChannelResult<Playlist> {
+            Ok(Playlist {
+                id: PlaylistId::new(SourceKind::NETEASE, "created-1"),
+                name: name.to_owned(),
+                description: String::new(),
+                cover_url: None,
+                track_count: 0,
+                songs: Vec::new(),
+            })
+        }
+
+        async fn my_playlists(&self) -> ChannelResult<Vec<Playlist>> {
+            Ok(vec![Playlist {
+                id: PlaylistId::new(SourceKind::NETEASE, "created-1"),
+                name: String::from("新歌单"),
+                description: String::new(),
+                cover_url: None,
+                track_count: 0,
+                songs: Vec::new(),
+            }])
+        }
+    }
+
+    /// 写成功 → PlaylistWriteDone 转发给 client,且自动触发 MyPlaylists 重拉
+    /// (缓存收敛走读管线,不直接改数据)。
+    #[tokio::test]
+    async fn playlist_write_done_forwards_and_triggers_refetch() -> color_eyre::Result<()> {
+        let ch: Arc<dyn MusicChannel> = Arc::new(WritableChannel);
+        let core = core_with_channels(
+            vec![ch],
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )?;
+        let h = core.inner.scheduler.submit(
+            mineral_task::TaskKind::PlaylistWrite(mineral_task::PlaylistWriteOp::Create {
+                source: SourceKind::NETEASE,
+                name: String::from("新歌单"),
+            }),
+            mineral_task::Priority::User,
+        );
+        assert_eq!(h.done().await, mineral_task::TaskOutcome::Ok);
+        core.consume_events_once();
+        let evs = core.drain_client_events();
+        assert!(
+            evs.iter().any(|e| matches!(
+                e,
+                mineral_task::TaskEvent::PlaylistWriteDone { error: None, .. }
+            )),
+            "写完结事件应转发给 client,got {evs:?}"
+        );
+
+        // 收敛重拉(MyPlaylists)由 consume 时提交,异步执行;轮询等它完成
+        let mut found = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            core.consume_events_once();
+            if core
+                .drain_client_events()
+                .iter()
+                .any(|e| matches!(e, mineral_task::TaskEvent::PlaylistsFetched { .. }))
+            {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "写成功后应触发 MyPlaylists 重拉");
         Ok(())
     }
 }

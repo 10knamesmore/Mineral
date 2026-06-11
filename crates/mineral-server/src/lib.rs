@@ -19,6 +19,7 @@
 mod client;
 mod config;
 mod download;
+mod events;
 mod gapless;
 mod hook_bridge;
 mod media;

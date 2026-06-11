@@ -133,6 +133,18 @@ pub enum Request {
         target_id: mineral_model::SongId,
     },
 
+    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
+    /// Shuffle 模式下同步插入 original_queue(当前曲后)。返回 [`Response::Ok`]。
+    QueueInsertNext(Box<Song>),
+
+    /// 追加到队列末尾,不动播放上下文与当前曲。
+    /// Shuffle 模式下同步追加 original_queue 末尾。返回 [`Response::Ok`]。
+    QueueAppend(Box<Song>),
+
+    /// 拉全部已注册 channel 的能力表(启动握手时一次,断连重连后再拉)。
+    /// 返回 [`Response::ChannelCaps`]。
+    ChannelCaps,
+
     /// `m` 键循环 PlayMode。返回 [`Response::Ok`]。
     CyclePlayMode,
 
@@ -285,6 +297,9 @@ pub enum Response {
 
     /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。
     DownloadProgress(DownloadProgress),
+
+    /// 对应 [`Request::ChannelCaps`]:每个已注册 channel 的能力声明。
+    ChannelCaps(Vec<(mineral_model::SourceKind, mineral_channel_core::ChannelCaps)>),
 
     /// 对应 [`Request::StoreGet`] / [`Request::StoreInc`]:标量值(未命中 `Nil`)。
     StoreValue(crate::StoreValue),

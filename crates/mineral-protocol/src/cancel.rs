@@ -23,6 +23,8 @@ impl CancelFilter {
             (Self::ChannelFetchKinds(tags), TaskKind::ChannelFetch(k)) => {
                 tags.contains(&ChannelFetchKindTag::of(k))
             }
+            // 写操作不可批量取消:开跑后远端可能已执行,中途砍只会脱节
+            (Self::ChannelFetchKinds(_), TaskKind::PlaylistWrite(_)) => false,
         }
     }
 }

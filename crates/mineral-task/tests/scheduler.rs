@@ -261,3 +261,118 @@ async fn lyrics_emits_event() -> color_eyre::Result<()> {
     assert!(found, "expected LyricsReady, got {evs:?}");
     Ok(())
 }
+
+// ---------------- PlaylistWrite lane ----------------
+
+/// 记录写调用时序的桩 channel:每次 rename 记 start/end 各一条,中间 sleep
+/// 放大并发窗口——若 lane 不是串行,start/end 必然交错。
+struct WriteRecorder {
+    /// 时序记录(`start:<name>` / `end:<name>`)。
+    events: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl MusicChannel for WriteRecorder {
+    fn source(&self) -> SourceKind {
+        SourceKind::NETEASE
+    }
+
+    fn caps(&self) -> mineral_channel_core::ChannelCaps {
+        mineral_channel_core::ChannelCaps::builder()
+            .searchable(Vec::new())
+            .playlist_edit(true)
+            .build()
+    }
+
+    async fn search_songs(&self, _q: &str, _p: Page) -> Result<Vec<Song>> {
+        Err(Error::NotSupported)
+    }
+    async fn search_albums(&self, _q: &str, _p: Page) -> Result<Vec<Album>> {
+        Err(Error::NotSupported)
+    }
+    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<Vec<Playlist>> {
+        Err(Error::NotSupported)
+    }
+    async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
+        Err(Error::NotSupported)
+    }
+    async fn songs_in_album(&self, _id: &mineral_model::AlbumId) -> Result<Vec<Song>> {
+        Err(Error::NotSupported)
+    }
+    async fn songs_in_playlist(&self, _id: &PlaylistId) -> Result<Vec<Song>> {
+        Err(Error::NotSupported)
+    }
+    async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> Result<Vec<PlayUrl>> {
+        Err(Error::NotSupported)
+    }
+    async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
+        Err(Error::NotSupported)
+    }
+
+    async fn rename_playlist(&self, _id: &PlaylistId, name: &str) -> Result<()> {
+        self.events.lock().push(format!("start:{name}"));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        self.events.lock().push(format!("end:{name}"));
+        Ok(())
+    }
+}
+
+fn rename_op(name: &str) -> TaskKind {
+    TaskKind::PlaylistWrite(mineral_task::PlaylistWriteOp::Rename {
+        id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+        name: name.to_owned(),
+    })
+}
+
+/// 同源写操作严格串行且保持提交顺序:start/end 成对相邻,绝不交错。
+#[tokio::test]
+async fn playlist_writes_run_serially_in_submit_order() -> color_eyre::Result<()> {
+    let events = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let ch: Arc<dyn MusicChannel> = Arc::new(WriteRecorder {
+        events: Arc::clone(&events),
+    });
+    let sched = Scheduler::new(&[ch], /*workers_per_channel*/ 8);
+
+    let h1 = sched.submit(rename_op("a"), Priority::User);
+    let h2 = sched.submit(rename_op("b"), Priority::User);
+    let h3 = sched.submit(rename_op("c"), Priority::User);
+    assert_eq!(h1.done().await, TaskOutcome::Ok);
+    assert_eq!(h2.done().await, TaskOutcome::Ok);
+    assert_eq!(h3.done().await, TaskOutcome::Ok);
+
+    assert_eq!(
+        *events.lock(),
+        vec!["start:a", "end:a", "start:b", "end:b", "start:c", "end:c"]
+    );
+
+    let evs = sched.drain_events();
+    let done_ok = evs
+        .iter()
+        .filter(|e| matches!(e, TaskEvent::PlaylistWriteDone { error: None, .. }))
+        .count();
+    assert_eq!(done_ok, 3);
+    Ok(())
+}
+
+/// 写操作失败也发事件(与 ChannelFetch"失败只留日志"刻意不同),
+/// 且错误结构化(默认 trait 实现 → NotSupported)。
+#[tokio::test]
+async fn playlist_write_failure_emits_error_event() -> color_eyre::Result<()> {
+    // FakeChannel 没实现写方法 → trait 默认 NotSupported
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let h = sched.submit(rename_op("x"), Priority::User);
+    assert_eq!(h.done().await, TaskOutcome::Failed);
+
+    let evs = sched.drain_events();
+    let found = evs.iter().any(|e| {
+        matches!(
+            e,
+            TaskEvent::PlaylistWriteDone {
+                error: Some(mineral_task::WriteError::NotSupported),
+                ..
+            }
+        )
+    });
+    assert!(found, "expected PlaylistWriteDone(NotSupported), got {evs:?}");
+    Ok(())
+}

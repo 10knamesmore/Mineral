@@ -303,6 +303,15 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.set_queue(queue, target_id);
             Response::Ok
         }
+        Request::QueueInsertNext(song) => {
+            client.queue_insert_next(*song);
+            Response::Ok
+        }
+        Request::QueueAppend(song) => {
+            client.queue_append(*song);
+            Response::Ok
+        }
+        Request::ChannelCaps => Response::ChannelCaps(client.channel_caps()),
         Request::CyclePlayMode => {
             client.cycle_play_mode();
             Response::Ok
@@ -400,6 +409,9 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::CancelTasks(_) => Some("CancelTasks"),
         Request::PlaySong(_) => Some("PlaySong"),
         Request::SetQueue { .. } => Some("SetQueue"),
+        Request::QueueInsertNext(_) => Some("QueueInsertNext"),
+        Request::QueueAppend(_) => Some("QueueAppend"),
+        Request::ChannelCaps => Some("ChannelCaps"),
         Request::CyclePlayMode => Some("CyclePlayMode"),
         Request::PrevOrRestart => Some("PrevOrRestart"),
         Request::NextSong => Some("NextSong"),

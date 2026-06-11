@@ -170,10 +170,10 @@ impl Ongoing {
         let mut by_kind = FxHashMap::<ChannelFetchKindTag, usize>::default();
         for meta in inner.tasks.values() {
             *by_lane.entry(meta.kind.lane()).or_insert(0) += 1;
-            // TaskKind 当前只有 ChannelFetch 一个 variant;新增其它种类时这里
-            // 自然要补 match 分支。`let` 解构是 irrefutable 的。
-            let TaskKind::ChannelFetch(k) = &meta.kind;
-            *by_kind.entry(ChannelFetchKindTag::of(k)).or_insert(0) += 1;
+            // by_kind 只细分 ChannelFetch;其余种类(PlaylistWrite 等)由 by_lane 计数。
+            if let TaskKind::ChannelFetch(k) = &meta.kind {
+                *by_kind.entry(ChannelFetchKindTag::of(k)).or_insert(0) += 1;
+            }
         }
         SnapshotCounts {
             running: inner.tasks.len(),

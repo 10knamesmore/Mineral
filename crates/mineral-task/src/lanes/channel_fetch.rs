@@ -325,5 +325,121 @@ async fn execute(
                 }
             }
         }
+        ChannelFetchKind::Search {
+            source,
+            kind,
+            query,
+            page,
+        } => {
+            let result = match kind {
+                mineral_model::SearchKind::Song => channel
+                    .search_songs(query, *page)
+                    .await
+                    .map(crate::event::SearchPayload::Songs),
+                mineral_model::SearchKind::Album => channel
+                    .search_albums(query, *page)
+                    .await
+                    .map(crate::event::SearchPayload::Albums),
+                mineral_model::SearchKind::Playlist => channel
+                    .search_playlists(query, *page)
+                    .await
+                    .map(crate::event::SearchPayload::Playlists),
+                mineral_model::SearchKind::Artist => channel
+                    .search_artists(query, *page)
+                    .await
+                    .map(crate::event::SearchPayload::Artists),
+                // User 搜索无 UI 消费方,caps 也不会声明它
+                mineral_model::SearchKind::User => {
+                    Err(mineral_channel_core::Error::NotSupported)
+                }
+            };
+            match result {
+                Ok(payload) => {
+                    event_tx.lock().push(TaskEvent::SearchResults {
+                        source: *source,
+                        kind: *kind,
+                        query: query.clone(),
+                        page: *page,
+                        payload,
+                    });
+                    TaskOutcome::Ok
+                }
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        ?source,
+                        op = "search",
+                        ?kind,
+                        query,
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
+                    );
+                    TaskOutcome::Failed
+                }
+            }
+        }
+        ChannelFetchKind::ArtistDetail { id } => match channel.artist_detail(id).await {
+            Ok(artist) => {
+                event_tx.lock().push(TaskEvent::ArtistDetailFetched {
+                    id: id.clone(),
+                    artist: Box::new(artist),
+                });
+                TaskOutcome::Ok
+            }
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "channel_fetch",
+                    source = ?id.namespace(),
+                    op = "artist_detail",
+                    artist_id = id.as_str(),
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
+                );
+                TaskOutcome::Failed
+            }
+        },
+        ChannelFetchKind::ArtistAlbums { id, page } => {
+            match channel.artist_albums(id, *page).await {
+                Ok(albums) => {
+                    event_tx.lock().push(TaskEvent::ArtistAlbumsFetched {
+                        id: id.clone(),
+                        page: *page,
+                        albums,
+                    });
+                    TaskOutcome::Ok
+                }
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        source = ?id.namespace(),
+                        op = "artist_albums",
+                        artist_id = id.as_str(),
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
+                    );
+                    TaskOutcome::Failed
+                }
+            }
+        }
+        ChannelFetchKind::AlbumSongs { id } => match channel.songs_in_album(id).await {
+            Ok(songs) => {
+                event_tx.lock().push(TaskEvent::AlbumSongsFetched {
+                    id: id.clone(),
+                    songs,
+                });
+                TaskOutcome::Ok
+            }
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "channel_fetch",
+                    source = ?id.namespace(),
+                    op = "album_songs",
+                    album_id = id.as_str(),
+                    error = mineral_log::chain(&e),
+                    "channel fetch failed"
+                );
+                TaskOutcome::Failed
+            }
+        },
     }
 }

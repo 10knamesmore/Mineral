@@ -303,7 +303,12 @@ impl AppState {
     /// 只剩 playlists / tracks / liked_ids 三类。
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
-            TaskEvent::PlaylistsFetched { playlists, .. } => {
+            TaskEvent::PlaylistsFetched { source, playlists } => {
+                // 按 source 替换而非追加:歌单写操作成功后 server 会重拉同源列表,
+                // 盲 extend 会让歌单重复(该源条目挪到尾部的顺序代价可接受)
+                self.library
+                    .playlists
+                    .retain(|p| p.data.id.namespace() != *source);
                 self.library
                     .playlists
                     .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
@@ -331,6 +336,13 @@ impl AppState {
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
             TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
+            // 搜索/详情/写操作事件由 Search 视图与管理流程消费(待接入);
+            // 在那之前先显式吞掉,保持 match 穷尽以便新事件到达时编译器提醒。
+            TaskEvent::SearchResults { .. }
+            | TaskEvent::ArtistDetailFetched { .. }
+            | TaskEvent::ArtistAlbumsFetched { .. }
+            | TaskEvent::AlbumSongsFetched { .. }
+            | TaskEvent::PlaylistWriteDone { .. } => {}
         }
     }
 

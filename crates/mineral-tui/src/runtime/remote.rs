@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use color_eyre::eyre::WrapErr;
 use futures_util::{SinkExt, StreamExt};
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, Song, SongId};
+use mineral_channel_core::ChannelCaps;
+use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed, PlayerSync,
     PlayerVersions, Request, RequestId, Response, SongStatsWire, Subscription, client_handshake,
@@ -277,6 +278,21 @@ impl Client for RemoteClient {
     }
     fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
         let _ = self.send_recv(Request::SetQueue { queue, target_id });
+    }
+    fn queue_insert_next(&self, song: Song) {
+        let _ = self.send_recv(Request::QueueInsertNext(Box::new(song)));
+    }
+    fn queue_append(&self, song: Song) {
+        let _ = self.send_recv(Request::QueueAppend(Box::new(song)));
+    }
+    fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
+        match self.send_recv(Request::ChannelCaps) {
+            Response::ChannelCaps(caps) => caps,
+            other => {
+                warn_unexpected("channel_caps", &other);
+                Vec::new()
+            }
+        }
     }
     fn cycle_play_mode(&self) {
         let _ = self.send_recv(Request::CyclePlayMode);

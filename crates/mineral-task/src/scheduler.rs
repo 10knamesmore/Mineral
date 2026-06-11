@@ -14,6 +14,7 @@ use crate::kind::ChannelFetchKindTag;
 use crate::kind::TaskKind;
 use crate::lane::Lane;
 use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
+use crate::lanes::playlist_write::{Job as PlaylistWriteJob, PlaylistWriteLane};
 use crate::ongoing::{Bind, Ongoing};
 
 /// 进程内任务调度器入口。`Clone` 廉价(`Arc<Inner>`)。
@@ -33,6 +34,9 @@ struct Inner {
 
     /// ChannelFetch lane(per-channel worker 池)。
     channel_fetch: ChannelFetchLane,
+
+    /// PlaylistWrite lane(per-source 单 worker 串行)。
+    playlist_write: PlaylistWriteLane,
 }
 
 /// `Scheduler::snapshot` 的返回:当前 running 数与按 lane / kind 的拆分。
@@ -60,11 +64,13 @@ impl Scheduler {
         let events = Arc::new(Mutex::new(Vec::<TaskEvent>::new()));
         let channel_fetch =
             ChannelFetchLane::spawn(channels, &ongoing, &events, workers_per_channel);
+        let playlist_write = PlaylistWriteLane::spawn(channels, &ongoing, &events);
         Self {
             inner: Arc::new(Inner {
                 ongoing,
                 events,
                 channel_fetch,
+                playlist_write,
             }),
         }
     }
@@ -114,6 +120,19 @@ impl Scheduler {
                         cancel: handle.cancel.clone(),
                         done_tx,
                     },
+                );
+            }
+            TaskKind::PlaylistWrite(op) => {
+                let source = op.target_source();
+                self.inner.playlist_write.dispatch(
+                    source,
+                    PlaylistWriteJob {
+                        id,
+                        op,
+                        cancel: handle.cancel.clone(),
+                        done_tx,
+                    },
+                    &self.inner.events,
                 );
             }
         }

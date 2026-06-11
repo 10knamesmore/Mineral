@@ -448,3 +448,67 @@ mod proptests {
         }
     }
 }
+
+/// 搜索任务 / 歌单写操作 / 队列插播 / caps 请求的 round-trip
+/// (新消息覆盖:bincode 位置式编码,字段增减会在这里炸出来)。
+#[tokio::test]
+async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
+    req_round_trips(Request::SubmitTask(
+        TaskKind::ChannelFetch(ChannelFetchKind::Search {
+            source: SourceKind::NETEASE,
+            kind: mineral_model::SearchKind::Artist,
+            query: String::from("海阔天空"),
+            page: mineral_channel_core::Page::new(30, 30),
+        }),
+        Priority::User,
+    ))
+    .await?;
+    req_round_trips(Request::SubmitTask(
+        TaskKind::PlaylistWrite(mineral_task::PlaylistWriteOp::AddSongs {
+            id: PlaylistId::new(SourceKind::NETEASE, "123"),
+            songs: vec![SongId::new(SourceKind::NETEASE, "186016")],
+        }),
+        Priority::User,
+    ))
+    .await?;
+    req_round_trips(Request::QueueInsertNext(Box::new(song("ins")))).await?;
+    req_round_trips(Request::QueueAppend(Box::new(song("app")))).await?;
+    req_round_trips(Request::ChannelCaps).await?;
+    resp_round_trips(Response::ChannelCaps(vec![(
+        SourceKind::NETEASE,
+        mineral_channel_core::ChannelCaps::builder()
+            .searchable(vec![
+                mineral_model::SearchKind::Song,
+                mineral_model::SearchKind::Artist,
+            ])
+            .playlist_edit(true)
+            .build(),
+    )]))
+    .await?;
+    Ok(())
+}
+
+/// 写完结事件(成功与带错误)经 TaskEvents 响应的 round-trip。
+#[tokio::test]
+async fn round_trip_playlist_write_done_events() -> color_eyre::Result<()> {
+    resp_round_trips(Response::TaskEvents(vec![
+        mineral_task::TaskEvent::PlaylistWriteDone {
+            op: mineral_task::PlaylistWriteOp::Create {
+                source: SourceKind::NETEASE,
+                name: String::from("新歌单"),
+            },
+            error: None,
+        },
+        mineral_task::TaskEvent::PlaylistWriteDone {
+            op: mineral_task::PlaylistWriteOp::Delete {
+                id: PlaylistId::new(SourceKind::NETEASE, "9"),
+            },
+            error: Some(mineral_task::WriteError::Api {
+                code: 502,
+                message: String::from("歌曲已存在"),
+            }),
+        },
+    ]))
+    .await?;
+    Ok(())
+}

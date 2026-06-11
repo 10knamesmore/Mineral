@@ -1,13 +1,20 @@
 //! 任务推到 client 的事件载荷。
 
-use mineral_model::{Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_channel_core::Page;
+use mineral_model::{
+    Album, Artist, ArtistId, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId,
+    SourceKind,
+};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
+
+use crate::write::{PlaylistWriteOp, WriteError};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
 /// 失败任务不发 event(只在 [`crate::TaskHandle::done`] 上拿到 [`crate::TaskOutcome::Failed`]),
-/// 详细错误进 mineral-log。
+/// 详细错误进 mineral-log。**例外:[`TaskEvent::PlaylistWriteDone`] 失败也发**——
+/// 写操作的失败必须到达用户(toast + 清 pending 标记),不能只留在日志里。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
@@ -63,4 +70,80 @@ pub enum TaskEvent {
         /// 远端累计播放次数。
         count: u32,
     },
+
+    /// `Search` 任务成功:一页搜索结果已到。
+    ///
+    /// 回带完整请求四元组,client 据此配对到对应搜索会话;query 已变的
+    /// 过期响应由 client 直接丢弃。
+    SearchResults {
+        /// 来源 channel。
+        source: SourceKind,
+
+        /// 搜索实体类型。
+        kind: SearchKind,
+
+        /// 关键词。
+        query: String,
+
+        /// 分页参数。
+        page: Page,
+
+        /// 结果载荷(变体与 `kind` 一致)。
+        payload: SearchPayload,
+    },
+
+    /// `ArtistDetail` 任务成功:歌手简介 + 热门曲目已到。
+    ArtistDetailFetched {
+        /// 歌手 id。
+        id: ArtistId,
+
+        /// 歌手详情。
+        artist: Box<Artist>,
+    },
+
+    /// `ArtistAlbums` 任务成功:歌手的一页专辑列表已到。
+    ArtistAlbumsFetched {
+        /// 歌手 id。
+        id: ArtistId,
+
+        /// 分页参数(client 配对翻页用)。
+        page: Page,
+
+        /// 专辑列表(曲目留空)。
+        albums: Vec<Album>,
+    },
+
+    /// `AlbumSongs` 任务成功:专辑曲目已到。
+    AlbumSongsFetched {
+        /// 专辑 id。
+        id: mineral_model::AlbumId,
+
+        /// 曲目。
+        songs: Vec<Song>,
+    },
+
+    /// `PlaylistWrite` 任务完结(**成功失败都发**,见模块文档)。
+    PlaylistWriteDone {
+        /// 原操作回带(client 据此定位 pending 项与 toast 文案)。
+        op: PlaylistWriteOp,
+
+        /// 失败时的结构化错误;`None` = 成功。
+        error: Option<WriteError>,
+    },
+}
+
+/// 搜索结果载荷,变体与请求的 [`SearchKind`] 一致。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SearchPayload {
+    /// 歌曲结果。
+    Songs(Vec<Song>),
+
+    /// 专辑结果(曲目留空)。
+    Albums(Vec<Album>),
+
+    /// 歌单结果(曲目留空)。
+    Playlists(Vec<Playlist>),
+
+    /// 歌手结果(热门曲留空)。
+    Artists(Vec<Artist>),
 }

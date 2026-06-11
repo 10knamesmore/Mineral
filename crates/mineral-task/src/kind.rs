@@ -1,16 +1,21 @@
 //! 任务种类与 dedup 键。
 
-use mineral_model::{BitRate, PlaylistId, SongId, SourceKind};
+use mineral_channel_core::Page;
+use mineral_model::{AlbumId, ArtistId, BitRate, PlaylistId, SearchKind, SongId, SourceKind};
 use serde::{Deserialize, Serialize};
 
 use crate::lane::Lane;
+use crate::write::PlaylistWriteOp;
 
 /// 一个待调度任务的所有信息。具体业务参数挂在子枚举里。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskKind {
     /// channel 数据拉取。
     ChannelFetch(ChannelFetchKind),
-    // 后续:Search / PlayPrep / AuthRefresh / PrePreload / LocalScan
+
+    /// 歌单写操作(per-source 串行执行,见 `Lane::PlaylistWrite`)。
+    PlaylistWrite(PlaylistWriteOp),
+    // 后续:PlayPrep / AuthRefresh / PrePreload / LocalScan
 }
 
 impl TaskKind {
@@ -18,6 +23,7 @@ impl TaskKind {
     pub fn lane(&self) -> Lane {
         match self {
             Self::ChannelFetch(_) => Lane::ChannelFetch,
+            Self::PlaylistWrite(_) => Lane::PlaylistWrite,
         }
     }
 
@@ -25,6 +31,7 @@ impl TaskKind {
     pub fn dedup_key(&self) -> DedupKey {
         match self {
             Self::ChannelFetch(k) => DedupKey(format!("ChannelFetch:{}", k.dedup_part())),
+            Self::PlaylistWrite(op) => DedupKey(format!("PlaylistWrite:{}", op.dedup_part())),
         }
     }
 }
@@ -70,6 +77,42 @@ pub enum ChannelFetchKind {
         /// 歌曲 id(自带 namespace)。
         song_id: SongId,
     },
+
+    /// 全库搜索某 channel(单页;翻页是新任务,page 进 dedup key)。
+    Search {
+        /// 目标 channel。
+        source: SourceKind,
+
+        /// 搜索实体类型。
+        kind: SearchKind,
+
+        /// 关键词。
+        query: String,
+
+        /// 分页参数。
+        page: Page,
+    },
+
+    /// 拉歌手详情(简介 + 热门曲目;目标 channel 由 `id` 的 namespace 决定)。
+    ArtistDetail {
+        /// 歌手 id(自带 namespace)。
+        id: ArtistId,
+    },
+
+    /// 拉歌手的专辑列表(分页;目标 channel 由 `id` 的 namespace 决定)。
+    ArtistAlbums {
+        /// 歌手 id(自带 namespace)。
+        id: ArtistId,
+
+        /// 分页参数。
+        page: Page,
+    },
+
+    /// 拉专辑内全部曲目(目标 channel 由 `id` 的 namespace 决定)。
+    AlbumSongs {
+        /// 专辑 id(自带 namespace)。
+        id: AlbumId,
+    },
 }
 
 impl ChannelFetchKind {
@@ -89,6 +132,17 @@ impl ChannelFetchKind {
             Self::RemotePlayCount { song_id } => {
                 format!("remote_play_count:{}", song_id.qualified())
             }
+            Self::Search {
+                source,
+                kind,
+                query,
+                page,
+            } => format!("search:{source:?}:{kind:?}:{query}:{}", page.offset),
+            Self::ArtistDetail { id } => format!("artist_detail:{}", id.qualified()),
+            Self::ArtistAlbums { id, page } => {
+                format!("artist_albums:{}:{}", id.qualified(), page.offset)
+            }
+            Self::AlbumSongs { id } => format!("album_songs:{}", id.qualified()),
         }
     }
 
@@ -97,11 +151,15 @@ impl ChannelFetchKind {
     /// 带 id 的形态从 id 的 namespace 派生;只有 source 的形态直接返回。
     pub fn source(&self) -> SourceKind {
         match self {
-            Self::MyPlaylists { source } | Self::LikedSongIds { source } => *source,
+            Self::MyPlaylists { source }
+            | Self::LikedSongIds { source }
+            | Self::Search { source, .. } => *source,
             Self::PlaylistTracks { id } => id.namespace(),
             Self::SongUrl { song_id, .. }
             | Self::Lyrics { song_id }
             | Self::RemotePlayCount { song_id } => song_id.namespace(),
+            Self::ArtistDetail { id } | Self::ArtistAlbums { id, .. } => id.namespace(),
+            Self::AlbumSongs { id } => id.namespace(),
         }
     }
 }
@@ -124,6 +182,14 @@ pub enum ChannelFetchKindTag {
     Lyrics,
     /// 对应 [`ChannelFetchKind::RemotePlayCount`]。
     RemotePlayCount,
+    /// 对应 [`ChannelFetchKind::Search`]。
+    Search,
+    /// 对应 [`ChannelFetchKind::ArtistDetail`]。
+    ArtistDetail,
+    /// 对应 [`ChannelFetchKind::ArtistAlbums`]。
+    ArtistAlbums,
+    /// 对应 [`ChannelFetchKind::AlbumSongs`]。
+    AlbumSongs,
 }
 
 impl ChannelFetchKindTag {
@@ -137,6 +203,10 @@ impl ChannelFetchKindTag {
             ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
             ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
             ChannelFetchKind::RemotePlayCount { .. } => Self::RemotePlayCount,
+            ChannelFetchKind::Search { .. } => Self::Search,
+            ChannelFetchKind::ArtistDetail { .. } => Self::ArtistDetail,
+            ChannelFetchKind::ArtistAlbums { .. } => Self::ArtistAlbums,
+            ChannelFetchKind::AlbumSongs { .. } => Self::AlbumSongs,
         }
     }
 }
