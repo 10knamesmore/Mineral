@@ -38,10 +38,10 @@ impl App {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
         });
-        let search_query = if self.state.search_q.is_empty() {
+        let search_query = if self.state.search.query.is_empty() {
             None
         } else {
-            Some(self.state.search_q.clone())
+            Some(self.state.search.query.clone())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(SongView 已装饰)。
@@ -55,7 +55,7 @@ impl App {
                         .is_some_and(|ids| ids.contains(&s.id))
                 });
                 (ViewKind::Queue, song, loved)
-            } else if self.state.search_mode {
+            } else if self.state.search.typing {
                 (ViewKind::Search, None, None)
             } else if self.state.fullscreen {
                 (ViewKind::Fullscreen, None, None)

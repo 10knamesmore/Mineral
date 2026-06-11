@@ -9,23 +9,23 @@ use crate::runtime::state::{AppState, View};
 /// 把搜索态渲染成可拼进面板标题的 [`Span`] 序列。
 ///
 /// # Params:
-///   - `state`: 读 `search_mode`(是否正在输入)与 `search_q`(当前词)
+///   - `state`: 读 `search.typing`(是否正在输入)与 `search.query`(当前词)
 ///   - `theme`: 取色
 ///
 /// # Return:
-///   - 输入态(`search_mode`):`/q█`(末尾光标方块,表示正在输入)
+///   - 输入态(`search.typing`):`/q█`(末尾光标方块,表示正在输入)
 ///   - 非输入态但有词:`/q`(已提交、仍在过滤的词)
 ///   - 任一搜索态下深度索引在飞:再缀 ` ⟳n`(见 [`indexing_count`])
 ///   - 无词且非输入态:空序列(标题不挂 badge)
 pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
-    if !state.search_mode && state.search_q.is_empty() {
+    if !state.search.typing && state.search.query.is_empty() {
         return Vec::new();
     }
     let mut spans = vec![Span::styled(
-        format!("/{}", state.search_q),
+        format!("/{}", state.search.query),
         Style::new().fg(theme.peach),
     )];
-    if state.search_mode {
+    if state.search.typing {
         spans.push(Span::styled(
             "█",
             Style::new().fg(theme.text).add_modifier(Modifier::BOLD),

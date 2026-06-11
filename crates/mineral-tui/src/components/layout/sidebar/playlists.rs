@@ -33,14 +33,14 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
-    if state.playlists.is_empty() && state.search_q.is_empty() {
+    if state.playlists.is_empty() && state.search.query.is_empty() {
         paint_empty_state(buf, area, state, theme, block);
         return;
     }
 
     // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
     // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
-    if total == 0 && !state.search_q.is_empty() {
+    if total == 0 && !state.search.query.is_empty() {
         paint_no_match(buf, area, state, theme, block);
         return;
     }
@@ -136,7 +136,7 @@ fn build_row<'a>(
     let count_label = format!("{}", p.data.track_count);
     let src = p.data.source();
 
-    let name_hits = state.match_for(&p.data.name).map(|m| m.hits);
+    let name_hits = state.search.match_for(&p.data.name).map(|m| m.hits);
     let mut cells = vec![Cell::from(Line::from(highlight_indices(
         &p.data.name,
         name_hits.as_deref().unwrap_or(&[]),
@@ -292,8 +292,8 @@ mod tests {
     fn playlists_search_active_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search_mode = true;
-        state.search_q = "春日影".to_owned();
+        state.search.typing = true;
+        state.search.query = "春日影".to_owned();
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -312,7 +312,7 @@ mod tests {
             crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
         ];
-        state.search_q = "cry".to_owned();
+        state.search.query = "cry".to_owned();
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -337,7 +337,7 @@ mod tests {
             SourceKind::NETEASE,
             1,
         )];
-        state.search_q = "chunying".to_owned();
+        state.search.query = "chunying".to_owned();
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -370,7 +370,7 @@ mod tests {
             }],
         );
         state.tracks_generation = 1;
-        state.search_q = "春日".to_owned();
+        state.search.query = "春日".to_owned();
 
         let mut t = Terminal::new(TestBackend::new(64, 12))?;
         t.draw(|f| {
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn playlists_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search_q = "zzz".to_owned();
+        state.search.query = "zzz".to_owned();
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn playlists_search_indexing_snapshot() -> color_eyre::Result<()> {
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search_q = "zzz".to_owned();
+        state.search.query = "zzz".to_owned();
         state
             .tasks_snapshot
             .by_kind

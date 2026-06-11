@@ -170,7 +170,7 @@ fn build_row<'a>(
         Cell::from(format!("{idx}"))
     };
 
-    let name_hits = state.match_for(&sv.data.name).map(|m| m.hits);
+    let name_hits = state.search.match_for(&sv.data.name).map(|m| m.hits);
     let title_cell = Cell::from(Line::from(highlight_indices(
         &sv.data.name,
         name_hits.as_deref().unwrap_or(&[]),
@@ -194,8 +194,8 @@ fn build_row<'a>(
             .as_ref()
             .map(|a| a.name.clone())
             .unwrap_or_default();
-        let artist_hits = state.match_for(&artist).map(|m| m.hits);
-        let album_hits = state.match_for(&album).map(|m| m.hits);
+        let artist_hits = state.search.match_for(&artist).map(|m| m.hits);
+        let album_hits = state.search.match_for(&album).map(|m| m.hits);
         cells.push(Cell::from(Line::from(highlight_indices(
             &artist,
             artist_hits.as_deref().unwrap_or(&[]),
@@ -247,7 +247,7 @@ fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
             .selected_playlist()
             .map(|_| placeholder_row("loading…"));
     }
-    if !state.search_q.is_empty() && state.filtered_tracks().is_empty() {
+    if !state.search.query.is_empty() && state.filtered_tracks().is_empty() {
         return Some(placeholder_row("无匹配"));
     }
     None
@@ -436,7 +436,7 @@ mod tests {
     fn library_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.search_q = "zzz".to_owned();
+        state.search.query = "zzz".to_owned();
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
         Ok(())

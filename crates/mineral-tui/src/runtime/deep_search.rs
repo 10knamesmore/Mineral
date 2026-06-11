@@ -82,7 +82,7 @@ impl CacheKey {
         let cfg = state.cfg.tui().search();
         let w = cfg.deep_weights();
         Self {
-            query: state.search_q.clone(),
+            query: state.search.query.clone(),
             generation: state.tracks_generation,
             weights: [
                 w.name().to_bits(),
@@ -105,7 +105,7 @@ impl CacheKey {
                     w.artist().to_bits(),
                     w.album().to_bits(),
                 ]
-            && self.query == state.search_q
+            && self.query == state.search.query
     }
 }
 
@@ -113,7 +113,7 @@ impl CacheKey {
 ///
 /// 每帧可重复调用:命中指纹时只做几次整数 / 字符串比较。
 pub fn ensure(state: &AppState) {
-    if let Some(key) = &state.deep_search.borrow().key
+    if let Some(key) = &state.search.deep_cache.borrow().key
         && key.matches(state)
     {
         return;
@@ -124,7 +124,7 @@ pub fn ensure(state: &AppState) {
     } else {
         FxHashMap::default()
     };
-    *state.deep_search.borrow_mut() = DeepSearchCache {
+    *state.search.deep_cache.borrow_mut() = DeepSearchCache {
         key: Some(key),
         hits,
     };
@@ -186,7 +186,7 @@ fn score_song<'a>(
 ) -> Option<SongHit<'a>> {
     let mut best: Option<SongHit<'a>> = None;
     if wn > 0.0
-        && let Some(m) = state.match_for(&song.name)
+        && let Some(m) = state.search.match_for(&song.name)
     {
         best = Some(SongHit {
             score: wn * f64::from(m.score),
@@ -198,7 +198,7 @@ fn score_song<'a>(
     }
     if wa > 0.0 {
         for artist in &song.artists {
-            let Some(m) = state.match_for(&artist.name) else {
+            let Some(m) = state.search.match_for(&artist.name) else {
                 continue;
             };
             let score = wa * f64::from(m.score);
@@ -215,7 +215,7 @@ fn score_song<'a>(
     }
     if wal > 0.0
         && let Some(album) = &song.album
-        && let Some(m) = state.match_for(&album.name)
+        && let Some(m) = state.search.match_for(&album.name)
     {
         let score = wal * f64::from(m.score);
         if best.as_ref().is_none_or(|b| score > b.score) {
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search_q = "春日".to_owned();
+        s.search.query = "春日".to_owned();
         let names = s
             .filtered_playlists()
             .iter()
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn artist_hit_highlights_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search_q = "mygo".to_owned();
+        s.search.query = "mygo".to_owned();
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search_q = "迷".to_owned();
+        s.search.query = "迷".to_owned();
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -373,7 +373,7 @@ mod tests {
         )];
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.search_q = "mygo".to_owned();
+        s.search.query = "mygo".to_owned();
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
@@ -393,7 +393,7 @@ mod tests {
         ];
         let inner_id = PlaylistId::new(SourceKind::NETEASE, "inner");
         fill_tracks(&mut s, &inner_id, vec![with_name(song("s1"), "春日影")]);
-        s.search_q = "春日影".to_owned();
+        s.search.query = "春日影".to_owned();
         let names = s
             .filtered_playlists()
             .iter()
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search_q = "春日".to_owned();
+        s.search.query = "春日".to_owned();
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");

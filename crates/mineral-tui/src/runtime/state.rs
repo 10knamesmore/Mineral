@@ -1,6 +1,5 @@
 //! 应用全局状态。`tracks_cache` 中的「key 不存在」== 还没拉到(渲染 "loading…")。
 
-use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,15 +12,16 @@ use mineral_model::{LyricLine, Lyrics};
 
 use crate::components::layout::spectrum::SpectrumState;
 use crate::render::anim::{Transition, ticks16_from_ms};
-use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
 use crate::runtime::playback::Playback;
 use crate::runtime::scroll::ListScroll;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
 mod covers;
+mod search;
 
 pub use covers::CoverHub;
+pub use search::SearchState;
 
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,8 +154,8 @@ pub struct AppState {
     /// 还停在该歌单且光标未动过则补落位,否则作废。
     pub pending_track_restore: Option<PendingRestore>,
 
-    /// 搜索关键字。
-    pub search_q: String,
+    /// 搜索状态(查询串 / 输入态 + 模糊匹配基建)。
+    pub search: SearchState,
 
     /// 当前正在播放(用于 Library 视图行首 ♫ 标记)。
     pub current: Option<Song>,
@@ -175,9 +175,6 @@ pub struct AppState {
     /// 上次已应用的 server 状态版本号(每 tick 随 PlayerSync 回报;0 = 还没同步过,
     /// 首次同步必然全量)。
     pub versions: mineral_protocol::PlayerVersions,
-
-    /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
-    pub search_mode: bool,
 
     /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
     /// 非 Shuffle 状态恒为 `None`。
@@ -208,19 +205,6 @@ pub struct AppState {
     /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
     /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
     pub last_sel_change: Instant,
-
-    /// 本地搜索的模糊匹配器(fzf 风格子序列 + 中文拼音/首字母联合)。
-    /// `&self` 路径下要复用 buffer,因此包 `RefCell`,与 `covers.protocols` 同理。
-    pub matcher: RefCell<FuzzyMatcher>,
-
-    /// 文本 → 预处理 [`MatchableText`] 的缓存。键是原始文本(歌名 / 艺人名 / 专辑名 /
-    /// 歌单名),session 内长留;规模(每条 ~几百字节,总量上限 ≈ 已加载曲目数 × 3)
-    /// 远低于其它 cache。换源 / 重启自然清掉。
-    pub matchable_cache: RefCell<FxHashMap<String, Arc<MatchableText>>>,
-
-    /// Playlists 深度搜索(搜索词穿透到歌单内歌曲)的结果缓存。按
-    /// `(query, tracks 版本, 权重)` 失效,渲染帧只读;`RefCell` 与 matcher 同理。
-    pub deep_search: RefCell<crate::runtime::deep_search::DeepSearchCache>,
 
     /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
@@ -258,14 +242,13 @@ impl AppState {
             scroll_track: ListScroll::new(),
             track_pos: TrackPosMap::default(),
             pending_track_restore: None,
-            search_q: String::new(),
+            search: SearchState::new(),
             current: None,
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
             queue: Vec::new(),
             versions: mineral_protocol::PlayerVersions::default(),
-            search_mode: false,
             original_queue: None,
             covers: CoverHub::new(),
             tasks_snapshot: mineral_task::Snapshot {
@@ -277,9 +260,6 @@ impl AppState {
             play_counts: FxHashMap::default(),
             play_count_requested: FxHashSet::default(),
             last_sel_change: Instant::now(),
-            matcher: RefCell::new(FuzzyMatcher::new()),
-            matchable_cache: RefCell::new(FxHashMap::default()),
-            deep_search: RefCell::new(crate::runtime::deep_search::DeepSearchCache::default()),
             cfg,
         }
     }
@@ -489,7 +469,7 @@ impl AppState {
     /// - Playlists 视图:filtered 列表的索引,过滤词作用于 playlist 名,渲染、导航、
     ///   selected_playlist 都对齐 filtered。
     /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
-    ///   此时 search_q 作用于 tracks,跟 playlists 过滤无关。
+    ///   此时 search.query 作用于 tracks,跟 playlists 过滤无关。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
         match self.view {
             View::Playlists => self.filtered_playlists().get(self.sel_playlist).copied(),
@@ -527,17 +507,20 @@ impl AppState {
     /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
     /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
-        if self.search_q.is_empty() {
+        if self.search.query.is_empty() {
             return self.playlists.iter().collect();
         }
-        self.sync_query();
+        self.search.sync_query();
         crate::runtime::deep_search::ensure(self);
-        let deep = self.deep_search.borrow();
+        let deep = self.search.deep_cache.borrow();
         let mut scored: Vec<(f64, &PlaylistView)> = self
             .playlists
             .iter()
             .filter_map(|p| {
-                let name = self.match_for(&p.data.name).map(|m| f64::from(m.score));
+                let name = self
+                    .search
+                    .match_for(&p.data.name)
+                    .map(|m| f64::from(m.score));
                 let inner = deep.score_of(&p.data.id);
                 let best = match (name, inner) {
                     (Some(n), Some(i)) => n.max(i),
@@ -558,16 +541,16 @@ impl AppState {
     /// 调用前提:本帧已有人调过 [`Self::filtered_playlists`](渲染路径必然满足),
     /// 缓存已就绪;这里不再 ensure,避免渲染端反复触发指纹比较。
     pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<crate::runtime::deep_search::DeepHit> {
-        if self.search_q.is_empty() {
+        if self.search.query.is_empty() {
             return None;
         }
-        self.deep_search.borrow().hit_of(id).cloned()
+        self.search.deep_cache.borrow().hit_of(id).cloned()
     }
 
     /// 当前过滤结果里是否存在任何深度命中。渲染端据此决定 match 列要不要占位——
     /// 全员只命中歌单名时不挤压 name 列宽。调用前提同 [`Self::deep_hit_for`]。
     pub fn has_deep_hits(&self) -> bool {
-        !self.search_q.is_empty() && self.deep_search.borrow().has_hits()
+        !self.search.query.is_empty() && self.search.deep_cache.borrow().has_hits()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。
@@ -575,62 +558,31 @@ impl AppState {
     /// 命中规则:歌名 / 任一艺人 / 专辑名取最高分作为该曲分数。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
         let tracks = self.current_tracks();
-        if self.search_q.is_empty() {
+        if self.search.query.is_empty() {
             return tracks;
         }
-        self.sync_query();
+        self.search.sync_query();
         let mut scored: Vec<(u32, SongView)> = tracks
             .into_iter()
             .filter_map(|sv| {
-                let name = self.match_for(&sv.data.name).map(|m| m.score);
+                let name = self.search.match_for(&sv.data.name).map(|m| m.score);
                 let artist = sv
                     .data
                     .artists
                     .iter()
-                    .filter_map(|a| self.match_for(&a.name).map(|m| m.score))
+                    .filter_map(|a| self.search.match_for(&a.name).map(|m| m.score))
                     .max();
                 let album = sv
                     .data
                     .album
                     .as_ref()
-                    .and_then(|a| self.match_for(&a.name).map(|m| m.score));
+                    .and_then(|a| self.search.match_for(&a.name).map(|m| m.score));
                 let best = name.into_iter().chain(artist).chain(album).max()?;
                 Some((best, sv))
             })
             .collect();
         scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
         scored.into_iter().map(|(_, sv)| sv).collect()
-    }
-
-    /// 把当前 `search_q` 同步给内部 matcher。空 query 也会被推下去,使 matcher 失活。
-    /// 同 query 重复调用是无开销 no-op(matcher 内部判等)。
-    pub fn sync_query(&self) {
-        self.matcher.borrow_mut().set_query(&self.search_q);
-    }
-
-    /// 对单段文本跑一次匹配,返回 score + 已映射回原文 char 下标的 `hits`。
-    ///
-    /// 空 query / 不命中都返回 `None`。每帧渲染时按需调用(已带 MatchableText 缓存
-    /// + matcher buffer 复用,开销可忽略)。
-    pub fn match_for(&self, text: &str) -> Option<Match> {
-        if self.search_q.is_empty() {
-            return None;
-        }
-        self.sync_query();
-        let mt = self.matchable_for(text);
-        self.matcher.borrow_mut().score(&mt)
-    }
-
-    /// 拿 / 构造 一份预处理过的 `MatchableText`。首次见到的文本会算一次拼音。
-    fn matchable_for(&self, text: &str) -> Arc<MatchableText> {
-        if let Some(mt) = self.matchable_cache.borrow().get(text) {
-            return Arc::clone(mt);
-        }
-        let mt = MatchableText::new(text);
-        self.matchable_cache
-            .borrow_mut()
-            .insert(text.to_owned(), Arc::clone(&mt));
-        mt
     }
 }
 
@@ -685,7 +637,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.search_q = "cry".to_owned();
+        s.search.query = "cry".to_owned();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -703,7 +655,7 @@ mod tests {
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search_q = "chunying".to_owned();
+        s.search.query = "chunying".to_owned();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -721,7 +673,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search_q = "my".to_owned();
+        s.search.query = "my".to_owned();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -735,8 +687,9 @@ mod tests {
     #[test]
     fn match_for_returns_original_indices() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.search_q = "cry".to_owned();
+        s.search.query = "cry".to_owned();
         let m = s
+            .search
             .match_for("春日影")
             .ok_or_else(|| color_eyre::eyre::eyre!("cry 应命中春日影"))?;
         assert_eq!(m.hits.as_slice(), &[0u32, 1, 2]);
@@ -747,7 +700,7 @@ mod tests {
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
-        assert!(s.match_for("春日影").is_none());
+        assert!(s.search.match_for("春日影").is_none());
         Ok(())
     }
 

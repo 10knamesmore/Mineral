@@ -519,7 +519,7 @@ impl App {
         // 用户绑定)、压过浮层(确认 / queue 开着也直接退);唯独让位文本输入——
         // 搜索态的大写 Q 是搜索词,不是退出意图。只看 `Char('Q')` 不看 modifier:
         // 部分终端报大写字符时不附带 SHIFT。
-        if !self.state.search_mode && key.code == KeyCode::Char('Q') {
+        if !self.state.search.typing && key.code == KeyCode::Char('Q') {
             self.stop_daemon_on_quit = true;
             // 还停在 Library 内就退出:位置没经过「返回」记录,这里补记。放在转场
             // 起点而非收尾——fire-and-forget 落盘借收缩动画的时长完成,收尾才写
@@ -544,7 +544,7 @@ impl App {
         }
 
         // —— 以下:无活跃浮层 ——
-        if self.state.search_mode {
+        if self.state.search.typing {
             self.handle_search_key(key);
             return;
         }
@@ -1027,13 +1027,13 @@ mod tests {
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
-        assert!(app.state.search_mode, "前置:已进搜索态");
+        assert!(app.state.search.typing, "前置:已进搜索态");
 
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
-        assert_eq!(app.state.search_q, "Q", "大写 Q 应进搜索词");
+        assert_eq!(app.state.search.query, "Q", "大写 Q 应进搜索词");
         assert!(app.transition.is_none(), "搜索态不该触发退出转场");
         assert!(!app.should_quit);
         assert_eq!(
