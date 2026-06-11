@@ -9,9 +9,9 @@ apitest = "run -p mineral-channel-netease --example apitest"
 #   cargo t      跑全仓测试(nextest)
 #   cargo td     跑 doctest(nextest 不覆盖,单独兜)
 #   cargo snap   跑测试 + 进 insta 快照审阅(改了快照时用;绝不 accept-all)
-t    = "nextest run --workspace"
-td   = "test --workspace --doc"
-snap = "insta test --test-runner nextest --review"
+t    = "nextest run --workspace --release"
+td   = "test --workspace --doc --release"
+snap = "insta test --test-runner nextest --review --release"
 
 # 性能剖析专用 build:release 优化 + 完整 DWARF 符号(见 Cargo.toml [profile.profiling])。
 # 产物在 target/profiling/mineral,符号只为 perf / 火焰图,不污染 `--release`。
