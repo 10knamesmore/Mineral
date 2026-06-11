@@ -8,10 +8,10 @@
 #![cfg(feature = "mock")]
 
 use async_trait::async_trait;
-use mineral_channel_core::{Credential, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, BitRate, Lyrics, PlayUrl, Playlist,
-    PlaylistId, Song, SongId, SourceKind, UserId,
+    PlaylistId, SearchKind, Song, SongId, SourceKind, UserId,
 };
 
 /// 一首 mock 歌 + UI 装饰(loved / 累计播放次数)。
@@ -70,6 +70,14 @@ impl Default for MockChannel {
 impl MusicChannel for MockChannel {
     fn source(&self) -> SourceKind {
         SourceKind::MOCK
+    }
+
+    fn caps(&self) -> ChannelCaps {
+        // playlist_edit 随内存写操作落地翻开,声明必须与当前真实能力一致
+        ChannelCaps::builder()
+            .searchable(vec![SearchKind::Song, SearchKind::Playlist])
+            .playlist_edit(false)
+            .build()
     }
 
     async fn search_songs(&self, query: &str, _page: Page) -> Result<Vec<Song>> {

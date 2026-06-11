@@ -6,10 +6,10 @@
 use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
-use mineral_channel_core::{Credential, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
-    Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind,
-    UserId,
+    Album, AlbumId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId,
+    SourceKind, UserId,
 };
 use mineral_persist::ServerStore;
 use rustc_hash::FxHashSet;
@@ -127,6 +127,14 @@ fn map_err(e: color_eyre::Report) -> Error {
 impl MusicChannel for NeteaseChannel {
     fn source(&self) -> SourceKind {
         SourceKind::NETEASE
+    }
+
+    fn caps(&self) -> ChannelCaps {
+        // playlist_edit / Artist 搜索随对应端点落地翻开,声明必须与当前真实能力一致
+        ChannelCaps::builder()
+            .searchable(vec![SearchKind::Song, SearchKind::Album, SearchKind::Playlist])
+            .playlist_edit(false)
+            .build()
     }
 
     async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>> {

@@ -3,6 +3,8 @@
 //! 任何具体音乐源(网易云、本地、QQ ……)都通过实现 [`MusicChannel`] 接入。
 //! 上层只面向 trait 编程,channel 实现间通过 [`mineral_model`] 中的统一类型互通。
 
+/// channel 能力声明。
+pub mod caps;
 /// 登录凭证类型。
 pub mod credential;
 /// channel 公共错误类型与 `Result` 别名。
@@ -10,6 +12,7 @@ pub mod error;
 /// 列表分页参数。
 pub mod page;
 
+pub use caps::ChannelCaps;
 pub use credential::Credential;
 pub use error::{Error, Result};
 pub use page::Page;
@@ -29,6 +32,12 @@ use mineral_model::{
 pub trait MusicChannel: Send + Sync {
     /// 该 channel 的来源标识。
     fn source(&self) -> SourceKind;
+
+    /// 该 channel 的能力声明,见 [`ChannelCaps`]。
+    ///
+    /// 刻意**不给默认实现**:能力是每个 channel 必须显式表态的事,
+    /// 默认值会让新 channel 静默继承错误声明。
+    fn caps(&self) -> ChannelCaps;
 
     // ---------- 搜索 ----------
     /// 搜索单曲。
@@ -51,6 +60,71 @@ pub trait MusicChannel: Send + Sync {
     async fn songs_in_playlist(&self, id: &PlaylistId) -> Result<Vec<Song>>;
     /// 拉取艺人详情(可选)。
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {
+        Err(Error::NotSupported)
+    }
+
+    /// 拉取艺人的专辑列表(分页,可选)。
+    ///
+    /// # Params:
+    ///   - `id`: 艺人
+    ///   - `page`: 分页参数
+    ///
+    /// # Return:
+    ///   专辑列表;`songs` 留空,曲目按需走 [`Self::songs_in_album`]。
+    async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<Vec<Album>> {
+        Err(Error::NotSupported)
+    }
+
+    // ---------- 歌单管理(可选写操作) ----------
+    // 前置条件(调用方保证,server 在边界校验):涉及的 SongId 必须与歌单
+    // PlaylistId 同 namespace——远程歌单装不下别源的歌,channel 实现不做
+    // 防御性检查。写操作失败语义见 [`Error`];实现方不得把远端的"已存在"
+    // 等业务态伪装成成功。
+
+    /// 创建歌单(可选)。
+    ///
+    /// # Params:
+    ///   - `name`: 歌单名
+    ///
+    /// # Return:
+    ///   新建的歌单。实现方应从创建响应直接映射,避免"建完再拉列表"的额外往返。
+    async fn create_playlist(&self, _name: &str) -> Result<Playlist> {
+        Err(Error::NotSupported)
+    }
+
+    /// 删除自己创建的歌单(可选)。
+    async fn delete_playlist(&self, _id: &PlaylistId) -> Result<()> {
+        Err(Error::NotSupported)
+    }
+
+    /// 向歌单追加歌曲(可选)。
+    ///
+    /// 歌曲已在歌单中时透传远端语义(如网易云 code 502 的
+    /// [`Error::Api`]),由上层翻译,不伪装成功。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌单
+    ///   - `songs`: 待追加歌曲(与歌单同 namespace)
+    async fn playlist_add_songs(&self, _id: &PlaylistId, _songs: &[SongId]) -> Result<()> {
+        Err(Error::NotSupported)
+    }
+
+    /// 从歌单移除歌曲(可选)。
+    ///
+    /// # Params:
+    ///   - `id`: 目标歌单
+    ///   - `songs`: 待移除歌曲(与歌单同 namespace)
+    async fn playlist_remove_songs(&self, _id: &PlaylistId, _songs: &[SongId]) -> Result<()> {
+        Err(Error::NotSupported)
+    }
+
+    /// 歌单改名(可选)。
+    async fn rename_playlist(&self, _id: &PlaylistId, _name: &str) -> Result<()> {
+        Err(Error::NotSupported)
+    }
+
+    /// 修改歌单描述(可选)。
+    async fn set_playlist_description(&self, _id: &PlaylistId, _desc: &str) -> Result<()> {
         Err(Error::NotSupported)
     }
 

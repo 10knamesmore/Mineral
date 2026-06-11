@@ -766,7 +766,7 @@ mod tests {
 
     use async_trait::async_trait;
     use mineral_audio::{AudioHandle, AudioMode};
-    use mineral_channel_core::{Error, MusicChannel, Page, Result as ChannelResult};
+    use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult};
     use mineral_model::{
         Album, AlbumId, AlbumRef, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song,
         SongId, SourceKind,
@@ -802,6 +802,13 @@ mod tests {
     impl MusicChannel for RecordingChannel {
         fn source(&self) -> SourceKind {
             SourceKind::NETEASE
+        }
+
+        fn caps(&self) -> ChannelCaps {
+            ChannelCaps::builder()
+                .searchable(Vec::new())
+                .playlist_edit(false)
+                .build()
         }
 
         async fn search_songs(&self, _query: &str, _page: Page) -> ChannelResult<Vec<Song>> {

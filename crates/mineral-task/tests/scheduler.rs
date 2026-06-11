@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::{Error, MusicChannel, Page, Result};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result};
 use mineral_model::{
     Album, AlbumId, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId,
     SourceKind,
@@ -50,6 +50,13 @@ impl FakeChannel {
 impl MusicChannel for FakeChannel {
     fn source(&self) -> SourceKind {
         SourceKind::NETEASE
+    }
+
+    fn caps(&self) -> ChannelCaps {
+        ChannelCaps::builder()
+            .searchable(Vec::new())
+            .playlist_edit(false)
+            .build()
     }
 
     async fn search_songs(&self, _q: &str, _p: Page) -> Result<Vec<Song>> {
