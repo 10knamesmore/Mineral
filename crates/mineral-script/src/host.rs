@@ -203,6 +203,30 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
     lua.globals().set("mineral", mineral)
 }
 
+/// 各源网页链接模板在 VM named registry 的键(Song/Playlist 投影拼 `url` 时读)。
+pub(crate) const WEB_URL_TEMPLATES: &str = "mineral.web_url_templates";
+
+/// 把各源的网页链接模板写进 VM named registry,供 Song/Playlist 的 Lua 投影
+/// 拼 `url` 字段。daemon 装配时(脚本线程启动前)调用;不 seed 则所有实体的
+/// `url` 为 nil(降级,不报错)。
+///
+/// # Params:
+///   - `lua`: 目标 VM
+///   - `entries`: `(源名, 歌曲模板, 歌单模板)`;模板 `{id}` 占位填裸 id
+pub fn seed_web_url_templates(
+    lua: &Lua,
+    entries: impl IntoIterator<Item = (String, Option<String>, Option<String>)>,
+) -> mlua::Result<()> {
+    let table = lua.create_table()?;
+    for (source, song_tpl, playlist_tpl) in entries {
+        let entry = lua.create_table()?;
+        entry.set("song", song_tpl)?;
+        entry.set("playlist", playlist_tpl)?;
+        table.set(source, entry)?;
+    }
+    lua.set_named_registry_value(WEB_URL_TEMPLATES, table)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::api::test_support::vm_with_host;

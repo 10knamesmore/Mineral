@@ -9,6 +9,7 @@ use super::animation::AnimationConfig;
 use super::audio::AudioConfig;
 use super::behavior::BehaviorConfig;
 use super::cache::CacheConfig;
+use super::copy::CopyConfig;
 use super::cover::CoverConfig;
 use super::daemon::DaemonConfig;
 use super::download::DownloadConfig;
@@ -94,4 +95,7 @@ pub struct TuiConfig {
 
     /// 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。
     layout: LayoutConfig,
+
+    /// copy 段(复制菜单的自定义模板)。
+    copy: CopyConfig,
 }

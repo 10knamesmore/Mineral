@@ -212,7 +212,8 @@ mod tests {
         Ok(())
     }
 
-    /// Song 投影携带 artists / album / cover_url(Option 字段缺席为 nil)。
+    /// Song 投影携带 artists / album / cover_url(Option 字段缺席为 nil),
+    /// 以及 source / url(未 seed 模板时 url 为 nil)。
     #[test]
     fn song_projection_carries_artists_album_and_urls() -> color_eyre::Result<()> {
         let (runtime, sender, mut push_rx) = spawn_with_script(
@@ -220,7 +221,8 @@ mod tests {
             mineral.on("track_started", function(args)
                 local s = args.song
                 mineral.ui.toast(table.concat(s.artists, ",") .. "/" .. tostring(s.album)
-                    .. "/" .. tostring(s.cover_url) .. "/" .. tostring(s.source_url))
+                    .. "/" .. tostring(s.cover_url) .. "/" .. tostring(s.source_url)
+                    .. "/" .. s.source .. "/" .. tostring(s.url))
             end)
             "#,
         )?;
@@ -235,10 +237,117 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: vec![TextSpan::plain("Mineral/EndSerenading/nil/nil")],
+                content: vec![TextSpan::plain("Mineral/EndSerenading/nil/nil/netease/nil")],
                 id: None,
                 ttl_secs: None,
             }]
+        );
+        Ok(())
+    }
+
+    /// seed 网页模板后 Song 投影的 url 按源模板拼出(`{id}` 填裸 id)。
+    #[test]
+    fn song_projection_url_uses_seeded_template() -> color_eyre::Result<()> {
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let (push_tx, mut push_rx) = unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = Lua::new();
+        install_api(&lua, &host)?;
+        crate::host::seed_web_url_templates(
+            &lua,
+            vec![(
+                "netease".to_owned(),
+                Some("https://x.example/song?id={id}".to_owned()),
+                None,
+            )],
+        )?;
+        lua.load(
+            r#"
+            mineral.on("track_started", function(args)
+                mineral.ui.toast(tostring(args.song.url))
+            end)
+            "#,
+        )
+        .exec()?;
+        let sender = ScriptSender::detached();
+        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?;
+        let song = first_track()?;
+        let raw = song.id.value().to_owned();
+        sender.send(ScriptEvent::TrackStarted {
+            song: Box::new(song),
+        });
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: vec![TextSpan::plain(format!("https://x.example/song?id={raw}"))],
+                id: None,
+                ttl_secs: None,
+            }]
+        );
+        Ok(())
+    }
+
+    /// 复制模板端到端:registry 函数按下标执行,song / playlist 两种 ctx 投影
+    /// 正确;下标无函数回人读错误。
+    #[test]
+    fn render_copy_template_executes_registry_function() -> color_eyre::Result<()> {
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let (push_tx, _push_rx) = unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = Lua::new();
+        install_api(&lua, &host)?;
+        // 模拟 config 管线摘好的函数表:1 = song 模板,2 = playlist 模板。
+        let fns = lua.create_table()?;
+        fns.set(
+            1,
+            lua.load("function(s) return s.title .. '|' .. s.source end")
+                .eval::<mlua::Function>()?,
+        )?;
+        fns.set(
+            2,
+            lua.load("function(p) return p.name .. '|' .. #p.songs .. '|' .. p.songs[1].title end")
+                .eval::<mlua::Function>()?,
+        )?;
+        lua.set_named_registry_value(mineral_config::COPY_TEMPLATE_FNS, fns)?;
+        let sender = ScriptSender::detached();
+        let _runtime = ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?;
+
+        let song = first_track()?;
+        let got = sender
+            .render_copy_template(
+                /*index*/ 0,
+                mineral_protocol::CopyTemplateCtx::Song(Box::new(song.clone())),
+            )
+            .blocking_recv()?;
+        assert_eq!(got, Ok(format!("{}|netease", song.name)));
+
+        let playlist = mineral_model::Playlist {
+            id: mineral_model::PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1"),
+            name: "歌单甲".to_owned(),
+            description: String::new(),
+            cover_url: None,
+            track_count: 1,
+            songs: vec![song.clone()],
+        };
+        let got = sender
+            .render_copy_template(
+                /*index*/ 1,
+                mineral_protocol::CopyTemplateCtx::Playlist(Box::new(playlist)),
+            )
+            .blocking_recv()?;
+        assert_eq!(got, Ok(format!("歌单甲|1|{}", song.name)));
+
+        let got = sender
+            .render_copy_template(
+                /*index*/ 9,
+                mineral_protocol::CopyTemplateCtx::Song(Box::new(song)),
+            )
+            .blocking_recv()?;
+        assert!(
+            got.as_ref().is_err_and(|e| e.contains("模板 #9")),
+            "下标无函数应回人读错误,实得 {got:?}"
         );
         Ok(())
     }

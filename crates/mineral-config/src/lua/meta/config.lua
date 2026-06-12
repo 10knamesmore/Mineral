@@ -42,6 +42,7 @@
 ---@field animation? mineral.AnimationConfig 各动画时长与帧率
 ---@field toast? mineral.ToastConfig 顶栏通知停留时长
 ---@field layout? mineral.LayoutConfig 布局门槛与分区尺寸
+---@field copy? mineral.CopyConfig 复制菜单(y)的自定义模板
 
 ---主题色板。色值一律 "#rrggbb" 六位十六进制(必须带 `#`,如 "#cba6f7");
 ---默认主题是 Catppuccin Mocha,想整体换主题就把 14 个 token 全写一遍。
@@ -116,6 +117,8 @@
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥
 ---@field download? mineral.KeyBinding 下载选中曲 / 歌单
 ---@field dismiss_notice? mineral.KeyBinding 关最早一张驻留通知卡片(连按逐条关)
+---@field open_action_menu? mineral.KeyBinding 上下文操作菜单(内容随光标实体 × 视图)
+---@field open_copy_menu? mineral.KeyBinding 复制菜单(内置项 + copy.templates 自定义模板)
 ---@field scroll_line_down? mineral.KeyBinding 逐行下滚:全屏滚歌词,浏览态滚列表视口(行数见 behavior.line_scroll_rows)
 ---@field scroll_line_up? mineral.KeyBinding 逐行上滚(行数见 behavior.line_scroll_rows)
 ---@field scroll_page_down? mineral.KeyBinding 翻页下滚(行数见 behavior.page_scroll_rows)
@@ -240,6 +243,17 @@
 ---@field fs_spectrum_height? integer 全屏态底部频谱通栏高,行
 ---@field fs_transport_height? integer 全屏态 transport 条高,行;内容 6 行 + 边框 2
 ---@field dock_w_pct? integer 停靠浮层(播放队列)占屏宽百分比 0-100
+
+---复制菜单(y)的自定义模板段。
+---@class mineral.CopyConfig
+---@field templates? mineral.CopyTemplate[] 自定义模板(数组整体替换,追加在内置项后)
+
+---一个自定义复制模板。template 在 daemon 脚本运行时执行(看门狗超时保护,超时/报错只 toast 不复制)。
+---@class mineral.CopyTemplate
+---@field key? string 菜单快捷字母(单字符);与内置项同字母时顶掉内置的快捷位,用户项之间后者胜;省略 = 仅 j/k + Enter 可达
+---@field label string 菜单显示名
+---@field template fun(e: mineral.Song|mineral.Playlist): string 渲染函数,返回进剪贴板的文本;收哪种表由 context 决定
+---@field context? "song"|"playlist" 作用上下文:"song"(默认)收 mineral.Song,"playlist" 收 mineral.Playlist
 
 ---音频引擎(daemon 持有,改后需重启 daemon)。
 ---@class mineral.AudioConfig

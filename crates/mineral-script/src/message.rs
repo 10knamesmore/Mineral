@@ -414,6 +414,19 @@ pub(crate) enum ScriptMsg {
         reply: tokio::sync::oneshot::Sender<crate::hooks::HookDecision>,
     },
 
+    /// 渲染一个复制模板(config `copy.templates[index]` 的函数),结果经
+    /// oneshot 回执(daemon 处理 `Request::RenderCopyTemplate` 用)。
+    RenderCopyTemplate {
+        /// 模板下标(0-based,对位 config 数组序)。
+        index: usize,
+
+        /// 模板作用的实体(client 随请求带来)。
+        ctx: mineral_protocol::CopyTemplateCtx,
+
+        /// 渲染结果回执(接收端 drop 时静默丢)。
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+
     /// 优雅停机:主循环退出,线程结束。
     Stop,
 }
@@ -587,6 +600,31 @@ impl ScriptSender {
             && let ScriptMsg::Action { reply, .. } = *failed
         {
             let _ = reply.send(ActionOutcome::Failed("脚本未启用或线程已退出".to_owned()));
+        }
+        rx
+    }
+
+    /// 投递一次复制模板渲染(`copy.templates[index]` 的函数,脚本线程执行)。
+    ///
+    /// 未挂 / 线程已退出时,回执立即就绪为 `Err`。
+    ///
+    /// # Params:
+    ///   - `index`: 模板下标(0-based,对位 config 数组序)
+    ///   - `ctx`: 模板作用的实体
+    ///
+    /// # Return:
+    ///   oneshot 接收端;`await` 得到剪贴板文本或人读错误。
+    #[must_use]
+    pub fn render_copy_template(
+        &self,
+        index: usize,
+        ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if let Err(failed) = self.try_send(ScriptMsg::RenderCopyTemplate { index, ctx, reply })
+            && let ScriptMsg::RenderCopyTemplate { reply, .. } = *failed
+        {
+            let _ = reply.send(Err("脚本未启用或线程已退出".to_owned()));
         }
         rx
     }

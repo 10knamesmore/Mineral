@@ -192,7 +192,16 @@ pub(crate) struct TestClient {
 
     /// `submit_task` 收到的任务序列(深度搜索全量补拉等提交路径断言用)。
     pub(crate) submitted: Arc<Mutex<Vec<TaskKind>>>,
+
+    /// 队列操作记录 `(操作名, 歌 id 全限定串)`(操作菜单的插播/追加路径断言用)。
+    pub(crate) queue_ops: QueueOpsLog,
+
+    /// `render_copy_template` 收到的模板下标记录(恒回 `Err`,避免测试真碰系统剪贴板)。
+    pub(crate) copy_template_calls: Arc<Mutex<Vec<usize>>>,
 }
+
+/// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
+pub(crate) type QueueOpsLog = Arc<Mutex<Vec<(&'static str, String)>>>;
 
 impl Client for TestClient {
     fn play(&self, _url: MediaUrl) {}
@@ -206,8 +215,16 @@ impl Client for TestClient {
     }
     fn play_song(&self, _song: Song) {}
     fn set_queue(&self, _queue: Vec<Song>, _target_id: SongId) {}
-    fn queue_insert_next(&self, _song: Song) {}
-    fn queue_append(&self, _song: Song) {}
+    fn queue_insert_next(&self, song: Song) {
+        if let Ok(mut v) = self.queue_ops.lock() {
+            v.push(("insert_next", song.id.qualified()));
+        }
+    }
+    fn queue_append(&self, song: Song) {
+        if let Ok(mut v) = self.queue_ops.lock() {
+            v.push(("append", song.id.qualified()));
+        }
+    }
     fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
         Vec::new()
     }
@@ -247,6 +264,17 @@ impl Client for TestClient {
     }
 
     fn download(&self, _target: mineral_protocol::DownloadTarget) {}
+
+    fn render_copy_template(
+        &self,
+        index: usize,
+        _ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> Result<String, String> {
+        if let Ok(mut v) = self.copy_template_calls.lock() {
+            v.push(index);
+        }
+        Err("test stub".to_owned())
+    }
 
     fn download_progress(&self) -> mineral_protocol::DownloadProgress {
         mineral_protocol::DownloadProgress::default()
@@ -355,6 +383,39 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     app.state.nav.sel_playlist = 0;
     app.state.nav.sel_track = sel_track;
     Ok(app)
+}
+
+/// 同 [`app_with_library`],额外返回 [`TestClient`] 的队列操作记录
+/// (操作菜单的插播 / 追加路径断言用)。
+pub(crate) fn app_with_library_probed(
+    len: usize,
+    sel_track: usize,
+) -> color_eyre::Result<(App, QueueOpsLog)> {
+    let queue_ops = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        queue_ops: Arc::clone(&queue_ops),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    app.state.library.playlists = vec![playlist_view(
+        "p1",
+        "EndSerenading",
+        SourceKind::NETEASE,
+        u64::try_from(len).unwrap_or(0),
+    )];
+    let views = endserenading(len)
+        .iter()
+        .map(|t| SongView {
+            data: t.clone(),
+            loved: false,
+            plays: None,
+        })
+        .collect::<Vec<SongView>>();
+    app.state.library.tracks.insert(pid, views);
+    app.state.view.switch_to(View::Library);
+    app.state.nav.sel_track = sel_track;
+    Ok((app, queue_ops))
 }
 
 /// 同 [`app_with_library`],但填 `len` 首程序化生成的可区分曲目——EndSerenading

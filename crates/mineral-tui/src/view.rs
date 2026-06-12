@@ -16,6 +16,8 @@ use crate::components::layout::{
 /// 与 `morph_areas` 给出)。通知 / 浮层叠在最上(整屏转场期间不画);最后叠启动 / 退出缩放边框。
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let theme = &app.theme;
+    // 回写本帧面积:按键路径(弹菜单求锚点)据此重算布局,不依赖 TTY 查询。
+    app.state.frame_area.set(frame.area());
     let layout_cfg = app.state.cfg.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
 

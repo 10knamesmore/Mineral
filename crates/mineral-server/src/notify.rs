@@ -220,6 +220,28 @@ impl PlayerCore {
             Err(_recv) => bail!("脚本线程已退出"),
         }
     }
+
+    /// 渲染一个复制模板并等待结果(daemon 处理 `Request::RenderCopyTemplate` 用)。
+    ///
+    /// # Params:
+    ///   - `index`: 模板下标(0-based,对位 config `copy.templates` 数组序)
+    ///   - `ctx`: 模板作用的实体
+    ///
+    /// # Return:
+    ///   `Ok(text)` = 剪贴板文本;`Err(msg)` = 人读错误(无脚本 / 越界 / 回调失败)。
+    pub(crate) async fn render_copy_template(
+        &self,
+        index: usize,
+        ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> Result<String, String> {
+        let Some(script) = &self.inner.notify.script else {
+            return Err("脚本未启用(无 config.lua 或脚本加载失败)".to_owned());
+        };
+        match script.render_copy_template(index, ctx).await {
+            Ok(result) => result,
+            Err(_recv) => Err("脚本线程已退出".to_owned()),
+        }
+    }
 }
 
 #[cfg(test)]

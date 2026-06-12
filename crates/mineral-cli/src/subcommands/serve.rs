@@ -67,7 +67,7 @@ pub async fn run(
         .build();
     // 投递句柄是热重载间接层:daemon 恒持有(初始无脚本也可经重载升级为有)。
     let script_sender = mineral_script::ScriptSender::detached();
-    let (script_runtime, pumps) = script.spawn_runtime(watchdog, &script_sender);
+    let (script_runtime, pumps) = script.spawn_runtime(watchdog, &script_sender, &channels);
     let server = Server::spawn(
         channels,
         audio_mode,

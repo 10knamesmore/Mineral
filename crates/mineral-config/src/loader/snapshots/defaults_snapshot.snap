@@ -416,6 +416,28 @@ Config {
                     },
                 ],
             },
+            open_action_menu: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'o',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            open_copy_menu: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'y',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
             scroll_line_down: KeyBinding {
                 chords: [
                     KeyChord {
@@ -561,6 +583,9 @@ Config {
             fs_spectrum_height: 14,
             fs_transport_height: 8,
             dock_w_pct: 36,
+        },
+        copy: CopyConfig {
+            templates: [],
         },
     },
     audio: AudioConfig {

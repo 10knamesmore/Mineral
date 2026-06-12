@@ -6,8 +6,13 @@
 use mineral_protocol::DownloadTarget;
 
 use crate::app::App;
+use crate::components::popup::MenuAction;
+use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::ScriptSlot;
 use crate::runtime::state::View;
+
+/// 复制成功 toast 里展示的内容上限(字符);超出截断加省略号,防长模板把顶栏挤爆。
+const COPY_TOAST_MAX_CHARS: usize = 48;
 
 impl App {
     /// 触发 `tui.keys.script` 绑定的脚本动作:槽位 → 注册名 → daemon;
@@ -134,6 +139,63 @@ impl App {
             self.client.toggle_love(song.id.clone());
             // 乐观翻转:♥ 立即变,不等 server 确认。
             self.state.toggle_loved_local(&song);
+        }
+    }
+
+    /// 执行 PopMenu 确认的动作(队列操作转 client;复制走系统剪贴板)。
+    pub(crate) fn run_menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::PlayNext(song) => self.client.queue_insert_next(*song),
+            MenuAction::Append(song) => self.client.queue_append(*song),
+            MenuAction::Download(song) => self.client.download(DownloadTarget::Song(song)),
+            MenuAction::Copy(text) => self.copy_to_clipboard(&text),
+            // 同步等 daemon 渲染(IPC 往返 + Lua 执行,看门狗 hard wall 封顶):
+            // 复制是低频操作,与 invoke_action 同款阻塞语义。
+            MenuAction::CopyTemplate { index, ctx } => {
+                match self.client.render_copy_template(index, ctx) {
+                    Ok(text) => self.copy_to_clipboard(&text),
+                    Err(msg) => {
+                        self.notifications
+                            .flash(tinted_text_item(msg, TextTint::Error));
+                    }
+                }
+            }
+        }
+    }
+
+    /// 把文本写进系统剪贴板:成功 flash `Copied: …`(超长截断),失败 error toast。
+    /// 句柄懒初始化、终身持有(理由见字段文档)。
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(cb) => self.clipboard = Some(cb),
+                Err(e) => {
+                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "剪贴板初始化失败");
+                    self.notifications
+                        .flash(tinted_text_item("剪贴板不可用".to_owned(), TextTint::Error));
+                    return;
+                }
+            }
+        }
+        let Some(cb) = self.clipboard.as_mut() else {
+            return;
+        };
+        match cb.set_text(text) {
+            Ok(()) => {
+                let shown = if text.chars().count() > COPY_TOAST_MAX_CHARS {
+                    let head = text.chars().take(COPY_TOAST_MAX_CHARS).collect::<String>();
+                    format!("Copied: {head}…")
+                } else {
+                    format!("Copied: {text}")
+                };
+                self.notifications
+                    .flash(tinted_text_item(shown, TextTint::Normal));
+            }
+            Err(e) => {
+                mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "写剪贴板失败");
+                self.notifications
+                    .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
+            }
         }
     }
 

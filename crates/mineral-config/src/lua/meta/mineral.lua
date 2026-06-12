@@ -14,6 +14,19 @@ mineral = {}
 ---@field album string|nil  专辑名(单曲 / 拿不到为 nil)
 ---@field cover_url string|nil  封面:远端 = http(s) URL,本地源 = 文件路径;拿不到为 nil
 ---@field source_url string|nil  原始位置:本地源 = 音频文件路径;远端未缓存为 nil
+---@field source string  来源名(如 "netease" / "local")
+---@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
+
+--- 复制模板(context = "playlist")回调里的歌单
+---@class mineral.Playlist
+---@field id string  全局唯一 id(`namespace:value`)
+---@field name string  歌单名
+---@field description string  简介,拿不到为空串
+---@field track_count integer  标称曲目数(可能与 #songs 不一致——分页或仅头部加载时)
+---@field cover_url string|nil  封面:远端 = http(s) URL;拿不到为 nil
+---@field source string  来源名(如 "netease" / "local")
+---@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
+---@field songs mineral.Song[]  已加载的曲目(client 侧缓存快照;未拉取过为空数组)
 
 --- 曲目结束原因(与 Rust `TrackFinishedReason` 由守卫测试钉死同步)。
 ---@alias mineral.FinishReason "eof"|"skip"|"error"|"stop"

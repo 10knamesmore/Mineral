@@ -35,8 +35,10 @@ k → MoveSelection(Up(1))
 l → ActivateSelection
 m → CyclePlayMode
 n → NextSong
+o → OpenActionMenu
 p → PrevOrRestart
 q → OpenQuitConfirm
 t → CycleLyricExtra
 x → DismissNotice
+y → OpenCopyMenu
 z → ToggleFullscreen

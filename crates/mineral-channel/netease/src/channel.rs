@@ -155,6 +155,8 @@ impl MusicChannel for NeteaseChannel {
                 SearchKind::Artist,
             ])
             .playlist_edit(true)
+            .song_web_url(Some("https://music.163.com/song?id={id}".to_owned()))
+            .playlist_web_url(Some("https://music.163.com/playlist?id={id}".to_owned()))
             .build()
     }
 

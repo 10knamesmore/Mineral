@@ -20,7 +20,7 @@ mod watchdog;
 pub use mlua;
 
 pub use hooks::{HookContext, HookDecision, HookKind, RewriteSpec};
-pub use host::{ScriptHost, install_api};
+pub use host::{ScriptHost, install_api, seed_web_url_templates};
 pub use message::{
     ActionOutcome, PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd,
     ScriptEvent, ScriptSender, TrackFinishedReason,

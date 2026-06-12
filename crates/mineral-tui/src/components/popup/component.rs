@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
+use crate::components::popup::placement::{Placement, place};
 use crate::render::blit::{self, EdgeColors, HAnchor};
 use crate::render::cells::left_eighth;
 use crate::render::cells::lower_eighth;
@@ -47,6 +48,11 @@ pub(crate) struct Chrome {
     /// 是否贴非封面侧停靠(抽屉式):`true` 走「贴边 + 仅水平 grow」,停靠侧由当前布局决定
     /// (全屏贴右 / 否则贴左)以避开封面;`false` 居中弹出(对话框)。
     pub(crate) dock: bool,
+
+    /// 锚定定位(PopMenu):`Some((锚点矩形, 首选方向))` 时走
+    /// [`placement::place`](super::placement::place) 算法,期望尺寸取 `max_w`/`max_h`,
+    /// `pct_*`/`min_*` 不参与;`None` 走居中 / dock。优先级高于 `dock`。
+    pub(crate) anchor: Option<(Rect, Placement)>,
 }
 
 /// 停靠浮层(抽屉式)避开封面的那一侧。
@@ -80,7 +86,7 @@ pub(crate) enum OverlayResponse {
 /// 浮层私有动作,**不并入** `runtime::action::Action`:以浮层私有光标为参数的意图
 /// (如 [`Self::PlayQueueIndex`])没法用「dispatch 时查 `AppState`」的范式表达。
 /// 与主 keymap 统一的是 dispatch 入口与动作概念,非枚举合一。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum OverlayAction {
     /// 退出程序。
     Quit,
@@ -90,6 +96,9 @@ pub(crate) enum OverlayAction {
 
     /// 播放 queue 中第 `0` 项(下标);App 据此查 [`AppState`] 的队列取歌。
     PlayQueueIndex(usize),
+
+    /// PopMenu 确认了一项:关闭菜单并执行该动作。
+    Menu(super::menu::MenuAction),
 }
 
 /// 浮层抽象:实现方只声明四件事,chrome 自动包办居中 layout + 弹出动画。
@@ -181,15 +190,17 @@ pub(crate) fn render_overlay<O: Overlay>(
     theme: &Theme,
 ) {
     let c = overlay.chrome();
+    // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
     // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
-    let dock = c.dock.then_some(if ctx.fullscreen.on() {
+    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.fullscreen.on() {
         Dock::Right
     } else {
         Dock::Left
     });
-    let base = match dock {
-        Some(d) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
-        None => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
+    let base = match (c.anchor, dock) {
+        (Some((anchor, placement)), _) => place(anchor, placement, c.max_w, c.max_h, area),
+        (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
+        (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
     };
     if scale >= FULL_SCALE {
         // 完全展开:整 cell 外框 + 内容。
@@ -202,12 +213,14 @@ pub(crate) fn render_overlay<O: Overlay>(
         frame.render_widget(block, base);
         overlay.render_content(frame.buffer_mut(), inner, ctx, theme);
     } else {
-        // 动画途中:停靠浮层滑入(内容随前沿平移),居中浮层中心揭开(内容定格)。
+        // 动画途中:锚定浮层方向性揭开(贴锚边先出现),停靠浮层滑入(内容随前沿
+        // 平移),居中浮层中心揭开(内容定格)。
         // 离屏渲染在此统一做(动画头几帧被几何 guard 跳过时白渲一次,面积小、可忽略)。
         let off = render_offscreen(base, overlay, focused, ctx, theme);
-        match dock {
-            Some(d) => draw_dock_slide(frame, base, d, scale, &off, theme),
-            None => draw_center_reveal(frame, base, scale, &off, theme),
+        match (c.anchor, dock) {
+            (Some((anchor, _)), _) => draw_anchored_reveal(frame, base, anchor, scale, &off, theme),
+            (None, Some(d)) => draw_dock_slide(frame, base, d, scale, &off, theme),
+            (None, None) => draw_center_reveal(frame, base, scale, &off, theme),
         }
     }
 }
@@ -278,6 +291,66 @@ fn draw_dock_slide(
         bg: theme.base,
     };
     blit::slide_h(frame.buffer_mut(), off, full, cur_w_e, anchor, edge);
+}
+
+/// 锚定浮层(PopMenu)的进退场动画:宽度恒满,高度随进度生长,**贴锚的那条边先
+/// 出现**——菜单在锚点下方时顶边固定、自上而下揭开(下拉菜单手感);在锚点上方时
+/// 镜像(底边固定、从下往上长)。方向由实际放置位置推断而非首选方向:`place`
+/// 放不下会翻面,动画必须跟着翻;Right/Left fallback 与锚点同行起步,归入自上而下。
+/// 内容定格终态(`off` = 满尺寸离屏渲染),前沿分数行画体色八分块平滑。
+fn draw_anchored_reveal(
+    frame: &mut Frame<'_>,
+    full: Rect,
+    anchor: Rect,
+    scale: u16,
+    off: &Buffer,
+    theme: &Theme,
+) {
+    if full.width == 0 || full.height == 0 {
+        return;
+    }
+    let full_h_e = u32::from(full.height) * 8;
+    let cur_h_e = full_h_e * u32::from(scale) / u32::from(FULL_SCALE);
+    // 不足一行画不出有意义的面板,跳过这一帧。
+    if cur_h_e < 8 {
+        return;
+    }
+    let whole = u16::try_from(cur_h_e / 8)
+        .unwrap_or(full.height)
+        .min(full.height);
+    let frac = cur_h_e % 8;
+    // 菜单整体在锚点上方 → 底边贴锚,从下往上长;否则顶边贴锚,自上而下。
+    let bottom_anchored = full.y.saturating_add(full.height) <= anchor.y;
+    let win_y = if bottom_anchored {
+        full.y.saturating_add(full.height - whole)
+    } else {
+        full.y
+    };
+    let win = Rect::new(full.x, win_y, full.width, whole);
+    // 前沿分数行紧贴窗口的生长侧(还在 full 范围内才画)。
+    let edge_y = if bottom_anchored {
+        (frac > 0 && win_y > full.y).then(|| win_y.saturating_sub(1))
+    } else {
+        let y = win_y.saturating_add(whole);
+        (frac > 0 && y < full.y.saturating_add(full.height)).then_some(y)
+    };
+
+    frame.render_widget(Clear, win);
+    let buf = frame.buffer_mut();
+    blit::copy_window(buf, off, win, win.x, win.y);
+    if let Some(y) = edge_y {
+        // bottom_anchored 时面板从下方长进前沿行(覆盖其下部 → 底对齐);
+        // 反之从上方长入(覆盖上部 → 顶对齐反色)。
+        let (glyph, style) = vertical_eighth(
+            frac,
+            /*bottom_aligned*/ bottom_anchored,
+            theme.mantle,
+            theme.base,
+        );
+        for x in full.x..full.x.saturating_add(full.width) {
+            buf.set_string(x, y, glyph, style);
+        }
+    }
 }
 
 /// 居中浮层的进退场动画:真实面板(`off` = 满尺寸离屏渲染)以 `base` 中心为锚,按
@@ -407,5 +480,154 @@ fn vertical_eighth(
         (lower_eighth(vcov), Style::new().fg(fill))
     } else {
         (lower_eighth(8 - vcov), Style::new().fg(bg).bg(fill))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::KeyEvent;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::{Block, Paragraph, Widget};
+
+    use super::{Chrome, Overlay, OverlayResponse, base_block, render_overlay};
+    use crate::components::popup::placement::Placement;
+    use crate::render::theme::Theme;
+    use crate::runtime::state::AppState;
+
+    /// 锚定测试浮层:外框 20x6、内容 4 行行号文本,专门验证方向性揭开。
+    struct AnchoredFixture {
+        /// 锚点矩形(屏幕坐标)。
+        anchor: Rect,
+
+        /// 首选弹出方向。
+        placement: Placement,
+    }
+
+    impl Overlay for AnchoredFixture {
+        fn chrome(&self) -> Chrome {
+            Chrome {
+                pct_w: 0,
+                pct_h: 0,
+                min_w: 4,
+                min_h: 3,
+                max_w: 20,
+                max_h: 6,
+                animated: true,
+                dock: false,
+                anchor: Some((self.anchor, self.placement)),
+            }
+        }
+
+        fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
+            base_block(theme)
+        }
+
+        fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+            let _ = theme;
+            for (i, row) in (inner.y..inner.y.saturating_add(inner.height)).enumerate() {
+                Paragraph::new(format!("row{i}"))
+                    .render(Rect::new(inner.x, row, inner.width, 1), buf);
+            }
+        }
+
+        fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+            OverlayResponse::Consumed
+        }
+    }
+
+    /// 画一帧锚定浮层到 40x16 测试终端,返回 backend 供断言/快照。
+    ///
+    /// # Params:
+    ///   - `fixture`: 锚定测试浮层
+    ///   - `scale`: 缩放进度(千分比)
+    fn draw_anchored(
+        fixture: &AnchoredFixture,
+        scale: u16,
+    ) -> color_eyre::Result<Terminal<TestBackend>> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 16))?;
+        let ctx = AppState::test_default()?;
+        terminal.draw(|f| {
+            render_overlay(
+                f,
+                f.area(),
+                fixture,
+                scale,
+                /*focused*/ true,
+                &ctx,
+                &Theme::default(),
+            );
+        })?;
+        Ok(terminal)
+    }
+
+    /// 取 cell 字符(越界给空格,断言里直接比较)。
+    fn sym(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .cell((x, y))
+            .map(|c| c.symbol().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// Below 揭开:顶边固定贴锚点下沿,半程时顶部行已可见(左上圆角),底部行还没长到。
+    #[test]
+    fn anchored_below_reveals_top_down() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(5, 2, 10, 1),
+            placement: Placement::Below,
+        };
+        // place(anchor, Below, 20, 6) → full = (5, 3, 20, 6);scale 500 = 恰好 3 行整可见。
+        let terminal = draw_anchored(&fixture, /*scale*/ 500)?;
+        assert_eq!(sym(&terminal, 5, 3), "╭", "顶边贴锚点下沿,先出现");
+        assert_eq!(sym(&terminal, 5, 8), " ", "底行(终态最后一行)半程不可见");
+        Ok(())
+    }
+
+    /// Above 揭开镜像:底边固定贴锚点上沿,半程时底部行已可见(左下圆角),顶部行还没长到。
+    #[test]
+    fn anchored_above_reveals_bottom_up() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(5, 12, 10, 1),
+            placement: Placement::Above,
+        };
+        // place(anchor, Above, 20, 6) → full = (5, 6, 20, 6);scale 500 = 底部 3 行可见。
+        let terminal = draw_anchored(&fixture, /*scale*/ 500)?;
+        assert_eq!(sym(&terminal, 5, 11), "╰", "底边贴锚点上沿,先出现");
+        assert_eq!(sym(&terminal, 5, 6), " ", "顶行(终态第一行)半程不可见");
+        Ok(())
+    }
+
+    /// Below 揭开中途一帧快照:可见窗口贴锚点自上而下,内容定格、前沿八分块平滑。
+    #[test]
+    fn anchored_below_midway_snapshot() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(5, 2, 10, 1),
+            placement: Placement::Below,
+        };
+        let terminal = draw_anchored(&fixture, /*scale*/ 580)?;
+        crate::test_support::assert_snap!(
+            "锚定浮层 Below 揭开中途(顶边固定自上而下,前沿八分块)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// Above 揭开中途一帧快照:镜像方向,底边固定从下往上长。
+    #[test]
+    fn anchored_above_midway_snapshot() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(5, 12, 10, 1),
+            placement: Placement::Above,
+        };
+        let terminal = draw_anchored(&fixture, /*scale*/ 580)?;
+        crate::test_support::assert_snap!(
+            "锚定浮层 Above 揭开中途(底边固定从下往上,前沿八分块)",
+            terminal.backend()
+        );
+        Ok(())
     }
 }

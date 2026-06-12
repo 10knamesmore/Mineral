@@ -61,6 +61,7 @@ impl Overlay for QueueOverlay {
             max_h: 32,
             animated: true,
             dock: true,
+            anchor: None,
         }
     }
 

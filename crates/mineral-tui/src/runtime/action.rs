@@ -73,6 +73,12 @@ pub enum Action {
     /// 关最早一张驻留通知卡片(连按逐条关;无卡时空操作)。
     DismissNotice,
 
+    /// 上下文操作菜单(内容随光标实体 × 视图;无实体时空操作)。
+    OpenActionMenu,
+
+    /// 复制菜单(内置项 + 自定义模板;无实体时空操作)。
+    OpenCopyMenu,
+
     /// 触发脚本具名动作(`tui.keys.script` 绑定)。槽位经
     /// `Keymap::script_action` 解析回注册名(Action 须 `Copy`,名字不内嵌)。
     InvokeScript(ScriptSlot),

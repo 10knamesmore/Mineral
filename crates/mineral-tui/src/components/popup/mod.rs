@@ -9,8 +9,12 @@
 mod component;
 mod confirm;
 mod disconnect;
+mod menu;
+mod placement;
 mod queue;
 mod stack;
 
 pub(crate) use component::{OverlayAction, OverlayResponse};
+pub(crate) use menu::{MenuAction, MenuItem, PopMenu};
+pub(crate) use placement::Placement;
 pub(crate) use stack::{OverlayKind, OverlayStack};

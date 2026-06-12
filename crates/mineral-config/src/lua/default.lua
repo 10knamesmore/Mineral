@@ -56,6 +56,8 @@ return {
       love = "f",
       download = "d",
       dismiss_notice = "x",
+      open_action_menu = "o",
+      open_copy_menu = "y",
       scroll_line_down = "<C-d>",
       scroll_line_up = "<C-u>",
       scroll_page_down = "<C-f>",
@@ -164,6 +166,17 @@ return {
     },
     toast = {
       flash_ttl_secs = 4, -- 一次性通知(下载完成 / 配置告警等)停留秒数
+    },
+    -- 复制菜单(y)的自定义模板,追加在内置项(title/artist/.../URL)之后;数组整体替换。
+    -- 每项 { key?, label, template, context? }:template 是函数,收实体表返回剪贴板文本,
+    -- 在 daemon 脚本运行时执行(超时/报错只 toast 不复制)。
+    -- context = "song"(默认,收 mineral.Song)| "playlist"(收 mineral.Playlist,含 songs)。
+    -- key 与内置项同字母时顶掉内置的快捷位;省略 = 仅 j/k + Enter 可达。
+    -- 例:{ key = "f", label = "Copy full", template = function(s)
+    --       return s.title .. " - " .. table.concat(s.artists, ", ")
+    --     end },
+    copy = {
+      templates = {},
     },
     -- 布局,单位是终端字符格:宽 = 列数,高 = 行数。
     layout = {

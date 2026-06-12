@@ -81,6 +81,22 @@ impl ClientHandle {
         self.player.invoke_script_action(name, ctx).await
     }
 
+    /// 渲染一个复制模板并等待结果(serve 层处理 `RenderCopyTemplate` 用)。
+    ///
+    /// # Params:
+    ///   - `index`: 模板下标(0-based,对位 config `copy.templates` 数组序)
+    ///   - `ctx`: 模板作用的实体
+    ///
+    /// # Return:
+    ///   `Ok(text)` = 剪贴板文本;`Err(msg)` = 人读错误。
+    pub(crate) async fn render_copy_template_async(
+        &self,
+        index: usize,
+        ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> Result<String, String> {
+        self.player.render_copy_template(index, ctx).await
+    }
+
     /// 读 per-song 持久值(serve 层处理 `StoreGet` 用)。未命中返回 `Nil`。
     ///
     /// # Params:
@@ -298,6 +314,24 @@ pub trait Client: Send + Sync {
     /// 经 IPC 拿真表。
     fn script_binds(&self) -> Vec<mineral_protocol::ScriptBind> {
         Vec::new()
+    }
+
+    /// 渲染一个复制模板(daemon 脚本运行时执行 config `copy.templates[index]`
+    /// 的函数)。默认不可用(in-proc 调试模式无脚本线程);daemon 模式经 IPC。
+    ///
+    /// # Params:
+    ///   - `index`: 模板下标(0-based,对位 config 数组序)。
+    ///   - `ctx`: 模板作用的实体。
+    ///
+    /// # Return:
+    ///   `Ok(text)` = 进剪贴板的文本;`Err(msg)` = 人读错误,client 应 toast。
+    fn render_copy_template(
+        &self,
+        index: usize,
+        ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> Result<String, String> {
+        let _ = (index, ctx);
+        Err("复制模板不可用(当前 client 不支持)".to_owned())
     }
 
     /// 查询一首歌的播放统计;无记录 / 不可用返回 `None`。

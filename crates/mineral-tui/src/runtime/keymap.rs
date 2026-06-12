@@ -119,6 +119,8 @@ impl Keymap {
             (keys.love(), Action::ToggleLoveSelection),
             (keys.download(), Action::DownloadSelection),
             (keys.dismiss_notice(), Action::DismissNotice),
+            (keys.open_action_menu(), Action::OpenActionMenu),
+            (keys.open_copy_menu(), Action::OpenCopyMenu),
             (
                 keys.scroll_line_down(),
                 Action::Scroll(ScrollStep::LineDown),
@@ -275,6 +277,8 @@ mod tests {
             ("f", Action::ToggleLoveSelection),
             ("d", Action::DownloadSelection),
             ("x", Action::DismissNotice),
+            ("o", Action::OpenActionMenu),
+            ("y", Action::OpenCopyMenu),
             // ---- 全屏歌词手动滚动:单行档 = nvim halfpage 键,多行档 = fullpage 键 ----
             ("<C-d>", Action::Scroll(ScrollStep::LineDown)),
             ("<C-u>", Action::Scroll(ScrollStep::LineUp)),

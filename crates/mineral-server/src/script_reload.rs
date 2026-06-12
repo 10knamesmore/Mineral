@@ -106,6 +106,8 @@ fn reload_once(
         );
         return;
     };
+    // 新 VM 重新 seed 各源网页链接模板(caps 启动后不变,直接复用装配时那份)。
+    crate::script_bridge::seed_web_urls(&lua, &parts.web_urls);
     // 先停老线程再起新:换 VM 窗口内 sender 短暂指向已停线程,投递静默丢
     // (脚本是旁路增强,丢这一拍无害);失败路径不走到这里,无空窗。
     *runtime = None;
@@ -211,6 +213,7 @@ mod tests {
                             mineral_script::PropValue::Int(42),
                         )]
                     }),
+                    web_urls: Vec::new(),
                 },
             })
         }

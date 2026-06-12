@@ -3,12 +3,12 @@
 use std::path::Path;
 
 use color_eyre::eyre::eyre;
-use mlua::{Lua, Table, Value};
+use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 
 use crate::loader::merge::deep_merge;
 use crate::loader::stub::inject_noop_host;
 use crate::loader::warning::ConfigWarning;
-use crate::schema::Config;
+use crate::schema::{COPY_TEMPLATE_FNS, Config};
 
 /// 加载用户配置。用户 `config.lua` 的任何错误降级为纯默认 + 一条 [`ConfigWarning`];
 /// 仅当内置 `default.lua` 损坏(程序员错误,守卫测试拦截)才返回 `Err`。
@@ -76,19 +76,52 @@ fn load_on(lua: &Lua, user_path: &Path) -> color_eyre::Result<(Config, Vec<Confi
     };
 
     let Some(user) = user_table else {
-        let (config, warnings) = finalize_default(default_table, warnings)?;
+        let (config, warnings) = finalize_default(lua, default_table, warnings)?;
         return Ok((config, warnings, false));
     };
 
     let merged = deep_merge(lua, default_table.clone(), user)?;
+    extract_copy_templates(lua, &merged)?;
     match from_lua_table(merged) {
         Ok(config) => Ok((config, warnings, true)),
         Err(warning) => {
             warnings.push(warning);
-            let (config, warnings) = finalize_default(default_table, warnings)?;
+            let (config, warnings) = finalize_default(lua, default_table, warnings)?;
             Ok((config, warnings, false))
         }
     }
+}
+
+/// 把 `tui.copy.templates[i].template`(Lua function,serde 落不了型)从配置表里
+/// 摘出,按数组序存进 VM named registry(键 [`COPY_TEMPLATE_FNS`]);表上的
+/// `template` 字段移除,`key`/`label`/`context` 留下进常规落型。client 渲染菜单
+/// 项与 daemon 取函数执行靠**数组下标对位**(两边 eval 的是同一份 config)。
+/// 顺手给 `templates` 表挂 array metatable——空 Lua 表经 serde 默认序列化成
+/// map `{}`,落不进 `Vec`,挂上才走 `[]`。**所有 `from_lua_table` 调用点之前都
+/// 必须过这里**(默认表的空 `templates` 同样需要 metatable 修正)。
+///
+/// 非 function 的 `template` 值不摘——留在表里让落型报 unknown field(带路径),
+/// 比静默吞掉好定位。配置整体落型失败回落默认时 registry 里可能残留已摘函数,
+/// 但默认配置 `templates` 为空,无下标触达,无害。
+fn extract_copy_templates(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    let fns = lua.create_table()?;
+    if let Ok(tui) = merged.get::<Table>("tui")
+        && let Ok(copy) = tui.get::<Table>("copy")
+        && let Ok(templates) = copy.get::<Table>("templates")
+    {
+        templates.set_metatable(Some(lua.array_metatable()));
+        for i in 1..=templates.raw_len() {
+            let Ok(item) = templates.get::<Table>(i) else {
+                continue;
+            };
+            if let Ok(f) = item.get::<Function>("template") {
+                fns.raw_set(i, f)?;
+                item.raw_set("template", Value::Nil)?;
+            }
+        }
+    }
+    lua.set_named_registry_value(COPY_TEMPLATE_FNS, fns)?;
+    Ok(())
 }
 
 impl Config {
@@ -99,6 +132,7 @@ impl Config {
     pub fn defaults() -> color_eyre::Result<Self> {
         let lua = new_vm()?;
         let table = eval_default(&lua)?;
+        extract_copy_templates(&lua, &table)?;
         from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))
     }
 }
@@ -106,15 +140,18 @@ impl Config {
 /// 把默认表落成 `Config` 并打包 warnings;default 坏则 fail(程序员错误)。
 ///
 /// # Params:
+///   - `lua`: 持有该表的 VM(templates 摘取 / metatable 修正用)
 ///   - `default_table`: 默认配置表
 ///   - `warnings`: 已累积的用户配置 warnings
 ///
 /// # Return:
 ///   `(默认 Config, warnings)`
 fn finalize_default(
+    lua: &Lua,
     default_table: Table,
     warnings: Vec<ConfigWarning>,
 ) -> color_eyre::Result<(Config, Vec<ConfigWarning>)> {
+    extract_copy_templates(lua, &default_table)?;
     let config = from_lua_table(default_table)
         .map_err(|w| eyre!("default.lua 无法落成 Config(应被守卫测试拦截):{w}"))?;
     Ok((config, warnings))
@@ -196,7 +233,9 @@ fn from_lua_table(table: Table) -> Result<Config, ConfigWarning> {
 mod tests {
     use std::path::PathBuf;
 
+    use color_eyre::eyre::eyre;
     use mineral_model::BitRate;
+    use mlua::{Function, Table};
 
     use super::load;
     use crate::loader::warning::ConfigWarning;
@@ -214,6 +253,62 @@ mod tests {
     fn defaults_snapshot() -> color_eyre::Result<()> {
         let cfg = Config::defaults()?;
         mineral_test::assert_snap!("默认配置全量(default.lua → Config)", format!("{cfg:#?}"));
+        Ok(())
+    }
+
+    /// copy.templates 的函数被摘进 VM registry(下标对位、可调用),
+    /// 展示字段(key/label/context)照常落型。
+    #[test]
+    fn copy_templates_extracted_to_registry() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "copytpl",
+            r#"return { tui = { copy = { templates = {
+                { key = "f", label = "Full", template = function(s) return s.title .. "!" end },
+                { label = "Pl", context = "playlist", template = function(p) return p.name end },
+            } } } }"#,
+        )?;
+        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        let templates = cfg.tui().copy().templates();
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates.first().and_then(|t| *t.key()), Some('f'));
+        assert_eq!(
+            templates.first().map(crate::CopyTemplate::context),
+            Some(&crate::CopyContext::Song),
+            "context 省略默认 song"
+        );
+        assert_eq!(
+            templates.get(1).map(crate::CopyTemplate::context),
+            Some(&crate::CopyContext::Playlist)
+        );
+        let lua = vm.ok_or_else(|| eyre!("eval 成功必须交还 VM"))?;
+        let fns: Table = lua.named_registry_value(super::COPY_TEMPLATE_FNS)?;
+        let f1: Function = fns.get(1)?;
+        let arg = lua.create_table()?;
+        arg.set("title", "Song")?;
+        let got: String = f1.call(arg)?;
+        assert_eq!(got, "Song!", "registry 函数按 1-based 下标对位且可调用");
+        Ok(())
+    }
+
+    /// template 不是函数(如字符串):落型报 unknown field(带路径)回落默认,
+    /// 不静默吞掉。
+    #[test]
+    fn copy_template_non_function_rejected() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "copytplbad",
+            r#"return { tui = { copy = { templates = {
+                { label = "Bad", template = "{title}" },
+            } } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(cfg.tui().copy().templates().is_empty(), "回落默认(空模板)");
+        assert!(
+            matches!(warnings.as_slice(), [ConfigWarning::Deserialize { .. }]),
+            "字符串 template 应报落型告警,实得 {warnings:?}"
+        );
         Ok(())
     }
 

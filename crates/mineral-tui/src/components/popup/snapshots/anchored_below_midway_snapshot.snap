@@ -1,0 +1,21 @@
+---
+source: crates/mineral-tui/src/components/popup/component.rs
+description: "锚定浮层 Below 揭开中途(顶边固定自上而下,前沿八分块)"
+expression: terminal.backend()
+---
+"                                        "
+"                                        "
+"                                        "
+"     ╭──────────────────╮               "
+"     │row0              │               "
+"     │row1              │               "
+"     ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅               "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "

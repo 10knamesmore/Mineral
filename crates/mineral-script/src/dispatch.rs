@@ -61,6 +61,9 @@ pub(crate) fn run_loop(
                 // 回执接收端 drop(daemon 侧超时放弃)时静默丢。
                 let _ = reply.send(run_hooks(lua, host, watchdog, kind, &ctx));
             }
+            Ok(ScriptMsg::RenderCopyTemplate { index, ctx, reply }) => {
+                let _ = reply.send(render_copy_template(lua, watchdog, index, &ctx));
+            }
             Ok(ScriptMsg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -456,5 +459,98 @@ fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
         "source_url",
         song.source_url.as_ref().map(ToString::to_string),
     )?;
+    table.set("source", song.source().name())?;
+    table.set(
+        "url",
+        web_url(
+            lua,
+            song.source().name(),
+            /*kind*/ "song",
+            song.id.value(),
+        ),
+    )?;
     Ok(table)
+}
+
+/// `Playlist` 在 Lua 侧的投影(复制模板 `context = "playlist"` 的实参)。
+fn playlist_table(lua: &Lua, playlist: &mineral_model::Playlist) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("id", playlist.id.qualified())?;
+    table.set("name", playlist.name.clone())?;
+    table.set("description", playlist.description.clone())?;
+    table.set("track_count", playlist.track_count)?;
+    table.set(
+        "cover_url",
+        playlist.cover_url.as_ref().map(ToString::to_string),
+    )?;
+    table.set("source", playlist.source().name())?;
+    table.set(
+        "url",
+        web_url(
+            lua,
+            playlist.source().name(),
+            /*kind*/ "playlist",
+            playlist.id.value(),
+        ),
+    )?;
+    let songs = lua.create_table()?;
+    for (i, s) in playlist.songs.iter().enumerate() {
+        songs.raw_set(i + 1, song_table(lua, s)?)?;
+    }
+    table.set("songs", songs)?;
+    Ok(table)
+}
+
+/// 按 seed 进 registry 的源模板拼网页分享链接(`{id}` 填裸 id)。
+/// 未 seed / 源没有该实体的模板给 `None`(Lua 侧 `url` 为 nil)。
+///
+/// # Params:
+///   - `source`: 源名(`SourceKind::name`)
+///   - `kind`: `"song"` 或 `"playlist"`(seed 表的二级键)
+///   - `raw_id`: 裸 id
+fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> {
+    let table: mlua::Table = lua
+        .named_registry_value(crate::host::WEB_URL_TEMPLATES)
+        .ok()?;
+    let entry: mlua::Table = table.get(source).ok()?;
+    let tpl: String = entry.get(kind).ok()?;
+    Some(tpl.replace("{id}", raw_id))
+}
+
+/// 渲染一个复制模板:registry 函数表按下标取函数,实体投影成表喂入,看门狗
+/// 保护执行,返回剪贴板文本。错误侧是人读首行短文(回执给 client toast),
+/// 完整链在这里进日志。
+fn render_copy_template(
+    lua: &Lua,
+    watchdog: &WatchdogConfig,
+    index: usize,
+    ctx: &mineral_protocol::CopyTemplateCtx,
+) -> Result<String, String> {
+    use mineral_protocol::CopyTemplateCtx;
+    let fns: mlua::Table = lua
+        .named_registry_value(mineral_config::COPY_TEMPLATE_FNS)
+        .map_err(|e| format!("模板函数表缺失:{e}"))?;
+    // protocol 下标 0-based,Lua 数组 1-based。
+    let func: mlua::Function = fns
+        .get(index.saturating_add(1))
+        .map_err(|_not_a_function| format!("模板 #{index} 没有可调用的 template 函数"))?;
+    let arg = match ctx {
+        CopyTemplateCtx::Song(song) => song_table(lua, song),
+        CopyTemplateCtx::Playlist(playlist) => playlist_table(lua, playlist),
+    }
+    .map_err(|e| format!("实体投影失败:{e}"))?;
+    call_guarded::<_, String>(lua, watchdog, &func, arg).map_err(|e| {
+        mineral_log::error!(
+            target: "script",
+            index,
+            error = mineral_log::chain(&e),
+            "copy template failed"
+        );
+        // 回执只给首行(toast 的人读信息);mlua 错误的 traceback 多行。
+        mineral_log::chain(&e)
+            .lines()
+            .next()
+            .unwrap_or("脚本错误(详见日志)")
+            .to_owned()
+    })
 }

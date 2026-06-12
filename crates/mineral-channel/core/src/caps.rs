@@ -20,6 +20,16 @@ pub struct ChannelCaps {
 
     /// 是否支持歌单写操作(建/删歌单、加/删歌、改名/改描述)。
     playlist_edit: bool,
+
+    /// 歌曲网页(分享链接)模板,`{id}` 占位填**裸** id(如
+    /// `"https://music.163.com/song?id={id}"`)。`None` = 该源没有网页形态
+    /// (本地文件等),UI 不渲染「复制链接」类入口。
+    #[builder(default)]
+    song_web_url: Option<String>,
+
+    /// 歌单网页(分享链接)模板,占位语义同 [`Self::song_web_url`]。
+    #[builder(default)]
+    playlist_web_url: Option<String>,
 }
 
 #[cfg(test)]

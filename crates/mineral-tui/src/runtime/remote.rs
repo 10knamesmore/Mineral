@@ -341,6 +341,21 @@ impl Client for RemoteClient {
         }
     }
 
+    fn render_copy_template(
+        &self,
+        index: usize,
+        ctx: mineral_protocol::CopyTemplateCtx,
+    ) -> Result<String, String> {
+        match self.send_recv(Request::RenderCopyTemplate { index, ctx }) {
+            Response::CopyText(result) => result,
+            Response::Error(e) => Err(e),
+            other => {
+                warn_unexpected("render_copy_template", &other);
+                Err("daemon 应答异常(详见日志)".to_owned())
+            }
+        }
+    }
+
     fn script_binds(&self) -> Vec<mineral_protocol::ScriptBind> {
         match self.send_recv(Request::ScriptBinds) {
             Response::ScriptBinds(binds) => binds,

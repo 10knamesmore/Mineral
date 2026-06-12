@@ -339,6 +339,9 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error(mineral_log::chain(&e)),
         },
+        Request::RenderCopyTemplate { index, ctx } => {
+            Response::CopyText(client.render_copy_template_async(index, ctx).await)
+        }
         Request::StoreGet { song, key } => match client.store_get_async(&song, &key).await {
             Ok(value) => Response::StoreValue(value),
             Err(e) => Response::Error(mineral_log::chain(&e)),
@@ -417,6 +420,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::NextSong => Some("NextSong"),
         Request::DaemonInfo => Some("DaemonInfo"),
         Request::InvokeAction { .. } => Some("InvokeAction"),
+        Request::RenderCopyTemplate { .. } => Some("RenderCopyTemplate"),
         Request::StoreGet { .. } => Some("StoreGet"),
         Request::StoreSet { .. } => Some("StoreSet"),
         Request::StoreInc { .. } => Some("StoreInc"),

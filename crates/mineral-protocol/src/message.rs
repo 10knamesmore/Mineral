@@ -195,6 +195,19 @@ pub enum Request {
         ctx: Option<crate::KeyContext>,
     },
 
+    /// 渲染一个用户复制模板(config.lua `copy.templates[index]` 的回调,daemon
+    /// 脚本运行时执行):函数收 `ctx` 投影成的 Lua 表,返回要进剪贴板的文本。
+    /// 返回 [`Response::CopyText`];无脚本运行时 / 下标越界 / 回调失败走其 `Err` 侧。
+    RenderCopyTemplate {
+        /// 模板在 `copy.templates` 数组中的下标(client 与 daemon eval 同一份
+        /// config,序号天然对位)。
+        index: usize,
+
+        /// 模板作用的实体(client 侧光标所指,数据随请求带过去,daemon 无需
+        /// 反查任何视图状态)。
+        ctx: CopyTemplateCtx,
+    },
+
     // ---- per-song 持久 KV ----
     /// 读 per-song 持久值(开放 key)。返回 [`Response::StoreValue`](未命中 `Nil`)。
     StoreGet {
@@ -307,6 +320,21 @@ pub enum Response {
     /// 对应 [`Request::ScriptBinds`]:脚本 bind 表(注册顺序;无脚本为空)。
     ScriptBinds(Vec<crate::ScriptBind>),
 
+    /// 对应 [`Request::RenderCopyTemplate`]:`Ok` = 回调返回的剪贴板文本,
+    /// `Err` = 人读错误短文(无脚本运行时 / 下标越界 / 回调失败 / 超时被中断)。
+    CopyText(Result<String, String>),
+
     /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。
     Error(String),
+}
+
+/// 复制模板回调作用的实体:client 侧光标所指,整体随请求传输
+/// (含已加载曲目等,daemon 端零状态反查)。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CopyTemplateCtx {
+    /// 一首歌(`context = "song"` 的模板)。
+    Song(Box<mineral_model::Song>),
+
+    /// 一张歌单,`songs` 为 client 已加载的曲目(`context = "playlist"` 的模板)。
+    Playlist(Box<mineral_model::Playlist>),
 }

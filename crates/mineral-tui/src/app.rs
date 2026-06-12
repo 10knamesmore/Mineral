@@ -30,6 +30,7 @@ use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
 
+mod menus;
 mod nav;
 
 /// 应用顶层状态。
@@ -111,6 +112,10 @@ pub struct App {
 
     /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen, focused)`(去抖:值没变不发)。
     last_terminal_report: Option<(u16, u16, bool, bool)>,
+
+    /// 系统剪贴板句柄,首次复制时懒初始化并**终身持有**——X11 的剪贴板内容归
+    /// owner 所有,句柄一 Drop 内容就没了;别改成每次复制临时 `new`。
+    pub(crate) clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -149,6 +154,8 @@ impl App {
         let transition_ticks = ticks16_from_ms(*anim.transition_ms(), tick_ms);
         let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
         let mut state = AppState::new(cfg);
+        // 各源能力声明:启动拉一次进镜像,UI 据此画入口(in-proc 即时;daemon 模式走 IPC)。
+        state.caps = client.channel_caps().into_iter().collect();
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
         state.covers.encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
@@ -180,6 +187,7 @@ impl App {
             ui_prefs,
             config_watch: crate::runtime::reload::ConfigWatch::new(),
             last_terminal_report: None,
+            clipboard: None,
         }
     }
 
@@ -578,6 +586,8 @@ impl App {
             Action::ToggleLoveSelection => self.toggle_love_selection(),
             Action::DownloadSelection => self.download_selection(),
             Action::DismissNotice => self.dismiss_notice(),
+            Action::OpenActionMenu => self.open_action_menu(),
+            Action::OpenCopyMenu => self.open_copy_menu(),
             Action::InvokeScript(slot) => self.invoke_script_action(slot),
         }
     }
@@ -622,6 +632,11 @@ impl App {
                 if let Some(song) = self.state.player.queue.get(i).cloned() {
                     self.client.play_song(song);
                 }
+            }
+            // 菜单确认即收:先关菜单(收起动画),再执行选中动作。
+            OverlayAction::Menu(action) => {
+                self.overlays.close_top();
+                self.run_menu_action(action);
             }
         }
     }

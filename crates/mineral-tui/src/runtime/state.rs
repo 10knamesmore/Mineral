@@ -6,6 +6,7 @@ use std::time::Duration;
 use mineral_model::{PlaylistId, Song, SourceKind};
 use mineral_spectrum::SpectrumComputer;
 use mineral_task::TaskEvent;
+use ratatui::layout::Rect;
 use rustc_hash::FxHashMap;
 
 use mineral_model::{LyricLine, Lyrics};
@@ -140,6 +141,15 @@ pub struct AppState {
     /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
     pub cfg: Arc<mineral_config::Config>,
+
+    /// 上一帧的主帧面积(渲染端每帧回写,`Cell` 因渲染只持 `&AppState`)。
+    /// 按键路径据此重算布局求锚点(如弹菜单贴选中行);首帧前为零矩形,
+    /// 消费方需容忍空值(placement 的 clamp 兜底)。
+    pub frame_area: std::cell::Cell<Rect>,
+
+    /// 各源能力声明镜像(启动时从 server 拉一次)。UI 据此决定渲染哪些入口
+    /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
+    pub caps: FxHashMap<SourceKind, mineral_channel_core::ChannelCaps>,
 }
 
 impl AppState {
@@ -171,6 +181,8 @@ impl AppState {
                 by_kind: FxHashMap::default(),
             },
             cfg,
+            frame_area: std::cell::Cell::new(Rect::default()),
+            caps: FxHashMap::default(),
         }
     }
 

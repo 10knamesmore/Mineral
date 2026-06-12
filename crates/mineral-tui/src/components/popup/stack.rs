@@ -11,6 +11,7 @@ use ratatui::widgets::Block;
 use crate::components::popup::component::{Chrome, Overlay, OverlayResponse, render_overlay};
 use crate::components::popup::confirm::ConfirmOverlay;
 use crate::components::popup::disconnect::DisconnectOverlay;
+use crate::components::popup::menu::PopMenu;
 use crate::components::popup::queue::QueueOverlay;
 use crate::render::anim::Transition;
 use crate::render::theme::Theme;
@@ -30,6 +31,9 @@ pub(crate) enum OverlayKind {
 
     /// daemon 断连提示。
     Disconnect(DisconnectOverlay),
+
+    /// 锚定弹出菜单(上下文操作 / 复制)。
+    Menu(PopMenu),
 }
 
 impl OverlayKind {
@@ -47,6 +51,11 @@ impl OverlayKind {
     pub(crate) fn disconnect() -> Self {
         Self::Disconnect(DisconnectOverlay)
     }
+
+    /// 锚定弹出菜单。
+    pub(crate) fn menu(menu: PopMenu) -> Self {
+        Self::Menu(menu)
+    }
 }
 
 impl Overlay for OverlayKind {
@@ -55,6 +64,7 @@ impl Overlay for OverlayKind {
             Self::Queue(o) => o.chrome(),
             Self::Confirm(o) => o.chrome(),
             Self::Disconnect(o) => o.chrome(),
+            Self::Menu(o) => o.chrome(),
         }
     }
 
@@ -63,6 +73,7 @@ impl Overlay for OverlayKind {
             Self::Queue(o) => o.block(ctx, theme, focused),
             Self::Confirm(o) => o.block(ctx, theme, focused),
             Self::Disconnect(o) => o.block(ctx, theme, focused),
+            Self::Menu(o) => o.block(ctx, theme, focused),
         }
     }
 
@@ -71,6 +82,7 @@ impl Overlay for OverlayKind {
             Self::Queue(o) => o.render_content(buf, inner, ctx, theme),
             Self::Confirm(o) => o.render_content(buf, inner, ctx, theme),
             Self::Disconnect(o) => o.render_content(buf, inner, ctx, theme),
+            Self::Menu(o) => o.render_content(buf, inner, ctx, theme),
         }
     }
 
@@ -79,6 +91,7 @@ impl Overlay for OverlayKind {
             Self::Queue(o) => o.on_key(key, ctx),
             Self::Confirm(o) => o.on_key(key, ctx),
             Self::Disconnect(o) => o.on_key(key, ctx),
+            Self::Menu(o) => o.on_key(key, ctx),
         }
     }
 
@@ -87,6 +100,7 @@ impl Overlay for OverlayKind {
             Self::Queue(o) => o.on_action(action, ctx),
             Self::Confirm(o) => o.on_action(action, ctx),
             Self::Disconnect(o) => o.on_action(action, ctx),
+            Self::Menu(o) => o.on_action(action, ctx),
         }
     }
 }

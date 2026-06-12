@@ -10,12 +10,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use parking_lot::RwLock;
 use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, BitRate, Lyrics, PlayUrl, Playlist,
     PlaylistId, SearchKind, Song, SongId, SourceKind, UserId,
 };
+use parking_lot::RwLock;
 
 /// 一首 mock 歌 + UI 装饰(loved / 累计播放次数)。
 #[derive(Clone, Debug)]
@@ -82,6 +82,8 @@ impl MusicChannel for MockChannel {
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Song, SearchKind::Playlist])
             .playlist_edit(true)
+            .song_web_url(Some("https://mock.example/song/{id}".to_owned()))
+            .playlist_web_url(Some("https://mock.example/playlist/{id}".to_owned()))
             .build()
     }
 
@@ -149,11 +151,21 @@ impl MusicChannel for MockChannel {
     }
 
     async fn user_playlists(&self, _uid: &UserId) -> Result<Vec<Playlist>> {
-        Ok(self.playlists.read().iter().map(|p| p.data.clone()).collect())
+        Ok(self
+            .playlists
+            .read()
+            .iter()
+            .map(|p| p.data.clone())
+            .collect())
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
-        Ok(self.playlists.read().iter().map(|p| p.data.clone()).collect())
+        Ok(self
+            .playlists
+            .read()
+            .iter()
+            .map(|p| p.data.clone())
+            .collect())
     }
 
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {

@@ -97,6 +97,12 @@ pub struct KeysConfig {
     /// 关最早一张驻留通知卡片(连按逐条关)。
     dismiss_notice: KeyBinding,
 
+    /// 上下文操作菜单(内容随光标实体 × 视图)。
+    open_action_menu: KeyBinding,
+
+    /// 复制菜单(内置项 + `copy.templates` 自定义模板)。
+    open_copy_menu: KeyBinding,
+
     /// 逐行下滚(行数见 `behavior.line_scroll_rows`):全屏滚歌词,浏览态滚列表视口。
     scroll_line_down: KeyBinding,
 
