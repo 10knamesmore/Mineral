@@ -99,11 +99,7 @@ async fn worker_loop(
 }
 
 /// 执行一个写操作:排队期被取消则 `Cancelled`,否则一旦开跑必有终态事件。
-async fn run_job(
-    channel: &Arc<dyn MusicChannel>,
-    job: Job,
-    event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
-) {
+async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
     let Job {
         id: _,
         op,
@@ -143,7 +139,9 @@ async fn execute(
     };
     match result {
         Ok(()) => {
-            event_tx.lock().push(TaskEvent::PlaylistWriteDone { op, error: None });
+            event_tx
+                .lock()
+                .push(TaskEvent::PlaylistWriteDone { op, error: None });
             TaskOutcome::Ok
         }
         Err(e) => {

@@ -109,7 +109,8 @@ mod tests {
     /// 专辑列表项 → model:无主艺术家时 artists 为空,曲目恒空。
     #[test]
     fn album_item_without_artist_maps_to_empty_artists() -> color_eyre::Result<()> {
-        let raw = serde_json::json!({ "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 });
+        let raw =
+            serde_json::json!({ "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 });
         let model = album_to_model(from_value(raw)?);
         assert!(model.artists.is_empty());
         assert!(model.songs.is_empty());

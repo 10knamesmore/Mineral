@@ -349,9 +349,7 @@ async fn execute(
                     .await
                     .map(crate::event::SearchPayload::Artists),
                 // User 搜索无 UI 消费方,caps 也不会声明它
-                mineral_model::SearchKind::User => {
-                    Err(mineral_channel_core::Error::NotSupported)
-                }
+                mineral_model::SearchKind::User => Err(mineral_channel_core::Error::NotSupported),
             };
             match result {
                 Ok(payload) => {

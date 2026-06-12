@@ -373,6 +373,9 @@ async fn playlist_write_failure_emits_error_event() -> color_eyre::Result<()> {
             }
         )
     });
-    assert!(found, "expected PlaylistWriteDone(NotSupported), got {evs:?}");
+    assert!(
+        found,
+        "expected PlaylistWriteDone(NotSupported), got {evs:?}"
+    );
     Ok(())
 }

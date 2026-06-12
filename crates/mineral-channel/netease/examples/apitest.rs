@@ -470,7 +470,8 @@ async fn run_section6_playlist_write(
     pause().await;
 
     let r = run("rename_playlist", async {
-        ch.rename_playlist(&created.id, "mineral-apitest 改名后").await?;
+        ch.rename_playlist(&created.id, "mineral-apitest 改名后")
+            .await?;
         Ok("renamed".into())
     })
     .await;

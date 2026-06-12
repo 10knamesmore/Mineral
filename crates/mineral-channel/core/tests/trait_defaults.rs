@@ -25,11 +25,19 @@ impl MusicChannel for BareChannel {
             .build()
     }
 
-    async fn search_songs(&self, _query: &str, _page: Page) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn search_songs(
+        &self,
+        _query: &str,
+        _page: Page,
+    ) -> mineral_channel_core::Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_albums(&self, _query: &str, _page: Page) -> mineral_channel_core::Result<Vec<Album>> {
+    async fn search_albums(
+        &self,
+        _query: &str,
+        _page: Page,
+    ) -> mineral_channel_core::Result<Vec<Album>> {
         Err(Error::NotSupported)
     }
 
@@ -87,11 +95,13 @@ async fn playlist_writes_default_to_not_supported() -> color_eyre::Result<()> {
         Err(Error::NotSupported)
     ));
     assert!(matches!(
-        chan.playlist_add_songs(&pl, std::slice::from_ref(&song)).await,
+        chan.playlist_add_songs(&pl, std::slice::from_ref(&song))
+            .await,
         Err(Error::NotSupported)
     ));
     assert!(matches!(
-        chan.playlist_remove_songs(&pl, std::slice::from_ref(&song)).await,
+        chan.playlist_remove_songs(&pl, std::slice::from_ref(&song))
+            .await,
         Err(Error::NotSupported)
     ));
     assert!(matches!(
