@@ -5,6 +5,7 @@
 //! 也不直接操作 App —— 按键产出 [`OverlayAction`] 回传执行,绕开双重可变借用。
 
 use crossterm::event::KeyEvent;
+use mineral_config::MenuReveal;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -177,7 +178,7 @@ pub(crate) fn centered_rect(
 ///   - `overlay`: 要渲染的浮层
 ///   - `scale`: 已缓动的缩放进度(千分比),来自 stack 托管的 [`Transition`]
 ///   - `focused`: 是否持有键盘焦点(影响边框色)
-///   - `ctx`: 只读后端态
+///   - `ctx`: 只读后端态(含 config:锚定浮层的进场风格 / 横向对齐由此读取)
 ///
 /// [`Transition`]: crate::render::anim::Transition
 pub(crate) fn render_overlay<O: Overlay>(
@@ -198,7 +199,14 @@ pub(crate) fn render_overlay<O: Overlay>(
         Dock::Left
     });
     let base = match (c.anchor, dock) {
-        (Some((anchor, placement)), _) => place(anchor, placement, c.max_w, c.max_h, area),
+        (Some((anchor, placement)), _) => place(
+            anchor,
+            placement,
+            *ctx.cfg.tui().layout().menu_align(),
+            c.max_w,
+            c.max_h,
+            area,
+        ),
         (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
         (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
     };
@@ -218,7 +226,17 @@ pub(crate) fn render_overlay<O: Overlay>(
         // 离屏渲染在此统一做(动画头几帧被几何 guard 跳过时白渲一次,面积小、可忽略)。
         let off = render_offscreen(base, overlay, focused, ctx, theme);
         match (c.anchor, dock) {
-            (Some((anchor, _)), _) => draw_anchored_reveal(frame, base, anchor, scale, &off, theme),
+            (Some((anchor, _)), _) => match ctx.cfg.tui().animation().menu_reveal() {
+                // 形变盒用与终态同款的 block(accent 边框 + 标题),避免落定瞬间边框/标题跳变。
+                MenuReveal::Morph => {
+                    let block = overlay.block(ctx, theme, focused);
+                    draw_morph(frame, base, anchor, scale, &off, block);
+                }
+                // #[non_exhaustive]:新风格接线前按方向性揭开兜底。
+                MenuReveal::Directional | _ => {
+                    draw_anchored_reveal(frame, base, anchor, scale, &off, theme);
+                }
+            },
             (None, Some(d)) => draw_dock_slide(frame, base, d, scale, &off, theme),
             (None, None) => draw_center_reveal(frame, base, scale, &off, theme),
         }
@@ -350,6 +368,67 @@ fn draw_anchored_reveal(
         for x in full.x..full.x.saturating_add(full.width) {
             buf.set_string(x, y, glyph, style);
         }
+    }
+}
+
+/// 锚定浮层(PopMenu)的形变进场:把锚点行矩形按进度几何插值到最终菜单矩形——
+/// 位置与宽高四个量同时线性过渡,中途用与终态同款的 `block`(accent 边框 + 标题)
+/// 画当前形变盒,最终内容(`off` = 满尺寸离屏渲染)按「当前盒内区 ∩ 终态内区」揭入
+/// (坐标系一致,直接搬运)。block 边框/标题全程不变,落定瞬间无跳变;退场走同一
+/// 几何(进度反向)天然对称。
+fn draw_morph(
+    frame: &mut Frame<'_>,
+    full: Rect,
+    anchor: Rect,
+    scale: u16,
+    off: &Buffer,
+    block: Block<'static>,
+) {
+    if full.width == 0 || full.height == 0 {
+        return;
+    }
+    let cur = lerp_rect(anchor, full, scale);
+    // 不足以画出圆角盒(边框 2 + 至少 1 内容行/列),跳过这一帧。
+    if cur.width < 3 || cur.height < 3 {
+        return;
+    }
+    frame.render_widget(Clear, cur);
+    let buf = frame.buffer_mut();
+    block.render(cur, buf);
+    let isect = border_inner(cur).intersection(border_inner(full));
+    if isect.width > 0 && isect.height > 0 {
+        blit::copy_window(buf, off, isect, isect.x, isect.y);
+    }
+}
+
+/// 去掉四周 1 格边框后的内区(尺寸不足时收敛为零面积)。
+fn border_inner(r: Rect) -> Rect {
+    Rect {
+        x: r.x.saturating_add(1),
+        y: r.y.saturating_add(1),
+        width: r.width.saturating_sub(2),
+        height: r.height.saturating_sub(2),
+    }
+}
+
+/// 矩形按进度 `scale`(千分比)从 `from` 线性插值到 `to`;各分量独立 lerp,
+/// 负值钳到 0(`from` 可能比 `to` 更宽/更靠下,差值为负)。
+///
+/// **四舍五入**而非截断:截断会让 scale 逼近满值的末帧仍比 `to` 差约 1 格(尤其右/下
+/// 边缘),等切到直绘路径才精确落位,造成整格尾跳;四舍五入让末帧提前精确等于 `to`。
+fn lerp_rect(from: Rect, to: Rect, scale: u16) -> Rect {
+    let t = i32::from(scale.min(FULL_SCALE));
+    let denom = i32::from(FULL_SCALE);
+    let lerp = |a: u16, b: u16| -> u16 {
+        let (a, b) = (i32::from(a), i32::from(b));
+        // 四舍五入:+denom/2 再整除(各量恒非负,截断即 floor = 正确舍入)。
+        u16::try_from(((a * denom + (b - a) * t + denom / 2) / denom).max(0)).unwrap_or(0)
+    };
+    Rect {
+        x: lerp(from.x, to.x),
+        y: lerp(from.y, to.y),
+        width: lerp(from.width, to.width),
+        height: lerp(from.height, to.height),
     }
 }
 
@@ -492,7 +571,12 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::widgets::{Block, Paragraph, Widget};
 
-    use super::{Chrome, Overlay, OverlayResponse, base_block, render_overlay};
+    use mineral_config::{MenuAlign, MenuReveal};
+
+    use super::{
+        Chrome, Overlay, OverlayResponse, base_block, draw_anchored_reveal, draw_morph, lerp_rect,
+        place, render_offscreen,
+    };
     use crate::components::popup::placement::Placement;
     use crate::render::theme::Theme;
     use crate::runtime::state::AppState;
@@ -521,8 +605,10 @@ mod tests {
             }
         }
 
-        fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
-            base_block(theme)
+        fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+            // 与真实 PopMenu 同款:聚焦时 accent 边框。用于验证形变进场边框色不跳变。
+            let border = if focused { theme.accent } else { theme.overlay };
+            base_block(theme).border_style(ratatui::style::Style::new().fg(border))
         }
 
         fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
@@ -538,27 +624,41 @@ mod tests {
         }
     }
 
-    /// 画一帧锚定浮层到 40x16 测试终端,返回 backend 供断言/快照。
+    /// 画一帧锚定浮层进场到 40x16 测试终端,返回 backend 供断言/快照。直接驱动
+    /// `place` + 离屏渲染 + 选定的进场绘制,绕开 `render_overlay` 对 config 的读取,
+    /// 使风格 / 对齐在测试里可显式注入。
     ///
     /// # Params:
     ///   - `fixture`: 锚定测试浮层
     ///   - `scale`: 缩放进度(千分比)
+    ///   - `reveal`: 进场风格(形变 / 方向性揭开)
+    ///   - `align`: 横向对齐
     fn draw_anchored(
         fixture: &AnchoredFixture,
         scale: u16,
+        reveal: MenuReveal,
+        align: MenuAlign,
     ) -> color_eyre::Result<Terminal<TestBackend>> {
         let mut terminal = Terminal::new(TestBackend::new(40, 16))?;
         let ctx = AppState::test_default()?;
+        let theme = Theme::default();
         terminal.draw(|f| {
-            render_overlay(
-                f,
-                f.area(),
-                fixture,
-                scale,
-                /*focused*/ true,
-                &ctx,
-                &Theme::default(),
-            );
+            let area = f.area();
+            let c = fixture.chrome();
+            let Some((anchor, placement)) = c.anchor else {
+                return;
+            };
+            let base = place(anchor, placement, align, c.max_w, c.max_h, area);
+            let off = render_offscreen(base, fixture, /*focused*/ true, &ctx, &theme);
+            match reveal {
+                MenuReveal::Morph => {
+                    let block = fixture.block(&ctx, &theme, /*focused*/ true);
+                    draw_morph(f, base, anchor, scale, &off, block);
+                }
+                MenuReveal::Directional | _ => {
+                    draw_anchored_reveal(f, base, anchor, scale, &off, &theme);
+                }
+            }
         })?;
         Ok(terminal)
     }
@@ -573,6 +673,15 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// 取 cell 前景色(越界给 Reset)。
+    fn fg(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> ratatui::style::Color {
+        terminal
+            .backend()
+            .buffer()
+            .cell((x, y))
+            .map_or(ratatui::style::Color::Reset, |c| c.fg)
+    }
+
     /// Below 揭开:顶边固定贴锚点下沿,半程时顶部行已可见(左上圆角),底部行还没长到。
     #[test]
     fn anchored_below_reveals_top_down() -> color_eyre::Result<()> {
@@ -580,8 +689,13 @@ mod tests {
             anchor: Rect::new(5, 2, 10, 1),
             placement: Placement::Below,
         };
-        // place(anchor, Below, 20, 6) → full = (5, 3, 20, 6);scale 500 = 恰好 3 行整可见。
-        let terminal = draw_anchored(&fixture, /*scale*/ 500)?;
+        // place(anchor, Below, Left, 20, 6) → full = (5, 3, 20, 6);scale 500 = 恰好 3 行整可见。
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 500,
+            MenuReveal::Directional,
+            MenuAlign::Left,
+        )?;
         assert_eq!(sym(&terminal, 5, 3), "╭", "顶边贴锚点下沿,先出现");
         assert_eq!(sym(&terminal, 5, 8), " ", "底行(终态最后一行)半程不可见");
         Ok(())
@@ -594,8 +708,13 @@ mod tests {
             anchor: Rect::new(5, 12, 10, 1),
             placement: Placement::Above,
         };
-        // place(anchor, Above, 20, 6) → full = (5, 6, 20, 6);scale 500 = 底部 3 行可见。
-        let terminal = draw_anchored(&fixture, /*scale*/ 500)?;
+        // place(anchor, Above, Left, 20, 6) → full = (5, 6, 20, 6);scale 500 = 底部 3 行可见。
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 500,
+            MenuReveal::Directional,
+            MenuAlign::Left,
+        )?;
         assert_eq!(sym(&terminal, 5, 11), "╰", "底边贴锚点上沿,先出现");
         assert_eq!(sym(&terminal, 5, 6), " ", "顶行(终态第一行)半程不可见");
         Ok(())
@@ -608,7 +727,12 @@ mod tests {
             anchor: Rect::new(5, 2, 10, 1),
             placement: Placement::Below,
         };
-        let terminal = draw_anchored(&fixture, /*scale*/ 580)?;
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 580,
+            MenuReveal::Directional,
+            MenuAlign::Left,
+        )?;
         crate::test_support::assert_snap!(
             "锚定浮层 Below 揭开中途(顶边固定自上而下,前沿八分块)",
             terminal.backend()
@@ -623,10 +747,94 @@ mod tests {
             anchor: Rect::new(5, 12, 10, 1),
             placement: Placement::Above,
         };
-        let terminal = draw_anchored(&fixture, /*scale*/ 580)?;
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 580,
+            MenuReveal::Directional,
+            MenuAlign::Left,
+        )?;
         crate::test_support::assert_snap!(
             "锚定浮层 Above 揭开中途(底边固定从下往上,前沿八分块)",
             terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// `lerp_rect` 端点与中点:scale 0 = 起点矩形,FULL = 终点矩形,500 ≈ 各分量中点。
+    #[test]
+    fn lerp_rect_interpolates_endpoints() {
+        let from = Rect::new(4, 2, 30, 1);
+        let to = Rect::new(10, 6, 12, 8);
+        assert_eq!(lerp_rect(from, to, 0), from, "scale 0 = 起点");
+        assert_eq!(lerp_rect(from, to, super::FULL_SCALE), to, "FULL = 终点");
+        // 四舍五入:x=7、y=4、w=21、h=round(1+3.5)=5。
+        assert_eq!(lerp_rect(from, to, 500), Rect::new(7, 4, 21, 5), "中点");
+    }
+
+    /// 形变进场中途一帧快照:锚点行(宽 30、高 1)正向最终菜单(居中、窄)插值,
+    /// 画圆角空盒 + 重叠区揭入内容。
+    #[test]
+    fn morph_below_midway_snapshot() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(4, 2, 30, 1),
+            placement: Placement::Below,
+        };
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 650,
+            MenuReveal::Morph,
+            MenuAlign::Center,
+        )?;
+        crate::test_support::assert_snap!(
+            "锚定浮层形变进场中途(锚点行→居中菜单几何插值,圆角空盒+重叠区揭入)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// 形变盒在锚点行过窄(高 1)时早帧不画:cur.height < 3 直接跳过,不留残影。
+    #[test]
+    fn morph_skips_when_box_too_small() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(4, 2, 30, 1),
+            placement: Placement::Below,
+        };
+        // scale 极小 → cur ≈ 锚点行(高 1)→ 不足以画盒。
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 40,
+            MenuReveal::Morph,
+            MenuAlign::Center,
+        )?;
+        for x in 0..40 {
+            for y in 0..16 {
+                assert_eq!(sym(&terminal, x, y), " ", "过小盒不应画出任何 cell");
+            }
+        }
+        Ok(())
+    }
+
+    /// 形变中途边框色 = 终态边框色(accent),不从默认白突变。回归:曾用 base_block
+    /// (默认白边)画形变盒,落定瞬间才切到 accent,观感跳变。
+    #[test]
+    fn morph_border_color_matches_final() -> color_eyre::Result<()> {
+        let fixture = AnchoredFixture {
+            anchor: Rect::new(4, 2, 30, 1),
+            placement: Placement::Below,
+        };
+        // scale 650:四舍五入后 cur=(7,3,24,4),左上圆角落在 (7,3)。
+        let terminal = draw_anchored(
+            &fixture,
+            /*scale*/ 650,
+            MenuReveal::Morph,
+            MenuAlign::Center,
+        )?;
+        let theme = Theme::default();
+        assert_eq!(sym(&terminal, 7, 3), "╭", "形变盒左上圆角");
+        assert_eq!(
+            fg(&terminal, 7, 3),
+            theme.accent,
+            "中途边框即 accent,非默认白"
         );
         Ok(())
     }

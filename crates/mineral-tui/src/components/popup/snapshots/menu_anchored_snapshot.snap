@@ -1,16 +1,17 @@
 ---
 source: crates/mineral-tui/src/components/popup/menu.rs
+assertion_line: 394
 description: "PopMenu 锚定弹出(锚点下方,快捷字母列,首项高亮,危险项红色置底)"
 expression: terminal.backend()
 ---
 "                                        "
 "                                        "
-"  ╭ Actions ────────────────╮           "
-"  │ p Play next             │           "
-"  │ a Append to queue       │           "
-"  │ d Download              │           "
-"  │ x Remove from playlist  │           "
-"  ╰─────────────────────────╯           "
+"╭ Actions ────────────────╮             "
+"│ p Play next             │             "
+"│ a Append to queue       │             "
+"│ d Download              │             "
+"│ x Remove from playlist  │             "
+"╰─────────────────────────╯             "
 "                                        "
 "                                        "
 "                                        "

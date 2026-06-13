@@ -116,6 +116,24 @@ impl Transition {
         u16::try_from(u32::from(FULL) - cube).unwrap_or(FULL)
     }
 
+    /// 朝**当前目标**减速的缓动,千分比 `0..=1000`:进场 `1-(1-p)³`(冲向满值再收束)、
+    /// 退场 `p³`(立刻收缩再收束到 `0`)——**两个方向都"先快后慢"**。区别于
+    /// [`Self::eased`](progress 的固定函数,退场会"先慢后快"显得拖拉)。
+    ///
+    /// 代价:它依赖目标方向,故**中途反向时值不连续**——两端点(`0`/满)两条曲线同值,
+    /// 整段开 / 整段合都不跳;仅在「动画没放完就反向」那一帧可能跳一下。modal 浮层极少
+    /// 中途反向,用它换取收回不拖拉;需要反向连续的场景(sweep 等)仍用 [`Self::eased`]。
+    pub fn eased_settle(&self) -> u16 {
+        if self.leaving() {
+            // p³:退场朝 0 减速(先快后慢)。p ≤ 1000 故 p³ ≤ 1e9 不溢出 u32。
+            let p = u32::from(self.progress);
+            let cube = p * p * p / (u32::from(FULL) * u32::from(FULL));
+            u16::try_from(cube).unwrap_or(0)
+        } else {
+            self.eased()
+        }
+    }
+
     /// 当前进度经 cubic **ease-in-out** 映射后的值,千分比 `0..=1000`。关于中点对称:
     /// 两端减速、中段快。区别于 [`Self::eased`](单向 ease-out)——它对进度**增减两个
     /// 方向都"减速到位"**,故左右 sweep 来回切换体感一致、无结尾冲刺。仍是进度的固定
@@ -382,6 +400,37 @@ mod tests {
                 "应关于中点对称: {lo} + {hi} ≈ {FULL}"
             );
         }
+    }
+
+    /// `eased_settle`:进场与 `eased` 同曲线;退场改走 `p³`,**先快后慢收向 0**——
+    /// 同一进度下退场值低于 `eased`(更早收缩),且两端点两路一致(整段无跳)。
+    #[test]
+    fn eased_settle_decelerates_into_both_targets() {
+        // 进场方向:与 eased 完全一致。
+        let mut up = Transition::new(FULL);
+        up.enter();
+        for _ in 0..FULL {
+            up.tick();
+            assert_eq!(up.eased_settle(), up.eased(), "进场两者同曲线");
+        }
+        // 退场方向:p³,先快后慢收向 0。
+        let mut down = Transition::new(FULL);
+        down.enter();
+        for _ in 0..FULL {
+            down.tick();
+        }
+        down.leave();
+        assert_eq!(down.eased_settle(), FULL, "退场起点(满)两路一致");
+        let mut prev = FULL;
+        for _ in 0..FULL {
+            down.tick();
+            let v = down.eased_settle();
+            assert!(v <= prev, "退场单调收缩: {v} <= {prev}");
+            // 退场早期(进度仍高)就已明显收缩,不像 eased 那样赖在满值附近。
+            assert!(v <= down.eased(), "退场更早收缩: settle {v} ≤ eased");
+            prev = v;
+        }
+        assert_eq!(down.eased_settle(), 0, "退场收到 0");
     }
 
     /// 退出收缩:从满值收到 0,是退场;到底后 `settled`、缓动值为 0。

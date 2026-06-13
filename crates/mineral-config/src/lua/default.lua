@@ -163,6 +163,7 @@ return {
       toast_anim_ms = 288, -- 顶栏通知横向展开收起
       focus_fade_ms = 288, -- 终端失焦/聚焦时顶栏变灰的淡入淡出
       view_sweep = "push", -- "push" | "cover":侧栏切换是新旧一起平移还是从右盖上
+      menu_reveal = "morph", -- "morph" | "directional":弹出菜单从锚点行形变而来 还是 贴边方向性揭开
     },
     toast = {
       flash_ttl_secs = 4, -- 一次性通知(下载完成 / 配置告警等)停留秒数
@@ -186,6 +187,7 @@ return {
       fs_spectrum_height = 14, -- 全屏底部频谱通栏高,行
       fs_transport_height = 8, -- 全屏 transport 条高,行;内容 6 + 边框 2
       dock_w_pct = 36, -- 停靠浮层(播放队列)占屏宽 %
+      menu_align = "right", -- 弹出菜单相对锚点行的横向对齐:"left"|"center"|"right",或 0.0~1.0 数字精确指定比例(0 贴左 / 0.5 居中 / 1 贴右)
     },
   },
   -- 以下顶层段 = daemon/共享核心

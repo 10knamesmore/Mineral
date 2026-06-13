@@ -2,9 +2,10 @@
 //! 算出最终绘制矩形。
 //!
 //! 规则:首选方向放不下 → 对侧 → Below → Above → Right → Left 依序找第一个
-//! 放得下的;全都放不下取可用空间最大的方向并截断尺寸;横轴与锚点起点对齐,
-//! 越界时向屏幕内 clamp。
+//! 放得下的;全都放不下取可用空间最大的方向并截断尺寸;交叉轴(与主方向正交)按
+//! [`MenuAlign`] 在锚点跨度内对齐,越界时向屏幕内 clamp。
 
+use mineral_config::MenuAlign;
 use ratatui::layout::Rect;
 
 /// 弹出方向偏好(相对锚点矩形)。
@@ -55,6 +56,7 @@ impl Placement {
 /// # Params:
 ///   - `anchor`: 锚点矩形(选中行 / 光标格)
 ///   - `placement`: 首选方向
+///   - `align`: 交叉轴(与主方向正交)在锚点跨度内的对齐
 ///   - `want_w` / `want_h`: 期望尺寸
 ///   - `screen`: 可用屏幕区域
 ///
@@ -63,6 +65,7 @@ impl Placement {
 pub(crate) fn place(
     anchor: Rect,
     placement: Placement,
+    align: MenuAlign,
     want_w: u16,
     want_h: u16,
     screen: Rect,
@@ -95,12 +98,24 @@ pub(crate) fn place(
     let h = want_h.min(ah).min(screen.height);
 
     let (x, y) = match chosen {
-        Placement::Below => (anchor.x, anchor.y.saturating_add(anchor.height)),
-        Placement::Above => (anchor.x, anchor.y.saturating_sub(h)),
-        Placement::Right => (anchor.x.saturating_add(anchor.width), anchor.y),
-        Placement::Left => (anchor.x.saturating_sub(w), anchor.y),
+        Placement::Below => (
+            cross_align(anchor.x, anchor.width, w, align),
+            anchor.y.saturating_add(anchor.height),
+        ),
+        Placement::Above => (
+            cross_align(anchor.x, anchor.width, w, align),
+            anchor.y.saturating_sub(h),
+        ),
+        Placement::Right => (
+            anchor.x.saturating_add(anchor.width),
+            cross_align(anchor.y, anchor.height, h, align),
+        ),
+        Placement::Left => (
+            anchor.x.saturating_sub(w),
+            cross_align(anchor.y, anchor.height, h, align),
+        ),
     };
-    // 横轴(与主方向正交的轴)越界时向屏幕内收
+    // 交叉轴越界时向屏幕内收
     let max_x = screen.x.saturating_add(screen.width).saturating_sub(w);
     let max_y = screen.y.saturating_add(screen.height).saturating_sub(h);
     Rect {
@@ -111,8 +126,21 @@ pub(crate) fn place(
     }
 }
 
+/// 交叉轴对齐:在锚点跨度 `[start, start+span)` 内为尺寸 `size` 定起点。
+/// 起点 = `start + (span - size) × 比例`,比例取自 [`MenuAlign::permille`]
+/// (0 贴起点 ~ 1000 贴终点),整数定点四舍五入。菜单比锚点宽时 `span - size` 为负、
+/// 对称溢出(负坐标钳到 0,最终再由 `place` 的屏幕 clamp 收回)。
+fn cross_align(start: u16, span: u16, size: u16, align: MenuAlign) -> u16 {
+    let (start, span, size) = (i64::from(start), i64::from(span), i64::from(size));
+    let off = (span - size) * i64::from(align.permille());
+    // 四舍五入(numerator 可正可负,按符号补半再整除)。
+    let rounded = (off + off.signum() * 500) / 1000;
+    u16::try_from((start + rounded).max(0)).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
+    use mineral_config::MenuAlign;
     use proptest::prelude::*;
     use ratatui::layout::Rect;
 
@@ -126,6 +154,11 @@ mod tests {
             Placement::Right,
             Placement::Left,
         ])
+    }
+
+    /// 任意对齐。
+    fn arb_align() -> impl Strategy<Value = MenuAlign> {
+        proptest::sample::select(vec![MenuAlign::Left, MenuAlign::Center, MenuAlign::Right])
     }
 
     /// 屏内随机锚点(1x1 至屏宽高)。
@@ -144,13 +177,14 @@ mod tests {
         fn result_stays_on_screen(
             (sw, sh) in (8..=200_u16, 4..=60_u16),
             placement in arb_placement(),
+            align in arb_align(),
             want_w in 1..=80_u16,
             want_h in 1..=30_u16,
         ) {
             let screen = Rect { x: 0, y: 0, width: sw, height: sh };
             let anchor_strategy = arb_anchor(sw, sh);
             proptest!(|(anchor in anchor_strategy)| {
-                let got = place(anchor, placement, want_w, want_h, screen);
+                let got = place(anchor, placement, align, want_w, want_h, screen);
                 prop_assert!(got.x.saturating_add(got.width) <= sw, "右越界: {got:?}");
                 prop_assert!(got.y.saturating_add(got.height) <= sh, "下越界: {got:?}");
                 prop_assert!(got.width <= want_w && got.height <= want_h);
@@ -174,9 +208,35 @@ mod tests {
             width: 20,
             height: 1,
         };
-        let got = place(anchor, Placement::Below, 15, 6, screen);
+        let got = place(anchor, Placement::Below, MenuAlign::Left, 15, 6, screen);
         assert_eq!((got.x, got.y), (10, 6));
         assert_eq!((got.width, got.height), (15, 6));
+    }
+
+    /// 交叉轴对齐:窄菜单(宽 8)在宽锚点(x=10, 宽 20)下方,
+    /// Left 贴左缘、Center 居中、Right 贴右缘。
+    #[test]
+    fn aligns_cross_axis_within_anchor() {
+        let screen = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let anchor = Rect {
+            x: 10,
+            y: 5,
+            width: 20,
+            height: 1,
+        };
+        let x = |a| place(anchor, Placement::Below, a, 8, 6, screen).x;
+        assert_eq!(x(MenuAlign::Left), 10, "贴锚点左缘");
+        assert_eq!(x(MenuAlign::Center), 16, "居中:10 + (20-8)/2");
+        assert_eq!(x(MenuAlign::Right), 22, "贴锚点右缘:10 + 20 - 8");
+        // 精确比例 0.25:10 + round((20-8) × 0.25) = 10 + 3 = 13。
+        assert_eq!(x(MenuAlign::Fraction(0.25)), 13, "比例 0.25");
+        assert_eq!(x(MenuAlign::Fraction(0.0)), 10, "比例 0 = 贴左");
+        assert_eq!(x(MenuAlign::Fraction(1.0)), 22, "比例 1 = 贴右");
     }
 
     /// 首选放不下翻转对侧:贴底锚点 Below 不够 → Above。
@@ -194,7 +254,7 @@ mod tests {
             width: 20,
             height: 1,
         };
-        let got = place(anchor, Placement::Below, 15, 6, screen);
+        let got = place(anchor, Placement::Below, MenuAlign::Left, 15, 6, screen);
         // Above:y = 22 - 6 = 16
         assert_eq!((got.x, got.y), (10, 16));
     }
@@ -214,7 +274,7 @@ mod tests {
             width: 3,
             height: 1,
         };
-        let got = place(anchor, Placement::Right, 40, 10, screen);
+        let got = place(anchor, Placement::Right, MenuAlign::Left, 40, 10, screen);
         assert!(got.x.saturating_add(got.width) <= 10);
         assert!(got.y.saturating_add(got.height) <= 4);
     }

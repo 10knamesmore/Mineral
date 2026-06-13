@@ -230,6 +230,7 @@
 ---@field toast_anim_ms? integer 顶栏通知横向展开收起的毫秒数
 ---@field focus_fade_ms? integer 终端失焦/聚焦时顶栏变灰的淡入淡出毫秒数
 ---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
+---@field menu_reveal? "morph"|"directional" 弹出菜单进场:"morph" = 从锚点行形变;"directional" = 贴边方向性揭开
 
 ---顶栏通知。
 ---@class mineral.ToastConfig
@@ -243,6 +244,7 @@
 ---@field fs_spectrum_height? integer 全屏态底部频谱通栏高,行
 ---@field fs_transport_height? integer 全屏态 transport 条高,行;内容 6 行 + 边框 2
 ---@field dock_w_pct? integer 停靠浮层(播放队列)占屏宽百分比 0-100
+---@field menu_align? "left"|"center"|"right"|number 弹出菜单相对锚点行的横向对齐;关键字或 0.0~1.0 比例(0 贴左 / 0.5 居中 / 1 贴右)
 
 ---复制菜单(y)的自定义模板段。
 ---@class mineral.CopyConfig

@@ -1,0 +1,22 @@
+---
+source: crates/mineral-tui/src/components/popup/component.rs
+assertion_line: 788
+description: "锚定浮层形变进场中途(锚点行→居中菜单几何插值,圆角空盒+重叠区揭入)"
+expression: terminal.backend()
+---
+"                                        "
+"                                        "
+"                                        "
+"       ╭──────────────────────╮         "
+"       │  row0                │         "
+"       │  row1                │         "
+"       ╰──────────────────────╯         "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "

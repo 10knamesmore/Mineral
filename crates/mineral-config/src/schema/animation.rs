@@ -1,6 +1,6 @@
-//! 动画段(挂在 `TuiConfig` 下):帧率基准 + 各转场/浮层/扫入时长 + 视图扫入风格。
+//! 动画段(挂在 `TuiConfig` 下):帧率基准 + 各转场/浮层/扫入时长 + 视图扫入/菜单进场风格。
 //!
-//! [`SweepStyle`] 与渲染层过渡风格语义对齐,但保持解耦——接线处做映射。
+//! [`SweepStyle`] / [`MenuReveal`] 与渲染层过渡风格语义对齐,但保持解耦——接线处做映射。
 
 use serde::Deserialize;
 
@@ -38,6 +38,21 @@ pub struct AnimationConfig {
 
     /// 侧栏曲目扫入风格。
     view_sweep: SweepStyle,
+
+    /// 锚定弹出菜单(PopMenu)的进场风格。
+    menu_reveal: MenuReveal,
+}
+
+/// 锚定弹出菜单进场风格。不依赖渲染 crate;接线处映射到具体实现。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum MenuReveal {
+    /// 方向性揭开:宽度恒满,贴锚边自上而下(或镜像)生长。
+    Directional,
+
+    /// 形变:从锚点行矩形几何插值成最终菜单矩形,内容随重叠区揭入。
+    Morph,
 }
 
 /// 侧栏视图扫入过渡风格。不依赖渲染 crate;接线处映射到具体实现。

@@ -20,7 +20,7 @@ mod spectrum;
 mod theme;
 mod toast;
 
-pub use animation::{AnimationConfig, SweepStyle};
+pub use animation::{AnimationConfig, MenuReveal, SweepStyle};
 pub use audio::{AudioConfig, BackendKind};
 pub use behavior::{BehaviorConfig, TrackPosMemory};
 pub use cache::CacheConfig;
@@ -30,7 +30,7 @@ pub use cover::{CoverConfig, CoverStorageMode, KmeansConfig};
 pub use daemon::DaemonConfig;
 pub use download::DownloadConfig;
 pub use keys::{KeyBinding, KeysConfig};
-pub use layout::LayoutConfig;
+pub use layout::{LayoutConfig, MenuAlign};
 pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
 pub use script::ScriptConfig;

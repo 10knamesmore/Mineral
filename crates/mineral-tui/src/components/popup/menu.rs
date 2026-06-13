@@ -1,11 +1,6 @@
 //! PopMenu:锚定弹出的轻量选择菜单,一个组件多处复用(上下文操作菜单 / 复制菜单,
 //! 后续还有 `@` 源补全 / `$` 类型单选 / 加入歌单选择器)。
 //!
-//! 交互:`j`/`k`(经全局 keymap,跟随重映射)导航 + 项首快捷字母直达 + Enter 确认
-//! (硬编码,不走 keymap——`activate` 默认绑 `l`,经 keymap 会抢走 `l` 的快捷字母位)。
-//! **快捷字母须避开 `j`/`k`/`h`/`q`**:前两者被导航吃掉,后两者经 keymap 落到
-//! 关闭族(back / quit 在模态浮层收敛为关闭),永远轮不到 hotkey 匹配。
-//!
 //! 定位走 [`Placement`](super::placement::Placement) 锚定算法(非居中/dock),
 //! 进退场是方向性揭开(贴锚边先出现),动画由
 //! [`OverlayStack`](super::stack::OverlayStack) 托管。
@@ -55,8 +50,8 @@ pub(crate) enum MenuAction {
 
 /// 一个菜单项。
 pub(crate) struct MenuItem {
-    /// 快捷字母:按下直达并执行。`None` = 仅导航 + Enter 可达。
-    /// 避开 `j`/`k`/`h`/`q`(见模块文档)。
+    /// 快捷字母:按下直达并执行。`None` = 仅导航 + 确认可达。
+    /// 避开 `j`/`k`/`h`/`q`/`l`(见模块文档)。
     pub(crate) hotkey: Option<char>,
 
     /// 显示标签。
@@ -206,7 +201,7 @@ impl Overlay for PopMenu {
     fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
         match key.code {
             KeyCode::Esc => OverlayResponse::Do(OverlayAction::CloseTop),
-            // Enter 硬编码确认,不走 keymap(见模块文档:activate 默认绑 l 会抢字母位)。
+            // Enter 兜底确认:默认 <CR> 经 activate 走 on_action,这里接住「<CR> 被解绑」的情形。
             KeyCode::Enter => self.confirm(),
             KeyCode::Tab | KeyCode::Down => {
                 self.sel = self
@@ -249,6 +244,8 @@ impl Overlay for PopMenu {
                 };
                 Some(OverlayResponse::Consumed)
             }
+            // 激活:activate(默认 l/<CR>)经 keymap 进来确认当前项,与列表「l 进入」同手感。
+            Action::ActivateSelection => Some(self.confirm()),
             // 关闭族:back / quit 在模态菜单收敛为关闭本浮层。
             Action::BackOrClearSearch | Action::OpenQuitConfirm => {
                 Some(OverlayResponse::Do(OverlayAction::CloseTop))
@@ -323,6 +320,25 @@ mod tests {
             color_eyre::eyre::bail!("Enter 应产出菜单动作");
         };
         assert_eq!(action, MenuAction::Download(song("s1")), "大步越底钳到末项");
+        Ok(())
+    }
+
+    /// `activate`(l/<CR>)经 on_action 确认当前项,与 Enter 兜底同效。
+    #[test]
+    fn activate_action_confirms_selection() -> color_eyre::Result<()> {
+        let ctx = AppState::test_default()?;
+        let mut menu = PopMenu::new("Actions", action_items(), anchor(), Placement::Below);
+        menu.on_action(Action::MoveSelection(SelectionMove::Down(1)), &ctx);
+        let Some(OverlayResponse::Do(OverlayAction::Menu(action))) =
+            menu.on_action(Action::ActivateSelection, &ctx)
+        else {
+            color_eyre::eyre::bail!("activate 应经 on_action 产出菜单动作");
+        };
+        assert_eq!(
+            action,
+            MenuAction::Append(song("s1")),
+            "确认当前选中(第二项)"
+        );
         Ok(())
     }
 

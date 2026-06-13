@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
+assertion_line: 255
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -572,6 +573,7 @@ Config {
             toast_anim_ms: 288,
             focus_fade_ms: 288,
             view_sweep: Push,
+            menu_reveal: Morph,
         },
         toast: ToastConfig {
             flash_ttl_secs: 4,
@@ -583,6 +585,7 @@ Config {
             fs_spectrum_height: 14,
             fs_transport_height: 8,
             dock_w_pct: 36,
+            menu_align: Right,
         },
         copy: CopyConfig {
             templates: [],

@@ -204,7 +204,15 @@ impl OverlayStack {
         let top = self.active_top_index();
         for (i, m) in self.stack.iter().enumerate() {
             let focused = Some(i) == top;
-            render_overlay(frame, area, &m.kind, m.anim.eased(), focused, ctx, theme);
+            render_overlay(
+                frame,
+                area,
+                &m.kind,
+                m.anim.eased_settle(),
+                focused,
+                ctx,
+                theme,
+            );
         }
     }
 
