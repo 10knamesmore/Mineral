@@ -169,7 +169,7 @@ impl AppState {
             lyric_view: LyricView::new(),
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             nav: NavState::new(),
-            search: SearchState::new(),
+            search: SearchState::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),

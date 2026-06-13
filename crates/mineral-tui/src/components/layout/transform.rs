@@ -126,10 +126,48 @@ pub fn morph_areas(normal: &Areas, full: &Areas, t: u16) -> Areas {
         top_status: collapse(normal.top_status),
         left: collapse(normal.left),
         right: Some(collapse(right_start)),
+        // fullscreen 形变无 token prompt 行(仅 search 端点有),两端皆 None。
+        search_prompt: None,
         cover: grow(normal.cover, full.cover),
         lyrics: grow(normal.lyrics, full.lyrics),
         spectrum: grow(normal.spectrum, full.spectrum),
         transport: lerp_rect(normal.transport, full.transport, t),
+    }
+}
+
+/// 在浏览态与 search 端点两套 [`Areas`] 间按进度 `t`(eased_in_out 千分比 `0..=1000`)插值。
+/// 与 [`morph_areas`](fullscreen 专用「一律朝中心收」)语义不同:search 是「两端对飞」——
+///   - `left` / `right` / `transport`:两端都在,逐字段对飞(sidebar→results / now_playing→detail / 半宽→全宽);
+///   - `search_prompt`:浏览端无,从自身中心零面积「长出」到 1 行;
+///   - `cover` / `lyrics` / `spectrum`:search 端无,从浏览位「收向」自身中心零面积退场。
+///
+/// # Params:
+///   - `normal`: 浏览态布局([`compute`](crate::components::layout::compute::compute) 产出)
+///   - `search`: search 端点布局([`compute_search`](crate::components::layout::compute::compute_search) 产出)
+///   - `t`: 形变进度,千分比 `0..=1000`
+///
+/// # Return:
+///   中途布局的 [`Areas`]。
+pub fn morph_search(normal: &Areas, search: &Areas, t: u16) -> Areas {
+    // 退场面板:从浏览位收向自身中心零面积。出场面板:从自身中心零面积长出到目标位。
+    let collapse = |r: Rect| lerp_rect(r, zero_center(r), t);
+    let grow = |r: Rect| lerp_rect(zero_center(r), r, t);
+    let right = match (normal.right, search.right) {
+        (Some(a), Some(b)) => Some(lerp_rect(a, b, t)),
+        (Some(a), None) => Some(collapse(a)),
+        (None, Some(b)) => Some(grow(b)),
+        (None, None) => None,
+    };
+    Areas {
+        mode: search.mode,
+        top_status: lerp_rect(normal.top_status, search.top_status, t),
+        left: lerp_rect(normal.left, search.left, t),
+        right,
+        search_prompt: search.search_prompt.map(grow),
+        cover: normal.cover.map(collapse),
+        lyrics: normal.lyrics.map(collapse),
+        spectrum: normal.spectrum.map(collapse),
+        transport: lerp_rect(normal.transport, search.transport, t),
     }
 }
 
@@ -162,8 +200,8 @@ fn lerp_rect(a: Rect, b: Rect, t: u16) -> Rect {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{lerp_rect, morph_areas, zero_center};
-    use crate::components::layout::compute::{compute, compute_fullscreen};
+    use super::{lerp_rect, morph_areas, morph_search, zero_center};
+    use crate::components::layout::compute::{compute, compute_fullscreen, compute_search};
 
     /// `lerp_rect` 两端点回到 a / b,中点逐字段取中。
     #[test]
@@ -200,6 +238,37 @@ mod tests {
         assert_eq!(m1.lyrics, full.lyrics, "t=1000 lyrics 抵全屏右半");
         assert_eq!(m1.left.width, 0, "t=1000 左栏收零宽");
         assert_eq!(m1.left.height, 0, "t=1000 左栏收零高");
+        Ok(())
+    }
+
+    /// search 形变端点:t=0 保留面板(left/right/transport)回浏览位、prompt 从零长出;
+    /// t=1000 抵 search 端点(left=results / right=detail / transport 全宽 / prompt 满),
+    /// 退场面板 lyrics 收成零面积。
+    #[test]
+    fn search_morph_endpoints() -> color_eyre::Result<()> {
+        let cfg = mineral_config::Config::defaults()?.tui().layout().clone();
+        let area = Rect::new(0, 0, 100, 40);
+        let normal = compute(area, &cfg);
+        let search = compute_search(area, &cfg);
+
+        let m0 = morph_search(&normal, &search, /*t*/ 0);
+        assert_eq!(m0.left, normal.left, "t=0 左栏在浏览位(sidebar)");
+        assert_eq!(m0.right, normal.right, "t=0 右栏在浏览位(now_playing)");
+        assert_eq!(m0.transport, normal.transport, "t=0 transport 在浏览位");
+        let p0 = m0
+            .search_prompt
+            .ok_or_else(|| color_eyre::eyre::eyre!("search 形变缺 prompt"))?;
+        assert_eq!(p0.height, 0, "t=0 prompt 零高(从无长出)");
+
+        let m1 = morph_search(&normal, &search, /*t*/ 1000);
+        assert_eq!(m1.left, search.left, "t=1000 左栏抵 results 位");
+        assert_eq!(m1.right, search.right, "t=1000 右栏抵 detail 位");
+        assert_eq!(m1.transport, search.transport, "t=1000 transport 全宽");
+        assert_eq!(m1.search_prompt, search.search_prompt, "t=1000 prompt 满");
+        let l1 = m1
+            .lyrics
+            .ok_or_else(|| color_eyre::eyre::eyre!("search 形变缺 lyrics"))?;
+        assert_eq!(l1.height, 0, "t=1000 lyrics 收零高");
         Ok(())
     }
 }

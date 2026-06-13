@@ -38,6 +38,7 @@ n → NextSong
 o → OpenActionMenu
 p → PrevOrRestart
 q → OpenQuitConfirm
+s → OpenSearchView
 t → CycleLyricExtra
 x → DismissNotice
 y → OpenCopyMenu

@@ -19,10 +19,14 @@ pub struct Areas {
     pub mode: LayoutMode,
     /// 顶部状态行(1 行)。
     pub top_status: Rect,
-    /// 左栏(playlists / library)。
+    /// 左栏(playlists / library) — search 端点复用为结果(results)列。
     pub left: Rect,
-    /// 右栏(now playing detail) — Compact 模式下为 `None`。
+    /// 右栏(now playing detail) — Compact 模式下为 `None`。search 端点复用为详情(detail)面板。
     pub right: Option<Rect>,
+
+    /// token prompt 输入行(1 行,顶栏下全宽)。仅 search 布局端点为 `Some`;normal /
+    /// fullscreen 端点为 `None`(同 `cover` 一样按端点取舍的锚点 `Option`)。
+    pub search_prompt: Option<Rect>,
 
     /// 独立封面面板矩形。常规 Full/Compact 由 now_playing 内部画封面,此处仅作**全屏形变的
     /// 起点锚点**(封面从此格脱出);全屏布局为左列上方(transport 在其下)。Compact 无锚点为 `None`。
@@ -73,6 +77,7 @@ fn compute_full(area: Rect) -> Areas {
         top_status,
         left,
         right: Some(right),
+        search_prompt: None,
         // 全屏形变锚点:封面从右栏 now_playing 整块脱出(programmatic cover 在 t=0 盖住该块,
         // 随即飞向左半)。取整块 right 作起点,无需耦合 now_playing 内部子布局。
         cover: Some(right),
@@ -95,6 +100,7 @@ fn compute_compact(area: Rect) -> Areas {
         top_status,
         left,
         right: None,
+        search_prompt: None,
         cover: None,
         lyrics: None,
         spectrum: None,
@@ -137,9 +143,46 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
         top_status: zero,
         left: zero,
         right: Some(zero),
+        search_prompt: None,
         cover: Some(cover),
         lyrics: Some(lyrics),
         spectrum: Some(spectrum),
+        transport,
+    }
+}
+
+/// Search 布局端点(继 [`compute`] / [`compute_fullscreen`] 之后的第三个):顶栏保留,其下
+/// 1 行 token prompt 全宽,主体左 results(38%)右 detail(62%)的 master-detail,transport
+/// 全宽贴底。退场面板 cover / lyrics / spectrum 在此端点无锚为 `None`。
+///
+/// # Params:
+///   - `area`: 可用区域
+///   - `_cfg`: 布局段;暂未读,保留入参令三个布局端点签名一致(备后续响应式宽度比)
+pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas {
+    let [top_status, search_prompt, body] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    // transport 高度沿用 normal(compute_full):内容固定 6 行 + 边框 2 = 8。
+    let [results_body, transport] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(body);
+
+    let [results, detail] =
+        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .areas(results_body);
+
+    Areas {
+        mode: LayoutMode::Full,
+        top_status,
+        left: results,
+        right: Some(detail),
+        search_prompt: Some(search_prompt),
+        cover: None,
+        lyrics: None,
+        spectrum: None,
         transport,
     }
 }
@@ -148,7 +191,7 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{LayoutMode, compute, compute_fullscreen};
+    use super::{LayoutMode, compute, compute_fullscreen, compute_search};
 
     /// 造一个左上角原点、给定宽高的 area。
     fn area(w: u16, h: u16) -> Rect {
@@ -244,6 +287,49 @@ mod tests {
         Ok(())
     }
 
+    /// search 布局:顶栏下 prompt 行全宽,results 在左、detail 在右无缝相接,transport 全宽贴底,
+    /// lyrics/spectrum/cover 退场(None)。
+    #[test]
+    fn search_layout_panels() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        let parent = area(100, 40);
+        let a = compute_search(parent, &cfg);
+
+        let prompt = a
+            .search_prompt
+            .ok_or_else(|| color_eyre::eyre::eyre!("search 缺 prompt 行"))?;
+        let detail = a
+            .right
+            .ok_or_else(|| color_eyre::eyre::eyre!("search 缺 detail(right)"))?;
+        let results = a.left;
+        let transport = a.transport;
+
+        // 顶栏 1 行不动,prompt 紧贴其下、全宽 1 行。
+        assert_eq!(a.top_status.height, 1, "顶栏保留 1 行");
+        assert_eq!(prompt.y, a.top_status.bottom(), "prompt 紧接顶栏下");
+        assert_eq!(prompt.height, 1, "prompt 1 行");
+        assert_eq!(prompt.width, parent.width, "prompt 全宽");
+
+        // results 在左、detail 在右,无缝相接、顶对齐。
+        assert!(results.x < detail.x, "results 在左、detail 在右");
+        assert_eq!(results.right(), detail.x, "results 右缘接 detail 左缘");
+        assert_eq!(results.y, detail.y, "results / detail 顶对齐");
+        assert!(results.y >= prompt.bottom(), "body 在 prompt 之下");
+
+        // transport 全宽贴底,在 body 之下。
+        assert_eq!(transport.width, parent.width, "transport 通栏全宽");
+        assert_eq!(transport.bottom(), parent.bottom(), "transport 贴底");
+        assert!(transport.y >= results.bottom(), "transport 在 results 之下");
+        assert!(transport.y >= detail.bottom(), "transport 在 detail 之下");
+
+        // 退场面板在 search 端点无锚。
+        assert!(a.lyrics.is_none(), "search 端点 lyrics 退场");
+        assert!(a.spectrum.is_none(), "search 端点 spectrum 退场");
+        assert!(a.cover.is_none(), "search 端点 cover 退场");
+
+        Ok(())
+    }
+
     use proptest::prelude::proptest;
 
     proptest! {
@@ -293,6 +379,27 @@ mod tests {
             for r in [a.cover, a.lyrics, a.spectrum].into_iter().flatten() {
                 proptest::prop_assert!(fits(r), "全屏子区 {:?} 越出父 {:?}", r, parent);
             }
+            proptest::prop_assert!(fits(a.transport), "transport {:?} 越出父 {:?}", a.transport, parent);
+        }
+
+        /// search 布局任意尺寸下子区都落在父 area 内(不越界 / 不 panic)。
+        #[test]
+        fn search_areas_fit_parent(w in 0u16..=600, h in 0u16..=600) {
+            let Ok(cfg) = layout_cfg() else {
+                return Err(proptest::test_runner::TestCaseError::fail("defaults 不可用"));
+            };
+            let parent = area(w, h);
+            let a = compute_search(parent, &cfg);
+            let fits = |c: Rect| {
+                c.x >= parent.x
+                    && c.y >= parent.y
+                    && c.right() <= parent.right()
+                    && c.bottom() <= parent.bottom()
+            };
+            for r in [a.search_prompt, a.right].into_iter().flatten() {
+                proptest::prop_assert!(fits(r), "search 子区 {:?} 越出父 {:?}", r, parent);
+            }
+            proptest::prop_assert!(fits(a.left), "results {:?} 越出父 {:?}", a.left, parent);
             proptest::prop_assert!(fits(a.transport), "transport {:?} 越出父 {:?}", a.transport, parent);
         }
     }

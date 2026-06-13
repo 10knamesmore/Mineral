@@ -265,6 +265,7 @@ impl App {
                 self.update_spectrum();
                 self.state.view.tick();
                 self.state.fullscreen.tick();
+                self.state.search.remote_search.active.tick();
                 self.state.dim.tick();
                 self.state.tick_lyric_scroll();
                 self.tick_overlays();
@@ -569,6 +570,7 @@ impl App {
     fn dispatch(&mut self, action: Action) {
         match action {
             Action::ToggleFullscreen => self.toggle_fullscreen(),
+            Action::OpenSearchView => self.open_search_view(),
             Action::OpenQueue => self.open_queue(),
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
@@ -607,9 +609,22 @@ impl App {
     }
 
     /// 切换全屏播放态:翻转开关并驱动形变进退场(`eased_in_out`,可中途反向)。
+    /// search 布局态下屏蔽(与 search 互斥,见 [`Self::open_search_view`])。
     fn toggle_fullscreen(&mut self) {
+        if self.state.search.remote_search.active.on() {
+            return;
+        }
         self.state.fullscreen.toggle();
         self.report_terminal_state();
+    }
+
+    /// 切换 Search 布局态:翻转开关驱动布局端点 morph 进退场。全屏态下屏蔽
+    /// (两个全屏级布局态互斥,逻辑 `on` 同时只一个)。
+    fn open_search_view(&mut self) {
+        if self.state.fullscreen.on() {
+            return;
+        }
+        self.state.search.remote_search.active.toggle();
     }
 
     /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
@@ -1238,6 +1253,56 @@ mod tests {
 
         press(&mut app, KeyCode::Char('z'));
         assert!(!app.state.fullscreen.on(), "再按 z 退全屏");
+        Ok(())
+    }
+
+    /// `s` 进/退 Search 布局态(toggle):浏览态可达,再按退出。
+    #[test]
+    fn s_opens_search_layout() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        assert!(
+            !app.state.search.remote_search.active.on(),
+            "初始非 search 布局"
+        );
+
+        press(&mut app, KeyCode::Char('s'));
+        assert!(
+            app.state.search.remote_search.active.on(),
+            "s 进 search 布局"
+        );
+
+        press(&mut app, KeyCode::Char('s'));
+        assert!(
+            !app.state.search.remote_search.active.on(),
+            "再按 s 退 search 布局"
+        );
+        Ok(())
+    }
+
+    /// 互斥:全屏态按 `s` 无效(不进 search 布局)。
+    #[test]
+    fn fullscreen_blocks_open_search() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.state.fullscreen.on(), "前置:已进全屏");
+
+        press(&mut app, KeyCode::Char('s'));
+        assert!(!app.state.search.remote_search.active.on(), "全屏态 s 无效");
+        Ok(())
+    }
+
+    /// 互斥:search 布局态按 `z` 无效(不进全屏)。
+    #[test]
+    fn search_blocks_toggle_fullscreen() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Char('s'));
+        assert!(
+            app.state.search.remote_search.active.on(),
+            "前置:已进 search 布局"
+        );
+
+        press(&mut app, KeyCode::Char('z'));
+        assert!(!app.state.fullscreen.on(), "search 态 z 无效");
         Ok(())
     }
 

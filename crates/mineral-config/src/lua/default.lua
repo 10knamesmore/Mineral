@@ -34,6 +34,7 @@ return {
       next = "n",
       prev = "p",
       toggle_fullscreen = "z",
+      open_search = "s",
       open_queue = "<Tab>",
       quit = "q",
       cycle_lyric = "t",

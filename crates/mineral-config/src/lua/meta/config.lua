@@ -95,6 +95,7 @@
 ---@field next? mineral.KeyBinding 下一首
 ---@field prev? mineral.KeyBinding 上一首 / 回开头(分界见 daemon.prev_restart_threshold_ms)
 ---@field toggle_fullscreen? mineral.KeyBinding 进 / 退全屏播放态
+---@field open_search? mineral.KeyBinding 进 / 退 Search 布局态(全屏态屏蔽)
 ---@field open_queue? mineral.KeyBinding 打开播放队列;队列开着时再按 = 关闭
 ---@field quit? mineral.KeyBinding 打开退出确认
 ---@field cycle_lyric? mineral.KeyBinding 循环歌词副语言:原文 → 翻译 → 罗马音

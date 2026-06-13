@@ -4,16 +4,17 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
-use crate::components::layout::compute::{Areas, compute, compute_fullscreen};
+use crate::components::layout::compute::{Areas, compute, compute_fullscreen, compute_search};
 use crate::components::layout::{
     cover, cover_image, lyrics, now_playing, sidebar, spectrum, top_status, transform, transport,
 };
 
-/// 渲染一帧:浏览态走常规 paint;全屏态 / 形变中走全屏 paint(几何由 `compute_fullscreen`
-/// 与 `morph_areas` 给出)。通知 / 浮层叠在最上(整屏转场期间不画);最后叠启动 / 退出缩放边框。
+/// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
+/// search 布局态走 search paint(端点几何 `compute_search`、形变中途 `morph_search`);否则
+/// 浏览态常规 paint。通知 / 浮层叠在最上(整屏转场期间不画);最后叠启动 / 退出缩放边框。
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let theme = &app.theme;
     // 回写本帧面积:按键路径(弹菜单求锚点)据此重算布局,不依赖 TTY 查询。
@@ -21,9 +22,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let layout_cfg = app.state.cfg.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
 
-    if app.state.fullscreen.at_min() {
-        paint(frame, &normal, app);
-    } else {
+    // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
+    if !app.state.fullscreen.at_min() {
         let full = compute_fullscreen(frame.area(), layout_cfg);
         let areas = if app.state.fullscreen.at_max() {
             full
@@ -31,6 +31,20 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             transform::morph_areas(&normal, &full, app.state.fullscreen.eased_in_out())
         };
         paint_fullscreen(frame, &areas, app);
+    } else if !app.state.search.remote_search.active.at_min() {
+        let search = compute_search(frame.area(), layout_cfg);
+        let areas = if app.state.search.remote_search.active.at_max() {
+            search
+        } else {
+            transform::morph_search(
+                &normal,
+                &search,
+                app.state.search.remote_search.active.eased_in_out(),
+            )
+        };
+        paint_search(frame, &areas, app);
+    } else {
+        paint(frame, &normal, app);
     }
 
     // topbar 通知层 / 浮层栈:整屏转场(启动扩大 / 退出收缩)期间不画;全屏形变不抑制。
@@ -64,6 +78,46 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
     }
     if let Some(spec) = areas.spectrum {
+        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+    }
+    transport::draw(frame, areas.transport, &app.state.playback, theme);
+}
+
+/// Search 布局:顶栏 + prompt 行 + results(左)/ detail(右)占位面板 + transport 全宽。
+/// 形变中途额外画收缩中的 lyrics / spectrum(浏览内容,稳态端点为 None 自动跳过)。面板内容
+/// 画在给定 rect 内——端点或飞行中皆然。真实 token prompt / 结果列 / 详情随后续里程碑填入。
+fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+    let theme = &app.theme;
+    top_status::draw(frame, areas.top_status, &app.state, theme);
+    if let Some(prompt) = areas.search_prompt {
+        // 空查询占位:放大镜图标(标准 unicode,单宽);真 token prompt 后续里程碑接入。
+        let hint = Line::from("⌕").style(Style::new().fg(theme.overlay));
+        frame.render_widget(Paragraph::new(hint), prompt);
+    }
+    let border = Style::new().fg(theme.overlay);
+    if let Some(results) = nonempty(areas.left) {
+        frame.render_widget(
+            Block::new()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title("results"),
+            results,
+        );
+    }
+    if let Some(detail) = areas.right.and_then(nonempty) {
+        frame.render_widget(
+            Block::new()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title("detail"),
+            detail,
+        );
+    }
+    // 形变期收缩中的 lyrics / spectrum 仍画浏览内容(稳态 search 端点为 None,自动跳过)。
+    if let Some(lyr) = areas.lyrics.and_then(nonempty) {
+        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
+    }
+    if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
@@ -167,7 +221,7 @@ mod tests {
     use ratatui::layout::Position;
 
     use crate::render::anim::{Toggle, Transition};
-    use crate::test_support::{app_in_fullscreen, app_with_queue};
+    use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
 
     /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**派发封面编码请求。
     ///
@@ -341,6 +395,42 @@ mod tests {
             .iter()
             .any(|(u, _)| *u == next_url);
         assert!(warmed, "全屏稳态应提前编码下一首封面");
+        Ok(())
+    }
+
+    /// Search 布局稳态一帧:顶栏保留、prompt 行 + results(左)/ detail(右)空占位面板、
+    /// transport 全宽贴底;lyrics / spectrum / now_playing 退场。
+    #[test]
+    fn search_steady_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_search()?;
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 稳态:prompt 行 + results 左 / detail 右占位 + transport 全宽",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 形变中途一帧:results / detail 从 sidebar / now_playing 位对飞、prompt 从顶栏下
+    /// 长出、lyrics / spectrum 收缩退场。
+    #[test]
+    fn search_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_search()?;
+        // 覆盖成形变中途:从零 expanding 推进约半程(9/18 tick)。
+        let mut anim = Toggle::new(18);
+        anim.set(true);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.search.remote_search.active = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 形变中途:results/detail 对飞、prompt 长出、lyrics/spectrum 收缩",
+            t.backend()
+        );
         Ok(())
     }
 

@@ -225,13 +225,16 @@ pub(crate) fn ticks16_from_ms(ms: u32, tick_ms: u64) -> u16 {
     u16::try_from(ticks32_from_ms(ms, tick_ms)).unwrap_or(u16::MAX)
 }
 
-/// 在 `a`、`b` 间按千分比 `t`(`0..=1000`)定点插值:`a + (b-a)*t/1000`。全程 `i32`,
-/// 不碰 `as` 强转;结果 clamp 进 `u16` 范围。布局形变的矩形插值与通知层的
-/// 锚点过渡共用这一个实现。
+/// 在 `a`、`b` 间按千分比 `t`(`0..=1000`)定点插值:`a + round((b-a)*t/1000)`。全程 `i32`,
+/// 不碰 `as` 强转;结果 clamp 进 `u16` 范围。**四舍五入(非截断)**:让「跨整格」的位移落在
+/// 形变中段、而非把整格位移全挤到末帧(否则收尾静止时会突兀跳一格)。布局形变的矩形插值与
+/// 通知层的锚点过渡共用这一个实现。
 pub(crate) fn lerp_u16(a: u16, b: u16, t: u16) -> u16 {
     let (a, b, t) = (i32::from(a), i32::from(b), i32::from(t.min(1000)));
-    let v = a + (b - a) * t / 1000;
-    u16::try_from(v.clamp(0, i32::from(u16::MAX))).unwrap_or(0)
+    let scaled = (b - a) * t;
+    // 朝零外侧 ±500 再整除 = 四舍五入(half away from zero),正负对称。
+    let rounded = (scaled + if scaled >= 0 { 500 } else { -500 }) / 1000;
+    u16::try_from((a + rounded).clamp(0, i32::from(u16::MAX))).unwrap_or(0)
 }
 
 /// cubic **ease-in-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比

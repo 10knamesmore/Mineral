@@ -459,3 +459,15 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     app.state.fullscreen = fs;
     Ok(app)
 }
+
+/// 造一个接 [`TestClient`]、**已稳态进入 Search 布局态**的 [`App`]:queue 填 3 首、在播首曲。
+/// 供 search 布局渲染快照用(M1 面板为占位骨架)。
+pub(crate) fn app_with_search() -> color_eyre::Result<App> {
+    let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+    // 稳态 search 布局:一步推到满值(step=1000)。
+    let mut s = Toggle::new(1);
+    s.set(true);
+    s.tick();
+    app.state.search.remote_search.active = s;
+    Ok(app)
+}

@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
-assertion_line: 255
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -140,6 +139,17 @@ Config {
                     KeyChord {
                         key: Char(
                             'z',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
+            open_search: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            's',
                         ),
                         shift: false,
                         ctrl: false,

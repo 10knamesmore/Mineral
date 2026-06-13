@@ -76,6 +76,7 @@ impl Keymap {
         let mut script_names = Vec::with_capacity(script_bindings.len());
         let mut pairs: Vec<(&mineral_config::KeyBinding, Action)> = vec![
             (keys.toggle_fullscreen(), Action::ToggleFullscreen),
+            (keys.open_search(), Action::OpenSearchView),
             (keys.open_queue(), Action::OpenQueue),
             (keys.quit(), Action::OpenQuitConfirm),
             (keys.cycle_lyric(), Action::CycleLyricExtra),
@@ -243,6 +244,7 @@ mod tests {
         vec![
             // ---- 全局(handle_key 直连段) ----
             ("z", Action::ToggleFullscreen),
+            ("s", Action::OpenSearchView),
             ("<Tab>", Action::OpenQueue),
             ("q", Action::OpenQuitConfirm),
             ("t", Action::CycleLyricExtra),

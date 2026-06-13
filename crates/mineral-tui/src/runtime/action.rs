@@ -20,6 +20,9 @@ pub enum Action {
     /// 进 / 退全屏播放态(toggle)。
     ToggleFullscreen,
 
+    /// 进 / 退 Search 布局态(toggle;浏览态可达,全屏态屏蔽——两个全屏级布局态互斥)。
+    OpenSearchView,
+
     /// 打开浮动播放队列(光标定位到在播歌)。
     OpenQueue,
 

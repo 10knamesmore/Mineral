@@ -31,6 +31,9 @@ pub struct KeysConfig {
     /// 进 / 退全屏播放态。
     toggle_fullscreen: KeyBinding,
 
+    /// 进 / 退 Search 布局态。
+    open_search: KeyBinding,
+
     /// 打开浮动播放队列。
     open_queue: KeyBinding,
 
