@@ -103,7 +103,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     // 真实终端任意宽度都可见(左段宽度随窗口缩放,放不下)。
     if state.playback.audio_backend == AudioBackend::Null {
         spans.push(Span::styled(
-            "⚠ 无音频设备  ",
+            "⚠ no audio device  ",
             Style::new().fg(theme.peach).add_modifier(Modifier::BOLD),
         ));
     }

@@ -171,8 +171,10 @@ impl App {
                 Ok(cb) => self.clipboard = Some(cb),
                 Err(e) => {
                     mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "剪贴板初始化失败");
-                    self.notifications
-                        .flash(tinted_text_item("剪贴板不可用".to_owned(), TextTint::Error));
+                    self.notifications.flash(tinted_text_item(
+                        "clipboard unavailable".to_owned(),
+                        TextTint::Error,
+                    ));
                     return;
                 }
             }
@@ -194,7 +196,7 @@ impl App {
             Err(e) => {
                 mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "写剪贴板失败");
                 self.notifications
-                    .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
+                    .flash(tinted_text_item("copy failed".to_owned(), TextTint::Error));
             }
         }
     }

@@ -181,7 +181,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if track.is_none() {
         let y = area.y + area.height / 2;
         let strip = Rect::new(area.x, y, area.width, 1);
-        let line = Line::from("暂无播放").style(
+        let line = Line::from("nothing playing").style(
             Style::new()
                 .fg(theme.overlay)
                 .add_modifier(Modifier::ITALIC),
