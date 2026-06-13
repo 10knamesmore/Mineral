@@ -24,7 +24,7 @@ pub struct Areas {
     /// 右栏(now playing detail) — Compact 模式下为 `None`。search 端点复用为详情(detail)面板。
     pub right: Option<Rect>,
 
-    /// token prompt 输入行(1 行,顶栏下全宽)。仅 search 布局端点为 `Some`;normal /
+    /// token prompt 输入行(3 行带边框,顶栏下全宽)。仅 search 布局端点为 `Some`;normal /
     /// fullscreen 端点为 `None`(同 `cover` 一样按端点取舍的锚点 `Option`)。
     pub search_prompt: Option<Rect>,
 
@@ -152,8 +152,8 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 }
 
 /// Search 布局端点(继 [`compute`] / [`compute_fullscreen`] 之后的第三个):顶栏保留,其下
-/// 1 行 token prompt 全宽,主体左 results(38%)右 detail(62%)的 master-detail,transport
-/// 全宽贴底。退场面板 cover / lyrics / spectrum 在此端点无锚为 `None`。
+/// 3 行 token prompt 全宽(带边框框,焦点高亮),主体左 results(38%)右 detail(62%)的
+/// master-detail,transport 全宽贴底。退场面板 cover / lyrics / spectrum 在此端点无锚为 `None`。
 ///
 /// # Params:
 ///   - `area`: 可用区域
@@ -161,7 +161,7 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas {
     let [top_status, search_prompt, body] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(3),
         Constraint::Min(0),
     ])
     .areas(area);
@@ -307,7 +307,7 @@ mod tests {
         // 顶栏 1 行不动,prompt 紧贴其下、全宽 1 行。
         assert_eq!(a.top_status.height, 1, "顶栏保留 1 行");
         assert_eq!(prompt.y, a.top_status.bottom(), "prompt 紧接顶栏下");
-        assert_eq!(prompt.height, 1, "prompt 1 行");
+        assert_eq!(prompt.height, 3, "prompt 3 行(带边框:上下框各 1 + 内容 1)");
         assert_eq!(prompt.width, parent.width, "prompt 全宽");
 
         // results 在左、detail 在右,无缝相接、顶对齐。

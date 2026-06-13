@@ -3,9 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mineral_model::{PlaylistId, Song, SourceKind};
+use mineral_channel_core::Page;
+use mineral_model::{PlaylistId, SearchKind, Song, SourceKind};
 use mineral_spectrum::SpectrumComputer;
-use mineral_task::TaskEvent;
+use mineral_task::{SearchPayload, TaskEvent};
 use ratatui::layout::Rect;
 use rustc_hash::FxHashMap;
 
@@ -16,6 +17,7 @@ use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
+mod channel_search;
 mod covers;
 mod library;
 mod lyric_view;
@@ -24,6 +26,7 @@ mod player;
 mod search;
 mod view_switch;
 
+pub use channel_search::{ChannelSearchState, SearchFocus};
 pub use covers::CoverHub;
 pub use library::LibraryData;
 pub use lyric_view::LyricView;
@@ -95,6 +98,10 @@ pub struct AppState {
     /// `on()` = 全屏、`eased_in_out()` = 形变位置。
     pub fullscreen: Toggle,
 
+    /// channel 搜索布局态:与 [`Self::fullscreen`] 同级的全屏级布局态(两者逻辑 `on` 互斥)。
+    /// 含布局开关 + 当前源 + 输入焦点 + 焦点环 + per-源会话。
+    pub channel_search: ChannelSearchState,
+
     /// 顶栏失焦变灰:`on()` = 已变灰(终端未聚焦)、`eased_in_out()` = 变灰深度。
     /// 终端聚焦态由 [`Self::focused`] 反读;初始 `off`(聚焦)——mode 1004 只报变化、
     /// 不支持的终端永不发事件,降级方向必须是「恒聚焦」。
@@ -164,12 +171,16 @@ impl AppState {
         Self {
             view: ViewSwitch::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            channel_search: ChannelSearchState::new(
+                ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
+                ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
+            ),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
             lyric_view: LyricView::new(),
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
             nav: NavState::new(),
-            search: SearchState::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            search: SearchState::new(),
             player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
@@ -195,6 +206,13 @@ impl AppState {
     /// 终端是否持有输入焦点。从 [`Self::dim`] 反读(变灰 = 未聚焦);上报 daemon 用。
     pub fn focused(&self) -> bool {
         !self.dim.on()
+    }
+
+    /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。
+    /// 全局逃生口 / 单键快捷在此让位字符输入——输入态的按键是文本,不是命令。
+    pub(crate) fn in_text_input(&self) -> bool {
+        self.search.typing
+            || (self.channel_search.active.on() && self.channel_search.focus == SearchFocus::Prompt)
     }
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
@@ -348,13 +366,46 @@ impl AppState {
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
             TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
-            // 搜索/详情/写操作事件由 Search 视图与管理流程消费(待接入);
+            TaskEvent::SearchResults {
+                source,
+                kind,
+                query,
+                page,
+                payload,
+            } => self.apply_search_results(*source, *kind, query, *page, payload),
+            // 详情/写操作事件由后续里程碑(detail / 歌单写)消费(待接入);
             // 在那之前先显式吞掉,保持 match 穷尽以便新事件到达时编译器提醒。
-            TaskEvent::SearchResults { .. }
-            | TaskEvent::ArtistDetailFetched { .. }
+            TaskEvent::ArtistDetailFetched { .. }
             | TaskEvent::ArtistAlbumsFetched { .. }
             | TaskEvent::AlbumSongsFetched { .. }
             | TaskEvent::PlaylistWriteDone { .. } => {}
+        }
+    }
+
+    /// 把一页搜索结果落进配对的会话:按 `(source, kind, query)` 配对(见 02 约定),
+    /// query 已变 / 类型不符的过期响应直接丢弃。首页(`offset == 0`)替换结果、光标归零。
+    ///
+    /// # Params:
+    ///   - `source` / `kind` / `query`: 回带的请求三元组(配对键)
+    ///   - `page`: 分页参数(翻页 append 在后续里程碑接入,当前仅认首页)
+    ///   - `payload`: 结果载荷
+    fn apply_search_results(
+        &mut self,
+        source: SourceKind,
+        kind: SearchKind,
+        query: &str,
+        page: Page,
+        payload: &SearchPayload,
+    ) {
+        let Some(session) = self.channel_search.sessions.get_mut(&source) else {
+            return;
+        };
+        if session.kind != kind || session.query != query {
+            return;
+        }
+        if page.offset == 0 {
+            session.results = Some(payload.clone());
+            session.sel = 0;
         }
     }
 
@@ -762,6 +813,84 @@ mod tests {
                 .is_some_and(|p| p.playlist == target),
             "非目标歌单到达不应消费 pending"
         );
+        Ok(())
+    }
+
+    /// 造一个已入会(源 NETEASE、kind Song、query 给定)的 AppState,供 SearchResults 配对测试用。
+    fn state_in_search(query: &str) -> color_eyre::Result<AppState> {
+        use mineral_channel_core::ChannelCaps;
+        use mineral_model::{SearchKind, SourceKind};
+        use rustc_hash::FxHashMap;
+
+        let mut s = AppState::test_default()?;
+        let mut caps = FxHashMap::default();
+        caps.insert(
+            SourceKind::NETEASE,
+            ChannelCaps::builder()
+                .searchable(vec![SearchKind::Song])
+                .playlist_edit(false)
+                .build(),
+        );
+        s.caps = caps;
+        s.channel_search.enter(&s.caps);
+        if let Some(session) = s.channel_search.current_mut() {
+            session.query = query.to_owned();
+        }
+        Ok(s)
+    }
+
+    /// 读当前会话的结果条数(无结果 / 非 Songs 载荷计 0)。
+    fn session_song_count(s: &AppState) -> usize {
+        use mineral_task::SearchPayload;
+        match s
+            .channel_search
+            .current()
+            .and_then(|sess| sess.results.as_ref())
+        {
+            Some(SearchPayload::Songs(songs)) => songs.len(),
+            _ => 0,
+        }
+    }
+
+    /// query 配对的 SearchResults 落进当前会话。
+    #[test]
+    fn search_results_populate_matching_session() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let mut s = state_in_search("hello")?;
+        s.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "hello".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(2)),
+        });
+        assert_eq!(session_song_count(&s), 2, "配对结果入会");
+        Ok(())
+    }
+
+    /// query 已变的过期 SearchResults 直接丢弃,不污染当前会话。
+    #[test]
+    fn stale_search_results_dropped() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let mut s = state_in_search("hello")?;
+        s.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "stale".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(5)),
+        });
+        assert_eq!(session_song_count(&s), 0, "过期响应不入会");
         Ok(())
     }
 }

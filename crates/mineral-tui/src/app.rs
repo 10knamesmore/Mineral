@@ -30,6 +30,7 @@ use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
 
+mod channel_search;
 mod menus;
 mod nav;
 
@@ -265,7 +266,7 @@ impl App {
                 self.update_spectrum();
                 self.state.view.tick();
                 self.state.fullscreen.tick();
-                self.state.search.remote_search.active.tick();
+                self.state.channel_search.tick();
                 self.state.dim.tick();
                 self.state.tick_lyric_scroll();
                 self.tick_overlays();
@@ -527,9 +528,9 @@ impl App {
 
         // Shift+Q 硬编码逃生口:退出 + 停掉 daemon。不进 keymap(不可重映射、压过
         // 用户绑定)、压过浮层(确认 / queue 开着也直接退);唯独让位文本输入——
-        // 搜索态的大写 Q 是搜索词,不是退出意图。只看 `Char('Q')` 不看 modifier:
-        // 部分终端报大写字符时不附带 SHIFT。
-        if !self.state.search.typing && key.code == KeyCode::Char('Q') {
+        // 文本输入态的大写 Q 是字符,不是退出意图(含 channel-search 搜索框)。只看
+        // `Char('Q')` 不看 modifier:部分终端报大写字符时不附带 SHIFT。
+        if !self.state.in_text_input() && key.code == KeyCode::Char('Q') {
             self.stop_daemon_on_quit = true;
             // 还停在 Library 内就退出:位置没经过「返回」记录,这里补记。放在转场
             // 起点而非收尾——fire-and-forget 落盘借收缩动画的时长完成,收尾才写
@@ -554,6 +555,13 @@ impl App {
         }
 
         // —— 以下:无活跃浮层 ——
+        // Search 布局态:按键先经 channel 搜索执行器。搜索框(prompt 焦点)是模态文本输入,
+        // 吞键进 query;搜索界面(results/detail 焦点)只截获面板导航,其余回落全局 dispatch
+        // (transport / 退出确认等照常),见 channel_search。
+        if self.state.channel_search.active.on() {
+            self.handle_channel_search_key(key);
+            return;
+        }
         if self.state.search.typing {
             self.handle_search_key(key);
             return;
@@ -611,7 +619,7 @@ impl App {
     /// 切换全屏播放态:翻转开关并驱动形变进退场(`eased_in_out`,可中途反向)。
     /// search 布局态下屏蔽(与 search 互斥,见 [`Self::open_search_view`])。
     fn toggle_fullscreen(&mut self) {
-        if self.state.search.remote_search.active.on() {
+        if self.state.channel_search.active.on() {
             return;
         }
         self.state.fullscreen.toggle();
@@ -624,7 +632,11 @@ impl App {
         if self.state.fullscreen.on() {
             return;
         }
-        self.state.search.remote_search.active.toggle();
+        self.state.channel_search.active.toggle();
+        // 进入(而非退出)时挑默认源 + 建会话;退出保留会话(切回恢复)。
+        if self.state.channel_search.active.on() {
+            self.state.channel_search.enter(&self.state.caps);
+        }
     }
 
     /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
@@ -693,7 +705,7 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_protocol::{PlayerSync, QueueSync};
 
-    use mineral_model::{MediaUrl, SourceKind};
+    use mineral_model::{MediaUrl, SearchKind, SourceKind};
 
     use super::App;
 
@@ -1256,26 +1268,17 @@ mod tests {
         Ok(())
     }
 
-    /// `s` 进/退 Search 布局态(toggle):浏览态可达,再按退出。
+    /// 浏览态 `s` 进 Search 布局态;布局内退出走 Esc(`s` 已是输入字符,见 token prompt)。
     #[test]
-    fn s_opens_search_layout() -> color_eyre::Result<()> {
+    fn s_opens_search_layout_esc_exits() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        assert!(
-            !app.state.search.remote_search.active.on(),
-            "初始非 search 布局"
-        );
+        assert!(!app.state.channel_search.active.on(), "初始非 search 布局");
 
         press(&mut app, KeyCode::Char('s'));
-        assert!(
-            app.state.search.remote_search.active.on(),
-            "s 进 search 布局"
-        );
+        assert!(app.state.channel_search.active.on(), "s 进 search 布局");
 
-        press(&mut app, KeyCode::Char('s'));
-        assert!(
-            !app.state.search.remote_search.active.on(),
-            "再按 s 退 search 布局"
-        );
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.state.channel_search.active.on(), "Esc 退 search 布局");
         Ok(())
     }
 
@@ -1287,7 +1290,7 @@ mod tests {
         assert!(app.state.fullscreen.on(), "前置:已进全屏");
 
         press(&mut app, KeyCode::Char('s'));
-        assert!(!app.state.search.remote_search.active.on(), "全屏态 s 无效");
+        assert!(!app.state.channel_search.active.on(), "全屏态 s 无效");
         Ok(())
     }
 
@@ -1297,12 +1300,326 @@ mod tests {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('s'));
         assert!(
-            app.state.search.remote_search.active.on(),
+            app.state.channel_search.active.on(),
             "前置:已进 search 布局"
         );
 
         press(&mut app, KeyCode::Char('z'));
         assert!(!app.state.fullscreen.on(), "search 态 z 无效");
+        Ok(())
+    }
+
+    /// Search 布局态(prompt 焦点)字符键进当前会话 query。
+    #[test]
+    fn typing_in_search_appends_to_query() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('i'));
+        let session = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有当前会话"))?;
+        assert_eq!(session.query, "hi", "字符进当前会话 query");
+        Ok(())
+    }
+
+    /// Search 布局态退格删 query 末字。
+    #[test]
+    fn backspace_in_search_pops_query() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        for c in "hi".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Backspace);
+        let session = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有当前会话"))?;
+        assert_eq!(session.query, "h", "退格删一字");
+        Ok(())
+    }
+
+    /// Enter 提交 `ChannelFetchKind::Search`(源/kind/query/page 正确),焦点落结果列。
+    #[test]
+    fn enter_submits_search_task_and_focuses_results() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_task::{ChannelFetchKind, TaskKind};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        for c in "hello".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+
+        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        let submitted_search = tasks.iter().find_map(|k| match k {
+            TaskKind::ChannelFetch(ChannelFetchKind::Search {
+                source,
+                kind,
+                query,
+                page,
+            }) => Some((*source, *kind, query.clone(), *page)),
+            _ => None,
+        });
+        assert_eq!(
+            submitted_search,
+            Some((
+                SourceKind::NETEASE,
+                SearchKind::Song,
+                "hello".to_owned(),
+                Page::new(/*offset*/ 0, /*limit*/ 30)
+            )),
+            "Enter 提交首页 Search 任务"
+        );
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Results,
+            "提交后焦点落结果列"
+        );
+        Ok(())
+    }
+
+    /// 造一个已提交并落了 `n` 首结果、焦点在结果列的 App(j/k 导航测试前置)。
+    fn app_with_results(n: usize) -> color_eyre::Result<App> {
+        use mineral_channel_core::Page;
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Enter);
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "x".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(n)),
+        });
+        Ok(app)
+    }
+
+    /// 结果列导航走 config 绑定(非写死键):`J`(move_down_big)经 keymap 大步下移、钳末行。
+    /// 旧写死实现只认 j/k,`J` 无效——本测试证明导航键已 config 化。
+    #[test]
+    fn results_focus_big_jump_is_config_driven() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('J'));
+        let sel = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .sel;
+        assert_eq!(sel, 3, "J 大步下移经 config 绑定生效(4 首钳到末行)");
+        Ok(())
+    }
+
+    /// 结果列焦点:`j`/`k` 在结果间移光标(钳末行 / 首行)。
+    #[test]
+    fn results_focus_jk_moves_selection() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        let sel = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .sel;
+        assert_eq!(sel, 2, "j 下移两次");
+        press(&mut app, KeyCode::Char('k'));
+        let sel = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .sel;
+        assert_eq!(sel, 1, "k 上移一次");
+        Ok(())
+    }
+
+    /// 结果列焦点 Esc 回 prompt(不退出布局态)。
+    #[test]
+    fn results_focus_esc_returns_to_prompt() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+
+        let mut app = app_with_results(4)?;
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Results,
+            "前置:焦点在结果列"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Prompt,
+            "Esc 回 prompt"
+        );
+        assert!(app.state.channel_search.active.on(), "仍在 search 布局");
+        Ok(())
+    }
+
+    /// prompt 焦点 Tab:**只切到上次面板(默认 results)、不提交搜索**——区别于 Enter(搜索+切)。
+    #[test]
+    fn prompt_tab_switches_to_last_panel_without_search() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        for c in "hi".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Results,
+            "Tab 切到上次面板(默认 results)"
+        );
+        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        assert!(tasks.is_empty(), "Tab 只切不搜:无 Search 任务提交");
+        Ok(())
+    }
+
+    /// results↔detail:`l` 进 detail、`h` 回 results(面板间空间导航,走 config 绑定)。
+    #[test]
+    fn results_detail_hl_navigation() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Detail,
+            "l 进 detail"
+        );
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Results,
+            "h 回 results"
+        );
+        Ok(())
+    }
+
+    /// detail 焦点下 `move_*` 不移 results 光标:detail 是独立面板,其内容滚动是后续里程碑,
+    /// 当前 j/k 在 detail 应无操作(而非偷偷动 results 的 sel)。
+    #[test]
+    fn detail_focus_move_does_not_touch_results() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+
+        use crate::runtime::state::SearchFocus;
+
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('l')); // results → detail
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Detail,
+            "前置:焦点在 detail"
+        );
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        let sel = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .sel;
+        assert_eq!(sel, 0, "detail 焦点下 j/k 不动 results 光标");
+        Ok(())
+    }
+
+    /// 搜索框(prompt 焦点)是模态文本输入:q / Q 都进 query——不弹退出框、不触发强退转场。
+    #[test]
+    fn search_box_q_and_capital_q_are_query_chars() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Char('Q'));
+        press(&mut app, KeyCode::Char('q'));
+        assert!(app.transition.is_none(), "搜索框 Q 不触发强退收缩转场");
+        assert_eq!(app.overlays.len(), 0, "搜索框 q 不弹退出确认框");
+        let query = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .query
+            .clone();
+        assert_eq!(query, "Qq", "q/Q 都进 query");
+        Ok(())
+    }
+
+    /// 搜索界面(results 焦点,非搜索框)非导航键回落全局:q 弹退出确认框(证明 transport 等
+    /// 全局键走同一回落路径生效)。
+    #[test]
+    fn search_view_q_falls_through_to_quit_confirm() -> color_eyre::Result<()> {
+        let mut app = app_with_results(4)?;
+        let before = app.overlays.len();
+        press(&mut app, KeyCode::Char('q'));
+        assert_eq!(
+            app.overlays.len(),
+            before + 1,
+            "results 焦点 q 回落全局 → 弹退出确认框"
+        );
+        assert!(!app.should_quit, "q 是确认框,不是直接退出");
+        Ok(())
+    }
+
+    /// 搜索界面(results 焦点)Shift+Q 逃生口照常生效:触发强退收缩转场(只有搜索框才让位)。
+    #[test]
+    fn search_view_capital_q_force_quits() -> color_eyre::Result<()> {
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('Q'));
+        assert!(app.transition.is_some(), "results 焦点 Q 触发强退收缩转场");
+        Ok(())
+    }
+
+    /// 面板 Tab/Esc 回 prompt,且 prompt 态 Tab 记住「上次面板」(detail)而非默认 results。
+    #[test]
+    fn panels_tab_esc_return_to_prompt_remembering_last() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+
+        let mut app = app_with_results(4)?;
+        press(&mut app, KeyCode::Char('l')); // results → detail
+        press(&mut app, KeyCode::Tab); // detail → prompt
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Prompt,
+            "detail Tab 回 prompt"
+        );
+        press(&mut app, KeyCode::Tab); // prompt → 上次面板 = detail
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Detail,
+            "Tab 回上次面板=detail(记住位置)"
+        );
+        press(&mut app, KeyCode::Esc); // detail → prompt
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Prompt,
+            "detail Esc 回 prompt"
+        );
+        assert!(
+            app.state.channel_search.active.on(),
+            "Esc 回 prompt 不退出布局态"
+        );
         Ok(())
     }
 

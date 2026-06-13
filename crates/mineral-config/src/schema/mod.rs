@@ -20,7 +20,7 @@ mod spectrum;
 mod theme;
 mod toast;
 
-pub use animation::{AnimationConfig, MenuReveal, SweepStyle};
+pub use animation::{AnimationConfig, MenuReveal, SearchFocusTransition, SweepStyle};
 pub use audio::{AudioConfig, BackendKind};
 pub use behavior::{BehaviorConfig, TrackPosMemory};
 pub use cache::CacheConfig;

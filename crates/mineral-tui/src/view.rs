@@ -6,11 +6,15 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use mineral_config::SearchFocusTransition;
+
 use crate::app::App;
 use crate::components::layout::compute::{Areas, compute, compute_fullscreen, compute_search};
 use crate::components::layout::{
-    cover, cover_image, lyrics, now_playing, sidebar, spectrum, top_status, transform, transport,
+    cover, cover_image, lyrics, now_playing, search_panel, sidebar, spectrum, top_status,
+    transform, transport,
 };
+use crate::runtime::state::SearchFocus;
 
 /// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
 /// search 布局态走 search paint(端点几何 `compute_search`、形变中途 `morph_search`);否则
@@ -31,15 +35,15 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             transform::morph_areas(&normal, &full, app.state.fullscreen.eased_in_out())
         };
         paint_fullscreen(frame, &areas, app);
-    } else if !app.state.search.remote_search.active.at_min() {
+    } else if !app.state.channel_search.active.at_min() {
         let search = compute_search(frame.area(), layout_cfg);
-        let areas = if app.state.search.remote_search.active.at_max() {
+        let areas = if app.state.channel_search.active.at_max() {
             search
         } else {
             transform::morph_search(
                 &normal,
                 &search,
-                app.state.search.remote_search.active.eased_in_out(),
+                app.state.channel_search.active.eased_in_out(),
             )
         };
         paint_search(frame, &areas, app);
@@ -83,34 +87,71 @@ fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     transport::draw(frame, areas.transport, &app.state.playback, theme);
 }
 
-/// Search 布局:顶栏 + prompt 行 + results(左)/ detail(右)占位面板 + transport 全宽。
-/// 形变中途额外画收缩中的 lyrics / spectrum(浏览内容,稳态端点为 None 自动跳过)。面板内容
-/// 画在给定 rect 内——端点或飞行中皆然。真实 token prompt / 结果列 / 详情随后续里程碑填入。
+/// Search 布局:顶栏 + prompt 行 + results(左)/ detail(右)面板 + transport 全宽。
+/// 左/右内容随形变方向画「出发端」(进场画浏览、退场画 search),到达端点才换,进退场对称、
+/// 不在起点瞬切;lyrics / spectrum 是浏览专属面板,随 rect 收缩/长出退进场。
+///
+/// 焦点高亮边框两种过渡(config `search_focus_transition`):`Instant` 时各面板按当前焦点直接
+/// 高亮;`Slide` 滑动期把所有面板边框压暗,改由一个 accent 浮动环从旧面板矩形 lerp 到新面板。
 fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     let theme = &app.theme;
+    let rs = &app.state.channel_search;
+    let sliding = matches!(
+        app.state.cfg.tui().animation().search_focus_transition(),
+        SearchFocusTransition::Slide
+    ) && !rs.focus_ring.settled();
+    // 滑动期所有面板边框压暗,高亮交给浮动环;否则当前焦点面板边框高亮。
+    let border_focused = |panel: SearchFocus| !sliding && rs.focus == panel;
+
+    // 左/右面板内容始终画「出发端」,到达端点才换——形变进退场对称、不在起点瞬切:
+    //   进场途中(朝 search 去) → 画浏览内容(playlists / now_playing)随框飞向 search 位,到
+    //     at_max 换 results / detail;
+    //   退场途中(朝 browse 去) → 仍画 results / detail 随框缩回 browse 位,到 at_min 由浏览态
+    //     paint 接管(esc 瞬间不把 results 跳成 playlists,消除跳变 + 起步卡顿)。
+    let show_browse = rs.active.on() && !rs.active.at_max();
     top_status::draw(frame, areas.top_status, &app.state, theme);
     if let Some(prompt) = areas.search_prompt {
-        // 空查询占位:放大镜图标(标准 unicode,单宽);真 token prompt 后续里程碑接入。
-        let hint = Line::from("⌕").style(Style::new().fg(theme.overlay));
-        frame.render_widget(Paragraph::new(hint), prompt);
-    }
-    let border = Style::new().fg(theme.overlay);
-    if let Some(results) = nonempty(areas.left) {
-        frame.render_widget(
-            Block::new()
-                .borders(Borders::ALL)
-                .border_style(border)
-                .title("results"),
-            results,
+        search_panel::draw_prompt(
+            frame,
+            prompt,
+            rs,
+            theme,
+            border_focused(SearchFocus::Prompt),
         );
     }
-    if let Some(detail) = areas.right.and_then(nonempty) {
+    if let Some(left) = nonempty(areas.left) {
+        if show_browse {
+            sidebar::draw(frame, left, &app.state, theme);
+        } else {
+            search_panel::draw_results(
+                frame,
+                left,
+                rs,
+                theme,
+                border_focused(SearchFocus::Results),
+            );
+        }
+    }
+    if let Some(right) = areas.right.and_then(nonempty) {
+        if show_browse {
+            now_playing::draw(frame, right, &app.state, &app.picker, theme);
+        } else {
+            search_panel::draw_detail(frame, right, theme, border_focused(SearchFocus::Detail));
+        }
+    }
+    // 焦点环:滑动期画 accent 浮动边框,从旧面板矩形几何插值到新面板矩形(border-only,不清内容)。
+    if sliding
+        && let (Some(from), Some(to)) = (
+            search_focus_rect(areas, rs.prev_focus),
+            search_focus_rect(areas, rs.focus),
+        )
+    {
+        let ring = transform::lerp_rect(from, to, rs.focus_ring.eased_in_out());
         frame.render_widget(
             Block::new()
                 .borders(Borders::ALL)
-                .border_style(border)
-                .title("detail"),
-            detail,
+                .border_style(Style::new().fg(theme.accent)),
+            ring,
         );
     }
     // 形变期收缩中的 lyrics / spectrum 仍画浏览内容(稳态 search 端点为 None,自动跳过)。
@@ -121,6 +162,16 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
+}
+
+/// 焦点对应的面板矩形(prompt 行 / results 左 / detail 右);该面板在当前端点不存在为 `None`。
+/// 焦点环滑动据此取两端矩形插值。
+fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
+    match focus {
+        SearchFocus::Prompt => areas.search_prompt,
+        SearchFocus::Results => nonempty(areas.left),
+        SearchFocus::Detail => areas.right.and_then(nonempty),
+    }
 }
 
 /// 全屏 / 形变布局:消失面板渲进收缩 rect(小到自动空白)→ spectrum → transport → cover
@@ -219,6 +270,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Position;
+    use ratatui::style::Color;
 
     use crate::render::anim::{Toggle, Transition};
     use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
@@ -398,7 +450,7 @@ mod tests {
         Ok(())
     }
 
-    /// Search 布局稳态一帧:顶栏保留、prompt 行 + results(左)/ detail(右)空占位面板、
+    /// Search 布局稳态一帧(无 caps 空态):prompt 行提示无可搜索源、results / detail 仅外框、
     /// transport 全宽贴底;lyrics / spectrum / now_playing 退场。
     #[test]
     fn search_steady_snapshot() -> color_eyre::Result<()> {
@@ -406,7 +458,179 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
-            "Search 稳态:prompt 行 + results 左 / detail 右占位 + transport 全宽",
+            "Search 稳态空态:prompt 提示无可搜索源 + results/detail 外框 + transport 全宽",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 焦点面板边框高亮:prompt 焦点时 prompt 框 accent、results 框 overlay;切 results 焦点反之。
+    #[test]
+    fn focused_panel_border_is_accent() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_model::SearchKind;
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        let accent = app.theme.accent;
+        let overlay = app.theme.overlay;
+        // prompt 边框左上角在 (0,1)(顶栏 1 行之下);results 边框左上角在 (0,4)(prompt 占 3 行)。
+        let border_fg = |app: &crate::app::App, x: u16, y: u16| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(80, 24))?;
+            t.draw(|f| super::draw(f, app))?;
+            Ok(t.backend()
+                .buffer()
+                .cell((x, y))
+                .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?
+                .fg)
+        };
+
+        assert_eq!(
+            border_fg(&app, 0, 1)?,
+            accent,
+            "prompt 焦点 → prompt 框 accent"
+        );
+        assert_eq!(
+            border_fg(&app, 0, 4)?,
+            overlay,
+            "results 未焦点 → results 框 overlay"
+        );
+
+        app.state.channel_search.focus = SearchFocus::Results;
+        assert_eq!(
+            border_fg(&app, 0, 1)?,
+            overlay,
+            "prompt 失焦 → prompt 框 overlay"
+        );
+        assert_eq!(
+            border_fg(&app, 0, 4)?,
+            accent,
+            "results 焦点 → results 框 accent"
+        );
+        Ok(())
+    }
+
+    /// 空结果(尚未搜索)时结果列画**居中 lite 提示**,而非可高亮的列表行:
+    /// 结果列 inner 区不应出现任何 surface0 选中高亮带。
+    #[test]
+    fn empty_results_hint_is_not_highlighted_row() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+        use mineral_model::SearchKind;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        // 焦点落结果列(若 hint 被当成可选行,这里就会被高亮——正是要规避的)。
+        app.state.channel_search.focus = SearchFocus::Results;
+        let surface0 = app.theme.surface0;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        // 结果列在左半(x < 30);空结果不应有整行底色带。
+        let mut banded = false;
+        for y in 0..24u16 {
+            for x in 0..30u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.bg == surface0) {
+                    banded = true;
+                }
+            }
+        }
+        assert!(!banded, "空结果的 hint 不应是高亮选中行");
+        Ok(())
+    }
+
+    /// Search 空结果稳态:结果列画**居中** lite 提示(无可高亮行),prompt / detail 外框照常。
+    #[test]
+    fn search_empty_results_hint_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        let (app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 空结果:results 列居中 lite 提示(非高亮行) + prompt/detail 外框",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 结果列选中行**整行**底色高亮(对齐 tracks/playlist/queue 的 row_highlight,非仅文字变色):
+    /// 选中行尾部空白 cell 也带 surface0 底色,非选中行不带。
+    #[test]
+    fn selected_result_row_has_full_width_highlight() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        app.state.channel_search.focus = SearchFocus::Results;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "x".to_owned();
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "x".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+        });
+        // 选中第 2 行(短名 "Gjs · Mineral",尾部留白便于验整行底色)。
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.sel = 2;
+        }
+        let surface0 = app.theme.surface0;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = |x: u16, y: u16| -> color_eyre::Result<Color> {
+            Ok(t.backend()
+                .buffer()
+                .cell((x, y))
+                .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?
+                .bg)
+        };
+        // 结果列起于 y=4(顶栏 1 + prompt 3),inner 首行 y=5 是表头,数据行从 y=6 起;
+        // 选中第 2 行在 y=8。x=20 是该行尾部留白。
+        assert_eq!(bg(20, 8)?, surface0, "选中行尾部空白也应带整行底色");
+        assert_ne!(bg(20, 6)?, surface0, "非选中数据行不带底色");
+        Ok(())
+    }
+
+    /// Search 结果稳态一帧:token prompt 渲染 源徽章 + 类型徽章 + query + 光标,
+    /// results 列渲染单曲行(光标行高亮)。
+    #[test]
+    fn search_results_steady_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "serenading".to_owned();
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+        });
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 结果稳态:prompt 源/类型徽章 + query + 光标,results 单曲行高亮",
             t.backend()
         );
         Ok(())
@@ -423,12 +647,282 @@ mod tests {
         for _ in 0..9 {
             anim.tick();
         }
-        app.state.search.remote_search.active = anim;
+        app.state.channel_search.active = anim;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
             "Search 形变中途:results/detail 对飞、prompt 长出、lyrics/spectrum 收缩",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 退场形变中途一帧:从稳态收起,左/右仍画 results/detail 内容随框缩回 browse 位
+    /// (而非 esc 瞬间瞬切成 playlists——进退场对称、不在起点跳变)。
+    #[test]
+    fn search_leave_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "serenading".to_owned();
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+        });
+        // 推满进场再收起半程(18 拍到顶、再 leave 9 拍):退场中途 on()=false、非端点。
+        let mut anim = Toggle::new(18);
+        anim.set(true);
+        for _ in 0..18 {
+            anim.tick();
+        }
+        anim.set(false);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.channel_search.active = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 退场形变中途:results/detail 随框缩回 browse 位(非起点瞬切 playlists)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 非焦点结果列的选中行走**暗调高亮**(subtext,非 accent):焦点在 prompt 时仍标出
+    /// "回得去"的光标位置而不抢视觉;切回结果列焦点则恢复 accent 亮高亮。
+    #[test]
+    fn unfocused_results_row_uses_dim_highlight() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "serenading".to_owned();
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+        });
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.sel = 2;
+        }
+        let accent = app.theme.accent;
+        let subtext = app.theme.subtext;
+        // 选中第 2 行 → inner y=8(顶栏 1 + prompt 3 + 边框 1 + 表头 1 + 2);x=20 是该行(整行高亮)。
+        let row_fg = |app: &crate::app::App| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(80, 24))?;
+            t.draw(|f| super::draw(f, app))?;
+            Ok(t.backend()
+                .buffer()
+                .cell((20, 8))
+                .ok_or_else(|| eyre!("cell (20,8) 越界"))?
+                .fg)
+        };
+
+        // 默认焦点在 prompt:结果列选中行走暗调(subtext)。
+        assert_eq!(row_fg(&app)?, subtext, "非焦点结果列 → 暗调高亮(subtext)");
+        app.state.channel_search.focus = SearchFocus::Results;
+        assert_eq!(row_fg(&app)?, accent, "焦点结果列 → accent 亮高亮");
+        Ok(())
+    }
+
+    /// Search 焦点环滑动中途一帧:焦点 prompt→results,accent 浮动边框悬在两面板矩形之间,
+    /// 两面板自身边框压暗(高亮交给浮动环)。
+    #[test]
+    fn search_focus_ring_slide_midframe_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        use crate::render::anim::Transition;
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        // 焦点环推进约半程(9/18),环悬在 prompt 与 results 矩形之间。
+        let mut ring = Transition::expanding(18);
+        for _ in 0..9 {
+            ring.tick();
+        }
+        app.state.channel_search.focus_ring = ring;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 焦点环滑动中途:accent 浮动边框悬在 prompt 与 results 之间,两面板边框压暗",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search detail 焦点稳态:detail 框 accent 高亮、results 框压暗且选中行走暗调高亮。
+    #[test]
+    fn search_detail_focused_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "serenading".to_owned();
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+        });
+        // 直接置焦点 detail(环 settle,不滑动):detail 高亮、results 暗调。
+        app.state.channel_search.focus = SearchFocus::Detail;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search detail 焦点:detail 框 accent + results 框暗调 + 选中行暗调高亮",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 专辑结果:结果列按类型走「专辑名 · 艺人」两列对齐(非纯单行文字)。
+    #[test]
+    fn search_results_albums_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Album, AlbumId, ArtistId, ArtistRef, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "mineral".to_owned();
+        }
+        let album = |id: &str, name: &str, who: &str| Album {
+            id: AlbumId::new(SourceKind::NETEASE, id),
+            name: name.to_owned(),
+            artists: vec![ArtistRef {
+                id: ArtistId::new(SourceKind::NETEASE, id),
+                name: who.to_owned(),
+            }],
+            description: String::new(),
+            publish_time_ms: 0,
+            cover_url: None,
+            songs: Vec::new(),
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "mineral".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                album("1", "Power", "Mineral"),
+                album("2", "EndSerenading", "Mineral"),
+            ]),
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!("Search 专辑结果:专辑名 · 艺人 两列对齐", t.backend());
+        Ok(())
+    }
+
+    /// 歌单结果:结果列走「歌单名 · N tracks」两列对齐。
+    #[test]
+    fn search_results_playlists_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Playlist, PlaylistId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Playlist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "indie".to_owned();
+        }
+        let playlist = |id: &str, name: &str, count: u64| Playlist {
+            id: PlaylistId::new(SourceKind::NETEASE, id),
+            name: name.to_owned(),
+            description: String::new(),
+            cover_url: None,
+            track_count: count,
+            songs: Vec::new(),
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Playlist,
+            query: "indie".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Playlists(vec![
+                playlist("1", "Bedroom Pop", 42),
+                playlist("2", "Math Rock 精选", 128),
+            ]),
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌单结果:歌单名 · N tracks 两列对齐",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 歌手结果:结果列走「歌手名 · 关注数缩写」两列对齐(humanize:42k / 1M)。
+    #[test]
+    fn search_results_artists_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Artist, ArtistId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.query = "football".to_owned();
+        }
+        let artist = |id: &str, name: &str, followers: u64| Artist {
+            id: ArtistId::new(SourceKind::NETEASE, id),
+            name: name.to_owned(),
+            description: String::new(),
+            follower_count: followers,
+            avatar_url: None,
+            songs: Vec::new(),
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Artist,
+            query: "football".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Artists(vec![
+                artist("1", "Chinese Football", 42_000),
+                artist("2", "American Football", 1_500_000),
+            ]),
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌手结果:歌手名 · 关注数缩写 两列对齐",
             t.backend()
         );
         Ok(())

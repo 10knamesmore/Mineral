@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_channel_core::ChannelCaps;
+use mineral_model::{MediaUrl, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind};
 use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions, SongStatsWire};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
@@ -468,6 +469,34 @@ pub(crate) fn app_with_search() -> color_eyre::Result<App> {
     let mut s = Toggle::new(1);
     s.set(true);
     s.tick();
-    app.state.search.remote_search.active = s;
+    app.state.channel_search.active = s;
     Ok(app)
+}
+
+/// 造一个**已稳态进入 Search 布局态**、注入单源(NETEASE)caps 的 probed [`App`]。
+///
+/// `searchable` 决定默认 kind / 可搜性;额外返回 `submit_task` 任务记录(提交断言用)。
+pub(crate) fn app_with_channel_search_probed(
+    searchable: Vec<SearchKind>,
+) -> color_eyre::Result<(App, Arc<Mutex<Vec<TaskKind>>>)> {
+    let submitted = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        submitted: Arc::clone(&submitted),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    app.state.caps.insert(
+        SourceKind::NETEASE,
+        ChannelCaps::builder()
+            .searchable(searchable)
+            .playlist_edit(false)
+            .build(),
+    );
+    // 真路径入会(挑默认源 + 建会话),再把 morph 推到稳态(step=1000 一步到位)。
+    app.state.channel_search.enter(&app.state.caps);
+    let mut active = Toggle::new(1);
+    active.set(true);
+    active.tick();
+    app.state.channel_search.active = active;
+    Ok((app, submitted))
 }

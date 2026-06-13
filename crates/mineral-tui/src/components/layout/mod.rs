@@ -5,6 +5,7 @@ pub mod cover;
 pub mod cover_image;
 pub mod lyrics;
 pub mod now_playing;
+pub mod search_panel;
 pub mod sidebar;
 pub mod spectrum;
 pub mod top_status;

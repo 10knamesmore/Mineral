@@ -36,11 +36,28 @@ pub struct AnimationConfig {
     /// 终端失焦/聚焦时顶栏变灰的淡入淡出时长(毫秒)。
     focus_fade_ms: u32,
 
+    /// Search 布局态焦点高亮边框滑动时长(毫秒);仅 `search_focus_transition = Slide` 时生效。
+    search_focus_morph_ms: u32,
+
     /// 侧栏曲目扫入风格。
     view_sweep: SweepStyle,
 
     /// 锚定弹出菜单(PopMenu)的进场风格。
     menu_reveal: MenuReveal,
+
+    /// Search 布局态焦点高亮边框切换的过渡风格(直切 / 边框滑动)。
+    search_focus_transition: SearchFocusTransition,
+}
+
+/// Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchFocusTransition {
+    /// 边框滑动:高亮边框从旧面板矩形几何插值滑到新面板矩形。
+    Slide,
+
+    /// 直切:高亮边框瞬移到新面板,无过渡。
+    Instant,
 }
 
 /// 锚定弹出菜单进场风格。不依赖渲染 crate;接线处映射到具体实现。

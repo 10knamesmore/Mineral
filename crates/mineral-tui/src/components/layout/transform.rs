@@ -186,8 +186,8 @@ fn zero_center(r: Rect) -> Rect {
     )
 }
 
-/// 逐 x/y/w/h 在两矩形间按千分比 `t` 定点插值。
-fn lerp_rect(a: Rect, b: Rect, t: u16) -> Rect {
+/// 逐 x/y/w/h 在两矩形间按千分比 `t` 定点插值。布局形变与搜索焦点环滑动共用。
+pub(crate) fn lerp_rect(a: Rect, b: Rect, t: u16) -> Rect {
     Rect::new(
         lerp_u16(a.x, b.x, t),
         lerp_u16(a.y, b.y, t),
