@@ -20,7 +20,7 @@ pub struct LibraryData {
     /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
     pub tracks_generation: u64,
 
-    /// 已提交过 `PlaylistTracks` 请求的歌单(成败都记)。prefetch 据此去重,
+    /// 已提交过 `PlaylistDetail` 请求的歌单(成败都记)。prefetch 据此去重,
     /// 避免**失败**歌单(`tracks` 永远不会被填)被每帧无限重提交而刷屏。
     /// 对齐 cover 的 `covers.pending`。
     pub tracks_requested: FxHashSet<PlaylistId>,

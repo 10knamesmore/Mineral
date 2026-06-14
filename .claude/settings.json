@@ -10,17 +10,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && cargo fmt 2>&1 || true",
-            "timeout": 60
-          }
-        ]
-      }
     ]
   }
 }

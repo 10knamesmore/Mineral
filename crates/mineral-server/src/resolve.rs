@@ -247,18 +247,14 @@ mod tests {
     use crate::media_cache::{MediaCache, library_relpath};
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {
-        Song {
-            id: SongId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            artists: Vec::new(),
-            album: album.map(|a| AlbumRef {
+        Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, id))
+            .name(name.to_owned())
+            .album(album.map(|a| AlbumRef {
                 id: AlbumId::new(SourceKind::NETEASE, "0"),
                 name: a.to_owned(),
-            }),
-            duration_ms: 0,
-            cover_url: None,
-            source_url: None,
-        }
+            }))
+            .build()
     }
 
     /// 开一个启用态 MediaCache(缓存文件落 `dir`,索引落 `persist`)。

@@ -48,7 +48,7 @@ impl PlayerCore {
         match op {
             PlaylistWriteOp::AddSongs { id, .. } | PlaylistWriteOp::RemoveSongs { id, .. } => {
                 self.inner.scheduler.submit(
-                    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
+                    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
                     Priority::User,
                 );
             }

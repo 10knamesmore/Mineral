@@ -38,6 +38,24 @@ where
         .collect())
 }
 
+/// 反序列化 `Vec<T>`,同时容忍**字段整体为 `null`** 与**元素为 `null`**。
+///
+/// 网易云 `/weapi/user/playlist` 的歌单列表项把 `tracks` / `trackIds` 返回显式 `null`
+/// (不是键缺失、也不是空数组):`#[serde(default)]` 只兜键缺失、[`vec_skip_null`] 又要求
+/// 整体是序列(遇顶层 `null` 报 `invalid type: null, expected a sequence`)。这里先把顶层
+/// `null` 收成空 `Vec`,再丢弃数组里的 `null` 元素——两层 null 都不炸。
+pub(crate) fn null_or_vec_skip_null<'de, D, T>(de: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<Option<T>>>::deserialize(de)?
+        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
 /// 从 [`Value`] 反序列化为 `T`,失败时错误信息带字段路径。
 ///
 /// # Params:

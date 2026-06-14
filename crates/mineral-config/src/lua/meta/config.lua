@@ -102,6 +102,8 @@
 ---@field enter_search? mineral.KeyBinding 进入搜索输入(全屏态屏蔽)
 ---@field activate? mineral.KeyBinding 进入歌单 / 播放选中曲
 ---@field back? mineral.KeyBinding 返回上级 / 清搜索词
+---@field drill_into? mineral.KeyBinding 下探一层 / 进入选中项详情(默认 "<C-l>";song 进其专辑、容器进详情)
+---@field cycle_detail_section? mineral.KeyBinding 切换详情内分区(歌手热门曲 ↔ 专辑;默认 "[" / "]")
 ---@field cycle_mode? mineral.KeyBinding 循环播放模式
 ---@field volume_up? mineral.KeyBinding 音量增(步长见 behavior.volume_step)
 ---@field volume_down? mineral.KeyBinding 音量减

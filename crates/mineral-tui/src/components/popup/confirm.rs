@@ -28,6 +28,7 @@ impl Overlay for ConfirmOverlay {
             animated: true,
             dock: false,
             anchor: None,
+            align: None,
         }
     }
 

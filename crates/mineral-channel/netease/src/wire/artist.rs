@@ -34,9 +34,30 @@ pub struct ArtistInfo {
     #[serde(default, rename = "briefDesc", deserialize_with = "string_or_null")]
     pub brief_desc: String,
 
-    /// 粉丝数(部分端点不带,缺失给 0)。
-    #[serde(default, rename = "fansCount")]
-    pub fans_count: u64,
+    /// 名下 album 总数(顶层 `albumSize`,部分端点不带 → `None`）。
+    #[serde(default, rename = "albumSize")]
+    pub album_size: Option<u64>,
+
+    /// 名下歌曲总数(顶层 `musicSize`,部分端点不带 → `None`)。
+    #[serde(default, rename = "musicSize")]
+    pub music_size: Option<u64>,
+}
+
+/// `/api/artist/follow/count/get` 响应。歌手详情端点顶层不带粉丝数,粉丝数只此端点给,
+/// 故 `artist_detail` 并发补打它再聚合。
+#[derive(Debug, Deserialize)]
+pub struct FollowCountResult {
+    /// 业务数据块(异常时可能缺)。
+    #[serde(default)]
+    pub data: Option<FollowCountData>,
+}
+
+/// follow/count `data` 块,本结构只取粉丝数。
+#[derive(Debug, Deserialize)]
+pub struct FollowCountData {
+    /// 粉丝数(字段名 `fansCnt`)。
+    #[serde(default, rename = "fansCnt")]
+    pub fans_cnt: u64,
 }
 
 /// `/api/artist/albums/{id}` 的响应。
@@ -65,9 +86,21 @@ pub struct ArtistAlbum {
     #[serde(default, rename = "publishTime")]
     pub publish_time: i64,
 
-    /// 主艺术家。
+    /// 曲目数。
+    #[serde(default)]
+    pub size: u64,
+
+    /// 发行方(唱片公司 / 厂牌),可为 null。
+    #[serde(default)]
+    pub company: Option<String>,
+
+    /// 主 artist(部分响应只给这个;`artists` 是全列表,优先后者)。
     #[serde(default)]
     pub artist: Option<Artist>,
+
+    /// 全部 artist(多人 album 用;缺失时退回 `artist`)。
+    #[serde(default)]
+    pub artists: Vec<Artist>,
 }
 
 #[cfg(test)]
@@ -81,7 +114,8 @@ mod tests {
         let raw = serde_json::json!({
             "artist": {
                 "id": 11127, "name": "Beyond", "picUrl": "https://p1.music.126.net/x.jpg",
-                "briefDesc": "香港摇滚乐队", "fansCount": 8_900_000
+                "briefDesc": "香港摇滚乐队",
+                "albumSize": 146, "musicSize": 2570
             },
             "hotSongs": [
                 { "id": 1, "name": "海阔天空", "ar": [{ "id": 11127, "name": "Beyond" }],
@@ -101,24 +135,45 @@ mod tests {
         });
         let r: ArtistDetailResult = from_value(raw)?;
         assert_eq!(r.artist.brief_desc, "");
-        assert_eq!(r.artist.fans_count, 0);
+        assert!(r.artist.album_size.is_none());
+        assert!(r.artist.music_size.is_none());
         assert!(r.hot_songs.is_empty());
         Ok(())
     }
 
-    /// 歌手专辑列表:hotAlbums 解析(含发行时间与主艺术家)。
+    /// follow/count 端点:取出 `data.fansCnt` 作粉丝数;`data` 缺则降级 0。
+    #[test]
+    fn parses_follow_count() -> color_eyre::Result<()> {
+        use super::FollowCountResult;
+
+        let raw =
+            serde_json::json!({ "code": 200, "data": { "fansCnt": 176_396, "follow": true } });
+        let r: FollowCountResult = from_value(raw)?;
+        assert_eq!(r.data.map(|d| d.fans_cnt), Some(176_396));
+
+        let empty: FollowCountResult = from_value(serde_json::json!({ "code": 200 }))?;
+        assert!(empty.data.is_none(), "data 缺 → None(调用方降级 0)");
+        Ok(())
+    }
+
+    /// artist 的 album 列表:hotAlbums 解析(发行时间 / size / company / 全 artists)。
     #[test]
     fn parses_artist_albums() -> color_eyre::Result<()> {
         let raw = serde_json::json!({
             "hotAlbums": [
                 { "id": 9, "name": "乐与怒", "picUrl": "https://p1.music.126.net/a.jpg",
-                  "publishTime": 736_185_600_000_i64, "artist": { "id": 11127, "name": "Beyond" } },
+                  "publishTime": 736_185_600_000_i64, "size": 10, "company": "滚石",
+                  "artists": [{ "id": 11127, "name": "Beyond" }] },
+                // size/company/artist 全缺 → 0 / None / 空。
                 { "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 }
             ],
             "more": false
         });
         let r: ArtistAlbumsResult = from_value(raw)?;
-        mineral_test::assert_snap_debug!("歌手专辑列表(乐与怒/继续革命)解析结构", r);
+        mineral_test::assert_snap_debug!(
+            "artist 的 album 列表(乐与怒 带 size/company/artists / 继续革命 缺字段)解析结构",
+            r
+        );
         Ok(())
     }
 }

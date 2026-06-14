@@ -787,11 +787,11 @@ mod tests {
             Err(Error::NotSupported)
         }
 
-        async fn songs_in_album(&self, _id: &AlbumId) -> ChannelResult<Vec<Song>> {
+        async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
             Err(Error::NotSupported)
         }
 
-        async fn songs_in_playlist(&self, _id: &PlaylistId) -> ChannelResult<Vec<Song>> {
+        async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
             Err(Error::NotSupported)
         }
 
@@ -1708,18 +1708,15 @@ mod tests {
 
     /// 一首带专辑的测试歌曲(库路径取 album/title)。
     fn song_with_album(id: &str, name: &str, album: &str) -> Song {
-        Song {
-            id: SongId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            artists: Vec::new(),
-            album: Some(AlbumRef {
+        Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, id))
+            .name(name.to_owned())
+            .album(Some(AlbumRef {
                 id: AlbumId::new(SourceKind::NETEASE, "0"),
                 name: album.to_owned(),
-            }),
-            duration_ms: 1000,
-            cover_url: None,
-            source_url: None,
-        }
+            }))
+            .duration_ms(1000)
+            .build()
     }
 
     /// 端到端:**真下载**一首(走进程内 HTTP server)→ **再播放** → 应解析到刚下载的文件
@@ -1961,10 +1958,10 @@ mod tests {
         async fn songs_detail(&self, _ids: &[SongId]) -> ChannelResult<Vec<Song>> {
             Err(Error::NotSupported)
         }
-        async fn songs_in_album(&self, _id: &AlbumId) -> ChannelResult<Vec<Song>> {
+        async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
             Err(Error::NotSupported)
         }
-        async fn songs_in_playlist(&self, _id: &PlaylistId) -> ChannelResult<Vec<Song>> {
+        async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
             Err(Error::NotSupported)
         }
         async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> ChannelResult<Vec<PlayUrl>> {
@@ -1975,25 +1972,19 @@ mod tests {
         }
 
         async fn create_playlist(&self, name: &str) -> ChannelResult<Playlist> {
-            Ok(Playlist {
-                id: PlaylistId::new(SourceKind::NETEASE, "created-1"),
-                name: name.to_owned(),
-                description: String::new(),
-                cover_url: None,
-                track_count: 0,
-                songs: Vec::new(),
-            })
+            Ok(Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))
+                .name(name.to_owned())
+                .build())
         }
 
         async fn my_playlists(&self) -> ChannelResult<Vec<Playlist>> {
-            Ok(vec![Playlist {
-                id: PlaylistId::new(SourceKind::NETEASE, "created-1"),
-                name: String::from("新歌单"),
-                description: String::new(),
-                cover_url: None,
-                track_count: 0,
-                songs: Vec::new(),
-            }])
+            Ok(vec![
+                Playlist::builder()
+                    .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))
+                    .name(String::from("新歌单"))
+                    .build(),
+            ])
         }
     }
 

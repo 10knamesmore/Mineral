@@ -54,7 +54,7 @@ async fn add_songs_appends_and_duplicate_maps_to_api_502() -> color_eyre::Result
 
     chan.playlist_add_songs(&pl.id, std::slice::from_ref(&song.id))
         .await?;
-    let songs = chan.songs_in_playlist(&pl.id).await?;
+    let songs = chan.playlist_detail(&pl.id).await?.songs;
     assert_eq!(
         songs.iter().map(|s| &s.id).collect::<Vec<_>>(),
         vec![&song.id]
@@ -65,7 +65,7 @@ async fn add_songs_appends_and_duplicate_maps_to_api_502() -> color_eyre::Result
         .await;
     assert!(matches!(dup, Err(Error::Api { code: 502, .. })));
     // 失败的重复添加不改变内容
-    assert_eq!(chan.songs_in_playlist(&pl.id).await?.len(), 1);
+    assert_eq!(chan.playlist_detail(&pl.id).await?.songs.len(), 1);
     Ok(())
 }
 
@@ -79,7 +79,7 @@ async fn remove_songs_removes_and_ignores_missing() -> color_eyre::Result<()> {
 
     chan.playlist_remove_songs(&pl.id, std::slice::from_ref(&song.id))
         .await?;
-    assert!(chan.songs_in_playlist(&pl.id).await?.is_empty());
+    assert!(chan.playlist_detail(&pl.id).await?.songs.is_empty());
 
     // 再删同一首(已不存在):宽容忽略,不报错
     chan.playlist_remove_songs(&pl.id, std::slice::from_ref(&song.id))

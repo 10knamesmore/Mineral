@@ -155,15 +155,13 @@ mod tests {
     /// 造一个带 track(指定时长 + 进度)的 Playback。
     fn with_track(duration_ms: u64, position_ms: u64) -> Playback {
         let mut pb = Playback::new();
-        pb.track = Some(Song {
-            id: SongId::new(SourceKind::LOCAL, "t"),
-            name: "t".to_owned(),
-            artists: Vec::new(),
-            album: None,
-            duration_ms,
-            cover_url: None,
-            source_url: None,
-        });
+        pb.track = Some(
+            Song::builder()
+                .id(SongId::new(SourceKind::LOCAL, "t"))
+                .name("t".to_owned())
+                .duration_ms(duration_ms)
+                .build(),
+        );
         pb.position_ms = position_ms;
         pb
     }

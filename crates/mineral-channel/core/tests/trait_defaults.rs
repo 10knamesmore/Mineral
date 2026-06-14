@@ -53,11 +53,11 @@ impl MusicChannel for BareChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_in_album(&self, _id: &AlbumId) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
 
-    async fn songs_in_playlist(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn playlist_detail(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Playlist> {
         Err(Error::NotSupported)
     }
 

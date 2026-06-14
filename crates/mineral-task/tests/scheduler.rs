@@ -11,7 +11,7 @@ use mineral_model::{
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind, TaskOutcome};
 use tokio::sync::Semaphore;
 
-/// fake channel:my_playlists/songs_in_playlist 可被 gate 阻塞,其他端点全部 NotSupported。
+/// fake channel:my_playlists/playlist_detail 可被 gate 阻塞,其他端点全部 NotSupported。
 ///
 /// 用 Semaphore 而非 Notify 当 gate ——`add_permits` 即使在没人 await 时调用,
 /// 之后的 `acquire` 也能立刻拿到,避免测试里的"先 notify 再 await"竞态。
@@ -22,14 +22,10 @@ struct FakeChannel {
 
 impl FakeChannel {
     fn new(gate: Option<Arc<Semaphore>>) -> Self {
-        let pl = Playlist {
-            id: PlaylistId::new(SourceKind::NETEASE, "p1"),
-            name: String::from("P1"),
-            description: String::new(),
-            cover_url: None,
-            track_count: 0,
-            songs: Vec::new(),
-        };
+        let pl = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .name(String::from("P1"))
+            .build();
         Self {
             playlists: vec![pl],
             gate,
@@ -71,12 +67,15 @@ impl MusicChannel for FakeChannel {
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn songs_in_album(&self, _id: &AlbumId) -> Result<Vec<Song>> {
+    async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
         Err(Error::NotSupported)
     }
-    async fn songs_in_playlist(&self, _id: &PlaylistId) -> Result<Vec<Song>> {
+    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
         self.maybe_wait().await;
-        Ok(Vec::new())
+        Ok(Playlist::builder()
+            .id(id.clone())
+            .name(String::new())
+            .build())
     }
     async fn song_urls(&self, ids: &[SongId], _q: BitRate) -> Result<Vec<PlayUrl>> {
         self.maybe_wait().await;
@@ -114,7 +113,7 @@ fn my_playlists_kind() -> TaskKind {
 }
 
 fn playlist_tracks_kind() -> TaskKind {
-    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
+    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
         id: PlaylistId::new(SourceKind::NETEASE, "p1"),
     })
 }
@@ -296,10 +295,10 @@ impl MusicChannel for WriteRecorder {
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn songs_in_album(&self, _id: &mineral_model::AlbumId) -> Result<Vec<Song>> {
+    async fn album_detail(&self, _id: &mineral_model::AlbumId) -> Result<mineral_model::Album> {
         Err(Error::NotSupported)
     }
-    async fn songs_in_playlist(&self, _id: &PlaylistId) -> Result<Vec<Song>> {
+    async fn playlist_detail(&self, _id: &PlaylistId) -> Result<Playlist> {
         Err(Error::NotSupported)
     }
     async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> Result<Vec<PlayUrl>> {

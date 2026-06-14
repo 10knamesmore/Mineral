@@ -124,18 +124,27 @@ impl MusicChannel for MockChannel {
             .collect())
     }
 
-    async fn songs_in_album(&self, _id: &AlbumId) -> Result<Vec<Song>> {
+    async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
         Err(Error::NotSupported)
     }
 
-    async fn songs_in_playlist(&self, id: &PlaylistId) -> Result<Vec<Song>> {
+    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
         Ok(self
             .playlists
             .read()
             .iter()
             .find(|p| &p.data.id == id)
-            .map(|p| p.tracks.iter().map(|t| t.data.clone()).collect())
-            .unwrap_or_default())
+            .map(|p| {
+                let mut pl = p.data.clone();
+                pl.songs = p.tracks.iter().map(|t| t.data.clone()).collect();
+                pl
+            })
+            .unwrap_or_else(|| {
+                Playlist::builder()
+                    .id(id.clone())
+                    .name(String::new())
+                    .build()
+            }))
     }
 
     async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> Result<Vec<PlayUrl>> {
@@ -174,14 +183,10 @@ impl MusicChannel for MockChannel {
 
     async fn create_playlist(&self, name: &str) -> Result<Playlist> {
         let seq = self.next_playlist_seq.fetch_add(1, Ordering::Relaxed);
-        let playlist = Playlist {
-            id: PlaylistId::new(SourceKind::MOCK, format!("user-{seq}")),
-            name: name.to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count: 0,
-            songs: Vec::new(),
-        };
+        let playlist = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::MOCK, format!("user-{seq}")))
+            .name(name.to_owned())
+            .build();
         self.playlists.write().push(DemoPlaylist {
             data: playlist.clone(),
             tracks: Vec::new(),
@@ -312,14 +317,12 @@ fn build_demo_playlists() -> Vec<DemoPlaylist> {
 fn build_one(name: &str, count: usize) -> DemoPlaylist {
     let songs = build_songs(name, "Various Artists", count);
     let tracks = decorate(&songs);
-    let playlist = Playlist {
-        id: PlaylistId::new(SourceKind::MOCK, name.to_owned()),
-        name: name.to_owned(),
-        description: String::new(),
-        cover_url: None,
-        track_count: u64::try_from(count).unwrap_or(0),
-        songs,
-    };
+    let playlist = Playlist::builder()
+        .id(PlaylistId::new(SourceKind::MOCK, name.to_owned()))
+        .name(name.to_owned())
+        .track_count(u64::try_from(count).unwrap_or(0))
+        .songs(songs)
+        .build();
     DemoPlaylist {
         data: playlist,
         tracks,
@@ -337,18 +340,20 @@ fn build_songs(album_name: &str, artist_name: &str, count: usize) -> Vec<Song> {
         name: album_name.to_owned(),
     };
     (0..count)
-        .map(|i| Song {
-            id: SongId::new(SourceKind::MOCK, format!("{album_name}/{i}")),
-            name: TITLES
-                .get(i % TITLES.len())
-                .copied()
-                .unwrap_or("Untitled")
-                .to_owned(),
-            artists: vec![artist_ref.clone()],
-            album: Some(album_ref.clone()),
-            duration_ms: 180_000 + (u64::try_from(i).unwrap_or(0) * 17_000),
-            cover_url: None,
-            source_url: None,
+        .map(|i| {
+            Song::builder()
+                .id(SongId::new(SourceKind::MOCK, format!("{album_name}/{i}")))
+                .name(
+                    TITLES
+                        .get(i % TITLES.len())
+                        .copied()
+                        .unwrap_or("Untitled")
+                        .to_owned(),
+                )
+                .artists(vec![artist_ref.clone()])
+                .album(Some(album_ref.clone()))
+                .duration_ms(180_000 + (u64::try_from(i).unwrap_or(0) * 17_000))
+                .build()
         })
         .collect()
 }

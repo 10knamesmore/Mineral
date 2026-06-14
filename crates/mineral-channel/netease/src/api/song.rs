@@ -1,27 +1,23 @@
-//! 歌曲详情、播放 URL、红心端点。
+//! 歌曲详情、播放 URL、红心、回忆坐标端点(纯协议:参数 → 类型化 wire DTO)。
 //!
-//! `song_urls` 实现 spec §4.3 的双层降级:
-//! 1. 先尝试 `SongUrlV1Service`(`/weapi/song/enhance/player/url/v1`,字符串等级)
-//! 2. 失败或返回试听片段(`freeTrialInfo` 非空)再降到 `SongUrlService`(`/api/song/enhance/player/url`,数字 br)
+//! 播放 URL 有两个网易端点:v1(`/weapi/song/enhance/player/url/v1`,字符串等级)与
+//! legacy(`/api/song/enhance/player/url`,数字 br)。两者各是纯端点、返回 [`SongUrl`] 列表;
+//! spec §4.3 的"v1 失败 / 仅试听 → 降级 legacy"双层降级编排在 channel 层,不在本层。
 
 use color_eyre::eyre::eyre;
-use mineral_model::{
-    AlbumId, AlbumRef, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl, Song, SongId,
-    SourceKind,
-};
+use mineral_model::{BitRate, SongId};
 use serde_json::json;
 
 /// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
-use crate::convert::parse_remote;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
 use crate::wire::song::{AlbumSong, FirstListenInfo, SongUrl};
 
-/// 详情:`/weapi/v3/song/detail`。返回与 album.rs 一致的 `wire::song::AlbumSong` 形态。
-pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<Song>> {
+/// 详情:`/weapi/v3/song/detail`。返回 `ar`/`al`/`dt` 形态的 wire DTO(映射归 `convert`）。
+pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<AlbumSong>> {
     let c: Vec<serde_json::Value> = ids.iter().map(|i| json!({ "id": i.as_str() })).collect();
     let mut p = serde_json::Map::new();
     p.insert("c".into(), json!(serde_json::to_string(&c)?));
@@ -37,51 +33,15 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<S
     let songs = v
         .get("songs")
         .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
-    Ok(dtos
-        .into_iter()
-        .map(|s| Song {
-            id: SongId::new(SourceKind::NETEASE, s.id.to_string()),
-            name: s.name,
-            artists: s
-                .ar
-                .into_iter()
-                .map(|a| ArtistRef {
-                    id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
-                    name: a.name,
-                })
-                .collect(),
-            album: Some(AlbumRef {
-                id: AlbumId::new(SourceKind::NETEASE, s.al.id.to_string()),
-                name: s.al.name,
-            }),
-            duration_ms: s.dt,
-            cover_url: s.al.pic_url.as_deref().and_then(parse_remote),
-            source_url: None,
-        })
-        .collect())
+    crate::wire::de::from_value(songs.clone())
 }
 
-/// 播放 URL,**双层降级**。
-pub async fn song_urls(
+/// 播放 URL · v1(`/weapi/song/enhance/player/url/v1`,字符串等级)。返回 wire DTO 列表。
+pub async fn song_url_v1(
     transport: &Transport,
     ids: &[SongId],
     quality: BitRate,
-) -> Result<Vec<PlayUrl>> {
-    if let Ok(out) = song_urls_v1(transport, ids, quality).await
-        && !out.is_empty()
-    {
-        return Ok(out);
-    }
-    song_urls_legacy(transport, ids, quality).await
-}
-
-/// SongUrlV1Service:`/weapi/song/enhance/player/url/v1`,字符串等级。
-async fn song_urls_v1(
-    transport: &Transport,
-    ids: &[SongId],
-    quality: BitRate,
-) -> Result<Vec<PlayUrl>> {
+) -> Result<Vec<SongUrl>> {
     let id_list: Vec<&str> = ids.iter().map(SongId::as_str).collect();
     let level = match quality {
         BitRate::Standard => "standard",
@@ -104,15 +64,15 @@ async fn song_urls_v1(
             ua: UaKind::Any,
         })
         .await?;
-    parse_song_url_data(&v, quality)
+    parse_song_url_dtos(&v)
 }
 
-/// 旧版 SongUrlService(linuxapi),双层降级里的 fallback。
-async fn song_urls_legacy(
+/// 播放 URL · legacy(`/api/song/enhance/player/url`,linuxapi,数字 br)。返回 wire DTO 列表。
+pub async fn song_url_legacy(
     transport: &Transport,
     ids: &[SongId],
     quality: BitRate,
-) -> Result<Vec<PlayUrl>> {
+) -> Result<Vec<SongUrl>> {
     let id_list: Vec<i64> = ids.iter().filter_map(|i| i.as_str().parse().ok()).collect();
     let br = match quality {
         BitRate::Standard => "128000",
@@ -134,7 +94,7 @@ async fn song_urls_legacy(
             ua: UaKind::Linux,
         })
         .await?;
-    parse_song_url_data(&v, quality)
+    parse_song_url_dtos(&v)
 }
 
 /// 组装 `/api/radio/like` 请求所需的 params。
@@ -208,29 +168,12 @@ pub async fn remote_play_count(transport: &Transport, id: &SongId) -> Result<u32
         .unwrap_or_default())
 }
 
-/// 把 v1 / legacy 两套响应里共有的 `data: [...]` 解析成 [`PlayUrl`] 列表。
-fn parse_song_url_data(v: &serde_json::Value, quality: BitRate) -> Result<Vec<PlayUrl>> {
+/// 取 v1 / legacy 两套响应里共有的 `data: [...]` 反序列化成 [`SongUrl`] 列表(两端点同构)。
+fn parse_song_url_dtos(v: &serde_json::Value) -> Result<Vec<SongUrl>> {
     let data = v
         .get("data")
         .ok_or_else(|| eyre!("song url response missing `data`"))?;
-    let dtos: Vec<SongUrl> = crate::wire::de::from_value(data.clone())?;
-    Ok(dtos
-        .into_iter()
-        .filter_map(|d| {
-            let url_str = d.url?;
-            let url = MediaUrl::remote(&url_str).ok()?;
-            Some(PlayUrl {
-                song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
-                url,
-                bitrate_bps: d.br,
-                quality,
-                size: d.size,
-                format: d.format.map(AudioFormat::from).unwrap_or_default(),
-                // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
-                bit_depth: None,
-            })
-        })
-        .collect())
+    crate::wire::de::from_value(data.clone())
 }
 
 #[cfg(test)]

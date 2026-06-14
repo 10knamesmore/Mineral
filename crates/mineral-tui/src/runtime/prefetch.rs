@@ -6,18 +6,21 @@
 //!
 //! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
 
+use mineral_channel_core::Page;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::cover_fetch::CoverFetcher;
-use crate::runtime::state::{AppState, View};
+use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch。
 pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
+    request_detail(state, client, covers);
+    request_detail_selected_cover(state, covers);
 }
 
 /// 看 view 决定的 sel 周围 `prefetch.radius` 内未 cache / pending 的封面,
@@ -131,7 +134,7 @@ fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind,
     covers.request(source, url);
 }
 
-/// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistTracks。
+/// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
 fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     if state.view != View::Playlists {
@@ -140,7 +143,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     for id in collect_pending_tracks(state) {
         mineral_log::debug!(target: "prefetch", playlist_id = id.as_str(), source = ?id.namespace(), "request playlist tracks");
         client.submit_task(
-            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
+            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
             Priority::User,
         );
         // 成败都记:失败歌单的 library.tracks 永远不会被填,只有靠这里去重才不会
@@ -177,6 +180,113 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
         Priority::User,
     );
     state.library.play_count_requested.insert(id);
+}
+
+/// search 布局态下，结果列/详情光标停留超防抖窗后，给当前 detail 栈顶帧补拉列表/详情
+/// （Background 优先级），并把该实体封面搭车投给 fetcher。
+///
+/// 同帧只派一次（`DetailFrame.requested`）；移光标 / 下钻换新帧后可再派——失败的帧换走
+/// 再回即重试（驻留窗口重新触发），与 spec「预览失败驻留重试」一致。布局态未开则不派。
+fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
+    if !state.channel_search.active.on() {
+        return;
+    }
+    let debounce =
+        std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
+    if state.nav.last_sel_change.elapsed() < debounce {
+        return;
+    }
+    // 取出当前帧的拉取意图 + 封面并标记已派，随即释放 channel_search 借用。
+    let intent = {
+        let Some(kr) = state.channel_search.active_results_mut() else {
+            return;
+        };
+        let Some(frame) = kr.detail.current_mut() else {
+            return;
+        };
+        if !frame.needs_fetch() {
+            return;
+        }
+        frame.mark_requested();
+        frame
+            .entity
+            .fetch()
+            .map(|fetch| (fetch, frame.entity.cover().cloned()))
+    };
+    // 单曲无所属专辑：已标记、跳过（降级只画歌曲卡片）。
+    let Some((fetch, cover)) = intent else {
+        return;
+    };
+    let source = fetch.source();
+    mineral_log::debug!(target: "prefetch", ?source, key = %fetch.dedup_key(), "request detail");
+    submit_detail_tasks(client, fetch);
+    if let Some(url) = cover {
+        ensure_cover(state, covers, source, url);
+    }
+}
+
+/// search 布局态下，给当前 detail 帧列表选中项的封面搭车投 fetcher（artist 帧右栏副头图用）。
+///
+/// 与 detail fetch 去重解耦：选中项随 `[ ]` 切区 / 光标移动而变，每 tick 看一眼，靠
+/// [`ensure_cover`] 的 cache/pending 去重兜重复。沿用 detail 驻留防抖窗，避免快速翻列表时
+/// 给 fetcher 灌一堆滚过即弃的图；不投则右栏副头图永远停在程序化占位。
+fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
+    if !state.channel_search.active.on() {
+        return;
+    }
+    let debounce =
+        std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
+    if state.nav.last_sel_change.elapsed() < debounce {
+        return;
+    }
+    // 先取出 (source, url) 再释放 channel_search 借用，避免与 ensure_cover 的 &mut 冲突。
+    // 来源用所在 artist 帧的 fetch source（选中歌/专辑与 artist 同 channel，落盘子目录一致）。
+    let intent = {
+        let Some(kr) = state.channel_search.active_results() else {
+            return;
+        };
+        let Some(frame) = kr.detail.current() else {
+            return;
+        };
+        match (frame.selected_cover().cloned(), frame.entity.fetch()) {
+            (Some(url), Some(fetch)) => Some((fetch.source(), url)),
+            _ => None,
+        }
+    };
+    if let Some((source, url)) = intent {
+        ensure_cover(state, covers, source, url);
+    }
+}
+
+/// 按 [`DetailFetch`] 派对应的 channel 拉取任务（歌手两路：详情 + 专辑列表；其余单路）。
+fn submit_detail_tasks(client: &dyn Client, fetch: DetailFetch) {
+    match fetch {
+        DetailFetch::AlbumDetail(id) => {
+            client.submit_task(
+                TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail { id }),
+                Priority::Background,
+            );
+        }
+        DetailFetch::PlaylistDetail(id) => {
+            client.submit_task(
+                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id }),
+                Priority::Background,
+            );
+        }
+        DetailFetch::Artist(id) => {
+            client.submit_task(
+                TaskKind::ChannelFetch(ChannelFetchKind::ArtistDetail { id: id.clone() }),
+                Priority::Background,
+            );
+            client.submit_task(
+                TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
+                    id,
+                    page: Page::default(),
+                }),
+                Priority::Background,
+            );
+        }
+    }
 }
 
 /// 当前 Library 选中行的歌曲 id(filtered 索引);无选中 / 空列表返回 `None`。
@@ -222,15 +332,12 @@ mod tests {
 
     /// 造一首带封面 URL 的歌:id = `s{i}`、cover = `https://cover/{i}.jpg`。
     fn song_with_cover(i: usize) -> color_eyre::Result<Song> {
-        Ok(Song {
-            id: SongId::new(SourceKind::NETEASE, format!("s{i}")),
-            name: format!("song {i}"),
-            artists: Vec::new(),
-            album: None,
-            duration_ms: 1000,
-            cover_url: Some(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?),
-            source_url: None,
-        })
+        Ok(Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, format!("s{i}")))
+            .name(format!("song {i}"))
+            .duration_ms(1000)
+            .cover_url(Some(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?))
+            .build())
     }
 
     /// 收集结果里是否含某序号歌的封面 URL。
@@ -275,6 +382,106 @@ mod tests {
         state.playback.track = Some(song_with_cover(42)?);
 
         assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");
+        Ok(())
+    }
+
+    /// 造一个「已进 Search 布局态、搜到 1 张专辑、光标停留超防抖窗」的 state。
+    fn searching_album_state() -> color_eyre::Result<AppState> {
+        use std::time::{Duration, Instant};
+
+        use mineral_channel_core::{ChannelCaps, Page};
+        use mineral_model::{AlbumId, SearchKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+        use rustc_hash::FxHashMap;
+
+        let mut state = AppState::test_default()?;
+        let mut caps = FxHashMap::default();
+        caps.insert(
+            SourceKind::NETEASE,
+            ChannelCaps::builder()
+                .searchable(vec![SearchKind::Album])
+                .playlist_edit(false)
+                .build(),
+        );
+        state.caps = caps;
+        state.channel_search.enter(&state.caps);
+        state.channel_search.active.set(true);
+        if let Some(s) = state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        let album = mineral_model::Album::builder()
+            .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+            .name("al".to_owned())
+            .build();
+        state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![album]),
+        });
+        // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
+        state.nav.last_sel_change = Instant::now()
+            .checked_sub(Duration::from_secs(3600))
+            .unwrap_or_else(Instant::now);
+        Ok(state)
+    }
+
+    /// 录提交任务的 client + disabled fetcher，驱动一次 request_detail，返回提交的任务。
+    fn drive_detail(state: &mut AppState) -> color_eyre::Result<Vec<mineral_task::TaskKind>> {
+        use std::sync::{Arc, Mutex};
+
+        use crate::runtime::cover_fetch::CoverFetcher;
+        use crate::test_support::TestClient;
+
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            submitted: Arc::clone(&submitted),
+            ..TestClient::default()
+        };
+        super::request_detail(state, &client, &CoverFetcher::disabled());
+        let tasks = submitted
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?
+            .clone();
+        Ok(tasks)
+    }
+
+    /// 驻留超窗 → 给选中专辑派 AlbumSongs。
+    #[test]
+    fn request_detail_dispatches_album_songs() -> color_eyre::Result<()> {
+        use mineral_task::{ChannelFetchKind, TaskKind};
+
+        let mut state = searching_album_state()?;
+        let tasks = drive_detail(&mut state)?;
+        assert!(
+            tasks.iter().any(|t| matches!(
+                t,
+                TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail { .. })
+            )),
+            "应给选中专辑派 AlbumDetail"
+        );
+        Ok(())
+    }
+
+    /// 同帧第二次驱动不重复派（requested 去重）。
+    #[test]
+    fn request_detail_dedup_same_frame() -> color_eyre::Result<()> {
+        let mut state = searching_album_state()?;
+        let first = drive_detail(&mut state)?;
+        assert!(!first.is_empty(), "首次应派");
+        let second = drive_detail(&mut state)?;
+        assert!(second.is_empty(), "同帧不重复派");
+        Ok(())
+    }
+
+    /// 布局态未开 → 不派（detail 是 search 专属）。
+    #[test]
+    fn request_detail_skips_when_inactive() -> color_eyre::Result<()> {
+        let mut state = searching_album_state()?;
+        state.channel_search.active.set(false);
+        let tasks = drive_detail(&mut state)?;
+        assert!(tasks.is_empty(), "未进 search 布局态不派 detail");
         Ok(())
     }
 }

@@ -237,15 +237,16 @@ impl NamespaceStore {
 
         let duration_ms = u64::try_from(row.duration_ms)?;
 
-        Ok(Some(Song {
-            id: SongId::new(source, row.song_value),
-            name: row.name,
-            artists,
-            album,
-            duration_ms,
-            cover_url,
-            source_url: None,
-        }))
+        Ok(Some(
+            Song::builder()
+                .id(SongId::new(source, row.song_value))
+                .name(row.name)
+                .artists(artists)
+                .album(album)
+                .duration_ms(duration_ms)
+                .cover_url(cover_url)
+                .build(),
+        ))
     }
 
     /// 记一次完整播放：play_count+1、累加时长、刷新 last_played_at。降级 no-op。
@@ -633,18 +634,15 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
-        let song = Song {
-            id: SongId::new(SourceKind::NETEASE, "123"),
-            name: "迷跡波".to_owned(),
-            artists: vec![ArtistRef {
+        let song = Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, "123"))
+            .name("迷跡波".to_owned())
+            .artists(vec![ArtistRef {
                 id: ArtistId::new(SourceKind::NETEASE, "a1"),
                 name: "演者".to_owned(),
-            }],
-            album: None,
-            duration_ms: 200_000,
-            cover_url: None,
-            source_url: None,
-        };
+            }])
+            .duration_ms(200_000)
+            .build();
         s.upsert_meta(&song).await?;
         let got = s.get_meta(&song.id).await?;
         assert!(got.is_some());
@@ -664,10 +662,10 @@ mod tests {
         let id = SongId::new(SourceKind::NETEASE, "777");
 
         // 首次 upsert:3 个艺人,验证保序 + 内容
-        let song = Song {
-            id: id.clone(),
-            name: "多人合作".to_owned(),
-            artists: vec![
+        let song = Song::builder()
+            .id(id.clone())
+            .name("多人合作".to_owned())
+            .artists(vec![
                 ArtistRef {
                     id: ArtistId::new(SourceKind::NETEASE, "a1"),
                     name: "甲".to_owned(),
@@ -680,12 +678,9 @@ mod tests {
                     id: ArtistId::new(SourceKind::NETEASE, "a3"),
                     name: "丙".to_owned(),
                 },
-            ],
-            album: None,
-            duration_ms: 123_000,
-            cover_url: None,
-            source_url: None,
-        };
+            ])
+            .duration_ms(123_000)
+            .build();
         s.upsert_meta(&song).await?;
 
         let got = s.get_meta(&id).await?;
@@ -703,18 +698,15 @@ mod tests {
         }
 
         // 再次 upsert 同 id:换成 1 个不同艺人,验证旧 3 行被清
-        let updated = Song {
-            id: id.clone(),
-            name: "改为单人".to_owned(),
-            artists: vec![ArtistRef {
+        let updated = Song::builder()
+            .id(id.clone())
+            .name("改为单人".to_owned())
+            .artists(vec![ArtistRef {
                 id: ArtistId::new(SourceKind::NETEASE, "b1"),
                 name: "丁".to_owned(),
-            }],
-            album: None,
-            duration_ms: 99_000,
-            cover_url: None,
-            source_url: None,
-        };
+            }])
+            .duration_ms(99_000)
+            .build();
         s.upsert_meta(&updated).await?;
 
         let got2 = s.get_meta(&id).await?;

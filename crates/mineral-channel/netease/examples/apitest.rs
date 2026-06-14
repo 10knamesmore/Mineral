@@ -32,7 +32,7 @@
 //! === 2. 公开数据(MusicChannel API) ===
 //! [✓] search_songs           ↳ 5 hits, first: "晴天"
 //! [✓] songs_detail           ↳ 1 song
-//! [✓] songs_in_album         ↳ 11 tracks
+//! [✓] album_detail           ↳ 11 tracks
 //! [✓] song_urls (Higher)     ↳ url scheme=https, format=mp3
 //! [✓] lyrics                 ↳ lrc=Some, yrc=Some
 //!
@@ -213,9 +213,9 @@ async fn main() -> color_eyre::Result<()> {
         report.push(r);
 
         if let Some(album) = song.album.clone() {
-            let r = run("songs_in_album", async {
-                let v = ch.songs_in_album(&album.id).await?;
-                Ok(format!("{} tracks", v.len()))
+            let r = run("album_detail", async {
+                let v = ch.album_detail(&album.id).await?;
+                Ok(format!("{} tracks", v.songs.len()))
             })
             .await;
             report.push(r);
@@ -338,9 +338,9 @@ async fn main() -> color_eyre::Result<()> {
             report.push(r);
 
             if let Some(p) = first_playlist {
-                let r = run("songs_in_playlist (我喜欢)", async {
-                    let v = ch.songs_in_playlist(&p.id).await?;
-                    Ok(format!("{} tracks", v.len()))
+                let r = run("playlist_detail (我喜欢)", async {
+                    let v = ch.playlist_detail(&p.id).await?;
+                    Ok(format!("{} tracks", v.songs.len()))
                 })
                 .await;
                 report.push(r);

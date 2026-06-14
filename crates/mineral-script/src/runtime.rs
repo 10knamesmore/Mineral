@@ -323,14 +323,15 @@ mod tests {
             .blocking_recv()?;
         assert_eq!(got, Ok(format!("{}|netease", song.name)));
 
-        let playlist = mineral_model::Playlist {
-            id: mineral_model::PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1"),
-            name: "歌单甲".to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count: 1,
-            songs: vec![song.clone()],
-        };
+        let playlist = mineral_model::Playlist::builder()
+            .id(mineral_model::PlaylistId::new(
+                mineral_model::SourceKind::NETEASE,
+                "p1",
+            ))
+            .name("歌单甲".to_owned())
+            .track_count(1)
+            .songs(vec![song.clone()])
+            .build();
         let got = sender
             .render_copy_template(
                 /*index*/ 1,

@@ -9,17 +9,16 @@
 //! 风控注意:512 表示风控或歌单容量满,**不要在本层自动重试**——参考实现
 //! 对 512 自动重试一次的行为不抄,风控下重试只会加重,让错误冒泡给用户。
 
-use color_eyre::eyre::eyre;
-use mineral_model::{Playlist, PlaylistId, SongId, SourceKind};
+use mineral_model::{PlaylistId, SongId};
 use serde_json::{Value, json};
 
 /// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
-use crate::convert::parse_remote;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
+use crate::wire::playlist::CreatePlaylistResult;
 
 /// 发一个 weapi 写请求,丢弃响应 body(只关心 code,非 200 已在 transport 报错)。
 async fn post(
@@ -37,10 +36,10 @@ async fn post(
         .await
 }
 
-/// 创建歌单。响应自带新歌单对象,就地映射返回,免一次"建完再拉列表"的往返。
-pub async fn create_playlist(transport: &Transport, name: &str) -> Result<Playlist> {
+/// 创建歌单。响应自带新歌单对象(返回 wire DTO,映射归 `convert`),免一次"建完再拉列表"的往返。
+pub async fn create_playlist(transport: &Transport, name: &str) -> Result<CreatePlaylistResult> {
     let raw = post(transport, "/api/playlist/create", create_params(name)).await?;
-    parse_created(&raw)
+    crate::wire::de::from_value(raw)
 }
 
 /// 删除自己创建的歌单。
@@ -133,43 +132,12 @@ fn manipulate_params(
     Ok(params)
 }
 
-/// 创建响应 → 统一 [`Playlist`]。
-fn parse_created(v: &Value) -> Result<Playlist> {
-    let p = v
-        .get("playlist")
-        .ok_or_else(|| eyre!("create response missing `playlist`"))?;
-    let id = p
-        .get("id")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| eyre!("create response missing `playlist.id`"))?;
-    Ok(Playlist {
-        id: PlaylistId::new(SourceKind::NETEASE, id.to_string()),
-        name: p
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        description: p
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        cover_url: p
-            .get("coverImgUrl")
-            .and_then(Value::as_str)
-            .and_then(parse_remote),
-        track_count: p.get("trackCount").and_then(Value::as_u64).unwrap_or(0),
-        songs: Vec::new(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use color_eyre::eyre::eyre;
     use mineral_model::{PlaylistId, SongId, SourceKind};
     use serde_json::{Value, json};
 
-    use super::{create_params, manipulate_params, parse_created};
+    use super::{create_params, manipulate_params};
 
     /// 建单参数:加密前明文必须与参考实现 byte 等价(name/privacy/type)。
     #[test]
@@ -198,33 +166,6 @@ mod tests {
                 "trackIds": "[\"186016\",\"175408\"]", "imme": "true"
             })
         );
-        Ok(())
-    }
-
-    /// 创建响应解析:playlist 对象 → model(NETEASE namespace + 字段兜底)。
-    #[test]
-    fn parse_created_maps_playlist_object() -> color_eyre::Result<()> {
-        let raw = json!({
-            "code": 200, "id": 987654,
-            "playlist": { "id": 987654, "name": "开车歌单", "trackCount": 0,
-                          "coverImgUrl": "https://p1.music.126.net/c.jpg", "description": null }
-        });
-        let pl = parse_created(&raw)?;
-        assert_eq!(pl.id, PlaylistId::new(SourceKind::NETEASE, "987654"));
-        assert_eq!(pl.name, "开车歌单");
-        assert_eq!(pl.description, "");
-        assert_eq!(pl.track_count, 0);
-        assert!(pl.cover_url.is_some());
-        Ok(())
-    }
-
-    /// 响应缺 playlist 对象 → 显式报错(而非 panic / 默认值)。
-    #[test]
-    fn parse_created_rejects_missing_playlist() -> color_eyre::Result<()> {
-        let err = parse_created(&json!({ "code": 200 }))
-            .err()
-            .ok_or_else(|| eyre!("expected err"))?;
-        assert!(format!("{err}").contains("playlist"));
         Ok(())
     }
 }

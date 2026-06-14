@@ -1,41 +1,48 @@
 ---
 source: crates/mineral-channel/netease/src/wire/search.rs
-description: 搜索歌曲列表(MyGO 迷星叫 / 碧天伴走)解析结构
+assertion_line: 151
+description: 搜索歌曲列表(MyGO 迷星叫 带 tns/封面 / 碧天伴走 缺 tns)解析结构
 expression: r
 ---
-SearchSongsResult {
+CloudSongsResult {
     songs: [
-        SearchSong {
+        AlbumSong {
             id: 1,
             name: "迷星叫",
-            artists: [
+            tns: [
+                "叫喊迷星",
+            ],
+            ar: [
                 Artist {
                     id: 1,
                     name: "MyGO!!!!!",
                 },
             ],
-            album: Album {
+            al: Album {
                 id: 1,
                 name: "迷跡波",
-                pic_url: None,
+                pic_url: Some(
+                    "https://p1.music.126.net/x.jpg",
+                ),
             },
-            duration: 248000,
+            dt: 248000,
         },
-        SearchSong {
+        AlbumSong {
             id: 2,
             name: "碧天伴走",
-            artists: [
+            tns: [],
+            ar: [
                 Artist {
                     id: 1,
                     name: "MyGO!!!!!",
                 },
             ],
-            album: Album {
+            al: Album {
                 id: 1,
                 name: "迷跡波",
                 pic_url: None,
             },
-            duration: 256000,
+            dt: 256000,
         },
     ],
 }

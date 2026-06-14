@@ -24,24 +24,24 @@ pub fn arb_song() -> impl Strategy<Value = Song> {
         option::of(any::<String>()),
         any::<u64>(),
     )
-        .prop_map(
-            |(source, id, name, artist_names, album, duration_ms)| Song {
-                id: SongId::new(source, id),
-                name,
-                artists: artist_names
-                    .into_iter()
-                    .map(|n| ArtistRef {
-                        id: ArtistId::new(source, n.as_str()),
-                        name: n,
-                    })
-                    .collect(),
-                album: album.map(|n| AlbumRef {
+        .prop_map(|(source, id, name, artist_names, album, duration_ms)| {
+            Song::builder()
+                .id(SongId::new(source, id))
+                .name(name)
+                .artists(
+                    artist_names
+                        .into_iter()
+                        .map(|n| ArtistRef {
+                            id: ArtistId::new(source, n.as_str()),
+                            name: n,
+                        })
+                        .collect(),
+                )
+                .album(album.map(|n| AlbumRef {
                     id: AlbumId::new(source, n.as_str()),
                     name: n,
-                }),
-                duration_ms,
-                cover_url: None,
-                source_url: None,
-            },
-        )
+                }))
+                .duration_ms(duration_ms)
+                .build()
+        })
 }

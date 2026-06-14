@@ -10,6 +10,8 @@ expression: "lines.join(\"\\n\")"
 <C-b> → Scroll(PageUp)
 <C-d> → Scroll(LineDown)
 <C-f> → Scroll(PageDown)
+<C-h> → BackOrClearSearch
+<C-l> → DrillIntoSelection
 <C-u> → Scroll(LineUp)
 <CR> → ActivateSelection
 <Down> → MoveSelection(Down(1))
@@ -25,6 +27,8 @@ expression: "lines.join(\"\\n\")"
 G → MoveSelection(Last)
 J → MoveSelection(Down(7))
 K → MoveSelection(Up(7))
+[ → CycleDetailSection
+] → CycleDetailSection
 _ → NudgeVolume(VolumeDelta(-5))
 d → DownloadSelection
 f → ToggleLoveSelection

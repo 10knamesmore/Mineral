@@ -5,14 +5,14 @@
 //! 列表滚动态的只读 offset 还原;菜单贴行下方弹出(`Placement::Below`)。
 
 use mineral_config::{CopyContext, CopyTemplate};
-use mineral_model::Song;
+use mineral_model::{Album, Artist, Song};
 use mineral_protocol::CopyTemplateCtx;
 use ratatui::layout::Rect;
 
-use crate::components::layout::compute::compute;
+use crate::components::layout::compute::{compute, compute_search};
 use crate::components::popup::{MenuAction, MenuItem, OverlayKind, Placement, PopMenu};
 use crate::runtime::scroll::{ListScroll, pin_cursor};
-use crate::runtime::state::View;
+use crate::runtime::state::{EntityRef, SearchFocus, View};
 
 use super::App;
 
@@ -20,6 +20,10 @@ impl App {
     /// 打开上下文操作菜单(全屏态屏蔽;无可作用实体时静默)。
     pub(crate) fn open_action_menu(&mut self) {
         if self.state.fullscreen.on() {
+            return;
+        }
+        // Search 布局态的操作菜单(插播/下载等)随 §5 接入;此处不落浏览态实体,静默。
+        if self.state.channel_search.active.on() {
             return;
         }
         let built = match self.state.view.current() {
@@ -55,6 +59,11 @@ impl App {
     /// 打开复制菜单(全屏态屏蔽;无可作用实体时静默)。
     pub(crate) fn open_copy_menu(&mut self) {
         if self.state.fullscreen.on() {
+            return;
+        }
+        // Search 布局态走自己的实体 + 锚点(浏览态布局/选中与搜索无关,不能借用)。
+        if self.state.channel_search.active.on() {
+            self.open_search_copy_menu();
             return;
         }
         let templates = self.state.cfg.tui().copy().templates();
@@ -106,6 +115,75 @@ impl App {
                 Placement::Below,
             )));
         }
+    }
+
+    /// Search 布局态的复制菜单:复制结果列选中实体(song/album/artist/playlist),菜单贴
+    /// 结果行正下方弹出(强制 `Left`,不吃全局右对齐)。
+    ///
+    /// 仅结果列焦点开;detail 焦点(下钻帧实体复制)随 §5 操作菜单接入,此处静默。
+    fn open_search_copy_menu(&mut self) {
+        if self.state.channel_search.focus != SearchFocus::Results {
+            return;
+        }
+        let templates = self.state.cfg.tui().copy().templates();
+        let Some(entity) = self
+            .state
+            .channel_search
+            .active_results()
+            .and_then(|kr| EntityRef::from_payload(&kr.results, kr.sel))
+        else {
+            return;
+        };
+        let caps = self.state.caps.get(&entity_source(&entity));
+        let items = match &entity {
+            EntityRef::Song(song) => {
+                let url = caps.and_then(|c| c.song_web_url().as_deref());
+                let mut items = song_copy_items(song, url);
+                append_template_items(&mut items, templates, CopyContext::Song, || {
+                    CopyTemplateCtx::Song(song.clone())
+                });
+                items
+            }
+            EntityRef::Playlist(playlist) => {
+                let url = caps.and_then(|c| c.playlist_web_url().as_deref());
+                let mut items = playlist_copy_items(playlist, url);
+                append_template_items(&mut items, templates, CopyContext::Playlist, || {
+                    CopyTemplateCtx::Playlist(playlist.clone())
+                });
+                items
+            }
+            EntityRef::Album(album) => album_copy_items(album),
+            EntityRef::Artist(artist) => artist_copy_items(artist),
+        };
+        let Some(anchor) = self.search_row_anchor() else {
+            return;
+        };
+        self.overlays.push(OverlayKind::menu(PopMenu::new(
+            "copy",
+            items,
+            anchor,
+            Placement::Below,
+        )));
+    }
+
+    /// Search 结果列选中行的屏幕矩形。
+    ///
+    /// 结果表每帧用 fresh `TableState`(offset 复位 0),ratatui 把选中行滚进视口——sel 在首屏
+    /// 内显示在第 sel 行,超出则钉在视口末行。据此还原屏幕行,无需另存滚动态。
+    fn search_row_anchor(&self) -> Option<Rect> {
+        let panel = compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).left;
+        let kr = self.state.channel_search.active_results()?;
+        // 视口可见行 = 高 - 上下边框 2 - 表头 1。
+        let viewport = usize::from(panel.height.saturating_sub(3));
+        let shown = kr.sel.min(viewport.saturating_sub(1));
+        let dy = u16::try_from(shown).unwrap_or(0);
+        Some(Rect::new(
+            panel.x.saturating_add(1),
+            // +1 边框 +1 表头。
+            panel.y.saturating_add(2).saturating_add(dy),
+            panel.width.saturating_sub(2),
+            1,
+        ))
     }
 
     /// Library 视图选中歌(过滤投影后的当前行)。
@@ -200,10 +278,10 @@ fn append_template_items(
         items.push(MenuItem {
             hotkey: *t.key(),
             label: t.label().clone(),
-            action: MenuAction::CopyTemplate {
+            action: Some(MenuAction::CopyTemplate {
                 index,
                 ctx: make_ctx(),
-            },
+            }),
             destructive: false,
         });
     }
@@ -286,20 +364,69 @@ fn song_copy_items(song: &Song, web_url: Option<&str>) -> Vec<MenuItem> {
     items
 }
 
+/// 专辑的复制菜单内置项(name / id / 封面;caps 未声明专辑网页模板,故无「复制链接」项)。
+fn album_copy_items(album: &Album) -> Vec<MenuItem> {
+    let mut items = vec![
+        MenuItem::keyed('n', "Copy name", MenuAction::Copy(album.name.clone())),
+        MenuItem::keyed('i', "Copy id", MenuAction::Copy(album.id.qualified())),
+    ];
+    if let Some(cover) = &album.cover_url {
+        items.push(MenuItem::keyed(
+            'c',
+            "Copy cover URL",
+            MenuAction::Copy(cover.to_string()),
+        ));
+    }
+    items
+}
+
+/// 歌手的复制菜单内置项(name / id / 头像;caps 未声明歌手网页模板,故无「复制链接」项)。
+fn artist_copy_items(artist: &Artist) -> Vec<MenuItem> {
+    let mut items = vec![
+        MenuItem::keyed('n', "Copy name", MenuAction::Copy(artist.name.clone())),
+        MenuItem::keyed('i', "Copy id", MenuAction::Copy(artist.id.qualified())),
+    ];
+    if let Some(avatar) = &artist.avatar_url {
+        items.push(MenuItem::keyed(
+            'c',
+            "Copy avatar URL",
+            MenuAction::Copy(avatar.to_string()),
+        ));
+    }
+    items
+}
+
+/// 结果实体的来源(由各自 id 的 namespace 派生);供查 caps 取网页模板。
+fn entity_source(entity: &EntityRef) -> mineral_model::SourceKind {
+    match entity {
+        EntityRef::Song(s) => s.id.namespace(),
+        EntityRef::Album(a) => a.id.namespace(),
+        EntityRef::Artist(a) => a.id.namespace(),
+        EntityRef::Playlist(p) => p.id.namespace(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use mineral_model::{AlbumId, AlbumRef, Playlist, PlaylistId, SourceKind};
+    use mineral_channel_core::Page;
+    use mineral_model::{Album, AlbumId, AlbumRef, Playlist, PlaylistId, SearchKind, SourceKind};
+    use mineral_task::SearchPayload;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
 
-    use super::{append_template_items, playlist_copy_items, row_anchor, song_copy_items};
+    use super::{
+        album_copy_items, append_template_items, playlist_copy_items, row_anchor, song_copy_items,
+    };
     use crate::app::App;
+    use crate::components::layout::compute::compute_search;
     use crate::components::popup::MenuAction;
     use crate::runtime::scroll::ListScroll;
+    use crate::runtime::state::SearchFocus;
     use crate::test_support::{
-        app_with_library, app_with_library_probed, app_with_playlists_probed,
+        app_with_channel_search_probed, app_with_library, app_with_library_probed,
+        app_with_playlists_probed, endserenading,
     };
 
     /// 经 serde 造一个 CopyTemplate(schema 字段私有,只能落型构造)。
@@ -404,7 +531,7 @@ mod tests {
         let items = song_copy_items(&song, Some("https://x.example/song?id={id}"));
         let got = items
             .iter()
-            .map(|it| (it.hotkey, it.action.clone()))
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
             .collect::<Vec<(Option<char>, MenuAction)>>();
         assert_eq!(
             got,
@@ -436,18 +563,14 @@ mod tests {
     /// 歌单复制项:name/description/id 恒有(空描述也渲染);URL/封面缺源数据不渲染。
     #[test]
     fn playlist_copy_items_compose() {
-        let playlist = Playlist {
-            id: PlaylistId::new(SourceKind::LOCAL, "p1"),
-            name: "歌单甲".to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count: 0,
-            songs: Vec::new(),
-        };
+        let playlist = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::LOCAL, "p1"))
+            .name("歌单甲".to_owned())
+            .build();
         let items = playlist_copy_items(&playlist, /*web_url*/ None);
         let got = items
             .iter()
-            .map(|it| (it.hotkey, it.action.clone()))
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
             .collect::<Vec<(Option<char>, MenuAction)>>();
         assert_eq!(
             got,
@@ -460,9 +583,73 @@ mod tests {
         );
         let items = playlist_copy_items(&playlist, Some("https://x.example/pl/{id}"));
         assert_eq!(
-            items.get(3).map(|it| it.action.clone()),
+            items.get(3).and_then(|it| it.action.clone()),
             Some(MenuAction::Copy("https://x.example/pl/p1".to_owned()))
         );
+    }
+
+    /// 专辑复制项:name/id 恒有;有封面则补 cover URL(caps 无专辑网页模板,故无 URL 项)。
+    #[test]
+    fn album_copy_items_compose() -> color_eyre::Result<()> {
+        let album = Album::builder()
+            .id(AlbumId::new(SourceKind::LOCAL, "al1"))
+            .name("EndSerenading".to_owned())
+            .cover_url(Some(mineral_model::MediaUrl::remote(
+                "https://img.example/a.jpg",
+            )?))
+            .build();
+        let got = album_copy_items(&album)
+            .iter()
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
+            .collect::<Vec<(Option<char>, MenuAction)>>();
+        assert_eq!(
+            got,
+            vec![
+                (Some('n'), MenuAction::Copy("EndSerenading".to_owned())),
+                (Some('i'), MenuAction::Copy(album.id.qualified())),
+                (
+                    Some('c'),
+                    MenuAction::Copy("https://img.example/a.jpg".to_owned())
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    /// Search 结果列按 `y`:复制菜单贴**结果行下方**弹出(锚到 search 布局的 results 面板,
+    /// 不借浏览态布局/选中)。回归:结果区 y 曾错抓浏览态歌单、菜单飘到 detail 面板上。
+    #[test]
+    fn y_in_search_anchors_copy_menu_to_result_row() -> color_eyre::Result<()> {
+        let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_kind(SearchKind::Song);
+            session.apply_page(
+                SearchKind::Song,
+                SearchPayload::Songs(endserenading(5)),
+                Page::default(),
+            );
+            if let Some(kr) = session.kind_results_mut() {
+                kr.set_sel(2);
+            }
+        }
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        // 画一帧回写 frame_area(锚点计算依赖)。
+        draw_once(&app)?;
+
+        let anchor = app
+            .search_row_anchor()
+            .ok_or_else(|| color_eyre::eyre::eyre!("有结果时应能算出锚点"))?;
+        let results = compute_search(app.state.frame_area.get(), app.state.cfg.tui().layout()).left;
+        assert_eq!(anchor.x, results.x + 1, "锚点在 results 面板内(去左边框)");
+        assert_eq!(
+            anchor.y,
+            results.y + 2 + 2,
+            "落在表头下第 3 行(offset 0、sel=2)"
+        );
+
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.overlays.len(), 1, "结果列 y 应弹复制菜单");
+        Ok(())
     }
 
     /// 模板项追加:context 过滤、同字母顶掉内置快捷位、index 按全量数组序对位。
@@ -491,7 +678,11 @@ mod tests {
         let got = items
             .iter()
             .filter(|it| it.label.starts_with("Tpl"))
-            .map(|it| (it.hotkey, it.label.as_str(), &it.action))
+            .filter_map(|it| {
+                it.action
+                    .as_ref()
+                    .map(|a| (it.hotkey, it.label.as_str(), a))
+            })
             .collect::<Vec<(Option<char>, &str, &MenuAction)>>();
         let (k0, l0, a0) = got
             .first()

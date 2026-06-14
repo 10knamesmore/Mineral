@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-channel/netease/src/wire/artist.rs
+assertion_line: 126
 description: 歌手详情(Beyond + 热门曲海阔天空)解析结构
 expression: r
 ---
@@ -11,12 +12,18 @@ ArtistDetailResult {
             "https://p1.music.126.net/x.jpg",
         ),
         brief_desc: "香港摇滚乐队",
-        fans_count: 8900000,
+        album_size: Some(
+            146,
+        ),
+        music_size: Some(
+            2570,
+        ),
     },
     hot_songs: [
         AlbumSong {
             id: 1,
             name: "海阔天空",
+            tns: [],
             ar: [
                 Artist {
                     id: 11127,

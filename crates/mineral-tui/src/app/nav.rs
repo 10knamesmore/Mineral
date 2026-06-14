@@ -48,7 +48,7 @@ impl App {
             .collect();
         for id in pending {
             self.client.submit_task(
-                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { id: id.clone() }),
+                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
                 Priority::Background,
             );
             self.state.library.tracks_requested.insert(id);
@@ -197,7 +197,7 @@ impl App {
                     {
                         // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),
                         // 走到这里说明无命中。曲目还没拉到时挂 pending,
-                        // 等 `PlaylistTracksFetched` 补落位。
+                        // 等 `PlaylistDetailFetched` 补落位。
                         if let Some(tracks) = self.state.library.tracks.get(&target_id) {
                             sel_track = pos.resolve(tracks);
                             // 恢复屏上相对位置:该行回到离开时的视口行,
@@ -556,7 +556,7 @@ mod tests {
         Ok(())
     }
 
-    /// 深度搜索数据保障:Playlists 视图按 `/`,所有未缓存歌单的 PlaylistTracks 一次性
+    /// 深度搜索数据保障:Playlists 视图按 `/`,所有未缓存歌单的 PlaylistDetail 一次性
     /// 提交;再次进搜索态不重复提交(`tracks_requested` 去重);Library 视图按 `/` 不提交。
     #[test]
     fn slash_in_playlists_requests_uncached_tracks() -> color_eyre::Result<()> {
@@ -573,7 +573,7 @@ mod tests {
                 .filter(|k| {
                     matches!(
                         k,
-                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks { .. })
+                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { .. })
                     )
                 })
                 .count();

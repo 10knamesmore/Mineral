@@ -227,11 +227,11 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::PlaylistTracks { id } => match channel.songs_in_playlist(id).await {
-            Ok(tracks) => {
-                event_tx.lock().push(TaskEvent::PlaylistTracksFetched {
+        ChannelFetchKind::PlaylistDetail { id } => match channel.playlist_detail(id).await {
+            Ok(playlist) => {
+                event_tx.lock().push(TaskEvent::PlaylistDetailFetched {
                     id: id.clone(),
-                    tracks,
+                    playlist: Box::new(playlist),
                 });
                 TaskOutcome::Ok
             }
@@ -239,7 +239,7 @@ async fn execute(
                 mineral_log::warn!(
                     target: "channel_fetch",
                     source = ?id.namespace(),
-                    op = "songs_in_playlist",
+                    op = "playlist_detail",
                     playlist_id = id.as_str(),
                     error = mineral_log::chain(&e),
                     "channel fetch failed"
@@ -419,11 +419,11 @@ async fn execute(
                 }
             }
         }
-        ChannelFetchKind::AlbumSongs { id } => match channel.songs_in_album(id).await {
-            Ok(songs) => {
-                event_tx.lock().push(TaskEvent::AlbumSongsFetched {
+        ChannelFetchKind::AlbumDetail { id } => match channel.album_detail(id).await {
+            Ok(album) => {
+                event_tx.lock().push(TaskEvent::AlbumDetailFetched {
                     id: id.clone(),
-                    songs,
+                    album: Box::new(album),
                 });
                 TaskOutcome::Ok
             }
@@ -431,7 +431,7 @@ async fn execute(
                 mineral_log::warn!(
                     target: "channel_fetch",
                     source = ?id.namespace(),
-                    op = "album_songs",
+                    op = "album_detail",
                     album_id = id.as_str(),
                     error = mineral_log::chain(&e),
                     "channel fetch failed"

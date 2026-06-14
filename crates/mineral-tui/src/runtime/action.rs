@@ -48,6 +48,13 @@ pub enum Action {
     /// 在当前视图「返回」(Library→Playlists;搜索非空时先清搜索)。
     BackOrClearSearch,
 
+    /// 下探一层 / 进入选中项详情:搜索面板 song 进其所属专辑、容器进详情,歌手专辑区下钻该专辑。
+    /// 与 [`Self::ActivateSelection`] 的区别在 song——activate 播放、本动作进专辑。
+    DrillIntoSelection,
+
+    /// 切换详情面板内分区(歌手:热门曲 ↔ 专辑)。
+    CycleDetailSection,
+
     // ---- 领域动作(转 Client) ----
     /// 暂停 / 恢复(有当前曲才动)。
     TogglePlayPause,

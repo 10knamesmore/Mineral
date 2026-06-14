@@ -62,6 +62,7 @@ impl Overlay for QueueOverlay {
             animated: true,
             dock: true,
             anchor: None,
+            align: None,
         }
     }
 

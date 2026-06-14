@@ -2,15 +2,20 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-use mineral_model::{ArtistRef, SearchKind};
+use unicode_width::UnicodeWidthStr;
+
+use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
+use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::theme::Theme;
-use crate::runtime::state::{ChannelSearchState, SearchFocus};
+use crate::runtime::state::{
+    AppState, ChannelSearch, ChannelSearchState, PromptSegment, SearchFocus,
+};
 
 /// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调(spec §1.2 当前焦点面板边框高亮)。
 fn border_style(focused: bool, theme: &Theme) -> Style {
@@ -18,13 +23,14 @@ fn border_style(focused: bool, theme: &Theme) -> Style {
     Style::new().fg(color)
 }
 
-/// 画 token prompt 输入行:`[源徽章] [类型徽章] query█`。
+/// 画 token prompt 输入行:`[source chip] [kind chip] query`。
 ///
-/// 源徽章颜色经 [`Theme::source_color`] 从 `SourceKind.palette()` 落地(不 match 来源,
-/// 插件源自动正确)。无可搜索源(`current()` 为 `None`)画空态提示。
+/// source chip 颜色经 [`Theme::source_color`] 从 `SourceKind.palette()` 落地(不 match source,
+/// 插件 source 自动正确)。无可搜索 source(`current()` 为 `None`)画空态提示。持焦的 chip 段亮底,
+/// query 段持焦才显光标块。
 ///
 /// # Params:
-///   - `rs`: channel 搜索子域(读当前源 / 会话 query / kind)
+///   - `rs`: channel 搜索子域(读当前 source / 会话 query / kind / 段焦点)
 ///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`,改由浮动环表达高亮)
 pub fn draw_prompt(
     frame: &mut Frame<'_>,
@@ -39,35 +45,213 @@ pub fn draw_prompt(
         .title("search");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let Some(session) = rs.current() else {
+    let (Some(tokens), Some(session)) = (prompt_tokens(area, rs), rs.current()) else {
         let hint = Span::styled("no searchable source", Style::new().fg(theme.overlay));
         frame.render_widget(Paragraph::new(Line::from(hint)), inner);
         return;
     };
-    let mut spans = Vec::<Span<'_>>::new();
-    if let Some(source) = rs.source {
-        spans.push(Span::styled(
-            format!(" {} ", source.label()),
-            Style::new()
-                .fg(theme.source_color(source.palette()))
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" "));
+    let focus = rs.prompt_focus();
+    // source chip:focus 时 accent 反色药丸(暗字,最跳);否则 source 色暗染底 + source 色字(身份)。
+    if let (Some(rect), Some(source)) = (tokens.source, rs.source) {
+        let sc = theme.source_color(source.palette());
+        let (bg, fg) = if focus == Some(PromptSegment::Source) {
+            (theme.accent, theme.crust)
+        } else {
+            (dark_tint(sc, theme), sc)
+        };
+        draw_chip(frame, rect, source.label(), fg, bg);
     }
-    spans.push(Span::styled(
-        format!(" {} ", kind_label(session.kind)),
-        Style::new().fg(theme.subtext),
-    ));
-    spans.push(Span::raw(" "));
-    spans.push(Span::styled(
-        session.query.clone(),
-        Style::new().fg(theme.text),
-    ));
-    spans.push(Span::styled(
-        "█",
-        Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-    ));
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+    // kind chip:focus 时 accent 反色药丸;否则中性 surface0 底 + subtext。
+    let (kbg, kfg) = if focus == Some(PromptSegment::Kind) {
+        (theme.accent, theme.crust)
+    } else {
+        (theme.surface0, theme.subtext)
+    };
+    draw_chip(frame, tokens.kind, session.kind.label(), kfg, kbg);
+    // query:光标块仅在 query 段持焦时显示(在 chip 段 / 离开 prompt 时只画文本)。
+    draw_query(
+        frame,
+        tokens.query,
+        session,
+        theme,
+        focus == Some(PromptSegment::Query),
+    );
+}
+
+/// token prompt 行内各段的 1-row 子矩形:chip 背景填充(渲染）与 chip 下拉锚定（定位）
+/// 读同一份几何,保证下拉贴在对应 chip 正下方而非整行输入框。
+pub(crate) struct PromptTokens {
+    /// source chip 矩形(无可搜索 source 时 `None`)。
+    pub(crate) source: Option<Rect>,
+
+    /// kind chip 矩形。
+    pub(crate) kind: Rect,
+
+    /// chip 之后的 query 输入区(光标块在此)。
+    pub(crate) query: Rect,
+}
+
+/// 算 token prompt 各子矩形(无当前会话 → `None`,空态由调用方画提示)。
+///
+/// # Params:
+///   - `area`: prompt 外框矩形(含边框;与 [`draw_prompt`] 同一 `area`)
+///   - `rs`: channel 搜索子域(读当前源 / kind)
+pub(crate) fn prompt_tokens(area: Rect, rs: &ChannelSearchState) -> Option<PromptTokens> {
+    let session = rs.current()?;
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    if inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+    let y = inner.y;
+    let right = inner.right();
+    let gap = 1u16;
+    let mut x = inner.x;
+    let mut take = |w: u16| -> Rect {
+        let rect = Rect::new(x.min(right), y, w.min(right.saturating_sub(x)), 1);
+        x = x.saturating_add(w).saturating_add(gap);
+        rect
+    };
+    let source = rs.source.map(|src| take(chip_width(src.label())));
+    let kind = take(chip_width(session.kind.label()));
+    let query = Rect::new(x.min(right), y, right.saturating_sub(x.min(right)), 1);
+    Some(PromptTokens {
+        source,
+        kind,
+        query,
+    })
+}
+
+/// chip 宽度 = ` {label} `(左右各 1 空格 padding;label 含字形图标)。
+fn chip_width(label: &str) -> u16 {
+    u16::try_from(label.width().saturating_add(2)).unwrap_or(u16::MAX)
+}
+
+/// 画一枚填充背景的 chip:` {label} `,`label`(含字形图标)给定色加粗、`bg` 填充底。
+/// 身份靠图标 + 颜色,无 sigil。
+fn draw_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, label_fg: Color, bg: Color) {
+    if rect.width == 0 {
+        return;
+    }
+    let fill = Style::new().bg(bg);
+    let spans = vec![
+        Span::styled(" ", fill),
+        Span::styled(
+            label.to_owned(),
+            fill.fg(label_fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ", fill),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
+/// 把 source 色混向 `base`(80% base + 20% source 色)得极暗调染色,作 source chip 底——
+/// 有 source 色身份感又不抢图标。非 RGB 色(理论上不出现:主题色恒 RGB)退回 `surface0`。
+fn dark_tint(c: Color, theme: &Theme) -> Color {
+    match (c, theme.base) {
+        (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) => {
+            let mix = |src: u8, base: u8| -> u8 {
+                u8::try_from((u16::from(base) * 4 + u16::from(src)) / 5).unwrap_or(base)
+            };
+            Color::Rgb(mix(r, br), mix(g, bg), mix(b, bb))
+        }
+        _ => theme.surface0,
+    }
+}
+
+/// 画 query 输入区:以文本光标为界分两段;`show_cursor` 时中间嵌光标块 `█`(光标可落词中),
+/// 否则只画文本(焦点不在 query 段时不显光标)。
+fn draw_query(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    session: &ChannelSearch,
+    theme: &Theme,
+    show_cursor: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let text = Style::new().fg(theme.text);
+    let (before, after) = session.query_split();
+    let mut spans = vec![Span::styled(before.to_owned(), text)];
+    if show_cursor {
+        spans.push(Span::styled("█", text.add_modifier(Modifier::BOLD)));
+    }
+    spans.push(Span::styled(after.to_owned(), text));
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
+/// 画 source / kind chip 的展开下拉(下拉归属某 chip 段且动画未归零时)。复用 PopMenu +
+/// [`render_overlay`] 的平滑揭开(脱 overlay 栈),贴对应 chip 左下、自 prompt 框下沿垂下,
+/// 盖在 results 面板之上(调用方在面板之后画);高亮行 = `seg_sel`。
+///
+/// # Params:
+///   - `prompt_area`: prompt 外框矩形(与 [`draw_prompt`] 同一 `area`,据此算 chip 子矩形)
+///   - `state`: 应用态(读 channel 搜索子域 + caps;`render_overlay` 取 cfg 的揭开风格)
+pub(crate) fn draw_prompt_dropdown(
+    frame: &mut Frame<'_>,
+    prompt_area: Rect,
+    state: &AppState,
+    theme: &Theme,
+) {
+    let rs = &state.channel_search;
+    // 画下拉归属的 chip 段(与 focus 解耦):切到 query / 别的 chip 后,仍把上一个 chip 的
+    // 收起动画画完。
+    let Some(seg) = rs.reveal_seg() else {
+        return;
+    };
+    // 动画态判渲染:收起后视觉收尾期继续画着往回收,播完归零才停。
+    if !rs.dropdown_active() {
+        return;
+    }
+    let Some(tokens) = prompt_tokens(prompt_area, rs) else {
+        return;
+    };
+    let (title, chip, labels): (&str, Rect, Vec<String>) = match seg {
+        PromptSegment::Source => {
+            let Some(rect) = tokens.source else {
+                return;
+            };
+            let labels = rs
+                .source_options(&state.caps)
+                .iter()
+                .map(|s| s.label().to_owned())
+                .collect();
+            ("source", rect, labels)
+        }
+        PromptSegment::Kind => {
+            let labels = rs
+                .kind_options(&state.caps)
+                .iter()
+                .map(|k| k.label().to_owned())
+                .collect();
+            ("kind", tokens.kind, labels)
+        }
+        PromptSegment::Query => return,
+    };
+    if labels.is_empty() {
+        return;
+    }
+    // 锚点贴 chip 左缘、置于 prompt 框底边行:`Placement::Below` 则下拉落在框**下方**,
+    // 不吃掉 prompt 的底边框。
+    let anchor = Rect::new(
+        chip.x,
+        prompt_area.bottom().saturating_sub(1),
+        chip.width,
+        1,
+    );
+    // 复用 PopMenu 的锚定渲染 + render_overlay 的平滑揭开(脱 overlay 栈:display-only 菜单 +
+    // 自带的 seg_reveal 进度当 scale,键交互仍走 inline)。强制 Left 对齐贴 chip 左下展开。
+    let items = labels.into_iter().map(MenuItem::display).collect();
+    let menu = PopMenu::display(title, items, anchor, Placement::Below, rs.seg_sel());
+    render_overlay(
+        frame,
+        frame.area(),
+        &menu,
+        rs.seg_reveal(),
+        /*focused*/ true,
+        state,
+        theme,
+    );
 }
 
 /// 画结果列:bordered `results` 外框 + 结果行(当前光标行高亮)。
@@ -91,20 +275,17 @@ pub fn draw_results(
         .title("results");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let Some(session) = rs.current() else {
-        return;
-    };
-    // 尚未搜索 / 空页:画居中 lite 提示,而非占用首行的可高亮列表项。
-    if session.result_len() == 0 {
-        draw_centered_hint(frame, inner, "type a query", theme);
+    if rs.source.is_none() {
         return;
     }
-    let Some(payload) = session.results.as_ref() else {
+    // 尚未搜索 / 空页:画居中 lite 提示,而非占用首行的可高亮列表项。
+    let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) else {
+        draw_centered_hint(frame, inner, "type a query", theme);
         return;
     };
-    let (header, rows, widths) = result_table(payload, theme);
+    let (header, rows, widths) = result_table(&kr.results, theme);
     let mut table_state =
-        TableState::default().with_selected(Some(session.sel.min(rows.len().saturating_sub(1))));
+        TableState::default().with_selected(Some(kr.sel.min(rows.len().saturating_sub(1))));
     // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
     // 焦点在结果列 → accent 亮;否则暗调(surface0 底 + subtext 字,无 BOLD),示意可回位。
     let highlight = if rs.focus == SearchFocus::Results {
@@ -120,21 +301,6 @@ pub fn draw_results(
         .row_highlight_style(highlight)
         .highlight_symbol("▌ ");
     frame.render_stateful_widget(table, inner, &mut table_state);
-}
-
-/// 画详情面板外框(`detail` 标题,焦点高亮)。实体详情内容(头图 / 字段)留待后续里程碑,
-/// 此处先落焦点态边框与标题,使面板切换有可见目标。
-///
-/// # Params:
-///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`)
-pub fn draw_detail(frame: &mut Frame<'_>, area: Rect, theme: &Theme, border_focused: bool) {
-    frame.render_widget(
-        Block::new()
-            .borders(Borders::ALL)
-            .border_style(border_style(border_focused, theme))
-            .title("detail"),
-        area,
-    );
 }
 
 /// 空结果列的居中 lite 提示(暗调斜体,水平 + 垂直居中);非可高亮列表行。
@@ -241,7 +407,7 @@ fn result_table(
 }
 
 /// 多艺人名 join 成 `艺人1, 艺人2`(无艺人为空串)。
-fn join_artists(artists: &[ArtistRef]) -> String {
+pub(super) fn join_artists(artists: &[ArtistRef]) -> String {
     artists
         .iter()
         .map(|a| a.name.as_str())
@@ -250,13 +416,13 @@ fn join_artists(artists: &[ArtistRef]) -> String {
 }
 
 /// 时长 ms → `m:ss`(结果列右侧;与 library 同款格式)。
-fn format_duration(ms: u64) -> String {
+pub(super) fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 /// 大计数缩写:< 1 万原样,≥ 1 万记 `Nk`,≥ 100 万记 `NM`(关注数列窄,纯整数无浮点)。
-fn humanize_count(n: u64) -> String {
+pub(super) fn humanize_count(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
         10_000..=999_999 => format!("{}k", n / 1000),
@@ -264,13 +430,127 @@ fn humanize_count(n: u64) -> String {
     }
 }
 
-/// 搜索类型的英文短标(token prompt 类型徽章用)。
-fn kind_label(kind: SearchKind) -> &'static str {
-    match kind {
-        SearchKind::Song => "songs",
-        SearchKind::Album => "albums",
-        SearchKind::Artist => "artists",
-        SearchKind::Playlist => "playlists",
-        SearchKind::User => "users",
+#[cfg(test)]
+mod tests {
+    use mineral_channel_core::ChannelCaps;
+    use mineral_model::{SearchKind, SourceKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use rustc_hash::FxHashMap;
+
+    use crate::render::theme::Theme;
+    use crate::runtime::state::{ChannelSearchState, PromptSegment};
+
+    use super::{chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens};
+
+    /// NETEASE 单源 caps(searchable = 给定 kinds)。
+    fn caps(kinds: Vec<SearchKind>) -> FxHashMap<SourceKind, ChannelCaps> {
+        let mut m = FxHashMap::default();
+        m.insert(
+            SourceKind::NETEASE,
+            ChannelCaps::builder()
+                .searchable(kinds)
+                .playlist_edit(false)
+                .build(),
+        );
+        m
+    }
+
+    /// 进入 search 并落到 NETEASE,得到带当前会话的状态。
+    fn entered(kinds: Vec<SearchKind>) -> ChannelSearchState {
+        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        rs.enter(&caps(kinds));
+        rs
+    }
+
+    /// prompt_tokens:source chip 贴 inner 左、kind chip 紧随(各空 1 列)、query 区接其右。
+    #[test]
+    fn prompt_tokens_lays_out_chips_left_to_right() -> color_eyre::Result<()> {
+        let rs = entered(vec![SearchKind::Song]);
+        let area = Rect::new(0, 0, 40, 3);
+        let t =
+            prompt_tokens(area, &rs).ok_or_else(|| color_eyre::eyre::eyre!("有会话应得 tokens"))?;
+        let src_w = chip_width(SourceKind::NETEASE.label());
+        let src = t
+            .source
+            .ok_or_else(|| color_eyre::eyre::eyre!("有 source 应得 chip"))?;
+        assert_eq!(src, Rect::new(1, 1, src_w, 1), "source chip 贴 inner 左上");
+        assert_eq!(
+            t.kind.x,
+            1 + src_w + 1,
+            "kind chip 紧随 source chip + 1 列空隙"
+        );
+        assert_eq!(t.kind.y, 1, "同一内容行");
+        assert_eq!(
+            t.query.x,
+            t.kind.x + t.kind.width + 1,
+            "query 区接 kind chip 右 + 1 列空隙"
+        );
+        Ok(())
+    }
+
+    /// draw_prompt 快照:填充背景的 source / kind chip(去 sigil、含图标)+ 光标落词中(te|st)。
+    #[test]
+    fn prompt_chips_and_cursor_snapshot() -> color_eyre::Result<()> {
+        let mut rs = entered(vec![SearchKind::Song]);
+        if let Some(s) = rs.current_mut() {
+            for c in "test".chars() {
+                s.push_query_char(c);
+            }
+            s.cursor_left();
+            s.cursor_left();
+        }
+        let mut terminal = Terminal::new(TestBackend::new(40, 3))?;
+        terminal.draw(|f| {
+            draw_prompt(
+                f,
+                f.area(),
+                &rs,
+                &Theme::default(),
+                /*border_focused*/ true,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "token prompt:source/kind chip(去 sigil 含图标)+ 光标落 te|st 词中",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// chip 下拉快照:focus 在 kind chip 段 + 展开 settle → prompt 框下方垂下候选,高亮当前行。
+    /// 复用 PopMenu + render_overlay 渲染(脱栈),故需真 `AppState`(取 cfg 的揭开风格/对齐)。
+    #[test]
+    fn kind_dropdown_open_snapshot() -> color_eyre::Result<()> {
+        let (mut app, _submitted) = crate::test_support::app_with_channel_search_probed(vec![
+            SearchKind::Song,
+            SearchKind::Album,
+            SearchKind::Artist,
+        ])?;
+        // 焦点落 kind chip 段、下拉展开(高亮当前 Song = idx 0)。
+        app.state
+            .channel_search
+            .set_prompt_seg(PromptSegment::Kind, 0);
+        // 推进展开动画到 settle(scale 满值,render_overlay 走完全展开分支,截到稳态框)。
+        for _ in 0..64 {
+            app.state.channel_search.tick();
+        }
+        let prompt = Rect::new(0, 0, 40, 3);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
+        terminal.draw(|f| {
+            draw_prompt(
+                f,
+                prompt,
+                &app.state.channel_search,
+                &app.theme,
+                /*border_focused*/ false,
+            );
+            draw_prompt_dropdown(f, prompt, &app.state, &app.theme);
+        })?;
+        crate::test_support::assert_snap!(
+            "kind chip 下拉展开:prompt 下方候选(songs/albums/artists),高亮当前 songs",
+            terminal.backend()
+        );
+        Ok(())
     }
 }

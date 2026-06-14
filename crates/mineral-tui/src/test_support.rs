@@ -37,14 +37,11 @@ pub(crate) fn playlist_view(
     track_count: u64,
 ) -> PlaylistView {
     PlaylistView {
-        data: Playlist {
-            id: PlaylistId::new(source, id),
-            name: name.to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count,
-            songs: Vec::new(),
-        },
+        data: Playlist::builder()
+            .id(PlaylistId::new(source, id))
+            .name(name.to_owned())
+            .track_count(track_count)
+            .build(),
     }
 }
 
@@ -214,8 +211,20 @@ impl Client for TestClient {
     fn audio_snapshot(&self) -> AudioSnapshot {
         AudioSnapshot::default()
     }
-    fn play_song(&self, _song: Song) {}
-    fn set_queue(&self, _queue: Vec<Song>, _target_id: SongId) {}
+    fn play_song(&self, song: Song) {
+        if let Ok(mut v) = self.queue_ops.lock() {
+            v.push(("play_song", song.id.qualified()));
+        }
+    }
+    fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
+        // 记队列长 + 目标曲;供"detail 起播 = set_queue + play_song 两步"的回归断言。
+        if let Ok(mut v) = self.queue_ops.lock() {
+            v.push((
+                "set_queue",
+                format!("{}:{}", queue.len(), target_id.qualified()),
+            ));
+        }
+    }
     fn queue_insert_next(&self, song: Song) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("insert_next", song.id.qualified()));
@@ -361,14 +370,11 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
     app.state.library.playlists = vec![PlaylistView {
-        data: Playlist {
-            id: pid.clone(),
-            name: "EndSerenading".to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count: u64::try_from(len).unwrap_or(0),
-            songs: Vec::new(),
-        },
+        data: Playlist::builder()
+            .id(pid.clone())
+            .name("EndSerenading".to_owned())
+            .track_count(u64::try_from(len).unwrap_or(0))
+            .build(),
     }];
     let tracks = endserenading(len);
     let views = tracks
@@ -499,4 +505,30 @@ pub(crate) fn app_with_channel_search_probed(
     active.tick();
     app.state.channel_search.active = active;
     Ok((app, submitted))
+}
+
+/// 同 [`app_with_channel_search_probed`],但返回 `queue_ops`——供"detail 起播"类测试断言
+/// `set_queue` + `play_song` 两步都发生(只 set_queue 不 play_song 会"队列换了却不响")。
+pub(crate) fn app_with_channel_search_qprobed(
+    searchable: Vec<SearchKind>,
+) -> color_eyre::Result<(App, QueueOpsLog)> {
+    let queue_ops = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        queue_ops: Arc::clone(&queue_ops),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    app.state.caps.insert(
+        SourceKind::NETEASE,
+        ChannelCaps::builder()
+            .searchable(searchable)
+            .playlist_edit(false)
+            .build(),
+    );
+    app.state.channel_search.enter(&app.state.caps);
+    let mut active = Toggle::new(1);
+    active.set(true);
+    active.tick();
+    app.state.channel_search.active = active;
+    Ok((app, queue_ops))
 }

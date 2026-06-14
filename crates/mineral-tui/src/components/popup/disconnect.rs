@@ -29,6 +29,7 @@ impl Overlay for DisconnectOverlay {
             animated: true,
             dock: false,
             anchor: None,
+            align: None,
         }
     }
 

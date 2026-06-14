@@ -233,6 +233,42 @@ Config {
                         shift: false,
                         ctrl: false,
                     },
+                    KeyChord {
+                        key: Char(
+                            'h',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            drill_into: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'l',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            cycle_detail_section: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            '[',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                    KeyChord {
+                        key: Char(
+                            ']',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
                 ],
             },
             cycle_mode: KeyBinding {

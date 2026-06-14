@@ -1,29 +1,31 @@
-//! 搜索端点。
+//! 搜索端点(纯协议:参数 → 类型化 wire DTO,DTO → model 映射归 `convert`)。
 
 use color_eyre::eyre::eyre;
-use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId,
-    SourceKind,
-};
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 /// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
-use crate::convert::{parse_remote, parse_remote_opt};
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
 use crate::wire::search::{
-    SearchAlbumsResult, SearchArtistsResult, SearchPlaylistsResult, SearchSongsResult,
+    CloudSongsResult, SearchAlbumsResult, SearchArtistsResult, SearchPlaylistsResult,
 };
 
-/// 搜索 API 路径,所有 `search_*` 共用同一端点,通过 `stype` 区分类别。
+/// album / artist / playlist 搜索端点,通过 `stype` 区分类别。
 const PATH: &str = "/weapi/search/get";
 
-/// 搜索单曲。`stype` 1=单曲, 10=专辑, 1000=歌单。
+/// 单曲走 cloudsearch:回 `ar`/`al`/`dt` 形态且带 `al.picUrl` 封面(`/weapi/search/get`
+/// 的嵌套 album 只给 `picId`,封面取不到)。
+const CLOUD_PATH: &str = "/weapi/cloudsearch/get/web";
+
+/// 打搜索端点拿原始响应。`stype` 1=单曲, 10=专辑, 100=歌手, 1000=歌单;`path` 选 [`PATH`]
+/// 或 [`CLOUD_PATH`](两者参数同构,仅响应形态不同)。
 async fn search_raw(
     transport: &Transport,
+    path: &str,
     keyword: &str,
     stype: i32,
     offset: u32,
@@ -37,7 +39,7 @@ async fn search_raw(
 
     transport
         .request(RequestSpec {
-            path: PATH,
+            path,
             crypto: Crypto::Weapi,
             params,
             ua: UaKind::Any,
@@ -45,123 +47,58 @@ async fn search_raw(
         .await
 }
 
+/// 打端点拿响应、取出 `result` 子对象(各搜索端点都把命中包在 `result` 下)、反序列化成 `T`。
+async fn search_typed<T: DeserializeOwned>(
+    transport: &Transport,
+    path: &str,
+    keyword: &str,
+    stype: i32,
+    offset: u32,
+    limit: u32,
+) -> Result<T> {
+    let raw = search_raw(transport, path, keyword, stype, offset, limit).await?;
+    let result = raw
+        .get("result")
+        .ok_or_else(|| eyre!("search response missing `result`"))?;
+    crate::wire::de::from_value(result.clone())
+}
+
+/// 单曲搜索(cloudsearch,`ar`/`al`/`dt` 形态,封面随 `al.picUrl` 到位)。
 pub async fn search_songs(
     transport: &Transport,
     keyword: &str,
     offset: u32,
     limit: u32,
-) -> Result<Vec<Song>> {
-    let raw = search_raw(transport, keyword, 1, offset, limit).await?;
-    let result = raw
-        .get("result")
-        .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchSongsResult = crate::wire::de::from_value(result.clone())?;
-    Ok(parsed
-        .songs
-        .into_iter()
-        .map(|s| Song {
-            id: SongId::new(SourceKind::NETEASE, s.id.to_string()),
-            name: s.name,
-            artists: s
-                .artists
-                .into_iter()
-                .map(|a| ArtistRef {
-                    id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
-                    name: a.name,
-                })
-                .collect(),
-            album: Some(AlbumRef {
-                id: AlbumId::new(SourceKind::NETEASE, s.album.id.to_string()),
-                name: s.album.name,
-            }),
-            duration_ms: s.duration,
-            cover_url: s.album.pic_url.as_deref().and_then(parse_remote),
-            source_url: None,
-        })
-        .collect())
+) -> Result<CloudSongsResult> {
+    search_typed(transport, CLOUD_PATH, keyword, 1, offset, limit).await
 }
 
+/// 专辑搜索(只回元信息,曲目按需走 `album_detail`)。
 pub async fn search_albums(
     transport: &Transport,
     keyword: &str,
     offset: u32,
     limit: u32,
-) -> Result<Vec<Album>> {
-    let raw = search_raw(transport, keyword, 10, offset, limit).await?;
-    let result = raw
-        .get("result")
-        .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchAlbumsResult = crate::wire::de::from_value(result.clone())?;
-    Ok(parsed
-        .albums
-        .into_iter()
-        .map(|a| Album {
-            id: AlbumId::new(SourceKind::NETEASE, a.id.to_string()),
-            name: a.name,
-            artists: a
-                .artist
-                .map(|x| {
-                    vec![ArtistRef {
-                        id: ArtistId::new(SourceKind::NETEASE, x.id.to_string()),
-                        name: x.name,
-                    }]
-                })
-                .unwrap_or_default(),
-            description: a.description,
-            publish_time_ms: a.publish_time,
-            cover_url: a.pic_url.as_deref().and_then(parse_remote),
-            songs: Vec::new(),
-        })
-        .collect())
+) -> Result<SearchAlbumsResult> {
+    search_typed(transport, PATH, keyword, 10, offset, limit).await
 }
 
+/// 歌手搜索(只回元信息 + 粉丝数,简介/热门曲按需走 `artist_detail`)。
 pub async fn search_artists(
     transport: &Transport,
     keyword: &str,
     offset: u32,
     limit: u32,
-) -> Result<Vec<Artist>> {
-    let raw = search_raw(transport, keyword, 100, offset, limit).await?;
-    let result = raw
-        .get("result")
-        .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchArtistsResult = crate::wire::de::from_value(result.clone())?;
-    Ok(parsed
-        .artists
-        .into_iter()
-        .map(|a| Artist {
-            id: ArtistId::new(SourceKind::NETEASE, a.id.to_string()),
-            name: a.name,
-            // 搜索结果不带简介/粉丝数,详情按需走 artist_detail
-            description: String::new(),
-            follower_count: 0,
-            avatar_url: parse_remote_opt(a.pic_url.as_deref()),
-            songs: Vec::new(),
-        })
-        .collect())
+) -> Result<SearchArtistsResult> {
+    search_typed(transport, PATH, keyword, 100, offset, limit).await
 }
 
+/// 歌单搜索(只回元信息,曲目按需走 `playlist_detail`)。
 pub async fn search_playlists(
     transport: &Transport,
     keyword: &str,
     offset: u32,
     limit: u32,
-) -> Result<Vec<Playlist>> {
-    let raw = search_raw(transport, keyword, 1000, offset, limit).await?;
-    let result = raw
-        .get("result")
-        .ok_or_else(|| eyre!("search response missing `result`"))?;
-    let parsed: SearchPlaylistsResult = crate::wire::de::from_value(result.clone())?;
-    Ok(parsed
-        .playlists
-        .into_iter()
-        .map(|p| Playlist {
-            id: PlaylistId::new(SourceKind::NETEASE, p.id.to_string()),
-            name: p.name,
-            description: p.description.unwrap_or_default(),
-            cover_url: p.cover_img_url.as_deref().and_then(parse_remote),
-            track_count: p.track_count,
-            songs: Vec::new(),
-        })
-        .collect())
+) -> Result<SearchPlaylistsResult> {
+    search_typed(transport, PATH, keyword, 1000, offset, limit).await
 }

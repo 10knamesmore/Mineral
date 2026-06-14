@@ -51,8 +51,8 @@ pub enum ChannelFetchKind {
         source: SourceKind,
     },
 
-    /// 拉某歌单内的曲目(目标 channel 由 `id` 的 namespace 决定)。
-    PlaylistTracks {
+    /// 拉歌单详情(元信息 + 曲目;目标 channel 由 `id` 的 namespace 决定)。
+    PlaylistDetail {
         /// 歌单 id(自带 namespace)。
         id: PlaylistId,
     },
@@ -108,8 +108,8 @@ pub enum ChannelFetchKind {
         page: Page,
     },
 
-    /// 拉专辑内全部曲目(目标 channel 由 `id` 的 namespace 决定)。
-    AlbumSongs {
+    /// 拉专辑详情(元信息 + 曲目;目标 channel 由 `id` 的 namespace 决定)。
+    AlbumDetail {
         /// 专辑 id(自带 namespace)。
         id: AlbumId,
     },
@@ -124,7 +124,7 @@ impl ChannelFetchKind {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
             Self::LikedSongIds { source } => format!("{source:?}:liked_song_ids"),
-            Self::PlaylistTracks { id } => format!("playlist_tracks:{}", id.qualified()),
+            Self::PlaylistDetail { id } => format!("playlist_detail:{}", id.qualified()),
             Self::SongUrl { song_id, quality } => {
                 format!("song_url:{}:{quality:?}", song_id.qualified())
             }
@@ -142,7 +142,7 @@ impl ChannelFetchKind {
             Self::ArtistAlbums { id, page } => {
                 format!("artist_albums:{}:{}", id.qualified(), page.offset)
             }
-            Self::AlbumSongs { id } => format!("album_songs:{}", id.qualified()),
+            Self::AlbumDetail { id } => format!("album_detail:{}", id.qualified()),
         }
     }
 
@@ -154,12 +154,12 @@ impl ChannelFetchKind {
             Self::MyPlaylists { source }
             | Self::LikedSongIds { source }
             | Self::Search { source, .. } => *source,
-            Self::PlaylistTracks { id } => id.namespace(),
+            Self::PlaylistDetail { id } => id.namespace(),
             Self::SongUrl { song_id, .. }
             | Self::Lyrics { song_id }
             | Self::RemotePlayCount { song_id } => song_id.namespace(),
             Self::ArtistDetail { id } | Self::ArtistAlbums { id, .. } => id.namespace(),
-            Self::AlbumSongs { id } => id.namespace(),
+            Self::AlbumDetail { id } => id.namespace(),
         }
     }
 }
@@ -174,8 +174,8 @@ pub enum ChannelFetchKindTag {
     MyPlaylists,
     /// 对应 [`ChannelFetchKind::LikedSongIds`]。
     LikedSongIds,
-    /// 对应 [`ChannelFetchKind::PlaylistTracks`]。
-    PlaylistTracks,
+    /// 对应 [`ChannelFetchKind::PlaylistDetail`]。
+    PlaylistDetail,
     /// 对应 [`ChannelFetchKind::SongUrl`]。
     SongUrl,
     /// 对应 [`ChannelFetchKind::Lyrics`]。
@@ -188,8 +188,8 @@ pub enum ChannelFetchKindTag {
     ArtistDetail,
     /// 对应 [`ChannelFetchKind::ArtistAlbums`]。
     ArtistAlbums,
-    /// 对应 [`ChannelFetchKind::AlbumSongs`]。
-    AlbumSongs,
+    /// 对应 [`ChannelFetchKind::AlbumDetail`]。
+    AlbumDetail,
 }
 
 impl ChannelFetchKindTag {
@@ -199,14 +199,14 @@ impl ChannelFetchKindTag {
         match kind {
             ChannelFetchKind::MyPlaylists { .. } => Self::MyPlaylists,
             ChannelFetchKind::LikedSongIds { .. } => Self::LikedSongIds,
-            ChannelFetchKind::PlaylistTracks { .. } => Self::PlaylistTracks,
+            ChannelFetchKind::PlaylistDetail { .. } => Self::PlaylistDetail,
             ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
             ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
             ChannelFetchKind::RemotePlayCount { .. } => Self::RemotePlayCount,
             ChannelFetchKind::Search { .. } => Self::Search,
             ChannelFetchKind::ArtistDetail { .. } => Self::ArtistDetail,
             ChannelFetchKind::ArtistAlbums { .. } => Self::ArtistAlbums,
-            ChannelFetchKind::AlbumSongs { .. } => Self::AlbumSongs,
+            ChannelFetchKind::AlbumDetail { .. } => Self::AlbumDetail,
         }
     }
 }

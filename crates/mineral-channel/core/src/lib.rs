@@ -54,10 +54,17 @@ pub trait MusicChannel: Send + Sync {
     // ---------- 详情 ----------
     /// 拉取若干歌曲的详情。
     async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>>;
-    /// 拉取专辑下的全部曲目。
-    async fn songs_in_album(&self, id: &AlbumId) -> Result<Vec<Song>>;
-    /// 拉取歌单下的全部曲目。
-    async fn songs_in_playlist(&self, id: &PlaylistId) -> Result<Vec<Song>>;
+
+    /// 拉取一张专辑的完整详情:元信息(简介 / 发行信息 / 曲目数等)+ 曲目列表(`songs`)。
+    ///
+    /// 返回**完整实体**而非裸曲目:上层要的是"这张专辑的完整视图",至于 channel 内部打几个
+    /// 端点拼出来是实现细节。只要曲目的调用方读 `.songs` 即可。
+    async fn album_detail(&self, id: &AlbumId) -> Result<Album>;
+
+    /// 拉取一个歌单的完整详情:元信息(名/简介/封面/计数)+ 曲目(`songs`)。
+    ///
+    /// 同 [`Self::album_detail`] —— 返回完整实体而非裸曲目;只要曲目的调用方读 `.songs`。
+    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist>;
     /// 拉取艺人详情(可选)。
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {
         Err(Error::NotSupported)
@@ -70,7 +77,7 @@ pub trait MusicChannel: Send + Sync {
     ///   - `page`: 分页参数
     ///
     /// # Return:
-    ///   专辑列表;`songs` 留空,曲目按需走 [`Self::songs_in_album`]。
+    ///   专辑列表;`songs` 留空,曲目按需走 [`Self::album_detail`]。
     async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<Vec<Album>> {
         Err(Error::NotSupported)
     }

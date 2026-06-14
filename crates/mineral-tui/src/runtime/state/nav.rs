@@ -26,7 +26,7 @@ pub struct NavState {
     /// 记录、再进恢复;persist 档启动时灌入落盘值)。
     pub track_pos: TrackPosMap,
 
-    /// 进歌单时曲目未就绪而挂起的位置恢复;`PlaylistTracksFetched` 到达时若用户
+    /// 进歌单时曲目未就绪而挂起的位置恢复;`PlaylistDetailFetched` 到达时若用户
     /// 还停在该歌单且光标未动过则补落位,否则作废。
     pub pending_track_restore: Option<PendingRestore>,
 

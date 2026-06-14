@@ -474,8 +474,8 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     resolve_err(&player, query, &e);
                     return;
                 };
-                match channel.songs_in_playlist(&playlist).await {
-                    Ok(songs) => resolve_ok(&player, query, ResolveValue::Songs(songs)),
+                match channel.playlist_detail(&playlist).await {
+                    Ok(pl) => resolve_ok(&player, query, ResolveValue::Songs(pl.songs)),
                     Err(e) => {
                         resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
                     }

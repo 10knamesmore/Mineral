@@ -49,7 +49,7 @@ fn task_kind_round_trip() -> color_eyre::Result<()> {
         TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
             source: SourceKind::NETEASE,
         }),
-        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistTracks {
+        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
             id: PlaylistId::new(SourceKind::NETEASE, "p123"),
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
@@ -125,9 +125,14 @@ fn task_event_round_trip() -> color_eyre::Result<()> {
             source: SourceKind::NETEASE,
             ids: FxHashSet::default(),
         },
-        TaskEvent::PlaylistTracksFetched {
+        TaskEvent::PlaylistDetailFetched {
             id: PlaylistId::new(SourceKind::NETEASE, "p"),
-            tracks: vec![],
+            playlist: Box::new(
+                mineral_model::Playlist::builder()
+                    .id(PlaylistId::new(SourceKind::NETEASE, "p"))
+                    .name(String::new())
+                    .build(),
+            ),
         },
     ];
     for ev in &cases {

@@ -1,11 +1,12 @@
-//! PopMenu:锚定弹出的轻量选择菜单,一个组件多处复用(上下文操作菜单 / 复制菜单,
-//! 后续还有 `@` 源补全 / `$` 类型单选 / 加入歌单选择器)。
+//! PopMenu:锚定弹出的轻量选择菜单,一个组件多处复用(上下文操作菜单 / 复制菜单 /
+//! 加入歌单选择器)。
 //!
 //! 定位走 [`Placement`](super::placement::Placement) 锚定算法(非居中/dock),
 //! 进退场是方向性揭开(贴锚边先出现),动画由
 //! [`OverlayStack`](super::stack::OverlayStack) 托管。
 
 use crossterm::event::{KeyCode, KeyEvent};
+use mineral_config::MenuAlign;
 use mineral_model::Song;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -57,8 +58,9 @@ pub(crate) struct MenuItem {
     /// 显示标签。
     pub(crate) label: String,
 
-    /// 确认后产出的动作。
-    pub(crate) action: MenuAction,
+    /// 确认后产出的动作;`None` = display-only(仅渲染,不产出动作)——chip 下拉脱栈复用
+    /// 渲染、Enter 由 inline 键路由自行处理,故无需 action。
+    pub(crate) action: Option<MenuAction>,
 
     /// 危险项:红色样式(置底由构造方排序保证)。
     pub(crate) destructive: bool,
@@ -70,7 +72,17 @@ impl MenuItem {
         Self {
             hotkey: Some(hotkey),
             label: label.into(),
-            action,
+            action: Some(action),
+            destructive: false,
+        }
+    }
+
+    /// display-only 项(无快捷字母、无确认动作):仅供脱栈渲染的列表(如 chip 下拉)。
+    pub(crate) fn display(label: impl Into<String>) -> Self {
+        Self {
+            hotkey: None,
+            label: label.into(),
+            action: None,
             destructive: false,
         }
     }
@@ -92,10 +104,13 @@ pub(crate) struct PopMenu {
 
     /// 首选弹出方向。
     placement: Placement,
+
+    /// 交叉轴对齐覆盖(`None` 跟随全局;display-only 下拉强制 `Left` 贴 chip 左下)。
+    align: Option<MenuAlign>,
 }
 
 impl PopMenu {
-    /// 新建菜单,光标在首项。
+    /// 新建菜单(光标在首项,对齐跟随全局配置)。
     pub(crate) fn new(
         title: impl Into<String>,
         items: Vec<MenuItem>,
@@ -108,13 +123,33 @@ impl PopMenu {
             sel: 0,
             anchor,
             placement,
+            align: None,
         }
     }
 
-    /// 确认当前选中项。
+    /// display-only 菜单(脱 overlay 栈、仅供 `render_overlay` 渲染):光标落 `sel`、强制
+    /// `Left` 对齐(贴 chip 左下展开,不吃全局 morph)。键交互不走它,由调用方 inline 处理。
+    pub(crate) fn display(
+        title: impl Into<String>,
+        items: Vec<MenuItem>,
+        anchor: Rect,
+        placement: Placement,
+        sel: usize,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            items,
+            sel,
+            anchor,
+            placement,
+            align: Some(MenuAlign::Left),
+        }
+    }
+
+    /// 确认当前选中(第 `sel` 项);display-only 项(无 action)收敛为 `Consumed`。
     fn confirm(&self) -> OverlayResponse {
-        match self.items.get(self.sel) {
-            Some(it) => OverlayResponse::Do(OverlayAction::Menu(it.action.clone())),
+        match self.items.get(self.sel).and_then(|it| it.action.clone()) {
+            Some(action) => OverlayResponse::Do(OverlayAction::Menu(action)),
             None => OverlayResponse::Consumed,
         }
     }
@@ -150,6 +185,7 @@ impl Overlay for PopMenu {
             animated: true,
             dock: false,
             anchor: Some((self.anchor, self.placement)),
+            align: self.align,
         }
     }
 
@@ -161,16 +197,12 @@ impl Overlay for PopMenu {
     }
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
-        for (row, it) in self
-            .items
-            .iter()
-            .enumerate()
-            .take(usize::from(inner.height))
-        {
+        let list_h = inner.height;
+        for (row, it) in self.items.iter().enumerate().take(usize::from(list_h)) {
             let Ok(dy) = u16::try_from(row) else {
                 continue;
             };
-            let area = Rect::new(inner.x, inner.y + dy, inner.width, 1);
+            let area = Rect::new(inner.x, inner.y.saturating_add(dy), inner.width, 1);
             let selected = row == self.sel;
             let fg = if it.destructive {
                 theme.red
@@ -181,6 +213,7 @@ impl Overlay for PopMenu {
             if selected {
                 style = style.bg(theme.surface0).add_modifier(Modifier::BOLD);
             }
+            // 无 hotkey 的项也留空列保持对齐。
             let key_span = match it.hotkey {
                 Some(k) => Span::styled(
                     format!(" {k} "),
@@ -198,10 +231,10 @@ impl Overlay for PopMenu {
         }
     }
 
+    /// Esc 关 / Enter 确认 / Tab·↓ 走查 / Shift+Tab·↑ 反向 / 字符命中 hotkey 直达。
     fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
         match key.code {
             KeyCode::Esc => OverlayResponse::Do(OverlayAction::CloseTop),
-            // Enter 兜底确认:默认 <CR> 经 activate 走 on_action,这里接住「<CR> 被解绑」的情形。
             KeyCode::Enter => self.confirm(),
             KeyCode::Tab | KeyCode::Down => {
                 self.sel = self
@@ -215,12 +248,12 @@ impl Overlay for PopMenu {
                 OverlayResponse::Consumed
             }
             KeyCode::Char(c) => {
-                // 快捷字母直达:命中即确认执行。
+                // 快捷字母直达:命中即确认执行(display-only 项无 action,吞键)。
                 let hit = self
                     .items
                     .iter()
                     .find(|it| it.hotkey == Some(c))
-                    .map(|it| it.action.clone());
+                    .and_then(|it| it.action.clone());
                 match hit {
                     Some(a) => OverlayResponse::Do(OverlayAction::Menu(a)),
                     None => OverlayResponse::Consumed,
@@ -274,15 +307,12 @@ mod tests {
 
     /// 极简测试歌(只有 id / 名字有意义)。
     fn song(name: &str) -> Box<Song> {
-        Box::new(Song {
-            id: SongId::new(SourceKind::LOCAL, name),
-            name: name.to_owned(),
-            artists: Vec::new(),
-            album: None,
-            duration_ms: 0,
-            cover_url: None,
-            source_url: None,
-        })
+        Box::new(
+            Song::builder()
+                .id(SongId::new(SourceKind::LOCAL, name))
+                .name(name.to_owned())
+                .build(),
+        )
     }
 
     /// 操作菜单三项(模拟 Library 歌曲上下文)。
@@ -392,7 +422,7 @@ mod tests {
         items.push(MenuItem {
             hotkey: Some('x'),
             label: "Remove from playlist".into(),
-            action: MenuAction::Copy("placeholder".into()),
+            action: Some(MenuAction::Copy("placeholder".into())),
             destructive: true,
         });
         let menu = PopMenu::new("Actions", items, anchor(), Placement::Below);

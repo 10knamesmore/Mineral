@@ -464,10 +464,14 @@ async fn collect_songs(player: &PlayerCore, target: &DownloadTarget) -> Result<V
                 .channel_for(id.namespace())
                 .cloned()
                 .ok_or_else(|| "下载失败: 无来源 channel".to_owned())?;
-            channel.songs_in_playlist(id).await.map_err(|e| {
-                mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "拉歌单曲目失败");
-                "下载失败: 拉歌单曲目失败".to_owned()
-            })
+            channel
+                .playlist_detail(id)
+                .await
+                .map(|pl| pl.songs)
+                .map_err(|e| {
+                    mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "拉歌单曲目失败");
+                    "下载失败: 拉歌单曲目失败".to_owned()
+                })
         }
     }
 }
@@ -490,18 +494,14 @@ mod tests {
 
     /// 一首带专辑的测试歌曲。
     fn song() -> Song {
-        Song {
-            id: SongId::new(SourceKind::NETEASE, "1"),
-            name: "t".to_owned(),
-            artists: Vec::new(),
-            album: Some(AlbumRef {
+        Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, "1"))
+            .name("t".to_owned())
+            .album(Some(AlbumRef {
                 id: AlbumId::new(SourceKind::NETEASE, "0"),
                 name: "A".to_owned(),
-            }),
-            duration_ms: 0,
-            cover_url: None,
-            source_url: None,
-        }
+            }))
+            .build()
     }
 
     /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache

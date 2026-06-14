@@ -1,18 +1,18 @@
 //! 专辑端点。
 
-use color_eyre::eyre::eyre;
-use mineral_model::{AlbumId, Song};
+use mineral_model::AlbumId;
 
 /// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
 type Result<T> = color_eyre::Result<T>;
 
-use crate::convert::album_song_to_model;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
-use crate::wire::song::AlbumSong;
+use crate::wire::search::AlbumDetailResult;
 
-pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result<Vec<Song>> {
+/// 专辑详情端点 `/weapi/v1/album/{id}`:一次返回顶层元信息(简介 / 发行信息 / 曲目数)
+/// 与曲目列表。纯端点——只打端点 + 解析成类型化 DTO,取舍 / 映射 model 交给上层。
+pub async fn detail(transport: &Transport, album_id: &AlbumId) -> Result<AlbumDetailResult> {
     let path = format!("/weapi/v1/album/{}", album_id.as_str());
     let raw = transport
         .request(RequestSpec {
@@ -22,9 +22,5 @@ pub async fn songs_in_album(transport: &Transport, album_id: &AlbumId) -> Result
             ua: UaKind::Any,
         })
         .await?;
-    let songs = raw
-        .get("songs")
-        .ok_or_else(|| eyre!("album response missing `songs`"))?;
-    let dtos: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
-    Ok(dtos.into_iter().map(album_song_to_model).collect())
+    crate::wire::de::from_value(raw)
 }

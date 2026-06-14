@@ -1,6 +1,7 @@
 ---
 source: crates/mineral-channel/netease/src/wire/search.rs
-description: 搜索歌手列表(Beyond / Beyond乐队)解析结构
+assertion_line: 150
+description: 搜索歌手列表(Beyond 带 fansSize / Beyond乐队 缺字段)解析结构
 expression: r
 ---
 SearchArtistsResult {
@@ -11,11 +12,15 @@ SearchArtistsResult {
             pic_url: Some(
                 "https://p1.music.126.net/x.jpg",
             ),
+            fans_size: Some(
+                176371,
+            ),
         },
         SearchArtist {
             id: 12345,
             name: "Beyond乐队",
             pic_url: None,
+            fans_size: None,
         },
     ],
 }

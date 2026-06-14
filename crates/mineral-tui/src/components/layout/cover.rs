@@ -4,6 +4,7 @@
 //! 的方形像素;cover 整体保持 ~2:1 字符比,方形视觉。
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
@@ -14,6 +15,16 @@ use crate::render::theme::Theme;
 /// `area` 宽高决定封面字符尺寸,完全响应式:`cell_w = min(width, height*2)`,
 /// `cell_h = cell_w / 2`。
 pub fn render(frame: &mut Frame<'_>, area: Rect, seed: &str, theme: &Theme) {
+    render_to(frame.buffer_mut(), area, seed, theme);
+}
+
+/// [`render`] 的 [`Buffer`] 版:离屏合成(detail 下钻 sweep)直接画进给定缓冲。
+///
+/// # Params:
+///   - `buf`: 目标缓冲(屏幕或离屏)
+///   - `area`: 封面区域
+///   - `seed`: 程序化封面种子(歌单名 / 专辑名)
+pub fn render_to(buf: &mut Buffer, area: Rect, seed: &str, theme: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -36,7 +47,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, seed: &str, theme: &Theme) {
     // 居中放置封面到 area 内。
     let off_x = area.x + (area.width.saturating_sub(cell_w)) / 2;
     let off_y = area.y;
-    let buf = frame.buffer_mut();
     for cy in 0..cell_h {
         for cx in 0..cell_w {
             let top = pixel(h, cx, cy.saturating_mul(2), cell_w);

@@ -407,7 +407,7 @@ mod tests {
         state
             .tasks_snapshot
             .by_kind
-            .insert(mineral_task::ChannelFetchKindTag::PlaylistTracks, 3);
+            .insert(mineral_task::ChannelFetchKindTag::PlaylistDetail, 3);
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();

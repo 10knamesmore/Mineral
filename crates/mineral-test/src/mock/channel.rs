@@ -43,11 +43,11 @@ impl MusicChannel for UrlChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_in_album(&self, _id: &AlbumId) -> ChannelResult<Vec<Song>> {
+    async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
         Err(Error::NotSupported)
     }
 
-    async fn songs_in_playlist(&self, _id: &PlaylistId) -> ChannelResult<Vec<Song>> {
+    async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
         Err(Error::NotSupported)
     }
 

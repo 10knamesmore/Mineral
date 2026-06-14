@@ -13,15 +13,10 @@ use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, Source
 /// # Return:
 ///   填好默认值的 `Song`,再用 `with_*` 装饰。
 pub fn song(id: &str) -> Song {
-    Song {
-        id: SongId::new(SourceKind::NETEASE, id),
-        name: id.to_owned(),
-        artists: Vec::new(),
-        album: None,
-        duration_ms: 0,
-        cover_url: None,
-        source_url: None,
-    }
+    Song::builder()
+        .id(SongId::new(SourceKind::NETEASE, id))
+        .name(id.to_owned())
+        .build()
 }
 
 /// 给一首 `Song` 挂上单个艺人(`id == name`)。

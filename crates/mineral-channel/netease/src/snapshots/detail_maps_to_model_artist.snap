@@ -1,5 +1,5 @@
 ---
-source: crates/mineral-channel/netease/src/api/artist.rs
+source: crates/mineral-channel/netease/src/convert.rs
 description: 歌手详情映射成统一 Artist(Beyond + 1 热门曲)
 expression: model
 ---
@@ -12,7 +12,13 @@ Artist {
     },
     name: "Beyond",
     description: "香港摇滚乐队",
-    follower_count: 42,
+    follower_count: 8900000,
+    album_count: Some(
+        146,
+    ),
+    song_count: Some(
+        2570,
+    ),
     avatar_url: Some(
         Remote(
             Url {
@@ -41,6 +47,7 @@ Artist {
                 ),
             },
             name: "海阔天空",
+            translation: None,
             artists: [
                 ArtistRef {
                     id: ArtistId {

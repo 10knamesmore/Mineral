@@ -599,6 +599,8 @@ impl App {
             Action::OpenActionMenu => self.open_action_menu(),
             Action::OpenCopyMenu => self.open_copy_menu(),
             Action::InvokeScript(slot) => self.invoke_script_action(slot),
+            // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
+            Action::DrillIntoSelection | Action::CycleDetailSection => {}
         }
     }
 
@@ -720,6 +722,11 @@ mod tests {
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 喂一个带 Ctrl 的 Press 键给 App(走真实事件入口)。
+    fn press_ctrl(app: &mut App, code: KeyCode) {
+        app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
     }
 
     /// 回归(红→蓝路径之二):换歌后新封面**还在抓取**时,频谱保持上一张封面,
@@ -1322,7 +1329,7 @@ mod tests {
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有当前会话"))?;
-        assert_eq!(session.query, "hi", "字符进当前会话 query");
+        assert_eq!(session.query(), "hi", "字符进当前会话 query");
         Ok(())
     }
 
@@ -1341,7 +1348,7 @@ mod tests {
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有当前会话"))?;
-        assert_eq!(session.query, "h", "退格删一字");
+        assert_eq!(session.query(), "h", "退格删一字");
         Ok(())
     }
 
@@ -1420,8 +1427,8 @@ mod tests {
         let sel = app
             .state
             .channel_search
-            .current()
-            .ok_or_else(|| eyre!("应有会话"))?
+            .active_results()
+            .ok_or_else(|| eyre!("应有结果桶"))?
             .sel;
         assert_eq!(sel, 3, "J 大步下移经 config 绑定生效(4 首钳到末行)");
         Ok(())
@@ -1437,16 +1444,16 @@ mod tests {
         let sel = app
             .state
             .channel_search
-            .current()
-            .ok_or_else(|| eyre!("应有会话"))?
+            .active_results()
+            .ok_or_else(|| eyre!("应有结果桶"))?
             .sel;
         assert_eq!(sel, 2, "j 下移两次");
         press(&mut app, KeyCode::Char('k'));
         let sel = app
             .state
             .channel_search
-            .current()
-            .ok_or_else(|| eyre!("应有会话"))?
+            .active_results()
+            .ok_or_else(|| eyre!("应有结果桶"))?
             .sel;
         assert_eq!(sel, 1, "k 上移一次");
         Ok(())
@@ -1496,23 +1503,24 @@ mod tests {
         Ok(())
     }
 
-    /// results↔detail:`l` 进 detail、`h` 回 results(面板间空间导航,走 config 绑定)。
+    /// results↔detail 空间导航:drill(Ctrl+L)进 detail、back(Ctrl+H)回 results。
+    /// song 结果的 `l` 已是「直接播放」,故进 detail 走 drill 这一对(与全 app 的 back 同源)。
     #[test]
-    fn results_detail_hl_navigation() -> color_eyre::Result<()> {
+    fn results_detail_drill_navigation() -> color_eyre::Result<()> {
         use crate::runtime::state::SearchFocus;
 
         let mut app = app_with_results(4)?;
-        press(&mut app, KeyCode::Char('l'));
+        press_ctrl(&mut app, KeyCode::Char('l'));
         assert_eq!(
             app.state.channel_search.focus,
             SearchFocus::Detail,
-            "l 进 detail"
+            "Ctrl+L drill 进 detail"
         );
-        press(&mut app, KeyCode::Char('h'));
+        press_ctrl(&mut app, KeyCode::Char('h'));
         assert_eq!(
             app.state.channel_search.focus,
             SearchFocus::Results,
-            "h 回 results"
+            "Ctrl+H 回 results"
         );
         Ok(())
     }
@@ -1526,7 +1534,7 @@ mod tests {
         use crate::runtime::state::SearchFocus;
 
         let mut app = app_with_results(4)?;
-        press(&mut app, KeyCode::Char('l')); // results → detail
+        press_ctrl(&mut app, KeyCode::Char('l')); // results → detail（song 结果走 drill 进入）
         assert_eq!(
             app.state.channel_search.focus,
             SearchFocus::Detail,
@@ -1537,10 +1545,222 @@ mod tests {
         let sel = app
             .state
             .channel_search
-            .current()
-            .ok_or_else(|| eyre!("应有会话"))?
+            .active_results()
+            .ok_or_else(|| eyre!("应有结果桶"))?
             .sel;
         assert_eq!(sel, 0, "detail 焦点下 j/k 不动 results 光标");
+        Ok(())
+    }
+
+    /// 空 query 按 left → 焦点跨到 kind chip 段,下拉自动展开。
+    #[test]
+    fn left_from_empty_query_opens_kind_chip() -> color_eyre::Result<()> {
+        use crate::runtime::state::PromptSegment;
+        let (mut app, _submitted) = crate::test_support::app_with_channel_search_probed(vec![
+            SearchKind::Song,
+            SearchKind::Album,
+        ])?;
+        press(&mut app, KeyCode::Left);
+        assert_eq!(
+            app.state.channel_search.prompt_seg(),
+            PromptSegment::Kind,
+            "词首 left 跨到 kind chip"
+        );
+        assert!(
+            app.state.channel_search.seg_open(),
+            "focus 到 chip 即展开下拉"
+        );
+        Ok(())
+    }
+
+    /// 从 kind chip 再 left → 跨到 source chip 段(最左)。
+    #[test]
+    fn left_from_kind_chip_reaches_source_chip() -> color_eyre::Result<()> {
+        use crate::runtime::state::PromptSegment;
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Left); // query → kind chip
+        press(&mut app, KeyCode::Left); // kind → source chip
+        assert_eq!(
+            app.state.channel_search.prompt_seg(),
+            PromptSegment::Source,
+            "kind chip 再 left 到 source chip"
+        );
+        assert!(app.state.channel_search.seg_open(), "source chip 下拉展开");
+        Ok(())
+    }
+
+    /// `@` / `$` 退役为普通字符:在 query 段直接进 query,不触发任何菜单。
+    #[test]
+    fn at_and_dollar_are_plain_query_chars() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Char('@'));
+        press(&mut app, KeyCode::Char('$'));
+        assert_eq!(app.overlays.len(), 0, "@/$ 不再弹菜单");
+        let query = app
+            .state
+            .channel_search
+            .current()
+            .ok_or_else(|| eyre!("应有会话"))?
+            .query()
+            .to_owned();
+        assert_eq!(query, "@$", "@/$ 当普通字符进 query");
+        Ok(())
+    }
+
+    /// kind chip 选中无缓存类型 + query 非空 → Enter 确认时用当前 query 自动搜该类型。
+    #[test]
+    fn confirm_kind_auto_searches_empty_bucket() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+
+        use mineral_task::{ChannelFetchKind, TaskKind};
+
+        let (mut app, submitted) = crate::test_support::app_with_channel_search_probed(vec![
+            SearchKind::Song,
+            SearchKind::Album,
+        ])?;
+        press(&mut app, KeyCode::Char('q')); // query = "q"
+        press(&mut app, KeyCode::Left); // 光标到词首
+        press(&mut app, KeyCode::Left); // 跨到 kind chip(下拉开,高亮当前 Song)
+        press(&mut app, KeyCode::Down); // 高亮 Album
+        press(&mut app, KeyCode::Enter); // 确认 → 自动搜 Album
+        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        assert!(
+            tasks.iter().any(|t| matches!(
+                t,
+                TaskKind::ChannelFetch(ChannelFetchKind::Search {
+                    kind: SearchKind::Album,
+                    ..
+                })
+            )),
+            "确认无缓存 kind + query 非空 → 自动搜 Album"
+        );
+        Ok(())
+    }
+
+    /// 造一张测试专辑。
+    fn test_album(raw: &str) -> mineral_model::Album {
+        mineral_model::Album::builder()
+            .id(mineral_model::AlbumId::new(SourceKind::NETEASE, raw))
+            .name(format!("album {raw}"))
+            .build()
+    }
+
+    /// 歌手 detail:[ ] 切专辑区、activate 专辑下钻一帧、Esc 弹回 root。
+    #[test]
+    fn artist_detail_section_drill_and_back() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Artist, ArtistId};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::{ArtistSection, SearchFocus};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
+        let artist = |songs: Vec<mineral_model::Song>| {
+            Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, "ar1"))
+                .name("Artist".to_owned())
+                .songs(songs)
+                .build()
+        };
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Artist,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Artists(vec![artist(Vec::new())]),
+        });
+        let id = ArtistId::new(SourceKind::NETEASE, "ar1");
+        app.state.apply(&TaskEvent::ArtistDetailFetched {
+            id: id.clone(),
+            artist: Box::new(artist(crate::test_support::endserenading(2))),
+        });
+        app.state.apply(&TaskEvent::ArtistAlbumsFetched {
+            id,
+            page: Page::default(),
+            albums: vec![test_album("a1"), test_album("a2")],
+        });
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        press(&mut app, KeyCode::Char('l')); // results → detail
+        assert_eq!(app.state.channel_search.focus, SearchFocus::Detail);
+        press(&mut app, KeyCode::Char('[')); // Hot → Albums
+        let section = app
+            .state
+            .channel_search
+            .active_results()
+            .and_then(|kr| kr.detail.current())
+            .map(|f| f.section);
+        assert_eq!(section, Some(ArtistSection::Albums), "[ 切到专辑区");
+        press(&mut app, KeyCode::Char('l')); // activate 专辑 → 下钻
+        assert_eq!(
+            app.state
+                .channel_search
+                .active_results()
+                .map(|kr| kr.detail.depth()),
+            Some(1),
+            "专辑区 activate 下钻一帧"
+        );
+        press(&mut app, KeyCode::Esc); // 弹回 root
+        assert_eq!(
+            app.state
+                .channel_search
+                .active_results()
+                .map(|kr| kr.detail.depth()),
+            Some(0),
+            "Esc 弹回 root"
+        );
+        Ok(())
+    }
+
+    /// detail 焦点 j/k 滚当前区列表(钳列表长度)。
+    #[test]
+    fn detail_jk_scrolls_list() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::AlbumId;
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![test_album("al1")]),
+        });
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                mineral_model::Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .songs(crate::test_support::endserenading(4))
+                    .build(),
+            ),
+        });
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(
+            app.state
+                .channel_search
+                .active_results()
+                .and_then(|kr| kr.detail.current())
+                .map(|f| f.list_sel),
+            Some(2),
+            "detail j 滚两次到第 3 行(同专辑曲目)"
+        );
         Ok(())
     }
 
@@ -1560,8 +1780,8 @@ mod tests {
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有会话"))?
-            .query
-            .clone();
+            .query()
+            .to_owned();
         assert_eq!(query, "Qq", "q/Q 都进 query");
         Ok(())
     }
@@ -1591,13 +1811,13 @@ mod tests {
         Ok(())
     }
 
-    /// 面板 Tab/Esc 回 prompt,且 prompt 态 Tab 记住「上次面板」(detail)而非默认 results。
+    /// 面板 Tab 回 prompt;Esc 走退一级链(detail→results→prompt);prompt 态 Tab 记住「上次面板」(detail)。
     #[test]
     fn panels_tab_esc_return_to_prompt_remembering_last() -> color_eyre::Result<()> {
         use crate::runtime::state::SearchFocus;
 
         let mut app = app_with_results(4)?;
-        press(&mut app, KeyCode::Char('l')); // results → detail
+        press_ctrl(&mut app, KeyCode::Char('l')); // results → detail（song 结果走 drill 进入）
         press(&mut app, KeyCode::Tab); // detail → prompt
         assert_eq!(
             app.state.channel_search.focus,
@@ -1610,16 +1830,19 @@ mod tests {
             SearchFocus::Detail,
             "Tab 回上次面板=detail(记住位置)"
         );
-        press(&mut app, KeyCode::Esc); // detail → prompt
+        press(&mut app, KeyCode::Esc); // detail → results(Esc 链退一级)
+        assert_eq!(
+            app.state.channel_search.focus,
+            SearchFocus::Results,
+            "detail Esc 退一级到 results(Esc 链)"
+        );
+        press(&mut app, KeyCode::Esc); // results → prompt
         assert_eq!(
             app.state.channel_search.focus,
             SearchFocus::Prompt,
-            "detail Esc 回 prompt"
+            "results Esc 回 prompt"
         );
-        assert!(
-            app.state.channel_search.active.on(),
-            "Esc 回 prompt 不退出布局态"
-        );
+        assert!(app.state.channel_search.active.on(), "Esc 链不退出布局态");
         Ok(())
     }
 

@@ -2703,6 +2703,7 @@ name = "mineral-model"
 version = "0.5.1"
 dependencies = [
  "color-eyre",
+ "derive-getters",
  "insta",
  "mineral-macros",
  "mineral-test",
@@ -2710,6 +2711,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "typed-builder",
  "url",
 ]
 
@@ -2905,6 +2907,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tempfile",
+ "time",
  "tokio",
  "tracing-subscriber",
  "unicode-width 0.2.0",

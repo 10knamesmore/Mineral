@@ -5,7 +5,7 @@
 //! 也不直接操作 App —— 按键产出 [`OverlayAction`] 回传执行,绕开双重可变借用。
 
 use crossterm::event::KeyEvent;
-use mineral_config::MenuReveal;
+use mineral_config::{MenuAlign, MenuReveal};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -54,6 +54,10 @@ pub(crate) struct Chrome {
     /// [`placement::place`](super::placement::place) 算法,期望尺寸取 `max_w`/`max_h`,
     /// `pct_*`/`min_*` 不参与;`None` 走居中 / dock。优先级高于 `dock`。
     pub(crate) anchor: Option<(Rect, Placement)>,
+
+    /// 锚定时交叉轴对齐覆盖:`None` 跟随全局 `tui.layout.menu_align`;`Some(_)` 强制本菜单对齐
+    /// (chip 下拉贴 chip 左下展开,不吃全局 morph)。非锚定浮层忽略。
+    pub(crate) align: Option<MenuAlign>,
 }
 
 /// 停靠浮层(抽屉式)避开封面的那一侧。
@@ -202,7 +206,7 @@ pub(crate) fn render_overlay<O: Overlay>(
         (Some((anchor, placement)), _) => place(
             anchor,
             placement,
-            *ctx.cfg.tui().layout().menu_align(),
+            c.align.unwrap_or(*ctx.cfg.tui().layout().menu_align()),
             c.max_w,
             c.max_h,
             area,
@@ -602,6 +606,7 @@ mod tests {
                 animated: true,
                 dock: false,
                 anchor: Some((self.anchor, self.placement)),
+                align: None,
             }
         }
 

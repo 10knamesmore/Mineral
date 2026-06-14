@@ -35,13 +35,13 @@ pub enum TaskEvent {
         ids: FxHashSet<SongId>,
     },
 
-    /// `PlaylistTracks` 任务成功:某歌单内的曲目已到。
-    PlaylistTracksFetched {
+    /// `PlaylistDetail` 任务成功:歌单完整详情(元信息 + 曲目)已到。
+    PlaylistDetailFetched {
         /// 歌单 id。
         id: PlaylistId,
 
-        /// 曲目。
-        tracks: Vec<Song>,
+        /// 完整歌单(含曲目)。
+        playlist: Box<Playlist>,
     },
 
     /// `SongUrl` 任务成功:可播放 URL 解析就绪。
@@ -113,13 +113,13 @@ pub enum TaskEvent {
         albums: Vec<Album>,
     },
 
-    /// `AlbumSongs` 任务成功:专辑曲目已到。
-    AlbumSongsFetched {
+    /// `AlbumDetail` 任务成功:专辑完整详情(元信息 + 曲目)已到。
+    AlbumDetailFetched {
         /// 专辑 id。
         id: mineral_model::AlbumId,
 
-        /// 曲目。
-        songs: Vec<Song>,
+        /// 完整专辑(含曲目)。
+        album: Box<Album>,
     },
 
     /// `PlaylistWrite` 任务完结(**成功失败都发**,见模块文档)。

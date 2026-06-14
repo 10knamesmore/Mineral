@@ -111,7 +111,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     // 固定顺序渲染,避免 hashmap 迭代顺序抖动。
     for (tag, label) in [
         (ChannelFetchKindTag::MyPlaylists, "pl"),
-        (ChannelFetchKindTag::PlaylistTracks, "tr"),
+        (ChannelFetchKindTag::PlaylistDetail, "tr"),
         (ChannelFetchKindTag::SongUrl, "song"),
         (ChannelFetchKindTag::Lyrics, "lyr"),
         (ChannelFetchKindTag::LikedSongIds, "♥"),

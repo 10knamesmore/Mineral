@@ -30,28 +30,6 @@ pub struct Album {
     pub pic_url: Option<String>,
 }
 
-/// 搜索结果里出现的歌曲（用 `artists`、`album`、`duration` 字段）。
-#[derive(Debug, Clone, Deserialize)]
-pub struct SearchSong {
-    /// 歌曲 ID。
-    pub id: i64,
-
-    /// 歌曲名。
-    #[serde(default, deserialize_with = "string_or_null")]
-    pub name: String,
-
-    /// 艺术家列表。
-    #[serde(default, deserialize_with = "vec_skip_null")]
-    pub artists: Vec<Artist>,
-
-    /// 专辑信息。
-    pub album: Album,
-
-    /// 时长（毫秒）。
-    #[serde(default)]
-    pub duration: u64,
-}
-
 /// 专辑/歌单详情里出现的歌曲（用 `ar`、`al`、`dt` 字段）。
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlbumSong {
@@ -61,6 +39,10 @@ pub struct AlbumSong {
     /// 歌曲名。
     #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
+
+    /// 译名（`tns` 数组；search 端点带，detail 端点常缺 → 空）。
+    #[serde(default)]
+    pub tns: Vec<String>,
 
     /// 艺术家列表（网易云在专辑/歌单 detail 端点用 `ar` 字段名）。
     #[serde(default, deserialize_with = "vec_skip_null")]
@@ -126,7 +108,7 @@ pub struct MusicTotalPlay {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlbumSong, FirstListenInfo, SearchSong};
+    use super::{AlbumSong, FirstListenInfo};
     use crate::wire::de::from_value;
 
     #[test]
@@ -145,21 +127,6 @@ mod tests {
             "失效单曲:ar:[null] + al.name:null 的清洗结果(ar 应空、al.name 应空串)",
             songs
         );
-        Ok(())
-    }
-
-    /// SearchSong 正常解析:artists / album / duration 各字段到位。
-    #[test]
-    fn search_song_parses_artists_album_duration() -> color_eyre::Result<()> {
-        let raw = serde_json::json!({
-            "id": 42,
-            "name": "壱雫空",
-            "artists": [{ "id": 1, "name": "MyGO!!!!!" }],
-            "album": { "id": 7, "name": "迷跡波", "picUrl": "http://p/x.jpg" },
-            "duration": 264_000
-        });
-        let s: SearchSong = from_value(raw)?;
-        mineral_test::assert_snap_debug!("SearchSong 全字段解析(MyGO 壱雫空 / 迷跡波)", s);
         Ok(())
     }
 

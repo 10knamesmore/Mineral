@@ -263,18 +263,14 @@ mod tests {
     }
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {
-        Song {
-            id: SongId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            artists: Vec::new(),
-            album: album.map(|a| AlbumRef {
+        Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, id))
+            .name(name.to_owned())
+            .album(album.map(|a| AlbumRef {
                 id: AlbumId::new(SourceKind::NETEASE, "0"),
                 name: a.to_owned(),
-            }),
-            duration_ms: 0,
-            cover_url: None,
-            source_url: None,
-        }
+            }))
+            .build()
     }
 
     #[test]

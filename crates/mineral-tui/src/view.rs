@@ -11,8 +11,8 @@ use mineral_config::SearchFocusTransition;
 use crate::app::App;
 use crate::components::layout::compute::{Areas, compute, compute_fullscreen, compute_search};
 use crate::components::layout::{
-    cover, cover_image, lyrics, now_playing, search_panel, sidebar, spectrum, top_status,
-    transform, transport,
+    cover, cover_image, lyrics, now_playing, search_detail, search_panel, sidebar, spectrum,
+    top_status, transform, transport,
 };
 use crate::runtime::state::SearchFocus;
 
@@ -136,7 +136,14 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         if show_browse {
             now_playing::draw(frame, right, &app.state, &app.picker, theme);
         } else {
-            search_panel::draw_detail(frame, right, theme, border_focused(SearchFocus::Detail));
+            search_detail::draw(
+                frame,
+                right,
+                &app.state,
+                &app.picker,
+                theme,
+                border_focused(SearchFocus::Detail),
+            );
         }
     }
     // 焦点环:滑动期画 accent 浮动边框,从旧面板矩形几何插值到新面板矩形(border-only,不清内容)。
@@ -160,6 +167,10 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     }
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
+    }
+    // chip 下拉(source/kind)画在最后,盖在 results 面板之上。
+    if let Some(prompt) = areas.search_prompt {
+        search_panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
 }
@@ -528,9 +539,10 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         let buf = t.backend().buffer();
-        // 结果列在左半(x < 30);空结果不应有整行底色带。
+        // 结果列在左半(x < 30)、prompt 行(y < 4)之下;只扫结果区,空结果不应有整行底色带
+        // (prompt 行的类型徽章本就用 surface0 填底,不在此判定范围)。
         let mut banded = false;
-        for y in 0..24u16 {
+        for y in 4..24u16 {
             for x in 0..30u16 {
                 if buf.cell((x, y)).is_some_and(|c| c.bg == surface0) {
                     banded = true;
@@ -573,7 +585,7 @@ mod tests {
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         app.state.channel_search.focus = SearchFocus::Results;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "x".to_owned();
+            session.set_query("x");
         }
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -583,8 +595,8 @@ mod tests {
             payload: SearchPayload::Songs(endserenading(4)),
         });
         // 选中第 2 行(短名 "Gjs · Mineral",尾部留白便于验整行底色)。
-        if let Some(session) = app.state.channel_search.current_mut() {
-            session.sel = 2;
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            kr.sel = 2;
         }
         let surface0 = app.theme.surface0;
 
@@ -617,7 +629,7 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "serenading".to_owned();
+            session.set_query("serenading");
         }
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -671,7 +683,7 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "serenading".to_owned();
+            session.set_query("serenading");
         }
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -716,7 +728,7 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "serenading".to_owned();
+            session.set_query("serenading");
         }
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -725,8 +737,8 @@ mod tests {
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
         });
-        if let Some(session) = app.state.channel_search.current_mut() {
-            session.sel = 2;
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            kr.sel = 2;
         }
         let accent = app.theme.accent;
         let subtext = app.theme.subtext;
@@ -789,7 +801,7 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "serenading".to_owned();
+            session.set_query("serenading");
         }
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -820,19 +832,17 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "mineral".to_owned();
+            session.set_query("mineral");
         }
-        let album = |id: &str, name: &str, who: &str| Album {
-            id: AlbumId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            artists: vec![ArtistRef {
-                id: ArtistId::new(SourceKind::NETEASE, id),
-                name: who.to_owned(),
-            }],
-            description: String::new(),
-            publish_time_ms: 0,
-            cover_url: None,
-            songs: Vec::new(),
+        let album = |id: &str, name: &str, who: &str| {
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, id),
+                    name: who.to_owned(),
+                }])
+                .build()
         };
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -860,15 +870,14 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Playlist])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "indie".to_owned();
+            session.set_query("indie");
         }
-        let playlist = |id: &str, name: &str, count: u64| Playlist {
-            id: PlaylistId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            description: String::new(),
-            cover_url: None,
-            track_count: count,
-            songs: Vec::new(),
+        let playlist = |id: &str, name: &str, count: u64| {
+            Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .track_count(count)
+                .build()
         };
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -899,15 +908,14 @@ mod tests {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
         if let Some(session) = app.state.channel_search.current_mut() {
-            session.query = "football".to_owned();
+            session.set_query("football");
         }
-        let artist = |id: &str, name: &str, followers: u64| Artist {
-            id: ArtistId::new(SourceKind::NETEASE, id),
-            name: name.to_owned(),
-            description: String::new(),
-            follower_count: followers,
-            avatar_url: None,
-            songs: Vec::new(),
+        let artist = |id: &str, name: &str, followers: u64| {
+            Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .follower_count(followers)
+                .build()
         };
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,

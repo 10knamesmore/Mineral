@@ -1,7 +1,8 @@
 //! `impl MusicChannel for NeteaseChannel`。
 //!
-//! 把 `api/` 模块里的逻辑层方法绑到 `mineral_channel_core::MusicChannel` 这个 trait,
-//! 让 binary 上层可以面向 trait 编程。
+//! 业务层:组合 `api/` 端点(纯协议 → 类型化 DTO)与 `convert`(DTO → mineral-model 映射),
+//! 收敛错误为 `mineral_channel_core::Error`,让上层面向 trait 编程。端点调用与 model 映射各
+//! 在其层,本文件只做编排与业务决策(如详情聚合多端点、歌单缓存)。
 
 use async_trait::async_trait;
 use color_eyre::eyre::eyre;
@@ -18,6 +19,7 @@ use crate::error::ApiCodeError;
 
 use crate::api;
 use crate::config::NeteaseConfig;
+use crate::convert;
 use crate::playlist_cache;
 use crate::transport::Transport;
 
@@ -161,45 +163,89 @@ impl MusicChannel for NeteaseChannel {
     }
 
     async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>> {
-        api::search::search_songs(&self.transport, query, page.offset, page.limit)
+        let dto = api::search::search_songs(&self.transport, query, page.offset, page.limit)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(dto
+            .songs
+            .into_iter()
+            .map(convert::album_song_to_model)
+            .collect())
     }
 
     async fn search_albums(&self, query: &str, page: Page) -> Result<Vec<Album>> {
-        api::search::search_albums(&self.transport, query, page.offset, page.limit)
+        let dto = api::search::search_albums(&self.transport, query, page.offset, page.limit)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        // 搜索只有元信息,曲目按需走 album_detail(传空 songs)。
+        Ok(dto
+            .albums
+            .into_iter()
+            .map(|a| convert::album_dto_to_model(a, Vec::new()))
+            .collect())
     }
 
     async fn search_playlists(&self, query: &str, page: Page) -> Result<Vec<Playlist>> {
-        api::search::search_playlists(&self.transport, query, page.offset, page.limit)
+        let dto = api::search::search_playlists(&self.transport, query, page.offset, page.limit)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(dto
+            .playlists
+            .into_iter()
+            .map(convert::search_playlist_to_model)
+            .collect())
     }
 
     async fn search_artists(&self, query: &str, page: Page) -> Result<Vec<Artist>> {
-        api::search::search_artists(&self.transport, query, page.offset, page.limit)
+        let dto = api::search::search_artists(&self.transport, query, page.offset, page.limit)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(dto
+            .artists
+            .into_iter()
+            .map(convert::search_artist_to_model)
+            .collect())
     }
 
+    /// 歌手详情:并发取「详情(简介/计数/热门曲)」与「粉丝数」两端点,聚合成完整 [`Artist`]。
+    ///
+    /// `/weapi/v1/artist/{id}` 顶层不带粉丝数,粉丝数只有 `/api/artist/follow/count/get` 给;两端点
+    /// 并发打、就地聚合。详情端点失败则整体失败(主数据);粉丝数端点失败降级 0(非致命,warn 留痕)。
     async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
-        api::artist::artist_detail(&self.transport, id)
-            .await
-            .map_err(map_err)
+        let (detail, fans) = tokio::join!(
+            api::artist::detail(&self.transport, id),
+            api::artist::follow_count(&self.transport, id),
+        );
+        let detail = detail.map_err(map_err)?;
+        let fans = fans.unwrap_or_else(|e| {
+            mineral_log::warn!(
+                target: "netease",
+                artist = id.value(),
+                error = mineral_log::chain(&e),
+                "artist follow count fetch failed; fans=0"
+            );
+            0
+        });
+        Ok(convert::artist_detail_to_model(detail, fans))
     }
 
     async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
-        api::artist::artist_albums(&self.transport, id, page.offset, page.limit)
+        let dto = api::artist::albums(&self.transport, id, page.offset, page.limit)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(dto
+            .hot_albums
+            .into_iter()
+            .map(convert::artist_album_to_model)
+            .collect())
     }
 
     async fn create_playlist(&self, name: &str) -> Result<Playlist> {
-        api::playlist_edit::create_playlist(&self.transport, name)
+        let dto = api::playlist_edit::create_playlist(&self.transport, name)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        // 建单响应只带新歌单元信息,无曲目。
+        Ok(convert::playlist_info_to_model(&dto.playlist, Vec::new()))
     }
 
     async fn delete_playlist(&self, id: &PlaylistId) -> Result<()> {
@@ -233,86 +279,115 @@ impl MusicChannel for NeteaseChannel {
     }
 
     async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
-        api::song::songs_detail(&self.transport, ids)
+        let dtos = api::song::songs_detail(&self.transport, ids)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(dtos.into_iter().map(convert::album_song_to_model).collect())
     }
 
-    async fn songs_in_album(&self, id: &AlbumId) -> Result<Vec<Song>> {
-        api::album::songs_in_album(&self.transport, id)
+    async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
+        let dto = api::album::detail(&self.transport, id)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(convert::album_detail_to_model(dto))
     }
 
-    /// 歌单内全部歌曲,配 persist 缓存(版本号 `trackUpdateTime` 条件刷新,远端为准)。
+    /// 歌单完整详情(元信息 + 曲目),配 persist 缓存(版本号 `trackUpdateTime` 条件刷新)。
     ///
-    /// 先轻量拉远端版本戳 + 全量 trackIds 顺序(不拉完整 tracks):
-    /// - 缓存命中且版本一致 → 由本地 song_meta 按远端顺序重建,省掉拉上千首 tracks。
-    /// - 版本变 / 无缓存 / 旧缓存无版本戳 → 全拉远端覆盖并写回(含新版本戳)。
-    /// - 轻请求网络失败 → 降级旧缓存(忽略版本)体验优先;无缓存才冒泡 `Err`。
+    /// 元信息从轻量请求(同端点 `limit=0`)拿——它返回 playlist 对象(名/简介/封面/计数/
+    /// 版本戳 + `trackIds` 顺序),不含 tracks 大头。曲目则:
+    /// - 缓存命中且版本一致 → 本地 song_meta 按远端顺序重建,省拉上千首。
+    /// - 版本变 / 无缓存 → 全拉(`limit=1000`)覆盖写回。
+    /// - 轻请求失败 → 降级旧缓存曲目(元信息缺,只剩 id + 曲目),体验优先;无缓存才冒泡。
     ///
-    /// 缓存是优化,远端始终是事实来源:版本戳一变即全拉覆盖,命中也以远端 trackIds 顺序重建。
-    async fn songs_in_playlist(&self, id: &PlaylistId) -> Result<Vec<Song>> {
-        // 1. 轻量请求拿版本戳 + 全量 trackIds 顺序。
-        let (remote_tut, remote_track_ids) =
-            match api::playlist::playlist_version(&self.transport, id).await {
-                Ok(v) => v,
-                Err(e) => {
-                    // 轻请求失败:降级旧缓存(忽略版本),体验优先;无缓存才冒泡。
-                    if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
-                        mineral_log::warn!(
-                            target: "netease",
-                            playlist = %id.value(),
-                            error = mineral_log::chain(&e),
-                            "歌单版本轻请求失败,降级返回旧缓存"
-                        );
-                        return Ok(stale);
-                    }
-                    return Err(map_err(e));
-                }
-            };
-
-        // 2. 缓存命中且版本一致 → 按远端顺序由本地重建,省 tracks 大头。
-        if let Some(cached) =
-            playlist_cache::try_rebuild_if_current(&self.persist, id, remote_tut, &remote_track_ids)
-                .await
-        {
-            return Ok(cached);
-        }
-
-        // 3. 未命中 / 版本变更 → 全拉远端覆盖,写回含新版本戳。
-        match api::playlist::songs_in_playlist(&self.transport, id).await {
-            Ok(songs) => {
-                playlist_cache::store(
-                    &self.persist,
-                    id,
-                    /*name*/ None,
-                    Some(remote_tut),
-                    &songs,
-                )
-                .await;
-                Ok(songs)
-            }
+    /// 缓存只存曲目(`Vec<Song>`),元信息每次从轻请求拿,故缓存结构不必随 model 扩张。
+    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
+        // 1. 轻量请求拿元信息 + 版本戳 + trackIds 顺序(limit=0,不拉 tracks)。
+        let meta = match api::playlist::detail(&self.transport, id, 0).await {
+            Ok(r) => r.playlist,
             Err(e) => {
-                // 全拉失败:仍尝试降级旧缓存,体验优先。
                 if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
                     mineral_log::warn!(
                         target: "netease",
                         playlist = %id.value(),
                         error = mineral_log::chain(&e),
-                        "歌单远端全拉失败,降级返回旧缓存"
+                        "歌单元信息轻请求失败,降级返回旧缓存曲目(元信息缺)"
                     );
-                    return Ok(stale);
+                    return Ok(Playlist::builder()
+                        .id(id.clone())
+                        .name(String::new())
+                        .songs(stale)
+                        .build());
                 }
-                Err(map_err(e))
+                return Err(map_err(e));
             }
-        }
+        };
+        let track_ids = meta
+            .track_ids
+            .iter()
+            .map(|t| t.id.to_string())
+            .collect::<Vec<String>>();
+
+        // 2. 缓存命中且版本一致 → 按远端顺序由本地重建曲目;否则全拉覆盖写回。
+        let songs = if let Some(cached) = playlist_cache::try_rebuild_if_current(
+            &self.persist,
+            id,
+            meta.track_update_time,
+            &track_ids,
+        )
+        .await
+        {
+            cached
+        } else {
+            match api::playlist::detail(&self.transport, id, 1000).await {
+                Ok(full) => {
+                    let songs = full
+                        .playlist
+                        .tracks
+                        .into_iter()
+                        .map(convert::album_song_to_model)
+                        .collect::<Vec<Song>>();
+                    playlist_cache::store(
+                        &self.persist,
+                        id,
+                        Some(&meta.name),
+                        Some(meta.track_update_time),
+                        &songs,
+                    )
+                    .await;
+                    songs
+                }
+                Err(e) => {
+                    if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
+                        mineral_log::warn!(
+                            target: "netease",
+                            playlist = %id.value(),
+                            error = mineral_log::chain(&e),
+                            "歌单曲目全拉失败,降级返回旧缓存曲目"
+                        );
+                        stale
+                    } else {
+                        return Err(map_err(e));
+                    }
+                }
+            }
+        };
+        Ok(convert::playlist_info_to_model(&meta, songs))
     }
 
+    /// 播放 URL,**双层降级**(spec §4.3):先打 v1(字符串等级),取到可播 url 即用;
+    /// v1 出错或只回试听片段(映射后为空)再降级 legacy(数字 br)。
     async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> Result<Vec<PlayUrl>> {
-        api::song::song_urls(&self.transport, ids, quality)
+        if let Ok(dtos) = api::song::song_url_v1(&self.transport, ids, quality).await {
+            let urls = convert::play_urls(dtos, quality);
+            if !urls.is_empty() {
+                return Ok(urls);
+            }
+        }
+        let dtos = api::song::song_url_legacy(&self.transport, ids, quality)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(convert::play_urls(dtos, quality))
     }
 
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {
@@ -336,16 +411,20 @@ impl MusicChannel for NeteaseChannel {
     }
 
     async fn user_playlists(&self, uid: &UserId) -> Result<Vec<Playlist>> {
-        api::playlist::user_playlists(&self.transport, uid)
+        let dto = api::playlist::user_playlists(&self.transport, uid)
             .await
-            .map_err(map_err)
+            .map_err(map_err)?;
+        // 列表项只有元信息,无曲目(曲目按需走 playlist_detail)。
+        Ok(dto
+            .playlist
+            .iter()
+            .map(|info| convert::playlist_info_to_model(info, Vec::new()))
+            .collect())
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
         match self.user_id.as_ref() {
-            Some(uid) => api::playlist::user_playlists(&self.transport, uid)
-                .await
-                .map_err(map_err),
+            Some(uid) => self.user_playlists(uid).await,
             None => Err(Error::NotSupported),
         }
     }

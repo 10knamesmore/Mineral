@@ -52,6 +52,12 @@ pub struct KeysConfig {
     /// 在当前视图「返回」(搜索非空时先清搜索)。
     back: KeyBinding,
 
+    /// 下探一层 / 进入选中项详情(搜索面板:song 进其专辑、容器进详情;歌手专辑区下钻该专辑)。
+    drill_into: KeyBinding,
+
+    /// 切换详情内分区(歌手:热门曲 ↔ 专辑)。
+    cycle_detail_section: KeyBinding,
+
     /// 循环播放模式。
     cycle_mode: KeyBinding,
 
