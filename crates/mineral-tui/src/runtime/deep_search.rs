@@ -12,7 +12,7 @@ use mineral_model::{PlaylistId, Song};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::runtime::state::AppState;
+use crate::runtime::state::{LibraryData, SearchState};
 
 /// 单个歌单的深度命中:加权分 + 行中部展示载荷。
 #[derive(Clone, Debug)]
@@ -78,70 +78,79 @@ struct CacheKey {
 
 impl CacheKey {
     /// 以当前 state 算一份指纹。
-    fn current(state: &AppState) -> Self {
-        let cfg = state.cfg.tui().search();
-        let w = cfg.deep_weights();
+    fn current(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) -> Self {
+        let scfg = cfg.tui().search();
+        let w = scfg.deep_weights();
         Self {
-            query: state.search.query().to_owned(),
-            generation: state.library.tracks_generation,
+            query: search.query().to_owned(),
+            generation: library.tracks_generation,
             weights: [
                 w.name().to_bits(),
                 w.artist().to_bits(),
                 w.album().to_bits(),
             ],
-            deep: *cfg.deep(),
+            deep: *scfg.deep(),
         }
     }
 
-    /// 与当前 state 比对是否仍然有效(避免每帧 clone query 构 key)。
-    fn matches(&self, state: &AppState) -> bool {
-        let cfg = state.cfg.tui().search();
-        let w = cfg.deep_weights();
-        self.deep == *cfg.deep()
-            && self.generation == state.library.tracks_generation
+    /// 与当前模型比对是否仍然有效(避免每帧 clone query 构 key)。
+    fn matches(
+        &self,
+        search: &SearchState,
+        library: &LibraryData,
+        cfg: &mineral_config::Config,
+    ) -> bool {
+        let scfg = cfg.tui().search();
+        let w = scfg.deep_weights();
+        self.deep == *scfg.deep()
+            && self.generation == library.tracks_generation
             && self.weights
                 == [
                     w.name().to_bits(),
                     w.artist().to_bits(),
                     w.album().to_bits(),
                 ]
-            && self.query == state.search.query()
+            && self.query == search.query()
     }
 }
 
 /// 保证缓存与当前 `(query, tracks 版本, 权重)` 一致,失配则重建。
 ///
 /// 每帧可重复调用:命中指纹时只做几次整数 / 字符串比较。
-pub fn ensure(state: &AppState) {
-    if let Some(key) = &state.search.deep_cache.borrow().key
-        && key.matches(state)
+pub fn ensure(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) {
+    if let Some(key) = &search.deep_cache.borrow().key
+        && key.matches(search, library, cfg)
     {
         return;
     }
-    let key = CacheKey::current(state);
+    let key = CacheKey::current(search, library, cfg);
     let hits = if key.deep && !key.query.is_empty() {
-        build(state)
+        build(search, library, cfg)
     } else {
         FxHashMap::default()
     };
-    *state.search.deep_cache.borrow_mut() = DeepSearchCache {
+    *search.deep_cache.borrow_mut() = DeepSearchCache {
         key: Some(key),
         hits,
     };
 }
 
 /// 全量重建:对 `library.tracks` 内每首歌按字段权重打分,每歌单留最佳一首 + 命中计数。
-fn build(state: &AppState) -> FxHashMap<PlaylistId, DeepHit> {
-    let w = state.cfg.tui().search().deep_weights();
+fn build(
+    search: &SearchState,
+    library: &LibraryData,
+    cfg: &mineral_config::Config,
+) -> FxHashMap<PlaylistId, DeepHit> {
+    let w = cfg.tui().search().deep_weights();
     let wn = f64::from(w.name().clamp(0.0, 1.0));
     let wa = f64::from(w.artist().clamp(0.0, 1.0));
     let wal = f64::from(w.album().clamp(0.0, 1.0));
     let mut out = FxHashMap::default();
-    for (pid, tracks) in &state.library.tracks {
+    for (pid, tracks) in &library.tracks {
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
         for sv in tracks {
-            let Some(hit) = score_song(state, &sv.data, wn, wa, wal) else {
+            let Some(hit) = score_song(search, &sv.data, wn, wa, wal) else {
                 continue;
             };
             matched = matched.saturating_add(1);
@@ -178,7 +187,7 @@ struct SongHit<'a> {
 ///
 /// 同分时按 歌名 > 艺人 > 专辑 优先(评估顺序 + 严格大于才替换)。
 fn score_song<'a>(
-    state: &AppState,
+    search: &SearchState,
     song: &'a Song,
     wn: f64,
     wa: f64,
@@ -186,7 +195,7 @@ fn score_song<'a>(
 ) -> Option<SongHit<'a>> {
     let mut best: Option<SongHit<'a>> = None;
     if wn > 0.0
-        && let Some(m) = state.search.match_for(&song.name)
+        && let Some(m) = search.match_for(&song.name)
     {
         best = Some(SongHit {
             score: wn * f64::from(m.score),
@@ -198,7 +207,7 @@ fn score_song<'a>(
     }
     if wa > 0.0 {
         for artist in &song.artists {
-            let Some(m) = state.search.match_for(&artist.name) else {
+            let Some(m) = search.match_for(&artist.name) else {
                 continue;
             };
             let score = wa * f64::from(m.score);
@@ -215,7 +224,7 @@ fn score_song<'a>(
     }
     if wal > 0.0
         && let Some(album) = &song.album
-        && let Some(m) = state.search.match_for(&album.name)
+        && let Some(m) = search.match_for(&album.name)
     {
         let score = wal * f64::from(m.score);
         if best.as_ref().is_none_or(|b| score > b.score) {
@@ -308,7 +317,7 @@ mod tests {
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.set_query("春日");
+        s.browse.search.set_query("春日");
         let names = s
             .filtered_playlists()
             .iter()
@@ -329,7 +338,7 @@ mod tests {
     #[test]
     fn artist_hit_highlights_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.set_query("mygo");
+        s.browse.search.set_query("mygo");
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -344,7 +353,7 @@ mod tests {
     #[test]
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.set_query("迷");
+        s.browse.search.set_query("迷");
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -373,7 +382,7 @@ mod tests {
         )];
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.search.set_query("mygo");
+        s.browse.search.set_query("mygo");
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
@@ -393,7 +402,7 @@ mod tests {
         ];
         let inner_id = PlaylistId::new(SourceKind::NETEASE, "inner");
         fill_tracks(&mut s, &inner_id, vec![with_name(song("s1"), "春日影")]);
-        s.search.set_query("春日影");
+        s.browse.search.set_query("春日影");
         let names = s
             .filtered_playlists()
             .iter()
@@ -411,7 +420,7 @@ mod tests {
     #[test]
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.set_query("春日");
+        s.browse.search.set_query("春日");
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");

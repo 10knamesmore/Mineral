@@ -11,7 +11,7 @@ use super::View;
 /// 左栏视图切换态([`AppState`](crate::runtime::state::AppState) 的视图域)。
 ///
 /// `current()` 给路由 / 选中语义,`at_min` / `at_max` / `eased_in_out` 给渲染。
-/// 实现 `PartialEq<View>`,故 `state.view == View::Library` 直接可比,无需显式 `current()`。
+/// 实现 `PartialEq<View>`,故 `state.browse.view == View::Library` 直接可比,无需显式 `current()`。
 #[derive(Clone, Copy, Debug)]
 pub struct ViewSwitch(Toggle);
 

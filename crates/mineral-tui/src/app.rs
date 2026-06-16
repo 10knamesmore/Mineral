@@ -25,7 +25,7 @@ use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
-use crate::runtime::state::{ActiveLayer, AppState};
+use crate::runtime::state::{ActiveLayer, AppState, PageKind};
 use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
@@ -33,6 +33,7 @@ use crate::view::draw;
 mod channel_search;
 mod menus;
 mod nav;
+mod page;
 
 /// 应用顶层状态。
 pub struct App {
@@ -160,10 +161,10 @@ impl App {
         // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
         state.covers.encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
-        state.lyric_view.extra = ui_prefs.initial_lyric_extra();
+        state.browse.lyric_view.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
-        state.nav.track_pos = ui_prefs.initial_track_pos().clone();
+        state.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();
         let notice_hint = Self::compose_notice_hint(&keymap);
         Self {
             should_quit: false,
@@ -264,8 +265,8 @@ impl App {
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
-                self.state.view.tick();
-                self.state.fullscreen.tick();
+                self.state.browse.view.tick();
+                self.state.browse.fullscreen.tick();
                 self.state.channel_search.tick();
                 self.state.dim.tick();
                 self.state.tick_lyric_scroll();
@@ -306,7 +307,7 @@ impl App {
         let before = self.overlays.len();
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
-        if self.state.fullscreen.on() && closing_centered && self.overlays.len() < before {
+        if self.state.browse.fullscreen.on() && closing_centered && self.overlays.len() < before {
             self.state.covers.protocols.borrow_mut().clear();
         }
     }
@@ -342,7 +343,7 @@ impl App {
             .fold(0_usize, |acc, set| acc + set.len());
         mineral_log::info!(
             target: "heartbeat",
-            view = ?s.view,
+            view = ?s.browse.view,
             playlists = s.library.playlists.len(),
             tracks_cached = s.library.tracks.len(),
             tracks_requested = s.library.tracks_requested.len(),
@@ -496,7 +497,12 @@ impl App {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
             return;
         };
-        let snapshot = (rows, cols, self.state.fullscreen.on(), self.state.focused());
+        let snapshot = (
+            rows,
+            cols,
+            self.state.browse.fullscreen.on(),
+            self.state.focused(),
+        );
         if self.last_terminal_report == Some(snapshot) {
             return;
         }
@@ -504,7 +510,7 @@ impl App {
         self.client.report_terminal_state(
             rows,
             cols,
-            self.state.fullscreen.on(),
+            self.state.browse.fullscreen.on(),
             self.state.focused(),
         );
     }
@@ -554,19 +560,22 @@ impl App {
             return;
         }
 
-        // —— 以下:无活跃浮层 —— 按布局层路由,与 collect_key_context 共用 active_layer
-        // (「在哪层」只一处真相)。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)仍在各执行器开头判。
-        match self.state.active_layer() {
+        // —— 以下:无活跃浮层 —— 按当前页(page_kind)路由到对应 Page 实现。Browse 页内部再按
+        // 子模式(deep-search 打字 / 其余)细分;子模式上下文裁决(全屏屏蔽列表导航等)仍在各执行器判。
+        match self.state.page_kind() {
             // 搜索框(prompt 焦点)是模态文本输入吞键进 query;results/detail 焦点只截获
             // 面板导航、其余回落全局,见 channel_search。
-            ActiveLayer::ChannelSearch => self.handle_channel_search_key(key),
-            ActiveLayer::DeepSearch => self.handle_search_key(key),
-            // 全屏 / 浏览:走全局 dispatch 执行查表意图。
-            ActiveLayer::Fullscreen | ActiveLayer::Browse => {
-                if let Some(action) = action {
-                    self.dispatch(action);
+            PageKind::Search => self.handle_channel_search_key(key),
+            PageKind::Browse => match self.state.active_layer() {
+                // `/` 模糊输入态:吞键进过滤词。
+                ActiveLayer::DeepSearch => self.handle_search_key(key),
+                // 全屏 / 浏览:走全局 dispatch 执行查表意图。
+                _ => {
+                    if let Some(action) = action {
+                        self.dispatch(action);
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -620,14 +629,14 @@ impl App {
         if self.state.channel_search.active.on() {
             return;
         }
-        self.state.fullscreen.toggle();
+        self.state.browse.fullscreen.toggle();
         self.report_terminal_state();
     }
 
     /// 切换 Search 布局态:翻转开关驱动布局端点 morph 进退场。全屏态下屏蔽
     /// (两个全屏级布局态互斥,逻辑 `on` 同时只一个)。
     fn open_search_view(&mut self) {
-        if self.state.fullscreen.on() {
+        if self.state.browse.fullscreen.on() {
             return;
         }
         self.state.channel_search.active.toggle();
@@ -640,7 +649,8 @@ impl App {
     /// `t` 键:循环歌词副轨档,并把新档落盘(跨会话保留,fire-and-forget)。
     fn cycle_lyric_extra(&mut self) {
         self.state.cycle_lyric_extra();
-        self.ui_prefs.save_lyric_extra(self.state.lyric_view.extra);
+        self.ui_prefs
+            .save_lyric_extra(self.state.browse.lyric_view.extra);
     }
 
     /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
@@ -776,7 +786,7 @@ mod tests {
         use crate::test_support::app_in_fullscreen;
 
         let mut app = app_in_fullscreen()?;
-        assert!(app.state.fullscreen.on(), "前置:已稳态进入全屏");
+        assert!(app.state.browse.fullscreen.on(), "前置:已稳态进入全屏");
 
         // 模拟封面已渲染:塞一个协议缓存条目。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
@@ -997,7 +1007,7 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         assert_eq!(
-            app.state.nav.track_pos.get(&pid).map(|p| p.index),
+            app.state.browse.nav.track_pos.get(&pid).map(|p| p.index),
             Some(4),
             "退出转场起点应补记 Library 光标位置"
         );
@@ -1072,18 +1082,19 @@ mod tests {
         let (mut app, shutdowns) = {
             let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
             app.state
+                .browse
                 .view
                 .switch_to(crate::runtime::state::View::Library);
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
-        assert!(app.state.search.typing, "前置:已进搜索态");
+        assert!(app.state.browse.search.typing, "前置:已进搜索态");
 
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
-        assert_eq!(app.state.search.query(), "Q", "大写 Q 应进搜索词");
+        assert_eq!(app.state.browse.search.query(), "Q", "大写 Q 应进搜索词");
         assert!(app.transition.is_none(), "搜索态不该触发退出转场");
         assert!(!app.should_quit);
         assert_eq!(
@@ -1236,21 +1247,22 @@ mod tests {
     fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 1)?;
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.nav.sel_track, 1, "Library d 不动选中");
+        assert_eq!(app.state.browse.nav.sel_track, 1, "Library d 不动选中");
         assert_eq!(
-            app.state.view,
+            app.state.browse.view,
             crate::runtime::state::View::Library,
             "Library d 不切视图"
         );
 
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
         app.state
+            .browse
             .view
             .switch_to(crate::runtime::state::View::Playlists);
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.nav.sel_playlist, 0, "Playlists d 不动选中");
+        assert_eq!(app.state.browse.nav.sel_playlist, 0, "Playlists d 不动选中");
         assert_eq!(
-            app.state.view,
+            app.state.browse.view,
             crate::runtime::state::View::Playlists,
             "Playlists d 不切视图"
         );
@@ -1261,13 +1273,16 @@ mod tests {
     #[test]
     fn z_toggles_fullscreen() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        assert!(!app.state.fullscreen.on(), "初始非全屏");
+        assert!(!app.state.browse.fullscreen.on(), "初始非全屏");
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen.on(), "z 进全屏(开关 + 形变目标合一)");
+        assert!(
+            app.state.browse.fullscreen.on(),
+            "z 进全屏(开关 + 形变目标合一)"
+        );
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(!app.state.fullscreen.on(), "再按 z 退全屏");
+        assert!(!app.state.browse.fullscreen.on(), "再按 z 退全屏");
         Ok(())
     }
 
@@ -1290,7 +1305,7 @@ mod tests {
     fn fullscreen_blocks_open_search() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen.on(), "前置:已进全屏");
+        assert!(app.state.browse.fullscreen.on(), "前置:已进全屏");
 
         press(&mut app, KeyCode::Char('s'));
         assert!(!app.state.channel_search.active.on(), "全屏态 s 无效");
@@ -1308,7 +1323,7 @@ mod tests {
         );
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(!app.state.fullscreen.on(), "search 态 z 无效");
+        assert!(!app.state.browse.fullscreen.on(), "search 态 z 无效");
         Ok(())
     }
 
@@ -1847,7 +1862,7 @@ mod tests {
     fn fullscreen_tab_still_opens_queue() -> color_eyre::Result<()> {
         let mut app = app_with_queue(4, /*current_idx*/ 1)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.fullscreen.on());
+        assert!(app.state.browse.fullscreen.on());
 
         press(&mut app, KeyCode::Tab);
         assert_eq!(

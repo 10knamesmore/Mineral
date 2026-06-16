@@ -44,10 +44,10 @@ impl App {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
         });
-        let search_query = if self.state.search.query().is_empty() {
+        let search_query = if self.state.browse.search.query().is_empty() {
             None
         } else {
-            Some(self.state.search.query().to_owned())
+            Some(self.state.browse.search.query().to_owned())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(SongView 已装饰)。
@@ -70,14 +70,14 @@ impl App {
                         (ViewKind::Search, None, None)
                     }
                     ActiveLayer::Fullscreen => (ViewKind::Fullscreen, None, None),
-                    ActiveLayer::Browse => match self.state.view.current() {
+                    ActiveLayer::Browse => match self.state.browse.view.current() {
                         View::Playlists => (ViewKind::Playlists, None, None),
                         View::Library => {
                             let sel = self
                                 .state
                                 .filtered_tracks()
                                 .into_iter()
-                                .nth(self.state.nav.sel_track);
+                                .nth(self.state.browse.nav.sel_track);
                             let loved = sel.as_ref().map(|sv| sv.loved);
                             (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
                         }
@@ -132,12 +132,14 @@ impl App {
 
     /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
     pub(crate) fn toggle_love_selection(&mut self) {
-        if self.state.fullscreen.on() || !matches!(self.state.view.current(), View::Library) {
+        if self.state.browse.fullscreen.on()
+            || !matches!(self.state.browse.view.current(), View::Library)
+        {
             return;
         }
         let filtered = self.state.filtered_tracks();
         if let Some(song) = filtered
-            .get(self.state.nav.sel_track)
+            .get(self.state.browse.nav.sel_track)
             .map(|sv| sv.data.clone())
         {
             // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
@@ -208,15 +210,15 @@ impl App {
 
     /// 下载当前视图选中项:Playlists 整张歌单 / Library 单曲。全屏态屏蔽。
     pub(crate) fn download_selection(&mut self) {
-        if self.state.fullscreen.on() {
+        if self.state.browse.fullscreen.on() {
             return;
         }
-        match self.state.view.current() {
+        match self.state.browse.view.current() {
             View::Playlists => {
                 let id = self
                     .state
                     .filtered_playlists()
-                    .get(self.state.nav.sel_playlist)
+                    .get(self.state.browse.nav.sel_playlist)
                     .map(|p| p.data.id.clone());
                 if let Some(id) = id {
                     self.client.download(DownloadTarget::Playlist(id));
@@ -226,7 +228,7 @@ impl App {
                 let song = self
                     .state
                     .filtered_tracks()
-                    .get(self.state.nav.sel_track)
+                    .get(self.state.browse.nav.sel_track)
                     .map(|sv| sv.data.clone());
                 if let Some(song) = song {
                     self.client.download(DownloadTarget::Song(Box::new(song)));
@@ -283,6 +285,7 @@ mod tests {
     fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
         app.state
+            .browse
             .view
             .switch_to(crate::runtime::state::View::Playlists);
         app.state.player.current = None;
@@ -319,7 +322,7 @@ mod tests {
     #[test]
     fn keyctx_fullscreen_reports_now_playing() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 2, /*current_idx*/ 1)?;
-        app.state.fullscreen.set(true);
+        app.state.browse.fullscreen.set(true);
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Fullscreen);
         assert!(ctx.selected_song().is_none());

@@ -106,7 +106,7 @@ mod tests {
     fn render_sweep(eased: u16, style: SweepStyle) -> color_eyre::Result<String> {
         let mut state = crate::test_support::state_with_tracks()?;
         // sweep 同屏要两视图都有内容:playlists 与选中歌单的 tracks。
-        state.view.switch_to(View::Library);
+        state.browse.view.switch_to(View::Library);
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -127,7 +127,7 @@ mod tests {
     fn push_midframe_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.view.switch_to(View::Library);
+        state.browse.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
             super::draw(
@@ -148,7 +148,7 @@ mod tests {
     fn cover_midframe_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.view.switch_to(View::Library);
+        state.browse.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
             super::draw(
@@ -190,7 +190,7 @@ mod tests {
         // eased=满值:渲染 = 纯 Library。
         let mut tl = Terminal::new(TestBackend::new(40, 12))?;
         let mut lib_state = crate::test_support::state_with_tracks()?;
-        lib_state.view.switch_to(View::Library);
+        lib_state.browse.view.switch_to(View::Library);
         tl.draw(|f| {
             let area = f.area();
             super::library::render_to(f.buffer_mut(), area, &lib_state, &Theme::default());

@@ -74,7 +74,7 @@ impl AppState {
     /// # Params:
     ///   - `scroll`: 方向 + 档位
     pub(crate) fn scroll_lyrics(&mut self, scroll: ScrollStep) {
-        if !self.fullscreen.on() {
+        if !self.browse.fullscreen.on() {
             return;
         }
         let len = self
@@ -94,11 +94,12 @@ impl AppState {
             ScrollStep::PageUp => -page,
         };
         // 基准:已脱离则用现有目标行,否则用播放当前行(脱离瞬间锚在眼前)。
-        let base = match &self.lyric_view.scroll {
+        let base = match &self.browse.lyric_view.scroll {
             Some(g) => g.target_line(),
             None => self.current_line_anchor(),
         };
         let from_milli = self
+            .browse
             .lyric_view
             .scroll
             .as_ref()
@@ -119,7 +120,7 @@ impl AppState {
             }
         };
         let glide = Transition::expanding(self.glide_ticks());
-        self.lyric_view.scroll = Some(LyricGlide {
+        self.browse.lyric_view.scroll = Some(LyricGlide {
             from_milli,
             to_milli: clamped * 1000 + overshoot_milli,
             glide,
@@ -132,14 +133,14 @@ impl AppState {
     /// 共用);过冲段 settle 后自动弹回 clamp 边界;有时间戳歌手动滚走后空闲超时平滑回锚
     /// 到当前播放行,无时间戳歌停在手动位置不回(无锚点可回)。
     pub(crate) fn tick_lyric_scroll(&mut self) {
-        let changed =
-            self.playback.track.as_ref().map(|s| &s.id) != self.lyric_view.scroll_song.as_ref();
+        let changed = self.playback.track.as_ref().map(|s| &s.id)
+            != self.browse.lyric_view.scroll_song.as_ref();
         if changed {
-            self.lyric_view.scroll_song = self.playback.track.as_ref().map(|s| s.id.clone());
-            self.lyric_view.scroll = None;
+            self.browse.lyric_view.scroll_song = self.playback.track.as_ref().map(|s| s.id.clone());
+            self.browse.lyric_view.scroll = None;
             return;
         }
-        if self.lyric_view.scroll.is_none() {
+        if self.browse.lyric_view.scroll.is_none() {
             return;
         }
         // 借用 lyric_view.scroll 前先把依赖 &self 的量算好,避免重叠借用。
@@ -150,7 +151,7 @@ impl AppState {
         );
         let cur_line = self.current_line_anchor();
         let glide_ticks = self.glide_ticks();
-        let Some(g) = self.lyric_view.scroll.as_mut() else {
+        let Some(g) = self.browse.lyric_view.scroll.as_mut() else {
             return;
         };
         g.glide.tick();
@@ -175,7 +176,7 @@ impl AppState {
         }
         if g.phase == GlidePhase::Reattach {
             if g.glide.settled() {
-                self.lyric_view.scroll = None;
+                self.browse.lyric_view.scroll = None;
             }
             return;
         }
@@ -211,13 +212,18 @@ impl AppState {
     /// (渲染跟随播放)。仅全屏沉浸态读取——紧凑面板恒附着,不吃手动偏移。
     /// 过冲段 / 弹回中锚点可短暂越出 `[0, 内容行数-1]`,渲染端沿行距外推画出回弹帧。
     pub(crate) fn manual_lyric_anchor_milli(&self) -> Option<i64> {
-        self.lyric_view.scroll.as_ref().map(LyricGlide::pos_milli)
+        self.browse
+            .lyric_view
+            .scroll
+            .as_ref()
+            .map(LyricGlide::pos_milli)
     }
 
     /// 脱离态当前锚定的原文行(渲染端给它半程高亮,标记手动浏览焦点);`None` = 附着态。
     /// 回锚平移期间目标即播放行,与 now-playing 高亮自然合一。
     pub(crate) fn manual_lyric_focus_line(&self) -> Option<usize> {
-        self.lyric_view
+        self.browse
+            .lyric_view
             .scroll
             .as_ref()
             .and_then(|g| usize::try_from(g.target_line()).ok())
@@ -234,7 +240,7 @@ impl AppState {
     /// 模拟过冲中帧供渲染快照)。
     #[cfg(test)]
     pub(crate) fn debug_scroll_lyrics_to_milli(&mut self, milli: i64) {
-        self.lyric_view.scroll = Some(LyricGlide {
+        self.browse.lyric_view.scroll = Some(LyricGlide {
             from_milli: milli,
             to_milli: milli,
             glide: Transition::expanding(1),
@@ -269,7 +275,7 @@ mod tests {
             .lyrics
             .insert(song.id.clone(), Lyrics { lines: original });
         s.playback.track = Some(song);
-        s.fullscreen.set(true);
+        s.browse.fullscreen.set(true);
         Ok(s)
     }
 
@@ -287,12 +293,16 @@ mod tests {
 
     /// 锚定目标行(整数 line index);附着态返回 `None`。
     fn target(s: &AppState) -> Option<i64> {
-        s.lyric_view.scroll.as_ref().map(LyricGlide::target_line)
+        s.browse
+            .lyric_view
+            .scroll
+            .as_ref()
+            .map(LyricGlide::target_line)
     }
 
     /// 平移目标(milli-line,过冲时越出内容界);附着态返回 `None`。
     fn to_milli(s: &AppState) -> Option<i64> {
-        s.lyric_view.scroll.as_ref().map(|g| g.to_milli)
+        s.browse.lyric_view.scroll.as_ref().map(|g| g.to_milli)
     }
 
     /// 步长随默认配置算(`behavior.page_scroll_rows` / `line_scroll_rows` 是手感旋钮,
@@ -303,10 +313,10 @@ mod tests {
         let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         let line = i64::try_from(*s.cfg.tui().behavior().line_scroll_rows())?;
         assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
-        s.fullscreen.set(false);
+        s.browse.fullscreen.set(false);
         s.scroll_lyrics(ScrollStep::PageDown);
-        assert!(s.lyric_view.scroll.is_none(), "非全屏不接管滚动");
-        s.fullscreen.set(true);
+        assert!(s.browse.lyric_view.scroll.is_none(), "非全屏不接管滚动");
+        s.browse.fullscreen.set(true);
         // position 0 → 当前播放行 0;翻页锚定到 0 + page。
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page), "全屏翻页锚定行 = 0 + page");
@@ -415,7 +425,7 @@ mod tests {
             s.tick_lyric_scroll();
         }
         assert!(
-            s.lyric_view.scroll.is_none(),
+            s.browse.lyric_view.scroll.is_none(),
             "过冲弹回后空闲超时仍正常回锚"
         );
         Ok(())
@@ -432,7 +442,7 @@ mod tests {
             s.tick_lyric_scroll();
         }
         assert!(
-            s.lyric_view.scroll.is_none(),
+            s.browse.lyric_view.scroll.is_none(),
             "synced 歌空闲超时平滑回锚后归附着"
         );
         Ok(())
@@ -460,7 +470,7 @@ mod tests {
         assert_eq!(target(&s), Some(page));
         s.playback.track = Some(feiyu_song());
         s.tick_lyric_scroll();
-        assert!(s.lyric_view.scroll.is_none(), "换歌清脱离态");
+        assert!(s.browse.lyric_view.scroll.is_none(), "换歌清脱离态");
         Ok(())
     }
 

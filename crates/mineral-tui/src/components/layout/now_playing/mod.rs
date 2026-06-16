@@ -16,14 +16,14 @@ pub mod track_detail;
 
 /// 渲染右栏。根据 [`AppState::view`] 选 playlist_detail / track_detail。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker, theme: &Theme) {
-    match state.view.current() {
+    match state.browse.view.current() {
         View::Playlists => match state.selected_playlist() {
             Some(p) => playlist_detail::draw(frame, area, p, state, picker, theme),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {
             let tracks = state.filtered_tracks();
-            match tracks.get(state.nav.sel_track) {
+            match tracks.get(state.browse.nav.sel_track) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
                     track_detail::draw(frame, area, sv, current_id, state, picker, theme);

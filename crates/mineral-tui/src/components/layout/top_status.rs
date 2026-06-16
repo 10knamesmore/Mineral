@@ -49,8 +49,8 @@ const UNFOCUS_BLEND_PERMILLE: u64 = 550;
 
 /// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
 fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    let active_pl = state.view == View::Playlists;
-    let active_lib = state.view == View::Library;
+    let active_pl = state.browse.view == View::Playlists;
+    let active_lib = state.browse.view == View::Library;
     let spans = vec![
         Span::styled(
             format!("▌ mineral v{}  ", env!("CARGO_PKG_VERSION")),

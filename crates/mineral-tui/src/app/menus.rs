@@ -19,14 +19,14 @@ use super::App;
 impl App {
     /// 打开上下文操作菜单(全屏态屏蔽;无可作用实体时静默)。
     pub(crate) fn open_action_menu(&mut self) {
-        if self.state.fullscreen.on() {
+        if self.state.browse.fullscreen.on() {
             return;
         }
         // Search 布局态的操作菜单(插播/下载等)随 §5 接入;此处不落浏览态实体,静默。
         if self.state.channel_search.active.on() {
             return;
         }
-        let built = match self.state.view.current() {
+        let built = match self.state.browse.view.current() {
             View::Library => self.selected_track_song().map(|song| {
                 let items = vec![
                     MenuItem::keyed(
@@ -58,7 +58,7 @@ impl App {
 
     /// 打开复制菜单(全屏态屏蔽;无可作用实体时静默)。
     pub(crate) fn open_copy_menu(&mut self) {
-        if self.state.fullscreen.on() {
+        if self.state.browse.fullscreen.on() {
             return;
         }
         // Search 布局态走自己的实体 + 锚点(浏览态布局/选中与搜索无关,不能借用)。
@@ -67,7 +67,7 @@ impl App {
             return;
         }
         let templates = self.state.cfg.tui().copy().templates();
-        let built = match self.state.view.current() {
+        let built = match self.state.browse.view.current() {
             View::Library => self.selected_track_song().map(|song| {
                 let url = self
                     .state
@@ -190,7 +190,7 @@ impl App {
     fn selected_track_song(&self) -> Option<Song> {
         self.state
             .filtered_tracks()
-            .get(self.state.nav.sel_track)
+            .get(self.state.browse.nav.sel_track)
             .map(|sv| sv.data.clone())
     }
 
@@ -198,8 +198,8 @@ impl App {
     fn library_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            self.state.nav.sel_track,
-            &self.state.nav.scroll_track,
+            self.state.browse.nav.sel_track,
+            &self.state.browse.nav.scroll_track,
             self.state.filtered_tracks().len(),
         )
     }
@@ -208,8 +208,8 @@ impl App {
     fn playlist_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            self.state.nav.sel_playlist,
-            &self.state.nav.scroll_playlist,
+            self.state.browse.nav.sel_playlist,
+            &self.state.browse.nav.scroll_playlist,
             self.state.filtered_playlists().len(),
         )
     }
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(app.overlays.len(), 0, "Playlists 视图暂无操作菜单");
 
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.fullscreen.set(true);
+        app.state.browse.fullscreen.set(true);
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 0, "全屏态屏蔽操作菜单");
         Ok(())
@@ -749,7 +749,7 @@ mod tests {
         let (mut app, _ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
         // 推满 Playlists → Library 的 sweep 过渡,否则左栏还画在起点视图。
         for _ in 0..40 {
-            app.state.view.tick();
+            app.state.browse.view.tick();
         }
         let mut terminal = draw_once(&app)?;
         press(&mut app, KeyCode::Char('o'));

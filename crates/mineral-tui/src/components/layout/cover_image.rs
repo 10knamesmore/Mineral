@@ -52,7 +52,7 @@ pub fn render_or_fallback(
     // 渲染。
     // 全局布局形变期一律让位程序化色块：fullscreen 或 channel-search 任一未 settle 都不上
     // 真图——根治 search 形变期的 kitty 重编码 churn 与图像穿透（detail 头图同此早退）。
-    if !state.fullscreen.settled() || !state.channel_search.active.settled() {
+    if !state.browse.fullscreen.settled() || !state.channel_search.active.settled() {
         return;
     }
     let Some(image) = state.covers.cache.get(url).cloned() else {

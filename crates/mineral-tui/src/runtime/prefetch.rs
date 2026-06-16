@@ -53,11 +53,11 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             out.push((source, u.clone()));
         }
     };
-    match state.view.current() {
+    match state.browse.view.current() {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
-            let sel = state.nav.sel_playlist;
+            let sel = state.browse.nav.sel_playlist;
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|p| {
                     p.data
@@ -78,7 +78,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
             // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
-            let sel = state.nav.sel_track;
+            let sel = state.browse.nav.sel_track;
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|sv| {
                     sv.data
@@ -137,7 +137,7 @@ fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind,
 /// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
 fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
-    if state.view != View::Playlists {
+    if state.browse.view != View::Playlists {
         return;
     }
     for id in collect_pending_tracks(state) {
@@ -158,12 +158,12 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
 /// 避免翻列表时为掠过的歌打满 API。`play_count_requested` 成败都记,不反复打同一首。
 /// 不预判来源能力 —— 不支持的源任务在 lane 里静默失败(debug),不把 channel 能力硬编码进 UI。
 fn request_play_count(state: &mut AppState, client: &dyn Client) {
-    if state.view != View::Library {
+    if state.browse.view != View::Library {
         return;
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.nav.last_sel_change.elapsed() < debounce {
+    if state.browse.nav.last_sel_change.elapsed() < debounce {
         return;
     }
     let Some(id) = selected_track_id(state) else {
@@ -193,7 +193,7 @@ fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetch
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.nav.last_sel_change.elapsed() < debounce {
+    if state.browse.nav.last_sel_change.elapsed() < debounce {
         return;
     }
     // 取出当前帧的拉取意图 + 封面并标记已派，随即释放 channel_search 借用。
@@ -236,7 +236,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.nav.last_sel_change.elapsed() < debounce {
+    if state.browse.nav.last_sel_change.elapsed() < debounce {
         return;
     }
     // 先取出 (source, url) 再释放 channel_search 借用，避免与 ensure_cover 的 &mut 冲突。
@@ -293,7 +293,7 @@ fn submit_detail_tasks(client: &dyn Client, fetch: DetailFetch) {
 fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
-        .get(state.nav.sel_track)
+        .get(state.browse.nav.sel_track)
         .map(|sv| sv.data.id.clone())
 }
 
@@ -301,7 +301,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let radius = *state.cfg.tui().prefetch().radius();
     let filtered = state.filtered_playlists();
-    let sel = state.nav.sel_playlist;
+    let sel = state.browse.nav.sel_playlist;
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn collects_playing_track_and_queue_neighbors() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.view.switch_to(View::Playlists);
+        state.browse.view.switch_to(View::Playlists);
         let queue = (0..10)
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.view.switch_to(View::Playlists);
+        state.browse.view.switch_to(View::Playlists);
         state.player.queue = Vec::new();
         state.playback.track = Some(song_with_cover(42)?);
 
@@ -421,7 +421,7 @@ mod tests {
             payload: SearchPayload::Albums(vec![album]),
         });
         // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
-        state.nav.last_sel_change = Instant::now()
+        state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
         Ok(state)

@@ -17,6 +17,7 @@ use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
+mod browse;
 mod channel_search;
 mod covers;
 mod detail;
@@ -27,15 +28,13 @@ mod player;
 mod search;
 mod view_switch;
 
+pub use browse::BrowsePage;
 pub use channel_search::{ChannelSearch, ChannelSearchState, PromptSegment, SearchFocus};
 pub use covers::CoverHub;
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
-pub use lyric_view::LyricView;
-pub use nav::NavState;
 pub use player::PlayerMirror;
 pub use search::SearchState;
-pub use view_switch::ViewSwitch;
 
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +61,20 @@ pub enum ActiveLayer {
     Fullscreen,
 
     /// 默认浏览态。
+    Browse,
+}
+
+/// 当前激活的页(浮层栈之下),供按键路由分流到对应 [`Page`](crate::app) 实现。
+///
+/// 只两页:`Search` 是模态(独立输入树),其余一律 `Browse`——fullscreen / `/` 过滤都是
+/// Browse 同一套导航面上的子模式,不另起页。比 [`ActiveLayer`] 粗一档(后者细分子模式供
+/// 渲染 / 上下文裁决)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageKind {
+    /// channel 搜索模态页。
+    Search,
+
+    /// 浏览页(含 fullscreen / deep-search 子模式)。
     Browse,
 }
 
@@ -110,15 +123,11 @@ mod lyric_glide;
 
 /// 应用顶层状态。
 pub struct AppState {
-    /// 左栏视图切换:Playlists ↔ Library 两态 + 横向过渡,由 [`ViewSwitch`] 合一。
-    /// `current()` 给路由 / 选中语义、`eased_in_out()` 给渲染;`== View::X` 直接可比。
-    pub view: ViewSwitch,
+    /// Browse 布局层的 view 状态:视图切换 + 全屏子模式 + 列表导航 + 歌词 + `/` 过滤,
+    /// 由 [`BrowsePage`] 聚合。与 model 数据(library / player)分离。
+    pub browse: BrowsePage,
 
-    /// 全屏播放态:逻辑开关(供按键路由)+ 进退场形变进度(供渲染),由 [`Toggle`] 合一。
-    /// `on()` = 全屏、`eased_in_out()` = 形变位置。
-    pub fullscreen: Toggle,
-
-    /// channel 搜索布局态:与 [`Self::fullscreen`] 同级的全屏级布局态(两者逻辑 `on` 互斥)。
+    /// channel 搜索布局态:与 [`BrowsePage::fullscreen`] 同级的全屏级布局态(两者逻辑 `on` 互斥)。
     /// 含布局开关 + 当前源 + 输入焦点 + 焦点环 + per-源会话。
     pub channel_search: ChannelSearchState,
 
@@ -130,18 +139,9 @@ pub struct AppState {
     /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
     pub library: LibraryData,
 
-    /// 歌词面板显示态(副歌词档 + 全屏手动滚动脱离态)。
-    pub lyric_view: LyricView,
-
     /// 脚本下发的 session 级旋钮覆盖(`Event::UiOverride` 落地;渲染处
     /// 有覆盖读覆盖、无覆盖读配置)。
     pub ui_overrides: crate::runtime::ui_override::UiOverrides,
-
-    /// 列表浏览态(两个列表的光标 + 视口滚动、跨歌单位置记忆、选中变化时刻)。
-    pub nav: NavState,
-
-    /// 搜索状态(查询串 / 输入态 + 模糊匹配基建)。
-    pub search: SearchState,
 
     /// server 权威播放态镜像(在播歌 / 队列 / 洗牌备份 / 同步版本号)。
     pub player: PlayerMirror,
@@ -189,18 +189,14 @@ impl AppState {
         let anim = cfg.tui().animation();
         let tick_ms = *anim.frame_tick_ms();
         Self {
-            view: ViewSwitch::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
-            fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            browse: BrowsePage::new(anim),
             channel_search: ChannelSearchState::new(
                 ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
                 ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
             ),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
-            lyric_view: LyricView::new(),
             ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
-            nav: NavState::new(),
-            search: SearchState::new(),
             player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
@@ -231,17 +227,27 @@ impl AppState {
     /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。
     /// 全局逃生口 / 单键快捷在此让位字符输入——输入态的按键是文本,不是命令。
     pub(crate) fn in_text_input(&self) -> bool {
-        self.search.typing
+        self.browse.search.typing
             || (self.channel_search.active.on() && self.channel_search.focus == SearchFocus::Prompt)
+    }
+
+    /// 当前激活的页(见 [`PageKind`]):Search 模态优先,否则归 Browse。供 `handle_key` 顶层
+    /// 路由分流到对应 Page 实现;子模式细分仍读 [`Self::active_layer`]。
+    pub(crate) fn page_kind(&self) -> PageKind {
+        if self.channel_search.active.on() {
+            PageKind::Search
+        } else {
+            PageKind::Browse
+        }
     }
 
     /// 当前活跃的布局层(见 [`ActiveLayer`])。浮层栈在其之上,由调用方单独裁决。
     pub(crate) fn active_layer(&self) -> ActiveLayer {
         if self.channel_search.active.on() {
             ActiveLayer::ChannelSearch
-        } else if self.search.typing {
+        } else if self.browse.search.typing {
             ActiveLayer::DeepSearch
-        } else if self.fullscreen.on() {
+        } else if self.browse.fullscreen.on() {
             ActiveLayer::Fullscreen
         } else {
             ActiveLayer::Browse
@@ -250,7 +256,7 @@ impl AppState {
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
     pub fn is_scrolling(&self) -> bool {
-        self.nav.last_sel_change.elapsed()
+        self.browse.nav.last_sel_change.elapsed()
             < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 
@@ -273,6 +279,7 @@ impl AppState {
     ///   - `id`: 刚落 cache 的歌单
     fn apply_pending_restore(&mut self, id: &PlaylistId) {
         if self
+            .browse
             .nav
             .pending_track_restore
             .as_ref()
@@ -280,23 +287,24 @@ impl AppState {
         {
             return;
         }
-        let Some(pending) = self.nav.pending_track_restore.take() else {
+        let Some(pending) = self.browse.nav.pending_track_restore.take() else {
             return;
         };
-        let still_there = self.view == View::Library
+        let still_there = self.browse.view == View::Library
             && self
                 .selected_playlist()
                 .is_some_and(|p| p.data.id == pending.playlist);
-        if !still_there || self.nav.sel_track != 0 {
+        if !still_there || self.browse.nav.sel_track != 0 {
             return;
         }
         let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
             return;
         };
         let sel = pending.pos.resolve(tracks);
-        self.nav.sel_track = sel;
+        self.browse.nav.sel_track = sel;
         // 与 activate 的即时恢复同语义:按屏上相对行还原视口。
-        self.nav
+        self.browse
+            .nav
             .scroll_track
             .snap_to(sel.saturating_sub(pending.pos.screen_row));
     }
@@ -375,8 +383,8 @@ impl AppState {
                 self.library
                     .playlists
                     .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
-                if self.nav.sel_playlist >= self.library.playlists.len() {
-                    self.nav.sel_playlist = 0;
+                if self.browse.nav.sel_playlist >= self.library.playlists.len() {
+                    self.browse.nav.sel_playlist = 0;
                 }
             }
             TaskEvent::PlaylistDetailFetched { id, playlist } => {
@@ -490,7 +498,7 @@ impl AppState {
     /// 当前生效的副歌词档(当前歌确有该档数据才算生效;`None` 档 / 该档无数据返回 `None`)。
     pub fn active_lyric_extra(&self) -> Option<LyricExtra> {
         let l = self.current_lyrics_set()?;
-        match self.lyric_view.extra {
+        match self.browse.lyric_view.extra {
             LyricExtra::None => None,
             LyricExtra::Translation if l.has_translation() => Some(LyricExtra::Translation),
             LyricExtra::Romanization if l.has_romanization() => Some(LyricExtra::Romanization),
@@ -507,7 +515,7 @@ impl AppState {
         let has_roma = self
             .current_lyrics_set()
             .is_some_and(Lyrics::has_romanization);
-        self.lyric_view.extra = match self.lyric_view.extra {
+        self.browse.lyric_view.extra = match self.browse.lyric_view.extra {
             LyricExtra::None if has_trans => LyricExtra::Translation,
             LyricExtra::None if has_roma => LyricExtra::Romanization,
             LyricExtra::None => LyricExtra::None,
@@ -517,32 +525,33 @@ impl AppState {
         };
     }
 
+    /// 构造 Browse 视图逻辑所需的只读模型借用(library + cfg);供下方 forwarder 调 BrowsePage。
+    fn browse_model(&self) -> browse::BrowseModel<'_> {
+        browse::BrowseModel {
+            library: &self.library,
+            cfg: &self.cfg,
+        }
+    }
+
     /// 返回当前选中歌单的引用。
     ///
-    /// `nav.sel_playlist` 的语义随 [`Self::view`] 切换:
+    /// `nav.sel_playlist` 的语义随 [`BrowsePage::view`] 切换:
     /// - Playlists 视图:filtered 列表的索引,过滤词作用于 playlist 名,渲染、导航、
     ///   selected_playlist 都对齐 filtered。
     /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
     ///   此时 search.query 作用于 tracks,跟 playlists 过滤无关。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
-        match self.view.current() {
-            View::Playlists => self
-                .filtered_playlists()
-                .get(self.nav.sel_playlist)
-                .copied(),
-            View::Library => self.library.playlists.get(self.nav.sel_playlist),
-        }
+        self.browse.selected_playlist(self.browse_model())
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
     pub fn current_tracks_slot(&self) -> Option<&Vec<SongView>> {
-        self.selected_playlist()
-            .and_then(|p| self.library.tracks.get(&p.data.id))
+        self.browse.current_tracks_slot(self.browse_model())
     }
 
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
     pub fn current_tracks(&self) -> Vec<SongView> {
-        self.current_tracks_slot().cloned().unwrap_or_default()
+        self.browse.current_tracks(self.browse_model())
     }
 
     /// 给定歌单的总时长(ms);槽位未到位时返回 0。
@@ -565,34 +574,7 @@ impl AppState {
     /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
     /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
-        if self.search.query().is_empty() {
-            return self.library.playlists.iter().collect();
-        }
-        self.search.sync_query();
-        crate::runtime::deep_search::ensure(self);
-        let deep = self.search.deep_cache.borrow();
-        let mut scored: Vec<(f64, &PlaylistView)> = self
-            .library
-            .playlists
-            .iter()
-            .filter_map(|p| {
-                let name = self
-                    .search
-                    .match_for(&p.data.name)
-                    .map(|m| f64::from(m.score));
-                let inner = deep.score_of(&p.data.id);
-                let best = match (name, inner) {
-                    (Some(n), Some(i)) => n.max(i),
-                    (Some(n), None) => n,
-                    (None, Some(i)) => i,
-                    (None, None) => return None,
-                };
-                Some((best, p))
-            })
-            .collect();
-        // total_cmp 全序 + sort_by 稳定:同分项保持原序。
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        scored.into_iter().map(|(_, p)| p).collect()
+        self.browse.filtered_playlists(self.browse_model())
     }
 
     /// 某歌单的深度命中展示载荷(克隆一份给渲染)。空 query / 无命中返回 `None`。
@@ -600,48 +582,20 @@ impl AppState {
     /// 调用前提:本帧已有人调过 [`Self::filtered_playlists`](渲染路径必然满足),
     /// 缓存已就绪;这里不再 ensure,避免渲染端反复触发指纹比较。
     pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<crate::runtime::deep_search::DeepHit> {
-        if self.search.query().is_empty() {
-            return None;
-        }
-        self.search.deep_cache.borrow().hit_of(id).cloned()
+        self.browse.deep_hit_for(id)
     }
 
     /// 当前过滤结果里是否存在任何深度命中。渲染端据此决定 match 列要不要占位——
     /// 全员只命中歌单名时不挤压 name 列宽。调用前提同 [`Self::deep_hit_for`]。
     pub fn has_deep_hits(&self) -> bool {
-        !self.search.query().is_empty() && self.search.deep_cache.borrow().has_hits()
+        self.browse.has_deep_hits()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。
     ///
     /// 命中规则:歌名 / 任一艺人 / 专辑名取最高分作为该曲分数。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
-        let tracks = self.current_tracks();
-        if self.search.query().is_empty() {
-            return tracks;
-        }
-        self.search.sync_query();
-        let mut scored: Vec<(u32, SongView)> = tracks
-            .into_iter()
-            .filter_map(|sv| {
-                let name = self.search.match_for(&sv.data.name).map(|m| m.score);
-                let artist = sv
-                    .data
-                    .artists
-                    .iter()
-                    .filter_map(|a| self.search.match_for(&a.name).map(|m| m.score))
-                    .max();
-                let album = sv
-                    .data
-                    .album
-                    .as_ref()
-                    .and_then(|a| self.search.match_for(&a.name).map(|m| m.score));
-                let best = name.into_iter().chain(artist).chain(album).max()?;
-                Some((best, sv))
-            })
-            .collect();
-        scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
-        scored.into_iter().map(|(_, sv)| sv).collect()
+        self.browse.filtered_tracks(self.browse_model())
     }
 }
 
@@ -696,7 +650,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.search.set_query("cry");
+        s.browse.search.set_query("cry");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -714,7 +668,7 @@ mod tests {
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search.set_query("chunying");
+        s.browse.search.set_query("chunying");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -732,7 +686,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search.set_query("my");
+        s.browse.search.set_query("my");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -746,8 +700,9 @@ mod tests {
     #[test]
     fn match_for_returns_original_indices() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.search.set_query("cry");
+        s.browse.search.set_query("cry");
         let m = s
+            .browse
             .search
             .match_for("春日影")
             .ok_or_else(|| color_eyre::eyre::eyre!("cry 应命中春日影"))?;
@@ -759,7 +714,7 @@ mod tests {
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
-        assert!(s.search.match_for("春日影").is_none());
+        assert!(s.browse.search.match_for("春日影").is_none());
         Ok(())
     }
 
@@ -775,16 +730,16 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view.switch_to(View::Library);
-        s.nav.sel_playlist = 0; // p1
-        s.nav.sel_track = 0;
+        s.browse.view.switch_to(View::Library);
+        s.browse.nav.sel_playlist = 0; // p1
+        s.browse.nav.sel_track = 0;
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
             .get(2)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 3 首"))?;
-        s.nav.pending_track_restore = Some(PendingRestore {
+        s.browse.nav.pending_track_restore = Some(PendingRestore {
             playlist: pid.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -801,8 +756,11 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
-        assert_eq!(s.nav.sel_track, 2, "曲目到达后应补落位到记忆行");
-        assert!(s.nav.pending_track_restore.is_none(), "pending 应被消费");
+        assert_eq!(s.browse.nav.sel_track, 2, "曲目到达后应补落位到记忆行");
+        assert!(
+            s.browse.nav.pending_track_restore.is_none(),
+            "pending 应被消费"
+        );
         Ok(())
     }
 
@@ -817,16 +775,16 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view.switch_to(View::Library);
-        s.nav.sel_playlist = 0;
-        s.nav.sel_track = 1; // 已离开进入时的第 0 行
+        s.browse.view.switch_to(View::Library);
+        s.browse.nav.sel_playlist = 0;
+        s.browse.nav.sel_track = 1; // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
             .get(3)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 4 首"))?;
-        s.nav.pending_track_restore = Some(PendingRestore {
+        s.browse.nav.pending_track_restore = Some(PendingRestore {
             playlist: pid.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -843,8 +801,11 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
-        assert_eq!(s.nav.sel_track, 1, "用户已动光标,不得抢落位");
-        assert!(s.nav.pending_track_restore.is_none(), "pending 仍应被消费");
+        assert_eq!(s.browse.nav.sel_track, 1, "用户已动光标,不得抢落位");
+        assert!(
+            s.browse.nav.pending_track_restore.is_none(),
+            "pending 仍应被消费"
+        );
         Ok(())
     }
 
@@ -859,9 +820,9 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.view.switch_to(View::Library);
-        s.nav.sel_playlist = 0;
-        s.nav.sel_track = 0;
+        s.browse.view.switch_to(View::Library);
+        s.browse.nav.sel_playlist = 0;
+        s.browse.nav.sel_track = 0;
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
         let tracks = endserenading(5);
@@ -869,7 +830,7 @@ mod tests {
             .first()
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 为空"))?;
-        s.nav.pending_track_restore = Some(PendingRestore {
+        s.browse.nav.pending_track_restore = Some(PendingRestore {
             playlist: target.clone(),
             pos: TrackPos {
                 song_id: anchor,
@@ -889,9 +850,10 @@ mod tests {
             id: other,
             playlist,
         });
-        assert_eq!(s.nav.sel_track, 0);
+        assert_eq!(s.browse.nav.sel_track, 0);
         assert!(
-            s.nav
+            s.browse
+                .nav
                 .pending_track_restore
                 .as_ref()
                 .is_some_and(|p| p.playlist == target),

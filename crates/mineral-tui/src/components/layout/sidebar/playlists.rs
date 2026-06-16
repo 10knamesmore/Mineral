@@ -18,7 +18,7 @@ use crate::runtime::view_model::PlaylistView;
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
-    let pos = position_label(state.nav.sel_playlist, total);
+    let pos = position_label(state.browse.nav.sel_playlist, total);
 
     let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
     title_spans.extend(search_badge(state, theme));
@@ -33,14 +33,14 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
-    if state.library.playlists.is_empty() && state.search.query().is_empty() {
+    if state.library.playlists.is_empty() && state.browse.search.query().is_empty() {
         paint_empty_state(buf, area, state, theme, block);
         return;
     }
 
     // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
     // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
-    if total == 0 && !state.search.query().is_empty() {
+    if total == 0 && !state.browse.search.query().is_empty() {
         paint_no_match(buf, area, state, theme, block);
         return;
     }
@@ -92,21 +92,25 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
     let viewport = usize::from(area.height.saturating_sub(3));
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,理由同 library。
-    let offset = if state.fullscreen.at_min() {
-        state.nav.scroll_playlist.render_offset(
-            state.nav.sel_playlist,
+    let offset = if state.browse.fullscreen.at_min() {
+        state.browse.nav.scroll_playlist.render_offset(
+            state.browse.nav.sel_playlist,
             total,
             viewport,
             state.scrolloff(),
             state.list_glide_ticks(),
         )
     } else {
-        state.nav.scroll_playlist.frozen_offset(total, viewport)
+        state
+            .browse
+            .nav
+            .scroll_playlist
+            .frozen_offset(total, viewport)
     };
     let mut table_state = TableState::default()
         .with_offset(offset)
         .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.nav.sel_playlist,
+            state.browse.nav.sel_playlist,
             offset,
             viewport,
         )));
@@ -136,7 +140,7 @@ fn build_row<'a>(
     let count_label = format!("{}", p.data.track_count);
     let src = p.data.source();
 
-    let name_hits = state.search.match_for(&p.data.name).map(|m| m.hits);
+    let name_hits = state.browse.search.match_for(&p.data.name).map(|m| m.hits);
     let mut cells = vec![Cell::from(Line::from(highlight_indices(
         &p.data.name,
         name_hits.as_deref().unwrap_or(&[]),
@@ -292,8 +296,8 @@ mod tests {
     fn playlists_search_active_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search.typing = true;
-        state.search.set_query("春日影");
+        state.browse.search.typing = true;
+        state.browse.search.set_query("春日影");
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -312,7 +316,7 @@ mod tests {
             crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
         ];
-        state.search.set_query("cry");
+        state.browse.search.set_query("cry");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -337,7 +341,7 @@ mod tests {
             SourceKind::NETEASE,
             1,
         )];
-        state.search.set_query("chunying");
+        state.browse.search.set_query("chunying");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -370,7 +374,7 @@ mod tests {
             }],
         );
         state.library.tracks_generation = 1;
-        state.search.set_query("春日");
+        state.browse.search.set_query("春日");
 
         let mut t = Terminal::new(TestBackend::new(64, 12))?;
         t.draw(|f| {
@@ -388,7 +392,7 @@ mod tests {
     #[test]
     fn playlists_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search.set_query("zzz");
+        state.browse.search.set_query("zzz");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -403,7 +407,7 @@ mod tests {
     #[test]
     fn playlists_search_indexing_snapshot() -> color_eyre::Result<()> {
         let mut state = crate::test_support::state_with_playlists()?;
-        state.search.set_query("zzz");
+        state.browse.search.set_query("zzz");
         state
             .tasks_snapshot
             .by_kind

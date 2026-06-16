@@ -27,12 +27,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let normal = compute(frame.area(), layout_cfg);
 
     // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
-    if !app.state.fullscreen.at_min() {
+    if !app.state.browse.fullscreen.at_min() {
         let full = compute_fullscreen(frame.area(), layout_cfg);
-        let areas = if app.state.fullscreen.at_max() {
+        let areas = if app.state.browse.fullscreen.at_max() {
             full
         } else {
-            transform::morph_areas(&normal, &full, app.state.fullscreen.eased_in_out())
+            transform::morph_areas(&normal, &full, app.state.browse.fullscreen.eased_in_out())
         };
         paint_fullscreen(frame, &areas, app);
     } else if !app.state.channel_search.active.at_min() {
@@ -59,7 +59,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             frame,
             normal.top_status,
             theme,
-            app.state.fullscreen.eased_in_out(),
+            app.state.browse.fullscreen.eased_in_out(),
             &app.notice_hint,
         );
         app.overlays.render(frame, frame.area(), &app.state, theme);
@@ -223,7 +223,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .map_or_else(|| t.name.clone(), |a| a.name.clone())
         },
     );
-    if app.state.fullscreen.at_max() {
+    if app.state.browse.fullscreen.at_max() {
         cover_image::render_or_fallback(
             frame,
             area,
@@ -318,7 +318,7 @@ mod tests {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state.covers.cache.insert(url.clone(), Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发一次编码。
-        app.state.nav.last_sel_change = Instant::now()
+        app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
 
@@ -331,10 +331,13 @@ mod tests {
 
         // 进入全屏,推进若干形变帧(均 `!settled`)。每帧后 pending 必须与稳态快照一致 ——
         // 证明 now_playing 消失面板没有在形变中按漂移 dims 追加派发。
-        app.state.fullscreen.set(true);
+        app.state.browse.fullscreen.set(true);
         for _ in 0..5 {
-            app.state.fullscreen.tick();
-            assert!(!app.state.fullscreen.settled(), "测试需停留在形变中途");
+            app.state.browse.fullscreen.tick();
+            assert!(
+                !app.state.browse.fullscreen.settled(),
+                "测试需停留在形变中途"
+            );
             t.draw(|f| super::draw(f, &app))?;
             assert_eq!(
                 *app.state.covers.encode_pending.borrow(),
@@ -444,7 +447,7 @@ mod tests {
         let mut fs = Toggle::new(1);
         fs.set(true);
         fs.tick();
-        app.state.fullscreen = fs;
+        app.state.browse.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -946,7 +949,7 @@ mod tests {
         for _ in 0..9 {
             anim.tick();
         }
-        app.state.fullscreen = anim;
+        app.state.browse.fullscreen = anim;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;

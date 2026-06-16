@@ -61,7 +61,7 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
 /// 当前在播标记),view = Library,选中第 1 首。
 pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     let mut s = state_with_playlists()?;
-    s.view.switch_to(View::Library);
+    s.browse.view.switch_to(View::Library);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
     let views = tracks
@@ -77,7 +77,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     s.library
         .tracks
         .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
-    s.nav.sel_track = 1;
+    s.browse.nav.sel_track = 1;
     Ok(s)
 }
 
@@ -103,7 +103,7 @@ pub(crate) fn state_with_lyrics(
     s.library.lyrics.insert(track.id.clone(), lyrics);
     s.playback.track = Some(track);
     s.playback.position_ms = 62_000;
-    s.lyric_view.extra = extra;
+    s.browse.lyric_view.extra = extra;
     Ok(s)
 }
 
@@ -129,7 +129,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
         SourceKind::NETEASE,
         10,
     )];
-    s.view.switch_to(View::Library);
+    s.browse.view.switch_to(View::Library);
     let tracks = chinese_football(4);
     let views = tracks
         .iter()
@@ -152,7 +152,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
 pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     s.library.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
-    s.view.switch_to(View::Library);
+    s.browse.view.switch_to(View::Library);
 
     let make = |name: &str, artist: &str, album: &str| {
         with_album(
@@ -360,7 +360,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
-    app.state.view.switch_to(View::Playlists);
+    app.state.browse.view.switch_to(View::Playlists);
     Ok((app, submitted))
 }
 
@@ -386,9 +386,9 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
         })
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
-    app.state.view.switch_to(View::Library);
-    app.state.nav.sel_playlist = 0;
-    app.state.nav.sel_track = sel_track;
+    app.state.browse.view.switch_to(View::Library);
+    app.state.browse.nav.sel_playlist = 0;
+    app.state.browse.nav.sel_track = sel_track;
     Ok(app)
 }
 
@@ -420,8 +420,8 @@ pub(crate) fn app_with_library_probed(
         })
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
-    app.state.view.switch_to(View::Library);
-    app.state.nav.sel_track = sel_track;
+    app.state.browse.view.switch_to(View::Library);
+    app.state.browse.nav.sel_track = sel_track;
     Ok((app, queue_ops))
 }
 
@@ -442,7 +442,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
         })
         .collect::<Vec<SongView>>();
     app.state.library.tracks.insert(pid, views);
-    app.state.nav.sel_track = sel_track;
+    app.state.browse.nav.sel_track = sel_track;
     Ok(app)
 }
 
@@ -463,7 +463,7 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     let mut fs = Toggle::new(1);
     fs.set(true);
     fs.tick();
-    app.state.fullscreen = fs;
+    app.state.browse.fullscreen = fs;
     Ok(app)
 }
 

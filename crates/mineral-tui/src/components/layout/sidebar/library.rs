@@ -71,7 +71,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
     let placeholder = slot_placeholder(state, theme);
-    let pos = position_label(state.nav.sel_track, tracks.len());
+    let pos = position_label(state.browse.nav.sel_track, tracks.len());
 
     let mut title_spans = vec![Span::styled(
         format!(" {title} "),
@@ -124,21 +124,25 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let viewport = usize::from(area.height.saturating_sub(3));
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示,收缩中的 viewport 不得改写
     // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
-    let offset = if state.fullscreen.at_min() {
-        state.nav.scroll_track.render_offset(
-            state.nav.sel_track,
+    let offset = if state.browse.fullscreen.at_min() {
+        state.browse.nav.scroll_track.render_offset(
+            state.browse.nav.sel_track,
             tracks.len(),
             viewport,
             state.scrolloff(),
             state.list_glide_ticks(),
         )
     } else {
-        state.nav.scroll_track.frozen_offset(tracks.len(), viewport)
+        state
+            .browse
+            .nav
+            .scroll_track
+            .frozen_offset(tracks.len(), viewport)
     };
     let mut table_state = TableState::default()
         .with_offset(offset)
         .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.nav.sel_track,
+            state.browse.nav.sel_track,
             offset,
             viewport,
         )));
@@ -174,7 +178,7 @@ fn build_row<'a>(
         Cell::from(format!("{idx}"))
     };
 
-    let name_hits = state.search.match_for(&sv.data.name).map(|m| m.hits);
+    let name_hits = state.browse.search.match_for(&sv.data.name).map(|m| m.hits);
     let title_cell = Cell::from(Line::from(highlight_indices(
         &sv.data.name,
         name_hits.as_deref().unwrap_or(&[]),
@@ -198,8 +202,8 @@ fn build_row<'a>(
             .as_ref()
             .map(|a| a.name.clone())
             .unwrap_or_default();
-        let artist_hits = state.search.match_for(&artist).map(|m| m.hits);
-        let album_hits = state.search.match_for(&album).map(|m| m.hits);
+        let artist_hits = state.browse.search.match_for(&artist).map(|m| m.hits);
+        let album_hits = state.browse.search.match_for(&album).map(|m| m.hits);
         cells.push(Cell::from(Line::from(highlight_indices(
             &artist,
             artist_hits.as_deref().unwrap_or(&[]),
@@ -251,7 +255,7 @@ fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
             .selected_playlist()
             .map(|_| placeholder_row("loading…"));
     }
-    if !state.search.query().is_empty() && state.filtered_tracks().is_empty() {
+    if !state.browse.search.query().is_empty() && state.filtered_tracks().is_empty() {
         return Some(placeholder_row("无匹配"));
     }
     None
@@ -295,7 +299,7 @@ mod tests {
         let bottom_first = row(&t, 2);
         // 安全区 [offset+3, offset+9-1-3] = [24, 26]:逐行上移视口不滚。
         for sel in (24..=28).rev() {
-            app.state.nav.sel_track = sel;
+            app.state.browse.nav.sel_track = sel;
             draw_lib(&mut t, &app.state)?;
             assert_eq!(
                 row(&t, 2),
@@ -304,7 +308,7 @@ mod tests {
             );
         }
         // 越过上安全边界:视口开始上滚,首行变化。
-        app.state.nav.sel_track = 23;
+        app.state.browse.nav.sel_track = 23;
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
@@ -324,31 +328,31 @@ mod tests {
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
-        let before = app.state.nav.scroll_track.target_rows();
+        let before = app.state.browse.nav.scroll_track.target_rows();
         assert!(before > 0, "前置:视口已滚到深处");
 
         // 进入 morph(fullscreen 离开 at_min),面板高度逐帧收缩地渲染。
         let mut fs = Toggle::new(8);
         fs.set(true);
         fs.tick();
-        app.state.fullscreen = fs;
+        app.state.browse.fullscreen = fs;
         for h in (2..20_u16).rev() {
             let mut small = Terminal::new(TestBackend::new(60, h))?;
             draw_lib(&mut small, &app.state)?;
         }
         assert_eq!(
-            app.state.nav.scroll_track.target_rows(),
+            app.state.browse.nav.scroll_track.target_rows(),
             before,
             "morph 期间滚动目标不得被瞬态 viewport 改写"
         );
 
         // 回浏览态:渲染收敛后仍在原 offset(无重定目标 = 无平移)。
-        app.state.fullscreen = Toggle::new(8);
+        app.state.browse.fullscreen = Toggle::new(8);
         for _ in 0..10 {
             draw_lib(&mut t, &app.state)?;
         }
         assert_eq!(
-            app.state.nav.scroll_track.target_rows(),
+            app.state.browse.nav.scroll_track.target_rows(),
             before,
             "回浏览态视口首行应与进全屏前一致"
         );
@@ -365,7 +369,7 @@ mod tests {
         let top_first = row(&t, 2);
 
         // G 跳末行:首帧视口应离开顶部但未到底(缓动中段)。
-        app.state.nav.sel_track = 29;
+        app.state.browse.nav.sel_track = 29;
         draw_lib(&mut t, &app.state)?;
         let mid = row(&t, 2);
         assert_ne!(mid, top_first, "G 跳转首帧视口应已起步");
@@ -376,7 +380,7 @@ mod tests {
         assert_ne!(mid, bottom_first, "G 跳转首帧不应一步到底(应是缓动中段)");
 
         // gg 跳回首行:同样多帧缓动收敛回顶。
-        app.state.nav.sel_track = 0;
+        app.state.browse.nav.sel_track = 0;
         draw_lib(&mut t, &app.state)?;
         let mid_back = row(&t, 2);
         assert_ne!(mid_back, bottom_first, "gg 跳转首帧视口应已起步");
@@ -396,7 +400,7 @@ mod tests {
         draw_lib(&mut t, &app.state)?;
         // 下移到 10:offset 收敛到 10+3+1-9 = 5,选中行落在 y = 2 + (10-5) = 7,
         // 距 body 末行(y=10)恰 3 行。
-        app.state.nav.sel_track = 10;
+        app.state.browse.nav.sel_track = 10;
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
@@ -426,7 +430,7 @@ mod tests {
     fn library_loading_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.view.switch_to(View::Library);
+        state.browse.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &Theme::default());
@@ -440,7 +444,7 @@ mod tests {
     fn library_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.search.set_query("zzz");
+        state.browse.search.set_query("zzz");
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
         Ok(())

@@ -197,7 +197,7 @@ pub(crate) fn render_overlay<O: Overlay>(
     let c = overlay.chrome();
     // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
     // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
-    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.fullscreen.on() {
+    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.browse.fullscreen.on() {
         Dock::Right
     } else {
         Dock::Left
