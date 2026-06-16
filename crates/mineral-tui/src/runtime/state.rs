@@ -47,6 +47,24 @@ pub enum View {
     Library,
 }
 
+/// 当前活跃的布局层(浮层栈之下)。`handle_key` 路由与 `collect_key_context` 共用
+/// [`AppState::active_layer`] 算它——「在哪层」只一处真相,杜绝两处漂移。浮层栈叠在其上,
+/// 由调用方各自裁决(路由对所有浮层一视同仁;脚本 ctx 只认 queue 浮层光标)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveLayer {
+    /// channel 搜索布局态。
+    ChannelSearch,
+
+    /// 本地 `/` 模糊搜索输入态。
+    DeepSearch,
+
+    /// 全屏播放态。
+    Fullscreen,
+
+    /// 默认浏览态。
+    Browse,
+}
+
 /// 歌词面板的副歌词显示档(翻译 / 罗马音),由 `t` 键循环切换。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LyricExtra {
@@ -215,6 +233,19 @@ impl AppState {
     pub(crate) fn in_text_input(&self) -> bool {
         self.search.typing
             || (self.channel_search.active.on() && self.channel_search.focus == SearchFocus::Prompt)
+    }
+
+    /// 当前活跃的布局层(见 [`ActiveLayer`])。浮层栈在其之上,由调用方单独裁决。
+    pub(crate) fn active_layer(&self) -> ActiveLayer {
+        if self.channel_search.active.on() {
+            ActiveLayer::ChannelSearch
+        } else if self.search.typing {
+            ActiveLayer::DeepSearch
+        } else if self.fullscreen.on() {
+            ActiveLayer::Fullscreen
+        } else {
+            ActiveLayer::Browse
+        }
     }
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。

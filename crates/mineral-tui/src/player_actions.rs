@@ -9,7 +9,7 @@ use crate::app::App;
 use crate::components::popup::MenuAction;
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::ScriptSlot;
-use crate::runtime::state::View;
+use crate::runtime::state::{ActiveLayer, View};
 
 /// 复制成功 toast 里展示的内容上限(字符);超出截断加省略号,防长模板把顶栏挤爆。
 const COPY_TOAST_MAX_CHARS: usize = 48;
@@ -32,7 +32,8 @@ impl App {
 
     /// 采集按键瞬间的上下文快照(脚本动作的 `ctx` 实参)。
     ///
-    /// view 判定优先级对齐 `handle_key` 的吃键顺序:队列浮层 > 搜索态 > 全屏 >
+    /// view 判定与 `handle_key` 路由共用 `active_layer`(队列浮层光标特例除外),优先级
+    /// 队列浮层 > 搜索 > 全屏 >
     /// 主视图映射(`Playlists` → Playlists,`Library` → Tracks)。选中歌只在
     /// 「有歌列表光标」的视图采(Library 列表 / 队列浮层光标),其余为 `None`;
     /// `selected_loved` 随选中歌给(♥ 装饰缓存),`search_query` 空词为 `None`。
@@ -52,6 +53,7 @@ impl App {
         // Library 列表取选中行(SongView 已装饰)。
         let (view, selected_song, selected_loved) =
             if let Some(cursor) = self.overlays.active_queue_cursor() {
+                // 队列浮层:唯一带脚本选中的浮层(取光标条目)。
                 let song = self.state.player.queue.get(cursor).cloned();
                 let loved = song.as_ref().map(|s| {
                     self.state
@@ -61,22 +63,25 @@ impl App {
                         .is_some_and(|ids| ids.contains(&s.id))
                 });
                 (ViewKind::Queue, song, loved)
-            } else if self.state.channel_search.active.on() || self.state.search.typing {
-                (ViewKind::Search, None, None)
-            } else if self.state.fullscreen.on() {
-                (ViewKind::Fullscreen, None, None)
             } else {
-                match self.state.view.current() {
-                    View::Playlists => (ViewKind::Playlists, None, None),
-                    View::Library => {
-                        let sel = self
-                            .state
-                            .filtered_tracks()
-                            .into_iter()
-                            .nth(self.state.nav.sel_track);
-                        let loved = sel.as_ref().map(|sv| sv.loved);
-                        (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
+                // 其余浮层对脚本 ctx 透明,看穿到下层布局层(与 handle_key 路由共用 active_layer)。
+                match self.state.active_layer() {
+                    ActiveLayer::ChannelSearch | ActiveLayer::DeepSearch => {
+                        (ViewKind::Search, None, None)
                     }
+                    ActiveLayer::Fullscreen => (ViewKind::Fullscreen, None, None),
+                    ActiveLayer::Browse => match self.state.view.current() {
+                        View::Playlists => (ViewKind::Playlists, None, None),
+                        View::Library => {
+                            let sel = self
+                                .state
+                                .filtered_tracks()
+                                .into_iter()
+                                .nth(self.state.nav.sel_track);
+                            let loved = sel.as_ref().map(|sv| sv.loved);
+                            (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
+                        }
+                    },
                 }
             };
         KeyContext::builder()
@@ -336,6 +341,23 @@ mod tests {
             *ctx.view(),
             ViewKind::Search,
             "channel 搜索态应报 Search,而非看穿到下层主视图"
+        );
+        Ok(())
+    }
+
+    /// 非 queue 浮层(确认框)对脚本 ctx 透明:看穿到下层布局层。channel 搜索态上叠确认框,
+    /// ctx 仍报 Search(回归:active_layer 重构不得改这条透明语义)。
+    #[test]
+    fn keyctx_non_queue_overlay_is_transparent() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
+        app.state.channel_search.active.set(true);
+        app.overlays
+            .push(crate::components::popup::OverlayKind::confirm());
+        let ctx = app.collect_key_context();
+        assert_eq!(
+            *ctx.view(),
+            ViewKind::Search,
+            "非 queue 浮层透明,看穿到下层 channel 搜索 = Search"
         );
         Ok(())
     }

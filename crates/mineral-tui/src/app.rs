@@ -25,7 +25,7 @@ use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
-use crate::runtime::state::AppState;
+use crate::runtime::state::{ActiveLayer, AppState};
 use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
@@ -554,23 +554,19 @@ impl App {
             return;
         }
 
-        // —— 以下:无活跃浮层 ——
-        // Search 布局态:按键先经 channel 搜索执行器。搜索框(prompt 焦点)是模态文本输入,
-        // 吞键进 query;搜索界面(results/detail 焦点)只截获面板导航,其余回落全局 dispatch
-        // (transport / 退出确认等照常),见 channel_search。
-        if self.state.channel_search.active.on() {
-            self.handle_channel_search_key(key);
-            return;
-        }
-        if self.state.search.typing {
-            self.handle_search_key(key);
-            return;
-        }
-
-        // dispatch 执行查表意图。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)在各
-        // 执行器开头判,保证「键 → 行为」中段可被 config 表替换而闸语义不动。
-        if let Some(action) = action {
-            self.dispatch(action);
+        // —— 以下:无活跃浮层 —— 按布局层路由,与 collect_key_context 共用 active_layer
+        // (「在哪层」只一处真相)。上下文裁决(全屏屏蔽列表导航 / 搜索 `/`)仍在各执行器开头判。
+        match self.state.active_layer() {
+            // 搜索框(prompt 焦点)是模态文本输入吞键进 query;results/detail 焦点只截获
+            // 面板导航、其余回落全局,见 channel_search。
+            ActiveLayer::ChannelSearch => self.handle_channel_search_key(key),
+            ActiveLayer::DeepSearch => self.handle_search_key(key),
+            // 全屏 / 浏览:走全局 dispatch 执行查表意图。
+            ActiveLayer::Fullscreen | ActiveLayer::Browse => {
+                if let Some(action) = action {
+                    self.dispatch(action);
+                }
+            }
         }
     }
 
