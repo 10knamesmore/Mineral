@@ -10,6 +10,7 @@ use mineral_model::{PlaylistId, Song};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::action::{ScrollStep, SelectionMove};
+use crate::runtime::line_input::InputRequest;
 use crate::runtime::scroll;
 use crate::runtime::state::View;
 use crate::runtime::track_pos::{PendingRestore, TrackPos};
@@ -23,7 +24,7 @@ impl App {
             return;
         }
         self.state.search.typing = true;
-        self.state.search.query.clear();
+        self.state.search.clear();
         self.request_deep_search_tracks();
     }
 
@@ -78,26 +79,39 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.state.search.typing = false;
-                self.state.search.query.clear();
+                self.state.search.clear();
             }
             KeyCode::Enter => {
                 self.state.search.typing = false;
             }
             KeyCode::Backspace => {
                 // vim 行为:query 已空时再删一次 = 退出搜索(等价 Esc)。
-                if self.state.search.query.is_empty() {
+                if self.state.search.query().is_empty() {
                     self.state.search.typing = false;
                     return;
                 }
-                self.state.search.query.pop();
-                self.reset_sel_for_search();
-                self.state.nav.last_sel_change = Instant::now();
+                if self.state.search.edit(InputRequest::DeletePrev) {
+                    self.reset_sel_for_search();
+                    self.state.nav.last_sel_change = Instant::now();
+                }
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
             KeyCode::Char(c) => {
-                self.state.search.query.push(c);
+                self.state.search.edit(InputRequest::Insert(c));
                 self.reset_sel_for_search();
                 self.state.nav.last_sel_change = Instant::now();
+            }
+            KeyCode::Left => {
+                self.state.search.edit(InputRequest::Left);
+            }
+            KeyCode::Right => {
+                self.state.search.edit(InputRequest::Right);
+            }
+            KeyCode::Home => {
+                self.state.search.edit(InputRequest::Home);
+            }
+            KeyCode::End => {
+                self.state.search.edit(InputRequest::End);
             }
             _ => {}
         }
@@ -174,7 +188,7 @@ impl App {
                     let locate = (*self.state.cfg.tui().search().locate_on_enter())
                         .then(|| self.state.deep_hit_for(&target_id).map(|h| h.song_id))
                         .flatten();
-                    self.state.search.query.clear();
+                    self.state.search.clear();
                     if let Some(raw_idx) = self
                         .state
                         .library
@@ -249,8 +263,8 @@ impl App {
             return;
         }
         self.state.nav.last_sel_change = Instant::now();
-        if !self.state.search.query.is_empty() {
-            self.state.search.query.clear();
+        if !self.state.search.query().is_empty() {
+            self.state.search.clear();
             self.reset_sel_for_search();
             return;
         }
@@ -400,22 +414,36 @@ mod tests {
         // `/` 进入搜索输入态,query 起始为空。
         press(&mut app, KeyCode::Char('/'));
         assert!(app.state.search.typing, "`/` 应进入搜索态");
-        assert!(app.state.search.query.is_empty());
+        assert!(app.state.search.query().is_empty());
 
         // 输入两个字符。
         press(&mut app, KeyCode::Char('a'));
         press(&mut app, KeyCode::Char('b'));
-        assert_eq!(app.state.search.query, "ab");
+        assert_eq!(app.state.search.query(), "ab");
 
         // 退格逐字符删;删到空时仍停在搜索态(不提前退出)。
         press(&mut app, KeyCode::Backspace);
         press(&mut app, KeyCode::Backspace);
-        assert!(app.state.search.query.is_empty());
+        assert!(app.state.search.query().is_empty());
         assert!(app.state.search.typing, "删到空时仍应在搜索态");
 
         // 空 query 上再删一次 → 退出搜索。
         press(&mut app, KeyCode::Backspace);
         assert!(!app.state.search.typing, "空 query 上退格应退出搜索");
+        Ok(())
+    }
+
+    /// 搜索输入态光标编辑:左移光标后插入落在词中间(deep-search `/` 框获得光标能力,
+    /// 不再 append-only)。
+    #[test]
+    fn search_cursor_edits_mid_query() -> color_eyre::Result<()> {
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.state.search.query(), "aXb", "左移后插入落在词中间");
         Ok(())
     }
 
@@ -474,7 +502,7 @@ mod tests {
         }
         ctrl(&mut app, 'd');
         ctrl(&mut app, 'u');
-        assert_eq!(app.state.search.query, "ab", "CONTROL 组合不进 query");
+        assert_eq!(app.state.search.query(), "ab", "CONTROL 组合不进 query");
         assert!(app.state.search.typing, "也不退出搜索态");
         Ok(())
     }
@@ -513,7 +541,10 @@ mod tests {
             "Enter 应进 Library"
         );
         assert_eq!(app.state.nav.sel_track, 2, "光标应落在命中歌「春日影」上");
-        assert!(app.state.search.query.is_empty(), "进歌单后清词(现状语义)");
+        assert!(
+            app.state.search.query().is_empty(),
+            "进歌单后清词(现状语义)"
+        );
         Ok(())
     }
 

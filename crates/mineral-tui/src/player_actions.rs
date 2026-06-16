@@ -43,10 +43,10 @@ impl App {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
         });
-        let search_query = if self.state.search.query.is_empty() {
+        let search_query = if self.state.search.query().is_empty() {
             None
         } else {
-            Some(self.state.search.query.clone())
+            Some(self.state.search.query().to_owned())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(SongView 已装饰)。
@@ -61,7 +61,7 @@ impl App {
                         .is_some_and(|ids| ids.contains(&s.id))
                 });
                 (ViewKind::Queue, song, loved)
-            } else if self.state.search.typing {
+            } else if self.state.channel_search.active.on() || self.state.search.typing {
                 (ViewKind::Search, None, None)
             } else if self.state.fullscreen.on() {
                 (ViewKind::Fullscreen, None, None)
@@ -321,6 +321,21 @@ mod tests {
         assert_eq!(
             ctx.now_playing().as_ref().map(|s| s.id.clone()),
             app.state.player.current.as_ref().map(|s| s.id.clone())
+        );
+        Ok(())
+    }
+
+    /// channel 搜索布局态:脚本 ctx 报 Search(回归 bug④——曾漏 channel_search 分支,
+    /// 在 channel 搜索里误报成看穿到的下层主视图)。
+    #[test]
+    fn keyctx_channel_search_reports_search() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
+        app.state.channel_search.active.set(true);
+        let ctx = app.collect_key_context();
+        assert_eq!(
+            *ctx.view(),
+            ViewKind::Search,
+            "channel 搜索态应报 Search,而非看穿到下层主视图"
         );
         Ok(())
     }

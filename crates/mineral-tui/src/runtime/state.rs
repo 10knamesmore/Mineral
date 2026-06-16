@@ -534,7 +534,7 @@ impl AppState {
     /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
     /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
-        if self.search.query.is_empty() {
+        if self.search.query().is_empty() {
             return self.library.playlists.iter().collect();
         }
         self.search.sync_query();
@@ -569,7 +569,7 @@ impl AppState {
     /// 调用前提:本帧已有人调过 [`Self::filtered_playlists`](渲染路径必然满足),
     /// 缓存已就绪;这里不再 ensure,避免渲染端反复触发指纹比较。
     pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<crate::runtime::deep_search::DeepHit> {
-        if self.search.query.is_empty() {
+        if self.search.query().is_empty() {
             return None;
         }
         self.search.deep_cache.borrow().hit_of(id).cloned()
@@ -578,7 +578,7 @@ impl AppState {
     /// 当前过滤结果里是否存在任何深度命中。渲染端据此决定 match 列要不要占位——
     /// 全员只命中歌单名时不挤压 name 列宽。调用前提同 [`Self::deep_hit_for`]。
     pub fn has_deep_hits(&self) -> bool {
-        !self.search.query.is_empty() && self.search.deep_cache.borrow().has_hits()
+        !self.search.query().is_empty() && self.search.deep_cache.borrow().has_hits()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。
@@ -586,7 +586,7 @@ impl AppState {
     /// 命中规则:歌名 / 任一艺人 / 专辑名取最高分作为该曲分数。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
         let tracks = self.current_tracks();
-        if self.search.query.is_empty() {
+        if self.search.query().is_empty() {
             return tracks;
         }
         self.search.sync_query();
@@ -665,7 +665,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.search.query = "cry".to_owned();
+        s.search.set_query("cry");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -683,7 +683,7 @@ mod tests {
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search.query = "chunying".to_owned();
+        s.search.set_query("chunying");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -701,7 +701,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.search.query = "my".to_owned();
+        s.search.set_query("my");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn match_for_returns_original_indices() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.search.query = "cry".to_owned();
+        s.search.set_query("cry");
         let m = s
             .search
             .match_for("春日影")

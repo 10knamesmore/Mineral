@@ -10,6 +10,7 @@ use mineral_task::SearchPayload;
 use rustc_hash::FxHashMap;
 
 use crate::render::anim::{Toggle, Transition};
+use crate::runtime::line_input::{InputRequest, LineInput};
 
 use super::detail::{DetailFetch, DetailStack, EntityRef};
 
@@ -168,12 +169,8 @@ pub struct ChannelSearch {
     /// 当前选中的 kind（kind chip 下拉切换；每 source 记住自己的选择）。
     pub kind: SearchKind,
 
-    /// token prompt 当前输入词。
-    query: String,
-
-    /// query 内文本光标（char 索引，`0..=query 字符数`）：插入/退格作用于此处，
-    /// Left/Right/Home/End 移动；随会话走（切 source 切回各自保留光标）。
-    cursor: usize,
+    /// token prompt 输入词 + 文本光标（通用 [`LineInput`]；随会话走，切 source 切回各自保留）。
+    input: LineInput,
 
     /// per-kind 结果桶（query 改变即整体作废）。
     by_kind: FxHashMap<SearchKind, KindResults>,
@@ -184,8 +181,7 @@ impl ChannelSearch {
     fn new(kind: SearchKind) -> Self {
         Self {
             kind,
-            query: String::new(),
-            cursor: 0,
+            input: LineInput::new(),
             by_kind: FxHashMap::default(),
         }
     }
@@ -212,75 +208,57 @@ impl ChannelSearch {
 
     /// 当前输入词（只读）。
     pub fn query(&self) -> &str {
-        &self.query
+        self.input.text()
     }
 
-    /// 测试构造：一次性灌入整段 query、光标落词尾、作废所有 kind 桶，保持 query↔cursor
-    /// 不变量（生产路径是逐字符 [`Self::push_query_char`]，故仅测试需要这个整段入口）。
+    /// 测试构造：一次性灌入整段 query、光标落词尾、作废所有 kind 桶（生产路径是逐字符
+    /// [`Self::push_query_char`]，故仅测试需要这个整段入口）。
     #[cfg(test)]
     pub fn set_query(&mut self, q: impl Into<String>) {
-        self.query = q.into();
-        self.cursor = self.query.chars().count();
+        self.input.set_text(q);
         self.by_kind.clear();
     }
 
     /// 在光标处插入字符、光标右移一格，并作废所有 kind 桶（换词 → 旧结果过期）。
     pub fn push_query_char(&mut self, c: char) {
-        let at = self.cursor_byte();
-        self.query.insert(at, c);
-        self.cursor = self.cursor.saturating_add(1);
+        self.input.apply(InputRequest::Insert(c));
         self.by_kind.clear();
     }
 
     /// 退格：删光标前一字符。光标 > 0 才删（删了返回 `true` 并作废结果桶），词首
     /// 返回 `false`（键路由据此知道「无字可删」而静默吞键）。
     pub fn pop_query_char(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
+        let changed = self.input.apply(InputRequest::DeletePrev);
+        if changed {
+            self.by_kind.clear();
         }
-        self.cursor = self.cursor.saturating_sub(1);
-        let at = self.cursor_byte();
-        self.query.remove(at);
-        self.by_kind.clear();
-        true
+        changed
     }
 
-    // TODO: 这组文本光标编辑（插入/退格/移动 + query_split）是通用单行输入逻辑，默认界面的
-    // 搜索输入框也需要同款行为；预期抽成独立输入组件后两处共用，届时 query + cursor 一并迁走。
+    /// 文本光标编辑委托给通用 [`LineInput`]；默认界面 `/` 模糊框亦用它，行为一致。
     /// 文本光标左移一格（钳词首）。
     pub fn cursor_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+        self.input.apply(InputRequest::Left);
     }
 
     /// 文本光标右移一格（钳词尾）。
     pub fn cursor_right(&mut self) {
-        self.cursor = self
-            .cursor
-            .saturating_add(1)
-            .min(self.query.chars().count());
+        self.input.apply(InputRequest::Right);
     }
 
     /// 文本光标跳词首。
     pub fn cursor_home(&mut self) {
-        self.cursor = 0;
+        self.input.apply(InputRequest::Home);
     }
 
     /// 文本光标跳词尾。
     pub fn cursor_end(&mut self) {
-        self.cursor = self.query.chars().count();
+        self.input.apply(InputRequest::End);
     }
 
     /// query 以光标为界切两段 `(光标前, 光标后)`（渲染光标块用；光标恒落 char 边界）。
     pub fn query_split(&self) -> (&str, &str) {
-        self.query.split_at(self.cursor_byte())
-    }
-
-    /// 当前光标的字节偏移（char 索引 → 字节；越界落词尾）。
-    fn cursor_byte(&self) -> usize {
-        self.query
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.query.len(), |(b, _)| b)
+        self.input.split()
     }
 
     /// 作废全部 kind 桶（显式重新提交时清旧词缓存）。
@@ -611,7 +589,7 @@ impl ChannelSearchState {
         match self.current_mut() {
             Some(session) => {
                 session.set_kind(kind);
-                !session.has_current_results() && !session.query.is_empty()
+                !session.has_current_results() && !session.input.is_empty()
             }
             None => false,
         }
@@ -856,13 +834,13 @@ mod tests {
         s.cursor_left();
         assert_eq!(s.query_split(), ("a", "b"), "左移一格落 a|b");
         s.push_query_char('X');
-        assert_eq!(s.query, "aXb", "插入落在光标处而非词尾");
+        assert_eq!(s.query(), "aXb", "插入落在光标处而非词尾");
         assert_eq!(s.query_split(), ("aX", "b"), "插入后光标停在新字符之后");
         assert!(s.pop_query_char(), "退格删光标前的 X 返回 true");
-        assert_eq!(s.query, "ab", "退格删掉的是光标前一字符");
+        assert_eq!(s.query(), "ab", "退格删掉的是光标前一字符");
         s.cursor_home();
         assert!(!s.pop_query_char(), "词首退格 no-op 返回 false");
-        assert_eq!(s.query, "ab", "词首退格不改 query");
+        assert_eq!(s.query(), "ab", "词首退格不改 query");
         s.cursor_end();
         s.cursor_right();
         assert_eq!(s.query_split(), ("ab", ""), "右移越界钳词尾");
@@ -878,7 +856,7 @@ mod tests {
         s.cursor_left();
         assert_eq!(s.query_split(), ("周杰", "伦"), "光标落在 char 边界");
         s.push_query_char('a');
-        assert_eq!(s.query, "周杰a伦", "多字节中间插入不切坏字符");
+        assert_eq!(s.query(), "周杰a伦", "多字节中间插入不切坏字符");
     }
 
     /// chip 下拉收起播 collapse 动画:close_seg 后 `seg_open` 已假,但 `dropdown_active` 仍真

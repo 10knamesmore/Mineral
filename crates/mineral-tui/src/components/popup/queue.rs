@@ -13,6 +13,7 @@ use crate::components::popup::component::{
 };
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
+use crate::runtime::list_cursor::ListCursor;
 use crate::runtime::playback::format_ms;
 use crate::runtime::scroll;
 use crate::runtime::scroll::ListScroll;
@@ -20,11 +21,11 @@ use crate::runtime::state::AppState;
 
 /// 浮动 queue 浮层。
 ///
-/// 只持有 UI-local 光标 `sel`(永不被 server snapshot 覆盖,仅 clamp 防越界);
+/// 只持有 UI-local 光标(`cursor`,永不被 server snapshot 覆盖,仅 clamp 防越界);
 /// 队列曲目是后端权威态,渲染 / 导航时从 [`AppState`] 读。
 pub(crate) struct QueueOverlay {
-    /// 光标选中行下标(UI-local)。
-    sel: usize,
+    /// 光标选中行(UI-local;移动 / 钳制走通用 [`ListCursor`])。
+    cursor: ListCursor,
 
     /// 队列表格的视口滚动态(nvim 手感 + 缓动平移)。
     scroll: ListScroll,
@@ -36,17 +37,20 @@ impl QueueOverlay {
         let scroll = ListScroll::new();
         // 视口直接落在光标附近(渲染端按 scrolloff 钳),不从队首长程滑过来。
         scroll.snap_to(sel);
-        Self { sel, scroll }
+        Self {
+            cursor: ListCursor::new(sel),
+            scroll,
+        }
     }
 
     /// 把光标钳到 `[0, len-1]`(队列变短后防越界);空队列归 0。
     pub(crate) fn clamp(&mut self, len: usize) {
-        self.sel = self.sel.min(len.saturating_sub(1));
+        self.cursor.clamp(len);
     }
 
     /// 当前光标行(脚本动作 ctx 采集 / 集成测试断言用)。
     pub(crate) fn cursor(&self) -> usize {
-        self.sel
+        self.cursor.sel()
     }
 }
 
@@ -76,7 +80,7 @@ impl Overlay for QueueOverlay {
             .border_style(Style::new().fg(border_color))
             .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
             .title_bottom(
-                Line::from(position_label(self.sel, ctx.player.queue.len()))
+                Line::from(position_label(self.cursor.sel(), ctx.player.queue.len()))
                     .style(Style::new().fg(theme.overlay)),
             )
             .title_bottom(
@@ -117,7 +121,7 @@ impl Overlay for QueueOverlay {
         // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
         let viewport = usize::from(inner.height.saturating_sub(1));
         let offset = self.scroll.render_offset(
-            self.sel,
+            self.cursor.sel(),
             ctx.player.queue.len(),
             viewport,
             ctx.scrolloff(),
@@ -125,7 +129,11 @@ impl Overlay for QueueOverlay {
         );
         let mut state = TableState::default()
             .with_offset(offset)
-            .with_selected(Some(scroll::pin_cursor(self.sel, offset, viewport)));
+            .with_selected(Some(scroll::pin_cursor(
+                self.cursor.sel(),
+                offset,
+                viewport,
+            )));
         StatefulWidget::render(table, inner, buf, &mut state);
     }
 
@@ -136,32 +144,29 @@ impl Overlay for QueueOverlay {
     }
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
-        let max = ctx.player.queue.len().saturating_sub(1);
+        let len = ctx.player.queue.len();
         match action {
             Action::MoveSelection(mv) => {
-                self.sel = match mv {
-                    SelectionMove::Down(n) => self.sel.saturating_add(n).min(max),
-                    SelectionMove::Up(n) => self.sel.saturating_sub(n),
-                    SelectionMove::First => 0,
-                    SelectionMove::Last => max,
-                };
+                self.cursor.move_by(mv, len);
                 Some(OverlayResponse::Consumed)
             }
-            // `<C-d>` 族:视口目标与光标同移 n 行(vim 语义),边界由渲染端统一钳。
+            // `<C-d>` 族:视口目标与光标同移 n 行(vim 语义);光标边界由 move_by 钳,
+            // 视口上界由渲染端统一钳。
             Action::Scroll(step) => {
                 let delta = scroll::step_delta(step, ctx.cfg.tui().behavior());
                 let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
                 self.scroll.nudge(delta, ctx.list_glide_ticks());
-                self.sel = if delta > 0 {
-                    self.sel.saturating_add(rows).min(max)
+                let mv = if delta > 0 {
+                    SelectionMove::Down(rows)
                 } else {
-                    self.sel.saturating_sub(rows)
+                    SelectionMove::Up(rows)
                 };
+                self.cursor.move_by(mv, len);
                 Some(OverlayResponse::Consumed)
             }
-            Action::ActivateSelection => {
-                Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(self.sel)))
-            }
+            Action::ActivateSelection => Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(
+                self.cursor.sel(),
+            ))),
             // 开关键语义:queue 已开,open_queue(toggle)/ quit / back 都收敛为关闭本浮层。
             Action::OpenQueue | Action::OpenQuitConfirm | Action::BackOrClearSearch => {
                 Some(OverlayResponse::Do(OverlayAction::CloseTop))

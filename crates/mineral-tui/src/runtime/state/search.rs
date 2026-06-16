@@ -10,11 +10,12 @@ use rustc_hash::FxHashMap;
 
 use crate::runtime::deep_search::DeepSearchCache;
 use crate::runtime::filter::{FuzzyMatcher, Match, MatchableText};
+use crate::runtime::line_input::{InputRequest, LineInput};
 
 /// 搜索状态([`AppState`](crate::runtime::state::AppState) 的本地模糊搜索域)。
 pub struct SearchState {
-    /// 搜索关键字。
-    pub query: String,
+    /// 搜索关键字 + 文本光标(通用 [`LineInput`]:`/` 框逐字符编辑、左右移光标)。
+    input: LineInput,
 
     /// 是否处于搜索输入态(`/` 触发,Enter / Esc 退出)。
     pub typing: bool,
@@ -37,7 +38,7 @@ impl SearchState {
     /// 构造空搜索态(无查询、非输入态、缓存全空)。
     pub(crate) fn new() -> Self {
         Self {
-            query: String::new(),
+            input: LineInput::new(),
             typing: false,
             matcher: RefCell::new(FuzzyMatcher::new()),
             matchable_cache: RefCell::new(FxHashMap::default()),
@@ -45,10 +46,36 @@ impl SearchState {
         }
     }
 
+    /// 当前搜索词(只读)。
+    pub fn query(&self) -> &str {
+        self.input.text()
+    }
+
+    /// 搜索词以光标为界切两段 `(光标前, 光标后)`(badge 渲染光标块用)。
+    pub fn query_split(&self) -> (&str, &str) {
+        self.input.split()
+    }
+
+    /// 应用一次文本编辑意图(`/` 框路由按键到此);返回文本是否变了。
+    pub fn edit(&mut self, req: InputRequest) -> bool {
+        self.input.apply(req)
+    }
+
+    /// 清空搜索词 + 光标归 0(退出 / 进歌单时清词)。
+    pub fn clear(&mut self) {
+        self.input.clear();
+    }
+
+    /// 测试构造:一次性灌入整段搜索词、光标落词尾。
+    #[cfg(test)]
+    pub fn set_query(&mut self, q: impl Into<String>) {
+        self.input.set_text(q);
+    }
+
     /// 把当前 `query` 同步给内部 matcher。空 query 也会被推下去,使 matcher 失活。
     /// 同 query 重复调用是无开销 no-op(matcher 内部判等)。
     pub fn sync_query(&self) {
-        self.matcher.borrow_mut().set_query(&self.query);
+        self.matcher.borrow_mut().set_query(self.input.text());
     }
 
     /// 对单段文本跑一次匹配,返回 score + 已映射回原文 char 下标的 `hits`。
@@ -56,7 +83,7 @@ impl SearchState {
     /// 空 query / 不命中都返回 `None`。每帧渲染时按需调用(已带 MatchableText 缓存
     /// + matcher buffer 复用,开销可忽略)。
     pub fn match_for(&self, text: &str) -> Option<Match> {
-        if self.query.is_empty() {
+        if self.input.is_empty() {
             return None;
         }
         self.sync_query();

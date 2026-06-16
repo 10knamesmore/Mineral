@@ -1087,7 +1087,7 @@ mod tests {
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
-        assert_eq!(app.state.search.query, "Q", "大写 Q 应进搜索词");
+        assert_eq!(app.state.search.query(), "Q", "大写 Q 应进搜索词");
         assert!(app.transition.is_none(), "搜索态不该触发退出转场");
         assert!(!app.should_quit);
         assert_eq!(

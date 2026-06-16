@@ -8,6 +8,8 @@ pub mod daemon;
 pub mod deep_search;
 pub mod filter;
 pub mod keymap;
+pub(crate) mod line_input;
+pub(crate) mod list_cursor;
 pub mod playback;
 pub mod prefetch;
 pub(crate) mod reload;

@@ -251,7 +251,7 @@ fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
             .selected_playlist()
             .map(|_| placeholder_row("loading…"));
     }
-    if !state.search.query.is_empty() && state.filtered_tracks().is_empty() {
+    if !state.search.query().is_empty() && state.filtered_tracks().is_empty() {
         return Some(placeholder_row("无匹配"));
     }
     None
@@ -440,7 +440,7 @@ mod tests {
     fn library_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.search.query = "zzz".to_owned();
+        state.search.set_query("zzz");
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
         Ok(())

@@ -13,22 +13,32 @@ use crate::runtime::state::{AppState, View};
 ///   - `theme`: 取色
 ///
 /// # Return:
-///   - 输入态(`search.typing`):`/q█`(末尾光标方块,表示正在输入)
+///   - 输入态(`search.typing`):`/q█`(光标块在文本光标处,表示正在输入)
 ///   - 非输入态但有词:`/q`(已提交、仍在过滤的词)
 ///   - 任一搜索态下深度索引在飞:再缀 ` ⟳n`(见 [`indexing_count`])
 ///   - 无词且非输入态:空序列(标题不挂 badge)
 pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
-    if !state.search.typing && state.search.query.is_empty() {
+    if !state.search.typing && state.search.query().is_empty() {
         return Vec::new();
     }
-    let mut spans = vec![Span::styled(
-        format!("/{}", state.search.query),
-        Style::new().fg(theme.peach),
-    )];
+    let mut spans = Vec::<Span<'static>>::new();
     if state.search.typing {
+        // 输入态:光标块落在文本光标处(before|after),不再恒在词尾。
+        let (before, after) = state.search.query_split();
+        spans.push(Span::styled(
+            format!("/{before}"),
+            Style::new().fg(theme.peach),
+        ));
         spans.push(Span::styled(
             "█",
             Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(after.to_owned(), Style::new().fg(theme.peach)));
+    } else {
+        // 非输入态:已提交、仍在过滤的词,无光标。
+        spans.push(Span::styled(
+            format!("/{}", state.search.query()),
+            Style::new().fg(theme.peach),
         ));
     }
     if let Some(n) = indexing_count(state) {

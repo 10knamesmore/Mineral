@@ -82,7 +82,7 @@ impl CacheKey {
         let cfg = state.cfg.tui().search();
         let w = cfg.deep_weights();
         Self {
-            query: state.search.query.clone(),
+            query: state.search.query().to_owned(),
             generation: state.library.tracks_generation,
             weights: [
                 w.name().to_bits(),
@@ -105,7 +105,7 @@ impl CacheKey {
                     w.artist().to_bits(),
                     w.album().to_bits(),
                 ]
-            && self.query == state.search.query
+            && self.query == state.search.query()
     }
 }
 
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.query = "春日".to_owned();
+        s.search.set_query("春日");
         let names = s
             .filtered_playlists()
             .iter()
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn artist_hit_highlights_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.query = "mygo".to_owned();
+        s.search.set_query("mygo");
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.query = "迷".to_owned();
+        s.search.set_query("迷");
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
@@ -373,7 +373,7 @@ mod tests {
         )];
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.search.query = "mygo".to_owned();
+        s.search.set_query("mygo");
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
@@ -393,7 +393,7 @@ mod tests {
         ];
         let inner_id = PlaylistId::new(SourceKind::NETEASE, "inner");
         fill_tracks(&mut s, &inner_id, vec![with_name(song("s1"), "春日影")]);
-        s.search.query = "春日影".to_owned();
+        s.search.set_query("春日影");
         let names = s
             .filtered_playlists()
             .iter()
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.search.query = "春日".to_owned();
+        s.search.set_query("春日");
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");
