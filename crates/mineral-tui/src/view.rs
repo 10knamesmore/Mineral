@@ -48,7 +48,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         };
         paint_search(frame, &areas, app);
     } else {
-        paint(frame, &normal, app);
+        paint_browse(frame, &normal, app);
     }
 
     // topbar 通知层 / 浮层栈:整屏转场(启动扩大 / 退出收缩)期间不画;全屏形变不抑制。
@@ -71,7 +71,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 }
 
 /// 常规(浏览态)布局:把各 area 分发给对应组件渲染。
-fn paint(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     let theme = &app.theme;
     top_status::draw(frame, areas.top_status, &app.state, theme);
     sidebar::draw(frame, areas.left, &app.state, theme);
