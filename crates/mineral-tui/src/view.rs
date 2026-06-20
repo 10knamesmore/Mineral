@@ -282,6 +282,7 @@ fn nonempty(r: Rect) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    use color_eyre::eyre::eyre;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Position;
@@ -824,6 +825,86 @@ mod tests {
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
             "Search detail 焦点:detail 框 accent + results 框暗调 + 选中行暗调高亮",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 歌单 detail 曲目表:对齐 browse library 风格 —— ♥/#/title/artist/album/len 六列 +
+    /// 表头,在播歌 # 列显 ♫、收藏歌显 ♥。宽 120 让 detail 面板够 Full 档(artist/album 不退)。
+    #[test]
+    fn search_detail_playlist_tracks_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{
+            AlbumId, AlbumRef, ArtistId, ArtistRef, Playlist, PlaylistId, SearchKind, Song, SongId,
+            SourceKind,
+        };
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Playlist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("emo");
+        }
+        let track = |id: &str, name: &str, artist: &str, album: &str, dur: u64| {
+            Song::builder()
+                .id(SongId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, id),
+                    name: artist.to_owned(),
+                }])
+                .album(Some(AlbumRef {
+                    id: AlbumId::new(SourceKind::NETEASE, id),
+                    name: album.to_owned(),
+                }))
+                .duration_ms(dur)
+                .build()
+        };
+        let songs = vec![
+            track("1", "Endserenading", "Mineral", "EndSerenading", 225_000),
+            track(
+                "2",
+                "守门员",
+                "Chinese Football",
+                "Chinese Football",
+                233_000,
+            ),
+            track("3", "Palisade", "Mineral", "EndSerenading", 271_000),
+        ];
+        let playlist = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::NETEASE, "pl1"))
+            .name("emo mix".to_owned())
+            .track_count(3)
+            .build();
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Playlist,
+            query: "emo".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Playlists(vec![playlist]),
+        });
+        // 歌单 root 帧补拉到曲目(DetailData::Tracks)。
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.set_tracks(songs.clone());
+        }
+        // 第 1 首在播(♫)、第 2 首已收藏(♥)。
+        app.state.player.current = songs.first().cloned();
+        let liked = songs
+            .get(1)
+            .ok_or_else(|| eyre!("fixture 应有第 2 首"))?
+            .clone();
+        app.state.toggle_loved_local(&liked);
+        app.state.channel_search.focus = SearchFocus::Detail;
+
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌单 detail 曲目表:♥/#/title/artist/album/len 六列 + 表头(♫ 在播 / ♥ 收藏)",
             t.backend()
         );
         Ok(())

@@ -355,7 +355,7 @@ fn result_table(
                 ],
             )
         }
-        // 专辑:专辑名 · 艺人。
+        // 专辑:专辑名 · 艺人 · 曲目数(裸数字,表头标 tracks;搜索期已填 track_count)。
         SearchPayload::Albums(albums) => {
             let rows = albums
                 .iter()
@@ -363,13 +363,22 @@ fn result_table(
                     Row::new(vec![
                         Cell::from(Span::styled(a.name.clone(), main)),
                         Cell::from(Span::styled(join_artists(&a.artists), sub)),
+                        Cell::from(Span::styled(a.track_count.to_string(), meta)),
                     ])
                 })
                 .collect();
             (
-                vec![Cell::from("album"), Cell::from("artist")],
+                vec![
+                    Cell::from("album"),
+                    Cell::from("artist"),
+                    Cell::from("tracks"),
+                ],
                 rows,
-                vec![Constraint::Fill(3), Constraint::Fill(2)],
+                vec![
+                    Constraint::Fill(3),
+                    Constraint::Fill(2),
+                    Constraint::Length(6),
+                ],
             )
         }
         // 歌单:歌单名 · 曲目数(裸数字,表头标 tracks)。

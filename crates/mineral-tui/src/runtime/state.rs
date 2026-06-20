@@ -314,17 +314,21 @@ impl AppState {
     /// 给定一首歌,根据当前 `library.liked_ids` / 未来其他 user-data 装饰成 SongView。
     /// 这是 user-data 写入 SongView 的**唯一入口**;新增 user-data 字段时只改这里。
     fn decorate(&self, song: Song) -> SongView {
-        let loved = self
-            .library
-            .liked_ids
-            .get(&song.source())
-            .is_some_and(|s| s.contains(&song.id));
+        let loved = self.is_liked(&song);
         let plays = self.library.play_counts.get(&song.id).copied();
         SongView {
             data: song,
             loved,
             plays,
         }
+    }
+
+    /// 一首歌是否已收藏（查 `library.liked_ids` 该源的桶）。
+    pub(crate) fn is_liked(&self, song: &Song) -> bool {
+        self.library
+            .liked_ids
+            .get(&song.source())
+            .is_some_and(|s| s.contains(&song.id))
     }
 
     /// 本地乐观切换一首歌的喜欢态(翻转 `library.liked_ids` 并重装该源曲目)。

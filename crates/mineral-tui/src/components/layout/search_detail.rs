@@ -18,7 +18,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use mineral_model::{Album, Artist, SearchKind, Song};
 
-use crate::components::layout::search_panel::{format_duration, join_artists};
+use crate::components::layout::search_panel::join_artists;
+use crate::components::layout::track_table::{self, TrackColumns};
 use crate::components::layout::{cover, cover_image};
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
@@ -57,9 +58,18 @@ pub fn draw(
         return;
     }
     match kr.detail.sweep_frames() {
-        Some((from, to, eased, is_push)) => {
-            draw_sweep(frame, inner, from, to, eased, is_push, theme)
-        }
+        Some((from, to, eased, is_push)) => draw_sweep(
+            frame,
+            inner,
+            SweepArgs {
+                from,
+                to,
+                eased,
+                is_push,
+            },
+            state,
+            theme,
+        ),
         None => {
             let Some(dframe) = kr.detail.current() else {
                 return;
@@ -115,11 +125,17 @@ fn draw_frame_real(
     }
     let buf = frame.buffer_mut();
     draw_meta(buf, meta_a, dframe, theme, show_back);
-    draw_body(buf, body, dframe, theme);
+    draw_body(buf, body, dframe, state, theme);
 }
 
 /// 把一帧渲染到（离屏）Buffer：头图走程序化占位（滑动期不上真图），元数据 + 列表照画。
-fn render_frame_to(buf: &mut Buffer, inner: Rect, dframe: &DetailFrame, theme: &Theme) {
+fn render_frame_to(
+    buf: &mut Buffer,
+    inner: Rect,
+    dframe: &DetailFrame,
+    state: &AppState,
+    theme: &Theme,
+) {
     let (head, body) = split_frame(inner);
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
@@ -130,7 +146,23 @@ fn render_frame_to(buf: &mut Buffer, inner: Rect, dframe: &DetailFrame, theme: &
         cover::render_to(buf, right_a, selected_seed(dframe), theme);
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
-    draw_body(buf, body, dframe, theme);
+    draw_body(buf, body, dframe, state, theme);
+}
+
+/// 下钻/返回滑动的合成参数：出发/目标帧 + 缓动进度 + 方向（打包避免 `draw_sweep` 参数过多）。
+#[derive(Clone, Copy)]
+struct SweepArgs<'a> {
+    /// 出发帧（滑出）。
+    from: &'a DetailFrame,
+
+    /// 目标帧（滑入）。
+    to: &'a DetailFrame,
+
+    /// 缓动后进度（千分比）。
+    eased: u16,
+
+    /// 方向：`true` = 下钻右入、`false` = 返回左入。
+    is_push: bool,
 }
 
 /// 下钻/返回滑动：出发帧与目标帧各渲染到离屏 Buffer，按 `eased` 列合成（Cover 风格：
@@ -138,16 +170,20 @@ fn render_frame_to(buf: &mut Buffer, inner: Rect, dframe: &DetailFrame, theme: &
 fn draw_sweep(
     frame: &mut Frame<'_>,
     inner: Rect,
-    from: &DetailFrame,
-    to: &DetailFrame,
-    eased: u16,
-    is_push: bool,
+    args: SweepArgs<'_>,
+    state: &AppState,
     theme: &Theme,
 ) {
+    let SweepArgs {
+        from,
+        to,
+        eased,
+        is_push,
+    } = args;
     let mut from_buf = Buffer::empty(inner);
     let mut to_buf = Buffer::empty(inner);
-    render_frame_to(&mut from_buf, inner, from, theme);
-    render_frame_to(&mut to_buf, inner, to, theme);
+    render_frame_to(&mut from_buf, inner, from, state, theme);
+    render_frame_to(&mut to_buf, inner, to, state, theme);
     let w = inner.width;
     let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
         .unwrap_or(w)
@@ -331,27 +367,54 @@ fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
 }
 
 /// 主体：歌手帧画双区，其余画曲目列表。
-fn draw_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, theme: &Theme) {
+fn draw_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, state: &AppState, theme: &Theme) {
     match &dframe.entity {
-        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, theme),
-        _ => draw_track_body(buf, body, dframe, theme),
+        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, state, theme),
+        _ => draw_track_body(buf, body, dframe, state, theme),
     }
 }
 
-/// 非歌手帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.songs`,
-/// 歌单帧来自 `Tracks`。
-fn draw_track_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, theme: &Theme) {
+/// 非歌手帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.songs`（同源
+/// 专辑无需再列 album 列），歌单帧来自 `Tracks`（混源，多列出 album）。
+fn draw_track_body(
+    buf: &mut Buffer,
+    body: Rect,
+    dframe: &DetailFrame,
+    state: &AppState,
+    theme: &Theme,
+) {
     match &dframe.data {
-        Some(DetailData::Album(a)) => draw_track_list(buf, body, &a.songs, dframe.list_sel, theme),
-        Some(DetailData::Tracks(songs)) => {
-            draw_track_list(buf, body, songs, dframe.list_sel, theme)
-        }
+        Some(DetailData::Album(a)) => draw_track_list(
+            buf,
+            body,
+            &a.songs,
+            dframe.list_sel,
+            TrackColumns::new(/*artist*/ true, /*album*/ false),
+            state,
+            theme,
+        ),
+        Some(DetailData::Tracks(songs)) => draw_track_list(
+            buf,
+            body,
+            songs,
+            dframe.list_sel,
+            TrackColumns::new(/*artist*/ true, /*album*/ true),
+            state,
+            theme,
+        ),
         _ => draw_skeleton(buf, body, theme),
     }
 }
 
-/// 歌手帧主体：热门曲/专辑双区 Tab + 当前区列表。
-fn draw_artist_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, theme: &Theme) {
+/// 歌手帧主体：热门曲/专辑双区 Tab + 当前区列表。热门曲是该歌手的歌，artist 列冗余，
+/// 改列 album。
+fn draw_artist_body(
+    buf: &mut Buffer,
+    body: Rect,
+    dframe: &DetailFrame,
+    state: &AppState,
+    theme: &Theme,
+) {
     if body.height < 2 {
         return;
     }
@@ -364,7 +427,15 @@ fn draw_artist_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, theme: &
                 detail: Some(a), ..
             }),
         ) => {
-            draw_track_list(buf, list, &a.songs, dframe.list_sel, theme);
+            draw_track_list(
+                buf,
+                list,
+                &a.songs,
+                dframe.list_sel,
+                TrackColumns::new(/*artist*/ false, /*album*/ true),
+                state,
+                theme,
+            );
         }
         (
             ArtistSection::Albums,
@@ -401,24 +472,31 @@ fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme:
     Widget::render(Paragraph::new(line), area, buf);
 }
 
-/// 曲目列表（title · len）：当前 `sel` 行整行高亮。
-fn draw_track_list(buf: &mut Buffer, area: Rect, songs: &[Song], sel: usize, theme: &Theme) {
+/// 曲目表（♥/#/title/[artist]/[album]/len，带表头）：对齐 browse library 表风格。
+/// `cols` 选中间列、按面板宽度降级；当前 `sel` 行整行高亮，在播歌 `#` 列显 `♫`、已收藏显 `♥`。
+fn draw_track_list(
+    buf: &mut Buffer,
+    area: Rect,
+    songs: &[Song],
+    sel: usize,
+    cols: TrackColumns,
+    state: &AppState,
+    theme: &Theme,
+) {
     if songs.is_empty() {
         draw_skeleton(buf, area, theme);
         return;
     }
-    let rows = songs.iter().map(|s| {
-        Row::new(vec![
-            Cell::from(Span::styled(s.name.clone(), Style::new().fg(theme.text))),
-            Cell::from(Span::styled(
-                format_duration(s.duration_ms),
-                Style::new().fg(theme.overlay),
-            )),
-        ])
+    let cols = cols.for_width(area.width);
+    let rows = songs.iter().enumerate().map(|(idx, s)| {
+        let loved = state.is_liked(s);
+        let is_current = state.player.current.as_ref().is_some_and(|c| c.id == s.id);
+        track_table::track_row(s, idx, loved, is_current, cols, theme)
     });
-    let table = Table::new(rows, [Constraint::Fill(1), Constraint::Length(5)])
-        .row_highlight_style(highlight(theme))
-        .highlight_symbol("▌ ");
+    let table = Table::new(rows, cols.widths())
+        .header(track_table::header_row(cols, theme))
+        .row_highlight_style(track_table::highlight_style(theme))
+        .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
     let mut st = TableState::default().with_selected(Some(sel.min(songs.len().saturating_sub(1))));
     StatefulWidget::render(table, area, buf, &mut st);
 }

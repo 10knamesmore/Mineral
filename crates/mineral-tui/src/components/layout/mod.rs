@@ -10,5 +10,6 @@ pub mod search_panel;
 pub mod sidebar;
 pub mod spectrum;
 pub mod top_status;
+pub mod track_table;
 pub mod transform;
 pub mod transport;
