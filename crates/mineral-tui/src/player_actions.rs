@@ -66,7 +66,7 @@ impl App {
             } else {
                 // 其余浮层对脚本 ctx 透明,看穿到下层布局层(与 handle_key 路由共用 active_layer)。
                 match self.state.active_layer() {
-                    ActiveLayer::ChannelSearch | ActiveLayer::DeepSearch => {
+                    ActiveLayer::SearchSession | ActiveLayer::DeepSearch => {
                         (ViewKind::Search, None, None)
                     }
                     ActiveLayer::Fullscreen => (ViewKind::Fullscreen, None, None),

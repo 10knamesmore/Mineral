@@ -28,8 +28,9 @@ mod player;
 mod search;
 mod view_switch;
 
+pub(crate) use browse::BrowseModel;
 pub use browse::BrowsePage;
-pub use channel_search::{ChannelSearch, ChannelSearchState, PromptSegment, SearchFocus};
+pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 pub use covers::CoverHub;
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
@@ -52,7 +53,7 @@ pub enum View {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveLayer {
     /// channel 搜索布局态。
-    ChannelSearch,
+    SearchSession,
 
     /// 本地 `/` 模糊搜索输入态。
     DeepSearch,
@@ -129,7 +130,7 @@ pub struct AppState {
 
     /// channel 搜索布局态:与 [`BrowsePage::fullscreen`] 同级的全屏级布局态(两者逻辑 `on` 互斥)。
     /// 含布局开关 + 当前源 + 输入焦点 + 焦点环 + per-源会话。
-    pub channel_search: ChannelSearchState,
+    pub channel_search: SearchPage,
 
     /// 顶栏失焦变灰:`on()` = 已变灰(终端未聚焦)、`eased_in_out()` = 变灰深度。
     /// 终端聚焦态由 [`Self::focused`] 反读;初始 `off`(聚焦)——mode 1004 只报变化、
@@ -190,7 +191,7 @@ impl AppState {
         let tick_ms = *anim.frame_tick_ms();
         Self {
             browse: BrowsePage::new(anim),
-            channel_search: ChannelSearchState::new(
+            channel_search: SearchPage::new(
                 ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
                 ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
             ),
@@ -244,7 +245,7 @@ impl AppState {
     /// 当前活跃的布局层(见 [`ActiveLayer`])。浮层栈在其之上,由调用方单独裁决。
     pub(crate) fn active_layer(&self) -> ActiveLayer {
         if self.channel_search.active.on() {
-            ActiveLayer::ChannelSearch
+            ActiveLayer::SearchSession
         } else if self.browse.search.typing {
             ActiveLayer::DeepSearch
         } else if self.browse.fullscreen.on() {
@@ -263,11 +264,6 @@ impl AppState {
     /// 光标与列表视口上下边缘的最小行距(配置 `behavior.scrolloff`)。
     pub(crate) fn scrolloff(&self) -> usize {
         usize::from(*self.cfg.tui().behavior().scrolloff())
-    }
-
-    /// 歌单内光标位置记忆档(配置 `behavior.remember_track_pos`)。
-    pub(crate) fn track_memory(&self) -> mineral_config::TrackPosMemory {
-        *self.cfg.tui().behavior().remember_track_pos()
     }
 
     /// 曲目到达时兑现挂起的位置恢复(进歌单时曲目还没拉到的延迟落位)。
@@ -547,11 +543,6 @@ impl AppState {
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
     pub fn current_tracks_slot(&self) -> Option<&Vec<SongView>> {
         self.browse.current_tracks_slot(self.browse_model())
-    }
-
-    /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
-    pub fn current_tracks(&self) -> Vec<SongView> {
-        self.browse.current_tracks(self.browse_model())
     }
 
     /// 给定歌单的总时长(ms);槽位未到位时返回 0。

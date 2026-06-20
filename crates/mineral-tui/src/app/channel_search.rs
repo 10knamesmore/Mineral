@@ -1,6 +1,6 @@
 //! Search 布局态的键盘输入执行器:token prompt 打字 / 结果列 / 详情面板,按 [`SearchFocus`] 分派。
 //!
-//! 行为长在 `impl ChannelSearchState` 上(Page 自管 view 状态):吃按键、改自身态,把"要 App 做
+//! 行为长在 `impl SearchPage` 上(Page 自管 view 状态):吃按键、改自身态,把"要 App 做
 //! 的副作用"作为 [`SearchEffect`] 意图**返回**;App 侧 [`App::handle_channel_search_key`] 就地构造
 //! 只读 [`SearchCtx`]、调 `on_key`、再 [`App::apply_search_effect`] 落地——Page 不反手摸
 //! `client` / `notifications`,故可脱离 App 单测(喂 KeyEvent、断言返回的意图)。
@@ -15,7 +15,7 @@ use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{
-    ArtistSection, ChannelSearchState, DetailData, EntityRef, PromptSegment, SearchFocus,
+    ArtistSection, DetailData, EntityRef, PromptSegment, SearchFocus, SearchPage,
 };
 
 use super::App;
@@ -121,7 +121,7 @@ impl App {
     }
 }
 
-impl Page for ChannelSearchState {
+impl Page for SearchPage {
     type Effect = SearchEffect;
     type Ctx<'a> = SearchCtx<'a>;
 
@@ -134,7 +134,7 @@ impl Page for ChannelSearchState {
     }
 }
 
-impl ChannelSearchState {
+impl SearchPage {
     /// 面板(results / detail)导航:搜索界面非文本输入,只截获面板导航,其余键回落全局
     /// dispatch（[`SearchEffect::Dispatch`]）——transport(播放/音量/seek/模式)、退出确认等照常生效。
     ///

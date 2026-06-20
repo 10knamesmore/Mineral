@@ -25,7 +25,7 @@ use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
 use crate::runtime::cover_encode::CoverEncoder;
 use crate::runtime::cover_fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
-use crate::runtime::state::{ActiveLayer, AppState, PageKind};
+use crate::runtime::state::{AppState, PageKind};
 use crate::runtime::ui_prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
@@ -566,16 +566,8 @@ impl App {
             // 搜索框(prompt 焦点)是模态文本输入吞键进 query;results/detail 焦点只截获
             // 面板导航、其余回落全局,见 channel_search。
             PageKind::Search => self.handle_channel_search_key(key),
-            PageKind::Browse => match self.state.active_layer() {
-                // `/` 模糊输入态:吞键进过滤词。
-                ActiveLayer::DeepSearch => self.handle_search_key(key),
-                // 全屏 / 浏览:走全局 dispatch 执行查表意图。
-                _ => {
-                    if let Some(action) = action {
-                        self.dispatch(action);
-                    }
-                }
-            },
+            // Browse 页(含 fullscreen / `/` 过滤子模式):on_key 内部按子模式分流。
+            PageKind::Browse => self.handle_browse_key(key),
         }
     }
 

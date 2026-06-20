@@ -1,7 +1,9 @@
-//! 浏览态导航执行器:列表光标移动 / 视口滚动 / 视图进入与返回 / 搜索输入。
+//! Browse 页的按键行为:列表光标移动 / 视口滚动 / 视图进入与返回 / `/` 过滤输入。
 //!
-//! 全部是 [`App::dispatch`](super::App) 查表命中后的执行端;全屏态的屏蔽闸在各执行器
-//! 开头判,保证「键 → 行为」中段可被 config 表替换而闸语义不动。
+//! 执行器长在 `impl BrowsePage` 上(Page 自管 view 态),经 [`Page::on_key`] 按子模式分派;
+//! 需要 model(client 起播 / 落盘 / lyrics)的副作用作为 [`BrowseEffect`] 冒泡,
+//! [`App::apply_browse_effect`] 落地。App 侧留同名 forwarder 供 `dispatch` 表(Search 面板等
+//! 回落)直调。全屏 / `/` 过滤是 Browse 的子模式,屏蔽闸 / 分流在各执行器开头判。
 
 use std::time::Instant;
 
@@ -9,128 +11,98 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mineral_model::{PlaylistId, Song};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
-use crate::runtime::action::{ScrollStep, SelectionMove};
+use crate::render::anim::ticks16_from_ms;
+use crate::runtime::action::{Action, ScrollStep, SelectionMove};
+use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::line_input::InputRequest;
 use crate::runtime::scroll;
-use crate::runtime::state::View;
+use crate::runtime::state::{BrowseModel, BrowsePage, View};
 use crate::runtime::track_pos::{PendingRestore, TrackPos};
 
 use super::App;
+use super::page::Page;
 
-impl App {
-    /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。
-    pub(super) fn enter_search(&mut self) {
-        if self.state.browse.fullscreen.on() {
-            return;
-        }
-        self.state.browse.search.typing = true;
-        self.state.browse.search.clear();
-        self.request_deep_search_tracks();
-    }
+/// Browse 页吃完按键后吐给 App 的副作用意图;[`App::apply_browse_effect`] 落地。
+/// Browse 自管纯 view 态动作;需要 model(client / 落盘 / lyrics)的操作经此冒泡。
+pub(crate) enum BrowseEffect {
+    /// 替换队列并起播(set_queue + play_song 两步;漏 play_song 会换队不响)。
+    PlayQueue {
+        /// 替换进播放队列的曲目(当前歌单全部曲目)。
+        queue: Vec<Song>,
 
-    /// 深度搜索的数据保障:Playlists 视图进搜索态时,把所有未拉取的歌单曲目一次性
-    /// 以 Background 优先级补齐(不抢视口 prefetch 的 User 档)。结果渐进到达,
-    /// 过滤结果逐帧变全。`tracks_requested` 成败都记,失败歌单不会反复重提交。
-    fn request_deep_search_tracks(&mut self) {
-        if self.state.browse.view != View::Playlists || !*self.state.cfg.tui().search().deep() {
-            return;
-        }
-        let pending: Vec<PlaylistId> = self
-            .state
-            .library
-            .playlists
-            .iter()
-            .map(|p| &p.data.id)
-            .filter(|id| {
-                !self.state.library.tracks.contains_key(*id)
-                    && !self.state.library.tracks_requested.contains(*id)
-            })
-            .cloned()
-            .collect();
-        for id in pending {
-            self.client.submit_task(
-                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
-                Priority::Background,
-            );
-            self.state.library.tracks_requested.insert(id);
-        }
-    }
+        /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
+        song: Box<Song>,
+    },
 
-    /// 搜索词每次变化后,把当前 view 的 sel 拉回 0(视口同步落位,逐字输入不滑屏)。
-    fn reset_sel_for_search(&mut self) {
-        match self.state.browse.view.current() {
-            View::Playlists => {
-                self.state.browse.nav.sel_playlist = 0;
-                self.state.browse.nav.scroll_playlist.snap_to(0);
-            }
-            View::Library => {
-                self.state.browse.nav.sel_track = 0;
-                self.state.browse.nav.scroll_track.snap_to(0);
-            }
-        }
-    }
+    /// 全屏态滚动歌词(歌词数据是 model,落地走既有 [`AppState::scroll_lyrics`])。
+    ScrollLyrics(ScrollStep),
 
-    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
-    /// 命令行行为),字符追加词;改词后复位 sel。
-    ///
-    /// 带 CONTROL 的字符键一律吞掉不当输入——否则 `<C-d>` 族滚动键在搜索态会把
-    /// 裸字符塞进 query。
-    pub(super) fn handle_search_key(&mut self, key: &KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.state.browse.search.typing = false;
-                self.state.browse.search.clear();
+    /// 把当前 track_pos 记忆表落盘(persist 档;表本身已在 Browse 内更新)。
+    PersistTrackPos,
+
+    /// 进搜索态时补拉这些歌单的曲目(Background 优先级);落地时提任务 + 标记已请求。
+    SubmitDeepSearch(Vec<PlaylistId>),
+
+    /// 非 Browse 自管的动词回落全局 dispatch(transport / 菜单 / 全屏切换等)。
+    Dispatch(Action),
+
+    /// 纯状态改动,无副作用。
+    None,
+}
+
+/// Browse 页决策所需的只读跨页上下文(props):由 App 在调用点就地构造。
+#[derive(Clone, Copy)]
+pub(crate) struct BrowseCtx<'a> {
+    /// 只读模型借用(library + cfg):过滤 / 选中 / 深度搜索读它。
+    model: BrowseModel<'a>,
+
+    /// 键位表(把按键解析成 [`Action`])。
+    keymap: &'a Keymap,
+}
+
+impl Page for BrowsePage {
+    type Effect = BrowseEffect;
+    type Ctx<'a> = BrowseCtx<'a>;
+
+    /// Browse 布局态按键入口:`/` 过滤 typing 子模式优先吞键;否则按 keymap 命中分派给自管动词
+    /// (移动 / 滚动 / 进退 / 进搜索),非 Browse 动词(transport / 菜单 / 全屏切换等)回落 Dispatch。
+    fn on_key(&mut self, key: &KeyEvent, ctx: BrowseCtx<'_>) -> BrowseEffect {
+        // `/` 模糊过滤输入子模式:吞键进过滤词,优先于动作解析。
+        if self.search.typing {
+            self.handle_search_key(key);
+            return BrowseEffect::None;
+        }
+        match chord_from_event(key).and_then(|c| ctx.keymap.lookup(c)) {
+            Some(Action::MoveSelection(mv)) => {
+                self.move_selection(mv, ctx.model);
+                BrowseEffect::None
             }
-            KeyCode::Enter => {
-                self.state.browse.search.typing = false;
-            }
-            KeyCode::Backspace => {
-                // vim 行为:query 已空时再删一次 = 退出搜索(等价 Esc)。
-                if self.state.browse.search.query().is_empty() {
-                    self.state.browse.search.typing = false;
-                    return;
-                }
-                if self.state.browse.search.edit(InputRequest::DeletePrev) {
-                    self.reset_sel_for_search();
-                    self.state.browse.nav.last_sel_change = Instant::now();
-                }
-            }
-            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
-            KeyCode::Char(c) => {
-                self.state.browse.search.edit(InputRequest::Insert(c));
-                self.reset_sel_for_search();
-                self.state.browse.nav.last_sel_change = Instant::now();
-            }
-            KeyCode::Left => {
-                self.state.browse.search.edit(InputRequest::Left);
-            }
-            KeyCode::Right => {
-                self.state.browse.search.edit(InputRequest::Right);
-            }
-            KeyCode::Home => {
-                self.state.browse.search.edit(InputRequest::Home);
-            }
-            KeyCode::End => {
-                self.state.browse.search.edit(InputRequest::End);
-            }
-            _ => {}
+            Some(Action::Scroll(step)) => self.scroll(step, ctx.model),
+            Some(Action::EnterSearch) => self.enter_search(ctx.model),
+            Some(Action::ActivateSelection) => self.activate_selection(ctx.model),
+            Some(Action::BackOrClearSearch) => self.back_or_clear_search(ctx.model),
+            Some(action) => BrowseEffect::Dispatch(action),
+            None => BrowseEffect::None,
         }
     }
+}
 
+/// Browse 页的按键执行器(纯 view 态改动在此;需要 model 的副作用经 [`BrowseEffect`] 冒泡)。
+impl BrowsePage {
     /// 列表光标移动,按当前 view 落到 `nav.sel_playlist` / `nav.sel_track`,越界钳首末行;
     /// 全屏态屏蔽(屏上无列表)。
-    pub(super) fn move_selection(&mut self, mv: SelectionMove) {
-        if self.state.browse.fullscreen.on() {
+    fn move_selection(&mut self, mv: SelectionMove, model: BrowseModel<'_>) {
+        if self.fullscreen.on() {
             return;
         }
-        self.state.browse.nav.last_sel_change = Instant::now();
-        let max = match self.state.browse.view.current() {
-            View::Playlists => self.state.filtered_playlists().len().saturating_sub(1),
-            View::Library => self.state.filtered_tracks().len().saturating_sub(1),
+        self.nav.last_sel_change = Instant::now();
+        let max = match self.view.current() {
+            View::Playlists => self.filtered_playlists(model).len().saturating_sub(1),
+            View::Library => self.filtered_tracks(model).len().saturating_sub(1),
         };
-        let sel = match self.state.browse.view.current() {
-            View::Playlists => &mut self.state.browse.nav.sel_playlist,
-            View::Library => &mut self.state.browse.nav.sel_track,
+        let sel = match self.view.current() {
+            View::Playlists => &mut self.nav.sel_playlist,
+            View::Library => &mut self.nav.sel_track,
         };
         *sel = match mv {
             SelectionMove::Down(n) => sel.saturating_add(n).min(max),
@@ -140,177 +112,266 @@ impl App {
         };
     }
 
-    /// `<C-d>` 族滚动按上下文路由:全屏滚歌词;浏览态滚当前列表——视口目标与光标同移
-    /// n 行(vim `<C-d>` 语义,保持光标的屏上相对位置),文档首尾边界由渲染端统一钳。
-    pub(super) fn scroll(&mut self, step: ScrollStep) {
-        if self.state.browse.fullscreen.on() {
-            self.state.scroll_lyrics(step);
-            return;
+    /// `<C-d>` 族滚动按上下文路由:全屏吐 [`BrowseEffect::ScrollLyrics`] 滚歌词;浏览态滚当前列表
+    /// ——视口目标与光标同移 n 行(vim `<C-d>` 语义,保持光标屏上相对位置),边界由渲染端统一钳。
+    fn scroll(&mut self, step: ScrollStep, model: BrowseModel<'_>) -> BrowseEffect {
+        if self.fullscreen.on() {
+            return BrowseEffect::ScrollLyrics(step);
         }
-        let delta = scroll::step_delta(step, self.state.cfg.tui().behavior());
+        let delta = scroll::step_delta(step, model.cfg.tui().behavior());
         let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
-        let ticks = self.state.list_glide_ticks();
-        let list = match self.state.browse.view.current() {
-            View::Playlists => &self.state.browse.nav.scroll_playlist,
-            View::Library => &self.state.browse.nav.scroll_track,
+        let anim = model.cfg.tui().animation();
+        let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
+        let list = match self.view.current() {
+            View::Playlists => &self.nav.scroll_playlist,
+            View::Library => &self.nav.scroll_track,
         };
         list.nudge(delta, ticks);
-        self.move_selection(if delta > 0 {
-            SelectionMove::Down(rows)
-        } else {
-            SelectionMove::Up(rows)
-        });
+        self.move_selection(
+            if delta > 0 {
+                SelectionMove::Down(rows)
+            } else {
+                SelectionMove::Up(rows)
+            },
+            model,
+        );
+        BrowseEffect::None
     }
 
-    /// 在当前视图「进入」:Playlists 进选中歌单的 Library;Library 设 queue 并播放选中曲。
-    /// 全屏态屏蔽。
-    pub(super) fn activate_selection(&mut self) {
-        if self.state.browse.fullscreen.on() {
-            return;
+    /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。同时吐出待补拉歌单(深度搜索数据保障)。
+    fn enter_search(&mut self, model: BrowseModel<'_>) -> BrowseEffect {
+        if self.fullscreen.on() {
+            return BrowseEffect::None;
         }
-        self.state.browse.nav.last_sel_change = Instant::now();
-        match self.state.browse.view.current() {
+        self.search.typing = true;
+        self.search.clear();
+        let pending = self.deep_search_pending(model);
+        if pending.is_empty() {
+            BrowseEffect::None
+        } else {
+            BrowseEffect::SubmitDeepSearch(pending)
+        }
+    }
+
+    /// 深度搜索数据保障:Playlists 视图 + deep 开启时,列出所有未拉取 / 未请求的歌单(待补拉);
+    /// 非该状态返回空。提任务 + 标记 `tracks_requested` 由落地端做(成败都标,失败不反复重提交)。
+    fn deep_search_pending(&self, model: BrowseModel<'_>) -> Vec<PlaylistId> {
+        if self.view != View::Playlists || !*model.cfg.tui().search().deep() {
+            return Vec::new();
+        }
+        model
+            .library
+            .playlists
+            .iter()
+            .map(|p| &p.data.id)
+            .filter(|id| {
+                !model.library.tracks.contains_key(*id)
+                    && !model.library.tracks_requested.contains(*id)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// 搜索词每次变化后,把当前 view 的 sel 拉回 0(视口同步落位,逐字输入不滑屏)。
+    fn reset_sel_for_search(&mut self) {
+        match self.view.current() {
+            View::Playlists => {
+                self.nav.sel_playlist = 0;
+                self.nav.scroll_playlist.snap_to(0);
+            }
+            View::Library => {
+                self.nav.sel_track = 0;
+                self.nav.scroll_track.snap_to(0);
+            }
+        }
+    }
+
+    /// 搜索输入态按键:Esc 退出 + 清词,Enter 退出保留词,Backspace 删字符 / 空词上退出(vim
+    /// 命令行行为),字符追加词;改词后复位 sel。
+    ///
+    /// 带 CONTROL 的字符键一律吞掉不当输入——否则 `<C-d>` 族滚动键在搜索态会把裸字符塞进 query。
+    fn handle_search_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.search.typing = false;
+                self.search.clear();
+            }
+            KeyCode::Enter => {
+                self.search.typing = false;
+            }
+            KeyCode::Backspace => {
+                if self.search.query().is_empty() {
+                    self.search.typing = false;
+                    return;
+                }
+                if self.search.edit(InputRequest::DeletePrev) {
+                    self.reset_sel_for_search();
+                    self.nav.last_sel_change = Instant::now();
+                }
+            }
+            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
+            KeyCode::Char(c) => {
+                self.search.edit(InputRequest::Insert(c));
+                self.reset_sel_for_search();
+                self.nav.last_sel_change = Instant::now();
+            }
+            KeyCode::Left => {
+                self.search.edit(InputRequest::Left);
+            }
+            KeyCode::Right => {
+                self.search.edit(InputRequest::Right);
+            }
+            KeyCode::Home => {
+                self.search.edit(InputRequest::Home);
+            }
+            KeyCode::End => {
+                self.search.edit(InputRequest::End);
+            }
+            _ => {}
+        }
+    }
+
+    /// 在当前视图「进入」:Playlists 进选中歌单的 Library(含深度命中定位 / 位置记忆恢复);
+    /// Library 吐 [`BrowseEffect::PlayQueue`] 起播选中曲。全屏态屏蔽。
+    fn activate_selection(&mut self, model: BrowseModel<'_>) -> BrowseEffect {
+        if self.fullscreen.on() {
+            return BrowseEffect::None;
+        }
+        self.nav.last_sel_change = Instant::now();
+        match self.view.current() {
             View::Playlists => {
                 // 上一次进歌单挂的延迟恢复(曲目未到就退出来了)就此作废。
-                self.state.browse.nav.pending_track_restore = None;
+                self.nav.pending_track_restore = None;
                 let mut sel_track = 0usize;
                 // 记忆恢复时的屏上相对行;None = 默认落位(光标上方留 scrolloff)。
                 let mut screen_anchor: Option<usize> = None;
                 if let Some(target_id) = self
-                    .state
-                    .filtered_playlists()
-                    .get(self.state.browse.nav.sel_playlist)
+                    .filtered_playlists(model)
+                    .get(self.nav.sel_playlist)
                     .map(|p| p.data.id.clone())
                 {
-                    // 深度命中行:进歌单后光标直接落到命中歌(搜索 → 定位闭环,
-                    // `search.locate_on_enter` 可关)。必须在清词前取——
+                    // 深度命中行:进歌单后光标直接落到命中歌。必须在清词前取——
                     // deep_hit_for 对空 query 恒 None。
-                    let locate = (*self.state.cfg.tui().search().locate_on_enter())
-                        .then(|| self.state.deep_hit_for(&target_id).map(|h| h.song_id))
+                    let locate = (*model.cfg.tui().search().locate_on_enter())
+                        .then(|| self.deep_hit_for(&target_id).map(|h| h.song_id))
                         .flatten();
-                    self.state.browse.search.clear();
-                    if let Some(raw_idx) = self
-                        .state
+                    self.search.clear();
+                    if let Some(raw_idx) = model
                         .library
                         .playlists
                         .iter()
                         .position(|p| p.data.id == target_id)
                     {
-                        self.state.browse.nav.sel_playlist = raw_idx;
+                        self.nav.sel_playlist = raw_idx;
                     }
                     if let Some(idx) = locate.and_then(|song_id| {
-                        self.state
+                        model
                             .library
                             .tracks
                             .get(&target_id)
                             .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
                     }) {
                         sel_track = idx;
-                    } else if self.state.track_memory().enabled()
-                        && let Some(pos) = self.state.browse.nav.track_pos.get(&target_id).cloned()
+                    } else if model.cfg.tui().behavior().remember_track_pos().enabled()
+                        && let Some(pos) = self.nav.track_pos.get(&target_id).cloned()
                     {
-                        // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),
-                        // 走到这里说明无命中。曲目还没拉到时挂 pending,
-                        // 等 `PlaylistDetailFetched` 补落位。
-                        if let Some(tracks) = self.state.library.tracks.get(&target_id) {
+                        // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),走到这里说明无命中。
+                        // 曲目还没拉到时挂 pending,等 `PlaylistDetailFetched` 补落位。
+                        if let Some(tracks) = model.library.tracks.get(&target_id) {
                             sel_track = pos.resolve(tracks);
-                            // 恢复屏上相对位置:该行回到离开时的视口行,
-                            // 而非统一顶到 scrolloff 位。
+                            // 恢复屏上相对位置:该行回到离开时的视口行,而非统一顶到 scrolloff 位。
                             screen_anchor = Some(pos.screen_row);
                         } else {
-                            self.state.browse.nav.pending_track_restore = Some(PendingRestore {
+                            self.nav.pending_track_restore = Some(PendingRestore {
                                 playlist: target_id.clone(),
                                 pos,
                             });
                         }
                     }
                 }
-                self.state.browse.view.switch_to(View::Library);
-                self.state.browse.nav.sel_track = sel_track;
-                // 视口直接落位(记忆按屏上相对行还原;命中歌上方留 scrolloff;
-                // 无命中即从头看),不从上张歌单的深处滑回来。
-                let anchor = screen_anchor.unwrap_or_else(|| self.state.scrolloff());
-                self.state
-                    .browse
-                    .nav
+                self.view.switch_to(View::Library);
+                self.nav.sel_track = sel_track;
+                // 视口直接落位(记忆按屏上相对行还原;命中歌上方留 scrolloff;无命中即从头看)。
+                let anchor = screen_anchor
+                    .unwrap_or_else(|| usize::from(*model.cfg.tui().behavior().scrolloff()));
+                self.nav
                     .scroll_track
                     .snap_to(sel_track.saturating_sub(anchor));
+                BrowseEffect::None
             }
             View::Library => {
-                let filtered = self.state.filtered_tracks();
-                let Some(song) = filtered
-                    .get(self.state.browse.nav.sel_track)
-                    .map(|sv| sv.data.clone())
-                else {
-                    return;
+                let filtered = self.filtered_tracks(model);
+                let Some(song) = filtered.get(self.nav.sel_track).map(|sv| sv.data.clone()) else {
+                    return BrowseEffect::None;
                 };
-                let new_queue: Vec<Song> = self
-                    .state
-                    .current_tracks()
+                let queue: Vec<Song> = self
+                    .current_tracks(model)
                     .into_iter()
                     .map(|sv| sv.data)
                     .collect();
                 // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。
-                self.client.set_queue(new_queue, song.id.clone());
-                self.client.play_song(song);
+                BrowseEffect::PlayQueue {
+                    queue,
+                    song: Box::new(song),
+                }
             }
         }
     }
 
-    /// 在当前视图「返回」:搜索非空先清词(选中复位),否则 Library 回 Playlists、
+    /// 在当前视图「返回」:搜索非空先清词(选中复位),否则 Library 回 Playlists(记位置)、
     /// Playlists 无处可回即无操作。全屏态屏蔽。
-    pub(super) fn back_or_clear_search(&mut self) {
-        if self.state.browse.fullscreen.on() {
-            return;
+    fn back_or_clear_search(&mut self, model: BrowseModel<'_>) -> BrowseEffect {
+        if self.fullscreen.on() {
+            return BrowseEffect::None;
         }
-        self.state.browse.nav.last_sel_change = Instant::now();
-        if !self.state.browse.search.query().is_empty() {
-            self.state.browse.search.clear();
+        self.nav.last_sel_change = Instant::now();
+        if !self.search.query().is_empty() {
+            self.search.clear();
             self.reset_sel_for_search();
-            return;
+            return BrowseEffect::None;
         }
-        if matches!(self.state.browse.view.current(), View::Library) {
-            self.remember_track_pos();
-            self.state.browse.nav.pending_track_restore = None;
-            self.state.browse.view.switch_to(View::Playlists);
+        if matches!(self.view.current(), View::Library) {
+            let persist = self.remember_track_pos(model);
+            self.nav.pending_track_restore = None;
+            self.view.switch_to(View::Playlists);
+            if persist {
+                return BrowseEffect::PersistTrackPos;
+            }
         }
+        BrowseEffect::None
     }
 
-    /// 把 Library 当前光标记入位置记忆表(`behavior.remember_track_pos` 非 off);
-    /// persist 档随手把整表 fire-and-forget 落盘。
+    /// 把 Library 当前光标记入位置记忆表(`behavior.remember_track_pos` 非 off);更新内存表,
+    /// 返回是否需要落盘(persist 档)——落盘由调用端做。
     ///
-    /// 曲目未就绪 / 空歌单时不记,**保留旧记忆**——进了还没加载完的歌单就退出来,
-    /// 不该把上次的有效位置抹成空。搜索过滤态下 `nav.sel_track` 指向 filtered 列表,
-    /// 记忆统一锚定到 raw 下标(恢复时无过滤)。
-    pub(super) fn remember_track_pos(&mut self) {
-        if !self.state.track_memory().enabled() || self.state.browse.view != View::Library {
-            return;
+    /// 曲目未就绪 / 空歌单时不记,**保留旧记忆**——进了还没加载完的歌单就退出来,不该把上次的
+    /// 有效位置抹成空。搜索过滤态下 `nav.sel_track` 指向 filtered 列表,记忆统一锚定到 raw 下标。
+    fn remember_track_pos(&mut self, model: BrowseModel<'_>) -> bool {
+        let mem = *model.cfg.tui().behavior().remember_track_pos();
+        if !mem.enabled() || self.view != View::Library {
+            return false;
         }
-        let Some(pid) = self.state.selected_playlist().map(|p| p.data.id.clone()) else {
-            return;
+        let Some(pid) = self.selected_playlist(model).map(|p| p.data.id.clone()) else {
+            return false;
         };
         let Some(song_id) = self
-            .state
-            .filtered_tracks()
-            .get(self.state.browse.nav.sel_track)
+            .filtered_tracks(model)
+            .get(self.nav.sel_track)
             .map(|sv| sv.data.id.clone())
         else {
-            return;
+            return false;
         };
         let index = self
-            .state
-            .current_tracks()
+            .current_tracks(model)
             .iter()
             .position(|sv| sv.data.id == song_id)
-            .unwrap_or(self.state.browse.nav.sel_track);
+            .unwrap_or(self.nav.sel_track);
         // 屏上相对行:光标减当前滚动目标(渲染端维护的视口首行)。
         let screen_row = self
-            .state
-            .browse
             .nav
             .sel_track
-            .saturating_sub(self.state.browse.nav.scroll_track.target_rows());
-        self.state.browse.nav.track_pos.insert(
+            .saturating_sub(self.nav.scroll_track.target_rows());
+        self.nav.track_pos.insert(
             pid,
             TrackPos {
                 song_id,
@@ -318,7 +379,112 @@ impl App {
                 screen_row,
             },
         );
-        if self.state.track_memory().persists() {
+        mem.persists()
+    }
+}
+
+impl App {
+    /// Browse 布局态按键入口:就地构造 [`BrowseCtx`]、交 Browse 页吃键、再落地它吐回的意图。
+    pub(super) fn handle_browse_key(&mut self, key: &KeyEvent) {
+        // ctx 就地构造:browse / library / cfg 是 self.state 三个不相交字段,keymap 在 self 上,
+        // 全 disjoint,借用检查器放行。
+        let ctx = BrowseCtx {
+            model: BrowseModel {
+                library: &self.state.library,
+                cfg: &self.state.cfg,
+            },
+            keymap: &self.keymap,
+        };
+        let eff = self.state.browse.on_key(key, ctx);
+        self.apply_browse_effect(eff);
+    }
+
+    /// 落地 Browse 页吐回的副作用意图。Browse 只产意图,client / 落盘 / lyrics 全在此收口。
+    fn apply_browse_effect(&mut self, eff: BrowseEffect) {
+        match eff {
+            BrowseEffect::PlayQueue { queue, song } => {
+                self.client.set_queue(queue, song.id.clone());
+                self.client.play_song(*song);
+            }
+            BrowseEffect::ScrollLyrics(step) => self.state.scroll_lyrics(step),
+            BrowseEffect::PersistTrackPos => self
+                .ui_prefs
+                .save_track_positions(&self.state.browse.nav.track_pos),
+            BrowseEffect::SubmitDeepSearch(ids) => {
+                // 失败 / 已请求都标记,避免反复重提交。
+                for id in ids {
+                    self.client.submit_task(
+                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
+                        Priority::Background,
+                    );
+                    self.state.library.tracks_requested.insert(id);
+                }
+            }
+            BrowseEffect::Dispatch(action) => self.dispatch(action),
+            BrowseEffect::None => {}
+        }
+    }
+
+    /// 进入搜索输入态 forwarder(dispatch 走它);逻辑在 [`BrowsePage::enter_search`]。
+    pub(super) fn enter_search(&mut self) {
+        let eff = self.state.browse.enter_search(BrowseModel {
+            library: &self.state.library,
+            cfg: &self.state.cfg,
+        });
+        self.apply_browse_effect(eff);
+    }
+
+    /// 列表光标移动 forwarder(dispatch / scroll 走它);逻辑在 [`BrowsePage::move_selection`]。
+    pub(super) fn move_selection(&mut self, mv: SelectionMove) {
+        self.state.browse.move_selection(
+            mv,
+            BrowseModel {
+                library: &self.state.library,
+                cfg: &self.state.cfg,
+            },
+        );
+    }
+
+    /// `<C-d>` 族滚动按上下文路由:全屏滚歌词;浏览态滚当前列表——视口目标与光标同移
+    /// n 行(vim `<C-d>` 语义,保持光标的屏上相对位置),文档首尾边界由渲染端统一钳。
+    /// `<C-d>` 族滚动 forwarder(dispatch 走它);逻辑在 [`BrowsePage::scroll`]。
+    pub(super) fn scroll(&mut self, step: ScrollStep) {
+        let eff = self.state.browse.scroll(
+            step,
+            BrowseModel {
+                library: &self.state.library,
+                cfg: &self.state.cfg,
+            },
+        );
+        self.apply_browse_effect(eff);
+    }
+
+    /// 在当前视图「进入」forwarder(dispatch 走它);逻辑在 [`BrowsePage::activate_selection`]。
+    pub(super) fn activate_selection(&mut self) {
+        let eff = self.state.browse.activate_selection(BrowseModel {
+            library: &self.state.library,
+            cfg: &self.state.cfg,
+        });
+        self.apply_browse_effect(eff);
+    }
+
+    /// 在当前视图「返回」forwarder(dispatch 走它);逻辑在 [`BrowsePage::back_or_clear_search`]。
+    pub(super) fn back_or_clear_search(&mut self) {
+        let eff = self.state.browse.back_or_clear_search(BrowseModel {
+            library: &self.state.library,
+            cfg: &self.state.cfg,
+        });
+        self.apply_browse_effect(eff);
+    }
+
+    /// 记当前 Library 光标位置 forwarder(Shift+Q 退出 / 进全屏等多入口走它);更新内存表后按
+    /// persist 档落盘。逻辑在 [`BrowsePage::remember_track_pos`]。
+    pub(super) fn remember_track_pos(&mut self) {
+        let persist = self.state.browse.remember_track_pos(BrowseModel {
+            library: &self.state.library,
+            cfg: &self.state.cfg,
+        });
+        if persist {
             self.ui_prefs
                 .save_track_positions(&self.state.browse.nav.track_pos);
         }

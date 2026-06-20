@@ -13,9 +13,7 @@ use mineral_task::SearchPayload;
 
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::theme::Theme;
-use crate::runtime::state::{
-    AppState, ChannelSearch, ChannelSearchState, PromptSegment, SearchFocus,
-};
+use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
 /// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调(spec §1.2 当前焦点面板边框高亮)。
 fn border_style(focused: bool, theme: &Theme) -> Style {
@@ -35,7 +33,7 @@ fn border_style(focused: bool, theme: &Theme) -> Style {
 pub fn draw_prompt(
     frame: &mut Frame<'_>,
     area: Rect,
-    rs: &ChannelSearchState,
+    rs: &SearchPage,
     theme: &Theme,
     border_focused: bool,
 ) {
@@ -96,7 +94,7 @@ pub(crate) struct PromptTokens {
 /// # Params:
 ///   - `area`: prompt 外框矩形(含边框;与 [`draw_prompt`] 同一 `area`)
 ///   - `rs`: channel 搜索子域(读当前源 / kind)
-pub(crate) fn prompt_tokens(area: Rect, rs: &ChannelSearchState) -> Option<PromptTokens> {
+pub(crate) fn prompt_tokens(area: Rect, rs: &SearchPage) -> Option<PromptTokens> {
     let session = rs.current()?;
     let inner = Block::new().borders(Borders::ALL).inner(area);
     if inner.width == 0 || inner.height == 0 {
@@ -163,7 +161,7 @@ fn dark_tint(c: Color, theme: &Theme) -> Color {
 fn draw_query(
     frame: &mut Frame<'_>,
     rect: Rect,
-    session: &ChannelSearch,
+    session: &SearchSession,
     theme: &Theme,
     show_cursor: bool,
 ) {
@@ -265,7 +263,7 @@ pub(crate) fn draw_prompt_dropdown(
 pub fn draw_results(
     frame: &mut Frame<'_>,
     area: Rect,
-    rs: &ChannelSearchState,
+    rs: &SearchPage,
     theme: &Theme,
     border_focused: bool,
 ) {
@@ -440,7 +438,7 @@ mod tests {
     use rustc_hash::FxHashMap;
 
     use crate::render::theme::Theme;
-    use crate::runtime::state::{ChannelSearchState, PromptSegment};
+    use crate::runtime::state::{PromptSegment, SearchPage};
 
     use super::{chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens};
 
@@ -458,8 +456,8 @@ mod tests {
     }
 
     /// 进入 search 并落到 NETEASE,得到带当前会话的状态。
-    fn entered(kinds: Vec<SearchKind>) -> ChannelSearchState {
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+    fn entered(kinds: Vec<SearchKind>) -> SearchPage {
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
         rs.enter(&caps(kinds));
         rs
     }

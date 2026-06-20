@@ -165,7 +165,7 @@ impl KindResults {
 ///
 /// 切 source 切的是整个会话（各 source 独立、切回恢复）；`query` 改变作废本会话全部 kind 桶
 /// （旧词的结果整体过期），切 kind 只换当前桶、其余桶保留（同词切回不重搜）。
-pub struct ChannelSearch {
+pub struct SearchSession {
     /// 当前选中的 kind（kind chip 下拉切换；每 source 记住自己的选择）。
     pub kind: SearchKind,
 
@@ -176,7 +176,7 @@ pub struct ChannelSearch {
     by_kind: FxHashMap<SearchKind, KindResults>,
 }
 
-impl ChannelSearch {
+impl SearchSession {
     /// 新会话：给定默认 kind、空输入、无结果桶。
     fn new(kind: SearchKind) -> Self {
         Self {
@@ -285,7 +285,7 @@ impl ChannelSearch {
 /// channel 搜索布局态：Search 布局态开关 + 当前 source + 输入焦点 + 焦点环 + per-channel 会话。
 ///
 /// `active` 与全屏态同级语义（全局布局态），两者逻辑 `on` 同时只一个（互斥）。
-pub struct ChannelSearchState {
+pub struct SearchPage {
     /// Search 布局态开关：`on()` 供按键路由互斥，`eased_in_out()` 供布局 morph 渲染位置。
     pub active: Toggle,
 
@@ -326,10 +326,10 @@ pub struct ChannelSearchState {
     reveal_seg: Option<PromptSegment>,
 
     /// per-source 搜索会话（query/kind/结果/光标独立，切 source 恢复）。
-    sessions: FxHashMap<SourceKind, ChannelSearch>,
+    sessions: FxHashMap<SourceKind, SearchSession>,
 }
 
-impl ChannelSearchState {
+impl SearchPage {
     /// 构造收起态的 channel 搜索域。
     ///
     /// # Params:
@@ -508,16 +508,16 @@ impl ChannelSearchState {
         self.source = Some(src);
         self.sessions
             .entry(src)
-            .or_insert_with(|| ChannelSearch::new(kind));
+            .or_insert_with(|| SearchSession::new(kind));
     }
 
     /// 当前 source 的搜索会话（只读）。
-    pub fn current(&self) -> Option<&ChannelSearch> {
+    pub fn current(&self) -> Option<&SearchSession> {
         self.source.and_then(|s| self.sessions.get(&s))
     }
 
     /// 当前 source 的搜索会话（可变；打字 / 翻页写入用）。
-    pub fn current_mut(&mut self) -> Option<&mut ChannelSearch> {
+    pub fn current_mut(&mut self) -> Option<&mut SearchSession> {
         match self.source {
             Some(src) => self.sessions.get_mut(&src),
             None => None,
@@ -526,16 +526,16 @@ impl ChannelSearchState {
 
     /// 当前 source × 当前 kind 的结果桶（只读）：渲染结果列/详情的直达入口。
     pub fn active_results(&self) -> Option<&KindResults> {
-        self.current().and_then(ChannelSearch::kind_results)
+        self.current().and_then(SearchSession::kind_results)
     }
 
     /// 当前 source × 当前 kind 的结果桶（可变）：光标移动 / detail 派发写入。
     pub fn active_results_mut(&mut self) -> Option<&mut KindResults> {
-        self.current_mut().and_then(ChannelSearch::kind_results_mut)
+        self.current_mut().and_then(SearchSession::kind_results_mut)
     }
 
     /// 按 source 找会话（可变）：搜索回包按事件自带 source 配对（可能非当前 source）。
-    pub fn session_for_mut(&mut self, source: SourceKind) -> Option<&mut ChannelSearch> {
+    pub fn session_for_mut(&mut self, source: SourceKind) -> Option<&mut SearchSession> {
         self.sessions.get_mut(&source)
     }
 
@@ -557,7 +557,7 @@ impl ChannelSearchState {
             .get(&source)
             .and_then(|c| c.searchable().first().copied())
             .unwrap_or(SearchKind::Song);
-        self.sessions.insert(source, ChannelSearch::new(kind));
+        self.sessions.insert(source, SearchSession::new(kind));
         Some(kind)
     }
 
@@ -626,7 +626,7 @@ mod tests {
 
     use crate::test_support::endserenading;
 
-    use super::{ChannelSearch, ChannelSearchState, EntityRef, PromptSegment, SearchFocus};
+    use super::{EntityRef, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
     /// 造一个落在 NETEASE、给定 searchable 的 caps 表。
     fn caps_with(kinds: Vec<SearchKind>) -> FxHashMap<SourceKind, ChannelCaps> {
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn enter_picks_first_searchable_source() -> color_eyre::Result<()> {
         let caps = caps_with(vec![SearchKind::Album, SearchKind::Song]);
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
         rs.enter(&caps);
 
         assert_eq!(
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn enter_with_no_searchable_source_stays_none() {
         let caps = FxHashMap::<SourceKind, ChannelCaps>::default();
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
         rs.enter(&caps);
         assert_eq!(rs.source, None, "无可搜索 source → 空态");
     }
@@ -687,7 +687,7 @@ mod tests {
     /// 同焦点为 no-op（不重置已 settle 的环）。
     #[test]
     fn set_focus_tracks_last_panel_and_arms_ring() {
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
         assert_eq!(
             rs.last_panel,
             SearchFocus::Results,
@@ -727,7 +727,7 @@ mod tests {
     /// 首页满页（30 条）不判榨干、next_offset 推到 30；detail root 落首项。
     #[test]
     fn first_page_full_not_exhausted() -> color_eyre::Result<()> {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(
             SearchKind::Song,
             full_page(),
@@ -749,7 +749,7 @@ mod tests {
     /// 短页（< 30）判榨干。
     #[test]
     fn short_page_marks_exhausted() -> color_eyre::Result<()> {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(
             SearchKind::Song,
             SearchPayload::Songs(endserenading(5)),
@@ -765,7 +765,7 @@ mod tests {
     /// 翻页 append：第二页拼到第一页后、next_offset 累加；短二页判榨干。
     #[test]
     fn append_page_accumulates_and_exhausts() -> color_eyre::Result<()> {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(
             SearchKind::Song,
             full_page(),
@@ -794,7 +794,7 @@ mod tests {
     /// 改 query 作废全部 kind 桶（旧词结果整体过期）。
     #[test]
     fn query_change_drops_buckets() {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(SearchKind::Song, full_page(), Page::default());
         assert!(s.kind_results().is_some(), "搜后有桶");
         s.push_query_char('x');
@@ -804,7 +804,7 @@ mod tests {
     /// set_sel 真的移动才复位 detail 栈（下钻后移光标 → 回 root）；钳制不动则保留。
     #[test]
     fn set_sel_resets_detail_only_on_real_move() -> color_eyre::Result<()> {
-        let mut s = ChannelSearch::new(SearchKind::Album);
+        let mut s = SearchSession::new(SearchKind::Album);
         s.apply_page(
             SearchKind::Album,
             SearchPayload::Albums(vec![album("a1"), album("a2")]),
@@ -826,7 +826,7 @@ mod tests {
     /// 文本光标:插入落在光标处、Left/Right 钳边、退格删光标前一字符、词首退格 no-op。
     #[test]
     fn prompt_cursor_edits_at_position() {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         for c in "ab".chars() {
             s.push_query_char(c);
         }
@@ -849,7 +849,7 @@ mod tests {
     /// 多字节(CJK)光标:byte 偏移按 char 边界,`query_split` 不切坏字符。
     #[test]
     fn prompt_cursor_multibyte_safe() {
-        let mut s = ChannelSearch::new(SearchKind::Song);
+        let mut s = SearchSession::new(SearchKind::Song);
         for c in "周杰伦".chars() {
             s.push_query_char(c);
         }
@@ -863,7 +863,7 @@ mod tests {
     /// （视觉收尾期继续画着往回收），tick 到 settle 才归零停画。
     #[test]
     fn dropdown_collapse_animates_after_close() {
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
         rs.set_prompt_seg(PromptSegment::Kind, 0);
         for _ in 0..8 {
             rs.tick();
@@ -881,7 +881,7 @@ mod tests {
     /// chip↔chip 切换重播展开动画;切到 query 收起动画仍画(reveal 归属保留上一个 chip)。
     #[test]
     fn dropdown_reanimates_on_chip_switch_then_query_collapse() {
-        let mut rs = ChannelSearchState::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
         rs.set_prompt_seg(PromptSegment::Kind, 0);
         for _ in 0..8 {
             rs.tick();
