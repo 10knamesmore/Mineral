@@ -158,7 +158,7 @@ impl SearchPage {
                 SearchEffect::None
             }
             Some(Action::CycleDetailSection) => {
-                self.cycle_detail_section();
+                self.cycle_detail_section(ctx.sweep_ticks);
                 SearchEffect::None
             }
             Some(Action::BackOrClearSearch) => {
@@ -321,9 +321,9 @@ impl SearchPage {
         }
     }
 
-    /// 切歌手双区(仅歌手帧),光标归零。CycleDetailSection 经全局 keymap 派发、任何焦点都可能
-    /// 到这里,仅 detail 焦点才动分区。
-    fn cycle_detail_section(&mut self) {
+    /// 切歌手双区(仅歌手帧),光标归零并 arm 横向滑动。CycleDetailSection 经全局 keymap 派发、
+    /// 任何焦点都可能到这里,仅 detail 焦点才动分区。
+    fn cycle_detail_section(&mut self, sweep_ticks: u16) {
         if self.focus != SearchFocus::Detail {
             return;
         }
@@ -334,8 +334,7 @@ impl SearchPage {
             return;
         };
         if matches!(frame.entity, EntityRef::Artist(_)) {
-            frame.section.cycle();
-            frame.list_sel = 0;
+            frame.cycle_section(sweep_ticks);
         }
     }
 

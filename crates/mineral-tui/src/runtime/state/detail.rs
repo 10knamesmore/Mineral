@@ -9,7 +9,7 @@ use mineral_model::{
 };
 use mineral_task::SearchPayload;
 
-use crate::render::anim::Transition;
+use crate::render::anim::{Toggle, Transition};
 
 /// 一帧详情要补拉的内容（携带目标 id，供派发与回包配对）。
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -174,6 +174,10 @@ pub struct DetailFrame {
     /// 歌手帧当前分区（非歌手帧忽略）。
     pub section: ArtistSection,
 
+    /// 歌手双区切换的横向滑动（off=Top Songs / on=Albums）。`None` = 从未切过（恒 Top Songs，
+    /// 无动画）；首次切换按 sweep 拍数懒构造，复用 browse view-sweep 同款 [`Toggle`]。
+    section_anim: Option<Toggle>,
+
     /// 面板内列表光标。
     pub list_sel: usize,
 
@@ -188,8 +192,35 @@ impl DetailFrame {
             entity,
             data: None,
             section: ArtistSection::default(),
+            section_anim: None,
             list_sel: 0,
             requested: false,
+        }
+    }
+
+    /// 切歌手双区并 arm 横向过渡（Top Songs↔Albums，复用 browse view-sweep 同款 [`Toggle`]）。
+    /// 光标归零；`ticks` 为切换拍数（由 sweep 配置折算，与下钻滑动同源）。
+    pub fn cycle_section(&mut self, ticks: u16) {
+        self.section.cycle();
+        self.list_sel = 0;
+        let to_albums = self.section == ArtistSection::Albums;
+        self.section_anim
+            .get_or_insert_with(|| Toggle::new(ticks.max(1)))
+            .set(to_albums);
+    }
+
+    /// 双区切换的横向滑动进度（`0` = Top Songs、满值 = Albums）；未在动画 → `None`（渲染单区）。
+    pub fn section_eased(&self) -> Option<u16> {
+        self.section_anim
+            .as_ref()
+            .filter(|t| !t.settled())
+            .map(Toggle::eased_in_out)
+    }
+
+    /// 推进双区切换动画一拍（由 [`DetailStack::tick`] 对栈顶帧调用）。
+    fn tick_section(&mut self) {
+        if let Some(anim) = &mut self.section_anim {
+            anim.tick();
         }
     }
 
@@ -405,11 +436,14 @@ impl DetailStack {
             .collect()
     }
 
-    /// 推进滑动一拍；过渡 settle 后清出发帧。
+    /// 推进滑动一拍；过渡 settle 后清出发帧。同时推进栈顶帧的双区切换动画。
     pub fn tick(&mut self) {
         self.transition.tick();
         if self.transition.settled() {
             self.sweep_from = None;
+        }
+        if let Some(frame) = self.frames.last_mut() {
+            frame.tick_section();
         }
     }
 
@@ -781,6 +815,54 @@ mod tests {
         assert!(
             DetailStack::empty().title_crumbs().is_empty(),
             "空栈无实体可标 → 空链"
+        );
+    }
+
+    /// cycle_section：立即翻转 section 并 arm 横向过渡；动画中 section_eased Some、
+    /// settle 后 None；可来回切。
+    #[test]
+    fn cycle_section_arms_and_settles() {
+        let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
+        assert_eq!(frame.section, ArtistSection::Hot, "默认 Top Songs");
+        assert!(frame.section_eased().is_none(), "未切过 → 无动画");
+
+        frame.cycle_section(/*ticks*/ 4);
+        assert_eq!(frame.section, ArtistSection::Albums, "立即翻到 Albums");
+        assert!(frame.section_eased().is_some(), "切换中有滑动进度");
+
+        for _ in 0..4 {
+            frame.tick_section();
+        }
+        assert!(frame.section_eased().is_none(), "推满后 settle、无动画");
+        assert_eq!(frame.section, ArtistSection::Albums);
+
+        frame.cycle_section(4);
+        assert_eq!(frame.section, ArtistSection::Hot, "再切回 Top Songs");
+        assert!(frame.section_eased().is_some(), "反向切换同样有滑动");
+    }
+
+    /// 非歌手帧不该被 cycle_section 误用，但即便调用也只是切 section + arm，不 panic；
+    /// 这里验证 DetailStack::tick 会推进栈顶帧的 section 动画。
+    #[test]
+    fn stack_tick_advances_top_section_anim() {
+        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
+        if let Some(frame) = st.current_mut() {
+            frame.cycle_section(4);
+        }
+        assert!(
+            st.current()
+                .and_then(super::DetailFrame::section_eased)
+                .is_some(),
+            "切换后栈顶帧动画在进行"
+        );
+        for _ in 0..4 {
+            st.tick();
+        }
+        assert!(
+            st.current()
+                .and_then(super::DetailFrame::section_eased)
+                .is_none(),
+            "DetailStack::tick 推进并 settle 栈顶帧 section 动画"
         );
     }
 

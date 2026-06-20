@@ -910,6 +910,139 @@ mod tests {
         Ok(())
     }
 
+    /// 造一个带热门曲 + 专辑列表的歌手 detail 帧(测试 helper)：搜索歌手 → root 帧补拉
+    /// detail(热门曲) + albums(带 track_count/发行年/厂牌)。返回已置焦 detail 的 App。
+    fn app_with_artist_detail() -> color_eyre::Result<crate::app::App> {
+        use mineral_channel_core::Page;
+        use mineral_model::{
+            Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, SearchKind, Song, SongId,
+            SourceKind,
+        };
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("mineral");
+        }
+        let result_artist = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("Mineral".to_owned())
+            .follower_count(176_393)
+            .build();
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Artist,
+            query: "mineral".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Artists(vec![result_artist]),
+        });
+        let hot = |id: &str, name: &str, album: &str, dur: u64| {
+            Song::builder()
+                .id(SongId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, "ar"),
+                    name: "Mineral".to_owned(),
+                }])
+                .album(Some(AlbumRef {
+                    id: AlbumId::new(SourceKind::NETEASE, "al1"),
+                    name: album.to_owned(),
+                }))
+                .duration_ms(dur)
+                .build()
+        };
+        let detail = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("Mineral".to_owned())
+            .follower_count(176_393)
+            .album_count(Some(2))
+            .song_count(Some(21))
+            .description("Texas emo, 1994–1998".to_owned())
+            .songs(vec![
+                hot("1", "LoveLetterTypewriter", "EndSerenading", 225_000),
+                hot("2", "Palisade", "EndSerenading", 271_000),
+            ])
+            .build();
+        let album = |id: &str, name: &str, n: u64, ms: i64, co: &str| {
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .track_count(n)
+                .publish_time_ms(ms)
+                .company(Some(co.to_owned()))
+                .build()
+        };
+        let albums = vec![
+            album(
+                "al1",
+                "EndSerenading",
+                10,
+                1_443_196_800_000,
+                "Crank! Records",
+            ),
+            album(
+                "al2",
+                "ThePowerOfFailing",
+                11,
+                1_577_808_000_000,
+                "Crank! Records",
+            ),
+        ];
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.set_artist_detail(Box::new(detail));
+            frame.set_artist_albums(albums);
+        }
+        app.state.channel_search.focus = SearchFocus::Detail;
+        Ok(app)
+    }
+
+    /// Search 歌手 detail 的 Albums 区:专辑表 name/tracks/year/label 四列 + 表头。
+    #[test]
+    fn search_detail_artist_albums_snapshot() -> color_eyre::Result<()> {
+        use crate::runtime::state::ArtistSection;
+
+        let mut app = app_with_artist_detail()?;
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.section = ArtistSection::Albums;
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌手 detail Albums 区:专辑表 name/tracks/year/label 四列 + 表头",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 歌手 detail 双区切换中途一帧:Top Songs 与 Albums 列表横向合成(尊重 view_sweep)。
+    #[test]
+    fn search_detail_section_sweep_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_artist_detail()?;
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            if let Some(frame) = kr.detail.current_mut() {
+                frame.cycle_section(/*ticks*/ 8);
+            }
+            // 推进约 3/8:既非起点也非终点,两区列表同屏合成。
+            for _ in 0..3 {
+                kr.detail.tick();
+            }
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌手 detail 切区中途:Top Songs↔Albums 横向合成(列表区,Tab/头图不滑)",
+            t.backend()
+        );
+        Ok(())
+    }
+
     /// 专辑结果:结果列按类型走「专辑名 · 艺人」两列对齐(非纯单行文字)。
     #[test]
     fn search_results_albums_snapshot() -> color_eyre::Result<()> {

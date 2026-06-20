@@ -14,13 +14,13 @@ use ratatui::widgets::{
     Wrap,
 };
 use ratatui_image::picker::Picker;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use mineral_model::{Album, Artist, SearchKind, Song};
+use mineral_config::SweepStyle;
+use mineral_model::{Album, Artist, Song};
 
 use crate::components::layout::search_panel::join_artists;
 use crate::components::layout::track_table::{self, TrackColumns};
-use crate::components::layout::{cover, cover_image};
+use crate::components::layout::{cover, cover_image, detail_title};
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
@@ -48,7 +48,7 @@ pub fn draw(
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color))
         .border_type(BorderType::Rounded)
-        .title(detail_title(state, area.width));
+        .title(detail_title::for_panel(state, area.width));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(kr) = state.channel_search.active_results() else {
@@ -420,32 +420,104 @@ fn draw_artist_body(
     }
     let [tabs, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
     draw_artist_tabs(buf, tabs, dframe.section, theme);
-    match (dframe.section, &dframe.data) {
+    match dframe.section_eased() {
+        // 切区滑动期：两区各渲染到离屏 Buffer，按进度横向合成（0=Top Songs、满值=Albums），
+        // 风格尊重 `view_sweep` 配置——与左栏 playlists↔tracks 同款。Tab/头图不滑，只动列表区。
+        Some(eased) => {
+            let mut hot_buf = Buffer::empty(list);
+            let mut alb_buf = Buffer::empty(list);
+            draw_artist_section(&mut hot_buf, list, ArtistSection::Hot, dframe, state, theme);
+            draw_artist_section(
+                &mut alb_buf,
+                list,
+                ArtistSection::Albums,
+                dframe,
+                state,
+                theme,
+            );
+            compose_sweep(
+                buf,
+                list,
+                &hot_buf,
+                &alb_buf,
+                eased,
+                *state.cfg.tui().animation().view_sweep(),
+            );
+        }
+        None => draw_artist_section(buf, list, dframe.section, dframe, state, theme),
+    }
+}
+
+/// 画歌手某一区的列表：Top Songs 走曲目表（artist 列冗余，出 album 列）、Albums 走专辑表；
+/// 数据未到画骨架。切区滑动期对两区各调一次（离屏合成）。
+fn draw_artist_section(
+    buf: &mut Buffer,
+    list: Rect,
+    section: ArtistSection,
+    dframe: &DetailFrame,
+    state: &AppState,
+    theme: &Theme,
+) {
+    match (section, &dframe.data) {
         (
             ArtistSection::Hot,
             Some(DetailData::Artist {
                 detail: Some(a), ..
             }),
-        ) => {
-            draw_track_list(
-                buf,
-                list,
-                &a.songs,
-                dframe.list_sel,
-                TrackColumns::new(/*artist*/ false, /*album*/ true),
-                state,
-                theme,
-            );
-        }
+        ) => draw_track_list(
+            buf,
+            list,
+            &a.songs,
+            dframe.list_sel,
+            TrackColumns::new(/*artist*/ false, /*album*/ true),
+            state,
+            theme,
+        ),
         (
             ArtistSection::Albums,
             Some(DetailData::Artist {
                 albums: Some(albs), ..
             }),
-        ) => {
-            draw_album_list(buf, list, albs, dframe.list_sel, theme);
-        }
+        ) => draw_album_list(buf, list, albs, dframe.list_sel, theme),
         _ => draw_skeleton(buf, list, theme),
+    }
+}
+
+/// 两区离屏 buffer 按 `eased`（千分比，`0`=base、满值=over）横向合成到 `area`，尊重
+/// [`SweepStyle`]（Push 整体平移 / Cover 新区从右覆盖）。与左栏 view-sweep 同范式。
+fn compose_sweep(
+    buf: &mut Buffer,
+    area: Rect,
+    base: &Buffer,
+    over: &Buffer,
+    eased: u16,
+    style: SweepStyle,
+) {
+    let w = area.width;
+    let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
+        .unwrap_or(w)
+        .min(w);
+    for c in 0..w {
+        let (src, src_c) = match style {
+            // 新区从右覆盖：右 advance 列取 over。
+            SweepStyle::Cover => {
+                let split = w.saturating_sub(advance);
+                if c < split {
+                    (base, c)
+                } else {
+                    (over, c - split)
+                }
+            }
+            // 整体左移 advance，新区从右补入。非穷尽（`#[non_exhaustive]`）→ 按 Push 兜底。
+            SweepStyle::Push | _ => {
+                if c + advance < w {
+                    (base, c + advance)
+                } else {
+                    (over, c + advance - w)
+                }
+            }
+        };
+        copy_col(buf, area, src, c, src_c);
     }
 }
 
@@ -501,31 +573,47 @@ fn draw_track_list(
     StatefulWidget::render(table, area, buf, &mut st);
 }
 
-/// 专辑列表（name）：当前 `sel` 行整行高亮（下钻入口）。
+/// 专辑表（name/tracks/year/label，带表头）：artist Albums 区，当前 `sel` 行整行高亮（下钻入口）。
 fn draw_album_list(buf: &mut Buffer, area: Rect, albums: &[Album], sel: usize, theme: &Theme) {
     if albums.is_empty() {
         draw_skeleton(buf, area, theme);
         return;
     }
+    let meta = Style::new().fg(theme.overlay);
+    let header = Row::new(vec![
+        Cell::from("name"),
+        Cell::from("tracks"),
+        Cell::from("year"),
+        Cell::from("label"),
+    ])
+    .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
     let rows = albums.iter().map(|a| {
-        Row::new(vec![Cell::from(Span::styled(
-            a.name.clone(),
-            Style::new().fg(theme.text),
-        ))])
+        let tracks = if a.track_count > 0 {
+            with_commas(a.track_count)
+        } else {
+            String::new()
+        };
+        let year = publish_year(a.publish_time_ms).map_or_else(String::new, |y| y.to_string());
+        let label = a.company.as_deref().unwrap_or_default().to_owned();
+        Row::new(vec![
+            Cell::from(Span::styled(a.name.clone(), Style::new().fg(theme.text))),
+            Cell::from(Span::styled(tracks, meta)),
+            Cell::from(Span::styled(year, meta)),
+            Cell::from(Span::styled(label, meta)),
+        ])
     });
-    let table = Table::new(rows, [Constraint::Fill(1)])
-        .row_highlight_style(highlight(theme))
-        .highlight_symbol("▌ ");
+    let widths = [
+        Constraint::Fill(3),
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Fill(2),
+    ];
+    let table = Table::new(rows, widths)
+        .header(header)
+        .row_highlight_style(track_table::highlight_style(theme))
+        .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
     let mut st = TableState::default().with_selected(Some(sel.min(albums.len().saturating_sub(1))));
     StatefulWidget::render(table, area, buf, &mut st);
-}
-
-/// 列表选中行整行高亮样式。
-fn highlight(theme: &Theme) -> Style {
-    Style::new()
-        .bg(theme.surface0)
-        .fg(theme.accent)
-        .add_modifier(Modifier::BOLD)
 }
 
 /// 数据未到的占位骨架（几行暗调虚线）。
@@ -627,166 +715,9 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-/// detail 顶栏 title：当前结果集的详情栈 breadcrumb；无结果 / 空栈回退固定 `detail`。
-/// `width` 是面板外框宽，扣掉圆角边框占位后交给 [`frame_title`] 按显示宽度截断。
-fn detail_title(state: &AppState, width: u16) -> String {
-    let budget = width.saturating_sub(4);
-    match state.channel_search.active_results() {
-        Some(kr) => frame_title(&kr.detail.title_crumbs(), budget),
-        None => "detail".to_owned(),
-    }
-}
-
-/// 详情栈 breadcrumb → 顶栏 title 文案，按显示宽度 `max_width` 截断。
-///
-/// root 单帧 → `图标 单数类型 · 名`；下钻多帧 → 各帧 `图标 名` 用 ` › ` 链接（图标代类型）。
-/// 超宽时优先截最左祖先名、保当前帧名完整；当前帧那一节自身放不下才截它补 `…`。空链 → `detail`。
-///
-/// # Params:
-///   - `crumbs`: 栈帧链（root→top）的 `(类型, 名)`
-///   - `max_width`: 可用显示宽度（列）
-///
-/// # Return:
-///   组装并按宽度截断后的 title 文案。
-fn frame_title(crumbs: &[(SearchKind, &str)], max_width: u16) -> String {
-    let Some((last, ancestors)) = crumbs.split_last() else {
-        return "detail".to_owned();
-    };
-    let (last_kind, last_name) = *last;
-    if ancestors.is_empty() {
-        let prefix = format!("{} {} · ", last_kind.icon(), last_kind.singular());
-        return fit_prefixed(&prefix, last_name, max_width);
-    }
-    let last_seg = format!("{} {}", last_kind.icon(), last_name);
-    let head = ancestors
-        .iter()
-        .map(|(k, n)| format!("{} {}", k.icon(), n))
-        .collect::<Vec<String>>()
-        .join(" › ");
-    let sep = " › ";
-    let full = format!("{head}{sep}{last_seg}");
-    if display_width(&full) <= max_width {
-        return full;
-    }
-    let reserve = display_width(&last_seg).saturating_add(display_width(sep));
-    if reserve >= max_width {
-        // 连当前帧那一节都放不下：退化为只截当前帧名（保图标）。
-        let prefix = format!("{} ", last_kind.icon());
-        return fit_prefixed(&prefix, last_name, max_width);
-    }
-    let head_trunc = truncate_to_width(&head, max_width.saturating_sub(reserve));
-    format!("{head_trunc}{sep}{last_seg}")
-}
-
-/// `前缀 + 名` 放不下时只截名补 `…`（保前缀）；前缀本身就超宽则整体截断兜底。
-fn fit_prefixed(prefix: &str, name: &str, max_width: u16) -> String {
-    let full = format!("{prefix}{name}");
-    if display_width(&full) <= max_width {
-        return full;
-    }
-    let pw = display_width(prefix);
-    if pw < max_width {
-        let name = truncate_to_width(name, max_width.saturating_sub(pw));
-        return format!("{prefix}{name}");
-    }
-    truncate_to_width(&full, max_width)
-}
-
-/// 按显示宽度截断到 `max_width`，截掉则补 `…`（占 1 列）；本就够宽原样返回。
-fn truncate_to_width(s: &str, max_width: u16) -> String {
-    if display_width(s) <= max_width {
-        return s.to_owned();
-    }
-    let budget = max_width.saturating_sub(1); // 给省略号留 1 列
-    let mut acc = 0u16;
-    let mut out = String::new();
-    for ch in s.chars() {
-        let w = char_width(ch);
-        if acc.saturating_add(w) > budget {
-            break;
-        }
-        acc = acc.saturating_add(w);
-        out.push(ch);
-    }
-    out.push('…');
-    out
-}
-
-/// 字符串显示宽度（CJK 双宽）；溢出 u16 夹到 MAX。
-fn display_width(s: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(s)).unwrap_or(u16::MAX)
-}
-
-/// 单字符显示宽度（控制字符按 0）。
-fn char_width(ch: char) -> u16 {
-    u16::try_from(UnicodeWidthChar::width(ch).unwrap_or(0)).unwrap_or(u16::MAX)
-}
-
 #[cfg(test)]
 mod tests {
-    use mineral_model::SearchKind;
-
-    use super::{frame_title, publish_year};
-
-    /// root 帧（单节）：`图标 单数类型 · 名`。
-    #[test]
-    fn title_root_frame_is_kind_and_name() {
-        assert_eq!(
-            frame_title(&[(SearchKind::Album, "范特西")], /*max_width*/ 40),
-            "◉ album · 范特西"
-        );
-        assert_eq!(
-            frame_title(&[(SearchKind::Playlist, "Chill")], 40),
-            "▤ playlist · Chill"
-        );
-    }
-
-    /// 下钻帧（多节）：图标代类型、名用 ` › ` 链接，宽度够时全展开。
-    #[test]
-    fn title_breadcrumb_joins_crumbs() {
-        assert_eq!(
-            frame_title(
-                &[
-                    (SearchKind::Artist, "周杰伦"),
-                    (SearchKind::Album, "范特西")
-                ],
-                40,
-            ),
-            "✦ 周杰伦 › ◉ 范特西"
-        );
-    }
-
-    /// 超宽：按显示宽度截祖先名（CJK 双宽）、当前帧名保持完整。
-    #[test]
-    fn title_breadcrumb_truncates_ancestor_keeps_current() {
-        // 全长 "✦ 周杰伦 › ◉ 范特西" 显示宽 19；给 17 容不下 → 截祖先到 "✦ 周…"。
-        assert_eq!(
-            frame_title(
-                &[
-                    (SearchKind::Artist, "周杰伦"),
-                    (SearchKind::Album, "范特西")
-                ],
-                17,
-            ),
-            "✦ 周… › ◉ 范特西"
-        );
-    }
-
-    /// 当前帧名自己都放不下时：截当前帧名补省略号（祖前缀保留图标/类型词）。
-    #[test]
-    fn title_root_truncates_long_name() {
-        // 前缀 "◉ album · " 宽 10；给 14 → 名字预算 4 → "范特西精选" 截成 "范…"。
-        assert_eq!(
-            frame_title(&[(SearchKind::Album, "范特西精选")], 14),
-            "◉ album · 范…"
-        );
-    }
-
-    /// 空链回退固定 `detail`（无实体可标）。
-    #[test]
-    fn title_empty_falls_back() {
-        assert_eq!(frame_title(&[], 40), "detail");
-    }
+    use super::publish_year;
 
     /// 发行年份按北京 +8 偏移读：北京 1 月 1 日发行的专辑不能因 UTC 落到上一年。
     #[test]

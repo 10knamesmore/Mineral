@@ -3,6 +3,7 @@
 pub mod compute;
 pub mod cover;
 pub mod cover_image;
+pub mod detail_title;
 pub mod lyrics;
 pub mod now_playing;
 pub mod search_detail;
