@@ -5,7 +5,7 @@
 //! fetch 任务回填。`frames[0]` 即 root（对应结果列选中行），其上是下钻帧。
 
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, Song, SourceKind,
+    Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind, Song, SourceKind,
 };
 use mineral_task::SearchPayload;
 
@@ -95,6 +95,16 @@ impl EntityRef {
             Self::Album(a) => &a.name,
             Self::Artist(a) => &a.name,
             Self::Playlist(p) => &p.name,
+        }
+    }
+
+    /// 该实体对应的 [`SearchKind`]（与结果列 tab 同一套）——detail 顶栏 title 据此取图标/类型词。
+    pub fn kind(&self) -> SearchKind {
+        match self {
+            Self::Song(_) => SearchKind::Song,
+            Self::Album(_) => SearchKind::Album,
+            Self::Artist(_) => SearchKind::Artist,
+            Self::Playlist(_) => SearchKind::Playlist,
         }
     }
 
@@ -384,6 +394,15 @@ impl DetailStack {
     /// 下钻深度：0 = 只看 root（或空栈）、N = root 之上压了 N 帧。
     pub fn depth(&self) -> usize {
         self.frames.len().saturating_sub(1)
+    }
+
+    /// 每一帧的 `(类型, 名)` 链，root→top——供 detail 顶栏 breadcrumb title 组装。
+    /// 空栈 → 空 `Vec`（无实体可标，调用方回退固定标题）。
+    pub fn title_crumbs(&self) -> Vec<(SearchKind, &str)> {
+        self.frames
+            .iter()
+            .map(|f| (f.entity.kind(), f.entity.name()))
+            .collect()
     }
 
     /// 推进滑动一拍；过渡 settle 后清出发帧。
@@ -719,6 +738,50 @@ mod tests {
         }
         assert!(st.sweep_frames().is_none(), "推满后 settle、无滑动");
         Ok(())
+    }
+
+    /// EntityRef::kind 把四变体映射到对应 SearchKind（与结果列 tab 同一套）。
+    #[test]
+    fn entity_ref_kind_maps_variants() {
+        use mineral_model::SearchKind;
+        assert_eq!(
+            EntityRef::Song(Box::new(song("s", None))).kind(),
+            SearchKind::Song
+        );
+        assert_eq!(
+            EntityRef::Album(Box::new(album("al"))).kind(),
+            SearchKind::Album
+        );
+        assert_eq!(
+            EntityRef::Artist(Box::new(artist("ar"))).kind(),
+            SearchKind::Artist
+        );
+        assert_eq!(
+            EntityRef::Playlist(Box::new(playlist("pl"))).kind(),
+            SearchKind::Playlist
+        );
+    }
+
+    /// title_crumbs 给出 root→top 的 (kind, name) 链，下钻一层多一节；空栈为空链。
+    #[test]
+    fn title_crumbs_walk_root_to_top() {
+        use mineral_model::SearchKind;
+        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
+        assert_eq!(st.title_crumbs(), vec![(SearchKind::Artist, "artist ar")]);
+
+        st.push(EntityRef::Album(Box::new(album("al"))), 1);
+        assert_eq!(
+            st.title_crumbs(),
+            vec![
+                (SearchKind::Artist, "artist ar"),
+                (SearchKind::Album, "album al"),
+            ]
+        );
+
+        assert!(
+            DetailStack::empty().title_crumbs().is_empty(),
+            "空栈无实体可标 → 空链"
+        );
     }
 
     /// 取栈顶实体名（测试 helper）。

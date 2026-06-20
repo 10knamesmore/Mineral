@@ -33,4 +33,72 @@ impl SearchKind {
             Self::User => "☻ users",
         }
     }
+
+    /// 单独的字形图标(`label` 的前缀部分,如 `◉`)。
+    ///
+    /// # Return:
+    ///   该类型的字形图标(`&'static str`)。
+    pub const fn icon(&self) -> &'static str {
+        match self {
+            Self::Song => "♪",
+            Self::Album => "◉",
+            Self::Artist => "✦",
+            Self::Playlist => "▤",
+            Self::User => "☻",
+        }
+    }
+
+    /// 单数名词(如 `album`)。
+    ///
+    /// # Return:
+    ///   该类型的单数名词(`&'static str`)。
+    pub const fn singular(&self) -> &'static str {
+        match self {
+            Self::Song => "song",
+            Self::Album => "album",
+            Self::Artist => "artist",
+            Self::Playlist => "playlist",
+            Self::User => "user",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchKind;
+
+    /// 五个变体(测试穷举用)。
+    const ALL: [SearchKind; 5] = [
+        SearchKind::Song,
+        SearchKind::Album,
+        SearchKind::Artist,
+        SearchKind::Playlist,
+        SearchKind::User,
+    ];
+
+    /// icon / singular 与 label 同源:label 必以 icon 起头、且含 singular 词干(复数仅多个尾字符)。
+    /// 守卫三处词表(label/icon/singular)别各改一处漂移。
+    #[test]
+    fn label_composes_from_icon_and_singular() {
+        for kind in ALL {
+            assert!(
+                kind.label().starts_with(kind.icon()),
+                "{kind:?}: label 应以 icon 起头"
+            );
+            assert!(
+                kind.label().contains(kind.singular()),
+                "{kind:?}: label 应含 singular 词干"
+            );
+        }
+    }
+
+    /// singular 是复数 label 去掉图标与尾 `s`(纯文案锚点,改词表时一并对齐)。
+    #[test]
+    fn singular_forms_are_expected() {
+        assert_eq!(SearchKind::Song.singular(), "song");
+        assert_eq!(SearchKind::Album.singular(), "album");
+        assert_eq!(SearchKind::Artist.singular(), "artist");
+        assert_eq!(SearchKind::Playlist.singular(), "playlist");
+        assert_eq!(SearchKind::User.singular(), "user");
+    }
 }
