@@ -10,7 +10,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget, Wrap,
+    Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
+    Wrap,
 };
 use ratatui_image::picker::Picker;
 
@@ -44,6 +45,7 @@ pub fn draw(
     let block = Block::new()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color))
+        .border_type(BorderType::Rounded)
         .title("detail");
     let inner = block.inner(area);
     frame.render_widget(block, area);

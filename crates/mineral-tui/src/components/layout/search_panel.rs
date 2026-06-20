@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -40,6 +40,7 @@ pub fn draw_prompt(
     let block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style(border_focused, theme))
+        .border_type(BorderType::Rounded)
         .title("search");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -96,7 +97,10 @@ pub(crate) struct PromptTokens {
 ///   - `rs`: channel 搜索子域(读当前源 / kind)
 pub(crate) fn prompt_tokens(area: Rect, rs: &SearchPage) -> Option<PromptTokens> {
     let session = rs.current()?;
-    let inner = Block::new().borders(Borders::ALL).inner(area);
+    let inner = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .inner(area);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -270,6 +274,7 @@ pub fn draw_results(
     let block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style(border_focused, theme))
+        .border_type(BorderType::Rounded)
         .title("results");
     let inner = block.inner(area);
     frame.render_widget(block, area);
