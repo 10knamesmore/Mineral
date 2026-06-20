@@ -137,8 +137,10 @@ pub fn morph_areas(normal: &Areas, full: &Areas, t: u16) -> Areas {
 
 /// 在浏览态与 search 端点两套 [`Areas`] 间按进度 `t`(eased_in_out 千分比 `0..=1000`)插值。
 /// 与 [`morph_areas`](fullscreen 专用「一律朝中心收」)语义不同:search 是「两端对飞」——
+///   - `top_status`:search 端被 prompt 接管,故浏览顶栏朝自身中心「收掉」(collapse),与同处
+///     顶部的 prompt 收放交叠;
 ///   - `left` / `right` / `transport`:两端都在,逐字段对飞(sidebar→results / now_playing→detail / 半宽→全宽);
-///   - `search_prompt`:浏览端无,从自身中心零面积「长出」到 1 行;
+///   - `search_prompt`:浏览端无,从自身中心零面积「长出」到 3 行带框;
 ///   - `cover` / `lyrics` / `spectrum`:search 端无,从浏览位「收向」自身中心零面积退场。
 ///
 /// # Params:
@@ -160,7 +162,8 @@ pub fn morph_search(normal: &Areas, search: &Areas, t: u16) -> Areas {
     };
     Areas {
         mode: search.mode,
-        top_status: lerp_rect(normal.top_status, search.top_status, t),
+        // search 端 prompt 接管顶行,故浏览顶栏朝自身中心收掉(同 lyrics/spectrum 退场机制)。
+        top_status: collapse(normal.top_status),
         left: lerp_rect(normal.left, search.left, t),
         right,
         search_prompt: search.search_prompt.map(grow),
@@ -255,6 +258,7 @@ mod tests {
         assert_eq!(m0.left, normal.left, "t=0 左栏在浏览位(sidebar)");
         assert_eq!(m0.right, normal.right, "t=0 右栏在浏览位(now_playing)");
         assert_eq!(m0.transport, normal.transport, "t=0 transport 在浏览位");
+        assert_eq!(m0.top_status, normal.top_status, "t=0 顶栏在浏览位(未收)");
         let p0 = m0
             .search_prompt
             .ok_or_else(|| color_eyre::eyre::eyre!("search 形变缺 prompt"))?;
@@ -265,6 +269,7 @@ mod tests {
         assert_eq!(m1.right, search.right, "t=1000 右栏抵 detail 位");
         assert_eq!(m1.transport, search.transport, "t=1000 transport 全宽");
         assert_eq!(m1.search_prompt, search.search_prompt, "t=1000 prompt 满");
+        assert_eq!(m1.top_status.height, 0, "t=1000 顶栏朝中心收零高");
         let l1 = m1
             .lyrics
             .ok_or_else(|| color_eyre::eyre::eyre!("search 形变缺 lyrics"))?;

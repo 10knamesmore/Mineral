@@ -151,20 +151,18 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
     }
 }
 
-/// Search 布局端点(继 [`compute`] / [`compute_fullscreen`] 之后的第三个):顶栏保留,其下
-/// 3 行 token prompt 全宽(带边框框,焦点高亮),主体左 results(38%)右 detail(62%)的
-/// master-detail,transport 全宽贴底。退场面板 cover / lyrics / spectrum 在此端点无锚为 `None`。
+/// Search 布局端点(继 [`compute`] / [`compute_fullscreen`] 之后的第三个):**prompt 框接管顶行**
+/// ——不留 status bar(其信息在 search 态无意义),3 行 token prompt 全宽贴 area 顶(带边框,焦点
+/// 高亮),主体左 results(38%)右 detail(62%)的 master-detail,transport 全宽贴底。top_status
+/// 退化零面积、cover / lyrics / spectrum 在此端点无锚均为 `None`。
 ///
 /// # Params:
 ///   - `area`: 可用区域
 ///   - `_cfg`: 布局段;暂未读,保留入参令三个布局端点签名一致(备后续响应式宽度比)
 pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas {
-    let [top_status, search_prompt, body] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(0),
-    ])
-    .areas(area);
+    // search 态顶行被 prompt 接管:不留 status bar,prompt 紧贴 area 顶。
+    let [search_prompt, body] =
+        Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
 
     // transport 高度沿用 normal(compute_full):内容固定 6 行 + 边框 2 = 8。
     let [results_body, transport] =
@@ -176,7 +174,8 @@ pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas 
 
     Areas {
         mode: LayoutMode::Full,
-        top_status,
+        // top_status 退化零面积:morph 里 browse 顶栏朝中心收掉,稳态 search 无 status bar。
+        top_status: Rect::new(area.x, area.y, 0, 0),
         left: results,
         right: Some(detail),
         search_prompt: Some(search_prompt),
@@ -304,9 +303,13 @@ mod tests {
         let results = a.left;
         let transport = a.transport;
 
-        // 顶栏 1 行不动,prompt 紧贴其下、全宽 1 行。
-        assert_eq!(a.top_status.height, 1, "顶栏保留 1 行");
-        assert_eq!(prompt.y, a.top_status.bottom(), "prompt 紧接顶栏下");
+        // 顶行被 prompt 接管:top_status 退化零面积,prompt 贴 area 顶、全宽 3 行。
+        assert_eq!(
+            a.top_status,
+            Rect::new(parent.x, parent.y, 0, 0),
+            "search 顶栏退化零面积"
+        );
+        assert_eq!(prompt.y, parent.y, "prompt 接管顶行(贴 area 顶)");
         assert_eq!(prompt.height, 3, "prompt 3 行(带边框:上下框各 1 + 内容 1)");
         assert_eq!(prompt.width, parent.width, "prompt 全宽");
 

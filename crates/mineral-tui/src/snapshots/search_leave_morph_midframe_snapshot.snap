@@ -1,12 +1,11 @@
 ---
 source: crates/mineral-tui/src/view.rs
-assertion_line: 709
 description: "Search 退场形变中途:results/detail 随框缩回 browse 位(非起点瞬切 playlists)"
 expression: t.backend()
 ---
-"▌ mineral v0.5.1  │                                                    ‖ paused "
-"                                                                                "
-"┌results─────────────────────────────────┐┌detail──────────────────────────────┐"
+"                                                    ‖ paused                    "
+"                    ╭search───────────────────────────────╮                     "
+"╭results─────────────────────────────────╮╭detail──────────────────────────────╮"
 "│  title               artist       len  ││▀▀▀▀▀▀▀▀▀▀  LoveLetterTypewriter    │"
 "│▌ LoveLetterTypewrite Mineral      3:45 ││▀▀▀▀▀▀▀▀▀▀  Mineral                 │"
 "│  Palisade            Mineral      4:31 ││▀▀▀▀▀▀▀▀▀▀                          │"
@@ -18,8 +17,8 @@ expression: t.backend()
 "│                                        ││  ┄┄┄┄┄┄┄┄                          │"
 "│                                        ││  ┄┄┄┄┄┄┄┄                          │"
 "│                                        ││                                    │"
-"└────────────────────────────────────────┘└────────────────────────────────────┘"
-"                                                  ╭ spectrum ────────╮          "
+"│                                        ││                                    │"
+"╰────────────────────────────────────────╯╰───────╭ spectrum ────────╮─────────╯"
 "                    ╭ transport ───────────────────────────────────────────────╮"
 "          ╭ lyrics ─│────────╮                    —                            │"
 "          │         │        │                    ·                            │"

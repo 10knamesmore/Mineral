@@ -87,7 +87,8 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     transport::draw(frame, areas.transport, &app.state.playback, theme);
 }
 
-/// Search 布局:顶栏 + prompt 行 + results(左)/ detail(右)面板 + transport 全宽。
+/// Search 布局:prompt 框接管顶行(稳态无 status bar;morph 收缩中途 browse 顶栏短暂可见),其下
+/// results(左)/ detail(右)面板,transport 全宽贴底。
 /// 左/右内容随形变方向画「出发端」(进场画浏览、退场画 search),到达端点才换,进退场对称、
 /// 不在起点瞬切;lyrics / spectrum 是浏览专属面板,随 rect 收缩/长出退进场。
 ///
@@ -109,7 +110,10 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     //   退场途中(朝 browse 去) → 仍画 results / detail 随框缩回 browse 位,到 at_min 由浏览态
     //     paint 接管(esc 瞬间不把 results 跳成 playlists,消除跳变 + 起步卡顿)。
     let show_browse = rs.active.on() && !rs.active.at_max();
-    top_status::draw(frame, areas.top_status, &app.state, theme);
+    // morph 收缩中途的 browse 顶栏(非零面积)才画;稳态 search 顶栏零面积,跳过。
+    if let Some(top) = nonempty(areas.top_status) {
+        top_status::draw(frame, top, &app.state, theme);
+    }
     if let Some(prompt) = areas.search_prompt {
         search_panel::draw_prompt(
             frame,
@@ -490,7 +494,7 @@ mod tests {
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         let accent = app.theme.accent;
         let overlay = app.theme.overlay;
-        // prompt 边框左上角在 (0,1)(顶栏 1 行之下);results 边框左上角在 (0,4)(prompt 占 3 行)。
+        // prompt 边框左上角在 (0,0)(接管顶行);results 边框左上角在 (0,3)(prompt 占 3 行)。
         let border_fg = |app: &crate::app::App, x: u16, y: u16| -> color_eyre::Result<Color> {
             let mut t = Terminal::new(TestBackend::new(80, 24))?;
             t.draw(|f| super::draw(f, app))?;
@@ -502,24 +506,24 @@ mod tests {
         };
 
         assert_eq!(
-            border_fg(&app, 0, 1)?,
+            border_fg(&app, 0, 0)?,
             accent,
             "prompt 焦点 → prompt 框 accent"
         );
         assert_eq!(
-            border_fg(&app, 0, 4)?,
+            border_fg(&app, 0, 3)?,
             overlay,
             "results 未焦点 → results 框 overlay"
         );
 
         app.state.channel_search.focus = SearchFocus::Results;
         assert_eq!(
-            border_fg(&app, 0, 1)?,
+            border_fg(&app, 0, 0)?,
             overlay,
             "prompt 失焦 → prompt 框 overlay"
         );
         assert_eq!(
-            border_fg(&app, 0, 4)?,
+            border_fg(&app, 0, 3)?,
             accent,
             "results 焦点 → results 框 accent"
         );
@@ -542,10 +546,10 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         let buf = t.backend().buffer();
-        // 结果列在左半(x < 30)、prompt 行(y < 4)之下;只扫结果区,空结果不应有整行底色带
+        // 结果列在左半(x < 30)、prompt 框(y < 3)之下;只扫结果区,空结果不应有整行底色带
         // (prompt 行的类型徽章本就用 surface0 填底,不在此判定范围)。
         let mut banded = false;
-        for y in 4..24u16 {
+        for y in 3..24u16 {
             for x in 0..30u16 {
                 if buf.cell((x, y)).is_some_and(|c| c.bg == surface0) {
                     banded = true;
@@ -612,10 +616,10 @@ mod tests {
                 .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?
                 .bg)
         };
-        // 结果列起于 y=4(顶栏 1 + prompt 3),inner 首行 y=5 是表头,数据行从 y=6 起;
-        // 选中第 2 行在 y=8。x=20 是该行尾部留白。
-        assert_eq!(bg(20, 8)?, surface0, "选中行尾部空白也应带整行底色");
-        assert_ne!(bg(20, 6)?, surface0, "非选中数据行不带底色");
+        // 结果列起于 y=3(prompt 接管顶行,占 3 行),inner 首行 y=4 是表头,数据行从 y=5 起;
+        // 选中第 2 行在 y=7。x=20 是该行尾部留白。
+        assert_eq!(bg(20, 7)?, surface0, "选中行尾部空白也应带整行底色");
+        assert_ne!(bg(20, 5)?, surface0, "非选中数据行不带底色");
         Ok(())
     }
 
@@ -745,14 +749,14 @@ mod tests {
         }
         let accent = app.theme.accent;
         let subtext = app.theme.subtext;
-        // 选中第 2 行 → inner y=8(顶栏 1 + prompt 3 + 边框 1 + 表头 1 + 2);x=20 是该行(整行高亮)。
+        // 选中第 2 行 → inner y=7(prompt 3 + 边框 1 + 表头 1 + 2);x=20 是该行(整行高亮)。
         let row_fg = |app: &crate::app::App| -> color_eyre::Result<Color> {
             let mut t = Terminal::new(TestBackend::new(80, 24))?;
             t.draw(|f| super::draw(f, app))?;
             Ok(t.backend()
                 .buffer()
-                .cell((20, 8))
-                .ok_or_else(|| eyre!("cell (20,8) 越界"))?
+                .cell((20, 7))
+                .ok_or_else(|| eyre!("cell (20,7) 越界"))?
                 .fg)
         };
 
