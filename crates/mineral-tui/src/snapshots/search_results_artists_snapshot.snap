@@ -4,7 +4,7 @@ description: "Search 歌手结果:歌手名 · 关注数缩写 两列对齐"
 expression: t.backend()
 ---
 "╭search────────────────────────────────────────────────────────────────────────╮"
-"│ ♫ netease   ✦ artists  football█                                             │"
+"│ ♫ netease   ✦ artists  football                                              │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
 "╭results─────────────────────╮╭✦ artist · Chinese Football─────────────────────╮"
 "│  artist              fans  ││▀▀▀▀▀▀▀▀▀▀▀▀  Chinese Football     ▀▀▀▀▀▀▀▀▀▀▀▀ │"

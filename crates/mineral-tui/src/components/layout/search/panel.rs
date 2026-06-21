@@ -14,6 +14,7 @@ use mineral_task::SearchPayload;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
+use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
@@ -163,7 +164,7 @@ fn dark_tint(c: Color, theme: &Theme) -> Color {
     }
 }
 
-/// 画 query 输入区:以文本光标为界分两段;`show_cursor` 时中间嵌光标块 `█`(光标可落词中),
+/// 画 query 输入区:`show_cursor` 时以文本光标为界、反色罩住光标处字符(光标可落词中),
 /// 否则只画文本(焦点不在 query 段时不显光标)。
 fn draw_query(
     frame: &mut Frame<'_>,
@@ -177,11 +178,11 @@ fn draw_query(
     }
     let text = Style::new().fg(theme.text);
     let (before, after) = session.query_split();
-    let mut spans = vec![Span::styled(before.to_owned(), text)];
-    if show_cursor {
-        spans.push(Span::styled("█", text.add_modifier(Modifier::BOLD)));
-    }
-    spans.push(Span::styled(after.to_owned(), text));
+    let spans = if show_cursor {
+        cursor_spans(before.to_owned(), after, text)
+    } else {
+        vec![Span::styled(format!("{before}{after}"), text)]
+    };
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 

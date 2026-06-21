@@ -4,5 +4,6 @@ pub mod anim;
 pub mod blit;
 pub mod cells;
 pub mod color;
+pub mod cursor;
 pub mod palette;
 pub mod theme;

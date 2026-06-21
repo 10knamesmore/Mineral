@@ -4,7 +4,7 @@ description: "Search 歌单结果:歌单名 · N tracks 两列对齐"
 expression: t.backend()
 ---
 "╭search────────────────────────────────────────────────────────────────────────╮"
-"│ ♫ netease   ▤ playlists  indie█                                              │"
+"│ ♫ netease   ▤ playlists  indie                                               │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
 "╭results─────────────────────╮╭▤ playlist · Bedroom Pop────────────────────────╮"
 "│  playlist            tracks││ ▀▀▀▀▀▀▀▀▀▀▀▀  Bedroom Pop                      │"

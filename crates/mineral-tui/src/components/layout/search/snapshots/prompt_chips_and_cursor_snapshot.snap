@@ -1,8 +1,8 @@
 ---
-source: crates/mineral-tui/src/components/layout/search_panel.rs
+source: crates/mineral-tui/src/components/layout/search/panel.rs
 description: "token prompt:source/kind chip(去 sigil 含图标)+ 光标落 te|st 词中"
 expression: terminal.backend()
 ---
 "╭search────────────────────────────────╮"
-"│ ♫ netease   ♪ songs  te█st           │"
+"│ ♫ netease   ♪ songs  test            │"
 "╰──────────────────────────────────────╯"

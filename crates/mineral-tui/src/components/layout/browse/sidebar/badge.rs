@@ -1,8 +1,9 @@
 //! 搜索 badge:把当前搜索态画进左栏面板标题。
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 
+use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, View};
 
@@ -13,7 +14,7 @@ use crate::runtime::state::{AppState, View};
 ///   - `theme`: 取色
 ///
 /// # Return:
-///   - 输入态(`search.typing`):`/q█`(光标块在文本光标处,表示正在输入)
+///   - 输入态(`search.typing`):`/q`+反色光标罩在文本光标处字符上,表示正在输入
 ///   - 非输入态但有词:`/q`(已提交、仍在过滤的词)
 ///   - 任一搜索态下深度索引在飞:再缀 ` ⟳n`(见 [`indexing_count`])
 ///   - 无词且非输入态:空序列(标题不挂 badge)
@@ -23,17 +24,10 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
     }
     let mut spans = Vec::<Span<'static>>::new();
     if state.browse.search.typing {
-        // 输入态:光标块落在文本光标处(before|after),不再恒在词尾。
+        // 输入态:光标反色罩在文本光标处(before|after)的字符上,不再恒在词尾。
         let (before, after) = state.browse.search.query_split();
-        spans.push(Span::styled(
-            format!("/{before}"),
-            Style::new().fg(theme.peach),
-        ));
-        spans.push(Span::styled(
-            "█",
-            Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(after.to_owned(), Style::new().fg(theme.peach)));
+        let base = Style::new().fg(theme.peach);
+        spans.extend(cursor_spans(format!("/{before}"), after, base));
     } else {
         // 非输入态:已提交、仍在过滤的词,无光标。
         spans.push(Span::styled(
