@@ -152,9 +152,9 @@ impl MusicChannel for NeteaseChannel {
         ChannelCaps::builder()
             .searchable(vec![
                 SearchKind::Song,
+                SearchKind::Artist,
                 SearchKind::Album,
                 SearchKind::Playlist,
-                SearchKind::Artist,
             ])
             .playlist_edit(true)
             .song_web_url(Some("https://music.163.com/song?id={id}".to_owned()))
