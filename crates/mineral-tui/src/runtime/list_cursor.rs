@@ -11,6 +11,7 @@ use crate::runtime::action::SelectionMove;
 ///
 /// items 不在此持有——队列 / 歌单等是后端或派生态,住在别处;本类型只管「选中第几行」
 /// 这个纯客户端态,后端同步逻辑碰都不该碰它(仅在列表变短时 [`Self::clamp`] 防越界)。
+#[derive(Clone)]
 pub(crate) struct ListCursor {
     /// 选中行下标。
     sel: usize,
@@ -40,6 +41,11 @@ impl ListCursor {
     /// 列表变短后把光标夹回 `[0, len-1]`(过滤 / 异步刷新后防越界);空列表归 0。
     pub(crate) fn clamp(&mut self, len: usize) {
         self.sel = self.sel.min(len.saturating_sub(1));
+    }
+
+    /// 直接落到某下标(调用方保证有效,或随后 [`Self::clamp`]);视口不在此管。
+    pub(crate) fn set(&mut self, sel: usize) {
+        self.sel = sel;
     }
 
     /// 当前选中行下标。

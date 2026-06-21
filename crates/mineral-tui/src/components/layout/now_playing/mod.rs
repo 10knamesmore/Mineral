@@ -23,7 +23,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker
         },
         View::Library => {
             let tracks = state.filtered_tracks();
-            match tracks.get(state.browse.nav.sel_track) {
+            match tracks.get(state.browse.nav.track.sel()) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
                     track_detail::draw(frame, area, sv, current_id, state, picker, theme);

@@ -12,6 +12,7 @@ use mineral_model::{
 use mineral_task::SearchPayload;
 
 use crate::render::anim::{Toggle, Transition};
+use crate::runtime::scroll_list::ScrollList;
 
 /// 一帧详情要补拉的内容（携带目标 id，供派发与回包配对）。
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -180,8 +181,9 @@ pub struct DetailFrame {
     /// 无动画）；首次切换按 sweep 拍数懒构造，复用 browse view-sweep 同款 [`Toggle`]。
     section_anim: Option<Toggle>,
 
-    /// 面板内列表光标。
-    pub list_sel: usize,
+    /// 面板内列表光标 + 视口滚动(nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移)。
+    /// 歌手帧 Hot/Albums 双区共用此一份(切区时 [`Self::cycle_section`] 瞬时归位)。
+    list: ScrollList,
 
     /// 头部简介的滚动 offset（可视行）。render 端折行后把它钳进内容边界并写回（渲染走
     /// `&self`，故内部可变）；C-d/u/b/f 经 [`Self::nudge_description`] 平移。
@@ -199,10 +201,20 @@ impl DetailFrame {
             data: None,
             section: ArtistSection::default(),
             section_anim: None,
-            list_sel: 0,
+            list: ScrollList::new(),
             desc_scroll: Cell::new(0),
             requested: false,
         }
+    }
+
+    /// 面板内列表的光标 + 视口滚动态(渲染 / 选中读取)。
+    pub(crate) fn list(&self) -> &ScrollList {
+        &self.list
+    }
+
+    /// 面板内列表态(可变)：按键路径移光标 / 翻页;数据到货后定位。
+    pub(crate) fn list_mut(&mut self) -> &mut ScrollList {
+        &mut self.list
     }
 
     /// 头部简介滚动 offset 句柄：render 端钳进内容边界并写回。
@@ -224,7 +236,8 @@ impl DetailFrame {
     /// 光标归零；`ticks` 为切换拍数（由 sweep 配置折算，与下钻滑动同源）。
     pub fn cycle_section(&mut self, ticks: u16) {
         self.section.cycle();
-        self.list_sel = 0;
+        // 双区共用一份列表态:切区瞬时归位顶端(无平移),Hot/Albums 长度不同也不残留旧 offset。
+        self.list.place(0, 0);
         let to_albums = self.section == ArtistSection::Albums;
         self.section_anim
             .get_or_insert_with(|| Toggle::new(ticks.max(1)))
@@ -319,11 +332,11 @@ impl DetailFrame {
         match self.section {
             ArtistSection::Hot => detail
                 .as_ref()
-                .and_then(|a| a.songs.get(self.list_sel))
+                .and_then(|a| a.songs.get(self.list.sel()))
                 .and_then(|s| s.cover_url.as_ref()),
             ArtistSection::Albums => albums
                 .as_ref()
-                .and_then(|v| v.get(self.list_sel))
+                .and_then(|v| v.get(self.list.sel()))
                 .and_then(|al| al.cover_url.as_ref()),
         }
     }
@@ -339,7 +352,8 @@ impl DetailFrame {
         if let EntityRef::Song(s) = &self.entity
             && let Some(idx) = album.songs.iter().position(|t| t.id == s.id)
         {
-            self.list_sel = idx;
+            // 视口瞬时定位到这首歌(无平移);渲染端首帧按 scrolloff 钳,选中歌即带上下文出现。
+            self.list.place(idx, 0);
         }
         self.data = Some(DetailData::Album(album));
     }

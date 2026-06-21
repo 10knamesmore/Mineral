@@ -57,7 +57,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
-            let sel = state.browse.nav.sel_playlist;
+            let sel = state.browse.nav.playlist.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|p| {
                     p.data
@@ -78,7 +78,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
             // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
-            let sel = state.browse.nav.sel_track;
+            let sel = state.browse.nav.track.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|sv| {
                     sv.data
@@ -293,7 +293,7 @@ fn submit_detail_tasks(client: &dyn Client, fetch: DetailFetch) {
 fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
-        .get(state.browse.nav.sel_track)
+        .get(state.browse.nav.track.sel())
         .map(|sv| sv.data.id.clone())
 }
 
@@ -301,7 +301,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let radius = *state.cfg.tui().prefetch().radius();
     let filtered = state.filtered_playlists();
-    let sel = state.browse.nav.sel_playlist;
+    let sel = state.browse.nav.playlist.sel();
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {

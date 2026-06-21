@@ -4,11 +4,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, StatefulWidget, Table, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table};
 
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
+use crate::components::layout::scroll_table::render_scroll_table;
 use crate::render::theme::Theme;
+use crate::runtime::scroll_list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
@@ -71,7 +73,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
     let placeholder = slot_placeholder(state, theme);
-    let pos = position_label(state.browse.nav.sel_track, tracks.len());
+    let pos = position_label(state.browse.nav.track.sel(), tracks.len());
 
     let mut title_spans = vec![Span::styled(
         format!(" {title} "),
@@ -121,32 +123,26 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .highlight_symbol("▌ ");
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    let viewport = usize::from(area.height.saturating_sub(3));
-    // 全屏 morph 中面板 rect 是插值瞬态:只读展示,收缩中的 viewport 不得改写
+    // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),收缩中的 viewport 不得改写
     // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
-    let offset = if state.browse.fullscreen.at_min() {
-        state.browse.nav.scroll_track.render_offset(
-            state.browse.nav.sel_track,
-            tracks.len(),
-            viewport,
-            state.scrolloff(),
-            state.list_glide_ticks(),
-        )
+    let viewport = usize::from(area.height.saturating_sub(3));
+    let motion = if state.browse.fullscreen.at_min() {
+        ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        }
     } else {
-        state
-            .browse
-            .nav
-            .scroll_track
-            .frozen_offset(tracks.len(), viewport)
+        ScrollMotion::Frozen
     };
-    let mut table_state = TableState::default()
-        .with_offset(offset)
-        .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.browse.nav.sel_track,
-            offset,
-            viewport,
-        )));
-    StatefulWidget::render(table, area, buf, &mut table_state);
+    render_scroll_table(
+        buf,
+        area,
+        table,
+        &state.browse.nav.track,
+        tracks.len(),
+        viewport,
+        motion,
+    );
 }
 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / ♫ 当前歌 / 高亮搜索词)。
@@ -299,7 +295,7 @@ mod tests {
         let bottom_first = row(&t, 2);
         // 安全区 [offset+3, offset+9-1-3] = [24, 26]:逐行上移视口不滚。
         for sel in (24..=28).rev() {
-            app.state.browse.nav.sel_track = sel;
+            app.state.browse.nav.track.set_sel(sel);
             draw_lib(&mut t, &app.state)?;
             assert_eq!(
                 row(&t, 2),
@@ -308,7 +304,7 @@ mod tests {
             );
         }
         // 越过上安全边界:视口开始上滚,首行变化。
-        app.state.browse.nav.sel_track = 23;
+        app.state.browse.nav.track.set_sel(23);
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
@@ -328,7 +324,7 @@ mod tests {
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }
-        let before = app.state.browse.nav.scroll_track.target_rows();
+        let before = app.state.browse.nav.track.scroll_target();
         assert!(before > 0, "前置:视口已滚到深处");
 
         // 进入 morph(fullscreen 离开 at_min),面板高度逐帧收缩地渲染。
@@ -341,7 +337,7 @@ mod tests {
             draw_lib(&mut small, &app.state)?;
         }
         assert_eq!(
-            app.state.browse.nav.scroll_track.target_rows(),
+            app.state.browse.nav.track.scroll_target(),
             before,
             "morph 期间滚动目标不得被瞬态 viewport 改写"
         );
@@ -352,7 +348,7 @@ mod tests {
             draw_lib(&mut t, &app.state)?;
         }
         assert_eq!(
-            app.state.browse.nav.scroll_track.target_rows(),
+            app.state.browse.nav.track.scroll_target(),
             before,
             "回浏览态视口首行应与进全屏前一致"
         );
@@ -369,7 +365,7 @@ mod tests {
         let top_first = row(&t, 2);
 
         // G 跳末行:首帧视口应离开顶部但未到底(缓动中段)。
-        app.state.browse.nav.sel_track = 29;
+        app.state.browse.nav.track.set_sel(29);
         draw_lib(&mut t, &app.state)?;
         let mid = row(&t, 2);
         assert_ne!(mid, top_first, "G 跳转首帧视口应已起步");
@@ -380,7 +376,7 @@ mod tests {
         assert_ne!(mid, bottom_first, "G 跳转首帧不应一步到底(应是缓动中段)");
 
         // gg 跳回首行:同样多帧缓动收敛回顶。
-        app.state.browse.nav.sel_track = 0;
+        app.state.browse.nav.track.set_sel(0);
         draw_lib(&mut t, &app.state)?;
         let mid_back = row(&t, 2);
         assert_ne!(mid_back, bottom_first, "gg 跳转首帧视口应已起步");
@@ -400,7 +396,7 @@ mod tests {
         draw_lib(&mut t, &app.state)?;
         // 下移到 10:offset 收敛到 10+3+1-9 = 5,选中行落在 y = 2 + (10-5) = 7,
         // 距 body 末行(y=10)恰 3 行。
-        app.state.browse.nav.sel_track = 10;
+        app.state.browse.nav.track.set_sel(10);
         for _ in 0..40 {
             draw_lib(&mut t, &app.state)?;
         }

@@ -4,13 +4,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
-};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Widget};
 
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
+use crate::components::layout::scroll_table::render_scroll_table;
 use crate::render::theme::Theme;
+use crate::runtime::scroll_list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
 
@@ -18,7 +18,7 @@ use crate::runtime::view_model::PlaylistView;
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
-    let pos = position_label(state.browse.nav.sel_playlist, total);
+    let pos = position_label(state.browse.nav.playlist.sel(), total);
 
     let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
     title_spans.extend(search_badge(state, theme));
@@ -90,31 +90,25 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .highlight_symbol("▌ ");
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
+    // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),理由同 library。
     let viewport = usize::from(area.height.saturating_sub(3));
-    // 全屏 morph 中面板 rect 是插值瞬态:只读展示,理由同 library。
-    let offset = if state.browse.fullscreen.at_min() {
-        state.browse.nav.scroll_playlist.render_offset(
-            state.browse.nav.sel_playlist,
-            total,
-            viewport,
-            state.scrolloff(),
-            state.list_glide_ticks(),
-        )
+    let motion = if state.browse.fullscreen.at_min() {
+        ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        }
     } else {
-        state
-            .browse
-            .nav
-            .scroll_playlist
-            .frozen_offset(total, viewport)
+        ScrollMotion::Frozen
     };
-    let mut table_state = TableState::default()
-        .with_offset(offset)
-        .with_selected(Some(crate::runtime::scroll::pin_cursor(
-            state.browse.nav.sel_playlist,
-            offset,
-            viewport,
-        )));
-    StatefulWidget::render(table, area, buf, &mut table_state);
+    render_scroll_table(
+        buf,
+        area,
+        table,
+        &state.browse.nav.playlist,
+        total,
+        viewport,
+        motion,
+    );
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 channel / 总时长 / 曲目数)。

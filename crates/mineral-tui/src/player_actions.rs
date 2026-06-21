@@ -77,7 +77,7 @@ impl App {
                                 .state
                                 .filtered_tracks()
                                 .into_iter()
-                                .nth(self.state.browse.nav.sel_track);
+                                .nth(self.state.browse.nav.track.sel());
                             let loved = sel.as_ref().map(|sv| sv.loved);
                             (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
                         }
@@ -139,7 +139,7 @@ impl App {
         }
         let filtered = self.state.filtered_tracks();
         if let Some(song) = filtered
-            .get(self.state.browse.nav.sel_track)
+            .get(self.state.browse.nav.track.sel())
             .map(|sv| sv.data.clone())
         {
             // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
@@ -218,7 +218,7 @@ impl App {
                 let id = self
                     .state
                     .filtered_playlists()
-                    .get(self.state.browse.nav.sel_playlist)
+                    .get(self.state.browse.nav.playlist.sel())
                     .map(|p| p.data.id.clone());
                 if let Some(id) = id {
                     self.client.download(DownloadTarget::Playlist(id));
@@ -228,7 +228,7 @@ impl App {
                 let song = self
                     .state
                     .filtered_tracks()
-                    .get(self.state.browse.nav.sel_track)
+                    .get(self.state.browse.nav.track.sel())
                     .map(|sv| sv.data.clone());
                 if let Some(song) = song {
                     self.client.download(DownloadTarget::Song(Box::new(song)));

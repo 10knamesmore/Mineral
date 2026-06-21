@@ -205,13 +205,8 @@ impl SearchPage {
         let Some(frame) = kr.detail.current_mut() else {
             return;
         };
-        let last = frame.list_len().saturating_sub(1);
-        frame.list_sel = match mv {
-            SelectionMove::Down(n) => frame.list_sel.saturating_add(n).min(last),
-            SelectionMove::Up(n) => frame.list_sel.saturating_sub(n),
-            SelectionMove::First => 0,
-            SelectionMove::Last => last,
-        };
+        let len = frame.list_len();
+        frame.list_mut().move_by(mv, len);
     }
 
     /// detail 焦点滚头部简介:按方向 + 档位(逐行 / 翻页)平移简介滚动 offset,档步长取
@@ -259,7 +254,7 @@ impl SearchPage {
         let SearchPayload::Songs(songs) = &kr.results else {
             return None;
         };
-        let song = songs.get(kr.sel)?.clone();
+        let song = songs.get(kr.sel())?.clone();
         Some((songs.clone(), song))
     }
 
@@ -311,9 +306,11 @@ impl SearchPage {
                 Some(DetailData::Artist {
                     albums: Some(albs), ..
                 }),
-            ) => albs.get(frame.list_sel).map_or(DetailActivate::None, |a| {
-                DetailActivate::Drill(Box::new(a.clone()))
-            }),
+            ) => albs
+                .get(frame.list().sel())
+                .map_or(DetailActivate::None, |a| {
+                    DetailActivate::Drill(Box::new(a.clone()))
+                }),
             // 歌手热门曲:选中曲 → 播放。
             (
                 EntityRef::Artist(_),
@@ -321,11 +318,11 @@ impl SearchPage {
                 Some(DetailData::Artist {
                     detail: Some(a), ..
                 }),
-            ) => play_from(&a.songs, frame.list_sel),
+            ) => play_from(&a.songs, frame.list().sel()),
             // 专辑详情(专辑帧 / 歌曲帧看所属专辑)曲目 → 播放。
-            (_, _, Some(DetailData::Album(a))) => play_from(&a.songs, frame.list_sel),
+            (_, _, Some(DetailData::Album(a))) => play_from(&a.songs, frame.list().sel()),
             // 曲目列表(歌单帧)→ 播放。
-            (_, _, Some(DetailData::Tracks(songs))) => play_from(songs, frame.list_sel),
+            (_, _, Some(DetailData::Tracks(songs))) => play_from(songs, frame.list().sel()),
             _ => DetailActivate::None,
         }
     }
@@ -370,12 +367,12 @@ impl SearchPage {
         };
         let last = kr.len().saturating_sub(1);
         let next = match mv {
-            SelectionMove::Down(n) => kr.sel.saturating_add(n).min(last),
-            SelectionMove::Up(n) => kr.sel.saturating_sub(n),
+            SelectionMove::Down(n) => kr.sel().saturating_add(n).min(last),
+            SelectionMove::Up(n) => kr.sel().saturating_sub(n),
             SelectionMove::First => 0,
             SelectionMove::Last => last,
         };
-        // set_sel 内联 detail 复位（真移动才复位、钳制不动则保留下钻栈）。
+        // set_sel 内联 detail 复位(真移动才复位、钳制不动则保留下钻栈)。
         kr.set_sel(next);
     }
 
@@ -756,7 +753,7 @@ mod tests {
             .active_results_mut()
             .and_then(|kr| kr.detail.current_mut())
         {
-            f.list_sel = 2;
+            f.list_mut().set_sel(2);
         }
         match app.state.channel_search.detail_activate_action() {
             DetailActivate::Play { queue, song } => {
@@ -768,6 +765,95 @@ mod tests {
                 color_eyre::eyre::bail!("回归:专辑详情 activate 落进 catch-all、静默无反应")
             }
         }
+        Ok(())
+    }
+
+    /// 回归锁:search detail 曲目表必须用持久 offset + scrolloff(nvim 手感),不能每帧
+    /// fresh `TableState` 把选中行钉死在视口底边。光标移到长列表深处后,选中行下方应仍留
+    /// 至少 scrolloff 行——曾因 detail 列表绕过 `ListScroll` 而回归(焦点贴底)。
+    #[test]
+    fn detail_track_list_keeps_scrolloff_below_cursor() -> color_eyre::Result<()> {
+        use mineral_model::{Album, AlbumId};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .build(),
+            ]),
+        });
+        // 30 首曲目的专辑详情(远超视口,光标可深入)。
+        let songs = (0..30)
+            .map(|i| crate::test_support::song(&format!("s{i}")))
+            .collect::<Vec<_>>();
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .songs(songs)
+                    .build(),
+            ),
+        });
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        // 光标深入到第 25 行(上下都还有曲目)。
+        if let Some(f) = app
+            .state
+            .channel_search
+            .active_results_mut()
+            .and_then(|kr| kr.detail.current_mut())
+        {
+            f.list_mut().set_sel(25);
+        }
+        // 把 search 布局推到 at_max(detail 面板才渲染,而非浏览态)。
+        app.state.channel_search.active.set(true);
+        for _ in 0..40 {
+            app.state.channel_search.active.tick();
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        // 多帧渲染让视口缓动收敛到稳态。
+        for _ in 0..16 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        // detail 面板矩形(search 布局右栏)。
+        let detail = crate::components::layout::compute::compute_search(
+            app.state.frame_area.get(),
+            app.state.cfg.tui().layout(),
+        )
+        .right
+        .ok_or_else(|| color_eyre::eyre::eyre!("search 布局应有 detail 面板"))?;
+        let buf = t.backend().buffer();
+        // 在 detail 面板 x 区间内找高亮行(highlight_symbol 前缀 '▌')。
+        let mut hi_y: Option<u16> = None;
+        'scan: for y in detail.y..detail.y.saturating_add(detail.height) {
+            for x in detail.x..detail.x.saturating_add(detail.width) {
+                if buf.cell((x, y)).is_some_and(|c| c.symbol() == "▌") {
+                    hi_y = Some(y);
+                    break 'scan;
+                }
+            }
+        }
+        let hi_y = hi_y.ok_or_else(|| color_eyre::eyre::eyre!("detail 面板应有高亮选中行"))?;
+        let scrolloff = u16::try_from(app.state.scrolloff()).unwrap_or(0);
+        // 列表填满到面板底(30 首 > 视口),底部数据行 ≈ 面板内底(去下边框)。
+        let bottom_data = detail.y.saturating_add(detail.height).saturating_sub(2);
+        assert!(
+            hi_y.saturating_add(scrolloff) <= bottom_data,
+            "选中行下方应留 ≥ scrolloff({scrolloff}) 行: hi_y={hi_y} bottom={bottom_data}"
+        );
         Ok(())
     }
 
@@ -851,7 +937,7 @@ mod tests {
             .active_results_mut()
             .and_then(|kr| kr.detail.current_mut())
         {
-            f.list_sel = 1;
+            f.list_mut().set_sel(1);
         }
         // 走完整 handler:不只是返回动作,而要真发出 set_queue + play_song 两步。
         let eff = app

@@ -9,23 +9,40 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget,
-    Wrap,
-};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Widget, Wrap};
 use ratatui_image::picker::Picker;
 
 use mineral_config::SweepStyle;
 use mineral_model::{Album, Artist, Song};
 
+use crate::components::layout::scroll_table::render_scroll_table;
 use crate::components::layout::search_panel::join_artists;
 use crate::components::layout::track_table::{self, TrackColumns};
 use crate::components::layout::{cover, cover_image, description, detail_title};
 use crate::render::theme::Theme;
+use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
 /// 缓动进度满值（千分比）。
 const FULL: u32 = 1000;
+
+/// 稳态实拍的视口推进语义(按 scrolloff + 缓动拍数);离屏合成 / 滑动期改用 [`ScrollMotion::Frozen`]。
+fn advancing(state: &AppState) -> ScrollMotion {
+    ScrollMotion::Advancing {
+        scrolloff: state.scrolloff(),
+        glide_ticks: state.list_glide_ticks(),
+    }
+}
+
+/// 列表区渲染的滚动两件套:光标 + 视口态 + 本帧推进语义。穿过 body 渲染链时合并一束传,压参数个数。
+#[derive(Clone, Copy)]
+struct ListPaint<'a> {
+    /// 该列表的光标 + 视口滚动态(取自栈顶帧)。
+    list: &'a ScrollList,
+
+    /// 本帧推进语义(稳态 Advancing / 离屏 Frozen)。
+    motion: ScrollMotion,
+}
 
 /// 画 detail 面板：bordered 外框 + 当前栈顶帧。空结果/无栈画空框；滑动期走 sweep 合成。
 ///
@@ -125,7 +142,8 @@ fn draw_frame_real(
     }
     let buf = frame.buffer_mut();
     draw_meta(buf, meta_a, dframe, theme, show_back);
-    draw_body(buf, body, dframe, state, theme);
+    // 稳态实拍:列表视口推进缓动(每帧恰一次)。
+    draw_body(buf, body, dframe, state, theme, advancing(state));
 }
 
 /// 把一帧渲染到（离屏）Buffer：头图走程序化占位（滑动期不上真图），元数据 + 列表照画。
@@ -146,7 +164,8 @@ fn render_frame_to(
         cover::render_to(buf, right_a, selected_seed(dframe), theme);
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
-    draw_body(buf, body, dframe, state, theme);
+    // 离屏合成(下钻 / 返回滑动期):只读展示当前视口,不推进动画、不改滚动目标。
+    draw_body(buf, body, dframe, state, theme, ScrollMotion::Frozen);
 }
 
 /// 下钻/返回滑动的合成参数：出发/目标帧 + 缓动进度 + 方向（打包避免 `draw_sweep` 参数过多）。
@@ -269,7 +288,7 @@ fn selected_seed(dframe: &DetailFrame) -> &str {
         // 歌的头图 = 其所属专辑封面；seed 用专辑名（同专辑共享一张占位）。
         ArtistSection::Hot => detail
             .as_ref()
-            .and_then(|a| a.songs.get(dframe.list_sel))
+            .and_then(|a| a.songs.get(dframe.list().sel()))
             .map_or("", |s| {
                 s.album
                     .as_ref()
@@ -277,7 +296,7 @@ fn selected_seed(dframe: &DetailFrame) -> &str {
             }),
         ArtistSection::Albums => albums
             .as_ref()
-            .and_then(|v| v.get(dframe.list_sel))
+            .and_then(|v| v.get(dframe.list().sel()))
             .map_or("", |al| al.name.as_str()),
     }
 }
@@ -393,11 +412,18 @@ fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
     }
 }
 
-/// 主体：歌手帧画双区，其余画曲目列表。
-fn draw_body(buf: &mut Buffer, body: Rect, dframe: &DetailFrame, state: &AppState, theme: &Theme) {
+/// 主体：歌手帧画双区，其余画曲目列表。`motion` 透传给底层列表(稳态推进 / 离屏冻结)。
+fn draw_body(
+    buf: &mut Buffer,
+    body: Rect,
+    dframe: &DetailFrame,
+    state: &AppState,
+    theme: &Theme,
+    motion: ScrollMotion,
+) {
     match &dframe.entity {
-        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, state, theme),
-        _ => draw_track_body(buf, body, dframe, state, theme),
+        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, state, theme, motion),
+        _ => draw_track_body(buf, body, dframe, state, theme, motion),
     }
 }
 
@@ -409,13 +435,18 @@ fn draw_track_body(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
+    motion: ScrollMotion,
 ) {
+    let paint = ListPaint {
+        list: dframe.list(),
+        motion,
+    };
     match &dframe.data {
         Some(DetailData::Album(a)) => draw_track_list(
             buf,
             body,
             &a.songs,
-            dframe.list_sel,
+            paint,
             TrackColumns::new(/*artist*/ true, /*album*/ false),
             state,
             theme,
@@ -424,7 +455,7 @@ fn draw_track_body(
             buf,
             body,
             songs,
-            dframe.list_sel,
+            paint,
             TrackColumns::new(/*artist*/ true, /*album*/ true),
             state,
             theme,
@@ -441,6 +472,7 @@ fn draw_artist_body(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
+    motion: ScrollMotion,
 ) {
     if body.height < 2 {
         return;
@@ -450,10 +482,20 @@ fn draw_artist_body(
     match dframe.section_eased() {
         // 切区滑动期：两区各渲染到离屏 Buffer，按进度横向合成（0=Top Songs、满值=Albums），
         // 风格尊重 `view_sweep` 配置——与左栏 playlists↔tracks 同款。Tab/头图不滑，只动列表区。
+        // 两次离屏渲染共用同一份 ScrollList,必须 Frozen(只读、幂等),否则同帧双调 render_offset
+        // 会双倍推进缓动。
         Some(eased) => {
             let mut hot_buf = Buffer::empty(list);
             let mut alb_buf = Buffer::empty(list);
-            draw_artist_section(&mut hot_buf, list, ArtistSection::Hot, dframe, state, theme);
+            draw_artist_section(
+                &mut hot_buf,
+                list,
+                ArtistSection::Hot,
+                dframe,
+                state,
+                theme,
+                ScrollMotion::Frozen,
+            );
             draw_artist_section(
                 &mut alb_buf,
                 list,
@@ -461,6 +503,7 @@ fn draw_artist_body(
                 dframe,
                 state,
                 theme,
+                ScrollMotion::Frozen,
             );
             compose_sweep(
                 buf,
@@ -471,12 +514,12 @@ fn draw_artist_body(
                 *state.cfg.tui().animation().view_sweep(),
             );
         }
-        None => draw_artist_section(buf, list, dframe.section, dframe, state, theme),
+        None => draw_artist_section(buf, list, dframe.section, dframe, state, theme, motion),
     }
 }
 
 /// 画歌手某一区的列表：Top Songs 走曲目表（artist 列冗余，出 album 列）、Albums 走专辑表；
-/// 数据未到画骨架。切区滑动期对两区各调一次（离屏合成）。
+/// 数据未到画骨架。切区滑动期对两区各调一次（离屏合成，传 `Frozen`）。
 fn draw_artist_section(
     buf: &mut Buffer,
     list: Rect,
@@ -484,7 +527,12 @@ fn draw_artist_section(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
+    motion: ScrollMotion,
 ) {
+    let paint = ListPaint {
+        list: dframe.list(),
+        motion,
+    };
     match (section, &dframe.data) {
         (
             ArtistSection::Hot,
@@ -495,7 +543,7 @@ fn draw_artist_section(
             buf,
             list,
             &a.songs,
-            dframe.list_sel,
+            paint,
             TrackColumns::new(/*artist*/ false, /*album*/ true),
             state,
             theme,
@@ -505,7 +553,7 @@ fn draw_artist_section(
             Some(DetailData::Artist {
                 albums: Some(albs), ..
             }),
-        ) => draw_album_list(buf, list, albs, dframe.list_sel, theme),
+        ) => draw_album_list(buf, list, albs, paint, theme),
         _ => draw_skeleton(buf, list, theme),
     }
 }
@@ -572,12 +620,13 @@ fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme:
 }
 
 /// 曲目表（♥/#/title/[artist]/[album]/len，带表头）：对齐 browse library 表风格。
-/// `cols` 选中间列、按面板宽度降级；当前 `sel` 行整行高亮，在播歌 `#` 列显 `♫`、已收藏显 `♥`。
+/// `cols` 选中间列、按面板宽度降级；`list` 选中行整行高亮 + nvim 视口滚动,在播歌 `#` 列显 `♫`、
+/// 已收藏显 `♥`。`motion` 定推进(稳态)/ 冻结(离屏)。
 fn draw_track_list(
     buf: &mut Buffer,
     area: Rect,
     songs: &[Song],
-    sel: usize,
+    paint: ListPaint<'_>,
     cols: TrackColumns,
     state: &AppState,
     theme: &Theme,
@@ -596,12 +645,27 @@ fn draw_track_list(
         .header(track_table::header_row(cols, theme))
         .row_highlight_style(track_table::highlight_style(theme))
         .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
-    let mut st = TableState::default().with_selected(Some(sel.min(songs.len().saturating_sub(1))));
-    StatefulWidget::render(table, area, buf, &mut st);
+    // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
+    let viewport = usize::from(area.height.saturating_sub(1));
+    render_scroll_table(
+        buf,
+        area,
+        table,
+        paint.list,
+        songs.len(),
+        viewport,
+        paint.motion,
+    );
 }
 
-/// 专辑表（name/tracks/year/label，带表头）：artist Albums 区，当前 `sel` 行整行高亮（下钻入口）。
-fn draw_album_list(buf: &mut Buffer, area: Rect, albums: &[Album], sel: usize, theme: &Theme) {
+/// 专辑表（name/tracks/year/label，带表头）：artist Albums 区，`list` 选中行整行高亮（下钻入口）。
+fn draw_album_list(
+    buf: &mut Buffer,
+    area: Rect,
+    albums: &[Album],
+    paint: ListPaint<'_>,
+    theme: &Theme,
+) {
     if albums.is_empty() {
         draw_skeleton(buf, area, theme);
         return;
@@ -639,8 +703,17 @@ fn draw_album_list(buf: &mut Buffer, area: Rect, albums: &[Album], sel: usize, t
         .header(header)
         .row_highlight_style(track_table::highlight_style(theme))
         .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
-    let mut st = TableState::default().with_selected(Some(sel.min(albums.len().saturating_sub(1))));
-    StatefulWidget::render(table, area, buf, &mut st);
+    // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
+    let viewport = usize::from(area.height.saturating_sub(1));
+    render_scroll_table(
+        buf,
+        area,
+        table,
+        paint.list,
+        albums.len(),
+        viewport,
+        paint.motion,
+    );
 }
 
 /// 数据未到的占位骨架（几行暗调虚线）。

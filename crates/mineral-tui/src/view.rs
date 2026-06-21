@@ -130,7 +130,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
             search_panel::draw_results(
                 frame,
                 left,
-                rs,
+                &app.state,
                 theme,
                 border_focused(SearchFocus::Results),
             );
@@ -604,7 +604,7 @@ mod tests {
         });
         // 选中第 2 行(短名 "Gjs · Mineral",尾部留白便于验整行底色)。
         if let Some(kr) = app.state.channel_search.active_results_mut() {
-            kr.sel = 2;
+            kr.set_sel(2);
         }
         let surface0 = app.theme.surface0;
 
@@ -746,7 +746,7 @@ mod tests {
             payload: SearchPayload::Songs(endserenading(4)),
         });
         if let Some(kr) = app.state.channel_search.active_results_mut() {
-            kr.sel = 2;
+            kr.set_sel(2);
         }
         let accent = app.theme.accent;
         let subtext = app.theme.subtext;

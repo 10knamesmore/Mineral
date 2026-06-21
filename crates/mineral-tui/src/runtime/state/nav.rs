@@ -5,22 +5,16 @@
 
 use std::time::Instant;
 
-use crate::runtime::scroll::ListScroll;
+use crate::runtime::scroll_list::ScrollList;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 
 /// 列表浏览态([`AppState`](crate::runtime::state::AppState) 的导航域)。
 pub struct NavState {
-    /// Playlists 视图当前选中行。
-    pub sel_playlist: usize,
+    /// Playlists 列表的光标 + 视口滚动(nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移)。
+    pub playlist: ScrollList,
 
-    /// Playlists 列表的视口滚动态(nvim 手感 + 缓动平移)。
-    pub scroll_playlist: ListScroll,
-
-    /// Library 视图当前选中行。
-    pub sel_track: usize,
-
-    /// Library 列表的视口滚动态。
-    pub scroll_track: ListScroll,
+    /// Library 列表的光标 + 视口滚动。
+    pub track: ScrollList,
 
     /// 各歌单的光标位置记忆(`behavior.remember_track_pos` 非 off 时退出 Library
     /// 记录、再进恢复;persist 档启动时灌入落盘值)。
@@ -39,10 +33,8 @@ impl NavState {
     /// 构造初始浏览态(光标在首行、视口未滚、无位置记忆)。
     pub(crate) fn new() -> Self {
         Self {
-            sel_playlist: 0,
-            scroll_playlist: ListScroll::new(),
-            sel_track: 0,
-            scroll_track: ListScroll::new(),
+            playlist: ScrollList::new(),
+            track: ScrollList::new(),
             track_pos: TrackPosMap::default(),
             pending_track_restore: None,
             last_sel_change: Instant::now(),

@@ -11,7 +11,8 @@ use ratatui::layout::Rect;
 
 use crate::components::layout::compute::{compute, compute_search};
 use crate::components::popup::{MenuAction, MenuItem, OverlayKind, Placement, PopMenu};
-use crate::runtime::scroll::{ListScroll, pin_cursor};
+use crate::runtime::scroll::pin_cursor;
+use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{EntityRef, SearchFocus, View};
 
 use super::App;
@@ -130,7 +131,7 @@ impl App {
             .state
             .channel_search
             .active_results()
-            .and_then(|kr| EntityRef::from_payload(&kr.results, kr.sel))
+            .and_then(|kr| EntityRef::from_payload(&kr.results, kr.sel()))
         else {
             return;
         };
@@ -168,29 +169,19 @@ impl App {
 
     /// Search 结果列选中行的屏幕矩形。
     ///
-    /// 结果表每帧用 fresh `TableState`(offset 复位 0),ratatui 把选中行滚进视口——sel 在首屏
-    /// 内显示在第 sel 行,超出则钉在视口末行。据此还原屏幕行,无需另存滚动态。
+    /// 走结果列的 [`ScrollList`] 只读 offset 还原(与左栏 row_anchor 同款),滚动到任意位置都对——
+    /// 不再假设 offset 恒 0。
     fn search_row_anchor(&self) -> Option<Rect> {
         let panel = compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).left;
         let kr = self.state.channel_search.active_results()?;
-        // 视口可见行 = 高 - 上下边框 2 - 表头 1。
-        let viewport = usize::from(panel.height.saturating_sub(3));
-        let shown = kr.sel.min(viewport.saturating_sub(1));
-        let dy = u16::try_from(shown).unwrap_or(0);
-        Some(Rect::new(
-            panel.x.saturating_add(1),
-            // +1 边框 +1 表头。
-            panel.y.saturating_add(2).saturating_add(dy),
-            panel.width.saturating_sub(2),
-            1,
-        ))
+        Some(row_anchor(panel, kr.list(), kr.len()))
     }
 
     /// Library 视图选中歌(过滤投影后的当前行)。
     fn selected_track_song(&self) -> Option<Song> {
         self.state
             .filtered_tracks()
-            .get(self.state.browse.nav.sel_track)
+            .get(self.state.browse.nav.track.sel())
             .map(|sv| sv.data.clone())
     }
 
@@ -198,8 +189,7 @@ impl App {
     fn library_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            self.state.browse.nav.sel_track,
-            &self.state.browse.nav.scroll_track,
+            &self.state.browse.nav.track,
             self.state.filtered_tracks().len(),
         )
     }
@@ -208,8 +198,7 @@ impl App {
     fn playlist_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            self.state.browse.nav.sel_playlist,
-            &self.state.browse.nav.scroll_playlist,
+            &self.state.browse.nav.playlist,
             self.state.filtered_playlists().len(),
         )
     }
@@ -221,19 +210,18 @@ impl App {
 }
 
 /// 选中行在屏幕上的矩形:面板内容区(去边框)第 `表头 + (sel - offset)` 行。
-/// offset 走滚动态的只读快照(不推进动画);平移途中光标可能在视口外,
+/// offset 走滚动态的只读快照(`Frozen`,不推进动画);平移途中光标可能在视口外,
 /// `pin_cursor` 与渲染端同款钳边,保证锚点恒落在面板内。
 ///
 /// # Params:
-///   - `panel`: 左栏面板矩形(含边框)
-///   - `sel`: 选中行下标
-///   - `scroll`: 该列表的视口滚动态
+///   - `panel`: 列表面板矩形(含边框)
+///   - `list`: 该列表的光标 + 视口滚动态
 ///   - `len`: 列表总行数
-fn row_anchor(panel: Rect, sel: usize, scroll: &ListScroll, len: usize) -> Rect {
+fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
     // 与渲染端同款视口数学:高 - 上下边框 - 表头。
     let viewport = usize::from(panel.height.saturating_sub(3));
-    let offset = scroll.frozen_offset(len, viewport);
-    let pinned = pin_cursor(sel, offset, viewport);
+    let offset = list.offset(len, viewport, ScrollMotion::Frozen);
+    let pinned = pin_cursor(list.sel(), offset, viewport);
     let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
     Rect::new(
         panel.x.saturating_add(1),
@@ -422,7 +410,7 @@ mod tests {
     use crate::app::App;
     use crate::components::layout::compute::compute_search;
     use crate::components::popup::MenuAction;
-    use crate::runtime::scroll::ListScroll;
+    use crate::runtime::scroll_list::ScrollList;
     use crate::runtime::state::SearchFocus;
     use crate::test_support::{
         app_with_channel_search_probed, app_with_library, app_with_library_probed,
@@ -738,8 +726,9 @@ mod tests {
     #[test]
     fn row_anchor_maps_selection_to_panel_row() {
         let panel = Rect::new(10, 5, 40, 20);
-        let scroll = ListScroll::new();
-        let got = row_anchor(panel, /*sel*/ 2, &scroll, /*len*/ 10);
+        let mut list = ScrollList::new();
+        list.set_sel(2);
+        let got = row_anchor(panel, &list, /*len*/ 10);
         assert_eq!(got, Rect::new(11, 9, 38, 1), "y = 5 + 2(框+表头) + 2(行)");
     }
 

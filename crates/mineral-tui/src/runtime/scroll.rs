@@ -75,12 +75,14 @@ pub(crate) fn clamp_offset(
 /// 渲染端持 `&AppState` 而平移需要推进/重定目标,故内部 `RefCell`;
 /// [`Self::render_offset`] **每帧恰调一次**(渲染即帧推进,列表不在屏上时动画冻结,
 /// 重新可见后从冻结位置接着滑)。
+#[derive(Clone)]
 pub(crate) struct ListScroll {
     /// 平移态(渲染路径经共享引用更新)。
     glide: RefCell<Glide>,
 }
 
 /// `from` → `to` 的一段缓动平移(milli-row = 视口首行 × 1000)。
+#[derive(Clone)]
 struct Glide {
     /// 平移起点。每设新目标时置为当前动画位置,连按 / 中途反向都从眼前位置接着滑。
     from_milli: i64,

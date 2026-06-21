@@ -15,6 +15,7 @@ pub mod prefetch;
 pub(crate) mod reload;
 pub mod remote;
 pub(crate) mod scroll;
+pub(crate) mod scroll_list;
 pub mod signal;
 pub mod state;
 pub mod track_pos;

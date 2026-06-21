@@ -290,19 +290,15 @@ impl AppState {
             && self
                 .selected_playlist()
                 .is_some_and(|p| p.data.id == pending.playlist);
-        if !still_there || self.browse.nav.sel_track != 0 {
+        if !still_there || self.browse.nav.track.sel() != 0 {
             return;
         }
         let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
             return;
         };
         let sel = pending.pos.resolve(tracks);
-        self.browse.nav.sel_track = sel;
-        // 与 activate 的即时恢复同语义:按屏上相对行还原视口。
-        self.browse
-            .nav
-            .scroll_track
-            .snap_to(sel.saturating_sub(pending.pos.screen_row));
+        // 与 activate 的即时恢复同语义:光标落位 + 按屏上相对行瞬时还原视口。
+        self.browse.nav.track.place(sel, pending.pos.screen_row);
     }
 
     /// 列表视口滚动平移的缓动拍数(配置 `animation.list_scroll_ms` 折算)。
@@ -383,8 +379,8 @@ impl AppState {
                 self.library
                     .playlists
                     .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
-                if self.browse.nav.sel_playlist >= self.library.playlists.len() {
-                    self.browse.nav.sel_playlist = 0;
+                if self.browse.nav.playlist.sel() >= self.library.playlists.len() {
+                    self.browse.nav.playlist.set_sel(0);
                 }
             }
             TaskEvent::PlaylistDetailFetched { id, playlist } => {
@@ -726,8 +722,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.sel_playlist = 0; // p1
-        s.browse.nav.sel_track = 0;
+        s.browse.nav.playlist.set_sel(0); // p1
+        s.browse.nav.track.set_sel(0);
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
@@ -751,7 +747,7 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
-        assert_eq!(s.browse.nav.sel_track, 2, "曲目到达后应补落位到记忆行");
+        assert_eq!(s.browse.nav.track.sel(), 2, "曲目到达后应补落位到记忆行");
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
             "pending 应被消费"
@@ -771,8 +767,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.sel_playlist = 0;
-        s.browse.nav.sel_track = 1; // 已离开进入时的第 0 行
+        s.browse.nav.playlist.set_sel(0);
+        s.browse.nav.track.set_sel(1); // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let tracks = endserenading(5);
         let anchor = tracks
@@ -796,7 +792,7 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
-        assert_eq!(s.browse.nav.sel_track, 1, "用户已动光标,不得抢落位");
+        assert_eq!(s.browse.nav.track.sel(), 1, "用户已动光标,不得抢落位");
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
             "pending 仍应被消费"
@@ -816,8 +812,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.sel_playlist = 0;
-        s.browse.nav.sel_track = 0;
+        s.browse.nav.playlist.set_sel(0);
+        s.browse.nav.track.set_sel(0);
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
         let tracks = endserenading(5);
@@ -845,7 +841,7 @@ mod tests {
             id: other,
             playlist,
         });
-        assert_eq!(s.browse.nav.sel_track, 0);
+        assert_eq!(s.browse.nav.track.sel(), 0);
         assert!(
             s.browse
                 .nav

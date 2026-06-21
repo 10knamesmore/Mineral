@@ -75,9 +75,9 @@ impl BrowsePage {
         match self.view.current() {
             View::Playlists => self
                 .filtered_playlists(model)
-                .get(self.nav.sel_playlist)
+                .get(self.nav.playlist.sel())
                 .copied(),
-            View::Library => model.library.playlists.get(self.nav.sel_playlist),
+            View::Library => model.library.playlists.get(self.nav.playlist.sel()),
         }
     }
 

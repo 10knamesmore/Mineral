@@ -1239,7 +1239,7 @@ mod tests {
     fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 1)?;
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.browse.nav.sel_track, 1, "Library d 不动选中");
+        assert_eq!(app.state.browse.nav.track.sel(), 1, "Library d 不动选中");
         assert_eq!(
             app.state.browse.view,
             crate::runtime::state::View::Library,
@@ -1252,7 +1252,11 @@ mod tests {
             .view
             .switch_to(crate::runtime::state::View::Playlists);
         press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.browse.nav.sel_playlist, 0, "Playlists d 不动选中");
+        assert_eq!(
+            app.state.browse.nav.playlist.sel(),
+            0,
+            "Playlists d 不动选中"
+        );
         assert_eq!(
             app.state.browse.view,
             crate::runtime::state::View::Playlists,
@@ -1432,7 +1436,7 @@ mod tests {
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
-            .sel;
+            .sel();
         assert_eq!(sel, 3, "J 大步下移经 config 绑定生效(4 首钳到末行)");
         Ok(())
     }
@@ -1449,7 +1453,7 @@ mod tests {
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
-            .sel;
+            .sel();
         assert_eq!(sel, 2, "j 下移两次");
         press(&mut app, KeyCode::Char('k'));
         let sel = app
@@ -1457,7 +1461,7 @@ mod tests {
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
-            .sel;
+            .sel();
         assert_eq!(sel, 1, "k 上移一次");
         Ok(())
     }
@@ -1550,7 +1554,7 @@ mod tests {
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
-            .sel;
+            .sel();
         assert_eq!(sel, 0, "detail 焦点下 j/k 不动 results 光标");
         Ok(())
     }
@@ -1760,7 +1764,7 @@ mod tests {
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(|f| f.list_sel),
+                .map(|f| f.list().sel()),
             Some(2),
             "detail j 滚两次到第 3 行(同专辑曲目)"
         );

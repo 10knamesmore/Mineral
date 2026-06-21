@@ -7,6 +7,7 @@ pub mod description;
 pub mod detail_title;
 pub mod lyrics;
 pub mod now_playing;
+pub mod scroll_table;
 pub mod search_detail;
 pub mod search_panel;
 pub mod sidebar;

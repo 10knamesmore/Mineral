@@ -11,6 +11,7 @@ use rustc_hash::FxHashMap;
 
 use crate::render::anim::{Toggle, Transition};
 use crate::runtime::line_input::{InputRequest, LineInput};
+use crate::runtime::scroll_list::ScrollList;
 
 use super::detail::{DetailFetch, DetailStack, EntityRef};
 
@@ -58,8 +59,8 @@ pub struct KindResults {
     /// 已拉取并累积的结果（翻页 append 同变体）。
     pub results: SearchPayload,
 
-    /// 结果列光标下标。
-    pub sel: usize,
+    /// 结果列光标 + 视口滚动（nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移）。
+    list: ScrollList,
 
     /// 下一页 offset（= 已加载条数）；翻页提交带它。
     pub next_offset: u32,
@@ -84,7 +85,7 @@ impl KindResults {
         let loaded = u32::try_from(count).unwrap_or(u32::MAX);
         Self {
             results: payload,
-            sel: 0,
+            list: ScrollList::new(),
             next_offset: loaded,
             exhausted: loaded < limit,
             detail,
@@ -106,14 +107,24 @@ impl KindResults {
         payload_len(&self.results)
     }
 
+    /// 结果列光标下标。
+    pub fn sel(&self) -> usize {
+        self.list.sel()
+    }
+
+    /// 结果列光标 + 视口滚动态（渲染 / 锚点反推读取）。
+    pub(crate) fn list(&self) -> &ScrollList {
+        &self.list
+    }
+
     /// 移动结果列光标到 `idx`（钳末行）；**真的移动了**才把 detail 栈复位到新选中实体
     /// （边界钳制不动则保留下钻栈）。
     pub fn set_sel(&mut self, idx: usize) {
         let clamped = idx.min(self.len().saturating_sub(1));
-        if clamped == self.sel {
+        if clamped == self.list.sel() {
             return;
         }
-        self.sel = clamped;
+        self.list.set_sel(clamped);
         if let Some(entity) = EntityRef::from_payload(&self.results, clamped) {
             self.detail.reset_to(entity);
         }
@@ -819,7 +830,7 @@ mod tests {
         kr.set_sel(1);
         assert_eq!(kr.detail.depth(), 0, "移光标 → detail 复位到新 root");
         kr.set_sel(9); // 越界钳到末行(idx1)==当前，不动
-        assert_eq!(kr.sel, 1, "钳制在末行");
+        assert_eq!(kr.sel(), 1, "钳制在末行");
         Ok(())
     }
 

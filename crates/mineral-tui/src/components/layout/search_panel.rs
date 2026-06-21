@@ -4,15 +4,17 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table};
 
 use unicode_width::UnicodeWidthStr;
 
 use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
+use crate::components::layout::scroll_table::render_scroll_table;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::theme::Theme;
+use crate::runtime::scroll_list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
 /// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调(spec §1.2 当前焦点面板边框高亮)。
@@ -262,15 +264,16 @@ pub(crate) fn draw_prompt_dropdown(
 /// 仍标出"回得去"的光标位置而不抢视觉。
 ///
 /// # Params:
-///   - `rs`: channel 搜索子域(读当前会话结果与光标)
+///   - `state`: 应用态(读 channel 搜索子域 + scrolloff / 缓动拍数 / morph 进度)
 ///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`)
 pub fn draw_results(
     frame: &mut Frame<'_>,
     area: Rect,
-    rs: &SearchPage,
+    state: &AppState,
     theme: &Theme,
     border_focused: bool,
 ) {
+    let rs = &state.channel_search;
     let block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style(border_focused, theme))
@@ -287,8 +290,6 @@ pub fn draw_results(
         return;
     };
     let (header, rows, widths) = result_table(&kr.results, theme);
-    let mut table_state =
-        TableState::default().with_selected(Some(kr.sel.min(rows.len().saturating_sub(1))));
     // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
     // 焦点在结果列 → accent 亮;否则暗调(surface0 底 + subtext 字,无 BOLD),示意可回位。
     let highlight = if rs.focus == SearchFocus::Results {
@@ -303,7 +304,26 @@ pub fn draw_results(
         .header(Row::new(header).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD)))
         .row_highlight_style(highlight)
         .highlight_symbol("▌ ");
-    frame.render_stateful_widget(table, inner, &mut table_state);
+    // 视口行数 = 内区高 - 表头(边框归 block);offset 跨帧持久 + 缓动平移。
+    // 退场 morph 中面板是收缩瞬态(只读展示,不得用瞬态 viewport 改写滚动目标),仅稳态(at_max)推进。
+    let viewport = usize::from(inner.height.saturating_sub(1));
+    let motion = if rs.active.at_max() {
+        ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        }
+    } else {
+        ScrollMotion::Frozen
+    };
+    render_scroll_table(
+        frame.buffer_mut(),
+        inner,
+        table,
+        kr.list(),
+        kr.len(),
+        viewport,
+        motion,
+    );
 }
 
 /// 空结果列的居中 lite 提示(暗调斜体,水平 + 垂直居中);非可高亮列表行。
