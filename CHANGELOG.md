@@ -1,4 +1,61 @@
 # Changelog
+## [0.5.2] — 2026-06-21
+
+### Features
+
+- 终端失焦标识——顶栏渐变变灰 + not focused 徽标 ([`8fec297`](https://github.com/10knamesmore/Mineral/commit/8fec2974be3e6e39c4000b2e1c60fa6fb0683277))
+
+- MusicChannel 增加歌单写操作与 caps 能力声明 ([`fce1533`](https://github.com/10knamesmore/Mineral/commit/fce15336d66335c4f61470a5f99ba4f42db8ec86))
+
+- MockChannel 歌单写操作内存实现 ([`7114200`](https://github.com/10knamesmore/Mineral/commit/7114200d2a8344c43f22e4e4277d4344558955bc))
+
+- 歌单写操作 + 歌手端点全套落地 ([`5241ffa`](https://github.com/10knamesmore/Mineral/commit/5241ffa9eaeb98214ddbbf9836c6912be9ba5584))
+
+- 搜索任务管线 + 歌单写执行器 + 队列插播 ([`a3a11d4`](https://github.com/10knamesmore/Mineral/commit/a3a11d4ff07930b671d35e482b13657453ba4f9e))
+
+- PopMenu 锚定菜单 + o/y 上下文操作/复制 + copy.templates Lua 模板全链 ([`127cd65`](https://github.com/10knamesmore/Mineral/commit/127cd65edb7b0ff2aa188b1265efcd531c98b84d))
+
+- PopMenu 形变进场 + 横向对齐(关键字/比例) + 收回缓动 + l 确认 ([`1c5fdee`](https://github.com/10knamesmore/Mineral/commit/1c5fdee988402986833a12a2d65a8b1a7b8dc98d))
+
+- Search 布局态 + morph 形变(compute_search 三端点 / OpenSearchView / z/s 互斥) ([`60141ce`](https://github.com/10knamesmore/Mineral/commit/60141ceb2b1f97adc82ab2c8a146e16d58b7eafd))
+
+- Search 布局态交互重做 + 结果列结构化 + channel_search 提顶层 ([`b0964fc`](https://github.com/10knamesmore/Mineral/commit/b0964fc5c83e15d78f2645dac1fdffbce16f798e))
+
+- Detail 端点 noun 化 + 实体详情栈下钻交互 ([`ba93384`](https://github.com/10knamesmore/Mineral/commit/ba9338474f6f8c40d273692754b50732b3e30a5d))
+
+- Browse 行为页化 → impl Page for BrowsePage + BrowseEffect ([`9d7c4d2`](https://github.com/10knamesmore/Mineral/commit/9d7c4d28844761970394baf79447df593d4a9d1f))
+
+- Tui border use rounded ([`d9cf98e`](https://github.com/10knamesmore/Mineral/commit/d9cf98eadbd8079dc8cebc114970c4ccebbda674))
+
+- Search 输入框接管顶行 — 去 status bar + 顶栏 morph 收掉 ([`0435212`](https://github.com/10knamesmore/Mineral/commit/04352122076cb1ab53d5da8f838572b140155e39))
+
+- Detail 顶栏 title 运行时按栈顶实体 breadcrumb 生成 ([`f0114d4`](https://github.com/10knamesmore/Mineral/commit/f0114d4687b04929cb1631bb1cb5669341894cca))
+
+- Search detail 曲目表对齐 browse + album 结果加 tracks 列 ([`f8f9069`](https://github.com/10knamesmore/Mineral/commit/f8f906943bc3cf3eb65f6f287edb0947ccda7f8d))
+
+- Artist detail Albums 表加列 + Top Songs↔Albums 切换动画 ([`4da91b6`](https://github.com/10knamesmore/Mineral/commit/4da91b6396918ebdf9d7ff44a8d4f966f595faf7))
+
+- Detail 头部简介多行渲染 + C-d/u/b/f 滚动 ([`f63a281`](https://github.com/10knamesmore/Mineral/commit/f63a281015eea14e10c8b75d9d14cfa725c9e79e))
+
+- Search result/detail 面板左下角加位置标 ([`b34e599`](https://github.com/10knamesmore/Mineral/commit/b34e599bc5abc0e3eb3097fecf5d6f3146d73d9c))
+
+- 搜索结果懒分页预取触发(behavior.search_prefetch_rows) ([`5672de1`](https://github.com/10knamesmore/Mineral/commit/5672de1719491a379690985b7dd696c645497d35))
+
+- List y/o 菜单接入所有 surface(单 resolver + 组件收口) ([`8ed90ac`](https://github.com/10knamesmore/Mineral/commit/8ed90ac7e38594abeb1baf27f33a5570733ea956))
+
+- Search/detail loading 三态 + 可配 spinner ([`685d186`](https://github.com/10knamesmore/Mineral/commit/685d1867976295086e34f0e048f822af22bf651e))
+
+- Detail meta↔list 居中短线分隔 ([`2696811`](https://github.com/10knamesmore/Mineral/commit/2696811347a6ada5464c808a443d1020da7eeec7))
+
+- 搜索光标改行内反色罩字符(ab[c]d)替代独立 █ 块 ([`9ec1d72`](https://github.com/10knamesmore/Mineral/commit/9ec1d724fc21c861220211b0e57df4c758428ed8))
+
+### Bug Fixes
+
+- 列表统一 ScrollList 组件，根治 search detail/results focus 贴边 ([`247058a`](https://github.com/10knamesmore/Mineral/commit/247058a17e61e299b4caa6a4fca737576f5ad628))
+
+- 简介折行前压平制表符等控制字符 ([`d306504`](https://github.com/10knamesmore/Mineral/commit/d306504e01df0ff2b1c09ce772bc560fb36d4098))
+
+- Reorder netease search kinds ([`f5855f6`](https://github.com/10knamesmore/Mineral/commit/f5855f6661b7df1ee378e632d1edbb0b73ecb257))
 ## [0.5.1] — 2026-06-10
 
 ### Breaking Changes
