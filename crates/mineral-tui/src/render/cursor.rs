@@ -56,8 +56,14 @@ mod tests {
     #[test]
     fn cursor_covers_first_after_char() -> color_eyre::Result<()> {
         let spans = cursor_spans("ab".to_owned(), "cd", Style::new());
-        assert_eq!(contents(&spans), ["ab", "c", "d"], "切成 before|光标字符|余下");
-        let cursor = spans.get(1).ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
+        assert_eq!(
+            contents(&spans),
+            ["ab", "c", "d"],
+            "切成 before|光标字符|余下"
+        );
+        let cursor = spans
+            .get(1)
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
         assert!(
             cursor.style.add_modifier.contains(Modifier::REVERSED),
             "光标段反色"
@@ -70,7 +76,9 @@ mod tests {
     fn cursor_at_end_covers_space() -> color_eyre::Result<()> {
         let spans = cursor_spans("abc".to_owned(), "", Style::new());
         assert_eq!(contents(&spans), ["abc", " "], "词尾光标罩空格");
-        let cursor = spans.get(1).ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
+        let cursor = spans
+            .get(1)
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
         assert!(
             cursor.style.add_modifier.contains(Modifier::REVERSED),
             "空格光标段反色"
