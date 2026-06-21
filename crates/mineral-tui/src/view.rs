@@ -578,6 +578,56 @@ mod tests {
         Ok(())
     }
 
+    /// Search 首页在飞:results 列画旋转 spinner「searching」,与「到货 0 条」「尚未搜索」区分。
+    #[test]
+    fn search_loading_spinner_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("x");
+        }
+        // 模拟刚提交首页、结果未到:当前 kind 标在飞。spinner 计数 0 → 首帧 ⠋(无 tick,确定性)。
+        app.state.channel_search.mark_loading(SearchKind::Song);
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 首页在飞:results 列居中旋转 spinner「⠋ searching」(区别于空态 / idle)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 到货 0 条:results 列画「no results」(bucket 存在但空),区别于 idle 的「type a query」。
+    #[test]
+    fn search_no_results_hint_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("zzzz");
+        }
+        // 到货 0 条:bucket 建起但空 → no results(apply_page 顺手清 loading)。
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "zzzz".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(Vec::new()),
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 到货 0 条:results 列居中「no results」(bucket 在但空,区别于 idle)",
+            t.backend()
+        );
+        Ok(())
+    }
+
     /// 结果列选中行**整行**底色高亮(对齐 tracks/playlist/queue 的 row_highlight,非仅文字变色):
     /// 选中行尾部空白 cell 也带 surface0 底色,非选中行不带。
     #[test]

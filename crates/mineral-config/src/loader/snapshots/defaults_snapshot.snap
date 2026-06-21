@@ -623,6 +623,18 @@ Config {
             view_sweep: Push,
             menu_reveal: Morph,
             search_focus_transition: Slide,
+            spinner_frames: [
+                "⠋",
+                "⠙",
+                "⠹",
+                "⠸",
+                "⠼",
+                "⠴",
+                "⠦",
+                "⠧",
+                "⠇",
+                "⠏",
+            ],
         },
         toast: ToastConfig {
             flash_ttl_secs: 4,

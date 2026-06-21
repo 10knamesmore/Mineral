@@ -170,6 +170,7 @@ return {
       view_sweep = "push", -- "push" | "cover":侧栏切换是新旧一起平移还是从右盖上
       menu_reveal = "morph", -- "morph" | "directional":弹出菜单从锚点行形变而来 还是 贴边方向性揭开
       search_focus_transition = "slide", -- "slide" | "instant":搜索焦点高亮边框切换 从旧面板滑到新面板 还是 瞬移直切
+      spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }, -- loading 旋转占位帧(逐帧循环);空 {} = 只留文案不画字形
     },
     toast = {
       flash_ttl_secs = 4, -- 一次性通知(下载完成 / 配置告警等)停留秒数

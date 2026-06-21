@@ -7,7 +7,7 @@
 use mineral_channel_core::{ChannelCaps, Page};
 use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId, SearchKind, Song, SourceKind};
 use mineral_task::SearchPayload;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::render::anim::{Toggle, Transition};
 use crate::runtime::line_input::{InputRequest, LineInput};
@@ -185,6 +185,11 @@ pub struct SearchSession {
 
     /// per-kind 结果桶（query 改变即整体作废）。
     by_kind: FxHashMap<SearchKind, KindResults>,
+
+    /// 首页搜索在飞中的 kind（提交即置位、首页到货清位）。渲染层据此把「正在搜」与「搜到
+    /// 0 条」「尚未搜索」三态分开。读失败无事件 → 不清 → 持续显 loading,重 Enter 重提交
+    /// （与 spec「读失败=停留 loading + 驻留重试」一致）。
+    in_flight: FxHashSet<SearchKind>,
 }
 
 impl SearchSession {
@@ -194,7 +199,18 @@ impl SearchSession {
             kind,
             input: LineInput::new(),
             by_kind: FxHashMap::default(),
+            in_flight: FxHashSet::default(),
         }
+    }
+
+    /// 标记某 kind 首页搜索在飞（提交时置位）。
+    pub(crate) fn mark_in_flight(&mut self, kind: SearchKind) {
+        self.in_flight.insert(kind);
+    }
+
+    /// 某 kind 是否首页搜索在飞（渲染层据此区分 loading↔empty）。
+    pub(crate) fn is_loading(&self, kind: SearchKind) -> bool {
+        self.in_flight.contains(&kind)
     }
 
     /// 当前 kind 的结果桶（只读）；未搜该 kind 为 `None`。
@@ -275,6 +291,8 @@ impl SearchSession {
     /// 作废全部 kind 桶（显式重新提交时清旧词缓存）。
     pub fn clear_results(&mut self) {
         self.by_kind.clear();
+        // 换词作废旧 loading 态;新提交随即重置当前 kind。
+        self.in_flight.clear();
     }
 
     /// 把一页结果落进 `by_kind[kind]`：首页新建桶、翻页 append 既有桶。
@@ -285,6 +303,8 @@ impl SearchSession {
     ///   - `page`: 分页参数（`offset == 0` 为首页）
     pub fn apply_page(&mut self, kind: SearchKind, payload: SearchPayload, page: Page) {
         if page.offset == 0 {
+            // 首页到货:清 loading（即便 0 条也算「搜完了」→ 渲染层转 no results）。
+            self.in_flight.remove(&kind);
             self.by_kind
                 .insert(kind, KindResults::first_page(payload, page.limit));
         } else if let Some(bucket) = self.by_kind.get_mut(&kind) {
@@ -338,6 +358,10 @@ pub struct SearchPage {
 
     /// per-source 搜索会话（query/kind/结果/光标独立，切 source 恢复）。
     sessions: FxHashMap<SourceKind, SearchSession>,
+
+    /// loading spinner 帧计数（每帧 tick +1；渲染按 [`Self::spinner_glyph`] 取旋转帧，与稳态
+    /// 列表无关，恒推进，故 loading 占位会持续旋转）。
+    spinner: u32,
 }
 
 impl SearchPage {
@@ -361,6 +385,25 @@ impl SearchPage {
             seg_reveal: Transition::new(ring_ticks),
             reveal_seg: None,
             sessions: FxHashMap::default(),
+            spinner: 0,
+        }
+    }
+
+    /// loading spinner 帧计数（每帧 +1）。字形选取交渲染层（按配置 `animation.spinner_frames`
+    /// 取当前格，见 shared `spinner`），状态层只持帧号、不知道画什么字符。
+    pub fn spinner_counter(&self) -> u32 {
+        self.spinner
+    }
+
+    /// 当前会话当前 kind 是否首页搜索在飞（结果面板 loading↔empty↔idle 三态分流）。
+    pub fn current_loading(&self) -> bool {
+        self.current().is_some_and(|s| s.is_loading(s.kind))
+    }
+
+    /// 标记当前会话某 kind 首页搜索在飞（submit 落地时由 App 调）。
+    pub(crate) fn mark_loading(&mut self, kind: SearchKind) {
+        if let Some(session) = self.current_mut() {
+            session.mark_in_flight(kind);
         }
     }
 
@@ -479,6 +522,8 @@ impl SearchPage {
         self.active.tick();
         self.focus_ring.tick();
         self.seg_reveal.tick();
+        // loading spinner 帧恒推进（wrapping 防溢出 lint;视觉上一直旋转）。
+        self.spinner = self.spinner.wrapping_add(1);
         if let Some(kr) = self.active_results_mut() {
             kr.detail.tick();
         }
@@ -663,6 +708,51 @@ mod tests {
             .id(mineral_model::AlbumId::new(SourceKind::NETEASE, raw))
             .name(format!("album {raw}"))
             .build()
+    }
+
+    /// loading 三态:提交置位 → current_loading 真;首页到货(含 0 条)清位 → 转 empty。
+    #[test]
+    fn loading_set_on_submit_cleared_on_first_page() -> color_eyre::Result<()> {
+        let caps = caps_with(vec![SearchKind::Song]);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        rs.enter(&caps);
+        rs.mark_loading(SearchKind::Song);
+        assert!(rs.current_loading(), "提交后当前 kind 在飞 → loading");
+        if let Some(session) = rs.current_mut() {
+            // 首页到货 0 条:仍算「搜完了」,清 loading(渲染层转 no results)。
+            session.apply_page(
+                SearchKind::Song,
+                SearchPayload::Songs(Vec::new()),
+                Page::default(),
+            );
+        }
+        assert!(!rs.current_loading(), "首页到货 → 清 loading");
+        Ok(())
+    }
+
+    /// 换词作废(clear_results)清 loading,避免旧词的 in-flight 残留显假 loading。
+    #[test]
+    fn loading_cleared_on_clear_results() -> color_eyre::Result<()> {
+        let caps = caps_with(vec![SearchKind::Song]);
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        rs.enter(&caps);
+        rs.mark_loading(SearchKind::Song);
+        assert!(rs.current_loading());
+        if let Some(session) = rs.current_mut() {
+            session.clear_results();
+        }
+        assert!(!rs.current_loading(), "换词 clear_results 清 loading");
+        Ok(())
+    }
+
+    /// spinner 帧计数随 tick 单调 +1(渲染层据此取旋转帧,故 loading 占位会持续旋转)。
+    #[test]
+    fn spinner_counter_advances_with_tick() {
+        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
+        let c0 = rs.spinner_counter();
+        rs.tick();
+        rs.tick();
+        assert_eq!(rs.spinner_counter(), c0 + 2, "每 tick spinner 计数 +1");
     }
 
     /// 进入时挑首个 searchable source、kind 落到该 source searchable 首项、焦点回 prompt。

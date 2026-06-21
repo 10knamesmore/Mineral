@@ -132,6 +132,8 @@ impl App {
                     }),
                     Priority::User,
                 );
+                // 首页在飞：结果区显 searching spinner，到货（含 0 条）由 apply_page 清。
+                self.state.channel_search.mark_loading(kind);
             }
             SearchEffect::FetchMore {
                 source,

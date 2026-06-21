@@ -12,6 +12,7 @@ use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::spinner;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::ScrollMotion;
@@ -291,9 +292,21 @@ pub fn draw_results(
     if rs.source.is_none() {
         return;
     }
-    // 尚未搜索 / 空页:画居中 lite 提示,而非占用首行的可高亮列表项。
+    // 无结果可列时画居中 lite 提示,三态分流(不与「占首行的可高亮列表项」混):
+    //   首页在飞 → 旋转 spinner「searching」;到货 0 条(bucket 在但空) → 「no results」;
+    //   尚未搜索(无 bucket、不在飞) → 「type a query」。
     let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) else {
-        draw_centered_hint(frame, inner, "type a query", theme);
+        if rs.current_loading() {
+            let glyph = spinner::glyph(
+                state.cfg.tui().animation().spinner_frames(),
+                rs.spinner_counter(),
+            );
+            draw_centered_hint(frame, inner, &format!("{glyph} searching"), theme);
+        } else if rs.active_results().is_some() {
+            draw_centered_hint(frame, inner, "no results", theme);
+        } else {
+            draw_centered_hint(frame, inner, "type a query", theme);
+        }
         return;
     };
     let (header, rows, widths) = result_table(&kr.results, theme);

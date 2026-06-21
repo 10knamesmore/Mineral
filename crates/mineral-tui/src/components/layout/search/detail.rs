@@ -17,6 +17,7 @@ use mineral_model::{Album, Song};
 
 mod description;
 mod meta;
+mod placeholder;
 mod title;
 mod track_table;
 
@@ -27,6 +28,7 @@ use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
 use self::meta::{album_card_lines, artist_counts, publish_year, with_commas};
+use self::placeholder::{draw_empty, draw_loading, loading_glyph};
 use self::track_table::TrackColumns;
 use super::panel::join_artists;
 
@@ -503,7 +505,8 @@ fn draw_track_body(
             state,
             theme,
         ),
-        _ => draw_skeleton(buf, body, theme),
+        // 数据未到货 → 旋转 loading(非空态)。
+        _ => draw_loading(buf, body, loading_glyph(state), theme),
     }
 }
 
@@ -597,7 +600,8 @@ fn draw_artist_section(
                 albums: Some(albs), ..
             }),
         ) => draw_album_list(buf, list, albs, paint, theme),
-        _ => draw_skeleton(buf, list, theme),
+        // 该区数据未到货 → 旋转 loading。
+        _ => draw_loading(buf, list, loading_glyph(state), theme),
     }
 }
 
@@ -675,7 +679,8 @@ fn draw_track_list(
     theme: &Theme,
 ) {
     if songs.is_empty() {
-        draw_skeleton(buf, area, theme);
+        // 已到货但 0 曲 → 静态空态(非 loading,数据已在手)。
+        draw_empty(buf, area, "no tracks", theme);
         return;
     }
     let cols = cols.for_width(area.width);
@@ -710,7 +715,8 @@ fn draw_album_list(
     theme: &Theme,
 ) {
     if albums.is_empty() {
-        draw_skeleton(buf, area, theme);
+        // 已到货但 0 专辑 → 静态空态。
+        draw_empty(buf, area, "no albums", theme);
         return;
     }
     let meta = Style::new().fg(theme.overlay);
@@ -757,19 +763,6 @@ fn draw_album_list(
         viewport,
         paint.motion,
     );
-}
-
-/// 数据未到的占位骨架（几行暗调虚线）。
-fn draw_skeleton(buf: &mut Buffer, area: Rect, theme: &Theme) {
-    let style = Style::new().fg(theme.overlay).add_modifier(Modifier::DIM);
-    for row in 0..area.height.min(4) {
-        let y = area.y.saturating_add(row);
-        Widget::render(
-            Paragraph::new(Line::from(Span::styled("  ┄┄┄┄┄┄┄┄", style))),
-            Rect::new(area.x, y, area.width, 1),
-            buf,
-        );
-    }
 }
 
 /// detail 面板左下角 ` n / total `(1-based 当前位 / 当前区列表长度)。调用方已保证 `total != 0`。

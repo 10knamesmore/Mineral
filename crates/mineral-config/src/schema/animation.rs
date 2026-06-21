@@ -47,6 +47,10 @@ pub struct AnimationConfig {
 
     /// Search 布局态焦点高亮边框切换的过渡风格(直切 / 边框滑动)。
     search_focus_transition: SearchFocusTransition,
+
+    /// loading 占位的旋转 spinner 帧(逐帧循环画;search「searching」/ detail 数据未到共用)。
+    /// 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
+    spinner_frames: Vec<String>,
 }
 
 /// Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。

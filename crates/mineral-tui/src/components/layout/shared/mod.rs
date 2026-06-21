@@ -5,6 +5,7 @@ pub mod compute;
 pub mod cover;
 pub mod cover_image;
 pub mod scroll_table;
+pub mod spinner;
 pub mod text;
 pub mod top_status;
 pub mod transform;
