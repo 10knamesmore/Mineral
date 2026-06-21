@@ -15,6 +15,6 @@ mod queue;
 mod stack;
 
 pub(crate) use component::{OverlayAction, OverlayResponse, render_overlay};
-pub(crate) use menu::{MenuAction, MenuItem, PopMenu};
+pub(crate) use menu::{ContainerRef, MenuAction, MenuItem, PopMenu};
 pub(crate) use placement::Placement;
 pub(crate) use stack::{OverlayKind, OverlayStack};

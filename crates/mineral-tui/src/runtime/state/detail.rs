@@ -294,6 +294,57 @@ impl DetailFrame {
         }
     }
 
+    /// 当前区列表选中行对应的实体（detail 焦点的行级菜单 `y`/`o` 据此构造项）：歌单/专辑/
+    /// 歌曲帧曲目行、歌手 Hot 区热门曲 → `Song`；歌手 Albums 区 → `Album`（容器，菜单走
+    /// 播放全部）；数据未到 / 越界 → `None`。与 [`Self::list_len`] 同一套
+    /// `(entity, section, data)` 分流——`j`/`k` 钳的行与菜单取的行必须是同一行。
+    pub(crate) fn row_entity(&self) -> Option<EntityRef> {
+        let sel = self.list.sel();
+        match (&self.entity, self.section, &self.data) {
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Hot,
+                Some(DetailData::Artist {
+                    detail: Some(a), ..
+                }),
+            ) => a.songs.get(sel).cloned().map(Box::new).map(EntityRef::Song),
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Albums,
+                Some(DetailData::Artist {
+                    albums: Some(albs), ..
+                }),
+            ) => albs.get(sel).cloned().map(Box::new).map(EntityRef::Album),
+            (EntityRef::Artist(_), _, _) => None,
+            (_, _, Some(DetailData::Album(a))) => {
+                a.songs.get(sel).cloned().map(Box::new).map(EntityRef::Song)
+            }
+            (_, _, Some(DetailData::Tracks(songs))) => {
+                songs.get(sel).cloned().map(Box::new).map(EntityRef::Song)
+            }
+            _ => None,
+        }
+    }
+
+    /// 当前区作为「歌曲列表」的视图（`Play` 的队列上下文 = 这一列整列，语义同 activate
+    /// 起播）：歌单/专辑/歌曲帧曲目、歌手 Hot 区热门曲；歌手 Albums 区（行是专辑容器，不入
+    /// 队）/ 数据未到 → 空。与 [`Self::row_entity`] 取 `Song` 的几路一一对应。
+    pub(crate) fn song_list(&self) -> Vec<Song> {
+        match (&self.entity, self.section, &self.data) {
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Hot,
+                Some(DetailData::Artist {
+                    detail: Some(a), ..
+                }),
+            ) => a.songs.clone(),
+            (EntityRef::Artist(_), _, _) => Vec::new(),
+            (_, _, Some(DetailData::Album(a))) => a.songs.clone(),
+            (_, _, Some(DetailData::Tracks(songs))) => songs.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// artist 帧头部 meta 该用哪份 artist：优先 fetch 回来的完整 detail（channel 已聚合成
     /// 字段齐全的 `Artist`——fans/计数/简介都有），未到货退回结果列 entity 占位（仅 name/fans）。
     /// 非 artist 帧 → `None`。渲染层据此读字段，不必关心数据来自哪个端点。
@@ -916,5 +967,109 @@ mod tests {
     /// 取栈顶实体名（测试 helper）。
     fn entity_name(f: &super::DetailFrame) -> String {
         f.entity.name().to_owned()
+    }
+
+    /// 造一张带 `n` 首曲目的专辑（曲目名 `t0..tn`）。
+    fn album_with_tracks(raw: &str, n: usize) -> Album {
+        Album::builder()
+            .id(AlbumId::new(SourceKind::NETEASE, raw))
+            .name(format!("album {raw}"))
+            .songs(
+                (0..n)
+                    .map(|i| {
+                        Song::builder()
+                            .id(SongId::new(SourceKind::NETEASE, format!("t{i}")))
+                            .name(format!("t{i}"))
+                            .duration_ms(1000)
+                            .build()
+                    })
+                    .collect::<Vec<Song>>(),
+            )
+            .build()
+    }
+
+    /// row_entity：专辑帧曲目行 → Song（按当前光标）；越界 → None。
+    #[test]
+    fn row_entity_album_track_follows_cursor() -> color_eyre::Result<()> {
+        let mut frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
+        assert!(frame.row_entity().is_none(), "数据未到 → None");
+        frame.set_album_detail(Box::new(album_with_tracks("al", 3)));
+        frame.list_mut().set_sel(2);
+        let Some(EntityRef::Song(s)) = frame.row_entity() else {
+            color_eyre::eyre::bail!("专辑帧曲目行应取到 Song");
+        };
+        assert_eq!(s.name, "t2", "取第 3 行曲目");
+        frame.list_mut().set_sel(9);
+        assert!(frame.row_entity().is_none(), "越界行 → None");
+        Ok(())
+    }
+
+    /// row_entity：歌单帧（Tracks）曲目行 → Song。
+    #[test]
+    fn row_entity_playlist_track() -> color_eyre::Result<()> {
+        let mut frame = super::DetailFrame::new(EntityRef::Playlist(Box::new(playlist("pl"))));
+        frame.set_tracks(vec![song("s0", None), song("s1", None)]);
+        frame.list_mut().set_sel(1);
+        let Some(EntityRef::Song(s)) = frame.row_entity() else {
+            color_eyre::eyre::bail!("歌单帧曲目行应取到 Song");
+        };
+        assert_eq!(s.name, "song s1");
+        Ok(())
+    }
+
+    /// row_entity：歌手帧 Hot 区行 → Song、Albums 区行 → Album（容器）。
+    #[test]
+    fn row_entity_artist_by_section() -> color_eyre::Result<()> {
+        use mineral_model::{Artist, ArtistId};
+        let detail = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("ar".to_owned())
+            .songs(vec![song("h0", None), song("h1", None)])
+            .build();
+        let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
+        frame.set_artist_detail(Box::new(detail));
+        frame.set_artist_albums(vec![album("a0"), album("a1")]);
+
+        frame.section = ArtistSection::Hot;
+        frame.list_mut().set_sel(1);
+        let Some(EntityRef::Song(s)) = frame.row_entity() else {
+            color_eyre::eyre::bail!("Hot 区行应取到 Song");
+        };
+        assert_eq!(s.name, "song h1");
+
+        frame.section = ArtistSection::Albums;
+        frame.list_mut().set_sel(0);
+        let Some(EntityRef::Album(a)) = frame.row_entity() else {
+            color_eyre::eyre::bail!("Albums 区行应取到 Album");
+        };
+        assert_eq!(a.name, "album a0");
+        Ok(())
+    }
+
+    /// song_list：专辑帧 = 全曲、歌手 Hot 区 = 热门曲、Albums 区（容器行）= 空、未到 = 空。
+    #[test]
+    fn song_list_per_section() -> color_eyre::Result<()> {
+        use mineral_model::{Artist, ArtistId};
+        let mut album_frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
+        assert!(album_frame.song_list().is_empty(), "未到货 → 空");
+        album_frame.set_album_detail(Box::new(album_with_tracks("al", 4)));
+        assert_eq!(album_frame.song_list().len(), 4, "专辑帧 = 全曲");
+
+        let detail = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("ar".to_owned())
+            .songs(vec![song("h0", None), song("h1", None)])
+            .build();
+        let mut artist_frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
+        artist_frame.set_artist_detail(Box::new(detail));
+        artist_frame.set_artist_albums(vec![album("a0")]);
+        artist_frame.section = ArtistSection::Hot;
+        assert_eq!(artist_frame.song_list().len(), 2, "Hot 区 = 热门曲");
+        artist_frame.section = ArtistSection::Albums;
+        assert!(
+            artist_frame.song_list().is_empty(),
+            "Albums 区行是专辑容器,不作歌曲队列上下文"
+        );
+        Ok(())
     }
 }

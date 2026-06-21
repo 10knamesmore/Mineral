@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Cell, Row, Table};
 
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::popup::component::{
-    Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
+    Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
@@ -44,6 +44,32 @@ impl QueueOverlay {
     /// 当前光标行(脚本动作 ctx 采集 / 集成测试断言用)。
     pub(crate) fn cursor(&self) -> usize {
         self.list.sel()
+    }
+
+    /// 选中行在屏幕上的矩形(供其上叠 `y` 复制菜单贴行下方弹)。停靠几何与渲染同源
+    /// ([`dock_full_rect`]),内区去边框后:表头占 1 行,选中行 = 内区 y + 1 + (光标 − 视口
+    /// offset)。`offset` 走只读 `Frozen` 快照,平移途中 `pin_cursor` 钳边与渲染端一致。
+    pub(crate) fn row_anchor(&self, ctx: &AppState) -> Rect {
+        let full = dock_full_rect(ctx.frame_area.get(), ctx);
+        // base_block 是 Borders::ALL,内区四周各去 1。
+        let inner = Rect::new(
+            full.x.saturating_add(1),
+            full.y.saturating_add(1),
+            full.width.saturating_sub(2),
+            full.height.saturating_sub(2),
+        );
+        let len = ctx.player.queue.len();
+        let viewport = usize::from(inner.height.saturating_sub(1));
+        let offset = self.list.offset(len, viewport, ScrollMotion::Frozen);
+        let pinned = scroll::viewport::pin_cursor(self.list.sel(), offset, viewport);
+        let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
+        Rect::new(
+            inner.x,
+            // +1 表头(无内层边框)。
+            inner.y.saturating_add(1).saturating_add(dy),
+            inner.width,
+            1,
+        )
     }
 }
 
@@ -154,6 +180,14 @@ impl Overlay for QueueOverlay {
             Action::OpenQueue | Action::OpenQuitConfirm | Action::BackOrClearSearch => {
                 Some(OverlayResponse::Do(OverlayAction::CloseTop))
             }
+            // `y`:为当前光标行弹复制菜单(贴行下方、叠在 queue 之上);queue 只读复制,不改队列。
+            Action::OpenCopyMenu => Some(OverlayResponse::Do(OverlayAction::CopyQueueIndex {
+                idx: self.list.sel(),
+                anchor: self.row_anchor(ctx),
+            })),
+            // `o`:queue 内无「容器/单曲操作」语义(它本身即队列),显式吞掉(Consumed)而非
+            // 回落——意图直白,且不押注 passes_overlay 白名单恰好不含 OpenActionMenu 的现状。
+            Action::OpenActionMenu => Some(OverlayResponse::Consumed),
             // 其余(播放控制族等)不认 → 回落 on_key(Pass 半穿透)。
             _ => None,
         }
@@ -425,6 +459,42 @@ mod tests {
         o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
         o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
         assert_eq!(o.cursor(), 0, "上滚越界钳到首行");
+        Ok(())
+    }
+
+    /// `y`(OpenCopyMenu)产出 CopyQueueIndex(当前光标);`o`(OpenActionMenu)被显式吞掉
+    /// (Consumed)——queue 只读复制、无操作语义。
+    #[test]
+    fn copy_menu_action_and_action_menu_swallowed() -> color_eyre::Result<()> {
+        let ctx = ctx_with_queue(4, None)?;
+        let mut o = QueueOverlay::new(2);
+        let resp = o.on_action(Action::OpenCopyMenu, &ctx);
+        let Some(OverlayResponse::Do(OverlayAction::CopyQueueIndex { idx, .. })) = resp else {
+            color_eyre::eyre::bail!("y 应产出 CopyQueueIndex");
+        };
+        assert_eq!(idx, 2, "复制作用于当前光标行");
+        assert!(
+            matches!(
+                o.on_action(Action::OpenActionMenu, &ctx),
+                Some(OverlayResponse::Consumed)
+            ),
+            "o 在 queue 被显式吞掉(无操作语义)"
+        );
+        Ok(())
+    }
+
+    /// row_anchor:无滚动时选中行落在停靠内区表头之下第 `sel` 行(去外框 1 + 表头 1）。
+    #[test]
+    fn row_anchor_maps_selection_within_dock() -> color_eyre::Result<()> {
+        use crate::components::popup::component::dock_full_rect;
+        let ctx = ctx_with_queue(5, None)?;
+        ctx.frame_area
+            .set(ratatui::layout::Rect::new(0, 0, 100, 30));
+        let o = QueueOverlay::new(2);
+        let full = dock_full_rect(ctx.frame_area.get(), &ctx);
+        let anchor = o.row_anchor(&ctx);
+        assert_eq!(anchor.x, full.x + 1, "锚点 x 在内区(去左边框)");
+        assert_eq!(anchor.y, full.y + 2 + 2, "内区顶(+1 框)+表头(+1)+ sel(2)");
         Ok(())
     }
 

@@ -7,136 +7,217 @@
 use mineral_config::{CopyContext, CopyTemplate};
 use mineral_model::{Album, Artist, Song};
 use mineral_protocol::CopyTemplateCtx;
+use mineral_task::SearchPayload;
 use ratatui::layout::Rect;
 
+use crate::components::layout::search::detail::detail_list_area;
 use crate::components::layout::shared::compute::{compute, compute_search};
-use crate::components::popup::{MenuAction, MenuItem, OverlayKind, Placement, PopMenu};
+use crate::components::popup::{
+    ContainerRef, MenuAction, MenuItem, OverlayKind, Placement, PopMenu,
+};
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::scroll::viewport::pin_cursor;
-use crate::runtime::state::{EntityRef, SearchFocus, View};
+use crate::runtime::state::{DetailFrame, EntityRef, SearchFocus, View};
 
 use super::App;
 
+/// 要开哪种行级菜单:复制(`y`)/ 操作(`o`)。两者共用 [`App::current_list_selection`]
+/// 解析活跃 list,只在「实体 → 菜单项」的构造器上分流。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuKind {
+    /// 复制菜单(把选中实体的字段塞剪贴板)。
+    Copy,
+
+    /// 操作菜单(队列动作 / 导航)。
+    Action,
+}
+
+/// 当前活跃 list 面的种类:决定 `o` 操作项的导航语义(查看专辑只在有 detail 栈处、
+/// 容器「进入」browse=激活歌单 ≠ search=下钻)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceKind {
+    /// 浏览态 Library 曲目列表。
+    BrowseLibrary,
+
+    /// 浏览态 Playlists 歌单列表。
+    BrowsePlaylists,
+
+    /// 搜索态结果列。
+    SearchResults,
+
+    /// 搜索态 detail 面板焦点的当前区列表（曲目 / 歌手某区）。
+    SearchDetail,
+}
+
+/// 一次行级菜单的落点:活跃 list 选中行的实体、屏幕锚点矩形、所在面种类。
+///
+/// 这是「共同行为」的核心载体——每个 list 面在 [`App::current_list_selection`] 注册成一条
+/// arm 产出它,`y`/`o` 都消费同一个,保证两键在每个面成对、一致地出现。
+pub(crate) struct ListSelection {
+    /// 选中行的实体(四类型统一,行级菜单据此构造项)。
+    pub entity: EntityRef,
+
+    /// 菜单贴出的屏幕矩形(选中行正下方弹)。
+    pub anchor: Rect,
+
+    /// 所在 list 面(操作项的导航语义按它分流)。
+    pub surface: SurfaceKind,
+}
+
 impl App {
-    /// 打开上下文操作菜单(全屏态屏蔽;无可作用实体时静默)。
-    pub(crate) fn open_action_menu(&mut self) {
-        if self.state.browse.fullscreen.on() {
-            return;
-        }
-        // Search 布局态的操作菜单(插播/下载等)随 §5 接入;此处不落浏览态实体,静默。
-        if self.state.channel_search.active.on() {
-            return;
-        }
-        let built = match self.state.browse.view.current() {
-            View::Library => self.selected_track_song().map(|song| {
-                let items = vec![
-                    MenuItem::keyed(
-                        'p',
-                        "Play next",
-                        MenuAction::PlayNext(Box::new(song.clone())),
-                    ),
-                    MenuItem::keyed(
-                        'a',
-                        "Append to queue",
-                        MenuAction::Append(Box::new(song.clone())),
-                    ),
-                    MenuItem::keyed('d', "Download", MenuAction::Download(Box::new(song))),
-                ];
-                (items, self.library_row_anchor())
-            }),
-            // Playlists 菜单全是歌单写操作项,随管理流程接入。
-            View::Playlists => None,
-        };
-        if let Some((items, anchor)) = built {
-            self.overlays.push(OverlayKind::menu(PopMenu::new(
-                "actions",
-                items,
-                anchor,
-                Placement::Below,
-            )));
-        }
-    }
-
-    /// 打开复制菜单(全屏态屏蔽;无可作用实体时静默)。
-    pub(crate) fn open_copy_menu(&mut self) {
-        if self.state.browse.fullscreen.on() {
-            return;
-        }
-        // Search 布局态走自己的实体 + 锚点(浏览态布局/选中与搜索无关,不能借用)。
-        if self.state.channel_search.active.on() {
-            self.open_search_copy_menu();
-            return;
-        }
-        let templates = self.state.cfg.tui().copy().templates();
-        let built = match self.state.browse.view.current() {
-            View::Library => self.selected_track_song().map(|song| {
-                let url = self
-                    .state
-                    .caps
-                    .get(&song.source())
-                    .and_then(|c| c.song_web_url().as_deref());
-                let mut items = song_copy_items(&song, url);
-                append_template_items(&mut items, templates, CopyContext::Song, || {
-                    CopyTemplateCtx::Song(Box::new(song.clone()))
-                });
-                (items, self.library_row_anchor())
-            }),
-            View::Playlists => self.state.selected_playlist().map(|p| {
-                let url = self
-                    .state
-                    .caps
-                    .get(&p.data.source())
-                    .and_then(|c| c.playlist_web_url().as_deref());
-                let mut items = playlist_copy_items(&p.data, url);
-                // 模板实参带上已加载曲目(songs 字段;未拉取过为空数组)。
-                let mut playlist = p.data.clone();
-                playlist.songs = self
-                    .state
-                    .library
-                    .tracks
-                    .get(&playlist.id)
-                    .map(|views| {
-                        views
-                            .iter()
-                            .map(|sv| sv.data.clone())
-                            .collect::<Vec<Song>>()
-                    })
-                    .unwrap_or_default();
-                append_template_items(&mut items, templates, CopyContext::Playlist, || {
-                    CopyTemplateCtx::Playlist(Box::new(playlist.clone()))
-                });
-                (items, self.playlist_row_anchor())
-            }),
-        };
-        if let Some((items, anchor)) = built {
-            self.overlays.push(OverlayKind::menu(PopMenu::new(
-                "copy",
-                items,
-                anchor,
-                Placement::Below,
-            )));
-        }
-    }
-
-    /// Search 布局态的复制菜单:复制结果列选中实体(song/album/artist/playlist),菜单贴
-    /// 结果行正下方弹出(强制 `Left`,不吃全局右对齐)。
+    /// 解析当前活跃 list 面的选中行 → 实体 + 锚点 + 面种类。全屏态 / 无活跃 list / 无选中
+    /// 实体 → `None`。**共同行为的单一入口**:每个 list 面在此注册一条 arm,`y`/`o` 共用。
     ///
-    /// 仅结果列焦点开;detail 焦点(下钻帧实体复制)随 §5 操作菜单接入,此处静默。
-    fn open_search_copy_menu(&mut self) {
-        if self.state.channel_search.focus != SearchFocus::Results {
-            return;
+    /// queue 浮层不在此(它走 overlay 路由,见 [`App::open_queue_copy_menu`]),是唯一接缝。
+    pub(crate) fn current_list_selection(&self) -> Option<ListSelection> {
+        if self.state.browse.fullscreen.on() {
+            return None;
         }
-        let templates = self.state.cfg.tui().copy().templates();
-        let Some(entity) = self
-            .state
-            .channel_search
-            .active_results()
-            .and_then(|kr| EntityRef::from_payload(&kr.results, kr.sel()))
-        else {
+        if self.state.channel_search.active.on() {
+            let kr = self.state.channel_search.active_results()?;
+            return match self.state.channel_search.focus {
+                SearchFocus::Results => Some(ListSelection {
+                    entity: EntityRef::from_payload(&kr.results, kr.sel())?,
+                    anchor: self.search_row_anchor()?,
+                    surface: SurfaceKind::SearchResults,
+                }),
+                // detail 焦点:当前区选中行的实体（曲目 / 歌手某区），锚到 detail 面板内
+                // 该列表区的选中行下方。
+                SearchFocus::Detail => Some(ListSelection {
+                    entity: kr.detail.current()?.row_entity()?,
+                    anchor: self.search_detail_row_anchor()?,
+                    surface: SurfaceKind::SearchDetail,
+                }),
+                // prompt 是模态文本输入,无行级实体。
+                SearchFocus::Prompt => None,
+            };
+        }
+        match self.state.browse.view.current() {
+            View::Library => Some(ListSelection {
+                entity: EntityRef::Song(Box::new(self.selected_track_song()?)),
+                anchor: self.library_row_anchor(),
+                surface: SurfaceKind::BrowseLibrary,
+            }),
+            View::Playlists => Some(ListSelection {
+                entity: EntityRef::Playlist(Box::new(self.state.selected_playlist()?.data.clone())),
+                anchor: self.playlist_row_anchor(),
+                surface: SurfaceKind::BrowsePlaylists,
+            }),
+        }
+    }
+
+    /// 打开行级菜单(`y` 复制 / `o` 操作):解析活跃 list 选中行 → 按 `kind` 构造项 → 贴行下方
+    /// 弹出。全屏态 / 无选中 / 空项静默。`y`/`o` 唯一消费者。
+    pub(crate) fn open_menu(&mut self, kind: MenuKind) {
+        let Some(sel) = self.current_list_selection() else {
             return;
         };
-        let caps = self.state.caps.get(&entity_source(&entity));
-        let items = match &entity {
+        let items = match kind {
+            MenuKind::Copy => self.copy_items(&sel.entity),
+            MenuKind::Action => self.action_items(&sel.entity, sel.surface),
+        };
+        if items.is_empty() {
+            return;
+        }
+        let label = match kind {
+            MenuKind::Copy => "copy",
+            MenuKind::Action => "actions",
+        };
+        self.overlays.push(OverlayKind::menu(PopMenu::new(
+            label,
+            items,
+            sel.anchor,
+            Placement::Below,
+        )));
+    }
+
+    /// queue 浮层 `y` 的落地:为队列第 `idx` 项构造复制菜单,贴 `anchor`(队列行下方)弹在
+    /// queue 浮层**之上**(不关 queue)。空队列下标 / 空项静默。复用 [`Self::copy_items`]——
+    /// 与全站复制同一套;queue 是 [`Self::current_list_selection`] resolver 之外的唯一接缝
+    /// (浮层持私有光标,锚点只能由它自算后随动作带回)。
+    pub(crate) fn open_queue_copy_menu(&mut self, idx: usize, anchor: Rect) {
+        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+            return;
+        };
+        let items = self.copy_items(&EntityRef::Song(Box::new(song)));
+        if items.is_empty() {
+            return;
+        }
+        self.overlays.push(OverlayKind::menu(PopMenu::new(
+            "copy",
+            items,
+            anchor,
+            Placement::Below,
+        )));
+    }
+
+    /// 选中实体的 `o` 操作项(按实体类型 + 面种类)。歌曲给队列动作(`p` 替换队列起播取所在
+    /// 列表整列作上下文);容器(专辑/歌单/歌手)给播放全部 / 加入队列(见 [`container_action_items`])。
+    fn action_items(&self, entity: &EntityRef, surface: SurfaceKind) -> Vec<MenuItem> {
+        match entity {
+            EntityRef::Song(song) => vec![
+                MenuItem::keyed(
+                    'p',
+                    "Play",
+                    MenuAction::Play {
+                        song: song.clone(),
+                        queue: self.surface_song_queue(surface),
+                    },
+                ),
+                MenuItem::keyed('n', "Play next", MenuAction::PlayNext(song.clone())),
+                MenuItem::keyed('a', "Append to queue", MenuAction::Append(song.clone())),
+                MenuItem::keyed('d', "Download", MenuAction::Download(song.clone())),
+            ],
+            EntityRef::Album(album) => container_action_items(ContainerRef::Album(album.clone())),
+            EntityRef::Playlist(playlist) => {
+                container_action_items(ContainerRef::Playlist(playlist.clone()))
+            }
+            EntityRef::Artist(artist) => {
+                container_action_items(ContainerRef::Artist(artist.clone()))
+            }
+        }
+    }
+
+    /// 某 list 面的「整列歌曲」(`Play` 的队列上下文,语义同该面 activate 起播):
+    /// Library 取当前全列曲目(非过滤投影,与 Enter 一致)、search 结果列取整列结果(仅歌曲
+    /// kind),其余面无歌曲列表给空(落地时退化为单曲队列)。
+    fn surface_song_queue(&self, surface: SurfaceKind) -> Vec<Song> {
+        match surface {
+            SurfaceKind::BrowseLibrary => self
+                .state
+                .current_tracks_slot()
+                .map(|v| v.iter().map(|sv| sv.data.clone()).collect::<Vec<Song>>())
+                .unwrap_or_default(),
+            SurfaceKind::SearchResults => self
+                .state
+                .channel_search
+                .active_results()
+                .and_then(|kr| match &kr.results {
+                    SearchPayload::Songs(v) => Some(v.clone()),
+                    SearchPayload::Albums(_)
+                    | SearchPayload::Playlists(_)
+                    | SearchPayload::Artists(_) => None,
+                })
+                .unwrap_or_default(),
+            // detail 面板当前区的整列歌曲（专辑/歌单曲目、歌手热门曲；Albums 区行是容器，
+            // 走容器动作不取此）。
+            SurfaceKind::SearchDetail => self
+                .state
+                .channel_search
+                .active_results()
+                .and_then(|kr| kr.detail.current())
+                .map(DetailFrame::song_list)
+                .unwrap_or_default(),
+            SurfaceKind::BrowsePlaylists => Vec::new(),
+        }
+    }
+
+    /// 选中实体的 `y` 复制项(按实体类型),后随 Lua 自定义模板项。歌曲 / 歌单带网页链接 +
+    /// 模板;专辑 / 歌手只内置项。全站(browse / search results / search detail / queue)共用。
+    fn copy_items(&self, entity: &EntityRef) -> Vec<MenuItem> {
+        let templates = self.state.cfg.tui().copy().templates();
+        let caps = self.state.caps.get(&entity_source(entity));
+        match entity {
             EntityRef::Song(song) => {
                 let url = caps.and_then(|c| c.song_web_url().as_deref());
                 let mut items = song_copy_items(song, url);
@@ -148,23 +229,30 @@ impl App {
             EntityRef::Playlist(playlist) => {
                 let url = caps.and_then(|c| c.playlist_web_url().as_deref());
                 let mut items = playlist_copy_items(playlist, url);
+                // 模板实参带上已加载曲目:实体自带 songs 优先,空则退查 library 缓存。
+                let mut pl = (**playlist).clone();
+                if pl.songs.is_empty() {
+                    pl.songs = self
+                        .state
+                        .library
+                        .tracks
+                        .get(&pl.id)
+                        .map(|views| {
+                            views
+                                .iter()
+                                .map(|sv| sv.data.clone())
+                                .collect::<Vec<Song>>()
+                        })
+                        .unwrap_or_default();
+                }
                 append_template_items(&mut items, templates, CopyContext::Playlist, || {
-                    CopyTemplateCtx::Playlist(playlist.clone())
+                    CopyTemplateCtx::Playlist(Box::new(pl.clone()))
                 });
                 items
             }
             EntityRef::Album(album) => album_copy_items(album),
             EntityRef::Artist(artist) => artist_copy_items(artist),
-        };
-        let Some(anchor) = self.search_row_anchor() else {
-            return;
-        };
-        self.overlays.push(OverlayKind::menu(PopMenu::new(
-            "copy",
-            items,
-            anchor,
-            Placement::Below,
-        )));
+        }
     }
 
     /// Search 结果列选中行的屏幕矩形。
@@ -175,6 +263,25 @@ impl App {
         let panel = compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).left;
         let kr = self.state.channel_search.active_results()?;
         Some(row_anchor(panel, kr.list(), kr.len()))
+    }
+
+    /// Search detail 面板当前区选中行的屏幕矩形（detail 焦点 `y`/`o` 贴行下方弹）。
+    ///
+    /// 走 detail 面板专属几何：右面板去外框 → [`detail_list_area`] 取列表区（该区无自己的
+    /// block 边框，[`borderless_row_anchor`] 据此还原行 y）。`.right` 为 `Option`（搜索布局恒
+    /// `Some`）、空栈无栈顶帧 → `None`。
+    fn search_detail_row_anchor(&self) -> Option<Rect> {
+        let kr = self.state.channel_search.active_results()?;
+        let dframe = kr.detail.current()?;
+        let panel =
+            compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).right?;
+        let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
+        let list_area = detail_list_area(panel_inner(panel), is_artist);
+        Some(borderless_row_anchor(
+            list_area,
+            dframe.list(),
+            dframe.list_len(),
+        ))
     }
 
     /// Library 视图选中歌(过滤投影后的当前行)。
@@ -229,6 +336,38 @@ fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
         panel.y.saturating_add(2).saturating_add(dy),
         panel.width.saturating_sub(2),
         1,
+    )
+}
+
+/// detail 面板内（列表区**无**自己的 block 边框）选中行的屏幕矩形：视口 = 区高 − 表头一行，
+/// 行 y = 区顶 + 表头 + (钳后光标 − offset)。区别于带边框面板的 [`row_anchor`]（那里另算上下
+/// 边框行）；offset 走只读 `Frozen` 快照，平移途中 `pin_cursor` 钳边与渲染端一致。
+///
+/// # Params:
+///   - `area`: 列表区矩形（已去面板外框 + 歌手 Tab 行，见 [`detail_list_area`]）
+///   - `list`: 该列表的光标 + 视口滚动态
+///   - `len`: 当前区列表总行数
+fn borderless_row_anchor(area: Rect, list: &ScrollList, len: usize) -> Rect {
+    let viewport = usize::from(area.height.saturating_sub(1));
+    let offset = list.offset(len, viewport, ScrollMotion::Frozen);
+    let pinned = pin_cursor(list.sel(), offset, viewport);
+    let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
+    Rect::new(
+        area.x,
+        // +1 表头（无边框，故不加边框行）。
+        area.y.saturating_add(1).saturating_add(dy),
+        area.width,
+        1,
+    )
+}
+
+/// 去四周 1 格边框后的内区（detail 面板 Borders::ALL）。
+fn panel_inner(r: Rect) -> Rect {
+    Rect::new(
+        r.x.saturating_add(1),
+        r.y.saturating_add(1),
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(2),
     )
 }
 
@@ -384,6 +523,27 @@ fn artist_copy_items(artist: &Artist) -> Vec<MenuItem> {
     items
 }
 
+/// 容器(专辑/歌单/歌手)的 `o` 操作项:`p` 播放全部、`a` 加入队列(歌手取热门曲那路)。
+/// 两项各持容器副本,落地经 [`App::start_container_play`] 拉取→入队。
+fn container_action_items(container: ContainerRef) -> Vec<MenuItem> {
+    let (play_label, append_label) = match container {
+        ContainerRef::Artist(_) => ("Play top songs", "Append top songs"),
+        ContainerRef::Album(_) | ContainerRef::Playlist(_) => ("Play all", "Append all to queue"),
+    };
+    vec![
+        MenuItem::keyed(
+            'p',
+            play_label,
+            MenuAction::PlayContainer(Box::new(container.clone())),
+        ),
+        MenuItem::keyed(
+            'a',
+            append_label,
+            MenuAction::AppendContainer(Box::new(container)),
+        ),
+    ]
+}
+
 /// 结果实体的来源(由各自 id 的 namespace 派生);供查 caps 取网页模板。
 fn entity_source(entity: &EntityRef) -> mineral_model::SourceKind {
     match entity {
@@ -447,7 +607,7 @@ mod tests {
         draw_once(&app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "o 应弹出操作菜单");
-        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('n'));
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('a'));
         let ops = queue_ops
@@ -459,18 +619,46 @@ mod tests {
                 ("insert_next", want_id.clone()),
                 ("append", want_id.clone())
             ],
-            "p=插播 a=追加,都作用于选中歌"
+            "n=插播 a=追加,都作用于选中歌"
         );
         Ok(())
     }
 
-    /// `o` 在 Playlists 视图(写操作未接入)与全屏态都不弹菜单。
+    /// `o` → `p` = Play:整列(当前全列曲目)替换队列 + 起播选中曲,记 set_queue + play_song
+    /// 两步(canonical:p=Play 主操作,顶掉原 p=插播)。
     #[test]
-    fn o_noop_on_playlists_and_fullscreen() -> color_eyre::Result<()> {
+    fn o_menu_play_replaces_queue_and_plays() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
+        let want_id = app
+            .state
+            .filtered_tracks()
+            .get(1)
+            .map(|sv| sv.data.id.qualified())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
+        draw_once(&app)?;
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('p'));
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(
+            *ops,
+            vec![
+                ("set_queue", format!("3:{want_id}")),
+                ("play_song", want_id.clone()),
+            ],
+            "p=Play:整列(3)替换队列 + 起播选中曲,两步齐"
+        );
+        Ok(())
+    }
+
+    /// `o` 在 Playlists 视图弹容器菜单(Play all / Add to queue);全屏态仍屏蔽。
+    #[test]
+    fn o_on_playlists_opens_container_menu_fullscreen_silent() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_playlists_probed()?;
         draw_once(&app)?;
         press(&mut app, KeyCode::Char('o'));
-        assert_eq!(app.overlays.len(), 0, "Playlists 视图暂无操作菜单");
+        assert_eq!(app.overlays.len(), 1, "Playlists 歌单 o 弹容器操作菜单");
 
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
         app.state.browse.fullscreen.set(true);
@@ -637,6 +825,117 @@ mod tests {
 
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(app.overlays.len(), 1, "结果列 y 应弹复制菜单");
+        Ok(())
+    }
+
+    /// 内聚 resolver 落地:search 结果列 Song(队列动作)与 Album 容器(播放全部/加入队列)
+    /// 上 `o` 都弹操作菜单(此前 active.on() 早退静默)。
+    #[test]
+    fn o_in_search_results_opens_action_menu_for_song_and_container() -> color_eyre::Result<()> {
+        // Song 结果:o 弹菜单。
+        let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_kind(SearchKind::Song);
+            session.apply_page(
+                SearchKind::Song,
+                SearchPayload::Songs(endserenading(5)),
+                Page::default(),
+            );
+        }
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        draw_once(&app)?;
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.overlays.len(), 1, "结果列 Song 的 o 应弹操作菜单");
+
+        // Album 容器结果:o 弹容器菜单(Play all / Append all)。
+        let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_kind(SearchKind::Album);
+            session.apply_page(
+                SearchKind::Album,
+                SearchPayload::Albums(vec![
+                    mineral_model::Album::builder()
+                        .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                        .name("EndSerenading".to_owned())
+                        .build(),
+                ]),
+                Page::default(),
+            );
+        }
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        draw_once(&app)?;
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.overlays.len(), 1, "Album 容器 o 应弹容器操作菜单");
+        Ok(())
+    }
+
+    /// 造一张带 `n` 首曲目的专辑（曲目取 EndSerenading 前 n 首）。
+    fn album_with_tracks(id: &AlbumId, n: usize) -> Album {
+        Album::builder()
+            .id(id.clone())
+            .name("EndSerenading".to_owned())
+            .songs(endserenading(n))
+            .build()
+    }
+
+    /// 构造：album 结果 + 专辑详情（3 曲）到货 + detail 焦点，并画一帧回写 `frame_area`。
+    /// detail 列表此时是专辑曲目，光标在首行。
+    fn app_in_album_detail() -> color_eyre::Result<App> {
+        let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Album])?;
+        let al_id = AlbumId::new(SourceKind::NETEASE, "al1");
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_kind(SearchKind::Album);
+            session.apply_page(
+                SearchKind::Album,
+                SearchPayload::Albums(vec![
+                    Album::builder()
+                        .id(al_id.clone())
+                        .name("EndSerenading".to_owned())
+                        .build(),
+                ]),
+                Page::default(),
+            );
+            if let Some(kr) = session.kind_results_mut() {
+                kr.fill_album_detail(&al_id, Box::new(album_with_tracks(&al_id, 3)));
+            }
+        }
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        draw_once(&app)?;
+        Ok(app)
+    }
+
+    /// detail 焦点:专辑详情曲目行上 `o` 弹操作菜单(Song 队列动作)。回归:detail 焦点
+    /// 此前 `active.on()` 早退静默。
+    #[test]
+    fn o_in_search_detail_opens_action_menu_for_track() -> color_eyre::Result<()> {
+        let mut app = app_in_album_detail()?;
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.overlays.len(), 1, "detail 曲目行 o 弹操作菜单");
+        Ok(())
+    }
+
+    /// detail 焦点:曲目行 `y` 弹复制菜单,且锚点落在右(detail)面板内、表头之下。
+    #[test]
+    fn y_in_search_detail_anchors_copy_menu_in_detail_panel() -> color_eyre::Result<()> {
+        let app = app_in_album_detail()?;
+        let anchor = app
+            .search_detail_row_anchor()
+            .ok_or_else(|| color_eyre::eyre::eyre!("有详情应能算出锚点"))?;
+        let right = compute_search(app.state.frame_area.get(), app.state.cfg.tui().layout())
+            .right
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail 面板"))?;
+        assert!(
+            anchor.x > right.x && anchor.x < right.x + right.width,
+            "锚点 x 落在 detail 面板内(去左边框)"
+        );
+        assert!(
+            anchor.y > right.y + 1,
+            "锚点 y 在面板内、头部之下(detail 头图区占顶部)"
+        );
+
+        let mut app = app;
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.overlays.len(), 1, "detail 曲目行 y 弹复制菜单");
         Ok(())
     }
 

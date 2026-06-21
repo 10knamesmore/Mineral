@@ -18,7 +18,10 @@ use ratatui_image::picker::Picker;
 
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
 use crate::components::toast::download_toast::DownloadNotifier;
+use rustc_hash::FxHashMap;
+
 use crate::components::toast::notifications::Notifications;
+use crate::player_actions::PlayMode;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
@@ -118,6 +121,11 @@ pub struct App {
     /// 系统剪贴板句柄,首次复制时懒初始化并**终身持有**——X11 的剪贴板内容归
     /// owner 所有,句柄一 Drop 内容就没了;别改成每次复制临时 `new`。
     pub(crate) clipboard: Option<arboard::Clipboard>,
+
+    /// 容器「播放全部 / 加入队列」的待兑现意图:key = [`DetailFetch::dedup_key`],value = 入队
+    /// 模式。容器曲目未加载时登记,对应 `*Fetched` 事件到货后由 [`Self::fulfill_pending_container`]
+    /// 取载荷入队并清除(入队走 client,故意图落 App 而非 state)。同 key 后发覆盖、切走不命中即丢。
+    pub(crate) pending_container: FxHashMap<String, PlayMode>,
 }
 
 impl App {
@@ -190,6 +198,7 @@ impl App {
             config_watch: crate::runtime::reload::ConfigWatch::new(),
             last_terminal_report: None,
             clipboard: None,
+            pending_container: FxHashMap::default(),
         }
     }
 
@@ -451,6 +460,8 @@ impl App {
         let events = self.client.drain_task_events();
         for ev in &events {
             self.state.apply(ev);
+            // apply 落数据后,容器播放意图在此兑现(入队走 client,state.apply 够不着)。
+            self.fulfill_pending_container(ev);
         }
     }
 
@@ -593,8 +604,8 @@ impl App {
             Action::ToggleLoveSelection => self.toggle_love_selection(),
             Action::DownloadSelection => self.download_selection(),
             Action::DismissNotice => self.dismiss_notice(),
-            Action::OpenActionMenu => self.open_action_menu(),
-            Action::OpenCopyMenu => self.open_copy_menu(),
+            Action::OpenActionMenu => self.open_menu(menus::MenuKind::Action),
+            Action::OpenCopyMenu => self.open_menu(menus::MenuKind::Copy),
             Action::InvokeScript(slot) => self.invoke_script_action(slot),
             // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
             Action::DrillIntoSelection | Action::CycleDetailSection => {}
@@ -659,6 +670,10 @@ impl App {
                 if let Some(song) = self.state.player.queue.get(i).cloned() {
                     self.client.play_song(song);
                 }
+            }
+            // queue 浮层 `y`:复制菜单叠在 queue 之上(不关 queue),为该队列项构造复制项。
+            OverlayAction::CopyQueueIndex { idx, anchor } => {
+                self.open_queue_copy_menu(idx, anchor);
             }
             // 菜单确认即收:先关菜单(收起动画),再执行选中动作。
             OverlayAction::Menu(action) => {
@@ -848,6 +863,26 @@ mod tests {
         assert!(
             !app.state.covers.protocols.borrow().is_empty(),
             "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
+        );
+        Ok(())
+    }
+
+    /// queue 浮层行级:`o` 被吞(无操作语义,不开新浮层也不关 queue);`y` 在 queue 之上
+    /// 叠复制菜单(queue 仍在栈底)。复用全站 copy_items,queue 是 resolver 之外的唯一接缝。
+    #[test]
+    fn queue_o_swallowed_y_stacks_copy_menu() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(4, /*current_idx*/ 1)?;
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.len(), 1, "Tab 开 queue 浮层");
+
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.overlays.len(), 1, "o 被吞:无新浮层、queue 仍在");
+
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            app.overlays.len(),
+            2,
+            "y 在 queue 之上叠复制菜单(queue 仍在栈底)"
         );
         Ok(())
     }

@@ -102,6 +102,17 @@ pub(crate) enum OverlayAction {
     /// 播放 queue 中第 `0` 项(下标);App 据此查 [`AppState`] 的队列取歌。
     PlayQueueIndex(usize),
 
+    /// queue 浮层 `y`:为队列第 `idx` 项弹复制菜单,贴 `anchor` 弹在 queue 浮层**之上**
+    /// (不关 queue)。`anchor` 由浮层据自身停靠几何 + 私有光标算好——App 无从得知浮层
+    /// 滚到哪一行,故锚点随动作携带。
+    CopyQueueIndex {
+        /// 队列下标(浮层私有光标);App 据此查 [`AppState`] 队列取歌。
+        idx: usize,
+
+        /// 复制菜单锚点(队列选中行屏幕矩形)。
+        anchor: Rect,
+    },
+
     /// PopMenu 确认了一项:关闭菜单并执行该动作。
     Menu(super::menu::MenuAction),
 }
@@ -276,6 +287,22 @@ fn dock_rect(area: Rect, dock: Dock, dock_w_pct: u16) -> Rect {
         Dock::Right => area.right().saturating_sub(w),
     };
     Rect::new(x, area.y + top, w, h)
+}
+
+/// queue 等停靠浮层「完全展开」时的屏幕矩形(供其上叠菜单的锚点计算)。与
+/// [`render_overlay`] 的停靠分支同源:贴边侧按布局选(全屏右 / 否则左)、宽取
+/// `dock_w_pct`、从顶栏下满高。
+///
+/// # Params:
+///   - `area`: 主帧区域(= `frame_area`,与渲染入口同一 Rect)
+///   - `ctx`: 只读后端态(全屏标志 + 停靠宽度配置)
+pub(crate) fn dock_full_rect(area: Rect, ctx: &AppState) -> Rect {
+    let d = if ctx.browse.fullscreen.on() {
+        Dock::Right
+    } else {
+        Dock::Left
+    };
+    dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct())
 }
 
 /// 按百分比取尺寸,钳到 `[0, total]`(不碰 `as` 强转)。

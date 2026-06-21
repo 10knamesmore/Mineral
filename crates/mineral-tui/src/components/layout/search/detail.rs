@@ -271,6 +271,30 @@ fn split_frame(inner: Rect) -> (Rect, Rect) {
     (head, body)
 }
 
+/// 歌手帧主体再分：顶 1 行双区 Tab + 其下列表区。抽出供渲染与 [`detail_list_area`] 共用，
+/// 锚点与渲染走同一处几何。
+fn split_artist_body(body: Rect) -> (Rect, Rect) {
+    let [tabs, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+    (tabs, list)
+}
+
+/// 当前栈顶帧「列表区」相对面板内区 `inner` 的屏幕矩形：去头部，歌手帧再去 Tab 行。
+/// 渲染端与行级菜单锚点共用此一处几何——菜单贴的行恒等于渲染出的行。该列表区**无**自己
+/// 的 block 边框（边框归整个 detail 面板），故其视口数学（区高 − 表头一行）与 browse 带
+/// 边框面板不同，锚点侧据此还原行 y。
+///
+/// # Params:
+///   - `inner`: detail 面板去外框后的内区
+///   - `is_artist`: 是否歌手帧（多减一行 Tab）
+pub(crate) fn detail_list_area(inner: Rect, is_artist: bool) -> Rect {
+    let (_head, body) = split_frame(inner);
+    if is_artist {
+        split_artist_body(body).1
+    } else {
+        body
+    }
+}
+
 /// 头部横分：左正方头图 + 中元数据；`with_right` 时右侧再切一栏放选中项 cover（artist 帧）。
 ///
 /// 窄面板响应式降级：宽度容不下三栏退两栏、容不下两栏退纯 meta（左 cover 栏宽置 0，由调用方
@@ -496,7 +520,7 @@ fn draw_artist_body(
     if body.height < 2 {
         return;
     }
-    let [tabs, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+    let (tabs, list) = split_artist_body(body);
     draw_artist_tabs(buf, tabs, dframe.section, theme);
     match dframe.section_eased() {
         // 切区滑动期：两区各渲染到离屏 Buffer，按进度横向合成（0=Top Songs、满值=Albums），
@@ -755,4 +779,32 @@ fn draw_skeleton(buf: &mut Buffer, area: Rect, theme: &Theme) {
 ///   - `total`: 当前区列表长度
 fn detail_position_label(sel: usize, total: usize) -> String {
     format!(" {} / {total} ", sel.saturating_add(1).min(total))
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+
+    use super::{detail_list_area, split_frame};
+
+    /// detail_list_area：非歌手帧 = split_frame 的 body 整块；歌手帧再去顶部 1 行 Tab。
+    /// 这是渲染端与行级菜单锚点共用的几何契约——两侧据此对齐。
+    #[test]
+    fn detail_list_area_drops_head_and_artist_tab() {
+        let inner = Rect::new(0, 0, 40, 30);
+        let (_head, body) = split_frame(inner);
+        assert_eq!(
+            detail_list_area(inner, /*is_artist*/ false),
+            body,
+            "非歌手帧 = 整块 body"
+        );
+        let artist = detail_list_area(inner, /*is_artist*/ true);
+        assert_eq!(artist.y, body.y + 1, "歌手帧列表区下移 1 行(让出 Tab)");
+        assert_eq!(artist.height, body.height - 1, "歌手帧列表区少 1 行");
+        assert_eq!(
+            (artist.x, artist.width),
+            (body.x, body.width),
+            "横向与 body 同"
+        );
+    }
 }

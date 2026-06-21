@@ -7,7 +7,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use mineral_config::MenuAlign;
-use mineral_model::Song;
+use mineral_model::{Album, Artist, Playlist, Song};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -26,6 +26,15 @@ use crate::runtime::state::AppState;
 /// 菜单确认后产出、由 App 执行的动作。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MenuAction {
+    /// 替换队列并起播:`queue` = 所在列表整列(空则落地时退化为单曲队列),target = `song`。
+    Play {
+        /// 起播曲(也是 set_queue 的 target)。
+        song: Box<Song>,
+
+        /// 队列上下文(所在列表整列);空 Vec 落地时退化为 `[song]`。
+        queue: Vec<Song>,
+    },
+
     /// 插播:插到当前曲之后(下一首播)。
     PlayNext(Box<Song>),
 
@@ -34,6 +43,13 @@ pub(crate) enum MenuAction {
 
     /// 下载这首。
     Download(Box<Song>),
+
+    /// 容器(专辑/歌单/歌手)播放全部:替换队列起播其曲目。曲目未加载时由落地侧触发拉取、
+    /// 到货再入队(异步意图,见 `App::start_container_play`)。
+    PlayContainer(Box<ContainerRef>),
+
+    /// 容器加入队列:其曲目追加到队尾(同上,曲目未加载走拉取→入队)。
+    AppendContainer(Box<ContainerRef>),
 
     /// 把文本写进系统剪贴板(复制菜单;文本在构造菜单时就渲染好)。
     Copy(String),
@@ -47,6 +63,20 @@ pub(crate) enum MenuAction {
         /// 模板作用的实体(构造菜单时捕获)。
         ctx: mineral_protocol::CopyTemplateCtx,
     },
+}
+
+/// 容器实体(整体携带,供容器播放动作登记意图 / 取拉取目标)。区别于 `EntityRef`:只含有
+/// 「整列曲目」语义的三类容器,不含单曲。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ContainerRef {
+    /// 专辑(曲目 = 专辑全曲)。
+    Album(Box<Album>),
+
+    /// 歌单(曲目 = 歌单全曲)。
+    Playlist(Box<Playlist>),
+
+    /// 歌手(曲目 = 热门曲那一路,非专辑)。
+    Artist(Box<Artist>),
 }
 
 /// 一个菜单项。
