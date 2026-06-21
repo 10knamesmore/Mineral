@@ -80,6 +80,6 @@ pub fn draw(
     ];
     frame.render_widget(Paragraph::new(kv), kv_area);
 
-    let help = Line::from(" ↵ open · h back ").style(Style::new().fg(theme.overlay));
+    let help = Line::from(" l open · y copy · o action ").style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(help), footer);
 }
