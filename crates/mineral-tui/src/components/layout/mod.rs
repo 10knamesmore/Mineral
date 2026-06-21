@@ -4,6 +4,7 @@ pub mod compute;
 pub mod cover;
 pub mod cover_image;
 pub mod description;
+pub mod detail_meta;
 pub mod detail_title;
 pub mod lyrics;
 pub mod now_playing;

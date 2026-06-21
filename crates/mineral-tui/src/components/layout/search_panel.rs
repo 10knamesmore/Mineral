@@ -274,11 +274,18 @@ pub fn draw_results(
     border_focused: bool,
 ) {
     let rs = &state.channel_search;
-    let block = Block::new()
+    let mut block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style(border_focused, theme))
         .border_type(BorderType::Rounded)
         .title("results");
+    // 左下角位置标:lazy 分页未榨干显 `n / total+`(至少 total、可能更多),短页确认榨干才去 `+`。
+    if let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) {
+        block = block.title_bottom(
+            Line::from(result_position_label(kr.sel(), kr.len(), kr.exhausted))
+                .style(Style::new().fg(theme.overlay)),
+        );
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if rs.source.is_none() {
@@ -324,6 +331,20 @@ pub fn draw_results(
         viewport,
         motion,
     );
+}
+
+/// 结果列底标 ` n / total[+] `(1-based 当前位 / 已加载条数)。
+///
+/// 结果是 lazy 分页累积:`exhausted`(短页/空页确认榨干)才省 `+`,`total` 即全部;否则缀 `+`
+/// 表示「至少 total、可能还有下一页」。调用方已保证 `total != 0`。
+///
+/// # Params:
+///   - `sel`: 0-based 选中行
+///   - `total`: 已加载结果条数
+///   - `exhausted`: 是否已确认搜完(无更多页)
+fn result_position_label(sel: usize, total: usize, exhausted: bool) -> String {
+    let more = if exhausted { "" } else { "+" };
+    format!(" {} / {total}{more} ", sel.saturating_add(1).min(total))
 }
 
 /// 空结果列的居中 lite 提示(暗调斜体,水平 + 垂直居中);非可高亮列表行。
@@ -474,7 +495,35 @@ mod tests {
     use crate::render::theme::Theme;
     use crate::runtime::state::{PromptSegment, SearchPage};
 
-    use super::{chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens};
+    use super::{
+        chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens, result_position_label,
+    };
+
+    /// 结果列底标:lazy 分页未榨干缀 `+`(还有下一页可能),短页确认榨干去 `+`(total 即全部);
+    /// 1-based 当前位、越界钳到 total。
+    #[test]
+    fn result_position_label_marks_pagination() {
+        assert_eq!(
+            result_position_label(/*sel*/ 0, /*total*/ 20, /*exhausted*/ false),
+            " 1 / 20+ ",
+            "未榨干:可能还有下一页 → +"
+        );
+        assert_eq!(
+            result_position_label(0, 20, /*exhausted*/ true),
+            " 1 / 20 ",
+            "短页确认榨干 → 无 +"
+        );
+        assert_eq!(
+            result_position_label(/*sel*/ 4, 20, true),
+            " 5 / 20 ",
+            "1-based 当前位"
+        );
+        assert_eq!(
+            result_position_label(/*sel*/ 99, 20, false),
+            " 20 / 20+ ",
+            "越界钳到 total"
+        );
+    }
 
     /// NETEASE 单源 caps(searchable = 给定 kinds)。
     fn caps(kinds: Vec<SearchKind>) -> FxHashMap<SourceKind, ChannelCaps> {

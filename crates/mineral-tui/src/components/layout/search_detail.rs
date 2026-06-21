@@ -13,8 +13,11 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, 
 use ratatui_image::picker::Picker;
 
 use mineral_config::SweepStyle;
-use mineral_model::{Album, Artist, Song};
+use mineral_model::{Album, Song};
 
+use crate::components::layout::detail_meta::{
+    album_card_lines, artist_counts, publish_year, with_commas,
+};
 use crate::components::layout::scroll_table::render_scroll_table;
 use crate::components::layout::search_panel::join_artists;
 use crate::components::layout::track_table::{self, TrackColumns};
@@ -61,14 +64,26 @@ pub fn draw(
     } else {
         theme.overlay
     };
-    let block = Block::new()
+    let results = state.channel_search.active_results();
+    let mut block = Block::new()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color))
         .border_type(BorderType::Rounded)
         .title(detail_title::for_panel(state, area.width));
+    // 左下角位置标:当前栈顶帧当前区列表 ` n / total `(数据未到 len 0 不显)。detail 非分页
+    // (一次拉全),故无 results 列那种 `+`。
+    if let Some(dframe) = results.and_then(|kr| kr.detail.current()) {
+        let len = dframe.list_len();
+        if len > 0 {
+            block = block.title_bottom(
+                Line::from(detail_position_label(dframe.list().sel(), len))
+                    .style(Style::new().fg(theme.overlay)),
+            );
+        }
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let Some(kr) = state.channel_search.active_results() else {
+    let Some(kr) = results else {
         return;
     };
     if inner.height < 2 || inner.width == 0 {
@@ -729,96 +744,11 @@ fn draw_skeleton(buf: &mut Buffer, area: Rect, theme: &Theme) {
     }
 }
 
-/// u64 千分位：`8900000` → `8,900,000`（detail 头部宽，展示完整数而非缩写）。
-fn with_commas(n: u64) -> String {
-    let s = n.to_string();
-    let len = s.chars().count();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// 专辑卡片的 header 行:名(bold)+ 艺人 + 计量行(N tracks · 年 · 厂牌)。简介不在此，
-/// 走独立可滚动视口（见 [`frame_description`]）。
+/// detail 面板左下角 ` n / total `(1-based 当前位 / 当前区列表长度)。调用方已保证 `total != 0`。
 ///
-/// album 帧与 song 帧共用同一套——歌曲的详情即其所属专辑,故选中歌时头部与「直接搜 album」
-/// 看到的一致。
-fn album_card_lines(a: &Album, theme: &Theme) -> Vec<Line<'static>> {
-    let name = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
-    let sub = Style::new().fg(theme.subtext);
-    let dim = Style::new().fg(theme.overlay);
-    let mut lines = vec![
-        Line::from(Span::styled(a.name.clone(), name)),
-        Line::from(Span::styled(join_artists(&a.artists), sub)),
-    ];
-    if let Some(meta) = album_meta_line(a) {
-        lines.push(Line::from(Span::styled(meta, dim)));
-    }
-    lines
-}
-
-/// album 计量行 `N tracks · 2015 · 厂牌`（缺哪个省哪个；全缺 → `None`）。
-fn album_meta_line(a: &Album) -> Option<String> {
-    let mut parts = Vec::<String>::new();
-    if a.track_count > 0 {
-        parts.push(format!("{} tracks", with_commas(a.track_count)));
-    }
-    if let Some(year) = publish_year(a.publish_time_ms) {
-        parts.push(year.to_string());
-    }
-    if let Some(company) = a.company.as_ref().filter(|c| !c.is_empty()) {
-        parts.push(company.clone());
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
-/// epoch 毫秒 → 发行年份；`<= 0`（未知）或换算失败 → `None`。
-///
-/// netease `publishTime` 是**北京零点**对齐的时间戳,故按 +8 偏移读年份——直接用 UTC 会让
-/// 北京 1 月 1 日发行的专辑落到上一年 12 月 31 日、年份少算一年。
-fn publish_year(ms: i64) -> Option<i32> {
-    if ms <= 0 {
-        return None;
-    }
-    let beijing = time::UtcOffset::from_hms(8, 0, 0).ok()?;
-    let dt = time::OffsetDateTime::from_unix_timestamp(ms / 1000).ok()?;
-    Some(dt.to_offset(beijing).year())
-}
-
-/// artist 计数行 `N albums · M songs`；两者皆 `None` → `None`（缺哪个省哪个）。
-fn artist_counts(a: &Artist) -> Option<String> {
-    let mut parts = Vec::<String>::new();
-    if let Some(n) = a.album_count {
-        parts.push(format!("{} albums", with_commas(n)));
-    }
-    if let Some(n) = a.song_count {
-        parts.push(format!("{} songs", with_commas(n)));
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::publish_year;
-
-    /// 发行年份按北京 +8 偏移读：北京 1 月 1 日发行的专辑不能因 UTC 落到上一年。
-    #[test]
-    fn publish_year_uses_beijing_offset() {
-        // 2015-09-26 00:00 北京（= 2015-09-25 16:00 UTC）→ 2015（两边同年,基线）。
-        assert_eq!(publish_year(1_443_196_800_000), Some(2015));
-        // 2020-01-01 00:00 北京（= 2019-12-31 16:00 UTC）→ 2020；UTC 读会错成 2019。
-        assert_eq!(
-            publish_year(1_577_808_000_000),
-            Some(2020),
-            "北京跨年不少算一年"
-        );
-        // 未知发行时间。
-        assert_eq!(publish_year(0), None);
-        assert_eq!(publish_year(-1), None);
-    }
+/// # Params:
+///   - `sel`: 0-based 选中行
+///   - `total`: 当前区列表长度
+fn detail_position_label(sel: usize, total: usize) -> String {
+    format!(" {} / {total} ", sel.saturating_add(1).min(total))
 }
