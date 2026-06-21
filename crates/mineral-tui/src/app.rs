@@ -1466,6 +1466,59 @@ mod tests {
         Ok(())
     }
 
+    /// 结果列光标进入「距底 prefetch_rows 行内」且未榨干 → 自动派发翻页(offset>0)Search
+    /// 任务(lazy 分页的 client 触发;scheduler 按 offset 进 dedup key 防重)。顶部不预取。
+    #[test]
+    fn results_prefetch_dispatches_next_page_near_bottom() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Enter);
+        // 满页(loaded == limit)→ 未榨干、next_offset = 10。
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "x".to_owned(),
+            page: Page::new(/*offset*/ 0, /*limit*/ 10),
+            payload: SearchPayload::Songs(endserenading(10)),
+        });
+
+        let next_page_offset = |tasks: &[TaskKind]| {
+            tasks.iter().find_map(|k| match k {
+                TaskKind::ChannelFetch(ChannelFetchKind::Search { page, .. })
+                    if page.offset > 0 =>
+                {
+                    Some(page.offset)
+                }
+                _ => None,
+            })
+        };
+
+        // 顶部、未移动:不预取下一页。
+        {
+            let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+            assert_eq!(next_page_offset(&tasks), None, "顶部不预取下一页");
+        }
+
+        // 光标连按下移到底 → 进入距底范围 → 预取 offset = next_offset(10)的下一页。
+        for _ in 0..9 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        assert_eq!(
+            next_page_offset(&tasks),
+            Some(10),
+            "光标近底自动预取下一页(offset = next_offset)"
+        );
+        Ok(())
+    }
+
     /// 结果列焦点 Esc 回 prompt(不退出布局态)。
     #[test]
     fn results_focus_esc_returns_to_prompt() -> color_eyre::Result<()> {

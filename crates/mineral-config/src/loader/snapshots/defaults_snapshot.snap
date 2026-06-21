@@ -539,6 +539,7 @@ Config {
             scrolloff: 3,
             line_scroll_rows: 1,
             page_scroll_rows: 15,
+            search_prefetch_rows: 8,
             kill_spawned_daemon_on_exit: true,
             remember_track_pos: Session,
         },

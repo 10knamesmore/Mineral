@@ -137,6 +137,7 @@
 ---@field scrolloff? integer 光标与列表视口上下边缘的最小行距(nvim 'scrolloff');0 = 贴边才滚,≥半视口时光标近似居中
 ---@field line_scroll_rows? integer 单行档滚动(<C-d>/<C-u>)一次滚的行数,≥1;列表与全屏歌词共用
 ---@field page_scroll_rows? integer 翻页档滚动(<C-f>/<C-b>)一次滚的行数,≥1
+---@field search_prefetch_rows? integer 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且该(源,kind)桶未榨干时,自动派发下一页搜索;越大越早预取
 ---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
 ---@field remember_track_pos? "off"|"session"|"persist" 歌单内光标位置记忆:off 不记;session 本次运行内记住;persist 落盘跨重启保留。搜索命中定位(search.locate_on_enter)优先于记忆位置
 

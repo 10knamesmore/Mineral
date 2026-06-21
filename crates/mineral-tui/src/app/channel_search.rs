@@ -63,6 +63,23 @@ pub(crate) enum SearchEffect {
         query: String,
     },
 
+    /// 懒分页预取下一页(`offset > 0`):光标近结果列底时按当前 source/kind/query 续拉。
+    /// 与 [`Self::Submit`] 同走 Search 任务,只是 `page.offset` 非零——scheduler 按 offset 进
+    /// dedup key,在途同 offset 自动并掉,无需 client 侧再设在途闸。
+    FetchMore {
+        /// 目标 source。
+        source: SourceKind,
+
+        /// 目标 kind。
+        kind: SearchKind,
+
+        /// 查询词(与首页同词,续拉同一桶)。
+        query: String,
+
+        /// 下一页 offset(= 当前已加载条数 `next_offset`)。
+        offset: u32,
+    },
+
     /// flash「kind 已切到 xxx」提示(切 source 致 kind 落首项时)。
     FlashKind(SearchKind),
 
@@ -116,6 +133,25 @@ impl App {
                     Priority::User,
                 );
             }
+            SearchEffect::FetchMore {
+                source,
+                kind,
+                query,
+                offset,
+            } => {
+                // 续拉用与首页一致的页大小(`Page::default().limit`),`exhausted`(短页判榨干)
+                // 的语义才连贯;offset 进 dedup key,在途同页自动并掉。
+                let limit = mineral_channel_core::Page::default().limit;
+                self.client.submit_task(
+                    TaskKind::ChannelFetch(ChannelFetchKind::Search {
+                        source,
+                        kind,
+                        query,
+                        page: mineral_channel_core::Page::new(offset, limit),
+                    }),
+                    Priority::User,
+                );
+            }
             SearchEffect::FlashKind(kind) => self.notifications.flash(tinted_text_item(
                 format!("kind \u{2192} {}", kind.label()),
                 TextTint::Normal,
@@ -154,8 +190,7 @@ impl SearchPage {
         }
         match chord_from_event(key).and_then(|chord| ctx.keymap.lookup(chord)) {
             Some(Action::MoveSelection(mv)) => {
-                self.move_search_panel(mv);
-                SearchEffect::None
+                self.move_search_panel(mv, *ctx.behavior.search_prefetch_rows())
             }
             Some(Action::ActivateSelection) => self.activate_search_panel(ctx.sweep_ticks),
             Some(Action::DrillIntoSelection) => {
@@ -188,12 +223,20 @@ impl SearchPage {
         }
     }
 
-    /// 面板导航:results 焦点移结果列、detail 焦点移当前区列表。
-    fn move_search_panel(&mut self, mv: SelectionMove) {
+    /// 面板导航:results 焦点移结果列(可能触发懒分页预取,故回传 effect)、detail 焦点移
+    /// 当前区列表(无副作用)。
+    ///
+    /// # Params:
+    ///   - `mv`: 选择移动
+    ///   - `prefetch_rows`: 结果列预取触发半径(`behavior.search_prefetch_rows`)
+    fn move_search_panel(&mut self, mv: SelectionMove, prefetch_rows: u16) -> SearchEffect {
         match self.focus {
-            SearchFocus::Results => self.move_search_result_sel(mv),
-            SearchFocus::Detail => self.move_detail_list_sel(mv),
-            SearchFocus::Prompt => {}
+            SearchFocus::Results => self.move_search_result_sel(mv, prefetch_rows),
+            SearchFocus::Detail => {
+                self.move_detail_list_sel(mv);
+                SearchEffect::None
+            }
+            SearchFocus::Prompt => SearchEffect::None,
         }
     }
 
@@ -360,10 +403,15 @@ impl SearchPage {
         }
     }
 
-    /// 按一次 [`SelectionMove`] 移动当前会话结果列光标(钳首 / 末行)。
-    fn move_search_result_sel(&mut self, mv: SelectionMove) {
+    /// 按一次 [`SelectionMove`] 移动当前会话结果列光标(钳首 / 末行),移动后按预取半径判是否
+    /// 续拉下一页(回传 [`SearchEffect::FetchMore`])。
+    ///
+    /// # Params:
+    ///   - `mv`: 选择移动
+    ///   - `prefetch_rows`: 预取触发半径(光标距已加载末行 ≤ 此值且未榨干即预取)
+    fn move_search_result_sel(&mut self, mv: SelectionMove, prefetch_rows: u16) -> SearchEffect {
         let Some(kr) = self.active_results_mut() else {
-            return;
+            return SearchEffect::None;
         };
         let last = kr.len().saturating_sub(1);
         let next = match mv {
@@ -374,6 +422,36 @@ impl SearchPage {
         };
         // set_sel 内联 detail 复位(真移动才复位、钳制不动则保留下钻栈)。
         kr.set_sel(next);
+        // 预取:光标进入距已加载末行 prefetch_rows 行内、且桶未榨干 → 续拉 next_offset 那页。
+        // 在途去重交给 scheduler(offset 进 dedup key),故移动即发、不在 client 设在途闸。
+        // kr 派生量先落本地,释放可变借用,才能再不可变借 self 组 effect。
+        let exhausted = kr.exhausted;
+        let rows_to_bottom = last.saturating_sub(kr.sel());
+        let next_offset = kr.next_offset;
+        if exhausted || rows_to_bottom > usize::from(prefetch_rows) {
+            return SearchEffect::None;
+        }
+        self.fetch_more_effect(next_offset)
+    }
+
+    /// 用当前 source/kind/query 组一条续拉(`offset > 0`)[`SearchEffect::FetchMore`];缺
+    /// source / 会话 / query 空 → [`SearchEffect::None`]。
+    fn fetch_more_effect(&self, offset: u32) -> SearchEffect {
+        let Some(source) = self.source else {
+            return SearchEffect::None;
+        };
+        let Some(session) = self.current() else {
+            return SearchEffect::None;
+        };
+        if session.query().is_empty() {
+            return SearchEffect::None;
+        }
+        SearchEffect::FetchMore {
+            source,
+            kind: session.kind,
+            query: session.query().to_owned(),
+            offset,
+        }
     }
 
     /// token prompt 按键:按当前段（query 文本 / source·kind chip）分派。

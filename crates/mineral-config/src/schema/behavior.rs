@@ -34,6 +34,10 @@ pub struct BehaviorConfig {
     /// 翻页档滚动(`<C-f>` / `<C-b>`)一次移动的行数。
     page_scroll_rows: usize,
 
+    /// 搜索结果列懒分页预取触发半径:光标进入距已加载结果末行此行数内、且该 (源,kind) 桶
+    /// 未榨干时,自动派发下一页搜索任务。越大越早预取(滚动越顺滑、请求越靠前)。
+    search_prefetch_rows: u16,
+
     /// TUI 退出时是否杀掉自己拉起的 daemon;`false` = 自拉起的 daemon 续命。
     kill_spawned_daemon_on_exit: bool,
 
