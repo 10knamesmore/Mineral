@@ -1043,6 +1043,91 @@ mod tests {
         Ok(())
     }
 
+    /// 造一个带多段简介(含 \n\n 段落 + \n 制作名单)的专辑 detail 帧(测试 helper)：
+    /// 搜专辑 → root 帧补拉完整 detail(含 description)。返回已置焦 detail 的 App。
+    fn app_with_album_description() -> color_eyre::Result<crate::app::App> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Album, AlbumId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("winlose");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "winlose".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("Win&Lose".to_owned())
+                    .build(),
+            ]),
+        });
+        // 仿网易云原文:段落用 \n\n、制作名单用 \n。换行必须渲染成多行(非塞进一个 Line);
+        // 长到溢出简介区,触发滚动条 + 让滚动演示有意义。
+        let desc = "三年过去，还是没能成为一个厉害的大人。Chinese Football也没能成为一个摇滚天团。\n\n游戏一旦开始就注定会有一个结局。\n胜利或失败。\n\n每个人都想成为赢家，用胜利的喜悦去回报付出的时间。\n\n只是偶尔还会发梦，梦到还未走向最终的结局。（文/徐波）\n\n发行厂牌：野生唱片\n发行编号：WILD-022\n录音师：骷髅，李珂\n混音/母带：骷髅\n制作：Chinese Football\n封面插画：史悲";
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("Win&Lose".to_owned())
+                    .track_count(12)
+                    .publish_time_ms(1_672_329_600_000)
+                    .company(Some("野生唱片".to_owned()))
+                    .description(desc.to_owned())
+                    .songs(endserenading(3))
+                    .build(),
+            ),
+        });
+        app.state.channel_search.focus = SearchFocus::Detail;
+        Ok(app)
+    }
+
+    /// Search 专辑 detail 头部简介:网易云多段原文按 \n 渲染成多行(修「整段塞一个 Line、换行
+    /// 被吞」),header 下独立简介区,溢出末列画滚动条。
+    #[test]
+    fn search_detail_album_description_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_album_description()?;
+        // 高 40:让 head 简介区有多行,既展示多段换行又仍溢出(滚动条可见)。
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 专辑 detail 简介:多段原文按 \\n 多行渲染 + 溢出滚动条",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 专辑 detail 简介滚到底:窗口落在简介尾部(header 不动),滚动条滑块底边贴轨道底
+    /// (回归用户实测——到底了滑块却没到底的误导)。nudge 一个大值,render 端 clamp 到 max offset。
+    #[test]
+    fn search_detail_description_scrolled_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_album_description()?;
+        if let Some(frame) = app
+            .state
+            .channel_search
+            .active_results()
+            .and_then(|kr| kr.detail.current())
+        {
+            frame.nudge_description(/*delta*/ 1000);
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 专辑 detail 简介滚到底:窗口在尾部 + 滚动条滑块贴轨道底",
+            t.backend()
+        );
+        Ok(())
+    }
+
     /// 专辑结果:结果列按类型走「专辑名 · 艺人」两列对齐(非纯单行文字)。
     #[test]
     fn search_results_albums_snapshot() -> color_eyre::Result<()> {

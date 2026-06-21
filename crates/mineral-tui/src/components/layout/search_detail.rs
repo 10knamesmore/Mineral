@@ -20,7 +20,7 @@ use mineral_model::{Album, Artist, Song};
 
 use crate::components::layout::search_panel::join_artists;
 use crate::components::layout::track_table::{self, TrackColumns};
-use crate::components::layout::{cover, cover_image, detail_title};
+use crate::components::layout::{cover, cover_image, description, detail_title};
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
@@ -293,7 +293,8 @@ fn header_seed(entity: &EntityRef) -> &str {
     }
 }
 
-/// 元数据区：名（bold）+ 次行（艺人/粉丝/计量）+ artist 简介（wrap 折行填充）。
+/// 元数据区：上半固定 header（名 + 次行 + 计量，wrap 折行），下半是独立可滚动简介视口
+/// （C-d/u/b/f 滚动，按 `\n` 多行渲染、溢出画滚动条）。两者间留一行视觉间隔。
 fn draw_meta(buf: &mut Buffer, meta_a: Rect, dframe: &DetailFrame, theme: &Theme, show_back: bool) {
     let pad = Rect::new(
         meta_a.x.saturating_add(1),
@@ -301,15 +302,46 @@ fn draw_meta(buf: &mut Buffer, meta_a: Rect, dframe: &DetailFrame, theme: &Theme
         meta_a.width.saturating_sub(1),
         meta_a.height,
     );
-    let mut lines = meta_lines(dframe, theme);
+    if pad.width == 0 || pad.height == 0 {
+        return;
+    }
+    let mut header = meta_lines(dframe, theme);
     if show_back {
-        lines.push(Line::from(Span::styled(
+        header.push(Line::from(Span::styled(
             "‹ Esc back",
             Style::new().fg(theme.peach),
         )));
     }
-    // wrap 让 artist 长简介按 meta 宽折行填充（其余短行不受影响），超出区域高度自动裁。
-    Widget::render(Paragraph::new(lines).wrap(Wrap { trim: false }), pad, buf);
+    // header 占其行数 + 1 行间隔；简介拿剩余高度（不足时 Layout 自动裁）。
+    let head_h = u16::try_from(header.len()).unwrap_or(0).saturating_add(1);
+    let [head_a, desc_a] =
+        Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(pad);
+    Widget::render(
+        Paragraph::new(header).wrap(Wrap { trim: false }),
+        head_a,
+        buf,
+    );
+    description::draw_description(
+        buf,
+        desc_a,
+        frame_description(dframe),
+        dframe.description_scroll(),
+        theme,
+    );
+}
+
+/// 当前帧头部该展示的简介原文（歌曲取其所属专辑的、专辑/歌手取聚合 detail 的、歌单取自身的）；
+/// 拿不到为空串（不渲染）。
+fn frame_description(dframe: &DetailFrame) -> &str {
+    match &dframe.entity {
+        EntityRef::Song(_) => match &dframe.data {
+            Some(DetailData::Album(a)) => &a.description,
+            _ => "",
+        },
+        EntityRef::Album(_) => dframe.album_meta().map_or("", |a| a.description.as_str()),
+        EntityRef::Artist(_) => dframe.artist_meta().map_or("", |a| a.description.as_str()),
+        EntityRef::Playlist(p) => &p.description,
+    }
 }
 
 /// 元数据行内容（按实体类型）。artist 帧的计数/简介取 fetch 回来的完整 detail——结果列那份
@@ -352,16 +384,11 @@ fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
             if let Some(counts) = artist_counts(a) {
                 lines.push(Line::from(Span::styled(counts, dim)));
             }
-            if !a.description.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(a.description.clone(), dim)));
-            }
             lines
         }
         EntityRef::Playlist(p) => vec![
             Line::from(Span::styled(p.name.clone(), name)),
             Line::from(Span::styled(format!("{} tracks", p.track_count), sub)),
-            Line::from(Span::styled(truncate(&p.description, 64), dim)),
         ],
     }
 }
@@ -643,10 +670,11 @@ fn with_commas(n: u64) -> String {
     out
 }
 
-/// 专辑卡片的元数据行:名(bold)+ 艺人 + 计量行(N tracks · 年 · 厂牌)+ 简介。
+/// 专辑卡片的 header 行:名(bold)+ 艺人 + 计量行(N tracks · 年 · 厂牌)。简介不在此，
+/// 走独立可滚动视口（见 [`frame_description`]）。
 ///
 /// album 帧与 song 帧共用同一套——歌曲的详情即其所属专辑,故选中歌时头部与「直接搜 album」
-/// 看到的一致(简介只有详情端点给,未到货时为空不显示)。
+/// 看到的一致。
 fn album_card_lines(a: &Album, theme: &Theme) -> Vec<Line<'static>> {
     let name = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
     let sub = Style::new().fg(theme.subtext);
@@ -657,10 +685,6 @@ fn album_card_lines(a: &Album, theme: &Theme) -> Vec<Line<'static>> {
     ];
     if let Some(meta) = album_meta_line(a) {
         lines.push(Line::from(Span::styled(meta, dim)));
-    }
-    if !a.description.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(a.description.clone(), dim)));
     }
     lines
 }
@@ -703,16 +727,6 @@ fn artist_counts(a: &Artist) -> Option<String> {
         parts.push(format!("{} songs", with_commas(n)));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
-/// 截断到 `max` 个字符并补省略号（按 char 计，避免切断多字节）。
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]

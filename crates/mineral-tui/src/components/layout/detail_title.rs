@@ -1,10 +1,9 @@
 //! detail 面板顶栏 title 的 breadcrumb 组装：把详情栈每帧的 `(类型, 名)` 拼成
 //! `图标 类型 · 名` / 多帧 `图标 名 › 图标 名`，并按面板显示宽度截断（CJK 双宽感知）。
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
 use mineral_model::SearchKind;
 
+use super::text::{char_width, display_width};
 use crate::runtime::state::AppState;
 
 /// detail 顶栏 title：当前结果集的详情栈 breadcrumb；无结果 / 空栈回退固定 `detail`。
@@ -90,16 +89,6 @@ fn truncate_to_width(s: &str, max_width: u16) -> String {
     }
     out.push('…');
     out
-}
-
-/// 字符串显示宽度（CJK 双宽）；溢出 u16 夹到 MAX。
-fn display_width(s: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(s)).unwrap_or(u16::MAX)
-}
-
-/// 单字符显示宽度（控制字符按 0）。
-fn char_width(ch: char) -> u16 {
-    u16::try_from(UnicodeWidthChar::width(ch).unwrap_or(0)).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

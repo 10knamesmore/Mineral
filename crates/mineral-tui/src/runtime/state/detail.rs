@@ -4,6 +4,8 @@
 //! 进某专辑看曲目。栈帧携带已有的完整实体（头部立即可画），补充的列表/详情由对应
 //! fetch 任务回填。`frames[0]` 即 root（对应结果列选中行），其上是下钻帧。
 
+use std::cell::Cell;
+
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind, Song, SourceKind,
 };
@@ -181,12 +183,16 @@ pub struct DetailFrame {
     /// 面板内列表光标。
     pub list_sel: usize,
 
+    /// 头部简介的滚动 offset（可视行）。render 端折行后把它钳进内容边界并写回（渲染走
+    /// `&self`，故内部可变）；C-d/u/b/f 经 [`Self::nudge_description`] 平移。
+    desc_scroll: Cell<u16>,
+
     /// 这一帧是否已派过 detail 拉取（防同帧重复派；新帧 / 移光标后复位为可再派）。
     requested: bool,
 }
 
 impl DetailFrame {
-    /// 新帧：光标归零、未拉数据、分区回热门曲、未派拉取。
+    /// 新帧：光标归零、未拉数据、分区回热门曲、简介滚回顶、未派拉取。
     fn new(entity: EntityRef) -> Self {
         Self {
             entity,
@@ -194,8 +200,24 @@ impl DetailFrame {
             section: ArtistSection::default(),
             section_anim: None,
             list_sel: 0,
+            desc_scroll: Cell::new(0),
             requested: false,
         }
+    }
+
+    /// 头部简介滚动 offset 句柄：render 端钳进内容边界并写回。
+    pub fn description_scroll(&self) -> &Cell<u16> {
+        &self.desc_scroll
+    }
+
+    /// 简介滚动平移 `delta` 行（向下为正；下界钳 0，上界由 render 端按内容高度钳）。
+    /// C-d/u/b/f 在 detail 焦点经此（与列表光标 `j/k` 互不干扰）。
+    pub fn nudge_description(&self, delta: i64) {
+        let next = i64::from(self.desc_scroll.get())
+            .saturating_add(delta)
+            .max(0);
+        self.desc_scroll
+            .set(u16::try_from(next).unwrap_or(u16::MAX));
     }
 
     /// 切歌手双区并 arm 横向过渡（Top Songs↔Albums，复用 browse view-sweep 同款 [`Toggle`]）。
@@ -864,6 +886,17 @@ mod tests {
                 .is_none(),
             "DetailStack::tick 推进并 settle 栈顶帧 section 动画"
         );
+    }
+
+    /// nudge_description：向下累加、下界钳 0（上界由 render 端按内容高度钳，不在此）。
+    #[test]
+    fn nudge_description_clamps_lower() {
+        let frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
+        assert_eq!(frame.description_scroll().get(), 0, "新帧简介滚回顶");
+        frame.nudge_description(5);
+        assert_eq!(frame.description_scroll().get(), 5, "向下平移 +5");
+        frame.nudge_description(-100);
+        assert_eq!(frame.description_scroll().get(), 0, "下界钳 0、不为负");
     }
 
     /// 取栈顶实体名（测试 helper）。

@@ -12,8 +12,9 @@ use mineral_task::{ChannelFetchKind, Priority, SearchPayload, TaskKind};
 use rustc_hash::FxHashMap;
 
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
-use crate::runtime::action::{Action, SelectionMove};
+use crate::runtime::action::{Action, ScrollStep, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
+use crate::runtime::scroll::step_delta;
 use crate::runtime::state::{
     ArtistSection, DetailData, EntityRef, PromptSegment, SearchFocus, SearchPage,
 };
@@ -31,6 +32,9 @@ pub(crate) struct SearchCtx<'a> {
 
     /// 键位表(面板动词自查表;prompt 仍走裸键)。
     pub keymap: &'a Keymap,
+
+    /// 交互手感段(detail 简介滚动的逐行 / 翻页档步长来源)。
+    pub behavior: &'a mineral_config::BehaviorConfig,
 
     /// detail 下钻 / 返回滑动拍数(App 从动画配置预算好传入)。
     pub sweep_ticks: u16,
@@ -82,6 +86,7 @@ impl App {
             SearchCtx {
                 caps: &self.state.caps,
                 keymap: &self.keymap,
+                behavior: self.state.cfg.tui().behavior(),
                 sweep_ticks,
             },
         );
@@ -161,6 +166,12 @@ impl SearchPage {
                 self.cycle_detail_section(ctx.sweep_ticks);
                 SearchEffect::None
             }
+            // detail 焦点下 C-d/u/b/f 滚头部简介(与列表光标 j/k 分治、键不重叠);其它焦点
+            // 不接管(回落,与改前一致)。
+            Some(Action::Scroll(step)) if self.focus == SearchFocus::Detail => {
+                self.scroll_detail_description(step, ctx.behavior);
+                SearchEffect::None
+            }
             Some(Action::BackOrClearSearch) => {
                 self.back_search_panel(ctx.sweep_ticks);
                 SearchEffect::None
@@ -201,6 +212,20 @@ impl SearchPage {
             SelectionMove::First => 0,
             SelectionMove::Last => last,
         };
+    }
+
+    /// detail 焦点滚头部简介:按方向 + 档位(逐行 / 翻页)平移简介滚动 offset,档步长取
+    /// `behavior`(与歌词 / 列表 / 队列滚动同源)。上界由 render 端按折行内容高度钳;
+    /// 无活跃结果 / 无栈顶帧 → no-op。
+    fn scroll_detail_description(
+        &mut self,
+        step: ScrollStep,
+        behavior: &mineral_config::BehaviorConfig,
+    ) {
+        let delta = step_delta(step, behavior);
+        if let Some(frame) = self.active_results().and_then(|kr| kr.detail.current()) {
+            frame.nudge_description(delta);
+        }
     }
 
     /// 面板激活(`activate`):results → 按实体做主事(song 播 / 容器开 detail);
@@ -942,6 +967,68 @@ mod tests {
                 .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?
                 .is_empty(),
             "容器结果不直接播放,无队列操作"
+        );
+        Ok(())
+    }
+
+    /// detail 焦点下 C-f/C-b 走完整键路由滚动头部简介(平移 desc_scroll);与列表光标 j/k
+    /// 分治、键不重叠。回归锁:Scroll 在 detail 焦点必须被 search 拦截作用于简介,而非穿透
+    /// 全局 dispatch 去滚别处。
+    #[test]
+    fn detail_focus_ctrl_f_scrolls_description() -> color_eyre::Result<()> {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let (mut app, _q) =
+            crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                mineral_model::Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .build(),
+            ]),
+        });
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                mineral_model::Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .description("line1\nline2\nline3".to_owned())
+                    .songs(crate::test_support::endserenading(3))
+                    .build(),
+            ),
+        });
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        let page = u16::try_from(*app.state.cfg.tui().behavior().page_scroll_rows())?;
+        // C-f 翻页下滚简介(平移 page_scroll_rows)。
+        app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.state
+                .channel_search
+                .active_results()
+                .and_then(|kr| kr.detail.current())
+                .map(|f| f.description_scroll().get()),
+            Some(page),
+            "C-f 平移简介 offset = page_scroll_rows"
+        );
+        // C-b 回滚,下界钳 0。
+        app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.state
+                .channel_search
+                .active_results()
+                .and_then(|kr| kr.detail.current())
+                .map(|f| f.description_scroll().get()),
+            Some(0),
+            "C-b 回滚到顶(下界钳 0)"
         );
         Ok(())
     }

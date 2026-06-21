@@ -3,6 +3,7 @@
 pub mod compute;
 pub mod cover;
 pub mod cover_image;
+pub mod description;
 pub mod detail_title;
 pub mod lyrics;
 pub mod now_playing;
@@ -10,6 +11,7 @@ pub mod search_detail;
 pub mod search_panel;
 pub mod sidebar;
 pub mod spectrum;
+pub mod text;
 pub mod top_status;
 pub mod track_table;
 pub mod transform;
