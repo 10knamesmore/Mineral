@@ -13,11 +13,11 @@ expression: t.backend()
 "│                                            ││     ▀▀▀▀▀▀▀▀▀▀▀▀                                                       │"
 "│                                            ││     ▀▀▀▀▀▀▀▀▀▀▀▀                                                       │"
 "│                                            ││     ▀▀▀▀▀▀▀▀▀▀▀▀                                                       │"
+"│                                            ││                              ────────────                              │"
 "│                                            ││    #    title                   artist           album           len   │"
 "│                                            ││▌   ♫    Endserenading           Mineral          EndSerenading   3:45  │"
 "│                                            ││  ♥ 1    守门员                  Chinese Football Chinese Footbal 3:53  │" Hidden by multi-width symbols: [(57, " "), (59, " "), (61, " ")]
 "│                                            ││    2    Palisade                Mineral          EndSerenading   4:31  │"
-"│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "╰ 1 / 1 ─────────────────────────────────────╯╰ 1 / 3 ─────────────────────────────────────────────────────────────────╯"

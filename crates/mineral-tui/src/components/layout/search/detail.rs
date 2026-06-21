@@ -28,7 +28,7 @@ use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
 use self::meta::{album_card_lines, artist_counts, publish_year, with_commas};
-use self::placeholder::{draw_empty, draw_loading, loading_glyph};
+use self::placeholder::{draw_delimiter, draw_empty, draw_loading, loading_glyph};
 use self::track_table::TrackColumns;
 use super::panel::join_artists;
 
@@ -136,7 +136,7 @@ fn draw_frame_real(
     theme: &Theme,
     show_back: bool,
 ) {
-    let (head, body) = split_frame(inner);
+    let (head, delim, body) = split_frame(inner);
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
     cover_image::render_or_fallback(
@@ -163,6 +163,7 @@ fn draw_frame_real(
     }
     let buf = frame.buffer_mut();
     draw_meta(buf, meta_a, dframe, theme, show_back);
+    draw_delimiter(buf, delim, theme);
     // 稳态实拍:列表视口推进缓动(每帧恰一次)。
     draw_body(buf, body, dframe, state, theme, advancing(state));
 }
@@ -175,7 +176,7 @@ fn render_frame_to(
     state: &AppState,
     theme: &Theme,
 ) {
-    let (head, body) = split_frame(inner);
+    let (head, delim, body) = split_frame(inner);
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
     if cover_a.width > 0 {
@@ -185,6 +186,7 @@ fn render_frame_to(
         cover::render_to(buf, right_a, selected_seed(dframe), theme);
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
+    draw_delimiter(buf, delim, theme);
     // 离屏合成(下钻 / 返回滑动期):只读展示当前视口,不推进动画、不改滚动目标。
     draw_body(buf, body, dframe, state, theme, ScrollMotion::Frozen);
 }
@@ -262,15 +264,19 @@ fn copy_col(dst: &mut Buffer, area: Rect, src: &Buffer, dst_c: u16, src_c: u16) 
     }
 }
 
-/// 头部占面板高 ~45%，让左右两张正方 cover 拿到够大的 Rect；夹下限保矮面板仍有基本头部、
-/// 夹上限给列表留可视行。
-fn split_frame(inner: Rect) -> (Rect, Rect) {
+/// 纵分三段:头部(~45%,左右两张正方 cover) + 1 行 meta↔list 分隔 + 列表 body。
+/// 夹下限保矮面板仍有基本头部、夹上限给分隔 + 列表留可视行。
+fn split_frame(inner: Rect) -> (Rect, Rect, Rect) {
     let head_h = (inner.height * 9 / 20)
         .max(6)
-        .min(inner.height.saturating_sub(3));
-    let [head, body] =
-        Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(inner);
-    (head, body)
+        .min(inner.height.saturating_sub(4));
+    let [head, delim, body] = Layout::vertical([
+        Constraint::Length(head_h),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    (head, delim, body)
 }
 
 /// 歌手帧主体再分：顶 1 行双区 Tab + 其下列表区。抽出供渲染与 [`detail_list_area`] 共用，
@@ -289,7 +295,7 @@ fn split_artist_body(body: Rect) -> (Rect, Rect) {
 ///   - `inner`: detail 面板去外框后的内区
 ///   - `is_artist`: 是否歌手帧（多减一行 Tab）
 pub(crate) fn detail_list_area(inner: Rect, is_artist: bool) -> Rect {
-    let (_head, body) = split_frame(inner);
+    let (_head, _delim, body) = split_frame(inner);
     if is_artist {
         split_artist_body(body).1
     } else {
@@ -785,7 +791,7 @@ mod tests {
     #[test]
     fn detail_list_area_drops_head_and_artist_tab() {
         let inner = Rect::new(0, 0, 40, 30);
-        let (_head, body) = split_frame(inner);
+        let (_head, _delim, body) = split_frame(inner);
         assert_eq!(
             detail_list_area(inner, /*is_artist*/ false),
             body,
