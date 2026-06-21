@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 
 use mineral_model::{Album, Artist};
 
-use crate::components::layout::search_panel::join_artists;
+use crate::components::layout::search::panel::join_artists;
 use crate::render::theme::Theme;
 
 /// u64 千分位：`8900000` → `8,900,000`（detail 头部宽，展示完整数而非缩写）。

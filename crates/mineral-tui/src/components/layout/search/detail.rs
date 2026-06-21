@@ -15,16 +15,20 @@ use ratatui_image::picker::Picker;
 use mineral_config::SweepStyle;
 use mineral_model::{Album, Song};
 
-use crate::components::layout::detail_meta::{
-    album_card_lines, artist_counts, publish_year, with_commas,
-};
-use crate::components::layout::scroll_table::render_scroll_table;
-use crate::components::layout::search_panel::join_artists;
-use crate::components::layout::track_table::{self, TrackColumns};
-use crate::components::layout::{cover, cover_image, description, detail_title};
+mod description;
+mod meta;
+mod title;
+mod track_table;
+
+use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::{cover, cover_image};
 use crate::render::theme::Theme;
-use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
+
+use self::meta::{album_card_lines, artist_counts, publish_year, with_commas};
+use self::track_table::TrackColumns;
+use super::panel::join_artists;
 
 /// 缓动进度满值（千分比）。
 const FULL: u32 = 1000;
@@ -69,7 +73,7 @@ pub fn draw(
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color))
         .border_type(BorderType::Rounded)
-        .title(detail_title::for_panel(state, area.width));
+        .title(title::for_panel(state, area.width));
     // 左下角位置标:当前栈顶帧当前区列表 ` n / total `(数据未到 len 0 不显)。detail 非分页
     // (一次拉全),故无 results 列那种 `+`。
     if let Some(dframe) = results.and_then(|kr| kr.detail.current()) {

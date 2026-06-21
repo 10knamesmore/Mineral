@@ -7,7 +7,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
-use crate::components::layout::compute::Areas;
+use crate::components::layout::shared::compute::Areas;
 use crate::render::anim::lerp_u16;
 use crate::render::theme::Theme;
 
@@ -107,8 +107,8 @@ fn fill_bg(frame: &mut Frame<'_>, rect: Rect, color: Color) {
 ///   - `transport`:常规位 → 全屏位。
 ///
 /// # Params:
-///   - `normal`: 常规布局([`compute`](crate::components::layout::compute::compute) 产出)
-///   - `full`: 全屏布局([`compute_fullscreen`](crate::components::layout::compute::compute_fullscreen) 产出)
+///   - `normal`: 常规布局([`compute`](crate::components::layout::shared::compute::compute) 产出)
+///   - `full`: 全屏布局([`compute_fullscreen`](crate::components::layout::shared::compute::compute_fullscreen) 产出)
 ///   - `t`: 形变进度,千分比 `0..=1000`(取 [`Transition::eased_in_out`](crate::render::anim::Transition::eased_in_out))
 ///
 /// # Return:
@@ -144,8 +144,8 @@ pub fn morph_areas(normal: &Areas, full: &Areas, t: u16) -> Areas {
 ///   - `cover` / `lyrics` / `spectrum`:search 端无,从浏览位「收向」自身中心零面积退场。
 ///
 /// # Params:
-///   - `normal`: 浏览态布局([`compute`](crate::components::layout::compute::compute) 产出)
-///   - `search`: search 端点布局([`compute_search`](crate::components::layout::compute::compute_search) 产出)
+///   - `normal`: 浏览态布局([`compute`](crate::components::layout::shared::compute::compute) 产出)
+///   - `search`: search 端点布局([`compute_search`](crate::components::layout::shared::compute::compute_search) 产出)
 ///   - `t`: 形变进度,千分比 `0..=1000`
 ///
 /// # Return:
@@ -204,7 +204,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::{lerp_rect, morph_areas, morph_search, zero_center};
-    use crate::components::layout::compute::{compute, compute_fullscreen, compute_search};
+    use crate::components::layout::shared::compute::{compute, compute_fullscreen, compute_search};
 
     /// `lerp_rect` 两端点回到 a / b,中点逐字段取中。
     #[test]

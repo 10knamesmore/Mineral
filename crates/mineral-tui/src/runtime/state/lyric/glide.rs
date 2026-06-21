@@ -4,7 +4,7 @@
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::runtime::action::ScrollStep;
 
-use super::AppState;
+use super::super::AppState;
 
 /// 手动滚动平移的阶段,决定 settle 后的去向。
 #[derive(Clone, Copy, PartialEq, Eq)]

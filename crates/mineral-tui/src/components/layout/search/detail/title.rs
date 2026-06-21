@@ -3,7 +3,7 @@
 
 use mineral_model::SearchKind;
 
-use super::text::{char_width, display_width};
+use crate::components::layout::shared::text::{char_width, display_width};
 use crate::runtime::state::AppState;
 
 /// detail 顶栏 title：当前结果集的详情栈 breadcrumb；无结果 / 空栈回退固定 `detail`。

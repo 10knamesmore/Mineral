@@ -12,7 +12,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::text::{char_width, display_width};
+use crate::components::layout::shared::text::{char_width, display_width};
 use crate::render::theme::Theme;
 
 /// 把简介原文折成可视行序列：先按 `\n` 拆逻辑行（空 / 纯空白行原样保留，不压不并），

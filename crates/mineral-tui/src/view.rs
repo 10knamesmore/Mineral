@@ -9,11 +9,12 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use mineral_config::SearchFocusTransition;
 
 use crate::app::App;
-use crate::components::layout::compute::{Areas, compute, compute_fullscreen, compute_search};
-use crate::components::layout::{
-    cover, cover_image, lyrics, now_playing, search_detail, search_panel, sidebar, spectrum,
-    top_status, transform, transport,
+use crate::components::layout::browse::{lyrics, now_playing, sidebar, spectrum};
+use crate::components::layout::search::{detail, panel};
+use crate::components::layout::shared::compute::{
+    Areas, compute, compute_fullscreen, compute_search,
 };
+use crate::components::layout::shared::{cover, cover_image, top_status, transform, transport};
 use crate::runtime::state::SearchFocus;
 
 /// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
@@ -115,7 +116,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         top_status::draw(frame, top, &app.state, theme);
     }
     if let Some(prompt) = areas.search_prompt {
-        search_panel::draw_prompt(
+        panel::draw_prompt(
             frame,
             prompt,
             rs,
@@ -127,7 +128,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         if show_browse {
             sidebar::draw(frame, left, &app.state, theme);
         } else {
-            search_panel::draw_results(
+            panel::draw_results(
                 frame,
                 left,
                 &app.state,
@@ -140,7 +141,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         if show_browse {
             now_playing::draw(frame, right, &app.state, &app.picker, theme);
         } else {
-            search_detail::draw(
+            detail::draw(
                 frame,
                 right,
                 &app.state,
@@ -174,7 +175,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     }
     // chip 下拉(source/kind)画在最后,盖在 results 面板之上。
     if let Some(prompt) = areas.search_prompt {
-        search_panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
+        panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
     }
     transport::draw(frame, areas.transport, &app.state.playback, theme);
 }

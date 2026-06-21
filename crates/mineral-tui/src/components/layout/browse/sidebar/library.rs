@@ -8,9 +8,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table};
 
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
-use crate::components::layout::scroll_table::render_scroll_table;
+use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::render::theme::Theme;
-use crate::runtime::scroll_list::ScrollMotion;
+use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 

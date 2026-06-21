@@ -21,10 +21,10 @@ use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
 use app::App;
-use runtime::cover_encode::CoverEncoder;
-use runtime::cover_fetch::CoverFetcher;
+use runtime::cover::encode::CoverEncoder;
+use runtime::cover::fetch::CoverFetcher;
 use runtime::remote::RemoteClient;
-use runtime::ui_prefs::{UiPrefs, open_client_store};
+use runtime::ui::prefs::{UiPrefs, open_client_store};
 use tui::Tui;
 
 /// TUI 的启动模式。决定 server 的来源与生命周期。

@@ -22,11 +22,11 @@ use crate::components::toast::notifications::Notifications;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
-use crate::runtime::cover_encode::CoverEncoder;
-use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::cover::encode::CoverEncoder;
+use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, PageKind};
-use crate::runtime::ui_prefs::UiPrefs;
+use crate::runtime::ui::prefs::UiPrefs;
 use crate::tui::Tui;
 use crate::view::draw;
 

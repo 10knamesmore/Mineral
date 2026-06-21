@@ -10,8 +10,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::{StatefulWidget, Table, TableState};
 
-use crate::runtime::scroll::pin_cursor;
-use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::viewport::pin_cursor;
 
 /// 把 `table` 按 `list` 的视口滚动态渲染到 `area`。
 ///

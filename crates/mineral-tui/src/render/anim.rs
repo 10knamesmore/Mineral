@@ -7,7 +7,7 @@ const FULL: u16 = 1000;
 /// 一个 `0..=1000`(千分比)的过渡进度,逐 tick 朝目标推进,可按缓动曲线取值。
 ///
 /// 面板弹出/收起、淡入淡出等 modal 过渡的通用基元,queue 浮层是首个调用方。
-/// 推进按「每 tick 固定步长」(不看 wall-clock),与 [`crate::components::layout::spectrum`]
+/// 推进按「每 tick 固定步长」(不看 wall-clock),与 [`crate::components::layout::browse::spectrum`]
 /// 的动画同范式 —— 确定性、可单测。本身不引用任何 widget / 渲染类型,纯数值。
 #[derive(Clone, Copy, Debug)]
 pub struct Transition {

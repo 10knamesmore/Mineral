@@ -13,8 +13,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 
 use crate::render::palette::CoverPalette;
-use crate::runtime::cover_encode::{CoverEncoder, EncodeRequest};
-use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::cover::encode::{CoverEncoder, EncodeRequest};
+use crate::runtime::cover::fetch::CoverFetcher;
 
 /// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
 ///

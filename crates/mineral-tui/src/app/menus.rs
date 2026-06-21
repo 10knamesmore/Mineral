@@ -9,10 +9,10 @@ use mineral_model::{Album, Artist, Song};
 use mineral_protocol::CopyTemplateCtx;
 use ratatui::layout::Rect;
 
-use crate::components::layout::compute::{compute, compute_search};
+use crate::components::layout::shared::compute::{compute, compute_search};
 use crate::components::popup::{MenuAction, MenuItem, OverlayKind, Placement, PopMenu};
-use crate::runtime::scroll::pin_cursor;
-use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::viewport::pin_cursor;
 use crate::runtime::state::{EntityRef, SearchFocus, View};
 
 use super::App;
@@ -408,9 +408,9 @@ mod tests {
         album_copy_items, append_template_items, playlist_copy_items, row_anchor, song_copy_items,
     };
     use crate::app::App;
-    use crate::components::layout::compute::compute_search;
+    use crate::components::layout::shared::compute::compute_search;
     use crate::components::popup::MenuAction;
-    use crate::runtime::scroll_list::ScrollList;
+    use crate::runtime::scroll::list::ScrollList;
     use crate::runtime::state::SearchFocus;
     use crate::test_support::{
         app_with_channel_search_probed, app_with_library, app_with_library_probed,

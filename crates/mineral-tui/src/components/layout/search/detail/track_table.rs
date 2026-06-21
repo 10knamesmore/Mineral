@@ -11,7 +11,7 @@ use ratatui::widgets::{Cell, Row};
 
 use mineral_model::Song;
 
-use super::search_panel::format_duration;
+use super::super::panel::format_duration;
 use crate::render::theme::Theme;
 
 /// 选中行整行高亮的前缀符（与 browse / results 同款）。

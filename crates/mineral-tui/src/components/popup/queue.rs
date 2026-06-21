@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Row, Table};
 
-use crate::components::layout::scroll_table::render_scroll_table;
+use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
@@ -16,7 +16,7 @@ use crate::render::theme::Theme;
 use crate::runtime::action::Action;
 use crate::runtime::playback::format_ms;
 use crate::runtime::scroll;
-use crate::runtime::scroll_list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::AppState;
 
 /// 浮动 queue 浮层。
@@ -143,7 +143,7 @@ impl Overlay for QueueOverlay {
             // `<C-d>` 族:视口目标与光标同移 n 行(vim 语义);光标边界由 page 钳,
             // 视口上界由渲染端统一钳。
             Action::Scroll(step) => {
-                let delta = scroll::step_delta(step, ctx.cfg.tui().behavior());
+                let delta = scroll::viewport::step_delta(step, ctx.cfg.tui().behavior());
                 self.list.page(delta, len, ctx.list_glide_ticks());
                 Some(OverlayResponse::Consumed)
             }

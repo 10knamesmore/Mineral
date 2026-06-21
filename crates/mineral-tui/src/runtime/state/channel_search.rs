@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 
 use crate::render::anim::{Toggle, Transition};
 use crate::runtime::line_input::{InputRequest, LineInput};
-use crate::runtime::scroll_list::ScrollList;
+use crate::runtime::scroll::list::ScrollList;
 
 use super::detail::{DetailFetch, DetailStack, EntityRef};
 

@@ -18,8 +18,8 @@ use rustc_hash::FxHashMap;
 
 use crate::app::App;
 use crate::render::anim::Toggle;
-use crate::runtime::cover_encode::CoverEncoder;
-use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::cover::encode::CoverEncoder;
+use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -310,7 +310,7 @@ fn test_app_with(client: Arc<dyn Client>) -> color_eyre::Result<App> {
         Picker::from_fontsize((8, 16)),
         /*launch_anchor*/ None,
         cfg,
-        crate::runtime::ui_prefs::UiPrefs::disabled(),
+        crate::runtime::ui::prefs::UiPrefs::disabled(),
     ))
 }
 

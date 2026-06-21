@@ -12,7 +12,7 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 
 use super::View;
 use super::library::LibraryData;
-use super::lyric_view::LyricView;
+use super::lyric::view::LyricView;
 use super::nav::NavState;
 use super::search::SearchState;
 use super::view_switch::ViewSwitch;

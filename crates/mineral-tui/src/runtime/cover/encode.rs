@@ -10,7 +10,7 @@
 //!   塞进 ready buffer。
 //! - 主循环 tick `drain_ready()` 把就绪协议装回 `covers.protocols`,之后帧才上真图。
 //!
-//! 与 [`crate::runtime::cover_fetch`] 同构(request → worker → ready → drain),互补成
+//! 与 [`crate::runtime::cover::fetch`] 同构(request → worker → ready → drain),互补成
 //! 「拉取 + 解码」与「resize + 编码」两段都离线的完整异步封面管线。去重由 caller(渲染处的
 //! `covers.encode_pending` 集合)做;错误静默(编码失败这张图不显示,UI 留占位)。
 

@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use crate::runtime::scroll_list::ScrollList;
+use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 
 /// 列表浏览态([`AppState`](crate::runtime::state::AppState) 的导航域)。

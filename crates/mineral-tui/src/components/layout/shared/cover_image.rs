@@ -1,7 +1,7 @@
 //! 封面渲染分发:命中已编码协议 → place 真图;缺失 / 拉失败 / 无 cover_url → 程序化封面。
 //!
 //! prefetch(拉图)触发逻辑在 [`crate::runtime::prefetch`];resize + kitty 编码**不在此处
-//! 同步做**,而是投递给 [`crate::runtime::cover_encode::CoverEncoder`] 的 worker 离线跑,
+//! 同步做**,而是投递给 [`crate::runtime::cover::encode::CoverEncoder`] 的 worker 离线跑,
 //! 渲染线程只命中已编码协议直接 place(`StatefulProtocol` 内部记 kitty image id,同尺寸
 //! 渲染只重发占位符、不重编码)。把百毫秒级的 resize/base64 挪出渲染线程,切歌 / 关浮层不卡帧。
 
@@ -15,13 +15,13 @@ use ratatui_image::Resize;
 use ratatui_image::StatefulImage;
 use ratatui_image::picker::Picker;
 
-use crate::components::layout::cover;
+use crate::components::layout::shared::cover;
 use crate::render::theme::Theme;
-use crate::runtime::cover_encode::EncodeRequest;
+use crate::runtime::cover::encode::EncodeRequest;
 use crate::runtime::state::AppState;
 
 /// 优先 ratatui-image 真图;cache miss / 无 url / 协议不支持时,回退到
-/// `crate::components::layout::cover::render` 的程序化封面。
+/// `crate::components::layout::shared::cover::render` 的程序化封面。
 pub fn render_or_fallback(
     frame: &mut Frame<'_>,
     area: Rect,

@@ -114,7 +114,7 @@ impl BrowsePage {
         if self.fullscreen.on() {
             return BrowseEffect::ScrollLyrics(step);
         }
-        let delta = scroll::step_delta(step, model.cfg.tui().behavior());
+        let delta = scroll::viewport::step_delta(step, model.cfg.tui().behavior());
         let anim = model.cfg.tui().animation();
         let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
         // len 先算(释放 model 借用),再取列表态可变借用;page 同移视口 + 光标(vim `<C-d>` 语义)。

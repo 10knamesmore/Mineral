@@ -11,7 +11,7 @@ use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
-use crate::runtime::cover_fetch::CoverFetcher;
+use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch。
@@ -431,7 +431,7 @@ mod tests {
     fn drive_detail(state: &mut AppState) -> color_eyre::Result<Vec<mineral_task::TaskKind>> {
         use std::sync::{Arc, Mutex};
 
-        use crate::runtime::cover_fetch::CoverFetcher;
+        use crate::runtime::cover::fetch::CoverFetcher;
         use crate::test_support::TestClient;
 
         let submitted = Arc::new(Mutex::new(Vec::new()));

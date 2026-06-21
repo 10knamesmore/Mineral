@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 
 use mineral_model::{LyricLine, Lyrics};
 
-use crate::components::layout::spectrum::SpectrumState;
+use crate::components::layout::browse::spectrum::SpectrumState;
 use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
@@ -22,7 +22,7 @@ mod channel_search;
 mod covers;
 mod detail;
 mod library;
-mod lyric_view;
+mod lyric;
 mod nav;
 mod player;
 mod search;
@@ -120,8 +120,6 @@ impl LyricExtra {
     }
 }
 
-mod lyric_glide;
-
 /// 应用顶层状态。
 pub struct AppState {
     /// Browse 布局层的 view 状态:视图切换 + 全屏子模式 + 列表导航 + 歌词 + `/` 过滤,
@@ -142,7 +140,7 @@ pub struct AppState {
 
     /// 脚本下发的 session 级旋钮覆盖(`Event::UiOverride` 落地;渲染处
     /// 有覆盖读覆盖、无覆盖读配置)。
-    pub ui_overrides: crate::runtime::ui_override::UiOverrides,
+    pub ui_overrides: crate::runtime::ui::overrides::UiOverrides,
 
     /// server 权威播放态镜像(在播歌 / 队列 / 洗牌备份 / 同步版本号)。
     pub player: PlayerMirror,
@@ -197,7 +195,7 @@ impl AppState {
             ),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
-            ui_overrides: crate::runtime::ui_override::UiOverrides::default(),
+            ui_overrides: crate::runtime::ui::overrides::UiOverrides::default(),
             player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),

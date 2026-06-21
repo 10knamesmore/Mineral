@@ -11,8 +11,8 @@
 //! 每帧恰一次)——二者分处不同帧路径。
 
 use crate::runtime::action::SelectionMove;
-use crate::runtime::list_cursor::ListCursor;
-use crate::runtime::scroll::ListScroll;
+use crate::runtime::scroll::cursor::ListCursor;
+use crate::runtime::scroll::viewport::ListScroll;
 
 /// 渲染时视口的推进语义(喂给 [`ScrollList::offset`])。
 #[derive(Clone, Copy)]

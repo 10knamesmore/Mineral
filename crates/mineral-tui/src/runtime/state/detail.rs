@@ -12,7 +12,7 @@ use mineral_model::{
 use mineral_task::SearchPayload;
 
 use crate::render::anim::{Toggle, Transition};
-use crate::runtime::scroll_list::ScrollList;
+use crate::runtime::scroll::list::ScrollList;
 
 /// 一帧详情要补拉的内容（携带目标 id，供派发与回包配对）。
 #[derive(Clone, PartialEq, Eq, Debug)]

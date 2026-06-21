@@ -11,10 +11,10 @@ use unicode_width::UnicodeWidthStr;
 use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
-use crate::components::layout::scroll_table::render_scroll_table;
+use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::theme::Theme;
-use crate::runtime::scroll_list::ScrollMotion;
+use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
 /// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调(spec §1.2 当前焦点面板边框高亮)。

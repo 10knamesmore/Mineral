@@ -1,12 +1,12 @@
 //! 歌词面板的显示态:副歌词档(原文 / 翻译 / 罗马音)+ 全屏手动滚动的脱离态。
 //!
 //! 只持状态;操作它的方法(切档、滚动、回锚)因要跨读 playback/fullscreen/配置,
-//! 留在组合根([`AppState`](crate::runtime::state::AppState),滚动逻辑见 lyric_glide)。
+//! 留在组合根([`AppState`](crate::runtime::state::AppState))。
 
 use mineral_model::SongId;
 
-use super::LyricExtra;
-use super::lyric_glide::LyricGlide;
+use super::super::LyricExtra;
+use super::glide::LyricGlide;
 
 /// 歌词显示态([`AppState`](crate::runtime::state::AppState) 的歌词面板域)。
 pub struct LyricView {

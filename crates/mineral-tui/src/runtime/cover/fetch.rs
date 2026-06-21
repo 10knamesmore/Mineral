@@ -28,7 +28,7 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::render::palette::CoverPalette;
-use crate::runtime::cover_colors::extract_palette;
+use crate::runtime::cover::colors::extract_palette;
 
 /// worker 完成一张封面的产物:图必有,色板尽力而为。
 ///

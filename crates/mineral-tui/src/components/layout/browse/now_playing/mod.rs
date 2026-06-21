@@ -11,14 +11,14 @@ use ratatui_image::picker::Picker;
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, View};
 
-pub mod playlist_detail;
-pub mod track_detail;
+pub mod playlist;
+pub mod track;
 
-/// 渲染右栏。根据 [`AppState::view`] 选 playlist_detail / track_detail。
+/// 渲染右栏。根据 [`AppState::view`] 选 playlist / track 详情。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker, theme: &Theme) {
     match state.browse.view.current() {
         View::Playlists => match state.selected_playlist() {
-            Some(p) => playlist_detail::draw(frame, area, p, state, picker, theme),
+            Some(p) => playlist::draw(frame, area, p, state, picker, theme),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {
@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker
             match tracks.get(state.browse.nav.track.sel()) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
-                    track_detail::draw(frame, area, sv, current_id, state, picker, theme);
+                    track::draw(frame, area, sv, current_id, state, picker, theme);
                 }
                 None => paint_empty(frame, area, theme),
             }

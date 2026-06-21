@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
 
-use crate::components::layout::cover_image;
+use crate::components::layout::shared::cover_image;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;

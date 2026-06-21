@@ -1,20 +1,6 @@
-//! 平铺基本层:占满主屏的各面板、布局几何计算,以及面板的整屏几何变换动画。
+//! 平铺基本层:占满主屏的各面板,按渲染归属分三档——browse 浏览态专属面、search 搜索态专属
+//! 面、两态共用 / 通用组件。布局几何与整屏几何变换归共用档。
 
-pub mod compute;
-pub mod cover;
-pub mod cover_image;
-pub mod description;
-pub mod detail_meta;
-pub mod detail_title;
-pub mod lyrics;
-pub mod now_playing;
-pub mod scroll_table;
-pub mod search_detail;
-pub mod search_panel;
-pub mod sidebar;
-pub mod spectrum;
-pub mod text;
-pub mod top_status;
-pub mod track_table;
-pub mod transform;
-pub mod transport;
+pub mod browse;
+pub mod search;
+pub mod shared;

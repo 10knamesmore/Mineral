@@ -14,7 +14,7 @@ use rustc_hash::FxHashMap;
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::{Action, ScrollStep, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
-use crate::runtime::scroll::step_delta;
+use crate::runtime::scroll::viewport::step_delta;
 use crate::runtime::state::{
     ArtistSection, DetailData, EntityRef, PromptSegment, SearchFocus, SearchPage,
 };
@@ -829,7 +829,7 @@ mod tests {
             t.draw(|f| crate::view::draw(f, &app))?;
         }
         // detail 面板矩形(search 布局右栏)。
-        let detail = crate::components::layout::compute::compute_search(
+        let detail = crate::components::layout::shared::compute::compute_search(
             app.state.frame_area.get(),
             app.state.cfg.tui().layout(),
         )
