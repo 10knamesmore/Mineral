@@ -28,11 +28,24 @@ pub(crate) fn wrap_description(text: &str, width: u16) -> Vec<String> {
     if text.is_empty() || width == 0 {
         return Vec::new();
     }
+    let sanitized = sanitize_controls(text);
     let mut rows = Vec::<String>::new();
-    for logical in text.split('\n') {
+    for logical in sanitized.split('\n') {
         wrap_logical(logical, width, &mut rows);
     }
     rows
+}
+
+/// 把除 `\n`（折行靠它分逻辑行）外的控制字符压成空格。
+///
+/// 数据层简介里巡演日程等用 `\t` 当列分隔：制表符显示宽 0，若原样进 cell symbol，终端会
+/// 按自身 tab stop 推进光标、错乱整行后续字符（实测网易云专辑简介渲染乱码）。这里在折行前
+/// 统一抹平——`\t` → 空格后由词感知折行当词间空白吃掉（列对齐在窄面板里本就保不住），`\r`
+/// 等其余控制字符同样压成空格，杜绝任何控制符落进可视 cell。
+fn sanitize_controls(text: &str) -> String {
+    text.chars()
+        .map(|c| if c == '\n' || !c.is_control() { c } else { ' ' })
+        .collect()
 }
 
 /// 折一条逻辑行进 `rows`：纯空白 / 空行原样保真为一条（作者有意的段落间隔，含「单空格」
@@ -281,6 +294,22 @@ mod tests {
             wrap_description("Footballer", /*width*/ 8),
             vec!["Football", "er"]
         );
+    }
+
+    /// 巡演日程等用制表符当列分隔：`\t` 必须压成词间空白，绝不能原样进可视行。
+    /// （原样落 cell 时终端按自身 tab stop 推进光标 → 整行后续字符错乱，实测专辑简介乱码。）
+    #[test]
+    fn wrap_normalizes_tabs_to_space() {
+        assert_eq!(
+            wrap_description("3月5日\t周二\t贵阳", /*width*/ 40),
+            vec!["3月5日 周二 贵阳"]
+        );
+    }
+
+    /// 纯制表符的逻辑行也压成空格 spacer，不把 `\t` 漏进输出。
+    #[test]
+    fn wrap_normalizes_tab_only_line() {
+        assert_eq!(wrap_description("x\n\t\ny", 40), vec!["x", " ", "y"]);
     }
 
     /// 空原文 / 零宽 → 空序列（不渲染）。
