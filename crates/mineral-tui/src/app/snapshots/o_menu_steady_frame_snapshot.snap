@@ -3,7 +3,7 @@ source: crates/mineral-tui/src/app/menus.rs
 description: "Library 视图 o 操作菜单稳态(贴选中行下方,p/a/d 三项)"
 expression: terminal.backend()
 ---
-"▌ mineral v0.5.1  │  [playlists]  [track                                                   ‖ paused "
+"▌ mineral vX.Y.Z  │  [playlists]  [track                                                   ‖ paused "
 "╭ tracks / EndSerenading ──────────────────────────────────────────╮╭ selected ────────────────────╮"
 "│    #    title                 artist        album          len   ││   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   │"
 "│    0    LoveLetterTypewriter  Mineral                      3:45  ││   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   │"

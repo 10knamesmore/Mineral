@@ -47,13 +47,21 @@ fn dim_unfocused(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Th
 /// 信息抹没,留约一半可读性、视觉上是「整体退后」。
 const UNFOCUS_BLEND_PERMILLE: u64 = 550;
 
+/// 顶栏展示的版本号。生产构建取真实 `CARGO_PKG_VERSION`。
+#[cfg(not(test))]
+const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// 顶栏展示的版本号。test 构建固定占位,免得每次 version bump 冲掉所有含顶栏的快照。
+#[cfg(test)]
+const DISPLAY_VERSION: &str = "X.Y.Z";
+
 /// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
 fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let active_pl = state.browse.view == View::Playlists;
     let active_lib = state.browse.view == View::Library;
     let spans = vec![
         Span::styled(
-            format!("▌ mineral v{}  ", env!("CARGO_PKG_VERSION")),
+            format!("▌ mineral v{DISPLAY_VERSION}  "),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled("│  ", Style::new().fg(theme.surface1)),
@@ -152,14 +160,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_playlists()?;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
-        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
-        insta::with_settings!({
-            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
-            prepend_module_to_snapshot => false,
-            description => "顶栏:Playlists 标签态(版本号已过滤)"
-        }, {
-            insta::assert_snapshot!(t.backend());
-        });
+        crate::test_support::assert_snap!("顶栏:Playlists 标签态", t.backend());
         Ok(())
     }
 
@@ -169,14 +170,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
-        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
-        insta::with_settings!({
-            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
-            prepend_module_to_snapshot => false,
-            description => "顶栏:Library 标签 + 队列打开(版本号已过滤)"
-        }, {
-            insta::assert_snapshot!(t.backend());
-        });
+        crate::test_support::assert_snap!("顶栏:Library 标签 + 队列打开", t.backend());
         Ok(())
     }
 
@@ -229,14 +223,7 @@ mod tests {
             state.dim.tick();
         }
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
-        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
-        insta::with_settings!({
-            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
-            prepend_module_to_snapshot => false,
-            description => "顶栏:终端失焦徽标(版本号已过滤)"
-        }, {
-            insta::assert_snapshot!(t.backend());
-        });
+        crate::test_support::assert_snap!("顶栏:终端失焦徽标", t.backend());
         Ok(())
     }
 
@@ -247,14 +234,7 @@ mod tests {
         let mut state = crate::test_support::state_with_playlists()?;
         state.playback.audio_backend = mineral_audio::AudioBackend::Null;
         t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
-        // 版本号(`mineral vX.Y.Z`)随每次 version bump 变,过滤成占位符避免快照失效。
-        insta::with_settings!({
-            filters => vec![(r"v\d+\.\d+\.\d+", "v[VERSION]")],
-            prepend_module_to_snapshot => false,
-            description => "顶栏:无音频设备降级徽标(版本号已过滤)"
-        }, {
-            insta::assert_snapshot!(t.backend());
-        });
+        crate::test_support::assert_snap!("顶栏:无音频设备降级徽标", t.backend());
         Ok(())
     }
 }

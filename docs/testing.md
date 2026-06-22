@@ -47,7 +47,7 @@
 ## insta 用法约定
 
 * **所有快照断言必须带中文 `description`**,`cargo insta review` 时逐张显示、便于辨认。统一走 `mineral_test::assert_snap!("…", backend)`(Display)/ `assert_snap_debug!("…", parsed)`(Debug)——这两个宏内置 description,**不要**再手写裸 `insta::with_settings!{description}{…}`。需要 `filters` 等额外设置时才直接用 `with_settings!`。
-* **动态内容**(版本号 `mineral vX.Y.Z`、时间戳、UUID、临时路径等)用 `with_settings!({ filters => vec![(正则, "占位符")] }, …)` 归一化,否则每次变动都假失败。需要 workspace `insta` 开 `features = ["filters"]`(已开)。
+* **动态内容**(时间戳、UUID、临时路径等)用 `with_settings!({ filters => vec![(正则, "占位符")] }, …)` 归一化,否则每次变动都假失败。需要 workspace `insta` 开 `features = ["filters"]`(已开)。版本号是例外:它在 `top_status.rs` 用 `#[cfg(test)]` 把 `DISPLAY_VERSION` 固定成占位值,**渲染源头**就不带真实版本,故含顶栏的快照走朴素 `assert_snap!` 即可、无需 per-test filter(避免新增顶栏快照时漏写 filter 又把版本号烤进去)。
 * **`.snap` 文件进 git**。新增/改动渲染后 `cargo insta review` **逐张人工确认**再接受;**严禁** `INSTA_UPDATE=always` 盲接受。CI 必须 `INSTA_UPDATE=no`(或 `cargo insta test --unreferenced=reject`)防止漏审 / 未提交快照蒙混过关。
 * HashMap 顺序不稳定用 `with_settings!({ sort_maps => true }, …)`;但 **ratatui `Table` 的 flex 列宽(`Constraint::Min` 有 slack 时)求解器本身非确定**,insta 治不了——这类表格快照会 flaky,得在生产侧改成确定性列约束(`sidebar/playlists` 表格就有这个潜在列宽闪烁 bug)。
 
