@@ -14,6 +14,8 @@
 
 <img src="assets/screenshot-library.png" alt="Mineral 曲库视图:歌单 / 封面 / 歌词 / 频谱" width="800"/>
 
+<img src="assets/screenshot-search.png" alt="Mineral 搜索:来源过滤 / 艺人 / 单曲 / 专辑" width="800"/>
+
 <img src="assets/screenshot-immersive.png" alt="Mineral 全屏沉浸态:封面 / 逐字歌词 / 频谱" width="800"/>
 
 </div>
@@ -99,6 +101,17 @@ mineral channel netease login    # 终端二维码,App 扫码登录
 
 </details>
 
+<details>
+<summary><b>其他 CLI 子命令(点开)</b></summary>
+
+| 命令                              | 行为                                                                  |
+| --------------------------------- | --------------------------------------------------------------------- |
+| `mineral cache status [--detail]` | 查看音频 / 封面 / 歌单缓存占用;`--detail` 出逐条清单 + 按音质分布     |
+| `mineral cache clean`             | 清理三类缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果              |
+| `mineral action <name>`           | 触发 `config.lua` 里 `mineral.action` 注册的具名动作(连 daemon 执行) |
+
+</details>
+
 ## 配置
 
 ```bash
@@ -152,7 +165,7 @@ end)
 
 ## 快捷键
 
-以下是默认键位,**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。
+以下是默认键位,除两个硬编码逃生口(`Ctrl-c` / `Q`)外**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。
 
 <details open>
 <summary><b>全局</b></summary>
@@ -162,14 +175,16 @@ end)
 | `Space`   | 播放 / 暂停                                     |
 | `n` / `p` | 下一首 / 上一首(`p` 在播放 > 3s 时回到本曲开头) |
 | `←` / `→` | 后退 / 前进 5s(`Shift` 加持 30s)                |
-| `+` / `-` | 音量 ±5                                         |
+| `+` / `-` | 音量 ±5(别名 `=` / `_`)                          |
 | `m`       | 循环模式:顺序 → 随机 → 列表循环 → 单曲循环      |
 | `z`       | 进 / 退全屏沉浸态                               |
 | `Tab`     | 播放队列浮层                                    |
 | `t`       | 歌词副轨:原文 → 翻译 → 罗马音                   |
 | `x`       | 关闭通知卡片(连按逐条关)                        |
+| `s`       | 打开搜索(进入在线搜索视图)                      |
 | `q`       | 退出(带确认)                                    |
-| `Q`       | 退出并停止 daemon(不确认;硬编码,不可重映射)    |
+
+> 两个**硬编码逃生口**不可重映射:`Ctrl-c` 立即退出 TUI(不动 daemon);`Q`(Shift+q)退出 TUI **并停止 daemon**(无视 `kill_spawned_daemon_on_exit`;搜索输入态下 `Q` 当字符)。
 
 </details>
 
@@ -188,6 +203,10 @@ end)
 | `/`                       | 搜索过滤(fuzzy + 拼音)                |
 | `f`                       | 切换选中曲 ♥                          |
 | `d`                       | 下载选中曲 / 歌单                     |
+| `Ctrl-l`                  | 下探:进专辑 / 艺人详情页             |
+| `[` / `]`                 | 详情页分区切换                        |
+| `o`                       | 操作菜单(选中曲 / 歌单)              |
+| `y`                       | 复制菜单(标题 / 艺人 / 链接…)        |
 
 </details>
 
@@ -196,9 +215,11 @@ end)
 
 | 键                 | 动作                  |
 | ------------------ | --------------------- |
-| 字符 / `Backspace` | 增 / 删过滤词         |
-| `Enter`            | 退出输入态,过滤词保留 |
-| `Esc`              | 清过滤词 + 退出输入态 |
+| 字符 / `Backspace` | 增 / 删过滤词          |
+| `←` / `→`          | 移动光标(可在词中插入) |
+| `Home` / `End`     | 光标跳首 / 尾          |
+| `Enter`            | 退出输入态,过滤词保留  |
+| `Esc`              | 清过滤词 + 退出输入态  |
 
 </details>
 
@@ -212,7 +233,7 @@ end)
 | 数据(凭证、统计、per-song KV) | `~/.local/share/mineral`               |
 | 缓存(封面、音频流缓存)        | `~/.cache/mineral`                     |
 | 下载导出                      | `~/Music/mineral`(`download.dir` 可改) |
-| 日志                          | `~/.cache/mineral/mineral.log`         |
+| 日志                          | `~/.cache/mineral/mineral.log.YYYY-MM-DD`(按天轮转) |
 
 ## 开发
 

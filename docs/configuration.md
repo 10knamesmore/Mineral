@@ -27,6 +27,7 @@ mineral config check   # 离线校验(语法 / 未知字段 / 类型)
 | 变量 | 覆盖 |
 |---|---|
 | `MINERAL_AUDIO_NULL=1` | `audio.backend = "null"`(强制无声;headless / 测试用) |
+| `MINERAL_SOCKET_DIR=<绝对路径>` | IPC socket 目录(非 config 字段,直接改运行期推导;优先于 `XDG_RUNTIME_DIR` / `$TMPDIR`)。socket 路径过长报错时用它指一个更短目录,测试隔离也用它 |
 
 ---
 
@@ -84,9 +85,12 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `open_queue` | `<Tab>` | 播放队列浮层(再按关闭) |
 | `quit` | `q` | 退出确认 |
 | `cycle_lyric` | `t` | 歌词副轨:原文 → 翻译 → 罗马音 |
-| `enter_search` | `/` | 搜索输入(全屏态屏蔽) |
+| `enter_search` | `/` | 当前列表行内过滤搜索(全屏态屏蔽) |
+| `open_search` | `s` | 打开搜索界面(在线搜索:歌曲 / 专辑 / 艺人 / 歌单);区别于 `/` 的本地过滤 |
 | `activate` | `l`、`<CR>` | 进入歌单 / 播放选中曲 |
-| `back` | `h`、`<Esc>`、`<BS>` | 返回上级 / 清搜索词 |
+| `back` | `h`、`<Esc>`、`<BS>`、`<C-h>` | 返回上级 / 清搜索词(`<C-h>` 兼容把 `<BS>` 报成 Ctrl-h 的终端) |
+| `drill_into` | `<C-l>` | 下探:进专辑 / 艺人详情页 |
+| `cycle_detail_section` | `[`、`]` | 详情页分区切换(`[` 上一区 / `]` 下一区) |
 | `cycle_mode` | `m` | 循环播放模式 |
 | `volume_up` / `volume_down` | `+`、`=` / `-`、`_` | 音量增减(步长见 behavior) |
 | `seek_forward` / `seek_backward` | `<Right>` / `<Left>` | 快进退(步长见 behavior) |
@@ -96,6 +100,8 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `move_first` / `move_last` | `g` / `G` | 跳首 / 末行 |
 | `love` | `f` | 切换选中曲 ♥ |
 | `download` | `d` | 下载选中曲 / 歌单 |
+| `open_action_menu` | `o` | 打开操作菜单(对选中曲 / 歌单) |
+| `open_copy_menu` | `y` | 打开复制菜单(标题 / 艺人 / 链接 / 自定义模板,见 `tui.copy`) |
 | `dismiss_notice` | `x` | 关最早一张驻留通知卡片(连按逐条关) |
 | `scroll_line_down` / `scroll_line_up` | `<C-d>` / `<C-u>` | 逐行滚:全屏态滚歌词,浏览态滚列表视口(行数见 `behavior.line_scroll_rows`) |
 | `scroll_page_down` / `scroll_page_up` | `<C-f>` / `<C-b>` | 翻页滚(行数见 `behavior.page_scroll_rows`) |
@@ -117,6 +123,7 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `scrolloff` | 3 | 光标与列表视口上下边缘保持的最小行距(nvim `scrolloff`);光标在安全区内移动时视口不动,0 = 贴边才滚 |
 | `line_scroll_rows` | 1 | 单行档滚动(`<C-d>`/`<C-u>`)一次行数,列表与全屏歌词共用 |
 | `page_scroll_rows` | 15 | 翻页档滚动(`<C-f>`/`<C-b>`)一次行数 |
+| `search_prefetch_rows` | 8 | 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且未榨干时自动拉下一页 |
 | `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 不杀(想连 daemon 一起退用 `Q`,它无视本旋钮) |
 | `remember_track_pos` | `"session"` | 歌单内光标位置记忆:`"off"` 不记 / `"session"` 本次运行内 / `"persist"` 整表落 `tui.db` 跨重启;搜索命中定位(`search.locate_on_enter`)优先于记忆位置 |
 
@@ -245,12 +252,37 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `toast_anim_ms` | 288 | 顶栏通知横向展开收起 |
 | `focus_fade_ms` | 288 | 终端失焦/聚焦时顶栏变灰 + `◌ not focused` 徽标的淡入淡出(tmux 内需 `set -g focus-events on`;不支持 focus 事件的终端恒按聚焦渲染) |
 | `view_sweep` | `"push"` | 侧栏切换风格:`"push"` = 新旧视图一起平移;`"cover"` = 新视图从右盖上 |
+| `menu_reveal` | `"morph"` | 弹出菜单揭示风格:`"morph"` = 从锚点行形变而来;`"directional"` = 贴边方向性揭开 |
+| `search_focus_transition` | `"slide"` | 搜索焦点高亮边框切换:`"slide"` = 从旧面板滑到新面板;`"instant"` = 瞬移直切 |
+| `search_focus_morph_ms` | 240 | 搜索焦点高亮边框滑动时长(`search_focus_transition = "slide"` 时生效) |
+| `spinner_frames` | braille 十帧 | loading 旋转占位帧(逐帧循环);空 `{}` = 只留文案不画字形 |
 
 ## tui.toast — 顶栏通知
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `flash_ttl_secs` | 4 | 一次性通知(下载完成 / 配置告警等)停留秒数 |
+
+## tui.copy — 复制菜单模板
+
+`y` 复制菜单的自定义项,**追加**在内置项(标题 / 艺人 / … / URL)之后;`templates` 数组**整体替换**(默认 `{}`,无自定义项)。每项 `{ key?, label, template, context? }` 的 `template` 是函数,收实体表返回剪贴板文本,在 daemon 内的脚本运行时执行(超时 / 报错只 toast 不复制)。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `label` | 是 | 菜单项显示名 |
+| `template` | 是 | `function(entity) -> string`,返回写入剪贴板的文本 |
+| `key` | 否 | 快捷字母;与内置项同字母时顶掉其快捷位,省略 = 仅 `j`/`k` + `Enter` 可达 |
+| `context` | 否 | `"song"`(默认,收 `mineral.Song`)/ `"playlist"`(收 `mineral.Playlist`,含 `songs`) |
+
+```lua
+copy = {
+  templates = {
+    { key = "f", label = "Copy full", template = function(s)
+        return s.title .. " - " .. table.concat(s.artists, ", ")
+      end },
+  },
+}
+```
 
 ## tui.layout — 布局
 
@@ -263,6 +295,7 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `fs_spectrum_height` | 14 | 全屏底部频谱通栏高,行 |
 | `fs_transport_height` | 8 | 全屏 transport 条高,行(内容 6 + 边框 2) |
 | `dock_w_pct` | 36 | 停靠浮层(播放队列)占屏宽 % |
+| `menu_align` | `"right"` | 弹出菜单相对锚点行的横向对齐:`"left"` / `"center"` / `"right"`,或 `0.0`~`1.0` 数字精确指定(0 贴左 / 0.5 居中 / 1 贴右) |
 
 ---
 
