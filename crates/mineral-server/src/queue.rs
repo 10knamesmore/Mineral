@@ -9,17 +9,6 @@ use rand::seq::SliceRandom;
 
 use crate::state::State;
 
-/// [`PlayMode`] → 稳定字符串(如 `"Sequential"`),启动恢复经 `PlayMode::from_name` 解析回来。
-///
-/// # Params:
-///   - `mode`: 播放模式
-///
-/// # Return:
-///   稳定名字符串(与历史 Debug 落库值一致)。
-pub(crate) fn play_mode_str(mode: PlayMode) -> String {
-    mode.name().to_owned()
-}
-
 /// 按 [`PlayMode`] 计算「下一首」的**下标**:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。
 ///
 /// 推进以**下标**为真相,不经歌曲身份——队列含重复曲时,按身份 first-match 定位会把位置吸附到

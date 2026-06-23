@@ -746,8 +746,7 @@ mod tests {
     use super::{DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode};
     use crate::download::download_song;
     use crate::queue::{
-        advance_next, advance_prev, enter_shuffle, exit_shuffle, next_in_queue, play_mode_str,
-        prev_index,
+        advance_next, advance_prev, enter_shuffle, exit_shuffle, next_in_queue, prev_index,
     };
     use crate::state::State;
 
@@ -1531,10 +1530,10 @@ mod tests {
     /// play_mode_str:各档落地为稳定 Debug 名。
     #[test]
     fn play_mode_str_is_debug_name() {
-        assert_eq!(play_mode_str(PlayMode::Sequential), "Sequential");
-        assert_eq!(play_mode_str(PlayMode::Shuffle), "Shuffle");
-        assert_eq!(play_mode_str(PlayMode::RepeatAll), "RepeatAll");
-        assert_eq!(play_mode_str(PlayMode::RepeatOne), "RepeatOne");
+        assert_eq!(PlayMode::Sequential.name(), "Sequential");
+        assert_eq!(PlayMode::Shuffle.name(), "Shuffle");
+        assert_eq!(PlayMode::RepeatAll.name(), "RepeatAll");
+        assert_eq!(PlayMode::RepeatOne.name(), "RepeatOne");
     }
 
     /// volume_pct(u8 0..=100)→ f64 0.0..=1.0:80 → 0.8。

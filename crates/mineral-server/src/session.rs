@@ -8,7 +8,6 @@ use std::time::Instant;
 use mineral_persist::SessionSnapshot;
 
 use crate::player::PlayerCore;
-use crate::queue::play_mode_str;
 
 impl PlayerCore {
     /// 从当前播放上下文组装一份 [`SessionSnapshot`](锁不跨 await,调用方在锁内取完即用)。
@@ -24,7 +23,7 @@ impl PlayerCore {
         SessionSnapshot {
             current: st.current_song.as_ref().map(|s| s.id.clone()),
             position_ms: audio.position_ms,
-            play_mode: play_mode_str(st.play_mode),
+            play_mode: st.play_mode.name().to_owned(),
             volume: f64::from(audio.volume_pct) / 100.0,
             queue: st.queue.iter().map(|s| s.id.clone()).collect(),
         }
