@@ -552,9 +552,19 @@ impl AppState {
             .unwrap_or(0)
     }
 
-    /// 当前在播歌在 queue 中的下标(打开浮层时把光标定位到此)。无在播曲返回 `None`。
+    /// 当前在播歌在 queue 中的下标(打开浮层定位光标 / prefetch 邻居 / 封面预热都用它)。
+    /// 无在播曲返回 `None`。
+    ///
+    /// 优先信任 server 的在播锚点 `queue_sel`——队列含重复曲时,这是唯一能精确指出
+    /// 在播是哪一行的依据(按歌曲身份 first-match 会错指到首个副本)。仅当锚点确实指向
+    /// 在播歌时采纳;否则(在播歌不在队列 / 锚点陈旧)退回身份 first-match,保住
+    /// 「在播曲不在队列」时返回 `None` 的既有语义。
     pub fn queue_current_index(&self) -> Option<usize> {
         let id = &self.playback.track.as_ref()?.id;
+        let sel = self.player.queue_sel;
+        if self.player.queue.get(sel).is_some_and(|s| &s.id == id) {
+            return Some(sel);
+        }
         self.player.queue.iter().position(|s| &s.id == id)
     }
 
@@ -627,6 +637,24 @@ mod tests {
 
         s.playback.track = None;
         assert_eq!(s.queue_current_index(), None);
+        Ok(())
+    }
+
+    /// 重复曲:`queue_current_index` 采纳 server 锚点 `queue_sel`,精确指向在播的那个
+    /// 副本,而非按身份回退到首个副本。
+    #[test]
+    fn queue_current_index_prefers_anchor_over_identity() -> color_eyre::Result<()> {
+        use mineral_test::song;
+        let mut s = AppState::test_default()?;
+        s.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
+        s.playback.track = Some(song("a"));
+        s.player.queue_sel = 2; // 第二个 a 正在播
+        assert_eq!(s.queue_current_index(), Some(2), "应采纳锚点,而非首个 a@0");
+
+        // 锚点不指向在播歌(在播曲不在队列)→ 退回身份匹配,找不到返回 None。
+        s.playback.track = Some(song("z"));
+        s.player.queue_sel = 2;
+        assert_eq!(s.queue_current_index(), None, "在播曲不在队列时仍返回 None");
         Ok(())
     }
 

@@ -1,7 +1,7 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
 use crossterm::event::KeyEvent;
-use mineral_model::{Song, SongId};
+use mineral_model::Song;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
@@ -110,7 +110,9 @@ impl Overlay for QueueOverlay {
     }
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
-        let current_id = ctx.playback.track.as_ref().map(|t| &t.id);
+        // ▶ 标记按 server 的在播位置锚点定位(queue_current_index,下标优先),
+        // 不用歌曲身份匹配——队列含重复曲时身份会把所有副本一起点亮。
+        let current_idx = ctx.queue_current_index();
         // 按浮层内宽选列档:窄浮层放不下 artist 时退到「歌本身」(# title len)。
         let cols = QueueCols::for_width(inner.width);
 
@@ -122,7 +124,7 @@ impl Overlay for QueueOverlay {
             .queue
             .iter()
             .enumerate()
-            .map(|(i, s)| build_row(i, s, current_id, theme, cols))
+            .map(|(i, s)| build_row(i, s, current_idx, theme, cols))
             .collect();
 
         let widths = cols.widths();
@@ -248,11 +250,11 @@ impl QueueCols {
 fn build_row<'a>(
     idx: usize,
     s: &'a Song,
-    current_id: Option<&SongId>,
+    current_idx: Option<usize>,
     theme: &Theme,
     cols: QueueCols,
 ) -> Row<'a> {
-    let is_current = current_id.is_some_and(|cid| cid == &s.id);
+    let is_current = current_idx == Some(idx);
     let (lead, title_fg, sub_fg) = if is_current {
         (
             Span::styled("▶", Style::new().fg(theme.accent)),
@@ -313,8 +315,47 @@ mod tests {
         let mut s = AppState::test_default()?;
         let queue = endserenading(len);
         s.playback.track = current.and_then(|i| queue.get(i).cloned());
+        // queue_sel 是 ▶ 标记的下标依据(server 在播锚点的镜像)。
+        s.player.queue_sel = current.unwrap_or(0);
         s.player.queue = queue;
         Ok(s)
+    }
+
+    /// 数缓冲区里某符号出现的次数(lint 安全,经 `buf.cell` 取值不裸索引)。
+    fn count_symbol(backend: &TestBackend, sym: &str) -> usize {
+        let buf = backend.buffer();
+        let area = buf.area;
+        let mut n = 0;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                if buf.cell((x, y)).is_some_and(|c| c.symbol() == sym) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// 回归:队列含重复曲、在播锚点(queue_sel)落在**第二个**副本时,
+    /// 只有那一行标 `▶`——历史 bug 按歌曲身份匹配会把两个副本一起点亮(count==2)。
+    #[test]
+    fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
+        use mineral_test::song;
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
+        ctx.player.queue_sel = 2; // 第二个 a 正在播
+        ctx.playback.track = Some(song("a"));
+        let overlay = QueueOverlay::new(2);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        assert_eq!(
+            count_symbol(t.backend(), "▶"),
+            1,
+            "重复曲只应有一行标在播,不能两个副本一起亮"
+        );
+        Ok(())
     }
 
     /// 空 queue,完全展开。
