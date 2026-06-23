@@ -13,7 +13,7 @@ use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::download::Capturing;
 use crate::player::PlayerCore;
-use crate::queue::next_in_queue;
+use crate::queue::{advance_next, next_in_queue, next_index};
 use crate::state::State;
 
 /// 一首「已预排进 rodio 队列、等当前曲播完接续」的下一曲及其播放记账。
@@ -79,7 +79,9 @@ pub(crate) fn decide_advance(finished_advanced: bool, playing: bool, has_queued:
 pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     let queued = st.queued.take()?;
     let old_id = st.current_song.as_ref().map(|s| s.id.clone());
-    if let Some(idx) = st.queue.iter().position(|s| s.id == queued.song.id) {
+    // queue_sel 此刻仍指旧当前曲;预排曲就是当时 next_index 算出的那一首(队列一变即作废预排),
+    // 故按下标推进,**不**按 queued.song 身份 first-match——重复曲会把下标吸附到首个副本。
+    if let Some(idx) = next_index(st) {
         st.queue_sel = idx;
     }
     st.current_song = Some(queued.song);
@@ -314,7 +316,8 @@ pub(crate) fn check_advance(player: &PlayerCore) {
                 drop(std::fs::remove_file(&cap.path));
             }
             player.audio().clear_next();
-            let next = player.with_state(|st| next_in_queue(st));
+            // 按下标推进 queue_sel(advance_next),play_song 据守卫保留它,重复曲不回退。
+            let next = player.with_state(advance_next);
             if let Some(next) = next {
                 player.play_song(&next);
             }

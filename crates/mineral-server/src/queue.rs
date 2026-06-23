@@ -20,50 +20,86 @@ pub(crate) fn play_mode_str(mode: PlayMode) -> String {
     mode.name().to_owned()
 }
 
-/// 按 [`PlayMode`] 计算「下一首」:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。
+/// 按 [`PlayMode`] 计算「下一首」的**下标**:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。
+///
+/// 推进以**下标**为真相,不经歌曲身份——队列含重复曲时,按身份 first-match 定位会把位置吸附到
+/// 首个副本,两首交替的重复曲会互相指回对方,造成无限循环跳不出去。
 ///
 /// # Params:
 ///   - `st`: 播放状态(读 queue / queue_sel / play_mode)
+///
+/// # Return:
+///   下一首的下标;无则 `None`。
+pub(crate) fn next_index(st: &State) -> Option<usize> {
+    let len = st.queue.len();
+    if len == 0 {
+        return None;
+    }
+    let cur = st.queue_sel.min(len - 1);
+    match st.play_mode {
+        PlayMode::Sequential => (cur + 1 < len).then(|| cur + 1),
+        PlayMode::RepeatAll | PlayMode::Shuffle => Some((cur + 1) % len),
+        PlayMode::RepeatOne => Some(cur),
+    }
+}
+
+/// 按 [`PlayMode`] 计算「上一首」的**下标**:Sequential 在 0 时返回 None,Repeat/Shuffle 环回末尾,RepeatOne 原地。
+/// 同 [`next_index`],以下标为真相、不经歌曲身份。
+///
+/// # Params:
+///   - `st`: 播放状态(读 queue / queue_sel / play_mode)
+///
+/// # Return:
+///   上一首的下标;无则 `None`。
+pub(crate) fn prev_index(st: &State) -> Option<usize> {
+    let len = st.queue.len();
+    if len == 0 {
+        return None;
+    }
+    let cur = st.queue_sel.min(len - 1);
+    match st.play_mode {
+        PlayMode::Sequential => (cur > 0).then(|| cur - 1),
+        PlayMode::RepeatAll | PlayMode::Shuffle => Some((cur + len - 1) % len),
+        PlayMode::RepeatOne => Some(cur),
+    }
+}
+
+/// 只读取「下一首」歌(不动 `queue_sel`):gapless 预排探下一曲用,此刻还没真切歌。
+///
+/// # Params:
+///   - `st`: 播放状态
 ///
 /// # Return:
 ///   下一首歌;无则 `None`。
 pub(crate) fn next_in_queue(st: &State) -> Option<Song> {
-    let len = st.queue.len();
-    if len == 0 {
-        return None;
-    }
-    let cur = st.queue_sel.min(len - 1);
-    match st.play_mode {
-        PlayMode::Sequential => st.queue.get(cur + 1).cloned(),
-        PlayMode::RepeatAll | PlayMode::Shuffle => st.queue.get((cur + 1) % len).cloned(),
-        PlayMode::RepeatOne => st.queue.get(cur).cloned(),
-    }
+    next_index(st).and_then(|i| st.queue.get(i).cloned())
 }
 
-/// 按 [`PlayMode`] 计算「上一首」:Sequential 在 0 时返回 None,Repeat/Shuffle 环回末尾,RepeatOne 原地。
+/// 顺序推进到「下一首」:把 `queue_sel` 钉到 [`next_index`] 的下标并返回该曲。
+/// 切歌入口(`n` 键 / gapless 兜底)走这条,确保位置按下标单向前进。
 ///
 /// # Params:
-///   - `st`: 播放状态(读 queue / queue_sel / play_mode)
+///   - `st`: 播放状态(写 `queue_sel`)
 ///
 /// # Return:
-///   上一首歌;无则 `None`。
-pub(crate) fn prev_in_queue(st: &State) -> Option<Song> {
-    let len = st.queue.len();
-    if len == 0 {
-        return None;
-    }
-    let cur = st.queue_sel.min(len - 1);
-    match st.play_mode {
-        PlayMode::Sequential => {
-            if cur == 0 {
-                None
-            } else {
-                st.queue.get(cur - 1).cloned()
-            }
-        }
-        PlayMode::RepeatAll | PlayMode::Shuffle => st.queue.get((cur + len - 1) % len).cloned(),
-        PlayMode::RepeatOne => st.queue.get(cur).cloned(),
-    }
+///   推进到的歌;到尾(Sequential)无下一首则不动、返回 `None`。
+pub(crate) fn advance_next(st: &mut State) -> Option<Song> {
+    let idx = next_index(st)?;
+    st.queue_sel = idx;
+    st.queue.get(idx).cloned()
+}
+
+/// 顺序后退到「上一首」:把 `queue_sel` 钉到 [`prev_index`] 的下标并返回该曲。
+///
+/// # Params:
+///   - `st`: 播放状态(写 `queue_sel`)
+///
+/// # Return:
+///   后退到的歌;在首位(Sequential)无上一首则不动、返回 `None`。
+pub(crate) fn advance_prev(st: &mut State) -> Option<Song> {
+    let idx = prev_index(st)?;
+    st.queue_sel = idx;
+    st.queue.get(idx).cloned()
 }
 
 /// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。

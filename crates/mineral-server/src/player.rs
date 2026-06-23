@@ -24,7 +24,7 @@ use rand::seq::SliceRandom;
 use crate::download::{self, Capturing};
 use crate::gapless;
 use crate::media_cache::MediaCache;
-use crate::queue::{apply_play_mode, next_in_queue, prev_in_queue};
+use crate::queue::{advance_next, advance_prev, apply_play_mode};
 use crate::state::State;
 
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
@@ -425,7 +425,13 @@ impl PlayerCore {
         let (cached_url, interrupted, stale_queued) = {
             let mut st = self.inner.state.lock();
             st.current_song = Some(song.clone());
-            if let Some(idx) = st.queue.iter().position(|s| s.id == song.id) {
+            // 仅当 queue_sel 尚未指向本曲时才按身份 first-match 定位(列表点歌入口)。
+            // 顺序推进入口(advance_next/advance_prev)已把 queue_sel 钉到精确下标,这里
+            // 必须保留——否则队列里有重复曲时,first-match 会把下标拽回首个副本,两首交替
+            // 的重复曲互相指回对方、无限循环跳不出去。
+            let already_positioned = st.queue.get(st.queue_sel).is_some_and(|s| s.id == song.id);
+            if !already_positioned && let Some(idx) = st.queue.iter().position(|s| s.id == song.id)
+            {
                 st.queue_sel = idx;
             }
             st.play_url = None;
@@ -622,7 +628,7 @@ impl PlayerCore {
     pub fn prev_or_restart(&self) {
         let pos = self.inner.audio.snapshot().position_ms;
         let (old, prev) = {
-            let st = self.inner.state.lock();
+            let mut st = self.inner.state.lock();
             if st.current_song.is_none() {
                 return;
             }
@@ -632,7 +638,8 @@ impl PlayerCore {
                 self.inner.audio.seek(0);
                 return;
             }
-            (st.current_song.clone(), prev_in_queue(&st))
+            // advance_prev 把 queue_sel 钉到上一首下标,play_song 据守卫保留它(见其内注释)。
+            (st.current_song.clone(), advance_prev(&mut st))
         };
         if let Some(s) = prev {
             if let Some(old) = old {
@@ -649,8 +656,9 @@ impl PlayerCore {
     pub fn next_song(&self) {
         let position_ms = self.inner.audio.snapshot().position_ms;
         let (old, next) = {
-            let st = self.inner.state.lock();
-            (st.current_song.clone(), next_in_queue(&st))
+            let mut st = self.inner.state.lock();
+            // advance_next 把 queue_sel 钉到下一首下标,play_song 据守卫保留它(见其内注释)。
+            (st.current_song.clone(), advance_next(&mut st))
         };
         if let Some(s) = next {
             if let Some(old) = old {
@@ -735,12 +743,12 @@ mod tests {
     use parking_lot::Mutex;
     use pretty_assertions::assert_eq;
 
-    use super::{
-        DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode, next_in_queue,
-        prev_in_queue,
-    };
+    use super::{DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode};
     use crate::download::download_song;
-    use crate::queue::{enter_shuffle, exit_shuffle, play_mode_str};
+    use crate::queue::{
+        advance_next, advance_prev, enter_shuffle, exit_shuffle, next_in_queue, play_mode_str,
+        prev_index,
+    };
     use crate::state::State;
 
     /// 记录型 mock channel:on_played 调用进 `calls`,其余方法返回 `NotSupported`。
@@ -1153,38 +1161,74 @@ mod tests {
         );
     }
 
-    /// prev:Sequential 首位返回 None,否则取上一首。
+    /// prev:Sequential 首位返回 None,否则取上一首的下标。
     #[test]
     fn prev_sequential_stops_at_start() {
-        assert!(prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Sequential)).is_none());
+        assert!(prev_index(&state_with(&["a", "b", "c"], 0, PlayMode::Sequential)).is_none());
         assert_eq!(
-            prev_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Sequential)),
-            Some(song("b"))
+            prev_index(&state_with(&["a", "b", "c"], 2, PlayMode::Sequential)),
+            Some(1) // b
         );
     }
 
-    /// prev:RepeatAll / Shuffle 在首部环回到尾,RepeatOne 原地。
+    /// prev:RepeatAll / Shuffle 在首部环回到尾,RepeatOne 原地(均以下标计)。
     #[test]
     fn prev_wraps_and_repeats_one() {
         assert_eq!(
-            prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::RepeatAll)),
-            Some(song("c"))
+            prev_index(&state_with(&["a", "b", "c"], 0, PlayMode::RepeatAll)),
+            Some(2) // c
         );
         assert_eq!(
-            prev_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Shuffle)),
-            Some(song("c"))
+            prev_index(&state_with(&["a", "b", "c"], 0, PlayMode::Shuffle)),
+            Some(2) // c
         );
         assert_eq!(
-            prev_in_queue(&state_with(&["a", "b", "c"], 1, PlayMode::RepeatOne)),
-            Some(song("b"))
+            prev_index(&state_with(&["a", "b", "c"], 1, PlayMode::RepeatOne)),
+            Some(1) // b
         );
+    }
+
+    /// 回归:队列含交替重复曲时,顺序推进必须按下标单向前进、走到队尾后停,
+    /// **不得**在两个重复副本之间来回吸附成无限循环(历史 bug:落地按歌曲身份
+    /// first-match 定位,重复曲把 queue_sel 拽回首个副本)。
+    #[test]
+    fn advance_next_walks_past_duplicates_without_looping() {
+        // gk 在下标 1/3、400 在下标 2/5;从正在播的 400(下标 2)起逐首推进。
+        let mut st = state_with(
+            &["intro", "gk", "400", "gk", "fish", "400", "outro"],
+            2,
+            PlayMode::Sequential,
+        );
+        let mut visited = Vec::new();
+        while let Some(_song) = advance_next(&mut st) {
+            visited.push(st.queue_sel);
+        }
+        // 2→3→4→5→6 后到队尾停;每步严格 +1,绝不回退到 1 或 2。
+        assert_eq!(visited, vec![3, 4, 5, 6]);
+        assert_eq!(st.queue_sel, 6, "推进到队尾后 queue_sel 停在末位");
+    }
+
+    /// 回归:advance_prev 同样按下标后退,重复曲不把 queue_sel 吸附到首个副本。
+    #[test]
+    fn advance_prev_steps_back_by_index_with_duplicates() {
+        let mut st = state_with(&["a", "b", "a", "b"], 3, PlayMode::Sequential); // 第二个 b
+        assert_eq!(
+            advance_prev(&mut st).as_ref().map(|s| s.id.as_str()),
+            Some("a")
+        );
+        assert_eq!(st.queue_sel, 2, "应退到下标 2(第二个 a),而非首个 a@0");
+        assert_eq!(
+            advance_prev(&mut st).as_ref().map(|s| s.id.as_str()),
+            Some("b")
+        );
+        assert_eq!(st.queue_sel, 1);
     }
 
     /// 空队列时 next / prev 都返回 None。
     #[test]
     fn empty_queue_has_no_neighbors() {
         assert!(next_in_queue(&State::empty()).is_none());
-        assert!(prev_in_queue(&State::empty()).is_none());
+        assert!(prev_index(&State::empty()).is_none());
     }
 
     /// queue_sel 越界被 clamp 到末位:Sequential next=None、prev=倒数第二首。
@@ -1192,7 +1236,7 @@ mod tests {
     fn out_of_bounds_sel_is_clamped() {
         let st = state_with(&["a", "b"], 5, PlayMode::Sequential);
         assert!(next_in_queue(&st).is_none());
-        assert_eq!(prev_in_queue(&st), Some(song("a")));
+        assert_eq!(prev_index(&st), Some(0)); // a
     }
 
     /// enter_shuffle:内容集合不变 + 当前歌置顶 + queue_sel=0 + original 存原序。
@@ -1316,6 +1360,37 @@ mod tests {
         core.play_song(&song("a"));
         let v1 = core.sync(PlayerVersions::default()).versions.current;
         assert_eq!(v1, v0 + 1);
+        Ok(())
+    }
+
+    /// 回归:play_song 落地时,若 `queue_sel` 已精确指向本曲(顺序推进入口预置好),
+    /// 不得再按身份 first-match 回溯——否则重复曲会把下标拽回首个副本。
+    #[tokio::test]
+    async fn play_song_keeps_preset_queue_sel_on_duplicate() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b"), song("a"), song("b")];
+            st.queue_sel = 2; // 第二个 a
+            st.current_song = Some(song("a"));
+        });
+        core.play_song(&song("a"));
+        core.with_state(|st| {
+            assert_eq!(st.queue_sel, 2, "已预置的精确下标须保留,不能吸附到 a@0");
+        });
+        Ok(())
+    }
+
+    /// play_song 的身份定位仍在:queue_sel 未指向目标曲时,按 first-match 重新定位。
+    #[tokio::test]
+    async fn play_song_locates_when_not_preset() -> color_eyre::Result<()> {
+        let core = core_with(Arc::default())?;
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+        });
+        core.play_song(&song("b"));
+        core.with_state(|st| assert_eq!(st.queue_sel, 1, "点播未在位的曲应重新定位"));
         Ok(())
     }
 
