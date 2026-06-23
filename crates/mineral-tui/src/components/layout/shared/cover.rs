@@ -25,12 +25,8 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, seed: &str, theme: &Theme) {
 ///   - `area`: 封面区域
 ///   - `seed`: 程序化封面种子(歌单名 / 专辑名)
 pub fn render_to(buf: &mut Buffer, area: Rect, seed: &str, theme: &Theme) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let cell_w = area.width.min(area.height.saturating_mul(2));
-    let cell_h = cell_w / 2;
-    if cell_w == 0 || cell_h == 0 {
+    let sq = square_cells(area);
+    if sq.width == 0 || sq.height == 0 {
         return;
     }
     let palette: [Color; 8] = [
@@ -44,13 +40,10 @@ pub fn render_to(buf: &mut Buffer, area: Rect, seed: &str, theme: &Theme) {
         theme.peach,
     ];
     let h = hash(seed);
-    // 居中放置封面到 area 内。
-    let off_x = area.x + (area.width.saturating_sub(cell_w)) / 2;
-    let off_y = area.y;
-    for cy in 0..cell_h {
-        for cx in 0..cell_w {
-            let top = pixel(h, cx, cy.saturating_mul(2), cell_w);
-            let bot = pixel(h, cx, cy.saturating_mul(2).saturating_add(1), cell_w);
+    for cy in 0..sq.height {
+        for cx in 0..sq.width {
+            let top = pixel(h, cx, cy.saturating_mul(2), sq.width);
+            let bot = pixel(h, cx, cy.saturating_mul(2).saturating_add(1), sq.width);
             let fg = palette
                 .get(usize::from(top) & 7)
                 .copied()
@@ -60,9 +53,31 @@ pub fn render_to(buf: &mut Buffer, area: Rect, seed: &str, theme: &Theme) {
                 .copied()
                 .unwrap_or(theme.base);
             let style = Style::new().fg(fg).bg(bg);
-            buf.set_string(off_x + cx, off_y + cy, "▀", style);
+            buf.set_string(sq.x + cx, sq.y + cy, "▀", style);
         }
     }
+}
+
+/// 程序化 / halfblock 封面共用的「正方 cell 区」:横向取 `min(width, 2*height)` 居中,
+/// 高度减半(`▀` 半字符宽:高 = 1:2,cell 高 = cell 宽 / 2 即得方形视觉)。
+///
+/// 与 `cover_image` 的 `square_subarea`(按真实字号比算)是两套正方化:程序化封面 / 离屏
+/// halfblock 占位用这套(无需字号、确定性);屏上真图用字号那套(与稳态 kitty 落点严丝合缝)。
+/// 二者差异仅在字号偏离 1:2 时显现,且同一封面一帧内非图即程序化、不会半途换算法。
+///
+/// # Params:
+///   - `area`: 外部可用区
+///
+/// # Return:
+///   居中正方 cell 区;`area` 宽高任一为 0 时返回原点处零面积 rect。
+pub(crate) fn square_cells(area: Rect) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return Rect::new(area.x, area.y, 0, 0);
+    }
+    let cell_w = area.width.min(area.height.saturating_mul(2));
+    let cell_h = cell_w / 2;
+    let off_x = area.x + area.width.saturating_sub(cell_w) / 2;
+    Rect::new(off_x, area.y, cell_w, cell_h)
 }
 
 /// 在 `(x,y)` 处采样一个 8 索引调色盘的像素;按 hash 的高 2 位选 horizon/mondrian/concentric/stripes。

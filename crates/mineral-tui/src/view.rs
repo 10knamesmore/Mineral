@@ -14,7 +14,7 @@ use crate::components::layout::search::{detail, panel};
 use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
-use crate::components::layout::shared::{cover, cover_image, top_status, transform, transport};
+use crate::components::layout::shared::{cover_image, top_status, transform, transport};
 use crate::runtime::state::SearchFocus;
 
 /// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
@@ -243,7 +243,16 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // 逐帧漂移 dims 编码(churn)。
         prewarm_upcoming(app, area);
     } else {
-        cover::render(frame, area, &seed, theme);
+        // 形变期:halfblock 真图(命中缓存)随封面区长大,无图退程序化色块;均不碰 kitty 协议。
+        cover_image::render_morph(
+            frame,
+            area,
+            track.and_then(|t| t.cover_url.as_ref()),
+            &app.state,
+            &app.picker,
+            theme,
+            &seed,
+        );
     }
     if track.is_none() {
         let y = area.y + area.height / 2;
@@ -351,6 +360,175 @@ mod tests {
                 "形变期不应追加封面编码派发(churn)"
             );
         }
+        Ok(())
+    }
+
+    /// 全屏形变中途:在播曲封面已在 `covers.cache` → 封面区渲 halfblock 真图(像素色),
+    /// 而非程序化主题色块。用纯品红测试图(UI 别处不会出现 `Rgb(255,0,255)`),扫全 buffer
+    /// 断言存在该 fg 的 cell —— 不依赖 morph 中途封面区精确坐标。
+    #[test]
+    fn fullscreen_morph_paints_real_cover_as_halfblock() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.clone());
+        }
+        let mut img = image::RgbImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([255, 0, 255]);
+        }
+        app.state
+            .covers
+            .cache
+            .insert(url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+
+        app.state.browse.fullscreen.set(true);
+        for _ in 0..5 {
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(!app.state.browse.fullscreen.settled(), "测试需停留形变中途");
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        let mut count = 0usize;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == magenta) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "形变期封面区应有 halfblock 真图(品红)cell,实得 {count}"
+        );
+        Ok(())
+    }
+
+    /// 全屏形变中途:有 `cover_url` 但图未入 `covers.cache` → 退程序化色块,封面区不应出现
+    /// 真图像素色(品红)。与上一例对照,证明只在缓存命中时上真图。
+    #[test]
+    fn fullscreen_morph_without_cached_image_stays_procedural() -> color_eyre::Result<()> {
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.clone());
+        }
+        // 故意不往 covers.cache 塞图。
+
+        app.state.browse.fullscreen.set(true);
+        for _ in 0..5 {
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(!app.state.browse.fullscreen.settled(), "测试需停留形变中途");
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                assert!(
+                    !buf.cell((x, y)).is_some_and(|c| c.fg == magenta),
+                    "无缓存图时不应出现真图像素色"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 回归:切到全屏**落定瞬间**的 hash 闪。稳态首帧该曲全屏尺寸 kitty 协议尚未编码(在途),
+    /// 封面区应继续画 halfblock 真图、不得退程序化 hash 色块。构造:稳态全屏 + 缓存图就绪 +
+    /// `covers.protocols` 空(逼走「编码在途」回退路径)+ 脱离滚动防抖。断言全 buffer 仍含
+    /// 真图像素色(品红)。
+    #[test]
+    fn fullscreen_steady_pending_encode_shows_halfblock_not_hash() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.clone());
+        }
+        let mut img = image::RgbImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([255, 0, 255]);
+        }
+        app.state
+            .covers
+            .cache
+            .insert(url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+        // 脱离滚动防抖,确保不是 `is_scrolling` 早退(那会留空、非 hash,测错原因)。
+        app.state.browse.nav.last_sel_change = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        // 全屏稳态(一步到位);不放任何已编码协议 → 首帧走「kitty 编码在途」回退。
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        let mut count = 0usize;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == magenta) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "稳态 kitty 编码在途时封面区应为 halfblock 真图(品红),不得闪 hash;实得 {count}"
+        );
         Ok(())
     }
 

@@ -21,8 +21,8 @@ mod placeholder;
 mod title;
 mod track_table;
 
+use crate::components::layout::shared::cover_image;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
-use crate::components::layout::shared::{cover, cover_image};
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
@@ -180,10 +180,24 @@ fn render_frame_to(
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
     if cover_a.width > 0 {
-        cover::render_to(buf, cover_a, header_seed(&dframe.entity), theme);
+        cover_image::render_morph_to(
+            buf,
+            cover_a,
+            dframe.entity.cover(),
+            state,
+            theme,
+            header_seed(&dframe.entity),
+        );
     }
     if let Some(right_a) = right_a {
-        cover::render_to(buf, right_a, selected_seed(dframe), theme);
+        cover_image::render_morph_to(
+            buf,
+            right_a,
+            dframe.selected_cover(),
+            state,
+            theme,
+            selected_seed(dframe),
+        );
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
     draw_delimiter(buf, delim, theme);
