@@ -28,6 +28,16 @@ pub(crate) struct BrowseModel<'a> {
     pub cfg: &'a mineral_config::Config,
 }
 
+/// 从 Playlists 进入 Library 后应落到的目标曲目。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlaylistEntryTarget {
+    /// 目标曲目下标。
+    pub index: usize,
+
+    /// 记忆恢复路径需要保留的屏上相对行;非记忆路径为 `None`。
+    pub screen_anchor: Option<usize>,
+}
+
 /// Browse 布局层的 view 状态(光标 / 视图 / 全屏 / 歌词 / 过滤)。
 pub struct BrowsePage {
     /// 左栏视图切换:Playlists ↔ Library 两态 + 横向过渡,由 [`ViewSwitch`] 合一。
@@ -90,6 +100,46 @@ impl BrowsePage {
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
     pub fn current_tracks(&self, model: BrowseModel<'_>) -> Vec<SongView> {
         self.current_tracks_slot(model).cloned().unwrap_or_default()
+    }
+
+    /// 解析进入歌单后右侧曲目列表的目标行:深度搜索命中优先,其次位置记忆,最后第 0 行。
+    ///
+    /// # Params:
+    ///   - `model`: Browse 视图逻辑所需的模型借用
+    ///   - `target_id`: 即将进入的歌单 id
+    ///   - `tracks`: 该歌单已缓存的曲目列表
+    ///
+    /// # Return:
+    ///   进入后的目标曲目下标,以及记忆恢复路径的屏上相对行。
+    pub(crate) fn playlist_entry_target(
+        &self,
+        model: BrowseModel<'_>,
+        target_id: &PlaylistId,
+        tracks: &[SongView],
+    ) -> PlaylistEntryTarget {
+        let locate = (*model.cfg.tui().search().locate_on_enter())
+            .then(|| self.deep_hit_for(target_id).map(|h| h.song_id))
+            .flatten();
+        if let Some(index) =
+            locate.and_then(|song_id| tracks.iter().position(|sv| sv.data.id == song_id))
+        {
+            return PlaylistEntryTarget {
+                index,
+                screen_anchor: None,
+            };
+        }
+        if model.cfg.tui().behavior().remember_track_pos().enabled()
+            && let Some(pos) = self.nav.track_pos.get(target_id)
+        {
+            return PlaylistEntryTarget {
+                index: pos.resolve(tracks),
+                screen_anchor: Some(pos.screen_row),
+            };
+        }
+        PlaylistEntryTarget {
+            index: 0,
+            screen_anchor: None,
+        }
     }
 
     /// 当前可见(被 search 过滤)的歌单列表。

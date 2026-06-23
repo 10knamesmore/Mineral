@@ -39,6 +39,7 @@ pub fn draw(
     ])
     .areas(inner);
 
+    prewarm_entry_track_cover(state, picker, cover_area);
     cover_image::render_or_fallback(
         frame,
         cover_area,
@@ -82,4 +83,21 @@ pub fn draw(
 
     let help = Line::from(" l open · y copy · o action ").style(Style::new().fg(theme.overlay));
     frame.render_widget(Paragraph::new(help), footer);
+}
+
+/// 稳态 Playlists 右栏渲染时,提前编码进入后目标曲目的封面。
+fn prewarm_entry_track_cover(state: &AppState, picker: &Picker, cover_area: Rect) {
+    if !state.browse.view.at_min()
+        || !state.browse.fullscreen.at_min()
+        || !state.channel_search.active.at_min()
+    {
+        return;
+    }
+    let Some(url) = state
+        .selected_playlist_entry_track()
+        .and_then(|sv| sv.data.cover_url.as_ref())
+    else {
+        return;
+    };
+    cover_image::prewarm(state, picker, cover_area, url);
 }

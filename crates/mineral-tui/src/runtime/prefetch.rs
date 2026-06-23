@@ -18,6 +18,7 @@ use crate::runtime::state::{AppState, DetailFetch, View};
 pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
     request_playlist_tracks(state, client);
+    request_playlist_entry_cover(state, covers);
     request_play_count(state, client);
     request_detail(state, client, covers);
     request_detail_selected_cover(state, covers);
@@ -149,6 +150,20 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
         // 成败都记:失败歌单的 library.tracks 永远不会被填,只有靠这里去重才不会
         // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
         state.library.tracks_requested.insert(id);
+    }
+}
+
+/// Playlists 视图下,当选中歌单曲目已缓存时,提前拉取进入后目标曲目的封面。
+fn request_playlist_entry_cover(state: &mut AppState, covers: &CoverFetcher) {
+    if state.browse.view != View::Playlists {
+        return;
+    }
+    let intent = state
+        .selected_playlist_entry_track()
+        .and_then(|sv| song_cover(&sv.data))
+        .map(|(source, url)| (source, url.clone()));
+    if let Some((source, url)) = intent {
+        ensure_cover(state, covers, source, url);
     }
 }
 
@@ -325,10 +340,15 @@ fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+    use std::sync::Arc;
+
+    use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 
     use super::collect_pending_covers;
+    use crate::runtime::cover::fetch::CoverFetcher;
     use crate::runtime::state::{AppState, View};
+    use crate::runtime::track_pos::TrackPos;
+    use crate::runtime::view_model::SongView;
 
     /// 造一首带封面 URL 的歌:id = `s{i}`、cover = `https://cover/{i}.jpg`。
     fn song_with_cover(i: usize) -> color_eyre::Result<Song> {
@@ -346,6 +366,139 @@ mod tests {
         Ok(collect_pending_covers(state)
             .iter()
             .any(|(_, u)| *u == want))
+    }
+
+    /// 造一首带可预测名称和封面 URL 的歌。
+    fn named_song_with_cover(name: &str, cover: &str) -> color_eyre::Result<Song> {
+        Ok(Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, name))
+            .name(name.to_owned())
+            .duration_ms(1000)
+            .cover_url(Some(MediaUrl::remote(cover)?))
+            .build())
+    }
+
+    /// 把带封面的歌曲包成 SongView。
+    fn song_view_with_cover(name: &str, cover: &str) -> color_eyre::Result<SongView> {
+        Ok(SongView {
+            data: named_song_with_cover(name, cover)?,
+            loved: false,
+            plays: None,
+        })
+    }
+
+    /// 给 `p1` 填三首带封面的曲目,并返回歌单 id。
+    fn state_with_entry_tracks() -> color_eyre::Result<(AppState, PlaylistId)> {
+        let mut state = crate::test_support::state_with_playlists()?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        let tracks = ["甲", "乙", "丙"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| song_view_with_cover(name, &format!("https://entry/{i}.jpg")))
+            .collect::<color_eyre::Result<Vec<SongView>>>()?;
+        state.library.tracks.insert(pid.clone(), tracks);
+        Ok((state, pid))
+    }
+
+    /// 取当前 Playlists 入口目标曲目的名称。
+    fn entry_track_name(state: &AppState) -> color_eyre::Result<String> {
+        Ok(state
+            .selected_playlist_entry_track()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应解析出入口目标曲目"))?
+            .data
+            .name
+            .clone())
+    }
+
+    /// 无搜索命中、无记忆时,入口目标曲目为第 0 首。
+    #[test]
+    fn playlist_entry_target_defaults_to_first_track() -> color_eyre::Result<()> {
+        let (state, _pid) = state_with_entry_tracks()?;
+        assert_eq!(entry_track_name(&state)?, "甲");
+        Ok(())
+    }
+
+    /// Playlists 深度搜索命中且 `locate_on_enter` 开启时,入口目标曲目为命中歌曲。
+    #[test]
+    fn playlist_entry_target_uses_deep_hit() -> color_eyre::Result<()> {
+        let mut state = crate::test_support::state_with_playlists()?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
+        let tracks = ["甲", "乙", "春日影"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| song_view_with_cover(name, &format!("https://deep/{i}.jpg")))
+            .collect::<color_eyre::Result<Vec<SongView>>>()?;
+        state.library.tracks.insert(pid, tracks);
+        state.browse.search.set_query("春日影");
+
+        assert_eq!(entry_track_name(&state)?, "春日影");
+        Ok(())
+    }
+
+    /// 没有深度搜索命中但有位置记忆时,入口目标曲目为记忆歌曲。
+    #[test]
+    fn playlist_entry_target_uses_remembered_position() -> color_eyre::Result<()> {
+        let (mut state, pid) = state_with_entry_tracks()?;
+        let tracks = state
+            .library
+            .tracks
+            .get(&pid)
+            .ok_or_else(|| color_eyre::eyre::eyre!("p1 曲目应已缓存"))?;
+        let remembered = tracks
+            .get(1)
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试曲目应有第 1 首"))?;
+        state.browse.nav.track_pos.insert(
+            pid,
+            TrackPos {
+                song_id: remembered.data.id.clone(),
+                index: 1,
+                screen_row: 0,
+            },
+        );
+
+        assert_eq!(entry_track_name(&state)?, "乙");
+        Ok(())
+    }
+
+    /// 选中歌单曲目已缓存且入口目标封面未就绪时,一个 prefetch tick 后进入 pending。
+    #[test]
+    fn playlist_entry_cover_enters_pending() -> color_eyre::Result<()> {
+        let (mut state, _pid) = state_with_entry_tracks()?;
+        let url = MediaUrl::remote("https://entry/0.jpg")?;
+        super::request_playlist_entry_cover(&mut state, &CoverFetcher::disabled());
+
+        assert!(
+            state.covers.pending.contains(&url),
+            "入口目标曲目封面应进入 pending"
+        );
+        Ok(())
+    }
+
+    /// 入口目标封面已缓存或已 pending 时,不会重复请求。
+    #[test]
+    fn playlist_entry_cover_dedups_cached_or_pending() -> color_eyre::Result<()> {
+        let (mut cached_state, _pid) = state_with_entry_tracks()?;
+        let url = MediaUrl::remote("https://entry/0.jpg")?;
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8));
+        cached_state
+            .covers
+            .cache
+            .insert(url.clone(), Arc::new(image));
+        super::request_playlist_entry_cover(&mut cached_state, &CoverFetcher::disabled());
+        assert!(
+            !cached_state.covers.pending.contains(&url),
+            "已缓存封面不应再进 pending"
+        );
+
+        let (mut pending_state, _pid) = state_with_entry_tracks()?;
+        pending_state.covers.pending.insert(url.clone());
+        super::request_playlist_entry_cover(&mut pending_state, &CoverFetcher::disabled());
+        assert_eq!(
+            pending_state.covers.pending.len(),
+            1,
+            "已 pending 封面不应重复插入"
+        );
+        Ok(())
     }
 
     /// 在播曲及其播放队列 ±[`PLAYBACK_COVER_RADIUS`] 邻居的封面进入 prefetch 集合。
