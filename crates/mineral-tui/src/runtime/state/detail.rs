@@ -534,14 +534,16 @@ impl DetailStack {
         }
     }
 
-    /// 滑动渲染参数：`(出发帧, 目标帧, eased 进度, is_push)`；未过渡为 `None`（渲染直接画当前帧）。
+    /// 滑动渲染参数：`(出发帧, 目标帧, ease-in-out 进度, is_push)`；未过渡为 `None`（渲染直接
+    /// 画当前帧）。进度走 ease-in-out（与歌手双区切换 / 左栏视图切换同曲线，两端减速、打断
+    /// 反向连续），不用单向 ease-out。
     pub fn sweep_frames(&self) -> Option<(&DetailFrame, &DetailFrame, u16, bool)> {
         if self.transition.settled() {
             return None;
         }
         let (from, is_push) = self.sweep_from.as_ref()?;
         let to = self.frames.last()?;
-        Some((from, to, self.transition.eased(), *is_push))
+        Some((from, to, self.transition.eased_in_out(), *is_push))
     }
 }
 
@@ -858,6 +860,30 @@ mod tests {
             st.tick();
         }
         assert!(st.sweep_frames().is_none(), "推满后 settle、无滑动");
+        Ok(())
+    }
+
+    /// sweep_frames 的进度走 ease-in-out（与歌手双区切换、左栏视图切换同曲线），
+    /// 不再是单向 ease-out——下钻/返回过渡与其余 sweep 对齐的回归守卫。
+    #[test]
+    fn sweep_uses_ease_in_out_curve() -> color_eyre::Result<()> {
+        use crate::render::anim::Transition;
+
+        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
+        st.push(EntityRef::Album(Box::new(album("al"))), /*ticks*/ 6);
+        st.tick();
+        let Some((_, _, eased, _)) = st.sweep_frames() else {
+            color_eyre::eyre::bail!("push 后应处于滑动中");
+        };
+        // 同参数参照：推进同样拍数，取 ease-in-out 应一致、取单向 ease-out 应不同。
+        let mut reference = Transition::expanding(6);
+        reference.tick();
+        assert_eq!(
+            eased,
+            reference.eased_in_out(),
+            "下钻 sweep 取 ease-in-out 曲线"
+        );
+        assert_ne!(eased, reference.eased(), "不再是单向 ease-out");
         Ok(())
     }
 

@@ -18,6 +18,7 @@ use mineral_model::{Album, Song};
 mod description;
 mod meta;
 mod placeholder;
+mod sweep;
 mod title;
 mod track_table;
 
@@ -29,6 +30,7 @@ use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, En
 
 use self::meta::{album_card_lines, artist_counts, publish_year, with_commas};
 use self::placeholder::{draw_delimiter, draw_empty, draw_loading, loading_glyph};
+use self::sweep::{SweepLayer, copy_col, sweep_column};
 use self::track_table::TrackColumns;
 use super::panel::join_artists;
 
@@ -221,8 +223,9 @@ struct SweepArgs<'a> {
     is_push: bool,
 }
 
-/// 下钻/返回滑动：出发帧与目标帧各渲染到离屏 Buffer，按 `eased` 列合成（Cover 风格：
-/// push 目标从右覆盖、pop 目标从左覆盖）。
+/// 下钻/返回滑动：出发帧与目标帧各渲染到离屏 Buffer，按 `eased` 列合成。风格随配置
+/// `view_sweep`（经 [`sweep_column`]），与歌手双区切换 / 左栏视图切换同款；方向由 `is_push`
+/// 定（下钻目标右入、返回左入）。
 fn draw_sweep(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -244,37 +247,14 @@ fn draw_sweep(
     let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
         .unwrap_or(w)
         .min(w);
+    let style = *state.cfg.tui().animation().view_sweep();
     let buf = frame.buffer_mut();
     for c in 0..w {
-        let (src, src_c) = if is_push {
-            // 目标从右覆盖：右 advance 列取目标帧。
-            let split = w.saturating_sub(advance);
-            if c < split {
-                (&from_buf, c)
-            } else {
-                (&to_buf, c - split)
-            }
-        } else if c < advance {
-            // 目标从左覆盖：左 advance 列取目标帧。
-            (&to_buf, c)
-        } else {
-            (&from_buf, c)
+        let (src, src_c) = match sweep_column(style, is_push, c, w, advance) {
+            (SweepLayer::From, src_c) => (&from_buf, src_c),
+            (SweepLayer::To, src_c) => (&to_buf, src_c),
         };
         copy_col(buf, inner, src, c, src_c);
-    }
-}
-
-/// 把离屏 `src` 的第 `src_c` 列（相对 `area`）整列搬到 `dst` 的第 `dst_c` 列。
-fn copy_col(dst: &mut Buffer, area: Rect, src: &Buffer, dst_c: u16, src_c: u16) {
-    let dx = area.x.saturating_add(dst_c);
-    let sx = area.x.saturating_add(src_c);
-    for ry in area.y..area.y.saturating_add(area.height) {
-        if let Some(cell) = src.cell((sx, ry)) {
-            let cell = cell.clone();
-            if let Some(slot) = dst.cell_mut((dx, ry)) {
-                *slot = cell;
-            }
-        }
     }
 }
 
@@ -640,24 +620,11 @@ fn compose_sweep(
         .unwrap_or(w)
         .min(w);
     for c in 0..w {
-        let (src, src_c) = match style {
-            // 新区从右覆盖：右 advance 列取 over。
-            SweepStyle::Cover => {
-                let split = w.saturating_sub(advance);
-                if c < split {
-                    (base, c)
-                } else {
-                    (over, c - split)
-                }
-            }
-            // 整体左移 advance，新区从右补入。非穷尽（`#[non_exhaustive]`）→ 按 Push 兜底。
-            SweepStyle::Push | _ => {
-                if c + advance < w {
-                    (base, c + advance)
-                } else {
-                    (over, c + advance - w)
-                }
-            }
+        // 双区切换恒「前进」（base=当前区 → over=目标区，over 从右来），故方向取 is_push=true；
+        // 反向切换由 eased 回落表达，不需另一方向。与下钻 sweep 共用同一列映射。
+        let (src, src_c) = match sweep_column(style, /*is_push*/ true, c, w, advance) {
+            (SweepLayer::From, src_c) => (base, src_c),
+            (SweepLayer::To, src_c) => (over, src_c),
         };
         copy_col(buf, area, src, c, src_c);
     }
