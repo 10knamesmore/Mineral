@@ -237,12 +237,11 @@ impl BrowsePage {
                     .get(self.nav.playlist.sel())
                     .map(|p| p.data.id.clone())
                 {
-                    // 深度命中行必须在清词前解析——deep_hit_for 对空 query 恒 None。
-                    let entry_target = model
-                        .library
-                        .tracks
-                        .get(&target_id)
-                        .map(|tracks| self.playlist_entry_target(model, &target_id, tracks));
+                    // 深度命中行:进歌单后光标直接落到命中歌。必须在清词前取——
+                    // deep_hit_for 对空 query 恒 None。
+                    let locate = (*model.cfg.tui().search().locate_on_enter())
+                        .then(|| self.deep_hit_for(&target_id).map(|h| h.song_id))
+                        .flatten();
                     self.search.clear();
                     if let Some(raw_idx) = model
                         .library
@@ -252,18 +251,29 @@ impl BrowsePage {
                     {
                         self.nav.playlist.set_sel(raw_idx);
                     }
-                    if let Some(target) = entry_target {
-                        sel_track = target.index;
-                        screen_anchor = target.screen_anchor;
+                    if let Some(idx) = locate.and_then(|song_id| {
+                        model
+                            .library
+                            .tracks
+                            .get(&target_id)
+                            .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
+                    }) {
+                        sel_track = idx;
                     } else if model.cfg.tui().behavior().remember_track_pos().enabled()
                         && let Some(pos) = self.nav.track_pos.get(&target_id).cloned()
                     {
                         // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),走到这里说明无命中。
                         // 曲目还没拉到时挂 pending,等 `PlaylistDetailFetched` 补落位。
-                        self.nav.pending_track_restore = Some(PendingRestore {
-                            playlist: target_id.clone(),
-                            pos,
-                        });
+                        if let Some(tracks) = model.library.tracks.get(&target_id) {
+                            sel_track = pos.resolve(tracks);
+                            // 恢复屏上相对位置:该行回到离开时的视口行,而非统一顶到 scrolloff 位。
+                            screen_anchor = Some(pos.screen_row);
+                        } else {
+                            self.nav.pending_track_restore = Some(PendingRestore {
+                                playlist: target_id.clone(),
+                                pos,
+                            });
+                        }
                     }
                 }
                 self.view.switch_to(View::Library);

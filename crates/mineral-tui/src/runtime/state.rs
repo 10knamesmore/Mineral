@@ -543,25 +543,6 @@ impl AppState {
         self.browse.current_tracks_slot(self.browse_model())
     }
 
-    /// Playlists 视图中,进入当前选中歌单后右栏会展示的目标曲目。
-    ///
-    /// 仅在曲目已缓存时返回:顺序与 Enter 进入逻辑一致,即深度搜索命中优先,
-    /// 其次恢复上次位置,最后默认第 0 首。
-    pub fn selected_playlist_entry_track(&self) -> Option<&SongView> {
-        if self.browse.view.current() != View::Playlists {
-            return None;
-        }
-        let target_id = self
-            .filtered_playlists()
-            .get(self.browse.nav.playlist.sel())
-            .map(|p| p.data.id.clone())?;
-        let tracks = self.library.tracks.get(&target_id)?;
-        let target = self
-            .browse
-            .playlist_entry_target(self.browse_model(), &target_id, tracks);
-        tracks.get(target.index)
-    }
-
     /// 给定歌单的总时长(ms);槽位未到位时返回 0。
     pub fn total_duration_ms_of(&self, id: &PlaylistId) -> u64 {
         self.library
