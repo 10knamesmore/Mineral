@@ -82,21 +82,21 @@ pub fn render_or_fallback(
             return;
         }
     }
-    // 未命中(无缓存协议 / 尺寸变了):手里已有解好的 `image`,**先画 halfblock 真图占位**
-    // (非程序化 hash)——让封面从形变→编码等待→滚动→kitty 全程都是真图,无空白、无 hash。
-    // 滚动期也照画低清,体感即「低清(滚动)→ 高清(停稳)」,不再有空白阶段。
+    // 未命中(无缓存协议 / 尺寸变了):**不在渲染线程编码**(resize + base64 是百毫秒级,
+    // 会卡帧),改投递给 [`CoverEncoder`] 的 worker 离线编码。
     //
-    // kitty 编码本身(resize + base64,百毫秒级)**不在渲染线程做**,投递给 [`CoverEncoder`]
-    // worker 离线跑;完成后主循环 `drain_ready_protocols` 装回 `covers.protocols`,下一帧 snap
-    // 成 crisp kitty。三态(halfblock / 在途 / kitty)同渲于 `target`,零位移。
-    //
-    // 但**滚动防抖期(`is_scrolling`)只画不投**:避免给 worker 灌一堆滚过即弃的编码任务、
-    // 让停稳那张排在陈货后头变慢。停稳 ≥ cover.debounce_ms 才按 `(url, dims)` 去重投递一次。
-    // `fallback_seed` 仅当无图(上方早退)时才用,此处图必在故不取。
-    render_halfblock_to(frame.buffer_mut(), target, &image);
-    if !state.is_scrolling() {
-        request_cover_encode(state, url, image, target);
+    // - 滚动中:留空,既不闪程序化色块也不投递 —— 避免给 worker 灌一堆滚过即弃的图,
+    //   稳定 ≥ cover.debounce_ms 后再编码淡入(沿用旧的「滚时图位空着」体感)。
+    // - 稳定后:按 `(url, dims)` 去重投递一次,**在途期间画 halfblock 真图**(非程序化 hash)——
+    //   手里已有解好的 `image`,kitty 大图编码要好几帧,这期间退 hash 会在「切到全屏落定瞬间」
+    //   闪一下色块;halfblock 让封面从形变→编码等待→kitty 全程都是真图,worker 完成后主循环
+    //   `drain_ready_protocols` 装回 `covers.protocols`,下一帧 snap 成 crisp kitty。三态同渲于
+    //   `target`,零位移。`fallback_seed` 仅当无图(上方早退)时才用,此处图必在故不取。
+    if state.is_scrolling() {
+        return;
     }
+    render_halfblock_to(frame.buffer_mut(), target, &image);
+    request_cover_encode(state, url, image, target);
 }
 
 /// 未命中已编码协议时,按 `(url, dims)` 去重投递一次离线编码请求(`image` 来自

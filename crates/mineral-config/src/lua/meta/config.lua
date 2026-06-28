@@ -175,7 +175,7 @@
 ---@field max_dim? integer 解码后等比缩放到的最大边,像素;终端显示 ~240px 足够,大了费内存
 ---@field jpeg_quality? integer JPEG 重编码质量 1-100;**仅 storage = "resized" 时生效**
 ---@field storage? "raw"|"resized" 磁盘缓存存什么:"raw" = 原始下载字节(无损,体积大);"resized" = 缩放后重编码 JPEG(省盘,锁定 ≤ max_dim)
----@field debounce_ms? integer 列表滚动停稳多久才开始渲染真图,毫秒;期间显示像素化封面
+---@field debounce_ms? integer 列表滚动停稳多久才开始渲染真图,毫秒;期间显示程序化色块占位
 ---@field download_workers? integer 封面下载并发 worker 数,≥1
 ---@field encode_workers? integer 封面终端协议编码并发 worker 数,≥1
 ---@field kmeans? mineral.KmeansConfig 取色(频谱封面配色)参数

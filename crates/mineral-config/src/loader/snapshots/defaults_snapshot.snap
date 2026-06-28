@@ -572,7 +572,7 @@ Config {
             max_dim: 384,
             jpeg_quality: 100,
             storage: Resized,
-            debounce_ms: 16,
+            debounce_ms: 80,
             download_workers: 4,
             encode_workers: 2,
             kmeans: KmeansConfig {
