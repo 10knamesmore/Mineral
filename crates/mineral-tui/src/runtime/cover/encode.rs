@@ -35,6 +35,11 @@ pub struct EncodeRequest {
 
     /// 目标渲染区域。决定编码尺寸;`(width, height)` 同时作维度键。
     pub target: Rect,
+
+    /// 编码用的终端协议能力 + 当前 cell 字号。**逐请求携带**而非 worker 自持:字号是
+    /// 编码尺寸换算的分母,终端字号变化后必须用新值,否则封面按旧 cell 比例铺 —— 偏小占
+    /// 一小块 / 偏大被裁。渲染处投递时塞入当前 `App.picker`,worker 用它不留 stale 副本。
+    pub picker: Picker,
 }
 
 /// 一次编码结果:就绪协议 + 维度键,供 tick 装回缓存。
@@ -63,21 +68,20 @@ pub struct CoverEncoder {
 
 impl CoverEncoder {
     /// 起 `workers` 个编码 worker。caller 必须在 tokio runtime 里(`run_app` 跑在
-    /// runtime 线程上,满足);`picker` 决定终端图片协议(kitty / sixel / halfblocks)。
+    /// runtime 线程上,满足)。终端图片协议能力随每个 [`EncodeRequest`] 携带(`picker`
+    /// 字段),worker 不自持,故字号变化后编码即用新 picker。
     ///
     /// # Params:
-    ///   - `picker`: 终端图片协议能力
     ///   - `workers`: worker 数(配置 `cover.encode_workers`)
-    pub fn spawn(picker: &Picker, workers: usize) -> Self {
+    pub fn spawn(workers: usize) -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<EncodeRequest>();
         let ready = Arc::new(Mutex::new(Vec::<EncodeResult>::new()));
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
         for _ in 0..workers.max(1) {
             let rx = Arc::clone(&rx);
             let ready = Arc::clone(&ready);
-            let picker = picker.clone();
             tokio::spawn(async move {
-                worker_loop(rx, ready, picker).await;
+                worker_loop(rx, ready).await;
             });
         }
         Self { req_tx: tx, ready }
@@ -111,7 +115,6 @@ impl CoverEncoder {
 async fn worker_loop(
     rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<EncodeRequest>>>,
     ready: ReadyBuf,
-    picker: Picker,
 ) {
     loop {
         let req = {
@@ -121,7 +124,7 @@ async fn worker_loop(
                 None => return, // 队列关了
             }
         };
-        if let Some(result) = encode_blocking(&picker, req).await {
+        if let Some(result) = encode_blocking(req).await {
             ready.lock().push(result);
         }
     }
@@ -131,18 +134,22 @@ async fn worker_loop(
 ///
 /// resize + base64 编码是 CPU 密集活儿,经 [`tokio::task::spawn_blocking`] 落 blocking 池,
 /// 不占 runtime worker。worker 内建好协议后,渲染线程拿同一 `target` 渲染时
-/// `needs_resize` 返回 `None`,只 place 不再重编码。
+/// `needs_resize` 返回 `None`,只 place 不再重编码。协议能力取自 `req.picker`(逐请求携带,
+/// 保证字号变化后用新值)。
 ///
 /// # Params:
-///   - `picker`: 终端图片协议能力(决定 `new_resize_protocol` 产出哪种协议)
-///   - `req`: 编码请求(URL + 图 + 目标区域)
+///   - `req`: 编码请求(URL + 图 + 目标区域 + picker)
 ///
 /// # Return:
 ///   就绪结果;`spawn_blocking` join 失败返回 `None`(已打日志)。
-async fn encode_blocking(picker: &Picker, req: EncodeRequest) -> Option<EncodeResult> {
-    let EncodeRequest { url, image, target } = req;
+async fn encode_blocking(req: EncodeRequest) -> Option<EncodeResult> {
+    let EncodeRequest {
+        url,
+        image,
+        target,
+        picker,
+    } = req;
     let dims = (target.width, target.height);
-    let picker = picker.clone();
     let encoded = tokio::task::spawn_blocking(move || {
         let mut proto = picker.new_resize_protocol((*image).clone());
         // 与渲染处一致:Scale 模式 + Triangle 滤镜。target 为视觉正方,源亦方图,不变形。
@@ -183,7 +190,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn encodes_and_drains() -> color_eyre::Result<()> {
         let picker = Picker::from_fontsize((8, 16));
-        let encoder = CoverEncoder::spawn(&picker, /*workers*/ 2);
+        let encoder = CoverEncoder::spawn(/*workers*/ 2);
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let image = Arc::new(image::DynamicImage::ImageRgba8(image::RgbaImage::new(
@@ -194,6 +201,7 @@ mod tests {
             url: url.clone(),
             image,
             target,
+            picker,
         });
 
         // worker 在另一线程编码,轮询 drain 直到就绪(上限 1s 兜底,正常几十 ms 内)。

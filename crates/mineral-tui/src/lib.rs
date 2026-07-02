@@ -153,8 +153,9 @@ fn run_app(
     // font 用 halfblocks 渲染,不阻塞启动。
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
     // 编码器 worker 在此 spawn(run_app 跑在 tokio runtime 线程上,满足 tokio::spawn)。
-    // picker 克隆给 worker,封面 resize + kitty 编码即落 worker 的 spawn_blocking,不卡渲染。
-    let cover_encoder = CoverEncoder::spawn(&picker, *cfg.tui().cover().encode_workers());
+    // 封面 resize + kitty 编码落 worker 的 spawn_blocking 不卡渲染;picker 随每个编码请求
+    // 携带(见 `EncodeRequest`),故字号变化后 worker 即用新 picker。
+    let cover_encoder = CoverEncoder::spawn(*cfg.tui().cover().encode_workers());
     let mut app = App::new(
         client,
         cover_fetcher,

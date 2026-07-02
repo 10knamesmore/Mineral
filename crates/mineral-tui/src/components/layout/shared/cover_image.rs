@@ -96,18 +96,26 @@ pub fn render_or_fallback(
         return;
     }
     render_halfblock_to(frame.buffer_mut(), target, &image);
-    request_cover_encode(state, url, image, target);
+    request_cover_encode(state, picker, url, image, target);
 }
 
 /// 未命中已编码协议时,按 `(url, dims)` 去重投递一次离线编码请求(`image` 来自
 /// `covers.cache`)。worker 完成后主循环 `drain_ready_protocols` 装回 `covers.protocols`。
-fn request_cover_encode(state: &AppState, url: &MediaUrl, image: Arc<DynamicImage>, target: Rect) {
+/// `picker` 随请求携带(字号是编码尺寸换算的分母,终端字号变化后须用当前值)。
+fn request_cover_encode(
+    state: &AppState,
+    picker: &Picker,
+    url: &MediaUrl,
+    image: Arc<DynamicImage>,
+    target: Rect,
+) {
     let key = (url.clone(), (target.width, target.height));
     if state.covers.encode_pending.borrow_mut().insert(key) {
         let _ = state.covers.encode_tx.send(EncodeRequest {
             url: url.clone(),
             image,
             target,
+            picker: picker.clone(),
         });
     }
 }
@@ -135,7 +143,7 @@ pub fn prewarm(state: &AppState, picker: &Picker, area: Rect, url: &MediaUrl) {
     let Some(image) = state.covers.cache.get(url).cloned() else {
         return;
     };
-    request_cover_encode(state, url, image, target);
+    request_cover_encode(state, picker, url, image, target);
 }
 
 /// 把已解码真图按 halfblock(`▀` 半字符)逐 cell 画进 `area`(**精确铺满**,不再内部正方化——

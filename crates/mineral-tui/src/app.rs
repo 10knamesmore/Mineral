@@ -488,7 +488,10 @@ impl App {
     fn handle_event(&mut self, ev: &Event) {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
-            Event::Resize(..) => self.report_terminal_state(),
+            Event::Resize(..) => {
+                self.refresh_picker_font();
+                self.report_terminal_state();
+            }
             Event::FocusGained => self.set_focus(/*focused*/ true),
             Event::FocusLost => self.set_focus(/*focused*/ false),
             _ => {}
@@ -524,6 +527,32 @@ impl App {
             self.state.browse.fullscreen.on(),
             self.state.focused(),
         );
+    }
+
+    /// 终端字号 / 尺寸变化后刷新 `picker` 的 cell 像素尺寸(封面尺寸换算的基准)。
+    ///
+    /// 封面占多大由「cell 网格」决定,网格换算(`square_subarea` 与编码 `needs_resize`)都吃
+    /// `picker.font_size()`。该值仅启动时 `from_query_stdio` 探一次;kitty 改字号时每 cell 的
+    /// 像素尺寸变了却不刷新,封面就按旧 cell 比例铺 —— 字号变小占一小块、变大溢出被裁。
+    ///
+    /// 这里用 `window_size()`(TIOCGWINSZ syscall,不抢 stdin)重算 cell 像素,变了才重建
+    /// picker + 清 `protocols` 逼下一帧按新字号重编码。**不能**改用 `from_query_stdio` 重探:
+    /// 它往 stdio 写 escape 读响应,会跟事件循环抢 stdin 把按键 / resize 事件吞掉。
+    /// window_size 的像素字段终端可能不实现(返 0),拿不到就保留旧值静默跳过。
+    fn refresh_picker_font(&mut self) {
+        let Ok(ws) = crossterm::terminal::window_size() else {
+            return;
+        };
+        if ws.columns == 0 || ws.rows == 0 || ws.width == 0 || ws.height == 0 {
+            return;
+        }
+        let font = (ws.width / ws.columns, ws.height / ws.rows);
+        if font == self.picker.font_size() {
+            return;
+        }
+        self.picker = rebuild_picker(&self.picker, font);
+        // 清缓存协议:字号变但 cell 数恰好没变时 dims 不变、不会自动触发重编码,清掉逼重编。
+        self.state.covers.protocols.borrow_mut().clear();
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
@@ -715,6 +744,17 @@ impl App {
     }
 }
 
+/// 按新 cell 字号重建 `picker`,**保留原协议类型**。
+///
+/// `Picker` 没有 font_size setter,只能重建;而 `from_fontsize` 会把协议从环境重新猜(kitty
+/// 探测依赖 stdio query,重建时拿不到),默认落 halfblocks。故必须 `set_protocol_type` 把原
+/// 协议塞回,否则 resize 后封面从 kitty/sixel 悄悄降级成半块字符。抽成自由函数以便单测该不变量。
+fn rebuild_picker(old: &Picker, font: (u16, u16)) -> Picker {
+    let mut picker = Picker::from_fontsize(font);
+    picker.set_protocol_type(old.protocol_type());
+    picker
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -735,6 +775,26 @@ mod tests {
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 回归:终端字号变化后重建 picker 必须**保留原协议类型 + 应用新字号**。
+    /// 若丢协议(`from_fontsize` 默认猜成 halfblocks),kitty/sixel 会悄悄降级成半块字符;
+    /// 若不换字号,封面按旧 cell 比例铺 —— 偏小占一小块 / 偏大被裁(本次修复的正题)。
+    #[test]
+    fn rebuild_picker_preserves_protocol_and_applies_font() {
+        use ratatui_image::picker::{Picker, ProtocolType};
+
+        let mut old = Picker::from_fontsize((8, 16));
+        old.set_protocol_type(ProtocolType::Kitty);
+
+        let rebuilt = super::rebuild_picker(&old, (10, 22));
+
+        assert_eq!(rebuilt.font_size(), (10, 22), "新 cell 字号应生效");
+        assert_eq!(
+            rebuilt.protocol_type(),
+            ProtocolType::Kitty,
+            "协议须保留为 kitty,不能被 from_fontsize 降级成 halfblocks",
+        );
     }
 
     /// 喂一个带 Ctrl 的 Press 键给 App(走真实事件入口)。
