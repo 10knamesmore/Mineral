@@ -8,14 +8,12 @@
 //! decay(衰减,播放中向更低目标回落 = 余韵)、release(释音,暂停时落向 0);
 //! sustain 即 FFT 实时值本身,无旋钮。
 
-use serde::Deserialize;
+use mineral_config_macros::config_section;
 
 /// 频谱面板配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct SpectrumConfig {
     /// FFT 窗大小(样本)。**外键**:`audio.tap_capacity` 须 ≥ 2 × 此值。
     fft_size: usize,

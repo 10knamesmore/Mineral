@@ -357,6 +357,8 @@ pub enum ResolveValue {
 }
 
 /// 歌单在脚本侧的轻量投影(不携带曲目,曲目另经 `library.tracks` 拉)。
+///
+/// `library.playlists` 回调与 curate transform 入参共用这一投影。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistBrief {
     /// 歌单 id(Lua 侧用 `qualified()` 字符串)。
@@ -367,6 +369,53 @@ pub struct PlaylistBrief {
 
     /// 曲目数。
     pub track_count: u64,
+
+    /// 简介(拿不到为空串,与 [`mineral_model::Playlist`] 同约定)。
+    pub description: String,
+
+    /// 播放量;拿不到为 `None`(Lua 侧缺席为 nil)。
+    pub play_count: Option<u64>,
+
+    /// 收藏 / 订阅数;拿不到为 `None`(Lua 侧缺席为 nil)。
+    pub subscriber_count: Option<u64>,
+}
+
+impl From<&mineral_model::Playlist> for PlaylistBrief {
+    fn from(playlist: &mineral_model::Playlist) -> Self {
+        Self {
+            id: playlist.id.clone(),
+            name: playlist.name.clone(),
+            track_count: playlist.track_count,
+            description: playlist.description.clone(),
+            play_count: playlist.play_count,
+            subscriber_count: playlist.subscriber_count,
+        }
+    }
+}
+
+/// curate transform 采纳的一条歌单条目。daemon 侧凭 `id` 对回真实
+/// `Playlist`(未知 id 丢弃、重复取首见,在 daemon 落地)。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CuratedEntry {
+    /// 目标歌单(qualified id 解析回来)。
+    pub id: mineral_model::PlaylistId,
+
+    /// 展示名覆盖;`None` = 保留原名。
+    pub name: Option<String>,
+
+    /// 简介覆盖;`None` = 保留原文。
+    pub description: Option<String>,
+}
+
+/// 一次 curate 往返的结果。
+#[derive(Clone, Debug, PartialEq)]
+pub enum CurateOutcome {
+    /// 原列表透传:无函数注册(常态,非错误)/ 函数失败 / 超时(fail-open,
+    /// 歌单不因脚本 bug 消失)。
+    Identity,
+
+    /// transform 采纳:省略 = 隐藏,顺序 = 展示序,`name`/`description` 可覆盖。
+    Curated(Vec<CuratedEntry>),
 }
 
 /// 脚本线程主循环消费的信封:事件投递、动作调用或停机。
@@ -412,6 +461,25 @@ pub(crate) enum ScriptMsg {
 
         /// 裁决回执(接收端超时放弃时静默丢)。
         reply: tokio::sync::oneshot::Sender<crate::hooks::HookDecision>,
+    },
+
+    /// 跑一级 curate transform(config `sources` 摘出的函数),回执采纳结果。
+    CuratePlaylists {
+        /// `Some` = per-source 函数(按源名取);`None` = 跨源函数(合并列表)。
+        source: Option<mineral_model::SourceKind>,
+
+        /// 待 transform 的歌单投影(per-source 给该源全量,跨源给合并列表)。
+        briefs: Vec<PlaylistBrief>,
+
+        /// 采纳结果回执(接收端超时放弃时静默丢)。
+        reply: tokio::sync::oneshot::Sender<CurateOutcome>,
+    },
+
+    /// 拉取 per-source curate 函数的源名键集(daemon 对无对应 channel 的键
+    /// 打 warn 用),回执经 oneshot。
+    GetCurateKeys {
+        /// 键集回执(接收端 drop 时静默丢)。
+        reply: tokio::sync::oneshot::Sender<Vec<String>>,
     },
 
     /// 渲染一个复制模板(config `copy.templates[index]` 的函数),结果经
@@ -577,6 +645,79 @@ impl ScriptSender {
                 HookDecision::Continue
             }
         }
+    }
+
+    /// 跑一级 curate transform 并等采纳结果,墙钟超时透传。
+    ///
+    /// 一切异常路径(未挂线程 / 线程退出 / 超时)都返回
+    /// [`CurateOutcome::Identity`] —— transform 失败不致命,原列表照常展示,
+    /// 超时与线程退出各记一条 warn。
+    ///
+    /// # Params:
+    ///   - `source`: `Some` = per-source 函数;`None` = 跨源函数(合并列表)
+    ///   - `briefs`: 待 transform 的歌单投影
+    ///   - `timeout`: 软超时(配置 `script.hook_timeout_ms`,与拦截 hook 同刻度)
+    ///
+    /// # Return:
+    ///   采纳结果。
+    pub async fn curate_playlists(
+        &self,
+        source: Option<mineral_model::SourceKind>,
+        briefs: Vec<PlaylistBrief>,
+        timeout: std::time::Duration,
+    ) -> CurateOutcome {
+        // SourceKind 是 Copy;name() 给日志用。
+        let label = source.map_or("<merged>", |s| s.name());
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if self
+            .try_send(ScriptMsg::CuratePlaylists {
+                source,
+                briefs,
+                reply,
+            })
+            .is_err()
+        {
+            // 无脚本线程:transform 天然不存在,静默透传(不是异常)。
+            return CurateOutcome::Identity;
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_dropped)) => {
+                mineral_log::warn!(
+                    target: "script",
+                    source = label,
+                    "脚本线程退出,curate 透传"
+                );
+                CurateOutcome::Identity
+            }
+            Err(_elapsed) => {
+                mineral_log::warn!(
+                    target: "script",
+                    source = label,
+                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    "curate transform 超时,透传"
+                );
+                CurateOutcome::Identity
+            }
+        }
+    }
+
+    /// 拉取 per-source curate 函数的源名键集(daemon 启动时对无对应 channel
+    /// 的键打 warn 用)。
+    ///
+    /// 未挂 / 线程已退出时,回执立即就绪为空集。
+    ///
+    /// # Return:
+    ///   oneshot 接收端;`await` 得到源名键集(不含跨源函数)。
+    #[must_use]
+    pub fn curate_source_keys(&self) -> tokio::sync::oneshot::Receiver<Vec<String>> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if let Err(failed) = self.try_send(ScriptMsg::GetCurateKeys { reply })
+            && let ScriptMsg::GetCurateKeys { reply } = *failed
+        {
+            let _ = reply.send(Vec::new());
+        }
+        rx
     }
 
     /// 调用一个具名动作,返回结果回执的接收端。

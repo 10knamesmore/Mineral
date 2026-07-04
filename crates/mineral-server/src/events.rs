@@ -1,8 +1,9 @@
 //! scheduler 任务事件的消化与分流。
 //!
 //! 每 tick 一次 drain:`PlayUrlReady` / `LyricsReady` 在 server 内部消化
-//! (进 PlayerSync 的 current 重段,不转发);`PlaylistWriteDone` 成功时先触发
-//! 缓存收敛再转发;其余原样进 client_events buffer 等 client 拉走。
+//! (进 PlayerSync 的 current 重段,不转发);`PlaylistsFetched` 进歌单库
+//! 聚合态(client 只见出口变换后的 LibrarySnapshot);`PlaylistWriteDone`
+//! 成功时先触发缓存收敛再转发;其余原样进 client_events buffer 等 client 拉走。
 
 use mineral_model::{PlayUrl, Song, SongId};
 use mineral_task::{ChannelFetchKind, PlaylistWriteOp, Priority, TaskEvent, TaskKind};
@@ -26,6 +27,11 @@ impl PlayerCore {
                 }
                 TaskEvent::LyricsReady { song_id, lyrics } => {
                     self.handle_lyrics_ready(&song_id, lyrics);
+                }
+                // 逐源列表进聚合态,client 只见出口变换后的合并快照
+                // (LibrarySnapshot,由管线异步推)。
+                TaskEvent::PlaylistsFetched { source, playlists } => {
+                    self.library_concluded(source, Some(playlists));
                 }
                 TaskEvent::PlaylistWriteDone { op, error } => {
                     if error.is_none() {
@@ -53,20 +59,12 @@ impl PlayerCore {
                 );
             }
             PlaylistWriteOp::Create { source, .. } => {
-                self.inner.scheduler.submit(
-                    TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source: *source }),
-                    Priority::User,
-                );
+                self.submit_my_playlists(*source);
             }
             PlaylistWriteOp::Delete { id }
             | PlaylistWriteOp::Rename { id, .. }
             | PlaylistWriteOp::SetDescription { id, .. } => {
-                self.inner.scheduler.submit(
-                    TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-                        source: id.namespace(),
-                    }),
-                    Priority::User,
-                );
+                self.submit_my_playlists(id.namespace());
             }
         }
     }

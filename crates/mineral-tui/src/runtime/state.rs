@@ -370,19 +370,20 @@ impl AppState {
     /// 只剩 playlists / tracks / liked_ids 三类。
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
-            TaskEvent::PlaylistsFetched { source, playlists } => {
-                // 按 source 替换而非追加:歌单写操作成功后 server 会重拉同源列表,
-                // 盲 extend 会让歌单重复(该源条目挪到尾部的顺序代价可接受)
-                self.library
-                    .playlists
-                    .retain(|p| p.data.id.namespace() != *source);
-                self.library
-                    .playlists
-                    .extend(playlists.iter().cloned().map(|data| PlaylistView { data }));
+            TaskEvent::LibrarySnapshot { playlists } => {
+                // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
+                // 变换后),client 不再自行按源拼接。
+                self.library.playlists = playlists
+                    .iter()
+                    .cloned()
+                    .map(|data| PlaylistView { data })
+                    .collect();
                 if self.browse.nav.playlist.sel() >= self.library.playlists.len() {
                     self.browse.nav.playlist.set_sel(0);
                 }
             }
+            // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
+            TaskEvent::PlaylistsFetched { .. } => {}
             TaskEvent::PlaylistDetailFetched { id, playlist } => {
                 // 歌单详情含元信息 + 曲目;library 与 detail 都只取曲目(歌单元信息走
                 // sidebar 列表那份 / detail 帧的 entity 占位)。
@@ -660,6 +661,40 @@ mod tests {
         s.playback.track = Some(song("z"));
         s.player.queue_sel = 2;
         assert_eq!(s.queue_current_index(), None, "在播曲不在队列时仍返回 None");
+        Ok(())
+    }
+
+    /// 合并快照整表替换:重复到达不追加不挪尾,顺序由 server 权威;
+    /// 选中超界夹回 0。
+    #[test]
+    fn library_snapshot_replaces_whole_table() -> color_eyre::Result<()> {
+        use mineral_model::{Playlist, PlaylistId};
+        use mineral_task::TaskEvent;
+        let pl = |id: &str, name: &str| {
+            Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .build()
+        };
+        let mut s = AppState::test_default()?;
+        s.apply(&TaskEvent::LibrarySnapshot {
+            playlists: vec![pl("p1", "甲"), pl("p2", "乙")],
+        });
+        let names = |s: &AppState| {
+            s.library
+                .playlists
+                .iter()
+                .map(|p| p.data.name.clone())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(names(&s), vec!["甲", "乙"]);
+        s.browse.nav.playlist.set_sel(1);
+        // 新快照(重排 + 藏掉一个)整表替换:无重复、无挪尾,超界选中夹回 0。
+        s.apply(&TaskEvent::LibrarySnapshot {
+            playlists: vec![pl("p2", "乙")],
+        });
+        assert_eq!(names(&s), vec!["乙"], "整表替换,不残留旧条目");
+        assert_eq!(s.browse.nav.playlist.sel(), 0, "选中超界夹回");
         Ok(())
     }
 

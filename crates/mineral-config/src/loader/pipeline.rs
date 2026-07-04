@@ -5,10 +5,13 @@ use std::path::Path;
 use color_eyre::eyre::eyre;
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 
+use crate::loader::lua_util::table_at;
 use crate::loader::merge::deep_merge;
 use crate::loader::stub::inject_noop_host;
 use crate::loader::warning::ConfigWarning;
-use crate::schema::{COPY_TEMPLATE_FNS, Config};
+use crate::schema::{
+    COPY_TEMPLATE_FNS, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS, Config,
+};
 
 /// 加载用户配置。用户 `config.lua` 的任何错误降级为纯默认 + 一条 [`ConfigWarning`];
 /// 仅当内置 `default.lua` 损坏(程序员错误,守卫测试拦截)才返回 `Err`。
@@ -81,7 +84,7 @@ fn load_on(lua: &Lua, user_path: &Path) -> color_eyre::Result<(Config, Vec<Confi
     };
 
     let merged = deep_merge(lua, default_table.clone(), user)?;
-    extract_copy_templates(lua, &merged)?;
+    extract_lua_fns(lua, &merged)?;
     match from_lua_table(merged) {
         Ok(config) => Ok((config, warnings, true)),
         Err(warning) => {
@@ -92,23 +95,28 @@ fn load_on(lua: &Lua, user_path: &Path) -> color_eyre::Result<(Config, Vec<Confi
     }
 }
 
-/// 把 `tui.copy.templates[i].template`(Lua function,serde 落不了型)从配置表里
-/// 摘出,按数组序存进 VM named registry(键 [`COPY_TEMPLATE_FNS`]);表上的
-/// `template` 字段移除,`key`/`label`/`context` 留下进常规落型。client 渲染菜单
-/// 项与 daemon 取函数执行靠**数组下标对位**(两边 eval 的是同一份 config)。
-/// 顺手给 `templates` 表挂 array metatable——空 Lua 表经 serde 默认序列化成
-/// map `{}`,落不进 `Vec`,挂上才走 `[]`。**所有 `from_lua_table` 调用点之前都
-/// 必须过这里**(默认表的空 `templates` 同样需要 metatable 修正)。
+/// 把配置表里所有 Lua function 字段摘进 VM named registry(serde 落不了型)。
+/// **所有 `from_lua_table` 调用点之前都必须过这里**——铁律只锚在此一处,
+/// 新增函数字段的提取器挂进来,不要在调用点单独加。
 ///
-/// 非 function 的 `template` 值不摘——留在表里让落型报 unknown field(带路径),
-/// 比静默吞掉好定位。配置整体落型失败回落默认时 registry 里可能残留已摘函数,
-/// 但默认配置 `templates` 为空,无下标触达,无害。
+/// 各提取器共同语义:非 function 的值不摘——留在表里让落型报 unknown field
+/// (带路径),比静默吞掉好定位。配置整体落型失败回落默认时 registry 里可能
+/// 残留已摘函数,但默认配置不声明这些字段,无键触达,无害。
+fn extract_lua_fns(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    extract_copy_templates(lua, merged)?;
+    extract_playlist_transforms(lua, merged)?;
+    Ok(())
+}
+
+/// 把 `tui.copy.templates[i].template` 从配置表里摘出,按数组序存进 VM named
+/// registry(键 [`COPY_TEMPLATE_FNS`]);表上的 `template` 字段移除,
+/// `key`/`label`/`context` 留下进常规落型。client 渲染菜单项与 daemon 取函数
+/// 执行靠**数组下标对位**(两边 eval 的是同一份 config)。顺手给 `templates`
+/// 表挂 array metatable——空 Lua 表经 serde 默认序列化成 map `{}`,落不进
+/// `Vec`,挂上才走 `[]`(默认表的空 `templates` 同样需要 metatable 修正)。
 fn extract_copy_templates(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
     let fns = lua.create_table()?;
-    if let Ok(tui) = merged.get::<Table>("tui")
-        && let Ok(copy) = tui.get::<Table>("copy")
-        && let Ok(templates) = copy.get::<Table>("templates")
-    {
+    if let Some(templates) = table_at!(merged, tui.copy.templates) {
         templates.set_metatable(Some(lua.array_metatable()));
         for i in 1..=templates.raw_len() {
             let Ok(item) = templates.get::<Table>(i) else {
@@ -124,6 +132,47 @@ fn extract_copy_templates(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 把两级 `curate_playlists`(Lua function)从 `sources` 表里摘进 VM named
+/// registry:per-source(`sources.<name>.curate_playlists`)按 **source 名**
+/// 存进 [`CURATE_PLAYLISTS_SOURCE_FNS`] 表;跨源(`sources.curate_playlists`,
+/// 合并列表 transform)存 [`CURATE_PLAYLISTS_MERGED_FN`](未声明为 Nil)。
+///
+/// per-source 条目摘完若变空(该源无配置段,如 `local` 只写了 curate),条目
+/// 一并移除——不要求源有 schema 段,`deny_unknown_fields` 不会拒它。拼错的
+/// 源名在此无从校验(config crate 不知运行期 channel 集),由 daemon 启动时
+/// 对无对应 channel 的键打 warn。
+fn extract_playlist_transforms(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    let fns = lua.create_table()?;
+    let mut merged_fn = Value::Nil;
+    if let Some(sources) = table_at!(merged, sources) {
+        if let Ok(f) = sources.get::<Function>("curate_playlists") {
+            merged_fn = Value::Function(f);
+            sources.raw_set("curate_playlists", Value::Nil)?;
+        }
+        // 先收集再改:迭代中删 sources 自身的键是未定义行为。
+        let mut emptied = Vec::<Value>::new();
+        for pair in sources.pairs::<Value, Value>() {
+            let (key, value) = pair?;
+            let Value::Table(section) = value else {
+                continue;
+            };
+            if let Ok(f) = section.get::<Function>("curate_playlists") {
+                fns.raw_set(key.clone(), f)?;
+                section.raw_set("curate_playlists", Value::Nil)?;
+                if section.is_empty() {
+                    emptied.push(key);
+                }
+            }
+        }
+        for key in emptied {
+            sources.raw_set(key, Value::Nil)?;
+        }
+    }
+    lua.set_named_registry_value(CURATE_PLAYLISTS_SOURCE_FNS, fns)?;
+    lua.set_named_registry_value(CURATE_PLAYLISTS_MERGED_FN, merged_fn)?;
+    Ok(())
+}
+
 impl Config {
     /// 纯默认配置(eval `default.lua`)。仅守卫测试与降级路径用;业务正常路径走 [`load`]。
     ///
@@ -132,7 +181,7 @@ impl Config {
     pub fn defaults() -> color_eyre::Result<Self> {
         let lua = new_vm()?;
         let table = eval_default(&lua)?;
-        extract_copy_templates(&lua, &table)?;
+        extract_lua_fns(&lua, &table)?;
         from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))
     }
 }
@@ -151,7 +200,7 @@ fn finalize_default(
     default_table: Table,
     warnings: Vec<ConfigWarning>,
 ) -> color_eyre::Result<(Config, Vec<ConfigWarning>)> {
-    extract_copy_templates(lua, &default_table)?;
+    extract_lua_fns(lua, &default_table)?;
     let config = from_lua_table(default_table)
         .map_err(|w| eyre!("default.lua 无法落成 Config(应被守卫测试拦截):{w}"))?;
     Ok((config, warnings))
@@ -289,6 +338,85 @@ mod tests {
         arg.set("title", "Song")?;
         let got: String = f1.call(arg)?;
         assert_eq!(got, "Song!", "registry 函数按 1-based 下标对位且可调用");
+        Ok(())
+    }
+
+    /// 两级 curate_playlists 函数被摘进各自 registry(per-source 按源名对位、
+    /// 跨源独立键),摘除后 sources 段照常落型。
+    #[test]
+    fn curate_playlists_extracted_to_registry() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "curate",
+            r#"return { sources = {
+                bilibili = { curate_playlists = function(lists) return { lists[1] } end },
+                curate_playlists = function(all) return all end,
+            } }"#,
+        )?;
+        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        assert_eq!(
+            *cfg.sources().bilibili().timeout_secs(),
+            100,
+            "sources 段其余字段仍默认"
+        );
+        let lua = vm.ok_or_else(|| eyre!("eval 成功必须交还 VM"))?;
+        let fns: Table = lua.named_registry_value(super::CURATE_PLAYLISTS_SOURCE_FNS)?;
+        let per_source: Function = fns.get("bilibili")?;
+        let lists = lua.create_table()?;
+        lists.push("a")?;
+        lists.push("b")?;
+        let kept: Table = per_source.call(lists)?;
+        assert_eq!(kept.raw_len(), 1, "per-source 函数按源名对位且可调用");
+        let merged: Function = lua.named_registry_value(super::CURATE_PLAYLISTS_MERGED_FN)?;
+        let all = lua.create_table()?;
+        all.push("x")?;
+        let out: Table = merged.call(all)?;
+        assert_eq!(out.raw_len(), 1, "跨源函数入独立键且可调用");
+        Ok(())
+    }
+
+    /// 无配置段的源(如 local)只写 curate_playlists:函数照摘,摘完变空的
+    /// 条目一并移除,不触发 unknown field 回落。
+    #[test]
+    fn curate_playlists_sectionless_entry_removed() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "curatelocal",
+            r#"return { sources = {
+                ["local"] = { curate_playlists = function(lists) return lists end },
+            } }"#,
+        )?;
+        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        std::fs::remove_file(&path)?;
+        assert!(
+            warnings.is_empty(),
+            "空条目应被移除而非报 unknown field,实得 {warnings:?}"
+        );
+        assert_eq!(*cfg.audio().volume(), 100);
+        let lua = vm.ok_or_else(|| eyre!("eval 成功必须交还 VM"))?;
+        let fns: Table = lua.named_registry_value(super::CURATE_PLAYLISTS_SOURCE_FNS)?;
+        assert!(
+            fns.get::<Function>("local").is_ok(),
+            "无段源的函数一样入 registry"
+        );
+        Ok(())
+    }
+
+    /// curate_playlists 不是函数(如字符串):留在表上,落型报 unknown field
+    /// 带路径回落默认,不静默吞掉。
+    #[test]
+    fn curate_playlists_non_function_rejected() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "curatebad",
+            r#"return { sources = { bilibili = { curate_playlists = "keep" } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert_eq!(*cfg.audio().volume(), 100, "回落默认");
+        assert!(
+            matches!(warnings.as_slice(), [ConfigWarning::Deserialize { .. }]),
+            "非函数值应报落型告警,实得 {warnings:?}"
+        );
         Ok(())
     }
 

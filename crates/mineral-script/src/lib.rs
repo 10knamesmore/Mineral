@@ -22,8 +22,8 @@ pub use mlua;
 pub use hooks::{HookContext, HookDecision, HookKind, RewriteSpec};
 pub use host::{ScriptHost, install_api, seed_web_url_templates};
 pub use message::{
-    ActionOutcome, PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd,
-    ScriptEvent, ScriptSender, TrackFinishedReason,
+    ActionOutcome, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey, PropValue, QueryId,
+    ResolveValue, ScriptCmd, ScriptEvent, ScriptSender, TrackFinishedReason,
 };
 pub use proc::{SpawnId, SpawnResult, SpawnSpec, run_child};
 pub use runtime::ScriptRuntime;

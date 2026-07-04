@@ -1,13 +1,11 @@
 //! 预取段(挂在 `TuiConfig` 下):各 lookahead 半径 + 去抖。
 
-use serde::Deserialize;
+use mineral_config_macros::config_section;
 
 /// 预取配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct PrefetchConfig {
     /// 通用预取半径(覆盖视口 + 跳跃 lookahead)。
     radius: usize,

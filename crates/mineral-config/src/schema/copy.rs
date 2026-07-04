@@ -5,6 +5,7 @@
 //! `key`/`label`/`context` 三个展示字段。**两边靠数组下标对位**:client 渲染菜单
 //! 项与 daemon 取函数执行用的是同一份 config 的同一次 eval 序。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 摘走的模板函数数组在 VM named registry 里的键(daemon 脚本运行时按下标取用)。
@@ -13,18 +14,14 @@ pub const COPY_TEMPLATE_FNS: &str = "mineral.copy_template_fns";
 /// copy 配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct CopyConfig {
     /// 自定义复制模板,追加在复制菜单内置项之后(数组整体替换)。
     templates: Vec<CopyTemplate>,
 }
 
 /// 一个自定义复制模板(的展示侧;渲染函数本体留在 VM,见模块文档)。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct CopyTemplate {
     /// 菜单快捷字母(单字符)。省略 = 仅导航 + Enter 可达;与内置项同字母时
     /// 顶掉内置的快捷位;用户项之间后者胜。

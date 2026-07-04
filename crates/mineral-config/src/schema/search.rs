@@ -1,14 +1,12 @@
 //! 搜索段(挂在 `TuiConfig` 下):本地过滤搜索的行为旋钮 + channel 搜索的 source/kind 白名单。
 
+use mineral_config_macros::config_section;
 use mineral_model::SearchKind;
-use serde::Deserialize;
 
 /// 搜索配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct SearchConfig {
     /// Playlists 视图搜索是否穿透到歌单内歌曲(总开关)。
     deep: bool,
@@ -33,9 +31,7 @@ pub struct SearchConfig {
 ///
 /// 歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
 /// 单曲分 = max(name 权重 × 歌名分, artist 权重 × 艺人分, album 权重 × 专辑分)。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct DeepWeights {
     /// 歌名命中分折扣。
     name: f32,

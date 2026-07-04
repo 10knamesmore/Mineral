@@ -270,16 +270,23 @@ mineral.queue = {}
 ---@param on_songs fun(songs: mineral.Song[], err: string|nil): nil
 function mineral.queue.list(on_songs) end
 
---- 歌单的轻量投影(`library.playlists` 出参;曲目另经 `library.tracks` 拉)。
+--- 歌单的轻量投影(`library.playlists` 出参与 `curate_playlists` 入参共用;
+--- 曲目另经 `library.tracks` 拉)。
 ---@class mineral.PlaylistBrief
 ---@field id string  歌单 id(`namespace:value`)
 ---@field name string  歌单名
 ---@field track_count integer  曲目数
+---@field description string  简介(拿不到为空串)
+---@field play_count integer|nil  播放量(拿不到为 nil)
+---@field subscriber_count integer|nil  收藏 / 订阅数(拿不到为 nil)
+---@field source string  来源名(如 "bilibili";跨源函数里免解析 id)
 
 ---@class mineral.library
 mineral.library = {}
 
---- 读用户歌单列表(跨源聚合;某源拉取失败跳过该源,不整体失败)。
+--- 读用户歌单列表(daemon 聚合快照,与 UI 所见严格一致——已过
+--- `curate_playlists` 出口变换;某源拉取失败该源空贡献,不整体失败)。
+--- daemon 启动早期(初始拉取未齐)回调会等到全部源就绪才触发,不会挂死。
 ---@param on_playlists fun(playlists: mineral.PlaylistBrief[], err: string|nil): nil
 function mineral.library.playlists(on_playlists) end
 

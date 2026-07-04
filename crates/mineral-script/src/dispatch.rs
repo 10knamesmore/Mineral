@@ -61,6 +61,17 @@ pub(crate) fn run_loop(
                 // 回执接收端 drop(daemon 侧超时放弃)时静默丢。
                 let _ = reply.send(run_hooks(lua, host, watchdog, kind, &ctx));
             }
+            Ok(ScriptMsg::CuratePlaylists {
+                source,
+                briefs,
+                reply,
+            }) => {
+                // 回执接收端 drop(daemon 侧超时放弃)时静默丢。
+                let _ = reply.send(run_curate(lua, host, watchdog, source.as_ref(), &briefs));
+            }
+            Ok(ScriptMsg::GetCurateKeys { reply }) => {
+                let _ = reply.send(curate_source_keys(lua));
+            }
             Ok(ScriptMsg::RenderCopyTemplate { index, ctx, reply }) => {
                 let _ = reply.send(render_copy_template(lua, watchdog, index, &ctx));
             }
@@ -154,17 +165,10 @@ fn resolve_query(
                 }
                 (mlua::Value::Table(list), mlua::Value::Nil)
             }
-            ResolveValue::Playlists(playlists) => {
-                let list = lua.create_table()?;
-                for (i, p) in playlists.iter().enumerate() {
-                    let entry = lua.create_table()?;
-                    entry.set("id", p.id.qualified())?;
-                    entry.set("name", p.name.clone())?;
-                    entry.set("track_count", p.track_count)?;
-                    list.set(i.wrapping_add(1), entry)?;
-                }
-                (mlua::Value::Table(list), mlua::Value::Nil)
-            }
+            ResolveValue::Playlists(playlists) => (
+                mlua::Value::Table(briefs_table(lua, playlists)?),
+                mlua::Value::Nil,
+            ),
             ResolveValue::Spawn(result) => {
                 let entry = lua.create_table()?;
                 // 被信号终止(含 kill)无退出码:字段缺席,Lua 读出 nil。
@@ -280,18 +284,140 @@ fn run_hooks(
             let func = lua.registry_value::<mlua::Function>(key)?;
             call_guarded::<_, mlua::Value>(lua, watchdog, &func, args)
         });
-        match outcome {
-            Ok(value) => match interpret_hook_return(&value) {
-                Ok(HookDecision::Continue) => {}
-                Ok(decision) => return decision,
-                Err(msg) => {
-                    report_callback_failure(host, kind.as_str(), &mlua::Error::runtime(msg));
-                }
-            },
+        match outcome.and_then(|value| interpret_hook_return(&value)) {
+            Ok(HookDecision::Continue) => {}
+            Ok(decision) => return decision,
             Err(e) => report_callback_failure(host, kind.as_str(), &e),
         }
     }
     HookDecision::Continue
+}
+
+/// `PlaylistBrief` 在 Lua 侧的投影:`library.playlists` 回调与 curate
+/// transform 入参共用。id 用 `qualified()`;Option 字段缺席为 nil;
+/// `source` 是便利字段(跨源函数里免解析 id)。
+fn brief_table(lua: &Lua, brief: &crate::message::PlaylistBrief) -> mlua::Result<mlua::Table> {
+    let entry = lua.create_table()?;
+    entry.set("id", brief.id.qualified())?;
+    entry.set("name", brief.name.clone())?;
+    entry.set("track_count", brief.track_count)?;
+    entry.set("description", brief.description.clone())?;
+    entry.set("play_count", brief.play_count)?;
+    entry.set("subscriber_count", brief.subscriber_count)?;
+    entry.set("source", brief.id.namespace().name())?;
+    Ok(entry)
+}
+
+/// 一组 `PlaylistBrief` 投影成 Lua 数组(按序)。
+fn briefs_table(lua: &Lua, briefs: &[crate::message::PlaylistBrief]) -> mlua::Result<mlua::Table> {
+    let list = lua.create_table()?;
+    for (i, brief) in briefs.iter().enumerate() {
+        list.raw_set(i.wrapping_add(1), brief_table(lua, brief)?)?;
+    }
+    Ok(list)
+}
+
+/// 跑一级 curate transform:registry 取函数(缺席 = 常态透传),投影入参,
+/// 看门狗保护执行,返回值解释成采纳条目。函数失败 / 返回非法形态一律
+/// [`CurateOutcome::Identity`](fail-open,歌单不因脚本 bug 消失)+ 记日志
+/// + error toast。
+fn run_curate(
+    lua: &Lua,
+    host: &ScriptHost,
+    watchdog: &WatchdogConfig,
+    source: Option<&mineral_model::SourceKind>,
+    briefs: &[crate::message::PlaylistBrief],
+) -> crate::message::CurateOutcome {
+    use crate::message::CurateOutcome;
+    let Some(func) = curate_fn(lua, source) else {
+        return CurateOutcome::Identity;
+    };
+    let outcome = briefs_table(lua, briefs)
+        .and_then(|list| call_guarded::<_, mlua::Value>(lua, watchdog, &func, list))
+        .and_then(|value| interpret_curate_return(&value));
+    match outcome {
+        Ok(entries) => CurateOutcome::Curated(entries),
+        Err(e) => {
+            report_callback_failure(host, "curate_playlists", &e);
+            CurateOutcome::Identity
+        }
+    }
+}
+
+/// 从脚本返回值 table 取一个字段,错误带「哪个实体的哪个字段」上下文
+/// (mlua 原始错误链保留为 cause)。
+///
+/// # Params:
+///   - `table`: 返回值 table
+///   - `entity`: 实体描述(如 `"hook 返回值"` / `"curate 返回的第 2 条"`)
+///   - `field`: 字段名
+///
+/// # Return:
+///   字段值,类型不符时 `Err` 带上下文。
+fn lua_field<T: mlua::FromLua>(table: &mlua::Table, entity: &str, field: &str) -> mlua::Result<T> {
+    use mlua::ErrorContext;
+    table
+        .get::<T>(field)
+        .with_context(|_cause| format!("{entity}的 {field} 字段非法"))
+}
+
+/// 按级取 curate 函数:`Some(kind)` = per-source 表按源名索引;`None` = 跨源
+/// 独立键。registry 值缺席 / 该源无函数 → `None`(常态,不是错误)。
+fn curate_fn(lua: &Lua, source: Option<&mineral_model::SourceKind>) -> Option<mlua::Function> {
+    match source {
+        Some(kind) => lua
+            .named_registry_value::<mlua::Table>(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS)
+            .ok()?
+            .get::<mlua::Function>(kind.name())
+            .ok(),
+        None => lua
+            .named_registry_value::<mlua::Function>(mineral_config::CURATE_PLAYLISTS_MERGED_FN)
+            .ok(),
+    }
+}
+
+/// per-source curate 函数的源名键集(daemon 对无对应 channel 的键打 warn 用)。
+fn curate_source_keys(lua: &Lua) -> Vec<String> {
+    let Ok(fns) =
+        lua.named_registry_value::<mlua::Table>(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS)
+    else {
+        return Vec::new();
+    };
+    fns.pairs::<String, mlua::Value>()
+        .filter_map(|pair| pair.map(|(key, _value)| key).ok())
+        .collect::<Vec<String>>()
+}
+
+/// 把 curate 函数的 Lua 返回值解释成采纳条目;非法形态整体报 `Err`(按透传
+/// 处理)——逐条跳过会把「写错一条」放大成「歌单静默消失」,宁可全量透传。
+fn interpret_curate_return(value: &mlua::Value) -> mlua::Result<Vec<crate::message::CuratedEntry>> {
+    use mlua::ErrorContext;
+    let mlua::Value::Table(list) = value else {
+        return Err(mlua::Error::runtime(format!(
+            "curate_playlists 须返回歌单数组,实得 {}",
+            value.type_name()
+        )));
+    };
+    let mut entries = Vec::new();
+    for i in 1..=list.raw_len() {
+        let entity = format!("curate 返回的第 {i} 条");
+        let item = list
+            .get::<mlua::Table>(i)
+            .with_context(|_cause| format!("{entity}不是 table"))?;
+        let raw_id = item
+            .get::<String>("id")
+            .with_context(|_cause| format!("{entity}缺 id(隐藏请省略整条)"))?;
+        let id = crate::api::value::parse_playlist_id(&raw_id)
+            .with_context(|_cause| format!("{entity}的 id 非法"))?;
+        let name = lua_field::<Option<String>>(&item, &entity, "name")?;
+        let description = lua_field::<Option<String>>(&item, &entity, "description")?;
+        entries.push(crate::message::CuratedEntry {
+            id,
+            name,
+            description,
+        });
+    }
+    Ok(entries)
 }
 
 /// 拦截回调的 ctx table:`song`(最小投影)+ `url`(字符串)+
@@ -310,37 +436,29 @@ fn hook_ctx_table(
 }
 
 /// 把 hook 回调的 Lua 返回值解释成裁决;非法形态报 `Err`(按放行处理)。
-fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecision, String> {
+fn interpret_hook_return(value: &mlua::Value) -> mlua::Result<crate::hooks::HookDecision> {
     use crate::hooks::{HookDecision, RewriteSpec};
+    const ENTITY: &str = "hook 返回值";
     match value {
         mlua::Value::Nil | mlua::Value::Boolean(true) => Ok(HookDecision::Continue),
         mlua::Value::Boolean(false) => Ok(HookDecision::Skip {
             reason: "脚本跳过".to_owned(),
         }),
         mlua::Value::Table(table) => {
-            if let Some(reason) = table
-                .get::<Option<String>>("skip")
-                .map_err(|e| format!("hook 返回值 skip 字段非法: {e}"))?
-            {
+            if let Some(reason) = lua_field::<Option<String>>(table, ENTITY, "skip")? {
                 return Ok(HookDecision::Skip { reason });
             }
-            let new_url = table
-                .get::<Option<String>>("url")
-                .map_err(|e| format!("hook 返回值 url 字段非法: {e}"))?
+            let new_url = lua_field::<Option<String>>(table, ENTITY, "url")?
                 .map(|raw| {
                     raw.parse::<mineral_model::MediaUrl>()
-                        .map_err(|e| format!("hook 返回的 url 解析失败: {e}"))
+                        .map_err(|e| mlua::Error::runtime(format!("hook 返回的 url 解析失败: {e}")))
                 })
                 .transpose()?;
-            let new_quality = table
-                .get::<Option<String>>("quality")
-                .map_err(|e| format!("hook 返回值 quality 字段非法: {e}"))?
+            let new_quality = lua_field::<Option<String>>(table, ENTITY, "quality")?
                 .map(|raw| parse_bitrate(&raw))
                 .transpose()?;
             // Lua 侧 `headers = { {name, value}, ... }`(数组的 {name,value} 对);缺项的行丢弃。
-            let stream_headers = table
-                .get::<Option<Vec<Vec<String>>>>("headers")
-                .map_err(|e| format!("hook 返回值 headers 字段非法: {e}"))?
+            let stream_headers = lua_field::<Option<Vec<Vec<String>>>>(table, ENTITY, "headers")?
                 .map(|rows| {
                     rows.into_iter()
                         .filter_map(|row| {
@@ -352,9 +470,7 @@ fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecisi
                         })
                         .collect::<Vec<(String, String)>>()
                 });
-            let layout = table
-                .get::<Option<String>>("layout")
-                .map_err(|e| format!("hook 返回值 layout 字段非法: {e}"))?
+            let layout = lua_field::<Option<String>>(table, ENTITY, "layout")?
                 .map(|raw| parse_layout(&raw))
                 .transpose()?;
             if new_url.is_none()
@@ -362,9 +478,9 @@ fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecisi
                 && stream_headers.is_none()
                 && layout.is_none()
             {
-                return Err(
-                    "hook 返回 table 但无 url / quality / headers / layout / skip 字段".to_owned(),
-                );
+                return Err(mlua::Error::runtime(
+                    "hook 返回 table 但无 url / quality / headers / layout / skip 字段",
+                ));
             }
             Ok(HookDecision::Rewrite(RewriteSpec {
                 new_url,
@@ -373,27 +489,33 @@ fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecisi
                 layout,
             }))
         }
-        other => Err(format!(
+        other => Err(mlua::Error::runtime(format!(
             "hook 返回值须是 nil / boolean / table,实得 {}",
             other.type_name()
-        )),
+        ))),
     }
 }
 
 /// 按音质名解析 [`mineral_model::BitRate`](与 `as_str` 对偶);未知名报错。
-fn parse_bitrate(raw: &str) -> Result<mineral_model::BitRate, String> {
+fn parse_bitrate(raw: &str) -> mlua::Result<mineral_model::BitRate> {
     mineral_model::BitRate::ALL
         .into_iter()
         .find(|q| q.as_str() == raw)
-        .ok_or_else(|| format!("未知音质名 `{raw}`(可选:standard/higher/exhigh/lossless/hires)"))
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "未知音质名 `{raw}`(可选:standard/higher/exhigh/lossless/hires)"
+            ))
+        })
 }
 
 /// 按容器布局名解析 [`mineral_model::StreamLayout`](与 serde snake_case 对偶);未知名报错。
-fn parse_layout(raw: &str) -> Result<mineral_model::StreamLayout, String> {
+fn parse_layout(raw: &str) -> mlua::Result<mineral_model::StreamLayout> {
     match raw {
         "contiguous" => Ok(mineral_model::StreamLayout::Contiguous),
         "chunked" => Ok(mineral_model::StreamLayout::Chunked),
-        other => Err(format!("未知 layout `{other}`(可选:contiguous / chunked)")),
+        other => Err(mlua::Error::runtime(format!(
+            "未知 layout `{other}`(可选:contiguous / chunked)"
+        ))),
     }
 }
 

@@ -2,14 +2,13 @@
 //!
 //! [`CoverStorageMode`] 与渲染层存储模式语义对齐,但保持解耦——接线处做映射。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 封面配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct CoverConfig {
     /// 封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
@@ -51,9 +50,7 @@ pub enum CoverStorageMode {
 /// kmeans 取色参数(挂在 `CoverConfig` 下)。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct KmeansConfig {
     /// 取色前先缩到的采样边长(像素);聚类只看颜色分布,无需全分辨率。
     sample_dim: u32,

@@ -282,10 +282,17 @@
 ---@field quality? "standard"|"higher"|"exhigh"|"lossless"|"hires" 下载音质,与播放音质相互独立
 ---@field dir? string 下载导出目录,绝对路径;省略 = 平台默认(~/Music/mineral)
 
+---歌单列表的呈现策展函数:只管呈现(挑选 / 命名 / 排序),动不了数据。
+---收歌单投影数组,返回要展示的条目:**省略 = 隐藏,顺序 = 展示序**,
+---`name` / `description` 改了即覆盖(其余字段改动忽略,`id` 是只读身份键)。
+---函数报错 / 超时 / 返回非法形态一律原列表透传(歌单不会因脚本 bug 消失)。
+---@alias mineral.CuratePlaylistsFn fun(lists: mineral.PlaylistBrief[]): mineral.PlaylistBrief[]
+
 ---音乐源。
 ---@class mineral.SourcesConfig
 ---@field netease? mineral.NeteaseSection 网易云
 ---@field bilibili? mineral.BilibiliSection 哔哩哔哩
+---@field curate_playlists? mineral.CuratePlaylistsFn 跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错
 
 ---网易云源的网络参数。
 ---@class mineral.NeteaseSection
@@ -293,6 +300,7 @@
 ---@field proxy? string|false 代理 URL(如 "socks5://127.0.0.1:1080" 或 "http://..."),或 false = 不走代理;不接受 true
 ---@field max_connections? integer 到网易云的最大并发连接数,0 = 不限
 ---@field color? string 来源徽标色:token 名(随主题联动)或 "#rrggbb"(固定色)
+---@field curate_playlists? mineral.CuratePlaylistsFn 该源歌单列表的呈现策展(过滤/改名/重排)
 
 ---哔哩哔哩源的网络参数。
 ---@class mineral.BilibiliSection
@@ -300,6 +308,7 @@
 ---@field proxy? string|false 代理 URL(如 "socks5://127.0.0.1:1080" 或 "http://..."),或 false = 不走代理;不接受 true
 ---@field max_connections? integer 到 B站的最大并发连接数,0 = 不限
 ---@field color? string 来源徽标色:token 名或 "#rrggbb"(默认 B站品牌粉)
+---@field curate_playlists? mineral.CuratePlaylistsFn 该源歌单(= 收藏夹)列表的呈现策展(过滤/改名/重排)
 
 ---daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动;
 ---改后需重启 daemon 生效。

@@ -5,6 +5,7 @@
 //! 字段集 = 内建动作展开后的稳定命令名;每字段值为单键或键数组(数组整体替换)。
 //! 键字符串 → 和弦的解析复用 [`crate::keys::KeyChord::parse`],不在此重复定义。
 
+use mineral_config_macros::config_section;
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
@@ -15,9 +16,7 @@ use crate::keys::KeyChord;
 /// 字段集与渲染层内建键表一一对应(无参动作直名;带参动作按方向/幅度展开)。
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取(如 `keys.play_pause()`)。
 /// 本段只承载强类型绑定;把命令名 + 步长参数组装成可执行动作是 client 接线的事。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct KeysConfig {
     /// 暂停 / 恢复。
     play_pause: KeyBinding,

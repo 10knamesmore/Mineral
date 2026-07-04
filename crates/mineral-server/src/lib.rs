@@ -23,6 +23,7 @@ mod events;
 mod favorites;
 mod gapless;
 mod hook_bridge;
+mod library;
 mod media;
 mod media_cache;
 mod notify;

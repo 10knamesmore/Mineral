@@ -1,5 +1,6 @@
 //! 布局段(挂在 `TuiConfig` 下):完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽。
 
+use mineral_config_macros::config_section;
 use std::fmt;
 
 use num_traits::ToPrimitive;
@@ -9,9 +10,7 @@ use serde::de::{self, Deserializer, Visitor};
 /// 布局配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct LayoutConfig {
     /// 启用完整布局的最小终端宽(列);不足走紧凑布局。
     min_full_width: u16,

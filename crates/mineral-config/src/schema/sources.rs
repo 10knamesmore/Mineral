@@ -3,16 +3,22 @@
 //! 各源一个子段;`proxy` 用自定义反序列化表达「`false` = 禁用 / 字符串 = 代理 URL」,
 //! 不用 `#[serde(untagged)]`(避免其错误路径含糊)。
 
-use serde::Deserialize;
+use mineral_config_macros::{config_section, source_section};
 
 use crate::schema::theme::ColorRef;
+
+/// 摘走的 per-source `curate_playlists` 函数表在 VM named registry 里的键
+/// (表键 = source 名,daemon 脚本运行时按源名取用)。
+pub const CURATE_PLAYLISTS_SOURCE_FNS: &str = "mineral.curate_playlists_source_fns";
+
+/// 摘走的跨源 `curate_playlists`(`sources` 表上的函数,合并列表 transform)
+/// 在 VM named registry 里的键;未声明时为 Nil。
+pub const CURATE_PLAYLISTS_MERGED_FN: &str = "mineral.curate_playlists_merged_fn";
 
 /// 音乐源段聚合。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct SourcesConfig {
     /// 网易云源段。
     netease: NeteaseSection,
@@ -37,46 +43,19 @@ impl SourcesConfig {
 
 /// 哔哩哔哩源段。
 ///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。B站取流 URL(baseUrl)与 API 请求都要带
-/// `Referer`(见 header 通道),超时 / 代理 / 并发在此配。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct BilibiliSection {
-    /// 请求超时(秒)。
-    timeout_secs: u64,
-
-    /// 代理:`None`(Lua `false`)= 禁用;`Some(url)` = 代理地址。
-    #[serde(deserialize_with = "de_proxy")]
-    proxy: Option<String>,
-
-    /// 最大并发连接数(`0` = 不限)。
-    max_connections: usize,
-
-    /// 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
-    color: ColorRef,
-}
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。共用网络字段
+/// (timeout / proxy / max_connections / color)由 `#[source_section]` 注入,
+/// 源特有字段写在体内。B站取流 URL(baseUrl)与 API 请求都要带 `Referer`
+/// (见 header 通道)。
+#[source_section]
+pub struct BilibiliSection {}
 
 /// 网易云源段。
 ///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct NeteaseSection {
-    /// 请求超时(秒)。
-    timeout_secs: u64,
-
-    /// 代理:`None`(Lua `false`)= 禁用;`Some(url)` = 代理地址。
-    #[serde(deserialize_with = "de_proxy")]
-    proxy: Option<String>,
-
-    /// 最大并发连接数(`0` = 不限)。
-    max_connections: usize,
-
-    /// 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
-    color: ColorRef,
-}
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。共用网络字段由
+/// `#[source_section]` 注入,源特有字段写在体内。
+#[source_section]
+pub struct NeteaseSection {}
 
 /// 反序列化代理设置:Lua `false` → `None`(禁用);字符串 → `Some(url)`。
 /// `true` 等其他形态报错(经 `serde_path_to_error` 带路径)。

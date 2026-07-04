@@ -211,6 +211,29 @@ impl ScriptPumps {
             let player = player.clone();
             Arc::new(move || player.props_snapshot())
         };
+        // 拼错的 curate 源名在 config 层无从校验(config crate 不知运行期
+        // channel 集),这里对无对应 channel 的键打 warn 兜诊断。
+        {
+            let player = player.clone();
+            tokio::spawn(async move {
+                let Some(sender) = player.script_sender() else {
+                    return;
+                };
+                let Ok(keys) = sender.curate_source_keys().await else {
+                    return;
+                };
+                for key in keys {
+                    let source = mineral_model::SourceKind::from_name(&key);
+                    if player.channel_for(source).is_none() {
+                        mineral_log::warn!(
+                            target: "script",
+                            source = key,
+                            "curate_playlists 配了未知源(无对应 channel),该函数不会生效"
+                        );
+                    }
+                }
+            });
+        }
         tokio::spawn(async move {
             while let Some(event) = push_rx.recv().await {
                 // 无订阅者 send 失败即丢(advisory)。
@@ -439,29 +462,15 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             });
         }
         ScriptCmd::LibraryPlaylists { query } => {
-            // channel 调用可能打网络,spawn 不卡泵(后续 player 命令照常)。
-            let player = player.clone();
-            tokio::spawn(async move {
-                let mut briefs = Vec::new();
-                for channel in player.channels() {
-                    match channel.my_playlists().await {
-                        Ok(playlists) => {
-                            briefs.extend(playlists.into_iter().map(|p| PlaylistBrief {
-                                id: p.id,
-                                name: p.name,
-                                track_count: p.track_count,
-                            }))
-                        }
-                        Err(e) => mineral_log::warn!(
-                            target: "script",
-                            source = channel.source().name(),
-                            error = %e,
-                            "library.playlists: 该源拉取失败,跳过"
-                        ),
-                    }
-                }
-                resolve_ok(&player, query, ResolveValue::Playlists(briefs));
-            });
+            // 读聚合快照,不再逐源真拉:与 client 严格同一份出口变换结果。
+            // 初始完备前(daemon 启动早期)query 停靠,完备时刻由管线统一 resolve。
+            if let Some(snapshot) = player.library_snapshot_or_park(query) {
+                let briefs = snapshot
+                    .iter()
+                    .map(PlaylistBrief::from)
+                    .collect::<Vec<PlaylistBrief>>();
+                resolve_ok(player, query, ResolveValue::Playlists(briefs));
+            }
         }
         ScriptCmd::LibraryTracks { playlist, query } => {
             let player = player.clone();

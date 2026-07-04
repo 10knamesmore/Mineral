@@ -2,14 +2,12 @@
 //!
 //! 这些是领域/后端逻辑(非 TUI 交互手感):prev 分界、循环节拍、心跳、上报间隔等。
 
-use serde::Deserialize;
+use mineral_config_macros::config_section;
 
 /// daemon 段。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct DaemonConfig {
     /// gapless 预取提前量(毫秒):距当前曲结束多久开始预取下一首。
     gapless_prefetch_ms: u64,

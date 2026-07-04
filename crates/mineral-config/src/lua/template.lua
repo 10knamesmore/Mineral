@@ -21,4 +21,21 @@ return {
   --   theme = { accent = "#f38ba8" },
   --   keys = { play_pause = "x" },
   -- },
+
+  -- 示例:歌单列表呈现策展(省略 = 隐藏,顺序 = 展示序,name 可改;
+  -- 函数出错/超时原列表照常显示)。sources.curate_playlists 是跨源版,
+  -- 收合并列表(条目带 source 字段),可做全局排序。
+  -- sources = {
+  --   bilibili = {
+  --     curate_playlists = function(lists)
+  --       local keep = {}
+  --       for _, p in ipairs(lists) do
+  --         if p.track_count > 0 and p.name:match("^音乐") then
+  --           keep[#keep + 1] = p
+  --         end
+  --       end
+  --       return keep
+  --     end,
+  --   },
+  -- },
 }

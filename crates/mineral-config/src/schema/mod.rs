@@ -35,7 +35,10 @@ pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
 pub use script::ScriptConfig;
 pub use search::{DeepWeights, SearchConfig};
-pub use sources::{BilibiliSection, NeteaseSection, SourcesConfig};
+pub use sources::{
+    BilibiliSection, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS, NeteaseSection,
+    SourcesConfig,
+};
 pub use spectrum::SpectrumConfig;
 pub use theme::{ColorRef, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName};
 pub use toast::ToastConfig;

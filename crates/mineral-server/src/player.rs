@@ -89,6 +89,9 @@ pub(crate) struct Inner {
     /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
     pub(crate) client_events: Mutex<Vec<TaskEvent>>,
 
+    /// 用户歌单库聚合态(原始数据唯一事实源 + curate 出口变换,见 [`crate::library`])。
+    library: crate::library::Library,
+
     /// 收藏(♥)persist 读改写 + canonical 推送的串行锁:让 toggle 与 connect 期 sync_favorites
     /// 互斥,防并发交错导致陈旧远端快照复活刚取消的收藏、或乐观收藏被整源桶替换清掉。
     /// 只护 persist 读写 + 推送,**不**跨远端网络调用(镜像 / fetch 都在锁外)。
@@ -153,6 +156,12 @@ impl PlayerCore {
     ) -> Self {
         let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
+        let library = crate::library::Library::new(
+            channels
+                .iter()
+                .map(|ch| ch.source())
+                .collect::<Vec<SourceKind>>(),
+        );
         let inner = Arc::new(Inner {
             audio,
             scheduler,
@@ -171,6 +180,7 @@ impl PlayerCore {
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
+            library,
             favorites_lock: tokio::sync::Mutex::new(()),
             last_session_save: Mutex::new(Instant::now()),
             playback_quality: *config.playback_quality(),
@@ -216,6 +226,11 @@ impl PlayerCore {
     /// 直通:scheduler 状态。
     pub fn task_snapshot(&self) -> Snapshot {
         self.inner.scheduler.snapshot()
+    }
+
+    /// 用户歌单库聚合态句柄(管线与脚本查询在 [`crate::library`] 消费)。
+    pub(crate) fn library(&self) -> &crate::library::Library {
+        &self.inner.library
     }
 
     /// 按 [`SourceKind`] 找对应的已注入 channel handle;无匹配返回 `None`。
@@ -713,15 +728,14 @@ impl PlayerCore {
         }
     }
 
-    /// 新 client 的初始数据:重拉各源歌单 + 触发收藏同步。收藏走 server 侧 async 编排
-    /// (需 persist,不进 task lane),把 canonical favorited 集推给 client。
+    /// 新 client 的初始数据:先即时下发歌单库缓存快照(有数据才发,消除连接
+    /// 瞬间的空库假象),再重拉各源歌单 + 触发收藏同步。收藏走 server 侧 async
+    /// 编排(需 persist,不进 task lane),把 canonical favorited 集推给 client。
     pub fn refresh_initial_loads(&self) {
+        self.push_cached_library_snapshot();
         for ch in &self.inner.channels {
             let source = ch.source();
-            self.inner.scheduler.submit(
-                TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }),
-                Priority::User,
-            );
+            self.submit_my_playlists(source);
             let this = self.clone();
             let channel = Arc::clone(ch);
             tokio::spawn(async move {
@@ -774,6 +788,9 @@ mod tests {
 
         /// `liked_song_ids` 返回的远端红心集;`None` → NotSupported(favorite 导入测试用 `Some`)。
         liked_ids: Option<rustc_hash::FxHashSet<SongId>>,
+
+        /// `my_playlists` 返回的歌单列表;`None` → NotSupported(库聚合测试用 `Some`)。
+        playlists: Option<Vec<Playlist>>,
     }
 
     #[async_trait]
@@ -853,6 +870,10 @@ mod tests {
         async fn liked_song_ids(&self) -> ChannelResult<rustc_hash::FxHashSet<SongId>> {
             self.liked_ids.clone().ok_or(Error::NotSupported)
         }
+
+        async fn my_playlists(&self) -> ChannelResult<Vec<Playlist>> {
+            self.playlists.clone().ok_or(Error::NotSupported)
+        }
     }
 
     /// 造一个不 spawn 后台 loop 的 [`PlayerCore`],注入记录型 channel。
@@ -882,6 +903,7 @@ mod tests {
             calls,
             url_delay: None,
             liked_ids: None,
+            playlists: None,
         })];
         core_with_channels(
             channels,
@@ -949,6 +971,7 @@ mod tests {
                 calls: Arc::default(),
                 url_delay: None,
                 liked_ids: None,
+                playlists: None,
             })],
             ServerStore::disabled(),
             /*music_dir*/ None,
@@ -982,6 +1005,12 @@ mod tests {
         let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
         let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
         let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
+        let library = crate::library::Library::new(
+            channels
+                .iter()
+                .map(|ch| ch.source())
+                .collect::<Vec<SourceKind>>(),
+        );
         let inner = Arc::new(Inner {
             audio,
             scheduler,
@@ -1001,6 +1030,7 @@ mod tests {
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
+            library,
             favorites_lock: tokio::sync::Mutex::new(()),
             last_session_save: Mutex::new(std::time::Instant::now()),
             playback_quality: *cfg.playback_quality(),
@@ -1792,6 +1822,7 @@ mod tests {
             calls,
             url_delay: None,
             liked_ids: None,
+            playlists: None,
         })];
         let core = core_with_events(
             channels,
@@ -1834,6 +1865,7 @@ mod tests {
             calls,
             url_delay: Some(Duration::from_millis(200)),
             liked_ids: None,
+            playlists: None,
         })];
         let core = core_with_events(
             channels,
@@ -1951,6 +1983,7 @@ mod tests {
             calls,
             url_delay: None,
             liked_ids: None,
+            playlists: None,
         })];
         let core = core_with_channels(channels, persist, Some(music_dir), media_cache)?;
         core.play_song(&s);
@@ -2212,22 +2245,248 @@ mod tests {
             "写完结事件应转发给 client,got {evs:?}"
         );
 
-        // 收敛重拉(MyPlaylists)由 consume 时提交,异步执行;轮询等它完成
+        // 收敛重拉(MyPlaylists)由 consume 时提交,异步执行;逐源列表进聚合态,
+        // client 收到的是出口变换后的合并快照。轮询等它落地。
         let mut found = false;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(5)).await;
             core.consume_events_once();
-            if core
-                .drain_client_events()
-                .iter()
-                .any(|e| matches!(e, mineral_task::TaskEvent::PlaylistsFetched { .. }))
-            {
+            if core.drain_client_events().iter().any(|e| {
+                matches!(
+                    e,
+                    mineral_task::TaskEvent::LibrarySnapshot { playlists }
+                        if playlists.iter().any(|p| p.id.value() == "created-1")
+                )
+            }) {
                 found = true;
                 break;
             }
         }
-        assert!(found, "写成功后应触发 MyPlaylists 重拉");
+        assert!(found, "写成功后应触发 MyPlaylists 重拉并推合并快照");
         Ok(())
+    }
+
+    /// 极简歌单(netease 源)。
+    fn named_playlist(id: &str, name: &str) -> Playlist {
+        Playlist::builder()
+            .id(PlaylistId::new(SourceKind::NETEASE, id))
+            .name(name.to_owned())
+            .build()
+    }
+
+    /// 轮询 consume + drain 直到收到一条 `LibrarySnapshot`,返回其载荷。
+    async fn wait_snapshot(core: &PlayerCore) -> color_eyre::Result<Vec<Playlist>> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            core.consume_events_once();
+            for ev in core.drain_client_events() {
+                if let mineral_task::TaskEvent::LibrarySnapshot { playlists } = ev {
+                    return Ok(playlists);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        color_eyre::eyre::bail!("超时未收到 LibrarySnapshot")
+    }
+
+    /// 组装带 curate registry 函数的 core(模拟 config 管线摘取结果):
+    /// per-source 函数按源名入表、跨源函数入独立键,channel 返回给定歌单。
+    fn core_with_curate(
+        per_source: &[(&str, &str)],
+        merged: Option<&str>,
+        playlists: Vec<Playlist>,
+    ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+        use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = mineral_script::mlua::Lua::new();
+        install_api(&lua, &host)?;
+        let fns = lua.create_table()?;
+        for (source, src) in per_source {
+            fns.set(
+                *source,
+                lua.load(*src).eval::<mineral_script::mlua::Function>()?,
+            )?;
+        }
+        lua.set_named_registry_value(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS, fns)?;
+        if let Some(src) = merged {
+            lua.set_named_registry_value(
+                mineral_config::CURATE_PLAYLISTS_MERGED_FN,
+                lua.load(src).eval::<mineral_script::mlua::Function>()?,
+            )?;
+        }
+        let sender = ScriptSender::detached();
+        let watchdog = mineral_script::WatchdogConfig::builder()
+            .instruction_interval(10_000)
+            .soft_wall(Duration::from_millis(200))
+            .hard_wall(Duration::from_secs(1))
+            .build();
+        let runtime = ScriptRuntime::spawn(lua, host, watchdog, &sender)?;
+        let core = core_with_events(
+            vec![Arc::new(RecordingChannel {
+                calls: Arc::default(),
+                url_delay: None,
+                liked_ids: None,
+                playlists: Some(playlists),
+            })],
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+            Some(sender),
+        )?;
+        Ok((core, runtime))
+    }
+
+    /// 无脚本:各源列表进聚合态,client 收 identity 透传的合并快照。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn library_snapshot_identity_without_script() -> color_eyre::Result<()> {
+        let core = core_with_channels(
+            vec![Arc::new(RecordingChannel {
+                calls: Arc::default(),
+                url_delay: None,
+                liked_ids: None,
+                playlists: Some(vec![
+                    named_playlist("p1", "日常"),
+                    named_playlist("p2", "稍后再看"),
+                ]),
+            })],
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )?;
+        core.submit_my_playlists(SourceKind::NETEASE);
+        let snapshot = wait_snapshot(&core).await?;
+        let names = snapshot
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<&str>>();
+        assert_eq!(names, vec!["日常", "稍后再看"], "无 transform 原样透传");
+        Ok(())
+    }
+
+    /// curate 全链:per-source 过滤 + 跨源改名都落到快照。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn library_snapshot_applies_curate_functions() -> color_eyre::Result<()> {
+        let (core, _runtime) = core_with_curate(
+            &[(
+                "netease",
+                r#"function(lists)
+                    local keep = {}
+                    for _, p in ipairs(lists) do
+                        if p.name ~= "稍后再看" then keep[#keep + 1] = p end
+                    end
+                    return keep
+                end"#,
+            )],
+            Some(
+                r#"function(all)
+                    for _, p in ipairs(all) do p.name = "[" .. p.name .. "]" end
+                    return all
+                end"#,
+            ),
+            vec![
+                named_playlist("p1", "日常"),
+                named_playlist("p2", "稍后再看"),
+            ],
+        )?;
+        core.submit_my_playlists(SourceKind::NETEASE);
+        let snapshot = wait_snapshot(&core).await?;
+        let names = snapshot
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<&str>>();
+        assert_eq!(
+            names,
+            vec!["[日常]"],
+            "per-source 滤掉稍后再看,跨源函数改名"
+        );
+        Ok(())
+    }
+
+    /// 拉取失败(NotSupported)也给结论:空贡献快照照常推,初始完备不卡死。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn library_failure_concludes_with_empty_snapshot() -> color_eyre::Result<()> {
+        // RecordingChannel playlists: None → my_playlists NotSupported → 任务 Failed。
+        let core = core_with(Arc::default())?;
+        core.submit_my_playlists(SourceKind::NETEASE);
+        let snapshot = wait_snapshot(&core).await?;
+        assert!(snapshot.is_empty(), "失败源空贡献,快照为空但必须到达");
+        Ok(())
+    }
+
+    /// 脚本 `library.playlists` 在初始完备前停靠,完备时刻统一 resolve
+    /// (config.lua 顶层调用是常态场景;快照与 client 同为出口变换结果)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()> {
+        use mineral_script::{ScriptHost, ScriptSender, install_api};
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = ScriptHost::new(cmd_tx.clone(), push_tx.clone());
+        let lua = mineral_script::mlua::Lua::new();
+        install_api(&lua, &host)?;
+        // 顶层调用:此刻聚合态必然未完备 → daemon 侧停靠。
+        lua.load(
+            r#"
+            mineral.library.playlists(function(ps, err)
+                mineral.ui.toast("got:" .. #ps .. ":" .. ps[1].name)
+            end)
+            "#,
+        )
+        .exec()?;
+        let parts = crate::script_bridge::ScriptParts::new(
+            Some(lua),
+            host,
+            cmd_tx,
+            cmd_rx,
+            push_tx,
+            push_rx,
+        );
+        let sender = ScriptSender::detached();
+        let watchdog = mineral_script::WatchdogConfig::builder()
+            .instruction_interval(10_000)
+            .soft_wall(Duration::from_millis(200))
+            .hard_wall(Duration::from_secs(1))
+            .build();
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+            calls: Arc::default(),
+            url_delay: None,
+            liked_ids: None,
+            playlists: Some(vec![named_playlist("p1", "日常")]),
+        })];
+        let (runtime, pumps) = parts.spawn_runtime(watchdog, &sender, &channels);
+        let _runtime = runtime.ok_or_else(|| color_eyre::eyre::eyre!("应有脚本线程"))?;
+        let (hub_tx, mut hub_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
+        let core = core_with_events(
+            channels,
+            ServerStore::disabled(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+            hub_tx.clone(),
+            Some(sender),
+        )?;
+        let _reload = pumps.start(core.clone(), hub_tx);
+        core.submit_my_playlists(SourceKind::NETEASE);
+        // 测试 core 不跑 background loop,手动 tick 驱动事件消化。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            core.consume_events_once();
+            match hub_rx.try_recv() {
+                Ok(mineral_protocol::Event::Toast { content, .. }) => {
+                    let text = content.iter().map(|s| s.text.as_str()).collect::<String>();
+                    assert_eq!(text, "got:1:日常", "停靠 query 在完备时刻收到快照");
+                    return Ok(());
+                }
+                Ok(_other) => {}
+                Err(_empty) => {
+                    if std::time::Instant::now() > deadline {
+                        color_eyre::eyre::bail!("超时未收到脚本回调 toast");
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
     }
 
     /// toggle_favorite 以本地 persist 为事实来源:即使该源 channel 的远端镜像
@@ -2291,6 +2550,7 @@ mod tests {
             calls: Arc::default(),
             url_delay: None,
             liked_ids: Some(remote),
+            playlists: None,
         });
         core.sync_favorites(SourceKind::NETEASE, channel).await;
 

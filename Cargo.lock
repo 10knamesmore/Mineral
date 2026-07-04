@@ -2677,6 +2677,7 @@ dependencies = [
  "color-eyre",
  "derive-getters",
  "insta",
+ "mineral-config-macros",
  "mineral-log",
  "mineral-model",
  "mineral-paths",
@@ -2688,6 +2689,14 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+]
+
+[[package]]
+name = "mineral-config-macros"
+version = "0.5.2"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]

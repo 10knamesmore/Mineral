@@ -3,15 +3,14 @@
 //! [`BackendKind`] 与音频层的后端模式语义对齐,但保持 config 与音频 crate 解耦——
 //! client 接线处做 `BackendKind → 音频后端模式` 映射,本枚举不依赖音频 crate。
 
+use mineral_config_macros::config_section;
 use mineral_model::BitRate;
 use serde::Deserialize;
 
 /// 音频段。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct AudioConfig {
     /// 初始音量百分比 0-100。
     volume: u8,

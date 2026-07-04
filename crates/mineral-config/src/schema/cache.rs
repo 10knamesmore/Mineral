@@ -3,14 +3,13 @@
 //! 容量字段用 `u64`,但 Lua 的 `^` 幂运算总产 float(`10 * 1024 ^ 3`),故反序列化
 //! 层容忍数值为整数或非负有限浮点(floor 后转 `u64`),非法值报错经路径冒泡。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 缓存容量段。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct CacheConfig {
     /// 音频本体缓存容量上限(字节)。
     #[serde(deserialize_with = "de_u64_lossy")]

@@ -3,6 +3,7 @@
 //! 对齐渲染层硬编码的 Catppuccin Mocha 色板。本模块只负责把用户 `#rrggbb`
 //! 字符串解析/校验成强类型,不依赖任何渲染框架;颜色到 client 接线处才落地。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 14 个合法 color token 名;`roles` 段的值必须取自此集合。
@@ -15,9 +16,7 @@ const TOKEN_NAMES: [&str; 14] = [
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。颜色经 [`HexColor::rgb`] 取
 /// RGB 三元组,client 接线处据此造各自渲染框架的颜色类型。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct ThemeConfig {
     /// 主背景。
     base: HexColor,
@@ -68,9 +67,7 @@ pub struct ThemeConfig {
 /// 搜索命中字符的样式:在所在列的基础样式上叠加。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct SearchHitConfig {
     /// 高亮色:token 名(`"peach"` 等)或裸 `"#rrggbb"`。
     color: ColorRef,

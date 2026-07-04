@@ -2,14 +2,13 @@
 //!
 //! [`SweepStyle`] / [`MenuReveal`] 与渲染层过渡风格语义对齐,但保持解耦——接线处做映射。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 动画配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct AnimationConfig {
     /// 主循环帧间隔(毫秒,≈ 60fps);重绘 / 拉数据 / 推进动画统一这一节奏。
     /// 它是所有时长旋钮(`*_ms`)折算成拍数的分母——改它不改各动画的真实时长。

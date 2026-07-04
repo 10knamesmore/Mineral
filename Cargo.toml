@@ -8,6 +8,7 @@ members = [
     "crates/mineral-tui",
     "crates/mineral-model",
     "crates/mineral-macros",
+    "crates/mineral-config-macros",
     "crates/mineral-media",
     "crates/mineral-paths",
     "crates/mineral-protocol",
@@ -58,6 +59,7 @@ mineral-log             = { path = "crates/mineral-log" }
 mineral-task            = { path = "crates/mineral-task" }
 mineral-tui             = { path = "crates/mineral-tui", default-features = false }
 mineral-macros          = { path = "crates/mineral-macros" }
+mineral-config-macros   = { path = "crates/mineral-config-macros" }
 mineral-media           = { path = "crates/mineral-media" }
 mineral-model           = { path = "crates/mineral-model" }
 mineral-paths           = { path = "crates/mineral-paths" }
@@ -73,6 +75,8 @@ mineral-persist         = { path = "crates/mineral-persist" }
 mineral-config          = { path = "crates/mineral-config" }
 mineral-script          = { path = "crates/mineral-script" }
 uuid               = { version = "1", features = ["v4"] }
+syn                = { version = "2", features = ["full"] }
+quote              = "1"
 async-trait        = "0.1"
 thiserror          = "1"
 regex              = "1"

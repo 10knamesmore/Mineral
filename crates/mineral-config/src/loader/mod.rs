@@ -1,5 +1,6 @@
 //! 配置加载器:eval default / eval user / 深合并 / 反序列化 / 降级。
 
+mod lua_util;
 mod merge;
 mod pipeline;
 mod stub;

@@ -4,14 +4,13 @@
 //! 自拉起 daemon 的退出续命。
 //! 命令名 + 这些步长参数组装成可执行动作是 client 接线的事;本段只承载强类型值。
 
+use mineral_config_macros::config_section;
 use serde::Deserialize;
 
 /// 交互手感旋钮集合。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct BehaviorConfig {
     /// 单次音量增减步长(百分点)。
     volume_step: u8,

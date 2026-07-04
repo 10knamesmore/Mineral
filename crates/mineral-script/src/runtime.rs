@@ -685,8 +685,8 @@ mod tests {
 
     #[test]
     fn library_apis_emit_cmds_and_resolve() -> color_eyre::Result<()> {
-        use crate::message::{PlaylistBrief, ResolveValue, ScriptCmd};
-        use mineral_model::{PlaylistId, SourceKind};
+        use crate::message::{ResolveValue, ScriptCmd};
+        use mineral_model::SourceKind;
         let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.library.playlists(function(ps, err)
@@ -722,11 +722,7 @@ mod tests {
         );
         sender.resolve(
             query,
-            ResolveValue::Playlists(vec![PlaylistBrief {
-                id: PlaylistId::new(SourceKind::NETEASE, "p1"),
-                name: "日常".to_owned(),
-                track_count: 42,
-            }]),
+            ResolveValue::Playlists(vec![brief(SourceKind::NETEASE, "p1", "日常", 42)]),
         );
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
@@ -796,6 +792,251 @@ mod tests {
             }],
             "search 回调收 (songs, nil)"
         );
+        Ok(())
+    }
+
+    /// curate 测试用歌单投影(非必填字段给缺省)。
+    fn brief(
+        source: mineral_model::SourceKind,
+        id: &str,
+        name: &str,
+        track_count: u64,
+    ) -> crate::message::PlaylistBrief {
+        crate::message::PlaylistBrief {
+            id: mineral_model::PlaylistId::new(source, id),
+            name: name.to_owned(),
+            track_count,
+            description: String::new(),
+            play_count: None,
+            subscriber_count: None,
+        }
+    }
+
+    /// 起一个无用户脚本、registry 里手动塞好 curate 函数的线程
+    /// (模拟 config 管线摘取结果),返回 (runtime, sender, push 接收端)。
+    fn spawn_with_curate_fns(
+        per_source: &[(&str, &str)],
+        merged: Option<&str>,
+    ) -> color_eyre::Result<(
+        ScriptRuntime,
+        ScriptSender,
+        tokio::sync::mpsc::UnboundedReceiver<Event>,
+    )> {
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let (push_tx, push_rx) = unbounded_channel();
+        let host = ScriptHost::new(cmd_tx, push_tx);
+        let lua = Lua::new();
+        install_api(&lua, &host)?;
+        let fns = lua.create_table()?;
+        for (source, src) in per_source {
+            fns.set(*source, lua.load(*src).eval::<mlua::Function>()?)?;
+        }
+        lua.set_named_registry_value(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS, fns)?;
+        if let Some(src) = merged {
+            lua.set_named_registry_value(
+                mineral_config::CURATE_PLAYLISTS_MERGED_FN,
+                lua.load(src).eval::<mlua::Function>()?,
+            )?;
+        }
+        let sender = ScriptSender::detached();
+        let runtime = ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?;
+        Ok((runtime, sender, push_rx))
+    }
+
+    /// per-source curate:过滤(track_count 0 淘汰)、改名、重排(倒序)一次到位。
+    #[tokio::test]
+    async fn curate_per_source_filters_renames_reorders() -> color_eyre::Result<()> {
+        use crate::message::CurateOutcome;
+        use mineral_model::SourceKind;
+        let (_runtime, sender, _push_rx) = spawn_with_curate_fns(
+            &[(
+                "bilibili",
+                r#"function(lists)
+                    local keep = {}
+                    for i = #lists, 1, -1 do
+                        local p = lists[i]
+                        if p.track_count > 0 then
+                            if p.name == "默认收藏夹" then p.name = "B站收藏" end
+                            keep[#keep + 1] = p
+                        end
+                    end
+                    return keep
+                end"#,
+            )],
+            /*merged*/ None,
+        )?;
+        let briefs = vec![
+            brief(SourceKind::BILIBILI, "f1", "默认收藏夹", 3),
+            brief(SourceKind::BILIBILI, "f2", "稍后再看", 0),
+            brief(SourceKind::BILIBILI, "f3", "钢琴", 7),
+        ];
+        let outcome = sender
+            .curate_playlists(
+                Some(SourceKind::BILIBILI),
+                briefs,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        let CurateOutcome::Curated(entries) = outcome else {
+            color_eyre::eyre::bail!("期望 Curated,实得 {outcome:?}");
+        };
+        let got = entries
+            .iter()
+            .map(|e| (e.id.qualified(), e.name.clone()))
+            .collect::<Vec<(String, Option<String>)>>();
+        assert_eq!(
+            got,
+            vec![
+                ("bilibili:f3".to_owned(), Some("钢琴".to_owned())),
+                ("bilibili:f1".to_owned(), Some("B站收藏".to_owned())),
+            ],
+            "省略 = 隐藏,顺序 = 展示序,name 覆盖生效"
+        );
+        Ok(())
+    }
+
+    /// 跨源 curate(source = None)走独立 registry 键;投影带 source /
+    /// description 便利字段。
+    #[tokio::test]
+    async fn curate_merged_fn_sees_source_and_description() -> color_eyre::Result<()> {
+        use crate::message::CurateOutcome;
+        use mineral_model::SourceKind;
+        let (_runtime, sender, _push_rx) = spawn_with_curate_fns(
+            &[],
+            Some(
+                r#"function(all)
+                    table.sort(all, function(a, b) return a.source < b.source end)
+                    for _, p in ipairs(all) do
+                        p.name = p.source .. "/" .. p.description
+                    end
+                    return all
+                end"#,
+            ),
+        )?;
+        let mut netease = brief(SourceKind::NETEASE, "p1", "日常", 5);
+        netease.description = "网易".to_owned();
+        let mut bilibili = brief(SourceKind::BILIBILI, "f1", "收藏", 3);
+        bilibili.description = "B站".to_owned();
+        let outcome = sender
+            .curate_playlists(
+                /*source*/ None,
+                vec![netease, bilibili],
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        let CurateOutcome::Curated(entries) = outcome else {
+            color_eyre::eyre::bail!("期望 Curated,实得 {outcome:?}");
+        };
+        let names = entries
+            .iter()
+            .map(|e| e.name.clone().unwrap_or_default())
+            .collect::<Vec<String>>();
+        assert_eq!(
+            names,
+            vec!["bilibili/B站".to_owned(), "netease/网易".to_owned()],
+            "跨源函数拿到合并列表,source/description 字段可读"
+        );
+        Ok(())
+    }
+
+    /// 该源没注册函数(registry 值缺席):Identity 透传,无错误 toast。
+    #[tokio::test]
+    async fn curate_without_fn_is_identity() -> color_eyre::Result<()> {
+        use crate::message::CurateOutcome;
+        use mineral_model::SourceKind;
+        let (runtime, sender, mut push_rx) = spawn_with_script("-- 无脚本注册")?;
+        let outcome = sender
+            .curate_playlists(
+                Some(SourceKind::BILIBILI),
+                vec![brief(SourceKind::BILIBILI, "f1", "收藏", 1)],
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        assert_eq!(outcome, CurateOutcome::Identity);
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert!(events.is_empty(), "无函数不是错误,不该有 toast");
+        Ok(())
+    }
+
+    /// fail-open:返回非数组 / 条目缺 id / 函数报错,一律 Identity + error toast,
+    /// 歌单不因脚本 bug 消失。
+    #[tokio::test]
+    async fn curate_bad_return_falls_back_to_identity() -> color_eyre::Result<()> {
+        use crate::message::CurateOutcome;
+        use mineral_model::SourceKind;
+        let (runtime, sender, mut push_rx) = spawn_with_curate_fns(
+            &[
+                ("netease", "function(lists) return 42 end"),
+                (
+                    "bilibili",
+                    r#"function(lists) return { { name = "缺id" } } end"#,
+                ),
+                ("local", r#"function(lists) error("炸") end"#),
+            ],
+            /*merged*/ None,
+        )?;
+        for source in [SourceKind::NETEASE, SourceKind::BILIBILI, SourceKind::LOCAL] {
+            let outcome = sender
+                .curate_playlists(
+                    Some(source),
+                    vec![brief(source, "p1", "列表", 1)],
+                    std::time::Duration::from_secs(5),
+                )
+                .await;
+            assert_eq!(
+                outcome,
+                CurateOutcome::Identity,
+                "{} 的非法返回必须 fail-open",
+                source.name()
+            );
+        }
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events.len(),
+            3,
+            "三种失败各报一条 error toast,实得 {events:?}"
+        );
+        Ok(())
+    }
+
+    /// per-source 键集拉取:有函数的源名可枚举(daemon 启动 warn 用);
+    /// 未挂线程立即回空集。
+    #[tokio::test]
+    async fn curate_source_keys_lists_registered_sources() -> color_eyre::Result<()> {
+        let (_runtime, sender, _push_rx) = spawn_with_curate_fns(
+            &[("bilibili", "function(lists) return lists end")],
+            /*merged*/ None,
+        )?;
+        let keys = sender.curate_source_keys().await?;
+        assert_eq!(keys, vec!["bilibili".to_owned()]);
+        let detached = ScriptSender::detached();
+        let keys = detached.curate_source_keys().await?;
+        assert!(keys.is_empty(), "未挂线程回空集");
+        Ok(())
+    }
+
+    /// 软超时 fail-open:回执永不到 → 等满超时后 Identity。
+    #[tokio::test]
+    async fn curate_timeout_falls_back_to_identity() -> color_eyre::Result<()> {
+        use crate::message::CurateOutcome;
+        use mineral_model::SourceKind;
+        let sender = ScriptSender::detached();
+        let (tx, rx) = std::sync::mpsc::channel();
+        sender.attach(tx);
+        let started = std::time::Instant::now();
+        let outcome = sender
+            .curate_playlists(
+                Some(SourceKind::BILIBILI),
+                vec![brief(SourceKind::BILIBILI, "f1", "收藏", 1)],
+                std::time::Duration::from_millis(50),
+            )
+            .await;
+        assert_eq!(outcome, CurateOutcome::Identity, "超时必须透传");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(50),
+            "透传必须等满软超时"
+        );
+        drop(rx);
         Ok(())
     }
 

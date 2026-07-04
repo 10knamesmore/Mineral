@@ -1,13 +1,11 @@
 //! 歌词段(挂在 `TuiConfig` 下):全屏沉浸态行距 + 滚动手感。
 
-use serde::Deserialize;
+use mineral_config_macros::config_section;
 
 /// 歌词配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
+#[config_section]
 pub struct LyricsConfig {
     /// 全屏沉浸态行与行之间垫的空行数(`0` = 紧凑)。
     fullscreen_line_gap: usize,

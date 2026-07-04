@@ -183,7 +183,7 @@ fn build_channels(
             "netease channel 构建失败,跳过(不影响其他源 / daemon)"
         ),
     }
-    // B站 guest 模式无需登录即可搜索/详情/取流,故恒尝试构建(登录 stage 3 再加)。
+    // B站 guest 模式无需登录即可搜索/详情/取流,故恒尝试构建。
     match build_bilibili(sources.bilibili()) {
         Ok(c) => channels.push(c),
         Err(e) => mineral_log::warn!(

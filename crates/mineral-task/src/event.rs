@@ -26,6 +26,15 @@ pub enum TaskEvent {
         playlists: Vec<Playlist>,
     },
 
+    /// 用户歌单库合并快照:server 聚合各源列表(经出口变换)后的整表,
+    /// **全量替换**语义,顺序即展示序。非任务事件(server 聚合态直接推,
+    /// 不经 channel-fetch lane);[`TaskEvent::PlaylistsFetched`] 是它的
+    /// server 内部原料,不再直达 client。
+    LibrarySnapshot {
+        /// 合并后的歌单列表(展示序)。
+        playlists: Vec<Playlist>,
+    },
+
     /// 某源 canonical 收藏(♥)集已到:server 从本地 persist 读、经远端红心导入合并后推送,
     /// client 据此装饰 SongView。非任务事件(server 直接推,不经 channel-fetch lane)。
     LikedSongIdsFetched {

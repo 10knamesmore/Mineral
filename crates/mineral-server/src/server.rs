@@ -148,7 +148,8 @@ impl Server {
     /// connection 时后续 incoming 不等握手直接收 `Hello { Busy }`。
     ///
     /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
-    /// (新 client 拿得到 PlaylistsFetched / LikedSongIdsFetched events)。
+    /// (新 client 先拿聚合态缓存的 LibrarySnapshot,再收重拉后的新快照 /
+    /// LikedSongIdsFetched events)。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
