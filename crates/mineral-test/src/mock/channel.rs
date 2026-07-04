@@ -1,7 +1,9 @@
 //! 返回固定直链的 mock [`MusicChannel`],供下载链路测试喂直链。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult};
+use mineral_channel_core::{
+    ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult, SearchHits,
+};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, AudioFormat, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist,
     PlaylistId, Song, SongId, SourceKind,
@@ -27,15 +29,15 @@ impl MusicChannel for UrlChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
 

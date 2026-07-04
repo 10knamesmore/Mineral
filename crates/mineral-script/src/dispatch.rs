@@ -538,7 +538,8 @@ fn playlist_table(lua: &Lua, playlist: &mineral_model::Playlist) -> mlua::Result
     Ok(table)
 }
 
-/// 按 seed 进 registry 的源模板拼网页分享链接(`{id}` 填裸 id)。
+/// 按 seed 进 registry 的源模板拼网页分享链接(占位语义——`{id}` 整段 / `{0}` 按 `:`
+/// 分段——见 [`mineral_channel_core::render_web_url`],与 TUI 复制菜单同一实现)。
 /// 未 seed / 源没有该实体的模板给 `None`(Lua 侧 `url` 为 nil)。
 ///
 /// # Params:
@@ -551,7 +552,7 @@ fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> 
         .ok()?;
     let entry: mlua::Table = table.get(source).ok()?;
     let tpl: String = entry.get(kind).ok()?;
-    Some(tpl.replace("{id}", raw_id))
+    Some(mineral_channel_core::render_web_url(&tpl, raw_id))
 }
 
 /// 渲染一个复制模板:registry 函数表按下标取函数,实体投影成表喂入,看门狗

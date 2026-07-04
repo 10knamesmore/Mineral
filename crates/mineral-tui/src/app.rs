@@ -1515,6 +1515,7 @@ mod tests {
             query: "x".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(n)),
+            has_more: None,
         });
         Ok(app)
     }
@@ -1582,6 +1583,7 @@ mod tests {
             query: "x".to_owned(),
             page: Page::new(/*offset*/ 0, /*limit*/ 10),
             payload: SearchPayload::Songs(endserenading(10)),
+            has_more: None,
         });
 
         let next_page_offset = |tasks: &[TaskKind]| {
@@ -1830,6 +1832,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Artists(vec![artist(Vec::new())]),
+            has_more: None,
         });
         let id = ArtistId::new(SourceKind::NETEASE, "ar1");
         app.state.apply(&TaskEvent::ArtistDetailFetched {
@@ -1893,6 +1896,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Albums(vec![test_album("al1")]),
+            has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             id: AlbumId::new(SourceKind::NETEASE, "al1"),

@@ -10,7 +10,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{
+    ChannelCaps, Credential, Error, MusicChannel, Page, Result, SearchHits,
+};
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, BitRate, Lyrics, PlayUrl, Playlist,
     PlaylistId, SearchKind, Song, SongId, SourceKind, UserId,
@@ -87,30 +89,33 @@ impl MusicChannel for MockChannel {
             .build()
     }
 
-    async fn search_songs(&self, query: &str, _page: Page) -> Result<Vec<Song>> {
+    async fn search_songs(&self, query: &str, _page: Page) -> Result<SearchHits<Song>> {
         let q = query.to_lowercase();
-        Ok(self
+        let items = self
             .playlists
             .read()
             .iter()
             .flat_map(|p| p.tracks.iter().map(|t| t.data.clone()))
             .filter(|s| s.name.to_lowercase().contains(&q))
-            .collect())
+            .collect::<Vec<Song>>();
+        // 一次性回全量,显式封死翻页(否则命中 ≥ limit 时上层会无限续拉同一批)。
+        Ok(SearchHits::new(items, /*has_more*/ false))
     }
 
-    async fn search_albums(&self, _query: &str, _page: Page) -> Result<Vec<Album>> {
+    async fn search_albums(&self, _query: &str, _page: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_playlists(&self, query: &str, _page: Page) -> Result<Vec<Playlist>> {
+    async fn search_playlists(&self, query: &str, _page: Page) -> Result<SearchHits<Playlist>> {
         let q = query.to_lowercase();
-        Ok(self
+        let items = self
             .playlists
             .read()
             .iter()
             .filter(|p| p.data.name.to_lowercase().contains(&q))
             .map(|p| p.data.clone())
-            .collect())
+            .collect::<Vec<Playlist>>();
+        Ok(SearchHits::new(items, /*has_more*/ false))
     }
 
     async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {

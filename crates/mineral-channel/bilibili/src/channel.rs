@@ -5,7 +5,7 @@
 //! `song_urls` 每首两跳(view + playurl);详情/搜索是单跳。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
 use mineral_model::{
     Album, AlbumId, BitRate, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
     UserId,
@@ -88,6 +88,9 @@ fn map_err(e: color_eyre::Report) -> Error {
 }
 
 /// [`Page`] 的 offset/limit → B站页码(1 起);`limit == 0` 退回第 1 页。
+///
+/// 依赖调用方的 offset 是 limit 的整数倍(翻页游标页对齐)。别按「实际返回条数」累加
+/// offset——B站每页实际条数与 limit 无关,余数会让页号折回/跳页。
 fn page_number(page: Page) -> u32 {
     page.offset.checked_div(page.limit).map_or(1, |q| q + 1)
 }
@@ -117,16 +120,18 @@ impl MusicChannel for BilibiliChannel {
     }
 
     fn caps(&self) -> ChannelCaps {
-        // MVP 只全库搜视频(→ Song);收藏夹(歌单)stage 2 接,写操作永不支持(只读源)。
-        // song_web_url 暂空:裸 id 是 `bvid:page`,套不进单一 `{id}` 视频模板。
+        // 只全库搜视频(→ Song);写操作永不支持(只读源)。song 模板用位置占位拆
+        // `bvid:page` 复合裸 id(`?p=1` 对单 P 视频冗余但合法,不特判);收藏夹的稳定
+        // 分享 URL 需要 mid 参与,裸 fid 拼不出,故歌单模板留空。
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Song])
             .playlist_edit(false)
+            .song_web_url(Some("https://www.bilibili.com/video/{0}?p={1}".to_owned()))
             .build()
     }
 
-    async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>> {
-        api::search::search_songs(&self.transport, query, page_number(page))
+    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>> {
+        api::search::search_songs(&self.transport, query, page_number(page), page.limit)
             .await
             .map_err(map_err)
     }

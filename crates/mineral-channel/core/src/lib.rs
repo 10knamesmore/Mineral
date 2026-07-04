@@ -9,12 +9,15 @@ pub mod caps;
 pub mod credential;
 /// channel 公共错误类型与 `Result` 别名。
 pub mod error;
+/// 搜索命中页(含显式翻页信号)。
+pub mod hits;
 /// 列表分页参数。
 pub mod page;
 
-pub use caps::ChannelCaps;
+pub use caps::{ChannelCaps, render_web_url};
 pub use credential::Credential;
 pub use error::{Error, Result};
+pub use hits::SearchHits;
 pub use page::Page;
 
 use rustc_hash::FxHashSet;
@@ -40,18 +43,22 @@ pub trait MusicChannel: Send + Sync {
     fn caps(&self) -> ChannelCaps;
 
     // ---------- 搜索 ----------
+    // 返回 [`SearchHits`] 而非裸 Vec:榨干与否由源显式表态(`has_more`),上层不再只能
+    // 靠「返回条数 < limit」推断——页码型分页 / 服务端固定页大小的源那样会误判。
+    // 无翻页元信息的源 `Vec::into()` 即可(`has_more = None`,上层回退条数推断)。
+
     /// 搜索单曲。
-    async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>>;
+    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>>;
     /// 搜索专辑(可选)。
-    async fn search_albums(&self, _query: &str, _page: Page) -> Result<Vec<Album>> {
+    async fn search_albums(&self, _query: &str, _page: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
     /// 搜索歌单(可选)。
-    async fn search_playlists(&self, _query: &str, _page: Page) -> Result<Vec<Playlist>> {
+    async fn search_playlists(&self, _query: &str, _page: Page) -> Result<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
     /// 搜索艺人(可选)。
-    async fn search_artists(&self, _query: &str, _page: Page) -> Result<Vec<Artist>> {
+    async fn search_artists(&self, _query: &str, _page: Page) -> Result<SearchHits<Artist>> {
         Err(Error::NotSupported)
     }
 

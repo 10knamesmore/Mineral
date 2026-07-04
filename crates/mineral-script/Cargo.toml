@@ -9,6 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+mineral-channel-core = { workspace = true }
 mineral-config   = { workspace = true }
 mineral-log      = { workspace = true }
 mineral-model    = { workspace = true }

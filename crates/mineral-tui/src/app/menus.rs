@@ -221,6 +221,9 @@ impl App {
             EntityRef::Song(song) => {
                 let url = caps.and_then(|c| c.song_web_url().as_deref());
                 let mut items = song_copy_items(song, url);
+                if let Some(item) = self.stream_copy_item(&song.id) {
+                    items.push(item);
+                }
                 append_template_items(&mut items, templates, CopyContext::Song, || {
                     CopyTemplateCtx::Song(song.clone())
                 });
@@ -253,6 +256,30 @@ impl App {
             EntityRef::Album(album) => album_copy_items(album),
             EntityRef::Artist(artist) => artist_copy_items(artist),
         }
+    }
+
+    /// 选中歌**恰是当前在播歌**时,给出其音频流地址的复制项:带取流头的源(如 B 站需
+    /// Referer / UA,裸链接贴出去 403)拼成 curl 片段,无头源给裸 URL / 本地路径。
+    /// 非在播歌 client 手里没有已解析的 PlayUrl,不出该项——按需解析得走 server 往返,
+    /// 不值得为一个复制项发请求。
+    fn stream_copy_item(&self, song_id: &mineral_model::SongId) -> Option<MenuItem> {
+        let play_url = self.state.playback.play_url.as_ref()?;
+        if &play_url.song_id != song_id {
+            return None;
+        }
+        Some(if play_url.stream_headers.is_empty() {
+            MenuItem::keyed(
+                's',
+                "Copy stream URL",
+                MenuAction::Copy(play_url.url.to_string()),
+            )
+        } else {
+            MenuItem::keyed(
+                's',
+                "Copy stream (curl)",
+                MenuAction::Copy(stream_curl(play_url)),
+            )
+        })
     }
 
     /// Search 结果列选中行的屏幕矩形。
@@ -371,9 +398,27 @@ fn panel_inner(r: Rect) -> Rect {
     )
 }
 
-/// 按源声明的模板渲染网页分享链接(`{id}` 填裸 id;源无模板给 `None`,不渲染该项)。
+/// 按源声明的模板渲染网页分享链接(占位语义——`{id}` 整段 / `{0}` 按 `:` 分段——见
+/// [`mineral_channel_core::render_web_url`];源无模板给 `None`,不渲染该项)。
 fn render_web_url(template: Option<&str>, raw_id: &str) -> Option<String> {
-    template.map(|t| t.replace("{id}", raw_id))
+    template.map(|t| mineral_channel_core::render_web_url(t, raw_id))
+}
+
+/// POSIX shell 单引号包裹:内嵌 `'` 换成 `'\''`。复制出的 curl 片段要能原样粘进 shell——
+/// header / url 可经 Lua before_play hook 自定义,不能假设无引号。
+fn shell_squote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 带取流头的流地址拼成可直接执行的 curl 片段。B 站等源的音频直链缺 Referer / UA 会 403,
+/// 裸 URL 贴到浏览器 / curl 里没用,复制就得连头一起给。
+fn stream_curl(play_url: &mineral_model::PlayUrl) -> String {
+    let headers = play_url
+        .stream_headers
+        .iter()
+        .map(|(k, v)| format!("-H {} ", shell_squote(&format!("{k}: {v}"))))
+        .collect::<String>();
+    format!("curl {headers}{}", shell_squote(&play_url.url.to_string()))
 }
 
 /// 把 config 的自定义模板项追加到内置项之后:按 `context` 过滤,与已有项
@@ -682,6 +727,86 @@ mod tests {
         Ok(())
     }
 
+    /// 复合裸 id(B 站 `bvid:page`)经位置占位模板渲染出正确视频页 URL。
+    #[test]
+    fn song_copy_url_renders_positional_segments() -> color_eyre::Result<()> {
+        let mut song = mineral_test::song("ignored");
+        song.id = mineral_model::SongId::new(SourceKind::BILIBILI, "BV1rvkMYgEtT:2");
+        let items = song_copy_items(&song, Some("https://www.bilibili.com/video/{0}?p={1}"));
+        let url = items
+            .iter()
+            .find(|it| it.label == "Copy URL")
+            .and_then(|it| it.action.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有 Copy URL 项"))?;
+        assert_eq!(
+            url,
+            MenuAction::Copy("https://www.bilibili.com/video/BV1rvkMYgEtT?p=2".to_owned()),
+            "bvid:page 按 {{0}}/{{1}} 拆段填入"
+        );
+        Ok(())
+    }
+
+    /// 流地址复制项只在「选中歌 == 当前在播歌」时出现:带取流头拼 curl 片段,其余选中歌无此项。
+    #[test]
+    fn stream_copy_item_gated_to_playing_song() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
+        let playing = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|sv| sv.data.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有首曲"))?;
+        app.state.playback.play_url = Some(mineral_model::PlayUrl {
+            song_id: playing.id.clone(),
+            url: mineral_model::MediaUrl::remote("https://cdn.example/a.m4s")?,
+            bitrate_bps: 0,
+            quality: mineral_model::BitRate::Standard,
+            size: 0,
+            format: mineral_model::AudioFormat::Aac,
+            bit_depth: None,
+            stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
+            layout: mineral_model::StreamLayout::Contiguous,
+        });
+        let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(playing)));
+        let stream = items
+            .iter()
+            .find(|it| it.label == "Copy stream (curl)")
+            .and_then(|it| it.action.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("在播歌应有流地址项"))?;
+        assert_eq!(
+            stream,
+            MenuAction::Copy(
+                "curl -H 'Referer: https://www.bilibili.com' 'https://cdn.example/a.m4s'"
+                    .to_owned()
+            ),
+            "取流头进 curl 片段,裸 URL 单独可用不了"
+        );
+
+        // 另一首(非在播)不出流地址项。
+        let other = app
+            .state
+            .filtered_tracks()
+            .get(1)
+            .map(|sv| sv.data.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
+        let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(other)));
+        assert!(
+            !items.iter().any(|it| it.label.starts_with("Copy stream")),
+            "非在播歌无已解析 PlayUrl,不出流地址项"
+        );
+        Ok(())
+    }
+
+    /// curl 片段的 shell 单引号转义:值内嵌 `'` 时粘进 shell 不截断。
+    #[test]
+    fn stream_curl_escapes_embedded_single_quote() {
+        assert_eq!(
+            super::shell_squote("it's"),
+            r"'it'\''s'",
+            "内嵌单引号按 POSIX 惯例断开重接"
+        );
+    }
+
     /// 歌曲复制项:title/id 恒有;artist 多人 `, ` join;album/URL/封面缺源数据不渲染。
     #[test]
     fn song_copy_items_compose() -> color_eyre::Result<()> {
@@ -803,6 +928,7 @@ mod tests {
                 SearchKind::Song,
                 SearchPayload::Songs(endserenading(5)),
                 Page::default(),
+                /*has_more*/ None,
             );
             if let Some(kr) = session.kind_results_mut() {
                 kr.set_sel(2);
@@ -840,6 +966,7 @@ mod tests {
                 SearchKind::Song,
                 SearchPayload::Songs(endserenading(5)),
                 Page::default(),
+                /*has_more*/ None,
             );
         }
         app.state.channel_search.set_focus(SearchFocus::Results);
@@ -860,6 +987,7 @@ mod tests {
                         .build(),
                 ]),
                 Page::default(),
+                /*has_more*/ None,
             );
         }
         app.state.channel_search.set_focus(SearchFocus::Results);
@@ -894,6 +1022,7 @@ mod tests {
                         .build(),
                 ]),
                 Page::default(),
+                /*has_more*/ None,
             );
             if let Some(kr) = session.kind_results_mut() {
                 kr.fill_album_detail(&al_id, Box::new(album_with_tracks(&al_id, 3)));

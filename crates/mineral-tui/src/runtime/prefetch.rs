@@ -419,6 +419,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Albums(vec![album]),
+            has_more: None,
         });
         // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
         state.browse.nav.last_sel_change = Instant::now()

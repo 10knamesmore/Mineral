@@ -3,7 +3,7 @@
 //! 保证老 channel 在 trait 扩展后行为不变(运行时兜底,与 caps 声明互为防线)。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page};
+use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, SearchHits};
 use mineral_model::{
     Album, AlbumId, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song,
     SongId, SourceKind,
@@ -29,7 +29,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<Vec<Song>> {
+    ) -> mineral_channel_core::Result<SearchHits<Song>> {
         Err(Error::NotSupported)
     }
 
@@ -37,7 +37,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<Vec<Album>> {
+    ) -> mineral_channel_core::Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
 
@@ -45,7 +45,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<Vec<Playlist>> {
+    ) -> mineral_channel_core::Result<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
 

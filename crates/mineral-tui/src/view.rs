@@ -797,6 +797,7 @@ mod tests {
             query: "zzzz".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(Vec::new()),
+            has_more: None,
         });
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -831,6 +832,7 @@ mod tests {
             query: "x".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
         });
         // 选中第 2 行(短名 "Gjs · Mineral",尾部留白便于验整行底色)。
         if let Some(kr) = app.state.channel_search.active_results_mut() {
@@ -875,6 +877,7 @@ mod tests {
             query: "serenading".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
         });
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
@@ -929,6 +932,7 @@ mod tests {
             query: "serenading".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
         });
         // 推满进场再收起半程(18 拍到顶、再 leave 9 拍):退场中途 on()=false、非端点。
         let mut anim = Toggle::new(18);
@@ -974,6 +978,7 @@ mod tests {
             query: "serenading".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
         });
         if let Some(kr) = app.state.channel_search.active_results_mut() {
             kr.set_sel(2);
@@ -1047,6 +1052,7 @@ mod tests {
             query: "serenading".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
         });
         // 直接置焦点 detail(环 settle,不滑动):detail 高亮、results 暗调。
         app.state.channel_search.focus = SearchFocus::Detail;
@@ -1115,6 +1121,7 @@ mod tests {
             query: "emo".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Playlists(vec![playlist]),
+            has_more: None,
         });
         // 歌单 root 帧补拉到曲目(DetailData::Tracks)。
         if let Some(kr) = app.state.channel_search.active_results_mut()
@@ -1168,6 +1175,7 @@ mod tests {
             query: "mineral".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Artists(vec![result_artist]),
+            has_more: None,
         });
         let hot = |id: &str, name: &str, album: &str, dur: u64| {
             Song::builder()
@@ -1299,6 +1307,7 @@ mod tests {
                     .name("Win&Lose".to_owned())
                     .build(),
             ]),
+            has_more: None,
         });
         // 仿网易云原文:段落用 \n\n、制作名单用 \n。换行必须渲染成多行(非塞进一个 Line);
         // 长到溢出简介区,触发滚动条 + 让滚动演示有意义。
@@ -1389,6 +1398,7 @@ mod tests {
                 album("1", "Power", "Mineral"),
                 album("2", "EndSerenading", "Mineral"),
             ]),
+            has_more: None,
         });
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -1424,6 +1434,7 @@ mod tests {
                 playlist("1", "Bedroom Pop", 42),
                 playlist("2", "Math Rock 精选", 128),
             ]),
+            has_more: None,
         });
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -1462,6 +1473,7 @@ mod tests {
                 artist("1", "Chinese Football", 42_000),
                 artist("2", "American Football", 1_500_000),
             ]),
+            has_more: None,
         });
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;

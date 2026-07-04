@@ -21,9 +21,11 @@ pub struct ChannelCaps {
     /// 是否支持歌单写操作(建/删歌单、加/删歌、改名/改描述)。
     playlist_edit: bool,
 
-    /// 歌曲网页(分享链接)模板,`{id}` 占位填**裸** id(如
-    /// `"https://music.163.com/song?id={id}"`)。`None` = 该源没有网页形态
-    /// (本地文件等),UI 不渲染「复制链接」类入口。
+    /// 歌曲网页(分享链接)模板。占位语义(渲染统一走 [`render_web_url`]):
+    /// `{id}` 填**整段裸** id(如 `"https://music.163.com/song?id={id}"`);裸 id 是
+    /// `:` 分段的复合值时可用 `{0}`/`{1}`… 位置占位取各段(如 B 站裸 id `bvid:page` 配
+    /// `".../video/{0}?p={1}"`)。`None` = 该源没有网页形态(本地文件等),
+    /// UI 不渲染「复制链接」类入口。
     #[builder(default)]
     song_web_url: Option<String>,
 
@@ -32,10 +34,57 @@ pub struct ChannelCaps {
     playlist_web_url: Option<String>,
 }
 
+/// 按源声明的网页模板渲染分享链接(TUI 复制菜单与 Lua 投影共用,勿各自实现)。
+///
+/// 占位语义(与 [`ChannelCaps::song_web_url`] 文档一致):`{id}` 填整段裸 id;
+/// `{0}`/`{1}`… 填裸 id 按 `:` 拆出的对应段(越界的占位原样保留,提示模板与
+/// id 形状不符,不静默吞)。
+///
+/// # Params:
+///   - `template`: caps 声明的模板
+///   - `raw_id`: 裸 id(`Id::value()`)
+///
+/// # Return:
+///   渲染后的网页链接。
+pub fn render_web_url(template: &str, raw_id: &str) -> String {
+    let mut out = template.replace("{id}", raw_id);
+    for (i, seg) in raw_id.split(':').enumerate() {
+        out = out.replace(&format!("{{{i}}}"), seg);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ChannelCaps;
+    use super::{ChannelCaps, render_web_url};
     use mineral_model::SearchKind;
+
+    /// `{id}` 整段替换(单段 id 的既有语义不变)。
+    #[test]
+    fn render_whole_id_placeholder() {
+        assert_eq!(
+            render_web_url("https://x.example/song?id={id}", "12345"),
+            "https://x.example/song?id=12345"
+        );
+    }
+
+    /// `{0}`/`{1}` 位置占位:复合裸 id 按 `:` 拆段对位填入。
+    #[test]
+    fn render_positional_segments() {
+        assert_eq!(
+            render_web_url("https://www.bilibili.com/video/{0}?p={1}", "BV1xx:3"),
+            "https://www.bilibili.com/video/BV1xx?p=3"
+        );
+    }
+
+    /// 越界占位原样保留(模板要 {1} 而 id 只有一段):暴露形状不符,不静默吞段。
+    #[test]
+    fn render_out_of_range_placeholder_kept() {
+        assert_eq!(
+            render_web_url("https://x.example/{0}?p={1}", "solo"),
+            "https://x.example/solo?p={1}"
+        );
+    }
 
     #[test]
     fn builder_and_getters_roundtrip() {

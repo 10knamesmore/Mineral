@@ -414,7 +414,8 @@ impl AppState {
                 query,
                 page,
                 payload,
-            } => self.apply_search_results(*source, *kind, query, *page, payload),
+                has_more,
+            } => self.apply_search_results(*source, *kind, query, *page, payload, *has_more),
             TaskEvent::ArtistDetailFetched { id, artist } => self.apply_artist_detail(id, artist),
             TaskEvent::ArtistAlbumsFetched { id, albums, .. } => {
                 self.apply_artist_albums(id, albums);
@@ -433,6 +434,7 @@ impl AppState {
     ///   - `source` / `kind` / `query`: 回带的请求三元组（source 找会话、query 配对、kind 选桶）
     ///   - `page`: 分页参数（`offset == 0` 首页建桶，否则 append）
     ///   - `payload`: 结果载荷
+    ///   - `has_more`: 源的显式翻页信号
     fn apply_search_results(
         &mut self,
         source: SourceKind,
@@ -440,6 +442,7 @@ impl AppState {
         query: &str,
         page: Page,
         payload: &SearchPayload,
+        has_more: Option<bool>,
     ) {
         let Some(session) = self.channel_search.session_for_mut(source) else {
             return;
@@ -447,7 +450,7 @@ impl AppState {
         if session.query() != query {
             return;
         }
-        session.apply_page(kind, payload.clone(), page);
+        session.apply_page(kind, payload.clone(), page, has_more);
     }
 
     /// ArtistDetail 回包：落到当前 detail 栈顶帧（若正等这个歌手；否则丢弃）。
@@ -927,6 +930,7 @@ mod tests {
             query: "hello".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(2)),
+            has_more: None,
         });
         assert_eq!(session_song_count(&s), 2, "配对结果入会");
         Ok(())
@@ -948,6 +952,7 @@ mod tests {
             query: "stale".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(endserenading(5)),
+            has_more: None,
         });
         assert_eq!(session_song_count(&s), 0, "过期响应不入会");
         Ok(())
@@ -1007,6 +1012,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Albums(vec![album_fixture("al1")]),
+            has_more: None,
         });
         // detail root = al1，fetch = AlbumDetail(al1)。喂该专辑完整详情(含曲目)。
         s.apply(&TaskEvent::AlbumDetailFetched {
@@ -1048,6 +1054,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Albums(vec![album_fixture("al1")]),
+            has_more: None,
         });
         s.apply(&TaskEvent::AlbumDetailFetched {
             id: AlbumId::new(SourceKind::NETEASE, "OTHER"),
@@ -1087,6 +1094,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Artists(vec![artist_fixture("ar1")]),
+            has_more: None,
         });
         let id = ArtistId::new(SourceKind::NETEASE, "ar1");
         s.apply(&TaskEvent::ArtistDetailFetched {

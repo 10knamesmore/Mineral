@@ -44,4 +44,7 @@ SearchResult {
             description: None,
         },
     ],
+    num_pages: Some(
+        34,
+    ),
 }

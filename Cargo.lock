@@ -2802,6 +2802,7 @@ version = "0.5.2"
 dependencies = [
  "color-eyre",
  "derive-getters",
+ "mineral-channel-core",
  "mineral-config",
  "mineral-log",
  "mineral-model",

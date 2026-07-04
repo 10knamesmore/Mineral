@@ -301,7 +301,7 @@ async fn resolve_search(
                 return;
             };
             match channel.search_songs(&term, page).await {
-                Ok(songs) => resolve_ok(player, query, ResolveValue::Songs(songs)),
+                Ok(hits) => resolve_ok(player, query, ResolveValue::Songs(hits.items)),
                 Err(e) => resolve_err(player, query, &color_eyre::eyre::eyre!("{e}")),
             }
         }
@@ -309,7 +309,7 @@ async fn resolve_search(
             let mut songs = Vec::new();
             for channel in player.channels() {
                 match channel.search_songs(&term, page).await {
-                    Ok(hits) => songs.extend(hits),
+                    Ok(hits) => songs.extend(hits.items),
                     Err(e) => mineral_log::warn!(
                         target: "script",
                         source = channel.source().name(),

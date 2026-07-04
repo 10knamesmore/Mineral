@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
 use mineral_model::{
     Album, AlbumId, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist, PlaylistId, Song, SongId,
     SourceKind,
@@ -55,13 +55,13 @@ impl MusicChannel for FakeChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<Vec<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> Result<SearchHits<Song>> {
         Err(Error::NotSupported)
     }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<Vec<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<Vec<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
@@ -285,13 +285,13 @@ impl MusicChannel for WriteRecorder {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<Vec<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> Result<SearchHits<Song>> {
         Err(Error::NotSupported)
     }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<Vec<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<Vec<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {

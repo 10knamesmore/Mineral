@@ -212,7 +212,8 @@ pub(crate) const WEB_URL_TEMPLATES: &str = "mineral.web_url_templates";
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `entries`: `(源名, 歌曲模板, 歌单模板)`;模板 `{id}` 占位填裸 id
+///   - `entries`: `(源名, 歌曲模板, 歌单模板)`;占位语义(`{id}` 整段 / `{0}` 按 `:` 分段)
+///     见 [`mineral_channel_core::render_web_url`]
 pub fn seed_web_url_templates(
     lua: &Lua,
     entries: impl IntoIterator<Item = (String, Option<String>, Option<String>)>,

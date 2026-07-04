@@ -91,6 +91,11 @@ pub enum TaskEvent {
 
         /// 结果载荷(变体与 `kind` 一致)。
         payload: SearchPayload,
+
+        /// channel 的显式翻页信号(`SearchHits::has_more` 透传):`None` = 源不知道,
+        /// client 回退「返回条数 < limit 即榨干」推断。
+        #[serde(default)]
+        has_more: Option<bool>,
     },
 
     /// `ArtistDetail` 任务成功:歌手简介 + 热门曲目已到。

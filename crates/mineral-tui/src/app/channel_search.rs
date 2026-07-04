@@ -76,7 +76,7 @@ pub(crate) enum SearchEffect {
         /// 查询词(与首页同词,续拉同一桶)。
         query: String,
 
-        /// 下一页 offset(= 当前已加载条数 `next_offset`)。
+        /// 下一页 offset(= `next_offset`,页对齐:已请求页数 × limit)。
         offset: u32,
     },
 
@@ -141,8 +141,9 @@ impl App {
                 query,
                 offset,
             } => {
-                // 续拉用与首页一致的页大小(`Page::default().limit`),`exhausted`(短页判榨干)
-                // 的语义才连贯;offset 进 dedup key,在途同页自动并掉。
+                // 续拉用与首页一致的页大小(`Page::default().limit`):榨干推断与 next_offset
+                // 页对齐都锚定同一 limit,混用页大小会让 offset↔页号换算错位;offset 进
+                // dedup key,在途同页自动并掉。
                 let limit = mineral_channel_core::Page::default().limit;
                 self.client.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Search {
@@ -812,6 +813,7 @@ mod tests {
                     .name("al1".to_owned())
                     .build(),
             ]),
+            has_more: None,
         });
         let songs = crate::test_support::endserenading(4);
         let want = songs.get(2).map(|s| s.id.clone());
@@ -873,6 +875,7 @@ mod tests {
                     .name("al1".to_owned())
                     .build(),
             ]),
+            has_more: None,
         });
         // 30 首曲目的专辑详情(远超视口,光标可深入)。
         let songs = (0..30)
@@ -959,6 +962,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Artists(vec![artist.clone()]),
+            has_more: None,
         });
         let aid = ArtistId::new(SourceKind::NETEASE, "ar");
         app.state.apply(&TaskEvent::ArtistDetailFetched {
@@ -1064,6 +1068,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(songs),
+            has_more: None,
         });
         app.state.channel_search.set_focus(SearchFocus::Results);
         if let Some(kr) = app.state.channel_search.active_results_mut() {
@@ -1115,6 +1120,7 @@ mod tests {
                     .name("al1".to_owned())
                     .build(),
             ]),
+            has_more: None,
         });
         app.state.channel_search.set_focus(SearchFocus::Results);
         let eff = app
@@ -1160,6 +1166,7 @@ mod tests {
                     .name("al1".to_owned())
                     .build(),
             ]),
+            has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
@@ -1213,6 +1220,7 @@ mod tests {
             query: "q".to_owned(),
             page: Page::default(),
             payload: SearchPayload::Songs(crate::test_support::endserenading(3)),
+            has_more: None,
         });
         app.state.channel_search.set_focus(SearchFocus::Results);
         app.state

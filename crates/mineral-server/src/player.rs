@@ -740,7 +740,9 @@ mod tests {
 
     use async_trait::async_trait;
     use mineral_audio::{AudioHandle, AudioMode};
-    use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult};
+    use mineral_channel_core::{
+        ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult, SearchHits,
+    };
     use mineral_model::{
         Album, AlbumId, AlbumRef, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song,
         SongId, SourceKind,
@@ -787,11 +789,15 @@ mod tests {
                 .build()
         }
 
-        async fn search_songs(&self, _query: &str, _page: Page) -> ChannelResult<Vec<Song>> {
+        async fn search_songs(&self, _query: &str, _page: Page) -> ChannelResult<SearchHits<Song>> {
             Err(Error::NotSupported)
         }
 
-        async fn search_albums(&self, _query: &str, _page: Page) -> ChannelResult<Vec<Album>> {
+        async fn search_albums(
+            &self,
+            _query: &str,
+            _page: Page,
+        ) -> ChannelResult<SearchHits<Album>> {
             Err(Error::NotSupported)
         }
 
@@ -799,7 +805,7 @@ mod tests {
             &self,
             _query: &str,
             _page: Page,
-        ) -> ChannelResult<Vec<Playlist>> {
+        ) -> ChannelResult<SearchHits<Playlist>> {
             Err(Error::NotSupported)
         }
 
@@ -2131,13 +2137,17 @@ mod tests {
                 .build()
         }
 
-        async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Song>> {
+        async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
             Err(Error::NotSupported)
         }
-        async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Album>> {
+        async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Album>> {
             Err(Error::NotSupported)
         }
-        async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<Vec<Playlist>> {
+        async fn search_playlists(
+            &self,
+            _q: &str,
+            _p: Page,
+        ) -> ChannelResult<SearchHits<Playlist>> {
             Err(Error::NotSupported)
         }
         async fn songs_detail(&self, _ids: &[SongId]) -> ChannelResult<Vec<Song>> {

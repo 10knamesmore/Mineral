@@ -7,7 +7,9 @@
 use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
-use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, Result};
+use mineral_channel_core::{
+    ChannelCaps, Credential, Error, MusicChannel, Page, Result, SearchHits,
+};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind,
     Song, SongId, SourceKind, UserId,
@@ -162,18 +164,20 @@ impl MusicChannel for NeteaseChannel {
             .build()
     }
 
-    async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>> {
+    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>> {
         let dto = api::search::search_songs(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
+        // 响应不带总数/总页数元信息,has_more 留 None(上层按「短页即榨干」推断)。
         Ok(dto
             .songs
             .into_iter()
             .map(convert::album_song_to_model)
-            .collect())
+            .collect::<Vec<Song>>()
+            .into())
     }
 
-    async fn search_albums(&self, query: &str, page: Page) -> Result<Vec<Album>> {
+    async fn search_albums(&self, query: &str, page: Page) -> Result<SearchHits<Album>> {
         let dto = api::search::search_albums(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -182,10 +186,11 @@ impl MusicChannel for NeteaseChannel {
             .albums
             .into_iter()
             .map(|a| convert::album_dto_to_model(a, Vec::new()))
-            .collect())
+            .collect::<Vec<Album>>()
+            .into())
     }
 
-    async fn search_playlists(&self, query: &str, page: Page) -> Result<Vec<Playlist>> {
+    async fn search_playlists(&self, query: &str, page: Page) -> Result<SearchHits<Playlist>> {
         let dto = api::search::search_playlists(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -193,10 +198,11 @@ impl MusicChannel for NeteaseChannel {
             .playlists
             .into_iter()
             .map(convert::search_playlist_to_model)
-            .collect())
+            .collect::<Vec<Playlist>>()
+            .into())
     }
 
-    async fn search_artists(&self, query: &str, page: Page) -> Result<Vec<Artist>> {
+    async fn search_artists(&self, query: &str, page: Page) -> Result<SearchHits<Artist>> {
         let dto = api::search::search_artists(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -204,7 +210,8 @@ impl MusicChannel for NeteaseChannel {
             .artists
             .into_iter()
             .map(convert::search_artist_to_model)
-            .collect())
+            .collect::<Vec<Artist>>()
+            .into())
     }
 
     /// 歌手详情:并发取「详情(简介/计数/热门曲)」与「粉丝数」两端点,聚合成完整 [`Artist`]。

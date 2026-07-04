@@ -54,7 +54,7 @@ pub enum PromptSegment {
 /// 某个 (source, kind) 的一桶搜索结果：累积页 + 光标 + 翻页游标 + 该实体的详情栈。
 ///
 /// 「累积页」= 翻页 append 进同一 [`SearchPayload`] 变体；`next_offset` 是下一页起点、
-/// `exhausted` 由短页（返回条数 < 页大小）置真后停止自动翻页。
+/// `exhausted` 由源的显式 `has_more` 或短页推断置真后停止自动翻页。
 pub struct KindResults {
     /// 已拉取并累积的结果（翻页 append 同变体）。
     pub results: SearchPayload,
@@ -62,23 +62,40 @@ pub struct KindResults {
     /// 结果列光标 + 视口滚动（nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移）。
     list: ScrollList,
 
-    /// 下一页 offset（= 已加载条数）；翻页提交带它。
+    /// 下一页 offset,**页对齐**（= 已请求页数 × limit,而非已加载条数）；翻页提交带它。
+    /// 别改回按实际条数累加——页码型源（如 B 站）每页实际条数与 limit 无关,余数会让
+    /// channel 侧 offset→页号换算折回/跳页。
     pub next_offset: u32,
 
-    /// 是否已榨干（短页/空页）：停止自动翻页，底标 `n/∞` → `n/n`。
+    /// 是否已榨干:源显式说没有下一页（`has_more == Some(false)`）,或源不知道时按
+    /// 短页（返回条数 < 页大小）推断。置真后停止自动翻页,底标 `n/∞` → `n/n`。
     pub exhausted: bool,
 
     /// 当前选中实体的详情栈（root 随 `sel` 复位、下钻 push/pop）。
     pub detail: DetailStack,
 }
 
+/// 榨干判定:源显式表态（`has_more`）优先,`None` 回退「短页即榨干」推断。
+///
+/// # Params:
+///   - `loaded`: 本页实际返回条数
+///   - `limit`: 请求页大小
+///   - `has_more`: 源的显式翻页信号
+fn page_exhausts(loaded: u32, limit: u32, has_more: Option<bool>) -> bool {
+    match has_more {
+        Some(more) => !more,
+        None => loaded < limit,
+    }
+}
+
 impl KindResults {
-    /// 首页结果（`offset == 0`）：替换、光标归零、按短页判 `exhausted`、detail root 落首项。
+    /// 首页结果（`offset == 0`）：替换、光标归零、判 `exhausted`、detail root 落首项。
     ///
     /// # Params:
     ///   - `payload`: 首页载荷
-    ///   - `limit`: 页大小（返回条数 < 它即判榨干）
-    fn first_page(payload: SearchPayload, limit: u32) -> Self {
+    ///   - `limit`: 页大小（`next_offset` 按它页对齐推进）
+    ///   - `has_more`: 源的显式翻页信号（`None` 回退短页推断）
+    fn first_page(payload: SearchPayload, limit: u32, has_more: Option<bool>) -> Self {
         let count = payload_len(&payload);
         let detail = EntityRef::from_payload(&payload, 0)
             .map_or_else(DetailStack::empty, DetailStack::rooted);
@@ -86,18 +103,18 @@ impl KindResults {
         Self {
             results: payload,
             list: ScrollList::new(),
-            next_offset: loaded,
-            exhausted: loaded < limit,
+            next_offset: limit,
+            exhausted: page_exhausts(loaded, limit, has_more),
             detail,
         }
     }
 
-    /// 翻页 append（`offset > 0`）：拼接同变体、推进 `next_offset`、短页置 `exhausted`。
-    fn append_page(&mut self, payload: SearchPayload, limit: u32) {
+    /// 翻页 append（`offset > 0`）：拼接同变体、`next_offset` 页对齐推进、判 `exhausted`。
+    fn append_page(&mut self, payload: SearchPayload, limit: u32, has_more: Option<bool>) {
         let added = u32::try_from(payload_len(&payload)).unwrap_or(u32::MAX);
         extend_payload(&mut self.results, payload);
-        self.next_offset = self.next_offset.saturating_add(added);
-        if added < limit {
+        self.next_offset = self.next_offset.saturating_add(limit);
+        if page_exhausts(added, limit, has_more) {
             self.exhausted = true;
         }
     }
@@ -301,14 +318,21 @@ impl SearchSession {
     ///   - `kind`: 事件自带的 kind（决定存哪个桶）
     ///   - `payload`: 结果载荷
     ///   - `page`: 分页参数（`offset == 0` 为首页）
-    pub fn apply_page(&mut self, kind: SearchKind, payload: SearchPayload, page: Page) {
+    ///   - `has_more`: 源的显式翻页信号（`None` 回退短页推断）
+    pub fn apply_page(
+        &mut self,
+        kind: SearchKind,
+        payload: SearchPayload,
+        page: Page,
+        has_more: Option<bool>,
+    ) {
         if page.offset == 0 {
             // 首页到货:清 loading（即便 0 条也算「搜完了」→ 渲染层转 no results）。
             self.in_flight.remove(&kind);
             self.by_kind
-                .insert(kind, KindResults::first_page(payload, page.limit));
+                .insert(kind, KindResults::first_page(payload, page.limit, has_more));
         } else if let Some(bucket) = self.by_kind.get_mut(&kind) {
-            bucket.append_page(payload, page.limit);
+            bucket.append_page(payload, page.limit, has_more);
         }
     }
 }
@@ -724,6 +748,7 @@ mod tests {
                 SearchKind::Song,
                 SearchPayload::Songs(Vec::new()),
                 Page::default(),
+                /*has_more*/ None,
             );
         }
         assert!(!rs.current_loading(), "首页到货 → 清 loading");
@@ -825,7 +850,7 @@ mod tests {
         assert!(rs.focus_ring.settled(), "同焦点不重新 arm");
     }
 
-    /// 首页满页（30 条）不判榨干、next_offset 推到 30；detail root 落首项。
+    /// 首页满页（= limit）不判榨干、next_offset 页对齐推到 limit；detail root 落首项。
     #[test]
     fn first_page_full_not_exhausted() -> color_eyre::Result<()> {
         let mut s = SearchSession::new(SearchKind::Song);
@@ -836,14 +861,57 @@ mod tests {
                 offset: 0,
                 limit: 5,
             },
+            /*has_more*/ None,
         );
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
         assert_eq!(kr.len(), 5, "5 条入桶");
         assert!(!kr.exhausted, "满页（= limit）不判榨干");
-        assert_eq!(kr.next_offset, 5, "下一页从 5 起");
+        assert_eq!(kr.next_offset, 5, "下一页从 limit 起(页对齐)");
         assert_eq!(kr.detail.depth(), 0, "detail root 落首项、无下钻");
+        Ok(())
+    }
+
+    /// 显式 `has_more` 优先于短页推断:短页 + `Some(true)` 不榨干(页码型源每页实际条数
+    /// 与 limit 无关);满页 + `Some(false)` 也榨干。next_offset 恒页对齐,与实际条数无关。
+    #[test]
+    fn explicit_has_more_overrides_short_page_inference() -> color_eyre::Result<()> {
+        // 短页(2 < limit 5)但源明说还有下一页 → 不榨干,next_offset 仍推到 limit。
+        let mut s = SearchSession::new(SearchKind::Song);
+        s.apply_page(
+            SearchKind::Song,
+            SearchPayload::Songs(endserenading(2)),
+            Page {
+                offset: 0,
+                limit: 5,
+            },
+            /*has_more*/ Some(true),
+        );
+        let kr = s
+            .kind_results()
+            .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
+        assert!(!kr.exhausted, "源显式 has_more=true → 短页不判榨干");
+        assert_eq!(
+            kr.next_offset, 5,
+            "next_offset 页对齐推进,与实际条数(2)无关"
+        );
+
+        // 满页(= limit)但源明说没有下一页 → 榨干。
+        let mut s = SearchSession::new(SearchKind::Song);
+        s.apply_page(
+            SearchKind::Song,
+            full_page(),
+            Page {
+                offset: 0,
+                limit: 5,
+            },
+            /*has_more*/ Some(false),
+        );
+        let kr = s
+            .kind_results()
+            .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
+        assert!(kr.exhausted, "源显式 has_more=false → 满页也榨干");
         Ok(())
     }
 
@@ -855,6 +923,7 @@ mod tests {
             SearchKind::Song,
             SearchPayload::Songs(endserenading(5)),
             Page::default(),
+            /*has_more*/ None,
         );
         let kr = s
             .kind_results()
@@ -863,7 +932,7 @@ mod tests {
         Ok(())
     }
 
-    /// 翻页 append：第二页拼到第一页后、next_offset 累加；短二页判榨干。
+    /// 翻页 append：第二页拼到第一页后、next_offset 页对齐累加(与实际条数无关)；短二页判榨干。
     #[test]
     fn append_page_accumulates_and_exhausts() -> color_eyre::Result<()> {
         let mut s = SearchSession::new(SearchKind::Song);
@@ -874,6 +943,7 @@ mod tests {
                 offset: 0,
                 limit: 5,
             },
+            /*has_more*/ None,
         );
         s.apply_page(
             SearchKind::Song,
@@ -882,12 +952,13 @@ mod tests {
                 offset: 5,
                 limit: 5,
             },
+            /*has_more*/ None,
         );
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("桶应在"))?;
         assert_eq!(kr.len(), 7, "两页累积");
-        assert_eq!(kr.next_offset, 7, "offset 推到 7");
+        assert_eq!(kr.next_offset, 10, "offset 页对齐推到 2 × limit");
         assert!(kr.exhausted, "短二页榨干");
         Ok(())
     }
@@ -896,7 +967,12 @@ mod tests {
     #[test]
     fn query_change_drops_buckets() {
         let mut s = SearchSession::new(SearchKind::Song);
-        s.apply_page(SearchKind::Song, full_page(), Page::default());
+        s.apply_page(
+            SearchKind::Song,
+            full_page(),
+            Page::default(),
+            /*has_more*/ None,
+        );
         assert!(s.kind_results().is_some(), "搜后有桶");
         s.push_query_char('x');
         assert!(s.kind_results().is_none(), "改 query 作废桶");
@@ -910,6 +986,7 @@ mod tests {
             SearchKind::Album,
             SearchPayload::Albums(vec![album("a1"), album("a2")]),
             Page::default(),
+            /*has_more*/ None,
         );
         let kr = s
             .kind_results_mut()

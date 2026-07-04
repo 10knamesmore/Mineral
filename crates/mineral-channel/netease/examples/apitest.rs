@@ -181,7 +181,8 @@ async fn main() -> color_eyre::Result<()> {
 
     // 用搜索结果驱动后续所有查询。
     let song_ref = match ch.search_songs("周杰伦", Page::new(0, 5)).await {
-        Ok(songs) => {
+        Ok(hits) => {
+            let songs = hits.items;
             let first = songs.first().cloned();
             report.push((
                 "search_songs".into(),
@@ -382,7 +383,8 @@ async fn run_artist_readonly(
     report: &mut Vec<(String, Result<String, String>)>,
 ) {
     let artist_ref = match ch.search_artists("Beyond", Page::new(0, 5)).await {
-        Ok(artists) => {
+        Ok(hits) => {
+            let artists = hits.items;
             let first = artists.first().cloned();
             report.push((
                 "search_artists".into(),
@@ -492,7 +494,7 @@ async fn run_section6_playlist_write(
         .search_songs("海阔天空", Page::new(0, 1))
         .await
         .ok()
-        .and_then(|v| v.into_iter().next());
+        .and_then(|hits| hits.items.into_iter().next());
     if let Some(song) = donor {
         let r = run("playlist_add_songs", async {
             ch.playlist_add_songs(&created.id, std::slice::from_ref(&song.id))

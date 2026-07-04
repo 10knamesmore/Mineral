@@ -312,34 +312,52 @@ async fn execute(
             query,
             page,
         } => {
+            // 每 arm 把 SearchHits 拆成 (载荷, 显式翻页信号) 一并透传给 client。
             let result = match kind {
-                mineral_model::SearchKind::Song => channel
-                    .search_songs(query, *page)
-                    .await
-                    .map(crate::event::SearchPayload::Songs),
-                mineral_model::SearchKind::Album => channel
-                    .search_albums(query, *page)
-                    .await
-                    .map(crate::event::SearchPayload::Albums),
-                mineral_model::SearchKind::Playlist => channel
-                    .search_playlists(query, *page)
-                    .await
-                    .map(crate::event::SearchPayload::Playlists),
-                mineral_model::SearchKind::Artist => channel
-                    .search_artists(query, *page)
-                    .await
-                    .map(crate::event::SearchPayload::Artists),
+                mineral_model::SearchKind::Song => {
+                    channel.search_songs(query, *page).await.map(|hits| {
+                        (
+                            crate::event::SearchPayload::Songs(hits.items),
+                            hits.has_more,
+                        )
+                    })
+                }
+                mineral_model::SearchKind::Album => {
+                    channel.search_albums(query, *page).await.map(|hits| {
+                        (
+                            crate::event::SearchPayload::Albums(hits.items),
+                            hits.has_more,
+                        )
+                    })
+                }
+                mineral_model::SearchKind::Playlist => {
+                    channel.search_playlists(query, *page).await.map(|hits| {
+                        (
+                            crate::event::SearchPayload::Playlists(hits.items),
+                            hits.has_more,
+                        )
+                    })
+                }
+                mineral_model::SearchKind::Artist => {
+                    channel.search_artists(query, *page).await.map(|hits| {
+                        (
+                            crate::event::SearchPayload::Artists(hits.items),
+                            hits.has_more,
+                        )
+                    })
+                }
                 // User 搜索无 UI 消费方,caps 也不会声明它
                 mineral_model::SearchKind::User => Err(mineral_channel_core::Error::NotSupported),
             };
             match result {
-                Ok(payload) => {
+                Ok((payload, has_more)) => {
                     event_tx.lock().push(TaskEvent::SearchResults {
                         source: *source,
                         kind: *kind,
                         query: query.clone(),
                         page: *page,
                         payload,
+                        has_more,
                     });
                     TaskOutcome::Ok
                 }
