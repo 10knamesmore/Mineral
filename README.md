@@ -114,6 +114,16 @@ mineral channel netease login    # 终端二维码,App 扫码登录
 
 ## 配置
 
+> [!WARNING]
+> Mineral 仍在积极开发中,每次版本迭代都可能新增 / 调整 / 移除配置项,字段名与默认值也可能变。**每次升级后**建议重跑一遍:
+>
+> ```bash
+> mineral config init    # 刷新编辑器类型注解(LSP stub + .luarc.json),补上新字段
+> mineral config check   # 离线校验现有 config.lua 在新版本下是否还合法
+> ```
+>
+> `config init` 不会覆盖你已有的 `config.lua`,只更新类型注解与 `default.lua` 参考;`config check` 只读校验、不碰网络。
+
 ```bash
 mineral config init    # 生成 config.lua 模板 + default.lua 参考 + 编辑器类型注解
 mineral config check   # 离线校验配置
