@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mineral_model::MediaUrl;
+use mineral_model::{MediaUrl, StreamLayout};
 
 /// 投递给 engine 主循环的一条指令。
 pub(crate) enum AudioCommand {
@@ -19,6 +19,9 @@ pub(crate) enum AudioCommand {
 
         /// 捕获落盘路径(`Remote` + 想缓存时给)。
         capture: Option<PathBuf>,
+
+        /// 流的容器布局:决定解码器 seekable / 流式打开(分片远端流流式,避免 open 预扫全片)。
+        layout: StreamLayout,
     },
     /// 预排下一曲:在当前曲播完前把它的 decoder 排进 rodio 队列,实现无缝接续。
     ///
@@ -34,6 +37,9 @@ pub(crate) enum AudioCommand {
 
         /// 捕获落盘路径(`Remote` + 想缓存时给)。
         capture: Option<PathBuf>,
+
+        /// 流的容器布局:决定解码器 seekable / 流式打开(分片远端流流式,避免 open 预扫全片)。
+        layout: StreamLayout,
     },
     /// 撤销「尚未 append 进队列」的待建下一曲(缓冲不及预期时的回退;已 append 则无效)。
     ClearNext,

@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_model::MediaUrl;
+use mineral_model::{MediaUrl, StreamLayout};
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Split};
 use ringbuf::{HeapCons, HeapRb};
@@ -152,11 +152,13 @@ impl AudioHandle {
     /// # Params:
     ///   - `url`: 播放源
     ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
-    pub fn play(&self, url: MediaUrl, headers: Vec<(String, String)>) {
+    ///   - `layout`: 流的容器布局(分片远端流以流式打开,避免起播预扫全片)
+    pub fn play(&self, url: MediaUrl, headers: Vec<(String, String)>, layout: StreamLayout) {
         self.send(AudioCommand::Play {
             url,
             headers,
             capture: None,
+            layout,
         });
     }
 
@@ -168,16 +170,19 @@ impl AudioHandle {
     ///   - `url`: 播放源
     ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
     ///   - `capture`: 捕获落盘路径
+    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
     pub fn play_capturing(
         &self,
         url: MediaUrl,
         headers: Vec<(String, String)>,
         capture: std::path::PathBuf,
+        layout: StreamLayout,
     ) {
         self.send(AudioCommand::Play {
             url,
             headers,
             capture: Some(capture),
+            layout,
         });
     }
 
@@ -188,11 +193,13 @@ impl AudioHandle {
     /// # Params:
     ///   - `url`: 下一曲播放源
     ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
-    pub fn append_next(&self, url: MediaUrl, headers: Vec<(String, String)>) {
+    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
+    pub fn append_next(&self, url: MediaUrl, headers: Vec<(String, String)>, layout: StreamLayout) {
         self.send(AudioCommand::AppendNext {
             url,
             headers,
             capture: None,
+            layout,
         });
     }
 
@@ -202,16 +209,19 @@ impl AudioHandle {
     ///   - `url`: 下一曲播放源(仅 `Remote` 时 capture 生效)
     ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
     ///   - `capture`: 捕获落盘路径
+    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
     pub fn append_next_capturing(
         &self,
         url: MediaUrl,
         headers: Vec<(String, String)>,
         capture: std::path::PathBuf,
+        layout: StreamLayout,
     ) {
         self.send(AudioCommand::AppendNext {
             url,
             headers,
             capture: Some(capture),
+            layout,
         });
     }
 
@@ -265,7 +275,7 @@ impl AudioHandle {
 mod tests {
     use std::time::Duration;
 
-    use mineral_model::MediaUrl;
+    use mineral_model::{MediaUrl, StreamLayout};
 
     use crate::handle::AudioMode;
     use crate::snapshot::AudioBackend;
@@ -314,6 +324,7 @@ mod tests {
         handle.append_next(
             MediaUrl::remote("https://example.com/next.mp3")?,
             Vec::new(),
+            StreamLayout::Contiguous,
         );
         handle.clear_next();
         handle.stop();

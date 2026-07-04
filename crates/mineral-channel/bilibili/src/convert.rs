@@ -8,7 +8,7 @@
 
 use mineral_model::{
     Album, AlbumId, AlbumRef, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl,
-    Playlist, PlaylistId, Song, SongId, SourceKind,
+    Playlist, PlaylistId, Song, SongId, SourceKind, StreamLayout,
 };
 
 use crate::wire::fav::{FavFolder, FavInfo, FavMedia};
@@ -203,10 +203,18 @@ pub(crate) fn view_to_album(info: VideoInfo) -> Album {
         .build()
 }
 
-/// 取流必带的请求头:B站音频 `baseUrl` 播放要 `Referer`(否则 403),随 `PlayUrl` 经 IPC 穿透到
-/// 播放/下载层(见 `stream_headers` 通道)。
+/// 取流必带的请求头:B站音频 `baseUrl` 播放要 `Referer` **且** 浏览器 `User-Agent`,随 `PlayUrl`
+/// 经 IPC 穿透到播放/下载层(见 `stream_headers` 通道)。
+///
+/// upos CDN 两个头都校验——curl 实测:缺任一(仅 Referer / 仅 UA)都 403,两者齐备才 206。
+/// 复用 transport 的 [`REFERER`]/[`UA`] 常量,与 API 请求同源。
 fn playback_stream_headers() -> Vec<(String, String)> {
-    vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())]
+    use crate::transport::headers::{REFERER, UA};
+
+    vec![
+        ("Referer".to_owned(), REFERER.to_owned()),
+        ("User-Agent".to_owned(), UA.to_owned()),
+    ]
 }
 
 /// playurl DTO → [`PlayUrl`];无可用音频轨返回 `None`。
@@ -238,6 +246,8 @@ pub(crate) fn playurl_to_play(song_id: SongId, result: PlayUrlResult) -> Option<
         format,
         bit_depth: None,
         stream_headers: playback_stream_headers(),
+        // B站音频是分片 fMP4:告知播放层以流式打开,避免 seekable 全扫导致起播前拉整段。
+        layout: StreamLayout::Chunked,
     })
 }
 
@@ -337,8 +347,8 @@ mod tests {
     use crate::wire::search::SearchVideoItem;
     use crate::wire::view::VideoInfo;
 
-    /// playurl → PlayUrl:取 id 最大的音频轨、映射 Exhigh/AAC、**带上 Referer 取流头**
-    /// (B站 baseUrl 播放必需,否则 403),bitrate 落 bandwidth。
+    /// playurl → PlayUrl:取 id 最大的音频轨、映射 Exhigh/AAC、**带上 Referer + UA 取流头**
+    /// (B站 baseUrl 播放两者缺一即 403),bitrate 落 bandwidth。
     ///
     /// 回归:真实响应每项**同时**带 `baseUrl` + `base_url`(值同)。DTO 只认 `baseUrl`,
     /// 不给 `base_url` alias,否则 serde 报 `duplicate field baseUrl`、取流失败卡开头。
@@ -365,8 +375,17 @@ mod tests {
         assert_eq!(pu.bitrate_bps, 320_000);
         assert_eq!(
             pu.stream_headers,
-            vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
-            "取流必须带 Referer,否则 baseUrl 403"
+            vec![
+                (
+                    "Referer".to_owned(),
+                    crate::transport::headers::REFERER.to_owned()
+                ),
+                (
+                    "User-Agent".to_owned(),
+                    crate::transport::headers::UA.to_owned()
+                ),
+            ],
+            "取流必须同时带 Referer + UA,否则 baseUrl 403(curl 实测:缺任一即 403,两者齐备 206)"
         );
         Ok(())
     }

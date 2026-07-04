@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_model::MediaUrl;
+use mineral_model::{MediaUrl, StreamLayout};
 use parking_lot::Mutex;
 use rodio::Source;
 use rodio::decoder::DecoderBuilder;
@@ -34,6 +34,7 @@ use crate::bps::Bps;
 use crate::command::AudioCommand;
 use crate::file_storage::FileStorageProvider;
 use crate::handle::{AudioMode, EngineParams};
+use crate::policy::{download_reached_full, effective_byte_len};
 use crate::queue_slots::{Boundary, PlayHead, SharedProgress, Slot};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
@@ -274,8 +275,9 @@ impl<'a> Engine<'a> {
                 url,
                 headers,
                 capture,
+                layout,
             } => {
-                if let Err(e) = self.play(url, headers, capture) {
+                if let Err(e) = self.play(url, headers, capture, layout) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "play error");
                 }
             }
@@ -283,7 +285,8 @@ impl<'a> Engine<'a> {
                 url,
                 headers,
                 capture,
-            } => self.append_next(url, headers, capture),
+                layout,
+            } => self.append_next(url, headers, capture, layout),
             AudioCommand::ClearNext => self.clear_next(),
             AudioCommand::Pause => self.player.pause(),
             AudioCommand::Resume => self.player.play(),
@@ -299,6 +302,7 @@ impl<'a> Engine<'a> {
         url: MediaUrl,
         headers: Vec<(String, String)>,
         capture: Option<PathBuf>,
+        layout: StreamLayout,
     ) -> color_eyre::Result<()> {
         mineral_log::info!(target: "audio", url = %url, capture = ?capture, "start decoding");
         // 切歌前先 disarm,旧曲尾巴(及已预排 next)的 sound_count 退潮不会被算成曲终。
@@ -315,7 +319,7 @@ impl<'a> Engine<'a> {
         let idx = 0;
         self.reset_progress(idx, track_gen);
         let (dur_ms, sr, local) =
-            self.build_and_append_blocking(url, headers, capture, track_gen, idx)?;
+            self.build_and_append_blocking(url, headers, capture, track_gen, idx, layout)?;
         if local {
             self.progress
                 .slot(idx)
@@ -343,6 +347,7 @@ impl<'a> Engine<'a> {
         url: MediaUrl,
         headers: Vec<(String, String)>,
         capture: Option<PathBuf>,
+        layout: StreamLayout,
     ) {
         if !self.head.cur.occupied {
             return;
@@ -371,6 +376,8 @@ impl<'a> Engine<'a> {
                         .await
                     {
                         Ok((reader, byte_len)) => {
+                            // 预排远端流同样按布局 gate:分片流丢 byte_len,drain 时以非 seekable 打开。
+                            let byte_len = effective_byte_len(byte_len, /*local*/ false, layout);
                             let _ = tx.send(NextBuilt {
                                 reader,
                                 byte_len,
@@ -439,6 +446,7 @@ impl<'a> Engine<'a> {
         capture: Option<PathBuf>,
         track_gen: u64,
         idx: usize,
+        layout: StreamLayout,
     ) -> color_eyre::Result<(u64, u32, bool)> {
         let (reader, byte_len, local) = match url {
             MediaUrl::Remote(u) => {
@@ -459,6 +467,8 @@ impl<'a> Engine<'a> {
                 (reader, byte_len, true)
             }
         };
+        // 分片远端流(如 B站 fMP4)丢弃 byte_len → 解码器非 seekable、open 不预扫全片,秒起播。
+        let byte_len = effective_byte_len(byte_len, local, layout);
         let decoder = build_decoder(reader, byte_len)?;
         let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
         let sr = u32::from(decoder.sample_rate());
@@ -600,11 +610,13 @@ async fn create_stream(
         Some(path) => {
             stream_with_provider(
                 target,
-                FileStorageProvider::new(path),
+                FileStorageProvider::new(path.clone()),
                 stream_gen,
                 progress_idx,
                 progress,
-                /*track_completion*/ true,
+                // 下完 waiter 核对该落盘文件字节数达 content_length 才标下完(挡截断)。
+                /*verify_path*/
+                Some(path),
                 prefetch_bytes,
             )
             .await
@@ -616,7 +628,7 @@ async fn create_stream(
                 stream_gen,
                 progress_idx,
                 progress,
-                /*track_completion*/ false,
+                /*verify_path*/ None,
                 prefetch_bytes,
             )
             .await
@@ -658,7 +670,8 @@ fn client_with_headers(headers: &[(String, String)]) -> color_eyre::Result<Clien
 /// 用给定 `StorageProvider` 起 stream-download(两种 provider 走同一泛型路径,差别只在 `provider`)。
 ///
 /// # Params:
-///   - `track_completion`: 是否 spawn waiter 等整段下完(capture 才需,用于 `download_complete`)
+///   - `verify_path`: capture 落盘路径(`Some` = capture 播放,spawn waiter 等下完并**核对字节数**;
+///     `None` = 非 capture,不 spawn waiter)
 ///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
 async fn stream_with_provider<P>(
     target: StreamTarget,
@@ -666,7 +679,7 @@ async fn stream_with_provider<P>(
     stream_gen: u64,
     progress_idx: usize,
     progress: Arc<SharedProgress>,
-    track_completion: bool,
+    verify_path: Option<PathBuf>,
     prefetch_bytes: u64,
 ) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)>
 where
@@ -711,14 +724,30 @@ where
         .map_err(|e| eyre!("stream-download init: {e}"))?;
     // capture 播放:拿 download handle,spawn 一个 waiter 等整段下完后 store 本曲代号。
     // 必须在 reader 被 decoder 消费前取 handle。
-    if track_completion {
+    if let Some(vpath) = verify_path {
         let handle = reader.handle();
         let done = Arc::clone(&progress);
         tokio::spawn(async move {
             handle.wait_for_completion().await;
-            done.slot(progress_idx)
-                .done_gen
-                .store(stream_gen, Ordering::Release);
+            // stream_download 在下载出错/断连时也 signal complete;核对落盘字节数达 content_length
+            // 才标下完,否则截断文件会被 harvest 进缓存、之后播放解码 IO 错。
+            let file_len = tokio::fs::metadata(&vpath)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if download_reached_full(file_len, len) {
+                done.slot(progress_idx)
+                    .done_gen
+                    .store(stream_gen, Ordering::Release);
+            } else {
+                mineral_log::warn!(
+                    target: "audio",
+                    stream_gen,
+                    file_len,
+                    expected = len.unwrap_or(0),
+                    "capture 未下完整段(截断),不标下完、不入缓存"
+                );
+            }
         });
     }
     Ok((Box::new(reader), len))

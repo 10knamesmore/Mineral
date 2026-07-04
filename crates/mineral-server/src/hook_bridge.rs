@@ -144,6 +144,11 @@ fn apply_play_decision(
             let mut effective = original;
             if let Some(url) = spec.new_url() {
                 effective.url = url.clone();
+                // 顶换了 URL → 目标容器可能与原曲不同:脚本显式给 layout 则用之,否则默认流式打开
+                // (不预扫,永不因分片容器全扫而起播卡顿;代价仅流式期间不支持向后 seek)。
+                effective.layout = spec
+                    .layout()
+                    .unwrap_or(mineral_model::StreamLayout::Chunked);
             }
             if let Some(quality) = spec.new_quality() {
                 effective.quality = quality;
@@ -160,9 +165,11 @@ fn apply_play_decision(
             );
             // 改写过的流不 capture 入缓存:缓存按 song_id+quality 入键,
             // 改写内容与原曲是否一致由脚本自负,污染缓存代价高;fallback 流每次现拉。
-            player
-                .audio()
-                .play(effective.url.clone(), effective.stream_headers.clone());
+            player.audio().play(
+                effective.url.clone(),
+                effective.stream_headers.clone(),
+                effective.layout,
+            );
             player.set_play_url(effective);
         }
         HookDecision::Skip { reason } => {

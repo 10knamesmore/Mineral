@@ -76,8 +76,9 @@ function mineral.on(event, handler) end
 ---@class mineral.HookReturn
 ---@field url? string  改写后的 URL
 ---@field quality? string  改写后的音质名
----@field headers? string[][]  改写后的取流请求头,`{{name, value}}` 数组(随顶替的 url 带头,如 B站 baseUrl 需 Referer)
----@field skip? string  跳过本次,值为原因(给了 skip 则忽略 url/quality/headers)
+---@field headers? string[][]  改写后的取流请求头,`{{name, value}}` 数组(随顶替的 url 带上其鉴权/防盗链头)
+---@field layout? "contiguous"|"chunked"  顶替流的容器布局:分片/自适应容器给 "chunked" 让播放层流式打开(避免起播预扫全片),直链给 "contiguous" 保留 seek;改 url 而不给时默认 "chunked"
+---@field skip? string  跳过本次,值为原因(给了 skip 则忽略 url/quality/headers/layout)
 
 --- 注册同步拦截 hook:daemon 在起播前(`before_play`)/ 下载写盘前
 --- (`before_download`)同步等待回调裁决。返回值:`nil`(或 `true`)放行;

@@ -352,13 +352,25 @@ fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecisi
                         })
                         .collect::<Vec<(String, String)>>()
                 });
-            if new_url.is_none() && new_quality.is_none() && stream_headers.is_none() {
-                return Err("hook 返回 table 但无 url / quality / headers / skip 字段".to_owned());
+            let layout = table
+                .get::<Option<String>>("layout")
+                .map_err(|e| format!("hook 返回值 layout 字段非法: {e}"))?
+                .map(|raw| parse_layout(&raw))
+                .transpose()?;
+            if new_url.is_none()
+                && new_quality.is_none()
+                && stream_headers.is_none()
+                && layout.is_none()
+            {
+                return Err(
+                    "hook 返回 table 但无 url / quality / headers / layout / skip 字段".to_owned(),
+                );
             }
             Ok(HookDecision::Rewrite(RewriteSpec {
                 new_url,
                 new_quality,
                 stream_headers,
+                layout,
             }))
         }
         other => Err(format!(
@@ -374,6 +386,15 @@ fn parse_bitrate(raw: &str) -> Result<mineral_model::BitRate, String> {
         .into_iter()
         .find(|q| q.as_str() == raw)
         .ok_or_else(|| format!("未知音质名 `{raw}`(可选:standard/higher/exhigh/lossless/hires)"))
+}
+
+/// 按容器布局名解析 [`mineral_model::StreamLayout`](与 serde snake_case 对偶);未知名报错。
+fn parse_layout(raw: &str) -> Result<mineral_model::StreamLayout, String> {
+    match raw {
+        "contiguous" => Ok(mineral_model::StreamLayout::Contiguous),
+        "chunked" => Ok(mineral_model::StreamLayout::Chunked),
+        other => Err(format!("未知 layout `{other}`(可选:contiguous / chunked)")),
+    }
 }
 
 /// 依次调用一桶回调;实参由 `make_args` 现做(每个回调独立一份,互不污染)。

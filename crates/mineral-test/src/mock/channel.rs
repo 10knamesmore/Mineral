@@ -62,6 +62,7 @@ impl MusicChannel for UrlChannel {
             format: AudioFormat::Flac,
             bit_depth: Some(24),
             stream_headers: Vec::new(),
+            layout: mineral_model::StreamLayout::Contiguous,
         }])
     }
 

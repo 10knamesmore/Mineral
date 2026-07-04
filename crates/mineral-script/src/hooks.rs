@@ -3,7 +3,7 @@
 //! [`ScriptSender::intercept`](crate::ScriptSender::intercept)(daemon 侧)
 //! 与 dispatch 层(脚本侧)。
 
-use mineral_model::{BitRate, MediaUrl, PlayUrl, Song};
+use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, StreamLayout};
 
 /// 拦截点类别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -113,8 +113,13 @@ pub struct RewriteSpec {
     /// 改写后的目标音质;`None` = 不改音质。
     pub(crate) new_quality: Option<BitRate>,
 
-    /// 改写后的取流请求头(如 B站 baseUrl 顶替需 `Referer`);`None` = 不改头。
+    /// 改写后的取流请求头(顶换的流若需鉴权/防盗链头,随之带上);`None` = 不改头。
     pub(crate) stream_headers: Option<Vec<(String, String)>>,
+
+    /// 改写后的流容器布局;`None` = 脚本没指定(改 URL 时由 apply 层定安全默认)。
+    /// 当改写把 URL 顶换成不同容器的流时,脚本据目标布局设置(分片流置 `Chunked` 让播放层流式
+    /// 打开、直链置 `Contiguous` 保留 seek)。
+    pub(crate) layout: Option<StreamLayout>,
 }
 
 impl RewriteSpec {
@@ -134,6 +139,12 @@ impl RewriteSpec {
     #[must_use]
     pub fn stream_headers(&self) -> Option<&[(String, String)]> {
         self.stream_headers.as_deref()
+    }
+
+    /// 改写后的流容器布局(只读);`None` = 脚本未指定(apply 层定默认)。
+    #[must_use]
+    pub fn layout(&self) -> Option<StreamLayout> {
+        self.layout
     }
 }
 

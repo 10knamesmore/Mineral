@@ -311,9 +311,12 @@ pub(crate) struct Capturing {
 pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, quality: BitRate) {
     match player.media_cache().capture_path(&song.id, quality) {
         Some(path) => {
-            player
-                .audio()
-                .play_capturing(pu.url.clone(), pu.stream_headers.clone(), path.clone());
+            player.audio().play_capturing(
+                pu.url.clone(),
+                pu.stream_headers.clone(),
+                path.clone(),
+                pu.layout,
+            );
             player.set_capturing(Capturing {
                 song: song.clone(),
                 quality,
@@ -323,7 +326,7 @@ pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, qua
         }
         None => player
             .audio()
-            .play(pu.url.clone(), pu.stream_headers.clone()),
+            .play(pu.url.clone(), pu.stream_headers.clone(), pu.layout),
     }
 }
 

@@ -189,6 +189,8 @@ fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
         bit_depth: None,
         // 网易云音频 CDN 直链自足,不需附加取流头。
         stream_headers: Vec::new(),
+        // 网易云是整块直链(MP3/FLAC),随机访问廉价,正常 seekable 打开。
+        layout: mineral_model::StreamLayout::Contiguous,
     })
 }
 

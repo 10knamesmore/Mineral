@@ -157,7 +157,7 @@ fn queue_repeatone(player: &PlayerCore, next: Song) {
     };
     player
         .audio()
-        .append_next(pu.url.clone(), pu.stream_headers.clone());
+        .append_next(pu.url.clone(), pu.stream_headers.clone(), pu.layout);
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -177,10 +177,12 @@ fn queue_local_next(
     origin: PlaybackOrigin,
 ) {
     let pu = crate::resolve::local_play_url(&next, &path, quality);
-    // 本地文件无需附加取流头。
-    player
-        .audio()
-        .append_next(MediaUrl::Local(path), Vec::new());
+    // 本地文件无需附加取流头;本地恒 seekable(Contiguous)。
+    player.audio().append_next(
+        MediaUrl::Local(path),
+        Vec::new(),
+        mineral_model::StreamLayout::Contiguous,
+    );
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -211,6 +213,7 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
                 play_url.url.clone(),
                 play_url.stream_headers.clone(),
                 path.clone(),
+                play_url.layout,
             );
             let cap = Capturing {
                 song: next.clone(),
@@ -228,9 +231,11 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
             });
         }
         None => {
-            player
-                .audio()
-                .append_next(play_url.url.clone(), play_url.stream_headers.clone());
+            player.audio().append_next(
+                play_url.url.clone(),
+                play_url.stream_headers.clone(),
+                play_url.layout,
+            );
             player.with_state(|st| {
                 st.queued = Some(Queued {
                     song: next,
@@ -270,10 +275,11 @@ pub(crate) fn check_advance(player: &PlayerCore) {
     }
     player.set_last_seen_finished_seq(snap.track_finished_seq);
 
-    // 旧当前曲自然播完 → capture 必已下完 → 收割(check_harvest 没赶上时兜底)。
+    // 曲终时 capture 还在 → 它没被 check_harvest(先于本函数跑,见 play.rs 调用序)按 download_complete
+    // 收走 = 下载未真完成。半截 capture 无用(截断文件入缓存后回放会解码 IO 错),删残件、不入缓存。
     let old_cap = player.with_state(|st| st.capturing.take());
     if let Some(cap) = old_cap {
-        crate::download::spawn_harvest(player, cap);
+        drop(std::fs::remove_file(&cap.path));
     }
 
     let (old, has_queued) = player.with_state(|st| (st.current_song.clone(), st.queued.is_some()));

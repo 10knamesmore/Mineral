@@ -473,7 +473,9 @@ impl PlayerCore {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), origin = ?origin, "本地命中,跳过网络");
             // 本地播也填 play_url(format / bitrate 按文件内容经 lofty 读出,见 resolve),transport 才显 fmt。
             let pu = crate::resolve::local_play_url(song, &path, quality);
-            self.inner.audio.play(MediaUrl::Local(path), Vec::new());
+            self.inner
+                .audio
+                .play(MediaUrl::Local(path), Vec::new(), pu.layout);
             let mut st = self.inner.state.lock();
             st.play_url = Some(pu);
             st.bump_current();
@@ -1025,6 +1027,7 @@ mod tests {
             format: mineral_model::AudioFormat::Mp3,
             bit_depth: None,
             stream_headers: Vec::new(),
+            layout: mineral_model::StreamLayout::Contiguous,
         })
     }
 
@@ -1108,6 +1111,59 @@ mod tests {
             carried,
             "play_url.stream_headers 应带上 hook 返回的 Referer"
         );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_play 改写 URL 但未指定 layout → effective.layout 默认 `Chunked`(解灰目标常是分片流,
+    /// 流式打开避免起播 stall)。回归:曾直接继承原曲 layout(网易云 `Contiguous`),改写成 B站
+    /// fMP4 后被 seekable 全扫、起播卡数秒。
+    #[tokio::test]
+    async fn before_play_rewrite_url_defaults_chunked_layout() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx)
+                return { url = "https://fallback.example/audio.m4s" }
+            end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        let chunked = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url
+                    .as_ref()
+                    .is_some_and(|pu| pu.layout == mineral_model::StreamLayout::Chunked)
+            })
+        })
+        .await;
+        assert!(chunked, "改写 URL 后 layout 应默认 Chunked");
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_play 改写时脚本显式 `layout = "contiguous"` → effective.layout 用该值(压过默认 Chunked),
+    /// 给「改写成直链源」的脚本一个恢复 seekable 的出口。
+    #[tokio::test]
+    async fn before_play_rewrite_explicit_layout_overrides_default() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx)
+                return { url = "https://fallback.example/direct.mp3", layout = "contiguous" }
+            end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        let contiguous = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url
+                    .as_ref()
+                    .is_some_and(|pu| pu.layout == mineral_model::StreamLayout::Contiguous)
+            })
+        })
+        .await;
+        assert!(contiguous, "显式 layout=contiguous 应压过默认 Chunked");
         drop(runtime);
         Ok(())
     }
