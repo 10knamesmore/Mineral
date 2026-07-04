@@ -89,6 +89,11 @@ pub(crate) struct Inner {
     /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
     pub(crate) client_events: Mutex<Vec<TaskEvent>>,
 
+    /// 收藏(♥)persist 读改写 + canonical 推送的串行锁:让 toggle 与 connect 期 sync_favorites
+    /// 互斥,防并发交错导致陈旧远端快照复活刚取消的收藏、或乐观收藏被整源桶替换清掉。
+    /// 只护 persist 读写 + 推送,**不**跨远端网络调用(镜像 / fetch 都在锁外)。
+    pub(crate) favorites_lock: tokio::sync::Mutex<()>,
+
     /// 上次「周期 position 刷新」落盘时刻;background_loop 按 `session_save` 节流。
     pub(crate) last_session_save: Mutex<Instant>,
 
@@ -166,6 +171,7 @@ impl PlayerCore {
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
+            favorites_lock: tokio::sync::Mutex::new(()),
             last_session_save: Mutex::new(Instant::now()),
             playback_quality: *config.playback_quality(),
             gapless_prefetch_ms: *config.daemon().gapless_prefetch_ms(),
@@ -707,7 +713,8 @@ impl PlayerCore {
         }
     }
 
-    /// 重新提交 PlaylistsFetched / LikedSongIdsFetched 任务(给新 client 用)。
+    /// 新 client 的初始数据:重拉各源歌单 + 触发收藏同步。收藏走 server 侧 async 编排
+    /// (需 persist,不进 task lane),把 canonical favorited 集推给 client。
     pub fn refresh_initial_loads(&self) {
         for ch in &self.inner.channels {
             let source = ch.source();
@@ -715,10 +722,11 @@ impl PlayerCore {
                 TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }),
                 Priority::User,
             );
-            self.inner.scheduler.submit(
-                TaskKind::ChannelFetch(ChannelFetchKind::LikedSongIds { source }),
-                Priority::Background,
-            );
+            let this = self.clone();
+            let channel = Arc::clone(ch);
+            tokio::spawn(async move {
+                this.sync_favorites(source, channel).await;
+            });
         }
     }
 }
@@ -761,6 +769,9 @@ mod tests {
 
         /// `song_urls` 失败前的人为延迟(竞态敏感的测试用它撑开时序窗口)。
         url_delay: Option<Duration>,
+
+        /// `liked_song_ids` 返回的远端红心集;`None` → NotSupported(favorite 导入测试用 `Some`)。
+        liked_ids: Option<rustc_hash::FxHashSet<SongId>>,
     }
 
     #[async_trait]
@@ -832,6 +843,10 @@ mod tests {
             self.calls.lock().push((id.clone(), completed, listen_ms));
             Ok(())
         }
+
+        async fn liked_song_ids(&self) -> ChannelResult<rustc_hash::FxHashSet<SongId>> {
+            self.liked_ids.clone().ok_or(Error::NotSupported)
+        }
     }
 
     /// 造一个不 spawn 后台 loop 的 [`PlayerCore`],注入记录型 channel。
@@ -860,6 +875,7 @@ mod tests {
         let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
             calls,
             url_delay: None,
+            liked_ids: None,
         })];
         core_with_channels(
             channels,
@@ -926,6 +942,7 @@ mod tests {
             vec![Arc::new(RecordingChannel {
                 calls: Arc::default(),
                 url_delay: None,
+                liked_ids: None,
             })],
             ServerStore::disabled(),
             /*music_dir*/ None,
@@ -978,6 +995,7 @@ mod tests {
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
+            favorites_lock: tokio::sync::Mutex::new(()),
             last_session_save: Mutex::new(std::time::Instant::now()),
             playback_quality: *cfg.playback_quality(),
             gapless_prefetch_ms: *cfg.daemon().gapless_prefetch_ms(),
@@ -1767,6 +1785,7 @@ mod tests {
         let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
             calls,
             url_delay: None,
+            liked_ids: None,
         })];
         let core = core_with_events(
             channels,
@@ -1808,6 +1827,7 @@ mod tests {
         let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
             calls,
             url_delay: Some(Duration::from_millis(200)),
+            liked_ids: None,
         })];
         let core = core_with_events(
             channels,
@@ -1924,6 +1944,7 @@ mod tests {
         let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
             calls,
             url_delay: None,
+            liked_ids: None,
         })];
         let core = core_with_channels(channels, persist, Some(music_dir), media_cache)?;
         core.play_song(&s);
@@ -2196,6 +2217,95 @@ mod tests {
             }
         }
         assert!(found, "写成功后应触发 MyPlaylists 重拉");
+        Ok(())
+    }
+
+    /// toggle_favorite 以本地 persist 为事实来源:即使该源 channel 的远端镜像
+    /// (`set_loved`)返回 NotSupported(如 bilibili / 未登录),本地也必写。
+    /// 回归:曾把写绕道 channel.set_loved,NotSupported 时本地一个字没写 → 按 f 假反馈。
+    #[tokio::test]
+    async fn toggle_favorite_persists_locally_even_when_remote_unsupported()
+    -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        // RecordingChannel(源 NETEASE)的 set_loved 用 trait 默认 → NotSupported。
+        let core = core_with_persist(Arc::default(), persist.clone())?;
+        let id = SongId::new(SourceKind::NETEASE, "42");
+        let scope = persist.scope(SourceKind::NETEASE);
+        assert!(!scope.is_loved(&id).await?, "初始未收藏");
+
+        let new = core.toggle_favorite(&id).await?;
+        assert!(new, "toggle 返回新态 true");
+        assert!(
+            scope.is_loved(&id).await?,
+            "远端镜像 NotSupported,本地 persist 仍必写 loved"
+        );
+        // toggle 后推 canonical(供装饰自愈,不只靠 client 乐观翻转)。
+        let events = core.drain_client_events();
+        let pushed = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                mineral_task::TaskEvent::LikedSongIdsFetched { source, ids }
+                    if *source == SourceKind::NETEASE =>
+                {
+                    Some(ids)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应推 canonical favorited 集"))?;
+        assert!(pushed.contains(&id), "推的 canonical 应含刚收藏的歌");
+
+        let new2 = core.toggle_favorite(&id).await?;
+        assert!(!new2, "再 toggle 回 false");
+        assert!(!scope.is_loved(&id).await?, "本地 persist 已取消");
+        Ok(())
+    }
+
+    /// sync_favorites 把远端红心导入本地 persist(add-only,不删本地),并向 client_events
+    /// 推 canonical(persist)favorited 集。回归:导入不得删掉本地独有的收藏(本地为准)。
+    #[tokio::test]
+    async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let local_only = SongId::new(SourceKind::NETEASE, "B");
+        persist
+            .scope(SourceKind::NETEASE)
+            .set_loved(&local_only, /*loved*/ true)
+            .await?;
+        let core = core_with_persist(Arc::default(), persist.clone())?;
+
+        let remote_only = SongId::new(SourceKind::NETEASE, "A");
+        let remote: rustc_hash::FxHashSet<SongId> = [remote_only.clone()].into_iter().collect();
+        let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
+            calls: Arc::default(),
+            url_delay: None,
+            liked_ids: Some(remote),
+        });
+        core.sync_favorites(SourceKind::NETEASE, channel).await;
+
+        let ids = persist.scope(SourceKind::NETEASE).loved_ids().await?;
+        assert!(ids.contains(&remote_only), "远端 A 应导入本地");
+        assert!(ids.contains(&local_only), "本地独有 B 不被删(本地为准)");
+        assert_eq!(ids.len(), 2, "persist 应为 A ∪ B");
+
+        let events = core.drain_client_events();
+        let last = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                mineral_task::TaskEvent::LikedSongIdsFetched { source, ids }
+                    if *source == SourceKind::NETEASE =>
+                {
+                    Some(ids)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("应向 client 推 canonical favorited 集"))?;
+        assert!(
+            last.contains(&remote_only) && last.contains(&local_only),
+            "推给 client 的应是 persist canonical 集(A ∪ B)"
+        );
         Ok(())
     }
 }

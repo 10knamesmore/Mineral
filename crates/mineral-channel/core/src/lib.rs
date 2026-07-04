@@ -181,18 +181,19 @@ pub trait MusicChannel: Send + Sync {
     // 上层用来 decorate `SongView`。沿用 default `NotSupported` 模式。
     // 后续按需追加(`user_play_counts` / 关注列表 / 个人评分等)。
 
-    /// 当前用户喜欢(♥)的歌曲 ID 集合(read-only)。
+    /// 拉该源**远端**记录的喜欢(♥)歌曲 ID 集合(纯远端、read-only)。
     ///
-    /// `liked_song_ids` 是 user-data 类的第一个口子;返回 `FxHashSet` 而非 `Vec` 是因为
-    /// 调用方会做点查("这首歌 like 了吗")。channel 不支持/未登录时返回 [`Error::NotSupported`]。
+    /// 返回 `FxHashSet` 而非 `Vec` 是因为调用方会做点查("这首歌 like 了吗")。语义是**纯远端**:
+    /// 本地收藏集不在此参与——上层把它导入本地事实来源后与本地合并。不支持 / 未登录时返回
+    /// [`Error::NotSupported`]。
     async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
         Err(Error::NotSupported)
     }
 
-    /// 设置 / 取消一首歌的喜欢(♥)。
+    /// 把一首歌的喜欢(♥)状态镜像到该源的**远端**收藏机制(纯远端镜像)。
     ///
-    /// 命令透传由 channel 自行决定:本地 channel 只写持久化;网易云既写持久化、
-    /// 又打远端红心接口。channel 不支持 / 未登录时返回 [`Error::NotSupported`]。
+    /// 本地持久化由上层统一负责,不在此写;此方法只把状态同步到远端。无远端能力 / 未登录时返回
+    /// [`Error::NotSupported`](上层视为该源无远端镜像,不影响本地已写)。
     ///
     /// # Params:
     ///   - `id`: 目标歌曲

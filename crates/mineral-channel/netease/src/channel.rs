@@ -429,55 +429,33 @@ impl MusicChannel for NeteaseChannel {
         }
     }
 
-    /// 返回当前用户喜欢的歌曲 ID 集合。
+    /// 拉网易云账号远端红心的歌曲 ID 集合(纯远端)。
     ///
-    /// **远端是事实来源**:已登录且远端拉取成功,完全返回远端结果,本地 persist 不参与。
-    /// **降级**:未登录或远端 fetch 失败时,返回本地 persist 记录的 `loved_ids`
-    /// (体验近似;未登录场景下本地 love 同样可见,空集也合法)。
+    /// 供 server 导入本地 persist(add-only)用。未登录 → [`Error::NotSupported`]:
+    /// 本地 favorited 集由 server 从 persist 读,不在此降级(本地为准的合并在 server 一侧)。
     ///
     /// # Return:
-    ///   远端或本地 persist 的 loved id 集合。
+    ///   远端红心 id 集;未登录 / 远端失败为 `Err`。
     async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
-        // 远端是事实来源:登录且 fetch 成功则完全以远端为准
-        if let Some(uid) = self.user_id.as_ref() {
-            match api::user::liked_song_ids(&self.transport, uid).await {
-                Ok(remote) => return Ok(remote),
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "netease",
-                        error = mineral_log::chain(&e),
-                        "远端 liked 拉取失败,降级本地 persist loved"
-                    );
-                    // 落到下面的本地降级
-                }
-            }
-        }
-        // 远端不可用(未登录 / fetch 失败):用本地 persist loved_ids 作体验近似
-        self.persist
-            .scope(SourceKind::NETEASE)
-            .loved_ids()
+        let Some(uid) = self.user_id.as_ref() else {
+            return Err(Error::NotSupported);
+        };
+        api::user::liked_song_ids(&self.transport, uid)
             .await
-            .map_err(Error::Other)
+            .map_err(map_err)
     }
 
+    /// 把一首歌的红心状态镜像到网易云远端(纯远端镜像)。
+    ///
+    /// 本地 persist 由 server 统一写(事实来源),这里只同步远端;未登录无远端可打 →
+    /// [`Error::NotSupported`](server 视为该源无远端镜像,不影响本地已写)。
     async fn set_loved(&self, id: &SongId, loved: bool) -> Result<()> {
-        // 本地是事实来源,必写(降级 persist 下自动 no-op)
-        self.persist
-            .scope(SourceKind::NETEASE)
-            .set_loved(id, loved)
-            .await
-            .map_err(Error::Other)?;
-        // 远端尽力:需登录;失败只 warn,不影响本地已记录的结果
-        if self.user_id.is_some()
-            && let Err(e) = api::song::like_song(&self.transport, id, loved).await
-        {
-            mineral_log::warn!(
-                target: "netease",
-                error = mineral_log::chain(&e),
-                "远端红心失败,本地已记录"
-            );
+        if self.user_id.is_none() {
+            return Err(Error::NotSupported);
         }
-        Ok(())
+        api::song::like_song(&self.transport, id, loved)
+            .await
+            .map_err(Error::Other)
     }
 
     /// 远端真实累计播放次数:登录(有 uid)才查回忆坐标;未登录返回 [`Error::NotSupported`]。
@@ -555,32 +533,32 @@ mod tests {
         Ok(())
     }
 
-    /// 匿名 channel(未登录,`user_id = None`)调用 `liked_song_ids` 时
-    /// 应降级读本地 persist 的 `loved_ids`,返回本地写入的两首 id。
+    /// favorite 方法收窄为**纯远端**:匿名 channel(未登录)无远端可查/可打,
+    /// `liked_song_ids` 与 `set_loved` 都返回 [`Error::NotSupported`]。
+    ///
+    /// 本地 favorited 集与本地写入统一由 server 经 persist 负责(不在 channel 降级),
+    /// 故 channel 未登录时不再读本地 loved_ids(回归:曾在此降级读本地)。
     #[tokio::test]
-    async fn liked_song_ids_falls_back_to_local_when_no_remote() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
-
-        // 写两首本地 loved
-        let id_a = SongId::new(SourceKind::NETEASE, "10001");
-        let id_b = SongId::new(SourceKind::NETEASE, "10002");
-        let store = persist.scope(SourceKind::NETEASE);
-        store.set_loved(&id_a, /*loved*/ true).await?;
-        store.set_loved(&id_b, /*loved*/ true).await?;
-
-        // 构造匿名 channel(无登录态 → 远端不会被调用)
+    async fn favorite_methods_not_supported_when_anonymous() -> color_eyre::Result<()> {
         let config = NeteaseConfig::builder()
             .max_connections(0)
             .proxy(None)
             .timeout_secs(100)
             .build();
-        let channel = NeteaseChannel::new(&config, persist)?;
+        let channel = NeteaseChannel::new(&config, ServerStore::disabled())?;
 
-        let ids = channel.liked_song_ids().await?;
-        assert!(ids.contains(&id_a), "本地 loved id_a 应在降级结果中");
-        assert!(ids.contains(&id_b), "本地 loved id_b 应在降级结果中");
-        assert_eq!(ids.len(), 2, "降级结果只应含本地写入的两首");
+        assert!(
+            matches!(channel.liked_song_ids().await, Err(Error::NotSupported)),
+            "匿名 liked_song_ids 应 NotSupported(纯远端,不降级本地)"
+        );
+        let id = SongId::new(SourceKind::NETEASE, "10001");
+        assert!(
+            matches!(
+                channel.set_loved(&id, /*loved*/ true).await,
+                Err(Error::NotSupported)
+            ),
+            "匿名 set_loved 应 NotSupported(纯远端镜像,不写本地)"
+        );
         Ok(())
     }
 }

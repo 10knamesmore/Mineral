@@ -83,7 +83,7 @@ fn tab_style(active: bool, theme: &Theme) -> Style {
 
 /// 右侧:server tasks 按 [`ChannelFetchKindTag`] 拆分 + cover 计数 + 播放状态。
 ///
-/// 显示样:`pl:1 tr:2 song:1 lyr:1 ♥:1 cover:7  ● playing`。各段 N>0 才显示。
+/// 显示样:`pl:1 tr:2 song:1 lyr:1 cover:7  ● playing`。各段 N>0 才显示。
 /// 全 0 时只剩 glyph,不会假装"什么都没在跑"——封面在跑就显示 cover:N。
 fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
     let pb = &state.playback;
@@ -122,7 +122,6 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         (ChannelFetchKindTag::PlaylistDetail, "tr"),
         (ChannelFetchKindTag::SongUrl, "song"),
         (ChannelFetchKindTag::Lyrics, "lyr"),
-        (ChannelFetchKindTag::LikedSongIds, "♥"),
     ] {
         let n = by.get(&tag).copied().unwrap_or(0);
         if n > 0 {

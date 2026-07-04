@@ -26,12 +26,13 @@ pub enum TaskEvent {
         playlists: Vec<Playlist>,
     },
 
-    /// `LikedSongIds` 任务成功:某 channel 当前用户喜欢(♥)的歌曲 ID 集合已到。
+    /// 某源 canonical 收藏(♥)集已到:server 从本地 persist 读、经远端红心导入合并后推送,
+    /// client 据此装饰 SongView。非任务事件(server 直接推,不经 channel-fetch lane)。
     LikedSongIdsFetched {
         /// 来源 channel。
         source: SourceKind,
 
-        /// 喜欢的歌曲 ID 集合。
+        /// 已收藏的歌曲 ID 集合(canonical,以本地 persist 为准)。
         ids: FxHashSet<SongId>,
     },
 

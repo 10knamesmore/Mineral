@@ -23,9 +23,9 @@ use crate::client::{Client, ClientHandle};
 /// Accept loop。返回 `Ok(())` 仅在 listener 被外部关闭时;否则一直循环。
 ///
 /// `on_connect` 在每条新 connection 被接受后立刻调用一次,调用方借此重新触发
-/// 「初始数据加载」(`MyPlaylists` / `LikedSongIds` 等)——必要的:`drain_task_events`
-/// 是消费式语义,首个 client 拿走 events 后 buffer 清空,新 client 看不到任何
-/// 历史 event 会显示「数据为空」假象。dedup 命中既存任务时无副作用。
+/// 「初始数据加载」(`MyPlaylists` 任务 + 收藏同步)——必要的:`drain_task_events`
+/// 与 client_events 都是消费式语义,首个 client 拿走 events 后 buffer 清空,新 client
+/// 看不到任何历史 event 会显示「数据为空」假象。dedup 命中既存任务时无副作用。
 ///
 /// `shutdown` 是 daemon 级关停通知:client 发 [`Request::Shutdown`] 时在此
 /// 唤醒,由 daemon 入口的 select 接走、走与 SIGTERM 相同的 graceful 收尾。

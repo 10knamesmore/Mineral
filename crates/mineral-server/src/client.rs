@@ -41,28 +41,16 @@ impl ClientHandle {
         }
     }
 
-    /// 切换一首歌的 love(♥)状态:查当前态 → 经对应 channel `set_loved`
-    /// (本地 persist + 远端)→ 返回切换后的新态。
+    /// 切换一首歌的 love(♥)状态:本地 persist 事实来源必写 + 尽力镜像远端,返回切换后的新态。
+    /// 编排见 [`PlayerCore::toggle_favorite`](crate::player::PlayerCore)。
     ///
     /// # Params:
-    ///   - `id`: 目标歌曲 id;其 namespace 决定走哪个 channel / persist scope。
+    ///   - `id`: 目标歌曲 id;其 namespace 决定 persist scope 与远端 channel。
     ///
     /// # Return:
     ///   切换后的新 loved 状态。
     pub(crate) async fn toggle_love_async(&self, id: &SongId) -> color_eyre::Result<bool> {
-        let ns = id.namespace();
-        let current = self.player.persist().scope(ns).is_loved(id).await?;
-        let new = !current;
-        let channel = self
-            .player
-            .channel_for(ns)
-            .ok_or_else(|| color_eyre::eyre::eyre!("no channel for source {}", ns.name()))?
-            .clone();
-        channel
-            .set_loved(id, new)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("set_loved failed: {e}"))?;
-        Ok(new)
+        self.player.toggle_favorite(id).await
     }
 
     /// 触发脚本具名动作并等待结果(serve 层处理 `InvokeAction` 用)。

@@ -208,25 +208,6 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::LikedSongIds { source } => match channel.liked_song_ids().await {
-            Ok(ids) => {
-                event_tx.lock().push(TaskEvent::LikedSongIdsFetched {
-                    source: *source,
-                    ids,
-                });
-                TaskOutcome::Ok
-            }
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "channel_fetch",
-                    ?source,
-                    op = "liked_song_ids",
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
-                );
-                TaskOutcome::Failed
-            }
-        },
         ChannelFetchKind::PlaylistDetail { id } => match channel.playlist_detail(id).await {
             Ok(playlist) => {
                 event_tx.lock().push(TaskEvent::PlaylistDetailFetched {

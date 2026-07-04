@@ -2,6 +2,7 @@
 .vscode
 .nvim.lua
 TODO.md
+.todo.md
 imgs/
 logs/
 .DS_Store

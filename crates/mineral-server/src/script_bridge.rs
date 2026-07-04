@@ -528,19 +528,13 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();
             tokio::spawn(async move {
-                let Some(channel) = player.channel_for(song.namespace()).cloned() else {
+                // 走 server 统一路径:锁内写本地 persist(事实来源)+ 推 canonical(脚本路径无
+                // client 乐观翻转,靠这条让装饰即时更新),锁外尽力镜像远端。
+                if let Err(e) = player.set_favorite(&song, loved).await {
                     mineral_log::warn!(
                         target: "script",
                         song_id = song.qualified(),
-                        "love: 无对应 channel,忽略"
-                    );
-                    return;
-                };
-                if let Err(e) = channel.set_loved(&song, loved).await {
-                    mineral_log::warn!(
-                        target: "script",
-                        song_id = song.qualified(),
-                        error = %e,
+                        error = mineral_log::chain(&e),
                         "love 失败"
                     );
                 }

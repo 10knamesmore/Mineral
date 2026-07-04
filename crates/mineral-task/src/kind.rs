@@ -45,12 +45,6 @@ pub enum ChannelFetchKind {
         source: SourceKind,
     },
 
-    /// 拉某 channel 当前用户喜欢的歌曲 ID 集合(♥ 装饰用)。
-    LikedSongIds {
-        /// 目标 channel。
-        source: SourceKind,
-    },
-
     /// 拉歌单详情(元信息 + 曲目;目标 channel 由 `id` 的 namespace 决定)。
     PlaylistDetail {
         /// 歌单 id(自带 namespace)。
@@ -123,7 +117,6 @@ impl ChannelFetchKind {
     fn dedup_part(&self) -> String {
         match self {
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
-            Self::LikedSongIds { source } => format!("{source:?}:liked_song_ids"),
             Self::PlaylistDetail { id } => format!("playlist_detail:{}", id.qualified()),
             Self::SongUrl { song_id, quality } => {
                 format!("song_url:{}:{quality:?}", song_id.qualified())
@@ -151,9 +144,7 @@ impl ChannelFetchKind {
     /// 带 id 的形态从 id 的 namespace 派生;只有 source 的形态直接返回。
     pub fn source(&self) -> SourceKind {
         match self {
-            Self::MyPlaylists { source }
-            | Self::LikedSongIds { source }
-            | Self::Search { source, .. } => *source,
+            Self::MyPlaylists { source } | Self::Search { source, .. } => *source,
             Self::PlaylistDetail { id } => id.namespace(),
             Self::SongUrl { song_id, .. }
             | Self::Lyrics { song_id }
@@ -172,8 +163,6 @@ impl ChannelFetchKind {
 pub enum ChannelFetchKindTag {
     /// 对应 [`ChannelFetchKind::MyPlaylists`]。
     MyPlaylists,
-    /// 对应 [`ChannelFetchKind::LikedSongIds`]。
-    LikedSongIds,
     /// 对应 [`ChannelFetchKind::PlaylistDetail`]。
     PlaylistDetail,
     /// 对应 [`ChannelFetchKind::SongUrl`]。
@@ -198,7 +187,6 @@ impl ChannelFetchKindTag {
     pub fn of(kind: &ChannelFetchKind) -> Self {
         match kind {
             ChannelFetchKind::MyPlaylists { .. } => Self::MyPlaylists,
-            ChannelFetchKind::LikedSongIds { .. } => Self::LikedSongIds,
             ChannelFetchKind::PlaylistDetail { .. } => Self::PlaylistDetail,
             ChannelFetchKind::SongUrl { .. } => Self::SongUrl,
             ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
