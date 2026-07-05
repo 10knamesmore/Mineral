@@ -421,15 +421,19 @@ fn result_table(
                 ],
             )
         }
-        // 专辑:专辑名 · 艺人 · 曲目数(裸数字,表头标 tracks;搜索期已填 track_count)。
+        // 专辑:专辑名 · 艺人 · 曲目数(表头标 tracks)。列表投影拿不到曲目数时画 `-`(未知,非
+        // 0 空专辑);下钻 album_detail 回填真值(见 KindResults::fill_album_detail)。
         SearchPayload::Albums(albums) => {
             let rows = albums
                 .iter()
                 .map(|a| {
+                    let tracks = a
+                        .track_count
+                        .map_or_else(|| "-".to_owned(), |n| n.to_string());
                     Row::new(vec![
                         Cell::from(Span::styled(a.name.clone(), main)),
                         Cell::from(Span::styled(join_artists(&a.artists), sub)),
-                        Cell::from(Span::styled(a.track_count.to_string(), meta)),
+                        Cell::from(Span::styled(tracks, meta)),
                     ])
                 })
                 .collect();

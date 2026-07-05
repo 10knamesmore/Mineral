@@ -177,10 +177,10 @@ pub(crate) fn view_to_album(info: VideoInfo) -> Album {
     Album::builder()
         .id(AlbumId::new(SourceKind::BILIBILI, bvid))
         .name(title)
+        .track_count(Some(track_count))
         .artists(vec![owner_artist_ref(&owner)])
         .description(desc.unwrap_or_default())
         .publish_time_ms(pubdate.map(|s| s.saturating_mul(1000)).unwrap_or(0))
-        .track_count(track_count)
         .cover_url(cover)
         .songs(songs)
         .build()
@@ -405,7 +405,7 @@ pub(crate) fn card_to_artist(id: ArtistId, result: CardResult) -> Artist {
         .build()
 }
 
-/// 投稿视频条目 → [`Album`](BV 即专辑,元信息版:曲目留空,P 数未知给 0,详情走
+/// 投稿视频条目 → [`Album`](BV 即专辑,元信息版:曲目留空,P 数未知留 `None`,详情走
 /// `album_detail`)。缺 `bvid` 无法定位,返回 `None`。`created`(秒)→ `publish_time_ms`。
 pub(crate) fn arc_video_to_album(item: ArcVideoItem) -> Option<Album> {
     let bvid = item.bvid?;
@@ -546,7 +546,7 @@ mod tests {
         let info: VideoInfo = from_value(raw)?;
         let album = view_to_album(info);
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
-        assert_eq!(album.track_count, 2);
+        assert_eq!(album.track_count, Some(2));
         assert_eq!(album.songs.len(), 2);
         let s0 = album
             .songs
@@ -779,7 +779,7 @@ mod tests {
     }
 
     /// 投稿条目 → Album(元信息版):bvid→AlbumId、created 秒→publish_time_ms、
-    /// 封面补 https、曲目留空且 track_count=0(P 数未知,详情走 album_detail)。
+    /// 封面补 https、曲目留空且 track_count=None(P 数未知,详情走 album_detail)。
     #[test]
     fn arc_video_maps_to_album() -> color_eyre::Result<()> {
         use super::arc_video_to_album;
@@ -796,7 +796,10 @@ mod tests {
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
         assert_eq!(album.name, "投稿一");
         assert_eq!(album.publish_time_ms, 1_600_000_000_000);
-        assert_eq!(album.track_count, 0, "列表页不知 P 数,详情再补");
+        assert_eq!(
+            album.track_count, None,
+            "列表页不知 P 数(未知非 0),详情再补"
+        );
         assert!(album.songs.is_empty());
         let artist = album
             .artists

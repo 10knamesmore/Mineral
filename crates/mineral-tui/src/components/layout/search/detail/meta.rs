@@ -45,8 +45,8 @@ pub(crate) fn album_card_lines(a: &Album, theme: &Theme) -> Vec<Line<'static>> {
 /// album 计量行 `N tracks · 2015 · 厂牌`（缺哪个省哪个；全缺 → `None`）。
 fn album_meta_line(a: &Album) -> Option<String> {
     let mut parts = Vec::<String>::new();
-    if a.track_count > 0 {
-        parts.push(format!("{} tracks", with_commas(a.track_count)));
+    if let Some(count) = a.track_count {
+        parts.push(format!("{} tracks", with_commas(count)));
     }
     if let Some(year) = publish_year(a.publish_time_ms) {
         parts.push(year.to_string());

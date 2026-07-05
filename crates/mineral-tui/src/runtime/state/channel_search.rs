@@ -175,7 +175,15 @@ impl KindResults {
 
     /// AlbumDetail 回包落当前帧——仅当栈顶帧正等这张专辑（歌曲帧拉所属专辑、专辑帧拉自身）。
     /// 帧已切走（移光标 / 下钻 / 切 source）则丢弃。
+    ///
+    /// 顺带**回填结果列**:搜索投影的 Album 曲目数未知(列表画 `-`),下钻拿到真值后写回同 id 的
+    /// 列表行,回列表即显真数、不再是 `-`(帧已切走仍回填,列表值与详情一致)。
     pub fn fill_album_detail(&mut self, id: &AlbumId, album: Box<Album>) {
+        if let SearchPayload::Albums(albums) = &mut self.results {
+            for listed in albums.iter_mut().filter(|a| a.id == *id) {
+                listed.track_count = album.track_count;
+            }
+        }
         let Some(frame) = self.detail.current_mut() else {
             return;
         };
@@ -1218,6 +1226,50 @@ mod tests {
         assert_eq!(kr.detail.depth(), 0, "移光标 → detail 复位到新 root");
         kr.set_sel(9); // 越界钳到末行(idx1)==当前，不动
         assert_eq!(kr.sel(), 1, "钳制在末行");
+        Ok(())
+    }
+
+    /// fill_album_detail 回填结果列:搜索投影的 Album 曲目数 `None`(列表画 `-`),下钻到货后
+    /// 把真值写回同 id 的列表行,其它行不动。
+    #[test]
+    fn fill_album_detail_backfills_list_track_count() -> color_eyre::Result<()> {
+        use mineral_model::{Album, AlbumId};
+
+        let mut s = SearchSession::new(SearchKind::Album);
+        s.apply_page(
+            SearchKind::Album,
+            SearchPayload::Albums(vec![album("a1"), album("a2")]),
+            Page::default(),
+            /*has_more*/ None,
+        );
+        let kr = s
+            .kind_results_mut()
+            .ok_or_else(|| color_eyre::eyre::eyre!("桶应在"))?;
+        let SearchPayload::Albums(before) = &kr.results else {
+            color_eyre::eyre::bail!("应是 Albums 桶");
+        };
+        assert_eq!(
+            before.first().and_then(|a| a.track_count),
+            None,
+            "投影列表曲目数未知"
+        );
+
+        let detailed = Album::builder()
+            .id(AlbumId::new(SourceKind::NETEASE, "a1"))
+            .name("album a1".to_owned())
+            .track_count(Some(11))
+            .build();
+        kr.fill_album_detail(&AlbumId::new(SourceKind::NETEASE, "a1"), Box::new(detailed));
+
+        let SearchPayload::Albums(after) = &kr.results else {
+            color_eyre::eyre::bail!("应是 Albums 桶");
+        };
+        assert_eq!(
+            after.first().and_then(|a| a.track_count),
+            Some(11),
+            "同 id 行回填真值"
+        );
+        assert_eq!(after.get(1).and_then(|a| a.track_count), None, "其它行不动");
         Ok(())
     }
 

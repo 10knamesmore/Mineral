@@ -877,7 +877,7 @@ mod tests {
         let entity = Album::builder()
             .id(AlbumId::new(SourceKind::NETEASE, "al"))
             .name("CF".to_owned())
-            .track_count(13)
+            .track_count(Some(13))
             .build();
         let mut frame = super::DetailFrame::new(EntityRef::Album(Box::new(entity)));
 
@@ -885,14 +885,14 @@ mod tests {
             .album_meta()
             .ok_or_else(|| color_eyre::eyre::eyre!("album 帧应有 meta"))?;
         assert!(before.description.is_empty(), "entity 份无简介");
-        assert_eq!(before.track_count, 13);
+        assert_eq!(before.track_count, Some(13));
 
         // fetch 到货:整份用详情(简介齐)。
         frame.set_album_detail(Box::new(
             Album::builder()
                 .id(AlbumId::new(SourceKind::NETEASE, "al"))
                 .name("CF".to_owned())
-                .track_count(13)
+                .track_count(Some(13))
                 .description("emo album".to_owned())
                 .build(),
         ));

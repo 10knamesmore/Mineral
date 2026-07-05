@@ -55,7 +55,7 @@ pub(crate) fn album_dto_to_model(a: SearchAlbum, songs: Vec<Song>) -> Album {
         .description(a.description)
         .company(a.company)
         .publish_time_ms(a.publish_time)
-        .track_count(a.size)
+        .track_count(Some(a.size))
         .cover_url(a.pic_url.as_deref().and_then(parse_remote))
         .songs(songs)
         .build()
@@ -162,7 +162,7 @@ pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
         .artists(album_artist_refs(a.artists, a.artist))
         .company(a.company)
         .publish_time_ms(a.publish_time)
-        .track_count(a.size)
+        .track_count(Some(a.size))
         .cover_url(parse_remote_opt(a.pic_url.as_deref()))
         .build()
 }
@@ -354,7 +354,7 @@ mod tests {
         let album = album_detail_to_model(dto);
         assert_eq!(album.name, "Chinese Football");
         assert_eq!(album.description, "成军四年的首张全长专辑。");
-        assert_eq!(album.track_count, 13);
+        assert_eq!(album.track_count, Some(13));
         assert_eq!(album.songs.len(), 1);
         assert!(album.cover_url.is_some());
         assert_eq!(album.id, AlbumId::new(SourceKind::NETEASE, "3314467"));

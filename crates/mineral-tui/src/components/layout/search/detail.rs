@@ -723,11 +723,8 @@ fn draw_album_list(
     ])
     .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
     let rows = albums.iter().map(|a| {
-        let tracks = if a.track_count > 0 {
-            with_commas(a.track_count)
-        } else {
-            String::new()
-        };
+        // 曲目数未知(搜索 / 投稿列表投影)画 `-`,别画 `0` 冒充空专辑;下钻 album_detail 回填真值。
+        let tracks = a.track_count.map_or_else(|| "-".to_owned(), with_commas);
         let year = publish_year(a.publish_time_ms).map_or_else(String::new, |y| y.to_string());
         let label = a.company.as_deref().unwrap_or_default().to_owned();
         Row::new(vec![

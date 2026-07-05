@@ -25,7 +25,9 @@ Album {
     description: "合集简介",
     company: None,
     publish_time_ms: 1600000000000,
-    track_count: 2,
+    track_count: Some(
+        2,
+    ),
     cover_url: Some(
         Remote(
             Url {

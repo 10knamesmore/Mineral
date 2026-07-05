@@ -32,9 +32,10 @@ pub struct Album {
     #[builder(default)]
     pub publish_time_ms: i64,
 
-    /// album 曲目总数;与 `songs` 是否已填充无关(`songs` 为空时仍可用)。
+    /// album 曲目总数;`None` = **未知**(搜索 / 投稿列表等轻量投影拿不到,须下钻 `album_detail`
+    /// 才确定)——与「真的 0 曲」区分开,展示层据此画 `-` 而非 `0`。与 `songs` 是否已填充无关。
     #[builder(default)]
-    pub track_count: u64,
+    pub track_count: Option<u64>,
 
     /// 封面 URL,无封面给 `None`。
     #[builder(default)]
