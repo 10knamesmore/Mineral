@@ -21,6 +21,15 @@ pub enum CacheCommand {
 
     /// 清理音频 / 封面 / 歌单缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果。
     Clean,
+
+    /// 删库重建:删除 server / client 两个 sqlite 库与音频 / 封面缓存目录,
+    /// **连播放统计 / 喜欢 / 历史一起丢**(与 `clean` 的区别)。供库结构早于
+    /// schema 迁移机制时重建用;请先停掉 daemon 再执行。
+    Reset {
+        /// 确认执行;不带此 flag 只打印将删除的路径,不动盘。
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// 按 [`CacheCommand`] 分发到具体实现。
@@ -34,6 +43,7 @@ pub async fn run(command: CacheCommand) -> color_eyre::Result<()> {
     match command {
         CacheCommand::Status { detail } => status(detail).await,
         CacheCommand::Clean => clean().await,
+        CacheCommand::Reset { yes } => reset(yes),
     }
 }
 
@@ -113,6 +123,80 @@ async fn clean() -> color_eyre::Result<()> {
     let color = std::io::stdout().is_terminal();
     println!("{}", render::render_clean(&audio, &cover, &playlist, color));
     Ok(())
+}
+
+/// `cache reset`:收集两个库文件(含 sqlite WAL 伴生文件)与两个缓存目录,
+/// 无 `--yes` 只打印删除计划,带 `--yes` 逐一删除(路径不存在视为已删,不报错)。
+///
+/// # Params:
+///   - `yes`: 是否真正执行删除。
+///
+/// # Return:
+///   打印计划 / 回执后返回 `Ok(())`;删除失败(如 daemon 仍占用库文件)冒泡报错。
+fn reset(yes: bool) -> color_eyre::Result<()> {
+    let server_db = mineral_paths::data_dir()?.join("mineral.db");
+    let client_db = mineral_paths::tui_db()?;
+    let mut rows = Vec::<render::ResetRow>::new();
+
+    for db in [server_db, client_db] {
+        // sqlite WAL 模式的 -wal / -shm 伴生文件必须与主库同删:半套残留会让重建的库
+        // 在下次打开时读到旧页,比不删更糟。
+        for suffix in ["", "-wal", "-shm"] {
+            let mut os = db.as_os_str().to_owned();
+            os.push(suffix);
+            rows.push(reset_file(&std::path::PathBuf::from(os), yes)?);
+        }
+    }
+    for dir in [
+        mineral_paths::audio_cache_dir()?,
+        mineral_paths::cover_cache_dir()?,
+    ] {
+        rows.push(reset_dir(&dir, yes)?);
+    }
+
+    let color = std::io::stdout().is_terminal();
+    println!("{}", render::render_reset(&rows, /*executed*/ yes, color));
+    Ok(())
+}
+
+/// 删除(或计划删除)单个库文件,产出渲染行。不存在 → 「不存在」。
+fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
+    let outcome = if !yes {
+        "将删除"
+    } else {
+        match std::fs::remove_file(path) {
+            Ok(()) => "已删除",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "不存在",
+            Err(e) => {
+                return Err(e).wrap_err_with(|| format!("删除 {} 失败", path.display()));
+            }
+        }
+    };
+    Ok(render::ResetRow {
+        path: path.display().to_string(),
+        kind: "库文件",
+        outcome,
+    })
+}
+
+/// 删除(或计划删除)单个缓存目录,产出渲染行。不存在 → 「不存在」。
+fn reset_dir(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
+    let outcome = if !yes {
+        "将删除"
+    } else {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => "已删除",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "不存在",
+            Err(e) => {
+                return Err(e).wrap_err_with(|| format!("删除 {} 失败", path.display()));
+            }
+        }
+    };
+    Ok(render::ResetRow {
+        path: path.display().to_string(),
+        kind: "缓存目录",
+        outcome,
+    })
 }
 
 /// 把音频缓存快照转成渲染输入:逐条 stat 文件 mtime(供「最旧 / 最新」与 detail 用)。

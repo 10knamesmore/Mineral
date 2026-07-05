@@ -153,6 +153,49 @@ pub(super) fn render_clean(
     blocks.join("\n")
 }
 
+/// `cache reset` 的一条目标(库文件 / 缓存目录)及其处理结果。
+pub(super) struct ResetRow {
+    /// 绝对路径展示串。
+    pub(super) path: String,
+
+    /// 类别标签(「库文件」/「缓存目录」)。
+    pub(super) kind: &'static str,
+
+    /// 结果列文本:计划态「将删除」;执行态「已删除」/「不存在」。
+    pub(super) outcome: &'static str,
+}
+
+/// 渲染 `cache reset` 报告:目标清单表 + 提示行(计划态提示如何确认执行)。
+///
+/// # Params:
+///   - `rows`: 各目标及结果
+///   - `executed`: 是否已真正执行删除(false = 只打印计划)
+///   - `color`: 是否上色
+///
+/// # Return:
+///   报告文本(无尾换行)。
+pub(super) fn render_reset(rows: &[ResetRow], executed: bool, color: bool) -> String {
+    let mut table = base_table(color);
+    table.set_header(vec![
+        head_cell("目标", color),
+        head_cell("类别", color),
+        head_cell("结果", color),
+    ]);
+    for r in rows {
+        table.add_row(vec![
+            Cell::new(&r.path),
+            label_cell(r.kind, color),
+            Cell::new(r.outcome),
+        ]);
+    }
+    let hint = if executed {
+        "重建完成:下次启动 daemon 会按最新 schema 建库(播放统计 / 喜欢 / 历史已清空)。"
+    } else {
+        "未执行:确认无误后先停掉 daemon,再加 --yes 运行(会丢播放统计 / 喜欢 / 历史)。"
+    };
+    format!("{table}\n{hint}")
+}
+
 /// 汇总表:音频 / 封面 / 歌单各一行。
 fn summary_table(
     audio: &AudioInput,
@@ -625,5 +668,29 @@ mod tests {
         };
         let out = render_clean(&audio, &cover, &playlist, /*color*/ false);
         mineral_test::assert_snap!("cache clean:三区域前后对比 + 音频分格式 + 总释放", out);
+    }
+
+    /// `cache reset` 计划态:目标清单表 + 「加 --yes 执行」提示;不动盘先看清单。
+    #[test]
+    fn reset_plan_snapshot() {
+        let rows = vec![
+            super::ResetRow {
+                path: "/data/mineral.db".to_owned(),
+                kind: "库文件",
+                outcome: "将删除",
+            },
+            super::ResetRow {
+                path: "/data/mineral.db-wal".to_owned(),
+                kind: "库文件",
+                outcome: "将删除",
+            },
+            super::ResetRow {
+                path: "/cache/audio".to_owned(),
+                kind: "缓存目录",
+                outcome: "将删除",
+            },
+        ];
+        let out = super::render_reset(&rows, /*executed*/ false, /*color*/ false);
+        mineral_test::assert_snap!("cache reset 计划态:目标清单 + --yes 确认提示", out);
     }
 }

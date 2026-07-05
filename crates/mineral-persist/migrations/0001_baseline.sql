@@ -1,16 +1,20 @@
--- Mineral 结构态 schema(规范化、无 JSON 列)。由 schema.rs 经 include_str! 引入并整体执行。
+-- baseline:server 库(mineral.db)全量 schema(规范化、无 JSON 列)。
+-- 刻意用裸 CREATE TABLE:建于迁移机制之前的老库(表已存在、无迁移记账)在这里
+-- 响亮撞错,由 ensure_schema 的错误指引用户 `mineral cache reset` 重建,
+-- 而不是 IF NOT EXISTS 静默收编一个结构过时的库、把错误推迟到运行时。
 
-CREATE TABLE IF NOT EXISTS song_meta (
+CREATE TABLE song_meta (
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL,
     name TEXT NOT NULL,
     album_id TEXT,
     album_name TEXT,
-    duration_ms INTEGER NOT NULL,
+    -- 时长毫秒;NULL = 未知(与「真的 0 ms」区分,别用 0 冒充)。
+    duration_ms INTEGER,
     cover_url TEXT,
     PRIMARY KEY (namespace, song_value));
 
-CREATE TABLE IF NOT EXISTS song_artists (
+CREATE TABLE song_artists (
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL,
     position INTEGER NOT NULL,
@@ -18,7 +22,7 @@ CREATE TABLE IF NOT EXISTS song_artists (
     artist_name TEXT NOT NULL,
     PRIMARY KEY (namespace, song_value, position));
 
-CREATE TABLE IF NOT EXISTS song_stats (
+CREATE TABLE song_stats (
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL,
     play_count INTEGER NOT NULL DEFAULT 0,
@@ -28,7 +32,7 @@ CREATE TABLE IF NOT EXISTS song_stats (
     rating INTEGER,
     PRIMARY KEY (namespace, song_value));
 
-CREATE TABLE IF NOT EXISTS play_history (
+CREATE TABLE play_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL,
@@ -36,7 +40,7 @@ CREATE TABLE IF NOT EXISTS play_history (
     completed INTEGER NOT NULL,
     listen_ms INTEGER NOT NULL);
 
-CREATE TABLE IF NOT EXISTS playlist_cache (
+CREATE TABLE playlist_cache (
     namespace TEXT NOT NULL,
     playlist_id TEXT NOT NULL,
     name TEXT,
@@ -44,14 +48,14 @@ CREATE TABLE IF NOT EXISTS playlist_cache (
     track_update_time INTEGER,
     PRIMARY KEY (namespace, playlist_id));
 
-CREATE TABLE IF NOT EXISTS playlist_tracks (
+CREATE TABLE playlist_tracks (
     namespace TEXT NOT NULL,
     playlist_id TEXT NOT NULL,
     position INTEGER NOT NULL,
     song_value TEXT NOT NULL,
     PRIMARY KEY (namespace, playlist_id, position));
 
-CREATE TABLE IF NOT EXISTS session_state (
+CREATE TABLE session_state (
     id INTEGER PRIMARY KEY CHECK (id = 0),
     cur_namespace TEXT,
     cur_song_value TEXT,
@@ -60,13 +64,13 @@ CREATE TABLE IF NOT EXISTS session_state (
     volume REAL NOT NULL,
     updated_at INTEGER NOT NULL);
 
-CREATE TABLE IF NOT EXISTS session_queue (
+CREATE TABLE session_queue (
     position INTEGER PRIMARY KEY,
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL
     );
 
-CREATE TABLE IF NOT EXISTS song_kv (
+CREATE TABLE song_kv (
     namespace TEXT NOT NULL,
     song_value TEXT NOT NULL,
     key TEXT NOT NULL,
