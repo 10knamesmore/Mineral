@@ -41,7 +41,7 @@ pub struct BilibiliCli {
 /// 哔哩哔哩子命令。
 #[derive(Debug, Subcommand)]
 pub enum BilibiliCommand {
-    /// 扫码登录(终端显示二维码,用 B站手机 App 扫码)。
+    /// 扫码登录
     Login,
 }
 

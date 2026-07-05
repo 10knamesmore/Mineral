@@ -17,10 +17,10 @@ pub struct ChannelArgs {
 /// 支持的音乐源。
 #[derive(Debug, Subcommand)]
 pub enum ChannelCommand {
-    /// 网易云音乐(扫码登录、调试 API)。
+    /// 网易云音乐
     Netease(NeteaseCli),
 
-    /// 哔哩哔哩(扫码登录)。
+    /// 哔哩哔哩
     Bilibili(BilibiliCli),
 }
 

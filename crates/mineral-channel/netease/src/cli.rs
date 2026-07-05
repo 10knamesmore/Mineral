@@ -42,7 +42,7 @@ pub struct NeteaseCli {
 /// 网易云音乐子命令。
 #[derive(Debug, Subcommand)]
 pub enum NeteaseCommand {
-    /// 扫码登录(终端显示二维码,用网易云手机 App 扫码)。
+    /// 扫码登录
     Login,
 }
 

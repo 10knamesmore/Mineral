@@ -54,7 +54,7 @@ pub enum Command {
     /// 管理音乐源
     Channel(ChannelArgs),
 
-    /// 用户配置(生成模板 / 校验)。
+    /// 用户配置
     Config {
         /// config 下的具体子命令。
         #[command(subcommand)]
