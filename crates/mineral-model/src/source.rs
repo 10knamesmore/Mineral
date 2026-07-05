@@ -7,7 +7,7 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
-/// 标识一份资源(歌曲、专辑……)的来源 channel——强类型、开放集合、自描述。
+/// 标识一份资源(歌曲、专辑……)的来源(source)——强类型、开放集合、自描述。
 ///
 /// 仿 `http::StatusCode` 的「newtype + 关联常量」:内置源是常量
 /// ([`SourceKind::NETEASE`] 等),将来插件源可经 [`SourceKind::from_static`] 在运行时铸造。
@@ -54,7 +54,7 @@ impl SourceKind {
         label: "◆ mineral",
     };
 
-    /// 占位 / 测试用伪 channel — 仅在启用 `mock` feature 时存在。
+    /// 占位 / 测试用伪源 — 仅在启用 `mock` feature 时存在。
     #[cfg(feature = "mock")]
     pub const MOCK: Self = Self {
         name: "mock",

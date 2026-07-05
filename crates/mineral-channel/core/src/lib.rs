@@ -1,4 +1,4 @@
-//! 抽象的"音乐源" channel trait。
+//! 音乐源接入的 channel(连接器)trait。
 //!
 //! 任何具体音乐源(网易云、本地、QQ ……)都通过实现 [`MusicChannel`] 接入。
 //! 上层只面向 trait 编程,channel 实现间通过 [`mineral_model`] 中的统一类型互通。
@@ -28,12 +28,12 @@ use mineral_model::{
     SourceKind, UserId,
 };
 
-/// 一个音乐源 channel 的统一接口。
+/// 接入一个音乐源的 channel(连接器)统一接口。
 ///
 /// 所有方法都是异步、可独立失败的;不支持的能力直接返回 [`Error::NotSupported`]。
 #[async_trait]
 pub trait MusicChannel: Send + Sync {
-    /// 该 channel 的来源标识。
+    /// 该 channel 服务的来源(`source`)标识。
     fn source(&self) -> SourceKind;
 
     /// 该 channel 的能力声明,见 [`ChannelCaps`]。

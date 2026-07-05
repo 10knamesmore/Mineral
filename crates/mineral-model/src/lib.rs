@@ -35,7 +35,7 @@ pub mod refs;
 pub mod search;
 /// 歌曲核心结构。
 pub mod song;
-/// 标识资源来源 channel 的枚举(Netease / Local 等)。
+/// 标识资源来源(source)的类型(Netease / Local 等)。
 pub mod source;
 /// 区分远端 / 本地的媒体资源 URL。
 pub mod url;

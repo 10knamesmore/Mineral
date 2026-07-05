@@ -42,7 +42,7 @@ pub struct Artist {
 }
 
 impl Artist {
-    /// 来源 channel——派生自 [`Artist::id`] 的 namespace。
+    /// 来源(source)——派生自 [`Artist::id`] 的 namespace。
     #[inline]
     pub fn source(&self) -> SourceKind {
         self.id.namespace()

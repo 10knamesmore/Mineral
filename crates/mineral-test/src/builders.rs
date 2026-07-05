@@ -64,7 +64,7 @@ pub fn with_name(mut s: Song, name: &str) -> Song {
     s
 }
 
-/// 改一首 `Song` 的来源 channel(重建 `id` 的 namespace,裸值不变)。
+/// 改一首 `Song` 的来源 source(重建 `id` 的 namespace,裸值不变)。
 ///
 /// # Params:
 ///   - `s`: 原 `Song`

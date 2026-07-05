@@ -491,7 +491,7 @@ async fn collect_songs(player: &PlayerCore, target: &DownloadTarget) -> Result<V
             let channel = player
                 .channel_for(id.namespace())
                 .cloned()
-                .ok_or_else(|| "下载失败: 无来源 channel".to_owned())?;
+                .ok_or_else(|| "下载失败: 该来源无对应 channel".to_owned())?;
             channel
                 .playlist_detail(id)
                 .await

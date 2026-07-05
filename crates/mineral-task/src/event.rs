@@ -21,7 +21,7 @@ use crate::write::{PlaylistWriteOp, WriteError};
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
     PlaylistsFetched {
-        /// 来源 channel。
+        /// 来源(source)。
         source: SourceKind,
 
         /// 拉到的歌单。
@@ -40,7 +40,7 @@ pub enum TaskEvent {
     /// 某源 canonical 收藏(♥)集已到:server 从本地 persist 读、经远端红心导入合并后推送,
     /// client 据此装饰 SongView。非任务事件(server 直接推,不经 channel-fetch lane)。
     LikedSongIdsFetched {
-        /// 来源 channel。
+        /// 来源(source)。
         source: SourceKind,
 
         /// 已收藏的歌曲 ID 集合(canonical,以本地 persist 为准)。
@@ -96,7 +96,7 @@ pub enum TaskEvent {
     /// 回带完整请求四元组,client 据此配对到对应搜索会话;query 已变的
     /// 过期响应由 client 直接丢弃。
     SearchResults {
-        /// 来源 channel。
+        /// 来源(source)。
         source: SourceKind,
 
         /// 搜索实体类型。

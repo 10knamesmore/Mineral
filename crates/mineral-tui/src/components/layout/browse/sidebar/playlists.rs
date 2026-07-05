@@ -111,7 +111,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     );
 }
 
-/// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 channel / 总时长 / 曲目数)。
+/// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 / 总时长 / 曲目数)。
 fn build_row<'a>(
     p: &'a PlaylistView,
     state: &AppState,

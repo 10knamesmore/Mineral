@@ -37,7 +37,7 @@ impl DetailFetch {
         }
     }
 
-    /// 该拉取目标的来源 channel（id namespace 派生）：封面搭车投递时定来源用。
+    /// 该拉取目标的来源 source（id namespace 派生）：封面搭车投递时定来源用。
     pub fn source(&self) -> SourceKind {
         match self {
             Self::AlbumDetail(id) => id.namespace(),
