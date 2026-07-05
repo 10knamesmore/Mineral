@@ -10,8 +10,10 @@ rust-version.workspace = true
 
 [features]
 mock = ["mineral-tui/mock", "dep:mineral-channel-mock"]
+dhat-heap = ["dep:dhat"]
 
 [dependencies]
+dhat                    = { version = "0.3", optional = true }
 clap                    = { workspace = true }
 color-eyre              = { workspace = true }
 mineral-channel-core    = { workspace = true }

@@ -13,6 +13,12 @@ use tokio::runtime::Runtime;
 
 mod os;
 
+/// 全局分配器换成 dhat,供 `dhat::Profiler` 记录每次分配的调用栈 + 字节(仅 `dhat-heap`
+/// feature 构建时生效);无 Profiler 时透传,故 daemon 进程不受影响。
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     // _log_guard 必须持到 main 返回:drop 它会停后台 flush 线程,后续日志丢失。
@@ -23,6 +29,9 @@ fn main() -> color_eyre::Result<()> {
         Some(Command::Serve) => os::run_daemon(),
         Some(command) => mineral_cli::run(command),
         None => {
+            // dhat guard 必须持到 TUI 退出:Drop 时才落 dhat-heap.json。
+            #[cfg(feature = "dhat-heap")]
+            let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
             runtime.block_on(run_tui(args.connect, args.in_proc))
         }

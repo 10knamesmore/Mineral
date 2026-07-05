@@ -8,6 +8,8 @@ logs/
 .DS_Store
 # 脚本/bin 生成的、可丢的中间物(perf.data / 火焰图 svg / samply 产物等)
 scratch/
+# dhat 堆剖析产物(--features dhat-heap 运行时落盘)
+dhat-heap.json
 # superpowers 头脑风暴可视化伴侣的本地产物
 .superpowers/
 **/__pycache__/**
