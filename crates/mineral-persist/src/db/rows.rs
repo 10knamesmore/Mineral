@@ -1,5 +1,8 @@
 //! db 行结构体与 mineral-model 互转。
 
+use std::str::FromStr;
+
+use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, Song, SongId, SourceKind};
 use sqlx::FromRow;
 
 /// `song_meta` 行。
@@ -35,4 +38,48 @@ pub(crate) struct SongArtistRow {
 
     /// 艺名。
     pub artist_name: String,
+}
+
+impl SongMetaRow {
+    /// 与按 `position` 升序排好的艺人行一起重建 [`Song`](namespace 从行内还原)。
+    ///
+    /// # Params:
+    ///   - `artists`: 该歌的艺人行(调用方保证顺序)
+    ///
+    /// # Return:
+    ///   重建的 [`Song`];`duration_ms` 负值(库损坏)时报错。
+    pub(crate) fn into_song(self, artists: Vec<SongArtistRow>) -> color_eyre::Result<Song> {
+        let source = SourceKind::from_name(&self.namespace);
+        let artists = artists
+            .into_iter()
+            .map(|a| ArtistRef {
+                id: ArtistId::new(source, a.artist_id),
+                name: a.artist_name,
+            })
+            .collect::<Vec<ArtistRef>>();
+
+        let album = match (self.album_id, self.album_name) {
+            (Some(aid), Some(aname)) => Some(AlbumRef {
+                id: AlbumId::new(source, aid),
+                name: aname,
+            }),
+            _ => None,
+        };
+
+        let cover_url = self.cover_url.map(|s| match MediaUrl::from_str(&s) {
+            Ok(u) => u,
+            Err(never) => match never {},
+        });
+
+        let duration_ms = u64::try_from(self.duration_ms)?;
+
+        Ok(Song::builder()
+            .id(SongId::new(source, self.song_value))
+            .name(self.name)
+            .artists(artists)
+            .album(album)
+            .duration_ms(duration_ms)
+            .cover_url(cover_url)
+            .build())
+    }
 }

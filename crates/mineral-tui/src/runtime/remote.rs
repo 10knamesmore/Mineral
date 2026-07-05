@@ -366,8 +366,8 @@ impl Client for RemoteClient {
         }
     }
 
-    fn toggle_love(&self, id: SongId) -> bool {
-        match self.send_recv(Request::ToggleLove(id)) {
+    fn toggle_love(&self, song: Song) -> bool {
+        match self.send_recv(Request::ToggleLove(Box::new(song))) {
             Response::LoveToggled(new) => new,
             // 错误/意外响应:保守返回 false(TUI 乐观值为准)
             _ => false,

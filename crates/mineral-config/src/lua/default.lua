@@ -239,6 +239,14 @@ return {
     dir = nil, -- 下载导出目录,绝对路径;缺省走默认(~/Music/mineral)
   },
   sources = {
+    mineral = {
+      color = "#2a6511", -- EndSerenading 封面绿(聚合收藏歌单的源徽标)
+      -- 后台补 meta 节流:sync 导入的红心先只有 id,后台逐源(按各歌来源走各自 channel)拉 songs_detail 补全,聚合面渐进填满
+      backfill = {
+        chunk_size = 40, -- 每次 songs_detail 调用处理多少 id(= 聚合面刷新粒度 + 限住单次调用时长;非"请求数",请求怎么发是 channel 内部的事)
+        max_concurrent = 3, -- 并行几个 songs_detail 调用(并发上限即节流;不管单次调用内部是一个还是多个请求,最多 N 个在飞)
+      },
+    },
     netease = {
       timeout_secs = 100, -- 单次 API 请求超时,秒
       proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")

@@ -132,6 +132,9 @@ pub(crate) struct Inner {
 
     /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
     spawn_max_concurrent: usize,
+
+    /// 聚合收藏补 meta 后台任务的状态 + 节流旋钮(单飞闸 / 待办标志 / 并发参数,见 [`crate::favorites`])。
+    pub(crate) backfill: crate::favorites::Backfill,
 }
 
 impl PlayerCore {
@@ -194,6 +197,10 @@ impl PlayerCore {
             media_seek_threshold_ms: *config.daemon().seek_threshold_ms(),
             hook_timeout: Duration::from_millis(*config.hook_timeout_ms()),
             spawn_max_concurrent: *config.spawn_max_concurrent(),
+            backfill: crate::favorites::Backfill::new(
+                *config.favorites_backfill_chunk_size(),
+                *config.favorites_backfill_max_concurrent(),
+            ),
         });
         let me = Self { inner };
         let bg = me.clone();
@@ -724,6 +731,9 @@ impl PlayerCore {
                 this.sync_favorites(source, channel).await;
             });
         }
+        // 立即扫一次上一会话遗留的缺 meta 收藏;本次 sync 晚到的那批由各 sync 末尾再触发、
+        // pending 合并进同一 worker。
+        self.spawn_meta_backfill();
     }
 }
 
@@ -1026,6 +1036,10 @@ mod tests {
             media_seek_threshold_ms: *cfg.daemon().seek_threshold_ms(),
             hook_timeout: Duration::from_millis(*cfg.hook_timeout_ms()),
             spawn_max_concurrent: *cfg.spawn_max_concurrent(),
+            backfill: crate::favorites::Backfill::new(
+                *cfg.favorites_backfill_chunk_size(),
+                *cfg.favorites_backfill_max_concurrent(),
+            ),
         });
         Ok(PlayerCore { inner })
     }
@@ -2654,15 +2668,21 @@ mod tests {
         let persist = ServerStore::open(&dir.path().join("t.db")).await?;
         // RecordingChannel(源 NETEASE)的 set_loved 用 trait 默认 → NotSupported。
         let core = core_with_persist(Arc::default(), persist.clone())?;
-        let id = SongId::new(SourceKind::NETEASE, "42");
+        let track = song("42");
+        let id = track.id.clone();
         let scope = persist.scope(SourceKind::NETEASE);
         assert!(!scope.is_loved(&id).await?, "初始未收藏");
 
-        let new = core.toggle_favorite(&id).await?;
+        let new = core.toggle_favorite(&track).await?;
         assert!(new, "toggle 返回新态 true");
         assert!(
             scope.is_loved(&id).await?,
             "远端镜像 NotSupported,本地 persist 仍必写 loved"
+        );
+        // 携带整首 Song 的意义:love 落地时 meta 顺手入库,聚合视图离线可重建。
+        assert!(
+            scope.get_meta(&id).await?.is_some(),
+            "toggle 应顺手 upsert_meta"
         );
         // toggle 后推 canonical(供装饰自愈,不只靠 client 乐观翻转)。
         let events = core.drain_client_events();
@@ -2680,9 +2700,189 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应推 canonical favorited 集"))?;
         assert!(pushed.contains(&id), "推的 canonical 应含刚收藏的歌");
 
-        let new2 = core.toggle_favorite(&id).await?;
+        let new2 = core.toggle_favorite(&track).await?;
         assert!(!new2, "再 toggle 回 false");
         assert!(!scope.is_loved(&id).await?, "本地 persist 已取消");
+        Ok(())
+    }
+
+    /// toggle 后聚合收藏歌单(mineral 源)被重合成并重推:曲目集合走 `PlaylistDetailFetched`
+    /// (正在看聚合歌单的 client 实时增删),sidebar 计数走 client **认得**的 `LibrarySnapshot`
+    /// (经 library_concluded 出口管线,而非被 client no-op 丢弃的 `PlaylistsFetched`)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![
+            Arc::new(RecordingChannel {
+                calls: Arc::default(),
+                url_delay: None,
+                liked_ids: None,
+                playlists: None,
+            }),
+            Arc::new(mineral_channel_mineral::MineralChannel::new(
+                persist.clone(),
+            )),
+        ];
+        let core = core_with_channels(
+            channels,
+            persist,
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )?;
+        let track = song("agg1");
+        core.toggle_favorite(&track).await?;
+
+        // detail 同步推;LibrarySnapshot 经 library_concluded 出口管线异步落地——轮询累积到它为止
+        // (不能只 drain 一次:snapshot 可能尚未产出,或与首次 drain 竞争被吞)。
+        let mut events = core.drain_client_events();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !events
+            .iter()
+            .any(|e| matches!(e, mineral_task::TaskEvent::LibrarySnapshot { .. }))
+        {
+            if std::time::Instant::now() >= deadline {
+                color_eyre::eyre::bail!("超时未收到聚合 LibrarySnapshot");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            core.consume_events_once();
+            events.extend(core.drain_client_events());
+        }
+
+        let detail = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                mineral_task::TaskEvent::PlaylistDetailFetched { id, playlist }
+                    if id.namespace() == SourceKind::MINERAL =>
+                {
+                    Some(playlist)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应重推聚合歌单 detail"))?;
+        assert_eq!(detail.songs.len(), 1);
+        assert_eq!(
+            detail.songs.first().map(|s| &s.id),
+            Some(&track.id),
+            "聚合曲目保留原源 id"
+        );
+
+        // F1 回归:sidebar 计数经 client 认得的 LibrarySnapshot 更新,快照里 mineral 聚合歌单的
+        // track_count 跟随收藏数。直推 PlaylistsFetched 会被 client apply 丢弃,故这里改断言这条。
+        let snapshot = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                mineral_task::TaskEvent::LibrarySnapshot { playlists } => Some(playlists),
+                _ => None,
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应产出 LibrarySnapshot"))?;
+        let fav = snapshot
+            .iter()
+            .find(|p| p.id.namespace() == SourceKind::MINERAL)
+            .ok_or_else(|| color_eyre::eyre::eyre!("快照应含 mineral 聚合歌单"))?;
+        assert_eq!(fav.track_count, 1, "sidebar 计数跟随收藏数");
+        Ok(())
+    }
+
+    /// set_favorite(script/CLI love,只握 id)收藏一首 persist 里没 meta 的歌:触发后台补 meta
+    /// 任务向其源 channel 拉 detail 回填,聚合视图才能离线重建它(sync / script 共用这条后台任务)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_favorite_backfills_missing_meta() -> color_eyre::Result<()> {
+        use mineral_test::mock::DetailChannel;
+        use mineral_test::with_name;
+
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let id = SongId::new(SourceKind::NETEASE, "lua1");
+        let full = with_name(song("lua1"), "From Detail");
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![
+            Arc::new(DetailChannel::new(SourceKind::NETEASE, vec![full])),
+            Arc::new(mineral_channel_mineral::MineralChannel::new(
+                persist.clone(),
+            )),
+        ];
+        let core = core_with_channels(
+            channels,
+            persist.clone(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )?;
+
+        let scope = persist.scope(SourceKind::NETEASE);
+        assert!(scope.get_meta(&id).await?.is_none(), "初始无 meta");
+
+        core.set_favorite(&id, /*loved*/ true).await?;
+
+        // 补 meta 是后台单飞任务(异步 spawn),轮询到它把 meta 写进 persist。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let meta = loop {
+            if let Some(meta) = scope.get_meta(&id).await? {
+                break meta;
+            }
+            if std::time::Instant::now() >= deadline {
+                color_eyre::eyre::bail!("后台补 meta 超时未写入");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(meta.name, "From Detail", "补的是 channel detail 返回的歌名");
+        Ok(())
+    }
+
+    /// 后台补 meta 是 source-neutral 的:一次 spawn 扫全部源,netease + bilibili 各自缺 meta 的
+    /// 歌都经**各自** channel 的 songs_detail 补上(单飞一个 worker 覆盖多源,无源特判)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn meta_backfill_covers_all_sources() -> color_eyre::Result<()> {
+        use mineral_test::mock::DetailChannel;
+        use mineral_test::with_name;
+
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let n_id = SongId::new(SourceKind::NETEASE, "n1");
+        let b_id = SongId::new(SourceKind::BILIBILI, "b1");
+        let n_full = with_name(song("n1"), "Netease Song");
+        let mut b_full = with_name(song("b1"), "Bili Song");
+        b_full.id = b_id.clone();
+        let channels: Vec<Arc<dyn MusicChannel>> = vec![
+            Arc::new(DetailChannel::new(SourceKind::NETEASE, vec![n_full])),
+            Arc::new(DetailChannel::new(SourceKind::BILIBILI, vec![b_full])),
+            Arc::new(mineral_channel_mineral::MineralChannel::new(
+                persist.clone(),
+            )),
+        ];
+        let core = core_with_channels(
+            channels,
+            persist.clone(),
+            /*music_dir*/ None,
+            MediaCache::disabled(),
+        )?;
+
+        // 两源各 love 一首、均无 meta。
+        persist
+            .scope(SourceKind::NETEASE)
+            .set_loved(&n_id, true)
+            .await?;
+        persist
+            .scope(SourceKind::BILIBILI)
+            .set_loved(&b_id, true)
+            .await?;
+
+        core.spawn_meta_backfill();
+
+        // 轮询到两源的 meta 都被后台任务补上。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let n = persist.scope(SourceKind::NETEASE).get_meta(&n_id).await?;
+            let b = persist.scope(SourceKind::BILIBILI).get_meta(&b_id).await?;
+            if n.is_some() && b.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                color_eyre::eyre::bail!("后台补 meta 超时:两源未都补上");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         Ok(())
     }
 

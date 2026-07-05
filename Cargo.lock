@@ -2510,6 +2510,7 @@ dependencies = [
  "color-eyre",
  "mineral-channel-bilibili",
  "mineral-channel-core",
+ "mineral-channel-mineral",
  "mineral-channel-mock",
  "mineral-channel-netease",
  "mineral-cli",
@@ -2591,6 +2592,20 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "typed-builder",
+]
+
+[[package]]
+name = "mineral-channel-mineral"
+version = "0.5.2"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "mineral-channel-core",
+ "mineral-model",
+ "mineral-persist",
+ "mineral-test",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2774,6 +2789,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-protocol",
+ "mineral-test",
  "parking_lot",
  "rustc-hash",
  "sqlx",
@@ -2841,6 +2857,7 @@ dependencies = [
  "lofty",
  "mineral-audio",
  "mineral-channel-core",
+ "mineral-channel-mineral",
  "mineral-config",
  "mineral-log",
  "mineral-media",

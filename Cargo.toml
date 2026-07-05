@@ -19,6 +19,7 @@ members = [
     "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
     "crates/mineral-channel/bilibili",
+    "crates/mineral-channel/mineral",
     "crates/mineral-persist",
     "crates/mineral-config",
     "crates/mineral-script",
@@ -71,6 +72,7 @@ mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili" }
+mineral-channel-mineral = { path = "crates/mineral-channel/mineral" }
 mineral-persist         = { path = "crates/mineral-persist" }
 mineral-config          = { path = "crates/mineral-config" }
 mineral-script          = { path = "crates/mineral-script" }

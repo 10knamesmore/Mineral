@@ -38,6 +38,7 @@ url           = { workspace = true }
 
 [dev-dependencies]
 insta             = { workspace = true }
+mineral-channel-mineral = { workspace = true }
 mineral-test      = { workspace = true }
 async-trait       = { workspace = true }
 pretty_assertions = { workspace = true }

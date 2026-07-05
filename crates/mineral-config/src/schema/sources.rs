@@ -25,6 +25,9 @@ pub struct SourcesConfig {
 
     /// 哔哩哔哩源段。
     bilibili: BilibiliSection,
+
+    /// Mineral 聚合源段(全源收藏投影)。
+    mineral: MineralSection,
 }
 
 impl SourcesConfig {
@@ -37,8 +40,38 @@ impl SourcesConfig {
         vec![
             ("netease", self.netease.color()),
             ("bilibili", self.bilibili.color()),
+            ("mineral", self.mineral.color()),
         ]
     }
+}
+
+/// Mineral 聚合源段(全源收藏投影,source = `mineral`)。
+///
+/// 非网络源:没有 timeout / proxy 等网络旋钮(故不走 `#[source_section]`),
+/// 可配徽标色 + 后台补 meta 的节流参数。
+#[config_section]
+pub struct MineralSection {
+    /// 来源徽标色:token 名(随主题联动)或 `"#rrggbb"`(固定色)。
+    color: ColorRef,
+
+    /// 后台补 meta 的节流参数(聚合面如何逐步补全 sync 导入的、缺 meta 的收藏)。
+    backfill: BackfillSection,
+}
+
+/// 聚合收藏后台补 meta 的节流参数。
+///
+/// sync 导入的远端红心先只有 id、无 meta,聚合视图重建不出。后台任务逐源(source-neutral:
+/// 按各歌 namespace 走各自 channel 的 `songs_detail`,**不假设它是批量还是逐个**——批量源一次
+/// 调用一个请求,逐个源一次调用内部循环,那是 channel 的事)分块拉详情补 persist,渐进填满。
+#[config_section]
+pub struct BackfillSection {
+    /// 每次 `songs_detail` 调用处理多少 id:聚合面刷新的粒度,也限住单次调用时长。
+    /// **非「请求数」**——请求怎么发是 channel 内部的事(批量 / 逐个)。
+    chunk_size: usize,
+
+    /// 并行几个 `songs_detail` 调用(并发上限即节流强度)。无论单次调用内部是一个请求还是
+    /// 多个,同时最多 `max_concurrent` 个在飞;越小越温柔。
+    max_concurrent: usize,
 }
 
 /// 哔哩哔哩源段。
@@ -109,6 +142,21 @@ impl serde::de::Visitor<'_> for ProxyVisitor {
 #[cfg(test)]
 mod tests {
     use super::NeteaseSection;
+
+    /// 默认配置含 mineral 聚合源段(唯一旋钮 color),`source_colors` 出其条目
+    /// (TUI 徽标据此着色,缺了就退中立兜底色)。
+    #[test]
+    fn mineral_section_in_defaults() -> color_eyre::Result<()> {
+        let cfg = crate::Config::defaults()?;
+        assert!(
+            cfg.sources()
+                .source_colors()
+                .iter()
+                .any(|(name, _)| *name == "mineral"),
+            "source_colors 应含 mineral 条目"
+        );
+        Ok(())
+    }
 
     #[test]
     fn proxy_false_is_none() -> color_eyre::Result<()> {

@@ -86,3 +86,58 @@ impl MusicChannel for UrlChannel {
         Ok(())
     }
 }
+
+/// mock channel:`songs_detail` 返回预置的 [`Song`] 池(按请求 id 过滤),供需要"拉详情"的
+/// 测试用(如收藏补 meta);其余方法走 trait 默认(`NotSupported` / 空)。来源可配。
+pub struct DetailChannel {
+    /// 该 mock 的来源(`songs_detail` 只对匹配 namespace 的 id 有意义)。
+    source: SourceKind,
+
+    /// `songs_detail` 可返回的曲目池;按请求 id 过滤后返回。
+    songs: Vec<Song>,
+}
+
+impl DetailChannel {
+    /// 新建。
+    ///
+    /// # Params:
+    ///   - `source`: 该 mock 的来源
+    ///   - `songs`: `songs_detail` 的曲目池(按请求 id 过滤)
+    ///
+    /// # Return:
+    ///   mock 实例。
+    pub fn new(source: SourceKind, songs: Vec<Song>) -> Self {
+        Self { source, songs }
+    }
+}
+
+#[async_trait]
+impl MusicChannel for DetailChannel {
+    fn source(&self) -> SourceKind {
+        self.source
+    }
+
+    fn caps(&self) -> ChannelCaps {
+        ChannelCaps::builder()
+            .searchable(Vec::new())
+            .playlist_edit(false)
+            .build()
+    }
+
+    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
+        Err(Error::NotSupported)
+    }
+
+    async fn songs_detail(&self, ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+        Ok(self
+            .songs
+            .iter()
+            .filter(|s| ids.contains(&s.id))
+            .cloned()
+            .collect())
+    }
+
+    async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> ChannelResult<Vec<PlayUrl>> {
+        Err(Error::NotSupported)
+    }
+}

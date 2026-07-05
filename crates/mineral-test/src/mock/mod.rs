@@ -2,9 +2,10 @@
 //!
 //! - [`serve_once`]:进程内一次性 HTTP server。
 //! - [`UrlChannel`]:返回固定直链的 mock channel。
+//! - [`DetailChannel`]:`songs_detail` 返回预置曲目的 mock channel。
 
 mod channel;
 mod http;
 
-pub use channel::UrlChannel;
+pub use channel::{DetailChannel, UrlChannel};
 pub use http::serve_once;

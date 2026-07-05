@@ -45,6 +45,43 @@ pub(crate) fn playlist_view(
     }
 }
 
+/// 混源三曲(netease / bilibili / local 各一首)——聚合收藏类混源列表的测试原料。
+pub(crate) fn mixed_source_songs() -> Vec<Song> {
+    let netease = endserenading(1)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| song("n1"));
+    let mut bilibili = with_artist(with_name(song("b1"), "夜間飛行"), "Chinese Football");
+    bilibili.id = SongId::new(SourceKind::BILIBILI, "b1");
+    let mut local = with_name(song("l1"), "Local Rip");
+    local.id = SongId::new(SourceKind::LOCAL, "l1");
+    vec![netease, bilibili, local]
+}
+
+/// 造一个选中混源歌单(source = mineral 的聚合收藏)的 `AppState`,view = Library,
+/// 曲目为 [`mixed_source_songs`],无在播(序号列不被 ♫ 占位)。
+pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
+    let mut s = AppState::test_default()?;
+    let pid = PlaylistId::new(SourceKind::MINERAL, "favorites");
+    s.library.playlists = vec![playlist_view(
+        "favorites",
+        "Favorites",
+        SourceKind::MINERAL,
+        3,
+    )];
+    s.browse.view.switch_to(View::Library);
+    let views = mixed_source_songs()
+        .into_iter()
+        .map(|data| SongView {
+            data,
+            loved: true,
+            plays: None,
+        })
+        .collect::<Vec<SongView>>();
+    s.library.tracks.insert(pid, views);
+    Ok(s)
+}
+
 /// 造一个填了歌单的 `AppState`(view = Playlists,选中第 0 个):Mineral 两张专辑
 /// + 一个本地歌单。
 pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
@@ -265,7 +302,7 @@ impl Client for TestClient {
         (Vec::new(), 0)
     }
 
-    fn toggle_love(&self, _id: SongId) -> bool {
+    fn toggle_love(&self, _song: Song) -> bool {
         false
     }
 

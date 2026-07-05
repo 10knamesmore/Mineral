@@ -20,7 +20,8 @@ mineral-log      = { workspace = true }
 mineral-protocol = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile     = "3"
+mineral-test = { workspace = true }
 
 [lints]
 workspace = true

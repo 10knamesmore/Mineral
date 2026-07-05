@@ -3,7 +3,7 @@
 pub(crate) mod schema;
 
 mod namespace;
-mod rows;
+pub(crate) mod rows;
 mod session;
 mod song_kv;
 mod time;

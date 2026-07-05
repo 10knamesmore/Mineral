@@ -739,6 +739,19 @@ Config {
                 },
             ),
         },
+        mineral: MineralSection {
+            color: Hex(
+                HexColor {
+                    r: 42,
+                    g: 101,
+                    b: 17,
+                },
+            ),
+            backfill: BackfillSection {
+                chunk_size: 40,
+                max_concurrent: 3,
+            },
+        },
     },
     daemon: DaemonConfig {
         gapless_prefetch_ms: 10000,

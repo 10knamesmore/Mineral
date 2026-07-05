@@ -94,11 +94,11 @@ end)
 触发面有两个:
 
 - **TUI 绑键**:配置 `tui.keys.script = { ["my.love_and_next"] = "L" }`
-- **CLI**:`mineral action my.love_and_next`(脚本调试利器)
+- **CLI**:`mineral action my.love_and_next`(脚本调试利器);尾随位置实参原样进 `ctx.args`,如 `mineral action title.set clock` → `ctx.args = { "clock" }`
 
 `mineral.bind(key, fn)` 是语法糖 = 匿名 action + 键位一步绑定。
 
-回调的 `ctx` 携带按键瞬间的 client 上下文(CLI 触发时全为 `nil`):
+回调的 `ctx` 携带按键瞬间的 client 上下文(CLI 触发时按键类字段全为 `nil`,唯 `args` 例外):
 
 | 字段                | 类型                                                             | 说明             |
 | ------------------- | ---------------------------------------------------------------- | ---------------- |
@@ -108,6 +108,7 @@ end)
 | `now_playing`       | Song                                                             | 在播的歌         |
 | `selected_loved`    | boolean                                                          | 选中歌的 ♥ 态    |
 | `search_query`      | string                                                           | 当前搜索词       |
+| `args`              | string[]                                                         | CLI 位置实参(见下);TUI 键位触发为空数组,恒非 nil |
 
 播放器自身的状态(音量 / 进度 / 模式)不在 ctx 里——用 `mineral.get`。
 

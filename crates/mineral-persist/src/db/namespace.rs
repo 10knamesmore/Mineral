@@ -1,12 +1,8 @@
 //! 某来源命名空间下的存储视图。
 
-use std::str::FromStr;
-
 use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
-use mineral_model::{
-    AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, PlaylistId, Song, SongId, SourceKind,
-};
+use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 
 use crate::ServerStore;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
@@ -213,40 +209,7 @@ impl NamespaceStore {
         .await
         .wrap_err_with(|| format!("查 song_artists 失败 song={song_value}"))?;
 
-        let source = SourceKind::from_name(&row.namespace);
-        let artists = artist_rows
-            .into_iter()
-            .map(|a| ArtistRef {
-                id: ArtistId::new(source, a.artist_id),
-                name: a.artist_name,
-            })
-            .collect::<Vec<ArtistRef>>();
-
-        let album = match (row.album_id, row.album_name) {
-            (Some(aid), Some(aname)) => Some(AlbumRef {
-                id: AlbumId::new(source, aid),
-                name: aname,
-            }),
-            _ => None,
-        };
-
-        let cover_url = row.cover_url.map(|s| match MediaUrl::from_str(&s) {
-            Ok(u) => u,
-            Err(never) => match never {},
-        });
-
-        let duration_ms = u64::try_from(row.duration_ms)?;
-
-        Ok(Some(
-            Song::builder()
-                .id(SongId::new(source, row.song_value))
-                .name(row.name)
-                .artists(artists)
-                .album(album)
-                .duration_ms(duration_ms)
-                .cover_url(cover_url)
-                .build(),
-        ))
+        Ok(Some(row.into_song(artist_rows)?))
     }
 
     /// 记一次完整播放：play_count+1、累加时长、刷新 last_played_at。降级 no-op。

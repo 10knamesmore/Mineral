@@ -32,6 +32,12 @@ pub struct ServerConfig {
 
     /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
     spawn_max_concurrent: usize,
+
+    /// 聚合收藏后台补 meta:单次 `songs_detail` 批量数(配置 `sources.mineral.backfill.chunk_size`)。
+    favorites_backfill_chunk_size: usize,
+
+    /// 聚合收藏后台补 meta:并行拉取路数上限(配置 `sources.mineral.backfill.max_concurrent`)。
+    favorites_backfill_max_concurrent: usize,
 }
 
 impl ServerConfig {
@@ -60,6 +66,8 @@ impl ServerConfig {
             .daemon(cfg.daemon().clone())
             .hook_timeout_ms(*cfg.script().hook_timeout_ms())
             .spawn_max_concurrent(*cfg.script().spawn_max_concurrent())
+            .favorites_backfill_chunk_size(*cfg.sources().mineral().backfill().chunk_size())
+            .favorites_backfill_max_concurrent(*cfg.sources().mineral().backfill().max_concurrent())
             .build()
     }
 }

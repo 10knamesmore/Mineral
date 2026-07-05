@@ -12,7 +12,7 @@ use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
-use crate::render::theme::Theme;
+use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::action::Action;
 use crate::runtime::playback::format_ms;
 use crate::runtime::scroll;
@@ -115,7 +115,8 @@ impl Overlay for QueueOverlay {
         let current_idx = ctx.queue_current_index();
         // 按浮层内宽选列档:窄浮层放不下 artist 时退到「歌本身」(# title len)。
         let cols = QueueCols::for_width(inner.width);
-
+        // 序号无条件染该行歌曲的源色(零列宽成本地表示来源):同源队列整列同色即
+        // 该队列来源,混源队列则逐行不同。
         let header = Row::new(cols.header_cells())
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
@@ -124,7 +125,10 @@ impl Overlay for QueueOverlay {
             .queue
             .iter()
             .enumerate()
-            .map(|(i, s)| build_row(i, s, current_idx, theme, cols))
+            .map(|(i, s)| {
+                let index_fg = resolve_source_color(theme, ctx.cfg.sources(), s.source());
+                build_row(i, s, current_idx, theme, cols, index_fg)
+            })
             .collect();
 
         let widths = cols.widths();
@@ -243,9 +247,10 @@ impl QueueCols {
 
 /// 把一首歌组成 queue 表格的一行。
 ///
-/// 当前在播行:行首 `▶` + 整行 `accent` 前景(与选中行的「背景块」区分);其余行
-/// 序号用暗色,歌名用主文本色,艺术家用次要色,层级分明。选中行的高亮背景由
-/// Table 的 `row_highlight_style` 叠加,与在播前景着色天然兼容(背景块视觉优先)。
+/// 当前在播行:行首 `▶` + 整行 `accent` 前景(与选中行的「背景块」区分),在播标记
+/// 语义优先于源色;其余行序号用 `index_fg`(该行歌曲的源色,整列同色即队列来源),
+/// 歌名用主文本色,艺术家用次要色,层级分明。选中行的高亮背景由 Table 的
+/// `row_highlight_style` 叠加,与在播前景着色天然兼容(背景块视觉优先)。
 /// `cols` 决定列集:窄档省去 artist。
 fn build_row<'a>(
     idx: usize,
@@ -253,6 +258,7 @@ fn build_row<'a>(
     current_idx: Option<usize>,
     theme: &Theme,
     cols: QueueCols,
+    index_fg: ratatui::style::Color,
 ) -> Row<'a> {
     let is_current = current_idx == Some(idx);
     let (lead, title_fg, sub_fg) = if is_current {
@@ -263,7 +269,7 @@ fn build_row<'a>(
         )
     } else {
         (
-            Span::styled(format!("{idx}"), Style::new().fg(theme.overlay)),
+            Span::styled(format!("{idx}"), Style::new().fg(index_fg)),
             theme.text,
             theme.subtext,
         )
@@ -355,6 +361,64 @@ mod tests {
             1,
             "重复曲只应有一行标在播,不能两个副本一起亮"
         );
+        Ok(())
+    }
+
+    /// 混源 queue:`#` 序号按该行歌曲的源色着色;未配置色的源(local)退中立兜底。
+    #[test]
+    fn queue_mixed_source_tints_index() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        use crate::render::theme::resolve_source_color;
+
+        let theme = Theme::default();
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = crate::test_support::mixed_source_songs();
+        let overlay = QueueOverlay::new(0);
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
+        })?;
+        let fg_of = |ch: &str| -> Option<ratatui::style::Color> {
+            let buf = t.backend().buffer();
+            let area = buf.area;
+            (0..area.height).find_map(|y| {
+                (0..area.width)
+                    .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == ch).map(|c| c.fg))
+            })
+        };
+        // 行 0(netease)是光标行:row_highlight_style 盖掉 cell 级前景(accent),
+        // 序号源色暂不可见——与设计一致,故断言非选中的行 1 / 2。
+        assert_eq!(fg_of("0"), Some(theme.accent), "光标行序号被高亮前景覆盖");
+        let bilibili = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::BILIBILI);
+        assert_eq!(fg_of("1"), Some(bilibili), "bilibili 行序号染 bilibili 色");
+        assert_eq!(fg_of("2"), Some(theme.subtext), "local 未配置色,退中立兜底");
+        Ok(())
+    }
+
+    /// 同源 queue:序号也无条件染该源色(整列同色),不再退中立灰。
+    #[test]
+    fn queue_single_source_also_tints_index() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        use crate::render::theme::resolve_source_color;
+
+        let theme = Theme::default();
+        let ctx = ctx_with_queue(3, /*current*/ None)?;
+        let overlay = QueueOverlay::new(0);
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
+        })?;
+        let buf = t.backend().buffer();
+        let area = buf.area;
+        let fg = (0..area.height).find_map(|y| {
+            (0..area.width)
+                .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == "1").map(|c| c.fg))
+        });
+        // endserenading 全 netease:非选中行序号染 netease 源色。
+        let netease = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::NETEASE);
+        assert_eq!(fg, Some(netease), "同源 queue 序号也染该源色");
         Ok(())
     }
 

@@ -48,6 +48,12 @@ impl SourceKind {
         label: "▶ bilibili",
     };
 
+    /// Mineral 自身——跨源聚合内容(如全源收藏合集)的挂靠来源,无网络后端。
+    pub const MINERAL: Self = Self {
+        name: "mineral",
+        label: "◆ mineral",
+    };
+
     /// 占位 / 测试用伪 channel — 仅在启用 `mock` feature 时存在。
     #[cfg(feature = "mock")]
     pub const MOCK: Self = Self {
@@ -91,6 +97,7 @@ impl SourceKind {
             "netease" => Self::NETEASE,
             "local" => Self::LOCAL,
             "bilibili" => Self::BILIBILI,
+            "mineral" => Self::MINERAL,
             #[cfg(feature = "mock")]
             "mock" => Self::MOCK,
             other => {
@@ -207,5 +214,13 @@ mod tests {
     fn from_name_interns_unknown() {
         let plugin = SourceKind::from_name("spotify");
         assert_eq!(plugin.name(), "spotify");
+    }
+
+    /// mineral 聚合源是内置常量:from_name 命中(非 intern 兜底),label 带字形。
+    #[test]
+    fn mineral_is_builtin() {
+        assert_eq!(SourceKind::from_name("mineral"), SourceKind::MINERAL);
+        assert_eq!(SourceKind::MINERAL.name(), "mineral");
+        assert_eq!(SourceKind::MINERAL.label(), "◆ mineral");
     }
 }

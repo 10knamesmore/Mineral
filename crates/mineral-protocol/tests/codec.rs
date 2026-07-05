@@ -311,7 +311,7 @@ async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
 /// love / 统计相关 Request 与 Response 的 round-trip。
 #[tokio::test]
 async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
-    req_round_trips(Request::ToggleLove(SongId::new(SourceKind::NETEASE, "123"))).await?;
+    req_round_trips(Request::ToggleLove(Box::new(song("123")))).await?;
     req_round_trips(Request::QuerySongStats(SongId::new(
         SourceKind::NETEASE,
         "123",
@@ -432,8 +432,7 @@ mod proptests {
                     target_id: SongId::new(SourceKind::NETEASE, target.as_str()),
                 }
             }),
-            any::<String>()
-                .prop_map(|s| Request::ToggleLove(SongId::new(SourceKind::NETEASE, s.as_str()))),
+            arb_song().prop_map(|s| Request::ToggleLove(Box::new(s))),
             any::<String>().prop_map(|s| Request::QuerySongStats(SongId::new(
                 SourceKind::NETEASE,
                 s.as_str()

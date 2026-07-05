@@ -171,7 +171,10 @@ pub enum Request {
 
     // ---- love / 统计 ----
     /// 切换一首歌的喜欢(♥)状态。返回 [`Response::LoveToggled`](切换后的新状态)。
-    ToggleLove(SongId),
+    ///
+    /// 携带整首 [`Song`] 而非裸 id:server 落 love 的同时把元数据写进 persist,
+    /// 跨源聚合视图(全源收藏)才能离线重建出歌名 / 艺人 / 时长。
+    ToggleLove(Box<Song>),
 
     /// 查询一首歌的播放统计。返回 [`Response::SongStats`]。
     QuerySongStats(SongId),

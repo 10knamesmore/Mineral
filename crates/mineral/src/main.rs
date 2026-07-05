@@ -161,7 +161,8 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
     }
 }
 
-/// 按可用凭证 / 编译 feature 收集所有 channel(目前是 netease + 可选 mock)。
+/// 按可用凭证 / 编译 feature 收集所有 channel(目前是 mineral 聚合 + netease + bilibili
+/// + 可选 mock)。
 ///
 /// **单个 channel 失败不阻塞**:某源构建失败(如凭证损坏)只 warn + 跳过,不拖垮其他源
 /// 或 daemon;空 channels 也是合法状态(没登录任何源),由 TUI 空状态提示兜。
@@ -174,6 +175,11 @@ fn build_channels(
     sources: &mineral_config::SourcesConfig,
 ) -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
+    // 聚合源(全源收藏投影):纯 persist 投影、无凭证依赖,恒注册。放列表首位,
+    // 其歌单列表(本地 SQL)最先就绪,聚合收藏歌单自然排 sidebar 顶部。
+    channels.push(Arc::new(mineral_channel_mineral::MineralChannel::new(
+        persist.clone(),
+    )));
     match build_netease(persist, sources.netease()) {
         Ok(Some(c)) => channels.push(c),
         Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),

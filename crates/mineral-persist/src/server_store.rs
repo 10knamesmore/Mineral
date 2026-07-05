@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use color_eyre::eyre::WrapErr;
 use mineral_log::{info, warn};
-use mineral_model::SourceKind;
+use mineral_model::{Song, SongId, SourceKind};
+use rustc_hash::FxHashMap;
 use sqlx::SqlitePool;
 
 use crate::CacheIndex;
+use crate::db::rows::{SongArtistRow, SongMetaRow};
 use crate::db::schema::ensure_schema;
 use crate::db::{NamespaceStore, SessionStore};
 
@@ -116,6 +118,106 @@ impl ServerStore {
         }
     }
 
+    /// 全部源的 loved 歌曲(join meta 重建),按 `loved_at` 降序(最新收藏在顶),
+    /// 同毫秒收藏以 `(namespace, song_value)` 破平局,顺序稳定不随库文件重排。
+    ///
+    /// loved 但缺 meta 的行**跳过**——聚合视图与其曲目计数保持同口径,不出现「有行但
+    /// 没名字」的占位。缺 meta 是常态:sync 导入的远端红心先只有 id,meta 随浏览补全。
+    /// 降级句柄返回空集。
+    ///
+    /// # Return:
+    ///   跨 namespace 的收藏 `Vec<Song>`。
+    pub async fn loved_songs(&self) -> color_eyre::Result<Vec<Song>> {
+        let Some(pool) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        let meta_rows = sqlx::query_as::<_, SongMetaRow>(
+            "SELECT m.namespace, m.song_value, m.name, m.album_id, m.album_name, \
+             m.duration_ms, m.cover_url \
+             FROM song_stats st \
+             JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
+             WHERE st.loved_at IS NOT NULL \
+             ORDER BY st.loved_at DESC, st.namespace, st.song_value",
+        )
+        .fetch_all(pool)
+        .await
+        .wrap_err("查跨源 loved 元数据失败")?;
+
+        let artist_rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT a.namespace, a.song_value, a.artist_id, a.artist_name \
+             FROM song_stats st \
+             JOIN song_artists a ON a.namespace = st.namespace AND a.song_value = st.song_value \
+             WHERE st.loved_at IS NOT NULL \
+             ORDER BY a.position",
+        )
+        .fetch_all(pool)
+        .await
+        .wrap_err("查跨源 loved 艺人失败")?;
+        let mut artists_by_song = FxHashMap::<(String, String), Vec<SongArtistRow>>::default();
+        for (namespace, song_value, artist_id, artist_name) in artist_rows {
+            artists_by_song
+                .entry((namespace, song_value))
+                .or_default()
+                .push(SongArtistRow {
+                    artist_id,
+                    artist_name,
+                });
+        }
+
+        meta_rows
+            .into_iter()
+            .map(|row| {
+                let key = (row.namespace.clone(), row.song_value.clone());
+                row.into_song(artists_by_song.remove(&key).unwrap_or_default())
+            })
+            .collect()
+    }
+
+    /// 跨源 loved 歌曲计数,与 [`Self::loved_songs`] **严格同口径**(只计 join 到 meta 的
+    /// 收藏,缺 meta 的行不计)——聚合歌单列表面只要计数时走它,免为拿个数字重建整个
+    /// `Vec<Song>`。降级句柄返回 0。
+    ///
+    /// # Return:
+    ///   有 meta 的跨源收藏数。
+    pub async fn loved_count(&self) -> color_eyre::Result<u64> {
+        let Some(pool) = self.pool() else {
+            return Ok(0);
+        };
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM song_stats st \
+             JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
+             WHERE st.loved_at IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await
+        .wrap_err("统计跨源 loved 计数失败")?;
+        u64::try_from(count).wrap_err("loved 计数转 u64 失败")
+    }
+
+    /// 全部源里 loved 但**缺 meta** 的歌 id(sync 导入的远端红心先只有 id、无 meta)。
+    /// 供后台补 meta 任务拉详情回填;补齐后它们就进 [`Self::loved_songs`] 的聚合视图。
+    /// 降级句柄返回空。
+    ///
+    /// # Return:
+    ///   跨 namespace 的缺 meta 收藏 id(namespace 从行内 `SourceKind::from_name` 还原)。
+    pub async fn missing_meta_loved_ids(&self) -> color_eyre::Result<Vec<SongId>> {
+        let Some(pool) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT st.namespace, st.song_value FROM song_stats st \
+             LEFT JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
+             WHERE st.loved_at IS NOT NULL AND m.song_value IS NULL",
+        )
+        .fetch_all(pool)
+        .await
+        .wrap_err("查缺 meta 的 loved 行失败")?;
+        Ok(rows
+            .into_iter()
+            .map(|(namespace, value)| SongId::new(SourceKind::from_name(&namespace), value))
+            .collect())
+    }
+
     /// 歌单缓存计数(只读)。供 CLI `cache status` 展示用。
     ///
     /// # Return:
@@ -203,6 +305,174 @@ mod tests {
     #[test]
     fn disabled_has_no_pool() {
         assert!(ServerStore::disabled().pool().is_none());
+    }
+
+    /// 跨源聚合:两源各一首 loved(带 meta)按 loved_at 降序返回;
+    /// 无 meta 的 loved 跳过;未 loved 的 meta 不出现。
+    #[tokio::test]
+    async fn loved_songs_aggregates_across_namespaces() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+        use mineral_test::{song, with_artist, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let netease = p.scope(SourceKind::NETEASE);
+        let bilibili = p.scope(SourceKind::BILIBILI);
+
+        // netease:较早收藏;bilibili:较晚收藏(手动定 loved_at,免同毫秒排序不稳)。
+        let n1 = with_artist(with_name(song("n1"), "Palisade"), "Mineral");
+        netease.upsert_meta(&n1).await?;
+        netease.set_loved(&n1.id, true).await?;
+        let b1 = {
+            let mut s = with_name(song("b1"), "夜間飛行");
+            s.id = SongId::new(SourceKind::BILIBILI, "b1");
+            s
+        };
+        bilibili.upsert_meta(&b1).await?;
+        bilibili.set_loved(&b1.id, true).await?;
+        // 有 meta 但未 loved:不该出现。
+        netease
+            .upsert_meta(&with_name(song("n2"), "unloved"))
+            .await?;
+        // loved 但无 meta:跳过。
+        netease
+            .set_loved(&SongId::new(SourceKind::NETEASE, "ghost"), true)
+            .await?;
+
+        let pool = p
+            .pool()
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
+        sqlx::query("UPDATE song_stats SET loved_at = 100 WHERE song_value = 'n1'")
+            .execute(pool)
+            .await?;
+        sqlx::query("UPDATE song_stats SET loved_at = 200 WHERE song_value = 'b1'")
+            .execute(pool)
+            .await?;
+
+        let songs = p.loved_songs().await?;
+        let names = songs.iter().map(|s| s.name.as_str()).collect::<Vec<&str>>();
+        assert_eq!(
+            names,
+            vec!["夜間飛行", "Palisade"],
+            "按 loved_at 降序,缺 meta 的 ghost 跳过,未 loved 的不出现"
+        );
+        let first = songs
+            .first()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有两首"))?;
+        assert_eq!(first.source(), SourceKind::BILIBILI, "namespace 还原为原源");
+        let second = songs
+            .get(1)
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有两首"))?;
+        assert_eq!(
+            second.artists.first().map(|a| a.name.as_str()),
+            Some("Mineral"),
+            "艺人列表随 meta 还原"
+        );
+        Ok(())
+    }
+
+    /// loved_count 与 loved_songs 同口径:只计 join 到 meta 的收藏(ghost 无 meta 不计,
+    /// unloved 的 meta 不计)。
+    #[tokio::test]
+    async fn loved_count_matches_loved_songs() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+        use mineral_test::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let netease = p.scope(SourceKind::NETEASE);
+        let a = with_name(song("a"), "Alpha");
+        netease.upsert_meta(&a).await?;
+        netease.set_loved(&a.id, true).await?;
+        // 有 meta 未 loved:不计。
+        netease.upsert_meta(&with_name(song("b"), "unloved")).await?;
+        // loved 无 meta(ghost):不计。
+        netease
+            .set_loved(&SongId::new(SourceKind::NETEASE, "ghost"), true)
+            .await?;
+
+        assert_eq!(p.loved_count().await?, 1, "只计有 meta 的收藏");
+        assert_eq!(
+            p.loved_count().await?,
+            u64::try_from(p.loved_songs().await?.len())?,
+            "count 与 songs 长度同口径"
+        );
+        Ok(())
+    }
+
+    /// 降级句柄:loved_count 返回 0 不报错。
+    #[tokio::test]
+    async fn loved_count_disabled_is_zero() -> color_eyre::Result<()> {
+        assert_eq!(ServerStore::disabled().loved_count().await?, 0);
+        Ok(())
+    }
+
+    /// 同毫秒收藏:tiebreaker `(namespace, song_value)` 给出确定顺序,不靠 SQLite 任意 tie 序;
+    /// 逆序插入也按 song_value 升序返回。
+    #[tokio::test]
+    async fn loved_songs_stable_order_on_same_millisecond() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+        use mineral_test::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let netease = p.scope(SourceKind::NETEASE);
+        // 逆序插入(先 bbb 后 aaa),验证返回顺序由 tiebreaker 而非插入序决定。
+        let b = with_name(song("bbb"), "Beta");
+        netease.upsert_meta(&b).await?;
+        netease.set_loved(&b.id, true).await?;
+        let a = with_name(song("aaa"), "Alpha");
+        netease.upsert_meta(&a).await?;
+        netease.set_loved(&a.id, true).await?;
+
+        let pool = p
+            .pool()
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
+        sqlx::query("UPDATE song_stats SET loved_at = 500")
+            .execute(pool)
+            .await?;
+
+        let songs = p.loved_songs().await?;
+        let names = songs.iter().map(|s| s.name.as_str()).collect::<Vec<&str>>();
+        assert_eq!(
+            names,
+            vec!["Alpha", "Beta"],
+            "同 loved_at 下按 song_value 升序(aaa 在 bbb 前),与插入序无关"
+        );
+        Ok(())
+    }
+
+    /// missing_meta_loved_ids:只列 loved 且缺 meta 的行(有 meta 的 loved 不列,unloved 不列)。
+    #[tokio::test]
+    async fn missing_meta_loved_ids_lists_only_meta_less_loved() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+        use mineral_test::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let netease = p.scope(SourceKind::NETEASE);
+        // 有 meta + loved:不列。
+        let a = with_name(song("a"), "Alpha");
+        netease.upsert_meta(&a).await?;
+        netease.set_loved(&a.id, true).await?;
+        // loved 无 meta:列。
+        let ghost = SongId::new(SourceKind::NETEASE, "ghost");
+        netease.set_loved(&ghost, true).await?;
+        // 有 meta 未 loved:不列。
+        netease
+            .upsert_meta(&with_name(song("b"), "unloved"))
+            .await?;
+
+        let ids = p.missing_meta_loved_ids().await?;
+        assert_eq!(ids, vec![ghost], "只列 loved 且缺 meta 的");
+        Ok(())
+    }
+
+    /// 降级句柄:loved_songs 返回空集不报错。
+    #[tokio::test]
+    async fn loved_songs_disabled_is_empty() -> color_eyre::Result<()> {
+        assert!(ServerStore::disabled().loved_songs().await?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]

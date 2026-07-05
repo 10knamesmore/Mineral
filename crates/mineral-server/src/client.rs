@@ -45,12 +45,12 @@ impl ClientHandle {
     /// 编排见 [`PlayerCore::toggle_favorite`](crate::player::PlayerCore)。
     ///
     /// # Params:
-    ///   - `id`: 目标歌曲 id;其 namespace 决定 persist scope 与远端 channel。
+    ///   - `song`: 目标歌曲(整首传入,server 顺手落 meta 供聚合视图重建)。
     ///
     /// # Return:
     ///   切换后的新 loved 状态。
-    pub(crate) async fn toggle_love_async(&self, id: &SongId) -> color_eyre::Result<bool> {
-        self.player.toggle_favorite(id).await
+    pub(crate) async fn toggle_love_async(&self, song: &Song) -> color_eyre::Result<bool> {
+        self.player.toggle_favorite(song).await
     }
 
     /// 触发脚本具名动作并等待结果(serve 层处理 `InvokeAction` 用)。
@@ -273,11 +273,11 @@ pub trait Client: Send + Sync {
     /// (调用方 TUI 应自行乐观更新本地 loved 态,不强依赖此返回值)。
     ///
     /// # Params:
-    ///   - `id`: 目标歌曲 id。
+    ///   - `song`: 目标歌曲(整首传入,server 顺手落 meta 供聚合视图重建)。
     ///
     /// # Return:
     ///   切换后的 loved 状态(daemon 模式为真实值;in-proc 为占位 `false`)。
-    fn toggle_love(&self, id: SongId) -> bool;
+    fn toggle_love(&self, song: Song) -> bool;
 
     /// 触发脚本具名动作(`mineral.action` 注册)。
     ///
@@ -475,12 +475,12 @@ impl Client for ClientHandle {
         self.pcm.pull(n)
     }
 
-    fn toggle_love(&self, id: SongId) -> bool {
+    fn toggle_love(&self, song: Song) -> bool {
         // in-proc 降级:fire-and-forget 触发完整 toggle(查+翻转+set_loved),返回乐观占位。
         // TUI 会乐观更新本地态,不依赖此返回值。
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.toggle_love_async(&id).await {
+            if let Err(e) = this.toggle_love_async(&song).await {
                 mineral_log::warn!(
                     target: "client",
                     error = mineral_log::chain(&e),

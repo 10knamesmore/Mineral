@@ -154,8 +154,8 @@ impl App {
             .get(self.state.browse.nav.track.sel())
             .map(|sv| sv.data.clone())
         {
-            // 触发持久化(daemon 写本地 + 远端);in-proc fire-and-forget。
-            self.client.toggle_love(song.id.clone());
+            // 触发持久化(daemon 写本地 + 远端,整首传入顺手落 meta);in-proc fire-and-forget。
+            self.client.toggle_love(song.clone());
             // 乐观翻转:♥ 立即变,不等 server 确认。
             self.state.toggle_loved_local(&song);
         }

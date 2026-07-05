@@ -30,4 +30,6 @@ ServerConfig {
     },
     hook_timeout_ms: 2000,
     spawn_max_concurrent: 8,
+    favorites_backfill_chunk_size: 40,
+    favorites_backfill_max_concurrent: 3,
 }

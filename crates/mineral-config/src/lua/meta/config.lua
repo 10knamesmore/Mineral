@@ -325,6 +325,7 @@
 ---@class mineral.SourcesConfig
 ---@field netease? mineral.NeteaseSection 网易云
 ---@field bilibili? mineral.BilibiliSection 哔哩哔哩
+---@field mineral? mineral.MineralSection Mineral 聚合源(全源收藏投影)
 ---@field curate_playlists? mineral.CuratePlaylistsFn 跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错
 
 ---网易云源的网络参数。
@@ -342,6 +343,19 @@
 ---@field max_connections? integer 到 B站的最大并发连接数,0 = 不限
 ---@field color? string 来源徽标色:token 名或 "#rrggbb"(默认 B站品牌粉)
 ---@field curate_playlists? mineral.CuratePlaylistsFn 该源歌单(= 收藏夹)列表的呈现策展(过滤/改名/重排)
+
+---Mineral 聚合源(全源收藏投影)。非网络源,可配徽标色 + 后台补 meta 节流参数。
+---@class mineral.MineralSection
+---@field color? string 来源徽标色:token 名或 "#rrggbb"(默认 EndSerenading 封面绿)
+---@field backfill? mineral.BackfillSection 后台补 meta 节流(逐步补全 sync 导入的缺 meta 收藏)
+---@field curate_playlists? mineral.CuratePlaylistsFn 该源歌单列表的呈现策展(过滤/改名/重排)
+
+---聚合收藏后台补 meta 的节流参数。sync 导入的红心先只有 id,后台逐源(按各歌来源走各自
+---channel 的 songs_detail)分块拉详情补全,聚合面渐进填满。source-neutral:不假设 songs_detail
+---是批量还是逐个,那是各 channel 内部的事(批量源一调=一请求,逐个源一调内部循环)。
+---@class mineral.BackfillSection
+---@field chunk_size? integer 每次 songs_detail 调用处理多少 id(= 刷新粒度 + 限住单次调用时长;非请求数)
+---@field max_concurrent? integer 并行几个 songs_detail 调用(并发上限即节流;不管单调用内部几个请求)
 
 ---daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动;
 ---改后需重启 daemon 生效。

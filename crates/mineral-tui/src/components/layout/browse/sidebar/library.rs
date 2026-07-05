@@ -6,6 +6,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table};
 
+use mineral_model::SourceKind;
+
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
@@ -14,52 +16,63 @@ use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
-/// 曲目表格的列档,按面板宽度选(见 [`TrackLayout::for_width`])。
+/// 曲目表格的列布局:宽度档(是否放得下 artist/album)× 是否聚合面(mineral 源)。
 #[derive(Clone, Copy)]
-enum TrackLayout {
-    /// 宽档:♥ / # / title / artist / album / len,文本列比例 Fill(3:2:2)。
-    Full,
+struct TrackLayout {
+    /// 宽档:♥ / # / title / artist / album / len,文本列比例 Fill(3:2:2);
+    /// `false` 为窄档 ♥ / # / title / len——artist/album 放不下,退到「歌本身」。
+    full: bool,
 
-    /// 窄档:♥ / # / title / len —— artist/album 放不下,退到「歌本身」。
-    Song,
+    /// 聚合面(source = mineral 的跨源歌单,如全源收藏合集):宽档在 album 后插
+    /// per-song `source` 徽标列;窄档插不起 11 格列,改为序号染该行歌曲的源色(与
+    /// queue 同一手法)。普通单源歌单为 `false`,天然无需 per-song source 表示。
+    aggregate: bool,
 }
 
 impl TrackLayout {
-    /// 按面板宽度 `width` 选档。阈值 56:低于此 3 个文本列各分不到约 12 格,
-    /// 退到只剩歌名(终端窄 → 面板窄 → 退列,与全局 compact 同源思路)。
-    fn for_width(width: u16) -> Self {
-        if width < 56 { Self::Song } else { Self::Full }
+    /// 按面板宽度与曲目集合选布局。宽度阈值:普通面 56(低于此 3 个文本列各分不到约 12 格,
+    /// 退到只剩歌名);聚合面还要塞 11 格 source 列,阈值抬到 68(56 + 列宽及间隔),否则
+    /// 56~67 格会挤瘦 artist/album——窄档改由序号染色承担源表示,不硬塞列。
+    fn new(width: u16, aggregate: bool) -> Self {
+        let full_threshold = if aggregate { 68 } else { 56 };
+        Self {
+            full: width >= full_threshold,
+            aggregate,
+        }
     }
 
     /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
     fn header_cells(self) -> Vec<Cell<'static>> {
         let mut cells = vec![Cell::from(""), Cell::from("#"), Cell::from("title")];
-        if matches!(self, Self::Full) {
+        if self.full {
             cells.push(Cell::from("artist"));
             cells.push(Cell::from("album"));
+            if self.aggregate {
+                cells.push(Cell::from("source"));
+            }
         }
         cells.push(Cell::from("len"));
         cells
     }
 
-    /// 列宽约束:定宽小列用 Length,文本列用比例 Fill。
+    /// 列宽约束:定宽小列用 Length,文本列用比例 Fill;source 列与
+    /// playlists sidebar 的同名列等宽。
     fn widths(self) -> Vec<Constraint> {
-        match self {
-            Self::Full => vec![
-                Constraint::Length(1),
-                Constraint::Length(4),
+        let mut widths = vec![Constraint::Length(1), Constraint::Length(4)];
+        if self.full {
+            widths.extend([
                 Constraint::Fill(3),
                 Constraint::Fill(2),
                 Constraint::Fill(2),
-                Constraint::Length(6),
-            ],
-            Self::Song => vec![
-                Constraint::Length(1),
-                Constraint::Length(4),
-                Constraint::Fill(1),
-                Constraint::Length(6),
-            ],
+            ]);
+            if self.aggregate {
+                widths.push(Constraint::Length(11));
+            }
+        } else {
+            widths.push(Constraint::Fill(1));
         }
+        widths.push(Constraint::Length(6));
+        widths
     }
 }
 
@@ -93,8 +106,13 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
                 .style(Style::new().fg(theme.overlay)),
         );
 
-    // 按面板宽度选列档:窄屏放不下 artist/album 时退到「歌本身」(♥ # title len)。
-    let layout = TrackLayout::for_width(area.width);
+    // 按面板宽度 × 是否聚合面选布局:窄屏放不下 artist/album 时退到「歌本身」
+    // (♥ # title len);聚合面(source = mineral 的跨源歌单)额外带 per-song source
+    // 表示。跨源的只有 mineral 源歌单,故看歌单 source 而非遍历曲目。
+    let aggregate = state
+        .selected_playlist()
+        .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
+    let layout = TrackLayout::new(area.width, aggregate);
 
     let header = Row::new(layout.header_cells())
         .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
@@ -170,6 +188,14 @@ fn build_row<'a>(
 
     let num_cell = if is_current {
         Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
+    } else if layout.aggregate && !layout.full {
+        // 窄档聚合面:source 列插不起,序号承担源表示(染该行歌曲的源色)。
+        let src_color = crate::render::theme::resolve_source_color(
+            theme,
+            state.cfg.sources(),
+            sv.data.source(),
+        );
+        Cell::from(Span::styled(format!("{idx}"), Style::new().fg(src_color)))
     } else {
         Cell::from(format!("{idx}"))
     };
@@ -185,7 +211,7 @@ fn build_row<'a>(
     let len = format_duration(sv.data.duration_ms);
 
     let mut cells = vec![love_cell, num_cell, title_cell];
-    if matches!(layout, TrackLayout::Full) {
+    if layout.full {
         let artist = sv
             .data
             .artists
@@ -212,6 +238,17 @@ fn build_row<'a>(
             Style::new().fg(theme.overlay),
             theme,
         ))));
+        if layout.aggregate {
+            let src = sv.data.source();
+            cells.push(Cell::from(Span::styled(
+                src.label(),
+                Style::new().fg(crate::render::theme::resolve_source_color(
+                    theme,
+                    state.cfg.sources(),
+                    src,
+                )),
+            )));
+        }
     }
     cells.push(Cell::from(len));
     let row = Row::new(cells);
@@ -267,6 +304,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    use super::TrackLayout;
     use crate::render::theme::Theme;
     use crate::runtime::state::{AppState, View};
 
@@ -448,6 +486,77 @@ mod tests {
         state.browse.search.set_query("zzz");
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
+        Ok(())
+    }
+
+    /// 聚合面阈值抬到 68:56~67 格插不起 11 格 source 列,退窄档(full=false)让序号染色兜底;
+    /// 普通面仍 56 格进宽档,聚合面 68 格进宽档。
+    #[test]
+    fn aggregate_layout_threshold_leaves_room_for_source_column() {
+        assert!(
+            !TrackLayout::new(60, /*aggregate*/ true).full,
+            "聚合面 60 格退窄档(插不起 source 列)"
+        );
+        assert!(
+            TrackLayout::new(56, /*aggregate*/ false).full,
+            "普通面 56 格进宽档"
+        );
+        assert!(
+            TrackLayout::new(68, /*aggregate*/ true).full,
+            "聚合面 68 格进宽档"
+        );
+    }
+
+    /// 混源歌单(聚合收藏):Full 档在 album 与 len 之间多出 source 徽标列,
+    /// 每行显示歌曲自己的真实来源;同源歌单(其余快照)无此列。
+    #[test]
+    fn library_mixed_source_column_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        let state = crate::test_support::state_with_mixed_tracks()?;
+        draw_lib(&mut t, &state)?;
+        crate::test_support::assert_snap!(
+            "曲目列表:混源歌单 Full 档插 per-song source 徽标列",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 混源歌单窄档(Song 档):source 列插不起,序号改染该行歌曲的源色
+    /// (与 queue 同一手法);同源歌单序号保持中立灰。
+    #[test]
+    fn library_mixed_source_narrow_tints_index() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        use crate::render::theme::resolve_source_color;
+
+        let theme = Theme::default();
+        let state = crate::test_support::state_with_mixed_tracks()?;
+        let mut t = Terminal::new(TestBackend::new(50, 12))?;
+        draw_lib(&mut t, &state)?;
+        // body 行 y=2 起,序号列字符 '0'/'1'/'2';逐行找到序号 cell 断言前景色。
+        let fg_of = |y: u16, ch: &str| -> Option<ratatui::style::Color> {
+            let buf = t.backend().buffer();
+            (0..buf.area.width)
+                .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == ch).map(|c| c.fg))
+        };
+        // 行 0(netease)是选中行:row_highlight_style 盖掉 cell 级前景(accent),
+        // 序号源色暂不可见——与设计一致,故断言非选中的行 1 / 2。
+        assert_eq!(
+            fg_of(2, "0"),
+            Some(theme.accent),
+            "选中行序号被高亮前景覆盖"
+        );
+        let bilibili = resolve_source_color(&theme, state.cfg.sources(), SourceKind::BILIBILI);
+        assert_eq!(
+            fg_of(3, "1"),
+            Some(bilibili),
+            "bilibili 行序号染 bilibili 色"
+        );
+        assert_eq!(
+            fg_of(4, "2"),
+            Some(theme.subtext),
+            "local 未配置色,退中立兜底"
+        );
         Ok(())
     }
 

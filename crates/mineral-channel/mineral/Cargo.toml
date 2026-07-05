@@ -1,0 +1,25 @@
+[package]
+name        = "mineral-channel-mineral"
+description = "跨源聚合 channel(source = mineral):把 persist 全源收藏投影成 synthetic 歌单"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model        = { workspace = true }
+mineral-channel-core = { workspace = true }
+mineral-persist      = { workspace = true }
+
+color-eyre  = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile     = "3"
+tokio        = { workspace = true }
+mineral-test = { workspace = true }
+
+[lints]
+workspace = true
