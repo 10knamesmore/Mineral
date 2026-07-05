@@ -2,13 +2,15 @@
 //!
 //! 标题是既有 client 状态的纯派生，按优先级取：断连（client 强制）> 脚本旋钮
 //! 覆盖 > 结构化四态模板（播放 / 暂停 / 空闲各一套，`StateIcon` 段按当前态解析
-//! 图标字形）。写入走 crossterm `SetTitle` + 变化检测，避免每帧刷 OSC。
+//! 图标字形）。写入走 crossterm `SetTitle` + 变化检测，避免每帧刷 OSC；写前抹掉
+//! 控制字符，杜绝远端元数据里的转义序列注入。
 
+use std::borrow::Cow;
 use std::io;
 
 use crossterm::execute;
 use crossterm::terminal::SetTitle;
-use mineral_config::{TimeFormat, TitleField, TitleIcons, TitleSegment, WindowTitleConfig};
+use mineral_config::{TimeFormat, TitleField, TitleSegment, WindowTitleConfig};
 use mineral_model::Song;
 
 /// 渲染窗口标题所需的当帧上下文（既有状态的只读投影）。
@@ -38,20 +40,12 @@ pub(crate) struct TitleContext<'a> {
 
 /// 窗口标题的状态机 + 变化检测。
 pub(crate) struct WindowTitle {
-    /// 总开关。
-    enabled: bool,
+    /// `tui.window_title` 段配置（总开关 / 四态图标 / 四态模板）。
+    cfg: WindowTitleConfig,
 
-    /// 四态状态图标字形。
-    icons: TitleIcons,
-
-    /// 有歌态（播放 / 暂停共用）模板。
-    template: Vec<TitleSegment>,
-
-    /// 空闲态模板。
-    idle: Vec<TitleSegment>,
-
-    /// 断连态模板。
-    disconnected: Vec<TitleSegment>,
+    /// 是否有任一模板引用 `Lyric` 字段。无引用时调用方可跳过每帧的歌词行拼接
+    /// （拼接要按时间轴定位当前行并拥有化文本，无谓的每帧分配）。
+    wants_lyric: bool,
 
     /// 上一次实际写给终端的标题。`None` 表示尚未写入或已禁用。
     last_title: Option<String>,
@@ -66,14 +60,31 @@ impl WindowTitle {
     /// # Return:
     ///   新的窗口标题管理器。
     pub(crate) fn new(cfg: &WindowTitleConfig) -> Self {
+        let wants_lyric = references_lyric(cfg.template())
+            || references_lyric(cfg.idle())
+            || references_lyric(cfg.disconnected());
         Self {
-            enabled: *cfg.enabled(),
-            icons: cfg.icons().clone(),
-            template: cfg.template().clone(),
-            idle: cfg.idle().clone(),
-            disconnected: cfg.disconnected().clone(),
+            cfg: cfg.clone(),
+            wants_lyric,
             last_title: None,
         }
+    }
+
+    /// 是否有任一模板引用歌词字段。调用方据此决定是否每帧拼接当前歌词行。
+    ///
+    /// # Return:
+    ///   有引用为 `true`。
+    pub(crate) fn wants_lyric(&self) -> bool {
+        self.wants_lyric
+    }
+
+    /// 标题系统是否启用（总开关）。禁用时 [`Self::render`] 恒 `None`；调用方据此决定
+    /// 是否需要 push 终端标题栈（禁用则不碰终端标题）。
+    ///
+    /// # Return:
+    ///   启用为 `true`。
+    pub(crate) fn enabled(&self) -> bool {
+        *self.cfg.enabled()
     }
 
     /// 根据当前上下文按优先级渲染标题字符串。
@@ -84,26 +95,27 @@ impl WindowTitle {
     /// # Return:
     ///   应显示的新标题；禁用时返回 `None`。
     fn render(&self, ctx: &TitleContext<'_>) -> Option<String> {
-        if !self.enabled {
+        if !*self.cfg.enabled() {
             return None;
         }
+        let icons = self.cfg.icons();
         // 断连优先且 client 强制：此时脚本通道已死，旋钮值 stale，忽略。
         if !ctx.connected {
-            return Some(fold(&self.disconnected, self.icons.disconnected(), ctx));
+            return Some(fold(self.cfg.disconnected(), icons.disconnected(), ctx));
         }
         // 旋钮覆盖胜过结构化模板（脚本自渲染整串）。
         if let Some(text) = ctx.override_text {
             return Some(text.to_owned());
         }
-        let Some(_song) = ctx.song else {
-            return Some(fold(&self.idle, self.icons.idle(), ctx));
-        };
+        if ctx.song.is_none() {
+            return Some(fold(self.cfg.idle(), icons.idle(), ctx));
+        }
         let icon = if ctx.playing {
-            self.icons.playing()
+            icons.playing()
         } else {
-            self.icons.paused()
+            icons.paused()
         };
-        Some(fold(&self.template, icon, ctx))
+        Some(fold(self.cfg.template(), icon, ctx))
     }
 
     /// 上下文变化导致标题串变化时才写给终端。
@@ -119,7 +131,9 @@ impl WindowTitle {
             return Ok(());
         }
         if let Some(title) = &new_title {
-            execute!(io::stdout(), SetTitle(title))?;
+            // 标题里可能混入远端元数据（歌名 / 歌词），写前抹掉控制字符再发 OSC，
+            // 杜绝 BEL / ESC 提前终止或另起转义序列（终端标题注入）。仅在标题真变时走一次。
+            execute!(io::stdout(), SetTitle(sanitize_title(title)))?;
         }
         self.last_title = new_title;
         Ok(())
@@ -132,8 +146,31 @@ impl WindowTitle {
     }
 }
 
-/// fold 一套模板：`StateIcon` → 当前态字形 + 空格；`Field` → 按字段取值，空值折叠
-/// （连同 prefix/suffix）；`Literal` 原样。
+/// 模板中是否有段引用 `Lyric` 字段。
+fn references_lyric(segments: &[TitleSegment]) -> bool {
+    segments.iter().any(|s| {
+        matches!(
+            s,
+            TitleSegment::Field {
+                field: TitleField::Lyric,
+                ..
+            }
+        )
+    })
+}
+
+/// 抹掉标题里的控制字符（含换行 / BEL / ESC），逐个压成空格。标题是单行 OSC 载荷，
+/// 任何控制符都可能被终端解读成转义序列的一部分（与既有多行简介的 `sanitize_controls`
+/// 不同：那条保留换行做折行，标题要连换行一起抹）。
+fn sanitize_title(title: &str) -> String {
+    title
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// fold 一套模板：`StateIcon{icon=true}` → 当前态字形 + 空格（`icon=false` 空段跳过）；
+/// `Field` → 按字段取值，空值折叠（连同 prefix/suffix）；`Literal` 原样。
 ///
 /// # Params:
 ///   - `template`: 段序列。
@@ -146,9 +183,11 @@ fn fold(template: &[TitleSegment], icon: &str, ctx: &TitleContext<'_>) -> String
     let mut out = String::new();
     for segment in template {
         match segment {
-            TitleSegment::StateIcon { .. } => {
-                out.push_str(icon);
-                out.push(' ');
+            TitleSegment::StateIcon { icon: enabled } => {
+                if *enabled {
+                    out.push_str(icon);
+                    out.push(' ');
+                }
             }
             TitleSegment::Field {
                 field,
@@ -156,11 +195,11 @@ fn fold(template: &[TitleSegment], icon: &str, ctx: &TitleContext<'_>) -> String
                 suffix,
                 format,
             } => {
-                if let Some(v) = field_value(*field, format, ctx)
-                    && !v.is_empty()
+                if let Some(value) = field_value(*field, format, ctx)
+                    && !value.is_empty()
                 {
                     out.push_str(prefix);
-                    out.push_str(&v);
+                    out.push_str(&value);
                     out.push_str(suffix);
                 }
             }
@@ -170,25 +209,32 @@ fn fold(template: &[TitleSegment], icon: &str, ctx: &TitleContext<'_>) -> String
     out
 }
 
-/// 取一个字段的渲染值（`None` = 该段折叠）。
+/// 取一个字段的渲染值（`None` = 该段折叠）。歌曲派生字段借用上下文里的串（零分配），
+/// 只有时间字段（`Position` / `Duration`）现算故拥有化。
 ///
 /// `Position` 恒渲染（0 → `00:00`）；`Duration` 为 0（未探出）折叠；歌曲派生字段
 /// 无歌 / 无值折叠；`Lyric` 无当前行折叠。
-fn field_value(field: TitleField, format: &TimeFormat, ctx: &TitleContext<'_>) -> Option<String> {
+fn field_value<'a>(
+    field: TitleField,
+    format: &TimeFormat,
+    ctx: &TitleContext<'a>,
+) -> Option<Cow<'a, str>> {
     match field {
-        TitleField::Title => ctx.song.map(|s| s.name.clone()),
+        TitleField::Title => ctx.song.map(|s| Cow::Borrowed(s.name.as_str())),
         TitleField::Artist => ctx
             .song
             .and_then(|s| s.artists.first())
-            .map(|a| a.name.clone()),
+            .map(|a| Cow::Borrowed(a.name.as_str())),
         TitleField::Album => ctx
             .song
             .and_then(|s| s.album.as_ref())
-            .map(|a| a.name.clone()),
-        TitleField::Source => ctx.song.map(|s| s.source().label().to_owned()),
-        TitleField::Position => Some(format.render(ctx.position_ms)),
-        TitleField::Duration => (ctx.duration_ms > 0).then(|| format.render(ctx.duration_ms)),
-        TitleField::Lyric => ctx.lyric.map(str::to_owned),
+            .map(|a| Cow::Borrowed(a.name.as_str())),
+        TitleField::Source => ctx.song.map(|s| Cow::Borrowed(s.source().label())),
+        TitleField::Position => Some(Cow::Owned(format.render(ctx.position_ms))),
+        TitleField::Duration => {
+            (ctx.duration_ms > 0).then(|| Cow::Owned(format.render(ctx.duration_ms)))
+        }
+        TitleField::Lyric => ctx.lyric.map(Cow::Borrowed),
     }
 }
 
@@ -198,7 +244,7 @@ mod tests {
     use mineral_model::Song;
     use mineral_test::{song, with_album, with_artist};
 
-    use super::{TitleContext, WindowTitle};
+    use super::{TitleContext, WindowTitle, fold, sanitize_title};
 
     /// 造一个默认上下文（播放中、已连接、无进度 / 歌词 / 覆盖）。
     fn ctx(song: Option<&Song>) -> TitleContext<'_> {
@@ -213,19 +259,6 @@ mod tests {
         }
     }
 
-    /// 用给定 template 造一个 WindowTitle（idle/disconnected 留空，图标取 default.lua）。
-    fn wt(template: Vec<TitleSegment>) -> color_eyre::Result<WindowTitle> {
-        let cfg = Config::defaults()?;
-        Ok(WindowTitle {
-            enabled: true,
-            icons: cfg.tui().window_title().icons().clone(),
-            template,
-            idle: Vec::new(),
-            disconnected: Vec::new(),
-            last_title: None,
-        })
-    }
-
     /// 一个纯时间字段段（clock 预设）。
     fn field(field: TitleField, prefix: &str, suffix: &str) -> TitleSegment {
         TitleSegment::Field {
@@ -235,6 +268,8 @@ mod tests {
             format: TimeFormat::default(),
         }
     }
+
+    // ── 状态机 / 优先级：走 WindowTitle::new(默认配置) + render ──
 
     /// 默认模板渲染播放 / 暂停态：仅图标不同。
     #[test]
@@ -296,32 +331,48 @@ mod tests {
         Ok(())
     }
 
+    // ── fold 渲染细节：直接调 fold（自定义段无需构造完整配置）──
+
+    /// StateIcon：`icon=true` 输出字形 + 空格，`icon=false` 空段跳过。
+    #[test]
+    fn state_icon_toggle() {
+        let s = song("s");
+        let c = ctx(Some(&s));
+        assert_eq!(
+            fold(&[TitleSegment::StateIcon { icon: true }], "▶", &c),
+            "▶ "
+        );
+        assert_eq!(
+            fold(&[TitleSegment::StateIcon { icon: false }], "▶", &c),
+            ""
+        );
+    }
+
     /// position / duration 字段：clock 预设，duration=0 折叠、position=0 渲染 00:00。
     #[test]
     fn position_and_duration_clock() -> color_eyre::Result<()> {
-        let wt = wt(Vec::from([
+        let template = [
             field(TitleField::Position, "", ""),
             field(TitleField::Duration, "/", ""),
-        ]))?;
+        ];
         let s = song("s");
-        // duration=0 → 折叠；position=0 → 00:00。
         let mut c = ctx(Some(&s));
-        assert_eq!(wt.render(&c), Some("00:00".to_owned()));
+        // duration=0 → 折叠；position=0 → 00:00。
+        assert_eq!(fold(&template, "", &c), "00:00");
         // 有进度 + 全长。
         c.position_ms = 83_000;
         c.duration_ms = 296_000;
-        assert_eq!(wt.render(&c), Some("01:23/04:56".to_owned()));
+        assert_eq!(fold(&template, "", &c), "01:23/04:56");
         Ok(())
     }
 
     /// source 字段渲染来源 label。
     #[test]
     fn source_field() -> color_eyre::Result<()> {
-        let wt = wt(Vec::from([field(TitleField::Source, "", "")]))?;
         let s = song("s"); // mineral_test::song → netease 命名空间
         assert_eq!(
-            wt.render(&ctx(Some(&s))),
-            Some(s.source().label().to_owned())
+            fold(&[field(TitleField::Source, "", "")], "", &ctx(Some(&s))),
+            s.source().label()
         );
         Ok(())
     }
@@ -329,38 +380,38 @@ mod tests {
     /// lyric 字段：有当前行则渲染，无则折叠。
     #[test]
     fn lyric_field_renders_and_folds() -> color_eyre::Result<()> {
-        let wt = wt(Vec::from([field(TitleField::Lyric, "♪ ", "")]))?;
+        let template = [field(TitleField::Lyric, "♪ ", "")];
         let s = song("s");
         let mut c = ctx(Some(&s));
         c.lyric = Some("这是当前歌词");
-        assert_eq!(wt.render(&c), Some("♪ 这是当前歌词".to_owned()));
+        assert_eq!(fold(&template, "", &c), "♪ 这是当前歌词");
         c.lyric = None;
-        assert_eq!(wt.render(&c), Some(String::new()), "无当前行整段折叠");
+        assert_eq!(fold(&template, "", &c), "", "无当前行整段折叠");
         Ok(())
     }
 
     /// 自定义时间格式串（pattern）。
     #[test]
     fn custom_pattern_format() -> color_eyre::Result<()> {
-        let wt = wt(Vec::from([TitleSegment::Field {
+        let template = [TitleSegment::Field {
             field: TitleField::Position,
             prefix: String::new(),
             suffix: String::new(),
             format: TimeFormat::Pattern {
                 pattern: "{m}分{ss}秒".to_owned(),
             },
-        }]))?;
+        }];
         let s = song("s");
         let mut c = ctx(Some(&s));
         c.position_ms = 83_000;
-        assert_eq!(wt.render(&c), Some("1分23秒".to_owned()));
+        assert_eq!(fold(&template, "", &c), "1分23秒");
         Ok(())
     }
 
     /// album 字段与 seconds 预设。
     #[test]
     fn album_and_seconds() -> color_eyre::Result<()> {
-        let wt = wt(Vec::from([
+        let template = [
             TitleSegment::Literal {
                 text: "[".to_owned(),
             },
@@ -374,21 +425,59 @@ mod tests {
                 suffix: "s".to_owned(),
                 format: TimeFormat::Preset(TimePreset::Seconds),
             },
-        ]))?;
+        ];
         let s = with_album(song("s"), "My Album");
         let mut c = ctx(Some(&s));
         c.position_ms = 42_000;
-        assert_eq!(wt.render(&c), Some("[My Album] 42s".to_owned()));
+        assert_eq!(fold(&template, "", &c), "[My Album] 42s");
         Ok(())
     }
 
-    /// 禁用时不产生任何标题。
+    // ── 开关 / 派生标志 / 消毒 / 变化检测 ──
+
+    /// 禁用（enabled=false）时不产生任何标题。
     #[test]
     fn disabled_returns_none() -> color_eyre::Result<()> {
-        let mut wt = wt(Vec::new())?;
-        wt.enabled = false;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            r#"return { tui = { window_title = { enabled = false } } }"#,
+        )?;
+        let (cfg, _warnings) = mineral_config::load(&path)?;
+        let wt = WindowTitle::new(cfg.tui().window_title());
         assert_eq!(wt.render(&ctx(Some(&song("s")))), None);
         Ok(())
+    }
+
+    /// 默认模板不含 lyric → wants_lyric 为 false（调用方跳过每帧歌词拼接）。
+    #[test]
+    fn wants_lyric_false_for_default() -> color_eyre::Result<()> {
+        let cfg = Config::defaults()?;
+        let wt = WindowTitle::new(cfg.tui().window_title());
+        assert!(!wt.wants_lyric());
+        Ok(())
+    }
+
+    /// 模板含 lyric 字段 → wants_lyric 为 true。
+    #[test]
+    fn wants_lyric_true_when_template_references_lyric() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            r#"return { tui = { window_title = { template = { { field = "lyric" } } } } }"#,
+        )?;
+        let (cfg, _warnings) = mineral_config::load(&path)?;
+        let wt = WindowTitle::new(cfg.tui().window_title());
+        assert!(wt.wants_lyric());
+        Ok(())
+    }
+
+    /// 标题里的控制字符（换行 / BEL / ESC）被抹平，杜绝 OSC 注入。
+    #[test]
+    fn sanitize_strips_control_chars() {
+        assert_eq!(sanitize_title("a\x07b\x1bc\nd"), "a b c d");
     }
 
     /// 连续同上下文只写一次（通过 last_title 观察）。

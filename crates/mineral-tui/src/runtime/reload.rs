@@ -1,11 +1,11 @@
-//! TUI 侧配置热重载:mtime 轮询 config.lua → 重读配置 → 重建 keymap / theme。
+//! TUI 侧配置热重载:mtime 轮询 config.lua → 重读配置 → 重建 keymap / theme / 窗口标题。
 //!
 //! 与 daemon 的脚本重载**互相独立**(两进程各自看文件):TUI 这条只管自己
 //! 消费的配置切片;脚本 bind 键的刷新另由 daemon 推送的
 //! [`Event::ScriptReloaded`](mineral_protocol::Event::ScriptReloaded) 触发
 //! (见 `App::refresh_script_binds`),那才是 bind 表就绪的权威信号。
 //!
-//! 范围:本期热应用 **keys / behavior(keymap)与 theme**;构造期参数
+//! 范围:本期热应用 **keys / behavior(keymap)、theme 与窗口标题**;构造期参数
 //! (动画时长 / toast TTL / 布局等)不热应用,重启生效。
 
 use std::time::{Duration, Instant, SystemTime};
@@ -116,7 +116,7 @@ impl crate::app::App {
         }
     }
 
-    /// 从指定路径重读配置并热应用 keymap / theme(路径可注入,单测用)。
+    /// 从指定路径重读配置并热应用 keymap / theme / 窗口标题(路径可注入,单测用)。
     ///
     /// 加载失败(IO / 全文件 eval 失败回落默认也算成功路径,由 loader 语义
     /// 决定)时保留现行配置,弹驻留错误卡(错误链逐层一行);切片级 warning
@@ -167,8 +167,10 @@ impl crate::app::App {
         self.theme =
             std::sync::Arc::new(crate::render::theme::Theme::from_config(cfg.tui().theme()));
         self.state.cfg = cfg;
+        self.window_title =
+            crate::runtime::window_title::WindowTitle::new(self.state.cfg.tui().window_title());
         self.rebuild_keymap();
-        mineral_log::info!(target: "tui", "配置已重载(keymap / theme)");
+        mineral_log::info!(target: "tui", "配置已重载(keymap / theme / 窗口标题)");
         self.notifications
             .flash(tinted_text_item("配置已重载".to_owned(), TextTint::Normal));
     }
@@ -230,6 +232,26 @@ mod tests {
         );
         assert_ne!(app.theme.accent, old_accent, "主题热应用");
         assert!(app.notifications.entry_count() >= 1, "应有重载提示");
+        Ok(())
+    }
+
+    /// 窗口标题随配置热重载:换成含 lyric 的模板,reload 后 wants_lyric 翻真
+    /// (证明 window_title 用新配置重建了,而非沿用旧的)。
+    #[test]
+    fn reload_rebuilds_window_title() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        assert!(!app.window_title.wants_lyric(), "默认模板不含 lyric");
+        std::fs::write(
+            &path,
+            r#"return { tui = { window_title = { template = { { field = "lyric" } } } } }"#,
+        )?;
+        app.reload_config_from(&path);
+        assert!(
+            app.window_title.wants_lyric(),
+            "重载后模板含 lyric → 窗口标题热应用"
+        );
         Ok(())
     }
 

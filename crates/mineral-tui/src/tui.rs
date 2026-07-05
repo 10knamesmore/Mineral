@@ -85,10 +85,15 @@ impl Tui {
         Ok(())
     }
 
-    /// push 终端标题栈(`CSI 22;2 t`),供退出时 pop 还原。
+    /// push 终端标题栈(`CSI 22;0 t`),供退出时 pop 还原。**幂等**:已 push 过即空转。
     ///
-    /// 调用点必须在 [`Self::enter`] 之后、任何 `SetTitle` 之前。
+    /// 调用点必须在 [`Self::enter`] 之后、任何 `SetTitle` 之前。主循环每帧在标题启用时
+    /// 兜一次(见 `App::run`),把热重载从禁用→启用也纳入——否则运行时才开启会写标题却
+    /// 从未 push,退出无从 pop、残留 stale 标题。
     pub(crate) fn push_title_stack(&mut self) -> io::Result<()> {
+        if self.title_pushed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         execute!(io::stdout(), PushWindowTitle)?;
         self.title_pushed.store(true, Ordering::SeqCst);
         Ok(())
@@ -145,21 +150,23 @@ fn restore_terminal(title_pushed: &Arc<AtomicBool>) -> io::Result<()> {
     Ok(())
 }
 
-/// 标题栈 push 命令:`CSI 22;2 t`。
+/// 标题栈 push 命令:`CSI 22;0 t`(Ps=0 = 同时存图标名 + 窗口标题)。
+/// 与 `SetTitle`(OSC 0,一发同改二者)对称——用 Ps=2 只存窗口标题,退出 pop
+/// 时图标名不还原、残留 stale 标题。
 struct PushWindowTitle;
 
 impl Command for PushWindowTitle {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        f.write_str("\x1b[22;2t")
+        f.write_str("\x1b[22;0t")
     }
 }
 
-/// 标题栈 pop 命令:`CSI 23;2 t`。
+/// 标题栈 pop 命令:`CSI 23;0 t`(Ps=0 = 同时还原图标名 + 窗口标题)。
 struct PopWindowTitle;
 
 impl Command for PopWindowTitle {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        f.write_str("\x1b[23;2t")
+        f.write_str("\x1b[23;0t")
     }
 }
 
@@ -172,7 +179,7 @@ mod tests {
     fn push_window_title_emits_correct_sequence() -> color_eyre::Result<()> {
         let mut buf = Vec::<u8>::new();
         crossterm::execute!(buf, PushWindowTitle)?;
-        assert_eq!(String::from_utf8(buf)?, "\x1b[22;2t");
+        assert_eq!(String::from_utf8(buf)?, "\x1b[22;0t");
         Ok(())
     }
 
@@ -181,7 +188,7 @@ mod tests {
     fn pop_window_title_emits_correct_sequence() -> color_eyre::Result<()> {
         let mut buf = Vec::<u8>::new();
         crossterm::execute!(buf, PopWindowTitle)?;
-        assert_eq!(String::from_utf8(buf)?, "\x1b[23;2t");
+        assert_eq!(String::from_utf8(buf)?, "\x1b[23;0t");
         Ok(())
     }
 }

@@ -46,7 +46,8 @@ pub struct TitleIcons {
 pub enum TitleSegment {
     /// 当前态的状态图标；字形取自 [`TitleIcons`] 按当前态解析。
     StateIcon {
-        /// 必须为 `true`；`false` 会被视为无法识别的段并报错。
+        /// `true` = 输出当前态图标字形（后随一个空格）；`false` = 空段，不输出
+        /// （留着以便用户在覆盖模板里临时关掉图标而不改段结构）。
         icon: bool,
     },
 

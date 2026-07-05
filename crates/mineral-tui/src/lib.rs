@@ -148,7 +148,8 @@ fn run_app(
 ) -> color_eyre::Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
-    // 标题栈 push 与配置开关对称;禁用时不 push,退出也无需 pop。
+    // 标题栈 push 与配置开关对称;禁用时不 push,退出也无需 pop。运行时热重载从禁用→
+    // 启用由主循环幂等兜底补 push(见 App::run),故此处只管启动即启用的常路。
     if *cfg.tui().window_title().enabled() {
         tui.push_title_stack()?;
     }

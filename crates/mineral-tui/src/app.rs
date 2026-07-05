@@ -129,7 +129,7 @@ pub struct App {
     pub(crate) pending_container: FxHashMap<String, PlayMode>,
 
     /// 终端窗口标题管理器（任务栏 / tab 标题）。
-    window_title: WindowTitle,
+    pub(crate) window_title: WindowTitle,
 }
 
 impl App {
@@ -242,8 +242,13 @@ impl App {
                 self.overlays.push(OverlayKind::disconnect());
             }
             // 窗口标题与 ratatui draw 走不同通道,在 draw 之前单独更新。
-            // 逐字行文本按需拼接,先落局部持有,再借进 context。
-            let title_lyric = self.state.active_title_lyric();
+            // 歌词行仅在有模板引用它时才按需拼接(拼接要定位当前行 + 拥有化文本),
+            // 先落局部持有,再借进 context。
+            let title_lyric = if self.window_title.wants_lyric() {
+                self.state.active_title_lyric()
+            } else {
+                None
+            };
             let title_ctx = TitleContext {
                 song: self.state.player.current.as_ref(),
                 playing: self.state.playback.playing,
@@ -253,6 +258,11 @@ impl App {
                 lyric: title_lyric.as_deref(),
                 override_text: self.state.ui_overrides.window_title_text.as_deref(),
             };
+            // 标题启用时确保标题栈已 push（幂等）——启动即启用由 lib.rs 兜住，热重载
+            // 从禁用→启用则由此补上，保证退出能对称 pop 还原原标题。禁用时不 push。
+            if self.window_title.enabled() {
+                tui.push_title_stack()?;
+            }
             self.window_title.update(&title_ctx)?;
             if self.overlays.is_disconnected() {
                 // 只渲染断连提示 + 推进其弹出动画 + 等按键退出;daemon 没了,正常路径全是
