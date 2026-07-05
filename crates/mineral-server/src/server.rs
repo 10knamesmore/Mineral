@@ -246,8 +246,12 @@ async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>, interval_secs: u64
                     st.queue_sel,
                     st.play_url
                         .as_ref()
-                        .map_or_else(|| "-".to_owned(), |p| p.format.as_str().to_owned()),
-                    st.play_url.as_ref().map_or(0_u32, |p| p.bitrate_bps / 1000),
+                        .and_then(|p| p.format.as_ref())
+                        .map_or_else(|| "-".to_owned(), |f| f.as_str().to_owned()),
+                    st.play_url
+                        .as_ref()
+                        .and_then(|p| p.bitrate_bps)
+                        .map_or_else(|| "-".to_owned(), |b| (b / 1000).to_string()),
                     st.current_lyrics.is_some(),
                 )
             });

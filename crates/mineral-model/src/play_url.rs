@@ -29,14 +29,14 @@ pub struct PlayUrl {
     pub song_id: SongId,
     /// 播放地址:远端 stream URL 用 `Remote`,本地文件用 `Local`。
     pub url: MediaUrl,
-    /// 实际比特率(bps)。
-    pub bitrate_bps: u32,
+    /// 实际比特率(bps);`None` = 未知(接口没给且无从估算),显示侧据此省略码率段。
+    pub bitrate_bps: Option<u32>,
     /// channel 解析后的归一化音质等级。
     pub quality: BitRate,
-    /// 文件大小(bytes),拿不到给 0。
-    pub size: u64,
-    /// 文件格式——channel 实际提供的容器格式(`mp3` / `flac` 等),拿不到为 `Other("")`。
-    pub format: AudioFormat,
+    /// 文件大小(bytes);`None` = 未知。
+    pub size: Option<u64>,
+    /// 文件格式——channel 实际提供的容器格式(`mp3` / `flac` 等);`None` = 未提供 / 探不出。
+    pub format: Option<AudioFormat>,
     /// 位深(bits per sample),如 16 / 24。仅本地无损文件经实测有值;流式来源的接口不返回
     /// 位深、有损格式(mp3/aac)亦无此概念,这些情形均为 `None`(显示侧据此省略位深段)。
     pub bit_depth: Option<u8>,
@@ -79,10 +79,10 @@ mod tests {
         let pu = PlayUrl {
             song_id: SongId::new(SourceKind::NETEASE, "1"),
             url: MediaUrl::remote("https://example.com/a.m4s")?,
-            bitrate_bps: 320_000,
+            bitrate_bps: Some(320_000),
             quality: BitRate::Exhigh,
-            size: 0,
-            format: AudioFormat::Mp3,
+            size: None,
+            format: Some(AudioFormat::Mp3),
             bit_depth: None,
             stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
             layout: crate::play_url::StreamLayout::Contiguous,
@@ -112,10 +112,10 @@ mod tests {
         let pu = PlayUrl {
             song_id: SongId::new(SourceKind::BILIBILI, "BV1x:1"),
             url: MediaUrl::remote("https://example.com/a.m4s")?,
-            bitrate_bps: 192_000,
+            bitrate_bps: Some(192_000),
             quality: BitRate::Exhigh,
-            size: 0,
-            format: AudioFormat::Aac,
+            size: None,
+            format: Some(AudioFormat::Aac),
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: StreamLayout::Chunked,

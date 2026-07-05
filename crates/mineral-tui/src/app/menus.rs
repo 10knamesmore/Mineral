@@ -760,10 +760,10 @@ mod tests {
         app.state.playback.play_url = Some(mineral_model::PlayUrl {
             song_id: playing.id.clone(),
             url: mineral_model::MediaUrl::remote("https://cdn.example/a.m4s")?,
-            bitrate_bps: 0,
+            bitrate_bps: None,
             quality: mineral_model::BitRate::Standard,
-            size: 0,
-            format: mineral_model::AudioFormat::Aac,
+            size: None,
+            format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
             stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
             layout: mineral_model::StreamLayout::Contiguous,

@@ -438,13 +438,14 @@ fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
             // 整份用 artist_meta 选定的 artist（fetch 完整 detail 优先、entity 占位兜底）；
             // 渲染层只读字段，不关心数据来自哪个端点——聚合已在 channel 边缘完成。
             let a = dframe.artist_meta().unwrap_or(&**entity_a);
-            let mut lines = vec![
-                Line::from(Span::styled(a.name.clone(), name)),
-                Line::from(Span::styled(
-                    format!("{} fans", with_commas(a.follower_count)),
+            let mut lines = vec![Line::from(Span::styled(a.name.clone(), name))];
+            // 粉丝数未知(接口没给)整行省略,不画 `0 fans` 撒谎。
+            if let Some(fans) = a.follower_count {
+                lines.push(Line::from(Span::styled(
+                    format!("{} fans", with_commas(fans)),
                     sub,
-                )),
-            ];
+                )));
+            }
             if let Some(counts) = artist_counts(a) {
                 lines.push(Line::from(Span::styled(counts, dim)));
             }

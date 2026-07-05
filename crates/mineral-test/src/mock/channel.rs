@@ -63,10 +63,10 @@ impl MusicChannel for UrlChannel {
         Ok(vec![PlayUrl {
             song_id: id,
             url: MediaUrl::Remote(self.url.clone()),
-            bitrate_bps: 0,
+            bitrate_bps: None,
             quality,
-            size: 0,
-            format: AudioFormat::Flac,
+            size: None,
+            format: Some(AudioFormat::Flac),
             bit_depth: Some(24),
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,

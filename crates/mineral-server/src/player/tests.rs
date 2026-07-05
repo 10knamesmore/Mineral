@@ -323,10 +323,10 @@ fn test_play_url(id: &str) -> color_eyre::Result<PlayUrl> {
     Ok(PlayUrl {
         song_id: SongId::new(SourceKind::NETEASE, id),
         url: mineral_model::MediaUrl::remote(&format!("https://example.com/{id}.mp3"))?,
-        bitrate_bps: 320_000,
+        bitrate_bps: Some(320_000),
         quality: BitRate::Higher,
-        size: 0,
-        format: mineral_model::AudioFormat::Mp3,
+        size: None,
+        format: Some(mineral_model::AudioFormat::Mp3),
         bit_depth: None,
         stream_headers: Vec::new(),
         layout: mineral_model::StreamLayout::Contiguous,

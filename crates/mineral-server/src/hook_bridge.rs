@@ -344,10 +344,10 @@ fn effective_play_url(
         return Some(PlayUrl {
             song_id: song_id.clone(),
             url: spec.new_url()?.clone(),
-            bitrate_bps: spec.bitrate_bps().unwrap_or(0),
+            bitrate_bps: spec.bitrate_bps(),
             quality: spec.new_quality().unwrap_or(BitRate::Standard),
-            size: 0,
-            format: spec.format().cloned().unwrap_or_default(),
+            size: None,
+            format: spec.format().cloned(),
             bit_depth: None,
             stream_headers: spec
                 .stream_headers()
@@ -372,10 +372,10 @@ fn effective_play_url(
     }
     // 顶换流的实测元信息(纯展示):脚本给了就覆盖,原曲的码率/格式对替身流没有意义。
     if let Some(bitrate_bps) = spec.bitrate_bps() {
-        effective.bitrate_bps = bitrate_bps;
+        effective.bitrate_bps = Some(bitrate_bps);
     }
     if let Some(format) = spec.format() {
-        effective.format = format.clone();
+        effective.format = Some(format.clone());
     }
     // 改写顶替进来的 url 同步带上其取流头(如 B站 baseUrl 需 `Referer`),否则播放 403。
     if let Some(headers) = spec.stream_headers() {

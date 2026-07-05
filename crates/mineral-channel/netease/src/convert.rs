@@ -120,7 +120,7 @@ pub(crate) fn search_artist_to_model(a: SearchArtist) -> Artist {
     Artist::builder()
         .id(ArtistId::new(SourceKind::NETEASE, a.id.to_string()))
         .name(a.name)
-        .follower_count(a.fans_size.unwrap_or(0))
+        .follower_count(a.fans_size)
         .avatar_url(parse_remote_opt(a.pic_url.as_deref()))
         .build()
 }
@@ -141,8 +141,8 @@ pub(crate) fn search_playlist_to_model(p: SearchPlaylist) -> Playlist {
 /// 歌手详情响应 + 粉丝数 → 统一 [`Artist`]。
 ///
 /// `fans` 来自 `/api/artist/follow/count/get`——详情端点顶层不带粉丝数,由 channel 并发补打
-/// 后传入。`albumSize`/`musicSize` 是详情端点顶层独家给的名下专辑/歌曲计数。
-pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: u64) -> Artist {
+/// 后传入(补打失败为 `None`)。`albumSize`/`musicSize` 是详情端点顶层独家给的名下专辑/歌曲计数。
+pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -> Artist {
     Artist::builder()
         .id(ArtistId::new(SourceKind::NETEASE, r.artist.id.to_string()))
         .name(r.artist.name)
@@ -199,10 +199,11 @@ fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
     Some(PlayUrl {
         song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
         url,
-        bitrate_bps: d.br,
+        // wire 层 br / size 缺字段经 serde default 落 0,在此边界转 None,哨兵不进模型。
+        bitrate_bps: (d.br > 0).then_some(d.br),
         quality,
-        size: d.size,
-        format: d.format.map(AudioFormat::from).unwrap_or_default(),
+        size: (d.size > 0).then_some(d.size),
+        format: d.format.filter(|s| !s.is_empty()).map(AudioFormat::from),
         // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
         bit_depth: None,
         // 网易云音频 CDN 直链自足,不需附加取流头。
@@ -419,10 +420,10 @@ mod tests {
             ]
         });
         let dto: ArtistDetailResult = from_value(raw)?;
-        let model = artist_detail_to_model(dto, /*fans*/ 8_900_000);
+        let model = artist_detail_to_model(dto, /*fans*/ Some(8_900_000));
         assert_eq!(model.album_count, Some(146));
         assert_eq!(model.song_count, Some(2570));
-        assert_eq!(model.follower_count, 8_900_000);
+        assert_eq!(model.follower_count, Some(8_900_000));
         mineral_test::assert_snap_debug!("歌手详情映射成统一 Artist(Beyond + 1 热门曲)", model);
         Ok(())
     }

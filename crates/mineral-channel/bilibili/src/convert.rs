@@ -220,13 +220,11 @@ pub(crate) fn playurl_to_play(song_id: SongId, result: PlayUrlResult) -> Option<
     Some(PlayUrl {
         song_id,
         url,
-        bitrate_bps: best
-            .bandwidth
-            .and_then(|b| u32::try_from(b).ok())
-            .unwrap_or(0),
+        bitrate_bps: best.bandwidth.and_then(|b| u32::try_from(b).ok()),
         quality,
-        size: 0,
-        format,
+        // playurl 接口不给文件大小。
+        size: None,
+        format: Some(format),
         bit_depth: None,
         stream_headers: playback_stream_headers(),
         // B站音频是分片 fMP4:告知播放层以流式打开,避免 seekable 全扫导致起播前拉整段。
@@ -367,7 +365,7 @@ pub(crate) fn search_user_to_artist(item: SearchUserItem) -> Option<Artist> {
             .id(ArtistId::new(SourceKind::BILIBILI, mid.to_string()))
             .name(item.uname.unwrap_or_default())
             .description(item.usign.unwrap_or_default())
-            .follower_count(item.fans.and_then(|n| u64::try_from(n).ok()).unwrap_or(0))
+            .follower_count(item.fans.and_then(|n| u64::try_from(n).ok()))
             .album_count(item.videos.and_then(|n| u64::try_from(n).ok()))
             .avatar_url(item.upic.as_deref().and_then(cover_media_url))
             .build(),
@@ -393,8 +391,7 @@ pub(crate) fn card_to_artist(id: ArtistId, result: CardResult) -> Artist {
     let follower = result
         .follower
         .or(card.fans)
-        .and_then(|n| u64::try_from(n).ok())
-        .unwrap_or(0);
+        .and_then(|n| u64::try_from(n).ok());
     Artist::builder()
         .id(id)
         .name(card.name.unwrap_or_default())
@@ -456,7 +453,7 @@ mod tests {
             "取 id 最大轨"
         );
         assert_eq!(pu.quality, mineral_model::BitRate::Exhigh);
-        assert_eq!(pu.bitrate_bps, 320_000);
+        assert_eq!(pu.bitrate_bps, Some(320_000));
         assert_eq!(
             pu.stream_headers,
             vec![
@@ -491,7 +488,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("应产出 PlayUrl"))?;
         assert_eq!(pu.url, MediaUrl::remote("https://cdn/flac.m4s")?);
         assert_eq!(pu.quality, mineral_model::BitRate::Lossless);
-        assert_eq!(pu.format, mineral_model::AudioFormat::Flac);
+        assert_eq!(pu.format, Some(mineral_model::AudioFormat::Flac));
         Ok(())
     }
 
@@ -709,7 +706,7 @@ mod tests {
         assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "12345"));
         assert_eq!(artist.name, "UP主甲");
         assert_eq!(artist.description, "个签");
-        assert_eq!(artist.follower_count, 4567);
+        assert_eq!(artist.follower_count, Some(4567));
         assert_eq!(
             artist.album_count,
             Some(89),
@@ -750,7 +747,8 @@ mod tests {
         assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "12345"));
         assert_eq!(artist.name, "UP主甲");
         assert_eq!(
-            artist.follower_count, 4567,
+            artist.follower_count,
+            Some(4567),
             "顶层 follower 优先于 card.fans"
         );
         assert_eq!(artist.album_count, Some(89));
@@ -763,7 +761,7 @@ mod tests {
         Ok(())
     }
 
-    /// card 整体缺失 → 仅含 id 的最小 Artist(名字空、粉丝退 0),不炸。
+    /// card 整体缺失 → 仅含 id 的最小 Artist(名字空、粉丝未知),不炸。
     #[test]
     fn card_missing_body_is_minimal_artist() -> color_eyre::Result<()> {
         use super::card_to_artist;
@@ -773,7 +771,7 @@ mod tests {
         let artist = card_to_artist(ArtistId::new(SourceKind::BILIBILI, "7"), result);
         assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "7"));
         assert_eq!(artist.name, "");
-        assert_eq!(artist.follower_count, 0);
+        assert_eq!(artist.follower_count, None);
         assert_eq!(artist.album_count, None);
         Ok(())
     }

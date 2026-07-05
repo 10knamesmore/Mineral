@@ -91,10 +91,10 @@ impl MusicChannel for FakeChannel {
             song_id: id,
             url: MediaUrl::remote("https://example.com/a.mp3")
                 .map_err(|e| Error::Other(color_eyre::eyre::eyre!("{e}")))?,
-            bitrate_bps: 320_000,
+            bitrate_bps: Some(320_000),
             quality: BitRate::Higher,
-            size: 0,
-            format: mineral_model::AudioFormat::Mp3,
+            size: None,
+            format: Some(mineral_model::AudioFormat::Mp3),
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,

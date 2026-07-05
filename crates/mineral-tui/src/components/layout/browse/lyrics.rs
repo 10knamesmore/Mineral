@@ -974,10 +974,10 @@ mod tests {
         state.playback.play_url = Some(mineral_model::PlayUrl {
             song_id,
             url: mineral_model::MediaUrl::remote("https://cdn.example/sub.m4s")?,
-            bitrate_bps: 0,
+            bitrate_bps: None,
             quality: mineral_model::BitRate::Standard,
-            size: 0,
-            format: mineral_model::AudioFormat::Aac,
+            size: None,
+            format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Chunked,

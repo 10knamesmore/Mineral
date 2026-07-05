@@ -1167,7 +1167,7 @@ mod tests {
         let result_artist = Artist::builder()
             .id(ArtistId::new(SourceKind::NETEASE, "ar"))
             .name("Mineral".to_owned())
-            .follower_count(176_393)
+            .follower_count(Some(176_393))
             .build();
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
@@ -1195,7 +1195,7 @@ mod tests {
         let detail = Artist::builder()
             .id(ArtistId::new(SourceKind::NETEASE, "ar"))
             .name("Mineral".to_owned())
-            .follower_count(176_393)
+            .follower_count(Some(176_393))
             .album_count(Some(2))
             .song_count(Some(21))
             .description("Texas emo, 1994–1998".to_owned())
@@ -1461,7 +1461,7 @@ mod tests {
             Artist::builder()
                 .id(ArtistId::new(SourceKind::NETEASE, id))
                 .name(name.to_owned())
-                .follower_count(followers)
+                .follower_count(Some(followers))
                 .build()
         };
         app.state.apply(&TaskEvent::SearchResults {

@@ -68,13 +68,13 @@ impl Notifier {
     ///   - `song`: 下载完成的歌
     ///   - `path`: 落盘路径
     ///   - `quality`: 实际下载音质(hook 改写后的有效值)
-    ///   - `format`: 容器格式(channel 实际提供)
+    ///   - `format`: 容器格式(channel 实际提供;拿不到为 `None`)
     pub(crate) fn download_completed(
         &self,
         song: &Song,
         path: &std::path::Path,
         quality: mineral_model::BitRate,
-        format: &mineral_model::AudioFormat,
+        format: Option<&mineral_model::AudioFormat>,
     ) {
         let _ = self.events.send(Event::DownloadCompleted {
             song_id: song.id.clone(),
@@ -84,7 +84,7 @@ impl Notifier {
                 song: Box::new(song.clone()),
                 path: path.to_path_buf(),
                 quality,
-                format: format.clone(),
+                format: format.cloned(),
             });
         }
     }

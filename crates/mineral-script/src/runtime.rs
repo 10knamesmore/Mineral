@@ -196,7 +196,7 @@ mod tests {
             song: Box::new(first_track()?),
             path: std::path::PathBuf::from("/tmp/LoveLetterTypewriter.flac"),
             quality: mineral_model::BitRate::Lossless,
-            format: mineral_model::AudioFormat::Flac,
+            format: Some(mineral_model::AudioFormat::Flac),
         });
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
@@ -721,10 +721,10 @@ mod tests {
         let play_url = mineral_model::PlayUrl {
             song_id: song,
             url: "https://cdn.example/a.m4s".parse::<mineral_model::MediaUrl>()?,
-            bitrate_bps: 192_000,
+            bitrate_bps: Some(192_000),
             quality: mineral_model::BitRate::Exhigh,
-            size: 0,
-            format: mineral_model::AudioFormat::Aac,
+            size: None,
+            format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
             stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com/".to_owned())],
             layout: mineral_model::StreamLayout::Chunked,
@@ -1113,10 +1113,10 @@ mod tests {
             url: "https://example.com/a.flac"
                 .parse::<mineral_model::MediaUrl>()
                 .wrap_err("parse url")?,
-            bitrate_bps: 0,
+            bitrate_bps: None,
             quality: mineral_model::BitRate::Exhigh,
-            size: 0,
-            format: mineral_model::AudioFormat::Flac,
+            size: None,
+            format: Some(mineral_model::AudioFormat::Flac),
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,

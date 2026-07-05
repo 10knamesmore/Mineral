@@ -20,9 +20,10 @@ pub struct Artist {
     #[builder(default)]
     pub description: String,
 
-    /// 关注者/粉丝数,拿不到给 0。
+    /// 关注者/粉丝数;`None` = **未知**(接口没给)——与「真的 0 粉丝」区分开,
+    /// 展示层据此画占位而非 `0`。
     #[builder(default)]
-    pub follower_count: u64,
+    pub follower_count: Option<u64>,
 
     /// 名下 album 总数,拿不到给 `None`。
     #[builder(default)]

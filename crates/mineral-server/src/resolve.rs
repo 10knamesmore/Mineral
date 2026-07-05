@@ -99,12 +99,11 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
 /// # Return:
 ///   填好 format / bitrate / 位深 / size / quality 的 `PlayUrl`(`url` = `Local(path)`)。
 pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> PlayUrl {
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let size = std::fs::metadata(path).map(|m| m.len()).ok();
     let (format, probed_kbps, bit_depth) = probe_format_props(path);
     let bitrate_bps = probed_kbps
         .and_then(|kbps| kbps.checked_mul(1000))
-        .or_else(|| est_bitrate_bps(size, song.duration_ms))
-        .unwrap_or(0);
+        .or_else(|| est_bitrate_bps(size, song.duration_ms));
     PlayUrl {
         song_id: song.id.clone(),
         url: MediaUrl::Local(path.to_path_buf()),
@@ -123,16 +122,16 @@ pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> Play
 /// 按**文件内容**(经 lofty)读出 `(格式, 码率kbps)`——全程不碰扩展名。
 ///
 /// 先用 [`detect_file_type`] 按 magic bytes 判容器类型,再以该类型解析属性取 bitrate 与位深。
-/// 任一步失败回退 `(空格式, None, None)`。
+/// 任一步失败回退 `(None, None, None)`。
 ///
 /// # Params:
 ///   - `path`: 本地文件绝对路径
 ///
 /// # Return:
-///   `(格式, 码率kbps, 位深bit)`;识别失败为 `(AudioFormat::default(), None, None)`。
-fn probe_format_props(path: &Path) -> (AudioFormat, Option<u32>, Option<u8>) {
+///   `(格式, 码率kbps, 位深bit)`;识别失败各项为 `None`。
+fn probe_format_props(path: &Path) -> (Option<AudioFormat>, Option<u32>, Option<u8>) {
     let Some(ft) = detect_file_type(path) else {
-        return (AudioFormat::default(), None, None);
+        return (None, None, None);
     };
     let (kbps, bit_depth) = read_audio_props(path, ft);
     (file_type_to_format(ft), kbps, bit_depth)
@@ -189,37 +188,38 @@ fn read_audio_props(path: &Path, ft: lofty::file::FileType) -> (Option<u32>, Opt
 /// 「文件大小 / 时长」估算码率(bps),作 lofty 取不到 bitrate 时的兜底。
 ///
 /// # Params:
-///   - `size`: 文件字节数
+///   - `size`: 文件字节数;`None` = 未知(stat 失败)
 ///   - `duration_ms`: 时长(ms);`None` = 未知
 ///
 /// # Return:
-///   估算 bps;时长未知 / 为 0 或溢出为 `None`。
-fn est_bitrate_bps(size: u64, duration_ms: Option<u64>) -> Option<u32> {
+///   估算 bps;大小 / 时长任一未知、时长为 0 或溢出为 `None`。
+fn est_bitrate_bps(size: Option<u64>, duration_ms: Option<u64>) -> Option<u32> {
     // size(B) * 8(bit/B) * 1000(ms/s) / duration(ms) = bit/s。
-    size.saturating_mul(8000)
+    size?
+        .saturating_mul(8000)
         .checked_div(duration_ms?)
         .and_then(|bps| u32::try_from(bps).ok())
 }
 
-/// lofty 容器类型 → model 的 [`AudioFormat`]。未覆盖类型回退空格式。
+/// lofty 容器类型 → model 的 [`AudioFormat`]。未覆盖类型为 `None`(格式未知)。
 ///
 /// # Params:
 ///   - `ft`: lofty 探测出的文件类型
 ///
 /// # Return:
-///   对应的 [`AudioFormat`]。
-fn file_type_to_format(ft: lofty::file::FileType) -> AudioFormat {
+///   对应的 [`AudioFormat`];未覆盖类型 `None`。
+fn file_type_to_format(ft: lofty::file::FileType) -> Option<AudioFormat> {
     use lofty::file::FileType;
     match ft {
-        FileType::Mpeg => AudioFormat::Mp3,
-        FileType::Flac => AudioFormat::Flac,
-        FileType::Mp4 => AudioFormat::Aac,
-        FileType::Vorbis => AudioFormat::Ogg,
-        FileType::Wav => AudioFormat::Wav,
-        FileType::Ape => AudioFormat::Ape,
-        FileType::Aac => AudioFormat::Aac,
-        FileType::Opus => AudioFormat::Other("opus".to_owned()),
-        _ => AudioFormat::default(),
+        FileType::Mpeg => Some(AudioFormat::Mp3),
+        FileType::Flac => Some(AudioFormat::Flac),
+        FileType::Mp4 => Some(AudioFormat::Aac),
+        FileType::Vorbis => Some(AudioFormat::Ogg),
+        FileType::Wav => Some(AudioFormat::Wav),
+        FileType::Ape => Some(AudioFormat::Ape),
+        FileType::Aac => Some(AudioFormat::Aac),
+        FileType::Opus => Some(AudioFormat::Other("opus".to_owned())),
+        _ => None,
     }
 }
 
@@ -274,7 +274,7 @@ mod tests {
         format: &AudioFormat,
         bytes: &[u8],
     ) -> color_eyre::Result<PathBuf> {
-        let (subdir, file_name) = library_relpath(s, quality, format);
+        let (subdir, file_name) = library_relpath(s, quality, Some(format));
         let abs = root.join(&subdir).join(&file_name);
         if let Some(parent) = abs.parent() {
             std::fs::create_dir_all(parent)?;
@@ -294,7 +294,7 @@ mod tests {
     ) -> color_eyre::Result<()> {
         let src = tmp_dir.join(format!("cap-{}-{}.part", s.id.value(), quality.as_str()));
         std::fs::write(&src, bytes)?;
-        cache.put_played(s, quality, format, &src).await
+        cache.put_played(s, quality, Some(format), &src).await
     }
 
     /// 只有 cache 命中(无下载导出)→ 返回 cache 路径与该音质。
@@ -519,7 +519,7 @@ mod tests {
 
         let abs = put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, &bytes)?;
         let pu = local_play_url(&s, &abs, BitRate::Exhigh);
-        assert_eq!(pu.format, AudioFormat::Mp3, "ID3 前缀的 mp3 应判 Mp3");
+        assert_eq!(pu.format, Some(AudioFormat::Mp3), "ID3 前缀的 mp3 应判 Mp3");
         Ok(())
     }
 
@@ -548,12 +548,13 @@ mod tests {
         let pu = local_play_url(&s, &abs, BitRate::Lossless);
         assert_eq!(
             pu.format,
-            AudioFormat::Wav,
+            Some(AudioFormat::Wav),
             "应按内容判 WAV,而非文件名的 .flac"
         );
-        assert_eq!(pu.size, 8044);
+        assert_eq!(pu.size, Some(8044));
         assert_eq!(
-            pu.bitrate_bps, 64_000,
+            pu.bitrate_bps,
+            Some(64_000),
             "lofty 解析 64kbps(非 size/时长 估算)"
         );
         assert_eq!(pu.quality, BitRate::Lossless);
@@ -578,12 +579,16 @@ mod tests {
         )?;
 
         let pu = local_play_url(&s, &abs, BitRate::Lossless);
-        assert!(pu.format.is_empty(), "乱字节识别不出格式 → 空");
-        assert_eq!(pu.bitrate_bps, 128_000, "回退估算:16000B/1s → 128kbps");
+        assert!(pu.format.is_none(), "乱字节识别不出格式 → None");
+        assert_eq!(
+            pu.bitrate_bps,
+            Some(128_000),
+            "回退估算:16000B/1s → 128kbps"
+        );
         Ok(())
     }
 
-    /// 既识别不出格式、时长又未知(None)→ bitrate 记 0(估算直接短路)。
+    /// 既识别不出格式、时长又未知(None)→ bitrate 为 None(估算直接短路)。
     #[tokio::test]
     async fn local_play_url_unknown_content_zero_duration() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
@@ -598,8 +603,8 @@ mod tests {
         )?;
 
         let pu = local_play_url(&s, &abs, BitRate::Lossless);
-        assert!(pu.format.is_empty());
-        assert_eq!(pu.bitrate_bps, 0, "时长未知且无解析 → 0,不除零");
+        assert!(pu.format.is_none());
+        assert_eq!(pu.bitrate_bps, None, "时长未知且无解析 → None");
         Ok(())
     }
 
@@ -607,17 +612,26 @@ mod tests {
     #[test]
     fn file_type_to_format_maps_known() {
         use lofty::file::FileType;
-        assert_eq!(super::file_type_to_format(FileType::Mpeg), AudioFormat::Mp3);
+        assert_eq!(
+            super::file_type_to_format(FileType::Mpeg),
+            Some(AudioFormat::Mp3)
+        );
         assert_eq!(
             super::file_type_to_format(FileType::Flac),
-            AudioFormat::Flac
+            Some(AudioFormat::Flac)
         );
-        assert_eq!(super::file_type_to_format(FileType::Wav), AudioFormat::Wav);
+        assert_eq!(
+            super::file_type_to_format(FileType::Wav),
+            Some(AudioFormat::Wav)
+        );
         assert_eq!(
             super::file_type_to_format(FileType::Vorbis),
-            AudioFormat::Ogg
+            Some(AudioFormat::Ogg)
         );
-        assert_eq!(super::file_type_to_format(FileType::Mp4), AudioFormat::Aac);
+        assert_eq!(
+            super::file_type_to_format(FileType::Mp4),
+            Some(AudioFormat::Aac)
+        );
     }
 
     /// probe_export 直接命中可读库路径(与下载侧幂等共用)。

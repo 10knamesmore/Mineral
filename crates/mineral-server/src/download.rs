@@ -29,8 +29,8 @@ pub(crate) enum DownloadOutcome {
         /// 实际下载音质(hook 改写后的有效值)。
         quality: mineral_model::BitRate,
 
-        /// 容器格式(channel 实际提供;拿不到为 `Other("")`)。
-        format: mineral_model::AudioFormat,
+        /// 容器格式(channel 实际提供;拿不到为 `None`)。
+        format: Option<mineral_model::AudioFormat>,
     },
 
     /// 目标文件已存在,幂等跳过(**不**触发完成事件)。
@@ -159,7 +159,7 @@ pub(crate) async fn download_song(
             return Ok(DownloadOutcome::Skipped);
         }
     }
-    let (subdir, file_name) = library_relpath(song, quality, &play_url.format);
+    let (subdir, file_name) = library_relpath(song, quality, play_url.format.as_ref());
     // 命名即身份:不做 ` (N)` 去重——同名直接落同一路径(本曲重下已被上面的幂等挡住;同源同专辑
     // 同名的另一首歌会与之共用一个文件,概率极低,换来「文件系统即唯一真相」)。
     let export = music_dir.join(&subdir).join(&file_name);
@@ -293,8 +293,8 @@ pub(crate) struct Capturing {
     /// 入库音质(与播放请求一致,决定 index 键 / 目录)。
     pub(crate) quality: BitRate,
 
-    /// 实际音频格式(决定扩展名)。
-    pub(crate) format: AudioFormat,
+    /// 实际音频格式(决定扩展名;未知按音质兜底)。
+    pub(crate) format: Option<AudioFormat>,
 
     /// capture 落盘临时路径(engine 正往这写)。
     pub(crate) path: PathBuf,
@@ -344,7 +344,7 @@ pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
         match std::fs::metadata(&cap.path) {
             Ok(m) if m.len() > 0 => {
                 if let Err(e) = cache
-                    .put_played(&cap.song, cap.quality, &cap.format, &cap.path)
+                    .put_played(&cap.song, cap.quality, cap.format.as_ref(), &cap.path)
                     .await
                 {
                     mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
@@ -446,7 +446,7 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
                 drop(p);
                 player
                     .notify()
-                    .download_completed(song, &path, quality, &format);
+                    .download_completed(song, &path, quality, format.as_ref());
                 p = player.progress_handle().lock();
             }
             Ok(DownloadOutcome::Skipped) => p.last_skip += 1,

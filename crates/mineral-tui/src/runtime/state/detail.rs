@@ -828,7 +828,7 @@ mod tests {
         let entity = Artist::builder()
             .id(ArtistId::new(SourceKind::NETEASE, "ar"))
             .name("CF".to_owned())
-            .follower_count(176_393)
+            .follower_count(Some(176_393))
             .build();
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(entity)));
 
@@ -836,7 +836,7 @@ mod tests {
         let before = frame
             .artist_meta()
             .ok_or_else(|| color_eyre::eyre::eyre!("artist 帧应有 meta"))?;
-        assert_eq!(before.follower_count, 176_393);
+        assert_eq!(before.follower_count, Some(176_393));
         assert_eq!(before.song_count, None, "entity 份无计数");
         assert!(before.description.is_empty(), "entity 份无简介");
 
@@ -845,7 +845,7 @@ mod tests {
             Artist::builder()
                 .id(ArtistId::new(SourceKind::NETEASE, "ar"))
                 .name("CF".to_owned())
-                .follower_count(176_396)
+                .follower_count(Some(176_396))
                 .album_count(Some(8))
                 .song_count(Some(43))
                 .description("emo band".to_owned())
@@ -854,7 +854,7 @@ mod tests {
         let after = frame
             .artist_meta()
             .ok_or_else(|| color_eyre::eyre::eyre!("artist 帧应有 meta"))?;
-        assert_eq!(after.follower_count, 176_396, "fans 取聚合 detail");
+        assert_eq!(after.follower_count, Some(176_396), "fans 取聚合 detail");
         assert_eq!(after.album_count, Some(8));
         assert_eq!(after.song_count, Some(43));
         assert_eq!(after.description, "emo band");

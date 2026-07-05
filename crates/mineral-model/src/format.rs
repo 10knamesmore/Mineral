@@ -29,7 +29,8 @@ pub enum AudioFormat {
     Ape,
     /// Apple Lossless(无损)。
     Alac,
-    /// 未识别格式(保留 channel 原文)或缺失(空串)。
+    /// 未识别格式(保留 channel 原文,不丢信息)。「格式缺失」不进本枚举——
+    /// 用 `Option<AudioFormat>` 的 `None` 表达,别造空串变体。
     Other(String),
 }
 
@@ -51,17 +52,6 @@ impl AudioFormat {
     /// 是否无损格式——供显示层做音质分级配色(不依赖请求侧的 quality)。
     pub fn is_lossless(&self) -> bool {
         matches!(self, Self::Flac | Self::Wav | Self::Ape | Self::Alac)
-    }
-
-    /// 格式缺失(channel 没提供)。
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Other(s) if s.is_empty())
-    }
-}
-
-impl Default for AudioFormat {
-    fn default() -> Self {
-        Self::Other(String::new())
     }
 }
 
@@ -126,13 +116,6 @@ mod tests {
         assert!(AudioFormat::Flac.is_lossless());
         assert!(AudioFormat::Wav.is_lossless());
         assert!(!AudioFormat::Mp3.is_lossless());
-    }
-
-    #[test]
-    fn empty_is_empty() {
-        assert!(AudioFormat::default().is_empty());
-        assert!(AudioFormat::from(String::new()).is_empty());
-        assert!(!AudioFormat::Mp3.is_empty());
     }
 
     #[test]

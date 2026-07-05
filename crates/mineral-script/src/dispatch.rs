@@ -254,9 +254,8 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
                     args.set("song", song_table(lua, &song)?)?;
                     args.set("path", path.display().to_string())?;
                     args.set("quality", quality.as_str())?;
-                    // 拿不到格式(Other(""))→ 缺席为 nil,不给空串。
-                    let fmt = format.as_str();
-                    args.set("format", (!fmt.is_empty()).then(|| fmt.to_owned()))?;
+                    // 拿不到格式 → 缺席为 nil,不给空串。
+                    args.set("format", format.as_ref().map(|f| f.as_str().to_owned()))?;
                     Ok(args)
                 },
             );
@@ -287,9 +286,13 @@ fn play_url_table(lua: &Lua, play_url: &mineral_model::PlayUrl) -> mlua::Result<
     entry.set("song_id", play_url.song_id.qualified())?;
     entry.set("url", play_url.url.to_string())?;
     entry.set("quality", play_url.quality.as_str())?;
+    // bitrate_bps / size / format 未知时为 nil(脚本侧参考前需判空)。
     entry.set("bitrate_bps", play_url.bitrate_bps)?;
     entry.set("size", play_url.size)?;
-    entry.set("format", play_url.format.as_str())?;
+    entry.set(
+        "format",
+        play_url.format.as_ref().map(|f| f.as_str().to_owned()),
+    )?;
     let headers = lua.create_table()?;
     for (i, (name, value)) in play_url.stream_headers.iter().enumerate() {
         let pair = lua.create_table()?;

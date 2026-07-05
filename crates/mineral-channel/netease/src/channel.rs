@@ -230,14 +230,14 @@ impl MusicChannel for NeteaseChannel {
             api::artist::follow_count(&self.transport, id),
         );
         let detail = detail.map_err(map_err)?;
-        let fans = fans.unwrap_or_else(|e| {
+        let fans = fans.map(Some).unwrap_or_else(|e| {
             mineral_log::warn!(
                 target: "netease",
                 artist = id.value(),
                 error = mineral_log::chain(&e),
-                "artist follow count fetch failed; fans=0"
+                "artist follow count fetch failed; fans unknown"
             );
-            0
+            None
         });
         Ok(convert::artist_detail_to_model(detail, fans))
     }

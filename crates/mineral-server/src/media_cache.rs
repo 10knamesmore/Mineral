@@ -88,7 +88,7 @@ impl MediaCache {
     /// # Params:
     ///   - `song`: 刚播完的歌(取来源 / 专辑 / 标题组库路径)
     ///   - `quality`: 入库音质(决定 index 键与目录;应与播放请求一致)
-    ///   - `format`: 实际音频格式(决定扩展名;空则按音质兜底)
+    ///   - `format`: 实际音频格式(决定扩展名;未知按音质兜底)
     ///   - `src`: capture 落盘文件路径(成功后被移走)
     ///
     /// # Return:
@@ -97,7 +97,7 @@ impl MediaCache {
         &self,
         song: &Song,
         quality: BitRate,
-        format: &AudioFormat,
+        format: Option<&AudioFormat>,
         src: &std::path::Path,
     ) -> color_eyre::Result<()> {
         let key = cache_key(&song.id, quality);
@@ -112,14 +112,14 @@ impl MediaCache {
 /// # Params:
 ///   - `song`: 歌曲(取来源 / 专辑 / 标题)
 ///   - `quality`: 音质(目录层)
-///   - `format`: 实际格式(定扩展名;空按音质兜底)
+///   - `format`: 实际格式(定扩展名;未知按音质兜底)
 ///
 /// # Return:
 ///   `(subdir, file_name)`。
 pub(crate) fn library_relpath(
     song: &Song,
     quality: BitRate,
-    format: &AudioFormat,
+    format: Option<&AudioFormat>,
 ) -> (String, String) {
     let (subdir, stem) = library_dir_and_stem(song, quality);
     let ext_seg = sanitize_segment(&ext_for(format, quality), "bin");
@@ -177,18 +177,17 @@ fn library_subdir(source: &str, album: Option<&str>, quality: BitRate) -> String
     format!("{source_seg}/{}/{album_seg}", quality.as_str())
 }
 
-/// 扩展名:优先用实际格式,空(拿不到格式)按音质兜底无损 `flac` / 有损 `mp3`。
+/// 扩展名:优先用实际格式,未知(拿不到格式)按音质兜底无损 `flac` / 有损 `mp3`。
 ///
 /// # Params:
-///   - `format`: 实际音频格式
-///   - `quality`: 音质(format 为空时据此兜底)
+///   - `format`: 实际音频格式;`None` = 未知
+///   - `quality`: 音质(format 未知时据此兜底)
 ///
 /// # Return:
 ///   扩展名(不含点)。
-fn ext_for(format: &AudioFormat, quality: BitRate) -> String {
-    let f = format.as_str();
-    if !f.is_empty() {
-        return f.to_owned();
+fn ext_for(format: Option<&AudioFormat>, quality: BitRate) -> String {
+    if let Some(f) = format {
+        return f.as_str().to_owned();
     }
     match quality {
         BitRate::Lossless | BitRate::Hires => "flac",
@@ -291,7 +290,7 @@ mod tests {
     #[test]
     fn relpath_is_readable_library_layout() {
         let s = song("186016", "晴天", Some("叶惠美"));
-        let (subdir, file) = library_relpath(&s, BitRate::Lossless, &AudioFormat::Flac);
+        let (subdir, file) = library_relpath(&s, BitRate::Lossless, Some(&AudioFormat::Flac));
         assert_eq!(subdir, "netease/lossless/叶惠美");
         assert_eq!(file, "晴天.flac");
     }
@@ -300,7 +299,7 @@ mod tests {
     fn relpath_falls_back_on_empty_album_and_title() {
         // 专辑缺失 → _unknown;标题 sanitize 后为空(全空白)→ _untitled。
         let s = song("186016", "   ", None);
-        let (subdir, file) = library_relpath(&s, BitRate::Higher, &AudioFormat::Mp3);
+        let (subdir, file) = library_relpath(&s, BitRate::Higher, Some(&AudioFormat::Mp3));
         assert_eq!(subdir, "netease/higher/_unknown");
         assert_eq!(file, "_untitled.mp3");
     }
@@ -315,7 +314,7 @@ mod tests {
         let src = d.path().join("capture.part");
         std::fs::write(&src, b"FLACdata")?;
         cache
-            .put_played(&s, BitRate::Lossless, &AudioFormat::Flac, &src)
+            .put_played(&s, BitRate::Lossless, Some(&AudioFormat::Flac), &src)
             .await?;
 
         let Some(path) = cache.get(&s.id, BitRate::Lossless) else {
@@ -348,7 +347,7 @@ mod tests {
             let src = d.path().join("cap.part");
             std::fs::write(&src, b"AUDIO")?;
             cache
-                .put_played(&s, BitRate::Exhigh, &AudioFormat::Mp3, &src)
+                .put_played(&s, BitRate::Exhigh, Some(&AudioFormat::Mp3), &src)
                 .await?;
             let Some(p) = cache.get(&s.id, BitRate::Exhigh) else {
                 return Err(color_eyre::eyre::eyre!("入库后应命中"));
@@ -368,7 +367,7 @@ mod tests {
         let src2 = d.path().join("cap2.part");
         std::fs::write(&src2, b"AUDIO2")?;
         reopened
-            .put_played(&s, BitRate::Exhigh, &AudioFormat::Mp3, &src2)
+            .put_played(&s, BitRate::Exhigh, Some(&AudioFormat::Mp3), &src2)
             .await?;
         let album_dir = dir.join("netease/exhigh/夜晚做决定");
         let mut names = Vec::<String>::new();
@@ -419,7 +418,7 @@ mod tests {
             .put_played(
                 &s,
                 BitRate::Lossless,
-                &AudioFormat::Flac,
+                Some(&AudioFormat::Flac),
                 std::path::Path::new("/nope"),
             )
             .await?;
@@ -450,11 +449,10 @@ mod tests {
 
     #[test]
     fn ext_prefers_format_then_falls_back_by_quality() {
-        assert_eq!(ext_for(&AudioFormat::Flac, BitRate::Lossless), "flac");
-        assert_eq!(ext_for(&AudioFormat::Mp3, BitRate::Higher), "mp3");
-        // 格式未知(空)→ 按音质兜底
-        let unknown = AudioFormat::default();
-        assert_eq!(ext_for(&unknown, BitRate::Lossless), "flac");
-        assert_eq!(ext_for(&unknown, BitRate::Higher), "mp3");
+        assert_eq!(ext_for(Some(&AudioFormat::Flac), BitRate::Lossless), "flac");
+        assert_eq!(ext_for(Some(&AudioFormat::Mp3), BitRate::Higher), "mp3");
+        // 格式未知(None)→ 按音质兜底
+        assert_eq!(ext_for(None, BitRate::Lossless), "flac");
+        assert_eq!(ext_for(None, BitRate::Higher), "mp3");
     }
 }

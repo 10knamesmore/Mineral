@@ -12,7 +12,9 @@ Artist {
     },
     name: "Beyond",
     description: "香港摇滚乐队",
-    follower_count: 8900000,
+    follower_count: Some(
+        8900000,
+    ),
     album_count: Some(
         146,
     ),

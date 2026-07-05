@@ -475,7 +475,11 @@ fn result_table(
                 .map(|a| {
                     Row::new(vec![
                         Cell::from(Span::styled(a.name.clone(), main)),
-                        Cell::from(Span::styled(humanize_count(a.follower_count), meta)),
+                        Cell::from(Span::styled(
+                            a.follower_count
+                                .map_or_else(|| "-".to_owned(), humanize_count),
+                            meta,
+                        )),
                     ])
                 })
                 .collect();
