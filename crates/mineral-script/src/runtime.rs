@@ -430,15 +430,27 @@ mod tests {
             "#,
         )?;
         let done = sender
-            .invoke_action("my.toast".to_owned(), /*ctx*/ None)
+            .invoke_action(
+                "my.toast".to_owned(),
+                /*ctx*/ None,
+                /*args*/ Vec::new(),
+            )
             .blocking_recv()?;
         assert_eq!(done, ActionOutcome::Done);
         let missing = sender
-            .invoke_action("my.gone".to_owned(), /*ctx*/ None)
+            .invoke_action(
+                "my.gone".to_owned(),
+                /*ctx*/ None,
+                /*args*/ Vec::new(),
+            )
             .blocking_recv()?;
         assert_eq!(missing, ActionOutcome::NotFound);
         let failed = sender
-            .invoke_action("my.boom".to_owned(), /*ctx*/ None)
+            .invoke_action(
+                "my.boom".to_owned(),
+                /*ctx*/ None,
+                /*args*/ Vec::new(),
+            )
             .blocking_recv()?;
         assert!(
             matches!(failed, ActionOutcome::Failed(ref e) if e.contains("nope")),
@@ -494,12 +506,16 @@ mod tests {
             .search_query(Some("雨".to_owned()))
             .build();
         let done = sender
-            .invoke_action("show.ctx".to_owned(), Some(ctx))
+            .invoke_action("show.ctx".to_owned(), Some(ctx), /*args*/ Vec::new())
             .blocking_recv()?;
         assert_eq!(done, ActionOutcome::Done);
         // CLI 触发:无上下文,ctx 是空表,字段全 nil
         let done = sender
-            .invoke_action("show.ctx".to_owned(), /*ctx*/ None)
+            .invoke_action(
+                "show.ctx".to_owned(),
+                /*ctx*/ None,
+                /*args*/ Vec::new(),
+            )
             .blocking_recv()?;
         assert_eq!(done, ActionOutcome::Done);
         let events = drain_after_stop(runtime, &mut push_rx);
@@ -1733,7 +1749,11 @@ mod tests {
         );
         // bind 的匿名动作经触发链可调(复用 action 通道)。
         let done = sender
-            .invoke_action("bind#1".to_owned(), /*ctx*/ None)
+            .invoke_action(
+                "bind#1".to_owned(),
+                /*ctx*/ None,
+                /*args*/ Vec::new(),
+            )
             .blocking_recv()?;
         assert_eq!(done, crate::message::ActionOutcome::Done);
         Ok(())

@@ -47,9 +47,21 @@ pub(crate) fn run_loop(
         };
         match msg {
             Ok(ScriptMsg::Event(event)) => dispatch_event(lua, host, watchdog, event),
-            Ok(ScriptMsg::Action { name, ctx, reply }) => {
+            Ok(ScriptMsg::Action {
+                name,
+                ctx,
+                args,
+                reply,
+            }) => {
                 // 回执接收端 drop(调用方超时放弃)时静默丢。
-                let _ = reply.send(invoke_action(lua, host, watchdog, &name, ctx.as_ref()));
+                let _ = reply.send(invoke_action(
+                    lua,
+                    host,
+                    watchdog,
+                    &name,
+                    ctx.as_ref(),
+                    &args,
+                ));
             }
             Ok(ScriptMsg::Resolve { query, value }) => {
                 resolve_query(lua, host, watchdog, query, &value);
@@ -111,12 +123,13 @@ fn invoke_action(
     watchdog: &WatchdogConfig,
     name: &str,
     ctx: Option<&mineral_protocol::KeyContext>,
+    args: &[String],
 ) -> crate::message::ActionOutcome {
     use crate::message::ActionOutcome;
     let Some(key) = host.events.lock().actions.get(name).cloned() else {
         return ActionOutcome::NotFound;
     };
-    let result = ctx_table(lua, ctx).and_then(|ctx| {
+    let result = ctx_table(lua, ctx, args).and_then(|ctx| {
         let func = lua.registry_value::<mlua::Function>(&key)?;
         call_guarded::<_, ()>(lua, watchdog, &func, ctx)
     });
@@ -475,8 +488,14 @@ pub(crate) fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &m
 /// `view` 用 [`mineral_protocol::ViewKind::script_name`] 蛇形名;歌投影成
 /// [`song_table`](`{id, title, duration_ms}`,id 可直接回喂 player / store API),
 /// 歌单投影成 `{id, name}`。
-fn ctx_table(lua: &Lua, ctx: Option<&mineral_protocol::KeyContext>) -> mlua::Result<mlua::Table> {
+fn ctx_table(
+    lua: &Lua,
+    ctx: Option<&mineral_protocol::KeyContext>,
+    args: &[String],
+) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
+    // args 恒设为数组:CLI 触发带位置实参,TUI 键位 / 无参 CLI 为空数组(非 nil)。
+    table.set("args", lua.create_sequence_from(args.iter().cloned())?)?;
     let Some(ctx) = ctx else {
         return Ok(table);
     };
@@ -620,4 +639,82 @@ fn render_copy_template(
             .unwrap_or("脚本错误(详见日志)")
             .to_owned()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::invoke_action;
+    use crate::api::test_support::vm_with_host;
+    use crate::message::ActionOutcome;
+    use crate::watchdog::WatchdogConfig;
+
+    /// 宽松看门狗:测试里不期望被超时中断。
+    fn loose_watchdog() -> WatchdogConfig {
+        WatchdogConfig::builder()
+            .instruction_interval(100_000)
+            .soft_wall(Duration::from_secs(5))
+            .hard_wall(Duration::from_secs(10))
+            .build()
+    }
+
+    /// CLI 触发(ctx=None、带位置实参)时,args 数组经 `ctx.args` 送达回调。
+    /// 断言写在 Lua 侧:任一不符则回调报错 → `ActionOutcome::Failed`,测试失败带原因。
+    #[test]
+    fn action_receives_cli_args() -> color_eyre::Result<()> {
+        let (lua, host) = vm_with_host()?;
+        lua.load(
+            r#"
+            mineral.action("t.args", function(ctx)
+                assert(type(ctx.args) == "table", "args 必须是 table")
+                assert(#ctx.args == 2, "args 长度必须是 2")
+                assert(ctx.args[1] == "hello", "args[1] 必须是 hello")
+                assert(ctx.args[2] == "world", "args[2] 必须是 world")
+            end)
+            "#,
+        )
+        .exec()?;
+        let outcome = invoke_action(
+            &lua,
+            &host,
+            &loose_watchdog(),
+            "t.args",
+            /*ctx*/ None,
+            &["hello".to_owned(), "world".to_owned()],
+        );
+        assert!(
+            matches!(outcome, ActionOutcome::Done),
+            "带 args 的动作应成功执行,实际 {outcome:?}"
+        );
+        Ok(())
+    }
+
+    /// 无 args(TUI 键位 / 无参 CLI)时 `ctx.args` 是空数组(长度 0,非 nil)。
+    #[test]
+    fn action_args_default_empty_array() -> color_eyre::Result<()> {
+        let (lua, host) = vm_with_host()?;
+        lua.load(
+            r#"
+            mineral.action("t.noargs", function(ctx)
+                assert(type(ctx.args) == "table", "args 必须是 table")
+                assert(#ctx.args == 0, "无实参时 args 必须是空数组")
+            end)
+            "#,
+        )
+        .exec()?;
+        let outcome = invoke_action(
+            &lua,
+            &host,
+            &loose_watchdog(),
+            "t.noargs",
+            /*ctx*/ None,
+            &[],
+        );
+        assert!(
+            matches!(outcome, ActionOutcome::Done),
+            "无 args 的动作应成功执行,实际 {outcome:?}"
+        );
+        Ok(())
+    }
 }

@@ -19,6 +19,7 @@ mod sources;
 mod spectrum;
 mod theme;
 mod toast;
+mod window_title;
 
 pub use animation::{AnimationConfig, MenuReveal, SearchFocusTransition, SweepStyle};
 pub use audio::{AudioConfig, BackendKind};
@@ -42,3 +43,6 @@ pub use sources::{
 pub use spectrum::SpectrumConfig;
 pub use theme::{ColorRef, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName};
 pub use toast::ToastConfig;
+pub use window_title::{
+    TimeFormat, TimePreset, TitleField, TitleIcons, TitleSegment, WindowTitleConfig,
+};

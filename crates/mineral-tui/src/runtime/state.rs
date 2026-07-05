@@ -491,6 +491,18 @@ impl AppState {
         self.current_lyrics_set().map(|l| l.lines.as_slice())
     }
 
+    /// 当前正在唱的歌词行文本,供窗口标题用。时间轴失真档(顶换流时长对不上)返回
+    /// `None`——与歌词面板同口径,不显示错行;无同步 / 无当前行同样 `None`。
+    /// 逐字行文本按需拼接故返回拥有串。
+    pub(crate) fn active_title_lyric(&self) -> Option<String> {
+        if self.playback.sync_trust() == crate::runtime::playback::SyncTrust::Broken {
+            return None;
+        }
+        let lines = self.current_lines()?;
+        let idx = mineral_model::current_line(lines, self.playback.position_ms)?;
+        lines.get(idx).map(|line| line.kind.text().into_owned())
+    }
+
     /// 当前曲目是否有任一副歌词(翻译 / 罗马音)可切换。无则歌词面板不显示 `t` 提示。
     pub fn has_extra_lyrics(&self) -> bool {
         self.current_lyrics_set()

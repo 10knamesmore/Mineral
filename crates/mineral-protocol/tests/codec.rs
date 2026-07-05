@@ -235,10 +235,11 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     resp_round_trips(Response::StoreValue(StoreValue::Real(2.5))).await?;
     resp_round_trips(Response::StoreValue(StoreValue::Nil)).await?;
 
-    // CLI 触发:无 ctx
+    // CLI 触发:无 ctx,带位置实参
     req_round_trips(Request::InvokeAction {
         name: "my.skip".to_owned(),
         ctx: None,
+        args: Vec::from(["mode".to_owned(), "clock".to_owned()]),
     })
     .await?;
     // TUI 触发:带按键瞬间上下文(builder 构造,getter 读;字段全 Some + 全 None 各一)
@@ -256,6 +257,7 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     req_round_trips(Request::InvokeAction {
         name: "my.rate".to_owned(),
         ctx: Some(ctx),
+        args: Vec::new(),
     })
     .await?;
     let empty = KeyContext::builder()
@@ -269,6 +271,7 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     req_round_trips(Request::InvokeAction {
         name: "my.global".to_owned(),
         ctx: Some(empty),
+        args: Vec::new(),
     })
     .await?;
     Ok(())

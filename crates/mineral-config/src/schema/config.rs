@@ -23,6 +23,7 @@ use super::sources::SourcesConfig;
 use super::spectrum::SpectrumConfig;
 use super::theme::ThemeConfig;
 use super::toast::ToastConfig;
+use super::window_title::WindowTitleConfig;
 
 /// 用户运行期配置的强类型真相源。深合并后整表一次反序列化落成本类型。
 ///
@@ -94,4 +95,7 @@ pub struct TuiConfig {
 
     /// copy 段(复制菜单的自定义模板)。
     copy: CopyConfig,
+
+    /// 窗口标题段(终端任务栏 / tab 标题)。
+    window_title: WindowTitleConfig,
 }

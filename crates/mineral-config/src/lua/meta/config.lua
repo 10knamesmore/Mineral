@@ -43,6 +43,7 @@
 ---@field toast? mineral.ToastConfig 顶栏通知停留时长
 ---@field layout? mineral.LayoutConfig 布局门槛与分区尺寸
 ---@field copy? mineral.CopyConfig 复制菜单(y)的自定义模板
+---@field window_title? mineral.WindowTitleConfig 窗口标题(终端任务栏 / tab 标题)
 
 ---主题色板。色值一律 "#rrggbb" 六位十六进制(必须带 `#`,如 "#cba6f7");
 ---默认主题是 Catppuccin Mocha,想整体换主题就把 14 个 token 全写一遍。
@@ -262,6 +263,38 @@
 ---@field label string 菜单显示名
 ---@field template fun(e: mineral.Song|mineral.Playlist): string 渲染函数,返回进剪贴板的文本;收哪种表由 context 决定
 ---@field context? "song"|"playlist" 作用上下文:"song"(默认)收 mineral.Song,"playlist" 收 mineral.Playlist
+
+---窗口标题配置。四态各一套模板:template(播/暂共用)、idle、disconnected。
+---@class mineral.WindowTitleConfig
+---@field enabled? boolean 总开关;false = 不 push/pop 标题栈,也不发 OSC 标题
+---@field icons? mineral.TitleIcons 四态状态图标字形
+---@field template? mineral.TitleSegment[] 有歌态(播/暂共用)模板,顺序即输出顺序
+---@field idle? mineral.TitleSegment[] 空闲态模板,缺省 { {icon=true}, {text="Mineral"} }
+---@field disconnected? mineral.TitleSegment[] 断连态模板,缺省 { {icon=true}, {text="Mineral"} }
+
+---四态状态图标字形,任一缺省独立回落默认符号。
+---@class mineral.TitleIcons
+---@field playing? string 播放中(默认 ⏸)
+---@field paused? string 暂停(默认 ▶)
+---@field idle? string 空闲(默认 ■)
+---@field disconnected? string 断连(默认 ⚠)
+
+---窗口标题模板的一个段。三种形态互斥,按 key 自动识别。
+---@class mineral.TitleSegment
+---@field icon? boolean `true` 表示当前态状态图标(字形取自 icons)
+---@field field? mineral.TitleField 引用字段
+---@field text? string 固定字面文本
+---@field prefix? string `field` 段在字段值前附加的文本;字段为空时整段(含 prefix/suffix)折叠
+---@field suffix? string `field` 段在字段值后附加的文本
+---@field format? mineral.TimeFormat `position`/`duration` 的渲染格式(非时间字段忽略)
+
+---模板可引用的字段。position 恒渲染(0→00:00);duration 为 0 折叠;source = 来源标签;
+---lyric = 当前歌词行(时间轴失真档折叠)。
+---@alias mineral.TitleField "title"|"artist"|"album"|"position"|"duration"|"source"|"lyric"
+
+---时间字段渲染格式。"clock" = mm:ss(>=1h 进 h:mm:ss);"seconds" = 总秒数;
+---{ pattern = "..." } = 占位串 {h}{hh}{m}{mm}{s}{ss}(最细到秒)。
+---@alias mineral.TimeFormat "clock"|"seconds"|{ pattern: string }
 
 ---音频引擎(daemon 持有,改后需重启 daemon)。
 ---@class mineral.AudioConfig

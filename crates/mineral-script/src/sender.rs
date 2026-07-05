@@ -258,6 +258,7 @@ impl ScriptSender {
     /// # Params:
     ///   - `name`: 动作注册名
     ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面传 `None`)
+    ///   - `args`: 调用位置实参(CLI 采集;TUI 键位 / 无参触发传空 `Vec`)
     ///
     /// # Return:
     ///   oneshot 接收端;`await` 得到调用结果。
@@ -266,10 +267,15 @@ impl ScriptSender {
         &self,
         name: String,
         ctx: Option<mineral_protocol::KeyContext>,
+        args: Vec<String>,
     ) -> tokio::sync::oneshot::Receiver<ActionOutcome> {
         let (reply, rx) = tokio::sync::oneshot::channel();
-        if let Err(failed) = self.try_send(ScriptMsg::Action { name, ctx, reply })
-            && let ScriptMsg::Action { reply, .. } = *failed
+        if let Err(failed) = self.try_send(ScriptMsg::Action {
+            name,
+            ctx,
+            args,
+            reply,
+        }) && let ScriptMsg::Action { reply, .. } = *failed
         {
             let _ = reply.send(ActionOutcome::Failed("脚本未启用或线程已退出".to_owned()));
         }

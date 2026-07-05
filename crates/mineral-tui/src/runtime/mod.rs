@@ -17,3 +17,4 @@ pub mod state;
 pub mod track_pos;
 pub mod ui;
 pub mod view_model;
+pub(crate) mod window_title;

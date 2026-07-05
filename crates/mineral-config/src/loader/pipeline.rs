@@ -638,4 +638,121 @@ mod tests {
         assert_eq!(*cfg.audio().volume(), 70);
         Ok(())
     }
+
+    /// 窗口标题默认配置(全部来自 default.lua):开启、图标四态、有歌模板三段、
+    /// idle/disconnected 各两段。
+    #[test]
+    fn window_title_defaults() -> color_eyre::Result<()> {
+        let cfg = Config::defaults()?;
+        let wt = cfg.tui().window_title();
+        assert!(wt.enabled(), "默认应开启");
+        // 图标默认符号。
+        assert_eq!(wt.icons().playing(), "⏸");
+        assert_eq!(wt.icons().paused(), "▶");
+        assert_eq!(wt.icons().idle(), "■");
+        assert_eq!(wt.icons().disconnected(), "⚠");
+        // 有歌模板:StateIcon + Title + Artist。
+        assert!(matches!(
+            wt.template().first(),
+            Some(crate::TitleSegment::StateIcon { icon: true })
+        ));
+        assert!(matches!(
+            wt.template().get(1),
+            Some(crate::TitleSegment::Field {
+                field: crate::TitleField::Title,
+                ..
+            })
+        ));
+        assert!(matches!(
+            wt.template().get(2),
+            Some(crate::TitleSegment::Field {
+                field: crate::TitleField::Artist,
+                ..
+            })
+        ));
+        // idle / disconnected:StateIcon + Literal("Mineral")。
+        for tpl in [wt.idle(), wt.disconnected()] {
+            assert!(matches!(
+                tpl.first(),
+                Some(crate::TitleSegment::StateIcon { icon: true })
+            ));
+            assert!(matches!(
+                tpl.get(1),
+                Some(crate::TitleSegment::Literal { text }) if text == "Mineral"
+            ));
+        }
+        Ok(())
+    }
+
+    /// 用户可覆盖 window_title.template 为只含 album 字段的模板。
+    #[test]
+    fn window_title_user_template() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "wintitle",
+            r#"return { tui = { window_title = { template = { { field = "album" } } } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        let wt = cfg.tui().window_title();
+        assert!(wt.enabled(), "未写 enabled 应默认 true");
+        assert_eq!(wt.template().len(), 1, "用户覆盖模板长度");
+        Ok(())
+    }
+
+    /// 用户可完全关闭窗口标题。
+    #[test]
+    fn window_title_disabled() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "wintitleoff",
+            r#"return { tui = { window_title = { enabled = false } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        assert!(!cfg.tui().window_title().enabled(), "应关闭");
+        Ok(())
+    }
+
+    /// 新字段端到端:icons 部分覆盖(未覆盖回落默认)、position + pattern 格式、自定义 idle。
+    #[test]
+    fn window_title_extended_fields() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "wintitleext",
+            r#"return { tui = { window_title = {
+                icons = { playing = "▷" },
+                template = {
+                    { field = "position", format = { pattern = "{m}:{ss}" } },
+                    { field = "source" },
+                },
+                idle = { { text = "睡了" } },
+            } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        let wt = cfg.tui().window_title();
+        assert_eq!(wt.icons().playing(), "▷", "playing 被覆盖");
+        assert_eq!(wt.icons().paused(), "▶", "未覆盖回落默认");
+        assert!(
+            matches!(
+                wt.template().first(),
+                Some(crate::TitleSegment::Field {
+                    field: crate::TitleField::Position,
+                    format: crate::TimeFormat::Pattern { pattern },
+                    ..
+                }) if pattern == "{m}:{ss}"
+            ),
+            "position 段带 pattern 格式"
+        );
+        assert!(matches!(
+            wt.template().get(1),
+            Some(crate::TitleSegment::Field {
+                field: crate::TitleField::Source,
+                ..
+            })
+        ));
+        assert_eq!(wt.idle().len(), 1, "idle 覆盖成单段");
+        Ok(())
+    }
 }

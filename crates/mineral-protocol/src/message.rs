@@ -193,6 +193,10 @@ pub enum Request {
 
         /// 按键瞬间的 client 上下文(TUI 采集;CLI 等无界面触发面为 `None`)。
         ctx: Option<crate::KeyContext>,
+
+        /// 调用位置实参(CLI `mineral action <name> <args...>` 采集;
+        /// TUI 键位触发为空 `Vec`)。Lua 回调经 `ctx.args` 读取(恒为数组)。
+        args: Vec<String>,
     },
 
     /// 渲染一个用户复制模板(config.lua `copy.templates[index]` 的回调,daemon

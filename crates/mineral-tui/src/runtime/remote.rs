@@ -335,6 +335,8 @@ impl Client for RemoteClient {
         match self.send_recv(Request::InvokeAction {
             name: name.to_owned(),
             ctx,
+            // 键位触发不带 CLI 位置实参。
+            args: Vec::new(),
         }) {
             Response::Error(e) => Some(e),
             _ => None,

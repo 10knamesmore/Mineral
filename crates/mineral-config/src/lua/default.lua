@@ -190,6 +190,24 @@ return {
     copy = {
       templates = {},
     },
+    -- 窗口标题:把当前播放态实时写进终端任务栏 / tab 标题。
+    -- 四态标题:template(播/暂共用)/ idle / disconnected 各一套 segment 数组,顺序即输出顺序。
+    -- segment: { icon = true } | { field = "...", prefix?, suffix?, format? } | { text = "..." }
+    --   field: title | artist | album | position | duration | source | lyric
+    --   format(仅 position/duration): "clock"(默认 mm:ss)| "seconds" | { pattern = "{m}:{ss}" }
+    -- icons 四态图标可覆盖;idle/disconnected 缺省 { {icon=true}, {text="Mineral"} }。
+    -- 动态标题(轮换 / spinner / 自适应)走脚本旋钮 window_title.text,见 docs/scripting.md。
+    window_title = {
+      enabled = true,
+      icons = { playing = "⏸", paused = "▶", idle = "■", disconnected = "⚠" },
+      template = {
+        { icon = true },
+        { field = "title" },
+        { field = "artist", prefix = " — " },
+      },
+      idle = { { icon = true }, { text = "Mineral" } },
+      disconnected = { { icon = true }, { text = "Mineral" } },
+    },
     -- 布局,单位是终端字符格:宽 = 列数,高 = 行数。
     layout = {
       min_full_width = 80, -- 宽不足此列数退紧凑布局(无歌词/频谱面板)

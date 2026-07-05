@@ -30,6 +30,7 @@ use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, PageKind};
 use crate::runtime::ui::prefs::UiPrefs;
+use crate::runtime::window_title::{TitleContext, WindowTitle};
 use crate::tui::Tui;
 use crate::view::draw;
 
@@ -126,6 +127,9 @@ pub struct App {
     /// 模式。容器曲目未加载时登记,对应 `*Fetched` 事件到货后由 [`Self::fulfill_pending_container`]
     /// 取载荷入队并清除(入队走 client,故意图落 App 而非 state)。同 key 后发覆盖、切走不命中即丢。
     pub(crate) pending_container: FxHashMap<String, PlayMode>,
+
+    /// 终端窗口标题管理器（任务栏 / tab 标题）。
+    window_title: WindowTitle,
 }
 
 impl App {
@@ -163,6 +167,7 @@ impl App {
         let frame_tick = Duration::from_millis(tick_ms);
         let transition_ticks = ticks16_from_ms(*anim.transition_ms(), tick_ms);
         let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
+        let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg);
         // 各源能力声明:启动拉一次进镜像,UI 据此画入口(in-proc 即时;daemon 模式走 IPC)。
         state.caps = client.channel_caps().into_iter().collect();
@@ -199,6 +204,7 @@ impl App {
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
+            window_title,
         }
     }
 
@@ -235,6 +241,19 @@ impl App {
                 mineral_log::error!(target: "tui", "daemon connection lost, awaiting key to exit");
                 self.overlays.push(OverlayKind::disconnect());
             }
+            // 窗口标题与 ratatui draw 走不同通道,在 draw 之前单独更新。
+            // 逐字行文本按需拼接,先落局部持有,再借进 context。
+            let title_lyric = self.state.active_title_lyric();
+            let title_ctx = TitleContext {
+                song: self.state.player.current.as_ref(),
+                playing: self.state.playback.playing,
+                connected: self.client.connected(),
+                position_ms: self.state.playback.position_ms,
+                duration_ms: self.state.playback.duration_ms(),
+                lyric: title_lyric.as_deref(),
+                override_text: self.state.ui_overrides.window_title_text.as_deref(),
+            };
+            self.window_title.update(&title_ctx)?;
             if self.overlays.is_disconnected() {
                 // 只渲染断连提示 + 推进其弹出动画 + 等按键退出;daemon 没了,正常路径全是
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。

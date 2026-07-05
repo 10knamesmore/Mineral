@@ -148,6 +148,10 @@ fn run_app(
 ) -> color_eyre::Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
+    // 标题栈 push 与配置开关对称;禁用时不 push,退出也无需 pop。
+    if *cfg.tui().window_title().enabled() {
+        tui.push_title_stack()?;
+    }
     // Picker::from_query_stdio 必须在进 alternate screen 之后、读 events 之前调,
     // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
     // font 用 halfblocks 渲染,不阻塞启动。

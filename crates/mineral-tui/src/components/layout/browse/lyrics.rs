@@ -18,43 +18,8 @@ use mineral_model::{LyricLine, Word};
 use crate::render::anim::ease_in_out;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::playback::Playback;
+use crate::runtime::playback::SyncTrust;
 use crate::runtime::state::{AppState, LyricExtra};
-
-/// 歌词时间轴的信任档。歌词永远来自歌曲原源,音频流却可能被拦截脚本顶换
-/// ([`mineral_model::PlayUrl::substituted`])——顶换后时间轴是「借来的」,
-/// 按实测时长差分档降级,不做伪精度对齐。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SyncTrust {
-    /// 原源流:时间轴与音频同源,完全可信。
-    Native,
-
-    /// 顶换流,实测时长与元数据相近(或尚未探出):保留同步,标识提示可能漂移。
-    Borrowed,
-
-    /// 顶换流且实测时长差超阈:时间轴确定失真,放弃逐行同步(静态呈现)。
-    Broken,
-}
-
-/// 顶换流「时长差可容忍」阈值(ms):差在此内多半是同曲重传(常见于补救命中原版
-/// 录音的搬运),同步仍基本可用;超过则视为不同版本,逐行高亮只会误导。
-const SUBSTITUTED_DURATION_SLACK_MS: u64 = 2_000;
-
-/// 归纳当前播放的歌词时间轴信任档(判定口径见 [`SyncTrust`])。
-fn sync_trust(pb: &Playback) -> SyncTrust {
-    if !pb.play_url.as_ref().is_some_and(|u| u.substituted) {
-        return SyncTrust::Native;
-    }
-    // 必须直读 song 元数据:`duration_ms()` 对顶换流已切实测口径,拿它比实测差恒 0。
-    let meta = pb.track.as_ref().map_or(0, |t| t.duration_ms);
-    let engine = pb.engine_duration_ms;
-    // 任一口径未知(刚起播 / 容器探不出 / 元数据缺)先按可用处理,探出后自然降档。
-    if meta > 0 && engine > 0 && engine.abs_diff(meta) > SUBSTITUTED_DURATION_SLACK_MS {
-        SyncTrust::Broken
-    } else {
-        SyncTrust::Borrowed
-    }
-}
 
 /// 渲染 lyrics 面板到给定 [`Rect`]。
 ///
@@ -64,7 +29,7 @@ fn sync_trust(pb: &Playback) -> SyncTrust {
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
     let lines = state.current_lines().filter(|v| !v.is_empty());
     let extra = state.active_lyric_extra();
-    let trust = sync_trust(&state.playback);
+    let trust = state.playback.sync_trust();
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -991,44 +956,6 @@ mod tests {
             text_of(&title_left_spans(false, false, SyncTrust::Broken, &th)),
             " lyrics "
         );
-    }
-
-    /// 时间轴信任分档:原源流恒 Native;顶换流按「实测 vs 元数据」时长差分
-    /// Borrowed / Broken,任一口径未探出先按 Borrowed(不预判失真)。
-    #[test]
-    fn sync_trust_tiers_by_duration_gap() -> color_eyre::Result<()> {
-        use super::{SyncTrust, sync_trust};
-        use crate::runtime::playback::Playback;
-
-        let play_url = |substituted: bool| mineral_model::PlayUrl {
-            song_id: mineral_model::SongId::new(mineral_model::SourceKind::NETEASE, "1"),
-            url: mineral_model::MediaUrl::Local("/x".into()),
-            bitrate_bps: 0,
-            quality: mineral_model::BitRate::Standard,
-            size: 0,
-            format: mineral_model::AudioFormat::Mp3,
-            bit_depth: None,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Contiguous,
-            substituted,
-        };
-        let mut song = mineral_test::song("1");
-        song.duration_ms = 269_000;
-
-        let mut pb = Playback::new();
-        pb.track = Some(song);
-        pb.play_url = Some(play_url(/*substituted*/ false));
-        pb.engine_duration_ms = 300_000;
-        assert_eq!(sync_trust(&pb), SyncTrust::Native, "原源流时长差不参与");
-
-        pb.play_url = Some(play_url(/*substituted*/ true));
-        pb.engine_duration_ms = 0;
-        assert_eq!(sync_trust(&pb), SyncTrust::Borrowed, "未探出先不判失真");
-        pb.engine_duration_ms = 270_500;
-        assert_eq!(sync_trust(&pb), SyncTrust::Borrowed, "差 1.5s 在容忍内");
-        pb.engine_duration_ms = 280_000;
-        assert_eq!(sync_trust(&pb), SyncTrust::Broken, "差 11s 判失真");
-        Ok(())
     }
 
     /// 顶换流时长差超阈(Broken):放弃逐行同步——窗口锚回篇首、无当前行高亮,

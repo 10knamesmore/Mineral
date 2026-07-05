@@ -229,7 +229,7 @@ mod tests {
         fn invoke(&self, name: &str) -> color_eyre::Result<mineral_script::ActionOutcome> {
             Ok(self
                 .sender
-                .invoke_action(name.to_owned(), /*ctx*/ None)
+                .invoke_action(name.to_owned(), /*ctx*/ None, /*args*/ Vec::new())
                 .blocking_recv()?)
         }
     }

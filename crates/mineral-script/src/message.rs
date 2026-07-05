@@ -446,6 +446,10 @@ pub(crate) enum ScriptMsg {
         /// 按键瞬间的 client 上下文(无界面触发面为 `None`,回调收空表)。
         ctx: Option<mineral_protocol::KeyContext>,
 
+        /// 调用位置实参(CLI `mineral action <name> <args...>` 采集;
+        /// TUI 键位 / 无参触发为空)。Lua 回调经 `ctx.args` 读取(恒为数组)。
+        args: Vec<String>,
+
         /// 调用结果回执(接收端 drop 时静默丢)。
         reply: tokio::sync::oneshot::Sender<ActionOutcome>,
     },

@@ -314,6 +314,7 @@ session 级覆盖 TUI 渲染旋钮(不写配置文件,daemon 重启即清;`value
 | ------------------------------ | ----------- | ---------------- |
 | `"lyrics.fullscreen_line_gap"` | integer ≥ 0 | 全屏歌词行间距   |
 | `"lyrics.compact_line_gap"`    | integer ≥ 0 | 非全屏歌词行间距 |
+| `"window_title.text"`          | string      | 整串覆盖窗口标题(脚本自渲染;`nil` 回落结构化模板) |
 
 ```lua
 -- 终端宽度自适应:超 200 列拉开全屏歌词行距
@@ -593,6 +594,73 @@ mineral.observe("terminal", function(terminal)
   end
 end)
 ```
+
+### 动态窗口标题(旋钮 `window_title.text`)
+
+结构化 `window_title` 配置管静态标题;**轮换 / spinner / 自适应 / 任意运行时定制**走
+`window_title.text` 旋钮——脚本自渲染整串推给 client(client 仍自己写 OSC)。旋钮有值时
+整串覆盖模板,`nil` 回落。下面几例**互斥**:同时只启用一个 `window_title.text` writer。
+共享前置(缓存当前歌 / 播放态 / 进度):
+
+```lua
+local cur, state, pos = nil, "stopped", 0
+mineral.on("track_started", function(a) cur = a.song end)
+mineral.observe("player.state", function(s) state = s or "stopped" end)
+mineral.observe("player.position", function(p) pos = p or 0 end)   -- 整秒
+
+local function icon()
+  if state == "playing" then return "⏸" elseif state == "paused" then return "▶" else return "■" end
+end
+local function clock(secs) return string.format("%d:%02d", secs // 60, secs % 60) end
+```
+
+**标题轮换(一秒 xxx 一秒 yyy)**——任栏太窄放不下时,在「歌名 — 艺人」和「进度」间轮换:
+
+```lua
+local page = 1
+mineral.timer.every(2000, function()
+  if not cur then mineral.ui.override("window_title.text", nil); return end
+  local body = (page == 1)
+    and (cur.title .. " — " .. (cur.artists[1] or ""))
+    or  (cur.title .. "  " .. clock(pos))
+  mineral.ui.override("window_title.text", icon() .. " " .. body)
+  page = page % 2 + 1
+end)
+```
+
+**标题 spinner**——播放时标题头挂个转圈(节奏脚本自定;暂停回落静态图标):
+
+```lua
+local frames, f = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }, 1
+mineral.timer.every(100, function()
+  if not cur then mineral.ui.override("window_title.text", nil); return end
+  local head = (state == "playing") and frames[f] or icon()
+  mineral.ui.override("window_title.text", head .. " " .. cur.title)
+  f = f % #frames + 1
+end)
+```
+
+**CLI 分发切换标题模式**——具名动作即「可被 CLI 分发的自定义事件」。CLI 触发不带 payload,
+故把「切到哪个模式」做进动作本身(循环 / 多个具名动作);带位置实参时读 `ctx.args`:
+
+```lua
+local modes, mi = { "full", "clock", "off" }, 1
+
+local function render_mode()
+  if not cur then return nil end
+  local m = modes[mi]
+  if m == "off"   then return nil end                          -- 撤销 → 回落结构化模板
+  if m == "clock" then return icon() .. " " .. clock(pos) end
+  return icon() .. " " .. cur.title .. " — " .. (cur.artists[1] or "")
+end
+
+mineral.action("title.cycle", function()
+  mi = mi % #modes + 1
+  mineral.ui.override("window_title.text", render_mode())
+end)
+```
+
+CLI:`mineral action title.cycle`——绑到 sxhkd / Hyprland bind / waybar 点击即成全局标题切换。
 
 ### 深夜自动降音量
 

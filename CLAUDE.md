@@ -78,6 +78,7 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 * 类型标注优先 turbofish:写 `Vec::<T>::new()`、`.collect::<Vec<T>>()`,而不是左侧 `: Vec<T>`。例外:trait object 向上转型(`let x: Arc<dyn Trait> = ...`)和无法推断的 `None`(`let x: Option<T> = None`)。
 * `format!` / `println!` 等参数尽量内联(clippy `uninlined_format_args`)。
 * 优先方法引用而非简单闭包;`match` 尽量穷尽,避免随手写 `_ =>`。
+- 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
 
 ### 文档与可见性
 

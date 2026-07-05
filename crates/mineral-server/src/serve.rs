@@ -335,10 +335,12 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
         Request::DaemonInfo => Response::DaemonInfo {
             pid: std::process::id(),
         },
-        Request::InvokeAction { name, ctx } => match client.invoke_action_async(&name, ctx).await {
-            Ok(()) => Response::Ok,
-            Err(e) => Response::Error(mineral_log::chain(&e)),
-        },
+        Request::InvokeAction { name, ctx, args } => {
+            match client.invoke_action_async(&name, ctx, args).await {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error(mineral_log::chain(&e)),
+            }
+        }
         Request::RenderCopyTemplate { index, ctx } => {
             Response::CopyText(client.render_copy_template_async(index, ctx).await)
         }

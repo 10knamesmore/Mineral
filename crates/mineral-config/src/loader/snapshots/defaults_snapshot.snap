@@ -651,6 +651,52 @@ Config {
         copy: CopyConfig {
             templates: [],
         },
+        window_title: WindowTitleConfig {
+            enabled: true,
+            icons: TitleIcons {
+                playing: "⏸",
+                paused: "▶",
+                idle: "■",
+                disconnected: "⚠",
+            },
+            template: [
+                StateIcon {
+                    icon: true,
+                },
+                Field {
+                    field: Title,
+                    prefix: "",
+                    suffix: "",
+                    format: Preset(
+                        Clock,
+                    ),
+                },
+                Field {
+                    field: Artist,
+                    prefix: " — ",
+                    suffix: "",
+                    format: Preset(
+                        Clock,
+                    ),
+                },
+            ],
+            idle: [
+                StateIcon {
+                    icon: true,
+                },
+                Literal {
+                    text: "Mineral",
+                },
+            ],
+            disconnected: [
+                StateIcon {
+                    icon: true,
+                },
+                Literal {
+                    text: "Mineral",
+                },
+            ],
+        },
     },
     audio: AudioConfig {
         volume: 100,

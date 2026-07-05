@@ -58,6 +58,7 @@ impl ClientHandle {
     /// # Params:
     ///   - `name`: 动作注册名
     ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
+    ///   - `args`: 调用位置实参(CLI 采集;无参触发为空)
     ///
     /// # Return:
     ///   成功为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`。
@@ -65,8 +66,9 @@ impl ClientHandle {
         &self,
         name: &str,
         ctx: Option<mineral_protocol::KeyContext>,
+        args: Vec<String>,
     ) -> color_eyre::Result<()> {
-        self.player.invoke_script_action(name, ctx).await
+        self.player.invoke_script_action(name, ctx, args).await
     }
 
     /// 渲染一个复制模板并等待结果(serve 层处理 `RenderCopyTemplate` 用)。

@@ -206,12 +206,13 @@ impl PlayerCore {
         &self,
         name: &str,
         ctx: Option<mineral_protocol::KeyContext>,
+        args: Vec<String>,
     ) -> color_eyre::Result<()> {
         use color_eyre::eyre::bail;
         let Some(script) = &self.inner.notify.script else {
             bail!("脚本未启用(无 config.lua 或脚本加载失败)");
         };
-        match script.invoke_action(name.to_owned(), ctx).await {
+        match script.invoke_action(name.to_owned(), ctx, args).await {
             Ok(mineral_script::ActionOutcome::Done) => Ok(()),
             Ok(mineral_script::ActionOutcome::NotFound) => {
                 bail!("动作 {name:?} 未注册(检查 config.lua 的 mineral.action)")

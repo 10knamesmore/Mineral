@@ -185,6 +185,7 @@ function mineral.on_message(name, handler) end
 ---@field now_playing mineral.Song|nil  在播的歌(停止态 nil)
 ---@field selected_loved boolean|nil  选中歌的 ♥ 态(无选中 / 未知为 nil)
 ---@field search_query string|nil  当前搜索 / 过滤词(空词为 nil)
+---@field args string[]  CLI `mineral action <name> <args...>` 的位置实参;TUI 键位触发为空数组
 
 --- 注册具名动作(物理键解耦,多 client 共用触发面)。重名 / 空名报错。
 --- 触发面:TUI `tui.keys.script` 绑键(ctx 带按键上下文)/ CLI `mineral action <name>`(ctx 空表)。

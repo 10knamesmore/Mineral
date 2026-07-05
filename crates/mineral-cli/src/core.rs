@@ -42,6 +42,10 @@ pub enum Command {
     Action {
         /// 动作注册名,如 "my.skip_short"。
         name: String,
+
+        /// 传给动作回调的位置实参(Lua 侧经 `ctx.args` 读取);可省。
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
     },
 
     /// 缓存管理
@@ -88,7 +92,7 @@ pub fn run(command: Command) -> color_eyre::Result<()> {
 /// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
 async fn run_async(command: Command) -> color_eyre::Result<()> {
     match command {
-        Command::Action { name } => action::run(&name).await,
+        Command::Action { name, args } => action::run(&name, &args).await,
         Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,
