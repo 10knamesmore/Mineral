@@ -15,4 +15,5 @@ dhat-heap.json
 **/__pycache__/**
 # Claude Code 调度任务的本机运行时锁
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 .worktrees/
