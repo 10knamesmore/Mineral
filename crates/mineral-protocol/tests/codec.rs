@@ -119,7 +119,7 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
     let snap = AudioSnapshot {
         playing: true,
         position_ms: 12_345,
-        duration_ms: 200_000,
+        duration_ms: Some(200_000),
         volume_pct: 77,
         track_finished_seq: 3,
         backend: mineral_audio::AudioBackend::Null,
@@ -127,7 +127,7 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         buffered_bps: mineral_audio::Bps::new(4_200),
         // gapless 字段给辨识度非默认值,roundtrip 等值断言覆盖到它们(bincode 位置式,守住没被 skip)。
         current_track_token: 9,
-        next_duration_ms: 180_000,
+        next_duration_ms: Some(180_000),
         next_buffered_bps: mineral_audio::Bps::new(6_000),
         next_ready: true,
         next_download_complete: true,

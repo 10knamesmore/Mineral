@@ -84,7 +84,12 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     );
 
     let tracks = state.filtered_tracks();
-    let total_min = tracks.iter().map(|s| s.data.duration_ms).sum::<u64>() / 60_000;
+    // 未知时长的曲目不计入合计(只反映已知部分)。
+    let total_min = tracks
+        .iter()
+        .filter_map(|s| s.data.duration_ms)
+        .sum::<u64>()
+        / 60_000;
     let placeholder = slot_placeholder(state, theme);
     let pos = position_label(state.browse.nav.track.sel(), tracks.len());
 
@@ -259,8 +264,11 @@ fn build_row<'a>(
     }
 }
 
-/// 把时长 ms 格式化成 `m:ss`(library 行右侧使用)。
-fn format_duration(ms: u64) -> String {
+/// 把时长 ms 格式化成 `m:ss`(library 行右侧使用);未知(`None`)画 `-:--`。
+fn format_duration(ms: Option<u64>) -> String {
+    let Some(ms) = ms else {
+        return "-:--".to_owned();
+    };
     let secs = ms / 1000;
     let m = secs / 60;
     let s = secs % 60;

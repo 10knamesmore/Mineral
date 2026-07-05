@@ -10,7 +10,7 @@ use ratatui_image::picker::Picker;
 
 use crate::components::layout::shared::cover_image;
 use crate::render::theme::Theme;
-use crate::runtime::playback::format_ms;
+use crate::runtime::playback::format_ms_opt;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
@@ -57,7 +57,7 @@ pub fn draw(
         &seed,
     );
 
-    let len = format_ms(sv.data.duration_ms);
+    let len = format_ms_opt(sv.data.duration_ms);
     let love_label = if sv.loved { "♥ loved" } else { "♡ —" };
     let love_color = if sv.loved { theme.red } else { theme.overlay };
     let plays_label = match sv.plays {

@@ -985,8 +985,13 @@ mod tests {
         });
         // 元数据时长 vs 实测差 30s:确定失真。直读元数据(`duration_ms()` 对顶换流
         // 会随 engine 值切口径,拿它算会自指)。
-        let meta_ms = state.playback.track.as_ref().map_or(0, |t| t.duration_ms);
-        state.playback.engine_duration_ms = meta_ms + 30_000;
+        let meta_ms = state
+            .playback
+            .track
+            .as_ref()
+            .and_then(|t| t.duration_ms)
+            .unwrap_or(0);
+        state.playback.engine_duration_ms = Some(meta_ms + 30_000);
         t.draw(|f| {
             super::draw(
                 f,

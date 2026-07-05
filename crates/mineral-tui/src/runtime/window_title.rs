@@ -27,8 +27,8 @@ pub(crate) struct TitleContext<'a> {
     /// 当前播放进度（ms）。
     pub position_ms: u64,
 
-    /// 当前曲目全长（ms；0 = 未探出）。
-    pub duration_ms: u64,
+    /// 当前曲目全长（ms）；`None` = 未知（未探出且元数据缺），标题里省略总长段。
+    pub duration_ms: Option<u64>,
 
     /// 当前歌词行文本，已按 [`sync_trust`](crate::runtime::playback::Playback::sync_trust)
     /// 过滤（失真档为 `None`）。
@@ -231,9 +231,7 @@ fn field_value<'a>(
             .map(|a| Cow::Borrowed(a.name.as_str())),
         TitleField::Source => ctx.song.map(|s| Cow::Borrowed(s.source().label())),
         TitleField::Position => Some(Cow::Owned(format.render(ctx.position_ms))),
-        TitleField::Duration => {
-            (ctx.duration_ms > 0).then(|| Cow::Owned(format.render(ctx.duration_ms)))
-        }
+        TitleField::Duration => ctx.duration_ms.map(|d| Cow::Owned(format.render(d))),
         TitleField::Lyric => ctx.lyric.map(Cow::Borrowed),
     }
 }
@@ -253,7 +251,7 @@ mod tests {
             playing: true,
             connected: true,
             position_ms: 0,
-            duration_ms: 0,
+            duration_ms: None,
             lyric: None,
             override_text: None,
         }
@@ -357,11 +355,11 @@ mod tests {
         ];
         let s = song("s");
         let mut c = ctx(Some(&s));
-        // duration=0 → 折叠；position=0 → 00:00。
+        // duration 未知 → 折叠；position=0 → 00:00。
         assert_eq!(fold(&template, "", &c), "00:00");
         // 有进度 + 全长。
         c.position_ms = 83_000;
-        c.duration_ms = 296_000;
+        c.duration_ms = Some(296_000);
         assert_eq!(fold(&template, "", &c), "01:23/04:56");
         Ok(())
     }

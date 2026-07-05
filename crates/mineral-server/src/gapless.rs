@@ -97,14 +97,44 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     old_id
 }
 
+/// 预排窗口是否已开(距曲终 ≤ `window_ms`)。
+///
+/// 总时长优先取 decoder 实测(顶换流的元数据描述的是原源音频,实测才是真口径);
+/// 分片容器(fMP4)以流式打开时 decoder 探不出总时长,回落当前曲元数据——不回落的话
+/// 这类源的预排窗口永远不开,gapless 整体失效。两口径都未知 → 不开窗。
+///
+/// # Params:
+///   - `engine_duration_ms`: decoder 实测总时长(探不出为 `None`)
+///   - `metadata_duration_ms`: 当前曲元数据时长(未知为 `None`)
+///   - `position_ms`: 当前播放位置(ms)
+///   - `window_ms`: 预排提前量(配置 `daemon.gapless_prefetch_ms`)
+///
+/// # Return:
+///   窗口是否已开。
+fn prefetch_window_open(
+    engine_duration_ms: Option<u64>,
+    metadata_duration_ms: Option<u64>,
+    position_ms: u64,
+    window_ms: u64,
+) -> bool {
+    let Some(duration_ms) = engine_duration_ms.or(metadata_duration_ms) else {
+        return false;
+    };
+    duration_ms.saturating_sub(position_ms) <= window_ms
+}
+
 /// gapless 预排:进入曲终前窗口(配置 `daemon.gapless_prefetch_ms`)时,据下一曲来源预排 decoder 进引擎队列
 /// ——本地命中 / RepeatOne 直排,远端先取链 → [`on_prefetch_url_ready`] 再排。本曲只触发一次。
 pub(crate) fn check_prefetch(player: &PlayerCore) {
     let snap = player.audio_snapshot();
-    if snap.duration_ms == 0 {
-        return;
-    }
-    if snap.duration_ms.saturating_sub(snap.position_ms) > player.gapless_prefetch_ms() {
+    let metadata_duration_ms =
+        player.with_state(|st| st.current_song.as_ref().and_then(|s| s.duration_ms));
+    if !prefetch_window_open(
+        snap.duration_ms,
+        metadata_duration_ms,
+        snap.position_ms,
+        player.gapless_prefetch_ms(),
+    ) {
         return;
     }
     let (cur_id, next) = player.with_state(|st| {
@@ -314,11 +344,7 @@ pub(crate) fn check_advance(player: &PlayerCore) {
     let (old, has_queued) = player.with_state(|st| (st.current_song.clone(), st.queued.is_some()));
     // 自然播完 = 听了整首;duration 未知时退用 position。
     if let Some(old) = old {
-        let listen_ms = if old.duration_ms == 0 {
-            snap.position_ms
-        } else {
-            old.duration_ms
-        };
+        let listen_ms = old.duration_ms.unwrap_or(snap.position_ms);
         player.spawn_on_played(old.id.clone(), /*completed*/ true, listen_ms);
         player
             .notify()
@@ -375,8 +401,34 @@ mod tests {
     use mineral_protocol::PlaybackOrigin;
     use mineral_test::song;
 
-    use super::{Advance, Queued, adopt_queued, decide_advance};
+    use super::{Advance, Queued, adopt_queued, decide_advance, prefetch_window_open};
     use crate::state::State;
+
+    /// prefetch_window_open:decoder 实测优先;实测探不出(分片 fMP4 流式打开)回落元数据
+    /// ——B站源曾因缺这层回落,预排窗口永远不开、gapless 从不触发;两口径都未知不开窗。
+    #[test]
+    fn prefetch_window_prefers_engine_falls_back_to_metadata() {
+        assert!(
+            prefetch_window_open(Some(200_000), None, 195_000, 10_000),
+            "实测时长,窗口内应开"
+        );
+        assert!(
+            !prefetch_window_open(Some(200_000), None, 100_000, 10_000),
+            "实测时长,窗口外不开"
+        );
+        assert!(
+            prefetch_window_open(None, Some(200_000), 195_000, 10_000),
+            "实测缺失应回落元数据"
+        );
+        assert!(
+            !prefetch_window_open(Some(300_000), Some(200_000), 195_000, 10_000),
+            "两口径都有值时实测优先(顶换流元数据描述的是原源音频)"
+        );
+        assert!(
+            !prefetch_window_open(None, None, 195_000, 10_000),
+            "时长全未知不应开窗"
+        );
+    }
 
     /// decide_advance:无曲终 → None;无缝(仍出声 + 有预排)→ Adopt;否则 → Fallback。
     #[test]

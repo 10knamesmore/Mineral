@@ -86,6 +86,6 @@ pub fn with_source(mut s: Song, source: SourceKind) -> Song {
 /// # Return:
 ///   `duration_ms` 被替换的 `Song`。
 pub fn with_duration(mut s: Song, duration_ms: u64) -> Song {
-    s.duration_ms = duration_ms;
+    s.duration_ms = Some(duration_ms);
     s
 }

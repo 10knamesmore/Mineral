@@ -109,7 +109,7 @@ impl NamespaceStore {
         let album_id = song.album.as_ref().map(|a| a.id.value().to_owned());
         let album_name = song.album.as_ref().map(|a| a.name.clone());
         let cover_url = song.cover_url.as_ref().map(MediaUrl::to_string);
-        let duration_ms = i64::try_from(song.duration_ms)?;
+        let duration_ms = song.duration_ms.map(i64::try_from).transpose()?;
 
         // 整体放进一个事务:song_meta upsert + song_artists 先删后插必须原子完成。
         // 否则并发 upsert 同一首歌(多个歌单含同曲、channel_fetch 多 worker 并行刷新)时,
@@ -604,7 +604,7 @@ mod tests {
                 id: ArtistId::new(SourceKind::NETEASE, "a1"),
                 name: "演者".to_owned(),
             }])
-            .duration_ms(200_000)
+            .duration_ms(Some(200_000))
             .build();
         s.upsert_meta(&song).await?;
         let got = s.get_meta(&song.id).await?;
@@ -612,7 +612,7 @@ mod tests {
         if let Some(g) = got {
             assert_eq!(g.name, "迷跡波");
             assert_eq!(g.artists.len(), song.artists.len());
-            assert_eq!(g.duration_ms, 200_000);
+            assert_eq!(g.duration_ms, Some(200_000));
         }
         Ok(())
     }
@@ -642,7 +642,7 @@ mod tests {
                     name: "丙".to_owned(),
                 },
             ])
-            .duration_ms(123_000)
+            .duration_ms(Some(123_000))
             .build();
         s.upsert_meta(&song).await?;
 
@@ -668,7 +668,7 @@ mod tests {
                 id: ArtistId::new(SourceKind::NETEASE, "b1"),
                 name: "丁".to_owned(),
             }])
-            .duration_ms(99_000)
+            .duration_ms(Some(99_000))
             .build();
         s.upsert_meta(&updated).await?;
 

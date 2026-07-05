@@ -127,12 +127,11 @@ impl App {
         self.state.playback.volume_pct = pct;
     }
 
-    /// 相对当前位置跳 `delta_s` 秒,clamp 到 [0, duration]。
+    /// 相对当前位置跳 `delta_s` 秒,clamp 到 [0, duration];时长未知时无法 clamp,不跳。
     pub(crate) fn seek_relative(&mut self, delta_s: i64) {
-        let dur_ms = self.state.playback.duration_ms();
-        if dur_ms == 0 {
+        let Some(dur_ms) = self.state.playback.duration_ms() else {
             return;
-        }
+        };
         let cur = i64::try_from(self.state.playback.position_ms).unwrap_or(0);
         let max = i64::try_from(dur_ms).unwrap_or(0);
         let new_ms = cur

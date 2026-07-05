@@ -524,6 +524,7 @@ fn ctx_table(
 /// `Song` 在 Lua 侧的投影
 ///
 /// id 用 `qualified()`(全局唯一,可直接回喂 `mineral.player.play`);
+/// `duration_ms` 时长未知时为 nil(脚本侧拼接 / 运算前需判空)。
 pub(crate) fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
     table.set("id", song.id.qualified())?;

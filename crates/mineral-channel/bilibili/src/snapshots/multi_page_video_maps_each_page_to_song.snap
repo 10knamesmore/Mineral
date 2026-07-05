@@ -79,7 +79,9 @@ Album {
                     name: "多P合集",
                 },
             ),
-            duration_ms: 240000,
+            duration_ms: Some(
+                240000,
+            ),
             cover_url: Some(
                 Remote(
                     Url {
@@ -133,7 +135,9 @@ Album {
                     name: "多P合集",
                 },
             ),
-            duration_ms: 200000,
+            duration_ms: Some(
+                200000,
+            ),
             cover_url: Some(
                 Remote(
                     Url {

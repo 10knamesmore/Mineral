@@ -6,8 +6,8 @@ expression: t.backend()
 "╭ tracks / Favorites ──────────────────────────────────────────────────────────╮"
 "│    #    title                 artist        album          source      len   │"
 "│▌ ♥ 0    LoveLetterTypewriter  Mineral                      ♫ netease   3:45  │"
-"│  ♥ 1    夜間飛行              Chinese Footb                ▶ bilibili  0:00  │" Hidden by multi-width symbols: [(11, " "), (13, " "), (15, " "), (17, " ")]
-"│  ♥ 2    Local Rip                                          □ local     0:00  │"
+"│  ♥ 1    夜間飛行              Chinese Footb                ▶ bilibili  -:--  │" Hidden by multi-width symbols: [(11, " "), (13, " "), (15, " "), (17, " ")]
+"│  ♥ 2    Local Rip                                          □ local     -:--  │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

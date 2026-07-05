@@ -125,7 +125,7 @@ pub(crate) fn view_page_to_song(
     pic: Option<&str>,
     page: &VideoPage,
 ) -> Song {
-    let duration_ms = seconds_to_ms(page.duration);
+    let duration_ms = Some(seconds_to_ms(page.duration));
     Song::builder()
         .id(SongId::new(
             SourceKind::BILIBILI,
@@ -314,7 +314,7 @@ pub(crate) fn plan_fav_entry(media: FavMedia) -> Option<FavEntryPlan> {
 fn fav_media_to_song(media: FavMedia) -> Option<Song> {
     let bvid = media.bvid?;
     let title = media.title.unwrap_or_default();
-    let duration_ms = media.duration.map(seconds_to_ms).unwrap_or(0);
+    let duration_ms = media.duration.map(seconds_to_ms);
     let cover = media.cover.as_deref().and_then(cover_media_url);
     let artist = ArtistRef {
         id: ArtistId::new(SourceKind::BILIBILI, media.upper.mid.to_string()),
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(s0.id, SongId::new(SourceKind::BILIBILI, "BV1xx:1"));
         assert_eq!(s1.id, SongId::new(SourceKind::BILIBILI, "BV1xx:2"));
         assert_eq!(s0.name, "第一话");
-        assert_eq!(s0.duration_ms, 240_000);
+        assert_eq!(s0.duration_ms, Some(240_000));
         assert_eq!(album.publish_time_ms, 1_600_000_000_000);
         mineral_test::assert_snap_debug!(
             "多P视频详情 → Album(2P 逐 P 成曲 + owner + 封面补 https)",
@@ -584,7 +584,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("应有单曲"))?;
         assert_eq!(s.id, SongId::new(SourceKind::BILIBILI, "BV1yy:1"));
         assert_eq!(s.name, "单P视频");
-        assert_eq!(s.duration_ms, 100_000);
+        assert_eq!(s.duration_ms, Some(100_000));
         Ok(())
     }
 
@@ -602,7 +602,7 @@ mod tests {
         let song =
             fav_media_to_song(media).ok_or_else(|| color_eyre::eyre::eyre!("应产出 Song"))?;
         assert_eq!(song.id, SongId::new(SourceKind::BILIBILI, "BV1zz:1"));
-        assert_eq!(song.duration_ms, 200_000);
+        assert_eq!(song.duration_ms, Some(200_000));
         assert_eq!(
             song.cover_url,
             MediaUrl::remote("https://i0.hdslb.com/c.jpg").ok()
@@ -631,7 +631,7 @@ mod tests {
             color_eyre::eyre::bail!("单 P 条目应直接成曲");
         };
         assert_eq!(song.id, SongId::new(SourceKind::BILIBILI, "BV1zz:1"));
-        assert_eq!(song.duration_ms, 200_000);
+        assert_eq!(song.duration_ms, Some(200_000));
         Ok(())
     }
 

@@ -383,7 +383,7 @@ mod tests {
         Ok(Song::builder()
             .id(SongId::new(SourceKind::NETEASE, format!("s{i}")))
             .name(format!("song {i}"))
-            .duration_ms(1000)
+            .duration_ms(Some(1000))
             .cover_url(Some(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?))
             .build())
     }

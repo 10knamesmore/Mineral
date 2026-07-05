@@ -275,7 +275,7 @@ fn build_now_playing(song: &Song, lyrics: Option<&Lyrics>) -> NowPlaying {
         .artist(artist)
         .album(song.album.as_ref().map(|a| a.name.clone()))
         .cover_url(song.cover_url.as_ref().map(cover_to_url))
-        .duration(Some(Duration::from_millis(song.duration_ms)));
+        .duration(song.duration_ms.map(Duration::from_millis));
     match lyrics {
         None => builder.build(),
         // 翻译 / 罗马音轨从合并行重建:时间戳取原文行的,与 asText 严格对齐。

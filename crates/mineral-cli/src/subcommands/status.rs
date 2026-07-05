@@ -68,7 +68,10 @@ fn format_speed(bps: u64) -> String {
 /// 把 [`AudioSnapshot`] + daemon pid 渲染成多行 key/value 文本(由 caller 打到 stdout)。
 fn render_snapshot(snap: &AudioSnapshot, pid: u32) -> String {
     let pos = format_ms(snap.position_ms);
-    let dur = format_ms(snap.duration_ms);
+    // 时长未知(decoder 探不出)画 --:-- 占位,与真实 00:00 区分。
+    let dur = snap
+        .duration_ms
+        .map_or_else(|| "--:--".to_owned(), format_ms);
     let backend = match snap.backend {
         AudioBackend::Device => "device",
         AudioBackend::Null => "null (no audio device)",

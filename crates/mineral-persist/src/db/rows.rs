@@ -23,8 +23,8 @@ pub(crate) struct SongMetaRow {
     /// 专辑名(可空)。
     pub album_name: Option<String>,
 
-    /// 时长毫秒(sqlite INTEGER → i64)。
-    pub duration_ms: i64,
+    /// 时长毫秒(sqlite INTEGER → i64);`NULL` = 未知。
+    pub duration_ms: Option<i64>,
 
     /// 封面 MediaUrl 序列化串(可空)。
     pub cover_url: Option<String>,
@@ -71,7 +71,7 @@ impl SongMetaRow {
             Err(never) => match never {},
         });
 
-        let duration_ms = u64::try_from(self.duration_ms)?;
+        let duration_ms = self.duration_ms.map(u64::try_from).transpose()?;
 
         Ok(Song::builder()
             .id(SongId::new(source, self.song_value))

@@ -14,7 +14,7 @@ use crate::components::popup::component::{
 };
 use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::action::Action;
-use crate::runtime::playback::format_ms;
+use crate::runtime::playback::format_ms_opt;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::AppState;
@@ -287,7 +287,7 @@ fn build_row<'a>(
         cells.push(Cell::from(Span::styled(artist, Style::new().fg(sub_fg))));
     }
     cells.push(Cell::from(Span::styled(
-        format_ms(s.duration_ms),
+        format_ms_opt(s.duration_ms),
         Style::new().fg(sub_fg),
     )));
     Row::new(cells)

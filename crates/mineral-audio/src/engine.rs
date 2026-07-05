@@ -438,7 +438,8 @@ impl<'a> Engine<'a> {
     /// 同步(block_on)建流 + build decoder + append 当前曲(cut-over 的有意阻塞,沿用历史行为)。
     ///
     /// # Return:
-    ///   `(duration_ms, sample_rate, is_local)`。
+    ///   `(duration_ms, sample_rate, is_local)`;`duration_ms` 为 `None` = decoder 探不出总长
+    ///   (分片容器流式打开)。
     fn build_and_append_blocking(
         &self,
         url: MediaUrl,
@@ -447,7 +448,7 @@ impl<'a> Engine<'a> {
         track_gen: u64,
         idx: usize,
         layout: StreamLayout,
-    ) -> color_eyre::Result<(u64, u32, bool)> {
+    ) -> color_eyre::Result<(Option<u64>, u32, bool)> {
         let (reader, byte_len, local) = match url {
             MediaUrl::Remote(u) => {
                 let progress = Arc::clone(&self.progress);
@@ -470,11 +471,11 @@ impl<'a> Engine<'a> {
         // 分片远端流(如 B站 fMP4)丢弃 byte_len → 解码器非 seekable、open 不预扫全片,秒起播。
         let byte_len = effective_byte_len(byte_len, local, layout);
         let decoder = build_decoder(reader, byte_len)?;
-        let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
+        let dur_ms = decoder.total_duration().map(duration_to_ms);
         let sr = u32::from(decoder.sample_rate());
         // 采样率 / byte_len 入日志:曲间采样率不一致或 byte_len 缺失会影响无缝衔接,便于现场排查。
         mineral_log::info!(
-            target: "audio", slot = "cur", sample_rate = sr, dur_ms,
+            target: "audio", slot = "cur", sample_rate = sr, dur_ms = ?dur_ms,
             byte_len_known = byte_len.is_some(), "decoder ready"
         );
         self.player
@@ -495,12 +496,12 @@ impl<'a> Engine<'a> {
             let byte_len_known = built.byte_len.is_some();
             match build_decoder(built.reader, built.byte_len) {
                 Ok(decoder) => {
-                    let dur_ms = decoder.total_duration().map(duration_to_ms).unwrap_or(0);
+                    let dur_ms = decoder.total_duration().map(duration_to_ms);
                     self.next_sample_rate = u32::from(decoder.sample_rate());
                     // 预排曲同样记采样率 / byte_len(便于排查曲间衔接)。
                     mineral_log::info!(
                         target: "audio", slot = "next", sample_rate = self.next_sample_rate,
-                        dur_ms, byte_len_known, "decoder ready (prefetch)"
+                        dur_ms = ?dur_ms, byte_len_known, "decoder ready (prefetch)"
                     );
                     self.player
                         .append(TapSource::new(decoder, Arc::clone(&self.tap_producer)));

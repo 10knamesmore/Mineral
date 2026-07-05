@@ -7,7 +7,7 @@ use proptest::collection::vec;
 use proptest::option;
 use proptest::prelude::{Just, Strategy, any, prop_oneof};
 
-/// 随机 `Song` 生成器:覆盖各来源、空/非空艺人、有无专辑、任意时长。
+/// 随机 `Song` 生成器:覆盖各来源、空/非空艺人、有无专辑、任意时长(含未知)。
 ///
 /// 同一首歌的 song / artist / album id 共用所选 `source` 作 namespace,
 /// 故 `song.source() == song.id.namespace()` 恒成立(可被属性测试当不变量守护)。
@@ -22,7 +22,7 @@ pub fn arb_song() -> impl Strategy<Value = Song> {
         any::<String>(),
         vec(any::<String>(), 0..3),
         option::of(any::<String>()),
-        any::<u64>(),
+        option::of(any::<u64>()),
     )
         .prop_map(|(source, id, name, artist_names, album, duration_ms)| {
             Song::builder()

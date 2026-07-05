@@ -618,7 +618,7 @@ mod tests {
                 id: AlbumId::new(SourceKind::NETEASE, a),
                 name: format!("album {a}"),
             }))
-            .duration_ms(1000)
+            .duration_ms(Some(1000))
             .build()
     }
 
@@ -1073,7 +1073,7 @@ mod tests {
                         Song::builder()
                             .id(SongId::new(SourceKind::NETEASE, format!("t{i}")))
                             .name(format!("t{i}"))
-                            .duration_ms(1000)
+                            .duration_ms(Some(1000))
                             .build()
                     })
                     .collect::<Vec<Song>>(),

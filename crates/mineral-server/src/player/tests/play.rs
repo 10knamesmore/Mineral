@@ -131,7 +131,7 @@ fn song_with_album(id: &str, name: &str, album: &str) -> Song {
             id: AlbumId::new(SourceKind::NETEASE, "0"),
             name: album.to_owned(),
         }))
-        .duration_ms(1000)
+        .duration_ms(Some(1000))
         .build()
 }
 

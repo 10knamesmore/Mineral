@@ -16,8 +16,8 @@ pub(crate) struct Slot {
     /// 该流的代号(每次起播 / 预排 +1),下载侧据此过滤迟到信号。
     pub(crate) stream_gen: u64,
 
-    /// decoder 探到的时长(ms,0 = 未知)。
-    pub(crate) duration_ms: u64,
+    /// decoder 探到的时长(ms);`None` = 探不出(分片容器流式打开无总长)。
+    pub(crate) duration_ms: Option<u64>,
 
     /// 进度载体里属于本槽的下标(0/1),snapshot 读缓冲 / 完成据此定位。
     pub(crate) progress_idx: usize,
@@ -87,18 +87,14 @@ impl PlayHead {
         GaplessFields {
             current_track_token: self.track_token,
             track_finished_seq: self.finished_seq,
-            duration_ms: if self.cur.occupied {
-                self.cur.duration_ms
-            } else {
-                0
-            },
+            duration_ms: self.cur.occupied.then_some(self.cur.duration_ms).flatten(),
             buffered_bps,
             download_complete,
-            next_duration_ms: if self.next.occupied {
-                self.next.duration_ms
-            } else {
-                0
-            },
+            next_duration_ms: self
+                .next
+                .occupied
+                .then_some(self.next.duration_ms)
+                .flatten(),
             next_buffered_bps,
             next_ready: self.next.occupied,
             next_download_complete,
@@ -192,8 +188,8 @@ pub(crate) struct GaplessFields {
     /// 单调曲终计数。
     pub(crate) track_finished_seq: u64,
 
-    /// 当前曲时长(ms;未占用为 0)。
-    pub(crate) duration_ms: u64,
+    /// 当前曲时长(ms);`None` = 未占用 / decoder 探不出。
+    pub(crate) duration_ms: Option<u64>,
 
     /// 当前曲缓冲比例。
     pub(crate) buffered_bps: Bps,
@@ -201,8 +197,8 @@ pub(crate) struct GaplessFields {
     /// 当前曲远端是否下完。
     pub(crate) download_complete: bool,
 
-    /// 下一曲时长(ms;未预排为 0)。
-    pub(crate) next_duration_ms: u64,
+    /// 下一曲时长(ms);`None` = 未预排 / decoder 探不出。
+    pub(crate) next_duration_ms: Option<u64>,
 
     /// 下一曲缓冲比例。
     pub(crate) next_buffered_bps: Bps,
@@ -226,14 +222,14 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 1,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });
         assert_eq!(head.track_token, 1, "起播应令牌 +1");
         assert!(head.cur.occupied, "起播后 cur 应占用");
         assert!(!head.next.occupied, "起播后 next 应空");
-        assert_eq!(head.cur.duration_ms, 1000);
+        assert_eq!(head.cur.duration_ms, Some(1000));
     }
 
     /// 单曲自然播完、无 next:len 1→0 报 EndOfQueue,finished_seq +1,cur 释放。
@@ -242,7 +238,7 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 1,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });
@@ -258,14 +254,14 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 1,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });
         head.observe(1); // 稳态
         head.arm_next(Slot {
             stream_gen: 2,
-            duration_ms: 2000,
+            duration_ms: Some(2000),
             progress_idx: 1,
             occupied: true,
         });
@@ -275,7 +271,7 @@ mod tests {
         assert_eq!(head.track_token, token_before + 1, "边界应令牌 +1");
         assert_eq!(head.finished_seq, 1, "边界应曲终 +1");
         assert_eq!(head.cur.stream_gen, 2, "next 应轮转成 cur");
-        assert_eq!(head.cur.duration_ms, 2000);
+        assert_eq!(head.cur.duration_ms, Some(2000));
         assert_eq!(head.cur.progress_idx, 1, "进度下标随轮转带过来");
         assert!(!head.next.occupied, "轮转后 next 应空");
     }
@@ -286,13 +282,13 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 1,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });
         head.arm_next(Slot {
             stream_gen: 2,
-            duration_ms: 2000,
+            duration_ms: Some(2000),
             progress_idx: 1,
             occupied: true,
         });
@@ -312,13 +308,13 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 5,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });
         head.arm_next(Slot {
             stream_gen: 6,
-            duration_ms: 2000,
+            duration_ms: Some(2000),
             progress_idx: 1,
             occupied: true,
         });
@@ -335,10 +331,10 @@ mod tests {
             GaplessFields {
                 current_track_token: 1,
                 track_finished_seq: 0,
-                duration_ms: 1000,
+                duration_ms: Some(1000),
                 buffered_bps: Bps::new(4000),
                 download_complete: true,
-                next_duration_ms: 2000,
+                next_duration_ms: Some(2000),
                 next_buffered_bps: Bps::new(8000),
                 next_ready: true,
                 next_download_complete: false,
@@ -354,7 +350,7 @@ mod tests {
         // 即便 0 号槽残留旧值,未占用也不该读出来。
         progress.slot(0).buffer_bps.store(9999, Ordering::Release);
         let f = head.snapshot_fields(&progress);
-        assert_eq!(f.duration_ms, 0);
+        assert_eq!(f.duration_ms, None);
         assert_eq!(f.buffered_bps, Bps::ZERO, "未占用 cur 缓冲应归零");
         assert!(!f.download_complete);
         assert!(!f.next_ready, "未预排 next_ready 应 false");
@@ -367,7 +363,7 @@ mod tests {
         let mut head = PlayHead::default();
         head.start(Slot {
             stream_gen: 1,
-            duration_ms: 1000,
+            duration_ms: Some(1000),
             progress_idx: 0,
             occupied: true,
         });

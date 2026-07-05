@@ -575,12 +575,12 @@ impl AppState {
         self.browse.current_tracks_slot(self.browse_model())
     }
 
-    /// 给定歌单的总时长(ms);槽位未到位时返回 0。
+    /// 给定歌单的总时长(ms);槽位未到位时返回 0。未知时长的曲目不计入(只反映已知部分)。
     pub fn total_duration_ms_of(&self, id: &PlaylistId) -> u64 {
         self.library
             .tracks
             .get(id)
-            .map(|tracks| tracks.iter().map(|sv| sv.data.duration_ms).sum())
+            .map(|tracks| tracks.iter().filter_map(|sv| sv.data.duration_ms).sum())
             .unwrap_or(0)
     }
 

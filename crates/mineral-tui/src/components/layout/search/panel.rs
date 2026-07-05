@@ -497,8 +497,11 @@ pub(super) fn join_artists(artists: &[ArtistRef]) -> String {
         .join(", ")
 }
 
-/// 时长 ms → `m:ss`(结果列右侧;与 library 同款格式)。
-pub(super) fn format_duration(ms: u64) -> String {
+/// 时长 ms → `m:ss`(结果列右侧;与 library 同款格式);未知(`None`)画 `-:--`。
+pub(super) fn format_duration(ms: Option<u64>) -> String {
+    let Some(ms) = ms else {
+        return "-:--".to_owned();
+    };
     let secs = ms / 1000;
     format!("{}:{:02}", secs / 60, secs % 60)
 }

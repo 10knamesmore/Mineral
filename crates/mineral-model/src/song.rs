@@ -34,9 +34,10 @@ pub struct Song {
     #[builder(default)]
     pub album: Option<AlbumRef>,
 
-    /// 时长(ms),拿不到给 0。
+    /// 时长(ms);`None` = **未知**(来源接口没给 / 本地文件未探)——与「真的 0 ms」区分开,
+    /// 展示层据此画占位而非 `0:00`,预排窗口等下游据此显式回落而非静默吃 0。
     #[builder(default)]
-    pub duration_ms: u64,
+    pub duration_ms: Option<u64>,
 
     /// 封面图。远端 channel 通常给 `Remote(http(s)://...)`,
     /// 本地源若有内嵌封面可以给 `Local(...)` 指向缓存出来的文件。

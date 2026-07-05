@@ -1,12 +1,12 @@
 ---
-source: crates/mineral-tui/src/components/layout/transport.rs
+source: crates/mineral-tui/src/components/layout/shared/transport.rs
 description: "播放栏:无曲目空态"
 expression: t.backend()
 ---
 "╭ transport ─────────────────────────────────────╮"
 "│                        —                       │"
 "│                        ·                       │"
-"│ 0:00 ●─────────────────────────────────── 0:00 │"
+"│ 0:00 ●─────────────────────────────────── -:-- │"
 "│              [⏮]   [▶]   [⏭]   [→]             │"
 "│               p     ␣     n     m              │"
 "│ vol ██████████     mode seq              fmt — │"

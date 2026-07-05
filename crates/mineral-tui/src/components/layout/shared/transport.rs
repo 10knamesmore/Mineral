@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::theme::Theme;
-use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage, format_ms};
+use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage, format_ms, format_ms_opt};
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
@@ -83,7 +83,7 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         return;
     }
     let elapsed = format_ms(pb.position_ms);
-    let total = format_ms(pb.duration_ms());
+    let total = format_ms_opt(pb.duration_ms());
     // 留 elapsed + 1 + (bar) + 1 + total + 1*2 padding
     let reserve = u16::try_from(elapsed.len() + total.len() + 4).unwrap_or(area.width);
     let bar_w = usize::from(area.width.saturating_sub(reserve));

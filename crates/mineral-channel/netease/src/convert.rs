@@ -106,7 +106,8 @@ pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
             id: AlbumId::new(SourceKind::NETEASE, s.al.id.to_string()),
             name: s.al.name,
         }))
-        .duration_ms(s.dt)
+        // 接口用 dt=0 表示时长未知,在 channel 边界转成 None,0 哨兵不进模型。
+        .duration_ms((s.dt > 0).then_some(s.dt))
         .cover_url(s.al.pic_url.as_deref().and_then(parse_remote))
         .unavailable(s.privilege.as_ref().is_some_and(|p| p.st < 0))
         .build()

@@ -15,7 +15,7 @@ pub enum AudioBackend {
     Null,
 }
 
-/// 当前引擎状态的只读视图。`duration_ms == 0` 表示 decoder 尚未探出时长(或没在播)。
+/// 当前引擎状态的只读视图。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioSnapshot {
     /// 是否正在出声(暂停 / 已结束 / 没有曲目时为 false)。
@@ -24,8 +24,9 @@ pub struct AudioSnapshot {
     /// 当前播放位置(ms)。
     pub position_ms: u64,
 
-    /// 当前曲目时长(ms);decoder 没探出来时为 0。
-    pub duration_ms: u64,
+    /// 当前曲目时长(ms);`None` = decoder 没探出来(分片容器流式打开探不出总长)或没在播。
+    /// 消费方需要总长时应显式回落别的口径(如歌曲元数据),不要默认吃 0。
+    pub duration_ms: Option<u64>,
 
     /// 当前音量(0..=100)。
     pub volume_pct: u8,
@@ -53,8 +54,8 @@ pub struct AudioSnapshot {
     /// 比单调 `track_finished_seq` 的边沿更稳:漏一个 tick 也不会丢轨(值对不上就重新对齐)。
     pub current_track_token: u64,
 
-    /// 已预排的下一曲时长(ms);未预排 / 未知为 0。
-    pub next_duration_ms: u64,
+    /// 已预排的下一曲时长(ms);`None` = 未预排 / decoder 未探出。
+    pub next_duration_ms: Option<u64>,
 
     /// 已预排的下一曲缓冲比例;未预排恒零。
     pub next_buffered_bps: Bps,

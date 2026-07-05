@@ -88,7 +88,7 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
 /// 为本地命中的文件构造 [`PlayUrl`],供 transport 显 format / bitrate / 位深。
 ///
 /// format、bitrate、位深都按**文件内容**经 lofty 读出(见 [`probe_format_props`],不信文件名
-/// 扩展名)。lofty 取不到 bitrate 时回退「文件大小 / 时长」的均值估算;时长未知(0)或 stat 失败
+/// 扩展名)。lofty 取不到 bitrate 时回退「文件大小 / 时长」的均值估算;时长未知或 stat 失败
 /// 时 bitrate 记 0。位深仅无损容器有值,有损 / 取不到为 `None`。
 ///
 /// # Params:
@@ -190,14 +190,14 @@ fn read_audio_props(path: &Path, ft: lofty::file::FileType) -> (Option<u32>, Opt
 ///
 /// # Params:
 ///   - `size`: 文件字节数
-///   - `duration_ms`: 时长(ms),0 表示未知
+///   - `duration_ms`: 时长(ms);`None` = 未知
 ///
 /// # Return:
-///   估算 bps;时长未知(checked_div → None)或溢出为 `None`。
-fn est_bitrate_bps(size: u64, duration_ms: u64) -> Option<u32> {
+///   估算 bps;时长未知 / 为 0 或溢出为 `None`。
+fn est_bitrate_bps(size: u64, duration_ms: Option<u64>) -> Option<u32> {
     // size(B) * 8(bit/B) * 1000(ms/s) / duration(ms) = bit/s。
     size.saturating_mul(8000)
-        .checked_div(duration_ms)
+        .checked_div(duration_ms?)
         .and_then(|bps| u32::try_from(bps).ok())
 }
 
@@ -531,7 +531,7 @@ mod tests {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let mut s = song("1", "晴天", Some("叶惠美"));
-        s.duration_ms = 1000; // 1s
+        s.duration_ms = Some(1000); // 1s
         // 内容是 WAV,但 put_download 用 Flac 决定盘上扩展名 → 文件名是 .flac。
         let abs = put_download(
             &root,
@@ -567,7 +567,7 @@ mod tests {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let mut s = song("1", "晴天", Some("叶惠美"));
-        s.duration_ms = 1000;
+        s.duration_ms = Some(1000);
         // 16000B / 1s → 128_000 bps(走估算兜底)。
         let abs = put_download(
             &root,
@@ -583,12 +583,12 @@ mod tests {
         Ok(())
     }
 
-    /// 既识别不出格式、时长又未知(0)→ bitrate 记 0(估算 checked_div 不除零)。
+    /// 既识别不出格式、时长又未知(None)→ bitrate 记 0(估算直接短路)。
     #[tokio::test]
     async fn local_play_url_unknown_content_zero_duration() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
-        let s = song("1", "晴天", Some("叶惠美")); // duration_ms = 0
+        let s = song("1", "晴天", Some("叶惠美")); // duration_ms = None
         let abs = put_download(
             &root,
             &s,

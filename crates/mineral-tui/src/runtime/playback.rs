@@ -35,10 +35,10 @@ pub struct Playback {
     /// 当前曲目采样率(Hz),由 audio engine 实测灌入;0 = 未在播 / 未探出。transport 在 fmt 段显示。
     pub sample_rate_hz: u32,
 
-    /// 当前曲目 decoder 实测时长(ms);0 = 未探出(刚起播 / 部分容器探不出)。
+    /// 当前曲目 decoder 实测时长(ms);`None` = 未探出(刚起播 / 分片容器流式打开探不出)。
     /// 与 song 元数据时长([`Self::duration_ms`])是两个口径:顶换流场景二者之差
     /// 是判断歌词时间轴是否失真的依据。
-    pub engine_duration_ms: u64,
+    pub engine_duration_ms: Option<u64>,
 
     /// 下一曲 gapless 预排状态。transport 据此显预排标记。
     pub prefetch: Prefetch,
@@ -124,27 +124,30 @@ impl Playback {
             audio_backend: AudioBackend::Device,
             buffered_bps: Bps::ZERO,
             sample_rate_hz: 0,
-            engine_duration_ms: 0,
+            engine_duration_ms: None,
             prefetch: Prefetch::default(),
         }
     }
 
-    /// 当前曲目时长(ms),没有 track 时返回 0。优先取 song 元数据,因为 decoder
-    /// 探出 duration 比 song 元数据慢一帧、且部分容器探不出来。
+    /// 当前曲目时长(ms);`None` = 无 track / 两口径都未知。优先取 song 元数据,
+    /// 因为 decoder 探出 duration 比 song 元数据慢一帧、且部分容器探不出来。
     ///
     /// 例外:**顶换流**([`mineral_model::PlayUrl::substituted`])的元数据时长描述的
     /// 是原源音频,不是实际在播的流——decoder 一探出实测就切实测(总时长 / 进度条 /
     /// 按比例 seek 随之对齐替身流);未探出前仍回落元数据。
-    pub fn duration_ms(&self) -> u64 {
-        if self.play_url.as_ref().is_some_and(|u| u.substituted) && self.engine_duration_ms > 0 {
-            return self.engine_duration_ms;
+    pub fn duration_ms(&self) -> Option<u64> {
+        if self.play_url.as_ref().is_some_and(|u| u.substituted)
+            && let Some(engine) = self.engine_duration_ms
+        {
+            return Some(engine);
         }
-        self.track.as_ref().map_or(0, |t| t.duration_ms)
+        self.track.as_ref().and_then(|t| t.duration_ms)
     }
 
     /// 播放进度比例(已播 ms / 总时长 ms;无 track / 时长未知恒零)。
     pub fn ratio_bps(&self) -> Bps {
-        Bps::ratio(self.position_ms, self.duration_ms())
+        self.duration_ms()
+            .map_or(Bps::ZERO, |total| Bps::ratio(self.position_ms, total))
     }
 
     /// 归纳当前播放的歌词时间轴信任档(判定口径见 [`SyncTrust`])。
@@ -156,10 +159,11 @@ impl Playback {
             return SyncTrust::Native;
         }
         // 必须直读 song 元数据:`duration_ms()` 对顶换流已切实测口径,拿它比实测差恒 0。
-        let meta = self.track.as_ref().map_or(0, |t| t.duration_ms);
-        let engine = self.engine_duration_ms;
+        let meta = self.track.as_ref().and_then(|t| t.duration_ms);
         // 任一口径未知(刚起播 / 容器探不出 / 元数据缺)先按可用处理,探出后自然降档。
-        if meta > 0 && engine > 0 && engine.abs_diff(meta) > SUBSTITUTED_DURATION_SLACK_MS {
+        if let (Some(meta), Some(engine)) = (meta, self.engine_duration_ms)
+            && engine.abs_diff(meta) > SUBSTITUTED_DURATION_SLACK_MS
+        {
             SyncTrust::Broken
         } else {
             SyncTrust::Borrowed
@@ -197,6 +201,11 @@ pub fn format_ms(ms: u64) -> String {
     format!("{m}:{s:02}")
 }
 
+/// `mm:ss` 格式化;时长未知(`None`)画 `-:--` 占位(与真实 `0:00` 区分,宽度同最小 `m:ss`)。
+pub fn format_ms_opt(ms: Option<u64>) -> String {
+    ms.map_or_else(|| "-:--".to_owned(), format_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use mineral_audio::Bps;
@@ -211,7 +220,7 @@ mod tests {
             Song::builder()
                 .id(SongId::new(SourceKind::LOCAL, "t"))
                 .name("t".to_owned())
-                .duration_ms(duration_ms)
+                .duration_ms(Some(duration_ms))
                 .build(),
         );
         pb.position_ms = position_ms;
@@ -238,15 +247,15 @@ mod tests {
         };
         let mut pb = with_track(/*duration_ms*/ 269_000, /*position_ms*/ 0);
         pb.play_url = Some(play_url(/*substituted*/ false));
-        pb.engine_duration_ms = 300_000;
+        pb.engine_duration_ms = Some(300_000);
         assert_eq!(pb.sync_trust(), SyncTrust::Native, "原源流时长差不参与");
 
         pb.play_url = Some(play_url(/*substituted*/ true));
-        pb.engine_duration_ms = 0;
+        pb.engine_duration_ms = None;
         assert_eq!(pb.sync_trust(), SyncTrust::Borrowed, "未探出先不判失真");
-        pb.engine_duration_ms = 270_500;
+        pb.engine_duration_ms = Some(270_500);
         assert_eq!(pb.sync_trust(), SyncTrust::Borrowed, "差 1.5s 在容忍内");
-        pb.engine_duration_ms = 280_000;
+        pb.engine_duration_ms = Some(280_000);
         assert_eq!(pb.sync_trust(), SyncTrust::Broken, "差 11s 判失真");
     }
 
@@ -269,11 +278,11 @@ mod tests {
         assert_eq!(with_track(1000, 5000).ratio_bps(), Bps::FULL);
     }
 
-    /// `duration_ms`:取 track 元数据,无 track → 0。
+    /// `duration_ms`:取 track 元数据,无 track → `None`。
     #[test]
     fn duration_ms_from_track() {
-        assert_eq!(Playback::new().duration_ms(), 0);
-        assert_eq!(with_track(4242, 0).duration_ms(), 4242);
+        assert_eq!(Playback::new().duration_ms(), None);
+        assert_eq!(with_track(4242, 0).duration_ms(), Some(4242));
     }
 
     /// `duration_ms` 顶换流口径:实测探出后切实测(元数据描述的是原源音频),
@@ -293,15 +302,15 @@ mod tests {
             layout: mineral_model::StreamLayout::Chunked,
             substituted: true,
         });
-        assert_eq!(pb.duration_ms(), 296_533, "未探出前回落元数据");
-        pb.engine_duration_ms = 298_000;
-        assert_eq!(pb.duration_ms(), 298_000, "探出后以替身流实测为准");
+        assert_eq!(pb.duration_ms(), Some(296_533), "未探出前回落元数据");
+        pb.engine_duration_ms = Some(298_000);
+        assert_eq!(pb.duration_ms(), Some(298_000), "探出后以替身流实测为准");
 
         // 原源流:实测在手也不切口径。
         if let Some(pu) = pb.play_url.as_mut() {
             pu.substituted = false;
         }
-        assert_eq!(pb.duration_ms(), 296_533, "原源流恒元数据");
+        assert_eq!(pb.duration_ms(), Some(296_533), "原源流恒元数据");
     }
 
     /// gapless 无缝边界:current_song 翻成新曲 + position 归零时,进度条按**新曲**时长重缩放

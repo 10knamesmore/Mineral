@@ -1096,7 +1096,7 @@ mod tests {
                     id: AlbumId::new(SourceKind::NETEASE, id),
                     name: album.to_owned(),
                 }))
-                .duration_ms(dur)
+                .duration_ms(Some(dur))
                 .build()
         };
         let songs = vec![
@@ -1189,7 +1189,7 @@ mod tests {
                     id: AlbumId::new(SourceKind::NETEASE, "al1"),
                     name: album.to_owned(),
                 }))
-                .duration_ms(dur)
+                .duration_ms(Some(dur))
                 .build()
         };
         let detail = Artist::builder()
