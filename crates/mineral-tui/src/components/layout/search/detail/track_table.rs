@@ -154,12 +154,50 @@ pub fn track_row(
         )));
     }
     cells.push(Cell::from(Line::from(format_duration(song.duration_ms))));
-    Row::new(cells)
+    let row = Row::new(cells);
+    if song.unavailable {
+        row.style(theme.unavailable_row())
+    } else {
+        row
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::TrackColumns;
+
+    /// unavailable 行整行 DIM 降权、正常行不带;样式断言(文本快照显不出 modifier)。
+    #[test]
+    fn unavailable_row_is_dimmed() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Modifier;
+        use ratatui::widgets::Table;
+
+        use crate::render::theme::Theme;
+
+        let theme = Theme::default();
+        let normal = mineral_test::song("ok");
+        let mut grey = mineral_test::song("grey");
+        grey.unavailable = true;
+        let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
+        let rows = vec![
+            super::track_row(
+                &normal, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
+            ),
+            super::track_row(
+                &grey, 1, /*loved*/ false, /*is_current*/ false, cols, &theme,
+            ),
+        ];
+        let mut t = Terminal::new(TestBackend::new(40, 4))?;
+        t.draw(|f| f.render_widget(Table::new(rows, cols.widths()), f.area()))?;
+        let buf = t.backend().buffer();
+        // 无表头:y=0 正常行、y=1 灰行;x=8 落在 title 列内。
+        let dim_at = |y: u16| buf.cell((8, y)).map(|c| c.modifier.contains(Modifier::DIM));
+        assert_eq!(dim_at(0), Some(false), "正常行不得 DIM");
+        assert_eq!(dim_at(1), Some(true), "unavailable 行应整行 DIM");
+        Ok(())
+    }
 
     /// 列集不变量：表头单元格数必须等于列宽约束数（否则 ratatui 错位）。覆盖四种组合。
     #[test]

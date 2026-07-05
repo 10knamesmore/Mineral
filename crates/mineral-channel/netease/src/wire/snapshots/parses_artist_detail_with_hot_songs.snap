@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-channel/netease/src/wire/artist.rs
-assertion_line: 126
 description: 歌手详情(Beyond + 热门曲海阔天空)解析结构
 expression: r
 ---
@@ -36,6 +35,7 @@ ArtistDetailResult {
                 pic_url: None,
             },
             dt: 323000,
+            privilege: None,
         },
     ],
 }

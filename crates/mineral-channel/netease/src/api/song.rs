@@ -14,9 +14,12 @@ type Result<T> = color_eyre::Result<T>;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
-use crate::wire::song::{AlbumSong, FirstListenInfo, SongUrl};
+use crate::wire::song::{AlbumSong, FirstListenInfo, Privilege, SongUrl, merge_privileges};
 
 /// 详情:`/weapi/v3/song/detail`。返回 `ar`/`al`/`dt` 形态的 wire DTO(映射归 `convert`）。
+///
+/// 权限块在响应根的平行数组 `privileges`(与 `songs` 按 id 对应),这里对回
+/// 每首歌——判可播性(`st < 0` 灰)靠它。
 pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<AlbumSong>> {
     let c: Vec<serde_json::Value> = ids.iter().map(|i| json!({ "id": i.as_str() })).collect();
     let mut p = serde_json::Map::new();
@@ -33,7 +36,14 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<A
     let songs = v
         .get("songs")
         .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
-    crate::wire::de::from_value(songs.clone())
+    let mut songs: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
+    // privileges 缺失(旧形态/异常响应)不致命,只是判不了灰。
+    let privileges: Vec<Privilege> = match v.get("privileges") {
+        Some(raw) => crate::wire::de::from_value(raw.clone())?,
+        None => Vec::new(),
+    };
+    merge_privileges(&mut songs, privileges);
+    Ok(songs)
 }
 
 /// 播放 URL · v1(`/weapi/song/enhance/player/url/v1`,字符串等级)。返回 wire DTO 列表。

@@ -13,8 +13,10 @@ use crate::write::{PlaylistWriteOp, WriteError};
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
 /// 失败任务不发 event(只在 [`crate::TaskHandle::done`] 上拿到 [`crate::TaskOutcome::Failed`]),
-/// 详细错误进 mineral-log。**例外:[`TaskEvent::PlaylistWriteDone`] 失败也发**——
+/// 详细错误进 mineral-log。**例外之一:[`TaskEvent::PlaylistWriteDone`] 失败也发**——
 /// 写操作的失败必须到达用户(toast + 清 pending 标记),不能只留在日志里。
+/// **例外之二:[`TaskEvent::SongUrlFailed`]**——取链失败是播放钩子的 `unplayable`
+/// 触发信号(脚本可跨源补救),必须进事件循环而不只是日志。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
@@ -61,6 +63,14 @@ pub enum TaskEvent {
 
         /// 解析出的播放 URL + 元信息。
         play_url: PlayUrl,
+    },
+
+    /// `SongUrl` 任务失败(channel 报错 / 返回空 url 列表):这首当下无可播 URL。
+    /// server 据此在提交点 fire `before_stream`(`unplayable` 信号),脚本可跨源
+    /// 补救;无脚本时维持原失败语义。取消的任务(切歌砍队)不发。
+    SongUrlFailed {
+        /// 关联的歌曲 id。
+        song_id: SongId,
     },
 
     /// `Lyrics` 任务成功:歌词数据就绪。

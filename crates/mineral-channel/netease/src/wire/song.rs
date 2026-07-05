@@ -30,6 +30,19 @@ pub struct Album {
     pub pic_url: Option<String>,
 }
 
+/// 单曲权限块。cloudsearch 内联在每首歌上(`privilege`);song/detail 与歌单 detail
+/// 在响应根给平行数组(`privileges`),由 [`merge_privileges`] 按 id 对回。
+/// 只解析判可播性所需字段。
+#[derive(Debug, Clone, Deserialize)]
+pub struct Privilege {
+    /// 歌曲 ID(平行数组形态按它对回歌曲)。
+    pub id: i64,
+
+    /// 状态:`0` 正常;`< 0` = 本源无可播资源(实测下架灰歌为 `-200`)。
+    #[serde(default)]
+    pub st: i64,
+}
+
 /// 专辑/歌单详情里出现的歌曲（用 `ar`、`al`、`dt` 字段）。
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlbumSong {
@@ -54,6 +67,27 @@ pub struct AlbumSong {
     /// 时长（毫秒，字段名为 `dt`）。
     #[serde(default)]
     pub dt: u64,
+
+    /// 权限块(cloudsearch 内联;detail/歌单端点缺,由 [`merge_privileges`] 补)。
+    #[serde(default)]
+    pub privilege: Option<Privilege>,
+}
+
+/// 把响应根的平行 `privileges` 按 id 对回歌曲;已有内联权限块的不覆盖。
+///
+/// # Params:
+///   - `songs`: 待补权限块的歌曲列表
+///   - `privileges`: 响应根的平行数组(缺失时传空,no-op)
+pub fn merge_privileges(songs: &mut [AlbumSong], privileges: Vec<Privilege>) {
+    let mut by_id = privileges
+        .into_iter()
+        .map(|p| (p.id, p))
+        .collect::<rustc_hash::FxHashMap<i64, Privilege>>();
+    for song in songs {
+        if song.privilege.is_none() {
+            song.privilege = by_id.remove(&song.id);
+        }
+    }
 }
 
 /// 播放 URL 端点的单首歌响应。
@@ -77,6 +111,28 @@ pub struct SongUrl {
     /// 文件格式（如 `mp3` / `flac`），网易返回的字段名是 `type`。
     #[serde(default, rename = "type")]
     pub format: Option<String>,
+
+    /// 单曲级状态码:`200` 可播;非 200(实测灰歌为 `404`)= 这首在本源无可播资源,
+    /// 此时 `url` 为 null。注意信封 code 恒 200,灰只体现在这里。缺失落 `None`
+    /// (旧响应形态,可播性回退看 `url`)。
+    #[serde(default)]
+    pub code: Option<i64>,
+
+    /// 试听片段信息;非空 = `url` 只是试听片段(VIP 曲未授权),**不算可播**。
+    #[serde(default, rename = "freeTrialInfo")]
+    pub free_trial_info: Option<FreeTrialInfo>,
+}
+
+/// 试听片段的起止秒(只用于「存在与否」判断,字段容缺)。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FreeTrialInfo {
+    /// 片段起点(秒)。
+    #[serde(default)]
+    pub start: Option<i64>,
+
+    /// 片段终点(秒)。
+    #[serde(default)]
+    pub end: Option<i64>,
 }
 
 /// 回忆坐标端点（`/api/content/activity/music/first/listen/info`）响应。
@@ -168,6 +224,35 @@ mod tests {
         let raw = serde_json::json!({ "code": 200 });
         let info: FirstListenInfo = from_value(raw)?;
         assert!(info.data.is_none(), "data 缺失应解析成 None");
+        Ok(())
+    }
+
+    /// 平行 `privileges` 按 id 对回;已有内联权限块的不覆盖;数组缺条目的歌保持 `None`。
+    #[test]
+    fn merge_privileges_matches_by_id_without_overwriting_inline() -> color_eyre::Result<()> {
+        use super::{Privilege, merge_privileges};
+
+        let mut songs: Vec<AlbumSong> = from_value(serde_json::json!([
+            { "id": 1, "name": "a", "al": { "id": 10, "name": "x" } },
+            { "id": 2, "name": "b", "al": { "id": 11, "name": "y" },
+              "privilege": { "id": 2, "st": 0 } },
+            { "id": 3, "name": "c", "al": { "id": 12, "name": "z" } }
+        ]))?;
+        let privileges: Vec<Privilege> = from_value(serde_json::json!([
+            { "id": 1, "st": -200 },
+            { "id": 2, "st": -200 }
+        ]))?;
+        merge_privileges(&mut songs, privileges);
+
+        let st_of = |i: usize| {
+            songs
+                .get(i)
+                .and_then(|s| s.privilege.as_ref())
+                .map(|p| p.st)
+        };
+        assert_eq!(st_of(0), Some(-200), "平行数组按 id 对回");
+        assert_eq!(st_of(1), Some(0), "内联权限块不被平行数组覆盖");
+        assert_eq!(st_of(2), None, "数组缺条目的歌保持 None");
         Ok(())
     }
 }

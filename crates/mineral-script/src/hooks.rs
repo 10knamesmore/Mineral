@@ -1,15 +1,19 @@
-//! 同步拦截 hook(`before_play` / `before_download`)的类型面:拦截点
-//! 类别、入参快照与裁决结果。纯数据,不碰播放 / 下载执行面;往返管线在
-//! [`ScriptSender::intercept`](crate::ScriptSender::intercept)(daemon 侧)
-//! 与 dispatch 层(脚本侧)。
+//! 同步拦截 hook(`before_stream` / `before_download`)的类型面:拦截点
+//! 类别、提交点口味、per-kind 入参快照与裁决结果。纯数据,不碰播放 / 下载
+//! 执行面;往返管线在 [`ScriptSender`](crate::ScriptSender) 的类型化拦截
+//! 入口(daemon 侧)与 dispatch 层(脚本侧)。
+//!
+//! 每个拦截点各有一个 ctx struct(字段集互不迁就),新增拦截点 = 新 struct +
+//! 新消息变体 + 新发送入口,不动既有类型。
 
-use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, StreamLayout};
+use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song, StreamLayout};
 
-/// 拦截点类别。
+/// 拦截点类别(注册名 / 回调桶键)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HookKind {
-    /// 播放 URL 解析后、起播前。
-    BeforePlay,
+    /// 一首歌走向「开播」的提交点:即时起播前 / gapless 预取武装前
+    /// (两个提交点共用本类别,由 [`BeforeStreamCtx`] 的 `mode` 区分口味)。
+    BeforeStream,
 
     /// 下载直链取得后、写盘前。
     BeforeDownload,
@@ -17,7 +21,7 @@ pub enum HookKind {
 
 impl HookKind {
     /// 全部拦截点(`mineral.hook` 错误信息 / meta 守卫测试用)。
-    pub const ALL: [Self; 2] = [Self::BeforePlay, Self::BeforeDownload];
+    pub const ALL: [Self; 2] = [Self::BeforeStream, Self::BeforeDownload];
 
     /// 按 hook 名解析(与 [`Self::as_str`] 对偶);未知名为 `None`。
     ///
@@ -29,7 +33,7 @@ impl HookKind {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "before_play" => Some(Self::BeforePlay),
+            "before_stream" => Some(Self::BeforeStream),
             "before_download" => Some(Self::BeforeDownload),
             _ => None,
         }
@@ -39,34 +43,65 @@ impl HookKind {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::BeforePlay => "before_play",
+            Self::BeforeStream => "before_stream",
             Self::BeforeDownload => "before_download",
         }
     }
 }
 
-/// 一次同步拦截的入参快照(只读,跨线程 move 给脚本线程)。
+/// 提交点口味:同一个决策 hook 在哪个提交点 fire。
+///
+/// host 按口味给预算并解释裁决(`Prefetch` 有整段预取窗口的异步预算、`Skip` 落为
+/// 否决预排;`Immediate` 预算短、`Skip` 落为推进),**脚本逻辑可与口味无关**
+/// (简单脚本不必区分)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookMode {
+    /// 即时:当前歌 URL 解析就绪、起播前(手动点播 / 边界兜底);下载链路恒为此口味。
+    Immediate,
+
+    /// 预取:gapless 预取的下一首武装进引擎 next 槽之前(曲尾窗口内,关键路径外)。
+    Prefetch,
+}
+
+impl HookMode {
+    /// 口味字符串(Lua ctx 的 `mode` 字段)。
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Immediate => "immediate",
+            Self::Prefetch => "prefetch",
+        }
+    }
+}
+
+/// `before_stream` 的入参快照(只读,跨线程 move 给脚本线程)。
 #[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct HookContext {
+pub struct BeforeStreamCtx {
     /// 触发拦截的歌。
     song: Box<Song>,
 
-    /// 宿主解析出的原始播放 URL(`before_play`)/ 下载直链(`before_download`)。
-    original: Box<PlayUrl>,
+    /// 宿主解析出的原始播放 URL;`None` = 解析失败(取链失败 / 灰歌),
+    /// 即「unplayable」信号——脚本可改写顶入可播流。
+    original: Option<Box<PlayUrl>>,
+
+    /// 提交点口味。
+    mode: HookMode,
 }
 
-impl HookContext {
+impl BeforeStreamCtx {
     /// 打包入参快照。
     ///
     /// # Params:
     ///   - `song`: 触发歌
-    ///   - `original`: 原始 URL
+    ///   - `mode`: 提交点口味
+    ///   - `original`: 原始 URL;`None` = 无可播 URL(unplayable)
     #[must_use]
-    pub fn new(song: Song, original: PlayUrl) -> Self {
+    pub fn new(song: Song, mode: HookMode, original: Option<PlayUrl>) -> Self {
         Self {
             song: Box::new(song),
-            original: Box::new(original),
+            original: original.map(Box::new),
+            mode,
         }
     }
 
@@ -76,18 +111,75 @@ impl HookContext {
         &self.song
     }
 
-    /// 原始 URL / 音质(只读)。
+    /// 原始 URL / 音质(只读);`None` = 无可播 URL。
     #[must_use]
-    pub fn original(&self) -> &PlayUrl {
-        &self.original
+    pub fn original(&self) -> Option<&PlayUrl> {
+        self.original.as_deref()
+    }
+
+    /// 提交点口味。
+    #[must_use]
+    pub fn mode(&self) -> HookMode {
+        self.mode
+    }
+
+    /// 是否「无可播 URL」(取链失败 / 灰歌)——`original` 缺席的便利投影。
+    #[must_use]
+    pub fn unplayable(&self) -> bool {
+        self.original.is_none()
+    }
+}
+
+/// `before_download` 的入参快照(只读,跨线程 move 给脚本线程)。
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct BeforeDownloadCtx {
+    /// 待下载的歌。
+    song: Box<Song>,
+
+    /// 取到的下载直链;`None` = 宿主没解析出直链。
+    original: Option<Box<PlayUrl>>,
+}
+
+impl BeforeDownloadCtx {
+    /// 打包入参快照。
+    ///
+    /// # Params:
+    ///   - `song`: 待下载歌
+    ///   - `original`: 下载直链;`None` = 无直链
+    #[must_use]
+    pub fn new(song: Song, original: Option<PlayUrl>) -> Self {
+        Self {
+            song: Box::new(song),
+            original: original.map(Box::new),
+        }
+    }
+
+    /// 待下载歌(只读)。
+    #[must_use]
+    pub fn song(&self) -> &Song {
+        &self.song
+    }
+
+    /// 下载直链 / 音质(只读);`None` = 无直链。
+    #[must_use]
+    pub fn original(&self) -> Option<&PlayUrl> {
+        self.original.as_deref()
+    }
+
+    /// 是否无直链——`original` 缺席的便利投影。
+    #[must_use]
+    pub fn unplayable(&self) -> bool {
+        self.original.is_none()
     }
 }
 
 /// 一次同步拦截的裁决结果。
 ///
 /// 脚本回调用返回值表达(`nil` 放行 / table 改写 / `false` 或 `{skip=...}`
-/// 跳过),dispatch 层收敛成本枚举;超时 / 线程退出 / Lua 错误一律按
-/// [`Self::Continue`] 放行(拦截失败不致命)。
+/// 跳过 / [`mineral.DEFER`](crate) 延迟稍后经 `ctx.resolve` 补交),dispatch 层
+/// 收敛成本枚举;超时 / 线程退出 / Lua 错误一律按 [`Self::Continue`] 放行
+/// (拦截失败不致命)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HookDecision {
     /// 放行,沿用原 URL / 原音质。
@@ -96,7 +188,8 @@ pub enum HookDecision {
     /// 用脚本改写后的 URL / 音质继续(多源 fallback 场景)。
     Rewrite(RewriteSpec),
 
-    /// 跳过本次播放 / 下载;宿主据此降级(播放跳下一首 / 下载记 skip)。
+    /// 跳过本次播放 / 下载;宿主据此降级(即时口味推进下一首 / 预取口味
+    /// 否决预排 / 下载记 skip)。
     Skip {
         /// 跳过原因(toast + 日志,人读)。
         reason: String,
@@ -120,6 +213,13 @@ pub struct RewriteSpec {
     /// 当改写把 URL 顶换成不同容器的流时,脚本据目标布局设置(分片流置 `Chunked` 让播放层流式
     /// 打开、直链置 `Contiguous` 保留 seek)。
     pub(crate) layout: Option<StreamLayout>,
+
+    /// 顶换流的实测码率(bps);`None` = 脚本没给(展示层显 0)。纯展示元信息,
+    /// 不参与播放决策——补救脚本从 `library.song_url` 拿到真值时透传。
+    pub(crate) bitrate_bps: Option<u32>,
+
+    /// 顶换流的容器格式;`None` = 脚本没给(展示层显缺失)。同为纯展示元信息。
+    pub(crate) format: Option<AudioFormat>,
 }
 
 impl RewriteSpec {
@@ -145,6 +245,18 @@ impl RewriteSpec {
     #[must_use]
     pub fn layout(&self) -> Option<StreamLayout> {
         self.layout
+    }
+
+    /// 顶换流的实测码率(bps,只读);`None` = 脚本未提供。
+    #[must_use]
+    pub fn bitrate_bps(&self) -> Option<u32> {
+        self.bitrate_bps
+    }
+
+    /// 顶换流的容器格式(只读);`None` = 脚本未提供。
+    #[must_use]
+    pub fn format(&self) -> Option<&AudioFormat> {
+        self.format.as_ref()
     }
 }
 

@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-channel/netease/src/wire/search.rs
-assertion_line: 151
 description: 搜索歌曲列表(MyGO 迷星叫 带 tns/封面 / 碧天伴走 缺 tns)解析结构
 expression: r
 ---
@@ -26,6 +25,7 @@ CloudSongsResult {
                 ),
             },
             dt: 248000,
+            privilege: None,
         },
         AlbumSong {
             id: 2,
@@ -43,6 +43,7 @@ CloudSongsResult {
                 pic_url: None,
             },
             dt: 256000,
+            privilege: None,
         },
     ],
 }

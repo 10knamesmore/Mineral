@@ -5,7 +5,8 @@ use mlua::Lua;
 
 use crate::dispatch;
 use crate::host::ScriptHost;
-use crate::message::{ScriptMsg, ScriptSender};
+use crate::message::ScriptMsg;
+use crate::sender::ScriptSender;
 use crate::watchdog::WatchdogConfig;
 
 /// 脚本线程句柄。持有期间线程存活;Drop 发停机信号并 join
@@ -683,6 +684,53 @@ mod tests {
         Ok(())
     }
 
+    /// library.song_url:发 LibrarySongUrl 命令,回投的 PlayUrl 投影字段
+    /// (url/quality/headers/layout)与 hook 改写返回值同形。
+    #[test]
+    fn library_song_url_resolves_play_url_projection() -> color_eyre::Result<()> {
+        use crate::message::{ResolveValue, ScriptCmd};
+        let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
+            r#"
+            mineral.library.song_url("bilibili:BV1xx:1", function(r, err)
+                mineral.ui.toast(r.url .. "|" .. r.quality .. "|" .. r.layout
+                    .. "|" .. r.headers[1][1] .. "=" .. r.headers[1][2])
+            end)
+            "#,
+        )?;
+        let cmd = cmd_rx.try_recv()?;
+        let ScriptCmd::LibrarySongUrl { song, query } = cmd else {
+            color_eyre::eyre::bail!("期望 LibrarySongUrl,实得 {cmd:?}");
+        };
+        assert_eq!(song.qualified(), "bilibili:BV1xx:1");
+        let play_url = mineral_model::PlayUrl {
+            song_id: song,
+            url: "https://cdn.example/a.m4s".parse::<mineral_model::MediaUrl>()?,
+            bitrate_bps: 192_000,
+            quality: mineral_model::BitRate::Exhigh,
+            size: 0,
+            format: mineral_model::AudioFormat::Aac,
+            bit_depth: None,
+            stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com/".to_owned())],
+            layout: mineral_model::StreamLayout::Chunked,
+            substituted: false,
+        };
+        sender.resolve(query, ResolveValue::PlayUrl(Box::new(play_url)));
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(
+            events,
+            vec![Event::Toast {
+                kind: ToastKind::Info,
+                content: vec![TextSpan::plain(
+                    "https://cdn.example/a.m4s|exhigh|chunked|Referer=https://www.bilibili.com/"
+                )],
+                id: None,
+                ttl_secs: None,
+            }],
+            "PlayUrl 投影字段应与 hook 改写返回值同形"
+        );
+        Ok(())
+    }
+
     #[test]
     fn library_apis_emit_cmds_and_resolve() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
@@ -1040,11 +1088,11 @@ mod tests {
         Ok(())
     }
 
-    /// 拦截测试用的入参快照(固定歌 + 远端 URL)。
-    fn hook_ctx() -> color_eyre::Result<crate::hooks::HookContext> {
+    /// 拦截测试用的取流直链(固定歌 + 远端 URL)。
+    fn hook_play_url() -> color_eyre::Result<mineral_model::PlayUrl> {
         use color_eyre::eyre::WrapErr;
         let target = song("1");
-        let play_url = mineral_model::PlayUrl {
+        Ok(mineral_model::PlayUrl {
             song_id: target.id.clone(),
             url: "https://example.com/a.flac"
                 .parse::<mineral_model::MediaUrl>()
@@ -1056,21 +1104,34 @@ mod tests {
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,
-        };
-        Ok(crate::hooks::HookContext::new(target, play_url))
+            substituted: false,
+        })
+    }
+
+    /// `before_stream` 拦截测试用的入参快照。
+    fn hook_ctx() -> color_eyre::Result<crate::hooks::BeforeStreamCtx> {
+        Ok(crate::hooks::BeforeStreamCtx::new(
+            song("1"),
+            crate::hooks::HookMode::Immediate,
+            Some(hook_play_url()?),
+        ))
+    }
+
+    /// `before_download` 拦截测试用的入参快照。
+    fn download_ctx() -> color_eyre::Result<crate::hooks::BeforeDownloadCtx> {
+        Ok(crate::hooks::BeforeDownloadCtx::new(
+            song("1"),
+            Some(hook_play_url()?),
+        ))
     }
 
     #[tokio::test]
     async fn intercept_detached_sender_continues() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         // 未挂线程:拦截天然不存在,立即放行(不等超时)。
         let sender = ScriptSender::detached();
         let decision = sender
-            .intercept(
-                HookKind::BeforePlay,
-                hook_ctx()?,
-                std::time::Duration::from_secs(60),
-            )
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(60))
             .await;
         assert_eq!(decision, HookDecision::Continue);
         Ok(())
@@ -1078,15 +1139,11 @@ mod tests {
 
     #[tokio::test]
     async fn intercept_no_hooks_registered_continues() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         // 有脚本但未注册 hook:脚本线程立即回执放行。
         let (runtime, sender, _push_rx) = spawn_with_script("-- 无 hook")?;
         let decision = sender
-            .intercept(
-                HookKind::BeforeDownload,
-                hook_ctx()?,
-                std::time::Duration::from_secs(5),
-            )
+            .intercept_download(download_ctx()?, std::time::Duration::from_secs(5))
             .await;
         assert_eq!(decision, HookDecision::Continue);
         drop(runtime);
@@ -1095,18 +1152,14 @@ mod tests {
 
     #[tokio::test]
     async fn intercept_timeout_falls_back_to_continue() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         // 挂一条没人消费的通道:回执永不到 → 墙钟超时放行。
         let sender = ScriptSender::detached();
         let (tx, rx) = std::sync::mpsc::channel();
         sender.attach(tx);
         let started = std::time::Instant::now();
         let decision = sender
-            .intercept(
-                HookKind::BeforePlay,
-                hook_ctx()?,
-                std::time::Duration::from_millis(50),
-            )
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_millis(50))
             .await;
         assert_eq!(decision, HookDecision::Continue, "超时必须放行");
         assert!(
@@ -1119,10 +1172,10 @@ mod tests {
 
     #[tokio::test]
     async fn hook_rewrite_returns_structured_spec() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         let (runtime, sender, _push_rx) = spawn_with_script(
             r#"
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 -- ctx 字段可读:据原音质决定改写
                 if ctx.quality == "exhigh" then
                     return { url = "https://fallback.example/b.flac", quality = "standard" }
@@ -1131,11 +1184,7 @@ mod tests {
             "#,
         )?;
         let decision = sender
-            .intercept(
-                HookKind::BeforePlay,
-                hook_ctx()?,
-                std::time::Duration::from_secs(5),
-            )
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
             .await;
         let HookDecision::Rewrite(spec) = decision else {
             color_eyre::eyre::bail!("期望 Rewrite,实得 {decision:?}");
@@ -1149,9 +1198,38 @@ mod tests {
         Ok(())
     }
 
+    /// 改写透传实测元信息:补救脚本从 `library.song_url` 拿到的 bitrate_bps / format
+    /// 原样带回,展示层才有真值可显(否则替身流只剩 engine 实测的采样率)。
+    #[tokio::test]
+    async fn hook_rewrite_carries_bitrate_and_format() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                return {
+                    url = "https://fallback.example/b.m4s",
+                    bitrate_bps = 132000,
+                    format = "m4a",
+                }
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        let HookDecision::Rewrite(spec) = decision else {
+            color_eyre::eyre::bail!("期望 Rewrite,实得 {decision:?}");
+        };
+        assert_eq!(spec.bitrate_bps(), Some(132_000));
+        // "m4a" 是别名,边界归一化到 Aac
+        assert_eq!(spec.format(), Some(&mineral_model::AudioFormat::Aac));
+        drop(runtime);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn hook_skip_and_short_circuit() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.hook("before_download", function(ctx)
@@ -1165,11 +1243,7 @@ mod tests {
             "#,
         )?;
         let decision = sender
-            .intercept(
-                HookKind::BeforeDownload,
-                hook_ctx()?,
-                std::time::Duration::from_secs(5),
-            )
+            .intercept_download(download_ctx()?, std::time::Duration::from_secs(5))
             .await;
         assert_eq!(
             decision,
@@ -1184,21 +1258,17 @@ mod tests {
 
     #[tokio::test]
     async fn hook_false_skips_and_errors_fall_through() -> color_eyre::Result<()> {
-        use crate::hooks::{HookDecision, HookKind};
+        use crate::hooks::HookDecision;
         // 三连注册:Lua 错误 → 放行继续走下一个;非法返回值 → 同;false → 跳过。
         let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
-            mineral.hook("before_play", function(ctx) error("炸") end)
-            mineral.hook("before_play", function(ctx) return 42 end)
-            mineral.hook("before_play", function(ctx) return false end)
+            mineral.hook("before_stream", function(ctx) error("炸") end)
+            mineral.hook("before_stream", function(ctx) return 42 end)
+            mineral.hook("before_stream", function(ctx) return false end)
             "#,
         )?;
         let decision = sender
-            .intercept(
-                HookKind::BeforePlay,
-                hook_ctx()?,
-                std::time::Duration::from_secs(5),
-            )
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
             .await;
         assert_eq!(
             decision,
@@ -1210,6 +1280,188 @@ mod tests {
         // 两次失败各推一条 error toast(同 id 顶替)。
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(events.len(), 2, "两个失败 hook 各报一条 error toast");
+        Ok(())
+    }
+
+    /// `mode` 是取流管线的提交点概念,下载口的 ctx 不投影它(避免填充值假装语义)。
+    #[tokio::test]
+    async fn hook_ctx_download_has_no_mode() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_download", function(ctx)
+                return { skip = type(ctx.mode) }
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_download(download_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            decision,
+            HookDecision::Skip {
+                reason: "nil".to_owned()
+            },
+            "before_download 的 ctx 不应带 mode 字段"
+        );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// ctx 新字段投影:`mode` / `unplayable`;有原始 URL 时 unplayable=false。
+    #[tokio::test]
+    async fn hook_ctx_projects_mode_and_unplayable() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                return { skip = ctx.mode .. "/" .. tostring(ctx.unplayable) }
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            decision,
+            HookDecision::Skip {
+                reason: "immediate/false".to_owned()
+            },
+            "mode 字符串与 unplayable 布尔应投影进 ctx"
+        );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// unplayable 快照(original 缺席):`url` 为 nil、`unplayable` = true——
+    /// 灰歌/取链失败场景脚本据此决定补救。
+    #[tokio::test]
+    async fn hook_ctx_unplayable_has_nil_url() -> color_eyre::Result<()> {
+        use crate::hooks::{BeforeStreamCtx, HookDecision, HookMode};
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                return { skip = tostring(ctx.url) .. "/" .. tostring(ctx.unplayable) }
+            end)
+            "#,
+        )?;
+        let ctx = BeforeStreamCtx::new(song("1"), HookMode::Prefetch, /*original*/ None);
+        let decision = sender
+            .intercept_stream(ctx, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            decision,
+            HookDecision::Skip {
+                reason: "nil/true".to_owned()
+            },
+            "无可播 URL 时 url 缺席、unplayable=true"
+        );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// DEFER 延迟裁决:回调返回 `mineral.DEFER`,定时器稍后经 `ctx.resolve` 补交改写
+    /// ——daemon 侧 await 拿到 Rewrite(异步补交的最小闭环)。
+    #[tokio::test]
+    async fn hook_defer_resolves_later_to_rewrite() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                mineral.timer.after(10, function()
+                    ctx.resolve({ url = "https://fallback.example/b.flac", quality = "standard" })
+                end)
+                return mineral.DEFER
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        let HookDecision::Rewrite(spec) = decision else {
+            color_eyre::eyre::bail!("期望延迟补交的 Rewrite,实得 {decision:?}");
+        };
+        assert_eq!(
+            spec.new_url().map(ToString::to_string),
+            Some("https://fallback.example/b.flac".to_owned())
+        );
+        assert_eq!(spec.new_quality(), Some(mineral_model::BitRate::Standard));
+        drop(runtime);
+        Ok(())
+    }
+
+    /// DEFER 后从不 resolve → daemon 侧软超时兜底放行(fail-open,不新增失败模式)。
+    #[tokio::test]
+    async fn hook_defer_without_resolve_times_out_to_continue() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, _push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                return mineral.DEFER
+            end)
+            "#,
+        )?;
+        let started = std::time::Instant::now();
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_millis(50))
+            .await;
+        assert_eq!(decision, HookDecision::Continue, "永不补交必须超时放行");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(50),
+            "放行必须等满软超时"
+        );
+        drop(runtime);
+        Ok(())
+    }
+
+    /// resolve 只认第一次(take 语义):第二次补交 no-op,裁决为首交值,且不报脚本错误。
+    #[tokio::test]
+    async fn hook_resolve_first_call_wins() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                mineral.timer.after(10, function()
+                    ctx.resolve({ quality = "standard" })
+                    ctx.resolve({ skip = "不该生效" })
+                end)
+                return mineral.DEFER
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        let HookDecision::Rewrite(spec) = decision else {
+            color_eyre::eyre::bail!("期望首交的 Rewrite,实得 {decision:?}");
+        };
+        assert_eq!(spec.new_quality(), Some(mineral_model::BitRate::Standard));
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(events, vec![], "重复 resolve 是 no-op,不该报脚本错误");
+        Ok(())
+    }
+
+    /// DEFER 短路回调链:首个回调认领裁决后,后续回调不再被调用。
+    #[tokio::test]
+    async fn hook_defer_short_circuits_chain() -> color_eyre::Result<()> {
+        use crate::hooks::HookDecision;
+        let (runtime, sender, mut push_rx) = spawn_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                mineral.timer.after(10, function() ctx.resolve(nil) end)
+                return mineral.DEFER
+            end)
+            mineral.hook("before_stream", function(ctx)
+                mineral.ui.toast("不该出现")
+            end)
+            "#,
+        )?;
+        let decision = sender
+            .intercept_stream(hook_ctx()?, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(decision, HookDecision::Continue, "resolve(nil) = 放行");
+        let events = drain_after_stop(runtime, &mut push_rx);
+        assert_eq!(events, vec![], "DEFER 短路后第二个 hook 不应被调用");
         Ok(())
     }
 

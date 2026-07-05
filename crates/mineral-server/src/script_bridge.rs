@@ -504,6 +504,32 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 resolve_search(&player, term, source, page, query).await;
             });
         }
+        ScriptCmd::LibrarySongUrl { song, query } => {
+            let Some(channel) = player.channel_for(song.namespace()).cloned() else {
+                let e =
+                    color_eyre::eyre::eyre!("no channel for source {}", song.namespace().name());
+                resolve_err(player, query, &e);
+                return;
+            };
+            let player = player.clone();
+            tokio::spawn(async move {
+                let ids = [song.clone()];
+                match channel.song_urls(&ids, player.playback_quality()).await {
+                    Ok(mut urls) => match urls.pop() {
+                        Some(play_url) => {
+                            resolve_ok(&player, query, ResolveValue::PlayUrl(Box::new(play_url)));
+                        }
+                        None => {
+                            let e = color_eyre::eyre::eyre!("{} 无可播 URL", song.qualified());
+                            resolve_err(&player, query, &e);
+                        }
+                    },
+                    Err(e) => {
+                        resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
+                    }
+                }
+            });
+        }
         ScriptCmd::Spawn { id, spec, query } => {
             let over_limit = spawns.max != 0 && spawns.running.lock().len() >= spawns.max;
             if over_limit {

@@ -1,0 +1,42 @@
+---
+source: crates/mineral-channel/bilibili/src/wire/search.rs
+description: 用户搜索响应解析(完整项 + 缺字段项共存)
+expression: r
+---
+UserSearchResult {
+    result: [
+        SearchUserItem {
+            mid: Some(
+                12345,
+            ),
+            uname: Some(
+                "UP主甲",
+            ),
+            usign: Some(
+                "个签",
+            ),
+            fans: Some(
+                4567,
+            ),
+            videos: Some(
+                89,
+            ),
+            upic: Some(
+                "//i1.hdslb.com/u.jpg",
+            ),
+        },
+        SearchUserItem {
+            mid: Some(
+                777,
+            ),
+            uname: None,
+            usign: None,
+            fans: None,
+            videos: None,
+            upic: None,
+        },
+    ],
+    num_pages: Some(
+        5,
+    ),
+}

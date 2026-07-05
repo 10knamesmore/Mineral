@@ -3,13 +3,17 @@
 use serde::Deserialize;
 
 use super::de::{null_or_vec_skip_null, string_or_null};
-use super::song::AlbumSong;
+use super::song::{AlbumSong, Privilege};
 
 /// `/api/v6/playlist/detail` 的响应:顶层 `playlist` 含元信息 + 曲目顺序 + 曲目。
 #[derive(Debug, Deserialize)]
 pub struct PlaylistDetailResult {
     /// 歌单对象(元信息 + trackIds + tracks)。
     pub playlist: PlaylistInfo,
+
+    /// 与 `playlist.tracks` 平行的权限数组(判可播性;`limit=0` 轻请求为空)。
+    #[serde(default)]
+    pub privileges: Vec<Privilege>,
 }
 
 /// 歌单详情 / 用户歌单列表里的 playlist 对象。

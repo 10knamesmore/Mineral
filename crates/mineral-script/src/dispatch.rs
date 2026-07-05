@@ -57,9 +57,11 @@ pub(crate) fn run_loop(
             Ok(ScriptMsg::GetBinds { reply }) => {
                 let _ = reply.send(host.events.lock().binds.clone());
             }
-            Ok(ScriptMsg::Intercept { kind, ctx, reply }) => {
-                // 回执接收端 drop(daemon 侧超时放弃)时静默丢。
-                let _ = reply.send(run_hooks(lua, host, watchdog, kind, &ctx));
+            Ok(ScriptMsg::InterceptStream { ctx, reply }) => {
+                crate::intercept::run_stream(lua, host, watchdog, &ctx, reply);
+            }
+            Ok(ScriptMsg::InterceptDownload { ctx, reply }) => {
+                crate::intercept::run_download(lua, host, watchdog, &ctx, reply);
             }
             Ok(ScriptMsg::CuratePlaylists {
                 source,
@@ -169,6 +171,10 @@ fn resolve_query(
                 mlua::Value::Table(briefs_table(lua, playlists)?),
                 mlua::Value::Nil,
             ),
+            ResolveValue::PlayUrl(play_url) => (
+                mlua::Value::Table(play_url_table(lua, play_url)?),
+                mlua::Value::Nil,
+            ),
             ResolveValue::Spawn(result) => {
                 let entry = lua.create_table()?;
                 // 被信号终止(含 kill)无退出码:字段缺席,Lua 读出 nil。
@@ -257,40 +263,36 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
     }
 }
 
-/// 跑一类同步拦截 hook:按注册顺序调用,首个非放行裁决短路生效。
+/// [`PlayUrl`](mineral_model::PlayUrl) 在 Lua 侧的投影(`library.song_url` 回调入参)。
 ///
-/// 回调收 ctx table(`song` / `url` / `quality` / `kind`),返回值解释:
-/// `nil`(或 `true`)= 放行;`false` / `{ skip = 原因 }` = 跳过;
-/// `{ url = ?, quality = ? }` = 改写。Lua 错误 / 非法返回值按放行处理
-/// (拦截失败不致命),记日志 + error toast。
-fn run_hooks(
-    lua: &Lua,
-    host: &ScriptHost,
-    watchdog: &WatchdogConfig,
-    kind: crate::hooks::HookKind,
-    ctx: &crate::hooks::HookContext,
-) -> crate::hooks::HookDecision {
-    use crate::hooks::HookDecision;
-    // 锁内只克隆 Arc 列表,锁外调回调(回调里再注册不撞锁)。
-    let callbacks = host
-        .events
-        .lock()
-        .hooks
-        .get(&kind)
-        .cloned()
-        .unwrap_or_default();
-    for key in &callbacks {
-        let outcome = hook_ctx_table(lua, kind, ctx).and_then(|args| {
-            let func = lua.registry_value::<mlua::Function>(key)?;
-            call_guarded::<_, mlua::Value>(lua, watchdog, &func, args)
-        });
-        match outcome.and_then(|value| interpret_hook_return(&value)) {
-            Ok(HookDecision::Continue) => {}
-            Ok(decision) => return decision,
-            Err(e) => report_callback_failure(host, kind.as_str(), &e),
-        }
+/// 字段名与 hook 改写返回值([`RewriteSpec`](crate::hooks::RewriteSpec) 的 Lua 形态)
+/// 对齐——`url` / `quality` / `headers`(`{{name, value}}` 数组)/ `layout`,回调里可
+/// 原样喂给 `ctx.resolve(...)` 完成顶入;另带 `song_id` / `bitrate_bps` / `size` /
+/// `format` 供匹配逻辑参考。
+fn play_url_table(lua: &Lua, play_url: &mineral_model::PlayUrl) -> mlua::Result<mlua::Table> {
+    let entry = lua.create_table()?;
+    entry.set("song_id", play_url.song_id.qualified())?;
+    entry.set("url", play_url.url.to_string())?;
+    entry.set("quality", play_url.quality.as_str())?;
+    entry.set("bitrate_bps", play_url.bitrate_bps)?;
+    entry.set("size", play_url.size)?;
+    entry.set("format", play_url.format.as_str())?;
+    let headers = lua.create_table()?;
+    for (i, (name, value)) in play_url.stream_headers.iter().enumerate() {
+        let pair = lua.create_table()?;
+        pair.raw_set(1, name.clone())?;
+        pair.raw_set(2, value.clone())?;
+        headers.raw_set(i.wrapping_add(1), pair)?;
     }
-    HookDecision::Continue
+    entry.set("headers", headers)?;
+    entry.set(
+        "layout",
+        match play_url.layout {
+            mineral_model::StreamLayout::Contiguous => "contiguous",
+            mineral_model::StreamLayout::Chunked => "chunked",
+        },
+    )?;
+    Ok(entry)
 }
 
 /// `PlaylistBrief` 在 Lua 侧的投影:`library.playlists` 回调与 curate
@@ -354,7 +356,11 @@ fn run_curate(
 ///
 /// # Return:
 ///   字段值,类型不符时 `Err` 带上下文。
-fn lua_field<T: mlua::FromLua>(table: &mlua::Table, entity: &str, field: &str) -> mlua::Result<T> {
+pub(crate) fn lua_field<T: mlua::FromLua>(
+    table: &mlua::Table,
+    entity: &str,
+    field: &str,
+) -> mlua::Result<T> {
     use mlua::ErrorContext;
     table
         .get::<T>(field)
@@ -418,105 +424,6 @@ fn interpret_curate_return(value: &mlua::Value) -> mlua::Result<Vec<crate::messa
         });
     }
     Ok(entries)
-}
-
-/// 拦截回调的 ctx table:`song`(最小投影)+ `url`(字符串)+
-/// `quality`(音质名)+ `kind`(hook 名)。
-fn hook_ctx_table(
-    lua: &Lua,
-    kind: crate::hooks::HookKind,
-    ctx: &crate::hooks::HookContext,
-) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-    table.set("song", song_table(lua, ctx.song())?)?;
-    table.set("url", ctx.original().url.to_string())?;
-    table.set("quality", ctx.original().quality.as_str())?;
-    table.set("kind", kind.as_str())?;
-    Ok(table)
-}
-
-/// 把 hook 回调的 Lua 返回值解释成裁决;非法形态报 `Err`(按放行处理)。
-fn interpret_hook_return(value: &mlua::Value) -> mlua::Result<crate::hooks::HookDecision> {
-    use crate::hooks::{HookDecision, RewriteSpec};
-    const ENTITY: &str = "hook 返回值";
-    match value {
-        mlua::Value::Nil | mlua::Value::Boolean(true) => Ok(HookDecision::Continue),
-        mlua::Value::Boolean(false) => Ok(HookDecision::Skip {
-            reason: "脚本跳过".to_owned(),
-        }),
-        mlua::Value::Table(table) => {
-            if let Some(reason) = lua_field::<Option<String>>(table, ENTITY, "skip")? {
-                return Ok(HookDecision::Skip { reason });
-            }
-            let new_url = lua_field::<Option<String>>(table, ENTITY, "url")?
-                .map(|raw| {
-                    raw.parse::<mineral_model::MediaUrl>()
-                        .map_err(|e| mlua::Error::runtime(format!("hook 返回的 url 解析失败: {e}")))
-                })
-                .transpose()?;
-            let new_quality = lua_field::<Option<String>>(table, ENTITY, "quality")?
-                .map(|raw| parse_bitrate(&raw))
-                .transpose()?;
-            // Lua 侧 `headers = { {name, value}, ... }`(数组的 {name,value} 对);缺项的行丢弃。
-            let stream_headers = lua_field::<Option<Vec<Vec<String>>>>(table, ENTITY, "headers")?
-                .map(|rows| {
-                    rows.into_iter()
-                        .filter_map(|row| {
-                            let mut it = row.into_iter();
-                            match (it.next(), it.next()) {
-                                (Some(name), Some(value)) => Some((name, value)),
-                                _ => None,
-                            }
-                        })
-                        .collect::<Vec<(String, String)>>()
-                });
-            let layout = lua_field::<Option<String>>(table, ENTITY, "layout")?
-                .map(|raw| parse_layout(&raw))
-                .transpose()?;
-            if new_url.is_none()
-                && new_quality.is_none()
-                && stream_headers.is_none()
-                && layout.is_none()
-            {
-                return Err(mlua::Error::runtime(
-                    "hook 返回 table 但无 url / quality / headers / layout / skip 字段",
-                ));
-            }
-            Ok(HookDecision::Rewrite(RewriteSpec {
-                new_url,
-                new_quality,
-                stream_headers,
-                layout,
-            }))
-        }
-        other => Err(mlua::Error::runtime(format!(
-            "hook 返回值须是 nil / boolean / table,实得 {}",
-            other.type_name()
-        ))),
-    }
-}
-
-/// 按音质名解析 [`mineral_model::BitRate`](与 `as_str` 对偶);未知名报错。
-fn parse_bitrate(raw: &str) -> mlua::Result<mineral_model::BitRate> {
-    mineral_model::BitRate::ALL
-        .into_iter()
-        .find(|q| q.as_str() == raw)
-        .ok_or_else(|| {
-            mlua::Error::runtime(format!(
-                "未知音质名 `{raw}`(可选:standard/higher/exhigh/lossless/hires)"
-            ))
-        })
-}
-
-/// 按容器布局名解析 [`mineral_model::StreamLayout`](与 serde snake_case 对偶);未知名报错。
-fn parse_layout(raw: &str) -> mlua::Result<mineral_model::StreamLayout> {
-    match raw {
-        "contiguous" => Ok(mineral_model::StreamLayout::Contiguous),
-        "chunked" => Ok(mineral_model::StreamLayout::Chunked),
-        other => Err(mlua::Error::runtime(format!(
-            "未知 layout `{other}`(可选:contiguous / chunked)"
-        ))),
-    }
 }
 
 /// 依次调用一桶回调;实参由 `make_args` 现做(每个回调独立一份,互不污染)。
@@ -598,7 +505,7 @@ fn ctx_table(lua: &Lua, ctx: Option<&mineral_protocol::KeyContext>) -> mlua::Res
 /// `Song` 在 Lua 侧的投影
 ///
 /// id 用 `qualified()`(全局唯一,可直接回喂 `mineral.player.play`);
-fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
+pub(crate) fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
     table.set("id", song.id.qualified())?;
     table.set("title", song.name.clone())?;

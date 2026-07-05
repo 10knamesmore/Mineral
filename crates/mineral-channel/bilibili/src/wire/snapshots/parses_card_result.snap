@@ -1,0 +1,29 @@
+---
+source: crates/mineral-channel/bilibili/src/wire/space.rs
+description: 名片响应解析(card 主体 + follower/archive_count)
+expression: r
+---
+CardResult {
+    card: Some(
+        CardInfo {
+            name: Some(
+                "UP主甲",
+            ),
+            face: Some(
+                "https://i0.hdslb.com/f.jpg",
+            ),
+            sign: Some(
+                "个签",
+            ),
+            fans: Some(
+                3,
+            ),
+        },
+    ),
+    follower: Some(
+        4567,
+    ),
+    archive_count: Some(
+        89,
+    ),
+}

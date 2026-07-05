@@ -9,7 +9,19 @@
 
 -- 示例(脚本层,取消注释即生效):
 -- mineral.on("track_started", function(args)
---   mineral.log.info("playing: " .. args.song.title)
+--   mineral.ui.card({
+--     title = "Now Play",
+--     ttl_secs = 6,
+--     body = {
+--       {
+--         { (" "):rep(3) },
+--         { args.song.title, fg = "accent", bold = true, italic = true, align = "center" },
+--         { (" "):rep(3) },
+--       },
+--       { { args.song.album, align = "center" } },
+--       { { args.song.artists[1], align = "center" } },
+--     },
+--   })
 -- end)
 
 return {

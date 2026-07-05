@@ -4,4 +4,5 @@ pub mod fav;
 pub mod login;
 pub mod playurl;
 pub mod search;
+pub mod space;
 pub mod view;

@@ -247,6 +247,10 @@ async fn execute(
                             song_id = song_id.as_str(),
                             "channel returned empty url list"
                         );
+                        // 空列表 = 灰歌的常见形态,与报错同为「无可播 URL」信号。
+                        event_tx.lock().push(TaskEvent::SongUrlFailed {
+                            song_id: song_id.clone(),
+                        });
                         TaskOutcome::Failed
                     }
                 },
@@ -259,6 +263,9 @@ async fn execute(
                         error = mineral_log::chain(&e),
                         "channel fetch failed"
                     );
+                    event_tx.lock().push(TaskEvent::SongUrlFailed {
+                        song_id: song_id.clone(),
+                    });
                     TaskOutcome::Failed
                 }
             }

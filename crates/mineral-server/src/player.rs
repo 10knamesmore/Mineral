@@ -460,6 +460,8 @@ impl PlayerCore {
             st.current_lyrics = None;
             st.current_lyrics_song_id = None;
             st.prefetch_fired_for = None;
+            // 手动切歌 = 本预取窗口结束,窗口内的否决一并作废(queued 在下面按命中与否消费)。
+            st.prefetch_vetoed.clear();
             st.bump_current();
             // 打断上一首未完成的 capture(残件待删)。
             let interrupted = st.capturing.take();
@@ -503,36 +505,19 @@ impl PlayerCore {
         } else if let Some(pu) = cached_url {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), "using queued url");
             // 拦截桥:无脚本同步直走(play_capturing + 回填 play_url),有脚本异步裁决。
-            crate::hook_bridge::before_play(self, song, pu);
+            crate::hook_bridge::before_stream(self, song, pu);
         } else {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit SongUrl task");
-            let handle = self.inner.scheduler.submit(
+            // 取链失败不在这里旁听 handle:失败经 `SongUrlFailed` 事件分流到
+            // `handle_song_url_failed` → unplayable 拦截口(脚本可改写补救;无脚本维持
+            // track_finished("error") 原语义;Cancelled 不发事件,与旧行为一致)。
+            self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
                     song_id: song.id.clone(),
                     quality: self.inner.playback_quality,
                 }),
                 Priority::User,
             );
-            // player 级播放失败信号:取链失败 = 这首播不下去,提升为
-            // `track_finished("error")`(脚本 / 订阅 client 可见)。
-            // Cancelled(切歌砍任务)不报;迟到失败再校验一道当前曲。
-            let player = self.clone();
-            let failed_song = song.clone();
-            tokio::spawn(async move {
-                if !matches!(handle.done().await, mineral_task::TaskOutcome::Failed) {
-                    return;
-                }
-                let still_current = player.with_state(|st| {
-                    st.current_song
-                        .as_ref()
-                        .is_some_and(|s| s.id == failed_song.id)
-                });
-                if still_current {
-                    player
-                        .notify()
-                        .track_finished(&failed_song, mineral_protocol::FinishReason::Error);
-                }
-            });
         }
         mineral_log::debug!(target: "player", song_id = song.id.as_str(), source = ?song.source(), "submit Lyrics task");
         self.inner.scheduler.submit(
@@ -574,8 +559,7 @@ impl PlayerCore {
                 st.original_queue = None;
             }
             // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
-            st.queued = None;
-            st.prefetch_fired_for = None;
+            st.invalidate_prefetch();
             st.bump_queue();
         }
         // 取消引擎里尚未 append 的待建预排(已 append 的无法摘除,会自然播完后由边界兜底)。
@@ -589,8 +573,7 @@ impl PlayerCore {
             let mut st = self.inner.state.lock();
             crate::queue::insert_next(&mut st, song);
             // 下一首变了:作废已排的 gapless 预排,让 check_prefetch 重排
-            st.queued = None;
-            st.prefetch_fired_for = None;
+            st.invalidate_prefetch();
         }
         self.inner.audio.clear_next();
         self.spawn_save_session();
@@ -602,8 +585,7 @@ impl PlayerCore {
         {
             let mut st = self.inner.state.lock();
             crate::queue::append(&mut st, song);
-            st.queued = None;
-            st.prefetch_fired_for = None;
+            st.invalidate_prefetch();
         }
         self.inner.audio.clear_next();
         self.spawn_save_session();
@@ -1082,6 +1064,7 @@ mod tests {
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,
+            substituted: false,
         })
     }
 
@@ -1104,18 +1087,18 @@ mod tests {
         false
     }
 
-    /// before_play 改写:hook 返回 {url, quality} → 起播用改写值、play_url 回填改写值。
+    /// before_stream 改写:hook 返回 {url, quality} → 起播用改写值、play_url 回填改写值。
     #[tokio::test]
-    async fn before_play_rewrite_replaces_url_and_quality() -> color_eyre::Result<()> {
+    async fn before_stream_rewrite_replaces_url_and_quality() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script(
             r#"
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 return { url = "https://fallback.example/b.flac", quality = "standard" }
             end)
             "#,
         )?;
         core.with_state(|st| st.current_song = Some(song("a")));
-        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
         let rewritten = wait_until(|| {
             core.with_state(|st| {
                 st.play_url
@@ -1131,18 +1114,23 @@ mod tests {
                 Some(BitRate::Standard),
                 "音质应一并改写"
             );
+            assert_eq!(
+                st.play_url.as_ref().map(|pu| pu.substituted),
+                Some(true),
+                "顶换过 URL 的流必须带 substituted 标记(歌词降级依据)"
+            );
         });
         drop(runtime);
         Ok(())
     }
 
-    /// before_play 改写带 headers:hook 返回 {url, headers} → play_url 回填的 stream_headers 含该头。
-    /// 解灰顶替进来的 B站 url 必须带 `Referer`,否则 403(header 穿透 rewrite→play)。
+    /// before_stream 改写带 headers:hook 返回 {url, headers} → play_url 回填的 stream_headers 含该头。
+    /// 改写顶替进来的 B站 url 必须带 `Referer`,否则 403(header 穿透 rewrite→play)。
     #[tokio::test]
-    async fn before_play_rewrite_carries_stream_headers() -> color_eyre::Result<()> {
+    async fn before_stream_rewrite_carries_stream_headers() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script(
             r#"
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 return {
                     url = "https://fallback.example/b.flac",
                     headers = { {"Referer", "https://www.bilibili.com"} },
@@ -1151,7 +1139,7 @@ mod tests {
             "#,
         )?;
         core.with_state(|st| st.current_song = Some(song("a")));
-        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
         let carried = wait_until(|| {
             core.with_state(|st| {
                 st.play_url.as_ref().is_some_and(|pu| {
@@ -1169,20 +1157,20 @@ mod tests {
         Ok(())
     }
 
-    /// before_play 改写 URL 但未指定 layout → effective.layout 默认 `Chunked`(解灰目标常是分片流,
+    /// before_stream 改写 URL 但未指定 layout → effective.layout 默认 `Chunked`(改写目标常是分片流,
     /// 流式打开避免起播 stall)。回归:曾直接继承原曲 layout(网易云 `Contiguous`),改写成 B站
     /// fMP4 后被 seekable 全扫、起播卡数秒。
     #[tokio::test]
-    async fn before_play_rewrite_url_defaults_chunked_layout() -> color_eyre::Result<()> {
+    async fn before_stream_rewrite_url_defaults_chunked_layout() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script(
             r#"
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 return { url = "https://fallback.example/audio.m4s" }
             end)
             "#,
         )?;
         core.with_state(|st| st.current_song = Some(song("a")));
-        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
         let chunked = wait_until(|| {
             core.with_state(|st| {
                 st.play_url
@@ -1196,19 +1184,19 @@ mod tests {
         Ok(())
     }
 
-    /// before_play 改写时脚本显式 `layout = "contiguous"` → effective.layout 用该值(压过默认 Chunked),
+    /// before_stream 改写时脚本显式 `layout = "contiguous"` → effective.layout 用该值(压过默认 Chunked),
     /// 给「改写成直链源」的脚本一个恢复 seekable 的出口。
     #[tokio::test]
-    async fn before_play_rewrite_explicit_layout_overrides_default() -> color_eyre::Result<()> {
+    async fn before_stream_rewrite_explicit_layout_overrides_default() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script(
             r#"
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 return { url = "https://fallback.example/direct.mp3", layout = "contiguous" }
             end)
             "#,
         )?;
         core.with_state(|st| st.current_song = Some(song("a")));
-        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
         let contiguous = wait_until(|| {
             core.with_state(|st| {
                 st.play_url
@@ -1222,13 +1210,13 @@ mod tests {
         Ok(())
     }
 
-    /// before_play 跳过:hook 返回 false → 不起播本曲,推进到下一首。
+    /// before_stream 跳过:hook 返回 false → 不起播本曲,推进到下一首。
     #[tokio::test]
-    async fn before_play_skip_advances_to_next() -> color_eyre::Result<()> {
+    async fn before_stream_skip_advances_to_next() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script(
             r#"
             local skipped = false
-            mineral.hook("before_play", function(ctx)
+            mineral.hook("before_stream", function(ctx)
                 -- 只跳第一次(下一首放行,避免连锁)
                 if not skipped then
                     skipped = true
@@ -1242,7 +1230,7 @@ mod tests {
             st.queue_sel = 0;
             st.current_song = Some(song("a"));
         });
-        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
         let advanced = wait_until(|| {
             core.with_state(|st| {
                 st.current_song
@@ -1256,14 +1244,179 @@ mod tests {
         Ok(())
     }
 
-    /// before_play 放行(无 hook 命中):走原 capture 起播路径,play_url 回填原值。
+    /// 预取提交点放行:裁决回来后按原 URL 武装(queued 登记原值)。
     #[tokio::test]
-    async fn before_play_continue_keeps_original() -> color_eyre::Result<()> {
+    async fn prefetch_hook_continue_arms_original() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx) return nil end)
+            "#,
+        )?;
+        let next = song("b");
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+            st.prefetch_fired_for = Some(song("b").id);
+        });
+        let original = test_play_url("b")?;
+        let want = original.url.to_string();
+        crate::hook_bridge::on_prefetch_ready(&core, &next.id, original);
+        let armed = wait_until(|| {
+            core.with_state(|st| {
+                st.queued
+                    .as_ref()
+                    .and_then(|q| q.play_url.as_ref())
+                    .is_some_and(|pu| pu.url.to_string() == want)
+            })
+        })
+        .await;
+        assert!(armed, "放行后应按原 URL 登记预排");
+        drop(runtime);
+        Ok(())
+    }
+
+    /// 预取提交点改写:武装改写流(URL + 取流头),且**不 capture**。
+    #[tokio::test]
+    async fn prefetch_hook_rewrite_arms_effective() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                if ctx.mode == "prefetch" then
+                    return { url = "https://fallback.example/b.m4s",
+                             headers = {{"Referer", "https://www.bilibili.com"}} }
+                end
+            end)
+            "#,
+        )?;
+        let next = song("b");
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+            st.prefetch_fired_for = Some(song("b").id);
+        });
+        crate::hook_bridge::on_prefetch_ready(&core, &next.id, test_play_url("b")?);
+        let armed = wait_until(|| {
+            core.with_state(|st| {
+                st.queued
+                    .as_ref()
+                    .and_then(|q| q.play_url.as_ref())
+                    .is_some_and(|pu| pu.url.to_string() == "https://fallback.example/b.m4s")
+            })
+        })
+        .await;
+        assert!(armed, "改写后应按 effective 登记预排");
+        core.with_state(|st| {
+            let queued = st.queued.as_ref();
+            assert!(
+                queued.is_some_and(|q| q.capturing.is_none()),
+                "改写流不 capture 入缓存"
+            );
+            assert!(
+                queued.and_then(|q| q.play_url.as_ref()).is_some_and(|pu| pu
+                    .stream_headers
+                    .contains(&("Referer".to_owned(), "https://www.bilibili.com".to_owned()))),
+                "改写流应携带脚本给的取流头"
+            );
+        });
+        drop(runtime);
+        Ok(())
+    }
+
+    /// 预取提交点 Skip = 否决:下标进否决集、队列不动、预拉标记复位待重排,不武装。
+    #[tokio::test]
+    async fn prefetch_hook_skip_vetoes_next() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                return { skip = "灰歌无替身" }
+            end)
+            "#,
+        )?;
+        let next = song("b");
+        core.with_state(|st| {
+            st.queue = vec![song("a"), song("b"), song("c")];
+            st.queue_sel = 0;
+            st.current_song = Some(song("a"));
+            st.prefetch_fired_for = Some(song("b").id);
+        });
+        crate::hook_bridge::on_prefetch_ready(&core, &next.id, test_play_url("b")?);
+        let vetoed = wait_until(|| core.with_state(|st| st.prefetch_vetoed == vec![1])).await;
+        assert!(vetoed, "b 的下标应进否决集");
+        core.with_state(|st| {
+            assert!(st.queued.is_none(), "否决不武装");
+            assert_eq!(st.prefetch_fired_for, None, "预拉标记应复位待重排");
+            assert_eq!(st.queue.len(), 3, "队列纹丝不动");
+            // 否决生效后,下一首预测应越过 b 落到 c。
+            assert_eq!(crate::queue::next_index(st), Some(2));
+        });
+        drop(runtime);
+        Ok(())
+    }
+
+    /// unplayable(取链失败)+ 改写 = 补救:脚本据 ctx.unplayable 顶入可播流,起播改写值。
+    #[tokio::test]
+    async fn unplayable_rewrite_plays_fallback() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx)
+                if ctx.unplayable then
+                    return { url = "https://rescue.example/a.m4s",
+                             headers = {{"Referer", "https://www.bilibili.com"}} }
+                end
+            end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::on_unplayable_current(&core, &song("a"));
+        let rescued = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url
+                    .as_ref()
+                    .is_some_and(|pu| pu.url.to_string() == "https://rescue.example/a.m4s")
+            })
+        })
+        .await;
+        assert!(rescued, "补救改写应回填 play_url");
+        drop(runtime);
+        Ok(())
+    }
+
+    /// unplayable + 放行(脚本帮不上):不起播、不回填 play_url(维持原失败语义,
+    /// 失败信号经 track_finished("error") 通知)。
+    #[tokio::test]
+    async fn unplayable_continue_keeps_failure() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_stream", function(ctx) return nil end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::on_unplayable_current(&core, &song("a"));
+        // 裁决是异步的:留出窗口再断言「什么都没被顶入」。
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        core.with_state(|st| {
+            assert!(st.play_url.is_none(), "放行 = 维持失败,不该凭空出 play_url");
+            assert!(
+                st.current_song
+                    .as_ref()
+                    .is_some_and(|s| s.id.as_str() == "a"),
+                "放行不推进队列"
+            );
+        });
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_stream 放行(无 hook 命中):走原 capture 起播路径,play_url 回填原值。
+    #[tokio::test]
+    async fn before_stream_continue_keeps_original() -> color_eyre::Result<()> {
         let (core, runtime) = core_with_script("-- 无 hook")?;
         core.with_state(|st| st.current_song = Some(song("a")));
         let original = test_play_url("a")?;
         let want = original.url.to_string();
-        crate::hook_bridge::before_play(&core, &song("a"), original);
+        crate::hook_bridge::before_stream(&core, &song("a"), original);
         let kept = wait_until(|| {
             core.with_state(|st| {
                 st.play_url
@@ -1811,8 +1964,9 @@ mod tests {
         Ok(())
     }
 
-    /// SongUrl 取链失败 → player 级播放失败信号:wire 推 `TrackFinished{reason: Error}`
-    /// (RecordingChannel 的 `song_urls` 恒 `Err`,任务必然 `Failed`)。
+    /// SongUrl 取链失败 → `SongUrlFailed` 事件 → unplayable 口(无脚本)推
+    /// `TrackFinished{reason: Error}`(RecordingChannel 的 `song_urls` 恒 `Err`)。
+    /// 事件由 tick 的 drain 消化,测试里手动泵 `consume_events_once`。
     #[tokio::test(flavor = "multi_thread")]
     async fn play_song_url_failure_notifies_error() -> color_eyre::Result<()> {
         use mineral_protocol::{Event, FinishReason};
@@ -1834,9 +1988,9 @@ mod tests {
         )?;
         let target = song("e1");
         core.play_song(&target);
-        // SongUrl 任务在 worker 上跑失败 → 监视 task 报 Error;轮询等事件(带超时)。
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
+            core.consume_events_once();
             match events_rx.try_recv() {
                 Ok(Event::TrackFinished { song_id, reason }) => {
                     assert_eq!(song_id, target.id);
@@ -1876,9 +2030,10 @@ mod tests {
             /*script*/ None,
         )?;
         core.play_song(&song("e1"));
-        // 立即切走:当前曲不再是 e1,e1 的失败(或被 cancel)不该报。
+        // 立即切走:当前曲不再是 e1,e1 的失败(SongUrlFailed 分流落 Drop)不该报。
         core.with_state(|st| st.current_song = Some(song("e2")));
         tokio::time::sleep(Duration::from_millis(500)).await;
+        core.consume_events_once();
         while let Ok(event) = events_rx.try_recv() {
             assert!(
                 !matches!(event, Event::TrackFinished { ref song_id, .. } if song_id == &song("e1").id),

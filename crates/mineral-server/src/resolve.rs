@@ -116,6 +116,7 @@ pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> Play
         stream_headers: Vec::new(),
         // 本地文件恒 seekable(磁盘全扫快):缓存命中的分片流(如 B站 .aac)重播也能向后 seek。
         layout: mineral_model::StreamLayout::Contiguous,
+        substituted: false,
     }
 }
 

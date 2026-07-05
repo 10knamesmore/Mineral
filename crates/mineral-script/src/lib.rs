@@ -12,19 +12,24 @@ mod api;
 mod dispatch;
 mod hooks;
 mod host;
+mod intercept;
 mod message;
 mod proc;
 mod runtime;
+mod sender;
 mod watchdog;
 
 pub use mlua;
 
-pub use hooks::{HookContext, HookDecision, HookKind, RewriteSpec};
+pub use hooks::{
+    BeforeDownloadCtx, BeforeStreamCtx, HookDecision, HookKind, HookMode, RewriteSpec,
+};
 pub use host::{ScriptHost, install_api, seed_web_url_templates};
 pub use message::{
     ActionOutcome, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey, PropValue, QueryId,
-    ResolveValue, ScriptCmd, ScriptEvent, ScriptSender, TrackFinishedReason,
+    ResolveValue, ScriptCmd, ScriptEvent, TrackFinishedReason,
 };
 pub use proc::{SpawnId, SpawnResult, SpawnSpec, run_child};
 pub use runtime::ScriptRuntime;
+pub use sender::ScriptSender;
 pub use watchdog::WatchdogConfig;

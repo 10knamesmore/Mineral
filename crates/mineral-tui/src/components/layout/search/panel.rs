@@ -399,11 +399,16 @@ fn result_table(
             let rows = songs
                 .iter()
                 .map(|s| {
-                    Row::new(vec![
+                    let row = Row::new(vec![
                         Cell::from(Span::styled(s.name.clone(), main)),
                         Cell::from(Span::styled(join_artists(&s.artists), sub)),
                         Cell::from(Span::styled(format_duration(s.duration_ms), meta)),
-                    ])
+                    ]);
+                    if s.unavailable {
+                        row.style(theme.unavailable_row())
+                    } else {
+                        row
+                    }
                 })
                 .collect();
             (

@@ -18,7 +18,43 @@ use mineral_model::{LyricLine, Word};
 use crate::render::anim::ease_in_out;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
+use crate::runtime::playback::Playback;
 use crate::runtime::state::{AppState, LyricExtra};
+
+/// 歌词时间轴的信任档。歌词永远来自歌曲原源,音频流却可能被拦截脚本顶换
+/// ([`mineral_model::PlayUrl::substituted`])——顶换后时间轴是「借来的」,
+/// 按实测时长差分档降级,不做伪精度对齐。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SyncTrust {
+    /// 原源流:时间轴与音频同源,完全可信。
+    Native,
+
+    /// 顶换流,实测时长与元数据相近(或尚未探出):保留同步,标识提示可能漂移。
+    Borrowed,
+
+    /// 顶换流且实测时长差超阈:时间轴确定失真,放弃逐行同步(静态呈现)。
+    Broken,
+}
+
+/// 顶换流「时长差可容忍」阈值(ms):差在此内多半是同曲重传(常见于补救命中原版
+/// 录音的搬运),同步仍基本可用;超过则视为不同版本,逐行高亮只会误导。
+const SUBSTITUTED_DURATION_SLACK_MS: u64 = 2_000;
+
+/// 归纳当前播放的歌词时间轴信任档(判定口径见 [`SyncTrust`])。
+fn sync_trust(pb: &Playback) -> SyncTrust {
+    if !pb.play_url.as_ref().is_some_and(|u| u.substituted) {
+        return SyncTrust::Native;
+    }
+    // 必须直读 song 元数据:`duration_ms()` 对顶换流已切实测口径,拿它比实测差恒 0。
+    let meta = pb.track.as_ref().map_or(0, |t| t.duration_ms);
+    let engine = pb.engine_duration_ms;
+    // 任一口径未知(刚起播 / 容器探不出 / 元数据缺)先按可用处理,探出后自然降档。
+    if meta > 0 && engine > 0 && engine.abs_diff(meta) > SUBSTITUTED_DURATION_SLACK_MS {
+        SyncTrust::Broken
+    } else {
+        SyncTrust::Borrowed
+    }
+}
 
 /// 渲染 lyrics 面板到给定 [`Rect`]。
 ///
@@ -28,6 +64,7 @@ use crate::runtime::state::{AppState, LyricExtra};
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
     let lines = state.current_lines().filter(|v| !v.is_empty());
     let extra = state.active_lyric_extra();
+    let trust = sync_trust(&state.playback);
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -36,6 +73,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         .title(Line::from(title_left_spans(
             lines.is_some_and(mineral_model::has_words),
             lines.is_some_and(mineral_model::has_timed),
+            trust,
             theme,
         )))
         .title_top(
@@ -54,7 +92,12 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         return;
     };
     let position_ms = state.playback.position_ms;
-    let cur = mineral_model::current_line(lines, position_ms);
+    // 时间轴失真(顶换流时长对不上)→ 不认当前行:无高亮、无自动跟随,退成静态整篇
+    //(手动滚动照常),与「无时间戳歌词」走同一条渲染路径。
+    let cur = match trust {
+        SyncTrust::Broken => None,
+        SyncTrust::Native | SyncTrust::Borrowed => mineral_model::current_line(lines, position_ms),
+    };
     paint_window(
         frame,
         inner,
@@ -88,48 +131,55 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
     );
 }
 
-/// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)。两档同步用不同高亮区分——
-/// 行级 `synced` 用 accent_2(sapphire),逐字 `synced ✦` 用 accent(mauve);`lyrics · `
-/// 前缀恒 subtext 弱化。
+/// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
+/// 不同高亮区分——行级 `synced` 用 accent_2(sapphire),逐字 `synced ✦` 用 accent
+/// (mauve);`lyrics · ` 前缀恒 subtext 弱化。顶换流:[`SyncTrust::Borrowed`] 在
+/// synced 后缀 `~`(yellow,「可能漂移」);[`SyncTrust::Broken`] 整档换成
+/// `unsynced`(yellow,同步已放弃)。
 ///
 /// # Params:
 ///   - `has_words`: 是否有逐字歌词
 ///   - `has_lrc`: 是否有行级 LRC
+///   - `trust`: 时间轴信任档(无 LRC 时无同步可言,不参与)
 ///   - `theme`: 取色
 ///
 /// # Return:
 ///   组成 ` lyrics · synced ✦ ` 的分色 Span 序列(首尾留空格)。
-fn title_left_spans(has_words: bool, has_lrc: bool, theme: &Theme) -> Vec<Span<'static>> {
+fn title_left_spans(
+    has_words: bool,
+    has_lrc: bool,
+    trust: SyncTrust,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     let base = Style::new().fg(theme.subtext);
     let base_lyrics = Span::styled(" lyrics · ", base);
+    let mark = |color| {
+        Style::new()
+            .fg(color)
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::ITALIC)
+    };
 
-    if has_words {
-        vec![
-            base_lyrics,
-            Span::styled(
-                "synced ✦",
-                Style::new()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(" ", base),
-        ]
-    } else if has_lrc {
-        vec![
-            base_lyrics,
-            Span::styled(
-                "synced",
-                Style::new()
-                    .fg(theme.accent_2)
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(" ", base),
-        ]
-    } else {
-        vec![Span::styled(" lyrics ", base)]
+    if !has_lrc {
+        return vec![Span::styled(" lyrics ", base)];
     }
+    if trust == SyncTrust::Broken {
+        return vec![
+            base_lyrics,
+            Span::styled("unsynced", mark(theme.yellow)),
+            Span::styled(" ", base),
+        ];
+    }
+    let mut spans = if has_words {
+        vec![base_lyrics, Span::styled("synced ✦", mark(theme.accent))]
+    } else {
+        vec![base_lyrics, Span::styled("synced", mark(theme.accent_2))]
+    };
+    if trust == SyncTrust::Borrowed {
+        spans.push(Span::styled(" ~", mark(theme.yellow)));
+    }
+    spans.push(Span::styled(" ", base));
+    spans
 }
 
 /// 右上提示:当前生效的副歌词档 + `[t]` 按键提示(方括号示意这是个按键)。翻译标 `tr`
@@ -907,19 +957,123 @@ mod tests {
         Ok(())
     }
 
-    /// 左上数据档三档(文本形状;颜色不进文本快照)。
+    /// 左上数据档三档 × 时间轴信任档(文本形状;颜色不进文本快照)。
     #[test]
     fn title_left_tiers() {
+        use super::SyncTrust;
         let th = Theme::default();
-        assert_eq!(text_of(&title_left_spans(false, false, &th)), " lyrics ");
         assert_eq!(
-            text_of(&title_left_spans(false, true, &th)),
+            text_of(&title_left_spans(false, false, SyncTrust::Native, &th)),
+            " lyrics "
+        );
+        assert_eq!(
+            text_of(&title_left_spans(false, true, SyncTrust::Native, &th)),
             " lyrics · synced "
         );
         assert_eq!(
-            text_of(&title_left_spans(true, true, &th)),
+            text_of(&title_left_spans(true, true, SyncTrust::Native, &th)),
             " lyrics · synced ✦ "
         );
+        // 顶换流:Borrowed 后缀 ~;Broken 整档换 unsynced;无 LRC 时信任档不参与。
+        assert_eq!(
+            text_of(&title_left_spans(false, true, SyncTrust::Borrowed, &th)),
+            " lyrics · synced ~ "
+        );
+        assert_eq!(
+            text_of(&title_left_spans(true, true, SyncTrust::Borrowed, &th)),
+            " lyrics · synced ✦ ~ "
+        );
+        assert_eq!(
+            text_of(&title_left_spans(true, true, SyncTrust::Broken, &th)),
+            " lyrics · unsynced "
+        );
+        assert_eq!(
+            text_of(&title_left_spans(false, false, SyncTrust::Broken, &th)),
+            " lyrics "
+        );
+    }
+
+    /// 时间轴信任分档:原源流恒 Native;顶换流按「实测 vs 元数据」时长差分
+    /// Borrowed / Broken,任一口径未探出先按 Borrowed(不预判失真)。
+    #[test]
+    fn sync_trust_tiers_by_duration_gap() -> color_eyre::Result<()> {
+        use super::{SyncTrust, sync_trust};
+        use crate::runtime::playback::Playback;
+
+        let play_url = |substituted: bool| mineral_model::PlayUrl {
+            song_id: mineral_model::SongId::new(mineral_model::SourceKind::NETEASE, "1"),
+            url: mineral_model::MediaUrl::Local("/x".into()),
+            bitrate_bps: 0,
+            quality: mineral_model::BitRate::Standard,
+            size: 0,
+            format: mineral_model::AudioFormat::Mp3,
+            bit_depth: None,
+            stream_headers: Vec::new(),
+            layout: mineral_model::StreamLayout::Contiguous,
+            substituted,
+        };
+        let mut song = mineral_test::song("1");
+        song.duration_ms = 269_000;
+
+        let mut pb = Playback::new();
+        pb.track = Some(song);
+        pb.play_url = Some(play_url(/*substituted*/ false));
+        pb.engine_duration_ms = 300_000;
+        assert_eq!(sync_trust(&pb), SyncTrust::Native, "原源流时长差不参与");
+
+        pb.play_url = Some(play_url(/*substituted*/ true));
+        pb.engine_duration_ms = 0;
+        assert_eq!(sync_trust(&pb), SyncTrust::Borrowed, "未探出先不判失真");
+        pb.engine_duration_ms = 270_500;
+        assert_eq!(sync_trust(&pb), SyncTrust::Borrowed, "差 1.5s 在容忍内");
+        pb.engine_duration_ms = 280_000;
+        assert_eq!(sync_trust(&pb), SyncTrust::Broken, "差 11s 判失真");
+        Ok(())
+    }
+
+    /// 顶换流时长差超阈(Broken):放弃逐行同步——窗口锚回篇首、无当前行高亮,
+    /// 标识换 `unsynced`(对照同 fixture 的居中同步帧)。
+    #[test]
+    fn lyrics_substituted_broken_goes_static_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 14))?;
+        let mut state =
+            crate::test_support::state_with_lyrics(LyricExtra::None, /*with_words*/ false)?;
+        let song_id = state
+            .playback
+            .track
+            .as_ref()
+            .map(|s| s.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有当前歌"))?;
+        state.playback.play_url = Some(mineral_model::PlayUrl {
+            song_id,
+            url: mineral_model::MediaUrl::remote("https://cdn.example/sub.m4s")?,
+            bitrate_bps: 0,
+            quality: mineral_model::BitRate::Standard,
+            size: 0,
+            format: mineral_model::AudioFormat::Aac,
+            bit_depth: None,
+            stream_headers: Vec::new(),
+            layout: mineral_model::StreamLayout::Chunked,
+            substituted: true,
+        });
+        // 元数据时长 vs 实测差 30s:确定失真。直读元数据(`duration_ms()` 对顶换流
+        // 会随 engine 值切口径,拿它算会自指)。
+        let meta_ms = state.playback.track.as_ref().map_or(0, |t| t.duration_ms);
+        state.playback.engine_duration_ms = meta_ms + 30_000;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &state,
+                &Theme::default(),
+                super::LyricMode::Compact,
+            )
+        })?;
+        crate::test_support::assert_snap!(
+            "歌词:顶换流时长失真 → 放弃同步(静态篇首 + unsynced 标识)",
+            t.backend()
+        );
+        Ok(())
     }
 
     /// 右上副歌词档 + 按键提示;无副歌词时为空(不显示)。

@@ -1,0 +1,51 @@
+---
+source: crates/mineral-channel/bilibili/src/wire/space.rs
+description: 投稿列表解析(完整项 + 缺字段项共存)
+expression: r
+---
+ArcSearchResult {
+    list: Some(
+        ArcSearchList {
+            vlist: [
+                ArcVideoItem {
+                    bvid: Some(
+                        "BV1xx",
+                    ),
+                    title: Some(
+                        "投稿一",
+                    ),
+                    pic: Some(
+                        "//i0.hdslb.com/a.jpg",
+                    ),
+                    description: Some(
+                        "简介",
+                    ),
+                    length: Some(
+                        "24:16",
+                    ),
+                    created: Some(
+                        1600000000,
+                    ),
+                    mid: Some(
+                        12345,
+                    ),
+                    author: Some(
+                        "UP主甲",
+                    ),
+                },
+                ArcVideoItem {
+                    bvid: Some(
+                        "BV1yy",
+                    ),
+                    title: None,
+                    pic: None,
+                    description: None,
+                    length: None,
+                    created: None,
+                    mid: None,
+                    author: None,
+                },
+            ],
+        },
+    ),
+}

@@ -94,6 +94,7 @@ impl MusicChannel for FakeChannel {
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,
+            substituted: false,
         }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {

@@ -348,9 +348,10 @@ impl MusicChannel for NeteaseChannel {
         } else {
             match api::playlist::detail(&self.transport, id, 1000).await {
                 Ok(full) => {
-                    let songs = full
-                        .playlist
-                        .tracks
+                    let mut tracks = full.playlist.tracks;
+                    // 权限数组与 tracks 平行给在响应根,对回后判灰才有依据。
+                    crate::wire::song::merge_privileges(&mut tracks, full.privileges);
+                    let songs = tracks
                         .into_iter()
                         .map(convert::album_song_to_model)
                         .collect::<Vec<Song>>();
@@ -383,9 +384,14 @@ impl MusicChannel for NeteaseChannel {
     }
 
     /// 播放 URL,**双层降级**(spec §4.3):先打 v1(字符串等级),取到可播 url 即用;
-    /// v1 出错或只回试听片段(映射后为空)再降级 legacy(数字 br)。
+    /// v1 出错或只回试听片段(映射后为空)再降级 legacy(数字 br)。例外:v1 整批显式
+    /// 报非 200(无版权,实测 404 + url null)时 legacy 同样无资源,不降级、直接空
+    /// ——上层据空列表发 `SongUrlFailed`,拦截口的脚本可跨源补救。
     async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> Result<Vec<PlayUrl>> {
         if let Ok(dtos) = api::song::song_url_v1(&self.transport, ids, quality).await {
+            if convert::all_explicitly_unavailable(&dtos) {
+                return Ok(Vec::new());
+            }
             let urls = convert::play_urls(dtos, quality);
             if !urls.is_empty() {
                 return Ok(urls);

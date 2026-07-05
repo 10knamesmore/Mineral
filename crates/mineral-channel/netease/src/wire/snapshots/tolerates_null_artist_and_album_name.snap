@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-channel/netease/src/wire/search.rs
-assertion_line: 223
 description: "搜索列表容错:null artist 跳过 + null album 名 → 空串"
 expression: r
 ---
@@ -17,6 +16,7 @@ CloudSongsResult {
                 pic_url: None,
             },
             dt: 0,
+            privilege: None,
         },
     ],
 }

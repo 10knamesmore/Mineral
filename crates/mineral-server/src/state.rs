@@ -48,6 +48,12 @@ pub(crate) struct State {
     /// 已预排进 rodio 队列、等当前曲播完无缝接续的下一曲及其记账(gapless)。
     pub(crate) queued: Option<crate::gapless::Queued>,
 
+    /// 本预取窗口内被 hook 否决(`Skip`)的队列**下标**:`next_index` 预测/推进时越过,
+    /// 队列本身不动。按下标记(与推进「以下标为真相」同条,重复曲互不吸附);任何队列
+    /// 变更/切歌/边界消费都清空,故下标不会陈旧。生命周期整族挂靠预取簿记
+    /// (见 [`Self::invalidate_prefetch`])。
+    pub(crate) prefetch_vetoed: Vec<usize>,
+
     /// queue + original_queue 的版本号。从 1 起步(0 = client 一无所有),变更处
     /// 经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否附带 queue 重段。
     pub(crate) queue_version: u64,
@@ -72,9 +78,19 @@ impl State {
             prefetch_fired_for: None,
             capturing: None,
             queued: None,
+            prefetch_vetoed: Vec::new(),
             queue_version: 1,
             current_version: 1,
         }
+    }
+
+    /// 作废 gapless 预取簿记三件套(预排曲 / 预拉标记 / 否决集),让 `check_prefetch`
+    /// 在下个 tick 按当前队列重排。队列变更 / 插播 / 追加 / 切歌等改变「下一首」预测
+    /// 的地方调用;引擎里可能已建的 next 槽由调用方另行 `audio.clear_next()`。
+    pub(crate) fn invalidate_prefetch(&mut self) {
+        self.queued = None;
+        self.prefetch_fired_for = None;
+        self.prefetch_vetoed.clear();
     }
 
     /// 版本门控同步:轻段恒出,重段仅在 `known` 落后于本端版本时 clone 附带。

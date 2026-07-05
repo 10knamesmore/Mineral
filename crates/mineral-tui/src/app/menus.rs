@@ -405,7 +405,7 @@ fn render_web_url(template: Option<&str>, raw_id: &str) -> Option<String> {
 }
 
 /// POSIX shell 单引号包裹:内嵌 `'` 换成 `'\''`。复制出的 curl 片段要能原样粘进 shell——
-/// header / url 可经 Lua before_play hook 自定义,不能假设无引号。
+/// header / url 可经 Lua before_stream hook 自定义,不能假设无引号。
 fn shell_squote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -767,6 +767,7 @@ mod tests {
             bit_depth: None,
             stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
             layout: mineral_model::StreamLayout::Contiguous,
+            substituted: false,
         });
         let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(playing)));
         let stream = items

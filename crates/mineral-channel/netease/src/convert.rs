@@ -108,6 +108,7 @@ pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
         }))
         .duration_ms(s.dt)
         .cover_url(s.al.pic_url.as_deref().and_then(parse_remote))
+        .unavailable(s.privilege.as_ref().is_some_and(|p| p.st < 0))
         .build()
 }
 
@@ -166,7 +167,7 @@ pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
         .build()
 }
 
-/// 播放 URL 端点 DTO 列表 → [`PlayUrl`] 列表,丢弃无 url(被拒 / 试听片段)的项。
+/// 播放 URL 端点 DTO 列表 → [`PlayUrl`] 列表,丢弃不可播的项(判据见 [`song_url_to_play`])。
 ///
 /// `quality` 是请求时的目标音质,原样回填 [`PlayUrl`] 的 `quality`(响应不含等级回执)。
 pub(crate) fn play_urls(dtos: Vec<SongUrl>, quality: BitRate) -> Vec<PlayUrl> {
@@ -175,8 +176,24 @@ pub(crate) fn play_urls(dtos: Vec<SongUrl>, quality: BitRate) -> Vec<PlayUrl> {
         .collect()
 }
 
-/// 单条播放 URL DTO → [`PlayUrl`];无 url(被拒 / 试听片段)返回 `None`。
+/// 整批条目是否都**显式**报了「本源无资源」(单曲级 `code` 非 200)。
+///
+/// 全灰时 legacy 端点同样不会有资源,调用方据此省掉降级那一跳、直接返回空
+/// (task 层继而发 `SongUrlFailed`,unplayable 拦截口接手)。只认显式 code——
+/// code 缺失或试听片段不算,那些情形 legacy 仍可能给出完整流。
+pub(crate) fn all_explicitly_unavailable(dtos: &[SongUrl]) -> bool {
+    !dtos.is_empty() && dtos.iter().all(|d| d.code.is_some_and(|c| c != 200))
+}
+
+/// 单条播放 URL DTO → [`PlayUrl`];不可播返回 `None`。
+///
+/// 不可播三口:单曲级 `code` 非 200(实测无版权曲为 404,url 同时为 null)、
+/// `freeTrialInfo` 非空(url 只是试听片段——接受它会把片段当整曲播放并入缓存)、
+/// url 缺失。
 fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
+    if d.code.is_some_and(|c| c != 200) || d.free_trial_info.is_some() {
+        return None;
+    }
     let url = MediaUrl::remote(&d.url?).ok()?;
     Some(PlayUrl {
         song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
@@ -191,6 +208,7 @@ fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
         stream_headers: Vec::new(),
         // 网易云是整块直链(MP3/FLAC),随机访问廉价,正常 seekable 打开。
         layout: mineral_model::StreamLayout::Contiguous,
+        substituted: false,
     })
 }
 
@@ -201,6 +219,118 @@ mod tests {
     use super::album_detail_to_model;
     use crate::wire::de::from_value;
     use crate::wire::search::AlbumDetailResult;
+
+    /// 灰歌条目(code=404 + url null,真实响应形态)→ 滤掉;整批全灰 →
+    /// `all_explicitly_unavailable` 为 true(channel 据此不降级 legacy)。
+    #[test]
+    fn grey_entry_is_rejected_and_detected() -> color_eyre::Result<()> {
+        use mineral_model::BitRate;
+
+        use super::{all_explicitly_unavailable, play_urls};
+        use crate::wire::song::SongUrl;
+
+        // 2026-07-04 实测 /song/enhance/player/url/v1 对无版权曲(id 186016)的形态。
+        let grey: SongUrl = from_value(serde_json::json!({
+            "id": 186016, "code": 404, "url": null, "br": 0, "size": 0, "type": null,
+            "freeTrialInfo": null
+        }))?;
+        assert!(
+            all_explicitly_unavailable(std::slice::from_ref(&grey)),
+            "整批显式非 200 应判定为本源无资源"
+        );
+        assert!(
+            play_urls(vec![grey], BitRate::Exhigh).is_empty(),
+            "灰歌条目不得产出 PlayUrl"
+        );
+        assert!(
+            !all_explicitly_unavailable(&[]),
+            "空批不算全灰(v1 异常形态,交给 legacy 降级)"
+        );
+        Ok(())
+    }
+
+    /// 试听片段(code=200 但 freeTrialInfo 非空)→ 不算可播,滤掉;且**不**算显式无资源
+    /// (legacy 可能给完整流,降级仍要走)。
+    #[test]
+    fn trial_fragment_is_not_playable() -> color_eyre::Result<()> {
+        use mineral_model::BitRate;
+
+        use super::{all_explicitly_unavailable, play_urls};
+        use crate::wire::song::SongUrl;
+
+        let trial: SongUrl = from_value(serde_json::json!({
+            "id": 33894312, "code": 200, "url": "https://m7.music.126.net/trial.mp3",
+            "br": 320_000, "size": 1_048_576, "type": "mp3",
+            "freeTrialInfo": { "start": 45, "end": 75 }
+        }))?;
+        assert!(
+            !all_explicitly_unavailable(std::slice::from_ref(&trial)),
+            "试听不算显式无资源,legacy 降级仍要走"
+        );
+        assert!(
+            play_urls(vec![trial], BitRate::Exhigh).is_empty(),
+            "试听片段不得当完整可播流放行"
+        );
+        Ok(())
+    }
+
+    /// 正常条目(code=200 + 完整 url)照常产出;混批(灰 + 正常)不触发全灰判定。
+    #[test]
+    fn playable_entry_survives_mixed_batch() -> color_eyre::Result<()> {
+        use mineral_model::BitRate;
+
+        use super::{all_explicitly_unavailable, play_urls};
+        use crate::wire::song::SongUrl;
+
+        let batch: Vec<SongUrl> = vec![
+            from_value(serde_json::json!({
+                "id": 186016, "code": 404, "url": null
+            }))?,
+            from_value(serde_json::json!({
+                "id": 1_862_188_922, "code": 200,
+                "url": "https://m7.music.126.net/full.mp3", "br": 320_000,
+                "size": 8_388_608, "type": "mp3"
+            }))?,
+        ];
+        assert!(!all_explicitly_unavailable(&batch), "混批不算全灰");
+        let urls = play_urls(batch, BitRate::Exhigh);
+        assert_eq!(urls.len(), 1, "只有可播条目产出");
+        assert_eq!(urls.first().map(|u| u.song_id.as_str()), Some("1862188922"));
+        Ok(())
+    }
+
+    /// 权限块 `st < 0`(实测下架灰歌 -200)→ `Song.unavailable`;
+    /// `st = 0` / 权限块缺失(旧端点形态)→ 可播。
+    #[test]
+    fn privilege_st_negative_marks_unavailable() -> color_eyre::Result<()> {
+        use super::album_song_to_model;
+        use crate::wire::song::AlbumSong;
+
+        // cloudsearch 形态:privilege 内联在歌曲对象上。
+        let grey: AlbumSong = from_value(serde_json::json!({
+            "id": 186_016, "name": "晴天",
+            "ar": [{ "id": 6452, "name": "周杰伦" }],
+            "al": { "id": 18896, "name": "葉惠美" },
+            "dt": 269_000,
+            "privilege": { "id": 186_016, "st": -200, "pl": 0, "dl": 0 }
+        }))?;
+        assert!(album_song_to_model(grey).unavailable, "st=-200 应判不可播");
+
+        let normal: AlbumSong = from_value(serde_json::json!({
+            "id": 1, "name": "ok", "al": { "id": 2, "name": "a" },
+            "privilege": { "id": 1, "st": 0 }
+        }))?;
+        assert!(!album_song_to_model(normal).unavailable, "st=0 应可播");
+
+        let missing: AlbumSong = from_value(serde_json::json!({
+            "id": 3, "name": "no-priv", "al": { "id": 4, "name": "b" }
+        }))?;
+        assert!(
+            !album_song_to_model(missing).unavailable,
+            "权限块缺失不得误判不可播"
+        );
+        Ok(())
+    }
 
     /// 专辑详情(顶层元信息 + 曲目)→ model:简介 / track_count / 曲目 / 封面 / id 都到位。
     /// 锁住"详情端点独家给的 description 不再被丢"这一重构要点。

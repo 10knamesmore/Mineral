@@ -98,6 +98,7 @@ Album {
                 ),
             ),
             source_url: None,
+            unavailable: false,
         },
         Song {
             id: SongId {
@@ -151,6 +152,7 @@ Album {
                 ),
             ),
             source_url: None,
+            unavailable: false,
         },
     ],
 }

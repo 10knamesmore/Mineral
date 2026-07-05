@@ -63,14 +63,37 @@ mineral = {}
 function mineral.on(event, handler) end
 
 --- 同步拦截点名(与 Rust `HookKind` 由守卫测试钉死同步)。
----@alias mineral.HookName "before_play"|"before_download"
+---@alias mineral.HookName "before_stream"|"before_download"
 
---- 同步拦截回调的 ctx。
+--- DEFER 哨兵:拦截回调返回它 = 裁决稍后经 `ctx.resolve(...)` 补交
+--- (异步场景:回调里发起 `mineral.library.search`,在其回调里 resolve)。
+---@type table
+mineral.DEFER = {}
+
+--- 拦截 ctx 的公共基座(所有拦截点都有);各拦截点的完整 ctx 是它的子类
+--- (per-kind `@class` + `mineral.hook` 的 `@overload`,与 `mineral.on` 的
+--- per-event args 同一模式——新增拦截点 = 加一个子类 + 一行 overload)。
 ---@class mineral.HookCtx
 ---@field song mineral.Song  触发拦截的歌
----@field url string  原始播放 / 下载 URL
----@field quality string  原始音质名(standard/higher/exhigh/lossless/hires)
 ---@field kind mineral.HookName  拦截点名
+---@field resolve fun(decision: nil|boolean|mineral.HookReturn): nil  延迟补交裁决(配合返回 DEFER);只认第一次,超时后补交静默丢
+local HookCtx = {}
+
+--- `before_stream` 的 ctx:宿主解析出的播放流 + unplayable 信号。
+---@class mineral.BeforeStreamCtx: mineral.HookCtx
+---@field mode "immediate"|"prefetch"  取流管线的提交点口味,两处各 fire 一次:即时起播前(预算 = `script.hook_timeout_ms`)/ gapless 预取武装前(预算 = 曲尾预取窗口,适合异步跨源搜);简单脚本可无视
+---@field url string|nil  原始播放 URL;nil = 宿主没解析出可播 URL(取链失败 / 灰歌)
+---@field quality string|nil  原始音质名(standard/higher/exhigh/lossless/hires);无 URL 时 nil
+---@field unplayable boolean  是否无可播 URL(`url == nil` 的便利投影);true 时改写 = 顶入可播流
+local BeforeStreamCtx = {}
+
+--- `before_download` 的 ctx:取到的下载直链。没有 `mode`——提交点口味是
+--- 取流管线的概念,下载链路没有这个维度。
+---@class mineral.BeforeDownloadCtx: mineral.HookCtx
+---@field url string|nil  下载直链;nil = 宿主没解析出直链
+---@field quality string|nil  原始音质名;无直链时 nil
+---@field unplayable boolean  是否无直链(`url == nil` 的便利投影)
+local BeforeDownloadCtx = {}
 
 --- 同步拦截回调的改写返回值(字段全可选,只给要改的)。
 ---@class mineral.HookReturn
@@ -78,16 +101,31 @@ function mineral.on(event, handler) end
 ---@field quality? string  改写后的音质名
 ---@field headers? string[][]  改写后的取流请求头,`{{name, value}}` 数组(随顶替的 url 带上其鉴权/防盗链头)
 ---@field layout? "contiguous"|"chunked"  顶替流的容器布局:分片/自适应容器给 "chunked" 让播放层流式打开(避免起播预扫全片),直链给 "contiguous" 保留 seek;改 url 而不给时默认 "chunked"
----@field skip? string  跳过本次,值为原因(给了 skip 则忽略 url/quality/headers/layout)
+---@field bitrate_bps? integer  顶替流的实测码率(bps),纯展示元信息(transport fmt 段);从 `library.song_url` 拿到真值时透传,不给显 0
+---@field format? string  顶替流的容器格式名(如 "m4a"/"flac"),纯展示元信息;未知名保留原文
+---@field skip? string  跳过本次,值为原因(给了 skip 则忽略其余字段)
 
---- 注册同步拦截 hook:daemon 在起播前(`before_play`)/ 下载写盘前
---- (`before_download`)同步等待回调裁决。返回值:`nil`(或 `true`)放行;
---- `false` 或 `{ skip = "原因" }` 跳过本次(播放跳下一首 / 下载记 skip);
---- `{ url = ?, quality = ? }` 改写后继续。改写过的播放流不入缓存。
---- **回调要快**:超过 `script.hook_timeout_ms`(默认 2000ms)按放行处理。
---- 同一拦截点可注册多个,按注册顺序调用,首个非放行返回值短路生效。
+--- 注册同步拦截 hook:daemon 在歌走向「开播」的提交点(`before_stream`,即时起播
+--- 前 / gapless 预取武装前,见 `ctx.mode`)/ 下载写盘前(`before_download`)等待
+--- 回调裁决。
+---
+--- 返回值契约:
+--- - `nil` 或 `true` —— 放行,原样继续
+--- - `false` 或 `{ skip = "原因" }` —— 跳过本次(即时口推进下一首 /
+---   预取口否决预排、队列不动 / 下载记 skip)
+--- - `{ url = ?, quality = ?, ... }` —— 改写后继续(字段见 `mineral.HookReturn`;
+---   改写过的播放流不入缓存)
+--- - `mineral.DEFER` —— 裁决稍后经 `ctx.resolve(...)` 补交(异步搜索期间
+---   不阻塞脚本线程)
+---
+--- 注意:
+--- - **同步返回要快**:超过预算(immediate = `script.hook_timeout_ms`,默认
+---   2000ms;prefetch = 预取窗口)按放行处理;DEFER 后忘记 resolve 同样超时放行
+--- - 同一拦截点可注册多个,按注册顺序调用,首个非放行返回值(或 DEFER)短路生效
 ---@param name mineral.HookName
----@param interceptor fun(ctx: mineral.HookCtx): nil|boolean|mineral.HookReturn
+---@param interceptor fun(ctx: mineral.HookCtx): nil|boolean|mineral.HookReturn|table
+---@overload fun(name: "before_stream", interceptor: fun(ctx: mineral.BeforeStreamCtx): nil|boolean|mineral.HookReturn|table)
+---@overload fun(name: "before_download", interceptor: fun(ctx: mineral.BeforeDownloadCtx): nil|boolean|mineral.HookReturn|table)
 function mineral.hook(name, interceptor) end
 
 --- 子进程句柄(`mineral.spawn` 返回)。
@@ -303,6 +341,25 @@ function mineral.library.tracks(playlist_id, on_songs) end
 ---@param on_songs fun(songs: mineral.Song[]|nil, err: string|nil): nil
 ---@overload fun(query: string, on_songs: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
 function mineral.library.search(query, opts, on_songs) end
+
+--- 一首歌的可播 URL 投影(`library.song_url` 回调入参)。
+--- `url` / `quality` / `headers` / `layout` 与 hook 改写返回值同形,可原样喂给
+--- `ctx.resolve(...)` 完成顶入。
+---@class mineral.PlayUrl
+---@field song_id string  全限定歌曲 id
+---@field url string  可播地址
+---@field quality string  音质名
+---@field bitrate_bps integer  实际比特率(bps),拿不到为 0
+---@field size integer  文件字节数,拿不到为 0
+---@field format string  容器格式(如 "mp3"/"flac"),拿不到为空串
+---@field headers string[][]  取流请求头,`{{name, value}}` 数组(空 = 无附加头)
+---@field layout "contiguous"|"chunked"  流容器布局
+
+--- 解析一首歌的可播 URL(异步回调):按 id 的 namespace 走对应源取流。
+--- 无可播资源 / 无对应源时回调收 `(nil, err)`。
+---@param song_id string  全限定歌曲 id(如 "bilibili:BV1xx:1")
+---@param on_url fun(play_url: mineral.PlayUrl|nil, err: string|nil): nil
+function mineral.library.song_url(song_id, on_url) end
 
 --- 设/取消一首歌的 love(♥)。fire-and-forget(本地 persist + 远端)。
 ---@param song_id string

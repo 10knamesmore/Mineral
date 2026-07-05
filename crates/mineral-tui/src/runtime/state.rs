@@ -410,7 +410,9 @@ impl AppState {
                 self.redecorate_for_source(song_id.namespace());
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
-            TaskEvent::PlayUrlReady { .. } | TaskEvent::LyricsReady { .. } => {}
+            TaskEvent::PlayUrlReady { .. }
+            | TaskEvent::SongUrlFailed { .. }
+            | TaskEvent::LyricsReady { .. } => {}
             TaskEvent::SearchResults {
                 source,
                 kind,

@@ -35,6 +35,11 @@ pub struct Playback {
     /// 当前曲目采样率(Hz),由 audio engine 实测灌入;0 = 未在播 / 未探出。transport 在 fmt 段显示。
     pub sample_rate_hz: u32,
 
+    /// 当前曲目 decoder 实测时长(ms);0 = 未探出(刚起播 / 部分容器探不出)。
+    /// 与 song 元数据时长([`Self::duration_ms`])是两个口径:顶换流场景二者之差
+    /// 是判断歌词时间轴是否失真的依据。
+    pub engine_duration_ms: u64,
+
     /// 下一曲 gapless 预排状态。transport 据此显预排标记。
     pub prefetch: Prefetch,
 }
@@ -100,13 +105,21 @@ impl Playback {
             audio_backend: AudioBackend::Device,
             buffered_bps: Bps::ZERO,
             sample_rate_hz: 0,
+            engine_duration_ms: 0,
             prefetch: Prefetch::default(),
         }
     }
 
     /// 当前曲目时长(ms),没有 track 时返回 0。优先取 song 元数据,因为 decoder
     /// 探出 duration 比 song 元数据慢一帧、且部分容器探不出来。
+    ///
+    /// 例外:**顶换流**([`mineral_model::PlayUrl::substituted`])的元数据时长描述的
+    /// 是原源音频,不是实际在播的流——decoder 一探出实测就切实测(总时长 / 进度条 /
+    /// 按比例 seek 随之对齐替身流);未探出前仍回落元数据。
     pub fn duration_ms(&self) -> u64 {
+        if self.play_url.as_ref().is_some_and(|u| u.substituted) && self.engine_duration_ms > 0 {
+            return self.engine_duration_ms;
+        }
         self.track.as_ref().map_or(0, |t| t.duration_ms)
     }
 
@@ -123,6 +136,7 @@ impl Playback {
         self.audio_backend = snap.backend;
         self.buffered_bps = snap.buffered_bps;
         self.sample_rate_hz = snap.sample_rate_hz;
+        self.engine_duration_ms = snap.duration_ms;
         self.prefetch = Prefetch {
             ready: snap.next_ready,
             buffered_bps: snap.next_buffered_bps,
@@ -190,6 +204,34 @@ mod tests {
     fn duration_ms_from_track() {
         assert_eq!(Playback::new().duration_ms(), 0);
         assert_eq!(with_track(4242, 0).duration_ms(), 4242);
+    }
+
+    /// `duration_ms` 顶换流口径:实测探出后切实测(元数据描述的是原源音频),
+    /// 未探出前回落元数据;原源流即使实测在手也仍用元数据(探出慢一帧 + 部分容器探不出)。
+    #[test]
+    fn duration_ms_prefers_engine_for_substituted_stream() {
+        let mut pb = with_track(296_533, 0);
+        pb.play_url = Some(mineral_model::PlayUrl {
+            song_id: SongId::new(SourceKind::NETEASE, "185868"),
+            url: mineral_model::MediaUrl::Local("/sub.m4s".into()),
+            bitrate_bps: 0,
+            quality: mineral_model::BitRate::Standard,
+            size: 0,
+            format: mineral_model::AudioFormat::Aac,
+            bit_depth: None,
+            stream_headers: Vec::new(),
+            layout: mineral_model::StreamLayout::Chunked,
+            substituted: true,
+        });
+        assert_eq!(pb.duration_ms(), 296_533, "未探出前回落元数据");
+        pb.engine_duration_ms = 298_000;
+        assert_eq!(pb.duration_ms(), 298_000, "探出后以替身流实测为准");
+
+        // 原源流:实测在手也不切口径。
+        if let Some(pu) = pb.play_url.as_mut() {
+            pu.substituted = false;
+        }
+        assert_eq!(pb.duration_ms(), 296_533, "原源流恒元数据");
     }
 
     /// gapless 无缝边界:current_song 翻成新曲 + position 归零时,进度条按**新曲**时长重缩放

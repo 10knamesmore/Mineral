@@ -73,6 +73,7 @@ Artist {
             duration_ms: 323000,
             cover_url: None,
             source_url: None,
+            unavailable: false,
         },
     ],
 }

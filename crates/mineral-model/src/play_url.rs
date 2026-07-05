@@ -48,6 +48,11 @@ pub struct PlayUrl {
     /// 流的容器布局([`StreamLayout`]):播放层据此选解码器打开策略。缺省(旧载荷)→ `Contiguous`。
     #[serde(default)]
     pub layout: StreamLayout,
+
+    /// 播放地址是否被拦截脚本顶换过(URL 非本曲 channel 所出)。展示层据此降低对
+    /// 「借自原源的元数据」的信任(如歌词时间轴按实测时长差分档降级)。缺省(旧载荷)→ `false`。
+    #[serde(default)]
+    pub substituted: bool,
 }
 
 impl PlayUrl {
@@ -81,6 +86,7 @@ mod tests {
             bit_depth: None,
             stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
             layout: crate::play_url::StreamLayout::Contiguous,
+            substituted: false,
         };
         let json = serde_json::to_string(&pu)?;
         let back = serde_json::from_str::<PlayUrl>(&json)?;
@@ -113,6 +119,7 @@ mod tests {
             bit_depth: None,
             stream_headers: Vec::new(),
             layout: StreamLayout::Chunked,
+            substituted: false,
         };
         let back = serde_json::from_str::<PlayUrl>(&serde_json::to_string(&pu)?)?;
         assert_eq!(back.layout, StreamLayout::Chunked);

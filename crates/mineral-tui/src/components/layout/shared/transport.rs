@@ -407,6 +407,7 @@ mod tests {
             bit_depth,
             stream_headers: Vec::new(),
             layout: mineral_model::StreamLayout::Contiguous,
+            substituted: false,
         });
         pb
     }

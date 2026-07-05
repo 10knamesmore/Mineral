@@ -8,7 +8,6 @@
 use mineral_model::{PlayUrl, Song, SongId};
 use mineral_task::{ChannelFetchKind, PlaylistWriteOp, Priority, TaskEvent, TaskKind};
 
-use crate::gapless;
 use crate::player::PlayerCore;
 
 impl PlayerCore {
@@ -24,6 +23,9 @@ impl PlayerCore {
             match ev {
                 TaskEvent::PlayUrlReady { song_id, play_url } => {
                     self.handle_play_url_ready(&song_id, play_url);
+                }
+                TaskEvent::SongUrlFailed { song_id } => {
+                    self.handle_song_url_failed(&song_id);
                 }
                 TaskEvent::LyricsReady { song_id, lyrics } => {
                     self.handle_lyrics_ready(&song_id, lyrics);
@@ -96,15 +98,54 @@ impl PlayerCore {
                 if let Some(song) = song {
                     // 拦截桥:无脚本同步直走,有脚本异步裁决(play_url 已在锁内写过,
                     // 桥内回填同值幂等;改写时回填改写值)。
-                    crate::hook_bridge::before_play(self, &song, play_url);
+                    crate::hook_bridge::before_stream(self, &song, play_url);
                 }
             }
             Route::Prefetch => {
                 mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
-                gapless::on_prefetch_url_ready(self, song_id, play_url);
+                // 拦截桥(预取提交点):无脚本直走武装,有脚本异步裁决后再武装/否决。
+                crate::hook_bridge::on_prefetch_ready(self, song_id, play_url);
             }
             Route::Drop => {
                 mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
+            }
+        }
+    }
+
+    /// SongUrlFailed 命中当前歌 → 即时口 unplayable 拦截(无脚本维持
+    /// `track_finished("error")` 的原失败语义);命中正在预拉的下一首 → 预取口
+    /// unplayable 拦截(无脚本静默,边界 Fallback 兜底);否则丢。
+    pub(crate) fn handle_song_url_failed(&self, song_id: &SongId) {
+        enum Route {
+            Current(Box<Song>),
+            Prefetch,
+            Drop,
+        }
+        let route = {
+            let st = self.inner.state.lock();
+            let want = st.current_song.as_ref().map(|t| &t.id);
+            if want == Some(song_id) {
+                match st.current_song.clone() {
+                    Some(song) => Route::Current(Box::new(song)),
+                    None => Route::Drop,
+                }
+            } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
+                Route::Prefetch
+            } else {
+                Route::Drop
+            }
+        };
+        match route {
+            Route::Current(song) => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "unplayable", "song url failed");
+                crate::hook_bridge::on_unplayable_current(self, &song);
+            }
+            Route::Prefetch => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch_unplayable", "song url failed");
+                crate::hook_bridge::on_unplayable_prefetch(self, song_id);
+            }
+            Route::Drop => {
+                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "song url failed");
             }
         }
     }

@@ -91,6 +91,8 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     st.current_lyrics = None;
     st.current_lyrics_song_id = None;
     st.prefetch_fired_for = None;
+    // 边界消费:本窗口的否决已完成使命(预测/推进都越过了被否决曲),清空。
+    st.prefetch_vetoed.clear();
     st.bump_current();
     old_id
 }
@@ -246,6 +248,33 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
             });
         }
     }
+}
+
+/// 脚本改写的预排曲:按 effective 直接武装,**不 capture**——缓存按
+/// song_id+quality 入键,改写内容与原曲是否一致由脚本自负,污染缓存代价高。
+/// 队列已变(找不到该曲)则丢弃。
+///
+/// # Params:
+///   - `song_id`: 目标曲 id(应为已发起预排的下一曲)
+///   - `play_url`: 改写后的播放 URL(含取流头 / 布局)
+pub(crate) fn on_prefetch_rewritten(player: &PlayerCore, song_id: &SongId, play_url: PlayUrl) {
+    let next = player.with_state(|st| st.queue.iter().find(|s| s.id == *song_id).cloned());
+    let Some(next) = next else {
+        return;
+    };
+    player.audio().append_next(
+        play_url.url.clone(),
+        play_url.stream_headers.clone(),
+        play_url.layout,
+    );
+    player.with_state(|st| {
+        st.queued = Some(Queued {
+            song: next,
+            play_url: Some(play_url),
+            origin: PlaybackOrigin::Remote,
+            capturing: None,
+        });
+    });
 }
 
 /// 收割已下完的 capture 进缓存:当前曲(`download_complete`)+ 已预排曲(`next_download_complete`),

@@ -6,7 +6,7 @@
 
 use mineral_config::ColorRef;
 use mineral_model::SourceKind;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 
 /// 一组完整的 UI 颜色 token。
 ///
@@ -54,6 +54,16 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// unavailable(来源标记「无可播资源」)行的整行降权样式:DIM 叠加,各列语义色不动。
+    /// 只降视觉权重、**不禁选**——unavailable 是列表元数据口径,播放时取流失败自有
+    /// 拦截脚本补救,禁选会堵死这条路。
+    ///
+    /// # Return:
+    ///   叠加用样式(调用方 `Row::style` 应用)。
+    pub fn unavailable_row(&self) -> Style {
+        Style::new().add_modifier(Modifier::DIM)
+    }
+
     /// 把配置里的 [`ColorRef`](token 名 / `#rrggbb`)解析成本主题下的具体色。
     ///
     /// token 名随主题联动(查 14 token 表),hex 为固定色。供 search_hit / 来源徽标色共用。

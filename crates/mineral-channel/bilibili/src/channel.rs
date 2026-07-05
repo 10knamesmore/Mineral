@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
 use mineral_model::{
-    Album, AlbumId, BitRate, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
-    UserId,
+    Album, AlbumId, Artist, ArtistId, BitRate, PlayUrl, Playlist, PlaylistId, SearchKind, Song,
+    SongId, SourceKind, UserId,
 };
 use rustc_hash::FxHashSet;
 
@@ -19,6 +19,9 @@ use crate::credential::StoredBilibiliAuth;
 use crate::error::ApiCodeError;
 use crate::transport::Transport;
 use crate::wire::view::VideoInfo;
+
+/// `artist_detail` 热门曲目取的投稿条数(播放数倒序单页,不翻页)。
+const HOT_SONGS_PAGE_SIZE: u32 = 20;
 
 /// 哔哩哔哩 channel 实例。guest 模式(无登录)可搜索 / 详情 / 取流;带登录态(见
 /// [`Self::with_credential`])额外解锁「我的收藏夹」+ 高码率。
@@ -120,11 +123,11 @@ impl MusicChannel for BilibiliChannel {
     }
 
     fn caps(&self) -> ChannelCaps {
-        // 只全库搜视频(→ Song);写操作永不支持(只读源)。song 模板用位置占位拆
-        // `bvid:page` 复合裸 id(`?p=1` 对单 P 视频冗余但合法,不特判);收藏夹的稳定
-        // 分享 URL 需要 mid 参与,裸 fid 拼不出,故歌单模板留空。
+        // 全库搜视频(→ Song)+ 用户(→ Artist);写操作永不支持(只读源)。song 模板
+        // 用位置占位拆 `bvid:page` 复合裸 id(`?p=1` 对单 P 视频冗余但合法,不特判);
+        // 收藏夹的稳定分享 URL 需要 mid 参与,裸 fid 拼不出,故歌单模板留空。
         ChannelCaps::builder()
-            .searchable(vec![SearchKind::Song])
+            .searchable(vec![SearchKind::Song, SearchKind::Artist])
             .playlist_edit(false)
             .song_web_url(Some("https://www.bilibili.com/video/{0}?p={1}".to_owned()))
             .build()
@@ -132,6 +135,12 @@ impl MusicChannel for BilibiliChannel {
 
     async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>> {
         api::search::search_songs(&self.transport, query, page_number(page), page.limit)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn search_artists(&self, query: &str, page: Page) -> Result<SearchHits<Artist>> {
+        api::search::search_artists(&self.transport, query, page_number(page), page.limit)
             .await
             .map_err(map_err)
     }
@@ -166,6 +175,61 @@ impl MusicChannel for BilibiliChannel {
             .await
             .map_err(map_err)?;
         Ok(convert::view_to_album(info))
+    }
+
+    async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
+        // 名片是主体;热门曲目 = 投稿按播放数取一页(整视频当 P1 曲目,与搜索同一
+        // 投影),拉不到(arc/search 风控)时降级空列表,不拖垮详情。
+        let (card, hot) = tokio::join!(
+            api::space::card(&self.transport, id.as_str()),
+            api::space::arc_videos(
+                &self.transport,
+                id.as_str(),
+                api::space::ArcOrder::Click,
+                /*page*/ 1,
+                HOT_SONGS_PAGE_SIZE,
+            ),
+        );
+        let card = card.map_err(map_err)?;
+        let songs = match hot {
+            Ok(result) => result
+                .list
+                .map(|l| l.vlist)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(convert::arc_video_to_song)
+                .collect(),
+            Err(e) => {
+                mineral_log::warn!(
+                    target: "bilibili",
+                    artist = id.value(),
+                    error = mineral_log::chain(&e),
+                    "hot uploads fetch failed; artist songs empty"
+                );
+                Vec::new()
+            }
+        };
+        Ok(convert::card_to_artist(id.clone(), card, songs))
+    }
+
+    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
+        // UP 主投稿,每 BV 一张专辑(元信息版,P 数/曲目详情走 album_detail)。
+        let result = api::space::arc_videos(
+            &self.transport,
+            id.as_str(),
+            api::space::ArcOrder::Pubdate,
+            page_number(page),
+            page.limit,
+        )
+        .await
+        .map_err(map_err)?;
+        Ok(result
+            .list
+            .map(|l| l.vlist)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(convert::arc_video_to_album)
+            .collect())
     }
 
     async fn song_urls(&self, ids: &[SongId], _quality: BitRate) -> Result<Vec<PlayUrl>> {

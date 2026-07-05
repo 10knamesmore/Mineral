@@ -214,7 +214,12 @@ fn build_row<'a>(
         ))));
     }
     cells.push(Cell::from(len));
-    Row::new(cells)
+    let row = Row::new(cells);
+    if sv.data.unavailable {
+        row.style(theme.unavailable_row())
+    } else {
+        row
+    }
 }
 
 /// 把时长 ms 格式化成 `m:ss`(library 行右侧使用)。
