@@ -15,6 +15,7 @@ comfy-table             = { workspace = true }
 mineral-audio           = { workspace = true }
 mineral-channel-core    = { workspace = true }
 mineral-channel-netease = { workspace = true }
+mineral-channel-bilibili = { workspace = true }
 mineral-config          = { workspace = true }
 mineral-log             = { workspace = true }
 mineral-paths           = { workspace = true }

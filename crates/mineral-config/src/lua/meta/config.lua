@@ -61,21 +61,12 @@
 ---@field yellow? string "#rrggbb" 暂停指示
 ---@field green? string "#rrggbb" 播放指示
 ---@field peach? string "#rrggbb" 命令 / 搜索前缀
----@field roles? mineral.RolesConfig 语义角色 → token 名映射
 ---@field search_hit? mineral.SearchHitConfig 搜索命中字符的样式(列表高亮)
 
 ---搜索命中字符的样式,在所在列的基础样式上叠加。
 ---@class mineral.SearchHitConfig
 ---@field color? string 高亮色:14 个 token 名之一(如 "peach",随主题联动)或 "#rrggbb"(固定色)
 ---@field modifiers? ("bold"|"italic"|"underline"|"dim"|"reversed"|"crossed_out")[] 叠加的字体效果;数组整体替换,空数组 = 仅变色;实际效果取决于终端支持
-
----语义角色映射:来源徽标等只声明角色,这里决定角色落到哪个 token 色。
----取值必须是 14 个 token 名之一:base / mantle / crust / surface0 / surface1 /
----overlay / subtext / text / accent / accent_2 / red / yellow / green / peach。
----@class mineral.RolesConfig
----@field accent? string 来源强调角色落到哪个 token
----@field muted? string 来源次要角色
----@field faint? string 来源最弱角色
 
 -- 键绑定值:单键字符串(如 "<Space>")或键数组(如 { "n", "j" });数组**整体替换**默认绑定。
 --
@@ -284,12 +275,21 @@
 ---音乐源。
 ---@class mineral.SourcesConfig
 ---@field netease? mineral.NeteaseSection 网易云
+---@field bilibili? mineral.BilibiliSection 哔哩哔哩
 
 ---网易云源的网络参数。
 ---@class mineral.NeteaseSection
 ---@field timeout_secs? integer 单次 API 请求超时,秒
 ---@field proxy? string|false 代理 URL(如 "socks5://127.0.0.1:1080" 或 "http://..."),或 false = 不走代理;不接受 true
 ---@field max_connections? integer 到网易云的最大并发连接数,0 = 不限
+---@field color? string 来源徽标色:token 名(随主题联动)或 "#rrggbb"(固定色)
+
+---哔哩哔哩源的网络参数。
+---@class mineral.BilibiliSection
+---@field timeout_secs? integer 单次 API 请求超时,秒
+---@field proxy? string|false 代理 URL(如 "socks5://127.0.0.1:1080" 或 "http://..."),或 false = 不走代理;不接受 true
+---@field max_connections? integer 到 B站的最大并发连接数,0 = 不限
+---@field color? string 来源徽标色:token 名或 "#rrggbb"(默认 B站品牌粉)
 
 ---daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动;
 ---改后需重启 daemon 生效。

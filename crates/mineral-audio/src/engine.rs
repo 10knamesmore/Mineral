@@ -270,12 +270,20 @@ impl<'a> Engine<'a> {
     /// 处理一条命令。错误就地 warn,不冒泡(单命令失败不该掀掉引擎线程)。
     fn handle_command(&mut self, cmd: AudioCommand) {
         match cmd {
-            AudioCommand::Play { url, capture } => {
-                if let Err(e) = self.play(url, capture) {
+            AudioCommand::Play {
+                url,
+                headers,
+                capture,
+            } => {
+                if let Err(e) = self.play(url, headers, capture) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "play error");
                 }
             }
-            AudioCommand::AppendNext { url, capture } => self.append_next(url, capture),
+            AudioCommand::AppendNext {
+                url,
+                headers,
+                capture,
+            } => self.append_next(url, headers, capture),
             AudioCommand::ClearNext => self.clear_next(),
             AudioCommand::Pause => self.player.pause(),
             AudioCommand::Resume => self.player.play(),
@@ -286,7 +294,12 @@ impl<'a> Engine<'a> {
 
     /// 切到 `url` 从头播(cut-over):停掉当前队列(含已预排的 next)、作废待建预排,
     /// 解码 + append 新曲后起播,武装 [`PlayHead`] 当前槽。
-    fn play(&mut self, url: MediaUrl, capture: Option<PathBuf>) -> color_eyre::Result<()> {
+    fn play(
+        &mut self,
+        url: MediaUrl,
+        headers: Vec<(String, String)>,
+        capture: Option<PathBuf>,
+    ) -> color_eyre::Result<()> {
         mineral_log::info!(target: "audio", url = %url, capture = ?capture, "start decoding");
         // 切歌前先 disarm,旧曲尾巴(及已预排 next)的 sound_count 退潮不会被算成曲终。
         self.head.cur.occupied = false;
@@ -301,7 +314,8 @@ impl<'a> Engine<'a> {
         let track_gen = self.next_gen();
         let idx = 0;
         self.reset_progress(idx, track_gen);
-        let (dur_ms, sr, local) = self.build_and_append_blocking(url, capture, track_gen, idx)?;
+        let (dur_ms, sr, local) =
+            self.build_and_append_blocking(url, headers, capture, track_gen, idx)?;
         if local {
             self.progress
                 .slot(idx)
@@ -324,7 +338,12 @@ impl<'a> Engine<'a> {
 
     /// 预排下一曲:占用另一进度槽,远端走链下建流(就绪后 drain 才 append),本地立即排进通道。
     /// 当前无曲在播时忽略(上层不该在停止态预排)。
-    fn append_next(&mut self, url: MediaUrl, capture: Option<PathBuf>) {
+    fn append_next(
+        &mut self,
+        url: MediaUrl,
+        headers: Vec<(String, String)>,
+        capture: Option<PathBuf>,
+    ) {
         if !self.head.cur.occupied {
             return;
         }
@@ -347,7 +366,10 @@ impl<'a> Engine<'a> {
                 let progress = Arc::clone(&self.progress);
                 let prefetch_bytes = self.prefetch_bytes;
                 self.rt.spawn(async move {
-                    match create_stream(u, capture, track_gen, idx, progress, prefetch_bytes).await {
+                    let target = StreamTarget { url: u, headers };
+                    match create_stream(target, capture, track_gen, idx, progress, prefetch_bytes)
+                        .await
+                    {
                         Ok((reader, byte_len)) => {
                             let _ = tx.send(NextBuilt {
                                 reader,
@@ -413,6 +435,7 @@ impl<'a> Engine<'a> {
     fn build_and_append_blocking(
         &self,
         url: MediaUrl,
+        headers: Vec<(String, String)>,
         capture: Option<PathBuf>,
         track_gen: u64,
         idx: usize,
@@ -420,8 +443,9 @@ impl<'a> Engine<'a> {
         let (reader, byte_len, local) = match url {
             MediaUrl::Remote(u) => {
                 let progress = Arc::clone(&self.progress);
+                let target = StreamTarget { url: u, headers };
                 let (reader, byte_len) = self.rt.block_on(create_stream(
-                    u,
+                    target,
                     capture,
                     track_gen,
                     idx,
@@ -541,11 +565,21 @@ fn open_local(p: &std::path::Path) -> color_eyre::Result<(Box<dyn ReadSeek>, Opt
     Ok((Box::new(BufReader::new(file)), byte_len))
 }
 
+/// 取流目标:远端音频 URL + 附加请求头(如 B站 baseUrl 需 `Referer`)。二者是「怎么取这条流」
+/// 的一体两面,合并成一个参数,避免建流函数参数膨胀。
+struct StreamTarget {
+    /// 远端音频 URL。
+    url: url::Url,
+
+    /// 取流附加请求头;空 = 无附加头,走默认无头 client。
+    headers: Vec<(String, String)>,
+}
+
 /// 起 stream-download(远端):建 HTTP 流、装好缓冲进度回调(写指定进度槽,代号门控挡旧流)、
 /// capture(非空)时 spawn 完成 waiter store 下完代号,返回装箱 reader + 字节长度。
 ///
 /// # Params:
-///   - `url`: 远端音频 URL
+///   - `target`: 取流目标(远端 URL + 取流头)
 ///   - `capture`: 落盘路径(`Some` = 持久 capture 供入缓存,`None` = 会自删的 temp)
 ///   - `stream_gen`: 本流代号
 ///   - `progress_idx`: 写入的进度槽下标
@@ -555,7 +589,7 @@ fn open_local(p: &std::path::Path) -> color_eyre::Result<(Box<dyn ReadSeek>, Opt
 /// # Return:
 ///   `(装箱 reader, 字节长度)`;字节长度 `None` 表示无 `Content-Length`。
 async fn create_stream(
-    url: url::Url,
+    target: StreamTarget,
     capture: Option<PathBuf>,
     stream_gen: u64,
     progress_idx: usize,
@@ -565,7 +599,7 @@ async fn create_stream(
     match capture {
         Some(path) => {
             stream_with_provider(
-                url,
+                target,
                 FileStorageProvider::new(path),
                 stream_gen,
                 progress_idx,
@@ -577,7 +611,7 @@ async fn create_stream(
         }
         None => {
             stream_with_provider(
-                url,
+                target,
                 TempStorageProvider::new(),
                 stream_gen,
                 progress_idx,
@@ -590,13 +624,44 @@ async fn create_stream(
     }
 }
 
+/// 把 `(name, value)` 头烤进一个 reqwest client 的 `default_headers`,供取流请求带上。
+///
+/// 用 `append`(非 `insert`):保序、允许重复同名头。非法头(名/值不合 HTTP 规范)跳过并 warn,
+/// 不掀掉整条请求;client build 失败(TLS 初始化等真错)冒泡。
+///
+/// # Params:
+///   - `headers`: 待注入的请求头(调用方已保证非空)
+///
+/// # Return:
+///   预配置好 `default_headers` 的 reqwest client
+fn client_with_headers(headers: &[(String, String)]) -> color_eyre::Result<Client> {
+    use stream_download::http::reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    let mut map = HeaderMap::new();
+    for (name, value) in headers {
+        match (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => {
+                map.append(n, v);
+            }
+            _ => mineral_log::warn!(target: "audio", header = %name, "跳过非法取流头"),
+        }
+    }
+    Client::builder()
+        .default_headers(map)
+        .build()
+        .map_err(|e| eyre!("build headed http client: {e}"))
+}
+
 /// 用给定 `StorageProvider` 起 stream-download(两种 provider 走同一泛型路径,差别只在 `provider`)。
 ///
 /// # Params:
 ///   - `track_completion`: 是否 spawn waiter 等整段下完(capture 才需,用于 `download_complete`)
 ///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
 async fn stream_with_provider<P>(
-    url: url::Url,
+    target: StreamTarget,
     provider: P,
     stream_gen: u64,
     progress_idx: usize,
@@ -608,9 +673,19 @@ where
     P: StorageProvider + 'static,
     P::Reader: Read + Seek + Send + Sync + 'static,
 {
-    let stream = HttpStream::<Client>::create(url)
-        .await
-        .map_err(|e| eyre!("http stream: {e}"))?;
+    let StreamTarget { url, headers } = target;
+    // 空头走默认 client(零行为变化,netease/local 保持原路径);带头则建一个把这些头烤进
+    // `default_headers` 的 reqwest client——B站 baseUrl 取流必须带 `Referer`,否则 403。
+    let stream = if headers.is_empty() {
+        HttpStream::<Client>::create(url)
+            .await
+            .map_err(|e| eyre!("http stream: {e}"))?
+    } else {
+        let client = client_with_headers(&headers)?;
+        HttpStream::new(client, url)
+            .await
+            .map_err(|e| eyre!("http stream (headed): {e}"))?
+    };
     let len = stream.content_length();
     let total = len.unwrap_or(0);
     let prog = Arc::clone(&progress);
@@ -669,4 +744,73 @@ where
 /// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
 fn duration_to_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use crate::engine::{StreamTarget, create_stream};
+    use crate::queue_slots::SharedProgress;
+
+    /// `create_stream` 把 `headers` 注入 HTTP 取流请求:B站 baseUrl 播放必须带 `Referer`,否则
+    /// 403。起一个记录请求头的本地 server,用带 Referer 的 headers 建流,断言 server 收到该头。
+    ///
+    /// 直接测 `create_stream`(而非经 `AudioHandle::play`):`ForceNull` 模式走 `run_null_mode`
+    /// 短路建流、`Auto` 又需真声卡,都测不到取流路径;`create_stream` 是取流链的真实汇聚点。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_stream_injects_headers_into_http_request() -> color_eyre::Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let recorded = Arc::new(Mutex::new(None::<String>));
+        let rec = Arc::clone(&recorded);
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = buf
+                    .get(..n)
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_default();
+                *rec.lock() = Some(req);
+                let body = b"FAKEDATA";
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                drop(sock.write_all(head.as_bytes()).await);
+                drop(sock.write_all(body).await);
+                drop(sock.shutdown().await);
+            }
+        });
+
+        let url = url::Url::parse(&format!("http://{addr}/a.mp3"))?;
+        let progress = Arc::new(SharedProgress::default());
+        let target = StreamTarget {
+            url,
+            headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
+        };
+        // body 非有效音频,建流本身不解码,故忽略返回;只验证请求已带上 header。
+        let _ = create_stream(
+            target, /*capture*/ None, /*stream_gen*/ 1, /*progress_idx*/ 0,
+            progress, /*prefetch_bytes*/ 0,
+        )
+        .await;
+
+        let raw = recorded.lock().clone().unwrap_or_default();
+        // HTTP header 名大小写不敏感(hyper 发小写),按名匹配、value 保原样。
+        let referer = raw.lines().find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.trim()
+                    .eq_ignore_ascii_case("referer")
+                    .then(|| value.trim().to_owned())
+            })
+        });
+        assert_eq!(
+            referer.as_deref(),
+            Some("https://www.bilibili.com"),
+            "create_stream 应把 headers 注入 HTTP 请求;实际收到:\n{raw}"
+        );
+        Ok(())
+    }
 }

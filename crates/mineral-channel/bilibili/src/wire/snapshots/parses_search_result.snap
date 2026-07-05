@@ -1,0 +1,47 @@
+---
+source: crates/mineral-channel/bilibili/src/wire/search.rs
+description: "搜索响应解析(高亮标题 / mm:ss 时长 / 协议相对封面 + 缺字段项)"
+expression: r
+---
+SearchResult {
+    result: [
+        SearchVideoItem {
+            bvid: Some(
+                "BV1xx411c7mD",
+            ),
+            title: Some(
+                "【<em class=\"keyword\">初音</em>】曲名",
+            ),
+            author: Some(
+                "UP主甲",
+            ),
+            mid: Some(
+                12345,
+            ),
+            pic: Some(
+                "//i0.hdslb.com/x.jpg",
+            ),
+            duration: Some(
+                "3:45",
+            ),
+            play: Some(
+                99999,
+            ),
+            description: Some(
+                "简介",
+            ),
+        },
+        SearchVideoItem {
+            bvid: Some(
+                "BV1yy",
+            ),
+            title: None,
+            author: None,
+            mid: None,
+            pic: None,
+            duration: None,
+            play: None,
+            description: None,
+        },
+    ],
+}

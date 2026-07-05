@@ -42,10 +42,14 @@ pub trait MusicChannel: Send + Sync {
     // ---------- 搜索 ----------
     /// 搜索单曲。
     async fn search_songs(&self, query: &str, page: Page) -> Result<Vec<Song>>;
-    /// 搜索专辑。
-    async fn search_albums(&self, query: &str, page: Page) -> Result<Vec<Album>>;
-    /// 搜索歌单。
-    async fn search_playlists(&self, query: &str, page: Page) -> Result<Vec<Playlist>>;
+    /// 搜索专辑(可选)。
+    async fn search_albums(&self, _query: &str, _page: Page) -> Result<Vec<Album>> {
+        Err(Error::NotSupported)
+    }
+    /// 搜索歌单(可选)。
+    async fn search_playlists(&self, _query: &str, _page: Page) -> Result<Vec<Playlist>> {
+        Err(Error::NotSupported)
+    }
     /// 搜索艺人(可选)。
     async fn search_artists(&self, _query: &str, _page: Page) -> Result<Vec<Artist>> {
         Err(Error::NotSupported)
@@ -59,12 +63,16 @@ pub trait MusicChannel: Send + Sync {
     ///
     /// 返回**完整实体**而非裸曲目:上层要的是"这张专辑的完整视图",至于 channel 内部打几个
     /// 端点拼出来是实现细节。只要曲目的调用方读 `.songs` 即可。
-    async fn album_detail(&self, id: &AlbumId) -> Result<Album>;
+    async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
+        Err(Error::NotSupported)
+    }
 
     /// 拉取一个歌单的完整详情:元信息(名/简介/封面/计数)+ 曲目(`songs`)。
     ///
     /// 同 [`Self::album_detail`] —— 返回完整实体而非裸曲目;只要曲目的调用方读 `.songs`。
-    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist>;
+    async fn playlist_detail(&self, _id: &PlaylistId) -> Result<Playlist> {
+        Err(Error::NotSupported)
+    }
     /// 拉取艺人详情(可选)。
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {
         Err(Error::NotSupported)
@@ -138,8 +146,10 @@ pub trait MusicChannel: Send + Sync {
     // ---------- 播放 ----------
     /// 解析若干歌曲在指定音质下的播放 URL。
     async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> Result<Vec<PlayUrl>>;
-    /// 拉取一首歌的歌词。
-    async fn lyrics(&self, id: &SongId) -> Result<Lyrics>;
+    /// 拉取一首歌的歌词(可选)。
+    async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
+        Err(Error::NotSupported)
+    }
 
     // ---------- 用户 / 登录(可选) ----------
     /// 用给定凭证登录(可选)。

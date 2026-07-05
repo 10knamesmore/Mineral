@@ -61,9 +61,6 @@ pub struct ThemeConfig {
     /// 命令 / 搜索前缀。
     peach: HexColor,
 
-    /// 语义角色 → token 名映射(accent / muted / faint)。
-    roles: RolesConfig,
-
     /// 搜索命中字符的样式(色 + 叠加字体效果)。
     search_hit: SearchHitConfig,
 }
@@ -132,24 +129,6 @@ pub enum TextStyle {
 
     /// 删除线。
     CrossedOut,
-}
-
-/// 语义角色 → token 名映射。值是同表 14 个 token 之一的名字(如 `"red"`),
-/// client 接线处解析为对应 token 的颜色。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取;值经 [`TokenName::as_str`] 取名。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct RolesConfig {
-    /// 来源 accent 角色 → 哪个 token。
-    accent: TokenName,
-
-    /// 来源 muted 角色 → 哪个 token。
-    muted: TokenName,
-
-    /// 来源 faint 角色 → 哪个 token。
-    faint: TokenName,
 }
 
 /// 一个合法的 color token 名(∈ [`TOKEN_NAMES`])。反序列化时校验取值范围。

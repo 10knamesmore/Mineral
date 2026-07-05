@@ -473,7 +473,7 @@ impl PlayerCore {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), origin = ?origin, "本地命中,跳过网络");
             // 本地播也填 play_url(format / bitrate 按文件内容经 lofty 读出,见 resolve),transport 才显 fmt。
             let pu = crate::resolve::local_play_url(song, &path, quality);
-            self.inner.audio.play(MediaUrl::Local(path));
+            self.inner.audio.play(MediaUrl::Local(path), Vec::new());
             let mut st = self.inner.state.lock();
             st.play_url = Some(pu);
             st.bump_current();
@@ -1024,6 +1024,7 @@ mod tests {
             size: 0,
             format: mineral_model::AudioFormat::Mp3,
             bit_depth: None,
+            stream_headers: Vec::new(),
         })
     }
 
@@ -1074,6 +1075,39 @@ mod tests {
                 "音质应一并改写"
             );
         });
+        drop(runtime);
+        Ok(())
+    }
+
+    /// before_play 改写带 headers:hook 返回 {url, headers} → play_url 回填的 stream_headers 含该头。
+    /// 解灰顶替进来的 B站 url 必须带 `Referer`,否则 403(header 穿透 rewrite→play)。
+    #[tokio::test]
+    async fn before_play_rewrite_carries_stream_headers() -> color_eyre::Result<()> {
+        let (core, runtime) = core_with_script(
+            r#"
+            mineral.hook("before_play", function(ctx)
+                return {
+                    url = "https://fallback.example/b.flac",
+                    headers = { {"Referer", "https://www.bilibili.com"} },
+                }
+            end)
+            "#,
+        )?;
+        core.with_state(|st| st.current_song = Some(song("a")));
+        crate::hook_bridge::before_play(&core, &song("a"), test_play_url("a")?);
+        let carried = wait_until(|| {
+            core.with_state(|st| {
+                st.play_url.as_ref().is_some_and(|pu| {
+                    pu.stream_headers
+                        == vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())]
+                })
+            })
+        })
+        .await;
+        assert!(
+            carried,
+            "play_url.stream_headers 应带上 hook 返回的 Referer"
+        );
         drop(runtime);
         Ok(())
     }

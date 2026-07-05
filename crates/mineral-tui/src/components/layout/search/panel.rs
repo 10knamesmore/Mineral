@@ -39,6 +39,7 @@ pub fn draw_prompt(
     area: Rect,
     rs: &SearchPage,
     theme: &Theme,
+    sources: &mineral_config::SourcesConfig,
     border_focused: bool,
 ) {
     let block = Block::new()
@@ -56,7 +57,7 @@ pub fn draw_prompt(
     let focus = rs.prompt_focus();
     // source chip:focus 时 accent 反色药丸(暗字,最跳);否则 source 色暗染底 + source 色字(身份)。
     if let (Some(rect), Some(source)) = (tokens.source, rs.source) {
-        let sc = theme.source_color(source.palette());
+        let sc = crate::render::theme::resolve_source_color(theme, sources, source);
         let (bg, fg) = if focus == Some(PromptSegment::Source) {
             (theme.accent, theme.crust)
         } else {
@@ -596,6 +597,7 @@ mod tests {
             s.cursor_left();
             s.cursor_left();
         }
+        let cfg = mineral_config::Config::defaults()?;
         let mut terminal = Terminal::new(TestBackend::new(40, 3))?;
         terminal.draw(|f| {
             draw_prompt(
@@ -603,6 +605,7 @@ mod tests {
                 f.area(),
                 &rs,
                 &Theme::default(),
+                cfg.sources(),
                 /*border_focused*/ true,
             )
         })?;
@@ -638,6 +641,7 @@ mod tests {
                 prompt,
                 &app.state.channel_search,
                 &app.theme,
+                app.state.cfg.sources(),
                 /*border_focused*/ false,
             );
             draw_prompt_dropdown(f, prompt, &app.state, &app.theme);

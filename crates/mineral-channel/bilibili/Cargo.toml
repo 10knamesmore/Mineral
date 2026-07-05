@@ -1,0 +1,45 @@
+[package]
+name        = "mineral-channel-bilibili"
+description = "哔哩哔哩 channel 实现(WBI 签名 / 搜索 / 详情 / 播放 URL)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model         = { workspace = true }
+mineral-channel-core  = { workspace = true }
+mineral-paths         = { workspace = true }
+mineral-log           = { workspace = true }
+
+color-eyre      = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+serde_path_to_error = { workspace = true }
+tokio           = { workspace = true }
+isahc           = { workspace = true }
+url             = { workspace = true }
+rustc-hash      = { workspace = true }
+thiserror       = { workspace = true }
+typed-builder   = { workspace = true }
+derive-getters  = { workspace = true }
+once_cell       = { workspace = true }
+
+# WBI 签名:mixin_key 重排后 md5(sorted_query + mixin_key)
+md-5            = { workspace = true }
+hex            = { workspace = true }
+
+# CLI(二维码登录,stage 3)
+clap       = { workspace = true }
+qrcode     = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+insta    = { workspace = true }
+mineral-test = { workspace = true }
+
+[lints]
+workspace = true

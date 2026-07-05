@@ -1,8 +1,11 @@
-//! UI 主题色板:14 个 color token + 3 个语义角色,生产路径由配置落地。
+//! UI 主题色板:14 个 color token,生产路径由配置落地。
 //!
-//! 所有 widget 渲染都从 [`Theme`] 取色,避免散落的硬编码 RGB。
+//! 所有 widget 渲染都从 [`Theme`] 取色,避免散落的硬编码 RGB。来源徽标色是 per-source 配置
+//! (`sources.<name>.color`),由 [`SourceColors`] 按 source 名解析(命中走配置色,未配置走中立
+//! 兜底)——不用一个闭合调色枚举强塞进开放的来源集合。
 
-use mineral_model::PaletteRole;
+use mineral_config::ColorRef;
+use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier};
 
 /// 一组完整的 UI 颜色 token。
@@ -42,15 +45,6 @@ pub struct Theme {
     /// 命令 / 搜索前缀。
     pub peach: Color,
 
-    /// 来源 Accent 角色落地色(构造时按配置 roles resolve)。
-    role_accent: Color,
-
-    /// 来源 Muted 角色落地色。
-    role_muted: Color,
-
-    /// 来源 Faint 角色落地色。
-    role_faint: Color,
-
     /// 搜索命中字符的高亮色(构造时按配置 `theme.search_hit.color` resolve:
     /// token 名随主题联动,`#rrggbb` 为固定色)。
     pub search_hit_color: Color,
@@ -60,19 +54,23 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// 把一个来源的语义调色角色([`PaletteRole`])解析成本主题下的具体颜色。
+    /// 把配置里的 [`ColorRef`](token 名 / `#rrggbb`)解析成本主题下的具体色。
     ///
-    /// 来源(含将来插件源)只声明角色,颜色在 [`Theme::from_config`] 构造时已按
-    /// 配置 `theme.roles` resolve 进字段,这里只读——避免硬编码。
-    pub const fn source_color(&self, role: PaletteRole) -> Color {
-        match role {
-            PaletteRole::Accent => self.role_accent,
-            PaletteRole::Muted => self.role_muted,
-            PaletteRole::Faint => self.role_faint,
+    /// token 名随主题联动(查 14 token 表),hex 为固定色。供 search_hit / 来源徽标色共用。
+    ///
+    /// # Params:
+    ///   - `cr`: 配置里的颜色引用
+    ///
+    /// # Return:
+    ///   落地颜色。
+    pub fn resolve(&self, cr: &ColorRef) -> Color {
+        match cr {
+            ColorRef::Token(name) => self.token_by_name(name.as_str()),
+            ColorRef::Hex(h) => Color::Rgb(h.r(), h.g(), h.b()),
         }
     }
 
-    /// 从配置切片落地主题:14 token 各取一色,3 个角色按 token 名 resolve 成具体色。
+    /// 从配置切片落地主题:14 token 各取一色 + search_hit 样式。
     ///
     /// # Params:
     ///   - `cfg`: 主题配置切片
@@ -96,19 +94,10 @@ impl Theme {
             yellow: c(cfg.yellow()),
             green: c(cfg.green()),
             peach: c(cfg.peach()),
-            role_accent: Color::Reset,
-            role_muted: Color::Reset,
-            role_faint: Color::Reset,
             search_hit_color: Color::Reset,
             search_hit_modifier: Modifier::empty(),
         };
-        t.role_accent = t.token_by_name(cfg.roles().accent().as_str());
-        t.role_muted = t.token_by_name(cfg.roles().muted().as_str());
-        t.role_faint = t.token_by_name(cfg.roles().faint().as_str());
-        t.search_hit_color = match cfg.search_hit().color() {
-            mineral_config::ColorRef::Token(name) => t.token_by_name(name.as_str()),
-            mineral_config::ColorRef::Hex(h) => c(h),
-        };
+        t.search_hit_color = t.resolve(cfg.search_hit().color());
         t.search_hit_modifier = cfg
             .search_hit()
             .modifiers()
@@ -159,11 +148,6 @@ impl Theme {
             yellow: Color::Rgb(0xf9, 0xe2, 0xaf),
             green: Color::Rgb(0xa6, 0xe3, 0xa1),
             peach: Color::Rgb(0xfa, 0xb3, 0x87),
-            // roles 与 default.lua 的 `roles = { accent = "red", muted = "subtext",
-            // faint = "overlay" }` 对齐。
-            role_accent: Color::Rgb(0xf3, 0x8b, 0xa8),
-            role_muted: Color::Rgb(0xa6, 0xad, 0xc8),
-            role_faint: Color::Rgb(0x6c, 0x70, 0x86),
             // search_hit 与 default.lua 的 `{ color = "peach",
             // modifiers = { "bold", "underline", "italic" } }` 对齐。
             search_hit_color: Color::Rgb(0xfa, 0xb3, 0x87),
@@ -172,6 +156,32 @@ impl Theme {
                 .union(Modifier::ITALIC),
         }
     }
+}
+
+/// 解析某来源的徽标色:从 `sources.<name>.color` 取该源的 [`ColorRef`],经主题落地成具体色;
+/// 未配色的源(local / 未知插件)走中立兜底(`subtext`)。
+///
+/// 边渲染边解析(查一张两三项的小表 + resolve,开销可忽略),避免把颜色缓存塞进 `Theme`
+/// (它是 `Copy` 的纯 token 板)。
+///
+/// # Params:
+///   - `theme`: 已落地的主题(解析 token 名 / 兜底色用)
+///   - `sources`: 音乐源段配置(各源的 `color`)
+///   - `kind`: 目标来源
+///
+/// # Return:
+///   徽标色。
+pub fn resolve_source_color(
+    theme: &Theme,
+    sources: &mineral_config::SourcesConfig,
+    kind: SourceKind,
+) -> Color {
+    sources
+        .source_colors()
+        .into_iter()
+        .find(|(name, _)| *name == kind.name())
+        .map(|(_, cr)| theme.resolve(cr))
+        .unwrap_or(theme.subtext)
 }
 
 /// 配置层字体效果 → ratatui [`Modifier`] 的接线映射。
@@ -194,12 +204,12 @@ impl Default for Theme {
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::PaletteRole;
+    use mineral_model::SourceKind;
 
-    use super::Theme;
+    use super::{Theme, resolve_source_color};
 
-    /// 不写配置:from_config(defaults) 与 mocha_mauve 逐 token 一致、roles 落点不变
-    /// (行为不变守卫;Theme 派生 Debug,整体快照钉死)。
+    /// 不写配置:from_config(defaults) 与 mocha_mauve 逐 token 一致(行为不变守卫;Theme 派生
+    /// Debug,整体快照钉死)。
     #[test]
     fn from_defaults_matches_mocha_mauve() -> color_eyre::Result<()> {
         let cfg = mineral_config::Config::defaults()?;
@@ -211,25 +221,29 @@ mod tests {
             "默认配置应逐字段等于 mocha_mauve"
         );
         crate::test_support::assert_snap_debug!(
-            "Theme 默认值(from_config(defaults) = mocha_mauve,含 3 个 role 落地色)",
+            "Theme 默认值(from_config(defaults) = mocha_mauve)",
             t
         );
         Ok(())
     }
 
-    /// 逐旋钮生效:用户配置改 roles.accent 指向 green,source_color(Accent) 跟着变。
+    /// 来源徽标色:default.lua 里 bilibili 配 `#FB7299`(固定品牌粉),未配置的源走中立兜底
+    /// (= subtext),不再经闭合调色枚举。
     #[test]
-    fn role_remap_takes_effect() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
-        std::fs::write(
-            &user,
-            "return { tui = { theme = { roles = { accent = \"green\" } } } }",
-        )?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
-        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let t = Theme::from_config(cfg.tui().theme());
-        assert_eq!(t.source_color(PaletteRole::Accent), t.green);
+    fn source_colors_from_config_and_fallback() -> color_eyre::Result<()> {
+        let cfg = mineral_config::Config::defaults()?;
+        let theme = Theme::from_config(cfg.tui().theme());
+        let sources = cfg.sources();
+        assert_eq!(
+            resolve_source_color(&theme, sources, SourceKind::BILIBILI),
+            ratatui::style::Color::Rgb(0xfb, 0x72, 0x99),
+            "bilibili 配置固定品牌粉"
+        );
+        assert_eq!(
+            resolve_source_color(&theme, sources, SourceKind::LOCAL),
+            theme.subtext,
+            "未配色来源走中立兜底(subtext)"
+        );
         Ok(())
     }
 

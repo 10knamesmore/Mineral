@@ -187,6 +187,8 @@ fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
         format: d.format.map(AudioFormat::from).unwrap_or_default(),
         // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
         bit_depth: None,
+        // 网易云音频 CDN 直链自足,不需附加取流头。
+        stream_headers: Vec::new(),
     })
 }
 

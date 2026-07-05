@@ -337,12 +337,28 @@ fn interpret_hook_return(value: &mlua::Value) -> Result<crate::hooks::HookDecisi
                 .map_err(|e| format!("hook 返回值 quality 字段非法: {e}"))?
                 .map(|raw| parse_bitrate(&raw))
                 .transpose()?;
-            if new_url.is_none() && new_quality.is_none() {
-                return Err("hook 返回 table 但无 url / quality / skip 字段".to_owned());
+            // Lua 侧 `headers = { {name, value}, ... }`(数组的 {name,value} 对);缺项的行丢弃。
+            let stream_headers = table
+                .get::<Option<Vec<Vec<String>>>>("headers")
+                .map_err(|e| format!("hook 返回值 headers 字段非法: {e}"))?
+                .map(|rows| {
+                    rows.into_iter()
+                        .filter_map(|row| {
+                            let mut it = row.into_iter();
+                            match (it.next(), it.next()) {
+                                (Some(name), Some(value)) => Some((name, value)),
+                                _ => None,
+                            }
+                        })
+                        .collect::<Vec<(String, String)>>()
+                });
+            if new_url.is_none() && new_quality.is_none() && stream_headers.is_none() {
+                return Err("hook 返回 table 但无 url / quality / headers / skip 字段".to_owned());
             }
             Ok(HookDecision::Rewrite(RewriteSpec {
                 new_url,
                 new_quality,
+                stream_headers,
             }))
         }
         other => Err(format!(

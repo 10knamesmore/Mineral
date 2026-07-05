@@ -405,6 +405,7 @@ mod tests {
             size: 0,
             format,
             bit_depth,
+            stream_headers: Vec::new(),
         });
         pb
     }

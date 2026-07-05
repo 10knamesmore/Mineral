@@ -35,9 +35,7 @@ pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
 pub use script::ScriptConfig;
 pub use search::{DeepWeights, SearchConfig};
-pub use sources::{NeteaseSection, SourcesConfig};
+pub use sources::{BilibiliSection, NeteaseSection, SourcesConfig};
 pub use spectrum::SpectrumConfig;
-pub use theme::{
-    ColorRef, HexColor, RolesConfig, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
-};
+pub use theme::{ColorRef, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName};
 pub use toast::ToastConfig;

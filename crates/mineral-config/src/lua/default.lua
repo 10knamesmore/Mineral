@@ -20,7 +20,6 @@ return {
       yellow = "#f9e2af",
       green = "#a6e3a1",
       peach = "#fab387",
-      roles = { accent = "red", muted = "subtext", faint = "overlay" }, -- 语义角色 → token 名(来源徽标等用)
       search_hit = { -- 搜索命中字符的样式(列表高亮)
         color = "peach", -- token 名(随主题联动)或 "#rrggbb"(固定色)
         modifiers = { "bold", "underline", "italic" }, -- 叠加效果,数组整体替换;可选 bold/italic/underline/dim/reversed/crossed_out
@@ -221,6 +220,13 @@ return {
       timeout_secs = 100, -- 单次 API 请求超时,秒
       proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")
       max_connections = 0, -- 到源的最大并发连接,0 = 不限
+      color = "#C20C0C", -- 网易云品牌红(token 名亦可,随主题联动)
+    },
+    bilibili = {
+      timeout_secs = 100, -- 单次 API 请求超时,秒
+      proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")
+      max_connections = 0, -- 到源的最大并发连接,0 = 不限
+      color = "#FB7299", -- B站品牌粉(token 名亦可)
     },
   },
   -- daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动。

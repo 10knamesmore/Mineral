@@ -141,7 +141,7 @@ mineral.timer.after(5000, function() mineral.ui.toast("5 秒到") end)
 | ---------------------------------- | ----------------------------------------------- |
 | `nil` 或 `true`                    | 放行,原样继续                                   |
 | `false` 或 `{ skip = "原因" }`     | 跳过本次(播放跳下一首并 toast 原因;下载记 skip) |
-| `{ url = "...", quality = "..." }` | 改写后继续(字段都可选,只给要改的)               |
+| `{ url = "...", quality = "...", headers = {{"Referer","..."}} }` | 改写后继续(字段都可选,只给要改的);`headers` 是 `{{name, value}}` 数组,随顶替的 `url` 带上取流请求头(如 B站 baseUrl 需 `Referer`) |
 
 ```lua
 -- 拒播 30 秒以下的短音频(广告/试听残片)

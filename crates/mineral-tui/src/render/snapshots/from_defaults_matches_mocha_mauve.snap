@@ -1,6 +1,7 @@
 ---
 source: crates/mineral-tui/src/render/theme.rs
-description: "Theme 默认值(from_config(defaults) = mocha_mauve,含 3 个 role 落地色)"
+assertion_line: 223
+description: Theme 默认值(from_config(defaults) = mocha_mauve)
 expression: t
 ---
 Theme {
@@ -73,21 +74,6 @@ Theme {
         250,
         179,
         135,
-    ),
-    role_accent: Rgb(
-        243,
-        139,
-        168,
-    ),
-    role_muted: Rgb(
-        166,
-        173,
-        200,
-    ),
-    role_faint: Rgb(
-        108,
-        112,
-        134,
     ),
     search_hit_color: Rgb(
         250,

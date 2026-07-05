@@ -148,6 +148,10 @@ fn apply_play_decision(
             if let Some(quality) = spec.new_quality() {
                 effective.quality = quality;
             }
+            // 解灰顶替进来的 url 同步带上其取流头(如 B站 baseUrl 需 `Referer`),否则播放 403。
+            if let Some(headers) = spec.stream_headers() {
+                effective.stream_headers = headers.to_vec();
+            }
             mineral_log::info!(
                 target: "script",
                 song_id = song.id.as_str(),
@@ -156,7 +160,9 @@ fn apply_play_decision(
             );
             // 改写过的流不 capture 入缓存:缓存按 song_id+quality 入键,
             // 改写内容与原曲是否一致由脚本自负,污染缓存代价高;fallback 流每次现拉。
-            player.audio().play(effective.url.clone());
+            player
+                .audio()
+                .play(effective.url.clone(), effective.stream_headers.clone());
             player.set_play_url(effective);
         }
         HookDecision::Skip { reason } => {

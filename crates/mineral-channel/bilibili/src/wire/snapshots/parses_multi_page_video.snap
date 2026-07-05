@@ -1,0 +1,44 @@
+---
+source: crates/mineral-channel/bilibili/src/wire/view.rs
+description: 视频详情解析(2P 合集 + owner + pages)
+expression: info
+---
+VideoInfo {
+    bvid: "BV1xx411c7mD",
+    aid: 800,
+    cid: 1001,
+    title: "多P合集",
+    desc: Some(
+        "简介",
+    ),
+    pic: Some(
+        "//i0.hdslb.com/cover.jpg",
+    ),
+    duration: Some(
+        480,
+    ),
+    pubdate: Some(
+        1600000000,
+    ),
+    owner: VideoOwner {
+        mid: 12345,
+        name: "UP主甲",
+        face: "//i0.hdslb.com/face.jpg",
+    },
+    pages: Some(
+        [
+            VideoPage {
+                cid: 1001,
+                page: 1,
+                part: "第一话",
+                duration: 240,
+            },
+            VideoPage {
+                cid: 1002,
+                page: 2,
+                part: "第二话",
+                duration: 240,
+            },
+        ],
+    ),
+}

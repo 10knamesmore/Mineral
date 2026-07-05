@@ -74,7 +74,11 @@ pub fn draw(
             Span::styled("source: ", Style::new().fg(theme.overlay)),
             Span::styled(
                 src.label(),
-                Style::new().fg(theme.source_color(src.palette())),
+                Style::new().fg(crate::render::theme::resolve_source_color(
+                    theme,
+                    state.cfg.sources(),
+                    src,
+                )),
             ),
         ]),
     ];

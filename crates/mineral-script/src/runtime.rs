@@ -813,6 +813,7 @@ mod tests {
             size: 0,
             format: mineral_model::AudioFormat::Flac,
             bit_depth: None,
+            stream_headers: Vec::new(),
         };
         Ok(crate::hooks::HookContext::new(target, play_url))
     }

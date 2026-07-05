@@ -112,6 +112,9 @@ pub struct RewriteSpec {
 
     /// 改写后的目标音质;`None` = 不改音质。
     pub(crate) new_quality: Option<BitRate>,
+
+    /// 改写后的取流请求头(如 B站 baseUrl 顶替需 `Referer`);`None` = 不改头。
+    pub(crate) stream_headers: Option<Vec<(String, String)>>,
 }
 
 impl RewriteSpec {
@@ -125,6 +128,12 @@ impl RewriteSpec {
     #[must_use]
     pub fn new_quality(&self) -> Option<BitRate> {
         self.new_quality
+    }
+
+    /// 改写后的取流请求头(只读);`None` = 不改头。
+    #[must_use]
+    pub fn stream_headers(&self) -> Option<&[(String, String)]> {
+        self.stream_headers.as_deref()
     }
 }
 

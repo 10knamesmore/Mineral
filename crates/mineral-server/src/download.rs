@@ -177,7 +177,15 @@ pub(crate) async fn download_song(
             .wrap_err_with(|| format!("创建导出目录失败 {}", parent.display()))?;
     }
     let part = export.with_extension("part-dl");
-    stream_to_file(http, remote, &part, progress, speed_tick).await?;
+    stream_to_file(
+        http,
+        remote,
+        &part,
+        progress,
+        speed_tick,
+        &play_url.stream_headers,
+    )
+    .await?;
 
     // 4. 完成 → rename 为正式导出(永久)。
     tokio::fs::rename(&part, &export)
@@ -209,9 +217,22 @@ async fn stream_to_file(
     dst: &Path,
     progress: &Arc<Mutex<DownloadProgress>>,
     speed_tick: Duration,
+    headers: &[(String, String)],
 ) -> color_eyre::Result<()> {
-    let resp = http
-        .get(url)
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let mut req = http.get(url);
+    // 取流附加头(如 B站 baseUrl 下载需 `Referer`);非法头跳过并 warn,不掀掉整条下载。
+    for (name, value) in headers {
+        match (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => req = req.header(n, v),
+            _ => mineral_log::warn!(target: "download", header = %name, "跳过非法取流头"),
+        }
+    }
+    let resp = req
         .send()
         .await
         .wrap_err("下载请求失败")?
@@ -290,7 +311,9 @@ pub(crate) struct Capturing {
 pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, quality: BitRate) {
     match player.media_cache().capture_path(&song.id, quality) {
         Some(path) => {
-            player.audio().play_capturing(pu.url.clone(), path.clone());
+            player
+                .audio()
+                .play_capturing(pu.url.clone(), pu.stream_headers.clone(), path.clone());
             player.set_capturing(Capturing {
                 song: song.clone(),
                 quality,
@@ -298,7 +321,9 @@ pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, qua
                 path,
             });
         }
-        None => player.audio().play(pu.url.clone()),
+        None => player
+            .audio()
+            .play(pu.url.clone(), pu.stream_headers.clone()),
     }
 }
 
@@ -654,6 +679,65 @@ mod tests {
             "导出路径应按改写后的音质(standard)标注"
         );
         drop(runtime);
+        Ok(())
+    }
+
+    /// `stream_to_file` 把 `PlayUrl.stream_headers` 注入下载请求:B站 baseUrl 下载必须带
+    /// `Referer`,否则 403。起一个记录请求头的本地 server,带 Referer 下载,断言 server 收到该头。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stream_to_file_injects_stream_headers() -> color_eyre::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let recorded = Arc::new(Mutex::new(None::<String>));
+        let rec = Arc::clone(&recorded);
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = buf
+                    .get(..n)
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_default();
+                *rec.lock() = Some(req);
+                let body = b"FAKEDATA";
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                drop(sock.write_all(head.as_bytes()).await);
+                drop(sock.write_all(body).await);
+                drop(sock.shutdown().await);
+            }
+        });
+
+        let dir = tempfile::tempdir()?;
+        let dst = dir.path().join("out.part-dl");
+        let http = reqwest::Client::new();
+        let progress = Arc::new(Mutex::new(DownloadProgress::default()));
+        let url = url::Url::parse(&format!("http://{addr}/a.mp3"))?;
+        super::stream_to_file(
+            &http,
+            url,
+            &dst,
+            &progress,
+            Duration::from_millis(100),
+            &[("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
+        )
+        .await?;
+
+        let raw = recorded.lock().clone().unwrap_or_default();
+        // HTTP header 名大小写不敏感(hyper 发小写),按名匹配、value 保原样。
+        let referer = raw.lines().find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.trim()
+                    .eq_ignore_ascii_case("referer")
+                    .then(|| value.trim().to_owned())
+            })
+        });
+        assert_eq!(
+            referer.as_deref(),
+            Some("https://www.bilibili.com"),
+            "stream_to_file 应把 headers 注入下载请求;实际收到:\n{raw}"
+        );
         Ok(())
     }
 }

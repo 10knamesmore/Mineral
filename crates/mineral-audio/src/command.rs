@@ -14,6 +14,9 @@ pub(crate) enum AudioCommand {
         /// 播放源。
         url: MediaUrl,
 
+        /// 取流附加请求头(如 B站 baseUrl 播放需 `Referer`);空 = 无附加头,走默认无头 client。
+        headers: Vec<(String, String)>,
+
         /// 捕获落盘路径(`Remote` + 想缓存时给)。
         capture: Option<PathBuf>,
     },
@@ -25,6 +28,9 @@ pub(crate) enum AudioCommand {
     AppendNext {
         /// 下一曲播放源。
         url: MediaUrl,
+
+        /// 取流附加请求头(如 B站 baseUrl 播放需 `Referer`);空 = 无附加头,走默认无头 client。
+        headers: Vec<(String, String)>,
 
         /// 捕获落盘路径(`Remote` + 想缓存时给)。
         capture: Option<PathBuf>,

@@ -1,0 +1,156 @@
+---
+source: crates/mineral-channel/bilibili/src/convert.rs
+description: 多P视频详情 → Album(2P 逐 P 成曲 + owner + 封面补 https)
+expression: album
+---
+Album {
+    id: AlbumId {
+        namespace: bilibili,
+        value: IdString(
+            "BV1xx",
+        ),
+    },
+    name: "多P合集",
+    artists: [
+        ArtistRef {
+            id: ArtistId {
+                namespace: bilibili,
+                value: IdString(
+                    "12345",
+                ),
+            },
+            name: "UP主甲",
+        },
+    ],
+    description: "合集简介",
+    company: None,
+    publish_time_ms: 1600000000000,
+    track_count: 2,
+    cover_url: Some(
+        Remote(
+            Url {
+                scheme: "https",
+                cannot_be_a_base: false,
+                username: "",
+                password: None,
+                host: Some(
+                    Domain(
+                        "cover.jpg",
+                    ),
+                ),
+                port: None,
+                path: "/",
+                query: None,
+                fragment: None,
+            },
+        ),
+    ),
+    songs: [
+        Song {
+            id: SongId {
+                namespace: bilibili,
+                value: IdString(
+                    "BV1xx:1",
+                ),
+            },
+            name: "第一话",
+            translation: None,
+            artists: [
+                ArtistRef {
+                    id: ArtistId {
+                        namespace: bilibili,
+                        value: IdString(
+                            "12345",
+                        ),
+                    },
+                    name: "UP主甲",
+                },
+            ],
+            album: Some(
+                AlbumRef {
+                    id: AlbumId {
+                        namespace: bilibili,
+                        value: IdString(
+                            "BV1xx",
+                        ),
+                    },
+                    name: "多P合集",
+                },
+            ),
+            duration_ms: 240000,
+            cover_url: Some(
+                Remote(
+                    Url {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "cover.jpg",
+                            ),
+                        ),
+                        port: None,
+                        path: "/",
+                        query: None,
+                        fragment: None,
+                    },
+                ),
+            ),
+            source_url: None,
+        },
+        Song {
+            id: SongId {
+                namespace: bilibili,
+                value: IdString(
+                    "BV1xx:2",
+                ),
+            },
+            name: "第二话",
+            translation: None,
+            artists: [
+                ArtistRef {
+                    id: ArtistId {
+                        namespace: bilibili,
+                        value: IdString(
+                            "12345",
+                        ),
+                    },
+                    name: "UP主甲",
+                },
+            ],
+            album: Some(
+                AlbumRef {
+                    id: AlbumId {
+                        namespace: bilibili,
+                        value: IdString(
+                            "BV1xx",
+                        ),
+                    },
+                    name: "多P合集",
+                },
+            ),
+            duration_ms: 200000,
+            cover_url: Some(
+                Remote(
+                    Url {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "cover.jpg",
+                            ),
+                        ),
+                        port: None,
+                        path: "/",
+                        query: None,
+                        fragment: None,
+                    },
+                ),
+            ),
+            source_url: None,
+        },
+    ],
+}

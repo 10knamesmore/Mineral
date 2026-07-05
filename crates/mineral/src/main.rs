@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
+use mineral_channel_bilibili::BilibiliChannel;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
@@ -182,9 +183,40 @@ fn build_channels(
             "netease channel 构建失败,跳过(不影响其他源 / daemon)"
         ),
     }
+    // B站 guest 模式无需登录即可搜索/详情/取流,故恒尝试构建(登录 stage 3 再加)。
+    match build_bilibili(sources.bilibili()) {
+        Ok(c) => channels.push(c),
+        Err(e) => mineral_log::warn!(
+            target: "channel",
+            error = mineral_log::chain(&e),
+            "bilibili channel 构建失败,跳过(不影响其他源 / daemon)"
+        ),
+    }
     #[cfg(feature = "mock")]
     channels.push(build_mock());
     Ok(channels)
+}
+
+/// 构造 guest B站 channel(公开端点:搜索 / 详情 / 取流,无需登录)。
+///
+/// 与 netease 不同,B站不需要预存凭证即可用,故恒返回一个 channel(非 `Option`);
+/// 登录(解锁高码率 / 私密收藏夹)是后续阶段。
+///
+/// # Params:
+///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。
+fn build_bilibili(
+    bilibili: &mineral_config::BilibiliSection,
+) -> color_eyre::Result<Arc<dyn MusicChannel>> {
+    let bc = mineral_cli::bilibili_config_from(bilibili);
+    // 有存储凭证 → 带登录态(解锁我的收藏夹 / 高码率);否则 guest。
+    let channel = match mineral_channel_bilibili::load_stored().wrap_err("读取 B站凭证失败")?
+    {
+        Some(auth) => BilibiliChannel::with_credential(&bc, &auth)
+            .wrap_err("构造带登录态 BilibiliChannel 失败")?,
+        None => BilibiliChannel::new(&bc).wrap_err("构造 BilibiliChannel 失败")?,
+    };
+    let arc: Arc<dyn MusicChannel> = Arc::new(channel);
+    Ok(arc)
 }
 
 /// 读本地凭证 → 构造 [`NeteaseChannel`];没凭证返回 `Ok(None)`(尚未登录,正常)。

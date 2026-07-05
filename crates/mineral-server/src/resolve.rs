@@ -113,6 +113,7 @@ pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> Play
         size,
         format,
         bit_depth,
+        stream_headers: Vec::new(),
     }
 }
 

@@ -17,6 +17,7 @@ color-eyre              = { workspace = true }
 mineral-channel-core    = { workspace = true }
 mineral-channel-mock    = { workspace = true, optional = true }
 mineral-channel-netease = { workspace = true }
+mineral-channel-bilibili = { workspace = true }
 mineral-cli             = { workspace = true }
 mineral-config          = { workspace = true }
 mineral-log             = { workspace = true }

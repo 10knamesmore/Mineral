@@ -147,7 +147,11 @@ fn build_row<'a>(
     cells.extend([
         Cell::from(Span::styled(
             src.label(),
-            Style::new().fg(theme.source_color(src.palette())),
+            Style::new().fg(crate::render::theme::resolve_source_color(
+                theme,
+                state.cfg.sources(),
+                src,
+            )),
         )),
         Cell::from(Span::styled(len_label, Style::new().fg(theme.subtext))),
         Cell::from(Span::styled(count_label, Style::new().fg(theme.overlay))),

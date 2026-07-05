@@ -148,8 +148,16 @@ impl AudioHandle {
     }
 
     /// 切到这个 URL,从头播。已有曲目会被立刻打断。
-    pub fn play(&self, url: MediaUrl) {
-        self.send(AudioCommand::Play { url, capture: None });
+    ///
+    /// # Params:
+    ///   - `url`: 播放源
+    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
+    pub fn play(&self, url: MediaUrl, headers: Vec<(String, String)>) {
+        self.send(AudioCommand::Play {
+            url,
+            headers,
+            capture: None,
+        });
     }
 
     /// 同 [`Self::play`],但把下载的字节捕获到 `capture` 路径(供播完后入缓存)。
@@ -158,10 +166,17 @@ impl AudioHandle {
     ///
     /// # Params:
     ///   - `url`: 播放源
+    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
     ///   - `capture`: 捕获落盘路径
-    pub fn play_capturing(&self, url: MediaUrl, capture: std::path::PathBuf) {
+    pub fn play_capturing(
+        &self,
+        url: MediaUrl,
+        headers: Vec<(String, String)>,
+        capture: std::path::PathBuf,
+    ) {
         self.send(AudioCommand::Play {
             url,
+            headers,
             capture: Some(capture),
         });
     }
@@ -169,18 +184,33 @@ impl AudioHandle {
     /// 预排下一曲(无 capture),供当前曲播完后无缝接续。
     ///
     /// 仅 `Remote` 走链下建流;不打断当前播放。缓冲不及时可用 [`Self::clear_next`] 撤销。
-    pub fn append_next(&self, url: MediaUrl) {
-        self.send(AudioCommand::AppendNext { url, capture: None });
+    ///
+    /// # Params:
+    ///   - `url`: 下一曲播放源
+    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
+    pub fn append_next(&self, url: MediaUrl, headers: Vec<(String, String)>) {
+        self.send(AudioCommand::AppendNext {
+            url,
+            headers,
+            capture: None,
+        });
     }
 
     /// 同 [`Self::append_next`],但把下载字节捕获到 `capture` 路径(供播完入缓存)。
     ///
     /// # Params:
     ///   - `url`: 下一曲播放源(仅 `Remote` 时 capture 生效)
+    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
     ///   - `capture`: 捕获落盘路径
-    pub fn append_next_capturing(&self, url: MediaUrl, capture: std::path::PathBuf) {
+    pub fn append_next_capturing(
+        &self,
+        url: MediaUrl,
+        headers: Vec<(String, String)>,
+        capture: std::path::PathBuf,
+    ) {
         self.send(AudioCommand::AppendNext {
             url,
+            headers,
             capture: Some(capture),
         });
     }
@@ -281,7 +311,10 @@ mod tests {
         handle.pause();
         handle.resume();
         // gapless 预排命令也得被接受、不 panic(null 模式静默丢弃)。
-        handle.append_next(MediaUrl::remote("https://example.com/next.mp3")?);
+        handle.append_next(
+            MediaUrl::remote("https://example.com/next.mp3")?,
+            Vec::new(),
+        );
         handle.clear_next();
         handle.stop();
         assert_eq!(

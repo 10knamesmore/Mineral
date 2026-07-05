@@ -121,6 +121,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
             prompt,
             rs,
             theme,
+            app.state.cfg.sources(),
             border_focused(SearchFocus::Prompt),
         );
     }

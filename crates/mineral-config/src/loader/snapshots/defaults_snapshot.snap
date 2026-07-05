@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
+assertion_line: 255
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -75,17 +76,6 @@ Config {
                 r: 250,
                 g: 179,
                 b: 135,
-            },
-            roles: RolesConfig {
-                accent: TokenName {
-                    name: "red",
-                },
-                muted: TokenName {
-                    name: "subtext",
-                },
-                faint: TokenName {
-                    name: "overlay",
-                },
             },
             search_hit: SearchHitConfig {
                 color: Token(
@@ -673,6 +663,25 @@ Config {
             timeout_secs: 100,
             proxy: None,
             max_connections: 0,
+            color: Hex(
+                HexColor {
+                    r: 194,
+                    g: 12,
+                    b: 12,
+                },
+            ),
+        },
+        bilibili: BilibiliSection {
+            timeout_secs: 100,
+            proxy: None,
+            max_connections: 0,
+            color: Hex(
+                HexColor {
+                    r: 251,
+                    g: 114,
+                    b: 153,
+                },
+            ),
         },
     },
     daemon: DaemonConfig {

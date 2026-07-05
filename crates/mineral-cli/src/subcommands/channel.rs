@@ -1,6 +1,8 @@
 //! `mineral channel ...` 子命令分发。
 
 use clap::{Args as ClapArgs, Subcommand};
+use mineral_channel_bilibili::BilibiliConfig;
+use mineral_channel_bilibili::cli::BilibiliCli;
 use mineral_channel_netease::NeteaseConfig;
 use mineral_channel_netease::cli::NeteaseCli;
 
@@ -17,6 +19,9 @@ pub struct ChannelArgs {
 pub enum ChannelCommand {
     /// 网易云音乐(扫码登录、调试 API)。
     Netease(NeteaseCli),
+
+    /// 哔哩哔哩(扫码登录)。
+    Bilibili(BilibiliCli),
 }
 
 /// 执行 `mineral channel ...` 下的命令。
@@ -35,6 +40,12 @@ pub async fn run(args: ChannelArgs) -> color_eyre::Result<()> {
             let nc = netease_config_from(config.sources().netease());
             mineral_channel_netease::cli::run(cli, &nc).await
         }
+        ChannelCommand::Bilibili(cli) => {
+            let (config, _warnings) =
+                mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+            let bc = bilibili_config_from(config.sources().bilibili());
+            mineral_channel_bilibili::cli::run(cli, &bc).await
+        }
     }
 }
 
@@ -48,6 +59,21 @@ pub async fn run(args: ChannelArgs) -> color_eyre::Result<()> {
 ///   网易云构造参数。
 pub fn netease_config_from(section: &mineral_config::NeteaseSection) -> NeteaseConfig {
     NeteaseConfig::builder()
+        .max_connections(*section.max_connections())
+        .proxy(section.proxy().clone())
+        .timeout_secs(*section.timeout_secs())
+        .build()
+}
+
+/// 把配置的 B站段映射成构造参数(同 [`netease_config_from`],消费侧一次显式映射)。
+///
+/// # Params:
+///   - `section`: 配置的 `sources.bilibili` 段
+///
+/// # Return:
+///   B站构造参数。
+pub fn bilibili_config_from(section: &mineral_config::BilibiliSection) -> BilibiliConfig {
+    BilibiliConfig::builder()
         .max_connections(*section.max_connections())
         .proxy(section.proxy().clone())
         .timeout_secs(*section.timeout_secs())

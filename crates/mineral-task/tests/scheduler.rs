@@ -92,6 +92,7 @@ impl MusicChannel for FakeChannel {
             size: 0,
             format: mineral_model::AudioFormat::Mp3,
             bit_depth: None,
+            stream_headers: Vec::new(),
         }])
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {

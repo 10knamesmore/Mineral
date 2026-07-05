@@ -155,7 +155,9 @@ fn queue_repeatone(player: &PlayerCore, next: Song) {
     let Some(pu) = pu else {
         return; // 当前 url 尚未就绪(极少),本轮不排。
     };
-    player.audio().append_next(pu.url.clone());
+    player
+        .audio()
+        .append_next(pu.url.clone(), pu.stream_headers.clone());
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -175,7 +177,10 @@ fn queue_local_next(
     origin: PlaybackOrigin,
 ) {
     let pu = crate::resolve::local_play_url(&next, &path, quality);
-    player.audio().append_next(MediaUrl::Local(path));
+    // 本地文件无需附加取流头。
+    player
+        .audio()
+        .append_next(MediaUrl::Local(path), Vec::new());
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -202,9 +207,11 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
         .capture_path(&next.id, player.playback_quality())
     {
         Some(path) => {
-            player
-                .audio()
-                .append_next_capturing(play_url.url.clone(), path.clone());
+            player.audio().append_next_capturing(
+                play_url.url.clone(),
+                play_url.stream_headers.clone(),
+                path.clone(),
+            );
             let cap = Capturing {
                 song: next.clone(),
                 quality: player.playback_quality(),
@@ -221,7 +228,9 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
             });
         }
         None => {
-            player.audio().append_next(play_url.url.clone());
+            player
+                .audio()
+                .append_next(play_url.url.clone(), play_url.stream_headers.clone());
             player.with_state(|st| {
                 st.queued = Some(Queued {
                     song: next,

@@ -5,6 +5,8 @@
 
 use serde::Deserialize;
 
+use crate::schema::theme::ColorRef;
+
 /// 音乐源段聚合。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
@@ -14,6 +16,45 @@ use serde::Deserialize;
 pub struct SourcesConfig {
     /// 网易云源段。
     netease: NeteaseSection,
+
+    /// 哔哩哔哩源段。
+    bilibili: BilibiliSection,
+}
+
+impl SourcesConfig {
+    /// 各源的徽标色 `(name, color)`——TUI 据此按 source 名把徽标解析成具体色(命中的走配置色,
+    /// 未列出的源走中立兜底)。新增 native 源在此追加一项。
+    ///
+    /// # Return:
+    ///   `(source name, 徽标 color)` 列表。
+    pub fn source_colors(&self) -> Vec<(&str, &ColorRef)> {
+        vec![
+            ("netease", self.netease.color()),
+            ("bilibili", self.bilibili.color()),
+        ]
+    }
+}
+
+/// 哔哩哔哩源段。
+///
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。B站取流 URL(baseUrl)与 API 请求都要带
+/// `Referer`(见 header 通道),超时 / 代理 / 并发在此配。
+#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct BilibiliSection {
+    /// 请求超时(秒)。
+    timeout_secs: u64,
+
+    /// 代理:`None`(Lua `false`)= 禁用;`Some(url)` = 代理地址。
+    #[serde(deserialize_with = "de_proxy")]
+    proxy: Option<String>,
+
+    /// 最大并发连接数(`0` = 不限)。
+    max_connections: usize,
+
+    /// 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
+    color: ColorRef,
 }
 
 /// 网易云源段。
@@ -32,6 +73,9 @@ pub struct NeteaseSection {
 
     /// 最大并发连接数(`0` = 不限)。
     max_connections: usize,
+
+    /// 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
+    color: ColorRef,
 }
 
 /// 反序列化代理设置:Lua `false` → `None`(禁用);字符串 → `Some(url)`。
@@ -90,7 +134,7 @@ mod tests {
     #[test]
     fn proxy_false_is_none() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
-            "timeout_secs": 100_u64, "proxy": false, "max_connections": 0_u64,
+            "timeout_secs": 100_u64, "proxy": false, "max_connections": 0_u64, "color": "red",
         }))?;
         assert_eq!(*s.proxy(), None);
         Ok(())
@@ -99,7 +143,7 @@ mod tests {
     #[test]
     fn proxy_string_is_some() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
-            "timeout_secs": 100_u64, "proxy": "socks5://127.0.0.1:1080", "max_connections": 0_u64,
+            "timeout_secs": 100_u64, "proxy": "socks5://127.0.0.1:1080", "max_connections": 0_u64, "color": "red",
         }))?;
         assert_eq!(s.proxy().as_deref(), Some("socks5://127.0.0.1:1080"));
         Ok(())
@@ -109,7 +153,7 @@ mod tests {
     fn proxy_true_errors() {
         assert!(
             serde_json::from_value::<NeteaseSection>(serde_json::json!({
-                "timeout_secs": 100_u64, "proxy": true, "max_connections": 0_u64,
+                "timeout_secs": 100_u64, "proxy": true, "max_connections": 0_u64, "color": "red",
             }))
             .is_err(),
             "proxy = true 应报错"
