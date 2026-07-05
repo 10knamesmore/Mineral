@@ -1,9 +1,9 @@
 //! 视频搜索端点(`wbi/search/type`,WBI 签名 + 需 buvid3)。
 
 use mineral_channel_core::SearchHits;
-use mineral_model::{Artist, Song};
+use mineral_model::{Album, Artist};
 
-use crate::convert::{search_user_to_artist, search_video_to_song};
+use crate::convert::{search_user_to_artist, search_video_to_album};
 use crate::transport::Transport;
 use crate::wire::de::from_value;
 use crate::wire::search::{SearchResult, UserSearchResult};
@@ -11,7 +11,7 @@ use crate::wire::search::{SearchResult, UserSearchResult};
 /// 视频搜索端点。
 const SEARCH_URL: &str = "https://api.bilibili.com/x/web-interface/wbi/search/type";
 
-/// 搜视频 → 一页 `Song` 命中(每命中项以其 P1 代表;缺 bvid 的项被 convert 丢弃)。
+/// 搜视频 → 一页 `Album` 命中(B站一个视频 BV = 一张专辑;缺 bvid 的项被 convert 丢弃)。
 ///
 /// `page_size` 显式下发(上限 50,不发则服务端默认 ~20);「还有下一页吗」从响应的
 /// `numPages` 算出——本页条数会被 convert 过滤缩水,不能当翻页依据。
@@ -23,13 +23,13 @@ const SEARCH_URL: &str = "https://api.bilibili.com/x/web-interface/wbi/search/ty
 ///   - `page_size`: 每页条数
 ///
 /// # Return:
-///   命中视频映射成的单曲页(带显式 `has_more`)。
-pub async fn search_songs(
+///   命中视频映射成的专辑页(带显式 `has_more`)。
+pub async fn search_albums(
     transport: &Transport,
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<SearchHits<Song>> {
+) -> color_eyre::Result<SearchHits<Album>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -46,8 +46,8 @@ pub async fn search_songs(
     let items = result
         .result
         .into_iter()
-        .filter_map(search_video_to_song)
-        .collect::<Vec<Song>>();
+        .filter_map(search_video_to_album)
+        .collect::<Vec<Album>>();
     Ok(SearchHits {
         items,
         has_more: result.num_pages.map(|total| page < total),
@@ -56,7 +56,7 @@ pub async fn search_songs(
 
 /// 搜用户(`search_type=bili_user`)→ 一页 `Artist` 命中(缺 mid 的项被 convert 丢弃)。
 ///
-/// 分页语义同 [`search_songs`]:`has_more` 从 `numPages` 算,不看本页条数。
+/// 分页语义同 [`search_albums`]:`has_more` 从 `numPages` 算,不看本页条数。
 ///
 /// # Params:
 ///   - `transport`: HTTP 传输层

@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use mineral_channel_core::{
-    ChannelCaps, Credential, Error, MusicChannel, Page, Result, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Credential, Error, MusicChannel, Page, Result,
+    SearchHits,
 };
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, BitRate, Lyrics, PlayUrl, Playlist,
@@ -84,6 +85,10 @@ impl MusicChannel for MockChannel {
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Song, SearchKind::Playlist])
             .playlist_edit(true)
+            .artist_sections(ArtistSections::new(vec![
+                ArtistSectionKind::TopSongs,
+                ArtistSectionKind::Albums,
+            ]))
             .song_web_url(Some("https://mock.example/song/{id}".to_owned()))
             .playlist_web_url(Some("https://mock.example/playlist/{id}".to_owned()))
             .build()

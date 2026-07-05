@@ -795,6 +795,10 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(Vec::new())
                 .playlist_edit(false)
+                .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                    mineral_channel_core::ArtistSectionKind::TopSongs,
+                    mineral_channel_core::ArtistSectionKind::Albums,
+                ]))
                 .build()
         }
 
@@ -2336,6 +2340,10 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(Vec::new())
                 .playlist_edit(true)
+                .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                    mineral_channel_core::ArtistSectionKind::TopSongs,
+                    mineral_channel_core::ArtistSectionKind::Albums,
+                ]))
                 .build()
         }
 

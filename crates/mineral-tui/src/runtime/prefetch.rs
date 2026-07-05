@@ -476,6 +476,10 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(vec![SearchKind::Album])
                 .playlist_edit(false)
+                .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                    mineral_channel_core::ArtistSectionKind::TopSongs,
+                    mineral_channel_core::ArtistSectionKind::Albums,
+                ]))
                 .build(),
         );
         state.caps = caps;

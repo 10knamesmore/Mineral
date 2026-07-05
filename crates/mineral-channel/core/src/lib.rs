@@ -14,7 +14,7 @@ pub mod hits;
 /// 列表分页参数。
 pub mod page;
 
-pub use caps::{ChannelCaps, render_web_url};
+pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
 pub use credential::Credential;
 pub use error::{Error, Result};
 pub use hits::SearchHits;
@@ -47,8 +47,10 @@ pub trait MusicChannel: Send + Sync {
     // 靠「返回条数 < limit」推断——页码型分页 / 服务端固定页大小的源那样会误判。
     // 无翻页元信息的源 `Vec::into()` 即可(`has_more = None`,上层回退条数推断)。
 
-    /// 搜索单曲。
-    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>>;
+    /// 搜索单曲(可选)。
+    async fn search_songs(&self, _query: &str, _page: Page) -> Result<SearchHits<Song>> {
+        Err(Error::NotSupported)
+    }
     /// 搜索专辑(可选)。
     async fn search_albums(&self, _query: &str, _page: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)

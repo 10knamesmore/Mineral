@@ -3,9 +3,6 @@
 //! 内容层级映射:分 P → [`Song`],视频(BV)→ [`Album`],单 P 视频即一首歌。SongId 用
 //! `{bvid}:{page}` 形态(全局唯一;裸值喂后端时按 `:` 拆回 bvid + 分 P 号)。
 
-// convert 函数会由 channel 层调用,但本 stage 只落数据层 + 离线测试,尚无非测试调用点。
-#![allow(dead_code)]
-
 use mineral_model::{
     Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl,
     Playlist, PlaylistId, Song, SongId, SourceKind, StreamLayout,
@@ -54,16 +51,9 @@ fn is_em_tag(tag: &str) -> bool {
     inner == "em" || inner.starts_with("em ") || inner.starts_with("em\t")
 }
 
-/// `"mm:ss"`(或 `"h:mm:ss"`)→ 毫秒。任一段非数字则整体判为 0。
-fn parse_duration_ms(text: &str) -> u64 {
-    let mut secs: u64 = 0;
-    for part in text.split(':') {
-        match part.trim().parse::<u64>() {
-            Ok(n) => secs = secs.saturating_mul(60).saturating_add(n),
-            Err(_) => return 0,
-        }
-    }
-    secs.saturating_mul(1000)
+/// 整数秒 → 毫秒(负值 / 越界饱和为 0)。B站各端点时长字段都是整数秒。
+pub(crate) fn seconds_to_ms(secs: i64) -> u64 {
+    u64::try_from(secs).unwrap_or(0).saturating_mul(1000)
 }
 
 /// B站封面 URL → [`MediaUrl::Remote`]:协议相对(`//host/...`)补 `https:`,空串 → `None`。
@@ -99,28 +89,20 @@ fn author_artist_refs(mid: Option<i64>, author: Option<String>) -> Vec<ArtistRef
         .unwrap_or_default()
 }
 
-/// 搜索结果视频项 → [`Song`](用 P1 代表)。
+/// 搜索结果视频项 → [`Album`](BV 即专辑,元信息版:曲目留空,分 P 详情走 `album_detail`)。
 ///
-/// 缺 `bvid` 无法定位,返回 `None`。标题 strip 高亮标签、时长 `"mm:ss"` 解析成毫秒、
-/// 封面补 `https`;album 落该视频的 BV 专辑、artist 落 UP 主(mid 缺时退 `0`)。
-pub(crate) fn search_video_to_song(item: SearchVideoItem) -> Option<Song> {
+/// 缺 `bvid` 无法定位,返回 `None`。标题 strip 高亮标签、封面补 `https`;artist 落 UP 主
+/// (mid 缺时退 `0`)。搜索响应不含发行时间 / P 数,`publish_time_ms`/`track_count` 留默认。
+pub(crate) fn search_video_to_album(item: SearchVideoItem) -> Option<Album> {
     let bvid = item.bvid?;
     let title = item.title.as_deref().map(strip_em).unwrap_or_default();
-    let duration_ms = item.duration.as_deref().map(parse_duration_ms).unwrap_or(0);
-    let cover = item.pic.as_deref().and_then(cover_media_url);
-    let artists = author_artist_refs(item.mid, item.author);
-    let album = AlbumRef {
-        id: AlbumId::new(SourceKind::BILIBILI, bvid.clone()),
-        name: title.clone(),
-    };
     Some(
-        Song::builder()
-            .id(SongId::new(SourceKind::BILIBILI, format!("{bvid}:1")))
+        Album::builder()
+            .id(AlbumId::new(SourceKind::BILIBILI, bvid))
             .name(title)
-            .artists(artists)
-            .album(Some(album))
-            .duration_ms(duration_ms)
-            .cover_url(cover)
+            .artists(author_artist_refs(item.mid, item.author))
+            .description(item.description.unwrap_or_default())
+            .cover_url(item.pic.as_deref().and_then(cover_media_url))
             .build(),
     )
 }
@@ -143,9 +125,7 @@ pub(crate) fn view_page_to_song(
     pic: Option<&str>,
     page: &VideoPage,
 ) -> Song {
-    let duration_ms = u64::try_from(page.duration)
-        .unwrap_or(0)
-        .saturating_mul(1000);
+    let duration_ms = seconds_to_ms(page.duration);
     Song::builder()
         .id(SongId::new(
             SourceKind::BILIBILI,
@@ -293,17 +273,48 @@ pub(crate) fn fav_folder_to_playlist(folder: FavFolder) -> Playlist {
         .build()
 }
 
+/// 收藏夹条目的曲目产出计划(由 [`plan_fav_entry`] 判定)。
+pub(crate) enum FavEntryPlan {
+    /// 单 P 条目:该视频即一首歌,直接成曲。
+    Single(Song),
+
+    /// 多 P 条目:需拉 view 逐 P 展开成多首(收藏夹 API 不给分 P 明细,时长也只有
+    /// 全 BV 总和)。`fallback` 是 view 拉取失败时的降级单行。
+    Expand {
+        /// 待拉 view 的视频 BV 号。
+        bvid: String,
+
+        /// 降级单行(P1 代表,标 unavailable):多 P 条目 view 拉不到多为失效视频。
+        fallback: Song,
+    },
+}
+
+/// 判定收藏夹条目的曲目产出计划;缺 bvid 无法定位,返回 `None`。
+///
+/// 单 P 直接成曲;多 P(`page > 1`)不能直接成曲——收藏夹 API 的 `duration` 是全 BV
+/// 总和,安在 P1 头上就是「显示合集总长、实播单 P」的错位,必须经 view 逐 P 展开。
+pub(crate) fn plan_fav_entry(media: FavMedia) -> Option<FavEntryPlan> {
+    // 单 P 是收藏夹的多数,不为它克隆 bvid:展开分支才需要保留 bvid 去拉 view。
+    if media.page.is_some_and(|n| n > 1) {
+        let bvid = media.bvid.clone()?;
+        let mut song = fav_media_to_song(media)?;
+        song.unavailable = true;
+        Some(FavEntryPlan::Expand {
+            bvid,
+            fallback: song,
+        })
+    } else {
+        Some(FavEntryPlan::Single(fav_media_to_song(media)?))
+    }
+}
+
 /// 收藏夹条目(视频)→ [`Song`](用 P1 代表);缺 bvid 返回 `None`。
 ///
 /// 与搜索项类似,但收藏夹条目标题不含高亮标签、UP 主在 `upper` 字段。
-pub(crate) fn fav_media_to_song(media: FavMedia) -> Option<Song> {
+fn fav_media_to_song(media: FavMedia) -> Option<Song> {
     let bvid = media.bvid?;
     let title = media.title.unwrap_or_default();
-    let duration_ms = media
-        .duration
-        .and_then(|s| u64::try_from(s).ok())
-        .unwrap_or(0)
-        .saturating_mul(1000);
+    let duration_ms = media.duration.map(seconds_to_ms).unwrap_or(0);
     let cover = media.cover.as_deref().and_then(cover_media_url);
     let artist = ArtistRef {
         id: ArtistId::new(SourceKind::BILIBILI, media.upper.mid.to_string()),
@@ -327,17 +338,21 @@ pub(crate) fn fav_media_to_song(media: FavMedia) -> Option<Song> {
 
 /// 收藏夹详情(元信息 + 已解析曲目)→ [`Playlist`]。
 ///
+/// `track_count` 取实际曲目行数而非元信息 `media_count`:多 P 条目展开后一个收藏
+/// 条目对应多首曲目,条目数不再描述曲目数。
+///
 /// # Params:
 ///   - `fid`: 收藏夹 id(响应 `info` 里不带,由调用方从请求透传)
 ///   - `info`: 收藏夹元信息
 ///   - `songs`: 已解析的曲目
 pub(crate) fn fav_list_to_playlist(fid: &str, info: FavInfo, songs: Vec<Song>) -> Playlist {
+    let track_count = u64::try_from(songs.len()).unwrap_or(0);
     Playlist::builder()
         .id(PlaylistId::new(SourceKind::BILIBILI, fid.to_owned()))
         .name(info.title)
         .description(info.intro.unwrap_or_default())
         .cover_url(info.cover.as_deref().and_then(cover_media_url))
-        .track_count(u64::try_from(info.media_count).unwrap_or(0))
+        .track_count(track_count)
         .songs(songs)
         .build()
 }
@@ -359,16 +374,16 @@ pub(crate) fn search_user_to_artist(item: SearchUserItem) -> Option<Artist> {
     )
 }
 
-/// 名片响应 → [`Artist`]。
+/// 名片响应 → [`Artist`](无热门曲区:B站没有「整源热门单曲」概念,详情只出专辑)。
 ///
 /// 粉丝数以顶层 `follower` 为准、`card.fans` 兜底;`archive_count`(投稿数)落
 /// `album_count`;`sign` 落简介。`card` 整体缺失时出仅含 id 的最小 Artist(名字空)。
+/// `songs` 留空——artist 专辑经 `artist_albums` 单独拉,这里不投影投稿当热门单曲。
 ///
 /// # Params:
 ///   - `id`: 请求的艺人 id(响应不回传 mid 的规范形态,由调用方透传)
 ///   - `result`: 名片响应的 `data`
-///   - `songs`: 热门曲目(名片端点不带,由调用方另拉投稿列表转换后传入)
-pub(crate) fn card_to_artist(id: ArtistId, result: CardResult, songs: Vec<Song>) -> Artist {
+pub(crate) fn card_to_artist(id: ArtistId, result: CardResult) -> Artist {
     let card = result.card.unwrap_or(CardInfo {
         name: None,
         face: None,
@@ -387,7 +402,6 @@ pub(crate) fn card_to_artist(id: ArtistId, result: CardResult, songs: Vec<Song>)
         .follower_count(follower)
         .album_count(result.archive_count.and_then(|n| u64::try_from(n).ok()))
         .avatar_url(card.face.as_deref().and_then(cover_media_url))
-        .songs(songs)
         .build()
 }
 
@@ -408,35 +422,11 @@ pub(crate) fn arc_video_to_album(item: ArcVideoItem) -> Option<Album> {
     )
 }
 
-/// 投稿视频条目 → [`Song`](整视频当 P1 曲目,与搜索结果同一投影:SongId=`{bvid}:1`,
-/// 视频自身作 AlbumRef)。缺 `bvid` 无法定位,返回 `None`。多 P 视频这里只代表 P1,
-/// 下钻分 P 走 `album_detail`。
-pub(crate) fn arc_video_to_song(item: ArcVideoItem) -> Option<Song> {
-    let bvid = item.bvid?;
-    let title = item.title.unwrap_or_default();
-    let duration_ms = item.length.as_deref().map(parse_duration_ms).unwrap_or(0);
-    let artists = author_artist_refs(item.mid, item.author);
-    let album = AlbumRef {
-        id: AlbumId::new(SourceKind::BILIBILI, bvid.clone()),
-        name: title.clone(),
-    };
-    Some(
-        Song::builder()
-            .id(SongId::new(SourceKind::BILIBILI, format!("{bvid}:1")))
-            .name(title)
-            .artists(artists)
-            .album(Some(album))
-            .duration_ms(duration_ms)
-            .cover_url(item.pic.as_deref().and_then(cover_media_url))
-            .build(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use mineral_model::{AlbumId, ArtistId, MediaUrl, SongId, SourceKind};
 
-    use super::{search_video_to_song, view_to_album};
+    use super::{search_video_to_album, view_to_album};
     use crate::wire::de::from_value;
     use crate::wire::search::SearchVideoItem;
     use crate::wire::view::VideoInfo;
@@ -505,27 +495,24 @@ mod tests {
         Ok(())
     }
 
-    /// 搜索项 → Song:strip `<em>`、`"3:45"` → 225000ms、`//x.jpg` → `https://x.jpg`、
-    /// SongId = `{bvid}:1`、album 落 BV 专辑、artist 落 UP 主。
+    /// 搜索项 → Album:strip `<em>`、`//x.jpg` → `https://x.jpg`、AlbumId = `{bvid}`、
+    /// artist 落 UP 主、description 落简介;曲目留空(详情走 album_detail)。
     #[test]
-    fn search_item_maps_to_song() -> color_eyre::Result<()> {
+    fn search_item_maps_to_album() -> color_eyre::Result<()> {
         let raw = serde_json::json!({
             "bvid": "BV1xx", "title": "【<em class=\"keyword\">初音</em>】曲名",
-            "author": "UP主甲", "mid": 12345, "pic": "//x.jpg", "duration": "3:45"
+            "author": "UP主甲", "mid": 12345, "pic": "//x.jpg",
+            "duration": "3:45", "description": "视频简介"
         });
         let item: SearchVideoItem = from_value(raw)?;
-        let song =
-            search_video_to_song(item).ok_or_else(|| color_eyre::eyre::eyre!("应产出 Song"))?;
-        assert_eq!(song.name, "【初音】曲名");
-        assert_eq!(song.duration_ms, 225_000);
-        assert_eq!(song.cover_url, MediaUrl::remote("https://x.jpg").ok());
-        assert_eq!(song.id, SongId::new(SourceKind::BILIBILI, "BV1xx:1"));
-        let album = song
-            .album
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有专辑"))?;
+        let album =
+            search_video_to_album(item).ok_or_else(|| color_eyre::eyre::eyre!("应产出 Album"))?;
+        assert_eq!(album.name, "【初音】曲名");
+        assert_eq!(album.description, "视频简介");
+        assert_eq!(album.cover_url, MediaUrl::remote("https://x.jpg").ok());
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
-        let artist = song
+        assert!(album.songs.is_empty(), "搜索结果只给元信息,曲目走详情");
+        let artist = album
             .artists
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有艺术家"))?;
@@ -538,7 +525,7 @@ mod tests {
     #[test]
     fn search_item_without_bvid_is_none() -> color_eyre::Result<()> {
         let item: SearchVideoItem = from_value(serde_json::json!({ "title": "x" }))?;
-        assert!(search_video_to_song(item).is_none());
+        assert!(search_video_to_album(item).is_none());
         Ok(())
     }
 
@@ -628,6 +615,83 @@ mod tests {
         Ok(())
     }
 
+    /// 单 P(page=1 / page 缺失)收藏条目 → 直接成曲,不需要拉 view。
+    #[test]
+    fn fav_entry_single_page_plans_direct_song() -> color_eyre::Result<()> {
+        use super::{FavEntryPlan, plan_fav_entry};
+        use crate::wire::fav::FavMedia;
+
+        let raw = serde_json::json!({
+            "bvid": "BV1zz", "title": "收藏的歌", "duration": 200, "page": 1,
+            "upper": { "mid": 999, "name": "收藏UP" }
+        });
+        let media: FavMedia = from_value(raw)?;
+        let plan = plan_fav_entry(media).ok_or_else(|| color_eyre::eyre::eyre!("应产出计划"))?;
+        let FavEntryPlan::Single(song) = plan else {
+            color_eyre::eyre::bail!("单 P 条目应直接成曲");
+        };
+        assert_eq!(song.id, SongId::new(SourceKind::BILIBILI, "BV1zz:1"));
+        assert_eq!(song.duration_ms, 200_000);
+        Ok(())
+    }
+
+    /// 多 P(page>1)收藏条目 → 计划为「拉 view 逐 P 展开」:收藏夹 API 只给分 P 数与
+    /// **全 BV 总时长**,直接成曲会把总长安在 P1 头上(显示 2h 实播 5min 的错位)。
+    /// 降级单行(view 失败时用)标 unavailable——多 P 条目 view 拉不到多为失效视频。
+    #[test]
+    fn fav_entry_multi_page_plans_expand_with_unavailable_fallback() -> color_eyre::Result<()> {
+        use super::{FavEntryPlan, plan_fav_entry};
+        use crate::wire::fav::FavMedia;
+
+        let raw = serde_json::json!({
+            "bvid": "BV1LsicBQEa2", "title": "10周年演出合集", "duration": 9499, "page": 23,
+            "upper": { "mid": 999, "name": "演出UP" }
+        });
+        let media: FavMedia = from_value(raw)?;
+        let plan = plan_fav_entry(media).ok_or_else(|| color_eyre::eyre::eyre!("应产出计划"))?;
+        let FavEntryPlan::Expand { bvid, fallback } = plan else {
+            color_eyre::eyre::bail!("多 P 条目应计划展开");
+        };
+        assert_eq!(bvid, "BV1LsicBQEa2");
+        assert_eq!(
+            fallback.id,
+            SongId::new(SourceKind::BILIBILI, "BV1LsicBQEa2:1")
+        );
+        assert!(fallback.unavailable, "降级单行应标不可播");
+        Ok(())
+    }
+
+    /// 收藏夹详情 → Playlist:track_count 取实际曲目行数——多 P 条目展开后行数多于
+    /// 收藏条目数,元信息里的 media_count(条目数)不再描述曲目数。
+    #[test]
+    fn fav_list_track_count_follows_expanded_songs() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, Song};
+
+        use super::fav_list_to_playlist;
+        use crate::wire::fav::FavInfo;
+
+        let info: FavInfo = from_value(serde_json::json!({
+            "title": "音乐夹", "media_count": 1
+        }))?;
+        let songs = vec![
+            Song::builder()
+                .id(SongId::new(SourceKind::BILIBILI, "BV1xx:1"))
+                .name("P1".to_owned())
+                .build(),
+            Song::builder()
+                .id(SongId::new(SourceKind::BILIBILI, "BV1xx:2"))
+                .name("P2".to_owned())
+                .build(),
+        ];
+        let playlist = fav_list_to_playlist("42", info, songs);
+        assert_eq!(playlist.id, PlaylistId::new(SourceKind::BILIBILI, "42"));
+        assert_eq!(
+            playlist.track_count, 2,
+            "1 个收藏条目展开成 2 曲,计数随曲目"
+        );
+        Ok(())
+    }
+
     /// 用户搜索条目 → Artist:mid 入 BILIBILI namespace、fans→follower_count、
     /// videos→album_count(每 BV 一张专辑)、usign→description、upic 补 https。
     #[test]
@@ -670,12 +734,11 @@ mod tests {
     }
 
     /// 名片 → Artist:follower 优先于 card.fans、archive_count→album_count、
-    /// sign→description、face 落头像、songs(热门曲目)原样透传。
+    /// sign→description、face 落头像;songs 恒空(B站 artist 无热门曲区,专辑走 artist_albums)。
     #[test]
     fn card_maps_to_artist() -> color_eyre::Result<()> {
         use super::card_to_artist;
         use crate::wire::space::CardResult;
-        use mineral_model::Song;
 
         let raw = serde_json::json!({
             "card": { "name": "UP主甲", "face": "https://i0.hdslb.com/f.jpg",
@@ -683,13 +746,7 @@ mod tests {
             "follower": 4567, "archive_count": 89
         });
         let result: CardResult = from_value(raw)?;
-        let hot = vec![
-            Song::builder()
-                .id(SongId::new(SourceKind::BILIBILI, "BV1xx:1"))
-                .name("热门一".to_owned())
-                .build(),
-        ];
-        let artist = card_to_artist(ArtistId::new(SourceKind::BILIBILI, "12345"), result, hot);
+        let artist = card_to_artist(ArtistId::new(SourceKind::BILIBILI, "12345"), result);
         assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "12345"));
         assert_eq!(artist.name, "UP主甲");
         assert_eq!(
@@ -702,7 +759,7 @@ mod tests {
             artist.avatar_url,
             MediaUrl::remote("https://i0.hdslb.com/f.jpg").ok()
         );
-        assert_eq!(artist.songs.len(), 1, "热门曲目应透传进 Artist.songs");
+        assert!(artist.songs.is_empty(), "B站 artist 无热门曲区,songs 恒空");
         Ok(())
     }
 
@@ -713,11 +770,7 @@ mod tests {
         use crate::wire::space::CardResult;
 
         let result: CardResult = from_value(serde_json::json!({}))?;
-        let artist = card_to_artist(
-            ArtistId::new(SourceKind::BILIBILI, "7"),
-            result,
-            /*songs*/ Vec::new(),
-        );
+        let artist = card_to_artist(ArtistId::new(SourceKind::BILIBILI, "7"), result);
         assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "7"));
         assert_eq!(artist.name, "");
         assert_eq!(artist.follower_count, 0);
@@ -765,51 +818,6 @@ mod tests {
 
         let item: ArcVideoItem = from_value(serde_json::json!({ "title": "x" }))?;
         assert!(arc_video_to_album(item).is_none());
-        Ok(())
-    }
-
-    /// 投稿条目 → Song(整视频当 P1 曲目,与搜索结果同一投影):SongId=`bvid:1`、
-    /// `length`("MM:SS")→duration_ms、视频自身作 AlbumRef。
-    #[test]
-    fn arc_video_maps_to_p1_song() -> color_eyre::Result<()> {
-        use super::arc_video_to_song;
-        use crate::wire::space::ArcVideoItem;
-
-        let raw = serde_json::json!({
-            "bvid": "BV1xx", "title": "投稿一", "pic": "//i0.hdslb.com/a.jpg",
-            "length": "3:45", "mid": 12345, "author": "UP主甲"
-        });
-        let item: ArcVideoItem = from_value(raw)?;
-        let song = arc_video_to_song(item).ok_or_else(|| color_eyre::eyre::eyre!("应产出 Song"))?;
-        assert_eq!(song.id, SongId::new(SourceKind::BILIBILI, "BV1xx:1"));
-        assert_eq!(song.name, "投稿一");
-        assert_eq!(song.duration_ms, 225_000);
-        let album = song
-            .album
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有 album ref"))?;
-        assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
-        assert_eq!(album.name, "投稿一");
-        let artist = song
-            .artists
-            .first()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有 artist"))?;
-        assert_eq!(artist.id, ArtistId::new(SourceKind::BILIBILI, "12345"));
-        assert_eq!(
-            song.cover_url,
-            MediaUrl::remote("https://i0.hdslb.com/a.jpg").ok()
-        );
-        Ok(())
-    }
-
-    /// 投稿条目缺 bvid → 出不了 Song,返回 None。
-    #[test]
-    fn arc_video_song_without_bvid_is_none() -> color_eyre::Result<()> {
-        use super::arc_video_to_song;
-        use crate::wire::space::ArcVideoItem;
-
-        let item: ArcVideoItem = from_value(serde_json::json!({ "title": "x" }))?;
-        assert!(arc_video_to_song(item).is_none());
         Ok(())
     }
 

@@ -81,6 +81,7 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 * `format!` / `println!` 等参数尽量内联(clippy `uninlined_format_args`)。
 * 优先方法引用而非简单闭包;`match` 尽量穷尽,避免随手写 `_ =>`。
 - 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
+* **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。哨兵值的三宗罪:① 与合法值不可区分(`duration_ms: 0` 到底是「未知」还是「真的 0 秒」?调用方无从判断);② 把「缺失」的处理**静默**推给下游的隐式 fallback,而那个 fallback 可能本身就是错的(踩过的坑:`local_play_url` 用 `duration_ms: 0` 当「未知,让显示层回落列表元数据」,但列表元数据恰是错的全 BV 总长 → 进度条显示 2h);③ 编译器帮不上忙——`Option` 会强制每个消费点显式处理 `None`,哨兵值不会。缺失就让类型说出来,别用魔法数字。
 
 ### 文档与可见性
 

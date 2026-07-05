@@ -6,6 +6,7 @@
 
 use std::cell::Cell;
 
+use mineral_channel_core::{ArtistSectionKind, ArtistSections};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind, Song, SourceKind,
 };
@@ -156,12 +157,20 @@ pub enum ArtistSection {
 }
 
 impl ArtistSection {
-    /// 在两区间切换（`[` 与 `]` 同效，两态互为反向）。
-    pub fn cycle(&mut self) {
-        *self = match self {
-            Self::Hot => Self::Albums,
-            Self::Albums => Self::Hot,
-        };
+    /// 映射到 caps 的分区种类（[`ArtistSectionKind`]）：渲染分区与能力声明的桥。
+    fn kind(self) -> ArtistSectionKind {
+        match self {
+            Self::Hot => ArtistSectionKind::TopSongs,
+            Self::Albums => ArtistSectionKind::Albums,
+        }
+    }
+
+    /// 从 caps 的分区种类映射回渲染分区。
+    fn from_kind(kind: ArtistSectionKind) -> Self {
+        match kind {
+            ArtistSectionKind::TopSongs => Self::Hot,
+            ArtistSectionKind::Albums => Self::Albums,
+        }
     }
 }
 
@@ -176,6 +185,11 @@ pub struct DetailFrame {
 
     /// 歌手帧当前分区（非歌手帧忽略）。
     pub section: ArtistSection,
+
+    /// 该歌手源的可用分区（`caps.artist_sections`）。`None` = caps 尚未落定的瞬态（建帧到
+    /// [`Self::apply_sections`] 之间，同一事件内 apply 先于 render 故不被观测）。落定后：默认区落
+    /// 首个可用区、`[`/`]` 只在两区皆有时切、渲染按可用区决定画几个 tab。非歌手帧忽略。
+    artist_sections: Option<ArtistSections>,
 
     /// 歌手双区切换的横向滑动（off=Top Songs / on=Albums）。`None` = 从未切过（恒 Top Songs，
     /// 无动画）；首次切换按 sweep 拍数懒构造，复用 browse view-sweep 同款 [`Toggle`]。
@@ -200,11 +214,26 @@ impl DetailFrame {
             entity,
             data: None,
             section: ArtistSection::default(),
+            artist_sections: None,
             section_anim: None,
             list: ScrollList::new(),
             desc_scroll: Cell::new(0),
             requested: false,
         }
+    }
+
+    /// 该帧歌手源的可用分区（`None` = caps 未落定;渲染据此决定画哪些 tab）。非歌手帧无意义。
+    pub fn artist_sections(&self) -> Option<&ArtistSections> {
+        self.artist_sections.as_ref()
+    }
+
+    /// 落定歌手源的可用分区(`caps.artist_sections`),并把当前分区收到首个可用区。由持 caps 的
+    /// 上层在建 / 复位歌手 root 帧后调用(幂等):如 B站只有 Albums,分区从默认的 Hot 收到 Albums。
+    pub fn apply_sections(&mut self, sections: ArtistSections) {
+        if let Some(first) = sections.kinds().first() {
+            self.section = ArtistSection::from_kind(*first);
+        }
+        self.artist_sections = Some(sections);
     }
 
     /// 面板内列表的光标 + 视口滚动态(渲染 / 选中读取)。
@@ -232,16 +261,32 @@ impl DetailFrame {
             .set(u16::try_from(next).unwrap_or(u16::MAX));
     }
 
-    /// 切歌手双区并 arm 横向过渡（Top Songs↔Albums，复用 browse view-sweep 同款 [`Toggle`]）。
+    /// 沿本源可用分区列表前进一格并 arm 横向过渡（复用 browse view-sweep 同款 [`Toggle`]）。
     /// 光标归零；`ticks` 为切换拍数（由 sweep 配置折算，与下钻滑动同源）。
+    ///
+    /// 只有一个可用区（如 B站仅 Albums）或 caps 未落定 → no-op：无处可切。
     pub fn cycle_section(&mut self, ticks: u16) {
-        self.section.cycle();
-        // 双区共用一份列表态:切区瞬时归位顶端(无平移),Hot/Albums 长度不同也不残留旧 offset。
+        let Some(kinds) = self.artist_sections.as_ref().map(ArtistSections::kinds) else {
+            return;
+        };
+        if kinds.len() < 2 {
+            return;
+        }
+        let here = kinds
+            .iter()
+            .position(|k| *k == self.section.kind())
+            .unwrap_or(0);
+        let next = (here + 1) % kinds.len();
+        let Some(&target) = kinds.get(next) else {
+            return;
+        };
+        self.section = ArtistSection::from_kind(target);
+        // 各区共用一份列表态:切区瞬时归位顶端(无平移),区间长度不同也不残留旧 offset。
         self.list.place(0, 0);
-        let to_albums = self.section == ArtistSection::Albums;
+        // 动画 [`Toggle`] 二态(off=列表首区 / on=次区);当前每源至多两区,>2 时仅首两区间平滑。
         self.section_anim
             .get_or_insert_with(|| Toggle::new(ticks.max(1)))
-            .set(to_albums);
+            .set(next == 1);
     }
 
     /// 双区切换的横向滑动进度（`0` = Top Songs、满值 = Albums）；未在动画 → `None`（渲染单区）。
@@ -555,7 +600,14 @@ mod tests {
     };
     use mineral_task::SearchPayload;
 
+    use mineral_channel_core::{ArtistSectionKind, ArtistSections};
+
     use super::{ArtistSection, DetailFetch, DetailStack, EntityRef};
+
+    /// 两区皆有的 artist 分区(音乐源形态测试夹具)。
+    fn both_sections() -> ArtistSections {
+        ArtistSections::new(vec![ArtistSectionKind::TopSongs, ArtistSectionKind::Albums])
+    }
 
     /// 造一首歌；`album` 给所属专辑 id（`None` = 单曲）。
     fn song(raw: &str, album: Option<&str>) -> Song {
@@ -704,14 +756,23 @@ mod tests {
         assert!(empty.current().is_none(), "空栈 push 忽略");
     }
 
-    /// ArtistSection.cycle 在两区间来回。
+    /// 单区源(仅 Albums,如 B站):apply_sections 把分区收到唯一可用区,cycle_section 为 no-op。
     #[test]
-    fn artist_section_cycles() {
-        let mut s = ArtistSection::Hot;
-        s.cycle();
-        assert_eq!(s, ArtistSection::Albums);
-        s.cycle();
-        assert_eq!(s, ArtistSection::Hot);
+    fn single_section_defaults_and_no_cycle() {
+        let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
+        frame.apply_sections(ArtistSections::new(vec![ArtistSectionKind::Albums]));
+        assert_eq!(
+            frame.section,
+            ArtistSection::Albums,
+            "单区源默认落到唯一可用区(专辑),不是默认的 Hot"
+        );
+        frame.cycle_section(/*ticks*/ 4);
+        assert_eq!(
+            frame.section,
+            ArtistSection::Albums,
+            "单区无处可切,cycle no-op"
+        );
+        assert!(frame.section_eased().is_none(), "单区不 arm 滑动");
     }
 
     /// selected_cover：Hot 区取选中歌封面、Albums 区取选中专辑封面、非 artist 帧为 None。
@@ -936,7 +997,12 @@ mod tests {
     #[test]
     fn cycle_section_arms_and_settles() {
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
-        assert_eq!(frame.section, ArtistSection::Hot, "默认 Top Songs");
+        frame.apply_sections(both_sections());
+        assert_eq!(
+            frame.section,
+            ArtistSection::Hot,
+            "两区源默认落首区 Top Songs"
+        );
         assert!(frame.section_eased().is_none(), "未切过 → 无动画");
 
         frame.cycle_section(/*ticks*/ 4);
@@ -960,6 +1026,7 @@ mod tests {
     fn stack_tick_advances_top_section_anim() {
         let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
         if let Some(frame) = st.current_mut() {
+            frame.apply_sections(both_sections());
             frame.cycle_section(4);
         }
         assert!(

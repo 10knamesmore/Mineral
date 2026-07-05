@@ -533,6 +533,10 @@ pub(crate) fn app_with_channel_search_probed(
         ChannelCaps::builder()
             .searchable(searchable)
             .playlist_edit(false)
+            .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                mineral_channel_core::ArtistSectionKind::TopSongs,
+                mineral_channel_core::ArtistSectionKind::Albums,
+            ]))
             .build(),
     );
     // 真路径入会(挑默认源 + 建会话),再把 morph 推到稳态(step=1000 一步到位)。
@@ -560,6 +564,10 @@ pub(crate) fn app_with_channel_search_qprobed(
         ChannelCaps::builder()
             .searchable(searchable)
             .playlist_edit(false)
+            .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                mineral_channel_core::ArtistSectionKind::TopSongs,
+                mineral_channel_core::ArtistSectionKind::Albums,
+            ]))
             .build(),
     );
     app.state.channel_search.enter(&app.state.caps);

@@ -385,7 +385,9 @@ mod tests {
         netease.upsert_meta(&a).await?;
         netease.set_loved(&a.id, true).await?;
         // 有 meta 未 loved:不计。
-        netease.upsert_meta(&with_name(song("b"), "unloved")).await?;
+        netease
+            .upsert_meta(&with_name(song("b"), "unloved"))
+            .await?;
         // loved 无 meta(ghost):不计。
         netease
             .set_loved(&SongId::new(SourceKind::NETEASE, "ghost"), true)

@@ -1,7 +1,9 @@
 //! 聚合 channel 实现:数据全部来自 persist,无网络后端。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
+use mineral_channel_core::{
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
+};
 use mineral_model::{BitRate, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 
@@ -52,8 +54,8 @@ impl MineralChannel {
     async fn build_favorites(&self, with_songs: bool) -> Result<Playlist> {
         let (track_count, songs) = if with_songs {
             let songs = self.store.loved_songs().await.map_err(Error::Other)?;
-            let count = u64::try_from(songs.len())
-                .map_err(|e| Error::Other(color_eyre::Report::new(e)))?;
+            let count =
+                u64::try_from(songs.len()).map_err(|e| Error::Other(color_eyre::Report::new(e)))?;
             (count, songs)
         } else {
             let count = self.store.loved_count().await.map_err(Error::Other)?;
@@ -78,6 +80,11 @@ impl MusicChannel for MineralChannel {
         ChannelCaps::builder()
             .searchable(Vec::new())
             .playlist_edit(false)
+            // 聚合源:artist 详情沿用音乐源形态(热门曲 + 专辑)。
+            .artist_sections(ArtistSections::new(vec![
+                ArtistSectionKind::TopSongs,
+                ArtistSectionKind::Albums,
+            ]))
             .build()
     }
 

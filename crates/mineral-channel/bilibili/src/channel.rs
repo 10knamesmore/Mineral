@@ -5,7 +5,9 @@
 //! `song_urls` 每首两跳(view + playurl);详情/搜索是单跳。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
+use mineral_channel_core::{
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
+};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, PlayUrl, Playlist, PlaylistId, SearchKind, Song,
     SongId, SourceKind, UserId,
@@ -19,9 +21,6 @@ use crate::credential::StoredBilibiliAuth;
 use crate::error::ApiCodeError;
 use crate::transport::Transport;
 use crate::wire::view::VideoInfo;
-
-/// `artist_detail` 热门曲目取的投稿条数(播放数倒序单页,不翻页)。
-const HOT_SONGS_PAGE_SIZE: u32 = 20;
 
 /// 哔哩哔哩 channel 实例。guest 模式(无登录)可搜索 / 详情 / 取流;带登录态(见
 /// [`Self::with_credential`])额外解锁「我的收藏夹」+ 高码率。
@@ -105,6 +104,18 @@ fn parse_song_ref(id: &SongId) -> Option<(String, i32)> {
     Some((bvid.to_owned(), page))
 }
 
+/// 多 P 展开时单条 view 失败是否应中止整个 `playlist_detail`(而非降级为 unavailable 单行)。
+///
+/// 全局/瞬时错误(登录失效 / 风控 / 网络 / 未知兜底)会命中夹子里**每一条**多 P 条目,若逐条
+/// 降级会把整夹伪造成一堆 unavailable 死行、掩盖「重登 / 退避重试」的真因——故中止并冒泡,让上层
+/// 可重试。仅该视频**自身**的内容错误(`Api` 码如 -404 删除、`Parse` 响应异常)才降级单行。
+fn expansion_should_abort(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::AuthRequired | Error::RateLimited | Error::Network(_) | Error::Other(_)
+    )
+}
+
 /// 在视频详情里定位某分 P 的 cid:优先 `pages` 里 `page` 匹配项;单 P(无 pages)且
 /// `page <= 1` 用顶层 cid 兜底。
 fn cid_for_page(info: &VideoInfo, page: i32) -> Option<i64> {
@@ -123,18 +134,21 @@ impl MusicChannel for BilibiliChannel {
     }
 
     fn caps(&self) -> ChannelCaps {
-        // 全库搜视频(→ Song)+ 用户(→ Artist);写操作永不支持(只读源)。song 模板
-        // 用位置占位拆 `bvid:page` 复合裸 id(`?p=1` 对单 P 视频冗余但合法,不特判);
-        // 收藏夹的稳定分享 URL 需要 mid 参与,裸 fid 拼不出,故歌单模板留空。
+        // 全库搜视频(BV → Album)+ 用户(→ Artist);写操作永不支持(只读源)。B站一个视频
+        // 就是一张专辑,分 P 是曲目,搜索直接产 Album、不投影成 P1 单曲(避免「显示全 BV 总长、
+        // 实播单 P」的时长错位)。song 模板用位置占位拆 `bvid:page` 复合裸 id(`?p=1` 对单 P
+        // 视频冗余但合法,不特判);收藏夹的稳定分享 URL 需要 mid 参与,裸 fid 拼不出,歌单模板留空。
         ChannelCaps::builder()
-            .searchable(vec![SearchKind::Song, SearchKind::Artist])
+            .searchable(vec![SearchKind::Album, SearchKind::Artist])
             .playlist_edit(false)
+            // UP 主详情:只有投稿专辑区,无「热门曲」区(B站无整源热门单曲概念,见 artist_detail)。
+            .artist_sections(ArtistSections::new(vec![ArtistSectionKind::Albums]))
             .song_web_url(Some("https://www.bilibili.com/video/{0}?p={1}".to_owned()))
             .build()
     }
 
-    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>> {
-        api::search::search_songs(&self.transport, query, page_number(page), page.limit)
+    async fn search_albums(&self, query: &str, page: Page) -> Result<SearchHits<Album>> {
+        api::search::search_albums(&self.transport, query, page_number(page), page.limit)
             .await
             .map_err(map_err)
     }
@@ -178,38 +192,12 @@ impl MusicChannel for BilibiliChannel {
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
-        // 名片是主体;热门曲目 = 投稿按播放数取一页(整视频当 P1 曲目,与搜索同一
-        // 投影),拉不到(arc/search 风控)时降级空列表,不拖垮详情。
-        let (card, hot) = tokio::join!(
-            api::space::card(&self.transport, id.as_str()),
-            api::space::arc_videos(
-                &self.transport,
-                id.as_str(),
-                api::space::ArcOrder::Click,
-                /*page*/ 1,
-                HOT_SONGS_PAGE_SIZE,
-            ),
-        );
-        let card = card.map_err(map_err)?;
-        let songs = match hot {
-            Ok(result) => result
-                .list
-                .map(|l| l.vlist)
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(convert::arc_video_to_song)
-                .collect(),
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "bilibili",
-                    artist = id.value(),
-                    error = mineral_log::chain(&e),
-                    "hot uploads fetch failed; artist songs empty"
-                );
-                Vec::new()
-            }
-        };
-        Ok(convert::card_to_artist(id.clone(), card, songs))
+        // 只取名片(基本信息);B站没有「整源热门单曲」概念,不投影投稿当热门曲——UP 主的投稿
+        // 专辑经 artist_albums 单独拉,UI 据 caps.artist_top_songs=false 只显示 Albums 区。
+        let card = api::space::card(&self.transport, id.as_str())
+            .await
+            .map_err(map_err)?;
+        Ok(convert::card_to_artist(id.clone(), card))
     }
 
     async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
@@ -257,17 +245,42 @@ impl MusicChannel for BilibiliChannel {
     }
 
     async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
-        // 收藏夹内容:翻页拉全条目 → Song,配元信息成 Playlist(缺 info 时以 fid 兜底名)。
+        // 收藏夹内容:翻页拉全条目,单 P 直接成曲;多 P 条目逐 BV 拉 view 展开成逐 P 曲目
+        // (串行:只有多 P 条目才多这一跳,音乐向收藏夹里量级很小)。view 失败分两类:该视频
+        // 自身内容错误(删除 / 解析异常)降级为标 unavailable 的单行,整夹不因单条失效视频而空;
+        // 全局/瞬时错误(登录失效 / 风控 / 网络)会命中每条,中止整夹并冒泡供上层重试(见
+        // [`expansion_should_abort`]),不伪造一堆死行掩盖真因。最后配元信息成 Playlist。
         let fid = id.as_str();
         let list = api::fav::all_resources(&self.transport, fid)
             .await
             .map_err(map_err)?;
-        let songs = list
-            .medias
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(convert::fav_media_to_song)
-            .collect::<Vec<Song>>();
+        let mut songs = Vec::<Song>::new();
+        for media in list.medias.unwrap_or_default() {
+            let Some(plan) = convert::plan_fav_entry(media) else {
+                continue;
+            };
+            match plan {
+                convert::FavEntryPlan::Single(song) => songs.push(song),
+                convert::FavEntryPlan::Expand { bvid, fallback } => {
+                    match api::view::video_info(&self.transport, &bvid).await {
+                        Ok(info) => songs.extend(convert::view_to_album(info).songs),
+                        Err(e) => {
+                            let err = map_err(e);
+                            if expansion_should_abort(&err) {
+                                return Err(err);
+                            }
+                            mineral_log::warn!(
+                                target: "bilibili",
+                                bvid,
+                                error = mineral_log::chain(&err),
+                                "多 P 收藏条目内容失效(删除 / 解析异常),降级为单行"
+                            );
+                            songs.push(fallback);
+                        }
+                    }
+                }
+            }
+        }
         match list.info {
             Some(info) => Ok(convert::fav_list_to_playlist(fid, info, songs)),
             None => Ok(Playlist::builder()
@@ -292,5 +305,74 @@ impl MusicChannel for BilibiliChannel {
             .into_iter()
             .map(convert::fav_folder_to_playlist)
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_channel_core::Error;
+
+    use super::{cid_for_page, expansion_should_abort};
+    use crate::wire::de::from_value;
+    use crate::wire::view::VideoInfo;
+
+    /// 多 P 展开时 view 失败的处置分流:全局/瞬时错误(登录失效 / 风控 / 网络 / 兜底)中止整夹
+    /// 可重试;该视频自身的内容错误(API 码如删除 / 解析异常)才降级单行,不冒充删除。
+    #[test]
+    fn expansion_aborts_on_global_errors_only() {
+        assert!(
+            expansion_should_abort(&Error::AuthRequired),
+            "登录失效会命中每条,应中止"
+        );
+        assert!(
+            expansion_should_abort(&Error::RateLimited),
+            "风控会命中每条,应中止"
+        );
+        assert!(
+            expansion_should_abort(&Error::Network("timeout".to_owned())),
+            "网络故障应中止"
+        );
+        assert!(
+            expansion_should_abort(&Error::Other(color_eyre::eyre::eyre!("x"))),
+            "未知兜底错误保守中止"
+        );
+        assert!(
+            !expansion_should_abort(&Error::Api {
+                code: -404,
+                message: String::new()
+            }),
+            "该视频删除(API 码)只降级单行"
+        );
+        assert!(
+            !expansion_should_abort(&Error::Parse("bad json".to_owned())),
+            "该视频响应解析异常只降级单行"
+        );
+    }
+
+    /// 多 P 视频按 page 号定位 cid:命中 `pages` 里对应 page 的 cid。
+    #[test]
+    fn cid_for_page_locates_matching_page() -> color_eyre::Result<()> {
+        let info: VideoInfo = from_value(serde_json::json!({
+            "bvid": "BV1xx", "title": "多P", "cid": 1001, "duration": 440,
+            "owner": { "mid": 1, "name": "甲" },
+            "pages": [
+                { "cid": 1001, "page": 1, "part": "一", "duration": 240 },
+                { "cid": 1002, "page": 2, "part": "二", "duration": 200 }
+            ]
+        }))?;
+        assert_eq!(cid_for_page(&info, 2), Some(1002));
+        Ok(())
+    }
+
+    /// 单 P 视频(无 pages)`page <= 1` 用顶层 cid 兜底;越界 page 定位失败。
+    #[test]
+    fn cid_for_page_falls_back_to_top_level_for_single_page() -> color_eyre::Result<()> {
+        let info: VideoInfo = from_value(serde_json::json!({
+            "bvid": "BV1yy", "title": "单P", "cid": 2001, "duration": 100,
+            "owner": { "mid": 7, "name": "乙" }
+        }))?;
+        assert_eq!(cid_for_page(&info, 1), Some(2001));
+        assert_eq!(cid_for_page(&info, 5), None);
+        Ok(())
     }
 }

@@ -334,7 +334,12 @@ impl PlayerCore {
                 continue;
             }
             for song in &songs {
-                if let Err(e) = self.persist().scope(song.id.namespace()).upsert_meta(song).await {
+                if let Err(e) = self
+                    .persist()
+                    .scope(song.id.namespace())
+                    .upsert_meta(song)
+                    .await
+                {
                     mineral_log::debug!(
                         target: "favorites",
                         song = song.id.value(),

@@ -484,6 +484,10 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
                 mineral_model::SearchKind::Artist,
             ])
             .playlist_edit(true)
+            .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                mineral_channel_core::ArtistSectionKind::TopSongs,
+                mineral_channel_core::ArtistSectionKind::Albums,
+            ]))
             .build(),
     )]))
     .await?;

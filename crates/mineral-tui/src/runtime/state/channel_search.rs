@@ -4,7 +4,7 @@
 //! 与本地模糊过滤（[`SearchState`](crate::runtime::state::SearchState)）是两回事：那边是「单段
 //! 文本怎么匹配」，这边是一个全屏级布局态（进入后整屏切到搜索视图）。
 
-use mineral_channel_core::{ChannelCaps, Page};
+use mineral_channel_core::{ArtistSections, ChannelCaps, Page};
 use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId, SearchKind, Song, SourceKind};
 use mineral_task::SearchPayload;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -74,6 +74,11 @@ pub struct KindResults {
 
     /// 当前选中实体的详情栈（root 随 `sel` 复位、下钻 push/pop）。
     pub detail: DetailStack,
+
+    /// 本桶所属源的 artist 可用分区（`caps.artist_sections`；一桶同源故桶级缓存）。`None` = caps
+    /// 尚未落定。由 [`Self::apply_sections`] 在首页到货后按 caps 落定,`set_sel` 复位新 root 时复用
+    /// （无需再查 caps）——新建 / 复位的歌手 root 帧据此把分区收到首个可用区。
+    sections: Option<ArtistSections>,
 }
 
 /// 榨干判定:源显式表态（`has_more`）优先,`None` 回退「短页即榨干」推断。
@@ -107,6 +112,24 @@ impl KindResults {
             next_offset: limit,
             exhausted: page_exhausts(loaded, limit, has_more),
             detail,
+            sections: None,
+        }
+    }
+
+    /// 按 caps 落定本桶所属源的 artist 可用分区（首页到货后由上层调,持 caps）。立即把当前歌手
+    /// root 帧的分区收到首个可用区,并让后续 `set_sel` 复位复用此判定。
+    pub fn apply_sections(&mut self, sections: ArtistSections) {
+        self.sections = Some(sections);
+        self.apply_sections_to_root();
+    }
+
+    /// 把桶级分区声明落到当前 root 帧（歌手帧才有意义;非歌手帧 / 未落定 → 不动）。
+    fn apply_sections_to_root(&mut self) {
+        if let Some(sections) = self.sections.clone()
+            && let Some(frame) = self.detail.current_mut()
+            && matches!(frame.entity, EntityRef::Artist(_))
+        {
+            frame.apply_sections(sections);
         }
     }
 
@@ -145,6 +168,8 @@ impl KindResults {
         self.list.set_sel(clamped);
         if let Some(entity) = EntityRef::from_payload(&self.results, clamped) {
             self.detail.reset_to(entity);
+            // 新 root 帧默认建;歌手帧沿用桶级分区声明把分区收到首个可用区(无热门曲的源即 Albums)。
+            self.apply_sections_to_root();
         }
     }
 
@@ -334,6 +359,14 @@ impl SearchSession {
                 .insert(kind, KindResults::first_page(payload, page.limit, has_more));
         } else if let Some(bucket) = self.by_kind.get_mut(&kind) {
             bucket.append_page(payload, page.limit, has_more);
+        }
+    }
+
+    /// 按 caps 落定某 kind 桶所属源的 artist 可用分区（首页到货后调,持 caps）。
+    /// 桶不存在(未搜该 kind)则无操作。
+    pub fn apply_sections(&mut self, kind: SearchKind, sections: ArtistSections) {
+        if let Some(bucket) = self.by_kind.get_mut(&kind) {
+            bucket.apply_sections(sections);
         }
     }
 }
@@ -741,9 +774,18 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(kinds)
                 .playlist_edit(false)
+                .artist_sections(music_sections())
                 .build(),
         );
         caps
+    }
+
+    /// 两区皆有的 artist 分区(测试夹具:音乐源形态)。
+    fn music_sections() -> mineral_channel_core::ArtistSections {
+        mineral_channel_core::ArtistSections::new(vec![
+            mineral_channel_core::ArtistSectionKind::TopSongs,
+            mineral_channel_core::ArtistSectionKind::Albums,
+        ])
     }
 
     /// 5 条歌曲一页（配 limit=5 即满页；endserenading 上限 10 条）。
@@ -845,6 +887,7 @@ mod tests {
                 ChannelCaps::builder()
                     .searchable(kinds)
                     .playlist_edit(false)
+                    .artist_sections(music_sections())
                     .build(),
             );
         }

@@ -87,9 +87,13 @@ pub struct FavMedia {
     #[serde(default)]
     pub cover: Option<String>,
 
-    /// 时长(秒)。
+    /// 时长(秒)。**多 P 视频这里是全 BV 各 P 之和**,不是任何单 P 的时长。
     #[serde(default)]
     pub duration: Option<i64>,
+
+    /// 视频分 P 数(实测单 P 为 1)。缺失按单 P 处理。
+    #[serde(default)]
+    pub page: Option<i64>,
 
     /// 视频 UP 主(收藏夹条目里叫 `upper`)。
     pub upper: FavUpper,

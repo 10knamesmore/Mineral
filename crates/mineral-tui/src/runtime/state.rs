@@ -452,6 +452,12 @@ impl AppState {
         payload: &SearchPayload,
         has_more: Option<bool>,
     ) {
+        // caps 先读:随后 session 借走 self.channel_search。歌手源的可用分区落定桶级判定,让歌手
+        // root 帧把分区收到首个可用区(无热门曲的源如 B站即只有 Albums;含后续 set_sel 复位)。
+        let sections = self
+            .caps
+            .get(&source)
+            .map(|channel_caps| channel_caps.artist_sections().clone());
         let Some(session) = self.channel_search.session_for_mut(source) else {
             return;
         };
@@ -459,6 +465,9 @@ impl AppState {
             return;
         }
         session.apply_page(kind, payload.clone(), page, has_more);
+        if let Some(sections) = sections {
+            session.apply_sections(kind, sections);
+        }
     }
 
     /// ArtistDetail 回包：落到当前 detail 栈顶帧（若正等这个歌手；否则丢弃）。
@@ -949,6 +958,10 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(vec![SearchKind::Song])
                 .playlist_edit(false)
+                .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                    mineral_channel_core::ArtistSectionKind::TopSongs,
+                    mineral_channel_core::ArtistSectionKind::Albums,
+                ]))
                 .build(),
         );
         s.caps = caps;
@@ -1024,6 +1037,10 @@ mod tests {
             ChannelCaps::builder()
                 .searchable(vec![kind])
                 .playlist_edit(false)
+                .artist_sections(mineral_channel_core::ArtistSections::new(vec![
+                    mineral_channel_core::ArtistSectionKind::TopSongs,
+                    mineral_channel_core::ArtistSectionKind::Albums,
+                ]))
                 .build(),
         );
         s.caps = caps;

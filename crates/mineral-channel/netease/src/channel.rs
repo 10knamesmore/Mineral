@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{
-    ChannelCaps, Credential, Error, MusicChannel, Page, Result, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Credential, Error, MusicChannel, Page, Result,
+    SearchHits,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind,
@@ -159,6 +160,11 @@ impl MusicChannel for NeteaseChannel {
                 SearchKind::Playlist,
             ])
             .playlist_edit(true)
+            // 音乐源:artist 详情有热门曲区 + 专辑区。
+            .artist_sections(ArtistSections::new(vec![
+                ArtistSectionKind::TopSongs,
+                ArtistSectionKind::Albums,
+            ]))
             .song_web_url(Some("https://music.163.com/song?id={id}".to_owned()))
             .playlist_web_url(Some("https://music.163.com/playlist?id={id}".to_owned()))
             .build()

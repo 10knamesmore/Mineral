@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use mineral_channel_core::{
-    ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page,
+    Result as ChannelResult, SearchHits,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, AudioFormat, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist,
@@ -26,6 +27,10 @@ impl MusicChannel for UrlChannel {
         ChannelCaps::builder()
             .searchable(Vec::new())
             .playlist_edit(false)
+            .artist_sections(ArtistSections::new(vec![
+                ArtistSectionKind::TopSongs,
+                ArtistSectionKind::Albums,
+            ]))
             .build()
     }
 
@@ -121,6 +126,10 @@ impl MusicChannel for DetailChannel {
         ChannelCaps::builder()
             .searchable(Vec::new())
             .playlist_edit(false)
+            .artist_sections(ArtistSections::new(vec![
+                ArtistSectionKind::TopSongs,
+                ArtistSectionKind::Albums,
+            ]))
             .build()
     }
 

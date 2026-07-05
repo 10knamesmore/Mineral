@@ -523,6 +523,14 @@ fn draw_artist_body(
     if body.height < 2 {
         return;
     }
+    // 单区源(如 B站仅专辑):不画切换 tab,整块给该区列表(分区已收到那唯一可用区)。
+    let single_section = dframe
+        .artist_sections()
+        .is_some_and(|sections| sections.kinds().len() < 2);
+    if single_section {
+        draw_artist_section(buf, body, dframe.section, dframe, state, theme, motion);
+        return;
+    }
     let (tabs, list) = split_artist_body(body);
     draw_artist_tabs(buf, tabs, dframe.section, theme);
     match dframe.section_eased() {
