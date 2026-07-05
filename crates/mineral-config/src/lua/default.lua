@@ -40,6 +40,7 @@ return {
       open_search = "s",
       open_queue = "<Tab>",
       quit = "q",
+      open_help = "?",
       cycle_lyric = "t",
       enter_search = "/",
       activate = { "l", "<CR>" },

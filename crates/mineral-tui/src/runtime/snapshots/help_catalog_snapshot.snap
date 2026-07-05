@@ -1,0 +1,32 @@
+---
+source: crates/mineral-tui/src/runtime/keymap.rs
+description: help 目录(组 · label · 显示优先序键;default.lua keys/behavior 落地产物)
+expression: "lines.join(\"\\n\")"
+---
+Playback · Play / Pause · <Space>
+Playback · Next / Previous · n p
+Playback · Cycle play mode · m
+Playback · Volume ±5 · + - = _
+Playback · Seek ±5s · <Left> <Right>
+Playback · Seek ±30s · <S-Left> <S-Right>
+Navigate · Move down / up · j k <Down> <Up>
+Navigate · Jump 7 rows · J K
+Navigate · First / last · g G
+Navigate · Activate · l <CR>
+Navigate · Back · h <Esc> <BS> <C-h>
+Navigate · Drill into · <C-l>
+Navigate · Cycle section · [ ]
+Actions · Love · f
+Actions · Download · d
+Actions · Actions menu · o
+Actions · Copy menu · y
+Actions · Dismiss notice · x
+View · Fullscreen · z
+View · Search view · s
+View · Queue · <Tab>
+View · Search input · /
+View · Lyric language · t
+View · Quit · q
+View · This help · ?
+Scroll · Line scroll · <C-d> <C-u>
+Scroll · Page scroll · <C-f> <C-b>

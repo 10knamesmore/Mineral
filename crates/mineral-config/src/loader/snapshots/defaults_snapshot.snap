@@ -165,6 +165,17 @@ Config {
                     },
                 ],
             },
+            open_help: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            '?',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
             cycle_lyric: KeyBinding {
                 chords: [
                     KeyChord {

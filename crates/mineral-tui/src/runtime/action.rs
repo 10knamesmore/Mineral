@@ -29,6 +29,9 @@ pub enum Action {
     /// 打开退出确认浮层。
     OpenQuitConfirm,
 
+    /// 打开键位 cheatsheet 浮层(已开时再按 = 关闭)。
+    OpenHelp,
+
     /// 循环歌词副语言(原文 → 翻译 → 罗马音)。
     CycleLyricExtra,
 

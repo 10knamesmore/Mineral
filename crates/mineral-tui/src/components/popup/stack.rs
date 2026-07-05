@@ -11,6 +11,7 @@ use ratatui::widgets::Block;
 use crate::components::popup::component::{Chrome, Overlay, OverlayResponse, render_overlay};
 use crate::components::popup::confirm::ConfirmOverlay;
 use crate::components::popup::disconnect::DisconnectOverlay;
+use crate::components::popup::help::HelpOverlay;
 use crate::components::popup::menu::PopMenu;
 use crate::components::popup::queue::QueueOverlay;
 use crate::render::anim::Transition;
@@ -34,6 +35,9 @@ pub(crate) enum OverlayKind {
 
     /// 锚定弹出菜单(上下文操作 / 复制)。
     Menu(PopMenu),
+
+    /// 键位 cheatsheet。
+    Help(HelpOverlay),
 }
 
 impl OverlayKind {
@@ -56,6 +60,14 @@ impl OverlayKind {
     pub(crate) fn menu(menu: PopMenu) -> Self {
         Self::Menu(menu)
     }
+
+    /// 键位 cheatsheet(目录与关闭提示在打开瞬间从 keymap 快照)。
+    pub(crate) fn help(
+        entries: Vec<crate::runtime::keymap::help::HelpEntry>,
+        close_hint: Option<String>,
+    ) -> Self {
+        Self::Help(HelpOverlay::new(entries, close_hint))
+    }
 }
 
 impl Overlay for OverlayKind {
@@ -65,6 +77,7 @@ impl Overlay for OverlayKind {
             Self::Confirm(o) => o.chrome(),
             Self::Disconnect(o) => o.chrome(),
             Self::Menu(o) => o.chrome(),
+            Self::Help(o) => o.chrome(),
         }
     }
 
@@ -74,6 +87,7 @@ impl Overlay for OverlayKind {
             Self::Confirm(o) => o.block(ctx, theme, focused),
             Self::Disconnect(o) => o.block(ctx, theme, focused),
             Self::Menu(o) => o.block(ctx, theme, focused),
+            Self::Help(o) => o.block(ctx, theme, focused),
         }
     }
 
@@ -83,6 +97,7 @@ impl Overlay for OverlayKind {
             Self::Confirm(o) => o.render_content(buf, inner, ctx, theme),
             Self::Disconnect(o) => o.render_content(buf, inner, ctx, theme),
             Self::Menu(o) => o.render_content(buf, inner, ctx, theme),
+            Self::Help(o) => o.render_content(buf, inner, ctx, theme),
         }
     }
 
@@ -92,6 +107,7 @@ impl Overlay for OverlayKind {
             Self::Confirm(o) => o.on_key(key, ctx),
             Self::Disconnect(o) => o.on_key(key, ctx),
             Self::Menu(o) => o.on_key(key, ctx),
+            Self::Help(o) => o.on_key(key, ctx),
         }
     }
 
@@ -101,6 +117,7 @@ impl Overlay for OverlayKind {
             Self::Confirm(o) => o.on_action(action, ctx),
             Self::Disconnect(o) => o.on_action(action, ctx),
             Self::Menu(o) => o.on_action(action, ctx),
+            Self::Help(o) => o.on_action(action, ctx),
         }
     }
 }
@@ -262,6 +279,14 @@ impl OverlayStack {
     /// 活跃栈顶的可变引用。
     fn active_top_mut(&mut self) -> Option<&mut Mounted> {
         self.stack.iter_mut().rev().find(|m| !m.anim.leaving())
+    }
+
+    /// 测试用:栈内是否有 cheatsheet 浮层(含正在退场、尚未被 [`Self::tick`] 移除的)。
+    #[cfg(test)]
+    pub(crate) fn has_help(&self) -> bool {
+        self.stack
+            .iter()
+            .any(|m| matches!(m.kind, OverlayKind::Help(_)))
     }
 
     /// 测试用:栈内 queue 浮层的光标下标(无 queue 时 `None`)。

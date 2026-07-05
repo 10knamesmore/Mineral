@@ -665,6 +665,7 @@ impl App {
             Action::OpenActionMenu => self.open_menu(menus::MenuKind::Action),
             Action::OpenCopyMenu => self.open_menu(menus::MenuKind::Copy),
             Action::InvokeScript(slot) => self.invoke_script_action(slot),
+            Action::OpenHelp => self.open_help(),
             // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
             Action::DrillIntoSelection | Action::CycleDetailSection => {}
         }
@@ -751,7 +752,8 @@ impl App {
         }
     }
 
-    /// 半穿透白名单:歌词切换 + 播放控制族 + 通知卡关闭;列表 / 视图 / 浮层动作不穿透。
+    /// 半穿透白名单:歌词切换 + 播放控制族 + 通知卡关闭 + cheatsheet(任何半穿透
+    /// 浮层上都能叠开);列表 / 视图 / 其余浮层动作不穿透。
     fn passes_overlay(action: Action) -> bool {
         matches!(
             action,
@@ -763,6 +765,7 @@ impl App {
                 | Action::PrevOrRestart
                 | Action::NextSong
                 | Action::DismissNotice
+                | Action::OpenHelp
         )
     }
 
@@ -770,6 +773,18 @@ impl App {
     fn open_queue(&mut self) {
         let sel = self.state.queue_current_index().unwrap_or(0);
         self.overlays.push(OverlayKind::queue(sel));
+    }
+
+    /// 打开键位 cheatsheet:目录与关闭提示在打开瞬间从 keymap 快照(重映射 /
+    /// 脚本绑定自动跟随)。已开在顶时按同键由浮层自身收敛为关闭(toggle),
+    /// 不经此路径,无双开之虞。
+    fn open_help(&mut self) {
+        let close_hint = self
+            .keymap
+            .hint_chord(Action::OpenHelp)
+            .map(crate::components::popup::chip_text);
+        self.overlays
+            .push(OverlayKind::help(self.keymap.help().to_vec(), close_hint));
     }
 }
 
@@ -1062,6 +1077,56 @@ mod tests {
         assert_eq!(app.state.player.queue.len(), 4, "queue 重段应整体替换");
         assert_eq!(app.state.player.versions.queue, 7);
         assert_eq!(app.state.player.versions.current, 9);
+        Ok(())
+    }
+
+    /// 集成:`?` 弹出 cheatsheet → 再按 `?` 收起(toggle);开着时播放控制键半穿透。
+    #[test]
+    fn question_mark_toggles_help_overlay() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Char('?'));
+        assert!(app.overlays.has_help(), "? 应弹出 cheatsheet");
+        // 半穿透:help 开着按音量键仍生效(白名单放行,乐观更新可观测)。
+        let before = app.state.playback.volume_pct;
+        press(&mut app, KeyCode::Char('-'));
+        assert_ne!(app.state.playback.volume_pct, before, "音量键应穿透");
+        press(&mut app, KeyCode::Char('?'));
+        for _ in 0..16 {
+            app.overlays.tick();
+        }
+        assert!(!app.overlays.has_help(), "再按 ? 应收起(toggle)");
+        Ok(())
+    }
+
+    /// 集成:queue 开着按 `?` → help 叠其上;back 只关 help,queue 仍在。
+    #[test]
+    fn help_stacks_on_queue_back_closes_top_only() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.queue_sel(), Some(0));
+        press(&mut app, KeyCode::Char('?'));
+        assert!(app.overlays.has_help(), "queue 上按 ? 应叠开 help");
+        press(&mut app, KeyCode::Esc);
+        for _ in 0..16 {
+            app.overlays.tick();
+        }
+        assert!(!app.overlays.has_help(), "back 关掉栈顶 help");
+        assert_eq!(app.overlays.queue_sel(), Some(0), "queue 不受牵连");
+        Ok(())
+    }
+
+    /// 集成:help 开着,列表导航键被 help 吞掉滚表,不落到底下的 Library 光标。
+    #[test]
+    fn help_consumes_navigation_keys() -> color_eyre::Result<()> {
+        let mut app = app_with_library(10, /*sel_track*/ 4)?;
+        press(&mut app, KeyCode::Char('?'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(
+            app.state.browse.nav.track.sel(),
+            4,
+            "导航键应被 help 吞掉,Library 光标不动"
+        );
         Ok(())
     }
 

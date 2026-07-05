@@ -3,11 +3,16 @@
 //! 表内容由配置落地([`Keymap::from_config`]):keys 段给「动作 → 键」绑定,
 //! behavior 段给带参动作的步长;default.lua 与用户 lua 已在 loader 深合并。
 
+use std::borrow::Cow;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mineral_config::keys::{Key, KeyChord};
 use rustc_hash::FxHashMap;
 
 use super::action::{Action, ScriptSlot, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
+use help::{CatalogBuilder, HelpEntry, HelpGroup};
+
+pub mod help;
 
 /// 把一个 crossterm 按键事件归一到 [`KeyChord`]:只保留 SHIFT / CONTROL 修饰
 /// (其余视为终端噪声丢弃),字符键的 SHIFT 由 [`KeyChord`] 的构造不变量吸收。
@@ -41,8 +46,7 @@ pub fn chord_from_event(key: &KeyEvent) -> Option<KeyChord> {
     Some(chord)
 }
 
-/// 键 → 动作绑定表。生产路径经 [`Self::from_config`] 由配置落地;
-/// [`Self::from_entries`] 是底层构造缝(测试 / 自定义表直喂)。
+/// 键 → 动作绑定表。生产路径经 [`Self::from_config`] 由配置落地。
 pub struct Keymap {
     /// 归一和弦 → 动作。一对一(单动作);多键映同动作即多条目。
     table: FxHashMap<KeyChord, Action>,
@@ -50,6 +54,9 @@ pub struct Keymap {
     /// 脚本动作名表:`Action::InvokeScript` 的槽位 → 注册名
     /// (Action 须 `Copy`,名字进不了枚举,经此表间接)。
     script_names: Vec<String>,
+
+    /// cheatsheet 目录(与查表同源产出,显示顺序;测试直喂构造时为空)。
+    help: Vec<HelpEntry>,
 }
 
 impl Keymap {
@@ -74,92 +81,115 @@ impl Keymap {
         let mut script_bindings = keys.script().iter().collect::<Vec<_>>();
         script_bindings.sort_by(|a, b| a.0.cmp(b.0));
         let mut script_names = Vec::with_capacity(script_bindings.len());
-        let mut pairs: Vec<(&mineral_config::KeyBinding, Action)> = vec![
-            (keys.toggle_fullscreen(), Action::ToggleFullscreen),
-            (keys.open_search(), Action::OpenSearchView),
-            (keys.open_queue(), Action::OpenQueue),
-            (keys.quit(), Action::OpenQuitConfirm),
-            (keys.cycle_lyric(), Action::CycleLyricExtra),
-            (keys.enter_search(), Action::EnterSearch),
-            (keys.play_pause(), Action::TogglePlayPause),
-            (keys.cycle_mode(), Action::CyclePlayMode),
-            (keys.volume_up(), Action::NudgeVolume(VolumeDelta(vol))),
-            (keys.volume_down(), Action::NudgeVolume(VolumeDelta(-vol))),
-            (keys.seek_forward(), Action::SeekRelative(SeekDelta(seek))),
-            (keys.seek_backward(), Action::SeekRelative(SeekDelta(-seek))),
-            (
-                keys.seek_forward_big(),
-                Action::SeekRelative(SeekDelta(seek_big)),
-            ),
-            (
-                keys.seek_backward_big(),
-                Action::SeekRelative(SeekDelta(-seek_big)),
-            ),
-            (keys.prev(), Action::PrevOrRestart),
-            (keys.next(), Action::NextSong),
-            (
-                keys.move_down(),
-                Action::MoveSelection(SelectionMove::Down(1)),
-            ),
-            (keys.move_up(), Action::MoveSelection(SelectionMove::Up(1))),
-            (
-                keys.move_down_big(),
-                Action::MoveSelection(SelectionMove::Down(jump)),
-            ),
-            (
-                keys.move_up_big(),
-                Action::MoveSelection(SelectionMove::Up(jump)),
-            ),
-            (
-                keys.move_first(),
-                Action::MoveSelection(SelectionMove::First),
-            ),
-            (keys.move_last(), Action::MoveSelection(SelectionMove::Last)),
-            (keys.activate(), Action::ActivateSelection),
-            (keys.back(), Action::BackOrClearSearch),
-            (keys.drill_into(), Action::DrillIntoSelection),
-            (keys.cycle_detail_section(), Action::CycleDetailSection),
-            (keys.love(), Action::ToggleLoveSelection),
-            (keys.download(), Action::DownloadSelection),
-            (keys.dismiss_notice(), Action::DismissNotice),
-            (keys.open_action_menu(), Action::OpenActionMenu),
-            (keys.open_copy_menu(), Action::OpenCopyMenu),
-            (
-                keys.scroll_line_down(),
-                Action::Scroll(ScrollStep::LineDown),
-            ),
-            (keys.scroll_line_up(), Action::Scroll(ScrollStep::LineUp)),
-            (
-                keys.scroll_page_down(),
-                Action::Scroll(ScrollStep::PageDown),
-            ),
-            (keys.scroll_page_up(), Action::Scroll(ScrollStep::PageUp)),
-        ];
+        // 绑定 × 动作 × 目录元数据(组 + label):声明序即 cheatsheet 显示序;
+        // 相邻同(组, label)的成对动作(±增减 / 上下移动)在目录里合并为一行。
+        type Pair<'k> = (
+            &'k mineral_config::KeyBinding,
+            Action,
+            HelpGroup,
+            Cow<'static, str>,
+        );
+        // 每行一条绑定:`keys 字段 => Action 变体(参数), label;`——label 是任意
+        // `Into<Cow>` 表达式(字面量零分配,带 behavior 实值的用 format!)。
+        // 展开为单个 vec 字面量(一次分配,长度编译期已知)。
+        macro_rules! bind {
+            ( $( $group:ident {
+                $( $getter:ident => $variant:ident $( ( $($arg:expr),+ ) )?, $label:expr; )+
+            } )+ ) => { vec![ $( $(
+                (
+                    keys.$getter(),
+                    Action::$variant $( ( $($arg),+ ) )?,
+                    HelpGroup::$group,
+                    $label.into(),
+                )
+            ),+ ),+ ] };
+        }
+        let mut pairs: Vec<Pair<'_>> = bind! {
+            Playback {
+                play_pause => TogglePlayPause, "Play / Pause";
+                next => NextSong, "Next / Previous";
+                prev => PrevOrRestart, "Next / Previous";
+                cycle_mode => CyclePlayMode, "Cycle play mode";
+                volume_up => NudgeVolume(VolumeDelta(vol)), format!("Volume ±{vol}");
+                volume_down => NudgeVolume(VolumeDelta(-vol)), format!("Volume ±{vol}");
+                seek_backward => SeekRelative(SeekDelta(-seek)), format!("Seek ±{seek}s");
+                seek_forward => SeekRelative(SeekDelta(seek)), format!("Seek ±{seek}s");
+                seek_backward_big => SeekRelative(SeekDelta(-seek_big)), format!("Seek ±{seek_big}s");
+                seek_forward_big => SeekRelative(SeekDelta(seek_big)), format!("Seek ±{seek_big}s");
+            }
+            Navigate {
+                move_down => MoveSelection(SelectionMove::Down(1)), "Move down / up";
+                move_up => MoveSelection(SelectionMove::Up(1)), "Move down / up";
+                move_down_big => MoveSelection(SelectionMove::Down(jump)), format!("Jump {jump} rows");
+                move_up_big => MoveSelection(SelectionMove::Up(jump)), format!("Jump {jump} rows");
+                move_first => MoveSelection(SelectionMove::First), "First / last";
+                move_last => MoveSelection(SelectionMove::Last), "First / last";
+                activate => ActivateSelection, "Activate";
+                back => BackOrClearSearch, "Back";
+                drill_into => DrillIntoSelection, "Drill into";
+                cycle_detail_section => CycleDetailSection, "Cycle section";
+            }
+            Actions {
+                love => ToggleLoveSelection, "Love";
+                download => DownloadSelection, "Download";
+                open_action_menu => OpenActionMenu, "Actions menu";
+                open_copy_menu => OpenCopyMenu, "Copy menu";
+                dismiss_notice => DismissNotice, "Dismiss notice";
+            }
+            View {
+                toggle_fullscreen => ToggleFullscreen, "Fullscreen";
+                open_search => OpenSearchView, "Search view";
+                open_queue => OpenQueue, "Queue";
+                enter_search => EnterSearch, "Search input";
+                cycle_lyric => CycleLyricExtra, "Lyric language";
+                quit => OpenQuitConfirm, "Quit";
+                open_help => OpenHelp, "This help";
+            }
+            Scroll {
+                scroll_line_down => Scroll(ScrollStep::LineDown), "Line scroll";
+                scroll_line_up => Scroll(ScrollStep::LineUp), "Line scroll";
+                scroll_page_down => Scroll(ScrollStep::PageDown), "Page scroll";
+                scroll_page_up => Scroll(ScrollStep::PageUp), "Page scroll";
+            }
+        };
         for (name, binding) in script_bindings {
             pairs.push((
                 binding,
                 Action::InvokeScript(ScriptSlot(script_names.len())),
+                HelpGroup::Scripts,
+                Cow::Owned(name.clone()),
             ));
             script_names.push(name.clone());
         }
-        let mut keymap = Self::from_entries(pairs.into_iter().flat_map(|(binding, action)| {
-            binding.chords().iter().copied().map(move |c| (c, action))
-        }));
-        keymap.script_names = script_names;
-        keymap
+        let mut table = FxHashMap::default();
+        let mut catalog = CatalogBuilder::default();
+        for (binding, action, group, label) in pairs {
+            for chord in binding.chords() {
+                // 重复和弦后写覆盖先写(与 from_entries 语义一致)。
+                table.insert(*chord, action);
+            }
+            catalog.push(group, label, binding.chords());
+        }
+        Self {
+            table,
+            script_names,
+            help: catalog.finish(),
+        }
     }
 
-    /// 从绑定序列构造底层查表(供 [`Self::from_config`] 与测试直喂)。
+    /// 从绑定序列构造底层查表(测试直喂;生产路径一律 [`Self::from_config`])。
     ///
     /// # Params:
     ///   - `entries`: 和弦 → 动作绑定;重复和弦后写覆盖先写
     ///
     /// # Return:
-    ///   查表结构
+    ///   查表结构(help 目录为空)
+    #[cfg(test)]
     pub fn from_entries(entries: impl IntoIterator<Item = (KeyChord, Action)>) -> Self {
         Self {
             table: entries.into_iter().collect::<FxHashMap<_, _>>(),
             script_names: Vec::new(),
+            help: Vec::new(),
         }
     }
 
@@ -199,8 +229,14 @@ impl Keymap {
                 chord,
                 Action::InvokeScript(ScriptSlot(self.script_names.len())),
             );
+            self.help.push(HelpEntry::script(&bind.action, chord));
             self.script_names.push(bind.action.clone());
         }
+    }
+
+    /// cheatsheet 目录(显示顺序;测试直喂构造时为空)。
+    pub fn help(&self) -> &[HelpEntry] {
+        &self.help
     }
 
     /// 查表。
@@ -251,6 +287,7 @@ mod tests {
             ("q", Action::OpenQuitConfirm),
             ("t", Action::CycleLyricExtra),
             ("/", Action::EnterSearch),
+            ("?", Action::OpenHelp),
             // ---- 播放控制(handle_playback_key) ----
             ("<Space>", Action::TogglePlayPause),
             ("m", Action::CyclePlayMode),
@@ -318,7 +355,7 @@ mod tests {
     fn unbound_key_returns_none() -> color_eyre::Result<()> {
         let km = default_keymap()?;
         assert_eq!(km.lookup(KeyChord::parse("!")?), None);
-        assert_eq!(km.lookup(KeyChord::parse("?")?), None);
+        assert_eq!(km.lookup(KeyChord::parse("e")?), None);
         Ok(())
     }
 
@@ -452,6 +489,157 @@ mod tests {
         };
         assert_eq!(km.script_action(slot), Some("my.first"));
         assert_eq!(km.script_action(ScriptSlot(3)), None, "非法键不占槽位");
+        Ok(())
+    }
+
+    /// help 目录:默认表分组有序连续、合并对(音量 ±/上下移动)按「各动作首键优先」
+    /// 排键、label 嵌 behavior 实值;script 空时无 Scripts 组。
+    #[test]
+    fn help_catalog_reflects_defaults() -> color_eyre::Result<()> {
+        use super::help::HelpGroup;
+        let km = default_keymap()?;
+        let catalog = km.help();
+        // 分组顺序 = 声明顺序,组内条目连续不穿插(dedup 后无重复组名)。
+        let mut groups = catalog.iter().map(|e| *e.group()).collect::<Vec<_>>();
+        groups.dedup();
+        assert_eq!(
+            groups,
+            vec![
+                HelpGroup::Playback,
+                HelpGroup::Navigate,
+                HelpGroup::Actions,
+                HelpGroup::View,
+                HelpGroup::Scroll,
+            ],
+            "默认无脚本绑定,不出 Scripts 组"
+        );
+        let chords_of = |label: &str| -> color_eyre::Result<Vec<String>> {
+            let entry = catalog
+                .iter()
+                .find(|e| e.label() == label)
+                .ok_or_else(|| color_eyre::eyre::eyre!("目录缺条目 `{label}`"))?;
+            Ok(entry.chords().iter().map(ToString::to_string).collect())
+        };
+        // 不变量:查表每个和弦都能在目录里找到 —— 新增绑定漏挂目录元数据在此爆红。
+        for chord in km.table.keys() {
+            assert!(
+                catalog.iter().any(|e| e.chords().contains(chord)),
+                "和弦 {chord} 不在 help 目录"
+            );
+        }
+        // 合并对:显示优先序 = 各动作首键在前(+/- 先于同义的 =/_)。
+        assert_eq!(chords_of("Volume ±5")?, ["+", "-", "=", "_"]);
+        assert_eq!(chords_of("Move down / up")?, ["j", "k", "<Down>", "<Up>"]);
+        // 单动作多键:保持配置声明序。
+        assert_eq!(chords_of("Back")?, ["h", "<Esc>", "<BS>", "<C-h>"]);
+        // label 嵌 behavior 实值。
+        assert_eq!(chords_of("Jump 7 rows")?, ["J", "K"]);
+        assert_eq!(chords_of("This help")?, ["?"]);
+        Ok(())
+    }
+
+    /// help 目录跟随重映射与 behavior:play_pause 改绑 w、volume_step 改 10 后,
+    /// 条目键与 label 实值同步变化。
+    #[test]
+    fn help_catalog_follows_remap_and_behavior() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let user = dir.path().join("config.lua");
+        std::fs::write(
+            &user,
+            "return { tui = { keys = { play_pause = \"w\" }, behavior = { volume_step = 10 } } }",
+        )?;
+        let (cfg, warnings) = mineral_config::load(&user)?;
+        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
+        let km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
+        let labels = km
+            .help()
+            .iter()
+            .map(|e| e.label().to_owned())
+            .collect::<Vec<String>>();
+        assert!(
+            labels.contains(&"Volume ±10".to_owned()),
+            "步长实值进 label"
+        );
+        let play = km
+            .help()
+            .iter()
+            .find(|e| e.label() == "Play / Pause")
+            .ok_or_else(|| color_eyre::eyre::eyre!("目录缺 Play / Pause"))?;
+        let chords = play
+            .chords()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>();
+        assert_eq!(chords, ["w"], "重映射后目录键跟随");
+        Ok(())
+    }
+
+    /// help 目录的 Scripts 组:配置 keys.script 与 daemon bind 追加都进目录,
+    /// label = 注册名、排在内建组之后。
+    #[test]
+    fn help_catalog_lists_script_binds() -> color_eyre::Result<()> {
+        use mineral_protocol::ScriptBind;
+
+        use super::help::HelpGroup;
+        let dir = tempfile::tempdir()?;
+        let user = dir.path().join("config.lua");
+        std::fs::write(
+            &user,
+            "return { tui = { keys = { script = { [\"my.first\"] = \"X\" } } } }",
+        )?;
+        let (cfg, warnings) = mineral_config::load(&user)?;
+        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
+        let mut km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
+        km.append_script_binds(&[ScriptBind {
+            key: "<C-g>".to_owned(),
+            action: "bind#1".to_owned(),
+        }]);
+        let scripts = km
+            .help()
+            .iter()
+            .filter(|e| *e.group() == HelpGroup::Scripts)
+            .map(|e| {
+                let chords = e
+                    .chords()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>();
+                (e.label().to_owned(), chords)
+            })
+            .collect::<Vec<(String, Vec<String>)>>();
+        assert_eq!(
+            scripts,
+            vec![
+                ("my.first".to_owned(), vec!["X".to_owned()]),
+                ("bind#1".to_owned(), vec!["<C-g>".to_owned()]),
+            ]
+        );
+        // Scripts 组恒在目录尾部。
+        let last_group = km.help().last().map(|e| *e.group());
+        assert_eq!(last_group, Some(HelpGroup::Scripts));
+        Ok(())
+    }
+
+    /// help 目录全量快照:分组 · label · 键序一次可审(default.lua 落地产物)。
+    #[test]
+    fn help_catalog_snapshot() -> color_eyre::Result<()> {
+        let km = default_keymap()?;
+        let lines = km
+            .help()
+            .iter()
+            .map(|e| {
+                let chords = e
+                    .chords()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>();
+                format!("{:?} · {} · {}", e.group(), e.label(), chords.join(" "))
+            })
+            .collect::<Vec<String>>();
+        crate::test_support::assert_snap!(
+            "help 目录(组 · label · 显示优先序键;default.lua keys/behavior 落地产物)",
+            lines.join("\n")
+        );
         Ok(())
     }
 

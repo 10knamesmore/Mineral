@@ -90,6 +90,7 @@
 ---@field open_search? mineral.KeyBinding 进 / 退 Search 布局态(全屏态屏蔽)
 ---@field open_queue? mineral.KeyBinding 打开播放队列;队列开着时再按 = 关闭
 ---@field quit? mineral.KeyBinding 打开退出确认
+---@field open_help? mineral.KeyBinding 打开键位 cheatsheet;已开时再按 = 关闭
 ---@field cycle_lyric? mineral.KeyBinding 循环歌词副语言:原文 → 翻译 → 罗马音
 ---@field enter_search? mineral.KeyBinding 进入搜索输入(全屏态屏蔽)
 ---@field activate? mineral.KeyBinding 进入歌单 / 播放选中曲

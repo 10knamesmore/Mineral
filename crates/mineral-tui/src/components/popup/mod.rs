@@ -9,12 +9,14 @@
 mod component;
 mod confirm;
 mod disconnect;
+mod help;
 mod menu;
 mod placement;
 mod queue;
 mod stack;
 
 pub(crate) use component::{OverlayAction, OverlayResponse, render_overlay};
+pub(crate) use help::chip_text;
 pub(crate) use menu::{ContainerRef, MenuAction, MenuItem, PopMenu};
 pub(crate) use placement::Placement;
 pub(crate) use stack::{OverlayKind, OverlayStack};

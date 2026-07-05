@@ -1,0 +1,23 @@
+---
+source: crates/mineral-tui/src/components/popup/help.rs
+description: "cheatsheet 浮层:窄矮终端单列 + 溢出滚动指示"
+expression: t.backend()
+---
+"                                              "
+"                                              "
+"   ╭ Key Cheatsheet ──────────────────────╮   "
+"   │ Playback ───────────────────────────█│   "
+"   │ Play / Pause ···············  Space █│   "
+"   │ Next / Previous ············  n   p █│   "
+"   │ Cycle play mode ················  m █│   "
+"   │ Volume ±5 ···············  +   -  +2││   "
+"   │ Seek ±5s ···················  ←   → ││   "
+"   │ Seek ±30s ··············  S-←   S-→ ││   "
+"   │                                     ││   "
+"   │ Navigate ───────────────────────────││   "
+"   │ Move down / up ··········  j   k  +2││   "
+"   │ Jump 7 rows ················  J   K ││   "
+"   │ First / last ···············  g   G ││   "
+"   ╰───────────────────────────── ? close ╯   "
+"                                              "
+"                                              "

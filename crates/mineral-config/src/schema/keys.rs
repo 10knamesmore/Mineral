@@ -39,6 +39,9 @@ pub struct KeysConfig {
     /// 打开退出确认浮层。
     quit: KeyBinding,
 
+    /// 打开键位 cheatsheet 浮层(已开时再按 = 关闭)。
+    open_help: KeyBinding,
+
     /// 循环歌词副语言。
     cycle_lyric: KeyBinding,
 
