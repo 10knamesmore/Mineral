@@ -40,6 +40,14 @@ fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
 fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     let radius = *state.cfg.tui().prefetch().radius();
     let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
+    // 浏览窗口邻居预取按封面内存预算收窄,避免预算装不下整窗时的逐出↔重取 thrash。
+    // sel(下方 push_if_new(get(sel)))与 playback 封面不受此约束、恒预取。
+    let eff_radius = effective_cover_radius(
+        radius,
+        *state.cfg.cache().cover_memory(),
+        *state.cfg.tui().cover().max_dim(),
+        playback_radius,
+    );
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
     let cache = &state.covers.cache;
     let pending = &state.covers.pending;
@@ -67,7 +75,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 })
             };
             push_if_new(get(sel), &mut out);
-            for d in 1..=radius {
+            for d in 1..=eff_radius {
                 if let Some(idx) = sel.checked_sub(d) {
                     push_if_new(get(idx), &mut out);
                 }
@@ -88,7 +96,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 })
             };
             push_if_new(get(sel), &mut out);
-            for d in 1..=radius {
+            for d in 1..=eff_radius {
                 if let Some(idx) = sel.checked_sub(d) {
                     push_if_new(get(idx), &mut out);
                 }
@@ -121,6 +129,46 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
 /// 从一首歌取 `(来源, 封面 URL)`;无封面返回 `None`。来源由 id namespace 派生。
 fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
     s.cover_url.as_ref().map(|u| (s.id.namespace(), u))
+}
+
+/// 封面预取的有效半径:取"配置半径"与"预算能留住的半径"的小者。
+///
+/// 封面内存缓存有字节上限(`cache.cover_memory`);若预取窗口 `sel ± radius` 装不下,拉进来的
+/// 图会被 LRU 立刻逐出、下 tick 又因"不在 cache"被重取,陷入逐出↔重解码的 livelock(CPU 打满、
+/// 可见图在真图/占位间闪)。故按预算能容纳的封面数折算出半径上限,与配置半径取小者。
+///
+/// 选中项与 playback 封面在收集处**无条件**预取、不受此约束,故返回 0 也不会"一张都取不到"。
+///
+/// # Params:
+///   - `radius`: 配置的浏览预取半径(`prefetch.radius`)
+///   - `cover_memory`: 封面内存缓存字节预算(`cache.cover_memory`)
+///   - `max_dim`: 封面缩放后最大边(`cover.max_dim`),用于保守估单张字节
+///   - `playback_radius`: 在播队列预取半径(`prefetch.playback_cover_radius`),预留其名额
+///
+/// # Return:
+///   收窄后的浏览窗口封面预取半径(可为 0)
+fn effective_cover_radius(
+    radius: usize,
+    cover_memory: u64,
+    max_dim: u32,
+    playback_radius: usize,
+) -> usize {
+    // 保守估:方图 max_dim² × RGB(3)。实际多为长边=max_dim 的非方图、字节更小,故此估偏大 →
+    // 折算半径偏保守(宁可少取,不冒 thrash 险)。
+    let per_cover = u64::from(max_dim)
+        .saturating_mul(u64::from(max_dim))
+        .saturating_mul(3)
+        .max(1);
+    let capacity = cover_memory / per_cover;
+    // 先扣掉必显名额:选中项(1)+ 在播曲 ± playback_radius(2·r+1),剩下的才分给浏览窗口两侧邻居。
+    let reserve = u64::try_from(playback_radius)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(2)
+        .saturating_add(2);
+    let neighbor_budget = capacity.saturating_sub(reserve);
+    // 窗口两侧共 2·radius 张邻居,故预算半径 = neighbor_budget / 2。
+    let budget_radius = usize::try_from(neighbor_budget / 2).unwrap_or(usize::MAX);
+    radius.min(budget_radius)
 }
 
 /// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
@@ -383,6 +431,33 @@ mod tests {
 
         assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");
         Ok(())
+    }
+
+    /// 预算充裕:128MB ÷ (384²×3) ≈ 303 张,远超半径 64 的窗口 → 不收窄,行为不变。
+    #[test]
+    fn effective_radius_full_when_budget_ample() {
+        assert_eq!(
+            super::effective_cover_radius(
+                /*radius*/ 64,
+                /*cover_memory*/ 128 * 1024 * 1024,
+                /*max_dim*/ 384,
+                /*playback_radius*/ 3,
+            ),
+            64
+        );
+    }
+
+    /// 预算偏紧:16MB ≈ 37 张,装不下 ±64 窗口 → 收窄到 (0, 64) 之间,消除 thrash。
+    #[test]
+    fn effective_radius_shrinks_when_budget_tight() {
+        let r = super::effective_cover_radius(64, 16 * 1024 * 1024, 384, 3);
+        assert!(r > 0 && r < 64, "应收窄到 (0,64),实得 {r}");
+    }
+
+    /// 病态预算:1 字节 → 邻居半径归 0(选中项与 playback 封面在收集处无条件预取,不受此约束)。
+    #[test]
+    fn effective_radius_zero_at_pathological_budget() {
+        assert_eq!(super::effective_cover_radius(64, 1, 384, 3), 0);
     }
 
     /// 造一个「已进 Search 布局态、搜到 1 张专辑、光标停留超防抖窗」的 state。

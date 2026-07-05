@@ -346,7 +346,7 @@ impl App {
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
         if self.state.browse.fullscreen.on() && closing_centered && self.overlays.len() < before {
-            self.state.covers.protocols.borrow_mut().clear();
+            self.state.covers.protocols.clear();
         }
     }
 
@@ -581,7 +581,7 @@ impl App {
         }
         self.picker = rebuild_picker(&self.picker, font);
         // 清缓存协议:字号变但 cell 数恰好没变时 dims 不变、不会自动触发重编码,清掉逼重编。
-        self.state.covers.protocols.borrow_mut().clear();
+        self.state.covers.protocols.clear();
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
@@ -891,10 +891,9 @@ mod tests {
         app.state
             .covers
             .protocols
-            .borrow_mut()
-            .insert(url, (proto, (10, 10)));
+            .insert(&url, (10, 10), proto, /*bytes*/ 0);
         assert!(
-            !app.state.covers.protocols.borrow().is_empty(),
+            !app.state.covers.protocols.is_empty(),
             "前置:封面协议条目已就位"
         );
 
@@ -904,7 +903,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            !app.state.covers.protocols.borrow().is_empty(),
+            !app.state.covers.protocols.is_empty(),
             "浮层开着时(未出栈)不应清空封面协议"
         );
 
@@ -914,7 +913,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            app.state.covers.protocols.borrow().is_empty(),
+            app.state.covers.protocols.is_empty(),
             "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
         );
         Ok(())
@@ -936,8 +935,7 @@ mod tests {
         app.state
             .covers
             .protocols
-            .borrow_mut()
-            .insert(url, (proto, (10, 10)));
+            .insert(&url, (10, 10), proto, /*bytes*/ 0);
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
         app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));
@@ -950,7 +948,7 @@ mod tests {
         }
 
         assert!(
-            !app.state.covers.protocols.borrow().is_empty(),
+            !app.state.covers.protocols.is_empty(),
             "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
         );
         Ok(())

@@ -202,7 +202,10 @@ impl AppState {
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
-            covers: CoverHub::new(),
+            covers: CoverHub::new(
+                *cfg.cache().cover_memory(),
+                *cfg.cache().cover_protocol_memory(),
+            ),
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
                 by_lane: FxHashMap::default(),

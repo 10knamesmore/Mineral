@@ -4,28 +4,22 @@
 //! 的结果都在这里落地;渲染处只读缓存、未命中时投递请求。
 
 use std::cell::RefCell;
-use std::sync::Arc;
 
-use image::DynamicImage;
 use mineral_model::MediaUrl;
-use ratatui_image::protocol::StatefulProtocol;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 
+use super::cache::CoverCache;
+use super::protocols::ProtocolCache;
 use crate::render::palette::CoverPalette;
 use crate::runtime::cover::encode::{CoverEncoder, EncodeRequest};
 use crate::runtime::cover::fetch::CoverFetcher;
 
-/// 一条 cover protocol 缓存项:`(协议, 上次渲染时的目标 cells dims)`。
-///
-/// dims 用于 invalidation —— 跟当前 area 不一致就重建 protocol,避免字号 / 终端
-/// 大小变了之后图按旧 dims 绘出来溢出 / 截断。
-pub type CoverProtocolEntry = (StatefulProtocol, (u16, u16));
-
 /// 封面管线状态([`AppState`](crate::runtime::state::AppState) 的封面域)。
 pub struct CoverHub {
-    /// 已拉好的封面原始图(URL → 解码后的 RGB 像素)。session 内一直留。
-    pub cache: FxHashMap<MediaUrl, Arc<DynamicImage>>,
+    /// 已拉好的封面原始图(字节预算 LRU;越 `cache.cover_memory` 逐出最久未用)。
+    /// 逐出项派生的协议 / 色板由 `drain_ready_covers` 联动清理,不留悬挂。
+    pub cache: CoverCache,
 
     /// 已取色的封面色板(URL → 频谱 2D 色场的重点色,Lab 明度升序)。
     /// 缺 key = 没取到色(取色失败 / 还没回传)。session 内一直留,顺手缓存复用。
@@ -38,10 +32,10 @@ pub struct CoverHub {
     /// 在飞 fetch 集合,用于 dedup tick 重复请求。
     pub pending: FxHashSet<MediaUrl>,
 
-    /// 渲染用的 ratatui-image stateful protocol 缓存。`StatefulProtocol` 内部记编码状态
-    /// (kitty 的图片 id、sixel 编码缓冲等),render 复用就不会每帧重发图。
-    /// 用 `RefCell` 是因为 `view::draw` 拿 `&AppState`,而 stateful_widget 渲染要 `&mut`。
-    pub protocols: RefCell<FxHashMap<MediaUrl, CoverProtocolEntry>>,
+    /// 已编码封面协议缓存(字节预算 LRU;越 `cache.cover_protocol_memory` 逐出最久未渲染)。
+    /// `StatefulProtocol` 内部记编码状态(kitty 图片 id、sixel 缓冲)+ 源图副本,render 复用
+    /// 就不每帧重编;逐出的滚回时后台重编、其间 halfblock 兜底。
+    pub protocols: ProtocolCache,
 
     /// 封面编码请求发送端(投递给 [`CoverEncoder`] 的 worker)。
     /// 渲染处未命中已编码协议时投一次,把 resize + base64 编码挪出渲染线程。禁用态(测试 /
@@ -60,13 +54,17 @@ pub struct CoverHub {
 impl CoverHub {
     /// 构造空 hub。`encode_tx` 默认是无接收端的 sender(投递即丢);真实 worker
     /// 由 `App::new` 注入 `CoverEncoder::sender()` 覆盖。
-    pub(crate) fn new() -> Self {
+    ///
+    /// # Params:
+    ///   - `image_budget`: 封面原图缓存的字节预算(配置 `cache.cover_memory`)
+    ///   - `protocol_budget`: 已编码协议缓存的字节预算(配置 `cache.cover_protocol_memory`)
+    pub(crate) fn new(image_budget: u64, protocol_budget: u64) -> Self {
         Self {
-            cache: FxHashMap::default(),
+            cache: CoverCache::new(image_budget),
             palettes: FxHashMap::default(),
             spectrum_cover: None,
             pending: FxHashSet::default(),
-            protocols: RefCell::new(FxHashMap::default()),
+            protocols: ProtocolCache::new(protocol_budget),
             encode_tx: mpsc::unbounded_channel().0,
             encode_pending: RefCell::new(FxHashSet::default()),
             loading: 0,
@@ -81,8 +79,21 @@ impl CoverHub {
             if let Some(palette) = ready.palette {
                 self.palettes.insert(ready.url.clone(), palette);
             }
-            self.cache.insert(ready.url.clone(), ready.image);
-            self.protocols.borrow_mut().remove(&ready.url);
+            let evicted = self.cache.insert(&ready.url, ready.image);
+            self.protocols.remove(&ready.url);
+            for url in evicted {
+                self.discard_derived(&url);
+            }
+        }
+    }
+
+    /// 清掉某封面 URL 派生的一切:已编码协议、取色色板;若它正是频谱当前色场来源,
+    /// 一并解除标记让频谱下 tick 回退 hue。原图已被 LRU 逐出,这些派生物再留即悬挂。
+    fn discard_derived(&mut self, url: &MediaUrl) {
+        self.protocols.remove(url);
+        self.palettes.remove(url);
+        if self.spectrum_cover.as_ref() == Some(url) {
+            self.spectrum_cover = None;
         }
     }
 
@@ -93,9 +104,7 @@ impl CoverHub {
             self.encode_pending
                 .borrow_mut()
                 .remove(&(r.url.clone(), r.dims));
-            self.protocols
-                .borrow_mut()
-                .insert(r.url, (r.protocol, r.dims));
+            self.protocols.insert(&r.url, r.dims, r.protocol, r.bytes);
         }
     }
 }

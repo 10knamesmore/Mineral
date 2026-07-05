@@ -709,6 +709,8 @@ Config {
     cache: CacheConfig {
         audio_capacity: 10737418240,
         cover_capacity: 4294967296,
+        cover_memory: 134217728,
+        cover_protocol_memory: 67108864,
     },
     download: DownloadConfig {
         quality: Lossless,

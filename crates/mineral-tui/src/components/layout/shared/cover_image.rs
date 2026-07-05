@@ -71,16 +71,14 @@ pub fn render_or_fallback(
     let dims = (target.width, target.height);
     // 命中已编码协议(同尺寸)→ 直接 place。`StatefulProtocol` 内部记着 kitty image id,
     // 同尺寸渲染 `needs_resize` 返回 `None`,只重发占位符不重编码,渲染线程零开销。
-    {
-        let mut protocols = state.covers.protocols.borrow_mut();
-        if let Some(entry) = protocols.get_mut(url)
-            && entry.1 == dims
-        {
-            let widget = StatefulImage::default()
-                .resize(Resize::Scale(Some(image::imageops::FilterType::Triangle)));
-            frame.render_stateful_widget(widget, target, &mut entry.0);
-            return;
-        }
+    // 命中即标为最近渲染(LRU touch),防止正在显示的协议被字节预算逐出。
+    let placed = state.covers.protocols.render_hit(url, dims, |protocol| {
+        let widget = StatefulImage::default()
+            .resize(Resize::Scale(Some(image::imageops::FilterType::Triangle)));
+        frame.render_stateful_widget(widget, target, protocol);
+    });
+    if placed {
+        return;
     }
     // 未命中(无缓存协议 / 尺寸变了):**不在渲染线程编码**(resize + base64 是百毫秒级,
     // 会卡帧),改投递给 [`CoverEncoder`] 的 worker 离线编码。
@@ -137,7 +135,7 @@ pub fn prewarm(state: &AppState, picker: &Picker, area: Rect, url: &MediaUrl) {
         return;
     }
     let dims = (target.width, target.height);
-    if matches!(state.covers.protocols.borrow().get(url), Some(e) if e.1 == dims) {
+    if state.covers.protocols.contains_dims(url, dims) {
         return;
     }
     let Some(image) = state.covers.cache.get(url).cloned() else {

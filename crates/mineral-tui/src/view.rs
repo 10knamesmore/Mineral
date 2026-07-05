@@ -332,7 +332,7 @@ mod tests {
             app.state.playback.track = Some(sv.data.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.covers.cache.insert(url.clone(), Arc::new(img));
+        app.state.covers.cache.insert(&url, Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发一次编码。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -395,7 +395,7 @@ mod tests {
         app.state
             .covers
             .cache
-            .insert(url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
 
         app.state.browse.fullscreen.set(true);
         for _ in 0..5 {
@@ -501,7 +501,7 @@ mod tests {
         app.state
             .covers
             .cache
-            .insert(url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
         // 脱离滚动防抖,确保不是 `is_scrolling` 早退(那会留空、非 hash,测错原因)。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -623,7 +623,7 @@ mod tests {
             }
             if i <= 1 {
                 let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-                app.state.covers.cache.insert(url, Arc::new(img));
+                app.state.covers.cache.insert(&url, Arc::new(img));
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。

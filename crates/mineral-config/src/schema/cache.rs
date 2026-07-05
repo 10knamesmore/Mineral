@@ -18,6 +18,18 @@ pub struct CacheConfig {
     /// 封面磁盘缓存容量上限(字节)。
     #[serde(deserialize_with = "de_u64_lossy")]
     cover_capacity: u64,
+
+    /// 封面**内存**缓存(解码后原图,client 端渲染用)字节上限。
+    /// 区别于 `cover_capacity`(磁盘原始字节):这是常驻 RAM 的解码位图预算,
+    /// 越界即逐出最久未显示的封面,把 client 内存钉死在此数。
+    #[serde(deserialize_with = "de_u64_lossy")]
+    cover_memory: u64,
+
+    /// 已编码封面协议(终端图片序列 + 源图副本)内存字节上限。
+    /// 是 `cover_memory` 之外的第二层常驻 RAM:每个协议留着源图副本 + kitty/sixel 编码序列,
+    /// 全屏大图可达 MB 级。越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
+    #[serde(deserialize_with = "de_u64_lossy")]
+    cover_protocol_memory: u64,
 }
 
 /// 把数值反序列化为 `u64`,容忍非负有限浮点(Lua `^` 幂运算产物):
@@ -60,25 +72,38 @@ mod tests {
     #[test]
     fn accepts_integer_and_float_bytes() -> color_eyre::Result<()> {
         // 整数(Lua integer 路径)。
-        let c: CacheConfig = serde_json::from_value(
-            serde_json::json!({ "audio_capacity": 1024_u64, "cover_capacity": 512_u64 }),
-        )?;
+        let c: CacheConfig = serde_json::from_value(serde_json::json!({
+            "audio_capacity": 1024_u64,
+            "cover_capacity": 512_u64,
+            "cover_memory": 256_u64,
+            "cover_protocol_memory": 128_u64,
+        }))?;
         assert_eq!(*c.audio_capacity(), 1024);
+        assert_eq!(*c.cover_memory(), 256);
+        assert_eq!(*c.cover_protocol_memory(), 128);
         // 浮点(Lua `10 * 1024 ^ 3` 路径)。
-        let c: CacheConfig = serde_json::from_value(
-            serde_json::json!({ "audio_capacity": 10737418240.0_f64, "cover_capacity": 1073741824.0_f64 }),
-        )?;
+        let c: CacheConfig = serde_json::from_value(serde_json::json!({
+            "audio_capacity": 10737418240.0_f64,
+            "cover_capacity": 1073741824.0_f64,
+            "cover_memory": 134217728.0_f64,
+            "cover_protocol_memory": 67108864.0_f64,
+        }))?;
         assert_eq!(*c.audio_capacity(), 10 * 1024 * 1024 * 1024);
         assert_eq!(*c.cover_capacity(), 1024 * 1024 * 1024);
+        assert_eq!(*c.cover_memory(), 128 * 1024 * 1024);
+        assert_eq!(*c.cover_protocol_memory(), 64 * 1024 * 1024);
         Ok(())
     }
 
     #[test]
     fn rejects_negative() {
         assert!(
-            serde_json::from_value::<CacheConfig>(
-                serde_json::json!({ "audio_capacity": -1.0_f64, "cover_capacity": 1.0_f64 })
-            )
+            serde_json::from_value::<CacheConfig>(serde_json::json!({
+                "audio_capacity": -1.0_f64,
+                "cover_capacity": 1.0_f64,
+                "cover_memory": 1.0_f64,
+                "cover_protocol_memory": 1.0_f64,
+            }))
             .is_err(),
             "负容量应报错"
         );

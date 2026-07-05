@@ -1,3 +1,7 @@
+local KB = 1024
+local MB = KB * 1024
+local GB = MB * 1024
+
 ---@type mineral.Config
 -- Mineral 默认配置。用户 config.lua 经深合并覆盖此表(数组整体替换)。
 -- 顶层只做纯计算,勿在此放副作用(多进程各 eval 一次)。
@@ -225,13 +229,15 @@ return {
     backend = "auto", -- "auto" | "null":auto 打不开声卡自动降级无声空跑;null 强制无声
     playback_quality = "exhigh", -- standard | higher | exhigh | lossless | hires
     engine_tick_ms = 20, -- 引擎主循环节拍;影响 seek/停止响应延迟,不建议动
-    prefetch_bytes = 256 * 1024, -- 流式起播前预拉字节;大 = 起播慢但 seek 命中缓冲概率高
+    prefetch_bytes = 256 * KB, -- 流式起播前预拉字节;大 = 起播慢但 seek 命中缓冲概率高
     tap_capacity = 8192, -- 频谱 PCM 环形缓冲,样本数。须 ≥ 2 × tui.spectrum.fft_size,否则 UI 卡帧丢样本出毛刺
   },
-  -- 磁盘缓存容量(LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐)。
+  -- 缓存容量(LRU,满了自动驱逐;磁盘项改小不立刻删文件,下次写入时驱逐)。
   cache = {
-    audio_capacity = 10 * 1024 ^ 3, -- 音频本体缓存上限,字节
-    cover_capacity = 4 * 1024 ^ 3, -- 封面缓存上限,字节
+    audio_capacity = 10 * GB, -- 音频本体磁盘缓存上限,字节
+    cover_capacity = 4 * GB, -- 封面磁盘缓存上限,字节
+    cover_memory = 128 * MB, -- 封面内存缓存(解码原图,渲染用)上限,字节;越界逐出最久未显示者
+    cover_protocol_memory = 64 * MB, -- 已编码封面协议(终端序列+源图副本)内存上限,字节;越界逐出最久未渲染者
   },
   -- 下载(永久导出,不受缓存容量约束)。
   download = {

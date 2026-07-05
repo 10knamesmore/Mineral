@@ -52,6 +52,10 @@ pub struct EncodeResult {
 
     /// 编码好的有状态协议(渲染线程只需 place,不再重编码)。
     pub protocol: StatefulProtocol,
+
+    /// 该协议估算的常驻字节数(源图副本 + 目标编码序列),供 `ProtocolCache` 字节预算记账。
+    /// ratatui-image 不暴露协议内部大小,故按"源像素 + 目标像素 × RGBA × base64"估。
+    pub bytes: u64,
 }
 
 /// 就绪 buffer:worker 端 push、主循环 `drain_ready` 端取走。
@@ -150,21 +154,25 @@ async fn encode_blocking(req: EncodeRequest) -> Option<EncodeResult> {
         picker,
     } = req;
     let dims = (target.width, target.height);
+    let font = picker.font_size();
     let encoded = tokio::task::spawn_blocking(move || {
+        // 源图副本常驻在协议里(ImageSource 留原图供尺寸变化时重 resize),记进字节账。
+        let source_bytes = u64::try_from(image.as_bytes().len()).unwrap_or(u64::MAX);
         let mut proto = picker.new_resize_protocol((*image).clone());
         // 与渲染处一致:Scale 模式 + Triangle 滤镜。target 为视觉正方,源亦方图,不变形。
         let resize = Resize::Scale(Some(image::imageops::FilterType::Triangle));
         if let Some(rect) = proto.needs_resize(&resize, target) {
             proto.resize_encode(&resize, rect);
         }
-        proto
+        (proto, source_bytes)
     })
     .await;
     match encoded {
-        Ok(protocol) => Some(EncodeResult {
+        Ok((protocol, source_bytes)) => Some(EncodeResult {
             url,
             dims,
             protocol,
+            bytes: source_bytes.saturating_add(encoded_bytes_estimate(target, font)),
         }),
         Err(e) => {
             let e = color_eyre::Report::new(e);
@@ -172,6 +180,24 @@ async fn encode_blocking(req: EncodeRequest) -> Option<EncodeResult> {
             None
         }
     }
+}
+
+/// 估算目标编码序列字节数:目标像素 × RGBA(4) × base64(4/3)。
+///
+/// ratatui-image 不暴露协议编码缓冲大小,这里按量级估(不求精确,只需与真实占用同阶、
+/// 单调),供 `ProtocolCache` 字节预算排序 / 封顶。
+///
+/// # Params:
+///   - `target`: 目标区域(cell 数)
+///   - `font`: 单 cell 像素尺寸 `(w, h)`
+///
+/// # Return:
+///   估算字节数
+fn encoded_bytes_estimate(target: Rect, font: (u16, u16)) -> u64 {
+    let px_w = u64::from(target.width).saturating_mul(u64::from(font.0));
+    let px_h = u64::from(target.height).saturating_mul(u64::from(font.1));
+    let pixels = px_w.saturating_mul(px_h);
+    pixels.saturating_mul(4).saturating_mul(4) / 3
 }
 
 #[cfg(test)]
