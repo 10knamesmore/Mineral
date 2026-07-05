@@ -26,6 +26,7 @@ mod lyric;
 mod nav;
 mod player;
 mod search;
+mod search_whitelist;
 mod view_switch;
 
 pub(crate) use browse::BrowseModel;
@@ -192,7 +193,8 @@ impl AppState {
             channel_search: SearchPage::new(
                 ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
                 ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
-            ),
+            )
+            .with_whitelist(search_whitelist::SearchWhitelist::from(cfg.tui().search())),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
             ui_overrides: crate::runtime::ui::overrides::UiOverrides::default(),

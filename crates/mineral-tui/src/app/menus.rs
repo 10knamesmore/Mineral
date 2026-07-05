@@ -455,6 +455,7 @@ fn append_template_items(
                 ctx: make_ctx(),
             }),
             destructive: false,
+            tint: None,
         });
     }
 }

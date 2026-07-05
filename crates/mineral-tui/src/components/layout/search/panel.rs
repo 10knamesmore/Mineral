@@ -15,7 +15,7 @@ use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::cursor::cursor_spans;
-use crate::render::theme::Theme;
+use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
@@ -27,7 +27,7 @@ fn border_style(focused: bool, theme: &Theme) -> Style {
 
 /// 画 token prompt 输入行:`[source chip] [kind chip] query`。
 ///
-/// source chip 颜色经 [`Theme::source_color`] 从 `SourceKind.palette()` 落地(不 match source,
+/// source chip 颜色经 [`resolve_source_color`] 按源名从配置落地(不 match source,
 /// 插件 source 自动正确)。无可搜索 source(`current()` 为 `None`)画空态提示。持焦的 chip 段亮底,
 /// query 段持焦才显光标块。
 ///
@@ -57,11 +57,11 @@ pub fn draw_prompt(
     let focus = rs.prompt_focus();
     // source chip:focus 时 accent 反色药丸(暗字,最跳);否则 source 色暗染底 + source 色字(身份)。
     if let (Some(rect), Some(source)) = (tokens.source, rs.source) {
-        let sc = crate::render::theme::resolve_source_color(theme, sources, source);
+        let source_color = resolve_source_color(theme, sources, source);
         let (bg, fg) = if focus == Some(PromptSegment::Source) {
             (theme.accent, theme.crust)
         } else {
-            (dark_tint(sc, theme), sc)
+            (dark_tint(source_color, theme), source_color)
         };
         draw_chip(frame, rect, source.label(), fg, bg);
     }
@@ -213,29 +213,35 @@ pub(crate) fn draw_prompt_dropdown(
     let Some(tokens) = prompt_tokens(prompt_area, rs) else {
         return;
     };
-    let (title, chip, labels): (&str, Rect, Vec<String>) = match seg {
+    let (title, chip, items): (&str, Rect, Vec<MenuItem>) = match seg {
         PromptSegment::Source => {
             let Some(rect) = tokens.source else {
                 return;
             };
-            let labels = rs
+            // 行 fg = 各源徽标色(身份靠图标 + 颜色,与 chip 一致);kind 下拉保持中性。
+            let items = rs
                 .source_options(&state.caps)
                 .iter()
-                .map(|s| s.label().to_owned())
+                .map(|s| {
+                    MenuItem::display_tinted(
+                        s.label(),
+                        resolve_source_color(theme, state.cfg.sources(), *s),
+                    )
+                })
                 .collect();
-            ("source", rect, labels)
+            ("source", rect, items)
         }
         PromptSegment::Kind => {
-            let labels = rs
+            let items = rs
                 .kind_options(&state.caps)
                 .iter()
-                .map(|k| k.label().to_owned())
+                .map(|k| MenuItem::display(k.label()))
                 .collect();
-            ("kind", tokens.kind, labels)
+            ("kind", tokens.kind, items)
         }
         PromptSegment::Query => return,
     };
-    if labels.is_empty() {
+    if items.is_empty() {
         return;
     }
     // 锚点贴 chip 左缘、置于 prompt 框底边行:`Placement::Below` 则下拉落在框**下方**,
@@ -248,7 +254,6 @@ pub(crate) fn draw_prompt_dropdown(
     );
     // 复用 PopMenu 的锚定渲染 + render_overlay 的平滑揭开(脱 overlay 栈:display-only 菜单 +
     // 自带的 seg_reveal 进度当 scale,键交互仍走 inline)。强制 Left 对齐贴 chip 左下展开。
-    let items = labels.into_iter().map(MenuItem::display).collect();
     let menu = PopMenu::display(title, items, anchor, Placement::Below, rs.seg_sel());
     render_overlay(
         frame,
@@ -507,7 +512,7 @@ mod tests {
     use ratatui::layout::Rect;
     use rustc_hash::FxHashMap;
 
-    use crate::render::theme::Theme;
+    use crate::render::theme::{Theme, resolve_source_color};
     use crate::runtime::state::{PromptSegment, SearchPage};
 
     use super::{
@@ -647,8 +652,71 @@ mod tests {
             draw_prompt_dropdown(f, prompt, &app.state, &app.theme);
         })?;
         crate::test_support::assert_snap!(
-            "kind chip 下拉展开:prompt 下方候选(songs/albums/artists),高亮当前 songs",
+            "kind chip 下拉展开:prompt 下方候选按 default.lua 全局 kind 序,高亮当前 songs",
             terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// source 下拉行按各自 source 徽标色着色(身份靠图标 + 颜色,与 chip 一致);
+    /// 选中行(加底色)也不夺 fg。
+    #[test]
+    fn source_dropdown_rows_tinted_by_source_color() -> color_eyre::Result<()> {
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        app.state.caps.insert(
+            SourceKind::BILIBILI,
+            ChannelCaps::builder()
+                .searchable(vec![SearchKind::Song])
+                .playlist_edit(false)
+                .build(),
+        );
+        app.state
+            .channel_search
+            .set_prompt_seg(PromptSegment::Source, 0);
+        for _ in 0..64 {
+            app.state.channel_search.tick();
+        }
+        let prompt = Rect::new(0, 0, 40, 3);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
+        terminal.draw(|f| {
+            draw_prompt(
+                f,
+                prompt,
+                &app.state.channel_search,
+                &app.theme,
+                app.state.cfg.sources(),
+                /*border_focused*/ false,
+            );
+            draw_prompt_dropdown(f, prompt, &app.state, &app.theme);
+        })?;
+        let buffer = terminal.backend().buffer();
+        // 下拉在 prompt 框(前 3 行)之下;按 source 图标字形定位行,跳过 chip 本体的同字形格。
+        let foreground_of = |glyph: &str| {
+            (3..buffer.area.height).find_map(|y| {
+                (0..buffer.area.width).find_map(|x| {
+                    let cell = buffer.cell((x, y))?;
+                    if cell.symbol() == glyph {
+                        cell.style().fg
+                    } else {
+                        None
+                    }
+                })
+            })
+        };
+        let netease =
+            resolve_source_color(&app.theme, app.state.cfg.sources(), SourceKind::NETEASE);
+        let bilibili =
+            resolve_source_color(&app.theme, app.state.cfg.sources(), SourceKind::BILIBILI);
+        assert_eq!(
+            foreground_of("♫"),
+            Some(netease),
+            "netease 行前景 = 其徽标色"
+        );
+        assert_eq!(
+            foreground_of("▶"),
+            Some(bilibili),
+            "bilibili 行(选中,带底色)前景仍 = 其徽标色"
         );
         Ok(())
     }

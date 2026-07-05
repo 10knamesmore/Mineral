@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
-assertion_line: 255
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -591,6 +590,17 @@ Config {
                 album: 0.4,
             },
             locate_on_enter: true,
+            sources: [
+                "netease",
+                "bilibili",
+            ],
+            kinds: [
+                Song,
+                Album,
+                Artist,
+                Playlist,
+                User,
+            ],
         },
         lyrics: LyricsConfig {
             fullscreen_line_gap: 1,
@@ -665,9 +675,9 @@ Config {
             max_connections: 0,
             color: Hex(
                 HexColor {
-                    r: 194,
-                    g: 12,
-                    b: 12,
+                    r: 157,
+                    g: 41,
+                    b: 40,
                 },
             ),
         },
@@ -677,9 +687,9 @@ Config {
             max_connections: 0,
             color: Hex(
                 HexColor {
-                    r: 251,
-                    g: 114,
-                    b: 153,
+                    r: 255,
+                    g: 140,
+                    b: 176,
                 },
             ),
         },

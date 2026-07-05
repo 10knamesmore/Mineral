@@ -227,22 +227,25 @@ mod tests {
         Ok(())
     }
 
-    /// 来源徽标色:default.lua 里 bilibili 配 `#FB7299`(固定品牌粉),未配置的源走中立兜底
-    /// (= subtext),不再经闭合调色枚举。
+    /// 来源徽标色解析逻辑:已配置来源(bilibili 在 sources 段配了固定品牌色)解析成配置色、
+    /// 不落中立兜底;未配置来源(LOCAL)落中立兜底(= subtext)。
+    ///
+    /// 只钉逻辑不钉具体色值——default.lua 里 bilibili 的实际品牌色由 `defaults_snapshot` 快照钉,
+    /// 改色只需 review 快照,不必动本测试。
     #[test]
     fn source_colors_from_config_and_fallback() -> color_eyre::Result<()> {
         let cfg = mineral_config::Config::defaults()?;
         let theme = Theme::from_config(cfg.tui().theme());
         let sources = cfg.sources();
-        assert_eq!(
+        assert_ne!(
             resolve_source_color(&theme, sources, SourceKind::BILIBILI),
-            ratatui::style::Color::Rgb(0xfb, 0x72, 0x99),
-            "bilibili 配置固定品牌粉"
+            theme.subtext,
+            "已配置来源(bilibili)解析成其配置色,不走中立兜底"
         );
         assert_eq!(
             resolve_source_color(&theme, sources, SourceKind::LOCAL),
             theme.subtext,
-            "未配色来源走中立兜底(subtext)"
+            "未配色来源(LOCAL)走中立兜底(subtext)"
         );
         Ok(())
     }

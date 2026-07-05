@@ -14,6 +14,7 @@ use crate::runtime::line_input::{InputRequest, LineInput};
 use crate::runtime::scroll::list::ScrollList;
 
 use super::detail::{DetailFetch, DetailStack, EntityRef};
+use super::search_whitelist::{self, SearchWhitelist};
 
 /// Search 布局态的输入焦点：token prompt 打字 / 结果列导航 / 详情面板。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -383,6 +384,9 @@ pub struct SearchPage {
     /// per-source 搜索会话（query/kind/结果/光标独立，切 source 恢复）。
     sessions: FxHashMap<SourceKind, SearchSession>,
 
+    /// source / kind 下拉的配置白名单(见 [`SearchWhitelist`])。
+    whitelist: SearchWhitelist,
+
     /// loading spinner 帧计数（每帧 tick +1；渲染按 [`Self::spinner_glyph`] 取旋转帧，与稳态
     /// 列表无关，恒推进，故 loading 占位会持续旋转）。
     spinner: u32,
@@ -409,8 +413,15 @@ impl SearchPage {
             seg_reveal: Transition::new(ring_ticks),
             reveal_seg: None,
             sessions: FxHashMap::default(),
+            whitelist: SearchWhitelist::default(),
             spinner: 0,
         }
+    }
+
+    /// 注入下拉白名单(链式,构造点接 `tui.search` 配置用;不设 = 不过滤)。
+    pub(crate) fn with_whitelist(mut self, whitelist: SearchWhitelist) -> Self {
+        self.whitelist = whitelist;
+        self
     }
 
     /// loading spinner 帧计数（每帧 +1）。字形选取交渲染层（按配置 `animation.spinner_frames`
@@ -556,7 +567,7 @@ impl SearchPage {
     /// 进入 Search 布局态：挑默认搜索 source + 确保其会话存在，焦点回 prompt。
     ///
     /// 默认 source = 首个 `searchable` 非空的 source（按 `name()` 定序去抖，多 source 下确定）；
-    /// 默认 kind = 该 source `searchable` 首项。已有 source 则保留（切回恢复），仅复位焦点。
+    /// 默认 kind = 该 source 过 kind 白名单后的首项。已有 source 则保留（切回恢复），仅复位焦点。
     /// 无可搜索 source 时 `source` 留 `None`（空态由渲染层提示）。
     ///
     /// # Params:
@@ -570,24 +581,38 @@ impl SearchPage {
         if self.source.is_some() {
             return;
         }
-        // 首个 searchable source，按 name() 定序去抖（FxHashMap 迭代序不确定）。
-        let mut candidates: Vec<(&SourceKind, &ChannelCaps)> = caps
-            .iter()
-            .filter(|(_, caps)| !caps.searchable().is_empty())
-            .collect();
-        candidates.sort_by_key(|(src, _)| src.name());
-        let Some((src, caps)) = candidates.first() else {
+        // 默认 source = 下拉首项(白名单定序;不设白名单则 name() 字典序去抖)。
+        let options = self.source_options(caps);
+        let Some(source) = options.first().copied() else {
             return;
         };
-        let src = **src;
-        let kind = caps
-            .searchable()
-            .first()
-            .copied()
-            .unwrap_or(SearchKind::Song);
-        self.source = Some(src);
+        // 白名单滤空的防呆回退只在进场告警一次——下拉数据每帧重算,不在那儿刷日志。
+        if !self.whitelist.sources.is_empty()
+            && !self
+                .whitelist
+                .sources
+                .iter()
+                .any(|name| name == source.name())
+        {
+            mineral_log::warn!(
+                target: "tui",
+                "search source 白名单与已加载 source 无交集,回退全量"
+            );
+        }
+        if !self.whitelist.kinds.is_empty()
+            && caps.get(&source).is_some_and(|channel_caps| {
+                search_whitelist::whitelisted_kinds(&self.whitelist, channel_caps).is_empty()
+            })
+        {
+            mineral_log::warn!(
+                target: "tui",
+                "search kind 白名单与各 source 可搜类型无交集,回退全量"
+            );
+        }
+        let kind = search_whitelist::default_kind(&self.whitelist, caps, source);
+        self.source = Some(source);
         self.sessions
-            .entry(src)
+            .entry(source)
             .or_insert_with(|| SearchSession::new(kind));
     }
 
@@ -619,7 +644,7 @@ impl SearchPage {
         self.sessions.get_mut(&source)
     }
 
-    /// 切 source：切到目标 source、确保会话存在（新建用其 `searchable` 首项）。
+    /// 切 source：切到目标 source、确保会话存在（新建用其过 kind 白名单后的首项）。
     ///
     /// # Return:
     ///   `Some(kind)` = 首次进入该 source、kind 落到首项（供 flash「已切到该 kind」）；
@@ -633,32 +658,30 @@ impl SearchPage {
         if self.sessions.contains_key(&source) {
             return None;
         }
-        let kind = caps
-            .get(&source)
-            .and_then(|c| c.searchable().first().copied())
-            .unwrap_or(SearchKind::Song);
+        let kind = search_whitelist::default_kind(&self.whitelist, caps, source);
         self.sessions.insert(source, SearchSession::new(kind));
         Some(kind)
     }
 
-    /// 可搜索的 source 列表（`searchable` 非空，按 `name()` 定序）：chip 下拉 / 段切换 / 渲染
-    /// 三处共用同一定序，保证 `seg_sel` 下标与展示一致。
+    /// 可搜索的 source 列表(白名单定序过滤,规则见 [`search_whitelist::source_options`]):
+    /// chip 下拉 / 段切换 / 渲染三处共用同一定序,保证 `seg_sel` 下标与展示一致。
     pub fn source_options(&self, caps: &FxHashMap<SourceKind, ChannelCaps>) -> Vec<SourceKind> {
-        let mut v: Vec<SourceKind> = caps
-            .iter()
-            .filter(|(_, c)| !c.searchable().is_empty())
-            .map(|(s, _)| *s)
-            .collect();
-        v.sort_by_key(SourceKind::name);
-        v
+        search_whitelist::source_options(&self.whitelist, caps)
     }
 
-    /// 当前 source 支持的 kind 列表（`caps.searchable` 原序）：chip 下拉 / 段切换 / 渲染共用。
+    /// 当前 source 支持的 kind 列表(过 kind 白名单,保白名单顺序):chip 下拉 / 段切换 / 渲染共用。
+    ///
+    /// 交集为空回退 searchable 全量——正常流程下交集空的 source 已被 [`Self::source_options`]
+    /// 隐藏,能走到这只有「kind 配置滤光一切被整体忽略」的回退态,此处同步回退保持一致。
     pub fn kind_options(&self, caps: &FxHashMap<SourceKind, ChannelCaps>) -> Vec<SearchKind> {
-        self.source
-            .and_then(|s| caps.get(&s))
-            .map(|c| c.searchable().clone())
-            .unwrap_or_default()
+        let Some(channel_caps) = self.source.and_then(|source| caps.get(&source)) else {
+            return Vec::new();
+        };
+        let intersection = search_whitelist::whitelisted_kinds(&self.whitelist, channel_caps);
+        if intersection.is_empty() {
+            return channel_caps.searchable().clone();
+        }
+        intersection
     }
 
     /// 切 kind：换当前会话 kind。
@@ -706,7 +729,9 @@ mod tests {
 
     use crate::test_support::endserenading;
 
-    use super::{EntityRef, PromptSegment, SearchFocus, SearchPage, SearchSession};
+    use super::{
+        EntityRef, PromptSegment, SearchFocus, SearchPage, SearchSession, SearchWhitelist,
+    };
 
     /// 造一个落在 NETEASE、给定 searchable 的 caps 表。
     fn caps_with(kinds: Vec<SearchKind>) -> FxHashMap<SourceKind, ChannelCaps> {
@@ -807,6 +832,158 @@ mod tests {
         let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
         rs.enter(&caps);
         assert_eq!(rs.source, None, "无可搜索 source → 空态");
+    }
+
+    /// 造多 source 的 caps 表:每项 `(source, searchable)`。
+    fn caps_multi(
+        entries: Vec<(SourceKind, Vec<SearchKind>)>,
+    ) -> FxHashMap<SourceKind, ChannelCaps> {
+        let mut caps = FxHashMap::default();
+        for (source, kinds) in entries {
+            caps.insert(
+                source,
+                ChannelCaps::builder()
+                    .searchable(kinds)
+                    .playlist_edit(false)
+                    .build(),
+            );
+        }
+        caps
+    }
+
+    /// source 白名单:顺序即下拉顺序(可与字典序相反)、未列出即隐藏、没加载的名字静默跳过。
+    #[test]
+    fn source_options_follow_whitelist_order_and_hide_unlisted() {
+        let caps = caps_multi(vec![
+            (SourceKind::BILIBILI, vec![SearchKind::Song]),
+            (SourceKind::NETEASE, vec![SearchKind::Song]),
+            (SourceKind::LOCAL, vec![SearchKind::Song]),
+        ]);
+        let rs =
+            SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {
+                sources: vec![
+                    "netease".to_owned(),
+                    "ghost".to_owned(),
+                    "bilibili".to_owned(),
+                ],
+                kinds: Vec::new(),
+            });
+        assert_eq!(
+            rs.source_options(&caps),
+            vec![SourceKind::NETEASE, SourceKind::BILIBILI],
+            "配置序 netease→bilibili(逆字典序),ghost 静默跳过,local 未列出隐藏"
+        );
+    }
+
+    /// source 白名单滤到空(全是没加载的名字)→ 回退全量字典序,不让搜索页变空壳。
+    #[test]
+    fn source_whitelist_all_unknown_falls_back_to_full() {
+        let caps = caps_multi(vec![
+            (SourceKind::NETEASE, vec![SearchKind::Song]),
+            (SourceKind::BILIBILI, vec![SearchKind::Song]),
+        ]);
+        let rs =
+            SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {
+                sources: vec!["ghost".to_owned()],
+                kinds: Vec::new(),
+            });
+        assert_eq!(
+            rs.source_options(&caps),
+            vec![SourceKind::BILIBILI, SourceKind::NETEASE],
+            "白名单全落空 → 忽略配置回退字典序全量"
+        );
+    }
+
+    /// kind 白名单:与当前 source 的 searchable 求交、保配置顺序;交集空的 source 从
+    /// source 下拉整体消失。
+    #[test]
+    fn kind_whitelist_orders_and_hides_kindless_source() -> color_eyre::Result<()> {
+        let caps = caps_multi(vec![
+            (
+                SourceKind::NETEASE,
+                vec![SearchKind::Song, SearchKind::Album, SearchKind::Artist],
+            ),
+            (SourceKind::BILIBILI, vec![SearchKind::User]),
+        ]);
+        let mut rs =
+            SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {
+                sources: Vec::new(),
+                kinds: vec![SearchKind::Album, SearchKind::Song],
+            });
+        assert_eq!(
+            rs.source_options(&caps),
+            vec![SourceKind::NETEASE],
+            "bilibili 只可搜 user、与 kind 白名单交集空 → 隐藏"
+        );
+        rs.enter(&caps);
+        assert_eq!(
+            rs.kind_options(&caps),
+            vec![SearchKind::Album, SearchKind::Song],
+            "kind 按配置序求交,artist 未列出隐藏"
+        );
+        let session = rs
+            .current()
+            .ok_or_else(|| color_eyre::eyre::eyre!("入会后应有当前会话"))?;
+        assert_eq!(session.kind, SearchKind::Album, "默认 kind 落到过滤后首项");
+        Ok(())
+    }
+
+    /// kind 白名单把所有 source 都滤没了 → 整体忽略 kind 配置回退全量(source 与 kind 一致回退)。
+    #[test]
+    fn kind_whitelist_wiping_everything_is_ignored() {
+        let caps = caps_multi(vec![(SourceKind::NETEASE, vec![SearchKind::Song])]);
+        let mut rs =
+            SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {
+                sources: Vec::new(),
+                kinds: vec![SearchKind::Playlist],
+            });
+        assert_eq!(
+            rs.source_options(&caps),
+            vec![SourceKind::NETEASE],
+            "kind 配置滤光一切 → 忽略之,source 全量"
+        );
+        rs.enter(&caps);
+        assert_eq!(
+            rs.kind_options(&caps),
+            vec![SearchKind::Song],
+            "同一回退下 kind 也给 searchable 全量,不留空下拉"
+        );
+    }
+
+    /// 进入时默认 source 跟白名单首位(而非字典序首位);switch_source 的默认 kind 也过白名单。
+    #[test]
+    fn enter_and_switch_respect_whitelist() -> color_eyre::Result<()> {
+        let caps = caps_multi(vec![
+            (
+                SourceKind::BILIBILI,
+                vec![SearchKind::Song, SearchKind::Album],
+            ),
+            (
+                SourceKind::NETEASE,
+                vec![SearchKind::Song, SearchKind::Album],
+            ),
+        ]);
+        let mut rs =
+            SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {
+                sources: vec!["netease".to_owned(), "bilibili".to_owned()],
+                kinds: vec![SearchKind::Album],
+            });
+        rs.enter(&caps);
+        assert_eq!(
+            rs.source,
+            Some(SourceKind::NETEASE),
+            "默认 source = 白名单首位,非字典序的 bilibili"
+        );
+        let session = rs
+            .current()
+            .ok_or_else(|| color_eyre::eyre::eyre!("入会后应有当前会话"))?;
+        assert_eq!(session.kind, SearchKind::Album, "默认 kind 过白名单");
+        assert_eq!(
+            rs.switch_source(SourceKind::BILIBILI, &caps),
+            Some(SearchKind::Album),
+            "首次切入 bilibili:kind 落到白名单过滤后的首项,而非 searchable 首项 song"
+        );
+        Ok(())
     }
 
     /// `set_focus`：切到面板记住 `last_panel`、armed 焦点环；回 prompt 不改 `last_panel`；

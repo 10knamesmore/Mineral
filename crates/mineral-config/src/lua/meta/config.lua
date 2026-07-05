@@ -190,12 +190,22 @@
 ---@field play_count_debounce_ms? integer 选中某曲停留超过此毫秒数才查它的远端播放次数;太小翻列表会打满 API
 ---@field prewarm_ahead? integer 全屏稳态提前编码接下来几首的封面,消自动切歌瞬间的占位闪;每首一份终端图开销
 
+---来源名:内置源有补全,插件源写任意 string 也合法(没加载的名字运行时静默跳过)。
+---@alias mineral.SourceName "netease"|"bilibili"|string
+
+---channel 搜索的目标类型名(封闭集合,typo 加载期报错)。
+---@alias mineral.SearchKindName "song"|"album"|"artist"|"playlist"|"user"
+
 ---本地过滤搜索(`/`)。deep 打开后 Playlists 视图的搜索词穿透到歌单内歌曲,
 ---进搜索态时后台补拉未缓存歌单的曲目。
+---sources / kinds 管 channel 搜索(Search 布局态)的两个下拉:白名单语义,
+---列出即暴露、顺序即下拉顺序;不设 = 全量。
 ---@class mineral.SearchConfig
 ---@field deep? boolean Playlists 视图搜索是否穿透到歌单内歌曲(总开关)
 ---@field deep_weights? mineral.DeepWeights 字段级命中分折扣
 ---@field locate_on_enter? boolean 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
+---@field sources? mineral.SourceName[] channel 搜索 source 白名单+顺序;未列出的隐藏,不设 = 继承默认名单,空列表 = 防呆回退全量
+---@field kinds? mineral.SearchKindName[] channel 搜索 kind 白名单+顺序,与各 source 可搜集合求交;不设 = 继承默认名单,空列表 = 防呆回退全量
 
 ---深度搜索的字段级权重,每项 0~1(越界 clamp),0 = 该字段不参与;
 ---歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),单曲分 = 各字段加权分取最高。

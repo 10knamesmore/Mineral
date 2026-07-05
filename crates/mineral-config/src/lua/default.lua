@@ -146,6 +146,11 @@ return {
         album = 0.4, -- 专辑
       },
       locate_on_enter = true, -- 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
+      -- channel 搜索两个下拉的白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
+      -- source 名开放(插件源可写),没加载的名字静默跳过;空列表 = 防呆回退全量。
+      sources = { "netease", "bilibili" },
+      -- 封闭集合 song/album/artist/playlist/user,与各 source 可搜集合求交(保此处顺序)
+      kinds = { "song", "album", "artist", "playlist", "user" },
     },
     lyrics = {
       fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳
@@ -220,13 +225,13 @@ return {
       timeout_secs = 100, -- 单次 API 请求超时,秒
       proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")
       max_connections = 0, -- 到源的最大并发连接,0 = 不限
-      color = "#C20C0C", -- 网易云品牌红(token 名亦可,随主题联动)
+      color = "#9D2928", -- 网易云品牌红
     },
     bilibili = {
       timeout_secs = 100, -- 单次 API 请求超时,秒
       proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")
       max_connections = 0, -- 到源的最大并发连接,0 = 不限
-      color = "#FB7299", -- B站品牌粉(token 名亦可)
+      color = "#FF8cB0", -- B站品牌粉
     },
   },
   -- daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动。

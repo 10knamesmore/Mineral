@@ -94,6 +94,10 @@ pub(crate) struct MenuItem {
 
     /// 危险项:红色样式(置底由构造方排序保证)。
     pub(crate) destructive: bool,
+
+    /// 前景色覆盖(`None` = 主题默认 text):带身份色的项(如 source 下拉行按各源徽标色)。
+    /// 选中行只加底色,不夺此色。危险项红色优先。
+    pub(crate) tint: Option<ratatui::style::Color>,
 }
 
 impl MenuItem {
@@ -104,6 +108,7 @@ impl MenuItem {
             label: label.into(),
             action: Some(action),
             destructive: false,
+            tint: None,
         }
     }
 
@@ -114,6 +119,15 @@ impl MenuItem {
             label: label.into(),
             action: None,
             destructive: false,
+            tint: None,
+        }
+    }
+
+    /// 带前景色的 display-only 项(source 下拉行:身份靠图标 + 颜色,与 chip 一致)。
+    pub(crate) fn display_tinted(label: impl Into<String>, tint: ratatui::style::Color) -> Self {
+        Self {
+            tint: Some(tint),
+            ..Self::display(label)
         }
     }
 }
@@ -237,7 +251,7 @@ impl Overlay for PopMenu {
             let fg = if it.destructive {
                 theme.red
             } else {
-                theme.text
+                it.tint.unwrap_or(theme.text)
             };
             let mut style = Style::new().fg(fg);
             if selected {
@@ -454,6 +468,7 @@ mod tests {
             label: "Remove from playlist".into(),
             action: Some(MenuAction::Copy("placeholder".into())),
             destructive: true,
+            tint: None,
         });
         let menu = PopMenu::new("Actions", items, anchor(), Placement::Below);
         terminal.draw(|f| {

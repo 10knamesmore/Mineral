@@ -234,7 +234,7 @@ mod tests {
     use std::path::PathBuf;
 
     use color_eyre::eyre::eyre;
-    use mineral_model::BitRate;
+    use mineral_model::{BitRate, SearchKind};
     use mlua::{Function, Table};
 
     use super::load;
@@ -330,6 +330,70 @@ mod tests {
         assert_eq!(*cfg.audio().volume(), 50, "覆盖生效");
         assert_eq!(*cfg.download().quality(), BitRate::Lossless, "其余仍默认");
         assert_eq!(*cfg.cache().audio_capacity(), 10 * 1024 * 1024 * 1024);
+        Ok(())
+    }
+
+    /// search 白名单:sources / kinds 落型且保配置顺序;默认值的唯一真相在 default.lua
+    /// (代码里没有第二份)。
+    #[test]
+    fn search_whitelists_deserialize_in_order() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "searchwl",
+            r#"return { tui = { search = {
+                sources = { "bilibili", "netease" },
+                kinds = { "album", "song" },
+            } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        let search = cfg.tui().search();
+        assert_eq!(
+            *search.sources(),
+            vec!["bilibili".to_owned(), "netease".to_owned()],
+            "sources 保配置顺序(数组整体替换默认)"
+        );
+        assert_eq!(
+            *search.kinds(),
+            vec![SearchKind::Album, SearchKind::Song],
+            "kinds 保配置顺序(数组整体替换默认)"
+        );
+        // 默认名单的具体内容归 defaults_snapshot 管(default.lua 是唯一真相,这里不复述),
+        // 只守「默认必须非空」——空名单会让消费侧走防呆回退,默认态不该踩它。
+        let defaults = Config::defaults()?;
+        assert!(
+            !defaults.tui().search().sources().is_empty(),
+            "默认 sources 非空"
+        );
+        assert!(
+            !defaults.tui().search().kinds().is_empty(),
+            "默认 kinds 非空"
+        );
+        Ok(())
+    }
+
+    /// kind 是封闭枚举:typo 在加载期报落型告警(带字段路径)并整体回落默认,不静默失效。
+    #[test]
+    fn search_kind_typo_rejected_with_path() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "searchwlbad",
+            r#"return { tui = { search = { kinds = { "song", "sogn" } } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert_eq!(
+            cfg.tui().search().kinds(),
+            Config::defaults()?.tui().search().kinds(),
+            "回落 default.lua 默认"
+        );
+        match warnings.as_slice() {
+            [ConfigWarning::Deserialize { path, .. }] => {
+                assert_eq!(path, "tui.search.kinds[1]", "字段路径应精确到下标");
+            }
+            other => {
+                return Err(eyre!("应有一条 Deserialize warning:{other:?}"));
+            }
+        }
         Ok(())
     }
 
