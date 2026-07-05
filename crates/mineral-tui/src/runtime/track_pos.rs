@@ -1,5 +1,6 @@
 //! 歌单内光标位置记忆:退出曲目列表时按歌单记一条 [`TrackPos`] 双锚,下次进入
-//! 恢复;`behavior.remember_track_pos = "persist"` 档经 ui_prefs 以 JSON 落盘。
+//! 恢复;`behavior.remember_track_pos = "persist"` 档经 `tui.db` 的 `track_pos`
+//! 专表落盘(结构化行,库层禁 JSON blob)。
 //!
 //! 双锚语义:优先按 `song_id` 在当前曲目里定位(歌单增删后仍指向同一首),
 //! 该歌已被删则退回 `index` 并钳到末行——纯 index 会在增删后指错歌,纯 id 会在
@@ -7,7 +8,6 @@
 
 use mineral_model::{PlaylistId, SongId};
 use rustc_hash::FxHashMap;
-use serde::{Deserialize, Serialize};
 
 use crate::runtime::view_model::SongView;
 
@@ -15,7 +15,7 @@ use crate::runtime::view_model::SongView;
 pub type TrackPosMap = FxHashMap<PlaylistId, TrackPos>;
 
 /// 一个歌单的记忆位置(双锚 + 屏上相对行)。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackPos {
     /// 记录时光标所在歌曲(优先锚)。
     pub song_id: SongId,
@@ -25,8 +25,6 @@ pub struct TrackPos {
 
     /// 记录时光标在视口内的相对行(`sel - 视口首行`)。恢复时反推视口首行,
     /// 让该行回到离开时的屏上位置;终端尺寸变了由渲染端 clamp 兜底(瞬时,无平移)。
-    /// 缺省(旧落盘数据)= 0,即恢复到视口顶行。
-    #[serde(default)]
     pub screen_row: usize,
 }
 
@@ -56,45 +54,46 @@ pub struct PendingRestore {
     pub pos: TrackPos,
 }
 
-/// 落盘 wire 条目。map 序列化成条目数组而不是 JSON object——ID 是结构化类型,
-/// 不强求扁平字符串 key,结构由 serde 自描述。
-#[derive(Serialize, Deserialize)]
-struct WireEntry {
-    /// 歌单 id。
-    playlist: PlaylistId,
-
-    /// 该歌单的记忆位置。
-    pos: TrackPos,
-}
-
-/// 把内存表编码成落盘 JSON。
+/// 内存表 → `track_pos` 表行(落盘用)。
 ///
 /// # Params:
 ///   - `map`: 内存表
 ///
 /// # Return:
-///   JSON 字符串;序列化失败返回 `Err`(调用方 warn 后放弃本次落盘)。
-pub fn encode(map: &TrackPosMap) -> color_eyre::Result<String> {
-    let entries: Vec<WireEntry> = map
-        .iter()
-        .map(|(playlist, pos)| WireEntry {
-            playlist: playlist.clone(),
-            pos: pos.clone(),
+///   结构化行(顺序不定;主键 = 歌单 id);下标溢出 i64(理论不可达)返回 `Err`。
+pub fn to_rows(map: &TrackPosMap) -> color_eyre::Result<Vec<mineral_persist::TrackPosRow>> {
+    map.iter()
+        .map(|(playlist, pos)| {
+            Ok(mineral_persist::TrackPosRow {
+                playlist: playlist.clone(),
+                song: pos.song_id.clone(),
+                index: u64::try_from(pos.index)?,
+                screen_row: u64::try_from(pos.screen_row)?,
+            })
         })
-        .collect();
-    Ok(serde_json::to_string(&entries)?)
+        .collect()
 }
 
-/// 从落盘 JSON 解码回内存表。
+/// `track_pos` 表行 → 内存表(启动读回用)。
 ///
 /// # Params:
-///   - `raw`: 落库的 JSON 字符串
+///   - `rows`: 库中全部行
 ///
 /// # Return:
-///   内存表;脏 JSON 返回 `Err`(调用方降级空表)。
-pub fn decode(raw: &str) -> color_eyre::Result<TrackPosMap> {
-    let entries: Vec<WireEntry> = serde_json::from_str(raw)?;
-    Ok(entries.into_iter().map(|e| (e.playlist, e.pos)).collect())
+///   内存表;下标超出 usize(库损坏)返回 `Err`(调用方降级空表)。
+pub fn from_rows(rows: Vec<mineral_persist::TrackPosRow>) -> color_eyre::Result<TrackPosMap> {
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                row.playlist,
+                TrackPos {
+                    song_id: row.song,
+                    index: usize::try_from(row.index)?,
+                    screen_row: usize::try_from(row.screen_row)?,
+                },
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -104,7 +103,7 @@ mod tests {
     use crate::runtime::view_model::SongView;
     use crate::test_support::song;
 
-    use super::{TrackPos, TrackPosMap, decode, encode};
+    use super::{TrackPos, TrackPosMap, from_rows, to_rows};
 
     /// 把若干歌名包成 SongView 列表(loved / plays 取默认)。
     fn views(names: &[&str]) -> Vec<SongView> {
@@ -150,16 +149,16 @@ mod tests {
         assert_eq!(overflow.resolve(&[]), 0, "空列表恒 0");
     }
 
-    /// wire round-trip:encode 后 decode 还原同一张表(含跨 source 的歌单 key)。
+    /// 行投影 round-trip:to_rows 后 from_rows 还原同一张表(含跨 source 的歌单 key)。
     #[test]
-    fn wire_round_trips() -> color_eyre::Result<()> {
+    fn rows_round_trip() -> color_eyre::Result<()> {
         let mut map = TrackPosMap::default();
         map.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
             TrackPos {
                 song_id: song("甲").id,
                 index: 3,
-                screen_row: 0,
+                screen_row: 7,
             },
         );
         map.insert(
@@ -170,45 +169,8 @@ mod tests {
                 screen_row: 0,
             },
         );
-        let raw = encode(&map)?;
-        let back = decode(&raw)?;
+        let back = from_rows(to_rows(&map)?)?;
         assert_eq!(back, map);
-        Ok(())
-    }
-
-    /// 脏 JSON decode 返回 Err(调用方降级空表),不 panic。
-    #[test]
-    fn decode_rejects_garbage() {
-        assert!(decode("not json").is_err());
-        assert!(decode(r#"{"wrong": "shape"}"#).is_err());
-    }
-
-    /// 旧落盘数据兼容:缺 `screen_row` 字段的条目解码成功,缺省 0(视口顶行)。
-    #[test]
-    fn decode_defaults_missing_screen_row() -> color_eyre::Result<()> {
-        let mut map = TrackPosMap::default();
-        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-        map.insert(
-            pid.clone(),
-            TrackPos {
-                song_id: song("甲").id,
-                index: 3,
-                screen_row: 7,
-            },
-        );
-        let mut v: serde_json::Value = serde_json::from_str(&encode(&map)?)?;
-        let stripped = v
-            .get_mut(0)
-            .and_then(|e| e.get_mut("pos"))
-            .and_then(serde_json::Value::as_object_mut)
-            .and_then(|pos| pos.remove("screen_row"));
-        assert!(stripped.is_some(), "前置:wire 里确有 screen_row 字段");
-        let back = decode(&serde_json::to_string(&v)?)?;
-        assert_eq!(
-            back.get(&pid).map(|p| p.screen_row),
-            Some(0),
-            "缺字段缺省 0"
-        );
         Ok(())
     }
 }

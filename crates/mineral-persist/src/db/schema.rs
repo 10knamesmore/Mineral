@@ -45,6 +45,43 @@ mod tests {
         Ok(())
     }
 
+    /// 约束由库执行,不靠代码纪律:song_kv 的「vtype 与值列相符」CHECK、
+    /// session_state 的「当前曲成对可空」CHECK、playlist_tracks → playlist_cache 外键
+    /// (sqlx 的 sqlite 默认 pragma 带 `foreign_keys=ON`)各自拒绝坏行。
+    #[tokio::test]
+    async fn schema_constraints_reject_bad_rows() -> color_eyre::Result<()> {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
+        ensure_schema(&pool).await?;
+
+        // song_kv:vtype='int' 但 int_val 为 NULL → CHECK 拒绝。
+        let kv = sqlx::query(
+            "INSERT INTO song_kv(namespace,song_value,key,vtype,text_val) \
+             VALUES ('netease','1','k','int','oops')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(kv.is_err(), "vtype 与值列不符应被 CHECK 拒绝");
+
+        // session_state:cur_namespace 有值而 cur_song_value 为 NULL(半空对)→ CHECK 拒绝。
+        let half = sqlx::query(
+            "INSERT INTO session_state(id,cur_namespace,cur_song_value,position_ms,play_mode,volume,updated_at) \
+             VALUES (0,'netease',NULL,0,'sequential',1.0,0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(half.is_err(), "当前曲半空对应被 CHECK 拒绝");
+
+        // playlist_tracks:引用不存在的 playlist_cache 行 → FK 拒绝。
+        let orphan = sqlx::query(
+            "INSERT INTO playlist_tracks(namespace,playlist_id,position,song_value) \
+             VALUES ('netease','nope',0,'s1')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(orphan.is_err(), "孤儿曲目行应被外键拒绝");
+        Ok(())
+    }
+
     /// 建于迁移机制之前的老库(表已存在、无迁移记账):baseline 裸建表撞错,
     /// 错误信息带 `mineral cache reset` 重建指引——刻意响亮失败,不静默收编旧结构。
     #[tokio::test]

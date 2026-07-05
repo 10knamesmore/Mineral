@@ -23,7 +23,7 @@ struct Entry {
     /// 相对 `root` 的文件路径(`<subdir>/<file_name>`)。
     relpath: String,
 
-    /// 文件字节数(LRU 容量核算用;不驱逐的索引恒 0)。
+    /// 文件字节数(实测 stat / 写入长度;LRU 容量核算用)。
     bytes: u64,
 
     /// 最近访问的逻辑时钟值(LRU 排序用;仅内存,不落库)。
@@ -206,7 +206,7 @@ impl CacheIndex {
     /// # Params:
     ///   - `key`: 缓存键
     ///   - `relpath`: 相对 `root` 的文件路径(含扩展名)
-    ///   - `bytes`: 文件字节数(不驱逐的索引传 0 即可)
+    ///   - `bytes`: 文件字节数(实测;别拿 0 冒充「未核算」,容量核算与状态报表都信它)
     ///
     /// # Return:
     ///   写盘成功 / 降级返回 `Ok(())`。
@@ -548,7 +548,10 @@ fn place_file(
         })?;
         drop(std::fs::remove_file(src));
     }
-    let bytes = std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
+    // 刚落盘就 stat 不到 = 真实 IO 异常,冒泡而非把 0 当字节数记进索引(容量核算会失真)。
+    let bytes = std::fs::metadata(&dst)
+        .map(|m| m.len())
+        .wrap_err_with(|| format!("stat 入库文件失败 path={}", dst.display()))?;
     Ok((rel, bytes))
 }
 
@@ -582,7 +585,7 @@ fn write_bytes_file(
     }
     std::fs::write(&dst, data)
         .wrap_err_with(|| format!("写缓存文件失败 path={}", dst.display()))?;
-    Ok((rel, u64::try_from(data.len()).unwrap_or(0)))
+    Ok((rel, u64::try_from(data.len())?))
 }
 
 /// 为新 key 选一个不与磁盘现有文件相撞的相对路径:`<subdir>/<file_name>`,撞则追加 ` (N)`。
