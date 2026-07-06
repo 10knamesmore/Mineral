@@ -39,10 +39,12 @@ pub fn draw(
     ])
     .areas(inner);
 
+    // mineral 聚合歌单无自带封面:拼贴就绪时给合成键,未就绪回落程序化占位。
+    let cover = crate::runtime::cover::collage::effective_cover_url(state, &p.data);
     cover_image::render_or_fallback(
         frame,
         cover_area,
-        p.data.cover_url.as_ref(),
+        cover.as_ref(),
         state,
         picker,
         theme,

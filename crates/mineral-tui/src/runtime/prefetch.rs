@@ -14,13 +14,15 @@ use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, DetailFetch, View};
 
-/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch。
+/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch,
+/// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover::collage`])。
 pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
     request_detail(state, client, covers);
     request_detail_selected_cover(state, covers);
+    crate::runtime::cover::collage::tick(state, covers);
 }
 
 /// 看 view 决定的 sel 周围 `prefetch.radius` 内未 cache / pending 的封面,
@@ -173,7 +175,12 @@ fn effective_cover_radius(
 
 /// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
 /// `source` 随请求带给 fetcher(决定缓存落盘子目录)。
-fn ensure_cover(state: &mut AppState, covers: &CoverFetcher, source: SourceKind, url: MediaUrl) {
+pub(crate) fn ensure_cover(
+    state: &mut AppState,
+    covers: &CoverFetcher,
+    source: SourceKind,
+    url: MediaUrl,
+) {
     if state.covers.cache.contains_key(&url) || state.covers.pending.contains(&url) {
         return;
     }

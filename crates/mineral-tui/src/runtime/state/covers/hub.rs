@@ -4,7 +4,9 @@
 //! 的结果都在这里落地;渲染处只读缓存、未命中时投递请求。
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
+use image::DynamicImage;
 use mineral_model::MediaUrl;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
@@ -46,6 +48,11 @@ pub struct CoverHub {
     /// 用 `RefCell` 因渲染拿 `&AppState`。
     pub encode_pending: RefCell<FxHashSet<(MediaUrl, (u16, u16))>>,
 
+    /// 歌单拼贴合成键 → 上次合成时的就绪成员数。渐进式重拼判定:成员图逐张到货,
+    /// 就绪数超过记录值才重拼覆盖同 key(成员 fetch 失败静默、`pending` 不回收,
+    /// 等不来"全员就绪",只能有几张拼几张)。成员集变化即换新键,旧记录仅占位无害。
+    pub(crate) collage_ready: FxHashMap<MediaUrl, usize>,
+
     /// 当前 client-side cover_fetcher in-flight 数(等价 `pending.len()`,
     /// 每 tick 由 App 灌入)。
     pub loading: usize,
@@ -67,7 +74,18 @@ impl CoverHub {
             protocols: ProtocolCache::new(protocol_budget),
             encode_tx: mpsc::unbounded_channel().0,
             encode_pending: RefCell::new(FxHashSet::default()),
+            collage_ready: FxHashMap::default(),
             loading: 0,
+        }
+    }
+
+    /// 塞入一张本地合成图(歌单拼贴),与 fetch 回填同规则:清掉该 key 旧协议(下次渲染
+    /// 按新图重建),被逐出项的派生物联动清理。
+    pub(crate) fn insert_synthesized(&mut self, url: &MediaUrl, image: Arc<DynamicImage>) {
+        let evicted = self.cache.insert(url, image);
+        self.protocols.remove(url);
+        for u in evicted {
+            self.discard_derived(&u);
         }
     }
 
