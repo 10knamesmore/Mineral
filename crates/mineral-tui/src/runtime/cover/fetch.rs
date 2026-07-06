@@ -16,7 +16,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{bail, eyre};
 use image::DynamicImage;
 use isahc::AsyncReadResponseExt;
 use isahc::HttpClient;
@@ -28,6 +28,7 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::render::palette::CoverPalette;
+use crate::runtime::cover::cdn_scale::scaled_url;
 use crate::runtime::cover::colors::extract_palette;
 
 /// worker 完成一张封面的产物:图必有,色板尽力而为。
@@ -247,7 +248,7 @@ async fn fetch_and_decode(
                 }
                 return Some(decoded);
             }
-            let raw = match download(client, key).await {
+            let raw = match download_preferring(client, scaled_url(u, *cfg.max_dim()), key).await {
                 Ok(b) => b,
                 Err(e) => {
                     mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "fetch failed");
@@ -295,6 +296,57 @@ async fn cached_read(key: &str, cache: Option<&Arc<CacheIndex>>) -> Option<Vec<u
     }
 }
 
+/// 下载封面字节:有图床缩放地址先试它,失败(网络/非 2xx)回退原始 URL。
+///
+/// 缩放地址是尽力而为的传输优化(图床语法可能变更/个别对象可能不支持),
+/// 失败只降级不报错;原始 URL 也失败才向上返回 `Err`。
+///
+/// # Params:
+///   - `client`: isahc 客户端
+///   - `scaled`: 图床缩放下载地址([`scaled_url`] 产物;`None` 直接用原始 URL)
+///   - `canonical`: 原始 URL(= 缓存键)
+///
+/// # Return:
+///   封面原始字节;可用地址全失败返回 `Err`。
+async fn download_preferring(
+    client: &HttpClient,
+    scaled: Option<String>,
+    canonical: &str,
+) -> color_eyre::Result<Vec<u8>> {
+    let had_scaled = scaled.is_some();
+    if let Some(scaled) = scaled {
+        let started = std::time::Instant::now();
+        match download(client, &scaled).await {
+            Ok(bytes) => {
+                log_downloaded("scaled", &scaled, started, bytes.len());
+                return Ok(bytes);
+            }
+            Err(e) => {
+                mineral_log::warn!(target: "cover", url = %scaled, error = mineral_log::chain(&e), "缩放地址下载失败,回退原始 URL");
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    let bytes = download(client, canonical).await?;
+    let route = if had_scaled { "fallback" } else { "direct" };
+    log_downloaded(route, canonical, started, bytes.len());
+    Ok(bytes)
+}
+
+/// 打一条封面下载完成的 debug 日志(耗时/字节数/走的哪条路)。
+///
+/// 排查「封面变慢」类问题的一手数据:`RUST_LOG=cover=debug` 打开。
+///
+/// # Params:
+///   - `route`: `scaled`(缩放地址)/ `fallback`(缩放失败回退原始)/ `direct`(无缩放地址)
+///   - `url`: 实际下载用的地址
+///   - `started`: 本次请求起点
+///   - `bytes`: 响应体大小
+fn log_downloaded(route: &str, url: &str, started: std::time::Instant, bytes: usize) {
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    mineral_log::debug!(target: "cover", %route, %url, elapsed_ms, bytes, "封面下载完成");
+}
+
 /// 下载 Remote 封面的原始字节。
 ///
 /// # Params:
@@ -302,12 +354,15 @@ async fn cached_read(key: &str, cache: Option<&Arc<CacheIndex>>) -> Option<Vec<u
 ///   - `key`: 远端 URL
 ///
 /// # Return:
-///   原始字节;网络失败返回 `Err`。
+///   原始字节;网络失败或非 2xx 状态返回 `Err`。
 async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>> {
     let mut resp = client
         .get_async(key)
         .await
         .map_err(|e| eyre!("http: {e}"))?;
+    if !resp.status().is_success() {
+        bail!("http status {}", resp.status());
+    }
     resp.bytes().await.map_err(|e| eyre!("read body: {e}"))
 }
 
@@ -572,8 +627,8 @@ mod tests {
     use mineral_persist::ClientStore;
 
     use super::{
-        CoverStorageMode, bytes_for_cache, cached_read, cover_file_name, decode_resize,
-        fetch_and_decode,
+        CoverStorageMode, bytes_for_cache, cached_read, cover_file_name, decode_resize, download,
+        download_preferring, fetch_and_decode,
     };
 
     /// 测试用封面段配置(storage 可选;其余为测试基线值,生产默认见 default.lua)。
@@ -844,6 +899,30 @@ mod tests {
 
         drop(cache);
         drop(std::fs::remove_dir_all(&dir));
+        Ok(())
+    }
+
+    /// 非 2xx 响应按下载失败处理,不把错误页字节当图喂解码器。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_rejects_non_2xx() -> color_eyre::Result<()> {
+        let url =
+            mineral_test::mock::serve_once_status(/*status*/ 404, b"not found".to_vec()).await?;
+        let client = isahc::HttpClient::new().map_err(|e| color_eyre::eyre::eyre!("isahc: {e}"))?;
+        assert!(
+            download(&client, url.as_str()).await.is_err(),
+            "404 应判失败"
+        );
+        Ok(())
+    }
+
+    /// 缩放地址失败时回退原始 URL,仍拿到字节。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_preferring_falls_back_to_canonical() -> color_eyre::Result<()> {
+        let bad = mineral_test::mock::serve_once_status(/*status*/ 404, Vec::new()).await?;
+        let good = mineral_test::mock::serve_once(b"cover-bytes".to_vec()).await?;
+        let client = isahc::HttpClient::new().map_err(|e| color_eyre::eyre::eyre!("isahc: {e}"))?;
+        let bytes = download_preferring(&client, Some(bad.to_string()), good.as_str()).await?;
+        assert_eq!(bytes, b"cover-bytes", "应回退到原始 URL 的字节");
         Ok(())
     }
 }
