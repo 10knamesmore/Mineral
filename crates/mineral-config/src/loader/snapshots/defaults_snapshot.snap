@@ -646,6 +646,19 @@ Config {
                 "⠇",
                 "⠏",
             ],
+            marquee: MarqueeConfig {
+                mode: Bounce,
+                step_ms: 60,
+                pause_ms: 100,
+                fade_ms: 300,
+                fade_cols: 5,
+                loop_: MarqueeLoopConfig {
+                    gap: "  ✦  ",
+                },
+                bounce: MarqueeBounceConfig {
+                    edge_pause_ms: 800,
+                },
+            },
         },
         toast: ToastConfig {
             flash_ttl_secs: 4,

@@ -23,8 +23,11 @@ mod title;
 mod track_table;
 
 use crate::components::layout::shared::cover_image;
+use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::text::display_width;
 use crate::render::theme::Theme;
+use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
 
@@ -680,12 +683,31 @@ fn draw_track_list(
         return;
     }
     let cols = cols.for_width(area.width);
+    let widths = cols.widths();
+    // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
+    // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
+    let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
+    let title_w = resolve_column_widths(
+        area.width,
+        &widths,
+        display_width(track_table::HIGHLIGHT_SYMBOL),
+    )
+    .get(2)
+    .copied()
+    .unwrap_or(0);
+    let sel = paint.list.sel();
     let rows = songs.iter().enumerate().map(|(idx, s)| {
         let loved = state.is_liked(s);
         let is_current = state.player.current.as_ref().is_some_and(|c| c.id == s.id);
-        track_table::track_row(s, idx, loved, is_current, cols, theme)
+        let marquee = row_marquee(
+            idx == sel,
+            &marquee_ctx,
+            Slot::SearchDetailSelected,
+            title_w,
+        );
+        track_table::track_row(s, idx, loved, is_current, cols, theme, marquee)
     });
-    let table = Table::new(rows, cols.widths())
+    let table = Table::new(rows, widths)
         .header(track_table::header_row(cols, theme))
         .row_highlight_style(track_table::highlight_style(theme))
         .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);

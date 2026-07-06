@@ -21,7 +21,10 @@ mod theme;
 mod toast;
 mod window_title;
 
-pub use animation::{AnimationConfig, MenuReveal, SearchFocusTransition, SweepStyle};
+pub use animation::{
+    AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode,
+    MenuReveal, SearchFocusTransition, SweepStyle,
+};
 pub use audio::{AudioConfig, BackendKind};
 pub use behavior::{BehaviorConfig, TrackPosMemory};
 pub use cache::CacheConfig;

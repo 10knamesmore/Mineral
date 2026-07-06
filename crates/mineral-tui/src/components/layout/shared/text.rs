@@ -1,7 +1,7 @@
 //! 文本渲染小工具：CJK 双宽感知的字符 / 字符串宽度、歌名别名后缀 span。
 
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::render::theme::Theme;
@@ -25,28 +25,6 @@ pub(crate) fn char_width(ch: char) -> u16 {
 ///   可直接 `extend` 进 title spans 的后缀；无别名给 `None`。
 pub(crate) fn alias_span(alias: Option<&str>, theme: &Theme) -> Option<Span<'static>> {
     alias.map(|a| Span::styled(format!(" ({a})"), Style::new().fg(theme.overlay)))
-}
-
-/// 「纯歌名 + 可选别名后缀」组装成一行：`name (alias)`（`name` 用 `name_style`，别名走
-/// [`alias_span`] 暗色）。曲目表 / 搜索结果 / 播放栏 / 队列等无搜索高亮的歌名渲染点共用；
-/// 带搜索高亮的基座（library 表）自行在高亮 spans 后 `extend(alias_span(..))`。
-///
-/// # Params:
-///   - `name`: 歌名
-///   - `name_style`: 歌名主体样式
-///   - `alias`: [`Song::alias`](mineral_model::Song)，`None` 时无后缀
-///
-/// # Return:
-///   `name` 与别名后缀拼成的 [`Line`]。
-pub(crate) fn title_with_alias(
-    name: &str,
-    name_style: Style,
-    alias: Option<&str>,
-    theme: &Theme,
-) -> Line<'static> {
-    let mut spans = vec![Span::styled(name.to_owned(), name_style)];
-    spans.extend(alias_span(alias, theme));
-    Line::from(spans)
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ use mineral_model::{LyricLine, Lyrics};
 
 use crate::components::layout::browse::spectrum::SpectrumState;
 use crate::render::anim::{Toggle, ticks16_from_ms};
+use crate::runtime::marquee::Marquees;
 use crate::runtime::playback::Playback;
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -177,6 +178,9 @@ pub struct AppState {
     /// 各源能力声明镜像(启动时从 server 拉一次)。UI 据此决定渲染哪些入口
     /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
     pub caps: FxHashMap<SourceKind, mineral_channel_core::ChannelCaps>,
+
+    /// 溢出标题滚动(marquee)的槽相位状态(节奏来自配置 `animation.marquee_*`)。
+    pub(crate) marquees: Marquees,
 }
 
 impl AppState {
@@ -211,6 +215,7 @@ impl AppState {
                 by_lane: FxHashMap::default(),
                 by_kind: FxHashMap::default(),
             },
+            marquees: Marquees::from_config(anim.marquee(), tick_ms),
             cfg,
             frame_area: std::cell::Cell::new(Rect::default()),
             caps: FxHashMap::default(),
@@ -226,6 +231,17 @@ impl AppState {
     /// 终端是否持有输入焦点。从 [`Self::dim`] 反读(变灰 = 未聚焦);上报 daemon 用。
     pub fn focused(&self) -> bool {
         !self.dim.on()
+    }
+
+    /// 推进一帧的各动画 / 相位状态(主循环每 tick 恰调一次):视图切换扫入、全屏形变、
+    /// 搜索布局、marquee 相位、失焦渐变、歌词滚动。
+    pub fn tick_frame(&mut self) {
+        self.browse.view.tick();
+        self.browse.fullscreen.tick();
+        self.channel_search.tick();
+        self.marquees.tick();
+        self.dim.tick();
+        self.tick_lyric_scroll();
     }
 
     /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。

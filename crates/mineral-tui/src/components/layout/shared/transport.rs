@@ -9,13 +9,21 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::components::layout::shared::text::title_with_alias;
+use crate::components::layout::shared::marquee::MarqueeCtx;
+use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::{format_ms, format_ms_opt};
+use crate::runtime::marquee::Slot;
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pb: &Playback,
+    marquee: &MarqueeCtx<'_>,
+    theme: &Theme,
+) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -38,26 +46,34 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     ])
     .areas(inner);
 
-    paint_now(frame, now, pb, theme);
+    paint_now(frame, now, pb, marquee, theme);
     paint_meta(frame, meta, pb, theme);
     paint_progress(frame, prog, pb, theme);
     paint_controls(frame, ctrl, pb, theme);
     paint_vol_mode(frame, vms, pb, theme);
 }
 
-/// transport 顶行:居中显示当前曲名(无歌时 `—`),带别名时后缀暗色 ` (alias)`。
-fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+/// transport 顶行:居中显示当前曲名(无歌时 `—`),带别名时后缀暗色 ` (alias)`;
+/// 溢出按 marquee 相位循环滚动(溢出时切片恰满行宽,居中对齐退化为贴满)。
+fn paint_now(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pb: &Playback,
+    marquee: &MarqueeCtx<'_>,
+    theme: &Theme,
+) {
     if area.height == 0 {
         return;
     }
-    let title = pb.track.as_ref().map_or("—", |t| t.name.as_str());
-    let alias = pb.track.as_ref().and_then(|t| t.alias.as_deref());
-    let line = title_with_alias(
-        title,
-        Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-        alias,
-        theme,
-    );
+    let name_style = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
+    let line = match pb.track.as_ref() {
+        None => Line::from(Span::styled("—", name_style)),
+        Some(t) => {
+            let mut spans = vec![Span::styled(t.name.clone(), name_style)];
+            spans.extend(alias_span(t.alias.as_deref(), theme));
+            marquee.line(spans, Slot::Transport, &t.id.qualified(), area.width)
+        }
+    };
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
@@ -403,9 +419,61 @@ mod tests {
     use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
 
     use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
+    use crate::components::layout::shared::marquee::MarqueeCtx;
     use crate::render::theme::Theme;
+    use crate::runtime::marquee::Marquees;
     use crate::runtime::playback::{Playback, PlaybackOrigin};
     use crate::test_support::{song, with_duration, with_name};
+
+    /// 静止相位(停顿拉满)的 marquee 状态——本组多数测试关注点不在滚动。
+    fn still_marquees() -> Marquees {
+        Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ u32::MAX)
+    }
+
+    /// 测试用 marquee 上下文(gap 取默认配置同款,fade 关)。
+    fn ctx(m: &Marquees) -> MarqueeCtx<'_> {
+        MarqueeCtx {
+            marquees: m,
+            gap: "  ✦  ",
+            gap_style: ratatui::style::Style::new(),
+            fade_to: ratatui::style::Color::Reset,
+            fade_cols: 3,
+        }
+    }
+
+    /// 长曲名溢出:顶行按 marquee 相位滚动——推进拍数后开头滚出、窗口从对应列起。
+    #[test]
+    fn transport_long_title_marquees() -> color_eyre::Result<()> {
+        let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
+        let mut pb = Playback::new();
+        pb.track = Some(with_name(
+            song("1"),
+            "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz",
+        ));
+        let render = |mq: &Marquees| -> color_eyre::Result<String> {
+            let mut t = Terminal::new(TestBackend::new(50, 8))?;
+            t.draw(|f| super::draw(f, f.area(), &pb, &ctx(mq), &Theme::default()))?;
+            let buf = t.backend().buffer();
+            // y=1:边框内顶行(now-line)。
+            Ok((0..buf.area.width)
+                .filter_map(|x| buf.cell((x, 1)).map(ratatui::buffer::Cell::symbol))
+                .collect::<String>())
+        };
+        let first = render(&mq)?;
+        assert!(
+            first.trim_start_matches('│').starts_with("abcdef"),
+            "建档帧应从开头显示: {first}"
+        );
+        for _ in 0..3 {
+            mq.tick();
+        }
+        let scrolled = render(&mq)?;
+        assert!(
+            scrolled.trim_start_matches('│').starts_with("defghi"),
+            "推进 3 拍后应从第 4 列字符起显示: {scrolled}"
+        );
+        Ok(())
+    }
 
     /// 造一个「播放中 + 指定来源 + PlayUrl」的 Playback,供来源徽标快照。
     fn pb_with_origin(
@@ -561,7 +629,8 @@ mod tests {
             /*bit_depth*/ Some(24),
         );
         pb.sample_rate_hz = 96_000;
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!(
             "播放栏:fmt 含位深+采样率(flac 24bit/96kHz)",
             t.backend()
@@ -574,7 +643,8 @@ mod tests {
     fn transport_no_track_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let pb = Playback::new();
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:无曲目空态", t.backend());
         Ok(())
     }
@@ -591,7 +661,8 @@ mod tests {
         pb.position_ms = 60_000;
         pb.playing = true;
         pb.volume_pct = 80;
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!(
             "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)",
             t.backend()
@@ -606,7 +677,8 @@ mod tests {
         let mut pb = Playback::new();
         pb.track = Some(mineral_test::aliased_song());
         pb.playing = true;
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:曲名带别名,后缀暗色 (alias)", t.backend());
         Ok(())
     }
@@ -622,7 +694,8 @@ mod tests {
         ));
         pb.position_ms = 30_000;
         pb.playing = false;
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!(
             "播放栏:暂停 + 长歌名(TheLastWordIsRejoice)",
             t.backend()
@@ -642,7 +715,8 @@ mod tests {
         ));
         pb.position_ms = 60_000;
         pb.playing = true;
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!(
             "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
             t.backend()
@@ -681,7 +755,8 @@ mod tests {
         pb.volume_pct = 80;
         pb.prefetch.ready = true;
         pb.prefetch.buffered_bps = Bps::new(4_000);
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:gapless prefetch 标记(⏭ 右侧 ⇣)", t.backend());
         Ok(())
     }
@@ -694,7 +769,8 @@ mod tests {
         /// 渲染一帧,取 `⇣` cell 的前景色(无标记则 None)。
         fn marker_fg(pb: &Playback, theme: &Theme) -> color_eyre::Result<Option<Color>> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
-            t.draw(|f| super::draw(f, f.area(), pb, theme))?;
+            let mq = still_marquees();
+            t.draw(|f| super::draw(f, f.area(), pb, &ctx(&mq), theme))?;
             Ok(t.backend()
                 .buffer()
                 .content
@@ -750,7 +826,8 @@ mod tests {
             Some(999_000),
             /*bit_depth*/ None,
         );
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 download(↓ 绿)", t.backend());
         Ok(())
     }
@@ -765,7 +842,8 @@ mod tests {
             Some(999_000),
             /*bit_depth*/ None,
         );
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 cache(◆ 蓝)", t.backend());
         Ok(())
     }
@@ -780,7 +858,8 @@ mod tests {
             Some(320_000),
             /*bit_depth*/ None,
         );
-        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
         Ok(())
     }
@@ -796,7 +875,8 @@ mod tests {
         pb.position_ms = 60_000; // ≈26.7% 已播
         pb.playing = true;
         pb.buffered_bps = Bps::new(6_000); // 60% 已缓冲:介于已播与满之间 → 亮暗两段都该出现
-        t.draw(|f| super::draw(f, f.area(), &pb, &theme))?;
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &theme))?;
 
         // 圆角边框的上下边也是 `─` 且同为 surface1,故不能全局扫字形。先用唯一的填充字符
         // `━` 定位进度条所在行,只在该行内取 `─` 轨道,避开边框。

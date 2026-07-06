@@ -303,11 +303,7 @@ impl App {
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
-                self.state.browse.view.tick();
-                self.state.browse.fullscreen.tick();
-                self.state.channel_search.tick();
-                self.state.dim.tick();
-                self.state.tick_lyric_scroll();
+                self.state.tick_frame();
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.player.versions);
                 self.apply_player_sync(sync);

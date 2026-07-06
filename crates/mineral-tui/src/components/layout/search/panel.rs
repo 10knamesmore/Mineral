@@ -11,13 +11,15 @@ use unicode_width::UnicodeWidthStr;
 use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
+use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
-use crate::components::layout::shared::text::title_with_alias;
+use crate::components::layout::shared::text::alias_span;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::format::format_ms_opt;
+use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
@@ -318,7 +320,15 @@ pub fn draw_results(
         }
         return;
     };
-    let (header, rows, widths) = result_table(&kr.results, theme);
+    let (header, rows, widths) = result_table(
+        &kr.results,
+        kr.list().sel(),
+        // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
+        // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
+        &MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0),
+        inner.width,
+        theme,
+    );
     // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
     // 焦点在结果列 → accent 亮;否则暗调(surface0 底 + subtext 字,无 BOLD),示意可回位。
     let highlight = if rs.focus == SearchFocus::Results {
@@ -390,6 +400,9 @@ fn draw_centered_hint(frame: &mut Frame<'_>, inner: Rect, text: &str, theme: &Th
 /// 列为裸数字,含义由表头说明(同 library 约定),省去逐行重复单位词。
 fn result_table(
     payload: &SearchPayload,
+    sel: usize,
+    marquee: &MarqueeCtx<'_>,
+    inner_w: u16,
     theme: &Theme,
 ) -> (Vec<Cell<'static>>, Vec<Row<'static>>, Vec<Constraint>) {
     let main = Style::new().fg(theme.text);
@@ -398,11 +411,34 @@ fn result_table(
     match payload {
         // 歌曲:标题 · 艺人 · 时长。
         SearchPayload::Songs(songs) => {
+            let widths = vec![
+                Constraint::Fill(3),
+                Constraint::Fill(2),
+                Constraint::Length(5),
+            ];
+            // highlight_symbol "▌ " 恒占 2 列;title 是第 0 列。
+            let title_w = resolve_column_widths(inner_w, &widths, 2)
+                .first()
+                .copied()
+                .unwrap_or(0);
             let rows = songs
                 .iter()
-                .map(|s| {
+                .enumerate()
+                .map(|(idx, s)| {
+                    let mut title_spans = vec![Span::styled(s.name.clone(), main)];
+                    title_spans.extend(alias_span(s.alias.as_deref(), theme));
+                    let title_cell = if idx == sel {
+                        Cell::from(marquee.line(
+                            title_spans,
+                            Slot::SearchResults,
+                            &s.id.qualified(),
+                            title_w,
+                        ))
+                    } else {
+                        Cell::from(Line::from(title_spans))
+                    };
                     let row = Row::new(vec![
-                        Cell::from(title_with_alias(&s.name, main, s.alias.as_deref(), theme)),
+                        title_cell,
                         Cell::from(Span::styled(join_artists(&s.artists), sub)),
                         Cell::from(Span::styled(format_ms_opt(s.duration_ms), meta)),
                     ]);
@@ -416,11 +452,7 @@ fn result_table(
             (
                 vec![Cell::from("title"), Cell::from("artist"), Cell::from("len")],
                 rows,
-                vec![
-                    Constraint::Fill(3),
-                    Constraint::Fill(2),
-                    Constraint::Length(5),
-                ],
+                widths,
             )
         }
         // 专辑:专辑名 · 艺人 · 曲目数(表头标 tracks)。列表投影拿不到曲目数时画 `-`(未知,非
@@ -521,12 +553,69 @@ mod tests {
     use ratatui::layout::Rect;
     use rustc_hash::FxHashMap;
 
+    use crate::components::layout::shared::marquee::MarqueeCtx;
     use crate::render::theme::{Theme, resolve_source_color};
+    use crate::runtime::marquee::{Marquees, Slot};
     use crate::runtime::state::{PromptSegment, SearchPage};
+
+    /// 测试用 marquee 上下文(gap 取默认配置同款,fade 关)。
+    fn marquee_ctx(m: &Marquees) -> MarqueeCtx<'_> {
+        MarqueeCtx {
+            marquees: m,
+            gap: "  ✦  ",
+            gap_style: ratatui::style::Style::new(),
+            fade_to: ratatui::style::Color::Reset,
+            fade_cols: 3,
+        }
+    }
 
     use super::{
         chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens, result_position_label,
     };
+
+    /// 选中的歌曲结果行:title 溢出按 marquee 相位滚动,推进拍数后从对应列起显示。
+    #[test]
+    fn song_result_selected_row_marquees() -> color_eyre::Result<()> {
+        use mineral_task::SearchPayload;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Table;
+
+        use crate::test_support::{song, with_name};
+
+        let theme = Theme::default();
+        let payload = SearchPayload::Songs(vec![with_name(
+            song("1"),
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        )]);
+        let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
+        let render = |mq: &Marquees| -> color_eyre::Result<String> {
+            let (_header, rows, widths) = super::result_table(
+                &payload,
+                /*sel*/ 0,
+                &marquee_ctx(mq),
+                /*inner_w*/ 40,
+                &theme,
+            );
+            let mut t = Terminal::new(TestBackend::new(40, 1))?;
+            t.draw(|f| f.render_widget(Table::new(rows, widths), f.area()))?;
+            let buf = t.backend().buffer();
+            Ok((0..buf.area.width)
+                .filter_map(|x| buf.cell((x, 0)).map(ratatui::buffer::Cell::symbol))
+                .collect::<String>())
+        };
+        assert!(render(&mq)?.starts_with("abcdef"), "建档帧应从歌名开头显示");
+        for _ in 0..4 {
+            mq.tick();
+        }
+        let scrolled = render(&mq)?;
+        assert!(
+            scrolled.starts_with("efghij"),
+            "推进 4 拍后应从第 5 字符起: {scrolled}"
+        );
+        let _ = Slot::SearchResults; // 槽由 result_table 内部选,此测试无需直接引用
+        Ok(())
+    }
 
     /// 歌曲结果行:带别名的歌名后缀暗色 ` (alias)`(overlay),无别名行无后缀。
     #[test]
@@ -540,7 +629,14 @@ mod tests {
             mineral_test::aliased_song(),
             mineral_test::song("Plain"),
         ]);
-        let (_header, rows, widths) = super::result_table(&payload, &theme);
+        let still = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ u32::MAX);
+        let (_header, rows, widths) = super::result_table(
+            &payload,
+            /*sel*/ 0,
+            &marquee_ctx(&still),
+            /*inner_w*/ 50,
+            &theme,
+        );
         let mut t = Terminal::new(TestBackend::new(50, 2))?;
         t.draw(|f| f.render_widget(Table::new(rows, widths), f.area()))?;
         let buf = t.backend().buffer();

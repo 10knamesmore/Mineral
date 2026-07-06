@@ -50,6 +50,65 @@ pub struct AnimationConfig {
     /// loading 占位的旋转 spinner 帧(逐帧循环画;search「searching」/ detail 数据未到共用)。
     /// 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
     spinner_frames: Vec<String>,
+
+    /// 溢出标题滚动(marquee)段。
+    marquee: MarqueeConfig,
+}
+
+/// 溢出标题滚动(marquee)配置。
+///
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
+#[config_section]
+pub struct MarqueeConfig {
+    /// 滚动方式(循环 / 来回往返 / 关闭)。
+    mode: MarqueeMode,
+
+    /// 每前进 1 列的毫秒;越小滚越快。
+    step_ms: u32,
+
+    /// 起步 / 选中切换后的停顿毫秒(先读到开头再开滚)。
+    pause_ms: u32,
+
+    /// 滚动窗口边缘 fade 的渐入毫秒(相位重置起缓升到满强度);0 = 关闭边缘 fade。
+    fade_ms: u32,
+
+    /// 边缘 fade 的空间宽度(列):窗口两侧各这么多列内逐级变暗。
+    fade_cols: u16,
+
+    /// 循环方式(`mode = "loop"`)独有段。
+    #[serde(rename = "loop")]
+    loop_: MarqueeLoopConfig,
+
+    /// 往返方式(`mode = "bounce"`)独有段。
+    bounce: MarqueeBounceConfig,
+}
+
+/// 溢出标题循环滚动(`mode = "loop"`)独有配置。
+#[config_section]
+pub struct MarqueeLoopConfig {
+    /// 循环拼接处的分隔串;空串 = 首尾直接相接。
+    gap: String,
+}
+
+/// 溢出标题往返滚动(`mode = "bounce"`)独有配置。
+#[config_section]
+pub struct MarqueeBounceConfig {
+    /// 到达两端后的停顿毫秒(读完首 / 尾再折返);0 = 不停顿直接折返。
+    edge_pause_ms: u32,
+}
+
+/// 溢出标题的滚动方式。不依赖渲染 crate;接线处映射到具体实现。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MarqueeMode {
+    /// 循环滚动:文本首尾相接(中间夹 `gap`)向左匀速循环。
+    Loop,
+
+    /// 来回往返:滚到末尾后反向滚回开头,不拼接 `gap`。
+    Bounce,
+
+    /// 关闭:溢出标题维持静态截断,不滚动。
+    Off,
 }
 
 /// Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。

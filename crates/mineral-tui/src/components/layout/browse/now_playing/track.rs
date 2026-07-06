@@ -9,8 +9,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
 
 use crate::components::layout::shared::cover_image;
+use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
+use crate::runtime::marquee::Slot;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
@@ -101,6 +103,14 @@ pub fn draw(
         .as_deref()
         .map(|a| format!(" ({a})"))
         .unwrap_or_default();
-    let strip = Line::from(format!(" ▶ {}{alias} — {artist} ", sv.data.name)).style(style);
+    let strip = MarqueeCtx::new(state, theme, /*fade_to*/ theme.base).line(
+        vec![Span::styled(
+            format!(" ▶ {}{alias} — {artist} ", sv.data.name),
+            style,
+        )],
+        Slot::NowPlaying,
+        &sv.data.id.qualified(),
+        current_strip.width,
+    );
     frame.render_widget(Paragraph::new(strip), current_strip);
 }

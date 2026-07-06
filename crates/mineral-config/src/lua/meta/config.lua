@@ -239,6 +239,25 @@
 ---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
 ---@field menu_reveal? "morph"|"directional" 弹出菜单进场:"morph" = 从锚点行形变;"directional" = 贴边方向性揭开
 ---@field spinner_frames? string[] loading 旋转占位帧(逐帧循环;默认 braille 一周);空数组 = 只留文案不画字形
+---@field marquee? mineral.MarqueeConfig 溢出标题滚动(选中行 / 播放栏长歌名)
+
+---溢出标题滚动(marquee)。
+---@class mineral.MarqueeConfig
+---@field mode? "loop"|"bounce"|"off" 滚动方式:"loop" 循环 | "bounce" 来回往返 | "off" 关闭(维持静态截断)
+---@field step_ms? integer 每前进 1 列的毫秒;越小滚越快
+---@field pause_ms? integer 起步 / 选中切换后的停顿毫秒
+---@field fade_ms? integer 滚动窗口边缘 fade 的渐入毫秒;0 = 关闭边缘 fade
+---@field fade_cols? integer 边缘 fade 的空间宽度(列):窗口两侧各这么多列内逐级变暗
+---@field loop? mineral.MarqueeLoopConfig 循环方式独有参数
+---@field bounce? mineral.MarqueeBounceConfig 往返方式独有参数
+
+---溢出标题循环滚动独有参数。
+---@class mineral.MarqueeLoopConfig
+---@field gap? string 循环拼接处的分隔串;"" = 首尾直接相接
+
+---溢出标题往返滚动独有参数。
+---@class mineral.MarqueeBounceConfig
+---@field edge_pause_ms? integer 到达两端后的停顿毫秒(读完首/尾再折返);0 = 直接折返
 
 ---顶栏通知。
 ---@class mineral.ToastConfig

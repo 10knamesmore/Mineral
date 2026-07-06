@@ -8,14 +8,18 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Row, Table};
 
+use crate::components::layout::shared::marquee::{
+    MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
+};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
-use crate::components::layout::shared::text::title_with_alias;
+use crate::components::layout::shared::text::alias_span;
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
 use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::action::Action;
 use crate::runtime::format::format_ms_opt;
+use crate::runtime::marquee::Slot;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::AppState;
@@ -121,6 +125,16 @@ impl Overlay for QueueOverlay {
         let header = Row::new(cols.header_cells())
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
+        let widths = cols.widths();
+        // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
+        // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
+        let marquee_ctx = MarqueeCtx::new(ctx, theme, /*fade_to*/ theme.surface0);
+        // highlight_symbol "▌ " 恒占 2 列;title 是第 1 列(# 之后)。
+        let title_w = resolve_column_widths(inner.width, &widths, 2)
+            .get(1)
+            .copied()
+            .unwrap_or(0);
+        let sel = self.list.sel();
         let rows: Vec<Row<'_>> = ctx
             .player
             .queue
@@ -128,11 +142,10 @@ impl Overlay for QueueOverlay {
             .enumerate()
             .map(|(i, s)| {
                 let index_fg = resolve_source_color(theme, ctx.cfg.sources(), s.source());
-                build_row(i, s, current_idx, theme, cols, index_fg)
+                let marquee = row_marquee(i == sel, &marquee_ctx, Slot::QueueSelected, title_w);
+                build_row(i, s, current_idx, theme, cols, index_fg, marquee)
             })
             .collect();
-
-        let widths = cols.widths();
 
         let table = Table::new(rows, widths)
             .header(header)
@@ -260,6 +273,7 @@ fn build_row<'a>(
     theme: &Theme,
     cols: QueueCols,
     index_fg: ratatui::style::Color,
+    marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
     let is_current = current_idx == Some(idx);
     let (lead, title_fg, sub_fg) = if is_current {
@@ -276,15 +290,16 @@ fn build_row<'a>(
         )
     };
 
-    let mut cells = vec![
-        Cell::from(lead),
-        Cell::from(title_with_alias(
-            &s.name,
-            Style::new().fg(title_fg),
-            s.alias.as_deref(),
-            theme,
-        )),
-    ];
+    let mut title_spans = vec![Span::styled(s.name.clone(), Style::new().fg(title_fg))];
+    title_spans.extend(alias_span(s.alias.as_deref(), theme));
+    let title_cell = match marquee {
+        Some(m) => Cell::from(
+            m.ctx
+                .line(title_spans, m.slot, &s.id.qualified(), m.title_w),
+        ),
+        None => Cell::from(Line::from(title_spans)),
+    };
+    let mut cells = vec![Cell::from(lead), title_cell];
     if matches!(cols, QueueCols::Full) {
         let artist = s
             .artists

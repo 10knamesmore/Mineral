@@ -5,10 +5,13 @@
 //! [`Event::ScriptReloaded`](mineral_protocol::Event::ScriptReloaded) 触发
 //! (见 `App::refresh_script_binds`),那才是 bind 表就绪的权威信号。
 //!
-//! 范围:本期热应用 **keys / behavior(keymap)、theme 与窗口标题**;构造期参数
-//! (动画时长 / toast TTL / 布局等)不热应用,重启生效。
+//! 范围:热应用 **keys / behavior(keymap)、theme、窗口标题与 marquee 节奏**
+//! (marquee 是折算成拍的快照,靠整体重建生效);其余构造期参数(动画时长 /
+//! toast TTL / 布局等)不热应用,重启生效。
 
 use std::time::{Duration, Instant, SystemTime};
+
+use crate::runtime::marquee::Marquees;
 
 /// mtime 轮询间隔(独立于帧率:配置文件是人手保存,1s 粒度足够)。
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -169,8 +172,10 @@ impl crate::app::App {
         self.state.cfg = cfg;
         self.window_title =
             crate::runtime::window_title::WindowTitle::new(self.state.cfg.tui().window_title());
+        let anim = self.state.cfg.tui().animation();
+        self.state.marquees = Marquees::from_config(anim.marquee(), *anim.frame_tick_ms());
         self.rebuild_keymap();
-        mineral_log::info!(target: "tui", "配置已重载(keymap / theme / 窗口标题)");
+        mineral_log::info!(target: "tui", "配置已重载(keymap / theme / 窗口标题 / marquee)");
         self.notifications
             .flash(tinted_text_item("配置已重载".to_owned(), TextTint::Normal));
     }
@@ -232,6 +237,70 @@ mod tests {
         );
         assert_ne!(app.theme.accent, old_accent, "主题热应用");
         assert!(app.notifications.entry_count() >= 1, "应有重载提示");
+        Ok(())
+    }
+
+    /// marquee 节奏随配置热重载:mode 改 off,reload 后溢出标题恒零相位
+    /// (证明 Marquees 用新配置重建了,而非沿用启动折算的快照)。
+    #[test]
+    fn reload_rebuilds_marquee_tempo() -> color_eyre::Result<()> {
+        use crate::runtime::marquee::Slot;
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            r#"return { tui = { animation = { marquee = { mode = "off" } } } }"#,
+        )?;
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        // 默认 loop:溢出 + 推进足量后相位应非零(默认 pause 100ms/16ms ≈ 7 拍)。
+        for _ in 0..200 {
+            app.state.marquees.tick();
+        }
+        let scrolled = app
+            .state
+            .marquees
+            .phase(
+                Slot::Transport,
+                "a",
+                /*content_w*/ 40,
+                /*window_w*/ 10,
+                /*gap_w*/ 2,
+            )
+            .offset;
+        // 建档在首查,再推进一轮令相位走起来。
+        for _ in 0..200 {
+            app.state.marquees.tick();
+        }
+        let scrolled = scrolled.max(
+            app.state
+                .marquees
+                .phase(
+                    Slot::Transport,
+                    "a",
+                    /*content_w*/ 40,
+                    /*window_w*/ 10,
+                    /*gap_w*/ 2,
+                )
+                .offset,
+        );
+        assert!(scrolled > 0, "重载前默认 loop 应在滚动");
+        app.reload_config_from(&path);
+        for _ in 0..200 {
+            app.state.marquees.tick();
+        }
+        let after = app
+            .state
+            .marquees
+            .phase(
+                Slot::Transport,
+                "a",
+                /*content_w*/ 40,
+                /*window_w*/ 10,
+                /*gap_w*/ 2,
+            )
+            .offset;
+        assert_eq!(after, 0, "重载为 off 后应恒零相位");
         Ok(())
     }
 

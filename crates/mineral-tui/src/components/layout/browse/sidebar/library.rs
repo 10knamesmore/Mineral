@@ -10,10 +10,14 @@ use mineral_model::SourceKind;
 
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
+use crate::components::layout::shared::marquee::{
+    MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
+};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
+use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
@@ -138,17 +142,28 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let header = Row::new(layout.header_cells())
         .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
+    let widths = layout.widths();
+    // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
+    // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
+    let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
+    // Table 带边框 block:列在 inner(左右各 -1)上求解;选中符 "▌ " 恒占 2 列。
+    let title_w = resolve_column_widths(area.width.saturating_sub(2), &widths, 2)
+        .get(2)
+        .copied()
+        .unwrap_or(0);
+    let sel = state.browse.nav.track.sel();
     let rows: Vec<Row<'_>> = if let Some(row) = placeholder {
         vec![row]
     } else {
         tracks
             .iter()
             .enumerate()
-            .map(|(i, sv)| build_row(i, sv, state, theme, layout))
+            .map(|(i, sv)| {
+                let marquee = row_marquee(i == sel, &marquee_ctx, Slot::BrowseSelected, title_w);
+                build_row(i, sv, state, theme, layout, marquee)
+            })
             .collect()
     };
-
-    let widths = layout.widths();
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -192,6 +207,7 @@ fn build_row<'a>(
     state: &AppState,
     theme: &Theme,
     layout: TrackLayout,
+    marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
     let is_current = state
         .player
@@ -229,7 +245,13 @@ fn build_row<'a>(
         theme,
     );
     title_spans.extend(alias_span(sv.data.alias.as_deref(), theme));
-    let title_cell = Cell::from(Line::from(title_spans));
+    let title_cell = match marquee {
+        Some(m) => Cell::from(
+            m.ctx
+                .line(title_spans, m.slot, &sv.data.id.qualified(), m.title_w),
+        ),
+        None => Cell::from(Line::from(title_spans)),
+    };
 
     let len = format_ms_opt(sv.data.duration_ms);
 

@@ -11,7 +11,8 @@ use ratatui::widgets::{Cell, Row};
 
 use mineral_model::Song;
 
-use crate::components::layout::shared::text::title_with_alias;
+use crate::components::layout::shared::marquee::RowMarquee;
+use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 
@@ -119,6 +120,7 @@ fn num_cell(idx: usize, is_current: bool, theme: &Theme) -> Cell<'static> {
 ///   - `loved`: 是否已收藏（♥）
 ///   - `is_current`: 是否当前在播（♫）
 ///   - `cols`: 中间列选择
+///   - `marquee`: title 溢出滚动接线(仅光标选中行 `Some`,其余行截断)
 pub fn track_row(
     song: &Song,
     idx: usize,
@@ -126,16 +128,21 @@ pub fn track_row(
     is_current: bool,
     cols: TrackColumns,
     theme: &Theme,
+    marquee: Option<RowMarquee<'_>>,
 ) -> Row<'static> {
+    let mut title_spans = vec![Span::styled(song.name.clone(), Style::new().fg(theme.text))];
+    title_spans.extend(alias_span(song.alias.as_deref(), theme));
+    let title_cell = match marquee {
+        Some(m) => Cell::from(
+            m.ctx
+                .line(title_spans, m.slot, &song.id.qualified(), m.title_w),
+        ),
+        None => Cell::from(Line::from(title_spans)),
+    };
     let mut cells = vec![
         love_cell(loved, theme),
         num_cell(idx, is_current, theme),
-        Cell::from(title_with_alias(
-            &song.name,
-            Style::new().fg(theme.text),
-            song.alias.as_deref(),
-            theme,
-        )),
+        title_cell,
     ];
     if cols.artist {
         let artist = song
@@ -190,9 +197,11 @@ mod tests {
         let rows = vec![
             super::track_row(
                 &normal, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
+                /*marquee*/ None,
             ),
             super::track_row(
                 &grey, 1, /*loved*/ false, /*is_current*/ false, cols, &theme,
+                /*marquee*/ None,
             ),
         ];
         let mut t = Terminal::new(TestBackend::new(40, 4))?;
@@ -220,6 +229,7 @@ mod tests {
         let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
         let rows = vec![super::track_row(
             &song, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
+            /*marquee*/ None,
         )];
         let mut t = Terminal::new(TestBackend::new(40, 2))?;
         t.draw(|f| f.render_widget(Table::new(rows, cols.widths()), f.area()))?;
@@ -238,6 +248,71 @@ mod tests {
         };
         assert_eq!(fg_of("("), Some(theme.overlay), "别名后缀应为 overlay 暗色");
         assert_eq!(fg_of("迷"), Some(theme.text), "主名应保持 text 色");
+        Ok(())
+    }
+
+    /// 传 marquee 的行:title 溢出按相位滚动,推进拍数后从对应列起显示;
+    /// title 列宽经 resolve_column_widths 解算,与 Table 实际列边界一致。
+    #[test]
+    fn marquee_row_title_scrolls() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Table;
+
+        use crate::components::layout::shared::marquee::{
+            MarqueeCtx, RowMarquee, resolve_column_widths,
+        };
+        use crate::render::theme::Theme;
+        use crate::runtime::marquee::{Marquees, Slot};
+        use crate::test_support::{song, with_name};
+
+        let theme = Theme::default();
+        let long = with_name(song("1"), "abcdefghijklmnopqrstuvwxyz0123456789");
+        let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
+        let widths = cols.widths();
+        // 测试渲染无 TableState 选中 → selection_w 0。
+        let title_w = resolve_column_widths(/*total_w*/ 40, &widths, /*selection_w*/ 0)
+            .get(2)
+            .copied()
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺 title 列"))?;
+        let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
+        let render = |mq: &Marquees| -> color_eyre::Result<String> {
+            let ctx = MarqueeCtx {
+                marquees: mq,
+                gap: "  ✦  ",
+                gap_style: ratatui::style::Style::new(),
+                fade_to: ratatui::style::Color::Reset,
+                fade_cols: 3,
+            };
+            let rows = vec![super::track_row(
+                &long,
+                0,
+                /*loved*/ false,
+                /*is_current*/ false,
+                cols,
+                &theme,
+                Some(RowMarquee {
+                    ctx: &ctx,
+                    slot: Slot::BrowseSelected,
+                    title_w,
+                }),
+            )];
+            let mut t = Terminal::new(TestBackend::new(40, 1))?;
+            t.draw(|f| f.render_widget(Table::new(rows, widths.clone()), f.area()))?;
+            let buf = t.backend().buffer();
+            Ok((0..buf.area.width)
+                .filter_map(|x| buf.cell((x, 0)).map(ratatui::buffer::Cell::symbol))
+                .collect::<String>())
+        };
+        assert!(render(&mq)?.contains("abcdef"), "建档帧应从歌名开头显示");
+        for _ in 0..4 {
+            mq.tick();
+        }
+        let scrolled = render(&mq)?;
+        assert!(
+            scrolled.contains("efghij") && !scrolled.contains("abcd"),
+            "推进 4 拍后应从第 5 字符起、开头滚出: {scrolled}"
+        );
         Ok(())
     }
 

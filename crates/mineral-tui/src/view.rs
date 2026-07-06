@@ -14,6 +14,7 @@ use crate::components::layout::search::{detail, panel};
 use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
+use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::{cover_image, top_status, transform, transport};
 use crate::runtime::state::SearchFocus;
 
@@ -85,7 +86,13 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     if let Some(spec) = areas.spectrum {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
-    transport::draw(frame, areas.transport, &app.state.playback, theme);
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        theme,
+    );
 }
 
 /// Search 布局:prompt 框接管顶行(稳态无 status bar;morph 收缩中途 browse 顶栏短暂可见),其下
@@ -178,7 +185,13 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     if let Some(prompt) = areas.search_prompt {
         panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
     }
-    transport::draw(frame, areas.transport, &app.state.playback, theme);
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        theme,
+    );
 }
 
 /// 焦点对应的面板矩形(prompt 行 / results 左 / detail 右);该面板在当前端点不存在为 `None`。
@@ -207,7 +220,13 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
-    transport::draw(frame, areas.transport, &app.state.playback, theme);
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        theme,
+    );
     if let Some(c) = areas.cover.and_then(nonempty) {
         draw_fullscreen_cover(frame, c, app);
     }

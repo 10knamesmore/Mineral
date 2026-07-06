@@ -8,6 +8,7 @@ pub mod filter;
 pub mod format;
 pub mod keymap;
 pub(crate) mod line_input;
+pub(crate) mod marquee;
 pub mod playback;
 pub mod prefetch;
 pub(crate) mod reload;
