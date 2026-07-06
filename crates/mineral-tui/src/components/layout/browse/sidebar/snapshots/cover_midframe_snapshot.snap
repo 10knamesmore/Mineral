@@ -1,9 +1,9 @@
 ---
-source: crates/mineral-tui/src/components/sidebar/sweep.rs
+source: crates/mineral-tui/src/components/layout/browse/sidebar/sweep.rs
 description: "Cover 中途:曲目从右覆盖、左缘竖线"
 expression: t.backend()
 ---
-"╭ playlists ────────╭ tracks / EndSerena"
+"╭ playlists ────────╭ ♫ netease tracks /"
 "│  name      source │    #    title     "
 "│▌ EndSerena ♫ netea│    ♫    LoveLetter"
 "│  The Power ♫ netea│▌ ♥ 1    Palisade  "
