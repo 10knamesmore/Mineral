@@ -44,7 +44,9 @@ pub use sources::{
     MineralSection, NeteaseSection, SourcesConfig,
 };
 pub use spectrum::SpectrumConfig;
-pub use theme::{ColorRef, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName};
+pub use theme::{
+    AnsiSlot, ColorRef, ColorValue, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
+};
 pub use toast::ToastConfig;
 pub use window_title::{
     TimeFormat, TimePreset, TitleField, TitleIcons, TitleSegment, WindowTitleConfig,

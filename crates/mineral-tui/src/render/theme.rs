@@ -4,7 +4,7 @@
 //! (`sources.<name>.color`),由 [`SourceColors`] 按 source 名解析(命中走配置色,未配置走中立
 //! 兜底)——不用一个闭合调色枚举强塞进开放的来源集合。
 
-use mineral_config::ColorRef;
+use mineral_config::{AnsiSlot, ColorRef, ColorValue};
 use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier, Style};
 
@@ -75,8 +75,8 @@ impl Theme {
     ///   落地颜色。
     pub fn resolve(&self, cr: &ColorRef) -> Color {
         match cr {
+            ColorRef::Value(v) => color_of_value(*v),
             ColorRef::Token(name) => self.token_by_name(name.as_str()),
-            ColorRef::Hex(h) => Color::Rgb(h.r(), h.g(), h.b()),
         }
     }
 
@@ -88,7 +88,7 @@ impl Theme {
     /// # Return:
     ///   落地后的 [`Theme`]。
     pub fn from_config(cfg: &mineral_config::ThemeConfig) -> Self {
-        let c = |h: &mineral_config::HexColor| Color::Rgb(h.r(), h.g(), h.b());
+        let c = |v: &ColorValue| color_of_value(*v);
         let mut t = Self {
             base: c(cfg.base()),
             mantle: c(cfg.mantle()),
@@ -206,6 +206,53 @@ fn modifier_of(style: mineral_config::TextStyle) -> Modifier {
     }
 }
 
+/// 把配置层的具体色值落地成 ratatui [`Color`]:固定色 → `Rgb`、ANSI 槽 → 具名色
+/// (随终端配色联动)、终端默认 → `Reset`。14 个 token 与 [`ColorRef::Value`] 共用此映射。
+///
+/// # Params:
+///   - `value`: 具体色值
+///
+/// # Return:
+///   落地颜色。
+fn color_of_value(value: ColorValue) -> Color {
+    match value {
+        ColorValue::Hex(h) => Color::Rgb(h.r(), h.g(), h.b()),
+        ColorValue::Ansi(slot) => ansi_color(slot),
+        ColorValue::Reset => Color::Reset,
+    }
+}
+
+/// 16 个 ANSI 槽号 → ratatui 具名色。发经典 SGR(具名变体),由终端当前配色填 RGB。
+///
+/// **注**:ratatui 里槽 7(white)是 `Gray`、槽 15(bright white)是 `White`,别按名字直觉对。
+///
+/// # Params:
+///   - `slot`: ANSI 槽(`index()` 恒 ∈ `0..=15`)
+///
+/// # Return:
+///   对应具名色。
+fn ansi_color(slot: AnsiSlot) -> Color {
+    match slot.index() {
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::Gray,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
+        10 => Color::LightGreen,
+        11 => Color::LightYellow,
+        12 => Color::LightBlue,
+        13 => Color::LightMagenta,
+        14 => Color::LightCyan,
+        // 15;index() 恒 ≤ 15,catch-all 兜类型穷尽。
+        _ => Color::White,
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::mocha_mauve()
@@ -303,6 +350,74 @@ mod tests {
         let t = Theme::from_config(cfg.tui().theme());
         assert_eq!(t.accent, ratatui::style::Color::Rgb(0x10, 0x20, 0x30));
         assert_eq!(t.base, Theme::mocha_mauve().base, "未改 token 不受影响");
+        Ok(())
+    }
+
+    /// 16 个 ANSI 槽经 resolve 落到对应 ratatui 具名色(槽 7=Gray、15=White 别按名字直觉对)。
+    #[test]
+    fn ansi_slots_resolve_to_named_colors() -> color_eyre::Result<()> {
+        use ratatui::style::Color;
+
+        let theme = Theme::mocha_mauve();
+        let cases = [
+            ("black", Color::Black),
+            ("red", Color::Red),
+            ("green", Color::Green),
+            ("yellow", Color::Yellow),
+            ("blue", Color::Blue),
+            ("magenta", Color::Magenta),
+            ("cyan", Color::Cyan),
+            ("white", Color::Gray),
+            ("bright_black", Color::DarkGray),
+            ("bright_red", Color::LightRed),
+            ("bright_green", Color::LightGreen),
+            ("bright_yellow", Color::LightYellow),
+            ("bright_blue", Color::LightBlue),
+            ("bright_magenta", Color::LightMagenta),
+            ("bright_cyan", Color::LightCyan),
+            ("bright_white", Color::White),
+        ];
+        for (name, want) in cases {
+            let cv = serde_json::from_value::<mineral_config::ColorValue>(
+                serde_json::json!({ "ansi": name }),
+            )?;
+            let got = theme.resolve(&mineral_config::ColorRef::Value(cv));
+            assert_eq!(got, want, "ansi {name} 应落到 {want:?}");
+        }
+        Ok(())
+    }
+
+    /// `reset` 具体色经 resolve 落到终端默认(`Color::Reset`)。
+    #[test]
+    fn reset_value_resolves_to_reset() -> color_eyre::Result<()> {
+        let theme = Theme::mocha_mauve();
+        let cv = serde_json::from_value::<mineral_config::ColorValue>(
+            serde_json::json!({ "reset": true }),
+        )?;
+        assert_eq!(
+            theme.resolve(&mineral_config::ColorRef::Value(cv)),
+            ratatui::style::Color::Reset
+        );
+        Ok(())
+    }
+
+    /// from_config 路径:把 token 设成 ansi / reset,落地 Theme 字段随之变(背景跟随终端)。
+    #[test]
+    fn from_config_resolves_ansi_and_reset_tokens() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let user = dir.path().join("config.lua");
+        std::fs::write(
+            &user,
+            r#"return { tui = { theme = {
+                base = { reset = true },
+                mantle = { ansi = "blue" },
+            } } }"#,
+        )?;
+        let (cfg, warnings) = mineral_config::load(&user)?;
+        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
+        let t = Theme::from_config(cfg.tui().theme());
+        assert_eq!(t.base, ratatui::style::Color::Reset);
+        assert_eq!(t.mantle, ratatui::style::Color::Blue);
         Ok(())
     }
 }

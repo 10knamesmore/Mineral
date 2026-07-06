@@ -33,7 +33,7 @@ mineral config check   # 离线校验(语法 / 未知字段 / 类型)
 
 ## tui.theme — 主题色板
 
-14 个颜色 token + 3 个语义角色。色值一律 `"#rrggbb"` 六位十六进制(必须带 `#`)。默认主题是 [Catppuccin Mocha](https://catppuccin.com/);想整体换主题,把 14 个 token 全写一遍即可。
+14 个颜色 token + 3 个语义角色。每个 token 的色值可以是固定色 `"#rrggbb"`、终端 ANSI 槽(跟随终端配色)或终端默认——写法详见下方[色值写法](#色值写法)。默认主题是 [Catppuccin Mocha](https://catppuccin.com/)(全固定色);想整体换主题,把 14 个 token 全写一遍即可。
 
 | token | 默认 | 用在哪 |
 |---|---|---|
@@ -62,8 +62,41 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `color` | `"peach"` | 命中字符色:上面 14 个 token 名之一(随主题联动)或 `"#rrggbb"` 直给固定色 |
+| `color` | `"peach"` | 命中字符色:14 个 token 名之一(随主题联动),或任意[色值写法](#色值写法) |
 | `modifiers` | `["bold", "underline", "italic"]` | 叠加的字体效果,数组**整体替换**;可选 `bold` / `italic` / `underline` / `dim` / `reversed` / `crossed_out`;空数组 = 仅变色 |
+
+### 色值写法
+
+一个色值有四种写法(前两种是固定色,后两种把颜色交给终端决定):
+
+| 写法 | 含义 |
+|---|---|
+| `"#rrggbb"` | 固定色简写(必须带 `#`) |
+| `{ hex = "#rrggbb" }` | 固定色(结构化写法,同上) |
+| `{ ansi = "blue" }` / `{ ansi = 4 }` | 引用终端 16 个 ANSI 槽之一,实际颜色由你的终端配色决定(换终端主题它跟着变) |
+| `{ reset = true }` | 终端默认前景 / 背景 |
+
+ANSI 槽名(或 `0`–`15` 编号):`black` `red` `green` `yellow` `blue` `magenta` `cyan` `white`(0–7)、`bright_black` … `bright_white`(8–15)。
+
+> `search_hit.color` / `roles` / 来源徽标色除以上写法外,还能直接写 token 名(如 `"peach"`)引用某个主题 token;14 个 token 本身不能互相引用(它们**被**引用,不去引用别人)。
+
+### Recipe:跟随终端配色
+
+让**背景层**跟随终端当前配色(换终端主题界面底色跟着变、与编辑器 / tmux 同色),**强调层**保留固定色:
+
+```lua
+theme = {
+  -- 背景层:跟随终端
+  base     = { reset = true },          -- 主背景用终端默认背景
+  mantle   = { ansi = "black" },        -- 嵌套面板底
+  crust    = { ansi = "black" },        -- transport 条
+  surface0 = { ansi = "bright_black" }, -- 行选中底
+  surface1 = { ansi = "bright_black" }, -- 未聚焦边框
+  -- 其余 token(accent / accent_2 / red / green / …)不写 = 沿用默认固定色
+}
+```
+
+**为什么强调层别跟随**:频谱柱的纵向渐变、歌词的距离淡出 / 逐字扫染、进度条的 `red→green` 都是在两个颜色之间算中间色,要求应用手里有确切 RGB。ANSI 槽的实际颜色只有终端知道,应用**算不出中间色**,会退成「过半硬切」的两段色(不崩、但糙)。所以喂给这些渐变的强调 token(`accent` / `accent_2` / `subtext` / `overlay`、进度条的 `red` / `green`)留固定色才顺滑;纯做背景 / 边框的 token 跟随终端零损失。上面把 `surface0` 也跟随了终端是有意折中——它主要是行选中底色,只有频谱余韵 / 歌词远行的淡出会用到它作终点,那点淡出变糙基本看不出,想更严谨可把它也留固定色。封面取色不受影响——那些色是从专辑图抠出的真 RGB。
 
 ## tui.keys — 键位重映射
 

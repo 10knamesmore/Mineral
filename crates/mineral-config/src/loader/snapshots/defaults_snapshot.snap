@@ -6,76 +6,104 @@ expression: "format!(\"{cfg:#?}\")"
 Config {
     tui: TuiConfig {
         theme: ThemeConfig {
-            base: HexColor {
-                r: 30,
-                g: 30,
-                b: 46,
-            },
-            mantle: HexColor {
-                r: 24,
-                g: 24,
-                b: 37,
-            },
-            crust: HexColor {
-                r: 17,
-                g: 17,
-                b: 27,
-            },
-            surface0: HexColor {
-                r: 49,
-                g: 50,
-                b: 68,
-            },
-            surface1: HexColor {
-                r: 69,
-                g: 71,
-                b: 90,
-            },
-            overlay: HexColor {
-                r: 108,
-                g: 112,
-                b: 134,
-            },
-            subtext: HexColor {
-                r: 166,
-                g: 173,
-                b: 200,
-            },
-            text: HexColor {
-                r: 205,
-                g: 214,
-                b: 244,
-            },
-            accent: HexColor {
-                r: 203,
-                g: 166,
-                b: 247,
-            },
-            accent_2: HexColor {
-                r: 116,
-                g: 199,
-                b: 236,
-            },
-            red: HexColor {
-                r: 243,
-                g: 139,
-                b: 168,
-            },
-            yellow: HexColor {
-                r: 249,
-                g: 226,
-                b: 175,
-            },
-            green: HexColor {
-                r: 166,
-                g: 227,
-                b: 161,
-            },
-            peach: HexColor {
-                r: 250,
-                g: 179,
-                b: 135,
-            },
+            base: Hex(
+                HexColor {
+                    r: 30,
+                    g: 30,
+                    b: 46,
+                },
+            ),
+            mantle: Hex(
+                HexColor {
+                    r: 24,
+                    g: 24,
+                    b: 37,
+                },
+            ),
+            crust: Hex(
+                HexColor {
+                    r: 17,
+                    g: 17,
+                    b: 27,
+                },
+            ),
+            surface0: Hex(
+                HexColor {
+                    r: 49,
+                    g: 50,
+                    b: 68,
+                },
+            ),
+            surface1: Hex(
+                HexColor {
+                    r: 69,
+                    g: 71,
+                    b: 90,
+                },
+            ),
+            overlay: Hex(
+                HexColor {
+                    r: 108,
+                    g: 112,
+                    b: 134,
+                },
+            ),
+            subtext: Hex(
+                HexColor {
+                    r: 166,
+                    g: 173,
+                    b: 200,
+                },
+            ),
+            text: Hex(
+                HexColor {
+                    r: 205,
+                    g: 214,
+                    b: 244,
+                },
+            ),
+            accent: Hex(
+                HexColor {
+                    r: 203,
+                    g: 166,
+                    b: 247,
+                },
+            ),
+            accent_2: Hex(
+                HexColor {
+                    r: 116,
+                    g: 199,
+                    b: 236,
+                },
+            ),
+            red: Hex(
+                HexColor {
+                    r: 243,
+                    g: 139,
+                    b: 168,
+                },
+            ),
+            yellow: Hex(
+                HexColor {
+                    r: 249,
+                    g: 226,
+                    b: 175,
+                },
+            ),
+            green: Hex(
+                HexColor {
+                    r: 166,
+                    g: 227,
+                    b: 161,
+                },
+            ),
+            peach: Hex(
+                HexColor {
+                    r: 250,
+                    g: 179,
+                    b: 135,
+                },
+            ),
             search_hit: SearchHitConfig {
                 color: Token(
                     TokenName {
@@ -631,7 +659,7 @@ Config {
             toast_anim_ms: 288,
             focus_fade_ms: 288,
             search_focus_morph_ms: 240,
-            vinyl_rev_ms: 20000,
+            vinyl_rev_ms: 60000,
             view_sweep: Push,
             menu_reveal: Morph,
             search_focus_transition: Slide,
@@ -746,33 +774,39 @@ Config {
             timeout_secs: 100,
             proxy: None,
             max_connections: 0,
-            color: Hex(
-                HexColor {
-                    r: 157,
-                    g: 41,
-                    b: 40,
-                },
+            color: Value(
+                Hex(
+                    HexColor {
+                        r: 157,
+                        g: 41,
+                        b: 40,
+                    },
+                ),
             ),
         },
         bilibili: BilibiliSection {
             timeout_secs: 100,
             proxy: None,
             max_connections: 0,
-            color: Hex(
-                HexColor {
-                    r: 255,
-                    g: 140,
-                    b: 176,
-                },
+            color: Value(
+                Hex(
+                    HexColor {
+                        r: 255,
+                        g: 140,
+                        b: 176,
+                    },
+                ),
             ),
         },
         mineral: MineralSection {
-            color: Hex(
-                HexColor {
-                    r: 42,
-                    g: 101,
-                    b: 17,
-                },
+            color: Value(
+                Hex(
+                    HexColor {
+                        r: 42,
+                        g: 101,
+                        b: 17,
+                    },
+                ),
             ),
             backfill: BackfillSection {
                 chunk_size: 40,
