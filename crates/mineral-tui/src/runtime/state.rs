@@ -181,6 +181,10 @@ pub struct AppState {
 
     /// 溢出标题滚动(marquee)的槽相位状态(节奏来自配置 `animation.marquee_*`)。
     pub(crate) marquees: Marquees,
+
+    /// not playing 待机唱片纹的旋转状态(相位每 tick 推进,节奏来自配置
+    /// `animation.vinyl_rev_ms`)。
+    pub(crate) vinyl: crate::components::layout::shared::vinyl::VinylSpin,
 }
 
 impl AppState {
@@ -216,6 +220,10 @@ impl AppState {
                 by_kind: FxHashMap::default(),
             },
             marquees: Marquees::from_config(anim.marquee(), tick_ms),
+            vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
+                *anim.vinyl_rev_ms(),
+                tick_ms,
+            ),
             cfg,
             frame_area: std::cell::Cell::new(Rect::default()),
             caps: FxHashMap::default(),
@@ -240,6 +248,7 @@ impl AppState {
         self.browse.fullscreen.tick();
         self.channel_search.tick();
         self.marquees.tick();
+        self.vinyl.tick();
         self.dim.tick();
         self.tick_lyric_scroll();
     }

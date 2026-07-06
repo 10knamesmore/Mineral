@@ -176,6 +176,7 @@ return {
       toast_anim_ms = 288, -- 顶栏通知横向展开收起
       focus_fade_ms = 288, -- 终端失焦/聚焦时顶栏变灰的淡入淡出
       search_focus_morph_ms = 240, -- 搜索焦点高亮边框滑动(search_focus_transition=slide 时)
+      vinyl_rev_ms = 60000, -- 待机(无在播曲)唱片纹封面高光旋转一圈
       view_sweep = "push", -- "push" | "cover":侧栏切换是新旧一起平移还是从右盖上
       menu_reveal = "morph", -- "morph" | "directional":弹出菜单从锚点行形变而来 还是 贴边方向性揭开
       search_focus_transition = "slide", -- "slide" | "instant":搜索焦点高亮边框切换 从旧面板滑到新面板 还是 瞬移直切

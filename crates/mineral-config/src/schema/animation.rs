@@ -38,6 +38,9 @@ pub struct AnimationConfig {
     /// Search 布局态焦点高亮边框滑动时长(毫秒);仅 `search_focus_transition = Slide` 时生效。
     search_focus_morph_ms: u32,
 
+    /// 待机(无在播曲)唱片纹封面高光旋转一整圈的时长(毫秒)。
+    vinyl_rev_ms: u32,
+
     /// 侧栏曲目扫入风格。
     view_sweep: SweepStyle,
 

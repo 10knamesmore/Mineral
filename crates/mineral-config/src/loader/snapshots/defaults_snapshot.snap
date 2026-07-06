@@ -631,6 +631,7 @@ Config {
             toast_anim_ms: 288,
             focus_fade_ms: 288,
             search_focus_morph_ms: 240,
+            vinyl_rev_ms: 20000,
             view_sweep: Push,
             menu_reveal: Morph,
             search_focus_transition: Slide,

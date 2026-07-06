@@ -1,10 +1,9 @@
 //! 主帧渲染入口。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Borders};
 
 use mineral_config::SearchFocusTransition;
 
@@ -15,7 +14,7 @@ use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
 use crate::components::layout::shared::marquee::MarqueeCtx;
-use crate::components::layout::shared::{cover_image, top_status, transform, transport};
+use crate::components::layout::shared::{cover_image, top_status, transform, transport, vinyl};
 use crate::runtime::state::SearchFocus;
 
 /// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
@@ -235,24 +234,24 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     }
 }
 
-/// 全屏独立封面:跟**在播曲**;形变中画程序化色块(便宜),稳态全屏才上真图(避免形变期
-/// 每帧尺寸变导致 protocol 重编码)。无在播曲时叠居中 `暂无播放` 提示。
+/// 全屏独立封面:跟**在播曲**;形变中画 halfblock / 程序化色块(便宜),稳态全屏才上真图
+/// (避免形变期每帧尺寸变导致 protocol 重编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
+/// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
 fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let theme = &app.theme;
-    let track = app.state.playback.track.as_ref();
-    let seed = track.map_or_else(
-        || "mineral".to_owned(),
-        |t| {
-            t.album
-                .as_ref()
-                .map_or_else(|| t.name.clone(), |a| a.name.clone())
-        },
-    );
+    let Some(track) = app.state.playback.track.as_ref() else {
+        vinyl::render(frame, area, &app.state.vinyl, theme);
+        return;
+    };
+    let seed = track
+        .album
+        .as_ref()
+        .map_or_else(|| track.name.clone(), |a| a.name.clone());
     if app.state.browse.fullscreen.at_max() {
         cover_image::render_or_fallback(
             frame,
             area,
-            track.and_then(|t| t.cover_url.as_ref()),
+            track.cover_url.as_ref(),
             &app.state,
             &app.picker,
             theme,
@@ -267,22 +266,12 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
         cover_image::render_morph(
             frame,
             area,
-            track.and_then(|t| t.cover_url.as_ref()),
+            track.cover_url.as_ref(),
             &app.state,
             &app.picker,
             theme,
             &seed,
         );
-    }
-    if track.is_none() {
-        let y = area.y + area.height / 2;
-        let strip = Rect::new(area.x, y, area.width, 1);
-        let line = Line::from("nothing playing").style(
-            Style::new()
-                .fg(theme.overlay)
-                .add_modifier(Modifier::ITALIC),
-        );
-        frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), strip);
     }
 }
 

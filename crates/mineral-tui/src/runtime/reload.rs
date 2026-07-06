@@ -174,6 +174,10 @@ impl crate::app::App {
             crate::runtime::window_title::WindowTitle::new(self.state.cfg.tui().window_title());
         let anim = self.state.cfg.tui().animation();
         self.state.marquees = Marquees::from_config(anim.marquee(), *anim.frame_tick_ms());
+        self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
+            *anim.vinyl_rev_ms(),
+            *anim.frame_tick_ms(),
+        );
         self.rebuild_keymap();
         mineral_log::info!(target: "tui", "配置已重载(keymap / theme / 窗口标题 / marquee)");
         self.notifications

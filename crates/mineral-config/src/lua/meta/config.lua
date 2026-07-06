@@ -238,6 +238,7 @@
 ---@field focus_fade_ms? integer 终端失焦/聚焦时顶栏变灰的淡入淡出毫秒数
 ---@field view_sweep? "push"|"cover" 侧栏切换风格:"push" = 新旧视图一起平移;"cover" = 新视图从右盖上
 ---@field menu_reveal? "morph"|"directional" 弹出菜单进场:"morph" = 从锚点行形变;"directional" = 贴边方向性揭开
+---@field vinyl_rev_ms? integer 待机(无在播曲)唱片纹封面高光旋转一圈的毫秒数
 ---@field spinner_frames? string[] loading 旋转占位帧(逐帧循环;默认 braille 一周);空数组 = 只留文案不画字形
 ---@field marquee? mineral.MarqueeConfig 溢出标题滚动(选中行 / 播放栏长歌名)
 
