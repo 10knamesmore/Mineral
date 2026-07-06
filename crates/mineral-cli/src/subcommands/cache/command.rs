@@ -22,9 +22,7 @@ pub enum CacheCommand {
     /// 清理音频 / 封面 / 歌单缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果。
     Clean,
 
-    /// 删库重建:删除 server / client 两个 sqlite 库与音频 / 封面缓存目录,
-    /// **连播放统计 / 喜欢 / 历史一起丢**(与 `clean` 的区别)。供库结构早于
-    /// schema 迁移机制时重建用;请先停掉 daemon 再执行。
+    /// 完全删除所缓存，包括db 与 cover/audio/playlists
     Reset {
         /// 确认执行;不带此 flag 只打印将删除的路径,不动盘。
         #[arg(long)]
