@@ -685,23 +685,15 @@ impl SearchPage {
         self.sessions.get_mut(&source)
     }
 
-    /// 切 source：切到目标 source、确保会话存在（新建用其过 kind 白名单后的首项）。
-    ///
-    /// # Return:
-    ///   `Some(kind)` = 首次进入该 source、kind 落到首项（供 flash「已切到该 kind」）；
-    ///   `None` = 已有会话（沿用记住的 kind，不 flash）。
-    pub fn switch_source(
-        &mut self,
-        source: SourceKind,
-        caps: &FxHashMap<SourceKind, ChannelCaps>,
-    ) -> Option<SearchKind> {
+    /// 切 source：切到目标 source、确保会话存在（新建用其过 kind 白名单后的首项，已有会话则
+    /// 沿用记住的 kind）。
+    pub fn switch_source(&mut self, source: SourceKind, caps: &FxHashMap<SourceKind, ChannelCaps>) {
         self.source = Some(source);
         if self.sessions.contains_key(&source) {
-            return None;
+            return;
         }
         let kind = search_whitelist::default_kind(&self.whitelist, caps, source);
         self.sessions.insert(source, SearchSession::new(kind));
-        Some(kind)
     }
 
     /// 可搜索的 source 列表(白名单定序过滤,规则见 [`search_whitelist::source_options`]):
@@ -1029,9 +1021,13 @@ mod tests {
             .current()
             .ok_or_else(|| color_eyre::eyre::eyre!("入会后应有当前会话"))?;
         assert_eq!(session.kind, SearchKind::Album, "默认 kind 过白名单");
+        rs.switch_source(SourceKind::BILIBILI, &caps);
+        let session = rs
+            .current()
+            .ok_or_else(|| color_eyre::eyre::eyre!("切源后应有当前会话"))?;
         assert_eq!(
-            rs.switch_source(SourceKind::BILIBILI, &caps),
-            Some(SearchKind::Album),
+            session.kind,
+            SearchKind::Album,
             "首次切入 bilibili:kind 落到白名单过滤后的首项,而非 searchable 首项 song"
         );
         Ok(())

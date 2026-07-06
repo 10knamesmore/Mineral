@@ -11,7 +11,6 @@ use mineral_model::{Album, SearchKind, Song, SourceKind};
 use mineral_task::{ChannelFetchKind, Priority, SearchPayload, TaskKind};
 use rustc_hash::FxHashMap;
 
-use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::{Action, ScrollStep, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::scroll::viewport::step_delta;
@@ -79,9 +78,6 @@ pub(crate) enum SearchEffect {
         /// 下一页 offset(= `next_offset`,页对齐:已请求页数 × limit)。
         offset: u32,
     },
-
-    /// flash「kind 已切到 xxx」提示(切 source 致 kind 落首项时)。
-    FlashKind(SearchKind),
 
     /// 非搜索动词回落全局 dispatch(transport / 退出确认等照常生效)。
     Dispatch(Action),
@@ -155,10 +151,6 @@ impl App {
                     Priority::User,
                 );
             }
-            SearchEffect::FlashKind(kind) => self.notifications.flash(tinted_text_item(
-                format!("kind \u{2192} {}", kind.label()),
-                TextTint::Normal,
-            )),
             SearchEffect::Dispatch(action) => self.dispatch(action),
             SearchEffect::None => {}
         }
@@ -623,16 +615,13 @@ impl SearchPage {
         eff
     }
 
-    /// 确认 source 选择:切到该 source（保留各 source 会话），首次进入吐 [`SearchEffect::FlashKind`];
-    /// 焦点留在 source chip 段。
+    /// 确认 source 选择:切到该 source（保留各 source 会话）;焦点留在 source chip 段。
     fn confirm_source(&mut self, idx: usize, ctx: SearchCtx<'_>) -> SearchEffect {
         let Some(source) = self.source_options(ctx.caps).get(idx).copied() else {
             return SearchEffect::None;
         };
-        match self.switch_source(source, ctx.caps) {
-            Some(kind) => SearchEffect::FlashKind(kind),
-            None => SearchEffect::None,
-        }
+        self.switch_source(source, ctx.caps);
+        SearchEffect::None
     }
 
     /// 确认 kind 选择:切到该 kind;无缓存 + query 非空则用当前 query 自动搜（焦点留在 kind chip）。
