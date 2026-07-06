@@ -1,0 +1,13 @@
+---
+source: crates/mineral-tui/src/components/layout/shared/transport.rs
+description: "播放栏:曲名带别名,后缀暗色 (alias)"
+expression: t.backend()
+---
+"╭ transport ─────────────────────────────────────╮"
+"│                迷星叫 (Mayoiuta)               │" Hidden by multi-width symbols: [(18, " "), (20, " "), (22, " ")]
+"│               MyGO!!!!! · 迷跡波               │" Hidden by multi-width symbols: [(29, " "), (31, " "), (33, " ")]
+"│ 0:00 ●─────────────────────────────────── 3:31 │"
+"│              [⏮]   [⏸]   [⏭]   [→]             │"
+"│               p     ␣     n     m              │"
+"│ vol ██████████     mode seq              fmt — │"
+"╰────────────────────────────────────────────────╯"

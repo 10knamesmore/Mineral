@@ -1,0 +1,17 @@
+---
+source: crates/mineral-tui/src/components/layout/browse/sidebar/library.rs
+description: "曲目列表:歌名带译名别名,title 后缀暗色 (alias)"
+expression: t.backend()
+---
+"╭ tracks / EndSerenading ──────────────────────────────────────────────────────╮"
+"│    #    title                      artist            album             len   │"
+"│    ♫    LoveLetterTypewriter       Mineral                             3:45  │"
+"│▌ ♥ 1    Palisade                   Mineral                             4:31  │"
+"│    2    迷星叫 (Mayoiuta)          MyGO!!!!!         迷跡波            3:31  │" Hidden by multi-width symbols: [(11, " "), (13, " "), (15, " "), (56, " "), (58, " "), (60, " ")]
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"╰ 2 / 3 ──────────────────────────────────────────────────────────────11m total╯"

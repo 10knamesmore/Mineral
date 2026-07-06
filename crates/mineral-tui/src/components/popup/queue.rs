@@ -9,12 +9,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Row, Table};
 
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::text::title_with_alias;
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
 use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::action::Action;
-use crate::runtime::playback::format_ms_opt;
+use crate::runtime::format::format_ms_opt;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::state::AppState;
@@ -277,7 +278,12 @@ fn build_row<'a>(
 
     let mut cells = vec![
         Cell::from(lead),
-        Cell::from(Span::styled(s.name.clone(), Style::new().fg(title_fg))),
+        Cell::from(title_with_alias(
+            &s.name,
+            Style::new().fg(title_fg),
+            s.alias.as_deref(),
+            theme,
+        )),
     ];
     if matches!(cols, QueueCols::Full) {
         let artist = s
@@ -455,6 +461,27 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 队列浮层歌名带别名:标题后缀暗色 ` (alias)`(与曲目表 / 播放栏 / 搜索结果一致)。
+    /// 锁住「新增渲染面漏挂 alias 后缀」的回归。
+    #[test]
+    fn queue_alias_suffix_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = ctx_with_queue(3, Some(1))?;
+        // 真实样本:迷星叫 / 别名 Mayoiuta。
+        if let Some(s) = ctx.player.queue.first_mut() {
+            *s = mineral_test::aliased_song();
+        }
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:歌名带译名别名,标题后缀暗色 (alias)",
             t.backend()
         );
         Ok(())

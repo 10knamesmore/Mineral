@@ -11,7 +11,9 @@ use mineral_model::SourceKind;
 use super::badge::search_badge;
 use super::highlight::highlight_indices;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
+use crate::runtime::format::format_ms_opt;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
@@ -206,14 +208,16 @@ fn build_row<'a>(
     };
 
     let name_hits = state.browse.search.match_for(&sv.data.name).map(|m| m.hits);
-    let title_cell = Cell::from(Line::from(highlight_indices(
+    let mut title_spans = highlight_indices(
         &sv.data.name,
         name_hits.as_deref().unwrap_or(&[]),
         Style::new().fg(theme.text),
         theme,
-    )));
+    );
+    title_spans.extend(alias_span(sv.data.alias.as_deref(), theme));
+    let title_cell = Cell::from(Line::from(title_spans));
 
-    let len = format_duration(sv.data.duration_ms);
+    let len = format_ms_opt(sv.data.duration_ms);
 
     let mut cells = vec![love_cell, num_cell, title_cell];
     if layout.full {
@@ -262,17 +266,6 @@ fn build_row<'a>(
     } else {
         row
     }
-}
-
-/// 把时长 ms 格式化成 `m:ss`(library 行右侧使用);未知(`None`)画 `-:--`。
-fn format_duration(ms: Option<u64>) -> String {
-    let Some(ms) = ms else {
-        return "-:--".to_owned();
-    };
-    let secs = ms / 1000;
-    let m = secs / 60;
-    let s = secs % 60;
-    format!("{m}:{s:02}")
 }
 
 /// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
@@ -468,6 +461,63 @@ mod tests {
         crate::test_support::assert_snap!(
             "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
             t.backend()
+        );
+        Ok(())
+    }
+
+    /// 歌名带别名(译名):title 后追加暗色 ` (alias)` 后缀,其余行不受影响。
+    #[test]
+    fn library_alias_suffix_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        let mut state = crate::test_support::state_with_tracks()?;
+        // 真实译名样本:迷星叫 / Mayoiuta(整首替换成 aliased_song,别名后缀在 title 列内可见)。
+        if let Some(v) = state
+            .library
+            .tracks
+            .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .and_then(|views| views.get_mut(2))
+        {
+            v.data = mineral_test::aliased_song();
+        }
+        draw_lib(&mut t, &state)?;
+        crate::test_support::assert_snap!(
+            "曲目列表:歌名带译名别名,title 后缀暗色 (alias)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 别名作独立字段可搜:搜一个只出现在某曲 `alias`(歌名/艺人/专辑都不含)的词,
+    /// 该曲应命中并留下,其余被滤掉——回归「展示了 alias 却搜不到、搜它反被过滤消失」。
+    #[test]
+    fn alias_is_searchable_as_separate_field() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        let mut state = crate::test_support::state_with_tracks()?;
+        // 把第 3 首换成真实的 迷星叫 / 别名 Mayoiuta;搜别名 "Mayoiuta"(英文名/艺人都不含)。
+        if let Some(v) = state
+            .library
+            .tracks
+            .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .and_then(|views| views.get_mut(2))
+        {
+            v.data = mineral_test::aliased_song();
+        }
+        state.browse.search.set_query("Mayoiuta");
+        let filtered = state.filtered_tracks();
+        assert!(
+            filtered
+                .iter()
+                .any(|sv| sv.data.alias.as_deref() == Some("Mayoiuta")),
+            "搜别名应命中该曲"
+        );
+        assert!(
+            filtered
+                .iter()
+                .all(|sv| sv.data.alias.as_deref() == Some("Mayoiuta")),
+            "只有别名命中的曲应留下(歌名/艺人/专辑都不含该词)"
         );
         Ok(())
     }

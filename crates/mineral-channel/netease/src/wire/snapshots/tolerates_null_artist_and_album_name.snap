@@ -9,6 +9,7 @@ CloudSongsResult {
             id: 1,
             name: "n",
             tns: [],
+            alia: [],
             ar: [],
             al: Album {
                 id: 1,

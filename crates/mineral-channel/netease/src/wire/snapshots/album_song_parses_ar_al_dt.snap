@@ -7,6 +7,7 @@ AlbumSong {
     id: 7,
     name: "詩超絆",
     tns: [],
+    alia: [],
     ar: [
         Artist {
             id: 1,

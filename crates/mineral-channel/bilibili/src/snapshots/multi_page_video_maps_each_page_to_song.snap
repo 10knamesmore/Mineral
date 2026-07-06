@@ -56,7 +56,7 @@ Album {
                 ),
             },
             name: "第一话",
-            translation: None,
+            alias: None,
             artists: [
                 ArtistRef {
                     id: ArtistId {
@@ -112,7 +112,7 @@ Album {
                 ),
             },
             name: "第二话",
-            translation: None,
+            alias: None,
             artists: [
                 ArtistRef {
                     id: ArtistId {

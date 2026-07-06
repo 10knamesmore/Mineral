@@ -624,7 +624,7 @@ impl AppState {
 
     /// 当前可见(被 search 过滤)的曲目列表。
     ///
-    /// 命中规则:歌名 / 任一艺人 / 专辑名取最高分作为该曲分数。
+    /// 命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分作为该曲分数。
     pub fn filtered_tracks(&self) -> Vec<SongView> {
         self.browse.filtered_tracks(self.browse_model())
     }

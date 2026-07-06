@@ -64,6 +64,19 @@ pub fn with_name(mut s: Song, name: &str) -> Song {
     s
 }
 
+/// 给一首 `Song` 挂上别名(译名 / 副标题)。
+///
+/// # Params:
+///   - `s`: 原 `Song`
+///   - `alias`: 别名
+///
+/// # Return:
+///   `alias` 被设为 `Some(alias)` 的 `Song`。
+pub fn with_alias(mut s: Song, alias: &str) -> Song {
+    s.alias = Some(alias.to_owned());
+    s
+}
+
 /// 改一首 `Song` 的来源 source(重建 `id` 的 namespace,裸值不变)。
 ///
 /// # Params:

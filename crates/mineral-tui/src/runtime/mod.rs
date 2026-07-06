@@ -5,6 +5,7 @@ pub mod cover;
 pub mod daemon;
 pub mod deep_search;
 pub mod filter;
+pub mod format;
 pub mod keymap;
 pub(crate) mod line_input;
 pub mod playback;

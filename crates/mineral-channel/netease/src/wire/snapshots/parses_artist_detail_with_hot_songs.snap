@@ -23,6 +23,7 @@ ArtistDetailResult {
             id: 1,
             name: "海阔天空",
             tns: [],
+            alia: [],
             ar: [
                 Artist {
                     id: 11127,

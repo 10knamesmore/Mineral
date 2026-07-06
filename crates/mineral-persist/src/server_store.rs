@@ -132,7 +132,7 @@ impl ServerStore {
             return Ok(Vec::new());
         };
         let meta_rows = sqlx::query_as::<_, SongMetaRow>(
-            "SELECT m.namespace, m.song_value, m.name, m.album_id, m.album_name, \
+            "SELECT m.namespace, m.song_value, m.name, m.alias, m.album_id, m.album_name, \
              m.duration_ms, m.cover_url \
              FROM song_stats st \
              JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \

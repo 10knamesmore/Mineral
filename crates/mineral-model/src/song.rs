@@ -22,9 +22,9 @@ pub struct Song {
     /// 歌名。
     pub name: String,
 
-    /// 译名(原名的翻译,如外文曲名的中文译名),拿不到给 `None`。
+    /// 别名(译名 / 副标题等替代显示名,如外文曲名的中文译名),拿不到给 `None`。
     #[builder(default)]
-    pub translation: Option<String>,
+    pub alias: Option<String>,
 
     /// 关联艺人(主艺人在前)。
     #[builder(default)]
@@ -75,7 +75,7 @@ mod tests {
         let song = serde_json::from_value::<Song>(serde_json::json!({
             "id": { "namespace": "netease", "value": "186016" },
             "name": "晴天",
-            "translation": null,
+            "alias": null,
             "artists": [],
             "album": null,
             "duration_ms": 269_000,

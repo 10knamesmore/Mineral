@@ -193,25 +193,12 @@ impl Default for Playback {
     }
 }
 
-/// `mm:ss` 格式化(ms 输入)。
-pub fn format_ms(ms: u64) -> String {
-    let secs = ms / 1000;
-    let m = secs / 60;
-    let s = secs % 60;
-    format!("{m}:{s:02}")
-}
-
-/// `mm:ss` 格式化;时长未知(`None`)画 `-:--` 占位(与真实 `0:00` 区分,宽度同最小 `m:ss`)。
-pub fn format_ms_opt(ms: Option<u64>) -> String {
-    ms.map_or_else(|| "-:--".to_owned(), format_ms)
-}
-
 #[cfg(test)]
 mod tests {
     use mineral_audio::Bps;
     use mineral_model::{Song, SongId, SourceKind};
 
-    use super::{Playback, format_ms};
+    use super::Playback;
 
     /// 造一个带 track(指定时长 + 进度)的 Playback。
     fn with_track(duration_ms: u64, position_ms: u64) -> Playback {
@@ -257,14 +244,6 @@ mod tests {
         assert_eq!(pb.sync_trust(), SyncTrust::Borrowed, "差 1.5s 在容忍内");
         pb.engine_duration_ms = Some(280_000);
         assert_eq!(pb.sync_trust(), SyncTrust::Broken, "差 11s 判失真");
-    }
-
-    /// `format_ms`:秒 / 分进位与零填充。
-    #[test]
-    fn format_ms_cases() {
-        assert_eq!(format_ms(0), "0:00");
-        assert_eq!(format_ms(75_000), "1:15");
-        assert_eq!(format_ms(3_661_000), "61:01");
     }
 
     /// `ratio_bps`:无 track / dur 0 → 零;超出 clamp 到满。

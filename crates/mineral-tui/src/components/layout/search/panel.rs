@@ -13,9 +13,11 @@ use mineral_task::SearchPayload;
 
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
+use crate::components::layout::shared::text::title_with_alias;
 use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::{Theme, resolve_source_color};
+use crate::runtime::format::format_ms_opt;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
@@ -400,9 +402,9 @@ fn result_table(
                 .iter()
                 .map(|s| {
                     let row = Row::new(vec![
-                        Cell::from(Span::styled(s.name.clone(), main)),
+                        Cell::from(title_with_alias(&s.name, main, s.alias.as_deref(), theme)),
                         Cell::from(Span::styled(join_artists(&s.artists), sub)),
-                        Cell::from(Span::styled(format_duration(s.duration_ms), meta)),
+                        Cell::from(Span::styled(format_ms_opt(s.duration_ms), meta)),
                     ]);
                     if s.unavailable {
                         row.style(theme.unavailable_row())
@@ -501,15 +503,6 @@ pub(super) fn join_artists(artists: &[ArtistRef]) -> String {
         .join(", ")
 }
 
-/// 时长 ms → `m:ss`(结果列右侧;与 library 同款格式);未知(`None`)画 `-:--`。
-pub(super) fn format_duration(ms: Option<u64>) -> String {
-    let Some(ms) = ms else {
-        return "-:--".to_owned();
-    };
-    let secs = ms / 1000;
-    format!("{}:{:02}", secs / 60, secs % 60)
-}
-
 /// 大计数缩写:< 1 万原样,≥ 1 万记 `Nk`,≥ 100 万记 `NM`(关注数列窄,纯整数无浮点)。
 pub(super) fn humanize_count(n: u64) -> String {
     match n {
@@ -534,6 +527,40 @@ mod tests {
     use super::{
         chip_width, draw_prompt, draw_prompt_dropdown, prompt_tokens, result_position_label,
     };
+
+    /// 歌曲结果行:带别名的歌名后缀暗色 ` (alias)`(overlay),无别名行无后缀。
+    #[test]
+    fn song_result_row_appends_dim_alias() -> color_eyre::Result<()> {
+        use mineral_task::SearchPayload;
+        use ratatui::widgets::Table;
+
+        let theme = Theme::default();
+        // 真实译名样本:迷星叫 / 叫喊迷星;第二行无别名对照(分隔符 / 括号由 alias_span 单测锁定)。
+        let payload = SearchPayload::Songs(vec![
+            mineral_test::aliased_song(),
+            mineral_test::song("Plain"),
+        ]);
+        let (_header, rows, widths) = super::result_table(&payload, &theme);
+        let mut t = Terminal::new(TestBackend::new(50, 2))?;
+        t.draw(|f| f.render_widget(Table::new(rows, widths), f.area()))?;
+        let buf = t.backend().buffer();
+        let line = |y: u16| -> String {
+            (0..buf.area.width)
+                .filter_map(|x| buf.cell((x, y)).map(ratatui::buffer::Cell::symbol))
+                .collect::<String>()
+        };
+        // 别名内容:去 CJK 补位 cell 的空格后验存在。
+        assert!(
+            line(0).replace(' ', "").contains("迷星叫(Mayoiuta)"),
+            "带别名行应有别名内容: {}",
+            line(0)
+        );
+        assert!(!line(1).contains('('), "无别名行不应有后缀: {}", line(1));
+        let alias_fg = (0..buf.area.width)
+            .find_map(|x| buf.cell((x, 0)).filter(|c| c.symbol() == "(").map(|c| c.fg));
+        assert_eq!(alias_fg, Some(theme.overlay), "别名后缀应为 overlay 暗色");
+        Ok(())
+    }
 
     /// 结果列底标:lazy 分页未榨干缀 `+`(还有下一页可能),短页确认榨干去 `+`(total 即全部);
     /// 1-based 当前位、越界钳到 total。

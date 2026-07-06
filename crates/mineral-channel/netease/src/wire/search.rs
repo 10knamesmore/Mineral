@@ -148,23 +148,24 @@ mod tests {
     use super::CloudSongsResult;
     use crate::wire::de::from_value;
 
-    /// 正常解析歌曲列表(cloudsearch ar/al/dt 形态,含 tns 译名)。
+    /// 正常解析歌曲列表(cloudsearch ar/al/dt 形态)。真实抓取样本(歌单 17880415607):
+    /// 迷星叫 `tns=null` + `alia=["Mayoiuta"]`(别名藏 alia、tns 为显式 null);
+    /// 碧天伴走 `tns=null` 且 `alia` 缺失。锁住 null 容忍 + alia 解析。
     #[test]
     fn parses_song_list() -> color_eyre::Result<()> {
         let raw = serde_json::json!({
             "songs": [
-                { "id": 1, "name": "迷星叫", "tns": ["叫喊迷星"],
+                { "id": 1, "name": "迷星叫", "tns": null, "alia": ["Mayoiuta"],
                   "ar": [{ "id": 1, "name": "MyGO!!!!!" }],
                   "al": { "id": 1, "name": "迷跡波", "picUrl": "https://p1.music.126.net/x.jpg" },
-                  "dt": 248_000 },
-                // tns 缺失 → 空数组。
-                { "id": 2, "name": "碧天伴走", "ar": [{ "id": 1, "name": "MyGO!!!!!" }],
+                  "dt": 211_373 },
+                { "id": 2, "name": "碧天伴走", "tns": null, "ar": [{ "id": 1, "name": "MyGO!!!!!" }],
                   "al": { "id": 1, "name": "迷跡波" }, "dt": 256_000 }
             ]
         });
         let r: CloudSongsResult = from_value(raw)?;
         mineral_test::assert_snap_debug!(
-            "搜索歌曲列表(MyGO 迷星叫 带 tns/封面 / 碧天伴走 缺 tns)解析结构",
+            "搜索歌曲列表(MyGO 迷星叫 tns=null+alia / 碧天伴走 tns=null 无 alia)解析结构",
             r
         );
         Ok(())

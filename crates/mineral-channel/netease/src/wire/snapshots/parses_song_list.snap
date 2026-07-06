@@ -1,6 +1,6 @@
 ---
 source: crates/mineral-channel/netease/src/wire/search.rs
-description: 搜索歌曲列表(MyGO 迷星叫 带 tns/封面 / 碧天伴走 缺 tns)解析结构
+description: 搜索歌曲列表(MyGO 迷星叫 tns=null+alia / 碧天伴走 tns=null 无 alia)解析结构
 expression: r
 ---
 CloudSongsResult {
@@ -8,8 +8,9 @@ CloudSongsResult {
         AlbumSong {
             id: 1,
             name: "迷星叫",
-            tns: [
-                "叫喊迷星",
+            tns: [],
+            alia: [
+                "Mayoiuta",
             ],
             ar: [
                 Artist {
@@ -24,13 +25,14 @@ CloudSongsResult {
                     "https://p1.music.126.net/x.jpg",
                 ),
             },
-            dt: 248000,
+            dt: 211373,
             privilege: None,
         },
         AlbumSong {
             id: 2,
             name: "碧天伴走",
             tns: [],
+            alia: [],
             ar: [
                 Artist {
                     id: 1,

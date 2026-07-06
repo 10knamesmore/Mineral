@@ -9,8 +9,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
 
 use crate::components::layout::shared::cover_image;
+use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
-use crate::runtime::playback::format_ms_opt;
+use crate::runtime::format::format_ms_opt;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
@@ -93,6 +94,12 @@ pub fn draw(
         .first()
         .map(|a| a.name.clone())
         .unwrap_or_default();
-    let strip = Line::from(format!(" ▶ {} — {artist} ", sv.data.name)).style(style);
-    frame.render_widget(Paragraph::new(strip), current_strip);
+    // ▶ 歌名 (别名暗色) — 艺人:别名恒 overlay 暗色,不随选中态 accent/bold 走(与各处一致)。
+    let mut strip_spans = vec![
+        Span::styled(" ▶ ", style),
+        Span::styled(sv.data.name.clone(), style),
+    ];
+    strip_spans.extend(alias_span(sv.data.alias.as_deref(), theme));
+    strip_spans.push(Span::styled(format!(" — {artist} "), style));
+    frame.render_widget(Paragraph::new(Line::from(strip_spans)), current_strip);
 }

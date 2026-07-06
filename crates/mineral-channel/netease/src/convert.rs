@@ -93,7 +93,14 @@ pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
     Song::builder()
         .id(SongId::new(SourceKind::NETEASE, s.id.to_string()))
         .name(s.name)
-        .translation(s.tns.into_iter().next())
+        // 别名优先取译名(tns),译名无效再退网易「别名」(alia:副标题/罗马音/出处)——tns 更有
+        // 意义,alia 常是出处说明。取首个**非空**项;空串不当值(避免渲染裸 ` ()` + 被 upsert 钉死)。
+        .alias(
+            s.tns
+                .into_iter()
+                .chain(s.alia)
+                .find(|t| !t.trim().is_empty()),
+        )
         .artists(
             s.ar.into_iter()
                 .map(|a| ArtistRef {
@@ -330,6 +337,65 @@ mod tests {
         assert!(
             !album_song_to_model(missing).unavailable,
             "权限块缺失不得误判不可播"
+        );
+        Ok(())
+    }
+
+    /// 别名映射:**优先译名 `tns`,译名无效再退网易别名 `alia`**;两者都无 → `None`。
+    /// 全部用真实抓取样本(歌单 17880415607,MyGO!!!!!)——真实数据里 `tns` 常为 `null`、
+    /// 别名藏在 `alia`(副标题 / 罗马音 / 出处),故这条既锁映射策略也锁 `null` 容忍。
+    #[test]
+    fn alias_prefers_tns_then_falls_back_to_alia() -> color_eyre::Result<()> {
+        use super::album_song_to_model;
+        use crate::wire::song::AlbumSong;
+
+        let alias_of = |v: serde_json::Value| -> color_eyre::Result<Option<String>> {
+            let s: AlbumSong = from_value(v)?;
+            Ok(album_song_to_model(s).alias)
+        };
+
+        // tns=null(真实形态)、alia 有罗马音 → 退 alia。
+        assert_eq!(
+            alias_of(serde_json::json!({
+                "id": 1, "name": "迷星叫", "tns": null, "alia": ["Mayoiuta"],
+                "ar": [{ "id": 1, "name": "MyGO!!!!!" }], "al": { "id": 1, "name": "迷跡波" }
+            }))?
+            .as_deref(),
+            Some("Mayoiuta"),
+            "tns 为 null 时退 alia"
+        );
+
+        // tns 与 alia 都有 → 优先 tns(译名比出处别名更有意义)。
+        assert_eq!(
+            alias_of(serde_json::json!({
+                "id": 2, "name": "歌いましょう鳴らしましょう",
+                "tns": ["一同歌唱一同奏响"], "alia": ["游戏《BanG Dream! 少女乐团派对！》MyGO!!!!!登场纪念曲目"],
+                "al": { "id": 1, "name": "迷跡波" }
+            }))?
+            .as_deref(),
+            Some("一同歌唱一同奏响"),
+            "tns 有效时优先 tns 而非 alia"
+        );
+
+        // tns 与 alia 都空(真实:明弦音)→ None。
+        assert!(
+            alias_of(serde_json::json!({
+                "id": 3, "name": "明弦音", "tns": null, "alia": [],
+                "al": { "id": 1, "name": "迷跡波" }
+            }))?
+            .is_none(),
+            "tns/alia 都无应落 None"
+        );
+
+        // 空白 tns 不当值:跳过它退到 alia(不落 Some("") 哨兵)。
+        assert_eq!(
+            alias_of(serde_json::json!({
+                "id": 4, "name": "影色舞", "tns": ["", "  "], "alia": ["Silhouette Dance"],
+                "al": { "id": 1, "name": "迷跡波" }
+            }))?
+            .as_deref(),
+            Some("Silhouette Dance"),
+            "空白 tns 应跳过、退到 alia"
         );
         Ok(())
     }

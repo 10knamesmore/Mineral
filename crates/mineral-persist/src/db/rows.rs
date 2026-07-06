@@ -17,6 +17,9 @@ pub(crate) struct SongMetaRow {
     /// 歌名。
     pub name: String,
 
+    /// 别名(译名 / 副标题等替代显示名,可空)。
+    pub alias: Option<String>,
+
     /// 专辑裸 id(可空)。
     pub album_id: Option<String>,
 
@@ -76,6 +79,7 @@ impl SongMetaRow {
         Ok(Song::builder()
             .id(SongId::new(source, self.song_value))
             .name(self.name)
+            .alias(self.alias)
             .artists(artists)
             .album(album)
             .duration_ms(duration_ms)

@@ -89,10 +89,21 @@ impl NamespaceStore {
         self.source.name()
     }
 
-    /// upsert 一首歌的元数据(song_meta + 重写 song_artists 保序)。
+    /// upsert 一首歌的元数据(song_meta + 按需重写 song_artists 保序)。
     ///
-    /// 降级 ServerStore 下静默 no-op。艺人列表按 [`Song::artists`] 顺序整体重写
-    /// (先删后插),`position` 即列表下标。
+    /// 降级 ServerStore 下静默 no-op。
+    ///
+    /// song_meta 是**富化程度不一的投影**的落点(同一首歌可能先由列表投影写入、后被 detail
+    /// 投影刷新,反之亦然),统一一条合并规则:**「本次输入缺失该字段 = 无新信息 → 保留旧值」**。
+    /// 标量富化字段(alias / album / duration / cover)用 SQL NULL 表达「缺失」,走
+    /// `COALESCE(excluded.x, song_meta.x)`;艺人列表用**空 Vec** 表达「缺失」,空则跳过重写、
+    /// 保留已存行,非空才按 [`Song::artists`] 顺序整体重写(先删后插,`position` 即下标)。
+    /// name 是 NOT NULL 列、每个投影必带,恒以新值为准。
+    ///
+    /// 空艺人列表判「缺失」而非「权威零艺人」是**领域不变量**:本仓任何 channel 产出的 Song
+    /// 都必带艺人(netease `ar` / album_artist_refs 有 primary 兜底;bilibili UP 主映射),
+    /// 零艺人只会是投影没带、不会是歌真没有。故与 `put_playlist_cache`「空曲目列表清空歌单」
+    /// 相反并不矛盾:歌单曲目是权威可编辑的,song 的艺人不是。
     ///
     /// # Params:
     ///   - `song`: 待写入的歌曲元数据
@@ -118,18 +129,25 @@ impl NamespaceStore {
         // 互斥串行,消除交错。
         let mut tx = pool.begin().await.wrap_err("开启 upsert_meta 事务失败")?;
 
+        // 可空富化字段走「非空进步、NULL 不回退」(COALESCE):写入方是富化程度不一的投影
+        // (如 netease 列表带译名而 detail 常缺),后到的贫投影不得抹掉已知值。旧行的 NULL
+        // 由此在数据流经时自然回填,无需专门修复步。name 非空列,恒以新值为准。
         sqlx::query(
             "INSERT INTO song_meta \
-             (namespace, song_value, name, album_id, album_name, duration_ms, cover_url) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+             (namespace, song_value, name, alias, album_id, album_name, duration_ms, cover_url) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(namespace, song_value) DO UPDATE SET \
-             name = excluded.name, album_id = excluded.album_id, \
-             album_name = excluded.album_name, duration_ms = excluded.duration_ms, \
-             cover_url = excluded.cover_url",
+             name = excluded.name, \
+             alias = COALESCE(excluded.alias, song_meta.alias), \
+             album_id = COALESCE(excluded.album_id, song_meta.album_id), \
+             album_name = COALESCE(excluded.album_name, song_meta.album_name), \
+             duration_ms = COALESCE(excluded.duration_ms, song_meta.duration_ms), \
+             cover_url = COALESCE(excluded.cover_url, song_meta.cover_url)",
         )
         .bind(ns)
         .bind(song_value)
         .bind(&song.name)
+        .bind(&song.alias)
         .bind(album_id)
         .bind(album_name)
         .bind(duration_ms)
@@ -138,30 +156,33 @@ impl NamespaceStore {
         .await
         .wrap_err_with(|| format!("upsert song_meta 失败 song={song_value}"))?;
 
-        sqlx::query("DELETE FROM song_artists WHERE namespace = ? AND song_value = ?")
-            .bind(ns)
-            .bind(song_value)
-            .execute(&mut *tx)
-            .await
-            .wrap_err_with(|| format!("清空 song_artists 失败 song={song_value}"))?;
+        // 艺人列表同理:空列表视作「未知」,保留已存行;非空才整体重写(先删后插保序)。
+        if !song.artists.is_empty() {
+            sqlx::query("DELETE FROM song_artists WHERE namespace = ? AND song_value = ?")
+                .bind(ns)
+                .bind(song_value)
+                .execute(&mut *tx)
+                .await
+                .wrap_err_with(|| format!("清空 song_artists 失败 song={song_value}"))?;
 
-        for (i, artist) in song.artists.iter().enumerate() {
-            let position = i64::try_from(i)?;
-            sqlx::query(
-                "INSERT INTO song_artists \
-                 (namespace, song_value, position, artist_id, artist_name) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(ns)
-            .bind(song_value)
-            .bind(position)
-            .bind(artist.id.value())
-            .bind(&artist.name)
-            .execute(&mut *tx)
-            .await
-            .wrap_err_with(|| {
-                format!("写入 song_artists 失败 song={song_value} position={position}")
-            })?;
+            for (i, artist) in song.artists.iter().enumerate() {
+                let position = i64::try_from(i)?;
+                sqlx::query(
+                    "INSERT INTO song_artists \
+                     (namespace, song_value, position, artist_id, artist_name) \
+                     VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(ns)
+                .bind(song_value)
+                .bind(position)
+                .bind(artist.id.value())
+                .bind(&artist.name)
+                .execute(&mut *tx)
+                .await
+                .wrap_err_with(|| {
+                    format!("写入 song_artists 失败 song={song_value} position={position}")
+                })?;
+            }
         }
 
         tx.commit()
@@ -187,8 +208,8 @@ impl NamespaceStore {
         let song_value = id.value();
 
         let Some(row) = sqlx::query_as::<_, SongMetaRow>(
-            "SELECT namespace, song_value, name, album_id, album_name, duration_ms, cover_url \
-             FROM song_meta WHERE namespace = ? AND song_value = ?",
+            "SELECT namespace, song_value, name, alias, album_id, album_name, duration_ms, \
+             cover_url FROM song_meta WHERE namespace = ? AND song_value = ?",
         )
         .bind(ns)
         .bind(song_value)
@@ -614,6 +635,73 @@ mod tests {
             assert_eq!(g.artists.len(), song.artists.len());
             assert_eq!(g.duration_ms, Some(200_000));
         }
+        Ok(())
+    }
+
+    /// 可空富化字段「非空进步、NULL 不回退」:贫投影(alias/duration/cover/album 全缺、
+    /// 艺人空)后到,不得抹掉先前富投影写入的值;name 非空列恒以新值为准。
+    #[tokio::test]
+    async fn upsert_meta_null_fields_do_not_regress() -> color_eyre::Result<()> {
+        use mineral_model::{AlbumId, AlbumRef, MediaUrl};
+
+        let dir = tempfile::tempdir()?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
+        let s = p.scope(SourceKind::NETEASE);
+        let id = SongId::new(SourceKind::NETEASE, "42");
+
+        let rich = Song::builder()
+            .id(id.clone())
+            .name("ButterFly".to_owned())
+            .alias(Some("黄油飞".to_owned()))
+            .artists(vec![ArtistRef {
+                id: ArtistId::new(SourceKind::NETEASE, "a1"),
+                name: "和田光司".to_owned(),
+            }])
+            .album(Some(AlbumRef {
+                id: AlbumId::new(SourceKind::NETEASE, "al1"),
+                name: "数码宝贝".to_owned(),
+            }))
+            .duration_ms(Some(259_000))
+            .cover_url(Some(MediaUrl::remote("https://p1.example/c.jpg")?))
+            .build();
+        s.upsert_meta(&rich).await?;
+
+        // 贫投影:除 name 外全缺。
+        let poor = Song::builder()
+            .id(id.clone())
+            .name("Butter-Fly".to_owned())
+            .build();
+        s.upsert_meta(&poor).await?;
+
+        let got = s
+            .get_meta(&id)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("应命中 meta"))?;
+        assert_eq!(got.name, "Butter-Fly", "name 恒以新值为准");
+        assert_eq!(
+            got.alias.as_deref(),
+            Some("黄油飞"),
+            "alias 不得被 NULL 回退"
+        );
+        assert_eq!(got.duration_ms, Some(259_000), "duration 不得被 NULL 回退");
+        assert!(got.cover_url.is_some(), "cover 不得被 NULL 回退");
+        assert!(got.album.is_some(), "album 不得被 NULL 回退");
+        assert_eq!(got.artists.len(), 1, "空艺人列表应保留已存行");
+
+        // 后续富投影仍能正常更新非空值(进步方向不受影响)。
+        let newer = Song::builder()
+            .id(id.clone())
+            .name("Butter-Fly".to_owned())
+            .alias(Some("黄油飞(数码宝贝OP)".to_owned()))
+            .duration_ms(Some(260_000))
+            .build();
+        s.upsert_meta(&newer).await?;
+        let got2 = s
+            .get_meta(&id)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("应命中 meta"))?;
+        assert_eq!(got2.alias.as_deref(), Some("黄油飞(数码宝贝OP)"));
+        assert_eq!(got2.duration_ms, Some(260_000));
         Ok(())
     }
 

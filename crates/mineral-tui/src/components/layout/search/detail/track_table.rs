@@ -11,8 +11,9 @@ use ratatui::widgets::{Cell, Row};
 
 use mineral_model::Song;
 
-use super::super::panel::format_duration;
+use crate::components::layout::shared::text::title_with_alias;
 use crate::render::theme::Theme;
+use crate::runtime::format::format_ms_opt;
 
 /// 选中行整行高亮的前缀符（与 browse / results 同款）。
 pub const HIGHLIGHT_SYMBOL: &str = "▌ ";
@@ -129,7 +130,12 @@ pub fn track_row(
     let mut cells = vec![
         love_cell(loved, theme),
         num_cell(idx, is_current, theme),
-        Cell::from(Span::styled(song.name.clone(), Style::new().fg(theme.text))),
+        Cell::from(title_with_alias(
+            &song.name,
+            Style::new().fg(theme.text),
+            song.alias.as_deref(),
+            theme,
+        )),
     ];
     if cols.artist {
         let artist = song
@@ -153,7 +159,7 @@ pub fn track_row(
             Style::new().fg(theme.overlay),
         )));
     }
-    cells.push(Cell::from(Line::from(format_duration(song.duration_ms))));
+    cells.push(Cell::from(Line::from(format_ms_opt(song.duration_ms))));
     let row = Row::new(cells);
     if song.unavailable {
         row.style(theme.unavailable_row())
@@ -196,6 +202,42 @@ mod tests {
         let dim_at = |y: u16| buf.cell((8, y)).map(|c| c.modifier.contains(Modifier::DIM));
         assert_eq!(dim_at(0), Some(false), "正常行不得 DIM");
         assert_eq!(dim_at(1), Some(true), "unavailable 行应整行 DIM");
+        Ok(())
+    }
+
+    /// 带别名的歌名后缀 ` (alias)` 为 overlay 暗色,主名保持 text 色。
+    #[test]
+    fn alias_suffix_is_dim() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Table;
+
+        use crate::render::theme::Theme;
+
+        let theme = Theme::default();
+        // 真实译名样本:迷星叫 / 叫喊迷星(分隔符 / 括号已由 alias_span 单测锁定,此处验渲染颜色)。
+        let song = mineral_test::aliased_song();
+        let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
+        let rows = vec![super::track_row(
+            &song, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
+        )];
+        let mut t = Terminal::new(TestBackend::new(40, 2))?;
+        t.draw(|f| f.render_widget(Table::new(rows, cols.widths()), f.area()))?;
+        let buf = t.backend().buffer();
+        let line = (0..buf.area.width)
+            .filter_map(|x| buf.cell((x, 0)).map(ratatui::buffer::Cell::symbol))
+            .collect::<String>();
+        // 别名内容渲染出来(CJK 双宽后随空补位 cell,去空格再验内容存在)。
+        assert!(
+            line.replace(' ', "").contains("迷星叫(Mayoiuta)"),
+            "title 应带别名内容: {line}"
+        );
+        let fg_of = |ch: &str| -> Option<ratatui::style::Color> {
+            (0..buf.area.width)
+                .find_map(|x| buf.cell((x, 0)).filter(|c| c.symbol() == ch).map(|c| c.fg))
+        };
+        assert_eq!(fg_of("("), Some(theme.overlay), "别名后缀应为 overlay 暗色");
+        assert_eq!(fg_of("迷"), Some(theme.text), "主名应保持 text 色");
         Ok(())
     }
 

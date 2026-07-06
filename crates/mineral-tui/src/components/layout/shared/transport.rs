@@ -9,8 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use crate::components::layout::shared::text::title_with_alias;
 use crate::render::theme::Theme;
-use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage, format_ms, format_ms_opt};
+use crate::runtime::format::{format_ms, format_ms_opt};
+use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
@@ -43,14 +45,19 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     paint_vol_mode(frame, vms, pb, theme);
 }
 
-/// transport 顶行:居中显示当前曲名(无歌时 `—`)。
+/// transport 顶行:居中显示当前曲名(无歌时 `—`),带别名时后缀暗色 ` (alias)`。
 fn paint_now(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
     if area.height == 0 {
         return;
     }
     let title = pb.track.as_ref().map_or("—", |t| t.name.as_str());
-    let line = Line::from(title.to_owned())
-        .style(Style::new().fg(theme.text).add_modifier(Modifier::BOLD));
+    let alias = pb.track.as_ref().and_then(|t| t.alias.as_deref());
+    let line = title_with_alias(
+        title,
+        Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+        alias,
+        theme,
+    );
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
@@ -589,6 +596,18 @@ mod tests {
             "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)",
             t.backend()
         );
+        Ok(())
+    }
+
+    /// 曲名带别名:顶行后缀暗色 ` (alias)`,与曲目列表同形式(真实样本 迷星叫 / Mayoiuta)。
+    #[test]
+    fn transport_alias_suffix_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(50, 8))?;
+        let mut pb = Playback::new();
+        pb.track = Some(mineral_test::aliased_song());
+        pb.playing = true;
+        t.draw(|f| super::draw(f, f.area(), &pb, &Theme::default()))?;
+        crate::test_support::assert_snap!("播放栏:曲名带别名,后缀暗色 (alias)", t.backend());
         Ok(())
     }
 

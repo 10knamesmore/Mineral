@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use super::de::{string_or_null, vec_skip_null};
+use super::de::{null_or_vec_skip_null, string_or_null, vec_skip_null};
 
 /// 协议层艺术家结构（出现在搜索结果、歌曲详情等多个端点）。
 #[derive(Debug, Clone, Deserialize)]
@@ -53,9 +53,15 @@ pub struct AlbumSong {
     #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 
-    /// 译名（`tns` 数组；search 端点带，detail 端点常缺 → 空）。
-    #[serde(default)]
+    /// 译名（`tns`；外文曲名的中文翻译）。真实数据里常为**显式 `null`**(不是缺失、也不是
+    /// `[]`),`#[serde(default)]` 兜不住 null,故走 [`null_or_vec_skip_null`](null → 空)。
+    #[serde(default, deserialize_with = "null_or_vec_skip_null")]
     pub tns: Vec<String>,
+
+    /// 别名（`alia`）。网易「别名列表」——副标题 / 罗马音读法 / 出处说明（如「TV动画《…》片头曲」），
+    /// 客户端把第一项显示作副标题。多数曲有 `alia` 而无 `tns`,故它是别名的主来源。
+    #[serde(default, deserialize_with = "null_or_vec_skip_null")]
+    pub alia: Vec<String>,
 
     /// 艺术家列表（网易云在专辑/歌单 detail 端点用 `ar` 字段名）。
     #[serde(default, deserialize_with = "vec_skip_null")]

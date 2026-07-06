@@ -8,6 +8,7 @@ expression: songs
         id: 1,
         name: "张洲",
         tns: [],
+        alia: [],
         ar: [],
         al: Album {
             id: 0,

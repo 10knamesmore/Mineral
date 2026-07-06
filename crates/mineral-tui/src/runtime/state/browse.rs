@@ -142,7 +142,7 @@ impl BrowsePage {
         !self.search.query().is_empty() && self.search.deep_cache.borrow().has_hits()
     }
 
-    /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 任一艺人 / 专辑名取最高分。
+    /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分。
     pub fn filtered_tracks(&self, model: BrowseModel<'_>) -> Vec<SongView> {
         let tracks = self.current_tracks(model);
         if self.search.query().is_empty() {
@@ -153,6 +153,13 @@ impl BrowsePage {
             .into_iter()
             .filter_map(|sv| {
                 let name = self.search.match_for(&sv.data.name).map(|m| m.score);
+                // alias(译名/副标题)独立一段匹配,不与歌名拼接——否则「歌名 别名」被当整串,
+                // 搜别名会因中间隔着歌名而错配。展示了 alias 就得能搜到它(否则搜它反被滤掉)。
+                let alias = sv
+                    .data
+                    .alias
+                    .as_deref()
+                    .and_then(|a| self.search.match_for(a).map(|m| m.score));
                 let artist = sv
                     .data
                     .artists
@@ -164,7 +171,12 @@ impl BrowsePage {
                     .album
                     .as_ref()
                     .and_then(|a| self.search.match_for(&a.name).map(|m| m.score));
-                let best = name.into_iter().chain(artist).chain(album).max()?;
+                let best = name
+                    .into_iter()
+                    .chain(alias)
+                    .chain(artist)
+                    .chain(album)
+                    .max()?;
                 Some((best, sv))
             })
             .collect();

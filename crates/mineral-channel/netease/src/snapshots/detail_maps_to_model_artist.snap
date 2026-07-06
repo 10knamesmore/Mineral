@@ -49,7 +49,7 @@ Artist {
                 ),
             },
             name: "海阔天空",
-            translation: None,
+            alias: None,
             artists: [
                 ArtistRef {
                     id: ArtistId {

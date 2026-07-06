@@ -2,7 +2,7 @@
 
 use mineral_model::Song;
 
-use crate::builders::{song, with_artist, with_duration};
+use crate::builders::{song, with_album, with_alias, with_artist, with_duration};
 
 /// Mineral 乐队专辑《EndSerenading》(1998)前 `n` 首(带艺人 + 真实时长)。
 ///
@@ -59,6 +59,22 @@ pub fn chinese_football(n: usize) -> Vec<Song> {
         .take(n)
         .map(|&(id, name)| with_artist(with_duration(named(id, name), 233_000), "Chinese Football"))
         .collect()
+}
+
+/// 一首带**真实网易云别名**的歌:歌名「迷星叫」/ 别名「Mayoiuta」(罗马音读法),
+/// 艺人 MyGO!!!!!、专辑「迷跡波」,全部取自真实抓取样本(歌单 17880415607,非杜撰)。
+/// 用于别名后缀渲染 / 别名搜索测试。
+///
+/// # Return:
+///   `name = "迷星叫"`、`alias = Some("Mayoiuta")` 的 `Song`(来源 Netease)。
+pub fn aliased_song() -> Song {
+    with_alias(
+        with_album(
+            with_artist(with_duration(named("mixj", "迷星叫"), 211_373), "MyGO!!!!!"),
+            "迷跡波",
+        ),
+        "Mayoiuta",
+    )
 }
 
 /// 造一首指定 id + 歌名的 `Song`(其余默认)。fixtures 内部用。
