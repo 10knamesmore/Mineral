@@ -95,10 +95,24 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let placeholder = slot_placeholder(state, theme);
     let pos = position_label(state.browse.nav.track.sel(), tracks.len());
 
-    let mut title_spans = vec![Span::styled(
+    // 左上角 source 徽标:标出当前歌单挂靠的来源(聚合面挂靠 mineral,单源面挂靠其真实
+    // 来源),与 sidebar playlists 面的 source 列同色,离开 sidebar(全屏)时仍能辨源。
+    let mut title_spans = Vec::new();
+    if let Some(p) = state.selected_playlist() {
+        let src = p.data.source();
+        title_spans.push(Span::styled(
+            format!(" {}", src.label()),
+            Style::new().fg(crate::render::theme::resolve_source_color(
+                theme,
+                state.cfg.sources(),
+                src,
+            )),
+        ));
+    }
+    title_spans.push(Span::styled(
         format!(" {title} "),
         Style::new().fg(theme.subtext),
-    )];
+    ));
     title_spans.extend(search_badge(state, theme));
 
     let block = Block::new()
@@ -461,6 +475,49 @@ mod tests {
         crate::test_support::assert_snap!(
             "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
             t.backend()
+        );
+        Ok(())
+    }
+
+    /// 左上角 source 徽标:单源歌单染该歌单真实 source 色,聚合面(mineral)染 mineral 色,
+    /// 与 sidebar playlists 面 source 列同一套 [`resolve_source_color`]。
+    #[test]
+    fn library_title_badge_matches_source_color() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+
+        use crate::render::theme::resolve_source_color;
+
+        let theme = Theme::default();
+        let fg_of = |t: &Terminal<TestBackend>, ch: &str| -> Option<ratatui::style::Color> {
+            let buf = t.backend().buffer();
+            (0..buf.area.width)
+                .find_map(|x| buf.cell((x, 0)).filter(|c| c.symbol() == ch).map(|c| c.fg))
+        };
+
+        let single = crate::test_support::state_with_tracks()?;
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        draw_lib(&mut t, &single)?;
+        assert_eq!(
+            fg_of(&t, "♫"),
+            Some(resolve_source_color(
+                &theme,
+                single.cfg.sources(),
+                SourceKind::NETEASE
+            )),
+            "单源歌单徽标应染该歌单的 netease 色"
+        );
+
+        let mixed = crate::test_support::state_with_mixed_tracks()?;
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        draw_lib(&mut t, &mixed)?;
+        assert_eq!(
+            fg_of(&t, "◆"),
+            Some(resolve_source_color(
+                &theme,
+                mixed.cfg.sources(),
+                SourceKind::MINERAL
+            )),
+            "聚合面徽标应染歌单自身的 mineral 色(不受 per-song 真实 source 影响)"
         );
         Ok(())
     }

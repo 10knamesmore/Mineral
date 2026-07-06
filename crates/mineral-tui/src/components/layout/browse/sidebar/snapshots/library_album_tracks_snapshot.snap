@@ -1,9 +1,10 @@
 ---
-source: crates/mineral-tui/src/components/sidebar/library.rs
+source: crates/mineral-tui/src/components/layout/browse/sidebar/library.rs
+assertion_line: 706
 description: "曲目列表:带 album 数据的 Full 档(title/artist/album 三列对齐)"
 expression: t.backend()
 ---
-"╭ tracks / EndSerenading ──────────────────────────────────────────────────────╮"
+"╭ ♫ netease tracks / EndSerenading ────────────────────────────────────────────╮"
 "│    #    title                      artist            album             len   │"
 "│▌   ♫    Bones                      HONNE             no song           3:30  │"
 "│    1    Location Unknown           HONNE             Warm on a Cold Ni 3:30  │"

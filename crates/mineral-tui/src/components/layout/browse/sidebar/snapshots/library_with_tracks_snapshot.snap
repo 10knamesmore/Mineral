@@ -1,9 +1,10 @@
 ---
-source: crates/mineral-tui/src/components/sidebar/library.rs
+source: crates/mineral-tui/src/components/layout/browse/sidebar/library.rs
+assertion_line: 503
 description: "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)"
 expression: t.backend()
 ---
-"╭ tracks / EndSerenading ──────────────────────────────────────────────────────╮"
+"╭ ♫ netease tracks / EndSerenading ────────────────────────────────────────────╮"
 "│    #    title                      artist            album             len   │"
 "│    ♫    LoveLetterTypewriter       Mineral                             3:45  │"
 "│▌ ♥ 1    Palisade                   Mineral                             4:31  │"

@@ -1,9 +1,10 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/library.rs
+assertion_line: 527
 description: "曲目列表:歌名带译名别名,title 后缀暗色 (alias)"
 expression: t.backend()
 ---
-"╭ tracks / EndSerenading ──────────────────────────────────────────────────────╮"
+"╭ ♫ netease tracks / EndSerenading ────────────────────────────────────────────╮"
 "│    #    title                      artist            album             len   │"
 "│    ♫    LoveLetterTypewriter       Mineral                             3:45  │"
 "│▌ ♥ 1    Palisade                   Mineral                             4:31  │"

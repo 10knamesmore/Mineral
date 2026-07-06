@@ -1,9 +1,10 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/library.rs
+assertion_line: 617
 description: "曲目列表:混源歌单 Full 档插 per-song source 徽标列"
 expression: t.backend()
 ---
-"╭ tracks / Favorites ──────────────────────────────────────────────────────────╮"
+"╭ ◆ mineral tracks / Favorites ────────────────────────────────────────────────╮"
 "│    #    title                 artist        album          source      len   │"
 "│▌ ♥ 0    LoveLetterTypewriter  Mineral                      ♫ netease   3:45  │"
 "│  ♥ 1    夜間飛行              Chinese Footb                ▶ bilibili  -:--  │" Hidden by multi-width symbols: [(11, " "), (13, " "), (15, " "), (17, " ")]
