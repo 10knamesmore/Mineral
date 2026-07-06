@@ -119,7 +119,7 @@ return {
       jpeg_quality = 100, -- 重编码质量 1-100;仅 storage = "resized" 时生效
       storage = "resized", -- "raw" | "resized";resized = 缓存命中只解 ≤max_dim 小图,CPU 大降
       debounce_ms = 80, -- 列表滚动停稳多久才渲染真图;期间显示程序化色块占位
-      download_workers = 4, -- 封面下载并发 worker 数
+      download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
       kmeans = { -- 取色(频谱封面配色);取出的色不满意再动
         sample_dim = 64, -- 取色采样边长:64² ≈ 4 千像素,够聚类、极省 CPU
