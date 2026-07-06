@@ -9,7 +9,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
 
 use crate::components::layout::shared::cover_image;
-use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::state::AppState;
@@ -94,12 +93,14 @@ pub fn draw(
         .first()
         .map(|a| a.name.clone())
         .unwrap_or_default();
-    // ▶ 歌名 (别名暗色) — 艺人:别名恒 overlay 暗色,不随选中态 accent/bold 走(与各处一致)。
-    let mut strip_spans = vec![
-        Span::styled(" ▶ ", style),
-        Span::styled(sv.data.name.clone(), style),
-    ];
-    strip_spans.extend(alias_span(sv.data.alias.as_deref(), theme));
-    strip_spans.push(Span::styled(format!(" — {artist} "), style));
-    frame.render_widget(Paragraph::new(Line::from(strip_spans)), current_strip);
+    // ▶ 歌名 (别名) — 艺人:别名**跟随整行 style**(playing 与两侧一起 accent 高亮、否则一起
+    // dim),靠括号而非颜色表达次级——避免像其它列表那样单独染 dim 造成高亮态 bright-dim-bright 断层。
+    let alias = sv
+        .data
+        .alias
+        .as_deref()
+        .map(|a| format!(" ({a})"))
+        .unwrap_or_default();
+    let strip = Line::from(format!(" ▶ {}{alias} — {artist} ", sv.data.name)).style(style);
+    frame.render_widget(Paragraph::new(strip), current_strip);
 }
