@@ -362,7 +362,7 @@ fn build_songs(album_name: &str, artist_name: &str, count: usize) -> Vec<Song> {
                 )
                 .artists(vec![artist_ref.clone()])
                 .album(Some(album_ref.clone()))
-                .duration_ms(180_000 + (u64::try_from(i).unwrap_or(0) * 17_000))
+                .duration_ms(Some(180_000 + (u64::try_from(i).unwrap_or(0) * 17_000)))
                 .build()
         })
         .collect()
