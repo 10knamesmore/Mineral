@@ -121,6 +121,11 @@ return {
       debounce_ms = 80, -- 列表滚动停稳多久才渲染真图;期间显示程序化色块占位
       download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
+      cache = { -- 缓存预算(LRU,满了自动驱逐);磁盘项改小不立刻删文件,下次写入时驱逐
+        disk = 4 * GB, -- 磁盘缓存上限,字节
+        image = 128 * MB, -- 解码原图 RAM 预算,字节;越界逐出最久未显示者
+        protocol = 64 * MB, -- 已编码终端协议(序列+源图副本)RAM 预算,字节;越界逐出最久未渲染者
+      },
       kmeans = { -- 取色(频谱封面配色);取出的色不满意再动
         sample_dim = 64, -- 取色采样边长:64² ≈ 4 千像素,够聚类、极省 CPU
         swatches = 6, -- 重点色上限(聚类 k);色多层次细、色少更整体
@@ -222,7 +227,7 @@ return {
     --   field: title | artist | album | position | duration | source | lyric
     --   format(仅 position/duration): "clock"(默认 mm:ss)| "seconds" | { pattern = "{m}:{ss}" }
     -- icons 四态图标可覆盖;idle/disconnected 缺省 { {icon=true}, {text="Mineral"} }。
-    -- 动态标题(轮换 / spinner / 自适应)走脚本旋钮 window_title.text,见 docs/scripting.md。
+    -- 动态标题(轮换 / spinner / 自适应)走脚本 mineral.ui.window_title(text),见 docs/scripting.md。
     window_title = {
       enabled = true,
       icons = { playing = "⏸", paused = "▶", idle = "■", disconnected = "⚠" },
@@ -254,12 +259,9 @@ return {
     prefetch_bytes = 256 * KB, -- 流式起播前预拉字节;大 = 起播慢但 seek 命中缓冲概率高
     tap_capacity = 8192, -- 频谱 PCM 环形缓冲,样本数。须 ≥ 2 × tui.spectrum.fft_size,否则 UI 卡帧丢样本出毛刺
   },
-  -- 缓存容量(LRU,满了自动驱逐;磁盘项改小不立刻删文件,下次写入时驱逐)。
+  -- 缓存容量(LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐)。封面缓存预算在 tui.cover.cache。
   cache = {
     audio_capacity = 10 * GB, -- 音频本体磁盘缓存上限,字节
-    cover_capacity = 4 * GB, -- 封面磁盘缓存上限,字节
-    cover_memory = 128 * MB, -- 封面内存缓存(解码原图,渲染用)上限,字节;越界逐出最久未显示者
-    cover_protocol_memory = 64 * MB, -- 已编码封面协议(终端序列+源图副本)内存上限,字节;越界逐出最久未渲染者
   },
   -- 下载(永久导出,不受缓存容量约束)。
   download = {

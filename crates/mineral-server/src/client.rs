@@ -125,9 +125,14 @@ impl ClientHandle {
         Ok(())
     }
 
-    /// 覆盖表快照(serve 层握手订阅 `UiOverride` 时逐条重放)。
-    pub(crate) fn ui_overrides_snapshot(&self) -> Vec<(String, mineral_protocol::BusValue)> {
-        self.player.ui_overrides_snapshot()
+    /// 当前有效配置(serve 层握手订阅 `Config` 时重放一帧)。
+    pub(crate) fn effective_config(&self) -> mineral_protocol::BusValue {
+        self.player.effective_config()
+    }
+
+    /// 当前窗口标题覆盖(serve 层握手订阅 `WindowTitle` 时重放;无覆盖不发)。
+    pub(crate) fn window_title_override(&self) -> Option<String> {
+        self.player.window_title_override()
     }
 
     /// client 断开时清空终端状态(serve 层连接收尾调;`terminal` 属性回 None)。

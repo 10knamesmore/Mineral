@@ -14,5 +14,8 @@ mod schema;
 
 pub use check::render_check;
 pub use init::{InitOutcome, run_init};
-pub use loader::{ConfigWarning, inject_noop_host, load, load_with_vm};
+pub use loader::{
+    ConfigWarning, DaemonLoad, default_tree, from_tree, inject_noop_host, load, load_with_vm,
+    merge_tree, nest_path,
+};
 pub use schema::*;

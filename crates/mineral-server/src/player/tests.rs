@@ -270,7 +270,8 @@ fn core_with_events(
         notify: crate::notify::Notifier::new(events, script),
         props: crate::props::PropsWatch::default(),
         ui_state: Mutex::new(None),
-        ui_overrides: crate::ui_override::UiOverrides::default(),
+        // 真实默认树:覆盖类测试要经它过落型校验,空树会把一切覆盖判坏。
+        config_host: crate::config_host::ConfigHost::new(mineral_config::default_tree()?),
         state: Mutex::new(State::empty()),
         last_seen_finished_seq: AtomicU64::new(0),
         client_events: Mutex::new(Vec::new()),

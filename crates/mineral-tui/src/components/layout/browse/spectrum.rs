@@ -292,6 +292,17 @@ impl SpectrumState {
         }
     }
 
+    /// 配置热更:换旋钮 + 重折时间制拍数,保留条高 / peak / 色相等运行态
+    /// (频谱不因改配置闪断)。
+    ///
+    /// # Params:
+    ///   - `cfg`: 新频谱旋钮(配置 `tui.spectrum` 段)
+    ///   - `frame_tick_ms`: 主循环帧间隔(毫秒)
+    pub fn reconfigure(&mut self, cfg: mineral_config::SpectrumConfig, frame_tick_ms: u64) {
+        self.timing = Timing::derive(&cfg, frame_tick_ms);
+        self.cfg = cfg;
+    }
+
     /// 从配置派生色场计算参数(传给 [`SpectrumColor`] 的端点计算)。
     fn color_params(&self) -> ColorParams {
         ColorParams {

@@ -27,7 +27,7 @@ mod lyric;
 mod nav;
 mod player;
 mod search;
-mod search_whitelist;
+pub(crate) mod search_whitelist;
 mod view_switch;
 
 pub(crate) use browse::BrowseModel;
@@ -140,9 +140,9 @@ pub struct AppState {
     /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
     pub library: LibraryData,
 
-    /// 脚本下发的 session 级旋钮覆盖(`Event::UiOverride` 落地;渲染处
-    /// 有覆盖读覆盖、无覆盖读配置)。
-    pub ui_overrides: crate::runtime::ui::overrides::UiOverrides,
+    /// 脚本下发的窗口标题整串覆盖(`Event::WindowTitleOverride` 落地;
+    /// `None` = 无覆盖,标题走结构化模板)。渲染产物直通,不属于配置。
+    pub window_title_override: Option<String>,
 
     /// server 权威播放态镜像(在播歌 / 队列 / 洗牌备份 / 同步版本号)。
     pub player: PlayerMirror,
@@ -207,14 +207,14 @@ impl AppState {
             )),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
-            ui_overrides: crate::runtime::ui::overrides::UiOverrides::default(),
+            window_title_override: None,
             player: PlayerMirror::new(),
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
             covers: CoverHub::new(
-                *cfg.cache().cover_memory(),
-                *cfg.cache().cover_protocol_memory(),
+                *cfg.tui().cover().cache().image(),
+                *cfg.tui().cover().cache().protocol(),
             ),
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
@@ -665,7 +665,9 @@ impl AppState {
 ///
 /// # Return:
 ///   DSP 参数。
-fn spectrum_params(cfg: &mineral_config::SpectrumConfig) -> mineral_spectrum::SpectrumParams {
+pub(crate) fn spectrum_params(
+    cfg: &mineral_config::SpectrumConfig,
+) -> mineral_spectrum::SpectrumParams {
     mineral_spectrum::SpectrumParams::builder()
         .fft_size(*cfg.fft_size())
         .f_min(*cfg.f_min())

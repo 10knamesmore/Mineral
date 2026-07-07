@@ -37,7 +37,7 @@ pub fn render_check(
     ));
     lines.push(format!(
         "  封面缓存(字节): {}",
-        config.cache().cover_capacity()
+        config.tui().cover().cache().disk()
     ));
     lines.push(format!(
         "  下载音质: {}",

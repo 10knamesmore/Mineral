@@ -307,25 +307,29 @@ mineral.ui.card {
 { "普通 ", { "强调", fg = "accent", bold = true }, { "靠右", align = "right" } }
 ```
 
-### UI 旋钮覆盖 `mineral.ui.override(key, value)`
+### 配置覆盖 `mineral.config.override(path, value)`
 
-session 级覆盖 TUI 渲染旋钮(不写配置文件,daemon 重启即清;`value = nil` 撤销回落配置值):
-
-| key                            | 类型        | 旋钮             |
-| ------------------------------ | ----------- | ---------------- |
-| `"lyrics.fullscreen_line_gap"` | integer ≥ 0 | 全屏歌词行间距   |
-| `"lyrics.compact_line_gap"`    | integer ≥ 0 | 非全屏歌词行间距 |
-| `"window_title.text"`          | string      | 整串覆盖窗口标题(脚本自渲染;`nil` 回落结构化模板) |
+session 级覆盖**任意配置路径**(不写配置文件,daemon 重启即清;`value = nil` 撤销
+回落配置文件的值)。`path` 必须是真实配置路径(与 `config.lua` 的字段树一一对应,
+见 [configuration.md](configuration.md)),值的类型与配置字段一致:
 
 ```lua
 -- 终端宽度自适应:超 200 列拉开全屏歌词行距
 mineral.observe("terminal", function(t)
-    mineral.ui.override("lyrics.fullscreen_line_gap",
+    mineral.config.override("tui.lyrics.fullscreen_line_gap",
         (t and t.cols > 200) and 2 or nil)
 end)
 ```
 
-未知 key 由 client 警告并忽略,不报错。
+daemon 把覆盖深合并进有效配置并整树校验后推给所有订阅 client——语义与手改
+`config.lua` 热重载完全一致,任何字段(主题色 / 动画时长 / 布局阈值…)都可覆盖。
+坏路径 / 坏值被剔除并以警告 toast 提示,不影响其余覆盖与现行配置。
+
+### 窗口标题覆盖 `mineral.ui.window_title(text)`
+
+整串覆盖窗口标题(脚本自渲染;`nil` 撤销回落结构化模板 `tui.window_title`)。
+它覆盖的是**渲染产物**而非配置值,直通转发不触发配置合成,10fps 级高频刷零成本
+——轮换 / spinner / 自适应标题都用它,见下方「动态窗口标题」。
 
 ### 子进程 `mineral.spawn(args, opts?, fn)`
 
@@ -578,7 +582,7 @@ end)
 
 ### 宽终端自适应歌词行距
 
-终端尺寸是脚本可观察的属性,UI 旋钮可以被 session 级覆盖:
+终端尺寸是脚本可观察的属性,配置可以被 session 级覆盖:
 
 ```lua
 mineral.observe("terminal", function(terminal)
@@ -587,20 +591,20 @@ mineral.observe("terminal", function(terminal)
   end
 
   if terminal.cols > 200 then
-    mineral.ui.override("lyrics.fullscreen_line_gap", 2)
-    mineral.ui.override("lyrics.compact_line_gap", 1)
+    mineral.config.override("tui.lyrics.fullscreen_line_gap", 2)
+    mineral.config.override("tui.lyrics.compact_line_gap", 1)
   else
-    mineral.ui.override("lyrics.fullscreen_line_gap", nil)
-    mineral.ui.override("lyrics.compact_line_gap", nil)
+    mineral.config.override("tui.lyrics.fullscreen_line_gap", nil)
+    mineral.config.override("tui.lyrics.compact_line_gap", nil)
   end
 end)
 ```
 
-### 动态窗口标题(旋钮 `window_title.text`)
+### 动态窗口标题(`mineral.ui.window_title`)
 
 结构化 `window_title` 配置管静态标题;**轮换 / spinner / 自适应 / 任意运行时定制**走
-`window_title.text` 旋钮——脚本自渲染整串推给 client(client 仍自己写 OSC)。旋钮有值时
-整串覆盖模板,`nil` 回落。下面几例**互斥**:同时只启用一个 `window_title.text` writer。
+`mineral.ui.window_title(text)`——脚本自渲染整串推给 client(client 仍自己写 OSC)。
+有值时整串覆盖模板,`nil` 回落。下面几例**互斥**:同时只启用一个 window_title writer。
 共享前置(缓存当前歌 / 播放态 / 进度):
 
 ```lua
@@ -620,11 +624,11 @@ local function clock(secs) return string.format("%d:%02d", secs // 60, secs % 60
 ```lua
 local page = 1
 mineral.timer.every(2000, function()
-  if not cur then mineral.ui.override("window_title.text", nil); return end
+  if not cur then mineral.ui.window_title(nil); return end
   local body = (page == 1)
     and (cur.title .. " — " .. (cur.artists[1] or ""))
     or  (cur.title .. "  " .. clock(pos))
-  mineral.ui.override("window_title.text", icon() .. " " .. body)
+  mineral.ui.window_title(icon() .. " " .. body)
   page = page % 2 + 1
 end)
 ```
@@ -634,9 +638,9 @@ end)
 ```lua
 local frames, f = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }, 1
 mineral.timer.every(100, function()
-  if not cur then mineral.ui.override("window_title.text", nil); return end
+  if not cur then mineral.ui.window_title(nil); return end
   local head = (state == "playing") and frames[f] or icon()
-  mineral.ui.override("window_title.text", head .. " " .. cur.title)
+  mineral.ui.window_title(head .. " " .. cur.title)
   f = f % #frames + 1
 end)
 ```
@@ -657,7 +661,7 @@ end
 
 mineral.action("title.cycle", function()
   mi = mi % #modes + 1
-  mineral.ui.override("window_title.text", render_mode())
+  mineral.ui.window_title(render_mode())
 end)
 ```
 

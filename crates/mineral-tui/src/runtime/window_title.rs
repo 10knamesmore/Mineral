@@ -34,7 +34,7 @@ pub(crate) struct TitleContext<'a> {
     /// 过滤（失真档为 `None`）。
     pub lyric: Option<&'a str>,
 
-    /// `window_title.text` 旋钮当前值（脚本自渲染整串；`None` = 无覆盖）。
+    /// 脚本 `mineral.ui.window_title` 覆盖当前值（自渲染整串;`None` = 无覆盖）。
     pub override_text: Option<&'a str>,
 }
 

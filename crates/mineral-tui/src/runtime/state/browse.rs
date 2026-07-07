@@ -63,6 +63,18 @@ impl BrowsePage {
             search: SearchState::new(),
         }
     }
+
+    /// 重折动画拍数(配置热更):保留视图 / 全屏的逻辑态与动画相位,只换速度。
+    ///
+    /// # Params:
+    ///   - `anim`: 新动画配置
+    pub fn retempo(&mut self, anim: &AnimationConfig) {
+        let tick_ms = *anim.frame_tick_ms();
+        self.view
+            .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));
+        self.fullscreen
+            .retempo(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms));
+    }
 }
 
 /// 视图逻辑:把过滤词 / 选中(本页状态)作用到歌曲库(借入的 model),算出当前可见 / 选中视图。

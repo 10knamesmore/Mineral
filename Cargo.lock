@@ -2786,6 +2786,7 @@ dependencies = [
  "mineral-script",
  "mineral-server",
  "mineral-test",
+ "serde_json",
  "tokio",
 ]
 

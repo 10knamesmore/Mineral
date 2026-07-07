@@ -16,6 +16,10 @@ use crate::script_bridge::ScriptReloadParts;
 /// mtime 轮询间隔。
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// 配置问题驻留卡的顶替键:重复重载顶替不刷屏,干净重载主动撤卡
+/// (client 侧同 id 的存活卡被 [`Event::DismissToast`] 撤掉)。
+const CONFIG_CARD_ID: &str = "config.reload";
+
 /// 起热重载任务:轮询 `config_path` 的修改时间,变更即重载脚本 VM。
 ///
 /// 持有 `runtime`(当前脚本线程)的所有权直到 daemon 退出;重载成功时
@@ -75,7 +79,7 @@ fn reload_once(
     let loaded = mineral_config::load_with_vm(config_path, |lua| {
         install_api(lua, &host).map_err(color_eyre::Report::new)
     });
-    let (_config, warnings, vm) = match loaded {
+    let loaded = match loaded {
         Ok(parts) => parts,
         Err(e) => {
             // 配置目录级故障(读目录失败等):保留旧 VM,报错。
@@ -92,13 +96,16 @@ fn reload_once(
             return;
         }
     };
-    let Some(lua) = vm else {
-        // eval 失败 / 文件缺失:保留旧 VM 照常跑,报错给用户。
-        let detail = warnings.first().map_or_else(
+    let Some(lua) = loaded.vm else {
+        // eval 失败 / 文件缺失:保留旧 VM 照常跑,报错给用户。配置侧同语义:
+        // **不**下发回落默认的树,有效配置保留上一份好的;告警进驻留卡
+        // (同 id 顶替不刷屏,修好后干净重载撤卡)。
+        let detail = loaded.warnings.first().map_or_else(
             || "config.lua 缺失或未通过求值".to_owned(),
             std::string::ToString::to_string,
         );
         mineral_log::warn!(target: "script", detail, "脚本重载失败,保留旧脚本");
+        warning_card(&parts.push_tx, &loaded.warnings);
         toast(
             &parts.push_tx,
             ToastKind::Error,
@@ -115,6 +122,12 @@ fn reload_once(
         Ok(new_runtime) => {
             *runtime = Some(new_runtime);
             mineral_log::info!(target: "script", "脚本已热重载");
+            // 新合成树交配置宿主:重算有效树 + 推送订阅 client(变了才推)。
+            // 干净重载主动撤问题卡(vm 就绪必然无 warnings,加载失败同沉语义)。
+            (parts.apply_config_base)(loaded.tree);
+            let _ = parts.push_tx.send(Event::DismissToast {
+                id: CONFIG_CARD_ID.to_owned(),
+            });
             // 先发就绪信号再发 toast:client 收到 ScriptReloaded 重拉 binds 时表已就绪。
             let _ = parts.push_tx.send(Event::ScriptReloaded);
             toast(&parts.push_tx, ToastKind::Info, "脚本已热重载".to_owned());
@@ -142,6 +155,23 @@ fn toast(push_tx: &UnboundedSender<Event>, kind: ToastKind, content: String) {
         kind,
         content: vec![TextSpan::plain(content)],
         id: Some("script.reload".to_owned()),
+        ttl_secs: None,
+    });
+}
+
+/// 配置告警驻留卡(同 [`CONFIG_CARD_ID`] 顶替):逐条 warning 一行。
+fn warning_card(push_tx: &UnboundedSender<Event>, warnings: &[mineral_config::ConfigWarning]) {
+    if warnings.is_empty() {
+        return;
+    }
+    let _ = push_tx.send(Event::Card {
+        kind: ToastKind::Warn,
+        id: Some(CONFIG_CARD_ID.to_owned()),
+        title: vec![TextSpan::plain("config.lua warnings")],
+        body: warnings
+            .iter()
+            .map(|w| vec![TextSpan::plain(w.to_string())])
+            .collect(),
         ttl_secs: None,
     });
 }
@@ -189,12 +219,18 @@ mod tests {
             let (cmd_tx, _cmd_rx) = unbounded_channel();
             let (push_tx, _push_rx) = unbounded_channel();
             let host = ScriptHost::new(cmd_tx.clone(), push_tx.clone());
-            let (_cfg, warnings, vm) = mineral_config::load_with_vm(&path, |lua| {
+            let loaded = mineral_config::load_with_vm(&path, |lua| {
                 install_api(lua, &host).map_err(color_eyre::Report::new)
             })?;
-            assert!(warnings.is_empty(), "初始配置不应有 warning: {warnings:?}");
+            assert!(
+                loaded.warnings.is_empty(),
+                "初始配置不应有 warning: {:?}",
+                loaded.warnings
+            );
             let sender = ScriptSender::detached();
-            let lua = vm.ok_or_else(|| color_eyre::eyre::eyre!("初始 VM 应就绪"))?;
+            let lua = loaded
+                .vm
+                .ok_or_else(|| color_eyre::eyre::eyre!("初始 VM 应就绪"))?;
             let runtime = Some(ScriptRuntime::spawn(lua, host, lax_watchdog(), &sender)?);
             Ok(Self {
                 _dir: dir,
@@ -214,6 +250,8 @@ mod tests {
                         )]
                     }),
                     web_urls: Vec::new(),
+                    // 无 PlayerCore 的隔离 rig:配置落点空转(宿主行为归 config_host 测试)。
+                    apply_config_base: std::sync::Arc::new(|_tree| {}),
                 },
             })
         }

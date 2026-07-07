@@ -72,15 +72,9 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
             position_ms,
             extra,
             motion,
-            // 行间距:脚本覆盖优先,无覆盖回落配置值。
-            fullscreen_line_gap: state
-                .ui_overrides
-                .fullscreen_line_gap
-                .unwrap_or(*state.cfg.tui().lyrics().fullscreen_line_gap()),
-            compact_line_gap: state
-                .ui_overrides
-                .compact_line_gap
-                .unwrap_or(*state.cfg.tui().lyrics().compact_line_gap()),
+            // 行间距现读配置(脚本覆盖已在 daemon 侧合成进有效配置,单数据源)。
+            fullscreen_line_gap: *state.cfg.tui().lyrics().fullscreen_line_gap(),
+            compact_line_gap: *state.cfg.tui().lyrics().compact_line_gap(),
             scroll_ms: *state.cfg.tui().lyrics().scroll_ms(),
             // 手动滚动是全屏沉浸态专属;紧凑面板恒附着,不继承脱离偏移。
             manual_anchor_milli: match motion {
@@ -721,16 +715,20 @@ mod tests {
         Ok(())
     }
 
-    /// 脚本覆盖 `lyrics.compact_line_gap = 1`:Compact 模式行间出现空行
-    /// (配置默认 0 紧排;覆盖只改渲染态,不碰配置)。
+    /// 脚本覆盖 `tui.lyrics.compact_line_gap = 1`:Compact 模式行间出现空行。
+    /// 覆盖在 daemon 侧合成进有效配置,client 只见换出来的 `state.cfg`——
+    /// 这里按同一条 overlay 合成路径(merge_tree + from_tree)造有效配置。
     #[test]
     fn lyrics_compact_gap_override_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let mut state =
             crate::test_support::state_with_lyrics(LyricExtra::None, /*with_words*/ false)?;
-        state.ui_overrides.apply(
-            "lyrics.compact_line_gap",
-            Some(&mineral_protocol::BusValue::Int(1)),
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            mineral_config::nest_path("tui.lyrics.compact_line_gap", serde_json::json!(1)),
+        );
+        state.cfg = std::sync::Arc::new(
+            mineral_config::from_tree(&tree).map_err(|w| color_eyre::eyre::eyre!("{w}"))?,
         );
         t.draw(|f| {
             super::draw(

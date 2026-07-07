@@ -1,10 +1,10 @@
-//! `mineral.ui.*`:脚本对用户界面的提示与旋钮覆盖出口。
+//! `mineral.ui.*`:脚本对用户界面的提示与标题覆盖出口。
 //! 一个文件对应一个 Lua 函数,与脚本侧 API 树一一对应。
 
 pub(crate) mod card;
-pub(crate) mod override_;
 pub(crate) mod span;
 pub(crate) mod toast;
+pub(crate) mod window_title;
 
 use mlua::{Lua, Table};
 
@@ -20,6 +20,6 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
     let ui = lua.create_table()?;
     toast::install(lua, &ui, host)?;
     card::install(lua, &ui, host)?;
-    override_::install(lua, &ui, host)?;
+    window_title::install(lua, &ui, host)?;
     mineral.set("ui", ui)
 }

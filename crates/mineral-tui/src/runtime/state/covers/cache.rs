@@ -39,7 +39,7 @@ pub(crate) struct CoverCache {
     /// 单调访问计数器,每次 `get` / `insert` 取一个新值赋给 `last_used`。
     tick: Cell<u64>,
 
-    /// 字节预算上限(来自配置 `cache.cover_memory`)。
+    /// 字节预算上限(来自配置 `tui.cover.cache.image`)。
     budget: u64,
 }
 
@@ -97,6 +97,34 @@ impl CoverCache {
         }
         self.total_bytes = self.total_bytes.saturating_add(bytes);
         self.evict_over_budget(url)
+    }
+
+    /// 现调字节预算(配置热更):缩小立即逐出最久未用项直到回落,**不清整表**;
+    /// 调大只放宽上限。
+    ///
+    /// # Params:
+    ///   - `budget`: 新预算(字节)
+    ///
+    /// # Return:
+    ///   被逐出的 URL 列表(派生物联动清理用);未触发逐出时为空。
+    pub(crate) fn set_budget(&mut self, budget: u64) -> Vec<MediaUrl> {
+        self.budget = budget;
+        let mut evicted = Vec::<MediaUrl>::new();
+        while self.total_bytes > self.budget {
+            let victim = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used.get())
+                .map(|(url, _)| url.clone());
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&victim) {
+                self.total_bytes = self.total_bytes.saturating_sub(entry.bytes);
+            }
+            evicted.push(victim);
+        }
+        evicted
     }
 
     /// 取下一个访问序号(单调递增,`wrapping` 免溢出 panic —— u64 实际到不了上限)。

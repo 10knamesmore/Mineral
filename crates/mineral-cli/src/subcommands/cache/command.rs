@@ -76,7 +76,7 @@ async fn status(detail: bool) -> color_eyre::Result<()> {
         .await?
         .cover_cache(
             mineral_paths::cover_cache_dir()?,
-            *config.cache().cover_capacity(),
+            *config.tui().cover().cache().disk(),
         )
         .await?
         .snapshot();

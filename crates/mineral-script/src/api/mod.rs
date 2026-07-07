@@ -7,6 +7,7 @@
 
 pub(crate) mod action;
 pub(crate) mod bind;
+pub(crate) mod config;
 pub(crate) mod download;
 pub(crate) mod emit;
 pub(crate) mod get;

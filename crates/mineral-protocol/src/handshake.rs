@@ -206,8 +206,13 @@ pub enum Subscription {
     /// 脚本 / 外部 client 自定义消息;内置 TUI 不订阅)。
     Bus,
 
-    /// 脚本 UI 旋钮覆盖([`Event::UiOverride`](crate::Event::UiOverride),
-    /// 内置 TUI 订阅;订阅时握手后重放当前覆盖全表。与 [`Self::Bus`] 不合并:
-    /// 覆盖有记表 + 重放语义,bus 是 fire-and-forget)。
-    UiOverride,
+    /// 有效配置([`Event::ConfigChanged`](crate::Event::ConfigChanged),内置 TUI
+    /// 订阅;订阅时握手后先重放当前有效配置一帧。与 [`Self::Bus`] 不合并:
+    /// 配置有宿主状态 + 重放语义,bus 是 fire-and-forget)。
+    Config,
+
+    /// 窗口标题覆盖([`Event::WindowTitleOverride`](crate::Event::WindowTitleOverride),
+    /// 内置 TUI 订阅;订阅时握手后重放当前覆盖(若有)。独立于 [`Self::Config`]:
+    /// 标题覆盖是高频直通的渲染产物,不参与配置合成。
+    WindowTitle,
 }

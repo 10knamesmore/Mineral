@@ -183,7 +183,14 @@ pub struct ScriptReloadParts {
 
     /// 各源网页链接模板(重载的新 VM 重新 seed 用)。
     pub(crate) web_urls: Vec<(String, Option<String>, Option<String>)>,
+
+    /// 配置底树落点:重载成功后把新合成树交给配置宿主(重算有效树 +
+    /// 推送订阅 client)。
+    pub(crate) apply_config_base: ApplyConfigBase,
 }
+
+/// 配置底树落点(重载任务 → 配置宿主的间接层,同 [`PropsSnapshot`] 模式)。
+pub(crate) type ApplyConfigBase = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
 
 impl ScriptPumps {
     /// 接上两条泵:脚本命令 → player 执行面;脚本推送 → event hub。
@@ -210,6 +217,10 @@ impl ScriptPumps {
         let props_snapshot: PropsSnapshot = {
             let player = player.clone();
             Arc::new(move || player.props_snapshot())
+        };
+        let apply_config_base: ApplyConfigBase = {
+            let player = player.clone();
+            Arc::new(move |tree| player.set_config_base(tree))
         };
         // 拼错的 curate 源名在 config 层无从校验(config crate 不知运行期
         // channel 集),这里对无对应 channel 的键打 warn 兜诊断。
@@ -253,6 +264,7 @@ impl ScriptPumps {
             watchdog,
             props_snapshot,
             web_urls,
+            apply_config_base,
         }
     }
 }
@@ -559,7 +571,8 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 let _ = kill.send(());
             }
         }
-        ScriptCmd::UiOverride { key, value } => player.apply_ui_override(key, value),
+        ScriptCmd::ConfigOverride { path, value } => player.apply_config_override(path, value),
+        ScriptCmd::WindowTitle { text } => player.apply_window_title_override(text),
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();
             tokio::spawn(async move {

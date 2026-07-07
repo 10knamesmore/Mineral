@@ -61,6 +61,15 @@ impl Transition {
         }
     }
 
+    /// 重设时长(拍数)而**不动**当前进度与目标:配置热更时保留动画相位,
+    /// 只有后续推进速度变化。
+    ///
+    /// # Params:
+    ///   - `ticks`: 全程所需拍数(与 [`Self::new`] 同语义)
+    pub fn retempo(&mut self, ticks: u16) {
+        self.step = FULL.div_ceil(ticks.max(1));
+    }
+
     /// 开始进场:目标置满,后续 [`Self::tick`] 把进度推向满值。
     pub fn enter(&mut self) {
         self.target = FULL;
@@ -175,6 +184,14 @@ impl Toggle {
     /// 翻转逻辑态。
     pub fn toggle(&mut self) {
         self.set(!self.on());
+    }
+
+    /// 重设时长(拍数),保留相位与逻辑态(见 [`Transition::retempo`])。
+    ///
+    /// # Params:
+    ///   - `ticks`: 从关到开所需拍数
+    pub fn retempo(&mut self, ticks: u16) {
+        self.0.retempo(ticks);
     }
 
     /// 推进过渡一拍。

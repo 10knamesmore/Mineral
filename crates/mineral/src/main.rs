@@ -8,6 +8,7 @@ use mineral_channel_bilibili::BilibiliChannel;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
+use mineral_config::DaemonLoad;
 use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
@@ -74,15 +75,22 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
         let host = mineral_script::ScriptHost::new(cmd_tx.clone(), push_tx.clone());
         let dir = mineral_paths::config_dir().wrap_err("解析配置目录失败")?;
         let config_path = dir.join("config.lua");
-        let (config, warnings, vm) = mineral_config::load_with_vm(&config_path, |lua| {
+        let loaded = mineral_config::load_with_vm(&config_path, |lua| {
             mineral_script::install_api(lua, &host).map_err(color_eyre::Report::new)
         })
         .wrap_err("加载用户配置失败")?;
-        log_config_warnings(&warnings);
+        log_config_warnings(&loaded.warnings);
+
+        let DaemonLoad {
+            config,
+            vm,
+            tree: config_tree,
+            ..
+        } = loaded;
         let script = mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
         let persist = open_persist().await;
         let channels = build_channels(persist.clone(), config.sources())?;
-        mineral_cli::serve_run(channels, persist, config, script, config_path).await
+        mineral_cli::serve_run(channels, persist, config, script, config_tree, config_path).await
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");

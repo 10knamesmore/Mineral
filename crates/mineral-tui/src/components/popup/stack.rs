@@ -175,6 +175,18 @@ impl OverlayStack {
         self.stack.push(Mounted::new(kind, self.anim_ticks));
     }
 
+    /// 配置热更:重设弹出 / 收起拍数。在场浮层一并重折(保留相位),
+    /// 开着的浮层立刻按新速度收尾。
+    ///
+    /// # Params:
+    ///   - `anim_ticks`: 新动画时长(tick)
+    pub(crate) fn retempo(&mut self, anim_ticks: u16) {
+        self.anim_ticks = anim_ticks;
+        for mounted in &mut self.stack {
+            mounted.anim.retempo(anim_ticks);
+        }
+    }
+
     /// 关闭栈顶浮层:触发收起动画,延迟到归零后由 [`Self::tick`] 真正移除。
     pub(crate) fn close_top(&mut self) {
         if let Some(m) = self.stack.last_mut() {

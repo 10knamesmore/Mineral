@@ -41,6 +41,14 @@ impl ViewSwitch {
         self.0.tick();
     }
 
+    /// 重设过渡时长(拍数),保留当前视图与动画相位(配置热更用)。
+    ///
+    /// # Params:
+    ///   - `ticks`: 切到 Library 所需拍数
+    pub(crate) fn retempo(&mut self, ticks: u16) {
+        self.0.retempo(ticks);
+    }
+
     /// 进度处于 Playlists 端点(`0`):sidebar 直接画 Playlists 单视图(零开销)。
     pub fn at_min(&self) -> bool {
         self.0.at_min()

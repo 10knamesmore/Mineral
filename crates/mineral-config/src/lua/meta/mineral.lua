@@ -398,6 +398,9 @@ function mineral.timer.every(ms, callback) end
 ---@class mineral.ui
 mineral.ui = {}
 
+---@class mineral.config
+mineral.config = {}
+
 --- 一段行内文本 + 样式(文本放位置 1),toast / card 标题 / card body 通用。
 --- fg 取主题角色名(随主题落色)或 "#rrggbb" 直给;样式缺省 = 所在语境默认色。
 --- align 把同一行的 spans 分成左/中/右三段(`|左段  中段  右段|`),段内按原顺序连排
@@ -427,13 +430,19 @@ function mineral.ui.toast(msg, opts) end
 ---@param opts { title?: string|(string|mineral.Span)[], kind?: "info"|"warn"|"error", id?: string, ttl_secs?: integer, body: (string|(string|mineral.Span)[])[] }
 function mineral.ui.card(opts) end
 
---- session 级 UI 旋钮覆盖(daemon 重启即清,不写配置文件)。
---- key 约定 = 配置路径(如 "lyrics.fullscreen_line_gap" / "lyrics.compact_line_gap");
---- daemon 零解释转发,未知 key 由 client 边缘 warn + 丢。
---- `value = nil` 撤销覆盖,client 回落自己的配置值。
----@param key string  旋钮键,如 "lyrics.fullscreen_line_gap"
+--- 窗口标题整串覆盖(脚本自渲染;daemon 重启即清)。
+--- 渲染产物直通:不进配置合成,高频刷(轮换 / spinner)零成本;
+--- `text = nil` 撤销,client 回落结构化模板(配置 tui.window_title)。
+---@param text string|nil  覆盖文本;nil = 撤销
+function mineral.ui.window_title(text) end
+
+--- session 级配置覆盖(daemon 重启即清,不写配置文件)。
+--- path 必须是**真实配置路径**(如 "tui.lyrics.fullscreen_line_gap");daemon 深合并进
+--- 有效配置并落型校验,坏路径 / 坏值被剔除并警告,结果推给所有订阅 client。
+--- `value = nil` 撤销覆盖,回落配置文件的值。
+---@param path string  配置路径,如 "tui.lyrics.fullscreen_line_gap"
 ---@param value mineral.BusPayload|nil  覆盖值;nil = 撤销
-function mineral.ui.override(key, value) end
+function mineral.config.override(path, value) end
 
 --- mineral 版本(结构化三分量,与发布版本同步;共享配置做兼容分叉用)。
 ---@class mineral.SysVersion

@@ -51,12 +51,15 @@ impl Server {
     ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
     ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
     ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
+    ///   - `config_tree`: 有效配置底树(加载管线产物;配置宿主初始状态,握手
+    ///     订阅 `Config` 的 client 重放它)。
     ///   - `script`: 脚本线程投递句柄(daemon 启用脚本时传 `Some`,其余 `None`)。
     pub async fn spawn(
         channels: Vec<Arc<dyn MusicChannel>>,
         audio_mode: AudioMode,
         persist: ServerStore,
         config: ServerConfig,
+        config_tree: serde_json::Value,
         script: Option<mineral_script::ScriptSender>,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
@@ -73,7 +76,10 @@ impl Server {
             channels,
             persist,
             media_cache,
-            &config,
+            crate::player::SpawnConfig {
+                slices: &config,
+                tree: config_tree,
+            },
             notify,
         );
         // 读回上次会话:恢复播放模式(其余字段仅打日志,不自动恢复队列/进度)。

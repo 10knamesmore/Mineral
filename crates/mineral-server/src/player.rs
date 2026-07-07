@@ -77,8 +77,8 @@ pub(crate) struct Inner {
     /// check_props 每 tick 采样灌 `terminal` 属性)。
     pub(crate) ui_state: Mutex<Option<crate::props::TerminalReport>>,
 
-    /// 脚本 UI 旋钮覆盖表(opaque:只存 + 转发 + 握手重放,不解释 key)。
-    pub(crate) ui_overrides: crate::ui_override::UiOverrides,
+    /// 有效配置宿主(合成底树 + session 覆盖 + 窗口标题覆盖,见 [`crate::config_host`])。
+    pub(crate) config_host: crate::config_host::ConfigHost,
 
     /// 播放上下文(队列/当前歌/歌词/预拉状态)。
     pub(crate) state: Mutex<State>,
@@ -137,6 +137,16 @@ pub(crate) struct Inner {
     pub(crate) backfill: crate::favorites::Backfill,
 }
 
+/// [`PlayerCore::spawn`] 的配置侧参数包:daemon 切片与有效配置底树是
+/// **同一次加载**的两面,成对传递。
+pub(crate) struct SpawnConfig<'a> {
+    /// daemon 配置切片(音质 / gapless 窗口 / 各间隔 / 下载目录)。
+    pub(crate) slices: &'a crate::config::ServerConfig,
+
+    /// 有效配置底树(加载管线产物,配置宿主的初始状态)。
+    pub(crate) tree: serde_json::Value,
+}
+
 impl PlayerCore {
     /// 起 PlayerCore 并 spawn 长跑 task(events drain + auto-next + prefetch tick)。
     ///
@@ -146,7 +156,7 @@ impl PlayerCore {
     ///   - `channels`: 已注入的全部音乐源 handle。
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
-    ///   - `config`: daemon 配置切片(音质 / gapless 窗口 / 各间隔 / 下载目录)。
+    ///   - `spawn_config`: 配置侧参数包(切片 + 有效配置底树)。
     ///   - `notify`: 事件通知双路出口(event hub + 脚本线程)。
     pub(crate) fn spawn(
         audio: AudioHandle,
@@ -154,9 +164,13 @@ impl PlayerCore {
         channels: Vec<Arc<dyn MusicChannel>>,
         persist: ServerStore,
         media_cache: MediaCache,
-        config: &crate::config::ServerConfig,
+        spawn_config: SpawnConfig<'_>,
         notify: crate::notify::Notifier,
     ) -> Self {
+        let SpawnConfig {
+            slices: config,
+            tree: config_tree,
+        } = spawn_config;
         let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
         let library = crate::library::Library::new(
@@ -179,7 +193,7 @@ impl PlayerCore {
             notify,
             props: crate::props::PropsWatch::default(),
             ui_state: Mutex::new(None),
-            ui_overrides: crate::ui_override::UiOverrides::default(),
+            config_host: crate::config_host::ConfigHost::new(config_tree),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),

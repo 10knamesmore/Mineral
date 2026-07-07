@@ -27,8 +27,25 @@ use crate::schema::{
 ///   `(Config, warnings)`:warnings 非空 = 用了默认兜底,调用方据此 toast。
 pub fn load(user_path: &Path) -> color_eyre::Result<(Config, Vec<ConfigWarning>)> {
     let lua = new_vm()?;
-    let (config, warnings, _user_evaled) = load_on(&lua, user_path)?;
+    let (config, warnings, _user_evaled, _tree) = load_on(&lua, user_path)?;
     Ok((config, warnings))
+}
+
+/// daemon 侧加载产物(见 [`load_with_vm`])。
+pub struct DaemonLoad {
+    /// 落型后的强类型配置(用户侧失败时为默认)。
+    pub config: Config,
+
+    /// 用户配置的降级告警(非空 = 用了默认兜底,调用方据此提示)。
+    pub warnings: Vec<ConfigWarning>,
+
+    /// 用户脚本 eval 且配置落型全部成功时交还的 VM(移交脚本运行时)。
+    pub vm: Option<Lua>,
+
+    /// 合成树(default + user 深合并、函数字段已摘;用户侧失败时为默认树)。
+    /// 作为推送给 client 的有效配置底树,session 覆盖经
+    /// [`merge_tree`](crate::merge_tree) 叠加后再 [`from_tree`](crate::from_tree) 校验。
+    pub tree: serde_json::Value,
 }
 
 /// daemon 专用:在**带活 host API** 的 VM 上加载 —— `config.lua` 顶层的
@@ -43,17 +60,21 @@ pub fn load(user_path: &Path) -> color_eyre::Result<(Config, Vec<ConfigWarning>)
 ///     本 crate 不依赖脚本 crate,方向由调用方注入)。
 ///
 /// # Return:
-///   `(Config, warnings, Option<Lua>)`:`Some(lua)` 仅当用户脚本 eval 且配置
-///   落型全部成功。
+///   [`DaemonLoad`]:`vm` 为 `Some` 仅当用户脚本 eval 且配置落型全部成功。
 pub fn load_with_vm(
     user_path: &Path,
     install: impl FnOnce(&Lua) -> color_eyre::Result<()>,
-) -> color_eyre::Result<(Config, Vec<ConfigWarning>, Option<Lua>)> {
+) -> color_eyre::Result<DaemonLoad> {
     let lua = Lua::new();
     install(&lua)?;
-    let (config, warnings, user_evaled) = load_on(&lua, user_path)?;
+    let (config, warnings, user_evaled, tree) = load_on(&lua, user_path)?;
     let vm = user_evaled.then_some(lua);
-    Ok((config, warnings, vm))
+    Ok(DaemonLoad {
+        config,
+        warnings,
+        vm,
+        tree,
+    })
 }
 
 /// `load` / `load_with_vm` 的共同主体:在给定 VM 上 eval default → eval user
@@ -64,9 +85,13 @@ pub fn load_with_vm(
 ///   - `user_path`: 用户配置文件路径
 ///
 /// # Return:
-///   `(Config, warnings, user_evaled)`:`user_evaled` 为 true 表示用户文件
-///   存在、eval 成功且配置落型成功(VM 内的脚本注册有效)。
-fn load_on(lua: &Lua, user_path: &Path) -> color_eyre::Result<(Config, Vec<ConfigWarning>, bool)> {
+///   `(Config, warnings, user_evaled, tree)`:`user_evaled` 为 true 表示用户文件
+///   存在、eval 成功且配置落型成功(VM 内的脚本注册有效);`tree` 是与 `Config`
+///   对应的合成树(失败路径为默认树)。
+fn load_on(
+    lua: &Lua,
+    user_path: &Path,
+) -> color_eyre::Result<(Config, Vec<ConfigWarning>, bool, serde_json::Value)> {
     let default_table = eval_default(lua)?;
     let mut warnings = Vec::<ConfigWarning>::new();
 
@@ -79,18 +104,18 @@ fn load_on(lua: &Lua, user_path: &Path) -> color_eyre::Result<(Config, Vec<Confi
     };
 
     let Some(user) = user_table else {
-        let (config, warnings) = finalize_default(lua, default_table, warnings)?;
-        return Ok((config, warnings, false));
+        let (config, tree, warnings) = finalize_default(lua, default_table, warnings)?;
+        return Ok((config, warnings, false, tree));
     };
 
     let merged = deep_merge(lua, default_table.clone(), user)?;
     extract_lua_fns(lua, &merged)?;
     match from_lua_table(merged) {
-        Ok(config) => Ok((config, warnings, true)),
+        Ok((config, tree)) => Ok((config, warnings, true, tree)),
         Err(warning) => {
             warnings.push(warning);
-            let (config, warnings) = finalize_default(lua, default_table, warnings)?;
-            Ok((config, warnings, false))
+            let (config, tree, warnings) = finalize_default(lua, default_table, warnings)?;
+            Ok((config, warnings, false, tree))
         }
     }
 }
@@ -182,8 +207,25 @@ impl Config {
         let lua = new_vm()?;
         let table = eval_default(&lua)?;
         extract_lua_fns(&lua, &table)?;
-        from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))
+        let (config, _tree) =
+            from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
+        Ok(config)
     }
+}
+
+/// 纯默认配置的合成树(eval `default.lua`,函数字段已摘)。与
+/// [`Config::defaults`] 同源;供无真实加载管线的场合(in-proc 调试 / 测试)
+/// 当配置宿主的静态底树。
+///
+/// # Return:
+///   默认树;`default.lua` 自身坏(不该发生,有守卫测试)返回 `Err`。
+pub fn default_tree() -> color_eyre::Result<serde_json::Value> {
+    let lua = new_vm()?;
+    let table = eval_default(&lua)?;
+    extract_lua_fns(&lua, &table)?;
+    let (_config, tree) =
+        from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
+    Ok(tree)
 }
 
 /// 把默认表落成 `Config` 并打包 warnings;default 坏则 fail(程序员错误)。
@@ -194,16 +236,16 @@ impl Config {
 ///   - `warnings`: 已累积的用户配置 warnings
 ///
 /// # Return:
-///   `(默认 Config, warnings)`
+///   `(默认 Config, 默认树, warnings)`
 fn finalize_default(
     lua: &Lua,
     default_table: Table,
     warnings: Vec<ConfigWarning>,
-) -> color_eyre::Result<(Config, Vec<ConfigWarning>)> {
+) -> color_eyre::Result<(Config, serde_json::Value, Vec<ConfigWarning>)> {
     extract_lua_fns(lua, &default_table)?;
-    let config = from_lua_table(default_table)
+    let (config, tree) = from_lua_table(default_table)
         .map_err(|w| eyre!("default.lua 无法落成 Config(应被守卫测试拦截):{w}"))?;
-    Ok((config, warnings))
+    Ok((config, tree, warnings))
 }
 
 /// 建 VM 并注入 no-op host stub。
@@ -259,23 +301,22 @@ fn eval_user(lua: &Lua, path: &Path) -> Result<Option<Table>, ConfigWarning> {
     Ok(Some(table))
 }
 
-/// 合并表 → 强类型:`serde_json` 中转 + `serde_path_to_error` 拿精确字段路径。
+/// 合并表 → 强类型 + 合成树:`serde_json` 中转,落型走
+/// [`from_tree`](crate::loader::tree::from_tree)(`serde_path_to_error` 拿精确字段路径)。
 ///
 /// # Params:
-///   - `table`: 合并后的配置表
+///   - `table`: 合并后的配置表(函数字段须已摘)
 ///
 /// # Return:
-///   `Config`,失败带字段路径
-fn from_lua_table(table: Table) -> Result<Config, ConfigWarning> {
+///   `(Config, 合成树)`,失败带字段路径
+fn from_lua_table(table: Table) -> Result<(Config, serde_json::Value), ConfigWarning> {
     let value = Value::Table(table);
     let json = serde_json::to_value(&value).map_err(|e| ConfigWarning::Deserialize {
         path: String::new(),
         detail: format!("Lua→JSON 转换失败:{e}"),
     })?;
-    serde_path_to_error::deserialize::<_, Config>(&json).map_err(|e| ConfigWarning::Deserialize {
-        path: e.path().to_string(),
-        detail: e.inner().to_string(),
-    })
+    let config = crate::loader::tree::from_tree(&json)?;
+    Ok((config, json))
 }
 
 #[cfg(test)]
@@ -316,8 +357,9 @@ mod tests {
                 { label = "Pl", context = "playlist", template = function(p) return p.name end },
             } } } }"#,
         )?;
-        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        let loaded = super::load_with_vm(&path, |_lua| Ok(()))?;
         std::fs::remove_file(&path)?;
+        let (cfg, warnings, vm) = (loaded.config, loaded.warnings, loaded.vm);
         assert!(warnings.is_empty(), "实得 {warnings:?}");
         let templates = cfg.tui().copy().templates();
         assert_eq!(templates.len(), 2);
@@ -352,8 +394,9 @@ mod tests {
                 curate_playlists = function(all) return all end,
             } }"#,
         )?;
-        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        let loaded = super::load_with_vm(&path, |_lua| Ok(()))?;
         std::fs::remove_file(&path)?;
+        let (cfg, warnings, vm) = (loaded.config, loaded.warnings, loaded.vm);
         assert!(warnings.is_empty(), "实得 {warnings:?}");
         assert_eq!(
             *cfg.sources().bilibili().timeout_secs(),
@@ -386,8 +429,9 @@ mod tests {
                 ["local"] = { curate_playlists = function(lists) return lists end },
             } }"#,
         )?;
-        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        let loaded = super::load_with_vm(&path, |_lua| Ok(()))?;
         std::fs::remove_file(&path)?;
+        let (cfg, warnings, vm) = (loaded.config, loaded.warnings, loaded.vm);
         assert!(
             warnings.is_empty(),
             "空条目应被移除而非报 unknown field,实得 {warnings:?}"
@@ -458,6 +502,48 @@ mod tests {
         assert_eq!(*cfg.audio().volume(), 50, "覆盖生效");
         assert_eq!(*cfg.download().quality(), BitRate::Lossless, "其余仍默认");
         assert_eq!(*cfg.cache().audio_capacity(), 10 * 1024 * 1024 * 1024);
+        Ok(())
+    }
+
+    /// 封面缓存预算归 `tui.cover.cache`(disk/image/protocol,client 进程的旋钮),
+    /// 顶层 `cache` 只剩 daemon 的 audio_capacity;新路径可独立覆盖,写旧顶层
+    /// 字段报 unknown field(带路径)回落默认,提示用户迁移。
+    #[test]
+    fn cover_cache_lives_under_tui_cover() -> color_eyre::Result<()> {
+        let defaults = Config::defaults()?;
+        let cache = defaults.tui().cover().cache();
+        assert_eq!(*cache.disk(), 4 * 1024 * 1024 * 1024, "磁盘配额默认 4GB");
+        assert_eq!(*cache.image(), 128 * 1024 * 1024, "原图 RAM 预算默认 128MB");
+        assert_eq!(
+            *cache.protocol(),
+            64 * 1024 * 1024,
+            "协议 RAM 预算默认 64MB"
+        );
+
+        // 新路径单字段覆盖:其余两档仍默认(深合并)。
+        let path = temp_config(
+            "covercache",
+            "return { tui = { cover = { cache = { image = 42 } } } }",
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        assert_eq!(*cfg.tui().cover().cache().image(), 42, "覆盖生效");
+        assert_eq!(
+            *cfg.tui().cover().cache().disk(),
+            4 * 1024 * 1024 * 1024,
+            "其余档仍默认"
+        );
+
+        // 旧顶层路径已迁走:报 unknown field 回落默认,不静默吞。
+        let path = temp_config("oldcache", "return { cache = { cover_memory = 1 } }")?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert_eq!(*cfg.audio().volume(), 100, "回落默认");
+        assert!(
+            matches!(warnings.as_slice(), [ConfigWarning::Deserialize { .. }]),
+            "旧字段应被拒并提示迁移,实得 {warnings:?}"
+        );
         Ok(())
     }
 
@@ -581,7 +667,7 @@ mod tests {
             "livevm",
             "mineral.probe()\nreturn { audio = { volume = 60 } }",
         )?;
-        let (cfg, warnings, vm) = super::load_with_vm(&path, |lua| {
+        let loaded = super::load_with_vm(&path, |lua| {
             let mineral = lua.create_table()?;
             mineral.set(
                 "probe",
@@ -594,34 +680,84 @@ mod tests {
             Ok(())
         })?;
         std::fs::remove_file(&path)?;
-        assert!(warnings.is_empty(), "实得 {warnings:?}");
-        assert_eq!(*cfg.audio().volume(), 60);
+        assert!(loaded.warnings.is_empty(), "实得 {:?}", loaded.warnings);
+        assert_eq!(*loaded.config.audio().volume(), 60);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "活 API 必须真被调用");
-        assert!(vm.is_some(), "eval 成功必须交还 VM");
+        assert!(loaded.vm.is_some(), "eval 成功必须交还 VM");
         Ok(())
     }
 
     #[test]
     fn load_with_vm_absent_file_yields_no_vm() -> color_eyre::Result<()> {
         let absent = std::env::temp_dir().join("mineral-cfg-does-not-exist-vm.lua");
-        let (cfg, warnings, vm) = super::load_with_vm(&absent, |_lua| Ok(()))?;
-        assert!(warnings.is_empty());
-        assert_eq!(*cfg.audio().volume(), 100);
-        assert!(vm.is_none(), "无用户文件就无脚本,不交还 VM");
+        let loaded = super::load_with_vm(&absent, |_lua| Ok(()))?;
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(*loaded.config.audio().volume(), 100);
+        assert!(loaded.vm.is_none(), "无用户文件就无脚本,不交还 VM");
         Ok(())
     }
 
     #[test]
     fn load_with_vm_eval_failure_sinks_both() -> color_eyre::Result<()> {
         let path = temp_config("badvm", "syntax error {{{")?;
-        let (cfg, warnings, vm) = super::load_with_vm(&path, |_lua| Ok(()))?;
+        let loaded = super::load_with_vm(&path, |_lua| Ok(()))?;
         std::fs::remove_file(&path)?;
-        assert_eq!(*cfg.audio().volume(), 100, "配置回落默认");
+        assert_eq!(*loaded.config.audio().volume(), 100, "配置回落默认");
         assert!(
-            matches!(warnings.as_slice(), [ConfigWarning::Eval { .. }]),
-            "实得 {warnings:?}"
+            matches!(loaded.warnings.as_slice(), [ConfigWarning::Eval { .. }]),
+            "实得 {:?}",
+            loaded.warnings
         );
-        assert!(vm.is_none(), "eval 失败配置与脚本同沉,弃 VM");
+        assert!(loaded.vm.is_none(), "eval 失败配置与脚本同沉,弃 VM");
+        assert_eq!(
+            loaded.tree.pointer("/audio/volume"),
+            Some(&serde_json::json!(100)),
+            "失败路径的合成树 = 默认树"
+        );
+        Ok(())
+    }
+
+    /// 合成树暴露:与 Config 同源(用户覆盖已合并)、函数字段已摘不过树、
+    /// 树可经 from_tree 再落型出等价 Config。
+    #[test]
+    fn load_with_vm_exposes_effective_tree() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "efftree",
+            r#"return {
+                audio = { volume = 61 },
+                tui = { copy = { templates = {
+                    { label = "T", template = function(s) return s.title end },
+                } } },
+            }"#,
+        )?;
+        let loaded = super::load_with_vm(&path, |_lua| Ok(()))?;
+        std::fs::remove_file(&path)?;
+        assert!(loaded.warnings.is_empty(), "实得 {:?}", loaded.warnings);
+        assert_eq!(
+            loaded.tree.pointer("/audio/volume"),
+            Some(&serde_json::json!(61)),
+            "用户覆盖进树"
+        );
+        assert_eq!(
+            loaded.tree.pointer("/tui/lyrics/fullscreen_line_gap"),
+            Some(&serde_json::json!(1)),
+            "未覆盖字段是默认值"
+        );
+        let template_entry = loaded
+            .tree
+            .pointer("/tui/copy/templates/0")
+            .ok_or_else(|| eyre!("templates[0] 应在树里"))?;
+        assert!(
+            template_entry.get("template").is_none(),
+            "函数字段不过树:{template_entry}"
+        );
+        let retyped =
+            crate::loader::tree::from_tree(&loaded.tree).map_err(|w| eyre!("再落型失败:{w}"))?;
+        assert_eq!(
+            format!("{retyped:?}"),
+            format!("{:?}", loaded.config),
+            "树与 Config 同源等价"
+        );
         Ok(())
     }
 

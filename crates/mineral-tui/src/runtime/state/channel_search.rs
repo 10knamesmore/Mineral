@@ -465,6 +465,25 @@ impl SearchPage {
         self
     }
 
+    /// 配置热更:重折两档动画拍数(保留布局态 / 焦点环相位与会话)+ 换下拉白名单。
+    ///
+    /// # Params:
+    ///   - `layout_ticks`: 布局态进退场 morph 拍数
+    ///   - `ring_ticks`: 焦点环滑动拍数
+    ///   - `whitelist`: 新下拉白名单
+    pub(crate) fn reconfigure(
+        &mut self,
+        layout_ticks: u16,
+        ring_ticks: u16,
+        whitelist: SearchWhitelist,
+    ) {
+        self.active.retempo(layout_ticks);
+        self.ring_ticks = ring_ticks;
+        self.focus_ring.retempo(ring_ticks);
+        self.seg_reveal.retempo(ring_ticks);
+        self.whitelist = whitelist;
+    }
+
     /// loading spinner 帧计数（每帧 +1）。字形选取交渲染层（按配置 `animation.spinner_frames`
     /// 取当前格，见 shared `spinner`），状态层只持帧号、不知道画什么字符。
     pub fn spinner_counter(&self) -> u32 {

@@ -45,17 +45,20 @@ pub(crate) fn apply_event(notifications: &mut Notifications, event: Event) {
                 ttl_secs.map(std::time::Duration::from_secs),
             );
         }
-        // ScriptReloaded / UiOverride 在 App::drain_push_events 已分流
-        // (前者刷新 bind 键、后者落旋钮覆盖),这里只是穷尽兜底。
-        // BusMessage 是用户自定义消息,内置 TUI 不订阅也不解释
-        // (语义契约在用户脚本与其外部工具之间)。
+        // daemon 主动撤驻留通知(坏配置修好后撤警告卡等)。
+        Event::DismissToast { id } => notifications.dismiss_card_by_id(&id),
+        // ScriptReloaded / ConfigChanged / WindowTitleOverride 在
+        // App::drain_push_events 已分流(刷新 bind 键 / 应用有效配置 / 落标题
+        // 覆盖),这里只是穷尽兜底。BusMessage 是用户自定义消息,内置 TUI 不
+        // 订阅也不解释(语义契约在用户脚本与其外部工具之间)。
         Event::PropertyChanged { .. }
         | Event::TrackFinished { .. }
         | Event::DownloadCompleted { .. }
         | Event::StoreChanged { .. }
         | Event::ScriptReloaded
         | Event::BusMessage { .. }
-        | Event::UiOverride { .. } => {}
+        | Event::ConfigChanged { .. }
+        | Event::WindowTitleOverride { .. } => {}
     }
 }
 

@@ -159,14 +159,20 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
         key: "plugin.skipcount".to_owned(),
     }))
     .await?;
-    frame_round_trips(Frame::Event(Event::UiOverride {
-        key: "lyrics.fullscreen_line_gap".to_owned(),
-        value: Some(BusValue::Int(2)),
+    frame_round_trips(Frame::Event(Event::ConfigChanged {
+        config: BusValue::Map(vec![(
+            "tui".to_owned(),
+            BusValue::Map(vec![("volume".to_owned(), BusValue::Int(80))]),
+        )]),
     }))
     .await?;
-    frame_round_trips(Frame::Event(Event::UiOverride {
-        key: "lyrics.fullscreen_line_gap".to_owned(),
-        value: None,
+    frame_round_trips(Frame::Event(Event::WindowTitleOverride {
+        text: Some("⏸ 歌名".to_owned()),
+    }))
+    .await?;
+    frame_round_trips(Frame::Event(Event::WindowTitleOverride { text: None })).await?;
+    frame_round_trips(Frame::Event(Event::DismissToast {
+        id: "config.reload".to_owned(),
     }))
     .await?;
     Ok(())
@@ -209,9 +215,14 @@ fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
             ("fullscreen".to_owned(), PropValue::Bool(true)),
         ]),
     })?;
-    dual_codec_roundtrip(&Event::UiOverride {
-        key: "lyrics.compact_line_gap".to_owned(),
-        value: Some(BusValue::Int(1)),
+    dual_codec_roundtrip(&Event::ConfigChanged {
+        config: BusValue::Map(vec![("volume".to_owned(), BusValue::Int(80))]),
+    })?;
+    dual_codec_roundtrip(&Event::WindowTitleOverride {
+        text: Some("⏸ 歌名".to_owned()),
+    })?;
+    dual_codec_roundtrip(&Event::DismissToast {
+        id: "config.reload".to_owned(),
     })?;
     dual_codec_roundtrip(&ClientInfo::new(vec![Subscription::Lifecycle]))?;
     dual_codec_roundtrip(&ServerHello::reject(RejectReason::VersionMismatch))?;
@@ -296,12 +307,22 @@ fn event_subscription_mapping() {
         Subscription::Bus
     );
     assert_eq!(
-        Event::UiOverride {
-            key: "lyrics.fullscreen_line_gap".to_owned(),
-            value: None,
+        Event::ConfigChanged {
+            config: BusValue::Nil,
         }
         .subscription(),
-        Subscription::UiOverride
+        Subscription::Config
+    );
+    assert_eq!(
+        Event::WindowTitleOverride { text: None }.subscription(),
+        Subscription::WindowTitle
+    );
+    assert_eq!(
+        Event::DismissToast {
+            id: "config.reload".to_owned(),
+        }
+        .subscription(),
+        Subscription::Toast
     );
 }
 

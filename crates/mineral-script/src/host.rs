@@ -193,6 +193,7 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
     // 子表(与 api/ 子目录一一对应;各目录根的 install 内部再分发到单函数文件)。
     api::player::install(lua, &mineral, host)?;
     api::ui::install(lua, &mineral, host)?;
+    api::config::install(lua, &mineral, host)?;
     api::log::install(lua, &mineral)?;
     api::sys::install(lua, &mineral)?;
     api::store::install(lua, &mineral, host)?;

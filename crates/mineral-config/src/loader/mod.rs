@@ -4,8 +4,10 @@ mod lua_util;
 mod merge;
 mod pipeline;
 mod stub;
+mod tree;
 mod warning;
 
-pub use pipeline::{load, load_with_vm};
+pub use pipeline::{DaemonLoad, default_tree, load, load_with_vm};
 pub use stub::inject_noop_host;
+pub use tree::{from_tree, merge_tree, nest_path};
 pub use warning::ConfigWarning;

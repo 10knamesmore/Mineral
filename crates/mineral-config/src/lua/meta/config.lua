@@ -23,7 +23,7 @@
 ---@class mineral.Config
 ---@field tui? mineral.TuiConfig TUI client 专属段(主题 / 键位 / 交互手感 / 各面板观感)
 ---@field audio? mineral.AudioConfig 音频引擎段(音量 / 后端 / 播放音质 / 引擎内参)
----@field cache? mineral.CacheConfig 缓存容量段(磁盘 + 封面内存)
+---@field cache? mineral.CacheConfig 缓存容量段(音频磁盘缓存)
 ---@field download? mineral.DownloadConfig 下载段(音质 / 目录)
 ---@field sources? mineral.SourcesConfig 音乐源段(网易云等)
 ---@field daemon? mineral.DaemonConfig daemon 后端节拍段(gapless / 各间隔)
@@ -172,6 +172,13 @@
 ---@field download_workers? integer 封面下载并发 worker 数,≥1
 ---@field encode_workers? integer 封面终端协议编码并发 worker 数,≥1
 ---@field kmeans? mineral.KmeansConfig 取色(频谱封面配色)参数
+---@field cache? mineral.CoverCacheConfig 缓存预算(磁盘配额 + 两层 RAM)
+
+---封面缓存预算(LRU,满了自动驱逐;磁盘项改小不立刻删文件,下次写入时驱逐)。
+---@class mineral.CoverCacheConfig
+---@field disk? integer 磁盘缓存上限,字节;可写算式如 4 * 1024 ^ 3
+---@field image? integer 解码原图 RAM 预算,字节;越界逐出最久未显示者
+---@field protocol? integer 已编码终端协议(序列+源图副本)RAM 预算,字节;越界逐出最久未渲染者
 
 ---k-means 封面取色。除非取出的色不满意,一般不用动。
 ---@class mineral.KmeansConfig
@@ -334,12 +341,9 @@
 ---@field prefetch_bytes? integer 流式起播前预拉的字节数;大了起播慢但 seek 命中缓冲概率高
 ---@field tap_capacity? integer 频谱 PCM 采样环形缓冲容量,样本数。**外键:须 ≥ 2 × tui.spectrum.fft_size**(双窗余量,UI 卡一帧不丢样本);改 fft_size 时同步改这里
 
----缓存容量(LRU,满了自动驱逐)。磁盘项改小不会立刻删文件,下次写入时才驱逐。
+---缓存容量(LRU,满了自动驱逐)。改小不会立刻删文件,下次写入时才驱逐。封面缓存预算在 tui.cover.cache。
 ---@class mineral.CacheConfig
 ---@field audio_capacity? integer 音频本体磁盘缓存上限,字节;可写算式如 10 * 1024 ^ 3
----@field cover_capacity? integer 封面磁盘缓存上限,字节
----@field cover_memory? integer 封面内存缓存(解码原图,渲染用)上限,字节;越界逐出最久未显示者
----@field cover_protocol_memory? integer 已编码封面协议(终端序列+源图副本)内存上限,字节;越界逐出最久未渲染者
 
 ---下载(永久导出,不受缓存容量约束)。
 ---@class mineral.DownloadConfig

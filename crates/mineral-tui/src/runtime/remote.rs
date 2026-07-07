@@ -69,14 +69,16 @@ impl RemoteClient {
         })?;
         let mut conn = framed(stream);
         // 握手:订 Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键;
-        // 其余生命周期事件收到即忽略)+ UiOverride(脚本旋钮覆盖,含握手重放)。
-        // Property 暂无消费场景,轮询是权威值来源。
+        // 其余生命周期事件收到即忽略)+ Config(有效配置,含握手重放一帧)
+        // + WindowTitle(标题覆盖,含握手重放)。Property 暂无消费场景,
+        // 轮询是权威值来源。
         client_handshake(
             &mut conn,
             ClientInfo::new(vec![
                 Subscription::Toast,
                 Subscription::Lifecycle,
-                Subscription::UiOverride,
+                Subscription::Config,
+                Subscription::WindowTitle,
             ]),
         )
         .await?;
@@ -485,9 +487,10 @@ mod tests {
             vec![
                 Subscription::Toast,
                 Subscription::Lifecycle,
-                Subscription::UiOverride,
+                Subscription::Config,
+                Subscription::WindowTitle,
             ],
-            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)+ UiOverride(脚本旋钮覆盖)"
+            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)+ Config(有效配置)+ WindowTitle(标题覆盖)"
         );
         send(&mut conn, &Frame::Hello(ServerHello::accept())).await?;
         then(conn).await
@@ -675,6 +678,7 @@ mod tests {
             mineral_server::AudioMode::ForceNull,
             mineral_persist::ServerStore::disabled(),
             mineral_server::ServerConfig::from_config(&cfg),
+            mineral_config::default_tree()?,
             /*script*/ None,
         )
         .await?;
@@ -686,7 +690,8 @@ mod tests {
 
     /// 进程内全链路:Server 的 broadcast hub → serve loop(先订阅再回 Hello +
     /// 订阅集过滤 + Frame 下推)→ RemoteClient 缓冲 → `drain_events`。
-    /// 同时验证过滤:TUI 只订 Toast,先推的 PropertyChanged 不该到达。
+    /// 同时验证:握手先重放一帧有效配置(订 Config 的语义),未订阅的
+    /// PropertyChanged 被过滤不到达。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn event_push_end_to_end() -> color_eyre::Result<()> {
         let (sink, serve, sock) = spawn_inproc_server().await?;
@@ -704,25 +709,34 @@ mod tests {
             ttl_secs: None,
         });
 
-        // 轮询等推送穿过 serve → socket → worker 缓冲(有界等待,防 flaky)。
+        // 轮询累积到 Toast 到达为止(有界等待,防 flaky);重放帧先于它入队。
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        let events = loop {
-            let drained = client.drain_events();
-            if !drained.is_empty() {
-                break drained;
+        let mut events = Vec::<Event>::new();
+        loop {
+            events.extend(client.drain_events());
+            if events.iter().any(|e| matches!(e, Event::Toast { .. })) {
+                break;
             }
             if std::time::Instant::now() >= deadline {
-                return Err(eyre!("2s 内没收到下推事件"));
+                return Err(eyre!("2s 内没收到下推 Toast:{events:?}"));
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-        assert_eq!(events.len(), 1, "只订 Toast,应恰好一条:{events:?}");
+        }
+        assert_eq!(
+            events.len(),
+            2,
+            "应恰好两条:握手重放的 ConfigChanged + hub 推的 Toast:{events:?}"
+        );
+        assert!(
+            matches!(events.first(), Some(Event::ConfigChanged { .. })),
+            "首帧应是握手重放的有效配置,实际 {events:?}"
+        );
         assert!(
             matches!(
-                events.first(),
+                events.get(1),
                 Some(Event::Toast { content, .. }) if *content == vec![TextSpan::plain("hub 直推")]
             ),
-            "应是 hub 推的 Toast,实际 {events:?}"
+            "第二条应是 hub 推的 Toast,实际 {events:?}"
         );
 
         serve.abort();

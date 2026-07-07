@@ -73,16 +73,6 @@ pub struct App {
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
-    /// 主循环帧间隔(配置 `animation.frame_tick_ms`,默认 ≈60fps)。
-    frame_tick: Duration,
-
-    /// 整屏转场动画时长(tick,由配置 `animation.transition_ms` 按帧率折算);
-    /// 扩大与收缩同速对称。
-    transition_ticks: u16,
-
-    /// client 侧心跳间隔(配置 `daemon.heartbeat_secs`)。
-    heartbeat: Duration,
-
     /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
     /// 实现可能是同进程 `ClientHandle`,也可能是跨进程 `RemoteClient`,通过
     /// [`Client`] trait 抽象。**player 业务在 server 端**;App 只 forward 意图。
@@ -113,8 +103,9 @@ pub struct App {
     /// fire-and-forget 落盘。
     ui_prefs: UiPrefs,
 
-    /// config.lua 的 mtime 监视器(热重载 keymap / theme)。
-    config_watch: crate::runtime::reload::ConfigWatch,
+    /// 是否已收到过 daemon 推送的有效配置:握手重放那帧静默应用,
+    /// 之后的变更才 flash 提示(否则每次启动都弹「配置已更新」)。
+    pub(crate) config_replayed: bool,
 
     /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen, focused)`(去抖:值没变不发)。
     last_terminal_report: Option<(u16, u16, bool, bool)>,
@@ -164,9 +155,6 @@ impl App {
             *tui_cfg.toast().flash_ttl_secs(),
             ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
-        let frame_tick = Duration::from_millis(tick_ms);
-        let transition_ticks = ticks16_from_ms(*anim.transition_ms(), tick_ms);
-        let heartbeat = Duration::from_secs(*cfg.daemon().heartbeat_secs());
         let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg);
         // 各源能力声明:启动拉一次进镜像,UI 据此画入口(in-proc 即时;daemon 模式走 IPC)。
@@ -189,9 +177,6 @@ impl App {
             transition: None,
             stop_daemon_on_quit: false,
             last_tick: Instant::now(),
-            frame_tick,
-            transition_ticks,
-            heartbeat,
             client,
             cover_fetcher,
             cover_encoder,
@@ -200,12 +185,24 @@ impl App {
             picker,
             launch_anchor,
             ui_prefs,
-            config_watch: crate::runtime::reload::ConfigWatch::new(),
+            config_replayed: false,
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
             window_title,
         }
+    }
+
+    /// 主循环帧间隔(现读配置 `animation.frame_tick_ms`,热更下一帧生效)。
+    fn frame_tick(&self) -> Duration {
+        Duration::from_millis(*self.state.cfg.tui().animation().frame_tick_ms())
+    }
+
+    /// 整屏转场拍数(现读配置 `animation.transition_ms` 按帧率折算;
+    /// 只在启停时构造转场,现场折算即可)。
+    fn transition_ticks(&self) -> u16 {
+        let anim = self.state.cfg.tui().animation();
+        ticks16_from_ms(*anim.transition_ms(), *anim.frame_tick_ms())
     }
 
     /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
@@ -217,7 +214,7 @@ impl App {
         self.apply_player_sync(sync);
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
-        self.transition = Some(Transition::expanding(self.transition_ticks));
+        self.transition = Some(Transition::expanding(self.transition_ticks()));
 
         // client 侧心跳(间隔 = daemon.heartbeat_secs):报 server 看不到的 UI / 缓存状态(启动即首条)。
         let mut last_heartbeat = Instant::now();
@@ -256,7 +253,7 @@ impl App {
                 position_ms: self.state.playback.position_ms,
                 duration_ms: self.state.playback.duration_ms(),
                 lyric: title_lyric.as_deref(),
-                override_text: self.state.ui_overrides.window_title_text.as_deref(),
+                override_text: self.state.window_title_override.as_deref(),
             };
             // 标题启用时确保标题栈已 push（幂等）——启动即启用由 lib.rs 兜住，热重载
             // 从禁用→启用则由此补上，保证退出能对称 pop 还原原标题。禁用时不 push。
@@ -270,7 +267,7 @@ impl App {
                 // 清掉转场:本分支不推进它,启动即断连否则会把扩大动画卡在空屏。
                 self.transition = None;
                 tui.draw(|f| draw(f, self))?;
-                if event::poll(self.frame_tick)?
+                if event::poll(self.frame_tick())?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
                 {
@@ -282,11 +279,11 @@ impl App {
 
             tui.draw(|f| draw(f, self))?;
 
-            let timeout = self.frame_tick.saturating_sub(self.last_tick.elapsed());
+            let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {
                 self.handle_event(&event::read()?);
             }
-            if self.last_tick.elapsed() >= self.frame_tick {
+            if self.last_tick.elapsed() >= self.frame_tick() {
                 // 转场动画(启动扩大 / 退出收缩)进行中:只推进它 + 重绘(上方 tui.draw),
                 // 跳过后端同步;退出转场归零即退,启动转场推满即转入正常运行。
                 if self.transition.is_some() {
@@ -296,10 +293,6 @@ impl App {
                 }
                 self.drain_task_events();
                 self.drain_push_events();
-                // config.lua 热重载(内部限频 1s 才真 stat)。
-                if self.config_watch.changed() {
-                    self.reload_config();
-                }
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
                 self.update_spectrum();
@@ -318,7 +311,9 @@ impl App {
                 self.download_notifier.feed(&mut self.notifications, &dp);
                 self.notifications.tick();
                 self.last_tick = Instant::now();
-                if last_heartbeat.elapsed() >= self.heartbeat {
+                // 心跳间隔现读配置(daemon.heartbeat_secs),热更下一轮生效。
+                let heartbeat = Duration::from_secs(*self.state.cfg.daemon().heartbeat_secs());
+                if last_heartbeat.elapsed() >= heartbeat {
                     self.log_heartbeat();
                     last_heartbeat = Instant::now();
                 }
@@ -498,8 +493,11 @@ impl App {
         for ev in self.client.drain_events() {
             match ev {
                 mineral_protocol::Event::ScriptReloaded => self.refresh_script_binds(),
-                mineral_protocol::Event::UiOverride { key, value } => {
-                    self.state.ui_overrides.apply(&key, value.as_ref());
+                mineral_protocol::Event::ConfigChanged { config } => {
+                    self.apply_pushed_config(config);
+                }
+                mineral_protocol::Event::WindowTitleOverride { text } => {
+                    self.state.window_title_override = text;
                 }
                 other => {
                     crate::components::toast::push::apply_event(&mut self.notifications, other);
@@ -607,7 +605,7 @@ impl App {
             // 起点而非收尾——fire-and-forget 落盘借收缩动画的时长完成,收尾才写
             // 会跟进程退出赛跑。Ctrl-C 强退不经此路径,不保证。
             self.remember_track_pos();
-            self.transition = Some(Transition::collapsing(self.transition_ticks));
+            self.transition = Some(Transition::collapsing(self.transition_ticks()));
             return;
         }
 
@@ -718,7 +716,7 @@ impl App {
             // 补记 Library 内的光标位置,时点理由见 Shift+Q 路径。
             OverlayAction::Quit => {
                 self.remember_track_pos();
-                self.transition = Some(Transition::collapsing(self.transition_ticks));
+                self.transition = Some(Transition::collapsing(self.transition_ticks()));
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::PlayQueueIndex(i) => {

@@ -23,7 +23,7 @@ const MIN_FFT_SIZE: usize = 64;
 /// - `fft_size` ↔ UI 每帧拉取量:消费端按 [`SpectrumComputer::window_size`] 取,自动跟随。
 /// - `db_floor` < `db_ceil` 必须成立(违反时 [`SpectrumComputer`] 内部按最小间距 1dB 自救)。
 #[non_exhaustive]
-#[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]
+#[derive(Clone, Debug, PartialEq, typed_builder::TypedBuilder, derive_getters::Getters)]
 pub struct SpectrumParams {
     /// FFT 窗大小(样本)。4096 在 48kHz 下 ≈ 85ms:低频 bin 间距 ~12Hz,细节足;
     /// 代价是瞬态被窗摊开、起播首窗延迟 ≈ 窗长。**建议 2 的幂**(否则 FFT 退化到
@@ -129,6 +129,12 @@ impl SpectrumComputer {
     /// 取窗大小则一帧能补满整窗,卡顿后追上最快)。
     pub fn window_size(&self) -> usize {
         self.size
+    }
+
+    /// 当前 DSP 参数(配置热更时消费端比对新旧,变了才重建——重建丢样本
+    /// 环形缓冲,频谱会空一两帧,没变白丢)。
+    pub fn params(&self) -> &SpectrumParams {
+        &self.params
     }
 
     /// 追加一批样本到环形缓冲。超过窗大小时自然覆盖最旧样本(环形语义)。

@@ -19,7 +19,7 @@ use crate::runtime::cover::fetch::CoverFetcher;
 
 /// 封面管线状态([`AppState`](crate::runtime::state::AppState) 的封面域)。
 pub struct CoverHub {
-    /// 已拉好的封面原始图(字节预算 LRU;越 `cache.cover_memory` 逐出最久未用)。
+    /// 已拉好的封面原始图(字节预算 LRU;越 `tui.cover.cache.image` 逐出最久未用)。
     /// 逐出项派生的协议 / 色板由 `drain_ready_covers` 联动清理,不留悬挂。
     pub cache: CoverCache,
 
@@ -34,7 +34,7 @@ pub struct CoverHub {
     /// 在飞 fetch 集合,用于 dedup tick 重复请求。
     pub pending: FxHashSet<MediaUrl>,
 
-    /// 已编码封面协议缓存(字节预算 LRU;越 `cache.cover_protocol_memory` 逐出最久未渲染)。
+    /// 已编码封面协议缓存(字节预算 LRU;越 `tui.cover.cache.protocol` 逐出最久未渲染)。
     /// `StatefulProtocol` 内部记编码状态(kitty 图片 id、sixel 缓冲)+ 源图副本,render 复用
     /// 就不每帧重编;逐出的滚回时后台重编、其间 halfblock 兜底。
     pub protocols: ProtocolCache,
@@ -63,8 +63,8 @@ impl CoverHub {
     /// 由 `App::new` 注入 `CoverEncoder::sender()` 覆盖。
     ///
     /// # Params:
-    ///   - `image_budget`: 封面原图缓存的字节预算(配置 `cache.cover_memory`)
-    ///   - `protocol_budget`: 已编码协议缓存的字节预算(配置 `cache.cover_protocol_memory`)
+    ///   - `image_budget`: 封面原图缓存的字节预算(配置 `tui.cover.cache.image`)
+    ///   - `protocol_budget`: 已编码协议缓存的字节预算(配置 `tui.cover.cache.protocol`)
     pub(crate) fn new(image_budget: u64, protocol_budget: u64) -> Self {
         Self {
             cache: CoverCache::new(image_budget),
@@ -77,6 +77,20 @@ impl CoverHub {
             collage_ready: FxHashMap::default(),
             loading: 0,
         }
+    }
+
+    /// 现调两层缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
+    /// 原图侧被逐出项的派生物(协议 / 色板 / 频谱标记)照常联动清理。
+    ///
+    /// # Params:
+    ///   - `image_budget`: 原图缓存新预算(配置 `tui.cover.cache.image`)
+    ///   - `protocol_budget`: 协议缓存新预算(配置 `tui.cover.cache.protocol`)
+    pub(crate) fn set_budgets(&mut self, image_budget: u64, protocol_budget: u64) {
+        let evicted = self.cache.set_budget(image_budget);
+        for url in evicted {
+            self.discard_derived(&url);
+        }
+        self.protocols.set_budget(protocol_budget);
     }
 
     /// 塞入一张本地合成图(歌单拼贴),与 fetch 回填同规则:清掉该 key 旧协议(下次渲染

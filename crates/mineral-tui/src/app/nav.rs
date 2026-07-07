@@ -738,7 +738,8 @@ mod tests {
             "return { tui = { search = { deep = { locate_on_enter = false } } } }",
         )?;
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
-        app.reload_config_from(&path);
+        let (cfg, _warnings) = mineral_config::load(&path)?;
+        app.apply_config(std::sync::Arc::new(cfg));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
         let views = ["甲", "乙", "春日影"]
             .into_iter()
@@ -824,7 +825,8 @@ mod tests {
             "return { tui = { search = { deep = { enabled = false } } } }",
         )?;
         let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
-        app.reload_config_from(&path);
+        let (cfg, _warnings) = mineral_config::load(&path)?;
+        app.apply_config(std::sync::Arc::new(cfg));
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
             .lock()
@@ -905,7 +907,8 @@ mod tests {
             "return { tui = { behavior = { remember_track_pos = \"off\" } } }",
         )?;
         let mut app = app_with_library(10, /*sel_track*/ 0)?;
-        app.reload_config_from(&path);
+        let (cfg, _warnings) = mineral_config::load(&path)?;
+        app.apply_config(std::sync::Arc::new(cfg));
         for _ in 0..3 {
             press(&mut app, KeyCode::Char('j'));
         }

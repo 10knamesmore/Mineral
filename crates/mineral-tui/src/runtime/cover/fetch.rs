@@ -93,7 +93,7 @@ impl CoverFetcher {
     ///
     /// # Params:
     ///   - `cfg`: 封面段配置(timeout / 尺寸 / 存储形态 / 并发 / kmeans)
-    ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `cache.cover_capacity`)
+    ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `tui.cover.cache.disk`)
     ///   - `store`: 共享的 `tui.db` 句柄(与 UI 偏好共用连接池;`None` = 降级不缓存)
     pub async fn spawn(
         cfg: CoverConfig,
@@ -129,7 +129,7 @@ impl CoverFetcher {
     ///
     /// # Params:
     ///   - `store`: 共享的 `tui.db` 句柄(`None` = 上游已降级)
-    ///   - `capacity`: 缓存容量上限(字节,配置 `cache.cover_capacity`)
+    ///   - `capacity`: 缓存容量上限(字节,配置 `tui.cover.cache.disk`)
     ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
@@ -641,6 +641,7 @@ mod tests {
                 "sample_dim": 64, "swatches": 6, "seed": 1, "max_iter": 20, "converge": 5.0,
                 "l_min": 8.0, "l_max": 92.0, "chroma_min": 8.0, "min_valid_pixels_pct": 5,
             },
+            "cache": { "disk": 4294967296_u64, "image": 134217728, "protocol": 67108864 },
         }))?;
         Ok(Arc::new(cfg))
     }

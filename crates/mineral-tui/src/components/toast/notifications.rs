@@ -92,6 +92,17 @@ impl Notifications {
         }
     }
 
+    /// 配置热更:就地重设默认展示时长与进出场拍数,**存活通知不动**
+    /// (在场的按旧节奏放完,新来的用新参数)。
+    ///
+    /// # Params:
+    ///   - `flash_ttl_secs`: 一次性通知展示秒数(配置 `toast.flash_ttl_secs`)
+    ///   - `toast_anim_ticks`: toast 进 / 出场动画 tick 数
+    pub(crate) fn retempo(&mut self, flash_ttl_secs: u64, toast_anim_ticks: u16) {
+        self.flash_ttl = Duration::from_secs(flash_ttl_secs);
+        self.anim_ticks = toast_anim_ticks;
+    }
+
     /// 推一条一次性通知(`deadline = now + flash_ttl`)。多次调用 = 多条堆叠。
     ///
     /// # Params:

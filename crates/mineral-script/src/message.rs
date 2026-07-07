@@ -327,16 +327,25 @@ pub enum ScriptCmd {
         id: crate::proc::SpawnId,
     },
 
-    /// session 级 UI 旋钮覆盖(`mineral.ui.override`)。daemon 零解释:
-    /// 记 opaque 表 + 转发 [`Event::UiOverride`](mineral_protocol::Event::UiOverride),
-    /// key→旋钮映射在 client 边缘。
-    UiOverride {
-        /// 旋钮键(约定 = 配置路径,如 `lyrics.fullscreen_line_gap`)。
-        key: String,
+    /// session 级配置覆盖(`mineral.config.override`)。daemon 把它合成进
+    /// 有效配置(深合并 + 落型校验,坏路径 / 坏值剔除并警告),经
+    /// [`Event::ConfigChanged`](mineral_protocol::Event::ConfigChanged) 推给订阅 client。
+    ConfigOverride {
+        /// 配置路径(真实路径,如 `tui.lyrics.fullscreen_line_gap`)。
+        path: String,
 
         /// 覆盖值;`None` = 撤销(Lua 侧传 nil)。`Some(Nil)` 不出现,
         /// API 层把 nil 收敛成 `None`,避免「覆盖成 Nil」与「撤销」两义。
         value: Option<mineral_protocol::BusValue>,
+    },
+
+    /// 窗口标题整串覆盖(`mineral.ui.window_title`,脚本自渲染)。渲染产物
+    /// 直通:不进配置合成,经
+    /// [`Event::WindowTitleOverride`](mineral_protocol::Event::WindowTitleOverride)
+    /// 转发给订阅 client;高频刷零成本。
+    WindowTitle {
+        /// 覆盖文本;`None` = 撤销(Lua 侧传 nil),client 回落结构化模板。
+        text: Option<String>,
     },
 }
 

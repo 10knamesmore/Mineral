@@ -25,12 +25,14 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
 ///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
 ///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
+///   - `config_tree`: 有效配置底树(与 `config` 同一次加载的合成树,交配置宿主)。
 ///   - `config_path`: 用户 config.lua 路径(热重载 mtime 轮询的目标)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
     config: mineral_config::Config,
     script: mineral_server::ScriptParts,
+    config_tree: serde_json::Value,
     config_path: std::path::PathBuf,
 ) -> color_eyre::Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
@@ -73,6 +75,7 @@ pub async fn run(
         audio_mode,
         persist,
         ServerConfig::from_config(&config),
+        config_tree,
         Some(script_sender.clone()),
     )
     .await?;

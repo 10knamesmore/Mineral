@@ -100,15 +100,27 @@ pub enum Event {
         payload: BusValue,
     },
 
-    /// 脚本对某 UI 旋钮的 session 级覆盖(`mineral.ui.override`)。daemon
-    /// 零解释:只存表 + 转发 + 新 client 握手重放;key→旋钮的类型化映射在
-    /// client 边缘做,未知 key client 侧 warn + 丢。
-    UiOverride {
-        /// 旋钮键(约定 = 配置路径,如 `lyrics.fullscreen_line_gap`)。
-        key: String,
+    /// 有效配置变更(配置文件重载 / 脚本 session 覆盖):daemon 推送合成后的
+    /// **完整**配置树(default + user + 覆盖,已过 daemon 落型校验),client
+    /// 落型后整体顶替自己的配置。订阅 [`Subscription::Config`](crate::Subscription::Config)
+    /// 的 client 握手后先收当前有效配置一帧再进实时流。
+    ConfigChanged {
+        /// 有效配置树。
+        config: BusValue,
+    },
 
-        /// 覆盖值;`None` = 撤销覆盖,client 回落自己的配置值。
-        value: Option<BusValue>,
+    /// 窗口标题整串覆盖(`mineral.ui.window_title`,脚本自渲染);`None` = 撤销,
+    /// client 回落结构化模板。高频友好:直通转发,不触发配置合成。
+    WindowTitleOverride {
+        /// 覆盖文本;`None` 撤销。
+        text: Option<String>,
+    },
+
+    /// 按顶替键撤销存活通知(flash / 卡片)。daemon 用于「问题修复后主动撤卡」,
+    /// 如坏配置的警告卡在干净重载后消失。
+    DismissToast {
+        /// 顶替键(与 [`Event::Toast`] / [`Event::Card`] 的 `id` 同一命名空间)。
+        id: String,
     },
 }
 
@@ -117,14 +129,17 @@ impl Event {
     #[must_use]
     pub fn subscription(&self) -> Subscription {
         match self {
-            Self::Toast { .. } | Self::Card { .. } => Subscription::Toast,
+            Self::Toast { .. } | Self::Card { .. } | Self::DismissToast { .. } => {
+                Subscription::Toast
+            }
             Self::PropertyChanged { .. } => Subscription::Property,
             Self::TrackFinished { .. }
             | Self::DownloadCompleted { .. }
             | Self::StoreChanged { .. }
             | Self::ScriptReloaded => Subscription::Lifecycle,
             Self::BusMessage { .. } => Subscription::Bus,
-            Self::UiOverride { .. } => Subscription::UiOverride,
+            Self::ConfigChanged { .. } => Subscription::Config,
+            Self::WindowTitleOverride { .. } => Subscription::WindowTitle,
         }
     }
 }
@@ -156,6 +171,64 @@ pub enum BusValue {
 
     /// 字符串键映射(有序键值对)。
     Map(Vec<(String, Self)>),
+}
+
+impl BusValue {
+    /// 转成 JSON 值,供配置树合并等 serde 消费方使用(边缘适配,协议内部仍是
+    /// 本类型)。`Map` 转 object(重复键后者胜),非有限浮点(NaN/±∞)无 JSON
+    /// 表示、落 `Null`。
+    ///
+    /// # Return:
+    ///   等形的 `serde_json::Value`
+    #[must_use]
+    pub fn into_json(self) -> serde_json::Value {
+        match self {
+            Self::Nil => serde_json::Value::Null,
+            Self::Bool(b) => serde_json::Value::Bool(b),
+            Self::Int(n) => serde_json::Value::Number(n.into()),
+            Self::Float(f) => serde_json::Number::from_f64(f)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            Self::Str(s) => serde_json::Value::String(s),
+            Self::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(Self::into_json).collect())
+            }
+            Self::Map(pairs) => serde_json::Value::Object(
+                pairs
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_json()))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// 从 JSON 值构造(配置树等 serde 产物上 wire 前的边缘转换,方向与
+    /// [`Self::into_json`] 相反)。整数优先 `Int`;超出 `i64` 的巨大无符号数
+    /// 降为 `Float`(配置域不出现,防御性兜底)。
+    ///
+    /// # Params:
+    ///   - `value`: 源 JSON 值
+    ///
+    /// # Return:
+    ///   等形的 `BusValue`
+    #[must_use]
+    pub fn from_json(value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => Self::Nil,
+            serde_json::Value::Bool(b) => Self::Bool(b),
+            serde_json::Value::Number(n) => n
+                .as_i64()
+                .map_or_else(|| Self::Float(n.as_f64().unwrap_or(f64::MAX)), Self::Int),
+            serde_json::Value::String(s) => Self::Str(s),
+            serde_json::Value::Array(items) => {
+                Self::Array(items.into_iter().map(Self::from_json).collect())
+            }
+            serde_json::Value::Object(map) => Self::Map(
+                map.into_iter()
+                    .map(|(key, value)| (key, Self::from_json(value)))
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// 一段行内文本 + 样式(样式全缺省 = 正文默认、靠左),通知类载荷
@@ -396,4 +469,47 @@ pub enum PropValue {
 
     /// 缺省 / 空(如无在播歌)。
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BusValue;
+
+    /// BusValue → JSON:标量 / 数组 / 映射逐形转换;非有限浮点无 JSON 表示落 Null。
+    #[test]
+    fn bus_value_into_json_shapes() {
+        let value = BusValue::Map(vec![
+            ("n".to_owned(), BusValue::Int(3)),
+            ("f".to_owned(), BusValue::Float(1.5)),
+            ("s".to_owned(), BusValue::Str("x".to_owned())),
+            ("b".to_owned(), BusValue::Bool(true)),
+            ("nil".to_owned(), BusValue::Nil),
+            (
+                "arr".to_owned(),
+                BusValue::Array(vec![BusValue::Int(1), BusValue::Int(2)]),
+            ),
+        ]);
+        assert_eq!(
+            value.into_json(),
+            serde_json::json!({
+                "n": 3, "f": 1.5, "s": "x", "b": true, "nil": null, "arr": [1, 2],
+            })
+        );
+        assert_eq!(
+            BusValue::Float(f64::NAN).into_json(),
+            serde_json::Value::Null,
+            "NaN 无 JSON 表示,落 Null"
+        );
+    }
+
+    /// JSON → BusValue → JSON 往返保形(配置树上 wire 的双向边缘转换互逆)。
+    #[test]
+    fn bus_value_json_roundtrip() {
+        let json = serde_json::json!({
+            "audio": { "volume": 100 },
+            "tui": { "lyrics": { "gap": 1, "damping": 1.5 } },
+            "list": [1, "two", null, true],
+        });
+        assert_eq!(BusValue::from_json(json.clone()).into_json(), json);
+    }
 }

@@ -118,14 +118,20 @@ impl Notifier {
         });
     }
 
-    /// 转发一条 UI 旋钮覆盖给订阅 client(脚本路不投递:覆盖发自脚本,
-    /// 变更方已知值)。
+    /// 广播有效配置变更(脚本路不投递:配置变更由脚本 / 文件驱动,变更方已知)。
     ///
     /// # Params:
-    ///   - `key`: 旋钮键(opaque,daemon 不解释)
-    ///   - `value`: 覆盖值;`None` = 撤销
-    pub(crate) fn ui_override(&self, key: String, value: Option<mineral_protocol::BusValue>) {
-        let _ = self.events.send(Event::UiOverride { key, value });
+    ///   - `config`: 合成后的有效配置树
+    pub(crate) fn config_changed(&self, config: mineral_protocol::BusValue) {
+        let _ = self.events.send(Event::ConfigChanged { config });
+    }
+
+    /// 广播窗口标题覆盖(高频直通;脚本路不投递,覆盖发自脚本)。
+    ///
+    /// # Params:
+    ///   - `text`: 覆盖文本;`None` = 撤销
+    pub(crate) fn window_title_override(&self, text: Option<String>) {
+        let _ = self.events.send(Event::WindowTitleOverride { text });
     }
 
     /// 属性树某项变更:wire `PropertyChanged` + 脚本 `PropertyChanged`。

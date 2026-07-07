@@ -108,16 +108,20 @@ async fn handle_connection(
     // Response 与 Event 汇同一条 mpsc → 唯一 writer 串行写 sink,杜绝并发写。
     let (out_tx, out_rx) = mpsc::unbounded_channel::<Frame>();
     tokio::spawn(write_loop(sink, out_rx));
-    // 订阅 UiOverride 的 client 先收覆盖表重放,再进实时流(pump 还没起,
-    // 重放帧必然先入队;events_rx 在握手前已订阅,期间的变更不丢——
-    // 快照与缓冲间可能重复一条,client 侧 last-wins 幂等)。
-    if subscriptions.contains(&Subscription::UiOverride) {
-        for (key, value) in client.ui_overrides_snapshot() {
-            let _ = out_tx.send(Frame::Event(Event::UiOverride {
-                key,
-                value: Some(value),
-            }));
-        }
+    // 订阅 Config / WindowTitle 的 client 先收当前状态重放,再进实时流(pump
+    // 还没起,重放帧必然先入队;events_rx 在握手前已订阅,期间的变更不丢——
+    // 快照与缓冲间可能重复一帧,client 侧 last-wins 幂等)。
+    if subscriptions.contains(&Subscription::Config) {
+        let _ = out_tx.send(Frame::Event(Event::ConfigChanged {
+            config: client.effective_config(),
+        }));
+    }
+    if subscriptions.contains(&Subscription::WindowTitle)
+        && let Some(text) = client.window_title_override()
+    {
+        let _ = out_tx.send(Frame::Event(Event::WindowTitleOverride {
+            text: Some(text),
+        }));
     }
     let pump = tokio::spawn(event_pump(events_rx, subscriptions, out_tx.clone()));
     let result = read_loop(stream, client, &out_tx, shutdown).await;

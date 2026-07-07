@@ -48,7 +48,7 @@ pub(crate) struct ProtocolCache {
     /// 内部可变状态。
     inner: RefCell<Inner>,
 
-    /// 字节预算上限(来自配置 `cache.cover_protocol_memory`)。
+    /// 字节预算上限(来自配置 `tui.cover.cache.protocol`)。
     budget: u64,
 }
 
@@ -141,6 +141,29 @@ impl ProtocolCache {
         let mut inner = self.inner.borrow_mut();
         if let Some(entry) = inner.entries.remove(url) {
             inner.total_bytes = inner.total_bytes.saturating_sub(entry.bytes);
+        }
+    }
+
+    /// 现调字节预算(配置热更):缩小立即逐出最久未渲染项直到回落,**不清整表**
+    /// (被逐出的滚回时后台重编,不损正确性);调大只放宽上限。
+    ///
+    /// # Params:
+    ///   - `budget`: 新预算(字节)
+    pub(crate) fn set_budget(&mut self, budget: u64) {
+        self.budget = budget;
+        let mut inner = self.inner.borrow_mut();
+        while inner.total_bytes > budget {
+            let victim = inner
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(url, _)| url.clone());
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(entry) = inner.entries.remove(&victim) {
+                inner.total_bytes = inner.total_bytes.saturating_sub(entry.bytes);
+            }
         }
     }
 

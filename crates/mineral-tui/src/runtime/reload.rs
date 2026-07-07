@@ -1,87 +1,125 @@
-//! TUI 侧配置热重载:mtime 轮询 config.lua → 重读配置 → 重建 keymap / theme / 窗口标题。
+//! 有效配置的应用单入口:daemon 托管配置,client 不看文件。
 //!
-//! 与 daemon 的脚本重载**互相独立**(两进程各自看文件):TUI 这条只管自己
-//! 消费的配置切片;脚本 bind 键的刷新另由 daemon 推送的
-//! [`Event::ScriptReloaded`](mineral_protocol::Event::ScriptReloaded) 触发
-//! (见 `App::refresh_script_binds`),那才是 bind 表就绪的权威信号。
+//! daemon 是唯一 watcher / 合成者(文件重载 + 脚本覆盖都在 daemon 侧合成),
+//! client 经 `Event::ConfigChanged` 收有效配置树,落型后走 [`App::apply_config`]
+//! 应用——与启动自举同一套 from_config / retempo,不存在第二条应用路径。
 //!
-//! 范围:热应用 **keys / behavior(keymap)、theme、窗口标题与 marquee 节奏**
-//! (marquee 是折算成拍的快照,靠整体重建生效);其余构造期参数(动画时长 /
-//! toast TTL / 布局等)不热应用,重启生效。
+//! 应用语义分两类:**现读型**字段(布局 / 行距 / 步长等)随 `state.cfg` 换 Arc
+//! 下一帧天然生效;**固化型**(拍数折算 / FFT 预计算 / 缓存预算)在这里统一
+//! 就地重设——保留运行态(动画相位 / 存活通知 / 已缓存封面),只换参数。
+//! 新增固化型配置消费点必须挂进 [`App::apply_config`] 并配重载测试。
 
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
 
 use crate::runtime::marquee::Marquees;
 
-/// mtime 轮询间隔(独立于帧率:配置文件是人手保存,1s 粒度足够)。
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// 配置重载问题卡(警告 / 失败共用)的顶替键:重复重载顶替不刷屏,
-/// 干净重载主动撤卡。
-const RELOAD_CARD_ID: &str = "config.reload";
-
-/// config.lua 的 mtime 监视器(App 持有,主循环每帧喂)。
-pub(crate) struct ConfigWatch {
-    /// 监视目标(config.lua 路径;解析失败时为 `None`,监视禁用)。
-    path: Option<std::path::PathBuf>,
-
-    /// 上次看到的修改时间(`None` = 文件不存在)。
-    last_mtime: Option<SystemTime>,
-
-    /// 上次 stat 的时刻(限频)。
-    last_poll: Instant,
-}
-
-impl ConfigWatch {
-    /// 建监视器并记下当前 mtime 基线。
-    pub(crate) fn new() -> Self {
-        let path = mineral_paths::config_dir()
-            .ok()
-            .map(|d| d.join("config.lua"));
-        let last_mtime = path.as_deref().and_then(mtime_of);
-        Self {
-            path,
-            last_mtime,
-            last_poll: Instant::now(),
-        }
-    }
-
-    /// 每帧调用:到轮询间隔才真 stat;mtime 变了返回 `true`(调用方触发重载)。
-    pub(crate) fn changed(&mut self) -> bool {
-        let Some(path) = self.path.as_deref() else {
-            return false;
-        };
-        if self.last_poll.elapsed() < POLL_INTERVAL {
-            return false;
-        }
-        self.last_poll = Instant::now();
-        let current = mtime_of(path);
-        if current == self.last_mtime {
-            return false;
-        }
-        self.last_mtime = current;
-        true
-    }
-}
-
-/// 读文件修改时间;文件缺失 / stat 失败为 `None`。
-fn mtime_of(path: &std::path::Path) -> Option<SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
-}
+/// daemon 推送的配置落型失败时的驻留错误卡顶替键(下一帧好配置到来主动撤)。
+const PUSH_CARD_ID: &str = "config.push";
 
 impl crate::app::App {
-    /// 配置文件变更的重载入口(主循环在 [`ConfigWatch::changed`] 为真时调)。
-    pub(crate) fn reload_config(&mut self) {
-        let Ok(dir) = mineral_paths::config_dir() else {
-            return;
-        };
-        self.reload_config_from(&dir.join("config.lua"));
+    /// 应用一份新的有效配置:换 `state.cfg` Arc + 全部固化型消费点就地重设。
+    ///
+    /// 启动自举(`App::new` 的构造参数)与 daemon 推送(`Event::ConfigChanged`)
+    /// 共用此入口的 from_config / retempo 集合;运行态(动画相位 / 存活通知 /
+    /// 封面缓存 / 搜索会话)一律保留。
+    ///
+    /// # Params:
+    ///   - `cfg`: 新有效配置(`Arc` 共享只读)
+    pub(crate) fn apply_config(&mut self, cfg: Arc<mineral_config::Config>) {
+        self.state.cfg = cfg;
+        let cfg = Arc::clone(&self.state.cfg);
+        let tui_cfg = cfg.tui();
+        let anim = tui_cfg.animation();
+        let tick_ms = *anim.frame_tick_ms();
+        // 固化型(重建即换,无运行态):主题色 token / 窗口标题模板 / keymap 查表。
+        self.theme = Arc::new(crate::render::theme::Theme::from_config(tui_cfg.theme()));
+        self.window_title = crate::runtime::window_title::WindowTitle::new(tui_cfg.window_title());
+        self.rebuild_keymap();
+        // 固化型(带槽相位,整体重建 + 相位 reconciliation 在其内部):marquee / 唱片纹。
+        self.state.marquees = Marquees::from_config(anim.marquee(), tick_ms);
+        self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
+            *anim.vinyl_rev_ms(),
+            tick_ms,
+        );
+        // 固化型(携带运行态,就地重设保相位 / 保存活项 / 保缓存)。
+        self.overlays.retempo(crate::render::anim::ticks16_from_ms(
+            *anim.popup_anim_ms(),
+            tick_ms,
+        ));
+        self.notifications.retempo(
+            *tui_cfg.toast().flash_ttl_secs(),
+            crate::render::anim::ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
+        );
+        self.state.browse.retempo(anim);
+        self.state.channel_search.reconfigure(
+            crate::render::anim::ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
+            crate::render::anim::ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
+            crate::runtime::state::search_whitelist::SearchWhitelist::from(
+                tui_cfg.search().channel(),
+            ),
+        );
+        self.state.dim.retempo(crate::render::anim::ticks16_from_ms(
+            *anim.focus_fade_ms(),
+            tick_ms,
+        ));
+        self.state
+            .spectrum
+            .reconfigure(tui_cfg.spectrum().clone(), tick_ms);
+        // FFT 预计算贵且重建丢样本环缓冲(频谱空一两帧),参数没变不动。
+        let params = crate::runtime::state::spectrum_params(tui_cfg.spectrum());
+        if self.state.fft.params() != &params {
+            self.state.fft = mineral_spectrum::SpectrumComputer::new(params);
+        }
+        self.state.covers.set_budgets(
+            *tui_cfg.cover().cache().image(),
+            *tui_cfg.cover().cache().protocol(),
+        );
+    }
+
+    /// 消费一帧 daemon 推送的有效配置树:落型成功即应用;失败(版本偏斜等,
+    /// daemon 侧已校验、正常不该发生)保留现行配置 + 驻留错误卡。
+    ///
+    /// 握手重放的第一帧静默应用;之后的变更 flash 提示。
+    ///
+    /// # Params:
+    ///   - `config`: 有效配置树(wire 形)
+    pub(crate) fn apply_pushed_config(&mut self, config: mineral_protocol::BusValue) {
+        use crate::components::toast::card::{plain_body, plain_line};
+        use crate::components::toast::notifications::{TextTint, tinted_text_item};
+        match mineral_config::from_tree(&config.into_json()) {
+            Ok(cfg) => {
+                self.apply_config(Arc::new(cfg));
+                self.notifications.dismiss_card_by_id(PUSH_CARD_ID);
+                if self.config_replayed {
+                    self.notifications
+                        .flash(tinted_text_item("配置已更新".to_owned(), TextTint::Normal));
+                }
+                self.config_replayed = true;
+            }
+            Err(warning) => {
+                mineral_log::warn!(
+                    target: "tui",
+                    warning = %warning,
+                    "daemon 推送的配置落型失败,保留现行配置"
+                );
+                self.notifications.push_card(
+                    TextTint::Error,
+                    plain_line("config push rejected"),
+                    plain_body(vec![
+                        warning.to_string(),
+                        "keeping current config".to_owned(),
+                    ]),
+                    Some(PUSH_CARD_ID.to_owned()),
+                    /*ttl*/ None,
+                );
+            }
+        }
     }
 
     /// 启动期配置提示(`run` 在 `App::new` 后调一次):
     ///   - `config_path` 不存在 → 驻留卡提醒 `mineral config init`(每次启动都提醒,
     ///     直到用户真的生成配置);
-    ///   - 启动加载的降级告警 → 与热重载同一张警告卡(同 id,改好后热重载自动撤)。
+    ///   - 启动自举加载的降级告警 → 驻留警告卡(daemon 侧重载后的告警走推送通道)。
     ///
     /// # Params:
     ///   - `config_path`: config.lua 路径(解析失败给 `None`,跳过缺失检查)
@@ -113,75 +151,10 @@ impl crate::app::App {
                 TextTint::Warn,
                 plain_line("config.lua warnings"),
                 plain_body(lines),
-                Some(RELOAD_CARD_ID.to_owned()),
+                Some("config.reload".to_owned()),
                 /*ttl*/ None,
             );
         }
-    }
-
-    /// 从指定路径重读配置并热应用 keymap / theme / 窗口标题(路径可注入,单测用)。
-    ///
-    /// 加载失败(IO / 全文件 eval 失败回落默认也算成功路径,由 loader 语义
-    /// 决定)时保留现行配置,弹驻留错误卡(错误链逐层一行);切片级 warning
-    /// 聚合成一张驻留警告卡。问题卡共用顶替键 [`RELOAD_CARD_ID`]:重复重载
-    /// 顶替不刷屏,干净重载(无警告)主动撤卡——用户修好配置卡自动消失。
-    ///
-    /// # Params:
-    ///   - `path`: config.lua 路径
-    pub(crate) fn reload_config_from(&mut self, path: &std::path::Path) {
-        use crate::components::toast::card::{plain_body, plain_line};
-        use crate::components::toast::notifications::{TextTint, tinted_text_item};
-        let (cfg, warnings) = match mineral_config::load(path) {
-            Ok(loaded) => loaded,
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "tui",
-                    error = mineral_log::chain(&e),
-                    "配置重载失败,保留现行配置"
-                );
-                let mut lines = e.chain().map(ToString::to_string).collect::<Vec<String>>();
-                lines.push("keeping current config".to_owned());
-                self.notifications.push_card(
-                    TextTint::Error,
-                    plain_line("config reload failed"),
-                    plain_body(lines),
-                    Some(RELOAD_CARD_ID.to_owned()),
-                    /*ttl*/ None,
-                );
-                return;
-            }
-        };
-        if warnings.is_empty() {
-            self.notifications.dismiss_card_by_id(RELOAD_CARD_ID);
-        } else {
-            for warning in &warnings {
-                mineral_log::warn!(target: "tui", warning = %warning, "配置重载 warning");
-            }
-            let lines = warnings.iter().map(ToString::to_string);
-            self.notifications.push_card(
-                TextTint::Warn,
-                plain_line("config.lua warnings"),
-                plain_body(lines),
-                Some(RELOAD_CARD_ID.to_owned()),
-                /*ttl*/ None,
-            );
-        }
-        let cfg = std::sync::Arc::new(cfg);
-        self.theme =
-            std::sync::Arc::new(crate::render::theme::Theme::from_config(cfg.tui().theme()));
-        self.state.cfg = cfg;
-        self.window_title =
-            crate::runtime::window_title::WindowTitle::new(self.state.cfg.tui().window_title());
-        let anim = self.state.cfg.tui().animation();
-        self.state.marquees = Marquees::from_config(anim.marquee(), *anim.frame_tick_ms());
-        self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
-            *anim.vinyl_rev_ms(),
-            *anim.frame_tick_ms(),
-        );
-        self.rebuild_keymap();
-        mineral_log::info!(target: "tui", "配置已重载(keymap / theme / 窗口标题 / marquee)");
-        self.notifications
-            .flash(tinted_text_item("配置已重载".to_owned(), TextTint::Normal));
     }
 
     /// daemon 推送 `ScriptReloaded` 后刷新脚本 bind 键(配置部分不动,
@@ -204,35 +177,39 @@ impl crate::app::App {
 #[cfg(test)]
 mod tests {
     use mineral_config::keys::KeyChord;
+    use mineral_protocol::BusValue;
 
     use crate::runtime::action::Action;
     use crate::test_support::app_with_queue;
 
-    /// 重载后 keymap / theme 热应用:改键绑定 + 主题色,reload 后即生效;
-    /// 通知层收到「配置已重载」提示。
+    /// 造一帧「default.lua + overlay」合成的有效配置树(wire 形),
+    /// 与 daemon 侧合成路径同构。
+    fn pushed_tree(overlay: serde_json::Value) -> color_eyre::Result<BusValue> {
+        Ok(BusValue::from_json(mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            overlay,
+        )))
+    }
+
+    /// 推送应用:keymap / theme 热生效;首帧(握手重放)静默、次帧 flash 提示。
     #[test]
-    fn reload_applies_keymap_and_theme() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            r##"return { tui = {
-                keys = { play_pause = "w" },
-                theme = { accent = "#ff0000" },
-            } }"##,
-        )?;
+    fn pushed_config_applies_keymap_and_theme() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let old_accent = app.theme.accent;
         assert_eq!(
             app.keymap.lookup(KeyChord::parse("<Space>")?),
             Some(Action::TogglePlayPause),
-            "重载前默认绑定"
+            "应用前默认绑定"
         );
-        app.reload_config_from(&path);
+        let entries_before = app.notifications.entry_count();
+        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": {
+            "keys": { "play_pause": "w" },
+            "theme": { "accent": "#ff0000" },
+        } }))?);
         assert_eq!(
             app.keymap.lookup(KeyChord::parse("w")?),
             Some(Action::TogglePlayPause),
-            "重载后新键生效"
+            "新键生效"
         );
         assert_eq!(
             app.keymap.lookup(KeyChord::parse("<Space>")?),
@@ -240,22 +217,27 @@ mod tests {
             "旧键整体替换"
         );
         assert_ne!(app.theme.accent, old_accent, "主题热应用");
-        assert!(app.notifications.entry_count() >= 1, "应有重载提示");
+        assert_eq!(
+            app.notifications.entry_count(),
+            entries_before,
+            "首帧(握手重放)应静默"
+        );
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "audio": { "volume": 42 } }),
+        )?);
+        assert!(
+            app.notifications.entry_count() > entries_before,
+            "后续变更应 flash 提示"
+        );
         Ok(())
     }
 
-    /// marquee 节奏随配置热重载:mode 改 off,reload 后溢出标题恒零相位
+    /// marquee 节奏随推送热更:mode 改 off 后溢出标题恒零相位
     /// (证明 Marquees 用新配置重建了,而非沿用启动折算的快照)。
     #[test]
-    fn reload_rebuilds_marquee_tempo() -> color_eyre::Result<()> {
+    fn pushed_config_rebuilds_marquee_tempo() -> color_eyre::Result<()> {
         use crate::runtime::marquee::Slot;
 
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            r#"return { tui = { animation = { marquee = { mode = "off" } } } }"#,
-        )?;
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         // 默认 loop:溢出 + 推进足量后相位应非零(默认 pause 100ms/16ms ≈ 7 拍)。
         for _ in 0..200 {
@@ -288,8 +270,10 @@ mod tests {
                 )
                 .offset,
         );
-        assert!(scrolled > 0, "重载前默认 loop 应在滚动");
-        app.reload_config_from(&path);
+        assert!(scrolled > 0, "应用前默认 loop 应在滚动");
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "animation": { "marquee": { "mode": "off" } } } }),
+        )?);
         for _ in 0..200 {
             app.state.marquees.tick();
         }
@@ -304,50 +288,92 @@ mod tests {
                 /*gap_w*/ 2,
             )
             .offset;
-        assert_eq!(after, 0, "重载为 off 后应恒零相位");
+        assert_eq!(after, 0, "热更为 off 后应恒零相位");
         Ok(())
     }
 
-    /// 窗口标题随配置热重载:换成含 lyric 的模板,reload 后 wants_lyric 翻真
-    /// (证明 window_title 用新配置重建了,而非沿用旧的)。
+    /// 窗口标题随推送热更:换成含 lyric 的模板后 wants_lyric 翻真。
     #[test]
-    fn reload_rebuilds_window_title() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+    fn pushed_config_rebuilds_window_title() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         assert!(!app.window_title.wants_lyric(), "默认模板不含 lyric");
-        std::fs::write(
-            &path,
-            r#"return { tui = { window_title = { template = { { field = "lyric" } } } } }"#,
-        )?;
-        app.reload_config_from(&path);
+        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "window_title": {
+            "template": [ { "field": "lyric" } ],
+        } } }))?);
         assert!(
             app.window_title.wants_lyric(),
-            "重载后模板含 lyric → 窗口标题热应用"
+            "热更后模板含 lyric → 窗口标题热应用"
         );
         Ok(())
     }
 
-    /// 加载失败(IO 错误:路径是目录)保留现行配置,弹驻留错误卡。
+    /// 固化型就地重设保留运行态:全屏形变飞行中热更拍数,逻辑态与相位都不回零。
     #[test]
-    fn reload_failure_keeps_current_config() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
+    fn pushed_config_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.reload_config_from(dir.path()); // 目录不是文件 → load Err
+        app.state.browse.fullscreen.toggle();
+        for _ in 0..3 {
+            app.state.browse.fullscreen.tick();
+        }
+        let mid = app.state.browse.fullscreen.eased_in_out();
+        assert!(mid > 0, "前置:形变已起步");
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "animation": { "fullscreen_ms": 1000 } } }),
+        )?);
+        assert!(app.state.browse.fullscreen.on(), "逻辑态保留");
+        assert!(
+            app.state.browse.fullscreen.eased_in_out() >= mid,
+            "相位不回零(retempo 只换速度)"
+        );
+        Ok(())
+    }
+
+    /// 防御:落型不了的推送(版本偏斜)保留现行配置,弹驻留错误卡;
+    /// 下一帧好配置到来自动撤卡。
+    #[test]
+    fn bad_pushed_config_keeps_current_and_recovers() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.apply_pushed_config(BusValue::Map(vec![(
+            "no_such_section".to_owned(),
+            BusValue::Int(1),
+        )]));
         assert_eq!(
             app.keymap.lookup(KeyChord::parse("<Space>")?),
             Some(Action::TogglePlayPause),
             "失败时键表不动"
         );
         assert!(
-            app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            app.notifications.has_live_card(super::PUSH_CARD_ID),
             "失败应弹驻留错误卡"
+        );
+        app.apply_pushed_config(pushed_tree(serde_json::json!({}))?);
+        assert!(
+            !app.notifications.has_live_card(super::PUSH_CARD_ID),
+            "好配置到来应撤卡"
         );
         Ok(())
     }
 
+    /// 封面缓存预算热更:缩到 0 立即逐出已缓存原图(不清表结构、派生物联动清理)。
+    #[test]
+    fn pushed_config_shrinks_cover_budget_evicts() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let url = mineral_model::MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8));
+        let evicted = app.state.covers.cache.insert(&url, Arc::new(img));
+        assert!(evicted.is_empty(), "预算内不逐出");
+        assert_eq!(app.state.covers.cache.len(), 1, "前置:已缓存一张");
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "cover": { "cache": { "image": 0 } } } }),
+        )?);
+        assert_eq!(app.state.covers.cache.len(), 0, "预算缩到 0 应立即逐出");
+        Ok(())
+    }
+
     /// 启动期:config.lua 缺失 → init 提醒卡;文件存在 → 不弹;
-    /// 启动降级告警 → 与热重载同 id 的警告卡。
+    /// 启动降级告警 → 警告卡。
     #[test]
     fn startup_notifies_missing_config_and_warnings() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -367,7 +393,7 @@ mod tests {
             "配置存在不该提醒 init"
         );
 
-        // 真实坏配置产出的 warnings → 与热重载同一张警告卡。
+        // 真实坏配置产出的 warnings → 警告卡。
         std::fs::write(
             &missing,
             r#"return { tui = { behavior = { volume_step = "loud" } } }"#,
@@ -377,35 +403,8 @@ mod tests {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         app.notify_startup_config(Some(&missing), &warnings);
         assert!(
-            app.notifications.has_live_card(super::RELOAD_CARD_ID),
+            app.notifications.has_live_card("config.reload"),
             "启动降级告警应进警告卡"
-        );
-        Ok(())
-    }
-
-    /// 坏字段配置:警告升级为驻留卡(同 id 顶替不堆叠);修好后干净重载主动撤卡。
-    #[test]
-    fn reload_warning_card_replaces_then_clears_on_clean_reload() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            r#"return { tui = { behavior = { volume_step = "loud" } } }"#,
-        )?;
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.reload_config_from(&path);
-        assert!(
-            app.notifications.has_live_card(super::RELOAD_CARD_ID),
-            "坏字段应弹警告卡"
-        );
-        app.reload_config_from(&path);
-        assert_eq!(app.notifications.card_count(), 1, "重复重载同 id 顶替");
-
-        std::fs::write(&path, "return {}")?;
-        app.reload_config_from(&path);
-        assert!(
-            !app.notifications.has_live_card(super::RELOAD_CARD_ID),
-            "干净重载应撤卡"
         );
         Ok(())
     }

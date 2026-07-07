@@ -73,7 +73,7 @@ pub async fn run(
     // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。
     let cover_fetcher = CoverFetcher::spawn(
         cfg.tui().cover().clone(),
-        *cfg.cache().cover_capacity(),
+        *cfg.tui().cover().cache().disk(),
         store,
     )
     .await
@@ -115,6 +115,9 @@ pub async fn run(
                 audio_mode,
                 persist,
                 mineral_server::ServerConfig::from_config(&cfg),
+                // in-proc 无脚本线程也无 watcher,配置宿主是静态默认树
+                // (无人订阅重放;TUI 用的是自己 bootstrap 的 cfg)。
+                mineral_config::default_tree()?,
                 /*script*/ None,
             )
             .await?;

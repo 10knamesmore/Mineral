@@ -23,6 +23,7 @@ mineral-persist         = { workspace = true }
 mineral-protocol        = { workspace = true }
 mineral-script          = { workspace = true }
 mineral-server          = { workspace = true }
+serde_json              = { workspace = true }
 tokio                   = { workspace = true }
 
 [dev-dependencies]

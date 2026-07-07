@@ -46,7 +46,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     // sel(下方 push_if_new(get(sel)))与 playback 封面不受此约束、恒预取。
     let eff_radius = effective_cover_radius(
         radius,
-        *state.cfg.cache().cover_memory(),
+        *state.cfg.tui().cover().cache().image(),
         *state.cfg.tui().cover().max_dim(),
         playback_radius,
     );
@@ -135,7 +135,7 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 
 /// 封面预取的有效半径:取"配置半径"与"预算能留住的半径"的小者。
 ///
-/// 封面内存缓存有字节上限(`cache.cover_memory`);若预取窗口 `sel ± radius` 装不下,拉进来的
+/// 封面内存缓存有字节上限(`tui.cover.cache.image`);若预取窗口 `sel ± radius` 装不下,拉进来的
 /// 图会被 LRU 立刻逐出、下 tick 又因"不在 cache"被重取,陷入逐出↔重解码的 livelock(CPU 打满、
 /// 可见图在真图/占位间闪)。故按预算能容纳的封面数折算出半径上限,与配置半径取小者。
 ///
@@ -143,7 +143,7 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 ///
 /// # Params:
 ///   - `radius`: 配置的浏览预取半径(`prefetch.radius`)
-///   - `cover_memory`: 封面内存缓存字节预算(`cache.cover_memory`)
+///   - `cover_memory`: 封面内存缓存字节预算(`tui.cover.cache.image`)
 ///   - `max_dim`: 封面缩放后最大边(`cover.max_dim`),用于保守估单张字节
 ///   - `playback_radius`: 在播队列预取半径(`prefetch.playback_cover_radius`),预留其名额
 ///

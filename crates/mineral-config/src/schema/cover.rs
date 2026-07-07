@@ -5,6 +5,8 @@
 use mineral_config_macros::config_section;
 use serde::Deserialize;
 
+use crate::schema::de;
+
 /// 封面配置。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
@@ -33,6 +35,31 @@ pub struct CoverConfig {
 
     /// kmeans 取色参数。
     kmeans: KmeansConfig,
+
+    /// 缓存预算(磁盘配额 + 两层 RAM 预算)。
+    cache: CoverCacheConfig,
+}
+
+/// 封面缓存预算(挂在 `CoverConfig` 下)。三档都是 client 进程的旋钮:
+/// 磁盘是跨进程共享的持久文件,两层 RAM 是本进程常驻内存。
+///
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
+#[config_section]
+pub struct CoverCacheConfig {
+    /// 磁盘缓存容量上限(字节),存原始/重编码封面文件。
+    #[serde(deserialize_with = "de::u64_lossy")]
+    disk: u64,
+
+    /// 解码原图 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是常驻 RAM 的
+    /// 解码位图,越界即逐出最久未显示的封面,把进程内存钉死在此数。
+    #[serde(deserialize_with = "de::u64_lossy")]
+    image: u64,
+
+    /// 已编码终端协议 RAM 预算(字节)。是 `image` 之外的第二层常驻 RAM:
+    /// 每个协议留着源图副本 + kitty/sixel 编码序列,全屏大图可达 MB 级。
+    /// 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
+    #[serde(deserialize_with = "de::u64_lossy")]
+    protocol: u64,
 }
 
 /// 封面磁盘存储模式。不依赖渲染 crate;接线处映射到具体实现。

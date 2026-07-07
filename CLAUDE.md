@@ -49,6 +49,21 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 
 **术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是取数的**连接器 / 适配器**(回答"用哪个后端去取"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索 / 详情 / 取 URL 的后端实现时用 **channel**。同名异义的 `rodio` 声道 / `tokio` channel 与本词表无关,别牵连。
 
+### 配置托管:daemon 是唯一 watcher,client 只消费推送
+
+配置(file + session 覆盖)是 daemon 上的一份**运行时状态**:daemon mtime 轮询
+config.lua、合成 `merge(default, user, overlay)`、落型校验后经 `Event::ConfigChanged`
+推整树给订阅 client(握手先重放一帧);脚本 `mineral.config.override(path, value)` 是
+合成的一层,path 必须是真实配置路径,坏覆盖按 serde 报错路径剔除并警告。**client 不看
+文件**(TUI 启动本地 load 一次只是自举,连上即被推送顶替)。
+
+client 侧配置消费两条规矩:
+- **现读优先**:组件直接读 `state.cfg`(Arc,换整棵即热更),**不许**构造期把配置值
+  拷进自己字段(第二数据源)。
+- 确需构造期折算 / 固化的(拍数折算、FFT 预计算、缓存预算),必须挂
+  `App::apply_config` 单入口(就地重设:`retempo` 保动画相位、`set_budgets` 不清缓存),
+  并配一条重载测试(仿 `mineral-tui/src/runtime/reload.rs` 的既有测试)。
+
 ## Rust 工程约定
 
 ### 当前 workspace 强制的 lints

@@ -20,6 +20,7 @@ color-eyre     = { workspace = true }
 derive-getters = { workspace = true }
 rustc-hash     = { workspace = true }
 serde          = { workspace = true }
+serde_json     = { workspace = true }
 tokio          = { workspace = true }
 tokio-util     = { workspace = true }
 futures-util   = { workspace = true }

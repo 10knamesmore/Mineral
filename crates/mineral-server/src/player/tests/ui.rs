@@ -1,9 +1,9 @@
-//! UI 覆盖下发 · terminal 属性上报 · queue 插入编辑。
+//! 配置宿主(覆盖合成 / 校验剔除 / 标题覆盖)· terminal 属性上报 · queue 插入编辑。
 
 use super::*;
 use pretty_assertions::assert_eq;
 
-/// 造一个带 event hub 接收端的 core(UI 覆盖 / 属性下发断言用)。
+/// 造一个带 event hub 接收端的 core(配置宿主 / 属性下发断言用)。
 fn core_with_hub() -> color_eyre::Result<(
     PlayerCore,
     tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
@@ -20,46 +20,170 @@ fn core_with_hub() -> color_eyre::Result<(
     Ok((core, events_rx))
 }
 
-/// apply_ui_override:存表 + 转发;同值重写与撤销不存在的 key 都不发事件。
+/// 从 hub 收一帧 `ConfigChanged`,按 JSON pointer 取叶子值(断言辅助)。
+fn config_leaf(
+    events_rx: &mut tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
+    pointer: &str,
+) -> color_eyre::Result<serde_json::Value> {
+    match events_rx.try_recv()? {
+        mineral_protocol::Event::ConfigChanged { config } => config
+            .into_json()
+            .pointer(pointer)
+            .cloned()
+            .ok_or_else(|| color_eyre::eyre::eyre!("有效树缺 {pointer}")),
+        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+    }
+}
+
+/// 配置覆盖:合成 + 校验 + 推送;同值重写与撤销不存在的 path 都不发事件;
+/// 撤销回落底树值。
 #[tokio::test]
-async fn ui_override_stores_forwards_and_diffs() -> color_eyre::Result<()> {
-    use mineral_protocol::{BusValue, Event};
+async fn config_override_merges_and_diffs() -> color_eyre::Result<()> {
+    use mineral_protocol::BusValue;
     let (core, mut events_rx) = core_with_hub()?;
-    core.apply_ui_override(
-        "lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_override(
+        "tui.lyrics.fullscreen_line_gap".to_owned(),
         Some(BusValue::Int(2)),
     );
     assert_eq!(
-        events_rx.try_recv()?,
-        Event::UiOverride {
-            key: "lyrics.fullscreen_line_gap".to_owned(),
-            value: Some(BusValue::Int(2)),
-        }
+        config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
+        serde_json::json!(2),
+        "覆盖合成进有效树"
     );
     // 同值重写:不发。
-    core.apply_ui_override(
-        "lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_override(
+        "tui.lyrics.fullscreen_line_gap".to_owned(),
         Some(BusValue::Int(2)),
     );
     assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
-    // 撤销不存在的 key:不发。
-    core.apply_ui_override("no.such".to_owned(), None);
-    assert!(events_rx.try_recv().is_err(), "撤销不存在的 key 不得下发");
-    // 快照只含在表的键。
+    // 撤销不存在的 path:不发。
+    core.apply_config_override("tui.lyrics.compact_line_gap".to_owned(), None);
+    assert!(events_rx.try_recv().is_err(), "撤销不存在的 path 不得下发");
+    // 握手重放快照反映覆盖。
     assert_eq!(
-        core.ui_overrides_snapshot(),
-        vec![("lyrics.fullscreen_line_gap".to_owned(), BusValue::Int(2))]
+        core.effective_config()
+            .into_json()
+            .pointer("/tui/lyrics/fullscreen_line_gap"),
+        Some(&serde_json::json!(2)),
+        "重放快照带覆盖"
     );
-    // 真撤销:发 None + 表清空。
-    core.apply_ui_override("lyrics.fullscreen_line_gap".to_owned(), None);
+    // 真撤销:回落底树默认值(default.lua 的 1)。
+    core.apply_config_override("tui.lyrics.fullscreen_line_gap".to_owned(), None);
+    assert_eq!(
+        config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
+        serde_json::json!(1),
+        "撤销回落底树值"
+    );
+    Ok(())
+}
+
+/// 坏覆盖(类型不符 / 未知路径)被剔除:警告 toast、不推 ConfigChanged、
+/// 有效配置保持校验通过的那份;好覆盖不被殃及。
+#[tokio::test]
+async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
+    use mineral_protocol::{BusValue, Event, ToastKind};
+    let (core, mut events_rx) = core_with_hub()?;
+    // 先落一条好覆盖。
+    core.apply_config_override(
+        "tui.lyrics.fullscreen_line_gap".to_owned(),
+        Some(BusValue::Int(3)),
+    );
+    let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
+    // 类型不符:剔除 + 警告,好覆盖仍在。
+    core.apply_config_override(
+        "tui.lyrics.compact_line_gap".to_owned(),
+        Some(BusValue::Str("x".to_owned())),
+    );
+    match events_rx.try_recv()? {
+        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "坏覆盖应警告"),
+        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+    }
+    assert!(
+        events_rx.try_recv().is_err(),
+        "坏覆盖不得推 ConfigChanged(有效树没变)"
+    );
+    let effective = core.effective_config().into_json();
+    assert_eq!(
+        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
+        Some(&serde_json::json!(3)),
+        "好覆盖不被殃及"
+    );
+    assert_eq!(
+        effective.pointer("/tui/lyrics/compact_line_gap"),
+        Some(&serde_json::json!(0)),
+        "坏覆盖不生效,保持底树值"
+    );
+    // 未知路径:deny_unknown_fields 拒 → 剔除 + 警告。
+    core.apply_config_override("tui.lyrics.bogus".to_owned(), Some(BusValue::Int(1)));
+    match events_rx.try_recv()? {
+        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "未知路径应警告"),
+        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+    }
+    assert!(
+        events_rx.try_recv().is_err(),
+        "未知路径不得推 ConfigChanged"
+    );
+    Ok(())
+}
+
+/// 换底树(配置文件重载)后 session 覆盖仍叠在新底树上。
+#[tokio::test]
+async fn set_config_base_reapplies_overlay() -> color_eyre::Result<()> {
+    use mineral_protocol::BusValue;
+    let (core, mut events_rx) = core_with_hub()?;
+    core.apply_config_override(
+        "tui.lyrics.fullscreen_line_gap".to_owned(),
+        Some(BusValue::Int(4)),
+    );
+    let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
+    // 新底树 = 默认树上改 audio.volume(模拟用户改文件)。
+    let new_base = mineral_config::merge_tree(
+        mineral_config::default_tree()?,
+        serde_json::json!({ "audio": { "volume": 55 } }),
+    );
+    core.set_config_base(new_base);
+    let effective = match events_rx.try_recv()? {
+        mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
+        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+    };
+    assert_eq!(
+        effective.pointer("/audio/volume"),
+        Some(&serde_json::json!(55)),
+        "新底树生效"
+    );
+    assert_eq!(
+        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
+        Some(&serde_json::json!(4)),
+        "session 覆盖在重载后仍生效"
+    );
+    Ok(())
+}
+
+/// 窗口标题覆盖:直通转发 + 同值 diff + 重放快照;撤销发 None。
+#[tokio::test]
+async fn window_title_override_forwards_and_diffs() -> color_eyre::Result<()> {
+    use mineral_protocol::Event;
+    let (core, mut events_rx) = core_with_hub()?;
+    core.apply_window_title_override(Some("⏸ 歌名".to_owned()));
     assert_eq!(
         events_rx.try_recv()?,
-        Event::UiOverride {
-            key: "lyrics.fullscreen_line_gap".to_owned(),
-            value: None,
+        Event::WindowTitleOverride {
+            text: Some("⏸ 歌名".to_owned()),
         }
     );
-    assert!(core.ui_overrides_snapshot().is_empty(), "撤销后表应为空");
+    core.apply_window_title_override(Some("⏸ 歌名".to_owned()));
+    assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
+    assert_eq!(
+        core.window_title_override().as_deref(),
+        Some("⏸ 歌名"),
+        "握手重放快照"
+    );
+    core.apply_window_title_override(None);
+    assert_eq!(
+        events_rx.try_recv()?,
+        Event::WindowTitleOverride { text: None }
+    );
+    assert_eq!(core.window_title_override(), None, "撤销后无重放");
     Ok(())
 }
 

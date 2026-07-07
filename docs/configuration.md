@@ -250,6 +250,14 @@ return {
 | `download_workers` | 4 | 封面下载并发 worker 数 |
 | `encode_workers` | 2 | 终端图片协议编码并发 worker 数 |
 
+`cache` 子表(缓存预算;LRU,满了自动驱逐,磁盘项改小不立刻删文件):
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `disk` | `4 * 1024 ^ 3`(4 GiB) | 磁盘缓存上限,字节 |
+| `image` | `128 * 1024 ^ 2`(128 MiB) | 解码原图 RAM 预算;越界逐出最久未显示者 |
+| `protocol` | `64 * 1024 ^ 2`(64 MiB) | 已编码终端协议(序列+源图副本)RAM 预算;越界逐出最久未渲染者 |
+
 `kmeans` 子表(取色;取出的色不满意再动):
 
 | 字段 | 默认 | 说明 |
@@ -311,7 +319,7 @@ Search 布局态两个下拉框(source / kind)的白名单:列出即暴露、顺
 | `overshoot_damping` | 1 | 沉浸滚动撞首 / 末行的 rubber-band 过冲阻尼:过冲 = 超出行数 ÷ 此值,越大弹得越轻;0 视作 1 |
 | `overshoot_max_permille` | 6000 | 单次过冲上限,行的千分比(6000 = 6 行);0 = 关闭边界回弹 |
 
-两个 `*_line_gap` 可被脚本 `mineral.ui.override` 做 session 级覆盖(见[脚本指南](./scripting.md))。
+任意配置字段(含两个 `*_line_gap`)可被脚本 `mineral.config.override` 做 session 级覆盖(见[脚本指南](./scripting.md))。
 
 ## tui.animation — 动画
 
@@ -390,12 +398,11 @@ daemon 持有,改后重启 daemon。
 
 ## cache — 磁盘缓存容量
 
-LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐。可写算式。
+LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐。可写算式。封面缓存预算见 `tui.cover.cache`。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `audio_capacity` | `10 * 1024 ^ 3`(10 GiB) | 音频本体缓存上限,字节 |
-| `cover_capacity` | `4 * 1024 ^ 3`(4 GiB) | 封面缓存上限,字节 |
 
 ## download — 下载导出
 
