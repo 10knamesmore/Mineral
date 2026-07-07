@@ -202,7 +202,9 @@ impl AppState {
                 ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
                 ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
             )
-            .with_whitelist(search_whitelist::SearchWhitelist::from(cfg.tui().search())),
+            .with_whitelist(search_whitelist::SearchWhitelist::from(
+                cfg.tui().search().channel(),
+            )),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             library: LibraryData::new(),
             ui_overrides: crate::runtime::ui::overrides::UiOverrides::default(),

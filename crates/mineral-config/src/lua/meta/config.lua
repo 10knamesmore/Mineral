@@ -37,7 +37,7 @@
 ---@field spectrum? mineral.SpectrumConfig 频谱面板观感与动态
 ---@field cover? mineral.CoverConfig 封面抓取 / 缓存 / 取色
 ---@field prefetch? mineral.PrefetchConfig 数据预取范围与节流
----@field search? mineral.SearchConfig 本地过滤搜索(深度搜索开关与字段权重)
+---@field search? mineral.SearchConfig 搜索:本地过滤(deep)与 channel 远程搜索白名单(channel)
 ---@field lyrics? mineral.LyricsConfig 歌词面板行距与滚动
 ---@field animation? mineral.AnimationConfig 各动画时长与帧率
 ---@field toast? mineral.ToastConfig 顶栏通知停留时长
@@ -132,7 +132,7 @@
 ---@field page_scroll_rows? integer 翻页档滚动(<C-f>/<C-b>)一次滚的行数,≥1
 ---@field search_prefetch_rows? integer 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且该(源,kind)桶未榨干时,自动派发下一页搜索;越大越早预取
 ---@field kill_spawned_daemon_on_exit? boolean true = 退出 TUI 连带关掉自己拉起的 daemon;false = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀
----@field remember_track_pos? "off"|"session"|"persist" 歌单内光标位置记忆:off 不记;session 本次运行内记住;persist 落盘跨重启保留。搜索命中定位(search.locate_on_enter)优先于记忆位置
+---@field remember_track_pos? "off"|"session"|"persist" 歌单内光标位置记忆:off 不记;session 本次运行内记住;persist 落盘跨重启保留。搜索命中定位(search.deep.locate_on_enter)优先于记忆位置
 
 ---频谱面板。条高单位是 1/8 字符格,满高 64(8 行 × 8)。所有时长旋钮均为毫秒,
 ---运行时按 animation.frame_tick_ms 折算,与帧率解耦。条高动态是效果器 ADSR 模型:
@@ -198,16 +198,18 @@
 ---channel 搜索的目标类型名(封闭集合,typo 加载期报错)。
 ---@alias mineral.SearchKindName "song"|"album"|"artist"|"playlist"|"user"
 
----本地过滤搜索(`/`)。deep 打开后 Playlists 视图的搜索词穿透到歌单内歌曲,
----进搜索态时后台补拉未缓存歌单的曲目。
----sources / kinds 管 channel 搜索(Search 布局态)的两个下拉:白名单语义,
----列出即暴露、顺序即下拉顺序;不设 = 全量。
+---搜索:deep(本地过滤搜索行为旋钮)与 channel(远程搜索白名单)是两套互不相关的
+---功能,共享这一张父表。
 ---@class mineral.SearchConfig
----@field deep? boolean Playlists 视图搜索是否穿透到歌单内歌曲(总开关)
----@field deep_weights? mineral.DeepWeights 字段级命中分折扣
+---@field deep? mineral.DeepSearchConfig 本地过滤搜索(`/`)的行为旋钮
+---@field channel? mineral.ChannelSearchConfig channel 远程搜索两个下拉的白名单
+
+---本地过滤搜索(`/`)。enabled 打开后 Playlists 视图的搜索词穿透到歌单内歌曲,
+---进搜索态时后台补拉未缓存歌单的曲目。
+---@class mineral.DeepSearchConfig
+---@field enabled? boolean Playlists 视图搜索是否穿透到歌单内歌曲(总开关)
+---@field weights? mineral.DeepWeights 字段级命中分折扣
 ---@field locate_on_enter? boolean 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
----@field sources? mineral.SourceName[] channel 搜索 source 白名单+顺序;未列出的隐藏,不设 = 继承默认名单,空列表 = 防呆回退全量
----@field kinds? mineral.SearchKindName[] channel 搜索 kind 白名单+顺序,与各 source 可搜集合求交;不设 = 继承默认名单,空列表 = 防呆回退全量
 
 ---深度搜索的字段级权重,每项 0~1(越界 clamp),0 = 该字段不参与;
 ---歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),单曲分 = 各字段加权分取最高。
@@ -215,6 +217,12 @@
 ---@field name? number 歌名命中分折扣
 ---@field artist? number 艺人名命中分折扣(多艺人取最高)
 ---@field album? number 专辑名命中分折扣
+
+---channel 搜索(Search 布局态)的两个下拉:白名单语义,列出即暴露、顺序即下拉顺序;
+---不设 = 全量。
+---@class mineral.ChannelSearchConfig
+---@field sources? mineral.SourceName[] source 白名单+顺序;未列出的隐藏,不设 = 继承默认名单,空列表 = 防呆回退全量
+---@field kinds? mineral.SearchKindName[] kind 白名单+顺序,与各 source 可搜集合求交;不设 = 继承默认名单,空列表 = 防呆回退全量
 
 ---歌词面板。
 ---@class mineral.LyricsConfig

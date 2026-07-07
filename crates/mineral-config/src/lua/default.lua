@@ -140,22 +140,27 @@ return {
       play_count_debounce_ms = 500, -- 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API
       prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
     },
-    -- 本地过滤搜索(`/`)。
+    -- 搜索:本地过滤(`/`)与 channel 远程搜索是两套互不相关的旋钮,分挂 deep / channel 子表。
     search = {
-      deep = true, -- Playlists 视图搜索词穿透到歌单内歌曲;进搜索态时后台补拉未缓存歌单的曲目
-      -- 字段级命中分折扣 0~1,0 = 该字段不参与;歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
-      -- 单曲分 = max(name × 歌名分, artist × 艺人分, album × 专辑分)
-      deep_weights = {
-        name = 0.6, -- 歌名
-        artist = 0.5, -- 艺人(多艺人取最高)
-        album = 0.4, -- 专辑
+      -- 本地过滤搜索(`/`)。
+      deep = {
+        enabled = true, -- Playlists 视图搜索词穿透到歌单内歌曲;进搜索态时后台补拉未缓存歌单的曲目
+        -- 字段级命中分折扣 0~1,0 = 该字段不参与;歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
+        -- 单曲分 = max(name × 歌名分, artist × 艺人分, album × 专辑分)
+        weights = {
+          name = 0.6, -- 歌名
+          artist = 0.5, -- 艺人(多艺人取最高)
+          album = 0.4, -- 专辑
+        },
+        locate_on_enter = true, -- 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
       },
-      locate_on_enter = true, -- 深度命中行 Enter 进歌单后光标直接落到命中歌;false = 仍从头看
       -- channel 搜索两个下拉的白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
       -- source 名开放(插件源可写),没加载的名字静默跳过;空列表 = 防呆回退全量。
-      sources = { "netease", "bilibili" },
-      -- 封闭集合 song/album/artist/playlist/user,与各 source 可搜集合求交(保此处顺序)
-      kinds = { "song", "album", "artist", "playlist", "user" },
+      channel = {
+        sources = { "netease", "bilibili" },
+        -- 封闭集合 song/album/artist/playlist/user,与各 source 可搜集合求交(保此处顺序)
+        kinds = { "song", "album", "artist", "playlist", "user" },
+      },
     },
     lyrics = {
       fullscreen_line_gap = 1, -- 全屏歌词行间空行数;0 = 紧排但滚动变瞬跳

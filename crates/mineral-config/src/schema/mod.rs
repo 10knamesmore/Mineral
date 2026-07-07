@@ -38,7 +38,7 @@ pub use layout::{LayoutConfig, MenuAlign};
 pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
 pub use script::ScriptConfig;
-pub use search::{DeepWeights, SearchConfig};
+pub use search::{ChannelSearchConfig, DeepSearchConfig, DeepWeights, SearchConfig};
 pub use sources::{
     BackfillSection, BilibiliSection, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS,
     MineralSection, NeteaseSection, SourcesConfig,

@@ -78,7 +78,7 @@ pub struct TuiConfig {
     /// 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
     prefetch: PrefetchConfig,
 
-    /// 搜索段(深度搜索开关与权重)。
+    /// 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
     search: SearchConfig,
 
     /// 歌词段(行距 + 滚动手感)。

@@ -158,7 +158,7 @@ theme = {
 | `page_scroll_rows` | 15 | 翻页档滚动(`<C-f>`/`<C-b>`)一次行数 |
 | `search_prefetch_rows` | 8 | 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且未榨干时自动拉下一页 |
 | `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 不杀(想连 daemon 一起退用 `Q`,它无视本旋钮) |
-| `remember_track_pos` | `"session"` | 歌单内光标位置记忆:`"off"` 不记 / `"session"` 本次运行内 / `"persist"` 整表落 `tui.db` 跨重启;搜索命中定位(`search.locate_on_enter`)优先于记忆位置 |
+| `remember_track_pos` | `"session"` | 歌单内光标位置记忆:`"off"` 不记 / `"session"` 本次运行内 / `"persist"` 整表落 `tui.db` 跨重启;搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置 |
 
 ## tui.spectrum — 频谱面板
 
@@ -243,19 +243,32 @@ theme = {
 | `play_count_debounce_ms` | 500 | 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API |
 | `prewarm_ahead` | 1 | 全屏稳态提前编码后几首封面,消自动切歌的占位闪 |
 
-## tui.search — 本地过滤搜索
+## tui.search — 搜索
 
-`/` 触发的本地过滤。`deep` 打开后,Playlists 视图的搜索词会穿透到歌单内歌曲(歌名 / 艺人 / 专辑),进搜索态时后台补拉未缓存歌单的曲目,命中字符按 `theme.search_hit` 高亮。改后重启 TUI 生效(`theme.search_hit` 在 `tui.theme` 段下,保存即热重载)。
+`deep`(本地过滤)与 `channel`(远程搜索白名单)是两套互不相关的旋钮,共享这一张父表。
+
+### `search.deep` —— 本地过滤搜索(`/`)
+
+`/` 触发的本地过滤。`enabled` 打开后,Playlists 视图的搜索词会穿透到歌单内歌曲(歌名 / 艺人 / 专辑),进搜索态时后台补拉未缓存歌单的曲目,命中字符按 `theme.search_hit` 高亮。改后重启 TUI 生效(`theme.search_hit` 在 `tui.theme` 段下,保存即热重载)。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `deep` | `true` | Playlists 视图搜索是否穿透到歌单内歌曲(总开关) |
-| `deep_weights.name` | 0.6 | 深度搜索歌名命中分折扣 0~1,0 = 该字段不参与匹配 |
-| `deep_weights.artist` | 0.5 | 艺人名命中分折扣(多艺人取最高,0 = 关闭) |
-| `deep_weights.album` | 0.4 | 专辑名命中分折扣(0 = 关闭) |
+| `enabled` | `true` | Playlists 视图搜索是否穿透到歌单内歌曲(总开关) |
+| `weights.name` | 0.6 | 深度搜索歌名命中分折扣 0~1,0 = 该字段不参与匹配 |
+| `weights.artist` | 0.5 | 艺人名命中分折扣(多艺人取最高,0 = 关闭) |
+| `weights.album` | 0.4 | 专辑名命中分折扣(0 = 关闭) |
 | `locate_on_enter` | `true` | 深度命中行 `Enter` 进歌单后光标是否直接定位到命中歌(`false` = 仍从头看) |
 
 歌单最终分 = max(歌单名分, 歌单内最佳歌曲分);单曲分 = 各字段加权分取最高。
+
+### `search.channel` —— channel 远程搜索白名单
+
+Search 布局态两个下拉框(source / kind)的白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏;空列表走消费侧防呆回退全量。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `sources` | `["netease", "bilibili"]` | source 下拉白名单+顺序;source 名开放(插件源可写),没加载的名字静默跳过 |
+| `kinds` | `["song", "album", "artist", "playlist", "user"]` | kind 下拉白名单+顺序(封闭集合),与各 source 声明的可搜集合求交 |
 
 ## tui.lyrics — 歌词面板
 

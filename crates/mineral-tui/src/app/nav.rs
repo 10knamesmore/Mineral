@@ -149,7 +149,7 @@ impl BrowsePage {
     /// 深度搜索数据保障:Playlists 视图 + deep 开启时,列出所有未拉取 / 未请求的歌单(待补拉);
     /// 非该状态返回空。提任务 + 标记 `tracks_requested` 由落地端做(成败都标,失败不反复重提交)。
     fn deep_search_pending(&self, model: BrowseModel<'_>) -> Vec<PlaylistId> {
-        if self.view != View::Playlists || !*model.cfg.tui().search().deep() {
+        if self.view != View::Playlists || !*model.cfg.tui().search().deep().enabled() {
             return Vec::new();
         }
         model
@@ -239,7 +239,7 @@ impl BrowsePage {
                 {
                     // 深度命中行:进歌单后光标直接落到命中歌。必须在清词前取——
                     // deep_hit_for 对空 query 恒 None。
-                    let locate = (*model.cfg.tui().search().locate_on_enter())
+                    let locate = (*model.cfg.tui().search().deep().locate_on_enter())
                         .then(|| self.deep_hit_for(&target_id).map(|h| h.song_id))
                         .flatten();
                     self.search.clear();
@@ -722,7 +722,7 @@ mod tests {
         Ok(())
     }
 
-    /// 配置旋钮:`search.locate_on_enter = false` 时,深度命中行 Enter 进歌单
+    /// 配置旋钮:`search.deep.locate_on_enter = false` 时,深度命中行 Enter 进歌单
     /// 仍从第 0 行开始(不定位)。
     #[test]
     fn locate_on_enter_disabled_keeps_top() -> color_eyre::Result<()> {
@@ -735,7 +735,7 @@ mod tests {
         let path = dir.path().join("config.lua");
         std::fs::write(
             &path,
-            "return { tui = { search = { locate_on_enter = false } } }",
+            "return { tui = { search = { deep = { locate_on_enter = false } } } }",
         )?;
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
         app.reload_config_from(&path);
@@ -814,12 +814,15 @@ mod tests {
         Ok(())
     }
 
-    /// 配置总开关:`search.deep = false` 时按 `/` 不触发任何补拉。
+    /// 配置总开关:`search.deep.enabled = false` 时按 `/` 不触发任何补拉。
     #[test]
     fn slash_respects_deep_disabled() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("config.lua");
-        std::fs::write(&path, "return { tui = { search = { deep = false } } }")?;
+        std::fs::write(
+            &path,
+            "return { tui = { search = { deep = { enabled = false } } } }",
+        )?;
         let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
         app.reload_config_from(&path);
         press(&mut app, KeyCode::Char('/'));

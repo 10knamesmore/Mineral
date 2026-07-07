@@ -7,7 +7,7 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{SearchKind, SourceKind};
 use rustc_hash::FxHashMap;
 
-/// channel 搜索两个下拉的白名单(`tui.search.sources` / `kinds` 的运行时快照)。
+/// channel 搜索两个下拉的白名单(`tui.search.channel.sources` / `kinds` 的运行时快照)。
 /// 配置每次运行不可变,构造 SearchPage 时拷一份进来,下拉数据源每帧据此重算。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SearchWhitelist {
@@ -18,8 +18,8 @@ pub(crate) struct SearchWhitelist {
     pub(crate) kinds: Vec<SearchKind>,
 }
 
-impl From<&mineral_config::SearchConfig> for SearchWhitelist {
-    fn from(cfg: &mineral_config::SearchConfig) -> Self {
+impl From<&mineral_config::ChannelSearchConfig> for SearchWhitelist {
+    fn from(cfg: &mineral_config::ChannelSearchConfig) -> Self {
         Self {
             sources: cfg.sources().clone(),
             kinds: cfg.kinds().clone(),

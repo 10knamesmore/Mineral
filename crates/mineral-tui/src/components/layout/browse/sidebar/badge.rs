@@ -47,7 +47,7 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
 /// 深度索引在飞的歌单数:Playlists 视图 + deep 开启 + PlaylistDetail 任务计数 > 0。
 /// 不在此状态返回 `None`(badge 不缀)。搜不到时用户据此区分「真没有」和「还没拉完」。
 pub fn indexing_count(state: &AppState) -> Option<usize> {
-    if state.browse.view != View::Playlists || !*state.cfg.tui().search().deep() {
+    if state.browse.view != View::Playlists || !*state.cfg.tui().search().deep().enabled() {
         return None;
     }
     let n = state

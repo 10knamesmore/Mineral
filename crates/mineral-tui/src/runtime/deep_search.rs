@@ -79,8 +79,8 @@ struct CacheKey {
 impl CacheKey {
     /// 以当前 state 算一份指纹。
     fn current(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) -> Self {
-        let scfg = cfg.tui().search();
-        let w = scfg.deep_weights();
+        let scfg = cfg.tui().search().deep();
+        let w = scfg.weights();
         Self {
             query: search.query().to_owned(),
             generation: library.tracks_generation,
@@ -89,7 +89,7 @@ impl CacheKey {
                 w.artist().to_bits(),
                 w.album().to_bits(),
             ],
-            deep: *scfg.deep(),
+            deep: *scfg.enabled(),
         }
     }
 
@@ -100,9 +100,9 @@ impl CacheKey {
         library: &LibraryData,
         cfg: &mineral_config::Config,
     ) -> bool {
-        let scfg = cfg.tui().search();
-        let w = scfg.deep_weights();
-        self.deep == *scfg.deep()
+        let scfg = cfg.tui().search().deep();
+        let w = scfg.weights();
+        self.deep == *scfg.enabled()
             && self.generation == library.tracks_generation
             && self.weights
                 == [
@@ -141,7 +141,7 @@ fn build(
     library: &LibraryData,
     cfg: &mineral_config::Config,
 ) -> FxHashMap<PlaylistId, DeepHit> {
-    let w = cfg.tui().search().deep_weights();
+    let w = cfg.tui().search().deep().weights();
     let wn = f64::from(w.name().clamp(0.0, 1.0));
     let wa = f64::from(w.artist().clamp(0.0, 1.0));
     let wal = f64::from(w.album().clamp(0.0, 1.0));
@@ -369,7 +369,7 @@ mod tests {
         let path = dir.path().join("config.lua");
         std::fs::write(
             &path,
-            "return { tui = { search = { deep_weights = { artist = 0 } } } }",
+            "return { tui = { search = { deep = { weights = { artist = 0 } } } } }",
         )?;
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");

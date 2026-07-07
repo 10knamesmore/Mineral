@@ -467,22 +467,22 @@ mod tests {
     fn search_whitelists_deserialize_in_order() -> color_eyre::Result<()> {
         let path = temp_config(
             "searchwl",
-            r#"return { tui = { search = {
+            r#"return { tui = { search = { channel = {
                 sources = { "bilibili", "netease" },
                 kinds = { "album", "song" },
-            } } }"#,
+            } } } }"#,
         )?;
         let (cfg, warnings) = load(&path)?;
         std::fs::remove_file(&path)?;
         assert!(warnings.is_empty(), "实得 {warnings:?}");
-        let search = cfg.tui().search();
+        let channel = cfg.tui().search().channel();
         assert_eq!(
-            *search.sources(),
+            *channel.sources(),
             vec!["bilibili".to_owned(), "netease".to_owned()],
             "sources 保配置顺序(数组整体替换默认)"
         );
         assert_eq!(
-            *search.kinds(),
+            *channel.kinds(),
             vec![SearchKind::Album, SearchKind::Song],
             "kinds 保配置顺序(数组整体替换默认)"
         );
@@ -490,11 +490,11 @@ mod tests {
         // 只守「默认必须非空」——空名单会让消费侧走防呆回退,默认态不该踩它。
         let defaults = Config::defaults()?;
         assert!(
-            !defaults.tui().search().sources().is_empty(),
+            !defaults.tui().search().channel().sources().is_empty(),
             "默认 sources 非空"
         );
         assert!(
-            !defaults.tui().search().kinds().is_empty(),
+            !defaults.tui().search().channel().kinds().is_empty(),
             "默认 kinds 非空"
         );
         Ok(())
@@ -505,18 +505,18 @@ mod tests {
     fn search_kind_typo_rejected_with_path() -> color_eyre::Result<()> {
         let path = temp_config(
             "searchwlbad",
-            r#"return { tui = { search = { kinds = { "song", "sogn" } } } }"#,
+            r#"return { tui = { search = { channel = { kinds = { "song", "sogn" } } } } }"#,
         )?;
         let (cfg, warnings) = load(&path)?;
         std::fs::remove_file(&path)?;
         assert_eq!(
-            cfg.tui().search().kinds(),
-            Config::defaults()?.tui().search().kinds(),
+            cfg.tui().search().channel().kinds(),
+            Config::defaults()?.tui().search().channel().kinds(),
             "回落 default.lua 默认"
         );
         match warnings.as_slice() {
             [ConfigWarning::Deserialize { path, .. }] => {
-                assert_eq!(path, "tui.search.kinds[1]", "字段路径应精确到下标");
+                assert_eq!(path, "tui.search.channel.kinds[1]", "字段路径应精确到下标");
             }
             other => {
                 return Err(eyre!("应有一条 Deserialize warning:{other:?}"));
