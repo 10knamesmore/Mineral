@@ -1,4 +1,83 @@
 # Changelog
+## [0.5.3] — 2026-07-07
+
+### Features
+
+- 封面形变期与编码等待改用 halfblock 真图,消除全屏落定瞬间 hash 闪 ([`6c1d69d`](https://github.com/10knamesmore/Mineral/commit/6c1d69d481853b99c1b92243daca9f512312ba43))
+
+- 滚动期封面画低清真图而非留空,kitty 编码压到停稳后 ([`08e37c9`](https://github.com/10knamesmore/Mineral/commit/08e37c95db4976941dbf0b73b9b4aa0eba85a6c3))
+
+- Prewarm playlist entry track covers ([`6397288`](https://github.com/10knamesmore/Mineral/commit/6397288b7cbf7e3d9c1ef04e080bef58a28f4a88))
+
+- 接入 Bilibili 音源 ([`560359e`](https://github.com/10knamesmore/Mineral/commit/560359ee31413ae81e93ab9f9e27fb7a78daede2))
+
+- 分片流 StreamLayout 流式打开 + capture 按 Content-Length 校验入缓存 ([`3becb1a`](https://github.com/10knamesmore/Mineral/commit/3becb1a63aa3ffdb916dec1a0b26b12b254ab1e9))
+
+- 收藏改为本地 persist 事实来源 + channel 远端镜像/导入 ([`649924c`](https://github.com/10knamesmore/Mineral/commit/649924c158d2635da82fca1cab6db3e7fa8a51c3))
+
+- 显式 has_more 翻页信号 + web url 位置占位模板 ([`f7329cd`](https://github.com/10knamesmore/Mineral/commit/f7329cde5a8fe286da147f285a300d43770a0f6f))
+
+- Source/kind 下拉白名单配置 + source 下拉按源徽标色着色 ([`3579419`](https://github.com/10knamesmore/Mineral/commit/35794198332927276dbbec21d727d733925c6434))
+
+- Curate_playlists 两级歌单策展 + server 聚合快照 ([`c2bb673`](https://github.com/10knamesmore/Mineral/commit/c2bb6731f04539ac79971a60ab63733cd924d932))
+
+- Before_stream 拦截管道 + 无版权曲跨源补救全链 ([`e089fbd`](https://github.com/10knamesmore/Mineral/commit/e089fbd0265dca6fb1e879c99bf441d4fdb036cb))
+
+- 播放态驱动的终端窗口标题 ([`d1db8ff`](https://github.com/10knamesmore/Mineral/commit/d1db8ff082a42a416abd1bc25a5b92c11c3a5ba6))
+
+- Mineral 源聚合全源收藏 + 缺 meta 后台节流回填 ([`cab21f3`](https://github.com/10knamesmore/Mineral/commit/cab21f3163c71e0b215cf27666ebd8940395a331))
+
+- 封面原图/协议双字节预算 LRU + prefetch 按预算收窄 ([`4e292cf`](https://github.com/10knamesmore/Mineral/commit/4e292cff1b45eb76d2f5b85fb8b5e37187a3fdff))
+
+- 视频源建模为 BV→Album,消除 P1 投影 + artist 分区能力声明 ([`9b07c0a`](https://github.com/10knamesmore/Mineral/commit/9b07c0a43ce4e29ed690d0db291088c5f1f6b322))
+
+- Album.track_count 提为 Option<u64>,未知画 `-` + 详情回填 ([`8d0a2e5`](https://github.com/10knamesmore/Mineral/commit/8d0a2e5a56cbef307e2adf79d7ed81cf0c88e340))
+
+- 全局 ? 键位 cheatsheet 浮层 ([`5a5d8fd`](https://github.com/10knamesmore/Mineral/commit/5a5d8fdc7dec353f518f00933b33fd34a1b67d95))
+
+- Schema 版本化迁移(sqlx::migrate)+ mineral cache reset 删库重建 ([`eb41562`](https://github.com/10knamesmore/Mineral/commit/eb41562dff0bd95e1e2da0bf89d52c3daac25ce1))
+
+- Duration_ms 全链去 0 哨兵改 Option,修 bilibili gapless 预排从不触发 ([`15722dd`](https://github.com/10knamesmore/Mineral/commit/15722dd61dadc2bd649ae815d3c33f241600fd84))
+
+- Follower/bitrate/size/format 去哨兵改 Option,fmt 段不再显 0kbps 撒谎 ([`63221be`](https://github.com/10knamesmore/Mineral/commit/63221be6da45dac89938c1fe6a09288e23f8a0c8))
+
+- DB 约束交给库执行 + tui.db 禁 JSON(track_pos 专表 + client 迁移) ([`f37e6be`](https://github.com/10knamesmore/Mineral/commit/f37e6be22df4319295e43b8cd07913473f0681cd))
+
+- 封面下载走图床服务端缩放(仅传输层,缓存 key/模型仍原始 URL) ([`45c1a3a`](https://github.com/10knamesmore/Mineral/commit/45c1a3a73c7525ba72322d0c28184347d3c6523b))
+
+- Cover.download_workers 默认 4→12 ([`15e4327`](https://github.com/10knamesmore/Mineral/commit/15e432790003473b792e9627912754d1528c506c))
+
+- Song 译名字段 translation→alias + 全链渲染/持久化/搜索,修网易别名来源 ([`63567f3`](https://github.com/10knamesmore/Mineral/commit/63567f3f0d7d6dd05d5195c57545fa3d8dc2643c))
+
+- Tracks 面板左上角加 source 徽标 ([`71e74d5`](https://github.com/10knamesmore/Mineral/commit/71e74d5c3883769a624c07c93bb3420b0d9b7799))
+
+- 溢出标题 marquee 滚动(loop/bounce/off)+ 边缘 fade ([`7b71d7e`](https://github.com/10knamesmore/Mineral/commit/7b71d7e606a21fe882eed92f1761dda7eb58e666))
+
+- Not playing 全屏封面改旋转唱片纹待机动画 ([`1f4306b`](https://github.com/10knamesmore/Mineral/commit/1f4306bab0a65f391dc780abe26bfbe64ae52105))
+
+- Mineral 聚合歌单封面改成员真封面拼贴 ([`13eae14`](https://github.com/10knamesmore/Mineral/commit/13eae14192c6813bfd215cfdf6062b5dac4181cc))
+
+- 颜色 token 可引用终端 ANSI 槽 / 终端默认(跟随终端配色) ([`7324ad5`](https://github.com/10knamesmore/Mineral/commit/7324ad5a04fd64a29e667c8c231979b4316f6d33))
+
+- Daemon 托管配置——overlay 合成推送 + client apply_config 单入口 ([`dd671bd`](https://github.com/10knamesmore/Mineral/commit/dd671bd6b36b6a3a696f1a007726eb1de3a8bbc8))
+
+### Bug Fixes
+
+- Detail 下钻 sweep 对齐切区/左栏——读 view_sweep + ease-in-out ([`0102dc8`](https://github.com/10knamesmore/Mineral/commit/0102dc883e72c2e54c9e64e560aec1068cbbef01))
+
+- 队列含重复曲时按下标推进,根治两首交替曲死循环 ([`3e9e339`](https://github.com/10knamesmore/Mineral/commit/3e9e339870840318fcf4a9675d729df4c6cd92a6))
+
+- Queue 浮层按下标标 ▶,重复曲不再两行一起高亮 ([`d3ef58b`](https://github.com/10knamesmore/Mineral/commit/d3ef58b7365a6b3b65ff6e9c51f532452165e58c))
+
+- 终端字号变化后刷新 picker 字号,修复封面尺寸错乱 ([`fb84240`](https://github.com/10knamesmore/Mineral/commit/fb84240b2635567415cf1b2115d3934c350b4730))
+
+- 窗口标题 OSC 消毒 / 图标名还原 / 热重载 + 渲染收尾 ([`633f793`](https://github.com/10knamesmore/Mineral/commit/633f79315fccb14bc17c7e33e77f8bf2c082f5e2))
+
+- Now_playing selected strip 别名跟随整行高亮,不再固定 dim ([`a2ff4ff`](https://github.com/10knamesmore/Mineral/commit/a2ff4ff07f1522999394211967a90cf6331ef63c))
+
+- 移除切 source 致 kind 落首项的 FlashKind 提示 ([`6496292`](https://github.com/10knamesmore/Mineral/commit/6496292a3095a7ac643530be9beb8f1ae31cc446))
+
+- Duration_ms 跟进 Option<u64> 化,修 mock channel 编译失败 ([`0e47970`](https://github.com/10knamesmore/Mineral/commit/0e479701dbaf7696f71fd945bd451ecf0496001e))
 ## [0.5.2] — 2026-06-21
 
 ### Features
