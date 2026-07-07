@@ -8,7 +8,8 @@ local GB = MB * 1024
 -- 字段注解(---@class / ---@field)的真相源在 lua/meta/config.lua,本表只 ---@type 引用。
 return {
   tui = {
-    -- 主题色板(默认 Catppuccin Mocha);色值一律 "#rrggbb"。
+    -- 主题色板(默认 Catppuccin Mocha)。色值还可写 { ansi = "blue" }(终端 ANSI 槽,
+    -- 跟随终端配色)/ { reset = true }(终端默认),写法详见 docs/configuration.md。
     theme = {
       base = "#1e1e2e",
       mantle = "#181825",
@@ -25,7 +26,7 @@ return {
       green = "#a6e3a1",
       peach = "#fab387",
       search_hit = { -- 搜索命中字符的样式(列表高亮)
-        color = "peach", -- token 名(随主题联动)或 "#rrggbb"(固定色)
+        color = "peach", -- token 名(随主题联动)或具体色值("#rrggbb" / { ansi = ... } 等)
         modifiers = { "bold", "underline", "italic" }, -- 叠加效果,数组整体替换;可选 bold/italic/underline/dim/reversed/crossed_out
       },
     },
