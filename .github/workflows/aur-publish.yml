@@ -1,19 +1,35 @@
 name: aur-publish
 
-# 手动兜底:为一个**已经发布的 tag** 单独把包推到 AUR。
+# 手动把包推到 AUR:重推已发布版本,或做同版本 hotfix 重打包(pkgrel 递增)。
 #
-# 正常发版用 release.yml —— 它已含 AUR 步骤(release + AUR 一条龙)。本工作流只在主路
-# 覆盖不到时用:
-#   - 某版发布时 aur-publish job 还没进默认分支(如 0.5.1,其 release run 里压根没这个 job);
-#   - 想给某个旧 tag 重推 / 补发。
-# 注:若是 release.yml 里 aur-publish 这一步**失败**(job 存在但跑挂了),优先去那次 run
-# 点 "Re-run failed jobs" 单独重跑该 job,不必用本工作流。
+# 正常发版用 release.yml —— 它已含 AUR 步骤(release + AUR 一条龙,恒 pkgrel=1)。
+# 本工作流覆盖两类场景:
+#   - 重推 / 补发某个已发布版本(commits 留空);
+#   - hotfix:上游修复已 commit 进 dev 但不值得发新版本时,commits 填要带的
+#     commit SHA——工作流现场生成 patch、对 tag 源码验证可 apply 后注入
+#     PKGBUILD,AUR 用户构建时打在 tag tarball 上。
+#
+# pkgrel 不用填:工作流读 AUR 上现在的 .SRCINFO——同版本重打包自增,
+# 版本不同(首推 / 补发)归 1。
+#
+# 注意:
+#   - PKGBUILD 与 patch 取自 dispatch 所选分支(通常 dev),源码 tarball 恒取
+#     version 对应 tag——打包描述与源码坐标解耦,hotfix 正是靠这一点。
+#   - 同一版本多轮 hotfix 时,commits 必须**全量累计**列出此前各 rel 已带的
+#     commit(本工作流无状态,不读取 AUR 上已有的 patch)。
+#   - 若是 release.yml 里 aur-publish 这一步**失败**(job 存在但跑挂了),优先去
+#     那次 run 点 "Re-run failed jobs" 单独重跑该 job,不必用本工作流。
 on:
   workflow_dispatch:
     inputs:
       version:
         description: "已发布的版本号 x.y.z(不含 v;须已有对应 tag vX.Y.Z)"
         required: true
+        type: string
+      commits:
+        description: "hotfix commit SHA,空格分隔、按序 apply;多轮 hotfix 须全量累计。留空 = 不带 patch"
+        required: false
+        default: ""
         type: string
 
 # 只读仓库;推 AUR 走 SSH key,不需要 GitHub 写权限。
@@ -29,29 +45,92 @@ jobs:
     name: aur-publish
     runs-on: ubuntu-latest
     steps:
-      - name: validate version format
+      - name: validate inputs
         env:
           VERSION: ${{ inputs.version }}
         run: echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号应为 x.y.z"; exit 1; }
 
-      - name: checkout release tag
+      # 取 dispatch 所选分支的 PKGBUILD;全历史以便解析 tag 与任意 hotfix commit。
+      - name: checkout
         uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          fetch-depth: 0
+
+      - name: check tag exists
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git rev-parse --verify --quiet "refs/tags/v${VERSION}" >/dev/null || { echo "tag v${VERSION} 不存在"; exit 1; }
+
+      # pkgrel 的真相源是 AUR 现状:同版本重打包自增,版本不同归 1。
+      # 读 git 里的 .SRCINFO 而非 RPC——与推送目标同源,无缓存窗口。
+      - name: resolve pkgrel from AUR
+        id: rel
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git clone --depth=1 https://aur.archlinux.org/mineral.git /tmp/aur-live
+          cur_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' /tmp/aur-live/.SRCINFO 2>/dev/null | head -1)
+          cur_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' /tmp/aur-live/.SRCINFO 2>/dev/null | head -1)
+          if [ "$cur_ver" = "$VERSION" ]; then
+            pkgrel=$(( ${cur_rel:-0} + 1 ))
+            echo "AUR 现为 ${cur_ver}-${cur_rel},同版本重打包 → pkgrel=${pkgrel}"
+          else
+            pkgrel=1
+            echo "AUR 现为 ${cur_ver:-<空>}-${cur_rel:-?},推 ${VERSION} 首包 → pkgrel=1"
+          fi
+          echo "pkgrel=${pkgrel}" >> "$GITHUB_OUTPUT"
+
+      # 每个 commit 生成一个纯 diff patch(编号即 apply 顺序),再对 tag 源码树
+      # 逐个真实 apply 验证——apply 不上直接红,不会把坏 PKGBUILD 推上 AUR。
+      - name: generate & verify hotfix patches
+        id: patches
+        env:
+          VERSION: ${{ inputs.version }}
+          PKGREL: ${{ steps.rel.outputs.pkgrel }}
+          COMMITS: ${{ inputs.commits }}
+        run: |
+          if [ -z "$COMMITS" ]; then
+            echo "assets=" >> "$GITHUB_OUTPUT"
+            echo "names=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p hotfix-patches
+          i=0
+          for sha in $COMMITS; do
+            git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null || { echo "commit $sha 不存在"; exit 1; }
+            i=$((i+1))
+            git diff "${sha}^" "$sha" > "hotfix-patches/hotfix-${VERSION}-r${PKGREL}-$(printf '%02d' "$i").patch"
+          done
+          mkdir -p /tmp/tag-src
+          git archive "v${VERSION}" | tar -x -C /tmp/tag-src
+          for p in hotfix-patches/*.patch; do
+            patch -d /tmp/tag-src -Np1 -i "$GITHUB_WORKSPACE/$p"
+          done
+          names=$(cd hotfix-patches && ls -- *.patch | tr '\n' ' ')
+          echo "assets=./hotfix-patches/*.patch" >> "$GITHUB_OUTPUT"
+          echo "names=$names" >> "$GITHUB_OUTPUT"
 
       - name: render PKGBUILD
         env:
           VERSION: ${{ inputs.version }}
-        run: sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+          PKGREL: ${{ steps.rel.outputs.pkgrel }}
+          NAMES: ${{ steps.patches.outputs.names }}
+        run: |
+          sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+          sed -i "s/@PKGREL@/${PKGREL}/" ./PKGBUILD
+          [ -n "$NAMES" ] && sed -i "s/^_patches=()/_patches=(${NAMES})/" ./PKGBUILD
+          bash -n ./PKGBUILD
+          grep -q '@VERSION@\|@PKGREL@' ./PKGBUILD && { echo "PKGBUILD 占位符未渲染完"; exit 1; } || true
 
       - name: publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
           pkgname: mineral
           pkgbuild: ./PKGBUILD
+          assets: ${{ steps.patches.outputs.assets }}
           updpkgsums: true
           test: false
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_username: wanger
           commit_email: 310779211wym@gmail.com
-          commit_message: "update to ${{ inputs.version }}"
+          commit_message: "update to ${{ inputs.version }}-${{ steps.rel.outputs.pkgrel }}"

@@ -134,10 +134,15 @@ jobs:
         with:
           ref: v${{ inputs.version }}
 
+      # 正式发版恒 pkgrel=1;_patches 保险清空——hotfix patch 只属旧版 tag,
+      # 新 tag 已含修复,带过来会二次 apply 失败(仓库里该数组本应恒为空)。
       - name: render PKGBUILD
         env:
           VERSION: ${{ inputs.version }}
-        run: sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+        run: |
+          sed -i "s/@VERSION@/${VERSION}/" ./PKGBUILD
+          sed -i "s/@PKGREL@/1/" ./PKGBUILD
+          sed -i "s/^_patches=(.*)$/_patches=()/" ./PKGBUILD
 
       - name: publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
