@@ -98,6 +98,36 @@ theme = {
 
 **为什么强调层别跟随**:频谱柱的纵向渐变、歌词的距离淡出 / 逐字扫染、进度条的 `red→green` 都是在两个颜色之间算中间色,要求应用手里有确切 RGB。ANSI 槽的实际颜色只有终端知道,应用**算不出中间色**,会退成「过半硬切」的两段色(不崩、但糙)。所以喂给这些渐变的强调 token(`accent` / `accent_2` / `subtext` / `overlay`、进度条的 `red` / `green`)留固定色才顺滑;纯做背景 / 边框的 token 跟随终端零损失。上面把 `surface0` 也跟随了终端是有意折中——它主要是行选中底色,只有频谱余韵 / 歌词远行的淡出会用到它作终点,那点淡出变糙基本看不出,想更严谨可把它也留固定色。封面取色不受影响——那些色是从专辑图抠出的真 RGB。
 
+### Recipe:多主题合集 + 启动随机
+
+`config.lua` 本身是 Lua 脚本(`return` 前可写任意代码),`tui.theme` 的值就是一张表——所以可以维护多套调色板、每次加载随机挑一套。把调色板放独立文件(纯数据),config 里 `dofile` 取用:
+
+```lua
+-- ~/.config/mineral/themes.lua —— 返回一张表,每套 14 个 token
+return {
+  tokyonight = { base = "#1a1b26", accent = "#bb9af7", --[[ …其余 12 个… ]] },
+  gruvbox    = { base = "#282828", accent = "#fabd2f", --[[ … ]] },
+  -- 也可混固定色与跟随终端:
+  follow     = { base = { reset = true }, accent = { ansi = "magenta" }, --[[ … ]] },
+}
+```
+
+```lua
+-- ~/.config/mineral/config.lua
+local THEMES = dofile((os.getenv("HOME") or "") .. "/.config/mineral/themes.lua")
+
+-- 每次配置加载随机挑一套
+math.randomseed(os.time())
+local pool = { "tokyonight", "gruvbox", "follow" } -- 想参与随机的名字
+local chosen = THEMES[pool[math.random(#pool)]]
+
+return {
+  tui = { theme = chosen }, -- 固定某套就写 THEMES.gruvbox
+}
+```
+
+注意:配置**保存热重载**时也会重跑这段 → 每次存盘都重新随机。想「仅启动随机、编辑时不变」,把选中结果缓存到文件(如 `paths` 下)再读回即可。
+
 ## tui.keys — 键位重映射
 
 方向是「**动作 → 键**」:给某动作写新键即完全替换其默认键;写空数组 `{}` 解绑。两个动作绑同一键时后写的生效(不报错,自己留意)。
