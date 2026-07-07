@@ -1,11 +1,11 @@
 ---
-source: crates/mineral-tui/src/components/layout/sidebar/playlists.rs
+source: crates/mineral-tui/src/components/layout/browse/sidebar/playlists.rs
 description: "歌单列表:搜索零命中(居中「无匹配」)"
 expression: t.backend()
 ---
 "╭ playlists /zzz───────────────────────╮"
 "│                                      │"
-"│                无匹配                │" Hidden by multi-width symbols: [(18, " "), (20, " "), (22, " ")]
+"│            no match found            │"
 "│                                      │"
 "│                                      │"
 "│                                      │"

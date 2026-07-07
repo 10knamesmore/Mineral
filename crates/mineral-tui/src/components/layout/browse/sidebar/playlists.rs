@@ -183,9 +183,9 @@ fn paint_no_match(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme,
         return;
     }
     let text = if let Some(n) = super::badge::indexing_count(state) {
-        format!("索引中({n} 个歌单)…")
+        format!("indexing({n} playlist{})…", if n < 2 { "" } else { "s" })
     } else {
-        "无匹配".to_owned()
+        "no match found".to_owned()
     };
     Paragraph::new(vec![
         Line::from(""),

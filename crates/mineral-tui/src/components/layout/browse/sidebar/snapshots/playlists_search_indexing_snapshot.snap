@@ -1,11 +1,11 @@
 ---
-source: crates/mineral-tui/src/components/layout/sidebar/playlists.rs
+source: crates/mineral-tui/src/components/layout/browse/sidebar/playlists.rs
 description: "歌单列表:零命中且索引在飞(badge ⟳3 + 居中「索引中」)"
 expression: t.backend()
 ---
 "╭ playlists /zzz ⟳3────────────────────╮"
 "│                                      │"
-"│           索引中(3 个歌单)…          │" Hidden by multi-width symbols: [(13, " "), (15, " "), (17, " "), (22, " "), (24, " "), (26, " ")]
+"│        indexing(3 playlists)…        │"
 "│                                      │"
 "│                                      │"
 "│                                      │"
