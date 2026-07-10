@@ -116,6 +116,10 @@ Config {
                     Italic,
                 ],
             },
+            dynamic: DynamicThemeConfig {
+                enabled: true,
+                fade_ms: 3000,
+            },
         },
         keys: KeysConfig {
             play_pause: KeyBinding {

@@ -35,6 +35,7 @@ use crate::tui::Tui;
 use crate::view::draw;
 
 mod channel_search;
+mod cover_colors;
 mod menus;
 mod nav;
 mod page;
@@ -45,8 +46,17 @@ pub struct App {
     /// 是否退出主循环。
     pub should_quit: bool,
 
-    /// 当前主题(`Arc` 共享:future 热重载时整体换,渲染处只读引用)。
+    /// 本帧的 effective 主题(`Arc` 共享,渲染处只读引用):`theme_base` 经动态
+    /// accent 合成的产物,每拍由 `tick_dynamic_accent` 重建;动态主题静止时与 base 相等。
     pub theme: std::sync::Arc<Theme>,
+
+    /// 配置落地的 base 主题(`Theme::from_config` 产物,热更时整体重建)。
+    /// 渲染永远读 `theme`,本字段只作动态 accent 合成与回落的基准。
+    pub(crate) theme_base: Theme,
+
+    /// 封面驱动的 accent 渐变状态机:目标由 `sync_cover_palette` 按封面身份 diff
+    /// 投喂,每拍推进并合成 effective `theme`。
+    pub(crate) accent_fade: crate::render::accent::AccentFade,
 
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
@@ -145,12 +155,16 @@ impl App {
         ui_prefs: UiPrefs,
     ) -> Self {
         let tui_cfg = cfg.tui();
-        let theme = Arc::new(Theme::from_config(tui_cfg.theme()));
+        let theme_base = Theme::from_config(tui_cfg.theme());
+        let theme = Arc::new(theme_base);
         let mut keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
         // 脚本 `mineral.bind` 的键合进查表(daemon 模式拉真表;in-proc 恒空)。
         keymap.append_script_binds(&client.script_binds());
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
+        let accent_fade = crate::render::accent::AccentFade::new(
+            crate::render::anim::ticks32_from_ms(*tui_cfg.theme().dynamic().fade_ms(), tick_ms),
+        );
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
         let notifications = Notifications::new(
             *tui_cfg.toast().flash_ttl_secs(),
@@ -171,6 +185,8 @@ impl App {
         Self {
             should_quit: false,
             theme,
+            theme_base,
+            accent_fade,
             state,
             keymap,
             notice_hint,
@@ -302,7 +318,8 @@ impl App {
                 let sync = self.client.player_sync(self.state.player.versions);
                 self.apply_player_sync(sync);
                 self.state.covers.drain_ready_covers(&self.cover_fetcher);
-                self.sync_spectrum_palette();
+                self.sync_cover_palette();
+                self.tick_dynamic_accent();
                 self.state.covers.drain_ready_protocols(&self.cover_encoder);
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
@@ -743,14 +760,13 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_protocol::{PlayerSync, QueueSync};
 
-    use mineral_model::{MediaUrl, SearchKind, SourceKind};
+    use mineral_model::{SearchKind, SourceKind};
 
     use super::App;
 
     /// 测试对照值 = default.lua 的 `animation.transition_ms`(288)÷ `frame_tick_ms`(16)。
     const TRANSITION_TICKS: u16 = 18;
     use crate::render::anim::Transition;
-    use crate::render::palette::{CoverPalette, Rgb};
     use crate::test_support::{
         app_with_library, app_with_queue, app_with_queue_probed, endserenading,
     };
@@ -783,48 +799,6 @@ mod tests {
     /// 喂一个带 Ctrl 的 Press 键给 App(走真实事件入口)。
     fn press_ctrl(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
-    }
-
-    /// 回归(红→蓝路径之二):换歌后新封面**还在抓取**时,频谱保持上一张封面,
-    /// **不**回退到 hue——这样等新色板就绪能直接红→蓝,而非 hue→蓝。
-    #[test]
-    fn sync_spectrum_holds_previous_cover_until_new_palette_ready() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let red = MediaUrl::remote("https://example.com/red.jpg")?;
-        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
-        // 当前在播这首歌封面是 blue,但频谱上一张应用的是 red。
-        if let Some(song) = app.state.player.current.as_mut() {
-            song.cover_url = Some(blue);
-        }
-        app.state.covers.spectrum_cover = Some(red.clone());
-        // blue 的色板 / 图都还没到 —— sync 应原地保持(不清、不抢先标记)。
-        app.sync_spectrum_palette();
-        assert_eq!(
-            app.state.covers.spectrum_cover.as_ref(),
-            Some(&red),
-            "抓图途中应保持上一张封面"
-        );
-        Ok(())
-    }
-
-    /// 回归(红→蓝路径之一):新封面色板就绪即触发过渡并记下其 key。
-    #[test]
-    fn sync_spectrum_begins_transition_when_palette_ready() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let blue = MediaUrl::remote("https://example.com/blue.jpg")?;
-        if let Some(song) = app.state.player.current.as_mut() {
-            song.cover_url = Some(blue.clone());
-        }
-        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
-            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.covers.palettes.insert(blue.clone(), palette);
-        app.sync_spectrum_palette();
-        assert_eq!(
-            app.state.covers.spectrum_cover.as_ref(),
-            Some(&blue),
-            "色板就绪应记下并触发过渡"
-        );
-        Ok(())
     }
 
     /// 回归:全屏下关闭居中浮层(quit 确认)后,封面协议缓存被清空 —— 据此下一帧重建并全量

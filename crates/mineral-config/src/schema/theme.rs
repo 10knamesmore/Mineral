@@ -63,6 +63,22 @@ pub struct ThemeConfig {
 
     /// 搜索命中字符的样式(色 + 叠加字体效果)。
     search_hit: SearchHitConfig,
+
+    /// 封面驱动的动态主题(accent 随在播封面主色渐变)。
+    dynamic: DynamicThemeConfig,
+}
+
+/// 封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前值
+/// 渐变到封面派生色;无封面 / 取色失败渐变回本表的静态 token。
+///
+/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
+#[config_section]
+pub struct DynamicThemeConfig {
+    /// 是否启用(关闭即恒用静态 `accent` / `accent_2`)。
+    enabled: bool,
+
+    /// 切歌 / 封面就绪时 accent 渐变过去的时长,毫秒。
+    fade_ms: u32,
 }
 
 /// 搜索命中字符的样式:在所在列的基础样式上叠加。
@@ -506,6 +522,33 @@ impl<'de> Deserialize<'de> for HexColor {
 #[cfg(test)]
 mod tests {
     use super::{HexColor, TokenName};
+
+    /// theme.dynamic 段默认值:封面驱动 accent 默认开,过渡 3000ms。
+    #[test]
+    fn dynamic_defaults() -> color_eyre::Result<()> {
+        let cfg = crate::Config::defaults()?;
+        let d = cfg.tui().theme().dynamic();
+        assert!(*d.enabled(), "封面驱动 accent 默认开");
+        assert_eq!(*d.fade_ms(), 3000, "accent 过渡默认 3s");
+        Ok(())
+    }
+
+    /// theme.dynamic 逐旋钮可覆盖:关掉 + 改时长都落到强类型。
+    #[test]
+    fn dynamic_override_takes_effect() -> color_eyre::Result<()> {
+        let tree = crate::merge_tree(
+            crate::default_tree()?,
+            serde_json::json!({ "tui": { "theme": {
+                "dynamic": { "enabled": false, "fade_ms": 500 },
+            } } }),
+        );
+        let cfg =
+            crate::from_tree(&tree).map_err(|w| color_eyre::eyre::eyre!("覆盖后应落型成功:{w}"))?;
+        let d = cfg.tui().theme().dynamic();
+        assert!(!*d.enabled());
+        assert_eq!(*d.fade_ms(), 500);
+        Ok(())
+    }
 
     #[test]
     fn hex_color_parses_valid() -> color_eyre::Result<()> {

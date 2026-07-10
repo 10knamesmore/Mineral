@@ -7,8 +7,10 @@
 use image::DynamicImage;
 use kmeans_colors::{Sort, get_kmeans};
 use palette::cast::from_component_slice;
-use palette::{FromColor, IntoColor, Lab, Srgb};
+use palette::convert::FromColorUnclamped;
+use palette::{FromColor, IntoColor, Lab, Lch, Srgb};
 
+use crate::render::accent::AccentPair;
 use crate::render::palette::{CoverPalette, Rgb};
 
 /// 从一张封面图提取频谱色板(Lab 明度升序的重点色)。
@@ -76,6 +78,104 @@ pub fn extract_palette(
     let sorted = Lab::sort_indexed_colors(&result.centroids, &result.indices);
     let swatches: Vec<Rgb> = sorted.iter().map(|cd| lab_to_rgb(cd.centroid)).collect();
     CoverPalette::new(swatches)
+}
+
+/// accent 派生色的明度 clamp 下限(Lab L):再低在深色背景上晦暗难辨。
+const ACCENT_L_MIN: f32 = 55.0;
+
+/// accent 派生色的明度 clamp 上限(Lab L):再高泛白失彩,强调感消失。
+const ACCENT_L_MAX: f32 = 78.0;
+
+/// accent 派生色的彩度下限:近灰封面(黑白 / 低饱和)派生出的强调色提到此彩度,
+/// 保留一丝可辨的色相倾向而不至于像禁用态的灰。
+const ACCENT_CHROMA_MIN: f32 = 16.0;
+
+/// 主 / 副强调色的最小色相距离(度):色板里拉不开就由主色旋转派生副色。
+const HUE_SEPARATION_DEG: f32 = 50.0;
+
+/// 从封面色板派生一对强调色(主 = 最鲜艳簇,副 = 与主色相拉开的次鲜艳簇)。
+///
+/// 两色都经可读性整形:Lab 明度 clamp 进 [`ACCENT_L_MIN`]..=[`ACCENT_L_MAX`]、
+/// 彩度保底 [`ACCENT_CHROMA_MIN`]、出 sRGB 色域则保明度/色相收彩度。色板内
+/// 无色相距离 ≥ [`HUE_SEPARATION_DEG`] 的候选(单色 / 同色系封面)时,副色由
+/// 主色旋转 [`HUE_SEPARATION_DEG`] 派生,保持同源和谐。纯函数、确定性,
+/// 每次封面切换在 app 层调用一次(6 色以内,开销可忽略)。
+///
+/// # Params:
+///   - `palette`: 封面色板(恒非空)
+///
+/// # Return:
+///   派生的强调色对。
+pub fn derive_accents(palette: &CoverPalette) -> AccentPair {
+    // 色板恒非空(CoverPalette::new 保证),fallback 仅兜类型穷尽:中性紫灰。
+    let fallback = Lch::new(65.0, 20.0, 300.0);
+    let lchs: Vec<Lch> = palette.swatches().iter().map(|c| lch_of(*c)).collect();
+    let seed = lchs
+        .iter()
+        .copied()
+        .reduce(|a, b| if b.chroma > a.chroma { b } else { a })
+        .unwrap_or(fallback);
+    let second = lchs
+        .iter()
+        .copied()
+        .filter(|c| hue_distance(*c, seed) >= HUE_SEPARATION_DEG)
+        .reduce(|a, b| if b.chroma > a.chroma { b } else { a })
+        .unwrap_or_else(|| {
+            Lch::new(
+                seed.l,
+                seed.chroma,
+                seed.hue.into_positive_degrees() + HUE_SEPARATION_DEG,
+            )
+        });
+    AccentPair {
+        accent: readable_rgb(seed),
+        accent_2: readable_rgb(second),
+    }
+}
+
+/// 把一个 Lch 候选整形成可读的强调色:明度 clamp + 彩度保底 + 色域内收。
+fn readable_rgb(lch: Lch) -> Rgb {
+    rgb_in_gamut(
+        lch.l.clamp(ACCENT_L_MIN, ACCENT_L_MAX),
+        lch.chroma.max(ACCENT_CHROMA_MIN),
+        lch.hue.into_positive_degrees(),
+    )
+}
+
+/// 保明度 / 色相、逐步收彩度直到落进 sRGB 色域(经典 gamut mapping)。
+/// 彩度收到 0 即灰轴,恒在域内,循环必然终止。
+///
+/// 探测必须走 `from_color_unclamped`:`FromColor` 会把出域分量静默 clamp 进
+/// [0, 1],探测永远"在域内",实际输出却被 clamp 改掉明度 / 色相(绿封面的
+/// 副色曾因此亮出区间)。
+fn rgb_in_gamut(l: f32, chroma: f32, hue_deg: f32) -> Rgb {
+    let mut c = chroma;
+    let mut candidate = Srgb::<f32>::from_color_unclamped(Lch::new(l, c, hue_deg));
+    while !in_srgb_bounds(candidate) && c > 0.5 {
+        c *= 0.9;
+        candidate = Srgb::<f32>::from_color_unclamped(Lch::new(l, c, hue_deg));
+    }
+    // 极端退出(c 见底仍出域,理论不可达)与浮点毛刺由 clamped 转换兜底。
+    let srgb: Srgb<u8> = Srgb::from_color(Lch::new(l, c, hue_deg)).into_format();
+    Rgb::new(srgb.red, srgb.green, srgb.blue)
+}
+
+/// 三通道都在 [0, 1] 内(未越出 sRGB 色域)。
+fn in_srgb_bounds(c: Srgb<f32>) -> bool {
+    let ok = |v: f32| (0.0..=1.0).contains(&v);
+    ok(c.red) && ok(c.green) && ok(c.blue)
+}
+
+/// swatch → Lch(明度 / 彩度 / 色相,选色的工作色空间)。
+fn lch_of(c: Rgb) -> Lch {
+    let lab: Lab = Srgb::new(c.r, c.g, c.b).into_format::<f32>().into_color();
+    Lch::from_color(lab)
+}
+
+/// 两个 Lch 的环形色相距离(度,`0..=180`)。
+fn hue_distance(a: Lch, b: Lch) -> f32 {
+    let d = (a.hue.into_positive_degrees() - b.hue.into_positive_degrees()).abs() % 360.0;
+    d.min(360.0 - d)
 }
 
 /// 像素是否"有色":明度在 `l_min..=l_max` 且彩度 ≥ `chroma_min`(配置 kmeans 段)。
@@ -235,5 +335,105 @@ mod tests {
         let img = DynamicImage::ImageRgb8(RgbImage::new(0, 0));
         assert!(extract_palette(&img, &kcfg()?).is_none());
         Ok(())
+    }
+
+    use proptest::prelude::any;
+
+    use super::{derive_accents, hue_distance, lch_of};
+    use crate::render::palette::CoverPalette;
+
+    /// 从明度升序 swatch 造色板(测试断言用)。
+    fn cover_palette(swatches: Vec<Rgb>) -> color_eyre::Result<CoverPalette> {
+        CoverPalette::new(swatches).ok_or_else(|| color_eyre::eyre::eyre!("非空应构造成功"))
+    }
+
+    /// 主色取最鲜艳簇:灰蓝 / 鲜红 / 近白里选中红,色相保留、明度 clamp 进可读区间。
+    #[test]
+    fn derive_picks_most_vivid_hue() -> color_eyre::Result<()> {
+        let vivid_red = Rgb::new(220, 30, 40);
+        let pal = cover_palette(vec![
+            Rgb::new(60, 70, 90),
+            vivid_red,
+            Rgb::new(230, 230, 235),
+        ])?;
+        let pair = derive_accents(&pal);
+        let accent = lch_of(pair.accent);
+        let seed = lch_of(vivid_red);
+        assert!(
+            hue_distance(accent, seed) < 12.0,
+            "主色色相应贴近最鲜艳输入:accent {:?} vs seed {:?}",
+            accent.hue,
+            seed.hue
+        );
+        assert!(
+            (52.0..=81.0).contains(&accent.l),
+            "明度应 clamp 进可读区间,实际 {}",
+            accent.l
+        );
+        assert!(accent.chroma >= 14.0, "彩度应保底,实际 {}", accent.chroma);
+        Ok(())
+    }
+
+    /// 副色与主色色相拉开:多色封面里选距主色 ≥ 阈值的次鲜艳簇。
+    #[test]
+    fn derive_second_hue_separated() -> color_eyre::Result<()> {
+        let pal = cover_palette(vec![
+            Rgb::new(30, 60, 180),
+            Rgb::new(220, 30, 40),
+            Rgb::new(210, 60, 50),
+        ])?;
+        let pair = derive_accents(&pal);
+        let dist = hue_distance(lch_of(pair.accent), lch_of(pair.accent_2));
+        assert!(dist >= 40.0, "主副色相距离应拉开,实际 {dist}");
+        Ok(())
+    }
+
+    /// 单色 / 同色系色板:副色由主色旋转派生,仍与主色拉得开。
+    #[test]
+    fn derive_single_swatch_rotates_second() -> color_eyre::Result<()> {
+        let pal = cover_palette(vec![Rgb::new(30, 60, 180)])?;
+        let pair = derive_accents(&pal);
+        assert_ne!(pair.accent, pair.accent_2, "单色也应派生出不同副色");
+        let dist = hue_distance(lch_of(pair.accent), lch_of(pair.accent_2));
+        assert!(dist >= 35.0, "旋转派生的副色应拉开色相,实际 {dist}");
+        Ok(())
+    }
+
+    /// 近灰色板(黑白封面回退路径的产物):彩度保底,派生色不是死灰。
+    #[test]
+    fn derive_gray_palette_gets_chroma_floor() -> color_eyre::Result<()> {
+        let pal = cover_palette(vec![Rgb::new(40, 40, 42), Rgb::new(180, 180, 184)])?;
+        let pair = derive_accents(&pal);
+        let accent = lch_of(pair.accent);
+        assert!(
+            accent.chroma >= 10.0,
+            "近灰输入的派生色应有保底彩度,实际 {}",
+            accent.chroma
+        );
+        Ok(())
+    }
+
+    proptest::proptest! {
+        /// 任意非空色板:派生色对恒可读(明度落在 clamp 区间附近,u8 量化留容差),不 panic。
+        #[test]
+        fn derive_accents_always_readable(
+            comps in proptest::collection::vec((any::<u8>(), any::<u8>(), any::<u8>()), 1..=6),
+        ) {
+            let swatches = comps
+                .into_iter()
+                .map(|(r, g, b)| Rgb::new(r, g, b))
+                .collect::<Vec<Rgb>>();
+            if let Some(pal) = CoverPalette::new(swatches) {
+                let pair = derive_accents(&pal);
+                for c in [pair.accent, pair.accent_2] {
+                    let l = lch_of(c).l;
+                    proptest::prop_assert!(
+                        (50.0..=83.0).contains(&l),
+                        "明度应留在可读区间附近,实际 {}",
+                        l
+                    );
+                }
+            }
+        }
     }
 }

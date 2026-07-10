@@ -28,7 +28,7 @@ pub struct CoverHub {
     pub palettes: FxHashMap<MediaUrl, CoverPalette>,
 
     /// 上次已应用到频谱的封面 key(频谱当前色场对应哪张封面)。
-    /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_spectrum_palette` 身份判定用。
+    /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_cover_palette` 身份判定用。
     pub spectrum_cover: Option<MediaUrl>,
 
     /// 当前播放封面的色板拷贝(频谱 / 波形共用的稳定源),与 `spectrum_cover` 同处维护。

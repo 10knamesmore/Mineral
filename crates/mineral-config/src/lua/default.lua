@@ -29,6 +29,10 @@ return {
         color = "peach", -- token 名(随主题联动)或具体色值("#rrggbb" / { ansi = ... } 等)
         modifiers = { "bold", "underline", "italic" }, -- 叠加效果,数组整体替换;可选 bold/italic/underline/dim/reversed/crossed_out
       },
+      dynamic = { -- 封面驱动的动态主题:accent/accent_2 随在播封面主色渐变
+        enabled = true, -- 关闭即恒用上面的静态 accent/accent_2
+        fade_ms = 3000, -- 切歌/封面就绪后 accent 渐变过去的时长
+      },
     },
     keys = {
       -- 方向是【动作 → 键】;值为单键或键数组(数组整体替换)。

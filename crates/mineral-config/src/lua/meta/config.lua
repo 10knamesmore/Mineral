@@ -80,6 +80,13 @@
 ---@field green? mineral.ColorValue 播放指示
 ---@field peach? mineral.ColorValue 命令 / 搜索前缀
 ---@field search_hit? mineral.SearchHitConfig 搜索命中字符的样式(列表高亮)
+---@field dynamic? mineral.DynamicThemeConfig 封面驱动的动态主题(accent 随在播封面主色渐变)
+
+---封面驱动的动态主题:在播封面取色就绪后,accent / accent_2 从当前值渐变到
+---封面派生色;无封面 / 取色失败渐变回静态 token。
+---@class mineral.DynamicThemeConfig
+---@field enabled? boolean 是否启用(关闭即恒用静态 accent / accent_2)
+---@field fade_ms? integer 切歌 / 封面就绪时 accent 渐变过去的时长,毫秒
 
 ---搜索命中字符的样式,在所在列的基础样式上叠加。
 ---@class mineral.SearchHitConfig

@@ -51,7 +51,8 @@ pub use spectrum::{
     BarsConfig, ScopeConfig, SpectrumConfig, SpectrumStyle, TerrainConfig, WaterfallConfig,
 };
 pub use theme::{
-    AnsiSlot, ColorRef, ColorValue, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
+    AnsiSlot, ColorRef, ColorValue, DynamicThemeConfig, HexColor, SearchHitConfig, TextStyle,
+    ThemeConfig, TokenName,
 };
 pub use toast::ToastConfig;
 pub use waveform::WaveformConfig;

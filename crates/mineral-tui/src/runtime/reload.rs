@@ -32,9 +32,28 @@ impl crate::app::App {
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         // 固化型(重建即换,无运行态):主题色 token / 窗口标题模板 / keymap 查表。
-        self.theme = Arc::new(crate::render::theme::Theme::from_config(tui_cfg.theme()));
+        self.theme_base = crate::render::theme::Theme::from_config(tui_cfg.theme());
         self.window_title = crate::runtime::window_title::WindowTitle::new(tui_cfg.window_title());
         self.rebuild_keymap();
+        // 固化型(携带运行态):动态 accent 渐变 retempo 保相位;开关与目标就地重算——
+        // 开着按当前已应用封面重投(同目标空操作,刚打开则渐变过去),关了渐变回 base。
+        let dynamic = tui_cfg.theme().dynamic();
+        self.accent_fade
+            .retempo(crate::render::anim::ticks32_from_ms(
+                *dynamic.fade_ms(),
+                tick_ms,
+            ));
+        let accent_target = (*dynamic.enabled()).then(|| {
+            self.state
+                .covers
+                .spectrum_cover
+                .as_ref()
+                .and_then(|url| self.state.covers.palettes.get(url))
+                .map(crate::runtime::cover::colors::derive_accents)
+        });
+        self.accent_fade
+            .set_target(accent_target.flatten(), &self.theme_base);
+        self.theme = Arc::new(self.accent_fade.apply(self.theme_base));
         // 固化型(带槽相位,整体重建 + 相位 reconciliation 在其内部):marquee / 唱片纹。
         self.state.marquees = Marquees::from_config(anim.marquee(), tick_ms);
         self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
@@ -347,6 +366,73 @@ mod tests {
             !app.notifications.has_live_card(super::PUSH_CARD_ID),
             "好配置到来应撤卡"
         );
+        Ok(())
+    }
+
+    /// 动态 accent 热更关闭:已染上封面色后推送 `enabled = false`,
+    /// effective theme 渐变回 base 静态 token(不瞬跳、不残留封面色)。
+    #[test]
+    fn pushed_config_dynamic_disabled_returns_to_base() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::palette::{CoverPalette, Rgb};
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let base_accent = app.theme_base.accent;
+        let url = MediaUrl::remote("https://example.com/c.jpg")?;
+        if let Some(song) = app.state.player.current.as_mut() {
+            song.cover_url = Some(url.clone());
+        }
+        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        app.state.covers.palettes.insert(url, palette);
+        app.sync_cover_palette();
+        for _ in 0..400 {
+            app.tick_dynamic_accent();
+        }
+        assert_ne!(app.theme.accent, base_accent, "前置:已染上封面色");
+
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "theme": { "dynamic": { "enabled": false } } } }),
+        )?);
+        assert_ne!(
+            app.theme.accent, base_accent,
+            "关闭那帧应从封面色渐变起步,不瞬跳"
+        );
+        for _ in 0..400 {
+            app.tick_dynamic_accent();
+        }
+        assert_eq!(app.theme.accent, base_accent, "关闭后应渐变回 base accent");
+        Ok(())
+    }
+
+    /// 动态 accent 渐变中热更 `fade_ms`:retempo 保相位,推送前后同一帧颜色不跳。
+    #[test]
+    fn pushed_config_accent_fade_retempo_preserves_phase() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::palette::{CoverPalette, Rgb};
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let url = MediaUrl::remote("https://example.com/c.jpg")?;
+        if let Some(song) = app.state.player.current.as_mut() {
+            song.cover_url = Some(url.clone());
+        }
+        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        app.state.covers.palettes.insert(url, palette);
+        app.sync_cover_palette();
+        for _ in 0..20 {
+            app.tick_dynamic_accent();
+        }
+        let mid = app.theme.accent;
+        assert_ne!(mid, app.theme_base.accent, "前置:渐变已起步");
+        // 6016ms / 16ms = 376 拍,恰为默认 3000ms(188 拍)的两倍:相位比例
+        // 可被整数精确保持,断言得以用严格相等(非倍数时长只有 ±1 字节级误差)。
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "theme": { "dynamic": { "fade_ms": 6016 } } } }),
+        )?);
+        assert_eq!(app.theme.accent, mid, "retempo 保相位,推送那帧颜色不跳");
         Ok(())
     }
 

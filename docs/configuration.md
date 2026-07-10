@@ -65,6 +65,13 @@ roles = { accent = "red", muted = "subtext", faint = "overlay" }   -- 默认
 | `color` | `"peach"` | 命中字符色:14 个 token 名之一(随主题联动),或任意[色值写法](#色值写法) |
 | `modifiers` | `["bold", "underline", "italic"]` | 叠加的字体效果,数组**整体替换**;可选 `bold` / `italic` / `underline` / `dim` / `reversed` / `crossed_out`;空数组 = 仅变色 |
 
+`dynamic` 子表是封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前可见色渐变到封面派生色(主色取封面最鲜艳的一簇、副色与主色拉开色相,明度会整形进深色背景上可读的区间),聚焦边框 / 进度条 / 在播标记等所有强调处全局联动;切到无封面的歌 / 取色失败时同样渐变回上表的静态 token,不闪跳:
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭即恒用静态 `accent` / `accent_2` |
+| `fade_ms` | `3000` | 切歌 / 封面就绪后 accent 渐变过去的时长,毫秒 |
+
 ### 色值写法
 
 一个色值有四种写法(前两种是固定色,后两种把颜色交给终端决定):
