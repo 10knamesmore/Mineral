@@ -435,6 +435,18 @@ impl AppState {
                 self.library.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
             }
+            TaskEvent::EnvelopeReady { song_id, envelope } => {
+                // 只认当前曲:迟到的旧曲事件不得顶掉当前曲已装载的包络
+                // (归属再校验在 Playback::current_envelope,这里挡覆盖)。
+                if self
+                    .playback
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.id == *song_id)
+                {
+                    self.playback.envelope = Some((song_id.clone(), envelope.clone()));
+                }
+            }
             TaskEvent::RemotePlayCountFetched { song_id, count } => {
                 self.library.play_counts.insert(song_id.clone(), *count);
                 self.redecorate_for_source(song_id.namespace());

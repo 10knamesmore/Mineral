@@ -6,6 +6,7 @@
 mod bps;
 mod command;
 mod engine;
+mod envelope;
 mod file_storage;
 mod handle;
 mod policy;
@@ -14,5 +15,8 @@ mod snapshot;
 mod tap;
 
 pub use bps::Bps;
+pub use envelope::{
+    ENVELOPE_POINT_COUNT, ENVELOPE_VERSION, envelope_from_file, envelope_from_samples,
+};
 pub use handle::{AudioHandle, AudioMode, EngineParams, SpectrumTap};
 pub use snapshot::{AudioBackend, AudioSnapshot};

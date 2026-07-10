@@ -24,7 +24,9 @@ typed-builder   = { workspace = true }
 url             = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+mineral-test = { workspace = true }
+proptest     = { workspace = true }
+tempfile     = "3"
 
 [lints]
 workspace = true

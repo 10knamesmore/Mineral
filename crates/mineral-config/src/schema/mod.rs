@@ -20,6 +20,7 @@ mod sources;
 mod spectrum;
 mod theme;
 mod toast;
+mod waveform;
 mod window_title;
 
 pub use animation::{
@@ -49,6 +50,7 @@ pub use theme::{
     AnsiSlot, ColorRef, ColorValue, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
 };
 pub use toast::ToastConfig;
+pub use waveform::WaveformConfig;
 pub use window_title::{
     TimeFormat, TimePreset, TitleField, TitleIcons, TitleSegment, WindowTitleConfig,
 };

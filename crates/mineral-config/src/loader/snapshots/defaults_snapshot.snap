@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
+assertion_line: 345
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -594,6 +595,10 @@ Config {
             cover_vshift_permille: 200,
             spring_stiffness: 0.35,
             spring_damping: 0.45,
+        },
+        waveform: WaveformConfig {
+            enabled: false,
+            cover_color: true,
         },
         cover: CoverConfig {
             http_timeout_secs: 30,

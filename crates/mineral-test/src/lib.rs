@@ -16,6 +16,7 @@ mod builders;
 mod fixtures;
 mod lyrics;
 mod strategies;
+mod wav;
 
 /// 测试 mock 的命名空间(每类 mock 各占一文件)。
 pub mod mock;
@@ -29,3 +30,4 @@ pub use builders::{
 pub use fixtures::{aliased_song, chinese_football, endserenading};
 pub use lyrics::{feiyu_lyrics, feiyu_song, qianzai_lyrics, qianzai_song};
 pub use strategies::arb_song;
+pub use wav::write_wav;

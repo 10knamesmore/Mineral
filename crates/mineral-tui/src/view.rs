@@ -14,6 +14,7 @@ use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
 use crate::components::layout::shared::marquee::MarqueeCtx;
+use crate::components::layout::shared::waveform::WaveformCtx;
 use crate::components::layout::shared::{cover_image, top_status, transform, transport, vinyl};
 use crate::runtime::state::SearchFocus;
 
@@ -90,6 +91,7 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         areas.transport,
         &app.state.playback,
         &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(&app.state, theme),
         theme,
     );
 }
@@ -189,6 +191,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         areas.transport,
         &app.state.playback,
         &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(&app.state, theme),
         theme,
     );
 }
@@ -224,6 +227,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         areas.transport,
         &app.state.playback,
         &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(&app.state, theme),
         theme,
     );
     if let Some(c) = areas.cover.and_then(nonempty) {

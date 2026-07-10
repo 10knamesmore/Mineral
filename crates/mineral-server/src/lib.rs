@@ -20,6 +20,7 @@ mod client;
 mod config;
 mod config_host;
 mod download;
+mod envelope;
 mod events;
 mod favorites;
 mod gapless;

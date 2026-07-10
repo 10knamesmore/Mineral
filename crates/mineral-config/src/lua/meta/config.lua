@@ -35,6 +35,7 @@
 ---@field keys? mineral.KeysConfig 键位重映射(动作 → 键)
 ---@field behavior? mineral.BehaviorConfig 交互手感(步长 / 跳行 / daemon 续命)
 ---@field spectrum? mineral.SpectrumConfig 频谱面板观感与动态
+---@field waveform? mineral.WaveformConfig 进度条振幅波形
 ---@field cover? mineral.CoverConfig 封面抓取 / 缓存 / 取色
 ---@field prefetch? mineral.PrefetchConfig 数据预取范围与节流
 ---@field search? mineral.SearchConfig 搜索:本地过滤(deep)与 channel 远程搜索白名单(channel)
@@ -177,6 +178,13 @@
 ---@field cover_vshift_permille? integer 封面色场顶端相对底端沿色带的偏移,千分比 0-1000;拉开条底/条顶明度层次
 ---@field spring_stiffness? number 弹簧刚度,每 tick force += k×(目标-当前);0.1-1.0 合理,太大瞬间过冲像 bug
 ---@field spring_damping? number 弹簧速度阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹
+
+---进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算
+---(流播半截算不出全曲形状),未就绪自动回落普通进度条。「全屏才展开波形」等
+---场景化行为不设配置项,用脚本 observe("terminal") + config.override 覆盖 enabled 实现。
+---@class mineral.WaveformConfig
+---@field enabled? boolean 进度条是否化身振幅波形;包络未就绪自动回落普通进度条
+---@field cover_color? boolean 已播放段是否吃封面取色;false 用主题 accent
 
 ---封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
 ---@class mineral.CoverConfig

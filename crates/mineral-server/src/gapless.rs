@@ -168,6 +168,8 @@ pub(crate) fn check_prefetch(player: &PlayerCore) {
         &next,
         player.playback_quality(),
     ) {
+        // 预排命中本地:提前把下一曲包络算好落库(adopt 边界经 replay 直取,零等待)。
+        player.ensure_envelope(next.id.clone(), path.clone());
         queue_local_next(player, next, path, quality, origin);
     } else {
         player.submit_task(
@@ -377,6 +379,8 @@ pub(crate) fn check_advance(player: &PlayerCore) {
                     Priority::User,
                 );
             }
+            // 无缝翻曲后补推新当前曲的 db 包络(预排时已算好;client 换曲后才认它)。
+            player.replay_current_envelope();
             player.spawn_save_session();
         }
         Advance::Fallback => {

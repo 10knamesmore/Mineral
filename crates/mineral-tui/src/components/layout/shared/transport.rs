@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::text::alias_span;
+use crate::components::layout::shared::waveform::{WaveformCtx, waveform_spans};
 use crate::render::theme::Theme;
 use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
@@ -22,6 +23,7 @@ pub fn draw(
     area: Rect,
     pb: &Playback,
     marquee: &MarqueeCtx<'_>,
+    wave: &WaveformCtx<'_>,
     theme: &Theme,
 ) {
     let block = Block::new()
@@ -48,7 +50,7 @@ pub fn draw(
 
     paint_now(frame, now, pb, marquee, theme);
     paint_meta(frame, meta, pb, theme);
-    paint_progress(frame, prog, pb, theme);
+    paint_progress(frame, prog, pb, wave, theme);
     paint_controls(frame, ctrl, pb, theme);
     paint_vol_mode(frame, vms, pb, theme);
 }
@@ -101,7 +103,14 @@ fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
 }
 
 /// 进度条:`elapsed ━━━●─── total`,宽度 < 12 或剩余空间不够时跳过。
-fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+/// 波形开启且当前曲包络就绪时,轨道段原地化身振幅波形(占位与时间文本完全不变)。
+fn paint_progress(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pb: &Playback,
+    wave: &WaveformCtx<'_>,
+    theme: &Theme,
+) {
     if area.height == 0 || area.width < 12 {
         return;
     }
@@ -114,6 +123,28 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         return;
     }
     let filled = pb.ratio_bps().of(bar_w);
+    if wave.enabled
+        && let Some(envelope) = wave.envelope
+    {
+        let mut spans = vec![Span::styled(
+            format!(" {elapsed} "),
+            Style::new().fg(theme.accent),
+        )];
+        spans.extend(waveform_spans(
+            &envelope.points,
+            bar_w,
+            filled,
+            pb.buffered_bps,
+            wave.played,
+            theme,
+        ));
+        spans.push(Span::styled(
+            format!(" {total} "),
+            Style::new().fg(theme.subtext),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     let fill = "━".repeat(filled);
     let mut spans = vec![
         Span::styled(format!(" {elapsed} "), Style::new().fg(theme.accent)),
@@ -160,7 +191,7 @@ fn paint_progress(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
 ///
 /// # Return:
 ///   `(亮段 cell 数, 暗段 cell 数)`,二者之和 = `bar_w - filled - 1`。
-fn split_buffered_track(bar_w: usize, filled: usize, buffered: Bps) -> (usize, usize) {
+pub(crate) fn split_buffered_track(bar_w: usize, filled: usize, buffered: Bps) -> (usize, usize) {
     let track_len = bar_w.saturating_sub(filled).saturating_sub(1);
     let bright = buffered
         .of(bar_w)
@@ -420,6 +451,7 @@ mod tests {
 
     use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
     use crate::components::layout::shared::marquee::MarqueeCtx;
+    use crate::components::layout::shared::waveform::WaveformCtx;
     use crate::render::theme::Theme;
     use crate::runtime::marquee::Marquees;
     use crate::runtime::playback::{Playback, PlaybackOrigin};
@@ -452,7 +484,16 @@ mod tests {
         ));
         let render = |mq: &Marquees| -> color_eyre::Result<String> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
-            t.draw(|f| super::draw(f, f.area(), &pb, &ctx(mq), &Theme::default()))?;
+            t.draw(|f| {
+                super::draw(
+                    f,
+                    f.area(),
+                    &pb,
+                    &ctx(mq),
+                    &WaveformCtx::off(),
+                    &Theme::default(),
+                )
+            })?;
             let buf = t.backend().buffer();
             // y=1:边框内顶行(now-line)。
             Ok((0..buf.area.width)
@@ -630,7 +671,16 @@ mod tests {
         );
         pb.sample_rate_hz = 96_000;
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!(
             "播放栏:fmt 含位深+采样率(flac 24bit/96kHz)",
             t.backend()
@@ -644,7 +694,16 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let pb = Playback::new();
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:无曲目空态", t.backend());
         Ok(())
     }
@@ -662,7 +721,16 @@ mod tests {
         pb.playing = true;
         pb.volume_pct = 80;
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!(
             "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)",
             t.backend()
@@ -678,7 +746,16 @@ mod tests {
         pb.track = Some(mineral_test::aliased_song());
         pb.playing = true;
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:曲名带别名,后缀暗色 (alias)", t.backend());
         Ok(())
     }
@@ -695,7 +772,16 @@ mod tests {
         pb.position_ms = 30_000;
         pb.playing = false;
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!(
             "播放栏:暂停 + 长歌名(TheLastWordIsRejoice)",
             t.backend()
@@ -716,10 +802,81 @@ mod tests {
         pb.position_ms = 60_000;
         pb.playing = true;
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!(
             "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
             t.backend()
+        );
+        Ok(())
+    }
+
+    /// 波形进度条:开关开 + 包络就绪(归属当前曲)→ 轨道段化身振幅块字符,
+    /// 时间文本与占位完全不变。
+    #[test]
+    fn transport_waveform_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let theme = Theme::default();
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(
+            with_name(song("1"), "CrescendoTrack"),
+            225_000,
+        ));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        pb.volume_pct = 80;
+        let track_id = pb
+            .track
+            .as_ref()
+            .map(|s| s.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("track 必在"))?;
+        // 合成渐强包络:波形应从矮到高有可见起伏。
+        let points = (0..200u16)
+            .map(|i| u8::try_from((u32::from(i) * 255) / 199).unwrap_or(255))
+            .collect::<Vec<u8>>();
+        pb.envelope = Some((track_id, mineral_model::Envelope { points, version: 1 }));
+        let wave = WaveformCtx {
+            enabled: true,
+            played: theme.accent_2,
+            envelope: pb.current_envelope(),
+        };
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &wave, &theme))?;
+        crate::test_support::assert_snap!("播放栏:波形进度条(渐强包络化身块字符)", t.backend());
+        Ok(())
+    }
+
+    /// 回落语义:开关开但包络缺失时,渲染与关闭态逐 cell 完全一致(普通进度条)。
+    #[test]
+    fn waveform_without_envelope_falls_back_to_plain_bar() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(with_name(song("1"), "NoEnvelope"), 225_000));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        let render = |wave: &WaveformCtx<'_>| -> color_eyre::Result<ratatui::buffer::Buffer> {
+            let mut t = Terminal::new(TestBackend::new(64, 8))?;
+            let mq = still_marquees();
+            t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), wave, &theme))?;
+            Ok(t.backend().buffer().clone())
+        };
+        let on_without_envelope = WaveformCtx {
+            enabled: true,
+            played: theme.accent_2,
+            envelope: None,
+        };
+        assert_eq!(
+            render(&on_without_envelope)?,
+            render(&WaveformCtx::off())?,
+            "包络缺失时开关开与关必须逐 cell 一致"
         );
         Ok(())
     }
@@ -756,7 +913,16 @@ mod tests {
         pb.prefetch.ready = true;
         pb.prefetch.buffered_bps = Bps::new(4_000);
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:gapless prefetch 标记(⏭ 右侧 ⇣)", t.backend());
         Ok(())
     }
@@ -770,7 +936,7 @@ mod tests {
         fn marker_fg(pb: &Playback, theme: &Theme) -> color_eyre::Result<Option<Color>> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
             let mq = still_marquees();
-            t.draw(|f| super::draw(f, f.area(), pb, &ctx(&mq), theme))?;
+            t.draw(|f| super::draw(f, f.area(), pb, &ctx(&mq), &WaveformCtx::off(), theme))?;
             Ok(t.backend()
                 .buffer()
                 .content
@@ -827,7 +993,16 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:来源徽标 download(↓ 绿)", t.backend());
         Ok(())
     }
@@ -843,7 +1018,16 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:来源徽标 cache(◆ 蓝)", t.backend());
         Ok(())
     }
@@ -859,7 +1043,16 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &Theme::default()))?;
+        t.draw(|f| {
+            super::draw(
+                f,
+                f.area(),
+                &pb,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &Theme::default(),
+            )
+        })?;
         crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
         Ok(())
     }
@@ -876,7 +1069,7 @@ mod tests {
         pb.playing = true;
         pb.buffered_bps = Bps::new(6_000); // 60% 已缓冲:介于已播与满之间 → 亮暗两段都该出现
         let mq = still_marquees();
-        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &theme))?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
 
         // 圆角边框的上下边也是 `─` 且同为 surface1,故不能全局扫字形。先用唯一的填充字符
         // `━` 定位进度条所在行,只在该行内取 `─` 轨道,避开边框。

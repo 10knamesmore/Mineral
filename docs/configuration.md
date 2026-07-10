@@ -236,6 +236,32 @@ return {
 | `spring_stiffness` | 0.35 | 弹簧刚度;0.1-1.0 合理,太大瞬间过冲像 bug |
 | `spring_damping` | 0.45 | 弹簧阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹 |
 
+## tui.waveform — 进度条波形
+
+transport 进度条化身全曲振幅波形:播放头扫过的部分点亮,副歌 / 安静桥段的位置一眼可见,seek 有了参照物。
+
+包络由 daemon 离线解码整曲算出、落库复用,只对**本地曲库 / 已缓存 / 已下载**的曲目可算——流播半截解不出全曲形状。包络未就绪时自动回落普通进度条,不占额外空间。首次流式播放的曲子在曲尾入缓存后包络就绪,**第二次播放起有波形**。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 进度条是否化身振幅波形;包络未就绪自动回落普通进度条 |
+| `cover_color` | `true` | 已播放段吃封面取色(与频谱同源);`false` 用主题 accent |
+
+### Recipe:全屏沉浸态才展开波形
+
+「browse 态保持细进度条、全屏才上波形」这类场景化行为不设配置项——观察终端态、
+用 override 覆盖开关即可(override 是配置合成的一层,翻转即热生效):
+
+```lua
+mineral.observe("terminal", function(t)
+  if t and t.fullscreen then
+    mineral.config.override("tui.waveform.enabled", true)
+  else
+    mineral.config.override("tui.waveform.enabled", nil) -- 撤销,回落配置默认
+  end
+end)
+```
+
 ## tui.cover — 封面管线
 
 抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。

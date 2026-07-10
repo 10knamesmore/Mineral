@@ -113,6 +113,12 @@ return {
       spring_stiffness = 0.35, -- 弹簧刚度;无量纲系数,与帧率耦合
       spring_damping = 0.45, -- 弹簧阻尼;越小回弹越多,越大越稳
     },
+    -- 进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算,
+    -- 未就绪自动回落普通进度条。「全屏才展开」等场景化开关走脚本 override,见文档 recipe。
+    waveform = {
+      enabled = false, -- 进度条化身振幅波形;包络未就绪自动回落普通进度条
+      cover_color = true, -- 已播放段吃封面取色;false 用主题 accent
+    },
     -- 封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
     cover = {
       http_timeout_secs = 30, -- 单张封面下载超时,秒

@@ -23,6 +23,7 @@ use super::sources::SourcesConfig;
 use super::spectrum::SpectrumConfig;
 use super::theme::ThemeConfig;
 use super::toast::ToastConfig;
+use super::waveform::WaveformConfig;
 use super::window_title::WindowTitleConfig;
 
 /// 用户运行期配置的强类型真相源。深合并后整表一次反序列化落成本类型。
@@ -71,6 +72,9 @@ pub struct TuiConfig {
 
     /// 频谱面板段(观感开关 + 平滑/衰减 + peak 物理)。
     spectrum: SpectrumConfig,
+
+    /// 进度条波形段(振幅波形开关 + 封面取色开关)。
+    waveform: WaveformConfig,
 
     /// 封面段(抓取/缓存/并发 + kmeans 取色)。
     cover: CoverConfig,

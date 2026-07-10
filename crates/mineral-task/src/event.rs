@@ -82,6 +82,17 @@ pub enum TaskEvent {
         lyrics: Lyrics,
     },
 
+    /// 某首歌的全曲振幅包络就绪(进度条波形渲染用)。非任务事件:server 在本地
+    /// 解码算出或 db 缓存命中后直接推,不经 channel-fetch lane(包络没有 channel,
+    /// 同 [`TaskEvent::LibrarySnapshot`] 的直推先例)。
+    EnvelopeReady {
+        /// 关联的歌曲 id。
+        song_id: SongId,
+
+        /// 包络数据(定长 points + 算法版本)。
+        envelope: mineral_model::Envelope,
+    },
+
     /// `RemotePlayCount` 任务成功:某首歌的远端真实累计播放次数已到。
     RemotePlayCountFetched {
         /// 关联的歌曲 id。

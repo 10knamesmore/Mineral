@@ -346,6 +346,15 @@ mod tests {
         Ok(())
     }
 
+    /// tui.waveform 默认:进度条波形关、封面取色开(default.lua 是唯一默认值数据源)。
+    #[test]
+    fn waveform_defaults() -> color_eyre::Result<()> {
+        let cfg = Config::defaults()?;
+        assert!(!*cfg.tui().waveform().enabled(), "波形默认应关闭");
+        assert!(*cfg.tui().waveform().cover_color(), "封面取色默认应开启");
+        Ok(())
+    }
+
     /// copy.templates 的函数被摘进 VM registry(下标对位、可调用),
     /// 展示字段(key/label/context)照常落型。
     #[test]

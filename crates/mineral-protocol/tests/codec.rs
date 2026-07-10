@@ -494,6 +494,22 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 包络就绪事件经 TaskEvents 响应的 round-trip:points 字节与算法版本不变形。
+#[tokio::test]
+async fn round_trip_envelope_ready_event() -> color_eyre::Result<()> {
+    resp_round_trips(Response::TaskEvents(vec![
+        mineral_task::TaskEvent::EnvelopeReady {
+            song_id: SongId::new(SourceKind::NETEASE, "1"),
+            envelope: mineral_model::Envelope {
+                points: vec![0, 128, 255],
+                version: 1,
+            },
+        },
+    ]))
+    .await?;
+    Ok(())
+}
+
 /// 写完结事件(成功与带错误)经 TaskEvents 响应的 round-trip。
 #[tokio::test]
 async fn round_trip_playlist_write_done_events() -> color_eyre::Result<()> {
