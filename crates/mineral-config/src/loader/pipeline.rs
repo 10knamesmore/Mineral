@@ -387,6 +387,30 @@ mod tests {
         Ok(())
     }
 
+    /// 用户覆盖 spectrum.style / per-style 子表旋钮:字符串枚举经深合并落型,
+    /// 子表覆盖不整表顶掉其余默认。
+    #[test]
+    fn spectrum_style_override_parses() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "spectrumstyle",
+            r#"return { tui = { spectrum = {
+                style = "terrain",
+                terrain = { push_ms = 96 },
+                bars = { spring_peak = false },
+            } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert!(warnings.is_empty(), "实得 {warnings:?}");
+        let spectrum = cfg.tui().spectrum();
+        assert_eq!(spectrum.style(), &crate::SpectrumStyle::Terrain);
+        assert_eq!(*spectrum.terrain().push_ms(), 96);
+        assert_eq!(*spectrum.terrain().layers(), 8, "未覆盖的子表键保默认");
+        assert!(!*spectrum.bars().spring_peak());
+        assert!(*spectrum.bars().show_trail(), "未覆盖的子表键保默认");
+        Ok(())
+    }
+
     /// copy.templates 的函数被摘进 VM registry(下标对位、可调用),
     /// 展示字段(key/label/context)照常落型。
     #[test]

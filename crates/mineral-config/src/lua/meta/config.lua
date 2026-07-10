@@ -156,6 +156,7 @@
 ---attack 起音(上升)/ decay 衰减(播放中余韵)/ release 释音(暂停落 0),
 ---sustain = FFT 实时值本身无旋钮。fft_size/dB 标定是 DSP 参数,其余纯观感放心乱调。
 ---@class mineral.SpectrumConfig
+---@field style? "bars"|"scope"|"waterfall"|"terrain" 渲染风格:"bars" 频谱柱(默认);"scope" 时域示波器(min/max 包络滚动);"waterfall" 频谱历史瀑布(x=频率 y=时间,热力半块);"terrain" 山脊地形(历史轮廓层叠)
 ---@field fft_size? integer FFT 窗大小,样本数,建议 2 的幂。大 = 低频细节多但瞬态钝、起播首窗慢(4096@48kHz ≈ 85ms);小 = 跟手但低频糊。**外键:audio.tap_capacity 须 ≥ 2 × 此值**,否则 UI 卡一帧就丢样本出毛刺
 ---@field f_min? number 频率轴下界,Hz;低于此的能量不显示
 ---@field f_max? number 频率轴上界,Hz;超过采样率一半时自动取一半
@@ -163,21 +164,44 @@
 ---@field db_floor? number dB 标定下界,低于此条高为 0;抬高 = 砍安静细节整体变矮,降低 = 噪声底也可见。须 < db_ceil
 ---@field db_ceil? number dB 标定上界,高于此满高;与 db_floor 共同决定显示动态范围
 ---@field peak_mix? number 频带统计中峰值占比 0-1:0 = 纯均值(平),1 = 纯峰值(躁);中间值兼顾动态与稳定
----@field show_peak_cap? boolean 是否显示 peak cap(浮在条顶的 ▔)
----@field show_trail? boolean 是否显示 peak 与条之间的余韵渐隐
 ---@field hue_rotate? boolean 无封面色时整体色相是否缓慢漂移
----@field spring_peak? boolean peak 是否带弹簧物理(过冲 + 回弹);false = 直接吸附
 ---@field baseline_min? integer 任何状态下条的最小高度,1/8 字符单位,0-64;0 = 静默时面板全空
 ---@field attack_ms? integer 起音:条高上升 90% 到位的毫秒数;越小越贴鼓点,≤帧间隔则瞬时
 ---@field decay_ms? integer 衰减:播放中条高向更低目标回落 90% 的毫秒数(余韵);比 attack_ms 大才有"快攻慢放"的动画感
----@field release_ms? integer 释音:暂停/无信号时条高落向 baseline 的 90% 毫秒数
----@field peak_hold_ms? integer 新 peak 在原位悬停的毫秒数
----@field peak_fall_ms? integer 悬停结束后 peak 从满高(64)落到 0 的满程毫秒数
+---@field release_ms? integer 释音:暂停/无信号时条高落向 baseline 的 90% 毫秒数(bars 专属;scope/waterfall/terrain 暂停整幅冻结)
 ---@field hue_cycle_ms? integer 色相转满一圈(360°)的毫秒数;越小转得越快
 ---@field cover_fade_ms? integer 封面取色就绪后,从当前配色缓动到封面色场的毫秒数
 ---@field cover_vshift_permille? integer 封面色场顶端相对底端沿色带的偏移,千分比 0-1000;拉开条底/条顶明度层次
+---@field bars? mineral.BarsConfig bars 风格参数,style = "bars" 时生效
+---@field scope? mineral.ScopeConfig scope 风格参数,style = "scope" 时生效
+---@field waterfall? mineral.WaterfallConfig waterfall 风格参数,style = "waterfall" 时生效
+---@field terrain? mineral.TerrainConfig terrain 风格参数,style = "terrain" 时生效
+
+---bars 频谱柱的参数:peak cap / trail 装饰 + 弹簧物理。
+---@class mineral.BarsConfig
+---@field show_peak_cap? boolean 是否显示 peak cap(浮在条顶的 ▔)
+---@field show_trail? boolean 是否显示 peak 与条之间的余韵渐隐
+---@field spring_peak? boolean peak 是否带弹簧物理(过冲 + 回弹);false = 直接吸附
+---@field peak_hold_ms? integer 新 peak 在原位悬停的毫秒数
+---@field peak_fall_ms? integer 悬停结束后 peak 从满高(64)落到 0 的满程毫秒数
 ---@field spring_stiffness? number 弹簧刚度,每 tick force += k×(目标-当前);0.1-1.0 合理,太大瞬间过冲像 bug
 ---@field spring_damping? number 弹簧速度阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹
+
+---scope 示波器的参数。波形右新左旧匀速滚动,列 = 该时段样本的 min/max 包络。
+---@class mineral.ScopeConfig
+---@field column_ms? integer 每根包络列聚合的音频时长,毫秒 = 滚动速度;越小滚得越快、可见时间窗越短
+
+---waterfall 频谱历史瀑布的参数。▀ 半块一字符行装两帧历史,幅度→热力色连续 lerp。
+---@class mineral.WaterfallConfig
+---@field push_ms? integer 推行间隔,毫秒;一行装两帧 = 每半格 push_ms/2,越小流速越快、可见历史窗越短
+---@field contrast? number 幅度→热力色的对比 gamma;1 = 线性,>1 压暗噪底只留强峰(音高线更突出),<1 抬亮弱谐波泛音
+
+---terrain 山脊地形的参数。层间按推层进度连续上浮,不整层跳变。
+---@class mineral.TerrainConfig
+---@field push_ms? integer 推层间隔,毫秒;× layers = 地形时间纵深
+---@field layers? integer 历史层数;层距 = 可用纵深 / 层数,层数多了单层太挤
+---@field amplitude? number 轮廓振幅占面板高比例 0-1;过大层间交叠互相淹没
+---@field fade_floor? number 远层亮度保底 0-1;越旧的层衰减到此为止不再隐入衬底,0 = 淡到全隐,1 = 全层等亮无纵深
 
 ---进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算
 ---(流播半截算不出全曲形状),未就绪自动回落普通进度条。「全屏才展开波形」等

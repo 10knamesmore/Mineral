@@ -85,15 +85,11 @@ impl crate::app::App {
     ///   - `config`: 有效配置树(wire 形)
     pub(crate) fn apply_pushed_config(&mut self, config: mineral_protocol::BusValue) {
         use crate::components::toast::card::{plain_body, plain_line};
-        use crate::components::toast::notifications::{TextTint, tinted_text_item};
+        use crate::components::toast::notifications::TextTint;
         match mineral_config::from_tree(&config.into_json()) {
             Ok(cfg) => {
                 self.apply_config(Arc::new(cfg));
                 self.notifications.dismiss_card_by_id(PUSH_CARD_ID);
-                if self.config_replayed {
-                    self.notifications
-                        .flash(tinted_text_item("配置已更新".to_owned(), TextTint::Normal));
-                }
                 self.config_replayed = true;
             }
             Err(warning) => {

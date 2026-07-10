@@ -1,6 +1,6 @@
-//! Spectrum 频谱面板:FFT 真值条 + peak hold cap 装饰 + baseline 兜底。
+//! 频谱运行态:FFT 真值条的 ADSR 包络 + peak hold/弹簧 + 配色态机 + baseline 兜底。
 //!
-//! 数据由 [`mineral_spectrum::SpectrumComputer`] 算出 64 根条目标高度,
+//! 数据由 [`mineral_spectrum::SpectrumComputer`] 算出目标条高,
 //! [`SpectrumState::tick`] 按效果器 ADSR 包络写入:attack(上升)/ decay(播放中
 //! 余韵滑落)/ release(暂停释音落 0),sustain 即 FFT 实时值。时长旋钮均为毫秒,
 //! 构造时按 `animation.frame_tick_ms` 折算成每拍系数,与帧率解耦。装饰两件:
@@ -11,12 +11,10 @@
 //!    pause 时条衰减到 baseline 停住,FFT 还没出第一窗时也是 baseline。
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 
-use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders};
+use mineral_config::SpectrumStyle;
+use ratatui::style::Color;
 
 use crate::render::anim::{ticks16_from_ms, ticks32_from_ms};
 use crate::render::color::{lerp_color, rotate_hue};
@@ -24,10 +22,29 @@ use crate::render::palette::{ColumnColors, CoverPalette, Rgb, column_permille};
 use crate::render::theme::Theme;
 
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
-const SPECTRUM_RES: u16 = mineral_spectrum::RES;
+pub(super) const SPECTRUM_RES: u16 = mineral_spectrum::RES;
 
-/// 首帧 / 重启时的默认条数。`paint_bars` 第一次跑后被实际 area.width 推算的值覆盖。
+/// 首帧 / 重启时的默认条数。首帧渲染后被实际 area.width 推算的值覆盖。
 const DEFAULT_BAR_COUNT: usize = 64;
+
+/// scope 包络历史环容量上限(列)。渲染按面板点宽取尾部,上限只防无界增长
+/// (16ms/列 × 2048 ≈ 33s,远超任何面板宽度所需;整环 16KB)。
+const SCOPE_HIST_CAP: usize = 2048;
+
+/// waterfall 历史环容量上限(行)。渲染按面板行数取所需前缀,上限只防无界增长
+/// (64ms/行 × 256 ≈ 16s,远超任何面板高度所需;行宽 ~200 列时整环 ≈ 100KB)。
+const WATER_HIST_CAP: usize = 256;
+
+/// scope 单列时域 min/max 包络(已乘音量,-1..=1 量级)。
+/// 一列 = `scope.column_ms` 毫秒音频的幅度极值,推入历史环后不再改写。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct WaveSpan {
+    /// 列内最小采样值。
+    pub(super) min: f32,
+
+    /// 列内最大采样值。
+    pub(super) max: f32,
+}
 
 /// 打断快照沿频率轴的采样点数(65 点 = 64 段,15.625‰/段)。色场本身是分段线性渐变
 /// (色板 swatch ≤ 6),这个密度下弦差不足一个可辨色阶;烘焙只在打断那刻发生一次。
@@ -208,6 +225,12 @@ struct Timing {
 
     /// 封面色场过渡拍数,来自 `cover_fade_ms`。
     fade_ticks: u32,
+
+    /// waterfall 推行间隔拍数,来自 `waterfall.push_ms`。
+    water_push_ticks: u16,
+
+    /// terrain 推层间隔拍数,来自 `terrain.push_ms`。
+    terrain_push_ticks: u16,
 }
 
 impl Timing {
@@ -221,10 +244,12 @@ impl Timing {
             alpha_attack: alpha_from_t90(*cfg.attack_ms(), tick_ms),
             alpha_decay: alpha_from_t90(*cfg.decay_ms(), tick_ms),
             alpha_release: alpha_from_t90(*cfg.release_ms(), tick_ms),
-            peak_hold_ticks: ticks16_from_ms(*cfg.peak_hold_ms(), tick_ms),
-            peak_fall_per_tick: fall_per_tick(*cfg.peak_fall_ms(), tick_ms),
+            peak_hold_ticks: ticks16_from_ms(*cfg.bars().peak_hold_ms(), tick_ms),
+            peak_fall_per_tick: fall_per_tick(*cfg.bars().peak_fall_ms(), tick_ms),
             hue_cycle_ticks: ticks32_from_ms(*cfg.hue_cycle_ms(), tick_ms),
             fade_ticks: ticks32_from_ms(*cfg.cover_fade_ms(), tick_ms),
+            water_push_ticks: ticks16_from_ms(*cfg.waterfall().push_ms(), tick_ms).max(1),
+            terrain_push_ticks: ticks16_from_ms(*cfg.terrain().push_ms(), tick_ms).max(1),
         }
     }
 }
@@ -258,8 +283,34 @@ pub struct SpectrumState {
     color: SpectrumColor,
 
     /// 渲染层根据 area.width 算出的目标条数,FFT compute 下一帧用它。
-    /// `Cell` 是因为 `paint_bars` 拿 `&SpectrumState`,这是「render → tick」反向通道。
+    /// `Cell` 是因为渲染层只拿 `&SpectrumState`,这是「render → tick」反向通道。
     pub target_bars: Cell<usize>,
+
+    /// waterfall 历史环(头部最新)。行 = 推行那刻的 FFT 真值条(已乘音量,
+    /// 不过 ADSR——瀑布要锐利的瞬时值,余韵是历史本身)。仅 `style = waterfall`
+    /// 时推进;行按推行那刻的列数存,渲染按当前面板宽插值读取——列数变化
+    /// (resize / browse↔fullscreen 切换)**不清环**,否则每次切布局画面清空重攒。
+    water_hist: VecDeque<Box<[u16]>>,
+
+    /// 距下次 waterfall 推行的剩余拍数。
+    water_countdown: u16,
+
+    /// terrain 历史层(头部最新)。层 = 推层那刻 ADSR 平滑后的条高快照
+    /// (f32,0..=RES)——decay 余韵让相邻层时间连贯,喂真值山脊会碎成条纹。
+    /// 仅 `style = terrain` 时推进;渲染按层长插值读取,层长与面板宽解耦。
+    terrain_hist: VecDeque<Box<[f32]>>,
+
+    /// 距下次 terrain 推层的剩余拍数。渲染经 [`Self::terrain_progress`] 读它做
+    /// 层间滚动插值——地形连续上浮而非整层跳变。
+    terrain_countdown: u16,
+
+    /// scope 包络历史环(尾部最新,渲染右新左旧)。列 = `scope.column_ms` 毫秒
+    /// 音频的 min/max 极值(已乘音量);无新样本(暂停)时冻结不动。
+    /// 仅 `style = scope` 时经 [`Self::tick_scope`] 更新。
+    wave: VecDeque<WaveSpan>,
+
+    /// scope 聚合进行中的余样本(不足一列的尾巴,下批样本续上)。
+    wave_carry: Vec<f32>,
 
     /// 频谱旋钮(平滑/衰减/peak 物理/观感开关),构造时由配置注入。
     cfg: mineral_config::SpectrumConfig,
@@ -287,6 +338,12 @@ impl SpectrumState {
             hue_phase: 0,
             color: SpectrumColor::Hue,
             target_bars: Cell::new(DEFAULT_BAR_COUNT),
+            water_hist: VecDeque::new(),
+            water_countdown: 0,
+            terrain_hist: VecDeque::new(),
+            terrain_countdown: 0,
+            wave: VecDeque::new(),
+            wave_carry: Vec::new(),
             cfg,
             timing,
         }
@@ -338,7 +395,7 @@ impl SpectrumState {
     /// `col` 列的弹簧后 peak 显示位置,clamp 到 `0..=RES` 再 round 成 u16。
     /// 过冲时 raw `peak_pos` 会短暂超过 RES,这里截到上限不让条画出面板外。
     #[allow(clippy::as_conversions)]
-    fn spring_peak_at(&self, col: usize) -> u16 {
+    pub(super) fn spring_peak_at(&self, col: usize) -> u16 {
         let raw = self.peak_pos.get(col).copied().unwrap_or(0.0);
         let clamped = raw.clamp(0.0, f32::from(SPECTRUM_RES));
         clamped.round() as u16
@@ -347,10 +404,32 @@ impl SpectrumState {
     /// `col` 列的条高收整(渲染用):clamp 到 `0..=RES` 再 round 成 u16。
     /// 内部包络是 f32(收敛精确、无整数截断),只在渲染口收整。
     #[allow(clippy::as_conversions)]
-    fn bar_at(&self, col: usize) -> u16 {
+    pub(super) fn bar_at(&self, col: usize) -> u16 {
         let raw = self.bars.get(col).copied().unwrap_or(0.0);
         let clamped = raw.clamp(0.0, f32::from(SPECTRUM_RES));
         clamped.round() as u16
+    }
+
+    /// 渲染侧读:条状态数组长度。resize 间隙可能与面板宽不一致,渲染按 min 取。
+    pub(super) fn bar_len(&self) -> usize {
+        self.bars.len()
+    }
+
+    /// 渲染侧读:频谱旋钮(观感开关 / 风格)。
+    pub(super) fn cfg(&self) -> &mineral_config::SpectrumConfig {
+        &self.cfg
+    }
+
+    /// 第 `col` 列(共 `bar_count` 列)的底/顶端点色。hue 相位与色场参数由内部提供,
+    /// 配色态机细节不出本模块。
+    pub(super) fn column_colors(
+        &self,
+        col: usize,
+        bar_count: usize,
+        theme: &Theme,
+    ) -> ColumnColors {
+        self.color
+            .column_endpoints(col, bar_count, self.hue_deg(), theme, self.color_params())
     }
 
     /// 一次 tick:推进条高 + peak。
@@ -365,7 +444,18 @@ impl SpectrumState {
     /// - `None` + `playing=false`:释音(release),所有条滑向 0(由 baseline 兜底)。
     ///
     /// 然后无条件:1) 把条托底到 `baseline_min`;2) 推进 peak 状态机。
+    ///
+    /// **例外**:waterfall / terrain 暂停时整体冻结(历史环 + 当前轮廓都静止,
+    /// 暂停就是要停下来观察历史频段),只有配色环境继续走;释音塌线是 bars 专属。
     pub fn tick(&mut self, playing: bool, volume_pct: u8, bars: Option<&[u16]>) {
+        let style = *self.cfg.style();
+        if !playing && matches!(style, SpectrumStyle::Waterfall | SpectrumStyle::Terrain) {
+            self.advance_color();
+            return;
+        }
+        if style == SpectrumStyle::Waterfall {
+            self.push_water(bars, volume_pct);
+        }
         match bars {
             Some(targets) => self.resize_state(targets.len()),
             // idle / 起播间隙没有 FFT 真值,仍把条数同步到渲染层反馈的面板宽度,
@@ -399,6 +489,128 @@ impl SpectrumState {
         self.advance_peaks();
         self.advance_peak_spring();
         self.advance_color();
+        // 放包络推进之后:terrain 层要的是本拍平滑结果的快照。
+        if *self.cfg.style() == SpectrumStyle::Terrain {
+            self.push_terrain();
+        }
+    }
+
+    /// scope 专用 tick:把本拍新到的 PCM 样本聚合进包络历史环并推进配色。
+    /// 与条形家族的 [`Self::tick`] 互斥使用(消费端按 style 分路,一帧只走一个入口)。
+    ///
+    /// 每满 `scope.column_ms` 毫秒音频(按 `sample_rate` 折算的样本数)出一根
+    /// min/max 列推入环尾;不足一列的尾巴留在 carry 等下批。列与**音频时间**对齐
+    /// 而非渲染帧——样本到达节奏抖动不影响滚动速度,这是波形不左右晃的关键。
+    ///
+    /// 无新样本(暂停 / 起播间隙)时画面**冻结**(DAW 语义:暂停就是要停下来
+    /// 观察波形),恢复播放从暂停点续推;不做释音塌线,故不需要 `playing`。
+    ///
+    /// # Params:
+    ///   - `volume_pct`: 音量百分比(听感联动:包络乘 `vol/100`)
+    ///   - `samples`: 本拍拉到的 PCM 样本(可空:起播间隙 / 暂停)
+    ///   - `sample_rate`: PCM 采样率(Hz);0(未知)时按每样本一列退化处理
+    pub fn tick_scope(&mut self, volume_pct: u8, samples: &[f32], sample_rate: u32) {
+        if samples.is_empty() {
+            self.advance_color();
+            return;
+        }
+        let per_column = self.scope_samples_per_column(sample_rate);
+        let vol = f32::from(volume_pct.min(100)) / 100.0;
+        self.wave_carry.extend_from_slice(samples);
+        let complete = self.wave_carry.len() / per_column;
+        for chunk in self.wave_carry.chunks_exact(per_column) {
+            let (min, max) = chunk
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), s| {
+                    (lo.min(*s), hi.max(*s))
+                });
+            self.wave.push_back(WaveSpan {
+                min: min * vol,
+                max: max * vol,
+            });
+        }
+        self.wave_carry.drain(..complete * per_column);
+        while self.wave.len() > SCOPE_HIST_CAP {
+            self.wave.pop_front();
+        }
+        self.advance_color();
+    }
+
+    /// scope 一列聚合的样本数(`scope.column_ms` 按采样率折算,至少 1)。
+    fn scope_samples_per_column(&self, sample_rate: u32) -> usize {
+        let column_ms = u64::from(*self.cfg.scope().column_ms()).max(1);
+        let per = u64::from(sample_rate) * column_ms / 1000;
+        usize::try_from(per).unwrap_or(usize::MAX).max(1)
+    }
+
+    /// 渲染侧读:从最新往回数第 `idx` 根包络列(0 = 最新,渲染贴右缘)。
+    /// 超出历史返回 `None`(面板比历史宽的左侧空白,渲染画中线)。
+    pub(super) fn wave_span_from_newest(&self, idx: usize) -> Option<WaveSpan> {
+        let i = self.wave.len().checked_sub(1 + idx)?;
+        self.wave.get(i).copied()
+    }
+
+    /// waterfall 历史推行:按 `waterfall.push_ms` 折算的节奏把当刻 FFT 真值
+    /// (乘音量,不过 ADSR)推入历史环头部。起播间隙(在播但 FFT 窗未满)推
+    /// 静默行(时间轴上那一刻确实无声);暂停不会走到这里([`Self::tick`] 冻结)。
+    /// 行长 = 推行那刻的列数,渲染按当前面板宽插值读取(与 terrain 同策略),
+    /// 列数变化不清环。
+    fn push_water(&mut self, bars: Option<&[u16]>, volume_pct: u8) {
+        if self.water_countdown > 0 {
+            self.water_countdown -= 1;
+            return;
+        }
+        self.water_countdown = self.timing.water_push_ticks.saturating_sub(1);
+        let cols = self.target_bars.get().max(1);
+        let mut row = vec![0_u16; cols].into_boxed_slice();
+        if let Some(targets) = bars {
+            let vol = u32::from(volume_pct.min(100));
+            for (slot, target) in row.iter_mut().zip(targets.iter()) {
+                *slot = u16::try_from(u32::from(*target) * vol / 100).unwrap_or(0);
+            }
+        }
+        self.water_hist.push_front(row);
+        self.water_hist.truncate(WATER_HIST_CAP);
+    }
+
+    /// 渲染侧读:第 `idx` 行 waterfall 历史(0 = 最新)。超出历史返回 `None`。
+    pub(super) fn water_row(&self, idx: usize) -> Option<&[u16]> {
+        self.water_hist.get(idx).map(AsRef::as_ref)
+    }
+
+    /// terrain 推层:按 `terrain.push_ms` 折算的节奏快照当前平滑条高。
+    fn push_terrain(&mut self) {
+        if self.terrain_countdown > 0 {
+            self.terrain_countdown -= 1;
+            return;
+        }
+        self.terrain_countdown = self.timing.terrain_push_ticks.saturating_sub(1);
+        self.terrain_hist
+            .push_front(self.bars.clone().into_boxed_slice());
+        self.terrain_hist
+            .truncate((*self.cfg.terrain().layers()).max(1));
+    }
+
+    /// 渲染侧读:第 `idx` 层 terrain 历史(0 = 最新最前)。超出层数返回 `None`。
+    pub(super) fn terrain_layer(&self, idx: usize) -> Option<&[f32]> {
+        self.terrain_hist.get(idx).map(AsRef::as_ref)
+    }
+
+    /// 渲染侧读:距上次推层的进度(0..1)。渲染用它把所有历史层连续上浮
+    /// `progress × 层距`——推层瞬间新层从最前山脊位置无缝接棒,地形匀速滚动
+    /// 而非每 `terrain.push_ms` 整层跳一格。
+    pub(super) fn terrain_progress(&self) -> f32 {
+        let ticks = self.timing.terrain_push_ticks.max(1);
+        let elapsed = ticks
+            .saturating_sub(1)
+            .saturating_sub(self.terrain_countdown);
+        f32::from(elapsed) / f32::from(ticks)
+    }
+
+    /// 渲染侧读:当前 ADSR 平滑条高(f32 真值,0..=RES)。terrain 拿它画最前山脊
+    /// (固定在底部的「现在」),历史层从这里起浮。
+    pub(super) fn smoothed_bars(&self) -> &[f32] {
+        &self.bars
     }
 
     /// 推进配色状态机一拍(替换原先裸 `hue_phase` 自增):
@@ -476,13 +688,16 @@ impl SpectrumState {
     /// 弹簧推进:`peak_pos` 朝 `peaks` (target) 跑,带配置的刚度 / 阻尼。
     /// `spring_peak=false` 时直接锁定到 target,无过冲。
     fn advance_peak_spring(&mut self) {
-        if !*self.cfg.spring_peak() {
+        if !*self.cfg.bars().spring_peak() {
             for (pos, p) in self.peak_pos.iter_mut().zip(self.peaks.iter()) {
                 *pos = *p;
             }
             return;
         }
-        let (stiffness, damping) = (*self.cfg.spring_stiffness(), *self.cfg.spring_damping());
+        let (stiffness, damping) = (
+            *self.cfg.bars().spring_stiffness(),
+            *self.cfg.bars().spring_damping(),
+        );
         for ((pos, vel), target) in self
             .peak_pos
             .iter_mut()
@@ -567,132 +782,6 @@ fn fall_per_tick(fall_ms: u32, tick_ms: u64) -> f32 {
     v as f32
 }
 
-/// 渲染频谱到给定 [`Rect`]。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Theme) {
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(" spectrum ").style(Style::new().fg(theme.subtext)));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let bars_area = Rect::new(inner.x, inner.y, inner.width, inner.height);
-    paint_bars(frame, bars_area, state, theme);
-}
-
-/// 渲染整个频谱条阵:每列一根柱 + 渐变色 + 余韵尾迹 + peak cap。
-fn paint_bars(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Theme) {
-    if area.height == 0 {
-        return;
-    }
-    // 每根条恒 1 列。FFT 端按 area.width 对数等分桶映射,窗口越宽频率分辨率越细。
-    let bar_step: u16 = 1;
-    let bar_count = usize::from(area.width).max(1);
-    state.target_bars.set(bar_count);
-    let total_w = u16::try_from(bar_count)
-        .unwrap_or(0)
-        .saturating_mul(bar_step);
-    // 总宽除不尽时把剩余空格平分到两边,让 spectrum 视觉上居中,避免「左密右稀 / 右密左稀」。
-    let pad_left = area.width.saturating_sub(total_w) / 2;
-    // state.bars 长度可能跟新 bar_count 不一致(刚 resize 终端,新 FFT 还没出第一窗),
-    // 这一帧只渲染已有的部分,其余留空。下一帧 tick 后对齐。
-    let render_count = bar_count.min(state.bars.len()).max(1);
-    let max_units = u32::from(area.height) * 8;
-    // 渐变跨度。0 → accent(底)、span → accent_2(顶)。area.height-1 给最顶格 100% accent_2。
-    let grad_span = u64::from(area.height.saturating_sub(1)).max(1);
-    // 当前 hue 漂移角度(`Hue` 态全列共用、`Transition` 起点用)。封面态各列端点不同,
-    // 故端点计算下沉进 col 循环。
-    let hue = state.hue_deg();
-    let buf = frame.buffer_mut();
-    for col in 0..render_count {
-        // 该列底/顶端点色:`Hue` 态全列同色(与旧实现逐像素等价),封面态沿频率轴铺色。
-        let endpoints =
-            state
-                .color
-                .column_endpoints(col, render_count, hue, theme, state.color_params());
-        let palette_lo = endpoints.bottom;
-        let palette_hi = endpoints.top;
-        let bar = state.bar_at(col);
-        let peak = state.spring_peak_at(col);
-        let scaled = (u32::from(bar) * max_units) / u32::from(SPECTRUM_RES);
-        let full = u16::try_from(scaled / 8).unwrap_or(0);
-        let partial = u16::try_from(scaled % 8).unwrap_or(0);
-        let peak_scaled = (u32::from(peak) * max_units) / u32::from(SPECTRUM_RES);
-        let peak_row = u16::try_from(peak_scaled / 8).unwrap_or(0);
-        // bar 顶部所占格(partial > 0 时是 full 行;否则 bar 仅到 full-1 的实心格)。
-        let bar_top_row = if partial > 0 {
-            full
-        } else {
-            full.saturating_sub(1)
-        };
-        // trail 区间 = (bar_top_row, peak_row),即 peak 落下时留在空中的「记忆」。
-        // trail_span 包含 peak 自身那格,作为 fade 分母:让最顶 trail 行刚好落在
-        // 接近(但不到)peak cap 的色阶,色阶逐行递进,无密度跳变。
-        let trail_span = u64::from(peak_row.saturating_sub(bar_top_row)).max(1);
-        let x = area.x + pad_left + u16::try_from(col).unwrap_or(0) * bar_step;
-        for row_from_bottom in 0..area.height {
-            let row_color = lerp_color(
-                palette_lo,
-                palette_hi,
-                u64::from(row_from_bottom),
-                grad_span,
-            );
-            let (glyph, color) = if row_from_bottom < full {
-                ("█", row_color)
-            } else if row_from_bottom == full && partial > 0 {
-                (partial_glyph(partial), row_color)
-            } else if *state.cfg.show_trail()
-                && row_from_bottom > bar_top_row
-                && row_from_bottom < peak_row
-            {
-                // 余韵:每行往背景色 lerp 一档,d=1 略淡、靠近 peak 几乎融入背景。
-                // 单一 glyph(▓)+ 颜色 fade,避免「▓→▒→░」三段密度跳变看起来分层。
-                let d = u64::from(row_from_bottom.saturating_sub(bar_top_row));
-                let faded = lerp_color(row_color, theme.surface0, d, trail_span);
-                ("▓", faded)
-            } else {
-                continue;
-            };
-            let y = area.y + area.height.saturating_sub(1 + row_from_bottom);
-            for dx in 0..bar_step {
-                buf.set_string(x + dx, y, glyph, Style::new().fg(color));
-            }
-        }
-
-        // peak cap:▔ + theme.text + Bold,跟 bar / trail 的 mauve↔sapphire 拉开。
-        // 仅当 peak 严格高于 bar 顶部所占的格才画,避免覆盖 partial glyph 丢失高度信息。
-        if *state.cfg.show_peak_cap() && peak_row > bar_top_row && peak_row < area.height {
-            let py = area.y + area.height.saturating_sub(1 + peak_row);
-            for dx in 0..bar_step {
-                buf.set_string(
-                    x + dx,
-                    py,
-                    "▔",
-                    Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-                );
-            }
-        }
-    }
-}
-
-/// 把 0..=7 单位的剩余高度映射成 8 段块字符(`▁..▇`),用于顶部"半行"渲染。
-fn partial_glyph(units: u16) -> &'static str {
-    match units {
-        1 => "▁",
-        2 => "▂",
-        3 => "▃",
-        4 => "▄",
-        5 => "▅",
-        6 => "▆",
-        _ => "▇",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;
@@ -752,6 +841,450 @@ mod tests {
             mineral_config::Config::defaults()?.tui().spectrum().clone(),
             TICK_MS,
         ))
+    }
+
+    /// 以「defaults + overlay」合成配置构造频谱态(与 daemon 合成路径同构),
+    /// 用于覆盖 `style` 及 per-style 子表旋钮。
+    fn spectrum_state_with(overlay: serde_json::Value) -> color_eyre::Result<SpectrumState> {
+        let tree = mineral_config::merge_tree(mineral_config::default_tree()?, overlay);
+        let cfg = mineral_config::from_tree(&tree)
+            .map_err(|w| color_eyre::eyre::eyre!("overlay 落型失败: {w}"))?;
+        Ok(SpectrumState::new(cfg.tui().spectrum().clone(), TICK_MS))
+    }
+
+    /// bars 风格不推 waterfall / terrain 历史(不为用不上的画面攒内存)。
+    #[test]
+    fn bars_style_keeps_histories_empty() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..32 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert!(s.water_hist.is_empty(), "bars 风格不该推 waterfall 历史");
+        assert!(s.terrain_hist.is_empty(), "bars 风格不该推 terrain 历史");
+        Ok(())
+    }
+
+    /// style = waterfall 的频谱态。
+    fn waterfall_state() -> color_eyre::Result<SpectrumState> {
+        spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "waterfall",
+        } } }))
+    }
+
+    /// waterfall:推行按节奏走(默认 64ms/行 @16ms = 每 4 拍一行),行内容是 FFT 真值×音量。
+    #[test]
+    fn waterfall_pushes_rows_on_cadence() -> color_eyre::Result<()> {
+        let mut s = waterfall_state()?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        assert!(s.water_hist.is_empty(), "初始无历史");
+        for _ in 0..16 {
+            s.tick(true /*playing*/, 50 /*volume_pct*/, Some(&bars));
+        }
+        assert_eq!(s.water_hist.len(), 4, "16 拍 @4拍/行 应推 4 行");
+        let newest = s
+            .water_hist
+            .front()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有最新行"))?;
+        assert_eq!(newest.first().copied(), Some(20), "真值 40 × 音量 50% = 20");
+        Ok(())
+    }
+
+    /// waterfall:暂停整幅**冻结**(历史 + 当前行都静止,停下观察历史频段),
+    /// 不推静默行流走;即便暂停期 FFT 仍给旧窗真值也不推。
+    #[test]
+    fn waterfall_pause_freezes_history() -> color_eyre::Result<()> {
+        let mut s = waterfall_state()?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..8 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        let before = s.water_hist.clone();
+        assert!(!before.is_empty(), "前置:已有历史");
+        for _ in 0..8 {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+            // 暂停期 FFT 环形窗还留着旧样本,可能继续给出真值——同样冻结。
+            s.tick(false /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert_eq!(s.water_hist, before, "暂停期历史环应逐行冻结不动");
+        Ok(())
+    }
+
+    /// terrain:暂停整幅冻结——不推层、最前轮廓(平滑条)与推层进度都静止。
+    #[test]
+    fn terrain_pause_freezes_layers() -> color_eyre::Result<()> {
+        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "terrain",
+        } } }))?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..32 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        let hist_before = s.terrain_hist.clone();
+        let bars_before = s.bars.clone();
+        let progress_before = s.terrain_progress();
+        for _ in 0..32 {
+            s.tick(false /*playing*/, 100 /*volume_pct*/, None);
+            s.tick(false /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert_eq!(s.terrain_hist, hist_before, "暂停期不该推层");
+        assert_eq!(s.bars, bars_before, "暂停期最前轮廓(平滑条)应静止");
+        assert!(
+            (s.terrain_progress() - progress_before).abs() < f32::EPSILON,
+            "暂停期推层进度应静止(山脊不上浮)"
+        );
+        Ok(())
+    }
+
+    /// waterfall:列数变化(resize / browse↔fullscreen 切换)**不清环**——
+    /// 旧行按原长保留,渲染插值读取;清环会让每次切布局画面清空重攒。
+    #[test]
+    fn waterfall_resize_keeps_history() -> color_eyre::Result<()> {
+        let mut s = waterfall_state()?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..8 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        let rows_before = s.water_hist.len();
+        assert!(rows_before > 0, "前置:已有历史");
+        s.target_bars.set(n + 7);
+        let wider = vec![40_u16; n + 7];
+        for _ in 0..4 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&wider));
+        }
+        assert!(
+            s.water_hist.len() > rows_before,
+            "变宽后旧历史应保留,新行继续叠加"
+        );
+        assert!(
+            s.water_hist.iter().any(|row| row.len() == n),
+            "旧行按原长保留(渲染插值读取,不重采样存储)"
+        );
+        Ok(())
+    }
+
+    /// waterfall 跨宽度渲染:窄面板攒的历史在宽面板(fullscreen 通栏)照常显示,
+    /// 顶行有内容——锁住「切布局不清空」的插值读取。
+    #[test]
+    fn waterfall_renders_history_across_width_change() -> color_eyre::Result<()> {
+        let mut narrow = Terminal::new(TestBackend::new(40, 10))?;
+        let mut state = waterfall_state()?;
+        narrow.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let bars = jagged_bars(state.target_bars.get());
+        for _ in 0..40 {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        // 切到更宽的面板(模拟 fullscreen 通栏),历史行长(38)< 新内宽(78)。
+        let mut wide = Terminal::new(TestBackend::new(80, 10))?;
+        wide.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let buf = wide.backend().buffer();
+        let has_glyph = (1..79_u16).any(|x| {
+            buf.cell((x, 1))
+                .is_some_and(|cell| cell.symbol() == "▀" || cell.symbol() == "▄")
+        });
+        assert!(has_glyph, "宽面板顶行应插值显示旧历史,而非清空");
+        Ok(())
+    }
+
+    /// waterfall 稳态快照:▀ 热力半块,一字符行装两帧历史,最新在顶。
+    #[test]
+    fn waterfall_heat_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = waterfall_state()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let bars = jagged_bars(state.target_bars.get());
+        for _ in 0..80 {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "waterfall 热力半块稳态(历史 20 帧,▀ 铺满上部)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// heat 半块配色:上下两帧幅度不同的格,fg ≠ bg 且字形为 ▀
+    /// (锁住「一格装两帧」的双色接线)。
+    #[test]
+    fn waterfall_heat_cell_packs_two_frames() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = waterfall_state()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let n = state.target_bars.get();
+        // 幅度随 tick 递增:相邻两帧历史必然不同 → 顶行格 fg ≠ bg。
+        for step in 0..80_u16 {
+            let bars = vec![(step % 60) + 4; n];
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let buf = terminal.backend().buffer();
+        let cell = buf
+            .cell((40, 1)) // 面板内区顶行中列
+            .ok_or_else(|| color_eyre::eyre::eyre!("cell 缺失"))?;
+        assert_eq!(cell.symbol(), "▀", "heat 格应是上半块");
+        assert_ne!(cell.fg, cell.bg, "上下两帧幅度不同 → fg ≠ bg");
+        Ok(())
+    }
+
+    /// terrain:推层按节奏走(128ms @16ms = 每 8 拍一层),层内容是 ADSR 平滑
+    /// 快照——首层在包络刚起步时推出,值应明显低于目标(锁「平滑而非真值」,
+    /// 喂真值层间会时间不连贯、山脊碎成条纹)。
+    #[test]
+    fn terrain_pushes_smoothed_layers_on_cadence() -> color_eyre::Result<()> {
+        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "terrain",
+        } } }))?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..32 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert_eq!(s.terrain_hist.len(), 4, "32 拍 @8拍/层 应推 4 层");
+        let first_layer_value = s
+            .terrain_hist
+            .back()
+            .and_then(|layer| layer.first())
+            .copied()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有最早层"))?;
+        assert!(
+            first_layer_value > 3.0 && first_layer_value < 39.0,
+            "首层应是包络中途的平滑值(baseline 3 与目标 40 之间),得 {first_layer_value}"
+        );
+        Ok(())
+    }
+
+    /// terrain:层数封顶(环容量 = `terrain.layers`),不无界增长。
+    #[test]
+    fn terrain_layers_capped() -> color_eyre::Result<()> {
+        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "terrain",
+        } } }))?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..200 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert_eq!(s.terrain_hist.len(), 8, "层数应封顶在默认 8");
+        Ok(())
+    }
+
+    /// terrain 推层进度:推层拍归零,层间随拍单调爬升且恒 < 1
+    /// (渲染按它上浮插值,越层会让山脊瞬移)。
+    #[test]
+    fn terrain_progress_ramps_between_pushes() -> color_eyre::Result<()> {
+        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "terrain",
+        } } }))?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars)); // 推层拍
+        assert!(s.terrain_progress() < 0.01, "推层瞬间进度应归零");
+        let mut last = s.terrain_progress();
+        // 默认 128ms @16ms/拍 = 每 8 拍推层:中间 7 拍进度爬升。
+        for i in 0..7 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+            let p = s.terrain_progress();
+            assert!(p > last && p < 1.0, "第 {i} 拍进度应单调爬升且 < 1,得 {p}");
+            last = p;
+        }
+        s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars)); // 下一推层拍
+        assert!(s.terrain_progress() < 0.01, "再推层进度应再归零");
+        Ok(())
+    }
+
+    /// terrain 稳态快照:Braille 山脊层叠,最新层在最下,前景遮挡后景。
+    #[test]
+    fn terrain_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
+        let mut state = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "terrain",
+        } } }))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let n = state.target_bars.get();
+        // 幅度随 tick 波动:相邻层轮廓不同,遮挡关系可见。
+        for step in 0..64_u16 {
+            let bars = (0..n)
+                .map(|i| {
+                    let base = 8 + u16::try_from((i * 13) % 40).unwrap_or(0);
+                    (base + step % 16).min(64)
+                })
+                .collect::<Vec<u16>>();
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "terrain 山脊地形稳态(最前活层 + 历史层进度上浮,画家算法遮挡)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// scope 测试用采样率(任意固定值,只要与 `column_ms` 一起折算出的
+    /// 每列样本数 > 0)。
+    const SCOPE_TEST_SR: u32 = 48_000;
+
+    /// style = scope 的频谱态。
+    fn scope_state() -> color_eyre::Result<SpectrumState> {
+        spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "scope",
+        } } }))
+    }
+
+    /// `s` 折算出的 scope 每列样本数([`SCOPE_TEST_SR`] 口径)。
+    fn per_column(s: &SpectrumState) -> color_eyre::Result<usize> {
+        let column_ms = usize::try_from(*s.cfg.scope().column_ms())?;
+        Ok(usize::try_from(SCOPE_TEST_SR)? * column_ms / 1000)
+    }
+
+    /// 造恰好聚成 `column_count` 列的正弦样本:幅度从头(旧)到尾(新)线性衰减
+    /// ——包络呈楔形,快照能锁住「轮廓随时间变化」而非一块实心砖。
+    #[allow(clippy::as_conversions)]
+    fn sine_samples(column_count: usize, samples_per_column: usize) -> Vec<f32> {
+        let n = column_count * samples_per_column;
+        (0..n)
+            .map(|i| {
+                let envelope = 1.0 - (i as f32) / (n as f32);
+                (2.0 * std::f32::consts::PI * 750.0 * (i as f32) / 48_000.0).sin() * envelope
+            })
+            .collect::<Vec<f32>>()
+    }
+
+    /// scope:喂样本即聚合出包络列(乘音量);暂停(无新样本)后整幅**冻结**
+    /// (DAW 语义,停下观察波形),不做释音塌线。
+    #[test]
+    fn scope_pause_freezes_wave() -> color_eyre::Result<()> {
+        let mut s = scope_state()?;
+        let samples = sine_samples(64, per_column(&s)?);
+        s.tick_scope(100 /*volume_pct*/, &samples, SCOPE_TEST_SR);
+        assert_eq!(s.wave.len(), 64, "64 列音频应恰聚出 64 列包络");
+        let peak = s.wave.iter().map(|span| span.max).fold(0.0_f32, f32::max);
+        assert!(peak > 0.9, "楔形头部应近满幅,得 {peak}");
+        let before = s.wave.clone();
+        for _ in 0..400 {
+            s.tick_scope(100 /*volume_pct*/, &[], SCOPE_TEST_SR);
+        }
+        assert_eq!(s.wave, before, "暂停期包络应逐列冻结不动");
+        Ok(())
+    }
+
+    /// scope:音量缩放包络(50% 音量 → 幅度减半)。
+    #[test]
+    fn scope_wave_scales_with_volume() -> color_eyre::Result<()> {
+        let mut s = scope_state()?;
+        let samples = sine_samples(64, per_column(&s)?);
+        s.tick_scope(50 /*volume_pct*/, &samples, SCOPE_TEST_SR);
+        let peak = s.wave.iter().map(|span| span.max).fold(0.0_f32, f32::max);
+        assert!(
+            (0.4..=0.55).contains(&peak),
+            "50% 音量满幅正弦应近半幅,得 {peak}"
+        );
+        Ok(())
+    }
+
+    /// scope 滚动时间序:先安静后响两批样本,环尾(最新,渲染贴右缘)是响的、
+    /// 环头是安静的;不足一列的尾巴留在 carry 不出列。
+    #[test]
+    fn scope_scroll_keeps_time_order() -> color_eyre::Result<()> {
+        let mut s = scope_state()?;
+        let per = per_column(&s)?;
+        let quiet = vec![0.2_f32; per * 2];
+        // 响批多带半列尾巴:验证 carry 只攒不出列。
+        let loud = vec![1.0_f32; per * 2 + per / 2];
+        s.tick_scope(100 /*volume_pct*/, &quiet, SCOPE_TEST_SR);
+        s.tick_scope(100 /*volume_pct*/, &loud, SCOPE_TEST_SR);
+        assert_eq!(s.wave.len(), 4, "半列尾巴不该出列");
+        assert_eq!(s.wave_carry.len(), per / 2, "尾巴应留在 carry");
+        let newest = s
+            .wave_span_from_newest(0)
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有最新列"))?;
+        let oldest = s
+            .wave_span_from_newest(3)
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有最旧列"))?;
+        assert!((newest.max - 1.0).abs() < 0.01, "最新列应是响批");
+        assert!((oldest.max - 0.2).abs() < 0.01, "最旧列应是安静批");
+        assert!(s.wave_span_from_newest(4).is_none(), "越界应 None");
+        Ok(())
+    }
+
+    /// scope 历史环封顶,不无界增长。
+    #[test]
+    fn scope_history_capped() -> color_eyre::Result<()> {
+        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "scope",
+            "scope": { "column_ms": 1 },
+        } } }))?;
+        let per = per_column(&s)?;
+        let samples = vec![0.5_f32; per * (super::SCOPE_HIST_CAP + 100)];
+        s.tick_scope(100 /*volume_pct*/, &samples, SCOPE_TEST_SR);
+        assert_eq!(s.wave.len(), super::SCOPE_HIST_CAP, "环应封顶");
+        Ok(())
+    }
+
+    /// scope 稳态快照:Braille min/max 包络跨中线,右新左旧;楔形幅度衰减可见。
+    #[test]
+    fn scope_snapshot() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let mut state = scope_state()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        // 填满面板点宽(字符列 × 2)的包络列,楔形从左(旧,响)衰减到右(新,静)。
+        let samples = sine_samples(state.target_bars.get() * 2, per_column(&state)?);
+        state.tick_scope(100 /*volume_pct*/, &samples, SCOPE_TEST_SR);
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "scope 示波器稳态(楔形正弦包络,Braille 跨中线右新左旧)",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
+    /// scope 静默:无包络数据也画中线,面板不死寂。
+    #[test]
+    fn scope_silent_draws_centerline() -> color_eyre::Result<()> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        let state = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+            "style": "scope",
+        } } }))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let buf = terminal.backend().buffer();
+        // 面板内区垂直中部应有非空字形(Braille 中线)。
+        let mid_y = buf.area().height / 2;
+        let has_glyph = (1..buf.area().width - 1).any(|x| {
+            buf.cell((x, mid_y))
+                .is_some_and(|cell| cell.symbol() != " ")
+        });
+        assert!(has_glyph, "静默 scope 应画中线");
+        Ok(())
+    }
+
+    /// 热更 style 改变 tick 行为:bars 态不攒 terrain 历史,reconfigure 成
+    /// terrain 后同一实例开始推层(锁 style 现读、非构造期固化)。
+    #[test]
+    fn reconfigure_style_switches_tick_behavior() -> color_eyre::Result<()> {
+        let mut s = spectrum_state()?;
+        let n = s.target_bars.get();
+        let bars = vec![40_u16; n];
+        for _ in 0..8 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert!(s.terrain_hist.is_empty(), "bars 态不该推层");
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "tui": { "spectrum": { "style": "terrain" } } }),
+        );
+        let cfg = mineral_config::from_tree(&tree)
+            .map_err(|w| color_eyre::eyre::eyre!("overlay 落型失败: {w}"))?;
+        s.reconfigure(cfg.tui().spectrum().clone(), TICK_MS);
+        for _ in 0..8 {
+            s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        assert!(!s.terrain_hist.is_empty(), "热更为 terrain 后应开始推层");
+        Ok(())
     }
 
     /// 不对称包络方向性:上升走 attack(30ms,快)、播放中下落走 decay(100ms,慢)。
@@ -866,7 +1399,7 @@ mod tests {
     fn spectrum_baseline_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
         let state = spectrum_state()?;
-        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
         crate::test_support::assert_snap!("频谱静默基线(SpectrumState::new())", terminal.backend());
         Ok(())
     }
@@ -885,13 +1418,13 @@ mod tests {
     fn spectrum_with_audio_full_width_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
-        // 先 draw 一帧让 paint_bars 把 target_bars 设成真实内宽。
-        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        // 先 draw 一帧让渲染层把 target_bars 设成真实内宽。
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
         let bars = jagged_bars(state.target_bars.get());
         for _ in 0..30 {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
         crate::test_support::assert_snap!(
             "频谱有音频(mock bars,占满宽度有起伏)",
             terminal.backend()
@@ -905,11 +1438,11 @@ mod tests {
     fn spectrum_silent_full_width_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
-        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
         for _ in 0..30 {
             state.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
-        terminal.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
         crate::test_support::assert_snap!(
             "频谱无音频(idle baseline,占满宽度无起伏)",
             terminal.backend()
@@ -1203,24 +1736,24 @@ mod tests {
         Ok(())
     }
 
-    /// 集成:`paint_bars` 真的把 per-column 端点接到了渲染。
+    /// 集成:条阵渲染真的把 per-column 端点接到了 buffer。
     ///
     /// 字形快照(`assert_snap!` 走 Display)只抓字符、不抓颜色,故颜色覆盖落在这里:
     /// 直接读渲染后 buffer 底行最左 / 最右 cell 的前景色。`Hue` 态全列同色 → 两端相等;
     /// `CoverFixed` 态沿频率轴铺色 → 两端不等。
     #[test]
-    fn paint_bars_wires_per_column_color() -> color_eyre::Result<()> {
+    fn bars_render_wires_per_column_color() -> color_eyre::Result<()> {
         let theme = Theme::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
         // 先渲一帧让 target_bars = 真实内宽,再喂音频让条形铺满底行。
-        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let bars = jagged_bars(state.target_bars.get());
         for _ in 0..30 {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
 
-        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let hue = bottom_row_edges(terminal.backend())?;
         assert_eq!(hue.left, hue.right, "Hue 态全列同色,底行两端前景应相等");
 
@@ -1229,7 +1762,7 @@ mod tests {
         for _ in 0..state.timing.fade_ticks {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::draw(f, f.area(), &state, &theme))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let cover = bottom_row_edges(terminal.backend())?;
         assert_ne!(
             cover.left, cover.right,

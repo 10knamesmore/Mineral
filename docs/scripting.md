@@ -600,6 +600,38 @@ mineral.observe("terminal", function(terminal)
 end)
 ```
 
+### 按终端尺寸 / 全屏态自动切频谱风格
+
+`terminal` 属性带尺寸(`rows` / `cols`)和全屏态(`fullscreen`),且订阅即回放
+——注册时立即按当前尺寸定好一次,之后每次 resize / 进退全屏自动重切。下例:全屏播放态
+用示波器,browse 态按终端高度递进 bars → terrain(6 层)→ terrain(8 层):
+
+```lua
+mineral.observe("terminal", function(t)
+  if t == nil then
+    return
+  end
+
+  -- 全屏播放态:固定示波器
+  if t.fullscreen then
+    mineral.config.override("tui.spectrum.style", "scope")
+    return
+  end
+
+  -- browse 态:越高越复杂(terrain 的层叠纵深吃高度,矮面板层挤,退回条形)
+  if t.rows < 48 then
+    mineral.config.override("tui.spectrum.style", "bars")
+  elseif t.rows < 64 then
+    mineral.config.override("tui.spectrum.terrain.layers", 6)
+    mineral.config.override("tui.spectrum.terrain.amplitude", 0.25)
+    mineral.config.override("tui.spectrum.style", "terrain")
+  else
+    mineral.config.override("tui.spectrum.terrain.layers", 8)
+    mineral.config.override("tui.spectrum.terrain.amplitude", 0.3)
+    mineral.config.override("tui.spectrum.style", "terrain")
+  end
+end)
+```
 ### 动态窗口标题(`mineral.ui.window_title`)
 
 结构化 `window_title` 配置管静态标题;**轮换 / spinner / 自适应 / 任意运行时定制**走

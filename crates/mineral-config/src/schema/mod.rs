@@ -47,7 +47,9 @@ pub use sources::{
     BackfillSection, BilibiliSection, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS,
     MineralSection, NeteaseSection, SourcesConfig,
 };
-pub use spectrum::SpectrumConfig;
+pub use spectrum::{
+    BarsConfig, ScopeConfig, SpectrumConfig, SpectrumStyle, TerrainConfig, WaterfallConfig,
+};
 pub use theme::{
     AnsiSlot, ColorRef, ColorValue, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
 };

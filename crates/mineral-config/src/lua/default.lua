@@ -90,6 +90,7 @@ return {
     -- 条高动态 = 效果器 ADSR 包络:attack 起音 / decay 衰减(余韵) / release 释音,
     -- sustain 即 FFT 实时值本身。
     spectrum = {
+      style = "bars", -- 渲染风格:"bars" 频谱柱 | "scope" 示波器 | "waterfall" 频谱历史瀑布 | "terrain" 山脊地形
       fft_size = 4096, -- FFT 窗,样本数,2 的幂;大 = 低频细节多但延迟高。外键:audio.tap_capacity 须 ≥ 2 × 此值
       f_min = 20, -- 频率轴下界,Hz
       f_max = 20000, -- 频率轴上界,Hz;超奈奎斯特自动取一半
@@ -97,21 +98,36 @@ return {
       db_floor = -65.0, -- dB 标定下界,低于此条高 0;抬高 = 砍安静细节整体变矮
       db_ceil = -6.0, -- dB 标定上界,高于此满高;与 db_floor 共同决定显示动态范围
       peak_mix = 0.5, -- 频带统计峰值占比 0-1:0 = 纯均值(平),1 = 纯峰值(躁)
-      show_peak_cap = true, -- 条顶 ▔ 浮标
-      show_trail = true, -- peak 与条之间的余韵渐隐
       hue_rotate = true, -- 无封面色时色相缓慢漂移
-      spring_peak = true, -- peak 弹簧物理(过冲 + 回弹);false = 直接吸附
       baseline_min = 3, -- 条最小高,1/8 字符格(满高 64);静默时面板不死寂
       attack_ms = 50, -- 起音:上升 90% 到位时长;越小越贴鼓点
       decay_ms = 100, -- 衰减:播放中余韵滑落时长;动画感来自这里
-      release_ms = 200, -- 释音:暂停后落向 baseline 的时长
-      peak_hold_ms = 192, -- 新 peak 原位悬停时长
-      peak_fall_ms = 512, -- peak 从满高落到 0 的满程时长
+      release_ms = 200, -- 释音:暂停后落向 baseline 的时长(bars 专属;其余风格暂停冻结)
       hue_cycle_ms = 30 * 1000, -- 色相转满一圈(360°)的时长
       cover_fade_ms = 6 * 1000, -- 封面取色就绪后的配色过渡时长
       cover_vshift_permille = 200, -- 封面色场顶端沿色带的纵向偏移,‰;拉开条底/条顶层次
-      spring_stiffness = 0.35, -- 弹簧刚度;无量纲系数,与帧率耦合
-      spring_damping = 0.45, -- 弹簧阻尼;越小回弹越多,越大越稳
+      bars = { -- bars 风格参数,style = "bars" 时生效
+        show_peak_cap = true, -- 条顶 ▔ 浮标
+        show_trail = true, -- peak 与条之间的余韵渐隐
+        spring_peak = true, -- peak 弹簧物理(过冲 + 回弹);false = 直接吸附
+        peak_hold_ms = 192, -- 新 peak 原位悬停时长
+        peak_fall_ms = 512, -- peak 从满高落到 0 的满程时长
+        spring_stiffness = 0.35, -- 弹簧刚度;无量纲系数,与帧率耦合
+        spring_damping = 0.45, -- 弹簧阻尼;越小回弹越多,越大越稳
+      },
+      scope = { -- scope 风格参数,style = "scope" 时生效
+        column_ms = 16, -- 每根包络列聚合的音频时长 = 滚动速度;越小滚得越快、可见时间窗越短
+      },
+      waterfall = { -- waterfall 风格参数,style = "waterfall" 时生效
+        push_ms = 64, -- 推行间隔;▀ 半块一行装两帧 = 每半格 push_ms/2,越小流速越快、历史窗越短
+        contrast = 1.4, -- 幅度→热力色的对比 gamma:1 = 线性;>1 压暗噪底只留强峰(音高线更突出),<1 抬亮弱谐波泛音;渲染层现读即时生效
+      },
+      terrain = { -- terrain 风格参数,style = "terrain" 时生效
+        push_ms = 128, -- 推层间隔;× layers = 地形时间纵深
+        layers = 8, -- 历史层数;层距 = 可用纵深 / 层数,层数多了单层太挤
+        amplitude = 0.30, -- 轮廓振幅占面板高比例 0-1;过大层间交叠互相淹没
+        fade_floor = 0.30, -- 远层亮度保底 0-1:越旧的层衰减到此为止不再隐入衬底;0 = 淡到全隐,1 = 全层等亮无纵深;渲染层现读即时生效
+      },
     },
     -- 进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算,
     -- 未就绪自动回落普通进度条。「全屏才展开」等场景化开关走脚本 override,见文档 recipe。
