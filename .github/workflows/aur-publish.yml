@@ -1,24 +1,22 @@
 name: aur-publish
 
-# 手动把包推到 AUR:重推已发布版本,或做同版本 hotfix 重打包(pkgrel 递增)。
-#
-# 正常发版用 release.yml —— 它已含 AUR 步骤(release + AUR 一条龙,恒 pkgrel=1)。
-# 本工作流覆盖两类场景:
-#   - 重推 / 补发某个已发布版本(commits 留空);
-#   - hotfix:上游修复已 commit 进 dev 但不值得发新版本时,commits 填要带的
-#     commit SHA——工作流现场生成 patch、对 tag 源码验证可 apply 后注入
-#     PKGBUILD,AUR 用户构建时打在 tag tarball 上。
+# 把某个**已存在 tag** 的版本推到 AUR。唯一的 AUR 推送实现:
+#   - release.yml 发版末尾经 workflow_call 引用本工作流(首推,pkgrel 自动=1);
+#   - 手动 dispatch 覆盖其余场景:补发(commits 留空)、hotfix 重打包(commits
+#     填要带的 commit SHA——现场生成 patch、对 tag 源码验证可 apply 后注入
+#     PKGBUILD,AUR 用户构建时打在 tag tarball 上)。
 #
 # pkgrel 不用填:工作流读 AUR 上现在的 .SRCINFO——同版本重打包自增,
 # 版本不同(首推 / 补发)归 1。
 #
 # 注意:
-#   - PKGBUILD 与 patch 取自 dispatch 所选分支(通常 dev),源码 tarball 恒取
-#     version 对应 tag——打包描述与源码坐标解耦,hotfix 正是靠这一点。
+#   - PKGBUILD 与 patch 取自触发时的分支(dispatch 所选 / release 触发的 dev),
+#     源码 tarball 恒取 version 对应 tag——打包描述与源码坐标解耦,hotfix 正是
+#     靠这一点。
 #   - 同一版本多轮 hotfix 时,commits 必须**全量累计**列出此前各 rel 已带的
 #     commit(本工作流无状态,不读取 AUR 上已有的 patch)。
-#   - 若是 release.yml 里 aur-publish 这一步**失败**(job 存在但跑挂了),优先去
-#     那次 run 点 "Re-run failed jobs" 单独重跑该 job,不必用本工作流。
+#   - release run 里本工作流失败时,优先去那次 run 点 "Re-run failed jobs";
+#     手动 dispatch 补发也一样成立(pkgrel 会重新按 AUR 现状算,幂等)。
 on:
   workflow_dispatch:
     inputs:
@@ -30,6 +28,12 @@ on:
         description: "hotfix commit SHA,空格分隔、按序 apply;多轮 hotfix 须全量累计。留空 = 不带 patch"
         required: false
         default: ""
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: "已发布的版本号 x.y.z(须已有对应 tag;commits 不暴露——发版首推永远不带 patch)"
+        required: true
         type: string
 
 # 只读仓库;推 AUR 走 SSH key,不需要 GitHub 写权限。
