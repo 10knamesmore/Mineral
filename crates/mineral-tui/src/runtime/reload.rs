@@ -98,7 +98,7 @@ impl crate::app::App {
     /// 消费一帧 daemon 推送的有效配置树:落型成功即应用;失败(版本偏斜等,
     /// daemon 侧已校验、正常不该发生)保留现行配置 + 驻留错误卡。
     ///
-    /// 握手重放的第一帧静默应用;之后的变更 flash 提示。
+    /// 成功路径一律静默(生效本身就是反馈),只有失败才打扰通知层。
     ///
     /// # Params:
     ///   - `config`: 有效配置树(wire 形)
@@ -109,7 +109,6 @@ impl crate::app::App {
             Ok(cfg) => {
                 self.apply_config(Arc::new(cfg));
                 self.notifications.dismiss_card_by_id(PUSH_CARD_ID);
-                self.config_replayed = true;
             }
             Err(warning) => {
                 mineral_log::warn!(
@@ -206,7 +205,7 @@ mod tests {
         )))
     }
 
-    /// 推送应用:keymap / theme 热生效;首帧(握手重放)静默、次帧 flash 提示。
+    /// 推送应用:keymap / theme 热生效;成功路径静默,不打扰通知层。
     #[test]
     fn pushed_config_applies_keymap_and_theme() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
@@ -232,17 +231,13 @@ mod tests {
             "旧键整体替换"
         );
         assert_ne!(app.theme.accent, old_accent, "主题热应用");
-        assert_eq!(
-            app.notifications.entry_count(),
-            entries_before,
-            "首帧(握手重放)应静默"
-        );
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "audio": { "volume": 42 } }),
         )?);
-        assert!(
-            app.notifications.entry_count() > entries_before,
-            "后续变更应 flash 提示"
+        assert_eq!(
+            app.notifications.entry_count(),
+            entries_before,
+            "成功应用应静默,不新增通知"
         );
         Ok(())
     }

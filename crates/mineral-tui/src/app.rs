@@ -114,10 +114,6 @@ pub struct App {
     /// fire-and-forget 落盘。
     ui_prefs: UiPrefs,
 
-    /// 是否已收到过 daemon 推送的有效配置:握手重放那帧静默应用,
-    /// 之后的变更才 flash 提示(否则每次启动都弹「配置已更新」)。
-    pub(crate) config_replayed: bool,
-
     /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen, focused)`(去抖:值没变不发)。
     last_terminal_report: Option<(u16, u16, bool, bool)>,
 
@@ -202,7 +198,6 @@ impl App {
             picker,
             launch_anchor,
             ui_prefs,
-            config_replayed: false,
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
