@@ -402,11 +402,13 @@ impl App {
             self.overlays.clamp_queue(self.state.player.queue.len());
         }
         if let Some(c) = sync.current {
+            // 包络随本段与 current_song 原子到达(归属由 server 组段保证)。
+            let song_id = c.current_song.as_ref().map(|s| s.id.clone());
+            self.state.playback.envelope = song_id.zip(c.current_envelope);
             self.state.player.current = c.current_song.clone();
             self.state.playback.track = c.current_song;
             self.state.playback.play_url = c.play_url;
-            // lyrics cache: 仅按 server 给的「current_lyrics_song_id」灌。歌词在 channel
-            // 层已结构化清洗,这里直接收下整份(原文 / 逐字 / 翻译 / 罗马音),不再解析。
+            // lyrics 已在 channel 层结构化清洗,按 current_lyrics_song_id 直接整份收下。
             if let (Some(song_id), Some(lyrics)) = (c.current_lyrics_song_id, c.current_lyrics)
                 && !self.state.library.lyrics.contains_key(&song_id)
             {
@@ -437,6 +439,7 @@ impl App {
             if self.state.covers.spectrum_cover.is_some() {
                 self.state.spectrum.clear_cover();
                 self.state.covers.spectrum_cover = None;
+                self.state.covers.current_palette = None;
             }
             return;
         };
@@ -446,12 +449,14 @@ impl App {
         if let Some(palette) = self.state.covers.palettes.get(&url).cloned() {
             self.state
                 .spectrum
-                .begin_cover_transition(palette, &self.theme);
+                .begin_cover_transition(palette.clone(), &self.theme);
             self.state.covers.spectrum_cover = Some(url);
+            self.state.covers.current_palette = Some(palette);
         } else if self.state.covers.cache.contains_key(&url) {
             // 图已回但无色板 = 取色失败:回退 hue,标记已处理(不再每帧重试)。
             self.state.spectrum.clear_cover();
             self.state.covers.spectrum_cover = Some(url);
+            self.state.covers.current_palette = None;
         }
         // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
     }

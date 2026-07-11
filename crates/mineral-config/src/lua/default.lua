@@ -113,6 +113,14 @@ return {
       spring_stiffness = 0.35, -- 弹簧刚度;无量纲系数,与帧率耦合
       spring_damping = 0.45, -- 弹簧阻尼;越小回弹越多,越大越稳
     },
+    -- 进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算,
+    -- 未就绪自动回落普通进度条。「全屏才展开」等场景化开关走脚本 override,见文档 recipe。
+    waveform = {
+      enabled = true, -- 进度条化身振幅波形;包络未就绪自动回落普通进度条
+      cover_color = true, -- 已播放段吃封面取色;false 用主题 accent
+      contrast = 2.0, -- 响度→条高的对比 gamma:1 = 线性,越大起伏越明显;渲染层映射,改了即时生效
+      edge_radius = 3, -- 播放头软边半径(列):前后各此数列在已播色与轨道色间插值雾化;0 = 硬边无播放头
+    },
     -- 封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
     cover = {
       http_timeout_secs = 30, -- 单张封面下载超时,秒
@@ -259,6 +267,23 @@ return {
     engine_tick_ms = 20, -- 引擎主循环节拍;影响 seek/停止响应延迟,不建议动
     prefetch_bytes = 256 * KB, -- 流式起播前预拉字节;大 = 起播慢但 seek 命中缓冲概率高
     tap_capacity = 8192, -- 频谱 PCM 环形缓冲,样本数。须 ≥ 2 × tui.spectrum.fft_size,否则 UI 卡帧丢样本出毛刺
+    -- 响度包络(波形 seekbar):daemon 离线解码整曲算出。滤波参数即 BS.1770 规范值,
+    -- 一般不用动;改了只影响之后计算的包络,已落库的不自动重算。
+    envelope = {
+      points = 200, -- 包络定长点数;渲染端再按显示宽度二次重采样
+      block_ms = 100, -- 响度块时长,毫秒(块内取均方)
+      window_ms = 400, -- momentary 滑窗时长;4 × block_ms = BS.1770 momentary 的 75% 重叠窗
+      shelf = { -- K-weighting 高频搁架级(头部声学,~2kHz 以上 +4dB)
+        f0_hz = 1681.974450955533,
+        gain_db = 3.999843853973347,
+        q = 0.7071752369554196,
+        band_exponent = 0.4996667741545416, -- 过渡带增益分配指数(Vb = Vh^x)
+      },
+      highpass = { -- K-weighting RLB 高通级(人耳低频不敏感)
+        f0_hz = 38.13547087602444,
+        q = 0.5003270373238773,
+      },
+    },
   },
   -- 缓存容量(LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐)。封面缓存预算在 tui.cover.cache。
   cache = {

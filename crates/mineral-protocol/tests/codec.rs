@@ -370,6 +370,11 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
             play_url: None,
             current_lyrics: None,
             current_lyrics_song_id: None,
+            // 包络随 current 段上线:points 字节与算法版本不变形。
+            current_envelope: Some(mineral_model::Envelope {
+                points: vec![0, 128, 255],
+                version: 1,
+            }),
         }),
     };
     resp_round_trips(Response::PlayerSync(Box::new(sync))).await?;

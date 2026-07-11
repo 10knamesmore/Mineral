@@ -1,7 +1,7 @@
 //! 服务端持有的「播放上下文」内部状态。[`crate::player::PlayerCore`] 用 `Mutex<State>` 包它,
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
-use mineral_model::{PlayUrl, Song, SongId};
+use mineral_model::{Envelope, PlayUrl, Song, SongId};
 use mineral_protocol::{
     CurrentSync, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
 };
@@ -36,6 +36,10 @@ pub(crate) struct State {
 
     /// 当前 lyrics 配对的歌 id(对不上 current_song 时不返回)。
     pub(crate) current_lyrics_song_id: Option<SongId>,
+
+    /// 当前歌的振幅包络(id + 数据),离线算出 / db 命中后由 `adopt_envelope` 落此并 bump
+    /// `current` 版本;`sync` 组段时按当前曲过滤,故串曲的迟到包络天然不外发。
+    pub(crate) current_envelope: Option<(SongId, Envelope)>,
 
     /// 正在预拉(已发起 SongUrl 任务、URL 尚未回来)的下一曲 id;URL 到达时据此认领。
     /// 切歌 / 采纳后复位,避免对同一 next 重复预拉。
@@ -75,6 +79,7 @@ impl State {
             play_mode: PlayMode::default(),
             current_lyrics: None,
             current_lyrics_song_id: None,
+            current_envelope: None,
             prefetch_fired_for: None,
             capturing: None,
             queued: None,
@@ -112,6 +117,13 @@ impl State {
             play_url: self.play_url.clone(),
             current_lyrics: self.current_lyrics.clone(),
             current_lyrics_song_id: self.current_lyrics_song_id.clone(),
+            // 只带归属当前曲的包络:预排下一曲 / 迟到旧曲的包络虽存在 slot 里,
+            // 也在这里被过滤掉,不会串到别的曲上。
+            current_envelope: self
+                .current_envelope
+                .as_ref()
+                .filter(|(id, _)| self.current_song.as_ref().is_some_and(|s| s.id == *id))
+                .map(|(_, envelope)| envelope.clone()),
         });
         PlayerSync {
             versions: PlayerVersions {
@@ -134,6 +146,16 @@ impl State {
     /// current_song / play_url / lyrics 发生变更后调用,推进版本号。
     pub(crate) fn bump_current(&mut self) {
         self.current_version += 1;
+    }
+
+    /// 收下一份算好 / db 命中的包络:仅当它归属**当前曲**才落 slot 并 bump `current`
+    /// 版本(下次 `sync` 即随 `CurrentSync` 携带它重发)。非当前曲(如预排下一曲)的
+    /// 包络此处忽略——它已落 db,待其成为当前曲时经 replay 载入,避免覆盖当前曲的 slot。
+    pub(crate) fn adopt_envelope(&mut self, song_id: SongId, envelope: Envelope) {
+        if self.current_song.as_ref().is_some_and(|s| s.id == song_id) {
+            self.current_envelope = Some((song_id, envelope));
+            self.bump_current();
+        }
     }
 }
 

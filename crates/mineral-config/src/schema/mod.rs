@@ -10,6 +10,7 @@ mod cover;
 mod daemon;
 mod de;
 mod download;
+mod envelope;
 mod keys;
 mod layout;
 mod lyrics;
@@ -20,6 +21,7 @@ mod sources;
 mod spectrum;
 mod theme;
 mod toast;
+mod waveform;
 mod window_title;
 
 pub use animation::{
@@ -34,6 +36,7 @@ pub use copy::{COPY_TEMPLATE_FNS, CopyConfig, CopyContext, CopyTemplate};
 pub use cover::{CoverCacheConfig, CoverConfig, CoverStorageMode, KmeansConfig};
 pub use daemon::DaemonConfig;
 pub use download::DownloadConfig;
+pub use envelope::{EnvelopeConfig, HighpassConfig, ShelfConfig};
 pub use keys::{KeyBinding, KeysConfig};
 pub use layout::{LayoutConfig, MenuAlign};
 pub use lyrics::LyricsConfig;
@@ -49,6 +52,7 @@ pub use theme::{
     AnsiSlot, ColorRef, ColorValue, HexColor, SearchHitConfig, TextStyle, ThemeConfig, TokenName,
 };
 pub use toast::ToastConfig;
+pub use waveform::WaveformConfig;
 pub use window_title::{
     TimeFormat, TimePreset, TitleField, TitleIcons, TitleSegment, WindowTitleConfig,
 };

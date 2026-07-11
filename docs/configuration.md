@@ -236,6 +236,34 @@ return {
 | `spring_stiffness` | 0.35 | 弹簧刚度;0.1-1.0 合理,太大瞬间过冲像 bug |
 | `spring_damping` | 0.45 | 弹簧阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹 |
 
+## tui.waveform — 进度条波形
+
+transport 进度条化身全曲振幅波形:播放头扫过的部分点亮,副歌 / 安静桥段的位置一眼可见,seek 有了参照物。
+
+包络由 daemon 离线解码整曲算出、落库复用,只对**本地曲库 / 已缓存 / 已下载**的曲目可算——流播半截解不出全曲形状。包络未就绪时自动回落普通进度条,不占额外空间。首次流式播放的曲子在曲尾入缓存后包络就绪,**第二次播放起有波形**。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 进度条是否化身振幅波形;包络未就绪自动回落普通进度条 |
+| `cover_color` | `true` | 已播放段吃封面取色(与频谱同源);`false` 用主题 accent |
+| `contrast` | `2.0` | 响度 → 条高的对比 gamma:`1` = 线性,越大安静段压得越低、起伏越明显。渲染层映射不动包络数据,改了即时生效 |
+| `edge_radius` | `3` | 播放头软边半径(列):前后各此数列在已播色与轨道色之间插值,边界雾化溶解;`0` = 硬边(无播放头高亮,已播渐变的生长边缘即 seek 位置) |
+
+### Recipe:全屏沉浸态才展开波形
+
+「browse 态保持细进度条、全屏才上波形」这类场景化行为不设配置项——观察终端态、
+用 override 覆盖开关即可(override 是配置合成的一层,翻转即热生效):
+
+```lua
+mineral.observe("terminal", function(t)
+  if t and t.fullscreen then
+    mineral.config.override("tui.waveform.enabled", true)
+  else
+    mineral.config.override("tui.waveform.enabled", nil) -- 撤销,回落配置默认
+  end
+end)
+```
+
 ## tui.cover — 封面管线
 
 抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
@@ -395,6 +423,24 @@ daemon 持有,改后重启 daemon。
 | `engine_tick_ms` | 20 | 引擎主循环节拍;影响 seek / 停止响应延迟,不建议动 |
 | `prefetch_bytes` | 256 KiB | 流式起播前预拉字节;大 = 起播慢但 seek 命中缓冲概率高 |
 | `tap_capacity` | 8192 | 频谱 PCM 环形缓冲,样本数。**须 ≥ 2 × `tui.spectrum.fft_size`**,否则 UI 卡一帧就丢样本出毛刺 |
+
+### audio.envelope — 响度包络计算
+
+波形 seekbar(`tui.waveform`)用的全曲响度包络,daemon 离线解码整曲算出。默认值即
+ITU-R BS.1770 规范参数,一般不用动。**参数变更只影响之后计算的包络,已落库的不自动
+重算**(只有算法版本升级才触发全量重算)。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `points` | 200 | 包络定长点数;渲染端再按显示宽度二次重采样 |
+| `block_ms` | 100 | 响度块时长(块内取均方) |
+| `window_ms` | 400 | momentary 滑窗时长;4 × `block_ms` = BS.1770 momentary 的 75% 重叠窗 |
+| `shelf.f0_hz` | 1681.97… | K-weighting 高频搁架转折频率(头部声学,~2kHz 以上 +4dB) |
+| `shelf.gain_db` | 4.0 | 搁架增益 |
+| `shelf.q` | 0.7072 | 搁架品质因数 |
+| `shelf.band_exponent` | 0.4997 | 过渡带增益分配指数(`Vb = Vh^x`) |
+| `highpass.f0_hz` | 38.14 | RLB 高通转折频率(人耳低频不敏感) |
+| `highpass.q` | 0.5003 | 高通品质因数 |
 
 ## cache — 磁盘缓存容量
 

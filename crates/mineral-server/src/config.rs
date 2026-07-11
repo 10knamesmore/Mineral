@@ -1,7 +1,9 @@
 //! daemon 启动所需的配置切片([`ServerConfig`]),从全局 `Config` 派生;
 //! 以及 env > config 的音频后端 resolve([`resolve_audio_mode`])。
 
-use mineral_audio::{AudioMode, EngineParams};
+use std::num::{NonZeroU32, NonZeroUsize};
+
+use mineral_audio::{AudioMode, EngineParams, EnvelopeParams, HighpassParams, ShelfParams};
 use mineral_config::{BackendKind, DaemonConfig, DownloadConfig};
 use mineral_model::BitRate;
 
@@ -11,6 +13,9 @@ use mineral_model::BitRate;
 pub struct ServerConfig {
     /// 音频引擎启动参数(初始音量 / tick / prefetch / tap 容量)。
     engine: EngineParams,
+
+    /// 响度包络计算参数(配置 `audio.envelope`)。
+    envelope: EnvelopeParams,
 
     /// 在线播放音质(独立于下载音质)。
     playback_quality: BitRate,
@@ -59,6 +64,7 @@ impl ServerConfig {
                     .tap_capacity(*audio.tap_capacity())
                     .build(),
             )
+            .envelope(envelope_params_from(audio.envelope()))
             .playback_quality(*audio.playback_quality())
             .audio_cache_capacity(*cfg.cache().audio_capacity())
             .channel_workers_per(*cfg.daemon().channel_workers_per())
@@ -70,6 +76,36 @@ impl ServerConfig {
             .favorites_backfill_max_concurrent(*cfg.sources().mineral().backfill().max_concurrent())
             .build()
     }
+}
+
+/// `audio.envelope` 配置 → 包络计算参数。粒度字段的 0 值无意义,一律兜底为 1
+/// (类型层 NonZero 强制,坏配置不该让 daemon 起不来)。
+///
+/// # Params:
+///   - `cfg`: 包络配置段
+///
+/// # Return:
+///   计算参数切片。
+fn envelope_params_from(cfg: &mineral_config::EnvelopeConfig) -> EnvelopeParams {
+    EnvelopeParams::builder()
+        .point_count(NonZeroUsize::new(*cfg.points()).unwrap_or(NonZeroUsize::MIN))
+        .block_ms(NonZeroU32::new(*cfg.block_ms()).unwrap_or(NonZeroU32::MIN))
+        .window_ms(NonZeroU32::new(*cfg.window_ms()).unwrap_or(NonZeroU32::MIN))
+        .shelf(
+            ShelfParams::builder()
+                .f0_hz(*cfg.shelf().f0_hz())
+                .gain_db(*cfg.shelf().gain_db())
+                .q(*cfg.shelf().q())
+                .band_exponent(*cfg.shelf().band_exponent())
+                .build(),
+        )
+        .highpass(
+            HighpassParams::builder()
+                .f0_hz(*cfg.highpass().f0_hz())
+                .q(*cfg.highpass().q())
+                .build(),
+        )
+        .build()
 }
 
 /// env > config 的音频后端 resolve:`MINERAL_AUDIO_NULL` 命中短路 config。

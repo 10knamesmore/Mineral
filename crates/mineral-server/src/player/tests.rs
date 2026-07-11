@@ -275,10 +275,12 @@ fn core_with_events(
         state: Mutex::new(State::empty()),
         last_seen_finished_seq: AtomicU64::new(0),
         client_events: Mutex::new(Vec::new()),
+        envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
         library,
         favorites_lock: tokio::sync::Mutex::new(()),
         last_session_save: Mutex::new(std::time::Instant::now()),
         playback_quality: *cfg.playback_quality(),
+        envelope_params: cfg.envelope().clone(),
         gapless_prefetch_ms: *cfg.daemon().gapless_prefetch_ms(),
         prev_restart_threshold_ms: *cfg.daemon().prev_restart_threshold_ms(),
         player_tick_ms: *cfg.daemon().player_tick_ms(),
@@ -354,6 +356,7 @@ async fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
     false
 }
 
+mod envelope;
 mod hooks;
 mod library;
 mod play;

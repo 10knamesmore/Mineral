@@ -2,6 +2,7 @@
 
 pub(crate) mod schema;
 
+mod envelope;
 mod namespace;
 pub(crate) mod rows;
 mod session;

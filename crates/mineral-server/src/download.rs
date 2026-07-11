@@ -338,6 +338,7 @@ pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, qua
 ///   - `cap`: 该曲的 capture 上下文
 pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
     let cache = Arc::clone(player.media_cache());
+    let player = player.clone();
     // async task(非 spawn_blocking):put_played 要 await DB 写穿透;入库内部的大拷贝由它自己
     // 再下沉到 spawn_blocking。metadata 是一次快速 stat,async 里直接调可接受。
     tokio::spawn(async move {
@@ -348,6 +349,10 @@ pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
                     .await
                 {
                     mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
+                } else if let Some(path) = cache.get(&cap.song.id, cap.quality) {
+                    // 收割成功 = 该曲首次拥有完整本地副本:补算包络。若它仍在播,
+                    // 算完即推,播放中段波形直接点亮;不在播则落库待下次直取。
+                    player.ensure_envelope(cap.song.id.clone(), path);
                 }
             }
             _ => {

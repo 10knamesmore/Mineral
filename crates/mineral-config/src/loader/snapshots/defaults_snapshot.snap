@@ -595,6 +595,12 @@ Config {
             spring_stiffness: 0.35,
             spring_damping: 0.45,
         },
+        waveform: WaveformConfig {
+            enabled: true,
+            cover_color: true,
+            contrast: 2.0,
+            edge_radius: 3,
+        },
         cover: CoverConfig {
             http_timeout_secs: 30,
             max_dim: 384,
@@ -767,6 +773,21 @@ Config {
         engine_tick_ms: 20,
         prefetch_bytes: 262144,
         tap_capacity: 8192,
+        envelope: EnvelopeConfig {
+            points: 200,
+            block_ms: 100,
+            window_ms: 400,
+            shelf: ShelfConfig {
+                f0_hz: 1681.974450955533,
+                gain_db: 3.999843853973347,
+                q: 0.7071752369554196,
+                band_exponent: 0.4996667741545416,
+            },
+            highpass: HighpassConfig {
+                f0_hz: 38.13547087602444,
+                q: 0.5003270373238773,
+            },
+        },
     },
     cache: CacheConfig {
         audio_capacity: 10737418240,

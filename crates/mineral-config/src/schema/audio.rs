@@ -7,6 +7,8 @@ use mineral_config_macros::config_section;
 use mineral_model::BitRate;
 use serde::Deserialize;
 
+use super::envelope::EnvelopeConfig;
+
 /// 音频段。
 ///
 /// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
@@ -29,6 +31,9 @@ pub struct AudioConfig {
 
     /// FFT tap 环形缓冲容量(采样点)。**外键**:须 ≥ 2 × `tui.spectrum.fft_size`。
     tap_capacity: usize,
+
+    /// 响度包络段(波形 seekbar 的离线包络计算参数)。
+    envelope: EnvelopeConfig,
 }
 
 /// 音频后端选择。不依赖音频 crate;接线处映射到具体后端模式。

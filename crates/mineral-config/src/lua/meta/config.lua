@@ -35,6 +35,7 @@
 ---@field keys? mineral.KeysConfig 键位重映射(动作 → 键)
 ---@field behavior? mineral.BehaviorConfig 交互手感(步长 / 跳行 / daemon 续命)
 ---@field spectrum? mineral.SpectrumConfig 频谱面板观感与动态
+---@field waveform? mineral.WaveformConfig 进度条振幅波形
 ---@field cover? mineral.CoverConfig 封面抓取 / 缓存 / 取色
 ---@field prefetch? mineral.PrefetchConfig 数据预取范围与节流
 ---@field search? mineral.SearchConfig 搜索:本地过滤(deep)与 channel 远程搜索白名单(channel)
@@ -177,6 +178,15 @@
 ---@field cover_vshift_permille? integer 封面色场顶端相对底端沿色带的偏移,千分比 0-1000;拉开条底/条顶明度层次
 ---@field spring_stiffness? number 弹簧刚度,每 tick force += k×(目标-当前);0.1-1.0 合理,太大瞬间过冲像 bug
 ---@field spring_damping? number 弹簧速度阻尼;< 2√刚度 时欠阻尼有回弹感,越大越稳越不弹
+
+---进度条波形:transport 进度条化身全曲振幅波形。包络只对本地/已缓存曲目可算
+---(流播半截算不出全曲形状),未就绪自动回落普通进度条。「全屏才展开波形」等
+---场景化行为不设配置项,用脚本 observe("terminal") + config.override 覆盖 enabled 实现。
+---@class mineral.WaveformConfig
+---@field enabled? boolean 进度条是否化身振幅波形;包络未就绪自动回落普通进度条
+---@field cover_color? boolean 已播放段是否吃封面取色;false 用主题 accent
+---@field contrast? number 响度→条高的对比 gamma:1 = 线性,越大安静段压得越低、起伏越明显;渲染层映射不动包络数据,改了即时生效
+---@field edge_radius? integer 播放头软边半径,列:前后各此数列在已播色与轨道色间插值雾化;0 = 硬边无播放头
 
 ---封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
 ---@class mineral.CoverConfig
@@ -356,6 +366,28 @@
 ---@field engine_tick_ms? integer 引擎主循环节拍,毫秒;影响 seek/停止响应延迟,不建议动
 ---@field prefetch_bytes? integer 流式起播前预拉的字节数;大了起播慢但 seek 命中缓冲概率高
 ---@field tap_capacity? integer 频谱 PCM 采样环形缓冲容量,样本数。**外键:须 ≥ 2 × tui.spectrum.fft_size**(双窗余量,UI 卡一帧不丢样本);改 fft_size 时同步改这里
+---@field envelope? mineral.EnvelopeConfig 响度包络(波形 seekbar)计算参数
+
+---响度包络计算参数(daemon 离线解码整曲算出)。默认即 BS.1770 规范参数,一般不用动。
+---参数变更只影响之后计算的包络,已落库的不自动重算(算法版本 bump 才重算)。
+---@class mineral.EnvelopeConfig
+---@field points? integer 包络定长点数;渲染端再按显示宽度二次重采样
+---@field block_ms? integer 响度块时长,毫秒(块内取均方)
+---@field window_ms? integer momentary 滑窗时长,毫秒;默认 4 × block_ms(= BS.1770 momentary 的 75% 重叠窗)
+---@field shelf? mineral.ShelfConfig K-weighting 高频搁架级(头部声学)
+---@field highpass? mineral.HighpassConfig K-weighting RLB 高通级(人耳低频不敏感)
+
+---高频搁架滤波参数(模拟原型;按采样率经双线性变换推导数字系数)。
+---@class mineral.ShelfConfig
+---@field f0_hz? number 转折频率,Hz
+---@field gain_db? number 搁架增益,dB
+---@field q? number 品质因数
+---@field band_exponent? number 过渡带增益分配指数(Vb = Vh^x);与其余参数同为参考实现反推的模拟原型参数
+
+---RLB 高通滤波参数(模拟原型;按采样率经双线性变换推导数字系数)。
+---@class mineral.HighpassConfig
+---@field f0_hz? number 转折频率,Hz
+---@field q? number 品质因数
 
 ---缓存容量(LRU,满了自动驱逐)。改小不会立刻删文件,下次写入时才驱逐。封面缓存预算在 tui.cover.cache。
 ---@class mineral.CacheConfig

@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-server/src/config.rs
+assertion_line: 143
 description: "ServerConfig(default.lua → daemon 切片映射,行为不变守卫)"
 expression: "ServerConfig::from_config(&cfg)"
 ---
@@ -9,6 +10,21 @@ ServerConfig {
         tick_ms: 20,
         prefetch_bytes: 262144,
         tap_capacity: 8192,
+    },
+    envelope: EnvelopeParams {
+        point_count: 200,
+        block_ms: 100,
+        window_ms: 400,
+        shelf: ShelfParams {
+            f0_hz: 1681.974450955533,
+            gain_db: 3.999843853973347,
+            q: 0.7071752369554196,
+            band_exponent: 0.4996667741545416,
+        },
+        highpass: HighpassParams {
+            f0_hz: 38.13547087602444,
+            q: 0.5003270373238773,
+        },
     },
     playback_quality: Exhigh,
     audio_cache_capacity: 10737418240,

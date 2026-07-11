@@ -5,7 +5,7 @@
 //! glyph / label 这两个 UI 字面量跟着挪过来 —— 字符画放 protocol 不优雅,
 //! 但避免 mineral-tui 跨 crate 加 inherent impl 的麻烦,**够用**。
 
-use mineral_model::{PlayUrl, Song, SongId};
+use mineral_model::{Envelope, PlayUrl, Song, SongId};
 use serde::{Deserialize, Serialize};
 
 /// 播放循环模式。
@@ -222,10 +222,10 @@ pub struct PlayerSync {
     /// 当前在播音频的来源(下载 / 缓存 / 远端);`None` = 未知。轻段。
     pub play_origin: Option<PlaybackOrigin>,
 
-    /// 重段 1:client 的 queue 版本落后时才 `Some`。
+    /// client 的 queue 版本落后时才 `Some`。
     pub queue: Option<QueueSync>,
 
-    /// 重段 2:client 的 current 版本落后时才 `Some`。
+    /// client 的 current 版本落后时才 `Some`。
     pub current: Option<CurrentSync>,
 }
 
@@ -253,6 +253,11 @@ pub struct CurrentSync {
 
     /// 当前歌对应的 song_id,用于 client 端校验 lyrics 是否跟得上 current_song。
     pub current_lyrics_song_id: Option<SongId>,
+
+    /// 当前歌的振幅包络(db 有则随本段与 `current_song` 原子送达;计算未就绪时 `None`,
+    /// 算完经一次 `current` 版本 bump 补发)。归属恒等于 `current_song`——server 端
+    /// 组段时按当前曲过滤,client 直接采用无需再猜归属。
+    pub current_envelope: Option<Envelope>,
 }
 
 #[cfg(test)]

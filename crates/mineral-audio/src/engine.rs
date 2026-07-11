@@ -54,7 +54,7 @@ fn pct_to_gain(pct: u8) -> f32 {
 ///
 /// `Box<dyn ReadSeek>` 经 std 的 `impl<R: Read+?Sized> Read for Box<R>`(Seek 同理)自动
 /// 获得 Read/Seek(`dyn ReadSeek` 含超 trait),无需手写转发 impl。
-trait ReadSeek: Read + Seek + Send + Sync {}
+pub(crate) trait ReadSeek: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync> ReadSeek for T {}
 
 /// 链下建好的下一曲:reader 已就绪(预缓冲完成),交回引擎线程 build decoder + append。
@@ -570,7 +570,9 @@ fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Playe
 }
 
 /// 打开本地文件成装箱 reader(+ 已知字节长度,供 decoder seekable)。
-fn open_local(p: &std::path::Path) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)> {
+pub(crate) fn open_local(
+    p: &std::path::Path,
+) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)> {
     let file = std::fs::File::open(p).map_err(|e| eyre!("open {}: {e}", p.display()))?;
     let byte_len = file.metadata().ok().map(|m| m.len());
     Ok((Box::new(BufReader::new(file)), byte_len))
@@ -760,7 +762,10 @@ where
 /// 随机访问时只能向前 seek(后退会返 `ForwardOnly` → `RandomAccessNotSupported`)
 /// —— 表现就是按 ← 没反应。`with_byte_len` 会一并把 `is_seekable` 置 true。
 /// `byte_len` 未知时退化到默认行为(只能向前 seek),至少不比之前差。
-fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> color_eyre::Result<rodio::Decoder<R>>
+pub(crate) fn build_decoder<R>(
+    reader: R,
+    byte_len: Option<u64>,
+) -> color_eyre::Result<rodio::Decoder<R>>
 where
     R: Read + Seek + Send + Sync + 'static,
 {

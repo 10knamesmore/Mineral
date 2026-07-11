@@ -346,6 +346,47 @@ mod tests {
         Ok(())
     }
 
+    /// tui.waveform 默认:进度条波形开、封面取色开(default.lua 是唯一默认值数据源)。
+    #[test]
+    fn waveform_defaults() -> color_eyre::Result<()> {
+        let cfg = Config::defaults()?;
+        assert!(*cfg.tui().waveform().enabled(), "波形默认应开启");
+        assert!(*cfg.tui().waveform().cover_color(), "封面取色默认应开启");
+        assert!(
+            (*cfg.tui().waveform().contrast() - 2.0).abs() < f32::EPSILON,
+            "对比 gamma 默认 2.0"
+        );
+        assert_eq!(
+            *cfg.tui().waveform().edge_radius(),
+            3usize,
+            "播放头软边半径默认 3 列"
+        );
+        Ok(())
+    }
+
+    /// audio.envelope 默认:管线粒度(点数 / 块 / 滑窗)与 K-weighting 滤波参数全部
+    /// 来自 default.lua(唯一默认值数据源);滤波参数默认值须与 BS.1770 参考实现的
+    /// 模拟原型参数逐位一致——48kHz 下推导出规范系数表的正是这组数。
+    #[test]
+    fn envelope_defaults() -> color_eyre::Result<()> {
+        let cfg = Config::defaults()?;
+        let envelope = cfg.audio().envelope();
+        assert_eq!(*envelope.points(), 200usize, "包络定长点数");
+        assert_eq!(*envelope.block_ms(), 100u32, "响度块时长");
+        assert_eq!(*envelope.window_ms(), 400u32, "momentary 滑窗时长");
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(*envelope.shelf().f0_hz(), 1_681.974_450_955_533));
+        assert!(close(*envelope.shelf().gain_db(), 3.999_843_853_973_347));
+        assert!(close(*envelope.shelf().q(), 0.707_175_236_955_419_6));
+        assert!(close(
+            *envelope.shelf().band_exponent(),
+            0.499_666_774_154_541_6
+        ));
+        assert!(close(*envelope.highpass().f0_hz(), 38.135_470_876_024_44));
+        assert!(close(*envelope.highpass().q(), 0.500_327_037_323_877_3));
+        Ok(())
+    }
+
     /// copy.templates 的函数被摘进 VM registry(下标对位、可调用),
     /// 展示字段(key/label/context)照常落型。
     #[test]

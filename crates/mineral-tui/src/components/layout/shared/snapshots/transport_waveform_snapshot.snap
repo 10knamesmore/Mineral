@@ -1,0 +1,14 @@
+---
+source: crates/mineral-tui/src/components/layout/shared/transport.rs
+assertion_line: 788
+description: "播放栏:波形进度条(渐强包络化身块字符)"
+expression: t.backend()
+---
+"╭ transport ───────────────────────────────────────────────────╮"
+"│                        CrescendoTrack                        │"
+"│                               ·                              │"
+"│ 1:00 ▁▁▁▁▁▁▂▂▂▂▂▂▃▃▃▃▃▃▄▄▄▄▄▄▄▅▅▅▅▅▅▆▆▆▆▆▆▇▇▇▇▇▇███████ 3:45 │"
+"│                     [⏮]   [⏸]   [⏭]   [→]                    │"
+"│                      p     ␣     n     m                     │"
+"│ vol ████████░░ 80%        mode seq                     fmt — │"
+"╰──────────────────────────────────────────────────────────────╯"

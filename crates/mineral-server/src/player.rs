@@ -89,6 +89,10 @@ pub(crate) struct Inner {
     /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
     pub(crate) client_events: Mutex<Vec<TaskEvent>>,
 
+    /// 包络离线计算的 in-flight 守卫(qualified id):开播 / 预排 / 收割多路
+    /// 触发同曲时只解码一次。
+    pub(crate) envelope_inflight: Mutex<rustc_hash::FxHashSet<String>>,
+
     /// 用户歌单库聚合态(原始数据唯一事实源 + curate 出口变换,见 [`crate::library`])。
     library: crate::library::Library,
 
@@ -102,6 +106,9 @@ pub(crate) struct Inner {
 
     /// 在线播放音质(配置 `audio.playback_quality`,独立于下载音质)。
     playback_quality: BitRate,
+
+    /// 响度包络计算参数(配置 `audio.envelope`)。
+    pub(crate) envelope_params: mineral_audio::EnvelopeParams,
 
     /// gapless 预排触发距曲终的剩余时间(ms,配置 `daemon.gapless_prefetch_ms`)。
     gapless_prefetch_ms: u64,
@@ -197,10 +204,12 @@ impl PlayerCore {
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
             client_events: Mutex::new(Vec::new()),
+            envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
             library,
             favorites_lock: tokio::sync::Mutex::new(()),
             last_session_save: Mutex::new(Instant::now()),
             playback_quality: *config.playback_quality(),
+            envelope_params: config.envelope().clone(),
             gapless_prefetch_ms: *config.daemon().gapless_prefetch_ms(),
             prev_restart_threshold_ms: *config.daemon().prev_restart_threshold_ms(),
             player_tick_ms: *config.daemon().player_tick_ms(),
@@ -515,6 +524,8 @@ impl PlayerCore {
 
         if let Some((path, quality, _)) = local_hit {
             mineral_log::debug!(target: "player", song_id = song.id.as_str(), action = "local_hit", quality = quality.as_str(), origin = ?origin, "本地命中,跳过网络");
+            // 本地可完整读取:确保包络可用并推给 client(db 命中直推,缺失离线补算)。
+            self.ensure_envelope(song.id.clone(), path.clone());
             // 本地播也填 play_url(format / bitrate 按文件内容经 lofty 读出,见 resolve),transport 才显 fmt。
             let pu = crate::resolve::local_play_url(song, &path, quality);
             self.inner
@@ -736,6 +747,8 @@ impl PlayerCore {
     /// 编排(需 persist,不进 task lane),把 canonical favorited 集推给 client。
     pub fn refresh_initial_loads(&self) {
         self.push_cached_library_snapshot();
+        // 重连的 client 播放中途接入:补推当前曲的 db 包络(缺失静默,不触发计算)。
+        self.replay_current_envelope();
         for ch in &self.inner.channels {
             let source = ch.source();
             self.submit_my_playlists(source);

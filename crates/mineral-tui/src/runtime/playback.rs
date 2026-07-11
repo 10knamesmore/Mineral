@@ -1,7 +1,7 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
 use mineral_audio::{AudioBackend, AudioSnapshot, Bps};
-use mineral_model::{PlayUrl, Song};
+use mineral_model::{Envelope, PlayUrl, Song, SongId};
 pub use mineral_protocol::{PlayMode, PlaybackOrigin};
 
 /// 播放视图模型;真值在 audio engine,这里只缓存 UI 当帧需要的字段。
@@ -42,6 +42,11 @@ pub struct Playback {
 
     /// 下一曲 gapless 预排状态。transport 据此显预排标记。
     pub prefetch: Prefetch,
+
+    /// 当前曲的振幅包络(归属歌曲 id + 数据),随 `current` 重段([`mineral_protocol::CurrentSync`])
+    /// 与 `track` **原子到达**。**读取走 [`Self::current_envelope`]**(只认归属当前 track 的),
+    /// 换曲时旧包络被新段整体顶替、归属校验再兜一层,无需显式清空。
+    pub envelope: Option<(SongId, Envelope)>,
 }
 
 /// 下一曲 gapless 预排状态:audio snapshot next_* 字段在 view-model 侧的聚合。
@@ -126,7 +131,20 @@ impl Playback {
             sample_rate_hz: 0,
             engine_duration_ms: None,
             prefetch: Prefetch::default(),
+            envelope: None,
         }
+    }
+
+    /// 当前曲的振幅包络;仅当已装载包络归属当前 track 时可见。
+    ///
+    /// 包络随 `current` 重段与 track 原子送达,故正常路径下二者恒一致;这层归属校验
+    /// 只是对"包络尚未随新段更新的中间帧"兜底(返回 `None` 回落普通进度条)。
+    ///
+    /// # Return:
+    ///   归属匹配返回 `Some(&Envelope)`,无包络 / 无 track / 归属不符返回 `None`。
+    pub fn current_envelope(&self) -> Option<&Envelope> {
+        let (owner, envelope) = self.envelope.as_ref()?;
+        (self.track.as_ref()?.id == *owner).then_some(envelope)
     }
 
     /// 当前曲目时长(ms);`None` = 无 track / 两口径都未知。优先取 song 元数据,
@@ -345,6 +363,41 @@ mod tests {
         assert!(pb.prefetch.ready);
         assert_eq!(pb.prefetch.buffered_bps, Bps::new(6_000));
         assert!(pb.prefetch.download_complete);
+    }
+
+    /// 包络只在归属当前曲时可见:匹配可见、异曲包络(迟到事件)不可见、
+    /// 换曲后旧包络自然失效——无需任何显式清空点。
+    #[test]
+    fn envelope_visible_only_for_matching_track() -> color_eyre::Result<()> {
+        use mineral_model::Envelope;
+
+        let mut pb = with_track(1000, 0);
+        let current_id = pb
+            .track
+            .as_ref()
+            .map(|t| t.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("with_track 必有 track"))?;
+        assert!(pb.current_envelope().is_none(), "未装载时不可见");
+
+        pb.envelope = Some((
+            current_id,
+            Envelope {
+                points: vec![9],
+                version: 1,
+            },
+        ));
+        assert!(pb.current_envelope().is_some(), "归属当前曲应可见");
+
+        // 换曲(不同 id):旧包络自然失效。
+        pb.track = Some(
+            Song::builder()
+                .id(SongId::new(SourceKind::LOCAL, "another"))
+                .name("another".to_owned())
+                .duration_ms(Some(1000))
+                .build(),
+        );
+        assert!(pb.current_envelope().is_none(), "换曲后旧包络不可见");
+        Ok(())
     }
 
     /// `Prefetch::stage` 三态归纳:未预排 → Idle;已预排未稳 → Fetching;
