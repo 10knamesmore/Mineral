@@ -762,11 +762,8 @@ mod tests {
             Some(bilibili),
             "bilibili 行序号染 bilibili 色"
         );
-        assert_eq!(
-            fg_of(4, "2"),
-            Some(theme.subtext),
-            "local 未配置色,退中立兜底"
-        );
+        let shelf = resolve_source_color(&theme, state.cfg.sources(), SourceKind::SHELF);
+        assert_eq!(fg_of(4, "2"), Some(shelf), "shelf 行序号染 shelf 配置色");
         Ok(())
     }
 

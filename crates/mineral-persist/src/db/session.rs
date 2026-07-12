@@ -147,7 +147,7 @@ mod tests {
             volume: 0.8,
             queue: vec![
                 SongId::new(SourceKind::NETEASE, "123"),
-                SongId::new(SourceKind::LOCAL, "abc"),
+                SongId::new(SourceKind::SHELF, "abc"),
             ],
         };
         p.session().save(&snap).await?;
@@ -161,7 +161,7 @@ mod tests {
             let Some(second) = back.queue.get(1) else {
                 return Err(color_eyre::eyre::eyre!("queue missing second"));
             };
-            assert_eq!(second.namespace(), SourceKind::LOCAL);
+            assert_eq!(second.namespace(), SourceKind::SHELF);
             assert!(back.current.is_some());
         }
         Ok(())

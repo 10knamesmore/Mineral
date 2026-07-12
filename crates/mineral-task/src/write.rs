@@ -171,9 +171,9 @@ mod tests {
         assert_eq!(create.target_source(), SourceKind::NETEASE);
 
         let delete = PlaylistWriteOp::Delete {
-            id: PlaylistId::new(SourceKind::LOCAL, "p1"),
+            id: PlaylistId::new(SourceKind::SHELF, "p1"),
         };
-        assert_eq!(delete.target_source(), SourceKind::LOCAL);
+        assert_eq!(delete.target_source(), SourceKind::SHELF);
     }
 
     /// dedup:同参数同 key(连按合并),任何参数差异即不同 key。

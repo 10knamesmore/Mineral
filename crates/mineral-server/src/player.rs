@@ -141,6 +141,9 @@ pub(crate) struct Inner {
 
     /// 聚合收藏补 meta 后台任务的状态 + 节流旋钮(单飞闸 / 待办标志 / 并发参数,见 [`crate::favorites`])。
     pub(crate) backfill: crate::favorites::Backfill,
+
+    /// shelf 本地库扫描参数(daemon 启动时扫盘的 roots / 深度 / 排除,见 [`crate::shelf_scan`])。
+    pub(crate) shelf_scan: crate::shelf_scan::ShelfScanParams,
 }
 
 /// [`PlayerCore::spawn`] 的配置侧参数包:daemon 切片与有效配置底树是
@@ -234,10 +237,17 @@ impl PlayerCore {
                 *config.favorites_backfill_chunk_size(),
                 *config.favorites_backfill_max_concurrent(),
             ),
+            shelf_scan: crate::shelf_scan::ShelfScanParams::new(
+                config.shelf_roots().clone(),
+                *config.shelf_max_depth(),
+                config.shelf_exclude().clone(),
+            ),
         });
         let me = Self { inner };
         let bg = me.clone();
         tokio::spawn(async move { bg.background_loop().await });
+        // daemon 启动即扫一次本地库(roots 空则空转);扫完刷 shelf 侧栏。
+        me.spawn_shelf_scan();
         // 下载 worker:单线串行消费队列,所有目标聚合进同一进度会话。
         let dl = me.clone();
         let pending = Arc::clone(&me.inner.download_pending);

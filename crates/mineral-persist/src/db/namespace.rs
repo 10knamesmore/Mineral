@@ -931,7 +931,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let netease = p.scope(SourceKind::NETEASE);
-        let local = p.scope(SourceKind::LOCAL);
+        let local = p.scope(SourceKind::SHELF);
         netease
             .set_loved(&SongId::new(SourceKind::NETEASE, "n1"), true)
             .await?;
@@ -1006,11 +1006,11 @@ mod tests {
     async fn playlist_cache_returns_namespaced_song_ids() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::LOCAL);
-        let pid = mineral_model::PlaylistId::new(SourceKind::LOCAL, "p1");
+        let s = p.scope(SourceKind::SHELF);
+        let pid = mineral_model::PlaylistId::new(SourceKind::SHELF, "p1");
         let tracks = vec![
-            SongId::new(SourceKind::LOCAL, "s1"),
-            SongId::new(SourceKind::LOCAL, "s2"),
+            SongId::new(SourceKind::SHELF, "s1"),
+            SongId::new(SourceKind::SHELF, "s2"),
         ];
         s.put_playlist_cache(&pid, Some("本地歌单"), Some(1), &tracks)
             .await?;
@@ -1021,7 +1021,7 @@ mod tests {
         for sid in &g.track_values {
             assert_eq!(
                 sid.namespace(),
-                SourceKind::LOCAL,
+                SourceKind::SHELF,
                 "namespace 应为本 store 的 source"
             );
         }

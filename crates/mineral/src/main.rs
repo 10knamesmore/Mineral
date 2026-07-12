@@ -197,6 +197,11 @@ fn build_channels(
     channels.push(Arc::new(mineral_channel_mineral::MineralChannel::new(
         persist.clone(),
     )));
+    // shelf(自管收藏):纯本地索引投影,恒注册——playback / 详情按 SHELF namespace 路由靠它。
+    // 索引由 daemon 启动时的 shelf 扫描任务填(见 mineral-server 的 shelf_scan);roots 空则空库。
+    channels.push(Arc::new(mineral_channel_shelf::ShelfChannel::new(
+        persist.clone(),
+    )));
     match build_netease(persist, sources.netease()) {
         Ok(Some(c)) => channels.push(c),
         Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),

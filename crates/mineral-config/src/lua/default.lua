@@ -337,6 +337,15 @@ return {
       max_connections = 0, -- 到源的最大并发连接,0 = 不限
       color = "#FF8cB0", -- B站品牌粉
     },
+    shelf = {
+      color = "#6b8e9e", -- shelf(自管收藏)徽标:静蓝灰
+      roots = {}, -- 扫描根(mount)列表;每个是 OS 可达目录路径。默认空 = 不激活、不扫任何目录
+      scan = {
+        exclude = { "^\\." }, -- 目录/文件名排除 pattern(regex);默认排除隐藏项(以点开头)
+        max_depth = 8, -- 遍历深度上限(防 symlink 环 / 超深树);root 自身为深度 0
+        follow_symlinks = false, -- 是否跟随 symlink
+      },
+    },
   },
   -- daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动。
   daemon = {

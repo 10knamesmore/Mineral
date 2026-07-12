@@ -17,6 +17,6 @@ pub use cache_index::{CacheEntryStat, CacheIndex, CacheStats, Evicted};
 pub use client_store::{ClientStore, TrackPosRow};
 pub use db::{
     HistoryEntry, NamespaceStore, PlaylistCacheEntry, RESERVED_KEYS, SessionSnapshot, SessionStore,
-    SongStats,
+    ShelfFileRow, ShelfStore, SongStats,
 };
 pub use server_store::{PlaylistCacheStats, ServerStore};

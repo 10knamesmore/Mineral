@@ -223,7 +223,7 @@ mod tests {
         let mut pb = Playback::new();
         pb.track = Some(
             Song::builder()
-                .id(SongId::new(SourceKind::LOCAL, "t"))
+                .id(SongId::new(SourceKind::SHELF, "t"))
                 .name("t".to_owned())
                 .duration_ms(Some(duration_ms))
                 .build(),
@@ -391,7 +391,7 @@ mod tests {
         // 换曲(不同 id):旧包络自然失效。
         pb.track = Some(
             Song::builder()
-                .id(SongId::new(SourceKind::LOCAL, "another"))
+                .id(SongId::new(SourceKind::SHELF, "another"))
                 .name("another".to_owned())
                 .duration_ms(Some(1000))
                 .build(),

@@ -162,7 +162,7 @@ mod tests {
             },
         );
         map.insert(
-            PlaylistId::new(SourceKind::LOCAL, "p1"),
+            PlaylistId::new(SourceKind::SHELF, "p1"),
             TrackPos {
                 song_id: song("乙").id,
                 index: 0,

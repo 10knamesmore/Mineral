@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 use crate::CacheIndex;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
 use crate::db::schema::ensure_schema;
-use crate::db::{NamespaceStore, SessionStore};
+use crate::db::{NamespaceStore, SessionStore, ShelfStore};
 
 /// 持久化服务句柄。廉价 clone(内部 `Arc`)。
 ///
@@ -97,6 +97,14 @@ impl ServerStore {
     ///   [`SessionStore`]。
     pub fn session(&self) -> SessionStore {
         SessionStore::new(self.clone())
+    }
+
+    /// 取 shelf source 文件索引存储(`shelf_file` 表)。
+    ///
+    /// # Return:
+    ///   [`ShelfStore`]。
+    pub fn shelf(&self) -> ShelfStore {
+        ShelfStore::new(self.clone())
     }
 
     /// 音频本体缓存索引(`audio_cache` 表,LRU 驱逐)。播放命中本地副本走它。

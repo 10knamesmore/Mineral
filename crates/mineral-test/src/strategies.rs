@@ -17,7 +17,7 @@ use proptest::prelude::{Just, Strategy, any, prop_oneof};
 ///   产出合法 `Song` 的 proptest [`Strategy`]。
 pub fn arb_song() -> impl Strategy<Value = Song> {
     (
-        prop_oneof![Just(SourceKind::NETEASE), Just(SourceKind::LOCAL)],
+        prop_oneof![Just(SourceKind::NETEASE), Just(SourceKind::SHELF)],
         any::<String>(),
         any::<String>(),
         vec(any::<String>(), 0..3),

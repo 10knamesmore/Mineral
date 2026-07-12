@@ -1,0 +1,20 @@
+[package]
+name        = "mineral-probe"
+description = "按文件内容探测音频属性与标签(lofty 封装,不信扩展名)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model  = { workspace = true }
+lofty          = { workspace = true }
+derive-getters = { workspace = true }
+
+[dev-dependencies]
+color-eyre = { workspace = true }
+
+[lints]
+workspace = true

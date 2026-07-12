@@ -43,6 +43,15 @@ pub struct ServerConfig {
 
     /// 聚合收藏后台补 meta:并行拉取路数上限(配置 `sources.mineral.backfill.max_concurrent`)。
     favorites_backfill_max_concurrent: usize,
+
+    /// shelf 扫描根列表(配置 `sources.shelf.roots`;空 = shelf 不激活、不扫)。
+    shelf_roots: Vec<String>,
+
+    /// shelf 遍历深度上限(配置 `sources.shelf.scan.max_depth`)。
+    shelf_max_depth: usize,
+
+    /// shelf 名称排除 regex 原文(配置 `sources.shelf.scan.exclude`)。
+    shelf_exclude: Vec<String>,
 }
 
 impl ServerConfig {
@@ -74,6 +83,9 @@ impl ServerConfig {
             .spawn_max_concurrent(*cfg.script().spawn_max_concurrent())
             .favorites_backfill_chunk_size(*cfg.sources().mineral().backfill().chunk_size())
             .favorites_backfill_max_concurrent(*cfg.sources().mineral().backfill().max_concurrent())
+            .shelf_roots(cfg.sources().shelf().roots().clone())
+            .shelf_max_depth(*cfg.sources().shelf().scan().max_depth())
+            .shelf_exclude(cfg.sources().shelf().scan().exclude().clone())
             .build()
     }
 }

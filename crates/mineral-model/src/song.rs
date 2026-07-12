@@ -34,6 +34,12 @@ pub struct Song {
     #[builder(default)]
     pub album: Option<AlbumRef>,
 
+    /// 专辑内曲序(1-based);`None` = 来源没给 / 未探出。展示层据此排序、编号,
+    /// 缺失时回落自然序而非充 `0`。serde 容缺:旧快照落 `None`。
+    #[builder(default)]
+    #[serde(default)]
+    pub track_no: Option<u32>,
+
     /// 时长(ms);`None` = **未知**(来源接口没给 / 本地文件未探)——与「真的 0 ms」区分开,
     /// 展示层据此画占位而非 `0:00`,预排窗口等下游据此显式回落而非静默吃 0。
     #[builder(default)]
@@ -48,6 +54,12 @@ pub struct Song {
     /// 远端源若已下载到缓存可以填 `Local`,否则为 `None`,需走 `song_urls`。
     #[builder(default)]
     pub source_url: Option<MediaUrl>,
+
+    /// 自由标签集(genre 并入此处,不设专用 genre 字段——本地 genre 本就多值自由文本)。
+    /// 大小写 / 别名归一是消费侧的事。serde 容缺:旧快照落空 `Vec`。
+    #[builder(default)]
+    #[serde(default)]
+    pub tags: Vec<String>,
 
     /// 来源侧标记「无可播资源」(下架 / 无版权 / 失效)。列表元数据口径,可能滞后于
     /// 取流实况;展示层据此降权提示,**不禁播**——播放时取流失败自有拦截脚本补救。
@@ -69,9 +81,9 @@ impl Song {
 mod tests {
     use super::Song;
 
-    /// 旧缓存快照(无 `unavailable` 字段)反序列化落 `false`,不炸缓存。
+    /// 旧缓存快照(无 `unavailable` / `track_no` / `tags` 字段)反序列化落各自默认,不炸缓存。
     #[test]
-    fn old_snapshot_without_unavailable_defaults_false() -> color_eyre::Result<()> {
+    fn old_snapshot_missing_optional_fields_defaults() -> color_eyre::Result<()> {
         let song = serde_json::from_value::<Song>(serde_json::json!({
             "id": { "namespace": "netease", "value": "186016" },
             "name": "晴天",
@@ -82,7 +94,9 @@ mod tests {
             "cover_url": null,
             "source_url": null
         }))?;
-        assert!(!song.unavailable, "字段缺失应落 false");
+        assert!(!song.unavailable, "unavailable 缺失应落 false");
+        assert_eq!(song.track_no, None, "track_no 缺失应落 None");
+        assert!(song.tags.is_empty(), "tags 缺失应落空 Vec");
         Ok(())
     }
 }

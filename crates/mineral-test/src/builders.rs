@@ -1,6 +1,6 @@
 //! [`Song`] 构造器:一个最小默认 + 一组函数式装饰,组合出测试要的形态。
 //!
-//! 设计成函数式装饰(`with_source(song("x"), SourceKind::LOCAL)`)而非多参构造,
+//! 设计成函数式装饰(`with_source(song("x"), SourceKind::SHELF)`)而非多参构造,
 //! 避免 `song("x", None, 0, ...)` 这种谜语调用。
 
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, Song, SongId, SourceKind};

@@ -759,7 +759,7 @@ mod tests {
         let caps = caps_multi(vec![
             (SourceKind::BILIBILI, vec![SearchKind::Song]),
             (SourceKind::NETEASE, vec![SearchKind::Song]),
-            (SourceKind::LOCAL, vec![SearchKind::Song]),
+            (SourceKind::SHELF, vec![SearchKind::Song]),
         ]);
         let rs =
             SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1).with_whitelist(SearchWhitelist {

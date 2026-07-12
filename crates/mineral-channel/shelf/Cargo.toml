@@ -1,0 +1,31 @@
+[package]
+name        = "mineral-channel-shelf"
+description = "shelf source channel(用户自管音频收藏:fs 及未来远端 storage backend)"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+mineral-model         = { workspace = true }
+mineral-channel-core  = { workspace = true }
+mineral-probe         = { workspace = true }
+mineral-persist       = { workspace = true }
+mineral-log           = { workspace = true }
+
+color-eyre      = { workspace = true }
+async-trait     = { workspace = true }
+tokio           = { workspace = true }
+regex           = { workspace = true }
+rustc-hash      = { workspace = true }
+nucleo-matcher  = { workspace = true }
+derive-getters  = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+mineral-test = { workspace = true }
+
+[lints]
+workspace = true

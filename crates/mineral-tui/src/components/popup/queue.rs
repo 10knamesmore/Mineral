@@ -470,7 +470,7 @@ mod tests {
         Ok(())
     }
 
-    /// 混源 queue:`#` 序号按该行歌曲的源色着色;未配置色的源(local)退中立兜底。
+    /// 混源 queue:`#` 序号按该行歌曲的源色着色(各源配置色)。
     #[test]
     fn queue_mixed_source_tints_index() -> color_eyre::Result<()> {
         use mineral_model::SourceKind;
@@ -498,7 +498,8 @@ mod tests {
         assert_eq!(fg_of("0"), Some(theme.accent), "光标行序号被高亮前景覆盖");
         let bilibili = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::BILIBILI);
         assert_eq!(fg_of("1"), Some(bilibili), "bilibili 行序号染 bilibili 色");
-        assert_eq!(fg_of("2"), Some(theme.subtext), "local 未配置色,退中立兜底");
+        let shelf = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::SHELF);
+        assert_eq!(fg_of("2"), Some(shelf), "shelf 行序号染 shelf 配置色");
         Ok(())
     }
 

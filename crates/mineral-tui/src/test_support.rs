@@ -55,7 +55,7 @@ pub(crate) fn mixed_source_songs() -> Vec<Song> {
     let mut bilibili = with_artist(with_name(song("b1"), "夜間飛行"), "Chinese Football");
     bilibili.id = SongId::new(SourceKind::BILIBILI, "b1");
     let mut local = with_name(song("l1"), "Local Rip");
-    local.id = SongId::new(SourceKind::LOCAL, "l1");
+    local.id = SongId::new(SourceKind::SHELF, "l1");
     vec![netease, bilibili, local]
 }
 
@@ -90,7 +90,7 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
     s.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
-        playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
+        playlist_view("p3", "本地音乐", SourceKind::SHELF, 5),
     ];
     Ok(s)
 }
@@ -414,7 +414,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
     app.state.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
-        playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
+        playlist_view("p3", "本地音乐", SourceKind::SHELF, 5),
     ];
     app.state.browse.view.switch_to(View::Playlists);
     Ok((app, submitted))

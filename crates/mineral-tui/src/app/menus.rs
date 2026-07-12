@@ -972,16 +972,16 @@ mod tests {
         song.name = "Mineral".to_owned();
         song.artists = vec![
             mineral_model::ArtistRef {
-                id: mineral_model::ArtistId::new(SourceKind::LOCAL, "a1"),
+                id: mineral_model::ArtistId::new(SourceKind::SHELF, "a1"),
                 name: "A".to_owned(),
             },
             mineral_model::ArtistRef {
-                id: mineral_model::ArtistId::new(SourceKind::LOCAL, "a2"),
+                id: mineral_model::ArtistId::new(SourceKind::SHELF, "a2"),
                 name: "B".to_owned(),
             },
         ];
         song.album = Some(AlbumRef {
-            id: AlbumId::new(SourceKind::LOCAL, "al"),
+            id: AlbumId::new(SourceKind::SHELF, "al"),
             name: "EndSerenading".to_owned(),
         });
         song.cover_url = Some(mineral_model::MediaUrl::remote(
@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn playlist_copy_items_compose() {
         let playlist = Playlist::builder()
-            .id(PlaylistId::new(SourceKind::LOCAL, "p1"))
+            .id(PlaylistId::new(SourceKind::SHELF, "p1"))
             .name("歌单甲".to_owned())
             .build();
         let items = playlist_copy_items(&playlist, /*web_url*/ None);
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn album_copy_items_compose() -> color_eyre::Result<()> {
         let mut album = Album::builder()
-            .id(AlbumId::new(SourceKind::LOCAL, "al1"))
+            .id(AlbumId::new(SourceKind::SHELF, "al1"))
             .name("EndSerenading".to_owned())
             .artists(vec![
                 mineral_model::ArtistRef {

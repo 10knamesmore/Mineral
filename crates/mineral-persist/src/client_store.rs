@@ -244,8 +244,8 @@ mod tests {
                 screen_row: 7,
             },
             TrackPosRow {
-                playlist: PlaylistId::new(SourceKind::LOCAL, "p1"),
-                song: SongId::new(SourceKind::LOCAL, "s2"),
+                playlist: PlaylistId::new(SourceKind::SHELF, "p1"),
+                song: SongId::new(SourceKind::SHELF, "s2"),
                 index: 0,
                 screen_row: 0,
             },

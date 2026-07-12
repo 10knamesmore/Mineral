@@ -1,6 +1,6 @@
 ---
 source: crates/mineral-server/src/config.rs
-assertion_line: 143
+assertion_line: 155
 description: "ServerConfig(default.lua → daemon 切片映射,行为不变守卫)"
 expression: "ServerConfig::from_config(&cfg)"
 ---
@@ -48,4 +48,9 @@ ServerConfig {
     spawn_max_concurrent: 8,
     favorites_backfill_chunk_size: 40,
     favorites_backfill_max_concurrent: 3,
+    shelf_roots: [],
+    shelf_max_depth: 8,
+    shelf_exclude: [
+        "^\\.",
+    ],
 }

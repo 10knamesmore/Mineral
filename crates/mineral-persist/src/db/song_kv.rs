@@ -273,9 +273,9 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let netease = p.scope(SourceKind::NETEASE);
-        let local = p.scope(SourceKind::LOCAL);
+        let local = p.scope(SourceKind::SHELF);
         let id_a = SongId::new(SourceKind::NETEASE, "7");
-        let id_b = SongId::new(SourceKind::LOCAL, "7");
+        let id_b = SongId::new(SourceKind::SHELF, "7");
         netease
             .kv_set(&id_a, "plugin.x", &StoreValue::Int(1))
             .await?;

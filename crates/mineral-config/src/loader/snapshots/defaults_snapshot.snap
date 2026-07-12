@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
+assertion_line: 366
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -860,6 +861,25 @@ Config {
             backfill: BackfillSection {
                 chunk_size: 40,
                 max_concurrent: 3,
+            },
+        },
+        shelf: ShelfSection {
+            color: Value(
+                Hex(
+                    HexColor {
+                        r: 107,
+                        g: 142,
+                        b: 158,
+                    },
+                ),
+            ),
+            roots: [],
+            scan: ScanSection {
+                exclude: [
+                    "^\\.",
+                ],
+                max_depth: 8,
+                follow_symlinks: false,
             },
         },
     },

@@ -1037,11 +1037,11 @@ mod tests {
                     "bilibili",
                     r#"function(lists) return { { name = "缺id" } } end"#,
                 ),
-                ("local", r#"function(lists) error("炸") end"#),
+                ("shelf", r#"function(lists) error("炸") end"#),
             ],
             /*merged*/ None,
         )?;
-        for source in [SourceKind::NETEASE, SourceKind::BILIBILI, SourceKind::LOCAL] {
+        for source in [SourceKind::NETEASE, SourceKind::BILIBILI, SourceKind::SHELF] {
             let outcome = sender
                 .curate_playlists(
                     Some(source),

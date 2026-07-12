@@ -333,6 +333,11 @@ fn core_with_events_stats(
             *cfg.favorites_backfill_chunk_size(),
             *cfg.favorites_backfill_max_concurrent(),
         ),
+        shelf_scan: crate::shelf_scan::ShelfScanParams::new(
+            cfg.shelf_roots().clone(),
+            *cfg.shelf_max_depth(),
+            cfg.shelf_exclude().clone(),
+        ),
     });
     Ok(PlayerCore { inner })
 }

@@ -11,6 +11,7 @@ members = [
     "crates/mineral-config-macros",
     "crates/mineral-media",
     "crates/mineral-paths",
+    "crates/mineral-probe",
     "crates/mineral-protocol",
     "crates/mineral-server",
     "crates/mineral-spectrum",
@@ -20,6 +21,7 @@ members = [
     "crates/mineral-channel/netease",
     "crates/mineral-channel/bilibili",
     "crates/mineral-channel/mineral",
+    "crates/mineral-channel/shelf",
     "crates/mineral-persist",
     "crates/mineral-config",
     "crates/mineral-script",
@@ -66,6 +68,7 @@ mineral-config-macros   = { path = "crates/mineral-config-macros" }
 mineral-media           = { path = "crates/mineral-media" }
 mineral-model           = { path = "crates/mineral-model" }
 mineral-paths           = { path = "crates/mineral-paths" }
+mineral-probe           = { path = "crates/mineral-probe" }
 mineral-protocol        = { path = "crates/mineral-protocol" }
 mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
@@ -75,6 +78,7 @@ mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili" }
 mineral-channel-mineral = { path = "crates/mineral-channel/mineral" }
+mineral-channel-shelf   = { path = "crates/mineral-channel/shelf" }
 mineral-persist         = { path = "crates/mineral-persist" }
 mineral-config          = { path = "crates/mineral-config" }
 mineral-script          = { path = "crates/mineral-script" }

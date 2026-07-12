@@ -31,6 +31,9 @@ pub struct SourcesConfig {
 
     /// Mineral 聚合源段(全源收藏投影)。
     mineral: MineralSection,
+
+    /// shelf 源段(用户自管音频收藏)。
+    shelf: ShelfSection,
 }
 
 impl SourcesConfig {
@@ -44,6 +47,7 @@ impl SourcesConfig {
             ("netease", self.netease.color()),
             ("bilibili", self.bilibili.color()),
             ("mineral", self.mineral.color()),
+            ("shelf", self.shelf.color()),
         ]
     }
 }
@@ -80,6 +84,37 @@ pub struct BackfillSection {
     /// 并行几个 `songs_detail` 调用(并发上限即节流强度)。无论单次调用内部是一个请求还是
     /// 多个,同时最多 `max_concurrent` 个在飞;越小越温柔。
     max_concurrent: usize,
+}
+
+/// shelf 源段(用户自管音频收藏,source = `shelf`)。
+///
+/// 非网络源(不走 `#[source_section]`:无 timeout / proxy)。`roots` 声明扫哪、`scan` 控制
+/// 怎么遍历;开箱 `roots` 空 = shelf 不激活、不扫任何目录。organize 映射函数尚未接入
+/// (默认按目录分组)。
+#[config_section]
+pub struct ShelfSection {
+    /// 来源徽标色:token 名(随主题联动)或 `"#rrggbb"`(固定色)。
+    color: ColorRef,
+
+    /// 扫描根(mount)列表:每个是 OS 文件系统可达的目录路径(本地盘 / 已挂载的 SMB/NFS 等)。
+    /// 默认空 = 不激活。
+    roots: Vec<String>,
+
+    /// 遍历控制(排除 / 深度 / symlink)。
+    scan: ScanSection,
+}
+
+/// shelf 遍历控制。
+#[config_section]
+pub struct ScanSection {
+    /// 目录 / 文件名排除 pattern(regex;默认排除隐藏项)。命中即跳过该目录整棵子树 / 该文件。
+    exclude: Vec<String>,
+
+    /// 遍历深度上限(防 symlink 环 / 超深树;root 自身为深度 0)。
+    max_depth: usize,
+
+    /// 是否跟随 symlink。
+    follow_symlinks: bool,
 }
 
 /// 哔哩哔哩源段。
@@ -167,6 +202,25 @@ mod tests {
                 .any(|(name, _)| *name == "mineral"),
             "source_colors 应含 mineral 条目"
         );
+        Ok(())
+    }
+
+    /// 默认配置含 shelf 源段:roots 默认空(开箱不激活),source_colors 出 shelf 条目。
+    #[test]
+    fn shelf_section_in_defaults() -> color_eyre::Result<()> {
+        let cfg = crate::Config::defaults()?;
+        assert!(
+            cfg.sources()
+                .source_colors()
+                .iter()
+                .any(|(name, _)| *name == "shelf"),
+            "source_colors 应含 shelf 条目"
+        );
+        assert!(
+            cfg.sources().shelf().roots().is_empty(),
+            "开箱 roots 空 = shelf 不激活"
+        );
+        assert_eq!(*cfg.sources().shelf().scan().max_depth(), 8);
         Ok(())
     }
 

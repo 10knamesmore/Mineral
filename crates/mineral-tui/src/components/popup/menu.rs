@@ -361,7 +361,7 @@ mod tests {
     fn song(name: &str) -> Box<Song> {
         Box::new(
             Song::builder()
-                .id(SongId::new(SourceKind::LOCAL, name))
+                .id(SongId::new(SourceKind::SHELF, name))
                 .name(name.to_owned())
                 .build(),
         )

@@ -72,11 +72,13 @@ Artist {
                     name: "乐与怒",
                 },
             ),
+            track_no: None,
             duration_ms: Some(
                 323000,
             ),
             cover_url: None,
             source_url: None,
+            tags: [],
             unavailable: false,
         },
     ],

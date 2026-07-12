@@ -12,9 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use lofty::file::AudioFile;
-use lofty::probe::Probe;
 use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song};
+use mineral_probe::{is_audio_ext, probe};
 use mineral_protocol::PlaybackOrigin;
 
 use crate::media_cache::{MediaCache, library_dir_and_stem};
@@ -119,70 +118,25 @@ pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> Play
     }
 }
 
-/// 按**文件内容**(经 lofty)读出 `(格式, 码率kbps)`——全程不碰扩展名。
-///
-/// 先用 [`detect_file_type`] 按 magic bytes 判容器类型,再以该类型解析属性取 bitrate 与位深。
-/// 任一步失败回退 `(None, None, None)`。
+/// 按**文件内容**(经 [`mineral_probe`])读出 `(格式, 码率kbps, 位深bit)`——全程不碰扩展名。
 ///
 /// # Params:
 ///   - `path`: 本地文件绝对路径
 ///
 /// # Return:
-///   `(格式, 码率kbps, 位深bit)`;识别失败各项为 `None`。
+///   `(格式, 码率kbps, 位深bit)`;打开 / 识别失败各项为 `None`。
 fn probe_format_props(path: &Path) -> (Option<AudioFormat>, Option<u32>, Option<u8>) {
-    let Some(ft) = detect_file_type(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return (None, None, None);
     };
-    let (kbps, bit_depth) = read_audio_props(path, ft);
-    (file_type_to_format(ft), kbps, bit_depth)
-}
-
-/// 按**文件内容**判容器类型,走 lofty 的 [`Probe`](先读 ID3 标签再认底层帧)。
-///
-/// 两个关键选择:
-///
-/// - **不用** [`lofty::file::FileType::from_buffer`]:它一旦见到 `ID3` 前缀就返回 `None`
-///   (无论给多少字节),而 NetEase exhigh 等 FFmpeg 转码的 mp3 恰是「ID3 标签 + MPEG 帧」结构,
-///   会被它整片漏判。[`Probe::guess_file_type`] 会跳过标签再认帧,带标签的文件也判得对。
-/// - 走 [`Probe::new`](reader)而非 [`Probe::open`](path):后者在内容认不出时**回退文件扩展名**,
-///   违背「只认内容、不信扩展名」(缓存文件名本就按 format 推,信扩展名会循环依赖);前者无路径、
-///   纯按内容判,认不出即 `None`。
-///
-/// # Params:
-///   - `path`: 本地文件绝对路径
-///
-/// # Return:
-///   识别出的类型,打开 / 读取 / 识别失败为 `None`。
-fn detect_file_type(path: &Path) -> Option<lofty::file::FileType> {
-    let file = std::fs::File::open(path).ok()?;
-    Probe::new(std::io::BufReader::new(file))
-        .guess_file_type()
-        .ok()?
-        .file_type()
-}
-
-/// 以**已知类型**(不经扩展名猜测)一次解析出音频 `(码率kbps, 位深bit)`。
-///
-/// 单次 lofty `read()` 同时取两者:位深仅无损容器(FLAC / WAV / APE 等)有值,有损为 `None`。
-///
-/// # Params:
-///   - `path`: 本地文件绝对路径
-///   - `ft`: 已由内容判出的容器类型
-///
-/// # Return:
-///   `(码率kbps, 位深bit)`;各自解析失败 / lofty 未提供为 `None`。
-fn read_audio_props(path: &Path, ft: lofty::file::FileType) -> (Option<u32>, Option<u8>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return (None, None);
+    let Some(probed) = probe(std::io::BufReader::new(file)) else {
+        return (None, None, None);
     };
-    let Ok(tagged) = Probe::new(std::io::BufReader::new(file))
-        .set_file_type(ft)
-        .read()
-    else {
-        return (None, None);
-    };
-    let props = tagged.properties();
-    (props.audio_bitrate(), props.bit_depth())
+    (
+        probed.format().clone(),
+        *probed.bitrate_kbps(),
+        *probed.bit_depth(),
+    )
 }
 
 /// 「文件大小 / 时长」估算码率(bps),作 lofty 取不到 bitrate 时的兜底。
@@ -199,42 +153,6 @@ fn est_bitrate_bps(size: Option<u64>, duration_ms: Option<u64>) -> Option<u32> {
         .saturating_mul(8000)
         .checked_div(duration_ms?)
         .and_then(|bps| u32::try_from(bps).ok())
-}
-
-/// lofty 容器类型 → model 的 [`AudioFormat`]。未覆盖类型为 `None`(格式未知)。
-///
-/// # Params:
-///   - `ft`: lofty 探测出的文件类型
-///
-/// # Return:
-///   对应的 [`AudioFormat`];未覆盖类型 `None`。
-fn file_type_to_format(ft: lofty::file::FileType) -> Option<AudioFormat> {
-    use lofty::file::FileType;
-    match ft {
-        FileType::Mpeg => Some(AudioFormat::Mp3),
-        FileType::Flac => Some(AudioFormat::Flac),
-        FileType::Mp4 => Some(AudioFormat::Aac),
-        FileType::Vorbis => Some(AudioFormat::Ogg),
-        FileType::Wav => Some(AudioFormat::Wav),
-        FileType::Ape => Some(AudioFormat::Ape),
-        FileType::Aac => Some(AudioFormat::Aac),
-        FileType::Opus => Some(AudioFormat::Other("opus".to_owned())),
-        _ => None,
-    }
-}
-
-/// 是否已知音频文件扩展名(大小写不敏感)。借此排除 `.part` / `.part-dl` 等未完成 / 非音频文件。
-///
-/// # Params:
-///   - `ext`: 扩展名(不含点)
-///
-/// # Return:
-///   是音频扩展名返回 `true`。
-fn is_audio_ext(ext: &str) -> bool {
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "mp3" | "flac" | "aac" | "m4a" | "ogg" | "opus" | "wav" | "ape" | "alac"
-    )
 }
 
 #[cfg(test)]
@@ -507,18 +425,14 @@ mod tests {
     }
 
     /// 回归(本次 bug):ID3 前缀的 mp3(缓存 / 下载库里 NetEase exhigh 的样子)经 `local_play_url`
-    /// 应判出 `Mp3`——旧实现用 `from_buffer` 见 ID3 即 None、format 落空,本测试守住改走 `Probe` 后的行为。
+    /// 应判出 `Mp3`——内容探测走 `mineral_probe`(跳 ID3 再认帧),format 不落空。
+    /// (`from_buffer` 见 ID3 即漏判的坐实在 `mineral_probe` 侧)。
     #[tokio::test]
     async fn local_play_url_detects_id3_prefixed_mp3() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let s = song("1", "环岛", Some("夜晚做决定"));
         let bytes = id3_prefixed_mp3();
-        // 坐实旧路径为何失效:from_buffer 见 ID3 前缀直接认不出(与字节多少无关)。
-        assert!(
-            lofty::file::FileType::from_buffer(&bytes).is_none(),
-            "from_buffer 对 ID3 前缀应返回 None(正是本 bug 根因)"
-        );
 
         let abs = put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, &bytes)?;
         let pu = local_play_url(&s, &abs, BitRate::Exhigh);
@@ -609,32 +523,6 @@ mod tests {
         assert!(pu.format.is_none());
         assert_eq!(pu.bitrate_bps, None, "时长未知且无解析 → None");
         Ok(())
-    }
-
-    /// file_type_to_format:lofty 容器类型 → AudioFormat 映射。
-    #[test]
-    fn file_type_to_format_maps_known() {
-        use lofty::file::FileType;
-        assert_eq!(
-            super::file_type_to_format(FileType::Mpeg),
-            Some(AudioFormat::Mp3)
-        );
-        assert_eq!(
-            super::file_type_to_format(FileType::Flac),
-            Some(AudioFormat::Flac)
-        );
-        assert_eq!(
-            super::file_type_to_format(FileType::Wav),
-            Some(AudioFormat::Wav)
-        );
-        assert_eq!(
-            super::file_type_to_format(FileType::Vorbis),
-            Some(AudioFormat::Ogg)
-        );
-        assert_eq!(
-            super::file_type_to_format(FileType::Mp4),
-            Some(AudioFormat::Aac)
-        );
     }
 
     /// probe_export 直接命中可读库路径(与下载侧幂等共用)。

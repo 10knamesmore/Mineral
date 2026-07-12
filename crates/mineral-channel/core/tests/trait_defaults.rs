@@ -15,7 +15,7 @@ struct BareChannel;
 #[async_trait]
 impl MusicChannel for BareChannel {
     fn source(&self) -> SourceKind {
-        SourceKind::LOCAL
+        SourceKind::SHELF
     }
 
     fn caps(&self) -> ChannelCaps {
@@ -87,8 +87,8 @@ fn credential_type_still_exported(c: Credential) -> Credential {
 #[tokio::test]
 async fn playlist_writes_default_to_not_supported() -> color_eyre::Result<()> {
     let chan = BareChannel;
-    let pl = PlaylistId::new(SourceKind::LOCAL, "pl-1");
-    let song = SongId::new(SourceKind::LOCAL, "song-1");
+    let pl = PlaylistId::new(SourceKind::SHELF, "pl-1");
+    let song = SongId::new(SourceKind::SHELF, "song-1");
 
     assert!(matches!(
         chan.create_playlist("新歌单").await,
@@ -122,7 +122,7 @@ async fn playlist_writes_default_to_not_supported() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn artist_albums_defaults_to_not_supported() -> color_eyre::Result<()> {
     let chan = BareChannel;
-    let artist = ArtistId::new(SourceKind::LOCAL, "ar-1");
+    let artist = ArtistId::new(SourceKind::SHELF, "ar-1");
     assert!(matches!(
         chan.artist_albums(&artist, Page::default()).await,
         Err(Error::NotSupported)

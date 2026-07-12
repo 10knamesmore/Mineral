@@ -36,10 +36,13 @@ impl SourceKind {
         label: "♫ netease",
     };
 
-    /// 本地文件系统(用户的 music 目录)。
-    pub const LOCAL: Self = Self {
-        name: "local",
-        label: "□ local",
+    /// 用户自管的音频收藏(shelf)——经文件系统(未来可扩其他 storage backend)可达。
+    ///
+    /// 名为 shelf 而非 local:承诺的是「我的收藏、我声明怎么组织」,不承诺物理位置
+    /// (本地盘 / NAS 挂载 / 未来 WebDAV 同属之)。
+    pub const SHELF: Self = Self {
+        name: "shelf",
+        label: "▣ shelf",
     };
 
     /// 哔哩哔哩。
@@ -95,7 +98,7 @@ impl SourceKind {
     pub fn from_name(name: &str) -> Self {
         match name {
             "netease" => Self::NETEASE,
-            "local" => Self::LOCAL,
+            "shelf" => Self::SHELF,
             "bilibili" => Self::BILIBILI,
             "mineral" => Self::MINERAL,
             #[cfg(feature = "mock")]
@@ -195,7 +198,7 @@ mod tests {
     /// 已知名字解析回内置常量;未知名字给默认展示(label = name)。
     #[test]
     fn from_name_known_and_unknown() {
-        assert_eq!(SourceKind::from_name("local"), SourceKind::LOCAL);
+        assert_eq!(SourceKind::from_name("shelf"), SourceKind::SHELF);
 
         let plugin = SourceKind::from_name("myplugin");
         assert_eq!(plugin.name(), "myplugin");
@@ -206,7 +209,7 @@ mod tests {
     #[test]
     fn from_name_roundtrips_builtins() {
         assert_eq!(SourceKind::from_name("netease"), SourceKind::NETEASE);
-        assert_eq!(SourceKind::from_name("local"), SourceKind::LOCAL);
+        assert_eq!(SourceKind::from_name("shelf"), SourceKind::SHELF);
     }
 
     /// 未知名字 intern,`name()` 仍可取回原值。

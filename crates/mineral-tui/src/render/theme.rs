@@ -285,7 +285,7 @@ mod tests {
     }
 
     /// 来源徽标色解析逻辑:已配置来源(bilibili 在 sources 段配了固定品牌色)解析成配置色、
-    /// 不落中立兜底;未配置来源(LOCAL)落中立兜底(= subtext)。
+    /// 不落中立兜底;未配置来源(default.lua 未列的插件源)落中立兜底(= subtext)。
     ///
     /// 只钉逻辑不钉具体色值——default.lua 里 bilibili 的实际品牌色由 `defaults_snapshot` 快照钉,
     /// 改色只需 review 快照,不必动本测试。
@@ -299,10 +299,11 @@ mod tests {
             theme.subtext,
             "已配置来源(bilibili)解析成其配置色,不走中立兜底"
         );
+        // default.lua 未列的源(如运行时铸造的插件源)无配色 → 中立兜底。
         assert_eq!(
-            resolve_source_color(&theme, sources, SourceKind::LOCAL),
+            resolve_source_color(&theme, sources, SourceKind::from_name("unconfigured_plugin")),
             theme.subtext,
-            "未配色来源(LOCAL)走中立兜底(subtext)"
+            "未配色来源走中立兜底(subtext)"
         );
         Ok(())
     }

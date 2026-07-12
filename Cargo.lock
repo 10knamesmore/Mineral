@@ -2729,6 +2729,7 @@ dependencies = [
  "mineral-channel-mineral",
  "mineral-channel-mock",
  "mineral-channel-netease",
+ "mineral-channel-shelf",
  "mineral-cli",
  "mineral-config",
  "mineral-log",
@@ -2882,6 +2883,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mineral-channel-shelf"
+version = "0.5.3"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "derive-getters",
+ "mineral-channel-core",
+ "mineral-log",
+ "mineral-model",
+ "mineral-persist",
+ "mineral-probe",
+ "mineral-test",
+ "nucleo-matcher",
+ "regex",
+ "rustc-hash 2.1.2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "mineral-cli"
 version = "0.5.3"
 dependencies = [
@@ -3024,6 +3045,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mineral-probe"
+version = "0.5.3"
+dependencies = [
+ "color-eyre",
+ "derive-getters",
+ "lofty",
+ "mineral-model",
+]
+
+[[package]]
 name = "mineral-protocol"
 version = "0.5.3"
 dependencies = [
@@ -3082,16 +3113,17 @@ dependencies = [
  "derive-getters",
  "futures-util",
  "insta",
- "lofty",
  "mineral-audio",
  "mineral-channel-core",
  "mineral-channel-mineral",
+ "mineral-channel-shelf",
  "mineral-config",
  "mineral-log",
  "mineral-media",
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-probe",
  "mineral-protocol",
  "mineral-script",
  "mineral-stats",

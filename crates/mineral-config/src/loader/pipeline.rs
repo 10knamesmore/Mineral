@@ -130,6 +130,27 @@ fn load_on(
 fn extract_lua_fns(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
     extract_copy_templates(lua, merged)?;
     extract_playlist_transforms(lua, merged)?;
+    normalize_shelf_arrays(lua, merged)?;
+    Ok(())
+}
+
+/// 给 shelf 的数组字段(`sources.shelf.roots` / `sources.shelf.scan.exclude`)挂 array
+/// metatable——空 Lua 表经 serde 默认序列化成 map `{}`,落不进 `Vec`(默认 `roots = {}` 即此),
+/// 挂上才走 `[]`(同 `tui.copy.templates` 的空表修正)。
+///
+/// # Params:
+///   - `lua`: VM(取 array metatable)
+///   - `merged`: 合成后的配置表
+///
+/// # Return:
+///   处理成功 `Ok(())`。
+fn normalize_shelf_arrays(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    if let Some(roots) = table_at!(merged, sources.shelf.roots) {
+        roots.set_metatable(Some(lua.array_metatable()));
+    }
+    if let Some(exclude) = table_at!(merged, sources.shelf.scan.exclude) {
+        exclude.set_metatable(Some(lua.array_metatable()));
+    }
     Ok(())
 }
 

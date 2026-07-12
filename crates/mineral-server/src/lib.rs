@@ -39,6 +39,7 @@ mod script_reload;
 mod serve;
 mod server;
 mod session;
+mod shelf_scan;
 mod state;
 mod stats;
 

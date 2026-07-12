@@ -20,7 +20,7 @@ fn command_family_maps_to_script_cmds() -> color_eyre::Result<()> {
         mineral.player.seek_to(30)
         mineral.player.set_mode("repeat_all")
         mineral.player.play("netease:42")
-        mineral.download("local:abc")
+        mineral.download("shelf:abc")
         "#,
     )
     .exec()?;
@@ -35,7 +35,7 @@ fn command_family_maps_to_script_cmds() -> color_eyre::Result<()> {
             ScriptCmd::SeekTo(30.0),
             ScriptCmd::SetMode(PlayMode::RepeatAll),
             ScriptCmd::Play(SongId::new(SourceKind::NETEASE, "42")),
-            ScriptCmd::Download(SongId::new(SourceKind::LOCAL, "abc")),
+            ScriptCmd::Download(SongId::new(SourceKind::SHELF, "abc")),
         ]
     );
     Ok(())

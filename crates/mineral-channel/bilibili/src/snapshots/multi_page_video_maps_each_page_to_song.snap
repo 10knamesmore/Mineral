@@ -79,6 +79,7 @@ Album {
                     name: "多P合集",
                 },
             ),
+            track_no: None,
             duration_ms: Some(
                 240000,
             ),
@@ -102,6 +103,7 @@ Album {
                 ),
             ),
             source_url: None,
+            tags: [],
             unavailable: false,
         },
         Song {
@@ -135,6 +137,7 @@ Album {
                     name: "多P合集",
                 },
             ),
+            track_no: None,
             duration_ms: Some(
                 200000,
             ),
@@ -158,6 +161,7 @@ Album {
                 ),
             ),
             source_url: None,
+            tags: [],
             unavailable: false,
         },
     ],
