@@ -42,16 +42,16 @@ pub enum WindowDefault {
     All,
 }
 
-/// 输出格式(§8.2:`text` 人读 / `json` 结构化全量 / `md` 年终存档)。
+/// 输出格式
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// 人读默认(分节 + unicode 条形分布)。
+    /// 默认
     Text,
 
-    /// 结构化全量(serde_json)。
+    /// json
     Json,
 
-    /// 年终盘点存档 / 分享形态(markdown)。
+    /// markdown
     Md,
 }
 

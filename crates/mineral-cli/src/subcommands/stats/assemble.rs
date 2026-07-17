@@ -123,19 +123,19 @@ async fn report_names(
     Ok(names)
 }
 
-/// `top` 的单榜类别(§8.2:`playlists` = 队列上下文口径)。
+/// `top` 的单榜类别
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum TopCategory {
-    /// top 歌曲。
+    /// top 歌曲
     Songs,
 
-    /// top 专辑(专辑语境聚合)。
+    /// top 专辑
     Albums,
 
-    /// top 艺人(艺人语境聚合)。
+    /// top 艺人
     Artists,
 
-    /// top 歌单(队列上下文口径:最常从哪个歌单起播)。
+    /// top 歌单
     Playlists,
 }
 

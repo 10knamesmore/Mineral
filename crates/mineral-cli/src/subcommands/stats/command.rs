@@ -15,84 +15,84 @@ use super::window::{self, By, Format, Window, WindowDefault};
 /// 埋点数据查询(离线直读)。
 #[derive(Debug, Subcommand)]
 pub enum StatsCommand {
-    /// 埋点系统自身状态:db 路径 / 大小 / 当前 level / 时间覆盖 / 各区行数。
+    /// 埋点系统自身状态
     Status {
-        /// 输出格式。
+        /// 输出格式
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 最近播放流水 tail(「昨晚听了啥」/ 验证埋点在记)。
+    /// 最近播放流水
     History {
-        /// 时间窗(缺省全量)。
+        /// 时间窗(缺省全量)
         #[command(flatten)]
         window: Window,
 
-        /// 展示条数(0 无意义,负值在解析层即拒)。
+        /// 展示条数
         #[arg(long, default_value_t = 20)]
         limit: u32,
 
-        /// 只看某来源(来源 name,如 `netease` / `bilibili`)。
+        /// 只看某来源(如 `netease` / `bilibili`)
         #[arg(long)]
         source: Option<String>,
 
-        /// 输出格式。
+        /// 输出格式
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 轻量单榜查询(`playlists` = 队列上下文口径:最常从哪个歌单起播)。
+    /// 单榜查询
     Top {
-        /// 榜类别。
+        /// 榜类别
         #[arg(value_enum)]
         category: TopCategory,
 
-        /// 时间窗(缺省全量)。
+        /// 时间窗(缺省全量)
         #[command(flatten)]
         window: Window,
 
-        /// 排序口径。
+        /// 排序口径
         #[arg(long, value_enum, default_value = "plays")]
         by: By,
 
-        /// 榜单长度(缺省来自配置 `stats.report.top_limit`;负值在解析层即拒)。
+        /// 榜单长度
         #[arg(long)]
         limit: Option<u32>,
 
-        /// 输出格式。
+        /// 输出格式
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 盘点报告主入口(§8.1 全套装配 + mineral.db 回查名)。
+    /// 盘点报告主入口
     Report {
-        /// 时间窗(缺省当前年)。
+        /// 时间窗(缺省当前年)
         #[command(flatten)]
         window: Window,
 
-        /// 覆盖各 top 榜长度(缺省来自配置 `stats.report.top_limit`;负值在解析层即拒)。
+        /// 覆盖各 top 榜长度
         #[arg(long)]
         top: Option<u32>,
 
-        /// 输出格式(`md` 适合年终存档:`stats report --format md > wrapped.md`)。
+        /// 输出格式
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 一次性裁剪:删 `--before` 日期之前的流水;无 `--yes` 只打印将删行数,不动盘。
+    /// 一次性裁剪
     Prune {
-        /// 裁剪水位 `YYYY-MM-DD`:早于当日零点(UTC)的流水被删。
+        /// 早于当日零点(UTC)的流水被删
         #[arg(long)]
         before: String,
 
-        /// 确认执行;不带此 flag 只 dry-run。
+        /// 确认执行
         #[arg(long)]
         yes: bool,
     },
 
-    /// 清空 stats.db(连同 -wal/-shm 伴生文件);无 `--yes` 只打印将删的文件。
+    /// 清空 stats.db(连同 -wal/-shm 伴生文件)
     Reset {
-        /// 确认执行;不带此 flag 只打印计划,不动盘。
+        /// 确认执行
         #[arg(long)]
         yes: bool,
     },

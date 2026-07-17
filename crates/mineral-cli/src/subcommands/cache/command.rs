@@ -12,19 +12,19 @@ use super::render::{self, AudioEntry, AudioInput, CoverInput};
 /// 缓存管理。
 #[derive(Debug, Subcommand)]
 pub enum CacheCommand {
-    /// 展示音频 / 封面 / 歌单缓存的当前状态。
+    /// 展示音频 / 封面 / 歌单缓存的当前状态
     Status {
-        /// 展示逐条清单与按音质分布等更详细信息。
+        /// 展示逐条清单与按音质分布等更详细信息
         #[arg(long)]
         detail: bool,
     },
 
-    /// 清理音频 / 封面 / 歌单缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果。
+    /// 清理音频 / 封面 / 歌单缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果
     Clean,
 
     /// 完全删除所缓存，包括db 与 cover/audio/playlists
     Reset {
-        /// 确认执行;不带此 flag 只打印将删除的路径,不动盘。
+        /// 确认执行
         #[arg(long)]
         yes: bool,
     },

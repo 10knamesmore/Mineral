@@ -61,22 +61,22 @@ pub enum Command {
 
     /// 用户配置
     Config {
-        /// config 下的具体子命令。
+        /// config 下的具体子命令
         #[command(subcommand)]
         cmd: ConfigCommand,
     },
 
-    /// 启动后台播放 daemon。
+    /// 启动后台播放 daemon
     Serve,
 
-    /// 埋点数据查询(直读 stats.db,不连 daemon)。
+    /// 埋点数据查询
     Stats {
-        /// stats 下的具体子命令。
+        /// stats 下的具体子命令
         #[command(subcommand)]
         cmd: StatsCommand,
     },
 
-    /// 显示当前播放状态(连 daemon)。
+    /// 显示当前播放状态
     Status,
 
     /// 请求后台 daemon 优雅退出;
