@@ -53,8 +53,9 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 
 配置(file + session 覆盖)是 daemon 上的一份**运行时状态**:daemon mtime 轮询
 config.lua、合成 `merge(default, user, overlay)`、落型校验后经 `Event::ConfigChanged`
-推整树给订阅 client(握手先重放一帧);脚本 `mineral.config.override(path, value)` 是
-合成的一层,path 必须是真实配置路径,坏覆盖按 serde 报错路径剔除并警告。**client 不看
+推整树给订阅 client(握手先重放一帧);脚本 `mineral.config.override`(配置偏表,或
+`path, value` 字符串形)是合成的一层,偏表拍平成标量叶子批量原子应用、一次重算一帧
+推送,path 必须是真实配置路径,坏覆盖按 serde 报错路径逐叶剔除并警告。**client 不看
 文件**(TUI 启动本地 load 一次只是自举,连上即被推送顶替)。
 
 client 侧配置消费两条规矩:

@@ -3064,6 +3064,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rustc-hash 2.1.2",
+ "serde_json",
  "tokio",
  "typed-builder",
 ]

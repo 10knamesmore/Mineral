@@ -307,23 +307,30 @@ mineral.ui.card {
 { "普通 ", { "强调", fg = "accent", bold = true }, { "靠右", align = "right" } }
 ```
 
-### 配置覆盖 `mineral.config.override(path, value)`
+### 配置覆盖 `mineral.config.override(patch)`
 
-session 级覆盖**任意配置路径**(不写配置文件,daemon 重启即清;`value = nil` 撤销
-回落配置文件的值)。`path` 必须是真实配置路径(与 `config.lua` 的字段树一一对应,
-见 [configuration.md](configuration.md)),值的类型与配置字段一致:
+session 级覆盖**任意配置字段**(不写配置文件,daemon 重启即清)。传一张配置偏表
+——结构同 `config.lua` 返回表(见 [configuration.md](configuration.md)),只写要
+覆盖的字段,LuaLS 全程补全 + 类型检查;一次调用的多个字段**原子应用**,单帧推送:
 
 ```lua
 -- 终端宽度自适应:超 200 列拉开全屏歌词行距
+local LINE_GAP = 1 -- 回落值提成共享 local,config 树与回调两处同用
+
 mineral.observe("terminal", function(t)
-    mineral.config.override("tui.lyrics.fullscreen_line_gap",
-        (t and t.cols > 200) and 2 or nil)
+    local gap = (t ~= nil and t.cols > 200) and 2 or LINE_GAP
+    mineral.config.override({ tui = { lyrics = { fullscreen_line_gap = gap } } })
 end)
 ```
 
-daemon 把覆盖深合并进有效配置并整树校验后推给所有订阅 client——语义与手改
-`config.lua` 热重载完全一致,任何字段(主题色 / 动画时长 / 布局阈值…)都可覆盖。
-坏路径 / 坏值被剔除并以警告 toast 提示,不影响其余覆盖与现行配置。
+daemon 把偏表拍平成叶子深合并进有效配置并整树校验后推给所有订阅 client——语义与
+手改 `config.lua` 热重载完全一致,任何字段(主题色 / 动画时长 / 布局阈值…)都可
+覆盖。坏路径 / 坏值按叶子剔除并以警告 toast 提示,不影响其余覆盖与现行配置。
+
+字符串形 `override(path, value)` 保留:path 是真实配置路径(如
+`"tui.lyrics.fullscreen_line_gap"`),动态拼 path 时用它;`value = nil` 撤销该
+path 的覆盖,回落配置文件的值(偏表写不出 nil,撤销只有字符串形)。场景化覆盖
+更推荐如上例把回落值提成共享 local——覆盖永远是「设成某值」,不依赖撤销语义。
 
 ### 窗口标题覆盖 `mineral.ui.window_title(text)`
 
@@ -585,18 +592,22 @@ end)
 终端尺寸是脚本可观察的属性,配置可以被 session 级覆盖:
 
 ```lua
+local FULLSCREEN_GAP, COMPACT_GAP = 1, 0 -- 窄终端的回落值
+
 mineral.observe("terminal", function(terminal)
   if terminal == nil then
     return
   end
 
-  if terminal.cols > 200 then
-    mineral.config.override("tui.lyrics.fullscreen_line_gap", 2)
-    mineral.config.override("tui.lyrics.compact_line_gap", 1)
-  else
-    mineral.config.override("tui.lyrics.fullscreen_line_gap", nil)
-    mineral.config.override("tui.lyrics.compact_line_gap", nil)
-  end
+  local wide = terminal.cols > 200
+  mineral.config.override({
+    tui = {
+      lyrics = {
+        fullscreen_line_gap = wide and 2 or FULLSCREEN_GAP,
+        compact_line_gap = wide and 1 or COMPACT_GAP,
+      },
+    },
+  })
 end)
 ```
 
@@ -614,21 +625,21 @@ mineral.observe("terminal", function(t)
 
   -- 全屏播放态:固定示波器
   if t.fullscreen then
-    mineral.config.override("tui.spectrum.style", "scope")
+    mineral.config.override({ tui = { spectrum = { style = "scope" } } })
     return
   end
 
   -- browse 态:越高越复杂(terrain 的层叠纵深吃高度,矮面板层挤,退回条形)
   if t.rows < 48 then
-    mineral.config.override("tui.spectrum.style", "bars")
+    mineral.config.override({ tui = { spectrum = { style = "bars" } } })
   elseif t.rows < 64 then
-    mineral.config.override("tui.spectrum.terrain.layers", 6)
-    mineral.config.override("tui.spectrum.terrain.amplitude", 0.25)
-    mineral.config.override("tui.spectrum.style", "terrain")
+    mineral.config.override({
+      tui = { spectrum = { style = "terrain", terrain = { layers = 6, amplitude = 0.25 } } },
+    })
   else
-    mineral.config.override("tui.spectrum.terrain.layers", 8)
-    mineral.config.override("tui.spectrum.terrain.amplitude", 0.3)
-    mineral.config.override("tui.spectrum.style", "terrain")
+    mineral.config.override({
+      tui = { spectrum = { style = "terrain", terrain = { layers = 8, amplitude = 0.3 } } },
+    })
   end
 end)
 ```

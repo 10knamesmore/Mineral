@@ -327,16 +327,13 @@ pub enum ScriptCmd {
         id: crate::proc::SpawnId,
     },
 
-    /// session 级配置覆盖(`mineral.config.override`)。daemon 把它合成进
-    /// 有效配置(深合并 + 落型校验,坏路径 / 坏值剔除并警告),经
-    /// [`Event::ConfigChanged`](mineral_protocol::Event::ConfigChanged) 推给订阅 client。
+    /// session 级配置覆盖(`mineral.config.override`)。一批叶子 op 原子应用:
+    /// daemon 全部落进覆盖表再一次重算 / 一次广播
+    /// [`Event::ConfigChanged`](mineral_protocol::Event::ConfigChanged)。
+    /// 表对象形一次调用拍出多条叶子;字符串形 = 长度 1 的一批。
     ConfigOverride {
-        /// 配置路径(真实路径,如 `tui.lyrics.fullscreen_line_gap`)。
-        path: String,
-
-        /// 覆盖值;`None` = 撤销(Lua 侧传 nil)。`Some(Nil)` 不出现,
-        /// API 层把 nil 收敛成 `None`,避免「覆盖成 Nil」与「撤销」两义。
-        value: Option<mineral_protocol::BusValue>,
+        /// 待应用的叶子覆盖。
+        ops: Vec<ConfigOverrideOp>,
     },
 
     /// 窗口标题整串覆盖(`mineral.ui.window_title`,脚本自渲染)。渲染产物
@@ -347,6 +344,19 @@ pub enum ScriptCmd {
         /// 覆盖文本;`None` = 撤销(Lua 侧传 nil),client 回落结构化模板。
         text: Option<String>,
     },
+}
+
+/// 一条配置覆盖叶子 op。daemon 把它深合并进有效配置并落型校验,坏路径 /
+/// 坏值按 path 剔除并警告,好叶子不受殃及。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigOverrideOp {
+    /// 配置路径(真实路径,如 `tui.lyrics.fullscreen_line_gap`)。
+    pub path: String,
+
+    /// 覆盖值;`None` = 撤销(仅字符串形传 nil 产生;表对象形拍不出撤销——
+    /// Lua 表存不下 nil value)。`Some(Nil)` 不出现,API 层把 nil 收敛成
+    /// `None`,避免「覆盖成 Nil」与「撤销」两义。
+    pub value: Option<mineral_protocol::BusValue>,
 }
 
 /// 一次异步查询的回投句柄:脚本侧把 Lua 回调挂进 pending 表拿到它,

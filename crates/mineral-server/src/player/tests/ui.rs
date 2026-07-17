@@ -41,23 +41,23 @@ fn config_leaf(
 async fn config_override_merges_and_diffs() -> color_eyre::Result<()> {
     use mineral_protocol::BusValue;
     let (core, mut events_rx) = core_with_hub()?;
-    core.apply_config_override(
-        "tui.lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.fullscreen_line_gap",
         Some(BusValue::Int(2)),
-    );
+    )]);
     assert_eq!(
         config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
         serde_json::json!(2),
         "覆盖合成进有效树"
     );
     // 同值重写:不发。
-    core.apply_config_override(
-        "tui.lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.fullscreen_line_gap",
         Some(BusValue::Int(2)),
-    );
+    )]);
     assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
     // 撤销不存在的 path:不发。
-    core.apply_config_override("tui.lyrics.compact_line_gap".to_owned(), None);
+    core.apply_config_overrides(vec![override_op("tui.lyrics.compact_line_gap", None)]);
     assert!(events_rx.try_recv().is_err(), "撤销不存在的 path 不得下发");
     // 握手重放快照反映覆盖。
     assert_eq!(
@@ -68,7 +68,7 @@ async fn config_override_merges_and_diffs() -> color_eyre::Result<()> {
         "重放快照带覆盖"
     );
     // 真撤销:回落底树默认值(default.lua 的 1)。
-    core.apply_config_override("tui.lyrics.fullscreen_line_gap".to_owned(), None);
+    core.apply_config_overrides(vec![override_op("tui.lyrics.fullscreen_line_gap", None)]);
     assert_eq!(
         config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
         serde_json::json!(1),
@@ -84,16 +84,16 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
     use mineral_protocol::{BusValue, Event, ToastKind};
     let (core, mut events_rx) = core_with_hub()?;
     // 先落一条好覆盖。
-    core.apply_config_override(
-        "tui.lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.fullscreen_line_gap",
         Some(BusValue::Int(3)),
-    );
+    )]);
     let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
     // 类型不符:剔除 + 警告,好覆盖仍在。
-    core.apply_config_override(
-        "tui.lyrics.compact_line_gap".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.compact_line_gap",
         Some(BusValue::Str("x".to_owned())),
-    );
+    )]);
     match events_rx.try_recv()? {
         Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "坏覆盖应警告"),
         other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
@@ -114,7 +114,10 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
         "坏覆盖不生效,保持底树值"
     );
     // 未知路径:deny_unknown_fields 拒 → 剔除 + 警告。
-    core.apply_config_override("tui.lyrics.bogus".to_owned(), Some(BusValue::Int(1)));
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.bogus",
+        Some(BusValue::Int(1)),
+    )]);
     match events_rx.try_recv()? {
         Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "未知路径应警告"),
         other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
@@ -126,15 +129,87 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 造一条覆盖叶子 op(测试简写)。
+fn override_op(
+    path: &str,
+    value: Option<mineral_protocol::BusValue>,
+) -> mineral_script::ConfigOverrideOp {
+    mineral_script::ConfigOverrideOp {
+        path: path.to_owned(),
+        value,
+    }
+}
+
+/// 一批叶子 op 原子应用:全部落进 overlay,一次重算、恰推一帧 ConfigChanged。
+#[tokio::test]
+async fn config_override_batch_single_broadcast() -> color_eyre::Result<()> {
+    use mineral_protocol::BusValue;
+    let (core, mut events_rx) = core_with_hub()?;
+    core.apply_config_overrides(vec![
+        override_op("tui.lyrics.fullscreen_line_gap", Some(BusValue::Int(2))),
+        override_op("tui.lyrics.compact_line_gap", Some(BusValue::Int(3))),
+    ]);
+    let effective = match events_rx.try_recv()? {
+        mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
+        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+    };
+    assert_eq!(
+        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
+        Some(&serde_json::json!(2)),
+        "第一条叶子生效"
+    );
+    assert_eq!(
+        effective.pointer("/tui/lyrics/compact_line_gap"),
+        Some(&serde_json::json!(3)),
+        "第二条叶子同帧生效"
+    );
+    assert!(events_rx.try_recv().is_err(), "一批 op 只得推一帧");
+    Ok(())
+}
+
+/// 一批里坏叶子按 path 精确剔除(警告 toast),好叶子照常生效同帧下推。
+#[tokio::test]
+async fn config_override_batch_evicts_only_bad_leaf() -> color_eyre::Result<()> {
+    use mineral_protocol::{BusValue, Event, ToastKind};
+    let (core, mut events_rx) = core_with_hub()?;
+    core.apply_config_overrides(vec![
+        override_op("tui.lyrics.fullscreen_line_gap", Some(BusValue::Int(2))),
+        override_op(
+            "tui.lyrics.compact_line_gap",
+            Some(BusValue::Str("x".to_owned())),
+        ),
+    ]);
+    match events_rx.try_recv()? {
+        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "坏叶子应警告"),
+        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+    }
+    let effective = match events_rx.try_recv()? {
+        Event::ConfigChanged { config } => config.into_json(),
+        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+    };
+    assert_eq!(
+        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
+        Some(&serde_json::json!(2)),
+        "好叶子不被殃及"
+    );
+    assert_eq!(
+        effective.pointer("/tui/lyrics/compact_line_gap"),
+        Some(&serde_json::json!(0)),
+        "坏叶子剔除,保持底树值"
+    );
+    assert!(events_rx.try_recv().is_err(), "剔除后不得再有多余帧");
+    Ok(())
+}
+
 /// 换底树(配置文件重载)后 session 覆盖仍叠在新底树上。
 #[tokio::test]
 async fn set_config_base_reapplies_overlay() -> color_eyre::Result<()> {
     use mineral_protocol::BusValue;
     let (core, mut events_rx) = core_with_hub()?;
-    core.apply_config_override(
-        "tui.lyrics.fullscreen_line_gap".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "tui.lyrics.fullscreen_line_gap",
         Some(BusValue::Int(4)),
-    );
+    )]);
     let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
     // 新底树 = 默认树上改 audio.volume(模拟用户改文件)。
     let new_base = mineral_config::merge_tree(
@@ -336,10 +411,10 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
         recorder,
     )?;
     // 覆盖 off → 播 A 被门掉。
-    core.apply_config_override(
-        "stats.level".to_owned(),
+    core.apply_config_overrides(vec![override_op(
+        "stats.level",
         Some(mineral_protocol::BusValue::Str("off".to_owned())),
-    );
+    )]);
     let gated = song("gated");
     core.play_song(
         &gated,
@@ -348,7 +423,7 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
     );
     core.spawn_on_played(gated.id.clone(), mineral_stats::FinishReason::Eof, 30_000);
     // 撤覆盖 → 回 base(full)→ 播 B 记。
-    core.apply_config_override("stats.level".to_owned(), None);
+    core.apply_config_overrides(vec![override_op("stats.level", None)]);
     let kept = song("kept");
     core.play_song(
         &kept,

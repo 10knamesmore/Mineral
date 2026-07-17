@@ -8,6 +8,7 @@
 //! [`PlayerCore::effective_config`] 重放当前有效配置。
 
 use mineral_protocol::BusValue;
+use mineral_script::ConfigOverrideOp;
 use parking_lot::Mutex;
 
 use crate::player::PlayerCore;
@@ -162,36 +163,40 @@ impl PlayerCore {
         }
     }
 
-    /// 落一条脚本配置覆盖:更新覆盖表 → 重算校验 → 有效树变了才广播。
+    /// 落一批脚本配置覆盖:逐条更新覆盖表 → **一次**重算校验 → 有效树变了
+    /// 才广播**一帧**(表对象形一次调用拍出多条叶子;字符串形 = 长度 1)。
     ///
-    /// 同值重写 / 撤销不存在的 path 不推事件(脚本常在 observe 回调里无脑
-    /// 重设,diff 掉无谓的下推);坏 path / 坏值被剔除并警告,有效配置不变。
+    /// 同值重写 / 撤销不存在的 path 不算 touch(脚本常在 observe 回调里无脑
+    /// 重设,diff 掉无谓的下推),整批没 touch 直接返回;坏 path / 坏值按叶子
+    /// 剔除并警告,好叶子不受殃及。
     ///
     /// # Params:
-    ///   - `path`: 配置路径(如 `tui.lyrics.fullscreen_line_gap`)
-    ///   - `value`: 覆盖值;`None` = 撤销
-    pub(crate) fn apply_config_override(&self, path: String, value: Option<BusValue>) {
+    ///   - `ops`: 叶子覆盖(`None` 值 = 撤销)
+    pub(crate) fn apply_config_overrides(&self, ops: Vec<ConfigOverrideOp>) {
         let (changed, effective, evicted) = {
             let mut guard = self.inner.config_host.state.lock();
             let state = &mut *guard;
-            let touched = match value {
-                Some(new_value) => match state.overlay.iter_mut().find(|(p, _)| *p == path) {
-                    Some((_, existing)) if *existing == new_value => false,
-                    Some((_, existing)) => {
-                        *existing = new_value;
-                        true
-                    }
+            let mut touched = false;
+            for ConfigOverrideOp { path, value } in ops {
+                touched |= match value {
+                    Some(new_value) => match state.overlay.iter_mut().find(|(p, _)| *p == path) {
+                        Some((_, existing)) if *existing == new_value => false,
+                        Some((_, existing)) => {
+                            *existing = new_value;
+                            true
+                        }
+                        None => {
+                            state.overlay.push((path, new_value));
+                            true
+                        }
+                    },
                     None => {
-                        state.overlay.push((path, new_value));
-                        true
+                        let before = state.overlay.len();
+                        state.overlay.retain(|(p, _)| *p != path);
+                        state.overlay.len() != before
                     }
-                },
-                None => {
-                    let before = state.overlay.len();
-                    state.overlay.retain(|(p, _)| *p != path);
-                    state.overlay.len() != before
-                }
-            };
+                };
+            }
             if !touched {
                 return;
             }

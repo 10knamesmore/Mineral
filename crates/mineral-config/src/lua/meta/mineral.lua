@@ -437,12 +437,15 @@ function mineral.ui.card(opts) end
 function mineral.ui.window_title(text) end
 
 --- session 级配置覆盖(daemon 重启即清,不写配置文件)。
---- path 必须是**真实配置路径**(如 "tui.lyrics.fullscreen_line_gap");daemon 深合并进
---- 有效配置并落型校验,坏路径 / 坏值被剔除并警告,结果推给所有订阅 client。
---- `value = nil` 撤销覆盖,回落配置文件的值。
----@param path string  配置路径,如 "tui.lyrics.fullscreen_line_gap"
----@param value mineral.BusPayload|nil  覆盖值;nil = 撤销
-function mineral.config.override(path, value) end
+--- 推荐传一张配置偏表(结构同 config.lua 返回表,只写要覆盖的字段,全程补全 +
+--- 类型检查):daemon 拍平成叶子深合并进有效配置并落型校验,坏路径 / 坏值被剔除
+--- 并警告,结果推给所有订阅 client。
+--- 字符串形 `override(path, value)` 保留:path 须是**真实配置路径**(如
+--- "tui.lyrics.fullscreen_line_gap"),动态拼 path 时仍用它;`value = nil` 撤销
+--- 覆盖,回落配置文件的值(表形写不出 nil,撤销只有字符串形)。
+---@param patch mineral.Config  配置偏表(只写要覆盖的字段)
+---@overload fun(path: string, value: mineral.BusPayload|nil)
+function mineral.config.override(patch) end
 
 --- mineral 版本(结构化三分量,与发布版本同步;共享配置做兼容分叉用)。
 ---@class mineral.SysVersion

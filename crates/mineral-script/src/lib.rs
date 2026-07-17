@@ -26,8 +26,8 @@ pub use hooks::{
 };
 pub use host::{ScriptHost, install_api, seed_web_url_templates};
 pub use message::{
-    ActionOutcome, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey, PropValue, QueryId,
-    ResolveValue, ScriptCmd, ScriptEvent, TrackFinishedReason,
+    ActionOutcome, ConfigOverrideOp, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey,
+    PropValue, QueryId, ResolveValue, ScriptCmd, ScriptEvent, TrackFinishedReason,
 };
 pub use proc::{SpawnId, SpawnResult, SpawnSpec, run_child};
 pub use runtime::ScriptRuntime;

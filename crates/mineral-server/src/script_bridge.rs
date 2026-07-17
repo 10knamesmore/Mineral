@@ -698,15 +698,20 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 let _ = kill.send(());
             }
         }
-        ScriptCmd::ConfigOverride { path, value } => {
-            player
-                .inner
-                .stats
-                .event(mineral_stats::StatsEvent::Behavior {
-                    actor: mineral_stats::Actor::Script,
-                    event: mineral_stats::BehaviorEvent::ConfigOverride { path: path.clone() },
-                });
-            player.apply_config_override(path, value);
+        ScriptCmd::ConfigOverride { ops } => {
+            // 埋点:config_overrides 逐叶入库(表对象形一次调用多条叶子,按 path 各记一行)。
+            for op in &ops {
+                player
+                    .inner
+                    .stats
+                    .event(mineral_stats::StatsEvent::Behavior {
+                        actor: mineral_stats::Actor::Script,
+                        event: mineral_stats::BehaviorEvent::ConfigOverride {
+                            path: op.path.clone(),
+                        },
+                    });
+            }
+            player.apply_config_overrides(ops);
         }
         ScriptCmd::WindowTitle { text } => player.apply_window_title_override(text),
         ScriptCmd::SetLoved { song, loved } => {
