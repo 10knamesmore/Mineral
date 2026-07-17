@@ -4,7 +4,7 @@
 //! `#rrggbb` / 终端 ANSI 槽 / 终端默认)解析/校验成强类型,不依赖任何渲染框架;
 //! 颜色到 client 接线处才落地。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
 /// 14 个合法 color token 名;`roles` 段的值必须取自此集合。
@@ -15,20 +15,19 @@ const TOKEN_NAMES: [&str; 14] = [
 
 /// 主题色板:14 个 color token + 3 个语义角色映射。
 ///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。每个 token 是一个 [`ColorValue`]
-/// (固定色 / ANSI 槽 / 终端默认),client 接线处据此造各自渲染框架的颜色类型。
+/// 每个 token 是一个 [`ColorValue`](固定色 / ANSI 槽 / 终端默认);token 之间不能互相引用。
 #[config_section]
 pub struct ThemeConfig {
     /// 主背景。
     base: ColorValue,
 
-    /// 次背景(嵌套面板)。
+    /// 次背景(嵌套面板 / 浮层底)。
     mantle: ColorValue,
 
     /// 第三背景(底部 transport / cmd 行)。
     crust: ColorValue,
 
-    /// 行选中 / 进度条 track。
+    /// 行选中背景 / 进度条轨道。
     surface0: ColorValue,
 
     /// 未聚焦边框 / 分隔线。
@@ -70,8 +69,6 @@ pub struct ThemeConfig {
 
 /// 封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前值
 /// 渐变到封面派生色;无封面 / 取色失败渐变回本表的静态 token。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct DynamicThemeConfig {
     /// 是否启用(关闭即恒用静态 `accent` / `accent_2`)。
@@ -82,11 +79,9 @@ pub struct DynamicThemeConfig {
 }
 
 /// 搜索命中字符的样式:在所在列的基础样式上叠加。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct SearchHitConfig {
-    /// 高亮色:token 名(`"peach"` 等)或裸 `"#rrggbb"`。
+    /// 高亮色:token 名(`"peach"` 等,随主题联动)或裸 `"#rrggbb"`。
     color: ColorRef,
 
     /// 叠加的字体效果(数组整体替换;空数组 = 仅变色)。
@@ -392,6 +387,7 @@ where
 }
 
 /// 可叠加的字体效果。终端实际渲染效果取决于终端模拟器支持(如部分终端无斜体)。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextStyle {

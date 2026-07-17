@@ -2,34 +2,32 @@
 //!
 //! [`SweepStyle`] / [`MenuReveal`] 与渲染层过渡风格语义对齐,但保持解耦——接线处做映射。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
 /// 动画配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct AnimationConfig {
-    /// 主循环帧间隔(毫秒,≈ 60fps);重绘 / 拉数据 / 推进动画统一这一节奏。
+    /// 主循环帧间隔(毫秒;16 ≈ 60fps,越小越流畅越费 CPU);重绘 / 拉数据 / 推进动画统一这一节奏。
     /// 它是所有时长旋钮(`*_ms`)折算成拍数的分母——改它不改各动画的真实时长。
     frame_tick_ms: u64,
 
-    /// 整屏转场动画时长(毫秒)。
+    /// 整屏转场(启动扩大 / 退出收缩)动画时长(毫秒)。
     transition_ms: u32,
 
-    /// 侧栏曲目扫入动画时长(毫秒)。
+    /// 侧栏歌单 ↔ 曲目切换扫入动画时长(毫秒)。
     sweep_ms: u32,
 
-    /// 列表视口滚动平移时长(毫秒)。
+    /// 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
     list_scroll_ms: u32,
 
-    /// 全屏进退动画时长(毫秒)。
+    /// 全屏播放态进退场形变动画时长(毫秒)。
     fullscreen_ms: u32,
 
-    /// 浮层进出动画时长(毫秒)。
+    /// 浮层(队列 / 确认框)进出动画时长(毫秒)。
     popup_anim_ms: u32,
 
-    /// toast 进出动画时长(毫秒)。
+    /// toast(顶栏通知)横向展开收起动画时长(毫秒)。
     toast_anim_ms: u32,
 
     /// 终端失焦/聚焦时顶栏变灰的淡入淡出时长(毫秒)。
@@ -54,13 +52,11 @@ pub struct AnimationConfig {
     /// 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
     spinner_frames: Vec<String>,
 
-    /// 溢出标题滚动(marquee)段。
+    /// 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
     marquee: MarqueeConfig,
 }
 
 /// 溢出标题滚动(marquee)配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct MarqueeConfig {
     /// 滚动方式(循环 / 来回往返 / 关闭)。
@@ -101,6 +97,7 @@ pub struct MarqueeBounceConfig {
 }
 
 /// 溢出标题的滚动方式。不依赖渲染 crate;接线处映射到具体实现。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MarqueeMode {
@@ -115,6 +112,7 @@ pub enum MarqueeMode {
 }
 
 /// Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchFocusTransition {
@@ -126,6 +124,7 @@ pub enum SearchFocusTransition {
 }
 
 /// 锚定弹出菜单进场风格。不依赖渲染 crate;接线处映射到具体实现。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -138,6 +137,7 @@ pub enum MenuReveal {
 }
 
 /// 侧栏视图扫入过渡风格。不依赖渲染 crate;接线处映射到具体实现。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]

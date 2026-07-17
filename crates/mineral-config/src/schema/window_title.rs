@@ -1,11 +1,9 @@
 //! TUI 窗口标题段配置。默认值全部在 `default.lua`（deep_merge 恒补全），本文件不写。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
-/// TUI 窗口标题配置。
-///
-/// 字段私有 + `#[non_exhaustive]`，经 getter 读取。默认值以 `default.lua` 为准。
+/// TUI 窗口标题配置。四态各一套模板:template(播 / 暂共用)、idle、disconnected。
 #[config_section]
 pub struct WindowTitleConfig {
     /// 总开关。`false` 时不 push/pop 标题栈，也不发送任何 OSC 标题序列。
@@ -14,7 +12,7 @@ pub struct WindowTitleConfig {
     /// 四态状态图标字形（`StateIcon` 段按当前态解析）。
     icons: TitleIcons,
 
-    /// 有歌态（播放 / 暂停共用）模板。
+    /// 有歌态（播放 / 暂停共用）模板，段顺序即输出顺序。
     template: Vec<TitleSegment>,
 
     /// 空闲态（无当前歌）模板。
@@ -25,7 +23,7 @@ pub struct WindowTitleConfig {
 }
 
 /// 四态状态图标字形。默认符号在 `default.lua`；用户部分覆盖经 deep_merge 补全其余。
-#[derive(Clone, Debug, Deserialize, derive_getters::Getters)]
+#[config_section]
 pub struct TitleIcons {
     /// 播放中图标（动作图标惯例：按下即暂停）。
     playing: String,
@@ -79,6 +77,7 @@ pub enum TitleSegment {
 }
 
 /// 模板可引用的字段。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleField {

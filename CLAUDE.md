@@ -141,6 +141,7 @@ client 侧配置消费两条规矩:
 ## 一些容易踩的点
 
 * **不要为某个 channel 的特殊字段污染 `mineral-model`**——平铺合并是核心契约。
+* **配置的 LuaCATS stub 是 Rust schema 的派生物,不手写**(细则见 [`docs/config-schema-stub.md`](docs/config-schema-stub.md)):`meta/config.lua`(用户 LSP 补全)由 `config_section` / `source_section` / `lua_enum` 宏从 struct / enum 生成常量,`mineral-config/src/lua_stub.rs` 拼装,`config init` 落盘。加字段**只改 Rust struct + `///` + `default.lua`**,stub 自动跟(快照红 → `cargo snap`);加新段 / `lua_enum` 枚举须挂进拼装清单(漏挂 → 闭合性测试红);函数字段(`template` / `curate_playlists`)用 struct 级 `#[lua_extra_field]` 声明。**两条易踩**:① `config_section` 刻意不加 `#[serde(default)]`(default.lua 完整性守卫的地基,别破);② `///` 即用户 hover 文本,别写「字段私有 / 经 getter」这类 Rust 约定语(守卫拦)、默认值也别写进 `///`(与 default.lua 双源)。
 * **新增行为入口 / 事件类型必须更新埋点 audit**:`mineral-server/src/stats/audit.rs` 有两层穷尽 `match`——入口层(`Request` / `ScriptCmd` / `ChannelFetchKind` / `PlaylistWriteOp`,加变体须补 `Recorded(表名)` 或 `NotAnEvent(理由)`)与事件层(`BehaviorEvent` / `SystemEvent`,加变体须补发射点账本),漏补即**编译失败**,并在 commit 说明埋点归属。别加 `_ =>` 兜底绕过。注意防线兜不住「不加任何变体的全新代码路径忘发既有事件」——那层靠触发链集成测试;新增 notify / 后台链路时给对应事件补一条触发测试。
 * **改动 `crypto/` 后必跑 `cargo test --test crypto_vectors`**,服务端解不出来不会立刻爆,而是返回 `code != 200` 的 JSON,排查成本高。
 * **TUI 错误恢复顺序**:`mineral/src/main.rs` 先 `color_eyre::install()`,再进 TUI;`mineral-tui` 的 `Tui::enter` 会取走当前 panic hook 并链式包一层,先 `restore_terminal()` 再调 prev。**不要**在 main 或 TUI 内部再装"裸"的 panic hook 绕过这条链——否则 panic 时彩色报告会被 alternate screen 吞掉,或者终端 raw mode 不恢复出现乱码。Result 冒泡走 `Tui::Drop` 的 `restore_terminal()`,顺序自然正确。

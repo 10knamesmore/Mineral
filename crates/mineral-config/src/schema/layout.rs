@@ -8,26 +8,24 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
 
 /// 布局配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct LayoutConfig {
-    /// 启用完整布局的最小终端宽(列);不足走紧凑布局。
+    /// 启用完整布局的最小终端宽(列);不足走紧凑布局(无歌词 / 频谱面板)。
     min_full_width: u16,
 
-    /// 启用完整布局的最小终端高(行)。
+    /// 启用完整布局的最小终端高(行);不足走紧凑布局。
     min_full_height: u16,
 
-    /// 全屏态左栏占比(%)。
+    /// 全屏态左栏(封面 + transport)占宽百分比(0-100),余下归歌词。
     fs_left_pct: u16,
 
-    /// 全屏态频谱区高(行)。
+    /// 全屏态底部频谱通栏高(行)。
     fs_spectrum_height: u16,
 
-    /// 全屏态 transport 区高(行)。
+    /// 全屏态 transport 区高(行);内容 6 行 + 边框 2。
     fs_transport_height: u16,
 
-    /// 浮层 dock 宽占比(%)。
+    /// 停靠浮层(播放队列)dock 宽占屏宽百分比(0-100)。
     dock_w_pct: u16,
 
     /// 锚定弹出菜单(PopMenu)相对锚点行的横向对齐。

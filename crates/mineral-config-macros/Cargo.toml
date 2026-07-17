@@ -15,5 +15,8 @@ proc-macro = true
 syn   = { workspace = true }
 quote = { workspace = true }
 
+[dev-dependencies]
+color-eyre = { workspace = true }
+
 [lints]
 workspace = true

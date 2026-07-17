@@ -16,9 +16,12 @@ pub const CURATE_PLAYLISTS_SOURCE_FNS: &str = "mineral.curate_playlists_source_f
 pub const CURATE_PLAYLISTS_MERGED_FN: &str = "mineral.curate_playlists_merged_fn";
 
 /// 音乐源段聚合。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错"
+)]
 pub struct SourcesConfig {
     /// 网易云源段。
     netease: NeteaseSection,
@@ -50,6 +53,11 @@ impl SourcesConfig {
 /// 非网络源:没有 timeout / proxy 等网络旋钮(故不走 `#[source_section]`),
 /// 可配徽标色 + 后台补 meta 的节流参数。
 #[config_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "该源歌单列表的呈现策展(过滤/改名/重排)"
+)]
 pub struct MineralSection {
     /// 来源徽标色:token 名(随主题联动)或 `"#rrggbb"`(固定色)。
     color: ColorRef,
@@ -76,18 +84,22 @@ pub struct BackfillSection {
 
 /// 哔哩哔哩源段。
 ///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。共用网络字段
-/// (timeout / proxy / max_connections / color)由 `#[source_section]` 注入,
-/// 源特有字段写在体内。B站取流 URL(baseUrl)与 API 请求都要带 `Referer`
-/// (见 header 通道)。
+/// B站取流 URL(baseUrl)与 API 请求都要带 `Referer`(见 header 通道)。
 #[source_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "该源歌单(= 收藏夹)列表的呈现策展(过滤/改名/重排)"
+)]
 pub struct BilibiliSection {}
 
 /// 网易云源段。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。共用网络字段由
-/// `#[source_section]` 注入,源特有字段写在体内。
 #[source_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "该源歌单列表的呈现策展(过滤/改名/重排)"
+)]
 pub struct NeteaseSection {}
 
 /// 反序列化代理设置:Lua `false` → `None`(禁用);字符串 → `Some(url)`。

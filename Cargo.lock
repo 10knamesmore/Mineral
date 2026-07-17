@@ -2934,6 +2934,7 @@ dependencies = [
 name = "mineral-config-macros"
 version = "0.5.3"
 dependencies = [
+ "color-eyre",
  "quote",
  "syn",
 ]

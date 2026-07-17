@@ -2,38 +2,36 @@
 //!
 //! [`CoverStorageMode`] 与渲染层存储模式语义对齐,但保持解耦——接线处做映射。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
 use crate::schema::de;
 
 /// 封面配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct CoverConfig {
-    /// 封面下载 HTTP 超时(秒)。
+    /// 单张封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
 
-    /// 封面缓存最大边长(像素)。
+    /// 封面解码后等比缩放到的最大边长(像素);终端显示 ~240px 足够,大了费内存。
     max_dim: u32,
 
-    /// 封面 JPEG 重编码质量(0-100)。
+    /// 封面 JPEG 重编码质量(1-100);**仅 `storage = "resized"` 时生效**。
     jpeg_quality: u8,
 
     /// 封面磁盘存储模式。
     storage: CoverStorageMode,
 
-    /// 封面切换去抖(毫秒)。
+    /// 封面切换去抖(毫秒):列表滚动停稳此时长才开始渲染真图,期间显示程序化色块占位。
     debounce_ms: u64,
 
-    /// 封面下载并发 worker 数。
+    /// 封面下载并发 worker 数,≥1。
     download_workers: usize,
 
-    /// 封面编码并发 worker 数。
+    /// 封面终端协议编码并发 worker 数,≥1。
     encode_workers: usize,
 
-    /// kmeans 取色参数。
+    /// kmeans 取色参数(封面派生配色)。
     kmeans: KmeansConfig,
 
     /// 缓存预算(磁盘配额 + 两层 RAM 预算)。
@@ -42,11 +40,9 @@ pub struct CoverConfig {
 
 /// 封面缓存预算(挂在 `CoverConfig` 下)。三档都是 client 进程的旋钮:
 /// 磁盘是跨进程共享的持久文件,两层 RAM 是本进程常驻内存。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct CoverCacheConfig {
-    /// 磁盘缓存容量上限(字节),存原始/重编码封面文件。
+    /// 磁盘缓存容量上限(字节),存原始/重编码封面文件;可写算式如 `4 * 1024 ^ 3`。
     #[serde(deserialize_with = "de::u64_lossy")]
     disk: u64,
 
@@ -63,6 +59,7 @@ pub struct CoverCacheConfig {
 }
 
 /// 封面磁盘存储模式。不依赖渲染 crate;接线处映射到具体实现。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -75,34 +72,32 @@ pub enum CoverStorageMode {
 }
 
 /// kmeans 取色参数(挂在 `CoverConfig` 下)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct KmeansConfig {
-    /// 取色前先缩到的采样边长(像素);聚类只看颜色分布,无需全分辨率。
+    /// 取色前先缩到的采样边长(像素);聚类只看颜色分布,64 足够,调大只费 CPU。
     sample_dim: u32,
 
-    /// 提取的色板色数(聚类数 k)。
+    /// 提取的色板色数(聚类数 k),≥1;色多层次细、色少更整体。
     swatches: usize,
 
-    /// kmeans 随机种子(确定性复现)。
+    /// kmeans 随机种子(确定性复现);**必须固定**,否则同一封面每次取色不同、颜色会跳。
     seed: u64,
 
-    /// kmeans 最大迭代次数。
+    /// kmeans 最大迭代次数;封面色块少,库推荐量级即可收敛。
     max_iter: usize,
 
-    /// 收敛阈值(质心位移 < 此值即停)。
+    /// 收敛阈值(质心位移 < 此值即停);Lab 空间推荐 5.0。
     converge: f32,
 
-    /// 明度下限(Lab L,过滤过暗像素)。
+    /// 明度下限(Lab L,0-100;过滤近黑像素,避免黑背景霸占色板)。
     l_min: f32,
 
-    /// 明度上限(Lab L,过滤过亮像素)。
+    /// 明度上限(Lab L,0-100;过滤近白像素)。
     l_max: f32,
 
-    /// 彩度下限(过滤灰像素)。
+    /// 彩度下限 √(a²+b²)(过滤近灰像素;灰底对配色无贡献)。
     chroma_min: f32,
 
-    /// 有效像素占比下限(%);低于此放弃取色。
+    /// 过滤后有效像素占比低于此(%)则放弃过滤改用全部像素,0-100;保证黑白封面也有色。
     min_valid_pixels_pct: usize,
 }

@@ -7,8 +7,6 @@
 use mineral_config_macros::config_section;
 
 /// 响度包络计算配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct EnvelopeConfig {
     /// 包络定长点数(产出粒度,渲染端再按显示宽度二次重采样)。
@@ -28,8 +26,6 @@ pub struct EnvelopeConfig {
 }
 
 /// 高频搁架滤波参数(模拟原型,按采样率经双线性变换推导数字系数)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct ShelfConfig {
     /// 转折频率(Hz)。
@@ -47,8 +43,6 @@ pub struct ShelfConfig {
 }
 
 /// RLB 高通滤波参数(模拟原型,按采样率经双线性变换推导数字系数)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct HighpassConfig {
     /// 转折频率(Hz)。

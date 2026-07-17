@@ -1,0 +1,17 @@
+---@meta
+-- Mineral 配置类型 stub(LuaCATS)。这是 default.lua / config.lua 的注解真相源。
+-- 本文件由 Rust 配置 schema 生成(mineral-config 拼装宏产物,随 `config init`
+-- 分发并按版本覆盖)——手改无效,字段增删随 Rust struct 自动同步。
+--
+-- ## 怎么填
+-- - 任何字段都可省略:省略 = 用默认值(深合并)。只写你想改的。
+-- - 各字段的**默认值**见配置目录下的 `default.lua`(由 `config init` 一并放置,
+--   仅供参考——程序不读取那份文件,改它无效;要改配置写 config.lua)。
+-- - 数组值(如键绑定)是**整体替换**,不与默认值合并。
+-- - 整数字段写 Lua 数字即可;`10 * 1024 ^ 3` 这类幂运算产生的小数会被自动取整。
+-- - 填错(类型不对 / 未知字段 / 超出取值集合)不会让程序崩:整份配置回落默认,
+--   启动时给一条告警。改完跑 `mineral config check` 可离线验证。
+-- - 生效方式:**主题 / 键位 / 脚本保存即热重载**(theme / keys / behavior 由 TUI
+--   热应用;顶层 mineral.* 脚本由 daemon 重载)。其余段(audio / cache / download /
+--   sources / daemon 节拍与 TUI 构造期参数如动画时长 / 布局)重启对应进程生效——
+--   默认退出 TUI 会带走自拉起的 daemon,重开即全量生效;daemon 续命时需重启 daemon。

@@ -4,7 +4,7 @@
 //! session_gap_minutes / retention_days)影响落库、只对未来生效;`report` 子表是查询期
 //! 口径,改动可回溯重算全部历史。分界判据:改了这个旋钮,历史数据的含义变不变。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
@@ -30,6 +30,7 @@ where
 }
 
 /// 采集档位。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StatsLevel {
@@ -44,6 +45,7 @@ pub enum StatsLevel {
 }
 
 /// 搜索词落库模式。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchQueryMode {
@@ -139,8 +141,6 @@ pub struct ReportConfig {
 }
 
 /// stats 段。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct StatsConfig {
     /// 采集档位:`off` 零写入 / `core` 播放+会话 / `full` 全谱交互。
@@ -156,6 +156,7 @@ pub struct StatsConfig {
 
     /// 完全不落库的来源 name(如 `mock`,防开发期污染年度统计)。
     #[serde(deserialize_with = "super::de::string_list")]
+    #[lua_type("mineral.SourceName[]")]
     exclude_sources: Vec<String>,
 
     /// 播放活动间隔超过此值(分钟)切分新收听会话。

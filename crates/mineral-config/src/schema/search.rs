@@ -6,8 +6,6 @@ use mineral_config_macros::config_section;
 use mineral_model::SearchKind;
 
 /// 搜索配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct SearchConfig {
     /// 本地过滤搜索(`/`)的行为旋钮。
@@ -18,8 +16,6 @@ pub struct SearchConfig {
 }
 
 /// 本地过滤搜索(`/`)的行为旋钮。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct DeepSearchConfig {
     /// Playlists 视图搜索是否穿透到歌单内歌曲(总开关)。
@@ -49,13 +45,12 @@ pub struct DeepWeights {
 }
 
 /// channel 远程搜索两个下拉的白名单。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct ChannelSearchConfig {
     /// source 白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
     /// source 名是开放 string(插件源可写),没加载的名字运行时静默跳过——同一份配置
     /// 跨机器可移植。空列表 = 消费侧防呆回退全量(按名字典序)。
+    #[lua_type("mineral.SourceName[]")]
     sources: Vec<String>,
 
     /// kind 白名单:与各 source 声明的可搜集合求交,保配置顺序。

@@ -885,6 +885,29 @@ mod tests {
         Ok(())
     }
 
+    /// icons 子表拼错键名应报 unknown field(带路径)回落默认,与全树
+    /// deny_unknown_fields 行为一致,不静默吞。
+    #[test]
+    fn window_title_icons_unknown_key_rejected() -> color_eyre::Result<()> {
+        let path = temp_config(
+            "wintitleiconbad",
+            r#"return { tui = { window_title = { icons = { plying = "▷" } } } }"#,
+        )?;
+        let (cfg, warnings) = load(&path)?;
+        std::fs::remove_file(&path)?;
+        assert_eq!(wt_icons_playing(&cfg), "⏸", "回落默认");
+        assert!(
+            matches!(warnings.as_slice(), [ConfigWarning::Deserialize { .. }]),
+            "拼错的 icon 键应被拒,实得 {warnings:?}"
+        );
+        Ok(())
+    }
+
+    /// 取窗口标题 playing 图标(测试断言辅助)。
+    fn wt_icons_playing(cfg: &Config) -> &str {
+        cfg.tui().window_title().icons().playing()
+    }
+
     /// 用户可覆盖 window_title.template 为只含 album 字段的模板。
     #[test]
     fn window_title_user_template() -> color_eyre::Result<()> {

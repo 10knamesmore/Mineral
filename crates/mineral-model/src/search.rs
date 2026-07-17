@@ -61,20 +61,23 @@ impl SearchKind {
             Self::User => "user",
         }
     }
+
+    /// 全部变体,按声明序。穷举消费点(测试 / 文档生成)用它,新增 variant 须同步。
+    pub const ALL: [Self; 5] = [
+        Self::Song,
+        Self::Album,
+        Self::Artist,
+        Self::Playlist,
+        Self::User,
+    ];
 }
 
 #[cfg(test)]
 mod tests {
     use super::SearchKind;
 
-    /// 五个变体(测试穷举用)。
-    const ALL: [SearchKind; 5] = [
-        SearchKind::Song,
-        SearchKind::Album,
-        SearchKind::Artist,
-        SearchKind::Playlist,
-        SearchKind::User,
-    ];
+    /// 五个变体(穷举用,取自类型自身声明)。
+    const ALL: [SearchKind; 5] = SearchKind::ALL;
 
     /// icon / singular 与 label 同源:label 必以 icon 起头、且含 singular 词干(复数仅多个尾字符)。
     /// 守卫三处词表(label/icon/singular)别各改一处漂移。

@@ -10,6 +10,7 @@ pub mod keys;
 mod check;
 mod init;
 mod loader;
+mod lua_stub;
 mod schema;
 
 pub use check::render_check;

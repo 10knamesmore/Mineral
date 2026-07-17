@@ -20,9 +20,6 @@ const DEFAULT_BANNER: &str = "\
 /// 内置 host API stub(随版本覆盖到用户目录,供 LSP)。
 const META_MINERAL: &str = include_str!("lua/meta/mineral.lua");
 
-/// 内置 Config 类型 stub(随版本覆盖到用户目录,供 LSP)。
-const META_CONFIG: &str = include_str!("lua/meta/config.lua");
-
 /// `.luarc.json` 内容
 const LUARC_JSON: &str = include_str!("lua/luarc.json");
 
@@ -77,7 +74,11 @@ pub fn run_init(config_dir: &Path) -> color_eyre::Result<Vec<InitOutcome>> {
     let meta_dir = config_dir.join("lua").join("meta");
     std::fs::create_dir_all(&meta_dir)?;
     outcomes.push(overwrite(&meta_dir.join("mineral.lua"), META_MINERAL)?);
-    outcomes.push(overwrite(&meta_dir.join("config.lua"), META_CONFIG)?);
+    // Config 类型 stub 是 Rust schema 的投影,每次拼装最新产物覆盖。
+    outcomes.push(overwrite(
+        &meta_dir.join("config.lua"),
+        &crate::lua_stub::meta_config_lua(),
+    )?);
 
     Ok(outcomes)
 }
@@ -142,9 +143,18 @@ mod tests {
             dir.join("lua/meta/mineral.lua").is_file(),
             "host stub 应生成"
         );
+        let config_stub = std::fs::read_to_string(dir.join("lua/meta/config.lua"))?;
         assert!(
-            dir.join("lua/meta/config.lua").is_file(),
-            "config stub 应生成"
+            config_stub.starts_with("---@meta"),
+            "config stub 应以 ---@meta 开头(LuaLS 库文件标记)"
+        );
+        assert!(
+            config_stub.contains("---@class mineral.Config"),
+            "config stub 应含根 Config class(拼装产物)"
+        );
+        assert!(
+            config_stub.contains("---@field stats? mineral.StatsConfig"),
+            "config stub 应含 stats 段(手写时代缺失的正是它)"
         );
         assert!(
             first.iter().all(|o| matches!(o, InitOutcome::Written(_))),

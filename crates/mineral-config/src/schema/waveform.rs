@@ -6,8 +6,6 @@
 use mineral_config_macros::config_section;
 
 /// 进度条波形配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct WaveformConfig {
     /// 进度条是否化身全曲振幅波形;包络未就绪(未缓存 / 流播中)自动回落普通进度条。
@@ -16,7 +14,7 @@ pub struct WaveformConfig {
     /// 已播放段是否吃封面取色;关闭时用主题 accent。
     cover_color: bool,
 
-    /// 响度 → 条高的对比 gamma(渲染层幂映射 `v^contrast`,不改包络数据):
+    /// 响度 → 条高的对比 gamma(渲染层幂映射 `v^contrast`,不改包络数据,改了即时生效):
     /// 1 = 线性,越大安静段压得越低、起伏越明显。
     contrast: f32,
 

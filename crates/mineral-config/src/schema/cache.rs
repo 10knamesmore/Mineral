@@ -7,11 +7,9 @@ use mineral_config_macros::config_section;
 use crate::schema::de;
 
 /// 缓存容量段。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct CacheConfig {
-    /// 音频本体缓存容量上限(字节)。
+    /// 音频本体缓存容量上限(字节);可写算式如 `10 * 1024 ^ 3`。
     #[serde(deserialize_with = "de::u64_lossy")]
     audio_capacity: u64,
 }

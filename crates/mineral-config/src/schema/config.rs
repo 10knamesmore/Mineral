@@ -28,27 +28,24 @@ use super::waveform::WaveformConfig;
 use super::window_title::WindowTitleConfig;
 
 /// 用户运行期配置的强类型真相源。深合并后整表一次反序列化落成本类型。
-///
-/// 字段私有 + `#[non_exhaustive]`:外部只能经 [`crate::load`] 或 [`crate::Config::defaults`]
-/// 取得,经 getter 读取,不可字面量构造(对外配置 struct 约定)。
 #[config_section]
 pub struct Config {
-    /// TUI client 段:in-repo client 专属命名空间,内含 theme + keys + behavior。
+    /// TUI client 段:in-repo client 专属命名空间(主题 / 键位 / 交互手感 / 各面板观感)。
     tui: TuiConfig,
 
-    /// 音频段(音量 / 后端)。
+    /// 音频段(音量 / 后端 / 播放音质 / 引擎内参)。
     audio: AudioConfig,
 
-    /// 缓存容量段。
+    /// 缓存容量段(音频磁盘缓存)。
     cache: CacheConfig,
 
-    /// 下载段。
+    /// 下载段(音质 / 目录)。
     download: DownloadConfig,
 
-    /// 音乐源段。
+    /// 音乐源段(网易云等)。
     sources: SourcesConfig,
 
-    /// daemon 段。
+    /// daemon 段(gapless 预取 + 各间隔节拍)。
     daemon: DaemonConfig,
 
     /// 脚本运行时段(watchdog 双阈值)。
@@ -61,8 +58,6 @@ pub struct Config {
 /// TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是
 /// in-repo client,在协议上无特权,只有「打包特权」。第三方 client 的配置活在
 /// 自己生态,不进本文件;未来 in-repo client 平行加段。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取:`cfg.tui().theme()` 等。
 #[config_section]
 pub struct TuiConfig {
     /// 主题色板段(14 token + 3 roles)。
@@ -95,7 +90,7 @@ pub struct TuiConfig {
     /// 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
     animation: AnimationConfig,
 
-    /// toast 段(通知停留时长)。
+    /// toast 段(顶栏通知停留时长)。
     toast: ToastConfig,
 
     /// 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。

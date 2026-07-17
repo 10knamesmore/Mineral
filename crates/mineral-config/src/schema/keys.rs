@@ -14,7 +14,6 @@ use crate::keys::KeyChord;
 /// 键位重映射表:每个字段是一个内建动作的稳定命令名,值为绑定到它的键。
 ///
 /// 字段集与渲染层内建键表一一对应(无参动作直名;带参动作按方向/幅度展开)。
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取(如 `keys.play_pause()`)。
 /// 本段只承载强类型绑定;把命令名 + 步长参数组装成可执行动作是 client 接线的事。
 #[config_section]
 pub struct KeysConfig {
@@ -24,16 +23,16 @@ pub struct KeysConfig {
     /// 下一首。
     next: KeyBinding,
 
-    /// 上一首 / 回开头。
+    /// 上一首 / 回开头(分界见 `daemon.prev_restart_threshold_ms`)。
     prev: KeyBinding,
 
     /// 进 / 退全屏播放态。
     toggle_fullscreen: KeyBinding,
 
-    /// 进 / 退 Search 布局态。
+    /// 进 / 退 Search 布局态(全屏态屏蔽)。
     open_search: KeyBinding,
 
-    /// 打开浮动播放队列。
+    /// 打开浮动播放队列(已开时再按 = 关闭)。
     open_queue: KeyBinding,
 
     /// 打开退出确认浮层。
@@ -42,13 +41,13 @@ pub struct KeysConfig {
     /// 打开键位 cheatsheet 浮层(已开时再按 = 关闭)。
     open_help: KeyBinding,
 
-    /// 循环歌词副语言。
+    /// 循环歌词副语言(原文 → 翻译 → 罗马音)。
     cycle_lyric: KeyBinding,
 
-    /// 进入搜索输入态。
+    /// 进入搜索输入态(全屏态屏蔽)。
     enter_search: KeyBinding,
 
-    /// 在当前视图「进入」。
+    /// 在当前视图「进入」:进入歌单 / 播放选中曲。
     activate: KeyBinding,
 
     /// 在当前视图「返回」(搜索非空时先清搜索)。

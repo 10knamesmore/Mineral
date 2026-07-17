@@ -12,42 +12,44 @@
 //! decay(衰减,播放中向更低目标回落 = 余韵)、release(释音,暂停时落向 0);
 //! sustain 即 FFT 实时值本身,无旋钮。
 
-use mineral_config_macros::config_section;
+use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
 /// 频谱面板配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct SpectrumConfig {
     /// 渲染风格。
     style: SpectrumStyle,
 
-    /// FFT 窗大小(样本)。**外键**:`audio.tap_capacity` 须 ≥ 2 × 此值。
+    /// FFT 窗大小(样本),建议 2 的幂:大 = 低频细节多但瞬态钝、起播首窗慢
+    /// (4096@48kHz ≈ 85ms),小 = 跟手但低频糊。**外键**:`audio.tap_capacity`
+    /// 须 ≥ 2 × 此值,否则 UI 卡一帧就丢样本出毛刺。
     fft_size: usize,
 
-    /// 频率轴下界(Hz)。
+    /// 频率轴下界(Hz);低于此的能量不显示。
     f_min: f32,
 
     /// 频率轴上界(Hz);超过奈奎斯特时取奈奎斯特。
     f_max: f32,
 
-    /// 频率轴对数化程度(0 线性 ..= 1 纯对数)。
+    /// 频率轴对数化程度(0 线性 ..= 1 纯对数,纯对数每 octave 等宽);
+    /// 略小于 1 可收掉低频「宽平顶」。
     log_axis_blend: f32,
 
-    /// dB 标定下界(低于此条高为 0)。
+    /// dB 标定下界(低于此条高为 0);抬高 = 砍安静细节整体变矮,降低 = 噪声底也可见。
+    /// 须 < `db_ceil`。
     db_floor: f32,
 
-    /// dB 标定上界(高于此满高);必须 > `db_floor`。
+    /// dB 标定上界(高于此满高);必须 > `db_floor`,两者共同决定显示动态范围。
     db_ceil: f32,
 
-    /// 频带统计中峰值的占比(0 纯均值 ..= 1 纯峰值)。
+    /// 频带统计中峰值的占比(0 纯均值 = 平 ..= 1 纯峰值 = 躁);中间值兼顾动态与稳定。
     peak_mix: f32,
 
-    /// 是否启用色相缓慢漂移。
+    /// 无封面色时,整体色相是否缓慢漂移。
     hue_rotate: bool,
 
-    /// 任何状态下条的最小高度(1/8 字符单位)。
+    /// 任何状态下条的最小高度(1/8 字符单位,0-64);`0` = 静默时面板全空。
     baseline_min: u16,
 
     /// 起音(attack):条高**上升**到位 90% 所需毫秒。越小越跟手(鼓点立即顶上),
@@ -58,7 +60,8 @@ pub struct SpectrumConfig {
     /// 动画感主要来自这里——比 `attack_ms` 大才有"快攻慢放"的运动轨迹。
     decay_ms: u32,
 
-    /// 释音(release):暂停/无信号时条高落向 0(止于 `baseline_min`)90% 所需毫秒。
+    /// 释音(release):暂停/无信号时条高落向 0(止于 `baseline_min`)90% 所需毫秒
+    /// (bars 专属;scope / waterfall / terrain 暂停整幅冻结)。
     release_ms: u32,
 
     /// 色相旋转一整圈(360°)的毫秒数。
@@ -67,7 +70,8 @@ pub struct SpectrumConfig {
     /// 封面就绪后从当前配色缓动到封面色场的过渡毫秒数。
     cover_fade_ms: u32,
 
-    /// 色场纵向采样偏移(‰):顶端比底端沿色带多偏向高频多少。
+    /// 色场纵向采样偏移(‰,0-1000):顶端比底端沿色带多偏向高频多少,
+    /// 拉开条底 / 条顶明度层次。
     cover_vshift_permille: u32,
 
     /// bars 风格参数;`style = "bars"` 时生效。
@@ -84,6 +88,7 @@ pub struct SpectrumConfig {
 }
 
 /// 频谱渲染风格。不依赖渲染 crate;接线处映射到具体画法。
+#[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -103,8 +108,6 @@ pub enum SpectrumStyle {
 }
 
 /// bars 风格参数(挂在 `SpectrumConfig` 下):peak cap / trail 装饰 + 弹簧物理。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct BarsConfig {
     /// 是否显示 peak cap(`▔` 浮在条顶)。
@@ -113,7 +116,7 @@ pub struct BarsConfig {
     /// 是否显示 trail(peak 与 bar 间余韵 fade)。
     show_trail: bool,
 
-    /// 是否启用 peak 弹簧物理(过冲 + 阻尼回弹)。
+    /// 是否启用 peak 弹簧物理(过冲 + 阻尼回弹);`false` = 直接吸附。
     spring_peak: bool,
 
     /// 新 peak 跟涨后在原位悬停的毫秒数。
@@ -122,17 +125,17 @@ pub struct BarsConfig {
     /// peak 悬停结束后,从满高(64 单位)落到 0 的满程毫秒数。
     peak_fall_ms: u32,
 
-    /// 弹簧刚度(每 tick `force += stiffness × (target - pos)`)。
+    /// 弹簧刚度(每 tick `force += stiffness × (target - pos)`);0.1-1.0 合理,
+    /// 太大瞬间过冲像 bug。
     /// **注**:弹簧是无量纲系数制,与 `animation.frame_tick_ms` 耦合——改帧率会改弹簧手感。
     spring_stiffness: f32,
 
-    /// 弹簧阻尼(每 tick `force -= damping × velocity`)。同上,与帧率耦合。
+    /// 弹簧阻尼(每 tick `force -= damping × velocity`)。同上,与帧率耦合;
+    /// < 2√刚度 时欠阻尼有回弹感,越大越稳越不弹。
     spring_damping: f32,
 }
 
 /// scope 风格参数(挂在 `SpectrumConfig` 下)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct ScopeConfig {
     /// 每根包络列聚合的音频时长(毫秒)= 滚动速度:越小滚得越快、可见时间窗越短。
@@ -140,8 +143,6 @@ pub struct ScopeConfig {
 }
 
 /// waterfall 风格参数(挂在 `SpectrumConfig` 下)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct WaterfallConfig {
     /// 推行间隔(毫秒)。`▀` 半块一字符行装两帧 = 每半格 `push_ms / 2` 毫秒;
@@ -155,8 +156,6 @@ pub struct WaterfallConfig {
 }
 
 /// terrain 风格参数(挂在 `SpectrumConfig` 下)。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct TerrainConfig {
     /// 推层间隔(毫秒)。层数 × 此值 = 地形时间纵深。

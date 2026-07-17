@@ -6,8 +6,6 @@
 use mineral_config_macros::config_section;
 
 /// 脚本运行时段。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 #[derive(Copy)]
 pub struct ScriptConfig {

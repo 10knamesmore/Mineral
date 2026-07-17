@@ -3,10 +3,8 @@
 use mineral_config_macros::config_section;
 
 /// toast 配置。
-///
-/// 字段私有 + `#[non_exhaustive]`,经 getter 读取。
 #[config_section]
 pub struct ToastConfig {
-    /// 通知 toast 停留时长(秒)。
+    /// 一次性通知(下载完成 / 配置告警等)toast 停留时长(秒)。
     flash_ttl_secs: u64,
 }
