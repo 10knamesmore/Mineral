@@ -955,6 +955,165 @@ mod tests {
         Ok(())
     }
 
+    /// 在 `rect` 内找选中行前缀 `▌` 的前景色(找不到 = 无高亮行)。
+    fn hi_fg(
+        buf: &ratatui::buffer::Buffer,
+        rect: ratatui::layout::Rect,
+    ) -> Option<ratatui::style::Color> {
+        for y in rect.y..rect.y.saturating_add(rect.height) {
+            for x in rect.x..rect.x.saturating_add(rect.width) {
+                if let Some(c) = buf.cell((x, y)).filter(|c| c.symbol() == "▌") {
+                    return Some(c.fg);
+                }
+            }
+        }
+        None
+    }
+
+    /// 造一个「专辑详情已在 detail 栈顶」的 probed App:结果列 1 张专辑、详情 4 首曲目。
+    /// 高亮焦点系列测试共用。
+    fn app_with_album_detail() -> color_eyre::Result<crate::App> {
+        use mineral_model::{Album, AlbumId};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .build(),
+            ]),
+            has_more: None,
+        });
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .songs(crate::test_support::endserenading(4))
+                    .build(),
+            ),
+        });
+        Ok(app)
+    }
+
+    /// detail 选中行高亮必须随焦点变化:焦点在 Detail → accent 亮;焦点回 Results →
+    /// 暗调(subtext),与 results 列失焦变暗对称——两栏同时亮 accent 会看不出焦点在哪。
+    /// 每次切焦点后 tick 到焦点环 settle(稳态端点色;滑动中途的渐变另有测试)。
+    #[test]
+    fn detail_highlight_pales_when_focus_on_results() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app_with_album_detail()?;
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        for _ in 0..64 {
+            app.state.channel_search.tick();
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        for _ in 0..4 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        let detail = crate::components::layout::shared::compute::compute_search(
+            app.state.frame_area.get(),
+            app.state.cfg.tui().layout(),
+        )
+        .right
+        .ok_or_else(|| color_eyre::eyre::eyre!("search 布局应有 detail 面板"))?;
+        assert_eq!(
+            hi_fg(t.backend().buffer(), detail),
+            Some(app.theme.accent),
+            "焦点在 Detail:选中行 accent 亮"
+        );
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        for _ in 0..64 {
+            app.state.channel_search.tick();
+        }
+        for _ in 0..4 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        assert_eq!(
+            hi_fg(t.backend().buffer(), detail),
+            Some(app.theme.subtext),
+            "焦点回 Results:detail 选中行退暗调"
+        );
+        Ok(())
+    }
+
+    /// 焦点环滑动中途,两栏选中行高亮沿同一进度渐变:失焦端 accent→subtext、得焦端
+    /// subtext→accent,半程恰为两色中点——高亮不随焦点瞬切,与浮动环同步。
+    #[test]
+    fn highlight_color_fades_along_focus_slide() -> color_eyre::Result<()> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        use crate::render::anim::Transition;
+
+        let mut app = app_with_album_detail()?;
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        for _ in 0..64 {
+            app.state.channel_search.tick();
+        }
+        // 切回 Results,把焦点环推到约半程(9/18;Transition 内部步进有整数舍入,
+        // 不锁精确 500‰,只锁「两端都在渐变中途」)。
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        let mut ring = Transition::expanding(18);
+        for _ in 0..9 {
+            ring.tick();
+        }
+        app.state.channel_search.focus_ring = ring;
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        for _ in 0..4 {
+            t.draw(|f| crate::view::draw(f, &app))?;
+        }
+        let areas = crate::components::layout::shared::compute::compute_search(
+            app.state.frame_area.get(),
+            app.state.cfg.tui().layout(),
+        );
+        let detail = areas
+            .right
+            .ok_or_else(|| color_eyre::eyre::eyre!("search 布局应有 detail 面板"))?;
+        let detail_fg = hi_fg(t.backend().buffer(), detail)
+            .ok_or_else(|| color_eyre::eyre::eyre!("detail 面板应有高亮选中行"))?;
+        let results_fg = hi_fg(t.backend().buffer(), areas.left)
+            .ok_or_else(|| color_eyre::eyre::eyre!("results 面板应有高亮选中行"))?;
+        for (label, fg) in [
+            ("失焦端(detail)", detail_fg),
+            ("得焦端(results)", results_fg),
+        ] {
+            assert!(
+                strictly_between(fg, app.theme.subtext, app.theme.accent),
+                "{label} 半程应为 subtext/accent 中间色,实际 {fg:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// 逐通道判断 `c` 是否严格落在 `a`/`b` 两色之间(通道相等的分量允许相等;要求至少
+    /// 一个通道严格在内,即不贴任一端点)。非 RGB 主题恒 `false`(渐变本就降级二态)。
+    fn strictly_between(
+        c: ratatui::style::Color,
+        a: ratatui::style::Color,
+        b: ratatui::style::Color,
+    ) -> bool {
+        use ratatui::style::Color;
+        let (Color::Rgb(cr, cg, cb), Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (c, a, b)
+        else {
+            return false;
+        };
+        let inside = |x: u8, lo: u8, hi: u8| x >= lo.min(hi) && x <= lo.max(hi);
+        inside(cr, ar, br) && inside(cg, ag, bg) && inside(cb, ab, bb) && c != a && c != b
+    }
+
     /// 复现用户路径:artist 详情 → Albums 区 → 下钻进某专辑 → 在专辑帧 activate 选中曲应播放。
     #[test]
     fn artist_drilled_album_activate_plays() -> color_eyre::Result<()> {

@@ -13,6 +13,7 @@ use mineral_model::Song;
 
 use crate::components::layout::shared::marquee::RowMarquee;
 use crate::components::layout::shared::text::alias_span;
+use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 
@@ -85,12 +86,23 @@ pub fn header_row(cols: TrackColumns, theme: &Theme) -> Row<'static> {
     Row::new(cols.header_cells()).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD))
 }
 
-/// 选中行整行高亮样式（bg surface0 + fg accent + BOLD）。
-pub fn highlight_style(theme: &Theme) -> Style {
-    Style::new()
-        .bg(theme.surface0)
-        .fg(theme.accent)
-        .add_modifier(Modifier::BOLD)
+/// 选中行整行高亮样式,`focus_permille` = 面板焦点度(千分比):满值 accent 亮(BOLD)、
+/// `0` 退暗调(subtext,无 BOLD,示意光标仍在、可回位),中间值沿焦点环滑动 subtext→accent
+/// 渐变(非 RGB 主题 lerp 降级半程二态,BOLD 阈值同在半程,两者同步切)。
+/// results 列与 detail 面板共用,两侧失焦表现对称。
+pub fn highlight_style(theme: &Theme, focus_permille: u16) -> Style {
+    let fg = lerp_color(
+        theme.subtext,
+        theme.accent,
+        u64::from(focus_permille),
+        /*denom*/ 1000,
+    );
+    let style = Style::new().bg(theme.surface0).fg(fg);
+    if focus_permille >= 500 {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
 }
 
 /// ♥ gutter：loved → `♥`(red)，否则空（恒占一格，像 vim signcolumn，不抖后续列）。

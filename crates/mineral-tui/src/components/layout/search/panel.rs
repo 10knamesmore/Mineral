@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
+use super::detail::highlight_style;
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
@@ -330,15 +331,13 @@ pub fn draw_results(
         theme,
     );
     // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
-    // 焦点在结果列 → accent 亮;否则暗调(surface0 底 + subtext 字,无 BOLD),示意可回位。
-    let highlight = if rs.focus == SearchFocus::Results {
-        Style::new()
-            .bg(theme.surface0)
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::new().bg(theme.surface0).fg(theme.subtext)
-    };
+    let highlight = highlight_style(
+        theme,
+        rs.focus_permille(
+            *state.cfg.tui().animation().search_focus_transition(),
+            SearchFocus::Results,
+        ),
+    );
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD)))
         .row_highlight_style(highlight)
