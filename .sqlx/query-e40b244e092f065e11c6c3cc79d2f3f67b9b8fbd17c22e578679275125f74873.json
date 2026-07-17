@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cache_evictions (ts, session_id, cache_key, bytes) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e40b244e092f065e11c6c3cc79d2f3f67b9b8fbd17c22e578679275125f74873"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO gapless_boundaries (ts, session_id, ns, song_value, result) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "a605c6393b0ec2fa90a86d516b5df0f4556b706db3a9490edc443728d33d63cb"
+}

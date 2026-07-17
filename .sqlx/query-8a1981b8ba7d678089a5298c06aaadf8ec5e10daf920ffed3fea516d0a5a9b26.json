@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT event AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM script_lifecycle WHERE ts >= ? AND ts < ?\n               GROUP BY event ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "8a1981b8ba7d678089a5298c06aaadf8ec5e10daf920ffed3fea516d0a5a9b26"
+}

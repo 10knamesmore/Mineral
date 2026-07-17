@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(query, query_hash) AS \"label!: String\", COUNT(*) AS \"count!: i64\"\n               FROM searches WHERE ts >= ? AND ts < ?\n               GROUP BY COALESCE(query, query_hash) ORDER BY 2 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "024d0450966495e02f2924f5c0d3ee3683d17b7f06a325ca5d79ed3f3aa22122"
+}

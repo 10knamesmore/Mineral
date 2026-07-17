@@ -30,6 +30,16 @@ struct Entry {
     last_access: u64,
 }
 
+/// 一条被 LRU 驱逐出缓存的记录(供上层埋点 / 诊断;缓存本身不依赖它)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Evicted {
+    /// 被驱逐的缓存键。
+    pub key: String,
+
+    /// 释放的字节数。
+    pub bytes: u64,
+}
+
 /// 内存镜像。
 struct Index {
     /// key → 项。
@@ -216,7 +226,7 @@ impl CacheIndex {
         };
         let last_access = backend.insert_mirror(key, relpath.to_owned(), bytes);
         backend.upsert_row(key, relpath, bytes, last_access).await?;
-        backend.evict_to_capacity().await
+        backend.evict_to_capacity().await.map(drop)
     }
 
     /// 把一个**已落盘**的源文件 move 入库(落到 `<root>/<subdir>/<file_name>`,撞名追加 ` (N)`),
@@ -232,16 +242,16 @@ impl CacheIndex {
     ///   - `file_name`: 落盘文件名(含扩展名,调用方负责 sanitize)
     ///
     /// # Return:
-    ///   入库成功 / 降级返回 `Ok(())`。
+    ///   入库成功返回本次 LRU 驱逐掉的记录(可空;供上层埋点);降级返回空 vec。
     pub async fn record_file(
         &self,
         key: &str,
         src: &Path,
         subdir: &str,
         file_name: &str,
-    ) -> color_eyre::Result<()> {
+    ) -> color_eyre::Result<Vec<Evicted>> {
         let Some(backend) = self.backend.as_ref() else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let existing = backend.index.lock().map.get(key).map(|e| e.relpath.clone());
         let root = backend.root.clone();
@@ -299,7 +309,7 @@ impl CacheIndex {
         backend
             .upsert_row(key, &relpath, bytes, last_access)
             .await?;
-        backend.evict_to_capacity().await
+        backend.evict_to_capacity().await.map(drop)
     }
 
     /// 当前索引内容的只读快照(读内存镜像,不触盘)。供 CLI `cache status` 展示用。
@@ -482,15 +492,16 @@ impl Backend {
     ///
     /// # Return:
     ///   驱逐完成返回 `Ok(())`。
-    async fn evict_to_capacity(&self) -> color_eyre::Result<()> {
+    async fn evict_to_capacity(&self) -> color_eyre::Result<Vec<Evicted>> {
+        let mut evicted = Vec::<Evicted>::new();
         let Some(cap) = self.capacity else {
-            return Ok(());
+            return Ok(evicted);
         };
         loop {
             let victim = {
                 let mut idx = self.index.lock();
                 if idx.total_bytes <= cap {
-                    return Ok(());
+                    return Ok(evicted);
                 }
                 let pick = idx
                     .map
@@ -501,14 +512,15 @@ impl Backend {
                     Some((key, relpath, bytes)) => {
                         idx.map.remove(&key);
                         idx.total_bytes = idx.total_bytes.saturating_sub(bytes);
-                        (key, relpath)
+                        (key, relpath, bytes)
                     }
-                    None => return Ok(()),
+                    None => return Ok(evicted),
                 }
             };
-            let (key, relpath) = victim;
+            let (key, relpath, bytes) = victim;
             drop(std::fs::remove_file(self.root.join(&relpath)));
             self.delete_row(&key).await?;
+            evicted.push(Evicted { key, bytes });
         }
     }
 }
@@ -625,7 +637,7 @@ mod tests {
     use sqlx::SqlitePool;
     use sqlx::sqlite::SqlitePoolOptions;
 
-    use super::CacheIndex;
+    use super::{CacheIndex, Evicted};
 
     /// 开一个内存 sqlite 池(每个测试独立)。
     async fn mem_pool() -> color_eyre::Result<SqlitePool> {
@@ -715,6 +727,33 @@ mod tests {
         assert!(idx.get("a").is_some());
         assert!(idx.get("b").is_none(), "最旧 b 应被驱逐");
         assert!(idx.get("c").is_some());
+        Ok(())
+    }
+
+    /// record_file 返回本次 LRU 驱逐掉的记录(供 cache_evictions 埋点):驱逐 b(5 字节)。
+    #[tokio::test]
+    async fn record_file_returns_evicted_entries() -> color_eyre::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path().join("root");
+        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(10)).await?;
+        let first = idx
+            .record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
+            .await?;
+        assert!(first.is_empty(), "首入未超容量,无驱逐");
+        idx.record_file("b", &make_src(d.path(), "b", b"12345")?, "s", "b.bin")
+            .await?; // 共 10
+        let _ = idx.get("a"); // 触碰 a → b 变最旧
+        let evicted = idx
+            .record_file("c", &make_src(d.path(), "c", b"123")?, "s", "c.bin")
+            .await?; // +3 超 → 驱逐最旧 b
+        assert_eq!(
+            evicted,
+            vec![Evicted {
+                key: "b".to_owned(),
+                bytes: 5
+            }],
+            "应返回被驱逐的 b(5 字节)"
+        );
         Ok(())
     }
 

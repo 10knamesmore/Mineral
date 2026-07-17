@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                COALESCE(SUM(listen_ms), 0) AS \"listen_ms!: i64\",\n                COUNT(*) AS \"plays!: i64\",\n                COALESCE(SUM(CASE WHEN finish_reason = 'eof' THEN 1 ELSE 0 END), 0) AS \"completed!: i64\",\n                COALESCE(SUM(CASE WHEN finish_reason = 'skip' THEN 1 ELSE 0 END), 0) AS \"skipped!: i64\",\n                COUNT(DISTINCT ns || ':' || song_value) AS \"distinct_songs!: i64\",\n                COUNT(DISTINCT date(started_at / 1000, 'unixepoch')) AS \"active_days!: i64\"\n               FROM plays WHERE started_at >= ? AND started_at < ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "skipped!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "distinct_songs!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "active_days!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7fa48fe93e094b48e4bdf11234c81a59a4a5cd603df2b45690c1b327166b14c0"
+}

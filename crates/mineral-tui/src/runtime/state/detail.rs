@@ -390,6 +390,31 @@ impl DetailFrame {
         }
     }
 
+    /// 从这一帧起播时的队列语境（埋点 provenance）：专辑帧 / 歌曲帧看所属专辑 → `Album`、
+    /// 歌手 Hot 区 → `Artist`、歌单帧 → `Playlist`；数据未到 / 无可播容器（歌手 Albums 区行是
+    /// 专辑容器，不在此起单曲队列）→ `None`。与 [`Self::song_list`] 取整列的几路一一对应——
+    /// 起播的那一列曲目归属哪个容器，语境就报哪个。
+    pub(crate) fn play_context(&self) -> Option<mineral_protocol::QueueContextWire> {
+        use mineral_protocol::QueueContextWire;
+        match (&self.entity, self.section, &self.data) {
+            (
+                EntityRef::Artist(a),
+                ArtistSection::Hot,
+                Some(DetailData::Artist {
+                    detail: Some(_), ..
+                }),
+            ) => Some(QueueContextWire::Artist { id: a.id.clone() }),
+            (EntityRef::Artist(_), _, _) => None,
+            (_, _, Some(DetailData::Album(a))) => {
+                Some(QueueContextWire::Album { id: a.id.clone() })
+            }
+            (EntityRef::Playlist(p), _, Some(DetailData::Tracks(_))) => {
+                Some(QueueContextWire::Playlist { id: p.id.clone() })
+            }
+            _ => None,
+        }
+    }
+
     /// artist 帧头部 meta 该用哪份 artist：优先 fetch 回来的完整 detail（channel 已聚合成
     /// 字段齐全的 `Artist`——fans/计数/简介都有），未到货退回结果列 entity 占位（仅 name/fans）。
     /// 非 artist 帧 → `None`。渲染层据此读字段，不必关心数据来自哪个端点。

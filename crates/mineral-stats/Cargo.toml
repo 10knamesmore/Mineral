@@ -1,0 +1,37 @@
+[package]
+name        = "mineral-stats"
+description = "行为埋点落库层:独立 stats.db,采集播放/会话/全谱交互事件,供跨源长周期聚合"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[features]
+# 确定性种子生成器(src/fixture.rs)。默认关,压测经 required-features 打开;crate 内单元
+# 测试走 test cfg 自动可见,不必开此 feature。
+fixture = []
+
+[dependencies]
+color-eyre    = { workspace = true }
+sqlx          = { workspace = true }
+tokio         = { workspace = true }
+mineral-model = { workspace = true }
+rustc-hash    = { workspace = true }
+typed-builder = { workspace = true }
+serde         = { workspace = true }
+
+[dev-dependencies]
+tempfile     = "3"
+mineral-test = { workspace = true }
+criterion    = { workspace = true }
+
+[[bench]]
+name    = "stats_bench"
+harness = false
+# 压测用确定性种子 fixture(仅 fixture feature 下编译)。
+required-features = ["fixture"]
+
+[lints]
+workspace = true

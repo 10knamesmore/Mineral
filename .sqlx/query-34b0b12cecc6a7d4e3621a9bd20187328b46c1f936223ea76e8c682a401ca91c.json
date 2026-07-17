@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO queue_ops (ts, session_id, actor, op, ns, song_value, count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "34b0b12cecc6a7d4e3621a9bd20187328b46c1f936223ea76e8c682a401ca91c"
+}

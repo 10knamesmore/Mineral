@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ns, song_value, started_at, listen_ms,\n                          finish_reason AS \"finish_reason: FinishReason\"\n                   FROM plays WHERE started_at >= ? AND started_at < ?\n                   ORDER BY started_at ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "ns",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "song_value",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "started_at",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "listen_ms",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "finish_reason: FinishReason",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bbe48096254530c05396cc241883a19b0c2d2eff9d08f05e76ae89107493583e"
+}

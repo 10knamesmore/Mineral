@@ -8,6 +8,8 @@ use mineral_model::{
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
+use crate::kind::ChannelFetchKindTag;
+use crate::outcome::TaskOutcome;
 use crate::write::{PlaylistWriteOp, WriteError};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
@@ -154,6 +156,28 @@ pub enum TaskEvent {
 
         /// 失败时的结构化错误;`None` = 成功。
         error: Option<WriteError>,
+    },
+
+    /// 任意 channel 取数收束(成功 / 失败 / 取消都发)。纯埋点信号(fetches),与具体
+    /// 结果事件(`PlayUrlReady` / `SearchResults` 等)并行——server 记录后不转发 client。
+    FetchDone {
+        /// 取数种类。
+        kind: ChannelFetchKindTag,
+
+        /// 来源。
+        source: SourceKind,
+
+        /// 目标 qualified 引用;只有 source 的形态(my_playlists / search)无目标为 `None`。
+        target_ref: Option<String>,
+
+        /// 是否 user 优先级触发(否则系统链路,如预取 / 回填)。
+        from_user: bool,
+
+        /// 收束结局。
+        outcome: TaskOutcome,
+
+        /// 耗时 ms。
+        latency_ms: u64,
     },
 }
 

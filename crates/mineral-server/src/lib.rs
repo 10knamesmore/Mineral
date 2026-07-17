@@ -40,6 +40,7 @@ mod serve;
 mod server;
 mod session;
 mod state;
+mod stats;
 
 pub use client::{Client, ClientHandle};
 pub use config::{ServerConfig, resolve_audio_mode};
@@ -48,3 +49,6 @@ pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use script_bridge::{ScriptParts, ScriptPumps, ScriptReloadParts};
 pub use script_reload::spawn_script_reloader;
 pub use server::Server;
+pub use stats::{
+    PendingPlay, StatsRecorder, now_ms, params_from_config, pending_from_start, stats_play_mode,
+};

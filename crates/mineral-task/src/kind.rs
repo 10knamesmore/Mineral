@@ -153,6 +153,19 @@ impl ChannelFetchKind {
             Self::AlbumDetail { id } => id.namespace(),
         }
     }
+
+    /// 取数目标的 qualified 引用(埋点 fetches.target_ref 用);只有 source 的形态无目标。
+    pub fn target_ref(&self) -> Option<String> {
+        match self {
+            Self::MyPlaylists { .. } | Self::Search { .. } => None,
+            Self::PlaylistDetail { id } => Some(id.qualified()),
+            Self::SongUrl { song_id, .. }
+            | Self::Lyrics { song_id }
+            | Self::RemotePlayCount { song_id } => Some(song_id.qualified()),
+            Self::ArtistDetail { id } | Self::ArtistAlbums { id, .. } => Some(id.qualified()),
+            Self::AlbumDetail { id } => Some(id.qualified()),
+        }
+    }
 }
 
 /// [`ChannelFetchKind`] 的 wire-friendly 标签:无字段 enum,可哈希、可序列化。
@@ -195,6 +208,22 @@ impl ChannelFetchKindTag {
             ChannelFetchKind::ArtistDetail { .. } => Self::ArtistDetail,
             ChannelFetchKind::ArtistAlbums { .. } => Self::ArtistAlbums,
             ChannelFetchKind::AlbumDetail { .. } => Self::AlbumDetail,
+        }
+    }
+
+    /// 稳定 snake_case 名(埋点 fetches.fetch_kind 用)。
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MyPlaylists => "my_playlists",
+            Self::PlaylistDetail => "playlist_detail",
+            Self::SongUrl => "song_url",
+            Self::Lyrics => "lyrics",
+            Self::RemotePlayCount => "remote_play_count",
+            Self::Search => "search",
+            Self::ArtistDetail => "artist_detail",
+            Self::ArtistAlbums => "artist_albums",
+            Self::AlbumDetail => "album_detail",
         }
     }
 }

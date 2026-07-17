@@ -303,6 +303,9 @@ async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::SetQueue {
         queue: vec![song("s1"), song("s2")],
         target_id: SongId::new(SourceKind::NETEASE, "s2"),
+        context: mineral_protocol::QueueContextWire::Search {
+            query: "李志".to_owned(),
+        },
     })
     .await?;
     Ok(())
@@ -435,6 +438,7 @@ mod proptests {
                 Request::SetQueue {
                     queue,
                     target_id: SongId::new(SourceKind::NETEASE, target.as_str()),
+                    context: mineral_protocol::QueueContextWire::Unknown,
                 }
             }),
             arb_song().prop_map(|s| Request::ToggleLove(Box::new(s))),
@@ -478,8 +482,18 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
         Priority::User,
     ))
     .await?;
-    req_round_trips(Request::QueueInsertNext(Box::new(song("ins")))).await?;
-    req_round_trips(Request::QueueAppend(Box::new(song("app")))).await?;
+    req_round_trips(Request::QueueInsertNext {
+        song: Box::new(song("ins")),
+        context: mineral_protocol::QueueContextWire::Manual,
+    })
+    .await?;
+    req_round_trips(Request::QueueAppend {
+        song: Box::new(song("app")),
+        context: mineral_protocol::QueueContextWire::Search {
+            query: "q".to_owned(),
+        },
+    })
+    .await?;
     req_round_trips(Request::ChannelCaps).await?;
     resp_round_trips(Response::ChannelCaps(vec![(
         SourceKind::NETEASE,

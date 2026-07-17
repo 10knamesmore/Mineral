@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO action_invocations (ts, session_id, actor, name, trigger, outcome) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "3d6934958ba248004511b5a31857bede40d0e2c529bb9d757c239d3224197a15"
+}

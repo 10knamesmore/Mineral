@@ -5,5 +5,6 @@ pub mod cache;
 pub mod channel;
 pub mod config;
 pub mod serve;
+pub mod stats;
 pub mod status;
 pub mod stop;

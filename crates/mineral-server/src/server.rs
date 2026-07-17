@@ -61,6 +61,7 @@ impl Server {
         config: ServerConfig,
         config_tree: serde_json::Value,
         script: Option<mineral_script::ScriptSender>,
+        stats: crate::StatsRecorder,
     ) -> color_eyre::Result<Self> {
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(&channels, *config.channel_workers_per());
@@ -80,11 +81,21 @@ impl Server {
                 slices: &config,
                 tree: config_tree,
             },
-            notify,
+            crate::player::Sinks { notify, stats },
         );
         // 读回上次会话:恢复播放模式(其余字段仅打日志,不自动恢复队列/进度)。
         // 同步 await:保证在 serve / 首次 PlayerSync 之前生效,client 一连上看到的就是恢复后的模式。
-        restore_last_session(&player).await;
+        let session_restored = restore_last_session(&player).await;
+        // 埋点:daemon 启动(app_lifecycle;audio 已 spawn 故后端已定,会话恢复已知)。
+        // in-proc TUI 传 disabled recorder → 此调用静默 no-op,不污染。
+        let audio_backend = match player.audio_snapshot().backend {
+            mineral_audio::AudioBackend::Device => mineral_stats::AudioBackend::Device,
+            mineral_audio::AudioBackend::Null => mineral_stats::AudioBackend::Null,
+        };
+        player
+            .inner
+            .stats
+            .daemon_started(audio_backend, session_restored);
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
@@ -197,7 +208,11 @@ async fn open_media_cache(persist: &ServerStore, capacity: u64) -> MediaCache {
 /// 启动时读回上次会话:**恢复播放模式**,其余字段(队列 / 进度 / 音量)仅打日志不应用
 /// (不自动恢复播放)。模式名解析不出(脏数据)warn 后保持默认;读不到走 debug;
 /// 读出错仅 warn,不影响 daemon 启动。
-async fn restore_last_session(player: &PlayerCore) {
+///
+/// # Return:
+///   是否读到并采纳了上次会话(app_lifecycle.session_restored 用):`Ok(Some)` 且模式
+///   可解析为 `true`;无历史 / 脏模式 / 读出错为 `false`(均视为「未恢复」)。
+async fn restore_last_session(player: &PlayerCore) -> bool {
     match player.load_session().await {
         Ok(Some(snap)) => {
             let restored = match PlayMode::from_name(&snap.play_mode) {
@@ -222,10 +237,15 @@ async fn restore_last_session(player: &PlayerCore) {
                 restored_play_mode = restored,
                 "读到上次会话"
             );
+            restored
         }
-        Ok(None) => mineral_log::debug!(target: "session", "无历史会话"),
+        Ok(None) => {
+            mineral_log::debug!(target: "session", "无历史会话");
+            false
+        }
         Err(e) => {
             mineral_log::warn!(target: "session", error = mineral_log::chain(&e), "读取上次会话失败");
+            false
         }
     }
 }

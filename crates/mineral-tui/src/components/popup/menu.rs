@@ -31,8 +31,12 @@ pub(crate) enum MenuAction {
         /// 起播曲(也是 set_queue 的 target)。
         song: Box<Song>,
 
-        /// 队列上下文(所在列表整列);空 Vec 落地时退化为 `[song]`。
+        /// 所在列表整列曲目(队列内容);空 Vec 落地时退化为 `[song]`。
         queue: Vec<Song>,
+
+        /// 队列语境(埋点 provenance):按菜单打开时所在 surface 推导——库内歌曲归当前
+        /// 歌单、搜索结果归搜索词、详情面板归当前容器身份,拿不到则 `Unknown`。
+        context: mineral_protocol::QueueContextWire,
     },
 
     /// 插播:插到当前曲之后(下一首播)。

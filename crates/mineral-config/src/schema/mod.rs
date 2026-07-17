@@ -19,6 +19,7 @@ mod script;
 mod search;
 mod sources;
 mod spectrum;
+mod stats;
 mod theme;
 mod toast;
 mod waveform;
@@ -50,6 +51,7 @@ pub use sources::{
 pub use spectrum::{
     BarsConfig, ScopeConfig, SpectrumConfig, SpectrumStyle, TerrainConfig, WaterfallConfig,
 };
+pub use stats::{ReportConfig, RetentionDays, SearchQueryMode, StatsConfig, StatsLevel};
 pub use theme::{
     AnsiSlot, ColorRef, ColorValue, DynamicThemeConfig, HexColor, SearchHitConfig, TextStyle,
     ThemeConfig, TokenName,

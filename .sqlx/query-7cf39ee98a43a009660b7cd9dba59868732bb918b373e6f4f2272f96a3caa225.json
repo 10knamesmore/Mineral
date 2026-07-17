@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT name AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM action_invocations WHERE ts >= ? AND ts < ?\n               GROUP BY name ORDER BY 2 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "7cf39ee98a43a009660b7cd9dba59868732bb918b373e6f4f2272f96a3caa225"
+}

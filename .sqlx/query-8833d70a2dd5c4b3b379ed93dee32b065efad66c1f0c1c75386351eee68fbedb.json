@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT decision AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM hook_fires WHERE ts >= ? AND ts < ?\n               GROUP BY decision ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "8833d70a2dd5c4b3b379ed93dee32b065efad66c1f0c1c75386351eee68fbedb"
+}

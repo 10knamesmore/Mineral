@@ -119,6 +119,8 @@ pub async fn run(
                 // (无人订阅重放;TUI 用的是自己 bootstrap 的 cfg)。
                 mineral_config::default_tree()?,
                 /*script*/ None,
+                // in-proc 无持久化埋点:disabled no-op recorder。
+                mineral_server::StatsRecorder::disabled(),
             )
             .await?;
             // in-proc 也接系统媒体服务(MPRIS),单跑 TUI 时桌面控件 / 媒体键照样联动;

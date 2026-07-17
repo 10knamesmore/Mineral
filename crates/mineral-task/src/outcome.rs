@@ -1,7 +1,9 @@
 //! 任务终态。
 
+use serde::{Deserialize, Serialize};
+
 /// 任务终态。详细错误进 log,这里只暴露三态,方便 UI / 调用方判断要不要重试。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskOutcome {
     /// 业务成功。
     Ok,

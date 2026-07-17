@@ -51,7 +51,11 @@ async fn local_hit_computes_and_pushes_envelope() -> color_eyre::Result<()> {
         MediaCache::disabled(),
     )?;
 
-    core.play_song(&s);
+    core.play_song(
+        &s,
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     let (id, envelope) = wait_envelope(&core).await?;
     assert_eq!(id, s.id);
     assert_eq!(
@@ -97,7 +101,11 @@ async fn db_hit_pushes_cached_envelope_without_recompute() -> color_eyre::Result
         MediaCache::disabled(),
     )?;
 
-    core.play_song(&s);
+    core.play_song(
+        &s,
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     let (id, envelope) = wait_envelope(&core).await?;
     assert_eq!(id, s.id);
     assert_eq!(envelope, fingerprint, "db 命中应直推缓存数据,不重算");

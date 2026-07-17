@@ -54,8 +54,16 @@ impl PlayerCore {
 
     /// client 上报终端 UI 状态(serve 层处理 `Request::TerminalState`)。
     /// 下 tick `check_props` 自然 diff 下发,不走独立推送。
-    pub(crate) fn set_terminal_state(&self, report: TerminalReport) {
-        *self.inner.ui_state.lock() = Some(report);
+    ///
+    /// # Return:
+    ///   fullscreen **相对上一份已知态翻转**时给新值(供 fullscreen_changes 埋点);
+    ///   无前态(client 刚连上,不算切换)或未变则 `None`。
+    pub(crate) fn set_terminal_state(&self, report: TerminalReport) -> Option<bool> {
+        let new_fullscreen = report.fullscreen;
+        let mut slot = self.inner.ui_state.lock();
+        let toggled = matches!(slot.as_ref(), Some(prev) if prev.fullscreen != new_fullscreen);
+        *slot = Some(report);
+        toggled.then_some(new_fullscreen)
     }
 
     /// client 断开时清空终端状态(`terminal` 属性回 `None`,脚本可感知离线)。

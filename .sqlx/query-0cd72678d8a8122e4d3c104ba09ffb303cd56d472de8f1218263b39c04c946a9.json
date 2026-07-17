@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO playlist_ops (ts, session_id, actor, op, playlist_ref, ns, song_value, song_count, outcome, error_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "0cd72678d8a8122e4d3c104ba09ffb303cd56d472de8f1218263b39c04c946a9"
+}

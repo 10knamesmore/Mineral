@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key AS \"key!: i64\", COUNT(*) AS \"plays!: i64\",\n                    COALESCE(SUM(listen_ms), 0) AS \"listen_ms!: i64\"\n                   FROM (SELECT CAST(strftime('%H', started_at / 1000, 'unixepoch') AS INTEGER) AS key, listen_ms\n                         FROM plays WHERE started_at >= ? AND started_at < ?)\n                   GROUP BY key ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5ad045b478a75234e3da4e2af1f8568d9c64d40d05a3e16ef73ff192963e8e61"
+}

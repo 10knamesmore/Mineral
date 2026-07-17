@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO url_resolutions (ts, session_id, ns, song_value, quality_requested, outcome, for_prefetch) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "8359ba92ec2f4bef8bdd126c5d9183cc37c41dc38250eb3199dac644bd045406"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT context_kind AS \"kind!\", context_ref AS \"reference\",\n                          COUNT(*) AS \"plays!: i64\", SUM(listen_ms) AS \"listen_ms!: i64\"\n                   FROM plays\n                   WHERE started_at >= ? AND started_at < ?\n                   GROUP BY context_kind, context_ref ORDER BY 3 DESC, context_kind LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "reference",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "87c88c1d08b4bfd2974a494237e6586b18b5cfc3ecf4cd66c1550791a94a08b3"
+}

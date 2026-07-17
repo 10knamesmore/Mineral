@@ -414,6 +414,8 @@ impl AppState {
             }
             // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
             TaskEvent::PlaylistsFetched { .. } => {}
+            // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
+            TaskEvent::FetchDone { .. } => {}
             TaskEvent::PlaylistDetailFetched { id, playlist } => {
                 // 歌单详情含元信息 + 曲目;library 与 detail 都只取曲目(歌单元信息走
                 // sidebar 列表那份 / detail 帧的 entity 占位)。

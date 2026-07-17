@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO prefetches (ts, session_id, ns, song_value, source, resolution) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ea2de25a19d1e1804cbcf0df7b66d93cb5d3ea31868f260761de05abd8583eab"
+}

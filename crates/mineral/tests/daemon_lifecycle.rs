@@ -114,15 +114,21 @@ impl Daemon {
     /// 在同一隔离环境下跑任意单参数 CLI 子命令(与 daemon 共享 `MINERAL_SOCKET_DIR`
     /// 才能连上同一 socket)。
     fn cli_output(&self, subcommand: &str) -> color_eyre::Result<std::process::Output> {
+        self.cli_args_output(&[subcommand])
+    }
+
+    /// 在同一隔离环境下跑多参数 CLI(如 `stats status`);共享 `XDG_DATA_HOME` 故读到
+    /// daemon 写的同一 stats.db。`stats` 走离线直读、不连 socket,与 daemon 无 busy 竞争。
+    fn cli_args_output(&self, args: &[&str]) -> color_eyre::Result<std::process::Output> {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-        cmd.arg(subcommand)
+        cmd.args(args)
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("MINERAL_SOCKET_DIR", &self.sock_dir)
             .stdin(Stdio::null());
         cmd.output()
-            .wrap_err_with(|| format!("run `mineral {subcommand}`"))
+            .wrap_err_with(|| format!("run `mineral {}`", args.join(" ")))
     }
 
     /// 轮询直到 socket 可连(daemon ready),超时则报错。
@@ -407,6 +413,54 @@ fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
     assert!(
         stdout.contains("backend:    null (no audio device)"),
         "status 应报告 null 后端,实际 stdout:\n{stdout}"
+    );
+    Ok(())
+}
+
+/// 从 `stats status` 输出末行解析 `events: N`(格式 `plays: A   sessions: B   events: C`)。
+fn parse_events(stdout: &str) -> Option<i64> {
+    stdout
+        .rsplit("events:")
+        .next()
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|n| n.parse::<i64>().ok())
+}
+
+/// 端到端:真 daemon 起来写 app_lifecycle start(Server::spawn),SIGTERM graceful
+/// 关停 flush 写 stop —— `stats status` 读同一 stats.db,start 后 events≥1、stop 后严格
+/// 增长(证停机 flush 把末尾事件真落了盘,没被进程退出截断)。
+#[test]
+fn daemon_records_app_lifecycle_around_run() -> color_eyre::Result<()> {
+    let mut daemon = Daemon::spawn_null("applifecycle")?;
+    // 直读 stats.db(离线,不占 busy):poll 到 start 事件落库(events≥1)。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let running = loop {
+        let out = daemon.cli_args_output(&["stats", "status"])?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if out.status.success()
+            && let Some(n) = parse_events(&stdout)
+            && n >= 1
+        {
+            break n;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "app_lifecycle start 超时未落 stats.db,最后 stdout:\n{stdout}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // graceful 关停:daemon 记 app_lifecycle stop + flush,进程退出前必落库。
+    daemon.sigterm()?;
+    daemon.wait_for_exit()?;
+    let out = daemon.cli_args_output(&["stats", "status"])?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let after = parse_events(&stdout)
+        .ok_or_else(|| color_eyre::eyre::eyre!("stop 后 status 无 events 行:\n{stdout}"))?;
+    assert!(
+        after > running,
+        "graceful stop 应 flush 落 app_lifecycle stop(running={running} → after={after}):\n{stdout}"
     );
     Ok(())
 }

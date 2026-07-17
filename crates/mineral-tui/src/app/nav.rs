@@ -32,6 +32,9 @@ pub(crate) enum BrowseEffect {
 
         /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
         song: Box<Song>,
+
+        /// 队列语境(埋点 provenance:库内起播恒 Playlist{当前歌单 id})。
+        context: mineral_protocol::QueueContextWire,
     },
 
     /// 全屏态滚动歌词(歌词数据是 model,落地走既有 [`AppState::scroll_lyrics`])。
@@ -294,10 +297,18 @@ impl BrowsePage {
                     .into_iter()
                     .map(|sv| sv.data)
                     .collect();
+                // 埋点队列语境:库内起播来自当前歌单(nav.playlist.sel 在进库时已钉到它)。
+                let context = model.library.playlists.get(self.nav.playlist.sel()).map_or(
+                    mineral_protocol::QueueContextWire::Unknown,
+                    |p| mineral_protocol::QueueContextWire::Playlist {
+                        id: p.data.id.clone(),
+                    },
+                );
                 // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。
                 BrowseEffect::PlayQueue {
                     queue,
                     song: Box::new(song),
+                    context,
                 }
             }
         }
@@ -388,8 +399,12 @@ impl App {
     /// 落地 Browse 页吐回的副作用意图。Browse 只产意图,client / 落盘 / lyrics 全在此收口。
     fn apply_browse_effect(&mut self, eff: BrowseEffect) {
         match eff {
-            BrowseEffect::PlayQueue { queue, song } => {
-                self.client.set_queue(queue, song.id.clone());
+            BrowseEffect::PlayQueue {
+                queue,
+                song,
+                context,
+            } => {
+                self.client.set_queue(queue, song.id.clone(), context);
                 self.client.play_song(*song);
             }
             BrowseEffect::ScrollLyrics(step) => self.state.scroll_lyrics(step),

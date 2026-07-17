@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO spawns (ts, session_id, actor, program, outcome, exit_code) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "3dbc86eb869b393db193e351fb93a479c36399ede012cfdd5299a4d36a8fba32"
+}

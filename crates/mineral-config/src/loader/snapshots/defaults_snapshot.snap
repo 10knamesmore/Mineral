@@ -879,4 +879,16 @@ Config {
         hook_timeout_ms: 2000,
         spawn_max_concurrent: 8,
     },
+    stats: StatsConfig {
+        level: Full,
+        collect: {},
+        search_queries: Raw,
+        exclude_sources: [],
+        session_gap_minutes: 30,
+        retention_days: Forever,
+        report: ReportConfig {
+            min_listen_secs: 30,
+            top_limit: 10,
+        },
+    },
 }

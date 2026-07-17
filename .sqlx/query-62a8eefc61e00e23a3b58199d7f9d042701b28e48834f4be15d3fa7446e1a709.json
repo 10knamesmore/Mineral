@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO connection_rejects (ts, session_id, actor, reason) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "62a8eefc61e00e23a3b58199d7f9d042701b28e48834f4be15d3fa7446e1a709"
+}

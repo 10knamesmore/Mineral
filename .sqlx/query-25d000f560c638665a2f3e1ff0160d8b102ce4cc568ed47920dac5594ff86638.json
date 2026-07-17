@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT result AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM gapless_boundaries WHERE ts >= ? AND ts < ?\n               GROUP BY result ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "25d000f560c638665a2f3e1ff0160d8b102ce4cc568ed47920dac5594ff86638"
+}

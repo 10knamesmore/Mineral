@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT fetch_kind AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM fetches WHERE ts >= ? AND ts < ?\n               GROUP BY fetch_kind ORDER BY 2 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "102bd4fef958b36202fb2aebc6ed383681c629b0c13b4b8e86b6548b2334dec4"
+}

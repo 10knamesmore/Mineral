@@ -1,0 +1,21 @@
+---
+source: crates/mineral-cli/src/subcommands/stats/render/markdown.rs
+description: "stats report md:年终盘点存档(标题 + 总览 + Top 歌曲 + 来源表)"
+expression: "report_md(&sample_report(), \"2026\")"
+---
+# Mineral 盘点 · 2026
+
+## 总览
+- 播放 12 次(完播 9 · 跳过 3)
+- 收听 1h30m
+- 涉及 7 首 · 活跃 4 天 · 新发现 1 首
+- 会话 2 · 最长 20m · 最长连续 3 天
+
+## Top 歌曲
+1. 稻香 — 9 次 · 9m
+
+
+## 来源分布
+| 值 | 次数 |
+|---|---|
+| netease | 8 |

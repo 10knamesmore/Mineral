@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO fullscreen_changes (ts, session_id, actor, fullscreen) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "16e1024dd4521245fd2a0d16a62da984b7484e19c0290d7ed3d9a1f9557a81ff"
+}

@@ -18,16 +18,20 @@ mineral-channel-netease = { workspace = true }
 mineral-channel-bilibili = { workspace = true }
 mineral-config          = { workspace = true }
 mineral-log             = { workspace = true }
+mineral-model           = { workspace = true }
 mineral-paths           = { workspace = true }
 mineral-persist         = { workspace = true }
 mineral-protocol        = { workspace = true }
 mineral-script          = { workspace = true }
 mineral-server          = { workspace = true }
+mineral-stats           = { workspace = true }
+rustc-hash              = { workspace = true }
 serde_json              = { workspace = true }
+time                    = { workspace = true }
 tokio                   = { workspace = true }
 
 [dev-dependencies]
-mineral-test = { workspace = true }
+mineral-test  = { workspace = true }
 insta        = { workspace = true }
 
 [lints]

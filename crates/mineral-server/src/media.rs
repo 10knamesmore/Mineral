@@ -37,39 +37,35 @@ pub(crate) fn start(player: PlayerCore) -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 系统媒体控件命令 → 播放控制。
+/// 系统媒体控件命令 → 播放控制。走 PlayerCore 的 transport 方法(执行 + 埋点同点):
+/// 媒体键是用户按的,actor=User,与界面按键同样入库。
 fn handle_command(player: &PlayerCore, cmd: MediaCommand) {
+    use mineral_stats::Actor;
     let audio = player.audio();
     match cmd {
-        MediaCommand::Play => audio.resume(),
-        MediaCommand::Pause => audio.pause(),
-        MediaCommand::Toggle => {
-            if audio.snapshot().playing {
-                audio.pause();
-            } else {
-                audio.resume();
-            }
-        }
-        MediaCommand::Next => player.next_song(),
-        MediaCommand::Previous => player.prev_or_restart(),
+        MediaCommand::Play => player.resume_playback(Actor::User),
+        MediaCommand::Pause => player.pause_playback(Actor::User),
+        MediaCommand::Toggle => player.toggle_playback(Actor::User),
+        MediaCommand::Next => player.next_song(Actor::User),
+        MediaCommand::Previous => player.prev_or_restart(Actor::User),
         MediaCommand::Stop => player.stop_playback(),
         MediaCommand::SeekForward(delta) => {
             let pos = audio.snapshot().position_ms;
-            audio.seek(pos.saturating_add(dur_ms(delta)));
+            player.seek_playback(pos.saturating_add(dur_ms(delta)), Actor::User);
         }
         MediaCommand::SeekBackward(delta) => {
             let pos = audio.snapshot().position_ms;
-            audio.seek(pos.saturating_sub(dur_ms(delta)));
+            player.seek_playback(pos.saturating_sub(dur_ms(delta)), Actor::User);
         }
-        MediaCommand::SetPosition(at) => audio.seek(dur_ms(at)),
+        MediaCommand::SetPosition(at) => player.seek_playback(dur_ms(at), Actor::User),
         // 控件只写单个维度;读当前 PlayMode、改对应维度、塌缩回四档(report_loop 随即回报真实档)。
         MediaCommand::SetShuffle(on) => {
             let mode = player.with_state(|st| st.play_mode);
-            player.set_play_mode(mode.with_shuffle(on));
+            player.set_play_mode(mode.with_shuffle(on), Actor::User);
         }
         MediaCommand::SetLoop(loop_mode) => {
             let mode = player.with_state(|st| st.play_mode);
-            player.set_play_mode(mode.with_repeat(loop_to_repeat(loop_mode)));
+            player.set_play_mode(mode.with_repeat(loop_to_repeat(loop_mode)), Actor::User);
         }
     }
 }

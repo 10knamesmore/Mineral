@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ns AS \"ns!\", song_value AS \"song_value!\" FROM\n                 (SELECT ns, song_value, MIN(started_at) AS first FROM plays GROUP BY ns, song_value)\n               WHERE first >= ? AND first < ? ORDER BY first LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ns!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "song_value!",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "0935ef99af5a919bd8eb8970513a2637f17dca1ec3e52b5933fa7b437aba43e2"
+}

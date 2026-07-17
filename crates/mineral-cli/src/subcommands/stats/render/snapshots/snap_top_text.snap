@@ -1,0 +1,8 @@
+---
+source: crates/mineral-cli/src/subcommands/stats/render/text.rs
+description: "stats top songs text:命中名 + 缺名回落 qualified id"
+expression: "render_top(&entries, \"top songs:\")"
+---
+top songs:
+ 1. 稻香  9 次  9m
+ 2. bilibili:BV2  3 次  3m

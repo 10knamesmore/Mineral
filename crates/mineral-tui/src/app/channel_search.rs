@@ -48,6 +48,9 @@ pub(crate) enum SearchEffect {
 
         /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
         song: Box<Song>,
+
+        /// 队列语境(埋点 provenance:顶层结果记搜索词、详情面板记容器身份)。
+        context: mineral_protocol::QueueContextWire,
     },
 
     /// 提交一条首页搜索任务(User 优先级)。
@@ -62,9 +65,8 @@ pub(crate) enum SearchEffect {
         query: String,
     },
 
-    /// 懒分页预取下一页(`offset > 0`):光标近结果列底时按当前 source/kind/query 续拉。
-    /// 与 [`Self::Submit`] 同走 Search 任务,只是 `page.offset` 非零——scheduler 按 offset 进
-    /// dedup key,在途同 offset 自动并掉,无需 client 侧再设在途闸。
+    /// 懒分页预取下一页(`offset > 0`):光标近结果列底时按当前 source/kind/query 续拉。与
+    /// [`Self::Submit`] 同走 Search 任务,只 `page.offset` 非零;offset 进 dedup key,在途同页并掉。
     FetchMore {
         /// 目标 source。
         source: SourceKind,
@@ -109,9 +111,13 @@ impl App {
     /// 落地 Search 页吐回的副作用意图。Page 只产意图、不碰 `client` / `notifications`,全在此收口。
     fn apply_search_effect(&mut self, eff: SearchEffect) {
         match eff {
-            SearchEffect::PlayQueue { queue, song } => {
+            SearchEffect::PlayQueue {
+                queue,
+                song,
+                context,
+            } => {
                 // 与 library / detail 起播一致:先建队列上下文,再起播选中曲(漏 play_song 会换队不响)。
-                self.client.set_queue(queue, song.id.clone());
+                self.client.set_queue(queue, song.id.clone(), context);
                 self.client.play_song(*song);
             }
             SearchEffect::Submit {
@@ -138,8 +144,7 @@ impl App {
                 offset,
             } => {
                 // 续拉用与首页一致的页大小(`Page::default().limit`):榨干推断与 next_offset
-                // 页对齐都锚定同一 limit,混用页大小会让 offset↔页号换算错位;offset 进
-                // dedup key,在途同页自动并掉。
+                // 页对齐都锚定同一 limit,混用会让 offset↔页号换算错位;offset 进 dedup key。
                 let limit = mineral_channel_core::Page::default().limit;
                 self.client.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Search {
@@ -278,12 +283,30 @@ impl SearchPage {
             Some((queue, song)) => SearchEffect::PlayQueue {
                 queue,
                 song: Box::new(song),
+                context: self.search_context(),
             },
             None => {
                 self.focus_search_panel_forward();
                 SearchEffect::None
             }
         }
+    }
+
+    /// 顶层搜索结果起播的队列语境(埋点:Search{query},取 active session 查询词)。
+    pub(crate) fn search_context(&self) -> mineral_protocol::QueueContextWire {
+        let query = self
+            .current()
+            .map(|s| s.query().to_owned())
+            .unwrap_or_default();
+        mineral_protocol::QueueContextWire::Search { query }
+    }
+
+    /// detail 面板起播的队列语境:当前帧定出容器身份(专辑 / 歌手 / 歌单)则报它,否则回落搜索词。
+    pub(crate) fn detail_context(&self) -> mineral_protocol::QueueContextWire {
+        self.active_results()
+            .and_then(|kr| kr.detail.current())
+            .and_then(crate::runtime::state::DetailFrame::play_context)
+            .unwrap_or_else(|| self.search_context())
     }
 
     /// 结果列选中行若是 song,给出(整列队列, 选中曲);非 song 结果(容器)→ `None`。
@@ -326,7 +349,11 @@ impl SearchPage {
                 }
                 SearchEffect::None
             }
-            DetailActivate::Play { queue, song } => SearchEffect::PlayQueue { queue, song },
+            DetailActivate::Play { queue, song } => SearchEffect::PlayQueue {
+                queue,
+                song,
+                context: self.detail_context(),
+            },
             DetailActivate::None => SearchEffect::None,
         }
     }
@@ -417,9 +444,8 @@ impl SearchPage {
         };
         // set_sel 内联 detail 复位(真移动才复位、钳制不动则保留下钻栈)。
         kr.set_sel(next);
-        // 预取:光标进入距已加载末行 prefetch_rows 行内、且桶未榨干 → 续拉 next_offset 那页。
-        // 在途去重交给 scheduler(offset 进 dedup key),故移动即发、不在 client 设在途闸。
-        // kr 派生量先落本地,释放可变借用,才能再不可变借 self 组 effect。
+        // 预取:光标距已加载末行 ≤ prefetch_rows 且桶未榨干 → 续拉 next_offset 那页(在途去重
+        // 交给 scheduler)。kr 派生量先落本地释放可变借用,才能再不可变借 self 组 effect。
         let exhausted = kr.exhausted;
         let rows_to_bottom = last.saturating_sub(kr.sel());
         let next_offset = kr.next_offset;
@@ -1034,6 +1060,56 @@ mod tests {
             ops.iter()
                 .any(|(op, arg)| *op == "play_song" && arg == &want_q),
             "回归:detail 起播必须 play_song(漏掉则队列换了却不响):{ops:?}"
+        );
+        Ok(())
+    }
+
+    /// F2 回归:detail 面板起播记容器语境而非搜索词——专辑详情曲目 activate 产出的 PlayQueue
+    /// 应带 Album{id},否则整批播放被 albums-via-context 误算成 search。
+    #[test]
+    fn detail_album_play_carries_album_context() -> color_eyre::Result<()> {
+        let (mut app, _q) =
+            crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                mineral_model::Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .build(),
+            ]),
+            has_more: None,
+        });
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                mineral_model::Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .songs(crate::test_support::endserenading(3))
+                    .build(),
+            ),
+        });
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        let super::SearchEffect::PlayQueue { context, .. } = app
+            .state
+            .channel_search
+            .activate_detail_item(/*sweep_ticks*/ 1)
+        else {
+            color_eyre::eyre::bail!("专辑详情 activate 应产出 PlayQueue");
+        };
+        assert_eq!(
+            context,
+            mineral_protocol::QueueContextWire::Album {
+                id: AlbumId::new(SourceKind::NETEASE, "al1")
+            },
+            "detail 专辑起播记 Album 语境"
         );
         Ok(())
     }

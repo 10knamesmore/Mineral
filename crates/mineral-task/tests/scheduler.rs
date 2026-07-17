@@ -149,12 +149,24 @@ async fn submit_and_done_ok() -> color_eyre::Result<()> {
     let h = sched.submit(my_playlists_kind(), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 
+    // 结果事件(PlaylistsFetched)+ 每次取数收束的 FetchDone 埋点信号。
     let evs = sched.drain_events();
-    assert_eq!(evs.len(), 1);
-    assert!(matches!(
-        evs.first(),
-        Some(TaskEvent::PlaylistsFetched { .. })
-    ));
+    assert_eq!(evs.len(), 2, "结果事件 + FetchDone");
+    assert!(
+        evs.iter()
+            .any(|e| matches!(e, TaskEvent::PlaylistsFetched { .. })),
+        "应含结果事件"
+    );
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            TaskEvent::FetchDone {
+                outcome: TaskOutcome::Ok,
+                ..
+            }
+        )),
+        "应含 FetchDone(Ok) 埋点信号"
+    );
     Ok(())
 }
 

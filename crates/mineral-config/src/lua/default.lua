@@ -356,4 +356,17 @@ return {
     hook_timeout_ms = 2000, -- before_stream/before_download 拦截 hook 软超时;超时放行 + warn,不卡播放
     spawn_max_concurrent = 8, -- mineral.spawn 子进程并发上限,防脚本 fork 炸;0 = 不限
   },
+  -- 行为埋点(采集侧旋钮只对未来生效;report 是查询期口径,改动可回溯重算全部历史)。
+  stats = {
+    level = "full", -- 采集档位: off 零写入 / core 播放+会话 / full 全谱交互
+    collect = {}, -- 档位基线上按事件微调(kind = true/false);plays/sessions 是 core 本体不可关
+    search_queries = "raw", -- 搜索词: raw 原文 / hashed 不可逆散列(保次数去重,丢原文) / off 不记
+    exclude_sources = {}, -- 完全不落库的来源(如 {"mock"}),防开发期 mock 播放污染年度统计
+    session_gap_minutes = 30, -- 播放活动间隔超过此值(分钟)切分新收听会话
+    retention_days = false, -- 流水保留天数; false = 永久(盘点跨年,默认)
+    report = { -- 查询期口径: 只影响报告计算, 不影响落库
+      min_listen_secs = 30, -- 有效播放阈值: 听不足此秒数不计入 top 榜/完播率(流水照记)
+      top_limit = 10, -- 各 top 榜长度(CLI --top 可再覆盖)
+    },
+  },
 }

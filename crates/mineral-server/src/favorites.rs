@@ -75,18 +75,25 @@ fn should_import(id: &SongId, before: &FxHashSet<SongId>, now: &FxHashSet<SongId
 
 impl PlayerCore {
     /// 设/取消一首歌的收藏(♥)为显式值:锁内**写 persist(事实来源,所有源通用)+ 推 canonical**,
-    /// 锁外尽力镜像远端。
+    /// 锁外尽力镜像远端(+ 记 love_changes;采集在此单点,client / 脚本入口同享)。
     ///
     /// # Params:
     ///   - `id`: 目标歌曲;namespace 决定 persist scope 与远端 channel。
     ///   - `loved`: `true` 收藏、`false` 取消。
-    pub(crate) async fn set_favorite(&self, id: &SongId, loved: bool) -> color_eyre::Result<()> {
+    ///   - `actor`: 发起方(界面 / 脚本 / CLI)。
+    pub(crate) async fn set_favorite(
+        &self,
+        id: &SongId,
+        loved: bool,
+        actor: mineral_stats::Actor,
+    ) -> color_eyre::Result<()> {
         let ns = id.namespace();
         {
             let _guard = self.inner.favorites_lock.lock().await;
             self.persist().scope(ns).set_loved(id, loved).await?;
             self.push_current_favorited_ids(ns).await;
         }
+        self.record_love_change(id, loved, actor);
         // script/CLI love 只握 id(不像 TUI toggle 自带整首 Song):触发后台补 meta,让缺 meta
         // 的这首(及其它待补的)渐进进聚合视图。取消收藏无需 meta。
         if loved {
@@ -97,6 +104,19 @@ impl PlayerCore {
         Ok(())
     }
 
+    /// love 变更的埋点出口(显式设值 / 翻转共用;远端镜像结果本轮不追踪 → `None`)。
+    fn record_love_change(&self, id: &SongId, loved: bool, actor: mineral_stats::Actor) {
+        self.record_behavior(
+            actor,
+            mineral_stats::BehaviorEvent::LoveChange {
+                song: id.clone(),
+                loved,
+                origin: mineral_stats::LoveOrigin::User,
+                remote_mirror: None,
+            },
+        );
+    }
+
     /// 切换一首歌的收藏(♥):锁内**读当前态 → 翻转 → 写 persist → 推 canonical**(原子,防与
     /// sync 交错),锁外尽力镜像远端。
     ///
@@ -105,10 +125,15 @@ impl PlayerCore {
     ///
     /// # Params:
     ///   - `song`: 目标歌曲(id 的 namespace 决定 persist scope 与远端 channel)。
+    ///   - `actor`: 发起方(界面 / 脚本 / CLI)。
     ///
     /// # Return:
     ///   切换后的新 loved 态。
-    pub(crate) async fn toggle_favorite(&self, song: &Song) -> color_eyre::Result<bool> {
+    pub(crate) async fn toggle_favorite(
+        &self,
+        song: &Song,
+        actor: mineral_stats::Actor,
+    ) -> color_eyre::Result<bool> {
         let ns = song.id.namespace();
         let new = {
             let _guard = self.inner.favorites_lock.lock().await;
@@ -126,6 +151,7 @@ impl PlayerCore {
             self.push_current_favorited_ids(ns).await;
             new
         };
+        self.record_love_change(&song.id, new, actor);
         self.refresh_aggregate_favorites().await;
         self.mirror_remote_favorite(&song.id, new).await;
         Ok(new)

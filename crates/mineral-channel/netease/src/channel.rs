@@ -487,22 +487,8 @@ impl MusicChannel for NeteaseChannel {
             .map_err(Error::Other)
     }
 
-    async fn on_played(&self, id: &SongId, completed: bool, listen_ms: u64) -> Result<()> {
-        let store = self.persist.scope(SourceKind::NETEASE);
-        if completed {
-            store
-                .record_play(id, listen_ms)
-                .await
-                .map_err(Error::Other)?;
-        } else {
-            store.record_skip(id).await.map_err(Error::Other)?;
-        }
-        store
-            .push_history(id, completed, listen_ms)
-            .await
-            .map_err(Error::Other)?;
-        Ok(())
-    }
+    // on_played 打点职责移交 daemon 的 StatsRecorder(见 mineral-server::stats):channel
+    // 不再本地落库,回到 trait 默认空实现(其他源不实现也不丢数据)。
 }
 
 #[cfg(test)]

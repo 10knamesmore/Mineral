@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO config_overrides (ts, session_id, actor, path) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "f9548ae4baa70ba72f6a59fc7fb8ada3fdb74f7afd17089c800db9c87e776b57"
+}

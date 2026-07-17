@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT outcome AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM cache_harvests WHERE ts >= ? AND ts < ?\n               GROUP BY outcome ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "62d6e08f6c03bf36c59b2ad6ed7f0bd15e3ff790c2906a8ae7650a9993432d09"
+}

@@ -5,12 +5,26 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, DownloadProgress, DownloadTarget, Event, PlayerSync, PlayerVersions,
-    SongStatsWire,
+    QueueContextWire, SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 
 use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
+
+/// wire 队列语境 → 埋点 [`mineral_stats::QueueContext`](边缘适配:protocol 不依赖 stats)。
+fn queue_context_from_wire(wire: QueueContextWire) -> mineral_stats::QueueContext {
+    use mineral_stats::QueueContext;
+    match wire {
+        // wire 侧总带原文;落库前由 recorder 按 search_queries 隐私档 redact。
+        QueueContextWire::Search { query } => QueueContext::Search { query: Some(query) },
+        QueueContextWire::Playlist { id } => QueueContext::Playlist { id },
+        QueueContextWire::Album { id } => QueueContext::Album { id },
+        QueueContextWire::Artist { id } => QueueContext::Artist { id },
+        QueueContextWire::Manual => QueueContext::Manual,
+        QueueContextWire::Unknown => QueueContext::Unknown,
+    }
+}
 
 /// 同进程 client handle:持 [`PlayerCore`] + [`PcmPuller`] 的 Arc 句柄,
 /// 所有调用直接 forward。`Clone` 廉价。
@@ -50,7 +64,36 @@ impl ClientHandle {
     /// # Return:
     ///   切换后的新 loved 状态。
     pub(crate) async fn toggle_love_async(&self, song: &Song) -> color_eyre::Result<bool> {
-        self.player.toggle_favorite(song).await
+        // 埋点在 toggle_favorite 单点(client / 脚本入口同享),此处只穿透 actor。
+        self.player
+            .toggle_favorite(song, mineral_stats::Actor::User)
+            .await
+    }
+
+    /// 记一次连接拒绝(connection_rejects)。actor=System:daemon 主动拒外来连接,
+    /// 非任何 user/script/cli 发起,归系统。
+    ///
+    /// # Params:
+    ///   - `reason`: 拒绝原因(busy / 版本不匹配)
+    pub(crate) fn record_connection_reject(&self, reason: mineral_stats::RejectReason) {
+        self.player
+            .inner
+            .stats
+            .event(mineral_stats::StatsEvent::Behavior {
+                actor: mineral_stats::Actor::System,
+                event: mineral_stats::BehaviorEvent::ConnectionReject { reason },
+            });
+    }
+
+    /// 记一次行为域事件(user 发起,stamp now_ms)。
+    fn record_behavior(&self, event: mineral_stats::BehaviorEvent) {
+        self.player
+            .inner
+            .stats
+            .event(mineral_stats::StatsEvent::Behavior {
+                actor: mineral_stats::Actor::User,
+                event,
+            });
     }
 
     /// 触发脚本具名动作并等待结果(serve 层处理 `InvokeAction` 用)。
@@ -68,7 +111,23 @@ impl ClientHandle {
         ctx: Option<mineral_protocol::KeyContext>,
         args: Vec<String>,
     ) -> color_eyre::Result<()> {
-        self.player.invoke_script_action(name, ctx, args).await
+        // trigger:带 KeyContext = TUI 键触发;无 = CLI `mineral action`。
+        let trigger = if ctx.is_some() {
+            mineral_stats::ActionTrigger::Tui
+        } else {
+            mineral_stats::ActionTrigger::Cli
+        };
+        let result = self.player.invoke_script_action(name, ctx, args).await;
+        self.record_behavior(mineral_stats::BehaviorEvent::ActionInvocation {
+            name: name.to_owned(),
+            trigger,
+            outcome: if result.is_ok() {
+                mineral_stats::OpOutcome::Ok
+            } else {
+                mineral_stats::OpOutcome::Failed
+            },
+        });
+        result
     }
 
     /// 渲染一个复制模板并等待结果(serve 层处理 `RenderCopyTemplate` 用)。
@@ -84,7 +143,28 @@ impl ClientHandle {
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
     ) -> Result<String, String> {
-        self.player.render_copy_template(index, ctx).await
+        // 埋点前先据 ctx 取类型 + 目标(ctx 随即被 render 移走)。
+        let (ctx_kind, target_ref) = match &ctx {
+            mineral_protocol::CopyTemplateCtx::Song(s) => {
+                (mineral_stats::CopyContext::Song, Some(s.id.qualified()))
+            }
+            mineral_protocol::CopyTemplateCtx::Playlist(p) => {
+                (mineral_stats::CopyContext::Playlist, Some(p.id.qualified()))
+            }
+        };
+        let result = self.player.render_copy_template(index, ctx).await;
+        // 埋点:文案渲染(copy_renders;user 发起)。Err = 模板缺失 / 渲染失败。
+        self.record_behavior(mineral_stats::BehaviorEvent::CopyRender {
+            template_index: i64::try_from(index).unwrap_or(i64::MAX),
+            ctx_kind,
+            target_ref,
+            outcome: if result.is_ok() {
+                mineral_stats::OpOutcome::Ok
+            } else {
+                mineral_stats::OpOutcome::Failed
+            },
+        });
+        result
     }
 
     /// 读 per-song 持久值(serve 层处理 `StoreGet` 用)。未命中返回 `Nil`。
@@ -184,19 +264,36 @@ impl ClientHandle {
         &self,
         id: &SongId,
     ) -> color_eyre::Result<Option<mineral_protocol::SongStatsWire>> {
-        let stats = self
+        // play/skip/listen/last 改由 stats.db 聚合(全量窗口);loved 是功能状态,仍读
+        // mineral.db。窗口语义与现状一致,wire 类型不变、client 零改动。
+        let summary = self.player.inner.stats.store().song_summary(id).await?;
+        let loved = self
             .player
             .persist()
             .scope(id.namespace())
             .query_stats(id)
-            .await?;
-        Ok(stats.map(|s| mineral_protocol::SongStatsWire {
-            play_count: s.play_count,
-            skip_count: s.skip_count,
-            total_listen_ms: s.total_listen_ms,
-            last_played_at: s.last_played_at,
-            loved: s.loved,
-        }))
+            .await?
+            .is_some_and(|s| s.loved);
+        if summary.is_none() && !loved {
+            return Ok(None);
+        }
+        let wire = match summary {
+            Some(s) => mineral_protocol::SongStatsWire {
+                play_count: u32::try_from(s.plays).unwrap_or(u32::MAX),
+                skip_count: u32::try_from(s.skips).unwrap_or(u32::MAX),
+                total_listen_ms: u64::try_from(s.listen_ms).unwrap_or(0),
+                last_played_at: s.last_played_at,
+                loved,
+            },
+            None => mineral_protocol::SongStatsWire {
+                play_count: 0,
+                skip_count: 0,
+                total_listen_ms: 0,
+                last_played_at: None,
+                loved,
+            },
+        };
+        Ok(Some(wire))
     }
 }
 
@@ -233,13 +330,26 @@ pub trait Client: Send + Sync {
     fn play_song(&self, song: Song);
 
     /// 替换 queue + 设当前位置。Shuffle 模式下 server 端洗牌。
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId);
+    ///
+    /// # Params:
+    ///   - `queue`: 新队列
+    ///   - `target_id`: 队列中作为「当前」的歌
+    ///   - `context`: 队列语境(埋点 provenance:该队列来自搜索 / 歌单 / 专辑 / 艺人 / 手动)
+    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire);
 
-    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
-    fn queue_insert_next(&self, song: Song);
+    /// 插播:插到当前曲之后,不动队列级 context 与当前曲。
+    ///
+    /// # Params:
+    ///   - `song`: 待插播的歌
+    ///   - `context`: 该曲来源语境(埋点 per-song 覆盖:插队散曲不继承队列级 context)
+    fn queue_insert_next(&self, song: Song, context: QueueContextWire);
 
-    /// 追加到队列末尾,不动播放上下文与当前曲。
-    fn queue_append(&self, song: Song);
+    /// 追加到队列末尾,不动队列级 context 与当前曲。
+    ///
+    /// # Params:
+    ///   - `song`: 待追加的歌
+    ///   - `context`: 该曲来源语境(埋点 per-song 覆盖:同插播)
+    fn queue_append(&self, song: Song, context: QueueContextWire);
 
     /// 全部已注册 channel 的能力声明(启动握手拉一次,断连重连后再拉)。
     fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)>;
@@ -400,49 +510,79 @@ impl Client for ClientHandle {
         let _ = url;
     }
     fn pause(&self) {
-        // pause/resume/stop/seek/set_volume 仍直通 audio。PlayerCore 内部持 audio
-        // 但没暴露;通过新加的 audio() getter 走。
-        self.player.audio().pause();
+        // 传输面(执行 + 埋点)统一走 PlayerCore 的 transport 方法,client 只穿透 actor。
+        self.player.pause_playback(mineral_stats::Actor::User);
     }
     fn resume(&self) {
-        self.player.audio().resume();
+        self.player.resume_playback(mineral_stats::Actor::User);
     }
     fn stop(&self) {
         self.player.stop_playback();
     }
     fn seek(&self, position_ms: u64) {
-        self.player.audio().seek(position_ms);
+        self.player
+            .seek_playback(position_ms, mineral_stats::Actor::User);
     }
     fn set_volume(&self, pct: u8) {
-        self.player.audio().set_volume(pct);
+        self.player
+            .set_playback_volume(pct, mineral_stats::Actor::User);
     }
     fn audio_snapshot(&self) -> AudioSnapshot {
         self.player.audio().snapshot()
     }
 
     fn play_song(&self, song: Song) {
-        self.player.play_song(&song);
+        // 直接改播会顶掉在播曲:先按 skip 结算它(next/prev/EOF 各有自己的结算,唯独这
+        // 条显式点播路径需要在此结算,否则被打断曲的 plays 行丢失)。
+        self.player.settle_interrupted();
+        self.player.play_song(
+            &song,
+            mineral_stats::PlayOrigin::Explicit,
+            mineral_stats::Actor::User,
+        );
     }
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
-        self.player.set_queue(queue, &target_id);
+    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire) {
+        let count = i64::try_from(queue.len()).unwrap_or(i64::MAX);
+        self.player
+            .set_queue(queue, &target_id, queue_context_from_wire(context));
+        self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
+            op: mineral_stats::QueueOp::Set,
+            song: None,
+            count,
+        });
     }
-    fn queue_insert_next(&self, song: Song) {
-        self.player.queue_insert_next(song);
+    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
+        let id = song.id.clone();
+        self.player
+            .queue_insert_next(song, queue_context_from_wire(context));
+        self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
+            op: mineral_stats::QueueOp::InsertNext,
+            song: Some(id),
+            count: 1,
+        });
     }
-    fn queue_append(&self, song: Song) {
-        self.player.queue_append(song);
+    fn queue_append(&self, song: Song, context: QueueContextWire) {
+        let id = song.id.clone();
+        self.player
+            .queue_append(song, queue_context_from_wire(context));
+        self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
+            op: mineral_stats::QueueOp::Append,
+            song: Some(id),
+            count: 1,
+        });
     }
     fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
         self.player.channel_caps()
     }
     fn cycle_play_mode(&self) {
-        self.player.cycle_play_mode();
+        // mode_changes 埋点在 PlayerCore 单点(cycle / 直设 / 脚本共用)。
+        self.player.cycle_play_mode(mineral_stats::Actor::User);
     }
     fn prev_or_restart(&self) {
-        self.player.prev_or_restart();
+        self.player.prev_or_restart(mineral_stats::Actor::User);
     }
     fn next_song(&self) {
-        self.player.next_song();
+        self.player.next_song(mineral_stats::Actor::User);
     }
     fn player_sync(&self, known: PlayerVersions) -> PlayerSync {
         self.player.sync(known)
@@ -452,7 +592,15 @@ impl Client for ClientHandle {
         self.player.submit_task(kind, priority)
     }
     fn cancel_tasks(&self, filter: CancelFilter) {
+        let filter_tags = match &filter {
+            CancelFilter::ChannelFetchKinds(tags) => tags
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        };
         self.player.cancel_tasks_where(move |k| filter.matches(k));
+        self.record_behavior(mineral_stats::BehaviorEvent::TaskCancel { filter_tags });
     }
     fn drain_task_events(&self) -> Vec<TaskEvent> {
         self.player.drain_client_events()
@@ -510,12 +658,17 @@ impl Client for ClientHandle {
     }
 
     fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
-        self.player
+        let toggled = self
+            .player
             .set_terminal_state(crate::props::TerminalReport {
                 rows,
                 cols,
                 fullscreen,
                 focused,
             });
+        // 埋点:全屏切换(fullscreen_changes;仅在相对前态翻转时,滤掉每 tick 的等值上报)。
+        if let Some(fullscreen) = toggled {
+            self.record_behavior(mineral_stats::BehaviorEvent::FullscreenChange { fullscreen });
+        }
     }
 }

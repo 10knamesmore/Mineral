@@ -21,9 +21,11 @@ mineral-model        = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-persist      = { workspace = true }
 mineral-protocol     = { workspace = true }
+mineral-stats        = { workspace = true }
 mineral-task         = { workspace = true }
 
 bytes          = { workspace = true }
+arc-swap       = { workspace = true }
 color-eyre     = { workspace = true }
 derive-getters = { workspace = true }
 futures-util   = { workspace = true }

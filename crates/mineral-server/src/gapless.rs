@@ -16,6 +16,27 @@ use crate::player::PlayerCore;
 use crate::queue::{advance_next, next_in_queue, next_index};
 use crate::state::State;
 
+/// 记一次预取裁决(prefetches;系统域,无 actor)。装填 / 否决 / 改写 / 失败各站点调。
+///
+/// # Params:
+///   - `song`: 预取的下一曲
+///   - `source`: 预取来源(本地 / 远端 / 单曲循环)
+///   - `resolution`: 裁决(装填 / 否决 / 改写 / 失败)
+pub(crate) fn record_prefetch(
+    player: &PlayerCore,
+    song: SongId,
+    source: mineral_stats::PrefetchSource,
+    resolution: mineral_stats::PrefetchResolution,
+) {
+    player.inner.stats.event(mineral_stats::StatsEvent::System(
+        mineral_stats::SystemEvent::Prefetch {
+            song,
+            source,
+            resolution,
+        },
+    ));
+}
+
 /// 一首「已预排进 rodio 队列、等当前曲播完接续」的下一曲及其播放记账。
 pub(crate) struct Queued {
     /// 预排的下一曲。
@@ -192,6 +213,7 @@ fn queue_repeatone(player: &PlayerCore, next: Song) {
     player
         .audio()
         .append_next(pu.url.clone(), pu.stream_headers.clone(), pu.layout);
+    let song_id = next.id.clone();
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -200,6 +222,12 @@ fn queue_repeatone(player: &PlayerCore, next: Song) {
             capturing: None,
         });
     });
+    record_prefetch(
+        player,
+        song_id,
+        mineral_stats::PrefetchSource::RepeatOne,
+        mineral_stats::PrefetchResolution::Armed,
+    );
 }
 
 /// 本地命中的下一曲:直接以本地路径预排(已在缓存 / 下载库,无需 capture)。
@@ -217,6 +245,7 @@ fn queue_local_next(
         Vec::new(),
         mineral_model::StreamLayout::Contiguous,
     );
+    let song_id = next.id.clone();
     player.with_state(|st| {
         st.queued = Some(Queued {
             song: next,
@@ -225,6 +254,12 @@ fn queue_local_next(
             capturing: None,
         });
     });
+    record_prefetch(
+        player,
+        song_id,
+        mineral_stats::PrefetchSource::Local,
+        mineral_stats::PrefetchResolution::Armed,
+    );
 }
 
 /// 远端预排曲取链就绪:据缓存可用与否带 / 不带 capture 预排,登记 [`Queued`]。
@@ -280,6 +315,12 @@ pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_
             });
         }
     }
+    record_prefetch(
+        player,
+        song_id.clone(),
+        mineral_stats::PrefetchSource::Remote,
+        mineral_stats::PrefetchResolution::Armed,
+    );
 }
 
 /// 脚本改写的预排曲:按 effective 直接武装,**不 capture**——缓存按
@@ -307,6 +348,12 @@ pub(crate) fn on_prefetch_rewritten(player: &PlayerCore, song_id: &SongId, play_
             capturing: None,
         });
     });
+    record_prefetch(
+        player,
+        song_id.clone(),
+        mineral_stats::PrefetchSource::Remote,
+        mineral_stats::PrefetchResolution::Rewritten,
+    );
 }
 
 /// 收割已下完的 capture 进缓存:当前曲(`download_complete`)+ 已预排曲(`next_download_complete`),
@@ -344,10 +391,11 @@ pub(crate) fn check_advance(player: &PlayerCore) {
     }
 
     let (old, has_queued) = player.with_state(|st| (st.current_song.clone(), st.queued.is_some()));
+    let boundary_song = old.as_ref().map(|s| s.id.clone());
     // 自然播完 = 听了整首;duration 未知时退用 position。
     if let Some(old) = old {
         let listen_ms = old.duration_ms.unwrap_or(snap.position_ms);
-        player.spawn_on_played(old.id.clone(), /*completed*/ true, listen_ms);
+        player.spawn_on_played(old.id.clone(), mineral_stats::FinishReason::Eof, listen_ms);
         player
             .notify()
             .track_finished(&old, mineral_protocol::FinishReason::Eof);
@@ -367,13 +415,54 @@ pub(crate) fn check_advance(player: &PlayerCore) {
         finished_seq = snap.track_finished_seq,
         "gapless boundary"
     );
+    // 埋点:无缝边界裁决(adopt=真无缝 / fallback=有间隙;None 不记)。
+    if let Some(song) = boundary_song {
+        let result = match action {
+            Advance::Adopt => Some(mineral_stats::GaplessResult::Adopt),
+            Advance::Fallback => Some(mineral_stats::GaplessResult::Fallback),
+            Advance::None => None,
+        };
+        if let Some(result) = result {
+            player.inner.stats.event(mineral_stats::StatsEvent::System(
+                mineral_stats::SystemEvent::GaplessBoundary { song, result },
+            ));
+        }
+    }
     match action {
         Advance::Adopt => {
             player.with_state(|st| {
                 let _ = adopt_queued(st);
             });
-            let new = player.with_state(|st| st.current_song.clone());
+            let (new, play_mode, playback_origin, play_url) = player.with_state(|st| {
+                (
+                    st.current_song.clone(),
+                    st.play_mode,
+                    st.play_origin,
+                    st.play_url.clone(),
+                )
+            });
             if let Some(s) = new {
+                // 埋点:无缝续播的新曲也是一次起播——adopt 不走 play_song,这里补起播快照,
+                // 否则该曲只在下个边界拿到 play_ended(无匹配 pending)而彻底漏记。actor 单
+                // 消费者按 FIFO 先消化前面 spawn_on_played 的 play_ended(old),再收本条。
+                // context 经 take_play_context 与 play_song 同规矩:先消费 per-song 覆盖
+                // (插队散曲经无缝接续也要记它自己的语境),否则继承队列级语境。
+                let context = player.take_play_context(&s.id);
+                if let Some(pending) = crate::pending_from_start(
+                    s.id.clone(),
+                    crate::stats_play_mode(play_mode),
+                    s.duration_ms.and_then(|d| i64::try_from(d).ok()),
+                    playback_origin.unwrap_or(PlaybackOrigin::Remote),
+                    mineral_stats::PlayOrigin::AutoAdvance,
+                    mineral_stats::Actor::System,
+                    context,
+                ) {
+                    player.inner.stats.play_started(pending);
+                }
+                // 富化音频快照:预排 URL 已轮转进 play_url。
+                if let Some(pu) = play_url {
+                    player.enrich_from_play_url(&pu);
+                }
                 player.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Lyrics { song_id: s.id }),
                     Priority::User,
@@ -393,7 +482,11 @@ pub(crate) fn check_advance(player: &PlayerCore) {
             // 按下标推进 queue_sel(advance_next),play_song 据守卫保留它,重复曲不回退。
             let next = player.with_state(advance_next);
             if let Some(next) = next {
-                player.play_song(&next);
+                player.play_song(
+                    &next,
+                    mineral_stats::PlayOrigin::AutoAdvance,
+                    mineral_stats::Actor::System,
+                );
             }
         }
         Advance::None => {}

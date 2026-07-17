@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                COUNT(*) AS \"plays!: i64\",\n                COALESCE(SUM(CASE WHEN finish_reason = 'skip' THEN 1 ELSE 0 END), 0) AS \"skips!: i64\",\n                COALESCE(SUM(listen_ms), 0) AS \"listen_ms!: i64\",\n                MAX(started_at) AS \"last_played_at?: i64\"\n               FROM plays WHERE ns = ? AND song_value = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "plays!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "skips!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_played_at?: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "9db3f635806633262a21bce0c5eab24284b2fe6af48e0b3b29c852bdbdf0e530"
+}

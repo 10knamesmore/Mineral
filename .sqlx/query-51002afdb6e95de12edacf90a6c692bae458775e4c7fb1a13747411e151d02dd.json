@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO script_lifecycle (ts, session_id, event, detail) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "51002afdb6e95de12edacf90a6c692bae458775e4c7fb1a13747411e151d02dd"
+}

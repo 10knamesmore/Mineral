@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cache_harvests (ts, session_id, ns, song_value, quality, format, outcome, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "734dbf7e568dad6d283d96e3b4c63d104d560682ab50e60a06866b9cc88f087f"
+}

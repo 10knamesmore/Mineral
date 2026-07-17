@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO searches (ts, session_id, actor, query, query_hash, kind, source, page, result_count, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "8cebcfbbc3bec20c69d0dfc9b796f8943ae485347024c5cfaf16137ee923a7ce"
+}

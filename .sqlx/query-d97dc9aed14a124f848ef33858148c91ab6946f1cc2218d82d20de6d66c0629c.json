@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO fetches (ts, session_id, actor, fetch_kind, source, target_ref, trigger, outcome, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "d97dc9aed14a124f848ef33858148c91ab6946f1cc2218d82d20de6d66c0629c"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ns AS \"ns!\", song_value AS \"song_value!\",\n                COUNT(*) AS \"plays!: i64\", COALESCE(SUM(listen_ms), 0) AS \"listen_ms!: i64\"\n               FROM plays\n               WHERE started_at >= ? AND started_at < ? AND play_mode = 'repeat_one'\n               GROUP BY ns, song_value ORDER BY 3 DESC, 4 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ns!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "song_value!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "538e2b483423efd2c1cc339993ea27ee517ab61914740623f4cd2c53e6e5eba1"
+}

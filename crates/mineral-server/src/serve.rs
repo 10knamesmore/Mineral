@@ -49,6 +49,7 @@ where
         if busy.swap(true, Ordering::AcqRel) {
             // 已经有 client 在用 → 不等握手直接拒。失败也无所谓,client 自己会 EOF。
             mineral_log::warn!(target: "ipc", "rejected new connection: single-client busy");
+            client.record_connection_reject(mineral_stats::RejectReason::Busy);
             tokio::spawn(reject_busy(stream));
             continue;
         }
@@ -101,7 +102,7 @@ async fn handle_connection(
     // 在回 Hello 之前就订阅 hub:保证「client 收到 Hello」之后产生的事件零窗口
     // 不丢(握手期间的事件缓冲在 receiver 里,由 pump 按订阅集过滤)。
     let events_rx = events.subscribe();
-    let Some(subscriptions) = handshake(&mut conn).await? else {
+    let Some(subscriptions) = handshake(&mut conn, client).await? else {
         return Ok(());
     };
     let (sink, stream) = conn.split();
@@ -142,7 +143,10 @@ async fn handle_connection(
 /// # Return:
 ///   `Some(订阅集)` = 握手通过;`None` = 连接该就此关闭(拒绝 / 对端探活即走 /
 ///   首帧不是握手)。
-async fn handshake(conn: &mut Framed<UnixStream>) -> color_eyre::Result<Option<Vec<Subscription>>> {
+async fn handshake(
+    conn: &mut Framed<UnixStream>,
+    client: &ClientHandle,
+) -> color_eyre::Result<Option<Vec<Subscription>>> {
     let info = match recv::<Frame, _>(conn).await.wrap_err("等待握手帧")? {
         Some(Frame::Handshake(info)) => info,
         Some(other) => {
@@ -158,6 +162,7 @@ async fn handshake(conn: &mut Framed<UnixStream>) -> color_eyre::Result<Option<V
             client_version = %info.version,
             "client 版本不匹配,拒绝连接"
         );
+        client.record_connection_reject(mineral_stats::RejectReason::VersionMismatch);
         send(
             conn,
             &Frame::Hello(ServerHello::reject(RejectReason::VersionMismatch)),
@@ -303,16 +308,20 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.play_song(*song);
             Response::Ok
         }
-        Request::SetQueue { queue, target_id } => {
-            client.set_queue(queue, target_id);
+        Request::SetQueue {
+            queue,
+            target_id,
+            context,
+        } => {
+            client.set_queue(queue, target_id, context);
             Response::Ok
         }
-        Request::QueueInsertNext(song) => {
-            client.queue_insert_next(*song);
+        Request::QueueInsertNext { song, context } => {
+            client.queue_insert_next(*song, context);
             Response::Ok
         }
-        Request::QueueAppend(song) => {
-            client.queue_append(*song);
+        Request::QueueAppend { song, context } => {
+            client.queue_append(*song, context);
             Response::Ok
         }
         Request::ChannelCaps => Response::ChannelCaps(client.channel_caps()),
@@ -418,8 +427,8 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::CancelTasks(_) => Some("CancelTasks"),
         Request::PlaySong(_) => Some("PlaySong"),
         Request::SetQueue { .. } => Some("SetQueue"),
-        Request::QueueInsertNext(_) => Some("QueueInsertNext"),
-        Request::QueueAppend(_) => Some("QueueAppend"),
+        Request::QueueInsertNext { .. } => Some("QueueInsertNext"),
+        Request::QueueAppend { .. } => Some("QueueAppend"),
         Request::ChannelCaps => Some("ChannelCaps"),
         Request::CyclePlayMode => Some("CyclePlayMode"),
         Request::PrevOrRestart => Some("PrevOrRestart"),

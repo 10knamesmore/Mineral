@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT context_ref AS \"reference!\", COUNT(*) AS \"plays!: i64\",\n                    COALESCE(SUM(listen_ms), 0) AS \"listen_ms!: i64\"\n                   FROM plays\n                   WHERE started_at >= ? AND started_at < ? AND context_kind = ?\n                     AND context_ref IS NOT NULL AND listen_ms >= ?\n                   GROUP BY context_ref ORDER BY 3 DESC, 2 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "reference!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "77e5cbaad5373a389783e52dcb9c7b33f4252fffddb64837c2bbda893e08d77a"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO app_lifecycle (ts, session_id, actor, who, phase, audio_backend, session_restored, client_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "71476fe487f40b8203fef41d57c449475208b50e6ce2f9f8fb0ef2286f383400"
+}

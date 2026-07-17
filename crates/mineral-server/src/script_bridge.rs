@@ -187,6 +187,9 @@ pub struct ScriptReloadParts {
     /// 配置底树落点:重载成功后把新合成树交给配置宿主(重算有效树 +
     /// 推送订阅 client)。
     pub(crate) apply_config_base: ApplyConfigBase,
+
+    /// 埋点句柄:重载成功 / 失败记 script_lifecycle。
+    pub(crate) stats: crate::StatsRecorder,
 }
 
 /// 配置底树落点(重载任务 → 配置宿主的间接层,同 [`PropsSnapshot`] 模式)。
@@ -214,6 +217,8 @@ impl ScriptPumps {
             watchdog,
             web_urls,
         } = self;
+        // player 随后被泵任务 move 走,先留一份埋点句柄给重载器。
+        let stats = player.inner.stats.clone();
         let props_snapshot: PropsSnapshot = {
             let player = player.clone();
             Arc::new(move || player.props_snapshot())
@@ -245,8 +250,16 @@ impl ScriptPumps {
                 }
             });
         }
+        let stats_bus = player.inner.stats.clone();
         tokio::spawn(async move {
             while let Some(event) = push_rx.recv().await {
+                // 埋点:脚本事件总线消息(bus_messages;actor=Script)。只记名,载荷不入库。
+                if let Event::BusMessage { name, .. } = &event {
+                    stats_bus.event(mineral_stats::StatsEvent::Behavior {
+                        actor: mineral_stats::Actor::Script,
+                        event: mineral_stats::BehaviorEvent::BusMessage { name: name.clone() },
+                    });
+                }
                 // 无订阅者 send 失败即丢(advisory)。
                 let _ = sink.send(event);
             }
@@ -265,6 +278,7 @@ impl ScriptPumps {
             props_snapshot,
             web_urls,
             apply_config_base,
+            stats,
         }
     }
 }
@@ -328,6 +342,8 @@ async fn resolve_search(
     page: mineral_channel_core::Page,
     query: QueryId,
 ) {
+    // 埋点页码 = offset / limit(Page 是 Copy,search_songs 后仍可读)。
+    let page_no = i64::from(page.offset.checked_div(page.limit).unwrap_or(0));
     match source {
         Some(source) => {
             let Some(channel) = player.channel_for(source).cloned() else {
@@ -336,21 +352,39 @@ async fn resolve_search(
                 return;
             };
             match channel.search_songs(&term, page).await {
-                Ok(hits) => resolve_ok(player, query, ResolveValue::Songs(hits.items)),
-                Err(e) => resolve_err(player, query, &color_eyre::eyre::eyre!("{e}")),
+                Ok(hits) => {
+                    record_script_search(player, &term, source, page_no, Ok(hits.items.len()));
+                    resolve_ok(player, query, ResolveValue::Songs(hits.items));
+                }
+                Err(e) => {
+                    record_script_search(player, &term, source, page_no, Err(()));
+                    resolve_err(player, query, &color_eyre::eyre::eyre!("{e}"));
+                }
             }
         }
         None => {
             let mut songs = Vec::new();
             for channel in player.channels() {
                 match channel.search_songs(&term, page).await {
-                    Ok(hits) => songs.extend(hits.items),
-                    Err(e) => mineral_log::warn!(
-                        target: "script",
-                        source = channel.source().name(),
-                        error = %e,
-                        "library.search: 该源搜索失败,跳过"
-                    ),
+                    Ok(hits) => {
+                        record_script_search(
+                            player,
+                            &term,
+                            channel.source(),
+                            page_no,
+                            Ok(hits.items.len()),
+                        );
+                        songs.extend(hits.items);
+                    }
+                    Err(e) => {
+                        record_script_search(player, &term, channel.source(), page_no, Err(()));
+                        mineral_log::warn!(
+                            target: "script",
+                            source = channel.source().name(),
+                            error = mineral_log::chain(&e),
+                            "library.search: 该源搜索失败,跳过"
+                        );
+                    }
                 }
             }
             resolve_ok(player, query, ResolveValue::Songs(songs));
@@ -358,35 +392,109 @@ async fn resolve_search(
     }
 }
 
+/// 记一次脚本发起的歌曲搜索(searches;actor=script,kind=song——`mineral.search`
+/// / `library.search` 只搜曲)。`result` 为 `Ok(条数)` / `Err(())`(失败无条数)。
+fn record_script_search(
+    player: &PlayerCore,
+    term: &str,
+    source: mineral_model::SourceKind,
+    page: i64,
+    result: Result<usize, ()>,
+) {
+    let (count, outcome) = match result {
+        Ok(n) => (
+            Some(i64::try_from(n).unwrap_or(i64::MAX)),
+            mineral_stats::SearchOutcome::Ok,
+        ),
+        Err(()) => (None, mineral_stats::SearchOutcome::Failed),
+    };
+    player.inner.stats.record_search(
+        mineral_stats::Actor::Script,
+        term,
+        mineral_stats::SearchTargetKind::Song,
+        source,
+        page,
+        count,
+        outcome,
+    );
+}
+
+/// 记一次脚本 KV 写事件(actor=script)。
+fn record_store_write(
+    player: &PlayerCore,
+    song: &mineral_model::SongId,
+    key: &str,
+    op: mineral_stats::StoreOp,
+) {
+    player
+        .inner
+        .stats
+        .event(mineral_stats::StatsEvent::Behavior {
+            actor: mineral_stats::Actor::Script,
+            event: mineral_stats::BehaviorEvent::StoreWrite {
+                song: song.clone(),
+                key: key.to_owned(),
+                op,
+            },
+        });
+}
+
+/// 记一次脚本子进程 spawn 收束(actor=script;spawns 表)。
+fn record_spawn(
+    player: &PlayerCore,
+    program: String,
+    outcome: mineral_stats::SpawnOutcome,
+    exit_code: Option<i64>,
+) {
+    player
+        .inner
+        .stats
+        .event(mineral_stats::StatsEvent::Behavior {
+            actor: mineral_stats::Actor::Script,
+            event: mineral_stats::BehaviorEvent::Spawn {
+                program,
+                outcome,
+                exit_code,
+            },
+        });
+}
+
 /// 把一条脚本命令落到 player 执行面(与 client Request 同一些方法)。
 fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
+    // 传输类命令(暂停 / 跳转 / 音量 / 模式)一律走 PlayerCore 的 transport 方法,与
+    // client Handler 同一执行 + 埋点出口——脚本操作以 actor=Script 入库,不再漏记。
     match cmd {
-        ScriptCmd::Toggle => {
-            if player.audio_snapshot().playing {
-                player.audio().pause();
-            } else {
-                player.audio().resume();
-            }
-        }
-        ScriptCmd::Next => player.next_song(),
-        ScriptCmd::Prev => player.prev_or_restart(),
+        ScriptCmd::Toggle => player.toggle_playback(mineral_stats::Actor::Script),
+        ScriptCmd::Next => player.next_song(mineral_stats::Actor::Script),
+        ScriptCmd::Prev => player.prev_or_restart(mineral_stats::Actor::Script),
         ScriptCmd::Stop => player.stop_playback(),
         ScriptCmd::SeekRel(secs) => {
             let delta_ms = (secs * 1000.0).round().to_i64().unwrap_or(0);
             let pos = i64::try_from(player.audio_snapshot().position_ms).unwrap_or(i64::MAX);
             let target = pos.saturating_add(delta_ms).max(0);
-            player.audio().seek(u64::try_from(target).unwrap_or(0));
+            player.seek_playback(
+                u64::try_from(target).unwrap_or(0),
+                mineral_stats::Actor::Script,
+            );
         }
         ScriptCmd::SeekTo(secs) => {
             let target_ms = (secs * 1000.0).round().to_u64().unwrap_or(0);
-            player.audio().seek(target_ms);
+            player.seek_playback(target_ms, mineral_stats::Actor::Script);
         }
-        ScriptCmd::SetVolume(pct) => player.audio().set_volume(pct),
-        ScriptCmd::SetMode(mode) => player.set_play_mode(mode),
+        ScriptCmd::SetVolume(pct) => player.set_playback_volume(pct, mineral_stats::Actor::Script),
+        ScriptCmd::SetMode(mode) => player.set_play_mode(mode, mineral_stats::Actor::Script),
         ScriptCmd::Play(id) => {
             let song = player.with_state(|st| st.queue.iter().find(|s| s.id == id).cloned());
             match song {
-                Some(song) => player.play_song(&song),
+                Some(song) => {
+                    // 直接改播:先结算被顶掉的在播曲(与 client PlaySong 同规矩)。
+                    player.settle_interrupted();
+                    player.play_song(
+                        &song,
+                        mineral_stats::PlayOrigin::Script,
+                        mineral_stats::Actor::Script,
+                    );
+                }
                 // 队列外跳播是后续能力;当前 warn 丢弃,不拉详情。
                 None => mineral_log::warn!(
                     target: "script",
@@ -429,6 +537,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             });
         }
         ScriptCmd::StoreSet { song, key, value } => {
+            record_store_write(player, &song, &key, mineral_stats::StoreOp::Set);
             let player = player.clone();
             tokio::spawn(async move {
                 let scope = player.persist().scope(song.namespace());
@@ -450,6 +559,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             delta,
             query,
         } => {
+            record_store_write(player, &song, &key, mineral_stats::StoreOp::Inc);
             let player = player.clone();
             tokio::spawn(async move {
                 let scope = player.persist().scope(song.namespace());
@@ -543,8 +653,17 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             });
         }
         ScriptCmd::Spawn { id, spec, query } => {
+            // spec 随即被 run_child 移走,先留程序名给埋点。
+            let program = spec.program().to_owned();
             let over_limit = spawns.max != 0 && spawns.running.lock().len() >= spawns.max;
             if over_limit {
+                // 埋点:并发超限即起进程失败(spawns;outcome=SpawnFailed,无退出码)。
+                record_spawn(
+                    player,
+                    program,
+                    mineral_stats::SpawnOutcome::SpawnFailed,
+                    None,
+                );
                 let e = color_eyre::eyre::eyre!(
                     "spawn 并发超限(script.spawn_max_concurrent = {})",
                     spawns.max
@@ -558,6 +677,14 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 tokio::spawn(async move {
                     let result = mineral_script::run_child(spec, kill_rx).await;
                     running.lock().remove(&id);
+                    // 埋点:子进程收束(kill / 正常退出 / 起进程失败)。退出码仅正常退出有。
+                    let outcome = match &result {
+                        Ok(done) if done.killed => mineral_stats::SpawnOutcome::Killed,
+                        Ok(_) => mineral_stats::SpawnOutcome::Exited,
+                        Err(_) => mineral_stats::SpawnOutcome::SpawnFailed,
+                    };
+                    let exit_code = result.as_ref().ok().and_then(|d| d.code).map(i64::from);
+                    record_spawn(&player, program, outcome, exit_code);
                     match result {
                         Ok(done) => resolve_ok(&player, query, ResolveValue::Spawn(done)),
                         Err(e) => resolve_err(&player, query, &e),
@@ -571,14 +698,26 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 let _ = kill.send(());
             }
         }
-        ScriptCmd::ConfigOverride { path, value } => player.apply_config_override(path, value),
+        ScriptCmd::ConfigOverride { path, value } => {
+            player
+                .inner
+                .stats
+                .event(mineral_stats::StatsEvent::Behavior {
+                    actor: mineral_stats::Actor::Script,
+                    event: mineral_stats::BehaviorEvent::ConfigOverride { path: path.clone() },
+                });
+            player.apply_config_override(path, value);
+        }
         ScriptCmd::WindowTitle { text } => player.apply_window_title_override(text),
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();
             tokio::spawn(async move {
                 // 走 server 统一路径:锁内写本地 persist(事实来源)+ 推 canonical(脚本路径无
                 // client 乐观翻转,靠这条让装饰即时更新),锁外尽力镜像远端。
-                if let Err(e) = player.set_favorite(&song, loved).await {
+                if let Err(e) = player
+                    .set_favorite(&song, loved, mineral_stats::Actor::Script)
+                    .await
+                {
                     mineral_log::warn!(
                         target: "script",
                         song_id = song.qualified(),

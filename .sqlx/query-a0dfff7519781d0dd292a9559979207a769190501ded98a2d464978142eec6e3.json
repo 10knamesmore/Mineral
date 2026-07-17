@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO downloads (ts, session_id, actor, ns, song_value, quality, format, outcome, hooked, path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "a0dfff7519781d0dd292a9559979207a769190501ded98a2d464978142eec6e3"
+}

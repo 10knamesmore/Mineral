@@ -14,6 +14,10 @@ use mineral_server::{Server, ServerConfig, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
+/// 停机时 await 埋点 actor join 的超时上限:actor 结算末尾一行 + 退出远快于此,超时纯是
+/// 兜底(埋点故障绝不无限拖住 daemon 退出)。
+const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// daemon 入口。需要 caller 已 `tokio::Runtime::block_on` 或在 async ctx 中调。
 ///
 /// accept loop 与关闭信号(SIGINT / SIGTERM)竞争:收到信号时主动停掉 server
@@ -70,6 +74,9 @@ pub async fn run(
     // 投递句柄是热重载间接层:daemon 恒持有(初始无脚本也可经重载升级为有)。
     let script_sender = mineral_script::ScriptSender::detached();
     let (script_runtime, pumps) = script.spawn_runtime(watchdog, &script_sender, &channels);
+    let (stats, stats_actor) = spawn_recorder(&config).await;
+    // 留一份句柄给停机路径记 app_lifecycle stop + 发 Shutdown(server 会 move 走原句柄)。
+    let stats_stop = stats.clone();
     let server = Server::spawn(
         channels,
         audio_mode,
@@ -77,6 +84,7 @@ pub async fn run(
         ServerConfig::from_config(&config),
         config_tree,
         Some(script_sender.clone()),
+        stats,
     )
     .await?;
     let reload_parts = server.attach_script_pumps(pumps);
@@ -101,9 +109,19 @@ pub async fn run(
         }
     };
 
-    // graceful 收尾:停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
+    // graceful 收尾:先记 daemon stop 并 flush(保证落库不被进程退出截断),
+    // 再停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
     mineral_log::info!(target: "daemon", "shutting down");
+    stats_stop.daemon_stopped();
+    stats_stop.flush().await;
     server.shutdown();
+    // 埋点优雅停机:发 Shutdown 让 actor 把在播 pending 结算成 stop 行,带超时 await join
+    // (在播行丢失由此收窄到仅硬 kill;超时兜底不无限阻塞退出)。
+    stats_stop.shutdown().await;
+    drop(stats_stop);
+    if let Err(e) = tokio::time::timeout(STATS_JOIN_TIMEOUT, stats_actor).await {
+        mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "埋点 actor join 超时,末尾在播行可能未落库");
+    }
     if let Err(e) = std::fs::remove_file(&socket_path) {
         mineral_log::warn!(
             target: "daemon",
@@ -158,4 +176,38 @@ async fn prepare_socket(path: &std::path::Path) -> color_eyre::Result<()> {
             Ok(())
         }
     }
+}
+
+/// 起埋点 recorder:开 stats.db(失败降级 disabled no-op)+ 折算采集参数 + spawn actor。
+/// 返回 actor 的 `JoinHandle` 供停机路径带超时 await(在播 pending 结算 stop 后退出)。
+///
+/// # Params:
+///   - `config`: 全局配置(取 `stats` 段折算;`report` 口径留给报告层现读)
+///
+/// # Return:
+///   (recorder 句柄, actor 的 `JoinHandle`);降级路径亦返回可用句柄(打点静默丢弃)
+async fn spawn_recorder(
+    config: &mineral_config::Config,
+) -> (mineral_server::StatsRecorder, tokio::task::JoinHandle<()>) {
+    let store = match mineral_paths::data_dir() {
+        Ok(dir) => match std::fs::create_dir_all(&dir) {
+            Ok(()) => match mineral_stats::StatsStore::open(&dir.join("stats.db")).await {
+                Ok(store) => store,
+                Err(e) => {
+                    mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "打开 stats.db 失败,埋点降级");
+                    mineral_stats::StatsStore::disabled()
+                }
+            },
+            Err(e) => {
+                mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "建数据目录失败,埋点降级");
+                mineral_stats::StatsStore::disabled()
+            }
+        },
+        Err(e) => {
+            mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "定位数据目录失败,埋点降级");
+            mineral_stats::StatsStore::disabled()
+        }
+    };
+    let params = mineral_server::params_from_config(config.stats());
+    mineral_server::StatsRecorder::spawn(store, params)
 }

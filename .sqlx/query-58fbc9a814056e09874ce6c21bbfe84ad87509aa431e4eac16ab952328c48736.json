@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO pauses (ts, session_id, actor, ns, song_value, at_ms, action) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "58fbc9a814056e09874ce6c21bbfe84ad87509aa431e4eac16ab952328c48736"
+}

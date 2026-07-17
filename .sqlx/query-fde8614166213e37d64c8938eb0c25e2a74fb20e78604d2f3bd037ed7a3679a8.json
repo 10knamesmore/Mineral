@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO store_writes (ts, session_id, actor, ns, song_value, key, op) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "fde8614166213e37d64c8938eb0c25e2a74fb20e78604d2f3bd037ed7a3679a8"
+}

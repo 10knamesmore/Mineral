@@ -294,7 +294,10 @@ mod tests {
     ) -> color_eyre::Result<()> {
         let src = tmp_dir.join(format!("cap-{}-{}.part", s.id.value(), quality.as_str()));
         std::fs::write(&src, bytes)?;
-        cache.put_played(s, quality, Some(format), &src).await
+        cache
+            .put_played(s, quality, Some(format), &src)
+            .await
+            .map(drop)
     }
 
     /// 只有 cache 命中(无下载导出)→ 返回 cache 路径与该音质。

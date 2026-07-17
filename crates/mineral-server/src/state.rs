@@ -19,6 +19,15 @@ pub(crate) struct State {
     /// 当前在播音频的来源(下载 / 缓存 / 远端);切歌时由 `play_song` 写入。
     pub(crate) play_origin: Option<PlaybackOrigin>,
 
+    /// 当前队列的语境(来自搜索 / 歌单 / 专辑 / 艺人 / 手动;`set_queue` 时写入)。
+    /// 埋点 provenance:随该队列每个起播继承进 plays 的 context 列。
+    pub(crate) queue_context: mineral_stats::QueueContext,
+
+    /// 插队散曲的 per-song 语境覆盖(`qualified id → QueueContext`;insert_next / append
+    /// 时按曲落一条)。起播该曲时优先取覆盖值再移除,使插队曲记自身来源而非继承队列级
+    /// context——不污染歌单归属。
+    pub(crate) context_overrides: rustc_hash::FxHashMap<String, mineral_stats::QueueContext>,
+
     /// 当前队列(顺序模式 = 原序;shuffle 模式 = 洗过)。
     pub(crate) queue: Vec<Song>,
 
@@ -73,6 +82,8 @@ impl State {
             current_song: None,
             play_url: None,
             play_origin: None,
+            queue_context: mineral_stats::QueueContext::Unknown,
+            context_overrides: rustc_hash::FxHashMap::default(),
             queue: Vec::new(),
             queue_sel: 0,
             original_queue: None,

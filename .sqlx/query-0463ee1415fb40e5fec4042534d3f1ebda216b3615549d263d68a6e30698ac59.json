@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO volume_changes (ts, session_id, actor, from_pct, to_pct) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "0463ee1415fb40e5fec4042534d3f1ebda216b3615549d263d68a6e30698ac59"
+}

@@ -22,8 +22,8 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed, PlayerSync,
-    PlayerVersions, Request, RequestId, Response, SongStatsWire, Subscription, client_handshake,
-    decode, encode, framed,
+    PlayerVersions, QueueContextWire, Request, RequestId, Response, SongStatsWire, Subscription,
+    client_handshake, decode, encode, framed,
 };
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
@@ -278,14 +278,24 @@ impl Client for RemoteClient {
     fn play_song(&self, song: Song) {
         let _ = self.send_recv(Request::PlaySong(Box::new(song)));
     }
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
-        let _ = self.send_recv(Request::SetQueue { queue, target_id });
+    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire) {
+        let _ = self.send_recv(Request::SetQueue {
+            queue,
+            target_id,
+            context,
+        });
     }
-    fn queue_insert_next(&self, song: Song) {
-        let _ = self.send_recv(Request::QueueInsertNext(Box::new(song)));
+    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
+        let _ = self.send_recv(Request::QueueInsertNext {
+            song: Box::new(song),
+            context,
+        });
     }
-    fn queue_append(&self, song: Song) {
-        let _ = self.send_recv(Request::QueueAppend(Box::new(song)));
+    fn queue_append(&self, song: Song, context: QueueContextWire) {
+        let _ = self.send_recv(Request::QueueAppend {
+            song: Box::new(song),
+            context,
+        });
     }
     fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
         match self.send_recv(Request::ChannelCaps) {
@@ -680,6 +690,7 @@ mod tests {
             mineral_server::ServerConfig::from_config(&cfg),
             mineral_config::default_tree()?,
             /*script*/ None,
+            mineral_server::StatsRecorder::disabled(),
         )
         .await?;
         let (listener, sock) = temp_listener()?;

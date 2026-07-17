@@ -93,6 +93,11 @@ fn reload_once(
                 ToastKind::Error,
                 format!("脚本重载失败,保留旧脚本:{e}"),
             );
+            record_script_lifecycle(
+                parts,
+                mineral_stats::ScriptEvent::ReloadFail,
+                Some(mineral_log::chain(&e)),
+            );
             return;
         }
     };
@@ -111,6 +116,7 @@ fn reload_once(
             ToastKind::Error,
             format!("脚本重载失败,保留旧脚本:{detail}"),
         );
+        record_script_lifecycle(parts, mineral_stats::ScriptEvent::ReloadFail, Some(detail));
         return;
     };
     // 新 VM 重新 seed 各源网页链接模板(caps 启动后不变,直接复用装配时那份)。
@@ -131,6 +137,7 @@ fn reload_once(
             // 先发就绪信号再发 toast:client 收到 ScriptReloaded 重拉 binds 时表已就绪。
             let _ = parts.push_tx.send(Event::ScriptReloaded);
             toast(&parts.push_tx, ToastKind::Info, "脚本已热重载".to_owned());
+            record_script_lifecycle(parts, mineral_stats::ScriptEvent::ReloadOk, None);
         }
         Err(e) => {
             // OS 线程起不来(极端):脚本从有到无,挂接摘掉让触发面报"未启用"。
@@ -145,8 +152,24 @@ fn reload_once(
                 ToastKind::Error,
                 "脚本线程启动失败,脚本不可用(详见日志)".to_owned(),
             );
+            record_script_lifecycle(
+                parts,
+                mineral_stats::ScriptEvent::ReloadFail,
+                Some(mineral_log::chain(&e)),
+            );
         }
     }
+}
+
+/// 记一次脚本热重载生命周期(script_lifecycle;系统域,无 actor)。
+fn record_script_lifecycle(
+    parts: &ScriptReloadParts,
+    event: mineral_stats::ScriptEvent,
+    detail: Option<String>,
+) {
+    parts.stats.event(mineral_stats::StatsEvent::System(
+        mineral_stats::SystemEvent::ScriptLifecycle { event, detail },
+    ));
 }
 
 /// 经脚本推送通道发一条 toast(泵汇入 event hub 下发 client)。
@@ -213,6 +236,14 @@ mod tests {
     impl Rig {
         /// 写初始 config.lua 并完成首次装配(走与 daemon 入口同构的流程)。
         fn boot(initial_lua: &str) -> color_eyre::Result<Self> {
+            Self::boot_with_stats(initial_lua, crate::StatsRecorder::disabled())
+        }
+
+        /// 同 [`Self::boot`],但注入指定埋点句柄(script_lifecycle 断言用)。
+        fn boot_with_stats(
+            initial_lua: &str,
+            stats: crate::StatsRecorder,
+        ) -> color_eyre::Result<Self> {
             let dir = tempfile::tempdir()?;
             let path = dir.path().join("config.lua");
             std::fs::write(&path, initial_lua)?;
@@ -252,6 +283,7 @@ mod tests {
                     web_urls: Vec::new(),
                     // 无 PlayerCore 的隔离 rig:配置落点空转(宿主行为归 config_host 测试)。
                     apply_config_base: std::sync::Arc::new(|_tree| {}),
+                    stats,
                 },
             })
         }
@@ -314,6 +346,26 @@ mod tests {
             ActionOutcome::Done,
             "重载失败保留旧脚本,不空窗"
         );
+        Ok(())
+    }
+
+    /// 热重载成功 / 失败各记一条 script_lifecycle(ReloadOk / ReloadFail)进 stats.db。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_records_script_lifecycle() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+        let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+        let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+        let mut rig = Rig::boot_with_stats("return {}", recorder)?;
+        rig.rewrite_and_reload("return {}")?; // 合法 → ReloadOk
+        rig.rewrite_and_reload("this is not lua ((")?; // eval 失败 → ReloadFail
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.status().await?.events < 2 {
+            if std::time::Instant::now() > deadline {
+                color_eyre::eyre::bail!("超时:script_lifecycle 未落两条");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         Ok(())
     }
 

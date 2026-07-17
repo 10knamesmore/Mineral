@@ -19,7 +19,9 @@ use tokio::io::AsyncWriteExt;
 use crate::media_cache::library_relpath;
 use crate::player::PlayerCore;
 
-/// 一首下载的结局(`Err` 另表失败):区分「真正下载」与「已存在跳过」,供完成提示分流统计。
+/// 一首下载的结局(`Err` 另表失败):区分「真正下载」与两类跳过(幂等 / 脚本否决),
+/// 供完成提示分流统计。hook 裁决随结局携带——埋点据此落 downloads.hooked 列,脚本
+/// veto 与幂等跳过在库里才分得开。
 pub(crate) enum DownloadOutcome {
     /// 真正流式下载并永久导出(完成事件下发用)。
     Downloaded {
@@ -31,10 +33,25 @@ pub(crate) enum DownloadOutcome {
 
         /// 容器格式(channel 实际提供;拿不到为 `None`)。
         format: Option<mineral_model::AudioFormat>,
+
+        /// before_download 的裁决(未改写为 `None`、改写为 `Rewrite`)。
+        hooked: mineral_stats::DownloadHook,
     },
 
-    /// 目标文件已存在,幂等跳过(**不**触发完成事件)。
-    Skipped,
+    /// 未下载而跳过(**不**触发完成事件);成因见 [`SkipCause`]。
+    Skipped {
+        /// 跳过成因。
+        cause: SkipCause,
+    },
+}
+
+/// 一次下载跳过的成因(埋点 hooked 列据此分流)。
+pub(crate) enum SkipCause {
+    /// 目标文件已存在,幂等跳过(hooked=none)。
+    AlreadyExists,
+
+    /// before_download 返回 Skip,脚本否决(hooked=skip)。
+    HookVeto,
 }
 
 /// 解析下载环境:HTTP client(整段 GET 用)+ 永久导出根目录。
@@ -116,7 +133,9 @@ pub(crate) async fn download_song(
     // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
-        return Ok(DownloadOutcome::Skipped);
+        return Ok(DownloadOutcome::Skipped {
+            cause: SkipCause::AlreadyExists,
+        });
     }
 
     // 2. 取直链 + 实际格式(格式定扩展名,得在算导出路径前拿到)。
@@ -129,11 +148,14 @@ pub(crate) async fn download_song(
         .next()
         .ok_or_else(|| eyre!("无可用播放 URL: {}", song.id.qualified()))?;
 
-    // 2.5 脚本拦截:before_download(取链后、算导出路径 / 写盘前)。
+    // 2.5 脚本拦截:before_download(取链后、算导出路径 / 写盘前)。裁决记进 hooked
+    // 随结局带出(埋点落 downloads.hooked 列)。
     let mut quality = quality;
+    let mut hooked = mineral_stats::DownloadHook::None;
     match hooks.before_download(song, &play_url).await {
         mineral_script::HookDecision::Continue => {}
         mineral_script::HookDecision::Rewrite(spec) => {
+            hooked = mineral_stats::DownloadHook::Rewrite;
             if let Some(url) = spec.new_url() {
                 play_url.url = url.clone();
             }
@@ -156,7 +178,9 @@ pub(crate) async fn download_song(
                 reason,
                 "before_download 跳过本曲"
             );
-            return Ok(DownloadOutcome::Skipped);
+            return Ok(DownloadOutcome::Skipped {
+                cause: SkipCause::HookVeto,
+            });
         }
     }
     let (subdir, file_name) = library_relpath(song, quality, play_url.format.as_ref());
@@ -196,6 +220,7 @@ pub(crate) async fn download_song(
         path: export,
         quality,
         format: play_url.format.clone(),
+        hooked,
     })
 }
 
@@ -339,27 +364,64 @@ pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, qua
 pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
     let cache = Arc::clone(player.media_cache());
     let player = player.clone();
+    // 埋点用:song / quality / format 先留(cap 随后在 match 里借用)。format 未知时落
+    // 显式 "unknown"(cache_harvests.format 为 NOT NULL,比空串更可辨)。
+    let song_id = cap.song.id.clone();
+    let quality = cap.quality.as_str().to_owned();
+    let format = cap
+        .format
+        .as_ref()
+        .map_or("unknown", mineral_model::AudioFormat::as_str)
+        .to_owned();
     // async task(非 spawn_blocking):put_played 要 await DB 写穿透;入库内部的大拷贝由它自己
     // 再下沉到 spawn_blocking。metadata 是一次快速 stat,async 里直接调可接受。
     tokio::spawn(async move {
-        match std::fs::metadata(&cap.path) {
+        let (outcome, bytes) = match std::fs::metadata(&cap.path) {
             Ok(m) if m.len() > 0 => {
-                if let Err(e) = cache
+                let bytes = i64::try_from(m.len()).ok();
+                match cache
                     .put_played(&cap.song, cap.quality, cap.format.as_ref(), &cap.path)
                     .await
                 {
-                    mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
-                } else if let Some(path) = cache.get(&cap.song.id, cap.quality) {
-                    // 收割成功 = 该曲首次拥有完整本地副本:补算包络。若它仍在播,
-                    // 算完即推,播放中段波形直接点亮;不在播则落库待下次直取。
-                    player.ensure_envelope(cap.song.id.clone(), path);
+                    Err(e) => {
+                        mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
+                        (mineral_stats::CacheHarvestOutcome::Discarded, bytes)
+                    }
+                    Ok(evicted) => {
+                        // 埋点:本次入库触发的 LRU 驱逐(cache_evictions;系统域,无 actor)。
+                        for ev in evicted {
+                            player.inner.stats.event(mineral_stats::StatsEvent::System(
+                                mineral_stats::SystemEvent::CacheEviction {
+                                    cache_key: ev.key,
+                                    bytes: i64::try_from(ev.bytes).unwrap_or(i64::MAX),
+                                },
+                            ));
+                        }
+                        if let Some(path) = cache.get(&cap.song.id, cap.quality) {
+                            // 收割成功 = 该曲首次拥有完整本地副本:补算包络。若它仍在播,
+                            // 算完即推,播放中段波形直接点亮;不在播则落库待下次直取。
+                            player.ensure_envelope(cap.song.id.clone(), path);
+                        }
+                        (mineral_stats::CacheHarvestOutcome::Cached, bytes)
+                    }
                 }
             }
             _ => {
                 mineral_log::debug!(target: "player", "capture 文件缺失/空,不入缓存");
                 drop(std::fs::remove_file(&cap.path));
+                (mineral_stats::CacheHarvestOutcome::Discarded, None)
             }
-        }
+        };
+        // 埋点:边播边收割结局(cache_harvests;系统域)。
+        player.inner.stats.event(mineral_stats::StatsEvent::System(
+            mineral_stats::SystemEvent::CacheHarvest {
+                song: song_id,
+                quality,
+                format,
+                outcome,
+                bytes,
+            },
+        ));
     });
 }
 
@@ -446,22 +508,86 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
                 path,
                 quality,
                 format,
+                hooked,
             }) => {
                 p.last_ok += 1;
                 drop(p);
                 player
                     .notify()
                     .download_completed(song, &path, quality, format.as_ref());
+                let path_str = path.display().to_string();
+                record_download(
+                    player,
+                    song,
+                    quality.as_str(),
+                    format.as_ref().map(mineral_model::AudioFormat::as_str),
+                    mineral_stats::DownloadOutcome::Downloaded,
+                    hooked,
+                    Some(path_str.as_str()),
+                );
                 p = player.progress_handle().lock();
             }
-            Ok(DownloadOutcome::Skipped) => p.last_skip += 1,
+            Ok(DownloadOutcome::Skipped { cause }) => {
+                p.last_skip += 1;
+                drop(p);
+                // 幂等跳过 hooked=none;脚本 veto 记 skip——两类跳过在库里分得开。
+                let hooked = match cause {
+                    super::download::SkipCause::AlreadyExists => mineral_stats::DownloadHook::None,
+                    super::download::SkipCause::HookVeto => mineral_stats::DownloadHook::Skip,
+                };
+                record_download(
+                    player,
+                    song,
+                    player.download_quality().as_str(),
+                    None,
+                    mineral_stats::DownloadOutcome::Skipped,
+                    hooked,
+                    None,
+                );
+            }
             Err(e) => {
                 drop(p);
                 mineral_log::warn!(target: "download", song_id = song.id.as_str(), error = mineral_log::chain(&e), "下载失败");
+                record_download(
+                    player,
+                    song,
+                    player.download_quality().as_str(),
+                    None,
+                    mineral_stats::DownloadOutcome::Failed,
+                    mineral_stats::DownloadHook::None,
+                    None,
+                );
                 player.progress_handle().lock().last_fail += 1;
             }
         }
     }
+}
+
+/// 记一次下载事件(system 触发;`hooked` 由 [`DownloadOutcome`] / [`SkipCause`] 带出)。
+#[allow(clippy::too_many_arguments)] // downloads 一行的固有列,拆结构体反增噪
+fn record_download(
+    player: &PlayerCore,
+    song: &Song,
+    quality: &str,
+    format: Option<&str>,
+    outcome: mineral_stats::DownloadOutcome,
+    hooked: mineral_stats::DownloadHook,
+    path: Option<&str>,
+) {
+    player
+        .inner
+        .stats
+        .event(mineral_stats::StatsEvent::Behavior {
+            actor: mineral_stats::Actor::System,
+            event: mineral_stats::BehaviorEvent::Download {
+                song: song.id.clone(),
+                quality: quality.to_owned(),
+                format: format.map(str::to_owned),
+                outcome,
+                hooked,
+                path: path.map(str::to_owned),
+            },
+        });
 }
 
 /// 会话收尾:`result_seq` +1(client 据其增长出一次完成提示),复位进度态、`active=false`;
@@ -636,7 +762,7 @@ mod tests {
         )
         .await?;
         assert!(
-            matches!(outcome, DownloadOutcome::Skipped),
+            matches!(outcome, DownloadOutcome::Skipped { .. }),
             "hook 跳过应记 Skipped"
         );
         assert!(

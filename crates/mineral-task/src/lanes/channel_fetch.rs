@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::event::TaskEvent;
 use crate::id::{Priority, TaskId};
-use crate::kind::ChannelFetchKind;
+use crate::kind::{ChannelFetchKind, ChannelFetchKindTag};
 use crate::ongoing::Ongoing;
 use crate::outcome::TaskOutcome;
 
@@ -22,6 +22,9 @@ pub(crate) struct Job {
 
     /// 业务参数。
     pub kind: ChannelFetchKind,
+
+    /// 触发优先级(埋点 fetches.trigger:User=用户触发、Background=系统链路)。
+    pub priority: Priority,
 
     /// 取消令牌,被 cancel 后 worker 在下一个 await 点直接返回 `Cancelled`。
     pub cancel: CancellationToken,
@@ -163,22 +166,35 @@ async fn next_job(
 }
 
 /// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
+/// 收束后另发一条 [`TaskEvent::FetchDone`] 埋点信号(成功 / 失败 / 取消都发)。
 async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
     let Job {
         id: _,
         kind,
+        priority,
         cancel,
         done_tx,
     } = job;
-    if cancel.is_cancelled() {
-        let _ = done_tx.send(TaskOutcome::Cancelled);
-        return;
-    }
-    let outcome = tokio::select! {
-        biased;
-        () = cancel.cancelled() => TaskOutcome::Cancelled,
-        out = execute(channel, &kind, event_tx) => out,
+    let started = std::time::Instant::now();
+    let outcome = if cancel.is_cancelled() {
+        TaskOutcome::Cancelled
+    } else {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => TaskOutcome::Cancelled,
+            out = execute(channel, &kind, event_tx) => out,
+        }
     };
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // 埋点信号:取数收束(fetches)。server 记录后不转发 client。
+    event_tx.lock().push(TaskEvent::FetchDone {
+        kind: ChannelFetchKindTag::of(&kind),
+        source: kind.source(),
+        target_ref: kind.target_ref(),
+        from_user: priority == Priority::User,
+        outcome,
+        latency_ms,
+    });
     let _ = done_tx.send(outcome);
 }
 

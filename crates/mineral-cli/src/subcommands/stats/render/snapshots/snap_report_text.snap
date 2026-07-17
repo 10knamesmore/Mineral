@@ -1,0 +1,26 @@
+---
+source: crates/mineral-cli/src/subcommands/stats/render/text.rs
+description: "stats report text:窗口 + 总量 + 带名 top 三榜 + 条形来源分布 + 事件量"
+expression: "render_report(&sample_report(), \"2026\")"
+---
+window:      2026
+plays:       12   completed: 9   skipped: 3
+listen:      1h30m
+songs:       7   active days: 4   discoveries: 2
+sessions:    2   longest: 20m   streak: 3d
+
+top songs:
+ 1. 稻香  9 次  9m
+
+top albums:
+ 1. 魔杰座  6 次  6m
+
+top artists:
+ 1. 周杰伦  9 次  9m
+
+by source:
+       8  netease      ████████████████████
+       1  (未知)         ██
+
+events:
+        12  searches

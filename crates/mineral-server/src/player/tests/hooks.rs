@@ -345,3 +345,28 @@ async fn before_stream_continue_keeps_original() -> color_eyre::Result<()> {
     drop(runtime);
     Ok(())
 }
+
+/// before_stream hook 触发即记一条 hook_fires(即便裁决 Continue);真 recorder 写库,
+/// 证 hook_bridge 接线产数据。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn before_stream_hook_records_hook_fire() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let (core, runtime) = core_with_script_stats(
+        r#"mineral.hook("before_stream", function(ctx) end)"#, // 无返回 = Continue
+        recorder,
+    )?;
+    core.with_state(|st| st.current_song = Some(song("a")));
+    crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while store.status().await?.events < 1 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:hook_fires 未落库");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(runtime);
+    Ok(())
+}

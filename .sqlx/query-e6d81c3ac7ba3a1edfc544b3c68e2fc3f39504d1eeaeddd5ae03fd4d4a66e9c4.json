@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_cancels (ts, session_id, actor, filter_tags) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e6d81c3ac7ba3a1edfc544b3c68e2fc3f39504d1eeaeddd5ae03fd4d4a66e9c4"
+}

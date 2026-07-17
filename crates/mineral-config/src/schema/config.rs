@@ -21,6 +21,7 @@ use super::script::ScriptConfig;
 use super::search::SearchConfig;
 use super::sources::SourcesConfig;
 use super::spectrum::SpectrumConfig;
+use super::stats::StatsConfig;
 use super::theme::ThemeConfig;
 use super::toast::ToastConfig;
 use super::waveform::WaveformConfig;
@@ -52,6 +53,9 @@ pub struct Config {
 
     /// 脚本运行时段(watchdog 双阈值)。
     script: ScriptConfig,
+
+    /// 行为埋点采集段(采集档位 / 事件微调 / 保留 / 查询期口径)。
+    stats: StatsConfig,
 }
 
 /// TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是

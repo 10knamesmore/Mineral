@@ -15,16 +15,14 @@ use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
+    DownloadProgress, DownloadTarget, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
 use parking_lot::Mutex;
-use rand::seq::SliceRandom;
 
 use crate::download::{self, Capturing};
 use crate::gapless;
 use crate::media_cache::MediaCache;
-use crate::queue::{advance_next, advance_prev, apply_play_mode};
 use crate::state::State;
 
 /// 服务端 PlayerCore。`Clone` 通过 `Arc` 廉价。
@@ -69,6 +67,9 @@ pub(crate) struct Inner {
 
     /// 事件通知双路出口(event hub + 脚本线程)。
     pub(crate) notify: crate::notify::Notifier,
+
+    /// 埋点 recorder(热路径 gating + fire-and-forget 落库);无持久化时为 disabled no-op。
+    pub(crate) stats: crate::StatsRecorder,
 
     /// 属性 diff 的上次值缓存(background_loop 每 tick 比对)。
     pub(crate) props: crate::props::PropsWatch,
@@ -154,6 +155,16 @@ pub(crate) struct SpawnConfig<'a> {
     pub(crate) tree: serde_json::Value,
 }
 
+/// [`PlayerCore::spawn`] 的两个 fire-and-forget 出口:事件通知 + 埋点 recorder。
+/// 合成一参避免 spawn 超 clippy 参数上限。
+pub(crate) struct Sinks {
+    /// 事件通知双路出口(event hub + 脚本线程)。
+    pub(crate) notify: crate::notify::Notifier,
+
+    /// 埋点 recorder(热路径 gating + fire-and-forget 落库)。
+    pub(crate) stats: crate::StatsRecorder,
+}
+
 impl PlayerCore {
     /// 起 PlayerCore 并 spawn 长跑 task(events drain + auto-next + prefetch tick)。
     ///
@@ -164,7 +175,7 @@ impl PlayerCore {
     ///   - `persist`: 持久化句柄,存入 [`Inner`] 供 B-T7 起使用。
     ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
     ///   - `spawn_config`: 配置侧参数包(切片 + 有效配置底树)。
-    ///   - `notify`: 事件通知双路出口(event hub + 脚本线程)。
+    ///   - `sinks`: 事件通知 + 埋点 recorder 两个 fire-and-forget 出口。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
@@ -172,12 +183,13 @@ impl PlayerCore {
         persist: ServerStore,
         media_cache: MediaCache,
         spawn_config: SpawnConfig<'_>,
-        notify: crate::notify::Notifier,
+        sinks: Sinks,
     ) -> Self {
         let SpawnConfig {
             slices: config,
             tree: config_tree,
         } = spawn_config;
+        let Sinks { notify, stats } = sinks;
         let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
         let library = crate::library::Library::new(
@@ -198,6 +210,7 @@ impl PlayerCore {
             download_tx,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             notify,
+            stats,
             props: crate::props::PropsWatch::default(),
             ui_state: Mutex::new(None),
             config_host: crate::config_host::ConfigHost::new(config_tree),
@@ -440,7 +453,21 @@ impl PlayerCore {
     // ---- player 业务 ----
 
     /// Enter 一首歌。等价历史 `App::submit_play_song`。
-    pub fn play_song(&self, song: &Song) {
+    ///
+    /// **不结算上一首**:自然 EOF / next / prev / stop 各路径已在调用前按各自语义
+    /// (eof / skip / stop)结算;直接改播入口(client `PlaySong` / 脚本 `Play`)须先调
+    /// [`Self::settle_interrupted`],否则被打断曲经 recorder 的自愈防线按近似值兜底。
+    ///
+    /// # Params:
+    ///   - `song`: 要播放的歌
+    ///   - `play_origin`: 起播来源(埋点 provenance:显式点播 / 自动接续 / 脚本)
+    ///   - `actor`: 发起方(用户按键 / 脚本 / daemon 自治;与 origin 独立)
+    pub fn play_song(
+        &self,
+        song: &Song,
+        play_origin: mineral_stats::PlayOrigin,
+        actor: mineral_stats::Actor,
+    ) {
         mineral_log::info!(
             target: "player",
             song_id = song.id.as_str(),
@@ -504,6 +531,22 @@ impl PlayerCore {
             };
             (cached_url, interrupted, stale_queued)
         };
+        // 埋点:起播语境快照(origin / actor 由调用点穿透;context 经 take_play_context
+        // 消费 per-song 覆盖或继承队列级语境;format 等 play_url 快照随后经 enrich 补;
+        // 时钟异常拿不出起播时刻则本次不记)。
+        let play_mode = self.with_state(|st| st.play_mode);
+        let context = self.take_play_context(&song.id);
+        if let Some(pending) = crate::pending_from_start(
+            song.id.clone(),
+            crate::stats_play_mode(play_mode),
+            song.duration_ms.and_then(|d| i64::try_from(d).ok()),
+            origin,
+            play_origin,
+            actor,
+            context,
+        ) {
+            self.inner.stats.play_started(pending);
+        }
         if let Some(cap) = interrupted {
             // 切歌时若该曲已下完(且 harvest 轮询还没来得及处理)→ 照样入缓存;否则是 half,删残件。
             if prev_download_complete {
@@ -561,164 +604,84 @@ impl PlayerCore {
         self.spawn_save_session();
     }
 
-    /// 替换 queue。等价历史 `App::set_queue`。
-    pub fn set_queue(&self, new_queue: Vec<Song>, target_id: &SongId) {
-        {
-            let mut st = self.inner.state.lock();
-            mineral_log::info!(
-                target: "player",
-                len = new_queue.len(),
-                target_id = target_id.as_str(),
-                mode = ?st.play_mode,
-                "set queue"
-            );
-            if matches!(st.play_mode, PlayMode::Shuffle) {
-                let mut shuffled = new_queue.clone();
-                shuffled.shuffle(&mut rand::rng());
-                if let Some(pos) = shuffled.iter().position(|s| s.id == *target_id) {
-                    shuffled.swap(0, pos);
-                }
-                st.original_queue = Some(new_queue);
-                st.queue = shuffled;
-                st.queue_sel = 0;
-            } else {
-                let sel = new_queue
-                    .iter()
-                    .position(|s| s.id == *target_id)
-                    .unwrap_or(0);
-                st.queue = new_queue;
-                st.queue_sel = sel;
-                st.original_queue = None;
-            }
-            // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
-            st.invalidate_prefetch();
-            st.bump_queue();
-        }
-        // 取消引擎里尚未 append 的待建预排(已 append 的无法摘除,会自然播完后由边界兜底)。
-        self.inner.audio.clear_next();
-        self.spawn_save_session();
-    }
-
-    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
-    pub fn queue_insert_next(&self, song: Song) {
-        {
-            let mut st = self.inner.state.lock();
-            crate::queue::insert_next(&mut st, song);
-            // 下一首变了:作废已排的 gapless 预排,让 check_prefetch 重排
-            st.invalidate_prefetch();
-        }
-        self.inner.audio.clear_next();
-        self.spawn_save_session();
-    }
-
-    /// 追加到队列末尾,不动播放上下文与当前曲。
-    /// 当前曲恰在尾部时"下一首"会变,保守作废预排(与插播同样处理)。
-    pub fn queue_append(&self, song: Song) {
-        {
-            let mut st = self.inner.state.lock();
-            crate::queue::append(&mut st, song);
-            st.invalidate_prefetch();
-        }
-        self.inner.audio.clear_next();
-        self.spawn_save_session();
-    }
-
-    /// 全部已注册 channel 的能力声明(按注册顺序)。
-    pub fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
-        self.inner
-            .channels
-            .iter()
-            .map(|ch| (ch.source(), ch.caps()))
-            .collect()
-    }
-
-    /// `m` 键:PlayMode cycle + 进/退 Shuffle 边界处洗牌或还原。
-    pub fn cycle_play_mode(&self) {
-        {
-            let mut st = self.inner.state.lock();
-            let new = st.play_mode.cycle();
-            apply_play_mode(&mut st, new);
-        }
-        self.spawn_save_session();
-    }
-
-    /// 直接设目标 PlayMode(系统媒体控件按维度写 Shuffle/LoopStatus 后塌缩成的档)。
-    pub fn set_play_mode(&self, mode: PlayMode) {
-        {
-            let mut st = self.inner.state.lock();
-            apply_play_mode(&mut st, mode);
-        }
-        self.spawn_save_session();
-    }
-
-    /// 启动时恢复上次会话的播放模式:只写模式标志,不走 [`Self::set_play_mode`] 的
-    /// 洗牌/还原边界(此刻队列为空,无可洗),也不回写会话(快照其余字段原样)。
+    /// 取该曲的起播语境:优先消费 per-song 覆盖(插队散曲,取后移除),否则继承队列级
+    /// 语境。所有起播路径(play_song / gapless adopt)统一走这里,防止某条路径绕过覆盖
+    /// 把插队曲记成队列归属。
     ///
     /// # Params:
-    ///   - `mode`: 上次会话解析出的播放模式
-    pub fn restore_play_mode(&self, mode: PlayMode) {
-        let mut st = self.inner.state.lock();
-        st.play_mode = mode;
+    ///   - `id`: 起播曲 id
+    ///
+    /// # Return:
+    ///   该曲应记入 plays 的语境
+    pub(crate) fn take_play_context(&self, id: &SongId) -> mineral_stats::QueueContext {
+        self.with_state(|st| {
+            st.context_overrides
+                .remove(&id.qualified())
+                .unwrap_or_else(|| st.queue_context.clone())
+        })
     }
 
-    /// `p` 键:进度 > 阈值 → seek(0);否则跳上一首。
-    pub fn prev_or_restart(&self) {
-        let pos = self.inner.audio.snapshot().position_ms;
-        let (old, prev) = {
-            let mut st = self.inner.state.lock();
-            if st.current_song.is_none() {
-                return;
-            }
-            if pos > self.inner.prev_restart_threshold_ms {
-                drop(st);
-                // 回开头不算切歌/跳过,不打点。
-                self.inner.audio.seek(0);
-                return;
-            }
-            // advance_prev 把 queue_sel 钉到上一首下标,play_song 据守卫保留它(见其内注释)。
-            (st.current_song.clone(), advance_prev(&mut st))
+    /// 结算被直接改播打断的在播曲(按 skip):直接改播入口(client `PlaySong` / 脚本
+    /// `Play`)在调 [`Self::play_song`] 前用。next / prev / EOF / stop 各有自己的结算,
+    /// 不走这里。无在播曲时 no-op。
+    ///
+    /// 必须在新曲 `play_song` **之前**调用:结算取的是被打断曲的实时播放位置,且
+    /// recorder 按 FIFO 先消化本结算再开新 pending。
+    pub(crate) fn settle_interrupted(&self) {
+        let Some(old) = self.with_state(|st| st.current_song.clone()) else {
+            return;
         };
-        if let Some(s) = prev {
-            if let Some(old) = old {
-                self.spawn_on_played(old.id.clone(), /*completed*/ false, pos);
-                self.inner
-                    .notify
-                    .track_finished(&old, mineral_protocol::FinishReason::Skip);
-            }
-            self.play_song(&s);
-        }
-    }
-
-    /// `n` 键:按 PlayMode 切下一首。
-    pub fn next_song(&self) {
         let position_ms = self.inner.audio.snapshot().position_ms;
-        let (old, next) = {
-            let mut st = self.inner.state.lock();
-            // advance_next 把 queue_sel 钉到下一首下标,play_song 据守卫保留它(见其内注释)。
-            (st.current_song.clone(), advance_next(&mut st))
-        };
-        if let Some(s) = next {
-            if let Some(old) = old {
-                self.spawn_on_played(old.id.clone(), /*completed*/ false, position_ms);
-                self.inner
-                    .notify
-                    .track_finished(&old, mineral_protocol::FinishReason::Skip);
-            }
-            self.play_song(&s);
-        }
+        self.spawn_on_played(
+            old.id.clone(),
+            mineral_stats::FinishReason::Skip,
+            position_ms,
+        );
+        self.inner
+            .notify
+            .track_finished(&old, mineral_protocol::FinishReason::Skip);
+    }
+
+    /// 以 play_url 快照富化在播行的音频列(格式 / 码率 / 音质 / 位深 / 顶换标记)。
+    /// 三个 play_url 落点(取链就绪 / gapless 轮转 / 脚本改写)统一走这里,顶换标记
+    /// 才不会漏。
+    ///
+    /// # Params:
+    ///   - `play_url`: 已生效的播放 URL 快照
+    pub(crate) fn enrich_from_play_url(&self, play_url: &mineral_model::PlayUrl) {
+        self.inner
+            .stats
+            .enrich_play_audio(mineral_stats::PlayAudioSnapshot {
+                audio_format: play_url.format.clone(),
+                bitrate_bps: play_url.bitrate_bps.map(i64::from),
+                quality: Some(play_url.quality),
+                bit_depth: play_url.bit_depth.map(i64::from),
+                substituted: play_url.substituted,
+            });
     }
 
     /// 异步上报一次播放打点(fire-and-forget,不阻塞播放)。
     ///
     /// # Params:
     ///   - `id`: 歌曲
-    ///   - `completed`: 是否完整播完(false=跳过)
+    ///   - `reason`: 结束原因(自然播完 eof / 被切 skip;stop / error 走各自站点)
     ///   - `listen_ms`: 本次收听毫秒
-    pub(crate) fn spawn_on_played(&self, id: SongId, completed: bool, listen_ms: u64) {
+    pub(crate) fn spawn_on_played(
+        &self,
+        id: SongId,
+        reason: mineral_stats::FinishReason,
+        listen_ms: u64,
+    ) {
+        // 埋点:结算在播行(起播被 gate 掉时 actor 无 pending、自动忽略)。
+        self.inner
+            .stats
+            .play_ended(reason, i64::try_from(listen_ms).unwrap_or(i64::MAX));
         let Some(channel) = self.channel_for(id.namespace()) else {
             return;
         };
         let channel = channel.clone();
+        // channel 契约的上报语义是完成布尔:eof 视为完整播完,其余为中断。
+        let completed = matches!(reason, mineral_stats::FinishReason::Eof);
         tokio::spawn(async move {
             if let Err(e) = channel.on_played(&id, completed, listen_ms).await {
                 mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "on_played 打点失败");
@@ -763,6 +726,9 @@ impl PlayerCore {
         self.spawn_meta_backfill();
     }
 }
+
+mod control;
+mod transport;
 
 #[cfg(test)]
 mod tests;

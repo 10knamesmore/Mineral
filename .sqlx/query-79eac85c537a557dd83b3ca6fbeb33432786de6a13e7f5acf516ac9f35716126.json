@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT origin AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM love_changes WHERE ts >= ? AND ts < ? AND loved = 1\n               GROUP BY origin ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "79eac85c537a557dd83b3ca6fbeb33432786de6a13e7f5acf516ac9f35716126"
+}

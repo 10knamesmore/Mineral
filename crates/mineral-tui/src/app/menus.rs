@@ -162,6 +162,7 @@ impl App {
                     MenuAction::Play {
                         song: song.clone(),
                         queue: self.surface_song_queue(surface),
+                        context: self.surface_play_context(surface),
                     },
                 ),
                 MenuItem::keyed('n', "Play next", MenuAction::PlayNext(song.clone())),
@@ -209,6 +210,23 @@ impl App {
                 .map(DetailFrame::song_list)
                 .unwrap_or_default(),
             SurfaceKind::BrowsePlaylists => Vec::new(),
+        }
+    }
+
+    /// 某 list 面「整列起播」的队列语境(埋点 provenance,与 [`Self::surface_song_queue`] 取的
+    /// 队列同源):Library 归当前歌单、search 结果列归搜索词、detail 面板归当前容器身份;
+    /// Playlists 面选中的是容器本身(不在此起单曲队列)→ `Unknown`。
+    fn surface_play_context(&self, surface: SurfaceKind) -> mineral_protocol::QueueContextWire {
+        match surface {
+            SurfaceKind::BrowseLibrary => self.state.selected_playlist().map_or(
+                mineral_protocol::QueueContextWire::Unknown,
+                |p| mineral_protocol::QueueContextWire::Playlist {
+                    id: p.data.id.clone(),
+                },
+            ),
+            SurfaceKind::SearchResults => self.state.channel_search.search_context(),
+            SurfaceKind::SearchDetail => self.state.channel_search.detail_context(),
+            SurfaceKind::BrowsePlaylists => mineral_protocol::QueueContextWire::Unknown,
         }
     }
 
@@ -694,6 +712,34 @@ mod tests {
                 ("play_song", want_id.clone()),
             ],
             "p=Play:整列(3)替换队列 + 起播选中曲,两步齐"
+        );
+        Ok(())
+    }
+
+    /// F1 回归:Library 上 o→Play 记当前歌单语境(此前菜单单曲 Play 硬编码 Unknown)。
+    #[test]
+    fn o_menu_play_carries_playlist_context() -> color_eyre::Result<()> {
+        let (mut app, _ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
+        let contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.client = std::sync::Arc::new(crate::test_support::TestClient {
+            queue_contexts: std::sync::Arc::clone(&contexts),
+            ..crate::test_support::TestClient::default()
+        });
+        draw_once(&app)?;
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('p'));
+        let got = contexts
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
+        assert_eq!(
+            *got,
+            vec![(
+                "set_queue",
+                mineral_protocol::QueueContextWire::Playlist {
+                    id: PlaylistId::new(SourceKind::NETEASE, "p1")
+                }
+            )],
+            "库内 o→Play 记当前歌单语境"
         );
         Ok(())
     }

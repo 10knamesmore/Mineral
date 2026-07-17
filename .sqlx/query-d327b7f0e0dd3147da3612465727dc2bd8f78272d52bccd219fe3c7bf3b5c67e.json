@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hook_fires (ts, session_id, ns, song_value, hook, stage, decision, fail_open) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "d327b7f0e0dd3147da3612465727dc2bd8f78272d52bccd219fe3c7bf3b5c67e"
+}

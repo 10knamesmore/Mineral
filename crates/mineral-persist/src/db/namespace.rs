@@ -2,7 +2,7 @@
 
 use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId, SourceKind};
 
 use crate::ServerStore;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
@@ -231,6 +231,54 @@ impl NamespaceStore {
         .wrap_err_with(|| format!("查 song_artists 失败 song={song_value}"))?;
 
         Ok(Some(row.into_song(artist_rows)?))
+    }
+
+    /// 按 album id 回查专辑名(取任一成员歌 `song_meta.album_name`;专辑名只作为歌的投影存,
+    /// 无独立专辑表)。降级 / 未命中返回 `Ok(None)`。
+    ///
+    /// # Params:
+    ///   - `id`: 专辑 id(裸值查 `song_meta.album_id`)
+    ///
+    /// # Return:
+    ///   命中返回 `Ok(Some(name))`,否则 `Ok(None)`。
+    pub async fn album_name(&self, id: &AlbumId) -> color_eyre::Result<Option<String>> {
+        let Some(pool) = self.persist.pool() else {
+            return Ok(None);
+        };
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT album_name FROM song_meta \
+             WHERE namespace = ? AND album_id = ? AND album_name IS NOT NULL LIMIT 1",
+        )
+        .bind(self.source.name())
+        .bind(id.value())
+        .fetch_optional(pool)
+        .await
+        .wrap_err_with(|| format!("回查专辑名失败 album={}", id.value()))?;
+        Ok(row.map(|(n,)| n))
+    }
+
+    /// 按 artist id 回查艺名(取任一署名行 `song_artists.artist_name`;艺名同样只作为歌的
+    /// 投影存)。降级 / 未命中返回 `Ok(None)`。
+    ///
+    /// # Params:
+    ///   - `id`: 艺人 id(裸值查 `song_artists.artist_id`)
+    ///
+    /// # Return:
+    ///   命中返回 `Ok(Some(name))`,否则 `Ok(None)`。
+    pub async fn artist_name(&self, id: &ArtistId) -> color_eyre::Result<Option<String>> {
+        let Some(pool) = self.persist.pool() else {
+            return Ok(None);
+        };
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT artist_name FROM song_artists \
+             WHERE namespace = ? AND artist_id = ? LIMIT 1",
+        )
+        .bind(self.source.name())
+        .bind(id.value())
+        .fetch_optional(pool)
+        .await
+        .wrap_err_with(|| format!("回查艺名失败 artist={}", id.value()))?;
+        Ok(row.map(|(n,)| n))
     }
 
     /// 记一次完整播放：play_count+1、累加时长、刷新 last_played_at。降级 no-op。
@@ -635,6 +683,47 @@ mod tests {
             assert_eq!(g.artists.len(), song.artists.len());
             assert_eq!(g.duration_ms, Some(200_000));
         }
+        Ok(())
+    }
+
+    /// album_name / artist_name:按 id 回查名(取任一成员歌 / 署名行),未命中 None。
+    #[tokio::test]
+    async fn album_and_artist_name_lookup() -> color_eyre::Result<()> {
+        use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef};
+
+        let dir = tempfile::tempdir()?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
+        let s = p.scope(SourceKind::NETEASE);
+        let song = Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, "1"))
+            .name("稻香".to_owned())
+            .artists(vec![ArtistRef {
+                id: ArtistId::new(SourceKind::NETEASE, "jay"),
+                name: "周杰伦".to_owned(),
+            }])
+            .album(Some(AlbumRef {
+                id: AlbumId::new(SourceKind::NETEASE, "mojito"),
+                name: "魔杰座".to_owned(),
+            }))
+            .build();
+        s.upsert_meta(&song).await?;
+
+        assert_eq!(
+            s.album_name(&AlbumId::new(SourceKind::NETEASE, "mojito"))
+                .await?,
+            Some("魔杰座".to_owned())
+        );
+        assert_eq!(
+            s.artist_name(&ArtistId::new(SourceKind::NETEASE, "jay"))
+                .await?,
+            Some("周杰伦".to_owned())
+        );
+        assert_eq!(
+            s.album_name(&AlbumId::new(SourceKind::NETEASE, "absent"))
+                .await?,
+            None,
+            "未命中回落 None"
+        );
         Ok(())
     }
 

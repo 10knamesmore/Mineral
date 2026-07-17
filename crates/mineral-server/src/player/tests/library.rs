@@ -346,7 +346,9 @@ async fn toggle_favorite_persists_locally_even_when_remote_unsupported() -> colo
     let scope = persist.scope(SourceKind::NETEASE);
     assert!(!scope.is_loved(&id).await?, "初始未收藏");
 
-    let new = core.toggle_favorite(&track).await?;
+    let new = core
+        .toggle_favorite(&track, mineral_stats::Actor::User)
+        .await?;
     assert!(new, "toggle 返回新态 true");
     assert!(
         scope.is_loved(&id).await?,
@@ -373,7 +375,9 @@ async fn toggle_favorite_persists_locally_even_when_remote_unsupported() -> colo
         .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应推 canonical favorited 集"))?;
     assert!(pushed.contains(&id), "推的 canonical 应含刚收藏的歌");
 
-    let new2 = core.toggle_favorite(&track).await?;
+    let new2 = core
+        .toggle_favorite(&track, mineral_stats::Actor::User)
+        .await?;
     assert!(!new2, "再 toggle 回 false");
     assert!(!scope.is_loved(&id).await?, "本地 persist 已取消");
     Ok(())
@@ -404,7 +408,8 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         MediaCache::disabled(),
     )?;
     let track = song("agg1");
-    core.toggle_favorite(&track).await?;
+    core.toggle_favorite(&track, mineral_stats::Actor::User)
+        .await?;
 
     // detail 同步推;LibrarySnapshot 经 library_concluded 出口管线异步落地——轮询累积到它为止
     // (不能只 drain 一次:snapshot 可能尚未产出,或与首次 drain 竞争被吞)。
@@ -486,7 +491,8 @@ async fn set_favorite_backfills_missing_meta() -> color_eyre::Result<()> {
     let scope = persist.scope(SourceKind::NETEASE);
     assert!(scope.get_meta(&id).await?.is_none(), "初始无 meta");
 
-    core.set_favorite(&id, /*loved*/ true).await?;
+    core.set_favorite(&id, /*loved*/ true, mineral_stats::Actor::User)
+        .await?;
 
     // 补 meta 是后台单飞任务(异步 spawn),轮询到它把 meta 写进 persist。
     let deadline = std::time::Instant::now() + Duration::from_secs(5);

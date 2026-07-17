@@ -42,6 +42,7 @@ assert_cmd       = { workspace = true }
 predicates       = { workspace = true }
 mineral-model    = { workspace = true }
 mineral-protocol = { workspace = true }
+mineral-stats    = { workspace = true, features = ["fixture"] }
 tokio            = { workspace = true }
 
 [lints]

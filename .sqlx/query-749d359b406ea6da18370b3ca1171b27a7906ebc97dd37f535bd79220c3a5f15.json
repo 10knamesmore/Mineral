@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO bus_messages (ts, session_id, actor, name) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "749d359b406ea6da18370b3ca1171b27a7906ebc97dd37f535bd79220c3a5f15"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT outcome AS \"label!\", COUNT(*) AS \"count!: i64\"\n               FROM downloads WHERE ts >= ? AND ts < ?\n               GROUP BY outcome ORDER BY 2 DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "label!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "f2907ba6456d430e506b676c142399734c582c6c4185d6d11a36aa769a2dab76"
+}

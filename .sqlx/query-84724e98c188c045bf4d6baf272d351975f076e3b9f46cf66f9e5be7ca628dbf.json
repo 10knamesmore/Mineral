@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM plays WHERE started_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "84724e98c188c045bf4d6baf272d351975f076e3b9f46cf66f9e5be7ca628dbf"
+}

@@ -8,6 +8,7 @@ use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
+use crate::subcommands::stats::{self, StatsCommand};
 use crate::subcommands::{status, stop};
 
 /// 多源终端音乐播放器。无子命令时进入 TUI。
@@ -68,6 +69,13 @@ pub enum Command {
     /// 启动后台播放 daemon。
     Serve,
 
+    /// 埋点数据查询(直读 stats.db,不连 daemon)。
+    Stats {
+        /// stats 下的具体子命令。
+        #[command(subcommand)]
+        cmd: StatsCommand,
+    },
+
     /// 显示当前播放状态(连 daemon)。
     Status,
 
@@ -96,6 +104,7 @@ async fn run_async(command: Command) -> color_eyre::Result<()> {
         Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,
+        Command::Stats { cmd } => stats::run(cmd).await,
         Command::Status => status::run().await,
         Command::Stop => stop::run().await,
         Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),

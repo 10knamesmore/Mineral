@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO mode_changes (ts, session_id, actor, from_mode, to_mode) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "0d38df38f244f2a8bb4780e5de130cf55d96459bf5baed59808dfae62e5ce51c"
+}

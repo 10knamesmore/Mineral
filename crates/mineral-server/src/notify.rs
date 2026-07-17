@@ -184,9 +184,16 @@ impl PlayerCore {
     /// audio 实际停止严格同步)。client 的 `stop` 与 MPRIS 的 Stop 都走这里。
     pub(crate) fn stop_playback(&self) {
         let current = self.with_state(|st| st.current_song.clone());
+        let position = self.inner.audio.snapshot().position_ms;
         self.inner.audio.stop();
         if let Some(song) = current {
             self.inner.notify.track_finished(&song, FinishReason::Stop);
+            // 埋点:结算被停的在播行(stop 不走 spawn_on_played,单独结算防 pending 被下次
+            // 起播覆盖丢失)。actor 无 pending 时自动忽略。
+            let listen = i64::try_from(position).unwrap_or(i64::MAX);
+            self.inner
+                .stats
+                .play_ended(mineral_stats::FinishReason::Stop, listen);
         }
     }
 

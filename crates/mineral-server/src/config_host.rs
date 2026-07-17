@@ -141,6 +141,11 @@ impl PlayerCore {
     /// # Params:
     ///   - `tree`: 新合成底树(加载管线产物)
     pub(crate) fn set_config_base(&self, tree: serde_json::Value) {
+        // 埋点:配置从磁盘重载(config_reloads;此入口仅由 mtime 重载回调驱动,故一次
+        // 调用 = 一次真重载,即便有效树最终未变——「重读了文件」本身是要记的事实)。
+        self.inner.stats.event(mineral_stats::StatsEvent::System(
+            mineral_stats::SystemEvent::ConfigReload,
+        ));
         let (changed, effective, evicted) = {
             let mut guard = self.inner.config_host.state.lock();
             let state = &mut *guard;
@@ -152,6 +157,7 @@ impl PlayerCore {
         };
         self.report_evicted_overrides(&evicted);
         if changed {
+            self.reapply_stats(&effective);
             self.notify().config_changed(BusValue::from_json(effective));
         }
     }
@@ -196,6 +202,7 @@ impl PlayerCore {
         };
         self.report_evicted_overrides(&evicted);
         if changed {
+            self.reapply_stats(&effective);
             self.notify().config_changed(BusValue::from_json(effective));
         }
     }
@@ -203,6 +210,23 @@ impl PlayerCore {
     /// 当前有效配置(新 client 握手订阅 `Config` 时重放一帧)。
     pub(crate) fn effective_config(&self) -> BusValue {
         BusValue::from_json(self.inner.config_host.state.lock().effective.clone())
+    }
+
+    /// 配置重算后把 stats 采集侧旋钮折算给 recorder 热更(level / gap / exclude 等,
+    /// 只影响后续采集;`report` 口径不进此处,报告装配时现读)。落型失败保持旧参数。
+    ///
+    /// # Params:
+    ///   - `effective`: 新有效配置树
+    fn reapply_stats(&self, effective: &serde_json::Value) {
+        match serde_json::from_value::<mineral_config::Config>(effective.clone()) {
+            Ok(config) => self
+                .inner
+                .stats
+                .set_params(crate::params_from_config(config.stats())),
+            Err(e) => {
+                mineral_log::warn!(target: "stats", error = mineral_log::chain(&e), "配置落型失败,保持旧采集参数");
+            }
+        }
     }
 
     /// 落窗口标题覆盖(渲染产物直通:不进合成、不触发重算,10fps 级高频友好)。

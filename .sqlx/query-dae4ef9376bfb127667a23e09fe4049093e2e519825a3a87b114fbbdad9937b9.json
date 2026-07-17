@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(run_len), 0) AS \"streak!: i64\" FROM (\n                 SELECT COUNT(*) AS run_len FROM (\n                   SELECT day - ROW_NUMBER() OVER (ORDER BY day) AS grp FROM (\n                     SELECT DISTINCT started_at / 1000 / 86400 AS day\n                     FROM plays WHERE started_at >= ? AND started_at < ?\n                   )\n                 ) GROUP BY grp\n               )",
+  "describe": {
+    "columns": [
+      {
+        "name": "streak!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dae4ef9376bfb127667a23e09fe4049093e2e519825a3a87b114fbbdad9937b9"
+}

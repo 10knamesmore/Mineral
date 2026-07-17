@@ -92,14 +92,14 @@ impl MediaCache {
     ///   - `src`: capture 落盘文件路径(成功后被移走)
     ///
     /// # Return:
-    ///   入库成功 / 缓存禁用都返回 `Ok(())`。
+    ///   入库时 LRU 驱逐掉的记录(可空;供上层 cache_evictions 埋点);缓存禁用返回空 vec。
     pub(crate) async fn put_played(
         &self,
         song: &Song,
         quality: BitRate,
         format: Option<&AudioFormat>,
         src: &std::path::Path,
-    ) -> color_eyre::Result<()> {
+    ) -> color_eyre::Result<Vec<mineral_persist::Evicted>> {
         let key = cache_key(&song.id, quality);
         let (subdir, file_name) = library_relpath(song, quality, format);
         self.index.record_file(&key, src, &subdir, &file_name).await

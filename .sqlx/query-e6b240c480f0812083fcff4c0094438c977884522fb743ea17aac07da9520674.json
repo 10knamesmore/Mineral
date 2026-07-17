@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO copy_renders (ts, session_id, actor, template_index, ctx_kind, target_ref, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "e6b240c480f0812083fcff4c0094438c977884522fb743ea17aac07da9520674"
+}

@@ -4,11 +4,47 @@
 //! 调用方根据自己发的 `Request` 决定预期。错误统一走 [`Response::Error`]。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId};
+use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
 use crate::{CancelFilter, PlayerSync, PlayerVersions};
+
+/// 队列语境的 wire 形态:client 告知一个队列「来自哪」,server 映射进埋点 `QueueContext`
+/// 后随该队列每个 plays 行继承(单一 origin 有归属漏洞:从歌单点第一首后连播 20 首,
+/// 后 19 行只知 AutoAdvance,「最常听的歌单」就断了)。id 用 mineral_model 类型,天然可序列化。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueContextWire {
+    /// 搜索结果(携搜索词)。
+    Search {
+        /// 触发该队列的搜索词。
+        query: String,
+    },
+
+    /// 歌单 tracks(含聚合收藏这类 synthetic 歌单)。
+    Playlist {
+        /// 歌单 ID。
+        id: PlaylistId,
+    },
+
+    /// 专辑详情。
+    Album {
+        /// 专辑 ID。
+        id: AlbumId,
+    },
+
+    /// 艺人详情。
+    Artist {
+        /// 艺人 ID。
+        id: ArtistId,
+    },
+
+    /// 手动攒的队列(insert_next / append 散曲)。
+    Manual,
+
+    /// 未标注(缺省)。
+    Unknown,
+}
 
 /// 下载进度快照(client 每 tick 轮询,驱动 top-center 进度弹窗)。
 ///
@@ -131,15 +167,27 @@ pub enum Request {
         queue: Vec<Song>,
         /// queue 中作为「当前」的歌 id;server 据此设 queue_sel。
         target_id: mineral_model::SongId,
+        /// 队列语境(埋点 provenance:该队列来自搜索 / 歌单 / 专辑 / 艺人 / 手动)。
+        context: QueueContextWire,
     },
 
     /// 插播:插到当前曲之后,不动播放上下文与当前曲。
     /// Shuffle 模式下同步插入 original_queue(当前曲后)。返回 [`Response::Ok`]。
-    QueueInsertNext(Box<Song>),
+    QueueInsertNext {
+        /// 待插播的歌(`Box` 避免 enum 体积膨胀)。
+        song: Box<Song>,
+        /// 该曲的来源语境(埋点 per-song 覆盖:插队散曲不继承队列级 context)。
+        context: QueueContextWire,
+    },
 
     /// 追加到队列末尾,不动播放上下文与当前曲。
     /// Shuffle 模式下同步追加 original_queue 末尾。返回 [`Response::Ok`]。
-    QueueAppend(Box<Song>),
+    QueueAppend {
+        /// 待追加的歌(`Box` 避免 enum 体积膨胀)。
+        song: Box<Song>,
+        /// 该曲的来源语境(埋点 per-song 覆盖:同插播)。
+        context: QueueContextWire,
+    },
 
     /// 拉全部已注册 channel 的能力表(启动握手时一次,断连重连后再拉)。
     /// 返回 [`Response::ChannelCaps`]。

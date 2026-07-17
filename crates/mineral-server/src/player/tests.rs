@@ -22,10 +22,11 @@ use mineral_test::mock::{UrlChannel, serve_once};
 use mineral_test::song;
 use parking_lot::Mutex;
 
-use super::{DownloadProgress, Inner, MediaCache, PlayerCore, apply_play_mode};
+use super::{DownloadProgress, Inner, MediaCache, PlayerCore};
 use crate::download::download_song;
 use crate::queue::{
-    advance_next, advance_prev, enter_shuffle, exit_shuffle, next_in_queue, prev_index,
+    advance_next, advance_prev, apply_play_mode, enter_shuffle, exit_shuffle, next_in_queue,
+    prev_index,
 };
 use crate::state::State;
 
@@ -196,6 +197,14 @@ fn core_with_channels(
 fn core_with_script(
     script: &str,
 ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+    core_with_script_stats(script, crate::StatsRecorder::disabled())
+}
+
+/// 同 [`core_with_script`],但注入指定埋点句柄(hook_fires 落库断言用)。
+fn core_with_script_stats(
+    script: &str,
+    stats: crate::StatsRecorder,
+) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
     use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -210,7 +219,7 @@ fn core_with_script(
         .hard_wall(Duration::from_secs(1))
         .build();
     let runtime = ScriptRuntime::spawn(lua, host, watchdog, &sender)?;
-    let core = core_with_events(
+    let core = core_with_events_stats(
         vec![Arc::new(RecordingChannel {
             calls: Arc::default(),
             url_delay: None,
@@ -222,6 +231,7 @@ fn core_with_script(
         MediaCache::disabled(),
         tokio::sync::broadcast::channel(/*capacity*/ 8).0,
         Some(sender),
+        stats,
     )?;
     Ok((core, runtime))
 }
@@ -244,6 +254,34 @@ fn core_with_events(
     media_cache: MediaCache,
     events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
     script: Option<mineral_script::ScriptSender>,
+) -> color_eyre::Result<PlayerCore> {
+    core_with_events_stats(
+        channels,
+        persist,
+        music_dir,
+        media_cache,
+        events,
+        script,
+        crate::StatsRecorder::disabled(),
+    )
+}
+
+/// 同 [`core_with_events`],但注入指定埋点 recorder(端到端录制测试用真 recorder)。
+///
+/// # Params:
+///   - `stats`: 埋点 recorder 句柄。
+///
+/// # Return:
+///   组装好的 [`PlayerCore`]。
+#[allow(clippy::too_many_arguments)] // 测试组装器:各入参是独立的注入维度,无自然分组。
+fn core_with_events_stats(
+    channels: Vec<Arc<dyn MusicChannel>>,
+    persist: ServerStore,
+    music_dir: Option<PathBuf>,
+    media_cache: MediaCache,
+    events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
+    script: Option<mineral_script::ScriptSender>,
+    stats: crate::StatsRecorder,
 ) -> color_eyre::Result<PlayerCore> {
     // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
     let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
@@ -268,6 +306,7 @@ fn core_with_events(
         download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         // 多数测试无脚本;hook 拦截测试经 `core_with_script` 注入。
         notify: crate::notify::Notifier::new(events, script),
+        stats,
         props: crate::props::PropsWatch::default(),
         ui_state: Mutex::new(None),
         // 真实默认树:覆盖类测试要经它过落型校验,空树会把一切覆盖判坏。

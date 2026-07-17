@@ -231,12 +231,19 @@ pub(crate) struct TestClient {
     /// 队列操作记录 `(操作名, 歌 id 全限定串)`(操作菜单的插播/追加路径断言用)。
     pub(crate) queue_ops: QueueOpsLog,
 
+    /// 队列操作的语境记录 `(操作名, 队列语境)`(埋点 provenance 路径断言用)。
+    pub(crate) queue_contexts: QueueContextLog,
+
     /// `render_copy_template` 收到的模板下标记录(恒回 `Err`,避免测试真碰系统剪贴板)。
     pub(crate) copy_template_calls: Arc<Mutex<Vec<usize>>>,
 }
 
 /// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
 pub(crate) type QueueOpsLog = Arc<Mutex<Vec<(&'static str, String)>>>;
+
+/// [`TestClient::queue_contexts`] 的记录容器:`(操作名, 队列语境)` 序列。
+pub(crate) type QueueContextLog =
+    Arc<Mutex<Vec<(&'static str, mineral_protocol::QueueContextWire)>>>;
 
 impl Client for TestClient {
     fn play(&self, _url: MediaUrl) {}
@@ -253,7 +260,12 @@ impl Client for TestClient {
             v.push(("play_song", song.id.qualified()));
         }
     }
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId) {
+    fn set_queue(
+        &self,
+        queue: Vec<Song>,
+        target_id: SongId,
+        context: mineral_protocol::QueueContextWire,
+    ) {
         // 记队列长 + 目标曲;供"detail 起播 = set_queue + play_song 两步"的回归断言。
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push((
@@ -261,15 +273,24 @@ impl Client for TestClient {
                 format!("{}:{}", queue.len(), target_id.qualified()),
             ));
         }
+        if let Ok(mut v) = self.queue_contexts.lock() {
+            v.push(("set_queue", context));
+        }
     }
-    fn queue_insert_next(&self, song: Song) {
+    fn queue_insert_next(&self, song: Song, context: mineral_protocol::QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("insert_next", song.id.qualified()));
         }
+        if let Ok(mut v) = self.queue_contexts.lock() {
+            v.push(("insert_next", context));
+        }
     }
-    fn queue_append(&self, song: Song) {
+    fn queue_append(&self, song: Song, context: mineral_protocol::QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("append", song.id.qualified()));
+        }
+        if let Ok(mut v) = self.queue_contexts.lock() {
+            v.push(("append", context));
         }
     }
     fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {

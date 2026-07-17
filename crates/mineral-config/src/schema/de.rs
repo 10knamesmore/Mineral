@@ -37,3 +37,37 @@ where
         "容量须为非负且不越界的整数字节,得到 `{value}`"
     )))
 }
+
+/// 反序列化字符串列表,容忍 Lua 空表 `{}`。
+///
+/// Lua 的 `{}` 既是空数组也是空表,mlua 落成空 map;而 `Vec<String>` 期望 sequence。
+/// 非空数组(如 `{"mock"}`,有整数键 1..n)正常走 seq。此 helper 把空 map 视作空
+/// 列表、逐元素取字符串,其余报错(经 `serde_path_to_error` 带路径)。
+///
+/// # Params:
+///   - `deserializer`: 字段反序列化器
+///
+/// # Return:
+///   字符串列表(可能为空)
+pub(crate) fn string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(s) => Ok(s),
+                other => Err(serde::de::Error::custom(format!(
+                    "列表元素须为字符串,得到 `{other}`"
+                ))),
+            })
+            .collect(),
+        serde_json::Value::Object(map) if map.is_empty() => Ok(Vec::new()),
+        other => Err(serde::de::Error::custom(format!(
+            "期望字符串数组(空表亦可),得到 `{other}`"
+        ))),
+    }
+}

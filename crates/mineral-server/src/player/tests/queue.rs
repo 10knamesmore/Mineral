@@ -205,15 +205,17 @@ async fn set_queue_bumps_queue_version() -> color_eyre::Result<()> {
     core.set_queue(
         vec![song("a"), song("b")],
         &SongId::new(SourceKind::NETEASE, "a"),
+        mineral_stats::QueueContext::Unknown,
     );
     let v1 = core.sync(PlayerVersions::default()).versions.queue;
     assert_eq!(v1, v0 + 1, "顺序模式 set_queue 应 bump");
 
-    core.set_play_mode(PlayMode::Shuffle); // 进 Shuffle 本身也 bump 一次
+    core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User); // 进 Shuffle 本身也 bump 一次
     let v2 = core.sync(PlayerVersions::default()).versions.queue;
     core.set_queue(
         vec![song("c"), song("d")],
         &SongId::new(SourceKind::NETEASE, "c"),
+        mineral_stats::QueueContext::Unknown,
     );
     let v3 = core.sync(PlayerVersions::default()).versions.queue;
     assert_eq!(v3, v2 + 1, "Shuffle 模式 set_queue 应 bump");
@@ -225,7 +227,11 @@ async fn set_queue_bumps_queue_version() -> color_eyre::Result<()> {
 async fn play_song_bumps_current_version() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     let v0 = core.sync(PlayerVersions::default()).versions.current;
-    core.play_song(&song("a"));
+    core.play_song(
+        &song("a"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     let v1 = core.sync(PlayerVersions::default()).versions.current;
     assert_eq!(v1, v0 + 1);
     Ok(())
@@ -241,7 +247,11 @@ async fn play_song_keeps_preset_queue_sel_on_duplicate() -> color_eyre::Result<(
         st.queue_sel = 2; // 第二个 a
         st.current_song = Some(song("a"));
     });
-    core.play_song(&song("a"));
+    core.play_song(
+        &song("a"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     core.with_state(|st| {
         assert_eq!(st.queue_sel, 2, "已预置的精确下标须保留,不能吸附到 a@0");
     });
@@ -257,7 +267,11 @@ async fn play_song_locates_when_not_preset() -> color_eyre::Result<()> {
         st.queue_sel = 0;
         st.current_song = Some(song("a"));
     });
-    core.play_song(&song("b"));
+    core.play_song(
+        &song("b"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     core.with_state(|st| assert_eq!(st.queue_sel, 1, "点播未在位的曲应重新定位"));
     Ok(())
 }
@@ -336,7 +350,7 @@ async fn next_song_records_skip_for_old_song() -> color_eyre::Result<()> {
         st.current_song = Some(song("a"));
         st.play_mode = PlayMode::Sequential;
     }
-    core.next_song();
+    core.next_song(mineral_stats::Actor::User);
     drain_spawned().await;
 
     let recorded = calls.lock().clone();
@@ -362,7 +376,7 @@ async fn next_song_at_end_records_nothing() -> color_eyre::Result<()> {
         st.current_song = Some(song("b"));
         st.play_mode = PlayMode::Sequential;
     }
-    core.next_song();
+    core.next_song(mineral_stats::Actor::User);
     drain_spawned().await;
 
     assert!(calls.lock().is_empty(), "队尾无下一首,不应打点");
@@ -382,7 +396,7 @@ async fn prev_below_threshold_records_skip() -> color_eyre::Result<()> {
         st.play_mode = PlayMode::Sequential;
     }
     // ForceNull 起步 position_ms == 0,< 阈值,走「跳上一首」分支。
-    core.prev_or_restart();
+    core.prev_or_restart(mineral_stats::Actor::User);
     drain_spawned().await;
 
     let recorded = calls.lock().clone();
@@ -403,4 +417,21 @@ fn play_mode_str_is_debug_name() {
     assert_eq!(PlayMode::Shuffle.name(), "Shuffle");
     assert_eq!(PlayMode::RepeatAll.name(), "RepeatAll");
     assert_eq!(PlayMode::RepeatOne.name(), "RepeatOne");
+}
+
+/// set_queue 把队列语境存进 State,供起播时继承进 plays 的 context 列(§4 provenance)。
+#[tokio::test]
+async fn set_queue_stores_context() -> color_eyre::Result<()> {
+    let core = core_with(Arc::default())?;
+    let id = mineral_model::PlaylistId::new(SourceKind::NETEASE, "42");
+    core.set_queue(
+        vec![song("a")],
+        &song("a").id,
+        mineral_stats::QueueContext::Playlist { id: id.clone() },
+    );
+    let matched = core.with_state(|st| {
+        matches!(&st.queue_context, mineral_stats::QueueContext::Playlist { id: got } if *got == id)
+    });
+    assert!(matched, "set_queue 应把 Playlist 语境存进 State");
+    Ok(())
 }

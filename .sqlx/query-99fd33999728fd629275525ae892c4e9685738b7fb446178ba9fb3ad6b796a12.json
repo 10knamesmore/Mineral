@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT (SELECT COUNT(*) FROM plays) AS \"plays!\",\n                      (SELECT COUNT(*) FROM sessions) AS \"sessions!\",\n                      (SELECT MIN(started_at) FROM plays) AS \"first_play_at?\",\n                      (SELECT MAX(started_at) FROM plays) AS \"last_play_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "plays!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "sessions!",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "first_play_at?",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_play_at?",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "99fd33999728fd629275525ae892c4e9685738b7fb446178ba9fb3ad6b796a12"
+}

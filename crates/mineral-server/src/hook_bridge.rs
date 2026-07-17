@@ -124,6 +124,13 @@ pub(crate) fn before_stream(player: &PlayerCore, song: &Song, pu: PlayUrl) {
     tokio::spawn(async move {
         let ctx = BeforeStreamCtx::new(song.clone(), HookMode::Immediate, Some(pu.clone()));
         let decision = sender.intercept_stream(ctx, gate.timeout).await;
+        record_hook_fire(
+            &player,
+            &song.id,
+            mineral_stats::HookKind::BeforeStream,
+            mineral_stats::HookStage::Immediate,
+            &decision,
+        );
         apply_play_decision(&player, &song, pu, decision);
     });
 }
@@ -143,6 +150,13 @@ pub(crate) fn on_unplayable_current(player: &PlayerCore, song: &Song) {
     tokio::spawn(async move {
         let ctx = BeforeStreamCtx::new(song.clone(), HookMode::Immediate, /*original*/ None);
         let decision = sender.intercept_stream(ctx, gate.timeout).await;
+        record_hook_fire(
+            &player,
+            &song.id,
+            mineral_stats::HookKind::BeforeStream,
+            mineral_stats::HookStage::Immediate,
+            &decision,
+        );
         if !still_current(&player, &song.id) {
             mineral_log::debug!(
                 target: "script",
@@ -179,7 +193,8 @@ pub(crate) fn on_unplayable_current(player: &PlayerCore, song: &Song) {
                     mineral_protocol::ToastKind::Warn,
                     format!("脚本跳过播放:{reason}"),
                 );
-                player.next_song();
+                // 跳过是脚本裁决的执行:actor=Script。
+                player.next_song(mineral_stats::Actor::Script);
             }
         }
     });
@@ -207,6 +222,13 @@ pub(crate) fn on_prefetch_ready(player: &PlayerCore, song_id: &SongId, play_url:
         let budget = prefetch_budget(&player, gate.timeout);
         let ctx = BeforeStreamCtx::new(song, HookMode::Prefetch, Some(play_url.clone()));
         let decision = sender.intercept_stream(ctx, budget).await;
+        record_hook_fire(
+            &player,
+            &song_id,
+            mineral_stats::HookKind::BeforeStream,
+            mineral_stats::HookStage::Prefetch,
+            &decision,
+        );
         if !prefetch_still_pending(&player, &song_id) {
             mineral_log::debug!(
                 target: "script",
@@ -254,6 +276,13 @@ pub(crate) fn on_unplayable_prefetch(player: &PlayerCore, song_id: &SongId) {
         let budget = prefetch_budget(&player, gate.timeout);
         let ctx = BeforeStreamCtx::new(song, HookMode::Prefetch, /*original*/ None);
         let decision = sender.intercept_stream(ctx, budget).await;
+        record_hook_fire(
+            &player,
+            &song_id,
+            mineral_stats::HookKind::BeforeStream,
+            mineral_stats::HookStage::Prefetch,
+            &decision,
+        );
         if !prefetch_still_pending(&player, &song_id) {
             return;
         }
@@ -296,6 +325,44 @@ fn find_in_queue(player: &PlayerCore, song_id: &SongId) -> Option<Song> {
     player.with_state(|st| st.queue.iter().find(|s| s.id == *song_id).cloned())
 }
 
+/// 脚本裁决([`HookDecision`])→ 埋点裁决([`mineral_stats::HookDecision`])。
+fn map_hook_decision(decision: &HookDecision) -> mineral_stats::HookDecision {
+    match decision {
+        HookDecision::Continue => mineral_stats::HookDecision::Continue,
+        HookDecision::Rewrite(_) => mineral_stats::HookDecision::Rewrite,
+        HookDecision::Skip { .. } => mineral_stats::HookDecision::Skip,
+    }
+}
+
+/// 记一次插件 hook 触发(hook_fires;系统域,无 actor)。
+///
+/// `fail_open` 恒 `None`:拦截层把超时 / 线程死都塌成 [`HookDecision::Continue`]
+/// (见 `intercept_stream` 文档),此层无从区分「脚本真放行」与「fail-open 放行」,
+/// 不臆造。record 点在裁决产出后、落地守卫前——hook 已触发即记,守卫丢弃是后话。
+///
+/// # Params:
+///   - `song`: 相关歌曲
+///   - `hook`: 触发的 hook 种类
+///   - `stage`: 触发时机(即时 / 预取)
+///   - `decision`: 脚本裁决
+fn record_hook_fire(
+    player: &PlayerCore,
+    song: &SongId,
+    hook: mineral_stats::HookKind,
+    stage: mineral_stats::HookStage,
+    decision: &HookDecision,
+) {
+    player.inner.stats.event(mineral_stats::StatsEvent::System(
+        mineral_stats::SystemEvent::HookFire {
+            song: Some(song.clone()),
+            hook,
+            stage,
+            decision: map_hook_decision(decision),
+            fail_open: None,
+        },
+    ));
+}
+
 /// 预取否决:把这首的**下标**记入本窗口否决集(队列不动),并复位预拉标记让
 /// `check_prefetch` 下个 tick 按否决后的预测重排(通常落到再下一首,无缝保住)。
 ///
@@ -310,6 +377,13 @@ fn veto_next(player: &PlayerCore, song_id: &SongId, reason: &str) {
         }
         st.prefetch_fired_for = None;
     });
+    // 埋点:预取被 before_stream 否决(prefetches;远端流才走该 hook)。
+    crate::gapless::record_prefetch(
+        player,
+        song_id.clone(),
+        mineral_stats::PrefetchSource::Remote,
+        mineral_stats::PrefetchResolution::Vetoed,
+    );
     mineral_log::info!(
         target: "script",
         song_id = song_id.as_str(),
@@ -424,7 +498,8 @@ fn apply_play_decision(
                 mineral_protocol::ToastKind::Warn,
                 format!("脚本跳过播放:{reason}"),
             );
-            player.next_song();
+            // 跳过是脚本裁决的执行:actor=Script。
+            player.next_song(mineral_stats::Actor::Script);
         }
     }
 }
@@ -437,6 +512,8 @@ fn play_rewritten(player: &PlayerCore, effective: PlayUrl) {
         effective.stream_headers.clone(),
         effective.layout,
     );
+    // 改写流的实测快照(含 substituted=true)覆盖起播时按原 URL 发过的 enrich。
+    player.enrich_from_play_url(&effective);
     player.set_play_url(effective);
 }
 
@@ -445,6 +522,12 @@ fn finish_failed(player: &PlayerCore, song: &Song) {
     player
         .notify()
         .track_finished(song, mineral_protocol::FinishReason::Error);
+    // 埋点:取链失败 = 一次播放尝试出错(play_started 已发,补 error 结算);未实际播放
+    // 故 listen_ms=0。actor 无 pending 时自动忽略。
+    player
+        .inner
+        .stats
+        .play_ended(mineral_stats::FinishReason::Error, /*listen_ms*/ 0);
 }
 
 /// 原播放路径:capture 起播 + 回填 `play_url`(放行 / 无脚本共用)。

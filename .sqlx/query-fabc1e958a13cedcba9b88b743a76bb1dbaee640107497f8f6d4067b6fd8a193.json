@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"sessions!: i64\",\n                      CAST(AVG(ended_at - started_at) AS INTEGER) AS \"avg_ms?: i64\",\n                      MAX(ended_at - started_at) AS \"longest_ms?: i64\"\n               FROM sessions WHERE started_at >= ? AND started_at < ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "sessions!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "avg_ms?: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "longest_ms?: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "fabc1e958a13cedcba9b88b743a76bb1dbaee640107497f8f6d4067b6fd8a193"
+}

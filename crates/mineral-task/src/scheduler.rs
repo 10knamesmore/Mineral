@@ -117,6 +117,7 @@ impl Scheduler {
                     ChannelFetchJob {
                         id,
                         kind: k,
+                        priority,
                         cancel: handle.cancel.clone(),
                         done_tx,
                     },

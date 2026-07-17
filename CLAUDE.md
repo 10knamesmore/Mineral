@@ -140,6 +140,7 @@ client 侧配置消费两条规矩:
 ## 一些容易踩的点
 
 * **不要为某个 channel 的特殊字段污染 `mineral-model`**——平铺合并是核心契约。
+* **新增行为入口 / 事件类型必须更新埋点 audit**:`mineral-server/src/stats/audit.rs` 有两层穷尽 `match`——入口层(`Request` / `ScriptCmd` / `ChannelFetchKind` / `PlaylistWriteOp`,加变体须补 `Recorded(表名)` 或 `NotAnEvent(理由)`)与事件层(`BehaviorEvent` / `SystemEvent`,加变体须补发射点账本),漏补即**编译失败**,并在 commit 说明埋点归属。别加 `_ =>` 兜底绕过。注意防线兜不住「不加任何变体的全新代码路径忘发既有事件」——那层靠触发链集成测试;新增 notify / 后台链路时给对应事件补一条触发测试。
 * **改动 `crypto/` 后必跑 `cargo test --test crypto_vectors`**,服务端解不出来不会立刻爆,而是返回 `code != 200` 的 JSON,排查成本高。
 * **TUI 错误恢复顺序**:`mineral/src/main.rs` 先 `color_eyre::install()`,再进 TUI;`mineral-tui` 的 `Tui::enter` 会取走当前 panic hook 并链式包一层,先 `restore_terminal()` 再调 prev。**不要**在 main 或 TUI 内部再装"裸"的 panic hook 绕过这条链——否则 panic 时彩色报告会被 alternate screen 吞掉,或者终端 raw mode 不恢复出现乱码。Result 冒泡走 `Tui::Drop` 的 `restore_terminal()`,顺序自然正确。
 * **音频无设备会降级 null 模式,不报错退出**:`mineral-audio` engine 拿不到默认输出设备(headless / 无声卡)时不 `return Err`,而是 warn + 置 `AudioSnapshot.backend = AudioBackend::Null` + 空跑(接受命令但不发声),daemon 照常 bind / serve / graceful shutdown。client 据此提示(CLI `status` 打 `backend: null`、TUI 顶栏 `⚠ 无音频设备`)。测试用 `AudioMode::ForceNull` / `MINERAL_AUDIO_NULL=1` env 确定性复现。**注**:`libasound2-dev` 是**编译期**依赖(alsa-sys),降级只省运行期声卡,省不了它。

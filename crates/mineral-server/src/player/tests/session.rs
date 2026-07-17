@@ -36,10 +36,14 @@ async fn save_then_load_roundtrips_queue_and_current() -> color_eyre::Result<()>
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let core = core_with_persist(calls, persist.clone())?;
 
-    core.cycle_play_mode(); // Sequential → Shuffle
+    core.cycle_play_mode(mineral_stats::Actor::User); // Sequential → Shuffle
     let queue = vec![song("a"), song("b"), song("c")];
-    core.set_queue(queue, &song("a").id);
-    core.play_song(&song("a"));
+    core.set_queue(queue, &song("a").id, mineral_stats::QueueContext::Unknown);
+    core.play_song(
+        &song("a"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     // 组装快照并同步落盘(确定性,不依赖 spawn 顺序)。
     let assembled = core.snapshot_session();
     persist.session().save(&assembled).await?;
@@ -65,7 +69,7 @@ async fn restore_play_mode_sets_flag_without_shuffle_side_effects() -> color_eyr
     let core = core_with_persist(calls, persist.clone())?;
 
     // 模拟上一次会话:Shuffle 模式落盘。
-    core.cycle_play_mode(); // Sequential → Shuffle
+    core.cycle_play_mode(mineral_stats::Actor::User); // Sequential → Shuffle
     persist.session().save(&core.snapshot_session()).await?;
 
     // 模拟下一次启动:新 core 读回会话,解析模式名并恢复。
@@ -98,7 +102,11 @@ async fn periodic_save_skips_empty_state_preserving_last_session() -> color_eyre
     // 上次会话:真实队列同步落盘。
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let core = core_with_persist(calls, persist.clone())?;
-    core.set_queue(vec![song("a"), song("b")], &song("a").id);
+    core.set_queue(
+        vec![song("a"), song("b")],
+        &song("a").id,
+        mineral_stats::QueueContext::Unknown,
+    );
     persist.session().save(&core.snapshot_session()).await?;
 
     // 模拟新启动:空态 core,把节流窗口拨到已过期再触发周期检查。
@@ -127,7 +135,11 @@ async fn spawn_save_session_persists_something() -> color_eyre::Result<()> {
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let core = core_with_persist(calls, persist)?;
 
-    core.set_queue(vec![song("a"), song("b")], &song("a").id);
+    core.set_queue(
+        vec![song("a"), song("b")],
+        &song("a").id,
+        mineral_stats::QueueContext::Unknown,
+    );
     drain_spawned().await;
 
     assert!(core.load_session().await?.is_some(), "save 后应能读到会话");

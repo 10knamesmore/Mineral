@@ -165,18 +165,26 @@ impl App {
         match action {
             // 替换队列并起播两步(漏 play_song 会换队不响,见 nav PlayQueue 注释);空 queue
             // 退化为单曲队列,绝不给 set_queue 空列。
-            MenuAction::Play { song, queue } => {
+            MenuAction::Play {
+                song,
+                queue,
+                context,
+            } => {
                 let target = song.id.clone();
                 let queue = if queue.is_empty() {
                     vec![(*song).clone()]
                 } else {
                     queue
                 };
-                self.client.set_queue(queue, target);
+                self.client.set_queue(queue, target, context);
                 self.client.play_song(*song);
             }
-            MenuAction::PlayNext(song) => self.client.queue_insert_next(*song),
-            MenuAction::Append(song) => self.client.queue_append(*song),
+            MenuAction::PlayNext(song) => self
+                .client
+                .queue_insert_next(*song, mineral_protocol::QueueContextWire::Manual),
+            MenuAction::Append(song) => self
+                .client
+                .queue_append(*song, mineral_protocol::QueueContextWire::Manual),
             MenuAction::Download(song) => self.client.download(DownloadTarget::Song(song)),
             MenuAction::PlayContainer(container) => {
                 self.start_container_play(&container, PlayMode::Replace);
@@ -271,7 +279,7 @@ impl App {
     fn start_container_play(&mut self, container: &ContainerRef, mode: PlayMode) {
         // 先 owned 取出已加载曲目(释放对 state 的借用),再碰 client / pending。
         if let Some(songs) = self.container_loaded_songs(container) {
-            self.enqueue_songs(songs, mode);
+            self.enqueue_songs(songs, mode, container_context(container));
             return;
         }
         let fetch = container_fetch(container);
@@ -297,20 +305,26 @@ impl App {
     }
 
     /// 按模式入队一组曲目:Replace = 替换队列 + 起播首曲(空则 no-op,绝不发空 set_queue);
-    /// Append = 逐曲追加(无批量 API)。
-    fn enqueue_songs(&self, songs: Vec<Song>, mode: PlayMode) {
+    /// Append = 逐曲追加(无批量 API)。`context` 是这批曲目的来源语境(容器身份),Replace 落
+    /// 队列级、Append 逐曲带上(整张专辑追加,每首都归该专辑而非笼统 Manual)。
+    fn enqueue_songs(
+        &self,
+        songs: Vec<Song>,
+        mode: PlayMode,
+        context: mineral_protocol::QueueContextWire,
+    ) {
         match mode {
             PlayMode::Replace => {
                 let Some(first) = songs.first().cloned() else {
                     return;
                 };
                 let target = first.id.clone();
-                self.client.set_queue(songs, target);
+                self.client.set_queue(songs, target, context);
                 self.client.play_song(first);
             }
             PlayMode::Append => {
                 for song in songs {
-                    self.client.queue_append(song);
+                    self.client.queue_append(song, context.clone());
                 }
             }
         }
@@ -320,24 +334,29 @@ impl App {
     /// **事件载荷**(非 detail 帧——帧可能已切走)取曲目入队、清意图。artist 只认热门曲那路
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
-        let (key, songs) = match ev {
+        use mineral_protocol::QueueContextWire;
+        // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / 歌手),与登记意图时的容器同一身份。
+        let (key, songs, context) = match ev {
             TaskEvent::AlbumDetailFetched { id, album } => (
                 DetailFetch::AlbumDetail(id.clone()).dedup_key(),
                 album.songs.clone(),
+                QueueContextWire::Album { id: id.clone() },
             ),
             TaskEvent::PlaylistDetailFetched { id, playlist } => (
                 DetailFetch::PlaylistDetail(id.clone()).dedup_key(),
                 playlist.songs.clone(),
+                QueueContextWire::Playlist { id: id.clone() },
             ),
             TaskEvent::ArtistDetailFetched { id, artist } => (
                 DetailFetch::Artist(id.clone()).dedup_key(),
                 artist.songs.clone(),
+                QueueContextWire::Artist { id: id.clone() },
             ),
             // 其余事件(含 ArtistAlbumsFetched)不兑现容器播放意图。
             _ => return,
         };
         if let Some(mode) = self.pending_container.remove(&key) {
-            self.enqueue_songs(songs, mode);
+            self.enqueue_songs(songs, mode, context);
         }
     }
 }
@@ -348,6 +367,18 @@ fn container_fetch(container: &ContainerRef) -> DetailFetch {
         ContainerRef::Album(a) => DetailFetch::AlbumDetail(a.id.clone()),
         ContainerRef::Playlist(p) => DetailFetch::PlaylistDetail(p.id.clone()),
         ContainerRef::Artist(a) => DetailFetch::Artist(a.id.clone()),
+    }
+}
+
+/// 容器 → 其起播队列语境(埋点 provenance:整张专辑 / 整个歌单 / 歌手热门曲各归其身份)。
+/// 曲目已加载时立即入队走它;未加载走拉取,到货后由 [`App::fulfill_pending_container`] 按
+/// 事件 id 重新定出同一语境。
+fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContextWire {
+    use mineral_protocol::QueueContextWire;
+    match container {
+        ContainerRef::Album(a) => QueueContextWire::Album { id: a.id.clone() },
+        ContainerRef::Playlist(p) => QueueContextWire::Playlist { id: p.id.clone() },
+        ContainerRef::Artist(a) => QueueContextWire::Artist { id: a.id.clone() },
     }
 }
 
@@ -516,6 +547,45 @@ mod tests {
             ops.first(),
             Some(&("set_queue", format!("2:{first}"))),
             "热门曲路到货才起播"
+        );
+        Ok(())
+    }
+
+    /// F1 回归:容器播放(专辑)起播记 Album 语境——此前 `enqueue_songs` 硬编码 Unknown,
+    /// albums-via-context 统计因此恒空。
+    #[test]
+    fn container_play_carries_album_context() -> color_eyre::Result<()> {
+        let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
+        let contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.client = std::sync::Arc::new(crate::test_support::TestClient {
+            queue_contexts: std::sync::Arc::clone(&contexts),
+            ..crate::test_support::TestClient::default()
+        });
+        let album = album_with_songs("al1", 3);
+        // 结果列专辑只有壳(无 songs)→ 触发拉取 + 挂 pending,到货再入队。
+        let shell = Album::builder()
+            .id(album.id.clone())
+            .name(album.name.clone())
+            .build();
+        app.run_menu_action(MenuAction::PlayContainer(Box::new(ContainerRef::Album(
+            Box::new(shell),
+        ))));
+        app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            id: album.id.clone(),
+            album: Box::new(album.clone()),
+        });
+        let got = contexts
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
+        assert_eq!(
+            *got,
+            vec![(
+                "set_queue",
+                mineral_protocol::QueueContextWire::Album {
+                    id: album.id.clone()
+                }
+            )],
+            "容器专辑起播 set_queue 带 Album 语境"
         );
         Ok(())
     }

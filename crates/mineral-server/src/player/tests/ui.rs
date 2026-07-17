@@ -240,6 +240,40 @@ async fn terminal_prop_follows_report_and_clear() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// set_terminal_state 的 fullscreen 翻转检测(驱动 fullscreen_changes 埋点):首次上报
+/// 无前态不算切换;翻转给新值;等值上报不重复;翻回给新值。
+#[tokio::test]
+async fn set_terminal_state_flags_fullscreen_toggle() -> color_eyre::Result<()> {
+    let (core, _rx) = core_with_hub()?;
+    let report = |fullscreen: bool| crate::props::TerminalReport {
+        rows: 40,
+        cols: 100,
+        fullscreen,
+        focused: true,
+    };
+    assert_eq!(
+        core.set_terminal_state(report(/*fullscreen*/ false)),
+        None,
+        "首次上报无前态,不算切换"
+    );
+    assert_eq!(
+        core.set_terminal_state(report(/*fullscreen*/ true)),
+        Some(true),
+        "翻到全屏应给新值"
+    );
+    assert_eq!(
+        core.set_terminal_state(report(/*fullscreen*/ true)),
+        None,
+        "等值上报(每 tick)不得重复触发"
+    );
+    assert_eq!(
+        core.set_terminal_state(report(/*fullscreen*/ false)),
+        Some(false),
+        "翻回非全屏应给新值"
+    );
+    Ok(())
+}
+
 /// 插播插到当前位置后、追加进末尾,当前位置不动;shuffle 下 original_queue 同步。
 #[tokio::test]
 async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
@@ -247,9 +281,10 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
     core.set_queue(
         vec![song("a"), song("b")],
         &SongId::new(SourceKind::NETEASE, "a"),
+        mineral_stats::QueueContext::Unknown,
     );
-    core.queue_insert_next(song("c"));
-    core.queue_append(song("d"));
+    core.queue_insert_next(song("c"), mineral_stats::QueueContext::Manual);
+    core.queue_append(song("d"), mineral_stats::QueueContext::Manual);
     {
         let st = core.inner.state.lock();
         let ids = st
@@ -260,8 +295,8 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
         assert_eq!(ids, ["a", "c", "b", "d"]);
         assert_eq!(st.queue_sel, 0);
     }
-    core.set_play_mode(PlayMode::Shuffle);
-    core.queue_insert_next(song("e"));
+    core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User);
+    core.queue_insert_next(song("e"), mineral_stats::QueueContext::Manual);
     {
         let st = core.inner.state.lock();
         let orig = st
@@ -273,6 +308,227 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
             "original_queue 应同步插入"
         );
         assert!(st.queue.iter().any(|s| s.id.as_str() == "e"));
+    }
+    Ok(())
+}
+
+/// §7.2 config re-apply:改 `stats.level` 经配置热更真改采集行为 —— 覆盖 off 门掉 A,
+/// 撤覆盖回 base(full)记 B。证明 reapply_stats 折算喂到了 recorder。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        url_delay: None,
+        liked_ids: None,
+        playlists: None,
+    })];
+    let core = core_with_events_stats(
+        channels,
+        ServerStore::disabled(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder,
+    )?;
+    // 覆盖 off → 播 A 被门掉。
+    core.apply_config_override(
+        "stats.level".to_owned(),
+        Some(mineral_protocol::BusValue::Str("off".to_owned())),
+    );
+    let gated = song("gated");
+    core.play_song(
+        &gated,
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
+    core.spawn_on_played(gated.id.clone(), mineral_stats::FinishReason::Eof, 30_000);
+    // 撤覆盖 → 回 base(full)→ 播 B 记。
+    core.apply_config_override("stats.level".to_owned(), None);
+    let kept = song("kept");
+    core.play_song(
+        &kept,
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
+    core.spawn_on_played(kept.id.clone(), mineral_stats::FinishReason::Eof, 60_000);
+    // poll 到 B 落库(带超时)。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.totals(0..i64::MAX).await?.plays == 0 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:B 未落库");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // 只 B 被记(A 被 off 热更门掉)。
+    assert_eq!(
+        store.totals(0..i64::MAX).await?.plays,
+        1,
+        "off 门掉 A,只 B 记"
+    );
+    let opts = mineral_stats::ReportOptions::builder()
+        .min_listen_ms(0)
+        .top_limit(10)
+        .build();
+    let top = store
+        .top_songs(0..i64::MAX, mineral_stats::TopBy::Plays, &opts)
+        .await?;
+    let first = top
+        .first()
+        .ok_or_else(|| color_eyre::eyre::eyre!("无 top 歌曲"))?;
+    assert_eq!(first.song.value(), kept.id.value());
+    Ok(())
+}
+
+/// set_config_base(配置文件重载入口)记一条 config_reloads(系统域,无 actor);
+/// 此入口只由 mtime 重载回调驱动,一次调用 = 一次真重读文件。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_reload_records_system_event() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        url_delay: None,
+        liked_ids: None,
+        playlists: None,
+    })];
+    let core = core_with_events_stats(
+        channels,
+        ServerStore::disabled(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder,
+    )?;
+    // 模拟用户改文件后重载:默认树上改 audio.volume。
+    let new_base = mineral_config::merge_tree(
+        mineral_config::default_tree()?,
+        serde_json::json!({ "audio": { "volume": 42 } }),
+    );
+    core.set_config_base(new_base);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.status().await?.events == 0 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:config_reloads 未落库");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        store.status().await?.events,
+        1,
+        "一次重载记一条 config_reloads"
+    );
+    Ok(())
+}
+
+/// record_playlist_op:成功 Create + 失败多曲 AddSongs 各落一条 playlist_ops(行为域)。
+/// 直接驱动接线方法,验证 op 名 / 错误映射真产数据。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playlist_op_records_to_stats_db() -> color_eyre::Result<()> {
+    use mineral_model::PlaylistId;
+    use mineral_task::{PlaylistWriteOp, WriteError};
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        url_delay: None,
+        liked_ids: None,
+        playlists: None,
+    })];
+    let core = core_with_events_stats(
+        channels,
+        ServerStore::disabled(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder,
+    )?;
+    core.record_playlist_op(
+        &PlaylistWriteOp::Create {
+            source: SourceKind::NETEASE,
+            name: "mix".to_owned(),
+        },
+        None,
+    );
+    core.record_playlist_op(
+        &PlaylistWriteOp::AddSongs {
+            id: PlaylistId::new(SourceKind::NETEASE, "1"),
+            songs: vec![song("a").id, song("b").id],
+        },
+        Some(&WriteError::RateLimited),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.status().await?.events < 2 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:playlist_ops 未落两条");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Ok(())
+}
+
+/// record_search_result:Song 搜索记一条 searches;User 搜索(埋点不覆盖)被跳过。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()> {
+    use mineral_channel_core::Page;
+    use mineral_model::SearchKind;
+    use mineral_task::SearchPayload;
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        url_delay: None,
+        liked_ids: None,
+        playlists: None,
+    })];
+    let core = core_with_events_stats(
+        channels,
+        ServerStore::disabled(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder,
+    )?;
+    let page = Page::new(/*offset*/ 30, /*limit*/ 30); // 页码 1
+    core.record_search_result(
+        SourceKind::NETEASE,
+        SearchKind::Song,
+        "test",
+        page,
+        &SearchPayload::Songs(vec![song("a"), song("b")]),
+    );
+    // 用户搜索:埋点不覆盖,应被跳过(不落库)。
+    core.record_search_result(
+        SourceKind::NETEASE,
+        SearchKind::User,
+        "someone",
+        page,
+        &SearchPayload::Artists(Vec::new()),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let events = store.status().await?.events;
+        if events >= 1 {
+            assert_eq!(events, 1, "只 Song 搜索记录,User 搜索跳过");
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:searches 未落库");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     Ok(())
 }

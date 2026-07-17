@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO love_changes (ts, session_id, actor, ns, song_value, loved, origin, remote_mirror) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "d8d2fae69bfef3f3a95366a0ec4db37ff7bad9a4c36a107cc201a2d43f4cc750"
+}
