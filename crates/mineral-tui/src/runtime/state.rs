@@ -286,9 +286,16 @@ impl AppState {
     }
 
     /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
+    ///
+    /// 时间戳按活跃 surface 取:search 布局态看搜索面板的选中变化,否则看 browse 列表的
+    /// ——两边各自维护,防抖只对当前正在滚的那个面板生效。
     pub fn is_scrolling(&self) -> bool {
-        self.browse.nav.last_sel_change.elapsed()
-            < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
+        let last_sel_change = if self.channel_search.active.on() {
+            self.channel_search.last_sel_change
+        } else {
+            self.browse.nav.last_sel_change
+        };
+        last_sel_change.elapsed() < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 
     /// 光标与列表视口上下边缘的最小行距(配置 `behavior.scrolloff`)。

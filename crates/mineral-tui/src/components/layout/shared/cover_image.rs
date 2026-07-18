@@ -64,8 +64,11 @@ pub fn render_or_fallback(
         return;
     }
     let Some(image) = state.covers.cache.get(url).cloned() else {
-        // 还没拉到图:程序化占位(fetch worker 完成后进 covers.cache,后续帧再走编码)。
-        cover::render(frame, target, fallback_seed, theme);
+        // 还没拉到图:稳态程序化占位(fetch worker 完成后进 covers.cache,后续帧再走编码);
+        // 滚动中留空——冷缓存下逐行闪不同 hash 色块比空位更晃眼,与下方编码早退同一体感。
+        if !state.is_scrolling() {
+            cover::render(frame, target, fallback_seed, theme);
+        }
         return;
     };
     let dims = (target.width, target.height);

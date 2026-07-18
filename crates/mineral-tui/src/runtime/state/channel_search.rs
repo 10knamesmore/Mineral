@@ -4,6 +4,8 @@
 //! 与本地模糊过滤（[`SearchState`](crate::runtime::state::SearchState)）是两回事：那边是「单段
 //! 文本怎么匹配」，这边是一个全屏级布局态（进入后整屏切到搜索视图）。
 
+use std::time::Instant;
+
 use mineral_channel_core::{ArtistSections, ChannelCaps, Page};
 use mineral_config::SearchFocusTransition;
 use mineral_model::{SearchKind, SourceKind};
@@ -262,6 +264,11 @@ pub struct SearchPage {
     /// loading spinner 帧计数（每帧 tick +1；渲染按 [`Self::spinner_glyph`] 取旋转帧，与稳态
     /// 列表无关，恒推进，故 loading 占位会持续旋转）。
     spinner: u32,
+
+    /// 最近一次「展示中封面实体」变化时刻(结果列 / 详情列光标、切区、下钻 / 返回、切桶都算)。
+    /// 防抖:连续滚动时跳过封面编码与 detail 预取,稳态后再上图 / 派发——对齐 browse 列表
+    /// 的同名时间戳语义。
+    pub last_sel_change: Instant,
 }
 
 impl SearchPage {
@@ -287,6 +294,7 @@ impl SearchPage {
             sessions: FxHashMap::default(),
             whitelist: SearchWhitelist::default(),
             spinner: 0,
+            last_sel_change: Instant::now(),
         }
     }
 
@@ -567,6 +575,8 @@ impl SearchPage {
     /// 切 source：切到目标 source、确保会话存在（新建用其过 kind 白名单后的首项，已有会话则
     /// 沿用记住的 kind）。
     pub fn switch_source(&mut self, source: SourceKind, caps: &FxHashMap<SourceKind, ChannelCaps>) {
+        // 已有会话时当帧直接换活跃桶(detail 头图立即变),计一次选中变化走防抖。
+        self.last_sel_change = Instant::now();
         self.source = Some(source);
         if self.sessions.contains_key(&source) {
             return;
@@ -601,13 +611,14 @@ impl SearchPage {
     /// # Return:
     ///   是否需要自动搜（目标 kind 无缓存 + query 非空）。
     pub fn select_kind(&mut self, kind: SearchKind) -> bool {
-        match self.current_mut() {
-            Some(session) => {
-                session.set_kind(kind);
-                !session.has_current_results() && !session.input.is_empty()
-            }
-            None => false,
-        }
+        let Some(session) = self.current_mut() else {
+            return false;
+        };
+        session.set_kind(kind);
+        let auto_search = !session.has_current_results() && !session.input.is_empty();
+        // 目标 kind 有缓存桶时当帧换 detail 头图,计一次选中变化走防抖。
+        self.last_sel_change = Instant::now();
+        auto_search
     }
 }
 

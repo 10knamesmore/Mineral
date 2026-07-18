@@ -5,7 +5,9 @@
 //! 只读 [`SearchCtx`]、调 `on_key`、再 [`App::apply_search_effect`] 落地——Page 不反手摸
 //! `client` / `notifications`,故可脱离 App 单测(喂 KeyEvent、断言返回的意图)。
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::time::Instant;
+
+use crossterm::event::{KeyCode, KeyEvent};
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Album, SearchKind, Song, SourceKind};
 use mineral_task::{ChannelFetchKind, Priority, SearchPayload, TaskKind};
@@ -14,12 +16,12 @@ use rustc_hash::FxHashMap;
 use crate::runtime::action::{Action, ScrollStep, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::scroll::viewport::step_delta;
-use crate::runtime::state::{
-    ArtistSection, DetailData, EntityRef, PromptSegment, SearchFocus, SearchPage,
-};
+use crate::runtime::state::{ArtistSection, DetailData, EntityRef, SearchFocus, SearchPage};
 
 use super::App;
 use super::page::Page;
+
+mod prompt;
 
 /// Page 决策所需的只读跨页上下文(= React 的 props)。借用而非拥有,故 App 侧必须在调用点
 /// **就地构造**(写明 `&self.state.caps` 等字段路径),不能抽成 `self.page_ctx()` 方法——那会整借
@@ -242,6 +244,7 @@ impl SearchPage {
 
     /// detail 列表光标(钳当前区列表长度)。
     fn move_detail_list_sel(&mut self, mv: SelectionMove) {
+        self.last_sel_change = Instant::now();
         let Some(kr) = self.active_results_mut() else {
             return;
         };
@@ -337,6 +340,7 @@ impl SearchPage {
             && let Some(kr) = self.active_results_mut()
         {
             kr.detail.push(EntityRef::Album(album), sweep_ticks);
+            self.last_sel_change = Instant::now();
         }
     }
 
@@ -346,6 +350,7 @@ impl SearchPage {
             DetailActivate::Drill(album) => {
                 if let Some(kr) = self.active_results_mut() {
                     kr.detail.push(EntityRef::Album(album), sweep_ticks);
+                    self.last_sel_change = Instant::now();
                 }
                 SearchEffect::None
             }
@@ -399,7 +404,9 @@ impl SearchPage {
                 let popped = self
                     .active_results_mut()
                     .is_some_and(|kr| kr.detail.pop(sweep_ticks));
-                if !popped {
+                if popped {
+                    self.last_sel_change = Instant::now();
+                } else {
                     self.set_focus(SearchFocus::Results);
                 }
             }
@@ -414,6 +421,7 @@ impl SearchPage {
         if self.focus != SearchFocus::Detail {
             return;
         }
+        self.last_sel_change = Instant::now();
         let Some(kr) = self.active_results_mut() else {
             return;
         };
@@ -432,6 +440,7 @@ impl SearchPage {
     ///   - `mv`: 选择移动
     ///   - `prefetch_rows`: 预取触发半径(光标距已加载末行 ≤ 此值且未榨干即预取)
     fn move_search_result_sel(&mut self, mv: SelectionMove, prefetch_rows: u16) -> SearchEffect {
+        self.last_sel_change = Instant::now();
         let Some(kr) = self.active_results_mut() else {
             return SearchEffect::None;
         };
@@ -474,299 +483,6 @@ impl SearchPage {
             offset,
         }
     }
-
-    /// token prompt 按键:按当前段（query 文本 / source·kind chip）分派。
-    /// 带 CONTROL 的字符键吞掉(控制组合不污染 query / 不误触段切换)。
-    fn handle_search_prompt_key(&mut self, key: &KeyEvent, ctx: SearchCtx<'_>) -> SearchEffect {
-        if matches!(key.code, KeyCode::Char(_)) && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return SearchEffect::None;
-        }
-        match self.prompt_seg() {
-            PromptSegment::Query => self.handle_query_seg_key(key, ctx),
-            PromptSegment::Source | PromptSegment::Kind => self.handle_chip_seg_key(key, ctx),
-        }
-    }
-
-    /// query 文本段:字符 / 退格 / 光标移动（词首再 left 跨到 kind chip）；Enter 提交搜索、
-    /// Tab 回面板、Esc 退布局态。
-    fn handle_query_seg_key(&mut self, key: &KeyEvent, ctx: SearchCtx<'_>) -> SearchEffect {
-        match key.code {
-            KeyCode::Esc => {
-                self.active.toggle();
-                SearchEffect::None
-            }
-            KeyCode::Enter => self.submit_search(),
-            KeyCode::Tab => {
-                let target = self.last_panel;
-                self.set_focus(target);
-                SearchEffect::None
-            }
-            KeyCode::Left => {
-                self.query_seg_left(ctx);
-                SearchEffect::None
-            }
-            KeyCode::Right => {
-                self.move_prompt_cursor(SearchCursor::Right);
-                SearchEffect::None
-            }
-            KeyCode::Home => {
-                self.move_prompt_cursor(SearchCursor::Home);
-                SearchEffect::None
-            }
-            KeyCode::End => {
-                self.move_prompt_cursor(SearchCursor::End);
-                SearchEffect::None
-            }
-            KeyCode::Backspace => {
-                if let Some(session) = self.current_mut() {
-                    session.pop_query_char();
-                }
-                SearchEffect::None
-            }
-            KeyCode::Char(c) => {
-                if let Some(session) = self.current_mut() {
-                    session.push_query_char(c);
-                }
-                SearchEffect::None
-            }
-            _ => SearchEffect::None,
-        }
-    }
-
-    /// query 段 left:光标未到词首就左移;已在词首则跨到 kind chip 段（自动展开下拉）。
-    fn query_seg_left(&mut self, ctx: SearchCtx<'_>) {
-        let at_start = self.current().is_none_or(|s| s.query_split().0.is_empty());
-        if at_start {
-            self.focus_chip(PromptSegment::Kind, ctx);
-        } else {
-            self.move_prompt_cursor(SearchCursor::Left);
-        }
-    }
-
-    /// 移动 token prompt 文本光标(无当前会话时 no-op)。
-    fn move_prompt_cursor(&mut self, dir: SearchCursor) {
-        let Some(session) = self.current_mut() else {
-            return;
-        };
-        match dir {
-            SearchCursor::Left => session.cursor_left(),
-            SearchCursor::Right => session.cursor_right(),
-            SearchCursor::Home => session.cursor_home(),
-            SearchCursor::End => session.cursor_end(),
-        }
-    }
-
-    /// source / kind chip 段:up/down 走查下拉、Enter 选定塌回（收起则重开）、left/right 段间走、
-    /// Esc 先收下拉再退布局态、Tab 回面板。
-    fn handle_chip_seg_key(&mut self, key: &KeyEvent, ctx: SearchCtx<'_>) -> SearchEffect {
-        let seg = self.prompt_seg();
-        match key.code {
-            KeyCode::Esc => {
-                if self.seg_open() {
-                    self.close_seg();
-                } else {
-                    self.active.toggle();
-                }
-                SearchEffect::None
-            }
-            KeyCode::Tab => {
-                let target = self.last_panel;
-                self.set_focus(target);
-                SearchEffect::None
-            }
-            KeyCode::Up => {
-                self.move_seg_sel(seg, /*down*/ false, ctx);
-                SearchEffect::None
-            }
-            KeyCode::Down => {
-                self.move_seg_sel(seg, /*down*/ true, ctx);
-                SearchEffect::None
-            }
-            KeyCode::Enter => self.chip_seg_enter(seg, ctx),
-            KeyCode::Left => {
-                self.chip_seg_left(seg, ctx);
-                SearchEffect::None
-            }
-            KeyCode::Right => {
-                self.chip_seg_right(seg, ctx);
-                SearchEffect::None
-            }
-            _ => SearchEffect::None,
-        }
-    }
-
-    /// 把 prompt 焦点移到某 chip 段:下拉自动展开,高亮落当前选择对应行。
-    fn focus_chip(&mut self, seg: PromptSegment, ctx: SearchCtx<'_>) {
-        let sel = self.chip_current_index(seg, ctx);
-        self.set_prompt_seg(seg, sel);
-    }
-
-    /// 把 prompt 焦点移回 query 段:光标落词首（从 kind chip 右移进 query 即落词头）。
-    fn focus_query(&mut self) {
-        self.set_prompt_seg(PromptSegment::Query, 0);
-        if let Some(session) = self.current_mut() {
-            session.cursor_home();
-        }
-    }
-
-    /// chip 下拉高亮行移动(钳列表范围;空列表 no-op)。
-    fn move_seg_sel(&mut self, seg: PromptSegment, down: bool, ctx: SearchCtx<'_>) {
-        let len = self.chip_options_len(seg, ctx);
-        if len == 0 {
-            return;
-        }
-        let cur = self.seg_sel();
-        let next = if down {
-            cur.saturating_add(1).min(len - 1)
-        } else {
-            cur.saturating_sub(1)
-        };
-        self.set_seg_sel(next);
-    }
-
-    /// chip 段 Enter:下拉展开时确认当前行（切 source / kind）并塌回;收起时重新展开。
-    fn chip_seg_enter(&mut self, seg: PromptSegment, ctx: SearchCtx<'_>) -> SearchEffect {
-        if !self.seg_open() {
-            let sel = self.chip_current_index(seg, ctx);
-            self.open_seg(sel);
-            return SearchEffect::None;
-        }
-        let sel = self.seg_sel();
-        let eff = match seg {
-            PromptSegment::Source => self.confirm_source(sel, ctx),
-            PromptSegment::Kind => self.confirm_kind(sel, ctx),
-            PromptSegment::Query => SearchEffect::None,
-        };
-        self.close_seg();
-        eff
-    }
-
-    /// 确认 source 选择:切到该 source（保留各 source 会话）;焦点留在 source chip 段。
-    fn confirm_source(&mut self, idx: usize, ctx: SearchCtx<'_>) -> SearchEffect {
-        let Some(source) = self.source_options(ctx.caps).get(idx).copied() else {
-            return SearchEffect::None;
-        };
-        self.switch_source(source, ctx.caps);
-        SearchEffect::None
-    }
-
-    /// 确认 kind 选择:切到该 kind;无缓存 + query 非空则用当前 query 自动搜（焦点留在 kind chip）。
-    fn confirm_kind(&mut self, idx: usize, ctx: SearchCtx<'_>) -> SearchEffect {
-        let Some(kind) = self.kind_options(ctx.caps).get(idx).copied() else {
-            return SearchEffect::None;
-        };
-        if self.select_kind(kind) {
-            self.submit_current_query()
-        } else {
-            SearchEffect::None
-        }
-    }
-
-    /// chip 段 left:kind → source;source 已是最左,no-op。
-    fn chip_seg_left(&mut self, seg: PromptSegment, ctx: SearchCtx<'_>) {
-        if seg == PromptSegment::Kind {
-            self.focus_chip(PromptSegment::Source, ctx);
-        }
-    }
-
-    /// chip 段 right:source → kind;kind → query 文本段。
-    fn chip_seg_right(&mut self, seg: PromptSegment, ctx: SearchCtx<'_>) {
-        match seg {
-            PromptSegment::Source => self.focus_chip(PromptSegment::Kind, ctx),
-            PromptSegment::Kind => self.focus_query(),
-            PromptSegment::Query => {}
-        }
-    }
-
-    /// 某 chip 段当前选择在其列表里的下标（focus 到达时下拉高亮落此行）;找不到落 0。
-    fn chip_current_index(&self, seg: PromptSegment, ctx: SearchCtx<'_>) -> usize {
-        match seg {
-            PromptSegment::Source => {
-                let cur = self.source;
-                self.source_options(ctx.caps)
-                    .iter()
-                    .position(|s| Some(*s) == cur)
-                    .unwrap_or(0)
-            }
-            PromptSegment::Kind => {
-                let cur = self.current().map(|s| s.kind);
-                self.kind_options(ctx.caps)
-                    .iter()
-                    .position(|k| Some(*k) == cur)
-                    .unwrap_or(0)
-            }
-            PromptSegment::Query => 0,
-        }
-    }
-
-    /// 某 chip 段下拉的候选数(走查钳制用)。
-    fn chip_options_len(&self, seg: PromptSegment, ctx: SearchCtx<'_>) -> usize {
-        match seg {
-            PromptSegment::Source => self.source_options(ctx.caps).len(),
-            PromptSegment::Kind => self.kind_options(ctx.caps).len(),
-            PromptSegment::Query => 0,
-        }
-    }
-
-    /// 提交当前会话的首页搜索任务,焦点转结果列。空 query 不提交(留在 prompt、吐
-    /// [`SearchEffect::None`])。显式提交即作废旧词缓存(per-kind 桶按当前 query 重建)。
-    fn submit_search(&mut self) -> SearchEffect {
-        let Some(source) = self.source else {
-            return SearchEffect::None;
-        };
-        let (kind, query) = {
-            let Some(session) = self.current_mut() else {
-                return SearchEffect::None;
-            };
-            if session.query().is_empty() {
-                return SearchEffect::None;
-            }
-            let pair = (session.kind, session.query().to_owned());
-            session.clear_results();
-            pair
-        };
-        self.set_focus(SearchFocus::Results);
-        SearchEffect::Submit {
-            source,
-            kind,
-            query,
-        }
-    }
-
-    /// 用当前会话 source/kind/query 提交一次搜索（不改焦点、不清其它 kind 桶）——
-    /// 切 kind 自动搜用,结果落桶后焦点仍留在 chip 段。
-    fn submit_current_query(&self) -> SearchEffect {
-        let Some(source) = self.source else {
-            return SearchEffect::None;
-        };
-        let Some(session) = self.current() else {
-            return SearchEffect::None;
-        };
-        if session.query().is_empty() {
-            return SearchEffect::None;
-        }
-        SearchEffect::Submit {
-            source,
-            kind: session.kind,
-            query: session.query().to_owned(),
-        }
-    }
-}
-
-/// token prompt 文本光标移动方向(Left/Right/Home/End 键映射)。
-#[derive(Clone, Copy)]
-enum SearchCursor {
-    /// 左移一格。
-    Left,
-
-    /// 右移一格。
-    Right,
-
-    /// 跳词首。
-    Home,
-
-    /// 跳词尾。
-    End,
 }
 
 /// detail 焦点 activate 的动作:下钻一张专辑、或替换队列播放选中曲。
@@ -1455,6 +1171,155 @@ mod tests {
             app.state.channel_search.focus,
             SearchFocus::Detail,
             "drill 在结果列 → 进 detail(song 进其专辑)"
+        );
+        Ok(())
+    }
+
+    /// 把面板选中时间戳拨回过去(越过防抖窗,checked_sub 防单调时钟下溢)。
+    fn rewound() -> std::time::Instant {
+        std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(3600))
+            .unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// search 面板导航必须刷新面板选中时间戳——封面滚动防抖与 detail 驻留预取窗都以它计时;
+    /// 不刷新则 search 布局下两者恒失效(滚动即闪占位 / 每格光标立即打 API)。
+    #[test]
+    fn panel_nav_bumps_last_sel_change() -> color_eyre::Result<()> {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = app_with_album_detail()?;
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.channel_search.last_sel_change = rewound();
+        let before = app.state.channel_search.last_sel_change;
+        app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        assert!(
+            app.state.channel_search.last_sel_change > before,
+            "结果列光标移动应刷新时间戳"
+        );
+
+        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.channel_search.last_sel_change = rewound();
+        let before = app.state.channel_search.last_sel_change;
+        app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        assert!(
+            app.state.channel_search.last_sel_change > before,
+            "detail 列表光标移动应刷新时间戳"
+        );
+        Ok(())
+    }
+
+    /// 造一个「结果列 1 张带封面专辑、其详情帧在 detail 栈顶」的 probed App,返回封面 URL。
+    /// 封面防抖系列测试共用(是否把图塞进 covers.cache 由各测试自定)。
+    fn app_with_covered_album() -> color_eyre::Result<(crate::App, mineral_model::MediaUrl)> {
+        use mineral_model::{Album, AlbumId, MediaUrl};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(s) = app.state.channel_search.current_mut() {
+            s.set_query("q");
+        }
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "q".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("al1".to_owned())
+                    .cover_url(Some(url.clone()))
+                    .build(),
+            ]),
+            has_more: None,
+        });
+        Ok((app, url))
+    }
+
+    /// 稳态渲染后取 search 布局右栏(detail 面板)矩形。
+    fn detail_rect(app: &crate::App) -> color_eyre::Result<ratatui::layout::Rect> {
+        crate::components::layout::shared::compute::compute_search(
+            app.state.frame_area.get(),
+            app.state.cfg.tui().layout(),
+        )
+        .right
+        .ok_or_else(|| color_eyre::eyre::eyre!("search 布局应有 detail 面板"))
+    }
+
+    /// 数 `rect` 内半字符封面 cell(`▀`)——hash 占位与 halfblock 真图都用它,0 = 图位留空。
+    fn half_cells(buf: &ratatui::buffer::Buffer, rect: ratatui::layout::Rect) -> usize {
+        let mut n = 0usize;
+        for y in rect.y..rect.y.saturating_add(rect.height) {
+            for x in rect.x..rect.x.saturating_add(rect.width) {
+                if buf.cell((x, y)).is_some_and(|c| c.symbol() == "▀") {
+                    n = n.saturating_add(1);
+                }
+            }
+        }
+        n
+    }
+
+    /// 封面编码派发尊重滚动防抖:选中刚变(窗内)图位留空、不投编码;停稳(窗外)才派发一次。
+    /// search 面板此前从不刷新时间戳,该防抖在 search 布局下恒失效——此测锁两半行为。
+    #[test]
+    fn search_cover_encode_respects_scroll_debounce() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut app, url) = app_with_covered_album()?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+        app.state.covers.cache.insert(&url, Arc::new(img));
+
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        // 窗内(选中刚变):不投编码。
+        app.state.channel_search.last_sel_change = Instant::now();
+        t.draw(|f| crate::view::draw(f, &app))?;
+        assert!(
+            app.state.covers.encode_pending.borrow().is_empty(),
+            "滚动窗内不应派发封面编码"
+        );
+        // 停稳(窗外):恰好派发一次。
+        app.state.channel_search.last_sel_change = rewound();
+        t.draw(|f| crate::view::draw(f, &app))?;
+        assert_eq!(
+            app.state.covers.encode_pending.borrow().len(),
+            1,
+            "停稳后应恰好派发一次封面编码"
+        );
+        Ok(())
+    }
+
+    /// cache miss 的程序化 hash 占位同样尊重滚动防抖:滚动中图位留空(不逐行闪不同色块),
+    /// 停稳后才画占位。
+    #[test]
+    fn search_cover_hash_respects_scroll_debounce() -> color_eyre::Result<()> {
+        use std::time::Instant;
+
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut app, _url) = app_with_covered_album()?;
+
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        // 窗内:图未拉到(cache miss)也不画 hash 占位,留空。
+        app.state.channel_search.last_sel_change = Instant::now();
+        t.draw(|f| crate::view::draw(f, &app))?;
+        let detail = detail_rect(&app)?;
+        assert_eq!(
+            half_cells(t.backend().buffer(), detail),
+            0,
+            "滚动窗内 cache miss 应留空,不闪 hash 占位"
+        );
+        // 停稳:画程序化 hash 占位。
+        app.state.channel_search.last_sel_change = rewound();
+        t.draw(|f| crate::view::draw(f, &app))?;
+        assert!(
+            half_cells(t.backend().buffer(), detail) > 0,
+            "停稳后应画程序化 hash 占位"
         );
         Ok(())
     }

@@ -248,7 +248,7 @@ fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetch
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.browse.nav.last_sel_change.elapsed() < debounce {
+    if state.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
     // 取出当前帧的拉取意图 + 封面并标记已派，随即释放 channel_search 借用。
@@ -291,7 +291,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.browse.nav.last_sel_change.elapsed() < debounce {
+    if state.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
     // 先取出 (source, url) 再释放 channel_search 借用，避免与 ensure_cover 的 &mut 冲突。
@@ -508,7 +508,7 @@ mod tests {
             has_more: None,
         });
         // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
-        state.browse.nav.last_sel_change = Instant::now()
+        state.channel_search.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
         Ok(state)
@@ -569,6 +569,16 @@ mod tests {
         state.channel_search.active.set(false);
         let tasks = drive_detail(&mut state)?;
         assert!(tasks.is_empty(), "未进 search 布局态不派 detail");
+        Ok(())
+    }
+
+    /// 驻留窗内(光标刚动)不派——快速翻结果列不为掠过的实体打 API。
+    #[test]
+    fn request_detail_holds_within_dwell_window() -> color_eyre::Result<()> {
+        let mut state = searching_album_state()?;
+        state.channel_search.last_sel_change = std::time::Instant::now();
+        let tasks = drive_detail(&mut state)?;
+        assert!(tasks.is_empty(), "驻留窗内不应派 detail");
         Ok(())
     }
 }
