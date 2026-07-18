@@ -99,16 +99,29 @@ impl Daemon {
     }
 
     /// 在同一隔离环境下跑 `mineral action <name>`,捕获输出。
+    ///
+    /// busy 拒绝自动重试:单 client daemon 下,daemon bind 后 accept loop 起来前
+    /// 连接先进 backlog——`wait_ready` 的探测连接与本次连接都可能已在队里,
+    /// 探测连接先被 accept 会占掉槽位,本次连接被拒 busy(慢机器上必现)。
     fn action_output(&self, name: &str) -> color_eyre::Result<std::process::Output> {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-        cmd.arg("action")
-            .arg(name)
-            .env("XDG_CACHE_HOME", self.root.join("cache"))
-            .env("XDG_CONFIG_HOME", self.root.join("config"))
-            .env("XDG_DATA_HOME", self.root.join("data"))
-            .env("MINERAL_SOCKET_DIR", &self.sock_dir)
-            .stdin(Stdio::null());
-        cmd.output().wrap_err("run `mineral action`")
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
+            cmd.arg("action")
+                .arg(name)
+                .env("XDG_CACHE_HOME", self.root.join("cache"))
+                .env("XDG_CONFIG_HOME", self.root.join("config"))
+                .env("XDG_DATA_HOME", self.root.join("data"))
+                .env("MINERAL_SOCKET_DIR", &self.sock_dir)
+                .stdin(Stdio::null());
+            let out = cmd.output().wrap_err("run `mineral action`")?;
+            let rejected_busy = !out.status.success()
+                && String::from_utf8_lossy(&out.stderr).contains("daemon busy");
+            if !rejected_busy || Instant::now() > deadline {
+                return Ok(out);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
