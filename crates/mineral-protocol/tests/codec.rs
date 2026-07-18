@@ -2,20 +2,38 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{BitRate, MediaUrl, PlaylistId, SongId, SourceKind};
+use mineral_model::{
+    Album, AlbumId, Artist, ArtistId, BitRate, MediaUrl, Playlist, PlaylistId, SongId, SourceKind,
+};
 use mineral_protocol::{
-    CancelFilter, ChannelFetchKindTag, CurrentSync, KeyContext, PlayMode, PlayerSync,
-    PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind, SongStatsWire,
-    StoreValue, ViewKind, framed, recv, send,
+    CancelFilter, ChannelFetchKindTag, CopyTemplateCtx, CurrentSync, DownloadProgress,
+    DownloadTarget, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef, QueueSync,
+    Request, Response, ScriptBind, SongStatsWire, StoreValue, ViewKind, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 use tokio::io::duplex;
 
+/// 同一值经 serde_json 往返,断言 Debug 保真。codec 可换的守卫(与 tests/frame.rs
+/// 的 `dual_codec_roundtrip` 同约定):wire 类型只许依赖 serde derive,不许绑死
+/// bincode。framed bincode 路径由调用方覆盖。
+fn json_round_trips<T>(value: &T) -> color_eyre::Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
+{
+    let want = format!("{value:?}");
+    let json = serde_json::to_string(value)?;
+    let back: T = serde_json::from_str(&json)?;
+    assert_eq!(format!("{back:?}"), want, "JSON 往返应保真");
+    Ok(())
+}
+
 /// 把一个 [`Request`] 走 framed round-trip,断言收回的与发出的 Debug 等价
-/// (`Request` 不实现 `PartialEq`,但成功反序列化的 Debug 必然逐字段相同)。
+/// (`Request` 不实现 `PartialEq`,但成功反序列化的 Debug 必然逐字段相同);
+/// 同一值顺带过 [`json_round_trips`](双 codec 一次覆盖)。
 async fn req_round_trips(req: Request) -> color_eyre::Result<()> {
+    json_round_trips(&req)?;
     let (a, b) = duplex(64 * 1024);
     let mut sender = framed(a);
     let mut receiver = framed(b);
@@ -30,6 +48,7 @@ async fn req_round_trips(req: Request) -> color_eyre::Result<()> {
 
 /// 同 [`req_round_trips`],[`Response`] 版。
 async fn resp_round_trips(resp: Response) -> color_eyre::Result<()> {
+    json_round_trips(&resp)?;
     let (a, b) = duplex(64 * 1024);
     let mut sender = framed(a);
     let mut receiver = framed(b);
@@ -49,7 +68,9 @@ async fn round_trip_request_play() -> color_eyre::Result<()> {
     let mut receiver = framed(b);
 
     let url = MediaUrl::remote("https://example.com/song.mp3")?;
-    send(&mut sender, &Request::Play(url.clone())).await?;
+    let req = Request::Play(url.clone());
+    json_round_trips(&req)?;
+    send(&mut sender, &req).await?;
     let got: Request = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
@@ -71,11 +92,9 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
         song_id: SongId::new(SourceKind::NETEASE, "12345"),
         quality: BitRate::Higher,
     });
-    send(
-        &mut sender,
-        &Request::SubmitTask(kind.clone(), Priority::User),
-    )
-    .await?;
+    let req = Request::SubmitTask(kind.clone(), Priority::User);
+    json_round_trips(&req)?;
+    send(&mut sender, &req).await?;
     let got: Request = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
@@ -98,7 +117,9 @@ async fn round_trip_request_cancel_tasks() -> color_eyre::Result<()> {
         ChannelFetchKindTag::SongUrl,
         ChannelFetchKindTag::Lyrics,
     ]);
-    send(&mut sender, &Request::CancelTasks(filter.clone())).await?;
+    let req = Request::CancelTasks(filter.clone());
+    json_round_trips(&req)?;
+    send(&mut sender, &req).await?;
     let got: Request = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
@@ -133,7 +154,9 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         next_download_complete: true,
         sample_rate_hz: 44_100,
     };
-    send(&mut sender, &Response::AudioSnapshot(snap)).await?;
+    let resp = Response::AudioSnapshot(snap);
+    json_round_trips(&resp)?;
+    send(&mut sender, &resp).await?;
     let got: Response = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
@@ -152,7 +175,9 @@ async fn round_trip_response_error() -> color_eyre::Result<()> {
     let mut receiver = framed(b);
 
     let msg = "daemon busy: another client is connected";
-    send(&mut sender, &Response::Error(msg.to_owned())).await?;
+    let resp = Response::Error(msg.to_owned());
+    json_round_trips(&resp)?;
+    send(&mut sender, &resp).await?;
     let got: Response = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
@@ -457,6 +482,14 @@ mod proptests {
             let back: Request = deserialize(&bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
             proptest::prop_assert_eq!(format!("{back:?}"), format!("{req:?}"));
         }
+
+        /// 任意 `Request` 经 JSON 往返后 Debug 恒等(codec 可换守卫,与 bincode 版共用 arb)。
+        #[test]
+        fn request_json_roundtrip(req in arb_request()) {
+            let json = serde_json::to_string(&req).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let back: Request = serde_json::from_str(&json).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            proptest::prop_assert_eq!(format!("{back:?}"), format!("{req:?}"));
+        }
     }
 }
 
@@ -509,6 +542,88 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
             ]))
             .build(),
     )]))
+    .await?;
+    Ok(())
+}
+
+/// 下载 / 进程信息 / 复制模板 / 终端上报的 round-trip(此前无覆盖的变体补齐,
+/// 双 codec 经 helper 一并守住)。
+#[tokio::test]
+async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
+    req_round_trips(Request::DaemonInfo).await?;
+    resp_round_trips(Response::DaemonInfo { pid: 4242 }).await?;
+
+    req_round_trips(Request::Download(DownloadTarget::Song(Box::new(song(
+        "dl",
+    )))))
+    .await?;
+    req_round_trips(Request::Download(DownloadTarget::Playlist(
+        PlaylistId::new(SourceKind::NETEASE, "p1"),
+    )))
+    .await?;
+    req_round_trips(Request::DownloadProgress).await?;
+    resp_round_trips(Response::DownloadProgress(DownloadProgress {
+        active: true,
+        done: 3,
+        total: 10,
+        bytes_done: 1_024,
+        bytes_total: 4_096,
+        speed_bps: 512,
+        queued: 1,
+        result_seq: 2,
+        last_ok: 5,
+        last_skip: 1,
+        last_fail: 0,
+    }))
+    .await?;
+
+    // 复制模板:四种实体 ctx 各一(Playlist/Album/Artist 载荷此前从未过 wire 测试)。
+    req_round_trips(Request::RenderCopyTemplate {
+        index: 2,
+        ctx: CopyTemplateCtx::Song(Box::new(song("cp"))),
+    })
+    .await?;
+    req_round_trips(Request::RenderCopyTemplate {
+        index: 0,
+        ctx: CopyTemplateCtx::Playlist(Box::new(
+            Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, "pl"))
+                .name("收藏夹".to_owned())
+                .songs(vec![song("in-pl")])
+                .build(),
+        )),
+    })
+    .await?;
+    req_round_trips(Request::RenderCopyTemplate {
+        index: 1,
+        ctx: CopyTemplateCtx::Album(Box::new(
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, "al"))
+                .name("专辑".to_owned())
+                .publish_time_ms(1_700_000_000_000)
+                .build(),
+        )),
+    })
+    .await?;
+    req_round_trips(Request::RenderCopyTemplate {
+        index: 3,
+        ctx: CopyTemplateCtx::Artist(Box::new(
+            Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+                .name("乐队".to_owned())
+                .build(),
+        )),
+    })
+    .await?;
+    resp_round_trips(Response::CopyText(Ok("标题 - 歌手".to_owned()))).await?;
+    resp_round_trips(Response::CopyText(Err("模板下标越界".to_owned()))).await?;
+
+    req_round_trips(Request::TerminalState {
+        rows: 50,
+        cols: 200,
+        fullscreen: false,
+        focused: true,
+    })
     .await?;
     Ok(())
 }
