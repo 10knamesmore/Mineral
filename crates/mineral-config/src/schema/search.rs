@@ -31,11 +31,15 @@ pub struct DeepSearchConfig {
 /// 深度搜索的字段级权重。每项 0~1(越界 clamp),`0` = 该字段不参与匹配。
 ///
 /// 歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
-/// 单曲分 = max(name 权重 × 歌名分, artist 权重 × 艺人分, album 权重 × 专辑分)。
+/// 单曲分 = max(name 权重 × 歌名分, alias 权重 × 别名分, artist 权重 × 艺人分,
+/// album 权重 × 专辑分)。
 #[config_section]
 pub struct DeepWeights {
     /// 歌名命中分折扣。
     name: f32,
+
+    /// 别名(译名 / 副标题)命中分折扣。
+    alias: f32,
 
     /// 艺人名命中分折扣(多艺人取最高)。
     artist: f32,

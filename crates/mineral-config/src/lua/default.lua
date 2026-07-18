@@ -180,9 +180,10 @@ return {
       deep = {
         enabled = true, -- Playlists 视图搜索词穿透到歌单内歌曲;进搜索态时后台补拉未缓存歌单的曲目
         -- 字段级命中分折扣 0~1,0 = 该字段不参与;歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
-        -- 单曲分 = max(name × 歌名分, artist × 艺人分, album × 专辑分)
+        -- 单曲分 = max(name × 歌名分, alias × 别名分, artist × 艺人分, album × 专辑分)
         weights = {
           name = 0.6, -- 歌名
+          alias = 0.5, -- 别名(译名 / 副标题)
           artist = 0.5, -- 艺人(多艺人取最高)
           album = 0.4, -- 专辑
         },

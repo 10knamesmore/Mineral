@@ -9,12 +9,11 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table};
 use mineral_model::SourceKind;
 
 use super::badge::search_badge;
-use super::highlight::highlight_indices;
+use super::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::marquee::{
     MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
 };
 use crate::components::layout::shared::scroll_table::render_scroll_table;
-use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
@@ -244,7 +243,16 @@ fn build_row<'a>(
         Style::new().fg(theme.text),
         theme,
     );
-    title_spans.extend(alias_span(sv.data.alias.as_deref(), theme));
+    // alias(译名 / 副标题)是歌名的暗色括注后缀;命中字符与主字段同款 search_hit
+    // 高亮。hits 是相对 alias 文本的 char 下标。
+    if let Some(alias) = sv.data.alias.as_deref() {
+        let alias_hits = state.browse.search.match_for(alias).map(|m| m.hits);
+        title_spans.extend(alias_suffix(
+            alias,
+            alias_hits.as_deref().unwrap_or(&[]),
+            theme,
+        ));
+    }
     let title_cell = match marquee {
         Some(m) => Cell::from(
             m.ctx
@@ -597,6 +605,71 @@ mod tests {
                 .iter()
                 .all(|sv| sv.data.alias.as_deref() == Some("Mayoiuta")),
             "只有别名命中的曲应留下(歌名/艺人/专辑都不含该词)"
+        );
+        Ok(())
+    }
+
+    /// 别名命中与主字段同款高亮:命中子串换 search_hit 色 + 字体效果,括号与未命中
+    /// 别名字符保持 overlay 暗调。命中效果只在非选中行落地(选中行整行 fg 被
+    /// row_highlight 的 accent 顶掉,见 render_to 注),故把选中放在第二行、别名命中行
+    /// 留在第一行。只扫 body 行(y=0 的标题栏 query badge 也染 search_hit 色,须排除):
+    /// body 里 search_hit 色的字符恰好拼成 "Mayo",其余别名字符仍是 overlay。
+    #[test]
+    fn alias_hits_use_primary_highlight() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        use crate::test_support::{song, with_alias, with_name};
+
+        let theme = Theme::default();
+        let mut state = crate::test_support::state_with_tracks()?;
+        // 前两首各带别名 Mayoiuta(歌名各异、都不含 "mayo"),搜 "mayo" 二者皆命中。
+        if let Some(views) = state
+            .library
+            .tracks
+            .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
+        {
+            if let Some(v) = views.get_mut(0) {
+                v.data = with_alias(with_name(song("s0"), "迷星叫"), "Mayoiuta");
+            }
+            if let Some(v) = views.get_mut(1) {
+                v.data = with_alias(with_name(song("s1"), "叫喊迷星"), "Mayoiuta");
+            }
+        }
+        state.browse.nav.track.set_sel(1);
+        state.browse.search.set_query("mayo");
+
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        draw_lib(&mut t, &state)?;
+
+        let buf = t.backend().buffer();
+        let (w, h) = (buf.area.width, buf.area.height);
+        // 跳过 y=0(标题栏 + query badge)与 y=1(表头),只看曲目 body 行。
+        let body = (2..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter_map(|(x, y)| buf.cell((x, y)))
+            .collect::<Vec<_>>();
+        let hit_chars = body
+            .iter()
+            .copied()
+            .filter(|c| c.fg == theme.search_hit_color)
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert_eq!(hit_chars, "Mayo", "别名命中换 search_hit 色,与主字段同款");
+        assert!(
+            body.iter().any(|c| c.fg == theme.search_hit_color
+                && c.modifier.contains(theme.search_hit_modifier)),
+            "命中段还应叠 search_hit 字体效果"
+        );
+        // 未命中的别名字符与括号保持 overlay 暗调:非选中行应能扫出 "(" 与 "iuta" 的残段。
+        let dim_chars = body
+            .iter()
+            .copied()
+            .filter(|c| c.fg == theme.overlay)
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            dim_chars.contains("iuta)"),
+            "未命中别名字符与括号应保持 overlay 暗调,实际: {dim_chars:?}"
         );
         Ok(())
     }

@@ -1,6 +1,6 @@
-//! Playlists 视图的深度搜索:搜索词穿透到歌单内歌曲(歌名 / 艺人 / 专辑)。
+//! Playlists 视图的深度搜索:搜索词穿透到歌单内歌曲(歌名 / 别名 / 艺人 / 专辑)。
 //!
-//! 全库 × 3 字段的 nucleo 打分开销大(千首级 × 每字段一次匹配),结果按
+//! 全库 × 4 字段的 nucleo 打分开销大(千首级 × 每字段一次匹配),结果按
 //! `(query, tracks 版本, 权重)` 缓存在 [`AppState::deep_search`],只在按键 /
 //! 数据到达 / 配置热重载时重算,渲染帧只读。
 //!
@@ -15,6 +15,10 @@ use smallvec::SmallVec;
 use crate::runtime::state::{LibraryData, SearchState};
 
 /// 单个歌单的深度命中:加权分 + 行中部展示载荷。
+///
+/// 展示文本按段结构化交给渲染端拼装(`♪ <name>[ (<alias>)][ · <second>]`),
+/// 命中下标是 [`Self::hit_field`] 所指字段**内**的 char 坐标,不做跨段平移——
+/// 各段样式(别名括注暗调等)由渲染端决定。
 #[derive(Clone, Debug)]
 pub struct DeepHit {
     /// 歌单内最佳歌曲的加权分(字段权重已生效),与歌单名分取 max 排序用。
@@ -23,14 +27,36 @@ pub struct DeepHit {
     /// 最佳命中歌曲的 id(进歌单时定位光标用)。
     pub song_id: mineral_model::SongId,
 
-    /// 行中部展示文本,如 `♪ 春日影 · MyGO!!!!!`;次段随最佳命中字段取艺人或专辑。
-    pub line: String,
+    /// 主段:歌名。
+    pub name: String,
 
-    /// `line` 内的命中 char 下标(已按展示前缀平移),喂 highlight 渲染。
+    /// 括注别名(译名 / 副标题);有则恒展示,与歌单内曲目行的样式一致。
+    pub alias: Option<String>,
+
+    /// `·` 后次段:命中在歌名 / 别名时为首位艺人(无则省略),命中在艺人 / 专辑时为命中文本。
+    pub second: Option<String>,
+
+    /// [`Self::hits`] 落在哪个展示段。
+    pub hit_field: HitField,
+
+    /// 命中字段内的原文 char 下标,喂 highlight 渲染。
     pub hits: Vec<u32>,
 
     /// 该歌单内除最佳外还有几首命中(展示 `+n`;0 = 不显示)。
     pub extra: usize,
+}
+
+/// [`DeepHit::hits`] 的落点段。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitField {
+    /// 歌名主段。
+    Name,
+
+    /// 括注别名段。
+    Alias,
+
+    /// `·` 后的次段(艺人 / 专辑)。
+    Second,
 }
 
 /// 深度搜索结果缓存。key 失配(query / tracks 版本 / 权重任一变化)时整体重建。
@@ -69,8 +95,8 @@ struct CacheKey {
     /// 构建时的 `library.tracks` 内容版本。
     generation: u64,
 
-    /// `[name, artist, album]` 权重位模式。
-    weights: [u32; 3],
+    /// `[name, alias, artist, album]` 权重位模式。
+    weights: [u32; 4],
 
     /// 深度搜索总开关。
     deep: bool,
@@ -80,15 +106,10 @@ impl CacheKey {
     /// 以当前 state 算一份指纹。
     fn current(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) -> Self {
         let scfg = cfg.tui().search().deep();
-        let w = scfg.weights();
         Self {
             query: search.query().to_owned(),
             generation: library.tracks_generation,
-            weights: [
-                w.name().to_bits(),
-                w.artist().to_bits(),
-                w.album().to_bits(),
-            ],
+            weights: weight_bits(scfg.weights()),
             deep: *scfg.enabled(),
         }
     }
@@ -101,17 +122,21 @@ impl CacheKey {
         cfg: &mineral_config::Config,
     ) -> bool {
         let scfg = cfg.tui().search().deep();
-        let w = scfg.weights();
         self.deep == *scfg.enabled()
             && self.generation == library.tracks_generation
-            && self.weights
-                == [
-                    w.name().to_bits(),
-                    w.artist().to_bits(),
-                    w.album().to_bits(),
-                ]
+            && self.weights == weight_bits(scfg.weights())
             && self.query == search.query()
     }
+}
+
+/// 四字段权重的位模式(`f32::to_bits`)——热重载改任一权重即指纹失配。
+fn weight_bits(w: &mineral_config::DeepWeights) -> [u32; 4] {
+    [
+        w.name().to_bits(),
+        w.alias().to_bits(),
+        w.artist().to_bits(),
+        w.album().to_bits(),
+    ]
 }
 
 /// 保证缓存与当前 `(query, tracks 版本, 权重)` 一致,失配则重建。
@@ -141,16 +166,13 @@ fn build(
     library: &LibraryData,
     cfg: &mineral_config::Config,
 ) -> FxHashMap<PlaylistId, DeepHit> {
-    let w = cfg.tui().search().deep().weights();
-    let wn = f64::from(w.name().clamp(0.0, 1.0));
-    let wa = f64::from(w.artist().clamp(0.0, 1.0));
-    let wal = f64::from(w.album().clamp(0.0, 1.0));
+    let weights = FieldWeights::from_cfg(cfg.tui().search().deep().weights());
     let mut out = FxHashMap::default();
     for (pid, tracks) in &library.tracks {
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
         for sv in tracks {
-            let Some(hit) = score_song(search, &sv.data, wn, wa, wal) else {
+            let Some(hit) = score_song(search, &sv.data, weights) else {
                 continue;
             };
             matched = matched.saturating_add(1);
@@ -165,74 +187,111 @@ fn build(
     out
 }
 
+/// 深度搜索四字段的命中分折扣(已 clamp 到 `0.0..=1.0`),`0` = 该字段不参与。
+#[derive(Clone, Copy)]
+struct FieldWeights {
+    /// 歌名。
+    name: f64,
+
+    /// 别名(译名 / 副标题)。
+    alias: f64,
+
+    /// 艺人(多艺人取最高)。
+    artist: f64,
+
+    /// 专辑。
+    album: f64,
+}
+
+impl FieldWeights {
+    /// 从配置读四字段权重并 clamp 到合法区间。
+    fn from_cfg(w: &mineral_config::DeepWeights) -> Self {
+        Self {
+            name: f64::from(w.name().clamp(0.0, 1.0)),
+            alias: f64::from(w.alias().clamp(0.0, 1.0)),
+            artist: f64::from(w.artist().clamp(0.0, 1.0)),
+            album: f64::from(w.album().clamp(0.0, 1.0)),
+        }
+    }
+}
+
 /// 一首歌的最佳字段命中(构建期中间态,借 song 的文本)。
 struct SongHit<'a> {
     /// 加权分。
     score: f64,
 
-    /// 命中歌曲(展示主段取 `name`,定位取 `id`)。
+    /// 命中歌曲(展示主段取 `name` + 括注 `alias`,定位取 `id`)。
     song: &'a Song,
 
-    /// 展示次段:命中在歌名时为首位艺人(无则省略),命中在艺人 / 专辑时为命中文本。
+    /// 展示次段:命中在歌名 / 别名时为首位艺人(无则省略),命中在艺人 / 专辑时为命中文本。
     second: Option<&'a str>,
 
-    /// 命中下标落在次段(艺人 / 专辑)而非歌名段。
-    hits_in_second: bool,
+    /// 命中下标落点段。
+    hit_field: HitField,
 
     /// 命中字段内的原文 char 下标。
     hits: SmallVec<[u32; 8]>,
 }
 
-/// 对一首歌的三个字段分别打分取加权最高;全不命中(或权重全 0)返回 `None`。
+/// 对一首歌的四个字段分别打分取加权最高;全不命中(或权重全 0)返回 `None`。
 ///
-/// 同分时按 歌名 > 艺人 > 专辑 优先(评估顺序 + 严格大于才替换)。
-fn score_song<'a>(
-    search: &SearchState,
-    song: &'a Song,
-    wn: f64,
-    wa: f64,
-    wal: f64,
-) -> Option<SongHit<'a>> {
+/// 同分时按 歌名 > 别名 > 艺人 > 专辑 优先(评估顺序 + 严格大于才替换)。
+fn score_song<'a>(search: &SearchState, song: &'a Song, w: FieldWeights) -> Option<SongHit<'a>> {
     let mut best: Option<SongHit<'a>> = None;
-    if wn > 0.0
+    if w.name > 0.0
         && let Some(m) = search.match_for(&song.name)
     {
         best = Some(SongHit {
-            score: wn * f64::from(m.score),
+            score: w.name * f64::from(m.score),
             song,
             second: song.artists.first().map(|a| a.name.as_str()),
-            hits_in_second: false,
+            hit_field: HitField::Name,
             hits: m.hits,
         });
     }
-    if wa > 0.0 {
+    if w.alias > 0.0
+        && let Some(alias) = &song.alias
+        && let Some(m) = search.match_for(alias)
+    {
+        let score = w.alias * f64::from(m.score);
+        if best.as_ref().is_none_or(|b| score > b.score) {
+            best = Some(SongHit {
+                score,
+                song,
+                second: song.artists.first().map(|a| a.name.as_str()),
+                hit_field: HitField::Alias,
+                hits: m.hits,
+            });
+        }
+    }
+    if w.artist > 0.0 {
         for artist in &song.artists {
             let Some(m) = search.match_for(&artist.name) else {
                 continue;
             };
-            let score = wa * f64::from(m.score);
+            let score = w.artist * f64::from(m.score);
             if best.as_ref().is_none_or(|b| score > b.score) {
                 best = Some(SongHit {
                     score,
                     song,
                     second: Some(&artist.name),
-                    hits_in_second: true,
+                    hit_field: HitField::Second,
                     hits: m.hits,
                 });
             }
         }
     }
-    if wal > 0.0
+    if w.album > 0.0
         && let Some(album) = &song.album
         && let Some(m) = search.match_for(&album.name)
     {
-        let score = wal * f64::from(m.score);
+        let score = w.album * f64::from(m.score);
         if best.as_ref().is_none_or(|b| score > b.score) {
             best = Some(SongHit {
                 score,
                 song,
                 second: Some(&album.name),
-                hits_in_second: true,
+                hit_field: HitField::Second,
                 hits: m.hits,
             });
         }
@@ -240,30 +299,17 @@ fn score_song<'a>(
     best
 }
 
-/// 组装展示载荷:`♪ <歌名>[ · <次段>]`,把字段内命中下标平移到 line 坐标。
+/// 组装展示载荷:借用态 [`SongHit`] 落成 owned [`DeepHit`],段结构原样携带,
+/// 命中下标保持字段内坐标(拼装与平移都不在这里做)。
 fn compose(b: &SongHit<'_>, extra: usize) -> DeepHit {
-    // '♪' + ' ' = 2 char;" · " = 3 char。偏移按 char 数算(highlight 以 char 为单位)。
-    let mut line = String::from("♪ ");
-    line.push_str(&b.song.name);
-    let mut second_start = 2u32;
-    if let Some(second) = b.second {
-        second_start = second_start
-            .saturating_add(u32::try_from(b.song.name.chars().count()).unwrap_or(u32::MAX))
-            .saturating_add(3);
-        line.push_str(" · ");
-        line.push_str(second);
-    }
-    let offset = if b.hits_in_second { second_start } else { 2 };
-    let hits = b
-        .hits
-        .iter()
-        .map(|h| h.saturating_add(offset))
-        .collect::<Vec<u32>>();
     DeepHit {
         score: b.score,
         song_id: b.song.id.clone(),
-        line,
-        hits,
+        name: b.song.name.clone(),
+        alias: b.song.alias.clone(),
+        second: b.second.map(str::to_owned),
+        hit_field: b.hit_field,
+        hits: b.hits.iter().copied().collect(),
         extra,
     }
 }
@@ -274,10 +320,11 @@ mod tests {
 
     use mineral_model::{PlaylistId, SourceKind};
 
+    use super::HitField;
     use crate::runtime::state::AppState;
     use crate::runtime::view_model::SongView;
     use crate::test_support::{
-        playlist_view, song, state_with_playlists, with_album, with_artist, with_name,
+        playlist_view, song, state_with_playlists, with_album, with_alias, with_artist, with_name,
     };
 
     /// p2 的歌单 id(与 [`state_with_playlists`] 对齐)。
@@ -313,7 +360,7 @@ mod tests {
     }
 
     /// 歌名命中:歌单名都不含「春日」,但 p2 内有「春日影」→ p2 被深度命中捞出,
-    /// 中部载荷 = `♪ 春日影 · CRYCHIC`,高亮落在歌名段(前缀 2 char 偏移)。
+    /// 载荷段 = 歌名「春日影」+ 次段首位艺人 CRYCHIC,命中落在歌名段(字段内坐标)。
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
@@ -327,24 +374,80 @@ mod tests {
         let hit = s
             .deep_hit_for(&p2())
             .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
-        assert_eq!(hit.line, "♪ 春日影 · CRYCHIC");
-        assert_eq!(hit.hits, vec![2, 3], "春日 两字高亮(+2 前缀偏移)");
+        assert_eq!(hit.name, "春日影");
+        assert_eq!(hit.second.as_deref(), Some("CRYCHIC"));
+        assert_eq!(hit.hit_field, HitField::Name);
+        assert_eq!(hit.hits, vec![0, 1], "春日 两字命中(歌名段内坐标)");
         assert_eq!(hit.extra, 0);
         Ok(())
     }
 
-    /// 艺人命中:`mygo` 只落在「迷星叫」的艺人 MyGO!!!!! 上 → 次段高亮
-    /// (偏移 = 前缀 2 + 歌名 3 + 分隔 3 = 8)。
+    /// 艺人命中:`mygo` 只落在「迷星叫」的艺人 MyGO!!!!! 上 → 命中落在次段
+    /// (字段内坐标,无跨段平移)。
     #[test]
-    fn artist_hit_highlights_second_segment() -> color_eyre::Result<()> {
+    fn artist_hit_lands_in_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
         s.browse.search.set_query("mygo");
         let _ = s.filtered_playlists();
         let hit = s
             .deep_hit_for(&p2())
             .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
-        assert_eq!(hit.line, "♪ 迷星叫 · MyGO!!!!!");
-        assert_eq!(hit.hits, vec![8, 9, 10, 11], "MyGO 四字高亮(次段偏移 8)");
+        assert_eq!(hit.name, "迷星叫");
+        assert_eq!(hit.second.as_deref(), Some("MyGO!!!!!"));
+        assert_eq!(hit.hit_field, HitField::Second);
+        assert_eq!(hit.hits, vec![0, 1, 2, 3], "MyGO 四字命中(次段内坐标)");
+        Ok(())
+    }
+
+    /// 别名命中:歌名 / 艺人都不含「mayo」,但某曲别名 Mayoiuta 命中 → p2 被深度捞出,
+    /// 命中落在括注别名段,次段回落首位艺人(与歌名命中同型:`♪ 歌名 (别名) · 艺人`)。
+    #[test]
+    fn alias_hit_lands_in_alias_segment() -> color_eyre::Result<()> {
+        let mut s = state_with_playlists()?;
+        let t = with_alias(
+            with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!"),
+            "Mayoiuta",
+        );
+        fill_tracks(&mut s, &p2(), vec![t]);
+        s.browse.search.set_query("mayo");
+        let _ = s.filtered_playlists();
+        let hit = s
+            .deep_hit_for(&p2())
+            .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有别名深度命中"))?;
+        assert_eq!(hit.name, "迷星叫");
+        assert_eq!(hit.alias.as_deref(), Some("Mayoiuta"));
+        assert_eq!(hit.second.as_deref(), Some("MyGO!!!!!"), "次段回落首位艺人");
+        assert_eq!(hit.hit_field, HitField::Alias);
+        assert_eq!(hit.hits, vec![0, 1, 2, 3], "Mayo 四字命中(别名段内坐标)");
+        Ok(())
+    }
+
+    /// 字段权重独立:alias 权重置 0 后,纯别名命中不再捞出歌单。
+    #[test]
+    fn zero_alias_weight_disables_alias() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            "return { tui = { search = { deep = { weights = { alias = 0 } } } } }",
+        )?;
+        let (cfg, warnings) = mineral_config::load(&path)?;
+        assert!(warnings.is_empty(), "测试配置不应有 warning");
+        let mut s = AppState::new(Arc::new(cfg));
+        s.library.playlists = vec![playlist_view(
+            "p2",
+            "The Power of Failing",
+            SourceKind::NETEASE,
+            8,
+        )];
+        let t = with_alias(with_name(song("s2"), "迷星叫"), "Mayoiuta");
+        fill_tracks(&mut s, &p2(), vec![t]);
+        s.browse.search.set_query("mayo");
+        assert!(
+            s.filtered_playlists().is_empty(),
+            "alias 权重 0:纯别名命中不应捞出歌单"
+        );
+        assert!(s.deep_hit_for(&p2()).is_none());
         Ok(())
     }
 

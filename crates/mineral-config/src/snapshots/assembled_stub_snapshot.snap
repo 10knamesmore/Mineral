@@ -349,9 +349,11 @@ expression: "super::meta_config_lua()"
 ---深度搜索的字段级权重。每项 0~1(越界 clamp),`0` = 该字段不参与匹配。
 ---
 ---歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
----单曲分 = max(name 权重 × 歌名分, artist 权重 × 艺人分, album 权重 × 专辑分)。
+---单曲分 = max(name 权重 × 歌名分, alias 权重 × 别名分, artist 权重 × 艺人分,
+---album 权重 × 专辑分)。
 ---@class mineral.DeepWeights
 ---@field name? number 歌名命中分折扣。
+---@field alias? number 别名(译名 / 副标题)命中分折扣。
 ---@field artist? number 艺人名命中分折扣(多艺人取最高)。
 ---@field album? number 专辑名命中分折扣。
 

@@ -26,7 +26,8 @@ use crate::runtime::view_model::{PlaylistView, SongView};
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
     assert_snap, assert_snap_debug, chinese_football, endserenading, feiyu_lyrics, feiyu_song,
-    qianzai_lyrics, qianzai_song, song, with_album, with_artist, with_duration, with_name,
+    qianzai_lyrics, qianzai_song, song, with_album, with_alias, with_artist, with_duration,
+    with_name,
 };
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。

@@ -7,9 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Widget};
 
 use super::badge::search_badge;
-use super::highlight::highlight_indices;
+use super::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::render::theme::Theme;
+use crate::runtime::deep_search::HitField;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
@@ -159,13 +160,30 @@ fn build_row<'a>(
     Row::new(cells)
 }
 
-/// 深度命中列:`♪ 歌名 · 艺人/专辑`(命中字符同款高亮)+ `+n` 计数;
-/// 该歌单无歌曲命中时为空白格。
+/// 深度命中列:`♪ 歌名[ (别名)][ · 艺人/专辑]` + `+n` 计数;该歌单无歌曲命中时为空白格。
+///
+/// 各段样式与歌单内曲目行一致:别名括注 dim、命中字符同款 search_hit 高亮——
+/// 命中下标按 [`HitField`] 派给对应段,其余段不带 hits。
 fn deep_hit_cell<'a>(p: &PlaylistView, state: &AppState, theme: &Theme) -> Cell<'a> {
     let Some(hit) = state.deep_hit_for(&p.data.id) else {
         return Cell::from("");
     };
-    let mut spans = highlight_indices(&hit.line, &hit.hits, Style::new().fg(theme.subtext), theme);
+    let base = Style::new().fg(theme.subtext);
+    let empty: &[u32] = &[];
+    let (name_hits, alias_hits, second_hits) = match hit.hit_field {
+        HitField::Name => (hit.hits.as_slice(), empty, empty),
+        HitField::Alias => (empty, hit.hits.as_slice(), empty),
+        HitField::Second => (empty, empty, hit.hits.as_slice()),
+    };
+    let mut spans = vec![Span::styled("♪ ", base)];
+    spans.extend(highlight_indices(&hit.name, name_hits, base, theme));
+    if let Some(alias) = hit.alias.as_deref() {
+        spans.extend(alias_suffix(alias, alias_hits, theme));
+    }
+    if let Some(second) = hit.second.as_deref() {
+        spans.push(Span::styled(" · ", base));
+        spans.extend(highlight_indices(second, second_hits, base, theme));
+    }
     if hit.extra > 0 {
         spans.push(Span::styled(
             format!(" +{}", hit.extra),
@@ -381,6 +399,43 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:深度命中(match 列展示 ♪ 春日影 · CRYCHIC,命中高亮)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 深度命中落在别名:别名以括注紧跟歌名(dim,与曲目行样式一致),次段仍是首位艺人——
+    /// match 列展示 `♪ 迷星叫 (Mayoiuta) · MyGO!!!!!`。
+    #[test]
+    fn playlists_search_deep_hit_alias_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::{PlaylistId, SourceKind};
+
+        use crate::runtime::view_model::SongView;
+        use crate::test_support::{song, with_alias, with_artist, with_name};
+
+        let mut state = crate::test_support::state_with_playlists()?;
+        let track = with_alias(
+            with_artist(with_name(song("s1"), "迷星叫"), "MyGO!!!!!"),
+            "Mayoiuta",
+        );
+        state.library.tracks.insert(
+            PlaylistId::new(SourceKind::NETEASE, "p2"),
+            vec![SongView {
+                data: track,
+                loved: false,
+                plays: None,
+            }],
+        );
+        state.library.tracks_generation = 1;
+        state.browse.search.set_query("mayo");
+
+        let mut t = Terminal::new(TestBackend::new(100, 12))?;
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "歌单列表:别名深度命中(match 列 ♪ 迷星叫 (Mayoiuta) · MyGO!!!!!,别名括注 dim)",
             t.backend()
         );
         Ok(())

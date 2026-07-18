@@ -657,6 +657,7 @@ Config {
                 enabled: true,
                 weights: DeepWeights {
                     name: 0.6,
+                    alias: 0.5,
                     artist: 0.5,
                     album: 0.4,
                 },
