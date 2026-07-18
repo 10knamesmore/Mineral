@@ -17,10 +17,12 @@ impl PlayerCore {
     ///   - `context`: 队列语境(埋点 provenance:随该队列每个起播继承)
     pub fn set_queue(
         &self,
-        new_queue: Vec<Song>,
+        mut new_queue: Vec<Song>,
         target_id: &SongId,
         context: mineral_stats::QueueContext,
     ) {
+        // 队列硬上限:超长替换截断到 QUEUE_CAP(下标 0-based 故最大 9998,与序号显示上限一致)。
+        new_queue.truncate(crate::queue::QUEUE_CAP);
         {
             let mut st = self.inner.state.lock();
             mineral_log::info!(

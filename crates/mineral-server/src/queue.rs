@@ -9,6 +9,17 @@ use rand::seq::SliceRandom;
 
 use crate::state::State;
 
+/// 队列硬上限:任何入队路径都不得让 `queue` 长度超过此值。
+///
+/// 满时 [`append`] / [`insert_next`] 拒绝入队,[`super::PlayerCore::set_queue`] 截断到此长度。
+/// 取 9999 与序号显示上限一致(0-based 下标故最大 9998,四位数封顶)。
+pub(crate) const QUEUE_CAP: usize = 9999;
+
+/// 队列是否已达 [`QUEUE_CAP`](满则拒绝再入队)。
+fn at_capacity(st: &State) -> bool {
+    st.queue.len() >= QUEUE_CAP
+}
+
 /// 按 [`PlayMode`] 计算「下一首」的**下标**:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。
 ///
 /// 推进以**下标**为真相,不经歌曲身份——队列含重复曲时,按身份 first-match 定位会把位置吸附到
@@ -154,6 +165,10 @@ pub(crate) fn exit_shuffle(st: &mut State) {
 /// 插播:`song` 插到当前曲之后;shuffle 模式下同步插入 `original_queue` 的
 /// 当前曲之后(退出 shuffle 时位置仍合理)。不动 `queue_sel` 与当前曲。
 pub(crate) fn insert_next(st: &mut State, song: Song) {
+    if at_capacity(st) {
+        mineral_log::debug!(target: "player", cap = QUEUE_CAP, "queue at capacity, insert dropped");
+        return;
+    }
     let cur_id = st.current_song.as_ref().map(|s| s.id.clone());
     let pos = (st.queue_sel + 1).min(st.queue.len());
     st.queue.insert(pos, song.clone());
@@ -168,6 +183,10 @@ pub(crate) fn insert_next(st: &mut State, song: Song) {
 
 /// 追加到队列末尾;shuffle 模式下同步追加 `original_queue`。
 pub(crate) fn append(st: &mut State, song: Song) {
+    if at_capacity(st) {
+        mineral_log::debug!(target: "player", cap = QUEUE_CAP, "queue at capacity, append dropped");
+        return;
+    }
     st.queue.push(song.clone());
     if let Some(orig) = st.original_queue.as_mut() {
         orig.push(song);
@@ -180,7 +199,7 @@ mod tests {
     use mineral_protocol::PlayMode;
     use mineral_test::song;
 
-    use super::{advance_next, next_index};
+    use super::{QUEUE_CAP, advance_next, append, insert_next, next_index};
     use crate::state::State;
 
     /// 造一个 3 曲队列(a/b/c),当前在 a(queue_sel=0),指定模式。
@@ -236,6 +255,27 @@ mod tests {
         assert_eq!(next.id, song("c").id, "Fallback 推进应越过被否决的 b");
         assert_eq!(st.queue_sel, 2);
         Ok(())
+    }
+
+    /// 队列硬上限 [`QUEUE_CAP`]:满队列 append / insert_next 均 no-op,长度不越界。
+    #[test]
+    fn queue_capacity_is_capped() {
+        let mut st = State::empty();
+        st.queue = (0..QUEUE_CAP).map(|i| song(&i.to_string())).collect();
+        assert_eq!(st.queue.len(), QUEUE_CAP);
+        append(&mut st, song("overflow"));
+        assert_eq!(st.queue.len(), QUEUE_CAP, "满队列 append 应被拒");
+        insert_next(&mut st, song("overflow2"));
+        assert_eq!(st.queue.len(), QUEUE_CAP, "满队列 insert_next 应被拒");
+    }
+
+    /// 未满时 append / insert_next 照常入队(守卫不误伤正常路径)。
+    #[test]
+    fn under_capacity_still_enqueues() {
+        let mut st = State::empty();
+        append(&mut st, song("a"));
+        insert_next(&mut st, song("b"));
+        assert_eq!(st.queue.len(), 2, "未满时正常入队");
     }
 
     /// 无否决时行为与既有语义一致(回归保护)。

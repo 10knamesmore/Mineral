@@ -222,6 +222,20 @@ async fn set_queue_bumps_queue_version() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// set_queue 硬上限:超长队列替换截断到 QUEUE_CAP(实际入队上限,非仅显示钳)。
+#[tokio::test]
+async fn set_queue_truncates_to_cap() -> color_eyre::Result<()> {
+    let core = core_with(Arc::default())?;
+    let cap = crate::queue::QUEUE_CAP;
+    let over = (0..(cap + 5))
+        .map(|i| song(&i.to_string()))
+        .collect::<Vec<_>>();
+    core.set_queue(over, &song("0").id, mineral_stats::QueueContext::Unknown);
+    let len = core.inner.state.lock().queue.len();
+    assert_eq!(len, cap, "超长队列替换应截断到 QUEUE_CAP");
+    Ok(())
+}
+
 /// play_song 清旧上下文 + 写新 current_song,必须推进 current_version。
 #[tokio::test]
 async fn play_song_bumps_current_version() -> color_eyre::Result<()> {

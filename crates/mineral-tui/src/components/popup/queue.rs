@@ -118,8 +118,9 @@ impl Overlay for QueueOverlay {
         // ▶ 标记按 server 的在播位置锚点定位(queue_current_index,下标优先),
         // 不用歌曲身份匹配——队列含重复曲时身份会把所有副本一起点亮。
         let current_idx = ctx.queue_current_index();
-        // 按浮层内宽选列档:窄浮层放不下 artist 时退到「歌本身」(# title len)。
-        let cols = QueueCols::for_width(inner.width);
+        // 列规格:文本档位按浮层内宽选(窄浮层退到「歌本身」),序号列宽按队列规模选
+        // (≤999 首 3 宽,超过 4 宽,避免 4 位下标被定宽截断)。
+        let cols = QueueColumns::resolve(inner.width, ctx.player.queue.len());
         // 序号无条件染该行歌曲的源色(零列宽成本地表示来源):同源队列整列同色即
         // 该队列来源,混源队列则逐行不同。
         let header = Row::new(cols.header_cells())
@@ -241,21 +242,79 @@ impl QueueCols {
         cells
     }
 
-    /// 列宽约束:`#` / len 定宽,文本列比例 Fill。
-    fn widths(self) -> Vec<Constraint> {
+    /// 列宽约束:`#`(宽由 `index_w` 传入,随队列规模自适应)/ len 定宽,文本列比例 Fill。
+    fn widths(self, index_w: u16) -> Vec<Constraint> {
         match self {
             Self::Full => vec![
-                Constraint::Length(3),
+                Constraint::Length(index_w),
                 Constraint::Fill(3),
                 Constraint::Fill(2),
                 Constraint::Length(6),
             ],
             Self::Song => vec![
-                Constraint::Length(3),
+                Constraint::Length(index_w),
                 Constraint::Fill(1),
                 Constraint::Length(6),
             ],
         }
+    }
+}
+
+/// 序号列宽,随队列长度自适应。
+///
+/// `#` 列宽随规模伸缩:避免定宽把宽下标截断(定 3 宽时 `1234` 会被截成 `123`),也不让
+/// 小队列白占列。阈值按队列**数量**取:≤999 首 3 宽,超过 4 宽。下标上界由 server 端队列
+/// 长度(≤9999,0-based 故最大 9998)保证落在 4 位内,显示层照实渲染、不再另钳。
+#[derive(Clone, Copy)]
+struct IndexCol {
+    /// 本帧该列的字符宽(3 或 4)。
+    width: u16,
+}
+
+impl IndexCol {
+    /// 按队列长度选列宽:≤999 首 3 宽,超过 4 宽。
+    fn for_len(len: usize) -> Self {
+        Self {
+            width: if len <= 999 { 3 } else { 4 },
+        }
+    }
+
+    /// 本列字符宽。
+    fn width(self) -> u16 {
+        self.width
+    }
+}
+
+/// queue 表格的完整列规格:文本档位(Full/Song)+ 序号列尺寸/显示策略。
+///
+/// 把「按浮层内宽选的文本档」与「按队列长度选的序号列」收成一份规格随行传递,
+/// 让 [`build_row`] 只认一个列上下文,不必平铺两个来源不同的入参。
+#[derive(Clone, Copy)]
+struct QueueColumns {
+    /// 文本列档位(按浮层内宽选,见 [`QueueCols::for_width`])。
+    text: QueueCols,
+
+    /// 序号列宽(按队列长度选,见 [`IndexCol::for_len`])。
+    index: IndexCol,
+}
+
+impl QueueColumns {
+    /// 按浮层内宽 `width` 与队列长度 `len` 选列规格。
+    fn resolve(width: u16, len: usize) -> Self {
+        Self {
+            text: QueueCols::for_width(width),
+            index: IndexCol::for_len(len),
+        }
+    }
+
+    /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
+    fn header_cells(self) -> Vec<Cell<'static>> {
+        self.text.header_cells()
+    }
+
+    /// 列宽约束:序号列宽由 [`IndexCol`] 定,其余随文本档。
+    fn widths(self) -> Vec<Constraint> {
+        self.text.widths(self.index.width())
     }
 }
 
@@ -271,7 +330,7 @@ fn build_row<'a>(
     s: &'a Song,
     current_idx: Option<usize>,
     theme: &Theme,
-    cols: QueueCols,
+    cols: QueueColumns,
     index_fg: ratatui::style::Color,
     marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
@@ -284,7 +343,7 @@ fn build_row<'a>(
         )
     } else {
         (
-            Span::styled(format!("{idx}"), Style::new().fg(index_fg)),
+            Span::styled(idx.to_string(), Style::new().fg(index_fg)),
             theme.text,
             theme.subtext,
         )
@@ -300,7 +359,7 @@ fn build_row<'a>(
         None => Cell::from(Line::from(title_spans)),
     };
     let mut cells = vec![Cell::from(lead), title_cell];
-    if matches!(cols, QueueCols::Full) {
+    if matches!(cols.text, QueueCols::Full) {
         let artist = s
             .artists
             .first()
@@ -519,6 +578,26 @@ mod tests {
         Ok(())
     }
 
+    /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断。
+    /// 回归历史 bug——固定 3 宽会把 `1234` 截成 `123`。光标定在 1234 使该行进视口。
+    #[test]
+    fn queue_wide_index_no_truncation_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 16))?;
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = (0..1300)
+            .map(|i| mineral_test::song(&format!("q{i}")))
+            .collect();
+        let overlay = QueueOverlay::new(1234);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:超千首序号列 4 宽,4 位下标完整不截断",
+            t.backend()
+        );
+        Ok(())
+    }
+
     /// 贴边滑入半程(scale=500):真面板右侧列(含右边框)贴左缘滑入,表格内容
     /// 随前沿平移可见,左边框尚未进场。
     #[test]
@@ -643,6 +722,16 @@ mod tests {
         assert_eq!(anchor.x, full.x + 1, "锚点 x 在内区(去左边框)");
         assert_eq!(anchor.y, full.y + 2 + 2, "内区顶(+1 框)+表头(+1)+ sel(2)");
         Ok(())
+    }
+
+    /// 序号列宽随队列长度自适应:≤999 首 3 宽,破千转 4 宽(避免 4 位下标被定宽截断)。
+    #[test]
+    fn index_col_width_adapts_to_len() {
+        use super::IndexCol;
+        assert_eq!(IndexCol::for_len(0).width(), 3, "空队列 3 宽");
+        assert_eq!(IndexCol::for_len(999).width(), 3, "999 首仍 3 宽");
+        assert_eq!(IndexCol::for_len(1000).width(), 4, "破千转 4 宽");
+        assert_eq!(IndexCol::for_len(9999).width(), 4, "满队列(9999)4 宽");
     }
 
     /// `clamp` 把越界光标钳到 `len-1`,空队列归 0。
