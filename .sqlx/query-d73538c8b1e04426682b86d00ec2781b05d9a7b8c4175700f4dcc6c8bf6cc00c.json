@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO client_connections (ts, session_id, actor, client, duration_ms, concurrent) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "d73538c8b1e04426682b86d00ec2781b05d9a7b8c4175700f4dcc6c8bf6cc00c"
+}

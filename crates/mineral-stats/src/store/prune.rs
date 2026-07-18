@@ -8,7 +8,7 @@ use crate::store::StatsStore;
 /// `prune_registry_matches_migration` 兜住漏项(漏则测试红,而非静默漏删)。plays /
 /// sessions 不在此(裁剪列不同:started_at / ended_at,单独 query 处理);songs 维表
 /// 不在此(维度非流水,任意年代的事实行都要 JOIN 它出名,永不裁剪)。
-pub(crate) const EVENT_TABLES: [&str; 28] = [
+pub(crate) const EVENT_TABLES: &[&str] = &[
     "searches",
     "seeks",
     "pauses",
@@ -28,6 +28,7 @@ pub(crate) const EVENT_TABLES: [&str; 28] = [
     "bus_messages",
     "fullscreen_changes",
     "connection_rejects",
+    "client_connections",
     "app_lifecycle",
     "url_resolutions",
     "hook_fires",
@@ -46,13 +47,13 @@ pub(crate) const EVENT_TABLES: [&str; 28] = [
 ///   - `name`: 待判定的 kind 名
 ///
 /// # Return:
-///   是 28 张事件表之一返回 `true`
+///   是事件表之一返回 `true`
 pub fn is_event_kind(name: &str) -> bool {
     EVENT_TABLES.contains(&name)
 }
 
 impl StatsStore {
-    /// 裁掉 `before_ms` 之前的流水:plays + 28 事件表 + 已无子行引用的旧会话。降级时 no-op。
+    /// 裁掉 `before_ms` 之前的流水:plays + 全部事件表 + 已无子行引用的旧会话。降级时 no-op。
     ///
     /// 删除顺序 plays → 事件表 → sessions。sessions **不能只按 `ended_at` 判**:
     /// `ended_at` 只随播放活动推进(`record_event` 不 touch),会话以事件收尾时子行
@@ -91,7 +92,7 @@ impl StatsStore {
         Ok(())
     }
 
-    /// dry-run 计数:一次 [`Self::prune`] 会删掉的总行数(plays + 28 事件表 + 旧会话)。
+    /// dry-run 计数:一次 [`Self::prune`] 会删掉的总行数(plays + 全部事件表 + 旧会话)。
     /// 供 CLI `prune` 无 `--yes` 时预告删量,不动盘。降级返回 0。
     ///
     /// 会话计数按删除时序模拟:先数将删的 plays / 事件行,再以「删净水位内子行后」的
@@ -135,11 +136,11 @@ impl StatsStore {
     }
 }
 
-/// sessions 删除守卫:29 张子表(plays + 事件表)均无引用本会话的行。表名全为内部
+/// sessions 删除守卫:全部子表(plays + 事件表)均无引用本会话的行。表名全为内部
 /// 常量,拼接安全;引用列统一叫 `session_id`(migration 约定)。
 fn unreferenced_session_guard() -> String {
     std::iter::once("plays")
-        .chain(EVENT_TABLES)
+        .chain(EVENT_TABLES.iter().copied())
         .map(|table| format!("NOT EXISTS (SELECT 1 FROM {table} WHERE session_id = sessions.id)"))
         .collect::<Vec<String>>()
         .join(" AND ")
@@ -354,7 +355,7 @@ mod tests {
         Ok(())
     }
 
-    /// is_event_kind:28 张事件表名判 true;core 本体(plays / sessions)与未知名判 false。
+    /// is_event_kind:事件表名判 true;core 本体(plays / sessions)与未知名判 false。
     #[test]
     fn is_event_kind_classifies_names() {
         assert!(super::is_event_kind("searches"));

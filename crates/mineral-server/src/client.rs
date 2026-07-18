@@ -100,6 +100,26 @@ impl ClientHandle {
             });
     }
 
+    /// 记一次 client 连接生命周期(client_connections;断开时调,只记握手
+    /// 完成的连接)。actor=User:连接由用户起的 client 发起。
+    ///
+    /// # Params:
+    ///   - `client`: client 自报名(握手 `ClientInfo::name`)
+    ///   - `duration_ms`: 连接存续时长
+    ///   - `concurrent`: 建立时刻在线连接数(含自己)
+    pub(crate) fn record_client_connection(
+        &self,
+        client: String,
+        duration_ms: i64,
+        concurrent: i64,
+    ) {
+        self.record_behavior(mineral_stats::BehaviorEvent::ClientConnection {
+            client,
+            duration_ms,
+            concurrent,
+        });
+    }
+
     /// 记一次行为域事件(user 发起,stamp now_ms)。
     fn record_behavior(&self, event: mineral_stats::BehaviorEvent) {
         self.player

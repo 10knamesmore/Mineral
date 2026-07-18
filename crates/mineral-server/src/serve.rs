@@ -55,6 +55,7 @@ where
         let guard = ConnGuard {
             registry: Arc::clone(&registry),
             id: conn_id,
+            client: client.clone(),
         };
         let registry = Arc::clone(&registry);
         let events = events.clone();
@@ -78,8 +79,20 @@ pub(crate) struct ConnRegistry {
     /// 下一个连接 id(进程内单调自增,不复用)。
     next_id: AtomicU64,
 
-    /// 在线连接:id → 握手身份(握手完成前为 `None`)。
-    conns: parking_lot::Mutex<rustc_hash::FxHashMap<u64, Option<ClientInfo>>>,
+    /// 在线连接:id → 连接元数据。
+    conns: parking_lot::Mutex<rustc_hash::FxHashMap<u64, ConnMeta>>,
+}
+
+/// 一条在线连接的元数据(断开时结算 client_connections 埋点用)。
+struct ConnMeta {
+    /// 握手身份(握手完成前为 `None`;埋点只结算握手完成的连接)。
+    identity: Option<ClientInfo>,
+
+    /// 连接建立时刻。
+    connected_at: std::time::Instant,
+
+    /// 建立时刻的在线连接数(含自己)。
+    concurrent_at_connect: usize,
 }
 
 impl ConnRegistry {
@@ -94,20 +107,29 @@ impl ConnRegistry {
     /// 登记一条新连接,返回其 id。
     fn register(&self) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.conns.lock().insert(id, None);
+        let mut conns = self.conns.lock();
+        let concurrent_at_connect = conns.len() + 1;
+        conns.insert(
+            id,
+            ConnMeta {
+                identity: None,
+                connected_at: std::time::Instant::now(),
+                concurrent_at_connect,
+            },
+        );
         id
     }
 
     /// 握手完成,补登身份。
     fn set_identity(&self, id: u64, info: ClientInfo) {
-        if let Some(slot) = self.conns.lock().get_mut(&id) {
-            *slot = Some(info);
+        if let Some(meta) = self.conns.lock().get_mut(&id) {
+            meta.identity = Some(info);
         }
     }
 
-    /// 连接断开,移除。
-    fn unregister(&self, id: u64) {
-        self.conns.lock().remove(&id);
+    /// 连接断开,移除并交回元数据(埋点结算用)。
+    fn unregister(&self, id: u64) -> Option<ConnMeta> {
+        self.conns.lock().remove(&id)
     }
 
     /// 当前在线连接数(心跳上报用)。
@@ -116,18 +138,33 @@ impl ConnRegistry {
     }
 }
 
-/// 注册表移除守卫:连接 task 无论正常结束还是 panic unwind,drop 时都移除。
+/// 注册表移除守卫:连接 task 无论正常结束还是 panic unwind,drop 时都移除,
+/// 并结算 client_connections 埋点(只记握手完成的连接;daemon 停机时进程直接
+/// 退出、guard 不保证跑到,在线连接丢行——与硬 kill 丢在播行同类取舍)。
 struct ConnGuard {
     /// 所属注册表。
     registry: Arc<ConnRegistry>,
 
     /// 本连接 id。
     id: u64,
+
+    /// 埋点出口(per-conn handle)。
+    client: ClientHandle,
 }
 
 impl Drop for ConnGuard {
     fn drop(&mut self) {
-        self.registry.unregister(self.id);
+        let Some(meta) = self.registry.unregister(self.id) else {
+            return;
+        };
+        let Some(identity) = meta.identity else {
+            return; // 未握手即走(探活 / 被拒),不落行。
+        };
+        let duration_ms =
+            i64::try_from(meta.connected_at.elapsed().as_millis()).unwrap_or(i64::MAX);
+        let concurrent = i64::try_from(meta.concurrent_at_connect).unwrap_or(i64::MAX);
+        self.client
+            .record_client_connection(identity.name, duration_ms, concurrent);
     }
 }
 

@@ -15,6 +15,10 @@ use crate::frame::{Frame, RequestId};
 use crate::handshake::ClientInfo;
 use crate::message::{Request, Response};
 
+/// 本类型握手自报的 client 名:oneshot 即「CLI 一次性命令」的封装(见模块
+/// 文档),其他形态的 client 走各自的长连接实现、自报各自的名。
+const CLIENT_NAME: &str = "mineral_cli";
+
 /// 一次性串行 client。泛型 stream 仅为可测性(`tokio::io::duplex`);
 /// 生产路径经 [`OneshotClient::connect`] 固定为 `UnixStream`。
 pub struct OneshotClient<S = UnixStream> {
@@ -57,7 +61,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> OneshotClient<S> {
     /// 握手被拒 / 对端没回 [`Frame::Hello`] / 连接被关。
     pub async fn from_stream(stream: S) -> color_eyre::Result<Self> {
         let mut conn = framed(stream);
-        crate::handshake::client_handshake(&mut conn, ClientInfo::new(Vec::new())).await?;
+        crate::handshake::client_handshake(&mut conn, ClientInfo::new(CLIENT_NAME, Vec::new()))
+            .await?;
         Ok(Self { conn, next_id: 0 })
     }
 

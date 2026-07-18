@@ -88,10 +88,10 @@ fn card_event() -> Event {
 
 #[tokio::test]
 async fn round_trip_handshake_frame() -> color_eyre::Result<()> {
-    frame_round_trips(Frame::Handshake(ClientInfo::new(vec![
-        Subscription::Toast,
-        Subscription::Property,
-    ])))
+    frame_round_trips(Frame::Handshake(ClientInfo::new(
+        "tui",
+        vec![Subscription::Toast, Subscription::Property],
+    )))
     .await
 }
 
@@ -229,7 +229,7 @@ fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
     dual_codec_roundtrip(&Event::DismissToast {
         id: "config.reload".to_owned(),
     })?;
-    dual_codec_roundtrip(&ClientInfo::new(vec![Subscription::Lifecycle]))?;
+    dual_codec_roundtrip(&ClientInfo::new("tui", vec![Subscription::Lifecycle]))?;
     dual_codec_roundtrip(&ServerHello::reject(RejectReason::VersionMismatch))?;
     dual_codec_roundtrip(&Event::Task(Box::new(
         mineral_task::TaskEvent::LikedSongIdsFetched {
@@ -369,11 +369,12 @@ fn event_subscription_mapping() {
 /// ClientInfo::new 自动携带本端包版本,version_matches 对自身恒真。
 #[test]
 fn client_info_carries_pkg_version() {
-    let info = ClientInfo::new(Vec::new());
+    let info = ClientInfo::new("cli", Vec::new());
     assert_eq!(info.version, PkgVersion::current());
     assert!(info.version_matches());
 
     let stale = ClientInfo {
+        name: "tui".to_owned(),
         version: PkgVersion {
             major: 0,
             minor: 0,
@@ -648,7 +649,7 @@ mod proptests {
         );
         let reject = Just(RejectReason::VersionMismatch);
         prop_oneof![
-            subs.prop_map(|s| Frame::Handshake(ClientInfo::new(s))),
+            subs.prop_map(|s| Frame::Handshake(ClientInfo::new("tui", s))),
             LazyJust::new(|| Frame::Hello(ServerHello::accept())),
             reject.prop_map(|r| Frame::Hello(ServerHello::reject(r))),
             any::<u64>().prop_map(|id| Frame::Request {

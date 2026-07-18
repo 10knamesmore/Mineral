@@ -62,16 +62,25 @@ pub struct ClientInfo {
     /// client 的包版本(构造经 [`ClientInfo::new`] 自动填 [`PkgVersion::current`])。
     pub version: PkgVersion,
 
+    /// client 实现的自报名(如 `tui` / `cli`;开放命名空间,新 client 形态
+    /// 自取名即可)。daemon 不据此分派任何行为,只作观测归属。
+    pub name: String,
+
     /// 期望接收的推送类别;不订阅的类别 server 不下发。一次性 CLI 命令订空集。
     pub subscriptions: Vec<Subscription>,
 }
 
 impl ClientInfo {
     /// 以本端包版本构造握手帧。
+    ///
+    /// # Params:
+    ///   - `name`: client 实现的自报名(如 `tui` / `cli`)
+    ///   - `subscriptions`: 期望接收的推送类别
     #[must_use]
-    pub fn new(subscriptions: Vec<Subscription>) -> Self {
+    pub fn new(name: &str, subscriptions: Vec<Subscription>) -> Self {
         Self {
             version: PkgVersion::current(),
+            name: name.to_owned(),
             subscriptions,
         }
     }

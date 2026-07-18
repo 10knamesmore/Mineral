@@ -630,6 +630,20 @@ pub enum BehaviorEvent {
         reason: RejectReason,
     },
 
+    /// client 连接生命周期(client_connections):断开时落行,只记握手完成的
+    /// 连接。
+    ClientConnection {
+        /// client 自报名(握手 `ClientInfo::name`,开放命名空间——各形态
+        /// 具名入库,报表按名分组,不压扁成类别)。
+        client: String,
+
+        /// 连接存续时长 ms。
+        duration_ms: i64,
+
+        /// 建立时刻的在线连接数(含自己)。
+        concurrent: i64,
+    },
+
     /// 进程生命周期(app_lifecycle)。
     AppLifecycle {
         /// 事件主体。
@@ -672,6 +686,7 @@ impl BehaviorEvent {
             Self::BusMessage { .. } => "bus_messages",
             Self::FullscreenChange { .. } => "fullscreen_changes",
             Self::ConnectionReject { .. } => "connection_rejects",
+            Self::ClientConnection { .. } => "client_connections",
             Self::AppLifecycle { .. } => "app_lifecycle",
         }
     }
@@ -706,6 +721,7 @@ impl BehaviorEvent {
             | Self::BusMessage { .. }
             | Self::FullscreenChange { .. }
             | Self::ConnectionReject { .. }
+            | Self::ClientConnection { .. }
             | Self::AppLifecycle { .. } => None,
         }
     }

@@ -180,6 +180,11 @@ pub(super) async fn write(
             write_fullscreen_change(&w, *fullscreen).await
         }
         BehaviorEvent::ConnectionReject { reason } => write_connection_reject(&w, *reason).await,
+        BehaviorEvent::ClientConnection {
+            client,
+            duration_ms,
+            concurrent,
+        } => write_client_connection(&w, client, *duration_ms, *concurrent).await,
         BehaviorEvent::AppLifecycle {
             who,
             phase,
@@ -667,6 +672,29 @@ async fn write_connection_reject(
     Ok(())
 }
 
+/// 落 client_connections 一行。
+async fn write_client_connection(
+    w: &BehaviorWrite<'_>,
+    client: &str,
+    duration_ms: i64,
+    concurrent: i64,
+) -> color_eyre::Result<()> {
+    sqlx::query!(
+        "INSERT INTO client_connections (ts, session_id, actor, client, duration_ms, concurrent) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+        w.ts,
+        w.session_id,
+        w.actor as _,
+        client,
+        duration_ms,
+        concurrent,
+    )
+    .execute(w.pool)
+    .await
+    .wrap_err("record_event client_connections 落库失败")?;
+    Ok(())
+}
+
 /// 落 app_lifecycle 一行。
 async fn write_app_lifecycle(
     w: &BehaviorWrite<'_>,
@@ -899,6 +927,39 @@ mod tests {
             .await?;
         assert_eq!(row.reason, crate::event::RejectReason::VersionMismatch);
         assert_eq!(row.actor, Actor::System);
+        Ok(())
+    }
+
+    /// client_connections:client 名 / duration / concurrent 逐列落库,actor=User。
+    #[tokio::test]
+    async fn record_client_connection_roundtrip() -> color_eyre::Result<()> {
+        let (_dir, store, sid) = open_temp().await?;
+        let event = StatsEvent::Behavior {
+            actor: Actor::User,
+            event: BehaviorEvent::ClientConnection {
+                client: "tui".to_owned(),
+                duration_ms: 65_000,
+                concurrent: 2,
+            },
+        };
+        store.record_event(7000, Some(sid), &event).await?;
+
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            client: String,
+            duration_ms: i64,
+            concurrent: i64,
+            actor: Actor,
+        }
+        let row = sqlx::query_as::<_, Row>(
+            "SELECT client, duration_ms, concurrent, actor FROM client_connections",
+        )
+        .fetch_one(live(&store)?)
+        .await?;
+        assert_eq!(row.client, "tui");
+        assert_eq!(row.duration_ms, 65_000);
+        assert_eq!(row.concurrent, 2);
+        assert_eq!(row.actor, Actor::User);
         Ok(())
     }
 

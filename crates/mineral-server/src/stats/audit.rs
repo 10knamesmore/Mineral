@@ -169,6 +169,7 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
         BehaviorEvent::BusMessage { .. } => "script_bridge 事件总线",
         BehaviorEvent::FullscreenChange { .. } => "serve.rs TerminalState",
         BehaviorEvent::ConnectionReject { .. } => "client.rs record_connection_reject",
+        BehaviorEvent::ClientConnection { .. } => "serve.rs ConnGuard drop",
         BehaviorEvent::AppLifecycle { .. } => {
             "recorder.daemon_lifecycle + serve.rs client 生命周期"
         }

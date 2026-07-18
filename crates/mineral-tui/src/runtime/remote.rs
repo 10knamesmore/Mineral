@@ -31,6 +31,9 @@ use rustc_hash::FxHashMap;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
+/// 握手自报的 client 名(TUI 形态;埋点按名归属各 client 的使用时长)。
+const CLIENT_NAME: &str = "mineral_tui";
+
 /// 一条等回复的请求。worker 收到后分配 [`RequestId`] 发出,应答按 id 配对回 `reply_tx`。
 struct Pending {
     /// 待发送的请求。
@@ -74,13 +77,16 @@ impl RemoteClient {
         // 握手重放库快照与收藏集)。Property 暂无消费场景,轮询是权威值来源。
         client_handshake(
             &mut conn,
-            ClientInfo::new(vec![
-                Subscription::Toast,
-                Subscription::Lifecycle,
-                Subscription::Config,
-                Subscription::WindowTitle,
-                Subscription::Task,
-            ]),
+            ClientInfo::new(
+                CLIENT_NAME,
+                vec![
+                    Subscription::Toast,
+                    Subscription::Lifecycle,
+                    Subscription::Config,
+                    Subscription::WindowTitle,
+                    Subscription::Task,
+                ],
+            ),
         )
         .await?;
         mineral_log::info!(target: "ipc", "connected to daemon");
@@ -784,6 +790,7 @@ mod tests {
         let stream = UnixStream::connect(&sock).await?;
         let mut conn = framed(stream);
         let stale = ClientInfo {
+            name: super::CLIENT_NAME.to_owned(),
             version: PkgVersion {
                 major: 0,
                 minor: 0,

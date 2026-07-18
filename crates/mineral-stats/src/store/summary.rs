@@ -31,7 +31,7 @@ impl StatsStore {
 
         // 各事件表行数(表名动态,运行期 query;表名是内部常量非用户输入)。
         let mut table_counts = Vec::<EventCount>::with_capacity(EVENT_TABLES.len());
-        for table in EVENT_TABLES {
+        for &table in EVENT_TABLES {
             let count = sqlx::query_scalar::<_, i64>(&format!(
                 "SELECT COUNT(*) FROM {table} WHERE ts >= ? AND ts < ?"
             ))
@@ -194,12 +194,16 @@ mod tests {
         Ok((dir, store))
     }
 
-    /// event_summary:空库列全 28 张表且计数全 0,各分桶空。
+    /// event_summary:空库列全事件表且计数全 0,各分桶空。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn event_summary_lists_all_tables_empty() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
         let s = store.event_summary(0..i64::MAX, 10).await?;
-        assert_eq!(s.table_counts.len(), 28, "28 张事件表");
+        assert_eq!(
+            s.table_counts.len(),
+            crate::store::prune::EVENT_TABLES.len(),
+            "全部事件表"
+        );
         assert!(s.table_counts.iter().all(|e| e.count == 0), "空库全 0");
         assert!(s.table_counts.iter().any(|e| e.table == "searches"));
         assert!(s.love_by_origin.is_empty(), "空库无分桶");
