@@ -143,7 +143,7 @@ pub fn track_row(
     marquee: Option<RowMarquee<'_>>,
 ) -> Row<'static> {
     let mut title_spans = vec![Span::styled(song.name.clone(), Style::new().fg(theme.text))];
-    title_spans.extend(alias_span(song.alias.as_deref(), theme));
+    title_spans.extend(alias_span(song.alias.as_deref(), theme.overlay));
     let title_cell = match marquee {
         Some(m) => Cell::from(
             m.ctx

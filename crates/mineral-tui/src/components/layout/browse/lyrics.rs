@@ -1,23 +1,24 @@
 //! Lyrics 面板:按 [`crate::runtime::state::AppState::current_lines`] 渲染当前行 + 邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
-//! 有逐字歌词时,中心行走字级 wipe 渲染:已唱的字 = `theme.text` + Bold,
-//! 未唱的字 = `theme.overlay` dim。邻行无论是否有逐字都按整行 dim 渲染。
+//! 有逐字歌词时,中心行走字级 wipe 渲染:已唱的字亮入 accent + Bold,
+//! 未唱的字 = strong 档弱化(对实际背景现算)。邻行无论是否有逐字都按整行 dim 渲染。
 //!
 //! `t` 键打开副歌词(翻译 / 罗马音)后,每个可见原文行下方紧跟一条静态副行;
 //! 副行不参与 wipe,恒按 muted 样式渲染。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use mineral_model::{LyricLine, Word};
 
+use crate::components::layout::shared::text::center_bg;
 use crate::render::anim::ease_in_out;
-use crate::render::color::lerp_color;
-use crate::render::theme::Theme;
+use crate::render::color::{lerp_color, lerp_permille};
+use crate::render::theme::{Ink, Theme};
 use crate::runtime::playback::SyncTrust;
 use crate::runtime::state::{AppState, LyricExtra};
 
@@ -31,18 +32,28 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
     let extra = state.active_lyric_extra();
     let trust = state.playback.sync_trust();
 
+    // 面板 chrome(边框 / 标题弱化色)按实际背景现算:氛围场上贴场色;无人铺 bg 采到
+    // Reset 按 base 混合,ANSI 主题回落静态 token(回落链见 Theme::text_over)。
+    let ink = theme.ink_over(center_bg(frame, area));
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.surface1))
+        .border_style(Style::new().fg(ink.faint))
         .title(Line::from(title_left_spans(
             lines.is_some_and(mineral_model::has_words),
             lines.is_some_and(mineral_model::has_timed),
             trust,
             theme,
+            ink,
         )))
         .title_top(
-            Line::from(title_right_spans(state.has_extra_lyrics(), extra, theme)).right_aligned(),
+            Line::from(title_right_spans(
+                state.has_extra_lyrics(),
+                extra,
+                theme,
+                ink,
+            ))
+            .right_aligned(),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -53,7 +64,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
 
     // 单一行序列:逐字行字级 wipe、其余整行;有时间戳行驱动定位,无时间戳行静态参与渐暗。
     let Some(lines) = lines else {
-        draw_fallback(frame, inner, theme);
+        draw_fallback(frame, inner, ink);
         return;
     };
     let position_ms = state.playback.position_ms;
@@ -92,7 +103,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
 /// 不同高亮区分——行级 `synced` 用 accent_2(sapphire),逐字 `synced ✦` 用 accent
-/// (mauve);`lyrics · ` 前缀恒 subtext 弱化。顶换流:[`SyncTrust::Borrowed`] 在
+/// (mauve);`lyrics · ` 前缀恒弱化(strong 档)。顶换流:[`SyncTrust::Borrowed`] 在
 /// synced 后缀 `~`(yellow,「可能漂移」);[`SyncTrust::Broken`] 整档换成
 /// `unsynced`(yellow,同步已放弃)。
 ///
@@ -101,6 +112,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
 ///   - `has_lrc`: 是否有行级 LRC
 ///   - `trust`: 时间轴信任档(无 LRC 时无同步可言,不参与)
 ///   - `theme`: 取色
+///   - `ink`: 对实际背景现算的弱化色阶(前缀 / 空隙用 strong 档)
 ///
 /// # Return:
 ///   组成 ` lyrics · synced ✦ ` 的分色 Span 序列(首尾留空格)。
@@ -109,8 +121,9 @@ fn title_left_spans(
     has_lrc: bool,
     trust: SyncTrust,
     theme: &Theme,
+    ink: Ink,
 ) -> Vec<Span<'static>> {
-    let base = Style::new().fg(theme.subtext);
+    let base = Style::new().fg(ink.strong);
     let base_lyrics = Span::styled(" lyrics · ", base);
     let mark = |color| {
         Style::new()
@@ -142,13 +155,14 @@ fn title_left_spans(
 }
 
 /// 右上提示:当前生效的副歌词档 + `[t]` 按键提示(方括号示意这是个按键)。翻译标 `tr`
-/// (green)、罗马音标 `ro`(peach),均 bold + italic;`[t]` 及分隔点用 overlay 弱化。
+/// (green)、罗马音标 `ro`(peach),均 bold + italic;`[t]` 及分隔点弱化(muted 档)。
 /// 没有任何副歌词可切换时返回空序列(不显示提示)。
 ///
 /// # Params:
 ///   - `has_extra`: 是否有任一副歌词(翻译 / 罗马音)可切换
 ///   - `extra`: 当前生效(且非空)的副歌词档;`None` 只显示按键
 ///   - `theme`: 取色
+///   - `ink`: 对实际背景现算的弱化色阶(按键提示 / 分隔点用 muted 档)
 ///
 /// # Return:
 ///   组成 ` tr · [t] ` / ` [t] ` 的分色 Span 序列;无副歌词时为空。
@@ -156,11 +170,12 @@ fn title_right_spans(
     has_extra: bool,
     extra: Option<LyricExtra>,
     theme: &Theme,
+    ink: Ink,
 ) -> Vec<Span<'static>> {
     if !has_extra {
         return Vec::new();
     }
-    let key = Style::new().fg(theme.overlay);
+    let key = Style::new().fg(ink.muted);
     let mark = |color| {
         Style::new()
             .fg(color)
@@ -202,15 +217,12 @@ enum Cell {
     Spacer,
 }
 
-/// 没歌词时居中渲染一行 `♪ no lyrics`(灰色 + 斜体)。
-fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, theme: &Theme) {
+/// 没歌词时居中渲染一行 `♪ no lyrics`(muted 档 + 斜体)。
+fn draw_fallback(frame: &mut Frame<'_>, inner: Rect, ink: Ink) {
     let centered_y = inner.y + inner.height / 2;
     let text_area = Rect::new(inner.x, centered_y, inner.width, 1);
-    let line = Line::from("♪ no lyrics").style(
-        Style::new()
-            .fg(theme.overlay)
-            .add_modifier(Modifier::ITALIC),
-    );
+    let line =
+        Line::from("♪ no lyrics").style(Style::new().fg(ink.muted).add_modifier(Modifier::ITALIC));
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), text_area);
 }
 
@@ -463,7 +475,10 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, input: WindowInput<'_>, them
             isize::try_from(row).unwrap_or(0) - isize::try_from(center_row).unwrap_or(0);
         let dist = u64::try_from(dist_signed.unsigned_abs()).unwrap_or(0);
 
-        let line = render_cell(cell, lines, ctx, dist, denom, theme);
+        // 逐行采样实际背景(氛围场行间明度渐变,行内水平变化可忽略,行中心一点足够):
+        // 淡出以它为终点才是真淡出;ambient 关 / ANSI 主题采到 Reset,回落静态 token 渐变。
+        let row_bg = center_bg(frame, row_area);
+        let line = render_cell(cell, lines, ctx, dist, denom, theme, row_bg);
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), row_area);
     }
 }
@@ -496,21 +511,31 @@ fn render_cell<'a>(
     dist: u64,
     denom: u64,
     theme: &Theme,
+    row_bg: Color,
 ) -> Line<'a> {
     match cell {
         Cell::Spacer => Line::default(),
         Cell::Secondary { text } => {
-            // 副行永远比原文淡:从 overlay 起 fade 入背景,加斜体作视觉区分。
-            let color = lerp_color(theme.overlay, theme.surface0, dist.saturating_sub(1), denom);
+            // 副行永远比原文淡:alpha 从 muted 档随距离衰至 ghost 档,对本行实际背景
+            // 混合(真淡出);拿不到真彩回落静态 overlay→surface0 渐变。斜体作视觉区分。
+            let alpha = lerp_permille(
+                theme.text_alpha.muted,
+                theme.text_alpha.ghost,
+                dist.saturating_sub(1),
+                denom,
+            );
+            let color = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
+                lerp_color(theme.overlay, theme.surface0, dist.saturating_sub(1), denom)
+            });
             Line::from(text.as_str()).style(Style::new().fg(color).add_modifier(Modifier::ITALIC))
         }
         Cell::Primary { line_idx } => {
             let line = lines.get(*line_idx);
-            // 当前行有逐字 → 字级 wipe(自带 subtext→accent 渐变,天然承担"淡入")。
+            // 当前行有逐字 → 字级 wipe(未唱起点同 strong 档,天然承担"淡入")。
             if Some(*line_idx) == ctx.cur
                 && let Some(words) = line.map(|l| l.kind.words()).filter(|w| !w.is_empty())
             {
-                return render_word_line(words, ctx.position_ms, theme);
+                return render_word_line(words, ctx.position_ms, theme, row_bg);
             }
             let text = line.map(|l| l.kind.text().into_owned()).unwrap_or_default();
             // 其余统一按 emphasis 在距离淡色与 accent 间插值:当前行 e=eased 升入 accent、
@@ -525,8 +550,17 @@ fn render_cell<'a>(
             } else {
                 0
             };
-            // 距中心越远越淡入背景。远端 endpoint 用 surface0,任何 bg 色下都是淡出。
-            let base = lerp_color(theme.subtext, theme.surface0, dist.saturating_sub(1), denom);
+            // 距中心越远 alpha 越低(strong→ghost),对本行**实际**背景混合——氛围场 /
+            // 亮暗主题下都是真淡出;别换回固定 token 终点,亮主题 + 氛围场会越远越显眼。
+            let alpha = lerp_permille(
+                theme.text_alpha.strong,
+                theme.text_alpha.ghost,
+                dist.saturating_sub(1),
+                denom,
+            );
+            let base = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
+                lerp_color(theme.subtext, theme.surface0, dist.saturating_sub(1), denom)
+            });
             let color = lerp_color(
                 base,
                 theme.accent,
@@ -548,16 +582,31 @@ fn render_cell<'a>(
 ///
 /// `Word.text` 对中文是单字、对英文是整词,所以在 `Word` 内再按 `text.chars()` 等分
 /// 时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
-fn render_word_line<'a>(words: &'a [Word], position_ms: u64, theme: &Theme) -> Line<'a> {
+fn render_word_line<'a>(
+    words: &'a [Word],
+    position_ms: u64,
+    theme: &Theme,
+    row_bg: Color,
+) -> Line<'a> {
+    // 未唱起点 = strong 档对本行实际背景混合(与 d=1 邻居同亮度);拿不到真彩回落 subtext。
+    let unlit = theme
+        .text_over(row_bg, theme.text_alpha.strong)
+        .unwrap_or(theme.subtext);
     let mut spans = Vec::<Span<'a>>::new();
     for w in words {
-        push_char_spans(&mut spans, w, position_ms, theme);
+        push_char_spans(&mut spans, w, position_ms, theme, unlit);
     }
     Line::from(spans)
 }
 
 /// 把一个 `Word` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
-fn push_char_spans<'a>(out: &mut Vec<Span<'a>>, word: &'a Word, position_ms: u64, theme: &Theme) {
+fn push_char_spans<'a>(
+    out: &mut Vec<Span<'a>>,
+    word: &'a Word,
+    position_ms: u64,
+    theme: &Theme,
+    unlit: Color,
+) {
     let n = word.text.chars().count();
     let Ok(n_u64) = u64::try_from(n) else {
         return;
@@ -577,9 +626,9 @@ fn push_char_spans<'a>(out: &mut Vec<Span<'a>>, word: &'a Word, position_ms: u64
             .saturating_add((i_u64 + 1) * total_dur / n_u64);
         let char_dur = char_end.saturating_sub(char_start).max(1);
         let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
-        // wipe 起点用 subtext(跟 d=1 邻居同亮度,中心行未唱部分不再「比周围暗」);
-        // 终点 accent 跟 lrc 兜底中心行同色;整行加 BOLD 让最亮部分再亮一点。
-        let color = lerp_color(theme.subtext, theme.accent, elapsed, char_dur);
+        // wipe 起点用 unlit(strong 档对实际背景混合,跟 d=1 邻居同亮度,中心行未唱
+        // 部分不再「比周围暗」);终点 accent 跟 lrc 兜底中心行同色;整行 BOLD 提亮。
+        let color = lerp_color(unlit, theme.accent, elapsed, char_dur);
 
         let next_byte = byte_cursor.saturating_add(ch.len_utf8());
         let slice = word.text.get(byte_cursor..next_byte).unwrap_or_default();
@@ -925,33 +974,40 @@ mod tests {
     fn title_left_tiers() {
         use super::SyncTrust;
         let th = Theme::default();
+        let ink = th.ink_over(ratatui::style::Color::Reset);
         assert_eq!(
-            text_of(&title_left_spans(false, false, SyncTrust::Native, &th)),
+            text_of(&title_left_spans(false, false, SyncTrust::Native, &th, ink)),
             " lyrics "
         );
         assert_eq!(
-            text_of(&title_left_spans(false, true, SyncTrust::Native, &th)),
+            text_of(&title_left_spans(false, true, SyncTrust::Native, &th, ink)),
             " lyrics · synced "
         );
         assert_eq!(
-            text_of(&title_left_spans(true, true, SyncTrust::Native, &th)),
+            text_of(&title_left_spans(true, true, SyncTrust::Native, &th, ink)),
             " lyrics · synced ✦ "
         );
         // 顶换流:Borrowed 后缀 ~;Broken 整档换 unsynced;无 LRC 时信任档不参与。
         assert_eq!(
-            text_of(&title_left_spans(false, true, SyncTrust::Borrowed, &th)),
+            text_of(&title_left_spans(
+                false,
+                true,
+                SyncTrust::Borrowed,
+                &th,
+                ink
+            )),
             " lyrics · synced ~ "
         );
         assert_eq!(
-            text_of(&title_left_spans(true, true, SyncTrust::Borrowed, &th)),
+            text_of(&title_left_spans(true, true, SyncTrust::Borrowed, &th, ink)),
             " lyrics · synced ✦ ~ "
         );
         assert_eq!(
-            text_of(&title_left_spans(true, true, SyncTrust::Broken, &th)),
+            text_of(&title_left_spans(true, true, SyncTrust::Broken, &th, ink)),
             " lyrics · unsynced "
         );
         assert_eq!(
-            text_of(&title_left_spans(false, false, SyncTrust::Broken, &th)),
+            text_of(&title_left_spans(false, false, SyncTrust::Broken, &th, ink)),
             " lyrics "
         );
     }
@@ -1010,31 +1066,97 @@ mod tests {
     #[test]
     fn title_right_hint() {
         let th = Theme::default();
-        assert_eq!(text_of(&title_right_spans(false, None, &th)), "");
+        let ink = th.ink_over(ratatui::style::Color::Reset);
+        assert_eq!(text_of(&title_right_spans(false, None, &th, ink)), "");
         assert_eq!(
             text_of(&title_right_spans(
                 false,
                 Some(LyricExtra::Translation),
-                &th
+                &th,
+                ink
             )),
             ""
         );
-        assert_eq!(text_of(&title_right_spans(true, None, &th)), " [t] ");
+        assert_eq!(text_of(&title_right_spans(true, None, &th, ink)), " [t] ");
         assert_eq!(
-            text_of(&title_right_spans(true, Some(LyricExtra::None), &th)),
+            text_of(&title_right_spans(true, Some(LyricExtra::None), &th, ink)),
             " [t] "
         );
         assert_eq!(
-            text_of(&title_right_spans(true, Some(LyricExtra::Translation), &th)),
+            text_of(&title_right_spans(
+                true,
+                Some(LyricExtra::Translation),
+                &th,
+                ink
+            )),
             " tr · [t] "
         );
         assert_eq!(
             text_of(&title_right_spans(
                 true,
                 Some(LyricExtra::Romanization),
-                &th
+                &th,
+                ink
             )),
             " ro · [t] "
         );
+    }
+
+    /// 氛围背景(真彩 bg)下,远端歌词行的前景贴向**实际**背景:蓝底下蓝分量占优、
+    /// 红底下红分量占优——淡出终点跟随背景,不再是固定 token(亮主题 + 氛围场上
+    /// 「越远越显眼」的回归钉)。
+    #[test]
+    fn far_rows_fade_toward_actual_bg() -> color_eyre::Result<()> {
+        use ratatui::style::Color;
+
+        // 探针:自上而下找第一个含非空字符的歌词行(跳过边框行/列),返回其 fg。
+        // 远端行在窗口顶部,首个命中行即距中心最远的可见行。
+        let probe = |bg: Color| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(48, 15))?;
+            let state = crate::test_support::state_with_lyrics(
+                LyricExtra::None,
+                /*with_words*/ false,
+            )?;
+            t.draw(|f| {
+                let area = f.area();
+                f.render_widget(
+                    ratatui::widgets::Block::new().style(ratatui::style::Style::new().bg(bg)),
+                    area,
+                );
+                super::draw(
+                    f,
+                    area,
+                    &state,
+                    &Theme::default(),
+                    super::LyricMode::Compact,
+                );
+            })?;
+            let buf = t.backend().buffer();
+            let area = *buf.area();
+            for y in (area.y + 1)..(area.y + area.height - 1) {
+                for x in (area.x + 1)..(area.x + area.width - 1) {
+                    let Some(cell) = buf.cell(ratatui::layout::Position::new(x, y)) else {
+                        continue;
+                    };
+                    if cell.symbol().trim().is_empty() {
+                        continue;
+                    }
+                    if let Some(fg) = cell.style().fg {
+                        return Ok(fg);
+                    }
+                }
+            }
+            color_eyre::eyre::bail!("未找到含文字的歌词行")
+        };
+
+        let on_blue = probe(Color::Rgb(0, 0, 120))?;
+        let on_red = probe(Color::Rgb(120, 0, 0))?;
+        assert_ne!(on_blue, on_red, "淡出终点应跟随实际背景而非固定 token");
+        let (Color::Rgb(br, _, bb), Color::Rgb(rr, _, rb)) = (on_blue, on_red) else {
+            color_eyre::eyre::bail!("探针应拿到真彩 fg: {on_blue:?} / {on_red:?}");
+        };
+        assert!(bb > br, "蓝底远端行:蓝分量应占优(贴背景),got {on_blue:?}");
+        assert!(rr > rb, "红底远端行:红分量应占优(贴背景),got {on_red:?}");
+        Ok(())
     }
 }

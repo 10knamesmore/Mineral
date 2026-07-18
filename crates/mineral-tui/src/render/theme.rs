@@ -51,6 +51,46 @@ pub struct Theme {
 
     /// 搜索命中字符叠加的字体效果(`theme.search_hit.modifiers` 折叠)。
     pub search_hit_modifier: Modifier,
+
+    /// 文本层级 alpha(`theme.text_alpha` 折千分比),经 [`Theme::ink_over`] /
+    /// [`Theme::text_over`] 对实际背景现算次级文本色。
+    pub text_alpha: TextAlpha,
+}
+
+/// 文本层级 alpha,千分比。四档语义与静态 token 的对应关系见各字段。
+#[derive(Clone, Copy, Debug)]
+pub struct TextAlpha {
+    /// 次级文本(≈ `subtext`)。
+    pub strong: u16,
+
+    /// 暗淡标签(≈ `overlay`)。
+    pub muted: u16,
+
+    /// 弱线条(≈ `surface1`)。
+    pub faint: u16,
+
+    /// 近背景(≈ `surface0`)。
+    pub ghost: u16,
+}
+
+/// 对「实际背景色」现算出的四档次级文本色(alpha compositing:`lerp(bg, text, alpha)`)。
+///
+/// 一处渲染面采样一次背景、换出一组 `Ink` 共用。回落链见 [`Theme::text_over`]:
+/// 采不到真彩背景按 `base` 混合;`base` / `text` 也非真彩才回落静态 token
+/// (`subtext` / `overlay` / `surface1` / `surface0`)。
+#[derive(Clone, Copy, Debug)]
+pub struct Ink {
+    /// 次级文本:metadata / 面板标题 / 时间戳。
+    pub strong: Color,
+
+    /// 暗淡标签:按键提示 / 别名后缀。
+    pub muted: Color,
+
+    /// 弱线条:未聚焦边框 / 已缓冲轨道。
+    pub faint: Color,
+
+    /// 近背景:淡出终点 / 空槽 / 未缓冲轨道。
+    pub ghost: Color,
 }
 
 impl Theme {
@@ -106,6 +146,12 @@ impl Theme {
             peach: c(cfg.peach()),
             search_hit_color: Color::Reset,
             search_hit_modifier: Modifier::empty(),
+            text_alpha: TextAlpha {
+                strong: permille_of(*cfg.text_alpha().strong()),
+                muted: permille_of(*cfg.text_alpha().muted()),
+                faint: permille_of(*cfg.text_alpha().faint()),
+                ghost: permille_of(*cfg.text_alpha().ghost()),
+            },
         };
         t.search_hit_color = t.resolve(cfg.search_hit().color());
         t.search_hit_modifier = cfg
@@ -164,8 +210,78 @@ impl Theme {
             search_hit_modifier: Modifier::BOLD
                 .union(Modifier::UNDERLINED)
                 .union(Modifier::ITALIC),
+            // 与 default.lua 的 text_alpha 对齐;strong/muted/faint 取自 mocha 中间色阶
+            // 在 base→text 上的天然 alpha 位置(三通道一致,回落色与混合色 ≈ 同值),
+            // ghost 刻意压到近乎贴底(淡出终点要真隐没,不对齐 surface0)。
+            text_alpha: TextAlpha {
+                strong: 780,
+                muted: 450,
+                faint: 220,
+                ghost: 10,
+            },
         }
     }
+
+    /// 按实际背景现算四档次级文本色;回落链(bg → `base` → 静态 token)见
+    /// [`Theme::text_over`]。
+    ///
+    /// # Params:
+    ///   - `bg`: 所在渲染面的实际背景色(先铺 bg 后画字,从 buffer 采样)
+    ///
+    /// # Return:
+    ///   四档 [`Ink`]。
+    pub fn ink_over(&self, bg: Color) -> Ink {
+        Ink {
+            strong: self
+                .text_over(bg, self.text_alpha.strong)
+                .unwrap_or(self.subtext),
+            muted: self
+                .text_over(bg, self.text_alpha.muted)
+                .unwrap_or(self.overlay),
+            faint: self
+                .text_over(bg, self.text_alpha.faint)
+                .unwrap_or(self.surface1),
+            ghost: self
+                .text_over(bg, self.text_alpha.ghost)
+                .unwrap_or(self.surface0),
+        }
+    }
+
+    /// `lerp(bg, text, alpha)`:主文本色对实际背景按千分比混合(连续 alpha,歌词
+    /// 距离淡出用;四档离散层级走 [`Theme::ink_over`])。
+    ///
+    /// 采样给的 `bg` 非真彩(无人铺 bg 的面采到 Reset / ANSI cell)时按「背景 ≈
+    /// `base`」混合——browse 面板不铺底色、观感即 base 是仓库既有假设(marquee
+    /// `fade_to` 同源),这级回落让 `text_alpha` 不依赖氛围背景恒生效。
+    ///
+    /// # Params:
+    ///   - `bg`: 实际背景色
+    ///   - `alpha_permille`: 混合比例,千分比(`1000` = 纯 `text`)
+    ///
+    /// # Return:
+    ///   混合色;`base` 也非真彩(ANSI / 跟随终端主题)或 `text` 非真彩时 `None`,
+    ///   调用方回落静态 token。
+    pub fn text_over(&self, bg: Color, alpha_permille: u16) -> Option<Color> {
+        let bg = match bg {
+            Color::Rgb(..) => bg,
+            _ => self.base,
+        };
+        match (bg, self.text) {
+            (Color::Rgb(..), Color::Rgb(..)) => Some(crate::render::color::lerp_color(
+                bg,
+                self.text,
+                u64::from(alpha_permille),
+                1000,
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// 0-1 的 alpha 折千分比(clamp + round)。
+#[allow(clippy::as_conversions)] // reason: 已 clamp 进 0..=1000 且 round,转换语义无损
+fn permille_of(alpha: f32) -> u16 {
+    (alpha.clamp(0.0, 1.0) * 1000.0).round() as u16
 }
 
 /// 解析某来源的徽标色:从 `sources.<name>.color` 取该源的 [`ColorRef`],经主题落地成具体色;
@@ -418,6 +534,85 @@ mod tests {
         let t = Theme::from_config(cfg.tui().theme());
         assert_eq!(t.base, ratatui::style::Color::Reset);
         assert_eq!(t.mantle, ratatui::style::Color::Blue);
+        Ok(())
+    }
+
+    /// `ink_over` 真彩背景:四档 = `lerp(bg, text, alpha)`,黑底下即 text 的等比暗化;
+    /// 换一个背景四档全部跟着动(对实际背景混合,不是固定 token)。
+    #[test]
+    fn ink_over_composites_on_rgb_bg() {
+        use ratatui::style::Color;
+
+        let mut theme = Theme::mocha_mauve();
+        theme.text = Color::Rgb(200, 100, 50);
+        let ink = theme.ink_over(Color::Rgb(0, 0, 0));
+        assert_eq!(ink.strong, Color::Rgb(156, 78, 39), "780‰ × text(黑底)");
+        assert_eq!(ink.muted, Color::Rgb(90, 45, 22), "450‰ × text(黑底)");
+        let shifted = theme.ink_over(Color::Rgb(100, 100, 100));
+        assert_ne!(shifted.strong, ink.strong, "背景变则档位色跟着变");
+    }
+
+    /// `ink_over` 回落链:采不到真彩背景(Reset / ANSI cell)按「背景 ≈ base」混合
+    /// ——browse 无人铺 bg 的面也因此吃到 `text_alpha`,不依赖氛围背景;`base` /
+    /// `text` 也非真彩才回落静态 token。
+    #[test]
+    fn ink_over_falls_back_to_base_then_tokens() {
+        use ratatui::style::Color;
+
+        let theme = Theme::mocha_mauve();
+        let over_base = theme.ink_over(theme.base);
+        for bg in [Color::Reset, Color::Blue] {
+            let ink = theme.ink_over(bg);
+            assert_eq!(ink.strong, over_base.strong, "采不到真彩应按 base 混合");
+            assert_eq!(ink.muted, over_base.muted, "muted 同上");
+            assert_eq!(ink.faint, over_base.faint, "faint 同上");
+            assert_eq!(ink.ghost, over_base.ghost, "ghost 同上");
+        }
+
+        let mut ansi_base = Theme::mocha_mauve();
+        ansi_base.base = Color::Reset;
+        let ink = ansi_base.ink_over(Color::Reset);
+        assert_eq!(ink.strong, ansi_base.subtext, "base 非真彩回落 subtext");
+        assert_eq!(ink.muted, ansi_base.overlay, "muted 回落 overlay");
+        assert_eq!(ink.faint, ansi_base.surface1, "faint 回落 surface1");
+        assert_eq!(ink.ghost, ansi_base.surface0, "ghost 回落 surface0");
+
+        let mut ansi_text = Theme::mocha_mauve();
+        ansi_text.text = Color::White;
+        assert!(
+            ansi_text.text_over(Color::Rgb(0, 0, 0), 500).is_none(),
+            "text 非真彩同样回落"
+        );
+    }
+
+    /// 默认 alpha 阶梯与 mocha 静态 token 对齐:在 base 底色上混出的 strong/muted/faint
+    /// 与 subtext/overlay/surface1 逐通道差 ≤ 1——无氛围背景时观感基本不漂移的地基。
+    /// ghost 刻意不对齐 surface0(淡出终点压到近乎贴底),只钉「明显暗于 faint」。
+    #[test]
+    fn default_ladder_matches_mocha_tokens() -> color_eyre::Result<()> {
+        use ratatui::style::Color;
+
+        let theme = Theme::mocha_mauve();
+        let ink = theme.ink_over(theme.base);
+        let close = |got: Color, want: Color| -> color_eyre::Result<()> {
+            let (Color::Rgb(gr, gg, gb), Color::Rgb(wr, wg, wb)) = (got, want) else {
+                color_eyre::eyre::bail!("应为真彩分量: {got:?} vs {want:?}");
+            };
+            for (g, w) in [(gr, wr), (gg, wg), (gb, wb)] {
+                assert!(
+                    g.abs_diff(w) <= 1,
+                    "通道差应 ≤ 1: got {got:?}, want {want:?}"
+                );
+            }
+            Ok(())
+        };
+        close(ink.strong, theme.subtext)?;
+        close(ink.muted, theme.overlay)?;
+        close(ink.faint, theme.surface1)?;
+        assert!(
+            theme.text_alpha.ghost < theme.text_alpha.faint / 2,
+            "ghost 应明显暗于 faint(淡出终点贴底)"
+        );
         Ok(())
     }
 }

@@ -18,7 +18,8 @@ use ratatui::style::Color;
 
 use super::super::state::{SPECTRUM_RES, SpectrumState};
 use super::BrailleGrid;
-use crate::render::color::lerp_color;
+use crate::components::layout::shared::text::center_bg;
+use crate::render::color::{ensure_bg_contrast, lerp_color, luma255_of};
 use crate::render::palette::ColumnColors;
 use crate::render::theme::Theme;
 
@@ -35,14 +36,25 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     let point_h = rows * 4;
     let layers = (*state.cfg().terrain().layers()).max(1);
     let base_y = point_h as f32 - 1.0;
+    // 顶端色过亮度保底(谱色与氛围背景同源,撞色时山脊融进场里);衬底锚用对实际
+    // 背景现算的 faint 档——远层「隐入衬底」的语义 = 贴实际背景,固定 token 在氛围
+    // 场 / 亮主题上会反向显眼。采到 Reset 按 base 混合,ANSI 主题回落静态 surface1。
+    let bg = center_bg(frame, area);
+    let floor = luma255_of(*state.cfg().dot_bg_contrast());
     let mut painter = RidgePainter {
         grid: BrailleGrid::new(cols, rows),
         horizon: vec![point_h as isize; point_w],
         // 端点色每字符列算一次,全部层共用(层色只差亮度系数)。
         endpoints: (0..cols)
-            .map(|col| state.column_colors(col, cols.max(1), theme))
+            .map(|col| {
+                let column = state.column_colors(col, cols.max(1), theme);
+                ColumnColors {
+                    bottom: column.bottom,
+                    top: ensure_bg_contrast(column.top, bg, floor),
+                }
+            })
             .collect::<Vec<ColumnColors>>(),
-        dim_anchor: theme.surface1,
+        dim_anchor: theme.ink_over(bg).faint,
         point_w,
         point_h,
         amplitude: point_h as f32 * (*state.cfg().terrain().amplitude()).clamp(0.0, 1.0),

@@ -369,7 +369,7 @@ fn build_row<'a>(
     };
 
     let mut title_spans = vec![Span::styled(s.name.clone(), Style::new().fg(title_fg))];
-    title_spans.extend(alias_span(s.alias.as_deref(), theme));
+    title_spans.extend(alias_span(s.alias.as_deref(), theme.overlay));
     let title_cell = match marquee {
         Some(m) => Cell::from(
             m.ctx

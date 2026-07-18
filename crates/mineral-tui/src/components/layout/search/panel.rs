@@ -425,7 +425,7 @@ fn result_table(
                 .enumerate()
                 .map(|(idx, s)| {
                     let mut title_spans = vec![Span::styled(s.name.clone(), main)];
-                    title_spans.extend(alias_span(s.alias.as_deref(), theme));
+                    title_spans.extend(alias_span(s.alias.as_deref(), theme.overlay));
                     let title_cell = if idx == sel {
                         Cell::from(marquee.line(
                             title_spans,

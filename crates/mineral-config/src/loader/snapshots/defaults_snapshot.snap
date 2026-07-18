@@ -120,6 +120,12 @@ Config {
                 enabled: true,
                 fade_ms: 3000,
             },
+            text_alpha: TextAlphaConfig {
+                strong: 0.78,
+                muted: 0.45,
+                faint: 0.22,
+                ghost: 0.01,
+            },
         },
         keys: KeysConfig {
             play_pause: KeyBinding {
@@ -592,6 +598,7 @@ Config {
             hue_cycle_ms: 30000,
             cover_fade_ms: 6000,
             cover_vshift_permille: 200,
+            dot_bg_contrast: 0.25,
             bars: BarsConfig {
                 show_peak_cap: true,
                 show_trail: true,

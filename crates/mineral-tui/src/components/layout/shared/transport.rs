@@ -10,9 +10,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::components::layout::shared::marquee::MarqueeCtx;
-use crate::components::layout::shared::text::alias_span;
+use crate::components::layout::shared::text::{alias_span, center_bg};
 use crate::components::layout::shared::waveform::{WaveformCtx, waveform_spans};
-use crate::render::theme::Theme;
+use crate::render::theme::{Ink, Theme};
 use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
@@ -26,11 +26,14 @@ pub fn draw(
     wave: &WaveformCtx<'_>,
     theme: &Theme,
 ) {
+    // 弱化色阶按实际背景现算:氛围场上贴场色保持成比例对比;无人铺 bg 的面采到
+    // Reset 按 base 混合(text_alpha 不依赖氛围背景),ANSI 主题回落静态 token。
+    let ink = theme.ink_over(center_bg(frame, area));
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.surface1))
-        .title(Line::from(" transport ").style(Style::new().fg(theme.subtext)));
+        .border_style(Style::new().fg(ink.faint))
+        .title(Line::from(" transport ").style(Style::new().fg(ink.strong)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -48,11 +51,11 @@ pub fn draw(
     ])
     .areas(inner);
 
-    paint_now(frame, now, pb, marquee, theme);
-    paint_meta(frame, meta, pb, theme);
-    paint_progress(frame, prog, pb, wave, theme);
-    paint_controls(frame, ctrl, pb, theme);
-    paint_vol_mode(frame, vms, pb, theme);
+    paint_now(frame, now, pb, marquee, theme, ink);
+    paint_meta(frame, meta, pb, ink);
+    paint_progress(frame, prog, pb, wave, theme, ink);
+    paint_controls(frame, ctrl, pb, theme, ink);
+    paint_vol_mode(frame, vms, pb, theme, ink);
 }
 
 /// transport 顶行:居中显示当前曲名(无歌时 `—`),带别名时后缀暗色 ` (alias)`;
@@ -63,6 +66,7 @@ fn paint_now(
     pb: &Playback,
     marquee: &MarqueeCtx<'_>,
     theme: &Theme,
+    ink: Ink,
 ) {
     if area.height == 0 {
         return;
@@ -72,15 +76,15 @@ fn paint_now(
         None => Line::from(Span::styled("—", name_style)),
         Some(t) => {
             let mut spans = vec![Span::styled(t.name.clone(), name_style)];
-            spans.extend(alias_span(t.alias.as_deref(), theme));
+            spans.extend(alias_span(t.alias.as_deref(), ink.muted));
             marquee.line(spans, Slot::Transport, &t.id.qualified(), area.width)
         }
     };
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
-/// transport 第二行:`artist · album` 居中(灰斜体)。
-fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+/// transport 第二行:`artist · album` 居中(弱化斜体)。
+fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, ink: Ink) {
     if area.height == 0 {
         return;
     }
@@ -94,11 +98,8 @@ fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
         .as_ref()
         .and_then(|t| t.album.as_ref())
         .map_or("", |a| a.name.as_str());
-    let line = Line::from(format!("{artist} · {album}")).style(
-        Style::new()
-            .fg(theme.subtext)
-            .add_modifier(Modifier::ITALIC),
-    );
+    let line = Line::from(format!("{artist} · {album}"))
+        .style(Style::new().fg(ink.strong).add_modifier(Modifier::ITALIC));
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
@@ -110,6 +111,7 @@ fn paint_progress(
     pb: &Playback,
     wave: &WaveformCtx<'_>,
     theme: &Theme,
+    ink: Ink,
 ) {
     if area.height == 0 || area.width < 12 {
         return;
@@ -142,7 +144,7 @@ fn paint_progress(
         ));
         spans.push(Span::styled(
             format!(" {total} "),
-            Style::new().fg(theme.subtext),
+            Style::new().fg(ink.strong),
         ));
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
@@ -158,25 +160,25 @@ fn paint_progress(
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ));
         // 播放头之后的轨道再分两段:已缓冲(亮)+ 未缓冲(暗)。同一 `─` 字形仅靠颜色区分,
-        // cell 数守恒,布局不抖。overlay(中灰)比 surface0 明显亮一大档但不抢已播的亮蓝,
+        // cell 数守恒,布局不抖。muted 档比 ghost 档明显亮一大档但不抢已播的亮蓝,
         // 形成「已播亮蓝 > 已缓冲中灰 > 未缓冲暗灰」的三级层次,缓冲进度即这段亮轨道的长度。
         let (buffered, unbuffered) = split_buffered_track(bar_w, filled, pb.buffered_bps);
         if buffered > 0 {
             spans.push(Span::styled(
                 "─".repeat(buffered),
-                Style::new().fg(theme.overlay),
+                Style::new().fg(ink.muted),
             ));
         }
         if unbuffered > 0 {
             spans.push(Span::styled(
                 "─".repeat(unbuffered),
-                Style::new().fg(theme.surface0),
+                Style::new().fg(ink.ghost),
             ));
         }
     }
     spans.push(Span::styled(
         format!(" {total} "),
-        Style::new().fg(theme.subtext),
+        Style::new().fg(ink.strong),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -205,7 +207,7 @@ pub(crate) fn split_buffered_track(bar_w: usize, filled: usize, buffered: Bps) -
 /// 控件区:`[⏮] [▶/⏸] [⏭] [mode]` 按钮 + 下方对应键位 label,等宽对齐避免抖动。
 /// 下一曲已预排(gapless prefetch)时,`[⏭]` 右侧 GAP 的第一格画 `⇣` 标记
 /// (见 [`prefetch_marker`])——占用本就存在的空格 cell,总宽不变、出现/消失不挪动按钮。
-fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme, ink: Ink) {
     if area.height < 2 {
         return;
     }
@@ -223,7 +225,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     ];
     const GAP: usize = 3;
     let gap = " ".repeat(GAP);
-    let marker = prefetch_marker(pb.prefetch.stage(), theme);
+    let marker = prefetch_marker(pb.prefetch.stage(), theme, ink);
     let mut buttons = Vec::<Span<'_>>::new();
     let mut labels = String::new();
     for (i, (b, l)) in slots.iter().enumerate() {
@@ -256,7 +258,7 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         btn,
     );
     frame.render_widget(
-        Paragraph::new(Line::from(labels).style(Style::new().fg(theme.overlay)))
+        Paragraph::new(Line::from(labels).style(Style::new().fg(ink.muted)))
             .alignment(Alignment::Center),
         lbl,
     );
@@ -264,25 +266,26 @@ fn paint_controls(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
 
 /// gapless prefetch 标记:字形 + 颜色;未预排 → `None`(不画)。
 ///
-/// 字形恒 `⇣`(1 cell)只换色——拉取中暗(overlay)、就绪亮(green),状态切换布局不抖。
+/// 字形恒 `⇣`(1 cell)只换色——拉取中暗(muted 档)、就绪亮(green),状态切换布局不抖。
 ///
 /// # Params:
 ///   - `stage`: 预排阶段(见 [`crate::runtime::playback::Prefetch::stage`])
 ///   - `theme`: 取色主题
+///   - `ink`: 对实际背景现算的弱化色阶
 ///
 /// # Return:
 ///   `(字形, 颜色)`;`Idle` 为 `None`。
-fn prefetch_marker(stage: PrefetchStage, theme: &Theme) -> Option<(&'static str, Color)> {
+fn prefetch_marker(stage: PrefetchStage, theme: &Theme, ink: Ink) -> Option<(&'static str, Color)> {
     match stage {
         PrefetchStage::Idle => None,
-        PrefetchStage::Fetching => Some(("⇣", theme.overlay)),
+        PrefetchStage::Fetching => Some(("⇣", ink.muted)),
         PrefetchStage::Ready => Some(("⇣", theme.green)),
     }
 }
 
 /// vms 行:vol / mode / fmt 三块三等分铺开(分别左 / 居中 / 右对齐)。fmt 段 =
 /// format + 位深 + 采样率 + 码率,各缺失即省略(见 [`fmt_spec_label`])。
-fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme) {
+fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Theme, ink: Ink) {
     if area.height == 0 {
         return;
     }
@@ -298,18 +301,15 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     let fill = "█".repeat(filled);
     let empty = "░".repeat(BAR_W.saturating_sub(filled));
     let vol = Line::from(vec![
-        Span::styled(" vol ", Style::new().fg(theme.overlay)),
+        Span::styled(" vol ", Style::new().fg(ink.muted)),
         Span::styled(fill, Style::new().fg(theme.accent)),
-        Span::styled(empty, Style::new().fg(theme.surface0)),
-        Span::styled(
-            format!(" {}%", pb.volume_pct),
-            Style::new().fg(theme.subtext),
-        ),
+        Span::styled(empty, Style::new().fg(ink.ghost)),
+        Span::styled(format!(" {}%", pb.volume_pct), Style::new().fg(ink.strong)),
     ]);
     frame.render_widget(Paragraph::new(vol).alignment(Alignment::Left), vol_area);
 
     let mode = Line::from(vec![
-        Span::styled("mode ", Style::new().fg(theme.overlay)),
+        Span::styled("mode ", Style::new().fg(ink.muted)),
         Span::styled(pb.mode.label(), Style::new().fg(theme.text)),
     ]);
     frame.render_widget(Paragraph::new(mode).alignment(Alignment::Center), mode_area);
@@ -331,14 +331,15 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
                     pu.format.as_ref().is_some_and(AudioFormat::is_lossless),
                     pu.bitrate_bps,
                     theme,
+                    ink,
                 ),
             )
         })
-        .unwrap_or_else(|| ("—".to_owned(), theme.overlay));
+        .unwrap_or_else(|| ("—".to_owned(), ink.muted));
     // 来源已知 → 来源字形(上色)作前缀;未知 → 退回 `fmt` 文字标签。
     let (badge_glyph, badge_color) = pb
         .play_origin
-        .map_or(("fmt", theme.overlay), |o| origin_badge(o, theme));
+        .map_or(("fmt", ink.muted), |o| origin_badge(o, theme, ink));
     let fmt = Line::from(vec![
         Span::styled(format!("{badge_glyph} "), Style::new().fg(badge_color)),
         Span::styled(text, Style::new().fg(color)),
@@ -416,14 +417,15 @@ fn fmt_sample_rate(hz: u32) -> Option<String> {
 /// # Params:
 ///   - `origin`: 当前在播音频的来源
 ///   - `theme`: 取色主题
+///   - `ink`: 对实际背景现算的弱化色阶
 ///
 /// # Return:
 ///   `(字形, 颜色)`。
-fn origin_badge(origin: PlaybackOrigin, theme: &Theme) -> (&'static str, Color) {
+fn origin_badge(origin: PlaybackOrigin, theme: &Theme, ink: Ink) -> (&'static str, Color) {
     match origin {
         PlaybackOrigin::Download => ("↓", theme.green),
         PlaybackOrigin::Cache => ("◆", theme.accent_2),
-        PlaybackOrigin::Remote => ("○", theme.overlay),
+        PlaybackOrigin::Remote => ("○", ink.muted),
     }
 }
 
@@ -431,13 +433,13 @@ fn origin_badge(origin: PlaybackOrigin, theme: &Theme) -> (&'static str, Color) 
 ///
 /// 刻意不读 `PlayUrl::quality`——那是请求侧的归一化等级,channel 可「尽力提供」
 /// 返回完全不同的实际音质(如 local channel 无视请求)。显示音质必须以实测为准。
-fn fmt_tier_color(lossless: bool, bitrate_bps: Option<u32>, theme: &Theme) -> Color {
+fn fmt_tier_color(lossless: bool, bitrate_bps: Option<u32>, theme: &Theme, ink: Ink) -> Color {
     match (lossless, bitrate_bps) {
         (true, Some(b)) if b >= 1_800_000 => theme.yellow, // Hi-Res 级无损(≈24bit/96k 起)
         (true, _) => theme.accent,                         // 无损(FLAC/WAV/APE/ALAC)
         (false, Some(b)) if b >= 320_000 => theme.green,   // 高码有损
         (false, Some(b)) if b >= 192_000 => theme.text,    // 中码
-        _ => theme.overlay,                                // 低码 / 码率未知
+        _ => ink.muted,                                    // 低码 / 码率未知
     }
 }
 
@@ -564,11 +566,12 @@ mod tests {
         #[test]
         fn prop_tier_color_partitioned(lossless in any::<bool>(), bitrate in 0u32..3_000_000) {
             let theme = Theme::default();
-            let c = fmt_tier_color(lossless, Some(bitrate), &theme);
+            let ink = theme.ink_over(ratatui::style::Color::Reset);
+            let c = fmt_tier_color(lossless, Some(bitrate), &theme, ink);
             if lossless {
                 prop_assert!(c == theme.accent || c == theme.yellow);
             } else {
-                prop_assert!(c == theme.green || c == theme.text || c == theme.overlay);
+                prop_assert!(c == theme.green || c == theme.text || c == ink.muted);
             }
         }
 
@@ -581,8 +584,9 @@ mod tests {
         ) {
             let (lo, hi) = if b1 <= b2 { (b1, b2) } else { (b2, b1) };
             let theme = Theme::default();
-            let r_lo = tier_rank(fmt_tier_color(lossless, Some(lo), &theme), &theme);
-            let r_hi = tier_rank(fmt_tier_color(lossless, Some(hi), &theme), &theme);
+            let ink = theme.ink_over(ratatui::style::Color::Reset);
+            let r_lo = tier_rank(fmt_tier_color(lossless, Some(lo), &theme, ink), &theme);
+            let r_hi = tier_rank(fmt_tier_color(lossless, Some(hi), &theme, ink), &theme);
             prop_assert!(r_lo <= r_hi);
         }
 
@@ -888,19 +892,23 @@ mod tests {
         Ok(())
     }
 
-    /// prefetch 标记的 (字形, 颜色) 映射——未预排无标记;拉取中暗(overlay)、就绪亮(green),
+    /// prefetch 标记的 (字形, 颜色) 映射——未预排无标记;拉取中暗(muted 档)、就绪亮(green),
     /// 字形恒 `⇣` 只换色,布局不抖。
     #[test]
     fn prefetch_marker_maps_glyph_and_color() {
         use crate::runtime::playback::PrefetchStage;
         let theme = Theme::default();
-        assert_eq!(super::prefetch_marker(PrefetchStage::Idle, &theme), None);
+        let ink = theme.ink_over(Color::Reset);
         assert_eq!(
-            super::prefetch_marker(PrefetchStage::Fetching, &theme),
-            Some(("⇣", theme.overlay))
+            super::prefetch_marker(PrefetchStage::Idle, &theme, ink),
+            None
         );
         assert_eq!(
-            super::prefetch_marker(PrefetchStage::Ready, &theme),
+            super::prefetch_marker(PrefetchStage::Fetching, &theme, ink),
+            Some(("⇣", ink.muted))
+        );
+        assert_eq!(
+            super::prefetch_marker(PrefetchStage::Ready, &theme, ink),
             Some(("⇣", theme.green))
         );
     }
@@ -934,7 +942,7 @@ mod tests {
         Ok(())
     }
 
-    /// prefetch 标记颜色随阶段切换:拉取中 overlay → 就绪 green;未预排不画 `⇣`。
+    /// prefetch 标记颜色随阶段切换:拉取中 muted 档 → 就绪 green;未预排不画 `⇣`。
     /// 文本快照不记前景色,这里直接读 `⇣` cell 的 fg 钉死。
     #[test]
     fn transport_prefetch_marker_colors() -> color_eyre::Result<()> {
@@ -962,8 +970,8 @@ mod tests {
         pb.prefetch.buffered_bps = Bps::new(4_000);
         assert_eq!(
             marker_fg(&pb, &theme)?,
-            Some(theme.overlay),
-            "Fetching 应 overlay"
+            Some(theme.ink_over(Color::Reset).muted),
+            "Fetching 应 muted 档"
         );
         // 字节下完:亮色就绪。
         pb.prefetch.download_complete = true;
@@ -975,18 +983,61 @@ mod tests {
     #[test]
     fn origin_badge_maps_glyph_and_color() {
         let theme = Theme::default();
+        let ink = theme.ink_over(Color::Reset);
         assert_eq!(
-            super::origin_badge(PlaybackOrigin::Download, &theme),
+            super::origin_badge(PlaybackOrigin::Download, &theme, ink),
             ("↓", theme.green)
         );
         assert_eq!(
-            super::origin_badge(PlaybackOrigin::Cache, &theme),
+            super::origin_badge(PlaybackOrigin::Cache, &theme, ink),
             ("◆", theme.accent_2)
         );
         assert_eq!(
-            super::origin_badge(PlaybackOrigin::Remote, &theme),
-            ("○", theme.overlay)
+            super::origin_badge(PlaybackOrigin::Remote, &theme, ink),
+            ("○", ink.muted)
         );
+    }
+
+    /// 氛围背景(真彩 bg)下,transport 弱化色阶(探边框 faint 档)对实际背景混合:
+    /// 蓝底与红底下 fg 不同且贴向各自背景——不再是固定 token。
+    #[test]
+    fn transport_ink_follows_actual_bg() -> color_eyre::Result<()> {
+        let probe = |bg: Color| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(50, 8))?;
+            let mut pb = Playback::new();
+            pb.track = Some(with_duration(with_name(song("1"), "InkProbe"), 225_000));
+            let mq = still_marquees();
+            t.draw(|f| {
+                let area = f.area();
+                f.render_widget(
+                    ratatui::widgets::Block::new().style(ratatui::style::Style::new().bg(bg)),
+                    area,
+                );
+                super::draw(
+                    f,
+                    area,
+                    &pb,
+                    &ctx(&mq),
+                    &WaveformCtx::off(),
+                    &Theme::default(),
+                );
+            })?;
+            let cell = t
+                .backend()
+                .buffer()
+                .cell(ratatui::layout::Position::new(0, 0))
+                .ok_or_else(|| color_eyre::eyre::eyre!("边框角 cell 应存在"))?;
+            Ok(cell.fg)
+        };
+        let on_blue = probe(Color::Rgb(0, 0, 120))?;
+        let on_red = probe(Color::Rgb(120, 0, 0))?;
+        assert_ne!(on_blue, on_red, "faint 档应跟随实际背景");
+        let (Color::Rgb(br, _, bb), Color::Rgb(rr, _, rb)) = (on_blue, on_red) else {
+            color_eyre::eyre::bail!("探针应拿到真彩 fg: {on_blue:?} / {on_red:?}");
+        };
+        assert!(bb > br, "蓝底边框:蓝分量占优,got {on_blue:?}");
+        assert!(rr > rb, "红底边框:红分量占优,got {on_red:?}");
+        Ok(())
     }
 
     /// 来源徽标:download(↓ 绿,FLAC 999kbps)。
@@ -1064,11 +1115,12 @@ mod tests {
         Ok(())
     }
 
-    /// 缓冲 overlay 的颜色:播放头之后先一段 overlay(已缓冲,中灰)再一段 surface0(未缓冲,
-    /// 暗灰),两色不交错且都非空。文本快照不记前景色,故这里直接读 `cell.fg` 钉死颜色与顺序。
+    /// 缓冲轨道的颜色:播放头之后先一段 muted 档(已缓冲,中灰)再一段 ghost 档(未缓冲,
+    /// 近底),两色不交错且都非空。文本快照不记前景色,故这里直接读 `cell.fg` 钉死颜色与顺序。
     #[test]
     fn transport_buffer_overlay_colors() -> color_eyre::Result<()> {
         let theme = Theme::default();
+        let ink = theme.ink_over(Color::Reset);
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(with_name(song("1"), "Buffering"), 225_000));
@@ -1097,19 +1149,15 @@ mod tests {
             .map(|(_, c)| c.fg)
             .collect();
 
-        let bright = track.iter().filter(|c| **c == theme.overlay).count();
-        let dim = track.iter().filter(|c| **c == theme.surface0).count();
-        assert!(bright > 0, "应有已缓冲亮段(overlay):{track:?}");
-        assert!(dim > 0, "缓冲未满应有未缓冲暗段(surface0):{track:?}");
-        assert_eq!(
-            bright + dim,
-            track.len(),
-            "轨道只该是 surface0/overlay 两色"
-        );
+        let bright = track.iter().filter(|c| **c == ink.muted).count();
+        let dim = track.iter().filter(|c| **c == ink.ghost).count();
+        assert!(bright > 0, "应有已缓冲亮段(muted 档):{track:?}");
+        assert!(dim > 0, "缓冲未满应有未缓冲暗段(ghost 档):{track:?}");
+        assert_eq!(bright + dim, track.len(), "轨道只该是 muted/ghost 两色");
 
         // 亮段必须全部排在暗段之前——缓冲连续紧随播放头,不交错。
-        let last_bright = track.iter().rposition(|c| *c == theme.overlay);
-        let first_dim = track.iter().position(|c| *c == theme.surface0);
+        let last_bright = track.iter().rposition(|c| *c == ink.muted);
+        let first_dim = track.iter().position(|c| *c == ink.ghost);
         if let (Some(lb), Some(fd)) = (last_bright, first_dim) {
             assert!(lb < fd, "亮段应全部在暗段之前:{track:?}");
         }

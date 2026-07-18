@@ -181,6 +181,7 @@ expression: "super::meta_config_lua()"
 ---@field peach? mineral.ColorValue 命令 / 搜索前缀。
 ---@field search_hit? mineral.SearchHitConfig 搜索命中字符的样式(色 + 叠加字体效果)。
 ---@field dynamic? mineral.DynamicThemeConfig 封面驱动的动态主题(accent 随在播封面主色渐变)。
+---@field text_alpha? mineral.TextAlphaConfig 文本层级的不透明度(歌词渐暗 / transport 标签等对实际背景的混合比例)。
 
 ---封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前值
 ---渐变到封面派生色;无封面 / 取色失败渐变回本表的静态 token。
@@ -192,6 +193,16 @@ expression: "super::meta_config_lua()"
 ---@class mineral.SearchHitConfig
 ---@field color? mineral.ColorRef 高亮色:token 名(`"peach"` 等,随主题联动)或裸 `"#rrggbb"`。
 ---@field modifiers? mineral.TextStyle[] 叠加的字体效果(数组整体替换;空数组 = 仅变色)。
+
+---文本层级的不透明度(0-1):次级文本的前景色 = 所在处实际背景色与 `text` 按此比例
+---混合,背景是氛围渐变场还是纯底色都保持成比例的对比度。仅当背景拿得到真彩分量时
+---生效;ANSI / 终端默认背景下回落对应的静态 token(`subtext` / `overlay` /
+---`surface1` / `surface0`)。
+---@class mineral.TextAlphaConfig
+---@field strong? number 次级文本:metadata / 面板标题 / 时间戳(对应静态 token `subtext`)。
+---@field muted? number 暗淡标签:二级标签 / 按键提示 / 别名后缀(对应静态 token `overlay`)。
+---@field faint? number 弱线条:未聚焦边框 / 已缓冲轨道(对应静态 token `surface1`)。
+---@field ghost? number 近背景:歌词远端淡出终点 / 空槽 / 未缓冲轨道(对应静态 token `surface0`)。
 
 ---键位重映射表:每个字段是一个内建动作的稳定命令名,值为绑定到它的键。
 ---
@@ -267,6 +278,7 @@ expression: "super::meta_config_lua()"
 ---@field hue_cycle_ms? integer 色相旋转一整圈(360°)的毫秒数。
 ---@field cover_fade_ms? integer 封面就绪后从当前配色缓动到封面色场的过渡毫秒数。
 ---@field cover_vshift_permille? integer 色场纵向采样偏移(‰,0-1000):顶端比底端沿色带多偏向高频多少, 拉开条底 / 条顶明度层次。
+---@field dot_bg_contrast? number 盲文点阵风格(scope / terrain)落笔色与实际背景的最小亮度差(0-1): 封面色场背景与同源的谱色撞色时,把落笔色向亮 / 暗侧抬开到此差值, 保持细点可辨;`0` = 关闭保底。
 ---@field bars? mineral.BarsConfig bars 风格参数;`style = "bars"` 时生效。
 ---@field scope? mineral.ScopeConfig scope 风格参数;`style = "scope"` 时生效。
 ---@field waterfall? mineral.WaterfallConfig waterfall 风格参数;`style = "waterfall"` 时生效。

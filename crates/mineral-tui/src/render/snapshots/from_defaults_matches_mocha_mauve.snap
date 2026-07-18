@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-tui/src/render/theme.rs
-assertion_line: 223
 description: Theme 默认值(from_config(defaults) = mocha_mauve)
 expression: t
 ---
@@ -81,4 +80,10 @@ Theme {
         135,
     ),
     search_hit_modifier: BOLD | ITALIC | UNDERLINED,
+    text_alpha: TextAlpha {
+        strong: 780,
+        muted: 450,
+        faint: 220,
+        ghost: 10,
+    },
 }

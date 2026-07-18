@@ -10,7 +10,8 @@ use ratatui::layout::Rect;
 
 use super::super::state::SpectrumState;
 use super::BrailleGrid;
-use crate::render::color::lerp_color;
+use crate::components::layout::shared::text::center_bg;
+use crate::render::color::{ensure_bg_contrast, lerp_color, luma255_of};
 use crate::render::palette::ColumnColors;
 use crate::render::theme::Theme;
 
@@ -27,9 +28,18 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     let center = point_h as f32 / 2.0;
     let amplitude = (center - 2.0).max(1.0);
     // 端点色每字符列算一次:深包络下逐点算是每帧几千次端点计算(封面过渡期尤重),
-    // 同列端点本就相同,hoist 无视觉差。
+    // 同列端点本就相同,hoist 无视觉差。端点过亮度保底:氛围背景与谱色同源(同一
+    // 封面调色板),撞色时细小盲文点会融进场里,按实际背景抬开最小亮度差。
+    let bg = center_bg(frame, area);
+    let floor = luma255_of(*state.cfg().dot_bg_contrast());
     let endpoints = (0..cols)
-        .map(|col| state.column_colors(col, cols.max(1), theme))
+        .map(|col| {
+            let column = state.column_colors(col, cols.max(1), theme);
+            ColumnColors {
+                bottom: ensure_bg_contrast(column.bottom, bg, floor),
+                top: ensure_bg_contrast(column.top, bg, floor),
+            }
+        })
         .collect::<Vec<ColumnColors>>();
     let mut grid = BrailleGrid::new(cols, usize::from(area.height));
     for px in 0..point_w {

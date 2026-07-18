@@ -11,9 +11,9 @@ use crate::schema::{
     MarqueeConfig, MarqueeLoopConfig, MarqueeMode, MenuReveal, MineralSection, NeteaseSection,
     PrefetchConfig, ReportConfig, RotateConfig, ScopeConfig, ScriptConfig, SearchConfig,
     SearchFocusTransition, SearchHitConfig, SearchQueryMode, ShelfConfig, SourcesConfig,
-    SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle, TerrainConfig, TextStyle,
-    ThemeConfig, TitleField, TitleIcons, ToastConfig, TrackPosMemory, TuiConfig, VignetteConfig,
-    WaterfallConfig, WaveformConfig, WindowTitleConfig, ZoomConfig,
+    SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle, TerrainConfig,
+    TextAlphaConfig, TextStyle, ThemeConfig, TitleField, TitleIcons, ToastConfig, TrackPosMemory,
+    TuiConfig, VignetteConfig, WaterfallConfig, WaveformConfig, WindowTitleConfig, ZoomConfig,
 };
 
 /// 文件头:`---@meta` 声明 + 使用说明(手写 prose,不随 schema 变)。
@@ -55,6 +55,7 @@ pub(crate) fn meta_config_lua() -> String {
         ThemeConfig::LUA_STUB,
         DynamicThemeConfig::LUA_STUB,
         SearchHitConfig::LUA_STUB,
+        TextAlphaConfig::LUA_STUB,
         KeysConfig::LUA_STUB,
         BehaviorConfig::LUA_STUB,
         SpectrumConfig::LUA_STUB,

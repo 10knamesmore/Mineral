@@ -230,11 +230,18 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<R
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
+    // marquee 边缘 fade 的目标 = transport 面实际背景(ambient 场色);采到 Reset
+    // (ambient 关 / ANSI 主题)回落 base,与非全屏调用点一致。
+    let marquee_fade_to =
+        match crate::components::layout::shared::text::center_bg(frame, areas.transport) {
+            bg @ ratatui::style::Color::Rgb(..) => bg,
+            _ => theme.base,
+        };
     transport::draw(
         frame,
         areas.transport,
         &app.state.playback,
-        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &MarqueeCtx::new(&app.state, theme, marquee_fade_to),
         &WaveformCtx::new(&app.state, theme),
         theme,
     );

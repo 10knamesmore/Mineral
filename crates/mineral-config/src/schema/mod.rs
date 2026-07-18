@@ -58,8 +58,8 @@ pub use spectrum::{
 };
 pub use stats::{ReportConfig, RetentionDays, SearchQueryMode, StatsConfig, StatsLevel};
 pub use theme::{
-    AnsiSlot, ColorRef, ColorValue, DynamicThemeConfig, HexColor, SearchHitConfig, TextStyle,
-    ThemeConfig, TokenName,
+    AnsiSlot, ColorRef, ColorValue, DynamicThemeConfig, HexColor, SearchHitConfig, TextAlphaConfig,
+    TextStyle, ThemeConfig, TokenName,
 };
 pub use toast::ToastConfig;
 pub use waveform::WaveformConfig;

@@ -74,6 +74,11 @@ pub struct SpectrumConfig {
     /// 拉开条底 / 条顶明度层次。
     cover_vshift_permille: u32,
 
+    /// 盲文点阵风格(scope / terrain)落笔色与实际背景的最小亮度差(0-1):
+    /// 封面色场背景与同源的谱色撞色时,把落笔色向亮 / 暗侧抬开到此差值,
+    /// 保持细点可辨;`0` = 关闭保底。
+    dot_bg_contrast: f32,
+
     /// bars 风格参数;`style = "bars"` 时生效。
     bars: BarsConfig,
 

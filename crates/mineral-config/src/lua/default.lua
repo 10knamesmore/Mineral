@@ -33,6 +33,12 @@ return {
         enabled = true, -- 关闭即恒用上面的静态 accent/accent_2
         fade_ms = 3000, -- 切歌/封面就绪后 accent 渐变过去的时长
       },
+      text_alpha = { -- 文本层级不透明度(0-1):次级文本 = 实际背景与 text 按此比例混合,氛围背景上保持成比例对比
+        strong = 0.78, -- 次级文本:metadata/面板标题/时间戳(≈ subtext)
+        muted = 0.45, -- 暗淡标签:按键提示/别名后缀/translation(≈ overlay)
+        faint = 0.22, -- 弱线条:未聚焦边框/已缓冲轨道(≈ surface1)
+        ghost = 0.01, -- 近背景:歌词远端淡出终点/空槽(≈ surface0)
+      },
     },
     keys = {
       -- 方向是【动作 → 键】;值为单键或键数组(数组整体替换)。
@@ -110,6 +116,7 @@ return {
       hue_cycle_ms = 30 * 1000, -- 色相转满一圈(360°)的时长
       cover_fade_ms = 6 * 1000, -- 封面取色就绪后的配色过渡时长
       cover_vshift_permille = 200, -- 封面色场顶端沿色带的纵向偏移,‰;拉开条底/条顶层次
+      dot_bg_contrast = 0.25, -- 盲文点阵风格(scope/terrain)落笔色与实际背景的最小亮度差 0-1;撞色时向亮/暗侧抬开,0 = 关闭
       bars = { -- bars 风格参数,style = "bars" 时生效
         show_peak_cap = true, -- 条顶 ▔ 浮标
         show_trail = true, -- peak 与条之间的余韵渐隐

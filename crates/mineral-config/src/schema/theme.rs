@@ -65,6 +65,9 @@ pub struct ThemeConfig {
 
     /// 封面驱动的动态主题(accent 随在播封面主色渐变)。
     dynamic: DynamicThemeConfig,
+
+    /// 文本层级的不透明度(歌词渐暗 / transport 标签等对实际背景的混合比例)。
+    text_alpha: TextAlphaConfig,
 }
 
 /// 封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前值
@@ -76,6 +79,25 @@ pub struct DynamicThemeConfig {
 
     /// 切歌 / 封面就绪时 accent 渐变过去的时长,毫秒。
     fade_ms: u32,
+}
+
+/// 文本层级的不透明度(0-1):次级文本的前景色 = 所在处实际背景色与 `text` 按此比例
+/// 混合,背景是氛围渐变场还是纯底色都保持成比例的对比度。仅当背景拿得到真彩分量时
+/// 生效;ANSI / 终端默认背景下回落对应的静态 token(`subtext` / `overlay` /
+/// `surface1` / `surface0`)。
+#[config_section]
+pub struct TextAlphaConfig {
+    /// 次级文本:metadata / 面板标题 / 时间戳(对应静态 token `subtext`)。
+    strong: f32,
+
+    /// 暗淡标签:二级标签 / 按键提示 / 别名后缀(对应静态 token `overlay`)。
+    muted: f32,
+
+    /// 弱线条:未聚焦边框 / 已缓冲轨道(对应静态 token `surface1`)。
+    faint: f32,
+
+    /// 近背景:歌词远端淡出终点 / 空槽 / 未缓冲轨道(对应静态 token `surface0`)。
+    ghost: f32,
 }
 
 /// 搜索命中字符的样式:在所在列的基础样式上叠加。
