@@ -19,7 +19,7 @@ use crate::write::{PlaylistWriteOp, WriteError};
 /// 写操作的失败必须到达用户(toast + 清 pending 标记),不能只留在日志里。
 /// **例外之二:[`TaskEvent::SongUrlFailed`]**——取链失败是播放钩子的 `unplayable`
 /// 触发信号(脚本可跨源补救),必须进事件循环而不只是日志。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
     PlaylistsFetched {
@@ -182,7 +182,7 @@ pub enum TaskEvent {
 }
 
 /// 搜索结果载荷,变体与请求的 [`SearchKind`] 一致。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SearchPayload {
     /// 歌曲结果。
     Songs(Vec<Song>),

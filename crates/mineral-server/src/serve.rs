@@ -2,18 +2,18 @@
 //! dispatch → **唯一 writer** 串行下发(Response 与订阅过滤后的 Event 汇同一条
 //! mpsc,杜绝并发写 sink)。
 //!
-//! 单 client 限制保留:已有 connection 时,新 incoming **不等握手**直接收
-//! `Hello { accepted: false, reason: Busy }` 然后被关。
+//! 多 client:每条 connection 独立 task / writer / event 订阅,连接间无共享
+//! 可变通道;在线身份经 [`ConnRegistry`] 登记,断开(含 panic unwind)即移除。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use color_eyre::eyre::WrapErr;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use mineral_protocol::{
-    Event, Frame, Framed, RejectReason, Request, Response, ServerHello, Subscription, decode,
-    encode, framed, recv, send,
+    ClientInfo, Event, Frame, Framed, RejectReason, Request, Response, ServerHello, Subscription,
+    decode, encode, framed, recv, send,
 };
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, broadcast, mpsc};
@@ -32,7 +32,7 @@ use crate::client::{Client, ClientHandle};
 pub(crate) async fn run<F>(
     listener: UnixListener,
     client: ClientHandle,
-    busy: Arc<AtomicBool>,
+    registry: Arc<ConnRegistry>,
     events: broadcast::Sender<Event>,
     on_connect: F,
     shutdown: Arc<Notify>,
@@ -46,48 +46,89 @@ where
             .accept()
             .await
             .wrap_err("UnixListener::accept failed")?;
-        if busy.swap(true, Ordering::AcqRel) {
-            // 已经有 client 在用 → 不等握手直接拒。失败也无所谓,client 自己会 EOF。
-            mineral_log::warn!(target: "ipc", "rejected new connection: single-client busy");
-            client.record_connection_reject(mineral_stats::RejectReason::Busy);
-            tokio::spawn(reject_busy(stream));
-            continue;
-        }
+        let conn_id = registry.register();
         on_connect();
-        mineral_log::info!(target: "ipc", "client connected");
-        let client = client.clone();
-        let busy_guard = BusyGuard(Arc::clone(&busy));
+        mineral_log::info!(target: "ipc", conn_id, "client connected");
+        // per-connection handle:后续所有 per-conn 状态(终端上报 / PCM 游标)
+        // 都以这个 id 归属,断开随 guard 一体清理。
+        let client = client.for_connection(conn_id);
+        let guard = ConnGuard {
+            registry: Arc::clone(&registry),
+            id: conn_id,
+        };
+        let registry = Arc::clone(&registry);
         let events = events.clone();
         let shutdown = Arc::clone(&shutdown);
         tokio::spawn(async move {
-            // 守卫持有到 task 结束:正常返回与 panic unwind 都复位 busy,
-            // 杜绝 daemon 因一次连接事故永久拒连。
-            let _busy_guard = busy_guard;
-            if let Err(e) = handle_connection(stream, &client, &events, &shutdown).await {
-                mineral_log::warn!(target: "ipc", error = mineral_log::chain(&e), "connection ended with error");
+            // 守卫持有到 task 结束:正常返回与 panic unwind 都从注册表移除,
+            // 杜绝一次连接事故留下幽灵在线记录。
+            let _guard = guard;
+            if let Err(e) =
+                handle_connection(stream, &client, &registry, conn_id, &events, &shutdown).await
+            {
+                mineral_log::warn!(target: "ipc", conn_id, error = mineral_log::chain(&e), "connection ended with error");
             }
         });
     }
 }
 
-/// 单 client 占用标志的复位守卫:连接 task 无论正常结束还是 panic unwind,
-/// drop 时都复位 busy。
-struct BusyGuard(Arc<AtomicBool>);
+/// 已接入连接的注册表:accept 分配自增 id、断开移除;心跳读在线数,握手后
+/// 登记 client 身份(版本 + 订阅集)。
+pub(crate) struct ConnRegistry {
+    /// 下一个连接 id(进程内单调自增,不复用)。
+    next_id: AtomicU64,
 
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+    /// 在线连接:id → 握手身份(握手完成前为 `None`)。
+    conns: parking_lot::Mutex<rustc_hash::FxHashMap<u64, Option<ClientInfo>>>,
+}
+
+impl ConnRegistry {
+    /// 空注册表。
+    pub(crate) fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            conns: parking_lot::Mutex::new(rustc_hash::FxHashMap::default()),
+        }
+    }
+
+    /// 登记一条新连接,返回其 id。
+    fn register(&self) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.conns.lock().insert(id, None);
+        id
+    }
+
+    /// 握手完成,补登身份。
+    fn set_identity(&self, id: u64, info: ClientInfo) {
+        if let Some(slot) = self.conns.lock().get_mut(&id) {
+            *slot = Some(info);
+        }
+    }
+
+    /// 连接断开,移除。
+    fn unregister(&self, id: u64) {
+        self.conns.lock().remove(&id);
+    }
+
+    /// 当前在线连接数(心跳上报用)。
+    pub(crate) fn online(&self) -> usize {
+        self.conns.lock().len()
     }
 }
 
-/// 已有 client 在用:新连进来的不等握手,直接收 `Hello { Busy }` 后被关。
-async fn reject_busy(stream: UnixStream) {
-    let mut conn = framed(stream);
-    let _ = send(
-        &mut conn,
-        &Frame::Hello(ServerHello::reject(RejectReason::Busy)),
-    )
-    .await;
+/// 注册表移除守卫:连接 task 无论正常结束还是 panic unwind,drop 时都移除。
+struct ConnGuard {
+    /// 所属注册表。
+    registry: Arc<ConnRegistry>,
+
+    /// 本连接 id。
+    id: u64,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.registry.unregister(self.id);
+    }
 }
 
 /// 接管已 accept 的 connection:握手守门 → split 出读写两半 → 起唯一 writer 与
@@ -95,6 +136,8 @@ async fn reject_busy(stream: UnixStream) {
 async fn handle_connection(
     stream: UnixStream,
     client: &ClientHandle,
+    registry: &ConnRegistry,
+    conn_id: u64,
     events: &broadcast::Sender<Event>,
     shutdown: &Arc<Notify>,
 ) -> color_eyre::Result<()> {
@@ -102,32 +145,26 @@ async fn handle_connection(
     // 在回 Hello 之前就订阅 hub:保证「client 收到 Hello」之后产生的事件零窗口
     // 不丢(握手期间的事件缓冲在 receiver 里,由 pump 按订阅集过滤)。
     let events_rx = events.subscribe();
-    let Some(subscriptions) = handshake(&mut conn, client).await? else {
+    let Some(info) = handshake(&mut conn, client).await? else {
         return Ok(());
     };
+    let subscriptions = info.subscriptions.clone();
+    registry.set_identity(conn_id, info);
     let (sink, stream) = conn.split();
     // Response 与 Event 汇同一条 mpsc → 唯一 writer 串行写 sink,杜绝并发写。
     let (out_tx, out_rx) = mpsc::unbounded_channel::<Frame>();
     tokio::spawn(write_loop(sink, out_rx));
-    // 订阅 Config / WindowTitle 的 client 先收当前状态重放,再进实时流(pump
-    // 还没起,重放帧必然先入队;events_rx 在握手前已订阅,期间的变更不丢——
-    // 快照与缓冲间可能重复一帧,client 侧 last-wins 幂等)。
-    if subscriptions.contains(&Subscription::Config) {
-        let _ = out_tx.send(Frame::Event(Event::ConfigChanged {
-            config: client.effective_config(),
-        }));
-    }
-    if subscriptions.contains(&Subscription::WindowTitle)
-        && let Some(text) = client.window_title_override()
-    {
-        let _ = out_tx.send(Frame::Event(Event::WindowTitleOverride {
-            text: Some(text),
-        }));
+    // 订阅类别的当前状态先重放,再进实时流(pump 还没起,重放帧必然先入队;
+    // events_rx 在握手前已订阅,期间的变更不丢——快照与缓冲间可能重复一帧,
+    // client 侧 last-wins 幂等)。重放内容按类别见 [`ClientHandle::replay_frames`]。
+    for ev in client.replay_frames(&subscriptions).await {
+        let _ = out_tx.send(Frame::Event(ev));
     }
     let pump = tokio::spawn(event_pump(events_rx, subscriptions, out_tx.clone()));
     let result = read_loop(stream, client, &out_tx, shutdown).await;
-    // client 断开:清终端上报,`terminal` 属性回 None(脚本可感知离线)。
-    client.clear_terminal_state();
+    // client 断开:清本连接的终端上报与 PCM 游标(全部离线时 `terminal`
+    // 属性回 None,脚本可感知离线)。
+    client.connection_closed();
     // 收尾:推送泵立停、放掉本端 out_tx。writer **不 await**——飞行中的 dispatch
     // task(如 love 的远端打点,可达数秒)还持着 out_tx clone,等它们结束才轮到
     // writer 退出;把 busy 的释放拖到慢 dispatch 之后,会让紧接着重连的 client
@@ -141,12 +178,12 @@ async fn handle_connection(
 /// 握手守门:期待首帧 [`Frame::Handshake`],版本不匹配回拒绝;通过回 accept。
 ///
 /// # Return:
-///   `Some(订阅集)` = 握手通过;`None` = 连接该就此关闭(拒绝 / 对端探活即走 /
-///   首帧不是握手)。
+///   `Some(client 身份)` = 握手通过;`None` = 连接该就此关闭(拒绝 / 对端探活
+///   即走 / 首帧不是握手)。
 async fn handshake(
     conn: &mut Framed<UnixStream>,
     client: &ClientHandle,
-) -> color_eyre::Result<Option<Vec<Subscription>>> {
+) -> color_eyre::Result<Option<ClientInfo>> {
     let info = match recv::<Frame, _>(conn).await.wrap_err("等待握手帧")? {
         Some(Frame::Handshake(info)) => info,
         Some(other) => {
@@ -172,7 +209,7 @@ async fn handshake(
     }
     send(conn, &Frame::Hello(ServerHello::accept())).await?;
     mineral_log::debug!(target: "ipc", subscriptions = ?info.subscriptions, "handshake accepted");
-    Ok(Some(info.subscriptions))
+    Ok(Some(info))
 }
 
 /// 唯一 writer:把汇聚的 [`Frame`] 串行写进 sink。写失败即退出(连接已断,
@@ -302,7 +339,6 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.cancel_tasks(filter);
             Response::Ok
         }
-        Request::DrainTaskEvents => Response::TaskEvents(client.drain_task_events()),
         Request::TaskSnapshot => Response::TaskSnapshot(client.task_snapshot()),
         Request::PlaySong(song) => {
             client.play_song(*song);
@@ -412,7 +448,6 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::AudioSnapshot
         | Request::PlayerSync(_)
         | Request::TaskSnapshot
-        | Request::DrainTaskEvents
         | Request::DownloadProgress
         // 拖动 resize 会连发,不记。
         | Request::TerminalState { .. }

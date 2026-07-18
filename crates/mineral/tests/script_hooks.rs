@@ -99,29 +99,16 @@ impl Daemon {
     }
 
     /// 在同一隔离环境下跑 `mineral action <name>`,捕获输出。
-    ///
-    /// busy 拒绝自动重试:单 client daemon 下,daemon bind 后 accept loop 起来前
-    /// 连接先进 backlog——`wait_ready` 的探测连接与本次连接都可能已在队里,
-    /// 探测连接先被 accept 会占掉槽位,本次连接被拒 busy(慢机器上必现)。
     fn action_output(&self, name: &str) -> color_eyre::Result<std::process::Output> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-            cmd.arg("action")
-                .arg(name)
-                .env("XDG_CACHE_HOME", self.root.join("cache"))
-                .env("XDG_CONFIG_HOME", self.root.join("config"))
-                .env("XDG_DATA_HOME", self.root.join("data"))
-                .env("MINERAL_SOCKET_DIR", &self.sock_dir)
-                .stdin(Stdio::null());
-            let out = cmd.output().wrap_err("run `mineral action`")?;
-            let rejected_busy = !out.status.success()
-                && String::from_utf8_lossy(&out.stderr).contains("daemon busy");
-            if !rejected_busy || Instant::now() > deadline {
-                return Ok(out);
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
+        cmd.arg("action")
+            .arg(name)
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("XDG_CONFIG_HOME", self.root.join("config"))
+            .env("XDG_DATA_HOME", self.root.join("data"))
+            .env("MINERAL_SOCKET_DIR", &self.sock_dir)
+            .stdin(Stdio::null());
+        cmd.output().wrap_err("run `mineral action`")
     }
 }
 
@@ -333,6 +320,38 @@ fn action_without_script_reports_disabled() -> color_eyre::Result<()> {
     assert!(
         stderr.contains("脚本未启用"),
         "错误应说明脚本未启用,实得: {stderr}"
+    );
+    Ok(())
+}
+
+/// 多 client 并存:常驻连接挂着时,oneshot CLI 照常服务,且常驻连接不被顶掉。
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_clients_are_served() -> color_eyre::Result<()> {
+    use mineral_protocol::{OneshotClient, Request, Response};
+    let daemon = Daemon::spawn(
+        "multi",
+        Some(
+            r#"
+            mineral.action("e2e.ping", function(ctx) end)
+            return {}
+            "#,
+        ),
+    )?;
+    daemon.wait_ready()?;
+    // 常驻连接:完成握手后一直挂着(模拟常开的 TUI)。
+    let mut resident = OneshotClient::connect(&daemon.socket).await?;
+    // 常驻在线时 oneshot CLI 子进程照常服务(自己连、自己断)。
+    let out = daemon.action_output("e2e.ping")?;
+    assert!(
+        out.status.success(),
+        "常驻连接在线时 oneshot 应照常服务,stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // 常驻连接不受后来 client 影响:随后的请求仍正常应答。
+    let resp = resident.request(Request::DaemonInfo).await?;
+    assert!(
+        matches!(resp, Response::DaemonInfo { .. }),
+        "常驻连接应不被顶掉,实得 {resp:?}"
     );
     Ok(())
 }

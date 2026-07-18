@@ -3,7 +3,7 @@
 //! 每 tick 一次 drain:`PlayUrlReady` / `LyricsReady` 在 server 内部消化
 //! (进 PlayerSync 的 current 重段,不转发);`PlaylistsFetched` 进歌单库
 //! 聚合态(client 只见出口变换后的 LibrarySnapshot);`PlaylistWriteDone`
-//! 成功时先触发缓存收敛再转发;其余原样进 client_events buffer 等 client 拉走。
+//! 成功时先触发缓存收敛再转发;其余经 event hub 推送给订阅 client。
 
 use mineral_model::{PlayUrl, Song, SongId};
 use mineral_task::{ChannelFetchKind, PlaylistWriteOp, Priority, TaskEvent, TaskKind, WriteError};
@@ -86,8 +86,8 @@ impl PlayerCore {
                 other => forward.push(other),
             }
         }
-        if !forward.is_empty() {
-            self.inner.client_events.lock().extend(forward);
+        for ev in forward {
+            self.notify().task_event(ev);
         }
     }
 

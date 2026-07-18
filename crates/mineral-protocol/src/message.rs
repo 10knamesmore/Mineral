@@ -5,7 +5,7 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId};
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
 use crate::{CancelFilter, PlayerSync, PlayerVersions};
@@ -158,9 +158,6 @@ pub enum Request {
     /// 按过滤条件批量取消任务。返回 [`Response::Ok`]。
     CancelTasks(CancelFilter),
 
-    /// 拉走 server 端积攒的所有任务事件。返回 [`Response::TaskEvents`]。
-    DrainTaskEvents,
-
     /// 拉一次 scheduler 状态快照。返回 [`Response::TaskSnapshot`]。
     TaskSnapshot,
 
@@ -309,8 +306,9 @@ pub enum Request {
     ScriptBinds,
 
     // ---- UI 状态上报 ----
-    /// client 上报终端 UI 状态(resize / 全屏切换时发)。daemon 灌属性树
-    /// `terminal` 复合属性供脚本 observe;多 client 后写赢。返回 [`Response::Ok`]。
+    /// client 上报终端 UI 状态(resize / 全屏切换时发)。daemon 按连接归属记录,
+    /// 灌属性树 `terminal` 复合属性供脚本 observe——多终端平等,属性取最近
+    /// 上报的那条,断开只清自己的。返回 [`Response::Ok`]。
     TerminalState {
         /// 终端行数。
         rows: u16,
@@ -329,8 +327,11 @@ pub enum Request {
     // ---- 生命周期 ----
     /// 请求 daemon 优雅退出:先回 [`Response::Ok`] ack,随后走与 SIGTERM
     /// 完全相同的收尾(停 server、清 socket)。`mineral stop` 与 TUI 的
-    /// 「退出并停止 daemon」(Shift+Q)都走这条;对 attach 模式它是唯一通路
+    /// 「退出并停止 daemon」都走这条;对 attach 模式它是唯一通路
     /// (client 没有 daemon 的 pid,发不了信号)。
+    ///
+    /// **任一** client 都可发起,停机殃及所有已连接 client——单人自用语义,
+    /// 不设权限仲裁。
     Shutdown,
 }
 
@@ -345,9 +346,6 @@ pub enum Response {
 
     /// 对应 [`Request::SubmitTask`]。
     TaskId(TaskId),
-
-    /// 对应 [`Request::DrainTaskEvents`]。
-    TaskEvents(Vec<TaskEvent>),
 
     /// 对应 [`Request::TaskSnapshot`]。
     TaskSnapshot(Snapshot),

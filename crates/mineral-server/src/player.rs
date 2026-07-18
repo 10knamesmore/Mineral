@@ -17,7 +17,7 @@ use mineral_persist::ServerStore;
 use mineral_protocol::{
     DownloadProgress, DownloadTarget, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskId, TaskKind};
 use parking_lot::Mutex;
 
 use crate::download::{self, Capturing};
@@ -74,9 +74,10 @@ pub(crate) struct Inner {
     /// 属性 diff 的上次值缓存(background_loop 每 tick 比对)。
     pub(crate) props: crate::props::PropsWatch,
 
-    /// client 上报的终端 UI 状态(`Request::TerminalState` 写、断开清;
-    /// check_props 每 tick 采样灌 `terminal` 属性)。
-    pub(crate) ui_state: Mutex<Option<crate::props::TerminalReport>>,
+    /// 各连接上报的终端 UI 状态(`Request::TerminalState` 写、断开清;
+    /// check_props 每 tick 采样灌 `terminal` 属性,last-wins 裁决见
+    /// [`TerminalStates`](crate::props::TerminalStates))。
+    pub(crate) ui_state: Mutex<crate::props::TerminalStates>,
 
     /// 有效配置宿主(合成底树 + session 覆盖 + 窗口标题覆盖,见 [`crate::config_host`])。
     pub(crate) config_host: crate::config_host::ConfigHost,
@@ -86,9 +87,6 @@ pub(crate) struct Inner {
 
     /// 已转发给 client 的最新 finished seq;auto-next 监听它。
     last_seen_finished_seq: AtomicU64,
-
-    /// PlayUrlReady/LyricsReady 之外的 events 暂存,client drain 时取走。
-    pub(crate) client_events: Mutex<Vec<TaskEvent>>,
 
     /// 包络离线计算的 in-flight 守卫(qualified id):开播 / 预排 / 收割多路
     /// 触发同曲时只解码一次。
@@ -212,11 +210,10 @@ impl PlayerCore {
             notify,
             stats,
             props: crate::props::PropsWatch::default(),
-            ui_state: Mutex::new(None),
+            ui_state: Mutex::new(crate::props::TerminalStates::default()),
             config_host: crate::config_host::ConfigHost::new(config_tree),
             state: Mutex::new(State::empty()),
             last_seen_finished_seq: AtomicU64::new(0),
-            client_events: Mutex::new(Vec::new()),
             envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
             library,
             favorites_lock: tokio::sync::Mutex::new(()),
@@ -258,12 +255,6 @@ impl PlayerCore {
     /// 等无业务语义的低级操作。**不暴露**给 client trait;client 只能调 trait 方法。
     pub(crate) fn audio(&self) -> &AudioHandle {
         &self.inner.audio
-    }
-
-    /// Client 拉走 server 已 filter 的 events(无 PlayUrlReady / LyricsReady,这俩
-    /// server 自己消化了)。
-    pub fn drain_client_events(&self) -> Vec<TaskEvent> {
-        std::mem::take(&mut *self.inner.client_events.lock())
     }
 
     /// 直通:scheduler 状态。

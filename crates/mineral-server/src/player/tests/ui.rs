@@ -267,12 +267,15 @@ async fn window_title_override_forwards_and_diffs() -> color_eyre::Result<()> {
 async fn terminal_prop_follows_report_and_clear() -> color_eyre::Result<()> {
     use mineral_protocol::Event;
     let (core, mut events_rx) = core_with_hub()?;
-    core.set_terminal_state(crate::props::TerminalReport {
-        rows: 50,
-        cols: 220,
-        fullscreen: true,
-        focused: true,
-    });
+    core.set_terminal_state(
+        /*conn*/ 0,
+        crate::props::TerminalReport {
+            rows: 50,
+            cols: 220,
+            fullscreen: true,
+            focused: true,
+        },
+    );
     core.check_props();
     let terminal_of = |rx: &mut tokio::sync::broadcast::Receiver<Event>| {
         // check_props 首轮全量产出,滤出 terminal 一项。
@@ -305,7 +308,7 @@ async fn terminal_prop_follows_report_and_clear() -> color_eyre::Result<()> {
     core.check_props();
     assert_eq!(terminal_of(&mut events_rx), None, "同值不得重复下发");
     // 断开清除:回 None。
-    core.clear_terminal_state();
+    core.clear_terminal_state(/*conn*/ 0);
     core.check_props();
     assert_eq!(
         terminal_of(&mut events_rx),
@@ -327,26 +330,66 @@ async fn set_terminal_state_flags_fullscreen_toggle() -> color_eyre::Result<()> 
         focused: true,
     };
     assert_eq!(
-        core.set_terminal_state(report(/*fullscreen*/ false)),
+        core.set_terminal_state(/*conn*/ 0, report(/*fullscreen*/ false)),
         None,
         "首次上报无前态,不算切换"
     );
     assert_eq!(
-        core.set_terminal_state(report(/*fullscreen*/ true)),
+        core.set_terminal_state(/*conn*/ 0, report(/*fullscreen*/ true)),
         Some(true),
         "翻到全屏应给新值"
     );
     assert_eq!(
-        core.set_terminal_state(report(/*fullscreen*/ true)),
+        core.set_terminal_state(/*conn*/ 0, report(/*fullscreen*/ true)),
         None,
         "等值上报(每 tick)不得重复触发"
     );
     assert_eq!(
-        core.set_terminal_state(report(/*fullscreen*/ false)),
+        core.set_terminal_state(/*conn*/ 0, report(/*fullscreen*/ false)),
         Some(false),
         "翻回非全屏应给新值"
     );
+    // 别的连接翻转不算本连接的切换(fullscreen 前态 per-conn 归属)。
+    assert_eq!(
+        core.set_terminal_state(/*conn*/ 1, report(/*fullscreen*/ true)),
+        None,
+        "另一连接首次上报,不算切换"
+    );
     Ok(())
+}
+
+/// 多终端 last-wins:`terminal` 属性取最近上报的连接;最近者断开回落到
+/// 次近;全部断开回 None。
+#[test]
+fn terminal_states_last_wins_and_fallback() {
+    let mut states = crate::props::TerminalStates::default();
+    let report = |rows: u16| crate::props::TerminalReport {
+        rows,
+        cols: 100,
+        fullscreen: false,
+        focused: true,
+    };
+    states.set(/*conn*/ 1, report(24));
+    states.set(/*conn*/ 2, report(50));
+    assert_eq!(
+        states.current().map(|t| t.rows),
+        Some(50),
+        "最近上报者(conn 2)生效"
+    );
+    states.set(/*conn*/ 1, report(30));
+    assert_eq!(
+        states.current().map(|t| t.rows),
+        Some(30),
+        "conn 1 再上报即顶替(无主终端,谁新谁生效)"
+    );
+    states.remove(/*conn*/ 1);
+    assert_eq!(
+        states.current().map(|t| t.rows),
+        Some(50),
+        "最近者断开,回落到次近(conn 2)"
+    );
+    states.remove(/*conn*/ 2);
+    assert_eq!(states.current(), None, "全部离线回 None");
 }
 
 /// 插播插到当前位置后、追加进末尾,当前位置不动;shuffle 下 original_queue 同步。

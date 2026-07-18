@@ -12,7 +12,7 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind};
 use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions, SongStatsWire};
 use mineral_server::Client;
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
@@ -310,9 +310,6 @@ impl Client for TestClient {
         TaskId::default()
     }
     fn cancel_tasks(&self, _filter: CancelFilter) {}
-    fn drain_task_events(&self) -> Vec<TaskEvent> {
-        Vec::new()
-    }
     fn task_snapshot(&self) -> Snapshot {
         Snapshot {
             running: 0,

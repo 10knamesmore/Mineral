@@ -37,8 +37,12 @@ pub struct ClientHandle {
     pcm: PcmPuller,
 
     /// event hub 订阅端(in-proc 推送通路:Toast / StoreChanged 等;
-    /// 多 clone 共享同一订阅,与「单 client」语义一致)。
+    /// 多 clone 共享同一订阅——in-proc 只有一个消费者)。
     events: std::sync::Arc<parking_lot::Mutex<tokio::sync::broadcast::Receiver<Event>>>,
+
+    /// 本 handle 归属的连接 id:wire 接入经 [`Self::for_connection`] 每连接
+    /// 唯一,per-conn 状态(终端上报 / PCM 游标)以它归属;in-proc 恒 0。
+    conn: u64,
 }
 
 impl ClientHandle {
@@ -52,7 +56,18 @@ impl ClientHandle {
             player,
             pcm,
             events: std::sync::Arc::new(parking_lot::Mutex::new(events)),
+            conn: 0,
         }
+    }
+
+    /// 派生某条 wire 连接专属的 handle(serve 层 accept 时调)。
+    ///
+    /// # Params:
+    ///   - `conn`: 连接 id(注册表分配,进程内唯一)
+    pub(crate) fn for_connection(&self, conn: u64) -> Self {
+        let mut handle = self.clone();
+        handle.conn = conn;
+        handle
     }
 
     /// 切换一首歌的 love(♥)状态:本地 persist 事实来源必写 + 尽力镜像远端,返回切换后的新态。
@@ -221,9 +236,51 @@ impl ClientHandle {
         self.player.window_title_override()
     }
 
-    /// client 断开时清空终端状态(serve 层连接收尾调;`terminal` 属性回 None)。
-    pub(crate) fn clear_terminal_state(&self) {
-        self.player.clear_terminal_state();
+    /// 按握手订阅集组装重放帧:各订阅类别的当前状态快照,先于实时流下发,
+    /// 新 client 无须等待下一次变更即拿到完整现状。
+    ///
+    /// # Params:
+    ///   - `subscriptions`: 握手声明的订阅集
+    ///
+    /// # Return:
+    ///   重放帧序列(无需重放的类别不产帧)。
+    pub(crate) async fn replay_frames(
+        &self,
+        subscriptions: &[mineral_protocol::Subscription],
+    ) -> Vec<Event> {
+        use mineral_protocol::Subscription;
+        let mut frames = Vec::new();
+        if subscriptions.contains(&Subscription::Config) {
+            frames.push(Event::ConfigChanged {
+                config: self.effective_config(),
+            });
+        }
+        if subscriptions.contains(&Subscription::WindowTitle)
+            && let Some(text) = self.window_title_override()
+        {
+            frames.push(Event::WindowTitleOverride { text: Some(text) });
+        }
+        if subscriptions.contains(&Subscription::Task) {
+            if let Some(playlists) = self.player.library().cached_snapshot() {
+                frames.push(Event::Task(Box::new(TaskEvent::LibrarySnapshot {
+                    playlists,
+                })));
+            }
+            for (source, ids) in self.player.favorited_ids_by_source().await {
+                frames.push(Event::Task(Box::new(TaskEvent::LikedSongIdsFetched {
+                    source,
+                    ids,
+                })));
+            }
+        }
+        frames
+    }
+
+    /// 本连接断开的收尾(serve 层连接收尾调):移除其终端上报(全部离线时
+    /// `terminal` 属性回 None)与 PCM 游标。
+    pub(crate) fn connection_closed(&self) {
+        self.player.clear_terminal_state(self.conn);
+        self.pcm.drop_cursor(self.conn);
     }
 
     /// 拉取脚本 bind 表(serve 层处理 `ScriptBinds` 用);无脚本 / 线程退出为空。
@@ -378,8 +435,6 @@ pub trait Client: Send + Sync {
     fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId;
     /// 按 [`CancelFilter`] 批量取消。
     fn cancel_tasks(&self, filter: CancelFilter);
-    /// 拉走 server 端积攒的任务事件(已 filter,不含 PlayUrlReady/LyricsReady)。
-    fn drain_task_events(&self) -> Vec<TaskEvent>;
     /// 当前 scheduler 状态快照。
     fn task_snapshot(&self) -> Snapshot;
 
@@ -495,9 +550,9 @@ pub trait Client: Send + Sync {
     /// (调用方已在退出路径上,无从补救也无需提示)。
     fn request_daemon_shutdown(&self) {}
 
-    /// 拉走 server 主动推送的 [`mineral_protocol::Event`](与轮询式
-    /// [`Self::drain_task_events`] 是两条通道:这条是握手订阅后 server 随时下推、
-    /// client 侧缓冲,每 tick drain)。
+    /// 拉走 server 主动推送的 [`mineral_protocol::Event`](握手订阅后 server
+    /// 随时下推、client 侧缓冲,每 tick drain;任务 / 数据事件也经
+    /// [`mineral_protocol::Event::Task`] 走此通道)。
     ///
     /// 跨进程实现(`RemoteClient`)返回缓冲的推送;同进程 / 测试实现用默认空
     /// (in-proc 无推送通道,Phase 1 也没有 daemon 内生产者面向 in-proc)。
@@ -608,10 +663,6 @@ impl Client for ClientHandle {
         self.player.cancel_tasks_where(move |k| filter.matches(k));
         self.record_behavior(mineral_stats::BehaviorEvent::TaskCancel { filter_tags });
     }
-    fn drain_task_events(&self) -> Vec<TaskEvent> {
-        self.player.drain_client_events()
-    }
-
     fn drain_events(&self) -> Vec<Event> {
         let mut rx = self.events.lock();
         let mut events = Vec::new();
@@ -631,7 +682,7 @@ impl Client for ClientHandle {
     }
 
     fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32) {
-        self.pcm.pull(n)
+        self.pcm.pull(self.conn, n)
     }
 
     fn toggle_love(&self, song: Song) -> bool {
@@ -664,14 +715,15 @@ impl Client for ClientHandle {
     }
 
     fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
-        let toggled = self
-            .player
-            .set_terminal_state(crate::props::TerminalReport {
+        let toggled = self.player.set_terminal_state(
+            self.conn,
+            crate::props::TerminalReport {
                 rows,
                 cols,
                 fullscreen,
                 focused,
-            });
+            },
+        );
         // 埋点:全屏切换(fullscreen_changes;仅在相对前态翻转时,滤掉每 tick 的等值上报)。
         if let Some(fullscreen) = toggled {
             self.record_behavior(mineral_stats::BehaviorEvent::FullscreenChange { fullscreen });

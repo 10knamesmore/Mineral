@@ -254,13 +254,10 @@ impl PlayerCore {
             for p in &playlists {
                 match channel.playlist_detail(&p.id).await {
                     Ok(playlist) => {
-                        self.inner
-                            .client_events
-                            .lock()
-                            .push(TaskEvent::PlaylistDetailFetched {
-                                id: p.id.clone(),
-                                playlist: Box::new(playlist),
-                            });
+                        self.notify().task_event(TaskEvent::PlaylistDetailFetched {
+                            id: p.id.clone(),
+                            playlist: Box::new(playlist),
+                        });
                     }
                     Err(e) => {
                         mineral_log::debug!(
@@ -412,12 +409,25 @@ impl PlayerCore {
         }
     }
 
-    /// 把给定 favorited 集推进 client_events(供 client 装饰)。
+    /// 把给定 favorited 集经 event hub 推给订阅 client(供 client 装饰)。
     fn emit_favorited_ids(&self, source: SourceKind, ids: FxHashSet<SongId>) {
-        self.inner
-            .client_events
-            .lock()
-            .push(TaskEvent::LikedSongIdsFetched { source, ids });
+        self.notify()
+            .task_event(TaskEvent::LikedSongIdsFetched { source, ids });
+    }
+
+    /// 各已注册 source 的 canonical 收藏集(persist 现读)。握手重放用:
+    /// 新订阅 client 先拿当前状态,再进实时流。
+    pub(crate) async fn favorited_ids_by_source(&self) -> Vec<(SourceKind, FxHashSet<SongId>)> {
+        let sources = self
+            .channels()
+            .iter()
+            .map(|ch| ch.source())
+            .collect::<Vec<SourceKind>>();
+        let mut out = Vec::with_capacity(sources.len());
+        for source in sources {
+            out.push((source, self.load_favorited_ids(source).await));
+        }
+        out
     }
 
     /// 读 persist canonical + 推。**调用方须持 [`Inner::favorites_lock`](crate::player)**,

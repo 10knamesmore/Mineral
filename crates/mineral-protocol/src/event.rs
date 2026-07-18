@@ -122,6 +122,10 @@ pub enum Event {
         /// 顶替键(与 [`Event::Toast`] / [`Event::Card`] 的 `id` 同一命名空间)。
         id: String,
     },
+
+    /// 任务 / 数据事件(歌单库快照、收藏集、搜索结果、下钻详情等,见
+    /// [`mineral_task::TaskEvent`])。`Box` 避免 enum 体积膨胀(载荷含整表歌单)。
+    Task(Box<mineral_task::TaskEvent>),
 }
 
 impl Event {
@@ -140,6 +144,7 @@ impl Event {
             Self::BusMessage { .. } => Subscription::Bus,
             Self::ConfigChanged { .. } => Subscription::Config,
             Self::WindowTitleOverride { .. } => Subscription::WindowTitle,
+            Self::Task(_) => Subscription::Task,
         }
     }
 }

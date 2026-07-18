@@ -76,6 +76,7 @@ async fn playlist_write_done_forwards_and_triggers_refetch() -> color_eyre::Resu
         /*music_dir*/ None,
         MediaCache::disabled(),
     )?;
+    let mut rx = core.notify().subscribe();
     let h = core.inner.scheduler.submit(
         mineral_task::TaskKind::PlaylistWrite(mineral_task::PlaylistWriteOp::Create {
             source: SourceKind::NETEASE,
@@ -85,7 +86,7 @@ async fn playlist_write_done_forwards_and_triggers_refetch() -> color_eyre::Resu
     );
     assert_eq!(h.done().await, mineral_task::TaskOutcome::Ok);
     core.consume_events_once();
-    let evs = core.drain_client_events();
+    let evs = drain_hub_task_events(&mut rx);
     assert!(
         evs.iter().any(|e| matches!(
             e,
@@ -100,7 +101,7 @@ async fn playlist_write_done_forwards_and_triggers_refetch() -> color_eyre::Resu
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(5)).await;
         core.consume_events_once();
-        if core.drain_client_events().iter().any(|e| {
+        if drain_hub_task_events(&mut rx).iter().any(|e| {
             matches!(
                 e,
                 mineral_task::TaskEvent::LibrarySnapshot { playlists }
@@ -124,11 +125,15 @@ fn named_playlist(id: &str, name: &str) -> Playlist {
 }
 
 /// 轮询 consume + drain 直到收到一条 `LibrarySnapshot`,返回其载荷。
-async fn wait_snapshot(core: &PlayerCore) -> color_eyre::Result<Vec<Playlist>> {
+/// `rx` 须在触发动作前订阅(broadcast 不补发历史)。
+async fn wait_snapshot(
+    core: &PlayerCore,
+    rx: &mut tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
+) -> color_eyre::Result<Vec<Playlist>> {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         core.consume_events_once();
-        for ev in core.drain_client_events() {
+        for ev in drain_hub_task_events(rx) {
             if let mineral_task::TaskEvent::LibrarySnapshot { playlists } = ev {
                 return Ok(playlists);
             }
@@ -205,8 +210,9 @@ async fn library_snapshot_identity_without_script() -> color_eyre::Result<()> {
         /*music_dir*/ None,
         MediaCache::disabled(),
     )?;
+    let mut rx = core.notify().subscribe();
     core.submit_my_playlists(SourceKind::NETEASE);
-    let snapshot = wait_snapshot(&core).await?;
+    let snapshot = wait_snapshot(&core, &mut rx).await?;
     let names = snapshot
         .iter()
         .map(|p| p.name.as_str())
@@ -240,8 +246,9 @@ async fn library_snapshot_applies_curate_functions() -> color_eyre::Result<()> {
             named_playlist("p2", "稍后再看"),
         ],
     )?;
+    let mut rx = core.notify().subscribe();
     core.submit_my_playlists(SourceKind::NETEASE);
-    let snapshot = wait_snapshot(&core).await?;
+    let snapshot = wait_snapshot(&core, &mut rx).await?;
     let names = snapshot
         .iter()
         .map(|p| p.name.as_str())
@@ -259,8 +266,9 @@ async fn library_snapshot_applies_curate_functions() -> color_eyre::Result<()> {
 async fn library_failure_concludes_with_empty_snapshot() -> color_eyre::Result<()> {
     // RecordingChannel playlists: None → my_playlists NotSupported → 任务 Failed。
     let core = core_with(Arc::default())?;
+    let mut rx = core.notify().subscribe();
     core.submit_my_playlists(SourceKind::NETEASE);
-    let snapshot = wait_snapshot(&core).await?;
+    let snapshot = wait_snapshot(&core, &mut rx).await?;
     assert!(snapshot.is_empty(), "失败源空贡献,快照为空但必须到达");
     Ok(())
 }
@@ -346,6 +354,7 @@ async fn toggle_favorite_persists_locally_even_when_remote_unsupported() -> colo
     let scope = persist.scope(SourceKind::NETEASE);
     assert!(!scope.is_loved(&id).await?, "初始未收藏");
 
+    let mut rx = core.notify().subscribe();
     let new = core
         .toggle_favorite(&track, mineral_stats::Actor::User)
         .await?;
@@ -360,7 +369,7 @@ async fn toggle_favorite_persists_locally_even_when_remote_unsupported() -> colo
         "toggle 应顺手 upsert_meta"
     );
     // toggle 后推 canonical(供装饰自愈,不只靠 client 乐观翻转)。
-    let events = core.drain_client_events();
+    let events = drain_hub_task_events(&mut rx);
     let pushed = events
         .iter()
         .rev()
@@ -408,12 +417,13 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         MediaCache::disabled(),
     )?;
     let track = song("agg1");
+    let mut rx = core.notify().subscribe();
     core.toggle_favorite(&track, mineral_stats::Actor::User)
         .await?;
 
     // detail 同步推;LibrarySnapshot 经 library_concluded 出口管线异步落地——轮询累积到它为止
     // (不能只 drain 一次:snapshot 可能尚未产出,或与首次 drain 竞争被吞)。
-    let mut events = core.drain_client_events();
+    let mut events = drain_hub_task_events(&mut rx);
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !events
         .iter()
@@ -424,7 +434,7 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
         core.consume_events_once();
-        events.extend(core.drain_client_events());
+        events.extend(drain_hub_task_events(&mut rx));
     }
 
     let detail = events
@@ -565,7 +575,7 @@ async fn meta_backfill_covers_all_sources() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// sync_favorites 把远端红心导入本地 persist(add-only,不删本地),并向 client_events
+/// sync_favorites 把远端红心导入本地 persist(add-only,不删本地),并向 event hub
 /// 推 canonical(persist)favorited 集。回归:导入不得删掉本地独有的收藏(本地为准)。
 #[tokio::test]
 async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Result<()> {
@@ -586,6 +596,7 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
         liked_ids: Some(remote),
         playlists: None,
     });
+    let mut rx = core.notify().subscribe();
     core.sync_favorites(SourceKind::NETEASE, channel).await;
 
     let ids = persist.scope(SourceKind::NETEASE).loved_ids().await?;
@@ -593,7 +604,7 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
     assert!(ids.contains(&local_only), "本地独有 B 不被删(本地为准)");
     assert_eq!(ids.len(), 2, "persist 应为 A ∪ B");
 
-    let events = core.drain_client_events();
+    let events = drain_hub_task_events(&mut rx);
     let last = events
         .iter()
         .rev()

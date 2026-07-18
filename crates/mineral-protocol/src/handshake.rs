@@ -113,13 +113,12 @@ impl ServerHello {
     /// oneshot 与长连接 client 共用)。
     ///
     /// # Errors
-    /// 握手被拒(busy / 版本不匹配)。
+    /// 握手被拒(版本不匹配)。
     pub fn ensure_accepted(&self) -> color_eyre::Result<()> {
         if self.accepted {
             return Ok(());
         }
         match self.reason {
-            Some(RejectReason::Busy) => Err(eyre!("daemon busy:已有另一个 client 连接")),
             Some(RejectReason::VersionMismatch) => Err(eyre!(
                 "daemon 版本 {} 与 client 版本 {} 不一致,请重启 daemon",
                 self.version,
@@ -143,9 +142,6 @@ impl ServerHello {
 /// 握手被拒的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RejectReason {
-    /// 已有 client 占用(单 client 限制)。
-    Busy,
-
     /// 两端包版本不一致(多见于升级后旧 daemon 仍在跑,重启 daemon 即解)。
     VersionMismatch,
 }
@@ -215,4 +211,10 @@ pub enum Subscription {
     /// 内置 TUI 订阅;订阅时握手后重放当前覆盖(若有)。独立于 [`Self::Config`]:
     /// 标题覆盖是高频直通的渲染产物,不参与配置合成。
     WindowTitle,
+
+    /// 任务 / 数据事件([`Event::Task`](crate::Event::Task),内置 TUI 订阅)。
+    /// 订阅时握手后先重放当前数据快照(歌单库合并快照 + 各源收藏集)再进实时流;
+    /// 请求-响应类载荷(搜索 / 下钻详情)广播给全部订阅者,client 按自身在途
+    /// 请求配对,配不上的直接丢。
+    Task,
 }

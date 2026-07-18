@@ -308,12 +308,11 @@ fn core_with_events_stats(
         notify: crate::notify::Notifier::new(events, script),
         stats,
         props: crate::props::PropsWatch::default(),
-        ui_state: Mutex::new(None),
+        ui_state: Mutex::new(crate::props::TerminalStates::default()),
         // 真实默认树:覆盖类测试要经它过落型校验,空树会把一切覆盖判坏。
         config_host: crate::config_host::ConfigHost::new(mineral_config::default_tree()?),
         state: Mutex::new(State::empty()),
         last_seen_finished_seq: AtomicU64::new(0),
-        client_events: Mutex::new(Vec::new()),
         envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
         library,
         favorites_lock: tokio::sync::Mutex::new(()),
@@ -336,6 +335,20 @@ fn core_with_events_stats(
         ),
     });
     Ok(PlayerCore { inner })
+}
+
+/// 从 hub 订阅端取走已推送的任务事件([`mineral_protocol::Event::Task`] 拆箱,
+/// 其余类别忽略)。订阅必须先于触发动作,broadcast 不补发历史。
+fn drain_hub_task_events(
+    rx: &mut tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
+) -> Vec<mineral_task::TaskEvent> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let mineral_protocol::Event::Task(te) = ev {
+            out.push(*te);
+        }
+    }
+    out
 }
 
 /// 让出执行若干次,给 fire-and-forget 的 `tokio::spawn(on_played)` 跑完。

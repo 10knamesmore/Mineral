@@ -89,6 +89,22 @@ impl Notifier {
         }
     }
 
+    /// 订阅 wire 路 event hub(测试直收推送断言用;订阅须先于触发动作,
+    /// broadcast 不补发历史)。
+    #[cfg(test)]
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
+    }
+
+    /// 任务 / 数据事件(库快照、收藏集、搜索结果、下钻详情等)→ wire 订阅推送。
+    /// 脚本路不投递:任务结果无脚本 hook 面,脚本要数据走 query 停靠。
+    ///
+    /// # Params:
+    ///   - `ev`: 任务事件载荷
+    pub(crate) fn task_event(&self, ev: mineral_task::TaskEvent) {
+        let _ = self.events.send(Event::Task(Box::new(ev)));
+    }
+
     /// 推一条匿名 toast 给订阅 client(下载不可用 / 失败等 daemon 侧提示)。
     ///
     /// # Params:

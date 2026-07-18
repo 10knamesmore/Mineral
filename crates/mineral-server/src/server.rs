@@ -1,7 +1,6 @@
 //! [`Server`]:audio engine + scheduler + PlayerCore + PCM puller 的单进程收纳容器。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use mineral_audio::{AudioHandle, AudioMode};
@@ -28,9 +27,9 @@ pub struct Server {
     /// PCM 中继 — 收纳 SpectrumTap,client 通过 pull_pcm 拉。
     pcm: PcmPuller,
 
-    /// 单 client 占用标志,与 [`serve::run`] 的 accept loop 共享:心跳据此报
-    /// `client_connected`(daemon 当前有没有 TUI 连着)。
-    busy: Arc<AtomicBool>,
+    /// 在线连接注册表,与 [`serve::run`] 的 accept loop 共享:心跳据此报
+    /// 在线 client 数。
+    connections: Arc<serve::ConnRegistry>,
 
     /// Event 推送 hub:生产者(脚本运行时 / 将来的 daemon 内事件源)经
     /// [`Server::event_sink`] 拿发送端;每条 client 连接握手后 subscribe,按
@@ -99,17 +98,17 @@ impl Server {
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
         let pcm = PcmPuller::spawn(spectrum_tap);
-        let busy = Arc::new(AtomicBool::new(false));
+        let connections = Arc::new(serve::ConnRegistry::new());
         tokio::spawn(heartbeat(
             player.clone(),
-            Arc::clone(&busy),
+            Arc::clone(&connections),
             *config.daemon().heartbeat_secs(),
         ));
         mineral_log::debug!(target: "server", "server components ready");
         Ok(Self {
             player,
             pcm,
-            busy,
+            connections,
             events,
             shutdown: Arc::new(Notify::new()),
         })
@@ -161,19 +160,19 @@ impl Server {
     }
 
     /// IPC accept loop:每条新 connection 走握手守门 + [`mineral_protocol::Frame`]
-    /// 管线(id 配对应答 + 订阅过滤的 Event 下推)。**单 client 限制**——已有
-    /// connection 时后续 incoming 不等握手直接收 `Hello { Busy }`。
+    /// 管线(id 配对应答 + 订阅过滤的 Event 下推)。多 client:连接数不设限,
+    /// 每条独立 task / writer / 订阅。
     ///
     /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
-    /// (新 client 先拿聚合态缓存的 LibrarySnapshot,再收重拉后的新快照 /
-    /// LikedSongIdsFetched events)。
+    /// ——数据现状已由握手重放兜底,这里是连接时顺手保鲜远端数据
+    /// (dedup 命中既存任务时无副作用)。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
         serve::run(
             listener,
             self.client(),
-            Arc::clone(&self.busy),
+            Arc::clone(&self.connections),
             self.events.clone(),
             on_connect,
             Arc::clone(&self.shutdown),
@@ -255,7 +254,7 @@ async fn restore_last_session(player: &PlayerCore) -> bool {
 ///
 /// # Params:
 ///   - `interval_secs`: 心跳间隔(秒,配置 `daemon.heartbeat_secs`)
-async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>, interval_secs: u64) {
+async fn heartbeat(player: PlayerCore, connections: Arc<serve::ConnRegistry>, interval_secs: u64) {
     let start = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
     loop {
@@ -286,7 +285,7 @@ async fn heartbeat(player: PlayerCore, busy: Arc<AtomicBool>, interval_secs: u64
         mineral_log::info!(
             target: "heartbeat",
             uptime_s = start.elapsed().as_secs(),
-            client_connected = busy.load(Ordering::Relaxed),
+            clients_online = connections.online(),
             playing = audio.playing,
             position_ms = audio.position_ms,
             duration_ms = audio.duration_ms,

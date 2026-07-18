@@ -98,7 +98,6 @@ async fn round_trip_handshake_frame() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn round_trip_hello_accept_and_reject() -> color_eyre::Result<()> {
     frame_round_trips(Frame::Hello(ServerHello::accept())).await?;
-    frame_round_trips(Frame::Hello(ServerHello::reject(RejectReason::Busy))).await?;
     frame_round_trips(Frame::Hello(ServerHello::reject(
         RejectReason::VersionMismatch,
     )))
@@ -175,6 +174,12 @@ async fn round_trip_event_variants() -> color_eyre::Result<()> {
         id: "config.reload".to_owned(),
     }))
     .await?;
+    frame_round_trips(Frame::Event(Event::Task(Box::new(
+        mineral_task::TaskEvent::LibrarySnapshot {
+            playlists: Vec::new(),
+        },
+    ))))
+    .await?;
     Ok(())
 }
 
@@ -226,6 +231,34 @@ fn dual_codec_event_and_handshake() -> color_eyre::Result<()> {
     })?;
     dual_codec_roundtrip(&ClientInfo::new(vec![Subscription::Lifecycle]))?;
     dual_codec_roundtrip(&ServerHello::reject(RejectReason::VersionMismatch))?;
+    dual_codec_roundtrip(&Event::Task(Box::new(
+        mineral_task::TaskEvent::LikedSongIdsFetched {
+            source: SourceKind::NETEASE,
+            ids: [SongId::new(SourceKind::NETEASE, "7")]
+                .into_iter()
+                .collect(),
+        },
+    )))?;
+    dual_codec_roundtrip(&Event::Task(Box::new(
+        mineral_task::TaskEvent::PlaylistWriteDone {
+            op: mineral_task::PlaylistWriteOp::Create {
+                source: SourceKind::NETEASE,
+                name: "新歌单".to_owned(),
+            },
+            error: Some(mineral_task::WriteError::RateLimited),
+        },
+    )))?;
+    dual_codec_roundtrip(&Event::Task(Box::new(
+        mineral_task::TaskEvent::PlaylistWriteDone {
+            op: mineral_task::PlaylistWriteOp::Delete {
+                id: mineral_model::PlaylistId::new(SourceKind::NETEASE, "9"),
+            },
+            error: Some(mineral_task::WriteError::Api {
+                code: 502,
+                message: "歌曲已存在".to_owned(),
+            }),
+        },
+    )))?;
     Ok(())
 }
 
@@ -323,6 +356,13 @@ fn event_subscription_mapping() {
         }
         .subscription(),
         Subscription::Toast
+    );
+    assert_eq!(
+        Event::Task(Box::new(mineral_task::TaskEvent::LibrarySnapshot {
+            playlists: Vec::new(),
+        }))
+        .subscription(),
+        Subscription::Task
     );
 }
 
@@ -435,7 +475,7 @@ async fn oneshot_pairs_response_and_skips_events() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// oneshot client:握手被拒(busy)时 from_stream 直接报人话错误。
+/// oneshot client:握手被拒(版本不匹配)时 from_stream 直接报人话错误。
 #[tokio::test]
 async fn oneshot_rejected_handshake_bails() -> color_eyre::Result<()> {
     let (client_side, server_side) = duplex(64 * 1024);
@@ -446,7 +486,7 @@ async fn oneshot_rejected_handshake_bails() -> color_eyre::Result<()> {
             .ok_or_else(|| eyre!("server 没收到握手"))?;
         send(
             &mut conn,
-            &Frame::Hello(ServerHello::reject(RejectReason::Busy)),
+            &Frame::Hello(ServerHello::reject(RejectReason::VersionMismatch)),
         )
         .await?;
         Ok::<(), color_eyre::Report>(())
@@ -456,7 +496,7 @@ async fn oneshot_rejected_handshake_bails() -> color_eyre::Result<()> {
         Ok(_) => return Err(eyre!("被拒的握手不该成功")),
         Err(e) => format!("{e:#}"),
     };
-    assert!(err.contains("busy"), "错误信息应说明 busy,实际:{err}");
+    assert!(err.contains("版本"), "错误信息应说明版本不匹配,实际:{err}");
     server.await??;
     Ok(())
 }
@@ -606,10 +646,7 @@ mod proptests {
             ],
             0..4,
         );
-        let reject = prop_oneof![
-            Just(RejectReason::Busy),
-            Just(RejectReason::VersionMismatch)
-        ];
+        let reject = Just(RejectReason::VersionMismatch);
         prop_oneof![
             subs.prop_map(|s| Frame::Handshake(ClientInfo::new(s))),
             LazyJust::new(|| Frame::Hello(ServerHello::accept())),

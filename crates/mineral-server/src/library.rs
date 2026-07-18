@@ -143,7 +143,7 @@ impl Library {
     }
 
     /// 缓存快照(新 client 接入即时下发用);还没有任何源结论时为 `None`。
-    fn cached_snapshot(&self) -> Option<Vec<Playlist>> {
+    pub(crate) fn cached_snapshot(&self) -> Option<Vec<Playlist>> {
         let st = self.state.lock();
         if st.raw.is_empty() {
             None
@@ -222,10 +222,8 @@ impl PlayerCore {
     /// 新 client 接入的即时快照(有缓存才推,避免连接瞬间显示空库假象)。
     pub(crate) fn push_cached_library_snapshot(&self) {
         if let Some(playlists) = self.library().cached_snapshot() {
-            self.inner
-                .client_events
-                .lock()
-                .push(TaskEvent::LibrarySnapshot { playlists });
+            self.notify()
+                .task_event(TaskEvent::LibrarySnapshot { playlists });
         }
     }
 
@@ -242,12 +240,9 @@ impl PlayerCore {
         let merged = library.merged_input();
         let snapshot = self.curate_via_script(/*source*/ None, merged).await;
         let parked = library.commit_snapshot(snapshot.clone());
-        self.inner
-            .client_events
-            .lock()
-            .push(TaskEvent::LibrarySnapshot {
-                playlists: snapshot.clone(),
-            });
+        self.notify().task_event(TaskEvent::LibrarySnapshot {
+            playlists: snapshot.clone(),
+        });
         if parked.is_empty() {
             return;
         }

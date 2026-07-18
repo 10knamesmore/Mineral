@@ -224,7 +224,6 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::CyclePlayMode).await?;
     req_round_trips(Request::PrevOrRestart).await?;
     req_round_trips(Request::NextSong).await?;
-    req_round_trips(Request::DrainTaskEvents).await?;
     req_round_trips(Request::TaskSnapshot).await?;
     req_round_trips(Request::PlayerSync(PlayerVersions {
         queue: 3,
@@ -363,7 +362,6 @@ async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
 async fn round_trip_responses() -> color_eyre::Result<()> {
     resp_round_trips(Response::Ok).await?;
     resp_round_trips(Response::TaskId(TaskId::default())).await?;
-    resp_round_trips(Response::TaskEvents(Vec::new())).await?;
     resp_round_trips(Response::TaskSnapshot(Snapshot {
         running: 2,
         by_lane: Default::default(),
@@ -446,7 +444,6 @@ mod proptests {
             Just(Request::Resume),
             Just(Request::Stop),
             Just(Request::AudioSnapshot),
-            Just(Request::DrainTaskEvents),
             Just(Request::TaskSnapshot),
             Just(Request::CyclePlayMode),
             Just(Request::PrevOrRestart),
@@ -624,31 +621,6 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
         fullscreen: false,
         focused: true,
     })
-    .await?;
-    Ok(())
-}
-
-/// 写完结事件(成功与带错误)经 TaskEvents 响应的 round-trip。
-#[tokio::test]
-async fn round_trip_playlist_write_done_events() -> color_eyre::Result<()> {
-    resp_round_trips(Response::TaskEvents(vec![
-        mineral_task::TaskEvent::PlaylistWriteDone {
-            op: mineral_task::PlaylistWriteOp::Create {
-                source: SourceKind::NETEASE,
-                name: String::from("新歌单"),
-            },
-            error: None,
-        },
-        mineral_task::TaskEvent::PlaylistWriteDone {
-            op: mineral_task::PlaylistWriteOp::Delete {
-                id: PlaylistId::new(SourceKind::NETEASE, "9"),
-            },
-            error: Some(mineral_task::WriteError::Api {
-                code: 502,
-                message: String::from("歌曲已存在"),
-            }),
-        },
-    ]))
     .await?;
     Ok(())
 }

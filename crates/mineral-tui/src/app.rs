@@ -303,7 +303,6 @@ impl App {
                     self.last_tick = Instant::now();
                     continue;
                 }
-                self.drain_task_events();
                 self.drain_push_events();
                 let snap = self.client.audio_snapshot();
                 self.state.playback.apply_audio_snapshot(snap);
@@ -430,25 +429,18 @@ impl App {
         }
     }
 
-    /// 把 server 端积攒的 task events 拉过来 apply 到 [`AppState`]。
-    /// (瞬时提示不走这条通道 —— daemon 经 [`Self::drain_push_events`] 的
-    /// `Event::Toast` 推送。)
-    fn drain_task_events(&mut self) {
-        let events = self.client.drain_task_events();
-        for ev in &events {
-            self.state.apply(ev);
-            // apply 落数据后,容器播放意图在此兑现(入队走 client,state.apply 够不着)。
-            self.fulfill_pending_container(ev);
-        }
-    }
-
-    /// 取走 server 主动推送的 event 缓冲并逐条消费(与轮询式
-    /// [`Self::drain_task_events`] 是两条通道)。`ScriptReloaded` 在这里
-    /// 分流(刷新脚本 bind 键),其余进通知层翻译
+    /// 取走 server 主动推送的 event 缓冲并逐条消费。`Event::Task` 是任务 /
+    /// 数据事件(库快照 / 收藏集 / 搜索结果等),apply 进 [`AppState`];
+    /// `ScriptReloaded` 分流(刷新脚本 bind 键),其余进通知层翻译
     /// ([`crate::components::toast::push::apply_event`])。
     fn drain_push_events(&mut self) {
         for ev in self.client.drain_events() {
             match ev {
+                mineral_protocol::Event::Task(te) => {
+                    self.state.apply(&te);
+                    // apply 落数据后,容器播放意图在此兑现(入队走 client,state.apply 够不着)。
+                    self.fulfill_pending_container(&te);
+                }
                 mineral_protocol::Event::ScriptReloaded => self.refresh_script_binds(),
                 mineral_protocol::Event::ConfigChanged { config } => {
                     self.apply_pushed_config(config);

@@ -46,7 +46,6 @@ fn audit_request(req: &Request) -> TrackingDecision {
             NotAnEvent("任务提交;取数事件在 task 终态记,见 audit_fetch_kind")
         }
         Request::CancelTasks(..) => Recorded("task_cancels"),
-        Request::DrainTaskEvents => NotAnEvent("轮询读:排空任务事件"),
         Request::TaskSnapshot => NotAnEvent("轮询读:任务快照"),
         Request::PlaySong(..) => Recorded("plays"),
         Request::SetQueue { .. } => Recorded("queue_ops"),

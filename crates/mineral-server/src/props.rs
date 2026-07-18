@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use crate::player::PlayerCore;
 
 /// client 上报的终端 UI 状态(`Request::TerminalState` 写入、断开清除;
-/// 每 tick 采样灌 `terminal` 复合属性)。多 client 后写赢。
+/// 每 tick 采样灌 `terminal` 复合属性)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalReport {
     /// 终端行数。
@@ -25,6 +25,42 @@ pub(crate) struct TerminalReport {
 
     /// 终端窗口是否持有输入焦点。
     pub(crate) focused: bool,
+}
+
+/// 各连接的终端上报 + last-wins 序:多终端平等,无主终端概念——`terminal`
+/// 属性读**最近更新**的那条;断开只清自己的,若恰是最近者则回落到其余里
+/// 最近更新的一条;全部离线回 `None`。
+#[derive(Default)]
+pub(crate) struct TerminalStates {
+    /// conn id → (更新序号, 上报状态);读取取序号最大者。
+    reports: FxHashMap<u64, (u64, TerminalReport)>,
+
+    /// 单调更新计数(last-wins 的裁决序)。
+    seq: u64,
+}
+
+impl TerminalStates {
+    /// 记录一条上报,返回该连接**自己的**上一份状态(fullscreen 翻转埋点用:
+    /// 别的终端的全屏态不算本终端的切换)。
+    pub(crate) fn set(&mut self, conn: u64, report: TerminalReport) -> Option<TerminalReport> {
+        self.seq += 1;
+        self.reports
+            .insert(conn, (self.seq, report))
+            .map(|(_seq, prev)| prev)
+    }
+
+    /// 移除某连接的上报(断开收尾)。
+    pub(crate) fn remove(&mut self, conn: u64) {
+        self.reports.remove(&conn);
+    }
+
+    /// 当前生效的终端状态(最近更新者;无在线上报为 `None`)。
+    pub(crate) fn current(&self) -> Option<TerminalReport> {
+        self.reports
+            .values()
+            .max_by_key(|(seq, _report)| *seq)
+            .map(|(_seq, report)| *report)
+    }
 }
 
 /// 上次下发值的缓存:首轮全量产出(下游借此拿到初值),此后只发真变更。
@@ -55,20 +91,24 @@ impl PlayerCore {
     /// client 上报终端 UI 状态(serve 层处理 `Request::TerminalState`)。
     /// 下 tick `check_props` 自然 diff 下发,不走独立推送。
     ///
+    /// # Params:
+    ///   - `conn`: 上报连接 id(per-conn 归属,见 [`TerminalStates`])
+    ///   - `report`: 上报状态
+    ///
     /// # Return:
-    ///   fullscreen **相对上一份已知态翻转**时给新值(供 fullscreen_changes 埋点);
-    ///   无前态(client 刚连上,不算切换)或未变则 `None`。
-    pub(crate) fn set_terminal_state(&self, report: TerminalReport) -> Option<bool> {
+    ///   fullscreen **相对该连接自己的上一份态翻转**时给新值(供
+    ///   fullscreen_changes 埋点);无前态(刚连上,不算切换)或未变则 `None`。
+    pub(crate) fn set_terminal_state(&self, conn: u64, report: TerminalReport) -> Option<bool> {
         let new_fullscreen = report.fullscreen;
-        let mut slot = self.inner.ui_state.lock();
-        let toggled = matches!(slot.as_ref(), Some(prev) if prev.fullscreen != new_fullscreen);
-        *slot = Some(report);
+        let prev = self.inner.ui_state.lock().set(conn, report);
+        let toggled = matches!(prev, Some(p) if p.fullscreen != new_fullscreen);
         toggled.then_some(new_fullscreen)
     }
 
-    /// client 断开时清空终端状态(`terminal` 属性回 `None`,脚本可感知离线)。
-    pub(crate) fn clear_terminal_state(&self) {
-        *self.inner.ui_state.lock() = None;
+    /// 某连接断开,清其终端上报(全部离线时 `terminal` 属性回 `None`,
+    /// 脚本可感知离线)。
+    pub(crate) fn clear_terminal_state(&self, conn: u64) {
+        self.inner.ui_state.lock().remove(conn);
     }
 
     /// 采样全部属性、与上次值比较,变更逐项下发。background_loop 每 tick 调一次。
@@ -86,14 +126,19 @@ impl PlayerCore {
                 st.queue.len(),
             )
         });
-        let terminal = self.inner.ui_state.lock().map_or(PropValue::None, |t| {
-            PropValue::Table(vec![
-                ("rows".to_owned(), PropValue::Int(i64::from(t.rows))),
-                ("cols".to_owned(), PropValue::Int(i64::from(t.cols))),
-                ("fullscreen".to_owned(), PropValue::Bool(t.fullscreen)),
-                ("focused".to_owned(), PropValue::Bool(t.focused)),
-            ])
-        });
+        let terminal = self
+            .inner
+            .ui_state
+            .lock()
+            .current()
+            .map_or(PropValue::None, |t| {
+                PropValue::Table(vec![
+                    ("rows".to_owned(), PropValue::Int(i64::from(t.rows))),
+                    ("cols".to_owned(), PropValue::Int(i64::from(t.cols))),
+                    ("fullscreen".to_owned(), PropValue::Bool(t.fullscreen)),
+                    ("focused".to_owned(), PropValue::Bool(t.focused)),
+                ])
+            });
         let state = if song.is_none() {
             "stopped"
         } else if snap.playing {

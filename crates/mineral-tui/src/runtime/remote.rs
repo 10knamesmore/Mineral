@@ -26,7 +26,7 @@ use mineral_protocol::{
     client_handshake, decode, encode, framed,
 };
 use mineral_server::Client;
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use rustc_hash::FxHashMap;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -70,8 +70,8 @@ impl RemoteClient {
         let mut conn = framed(stream);
         // 握手:订 Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键;
         // 其余生命周期事件收到即忽略)+ Config(有效配置,含握手重放一帧)
-        // + WindowTitle(标题覆盖,含握手重放)。Property 暂无消费场景,
-        // 轮询是权威值来源。
+        // + WindowTitle(标题覆盖,含握手重放)+ Task(任务 / 数据事件,含
+        // 握手重放库快照与收藏集)。Property 暂无消费场景,轮询是权威值来源。
         client_handshake(
             &mut conn,
             ClientInfo::new(vec![
@@ -79,6 +79,7 @@ impl RemoteClient {
                 Subscription::Lifecycle,
                 Subscription::Config,
                 Subscription::WindowTitle,
+                Subscription::Task,
             ]),
         )
         .await?;
@@ -251,15 +252,6 @@ impl Client for RemoteClient {
     }
     fn cancel_tasks(&self, filter: CancelFilter) {
         let _ = self.send_recv(Request::CancelTasks(filter));
-    }
-    fn drain_task_events(&self) -> Vec<TaskEvent> {
-        match self.send_recv(Request::DrainTaskEvents) {
-            Response::TaskEvents(events) => events,
-            other => {
-                warn_unexpected("drain_task_events", &other);
-                Vec::new()
-            }
-        }
     }
     fn task_snapshot(&self) -> Snapshot {
         match self.send_recv(Request::TaskSnapshot) {
@@ -438,7 +430,7 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
 
-    use color_eyre::eyre::eyre;
+    use color_eyre::eyre::{WrapErr, eyre};
     use mineral_protocol::{
         ClientInfo, Event, Frame, PkgVersion, RejectReason, Request, Response, ServerHello,
         Subscription, TextSpan, ToastKind, framed, recv, send,
@@ -499,8 +491,9 @@ mod tests {
                 Subscription::Lifecycle,
                 Subscription::Config,
                 Subscription::WindowTitle,
+                Subscription::Task,
             ],
-            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)+ Config(有效配置)+ WindowTitle(标题覆盖)"
+            "TUI 默认订阅集:Toast(提示)+ Lifecycle(ScriptReloaded 刷新 bind 键)+ Config(有效配置)+ WindowTitle(标题覆盖)+ Task(任务 / 数据事件)"
         );
         send(&mut conn, &Frame::Hello(ServerHello::accept())).await?;
         then(conn).await
@@ -554,21 +547,21 @@ mod tests {
         Ok(())
     }
 
-    /// 握手被拒(busy)时 connect 直接报人话错误,不起 worker。
+    /// 握手被拒(版本不匹配)时 connect 直接报人话错误,不起 worker。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn connect_rejected_busy_bails() -> color_eyre::Result<()> {
+    async fn connect_rejected_handshake_bails() -> color_eyre::Result<()> {
         let (listener, sock) = temp_listener()?;
         let server = tokio::spawn(async move {
             let (stream, _addr) = listener.accept().await?;
             let mut conn = framed(stream);
-            // busy 拒绝不等握手帧,直接回 Hello。
+            // 拒绝不等握手帧,直接回 Hello。
             send(
                 &mut conn,
-                &Frame::Hello(ServerHello::reject(RejectReason::Busy)),
+                &Frame::Hello(ServerHello::reject(RejectReason::VersionMismatch)),
             )
             .await?;
             // 握住连接直到 client 收到拒绝主动断开(立刻 drop 会让 client 的握手帧
-            // 撞上已关 socket,错误变成 EPIPE 而非 busy,测试 flaky)。
+            // 撞上已关 socket,错误变成 EPIPE 而非拒绝原因,测试 flaky)。
             while recv::<Frame, _>(&mut conn).await.is_ok_and(|f| f.is_some()) {}
             Ok::<(), color_eyre::Report>(())
         });
@@ -577,7 +570,7 @@ mod tests {
             Ok(_) => return Err(eyre!("被拒的握手不该成功")),
             Err(e) => format!("{e:#}"),
         };
-        assert!(err.contains("busy"), "错误信息应说明 busy,实际:{err}");
+        assert!(err.contains("版本"), "错误信息应说明版本不匹配,实际:{err}");
         server.await??;
         std::fs::remove_file(&sock)?;
         Ok(())
@@ -756,31 +749,27 @@ mod tests {
         Ok(())
     }
 
-    /// 真 server 的单 client 门:第二个连接被 busy 拒绝(人话错误);
-    /// 第一个断开后槽位**及时**释放,新连接可入(busy 释放不被收尾拖住)。
+    /// 真 server 的多 client 接入:两个连接并存都被服务,先到者不被顶掉;
+    /// 一个断开不影响另一个。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn second_client_rejected_busy_until_first_leaves() -> color_eyre::Result<()> {
+    async fn concurrent_clients_both_served() -> color_eyre::Result<()> {
         let (_sink, serve, sock) = spawn_inproc_server().await?;
 
         let first = RemoteClient::connect(&sock).await?;
-        let err = match RemoteClient::connect(&sock).await {
-            Ok(_) => return Err(eyre!("单 client 限制失效:第二个连接不该成功")),
-            Err(e) => format!("{e:#}"),
-        };
-        assert!(err.contains("busy"), "应为 busy 拒绝,实际:{err}");
+        let second = RemoteClient::connect(&sock)
+            .await
+            .wrap_err("第二个连接应被接受而非拒绝")?;
+        // 两连接同时可服务(轮询请求各自成功)。
+        let _ = first.audio_snapshot();
+        let _ = second.audio_snapshot();
+        assert!(first.connected(), "先到连接不被后来者顶掉");
+        assert!(second.connected(), "后到连接照常服务");
 
         drop(first);
-        // 槽位释放是异步的(worker EOF → 连接 task 结束 → BusyGuard drop),有界轮询。
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            match RemoteClient::connect(&sock).await {
-                Ok(_) => break,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(e) => return Err(e.wrap_err("第一个 client 断开 2s 后槽位仍未释放")),
-            }
-        }
+        // 断开是异步收尾;另一连接不受影响,请求持续成功。
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = second.audio_snapshot();
+        assert!(second.connected(), "一个断开不影响另一个");
         serve.abort();
         std::fs::remove_file(&sock)?;
         Ok(())
