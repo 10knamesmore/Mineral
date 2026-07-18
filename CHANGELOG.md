@@ -1,4 +1,59 @@
 # Changelog
+## [0.5.4] — 2026-07-18
+
+### Features
+
+- 进度条振幅波形 seekbar ([`57ed382`](https://github.com/10knamesmore/Mineral/commit/57ed3825c1a2c216b975949790d36b83886df378))
+
+- Spectrum.style 渲染风格枚举 ([`7ce5f94`](https://github.com/10knamesmore/Mineral/commit/7ce5f94c29014b3cc2bc1a9368e28056ff7eb755))
+
+- 封面取色驱动动态 accent——effective theme 合成,切歌全局渐变 ([`89d7654`](https://github.com/10knamesmore/Mineral/commit/89d765462fbad010bcafc90adf46016da2517c9f))
+
+- 行为埋点系统——28 事件表 + plays 全 provenance + CLI 报告 ([`4f44b67`](https://github.com/10knamesmore/Mineral/commit/4f44b671ef85df61a4a2db999efe8eaba0ef5944))
+
+- Config.override 表对象形——Config 偏表拍平标量叶子,批量原子覆盖 ([`9957398`](https://github.com/10knamesmore/Mineral/commit/9957398c7fa7e23311f36b19f0c79a8c13d383ec))
+
+- Search 选中行高亮随焦点环渐变——detail 失焦补 pale 对称 ([`4d234c3`](https://github.com/10knamesmore/Mineral/commit/4d234c3f2b7290b2e094250f78aa590e06fc28f6))
+
+- LuaCATS type stub 从 Rust schema 宏生成 ([`1b0d1e0`](https://github.com/10knamesmore/Mineral/commit/1b0d1e068473a896465b8d75afa16621786d8847))
+
+- 容器 o 菜单加 Play all next——整列按序插播,倒序保序 + 空队列退化 ([`edee60b`](https://github.com/10knamesmore/Mineral/commit/edee60b4722cfd9890d035004bd884a28133a669))
+
+- 报表自足化——songs 维表 + context_name 快照,删跨库回查 ([`773b80a`](https://github.com/10knamesmore/Mineral/commit/773b80a2bc80700c3c0ce08b6e7bab9cebc8baa3))
+
+- Album/artist 复制菜单加 Copy URL + Lua 模板扩展到 album/artist ([`46143ae`](https://github.com/10knamesmore/Mineral/commit/46143aedb3237ff0a9aa816152f334ad132eaada))
+
+- Alias入 deep search+ 两搜索面统一括注样式与命中高亮 ([`21e9a4a`](https://github.com/10knamesmore/Mineral/commit/21e9a4a563ef0014bacdc53695608445494f4054))
+
+- 多 client 接入——TaskEvent 订阅化 + busy 门退役 ([`f1d7954`](https://github.com/10knamesmore/Mineral/commit/f1d7954a3d0d7b618ce7f7e438f349d9e8e38c49))
+
+- Client 连接生命周期埋点——client_connections 表 ([`f1bc2b9`](https://github.com/10knamesmore/Mineral/commit/f1bc2b99de5c76536638a2f57b5775762133f748))
+
+- Queue 浮层宽档加 album 列 ([`34f87fd`](https://github.com/10knamesmore/Mineral/commit/34f87fd5dd908465d0ac16239ff424a08782b4e8))
+
+- 全屏 ambient 调色板渐变背景 + 切歌封面 halfblock 转场 ([`a1eaa68`](https://github.com/10knamesmore/Mineral/commit/a1eaa684a2c703200e01d09537e1b5866130d4b3))
+
+- Kitty transmit 流式化 + 多终端适配(ambient 挖洞 / 图协议强制与降级) ([`baf9519`](https://github.com/10knamesmore/Mineral/commit/baf9519071990ba9536df0cfd3e3e25ec6a2271b))
+
+- Ambient / cover_transition 默认值按真机观感调参 ([`27d89d9`](https://github.com/10knamesmore/Mineral/commit/27d89d99919e9ea637ee4905178e61c3d42b8c9f))
+
+- 次级文本对实际背景 alpha 化 + 盲文频谱亮度保底 ([`7bb5868`](https://github.com/10knamesmore/Mineral/commit/7bb58686999fa56daaa1a25582bd8b6d4a9eef00))
+
+- 氛围背景响度跳动——PCM 响度包络驱动浓度/色斑/亮端/暗角四目标调制 ([`76a2a42`](https://github.com/10knamesmore/Mineral/commit/76a2a42a3f6e07eabb965d4ca0e874757a0d5857))
+
+### Bug Fixes
+
+- Lua 类型标注补 ANSI 色值写法 ([`4d136ef`](https://github.com/10knamesmore/Mineral/commit/4d136efe1792ccc34b0b94d53e65d491885efd7f))
+
+- 配置推送成功路径彻底静默——清掉 flash 行为的残留 ([`72a1109`](https://github.com/10knamesmore/Mineral/commit/72a11090ce84d2220ee6dade3e621198d8f33eeb))
+
+- 序号列宽随长度自适应 + 实际硬上限 9999 ([`a24634f`](https://github.com/10knamesmore/Mineral/commit/a24634fe09ca689691450844a2e144d0b05430a3))
+
+- Search 封面接入滚动防抖——SearchPage 自持选中时间戳 ([`c25bf25`](https://github.com/10knamesmore/Mineral/commit/c25bf254c7d5bae64c8ee0d6e2200f8db0f6528a))
+
+- Daemon e2e 的 action_output 对 busy 拒绝加重试 ([`8f9df04`](https://github.com/10knamesmore/Mineral/commit/8f9df04a773ebbc52199b1d8399cfcb0ff8f58f1))
+
+- 全屏封面免重编码——协议缓存 per-URL 多尺寸槽位 + 进入形变按终态尺寸预热 ([`df56b5b`](https://github.com/10knamesmore/Mineral/commit/df56b5bca3f980446f8bb7d17f172678cf7bffad))
 ## [0.5.3] — 2026-07-07
 
 ### Features
