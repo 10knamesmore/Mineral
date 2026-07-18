@@ -2,7 +2,7 @@
 
 # Mineral
 
-**多源终端音乐播放器 —— 简洁,音乐为中心**
+**多源音乐播放器**
 
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
@@ -24,9 +24,11 @@
 
 - **多源融合** — `MusicChannel` trait 统一抽象搜索 / 详情 / 播放 URL / 歌词 / 用户数据;平铺数据模型跨源直接合并展示,新增音乐源不污染模型
 - **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接**
-- **daemon 后台播放** — 播放核心独立进程,退出 TUI 音乐不停;重开 TUI 无缝接回当前进度
-- **全屏沉浸态** — `z` 一键进出:封面 / 逐字歌词 / 频谱的沉浸布局,行间平移与字级 wipe
-- **频谱** — realfft 真值 + ADSR 包络 + peak 弹簧物理; 封面取色
+- **daemon 后台播放** — 播放核心独立进程,退出 TUI 音乐不停;重开无缝接回进度;多 client 可同时连接,共享同一份播放状态
+- **全屏沉浸态** — `z` 一键进出:封面 / 逐字歌词 / 频谱的沉浸布局,行间平移与逐字歌词高亮
+- **氛围背景** — 封面取色驱动:全屏调色板渐变背景 + 全局 accent 动态主题;背景随响度实时跳动(浓度 / 色斑 / 亮端 / 暗角),切歌封面转场
+- **频谱可视化** — realfft 真值 + ADSR 包络 + peak 弹簧物理;四风格可切(柱 / 示波器 / 瀑布 / 地形)
+- **波形进度条** — seekbar 化身全曲振幅包络波形,已播段随封面取色(未缓存回落普通进度条)
 - **封面** — kitty / iTerm2 / sixel / halfblock 自适配,异步解码编码不卡渲染
 - **流畅动画** — 启动 / 退出整屏形变(以光标为缩放锚点)、视图扫入、浮层弹出、歌词缓动平移、频谱弹簧;时长全配置化且与帧率解耦
 - **Lua 配置** — 单文件 `config.lua`,深合并默认值,LSP 补全 / 类型检查开箱即用;主题、键位、手感全量可调,保存即热重载
@@ -34,7 +36,7 @@
 - **键位重映射** — nvim 键表示法(`<C-g>` / `<S-Left>`),动作 → 键全量可改
 - **缓存与下载** — 边播边缓存(LRU 容量上限)+ 永久下载导出;本地命中跳过网络
 - **搜索过滤** — fuzzy 匹配 + 拼音(全拼 / 首字母);Playlists 视图可穿透歌单内歌曲(歌名 / 艺人 / 专辑)
-- **love 与统计** — 喜欢标记双向同步,本地播放统计
+- **love 与统计** — 喜欢标记双向同步;全量行为埋点(播放 provenance / 时长 / 跳过…),`mineral stats report` 出年度盘点
 
 ## 安装
 
@@ -102,13 +104,15 @@ mineral channel netease login    # 终端二维码,App 扫码登录
 </details>
 
 <details>
-<summary><b>其他 CLI 子命令(点开)</b></summary>
+<summary><b>其他 CLI 子命令</b></summary>
 
-| 命令                              | 行为                                                                  |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `mineral cache status [--detail]` | 查看音频 / 封面 / 歌单缓存占用;`--detail` 出逐条清单 + 按音质分布     |
-| `mineral cache clean`             | 清理三类缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果              |
-| `mineral action <name>`           | 触发 `config.lua` 里 `mineral.action` 注册的具名动作(连 daemon 执行) |
+| 命令                                | 行为                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| `mineral cache status [--detail]`   | 查看音频 / 封面 / 歌单缓存占用;`--detail` 出逐条清单 + 按音质分布     |
+| `mineral cache clean`               | 清理三类缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果             |
+| `mineral stats report [--top N]`    | 播放盘点报告(默认当年:次数 / 时长 / 常听来源 / 各类 top 榜)         |
+| `mineral stats top <category>`      | 单榜查询(某类别的 top 列表)                                         |
+| `mineral action <name>`             | 触发 `config.lua` 里 `mineral.action` 注册的具名动作(连 daemon 执行) |
 
 </details>
 
