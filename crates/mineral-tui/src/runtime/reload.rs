@@ -63,6 +63,8 @@ impl crate::app::App {
         );
         let ambient_palette = self.state.covers.current_palette.clone();
         self.feed_ambient(ambient_palette.as_ref());
+        // 固化型(携带运行态):响度包络只重设时间基准,包络值 / 峰值跟踪保留不跳。
+        self.ambient_pulse.retempo(tick_ms);
         // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
         if let Some(active) = self.state.covers.transition.as_mut() {
             active.anim.retempo(crate::render::anim::ticks16_from_ms(
@@ -532,6 +534,7 @@ mod tests {
             base,
             app.state.cfg.tui().ambient(),
             /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0,
             /*skip*/ None,
         );
         Ok(buf
@@ -558,6 +561,51 @@ mod tests {
             serde_json::json!({ "tui": { "ambient": { "fade_ms": doubled_ms } } }),
         )?);
         assert_eq!(ambient_probe(&app)?, mid, "retempo 保相位,推送那帧场色不跳");
+        Ok(())
+    }
+
+    /// 响度包络热更 `frame_tick_ms`:retempo 只换时间基准——推送瞬间包络值不跳,
+    /// 此后同样样本下新拍长(更长)单拍步进更大。
+    #[test]
+    fn pushed_config_pulse_retempo_rescales_without_jump() -> color_eyre::Result<()> {
+        let mut app = app_with_synced_palette()?;
+        // punch 零 attack 一拍打满会掩盖主包络的步进差,关掉只看主包络。
+        let pulse_tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "tui": { "ambient": { "pulse": { "punch": { "gain": 0.0 } } } } }),
+        );
+        let pulse_cfg = mineral_config::from_tree(&pulse_tree)
+            .map_err(|warning| color_eyre::eyre::eyre!("测试配置落型失败:{warning}"))?
+            .tui()
+            .ambient()
+            .pulse()
+            .clone();
+        let loud = vec![0.5_f32; 64];
+        for _ in 0..3 {
+            app.ambient_pulse
+                .feed(&loud, /*sample_rate*/ 48_000, &pulse_cfg);
+        }
+        let stale = app.ambient_pulse.clone();
+        let before = app.ambient_pulse.level_permille(&pulse_cfg);
+        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "animation": { "frame_tick_ms": tick_ms * 2 } } }),
+        )?);
+        assert_eq!(
+            app.ambient_pulse.level_permille(&pulse_cfg),
+            before,
+            "推送瞬间包络不跳"
+        );
+        let mut doubled = app.ambient_pulse.clone();
+        let mut old_tempo = stale;
+        doubled.feed(&loud, /*sample_rate*/ 48_000, &pulse_cfg);
+        old_tempo.feed(&loud, /*sample_rate*/ 48_000, &pulse_cfg);
+        assert!(
+            doubled.level_permille(&pulse_cfg) > old_tempo.level_permille(&pulse_cfg),
+            "拍长翻倍后单拍升幅应更大:{} vs {}",
+            doubled.level_permille(&pulse_cfg),
+            old_tempo.level_permille(&pulse_cfg)
+        );
         Ok(())
     }
 

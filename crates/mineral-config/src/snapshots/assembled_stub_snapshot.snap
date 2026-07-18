@@ -382,6 +382,7 @@ expression: "super::meta_config_lua()"
 ---@field vignette? mineral.VignetteConfig 边缘暗角(向主题底色收敛,保歌词 / 播控可读)。
 ---@field drift? mineral.DriftConfig 锚点漂移(渐变场的缓慢流动)。
 ---@field rotate? mineral.RotateConfig 颜色轮转(各锚点颜色沿封面色带循环流动)。
+---@field pulse? mineral.PulseConfig 响度跳动(场浓度随播放响度呼吸)。
 ---@field anchors? mineral.AnchorConfig[] 渐变场锚点表(数组整体替换):每锚点一个色斑,颜色取封面色带 `pos` 位置。
 
 ---氛围背景的边缘暗角参数(挂在 `AmbientConfig` 下)。
@@ -401,6 +402,34 @@ expression: "super::meta_config_lua()"
 ---@class mineral.RotateConfig
 ---@field enabled? boolean 是否轮转;关闭则各锚点颜色钉在其 `pos` 位置。
 ---@field cycle_secs? number 一整个往返周期的时长,秒;越小颜色流动越快。
+
+---氛围背景的响度跳动参数(挂在 `AmbientConfig` 下):正在播放的音频每帧过低通
+---滤波(可选)算 RMS 响度,在近期峰值与谷值间归一(把压限压扁的动态重新撑开),
+---过 gamma 感知曲线后由主包络(attack/release)与 punch 瞬态通道合成,按 `depth`
+---叠加到场浓度上——音乐越响封面色越浓,随鼓点呼吸。
+---@class mineral.PulseConfig
+---@field enabled? boolean 是否启用;关闭则场完全不随响度变化。
+---@field depth? mineral.PulseDepthConfig 各调制目标的深度(响度作用到哪些旋钮、作用多深)。
+---@field attack_ms? integer 主包络 attack 时间常数,毫秒:越小越跟得上鼓点瞬态,过小会抖。
+---@field release_ms? integer 主包络 release 时间常数,毫秒:越大鼓点之间衰减越平滑,过小会闪。
+---@field gain_window_secs? number 归一跟踪窗口,秒:响度的近期峰值 / 谷值按此窗口收敛,跳动幅度 = 当前响度在 两者之间的位置;越大对段落起伏越敏感,越小越趋向恒定满幅。
+---@field bass_cutoff_hz? number 低通滤波截止频率,Hz:响度测量只计低频能量,包络只跟底鼓 / 贝斯走,人声 与镲片不触发跳动;0 = 不滤波(全频段)。
+---@field gamma? number gamma 感知曲线:归一响度的幂次。大于 1 压低中低响度、鼓点间隙沉得更干净; 1 = 线性。
+---@field punch? mineral.PunchConfig punch 瞬态通道(专抓鼓点的「点」)。
+
+---氛围响度跳动的调制深度表(挂在 `PulseConfig` 下):响度包络(0-1)乘各深度后
+---作用到对应旋钮;0 = 该目标不随响度变化,多目标可叠加。
+---@class mineral.PulseDepthConfig
+---@field intensity? number 场浓度增量 0-1:满响度时在 `intensity` 上叠加的量——最直觉的「颜色跳动」; 过大明暗闪烁刺眼。
+---@field sigma? number 色斑半径膨胀比例 0-1:满响度时 `sigma` 放大到 `1 + 此值` 倍,色斑随鼓点 呼吸;单独开时颜色深浅不变。
+---@field brightness? number 亮端推 0-1:满响度时各锚点的色带采样位向亮端推进的比例(1 = 暗端一推到底) ——颜色本身变亮而非变浓。
+---@field vignette? number 暗角减弱比例 0-1:满响度时 `vignette.strength` 打的折扣,响时场向边缘涌; 易显「泵感」,慎用。
+
+---氛围响度跳动的瞬态通道(挂在 `PulseConfig` 下):零 attack、快 release 的第二条
+---包络,与主包络取较大者合成——主包络管持续的「呼吸」,瞬态通道管鼓点瞬间的「跳」。
+---@class mineral.PunchConfig
+---@field gain? number 混入强度 0-1:瞬态包络乘此系数后与主包络取较大者;0 = 关闭,只留主包络。
+---@field release_ms? integer 瞬态的释放时长,毫秒:越小「点」越锐利,越大越接近主包络的平滑。
 
 ---渐变场单个锚点(挂在 `AmbientConfig.anchors` 数组)。
 ---@class mineral.AnchorConfig

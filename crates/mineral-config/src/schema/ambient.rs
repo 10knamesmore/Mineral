@@ -26,6 +26,9 @@ pub struct AmbientConfig {
     /// 颜色轮转(各锚点颜色沿封面色带循环流动)。
     rotate: RotateConfig,
 
+    /// 响度跳动(场浓度随播放响度呼吸)。
+    pulse: PulseConfig,
+
     /// 渐变场锚点表(数组整体替换):每锚点一个色斑,颜色取封面色带 `pos` 位置。
     anchors: Vec<AnchorConfig>,
 }
@@ -65,6 +68,72 @@ pub struct RotateConfig {
 
     /// 一整个往返周期的时长,秒;越小颜色流动越快。
     cycle_secs: f32,
+}
+
+/// 氛围背景的响度跳动参数(挂在 `AmbientConfig` 下):正在播放的音频每帧过低通
+/// 滤波(可选)算 RMS 响度,在近期峰值与谷值间归一(把压限压扁的动态重新撑开),
+/// 过 gamma 感知曲线后由主包络(attack/release)与 punch 瞬态通道合成,按 `depth`
+/// 叠加到场浓度上——音乐越响封面色越浓,随鼓点呼吸。
+#[config_section]
+pub struct PulseConfig {
+    /// 是否启用;关闭则场完全不随响度变化。
+    enabled: bool,
+
+    /// 各调制目标的深度(响度作用到哪些旋钮、作用多深)。
+    depth: PulseDepthConfig,
+
+    /// 主包络 attack 时间常数,毫秒:越小越跟得上鼓点瞬态,过小会抖。
+    attack_ms: u32,
+
+    /// 主包络 release 时间常数,毫秒:越大鼓点之间衰减越平滑,过小会闪。
+    release_ms: u32,
+
+    /// 归一跟踪窗口,秒:响度的近期峰值 / 谷值按此窗口收敛,跳动幅度 = 当前响度在
+    /// 两者之间的位置;越大对段落起伏越敏感,越小越趋向恒定满幅。
+    gain_window_secs: f32,
+
+    /// 低通滤波截止频率,Hz:响度测量只计低频能量,包络只跟底鼓 / 贝斯走,人声
+    /// 与镲片不触发跳动;0 = 不滤波(全频段)。
+    bass_cutoff_hz: f32,
+
+    /// gamma 感知曲线:归一响度的幂次。大于 1 压低中低响度、鼓点间隙沉得更干净;
+    /// 1 = 线性。
+    gamma: f32,
+
+    /// punch 瞬态通道(专抓鼓点的「点」)。
+    punch: PunchConfig,
+}
+
+/// 氛围响度跳动的调制深度表(挂在 `PulseConfig` 下):响度包络(0-1)乘各深度后
+/// 作用到对应旋钮;0 = 该目标不随响度变化,多目标可叠加。
+#[config_section]
+pub struct PulseDepthConfig {
+    /// 场浓度增量 0-1:满响度时在 `intensity` 上叠加的量——最直觉的「颜色跳动」;
+    /// 过大明暗闪烁刺眼。
+    intensity: f32,
+
+    /// 色斑半径膨胀比例 0-1:满响度时 `sigma` 放大到 `1 + 此值` 倍,色斑随鼓点
+    /// 呼吸;单独开时颜色深浅不变。
+    sigma: f32,
+
+    /// 亮端推 0-1:满响度时各锚点的色带采样位向亮端推进的比例(1 = 暗端一推到底)
+    /// ——颜色本身变亮而非变浓。
+    brightness: f32,
+
+    /// 暗角减弱比例 0-1:满响度时 `vignette.strength` 打的折扣,响时场向边缘涌;
+    /// 易显「泵感」,慎用。
+    vignette: f32,
+}
+
+/// 氛围响度跳动的瞬态通道(挂在 `PulseConfig` 下):零 attack、快 release 的第二条
+/// 包络,与主包络取较大者合成——主包络管持续的「呼吸」,瞬态通道管鼓点瞬间的「跳」。
+#[config_section]
+pub struct PunchConfig {
+    /// 混入强度 0-1:瞬态包络乘此系数后与主包络取较大者;0 = 关闭,只留主包络。
+    gain: f32,
+
+    /// 瞬态的释放时长,毫秒:越小「点」越锐利,越大越接近主包络的平滑。
+    release_ms: u32,
 }
 
 /// 渐变场单个锚点(挂在 `AmbientConfig.anchors` 数组)。

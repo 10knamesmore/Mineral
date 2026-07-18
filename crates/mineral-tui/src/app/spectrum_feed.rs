@@ -14,6 +14,12 @@ impl App {
         if !samples.is_empty() {
             self.state.fft.push(&samples);
         }
+        // 同一批样本顺路喂氛围背景的响度包络(空样本 = 静音,包络自然回落)。
+        self.ambient_pulse.feed(
+            &samples,
+            sample_rate,
+            self.state.cfg.tui().ambient().pulse(),
+        );
         let playing = self.state.playback.playing;
         let volume_pct = self.state.playback.volume_pct;
         if *self.state.cfg.tui().spectrum().style() == mineral_config::SpectrumStyle::Scope {

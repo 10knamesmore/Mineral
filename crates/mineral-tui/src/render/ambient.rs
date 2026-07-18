@@ -8,8 +8,11 @@
 //!
 //! 锚点表 / σ / 暗角等观感数值全部现读配置(`tui.ambient`),状态机只携带
 //! 「色过渡进度 + 漂移时钟 + 轮转相位」三样运行态,锚点热更下一帧即生效。
+//!
+//! [`LoudnessPulse`] 是独立的响度包络:播放中的 PCM 样本每拍喂入,输出平滑响度
+//! 供 [`render`] 叠加进场浓度——音乐越响封面色越浓,随鼓点呼吸。
 
-use mineral_config::{AmbientConfig, AnchorConfig};
+use mineral_config::{AmbientConfig, AnchorConfig, PulseConfig};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -85,7 +88,8 @@ impl AmbientGradient {
         if to == self.to {
             return;
         }
-        self.from = Some(self.anchor_colors(base, anchors));
+        // 冻结起点不含响度亮端推:推是渲染期瞬态,烙进起点会让切歌那帧的基准色偏亮。
+        self.from = Some(self.anchor_colors(base, anchors, /*pos_push*/ 0));
         self.to = to;
         self.frame = 0;
     }
@@ -128,12 +132,18 @@ impl AmbientGradient {
     }
 
     /// 当前可见锚点色(与 `anchors` 同序同长):静止在终点,或起点 → 终点按进度逐
-    /// 锚点 Lab 插值。终点 = 色板在「锚点采样位经轮转相位映射」处的取色(随轮转流动),
-    /// `None` 时现读底色(渐变途中热更主题即追新底色);起点缺位(锚点表热更变长)补底色。
-    fn anchor_colors(&self, base: Rgb, anchors: &[AnchorConfig]) -> Vec<Rgb> {
+    /// 锚点 Lab 插值。终点 = 色板在「锚点采样位经轮转相位映射、再加响度亮端推
+    /// `pos_push`(‰,顶到最亮端为止)」处的取色,`None` 时现读底色(渐变途中热更
+    /// 主题即追新底色);起点缺位(锚点表热更变长)补底色。亮端推是逐帧瞬态,
+    /// 不烙进冻结起点(见 [`Self::set_target`])。
+    fn anchor_colors(&self, base: Rgb, anchors: &[AnchorConfig], pos_push: u32) -> Vec<Rgb> {
         let end_at = |anchor: &AnchorConfig| -> Rgb {
             self.to.as_ref().map_or(base, |palette| {
-                palette.sample_rgb(rotated_pos(*anchor.pos(), self.rotate_phase))
+                palette.sample_rgb(
+                    rotated_pos(*anchor.pos(), self.rotate_phase)
+                        .saturating_add(pos_push)
+                        .min(1000),
+                )
             })
         };
         if self.settled() {
@@ -161,6 +171,193 @@ impl AmbientGradient {
     }
 }
 
+/// 响度包络:PCM 样本(tap 已 mono 化)每拍喂入,输出 0..=1000‰ 的平滑响度,
+/// 驱动氛围场浓度随音乐呼吸。链路:低通加权(只听底鼓 / 贝斯,人声与镲片不触发
+/// 跳动)→ RMS → 峰 / 谷双端归一(近期峰值与谷值都跟踪,当前响度在两者之间定位
+/// ——把压限压扁的动态重新撑开,不同母带响度的歌跳动幅度一致)→ 感知 gamma →
+/// 主包络(attack/release 快起慢落)与瞬态通道(零 attack 快 release,专抓鼓点
+/// 的「点」)取较大者。参数全部现读配置,热更下一拍生效。
+#[derive(Clone, Debug)]
+pub struct LoudnessPulse {
+    /// 主包络(0..=1):持续响度的「呼吸」。
+    level: f32,
+
+    /// 瞬态包络(0..=1):零 attack 快 release,乘 `punch.gain` 后与主包络取较大者。
+    punch: f32,
+
+    /// 峰值跟踪:瞬间顶起、按 `gain_window_secs` 向当前响度回落。
+    slow_peak: f32,
+
+    /// 谷值跟踪:瞬间坠落、按 `gain_window_secs` 向当前响度爬升。
+    slow_floor: f32,
+
+    /// 低通滤波器状态(跨拍延续,样本流在拍边界上连续)。
+    lowpass_state: f32,
+
+    /// 每拍秒数(`animation.frame_tick_ms` 折算;平滑系数的时间基准)。
+    tick_secs: f32,
+}
+
+impl LoudnessPulse {
+    /// 响度跟踪下限:峰值或峰谷差低于此视作静音 / 无动态,不做归一——否则长
+    /// 静音后底噪、或恒定音量的间隙噪声会被归一拉成满幅跳动。
+    const PEAK_FLOOR: f32 = 1e-3;
+
+    /// 构造静默初态(包络 0、峰谷跟踪空)。
+    ///
+    /// # Params:
+    ///   - `tick_ms`: 主循环帧间隔毫秒(平滑系数的时间基准)
+    pub fn new(tick_ms: u64) -> Self {
+        Self {
+            level: 0.0,
+            punch: 0.0,
+            slow_peak: 0.0,
+            slow_floor: 0.0,
+            lowpass_state: 0.0,
+            tick_secs: secs_of(tick_ms),
+        }
+    }
+
+    /// 重设帧间隔而保留包络与峰谷跟踪(配置热更 `frame_tick_ms` 时调用,不跳变)。
+    pub fn retempo(&mut self, tick_ms: u64) {
+        self.tick_secs = secs_of(tick_ms);
+    }
+
+    /// 喂入本拍的 PCM 样本推进包络一步。空样本(暂停 / 断流)按静音处理,包络
+    /// 经 release 自然回落。
+    ///
+    /// # Params:
+    ///   - `samples`: 本拍新到的样本(f32 PCM,tap 侧已 mono 化)
+    ///   - `sample_rate`: 采样率 Hz(低通截止的折算基准;`0` 视作未知,跳过低通)
+    ///   - `cfg`: 响度跳动配置(全部旋钮现读)
+    pub fn feed(&mut self, samples: &[f32], sample_rate: u32, cfg: &PulseConfig) {
+        let rms = self.weighted_rms(samples, sample_rate, *cfg.bass_cutoff_hz());
+        let window_alpha = alpha_of(self.tick_secs, cfg.gain_window_secs().max(0.1));
+        // 峰值瞬升缓落、谷值瞬落缓升,都向当前响度收敛:一段安静后峰谷自动收窄,
+        // 呼吸幅度跟着段落走。
+        self.slow_peak = if rms > self.slow_peak {
+            rms
+        } else {
+            self.slow_peak + (rms - self.slow_peak) * window_alpha
+        };
+        self.slow_floor = if rms < self.slow_floor {
+            rms
+        } else {
+            self.slow_floor + (rms - self.slow_floor) * window_alpha
+        };
+        let span = self.slow_peak - self.slow_floor;
+        let normalized = if self.slow_peak > Self::PEAK_FLOOR && span > Self::PEAK_FLOOR {
+            ((rms - self.slow_floor) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let target = normalized.powf(cfg.gamma().clamp(0.25, 4.0));
+        self.level = envelope_step(
+            self.level,
+            target,
+            self.tick_secs,
+            *cfg.attack_ms(),
+            *cfg.release_ms(),
+        );
+        self.punch = envelope_step(
+            self.punch,
+            target,
+            self.tick_secs,
+            /*attack_ms*/ 0,
+            *cfg.punch().release_ms(),
+        );
+    }
+
+    /// 当前驱动值的千分比(0..=1000),交给 [`render`] 的 `pulse_permille`:
+    /// 主包络与「瞬态包络 × `punch.gain`」取较大者。
+    pub fn level_permille(&self, cfg: &PulseConfig) -> u16 {
+        let mixed = self
+            .level
+            .max(self.punch * cfg.punch().gain().clamp(0.0, 1.0));
+        u16::try_from(permille_of(mixed * 1000.0)).unwrap_or(1000)
+    }
+
+    /// 低通加权 RMS:`cutoff_hz > 0` 且采样率已知时样本先过 one-pole 低通
+    /// (滤波器状态跨拍延续),响度只计低频能量;否则全频段 RMS。
+    fn weighted_rms(&mut self, samples: &[f32], sample_rate: u32, cutoff_hz: f32) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        if cutoff_hz <= 0.0 || sample_rate == 0 {
+            return rms_of(samples);
+        }
+        let rate = rate_f32(sample_rate);
+        let alpha = 1.0 - (-std::f32::consts::TAU * cutoff_hz.min(rate / 2.0) / rate).exp();
+        let mut state = self.lowpass_state;
+        let mut sum = 0.0_f32;
+        for &sample in samples {
+            state += alpha * (sample - state);
+            sum += state * state;
+        }
+        self.lowpass_state = state;
+        mean_sqrt(sum, samples.len())
+    }
+}
+
+/// attack/release 非对称一阶平滑推进一步:目标高于现值走 attack,否则走 release;
+/// 时长 0 = 一拍到位。
+///
+/// # Params:
+///   - `current`: 现值
+///   - `target`: 本拍目标
+///   - `tick_secs`: 拍长秒数
+///   - `attack_ms`: 上行时间常数,毫秒
+///   - `release_ms`: 下行时间常数,毫秒
+///
+/// # Return:
+///   推进后的值。
+fn envelope_step(
+    current: f32,
+    target: f32,
+    tick_secs: f32,
+    attack_ms: u32,
+    release_ms: u32,
+) -> f32 {
+    let tau_ms = if target > current {
+        attack_ms
+    } else {
+        release_ms
+    };
+    let tau_secs = secs_of(u64::from(tau_ms));
+    let alpha = if tau_secs > 0.0 {
+        1.0 - (-tick_secs / tau_secs).exp()
+    } else {
+        1.0
+    };
+    current + alpha * (target - current)
+}
+
+/// 一拍时长对时间常数 `tau_secs` 的一阶平滑系数(`1 - e^(-dt/τ)`)。
+fn alpha_of(tick_secs: f32, tau_secs: f32) -> f32 {
+    1.0 - (-tick_secs / tau_secs).exp()
+}
+
+/// 样本均方根(空样本 = 静音)。
+fn rms_of(samples: &[f32]) -> f32 {
+    let sum = samples.iter().map(|s| s * s).sum::<f32>();
+    mean_sqrt(sum, samples.len())
+}
+
+/// `sqrt(sum / n)`(`n = 0` 给 0)。
+#[allow(clippy::as_conversions)] // reason: 样本计数 → f32 只作分母,精度损失可忽略
+fn mean_sqrt(sum: f32, n: usize) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    (sum / n as f32).sqrt()
+}
+
+/// 采样率 → f32(音频采样率 ≤ 192k,f32 内精确)。
+#[allow(clippy::as_conversions)] // reason: 采样率量级 < 2^24,f32 表示无损
+fn rate_f32(sample_rate: u32) -> f32 {
+    sample_rate as f32
+}
+
 /// 把氛围渐变场写进 `area` 内每个 cell 的 `bg`(不动字符与 `fg`)。
 ///
 /// 每 cell:各锚点按高斯权重混色(权重归一 `Σw·c / Σw`)→ 按浓度从底色向场色走
@@ -173,9 +370,12 @@ impl AmbientGradient {
 ///   - `base`: 主题底色(须真彩;ANSI 主题由调用方经 [`rgb_of`] 拦下)
 ///   - `cfg`: 氛围段配置(σ / 暗角 / 摆幅 / 锚点表,现读)
 ///   - `progress_permille`: 全屏形变进度(‰):浓度乘它,进场随形变淡入、退场收干净
+///   - `pulse_permille`: 响度包络(‰,[`LoudnessPulse::level_permille`]):
+///     `pulse.enabled` 时按 `pulse.depth` 叠加进浓度,音乐越响场越浓;关闭时忽略
 ///   - `skip`: 不铺的洞(将被不透明终端图协议真图盖住的封面区)。图协议把整段载荷
 ///     藏在图区首 cell 的 symbol 里,逐帧改那格 bg 会让 diff 每帧重发载荷——
 ///     iTerm2 / sixel(数据即显示、自带擦行)表现为整图闪烁;图不透明,跳过零视觉损失
+#[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
@@ -183,6 +383,7 @@ pub fn render(
     base: Rgb,
     cfg: &AmbientConfig,
     progress_permille: u16,
+    pulse_permille: u16,
     skip: Option<Rect>,
 ) {
     if area.width == 0 || area.height == 0 {
@@ -202,7 +403,19 @@ pub fn render(
         b: f32,
     }
     let anchors = cfg.anchors();
-    let colors = gradient.anchor_colors(base, anchors);
+    let pulse_cfg = cfg.pulse();
+    let pulse = if *pulse_cfg.enabled() {
+        f32::from(pulse_permille.min(1000)) / 1000.0
+    } else {
+        0.0
+    };
+    let depth = pulse_cfg.depth();
+    let boost = |d: f32| d.clamp(0.0, 1.0) * pulse;
+    let colors = gradient.anchor_colors(
+        base,
+        anchors,
+        /*pos_push*/ permille_of(boost(*depth.brightness()) * 1000.0),
+    );
     let sway = *cfg.drift().sway_pct() / 100.0;
     let t = gradient.drift_t;
     let blobs = anchors
@@ -218,13 +431,16 @@ pub fn render(
         .collect::<Vec<Blob>>();
     let (base_r, base_g, base_b) = (f32::from(base.r), f32::from(base.g), f32::from(base.b));
     let (grid_w, grid_h) = (f32::from(area.width), f32::from(area.height));
-    let intensity =
-        (cfg.intensity() * f32::from(progress_permille.min(1000)) / 1000.0).clamp(0.0, 1.0);
+    let intensity = ((cfg.intensity() + boost(*depth.intensity()))
+        * f32::from(progress_permille.min(1000))
+        / 1000.0)
+        .clamp(0.0, 1.0);
     let vignette = cfg.vignette();
-    let (veil_strength, veil_inner) = (vignette.strength().clamp(0.0, 1.0), *vignette.inner());
+    let veil_strength = (vignette.strength() * (1.0 - boost(*depth.vignette()))).clamp(0.0, 1.0);
+    let veil_inner = *vignette.inner();
     // 满强半径贴着起始半径也不除零:压出一段极窄的过渡带。
     let veil_span = (vignette.outer() - veil_inner).max(1e-3);
-    let sigma = cfg.sigma().max(1e-3);
+    let sigma = (cfg.sigma() * (1.0 + boost(*depth.sigma()))).max(1e-3);
     let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
     for cy in 0..area.height {
         let ny = (f32::from(cy) + 0.5) / grid_h;
@@ -311,7 +527,7 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
 
-    use super::{AmbientGradient, render, rgb_of, rotated_pos};
+    use super::{AmbientGradient, LoudnessPulse, render, rgb_of, rotated_pos};
     use crate::render::palette::{CoverPalette, Rgb};
     use crate::runtime::cover::colors::lerp_lab;
 
@@ -370,7 +586,7 @@ mod tests {
         let g = AmbientGradient::new(/*fade_ticks*/ 10, /*tick_ms*/ 16);
         assert!(g.settled_at_base());
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             vec![BASE; cfg.anchors().len()]
         );
         Ok(())
@@ -384,14 +600,14 @@ mod tests {
         let mut g = AmbientGradient::new(/*fade_ticks*/ 10, /*tick_ms*/ 16);
         g.set_target(Some(&pal), BASE, cfg.anchors());
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             vec![BASE; cfg.anchors().len()],
             "frame 0 应从底色起步"
         );
         for _ in 0..5 {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
-        let mid = g.anchor_colors(BASE, cfg.anchors());
+        let mid = g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0);
         let band = expected_band(&pal, &cfg);
         for (got, end) in mid.into_iter().zip(band.iter().copied()) {
             assert_eq!(got, lerp_lab(BASE, end, 500), "中点应是 Lab 半程插值");
@@ -400,7 +616,7 @@ mod tests {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             band,
             "到程应达色板锚点采样"
         );
@@ -417,11 +633,11 @@ mod tests {
         for _ in 0..4 {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
-        let before = g.anchor_colors(BASE, cfg.anchors());
+        let before = g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0);
         let green = palette(vec![Rgb::new(20, 120, 20)])?;
         g.set_target(Some(&green), BASE, cfg.anchors());
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             before,
             "打断那帧不应跳色"
         );
@@ -440,14 +656,17 @@ mod tests {
         }
         g.set_target(/*palette*/ None, BASE, cfg.anchors());
         assert_ne!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             vec![BASE; n],
             "回落起点是封面色,不瞬跳"
         );
         for _ in 0..10 {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
-        assert_eq!(g.anchor_colors(BASE, cfg.anchors()), vec![BASE; n]);
+        assert_eq!(
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
+            vec![BASE; n]
+        );
         assert!(g.settled_at_base(), "回落到程应判定底色静止");
         Ok(())
     }
@@ -461,10 +680,10 @@ mod tests {
         for _ in 0..5 {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
-        let before = g.anchor_colors(BASE, cfg.anchors());
+        let before = g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0);
         g.retempo(/*fade_ticks*/ 20, /*tick_ms*/ 16);
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             before,
             "retempo 不应改变当前帧颜色"
         );
@@ -481,10 +700,10 @@ mod tests {
         for _ in 0..7 {
             g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
-        let before = g.anchor_colors(BASE, cfg.anchors());
+        let before = g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0);
         g.set_target(Some(&pal), BASE, cfg.anchors());
         assert_eq!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             before,
             "同目标不应重启渐变"
         );
@@ -514,7 +733,7 @@ mod tests {
         let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
         g.set_target(Some(&pal), BASE, cfg.anchors());
         g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
-        let before = g.anchor_colors(BASE, cfg.anchors());
+        let before = g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0);
         let mut frozen = g.clone();
         // 周期 4s、拍长 16ms:125 拍走完半圈,采样位翻转到对侧,颜色必然变化。
         for _ in 0..125 {
@@ -522,12 +741,12 @@ mod tests {
             frozen.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
         }
         assert_ne!(
-            g.anchor_colors(BASE, cfg.anchors()),
+            g.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             before,
             "轮转推进后锚点色应流动"
         );
         assert_eq!(
-            frozen.anchor_colors(BASE, cfg.anchors()),
+            frozen.anchor_colors(BASE, cfg.anchors(), /*pos_push*/ 0),
             before,
             "轮转关闭应逐锚点冻结"
         );
@@ -544,7 +763,8 @@ mod tests {
         let area = Rect::new(0, 0, 12, 6);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0, /*skip*/ None,
         );
         for (x, y) in cells(area) {
             assert_eq!(
@@ -568,7 +788,8 @@ mod tests {
         let area = Rect::new(0, 0, 16, 8);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0, /*skip*/ None,
         );
         for (x, y) in cells(area) {
             assert_eq!(
@@ -595,7 +816,8 @@ mod tests {
         let area = Rect::new(0, 0, 20, 10);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0, /*skip*/ None,
         );
         let dist_to_base = |color: Color| -> color_eyre::Result<u32> {
             let Color::Rgb(r, g, b) = color else {
@@ -625,7 +847,8 @@ mod tests {
         let mut buf = Buffer::empty(area);
         buf.set_string(2, 1, "lyric", Style::new().fg(Color::Rgb(255, 0, 255)));
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0, /*skip*/ None,
         );
         let cell = buf.cell((2, 1)).ok_or_else(|| eyre!("cell 越界"))?;
         assert_eq!(cell.symbol(), "l", "字符不应被铺场动到");
@@ -647,7 +870,8 @@ mod tests {
         let paint = |g: &AmbientGradient| {
             let mut buf = Buffer::empty(area);
             render(
-                &mut buf, area, g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+                &mut buf, area, g, BASE, &cfg, /*progress_permille*/ 1000,
+                /*pulse_permille*/ 0, /*skip*/ None,
             );
             buf
         };
@@ -685,7 +909,10 @@ mod tests {
         let area = Rect::new(0, 0, 4, 2);
         let probe = |permille: u16| -> color_eyre::Result<Color> {
             let mut buf = Buffer::empty(area);
-            render(&mut buf, area, &g, BASE, &cfg, permille, /*skip*/ None);
+            render(
+                &mut buf, area, &g, BASE, &cfg, permille, /*pulse_permille*/ 0,
+                /*skip*/ None,
+            );
             bg_at(&buf, 1, 1)
         };
         assert_eq!(
@@ -723,6 +950,7 @@ mod tests {
             BASE,
             &cfg,
             /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0,
             Some(hole),
         );
         for (x, y) in cells(area) {
@@ -761,12 +989,399 @@ mod tests {
         let area = Rect::new(0, 0, 24, 8);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            /*pulse_permille*/ 0, /*skip*/ None,
         );
         let grid = bg_grid(&buf, area)?;
         mineral_test::assert_snap!(
             "氛围渐变场:三色板稳态 24×8,默认观感配置(bg 压 4bit hex)",
             grid
+        );
+        Ok(())
+    }
+
+    /// 测试用采样率(48kHz)。
+    const RATE: u32 = 48_000;
+
+    /// pulse 段配置(默认值 + overlay 合成)。
+    fn pulse_cfg(overlay: &serde_json::Value) -> color_eyre::Result<mineral_config::PulseConfig> {
+        Ok(acfg(&serde_json::json!({ "pulse": overlay }))?
+            .pulse()
+            .clone())
+    }
+
+    /// 关掉 punch 通道的 pulse 配置(只看主包络的测试用)。
+    fn pulse_cfg_no_punch(
+        overlay: serde_json::Value,
+    ) -> color_eyre::Result<mineral_config::PulseConfig> {
+        let mut merged = overlay;
+        if let Some(table) = merged.as_object_mut() {
+            table.insert("punch".to_owned(), serde_json::json!({ "gain": 0.0 }));
+        }
+        pulse_cfg(&merged)
+    }
+
+    /// 包络快起慢落:同拍数下 attack 的升幅远大于 release 的降幅(跟得上鼓点、
+    /// 鼓点间不闪的手感基础)。
+    #[test]
+    fn pulse_attack_faster_than_release() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg_no_punch(serde_json::json!({}))?;
+        let mut p = LoudnessPulse::new(/*tick_ms*/ 16);
+        let loud = vec![0.5_f32; 512];
+        for _ in 0..5 {
+            p.feed(&loud, RATE, &cfg);
+        }
+        let peak = p.level_permille(&cfg);
+        for _ in 0..5 {
+            p.feed(&[], RATE, &cfg);
+        }
+        let after = p.level_permille(&cfg);
+        assert!(after < peak, "静音后应回落");
+        let drop = peak - after;
+        assert!(
+            peak > drop * 2,
+            "同拍数 attack 升幅({peak})应远大于 release 降幅({drop})"
+        );
+        Ok(())
+    }
+
+    /// 峰谷归一:恒定小音量按自身峰谷定标,包络仍到近满幅(母带响度差异不影响
+    /// 跳动幅度)。
+    #[test]
+    fn pulse_gain_normalizes_quiet_input() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg(&serde_json::json!({}))?;
+        let mut p = LoudnessPulse::new(/*tick_ms*/ 16);
+        let quiet = vec![0.01_f32; 512];
+        for _ in 0..60 {
+            p.feed(&quiet, RATE, &cfg);
+        }
+        assert!(
+            p.level_permille(&cfg) > 900,
+            "恒定小音量应被归一到近满幅,实得 {}",
+            p.level_permille(&cfg)
+        );
+        Ok(())
+    }
+
+    /// 静音与底噪:空样本包络归零;RMS 低于跟踪下限的底噪不被归一拉起。
+    #[test]
+    fn pulse_silence_and_noise_floor_stay_zero() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg(&serde_json::json!({}))?;
+        let mut p = LoudnessPulse::new(/*tick_ms*/ 16);
+        for _ in 0..30 {
+            p.feed(&[], RATE, &cfg);
+        }
+        assert_eq!(p.level_permille(&cfg), 0);
+        let noise = vec![1e-4_f32; 512];
+        for _ in 0..30 {
+            p.feed(&noise, RATE, &cfg);
+        }
+        assert_eq!(p.level_permille(&cfg), 0, "底噪不应被归一拉成满幅");
+        Ok(())
+    }
+
+    /// retempo 保状态:改帧间隔的瞬间包络值不变;此后同样样本下新拍长(更长)
+    /// 单拍步进更大。
+    #[test]
+    fn pulse_retempo_preserves_level_then_rescales_step() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg_no_punch(serde_json::json!({}))?;
+        let mut p = LoudnessPulse::new(/*tick_ms*/ 16);
+        let loud = vec![0.5_f32; 64];
+        for _ in 0..3 {
+            p.feed(&loud, RATE, &cfg);
+        }
+        let mut stale = p.clone();
+        let before = p.level_permille(&cfg);
+        p.retempo(/*tick_ms*/ 32);
+        assert_eq!(p.level_permille(&cfg), before, "retempo 瞬间包络不跳");
+        p.feed(&loud, RATE, &cfg);
+        stale.feed(&loud, RATE, &cfg);
+        assert!(
+            p.level_permille(&cfg) > stale.level_permille(&cfg),
+            "拍长翻倍后单拍升幅应更大:{} vs {}",
+            p.level_permille(&cfg),
+            stale.level_permille(&cfg)
+        );
+        Ok(())
+    }
+
+    /// 低通加权:同幅度下 50Hz 正弦驱动包络到近满幅,8kHz 正弦被低通滤波衰到
+    /// 静音线以下不触发跳动(镲片 / 齿音不该闪)。
+    #[test]
+    fn pulse_bass_weighting_ignores_highs() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg_no_punch(serde_json::json!({ "attack_ms": 0, "release_ms": 0 }))?;
+        let sine = |freq: f32| -> Vec<f32> {
+            (0..512_u16)
+                .map(|i| (std::f32::consts::TAU * freq * f32::from(i) / 48_000.0).sin() * 0.05)
+                .collect::<Vec<f32>>()
+        };
+        let mut low = LoudnessPulse::new(/*tick_ms*/ 16);
+        let mut high = LoudnessPulse::new(/*tick_ms*/ 16);
+        for _ in 0..10 {
+            low.feed(&sine(50.0), RATE, &cfg);
+            high.feed(&sine(8_000.0), RATE, &cfg);
+        }
+        assert!(
+            low.level_permille(&cfg) > 800,
+            "低频应驱动近满幅,实得 {}",
+            low.level_permille(&cfg)
+        );
+        assert_eq!(high.level_permille(&cfg), 0, "高频应被低通衰到静音线以下");
+        Ok(())
+    }
+
+    /// 峰谷双端归一:重压限母带(RMS 只在 0.8-1.0 间起伏)被撑开到近满幅摆动
+    /// ——谷 ≈ 0、峰 ≈ 1,而非线性比例的 0.8 / 1.0。
+    #[test]
+    fn pulse_expands_compressed_dynamics() -> color_eyre::Result<()> {
+        let cfg = pulse_cfg_no_punch(serde_json::json!({
+            "attack_ms": 0,
+            "release_ms": 0,
+            "gamma": 1.0,
+            "bass_cutoff_hz": 0.0,
+            "gain_window_secs": 0.5,
+        }))?;
+        let mut p = LoudnessPulse::new(/*tick_ms*/ 16);
+        let loud = vec![1.0_f32; 256];
+        let quiet = vec![0.8_f32; 256];
+        let (mut top, mut bottom) = (0_u16, 1000_u16);
+        for _ in 0..20 {
+            for _ in 0..4 {
+                p.feed(&loud, RATE, &cfg);
+                top = top.max(p.level_permille(&cfg));
+            }
+            for _ in 0..4 {
+                p.feed(&quiet, RATE, &cfg);
+                bottom = bottom.min(p.level_permille(&cfg));
+            }
+        }
+        assert!(top > 900, "峰应近满幅,实得 {top}");
+        assert!(bottom < 100, "谷应近归零(动态被撑开),实得 {bottom}");
+        Ok(())
+    }
+
+    /// punch 通道:主包络 attack 拉慢时,单个响拍仍一拍把混合驱动值打到高位
+    /// (punch 零 attack),随后按 `punch.release_ms` 快速衰减——「点」比主包络锐利。
+    #[test]
+    fn pulse_punch_spikes_on_transient() -> color_eyre::Result<()> {
+        let overlay = |gain: f32| {
+            serde_json::json!({
+                "attack_ms": 300,
+                "punch": { "gain": gain, "release_ms": 160 },
+            })
+        };
+        let with_punch = pulse_cfg(&overlay(1.0))?;
+        let without = pulse_cfg(&overlay(0.0))?;
+        let loud = vec![0.5_f32; 256];
+        let mut spiky = LoudnessPulse::new(/*tick_ms*/ 16);
+        let mut smooth = LoudnessPulse::new(/*tick_ms*/ 16);
+        spiky.feed(&loud, RATE, &with_punch);
+        smooth.feed(&loud, RATE, &without);
+        assert!(
+            spiky.level_permille(&with_punch) > 900,
+            "punch 应一拍打满,实得 {}",
+            spiky.level_permille(&with_punch)
+        );
+        assert!(
+            smooth.level_permille(&without) < 200,
+            "无 punch 的慢 attack 主包络一拍只走一小步,实得 {}",
+            smooth.level_permille(&without)
+        );
+        for _ in 0..40 {
+            spiky.feed(&[], RATE, &with_punch);
+        }
+        assert!(
+            spiky.level_permille(&with_punch) < 200,
+            "静音后 punch 应快速衰减,实得 {}",
+            spiky.level_permille(&with_punch)
+        );
+        Ok(())
+    }
+
+    /// gamma 感知曲线:同一「半程响度」时刻,gamma 3 的目标显著低于 gamma 1
+    /// (中低响度被压低,鼓点间隙更沉)。
+    #[test]
+    fn pulse_gamma_darkens_midrange() -> color_eyre::Result<()> {
+        let overlay = |gamma: f32| {
+            serde_json::json!({
+                "attack_ms": 0,
+                "release_ms": 0,
+                "gamma": gamma,
+                "bass_cutoff_hz": 0.0,
+            })
+        };
+        let linear = pulse_cfg_no_punch(overlay(1.0))?;
+        let curved = pulse_cfg_no_punch(overlay(3.0))?;
+        let full = vec![1.0_f32; 256];
+        let half = vec![0.5_f32; 256];
+        let mut a = LoudnessPulse::new(/*tick_ms*/ 16);
+        let mut b = LoudnessPulse::new(/*tick_ms*/ 16);
+        a.feed(&full, RATE, &linear);
+        b.feed(&full, RATE, &curved);
+        a.feed(&half, RATE, &linear);
+        b.feed(&half, RATE, &curved);
+        let (mid_linear, mid_curved) = (a.level_permille(&linear), b.level_permille(&curved));
+        assert!(
+            mid_linear > 400 && mid_linear < 600,
+            "线性应近半程,实得 {mid_linear}"
+        );
+        assert!(
+            mid_curved < mid_linear / 2,
+            "gamma 3 应显著压低中程:{mid_curved} vs {mid_linear}"
+        );
+        Ok(())
+    }
+
+    /// 响度调制:满包络把场推得比零包络更浓(探针 cell 更接近场色);
+    /// `pulse.enabled = false` 时同一包络完全不改变输出。
+    #[test]
+    fn pulse_deepens_field_and_disabled_ignores_level() -> color_eyre::Result<()> {
+        let overlay = |enabled: bool| {
+            serde_json::json!({
+                "intensity": 0.4,
+                "vignette": { "strength": 0.0 },
+                "drift": { "sway_pct": 0.0 },
+                "pulse": { "enabled": enabled, "depth": { "intensity": 0.3 } },
+            })
+        };
+        let c = Rgb::new(220, 220, 220);
+        let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
+        let cfg = acfg(&overlay(true))?;
+        g.set_target(Some(&palette(vec![c])?), BASE, cfg.anchors());
+        g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
+        let area = Rect::new(0, 0, 8, 4);
+        let probe = |cfg: &AmbientConfig, pulse: u16| -> color_eyre::Result<Color> {
+            let mut buf = Buffer::empty(area);
+            render(
+                &mut buf, area, &g, BASE, cfg, /*progress_permille*/ 1000, pulse,
+                /*skip*/ None,
+            );
+            bg_at(&buf, 4, 2)
+        };
+        let Color::Rgb(idle_r, ..) = probe(&cfg, /*pulse*/ 0)? else {
+            return Err(eyre!("应为真彩"));
+        };
+        let Color::Rgb(loud_r, ..) = probe(&cfg, /*pulse*/ 1000)? else {
+            return Err(eyre!("应为真彩"));
+        };
+        assert!(
+            loud_r > idle_r,
+            "满响度应比静默更浓(更接近场色):{loud_r} vs {idle_r}"
+        );
+        let disabled = acfg(&overlay(false))?;
+        assert_eq!(
+            probe(&disabled, /*pulse*/ 1000)?,
+            probe(&disabled, /*pulse*/ 0)?,
+            "关闭后包络不应影响输出"
+        );
+        Ok(())
+    }
+
+    /// 亮端推:满响度 + `depth.brightness = 1` 把所有锚点采样位推到色带最亮端,
+    /// 全场即最亮色;静默时暗端锚点附近保持混合色。
+    #[test]
+    fn pulse_brightness_pushes_band_to_bright_end() -> color_eyre::Result<()> {
+        let cfg = acfg(&serde_json::json!({
+            "intensity": 1.0,
+            "vignette": { "strength": 0.0 },
+            "drift": { "sway_pct": 0.0 },
+            "pulse": { "enabled": true, "depth": { "intensity": 0.0, "brightness": 1.0 } },
+        }))?;
+        let pal = blue_red()?;
+        let bright = pal.sample_rgb(1000);
+        let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
+        g.set_target(Some(&pal), BASE, cfg.anchors());
+        g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
+        let area = Rect::new(0, 0, 24, 8);
+        let probe = |pulse: u16| -> color_eyre::Result<Color> {
+            let mut buf = Buffer::empty(area);
+            render(
+                &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, pulse,
+                /*skip*/ None,
+            );
+            bg_at(&buf, 5, 1)
+        };
+        assert_eq!(
+            probe(/*pulse*/ 1000)?,
+            Color::Rgb(bright.r, bright.g, bright.b),
+            "满推时全场应为色带最亮色"
+        );
+        assert_ne!(
+            probe(/*pulse*/ 0)?,
+            Color::Rgb(bright.r, bright.g, bright.b),
+            "静默时暗端锚点附近不应是最亮色"
+        );
+        Ok(())
+    }
+
+    /// 色斑呼吸:`depth.sigma` 满响度时高斯半径放大,暗端锚点所在 cell 被更远的
+    /// 亮端锚点掺进更多颜色(红分量上升)。
+    #[test]
+    fn pulse_sigma_swell_mixes_field() -> color_eyre::Result<()> {
+        let cfg = acfg(&serde_json::json!({
+            "intensity": 1.0,
+            "vignette": { "strength": 0.0 },
+            "drift": { "sway_pct": 0.0 },
+            "pulse": { "enabled": true, "depth": { "intensity": 0.0, "sigma": 1.0 } },
+        }))?;
+        let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
+        g.set_target(Some(&blue_red()?), BASE, cfg.anchors());
+        g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
+        let area = Rect::new(0, 0, 24, 8);
+        // (5,1) 即暗端锚点(0.22, 0.20)所在 cell:σ 膨胀 → 远处亮锚点权重上升。
+        let probe = |pulse: u16| -> color_eyre::Result<Color> {
+            let mut buf = Buffer::empty(area);
+            render(
+                &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, pulse,
+                /*skip*/ None,
+            );
+            bg_at(&buf, 5, 1)
+        };
+        let Color::Rgb(idle_r, ..) = probe(/*pulse*/ 0)? else {
+            return Err(eyre!("应为真彩"));
+        };
+        let Color::Rgb(loud_r, ..) = probe(/*pulse*/ 1000)? else {
+            return Err(eyre!("应为真彩"));
+        };
+        assert!(
+            loud_r > idle_r,
+            "σ 膨胀应让暗端 cell 掺入更多亮端色:{loud_r} vs {idle_r}"
+        );
+        Ok(())
+    }
+
+    /// 暗角开合:`depth.vignette` 满响度时暗角强度打满折,角落 cell 恰为场色
+    /// (场涌到边缘);静默时暗角原样、角落偏向底色。
+    #[test]
+    fn pulse_vignette_opens_on_loud() -> color_eyre::Result<()> {
+        let cfg = acfg(&serde_json::json!({
+            "intensity": 1.0,
+            "vignette": { "strength": 1.0 },
+            "drift": { "sway_pct": 0.0 },
+            "pulse": { "enabled": true, "depth": { "intensity": 0.0, "vignette": 1.0 } },
+        }))?;
+        let c = Rgb::new(200, 200, 40);
+        let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
+        g.set_target(Some(&palette(vec![c])?), BASE, cfg.anchors());
+        g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
+        let area = Rect::new(0, 0, 20, 10);
+        let probe = |pulse: u16| -> color_eyre::Result<Color> {
+            let mut buf = Buffer::empty(area);
+            render(
+                &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, pulse,
+                /*skip*/ None,
+            );
+            bg_at(&buf, 0, 0)
+        };
+        assert_eq!(
+            probe(/*pulse*/ 1000)?,
+            Color::Rgb(c.r, c.g, c.b),
+            "满响度暗角全开,角落应恰为场色"
+        );
+        assert_ne!(
+            probe(/*pulse*/ 0)?,
+            Color::Rgb(c.r, c.g, c.b),
+            "静默时暗角原样,角落应偏向底色"
         );
         Ok(())
     }

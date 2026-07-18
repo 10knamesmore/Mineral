@@ -271,6 +271,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
         base,
         cfg,
         app.state.browse.fullscreen.eased_in_out(),
+        app.ambient_pulse.level_permille(cfg.pulse()),
         skip,
     );
 }

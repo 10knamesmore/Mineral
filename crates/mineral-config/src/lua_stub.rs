@@ -9,11 +9,12 @@ use crate::schema::{
     DeepWeights, DownloadConfig, DriftConfig, DynamicThemeConfig, EnvelopeConfig, HighpassConfig,
     KeysConfig, KittyTransmitConfig, KmeansConfig, LayoutConfig, LyricsConfig, MarqueeBounceConfig,
     MarqueeConfig, MarqueeLoopConfig, MarqueeMode, MenuReveal, MineralSection, NeteaseSection,
-    PrefetchConfig, ReportConfig, RotateConfig, ScopeConfig, ScriptConfig, SearchConfig,
-    SearchFocusTransition, SearchHitConfig, SearchQueryMode, ShelfConfig, SourcesConfig,
-    SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle, TerrainConfig,
-    TextAlphaConfig, TextStyle, ThemeConfig, TitleField, TitleIcons, ToastConfig, TrackPosMemory,
-    TuiConfig, VignetteConfig, WaterfallConfig, WaveformConfig, WindowTitleConfig, ZoomConfig,
+    PrefetchConfig, PulseConfig, PulseDepthConfig, PunchConfig, ReportConfig, RotateConfig,
+    ScopeConfig, ScriptConfig, SearchConfig, SearchFocusTransition, SearchHitConfig,
+    SearchQueryMode, ShelfConfig, SourcesConfig, SpectrumConfig, SpectrumStyle, StatsConfig,
+    StatsLevel, SweepStyle, TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig, TitleField,
+    TitleIcons, ToastConfig, TrackPosMemory, TuiConfig, VignetteConfig, WaterfallConfig,
+    WaveformConfig, WindowTitleConfig, ZoomConfig,
 };
 
 /// 文件头:`---@meta` 声明 + 使用说明(手写 prose,不随 schema 变)。
@@ -74,6 +75,9 @@ pub(crate) fn meta_config_lua() -> String {
         VignetteConfig::LUA_STUB,
         DriftConfig::LUA_STUB,
         RotateConfig::LUA_STUB,
+        PulseConfig::LUA_STUB,
+        PulseDepthConfig::LUA_STUB,
+        PunchConfig::LUA_STUB,
         AnchorConfig::LUA_STUB,
         PrefetchConfig::LUA_STUB,
         SearchConfig::LUA_STUB,

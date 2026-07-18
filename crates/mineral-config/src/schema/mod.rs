@@ -26,7 +26,10 @@ mod toast;
 mod waveform;
 mod window_title;
 
-pub use ambient::{AmbientConfig, AnchorConfig, DriftConfig, RotateConfig, VignetteConfig};
+pub use ambient::{
+    AmbientConfig, AnchorConfig, DriftConfig, PulseConfig, PulseDepthConfig, PunchConfig,
+    RotateConfig, VignetteConfig,
+};
 pub use animation::{
     AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode,
     MenuReveal, SearchFocusTransition, SweepStyle,

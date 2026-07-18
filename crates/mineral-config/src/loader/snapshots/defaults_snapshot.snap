@@ -686,6 +686,24 @@ Config {
                 enabled: true,
                 cycle_secs: 30.0,
             },
+            pulse: PulseConfig {
+                enabled: true,
+                depth: PulseDepthConfig {
+                    intensity: 0.2,
+                    sigma: 0.25,
+                    brightness: 0.05,
+                    vignette: 0.1,
+                },
+                attack_ms: 70,
+                release_ms: 420,
+                gain_window_secs: 4.0,
+                bass_cutoff_hz: 150.0,
+                gamma: 2.6,
+                punch: PunchConfig {
+                    gain: 0.4,
+                    release_ms: 160,
+                },
+            },
             anchors: [
                 AnchorConfig {
                     x: 0.22,

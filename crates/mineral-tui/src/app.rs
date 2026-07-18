@@ -64,6 +64,10 @@ pub struct App {
     /// 时长独立(`ambient.fade_ms`);渲染在全屏 paint 开头整屏铺 bg。
     pub(crate) ambient: crate::render::ambient::AmbientGradient,
 
+    /// 全屏氛围背景的响度包络:`update_spectrum` 拉到的 PCM 样本每拍喂入,
+    /// 场浓度随它呼吸(`ambient.pulse`)。
+    pub(crate) ambient_pulse: crate::render::ambient::LoudnessPulse,
+
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
 
@@ -179,6 +183,7 @@ impl App {
             crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
+        let ambient_pulse = crate::render::ambient::LoudnessPulse::new(tick_ms);
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
         let notifications = Notifications::new(
             *tui_cfg.toast().flash_ttl_secs(),
@@ -204,6 +209,7 @@ impl App {
             theme_base,
             accent_fade,
             ambient,
+            ambient_pulse,
             state,
             keymap,
             notice_hint,
