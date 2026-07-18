@@ -641,7 +641,10 @@ mod tests {
                 "sample_dim": 64, "swatches": 6, "seed": 1, "max_iter": 20, "converge": 5.0,
                 "l_min": 8.0, "l_max": 92.0, "chroma_min": 8.0, "min_valid_pixels_pct": 5,
             },
-            "cache": { "disk": 4294967296_u64, "image": 134217728, "protocol": 67108864 },
+            "cache": {
+                "disk": 4294967296_u64, "image": 134217728, "protocol": 67108864,
+                "sizes_per_image": 3,
+            },
         }))?;
         Ok(Arc::new(cfg))
     }

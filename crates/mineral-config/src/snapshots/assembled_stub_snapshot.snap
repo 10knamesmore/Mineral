@@ -315,6 +315,7 @@ expression: "super::meta_config_lua()"
 ---@field disk? integer 磁盘缓存容量上限(字节),存原始/重编码封面文件;可写算式如 `4 * 1024 ^ 3`。
 ---@field image? integer 解码原图 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是常驻 RAM 的 解码位图,越界即逐出最久未显示的封面,把进程内存钉死在此数。
 ---@field protocol? integer 已编码终端协议 RAM 预算(字节)。是 `image` 之外的第二层常驻 RAM: 每个协议留着源图副本 + kitty/sixel 编码序列,全屏大图可达 MB 级。 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
+---@field sizes_per_image? integer 同一张封面并存的已编码尺寸数,≥1;常规面板与全屏各占一份, 超出时逐出该封面最久未渲染的尺寸。
 
 ---kmeans 取色参数(挂在 `CoverConfig` 下)。
 ---@class mineral.KmeansConfig

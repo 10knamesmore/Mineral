@@ -314,7 +314,10 @@ impl App {
                 self.state.covers.drain_ready_covers(&self.cover_fetcher);
                 self.sync_cover_palette();
                 self.tick_dynamic_accent();
-                self.state.covers.drain_ready_protocols(&self.cover_encoder);
+                let sizes_per_image = *self.state.cfg.tui().cover().cache().sizes_per_image();
+                self.state
+                    .covers
+                    .drain_ready_protocols(&self.cover_encoder, sizes_per_image);
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.covers.loading = self.state.covers.pending.len();
@@ -803,10 +806,13 @@ mod tests {
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
         let proto = app.picker.new_resize_protocol(img);
-        app.state
-            .covers
-            .protocols
-            .insert(&url, (10, 10), proto, /*bytes*/ 0);
+        app.state.covers.protocols.insert(
+            &url,
+            (10, 10),
+            proto,
+            /*bytes*/ 0,
+            /*sizes_per_image*/ 3,
+        );
         assert!(
             !app.state.covers.protocols.is_empty(),
             "前置:封面协议条目已就位"
@@ -847,10 +853,13 @@ mod tests {
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
         let proto = app.picker.new_resize_protocol(img);
-        app.state
-            .covers
-            .protocols
-            .insert(&url, (10, 10), proto, /*bytes*/ 0);
+        app.state.covers.protocols.insert(
+            &url,
+            (10, 10),
+            proto,
+            /*bytes*/ 0,
+            /*sizes_per_image*/ 3,
+        );
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
         app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));

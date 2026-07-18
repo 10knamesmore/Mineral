@@ -31,12 +31,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
     if !app.state.browse.fullscreen.at_min() {
         let full = compute_fullscreen(frame.area(), layout_cfg);
+        // 终态全屏封面区在形变全程固定可知,形变分支据此预热当前曲的协议编码。
+        let steady_cover = full.cover;
         let areas = if app.state.browse.fullscreen.at_max() {
             full
         } else {
             transform::morph_areas(&normal, &full, app.state.browse.fullscreen.eased_in_out())
         };
-        paint_fullscreen(frame, &areas, app);
+        paint_fullscreen(frame, &areas, steady_cover, app);
     } else if !app.state.channel_search.active.at_min() {
         let search = compute_search(frame.area(), layout_cfg);
         let areas = if app.state.channel_search.active.at_max() {
@@ -208,7 +210,10 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
 
 /// 全屏 / 形变布局:消失面板渲进收缩 rect(小到自动空白)→ spectrum → transport → cover
 /// → lyrics(歌词最后画,对穿交错时压在封面上保持可读)。
-fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+///
+/// # Params:
+///   - `steady_cover`: 终态全屏封面区(形变全程固定),形变分支按它预热协议编码
+fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<Rect>, app: &App) {
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
         top_status::draw(frame, r, &app.state, theme);
@@ -231,7 +236,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         theme,
     );
     if let Some(c) = areas.cover.and_then(nonempty) {
-        draw_fullscreen_cover(frame, c, app);
+        draw_fullscreen_cover(frame, c, steady_cover, app);
     }
     if let Some(lyr) = areas.lyrics.and_then(nonempty) {
         lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Immersive);
@@ -241,7 +246,10 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 /// 全屏独立封面:跟**在播曲**;形变中画 halfblock / 程序化色块(便宜),稳态全屏才上真图
 /// (避免形变期每帧尺寸变导致 protocol 重编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
 /// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
-fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
+///
+/// # Params:
+///   - `steady_cover`: 终态全屏封面区,进入方向的形变期按它预热当前曲协议编码
+fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option<Rect>, app: &App) {
     let theme = &app.theme;
     let Some(track) = app.state.playback.track.as_ref() else {
         vinyl::render(frame, area, &app.state.vinyl, theme);
@@ -262,8 +270,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
             &seed,
         );
         // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
-        // 直接 place,消掉切歌瞬间的程序化占位闪。形变期(非 at_max)绝不预热——那会按
-        // 逐帧漂移 dims 编码(churn)。
+        // 直接 place,消掉切歌瞬间的程序化占位闪。
         prewarm_upcoming(app, area);
     } else {
         // 形变期:halfblock 真图(命中缓存)随封面区长大,无图退程序化色块;均不碰 kitty 协议。
@@ -276,6 +283,16 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &App) {
             theme,
             &seed,
         );
+        // 进入方向:终态封面区固定可知,按它把当前曲的协议编码与形变动画并行预热,
+        // 落定即命中直接上真图,消「落定后先糊后清晰」的等待。`(url, dims)` 去重,整段
+        // 形变只投一次;**绝不按形变中逐帧漂移的 `area` 预热**(那是 churn)。退出方向
+        // 不预热——面板尺寸协议在多尺寸槽位下仍在缓存,回去即命中。
+        if app.state.browse.fullscreen.on()
+            && let (Some(url), Some(steady)) =
+                (track.cover_url.as_ref(), steady_cover.and_then(nonempty))
+        {
+            cover_image::prewarm(&app.state, &app.picker, steady, url);
+        }
     }
 }
 
@@ -314,14 +331,16 @@ mod tests {
     use crate::render::anim::{Toggle, Transition};
     use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
 
-    /// 回归:全屏形变期间,正在收缩的 now_playing 面板**不得**派发封面编码请求。
-    ///
-    /// 封面编码已离线(投递给 `CoverEncoder` worker);若形变中逐帧 now_playing 尺寸变
-    /// 还照常派发,会按逐帧漂移的 dims **flood 编码器**(churn,且稳态落地后占位符乱套留
-    /// 残影)。修复:形变期(`!settled`)`cover_image` 早退,不派发。这里验证整段形变中
-    /// `covers.encode_pending` 不新增——只保留稳态那次派发。
+    /// 全屏进入形变:不按逐帧漂移的 dims 派发编码(churn),但按**终态全屏尺寸**预热
+    /// 恰好一次——编码与形变动画并行,落定即命中。从零 pending 起步(不先渲常规帧:
+    /// 常规面板与全屏封面的正方 cell 尺寸在部分终端几何下会撞同值,基线派发会掩蔽预热
+    /// 那一条)。三段断言:
+    /// ① 首个形变帧后 pending 恰好一条(预热);
+    /// ② 后续形变帧 pending 不再变(逐帧漂移 dims 一条都没混进来);
+    /// ③ 落定 at_max 渲稳态帧后 pending 仍不变——稳态渲染与预热撞同一 `(url, dims)` 去重,
+    ///    反证预热用的正是终态尺寸(错一个 cell 都会多出一条)。
     #[test]
-    fn fullscreen_morph_does_not_dispatch_cover_encode() -> color_eyre::Result<()> {
+    fn fullscreen_morph_prewarms_steady_cover_once() -> color_eyre::Result<()> {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
@@ -345,34 +364,56 @@ mod tests {
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state.covers.cache.insert(&url, Arc::new(img));
-        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发一次编码。
+        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
 
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
 
-        // 稳态老布局:渲一帧 → 派发一次封面编码(稳态 dims)。记录此刻 pending 快照。
-        t.draw(|f| super::draw(f, &app))?;
-        let steady_pending = app.state.covers.encode_pending.borrow().clone();
-        assert_eq!(steady_pending.len(), 1, "稳态老布局应恰好派发一次封面编码");
-
-        // 进入全屏,推进若干形变帧(均 `!settled`)。每帧后 pending 必须与稳态快照一致 ——
-        // 证明 now_playing 消失面板没有在形变中按漂移 dims 追加派发。
+        // 进入全屏,推进若干形变帧(均 `!settled`)。首帧即应派发终态尺寸预热恰好一条;
+        // 之后每帧 pending 定格——证明没按逐帧漂移 dims 追加派发。
         app.state.browse.fullscreen.set(true);
-        for _ in 0..5 {
+        let mut morph_pending = app.state.covers.encode_pending.borrow().clone();
+        assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
+        for frame_no in 0..5 {
             app.state.browse.fullscreen.tick();
             assert!(
                 !app.state.browse.fullscreen.settled(),
                 "测试需停留在形变中途"
             );
             t.draw(|f| super::draw(f, &app))?;
-            assert_eq!(
-                *app.state.covers.encode_pending.borrow(),
-                steady_pending,
-                "形变期不应追加封面编码派发(churn)"
-            );
+            if frame_no == 0 {
+                morph_pending = app.state.covers.encode_pending.borrow().clone();
+                assert_eq!(
+                    morph_pending.len(),
+                    1,
+                    "首个形变帧应按终态全屏尺寸预热恰好一条"
+                );
+            } else {
+                assert_eq!(
+                    *app.state.covers.encode_pending.borrow(),
+                    morph_pending,
+                    "后续形变帧不应追加封面编码派发(churn)"
+                );
+            }
         }
+
+        // 推进到落定(at_max),渲稳态全屏帧:稳态渲染的派发应与预热同 key 去重,
+        // pending 纹丝不动 —— 反证预热 dims 与稳态渲染 dims 完全一致。
+        for _ in 0..1_000 {
+            if app.state.browse.fullscreen.settled() {
+                break;
+            }
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(app.state.browse.fullscreen.settled(), "形变应在上限内落定");
+        t.draw(|f| super::draw(f, &app))?;
+        assert_eq!(
+            *app.state.covers.encode_pending.borrow(),
+            morph_pending,
+            "稳态渲染应命中预热的同 (url, dims) 去重,不再追加派发"
+        );
         Ok(())
     }
 

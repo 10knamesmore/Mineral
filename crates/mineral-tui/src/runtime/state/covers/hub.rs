@@ -138,12 +138,16 @@ impl CoverHub {
 
     /// 把编码 worker 就绪的封面协议装回 `protocols`,并出 `encode_pending`。
     /// 之后帧渲染该封面即命中已编码协议、直接 place,不再在渲染线程上 resize / 编码。
-    pub(crate) fn drain_ready_protocols(&mut self, encoder: &CoverEncoder) {
+    ///
+    /// # Params:
+    ///   - `sizes_per_image`: 同一封面并存的已编码尺寸槽上限(调用方现读配置传入)
+    pub(crate) fn drain_ready_protocols(&mut self, encoder: &CoverEncoder, sizes_per_image: usize) {
         for r in encoder.drain_ready() {
             self.encode_pending
                 .borrow_mut()
                 .remove(&(r.url.clone(), r.dims));
-            self.protocols.insert(&r.url, r.dims, r.protocol, r.bytes);
+            self.protocols
+                .insert(&r.url, r.dims, r.protocol, r.bytes, sizes_per_image);
         }
     }
 }

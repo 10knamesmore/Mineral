@@ -56,6 +56,10 @@ pub struct CoverCacheConfig {
     /// 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
     #[serde(deserialize_with = "de::u64_lossy")]
     protocol: u64,
+
+    /// 同一张封面并存的已编码尺寸数,≥1;常规面板与全屏各占一份,
+    /// 超出时逐出该封面最久未渲染的尺寸。
+    sizes_per_image: usize,
 }
 
 /// 封面磁盘存储模式。不依赖渲染 crate;接线处映射到具体实现。

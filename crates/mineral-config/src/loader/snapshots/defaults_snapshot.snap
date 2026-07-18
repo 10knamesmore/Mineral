@@ -644,6 +644,7 @@ Config {
                 disk: 4294967296,
                 image: 134217728,
                 protocol: 67108864,
+                sizes_per_image: 3,
             },
         },
         prefetch: PrefetchConfig {
