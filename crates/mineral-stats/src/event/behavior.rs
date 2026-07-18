@@ -298,6 +298,12 @@ pub enum CopyContext {
 
     /// 歌单文案。
     Playlist,
+
+    /// 专辑文案。
+    Album,
+
+    /// artist 文案。
+    Artist,
 }
 
 /// action 的触发面(action_invocations.trigger)。

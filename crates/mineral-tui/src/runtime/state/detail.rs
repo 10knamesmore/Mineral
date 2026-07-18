@@ -1,6 +1,6 @@
 //! detail 面板的实体详情栈：结果列选中实体为栈底，下钻 push 一帧、back pop 一帧。
 //!
-//! 一种机制覆盖所有「看详情」：歌曲/专辑/歌单看曲目、歌手看热门曲与专辑、歌手专辑区
+//! 一种机制覆盖所有「看详情」：歌曲/专辑/歌单看曲目、artist 看热门曲与专辑、artist 专辑区
 //! 进某专辑看曲目。栈帧携带已有的完整实体（头部立即可画），补充的列表/详情由对应
 //! fetch 任务回填。`frames[0]` 即 root（对应结果列选中行），其上是下钻帧。
 
@@ -24,7 +24,7 @@ pub enum DetailFetch {
     /// 歌单帧 → 曲目（`PlaylistDetail` 任务）。
     PlaylistDetail(PlaylistId),
 
-    /// 歌手帧 → 详情(热门曲) + 专辑列表（`ArtistDetail` + `ArtistAlbums` 两任务）。
+    /// artist 帧 → 详情(热门曲) + 专辑列表（`ArtistDetail` + `ArtistAlbums` 两任务）。
     Artist(ArtistId),
 }
 
@@ -57,7 +57,7 @@ pub enum EntityRef {
     /// 专辑。
     Album(Box<Album>),
 
-    /// 歌手。
+    /// artist。
     Artist(Box<Artist>),
 
     /// 歌单。
@@ -82,7 +82,7 @@ impl EntityRef {
         }
     }
 
-    /// 头图源：歌曲/专辑/歌单取 `cover_url`、歌手取 `avatar_url`；无图为 `None`。
+    /// 头图源：歌曲/专辑/歌单取 `cover_url`、artist 取 `avatar_url`；无图为 `None`。
     pub fn cover(&self) -> Option<&MediaUrl> {
         match self {
             Self::Song(s) => s.cover_url.as_ref(),
@@ -135,9 +135,9 @@ pub enum DetailData {
     /// 专辑完整详情（元信息 + 曲目）——album 帧、以及 song 帧（看其所属专辑）。
     Album(Box<Album>),
 
-    /// 歌手帧两路（详情含热门曲 + 专辑列表），分别到货。
+    /// artist 帧两路（详情含热门曲 + 专辑列表），分别到货。
     Artist {
-        /// 歌手详情（`songs` 为热门曲），`None` = 未到。
+        /// artist 详情（`songs` 为热门曲），`None` = 未到。
         detail: Option<Box<Artist>>,
 
         /// 专辑列表，`None` = 未到。
@@ -145,7 +145,7 @@ pub enum DetailData {
     },
 }
 
-/// 歌手帧的面板内分区（`[` / `]` 切换）。
+/// artist 帧的面板内分区（`[` / `]` 切换）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ArtistSection {
     /// 热门曲。
@@ -183,20 +183,20 @@ pub struct DetailFrame {
     /// 补拉到的列表/详情，`None` = 未到（渲染占位骨架）。
     pub data: Option<DetailData>,
 
-    /// 歌手帧当前分区（非歌手帧忽略）。
+    /// artist 帧当前分区（非 artist 帧忽略）。
     pub section: ArtistSection,
 
-    /// 该歌手源的可用分区（`caps.artist_sections`）。`None` = caps 尚未落定的瞬态（建帧到
+    /// 该 artist 源的可用分区（`caps.artist_sections`）。`None` = caps 尚未落定的瞬态（建帧到
     /// [`Self::apply_sections`] 之间，同一事件内 apply 先于 render 故不被观测）。落定后：默认区落
-    /// 首个可用区、`[`/`]` 只在两区皆有时切、渲染按可用区决定画几个 tab。非歌手帧忽略。
+    /// 首个可用区、`[`/`]` 只在两区皆有时切、渲染按可用区决定画几个 tab。非 artist 帧忽略。
     artist_sections: Option<ArtistSections>,
 
-    /// 歌手双区切换的横向滑动（off=Top Songs / on=Albums）。`None` = 从未切过（恒 Top Songs，
+    /// artist 双区切换的横向滑动（off=Top Songs / on=Albums）。`None` = 从未切过（恒 Top Songs，
     /// 无动画）；首次切换按 sweep 拍数懒构造，复用 browse view-sweep 同款 [`Toggle`]。
     section_anim: Option<Toggle>,
 
     /// 面板内列表光标 + 视口滚动(nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移)。
-    /// 歌手帧 Hot/Albums 双区共用此一份(切区时 [`Self::cycle_section`] 瞬时归位)。
+    /// artist 帧 Hot/Albums 双区共用此一份(切区时 [`Self::cycle_section`] 瞬时归位)。
     list: ScrollList,
 
     /// 头部简介的滚动 offset（可视行）。render 端折行后把它钳进内容边界并写回（渲染走
@@ -222,13 +222,13 @@ impl DetailFrame {
         }
     }
 
-    /// 该帧歌手源的可用分区（`None` = caps 未落定;渲染据此决定画哪些 tab）。非歌手帧无意义。
+    /// 该帧 artist 源的可用分区（`None` = caps 未落定;渲染据此决定画哪些 tab）。非 artist 帧无意义。
     pub fn artist_sections(&self) -> Option<&ArtistSections> {
         self.artist_sections.as_ref()
     }
 
-    /// 落定歌手源的可用分区(`caps.artist_sections`),并把当前分区收到首个可用区。由持 caps 的
-    /// 上层在建 / 复位歌手 root 帧后调用(幂等):如 B站只有 Albums,分区从默认的 Hot 收到 Albums。
+    /// 落定 artist 源的可用分区(`caps.artist_sections`),并把当前分区收到首个可用区。由持 caps 的
+    /// 上层在建 / 复位 artist root 帧后调用(幂等):如 B站只有 Albums,分区从默认的 Hot 收到 Albums。
     pub fn apply_sections(&mut self, sections: ArtistSections) {
         if let Some(first) = sections.kinds().first() {
             self.section = ArtistSection::from_kind(*first);
@@ -314,7 +314,7 @@ impl DetailFrame {
         self.requested = true;
     }
 
-    /// 当前区列表长度（曲目 / 专辑 / 歌手热门曲 / 歌手专辑，按 section + data；未到为 0）。
+    /// 当前区列表长度（曲目 / 专辑 / artist 热门曲 / artist 专辑，按 section + data；未到为 0）。
     /// detail 焦点的 `j`/`k` 据此钳光标。
     pub fn list_len(&self) -> usize {
         match (&self.entity, self.section, &self.data) {
@@ -340,7 +340,7 @@ impl DetailFrame {
     }
 
     /// 当前区列表选中行对应的实体（detail 焦点的行级菜单 `y`/`o` 据此构造项）：歌单/专辑/
-    /// 歌曲帧曲目行、歌手 Hot 区热门曲 → `Song`；歌手 Albums 区 → `Album`（容器，菜单走
+    /// 歌曲帧曲目行、artist Hot 区热门曲 → `Song`；artist Albums 区 → `Album`（容器，菜单走
     /// 播放全部）；数据未到 / 越界 → `None`。与 [`Self::list_len`] 同一套
     /// `(entity, section, data)` 分流——`j`/`k` 钳的行与菜单取的行必须是同一行。
     pub(crate) fn row_entity(&self) -> Option<EntityRef> {
@@ -372,7 +372,7 @@ impl DetailFrame {
     }
 
     /// 当前区作为「歌曲列表」的视图（`Play` 的队列上下文 = 这一列整列，语义同 activate
-    /// 起播）：歌单/专辑/歌曲帧曲目、歌手 Hot 区热门曲；歌手 Albums 区（行是专辑容器，不入
+    /// 起播）：歌单/专辑/歌曲帧曲目、artist Hot 区热门曲；artist Albums 区（行是专辑容器，不入
     /// 队）/ 数据未到 → 空。与 [`Self::row_entity`] 取 `Song` 的几路一一对应。
     pub(crate) fn song_list(&self) -> Vec<Song> {
         match (&self.entity, self.section, &self.data) {
@@ -391,7 +391,7 @@ impl DetailFrame {
     }
 
     /// 从这一帧起播时的队列语境（埋点 provenance）：专辑帧 / 歌曲帧看所属专辑 → `Album`、
-    /// 歌手 Hot 区 → `Artist`、歌单帧 → `Playlist`；数据未到 / 无可播容器（歌手 Albums 区行是
+    /// artist Hot 区 → `Artist`、歌单帧 → `Playlist`；数据未到 / 无可播容器（artist Albums 区行是
     /// 专辑容器，不在此起单曲队列）→ `None`。与 [`Self::song_list`] 取整列的几路一一对应——
     /// 起播的那一列曲目归属哪个容器，语境就报哪个。
     pub(crate) fn play_context(&self) -> Option<mineral_protocol::QueueContextWire> {
@@ -486,7 +486,7 @@ impl DetailFrame {
         self.data = Some(DetailData::Album(album));
     }
 
-    /// 落歌手详情（热门曲那一路）；与 `albums` 那一路合并，先到的不被覆盖。
+    /// 落 artist 详情（热门曲那一路）；与 `albums` 那一路合并，先到的不被覆盖。
     pub fn set_artist_detail(&mut self, artist: Box<Artist>) {
         match &mut self.data {
             Some(DetailData::Artist { detail, .. }) => *detail = Some(artist),
@@ -499,7 +499,7 @@ impl DetailFrame {
         }
     }
 
-    /// 落歌手专辑列表那一路；与 `detail` 那一路合并。
+    /// 落 artist 专辑列表那一路；与 `detail` 那一路合并。
     pub fn set_artist_albums(&mut self, albums: Vec<Album>) {
         match &mut self.data {
             Some(DetailData::Artist { albums: slot, .. }) => *slot = Some(albums),
@@ -612,7 +612,7 @@ impl DetailStack {
     }
 
     /// 滑动渲染参数：`(出发帧, 目标帧, ease-in-out 进度, is_push)`；未过渡为 `None`（渲染直接
-    /// 画当前帧）。进度走 ease-in-out（与歌手双区切换 / 左栏视图切换同曲线，两端减速、打断
+    /// 画当前帧）。进度走 ease-in-out（与 artist 双区切换 / 左栏视图切换同曲线，两端减速、打断
     /// 反向连续），不用单向 ease-out。
     pub fn sweep_frames(&self) -> Option<(&DetailFrame, &DetailFrame, u16, bool)> {
         if self.transition.settled() {
@@ -662,7 +662,7 @@ mod tests {
             .build()
     }
 
-    /// 造一个歌手（带头像，验证 `cover` 取 avatar）。
+    /// 造一个 artist（带头像，验证 `cover` 取 avatar）。
     fn artist(raw: &str) -> Artist {
         Artist::builder()
             .id(ArtistId::new(SourceKind::NETEASE, raw))
@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(single.fetch(), None, "单曲无专辑 → 不拉、降级");
     }
 
-    /// `fetch`：专辑→AlbumDetail(自身)、歌单→PlaylistDetail、歌手→Artist。
+    /// `fetch`：专辑→AlbumDetail(自身)、歌单→PlaylistDetail、artist→Artist。
     #[test]
     fn fetch_per_entity_kind() {
         assert_eq!(
@@ -736,11 +736,11 @@ mod tests {
         );
     }
 
-    /// 歌手 `cover` 取 avatar_url（非 cover_url）。
+    /// artist `cover` 取 avatar_url（非 cover_url）。
     #[test]
     fn artist_cover_is_avatar() {
         let a = EntityRef::Artist(Box::new(artist("ar")));
-        assert!(a.cover().is_some(), "歌手头图取 avatar_url");
+        assert!(a.cover().is_some(), "artist 头图取 avatar_url");
     }
 
     /// dedup_key 跨类型不碰撞、同实体稳定。
@@ -956,7 +956,7 @@ mod tests {
         Ok(())
     }
 
-    /// sweep_frames 的进度走 ease-in-out（与歌手双区切换、左栏视图切换同曲线），
+    /// sweep_frames 的进度走 ease-in-out（与 artist 双区切换、左栏视图切换同曲线），
     /// 不再是单向 ease-out——下钻/返回过渡与其余 sweep 对齐的回归守卫。
     #[test]
     fn sweep_uses_ease_in_out_curve() -> color_eyre::Result<()> {
@@ -1052,7 +1052,7 @@ mod tests {
         assert!(frame.section_eased().is_some(), "反向切换同样有滑动");
     }
 
-    /// 非歌手帧不该被 cycle_section 误用，但即便调用也只是切 section + arm，不 panic；
+    /// 非 artist 帧不该被 cycle_section 误用，但即便调用也只是切 section + arm，不 panic；
     /// 这里验证 DetailStack::tick 会推进栈顶帧的 section 动画。
     #[test]
     fn stack_tick_advances_top_section_anim() {
@@ -1142,7 +1142,7 @@ mod tests {
         Ok(())
     }
 
-    /// row_entity：歌手帧 Hot 区行 → Song、Albums 区行 → Album（容器）。
+    /// row_entity：artist 帧 Hot 区行 → Song、Albums 区行 → Album（容器）。
     #[test]
     fn row_entity_artist_by_section() -> color_eyre::Result<()> {
         use mineral_model::{Artist, ArtistId};
@@ -1171,7 +1171,7 @@ mod tests {
         Ok(())
     }
 
-    /// song_list：专辑帧 = 全曲、歌手 Hot 区 = 热门曲、Albums 区（容器行）= 空、未到 = 空。
+    /// song_list：专辑帧 = 全曲、artist Hot 区 = 热门曲、Albums 区（容器行）= 空、未到 = 空。
     #[test]
     fn song_list_per_section() -> color_eyre::Result<()> {
         use mineral_model::{Artist, ArtistId};

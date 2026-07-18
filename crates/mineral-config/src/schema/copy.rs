@@ -24,7 +24,7 @@ pub struct CopyConfig {
 #[lua_optional_by_serde]
 #[lua_extra_field(
     "template",
-    "fun(e: mineral.Song|mineral.Playlist): string",
+    "fun(e: mineral.Song|mineral.Playlist|mineral.Album|mineral.Artist): string",
     "渲染函数,返回进剪贴板的文本;收哪种表由 context 决定"
 )]
 pub struct CopyTemplate {
@@ -52,4 +52,10 @@ pub enum CopyContext {
 
     /// 歌单上(回调收 `mineral.Playlist`,含已加载曲目 `songs`)。
     Playlist,
+
+    /// 专辑上(回调收 `mineral.Album`,含已加载曲目 `songs`)。
+    Album,
+
+    /// artist 上(回调收 `mineral.Artist`,含代表曲 `songs`)。
+    Artist,
 }

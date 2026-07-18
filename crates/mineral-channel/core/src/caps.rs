@@ -76,6 +76,14 @@ pub struct ChannelCaps {
     /// 歌单网页(分享链接)模板,占位语义同 [`Self::song_web_url`]。
     #[builder(default)]
     playlist_web_url: Option<String>,
+
+    /// 专辑网页(分享链接)模板,占位语义同 [`Self::song_web_url`]。
+    #[builder(default)]
+    album_web_url: Option<String>,
+
+    /// artist 网页(分享链接)模板,占位语义同 [`Self::song_web_url`]。
+    #[builder(default)]
+    artist_web_url: Option<String>,
 }
 
 /// 按源声明的网页模板渲染分享链接(TUI 复制菜单与 Lua 投影共用,勿各自实现)。

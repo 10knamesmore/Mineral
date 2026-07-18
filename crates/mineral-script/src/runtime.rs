@@ -256,11 +256,13 @@ mod tests {
         install_api(&lua, &host)?;
         crate::host::seed_web_url_templates(
             &lua,
-            vec![(
-                "netease".to_owned(),
-                Some("https://x.example/song?id={id}".to_owned()),
-                None,
-            )],
+            vec![crate::host::SourceWebUrls {
+                source: "netease".to_owned(),
+                song: Some("https://x.example/song?id={id}".to_owned()),
+                playlist: None,
+                album: None,
+                artist: None,
+            }],
         )?;
         lua.load(
             r#"

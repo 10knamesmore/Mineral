@@ -258,7 +258,7 @@ async fn main() -> color_eyre::Result<()> {
         eprintln!("跳过 songs_detail/album/url/lyrics(因为 search_songs 没产出歌曲)");
     }
 
-    // 歌手三连:搜索 → 详情 → 专辑列表(全部匿名可用)
+    // artist 三连:搜索 → 详情 → 专辑列表(全部匿名可用)
     run_artist_readonly(&ch, &mut report).await;
 
     // ---------------- 3. 登录态 ----------------
@@ -373,7 +373,7 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 歌手只读三连:搜索 → 详情(简介 + 热门曲)→ 专辑列表,全部匿名可用。
+/// artist 只读三连:搜索 → 详情(简介 + 热门曲)→ 专辑列表,全部匿名可用。
 async fn run_artist_readonly(
     ch: &NeteaseChannel,
     report: &mut Vec<(String, Result<String, String>)>,
@@ -404,7 +404,7 @@ async fn run_artist_readonly(
     };
 
     let Some(artist) = artist_ref else {
-        eprintln!("跳过 artist_detail/artist_albums(因为 search_artists 没产出歌手)");
+        eprintln!("跳过 artist_detail/artist_albums(因为 search_artists 没产出 artist)");
         return;
     };
     let r = run("artist_detail", async {

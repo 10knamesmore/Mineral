@@ -28,6 +28,31 @@ mineral = {}
 ---@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
 ---@field songs mineral.Song[]  已加载的曲目(client 侧缓存快照;未拉取过为空数组)
 
+--- 复制模板(context = "album")回调里的专辑
+---@class mineral.Album
+---@field id string  全局唯一 id(`namespace:value`)
+---@field name string  专辑名
+---@field artists string[]  艺术家名列表(主艺人在前;可能为空数组)
+---@field description string  简介,拿不到为空串
+---@field track_count integer|nil  标称曲目数;未知为 nil(轻量投影拿不到,与「真的 0 曲」区分)
+---@field cover_url string|nil  封面:远端 = http(s) URL;拿不到为 nil
+---@field source string  来源名(如 "netease" / "local")
+---@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
+---@field songs mineral.Song[]  已加载的曲目(搜索投影常空,下钻详情后填充)
+
+--- 复制模板(context = "artist")回调里的 artist
+---@class mineral.Artist
+---@field id string  全局唯一 id(`namespace:value`)
+---@field name string  艺名
+---@field description string  简介,拿不到为空串
+---@field follower_count integer|nil  关注者数;未知为 nil
+---@field album_count integer|nil  名下专辑数;拿不到为 nil
+---@field song_count integer|nil  名下歌曲数;拿不到为 nil
+---@field avatar_url string|nil  头像 URL;拿不到为 nil
+---@field source string  来源名(如 "netease" / "local")
+---@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
+---@field songs mineral.Song[]  代表 / 热门曲(未拉取过为空数组)
+
 --- 曲目结束原因(与 Rust `TrackFinishedReason` 由守卫测试钉死同步)。
 ---@alias mineral.FinishReason "eof"|"skip"|"error"|"stop"
 

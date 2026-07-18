@@ -151,6 +151,12 @@ impl ClientHandle {
             mineral_protocol::CopyTemplateCtx::Playlist(p) => {
                 (mineral_stats::CopyContext::Playlist, Some(p.id.qualified()))
             }
+            mineral_protocol::CopyTemplateCtx::Album(a) => {
+                (mineral_stats::CopyContext::Album, Some(a.id.qualified()))
+            }
+            mineral_protocol::CopyTemplateCtx::Artist(a) => {
+                (mineral_stats::CopyContext::Artist, Some(a.id.qualified()))
+            }
         };
         let result = self.player.render_copy_template(index, ctx).await;
         // 埋点:文案渲染(copy_renders;user 发起)。Err = 模板缺失 / 渲染失败。

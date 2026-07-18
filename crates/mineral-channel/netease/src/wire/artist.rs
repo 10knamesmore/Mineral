@@ -1,4 +1,4 @@
-//! 歌手详情 / 歌手专辑列表端点的响应结构。
+//! artist 详情 / artist 专辑列表端点的响应结构。
 
 use serde::Deserialize;
 
@@ -8,7 +8,7 @@ use super::song::{AlbumSong, Artist};
 /// `/weapi/v1/artist/{id}` 的响应(顶层即此结构,非 `result` 包裹)。
 #[derive(Debug, Deserialize)]
 pub struct ArtistDetailResult {
-    /// 歌手信息。
+    /// artist 信息。
     pub artist: ArtistInfo,
 
     /// 热门曲目(ar/al/dt 字段风格,与专辑/歌单 detail 同构)。
@@ -16,13 +16,13 @@ pub struct ArtistDetailResult {
     pub hot_songs: Vec<AlbumSong>,
 }
 
-/// 详情 / 专辑列表端点里的歌手信息。
+/// 详情 / 专辑列表端点里的 artist 信息。
 #[derive(Debug, Deserialize)]
 pub struct ArtistInfo {
-    /// 歌手数字 ID。
+    /// artist 数字 ID。
     pub id: i64,
 
-    /// 歌手名。
+    /// artist 名。
     #[serde(default, deserialize_with = "string_or_null")]
     pub name: String,
 
@@ -43,7 +43,7 @@ pub struct ArtistInfo {
     pub music_size: Option<u64>,
 }
 
-/// `/api/artist/follow/count/get` 响应。歌手详情端点顶层不带粉丝数,粉丝数只此端点给,
+/// `/api/artist/follow/count/get` 响应。artist 详情端点顶层不带粉丝数,粉丝数只此端点给,
 /// 故 `artist_detail` 并发补打它再聚合。
 #[derive(Debug, Deserialize)]
 pub struct FollowCountResult {
@@ -68,7 +68,7 @@ pub struct ArtistAlbumsResult {
     pub hot_albums: Vec<ArtistAlbum>,
 }
 
-/// 歌手专辑列表里的专辑项。
+/// artist 专辑列表里的专辑项。
 #[derive(Debug, Deserialize)]
 pub struct ArtistAlbum {
     /// 专辑数字 ID。
@@ -108,7 +108,7 @@ mod tests {
     use super::{ArtistAlbumsResult, ArtistDetailResult};
     use crate::wire::de::from_value;
 
-    /// 歌手详情:artist 元信息 + hotSongs(ar/al/dt 风格)整体解析。
+    /// artist 详情:artist 元信息 + hotSongs(ar/al/dt 风格)整体解析。
     #[test]
     fn parses_artist_detail_with_hot_songs() -> color_eyre::Result<()> {
         let raw = serde_json::json!({
@@ -123,7 +123,7 @@ mod tests {
             ]
         });
         let r: ArtistDetailResult = from_value(raw)?;
-        mineral_test::assert_snap_debug!("歌手详情(Beyond + 热门曲海阔天空)解析结构", r);
+        mineral_test::assert_snap_debug!("artist 详情(Beyond + 热门曲海阔天空)解析结构", r);
         Ok(())
     }
 

@@ -88,7 +88,7 @@ pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, songs: Vec<Song>) -> P
         .build()
 }
 
-/// 专辑/歌单/歌手详情里的 [`AlbumSong`](ar/al/dt 字段风格)→ 统一 [`Song`]。
+/// 专辑/歌单/artist 详情里的 [`AlbumSong`](ar/al/dt 字段风格)→ 统一 [`Song`]。
 pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
     Song::builder()
         .id(SongId::new(SourceKind::NETEASE, s.id.to_string()))
@@ -120,7 +120,7 @@ pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
         .build()
 }
 
-/// 搜索结果歌手 DTO → 统一 [`Artist`]。
+/// 搜索结果 artist DTO → 统一 [`Artist`]。
 ///
 /// 搜索只给元信息 + 粉丝数(`fansSize`),不含简介/热门曲——简介与曲目按需走 `artist_detail`。
 pub(crate) fn search_artist_to_model(a: SearchArtist) -> Artist {
@@ -145,7 +145,7 @@ pub(crate) fn search_playlist_to_model(p: SearchPlaylist) -> Playlist {
         .build()
 }
 
-/// 歌手详情响应 + 粉丝数 → 统一 [`Artist`]。
+/// artist 详情响应 + 粉丝数 → 统一 [`Artist`]。
 ///
 /// `fans` 来自 `/api/artist/follow/count/get`——详情端点顶层不带粉丝数,由 channel 并发补打
 /// 后传入(补打失败为 `None`)。`albumSize`/`musicSize` 是详情端点顶层独家给的名下专辑/歌曲计数。
@@ -162,7 +162,7 @@ pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -
         .build()
 }
 
-/// 歌手专辑列表项 → 统一 [`Album`](曲目留空,按需走 `album_detail`)。
+/// artist 专辑列表项 → 统一 [`Album`](曲目留空,按需走 `album_detail`)。
 pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
     Album::builder()
         .id(AlbumId::new(SourceKind::NETEASE, a.id.to_string()))
@@ -468,7 +468,7 @@ mod tests {
         Ok(())
     }
 
-    /// 歌手详情响应 → model:id 入 NETEASE namespace、briefDesc → description、
+    /// artist 详情响应 → model:id 入 NETEASE namespace、briefDesc → description、
     /// albumSize/musicSize → 计数、hotSongs → songs 全量映射、fans 来自聚合参数。
     #[test]
     fn detail_maps_to_model_artist() -> color_eyre::Result<()> {
@@ -490,11 +490,11 @@ mod tests {
         assert_eq!(model.album_count, Some(146));
         assert_eq!(model.song_count, Some(2570));
         assert_eq!(model.follower_count, Some(8_900_000));
-        mineral_test::assert_snap_debug!("歌手详情映射成统一 Artist(Beyond + 1 热门曲)", model);
+        mineral_test::assert_snap_debug!("artist 详情映射成统一 Artist(Beyond + 1 热门曲)", model);
         Ok(())
     }
 
-    /// 歌手专辑列表项 → model:无主艺术家时 artists 为空,曲目恒空。
+    /// artist 专辑列表项 → model:无主艺术家时 artists 为空,曲目恒空。
     #[test]
     fn album_item_without_artist_maps_to_empty_artists() -> color_eyre::Result<()> {
         use super::artist_album_to_model;

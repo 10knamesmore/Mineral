@@ -207,24 +207,45 @@ pub fn install_api(lua: &Lua, host: &ScriptHost) -> mlua::Result<()> {
 /// 各源网页链接模板在 VM named registry 的键(Song/Playlist 投影拼 `url` 时读)。
 pub(crate) const WEB_URL_TEMPLATES: &str = "mineral.web_url_templates";
 
-/// 把各源的网页链接模板写进 VM named registry,供 Song/Playlist 的 Lua 投影
-/// 拼 `url` 字段。daemon 装配时(脚本线程启动前)调用;不 seed 则所有实体的
-/// `url` 为 nil(降级,不报错)。
+/// 一个源的各实体网页链接模板(从 channel caps 抽取,seed 进 VM registry 供实体投影的
+/// `url` 字段拼接;各字段 `None` = 该源无此实体的网页形态)。占位语义(`{id}` 整段 / `{0}`
+/// 按 `:` 分段)见 [`mineral_channel_core::render_web_url`]。
+#[derive(Clone, Debug)]
+pub struct SourceWebUrls {
+    /// 源名(`SourceKind::name`)。
+    pub source: String,
+
+    /// 歌曲网页模板。
+    pub song: Option<String>,
+
+    /// 歌单网页模板。
+    pub playlist: Option<String>,
+
+    /// 专辑网页模板。
+    pub album: Option<String>,
+
+    /// artist 网页模板。
+    pub artist: Option<String>,
+}
+
+/// 把各源的网页链接模板写进 VM named registry,供实体的 Lua 投影拼 `url` 字段。
+/// daemon 装配时(脚本线程启动前)调用;不 seed 则所有实体的 `url` 为 nil(降级,不报错)。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `entries`: `(源名, 歌曲模板, 歌单模板)`;占位语义(`{id}` 整段 / `{0}` 按 `:` 分段)
-///     见 [`mineral_channel_core::render_web_url`]
+///   - `entries`: 各源的模板集(见 [`SourceWebUrls`])
 pub fn seed_web_url_templates(
     lua: &Lua,
-    entries: impl IntoIterator<Item = (String, Option<String>, Option<String>)>,
+    entries: impl IntoIterator<Item = SourceWebUrls>,
 ) -> mlua::Result<()> {
     let table = lua.create_table()?;
-    for (source, song_tpl, playlist_tpl) in entries {
+    for urls in entries {
         let entry = lua.create_table()?;
-        entry.set("song", song_tpl)?;
-        entry.set("playlist", playlist_tpl)?;
-        table.set(source, entry)?;
+        entry.set("song", urls.song)?;
+        entry.set("playlist", urls.playlist)?;
+        entry.set("album", urls.album)?;
+        entry.set("artist", urls.artist)?;
+        table.set(urls.source, entry)?;
     }
     lua.set_named_registry_value(WEB_URL_TEMPLATES, table)
 }

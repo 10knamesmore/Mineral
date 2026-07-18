@@ -11,7 +11,7 @@ use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
 use mineral_script::{
     PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime,
-    ScriptSender, WatchdogConfig,
+    ScriptSender, SourceWebUrls, WatchdogConfig,
 };
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
@@ -94,13 +94,15 @@ impl ScriptParts {
             .iter()
             .map(|ch| {
                 let caps = ch.caps();
-                (
-                    ch.source().name().to_owned(),
-                    caps.song_web_url().clone(),
-                    caps.playlist_web_url().clone(),
-                )
+                SourceWebUrls {
+                    source: ch.source().name().to_owned(),
+                    song: caps.song_web_url().clone(),
+                    playlist: caps.playlist_web_url().clone(),
+                    album: caps.album_web_url().clone(),
+                    artist: caps.artist_web_url().clone(),
+                }
             })
-            .collect::<Vec<(String, Option<String>, Option<String>)>>();
+            .collect::<Vec<SourceWebUrls>>();
         let runtime = self.vm.and_then(|lua| {
             seed_web_urls(&lua, &web_urls);
             match ScriptRuntime::spawn(lua, self.host.clone(), watchdog, sender) {
@@ -130,7 +132,7 @@ impl ScriptParts {
 }
 
 /// 把各源网页链接模板 seed 进 VM;失败只降级(`url` 为 nil),不阻断脚本启动。
-pub(crate) fn seed_web_urls(lua: &Lua, web_urls: &[(String, Option<String>, Option<String>)]) {
+pub(crate) fn seed_web_urls(lua: &Lua, web_urls: &[SourceWebUrls]) {
     if let Err(e) = mineral_script::seed_web_url_templates(lua, web_urls.iter().cloned()) {
         mineral_log::warn!(
             target: "script",
@@ -158,7 +160,7 @@ pub struct ScriptPumps {
     watchdog: WatchdogConfig,
 
     /// 各源网页链接模板(热重载的新 VM 重新 seed 用;caps 启动后不变)。
-    web_urls: Vec<(String, Option<String>, Option<String>)>,
+    web_urls: Vec<SourceWebUrls>,
 }
 
 /// 属性值快照源:重载起新 VM 前取 daemon 当前属性,播种其缓存
@@ -182,7 +184,7 @@ pub struct ScriptReloadParts {
     pub(crate) props_snapshot: PropsSnapshot,
 
     /// 各源网页链接模板(重载的新 VM 重新 seed 用)。
-    pub(crate) web_urls: Vec<(String, Option<String>, Option<String>)>,
+    pub(crate) web_urls: Vec<SourceWebUrls>,
 
     /// 配置底树落点:重载成功后把新合成树交给配置宿主(重算有效树 +
     /// 推送订阅 client)。

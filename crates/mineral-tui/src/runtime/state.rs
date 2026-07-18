@@ -488,7 +488,7 @@ impl AppState {
         payload: &SearchPayload,
         has_more: Option<bool>,
     ) {
-        // caps 先读:随后 session 借走 self.channel_search。歌手源的可用分区落定桶级判定,让歌手
+        // caps 先读:随后 session 借走 self.channel_search。artist 源的可用分区落定桶级判定,让 artist
         // root 帧把分区收到首个可用区(无热门曲的源如 B站即只有 Albums;含后续 set_sel 复位)。
         let sections = self
             .caps
@@ -506,14 +506,14 @@ impl AppState {
         }
     }
 
-    /// ArtistDetail 回包：落到当前 detail 栈顶帧（若正等这个歌手；否则丢弃）。
+    /// ArtistDetail 回包：落到当前 detail 栈顶帧（若正等这个 artist；否则丢弃）。
     fn apply_artist_detail(&mut self, id: &ArtistId, artist: &Artist) {
         if let Some(kr) = self.channel_search.active_results_mut() {
             kr.fill_artist_detail(id, Box::new(artist.clone()));
         }
     }
 
-    /// ArtistAlbums 回包：落到当前 detail 栈顶帧（若正等这个歌手）。
+    /// ArtistAlbums 回包：落到当前 detail 栈顶帧（若正等这个 artist）。
     fn apply_artist_albums(&mut self, id: &ArtistId, albums: &[Album]) {
         if let Some(kr) = self.channel_search.active_results_mut() {
             kr.fill_artist_albums(id, albums.to_vec());
@@ -1097,7 +1097,7 @@ mod tests {
             .build()
     }
 
-    /// 造一个歌手(测试 helper)。
+    /// 造一个 artist(测试 helper)。
     fn artist_fixture(raw: &str) -> mineral_model::Artist {
         mineral_model::Artist::builder()
             .id(mineral_model::ArtistId::new(SourceKind::NETEASE, raw))
@@ -1187,7 +1187,7 @@ mod tests {
         Ok(())
     }
 
-    /// 歌手详情两路(热门曲 + 专辑列表)分别到货、合并进同一帧。
+    /// artist 详情两路(热门曲 + 专辑列表)分别到货、合并进同一帧。
     #[test]
     fn artist_detail_and_albums_merge() -> color_eyre::Result<()> {
         use mineral_channel_core::Page;

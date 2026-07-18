@@ -167,6 +167,8 @@ impl MusicChannel for NeteaseChannel {
             ]))
             .song_web_url(Some("https://music.163.com/song?id={id}".to_owned()))
             .playlist_web_url(Some("https://music.163.com/playlist?id={id}".to_owned()))
+            .album_web_url(Some("https://music.163.com/album?id={id}".to_owned()))
+            .artist_web_url(Some("https://music.163.com/artist?id={id}".to_owned()))
             .build()
     }
 
@@ -220,7 +222,7 @@ impl MusicChannel for NeteaseChannel {
             .into())
     }
 
-    /// 歌手详情:并发取「详情(简介/计数/热门曲)」与「粉丝数」两端点,聚合成完整 [`Artist`]。
+    /// artist 详情:并发取「详情(简介/计数/热门曲)」与「粉丝数」两端点,聚合成完整 [`Artist`]。
     ///
     /// `/weapi/v1/artist/{id}` 顶层不带粉丝数,粉丝数只有 `/api/artist/follow/count/get` 给;两端点
     /// 并发打、就地聚合。详情端点失败则整体失败(主数据);粉丝数端点失败降级 0(非致命,warn 留痕)。

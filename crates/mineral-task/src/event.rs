@@ -119,18 +119,18 @@ pub enum TaskEvent {
         has_more: Option<bool>,
     },
 
-    /// `ArtistDetail` 任务成功:歌手简介 + 热门曲目已到。
+    /// `ArtistDetail` 任务成功:artist 简介 + 热门曲目已到。
     ArtistDetailFetched {
-        /// 歌手 id。
+        /// artist id。
         id: ArtistId,
 
-        /// 歌手详情。
+        /// artist 详情。
         artist: Box<Artist>,
     },
 
-    /// `ArtistAlbums` 任务成功:歌手的一页专辑列表已到。
+    /// `ArtistAlbums` 任务成功:artist 的一页专辑列表已到。
     ArtistAlbumsFetched {
-        /// 歌手 id。
+        /// artist id。
         id: ArtistId,
 
         /// 分页参数(client 配对翻页用)。
@@ -193,6 +193,6 @@ pub enum SearchPayload {
     /// 歌单结果(曲目留空)。
     Playlists(Vec<Playlist>),
 
-    /// 歌手结果(热门曲留空)。
+    /// artist 结果(热门曲留空)。
     Artists(Vec<Artist>),
 }

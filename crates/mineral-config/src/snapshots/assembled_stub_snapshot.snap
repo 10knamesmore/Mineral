@@ -112,7 +112,7 @@ expression: "super::meta_config_lua()"
 ---@alias mineral.TextStyle "bold"|"italic"|"underline"|"dim"|"reversed"|"crossed_out"
 
 ---复制模板的作用上下文。
----@alias mineral.CopyContext "song"|"playlist"
+---@alias mineral.CopyContext "song"|"playlist"|"album"|"artist"
 
 ---模板可引用的字段。
 ---@alias mineral.TitleField "title"|"artist"|"album"|"position"|"duration"|"source"|"lyric"
@@ -202,8 +202,8 @@ expression: "super::meta_config_lua()"
 ---@field enter_search? mineral.KeyBinding 进入搜索输入态(全屏态屏蔽)。
 ---@field activate? mineral.KeyBinding 在当前视图「进入」:进入歌单 / 播放选中曲。
 ---@field back? mineral.KeyBinding 在当前视图「返回」(搜索非空时先清搜索)。
----@field drill_into? mineral.KeyBinding 下探一层 / 进入选中项详情(搜索面板:song 进其专辑、容器进详情;歌手专辑区下钻该专辑)。
----@field cycle_detail_section? mineral.KeyBinding 切换详情内分区(歌手:热门曲 ↔ 专辑)。
+---@field drill_into? mineral.KeyBinding 下探一层 / 进入选中项详情(搜索面板:song 进其专辑、容器进详情;artist 专辑区下钻该专辑)。
+---@field cycle_detail_section? mineral.KeyBinding 切换详情内分区(artist:热门曲 ↔ 专辑)。
 ---@field cycle_mode? mineral.KeyBinding 循环播放模式。
 ---@field volume_up? mineral.KeyBinding 音量增(步长见 `behavior.volume_step`)。
 ---@field volume_down? mineral.KeyBinding 音量减(步长见 `behavior.volume_step`)。
@@ -429,7 +429,7 @@ expression: "super::meta_config_lua()"
 ---@field key? string 菜单快捷字母(单字符)。省略 = 仅导航 + Enter 可达;与内置项同字母时 顶掉内置的快捷位;用户项之间后者胜。
 ---@field label string 菜单显示名。
 ---@field context? mineral.CopyContext 模板作用的上下文(决定回调收到的表形态与菜单项出现的位置)。
----@field template fun(e: mineral.Song|mineral.Playlist): string 渲染函数,返回进剪贴板的文本;收哪种表由 context 决定
+---@field template fun(e: mineral.Song|mineral.Playlist|mineral.Album|mineral.Artist): string 渲染函数,返回进剪贴板的文本;收哪种表由 context 决定
 
 ---TUI 窗口标题配置。四态各一套模板:template(播 / 暂共用)、idle、disconnected。
 ---@class mineral.WindowTitleConfig

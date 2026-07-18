@@ -304,7 +304,7 @@ impl SearchPage {
         mineral_protocol::QueueContextWire::Search { query }
     }
 
-    /// detail 面板起播的队列语境:当前帧定出容器身份(专辑 / 歌手 / 歌单)则报它,否则回落搜索词。
+    /// detail 面板起播的队列语境:当前帧定出容器身份(专辑 / artist / 歌单)则报它,否则回落搜索词。
     pub(crate) fn detail_context(&self) -> mineral_protocol::QueueContextWire {
         self.active_results()
             .and_then(|kr| kr.detail.current())
@@ -323,7 +323,7 @@ impl SearchPage {
     }
 
     /// 面板下探(`drill_into`):results → 进 detail(song 进其专辑、容器进详情);
-    /// detail → 下钻选中专辑(歌手专辑区;曲目是叶子,无可下钻)。纯状态,无副作用。
+    /// detail → 下钻选中专辑(artist 专辑区;曲目是叶子,无可下钻)。纯状态,无副作用。
     fn drill_search_panel(&mut self, sweep_ticks: u16) {
         match self.focus {
             SearchFocus::Results => self.focus_search_panel_forward(),
@@ -332,7 +332,7 @@ impl SearchPage {
         }
     }
 
-    /// detail 下探:只取「下钻专辑」那支(歌手专辑区选中专辑 push 帧),曲目是叶子无操作。
+    /// detail 下探:只取「下钻专辑」那支(artist 专辑区选中专辑 push 帧),曲目是叶子无操作。
     /// 复用 [`Self::detail_activate_action`] 的判定,与 `activate` 同源——activate 接 Drill+Play、
     /// drill 只接 Drill。
     fn drill_detail_item(&mut self, sweep_ticks: u16) {
@@ -344,7 +344,7 @@ impl SearchPage {
         }
     }
 
-    /// detail 激活:歌手专辑区选中 album → push 下钻帧(纯状态);其余列表选中 song → 替换队列播放。
+    /// detail 激活:artist 专辑区选中 album → push 下钻帧(纯状态);其余列表选中 song → 替换队列播放。
     fn activate_detail_item(&mut self, sweep_ticks: u16) -> SearchEffect {
         match self.detail_activate_action() {
             DetailActivate::Drill(album) => {
@@ -369,7 +369,7 @@ impl SearchPage {
             return DetailActivate::None;
         };
         match (&frame.entity, frame.section, &frame.data) {
-            // 歌手专辑区:选中专辑 → 下钻。
+            // artist 专辑区:选中专辑 → 下钻。
             (
                 EntityRef::Artist(_),
                 ArtistSection::Albums,
@@ -381,7 +381,7 @@ impl SearchPage {
                 .map_or(DetailActivate::None, |a| {
                     DetailActivate::Drill(Box::new(a.clone()))
                 }),
-            // 歌手热门曲:选中曲 → 播放。
+            // artist 热门曲:选中曲 → 播放。
             (
                 EntityRef::Artist(_),
                 ArtistSection::Hot,
@@ -415,7 +415,7 @@ impl SearchPage {
         }
     }
 
-    /// 切歌手双区(仅歌手帧),光标归零并 arm 横向滑动。CycleDetailSection 经全局 keymap 派发、
+    /// 切 artist 双区(仅 artist 帧),光标归零并 arm 横向滑动。CycleDetailSection 经全局 keymap 派发、
     /// 任何焦点都可能到这里,仅 detail 焦点才动分区。
     fn cycle_detail_section(&mut self, sweep_ticks: u16) {
         if self.focus != SearchFocus::Detail {
@@ -487,7 +487,7 @@ impl SearchPage {
 
 /// detail 焦点 activate 的动作:下钻一张专辑、或替换队列播放选中曲。
 enum DetailActivate {
-    /// 歌手专辑区选中专辑 → push 下钻帧。
+    /// artist 专辑区选中专辑 → push 下钻帧。
     Drill(Box<Album>),
 
     /// 列表选中曲 → 替换队列播放(队列 = 整个列表,起播 = 选中曲)。

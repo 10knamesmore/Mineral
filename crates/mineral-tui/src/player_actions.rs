@@ -294,7 +294,7 @@ impl App {
         self.pending_container.insert(fetch.dedup_key(), mode);
     }
 
-    /// 容器曲目若已在手则返回(免冗余拉取):歌单退查 library 缓存;专辑 / 歌手本地无缓存,
+    /// 容器曲目若已在手则返回(免冗余拉取):歌单退查 library 缓存;专辑 / artist 本地无缓存,
     /// 恒 `None`(走拉取)。
     fn container_loaded_songs(&self, container: &ContainerRef) -> Option<Vec<Song>> {
         match container {
@@ -357,7 +357,7 @@ impl App {
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
         use mineral_protocol::QueueContextWire;
-        // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / 歌手),与登记意图时的容器同一身份。
+        // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / artist),与登记意图时的容器同一身份。
         let (key, songs, context) = match ev {
             TaskEvent::AlbumDetailFetched { id, album } => (
                 DetailFetch::AlbumDetail(id.clone()).dedup_key(),
@@ -401,7 +401,7 @@ fn container_fetch(container: &ContainerRef) -> DetailFetch {
     }
 }
 
-/// 容器 → 其起播队列语境(埋点 provenance:整张专辑 / 整个歌单 / 歌手热门曲各归其身份)。
+/// 容器 → 其起播队列语境(埋点 provenance:整张专辑 / 整个歌单 / artist 热门曲各归其身份)。
 /// 曲目已加载时立即入队走它;未加载走拉取,到货后由 [`App::fulfill_pending_container`] 按
 /// 事件 id 重新定出同一语境。
 fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContextWire {

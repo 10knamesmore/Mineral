@@ -1,4 +1,4 @@
-//! 歌手端点(详情 / 粉丝数 / 专辑列表;纯协议:参数 → 类型化 wire DTO)。
+//! artist 端点(详情 / 粉丝数 / 专辑列表;纯协议:参数 → 类型化 wire DTO)。
 //!
 //! 详情端点顶层不带粉丝数,粉丝数只有 follow/count 端点给——两者各是独立纯端点,
 //! "并发取 + 聚合成完整 Artist"的编排在 channel 层,本层只暴露单端点。
@@ -13,7 +13,7 @@ use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
 use crate::wire::artist::{ArtistAlbumsResult, ArtistDetailResult, FollowCountResult};
 
-/// 歌手详情:`/weapi/v1/artist/{id}`(简介 / 计数 / 热门曲)。
+/// artist 详情:`/weapi/v1/artist/{id}`(简介 / 计数 / 热门曲)。
 ///
 /// 响应顶层平铺(`artist` / `hotSongs` 与 `code` 同级,无 `result` 包裹)。
 pub async fn detail(transport: &Transport, id: &ArtistId) -> Result<ArtistDetailResult> {
@@ -29,7 +29,7 @@ pub async fn detail(transport: &Transport, id: &ArtistId) -> Result<ArtistDetail
     crate::wire::de::from_value(raw)
 }
 
-/// 歌手粉丝数:`/api/artist/follow/count/get`(取 `data.fansCnt`;`data` 缺降级 0)。
+/// artist 粉丝数:`/api/artist/follow/count/get`(取 `data.fansCnt`;`data` 缺降级 0)。
 pub async fn follow_count(transport: &Transport, id: &ArtistId) -> Result<u64> {
     let mut params = serde_json::Map::new();
     params.insert("id".into(), serde_json::json!(id.as_str()));
@@ -45,7 +45,7 @@ pub async fn follow_count(transport: &Transport, id: &ArtistId) -> Result<u64> {
     Ok(parsed.data.map_or(0, |d| d.fans_cnt))
 }
 
-/// 歌手专辑列表:`/api/artist/albums/{id}`(分页;曲目留空,按需走 `album_detail`)。
+/// artist 专辑列表:`/api/artist/albums/{id}`(分页;曲目留空,按需走 `album_detail`)。
 pub async fn albums(
     transport: &Transport,
     id: &ArtistId,

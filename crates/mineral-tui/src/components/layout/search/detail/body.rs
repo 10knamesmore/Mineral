@@ -1,4 +1,4 @@
-//! Detail 面板栈顶帧的主体列表区:非歌手帧曲目表、歌手帧热门曲/专辑双区(Tab + 切区
+//! Detail 面板栈顶帧的主体列表区:非 artist 帧曲目表、artist 帧热门曲/专辑双区(Tab + 切区
 //! 离屏合成),及两张表(曲目/专辑)的渲染。数据未到画骨架,选中行高亮随面板焦点度渐变。
 
 use ratatui::buffer::Buffer;
@@ -41,7 +41,7 @@ struct ListPaint<'a> {
     focus_permille: u16,
 }
 
-/// 主体：歌手帧画双区，其余画曲目列表。`motion` 透传给底层列表(稳态推进 / 离屏冻结)。
+/// 主体：artist 帧画双区，其余画曲目列表。`motion` 透传给底层列表(稳态推进 / 离屏冻结)。
 pub(super) fn draw_body(
     buf: &mut Buffer,
     body: Rect,
@@ -56,7 +56,7 @@ pub(super) fn draw_body(
     }
 }
 
-/// 非歌手帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.songs`（同源
+/// 非 artist 帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.songs`（同源
 /// 专辑无需再列 album 列），歌单帧来自 `Tracks`（混源，多列出 album）。
 fn draw_track_body(
     buf: &mut Buffer,
@@ -98,7 +98,7 @@ fn draw_track_body(
     }
 }
 
-/// 歌手帧主体：热门曲/专辑双区 Tab + 当前区列表。热门曲是该歌手的歌，artist 列冗余，
+/// artist 帧主体：热门曲/专辑双区 Tab + 当前区列表。热门曲是该 artist 的歌，artist 列冗余，
 /// 改列 album。
 fn draw_artist_body(
     buf: &mut Buffer,
@@ -160,7 +160,7 @@ fn draw_artist_body(
     }
 }
 
-/// 画歌手某一区的列表：Top Songs 走曲目表（artist 列冗余，出 album 列）、Albums 走专辑表；
+/// 画 artist 某一区的列表：Top Songs 走曲目表（artist 列冗余，出 album 列）、Albums 走专辑表；
 /// 数据未到画骨架。切区滑动期对两区各调一次（离屏合成，传 `Frozen`）。
 fn draw_artist_section(
     buf: &mut Buffer,
@@ -230,7 +230,7 @@ fn compose_sweep(
     }
 }
 
-/// 歌手双区 Tab：当前区 accent 高亮，另一区暗调；右侧 `[ / ]` 切区提示。
+/// artist 双区 Tab：当前区 accent 高亮，另一区暗调；右侧 `[ / ]` 切区提示。
 fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme: &Theme) {
     let on = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
     let off = Style::new().fg(theme.subtext);

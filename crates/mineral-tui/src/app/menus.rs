@@ -5,7 +5,7 @@
 //! 列表滚动态的只读 offset 还原;菜单贴行下方弹出(`Placement::Below`)。
 
 use mineral_config::{CopyContext, CopyTemplate};
-use mineral_model::{Album, Artist, Song};
+use mineral_model::{Album, Artist, ArtistRef, Song};
 use mineral_protocol::CopyTemplateCtx;
 use mineral_task::SearchPayload;
 use ratatui::layout::Rect;
@@ -45,7 +45,7 @@ pub(crate) enum SurfaceKind {
     /// 搜索态结果列。
     SearchResults,
 
-    /// 搜索态 detail 面板焦点的当前区列表（曲目 / 歌手某区）。
+    /// 搜索态 detail 面板焦点的当前区列表（曲目 / artist 某区）。
     SearchDetail,
 }
 
@@ -81,7 +81,7 @@ impl App {
                     anchor: self.search_row_anchor()?,
                     surface: SurfaceKind::SearchResults,
                 }),
-                // detail 焦点:当前区选中行的实体（曲目 / 歌手某区），锚到 detail 面板内
+                // detail 焦点:当前区选中行的实体（曲目 / artist 某区），锚到 detail 面板内
                 // 该列表区的选中行下方。
                 SearchFocus::Detail => Some(ListSelection {
                     entity: kr.detail.current()?.row_entity()?,
@@ -152,7 +152,7 @@ impl App {
     }
 
     /// 选中实体的 `o` 操作项(按实体类型 + 面种类)。歌曲给队列动作(`p` 替换队列起播取所在
-    /// 列表整列作上下文);容器(专辑/歌单/歌手)给播放全部 / 加入队列(见 [`container_action_items`])。
+    /// 列表整列作上下文);容器(专辑/歌单/artist)给播放全部 / 加入队列(见 [`container_action_items`])。
     fn action_items(&self, entity: &EntityRef, surface: SurfaceKind) -> Vec<MenuItem> {
         match entity {
             EntityRef::Song(song) => vec![
@@ -200,7 +200,7 @@ impl App {
                     | SearchPayload::Artists(_) => None,
                 })
                 .unwrap_or_default(),
-            // detail 面板当前区的整列歌曲（专辑/歌单曲目、歌手热门曲；Albums 区行是容器，
+            // detail 面板当前区的整列歌曲（专辑/歌单曲目、artist 热门曲；Albums 区行是容器，
             // 走容器动作不取此）。
             SurfaceKind::SearchDetail => self
                 .state
@@ -231,8 +231,8 @@ impl App {
         }
     }
 
-    /// 选中实体的 `y` 复制项(按实体类型),后随 Lua 自定义模板项。歌曲 / 歌单带网页链接 +
-    /// 模板;专辑 / 歌手只内置项。全站(browse / search results / search detail / queue)共用。
+    /// 选中实体的 `y` 复制项(按实体类型),后随 Lua 自定义模板项。四类实体均带网页链接(源
+    /// 声明模板者)与模板。全站(browse / search results / search detail / queue)共用。
     fn copy_items(&self, entity: &EntityRef) -> Vec<MenuItem> {
         let templates = self.state.cfg.tui().copy().templates();
         let caps = self.state.caps.get(&entity_source(entity));
@@ -272,8 +272,22 @@ impl App {
                 });
                 items
             }
-            EntityRef::Album(album) => album_copy_items(album),
-            EntityRef::Artist(artist) => artist_copy_items(artist),
+            EntityRef::Album(album) => {
+                let url = caps.and_then(|c| c.album_web_url().as_deref());
+                let mut items = album_copy_items(album, url);
+                append_template_items(&mut items, templates, CopyContext::Album, || {
+                    CopyTemplateCtx::Album(Box::new((**album).clone()))
+                });
+                items
+            }
+            EntityRef::Artist(artist) => {
+                let url = caps.and_then(|c| c.artist_web_url().as_deref());
+                let mut items = artist_copy_items(artist, url);
+                append_template_items(&mut items, templates, CopyContext::Artist, || {
+                    CopyTemplateCtx::Artist(Box::new((**artist).clone()))
+                });
+                items
+            }
         }
     }
 
@@ -390,7 +404,7 @@ fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
 /// 边框行）；offset 走只读 `Frozen` 快照，平移途中 `pin_cursor` 钳边与渲染端一致。
 ///
 /// # Params:
-///   - `area`: 列表区矩形（已去面板外框 + 歌手 Tab 行，见 [`detail_list_area`]）
+///   - `area`: 列表区矩形（已去面板外框 + artist Tab 行，见 [`detail_list_area`]）
 ///   - `list`: 该列表的光标 + 视口滚动态
 ///   - `len`: 当前区列表总行数
 fn borderless_row_anchor(area: Rect, list: &ScrollList, len: usize) -> Rect {
@@ -507,6 +521,16 @@ fn playlist_copy_items(playlist: &mineral_model::Playlist, web_url: Option<&str>
     items
 }
 
+/// 多 artist 名按 `, ` join(主艺人在前),供歌曲 / 专辑复制菜单的「Copy artist」项共用。
+/// 调用方先按 `is_empty` 决定是否出该项,故空 slice 落成空串不会被渲染。
+fn joined_artist_names(artists: &[ArtistRef]) -> String {
+    artists
+        .iter()
+        .map(|a| a.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
 /// 歌曲的复制菜单内置项(后随 Lua 自定义模板,接入见 `copy.templates`)。
 ///
 /// # Params:
@@ -519,16 +543,10 @@ fn song_copy_items(song: &Song, web_url: Option<&str>) -> Vec<MenuItem> {
         MenuAction::Copy(song.name.clone()),
     )];
     if !song.artists.is_empty() {
-        let joined = song
-            .artists
-            .iter()
-            .map(|a| a.name.clone())
-            .collect::<Vec<String>>()
-            .join(", ");
         items.push(MenuItem::keyed(
             'a',
             "Copy artist",
-            MenuAction::Copy(joined),
+            MenuAction::Copy(joined_artist_names(&song.artists)),
         ));
     }
     if let Some(album) = &song.album {
@@ -556,12 +574,32 @@ fn song_copy_items(song: &Song, web_url: Option<&str>) -> Vec<MenuItem> {
     items
 }
 
-/// 专辑的复制菜单内置项(name / id / 封面;caps 未声明专辑网页模板,故无「复制链接」项)。
-fn album_copy_items(album: &Album) -> Vec<MenuItem> {
-    let mut items = vec![
-        MenuItem::keyed('n', "Copy name", MenuAction::Copy(album.name.clone())),
-        MenuItem::keyed('i', "Copy id", MenuAction::Copy(album.id.qualified())),
-    ];
+/// 专辑的复制菜单内置项(name / artist / id / URL / 封面)。
+///
+/// # Params:
+///   - `album`: 选中专辑
+///   - `web_url`: 该源的专辑网页模板(caps 声明)
+fn album_copy_items(album: &Album, web_url: Option<&str>) -> Vec<MenuItem> {
+    let mut items = vec![MenuItem::keyed(
+        'n',
+        "Copy name",
+        MenuAction::Copy(album.name.clone()),
+    )];
+    if !album.artists.is_empty() {
+        items.push(MenuItem::keyed(
+            'a',
+            "Copy artist",
+            MenuAction::Copy(joined_artist_names(&album.artists)),
+        ));
+    }
+    items.push(MenuItem::keyed(
+        'i',
+        "Copy id",
+        MenuAction::Copy(album.id.qualified()),
+    ));
+    if let Some(url) = render_web_url(web_url, album.id.value()) {
+        items.push(MenuItem::keyed('u', "Copy URL", MenuAction::Copy(url)));
+    }
     if let Some(cover) = &album.cover_url {
         items.push(MenuItem::keyed(
             'c',
@@ -572,12 +610,19 @@ fn album_copy_items(album: &Album) -> Vec<MenuItem> {
     items
 }
 
-/// 歌手的复制菜单内置项(name / id / 头像;caps 未声明歌手网页模板,故无「复制链接」项)。
-fn artist_copy_items(artist: &Artist) -> Vec<MenuItem> {
+/// artist 的复制菜单内置项(name / id / URL / 头像)。
+///
+/// # Params:
+///   - `artist`: 选中 artist
+///   - `web_url`: 该源的 artist 网页模板(caps 声明)
+fn artist_copy_items(artist: &Artist, web_url: Option<&str>) -> Vec<MenuItem> {
     let mut items = vec![
         MenuItem::keyed('n', "Copy name", MenuAction::Copy(artist.name.clone())),
         MenuItem::keyed('i', "Copy id", MenuAction::Copy(artist.id.qualified())),
     ];
+    if let Some(url) = render_web_url(web_url, artist.id.value()) {
+        items.push(MenuItem::keyed('u', "Copy URL", MenuAction::Copy(url)));
+    }
     if let Some(avatar) = &artist.avatar_url {
         items.push(MenuItem::keyed(
             'c',
@@ -588,9 +633,9 @@ fn artist_copy_items(artist: &Artist) -> Vec<MenuItem> {
     items
 }
 
-/// 容器(专辑/歌单/歌手)的 `o` 操作项:`p` 播放全部、`n` 全部按序插播、`a` 加入队列
-/// (歌手取热门曲那路)。各项持容器副本,落地经 [`App::start_container_play`] 拉取→入队。
-/// `n` 只给有「全部曲目」语义的专辑 / 歌单——歌手是热门曲采样,插播整列无意义。
+/// 容器(专辑/歌单/artist)的 `o` 操作项:`p` 播放全部、`n` 全部按序插播、`a` 加入队列
+/// (artist 取热门曲那路)。各项持容器副本,落地经 [`App::start_container_play`] 拉取→入队。
+/// `n` 只给有「全部曲目」语义的专辑 / 歌单——artist 是热门曲采样,插播整列无意义。
 fn container_action_items(container: ContainerRef) -> Vec<MenuItem> {
     let (play_label, append_label) = match container {
         ContainerRef::Artist(_) => ("Play top songs", "Append top songs"),
@@ -639,8 +684,8 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::{
-        album_copy_items, append_template_items, container_action_items, playlist_copy_items,
-        row_anchor, song_copy_items,
+        album_copy_items, append_template_items, artist_copy_items, container_action_items,
+        playlist_copy_items, row_anchor, song_copy_items,
     };
     use crate::app::App;
     use crate::components::layout::shared::compute::compute_search;
@@ -771,7 +816,7 @@ mod tests {
         Ok(())
     }
 
-    /// 容器 `o` 菜单的「Play all next」项只给专辑 / 歌单(有「全部曲目」语义);歌手不出
+    /// 容器 `o` 菜单的「Play all next」项只给专辑 / 歌单(有「全部曲目」语义);artist 不出
     /// (热门曲是采样,无整列语义)。
     #[test]
     fn container_menu_play_next_only_for_album_playlist() -> color_eyre::Result<()> {
@@ -802,7 +847,7 @@ mod tests {
             !items
                 .iter()
                 .any(|it| matches!(it.action, Some(MenuAction::PlayNextContainer(_)))),
-            "歌手容器不出 Play all next"
+            "artist 容器不出 Play all next"
         );
         Ok(())
     }
@@ -1002,17 +1047,52 @@ mod tests {
         );
     }
 
-    /// 专辑复制项:name/id 恒有;有封面则补 cover URL(caps 无专辑网页模板,故无 URL 项)。
+    /// 专辑复制项:name/id 恒有;有 artist 在 name 后补(多人 `, ` join)、有模板补 URL、有封面
+    /// 补 cover;无 artist / 无模板对应项不渲染。
     #[test]
     fn album_copy_items_compose() -> color_eyre::Result<()> {
-        let album = Album::builder()
+        let mut album = Album::builder()
             .id(AlbumId::new(SourceKind::LOCAL, "al1"))
             .name("EndSerenading".to_owned())
+            .artists(vec![
+                mineral_model::ArtistRef {
+                    id: mineral_model::ArtistId::new(SourceKind::LOCAL, "a1"),
+                    name: "A".to_owned(),
+                },
+                mineral_model::ArtistRef {
+                    id: mineral_model::ArtistId::new(SourceKind::LOCAL, "a2"),
+                    name: "B".to_owned(),
+                },
+            ])
             .cover_url(Some(mineral_model::MediaUrl::remote(
                 "https://img.example/a.jpg",
             )?))
             .build();
-        let got = album_copy_items(&album)
+        let got = album_copy_items(&album, Some("https://x.example/album?id={id}"))
+            .iter()
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
+            .collect::<Vec<(Option<char>, MenuAction)>>();
+        assert_eq!(
+            got,
+            vec![
+                (Some('n'), MenuAction::Copy("EndSerenading".to_owned())),
+                (Some('a'), MenuAction::Copy("A, B".to_owned())),
+                (Some('i'), MenuAction::Copy(album.id.qualified())),
+                (
+                    Some('u'),
+                    MenuAction::Copy("https://x.example/album?id=al1".to_owned())
+                ),
+                (
+                    Some('c'),
+                    MenuAction::Copy("https://img.example/a.jpg".to_owned())
+                ),
+            ],
+            "有艺人+模板:name→artist(, join)→id→url→cover"
+        );
+
+        // 无艺人 + 无模板:对应项不渲染。
+        album.artists = Vec::new();
+        let got = album_copy_items(&album, /*web_url*/ None)
             .iter()
             .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
             .collect::<Vec<(Option<char>, MenuAction)>>();
@@ -1025,7 +1105,58 @@ mod tests {
                     Some('c'),
                     MenuAction::Copy("https://img.example/a.jpg".to_owned())
                 ),
-            ]
+            ],
+            "无艺人+无模板:name→id→cover"
+        );
+        Ok(())
+    }
+
+    /// artist 复制项:name/id 恒有;有模板补 URL、有头像补 avatar;无模板 / 无头像对应项不渲染。
+    #[test]
+    fn artist_copy_items_compose() -> color_eyre::Result<()> {
+        let artist = mineral_model::Artist::builder()
+            .id(mineral_model::ArtistId::new(SourceKind::NETEASE, "ar1"))
+            .name("Mono".to_owned())
+            .avatar_url(Some(mineral_model::MediaUrl::remote(
+                "https://img.example/av.jpg",
+            )?))
+            .build();
+        let got = artist_copy_items(&artist, Some("https://music.163.com/artist?id={id}"))
+            .iter()
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
+            .collect::<Vec<(Option<char>, MenuAction)>>();
+        assert_eq!(
+            got,
+            vec![
+                (Some('n'), MenuAction::Copy("Mono".to_owned())),
+                (Some('i'), MenuAction::Copy(artist.id.qualified())),
+                (
+                    Some('u'),
+                    MenuAction::Copy("https://music.163.com/artist?id=ar1".to_owned())
+                ),
+                (
+                    Some('c'),
+                    MenuAction::Copy("https://img.example/av.jpg".to_owned())
+                ),
+            ],
+            "有模板+头像:name→id→url→avatar"
+        );
+
+        let bare = mineral_model::Artist::builder()
+            .id(mineral_model::ArtistId::new(SourceKind::NETEASE, "ar2"))
+            .name("Mono".to_owned())
+            .build();
+        let got = artist_copy_items(&bare, /*web_url*/ None)
+            .iter()
+            .filter_map(|it| it.action.clone().map(|a| (it.hotkey, a)))
+            .collect::<Vec<(Option<char>, MenuAction)>>();
+        assert_eq!(
+            got,
+            vec![
+                (Some('n'), MenuAction::Copy("Mono".to_owned())),
+                (Some('i'), MenuAction::Copy(bare.id.qualified())),
+            ],
+            "无模板+无头像:仅 name→id"
         );
         Ok(())
     }

@@ -143,7 +143,11 @@ impl MusicChannel for BilibiliChannel {
             .playlist_edit(false)
             // UP 主详情:只有投稿专辑区,无「热门曲」区(B站无整源热门单曲概念,见 artist_detail)。
             .artist_sections(ArtistSections::new(vec![ArtistSectionKind::Albums]))
+            // album = 整个视频(裸 id 即 bvid,无分 P 段),用 `{id}` 整段;artist = UP 主空间页,
+            // 裸 id 即 mid。
             .song_web_url(Some("https://www.bilibili.com/video/{0}?p={1}".to_owned()))
+            .album_web_url(Some("https://www.bilibili.com/video/{id}".to_owned()))
+            .artist_web_url(Some("https://space.bilibili.com/{id}".to_owned()))
             .build()
     }
 

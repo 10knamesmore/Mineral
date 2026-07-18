@@ -590,13 +590,78 @@ fn playlist_table(lua: &Lua, playlist: &mineral_model::Playlist) -> mlua::Result
     Ok(table)
 }
 
+/// `Album` 在 Lua 侧的投影(复制模板 `context = "album"` 的实参)。`songs` 为已加载曲目
+/// (搜索投影常空,下钻 `album_detail` 后填充)。
+fn album_table(lua: &Lua, album: &mineral_model::Album) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("id", album.id.qualified())?;
+    table.set("name", album.name.clone())?;
+    table.set(
+        "artists",
+        lua.create_sequence_from(album.artists.iter().map(|a| a.name.clone()))?,
+    )?;
+    table.set("description", album.description.clone())?;
+    table.set("track_count", album.track_count)?;
+    table.set(
+        "cover_url",
+        album.cover_url.as_ref().map(ToString::to_string),
+    )?;
+    table.set("source", album.source().name())?;
+    table.set(
+        "url",
+        web_url(
+            lua,
+            album.source().name(),
+            /*kind*/ "album",
+            album.id.value(),
+        ),
+    )?;
+    let songs = lua.create_table()?;
+    for (i, s) in album.songs.iter().enumerate() {
+        songs.raw_set(i + 1, song_table(lua, s)?)?;
+    }
+    table.set("songs", songs)?;
+    Ok(table)
+}
+
+/// `Artist` 在 Lua 侧的投影(复制模板 `context = "artist"` 的实参)。`songs` 为代表 / 热门曲。
+fn artist_table(lua: &Lua, artist: &mineral_model::Artist) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("id", artist.id.qualified())?;
+    table.set("name", artist.name.clone())?;
+    table.set("description", artist.description.clone())?;
+    table.set("follower_count", artist.follower_count)?;
+    table.set("album_count", artist.album_count)?;
+    table.set("song_count", artist.song_count)?;
+    table.set(
+        "avatar_url",
+        artist.avatar_url.as_ref().map(ToString::to_string),
+    )?;
+    table.set("source", artist.source().name())?;
+    table.set(
+        "url",
+        web_url(
+            lua,
+            artist.source().name(),
+            /*kind*/ "artist",
+            artist.id.value(),
+        ),
+    )?;
+    let songs = lua.create_table()?;
+    for (i, s) in artist.songs.iter().enumerate() {
+        songs.raw_set(i + 1, song_table(lua, s)?)?;
+    }
+    table.set("songs", songs)?;
+    Ok(table)
+}
+
 /// 按 seed 进 registry 的源模板拼网页分享链接(占位语义——`{id}` 整段 / `{0}` 按 `:`
 /// 分段——见 [`mineral_channel_core::render_web_url`],与 TUI 复制菜单同一实现)。
 /// 未 seed / 源没有该实体的模板给 `None`(Lua 侧 `url` 为 nil)。
 ///
 /// # Params:
 ///   - `source`: 源名(`SourceKind::name`)
-///   - `kind`: `"song"` 或 `"playlist"`(seed 表的二级键)
+///   - `kind`: `"song"` / `"playlist"` / `"album"` / `"artist"`(seed 表的二级键)
 ///   - `raw_id`: 裸 id
 fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> {
     let table: mlua::Table = lua
@@ -627,6 +692,8 @@ fn render_copy_template(
     let arg = match ctx {
         CopyTemplateCtx::Song(song) => song_table(lua, song),
         CopyTemplateCtx::Playlist(playlist) => playlist_table(lua, playlist),
+        CopyTemplateCtx::Album(album) => album_table(lua, album),
+        CopyTemplateCtx::Artist(artist) => artist_table(lua, artist),
     }
     .map_err(|e| format!("实体投影失败:{e}"))?;
     call_guarded::<_, String>(lua, watchdog, &func, arg).map_err(|e| {

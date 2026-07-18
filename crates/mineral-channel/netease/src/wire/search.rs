@@ -75,21 +75,21 @@ pub struct SearchAlbum {
     pub pic_url: Option<String>,
 }
 
-/// `/weapi/search/get` type=100（歌手）的响应。
+/// `/weapi/search/get` type=100（artist）的响应。
 #[derive(Debug, Deserialize)]
 pub struct SearchArtistsResult {
-    /// 命中的歌手列表。
+    /// 命中的 artist 列表。
     #[serde(default)]
     pub artists: Vec<SearchArtist>,
 }
 
-/// 搜索结果里出现的歌手。
+/// 搜索结果里出现的 artist。
 #[derive(Debug, Deserialize)]
 pub struct SearchArtist {
-    /// 歌手 ID。
+    /// artist ID。
     pub id: i64,
 
-    /// 歌手名。
+    /// artist 名。
     #[serde(default)]
     pub name: String,
 
@@ -179,7 +179,7 @@ mod tests {
         Ok(())
     }
 
-    /// 正常解析歌手列表(stype=100)。
+    /// 正常解析 artist 列表(stype=100)。
     #[test]
     fn parses_artist_list() -> color_eyre::Result<()> {
         let raw = serde_json::json!({
@@ -192,7 +192,7 @@ mod tests {
         });
         let r: super::SearchArtistsResult = from_value(raw)?;
         mineral_test::assert_snap_debug!(
-            "搜索歌手列表(Beyond 带 fansSize / Beyond乐队 缺字段)解析结构",
+            "搜索 artist 列表(Beyond 带 fansSize / Beyond乐队 缺字段)解析结构",
             r
         );
         Ok(())

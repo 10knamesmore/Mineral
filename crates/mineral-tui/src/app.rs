@@ -1805,7 +1805,7 @@ mod tests {
             .build()
     }
 
-    /// 歌手 detail:[ ] 切专辑区、activate 专辑下钻一帧、Esc 弹回 root。
+    /// artist detail:[ ] 切专辑区、activate 专辑下钻一帧、Esc 弹回 root。
     #[test]
     fn artist_detail_section_drill_and_back() -> color_eyre::Result<()> {
         use mineral_channel_core::Page;

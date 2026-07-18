@@ -48,7 +48,7 @@ pub(crate) enum MenuAction {
     /// 下载这首。
     Download(Box<Song>),
 
-    /// 容器(专辑/歌单/歌手)播放全部:替换队列起播其曲目。曲目未加载时由落地侧触发拉取、
+    /// 容器(专辑/歌单/artist)播放全部:替换队列起播其曲目。曲目未加载时由落地侧触发拉取、
     /// 到货再入队(异步意图,见 `App::start_container_play`)。
     PlayContainer(Box<ContainerRef>),
 
@@ -83,7 +83,7 @@ pub(crate) enum ContainerRef {
     /// 歌单(曲目 = 歌单全曲)。
     Playlist(Box<Playlist>),
 
-    /// 歌手(曲目 = 热门曲那一路,非专辑)。
+    /// artist(曲目 = 热门曲那一路,非专辑)。
     Artist(Box<Artist>),
 }
 

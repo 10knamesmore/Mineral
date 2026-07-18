@@ -501,7 +501,7 @@ fn result_table(
                 vec![Constraint::Fill(1), Constraint::Length(6)],
             )
         }
-        // 歌手:歌手名 · 关注数(裸缩写,表头标 fans)。
+        // artist:artist 名 · 关注数(裸缩写,表头标 fans)。
         SearchPayload::Artists(artists) => {
             let rows = artists
                 .iter()

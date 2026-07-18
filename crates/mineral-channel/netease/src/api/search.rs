@@ -21,7 +21,7 @@ const PATH: &str = "/weapi/search/get";
 /// 的嵌套 album 只给 `picId`,封面取不到)。
 const CLOUD_PATH: &str = "/weapi/cloudsearch/get/web";
 
-/// 打搜索端点拿原始响应。`stype` 1=单曲, 10=专辑, 100=歌手, 1000=歌单;`path` 选 [`PATH`]
+/// 打搜索端点拿原始响应。`stype` 1=单曲, 10=专辑, 100=artist, 1000=歌单;`path` 选 [`PATH`]
 /// 或 [`CLOUD_PATH`](两者参数同构,仅响应形态不同)。
 async fn search_raw(
     transport: &Transport,
@@ -83,7 +83,7 @@ pub async fn search_albums(
     search_typed(transport, PATH, keyword, 10, offset, limit).await
 }
 
-/// 歌手搜索(只回元信息 + 粉丝数,简介/热门曲按需走 `artist_detail`)。
+/// artist 搜索(只回元信息 + 粉丝数,简介/热门曲按需走 `artist_detail`)。
 pub async fn search_artists(
     transport: &Transport,
     keyword: &str,

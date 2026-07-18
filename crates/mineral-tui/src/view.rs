@@ -1159,7 +1159,7 @@ mod tests {
         Ok(())
     }
 
-    /// 造一个带热门曲 + 专辑列表的歌手 detail 帧(测试 helper)：搜索歌手 → root 帧补拉
+    /// 造一个带热门曲 + 专辑列表的 artist detail 帧(测试 helper)：搜索 artist → root 帧补拉
     /// detail(热门曲) + albums(带 track_count/发行年/厂牌)。返回已置焦 detail 的 App。
     fn app_with_artist_detail() -> color_eyre::Result<crate::app::App> {
         use mineral_channel_core::Page;
@@ -1251,7 +1251,7 @@ mod tests {
         Ok(app)
     }
 
-    /// Search 歌手 detail 的 Albums 区:专辑表 name/tracks/year/label 四列 + 表头。
+    /// Search artist detail 的 Albums 区:专辑表 name/tracks/year/label 四列 + 表头。
     #[test]
     fn search_detail_artist_albums_snapshot() -> color_eyre::Result<()> {
         use crate::runtime::state::ArtistSection;
@@ -1265,13 +1265,13 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 26))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
-            "Search 歌手 detail Albums 区:专辑表 name/tracks/year/label 四列 + 表头",
+            "Search artist detail Albums 区:专辑表 name/tracks/year/label 四列 + 表头",
             t.backend()
         );
         Ok(())
     }
 
-    /// Search 歌手 detail 双区切换中途一帧:Top Songs 与 Albums 列表横向合成(尊重 view_sweep)。
+    /// Search artist detail 双区切换中途一帧:Top Songs 与 Albums 列表横向合成(尊重 view_sweep)。
     #[test]
     fn search_detail_section_sweep_midframe_snapshot() -> color_eyre::Result<()> {
         let mut app = app_with_artist_detail()?;
@@ -1287,7 +1287,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 26))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
-            "Search 歌手 detail 切区中途:Top Songs↔Albums 横向合成(列表区,Tab/头图不滑)",
+            "Search artist detail 切区中途:Top Songs↔Albums 横向合成(列表区,Tab/头图不滑)",
             t.backend()
         );
         Ok(())
@@ -1457,7 +1457,7 @@ mod tests {
         Ok(())
     }
 
-    /// 歌手结果:结果列走「歌手名 · 关注数缩写」两列对齐(humanize:42k / 1M)。
+    /// artist 结果:结果列走「artist 名 · 关注数缩写」两列对齐(humanize:42k / 1M)。
     #[test]
     fn search_results_artists_snapshot() -> color_eyre::Result<()> {
         use mineral_channel_core::Page;
@@ -1490,7 +1490,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
-            "Search 歌手结果:歌手名 · 关注数缩写 两列对齐",
+            "Search artist 结果:artist 名 · 关注数缩写 两列对齐",
             t.backend()
         );
         Ok(())

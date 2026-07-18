@@ -1,5 +1,5 @@
 //! Search detail 面板：实体详情栈顶帧的页头式渲染——左正方头图 + 右元数据，其下曲目/
-//! 专辑列表；歌手帧多一行热门曲/专辑双区 Tab。数据未到画占位骨架。
+//! 专辑列表；artist 帧多一行热门曲/专辑双区 Tab。数据未到画占位骨架。
 //!
 //! 稳态直接画在主帧（头图走 covers 管线的真图）；下钻/返回滑动期，出发帧与目标帧各渲染到
 //! 离屏 Buffer（头图走程序化占位、不上 kitty 真图，根治图像穿透），再按 sweep 进度列合成。
@@ -212,7 +212,7 @@ struct SweepArgs<'a> {
 }
 
 /// 下钻/返回滑动：出发帧与目标帧各渲染到离屏 Buffer，按 `eased` 列合成。风格随配置
-/// `view_sweep`（经 [`sweep_column`]），与歌手双区切换 / 左栏视图切换同款；方向由 `is_push`
+/// `view_sweep`（经 [`sweep_column`]），与 artist 双区切换 / 左栏视图切换同款；方向由 `is_push`
 /// 定（下钻目标右入、返回左入）。
 fn draw_sweep(
     frame: &mut Frame<'_>,
@@ -261,21 +261,21 @@ fn split_frame(inner: Rect) -> (Rect, Rect, Rect) {
     (head, delim, body)
 }
 
-/// 歌手帧主体再分：顶 1 行双区 Tab + 其下列表区。抽出供渲染与 [`detail_list_area`] 共用，
+/// artist 帧主体再分：顶 1 行双区 Tab + 其下列表区。抽出供渲染与 [`detail_list_area`] 共用，
 /// 锚点与渲染走同一处几何。
 fn split_artist_body(body: Rect) -> (Rect, Rect) {
     let [tabs, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
     (tabs, list)
 }
 
-/// 当前栈顶帧「列表区」相对面板内区 `inner` 的屏幕矩形：去头部，歌手帧再去 Tab 行。
+/// 当前栈顶帧「列表区」相对面板内区 `inner` 的屏幕矩形：去头部，artist 帧再去 Tab 行。
 /// 渲染端与行级菜单锚点共用此一处几何——菜单贴的行恒等于渲染出的行。该列表区**无**自己
 /// 的 block 边框（边框归整个 detail 面板），故其视口数学（区高 − 表头一行）与 browse 带
 /// 边框面板不同，锚点侧据此还原行 y。
 ///
 /// # Params:
 ///   - `inner`: detail 面板去外框后的内区
-///   - `is_artist`: 是否歌手帧（多减一行 Tab）
+///   - `is_artist`: 是否 artist 帧（多减一行 Tab）
 pub(crate) fn detail_list_area(inner: Rect, is_artist: bool) -> Rect {
     let (_head, _delim, body) = split_frame(inner);
     if is_artist {
@@ -382,7 +382,7 @@ fn draw_meta(buf: &mut Buffer, meta_a: Rect, dframe: &DetailFrame, theme: &Theme
     );
 }
 
-/// 当前帧头部该展示的简介原文（歌曲取其所属专辑的、专辑/歌手取聚合 detail 的、歌单取自身的）；
+/// 当前帧头部该展示的简介原文（歌曲取其所属专辑的、专辑/artist 取聚合 detail 的、歌单取自身的）；
 /// 拿不到为空串（不渲染）。
 fn frame_description(dframe: &DetailFrame) -> &str {
     match &dframe.entity {
@@ -461,7 +461,7 @@ mod tests {
 
     use super::{detail_list_area, split_frame};
 
-    /// detail_list_area：非歌手帧 = split_frame 的 body 整块；歌手帧再去顶部 1 行 Tab。
+    /// detail_list_area：非 artist 帧 = split_frame 的 body 整块；artist 帧再去顶部 1 行 Tab。
     /// 这是渲染端与行级菜单锚点共用的几何契约——两侧据此对齐。
     #[test]
     fn detail_list_area_drops_head_and_artist_tab() {
@@ -470,11 +470,11 @@ mod tests {
         assert_eq!(
             detail_list_area(inner, /*is_artist*/ false),
             body,
-            "非歌手帧 = 整块 body"
+            "非 artist 帧 = 整块 body"
         );
         let artist = detail_list_area(inner, /*is_artist*/ true);
-        assert_eq!(artist.y, body.y + 1, "歌手帧列表区下移 1 行(让出 Tab)");
-        assert_eq!(artist.height, body.height - 1, "歌手帧列表区少 1 行");
+        assert_eq!(artist.y, body.y + 1, "artist 帧列表区下移 1 行(让出 Tab)");
+        assert_eq!(artist.height, body.height - 1, "artist 帧列表区少 1 行");
         assert_eq!(
             (artist.x, artist.width),
             (body.x, body.width),

@@ -404,4 +404,10 @@ pub enum CopyTemplateCtx {
 
     /// 一张歌单,`songs` 为 client 已加载的曲目(`context = "playlist"` 的模板)。
     Playlist(Box<mineral_model::Playlist>),
+
+    /// 一张专辑(`context = "album"` 的模板)。
+    Album(Box<mineral_model::Album>),
+
+    /// 一个 artist(`context = "artist"` 的模板)。
+    Artist(Box<mineral_model::Artist>),
 }

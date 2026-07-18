@@ -313,7 +313,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
     }
 }
 
-/// 按 [`DetailFetch`] 派对应的 channel 拉取任务（歌手两路：详情 + 专辑列表；其余单路）。
+/// 按 [`DetailFetch`] 派对应的 channel 拉取任务（artist 两路：详情 + 专辑列表；其余单路）。
 pub(crate) fn submit_detail_tasks(client: &dyn Client, fetch: DetailFetch) {
     match fetch {
         DetailFetch::AlbumDetail(id) => {

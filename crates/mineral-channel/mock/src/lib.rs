@@ -91,6 +91,8 @@ impl MusicChannel for MockChannel {
             ]))
             .song_web_url(Some("https://mock.example/song/{id}".to_owned()))
             .playlist_web_url(Some("https://mock.example/playlist/{id}".to_owned()))
+            .album_web_url(Some("https://mock.example/album/{id}".to_owned()))
+            .artist_web_url(Some("https://mock.example/artist/{id}".to_owned()))
             .build()
     }
 

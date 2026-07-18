@@ -35,7 +35,7 @@ pub struct KindResults {
 
     /// 本桶所属源的 artist 可用分区（`caps.artist_sections`；一桶同源故桶级缓存）。`None` = caps
     /// 尚未落定。由 [`Self::apply_sections`] 在首页到货后按 caps 落定,`set_sel` 复位新 root 时复用
-    /// （无需再查 caps）——新建 / 复位的歌手 root 帧据此把分区收到首个可用区。
+    /// （无需再查 caps）——新建 / 复位的 artist root 帧据此把分区收到首个可用区。
     sections: Option<ArtistSections>,
 }
 
@@ -74,14 +74,14 @@ impl KindResults {
         }
     }
 
-    /// 按 caps 落定本桶所属源的 artist 可用分区（首页到货后由上层调,持 caps）。立即把当前歌手
+    /// 按 caps 落定本桶所属源的 artist 可用分区（首页到货后由上层调,持 caps）。立即把当前 artist
     /// root 帧的分区收到首个可用区,并让后续 `set_sel` 复位复用此判定。
     pub fn apply_sections(&mut self, sections: ArtistSections) {
         self.sections = Some(sections);
         self.apply_sections_to_root();
     }
 
-    /// 把桶级分区声明落到当前 root 帧（歌手帧才有意义;非歌手帧 / 未落定 → 不动）。
+    /// 把桶级分区声明落到当前 root 帧（artist 帧才有意义;非 artist 帧 / 未落定 → 不动）。
     fn apply_sections_to_root(&mut self) {
         if let Some(sections) = self.sections.clone()
             && let Some(frame) = self.detail.current_mut()
@@ -131,7 +131,7 @@ impl KindResults {
         self.list.set_sel(clamped);
         if let Some(entity) = EntityRef::from_payload(&self.results, clamped) {
             self.detail.reset_to(entity);
-            // 新 root 帧默认建;歌手帧沿用桶级分区声明把分区收到首个可用区(无热门曲的源即 Albums)。
+            // 新 root 帧默认建;artist 帧沿用桶级分区声明把分区收到首个可用区(无热门曲的源即 Albums)。
             self.apply_sections_to_root();
         }
     }
@@ -165,7 +165,7 @@ impl KindResults {
         }
     }
 
-    /// ArtistDetail 回包（热门曲那一路）落当前帧（栈顶正等这个歌手时）。
+    /// ArtistDetail 回包（热门曲那一路）落当前帧（栈顶正等这个 artist 时）。
     pub fn fill_artist_detail(&mut self, id: &ArtistId, artist: Box<Artist>) {
         let Some(frame) = self.detail.current_mut() else {
             return;
@@ -175,7 +175,7 @@ impl KindResults {
         }
     }
 
-    /// ArtistAlbums 回包（专辑列表那一路）落当前帧（栈顶正等这个歌手时）。
+    /// ArtistAlbums 回包（专辑列表那一路）落当前帧（栈顶正等这个 artist 时）。
     pub fn fill_artist_albums(&mut self, id: &ArtistId, albums: Vec<Album>) {
         let Some(frame) = self.detail.current_mut() else {
             return;

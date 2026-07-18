@@ -24,7 +24,7 @@ pub use mlua;
 pub use hooks::{
     BeforeDownloadCtx, BeforeStreamCtx, HookDecision, HookKind, HookMode, RewriteSpec,
 };
-pub use host::{ScriptHost, install_api, seed_web_url_templates};
+pub use host::{ScriptHost, SourceWebUrls, install_api, seed_web_url_templates};
 pub use message::{
     ActionOutcome, ConfigOverrideOp, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey,
     PropValue, QueryId, ResolveValue, ScriptCmd, ScriptEvent, TrackFinishedReason,

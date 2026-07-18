@@ -87,15 +87,15 @@ pub enum ChannelFetchKind {
         page: Page,
     },
 
-    /// 拉歌手详情(简介 + 热门曲目;目标 channel 由 `id` 的 namespace 决定)。
+    /// 拉 artist 详情(简介 + 热门曲目;目标 channel 由 `id` 的 namespace 决定)。
     ArtistDetail {
-        /// 歌手 id(自带 namespace)。
+        /// artist id(自带 namespace)。
         id: ArtistId,
     },
 
-    /// 拉歌手的专辑列表(分页;目标 channel 由 `id` 的 namespace 决定)。
+    /// 拉 artist 的专辑列表(分页;目标 channel 由 `id` 的 namespace 决定)。
     ArtistAlbums {
-        /// 歌手 id(自带 namespace)。
+        /// artist id(自带 namespace)。
         id: ArtistId,
 
         /// 分页参数。
