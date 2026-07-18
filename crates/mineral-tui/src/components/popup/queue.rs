@@ -218,25 +218,37 @@ impl Overlay for QueueOverlay {
 /// queue 表格的列档,按浮层内宽选(见 [`QueueCols::for_width`])。
 #[derive(Clone, Copy)]
 enum QueueCols {
-    /// 宽档:# / title / artist / len,文本列比例 Fill(3:2)。
+    /// 宽档:# / title / artist / album / len,文本列比例 Fill(3:2:2)。
+    Wide,
+
+    /// 中档:# / title / artist / len,文本列比例 Fill(3:2)—— album 放不下。
     Full,
 
-    /// 窄档:# / title / len —— artist 放不下,退到「歌本身」。
+    /// 窄档:# / title / len —— artist 也放不下,退到「歌本身」。
     Song,
 }
 
 impl QueueCols {
     /// 按浮层内宽 `width` 选档。阈值 44:低于此 title/artist 各分不到约 14 格,
-    /// 退到只剩歌名。
+    /// 退到只剩歌名;56 起三个文本列各分得约 12 格,才塞得下 album。
     fn for_width(width: u16) -> Self {
-        if width < 44 { Self::Song } else { Self::Full }
+        if width < 44 {
+            Self::Song
+        } else if width < 56 {
+            Self::Full
+        } else {
+            Self::Wide
+        }
     }
 
     /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
     fn header_cells(self) -> Vec<Cell<'static>> {
         let mut cells = vec![Cell::from("#"), Cell::from("title")];
-        if matches!(self, Self::Full) {
+        if matches!(self, Self::Wide | Self::Full) {
             cells.push(Cell::from("artist"));
+        }
+        if matches!(self, Self::Wide) {
+            cells.push(Cell::from("album"));
         }
         cells.push(Cell::from("len"));
         cells
@@ -245,6 +257,13 @@ impl QueueCols {
     /// 列宽约束:`#`(宽由 `index_w` 传入,随队列规模自适应)/ len 定宽,文本列比例 Fill。
     fn widths(self, index_w: u16) -> Vec<Constraint> {
         match self {
+            Self::Wide => vec![
+                Constraint::Length(index_w),
+                Constraint::Fill(3),
+                Constraint::Fill(2),
+                Constraint::Fill(2),
+                Constraint::Length(6),
+            ],
             Self::Full => vec![
                 Constraint::Length(index_w),
                 Constraint::Fill(3),
@@ -324,7 +343,7 @@ impl QueueColumns {
 /// 语义优先于源色;其余行序号用 `index_fg`(该行歌曲的源色,整列同色即队列来源),
 /// 歌名用主文本色,艺术家用次要色,层级分明。选中行的高亮背景由 Table 的
 /// `row_highlight_style` 叠加,与在播前景着色天然兼容(背景块视觉优先)。
-/// `cols` 决定列集:窄档省去 artist。
+/// `cols` 决定列集:窄档省去 artist,宽档多出 album。
 fn build_row<'a>(
     idx: usize,
     s: &'a Song,
@@ -359,12 +378,19 @@ fn build_row<'a>(
         None => Cell::from(Line::from(title_spans)),
     };
     let mut cells = vec![Cell::from(lead), title_cell];
-    if matches!(cols.text, QueueCols::Full) {
+    if matches!(cols.text, QueueCols::Wide | QueueCols::Full) {
         let artist = s
             .artists
             .first()
             .map_or_else(|| "—".to_owned(), |a| a.name.clone());
         cells.push(Cell::from(Span::styled(artist, Style::new().fg(sub_fg))));
+    }
+    if matches!(cols.text, QueueCols::Wide) {
+        let album = s
+            .album
+            .as_ref()
+            .map_or_else(|| "—".to_owned(), |a| a.name.clone());
+        cells.push(Cell::from(Span::styled(album, Style::new().fg(sub_fg))));
     }
     cells.push(Cell::from(Span::styled(
         format_ms_opt(s.duration_ms),
@@ -524,7 +550,7 @@ mod tests {
     }
 
     /// EndSerenading 前 3 曲 + 当前在播标记(下标 1)+ 聚焦,完全展开。
-    /// backend=100 → 浮层够宽落 Full 档(# / title / artist / len)。
+    /// backend=100(默认停靠占宽 36% → 浮层 36 → 内区 34)落 Song 档。
     #[test]
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
@@ -561,7 +587,7 @@ mod tests {
         Ok(())
     }
 
-    /// 小终端(backend=60)停靠浮层宽 = 左 64% ≈ 38 → inner < 44 → Song 档:
+    /// 小终端(backend=60,默认停靠占宽 36% → 浮层 21 → 内区 19)落 Song 档:
     /// 只剩 # / title / len,artist 省去。
     #[test]
     fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
@@ -576,6 +602,76 @@ mod tests {
             t.backend()
         );
         Ok(())
+    }
+
+    /// 中宽终端(backend=140,默认停靠占宽 36% → 浮层 50 → 内区 48)落 Full 档:
+    /// 放得下 artist 但塞不进 album——锁住「中档不硬塞 album 挤瘦 title/artist」。
+    #[test]
+    fn queue_mid_full_no_album_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(140, 20))?;
+        let ctx = ctx_with_queue(3, Some(1))?;
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:中宽保持 Full 档(有 artist,无 album)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 宽终端(backend=170,默认停靠占宽 36% → 浮层 61 → 内区 59)落 Wide 档:
+    /// # / title / artist / album / len。三首歌 album 全有值(短英文 / 长英文 / CJK
+    /// 混排),验证 album 列有内容时多文本列渲染不串列;其余 fixture 的 album 多为空,
+    /// 覆盖不到这条路径。
+    #[test]
+    fn queue_wide_album_snapshot() -> color_eyre::Result<()> {
+        use mineral_test::{song, with_album, with_artist, with_duration, with_name};
+        let make = |name: &str, artist: &str, album: &str| {
+            with_album(
+                with_artist(with_duration(with_name(song(name), name), 210_000), artist),
+                album,
+            )
+        };
+        let mut t = Terminal::new(TestBackend::new(170, 24))?;
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = vec![
+            make("Bones", "HONNE", "no song"),
+            make("Location Unknown", "HONNE", "Warm on a Cold Night"),
+            make("无", "草东没有派对", "丑奴儿"),
+        ];
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:宽浮层 Wide 档 album 列有内容(短英文/长英文/CJK)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 文本列档随浮层内宽三档递进:窄档只剩歌名,中档放得下 artist,宽档再放 album。
+    #[test]
+    fn queue_cols_tiers_by_width() {
+        use super::QueueCols;
+        assert!(
+            matches!(QueueCols::for_width(43), QueueCols::Song),
+            "43 退到只剩歌名"
+        );
+        assert!(
+            matches!(QueueCols::for_width(44), QueueCols::Full),
+            "44 起放得下 artist"
+        );
+        assert!(
+            matches!(QueueCols::for_width(55), QueueCols::Full),
+            "55 仍塞不进 album"
+        );
+        assert!(
+            matches!(QueueCols::for_width(56), QueueCols::Wide),
+            "56 起再放 album"
+        );
     }
 
     /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断。
