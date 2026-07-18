@@ -403,13 +403,20 @@ impl DetailFrame {
                 Some(DetailData::Artist {
                     detail: Some(_), ..
                 }),
-            ) => Some(QueueContextWire::Artist { id: a.id.clone() }),
+            ) => Some(QueueContextWire::Artist {
+                id: a.id.clone(),
+                name: Some(a.name.clone()),
+            }),
             (EntityRef::Artist(_), _, _) => None,
-            (_, _, Some(DetailData::Album(a))) => {
-                Some(QueueContextWire::Album { id: a.id.clone() })
-            }
+            (_, _, Some(DetailData::Album(a))) => Some(QueueContextWire::Album {
+                id: a.id.clone(),
+                name: Some(a.name.clone()),
+            }),
             (EntityRef::Playlist(p), _, Some(DetailData::Tracks(_))) => {
-                Some(QueueContextWire::Playlist { id: p.id.clone() })
+                Some(QueueContextWire::Playlist {
+                    id: p.id.clone(),
+                    name: Some(p.name.clone()),
+                })
             }
             _ => None,
         }

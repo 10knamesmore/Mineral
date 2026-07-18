@@ -302,6 +302,7 @@ impl BrowsePage {
                     mineral_protocol::QueueContextWire::Unknown,
                     |p| mineral_protocol::QueueContextWire::Playlist {
                         id: p.data.id.clone(),
+                        name: Some(p.data.name.clone()),
                     },
                 );
                 // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。

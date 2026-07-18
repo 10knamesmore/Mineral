@@ -1266,9 +1266,10 @@ mod tests {
         assert_eq!(
             context,
             mineral_protocol::QueueContextWire::Album {
-                id: AlbumId::new(SourceKind::NETEASE, "al1")
+                id: AlbumId::new(SourceKind::NETEASE, "al1"),
+                name: Some("al1".to_owned()),
             },
-            "detail 专辑起播记 Album 语境"
+            "detail 专辑起播记 Album 语境(带页面标题快照)"
         );
         Ok(())
     }

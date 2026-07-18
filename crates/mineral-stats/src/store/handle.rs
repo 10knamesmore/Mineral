@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn baseline_creates_thirty_tables() -> color_eyre::Result<()> {
+    async fn migrations_create_thirty_one_tables() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
         let pool = live(&store)?;
         let count = sqlx::query_scalar::<_, i64>(
@@ -126,7 +126,7 @@ mod tests {
         )
         .fetch_one(pool)
         .await?;
-        assert_eq!(count, 30, "plays + sessions + 28 事件表");
+        assert_eq!(count, 31, "plays + sessions + songs 维表 + 28 事件表");
         Ok(())
     }
 

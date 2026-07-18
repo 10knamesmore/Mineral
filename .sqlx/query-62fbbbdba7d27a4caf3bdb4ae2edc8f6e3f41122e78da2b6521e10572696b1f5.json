@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.ns AS \"ns!\", p.song_value AS \"song_value!\",\n                    COUNT(*) AS \"plays!: i64\", COALESCE(SUM(p.listen_ms), 0) AS \"listen_ms!: i64\",\n                    s.name AS \"name?\"\n                   FROM plays p\n                   LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value\n                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?\n                   GROUP BY p.ns, p.song_value ORDER BY 3 DESC, 4 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ns!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "song_value!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "name?",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "62fbbbdba7d27a4caf3bdb4ae2edc8f6e3f41122e78da2b6521e10572696b1f5"
+}

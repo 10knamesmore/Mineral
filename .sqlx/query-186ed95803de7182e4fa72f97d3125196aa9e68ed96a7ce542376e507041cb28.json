@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO songs (ns, song_value, name, alias, album_id, album_name, duration_ms)\n             VALUES (?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT(ns, song_value) DO UPDATE SET\n             name = excluded.name,\n             alias = COALESCE(excluded.alias, songs.alias),\n             album_id = COALESCE(excluded.album_id, songs.album_id),\n             album_name = COALESCE(excluded.album_name, songs.album_name),\n             duration_ms = COALESCE(excluded.duration_ms, songs.duration_ms)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "186ed95803de7182e4fa72f97d3125196aa9e68ed96a7ce542376e507041cb28"
+}

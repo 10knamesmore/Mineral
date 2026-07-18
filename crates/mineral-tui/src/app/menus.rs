@@ -222,6 +222,7 @@ impl App {
                 mineral_protocol::QueueContextWire::Unknown,
                 |p| mineral_protocol::QueueContextWire::Playlist {
                     id: p.data.id.clone(),
+                    name: Some(p.data.name.clone()),
                 },
             ),
             SurfaceKind::SearchResults => self.state.channel_search.search_context(),
@@ -746,10 +747,11 @@ mod tests {
             vec![(
                 "set_queue",
                 mineral_protocol::QueueContextWire::Playlist {
-                    id: PlaylistId::new(SourceKind::NETEASE, "p1")
+                    id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+                    name: Some("EndSerenading".to_owned()),
                 }
             )],
-            "库内 o→Play 记当前歌单语境"
+            "库内 o→Play 记当前歌单语境(带歌单名快照)"
         );
         Ok(())
     }

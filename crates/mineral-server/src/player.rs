@@ -537,7 +537,7 @@ impl PlayerCore {
         let play_mode = self.with_state(|st| st.play_mode);
         let context = self.take_play_context(&song.id);
         if let Some(pending) = crate::pending_from_start(
-            song.id.clone(),
+            song.clone(),
             crate::stats_play_mode(play_mode),
             song.duration_ms.and_then(|d| i64::try_from(d).ok()),
             origin,

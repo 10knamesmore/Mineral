@@ -6,7 +6,8 @@ use crate::store::StatsStore;
 
 /// 所有按 `ts` 裁剪的事件表。**单一真相源**:新增事件表必须补进来,由完整性测试
 /// `prune_registry_matches_migration` 兜住漏项(漏则测试红,而非静默漏删)。plays /
-/// sessions 不在此(裁剪列不同:started_at / ended_at,单独 query 处理)。
+/// sessions 不在此(裁剪列不同:started_at / ended_at,单独 query 处理);songs 维表
+/// 不在此(维度非流水,任意年代的事实行都要 JOIN 它出名,永不裁剪)。
 pub(crate) const EVENT_TABLES: [&str; 28] = [
     "searches",
     "seeks",
@@ -233,7 +234,7 @@ mod tests {
         let pool = live(&store)?;
         let db_tables = sqlx::query_scalar::<_, String>(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name NOT IN ('plays', 'sessions', '_sqlx_migrations') \
+             AND name NOT IN ('plays', 'sessions', 'songs', '_sqlx_migrations') \
              AND name NOT LIKE 'sqlite_%'",
         )
         .fetch_all(pool)

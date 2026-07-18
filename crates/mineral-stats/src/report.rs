@@ -8,7 +8,6 @@
 //! 展示名由上层回查。
 
 use mineral_model::{AlbumId, ArtistId, SongId};
-use rustc_hash::FxHashMap;
 use serde::Serialize;
 use typed_builder::TypedBuilder;
 
@@ -85,8 +84,11 @@ pub struct Totals {
 /// top 歌曲一项。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TopSong {
-    /// 歌曲 id(名字由 server 回查)。
+    /// 歌曲 id。
     pub song: SongId,
+
+    /// songs 维表回查的歌名;未覆盖为 `None`(展示层回落 id)。
+    pub name: Option<String>,
 
     /// 播放次数。
     pub plays: i64,
@@ -95,11 +97,14 @@ pub struct TopSong {
     pub listen_ms: i64,
 }
 
-/// top 专辑一项(按专辑语境 `context_ref` 聚合;名字由上层回查)。
+/// top 专辑一项(按专辑语境 `context_ref` 聚合)。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TopAlbum {
     /// 专辑 id(从 `plays.context_ref` 的 qualified 串重建)。
     pub album: AlbumId,
+
+    /// 组内任意非空的显示名快照;全组缺名为 `None`(展示层回落 id)。
+    pub name: Option<String>,
 
     /// 从该专辑起播的次数。
     pub plays: i64,
@@ -108,11 +113,14 @@ pub struct TopAlbum {
     pub listen_ms: i64,
 }
 
-/// top 艺人一项(按艺人语境 `context_ref` 聚合;名字由上层回查)。
+/// top 艺人一项(按艺人语境 `context_ref` 聚合)。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TopArtist {
     /// 艺人 id(从 `plays.context_ref` 的 qualified 串重建)。
     pub artist: ArtistId,
+
+    /// 组内任意非空的显示名快照;全组缺名为 `None`(展示层回落 id)。
+    pub name: Option<String>,
 
     /// 从该艺人起播的次数。
     pub plays: i64,
@@ -177,6 +185,9 @@ pub struct ContextSlice {
 
     /// 语境引用(搜索词 / qualified id);无为 `None`(manual / unknown)。
     pub reference: Option<String>,
+
+    /// 组内任意非空的显示名快照;search / manual / unknown 或全组缺名为 `None`。
+    pub name: Option<String>,
 
     /// 该语境的播放次数。
     pub plays: i64,
@@ -326,7 +337,7 @@ pub struct NamedEntry {
     /// qualified id(`namespace:value`;回查失败时展示层回落它)。
     pub id: String,
 
-    /// 回查得到的展示名;缺失为 `None`。
+    /// 库内直出的展示名;缺失为 `None`。
     pub name: Option<String>,
 
     /// 播放次数。
@@ -336,7 +347,7 @@ pub struct NamedEntry {
     pub listen_ms: i64,
 }
 
-/// stats.db 直出的原始盘点(未回查名),[`combine`] 的输入。
+/// stats.db 直出的原始盘点(名字已随查询 JOIN 就位),[`combine`] 的输入。
 #[derive(Clone, Debug, Default)]
 pub struct RawReport {
     /// 总量。
@@ -367,7 +378,7 @@ pub struct RawReport {
     pub events: EventSummary,
 }
 
-/// 一份装配好的完整盘点报告(§8.1 全套 + meta 回查名)。
+/// 一份装配好的完整盘点报告(§8.1 全套,名字随库直出)。
 #[derive(Clone, Debug, Serialize)]
 #[non_exhaustive]
 pub struct StatsReport {
@@ -399,43 +410,39 @@ pub struct StatsReport {
     pub events: EventSummary,
 }
 
-/// 纯函数:把 stats.db 直出的原始聚合 + `qualified id → 展示名` 映射装配成完整报告。
+/// 纯函数:把 stats.db 直出的原始聚合装配成完整报告。
 ///
-/// 名映射由上层拿 qualified id 回查 mineral.db 得到;缺失的名回落 `None`(展示层落 id)。
-/// 无 IO——server 出报告与将来 TUI 盘点页复用同一装配。
+/// 名字已由查询层就地 JOIN / 快照聚合得出(stats.db 自足,不回查其他数据库);缺名
+/// 保持 `None`,展示层回落 id。无 IO——server 出报告与将来 TUI 盘点页复用同一装配。
 ///
 /// # Params:
 ///   - `raw`: stats.db 直出的原始聚合
-///   - `names`: `qualified id → 展示名`
 ///
 /// # Return:
 ///   装配好的报告
-pub fn combine(raw: RawReport, names: &FxHashMap<String, String>) -> StatsReport {
-    let named = |id: String, plays: i64, listen_ms: i64| {
-        let name = names.get(&id).cloned();
-        NamedEntry {
-            id,
-            name,
-            plays,
-            listen_ms,
-        }
+pub fn combine(raw: RawReport) -> StatsReport {
+    let named = |id: String, name: Option<String>, plays: i64, listen_ms: i64| NamedEntry {
+        id,
+        name,
+        plays,
+        listen_ms,
     };
     StatsReport {
         totals: raw.totals,
         top_songs: raw
             .top_songs
             .into_iter()
-            .map(|t| named(t.song.qualified(), t.plays, t.listen_ms))
+            .map(|t| named(t.song.qualified(), t.name, t.plays, t.listen_ms))
             .collect(),
         top_albums: raw
             .top_albums
             .into_iter()
-            .map(|t| named(t.album.qualified(), t.plays, t.listen_ms))
+            .map(|t| named(t.album.qualified(), t.name, t.plays, t.listen_ms))
             .collect(),
         top_artists: raw
             .top_artists
             .into_iter()
-            .map(|t| named(t.artist.qualified(), t.plays, t.listen_ms))
+            .map(|t| named(t.artist.qualified(), t.name, t.plays, t.listen_ms))
             .collect(),
         distributions: raw.distributions,
         hourly: raw.hourly,
@@ -449,41 +456,40 @@ pub fn combine(raw: RawReport, names: &FxHashMap<String, String>) -> StatsReport
 mod tests {
     use super::{RawReport, TopSong, combine};
     use mineral_model::{SongId, SourceKind};
-    use rustc_hash::FxHashMap;
 
-    /// combine:命中名映射的落展示名,未命中的回落 `None`(id 恒在)。
+    /// combine:query 层直出的名原样进 `NamedEntry`,缺名落 `None`(id 恒在供回落展示)。
     #[test]
-    fn combine_attaches_names_with_fallback() -> color_eyre::Result<()> {
+    fn combine_carries_query_names() -> color_eyre::Result<()> {
         let raw = RawReport {
             top_songs: vec![
                 TopSong {
                     song: SongId::new(SourceKind::NETEASE, "1"),
+                    name: Some("稻香".to_owned()),
                     plays: 5,
                     listen_ms: 100,
                 },
                 TopSong {
                     song: SongId::new(SourceKind::NETEASE, "2"),
+                    name: None,
                     plays: 3,
                     listen_ms: 60,
                 },
             ],
             ..Default::default()
         };
-        let mut names = FxHashMap::<String, String>::default();
-        names.insert("netease:1".to_owned(), "稻香".to_owned());
-        let report = combine(raw, &names);
+        let report = combine(raw);
         assert_eq!(report.top_songs.len(), 2);
         let first = report
             .top_songs
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("无首项"))?;
         assert_eq!(first.id, "netease:1");
-        assert_eq!(first.name.as_deref(), Some("稻香"), "命中回查名");
+        assert_eq!(first.name.as_deref(), Some("稻香"), "维表名原样穿透");
         let second = report
             .top_songs
             .get(1)
             .ok_or_else(|| color_eyre::eyre::eyre!("无次项"))?;
-        assert_eq!(second.name, None, "未命中回落 None");
+        assert_eq!(second.name, None, "维表未覆盖落 None");
         assert_eq!(second.id, "netease:2", "id 恒在供回落展示");
         Ok(())
     }

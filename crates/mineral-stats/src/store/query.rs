@@ -59,6 +59,9 @@ struct TopSongRow {
 
     /// 累计收听 ms。
     listen_ms: i64,
+
+    /// songs 维表回查的歌名;未覆盖为 `None`。
+    name: Option<String>,
 }
 
 /// `top_albums` / `top_artists` 的每行;typed id 由 `context_ref` 重建故经中转。
@@ -71,6 +74,9 @@ struct TopContextRefRow {
 
     /// 累计收听 ms。
     listen_ms: i64,
+
+    /// 组内任意非空的显示名快照(`MAX` 略过 NULL);全组缺名为 `None`。
+    name: Option<String>,
 }
 
 /// `status` 主查询单行(events 由各事件表另算,故不直落 StatusReport)。
@@ -240,15 +246,18 @@ impl StatsStore {
         };
         let min = options.min_listen_ms();
         let limit = options.top_limit();
-        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。
+        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。songs 维表 LEFT JOIN
+        // 在 (ns, song_value) 键上,与 GROUP BY 键一致——s.name 组内恒定,裸取合法。
         let rows = match by {
             TopBy::Plays => sqlx::query_as!(
                 TopSongRow,
-                r#"SELECT ns AS "ns!", song_value AS "song_value!",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND listen_ms >= ?
-                   GROUP BY ns, song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
+                r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
+                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
+                    s.name AS "name?"
+                   FROM plays p
+                   LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
+                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
+                   GROUP BY p.ns, p.song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
                 range.start,
                 range.end,
                 min,
@@ -260,17 +269,20 @@ impl StatsStore {
             .into_iter()
             .map(|r| TopSong {
                 song: song_id(&r.ns, &r.song_value),
+                name: r.name,
                 plays: r.plays,
                 listen_ms: r.listen_ms,
             })
             .collect(),
             TopBy::Time => sqlx::query_as!(
                 TopSongRow,
-                r#"SELECT ns AS "ns!", song_value AS "song_value!",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND listen_ms >= ?
-                   GROUP BY ns, song_value ORDER BY 4 DESC, 3 DESC LIMIT ?"#,
+                r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
+                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
+                    s.name AS "name?"
+                   FROM plays p
+                   LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
+                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
+                   GROUP BY p.ns, p.song_value ORDER BY 4 DESC, 3 DESC LIMIT ?"#,
                 range.start,
                 range.end,
                 min,
@@ -282,6 +294,7 @@ impl StatsStore {
             .into_iter()
             .map(|r| TopSong {
                 song: song_id(&r.ns, &r.song_value),
+                name: r.name,
                 plays: r.plays,
                 listen_ms: r.listen_ms,
             })
@@ -320,6 +333,7 @@ impl StatsStore {
             .filter_map(|r| {
                 split_qualified(&r.reference).map(|(ns, value)| TopAlbum {
                     album: AlbumId::new(ns, value),
+                    name: r.name.clone(),
                     plays: r.plays,
                     listen_ms: r.listen_ms,
                 })
@@ -357,6 +371,7 @@ impl StatsStore {
             .filter_map(|r| {
                 split_qualified(&r.reference).map(|(ns, value)| TopArtist {
                     artist: ArtistId::new(ns, value),
+                    name: r.name.clone(),
                     plays: r.plays,
                     listen_ms: r.listen_ms,
                 })
@@ -378,12 +393,14 @@ impl StatsStore {
             return Ok(Vec::new());
         };
         // context_kind 由 kind 参数 bind(值,非列名);ORDER BY 列位随口径变故分两条。
+        // 名字取组内 MAX(context_name):快照列 NULL 被略过,带名行照亮全组(含历史行)。
         let rows = match by {
             TopBy::Plays => {
                 sqlx::query_as!(
                     TopContextRefRow,
                     r#"SELECT context_ref AS "reference!", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
+                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
+                    MAX(context_name) AS "name?: String"
                    FROM plays
                    WHERE started_at >= ? AND started_at < ? AND context_kind = ?
                      AND context_ref IS NOT NULL AND listen_ms >= ?
@@ -401,7 +418,8 @@ impl StatsStore {
                 sqlx::query_as!(
                     TopContextRefRow,
                     r#"SELECT context_ref AS "reference!", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
+                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
+                    MAX(context_name) AS "name?: String"
                    FROM plays
                    WHERE started_at >= ? AND started_at < ? AND context_kind = ?
                      AND context_ref IS NOT NULL AND listen_ms >= ?
@@ -437,11 +455,13 @@ impl StatsStore {
         };
         let rows = sqlx::query_as!(
             TopSongRow,
-            r#"SELECT ns AS "ns!", song_value AS "song_value!",
-                COUNT(*) AS "plays!: i64", COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-               FROM plays
-               WHERE started_at >= ? AND started_at < ? AND play_mode = 'repeat_one'
-               GROUP BY ns, song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
+            r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
+                COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
+                s.name AS "name?"
+               FROM plays p
+               LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
+               WHERE p.started_at >= ? AND p.started_at < ? AND p.play_mode = 'repeat_one'
+               GROUP BY p.ns, p.song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
             range.start,
             range.end,
             limit
@@ -453,6 +473,7 @@ impl StatsStore {
             .into_iter()
             .map(|r| TopSong {
                 song: song_id(&r.ns, &r.song_value),
+                name: r.name,
                 plays: r.plays,
                 listen_ms: r.listen_ms,
             })
@@ -615,7 +636,8 @@ impl StatsStore {
             Some(k) => sqlx::query_as!(
                 ContextSlice,
                 r#"SELECT context_kind AS "kind!", context_ref AS "reference",
-                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64"
+                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64",
+                          MAX(context_name) AS "name?: String"
                    FROM plays
                    WHERE started_at >= ? AND started_at < ? AND context_kind = ?
                    GROUP BY context_ref ORDER BY 3 DESC, context_ref LIMIT ?"#,
@@ -630,7 +652,8 @@ impl StatsStore {
             None => sqlx::query_as!(
                 ContextSlice,
                 r#"SELECT context_kind AS "kind!", context_ref AS "reference",
-                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64"
+                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64",
+                          MAX(context_name) AS "name?: String"
                    FROM plays
                    WHERE started_at >= ? AND started_at < ?
                    GROUP BY context_kind, context_ref ORDER BY 3 DESC, context_kind LIMIT ?"#,
@@ -958,6 +981,29 @@ mod tests {
         Ok(())
     }
 
+    /// top_songs LEFT JOIN songs 维表出名;维表未覆盖的落 None(展示层回落 id)。
+    #[tokio::test]
+    async fn top_songs_joins_dim_names() -> color_eyre::Result<()> {
+        let (_d, store) = open_temp().await?;
+        seed(&store).await?;
+        store
+            .upsert_song(&mineral_test::with_name(mineral_test::song("1"), "栞"))
+            .await?;
+        let tops = store
+            .top_songs(full_range(), TopBy::Plays, &options(0))
+            .await?;
+        let names = tops
+            .iter()
+            .map(|t| (t.song.value(), t.name.as_deref()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![("1", Some("栞")), ("3", None), ("2", None)],
+            "维表命中出名,未覆盖 None"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn song_summary_and_none_for_unknown() -> color_eyre::Result<()> {
         let (_d, store) = open_temp().await?;
@@ -1060,6 +1106,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("session"))?;
         let pl = QueueContext::Playlist {
             id: PlaylistId::new(SourceKind::NETEASE, "7"),
+            name: Some("收藏夹".to_owned()),
         };
         for (value, at, ctx) in [
             ("1", T0, pl.clone()),
@@ -1093,6 +1140,7 @@ mod tests {
         assert_eq!(first.reference.as_deref(), Some("netease:7"));
         assert_eq!(first.plays, 2);
         assert_eq!(first.listen_ms, 120_000);
+        assert_eq!(first.name.as_deref(), Some("收藏夹"), "歌单名快照直出");
         // kind 过滤 = top 专辑 / 艺人的 context 版:只留 search 语境那一条。
         let searches = store.top_contexts(0..i64::MAX, Some("search"), 10).await?;
         assert_eq!(searches.len(), 1, "只 search 类");
@@ -1104,7 +1152,8 @@ mod tests {
         Ok(())
     }
 
-    /// top_albums / top_artists:按专辑 / 艺人语境的 context_ref 聚合,typed id 重建。
+    /// top_albums / top_artists:按专辑 / 艺人语境的 context_ref 聚合,typed id 重建;
+    /// 名字取组内 `MAX(context_name)`——旧行(快照 NULL)被后来带名的行照亮。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn top_albums_and_artists_group_by_context_ref() -> color_eyre::Result<()> {
         use mineral_model::{AlbumId, ArtistId};
@@ -1113,18 +1162,26 @@ mod tests {
             .open_session(T0)
             .await?
             .ok_or_else(|| color_eyre::eyre::eyre!("session"))?;
+        // 同一专辑语境两行:先一行缺名(旧 client / 历史行),再一行带名快照。
+        let album_a_nameless = QueueContext::Album {
+            id: AlbumId::new(SourceKind::NETEASE, "aaa"),
+            name: None,
+        };
         let album_a = QueueContext::Album {
             id: AlbumId::new(SourceKind::NETEASE, "aaa"),
+            name: Some("Album A".to_owned()),
         };
         let album_b = QueueContext::Album {
             id: AlbumId::new(SourceKind::BILIBILI, "bbb"),
+            name: None,
         };
         let artist = QueueContext::Artist {
             id: ArtistId::new(SourceKind::NETEASE, "art"),
+            name: Some("Artist A".to_owned()),
         };
         // album_a ×2、album_b ×1、artist ×1。
         for (value, at, ctx) in [
-            ("1", T0, album_a.clone()),
+            ("1", T0, album_a_nameless.clone()),
             ("2", T0 + HOUR, album_a.clone()),
             ("3", T0 + 2 * HOUR, album_b.clone()),
             ("4", T0 + 3 * HOUR, artist.clone()),
@@ -1157,6 +1214,11 @@ mod tests {
             "最多的专辑"
         );
         assert_eq!(top.plays, 2);
+        assert_eq!(
+            top.name.as_deref(),
+            Some("Album A"),
+            "MAX 略过 NULL 快照,带名行照亮全组"
+        );
         let artists = store.top_artists(0..i64::MAX, TopBy::Plays, &opts).await?;
         assert_eq!(artists.len(), 1, "一个艺人语境");
         let a = artists
@@ -1164,6 +1226,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("无艺人"))?;
         assert_eq!(a.artist, ArtistId::new(SourceKind::NETEASE, "art"));
         assert_eq!(a.plays, 1);
+        assert_eq!(a.name.as_deref(), Some("Artist A"));
         Ok(())
     }
 

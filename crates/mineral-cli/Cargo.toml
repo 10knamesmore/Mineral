@@ -33,6 +33,7 @@ tokio                   = { workspace = true }
 [dev-dependencies]
 mineral-test  = { workspace = true }
 insta        = { workspace = true }
+tempfile     = "3"
 
 [lints]
 workspace = true

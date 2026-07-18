@@ -55,6 +55,7 @@ impl StatsStore {
         let song_value = rec.song_id.value();
         let (context_kind, context_ref) = rec.context.to_columns();
         let context_ref = context_ref.as_deref();
+        let context_name = rec.context.display_name();
         let audio_format = rec.audio.audio_format.as_ref().map(AudioFormat::as_str);
         let is_lossless = rec
             .audio
@@ -67,9 +68,9 @@ impl StatsStore {
             "INSERT INTO plays (
                 ns, song_value, started_at, ended_at, listen_ms, duration_ms_snapshot,
                 finish_reason, skip_at_ms, play_mode, session_id, origin_kind, actor,
-                context_kind, context_ref, audio_format, is_lossless, bitrate_bps,
-                quality, bit_depth, playback_origin, substituted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                context_kind, context_ref, context_name, audio_format, is_lossless,
+                bitrate_bps, quality, bit_depth, playback_origin, substituted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ns,
             song_value,
             rec.started_at,
@@ -84,6 +85,7 @@ impl StatsStore {
             rec.actor as _,
             context_kind,
             context_ref,
+            context_name,
             audio_format,
             is_lossless,
             rec.audio.bitrate_bps,
@@ -130,6 +132,8 @@ mod tests {
         context_kind: String,
         /// 上下文 ref。
         context_ref: Option<String>,
+        /// 上下文显示名快照。
+        context_name: Option<String>,
         /// 格式串。
         audio_format: Option<String>,
         /// 无损标记(现算,0/1)。
@@ -161,6 +165,7 @@ mod tests {
             actor: Actor::User,
             context: QueueContext::Playlist {
                 id: PlaylistId::new(SourceKind::NETEASE, "7"),
+                name: Some("收藏夹".to_owned()),
             },
             audio: crate::PlayAudioSnapshot {
                 audio_format: Some(AudioFormat::Flac),
@@ -186,8 +191,8 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))?;
         let row = sqlx::query_as::<_, PlayRow>(
             "SELECT ns, song_value, listen_ms, finish_reason, play_mode, session_id, \
-             origin_kind, actor, context_kind, context_ref, audio_format, is_lossless, \
-             playback_origin, substituted FROM plays",
+             origin_kind, actor, context_kind, context_ref, context_name, audio_format, \
+             is_lossless, playback_origin, substituted FROM plays",
         )
         .fetch_one(pool)
         .await?;
@@ -201,6 +206,11 @@ mod tests {
         assert_eq!(row.actor, Actor::User);
         assert_eq!(row.context_kind, "playlist");
         assert_eq!(row.context_ref, Some("netease:7".to_owned()));
+        assert_eq!(
+            row.context_name,
+            Some("收藏夹".to_owned()),
+            "语境显示名快照"
+        );
         assert_eq!(row.audio_format, Some("flac".to_owned()));
         assert_eq!(row.is_lossless, Some(1), "flac 无损 → 1");
         assert_eq!(row.playback_origin, PlaybackOrigin::Download);

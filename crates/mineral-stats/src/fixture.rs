@@ -98,13 +98,16 @@ fn context(i: i64) -> QueueContext {
             query: Some(format!("ctx{}", i.rem_euclid(CONTEXT_POOL))),
         },
         1 => QueueContext::Playlist {
-            id: PlaylistId::new(source(i), n),
+            id: PlaylistId::new(source(i), n.clone()),
+            name: Some(format!("playlist {n}")),
         },
         2 => QueueContext::Album {
-            id: AlbumId::new(source(i), n),
+            id: AlbumId::new(source(i), n.clone()),
+            name: Some(format!("album {n}")),
         },
         3 => QueueContext::Artist {
-            id: ArtistId::new(source(i), n),
+            id: ArtistId::new(source(i), n.clone()),
+            name: Some(format!("artist {n}")),
         },
         4 => QueueContext::Manual,
         _ => QueueContext::Unknown,

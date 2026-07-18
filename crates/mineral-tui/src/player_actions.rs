@@ -362,17 +362,26 @@ impl App {
             TaskEvent::AlbumDetailFetched { id, album } => (
                 DetailFetch::AlbumDetail(id.clone()).dedup_key(),
                 album.songs.clone(),
-                QueueContextWire::Album { id: id.clone() },
+                QueueContextWire::Album {
+                    id: id.clone(),
+                    name: Some(album.name.clone()),
+                },
             ),
             TaskEvent::PlaylistDetailFetched { id, playlist } => (
                 DetailFetch::PlaylistDetail(id.clone()).dedup_key(),
                 playlist.songs.clone(),
-                QueueContextWire::Playlist { id: id.clone() },
+                QueueContextWire::Playlist {
+                    id: id.clone(),
+                    name: Some(playlist.name.clone()),
+                },
             ),
             TaskEvent::ArtistDetailFetched { id, artist } => (
                 DetailFetch::Artist(id.clone()).dedup_key(),
                 artist.songs.clone(),
-                QueueContextWire::Artist { id: id.clone() },
+                QueueContextWire::Artist {
+                    id: id.clone(),
+                    name: Some(artist.name.clone()),
+                },
             ),
             // 其余事件(含 ArtistAlbumsFetched)不兑现容器播放意图。
             _ => return,
@@ -398,9 +407,18 @@ fn container_fetch(container: &ContainerRef) -> DetailFetch {
 fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContextWire {
     use mineral_protocol::QueueContextWire;
     match container {
-        ContainerRef::Album(a) => QueueContextWire::Album { id: a.id.clone() },
-        ContainerRef::Playlist(p) => QueueContextWire::Playlist { id: p.id.clone() },
-        ContainerRef::Artist(a) => QueueContextWire::Artist { id: a.id.clone() },
+        ContainerRef::Album(a) => QueueContextWire::Album {
+            id: a.id.clone(),
+            name: Some(a.name.clone()),
+        },
+        ContainerRef::Playlist(p) => QueueContextWire::Playlist {
+            id: p.id.clone(),
+            name: Some(p.name.clone()),
+        },
+        ContainerRef::Artist(a) => QueueContextWire::Artist {
+            id: a.id.clone(),
+            name: Some(a.name.clone()),
+        },
     }
 }
 
@@ -604,10 +622,11 @@ mod tests {
             vec![(
                 "set_queue",
                 mineral_protocol::QueueContextWire::Album {
-                    id: album.id.clone()
+                    id: album.id.clone(),
+                    name: Some(album.name.clone()),
                 }
             )],
-            "容器专辑起播 set_queue 带 Album 语境"
+            "容器专辑起播 set_queue 带 Album 语境(带标题快照)"
         );
         Ok(())
     }
@@ -652,7 +671,8 @@ mod tests {
             ctxs.iter().all(|(op, ctx)| *op == "insert_next"
                 && *ctx
                     == QueueContextWire::Album {
-                        id: album.id.clone()
+                        id: album.id.clone(),
+                        name: Some(album.name.clone()),
                     }),
             "插播语境逐曲归 Album 身份,非笼统 Manual"
         );

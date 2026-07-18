@@ -217,7 +217,6 @@ mod tests {
         PlayTail, RawReport, Slice, StatsReport, StatusReport, TopAlbum, TopArtist, TopSong,
         Totals, combine,
     };
-    use rustc_hash::FxHashMap;
 
     fn named(id: &str, name: Option<&str>, plays: i64, listen_ms: i64) -> NamedEntry {
         NamedEntry {
@@ -241,16 +240,19 @@ mod tests {
             },
             top_songs: vec![TopSong {
                 song: SongId::new(SourceKind::NETEASE, "1"),
+                name: Some("稻香".to_owned()),
                 plays: 9,
                 listen_ms: 540_000,
             }],
             top_albums: vec![TopAlbum {
                 album: AlbumId::new(SourceKind::NETEASE, "al"),
+                name: Some("魔杰座".to_owned()),
                 plays: 6,
                 listen_ms: 360_000,
             }],
             top_artists: vec![TopArtist {
                 artist: ArtistId::new(SourceKind::NETEASE, "jay"),
+                name: Some("周杰伦".to_owned()),
                 plays: 9,
                 listen_ms: 540_000,
             }],
@@ -290,11 +292,7 @@ mod tests {
                 ..EventSummary::default()
             },
         };
-        let mut names = FxHashMap::<String, String>::default();
-        names.insert("netease:1".to_owned(), "稻香".to_owned());
-        names.insert("netease:al".to_owned(), "魔杰座".to_owned());
-        names.insert("netease:jay".to_owned(), "周杰伦".to_owned());
-        combine(raw, &names)
+        combine(raw)
     }
 
     #[test]

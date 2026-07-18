@@ -18,9 +18,9 @@ fn queue_context_from_wire(wire: QueueContextWire) -> mineral_stats::QueueContex
     match wire {
         // wire 侧总带原文;落库前由 recorder 按 search_queries 隐私档 redact。
         QueueContextWire::Search { query } => QueueContext::Search { query: Some(query) },
-        QueueContextWire::Playlist { id } => QueueContext::Playlist { id },
-        QueueContextWire::Album { id } => QueueContext::Album { id },
-        QueueContextWire::Artist { id } => QueueContext::Artist { id },
+        QueueContextWire::Playlist { id, name } => QueueContext::Playlist { id, name },
+        QueueContextWire::Album { id, name } => QueueContext::Album { id, name },
+        QueueContextWire::Artist { id, name } => QueueContext::Artist { id, name },
         QueueContextWire::Manual => QueueContext::Manual,
         QueueContextWire::Unknown => QueueContext::Unknown,
     }

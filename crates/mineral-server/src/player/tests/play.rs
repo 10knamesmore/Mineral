@@ -78,6 +78,7 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
         &queued.id,
         mineral_stats::QueueContext::Playlist {
             id: playlist.clone(),
+            name: None,
         },
     );
     // 队列曲:继承队列级 Playlist context。
@@ -186,6 +187,7 @@ async fn context_override_consumed_once_and_cleared_on_set_queue() -> color_eyre
     let core = core_with(calls)?;
     let playlist_context = || mineral_stats::QueueContext::Playlist {
         id: mineral_model::PlaylistId::new(SourceKind::NETEASE, "pl"),
+        name: None,
     };
     core.set_queue(vec![song("a")], &song("a").id, playlist_context());
     // 插队散曲:首次取用得覆盖,且取用即消费——再取回落队列语境。

@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use mineral_log::chain;
-use mineral_model::{SongId, SourceKind};
+use mineral_model::{Song, SourceKind};
 use mineral_protocol::PlaybackOrigin as WirePlaybackOrigin;
 use mineral_stats::{
     Actor, AudioBackend, BehaviorEvent, FinishReason, LifecyclePhase, LifecycleWho,
@@ -42,8 +42,9 @@ const CHANNEL_CAPACITY: usize = 4096;
 /// 除 `ended_at` / `listen_ms` / `finish_reason` / `skip_at_ms`(结束时给)与
 /// `session_id`(actor 分配)外,其余 = plays 行的起播快照。
 pub struct PendingPlay {
-    /// 歌曲 id。
-    pub song_id: SongId,
+    /// 完整歌曲元数据:结算落 plays 只用 `id`,起播时整首写 songs 维表(报表出名的
+    /// 唯一数据源)。
+    pub song: Song,
 
     /// 起播时刻 epoch ms。
     pub started_at: i64,
@@ -157,7 +158,7 @@ pub fn stats_play_mode(mode: mineral_protocol::PlayMode) -> mineral_stats::PlayM
 /// enrich 补。
 ///
 /// # Params:
-///   - `song_id`: 歌曲 id
+///   - `song`: 完整歌曲元数据(起播时写 songs 维表)
 ///   - `play_mode`: 当前播放模式
 ///   - `duration_ms_snapshot`: 歌曲总长 ms
 ///   - `playback_origin`: 音频本体来源位置(wire 枚举)
@@ -168,7 +169,7 @@ pub fn stats_play_mode(mode: mineral_protocol::PlayMode) -> mineral_stats::PlayM
 /// # Return:
 ///   起播快照;系统时钟异常拿不出起播时刻时 `None`(本次播放不记)
 pub fn pending_from_start(
-    song_id: SongId,
+    song: Song,
     play_mode: mineral_stats::PlayMode,
     duration_ms_snapshot: Option<i64>,
     playback_origin: WirePlaybackOrigin,
@@ -177,7 +178,7 @@ pub fn pending_from_start(
     context: QueueContext,
 ) -> Option<PendingPlay> {
     Some(PendingPlay {
-        song_id,
+        song,
         started_at: now_ms()?,
         origin: play_origin,
         actor,
@@ -275,7 +276,7 @@ impl StatsRecorder {
     pub fn play_started(&self, mut pending: PendingPlay) {
         {
             let params = self.params.load();
-            if !params.records_plays() || params.excludes_source(pending.song_id.namespace().name())
+            if !params.records_plays() || params.excludes_source(pending.song.id.namespace().name())
             {
                 return;
             }
@@ -491,7 +492,7 @@ async fn process_command(
             if let Some((snapshot, session_id)) = pending.take() {
                 mineral_log::warn!(
                     target: "stats",
-                    song_id = snapshot.song_id.as_str(),
+                    song_id = snapshot.song.id.as_str(),
                     "起播时发现未结算的在播行,按 skip 自愈结算(上游漏结算?)"
                 );
                 let ended_at = started.started_at;
@@ -513,6 +514,11 @@ async fn process_command(
                 if let Err(e) = store.touch_session(session_id, ended_at).await {
                     mineral_log::warn!(target: "stats", error = chain(&e), "自愈结算 touch_session 失败");
                 }
+            }
+            // 起播即写维表:凡进 plays 的歌必有 songs 行,报表 JOIN 出名不依赖别的库;
+            // 维表后补的行照亮历史事实行,失败不阻断播放事实链。
+            if let Err(e) = store.upsert_song(&started.song).await {
+                mineral_log::warn!(target: "stats", error = chain(&e), "upsert_song 失败");
             }
             let gap_ms = params.load().gap_ms();
             *pending = assign_session(store, tracker, started.started_at, gap_ms)
@@ -655,7 +661,7 @@ fn assemble(
     skip_at_ms: Option<i64>,
 ) -> PlayRecord {
     PlayRecord {
-        song_id: snapshot.song_id,
+        song_id: snapshot.song.id,
         started_at: snapshot.started_at,
         ended_at,
         listen_ms,
@@ -697,7 +703,7 @@ mod tests {
 
     fn pending(started_at: i64) -> PendingPlay {
         PendingPlay {
-            song_id: SongId::new(SourceKind::NETEASE, "1"),
+            song: mineral_test::with_name(mineral_test::song("1"), "栞"),
             started_at,
             origin: PlayOrigin::Explicit,
             actor: Actor::User,
@@ -753,7 +759,7 @@ mod tests {
         use mineral_stats::PlayOrigin;
         let mk = |origin, actor| {
             super::pending_from_start(
-                SongId::new(SourceKind::NETEASE, "1"),
+                mineral_test::song("1"),
                 mineral_stats::PlayMode::Sequential,
                 Some(1000),
                 mineral_protocol::PlaybackOrigin::Remote,
@@ -778,7 +784,7 @@ mod tests {
         );
         // context 原样穿透(队列语境继承)。
         let with_ctx = super::pending_from_start(
-            SongId::new(SourceKind::NETEASE, "1"),
+            mineral_test::song("1"),
             mineral_stats::PlayMode::Sequential,
             None,
             mineral_protocol::PlaybackOrigin::Remote,
@@ -786,6 +792,7 @@ mod tests {
             Actor::User,
             QueueContext::Playlist {
                 id: mineral_model::PlaylistId::new(SourceKind::NETEASE, "7"),
+                name: None,
             },
         )
         .ok_or_else(|| color_eyre::eyre::eyre!("正常时钟下应产出快照"))?;
@@ -805,6 +812,30 @@ mod tests {
         assert_eq!(totals.plays, 1);
         assert_eq!(totals.listen_ms, 3000);
         assert_eq!(totals.completed, 1, "eof");
+        Ok(())
+    }
+
+    /// 起播即写维表:play_started 携带的完整 Song 落 songs 行,top_songs 由此出名——
+    /// 报表不依赖 stats.db 之外的任何数据库。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn play_started_writes_song_dim() -> color_eyre::Result<()> {
+        let (_dir, store) = temp_store().await?;
+        let (recorder, handle) = StatsRecorder::spawn(store.clone(), full_params());
+        recorder.play_started(pending(1000));
+        recorder.play_ended(FinishReason::Eof, /*listen_ms*/ 3000);
+        drop(recorder);
+        handle.await?;
+        let options = mineral_stats::ReportOptions::builder()
+            .min_listen_ms(0)
+            .top_limit(10)
+            .build();
+        let tops = store
+            .top_songs(0..i64::MAX, mineral_stats::TopBy::Plays, &options)
+            .await?;
+        let first = tops
+            .first()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有 top 行"))?;
+        assert_eq!(first.name.as_deref(), Some("栞"), "维表名随起播落库");
         Ok(())
     }
 

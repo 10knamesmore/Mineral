@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO plays (\n                ns, song_value, started_at, ended_at, listen_ms, duration_ms_snapshot,\n                finish_reason, skip_at_ms, play_mode, session_id, origin_kind, actor,\n                context_kind, context_ref, context_name, audio_format, is_lossless,\n                bitrate_bps, quality, bit_depth, playback_origin, substituted\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 22
+    },
+    "nullable": []
+  },
+  "hash": "31621f135f76d55dd832591ee5fd9abf518b801a09e50e5e2fff2ba114f7805b"
+}

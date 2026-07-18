@@ -449,7 +449,7 @@ pub(crate) fn check_advance(player: &PlayerCore) {
                 // (插队散曲经无缝接续也要记它自己的语境),否则继承队列级语境。
                 let context = player.take_play_context(&s.id);
                 if let Some(pending) = crate::pending_from_start(
-                    s.id.clone(),
+                    s.clone(),
                     crate::stats_play_mode(play_mode),
                     s.duration_ms.and_then(|d| i64::try_from(d).ok()),
                     playback_origin.unwrap_or(PlaybackOrigin::Remote),

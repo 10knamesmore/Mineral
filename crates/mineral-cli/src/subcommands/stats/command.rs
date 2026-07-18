@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use color_eyre::eyre::WrapErr as _;
-use mineral_persist::ServerStore;
 use mineral_stats::{ReportOptions, StatsStore};
 
-use super::assemble::{self, NameResolver, TopCategory};
+use super::assemble::{self, TopCategory};
 use super::render;
 use super::window::{self, By, Format, Window, WindowDefault};
 
@@ -145,17 +144,6 @@ fn now_ms() -> color_eyre::Result<i64> {
     i64::try_from(ms).wrap_err("时间戳溢出 i64")
 }
 
-/// 开 mineral.db 只读做名字回查;库不存在则用降级句柄(名字全回落 id,不建空库)。
-async fn open_resolver() -> color_eyre::Result<NameResolver> {
-    let mineral_db = mineral_paths::data_dir()?.join("mineral.db");
-    let persist = if mineral_db.exists() {
-        ServerStore::open(&mineral_db).await?
-    } else {
-        ServerStore::disabled()
-    };
-    Ok(NameResolver::new(persist))
-}
-
 /// 离线读配置的 `stats.report` 段,折算成查询期口径 [`ReportOptions`]。
 ///
 /// 与 daemon 同一真相源:`min_listen_secs`(×1000 换算成 ms)与 `top_limit` 取自配置;
@@ -191,12 +179,11 @@ async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre
         return Ok(());
     }
     let store = StatsStore::open(&db_path).await?;
-    let resolver = open_resolver().await?;
     let now = now_ms()?;
     let range = window.range(WindowDefault::CurrentYear, now)?;
     let label = window.label(WindowDefault::CurrentYear, now)?;
     let opts = report_options(top)?;
-    let sr = assemble::stats_report(&store, &resolver, range, &opts).await?;
+    let sr = assemble::stats_report(&store, range, &opts).await?;
     let out = match format {
         Format::Text => render::render_report(&sr, &label),
         Format::Json => serde_json::to_string_pretty(&sr).wrap_err("report json 序列化失败")?,
@@ -220,11 +207,9 @@ async fn top(
         return Ok(());
     }
     let store = StatsStore::open(&db_path).await?;
-    let resolver = open_resolver().await?;
     let range = window.range(WindowDefault::All, now_ms()?)?;
     let opts = report_options(limit)?;
-    let entries =
-        assemble::top_entries(&store, &resolver, category, range, by.into(), &opts).await?;
+    let entries = assemble::top_entries(&store, category, range, by.into(), &opts).await?;
     let out = match format {
         Format::Text => render::render_top(&entries, category.text_title()),
         Format::Json => serde_json::to_string_pretty(&entries).wrap_err("top json 序列化失败")?,

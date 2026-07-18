@@ -441,10 +441,13 @@ async fn set_queue_stores_context() -> color_eyre::Result<()> {
     core.set_queue(
         vec![song("a")],
         &song("a").id,
-        mineral_stats::QueueContext::Playlist { id: id.clone() },
+        mineral_stats::QueueContext::Playlist {
+            id: id.clone(),
+            name: None,
+        },
     );
     let matched = core.with_state(|st| {
-        matches!(&st.queue_context, mineral_stats::QueueContext::Playlist { id: got } if *got == id)
+        matches!(&st.queue_context, mineral_stats::QueueContext::Playlist { id: got, .. } if *got == id)
     });
     assert!(matched, "set_queue 应把 Playlist 语境存进 State");
     Ok(())

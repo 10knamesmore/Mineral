@@ -20,18 +20,27 @@ pub enum QueueContext {
     Playlist {
         /// 歌单 ID。
         id: PlaylistId,
+
+        /// 歌单显示名快照(队列建立时刻);拿不到给 `None`。
+        name: Option<String>,
     },
 
     /// 专辑详情。
     Album {
         /// 专辑 ID。
         id: AlbumId,
+
+        /// 专辑页标题快照(队列建立时刻);拿不到给 `None`。
+        name: Option<String>,
     },
 
     /// 艺人详情。
     Artist {
         /// 艺人 ID。
         id: ArtistId,
+
+        /// 艺人页标题快照(队列建立时刻);拿不到给 `None`。
+        name: Option<String>,
     },
 
     /// 手动攒的队列(insert_next / append 散曲)。
@@ -54,11 +63,27 @@ impl QueueContext {
     pub fn to_columns(&self) -> (&'static str, Option<String>) {
         match self {
             Self::Search { query } => ("search", query.clone()),
-            Self::Playlist { id } => ("playlist", Some(id.qualified())),
-            Self::Album { id } => ("album", Some(id.qualified())),
-            Self::Artist { id } => ("artist", Some(id.qualified())),
+            Self::Playlist { id, .. } => ("playlist", Some(id.qualified())),
+            Self::Album { id, .. } => ("album", Some(id.qualified())),
+            Self::Artist { id, .. } => ("artist", Some(id.qualified())),
             Self::Manual => ("manual", None),
             Self::Unknown => ("unknown", None),
+        }
+    }
+
+    /// 实体语境(歌单 / 专辑 / 艺人)的显示名快照,落 `plays.context_name`。
+    ///
+    /// [`QueueContext::Search`] 恒 `None`——搜索词有独立列与隐私档管辖,不得经显示名
+    /// 旁路落库;[`QueueContext::Manual`] / [`QueueContext::Unknown`] 无名可落。
+    ///
+    /// # Return:
+    ///   显示名借用;缺名(旧 client / 脚本未带)为 `None`。
+    pub fn display_name(&self) -> Option<&str> {
+        match self {
+            Self::Playlist { name, .. } | Self::Album { name, .. } | Self::Artist { name, .. } => {
+                name.as_deref()
+            }
+            Self::Search { .. } | Self::Manual | Self::Unknown => None,
         }
     }
 
@@ -129,6 +154,7 @@ mod tests {
         );
         let playlist = QueueContext::Playlist {
             id: PlaylistId::new(SourceKind::NETEASE, "1"),
+            name: None,
         };
         assert_eq!(
             playlist.clone().redact_search(SearchQueryMode::Off),
@@ -141,6 +167,7 @@ mod tests {
     fn entity_contexts_store_qualified_id() {
         let playlist = QueueContext::Playlist {
             id: PlaylistId::new(SourceKind::NETEASE, "123"),
+            name: None,
         };
         assert_eq!(
             playlist.to_columns(),
@@ -149,6 +176,7 @@ mod tests {
 
         let album = QueueContext::Album {
             id: AlbumId::new(SourceKind::BILIBILI, "BV1x"),
+            name: None,
         };
         assert_eq!(
             album.to_columns(),
@@ -157,6 +185,7 @@ mod tests {
 
         let artist = QueueContext::Artist {
             id: ArtistId::new(SourceKind::LOCAL, "abc"),
+            name: None,
         };
         assert_eq!(
             artist.to_columns(),
@@ -168,5 +197,29 @@ mod tests {
     fn manual_and_unknown_have_no_ref() {
         assert_eq!(QueueContext::Manual.to_columns(), ("manual", None));
         assert_eq!(QueueContext::Unknown.to_columns(), ("unknown", None));
+    }
+
+    /// display_name:实体语境给显示名快照,search/manual/unknown 恒 None
+    /// (搜索词有独立列与隐私档管辖,不得经显示名旁路落库)。
+    #[test]
+    fn display_name_snapshots_entity_titles() {
+        let playlist = QueueContext::Playlist {
+            id: PlaylistId::new(SourceKind::NETEASE, "1"),
+            name: Some("收藏夹".to_owned()),
+        };
+        assert_eq!(playlist.display_name(), Some("收藏夹"));
+
+        let nameless = QueueContext::Album {
+            id: AlbumId::new(SourceKind::NETEASE, "a"),
+            name: None,
+        };
+        assert_eq!(nameless.display_name(), None, "旧 client 缺名照常");
+
+        let search = QueueContext::Search {
+            query: Some("李志".to_owned()),
+        };
+        assert_eq!(search.display_name(), None, "搜索词不经显示名旁路");
+        assert_eq!(QueueContext::Manual.display_name(), None);
+        assert_eq!(QueueContext::Unknown.display_name(), None);
     }
 }

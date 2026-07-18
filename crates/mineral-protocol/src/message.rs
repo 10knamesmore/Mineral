@@ -25,18 +25,30 @@ pub enum QueueContextWire {
     Playlist {
         /// 歌单 ID。
         id: PlaylistId,
+
+        /// 歌单显示名快照(队列建立时刻);拿不到给 `None`。
+        #[serde(default)]
+        name: Option<String>,
     },
 
     /// 专辑详情。
     Album {
         /// 专辑 ID。
         id: AlbumId,
+
+        /// 专辑页标题快照(队列建立时刻);拿不到给 `None`。
+        #[serde(default)]
+        name: Option<String>,
     },
 
     /// 艺人详情。
     Artist {
         /// 艺人 ID。
         id: ArtistId,
+
+        /// 艺人页标题快照(队列建立时刻);拿不到给 `None`。
+        #[serde(default)]
+        name: Option<String>,
     },
 
     /// 手动攒的队列(insert_next / append 散曲)。
