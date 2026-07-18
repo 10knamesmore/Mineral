@@ -544,14 +544,18 @@ mod tests {
     #[test]
     fn pushed_config_ambient_fade_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_synced_palette()?;
+        // 新时长取「当前拍数 × 2」折回毫秒:retempo 的整数缩放 frame×2N/N 恒整除,
+        // 相位比例作为有理数完全一致,断言得以用严格相等;默认 fade_ms 调整不破本测试。
+        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
+        let fade_ticks =
+            crate::render::anim::ticks32_from_ms(*app.state.cfg.tui().ambient().fade_ms(), tick_ms);
+        let doubled_ms = u64::from(fade_ticks) * 2 * tick_ms;
         for _ in 0..20 {
             app.tick_cover_fades();
         }
         let mid = ambient_probe(&app)?;
-        // 2816ms / 16ms = 176 拍,恰为默认 1400ms(88 拍)的两倍:相位比例可被整数
-        // 精确保持,断言得以用严格相等。
         app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "ambient": { "fade_ms": 2816 } } }),
+            serde_json::json!({ "tui": { "ambient": { "fade_ms": doubled_ms } } }),
         )?);
         assert_eq!(ambient_probe(&app)?, mid, "retempo 保相位,推送那帧场色不跳");
         Ok(())
