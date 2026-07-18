@@ -13,14 +13,18 @@ use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::ScriptSlot;
 use crate::runtime::state::{ActiveLayer, DetailFetch, View};
 
-/// 容器入队模式:替换队列起播 / 追加到队尾(由 `PlayContainer` / `AppendContainer` 决定)。
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// 容器入队模式:替换队列起播 / 追加到队尾 / 按序插播(由 `PlayContainer` /
+/// `AppendContainer` / `PlayNextContainer` 决定)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlayMode {
     /// 替换队列并起播首曲。
     Replace,
 
     /// 追加到队尾。
     Append,
+
+    /// 按原顺序插到当前曲之后(下一首起连播);本地队列为空时退化为追加。
+    InsertNext,
 }
 
 /// 复制成功 toast 里展示的内容上限(字符);超出截断加省略号,防长模板把顶栏挤爆。
@@ -192,6 +196,9 @@ impl App {
             MenuAction::AppendContainer(container) => {
                 self.start_container_play(&container, PlayMode::Append);
             }
+            MenuAction::PlayNextContainer(container) => {
+                self.start_container_play(&container, PlayMode::InsertNext);
+            }
             MenuAction::Copy(text) => self.copy_to_clipboard(&text),
             // 同步等 daemon 渲染(IPC 往返 + Lua 执行,看门狗 hard wall 封顶):
             // 复制是低频操作,与 invoke_action 同款阻塞语义。
@@ -274,8 +281,8 @@ impl App {
         }
     }
 
-    /// 容器「播放全部 / 加入队列」入口:已加载曲目直接入队;未加载则派发详情拉取 + 登记待
-    /// 兑现意图,`*Fetched` 到货由 [`Self::fulfill_pending_container`] 入队。
+    /// 容器「播放全部 / 加入队列 / 按序插播」入口:已加载曲目直接入队;未加载则派发详情拉取 +
+    /// 登记待兑现意图,`*Fetched` 到货由 [`Self::fulfill_pending_container`] 入队。
     fn start_container_play(&mut self, container: &ContainerRef, mode: PlayMode) {
         // 先 owned 取出已加载曲目(释放对 state 的借用),再碰 client / pending。
         if let Some(songs) = self.container_loaded_songs(container) {
@@ -305,8 +312,9 @@ impl App {
     }
 
     /// 按模式入队一组曲目:Replace = 替换队列 + 起播首曲(空则 no-op,绝不发空 set_queue);
-    /// Append = 逐曲追加(无批量 API)。`context` 是这批曲目的来源语境(容器身份),Replace 落
-    /// 队列级、Append 逐曲带上(整张专辑追加,每首都归该专辑而非笼统 Manual)。
+    /// Append = 逐曲追加(无批量 API);InsertNext = 按原顺序插到当前曲之后。`context` 是这批
+    /// 曲目的来源语境(容器身份),Replace 落队列级、Append / InsertNext 逐曲带上(整张专辑
+    /// 插入,每首都归该专辑而非笼统 Manual)。
     fn enqueue_songs(
         &self,
         songs: Vec<Song>,
@@ -325,6 +333,20 @@ impl App {
             PlayMode::Append => {
                 for song in songs {
                     self.client.queue_append(song, context.clone());
+                }
+            }
+            PlayMode::InsertNext => {
+                // insert_next 恒插在当前曲后一位:倒序逐曲喂入才把整组还原成原序连播
+                // (正序会逐首顶到最前、把顺序翻过来)。本地队列为空时插入点数学退化
+                // (无当前曲、queue_sel 悬空),改逐曲 append 保序(同 Append,不起播)。
+                if self.state.player.queue.is_empty() {
+                    for song in songs {
+                        self.client.queue_append(song, context.clone());
+                    }
+                } else {
+                    for song in songs.into_iter().rev() {
+                        self.client.queue_insert_next(song, context.clone());
+                    }
                 }
             }
         }
@@ -386,7 +408,7 @@ fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContext
 mod tests {
     use mineral_channel_core::Page;
     use mineral_model::{Album, AlbumId, Artist, ArtistId, SourceKind};
-    use mineral_protocol::ViewKind;
+    use mineral_protocol::{QueueContextWire, ViewKind};
     use mineral_task::TaskEvent;
 
     use super::PlayMode;
@@ -587,6 +609,80 @@ mod tests {
             )],
             "容器专辑起播 set_queue 带 Album 语境"
         );
+        Ok(())
+    }
+
+    /// InsertNext 容器(本地队列非空):倒序逐曲 `queue_insert_next`——server 恒插当前曲
+    /// 后一位,倒序喂入恰把专辑还原成原序连播;语境逐曲带 Album 身份。
+    #[test]
+    fn container_play_next_inserts_reversed_keeping_order() -> color_eyre::Result<()> {
+        let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
+        // 本地队列非空 → 走倒序 insert_next 分支。
+        app.state.player.queue = endserenading(1);
+        let queue_ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let queue_contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.client = std::sync::Arc::new(crate::test_support::TestClient {
+            queue_ops: std::sync::Arc::clone(&queue_ops),
+            queue_contexts: std::sync::Arc::clone(&queue_contexts),
+            ..crate::test_support::TestClient::default()
+        });
+        let album = album_with_songs("al1", 3);
+        let want_reversed: Vec<(&str, String)> = album
+            .songs
+            .iter()
+            .rev()
+            .map(|s| ("insert_next", s.id.qualified()))
+            .collect();
+        app.pending_container.insert(
+            DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
+            PlayMode::InsertNext,
+        );
+        app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            id: album.id.clone(),
+            album: Box::new(album.clone()),
+        });
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(*ops, want_reversed, "倒序 insert_next 恰按专辑原序连播");
+        let ctxs = queue_contexts
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
+        assert!(
+            ctxs.iter().all(|(op, ctx)| *op == "insert_next"
+                && *ctx
+                    == QueueContextWire::Album {
+                        id: album.id.clone()
+                    }),
+            "插播语境逐曲归 Album 身份,非笼统 Manual"
+        );
+        Ok(())
+    }
+
+    /// InsertNext 容器(本地队列为空):插入点数学退化,改逐曲 `queue_append` 正序——
+    /// 与 Append all 同款保序,不自动起播。
+    #[test]
+    fn container_play_next_on_empty_queue_appends_in_order() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
+        assert!(app.state.player.queue.is_empty(), "前置:本地队列应为空");
+        let album = album_with_songs("al1", 2);
+        let want: Vec<(&str, String)> = album
+            .songs
+            .iter()
+            .map(|s| ("append", s.id.qualified()))
+            .collect();
+        app.pending_container.insert(
+            DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
+            PlayMode::InsertNext,
+        );
+        app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            id: album.id.clone(),
+            album: Box::new(album),
+        });
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(*ops, want, "空队列退化为逐曲 append 正序");
         Ok(())
     }
 

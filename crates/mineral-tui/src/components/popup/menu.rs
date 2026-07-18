@@ -55,6 +55,10 @@ pub(crate) enum MenuAction {
     /// 容器加入队列:其曲目追加到队尾(同上,曲目未加载走拉取→入队)。
     AppendContainer(Box<ContainerRef>),
 
+    /// 容器按序插播:其曲目按原顺序插到当前曲之后(下一首起连播)。本地队列为空时退化为
+    /// 追加(见 `App::enqueue_songs`);曲目未加载走拉取→入队,同 `PlayContainer`。
+    PlayNextContainer(Box<ContainerRef>),
+
     /// 把文本写进系统剪贴板(复制菜单;文本在构造菜单时就渲染好)。
     Copy(String),
 

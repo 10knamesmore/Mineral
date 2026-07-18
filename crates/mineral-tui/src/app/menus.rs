@@ -587,25 +587,32 @@ fn artist_copy_items(artist: &Artist) -> Vec<MenuItem> {
     items
 }
 
-/// 容器(专辑/歌单/歌手)的 `o` 操作项:`p` 播放全部、`a` 加入队列(歌手取热门曲那路)。
-/// 两项各持容器副本,落地经 [`App::start_container_play`] 拉取→入队。
+/// 容器(专辑/歌单/歌手)的 `o` 操作项:`p` 播放全部、`n` 全部按序插播、`a` 加入队列
+/// (歌手取热门曲那路)。各项持容器副本,落地经 [`App::start_container_play`] 拉取→入队。
+/// `n` 只给有「全部曲目」语义的专辑 / 歌单——歌手是热门曲采样,插播整列无意义。
 fn container_action_items(container: ContainerRef) -> Vec<MenuItem> {
     let (play_label, append_label) = match container {
         ContainerRef::Artist(_) => ("Play top songs", "Append top songs"),
         ContainerRef::Album(_) | ContainerRef::Playlist(_) => ("Play all", "Append all to queue"),
     };
-    vec![
-        MenuItem::keyed(
-            'p',
-            play_label,
-            MenuAction::PlayContainer(Box::new(container.clone())),
-        ),
-        MenuItem::keyed(
-            'a',
-            append_label,
-            MenuAction::AppendContainer(Box::new(container)),
-        ),
-    ]
+    let mut items = vec![MenuItem::keyed(
+        'p',
+        play_label,
+        MenuAction::PlayContainer(Box::new(container.clone())),
+    )];
+    if !matches!(container, ContainerRef::Artist(_)) {
+        items.push(MenuItem::keyed(
+            'n',
+            "Play all next",
+            MenuAction::PlayNextContainer(Box::new(container.clone())),
+        ));
+    }
+    items.push(MenuItem::keyed(
+        'a',
+        append_label,
+        MenuAction::AppendContainer(Box::new(container)),
+    ));
+    items
 }
 
 /// 结果实体的来源(由各自 id 的 namespace 派生);供查 caps 取网页模板。
@@ -622,20 +629,23 @@ fn entity_source(entity: &EntityRef) -> mineral_model::SourceKind {
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_channel_core::Page;
-    use mineral_model::{Album, AlbumId, AlbumRef, Playlist, PlaylistId, SearchKind, SourceKind};
+    use mineral_model::{
+        Album, AlbumId, AlbumRef, Artist, ArtistId, Playlist, PlaylistId, SearchKind, SourceKind,
+    };
     use mineral_task::SearchPayload;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
 
     use super::{
-        album_copy_items, append_template_items, playlist_copy_items, row_anchor, song_copy_items,
+        album_copy_items, append_template_items, container_action_items, playlist_copy_items,
+        row_anchor, song_copy_items,
     };
     use crate::app::App;
     use crate::components::layout::shared::compute::compute_search;
-    use crate::components::popup::MenuAction;
+    use crate::components::popup::{ContainerRef, MenuAction};
     use crate::runtime::scroll::list::ScrollList;
-    use crate::runtime::state::SearchFocus;
+    use crate::runtime::state::{DetailFetch, SearchFocus};
     use crate::test_support::{
         app_with_channel_search_probed, app_with_library, app_with_library_probed,
         app_with_playlists_probed, endserenading,
@@ -756,6 +766,59 @@ mod tests {
         app.state.browse.fullscreen.set(true);
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 0, "全屏态屏蔽操作菜单");
+        Ok(())
+    }
+
+    /// 容器 `o` 菜单的「Play all next」项只给专辑 / 歌单(有「全部曲目」语义);歌手不出
+    /// (热门曲是采样,无整列语义)。
+    #[test]
+    fn container_menu_play_next_only_for_album_playlist() -> color_eyre::Result<()> {
+        let playlist = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .name("PL".to_owned())
+            .build();
+        let items = container_action_items(ContainerRef::Playlist(Box::new(playlist.clone())));
+        let play_next = items
+            .iter()
+            .find(|it| it.hotkey == Some('n'))
+            .ok_or_else(|| color_eyre::eyre::eyre!("歌单容器应有 Play all next 项"))?;
+        assert_eq!(play_next.label, "Play all next");
+        assert_eq!(
+            play_next.action,
+            Some(MenuAction::PlayNextContainer(Box::new(
+                ContainerRef::Playlist(Box::new(playlist))
+            ))),
+            "动作携同一容器"
+        );
+
+        let artist = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar1"))
+            .name("A".to_owned())
+            .build();
+        let items = container_action_items(ContainerRef::Artist(Box::new(artist)));
+        assert!(
+            !items
+                .iter()
+                .any(|it| matches!(it.action, Some(MenuAction::PlayNextContainer(_)))),
+            "歌手容器不出 Play all next"
+        );
+        Ok(())
+    }
+
+    /// Playlists 面 `o`→`n`:歌单曲目未缓存 → 登记「整单按序插播」意图(待详情到货兑现)。
+    #[test]
+    fn o_menu_play_next_on_playlists_registers_intent() -> color_eyre::Result<()> {
+        let (mut app, _submitted) = app_with_playlists_probed()?;
+        draw_once(&app)?;
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('n'));
+        let key =
+            DetailFetch::PlaylistDetail(PlaylistId::new(SourceKind::NETEASE, "p1")).dedup_key();
+        assert_eq!(
+            app.pending_container.get(&key),
+            Some(&crate::player_actions::PlayMode::InsertNext),
+            "playlists o→n 登记整单按序插播意图"
+        );
         Ok(())
     }
 
