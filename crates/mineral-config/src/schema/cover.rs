@@ -75,6 +75,46 @@ pub enum CoverStorageMode {
     Resized,
 }
 
+/// 全屏切歌封面转场段(挂在 `TuiConfig` 下)。转场期封面以字符半块像素级合成,
+/// 落定后回终端图协议高清渲染。
+#[config_section]
+pub struct CoverTransitionConfig {
+    /// 是否启用(关闭则切歌封面直接换,不做合成转场)。
+    enabled: bool,
+
+    /// 转场样式。
+    style: CoverTransitionStyle,
+
+    /// 转场时长,毫秒。
+    duration_ms: u32,
+
+    /// zoom 样式参数(`style = "zoom"` 时生效)。
+    zoom: ZoomConfig,
+}
+
+/// zoom 转场样式参数(挂在 `CoverTransitionConfig` 下)。
+#[config_section]
+pub struct ZoomConfig {
+    /// 缩放幅度:旧图放大到此倍数退场,新图从此倍数回缩到 1 落定;1 = 无缩放(等效 fade)。
+    scale: f32,
+}
+
+/// 全屏切歌封面转场样式。
+#[lua_enum]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum CoverTransitionStyle {
+    /// 新旧封面逐像素淡入淡出。
+    Fade,
+
+    /// 旧图左移退场,新图自右推入。
+    Slide,
+
+    /// 旧图放大退场,新图自微放大回缩落定。
+    Zoom,
+}
+
 /// kmeans 取色参数(挂在 `CoverConfig` 下)。
 #[config_section]
 pub struct KmeansConfig {

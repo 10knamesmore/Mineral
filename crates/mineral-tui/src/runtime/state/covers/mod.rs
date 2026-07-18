@@ -4,4 +4,4 @@ mod cache;
 mod hub;
 mod protocols;
 
-pub use hub::CoverHub;
+pub use hub::{CoverHub, CoverTransition};

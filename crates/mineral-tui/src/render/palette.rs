@@ -38,13 +38,13 @@ impl Rgb {
         Color::Rgb(self.r, self.g, self.b)
     }
 
-    /// 在两个 swatch 之间按 `num/denom` 逐分量整数 lerp,返回渲染色。
+    /// 在两个 swatch 之间按 `num/denom` 逐分量整数 lerp。
     ///
     /// # Params:
     ///   - `to`: 终点色
     ///   - `num` / `denom`: lerp 比例(`num` 越界自动 clamp 到 `denom`)
-    fn lerp_to(self, to: Self, num: u64, denom: u64) -> Color {
-        Color::Rgb(
+    fn lerp_to(self, to: Self, num: u64, denom: u64) -> Self {
+        Self::new(
             lerp_byte(self.r, to.r, num, denom),
             lerp_byte(self.g, to.g, num, denom),
             lerp_byte(self.b, to.b, num, denom),
@@ -66,7 +66,7 @@ pub struct ColumnColors {
 ///
 /// 频谱用它沿频率轴铺色(低频取暗色、高频取亮色);[`Self::sample`] 把
 /// `0..=1000` 的位置映射到这条色带上插值取色。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoverPalette {
     /// 重点色,Lab 明度升序;长度 = 实际聚出的色数(≤ k),恒非空(由 [`Self::new`] 保证)。
     swatches: Vec<Rgb>,
@@ -109,17 +109,26 @@ impl CoverPalette {
     /// # Return:
     ///   对应位置的 `Color::Rgb`。
     pub fn sample(&self, pos_permille: u32) -> Color {
+        self.sample_rgb(pos_permille).to_color()
+    }
+
+    /// [`Self::sample`] 的结构化版本:同一取色逻辑,返回 [`Rgb`] 而非渲染色。
+    /// 供需要继续做颜色数学的消费方(氛围渐变的锚点色)使用,免去从 `Color` 反解。
+    ///
+    /// # Params:
+    ///   - `pos_permille`: 色带位置千分比(`0..=1000`)
+    ///
+    /// # Return:
+    ///   对应位置的颜色。
+    pub fn sample_rgb(&self, pos_permille: u32) -> Rgb {
         let pos = pos_permille.min(1000);
         // segments = swatch 数 - 1 = 色带被分成的区间数。
         let segments = u32::try_from(self.swatches.len())
             .unwrap_or(1)
             .saturating_sub(1);
         if segments == 0 {
-            // 单 swatch:整条色带一个颜色。
-            return match self.swatches.first() {
-                Some(swatch) => swatch.to_color(),
-                None => Color::Reset,
-            };
+            // 单 swatch:整条色带一个颜色。构造保证非空,fallback 仅兜类型穷尽。
+            return self.swatches.first().copied().unwrap_or(Rgb::new(0, 0, 0));
         }
         // pos 落在第 idx 段 [idx/segments, (idx+1)/segments],末段封顶到 segments-1。
         let idx = (pos.saturating_mul(segments) / 1000).min(segments - 1);
@@ -131,7 +140,7 @@ impl CoverPalette {
         match (self.swatches.get(lo_i), self.swatches.get(lo_i + 1)) {
             (Some(lo), Some(hi)) => lo.lerp_to(*hi, num, denom),
             // idx+1 恒 ≤ segments = len-1 < len,故不可达;留作类型穷尽。
-            _ => Color::Reset,
+            _ => Rgb::new(0, 0, 0),
         }
     }
 

@@ -108,6 +108,9 @@ expression: "super::meta_config_lua()"
 ---Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。
 ---@alias mineral.SearchFocusTransition "slide"|"instant"
 
+---全屏切歌封面转场样式。
+---@alias mineral.CoverTransitionStyle "fade"|"slide"|"zoom"
+
 ---可叠加的字体效果。终端实际渲染效果取决于终端模拟器支持(如部分终端无斜体)。
 ---@alias mineral.TextStyle "bold"|"italic"|"underline"|"dim"|"reversed"|"crossed_out"
 
@@ -144,6 +147,8 @@ expression: "super::meta_config_lua()"
 ---@field spectrum? mineral.SpectrumConfig 频谱面板段(观感开关 + 平滑/衰减 + peak 物理)。
 ---@field waveform? mineral.WaveformConfig 进度条波形段(振幅波形开关 + 封面取色开关)。
 ---@field cover? mineral.CoverConfig 封面段(抓取/缓存/并发 + kmeans 取色)。
+---@field cover_transition? mineral.CoverTransitionConfig 全屏切歌封面转场段(样式 + 时长)。
+---@field ambient? mineral.AmbientConfig 氛围背景段(全屏沉浸页的调色板渐变场)。
 ---@field prefetch? mineral.PrefetchConfig 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
 ---@field search? mineral.SearchConfig 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
 ---@field lyrics? mineral.LyricsConfig 歌词段(行距 + 滚动手感)。
@@ -328,6 +333,57 @@ expression: "super::meta_config_lua()"
 ---@field l_max? number 明度上限(Lab L,0-100;过滤近白像素)。
 ---@field chroma_min? number 彩度下限 √(a²+b²)(过滤近灰像素;灰底对配色无贡献)。
 ---@field min_valid_pixels_pct? integer 过滤后有效像素占比低于此(%)则放弃过滤改用全部像素,0-100;保证黑白封面也有色。
+
+---全屏切歌封面转场段(挂在 `TuiConfig` 下)。转场期封面以字符半块像素级合成,
+---落定后回终端图协议高清渲染。
+---@class mineral.CoverTransitionConfig
+---@field enabled? boolean 是否启用(关闭则切歌封面直接换,不做合成转场)。
+---@field style? mineral.CoverTransitionStyle 转场样式。
+---@field duration_ms? integer 转场时长,毫秒。
+---@field zoom? mineral.ZoomConfig zoom 样式参数(`style = "zoom"` 时生效)。
+
+---zoom 转场样式参数(挂在 `CoverTransitionConfig` 下)。
+---@class mineral.ZoomConfig
+---@field scale? number 缩放幅度:旧图放大到此倍数退场,新图从此倍数回缩到 1 落定;1 = 无缩放(等效 fade)。
+
+---氛围背景配置。
+---@class mineral.AmbientConfig
+---@field enabled? boolean 是否启用(全屏沉浸页整屏铺当前封面调色板驱动的氛围渐变;关闭经渐变平滑淡出)。
+---@field intensity? number 渐变场浓度 0-1:0 = 纯主题底色,越大封面色越浓;过大前景文字对比度下降。
+---@field sigma? number 锚点高斯权重的半径 σ(屏幕相对坐标):越小色斑越聚拢,越大场越均匀。
+---@field fade_ms? integer 切歌 / 封面取色就绪时调色板渐变到新封面的时长,毫秒。
+---@field vignette? mineral.VignetteConfig 边缘暗角(向主题底色收敛,保歌词 / 播控可读)。
+---@field drift? mineral.DriftConfig 锚点漂移(渐变场的缓慢流动)。
+---@field rotate? mineral.RotateConfig 颜色轮转(各锚点颜色沿封面色带循环流动)。
+---@field anchors? mineral.AnchorConfig[] 渐变场锚点表(数组整体替换):每锚点一个色斑,颜色取封面色带 `pos` 位置。
+
+---氛围背景的边缘暗角参数(挂在 `AmbientConfig` 下)。
+---@class mineral.VignetteConfig
+---@field strength? number 暗角强度 0-1:屏幕边缘向主题底色收敛的程度;0 = 关闭。
+---@field inner? number 起始半径(到屏心的相对距离,0-1;此距离以内不叠暗角)。
+---@field outer? number 满强半径(到屏心的相对距离;到此距离暗角达 `strength`,屏角距离 ≈ 0.71)。
+
+---氛围背景的锚点漂移参数(挂在 `AmbientConfig` 下)。
+---@class mineral.DriftConfig
+---@field enabled? boolean 是否漂移;关闭则场静止(仅切歌时颜色过渡)。
+---@field speed? number 漂移速率倍率:1 = 各锚点自带速率的原速,越大流动越快。
+---@field sway_pct? number 锚点摆幅,屏幕尺寸的 %:锚点绕锚位正弦游走的半径。
+
+---氛围背景的颜色轮转参数(挂在 `AmbientConfig` 下):各锚点的色带采样位随时间
+---沿「暗 → 亮 → 暗」三角波往返,封面色在色斑间缓慢流动。
+---@class mineral.RotateConfig
+---@field enabled? boolean 是否轮转;关闭则各锚点颜色钉在其 `pos` 位置。
+---@field cycle_secs? number 一整个往返周期的时长,秒;越小颜色流动越快。
+
+---渐变场单个锚点(挂在 `AmbientConfig.anchors` 数组)。
+---@class mineral.AnchorConfig
+---@field x? number 锚位横坐标(屏幕相对 0-1)。
+---@field y? number 锚位纵坐标(屏幕相对 0-1)。
+---@field pos? integer 绑定的色带采样位置(‰,0-1000;0 = 色板最暗色,1000 = 最亮色)。
+---@field speed_x? number 横轴漂移角速度(弧度/秒,乘 `drift.speed` 后生效)。
+---@field speed_y? number 纵轴漂移角速度(弧度/秒;与横轴不同才游走出非正圆轨迹)。
+---@field phase_x? number 横轴初始相位(弧度;各锚点错开,静止帧也不对称)。
+---@field phase_y? number 纵轴初始相位(弧度)。
 
 ---预取配置。
 ---@class mineral.PrefetchConfig

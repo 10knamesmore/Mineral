@@ -1,5 +1,6 @@
 //! 强类型配置 schema:顶层 [`Config`] 与各域子段。
 
+mod ambient;
 mod animation;
 mod audio;
 mod behavior;
@@ -25,6 +26,7 @@ mod toast;
 mod waveform;
 mod window_title;
 
+pub use ambient::{AmbientConfig, AnchorConfig, DriftConfig, RotateConfig, VignetteConfig};
 pub use animation::{
     AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode,
     MenuReveal, SearchFocusTransition, SweepStyle,
@@ -34,7 +36,10 @@ pub use behavior::{BehaviorConfig, TrackPosMemory};
 pub use cache::CacheConfig;
 pub use config::{Config, TuiConfig};
 pub use copy::{COPY_TEMPLATE_FNS, CopyConfig, CopyContext, CopyTemplate};
-pub use cover::{CoverCacheConfig, CoverConfig, CoverStorageMode, KmeansConfig};
+pub use cover::{
+    CoverCacheConfig, CoverConfig, CoverStorageMode, CoverTransitionConfig, CoverTransitionStyle,
+    KmeansConfig, ZoomConfig,
+};
 pub use daemon::DaemonConfig;
 pub use download::DownloadConfig;
 pub use envelope::{EnvelopeConfig, HighpassConfig, ShelfConfig};

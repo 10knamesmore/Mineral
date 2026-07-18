@@ -5,12 +5,13 @@
 
 use mineral_config_macros::config_section;
 
+use super::ambient::AmbientConfig;
 use super::animation::AnimationConfig;
 use super::audio::AudioConfig;
 use super::behavior::BehaviorConfig;
 use super::cache::CacheConfig;
 use super::copy::CopyConfig;
-use super::cover::CoverConfig;
+use super::cover::{CoverConfig, CoverTransitionConfig};
 use super::daemon::DaemonConfig;
 use super::download::DownloadConfig;
 use super::keys::KeysConfig;
@@ -77,6 +78,12 @@ pub struct TuiConfig {
 
     /// 封面段(抓取/缓存/并发 + kmeans 取色)。
     cover: CoverConfig,
+
+    /// 全屏切歌封面转场段(样式 + 时长)。
+    cover_transition: CoverTransitionConfig,
+
+    /// 氛围背景段(全屏沉浸页的调色板渐变场)。
+    ambient: AmbientConfig,
 
     /// 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
     prefetch: PrefetchConfig,

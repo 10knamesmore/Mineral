@@ -33,7 +33,7 @@ mod view_switch;
 pub(crate) use browse::BrowseModel;
 pub use browse::BrowsePage;
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
-pub use covers::CoverHub;
+pub use covers::{CoverHub, CoverTransition};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
 pub use player::PlayerMirror;

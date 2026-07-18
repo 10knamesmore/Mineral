@@ -36,6 +36,7 @@ use crate::view::draw;
 
 mod channel_search;
 mod cover_colors;
+mod cover_transition;
 mod menus;
 mod nav;
 mod page;
@@ -57,6 +58,10 @@ pub struct App {
     /// 封面驱动的 accent 渐变状态机:目标由 `sync_cover_palette` 按封面身份 diff
     /// 投喂,每拍推进并合成 effective `theme`。
     pub(crate) accent_fade: crate::render::accent::AccentFade,
+
+    /// 全屏氛围背景的调色板渐变状态机:与 accent 共用同一次封面身份 diff 投喂,
+    /// 时长独立(`ambient.fade_ms`);渲染在全屏 paint 开头整屏铺 bg。
+    pub(crate) ambient: crate::render::ambient::AmbientGradient,
 
     /// 业务状态(视图、选中、playback 镜像、加载缓存等)。
     pub state: AppState,
@@ -161,6 +166,10 @@ impl App {
         let accent_fade = crate::render::accent::AccentFade::new(
             crate::render::anim::ticks32_from_ms(*tui_cfg.theme().dynamic().fade_ms(), tick_ms),
         );
+        let ambient = crate::render::ambient::AmbientGradient::new(
+            crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
+            tick_ms,
+        );
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
         let notifications = Notifications::new(
             *tui_cfg.toast().flash_ttl_secs(),
@@ -183,6 +192,7 @@ impl App {
             theme,
             theme_base,
             accent_fade,
+            ambient,
             state,
             keymap,
             notice_hint,
@@ -313,7 +323,8 @@ impl App {
                 self.apply_player_sync(sync);
                 self.state.covers.drain_ready_covers(&self.cover_fetcher);
                 self.sync_cover_palette();
-                self.tick_dynamic_accent();
+                self.tick_cover_fades();
+                self.sync_cover_transition();
                 let sizes_per_image = *self.state.cfg.tui().cover().cache().sizes_per_image();
                 self.state
                     .covers

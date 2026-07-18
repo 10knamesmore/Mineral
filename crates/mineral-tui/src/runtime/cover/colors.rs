@@ -168,8 +168,38 @@ fn in_srgb_bounds(c: Srgb<f32>) -> bool {
 
 /// swatch → Lch(明度 / 彩度 / 色相,选色的工作色空间)。
 fn lch_of(c: Rgb) -> Lch {
-    let lab: Lab = Srgb::new(c.r, c.g, c.b).into_format::<f32>().into_color();
-    Lch::from_color(lab)
+    Lch::from_color(lab_of(c))
+}
+
+/// swatch → Lab(感知均匀插值的工作色空间)。
+fn lab_of(c: Rgb) -> Lab {
+    Srgb::new(c.r, c.g, c.b).into_format::<f32>().into_color()
+}
+
+/// 两个 sRGB 色在 **Lab 空间**按千分比插值:感知均匀,互补色中途不塌成灰
+/// (RGB 直插会——两端彩度都高、中点却近灰轴)。氛围渐变的锚点色过渡用它。
+///
+/// # Params:
+///   - `a` / `b`: 两端颜色
+///   - `permille`: 插值位置千分比 `0..=1000`(越界 clamp;`0` = `a`、`1000` = `b`)
+///
+/// # Return:
+///   插值后的 sRGB 颜色。
+pub(crate) fn lerp_lab(a: Rgb, b: Rgb, permille: u16) -> Rgb {
+    if permille == 0 {
+        return a;
+    }
+    if permille >= 1000 {
+        return b;
+    }
+    let t = f32::from(permille) / 1000.0;
+    let (la, lb) = (lab_of(a), lab_of(b));
+    let mixed = Lab::new(
+        la.l + (lb.l - la.l) * t,
+        la.a + (lb.a - la.a) * t,
+        la.b + (lb.b - la.b) * t,
+    );
+    lab_to_rgb(mixed)
 }
 
 /// 两个 Lch 的环形色相距离(度,`0..=180`)。
@@ -411,6 +441,51 @@ mod tests {
             accent.chroma
         );
         Ok(())
+    }
+
+    use super::lerp_lab;
+
+    /// `lerp_lab` 端点精确:0‰ = 起点、1000‰(及越界)= 终点,逐字节相等。
+    #[test]
+    fn lerp_lab_endpoints_exact() {
+        let a = Rgb::new(200, 40, 40);
+        let b = Rgb::new(40, 40, 200);
+        assert_eq!(lerp_lab(a, b, 0), a);
+        assert_eq!(lerp_lab(a, b, 1000), b);
+        assert_eq!(lerp_lab(a, b, /*permille*/ 2000), b, "越界应 clamp 到终点");
+    }
+
+    /// Lab 插值不塌灰:红 ↔ 青(RGB 互补)中点在 RGB 直插下近灰(彩度趋零),
+    /// Lab 插值应保住明显更高的彩度——这正是氛围渐变选 Lab 的理由。
+    #[test]
+    fn lerp_lab_midpoint_keeps_chroma() {
+        let red = Rgb::new(220, 30, 30);
+        let cyan = Rgb::new(30, 200, 200);
+        let mid = lerp_lab(red, cyan, 500);
+        let rgb_mid = Rgb::new(125, 115, 115); // RGB 直插的中点(近灰)
+        let chroma = |c: Rgb| lch_of(c).chroma;
+        assert!(
+            chroma(mid) > chroma(rgb_mid) + 10.0,
+            "Lab 中点彩度 {} 应明显高于 RGB 直插中点 {}",
+            chroma(mid),
+            chroma(rgb_mid)
+        );
+    }
+
+    proptest::proptest! {
+        /// 任意两色任意位置:`lerp_lab` 不 panic,输出恒为合法 sRGB(转换内部已 clamp)。
+        #[test]
+        fn lerp_lab_total(
+            a in (any::<u8>(), any::<u8>(), any::<u8>()),
+            b in (any::<u8>(), any::<u8>(), any::<u8>()),
+            permille in any::<u16>(),
+        ) {
+            let _ = lerp_lab(
+                Rgb::new(a.0, a.1, a.2),
+                Rgb::new(b.0, b.1, b.2),
+                permille,
+            );
+        }
     }
 
     proptest::proptest! {

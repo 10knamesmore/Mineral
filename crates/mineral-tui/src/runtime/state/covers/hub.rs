@@ -13,9 +13,23 @@ use tokio::sync::mpsc;
 
 use super::cache::CoverCache;
 use super::protocols::ProtocolCache;
+use crate::render::anim::Transition;
 use crate::render::palette::CoverPalette;
 use crate::runtime::cover::encode::{CoverEncoder, EncodeRequest};
 use crate::runtime::cover::fetch::CoverFetcher;
+
+/// 一段进行中的全屏切歌封面转场:新旧两图按样式逐帧合成 halfblock,推满落定回
+/// 终端图协议高清。转场窗口恰好盖住新图的离线编码期,落定无占位闪。
+pub struct CoverTransition {
+    /// 退场封面(切歌前封面区显示的图)。
+    pub from_url: MediaUrl,
+
+    /// 进场封面(在播新图)。
+    pub to_url: MediaUrl,
+
+    /// 转场进度(进场方向,推满即落定;时长 = `cover_transition.duration_ms`)。
+    pub anim: Transition,
+}
 
 /// 封面管线状态([`AppState`](crate::runtime::state::AppState) 的封面域)。
 pub struct CoverHub {
@@ -54,6 +68,14 @@ pub struct CoverHub {
     /// 用 `RefCell` 因渲染拿 `&AppState`。
     pub encode_pending: RefCell<FxHashSet<(MediaUrl, (u16, u16))>>,
 
+    /// 进行中的全屏切歌封面转场;`None` = 稳态(命中协议直接 place 高清)。
+    /// 触发 / 推进 / 收尾都在 app 层的转场同步,渲染处只读。
+    pub transition: Option<CoverTransition>,
+
+    /// 全屏封面区当前实际显示的封面(转场 from 的身份依据)。与在播封面 diff 出
+    /// 切歌瞬间;非全屏稳态时只跟随不触发。
+    pub displayed_cover: Option<MediaUrl>,
+
     /// 歌单拼贴合成键 → 上次合成时的就绪成员数。渐进式重拼判定:成员图逐张到货,
     /// 就绪数超过记录值才重拼覆盖同 key(成员 fetch 失败静默、`pending` 不回收,
     /// 等不来"全员就绪",只能有几张拼几张)。成员集变化即换新键,旧记录仅占位无害。
@@ -81,6 +103,8 @@ impl CoverHub {
             protocols: ProtocolCache::new(protocol_budget),
             encode_tx: mpsc::unbounded_channel().0,
             encode_pending: RefCell::new(FxHashSet::default()),
+            transition: None,
+            displayed_cover: None,
             collage_ready: FxHashMap::default(),
             loading: 0,
         }

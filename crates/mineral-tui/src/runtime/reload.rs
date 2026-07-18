@@ -54,6 +54,22 @@ impl crate::app::App {
         self.accent_fade
             .set_target(accent_target.flatten(), &self.theme_base);
         self.theme = Arc::new(self.accent_fade.apply(self.theme_base));
+        // 固化型(携带运行态):氛围渐变 retempo 保相位;开关 / 目标按当前已应用色板
+        // 重投(开着且色板在则渐变过去,关了渐变回底色场)。`current_palette` 是随封面
+        // 身份维护的稳定拷贝,对原图 LRU 逐出免疫。
+        self.ambient.retempo(
+            crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
+            tick_ms,
+        );
+        let ambient_palette = self.state.covers.current_palette.clone();
+        self.feed_ambient(ambient_palette.as_ref());
+        // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
+        if let Some(active) = self.state.covers.transition.as_mut() {
+            active.anim.retempo(crate::render::anim::ticks16_from_ms(
+                *tui_cfg.cover_transition().duration_ms(),
+                tick_ms,
+            ));
+        }
         // 固化型(带槽相位,整体重建 + 相位 reconciliation 在其内部):marquee / 唱片纹。
         self.state.marquees = Marquees::from_config(anim.marquee(), tick_ms);
         self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
@@ -383,7 +399,7 @@ mod tests {
         app.state.covers.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..400 {
-            app.tick_dynamic_accent();
+            app.tick_cover_fades();
         }
         assert_ne!(app.theme.accent, base_accent, "前置:已染上封面色");
 
@@ -395,7 +411,7 @@ mod tests {
             "关闭那帧应从封面色渐变起步,不瞬跳"
         );
         for _ in 0..400 {
-            app.tick_dynamic_accent();
+            app.tick_cover_fades();
         }
         assert_eq!(app.theme.accent, base_accent, "关闭后应渐变回 base accent");
         Ok(())
@@ -418,7 +434,7 @@ mod tests {
         app.state.covers.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..20 {
-            app.tick_dynamic_accent();
+            app.tick_cover_fades();
         }
         let mid = app.theme.accent;
         assert_ne!(mid, app.theme_base.accent, "前置:渐变已起步");
@@ -428,6 +444,128 @@ mod tests {
             serde_json::json!({ "tui": { "theme": { "dynamic": { "fade_ms": 6016 } } } }),
         )?);
         assert_eq!(app.theme.accent, mid, "retempo 保相位,推送那帧颜色不跳");
+        Ok(())
+    }
+
+    /// 造一个「在播曲色板已就绪并 sync」的 App(氛围 / accent 渐变的共用前置)。
+    fn app_with_synced_palette() -> color_eyre::Result<crate::app::App> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::palette::{CoverPalette, Rgb};
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let url = MediaUrl::remote("https://example.com/c.jpg")?;
+        if let Some(song) = app.state.player.current.as_mut() {
+            song.cover_url = Some(url.clone());
+        }
+        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        app.state.covers.palettes.insert(url, palette);
+        app.sync_cover_palette();
+        Ok(app)
+    }
+
+    /// 用 1×1 铺场探针读氛围场的当前可见色(屏心一点,几何项不干扰)。
+    fn ambient_probe(app: &crate::app::App) -> color_eyre::Result<ratatui::style::Color> {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        use crate::render::ambient;
+
+        let area = Rect::new(0, 0, 1, 1);
+        let mut buf = Buffer::empty(area);
+        let base = ambient::rgb_of(app.theme_base.base)
+            .ok_or_else(|| color_eyre::eyre::eyre!("默认主题应为真彩"))?;
+        ambient::render(
+            &mut buf,
+            area,
+            &app.ambient,
+            base,
+            app.state.cfg.tui().ambient(),
+            /*progress_permille*/ 1000,
+        );
+        Ok(buf
+            .cell((0, 0))
+            .ok_or_else(|| color_eyre::eyre::eyre!("cell 越界"))?
+            .bg)
+    }
+
+    /// 氛围渐变中热更 `ambient.fade_ms`:retempo 保相位,推送前后同一帧场色不跳。
+    #[test]
+    fn pushed_config_ambient_fade_retempo_preserves_phase() -> color_eyre::Result<()> {
+        let mut app = app_with_synced_palette()?;
+        for _ in 0..20 {
+            app.tick_cover_fades();
+        }
+        let mid = ambient_probe(&app)?;
+        // 2816ms / 16ms = 176 拍,恰为默认 1400ms(88 拍)的两倍:相位比例可被整数
+        // 精确保持,断言得以用严格相等。
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "ambient": { "fade_ms": 2816 } } }),
+        )?);
+        assert_eq!(ambient_probe(&app)?, mid, "retempo 保相位,推送那帧场色不跳");
+        Ok(())
+    }
+
+    /// 氛围热更关闭:已染上封面场后推送 `enabled = false`,渐变回底色场并静止
+    /// (不瞬跳、不残留封面色;静止后渲染方可整段跳过铺场)。
+    #[test]
+    fn pushed_config_ambient_disabled_fades_out() -> color_eyre::Result<()> {
+        let mut app = app_with_synced_palette()?;
+        for _ in 0..400 {
+            app.tick_cover_fades();
+        }
+        assert!(
+            !app.ambient.settled_at_base(),
+            "前置:氛围场已静止在封面色板上"
+        );
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "ambient": { "enabled": false } } }),
+        )?);
+        assert!(
+            !app.ambient.settled_at_base(),
+            "关闭那帧应从封面场渐变起步,不瞬跳"
+        );
+        for _ in 0..400 {
+            app.tick_cover_fades();
+        }
+        assert!(app.ambient.settled_at_base(), "关闭后应渐变回底色场并静止");
+        Ok(())
+    }
+
+    /// 在途切歌封面转场热更 `duration_ms`:retempo 保相位,推送前后同一帧进度不跳。
+    #[test]
+    fn pushed_config_cover_transition_retempo_preserves_phase() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::anim::Transition;
+        use crate::runtime::state::CoverTransition;
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let mut anim = Transition::expanding(/*ticks*/ 10);
+        for _ in 0..5 {
+            anim.tick();
+        }
+        app.state.covers.transition = Some(CoverTransition {
+            from_url: MediaUrl::remote("https://x.y/a.jpg")?,
+            to_url: MediaUrl::remote("https://x.y/b.jpg")?,
+            anim,
+        });
+        let before = anim.eased_in_out();
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "cover_transition": { "duration_ms": 1800 } } }),
+        )?);
+        let active = app
+            .state
+            .covers
+            .transition
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("在途转场不应被热更清掉"))?;
+        assert_eq!(
+            active.anim.eased_in_out(),
+            before,
+            "retempo 保相位,推送那帧进度不跳"
+        );
         Ok(())
     }
 

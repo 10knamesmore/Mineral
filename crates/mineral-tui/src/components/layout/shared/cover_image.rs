@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use image::{DynamicImage, Rgb};
+use image::{DynamicImage, Rgb, RgbImage};
+use mineral_config::CoverTransitionStyle;
 use mineral_model::MediaUrl;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -18,9 +19,10 @@ use ratatui_image::StatefulImage;
 use ratatui_image::picker::Picker;
 
 use crate::components::layout::shared::cover;
+use crate::render::color::lerp_byte;
 use crate::render::theme::Theme;
 use crate::runtime::cover::encode::EncodeRequest;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, CoverTransition};
 
 /// 优先 ratatui-image 真图;cache miss / 无 url / 协议不支持时,回退到
 /// `crate::components::layout::shared::cover::render` 的程序化封面。
@@ -145,6 +147,141 @@ pub fn prewarm(state: &AppState, picker: &Picker, area: Rect, url: &MediaUrl) {
         return;
     };
     request_cover_encode(state, picker, url, image, target);
+}
+
+/// 全屏切歌转场帧:from / to 两图按样式与进度在像素级合成一帧,走 [`render_halfblock_to`]
+/// 同一量化路径铺进封面区(纯 cell,逐帧重画安全)。任一图不在缓存返回 `false`,
+/// 调用方回落常规渲染(无图直接换 / 编码在途 halfblock)。
+///
+/// # Params:
+///   - `area`: 封面区(内部按字号锁视觉正方,与稳态 kitty 落点一致,落定不跳)
+///   - `transition`: 进行中的转场(身份 + 进度)
+///
+/// # Return:
+///   本帧是否已画(`false` = 缺图,调用方兜底)。
+pub fn render_transition(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    transition: &CoverTransition,
+    state: &AppState,
+    picker: &Picker,
+) -> bool {
+    let (Some(from), Some(to)) = (
+        state.covers.cache.get(&transition.from_url),
+        state.covers.cache.get(&transition.to_url),
+    ) else {
+        return false;
+    };
+    let target = square_subarea(area, picker.font_size());
+    if target.width == 0 || target.height == 0 {
+        return false;
+    }
+    let cfg = state.cfg.tui().cover_transition();
+    let composite = compose_transition(
+        from,
+        to,
+        u32::from(target.width),
+        u32::from(target.height).saturating_mul(2),
+        *cfg.style(),
+        transition.anim.eased_in_out(),
+        permille_of_scale(*cfg.zoom().scale()),
+    );
+    render_halfblock_to(
+        frame.buffer_mut(),
+        target,
+        &DynamicImage::ImageRgb8(composite),
+    );
+    true
+}
+
+/// 把新旧两封面按样式与进度合成一帧转场图(尺寸 = halfblock 像素网格,调用方直出)。
+///
+/// # Params:
+///   - `px_w` / `px_h`: 输出像素网格(宽 = cell 列数,高 = cell 行数 × 2)
+///   - `progress_permille`: 转场进度(‰,已缓动)
+///   - `zoom_scale_permille`: zoom 样式的缩放幅度(‰,`permille_of_scale` 折算)
+fn compose_transition(
+    from: &DynamicImage,
+    to: &DynamicImage,
+    px_w: u32,
+    px_h: u32,
+    style: CoverTransitionStyle,
+    progress_permille: u16,
+    zoom_scale_permille: u32,
+) -> RgbImage {
+    let old = from
+        .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
+        .to_rgb8();
+    let new = to
+        .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
+        .to_rgb8();
+    let p = u64::from(progress_permille.min(1000));
+    match style {
+        CoverTransitionStyle::Slide => RgbImage::from_fn(px_w, px_h, |x, y| {
+            // 旧图整体左移 p·w 退场,新图贴着旧图右缘推入。
+            let shifted = x.saturating_add(
+                u32::try_from(u64::from(px_w).saturating_mul(p) / 1000).unwrap_or(0),
+            );
+            if shifted < px_w {
+                pixel_at(&old, shifted, y)
+            } else {
+                pixel_at(&new, shifted - px_w, y)
+            }
+        }),
+        CoverTransitionStyle::Zoom => {
+            // 旧图 1 → scale 放大退场,新图 scale → 1 回缩落定,透明度随进度交叉。
+            let step =
+                u32::try_from(u64::from(zoom_scale_permille.saturating_sub(1000)) * p / 1000)
+                    .unwrap_or(0);
+            let grow = 1000_u32.saturating_add(step);
+            let shrink = zoom_scale_permille.saturating_sub(step).max(1000);
+            RgbImage::from_fn(px_w, px_h, |x, y| {
+                let Rgb([old_r, old_g, old_b]) = sample_zoomed(&old, x, y, grow);
+                let Rgb([new_r, new_g, new_b]) = sample_zoomed(&new, x, y, shrink);
+                Rgb([
+                    lerp_byte(old_r, new_r, p, 1000),
+                    lerp_byte(old_g, new_g, p, 1000),
+                    lerp_byte(old_b, new_b, p, 1000),
+                ])
+            })
+        }
+        // 枚举在上游 non_exhaustive,wildcard 必需:Fade 与未知新样式都走淡入淡出。
+        _ => RgbImage::from_fn(px_w, px_h, |x, y| {
+            let Rgb([old_r, old_g, old_b]) = pixel_at(&old, x, y);
+            let Rgb([new_r, new_g, new_b]) = pixel_at(&new, x, y);
+            Rgb([
+                lerp_byte(old_r, new_r, p, 1000),
+                lerp_byte(old_g, new_g, p, 1000),
+                lerp_byte(old_b, new_b, p, 1000),
+            ])
+        }),
+    }
+}
+
+/// 越界安全取像素(合成坐标域与图同构,黑色 fallback 仅兜类型穷尽)。
+fn pixel_at(img: &RgbImage, x: u32, y: u32) -> Rgb<u8> {
+    img.get_pixel_checked(x, y)
+        .copied()
+        .unwrap_or(Rgb([0, 0, 0]))
+}
+
+/// 以图心为原点按千分比缩放采样:输出坐标映射回源坐标 `c + (v - c)·1000 / scale`。
+/// `scale ≥ 1000` 时采样窗内收不出界,仍 clamp 兜边。
+fn sample_zoomed(img: &RgbImage, x: u32, y: u32, scale_permille: u32) -> Rgb<u8> {
+    let scale = i64::from(scale_permille.max(1));
+    let map = |v: u32, dim: u32| -> u32 {
+        let center = i64::from(dim).saturating_mul(500);
+        let v_permille = i64::from(v).saturating_mul(1000).saturating_add(500);
+        let src = center + (v_permille - center) * 1000 / scale;
+        u32::try_from((src / 1000).clamp(0, i64::from(dim.saturating_sub(1)))).unwrap_or(0)
+    };
+    pixel_at(img, map(x, img.width()), map(y, img.height()))
+}
+
+/// 缩放倍数 → 千分比定点(clamp 进转场缩放的合理域再转)。
+#[allow(clippy::as_conversions)] // reason: 已 clamp 进 1.0..=4.0 且 round,转换语义无损
+fn permille_of_scale(scale: f32) -> u32 {
+    (scale.clamp(1.0, 4.0) * 1000.0).round() as u32
 }
 
 /// 把已解码真图按 halfblock(`▀` 半字符)逐 cell 画进 `area`(**精确铺满**,不再内部正方化——
@@ -298,6 +435,84 @@ mod tests {
                     Color::Rgb(200, 50, 50),
                     "cell ({x},{y}) 下半像素色"
                 );
+            }
+        }
+        Ok(())
+    }
+
+    use image::Rgb as PxRgb;
+    use mineral_config::CoverTransitionStyle;
+
+    use super::compose_transition;
+
+    /// 造一张纯色图。
+    fn solid(r: u8, g: u8, b: u8) -> DynamicImage {
+        let mut img = RgbImage::new(16, 16);
+        for p in img.pixels_mut() {
+            *p = PxRgb([r, g, b]);
+        }
+        DynamicImage::ImageRgb8(img)
+    }
+
+    /// fade 中点:纯红 → 纯蓝在 500‰ 处逐像素恰为均值(整数 lerp 无偏差)。
+    #[test]
+    fn compose_fade_midpoint_is_average() -> color_eyre::Result<()> {
+        let out = compose_transition(
+            &solid(200, 0, 0),
+            &solid(0, 0, 200),
+            /*px_w*/ 8,
+            /*px_h*/ 8,
+            CoverTransitionStyle::Fade,
+            /*progress_permille*/ 500,
+            /*zoom_scale_permille*/ 1120,
+        );
+        for p in out.pixels() {
+            assert_eq!(*p, PxRgb([100, 0, 100]), "中点应为两图均值");
+        }
+        Ok(())
+    }
+
+    /// slide 中点:旧图左移半宽——左半是旧图(右半部分内容),右半是推入的新图。
+    #[test]
+    fn compose_slide_midpoint_splits_frame() -> color_eyre::Result<()> {
+        let out = compose_transition(
+            &solid(200, 0, 0),
+            &solid(0, 0, 200),
+            /*px_w*/ 8,
+            /*px_h*/ 4,
+            CoverTransitionStyle::Slide,
+            /*progress_permille*/ 500,
+            /*zoom_scale_permille*/ 1120,
+        );
+        assert_eq!(
+            out.get_pixel_checked(0, 0).copied(),
+            Some(PxRgb([200, 0, 0])),
+            "左缘应仍是旧图"
+        );
+        assert_eq!(
+            out.get_pixel_checked(7, 0).copied(),
+            Some(PxRgb([0, 0, 200])),
+            "右缘应是推入的新图"
+        );
+        Ok(())
+    }
+
+    /// zoom 端点:进度 0 恰为旧图、进度 1000 恰为新图(缩放与透明度都归位,落定零漂移)。
+    #[test]
+    fn compose_zoom_endpoints_are_exact() -> color_eyre::Result<()> {
+        let endpoints = [(0_u16, PxRgb([200, 0, 0])), (1000_u16, PxRgb([0, 0, 200]))];
+        for (progress, expected) in endpoints {
+            let out = compose_transition(
+                &solid(200, 0, 0),
+                &solid(0, 0, 200),
+                /*px_w*/ 8,
+                /*px_h*/ 8,
+                CoverTransitionStyle::Zoom,
+                progress,
+                /*zoom_scale_permille*/ 1120,
+            );
+            for p in out.pixels() {
+                assert_eq!(*p, expected, "进度 {progress}‰ 应为端点原图");
             }
         }
         Ok(())

@@ -16,6 +16,7 @@ use crate::components::layout::shared::compute::{
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::waveform::WaveformCtx;
 use crate::components::layout::shared::{cover_image, top_status, transform, transport, vinyl};
+use crate::render::ambient;
 use crate::runtime::state::SearchFocus;
 
 /// 渲染一帧:全屏态 / 形变走全屏 paint(几何由 `compute_fullscreen` 与 `morph_areas` 给出);
@@ -208,12 +209,14 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
     }
 }
 
-/// 全屏 / 形变布局:消失面板渲进收缩 rect(小到自动空白)→ spectrum → transport → cover
+/// 全屏 / 形变布局:先整屏铺氛围背景(只写 bg,后画组件的 fg-only 样式天然透出)
+/// → 消失面板渲进收缩 rect(小到自动空白)→ spectrum → transport → cover
 /// → lyrics(歌词最后画,对穿交错时压在封面上保持可读)。
 ///
 /// # Params:
 ///   - `steady_cover`: 终态全屏封面区(形变全程固定),形变分支按它预热协议编码
 fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<Rect>, app: &App) {
+    draw_ambient(frame, app);
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
         top_status::draw(frame, r, &app.state, theme);
@@ -243,6 +246,27 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<R
     }
 }
 
+/// 氛围背景:整屏铺当前封面调色板驱动的渐变场(功能开着、或关闭后仍在淡出途中才画;
+/// 浓度乘全屏形变进度,进场随形变淡入、退场随形变收干净)。ANSI 主题无真彩底色,跳过。
+fn draw_ambient(frame: &mut Frame<'_>, app: &App) {
+    let cfg = app.state.cfg.tui().ambient();
+    if !*cfg.enabled() && app.ambient.settled_at_base() {
+        return;
+    }
+    let Some(base) = ambient::rgb_of(app.theme.base) else {
+        return;
+    };
+    let area = frame.area();
+    ambient::render(
+        frame.buffer_mut(),
+        area,
+        &app.ambient,
+        base,
+        cfg,
+        app.state.browse.fullscreen.eased_in_out(),
+    );
+}
+
 /// 全屏独立封面:跟**在播曲**;形变中画 halfblock / 程序化色块(便宜),稳态全屏才上真图
 /// (避免形变期每帧尺寸变导致 protocol 重编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
 /// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
@@ -260,6 +284,16 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
         .as_ref()
         .map_or_else(|| track.name.clone(), |a| a.name.clone());
     if app.state.browse.fullscreen.at_max() {
+        // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
+        // 新图的离线编码期;同时按当前尺寸预热新图协议((url, dims) 去重),推满落定
+        // 直接 place 高清零闪。缺任一图回落常规路径。
+        if let Some(transition) = app.state.covers.transition.as_ref()
+            && cover_image::render_transition(frame, area, transition, &app.state, &app.picker)
+        {
+            cover_image::prewarm(&app.state, &app.picker, area, &transition.to_url);
+            prewarm_upcoming(app, area);
+            return;
+        }
         cover_image::render_or_fallback(
             frame,
             area,
@@ -583,6 +617,155 @@ mod tests {
             count > 0,
             "稳态 kitty 编码在途时封面区应为 halfblock 真图(品红),不得闪 hash;实得 {count}"
         );
+        Ok(())
+    }
+
+    /// 全屏稳态切歌转场中途:封面区画两图合成的 halfblock 混色帧(fade 中点 = 均值色),
+    /// 而非任一原图 / 程序化色块——证明转场窗口接管了稳态渲染路径。
+    #[test]
+    fn fullscreen_transition_paints_halfblock_blend() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        use crate::render::anim::Transition;
+        use crate::runtime::state::CoverTransition;
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let from_url = MediaUrl::remote("https://x.y/from.jpg")?;
+        let to_url = MediaUrl::remote("https://x.y/to.jpg")?;
+        let solid = |r: u8, g: u8, b: u8| {
+            let mut img = image::RgbImage::new(16, 16);
+            for p in img.pixels_mut() {
+                *p = image::Rgb([r, g, b]);
+            }
+            Arc::new(image::DynamicImage::ImageRgb8(img))
+        };
+        app.state.covers.cache.insert(&from_url, solid(200, 0, 0));
+        app.state.covers.cache.insert(&to_url, solid(0, 0, 200));
+        if let Some(track) = app.state.playback.track.as_mut() {
+            track.cover_url = Some(to_url.clone());
+        }
+        // 转场推到恰好半程(2 拍全程推 1 拍 → 500‰,eased_in_out 过中点仍 500)。
+        let mut anim = Transition::expanding(2);
+        anim.tick();
+        app.state.covers.transition = Some(CoverTransition {
+            from_url,
+            to_url,
+            anim,
+        });
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let blend = Color::Rgb(100, 0, 100);
+        let buf = t.backend().buffer();
+        let mut count = 0_usize;
+        for y in 0..40_u16 {
+            for x in 0..120_u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == blend) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "转场半程封面区应出现红蓝均值色 halfblock,实得 {count}"
+        );
+        Ok(())
+    }
+
+    /// 全屏稳态 + 在播色板就绪:氛围背景整屏铺 bg——顶行角落(无组件写 bg)应为
+    /// 真彩场色且偏离纯底色(封面色可见)。
+    #[test]
+    fn fullscreen_ambient_paints_background() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::palette::{CoverPalette, Rgb};
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        if let Some(song) = app.state.player.current.as_mut() {
+            song.cover_url = Some(url.clone());
+        }
+        let pal = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
+            .ok_or_else(|| eyre!("非空色板"))?;
+        app.state.covers.palettes.insert(url, pal);
+        app.sync_cover_palette();
+        for _ in 0..400 {
+            app.tick_cover_fades();
+        }
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert!(
+            matches!(bg, Color::Rgb(..)),
+            "全屏顶行角落应铺氛围 bg,实得 {bg:?}"
+        );
+        assert_ne!(bg, app.theme.base, "场色应偏离纯底色(封面色可见)");
+        Ok(())
+    }
+
+    /// 全屏稳态 + 无在播色板:氛围场静止在底色——整屏铺出的是纯底色平场
+    /// (功能开着就不透出终端默认背景,切歌淡入无缝)。
+    #[test]
+    fn fullscreen_ambient_without_palette_paints_flat_base() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert_eq!(bg, app.theme.base, "无色板时应铺纯底色平场");
+        Ok(())
+    }
+
+    /// `ambient.enabled = false` 且已静止在底色场:整段跳过铺场,顶行角落 bg 保持
+    /// 未写入(终端默认),证明关闭态常态零开销。
+    #[test]
+    fn fullscreen_ambient_disabled_skips_painting() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        app.apply_pushed_config(mineral_protocol::BusValue::from_json(
+            mineral_config::merge_tree(
+                mineral_config::default_tree()?,
+                serde_json::json!({ "tui": { "ambient": { "enabled": false } } }),
+            ),
+        ));
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert_eq!(bg, Color::Reset, "关闭且静止时不应写任何 bg");
         Ok(())
     }
 
