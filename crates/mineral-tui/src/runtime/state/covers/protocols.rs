@@ -29,6 +29,10 @@ struct Slot {
 
     /// 上次被渲染命中的单调序号;最小者最久未渲染,优先逐出。
     last_used: u64,
+
+    /// 图数据仍在流式传输途中(kitty transmit backlog 未写完):不参与渲染命中,
+    /// 上层继续 halfblock 兜底——占位符绝不指向终端还没收全的图。
+    awaiting_transmit: bool,
 }
 
 /// 缓存内部可变状态(渲染路径持 `&AppState`,故整体走 `RefCell`)。
@@ -98,6 +102,9 @@ impl ProtocolCache {
         else {
             return false;
         };
+        if slot.awaiting_transmit {
+            return false;
+        }
         slot.last_used = tick;
         render(&mut slot.protocol);
         true
@@ -111,6 +118,15 @@ impl ProtocolCache {
         )
     }
 
+    /// 同尺寸协议已缓存**且图数据已送达终端**(本帧 `render_hit` 必命中)。**不** touch。
+    /// 与 [`Self::contains_dims`] 的差别:待传输槽算「在」(预热去重)但不算「可渲染」。
+    pub(crate) fn ready_for_render(&self, url: &MediaUrl, dims: (u16, u16)) -> bool {
+        matches!(
+            self.inner.borrow().entries.get(url),
+            Some(slots) if slots.iter().any(|s| s.dims == dims && !s.awaiting_transmit)
+        )
+    }
+
     /// 装入一条编码好的协议:同 `(url, dims)` 是替换;同 URL 槽数越 `sizes_per_image`
     /// 逐出该 URL 内最久未渲染尺寸;全局越字节预算逐出最久未渲染槽。
     ///
@@ -120,6 +136,7 @@ impl ProtocolCache {
     ///   - `protocol`: 编码好的协议
     ///   - `bytes`: 该协议估算的常驻字节数(worker 侧算好带入)
     ///   - `sizes_per_image`: 同一封面并存的尺寸槽上限(≥1,现读配置传入)
+    ///   - `awaiting_transmit`: 图数据是否仍在流式传输途中(传完前该槽不参与渲染命中)
     pub(crate) fn insert(
         &self,
         url: &MediaUrl,
@@ -127,6 +144,7 @@ impl ProtocolCache {
         protocol: StatefulProtocol,
         bytes: u64,
         sizes_per_image: usize,
+        awaiting_transmit: bool,
     ) {
         let inner = &mut *self.inner.borrow_mut();
         inner.tick = inner.tick.wrapping_add(1);
@@ -137,12 +155,14 @@ impl ProtocolCache {
             slot.protocol = protocol;
             slot.bytes = bytes;
             slot.last_used = last_used;
+            slot.awaiting_transmit = awaiting_transmit;
         } else {
             slots.push(Slot {
                 dims,
                 protocol,
                 bytes,
                 last_used,
+                awaiting_transmit,
             });
         }
         inner.total_bytes = inner.total_bytes.saturating_add(bytes);
@@ -160,6 +180,19 @@ impl ProtocolCache {
             inner.total_bytes = inner.total_bytes.saturating_sub(removed.bytes);
         }
         Self::evict_over_budget(inner, self.budget, Some((url, dims)));
+    }
+
+    /// 标记某槽的图数据已全部送达终端:解除「待传输」,恢复渲染命中。
+    /// 槽已被逐出 / 清空则空转(传输字节白写,无正确性影响)。
+    pub(crate) fn mark_transmit_done(&self, url: &MediaUrl, dims: (u16, u16)) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(slot) = inner
+            .entries
+            .get_mut(url)
+            .and_then(|slots| slots.iter_mut().find(|s| s.dims == dims))
+        {
+            slot.awaiting_transmit = false;
+        }
     }
 
     /// 移除某 URL 的**全部尺寸槽**(其源图被逐 / 有新图要重建时)。
@@ -260,6 +293,7 @@ mod tests {
                 proto(),
                 /*bytes*/ 100,
                 /*sizes_per_image*/ 3,
+                /*awaiting_transmit*/ false,
             );
         }
         assert!(cache.contains_dims(&url(0)?, (10, 10)));
@@ -278,6 +312,7 @@ mod tests {
             proto(),
             /*bytes*/ 100,
             /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
         );
 
         assert!(!cache.contains_dims(&u0, (20, 20)), "尺寸不同不算命中");
@@ -294,14 +329,42 @@ mod tests {
         // 每条 100 字节,预算 300 恰容 3 条,第 4 条触发逐 1。
         let cache = ProtocolCache::new(/*budget*/ 300);
         let (u0, u1, u2, u3) = (url(0)?, url(1)?, url(2)?, url(3)?);
-        cache.insert(&u0, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u1, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u2, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u0,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u1,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u2,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
 
         // 渲染 u0 → 变最近;此刻最久未渲染是 u1。
         assert!(cache.render_hit(&u0, (10, 10), |_| {}));
 
-        cache.insert(&u3, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u3,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
 
         assert!(!cache.contains_dims(&u1, (10, 10)), "u1 最久未渲染,被逐");
         assert!(cache.contains_dims(&u0, (10, 10)), "u0 被 render_hit 保护");
@@ -314,13 +377,34 @@ mod tests {
     fn remove_and_clear_reclaim_bytes() -> color_eyre::Result<()> {
         let cache = ProtocolCache::new(/*budget*/ 300);
         let (u0, u1, u2) = (url(0)?, url(1)?, url(2)?);
-        cache.insert(&u0, (10, 10), proto(), 300, /*sizes_per_image*/ 3); // 占满
+        cache.insert(
+            &u0,
+            (10, 10),
+            proto(),
+            300,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        ); // 占满
         cache.remove(&u0);
         assert!(cache.is_empty(), "remove 后为空");
 
         // 账已清零,再塞满额三条不会因旧 300 立刻逐出。
-        cache.insert(&u1, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u2, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u1,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u2,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
         assert!(cache.contains_dims(&u1, (10, 10)));
         assert!(cache.contains_dims(&u2, (10, 10)));
 
@@ -340,6 +424,7 @@ mod tests {
             proto(),
             /*bytes*/ 100,
             /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
         );
         cache.insert(
             &u,
@@ -347,6 +432,7 @@ mod tests {
             proto(),
             /*bytes*/ 100,
             /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
         );
 
         assert!(cache.contains_dims(&u, (10, 10)), "面板尺寸应保留");
@@ -361,13 +447,41 @@ mod tests {
     fn per_url_cap_evicts_oldest_dims() -> color_eyre::Result<()> {
         let cache = ProtocolCache::new(/*budget*/ 10_000);
         let (u, other) = (url(0)?, url(1)?);
-        cache.insert(&other, (5, 5), proto(), 100, /*sizes_per_image*/ 2);
-        cache.insert(&u, (10, 10), proto(), 100, /*sizes_per_image*/ 2);
-        cache.insert(&u, (20, 20), proto(), 100, /*sizes_per_image*/ 2);
+        cache.insert(
+            &other,
+            (5, 5),
+            proto(),
+            100,
+            /*sizes_per_image*/ 2,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 2,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u,
+            (20, 20),
+            proto(),
+            100,
+            /*sizes_per_image*/ 2,
+            /*awaiting_transmit*/ false,
+        );
         // 渲染 (10,10) → 变最近;此刻该 URL 内最久未渲染的是 (20,20)。
         assert!(cache.render_hit(&u, (10, 10), |_| {}));
 
-        cache.insert(&u, (30, 30), proto(), 100, /*sizes_per_image*/ 2);
+        cache.insert(
+            &u,
+            (30, 30),
+            proto(),
+            100,
+            /*sizes_per_image*/ 2,
+            /*awaiting_transmit*/ false,
+        );
 
         assert!(
             !cache.contains_dims(&u, (20, 20)),
@@ -387,16 +501,83 @@ mod tests {
     fn remove_clears_all_dims() -> color_eyre::Result<()> {
         let cache = ProtocolCache::new(/*budget*/ 200);
         let u = url(0)?;
-        cache.insert(&u, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u, (20, 20), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u,
+            (20, 20),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
         cache.remove(&u);
         assert!(cache.is_empty(), "remove 后所有尺寸清空");
 
         // 字节账清零:预算 200 再装两条 100 不触发逐出。
-        cache.insert(&u, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u, (20, 20), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u,
+            (20, 20),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
         assert!(cache.contains_dims(&u, (10, 10)));
         assert!(cache.contains_dims(&u, (20, 20)));
+        Ok(())
+    }
+
+    /// 待传输槽:`contains_dims` 真(预热去重照常)但 `render_hit` 假(halfblock 兜底),
+    /// 标记传完后恢复命中。
+    #[test]
+    fn awaiting_transmit_gates_render_until_done() -> color_eyre::Result<()> {
+        let cache = ProtocolCache::new(/*budget*/ 1_000);
+        let u = url(0)?;
+        cache.insert(
+            &u,
+            (10, 10),
+            proto(),
+            /*bytes*/ 100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ true,
+        );
+
+        assert!(
+            cache.contains_dims(&u, (10, 10)),
+            "待传输槽存在,预热不应重复投递"
+        );
+        let mut rendered = false;
+        assert!(
+            !cache.render_hit(&u, (10, 10), |_| rendered = true),
+            "传输途中不参与渲染命中"
+        );
+        assert!(!rendered, "传输途中不应执行渲染闭包");
+
+        cache.mark_transmit_done(&u, (10, 10));
+        assert!(
+            cache.render_hit(&u, (10, 10), |_| rendered = true),
+            "传完恢复命中"
+        );
+        assert!(rendered, "传完应执行渲染闭包");
+
+        // 槽已逐出后标记传完:空转不 panic。
+        cache.remove(&u);
+        cache.mark_transmit_done(&u, (10, 10));
         Ok(())
     }
 
@@ -405,10 +586,31 @@ mod tests {
     fn same_dims_reinsert_replaces_no_double_count() -> color_eyre::Result<()> {
         let cache = ProtocolCache::new(/*budget*/ 250);
         let (u0, u1) = (url(0)?, url(1)?);
-        cache.insert(&u0, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
-        cache.insert(&u0, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u0,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+        cache.insert(
+            &u0,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
         // 替换后总账应为 100;再入 100 合计 200 ≤ 250,谁都不该被逐。
-        cache.insert(&u1, (10, 10), proto(), 100, /*sizes_per_image*/ 3);
+        cache.insert(
+            &u1,
+            (10, 10),
+            proto(),
+            100,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
         assert!(
             cache.contains_dims(&u0, (10, 10)),
             "重复插入不应虚增字节导致逐出"

@@ -216,7 +216,7 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
 /// # Params:
 ///   - `steady_cover`: 终态全屏封面区(形变全程固定),形变分支按它预热协议编码
 fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<Rect>, app: &App) {
-    draw_ambient(frame, app);
+    draw_ambient(frame, app, ambient_skip_rect(app, areas.cover));
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
         top_status::draw(frame, r, &app.state, theme);
@@ -248,7 +248,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<R
 
 /// 氛围背景:整屏铺当前封面调色板驱动的渐变场(功能开着、或关闭后仍在淡出途中才画;
 /// 浓度乘全屏形变进度,进场随形变淡入、退场随形变收干净)。ANSI 主题无真彩底色,跳过。
-fn draw_ambient(frame: &mut Frame<'_>, app: &App) {
+fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
     let cfg = app.state.cfg.tui().ambient();
     if !*cfg.enabled() && app.ambient.settled_at_base() {
         return;
@@ -264,7 +264,28 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App) {
         base,
         cfg,
         app.state.browse.fullscreen.eased_in_out(),
+        skip,
     );
+}
+
+/// 本帧全屏封面确定会以终端图协议真图 place 时,其视觉正方区——ambient 不铺这个洞。
+///
+/// 图协议把整段载荷藏在图区首 cell 的 symbol 里:ambient 逐帧改那格 bg,diff 会每帧
+/// 重发载荷——iTerm2 / sixel(数据即显示、序列自带擦行)表现为整图持续闪烁。图不透明,
+/// 跳过零视觉损失。转场 / halfblock 兜底途中此区被不透明半块整面覆盖,跳过同样无害;
+/// 等图空窗 / 无轨待机盘则返回 `None` 照常铺场(那里没有不透明覆盖,挖洞会露出底色)。
+fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
+    if !app.state.browse.fullscreen.at_max() {
+        return None;
+    }
+    let track = app.state.playback.track.as_ref()?;
+    let url = track.cover_url.as_ref()?;
+    let target = cover_image::square_subarea(cover.and_then(nonempty)?, app.picker.font_size());
+    app.state
+        .covers
+        .protocols
+        .ready_for_render(url, (target.width, target.height))
+        .then_some(target)
 }
 
 /// 全屏独立封面:跟**在播曲**;形变中画 halfblock / 程序化色块(便宜),稳态全屏才上真图

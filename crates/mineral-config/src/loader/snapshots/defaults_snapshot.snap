@@ -622,6 +622,7 @@ Config {
             edge_radius: 3,
         },
         cover: CoverConfig {
+            protocol: Auto,
             http_timeout_secs: 30,
             max_dim: 384,
             jpeg_quality: 100,
@@ -629,6 +630,10 @@ Config {
             debounce_ms: 80,
             download_workers: 12,
             encode_workers: 2,
+            kitty_transmit: KittyTransmitConfig {
+                enabled: true,
+                per_tick_kb: 768,
+            },
             kmeans: KmeansConfig {
                 sample_dim: 64,
                 swatches: 6,

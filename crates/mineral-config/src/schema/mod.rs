@@ -37,8 +37,8 @@ pub use cache::CacheConfig;
 pub use config::{Config, TuiConfig};
 pub use copy::{COPY_TEMPLATE_FNS, CopyConfig, CopyContext, CopyTemplate};
 pub use cover::{
-    CoverCacheConfig, CoverConfig, CoverStorageMode, CoverTransitionConfig, CoverTransitionStyle,
-    KmeansConfig, ZoomConfig,
+    CoverCacheConfig, CoverConfig, CoverProtocolMode, CoverStorageMode, CoverTransitionConfig,
+    CoverTransitionStyle, KittyTransmitConfig, KmeansConfig, ZoomConfig,
 };
 pub use daemon::DaemonConfig;
 pub use download::DownloadConfig;

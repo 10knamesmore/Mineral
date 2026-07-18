@@ -15,8 +15,9 @@ use super::cache::CoverCache;
 use super::protocols::ProtocolCache;
 use crate::render::anim::Transition;
 use crate::render::palette::CoverPalette;
-use crate::runtime::cover::encode::{CoverEncoder, EncodeRequest};
+use crate::runtime::cover::encode::{CoverEncoder, EncodeRequest, EncodeResult};
 use crate::runtime::cover::fetch::CoverFetcher;
+use crate::runtime::cover::kitty_transmit::{self, TransmitBacklog, TransmitBatch};
 
 /// 一段进行中的全屏切歌封面转场:新旧两图按样式逐帧合成 halfblock,推满落定回
 /// 终端图协议高清。转场窗口恰好盖住新图的离线编码期,落定无占位闪。
@@ -65,8 +66,13 @@ pub struct CoverHub {
     pub encode_tx: mpsc::UnboundedSender<EncodeRequest>,
 
     /// 在飞编码 `(URL, 维度)` 集合,渲染处据此 dedup —— 同一封面同尺寸只投一次,等结果回填。
-    /// 用 `RefCell` 因渲染拿 `&AppState`。
+    /// 流式传输开启时,key 保留到图数据**送达终端**才出集(编码 + 传输合并为一段在飞期,
+    /// 防止传输途中渲染未命中又重投编码)。用 `RefCell` 因渲染拿 `&AppState`。
     pub encode_pending: RefCell<FxHashSet<(MediaUrl, (u16, u16))>>,
+
+    /// kitty 图数据流式传输 backlog:编码就绪时取出的 transmit 序列在此排队,
+    /// 主循环每帧按预算写给终端;传完才放行对应协议槽的渲染命中。
+    kitty_backlog: TransmitBacklog,
 
     /// 进行中的全屏切歌封面转场;`None` = 稳态(命中协议直接 place 高清)。
     /// 触发 / 推进 / 收尾都在 app 层的转场同步,渲染处只读。
@@ -103,6 +109,7 @@ impl CoverHub {
             protocols: ProtocolCache::new(protocol_budget),
             encode_tx: mpsc::unbounded_channel().0,
             encode_pending: RefCell::new(FxHashSet::default()),
+            kitty_backlog: TransmitBacklog::default(),
             transition: None,
             displayed_cover: None,
             collage_ready: FxHashMap::default(),
@@ -160,18 +167,200 @@ impl CoverHub {
         }
     }
 
-    /// 把编码 worker 就绪的封面协议装回 `protocols`,并出 `encode_pending`。
-    /// 之后帧渲染该封面即命中已编码协议、直接 place,不再在渲染线程上 resize / 编码。
+    /// 把编码 worker 就绪的封面协议装回 `protocols`。之后帧渲染该封面即命中已编码
+    /// 协议、直接 place,不再在渲染线程上 resize / 编码。
     ///
     /// # Params:
     ///   - `sizes_per_image`: 同一封面并存的已编码尺寸槽上限(调用方现读配置传入)
-    pub(crate) fn drain_ready_protocols(&mut self, encoder: &CoverEncoder, sizes_per_image: usize) {
+    ///   - `stream_transmit`: 是否启用 kitty 图数据流式传输(现读配置传入)
+    pub(crate) fn drain_ready_protocols(
+        &mut self,
+        encoder: &CoverEncoder,
+        sizes_per_image: usize,
+        stream_transmit: bool,
+    ) {
         for r in encoder.drain_ready() {
+            self.install_protocol(r, sizes_per_image, stream_transmit);
+        }
+    }
+
+    /// 装一条编码结果:流式传输开启且是 kitty 时,先把 transmit 序列取进 backlog、
+    /// 槽标「待传输」、`encode_pending` 保留到传完;否则(关闭 / 非 kitty)按原行为
+    /// 立即出集、槽即刻可命中(图数据在首次 place 那帧整段发送)。
+    fn install_protocol(&mut self, mut r: EncodeResult, sizes_per_image: usize, stream: bool) {
+        let payload = if stream {
+            kitty_transmit::extract_transmit(&mut r.protocol)
+        } else {
+            None
+        };
+        let awaiting = payload.is_some();
+        if let Some(payload) = payload {
+            self.kitty_backlog.push(r.url.clone(), r.dims, payload);
+        } else {
             self.encode_pending
                 .borrow_mut()
                 .remove(&(r.url.clone(), r.dims));
-            self.protocols
-                .insert(&r.url, r.dims, r.protocol, r.bytes, sizes_per_image);
         }
+        self.protocols.insert(
+            &r.url,
+            r.dims,
+            r.protocol,
+            r.bytes,
+            sizes_per_image,
+            awaiting,
+        );
+    }
+
+    /// 按字节预算弹一批待写终端的 kitty 图数据;空 backlog 返回 `None`。
+    ///
+    /// 调用方写达终端后**必须**调 [`Self::finish_transmitted`] 应用批里的完成键,
+    /// 顺序不可反——占位符绝不先于图数据 place。
+    pub(crate) fn drain_transmit(&mut self, budget_bytes: usize) -> Option<TransmitBatch> {
+        self.kitty_backlog.drain_budget(budget_bytes)
+    }
+
+    /// 应用一批已送达终端的传输完成键:解除协议槽「待传输」、`encode_pending` 出集。
+    /// 槽已被逐出 / 清空则空转。
+    pub(crate) fn finish_transmitted(&mut self, completed: &[(MediaUrl, (u16, u16))]) {
+        for (url, dims) in completed {
+            self.encode_pending
+                .borrow_mut()
+                .remove(&(url.clone(), *dims));
+            self.protocols.mark_transmit_done(url, *dims);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::eyre::eyre;
+    use image::{DynamicImage, RgbImage};
+    use mineral_model::MediaUrl;
+    use ratatui::layout::Rect;
+    use ratatui_image::picker::{Picker, ProtocolType};
+    use ratatui_image::{Resize, ResizeEncodeRender};
+
+    use super::CoverHub;
+    use crate::runtime::cover::encode::EncodeResult;
+
+    /// 造一条已编码好的结果;`kind` 决定协议形态(kitty 才有可提取的 transmit)。
+    fn encode_result(url: &MediaUrl, kind: ProtocolType) -> EncodeResult {
+        let mut picker = Picker::from_fontsize((8, 16));
+        picker.set_protocol_type(kind);
+        let image = DynamicImage::ImageRgb8(RgbImage::new(32, 32));
+        let mut protocol = picker.new_resize_protocol(image);
+        let resize = Resize::Scale(Some(image::imageops::FilterType::Triangle));
+        let target = Rect::new(0, 0, 8, 4);
+        if let Some(rect) = protocol.needs_resize(&resize, target) {
+            protocol.resize_encode(&resize, rect);
+        }
+        EncodeResult {
+            url: url.clone(),
+            dims: (target.width, target.height),
+            protocol,
+            bytes: 100,
+        }
+    }
+
+    /// 流式开启 + kitty:装入即「待传输」——不参与渲染命中、`encode_pending` 保留;
+    /// 传输批写完应用完成键后恢复命中、出集。
+    #[test]
+    fn streamed_kitty_gates_until_transmitted() -> color_eyre::Result<()> {
+        let mut hub = CoverHub::new(
+            /*image_budget*/ 1 << 20,
+            /*protocol_budget*/ 1 << 20,
+        );
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let key = (url.clone(), (8, 4));
+        hub.encode_pending.borrow_mut().insert(key.clone());
+
+        hub.install_protocol(
+            encode_result(&url, ProtocolType::Kitty),
+            /*sizes_per_image*/ 3,
+            /*stream*/ true,
+        );
+
+        assert!(
+            hub.encode_pending.borrow().contains(&key),
+            "传输途中在飞集不出集,防重投编码"
+        );
+        assert!(
+            !hub.protocols.render_hit(&url, (8, 4), |_| {}),
+            "传输途中不参与渲染命中"
+        );
+
+        // 大预算一批传完 → 写达终端后应用完成键。
+        let batch = hub
+            .drain_transmit(/*budget_bytes*/ 1 << 20)
+            .ok_or_else(|| eyre!("backlog 应有待写批"))?;
+        assert!(batch.bytes.starts_with("\x1b_G"), "批内容应是 APC 图数据链");
+        assert_eq!(batch.completed, vec![key.clone()], "一批传完回吐完成键");
+        hub.finish_transmitted(&batch.completed);
+
+        assert!(
+            !hub.encode_pending.borrow().contains(&key),
+            "传完在飞集出集"
+        );
+        assert!(
+            hub.protocols.render_hit(&url, (8, 4), |_| {}),
+            "传完恢复渲染命中"
+        );
+        assert!(hub.drain_transmit(1 << 20).is_none(), "backlog 应已排空");
+        Ok(())
+    }
+
+    /// 流式关闭:kitty 结果按原行为装入——立即出集、立即可命中(首次 place 整段发送)。
+    #[test]
+    fn stream_disabled_installs_immediately() -> color_eyre::Result<()> {
+        let mut hub = CoverHub::new(
+            /*image_budget*/ 1 << 20,
+            /*protocol_budget*/ 1 << 20,
+        );
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let key = (url.clone(), (8, 4));
+        hub.encode_pending.borrow_mut().insert(key.clone());
+
+        hub.install_protocol(
+            encode_result(&url, ProtocolType::Kitty),
+            /*sizes_per_image*/ 3,
+            /*stream*/ false,
+        );
+
+        assert!(!hub.encode_pending.borrow().contains(&key), "装入即出集");
+        assert!(
+            hub.protocols.render_hit(&url, (8, 4), |_| {}),
+            "装入即可命中"
+        );
+        assert!(hub.drain_transmit(1 << 20).is_none(), "无流式任务");
+        Ok(())
+    }
+
+    /// 流式开启但非 kitty(halfblocks):无从提取,按原行为立即装入,不进 backlog。
+    #[test]
+    fn stream_non_kitty_installs_immediately() -> color_eyre::Result<()> {
+        let mut hub = CoverHub::new(
+            /*image_budget*/ 1 << 20,
+            /*protocol_budget*/ 1 << 20,
+        );
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let key = (url.clone(), (8, 4));
+        hub.encode_pending.borrow_mut().insert(key.clone());
+
+        hub.install_protocol(
+            encode_result(&url, ProtocolType::Halfblocks),
+            /*sizes_per_image*/ 3,
+            /*stream*/ true,
+        );
+
+        assert!(!hub.encode_pending.borrow().contains(&key), "装入即出集");
+        assert!(
+            hub.protocols.render_hit(&url, (8, 4), |_| {}),
+            "装入即可命中"
+        );
+        assert!(
+            hub.drain_transmit(1 << 20).is_none(),
+            "非 kitty 不进 backlog"
+        );
+        Ok(())
     }
 }

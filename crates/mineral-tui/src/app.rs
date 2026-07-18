@@ -14,7 +14,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use mineral_protocol::PlayerSync;
 use mineral_server::Client;
 use ratatui::layout::Position;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
 use crate::components::toast::download_toast::DownloadNotifier;
@@ -40,6 +40,7 @@ mod cover_transition;
 mod menus;
 mod nav;
 mod page;
+mod picker;
 mod spectrum_feed;
 
 /// 应用顶层状态。
@@ -107,8 +108,16 @@ pub struct App {
     /// 下载 → 通知层的翻译器(持下载专属去重状态);通知层之上的众多使用方之一。
     download_notifier: DownloadNotifier,
 
-    /// 终端图片协议探测结果。
+    /// 终端图片协议能力(探测结果,可能被配置强制项 / zellij 降级改写协议类型)。
     pub picker: Picker,
+
+    /// 启动探测协商出的原始协议类型。`picker` 的协议可被 `cover.protocol` 强制项改写,
+    /// 配置切回 `"auto"` 时凭它还原——**不能**重探(`from_query_stdio` 抢 stdin 吞按键)。
+    negotiated_protocol: ProtocolType,
+
+    /// 命中的图协议降级信号(启动探测一次,`None` = 无):auto 档据此落半块字符,
+    /// 强制档无视(逃生门)。信号判据见 `picker::graphics_fallback_signal`。
+    graphics_fallback: Option<&'static str>,
 
     /// 进 alternate screen 前捕获的终端光标位置,作为整屏 expand/collapse 的缩放锚点:
     /// expand 从此点铺开、collapse 收回此点(对得上 `LeaveAlternateScreen` 后光标实际
@@ -187,7 +196,9 @@ impl App {
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
         state.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();
         let notice_hint = Self::compose_notice_hint(&keymap);
-        Self {
+        let negotiated_protocol = picker.protocol_type();
+        let graphics_fallback = picker::graphics_fallback_signal();
+        let mut app = Self {
             should_quit: false,
             theme,
             theme_base,
@@ -206,13 +217,17 @@ impl App {
             notifications,
             download_notifier: DownloadNotifier::new(),
             picker,
+            negotiated_protocol,
+            graphics_fallback,
             launch_anchor,
             ui_prefs,
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
             window_title,
-        }
+        };
+        app.apply_cover_protocol();
+        app
     }
 
     /// 主循环帧间隔(现读配置 `animation.frame_tick_ms`,热更下一帧生效)。
@@ -300,6 +315,8 @@ impl App {
             }
 
             tui.draw(|f| draw(f, self))?;
+            // 帧已完整落盘,此刻直写的 kitty 图数据单元不会插进半帧输出。
+            self.flush_kitty_transmit(tui)?;
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {
@@ -325,10 +342,14 @@ impl App {
                 self.sync_cover_palette();
                 self.tick_cover_fades();
                 self.sync_cover_transition();
-                let sizes_per_image = *self.state.cfg.tui().cover().cache().sizes_per_image();
-                self.state
-                    .covers
-                    .drain_ready_protocols(&self.cover_encoder, sizes_per_image);
+                let cover_cfg = self.state.cfg.tui().cover();
+                let sizes_per_image = *cover_cfg.cache().sizes_per_image();
+                let stream_transmit = *cover_cfg.kitty_transmit().enabled();
+                self.state.covers.drain_ready_protocols(
+                    &self.cover_encoder,
+                    sizes_per_image,
+                    stream_transmit,
+                );
                 crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
                 self.state.tasks_snapshot = self.client.task_snapshot();
                 self.state.covers.loading = self.state.covers.pending.len();
@@ -345,6 +366,26 @@ impl App {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// 把 backlog 里待传的 kitty 封面图数据按预算写一批给终端(流式传输,消首显尖峰)。
+    ///
+    /// 在两次 draw 之间调用。写达终端**之后**才应用完成标记——放行渲染命中必须晚于
+    /// 图数据送达,占位符绝不指向终端还没收全的图。预算现读配置,热更下一帧生效;
+    /// 开关只拦「取出」(见 `drain_ready_protocols`),已入队的存量任务照常排空,
+    /// 否则关掉开关会把半途的图永远饿死在 backlog 里。
+    fn flush_kitty_transmit(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
+        let per_tick_kb = *self.state.cfg.tui().cover().kitty_transmit().per_tick_kb();
+        let budget = usize::try_from(per_tick_kb)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(1024)
+            .max(1);
+        let Some(batch) = self.state.covers.drain_transmit(budget) else {
+            return Ok(());
+        };
+        tui.write_raw(batch.bytes.as_bytes())?;
+        self.state.covers.finish_transmitted(&batch.completed);
         Ok(())
     }
 
@@ -513,32 +554,6 @@ impl App {
             self.state.browse.fullscreen.on(),
             self.state.focused(),
         );
-    }
-
-    /// 终端字号 / 尺寸变化后刷新 `picker` 的 cell 像素尺寸(封面尺寸换算的基准)。
-    ///
-    /// 封面占多大由「cell 网格」决定,网格换算(`square_subarea` 与编码 `needs_resize`)都吃
-    /// `picker.font_size()`。该值仅启动时 `from_query_stdio` 探一次;kitty 改字号时每 cell 的
-    /// 像素尺寸变了却不刷新,封面就按旧 cell 比例铺 —— 字号变小占一小块、变大溢出被裁。
-    ///
-    /// 这里用 `window_size()`(TIOCGWINSZ syscall,不抢 stdin)重算 cell 像素,变了才重建
-    /// picker + 清 `protocols` 逼下一帧按新字号重编码。**不能**改用 `from_query_stdio` 重探:
-    /// 它往 stdio 写 escape 读响应,会跟事件循环抢 stdin 把按键 / resize 事件吞掉。
-    /// window_size 的像素字段终端可能不实现(返 0),拿不到就保留旧值静默跳过。
-    fn refresh_picker_font(&mut self) {
-        let Ok(ws) = crossterm::terminal::window_size() else {
-            return;
-        };
-        if ws.columns == 0 || ws.rows == 0 || ws.width == 0 || ws.height == 0 {
-            return;
-        }
-        let font = (ws.width / ws.columns, ws.height / ws.rows);
-        if font == self.picker.font_size() {
-            return;
-        }
-        self.picker = rebuild_picker(&self.picker, font);
-        // 清缓存协议:字号变但 cell 数恰好没变时 dims 不变、不会自动触发重编码,清掉逼重编。
-        self.state.covers.protocols.clear();
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
@@ -745,17 +760,6 @@ impl App {
     }
 }
 
-/// 按新 cell 字号重建 `picker`,**保留原协议类型**。
-///
-/// `Picker` 没有 font_size setter,只能重建;而 `from_fontsize` 会把协议从环境重新猜(kitty
-/// 探测依赖 stdio query,重建时拿不到),默认落 halfblocks。故必须 `set_protocol_type` 把原
-/// 协议塞回,否则 resize 后封面从 kitty/sixel 悄悄降级成半块字符。抽成自由函数以便单测该不变量。
-fn rebuild_picker(old: &Picker, font: (u16, u16)) -> Picker {
-    let mut picker = Picker::from_fontsize(font);
-    picker.set_protocol_type(old.protocol_type());
-    picker
-}
-
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -775,26 +779,6 @@ mod tests {
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
-    }
-
-    /// 回归:终端字号变化后重建 picker 必须**保留原协议类型 + 应用新字号**。
-    /// 若丢协议(`from_fontsize` 默认猜成 halfblocks),kitty/sixel 会悄悄降级成半块字符;
-    /// 若不换字号,封面按旧 cell 比例铺 —— 偏小占一小块 / 偏大被裁(本次修复的正题)。
-    #[test]
-    fn rebuild_picker_preserves_protocol_and_applies_font() {
-        use ratatui_image::picker::{Picker, ProtocolType};
-
-        let mut old = Picker::from_fontsize((8, 16));
-        old.set_protocol_type(ProtocolType::Kitty);
-
-        let rebuilt = super::rebuild_picker(&old, (10, 22));
-
-        assert_eq!(rebuilt.font_size(), (10, 22), "新 cell 字号应生效");
-        assert_eq!(
-            rebuilt.protocol_type(),
-            ProtocolType::Kitty,
-            "协议须保留为 kitty,不能被 from_fontsize 降级成 halfblocks",
-        );
     }
 
     /// 喂一个带 Ctrl 的 Press 键给 App(走真实事件入口)。
@@ -823,6 +807,7 @@ mod tests {
             proto,
             /*bytes*/ 0,
             /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
         );
         assert!(
             !app.state.covers.protocols.is_empty(),
@@ -870,6 +855,7 @@ mod tests {
             proto,
             /*bytes*/ 0,
             /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
         );
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。

@@ -634,9 +634,11 @@ mod tests {
     /// 测试用封面段配置(storage 可选;其余为测试基线值,生产默认见 default.lua)。
     fn cover_cfg(storage: &str) -> color_eyre::Result<Arc<CoverConfig>> {
         let cfg: CoverConfig = serde_json::from_value(serde_json::json!({
+            "protocol": "auto",
             "http_timeout_secs": 30, "max_dim": 384, "jpeg_quality": 85,
             "storage": storage, "debounce_ms": 80,
             "download_workers": 1, "encode_workers": 1,
+            "kitty_transmit": { "enabled": true, "per_tick_kb": 256 },
             "kmeans": {
                 "sample_dim": 64, "swatches": 6, "seed": 1, "max_iter": 20, "converge": 5.0,
                 "l_min": 8.0, "l_max": 92.0, "chroma_min": 8.0, "min_valid_pixels_pct": 5,

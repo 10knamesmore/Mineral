@@ -143,6 +143,7 @@ return {
     },
     -- 封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
     cover = {
+      protocol = "auto", -- 终端图协议:"auto" 探测协商(zellij 等不合成图的环境自动降半块) | "halfblocks" | "kitty" | "sixel" | "iterm2" 强制(无视降级信号)
       http_timeout_secs = 30, -- 单张封面下载超时,秒
       max_dim = 384, -- 解码后等比缩放到的最大边,px;终端显示足够,大了费内存
       jpeg_quality = 100, -- 重编码质量 1-100;仅 storage = "resized" 时生效
@@ -150,6 +151,10 @@ return {
       debounce_ms = 80, -- 列表滚动停稳多久才渲染真图;期间显示程序化色块占位
       download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
+      kitty_transmit = { -- kitty 图协议数据流式传输:编码就绪拆块逐帧发终端,首显只写占位符;仅 kitty 协议生效
+        enabled = true,
+        per_tick_kb = 768, -- 每帧发送预算 KiB;越大传完越快,单帧终端解析负担越重
+      },
       cache = { -- 缓存预算(LRU,满了自动驱逐);磁盘项改小不立刻删文件,下次写入时驱逐
         disk = 4 * GB, -- 磁盘缓存上限,字节
         image = 128 * MB, -- 解码原图 RAM 预算,字节;越界逐出最久未显示者

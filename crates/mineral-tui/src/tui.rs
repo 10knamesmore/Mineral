@@ -4,7 +4,7 @@
 //! 必然恢复终端,即使发生 panic(我们在 enter 时安装了一个 chained panic hook)。
 
 use std::fmt;
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -118,6 +118,17 @@ impl Tui {
     {
         self.terminal.draw(f)?;
         Ok(())
+    }
+
+    /// 在两帧之间把原始字节直写终端(kitty 图数据流式传输用),写完即 flush。
+    ///
+    /// 字节不经 ratatui 的 buffer diff,只能承载**自包含的完整转义序列**
+    /// (对屏上格子零影响的控制流,如 kitty APC 图数据单元);写可见内容会被
+    /// 下一帧 diff 无视而残留。
+    pub(crate) fn write_raw(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let mut out = io::stdout().lock();
+        out.write_all(bytes)?;
+        out.flush()
     }
 }
 

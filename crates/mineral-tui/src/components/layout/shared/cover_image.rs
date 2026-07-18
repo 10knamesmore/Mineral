@@ -379,7 +379,7 @@ pub fn render_morph_to(
 /// 推导:可视宽度 = `cells_w * px_w`,可视高度 = `cells_h * px_h`;方图要求两者相等,
 /// 解出 `cells_h = cells_w * px_w / px_h`。若超出 area 高度,反过来按 area 高度算
 /// `cells_w`,横向居中(用户面板特别扁的退化情况)。
-fn square_subarea(area: Rect, cell_px: (u16, u16)) -> Rect {
+pub(crate) fn square_subarea(area: Rect, cell_px: (u16, u16)) -> Rect {
     let cw = u32::from(cell_px.0).max(1);
     let ch = u32::from(cell_px.1).max(1);
     let max_h_for_full_w = u16::try_from(u32::from(area.width) * cw / ch).unwrap_or(area.height);

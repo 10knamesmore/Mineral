@@ -281,6 +281,7 @@ return {
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
+| `protocol` | `"auto"` | 终端图协议:`"auto"` 启动探测协商,已知「探测穿透、渲染不合成图数据」的环境(如 zellij)自动降级halfblock;`"halfblocks"` / `"kitty"` / `"sixel"` / `"iterm2"` 强制 |
 | `http_timeout_secs` | 30 | 单张封面下载超时,秒 |
 | `max_dim` | 384 | 解码后等比缩放到的最大边,px;终端显示足够,大了费内存 |
 | `storage` | `"resized"` | 磁盘缓存存什么:`"raw"` = 原始字节(无损,体积大);`"resized"` = 缩放后重编码 JPEG(省盘,命中只解小图,CPU 大降) |
@@ -288,6 +289,16 @@ return {
 | `debounce_ms` | 80 | 列表滚动停稳多久才渲染真图;期间显示程序化色块占位 |
 | `download_workers` | 4 | 封面下载并发 worker 数 |
 | `encode_workers` | 2 | 终端图片协议编码并发 worker 数 |
+
+`kitty_transmit` 子表(kitty 图协议数据流式传输)。kitty graphics protocol 的图数据
+传输与占位显示分离:编码就绪后把数 MB 的传输序列拆成完整转义单元、逐帧按预算发给
+终端,首次显示只写几 KB 占位符——消掉「没播过的歌切过去卡一下」的首显传输尖峰。
+仅对 kitty 协议生效;sixel / iTerm2 inline 图数据即显示,无从提前传输,此段无操作:
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭则图数据在首次显示那一帧整段发送 |
+| `per_tick_kb` | 768 | 每帧发送预算(KiB);越大传完越快,单帧终端解析负担越重 |
 
 `cache` 子表(缓存预算;LRU,满了自动驱逐,磁盘项改小不立刻删文件):
 

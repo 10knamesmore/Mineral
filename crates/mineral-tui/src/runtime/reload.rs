@@ -109,6 +109,8 @@ impl crate::app::App {
             *tui_cfg.cover().cache().image(),
             *tui_cfg.cover().cache().protocol(),
         );
+        // 固化型(改写 picker):封面终端图协议强制项;协议变了其内部清协议缓存逼全量重编。
+        self.apply_cover_protocol();
     }
 
     /// 消费一帧 daemon 推送的有效配置树:落型成功即应用;失败(版本偏斜等,
@@ -254,6 +256,53 @@ mod tests {
             app.notifications.entry_count(),
             entries_before,
             "成功应用应静默,不新增通知"
+        );
+        Ok(())
+    }
+
+    /// 封面终端图协议强制项热更:强制档改写 picker 并清协议缓存(逼全量重编码),
+    /// 切回 auto 还原启动协商结果。
+    #[test]
+    fn pushed_config_forces_cover_protocol() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+        use ratatui_image::picker::ProtocolType;
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let negotiated = app.picker.protocol_type();
+        assert_ne!(negotiated, ProtocolType::Kitty, "前置:测试 picker 非 kitty");
+        // 塞一个协议缓存条目,验证协议切换会清缓存。
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 16));
+        let proto = app.picker.new_resize_protocol(img);
+        app.state.covers.protocols.insert(
+            &url,
+            (10, 10),
+            proto,
+            /*bytes*/ 0,
+            /*sizes_per_image*/ 3,
+            /*awaiting_transmit*/ false,
+        );
+
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "cover": { "protocol": "kitty" } } }),
+        )?);
+        assert_eq!(
+            app.picker.protocol_type(),
+            ProtocolType::Kitty,
+            "强制档改写 picker"
+        );
+        assert!(
+            app.state.covers.protocols.is_empty(),
+            "协议切换应清协议缓存逼重编"
+        );
+
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "tui": { "cover": { "protocol": "auto" } } }),
+        )?);
+        assert_eq!(
+            app.picker.protocol_type(),
+            negotiated,
+            "切回 auto 还原启动协商结果(不重探)"
         );
         Ok(())
     }
@@ -483,6 +532,7 @@ mod tests {
             base,
             app.state.cfg.tui().ambient(),
             /*progress_permille*/ 1000,
+            /*skip*/ None,
         );
         Ok(buf
             .cell((0, 0))

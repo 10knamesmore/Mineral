@@ -10,6 +10,10 @@ use crate::schema::de;
 /// 封面配置。
 #[config_section]
 pub struct CoverConfig {
+    /// 封面终端图协议:自动探测(含已知不合成图环境的降级)或强制指定;
+    /// 强制档无视降级信号,是误降 / 确认环境可用时的逃生门。
+    protocol: CoverProtocolMode,
+
     /// 单张封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
 
@@ -31,11 +35,29 @@ pub struct CoverConfig {
     /// 封面终端协议编码并发 worker 数,≥1。
     encode_workers: usize,
 
+    /// kitty 图协议数据流式传输(编码就绪后拆块逐帧发给终端,消首次显示的单帧卡顿)。
+    kitty_transmit: KittyTransmitConfig,
+
     /// kmeans 取色参数(封面派生配色)。
     kmeans: KmeansConfig,
 
     /// 缓存预算(磁盘配额 + 两层 RAM 预算)。
     cache: CoverCacheConfig,
+}
+
+/// kitty 图协议数据流式传输段(挂在 `CoverConfig` 下)。已编码封面的图数据不等首次
+/// 显示才整段发给终端,而是编码就绪后拆成完整转义单元、逐帧按预算流式发送;首次显示
+/// 只写占位符。全屏大图的传输序列可达数 MB,一帧内整段发送会造成可感卡顿。
+///
+/// 仅对 kitty graphics protocol 生效(数据传输与显示分离是它独有的形态);
+/// sixel / iTerm2 inline 图数据即显示,无从提前传输,此段对它们无操作。
+#[config_section]
+pub struct KittyTransmitConfig {
+    /// 是否启用(关闭则图数据在首次显示那一帧整段发送)。
+    enabled: bool,
+
+    /// 每帧发送的图数据预算(KiB);越大传完越快,单帧终端解析负担越重。
+    per_tick_kb: u32,
 }
 
 /// 封面缓存预算(挂在 `CoverConfig` 下)。三档都是 client 进程的旋钮:
@@ -60,6 +82,29 @@ pub struct CoverCacheConfig {
     /// 同一张封面并存的已编码尺寸数,≥1;常规面板与全屏各占一份,
     /// 超出时逐出该封面最久未渲染的尺寸。
     sizes_per_image: usize,
+}
+
+/// 封面终端图协议选择。不依赖渲染 crate;接线处映射到 ratatui-image 的协议类型。
+#[lua_enum]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum CoverProtocolMode {
+    /// 启动时向终端探测能力自动协商;已知「探测穿透、渲染却不合成图数据」的环境
+    /// (如 zellij)自动降级半块字符,开箱不乱码。
+    Auto,
+
+    /// 强制半块字符渲染(任何终端 / multiplexer 都正确,清晰度最低)。
+    Halfblocks,
+
+    /// 强制 kitty graphics protocol。
+    Kitty,
+
+    /// 强制 sixel。
+    Sixel,
+
+    /// 强制 iTerm2 inline 图协议。
+    Iterm2,
 }
 
 /// 封面磁盘存储模式。不依赖渲染 crate;接线处映射到具体实现。

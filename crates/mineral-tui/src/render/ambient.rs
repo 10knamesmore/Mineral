@@ -173,6 +173,9 @@ impl AmbientGradient {
 ///   - `base`: 主题底色(须真彩;ANSI 主题由调用方经 [`rgb_of`] 拦下)
 ///   - `cfg`: 氛围段配置(σ / 暗角 / 摆幅 / 锚点表,现读)
 ///   - `progress_permille`: 全屏形变进度(‰):浓度乘它,进场随形变淡入、退场收干净
+///   - `skip`: 不铺的洞(将被不透明终端图协议真图盖住的封面区)。图协议把整段载荷
+///     藏在图区首 cell 的 symbol 里,逐帧改那格 bg 会让 diff 每帧重发载荷——
+///     iTerm2 / sixel(数据即显示、自带擦行)表现为整图闪烁;图不透明,跳过零视觉损失
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
@@ -180,6 +183,7 @@ pub fn render(
     base: Rgb,
     cfg: &AmbientConfig,
     progress_permille: u16,
+    skip: Option<Rect>,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -225,6 +229,11 @@ pub fn render(
     for cy in 0..area.height {
         let ny = (f32::from(cy) + 0.5) / grid_h;
         for cx in 0..area.width {
+            if skip.is_some_and(|hole| {
+                hole.contains(ratatui::layout::Position::new(area.x + cx, area.y + cy))
+            }) {
+                continue;
+            }
             let nx = (f32::from(cx) + 0.5) / grid_w;
             let (mut wsum, mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
             for blob in &blobs {
@@ -535,7 +544,7 @@ mod tests {
         let area = Rect::new(0, 0, 12, 6);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
         );
         for (x, y) in cells(area) {
             assert_eq!(
@@ -559,7 +568,7 @@ mod tests {
         let area = Rect::new(0, 0, 16, 8);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
         );
         for (x, y) in cells(area) {
             assert_eq!(
@@ -586,7 +595,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 10);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
         );
         let dist_to_base = |color: Color| -> color_eyre::Result<u32> {
             let Color::Rgb(r, g, b) = color else {
@@ -616,7 +625,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         buf.set_string(2, 1, "lyric", Style::new().fg(Color::Rgb(255, 0, 255)));
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
         );
         let cell = buf.cell((2, 1)).ok_or_else(|| eyre!("cell 越界"))?;
         assert_eq!(cell.symbol(), "l", "字符不应被铺场动到");
@@ -638,7 +647,7 @@ mod tests {
         let paint = |g: &AmbientGradient| {
             let mut buf = Buffer::empty(area);
             render(
-                &mut buf, area, g, BASE, &cfg, /*progress_permille*/ 1000,
+                &mut buf, area, g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
             );
             buf
         };
@@ -676,7 +685,7 @@ mod tests {
         let area = Rect::new(0, 0, 4, 2);
         let probe = |permille: u16| -> color_eyre::Result<Color> {
             let mut buf = Buffer::empty(area);
-            render(&mut buf, area, &g, BASE, &cfg, permille);
+            render(&mut buf, area, &g, BASE, &cfg, permille, /*skip*/ None);
             bg_at(&buf, 1, 1)
         };
         assert_eq!(
@@ -692,6 +701,39 @@ mod tests {
             mid_r > BASE.r && mid_r < c.r,
             "半程浓度应介于底色与场色之间,实得 r={mid_r}"
         );
+        Ok(())
+    }
+
+    /// skip 洞:洞内 cell 的 bg 原样不动(终端图协议真图区不铺场,防载荷 cell 每帧脏),
+    /// 洞外照常铺场。
+    #[test]
+    fn skip_hole_leaves_bg_untouched() -> color_eyre::Result<()> {
+        let cfg = flat_cfg()?;
+        let c = Rgb::new(90, 40, 140);
+        let mut g = AmbientGradient::new(/*fade_ticks*/ 1, /*tick_ms*/ 16);
+        g.set_target(Some(&palette(vec![c])?), BASE, cfg.anchors());
+        g.tick(/*drift_speed*/ 0.0, /*rotate_cycle_secs*/ 0.0);
+        let area = Rect::new(0, 0, 12, 6);
+        let hole = Rect::new(2, 1, 4, 3);
+        let mut buf = Buffer::empty(area);
+        render(
+            &mut buf,
+            area,
+            &g,
+            BASE,
+            &cfg,
+            /*progress_permille*/ 1000,
+            Some(hole),
+        );
+        for (x, y) in cells(area) {
+            let inside = hole.contains(ratatui::layout::Position::new(x, y));
+            let bg = bg_at(&buf, x, y)?;
+            if inside {
+                assert_eq!(bg, Color::Reset, "洞内 ({x},{y}) 不应被铺场");
+            } else {
+                assert_eq!(bg, Color::Rgb(c.r, c.g, c.b), "洞外 ({x},{y}) 照常铺场");
+            }
+        }
         Ok(())
     }
 
@@ -719,7 +761,7 @@ mod tests {
         let area = Rect::new(0, 0, 24, 8);
         let mut buf = Buffer::empty(area);
         render(
-            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000,
+            &mut buf, area, &g, BASE, &cfg, /*progress_permille*/ 1000, /*skip*/ None,
         );
         let grid = bg_grid(&buf, area)?;
         mineral_test::assert_snap!(
