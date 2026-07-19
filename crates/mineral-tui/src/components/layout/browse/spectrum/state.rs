@@ -1499,6 +1499,145 @@ mod tests {
         Ok(())
     }
 
+    /// BT.601 定点亮度(与 [`crate::render::color`] 内部一致),扫描断言用。
+    fn luma601(r: u8, g: u8, b: u8) -> i32 {
+        (299 * i32::from(r) + 587 * i32::from(g) + 114 * i32::from(b)) / 1000
+    }
+
+    /// 把 `state` 落到静止的封面色场(低频端**很暗**、高频端很亮的两色板)。
+    /// 用来复现「左列 = 最暗 swatch」——氛围场撞色时最容易被埋掉的那种。
+    fn settled_dark_low_cover(mut state: SpectrumState) -> color_eyre::Result<SpectrumState> {
+        let pal = CoverPalette::new(vec![Rgb::new(18, 18, 26), Rgb::new(235, 235, 235)])
+            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
+        state.begin_cover_transition(pal, &Theme::default());
+        for _ in 0..state.timing.fade_ticks {
+            state.tick(false /*playing*/, 100 /*volume_pct*/, None);
+        }
+        Ok(state)
+    }
+
+    /// 把频谱渲到**整片给定背景色**上,返回被点亮的盲文 cell 的最小 fg 亮度。
+    /// 背景比暗点亮时,旧双向保底会把暗点往黑压到近黑;单向 `soften_over_bg` 只提亮,
+    /// 故最小亮度有底、不落近黑。
+    fn min_lit_dot_luma(state: &SpectrumState, bg: Color) -> color_eyre::Result<i32> {
+        use ratatui::layout::Position;
+
+        let (w, h) = (48_u16, 12_u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            for cy in 0..area.height {
+                for cx in 0..area.width {
+                    if let Some(cell) = f.buffer_mut().cell_mut(Position::new(cx, cy)) {
+                        cell.set_bg(bg);
+                    }
+                }
+            }
+            super::super::draw(f, area, state, &Theme::default());
+        })?;
+
+        let buf = terminal.backend().buffer().clone();
+        let mut min = i32::MAX;
+        for cy in 0..h {
+            for cx in 0..w {
+                let Some(cell) = buf.cell(Position::new(cx, cy)) else {
+                    continue;
+                };
+                let ch = cell.symbol().chars().next().unwrap_or(' ');
+                if !('\u{2800}'..='\u{28ff}').contains(&ch) {
+                    continue; // 只看盲文点阵格,跳过边框 / 标题 / 空格
+                }
+                let Color::Rgb(fr, fg, fb) = cell.fg else {
+                    continue;
+                };
+                min = min.min(luma601(fr, fg, fb));
+            }
+        }
+        Ok(min)
+    }
+
+    /// 回归:scope 盲文点**绝不被往黑压**。暗低频 swatch 落在**更亮**的氛围场上时,
+    /// 旧双向保底会把点推到近黑(luma≈6)、造出随背景漂移的移动黑斑;单向平滑只往亮抬,
+    /// 点亮度有底。
+    #[test]
+    fn scope_dots_never_pushed_black() -> color_eyre::Result<()> {
+        let state = settled_dark_low_cover(scope_state()?)?;
+        let min = min_lit_dot_luma(&state, Color::Rgb(70, 70, 70))?;
+        assert_ne!(min, i32::MAX, "应画出盲文点(中线至少一格)");
+        assert!(min > 12, "scope 暗点不应被压到近黑,实得最小亮度 {min}");
+        Ok(())
+    }
+
+    /// 回归:terrain 山脊顶端色同理绝不被往黑压。单层 + 满高条让山脊铺满、取顶端色。
+    #[test]
+    fn terrain_dots_never_pushed_black() -> color_eyre::Result<()> {
+        let mut state = settled_dark_low_cover(spectrum_state_with(serde_json::json!({
+            "tui": { "spectrum": { "style": "terrain", "terrain": { "layers": 1 } } }
+        }))?)?;
+        let bars = vec![60_u16; 48];
+        for _ in 0..40 {
+            state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
+        }
+        let min = min_lit_dot_luma(&state, Color::Rgb(70, 70, 70))?;
+        assert_ne!(min, i32::MAX, "应画出山脊盲文点");
+        assert!(min > 12, "terrain 山脊顶不应被压到近黑,实得最小亮度 {min}");
+        Ok(())
+    }
+
+    /// 回归:逐列取 bg。左区暗 swatch 落在**本列暗**背景上时,点按本列 bg 提亮;
+    /// 若沿用单中心(右侧亮 bg),左点会被判「已分开」不抬、埋进本地暗底成 muddy。
+    #[test]
+    fn scope_dots_lift_against_local_dark_bg() -> color_eyre::Result<()> {
+        use ratatui::layout::Position;
+
+        let state = settled_dark_low_cover(scope_state()?)?;
+        let (w, h) = (48_u16, 12_u16);
+        let split = w / 4; // 左 1/4 暗、其余亮(中心落在亮区)
+        let mut terminal = Terminal::new(TestBackend::new(w, h))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            for cy in 0..area.height {
+                for cx in 0..area.width {
+                    let bg = if cx < split {
+                        Color::Rgb(22, 22, 30)
+                    } else {
+                        Color::Rgb(210, 210, 210)
+                    };
+                    if let Some(cell) = f.buffer_mut().cell_mut(Position::new(cx, cy)) {
+                        cell.set_bg(bg);
+                    }
+                }
+            }
+            super::super::draw(f, area, &state, &Theme::default());
+        })?;
+
+        let buf = terminal.backend().buffer().clone();
+        let mut lifted_any = false;
+        for cy in 0..h {
+            for cx in 1..split {
+                let Some(cell) = buf.cell(Position::new(cx, cy)) else {
+                    continue;
+                };
+                let ch = cell.symbol().chars().next().unwrap_or(' ');
+                if !('\u{2800}'..='\u{28ff}').contains(&ch) {
+                    continue;
+                }
+                let Color::Rgb(r, g, b) = cell.fg else {
+                    continue;
+                };
+                // 最暗 swatch 原色 luma≈18;按本列暗 bg 提亮后应明显更亮。
+                if luma601(r, g, b) >= 30 {
+                    lifted_any = true;
+                }
+            }
+        }
+        assert!(
+            lifted_any,
+            "左暗区暗点应按本列暗 bg 提亮(单中心亮 bg 不会抬)"
+        );
+        Ok(())
+    }
+
     /// `Hue` 态:所有列端点相同(与旧单色实现等价,零回归)。
     #[test]
     fn hue_columns_are_uniform() {

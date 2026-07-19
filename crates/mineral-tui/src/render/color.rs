@@ -48,57 +48,51 @@ fn luma(r: u8, g: u8, b: u8) -> i32 {
     (299 * i32::from(r) + 587 * i32::from(g) + 114 * i32::from(b)) / 1000
 }
 
-/// 0-1 的比例折 0-255 亮度差(clamp + round),喂 [`ensure_bg_contrast`]。
+/// 0-1 的比例折 0-255 亮度差(clamp + round),喂 [`soften_over_bg`]。
 #[allow(clippy::as_conversions)] // reason: 已 clamp 进 0..=255 且 round,转换语义无损
 pub fn luma255_of(ratio: f32) -> u8 {
     (ratio.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-/// 保证 `color` 与背景的亮度差 ≥ `min_luma`(0-255,定点舍入误差 ≤ 2):不足时把色
-/// 向白 / 黑极 lerp 到恰好达标——只动明度,色相尽量保留。方向优先「远离背景亮度」的
-/// 自然侧,该侧头顶余量不足(背景近纯白 / 纯黑)时换另一侧;两侧都不够(`min_luma`
-/// 过半且背景居中)保持自然侧尽力。已达标、`min_luma` 为 0、任一非真彩时原样返回。
-pub fn ensure_bg_contrast(color: Color, bg: Color, min_luma: u8) -> Color {
+/// 盲文点阵落笔色对**实际背景**的平滑亮度分离:点与背景亮度差不足 `min_luma` 时,
+/// 按缺口 `min_luma − |Δluma|` 把点**向白**提亮;缺口随差值连续归零,故背景平滑
+/// 变化时输出连续、无跳变。**只往亮抬、绝不压暗**——不制造调色板外的近黑色。
+///
+/// 单向连续是刻意的:若按「远离背景亮度」双向拉开,点比背景暗时会被推向黑,且方向
+/// 在 `fg=bg` 处翻转、输出出现亮度断崖;平滑漂动的氛围场扫过这道断崖就是一条会移动
+/// 的黑边。单向只提亮无此突变,代价是点与背景亮度极接近的一瞬只被抬到「刚好分开」
+/// (柔和淡入,而非硬顶强对比)。
+///
+/// 已充分分离(`|Δluma| ≥ min_luma`)、`min_luma = 0`、点已近纯白、任一非真彩时原样返回。
+///
+/// # Params:
+///   - `color`: 点的原始色(封面色场采样)
+///   - `bg`: 该点**实际**落处的背景色(氛围场,逐列现采)
+///   - `min_luma`: 目标最小亮度差(0-255,`dot_bg_contrast` 折算;`0` = 关闭)
+///
+/// # Return:
+///   提亮后的点色(色相尽量保留,只沿向白方向抬亮度)。
+pub fn soften_over_bg(color: Color, bg: Color, min_luma: u8) -> Color {
     let (Color::Rgb(r, g, b), Color::Rgb(bg_r, bg_g, bg_b)) = (color, bg) else {
         return color;
     };
     let fg_luma = luma(r, g, b);
     let bg_luma = luma(bg_r, bg_g, bg_b);
-    let min = i32::from(min_luma);
-    if (fg_luma - bg_luma).abs() >= min {
-        return color;
+    // 缺口:亮度差不足 min 的部分。连续、非负,充分分离时为 0。
+    let deficit = (i32::from(min_luma) - (fg_luma - bg_luma).abs()).max(0);
+    let headroom = 255 - fg_luma;
+    if deficit == 0 || headroom <= 0 {
+        return color; // 已够分开,或点已近纯白、无从更亮。
     }
-    let natural_white = if fg_luma == bg_luma {
-        bg_luma < 128
-    } else {
-        fg_luma > bg_luma
-    };
-    let white_reachable = 255 - bg_luma >= min;
-    let black_reachable = bg_luma >= min;
-    let toward_white = match (natural_white, white_reachable, black_reachable) {
-        (true, true, _) | (false, true, false) => true,
-        (true, false, true) | (false, _, true) => false,
-        (natural, false, false) => natural,
-    };
-    let (pole, pole_luma) = if toward_white {
-        (Color::Rgb(255, 255, 255), 255)
-    } else {
-        (Color::Rgb(0, 0, 0), 0)
-    };
-    let target = if toward_white {
-        (bg_luma + min).min(255)
-    } else {
-        (bg_luma - min).max(0)
-    };
-    let denom = (pole_luma - fg_luma).abs();
-    if denom == 0 {
-        return pole;
-    }
-    // 亮度对 lerp 线性,解出恰达标的比例(分子分母必同号,按绝对值算);
-    // 向上取整抵消定点截断的欠拉。
-    let num = (target - fg_luma).abs();
-    let t = ((num * 1000 + denom - 1) / denom).clamp(0, 1000);
-    lerp_color(color, pole, u64::try_from(t).unwrap_or(0), 1000)
+    // 只往白抬:目标亮度 = fg + 缺口(封顶纯白)。lerp 比例 = 缺口 / (255 − fg)。
+    let num = deficit.min(headroom);
+    let t = (num * 1000) / headroom;
+    lerp_color(
+        color,
+        Color::Rgb(255, 255, 255),
+        u64::try_from(t).unwrap_or(0),
+        1000,
+    )
 }
 
 /// 把 `Color::Rgb` 在 HSV 色环上旋转 `deg` 度,饱和度 / 明度不变。
@@ -181,43 +175,56 @@ mod tests {
         assert_eq!(lerp_permille(780, 110, 9, 5), 110, "num 越界 clamp");
     }
 
-    /// `ensure_bg_contrast`:已达标 / 关闭 / 非真彩原样;撞色时向远离背景亮度的极
-    /// 拉到恰好达标;背景近极点时停在极点(尽力)。
+    /// 真彩亮度(测试内联,与 `color::luma` 同式);非真彩给 -1。
+    fn tl(c: Color) -> i32 {
+        let Color::Rgb(r, g, b) = c else {
+            return -1;
+        };
+        (299 * i32::from(r) + 587 * i32::from(g) + 114 * i32::from(b)) / 1000
+    }
+
+    /// `soften_over_bg`:关闭 / 充分分离 / 非真彩原样;撞色时只向白提亮、**绝不压暗**;
+    /// 且对背景**连续**——`fg=bg` 两侧无亮度断崖(旧双向保底会在此处骤降到近黑)。
     #[test]
-    fn ensure_bg_contrast_lifts_clashing_colors() {
-        use super::{ensure_bg_contrast, luma255_of};
+    fn soften_over_bg_lifts_toward_light_only() {
+        use super::{luma255_of, soften_over_bg};
 
-        let bg = Color::Rgb(100, 100, 100);
-        let bright = Color::Rgb(250, 250, 250);
-        assert_eq!(ensure_bg_contrast(bright, bg, 64), bright, "已达标原样返回");
-        assert_eq!(ensure_bg_contrast(bg, bg, 0), bg, "min = 0 关闭保底");
+        let mid = Color::Rgb(100, 100, 100);
+        assert_eq!(soften_over_bg(mid, mid, 0), mid, "min = 0 关闭");
         assert_eq!(
-            ensure_bg_contrast(Color::Red, bg, 64),
+            soften_over_bg(Color::Red, mid, 64),
             Color::Red,
-            "非真彩原样返回"
+            "非真彩原样"
+        );
+        assert_eq!(
+            soften_over_bg(Color::Rgb(10, 10, 10), Color::Rgb(200, 200, 200), 64),
+            Color::Rgb(10, 10, 10),
+            "亮度差已 ≥ min,原样"
         );
 
-        // 同色撞同底(中灰):底在暗半区 → 拉白,达到最小亮度差(定点舍入误差 ≤ 2)。
-        let lifted = ensure_bg_contrast(bg, bg, 64);
-        let Color::Rgb(r, g, b) = lifted else {
-            unreachable!("真彩入参恒真彩出参");
-        };
-        let diff = (299 * i32::from(r) + 587 * i32::from(g) + 114 * i32::from(b)) / 1000 - 100;
-        assert!(
-            (62..=66).contains(&diff),
-            "拉开后的亮度差应 ≈ min,got {diff}"
-        );
-        assert!(r >= 100 && g >= 100 && b >= 100, "拉白方向单调不降");
+        // 暗点撞更亮背景(旧双向会把它压到近黑 luma≈6):只往亮,不暗于原色、不落近黑。
+        let fg = Color::Rgb(18, 18, 26);
+        let out = soften_over_bg(fg, Color::Rgb(70, 70, 70), 64);
+        assert!(tl(out) >= tl(fg), "永不压暗:{} >= {}", tl(out), tl(fg));
+        assert!(tl(out) > 8, "绝不落近黑(旧双向到 ~6),got {}", tl(out));
 
-        // 背景近纯白:亮侧头顶余量不足,换暗侧拉开。
-        let stuck = ensure_bg_contrast(Color::Rgb(255, 255, 255), Color::Rgb(250, 250, 250), 64);
-        let Color::Rgb(sr, sg, sb) = stuck else {
-            unreachable!("真彩入参恒真彩出参");
-        };
-        let stuck_luma = (299 * i32::from(sr) + 587 * i32::from(sg) + 114 * i32::from(sb)) / 1000;
+        // 同色撞:抬开约 min(柔和分离,定点误差内)。
+        let lifted = soften_over_bg(mid, mid, 64);
         assert!(
-            250 - stuck_luma >= 62,
-            "亮侧无余量应换暗侧拉开,got luma {stuck_luma}"
+            (tl(lifted) - 100 - 64).abs() <= 3,
+            "同色应抬开约 min,got Δ{}",
+            tl(lifted) - 100
+        );
+
+        // 连续性:背景跨过 fg 亮度两侧,输出不跳变(旧双向此处骤降 ~128)。
+        let f = Color::Rgb(80, 80, 80);
+        let below = soften_over_bg(f, Color::Rgb(79, 79, 79), 64);
+        let above = soften_over_bg(f, Color::Rgb(81, 81, 81), 64);
+        assert!(
+            (tl(below) - tl(above)).abs() <= 4,
+            "fg=bg 两侧应连续,got {} vs {}",
+            tl(below),
+            tl(above)
         );
 
         assert_eq!(luma255_of(0.25), 64, "0-1 比例折 0-255 亮度差");
@@ -260,6 +267,17 @@ mod tests {
         fn rotate_hue_keeps_rgb(r in any::<u8>(), g in any::<u8>(), b in any::<u8>(), deg in -1000.0_f32..1000.0) {
             let out = rotate_hue(Color::Rgb(r, g, b), deg);
             proptest::prop_assert!(matches!(out, Color::Rgb(..)));
+        }
+
+        /// `soften_over_bg` 永不压暗:任意点色 / 背景 / min,输出亮度恒 ≥ 原色亮度
+        /// (根除「往黑压」的核心不变量)。
+        #[test]
+        fn soften_never_darkens(fr in any::<u8>(), fgc in any::<u8>(), fb in any::<u8>(),
+                                br in any::<u8>(), bgc in any::<u8>(), bb in any::<u8>(),
+                                min in any::<u8>()) {
+            let color = Color::Rgb(fr, fgc, fb);
+            let out = super::soften_over_bg(color, Color::Rgb(br, bgc, bb), min);
+            proptest::prop_assert!(tl(out) >= tl(color));
         }
     }
 }

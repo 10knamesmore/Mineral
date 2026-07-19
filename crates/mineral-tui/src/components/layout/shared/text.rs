@@ -29,16 +29,31 @@ pub(crate) fn alias_span(alias: Option<&str>, color: Color) -> Option<Span<'stat
     alias.map(|a| Span::styled(format!(" ({a})"), Style::new().fg(color)))
 }
 
-/// 读区域中心 cell 的**实际**背景色（本渲染面先铺 bg、后画字的采样点，喂
-/// [`crate::render::theme::Theme::ink_over`]）。区域为空 / 越界给 `Color::Reset`，
-/// 下游按「拿不到真彩」回落静态 token——固定底色面板与氛围背景面由此走同一条取色路径。
-pub(crate) fn center_bg(frame: &mut Frame<'_>, area: Rect) -> Color {
-    let x = area.x.saturating_add(area.width / 2);
+/// 读 `area` 内第 `col` 列（相对左缘，`0` = 最左）在垂直中点 cell 的**实际**背景色。
+/// 供盲文点阵按列取本地背景做对比度保底：氛围场沿通栏横向变化，单一采样点护不住
+/// 两端。越界的 `col` 夹到最右列；空 cell / 区域为空给 `Color::Reset`（下游按「非真彩」
+/// 跳过保底）。
+///
+/// # Params:
+///   - `col`: 距 `area` 左缘的列偏移（`0..area.width`；越界夹到末列）
+pub(crate) fn column_bg(frame: &mut Frame<'_>, area: Rect, col: usize) -> Color {
+    if area.width == 0 || area.height == 0 {
+        return Color::Reset;
+    }
+    let col = u16::try_from(col).unwrap_or(u16::MAX).min(area.width - 1);
+    let x = area.x.saturating_add(col);
     let y = area.y.saturating_add(area.height / 2);
     frame
         .buffer_mut()
         .cell(Position::new(x, y))
         .map_or(Color::Reset, |cell| cell.bg)
+}
+
+/// 读区域中心 cell 的**实际**背景色（本渲染面先铺 bg、后画字的采样点，喂
+/// [`crate::render::theme::Theme::ink_over`]）。区域为空 / 越界给 `Color::Reset`，
+/// 下游按「拿不到真彩」回落静态 token——固定底色面板与氛围背景面由此走同一条取色路径。
+pub(crate) fn center_bg(frame: &mut Frame<'_>, area: Rect) -> Color {
+    column_bg(frame, area, usize::from(area.width / 2))
 }
 
 #[cfg(test)]

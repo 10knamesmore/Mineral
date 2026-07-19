@@ -18,8 +18,8 @@ use ratatui::style::Color;
 
 use super::super::state::{SPECTRUM_RES, SpectrumState};
 use super::BrailleGrid;
-use crate::components::layout::shared::text::center_bg;
-use crate::render::color::{ensure_bg_contrast, lerp_color, luma255_of};
+use crate::components::layout::shared::text::{center_bg, column_bg};
+use crate::render::color::{lerp_color, luma255_of, soften_over_bg};
 use crate::render::palette::ColumnColors;
 use crate::render::theme::Theme;
 
@@ -44,13 +44,15 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     let mut painter = RidgePainter {
         grid: BrailleGrid::new(cols, rows),
         horizon: vec![point_h as isize; point_w],
-        // 端点色每字符列算一次,全部层共用(层色只差亮度系数)。
+        // 端点色每字符列算一次,全部层共用(层色只差亮度系数)。顶端色对本列实际背景
+        // **向亮平滑提亮**(只提不压,不造近黑),bg **逐列取**——氛围场沿通栏横向变化,
+        // 单中心护不住两端。衬底锚仍取中心 bg:它是全层共享的暗端语义,非逐列。
         endpoints: (0..cols)
             .map(|col| {
                 let column = state.column_colors(col, cols.max(1), theme);
                 ColumnColors {
                     bottom: column.bottom,
-                    top: ensure_bg_contrast(column.top, bg, floor),
+                    top: soften_over_bg(column.top, column_bg(frame, area, col), floor),
                 }
             })
             .collect::<Vec<ColumnColors>>(),
