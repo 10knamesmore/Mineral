@@ -295,6 +295,17 @@ impl Client for RemoteClient {
             context,
         });
     }
+    fn queue_edit(&self, op: mineral_protocol::QueueOp) -> mineral_protocol::QueueEditOutcome {
+        match self.send_recv(Request::QueueEdit { op }) {
+            Response::QueueEdited(outcome) => outcome,
+            other => {
+                warn_unexpected("queue_edit", &other);
+                // 断连 / 应答错位时按「没做成」兜底:报 Applied 会让界面画出一个
+                // 服务端并未发生的变更。
+                mineral_protocol::QueueEditOutcome::NoOp
+            }
+        }
+    }
     fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
         match self.send_recv(Request::ChannelCaps) {
             Response::ChannelCaps(caps) => caps,

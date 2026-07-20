@@ -479,6 +479,39 @@ Config {
                     },
                 ],
             },
+            reorder_down: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'j',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            reorder_up: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'k',
+                        ),
+                        shift: false,
+                        ctrl: true,
+                    },
+                ],
+            },
+            jump_to_current: KeyBinding {
+                chords: [
+                    KeyChord {
+                        key: Char(
+                            'c',
+                        ),
+                        shift: false,
+                        ctrl: false,
+                    },
+                ],
+            },
             download: KeyBinding {
                 chords: [
                     KeyChord {
@@ -967,6 +1000,9 @@ Config {
                 max_concurrent: 3,
             },
         },
+    },
+    queue: QueueConfig {
+        transforms: [],
     },
     daemon: DaemonConfig {
         gapless_prefetch_ms: 10000,

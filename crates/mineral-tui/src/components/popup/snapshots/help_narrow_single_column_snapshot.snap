@@ -9,7 +9,7 @@ expression: t.backend()
 "   │ Playback ───────────────────────────█│   "
 "   │ Play / Pause ···············  Space █│   "
 "   │ Next / Previous ············  n   p █│   "
-"   │ Cycle play mode ················  m █│   "
+"   │ Cycle play mode ················  m ││   "
 "   │ Volume ±5 ···············  +   -  +2││   "
 "   │ Seek ±5s ···················  ←   → ││   "
 "   │ Seek ±30s ··············  S-←   S-→ ││   "

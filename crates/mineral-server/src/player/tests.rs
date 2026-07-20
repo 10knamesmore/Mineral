@@ -16,7 +16,7 @@ use mineral_model::{
     SourceKind,
 };
 use mineral_persist::ServerStore;
-use mineral_protocol::{PlayMode, PlaybackOrigin, PlayerVersions};
+use mineral_protocol::{PlayCursor, PlayMode, PlaybackOrigin, PlayerVersions};
 use mineral_task::Scheduler;
 use mineral_test::mock::{UrlChannel, serve_once};
 use mineral_test::song;
@@ -358,14 +358,19 @@ async fn drain_spawned() {
     }
 }
 
-/// 造一个含队列的 State:queue=ids、queue_sel=sel、current=queue[sel]、mode。
+/// 造一个含队列的 State:queue=ids、游标附着在 sel、current=queue[sel]、mode。
 fn state_with(ids: &[&str], sel: usize, mode: PlayMode) -> State {
     let mut st = State::empty();
     st.queue = ids.iter().map(|&i| song(i)).collect();
-    st.queue_sel = sel;
+    st.cursor = PlayCursor::InQueue(sel);
     st.current_song = st.queue.get(sel).cloned();
     st.play_mode = mode;
     st
+}
+
+/// 游标的基准下标——只关心「推进算到第几位」的断言用它,不必区分附着 / 悬空。
+fn sel_of(st: &State) -> usize {
+    st.cursor.anchor()
 }
 
 /// 取队列各歌 id(原序)。

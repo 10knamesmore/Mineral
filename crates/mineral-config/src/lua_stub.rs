@@ -9,12 +9,12 @@ use crate::schema::{
     DeepWeights, DownloadConfig, DriftConfig, DynamicThemeConfig, EnvelopeConfig, HighpassConfig,
     KeysConfig, KittyTransmitConfig, KmeansConfig, LayoutConfig, LyricsConfig, MarqueeBounceConfig,
     MarqueeConfig, MarqueeLoopConfig, MarqueeMode, MenuReveal, MineralSection, NeteaseSection,
-    PrefetchConfig, PulseConfig, PulseDepthConfig, PunchConfig, ReportConfig, RotateConfig,
-    ScopeConfig, ScriptConfig, SearchConfig, SearchFocusTransition, SearchHitConfig,
-    SearchQueryMode, ShelfConfig, SourcesConfig, SpectrumConfig, SpectrumStyle, StatsConfig,
-    StatsLevel, SweepStyle, TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig, TitleField,
-    TitleIcons, ToastConfig, TrackPosMemory, TuiConfig, VignetteConfig, WaterfallConfig,
-    WaveformConfig, WindowTitleConfig, ZoomConfig,
+    PrefetchConfig, PulseConfig, PulseDepthConfig, PunchConfig, QueueConfig, QueueTransform,
+    ReportConfig, RotateConfig, ScopeConfig, ScriptConfig, SearchConfig, SearchFocusTransition,
+    SearchHitConfig, SearchQueryMode, ShelfConfig, SourcesConfig, SpectrumConfig, SpectrumStyle,
+    StatsConfig, StatsLevel, SweepStyle, TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig,
+    TitleField, TitleIcons, ToastConfig, TrackPosMemory, TuiConfig, VignetteConfig,
+    WaterfallConfig, WaveformConfig, WindowTitleConfig, ZoomConfig,
 };
 
 /// 文件头:`---@meta` 声明 + 使用说明(手写 prose,不随 schema 变)。
@@ -102,6 +102,8 @@ pub(crate) fn meta_config_lua() -> String {
         CacheConfig::LUA_STUB,
         DownloadConfig::LUA_STUB,
         SourcesConfig::LUA_STUB,
+        QueueConfig::LUA_STUB,
+        QueueTransform::LUA_STUB,
         NeteaseSection::LUA_STUB,
         BilibiliSection::LUA_STUB,
         MineralSection::LUA_STUB,

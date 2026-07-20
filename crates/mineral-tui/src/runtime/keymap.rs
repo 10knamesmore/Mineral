@@ -131,6 +131,9 @@ impl Keymap {
             }
             Actions {
                 love => ToggleLoveSelection, "Love";
+                reorder_down => ReorderSelection(SelectionMove::Down(1)), "Move item down / up";
+                reorder_up => ReorderSelection(SelectionMove::Up(1)), "Move item down / up";
+                jump_to_current => JumpToCurrent, "Jump to playing";
                 download => DownloadSelection, "Download";
                 open_action_menu => OpenActionMenu, "Actions menu";
                 open_copy_menu => OpenCopyMenu, "Copy menu";
@@ -320,6 +323,9 @@ mod tests {
             ("[", Action::CycleDetailSection),
             ("]", Action::CycleDetailSection),
             ("f", Action::ToggleLoveSelection),
+            ("<C-j>", Action::ReorderSelection(SelectionMove::Down(1))),
+            ("<C-k>", Action::ReorderSelection(SelectionMove::Up(1))),
+            ("c", Action::JumpToCurrent),
             ("d", Action::DownloadSelection),
             ("x", Action::DismissNotice),
             ("o", Action::OpenActionMenu),

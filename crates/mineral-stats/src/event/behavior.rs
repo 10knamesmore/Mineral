@@ -203,6 +203,21 @@ pub enum QueueOp {
 
     /// 移除某条。
     Remove,
+
+    /// 队列内重排某条(不改变集合,只改顺序)。
+    Move,
+
+    /// 清空某条之上的全部条目。
+    ClearAbove,
+
+    /// 清空某条之下的全部条目。
+    ClearBelow,
+
+    /// 应用脚本注册的具名变换(整表重排 / 删减)。
+    Transform,
+
+    /// 撤销上一次编辑。
+    Undo,
 }
 
 /// 二值操作结局(playlist_ops / copy_renders / action_invocations 的 outcome)。

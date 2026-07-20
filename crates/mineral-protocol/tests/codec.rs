@@ -384,7 +384,7 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
             queue: 4,
             current: 9,
         },
-        queue_sel: 1,
+        cursor: mineral_protocol::PlayCursor::InQueue(1),
         play_mode: PlayMode::Shuffle,
         play_origin: None,
         queue: Some(QueueSync {
@@ -415,7 +415,7 @@ async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
             queue: 4,
             current: 9,
         },
-        queue_sel: 2,
+        cursor: mineral_protocol::PlayCursor::InQueue(2),
         play_mode: PlayMode::RepeatAll,
         play_origin: None,
         queue: None,

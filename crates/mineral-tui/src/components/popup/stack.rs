@@ -233,16 +233,21 @@ impl OverlayStack {
         let top = self.active_top_index();
         for (i, m) in self.stack.iter().enumerate() {
             let focused = Some(i) == top;
-            render_overlay(
-                frame,
-                area,
-                &m.kind,
-                m.anim.eased_settle(),
-                focused,
-                ctx,
-                theme,
-            );
+            let settle = m.anim.eased_settle();
+            // 把「本层进度」与「上层进度」交给渲染:被压住的一层据此把选中高亮淡出,
+            // 上层据此淡入,两处读同一个数,交接不会错拍。
+            ctx.overlay_reveal
+                .set(crate::runtime::state::OverlayReveal {
+                    own: settle,
+                    above: self
+                        .stack
+                        .get(i + 1)
+                        .map_or(0, |upper| upper.anim.eased_settle()),
+                });
+            render_overlay(frame, area, &m.kind, settle, focused, ctx, theme);
         }
+        ctx.overlay_reveal
+            .set(crate::runtime::state::OverlayReveal::default());
     }
 
     /// 当前栈内浮层数(含正在退场、尚未被 [`Self::tick`] 移除的)。

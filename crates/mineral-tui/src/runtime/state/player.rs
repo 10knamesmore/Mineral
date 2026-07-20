@@ -15,10 +15,12 @@ pub struct PlayerMirror {
     /// 浮动 queue 当前曲目列表(后端权威态)。
     pub queue: Vec<Song>,
 
-    /// server 的「在播位置锚点」:`queue` 中当前在播歌所在的下标(prev/next 由它推进)。
+    /// server 的「在播位置锚点」:当前在播歌在 `queue` 中的位置(prev/next 由它推进)。
     /// 渲染 queue 浮层时按此下标标 `▶`,而非按歌曲身份——队列含重复曲时身份匹配会
     /// 把全部副本一起点亮,只有下标能精确指出真正在播的那一行。
-    pub queue_sel: usize,
+    ///
+    /// 悬空态(在播曲已被摘出队列但仍在响)下没有任何一行该被标记。
+    pub cursor: mineral_protocol::PlayCursor,
 
     /// Shuffle 状态下保存的原始 queue 顺序。退 Shuffle 时还原。
     /// 非 Shuffle 状态恒为 `None`。
@@ -35,7 +37,7 @@ impl PlayerMirror {
         Self {
             current: None,
             queue: Vec::new(),
-            queue_sel: 0,
+            cursor: mineral_protocol::PlayCursor::default(),
             original_queue: None,
             versions: mineral_protocol::PlayerVersions::default(),
         }

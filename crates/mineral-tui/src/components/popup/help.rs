@@ -252,6 +252,8 @@ impl Overlay for HelpOverlay {
             | Action::DownloadSelection
             | Action::OpenActionMenu
             | Action::OpenCopyMenu
+            | Action::ReorderSelection(_)
+            | Action::JumpToCurrent
             | Action::InvokeScript(_) => Some(OverlayResponse::Consumed),
         }
     }

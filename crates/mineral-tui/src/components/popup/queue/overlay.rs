@@ -1,28 +1,27 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
 use crossterm::event::KeyEvent;
-use mineral_model::Song;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Row, Table};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Row, Table};
 
-use crate::components::layout::shared::marquee::{
-    MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
-};
+use super::columns::{QueueColumns, TITLE_COL};
+use super::footer::{position_label, remaining_label};
+use super::row::{RowDecor, build_row};
+use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
-use crate::components::layout::shared::text::alias_span;
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
+use crate::render::color::lerp_color;
 use crate::render::theme::{Theme, resolve_source_color};
-use crate::runtime::action::Action;
-use crate::runtime::format::format_ms_opt;
+use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, OverlayReveal};
 
 /// 浮动 queue 浮层。
 ///
@@ -100,15 +99,16 @@ impl Overlay for QueueOverlay {
         } else {
             theme.surface1
         };
+        let inner_w = dock_full_rect(ctx.frame_area.get(), ctx).width;
         base_block(theme)
             .border_style(Style::new().fg(border_color))
             .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
             .title_bottom(
-                Line::from(position_label(self.list.sel(), ctx.player.queue.len()))
+                Line::from(position_label(self.list.sel(), ctx))
                     .style(Style::new().fg(theme.overlay)),
             )
             .title_bottom(
-                Line::from(" ↵ play  ·  Tab/q/esc close ")
+                Line::from(remaining_label(ctx, inner_w))
                     .right_aligned()
                     .style(Style::new().fg(theme.overlay)),
             )
@@ -130,9 +130,10 @@ impl Overlay for QueueOverlay {
         // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
         // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
         let marquee_ctx = MarqueeCtx::new(ctx, theme, /*fade_to*/ theme.surface0);
-        // highlight_symbol "▌ " 恒占 2 列;title 是第 1 列(# 之后)。
+        // highlight_symbol "▌ " 恒占 2 列;title 是第 2 列(# / ♥ 之后)。下标必须跟着
+        // 列序走——取错列会让 marquee 按那一列的宽度去裁标题(取到 ♥ 列就只剩 2 格)。
         let title_w = resolve_column_widths(inner.width, &widths, 2)
-            .get(1)
+            .get(TITLE_COL)
             .copied()
             .unwrap_or(0);
         let sel = self.list.sel();
@@ -142,18 +143,28 @@ impl Overlay for QueueOverlay {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let index_fg = resolve_source_color(theme, ctx.cfg.sources(), s.source());
-                let marquee = row_marquee(i == sel, &marquee_ctx, Slot::QueueSelected, title_w);
-                build_row(i, s, current_idx, theme, cols, index_fg, marquee)
+                let decor = RowDecor {
+                    is_current: current_idx == Some(i),
+                    loved: ctx.is_liked(s),
+                    index_fg: resolve_source_color(theme, ctx.cfg.sources(), s.source()),
+                    marquee: row_marquee(i == sel, &marquee_ctx, Slot::QueueSelected, title_w),
+                };
+                build_row(i, s, theme, cols, decor)
             })
             .collect();
 
+        // 焦点让给压在上面的菜单时,选中高亮按其揭开进度淡向底色——两层同时全亮会读成
+        // 「两处都在等输入」。用同一个进度插值,交接与菜单的淡入严格同拍。
+        let yielded = ctx.overlay_reveal.get().yielded();
+        let (num, denom) = (u64::from(yielded), u64::from(OverlayReveal::FULL));
+        let highlight_bg = lerp_color(theme.surface0, theme.base, num, denom);
+        let highlight_fg = lerp_color(theme.accent, theme.subtext, num, denom);
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
                 Style::new()
-                    .bg(theme.surface0)
-                    .fg(theme.accent)
+                    .bg(highlight_bg)
+                    .fg(highlight_fg)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▌ ");
@@ -206,205 +217,48 @@ impl Overlay for QueueOverlay {
                 idx: self.list.sel(),
                 anchor: self.row_anchor(ctx),
             })),
-            // `o`:queue 内无「容器/单曲操作」语义(它本身即队列),显式吞掉(Consumed)而非
-            // 回落——意图直白,且不押注 passes_overlay 白名单恰好不含 OpenActionMenu 的现状。
-            Action::OpenActionMenu => Some(OverlayResponse::Consumed),
+            // 操作菜单:为当前光标行弹队列操作菜单(贴行下方、叠在 queue 之上)。
+            Action::OpenActionMenu => Some(OverlayResponse::Do(OverlayAction::QueueActionMenu {
+                idx: self.list.sel(),
+                anchor: self.row_anchor(ctx),
+            })),
+            // 收藏:浮层自持光标,不走 browse 页那条「按 View 取选中曲」的路径。
+            Action::ToggleLoveSelection => Some(OverlayResponse::Do(
+                OverlayAction::ToggleLoveQueueIndex(self.list.sel()),
+            )),
+            // 下载光标行。
+            Action::DownloadSelection => Some(OverlayResponse::Do(
+                OverlayAction::DownloadQueueIndex(self.list.sel()),
+            )),
+            // 上下移动条目:光标跟着歌走,故这里预移一格——server 应用后队列顺序与之一致。
+            // 端点不动(server 判 NoOp),光标也不该动。
+            Action::ReorderSelection(mv) => {
+                let at = self.list.sel();
+                let moved = match mv {
+                    SelectionMove::Down(_) if at.saturating_add(1) < len => at.saturating_add(1),
+                    SelectionMove::Up(_) if at > 0 => at.saturating_sub(1),
+                    _ => at,
+                };
+                if moved == at {
+                    return Some(OverlayResponse::Consumed);
+                }
+                self.list.move_by(mv, len);
+                Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex {
+                    idx: at,
+                    down: matches!(mv, SelectionMove::Down(_)),
+                }))
+            }
+            // 跳回在播条目;无在播(或已被摘出队列)时不动。只移光标不碰视口——视口交给
+            // 渲染端的 Advancing 缓动滚过去,故是「滚动到那里」而非瞬移。
+            Action::JumpToCurrent => {
+                if let Some(at) = ctx.queue_current_index() {
+                    self.list.set_sel(at);
+                }
+                Some(OverlayResponse::Consumed)
+            }
             // 其余(播放控制族等)不认 → 回落 on_key(Pass 半穿透)。
             _ => None,
         }
-    }
-}
-
-/// queue 表格的列档,按浮层内宽选(见 [`QueueCols::for_width`])。
-#[derive(Clone, Copy)]
-enum QueueCols {
-    /// 宽档:# / title / artist / album / len,文本列比例 Fill(3:2:2)。
-    Wide,
-
-    /// 中档:# / title / artist / len,文本列比例 Fill(3:2)—— album 放不下。
-    Full,
-
-    /// 窄档:# / title / len —— artist 也放不下,退到「歌本身」。
-    Song,
-}
-
-impl QueueCols {
-    /// 按浮层内宽 `width` 选档。阈值 44:低于此 title/artist 各分不到约 14 格,
-    /// 退到只剩歌名;56 起三个文本列各分得约 12 格,才塞得下 album。
-    fn for_width(width: u16) -> Self {
-        if width < 44 {
-            Self::Song
-        } else if width < 56 {
-            Self::Full
-        } else {
-            Self::Wide
-        }
-    }
-
-    /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
-    fn header_cells(self) -> Vec<Cell<'static>> {
-        let mut cells = vec![Cell::from("#"), Cell::from("title")];
-        if matches!(self, Self::Wide | Self::Full) {
-            cells.push(Cell::from("artist"));
-        }
-        if matches!(self, Self::Wide) {
-            cells.push(Cell::from("album"));
-        }
-        cells.push(Cell::from("len"));
-        cells
-    }
-
-    /// 列宽约束:`#`(宽由 `index_w` 传入,随队列规模自适应)/ len 定宽,文本列比例 Fill。
-    fn widths(self, index_w: u16) -> Vec<Constraint> {
-        match self {
-            Self::Wide => vec![
-                Constraint::Length(index_w),
-                Constraint::Fill(3),
-                Constraint::Fill(2),
-                Constraint::Fill(2),
-                Constraint::Length(6),
-            ],
-            Self::Full => vec![
-                Constraint::Length(index_w),
-                Constraint::Fill(3),
-                Constraint::Fill(2),
-                Constraint::Length(6),
-            ],
-            Self::Song => vec![
-                Constraint::Length(index_w),
-                Constraint::Fill(1),
-                Constraint::Length(6),
-            ],
-        }
-    }
-}
-
-/// 序号列宽,随队列长度自适应。
-///
-/// `#` 列宽随规模伸缩:避免定宽把宽下标截断(定 3 宽时 `1234` 会被截成 `123`),也不让
-/// 小队列白占列。阈值按队列**数量**取:≤999 首 3 宽,超过 4 宽。下标上界由 server 端队列
-/// 长度(≤9999,0-based 故最大 9998)保证落在 4 位内,显示层照实渲染、不再另钳。
-#[derive(Clone, Copy)]
-struct IndexCol {
-    /// 本帧该列的字符宽(3 或 4)。
-    width: u16,
-}
-
-impl IndexCol {
-    /// 按队列长度选列宽:≤999 首 3 宽,超过 4 宽。
-    fn for_len(len: usize) -> Self {
-        Self {
-            width: if len <= 999 { 3 } else { 4 },
-        }
-    }
-
-    /// 本列字符宽。
-    fn width(self) -> u16 {
-        self.width
-    }
-}
-
-/// queue 表格的完整列规格:文本档位(Full/Song)+ 序号列尺寸/显示策略。
-///
-/// 把「按浮层内宽选的文本档」与「按队列长度选的序号列」收成一份规格随行传递,
-/// 让 [`build_row`] 只认一个列上下文,不必平铺两个来源不同的入参。
-#[derive(Clone, Copy)]
-struct QueueColumns {
-    /// 文本列档位(按浮层内宽选,见 [`QueueCols::for_width`])。
-    text: QueueCols,
-
-    /// 序号列宽(按队列长度选,见 [`IndexCol::for_len`])。
-    index: IndexCol,
-}
-
-impl QueueColumns {
-    /// 按浮层内宽 `width` 与队列长度 `len` 选列规格。
-    fn resolve(width: u16, len: usize) -> Self {
-        Self {
-            text: QueueCols::for_width(width),
-            index: IndexCol::for_len(len),
-        }
-    }
-
-    /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
-    fn header_cells(self) -> Vec<Cell<'static>> {
-        self.text.header_cells()
-    }
-
-    /// 列宽约束:序号列宽由 [`IndexCol`] 定,其余随文本档。
-    fn widths(self) -> Vec<Constraint> {
-        self.text.widths(self.index.width())
-    }
-}
-
-/// 把一首歌组成 queue 表格的一行。
-///
-/// 当前在播行:行首 `▶` + 整行 `accent` 前景(与选中行的「背景块」区分),在播标记
-/// 语义优先于源色;其余行序号用 `index_fg`(该行歌曲的源色,整列同色即队列来源),
-/// 歌名用主文本色,艺术家用次要色,层级分明。选中行的高亮背景由 Table 的
-/// `row_highlight_style` 叠加,与在播前景着色天然兼容(背景块视觉优先)。
-/// `cols` 决定列集:窄档省去 artist,宽档多出 album。
-fn build_row<'a>(
-    idx: usize,
-    s: &'a Song,
-    current_idx: Option<usize>,
-    theme: &Theme,
-    cols: QueueColumns,
-    index_fg: ratatui::style::Color,
-    marquee: Option<RowMarquee<'_>>,
-) -> Row<'a> {
-    let is_current = current_idx == Some(idx);
-    let (lead, title_fg, sub_fg) = if is_current {
-        (
-            Span::styled("▶", Style::new().fg(theme.accent)),
-            theme.accent,
-            theme.accent,
-        )
-    } else {
-        (
-            Span::styled(idx.to_string(), Style::new().fg(index_fg)),
-            theme.text,
-            theme.subtext,
-        )
-    };
-
-    let mut title_spans = vec![Span::styled(s.name.clone(), Style::new().fg(title_fg))];
-    title_spans.extend(alias_span(s.alias.as_deref(), theme.overlay));
-    let title_cell = match marquee {
-        Some(m) => Cell::from(
-            m.ctx
-                .line(title_spans, m.slot, &s.id.qualified(), m.title_w),
-        ),
-        None => Cell::from(Line::from(title_spans)),
-    };
-    let mut cells = vec![Cell::from(lead), title_cell];
-    if matches!(cols.text, QueueCols::Wide | QueueCols::Full) {
-        let artist = s
-            .artists
-            .first()
-            .map_or_else(|| "—".to_owned(), |a| a.name.clone());
-        cells.push(Cell::from(Span::styled(artist, Style::new().fg(sub_fg))));
-    }
-    if matches!(cols.text, QueueCols::Wide) {
-        let album = s
-            .album
-            .as_ref()
-            .map_or_else(|| "—".to_owned(), |a| a.name.clone());
-        cells.push(Cell::from(Span::styled(album, Style::new().fg(sub_fg))));
-    }
-    cells.push(Cell::from(Span::styled(
-        format_ms_opt(s.duration_ms),
-        Style::new().fg(sub_fg),
-    )));
-    Row::new(cells)
-}
-
-/// 拼 ` n / total ` 的 footer 标签;空 queue 显示 `0 / 0`。
-fn position_label(sel: usize, total: usize) -> String {
-    if total == 0 {
-        " 0 / 0 ".to_owned()
-    } else {
-        format!(" {} / {total} ", sel.saturating_add(1).min(total))
     }
 }
 
@@ -427,8 +281,8 @@ mod tests {
         let mut s = AppState::test_default()?;
         let queue = endserenading(len);
         s.playback.track = current.and_then(|i| queue.get(i).cloned());
-        // queue_sel 是 ▶ 标记的下标依据(server 在播锚点的镜像)。
-        s.player.queue_sel = current.unwrap_or(0);
+        // 游标是 ▶ 标记的下标依据(server 在播锚点的镜像)。
+        s.player.cursor = mineral_protocol::PlayCursor::InQueue(current.unwrap_or(0));
         s.player.queue = queue;
         Ok(s)
     }
@@ -448,7 +302,7 @@ mod tests {
         n
     }
 
-    /// 回归:队列含重复曲、在播锚点(queue_sel)落在**第二个**副本时,
+    /// 回归:队列含重复曲、在播锚点落在**第二个**副本时,
     /// 只有那一行标 `▶`——历史 bug 按歌曲身份匹配会把两个副本一起点亮(count==2)。
     #[test]
     fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
@@ -456,7 +310,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = AppState::test_default()?;
         ctx.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
-        ctx.player.queue_sel = 2; // 第二个 a 正在播
+        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
         ctx.playback.track = Some(song("a"));
         let overlay = QueueOverlay::new(2);
         t.draw(|f| {
@@ -566,6 +420,58 @@ mod tests {
         Ok(())
     }
 
+    /// 队列浮层底栏:左下 `n / total`,右下 `剩余曲目 · 时长 → 预计播完钟点`。
+    /// 设够宽的 frame_area 让右下不退化;playing + 固定 now 让 ends 钟点稳定可锁。
+    #[test]
+    fn queue_footer_end_clock_snapshot() -> color_eyre::Result<()> {
+        use chrono::TimeZone;
+
+        let mut t = Terminal::new(TestBackend::new(160, 24))?;
+        let mut ctx = ctx_with_queue(4, Some(0))?;
+        ctx.frame_area
+            .set(ratatui::layout::Rect::new(0, 0, 160, 24));
+        ctx.playback.playing = true;
+        ctx.playback.position_ms = 0;
+        ctx.now.set(
+            chrono::Local
+                .with_ymd_and_hms(2026, 7, 20, 14, 44, 0)
+                .single()
+                .ok_or_else(|| color_eyre::eyre::eyre!("构造固定钟点失败"))?,
+        );
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层底栏:左下 n/total,右下 剩余曲目·时长→预计播完钟点",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 队列浮层收藏列:已收藏行画实心 ♥,未收藏行留空(不画空心 ♡,免满屏噪音)。
+    #[test]
+    fn queue_love_column_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = ctx_with_queue(3, Some(1))?;
+        // 标记第 0、2 首为已收藏(第 1 首留未收藏,同屏对照)。
+        if let Some(song) = ctx.player.queue.first().cloned() {
+            ctx.toggle_loved_local(&song);
+        }
+        if let Some(song) = ctx.player.queue.get(2).cloned() {
+            ctx.toggle_loved_local(&song);
+        }
+        let overlay = QueueOverlay::new(0);
+        t.draw(|f| {
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+        })?;
+        crate::test_support::assert_snap!(
+            "队列浮层:♥ 列——第 0/2 首已收藏画实心,第 1 首(在播)未收藏留空",
+            t.backend()
+        );
+        Ok(())
+    }
+
     /// 队列浮层歌名带别名:标题后缀暗色 ` (alias)`(与曲目表 / 播放栏 / 搜索结果一致)。
     /// 锁住「新增渲染面漏挂 alias 后缀」的回归。
     #[test]
@@ -650,28 +556,6 @@ mod tests {
             t.backend()
         );
         Ok(())
-    }
-
-    /// 文本列档随浮层内宽三档递进:窄档只剩歌名,中档放得下 artist,宽档再放 album。
-    #[test]
-    fn queue_cols_tiers_by_width() {
-        use super::QueueCols;
-        assert!(
-            matches!(QueueCols::for_width(43), QueueCols::Song),
-            "43 退到只剩歌名"
-        );
-        assert!(
-            matches!(QueueCols::for_width(44), QueueCols::Full),
-            "44 起放得下 artist"
-        );
-        assert!(
-            matches!(QueueCols::for_width(55), QueueCols::Full),
-            "55 仍塞不进 album"
-        );
-        assert!(
-            matches!(QueueCols::for_width(56), QueueCols::Wide),
-            "56 起再放 album"
-        );
     }
 
     /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断。
@@ -795,13 +679,116 @@ mod tests {
             color_eyre::eyre::bail!("y 应产出 CopyQueueIndex");
         };
         assert_eq!(idx, 2, "复制作用于当前光标行");
-        assert!(
-            matches!(
-                o.on_action(Action::OpenActionMenu, &ctx),
-                Some(OverlayResponse::Consumed)
+        let resp = o.on_action(Action::OpenActionMenu, &ctx);
+        let Some(OverlayResponse::Do(OverlayAction::QueueActionMenu { idx, .. })) = resp else {
+            color_eyre::eyre::bail!("o 应产出 QueueActionMenu");
+        };
+        assert_eq!(idx, 2, "操作同样作用于当前光标行");
+        Ok(())
+    }
+
+    /// 高亮交接:上层菜单揭开到一半时,queue 的选中行底色应插值到 surface0 与 base 之间
+    /// ——既不是全亮(读成两处都在等输入),也不是全灭(读成 queue 已经关了)。
+    #[test]
+    fn selection_highlight_fades_as_the_layer_above_opens() -> color_eyre::Result<()> {
+        use crate::render::color::lerp_color;
+        use crate::runtime::state::OverlayReveal;
+
+        let theme = Theme::default();
+        let ctx = ctx_with_queue(4, None)?;
+        let full = u64::from(OverlayReveal::FULL);
+        let half = lerp_color(theme.surface0, theme.base, full / 2, full);
+        assert_ne!(half, theme.surface0, "半程不应仍是全亮底色");
+        assert_ne!(half, theme.base, "半程不应已经淡到底色");
+
+        // 无上层时不让渡:高亮保持全亮。
+        ctx.overlay_reveal.set(OverlayReveal::default());
+        assert_eq!(ctx.overlay_reveal.get().yielded(), 0);
+        // 上层完全展开时全让:高亮到底色。
+        ctx.overlay_reveal.set(OverlayReveal {
+            own: OverlayReveal::FULL,
+            above: OverlayReveal::FULL,
+        });
+        assert_eq!(
+            lerp_color(
+                theme.surface0,
+                theme.base,
+                u64::from(ctx.overlay_reveal.get().yielded()),
+                full
             ),
-            "o 在 queue 被显式吞掉(无操作语义)"
+            theme.base
         );
+        Ok(())
+    }
+
+    /// 收藏 / 下载 / 跳回在播都以浮层私有光标为准,不走 browse 页的「当前 View 选中曲」。
+    #[test]
+    fn love_download_and_jump_use_the_overlay_cursor() -> color_eyre::Result<()> {
+        let ctx = ctx_with_queue(6, /*current*/ Some(4))?;
+        let mut o = QueueOverlay::new(1);
+        assert!(matches!(
+            o.on_action(Action::ToggleLoveSelection, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::ToggleLoveQueueIndex(1)))
+        ));
+        assert!(matches!(
+            o.on_action(Action::DownloadSelection, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::DownloadQueueIndex(1)))
+        ));
+        assert!(matches!(
+            o.on_action(Action::JumpToCurrent, &ctx),
+            Some(OverlayResponse::Consumed)
+        ));
+        assert_eq!(o.cursor(), 4, "跳回在播条目");
+        Ok(())
+    }
+
+    /// 跳回在播是「滚动过去」而非瞬移:光标即刻落在在播行,但视口目标不被 snap——
+    /// 留给渲染端的 Advancing 缓动滚过去。回退成 `place`/`at` 会让视口瞬跳,本测试拦它。
+    #[test]
+    fn jump_to_current_scrolls_instead_of_snapping() -> color_eyre::Result<()> {
+        let ctx = ctx_with_queue(10, /*current*/ Some(9))?;
+        let mut o = QueueOverlay::new(0);
+        assert_eq!(
+            o.list.offset(
+                10,
+                /*viewport*/ 4,
+                crate::runtime::scroll::list::ScrollMotion::Frozen
+            ),
+            0,
+            "打开时视口在顶"
+        );
+        o.on_action(Action::JumpToCurrent, &ctx);
+        assert_eq!(o.cursor(), 9, "光标即刻落在在播行");
+        assert_eq!(
+            o.list.offset(
+                10,
+                /*viewport*/ 4,
+                crate::runtime::scroll::list::ScrollMotion::Frozen
+            ),
+            0,
+            "视口目标未被 snap(仍在顶),靠缓动滚过去"
+        );
+        Ok(())
+    }
+
+    /// 移动条目:光标跟着歌走(预移一格),端点不动且不发请求。
+    #[test]
+    fn reorder_follows_the_song_and_stops_at_edges() -> color_eyre::Result<()> {
+        let ctx = ctx_with_queue(3, None)?;
+        let mut o = QueueOverlay::new(0);
+        // 首项上移 = 端点,不动也不发请求。
+        assert!(matches!(
+            o.on_action(Action::ReorderSelection(SelectionMove::Up(1)), &ctx),
+            Some(OverlayResponse::Consumed)
+        ));
+        assert_eq!(o.cursor(), 0, "端点不环绕");
+
+        let resp = o.on_action(Action::ReorderSelection(SelectionMove::Down(1)), &ctx);
+        let Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex { idx, down })) = resp else {
+            color_eyre::eyre::bail!("下移应产出 ReorderQueueIndex");
+        };
+        assert_eq!((idx, down), (0, true), "带原下标与方向");
+        assert_eq!(o.cursor(), 1, "光标跟着歌下移一格");
         Ok(())
     }
 
@@ -818,16 +805,6 @@ mod tests {
         assert_eq!(anchor.x, full.x + 1, "锚点 x 在内区(去左边框)");
         assert_eq!(anchor.y, full.y + 2 + 2, "内区顶(+1 框)+表头(+1)+ sel(2)");
         Ok(())
-    }
-
-    /// 序号列宽随队列长度自适应:≤999 首 3 宽,破千转 4 宽(避免 4 位下标被定宽截断)。
-    #[test]
-    fn index_col_width_adapts_to_len() {
-        use super::IndexCol;
-        assert_eq!(IndexCol::for_len(0).width(), 3, "空队列 3 宽");
-        assert_eq!(IndexCol::for_len(999).width(), 3, "999 首仍 3 宽");
-        assert_eq!(IndexCol::for_len(1000).width(), 4, "破千转 4 宽");
-        assert_eq!(IndexCol::for_len(9999).width(), 4, "满队列(9999)4 宽");
     }
 
     /// `clamp` 把越界光标钳到 `len-1`,空队列归 0。

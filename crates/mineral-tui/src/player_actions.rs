@@ -190,6 +190,7 @@ impl App {
                 .client
                 .queue_append(*song, mineral_protocol::QueueContextWire::Manual),
             MenuAction::Download(song) => self.client.download(DownloadTarget::Song(song)),
+            MenuAction::QueueEdit(op) => self.apply_queue_edit(op),
             MenuAction::PlayContainer(container) => {
                 self.start_container_play(&container, PlayMode::Replace);
             }

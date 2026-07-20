@@ -80,6 +80,12 @@ pub enum Action {
     /// 切换选中曲的 ♥(乐观翻转 + 转发)。
     ToggleLoveSelection,
 
+    /// 把选中条目在队列里上 / 下移一格,光标跟随歌曲而非停在原下标。
+    ReorderSelection(SelectionMove),
+
+    /// 光标跳回当前在播条目。
+    JumpToCurrent,
+
     /// 下载当前视图选中项(Library→单曲 / Playlists→整张歌单)。
     DownloadSelection,
 

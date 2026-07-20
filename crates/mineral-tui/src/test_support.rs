@@ -237,6 +237,9 @@ pub(crate) struct TestClient {
 
     /// `render_copy_template` 收到的模板下标记录(恒回 `Err`,避免测试真碰系统剪贴板)。
     pub(crate) copy_template_calls: Arc<Mutex<Vec<usize>>>,
+
+    /// `queue_edit` 收到的编辑操作序列(队列面板的删除 / 移动 / 清理路径断言用)。
+    pub(crate) queue_edits: QueueEditLog,
 }
 
 /// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
@@ -245,6 +248,9 @@ pub(crate) type QueueOpsLog = Arc<Mutex<Vec<(&'static str, String)>>>;
 /// [`TestClient::queue_contexts`] 的记录容器:`(操作名, 队列语境)` 序列。
 pub(crate) type QueueContextLog =
     Arc<Mutex<Vec<(&'static str, mineral_protocol::QueueContextWire)>>>;
+
+/// [`TestClient::queue_edits`] 的记录容器:编辑操作序列。
+pub(crate) type QueueEditLog = Arc<Mutex<Vec<mineral_protocol::QueueOp>>>;
 
 impl Client for TestClient {
     fn play(&self, _url: MediaUrl) {}
@@ -293,6 +299,12 @@ impl Client for TestClient {
         if let Ok(mut v) = self.queue_contexts.lock() {
             v.push(("append", context));
         }
+    }
+    fn queue_edit(&self, op: mineral_protocol::QueueOp) -> mineral_protocol::QueueEditOutcome {
+        if let Ok(mut v) = self.queue_edits.lock() {
+            v.push(op);
+        }
+        mineral_protocol::QueueEditOutcome::Applied
     }
     fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
         Vec::new()
@@ -400,6 +412,22 @@ pub(crate) fn app_with_queue_probed(
     let mut app = test_app_with(Arc::new(client))?;
     fill_queue(&mut app, len, current_idx);
     Ok((app, counter))
+}
+
+/// 同 [`app_with_queue`],额外返回 [`TestClient`] 的队列编辑记录
+/// (queue 面板的删除 / 移动 / 清理路径断言用)。
+pub(crate) fn app_with_queue_edits(
+    len: usize,
+    current_idx: usize,
+) -> color_eyre::Result<(App, QueueEditLog)> {
+    let edits: QueueEditLog = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        queue_edits: Arc::clone(&edits),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    fill_queue(&mut app, len, current_idx);
+    Ok((app, edits))
 }
 
 /// 造一个停在 Playlists 视图、填 [`state_with_playlists`] 同款三歌单(曲目均未缓存)

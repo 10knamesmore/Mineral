@@ -18,6 +18,7 @@ use super::keys::KeysConfig;
 use super::layout::LayoutConfig;
 use super::lyrics::LyricsConfig;
 use super::prefetch::PrefetchConfig;
+use super::queue::QueueConfig;
 use super::script::ScriptConfig;
 use super::search::SearchConfig;
 use super::sources::SourcesConfig;
@@ -45,6 +46,9 @@ pub struct Config {
 
     /// 音乐源段(网易云等)。
     sources: SourcesConfig,
+
+    /// 队列段(脚本注册的具名队列变换)。
+    queue: QueueConfig,
 
     /// daemon 段(gapless 预取 + 各间隔节拍)。
     daemon: DaemonConfig,

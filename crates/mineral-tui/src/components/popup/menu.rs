@@ -19,13 +19,17 @@ use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
 use crate::components::popup::placement::Placement;
+use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, OverlayReveal};
 
 /// 菜单确认后产出、由 App 执行的动作。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MenuAction {
+    /// 执行一次队列结构编辑(queue 浮层操作菜单的落地动作)。
+    QueueEdit(mineral_protocol::QueueOp),
+
     /// 替换队列并起播:`queue` = 所在列表整列(空则落地时退化为单曲队列),target = `song`。
     Play {
         /// 起播曲(也是 set_queue 的 target)。
@@ -126,6 +130,25 @@ impl MenuItem {
             hotkey: None,
             label: label.into(),
             action: None,
+            destructive: false,
+            tint: None,
+        }
+    }
+
+    /// 标为危险项(红色渲染;调用方负责把它排在末位)。
+    pub(crate) fn destructive(self) -> Self {
+        Self {
+            destructive: true,
+            ..self
+        }
+    }
+
+    /// 无 hotkey 的可选项(仅导航 + 激活可达)。
+    pub(crate) fn labeled(label: impl Into<String>, action: MenuAction) -> Self {
+        Self {
+            hotkey: None,
+            label: label.into(),
+            action: Some(action),
             destructive: false,
             tint: None,
         }
@@ -248,8 +271,16 @@ impl Overlay for PopMenu {
             .title(Line::from(format!(" {} ", self.title)).style(Style::new().fg(theme.subtext)))
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         let list_h = inner.height;
+        // 选中高亮随本层揭开进度淡入,与被压住那层的淡出严格同拍(读同一个进度)。
+        let own = ctx.overlay_reveal.get().own.min(OverlayReveal::FULL);
+        let sel_bg = lerp_color(
+            theme.base,
+            theme.surface0,
+            u64::from(own),
+            u64::from(OverlayReveal::FULL),
+        );
         for (row, it) in self.items.iter().enumerate().take(usize::from(list_h)) {
             let Ok(dy) = u16::try_from(row) else {
                 continue;
@@ -263,7 +294,7 @@ impl Overlay for PopMenu {
             };
             let mut style = Style::new().fg(fg);
             if selected {
-                style = style.bg(theme.surface0).add_modifier(Modifier::BOLD);
+                style = style.bg(sel_bg).add_modifier(Modifier::BOLD);
             }
             // 无 hotkey 的项也留空列保持对齐。
             let key_span = match it.hotkey {
@@ -275,7 +306,7 @@ impl Overlay for PopMenu {
             };
             let spans = vec![key_span, Span::styled(it.label.clone(), style)];
             Paragraph::new(Line::from(spans).style(if selected {
-                Style::new().bg(theme.surface0)
+                Style::new().bg(sel_bg)
             } else {
                 Style::new()
             }))

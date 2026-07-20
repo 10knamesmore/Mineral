@@ -306,4 +306,38 @@ impl ScriptSender {
         }
         rx
     }
+
+    /// 跑一个具名队列变换,回执新的队列顺序。
+    ///
+    /// 未挂 / 线程已退出时,回执立即就绪为 `Err`(调用方 fail-open,队列不动)。
+    ///
+    /// # Params:
+    ///   - `index`: 变换下标(0-based,对位 config 数组序)
+    ///   - `queue`: 当前队列(有序)
+    ///   - `current`: 在播条目下标(0-based)
+    ///   - `selected`: 光标下标(0-based),无则 `None`
+    ///
+    /// # Return:
+    ///   oneshot 接收端;`await` 得到新顺序的 id 序列或人读错误。
+    #[must_use]
+    pub fn queue_transform(
+        &self,
+        index: usize,
+        queue: Vec<mineral_model::Song>,
+        current: usize,
+        selected: Option<usize>,
+    ) -> tokio::sync::oneshot::Receiver<Result<Vec<mineral_model::SongId>, String>> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if let Err(failed) = self.try_send(ScriptMsg::QueueTransform {
+            index,
+            queue,
+            current,
+            selected,
+            reply,
+        }) && let ScriptMsg::QueueTransform { reply, .. } = *failed
+        {
+            let _ = reply.send(Err("脚本未启用或线程已退出".to_owned()));
+        }
+        rx
+    }
 }

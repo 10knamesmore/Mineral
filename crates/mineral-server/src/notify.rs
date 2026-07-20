@@ -272,6 +272,35 @@ impl PlayerCore {
             Err(_recv) => Err("脚本线程已退出".to_owned()),
         }
     }
+
+    /// 跑一个具名队列变换,拿回新的队列顺序(脚本未启用 / 线程已退出即错误)。
+    ///
+    /// # Params:
+    ///   - `index`: 变换下标(0-based,对位 config 数组序)
+    ///   - `queue`: 当前队列(有序)
+    ///   - `current`: 在播条目下标(0-based)
+    ///   - `selected`: 光标下标(0-based),无则 `None`
+    ///
+    /// # Return:
+    ///   `Ok(ids)` = 新顺序;`Err(msg)` = 人读错误。
+    pub(crate) async fn queue_transform(
+        &self,
+        index: usize,
+        queue: Vec<mineral_model::Song>,
+        current: usize,
+        selected: Option<usize>,
+    ) -> Result<Vec<mineral_model::SongId>, String> {
+        let Some(script) = &self.inner.notify.script else {
+            return Err("脚本未启用(无 config.lua 或脚本加载失败)".to_owned());
+        };
+        match script
+            .queue_transform(index, queue, current, selected)
+            .await
+        {
+            Ok(result) => result,
+            Err(_recv) => Err("脚本线程已退出".to_owned()),
+        }
+    }
 }
 
 #[cfg(test)]

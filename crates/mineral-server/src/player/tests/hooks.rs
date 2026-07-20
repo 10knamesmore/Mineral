@@ -143,7 +143,7 @@ async fn before_stream_skip_advances_to_next() -> color_eyre::Result<()> {
     )?;
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
     });
     crate::hook_bridge::before_stream(&core, &song("a"), test_play_url("a")?);
@@ -171,7 +171,7 @@ async fn prefetch_hook_continue_arms_original() -> color_eyre::Result<()> {
     let next = song("b");
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.prefetch_fired_for = Some(song("b").id);
     });
@@ -208,7 +208,7 @@ async fn prefetch_hook_rewrite_arms_effective() -> color_eyre::Result<()> {
     let next = song("b");
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.prefetch_fired_for = Some(song("b").id);
     });
@@ -253,7 +253,7 @@ async fn prefetch_hook_skip_vetoes_next() -> color_eyre::Result<()> {
     let next = song("b");
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b"), song("c")];
-        st.queue_sel = 0;
+        st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.prefetch_fired_for = Some(song("b").id);
     });

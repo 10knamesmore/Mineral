@@ -3,10 +3,25 @@
 
 use mineral_model::{Envelope, PlayUrl, Song, SongId};
 use mineral_protocol::{
-    CurrentSync, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
+    CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
 };
 
 use crate::download::Capturing;
+
+/// 一次队列编辑前的队列全貌,供撤销还原。
+///
+/// 只回滚队列结构,**不回滚播放**:撤销一次「删在播曲」后,那首歌回到队列里、游标从悬空
+/// 变回附着,但它自始至终没有断过声。
+pub(crate) struct QueueSnapshot {
+    /// 编辑前的队列。
+    pub(crate) queue: Vec<Song>,
+
+    /// 编辑前的 shuffle 原序。
+    pub(crate) original_queue: Option<Vec<Song>>,
+
+    /// 编辑前的游标。
+    pub(crate) cursor: PlayCursor,
+}
 
 /// 播放上下文。字段对 crate 内开放(队列计算 / 模式切换 / 播放编排直接读写)。
 pub(crate) struct State {
@@ -31,11 +46,14 @@ pub(crate) struct State {
     /// 当前队列(顺序模式 = 原序;shuffle 模式 = 洗过)。
     pub(crate) queue: Vec<Song>,
 
-    /// 当前歌在 `queue` 中的下标。
-    pub(crate) queue_sel: usize,
+    /// 当前歌在 `queue` 中的位置(悬空态见 [`PlayCursor::Detached`])。
+    pub(crate) cursor: PlayCursor,
 
     /// shuffle 切换前的原始顺序,关 shuffle 时还原用;非 shuffle 模式下为 `None`。
     pub(crate) original_queue: Option<Vec<Song>>,
+
+    /// 上一次队列编辑前的快照,供撤销。单级:撤销后即清空,不支持连撤与重做。
+    pub(crate) queue_undo: Option<QueueSnapshot>,
 
     /// 当前播放模式(顺序 / 单曲 / 列表循环 / shuffle)。
     pub(crate) play_mode: PlayMode,
@@ -85,7 +103,8 @@ impl State {
             queue_context: mineral_stats::QueueContext::Unknown,
             context_overrides: rustc_hash::FxHashMap::default(),
             queue: Vec::new(),
-            queue_sel: 0,
+            cursor: PlayCursor::default(),
+            queue_undo: None,
             original_queue: None,
             play_mode: PlayMode::default(),
             current_lyrics: None,
@@ -107,6 +126,32 @@ impl State {
         self.queued = None;
         self.prefetch_fired_for = None;
         self.prefetch_vetoed.clear();
+    }
+
+    /// 队列结构编辑后的预取维护——**精确**作废,不照抄 [`Self::invalidate_prefetch`]。
+    ///
+    /// 否决集存的是下标,重排后必然陈旧,无条件清。但已排的下一曲只在「下一首真的换了」
+    /// 时才作废:删在播曲这类编辑并不改变下一首,连带作废反而打断 gapless——而且已 append
+    /// 进 sink 的预排撤不掉,会先响半秒过期曲再被切走。
+    ///
+    /// # Return:
+    ///   预排是否被作废(为真时调用方需同步取消引擎侧待建预排)。
+    pub(crate) fn revalidate_prefetch_after_edit(&mut self) -> bool {
+        self.prefetch_vetoed.clear();
+        let armed = self
+            .queued
+            .as_ref()
+            .map(|q| q.song.id.clone())
+            .or_else(|| self.prefetch_fired_for.clone());
+        let Some(armed) = armed else {
+            return false;
+        };
+        if crate::queue::next_in_queue(self).is_some_and(|next| next.id == armed) {
+            return false;
+        }
+        self.queued = None;
+        self.prefetch_fired_for = None;
+        true
     }
 
     /// 版本门控同步:轻段恒出,重段仅在 `known` 落后于本端版本时 clone 附带。
@@ -141,7 +186,7 @@ impl State {
                 queue: self.queue_version,
                 current: self.current_version,
             },
-            queue_sel: self.queue_sel,
+            cursor: self.cursor,
             play_mode: self.play_mode,
             play_origin: self.play_origin,
             queue,
@@ -173,7 +218,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use color_eyre::eyre::eyre;
-    use mineral_protocol::{PlayMode, PlayerVersions};
+    use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions};
     use mineral_test::song;
     use pretty_assertions::assert_eq;
 
@@ -183,7 +228,7 @@ mod tests {
     fn populated() -> State {
         let mut st = State::empty();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 1;
+        st.cursor = PlayCursor::InQueue(1);
         st.current_song = Some(song("b"));
         st.play_mode = PlayMode::RepeatAll;
         st
@@ -196,7 +241,7 @@ mod tests {
         let sync = st.sync(PlayerVersions::default());
         assert_eq!(sync.versions.queue, 1);
         assert_eq!(sync.versions.current, 1);
-        assert_eq!(sync.queue_sel, 1);
+        assert_eq!(sync.cursor, PlayCursor::InQueue(1));
         assert_eq!(sync.play_mode, PlayMode::RepeatAll);
         let q = sync.queue.ok_or_else(|| eyre!("queue 重段应存在"))?;
         assert_eq!(q.queue.len(), 2);
@@ -216,7 +261,7 @@ mod tests {
         });
         assert!(sync.queue.is_none());
         assert!(sync.current.is_none());
-        assert_eq!(sync.queue_sel, 1);
+        assert_eq!(sync.cursor, PlayCursor::InQueue(1));
         assert_eq!(sync.play_mode, PlayMode::RepeatAll);
     }
 

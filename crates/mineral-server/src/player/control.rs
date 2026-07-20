@@ -2,7 +2,7 @@
 
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
-use mineral_protocol::PlayMode;
+use mineral_protocol::{PlayCursor, PlayMode, QueueEditOutcome, QueueOp};
 use rand::seq::SliceRandom;
 
 use super::PlayerCore;
@@ -44,14 +44,14 @@ impl PlayerCore {
                 }
                 st.original_queue = Some(new_queue);
                 st.queue = shuffled;
-                st.queue_sel = 0;
+                st.cursor = PlayCursor::InQueue(0);
             } else {
                 let sel = new_queue
                     .iter()
                     .position(|s| s.id == *target_id)
                     .unwrap_or(0);
                 st.queue = new_queue;
-                st.queue_sel = sel;
+                st.cursor = PlayCursor::InQueue(sel);
                 st.original_queue = None;
             }
             // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
@@ -95,6 +95,52 @@ impl PlayerCore {
         }
         self.inner.audio.clear_next();
         self.spawn_save_session();
+    }
+
+    /// 队列结构编辑:删除 / 重排 / 批量清理 / 撤销。
+    ///
+    /// [`QueueOp::ApplyTransform`] 不走这里——它要跨线程跑脚本,由调用方拿到新序后走
+    /// [`Self::queue_reorder`]。
+    ///
+    /// # Params:
+    ///   - `op`: 待执行的操作
+    ///
+    /// # Return:
+    ///   本次编辑的结果。
+    pub fn queue_edit(&self, op: &QueueOp) -> QueueEditOutcome {
+        self.finish_edit(|st| crate::queue::apply(st, op))
+    }
+
+    /// 按给定 id 序列整表重排队列(脚本变换 / `mineral.queue.set` 的落地口)。
+    ///
+    /// # Params:
+    ///   - `ids`: 新的队列顺序;每个 id 必须在原队列里出现过,次数不限
+    ///
+    /// # Return:
+    ///   本次编辑的结果;含未知 id 时整体拒绝。
+    pub fn queue_reorder(&self, ids: &[mineral_model::SongId]) -> QueueEditOutcome {
+        self.finish_edit(|st| crate::queue::apply_order(st, ids))
+    }
+
+    /// 编辑落地后的共同收尾:精确作废预排、取消引擎待建预排、存会话。
+    fn finish_edit(
+        &self,
+        edit: impl FnOnce(&mut crate::state::State) -> QueueEditOutcome,
+    ) -> QueueEditOutcome {
+        let (outcome, prefetch_dropped) = {
+            let mut st = self.inner.state.lock();
+            let outcome = edit(&mut st);
+            let dropped =
+                matches!(outcome, QueueEditOutcome::Applied) && st.revalidate_prefetch_after_edit();
+            (outcome, dropped)
+        };
+        if prefetch_dropped {
+            self.inner.audio.clear_next();
+        }
+        if matches!(outcome, QueueEditOutcome::Applied) {
+            self.spawn_save_session();
+        }
+        outcome
     }
 
     /// 全部已注册 channel 的能力声明(按注册顺序)。

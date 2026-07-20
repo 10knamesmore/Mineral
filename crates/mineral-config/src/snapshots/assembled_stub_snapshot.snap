@@ -136,6 +136,7 @@ expression: "super::meta_config_lua()"
 ---@field cache? mineral.CacheConfig 缓存容量段(音频磁盘缓存)。
 ---@field download? mineral.DownloadConfig 下载段(音质 / 目录)。
 ---@field sources? mineral.SourcesConfig 音乐源段(网易云等)。
+---@field queue? mineral.QueueConfig 队列段(脚本注册的具名队列变换)。
 ---@field daemon? mineral.DaemonConfig daemon 段(gapless 预取 + 各间隔节拍)。
 ---@field script? mineral.ScriptConfig 脚本运行时段(watchdog 双阈值)。
 ---@field stats? mineral.StatsConfig 行为埋点采集段(采集档位 / 事件微调 / 保留 / 查询期口径)。
@@ -237,6 +238,9 @@ expression: "super::meta_config_lua()"
 ---@field move_first? mineral.KeyBinding 列表光标跳首行。
 ---@field move_last? mineral.KeyBinding 列表光标跳末行。
 ---@field love? mineral.KeyBinding 切换选中曲的 ♥。
+---@field reorder_down? mineral.KeyBinding 把选中条目在队列里下移一格。
+---@field reorder_up? mineral.KeyBinding 把选中条目在队列里上移一格。
+---@field jump_to_current? mineral.KeyBinding 光标跳回当前在播条目。
 ---@field download? mineral.KeyBinding 下载当前视图选中项。
 ---@field dismiss_notice? mineral.KeyBinding 关最早一张驻留通知卡片(连按逐条关)。
 ---@field open_action_menu? mineral.KeyBinding 上下文操作菜单(内容随光标实体 × 视图)。
@@ -606,6 +610,17 @@ expression: "super::meta_config_lua()"
 ---@field bilibili? mineral.BilibiliSection 哔哩哔哩源段。
 ---@field mineral? mineral.MineralSection Mineral 聚合源段(全源收藏投影)。
 ---@field curate_playlists? mineral.CuratePlaylistsFn 跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错
+
+---queue 配置。
+---@class mineral.QueueConfig
+---@field transforms? mineral.QueueTransform[] 具名队列变换,出现在队列操作菜单的脚本段(数组整体替换)。
+
+---一个具名队列变换(的展示侧;变换函数本体留在 VM,见模块文档)。
+---函数在 daemon 脚本运行时执行(看门狗超时保护,超时/报错只 toast 不改队列)。
+---@class mineral.QueueTransform
+---@field key? string 菜单快捷字母(单字符)。省略 = 仅导航 + 激活可达;用户项之间后者胜。
+---@field label string 菜单显示名。
+---@field transform fun(queue: mineral.Song[], ctx: mineral.QueueCtx): mineral.Song[] 变换函数,收有序队列与位置上下文,返回新的有序队列
 
 ---网易云源段。
 ---@class mineral.NeteaseSection

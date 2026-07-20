@@ -22,6 +22,7 @@ mod key;
 mod message;
 mod oneshot;
 mod player;
+mod queue_edit;
 mod store;
 
 pub use cancel::CancelFilter;
@@ -41,6 +42,8 @@ pub use message::{
 pub use mineral_task::ChannelFetchKindTag;
 pub use oneshot::OneshotClient;
 pub use player::{
-    CurrentSync, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync, Repeat,
+    CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
+    Repeat,
 };
+pub use queue_edit::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
 pub use store::StoreValue;

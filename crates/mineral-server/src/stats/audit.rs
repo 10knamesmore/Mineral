@@ -51,6 +51,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::SetQueue { .. } => Recorded("queue_ops"),
         Request::QueueInsertNext { .. } => Recorded("queue_ops"),
         Request::QueueAppend { .. } => Recorded("queue_ops"),
+        Request::QueueEdit { .. } => Recorded("queue_ops"),
         Request::ChannelCaps => NotAnEvent("读:channel 能力查询"),
         Request::CyclePlayMode => Recorded("mode_changes"),
         // 切上首=skip 记 plays;回曲首(超阈值)分支另记 seeks,主归属取 plays。
@@ -93,6 +94,7 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
         ScriptCmd::StoreSet { .. } => Recorded("store_writes"),
         ScriptCmd::StoreInc { .. } => Recorded("store_writes"),
         ScriptCmd::QueueList { .. } => NotAnEvent("读:队列查询"),
+        ScriptCmd::QueueSet { .. } => Recorded("queue_ops"),
         ScriptCmd::LibraryPlaylists { .. } => {
             NotAnEvent("触发取数 task;fetches 在终态记,见 audit_fetch_kind")
         }

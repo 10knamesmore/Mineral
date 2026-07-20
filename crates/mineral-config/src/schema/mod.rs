@@ -16,6 +16,7 @@ mod keys;
 mod layout;
 mod lyrics;
 mod prefetch;
+mod queue;
 mod script;
 mod search;
 mod sources;
@@ -50,6 +51,7 @@ pub use keys::{KeyBinding, KeysConfig};
 pub use layout::{LayoutConfig, MenuAlign};
 pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
+pub use queue::{QUEUE_TRANSFORM_FNS, QueueConfig, QueueTransform};
 pub use script::ScriptConfig;
 pub use search::{ChannelSearchConfig, DeepSearchConfig, DeepWeights, SearchConfig};
 pub use sources::{

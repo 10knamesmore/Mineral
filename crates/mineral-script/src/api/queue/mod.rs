@@ -1,7 +1,8 @@
-//! `mineral.queue.*`:播放队列的脚本只读出口。
+//! `mineral.queue.*`:播放队列的脚本出口(读队列 + 整表重排)。
 //! 一个文件对应一个 Lua 函数,与脚本侧 API 树一一对应。
 
 pub(crate) mod list;
+pub(crate) mod set;
 
 use mlua::{Lua, Table};
 
@@ -16,5 +17,6 @@ use crate::host::ScriptHost;
 pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
     let queue = lua.create_table()?;
     list::install(lua, &queue, host)?;
+    set::install(lua, &queue, host)?;
     mineral.set("queue", queue)
 }

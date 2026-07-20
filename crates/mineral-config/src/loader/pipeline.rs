@@ -11,6 +11,7 @@ use crate::loader::stub::inject_noop_host;
 use crate::loader::warning::ConfigWarning;
 use crate::schema::{
     COPY_TEMPLATE_FNS, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS, Config,
+    QUEUE_TRANSFORM_FNS,
 };
 
 /// 加载用户配置。用户 `config.lua` 的任何错误降级为纯默认 + 一条 [`ConfigWarning`];
@@ -130,6 +131,28 @@ fn load_on(
 fn extract_lua_fns(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
     extract_copy_templates(lua, merged)?;
     extract_playlist_transforms(lua, merged)?;
+    extract_queue_transforms(lua, merged)?;
+    Ok(())
+}
+
+/// 把 `queue.transforms[i].transform` 从配置表里摘出,按数组序存进 VM named registry
+/// (键 [`QUEUE_TRANSFORM_FNS`]);表上的 `transform` 字段移除,`key`/`label` 留下进常规
+/// 落型。对位方式与 `tui.copy.templates` 相同(见 [`extract_copy_templates`])。
+fn extract_queue_transforms(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    let fns = lua.create_table()?;
+    if let Some(transforms) = table_at!(merged, queue.transforms) {
+        transforms.set_metatable(Some(lua.array_metatable()));
+        for i in 1..=transforms.raw_len() {
+            let Ok(item) = transforms.get::<Table>(i) else {
+                continue;
+            };
+            if let Ok(f) = item.get::<Function>("transform") {
+                fns.raw_set(i, f)?;
+                item.raw_set("transform", Value::Nil)?;
+            }
+        }
+    }
+    lua.set_named_registry_value(QUEUE_TRANSFORM_FNS, fns)?;
     Ok(())
 }
 

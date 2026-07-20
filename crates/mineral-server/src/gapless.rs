@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId};
-use mineral_protocol::PlaybackOrigin;
+use mineral_protocol::{PlayCursor, PlaybackOrigin};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::download::Capturing;
@@ -100,10 +100,11 @@ pub(crate) fn decide_advance(finished_advanced: bool, playing: bool, has_queued:
 pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     let queued = st.queued.take()?;
     let old_id = st.current_song.as_ref().map(|s| s.id.clone());
-    // queue_sel 此刻仍指旧当前曲;预排曲就是当时 next_index 算出的那一首(队列一变即作废预排),
-    // 故按下标推进,**不**按 queued.song 身份 first-match——重复曲会把下标吸附到首个副本。
+    // 游标此刻仍指旧当前曲(或其接续点);预排曲就是当时 next_index 算出的那一首(队列一变
+    // 即作废预排),故按下标推进,**不**按 queued.song 身份 first-match——重复曲会把下标
+    // 吸附到首个副本。轮转到队列内的曲即离开悬空态。
     if let Some(idx) = next_index(st) {
-        st.queue_sel = idx;
+        st.cursor = PlayCursor::InQueue(idx);
     }
     st.current_song = Some(queued.song);
     st.play_url = queued.play_url;
@@ -495,7 +496,7 @@ pub(crate) fn check_advance(player: &PlayerCore) {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::PlaybackOrigin;
+    use mineral_protocol::{PlayCursor, PlaybackOrigin};
     use mineral_test::song;
 
     use super::{Advance, Queued, adopt_queued, decide_advance, prefetch_window_open};
@@ -565,7 +566,7 @@ mod tests {
     fn adopt_rotates_queued_into_current() {
         let mut st = State::empty();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.prefetch_fired_for = Some(song("a").id);
         st.queued = Some(Queued {
@@ -582,7 +583,7 @@ mod tests {
             Some(song("b").id),
             "current 应变成 queued"
         );
-        assert_eq!(st.queue_sel, 1, "queue_sel 应定位到 b");
+        assert_eq!(st.cursor, PlayCursor::InQueue(1), "游标应定位到 b");
         assert_eq!(st.play_origin, Some(PlaybackOrigin::Remote));
         assert!(st.queued.is_none(), "queued 应被取走");
         assert!(st.prefetch_fired_for.is_none(), "预拉触发标记应复位");

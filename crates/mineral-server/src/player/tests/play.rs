@@ -401,7 +401,7 @@ async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
     {
         let mut st = core.inner.state.lock();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.queued = Some(crate::gapless::Queued {
             song: song("b"),

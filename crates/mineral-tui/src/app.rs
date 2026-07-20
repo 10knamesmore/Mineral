@@ -41,6 +41,7 @@ mod menus;
 mod nav;
 mod page;
 mod picker;
+mod queue_edit;
 mod spectrum_feed;
 
 /// 应用顶层状态。
@@ -80,6 +81,9 @@ pub struct App {
 
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
     pub(crate) overlays: OverlayStack,
+
+    /// queue 浮层上次离开时的光标位置,下次打开落回原处;越界(队列已换短)时作废。
+    pub(crate) queue_cursor_memo: Option<usize>,
 
     /// 整屏转场动画:`None` 为正常运行;`Some` 且 `leaving()` 为退出收缩(归零后真正退出),
     /// `Some` 且非 `leaving()` 为启动扩大(推满后转入正常运行)。两者时间上互斥,共用此字段。
@@ -214,6 +218,7 @@ impl App {
             keymap,
             notice_hint,
             overlays,
+            queue_cursor_memo: None,
             transition: None,
             stop_daemon_on_quit: false,
             last_tick: Instant::now(),
@@ -363,6 +368,8 @@ impl App {
                 let dp = self.client.download_progress();
                 self.download_notifier.feed(&mut self.notifications, &dp);
                 self.notifications.tick();
+                // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
+                self.state.now.set(chrono::Local::now());
                 self.last_tick = Instant::now();
                 // 心跳间隔现读配置(daemon.heartbeat_secs),热更下一轮生效。
                 let heartbeat = Duration::from_secs(*self.state.cfg.daemon().heartbeat_secs());
@@ -468,11 +475,16 @@ impl App {
         self.state.playback.mode = sync.play_mode;
         // 在播位置锚点是轻段,每 tick 灌(prev/next 可在 queue 列表不变时单独前进)。
         // 它是 queue 浮层 ▶ 标记的下标依据——区别于纯客户端的 UI 光标(后者只钳防越界)。
-        self.state.player.queue_sel = sync.queue_sel;
+        self.state.player.cursor = sync.cursor;
         if let Some(q) = sync.queue {
             self.state.player.queue = q.queue;
             self.state.player.original_queue = q.original_queue;
             self.overlays.clamp_queue(self.state.player.queue.len());
+        }
+        // 浮层开着时持续记账:关闭是动画式的(close_top 后浮层还在栈上退场几帧),
+        // 挂在关闭那一刻反而要挑时点,不如每 tick 抄一份现值。
+        if let Some(at) = self.overlays.active_queue_cursor() {
+            self.queue_cursor_memo = Some(at);
         }
         if let Some(c) = sync.current {
             // 包络随本段与 current_song 原子到达(归属由 server 组段保证)。
@@ -646,6 +658,8 @@ impl App {
             Action::OpenHelp => self.open_help(),
             // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
             Action::DrillIntoSelection | Action::CycleDetailSection => {}
+            // 仅 queue 浮层内有意义(由其 on_action 消费);其它布局态落此 = no-op。
+            Action::ReorderSelection(_) | Action::JumpToCurrent => {}
         }
     }
 
@@ -712,6 +726,11 @@ impl App {
             OverlayAction::CopyQueueIndex { idx, anchor } => {
                 self.open_queue_copy_menu(idx, anchor);
             }
+            // 队列编辑族(含叠在 queue 之上的操作菜单):整族交给 queue_edit 模块。
+            edit @ (OverlayAction::QueueActionMenu { .. }
+            | OverlayAction::ToggleLoveQueueIndex(_)
+            | OverlayAction::DownloadQueueIndex(_)
+            | OverlayAction::ReorderQueueIndex { .. }) => self.run_queue_overlay_action(&edit),
             // 菜单确认即收:先关菜单(收起动画),再执行选中动作。
             OverlayAction::Menu(action) => {
                 self.overlays.close_top();
@@ -747,9 +766,16 @@ impl App {
         )
     }
 
-    /// 打开浮动播放队列,光标定位到在播歌(无在播落 0)。
+    /// 打开浮动播放队列,光标落在上次离开的位置;首次打开(或队列已换)定位到在播歌。
+    ///
+    /// 记住位置是因为队列翻找往往是连续动作:翻到一半关掉再开,每次被拽回在播行等于
+    /// 从头再来。显式回到在播行有 `JumpToCurrent` 专管。
     fn open_queue(&mut self) {
-        let sel = self.state.queue_current_index().unwrap_or(0);
+        let fallback = self.state.queue_current_index().unwrap_or(0);
+        let sel = self
+            .queue_cursor_memo
+            .filter(|at| *at < self.state.player.queue.len())
+            .unwrap_or(fallback);
         self.overlays.push(OverlayKind::queue(sel));
     }
 
@@ -881,16 +907,61 @@ mod tests {
         Ok(())
     }
 
-    /// queue 浮层行级:`o` 被吞(无操作语义,不开新浮层也不关 queue);`y` 在 queue 之上
-    /// 叠复制菜单(queue 仍在栈底)。复用全站 copy_items,queue 是 resolver 之外的唯一接缝。
+    /// 集成:queue 光标记忆——翻到别处关掉再开,落回原处而非被拽回在播行。
     #[test]
-    fn queue_o_swallowed_y_stacks_copy_menu() -> color_eyre::Result<()> {
+    fn queue_reopens_at_remembered_cursor() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(6, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.queue_sel(), Some(0), "首次开落在在播行");
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.overlays.queue_sel(), Some(2));
+        // 记账挂在每 tick 的 sync 上,先走一拍再关。
+        app.apply_player_sync(PlayerSync::default());
+        press(&mut app, KeyCode::Tab);
+        app.apply_player_sync(PlayerSync::default());
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.overlays.queue_sel(), Some(2), "重开落回上次位置");
+        Ok(())
+    }
+
+    /// 集成:queue 上按移动键 → 送出带身份定位的 Move,光标跟着歌走。
+    #[test]
+    fn queue_reorder_key_sends_move_with_anchor() -> color_eyre::Result<()> {
+        use crossterm::event::{KeyEvent, KeyModifiers};
+        let (mut app, edits) =
+            crate::test_support::app_with_queue_edits(6, /*current_idx*/ 0)?;
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('j'));
+        app.handle_key(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+
+        let sent = edits
+            .lock()
+            .map_err(|_poisoned| color_eyre::eyre::eyre!("编辑记录被毒化"))?;
+        let Some(mineral_protocol::QueueOp::Move { at, to }) = sent.first() else {
+            color_eyre::eyre::bail!("应送出一次 Move");
+        };
+        assert_eq!(at.index, 1, "定位是移动前的下标");
+        assert_eq!(to, &mineral_protocol::QueuePos::Down);
+        assert_eq!(app.overlays.queue_sel(), Some(2), "光标跟着歌下移");
+        Ok(())
+    }
+
+    /// queue 浮层行级:操作菜单与复制菜单都叠在 queue 之上(queue 仍在栈底),
+    /// 两者都是 resolver 之外的独立接缝——浮层持私有光标,锚点只能由它自算后带回。
+    #[test]
+    fn queue_action_and_copy_menus_stack_above() -> color_eyre::Result<()> {
         let mut app = app_with_queue(4, /*current_idx*/ 1)?;
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.overlays.len(), 1, "Tab 开 queue 浮层");
 
         press(&mut app, KeyCode::Char('o'));
-        assert_eq!(app.overlays.len(), 1, "o 被吞:无新浮层、queue 仍在");
+        assert_eq!(
+            app.overlays.len(),
+            2,
+            "o 在 queue 之上叠操作菜单(queue 仍在栈底)"
+        );
 
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(
@@ -918,14 +989,14 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.overlays.queue_sel(), Some(4));
 
-        // 模拟一次 server tick:sync 带不同的 queue_sel(在播锚点 = 2)+ queue 重段。
+        // 模拟一次 server tick:sync 带不同的在播锚点(= 2)+ queue 重段。
         // UI 光标不应被这个值覆盖(只 clamp 防越界)。
         let sync = PlayerSync {
             queue: Some(QueueSync {
                 queue: endserenading(6),
                 original_queue: None,
             }),
-            queue_sel: 2,
+            cursor: mineral_protocol::PlayCursor::InQueue(2),
             ..Default::default()
         };
         app.apply_player_sync(sync);

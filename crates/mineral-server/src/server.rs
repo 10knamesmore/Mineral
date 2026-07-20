@@ -260,15 +260,15 @@ async fn heartbeat(player: PlayerCore, connections: Arc<serve::ConnRegistry>, in
     loop {
         tick.tick().await;
         // in-process 直读 State 摘日志字段,不走含整队列 clone 的全量快照。
-        let (song_id, play_mode, queue_len, queue_sel, format, bitrate_kbps, lyrics_loaded) =
-            player.with_state(|st| {
+        let (song_id, play_mode, queue_len, cursor, format, bitrate_kbps, lyrics_loaded) = player
+            .with_state(|st| {
                 (
                     st.current_song
                         .as_ref()
                         .map_or_else(|| "-".to_owned(), |s| s.id.as_str().to_owned()),
                     st.play_mode,
                     st.queue.len(),
-                    st.queue_sel,
+                    st.cursor,
                     st.play_url
                         .as_ref()
                         .and_then(|p| p.format.as_ref())
@@ -293,7 +293,7 @@ async fn heartbeat(player: PlayerCore, connections: Arc<serve::ConnRegistry>, in
             song_id,
             play_mode = ?play_mode,
             queue_len,
-            queue_sel,
+            cursor = ?cursor,
             format,
             bitrate_kbps,
             lyrics_loaded,

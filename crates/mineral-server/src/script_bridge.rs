@@ -528,6 +528,29 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             let songs = player.with_state(|st| st.queue.clone());
             resolve_ok(player, query, ResolveValue::Songs(songs));
         }
+        ScriptCmd::QueueSet { ids } => {
+            let before = player.with_state(|st| st.queue.len());
+            if matches!(
+                player.queue_reorder(&ids),
+                mineral_protocol::QueueEditOutcome::Applied
+            ) {
+                let after = player.with_state(|st| st.queue.len());
+                player.record_behavior(
+                    mineral_stats::Actor::Script,
+                    mineral_stats::BehaviorEvent::QueueOp {
+                        op: mineral_stats::QueueOp::Transform,
+                        song: None,
+                        count: i64::try_from(after).unwrap_or(i64::MAX),
+                    },
+                );
+                mineral_log::debug!(
+                    target: "script",
+                    before,
+                    after,
+                    "queue reordered by script"
+                );
+            }
+        }
         ScriptCmd::StoreGet { song, key, query } => {
             let player = player.clone();
             tokio::spawn(async move {

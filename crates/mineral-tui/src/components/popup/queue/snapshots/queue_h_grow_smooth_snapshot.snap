@@ -1,13 +1,13 @@
 ---
-source: crates/mineral-tui/src/components/popup/queue.rs
+source: crates/mineral-tui/src/components/popup/queue/overlay.rs
 description: "队列浮层:贴边滑入(scale=505)前沿 1/8 八分块平滑"
 expression: t.backend()
 ---
 "                                                                                "
 "─────────────╮▏                                                                 "
 "       len   │▏                                                                 "
-"terTyp 3:45  │▏                                                                 "
-"e      4:31  │▏                                                                 "
+"etterT 3:45  │▏                                                                 "
+"ade    4:31  │▏                                                                 "
 "       4:46  │▏                                                                 "
 "             │▏                                                                 "
 "             │▏                                                                 "
@@ -26,4 +26,4 @@ expression: t.backend()
 "             │▏                                                                 "
 "             │▏                                                                 "
 "             │▏                                                                 "
-"/q/esc close ╯▏                                                                 "
+"─────────────╯▏                                                                 "

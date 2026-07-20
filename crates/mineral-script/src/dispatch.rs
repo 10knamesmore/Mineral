@@ -89,6 +89,17 @@ pub(crate) fn run_loop(
             Ok(ScriptMsg::RenderCopyTemplate { index, ctx, reply }) => {
                 let _ = reply.send(render_copy_template(lua, watchdog, index, &ctx));
             }
+            Ok(ScriptMsg::QueueTransform {
+                index,
+                queue,
+                current,
+                selected,
+                reply,
+            }) => {
+                let _ = reply.send(run_queue_transform(
+                    lua, watchdog, index, &queue, current, selected,
+                ));
+            }
             Ok(ScriptMsg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -710,6 +721,81 @@ fn render_copy_template(
             .unwrap_or("脚本错误(详见日志)")
             .to_owned()
     })
+}
+
+/// 跑一个具名队列变换,回执新的队列顺序(只取 id,实体由 daemon 从原队列回捞)。
+///
+/// 只读 id 是刻意的:脚本手里的 song 表是有损投影(艺人 / 专辑只有名字,没有 id),让它
+/// 直接构造 `Song` 会造出半残实体。凭空引入新歌因而不被支持——变换的能力边界是删减与排序。
+///
+/// # Params:
+///   - `lua`: 脚本 VM
+///   - `watchdog`: 看门狗阈值
+///   - `index`: 变换下标(0-based)
+///   - `queue`: 当前队列(有序)
+///   - `current`: 在播条目下标(0-based)
+///   - `selected`: 光标下标(0-based),无则 `None`
+///
+/// # Return:
+///   新顺序的 id 序列;函数缺失 / 报错 / 返回值不是歌表数组时返回错误串(调用方 fail-open)。
+fn run_queue_transform(
+    lua: &Lua,
+    watchdog: &WatchdogConfig,
+    index: usize,
+    queue: &[mineral_model::Song],
+    current: usize,
+    selected: Option<usize>,
+) -> Result<Vec<mineral_model::SongId>, String> {
+    let fns: mlua::Table = lua
+        .named_registry_value(mineral_config::QUEUE_TRANSFORM_FNS)
+        .map_err(|e| format!("变换函数表缺失:{e}"))?;
+    // protocol 下标 0-based,Lua 数组 1-based。
+    let func: mlua::Function = fns
+        .get(index.saturating_add(1))
+        .map_err(|_not_a_function| format!("变换 #{index} 没有可调用的 transform 函数"))?;
+    let songs = lua
+        .create_sequence_from(
+            queue
+                .iter()
+                .map(|s| song_table(lua, s))
+                .collect::<mlua::Result<Vec<_>>>()
+                .map_err(|e| format!("队列投影失败:{e}"))?,
+        )
+        .map_err(|e| format!("队列投影失败:{e}"))?;
+    let ctx = lua
+        .create_table()
+        .map_err(|e| format!("上下文投影失败:{e}"))?;
+    // Lua 侧一律 1-based,与 songs 数组下标同口径。
+    ctx.set("current", current.saturating_add(1))
+        .and_then(|()| ctx.set("selected", selected.map(|at| at.saturating_add(1))))
+        .map_err(|e| format!("上下文投影失败:{e}"))?;
+    let returned: mlua::Table = call_guarded(lua, watchdog, &func, (songs, ctx)).map_err(|e| {
+        mineral_log::error!(
+            target: "script",
+            index,
+            error = mineral_log::chain(&e),
+            "queue transform failed"
+        );
+        mineral_log::chain(&e)
+            .lines()
+            .next()
+            .unwrap_or("脚本错误(详见日志)")
+            .to_owned()
+    })?;
+    let mut ids = Vec::with_capacity(returned.raw_len());
+    for at in 1..=returned.raw_len() {
+        let entry: mlua::Table = returned
+            .get(at)
+            .map_err(|_not_a_table| format!("返回的第 {at} 项不是歌表"))?;
+        let qualified: String = entry
+            .get("id")
+            .map_err(|_missing| format!("返回的第 {at} 项缺 id 字段"))?;
+        ids.push(
+            crate::api::value::parse_song_id(&qualified)
+                .map_err(|e| format!("返回的第 {at} 项 id 无法解析:{e}"))?,
+        );
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]

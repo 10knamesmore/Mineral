@@ -190,6 +190,62 @@ pub enum PlaybackOrigin {
     Remote,
 }
 
+/// 当前歌在队列中的位置——server 的 prev/next 锚点,不是 UI 光标。
+///
+/// 推进以**下标**为真相而非歌曲身份:队列含重复曲时,按身份 first-match 定位会把位置
+/// 吸附到首个副本,两首交替的重复曲会互相指回对方,造成无限循环跳不出去。
+///
+/// [`Self::Detached`] 表达「当前曲已被摘出队列但仍在出声」——把在播曲从队列删掉时,
+/// 声音不打断(音频引擎不感知队列),但它在队列里已无下标可指。裸 `usize` 表达不了这个
+/// 状态:留在原下标会让推进逻辑再 +1、白白跳过一首。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayCursor {
+    /// 当前曲在队列中,值为其下标。
+    InQueue(usize),
+
+    /// 当前曲已被摘出队列但仍在出声。
+    Detached {
+        /// 当前曲播完后应接的下标;等于队列长度表示播完即停。
+        resume_at: usize,
+    },
+}
+
+impl Default for PlayCursor {
+    fn default() -> Self {
+        Self::InQueue(0)
+    }
+}
+
+impl PlayCursor {
+    /// 推进 / 后退计算的基准下标。
+    ///
+    /// # Return:
+    ///   队列内时为当前曲下标;悬空时为接续点(当前曲已不占下标)。
+    #[inline]
+    pub fn anchor(self) -> usize {
+        match self {
+            Self::InQueue(index) | Self::Detached { resume_at: index } => index,
+        }
+    }
+
+    /// 当前曲是否仍在队列中。
+    #[inline]
+    pub fn is_attached(self) -> bool {
+        matches!(self, Self::InQueue(_))
+    }
+
+    /// 当前曲在队列中的下标;悬空时为 `None`(它已不在队列里)。
+    ///
+    /// 展示层据此决定给哪一行画在播标记——悬空时不该有任何一行被标记。
+    #[inline]
+    pub fn queue_index(self) -> Option<usize> {
+        match self {
+            Self::InQueue(index) => Some(index),
+            Self::Detached { .. } => None,
+        }
+    }
+}
+
 /// Client 已持有的播放状态版本号,随 [`crate::Request::PlayerSync`] 上报。
 ///
 /// `0` = 一无所有(启动初次同步);server 端版本从 1 起步、per-process 单调递增,
@@ -213,8 +269,8 @@ pub struct PlayerSync {
     /// server 当前版本;client 收下后于下次请求回报。
     pub versions: PlayerVersions,
 
-    /// queue 中「当前歌」的位置(server 的 prev/next 锚点,非 UI 光标)。轻段。
-    pub queue_sel: usize,
+    /// queue 中「当前歌」的位置。轻段。
+    pub cursor: PlayCursor,
 
     /// 当前播放模式。轻段。
     pub play_mode: PlayMode,

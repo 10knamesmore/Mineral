@@ -69,11 +69,11 @@ fn advance_next_walks_past_duplicates_without_looping() {
     );
     let mut visited = Vec::new();
     while let Some(_song) = advance_next(&mut st) {
-        visited.push(st.queue_sel);
+        visited.push(sel_of(&st));
     }
     // 2→3→4→5→6 后到队尾停;每步严格 +1,绝不回退到 1 或 2。
     assert_eq!(visited, vec![3, 4, 5, 6]);
-    assert_eq!(st.queue_sel, 6, "推进到队尾后 queue_sel 停在末位");
+    assert_eq!(sel_of(&st), 6, "推进到队尾后游标停在末位");
 }
 
 /// 回归:advance_prev 同样按下标后退,重复曲不把 queue_sel 吸附到首个副本。
@@ -84,12 +84,12 @@ fn advance_prev_steps_back_by_index_with_duplicates() {
         advance_prev(&mut st).as_ref().map(|s| s.id.as_str()),
         Some("a")
     );
-    assert_eq!(st.queue_sel, 2, "应退到下标 2(第二个 a),而非首个 a@0");
+    assert_eq!(sel_of(&st), 2, "应退到下标 2(第二个 a),而非首个 a@0");
     assert_eq!(
         advance_prev(&mut st).as_ref().map(|s| s.id.as_str()),
         Some("b")
     );
-    assert_eq!(st.queue_sel, 1);
+    assert_eq!(sel_of(&st), 1);
 }
 
 /// 空队列时 next / prev 都返回 None。
@@ -99,7 +99,7 @@ fn empty_queue_has_no_neighbors() {
     assert!(prev_index(&State::empty()).is_none());
 }
 
-/// queue_sel 越界被 clamp 到末位:Sequential next=None、prev=倒数第二首。
+/// 游标越界被 clamp 到末位:Sequential next=None、prev=倒数第二首。
 #[test]
 fn out_of_bounds_sel_is_clamped() {
     let st = state_with(&["a", "b"], 5, PlayMode::Sequential);
@@ -107,13 +107,13 @@ fn out_of_bounds_sel_is_clamped() {
     assert_eq!(prev_index(&st), Some(0)); // a
 }
 
-/// enter_shuffle:内容集合不变 + 当前歌置顶 + queue_sel=0 + original 存原序。
+/// enter_shuffle:内容集合不变 + 当前歌置顶 + 游标落 0 + original 存原序。
 #[test]
 fn enter_shuffle_keeps_all_and_pins_current() {
     let mut st = state_with(&["a", "b", "c", "d"], 2, PlayMode::Sequential); // current=c
     enter_shuffle(&mut st);
     assert_eq!(st.queue.first().map(|s| s.id.as_str()), Some("c"));
-    assert_eq!(st.queue_sel, 0);
+    assert_eq!(st.cursor, PlayCursor::InQueue(0));
     assert_eq!(ids_sorted(&st.queue), vec!["a", "b", "c", "d"]);
     assert_eq!(
         st.original_queue.as_deref().map(ids),
@@ -130,17 +130,17 @@ fn enter_shuffle_empty_is_noop() {
     assert!(st.original_queue.is_none());
 }
 
-/// exit_shuffle:从 original 还原原序,queue_sel 重定位到当前歌,清 original。
+/// exit_shuffle:从 original 还原原序,游标重定位到当前歌,清 original。
 #[test]
 fn exit_shuffle_restores_order_and_relocates_sel() {
     let mut st = state_with(&["a", "b", "c", "d"], 0, PlayMode::Shuffle);
     st.queue = vec![song("c"), song("a"), song("d"), song("b")];
-    st.queue_sel = 0;
+    st.cursor = PlayCursor::InQueue(0);
     st.current_song = Some(song("c"));
     st.original_queue = Some(vec![song("a"), song("b"), song("c"), song("d")]);
     exit_shuffle(&mut st);
     assert_eq!(ids(&st.queue), vec!["a", "b", "c", "d"]);
-    assert_eq!(st.queue_sel, 2); // c 在原序的下标
+    assert_eq!(st.cursor, PlayCursor::InQueue(2)); // c 在原序的下标
     assert!(st.original_queue.is_none());
 }
 
@@ -151,7 +151,7 @@ fn exit_shuffle_without_original_is_noop() {
     st.original_queue = None;
     exit_shuffle(&mut st);
     assert_eq!(ids(&st.queue), vec!["a", "b"]);
-    assert_eq!(st.queue_sel, 1);
+    assert_eq!(st.cursor, PlayCursor::InQueue(1));
 }
 
 /// apply_play_mode:目标与当前相同时 no-op。
@@ -251,14 +251,14 @@ async fn play_song_bumps_current_version() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 回归:play_song 落地时,若 `queue_sel` 已精确指向本曲(顺序推进入口预置好),
+/// 回归:play_song 落地时,若游标已精确指向本曲(顺序推进入口预置好),
 /// 不得再按身份 first-match 回溯——否则重复曲会把下标拽回首个副本。
 #[tokio::test]
 async fn play_song_keeps_preset_queue_sel_on_duplicate() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b"), song("a"), song("b")];
-        st.queue_sel = 2; // 第二个 a
+        st.cursor = PlayCursor::InQueue(2); // 第二个 a
         st.current_song = Some(song("a"));
     });
     core.play_song(
@@ -267,18 +267,22 @@ async fn play_song_keeps_preset_queue_sel_on_duplicate() -> color_eyre::Result<(
         mineral_stats::Actor::User,
     );
     core.with_state(|st| {
-        assert_eq!(st.queue_sel, 2, "已预置的精确下标须保留,不能吸附到 a@0");
+        assert_eq!(
+            st.cursor,
+            PlayCursor::InQueue(2),
+            "已预置的精确下标须保留,不能吸附到 a@0"
+        );
     });
     Ok(())
 }
 
-/// play_song 的身份定位仍在:queue_sel 未指向目标曲时,按 first-match 重新定位。
+/// play_song 的身份定位仍在:游标未指向目标曲时,按 first-match 重新定位。
 #[tokio::test]
 async fn play_song_locates_when_not_preset() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     core.with_state(|st| {
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
     });
     core.play_song(
@@ -286,7 +290,13 @@ async fn play_song_locates_when_not_preset() -> color_eyre::Result<()> {
         mineral_stats::PlayOrigin::Explicit,
         mineral_stats::Actor::User,
     );
-    core.with_state(|st| assert_eq!(st.queue_sel, 1, "点播未在位的曲应重新定位"));
+    core.with_state(|st| {
+        assert_eq!(
+            st.cursor,
+            PlayCursor::InQueue(1),
+            "点播未在位的曲应重新定位"
+        );
+    });
     Ok(())
 }
 
@@ -360,7 +370,7 @@ async fn next_song_records_skip_for_old_song() -> color_eyre::Result<()> {
     {
         let mut st = core.inner.state.lock();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 0;
+        st.cursor = PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
         st.play_mode = PlayMode::Sequential;
     }
@@ -386,7 +396,7 @@ async fn next_song_at_end_records_nothing() -> color_eyre::Result<()> {
     {
         let mut st = core.inner.state.lock();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 1;
+        st.cursor = PlayCursor::InQueue(1);
         st.current_song = Some(song("b"));
         st.play_mode = PlayMode::Sequential;
     }
@@ -405,7 +415,7 @@ async fn prev_below_threshold_records_skip() -> color_eyre::Result<()> {
     {
         let mut st = core.inner.state.lock();
         st.queue = vec![song("a"), song("b")];
-        st.queue_sel = 1;
+        st.cursor = PlayCursor::InQueue(1);
         st.current_song = Some(song("b"));
         st.play_mode = PlayMode::Sequential;
     }

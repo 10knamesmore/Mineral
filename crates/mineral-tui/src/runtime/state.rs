@@ -122,6 +122,30 @@ impl LyricExtra {
     }
 }
 
+/// 一层浮层在本帧的揭开进度,以及压在它上面那层的进度(千分比,1000 = 完全展开)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverlayReveal {
+    /// 本层自己的入场进度。
+    pub own: u16,
+
+    /// 直接压在本层之上那层的入场进度;上面没有东西时为 0。
+    pub above: u16,
+}
+
+impl OverlayReveal {
+    /// 千分比进度的满值。
+    pub const FULL: u16 = 1000;
+
+    /// 焦点让渡给上层的程度——上层揭开到几成,本层的选中高亮就该淡出几成。
+    ///
+    /// # Return:
+    ///   千分比;上面没有浮层时为 0(高亮全亮)。
+    #[inline]
+    pub fn yielded(self) -> u16 {
+        self.above.min(Self::FULL)
+    }
+}
+
 /// 应用顶层状态。
 pub struct AppState {
     /// Browse 布局层的 view 状态:视图切换 + 全屏子模式 + 列表导航 + 歌词 + `/` 过滤,
@@ -174,6 +198,16 @@ pub struct AppState {
     /// 按键路径据此重算布局求锚点(如弹菜单贴选中行);首帧前为零矩形,
     /// 消费方需容忍空值(placement 的 clamp 兜底)。
     pub frame_area: std::cell::Cell<Rect>,
+
+    /// 本帧的本地钟点(主循环每 tick 写 `Local::now()`;测试注入固定值)。
+    /// 队列剩余时长的「预计播完钟点」据此算——渲染只持 `&AppState`,故走 `Cell`,
+    /// 也让依赖 wall-clock 的快照可固定时间不飘。
+    pub now: std::cell::Cell<chrono::DateTime<chrono::Local>>,
+
+    /// 正在渲染的这一层浮层的入场进度,以及压在它上面那层的进度(千分比,渲染端每帧
+    /// 回写,`Cell` 因渲染只持 `&AppState`)。高亮交接据此插值:被压住的一层随上层
+    /// 入场把选中高亮淡出,上层则同步淡入,两处共用一个进度故不会错拍。
+    pub overlay_reveal: std::cell::Cell<OverlayReveal>,
 
     /// 各源能力声明镜像(启动时从 server 拉一次)。UI 据此决定渲染哪些入口
     /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
@@ -228,6 +262,8 @@ impl AppState {
             ),
             cfg,
             frame_area: std::cell::Cell::new(Rect::default()),
+            now: std::cell::Cell::new(chrono::Local::now()),
+            overlay_reveal: std::cell::Cell::new(OverlayReveal::default()),
             caps: FxHashMap::default(),
         }
     }
@@ -623,13 +659,16 @@ impl AppState {
     /// 当前在播歌在 queue 中的下标(打开浮层定位光标 / prefetch 邻居 / 封面预热都用它)。
     /// 无在播曲返回 `None`。
     ///
-    /// 优先信任 server 的在播锚点 `queue_sel`——队列含重复曲时,这是唯一能精确指出
-    /// 在播是哪一行的依据(按歌曲身份 first-match 会错指到首个副本)。仅当锚点确实指向
-    /// 在播歌时采纳;否则(在播歌不在队列 / 锚点陈旧)退回身份 first-match,保住
-    /// 「在播曲不在队列」时返回 `None` 的既有语义。
+    /// 优先信任 server 的在播锚点——队列含重复曲时,这是唯一能精确指出在播是哪一行的
+    /// 依据(按歌曲身份 first-match 会错指到首个副本)。仅当锚点确实指向在播歌时采纳;
+    /// 否则(在播歌不在队列 / 锚点陈旧)退回身份 first-match,保住「在播曲不在队列」时
+    /// 返回 `None` 的既有语义。
+    ///
+    /// 锚点悬空(在播曲已被摘出队列但仍在响)时直接返回 `None` 且**不**回落身份匹配:
+    /// 队列里若还留着同一首歌的另一份,回落会把那一行错点亮成「正在播」。
     pub fn queue_current_index(&self) -> Option<usize> {
         let id = &self.playback.track.as_ref()?.id;
-        let sel = self.player.queue_sel;
+        let sel = self.player.cursor.queue_index()?;
         if self.player.queue.get(sel).is_some_and(|s| &s.id == id) {
             return Some(sel);
         }
@@ -710,7 +749,7 @@ mod tests {
         Ok(())
     }
 
-    /// 重复曲:`queue_current_index` 采纳 server 锚点 `queue_sel`,精确指向在播的那个
+    /// 重复曲:`queue_current_index` 采纳 server 锚点,精确指向在播的那个
     /// 副本,而非按身份回退到首个副本。
     #[test]
     fn queue_current_index_prefers_anchor_over_identity() -> color_eyre::Result<()> {
@@ -718,12 +757,12 @@ mod tests {
         let mut s = AppState::test_default()?;
         s.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
         s.playback.track = Some(song("a"));
-        s.player.queue_sel = 2; // 第二个 a 正在播
+        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
         assert_eq!(s.queue_current_index(), Some(2), "应采纳锚点,而非首个 a@0");
 
         // 锚点不指向在播歌(在播曲不在队列)→ 退回身份匹配,找不到返回 None。
         s.playback.track = Some(song("z"));
-        s.player.queue_sel = 2;
+        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2);
         assert_eq!(s.queue_current_index(), None, "在播曲不在队列时仍返回 None");
         Ok(())
     }

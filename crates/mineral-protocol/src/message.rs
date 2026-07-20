@@ -8,7 +8,7 @@ use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
-use crate::{CancelFilter, PlayerSync, PlayerVersions};
+use crate::{CancelFilter, PlayerSync, PlayerVersions, QueueEditOutcome, QueueOp};
 
 /// 队列语境的 wire 形态:client 告知一个队列「来自哪」,server 映射进埋点 `QueueContext`
 /// 后随该队列每个 plays 行继承(单一 origin 有归属漏洞:从歌单点第一首后连播 20 首,
@@ -174,7 +174,7 @@ pub enum Request {
     SetQueue {
         /// 新 queue。
         queue: Vec<Song>,
-        /// queue 中作为「当前」的歌 id;server 据此设 queue_sel。
+        /// queue 中作为「当前」的歌 id;server 据此设游标。
         target_id: mineral_model::SongId,
         /// 队列语境(埋点 provenance:该队列来自搜索 / 歌单 / 专辑 / 艺人 / 手动)。
         context: QueueContextWire,
@@ -196,6 +196,16 @@ pub enum Request {
         song: Box<Song>,
         /// 该曲的来源语境(埋点 per-song 覆盖:同插播)。
         context: QueueContextWire,
+    },
+
+    /// 队列结构编辑:删除 / 重排 / 批量清理 / 脚本变换 / 撤销。
+    ///
+    /// 单变体承载全部编辑而非按操作平铺,是因为埋点入口层对每个 `Request` 变体都要补一条
+    /// 归属;op 判别落成埋点表的一列后,粒度并不损失。
+    /// 返回 [`Response::QueueEdited`]。
+    QueueEdit {
+        /// 具体操作。
+        op: QueueOp,
     },
 
     /// 拉全部已注册 channel 的能力表(启动握手时一次,断连重连后再拉)。
@@ -369,6 +379,9 @@ pub enum Response {
 
     /// 对应 [`Request::ToggleLove`]:切换后的新 loved 状态。
     LoveToggled(bool),
+
+    /// 对应 [`Request::QueueEdit`]:本次编辑的结果。
+    QueueEdited(QueueEditOutcome),
 
     /// 对应 [`Request::QuerySongStats`]:命中返回统计,无记录返回 None。
     SongStats(Option<SongStatsWire>),

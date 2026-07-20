@@ -411,7 +411,7 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
             .map(|s| s.id.as_str().to_owned())
             .collect::<Vec<String>>();
         assert_eq!(ids, ["a", "c", "b", "d"]);
-        assert_eq!(st.queue_sel, 0);
+        assert_eq!(st.cursor, mineral_protocol::PlayCursor::InQueue(0));
     }
     core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User);
     core.queue_insert_next(song("e"), mineral_stats::QueueContext::Manual);

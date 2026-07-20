@@ -397,6 +397,7 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.queue_append(*song, context);
             Response::Ok
         }
+        Request::QueueEdit { op } => Response::QueueEdited(client.queue_edit_async(op).await),
         Request::ChannelCaps => Response::ChannelCaps(client.channel_caps()),
         Request::CyclePlayMode => {
             client.cycle_play_mode();
@@ -501,6 +502,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::SetQueue { .. } => Some("SetQueue"),
         Request::QueueInsertNext { .. } => Some("QueueInsertNext"),
         Request::QueueAppend { .. } => Some("QueueAppend"),
+        Request::QueueEdit { .. } => Some("QueueEdit"),
         Request::ChannelCaps => Some("ChannelCaps"),
         Request::CyclePlayMode => Some("CyclePlayMode"),
         Request::PrevOrRestart => Some("PrevOrRestart"),

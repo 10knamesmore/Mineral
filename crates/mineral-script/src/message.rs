@@ -257,6 +257,12 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
+    /// 整表重排队列。每个 id 必须在当前队列里出现过(次数不限);混入外来 id 则整体被拒。
+    QueueSet {
+        /// 新的队列顺序。
+        ids: Vec<mineral_model::SongId>,
+    },
+
     /// 读用户歌单列表;结果以 [`ResolveValue::Playlists`] 回投 `query`。
     LibraryPlaylists {
         /// 结果回投句柄。
@@ -536,6 +542,25 @@ pub(crate) enum ScriptMsg {
 
         /// 渲染结果回执(接收端 drop 时静默丢)。
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+
+    /// 跑一个具名队列变换(config `queue.transforms[index]` 的函数),回执新的队列顺序
+    /// (daemon 处理 [`crate::ScriptCmd`] 之外的 `Request::QueueEdit` 变换分支用)。
+    QueueTransform {
+        /// 变换下标(0-based,对位 config 数组序)。
+        index: usize,
+
+        /// 当前队列(有序)。
+        queue: Vec<mineral_model::Song>,
+
+        /// 在播条目的下标(0-based)。
+        current: usize,
+
+        /// 发起时的光标下标(0-based);无光标概念时缺席。
+        selected: Option<usize>,
+
+        /// 新顺序的 id 序列回执(接收端 drop 时静默丢)。
+        reply: tokio::sync::oneshot::Sender<Result<Vec<mineral_model::SongId>, String>>,
     },
 
     /// 优雅停机:主循环退出,线程结束。

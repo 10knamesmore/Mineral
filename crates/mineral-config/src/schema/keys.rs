@@ -101,6 +101,15 @@ pub struct KeysConfig {
     /// 切换选中曲的 ♥。
     love: KeyBinding,
 
+    /// 把选中条目在队列里下移一格。
+    reorder_down: KeyBinding,
+
+    /// 把选中条目在队列里上移一格。
+    reorder_up: KeyBinding,
+
+    /// 光标跳回当前在播条目。
+    jump_to_current: KeyBinding,
+
     /// 下载当前视图选中项。
     download: KeyBinding,
 

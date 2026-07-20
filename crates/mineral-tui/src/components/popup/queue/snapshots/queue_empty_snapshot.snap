@@ -1,11 +1,11 @@
 ---
-source: crates/mineral-tui/src/components/popup/queue.rs
+source: crates/mineral-tui/src/components/popup/queue/overlay.rs
 description: "队列浮层:空队列"
 expression: t.backend()
 ---
 "                                                            "
 "╭ queue ────────────╮                                       "
-"│#   title    len   │                                       "
+"│  #   title  len   │                                       "
 "│                   │                                       "
 "│                   │                                       "
 "│                   │                                       "
@@ -22,4 +22,4 @@ expression: t.backend()
 "│                   │                                       "
 "│                   │                                       "
 "│                   │                                       "
-"╰ 0 / 0 q/esc close ╯                                       "
+"╰ 0 / 0 ────────────╯                                       "

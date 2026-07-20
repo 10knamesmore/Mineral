@@ -6,7 +6,7 @@
 
 use mineral_config::{CopyContext, CopyTemplate};
 use mineral_model::{Album, Artist, ArtistRef, Song};
-use mineral_protocol::CopyTemplateCtx;
+use mineral_protocol::{CopyTemplateCtx, QueueAnchor, QueueOp, QueuePos};
 use mineral_task::SearchPayload;
 use ratatui::layout::Rect;
 
@@ -149,6 +149,86 @@ impl App {
             anchor,
             Placement::Below,
         )));
+    }
+
+    /// queue 浮层操作菜单的落地:为队列第 `idx` 项构造队列编辑菜单,锚点语义同
+    /// [`Self::open_queue_copy_menu`]。
+    ///
+    /// 菜单分三段——本行操作 / 整队操作 / 脚本变换。**不放** "Play now" 与 "Favorite":
+    /// 激活键与收藏键已经能做同样的事,进菜单只让列表变长而不增加能力。
+    pub(crate) fn open_queue_action_menu(&mut self, idx: usize, anchor: Rect) {
+        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+            return;
+        };
+        let at = QueueAnchor::new(idx, song.id.clone());
+        let mut items = vec![
+            MenuItem::keyed(
+                'n',
+                "Play next",
+                MenuAction::QueueEdit(QueueOp::Move {
+                    at: at.clone(),
+                    to: QueuePos::AfterCurrent,
+                }),
+            ),
+            MenuItem::keyed(
+                'e',
+                "Move to end",
+                MenuAction::QueueEdit(QueueOp::Move {
+                    at: at.clone(),
+                    to: QueuePos::Bottom,
+                }),
+            ),
+            MenuItem::keyed('d', "Download", MenuAction::Download(Box::new(song))),
+            MenuItem::keyed('u', "Undo last edit", MenuAction::QueueEdit(QueueOp::Undo)),
+            MenuItem::keyed(
+                'a',
+                "Clear above",
+                MenuAction::QueueEdit(QueueOp::ClearAbove(at.clone())),
+            )
+            .destructive(),
+            MenuItem::keyed(
+                'b',
+                "Clear below",
+                MenuAction::QueueEdit(QueueOp::ClearBelow(at.clone())),
+            )
+            .destructive(),
+        ];
+        items.extend(self.queue_transform_items(idx));
+        items.push(
+            MenuItem::keyed(
+                'x',
+                "Remove from queue",
+                MenuAction::QueueEdit(QueueOp::Remove(at)),
+            )
+            .destructive(),
+        );
+        self.overlays.push(OverlayKind::menu(PopMenu::new(
+            "queue",
+            items,
+            anchor,
+            Placement::Below,
+        )));
+    }
+
+    /// 脚本注册的具名队列变换项(config `queue.transforms` 的声明顺序即下标)。
+    fn queue_transform_items(&self, selected: usize) -> Vec<MenuItem> {
+        self.state
+            .cfg
+            .queue()
+            .transforms()
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                let action = MenuAction::QueueEdit(QueueOp::ApplyTransform {
+                    index,
+                    selected: Some(selected),
+                });
+                spec.key().map_or_else(
+                    || MenuItem::labeled(spec.label().clone(), action.clone()),
+                    |key| MenuItem::keyed(key, spec.label().clone(), action.clone()),
+                )
+            })
+            .collect()
     }
 
     /// 选中实体的 `o` 操作项(按实体类型 + 面种类)。歌曲给队列动作(`p` 替换队列起播取所在

@@ -72,6 +72,9 @@ return {
       move_first = "g",
       move_last = "G",
       love = "f",
+      reorder_down = "<C-j>", -- 队列面板:把选中条目下移一格
+      reorder_up = "<C-k>", -- 队列面板:把选中条目上移一格
+      jump_to_current = "c", -- 队列面板:光标跳回在播条目
       download = "d",
       dismiss_notice = "x",
       open_action_menu = "o",
@@ -407,6 +410,17 @@ return {
       max_connections = 0, -- 到源的最大并发连接,0 = 不限
       color = "#FF8cB0", -- B站品牌粉
     },
+  },
+  -- 队列:脚本注册的具名变换,出现在队列操作菜单的脚本段。
+  -- transform 收有序队列与位置上下文,返回新的有序队列;返回的每首歌必须在原队列出现过
+  -- (按 id 认,次数不限——复制已在队列的歌是允许的),混入外来 id 则整次变换被拒。
+  -- ctx = { current = <1-based 在播下标>, selected = <1-based 光标下标|nil> }
+  -- 例:{ key = "a", label = "Sort by artist", transform = function(queue, ctx)
+  --       table.sort(queue, function(x, y) return (x.artists[1] or "") < (y.artists[1] or "") end)
+  --       return queue
+  --     end },
+  queue = {
+    transforms = {},
   },
   -- daemon 后端节拍。多为内部时序参数,默认值经过调校,没有明确诉求不要动。
   daemon = {

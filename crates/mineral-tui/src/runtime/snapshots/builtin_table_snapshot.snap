@@ -11,6 +11,8 @@ expression: "lines.join(\"\\n\")"
 <C-d> → Scroll(LineDown)
 <C-f> → Scroll(PageDown)
 <C-h> → BackOrClearSearch
+<C-j> → ReorderSelection(Down(1))
+<C-k> → ReorderSelection(Up(1))
 <C-l> → DrillIntoSelection
 <C-u> → Scroll(LineUp)
 <CR> → ActivateSelection
@@ -31,6 +33,7 @@ K → MoveSelection(Up(7))
 [ → CycleDetailSection
 ] → CycleDetailSection
 _ → NudgeVolume(VolumeDelta(-5))
+c → JumpToCurrent
 d → DownloadSelection
 f → ToggleLoveSelection
 g → MoveSelection(First)

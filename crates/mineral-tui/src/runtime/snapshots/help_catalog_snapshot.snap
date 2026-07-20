@@ -17,6 +17,8 @@ Navigate · Back · h <Esc> <BS> <C-h>
 Navigate · Drill into · <C-l>
 Navigate · Cycle section · [ ]
 Actions · Love · f
+Actions · Move item down / up · <C-j> <C-k>
+Actions · Jump to playing · c
 Actions · Download · d
 Actions · Actions menu · o
 Actions · Copy menu · y

@@ -15,7 +15,7 @@ use mineral_channel_core::MusicChannel;
 use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, PlaybackOrigin, PlayerSync, PlayerVersions,
+    DownloadProgress, DownloadTarget, PlayCursor, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskId, TaskKind};
 use parking_lot::Mutex;
@@ -494,14 +494,19 @@ impl PlayerCore {
         let (cached_url, interrupted, stale_queued) = {
             let mut st = self.inner.state.lock();
             st.current_song = Some(song.clone());
-            // 仅当 queue_sel 尚未指向本曲时才按身份 first-match 定位(列表点歌入口)。
-            // 顺序推进入口(advance_next/advance_prev)已把 queue_sel 钉到精确下标,这里
+            // 仅当游标尚未指向本曲时才按身份 first-match 定位(列表点歌入口)。
+            // 顺序推进入口(advance_next/advance_prev)已把游标钉到精确下标,这里
             // 必须保留——否则队列里有重复曲时,first-match 会把下标拽回首个副本,两首交替
             // 的重复曲互相指回对方、无限循环跳不出去。
-            let already_positioned = st.queue.get(st.queue_sel).is_some_and(|s| s.id == song.id);
+            // 本曲在队列里找得到即离开悬空态;找不到(播队列外的歌)则保持原游标不动。
+            let already_positioned = st
+                .cursor
+                .queue_index()
+                .and_then(|at| st.queue.get(at))
+                .is_some_and(|s| s.id == song.id);
             if !already_positioned && let Some(idx) = st.queue.iter().position(|s| s.id == song.id)
             {
-                st.queue_sel = idx;
+                st.cursor = PlayCursor::InQueue(idx);
             }
             st.play_url = None;
             st.play_origin = Some(origin);

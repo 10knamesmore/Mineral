@@ -9,7 +9,7 @@ mineral = {}
 ---@class mineral.Song
 ---@field id string  全局唯一 id(`namespace:value`,如 "netease:123"),可直接回喂 player API
 ---@field title string  歌名
----@field duration_ms integer  时长(毫秒),拿不到为 0
+---@field duration_ms integer|nil  时长(毫秒);来源没给 / 本地文件未探时为 nil,运算前需判空
 ---@field artists string[]  艺术家名列表(主艺人在前;可能为空数组)
 ---@field album string|nil  专辑名(单曲 / 拿不到为 nil)
 ---@field cover_url string|nil  封面:远端 = http(s) URL,本地源 = 文件路径;拿不到为 nil
@@ -329,10 +329,23 @@ function mineral.store.inc(song_id, key, delta, on_value) end
 ---@class mineral.queue
 mineral.queue = {}
 
---- 读当前播放队列(回调风格;数组顺序即队列顺序)。
---- 跳播用 `mineral.player.play(song.id)`。队列编辑是规划中的能力,本期只读。
+--- 读当前播放队列(回调风格;数组顺序即队列顺序)。跳播用 `mineral.player.play(song.id)`。
 ---@param on_songs fun(songs: mineral.Song[], err: string|nil): nil
 function mineral.queue.list(on_songs) end
+
+--- 整表重排队列:传入的数组顺序即新的队列顺序。
+---
+--- 只读每项的 `id`,实体由 daemon 从当前队列回捞——因此**只能删减与排序**,
+--- 每个 id 必须在当前队列里出现过(次数不限,复制已在队列的歌是允许的);
+--- 混入外来 id 则整次重排被拒、队列不动。加新歌用 `mineral.player.play`
+--- 之类的入队路径。
+---@param songs mineral.Song[]  新的队列顺序
+function mineral.queue.set(songs) end
+
+--- `queue.transforms[].transform` 回调收到的位置上下文(下标 1-based,与队列数组同口径)。
+---@class mineral.QueueCtx
+---@field current integer  在播条目的下标
+---@field selected integer|nil  发起时的光标下标;无光标概念(脚本主动调用)时为 nil
 
 --- 歌单的轻量投影(`library.playlists` 出参与 `curate_playlists` 入参共用;
 --- 曲目另经 `library.tracks` 拉)。

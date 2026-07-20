@@ -3175,6 +3175,7 @@ name = "mineral-tui"
 version = "0.5.4"
 dependencies = [
  "arboard",
+ "chrono",
  "color-eyre",
  "crossterm 0.29.0",
  "futures-util",

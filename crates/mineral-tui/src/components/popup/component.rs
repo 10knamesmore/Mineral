@@ -113,6 +113,30 @@ pub(crate) enum OverlayAction {
         anchor: Rect,
     },
 
+    /// queue 浮层操作菜单:为队列第 `idx` 项弹操作菜单,锚点语义同 [`Self::CopyQueueIndex`]。
+    QueueActionMenu {
+        /// 队列下标(浮层私有光标)。
+        idx: usize,
+
+        /// 操作菜单锚点(队列选中行屏幕矩形)。
+        anchor: Rect,
+    },
+
+    /// queue 浮层:切换第 `0` 项(下标)的收藏态。
+    ToggleLoveQueueIndex(usize),
+
+    /// queue 浮层:下载第 `0` 项(下标)。
+    DownloadQueueIndex(usize),
+
+    /// queue 浮层:把某项在队列里移一格。
+    ReorderQueueIndex {
+        /// 待移动项的当前下标。
+        idx: usize,
+
+        /// 下移为真,上移为假。
+        down: bool,
+    },
+
     /// PopMenu 确认了一项:关闭菜单并执行该动作。
     Menu(super::menu::MenuAction),
 }
