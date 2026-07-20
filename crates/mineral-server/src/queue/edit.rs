@@ -67,6 +67,11 @@ fn resolve(st: &State, at: &QueueAnchor) -> Option<usize> {
 }
 
 /// 重排的目标下标。端点不环绕:首项上移 / 末项下移返回原位(commit 据此判 NoOp)。
+///
+/// 返回值语义统一为「plan 里 `order.remove(target)` **之后**的插入位」:Up/Down/Top/Bottom
+/// 本就落在这个空间,直接返回。AfterCurrent 例外——`after_current_pos` 给的是**原始下标
+/// 空间**的绝对点(`cur+1`),当被移动项在它之前(`target < 绝对点`)时,remove 会把绝对点
+/// 之后的下标全左移一位,插入位要跟着 −1,否则「紧随当前曲」会落到再后一格、中间空一格。
 fn destination(st: &State, target: usize, to: QueuePos) -> Option<usize> {
     let last = st.queue.len().checked_sub(1)?;
     Some(match to {
@@ -74,7 +79,10 @@ fn destination(st: &State, target: usize, to: QueuePos) -> Option<usize> {
         QueuePos::Down => (target + 1).min(last),
         QueuePos::Top => 0,
         QueuePos::Bottom => last,
-        QueuePos::AfterCurrent => super::nav::after_current_pos(st),
+        QueuePos::AfterCurrent => {
+            let abs = super::nav::after_current_pos(st);
+            if target < abs { abs - 1 } else { abs }
+        }
     })
 }
 
@@ -386,6 +394,31 @@ mod tests {
         );
         assert_eq!(ids(&st), vec!["a", "d", "b", "c"], "长度不变,只是换位");
         assert_eq!(st.cursor, PlayCursor::InQueue(0));
+    }
+
+    /// 回归:被移动项在**当前曲之前**时,「紧随当前曲」要紧挨着落,中间不空一格。
+    /// 历史 bug——`after_current_pos` 给原始空间绝对点,remove 前移下标后没补偿,a 落到 d 后面。
+    #[test]
+    fn move_after_current_from_before_lands_snug() {
+        let mut st = state(2); // 当前 c(下标 2)
+        let at = anchor(&st, 0); // 移 a(在 c 之前)
+        assert_eq!(
+            apply(
+                &mut st,
+                &QueueOp::Move {
+                    at,
+                    to: QueuePos::AfterCurrent
+                }
+            ),
+            QueueEditOutcome::Applied
+        );
+        // a 紧随 c,不是落到队尾(旧 bug 会得 [b,c,d,a],中间空一格)。
+        assert_eq!(ids(&st), vec!["b", "c", "a", "d"], "a 紧挨当前曲 c 之后");
+        assert_eq!(
+            st.cursor,
+            PlayCursor::InQueue(1),
+            "当前曲 c 前移一位(a 被摘走)"
+        );
     }
 
     /// 清空锚点之上:锚点自身保留。
