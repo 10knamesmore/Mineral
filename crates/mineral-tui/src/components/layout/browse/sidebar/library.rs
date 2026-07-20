@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table};
 use mineral_model::SourceKind;
 
 use super::badge::search_badge;
-use super::highlight::{alias_suffix, highlight_indices};
+use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::marquee::{
     MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
 };

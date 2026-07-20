@@ -4,11 +4,11 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Row, Table};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph, Row, Table, Widget};
 
 use super::columns::{QueueColumns, TITLE_COL};
-use super::footer::{position_label, remaining_label};
+use super::footer::remaining_label;
 use super::row::{RowDecor, build_row};
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
@@ -25,11 +25,19 @@ use crate::runtime::state::{AppState, OverlayReveal};
 
 /// 浮动 queue 浮层。
 ///
-/// 只持有 UI-local 光标 + 视口滚动(`list`,永不被 server snapshot 覆盖,仅 clamp 防越界);
-/// 队列曲目是后端权威态,渲染 / 导航时从 [`AppState`] 读。
+/// 只持有 UI-local 光标 + 视口滚动(`list`,永不被 server snapshot 覆盖,仅 clamp 防越界)
+/// 与本地 `/` 模糊过滤态(`search`);队列曲目是后端权威态,渲染 / 导航时从 [`AppState`] 读。
+///
+/// `/` 过滤只重排**显示**:光标 `list` 索引的是过滤视图(按匹配分降序),经
+/// [`Self::visible`] 映射回队列真实下标;底层 `player.queue`(播放顺序)分毫不动。
 pub(crate) struct QueueOverlay {
-    /// 光标 + 视口滚动态(UI-local;走通用 [`ScrollList`])。
-    list: ScrollList,
+    /// 光标 + 视口滚动态(UI-local;走通用 [`ScrollList`])。**索引过滤视图**,非队列 raw 下标。
+    pub(super) list: ScrollList,
+
+    /// 本地 `/` 模糊过滤态(查询串 + 输入态 + matcher);复用通用「本地模糊过滤域」。
+    /// `deep_cache` 对队列恒空、不触碰。装箱是因 [`SearchState`](crate::runtime::state::SearchState)
+    /// 内含 nucleo matcher + 多份缓存体量大,直接嵌入会让 `OverlayKind` 各变体尺寸悬殊。
+    pub(super) search: Box<crate::runtime::state::SearchState>,
 }
 
 impl QueueOverlay {
@@ -37,6 +45,7 @@ impl QueueOverlay {
     pub(crate) fn new(sel: usize) -> Self {
         Self {
             list: ScrollList::at(sel),
+            search: Box::new(crate::runtime::state::SearchState::new()),
         }
     }
 
@@ -45,7 +54,9 @@ impl QueueOverlay {
         self.list.clamp(len);
     }
 
-    /// 当前光标行(脚本动作 ctx 采集 / 集成测试断言用)。
+    /// 当前光标行(过滤视图位;集成测试断言用)。脚本 ctx 采集要队列真实下标走
+    /// [`Self::raw_cursor`],不用这个视图位。
+    #[cfg(test)]
     pub(crate) fn cursor(&self) -> usize {
         self.list.sel()
     }
@@ -75,6 +86,23 @@ impl QueueOverlay {
             1,
         )
     }
+
+    /// 过滤命中为空时的占位:内区垂直中点居中一行暗色提示,替代空表(空表读成
+    /// 「队列为空」,而此处是「过滤没命中」)。
+    fn render_no_matches(&self, buf: &mut Buffer, inner: Rect, theme: &Theme) {
+        if inner.height == 0 {
+            return;
+        }
+        let msg = format!("no match for /{}", self.search.query());
+        let line = Line::from(Span::styled(msg, Style::new().fg(theme.overlay))).centered();
+        let row = Rect::new(
+            inner.x,
+            inner.y.saturating_add(inner.height / 2),
+            inner.width,
+            1,
+        );
+        Paragraph::new(line).render(row, buf);
+    }
 }
 
 impl Overlay for QueueOverlay {
@@ -100,12 +128,15 @@ impl Overlay for QueueOverlay {
             theme.surface1
         };
         let inner_w = dock_full_rect(ctx.frame_area.get(), ctx).width;
+        // 顶栏:` queue ` + `/query` 输入片段(与浏览页同位,输入框在上不在底栏)。
+        let mut title = vec![Span::styled(" queue ", Style::new().fg(theme.subtext))];
+        title.extend(self.search_input(theme));
         base_block(theme)
             .border_style(Style::new().fg(border_color))
-            .title(Line::from(" queue ").style(Style::new().fg(theme.subtext)))
+            .title(Line::from(title))
+            // 底栏左下:过滤态 `命中位 / 命中数`,否则 `n / total`。
             .title_bottom(
-                Line::from(position_label(self.list.sel(), ctx))
-                    .style(Style::new().fg(theme.overlay)),
+                Line::from(self.position_bottom(ctx)).style(Style::new().fg(theme.overlay)),
             )
             .title_bottom(
                 Line::from(remaining_label(ctx, inner_w))
@@ -136,20 +167,27 @@ impl Overlay for QueueOverlay {
             .get(TITLE_COL)
             .copied()
             .unwrap_or(0);
+        // 过滤视图:按匹配分降序的队列真实下标;无过滤词恒等 `0..len`。空命中时画占位。
+        let visible = self.visible(ctx);
+        if visible.is_empty() && self.is_filtering() {
+            self.render_no_matches(buf, inner, theme);
+            return;
+        }
         let sel = self.list.sel();
-        let rows: Vec<Row<'_>> = ctx
-            .player
-            .queue
+        let rows: Vec<Row<'_>> = visible
             .iter()
             .enumerate()
-            .map(|(i, s)| {
+            .filter_map(|(view_i, &raw_i)| {
+                let s = ctx.player.queue.get(raw_i)?;
                 let decor = RowDecor {
-                    is_current: current_idx == Some(i),
+                    // ▶ / # 按队列真实下标,不随过滤重排漂移。
+                    is_current: current_idx == Some(raw_i),
                     loved: ctx.is_liked(s),
                     index_fg: resolve_source_color(theme, ctx.cfg.sources(), s.source()),
-                    marquee: row_marquee(i == sel, &marquee_ctx, Slot::QueueSelected, title_w),
+                    marquee: row_marquee(view_i == sel, &marquee_ctx, Slot::QueueSelected, title_w),
+                    hits: self.row_hits(s),
                 };
-                build_row(i, s, theme, cols, decor)
+                Some(build_row(raw_i, s, theme, cols, decor))
             })
             .collect();
 
@@ -170,13 +208,14 @@ impl Overlay for QueueOverlay {
             .highlight_symbol("▌ ");
 
         // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
+        // 行数按过滤视图长度(而非队列全长),视口 / offset 才与实际画的行数对齐。
         let viewport = usize::from(inner.height.saturating_sub(1));
         render_scroll_table(
             buf,
             inner,
             table,
             &self.list,
-            ctx.player.queue.len(),
+            visible.len(),
             viewport,
             ScrollMotion::Advancing {
                 scrolloff: ctx.scrolloff(),
@@ -185,14 +224,27 @@ impl Overlay for QueueOverlay {
         );
     }
 
-    fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
-        // 导航/激活/关闭全走 on_action(跟随键位重映射与 behavior 步长);
+    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+        // `/` 输入态:吞键进过滤词(文本编辑),优先于一切动作与半穿透。
+        if self.is_typing() {
+            return self.on_search_key(key);
+        }
+        // 非输入态:导航 / 激活 / 关闭全走 on_action(跟随键位重映射与 behavior 步长);
         // 未映射裸键半穿透给全局(播放控制族,白名单在 App::passes_overlay)。
         OverlayResponse::Pass
     }
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
-        let len = ctx.player.queue.len();
+        // `/` 输入态:所有键让给 on_key 做文本编辑(裸 KeyCode 分派),动作层一律不认。
+        if self.is_typing() {
+            return None;
+        }
+        // 过滤视图长度决定导航范围;光标索引视图位,操作前经 `visible` 映射回队列真实下标。
+        let visible = self.visible(ctx);
+        self.list.clamp(visible.len());
+        let len = visible.len();
+        let sel = self.list.sel();
+        let raw = visible.get(sel).copied();
         match action {
             Action::MoveSelection(mv) => {
                 self.list.move_by(mv, len);
@@ -205,35 +257,56 @@ impl Overlay for QueueOverlay {
                 self.list.page(delta, len, ctx.list_glide_ticks());
                 Some(OverlayResponse::Consumed)
             }
-            Action::ActivateSelection => Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(
-                self.list.sel(),
-            ))),
-            // 开关键语义:queue 已开,open_queue(toggle)/ quit / back 都收敛为关闭本浮层。
-            Action::OpenQueue | Action::OpenQuitConfirm | Action::BackOrClearSearch => {
+            // `/`:进入模糊过滤输入态。
+            Action::EnterSearch => {
+                self.begin_search();
+                Some(OverlayResponse::Consumed)
+            }
+            // back:过滤生效时先清词退出过滤(留在浮层),否则关闭本浮层。
+            Action::BackOrClearSearch => {
+                if self.is_filtering() {
+                    self.clear_filter(ctx);
+                    Some(OverlayResponse::Consumed)
+                } else {
+                    Some(OverlayResponse::Do(OverlayAction::CloseTop))
+                }
+            }
+            // open_queue(toggle)/ quit 收敛为关闭本浮层。
+            Action::OpenQueue | Action::OpenQuitConfirm => {
                 Some(OverlayResponse::Do(OverlayAction::CloseTop))
             }
+            Action::ActivateSelection => Some(raw.map_or(OverlayResponse::Consumed, |i| {
+                OverlayResponse::Do(OverlayAction::PlayQueueIndex(i))
+            })),
             // `y`:为当前光标行弹复制菜单(贴行下方、叠在 queue 之上);queue 只读复制,不改队列。
-            Action::OpenCopyMenu => Some(OverlayResponse::Do(OverlayAction::CopyQueueIndex {
-                idx: self.list.sel(),
-                anchor: self.row_anchor(ctx),
+            Action::OpenCopyMenu => Some(raw.map_or(OverlayResponse::Consumed, |i| {
+                OverlayResponse::Do(OverlayAction::CopyQueueIndex {
+                    idx: i,
+                    anchor: self.row_anchor(ctx),
+                })
             })),
             // 操作菜单:为当前光标行弹队列操作菜单(贴行下方、叠在 queue 之上)。
-            Action::OpenActionMenu => Some(OverlayResponse::Do(OverlayAction::QueueActionMenu {
-                idx: self.list.sel(),
-                anchor: self.row_anchor(ctx),
+            Action::OpenActionMenu => Some(raw.map_or(OverlayResponse::Consumed, |i| {
+                OverlayResponse::Do(OverlayAction::QueueActionMenu {
+                    idx: i,
+                    anchor: self.row_anchor(ctx),
+                })
             })),
             // 收藏:浮层自持光标,不走 browse 页那条「按 View 取选中曲」的路径。
-            Action::ToggleLoveSelection => Some(OverlayResponse::Do(
-                OverlayAction::ToggleLoveQueueIndex(self.list.sel()),
-            )),
+            Action::ToggleLoveSelection => Some(raw.map_or(OverlayResponse::Consumed, |i| {
+                OverlayResponse::Do(OverlayAction::ToggleLoveQueueIndex(i))
+            })),
             // 下载光标行。
-            Action::DownloadSelection => Some(OverlayResponse::Do(
-                OverlayAction::DownloadQueueIndex(self.list.sel()),
-            )),
-            // 上下移动条目:光标跟着歌走,故这里预移一格——server 应用后队列顺序与之一致。
-            // 端点不动(server 判 NoOp),光标也不该动。
+            Action::DownloadSelection => Some(raw.map_or(OverlayResponse::Consumed, |i| {
+                OverlayResponse::Do(OverlayAction::DownloadQueueIndex(i))
+            })),
+            // 上下移动条目:过滤态屏蔽——视图按分重排后「上一格」对应队列非相邻位,
+            // 移动语义混乱;无过滤时视图位即队列真实位,光标跟着歌走预移一格,端点不动。
             Action::ReorderSelection(mv) => {
-                let at = self.list.sel();
+                if self.is_filtering() {
+                    return Some(OverlayResponse::Consumed);
+                }
+                let at = sel;
                 let moved = match mv {
                     SelectionMove::Down(_) if at.saturating_add(1) < len => at.saturating_add(1),
                     SelectionMove::Up(_) if at > 0 => at.saturating_sub(1),
@@ -248,11 +321,13 @@ impl Overlay for QueueOverlay {
                     down: matches!(mv, SelectionMove::Down(_)),
                 }))
             }
-            // 跳回在播条目;无在播(或已被摘出队列)时不动。只移光标不碰视口——视口交给
-            // 渲染端的 Advancing 缓动滚过去,故是「滚动到那里」而非瞬移。
+            // 跳回在播条目:找到在播歌在过滤视图中的位置移光标(被过滤掉则不动)。只移光标
+            // 不碰视口——视口交给渲染端 Advancing 缓动滚过去,故是「滚动到那里」而非瞬移。
             Action::JumpToCurrent => {
-                if let Some(at) = ctx.queue_current_index() {
-                    self.list.set_sel(at);
+                if let Some(cur) = ctx.queue_current_index()
+                    && let Some(view_i) = visible.iter().position(|&r| r == cur)
+                {
+                    self.list.set_sel(view_i);
                 }
                 Some(OverlayResponse::Consumed)
             }
@@ -863,6 +938,196 @@ mod tests {
         assert!(o.on_action(Action::TogglePlayPause, &ctx).is_none());
         let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty());
         assert!(matches!(o.on_key(&space, &ctx), OverlayResponse::Pass));
+        Ok(())
+    }
+
+    /// 造一个歌名可辨的队列(`/` 过滤测试用;名即 id,互异)。
+    fn named(names: &[&str]) -> Vec<mineral_model::Song> {
+        names.iter().map(|n| mineral_test::song(n)).collect()
+    }
+
+    /// `/` 过滤:visible 只留命中行,按匹配分降序(最接近输入在顶);底层队列不动。
+    #[test]
+    fn filter_keeps_only_matches() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("al");
+        let visible = o.visible(&ctx);
+        assert_eq!(visible.len(), 2, "只 alpha/alba 命中");
+        assert!(
+            visible.contains(&0) && visible.contains(&3),
+            "命中行的队列真实下标是 0/3"
+        );
+        assert!(
+            !visible.contains(&1) && !visible.contains(&2),
+            "beta/gamma 落选"
+        );
+        Ok(())
+    }
+
+    /// 过滤态 Enter 播的是**队列真实下标**,不是过滤视图位。
+    #[test]
+    fn activate_plays_raw_index_under_filter() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        // 只有下标 3 命中,过滤后它是视图第 0 行。
+        ctx.player.queue = named(&["one", "two", "three", "zephyr"]);
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("zephyr");
+        assert_eq!(o.raw_cursor(&ctx), Some(3), "视图位 0 映射回真实下标 3");
+        assert!(
+            matches!(
+                o.on_action(Action::ActivateSelection, &ctx),
+                Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(3)))
+            ),
+            "播真实下标 3"
+        );
+        Ok(())
+    }
+
+    /// 过滤态屏蔽上下移动(视图按分重排后相邻位 ≠ 队列相邻位)。
+    #[test]
+    fn reorder_suppressed_while_filtering() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta", "alba"]);
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("al");
+        assert!(
+            matches!(
+                o.on_action(Action::ReorderSelection(SelectionMove::Down(1)), &ctx),
+                Some(OverlayResponse::Consumed)
+            ),
+            "过滤态吞掉 reorder、不发编辑"
+        );
+        Ok(())
+    }
+
+    /// `/` 进输入态 → 逐字改词 → Enter 保留词退输入 → back 清词退出过滤。与浏览页 `/` 同构。
+    #[test]
+    fn slash_typing_flow_matches_browse() -> color_eyre::Result<()> {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta"]);
+        let mut o = QueueOverlay::new(0);
+        assert!(o.on_action(Action::EnterSearch, &ctx).is_some());
+        assert!(o.is_typing(), "`/` 进输入态");
+        // 输入态下动作层一律不认(让裸键落 on_key 做文本编辑)。
+        assert!(
+            o.on_action(Action::MoveSelection(SelectionMove::Down(1)), &ctx)
+                .is_none(),
+            "输入态 on_action 不认"
+        );
+        for c in "al".chars() {
+            let k = KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty());
+            assert!(matches!(o.on_key(&k, &ctx), OverlayResponse::Consumed));
+        }
+        assert_eq!(o.search.query(), "al");
+        o.on_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()), &ctx);
+        assert!(
+            !o.is_typing() && o.is_filtering(),
+            "Enter 退输入、词保留过滤"
+        );
+        assert!(
+            matches!(
+                o.on_action(Action::BackOrClearSearch, &ctx),
+                Some(OverlayResponse::Consumed)
+            ),
+            "过滤态 back 清词(不关浮层)"
+        );
+        assert!(!o.is_filtering(), "词已清");
+        Ok(())
+    }
+
+    /// 无过滤时 back 关闭浮层(与既有行为一致,不被 `/` 改道)。
+    #[test]
+    fn back_closes_when_not_filtering() -> color_eyre::Result<()> {
+        let ctx = ctx_with_queue(3, None)?;
+        let mut o = QueueOverlay::new(0);
+        assert!(matches!(
+            o.on_action(Action::BackOrClearSearch, &ctx),
+            Some(OverlayResponse::Do(OverlayAction::CloseTop))
+        ));
+        Ok(())
+    }
+
+    /// 拼音首字母过滤:输入 `cry` 命中「春日影」,证明复用了 fuzzy 的拼音段。
+    #[test]
+    fn pinyin_initials_filter_hits() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["春日影", "MyGO"]);
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("cry");
+        assert_eq!(o.visible(&ctx), vec![0], "cry 命中春日影(首字母),MyGO 落选");
+        Ok(())
+    }
+
+    /// 按**别名**命中:该曲进过滤视图,且命中下标落在别名段(会被高亮),歌名段无命中。
+    /// 回归——别名参与打分却漏高亮的 bug。
+    #[test]
+    fn alias_match_produces_alias_hits() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        // aliased_song:名「迷星叫」/ 别名「Mayoiuta」。"mayo" 只命中别名。
+        ctx.player.queue = vec![mineral_test::aliased_song(), mineral_test::song("other")];
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("mayo");
+        assert_eq!(o.visible(&ctx), vec![0], "按别名命中,该曲进视图");
+        let s = ctx
+            .player
+            .queue
+            .first()
+            .ok_or_else(|| color_eyre::eyre::eyre!("队列首项应在"))?;
+        let hits = o.row_hits(s);
+        assert!(!hits.alias.is_empty(), "别名段命中非空(会被高亮)");
+        assert!(hits.name.is_empty(), "命中来自别名,歌名段无命中");
+        Ok(())
+    }
+
+    /// 跳回在播:在播歌被过滤保留时,光标落到它在**过滤视图**中的位置(非队列真实位)。
+    #[test]
+    fn jump_to_current_maps_into_filtered_view() -> color_eyre::Result<()> {
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
+        // 在播 alba(真实下标 3)。queue_current_index 以 playback.track 为准,须同设。
+        ctx.playback.track = ctx.player.queue.get(3).cloned();
+        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(3);
+        let mut o = QueueOverlay::new(0);
+        o.search.set_query("al");
+        let visible = o.visible(&ctx);
+        let want = visible
+            .iter()
+            .position(|&r| r == 3)
+            .ok_or_else(|| color_eyre::eyre::eyre!("alba 应在过滤视图内"))?;
+        o.on_action(Action::JumpToCurrent, &ctx);
+        assert_eq!(o.cursor(), want, "光标落到在播歌在过滤视图中的位置");
+        Ok(())
+    }
+
+    /// `/al` 过滤态渲染:命中行高亮、按分排序、顶栏 `/al` 输入片段、底栏命中位/命中数。
+    #[test]
+    fn queue_filtered_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
+        let mut overlay = QueueOverlay::new(0);
+        overlay.search.set_query("al");
+        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default()))?;
+        crate::test_support::assert_snap!(
+            "队列浮层:/al 过滤——命中行高亮 + 按分排序 + 顶栏 /al 输入 + 底栏命中位/数",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 过滤无命中:画居中占位而非空表(空表会读成「队列为空」)。
+    #[test]
+    fn queue_no_match_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(100, 24))?;
+        let mut ctx = AppState::test_default()?;
+        ctx.player.queue = named(&["alpha", "beta"]);
+        let mut overlay = QueueOverlay::new(0);
+        overlay.search.set_query("zzzzz");
+        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default()))?;
+        crate::test_support::assert_snap!("队列浮层:过滤无命中——居中占位", t.backend());
         Ok(())
     }
 }

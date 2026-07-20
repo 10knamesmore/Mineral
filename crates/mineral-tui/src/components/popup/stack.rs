@@ -263,11 +263,12 @@ impl OverlayStack {
             .any(|m| m.anim.leaving() && !m.kind.chrome().dock)
     }
 
-    /// 活跃栈顶是队列浮层时返回其光标下标(脚本动作的 ctx 采集用),否则 `None`。
-    pub(crate) fn active_queue_cursor(&self) -> Option<usize> {
+    /// 活跃栈顶是队列浮层时返回其光标对应的**队列真实下标**(脚本动作的 ctx 采集用),
+    /// 否则 `None`。`/` 过滤重排显示后,光标索引的是视图位,须经 `ctx` 映射回真实位。
+    pub(crate) fn active_queue_cursor(&self, ctx: &AppState) -> Option<usize> {
         let top = self.active_top_index()?;
         match self.stack.get(top).map(|m| &m.kind) {
-            Some(OverlayKind::Queue(q)) => Some(q.cursor()),
+            Some(OverlayKind::Queue(q)) => q.raw_cursor(ctx),
             _ => None,
         }
     }

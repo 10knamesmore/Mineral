@@ -483,7 +483,7 @@ impl App {
         }
         // 浮层开着时持续记账:关闭是动画式的(close_top 后浮层还在栈上退场几帧),
         // 挂在关闭那一刻反而要挑时点,不如每 tick 抄一份现值。
-        if let Some(at) = self.overlays.active_queue_cursor() {
+        if let Some(at) = self.overlays.active_queue_cursor(&self.state) {
             self.queue_cursor_memo = Some(at);
         }
         if let Some(c) = sync.current {

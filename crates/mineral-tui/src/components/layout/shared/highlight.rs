@@ -1,6 +1,6 @@
 //! 列表行内的搜索命中高亮:按 char 下标切片成 Span 序列。
 //!
-//! 给 sidebar 两栏(playlists / library)共用,避免高亮规则在两处漂移。
+//! 供任意展示模糊过滤结果的列表面共用,避免高亮规则在多处漂移。
 //!
 //! 入参 `hits` 是已 sort + dedup 的 `text` 字符下标(单位 char,非 byte),
 //! 由 `filter::FuzzyMatcher` 反向映射出 —— 既覆盖原文段直接命中,也覆盖
@@ -31,7 +31,7 @@ pub fn highlight_indices<'a>(
 /// (与无搜索词时的浏览样式一致),命中字符换 `search_hit` 色 + 字体效果——与主字段
 /// 命中同款,不因从属地位弱化。
 ///
-/// library 曲目行的歌名后缀与 playlists 深度命中列共用,别名样式只此一处。
+/// 别名括注样式收敛此一处,凡渲染歌名后缀的列表面共用。
 pub fn alias_suffix<'a>(alias: &str, hits: &[u32], theme: &Theme) -> Vec<Span<'a>> {
     let dim = Style::new().fg(theme.overlay);
     let mut out = vec![Span::styled(" (".to_owned(), dim)];

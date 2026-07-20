@@ -4,6 +4,7 @@
 pub mod compute;
 pub mod cover;
 pub mod cover_image;
+pub mod highlight;
 pub mod marquee;
 pub mod scroll_table;
 pub mod scrollbar;

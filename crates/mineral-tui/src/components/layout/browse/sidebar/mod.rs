@@ -7,7 +7,6 @@ use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 
 mod badge;
-mod highlight;
 pub mod library;
 pub mod playlists;
 mod sweep;

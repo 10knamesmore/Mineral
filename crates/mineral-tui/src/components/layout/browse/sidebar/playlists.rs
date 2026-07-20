@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Widget};
 
 use super::badge::search_badge;
-use super::highlight::{alias_suffix, highlight_indices};
+use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::render::theme::Theme;
 use crate::runtime::deep_search::HitField;

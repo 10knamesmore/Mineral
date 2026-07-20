@@ -68,7 +68,7 @@ impl App {
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(SongView 已装饰)。
         let (view, selected_song, selected_loved) =
-            if let Some(cursor) = self.overlays.active_queue_cursor() {
+            if let Some(cursor) = self.overlays.active_queue_cursor(&self.state) {
                 // 队列浮层:唯一带脚本选中的浮层(取光标条目)。
                 let song = self.state.player.queue.get(cursor).cloned();
                 let loved = song.as_ref().map(|s| {

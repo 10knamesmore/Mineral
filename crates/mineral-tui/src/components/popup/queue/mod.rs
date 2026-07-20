@@ -4,5 +4,6 @@ mod columns;
 mod footer;
 mod overlay;
 mod row;
+mod search;
 
 pub(crate) use overlay::QueueOverlay;

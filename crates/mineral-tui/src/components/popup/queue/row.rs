@@ -4,14 +4,34 @@ use mineral_model::Song;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Row};
+use smallvec::SmallVec;
 
 use super::columns::{QueueCols, QueueColumns};
+use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::marquee::RowMarquee;
-use crate::components::layout::shared::text::alias_span;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 
-/// 一行的可变装饰:在播标记、收藏态、源色、跑马灯。
+/// 一行各文本列的模糊命中下标(`/` 过滤态下按这些下标染 `search_hit` 色)。
+///
+/// 均为已 sort + dedup 的**原文 char 下标**(由 [`FuzzyMatcher`](crate::runtime::filter::FuzzyMatcher)
+/// 反向映射)。无过滤词时三列皆空,`highlight_indices` 退化为整段原样——渲染与无搜索一致。
+#[derive(Default)]
+pub(super) struct RowHits {
+    /// 歌名命中。
+    pub(super) name: SmallVec<[u32; 8]>,
+
+    /// 别名(译名 / 副标题)命中。
+    pub(super) alias: SmallVec<[u32; 8]>,
+
+    /// 展示艺人(首位)命中。
+    pub(super) artist: SmallVec<[u32; 8]>,
+
+    /// 专辑名命中。
+    pub(super) album: SmallVec<[u32; 8]>,
+}
+
+/// 一行的可变装饰:在播标记、收藏态、源色、跑马灯、模糊命中。
 ///
 /// 收成一份随行传递,避免行组装函数摊开五六个位置参数。
 pub(super) struct RowDecor<'m> {
@@ -26,6 +46,9 @@ pub(super) struct RowDecor<'m> {
 
     /// 选中行的跑马灯上下文;非选中行为 `None`。
     pub(super) marquee: Option<RowMarquee<'m>>,
+
+    /// 各文本列的模糊命中下标(无过滤词时全空)。
+    pub(super) hits: RowHits,
 }
 
 /// 把一首歌组成 queue 表格的一行。
@@ -65,8 +88,16 @@ pub(super) fn build_row<'a>(
         )
     };
 
-    let mut title_spans = vec![Span::styled(song.name.clone(), Style::new().fg(title_fg))];
-    title_spans.extend(alias_span(song.alias.as_deref(), theme.overlay));
+    let mut title_spans = highlight_indices(
+        &song.name,
+        &decor.hits.name,
+        Style::new().fg(title_fg),
+        theme,
+    );
+    if let Some(alias) = song.alias.as_deref() {
+        // 过滤命中别名时高亮命中字符;无过滤词(hits 空)退化为整段暗调,与非搜索一致。
+        title_spans.extend(alias_suffix(alias, &decor.hits.alias, theme));
+    }
     let title_cell = match decor.marquee {
         Some(m) => Cell::from(
             m.ctx
@@ -80,14 +111,24 @@ pub(super) fn build_row<'a>(
             .artists
             .first()
             .map_or_else(|| "—".to_owned(), |a| a.name.clone());
-        cells.push(Cell::from(Span::styled(artist, Style::new().fg(sub_fg))));
+        cells.push(Cell::from(Line::from(highlight_indices(
+            &artist,
+            &decor.hits.artist,
+            Style::new().fg(sub_fg),
+            theme,
+        ))));
     }
     if matches!(cols.text, QueueCols::Wide) {
         let album = song
             .album
             .as_ref()
             .map_or_else(|| "—".to_owned(), |a| a.name.clone());
-        cells.push(Cell::from(Span::styled(album, Style::new().fg(sub_fg))));
+        cells.push(Cell::from(Line::from(highlight_indices(
+            &album,
+            &decor.hits.album,
+            Style::new().fg(sub_fg),
+            theme,
+        ))));
     }
     cells.push(Cell::from(Span::styled(
         format_ms_opt(song.duration_ms),
