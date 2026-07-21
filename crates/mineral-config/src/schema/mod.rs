@@ -48,7 +48,7 @@ pub use daemon::DaemonConfig;
 pub use download::DownloadConfig;
 pub use envelope::{EnvelopeConfig, HighpassConfig, ShelfConfig};
 pub use keys::{KeyBinding, KeysConfig};
-pub use layout::{LayoutConfig, MenuAlign};
+pub use layout::{FsSpectrumConfig, LayoutConfig, MenuAlign};
 pub use lyrics::LyricsConfig;
 pub use prefetch::PrefetchConfig;
 pub use queue::{QUEUE_TRANSFORM_FNS, QueueConfig, QueueTransform};

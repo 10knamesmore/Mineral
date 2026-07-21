@@ -348,7 +348,7 @@ return {
       min_full_width = 80, -- 宽不足此列数退紧凑布局(无歌词/频谱面板)
       min_full_height = 24, -- 高不足此行数退紧凑布局
       fs_left_pct = 44, -- 全屏左栏(封面+transport)占宽 %,余下归歌词
-      fs_spectrum_height = 14, -- 全屏底部频谱通栏高,行
+      fs_spectrum = { pct = 28, min = 10, max = 22 }, -- 全屏底部频谱通栏高:占屏高 %,钳到 [min,max] 行(响应式)
       fs_transport_height = 8, -- 全屏 transport 条高,行;内容 6 + 边框 2
       dock_w_pct = 36, -- 停靠浮层(播放队列)占屏宽 %
       menu_align = "right", -- 弹出菜单相对锚点行的横向对齐:"left"|"center"|"right",或 0.0~1.0 数字精确指定比例(0 贴左 / 0.5 居中 / 1 贴右)

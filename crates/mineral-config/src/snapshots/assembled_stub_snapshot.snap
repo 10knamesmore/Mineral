@@ -533,10 +533,19 @@ expression: "super::meta_config_lua()"
 ---@field min_full_width? integer 启用完整布局的最小终端宽(列);不足走紧凑布局(无歌词 / 频谱面板)。
 ---@field min_full_height? integer 启用完整布局的最小终端高(行);不足走紧凑布局。
 ---@field fs_left_pct? integer 全屏态左栏(封面 + transport)占宽百分比(0-100),余下归歌词。
----@field fs_spectrum_height? integer 全屏态底部频谱通栏高(行)。
+---@field fs_spectrum? mineral.FsSpectrumConfig 全屏态底部频谱通栏高:响应式(占终端高百分比,再钳到行数上下限)。
 ---@field fs_transport_height? integer 全屏态 transport 区高(行);内容 6 行 + 边框 2。
 ---@field dock_w_pct? integer 停靠浮层(播放队列)dock 宽占屏宽百分比(0-100)。
 ---@field menu_align? mineral.MenuAlign 锚定弹出菜单(PopMenu)相对锚点行的横向对齐。
+
+---全屏底部频谱通栏高的响应式规格:先按终端总高取百分比,再钳到行数上下限。
+---
+---绝对行高在大终端显得过矮、小终端又过高;百分比让两端等比缩放,上下限兜住极端
+---尺寸(超高屏不至于铺满几十行、矮屏不至于吞掉过多歌词区)。
+---@class mineral.FsSpectrumConfig
+---@field pct? integer 占终端总高的百分比(0-100)。
+---@field min? integer 下限:频谱至少这么多行。
+---@field max? integer 上限:频谱至多这么多行。
 
 ---copy 配置。
 ---@class mineral.CopyConfig

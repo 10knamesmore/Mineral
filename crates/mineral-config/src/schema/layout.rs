@@ -19,8 +19,8 @@ pub struct LayoutConfig {
     /// 全屏态左栏(封面 + transport)占宽百分比(0-100),余下归歌词。
     fs_left_pct: u16,
 
-    /// 全屏态底部频谱通栏高(行)。
-    fs_spectrum_height: u16,
+    /// 全屏态底部频谱通栏高:响应式(占终端高百分比,再钳到行数上下限)。
+    fs_spectrum: FsSpectrumConfig,
 
     /// 全屏态 transport 区高(行);内容 6 行 + 边框 2。
     fs_transport_height: u16,
@@ -30,6 +30,40 @@ pub struct LayoutConfig {
 
     /// 锚定弹出菜单(PopMenu)相对锚点行的横向对齐。
     menu_align: MenuAlign,
+}
+
+/// 全屏底部频谱通栏高的响应式规格:先按终端总高取百分比,再钳到行数上下限。
+///
+/// 绝对行高在大终端显得过矮、小终端又过高;百分比让两端等比缩放,上下限兜住极端
+/// 尺寸(超高屏不至于铺满几十行、矮屏不至于吞掉过多歌词区)。
+#[config_section]
+pub struct FsSpectrumConfig {
+    /// 占终端总高的百分比(0-100)。
+    pct: u16,
+
+    /// 下限:频谱至少这么多行。
+    min: u16,
+
+    /// 上限:频谱至多这么多行。
+    max: u16,
+}
+
+impl FsSpectrumConfig {
+    /// 给定终端总高,解出频谱通栏应占的行数。
+    ///
+    /// # Params:
+    ///   - `total_height`: 全屏 area 的总行数
+    ///
+    /// # Return:
+    ///   `total_height × pct%` 钳到 `[min, max]`,且不超过 `total_height` 本身。
+    pub fn resolve(&self, total_height: u16) -> u16 {
+        let pct = u32::from(self.pct.min(100));
+        let scaled = u16::try_from(u32::from(total_height) * pct / 100).unwrap_or(u16::MAX);
+        let floor = self.min;
+        // 容错坏配置(min > max):上限至少不低于下限,避免 clamp panic。
+        let ceil = self.max.max(floor);
+        scaled.clamp(floor, ceil).min(total_height)
+    }
 }
 
 /// 锚定弹出菜单相对锚点行的横向对齐。不依赖渲染 crate;接线处经 [`Self::permille`] 消费。
@@ -108,7 +142,43 @@ impl<'de> Deserialize<'de> for MenuAlign {
 
 #[cfg(test)]
 mod tests {
-    use super::MenuAlign;
+    use super::{FsSpectrumConfig, MenuAlign};
+
+    /// 从 JSON 值落型出 `FsSpectrumConfig`(模拟 Lua → serde_json → 落型路径)。
+    fn spectrum(pct: u16, min: u16, max: u16) -> color_eyre::Result<FsSpectrumConfig> {
+        Ok(serde_json::from_value::<FsSpectrumConfig>(
+            serde_json::json!({ "pct": pct, "min": min, "max": max }),
+        )?)
+    }
+
+    /// 中段尺寸走百分比,两端被上下限钳住。
+    #[test]
+    fn resolve_scales_then_clamps() -> color_eyre::Result<()> {
+        let spec = spectrum(/*pct*/ 28, /*min*/ 10, /*max*/ 22)?;
+        // 50 行:28% = 14,落在 [10,22] 内,原样取用。
+        assert_eq!(spec.resolve(/*total_height*/ 50), 14);
+        // 30 行:28% ≈ 8,低于下限 → 提到 10。
+        assert_eq!(spec.resolve(/*total_height*/ 30), 10);
+        // 100 行:28% = 28,高于上限 → 压到 22。
+        assert_eq!(spec.resolve(/*total_height*/ 100), 22);
+        Ok(())
+    }
+
+    /// 下限比屏还高时不越界:最终不超过总高。
+    #[test]
+    fn resolve_never_exceeds_total() -> color_eyre::Result<()> {
+        let spec = spectrum(/*pct*/ 50, /*min*/ 40, /*max*/ 60)?;
+        assert_eq!(spec.resolve(/*total_height*/ 8), 8);
+        Ok(())
+    }
+
+    /// 坏配置(min > max)不 panic:上限被提到不低于下限。
+    #[test]
+    fn resolve_tolerates_inverted_bounds() -> color_eyre::Result<()> {
+        let spec = spectrum(/*pct*/ 90, /*min*/ 30, /*max*/ 10)?;
+        assert_eq!(spec.resolve(/*total_height*/ 100), 30);
+        Ok(())
+    }
 
     /// 从 JSON 值解析 `MenuAlign`(模拟 Lua → serde_json → 落型的真实路径)。
     fn parse(v: serde_json::Value) -> color_eyre::Result<MenuAlign> {

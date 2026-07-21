@@ -871,7 +871,11 @@ Config {
             min_full_width: 80,
             min_full_height: 24,
             fs_left_pct: 44,
-            fs_spectrum_height: 14,
+            fs_spectrum: FsSpectrumConfig {
+                pct: 28,
+                min: 10,
+                max: 22,
+            },
             fs_transport_height: 8,
             dock_w_pct: 36,
             menu_align: Right,

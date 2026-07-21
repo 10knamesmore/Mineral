@@ -120,7 +120,7 @@ fn compute_compact(area: Rect) -> Areas {
 pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
     let [body, spectrum] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(*cfg.fs_spectrum_height()),
+        Constraint::Length(cfg.fs_spectrum().resolve(area.height)),
     ])
     .areas(area);
 
