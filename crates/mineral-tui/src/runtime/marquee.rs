@@ -27,7 +27,7 @@ pub(crate) enum Slot {
     /// transport 面板顶行(当前曲)。
     Transport,
 
-    /// now_playing 面板标题行(当前曲)。
+    /// now_playing 面板标题行(选中曲)。
     NowPlaying,
 }
 

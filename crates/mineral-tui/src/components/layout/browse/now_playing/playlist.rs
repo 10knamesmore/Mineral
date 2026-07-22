@@ -1,8 +1,8 @@
-//! Playlists 视图右栏:程序化封面 + KV(tracks/length/source/...) + footer。
+//! Playlists 视图右栏:程序化封面 + 歌单名/meta 两行(居中) + 底部简介行(空显占位)。
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
@@ -58,20 +58,13 @@ pub fn draw(
     };
 
     let src = p.data.source();
+    // 标题行:歌单名(text + bold);meta 行:源(源色)· tracks · 总时长(overlay)。居中。
     let kv = vec![
+        Line::from(Span::styled(
+            p.data.name.clone(),
+            Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+        )),
         Line::from(vec![
-            Span::raw(" "),
-            Span::styled("tracks: ", Style::new().fg(theme.overlay)),
-            Span::styled(
-                format!("{:<10}", p.data.track_count),
-                Style::new().fg(theme.text),
-            ),
-            Span::styled("length: ", Style::new().fg(theme.overlay)),
-            Span::styled(len_label, Style::new().fg(theme.text)),
-        ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("source: ", Style::new().fg(theme.overlay)),
             Span::styled(
                 src.label(),
                 Style::new().fg(crate::render::theme::resolve_source_color(
@@ -80,10 +73,34 @@ pub fn draw(
                     src,
                 )),
             ),
+            Span::styled(
+                format!(" · {} tracks · {len_label}", p.data.track_count),
+                Style::new().fg(theme.overlay),
+            ),
         ]),
     ];
-    frame.render_widget(Paragraph::new(kv), kv_area);
+    frame.render_widget(
+        Paragraph::new(kv).alignment(Alignment::Center),
+        kv_area,
+    );
 
-    let help = Line::from(" l open · y copy · o action ").style(Style::new().fg(theme.overlay));
-    frame.render_widget(Paragraph::new(help), footer);
+    // 底行:歌单简介首个非空行(overlay,居中截断);无简介显占位——详情面板不放按键
+    // 提示(发现交给 ? 帮助浮层),占位语义与 no match found 同款措辞。
+    let desc = p
+        .data
+        .description
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty());
+    let footer_line = match desc {
+        Some(d) => Line::from(Span::styled(d, Style::new().fg(theme.overlay))),
+        None => Line::from(Span::styled(
+            "no description",
+            Style::new().fg(theme.overlay).add_modifier(Modifier::DIM),
+        )),
+    };
+    frame.render_widget(
+        Paragraph::new(footer_line).alignment(Alignment::Center),
+        footer,
+    );
 }
