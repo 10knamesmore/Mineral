@@ -166,6 +166,7 @@ expression: "super::meta_config_lua()"
 ---
 ---每个 token 是一个 `ColorValue`(固定色 / ANSI 槽 / 终端默认);token 之间不能互相引用。
 ---@class mineral.ThemeConfig
+---@field background? mineral.ColorRef 整屏背景填充色:普通页面每格底色刷成此色,消除与全屏沉浸背景之间的色跳变。 取具体色 / token 引用即填充,取 `{ reset = true }` 则不填充(用终端默认底)。
 ---@field base? mineral.ColorValue 主背景。
 ---@field mantle? mineral.ColorValue 次背景(嵌套面板 / 浮层底)。
 ---@field crust? mineral.ColorValue 第三背景(底部 transport / cmd 行)。
@@ -495,6 +496,7 @@ expression: "super::meta_config_lua()"
 ---@field sweep_ms? integer 侧栏歌单 ↔ 曲目切换扫入动画时长(毫秒)。
 ---@field list_scroll_ms? integer 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
 ---@field fullscreen_ms? integer 全屏播放态进退场形变动画时长(毫秒)。
+---@field ambient_trail? mineral.AmbientTrailConfig 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位, 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
 ---@field popup_anim_ms? integer 浮层(队列 / 确认框)进出动画时长(毫秒)。
 ---@field toast_anim_ms? integer toast(顶栏通知)横向展开收起动画时长(毫秒)。
 ---@field focus_fade_ms? integer 终端失焦/聚焦时顶栏变灰的淡入淡出时长(毫秒)。
@@ -505,6 +507,19 @@ expression: "super::meta_config_lua()"
 ---@field search_focus_transition? mineral.SearchFocusTransition Search 布局态焦点高亮边框切换的过渡风格(直切 / 边框滑动)。
 ---@field spinner_frames? string[] loading 占位的旋转 spinner 帧(逐帧循环画;search「searching」/ detail 数据未到共用)。 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
 ---@field marquee? mineral.MarqueeConfig 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
+
+---全屏氛围背景的滞后跟随参数(挂在 `AnimationConfig` 下):进 / 退各一套时长,故进场可
+---优雅慢入、退场可迅速收干净。
+---@class mineral.AmbientTrailConfig
+---@field enter? mineral.TrailTimingConfig 进全屏方向的滞后跟随时长(优雅慢入)。
+---@field exit? mineral.TrailTimingConfig 退全屏方向的滞后跟随时长(迅速收)。
+
+---一个方向(进 / 退)的滞后跟随时长(挂在 `AmbientTrailConfig` 下):背景色先僵一段
+---`delay_ms`,再用 ease-out 缓动在 `ease_ms` 内追到几何形变的终态。两者都为 0 则退化为
+---与形变同步到位(无滞后)。
+---@class mineral.TrailTimingConfig
+---@field delay_ms? integer 背景色开始跟随前的滞后时长(毫秒):形变已起步 / 收拢,背景色仍按兵不动这么久。
+---@field ease_ms? integer 滞后结束后背景色缓入 / 缓出到位的时长(毫秒):越长越慵懒。
 
 ---溢出标题滚动(marquee)配置。
 ---@class mineral.MarqueeConfig

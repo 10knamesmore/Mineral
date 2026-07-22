@@ -11,6 +11,7 @@ return {
     -- 主题色板(默认 Catppuccin Mocha)。色值还可写 { ansi = "blue" }(终端 ANSI 槽,
     -- 跟随终端配色)/ { reset = true }(终端默认),写法详见 docs/configuration.md。
     theme = {
+      background = "base", -- 整屏背景填充:token 名 / "#rrggbb" 填充,{ reset = true } 则用终端默认底(不填)
       base = "#1e1e2e",
       mantle = "#181825",
       crust = "#11111b",
@@ -286,6 +287,10 @@ return {
       sweep_ms = 288, -- 侧栏 歌单↔曲目 切换扫入
       list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
       fullscreen_ms = 288, -- 全屏进退场形变
+      ambient_trail = { -- 全屏氛围背景滞后跟随几何形变(follow-through);进/退各一套时长
+        enter = { delay_ms = 80, ease_ms = 740 }, -- 进全屏:优雅慢入(先僵 delay 再 ease-out 缓入;都 0 = 同步无滞后)
+        exit = { delay_ms = 0, ease_ms = 240 }, -- 退全屏:迅速收(短缓动几乎不在列表上残留)
+      },
       popup_anim_ms = 288, -- 浮层(队列 / 确认框)弹出收起
       toast_anim_ms = 288, -- 顶栏通知横向展开收起
       focus_fade_ms = 288, -- 终端失焦/聚焦时顶栏变灰的淡入淡出

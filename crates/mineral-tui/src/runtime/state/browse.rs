@@ -3,10 +3,10 @@
 //! 与模型数据(library / caps / player)分离——模型留在外层聚合态,Browse 决策时按需借入。
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
-use mineral_config::AnimationConfig;
+use mineral_config::{AnimationConfig, TrailTimingConfig};
 use mineral_model::PlaylistId;
 
-use crate::render::anim::{Toggle, ticks16_from_ms};
+use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
 use crate::runtime::deep_search::{self, DeepHit};
 use crate::runtime::view_model::{PlaylistView, SongView};
 
@@ -38,6 +38,11 @@ pub struct BrowsePage {
     /// `on()` = 全屏、`eased_in_out()` = 形变位置。
     pub fullscreen: Toggle,
 
+    /// 全屏氛围背景的滞后跟随:逻辑态跟随 `fullscreen`,但渲染进度慢半拍(follow-through)——
+    /// 背景色落在几何形变后面淡入 / 淡出。`progress()` 给背景浓度、`active()` 决定是否铺场
+    /// (退出时几何已回列表、背景仍越过列表慢褪,故需独立存活判定)。
+    pub ambient_reveal: TrailingToggle,
+
     /// 歌词面板显示态(副歌词档 + 全屏手动滚动脱离态)。
     pub lyric_view: LyricView,
 
@@ -55,13 +60,25 @@ impl BrowsePage {
     ///   - `anim`: 动画配置(取 view sweep / fullscreen 形变拍数)
     pub fn new(anim: &AnimationConfig) -> Self {
         let tick_ms = *anim.frame_tick_ms();
+        let trail = anim.ambient_trail();
         Self {
             view: ViewSwitch::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
+            ambient_reveal: TrailingToggle::new(
+                trail_leg(trail.enter(), tick_ms),
+                trail_leg(trail.exit(), tick_ms),
+            ),
             lyric_view: LyricView::new(),
             nav: NavState::new(),
             search: SearchState::new(),
         }
+    }
+
+    /// 推进氛围背景滞后跟随一拍:先跟随全屏逻辑态(变化才重置滞后),再推进(follow-through)。
+    /// 与 `fullscreen.tick()` 同拍调用。
+    pub fn tick_ambient_reveal(&mut self) {
+        self.ambient_reveal.follow(self.fullscreen.on());
+        self.ambient_reveal.tick();
     }
 
     /// 重折动画拍数(配置热更):保留视图 / 全屏的逻辑态与动画相位,只换速度。
@@ -70,11 +87,24 @@ impl BrowsePage {
     ///   - `anim`: 新动画配置
     pub fn retempo(&mut self, anim: &AnimationConfig) {
         let tick_ms = *anim.frame_tick_ms();
+        let trail = anim.ambient_trail();
         self.view
             .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));
         self.fullscreen
             .retempo(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms));
+        self.ambient_reveal.retempo(
+            trail_leg(trail.enter(), tick_ms),
+            trail_leg(trail.exit(), tick_ms),
+        );
     }
+}
+
+/// 把配置里一个方向的滞后跟随时长折算成运行时 [`TrailLeg`](毫秒 → 拍数)。
+fn trail_leg(timing: &TrailTimingConfig, tick_ms: u64) -> TrailLeg {
+    TrailLeg::new(
+        ticks16_from_ms(*timing.delay_ms(), tick_ms),
+        ticks16_from_ms(*timing.ease_ms(), tick_ms),
+    )
 }
 
 /// 视图逻辑:把过滤词 / 选中(本页状态)作用到歌曲库(借入的 model),算出当前可见 / 选中视图。
@@ -194,5 +224,54 @@ impl BrowsePage {
             .collect();
         scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
         scored.into_iter().map(|(_, sv)| sv).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrowsePage;
+
+    /// 氛围背景滞后跟随:进全屏滞后期内几何已动、背景仍 0(慢半拍 follow-through),
+    /// 最终追到满;进 / 退各用自己的时长——默认退场比进场快,故退场收干净的拍数
+    /// 明显少于进场走满(与具体默认值无关,只验不等式)。
+    #[test]
+    fn ambient_reveal_enter_graceful_exit_quick() -> color_eyre::Result<()> {
+        let cfg = mineral_config::Config::defaults()?;
+        let anim = cfg.tui().animation();
+        let mut page = BrowsePage::new(anim);
+
+        page.fullscreen.toggle(); // 进全屏
+        for _ in 0..3 {
+            page.fullscreen.tick();
+            page.tick_ambient_reveal();
+        }
+        assert!(page.fullscreen.eased_in_out() > 0, "几何形变已起步");
+        assert_eq!(
+            page.ambient_reveal.progress(),
+            0,
+            "进场滞后期背景进度仍为 0(慢半拍)"
+        );
+
+        let mut enter_ticks = 3;
+        while page.ambient_reveal.progress() < 1000 && enter_ticks < 1000 {
+            page.fullscreen.tick();
+            page.tick_ambient_reveal();
+            enter_ticks += 1;
+        }
+        assert_eq!(page.ambient_reveal.progress(), 1000, "进场最终追到满");
+
+        page.fullscreen.toggle(); // 退全屏
+        let mut exit_ticks = 0;
+        while page.ambient_reveal.progress() > 0 && exit_ticks < 1000 {
+            page.fullscreen.tick();
+            page.tick_ambient_reveal();
+            exit_ticks += 1;
+        }
+        assert_eq!(page.ambient_reveal.progress(), 0, "退场最终收干净");
+        assert!(
+            exit_ticks < enter_ticks,
+            "退场({exit_ticks} 拍)应快于进场({enter_ticks} 拍)"
+        );
+        Ok(())
     }
 }

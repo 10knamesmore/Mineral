@@ -220,6 +220,127 @@ impl Toggle {
     }
 }
 
+/// 一个方向(进 / 退)的滞后跟随拍数:先僵 `delay` 拍,再用 ease-out 在 `ease` 拍内追到位。
+/// 进退各持一份,故 [`TrailingToggle`] 可进场优雅慢入、退场迅速收。
+#[derive(Clone, Copy, Debug)]
+pub struct TrailLeg {
+    /// 滞后拍数(目标变化后开始跟随前按兵不动多少拍)。
+    delay_ticks: u16,
+
+    /// 缓动拍数(滞后结束后 ease-out 追到位所需拍数)。
+    ease_ticks: u16,
+}
+
+impl TrailLeg {
+    /// 构造一条方向腿。
+    ///
+    /// # Params:
+    ///   - `delay_ticks`: 滞后拍数
+    ///   - `ease_ticks`: 缓动拍数
+    pub fn new(delay_ticks: u16, ease_ticks: u16) -> Self {
+        Self {
+            delay_ticks,
+            ease_ticks,
+        }
+    }
+}
+
+/// 滞后跟随开关:逻辑目标(由外部驱动源翻转)变化后,先僵 `delay` 拍再用 **cubic ease-out**
+/// (先快后慢)在 `ease` 拍内追到目标——渲染进度**慢半拍**跟随驱动源,制造 follow-through
+/// (跟随迟滞)手感。进 / 退各持一条 [`TrailLeg`],故可进场优雅慢入、退场迅速收(时长各调)。
+///
+/// 与 [`Toggle`](即时缓动、零迟滞)解耦:一个即时的 [`Toggle`] 驱动几何,另一台
+/// [`TrailingToggle`] 跟随它驱动背景色,使背景落在几何后面淡入 / 淡出,而非严丝合缝同步。
+/// 进度取 [`Transition::eased`](进度的固定函数),故驱动源中途反向也连续不跳变(反向即
+/// 从当前进度平滑折回);`delay` 只冻结推进,不引入跳变。
+#[derive(Clone, Copy, Debug)]
+pub struct TrailingToggle {
+    /// ease-out 过渡本体;`delay_left > 0` 时冻结不推进,方向切换时 retempo 到对应腿的 `ease`。
+    inner: Transition,
+
+    /// 当前逻辑目标(`true` = 开);[`Self::follow`] 检测到它变化才换腿、重置 `delay_left`。
+    target_on: bool,
+
+    /// 剩余滞后拍数(`> 0` 时 [`Self::tick`] 只递减、不推进 `inner`)。
+    delay_left: u16,
+
+    /// 进场腿(优雅慢入)。
+    enter: TrailLeg,
+
+    /// 退场腿(迅速收)。
+    exit: TrailLeg,
+}
+
+impl TrailingToggle {
+    /// 构造一个停在「关」(`0`)、无待走滞后的跟随开关。
+    ///
+    /// # Params:
+    ///   - `enter`: 进场腿(目标转「开」时用)
+    ///   - `exit`: 退场腿(目标转「关」时用)
+    pub fn new(enter: TrailLeg, exit: TrailLeg) -> Self {
+        Self {
+            inner: Transition::new(enter.ease_ticks),
+            target_on: false,
+            delay_left: 0,
+            enter,
+            exit,
+        }
+    }
+
+    /// 重设两条腿的拍数而**不动**当前进度、目标与待走滞后(配置热更保相位):in-flight 的
+    /// `inner` 顺带 retempo 到**当前方向**腿的新 `ease`,只换后续速度。
+    ///
+    /// # Params:
+    ///   - `enter`: 新进场腿
+    ///   - `exit`: 新退场腿
+    pub fn retempo(&mut self, enter: TrailLeg, exit: TrailLeg) {
+        self.enter = enter;
+        self.exit = exit;
+        let current = if self.target_on { enter } else { exit };
+        self.inner.retempo(current.ease_ticks);
+    }
+
+    /// 跟随驱动源的逻辑态:目标**变化**的那次换到对应方向腿(重置滞后 + retempo 缓动 +
+    /// 翻转方向);不变则空操作(故可每拍无条件调用)。
+    ///
+    /// # Params:
+    ///   - `on`: 驱动源当前逻辑态(如 [`Toggle::on`])
+    pub fn follow(&mut self, on: bool) {
+        if on == self.target_on {
+            return;
+        }
+        self.target_on = on;
+        let leg = if on { self.enter } else { self.exit };
+        self.delay_left = leg.delay_ticks;
+        self.inner.retempo(leg.ease_ticks);
+        if on {
+            self.inner.enter();
+        } else {
+            self.inner.leave();
+        }
+    }
+
+    /// 推进一拍:滞后未走完只递减滞后,走完才推进缓动。
+    pub fn tick(&mut self) {
+        if self.delay_left > 0 {
+            self.delay_left -= 1;
+        } else {
+            self.inner.tick();
+        }
+    }
+
+    /// 当前渲染进度经 cubic ease-out 映射(先快后慢),千分比 `0..=1000`。
+    pub fn progress(&self) -> u16 {
+        self.inner.eased()
+    }
+
+    /// 是否仍需渲染:缓动未归零、或正朝「开」推进、或尚有待走滞后。完全收起且无目标 /
+    /// 无待走滞后时为 `false`,渲染据此整段跳过。
+    pub fn active(&self) -> bool {
+        self.inner.active() || self.delay_left > 0
+    }
+}
+
 /// 动画时长(毫秒)→ tick 数:按主循环帧间隔四舍五入,至少 1(0ms 也占一拍,
 /// 语义 = "一帧到位")。配置面只写毫秒,运行时统一经此换算 —— 改 `frame_tick_ms`
 /// 不改动画的真实时长。
@@ -280,7 +401,98 @@ pub fn ease_in_out(progress: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL, Transition, ease_in_out, ticks16_from_ms};
+    use super::{FULL, TrailLeg, TrailingToggle, Transition, ease_in_out, ticks16_from_ms};
+
+    /// TrailingToggle:开启后先僵 `delay` 拍(进度冻结),再缓入到满;全程 active。
+    #[test]
+    fn trailing_delays_then_eases_to_full() {
+        let mut t =
+            TrailingToggle::new(TrailLeg::new(/*delay*/ 3, /*ease*/ 4), TrailLeg::new(2, 2));
+        t.follow(/*on*/ true);
+        assert!(t.active(), "开启即 active(含待走滞后)");
+        for _ in 0..3 {
+            assert_eq!(t.progress(), 0, "滞后期进度冻结在 0");
+            t.tick();
+        }
+        let mut prev = 0;
+        for _ in 0..4 {
+            t.tick();
+            let v = t.progress();
+            assert!(v >= prev, "滞后走完后缓入单调不降: {v} >= {prev}");
+            prev = v;
+        }
+        assert_eq!(t.progress(), FULL, "缓入到满");
+    }
+
+    /// TrailingToggle:退出同样先僵退场腿 `delay` 再缓出到 0,收干净后不再 active。
+    #[test]
+    fn trailing_reverse_delays_then_eases_to_zero() {
+        let leg = TrailLeg::new(/*delay*/ 2, /*ease*/ 2);
+        let mut t = TrailingToggle::new(leg, leg);
+        t.follow(/*on*/ true);
+        for _ in 0..4 {
+            t.tick();
+        }
+        assert_eq!(t.progress(), FULL, "进场到满");
+        t.follow(/*on*/ false);
+        for _ in 0..2 {
+            assert_eq!(t.progress(), FULL, "退出滞后期仍满(先等再褪)");
+            t.tick();
+        }
+        for _ in 0..2 {
+            t.tick();
+        }
+        assert_eq!(t.progress(), 0, "退出缓出到 0");
+        assert!(!t.active(), "收干净且无待走滞后后不再 active");
+    }
+
+    /// TrailingToggle:进 / 退各用自己的腿——进场慢(ease 10)、退场快(ease 2),
+    /// 退场收干净的拍数远少于进场走满。
+    #[test]
+    fn trailing_enter_exit_use_separate_legs() {
+        let mut t = TrailingToggle::new(
+            TrailLeg::new(/*delay*/ 0, /*ease*/ 10), // 进:优雅慢入
+            TrailLeg::new(/*delay*/ 0, /*ease*/ 2),  // 退:迅速收
+        );
+        t.follow(/*on*/ true);
+        for _ in 0..10 {
+            t.tick();
+        }
+        assert_eq!(t.progress(), FULL, "进场慢腿 10 拍走满");
+        t.follow(/*on*/ false);
+        t.tick();
+        t.tick();
+        assert_eq!(t.progress(), 0, "退场快腿 2 拍即收干净");
+    }
+
+    /// TrailingToggle:同目标反复 follow 是空操作,不重置滞后(每拍无条件调用安全)。
+    #[test]
+    fn trailing_follow_is_idempotent() {
+        let leg = TrailLeg::new(/*delay*/ 3, /*ease*/ 3);
+        let mut t = TrailingToggle::new(leg, leg);
+        t.follow(/*on*/ true);
+        t.tick(); // 滞后 3 → 2
+        t.follow(/*on*/ true); // 同目标:不该把滞后重置回 3
+        t.tick(); // 2 → 1
+        t.tick(); // 1 → 0
+        t.tick(); // 滞后已尽,推进缓动
+        assert!(t.progress() > 0, "同目标反复 follow 未重置滞后,缓动已起步");
+    }
+
+    /// TrailingToggle:缓动途中 retempo 不动当前进度(保相位,只换后续速度)。
+    #[test]
+    fn trailing_retempo_preserves_phase() {
+        let mut t =
+            TrailingToggle::new(TrailLeg::new(/*delay*/ 2, /*ease*/ 10), TrailLeg::new(0, 2));
+        t.follow(/*on*/ true);
+        for _ in 0..5 {
+            t.tick();
+        }
+        let mid = t.progress();
+        assert!(mid > 0, "前置:缓动已起步");
+        t.retempo(TrailLeg::new(/*delay*/ 5, /*ease*/ 20), TrailLeg::new(0, 4));
+        assert_eq!(t.progress(), mid, "retempo 那拍进度不跳");
+    }
 
     /// `ticks16_from_ms`:默认值精确换算(288/16=18、96/16=6)、四舍五入、
     /// 下限 1、超界饱和到 `u16::MAX`、`tick_ms=0` 不除零。

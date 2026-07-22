@@ -32,8 +32,8 @@ pub use ambient::{
     RotateConfig, VignetteConfig,
 };
 pub use animation::{
-    AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode,
-    MenuReveal, SearchFocusTransition, SweepStyle,
+    AmbientTrailConfig, AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig,
+    MarqueeMode, MenuReveal, SearchFocusTransition, SweepStyle, TrailTimingConfig,
 };
 pub use audio::{AudioConfig, BackendKind};
 pub use behavior::{BehaviorConfig, TrackPosMemory};

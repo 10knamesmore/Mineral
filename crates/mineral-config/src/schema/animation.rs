@@ -24,6 +24,10 @@ pub struct AnimationConfig {
     /// 全屏播放态进退场形变动画时长(毫秒)。
     fullscreen_ms: u32,
 
+    /// 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位,
+    /// 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
+    ambient_trail: AmbientTrailConfig,
+
     /// 浮层(队列 / 确认框)进出动画时长(毫秒)。
     popup_anim_ms: u32,
 
@@ -54,6 +58,29 @@ pub struct AnimationConfig {
 
     /// 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
     marquee: MarqueeConfig,
+}
+
+/// 全屏氛围背景的滞后跟随参数(挂在 `AnimationConfig` 下):进 / 退各一套时长,故进场可
+/// 优雅慢入、退场可迅速收干净。
+#[config_section]
+pub struct AmbientTrailConfig {
+    /// 进全屏方向的滞后跟随时长(优雅慢入)。
+    enter: TrailTimingConfig,
+
+    /// 退全屏方向的滞后跟随时长(迅速收)。
+    exit: TrailTimingConfig,
+}
+
+/// 一个方向(进 / 退)的滞后跟随时长(挂在 `AmbientTrailConfig` 下):背景色先僵一段
+/// `delay_ms`,再用 ease-out 缓动在 `ease_ms` 内追到几何形变的终态。两者都为 0 则退化为
+/// 与形变同步到位(无滞后)。
+#[config_section]
+pub struct TrailTimingConfig {
+    /// 背景色开始跟随前的滞后时长(毫秒):形变已起步 / 收拢,背景色仍按兵不动这么久。
+    delay_ms: u32,
+
+    /// 滞后结束后背景色缓入 / 缓出到位的时长(毫秒):越长越慵懒。
+    ease_ms: u32,
 }
 
 /// 溢出标题滚动(marquee)配置。

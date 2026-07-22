@@ -2,19 +2,20 @@
 //! 宏生成的 `---@class` / `---@alias` 常量,按主题序合成完整 LuaCATS stub。
 
 use crate::schema::{
-    AmbientConfig, AnchorConfig, AnimationConfig, AudioConfig, BackendKind, BackfillSection,
-    BarsConfig, BehaviorConfig, BilibiliSection, CacheConfig, ChannelSearchConfig, Config,
-    CopyConfig, CopyContext, CopyTemplate, CoverCacheConfig, CoverConfig, CoverProtocolMode,
-    CoverStorageMode, CoverTransitionConfig, CoverTransitionStyle, DaemonConfig, DeepSearchConfig,
-    DeepWeights, DownloadConfig, DriftConfig, DynamicThemeConfig, EnvelopeConfig, FsSpectrumConfig,
-    HighpassConfig, KeysConfig, KittyTransmitConfig, KmeansConfig, LayoutConfig, LyricsConfig,
-    MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode, MenuReveal, MineralSection,
-    NeteaseSection, PrefetchConfig, PulseConfig, PulseDepthConfig, PunchConfig, QueueConfig,
-    QueueTransform, ReportConfig, RotateConfig, ScopeConfig, ScriptConfig, SearchConfig,
-    SearchFocusTransition, SearchHitConfig, SearchQueryMode, ShelfConfig, SourcesConfig,
-    SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle, TerrainConfig,
-    TextAlphaConfig, TextStyle, ThemeConfig, TitleField, TitleIcons, ToastConfig, TrackPosMemory,
-    TuiConfig, VignetteConfig, WaterfallConfig, WaveformConfig, WindowTitleConfig, ZoomConfig,
+    AmbientConfig, AmbientTrailConfig, AnchorConfig, AnimationConfig, AudioConfig, BackendKind,
+    BackfillSection, BarsConfig, BehaviorConfig, BilibiliSection, CacheConfig, ChannelSearchConfig,
+    Config, CopyConfig, CopyContext, CopyTemplate, CoverCacheConfig, CoverConfig,
+    CoverProtocolMode, CoverStorageMode, CoverTransitionConfig, CoverTransitionStyle, DaemonConfig,
+    DeepSearchConfig, DeepWeights, DownloadConfig, DriftConfig, DynamicThemeConfig, EnvelopeConfig,
+    FsSpectrumConfig, HighpassConfig, KeysConfig, KittyTransmitConfig, KmeansConfig, LayoutConfig,
+    LyricsConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig, MarqueeMode, MenuReveal,
+    MineralSection, NeteaseSection, PrefetchConfig, PulseConfig, PulseDepthConfig, PunchConfig,
+    QueueConfig, QueueTransform, ReportConfig, RotateConfig, ScopeConfig, ScriptConfig,
+    SearchConfig, SearchFocusTransition, SearchHitConfig, SearchQueryMode, ShelfConfig,
+    SourcesConfig, SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle,
+    TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig, TitleField, TitleIcons, ToastConfig,
+    TrackPosMemory, TrailTimingConfig, TuiConfig, VignetteConfig, WaterfallConfig, WaveformConfig,
+    WindowTitleConfig, ZoomConfig,
 };
 
 /// 文件头:`---@meta` 声明 + 使用说明(手写 prose,不随 schema 变)。
@@ -86,6 +87,8 @@ pub(crate) fn meta_config_lua() -> String {
         ChannelSearchConfig::LUA_STUB,
         LyricsConfig::LUA_STUB,
         AnimationConfig::LUA_STUB,
+        AmbientTrailConfig::LUA_STUB,
+        TrailTimingConfig::LUA_STUB,
         MarqueeConfig::LUA_STUB,
         MarqueeLoopConfig::LUA_STUB,
         MarqueeBounceConfig::LUA_STUB,

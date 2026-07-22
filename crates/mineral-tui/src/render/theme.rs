@@ -45,6 +45,11 @@ pub struct Theme {
     /// 命令 / 搜索前缀。
     pub peach: Color,
 
+    /// 整屏背景填充色(构造时按配置 `theme.background` resolve):普通页面每格底色刷成
+    /// 此色,消除与全屏沉浸背景之间的色跳变。`Color::Reset` = 不填(终端默认底),
+    /// 渲染层据此整段跳过铺底。
+    pub background: Color,
+
     /// 搜索命中字符的高亮色(构造时按配置 `theme.search_hit.color` resolve:
     /// token 名随主题联动,`#rrggbb` 为固定色)。
     pub search_hit_color: Color,
@@ -144,6 +149,7 @@ impl Theme {
             yellow: c(cfg.yellow()),
             green: c(cfg.green()),
             peach: c(cfg.peach()),
+            background: Color::Reset,
             search_hit_color: Color::Reset,
             search_hit_modifier: Modifier::empty(),
             text_alpha: TextAlpha {
@@ -153,6 +159,7 @@ impl Theme {
                 ghost: permille_of(*cfg.text_alpha().ghost()),
             },
         };
+        t.background = t.resolve(cfg.background());
         t.search_hit_color = t.resolve(cfg.search_hit().color());
         t.search_hit_modifier = cfg
             .search_hit()
@@ -204,6 +211,8 @@ impl Theme {
             yellow: Color::Rgb(0xf9, 0xe2, 0xaf),
             green: Color::Rgb(0xa6, 0xe3, 0xa1),
             peach: Color::Rgb(0xfa, 0xb3, 0x87),
+            // background 与 default.lua 的 `background = "base"` 对齐(resolve 到 base 同值)。
+            background: Color::Rgb(0x1e, 0x1e, 0x2e),
             // search_hit 与 default.lua 的 `{ color = "peach",
             // modifiers = { "bold", "underline", "italic" } }` 对齐。
             search_hit_color: Color::Rgb(0xfa, 0xb3, 0x87),
@@ -397,6 +406,30 @@ mod tests {
             "Theme 默认值(from_config(defaults) = mocha_mauve)",
             t
         );
+        Ok(())
+    }
+
+    /// theme.background 落地:默认 `"base"` → 与 base 同色(消跳变的地基);覆盖为
+    /// `{ reset = true }` → `Color::Reset`(不填,渲染层据此跳过铺底、回到旧行为)。
+    #[test]
+    fn background_resolves_base_by_default_and_reset_override() -> color_eyre::Result<()> {
+        use ratatui::style::Color;
+
+        let cfg = mineral_config::Config::defaults()?;
+        let t = Theme::from_config(cfg.tui().theme());
+        assert_eq!(
+            t.background, t.base,
+            "默认 background = \"base\" → 与 base 同色"
+        );
+
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "tui": { "theme": { "background": { "reset": true } } } }),
+        );
+        let cfg = mineral_config::from_tree(&tree)
+            .map_err(|w| color_eyre::eyre::eyre!("覆盖后应落型成功:{w}"))?;
+        let t = Theme::from_config(cfg.tui().theme());
+        assert_eq!(t.background, Color::Reset, "reset 覆盖 → 不填(终端默认底)");
         Ok(())
     }
 

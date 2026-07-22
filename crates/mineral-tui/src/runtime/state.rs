@@ -280,10 +280,11 @@ impl AppState {
     }
 
     /// 推进一帧的各动画 / 相位状态(主循环每 tick 恰调一次):视图切换扫入、全屏形变、
-    /// 搜索布局、marquee 相位、失焦渐变、歌词滚动。
+    /// 氛围背景滞后跟随、搜索布局、marquee 相位、失焦渐变、歌词滚动。
     pub fn tick_frame(&mut self) {
         self.browse.view.tick();
         self.browse.fullscreen.tick();
+        self.browse.tick_ambient_reveal();
         self.channel_search.tick();
         self.marquees.tick();
         self.vinyl.tick();

@@ -74,6 +74,11 @@ Theme {
         179,
         135,
     ),
+    background: Rgb(
+        30,
+        30,
+        46,
+    ),
     search_hit_color: Rgb(
         250,
         179,

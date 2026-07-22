@@ -1,8 +1,9 @@
 //! 主帧渲染入口。
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
 use mineral_config::SearchFocusTransition;
@@ -29,6 +30,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     app.state.frame_area.set(frame.area());
     let layout_cfg = app.state.cfg.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
+
+    // 整屏背景底(在任何布局面板之下):先铺 `theme.background`(普通页也有底色,消除进退
+    // 全屏时与沉浸背景的色跳变),再叠氛围场——氛围由滞后跟随门控,进 / 退全屏时背景色慢
+    // 半拍淡入 / 淡出,退出时越过恢复的列表界面慢褪。
+    paint_backdrop(frame, app, &normal, layout_cfg);
 
     // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
     if !app.state.browse.fullscreen.at_min() {
@@ -256,7 +262,7 @@ fn paint_fullscreen(
     app: &App,
     flight: Option<(&flight::FlightPlan, u16)>,
 ) {
-    draw_ambient(frame, app, ambient_skip_rect(app, areas.cover));
+    // 氛围背景已由 `paint_backdrop` 在布局分派前整屏铺就(滞后跟随门控),此处不再自铺。
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
         top_status::draw(frame, r, &app.state, theme);
@@ -298,9 +304,84 @@ fn paint_fullscreen(
     }
 }
 
-/// 氛围背景:整屏铺当前封面调色板驱动的渐变场(功能开着、或关闭后仍在淡出途中才画;
-/// 浓度乘全屏形变进度,进场随形变淡入、退场随形变收干净)。ANSI 主题无真彩底色,跳过。
+/// 整屏背景底:布局面板之下的两层——先 `theme.background` 纯色填充,再叠氛围渐变场。
+///
+/// 普通页面本无底色(逐格终端默认),进 / 退全屏时整屏刷成沉浸底会瞬跳;这里给普通页也
+/// 铺 `theme.background`(默认 = `base` = 氛围场在浓度 0 时的底色),两端连续。氛围场再叠
+/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变);全屏真图区两层都挖洞,防每帧
+/// 改图 cell 的 bg 触发图协议载荷 diff 重发。
+fn paint_backdrop(
+    frame: &mut Frame<'_>,
+    app: &App,
+    normal: &Areas,
+    layout_cfg: &mineral_config::LayoutConfig,
+) {
+    let area = frame.area();
+    let skip = backdrop_skip(app, area, normal, layout_cfg);
+    fill_bg(frame.buffer_mut(), area, app.theme.background, skip);
+    draw_ambient(frame, app, skip);
+}
+
+/// 本帧铺底 / 氛围都要挖的真图洞(防每帧改图 cell 的 bg 触发图协议载荷 diff 重发):
+///   - 全屏稳态(`at_max`):全屏封面真图区(见 [`ambient_skip_rect`]);
+///   - 退出残留期(几何已回列表 `at_min`、氛围仍在褪):now_playing 面板的真图封面区;
+///   - 其余(形变途中 halfblock 不透明覆盖 / 无氛围):无洞。
+fn backdrop_skip(
+    app: &App,
+    area: Rect,
+    normal: &Areas,
+    layout_cfg: &mineral_config::LayoutConfig,
+) -> Option<Rect> {
+    let fullscreen = &app.state.browse.fullscreen;
+    if fullscreen.at_max() {
+        return ambient_skip_rect(app, compute_fullscreen(area, layout_cfg).cover);
+    }
+    if fullscreen.at_min() && app.state.browse.ambient_reveal.active() {
+        return now_playing_cover_skip(app, normal.right);
+    }
+    None
+}
+
+/// now_playing 面板当前 place 的真图封面视觉区(用于退出残留期挖洞);面板不画真图
+/// (无选中 / 无图 / 协议未就绪 / halfblock 兜底)时为 `None`。
+fn now_playing_cover_skip(app: &App, right: Option<Rect>) -> Option<Rect> {
+    let right = nonempty(right?)?;
+    let url = now_playing::main_cover::url(&app.state)?;
+    let [cover_sec, _, _] = now_playing::main_cover::sections(right)?;
+    let target = cover_image::square_subarea(nonempty(cover_sec)?, app.picker.font_size());
+    app.state
+        .covers
+        .protocols
+        .ready_for_render(&url, (target.width, target.height))
+        .then_some(target)
+}
+
+/// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时空操作(保留终端默认
+/// 底,即旧行为)。`skip` 区不刷(见 [`ambient_skip_rect`])。
+fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
+    if matches!(color, Color::Reset) {
+        return;
+    }
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if skip.is_some_and(|hole| hole.contains(Position::new(x, y))) {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(color);
+            }
+        }
+    }
+}
+
+/// 氛围渐变场:整屏铺当前封面调色板驱动的渐变场,浓度由**滞后跟随**进度驱动——进 / 退全屏
+/// 时背景色慢半拍淡入 / 淡出,退出时几何已回列表、场仍越过列表慢褪(故门控用
+/// `ambient_reveal.active()` 而非全屏几何)。跟随静止在关态时整段跳过(背景填充已铺底);
+/// 功能关且色板淡出已到底、或 ANSI 主题无真彩底色时同样跳过。
 fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
+    if !app.state.browse.ambient_reveal.active() {
+        return;
+    }
     let cfg = app.state.cfg.tui().ambient();
     if !*cfg.enabled() && app.ambient.settled_at_base() {
         return;
@@ -315,7 +396,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
         &app.ambient,
         base,
         cfg,
-        app.state.browse.fullscreen.eased_in_out(),
+        app.state.browse.ambient_reveal.progress(),
         app.ambient_pulse.level_permille(cfg.pulse()),
         skip,
     );
@@ -438,6 +519,24 @@ mod tests {
 
     use crate::render::anim::{Toggle, Transition};
     use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
+
+    /// theme.background 整屏填充:普通浏览页每格底色刷成背景填充色(默认 = base),
+    /// 与全屏沉浸背景在浓度 0 时同底,消除进退全屏的色跳变。面板只画前景不改 bg,
+    /// 故取任一非封面 cell 验证底色即可。
+    #[test]
+    fn backdrop_fills_browse_with_background_color() -> color_eyre::Result<()> {
+        let app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let base = app.theme.base;
+        assert!(matches!(base, Color::Rgb(..)), "前置:默认主题 base 为真彩");
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        let cell = buf
+            .cell(Position::new(1, 1))
+            .ok_or_else(|| eyre!("cell 越界"))?;
+        assert_eq!(cell.bg, base, "普通页每格底色应为背景填充色(base)");
+        Ok(())
+    }
 
     /// 全屏进入形变:不按逐帧漂移的 dims 派发编码(churn),预热只按**端点稳态尺寸**
     /// (封面飞行层两端各一)——编码与形变动画并行,落定即命中。从零 pending 起步
@@ -1017,6 +1116,7 @@ mod tests {
         fs.set(true);
         fs.tick();
         app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app); // 滞后跟随推满,氛围场浓度到位
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -1034,6 +1134,14 @@ mod tests {
         Ok(())
     }
 
+    /// 滞后跟随进度推满:全屏已 on 时把 `ambient_reveal` 缓到满(delay + ease),
+    /// 使氛围场以满浓度渲染(供直接钉 `fullscreen` 而绕过主循环的渲染测试用)。
+    fn settle_ambient_reveal(app: &mut crate::app::App) {
+        for _ in 0..80 {
+            app.state.browse.tick_ambient_reveal();
+        }
+    }
+
     /// 全屏稳态 + 无在播色板:氛围场静止在底色——整屏铺出的是纯底色平场
     /// (功能开着就不透出终端默认背景,切歌淡入无缝)。
     #[test]
@@ -1043,6 +1151,7 @@ mod tests {
         fs.set(true);
         fs.tick();
         app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app);
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -1056,21 +1165,27 @@ mod tests {
         Ok(())
     }
 
-    /// `ambient.enabled = false` 且已静止在底色场:整段跳过铺场,顶行角落 bg 保持
-    /// 未写入(终端默认),证明关闭态常态零开销。
+    /// `ambient.enabled = false` 且已静止在底色场:氛围层整段跳过铺场。为把它与
+    /// `theme.background` 整屏填充区分开,这里一并 `background = reset`(关掉纯色填充)——
+    /// 即便滞后跟随已推满、渲染入口活着,顶行角落 bg 仍保持未写入(终端默认),
+    /// 证明关闭态氛围层常态零开销。
     #[test]
     fn fullscreen_ambient_disabled_skips_painting() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         app.apply_pushed_config(mineral_protocol::BusValue::from_json(
             mineral_config::merge_tree(
                 mineral_config::default_tree()?,
-                serde_json::json!({ "tui": { "ambient": { "enabled": false } } }),
+                serde_json::json!({ "tui": {
+                    "ambient": { "enabled": false },
+                    "theme": { "background": { "reset": true } },
+                } }),
             ),
         ));
         let mut fs = Toggle::new(1);
         fs.set(true);
         fs.tick();
         app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app);
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| super::draw(f, &app))?;
@@ -1080,7 +1195,11 @@ mod tests {
             .cell((79, 0))
             .ok_or_else(|| eyre!("cell 越界"))?
             .bg;
-        assert_eq!(bg, Color::Reset, "关闭且静止时不应写任何 bg");
+        assert_eq!(
+            bg,
+            Color::Reset,
+            "关闭且静止时氛围层不应写任何 bg(填充也已关)"
+        );
         Ok(())
     }
 

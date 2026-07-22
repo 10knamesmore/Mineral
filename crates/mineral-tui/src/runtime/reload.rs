@@ -405,6 +405,32 @@ mod tests {
         Ok(())
     }
 
+    /// 氛围背景滞后跟随飞行中热更 `ambient_trail`:retempo 保相位——推送那帧进度不回零、
+    /// 不跳变(逻辑态与已走缓动都留住)。
+    #[test]
+    fn pushed_config_ambient_trail_retempo_preserves_phase() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.state.browse.fullscreen.toggle();
+        // 推进过默认滞后(140ms/16ms ≈ 9 拍)再进缓动几拍;tick_frame 同拍推进跟随。
+        for _ in 0..14 {
+            app.state.tick_frame();
+        }
+        let mid = app.state.browse.ambient_reveal.progress();
+        assert!(mid > 0, "前置:滞后已尽、缓动起步");
+        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
+            "ambient_trail": {
+                "enter": { "delay_ms": 400, "ease_ms": 2000 },
+                "exit": { "delay_ms": 0, "ease_ms": 240 },
+            },
+        } } }))?);
+        assert_eq!(
+            app.state.browse.ambient_reveal.progress(),
+            mid,
+            "retempo 只换速度,推送那帧进度不跳"
+        );
+        Ok(())
+    }
+
     /// 防御:落型不了的推送(版本偏斜)保留现行配置,弹驻留错误卡;
     /// 下一帧好配置到来自动撤卡。
     #[test]

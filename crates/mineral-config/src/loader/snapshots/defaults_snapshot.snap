@@ -6,6 +6,11 @@ expression: "format!(\"{cfg:#?}\")"
 Config {
     tui: TuiConfig {
         theme: ThemeConfig {
+            background: Token(
+                TokenName {
+                    name: "base",
+                },
+            ),
             base: Hex(
                 HexColor {
                     r: 30,
@@ -830,6 +835,16 @@ Config {
             sweep_ms: 288,
             list_scroll_ms: 280,
             fullscreen_ms: 288,
+            ambient_trail: AmbientTrailConfig {
+                enter: TrailTimingConfig {
+                    delay_ms: 80,
+                    ease_ms: 740,
+                },
+                exit: TrailTimingConfig {
+                    delay_ms: 0,
+                    ease_ms: 240,
+                },
+            },
             popup_anim_ms: 288,
             toast_anim_ms: 288,
             focus_fade_ms: 288,

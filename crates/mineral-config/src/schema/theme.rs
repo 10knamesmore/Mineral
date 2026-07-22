@@ -18,6 +18,10 @@ const TOKEN_NAMES: [&str; 14] = [
 /// 每个 token 是一个 [`ColorValue`](固定色 / ANSI 槽 / 终端默认);token 之间不能互相引用。
 #[config_section]
 pub struct ThemeConfig {
+    /// 整屏背景填充色:普通页面每格底色刷成此色,消除与全屏沉浸背景之间的色跳变。
+    /// 取具体色 / token 引用即填充,取 `{ reset = true }` 则不填充(用终端默认底)。
+    background: ColorRef,
+
     /// 主背景。
     base: ColorValue,
 
