@@ -573,6 +573,22 @@ fn render_cell<'a>(
             if emphasis > SCROLL_FULL / 2 {
                 style = style.add_modifier(Modifier::BOLD);
             }
+            // 脱离态焦点行:文字两侧垫一对淡 `-`(muted 档对本行实际背景混合)作 seek 游标,
+            // 提示「Enter 跳到此行」;跟居中文字一起居中故左右对称。当前行 / 上一行不标——
+            // 它们已有 now-playing / 交叉淡出线索,与半程焦点行拉开层级。
+            if Some(*line_idx) == ctx.focus
+                && Some(*line_idx) != ctx.cur
+                && Some(*line_idx) != ctx.prev
+            {
+                let dash = Style::new().fg(theme
+                    .text_over(row_bg, theme.text_alpha.muted)
+                    .unwrap_or(theme.overlay));
+                return Line::from(vec![
+                    Span::styled("-  ", dash),
+                    Span::styled(text, style),
+                    Span::styled("  -", dash),
+                ]);
+            }
             Line::from(text).style(style)
         }
     }
@@ -857,7 +873,8 @@ mod tests {
     }
 
     /// 全屏沉浸 + 手动下滚:在自动锚点上叠加偏移,当前行离开正中、窗口整体上移露出后文
-    /// (对照上方稳态帧)。synced 歌仍按播放位置算 now-playing 高亮。
+    /// (对照上方稳态帧)。synced 歌仍按播放位置算 now-playing 高亮;居中的焦点行两侧垫一对
+    /// 淡 `-`(seek 游标,提示 Enter 跳到此行)。
     #[test]
     fn lyrics_immersive_manual_scroll_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 20))?;

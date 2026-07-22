@@ -240,6 +240,9 @@ pub(crate) struct TestClient {
 
     /// `queue_edit` 收到的编辑操作序列(队列面板的删除 / 移动 / 清理路径断言用)。
     pub(crate) queue_edits: QueueEditLog,
+
+    /// `seek` 收到的目标位置(ms)序列(全屏歌词 Enter 跳到焦点行的绝对 seek 路径断言用)。
+    pub(crate) seeks: Arc<Mutex<Vec<u64>>>,
 }
 
 /// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
@@ -257,7 +260,11 @@ impl Client for TestClient {
     fn pause(&self) {}
     fn resume(&self) {}
     fn stop(&self) {}
-    fn seek(&self, _position_ms: u64) {}
+    fn seek(&self, position_ms: u64) {
+        if let Ok(mut v) = self.seeks.lock() {
+            v.push(position_ms);
+        }
+    }
     fn set_volume(&self, _pct: u8) {}
     fn audio_snapshot(&self) -> AudioSnapshot {
         AudioSnapshot::default()
@@ -533,7 +540,23 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
 /// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
 /// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
 pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
-    let mut app = test_app()?;
+    Ok(seed_fullscreen(test_app()?))
+}
+
+/// 同 [`app_in_fullscreen`],但接一个记录 `seek` 目标的 [`TestClient`];额外返回该记录
+/// (全屏歌词 Enter 跳到焦点行的绝对 seek 路径断言用)。
+pub(crate) fn app_in_fullscreen_seek_probe() -> color_eyre::Result<(App, Arc<Mutex<Vec<u64>>>)> {
+    let seeks: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        seeks: Arc::clone(&seeks),
+        ..TestClient::default()
+    };
+    Ok((seed_fullscreen(test_app_with(Arc::new(client))?), seeks))
+}
+
+/// 把一个空 [`App`] 布置成稳态全屏在播态:缓存《潜在表明》逐字歌词、position 62s 落中段、
+/// queue 填 3 首、fullscreen 推到满值。[`app_in_fullscreen`] 系列共用。
+fn seed_fullscreen(mut app: App) -> App {
     let track = qianzai_song();
     app.state
         .library
@@ -548,7 +571,7 @@ pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     fs.set(true);
     fs.tick();
     app.state.browse.fullscreen = fs;
-    Ok(app)
+    app
 }
 
 /// 造一个接 [`TestClient`]、**已稳态进入 Search 布局态**的 [`App`]:queue 填 3 首、在播首曲。

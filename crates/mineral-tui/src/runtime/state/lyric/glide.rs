@@ -20,6 +20,15 @@ enum GlidePhase {
 
     /// 回锚平移(目标已切回播放行);settle 后清回附着态。
     Reattach,
+
+    /// Enter 跳到焦点行后的等待态:锚点钉在 `line`,等 seek 落地且播放越过该行的交叉淡入窗口
+    /// 再清回附着态。seek 是服务端往返、`position_ms` 滞后,若落地即清,attached 会以 `eased≈0`
+    /// 把焦点行当新行从上一行重新缓动平移进来——钉住直到 `eased` 满,附着态直接 settled 居中
+    /// 接手,零重演。收口判定见 [`AppState::tick_lyric_scroll`]。
+    AwaitSeek {
+        /// 锚定并等待播放抵达的原文行索引。
+        line: i64,
+    },
 }
 
 /// 全屏歌词「脱离播放」的手动滚动态。
@@ -58,6 +67,7 @@ impl LyricGlide {
     fn target_line(&self) -> i64 {
         match self.phase {
             GlidePhase::Overshoot { rest_milli } => rest_milli / 1000,
+            GlidePhase::AwaitSeek { line } => line,
             GlidePhase::Manual | GlidePhase::Reattach => self.to_milli / 1000,
         }
     }
@@ -151,6 +161,33 @@ impl AppState {
         );
         let cur_line = self.current_line_anchor();
         let glide_ticks = self.glide_ticks();
+
+        // Enter 跳行后的等待态:锚点钉在焦点行不动,等 seek 落地。收口条件不是「刚落进焦点行」,
+        // 而是「播放已进入焦点行且越过交叉淡入窗口(`elapsed >= scroll_ms`)」——否则清脱离瞬间
+        // attached 的 `elapsed≈0`、`eased≈0`,会把焦点行当成刚切入的新行、从上一行重新缓动平移
+        // 进来(观感:先居中在前一行再滑到焦点行)。等 `eased` 满再清,attached 直接以 settled
+        // 居中接手,零重演。`cur == line` 判「已落进焦点行区间」——向后 seek 时旧位置在别处,
+        // 不会在 seek 落地前误判;超时兜底防 seek 未落地(拒绝 / 越界)卡死在脱离态。
+        if let Some(GlidePhase::AwaitSeek { line }) =
+            self.browse.lyric_view.scroll.as_ref().map(|g| g.phase)
+        {
+            let scroll_ms = *self.cfg.tui().lyrics().scroll_ms();
+            let past_fade = self
+                .current_lines()
+                .and_then(|lines| usize::try_from(line).ok().and_then(|i| lines.get(i)))
+                .and_then(|line| line.time_ms)
+                .is_some_and(|t| self.playback.position_ms.saturating_sub(t) >= scroll_ms);
+            let settled = cur_line == line && past_fade;
+            let Some(g) = self.browse.lyric_view.scroll.as_mut() else {
+                return;
+            };
+            g.idle = g.idle.saturating_add(1);
+            if settled || g.idle >= reattach_ticks {
+                self.browse.lyric_view.scroll = None;
+            }
+            return;
+        }
+
         let Some(g) = self.browse.lyric_view.scroll.as_mut() else {
             return;
         };
@@ -227,6 +264,32 @@ impl AppState {
             .scroll
             .as_ref()
             .and_then(|g| usize::try_from(g.target_line()).ok())
+    }
+
+    /// 脱离态焦点行的起始时间(ms),给 Enter「跳到此行」的绝对 seek 用;附着态 / 焦点行
+    /// 无时间戳(无同步歌)均返回 `None`(无从跳)。
+    pub(crate) fn lyric_focus_seek_target(&self) -> Option<u64> {
+        let line = self.manual_lyric_focus_line()?;
+        self.current_lines()?.get(line)?.time_ms
+    }
+
+    /// Enter 跳到焦点行后钉住锚点等 seek 落地:把脱离态换成 [`GlidePhase::AwaitSeek`] 定在
+    /// `line`(已 settle,不再平移),由 [`Self::tick_lyric_scroll`] 在播放位置抵达该行时
+    /// 无缝清回附着态。不立即清脱离——seek 往返滞后,立即清会先跳回旧播放行(见 `AwaitSeek`)。
+    ///
+    /// # Params:
+    ///   - `line`: seek 目标原文行索引(焦点行)
+    pub(crate) fn hold_lyric_anchor_for_seek(&mut self, line: usize) {
+        let Ok(line) = i64::try_from(line) else {
+            return;
+        };
+        self.browse.lyric_view.scroll = Some(LyricGlide {
+            from_milli: line * 1000,
+            to_milli: line * 1000,
+            glide: Transition::expanding(1),
+            phase: GlidePhase::AwaitSeek { line },
+            idle: 0,
+        });
     }
 
     /// 测试辅助:把手动滚动直接置于「已 settle」状态,锚定在当前播放行 + `delta` 行。
@@ -471,6 +534,106 @@ mod tests {
         s.playback.track = Some(feiyu_song());
         s.tick_lyric_scroll();
         assert!(s.browse.lyric_view.scroll.is_none(), "换歌清脱离态");
+        Ok(())
+    }
+
+    /// `lyric_focus_seek_target`:附着态无焦点 → None;synced 脱离态 → 焦点行时间戳;
+    /// 无时间戳歌脱离态 → None(无从跳)。给 Enter「跳到此行」的绝对 seek 用。
+    #[test]
+    fn focus_seek_target_only_when_synced_and_detached() -> color_eyre::Result<()> {
+        let mut s = fullscreen_with(timed_lines())?;
+        assert_eq!(
+            s.lyric_focus_seek_target(),
+            None,
+            "附着态无焦点 → 无跳转目标"
+        );
+        s.tick_lyric_scroll();
+        s.scroll_lyrics(ScrollStep::PageDown);
+        let page = u64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        assert_eq!(
+            s.lyric_focus_seek_target(),
+            Some(page * 1000),
+            "synced 脱离态 → 焦点行时间戳(timed_lines 第 i 行 = i*1000ms)"
+        );
+
+        let mut u = fullscreen_with(untimed_lines())?;
+        u.tick_lyric_scroll();
+        u.scroll_lyrics(ScrollStep::PageDown);
+        assert_eq!(
+            u.lyric_focus_seek_target(),
+            None,
+            "无时间戳行脱离态 → 无从跳"
+        );
+        Ok(())
+    }
+
+    /// `hold_lyric_anchor_for_seek` + tick:seek 落地前锚点钉在焦点行不清;播放进入焦点行
+    /// 且越过交叉淡入窗口后无缝清回附着态。
+    #[test]
+    fn await_seek_holds_until_playback_arrives() -> color_eyre::Result<()> {
+        let mut s = fullscreen_with(timed_lines())?;
+        s.tick_lyric_scroll();
+        s.scroll_lyrics(ScrollStep::PageDown);
+        let focus = s
+            .manual_lyric_focus_line()
+            .ok_or_else(|| color_eyre::eyre::eyre!("已脱离应有焦点行"))?;
+        s.hold_lyric_anchor_for_seek(focus);
+
+        // seek 未落地(position 仍 0):锚点钉住不清,焦点仍在该行。
+        s.tick_lyric_scroll();
+        assert!(
+            s.browse.lyric_view.scroll.is_some(),
+            "seek 落地前钉住锚点(不立即回附着)"
+        );
+        assert_eq!(s.manual_lyric_focus_line(), Some(focus), "锚点仍在焦点行");
+
+        // 刚落进焦点行(elapsed=0,仍在淡入窗口内):不清——否则 attached 会从上一行重演。
+        s.playback.position_ms = u64::try_from(focus)? * 1000;
+        s.tick_lyric_scroll();
+        assert!(
+            s.browse.lyric_view.scroll.is_some(),
+            "落进焦点行但淡入未完成时仍钉住(避免 attached 重演行切入)"
+        );
+
+        // 越过淡入窗口(elapsed ≥ scroll_ms)→ 清脱离回附着。scroll_ms < 1000 故仍落在该行
+        // 区间(timed_lines 行距 1000ms)。
+        let scroll_ms = *s.cfg.tui().lyrics().scroll_ms();
+        assert!(
+            scroll_ms < 1000,
+            "前提:淡入窗口须短于行距,否则会溢出到下一行"
+        );
+        s.playback.position_ms = u64::try_from(focus)? * 1000 + scroll_ms;
+        s.tick_lyric_scroll();
+        assert!(
+            s.browse.lyric_view.scroll.is_none(),
+            "越过淡入窗口后无缝回附着态"
+        );
+        Ok(())
+    }
+
+    /// 向后 seek(旧位置在焦点行之后):`AwaitSeek` 靠 `cur == line`(位置落进焦点行区间)判
+    /// 落地,而非 `>=`——否则 seek 落地前旧位置本就 `> line` 会被误判、先跳回旧播放行。
+    #[test]
+    fn await_seek_backward_does_not_prematurely_reattach() -> color_eyre::Result<()> {
+        let mut s = fullscreen_with(timed_lines())?;
+        s.tick_lyric_scroll();
+        // 播放在第 18 行,向后 seek 到第 5 行:hold 在 5,但 position 仍在 18。
+        s.playback.position_ms = 18_000;
+        s.hold_lyric_anchor_for_seek(5);
+        s.tick_lyric_scroll();
+        assert!(
+            s.browse.lyric_view.scroll.is_some(),
+            "cur=18 ≠ line=5:不误判抵达(`>=` 会在此错误清脱离)"
+        );
+        // seek 落地到第 5 行并越过淡入窗口 → 清回附着。
+        let scroll_ms = *s.cfg.tui().lyrics().scroll_ms();
+        assert!(scroll_ms < 1000, "前提:淡入窗口须短于行距");
+        s.playback.position_ms = 5_000 + scroll_ms;
+        s.tick_lyric_scroll();
+        assert!(
+            s.browse.lyric_view.scroll.is_none(),
+            "落进焦点行且越过淡入窗口后回附着态"
+        );
         Ok(())
     }
 

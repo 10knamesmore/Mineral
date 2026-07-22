@@ -40,6 +40,10 @@ pub(crate) enum BrowseEffect {
     /// 全屏态滚动歌词(歌词数据是 model,落地走既有 [`AppState::scroll_lyrics`])。
     ScrollLyrics(ScrollStep),
 
+    /// 全屏手动浏览(已脱离)时 Enter 跳到焦点行时间点(seek + 回附着态);
+    /// 落地走 [`AppState::lyric_focus_seek_target`],无时间戳行则无跳转目标。
+    SeekLyricFocus,
+
     /// 把当前 track_pos 记忆表落盘(persist 档;表本身已在 Browse 内更新)。
     PersistTrackPos,
 
@@ -222,10 +226,16 @@ impl BrowsePage {
     }
 
     /// 在当前视图「进入」:Playlists 进选中歌单的 Library(含深度命中定位 / 位置记忆恢复);
-    /// Library 吐 [`BrowseEffect::PlayQueue`] 起播选中曲。全屏态屏蔽。
+    /// Library 吐 [`BrowseEffect::PlayQueue`] 起播选中曲。全屏态改吐
+    /// [`BrowseEffect::SeekLyricFocus`](脱离浏览时跳到焦点行)/ 附着态无焦点则吞掉。
     fn activate_selection(&mut self, model: BrowseModel<'_>) -> BrowseEffect {
         if self.fullscreen.on() {
-            return BrowseEffect::None;
+            // 全屏手动浏览(已脱离,有焦点行)→ Enter 跳到焦点行时间点;附着态无焦点,吞掉。
+            return if self.lyric_view.scroll.is_some() {
+                BrowseEffect::SeekLyricFocus
+            } else {
+                BrowseEffect::None
+            };
         }
         self.nav.last_sel_change = Instant::now();
         match self.view.current() {
@@ -409,6 +419,18 @@ impl App {
                 self.client.play_song(*song);
             }
             BrowseEffect::ScrollLyrics(step) => self.state.scroll_lyrics(step),
+            BrowseEffect::SeekLyricFocus => {
+                // 焦点行有时间戳才跳:seek 到该行起点,并把锚点钉在该行等 seek 落地再无缝
+                // 回附着(不立即清脱离——seek 往返滞后会先跳回旧播放行)。无时间戳行无跳转
+                // 目标,保持脱离态不动。
+                if let (Some(ms), Some(line)) = (
+                    self.state.lyric_focus_seek_target(),
+                    self.state.manual_lyric_focus_line(),
+                ) {
+                    self.client.seek(ms);
+                    self.state.hold_lyric_anchor_for_seek(line);
+                }
+            }
             BrowseEffect::PersistTrackPos => self
                 .ui_prefs
                 .save_track_positions(&self.state.browse.nav.track_pos),
@@ -1062,6 +1084,65 @@ mod tests {
         // `/` 不进搜索态。
         press(&mut app, KeyCode::Char('/'));
         assert!(!app.state.browse.search.typing, "全屏屏蔽搜索 `/`");
+        Ok(())
+    }
+
+    /// 全屏手动浏览(已脱离)时 Enter 跳到焦点行:seek 到该行时间戳 + 回附着态。
+    /// 附着态(未脱离)时 Enter 无跳转、维持现状(全屏无列表可 activate)。
+    #[test]
+    fn fullscreen_enter_seeks_to_focus_line() -> color_eyre::Result<()> {
+        use crate::runtime::action::ScrollStep;
+        use crate::test_support::app_in_fullscreen_seek_probe;
+
+        let (mut app, seeks) = app_in_fullscreen_seek_probe()?;
+        // 先注册当前歌(首个 tick 否则会因 scroll_song 未绑定而清脱离,与本测试无关)。
+        app.state.tick_lyric_scroll();
+
+        // 附着态:Enter 无跳转目标,不产生 seek。
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            seeks
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("seek 记录锁中毒: {e}"))?
+                .is_empty(),
+            "附着态 Enter 不 seek"
+        );
+
+        // 手动下滚脱离,取焦点行时间戳作预期。
+        app.state.scroll_lyrics(ScrollStep::PageDown);
+        let focus = app
+            .state
+            .manual_lyric_focus_line()
+            .ok_or_else(|| color_eyre::eyre::eyre!("已脱离应有焦点行"))?;
+        let expected = app
+            .state
+            .current_lines()
+            .and_then(|lines| lines.get(focus).and_then(|l| l.time_ms))
+            .ok_or_else(|| color_eyre::eyre::eyre!("焦点行应有时间戳"))?;
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            *seeks
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("seek 记录锁中毒: {e}"))?,
+            vec![expected],
+            "Enter 跳到焦点行时间戳"
+        );
+        // seek 未落地(position 未变)时锚点钉在焦点行不清脱离——避免先跳回旧播放行。
+        app.state.tick_lyric_scroll();
+        assert!(
+            app.state.browse.lyric_view.scroll.is_some(),
+            "seek 落地前钉住锚点(不立即回附着)"
+        );
+        // 模拟 snapshot 回传:播放进入焦点行并越过交叉淡入窗口(elapsed ≥ scroll_ms)→ 下一
+        // tick 无缝清脱离回附着(仅落地不越窗则仍钉住,避免 attached 重演行切入)。
+        let scroll_ms = *app.state.cfg.tui().lyrics().scroll_ms();
+        app.state.playback.position_ms = expected + scroll_ms;
+        app.state.tick_lyric_scroll();
+        assert!(
+            app.state.browse.lyric_view.scroll.is_none(),
+            "seek 落地并越过淡入窗口后无缝回附着态"
+        );
         Ok(())
     }
 }
