@@ -2,7 +2,7 @@
 
 use mineral_model::SongId;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
@@ -17,6 +17,10 @@ use crate::runtime::state::AppState;
 use crate::runtime::view_model::SongView;
 
 /// 渲染曲目详情(right pane)到 `area`。
+///
+/// # Params:
+///   - `cover_in_flight`: page morph 封面飞行层已接管主封面时置真——跳过自画封面防双画
+#[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
 pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -25,39 +29,34 @@ pub fn draw(
     state: &AppState,
     picker: &Picker,
     theme: &Theme,
+    cover_in_flight: bool,
 ) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
         .title(Line::from(" selected ").style(Style::new().fg(theme.subtext)));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height < 4 || inner.width < 8 {
+    let Some([cover_area, kv_area, current_strip]) = super::main_cover::sections(area) else {
         return;
+    };
+
+    if !cover_in_flight {
+        let seed = sv
+            .data
+            .album
+            .as_ref()
+            .map_or_else(|| sv.data.name.clone(), |a| a.name.clone());
+        cover_image::render_or_fallback(
+            frame,
+            cover_area,
+            sv.data.cover_url.as_ref(),
+            state,
+            picker,
+            theme,
+            &seed,
+        );
     }
-
-    let [cover_area, kv_area, current_strip] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(2),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
-
-    let seed = sv
-        .data
-        .album
-        .as_ref()
-        .map_or_else(|| sv.data.name.clone(), |a| a.name.clone());
-    cover_image::render_or_fallback(
-        frame,
-        cover_area,
-        sv.data.cover_url.as_ref(),
-        state,
-        picker,
-        theme,
-        &seed,
-    );
 
     let len = format_ms_opt(sv.data.duration_ms);
     let love_label = if sv.loved { "♥ loved" } else { "♡ —" };

@@ -284,6 +284,35 @@ fn permille_of_scale(scale: f32) -> u32 {
     (scale.clamp(1.0, 4.0) * 1000.0).round() as u32
 }
 
+/// page morph 飞行帧:两图按进度 fade 像素合成一帧,halfblock 直出到 `rect`(rect 已由
+/// 调用方正方化 / 插值)。与 [`render_transition`] 共用 [`compose_transition`] 量化路径,
+/// 纯 cell 逐帧重画安全。样式固定 fade——飞行层同时在改几何,再叠 slide / zoom 位移会打架。
+///
+/// # Params:
+///   - `rect`: 本帧铺图区域(飞行插值中途)
+///   - `progress_permille`: morph 进度(已缓动千分比,0 = 纯 `from`、1000 = 纯 `to`)
+pub(crate) fn render_crossfade_to(
+    buf: &mut Buffer,
+    rect: Rect,
+    from: &DynamicImage,
+    to: &DynamicImage,
+    progress_permille: u16,
+) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let composite = compose_transition(
+        from,
+        to,
+        u32::from(rect.width),
+        u32::from(rect.height).saturating_mul(2),
+        CoverTransitionStyle::Fade,
+        progress_permille,
+        /*zoom_scale_permille*/ 1000,
+    );
+    render_halfblock_to(buf, rect, &DynamicImage::ImageRgb8(composite));
+}
+
 /// 把已解码真图按 halfblock(`▀` 半字符)逐 cell 画进 `area`(**精确铺满**,不再内部正方化——
 /// 正方区由调用方算好再传入)。每 cell:上半像素 → fg、下半像素 → bg;源图先 `resize_exact`
 /// 到 `area.width × area.height*2` 像素再逐 cell 采样。

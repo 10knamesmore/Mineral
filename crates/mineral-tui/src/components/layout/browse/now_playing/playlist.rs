@@ -1,7 +1,7 @@
 //! Playlists 视图右栏:程序化封面 + KV(tracks/length/source/...) + footer。
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
@@ -13,6 +13,9 @@ use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
 
 /// 渲染歌单详情(right pane)到 `area`。
+///
+/// # Params:
+///   - `cover_in_flight`: page morph 封面飞行层已接管主封面时置真——跳过自画封面防双画
 pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -20,36 +23,31 @@ pub fn draw(
     state: &AppState,
     picker: &Picker,
     theme: &Theme,
+    cover_in_flight: bool,
 ) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
         .title(Line::from(" selected ").style(Style::new().fg(theme.subtext)));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height < 4 || inner.width < 8 {
+    let Some([cover_area, kv_area, footer]) = super::main_cover::sections(area) else {
         return;
+    };
+
+    if !cover_in_flight {
+        // mineral 聚合歌单无自带封面:拼贴就绪时给合成键,未就绪回落程序化占位。
+        let cover = crate::runtime::cover::collage::effective_cover_url(state, &p.data);
+        cover_image::render_or_fallback(
+            frame,
+            cover_area,
+            cover.as_ref(),
+            state,
+            picker,
+            theme,
+            &p.data.name,
+        );
     }
-
-    let [cover_area, kv_area, footer] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(2),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
-
-    // mineral 聚合歌单无自带封面:拼贴就绪时给合成键,未就绪回落程序化占位。
-    let cover = crate::runtime::cover::collage::effective_cover_url(state, &p.data);
-    cover_image::render_or_fallback(
-        frame,
-        cover_area,
-        cover.as_ref(),
-        state,
-        picker,
-        theme,
-        &p.data.name,
-    );
 
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {

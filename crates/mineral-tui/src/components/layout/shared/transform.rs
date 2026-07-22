@@ -180,7 +180,7 @@ fn grow_start(normal: Option<Rect>, full: Rect) -> Rect {
 }
 
 /// 把矩形退化为「以自身中心为原点的零面积矩形」,作形变收缩 / 长出端点。
-fn zero_center(r: Rect) -> Rect {
+pub(crate) fn zero_center(r: Rect) -> Rect {
     Rect::new(
         r.x.saturating_add(r.width / 2),
         r.y.saturating_add(r.height / 2),

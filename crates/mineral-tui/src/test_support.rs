@@ -483,6 +483,86 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     Ok(app)
 }
 
+/// 造「page morph(Browse ↔ Search)中途」的 [`App`]:Library 选中曲带封面 A(纯品红),
+/// search 端 album 结果已成 detail 根帧、头图 B(纯青);`cache_*` 控制两端图是否入
+/// `covers.cache`,覆盖双图合成 / 单图独飞 / 无图回退三形态。morph 停在 4/8 拍中途。
+pub(crate) fn app_in_search_morph(
+    cache_browse: bool,
+    cache_detail: bool,
+) -> color_eyre::Result<App> {
+    use mineral_channel_core::Page;
+    use mineral_model::{Album, AlbumId};
+    use mineral_task::{SearchPayload, TaskEvent};
+
+    let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
+    let url_a = MediaUrl::remote("https://x.y/browse-a.jpg")?;
+    let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    if let Some(sv) = app
+        .state
+        .library
+        .tracks
+        .get_mut(&pid)
+        .and_then(|views| views.get_mut(0))
+    {
+        sv.data.cover_url = Some(url_a.clone());
+    }
+    if cache_browse {
+        app.state
+            .covers
+            .cache
+            .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
+    }
+    let url_b = MediaUrl::remote("https://x.y/detail-b.jpg")?;
+    app.state.caps.insert(
+        SourceKind::NETEASE,
+        ChannelCaps::builder()
+            .searchable(vec![SearchKind::Album])
+            .playlist_edit(false)
+            .artist_sections(mineral_channel_core::ArtistSections::new(vec![]))
+            .build(),
+    );
+    app.state.channel_search.enter(&app.state.caps);
+    if let Some(session) = app.state.channel_search.current_mut() {
+        session.set_query("q");
+    }
+    app.state.apply(&TaskEvent::SearchResults {
+        source: SourceKind::NETEASE,
+        kind: SearchKind::Album,
+        query: "q".to_owned(),
+        page: Page::default(),
+        payload: SearchPayload::Albums(vec![
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                .name("Aurora".to_owned())
+                .cover_url(Some(url_b.clone()))
+                .build(),
+        ]),
+        has_more: None,
+    });
+    if cache_detail {
+        app.state
+            .covers
+            .cache
+            .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
+    }
+    let mut active = Toggle::new(8);
+    active.set(true);
+    for _ in 0..4 {
+        active.tick();
+    }
+    app.state.channel_search.active = active;
+    Ok(app)
+}
+
+/// 纯色 64×64 测试封面(选 UI 不会出现的像素色作探针,渲染断言据此扫 buffer)。
+pub(crate) fn solid_cover(r: u8, g: u8, b: u8) -> image::DynamicImage {
+    let mut img = image::RgbImage::new(64, 64);
+    for p in img.pixels_mut() {
+        *p = image::Rgb([r, g, b]);
+    }
+    image::DynamicImage::ImageRgb8(img)
+}
+
 /// 同 [`app_with_library`],额外返回 [`TestClient`] 的队列操作记录
 /// (操作菜单的插播 / 追加路径断言用)。
 pub(crate) fn app_with_library_probed(

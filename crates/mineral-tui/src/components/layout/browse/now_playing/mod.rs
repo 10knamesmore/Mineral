@@ -11,14 +11,25 @@ use ratatui_image::picker::Picker;
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, View};
 
+pub(crate) mod main_cover;
 pub mod playlist;
 pub mod track;
 
 /// 渲染右栏。根据 [`AppState::view`] 选 playlist / track 详情。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker, theme: &Theme) {
+///
+/// # Params:
+///   - `cover_in_flight`: page morph 封面飞行层已接管主封面时置真——面板跳过自画主图防双画
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &AppState,
+    picker: &Picker,
+    theme: &Theme,
+    cover_in_flight: bool,
+) {
     match state.browse.view.current() {
         View::Playlists => match state.selected_playlist() {
-            Some(p) => playlist::draw(frame, area, p, state, picker, theme),
+            Some(p) => playlist::draw(frame, area, p, state, picker, theme, cover_in_flight),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {
@@ -26,7 +37,16 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, picker: &Picker
             match tracks.get(state.browse.nav.track.sel()) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
-                    track::draw(frame, area, sv, current_id, state, picker, theme);
+                    track::draw(
+                        frame,
+                        area,
+                        sv,
+                        current_id,
+                        state,
+                        picker,
+                        theme,
+                        cover_in_flight,
+                    );
                 }
                 None => paint_empty(frame, area, theme),
             }

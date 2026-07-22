@@ -47,6 +47,7 @@ fn advancing(state: &AppState) -> ScrollMotion {
 ///
 /// # Params:
 ///   - `border_focused`: 边框是否高亮（焦点环滑动期由调用方置 `false`）
+///   - `cover_in_flight`: page morph 封面飞行层已接管头图时置真——跳过自画头图防双画
 pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -54,6 +55,7 @@ pub fn draw(
     picker: &Picker,
     theme: &Theme,
     border_focused: bool,
+    cover_in_flight: bool,
 ) {
     let color = if border_focused {
         theme.accent
@@ -94,6 +96,7 @@ pub fn draw(
                 to,
                 eased,
                 is_push,
+                cover_in_flight,
             },
             state,
             theme,
@@ -111,12 +114,31 @@ pub fn draw(
                 picker,
                 theme,
                 kr.detail.depth() > 0,
+                cover_in_flight,
             );
         }
     }
 }
 
+/// detail 面板头图区（与 [`draw_frame_real`] 同一几何管道：外框内区 → [`split_frame`] →
+/// [`split_head`]），page morph 封面飞行层据此取 search 端点。面板画不下（内区过小 /
+/// 窄到砍掉 cover 栏）为 `None`。
+///
+/// # Params:
+///   - `area`: detail 面板整区（含边框）
+///   - `is_artist`: 栈顶帧是否 artist（头部三栏布局）
+pub(crate) fn header_cover_area(area: Rect, is_artist: bool) -> Option<Rect> {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    if inner.height < 2 || inner.width == 0 {
+        return None;
+    }
+    let (head, _delim, _body) = split_frame(inner);
+    let (cover_a, _meta_a, _right_a) = split_head(head, is_artist);
+    (cover_a.width > 0).then_some(cover_a)
+}
+
 /// 稳态一帧：头图走 covers 管线真图，元数据 + 列表画主帧。
+#[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
 fn draw_frame_real(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -125,19 +147,22 @@ fn draw_frame_real(
     picker: &Picker,
     theme: &Theme,
     show_back: bool,
+    cover_in_flight: bool,
 ) {
     let (head, delim, body) = split_frame(inner);
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
-    cover_image::render_or_fallback(
-        frame,
-        cover_a,
-        dframe.entity.cover(),
-        state,
-        picker,
-        theme,
-        header_seed(&dframe.entity),
-    );
+    if !cover_in_flight {
+        cover_image::render_or_fallback(
+            frame,
+            cover_a,
+            dframe.entity.cover(),
+            state,
+            picker,
+            theme,
+            header_seed(&dframe.entity),
+        );
+    }
     // artist 帧右栏:当前列表选中项封面(随 [ ] 切区 / 光标移动;图未到 / 滚动期走占位)。
     if let Some(right_a) = right_a {
         let sel_cover = dframe.selected_cover();
@@ -165,11 +190,12 @@ fn render_frame_to(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
+    cover_in_flight: bool,
 ) {
     let (head, delim, body) = split_frame(inner);
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
-    if cover_a.width > 0 {
+    if cover_a.width > 0 && !cover_in_flight {
         cover_image::render_morph_to(
             buf,
             cover_a,
@@ -209,6 +235,9 @@ struct SweepArgs<'a> {
 
     /// 方向：`true` = 下钻右入、`false` = 返回左入。
     is_push: bool,
+
+    /// page morph 封面飞行层已接管头图（离屏帧同样跳过自画防双画）。
+    cover_in_flight: bool,
 }
 
 /// 下钻/返回滑动：出发帧与目标帧各渲染到离屏 Buffer，按 `eased` 列合成。风格随配置
@@ -226,11 +255,12 @@ fn draw_sweep(
         to,
         eased,
         is_push,
+        cover_in_flight,
     } = args;
     let mut from_buf = Buffer::empty(inner);
     let mut to_buf = Buffer::empty(inner);
-    render_frame_to(&mut from_buf, inner, from, state, theme);
-    render_frame_to(&mut to_buf, inner, to, state, theme);
+    render_frame_to(&mut from_buf, inner, from, state, theme, cover_in_flight);
+    render_frame_to(&mut to_buf, inner, to, state, theme, cover_in_flight);
     let w = inner.width;
     let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
         .unwrap_or(w)
@@ -459,7 +489,29 @@ fn detail_position_label(sel: usize, total: usize) -> String {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{detail_list_area, split_frame};
+    use super::{detail_list_area, header_cover_area, split_frame, split_head};
+
+    /// `header_cover_area` 与稳态实画同一几何管道(外框内区 → split_frame → split_head),
+    /// page morph 飞行层端点据此与落定后的头图零漂移;面板过小为 `None`。
+    #[test]
+    fn header_cover_area_matches_split_pipeline() {
+        use ratatui::widgets::{Block, Borders};
+
+        let area = Rect::new(0, 0, 60, 30);
+        let inner = Block::new().borders(Borders::ALL).inner(area);
+        let (head, _delim, _body) = split_frame(inner);
+        let (cover, _meta, _right) = split_head(head, /*with_right*/ false);
+        assert_eq!(
+            header_cover_area(area, /*is_artist*/ false),
+            Some(cover),
+            "常规尺寸应等于 split 管道产出"
+        );
+        assert_eq!(
+            header_cover_area(Rect::new(0, 0, 60, 3), /*is_artist*/ false),
+            None,
+            "内区过矮无头图"
+        );
+    }
 
     /// detail_list_area：非 artist 帧 = split_frame 的 body 整块；artist 帧再去顶部 1 行 Tab。
     /// 这是渲染端与行级菜单锚点共用的几何契约——两侧据此对齐。

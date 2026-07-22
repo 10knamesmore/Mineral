@@ -9,6 +9,7 @@ use mineral_config::SearchFocusTransition;
 
 use crate::app::App;
 use crate::components::layout::browse::{lyrics, now_playing, sidebar, spectrum};
+use crate::components::layout::flight;
 use crate::components::layout::search::{detail, panel};
 use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
@@ -34,24 +35,37 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         let full = compute_fullscreen(frame.area(), layout_cfg);
         // 终态全屏封面区在形变全程固定可知,形变分支据此预热当前曲的协议编码。
         let steady_cover = full.cover;
-        let areas = if app.state.browse.fullscreen.at_max() {
-            full
+        if app.state.browse.fullscreen.at_max() {
+            paint_fullscreen(frame, &full, steady_cover, app, /*flight*/ None);
         } else {
-            transform::morph_areas(&normal, &full, app.state.browse.fullscreen.eased_in_out())
-        };
-        paint_fullscreen(frame, &areas, steady_cover, app);
+            // 形变中途:两端封面都就绪时飞行层接管(browse 选中曲 ↔ 在播曲 fade 跨端飞),
+            // now_playing 与全屏封面槽都让位;否则维持各自收放的现状路径。
+            let t = app.state.browse.fullscreen.eased_in_out();
+            let plan = flight::plan_fullscreen(&normal, &full, &app.state);
+            let areas = transform::morph_areas(&normal, &full, t);
+            paint_fullscreen(
+                frame,
+                &areas,
+                steady_cover,
+                app,
+                plan.as_ref().map(|p| (p, t)),
+            );
+        }
     } else if !app.state.channel_search.active.at_min() {
         let search = compute_search(frame.area(), layout_cfg);
-        let areas = if app.state.channel_search.active.at_max() {
-            search
+        if app.state.channel_search.active.at_max() {
+            paint_search(frame, &search, app, /*cover_in_flight*/ false);
         } else {
-            transform::morph_search(
-                &normal,
-                &search,
-                app.state.channel_search.active.eased_in_out(),
-            )
-        };
-        paint_search(frame, &areas, app);
+            // 形变中途:封面飞行层接管主图(两端至少一图就绪),面板据此抑制自画防双画;
+            // 飞行层叠在面板之上,同一进度驱动几何插值与 fade 合成。
+            let t = app.state.channel_search.active.eased_in_out();
+            let areas = transform::morph_search(&normal, &search, t);
+            let plan = flight::plan(&normal, &search, &app.state);
+            paint_search(frame, &areas, app, plan.is_some());
+            if let Some(plan) = &plan {
+                flight::render(frame, plan, t, &app.state, &app.picker);
+            }
+        }
     } else {
         paint_browse(frame, &normal, app);
     }
@@ -81,7 +95,14 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     top_status::draw(frame, areas.top_status, &app.state, theme);
     sidebar::draw(frame, areas.left, &app.state, theme);
     if let Some(right) = areas.right {
-        now_playing::draw(frame, right, &app.state, &app.picker, theme);
+        now_playing::draw(
+            frame,
+            right,
+            &app.state,
+            &app.picker,
+            theme,
+            /*cover_in_flight*/ false,
+        );
     }
     if let Some(lyr) = areas.lyrics {
         lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
@@ -106,7 +127,10 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 ///
 /// 焦点高亮边框两种过渡(config `search_focus_transition`):`Instant` 时各面板按当前焦点直接
 /// 高亮;`Slide` 滑动期把所有面板边框压暗,改由一个 accent 浮动环从旧面板矩形 lerp 到新面板。
-fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+///
+/// `cover_in_flight`:page morph 封面飞行层已接管主图(now_playing 封面 / detail 头图),
+/// 面板跳过自画防双画。
+fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight: bool) {
     let theme = &app.theme;
     let rs = &app.state.channel_search;
     let sliding = matches!(
@@ -151,7 +175,14 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     }
     if let Some(right) = areas.right.and_then(nonempty) {
         if show_browse {
-            now_playing::draw(frame, right, &app.state, &app.picker, theme);
+            now_playing::draw(
+                frame,
+                right,
+                &app.state,
+                &app.picker,
+                theme,
+                cover_in_flight,
+            );
         } else {
             detail::draw(
                 frame,
@@ -160,6 +191,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
                 &app.picker,
                 theme,
                 border_focused(SearchFocus::Detail),
+                cover_in_flight,
             );
         }
     }
@@ -215,7 +247,15 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
 ///
 /// # Params:
 ///   - `steady_cover`: 终态全屏封面区(形变全程固定),形变分支按它预热协议编码
-fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<Rect>, app: &App) {
+///   - `flight`: 形变中途飞行层接管封面时为 `Some((计划, 进度))`——now_playing 抑制自画、
+///     封面槽改画飞行层(仍在 lyrics 之下,保持歌词压顶可读)
+fn paint_fullscreen(
+    frame: &mut Frame<'_>,
+    areas: &Areas,
+    steady_cover: Option<Rect>,
+    app: &App,
+    flight: Option<(&flight::FlightPlan, u16)>,
+) {
     draw_ambient(frame, app, ambient_skip_rect(app, areas.cover));
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
@@ -225,7 +265,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<R
         sidebar::draw(frame, r, &app.state, theme);
     }
     if let Some(r) = areas.right.and_then(nonempty) {
-        now_playing::draw(frame, r, &app.state, &app.picker, theme);
+        now_playing::draw(frame, r, &app.state, &app.picker, theme, flight.is_some());
     }
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
@@ -245,8 +285,13 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, steady_cover: Option<R
         &WaveformCtx::new(&app.state, theme),
         theme,
     );
-    if let Some(c) = areas.cover.and_then(nonempty) {
-        draw_fullscreen_cover(frame, c, steady_cover, app);
+    match flight {
+        Some((plan, progress)) => flight::render(frame, plan, progress, &app.state, &app.picker),
+        None => {
+            if let Some(c) = areas.cover.and_then(nonempty) {
+                draw_fullscreen_cover(frame, c, steady_cover, app);
+            }
+        }
     }
     if let Some(lyr) = areas.lyrics.and_then(nonempty) {
         lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Immersive);
@@ -394,11 +439,11 @@ mod tests {
     use crate::render::anim::{Toggle, Transition};
     use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
 
-    /// 全屏进入形变:不按逐帧漂移的 dims 派发编码(churn),但按**终态全屏尺寸**预热
-    /// 恰好一次——编码与形变动画并行,落定即命中。从零 pending 起步(不先渲常规帧:
-    /// 常规面板与全屏封面的正方 cell 尺寸在部分终端几何下会撞同值,基线派发会掩蔽预热
-    /// 那一条)。三段断言:
-    /// ① 首个形变帧后 pending 恰好一条(预热);
+    /// 全屏进入形变:不按逐帧漂移的 dims 派发编码(churn),预热只按**端点稳态尺寸**
+    /// (封面飞行层两端各一)——编码与形变动画并行,落定即命中。从零 pending 起步
+    /// (不先渲常规帧:常规面板与全屏封面的正方 cell 尺寸在部分终端几何下会撞同值,
+    /// 基线派发会掩蔽预热条目)。三段断言:
+    /// ① 首个形变帧后 pending 即有端点预热条目;
     /// ② 后续形变帧 pending 不再变(逐帧漂移 dims 一条都没混进来);
     /// ③ 落定 at_max 渲稳态帧后 pending 仍不变——稳态渲染与预热撞同一 `(url, dims)` 去重,
     ///    反证预热用的正是终态尺寸(错一个 cell 都会多出一条)。
@@ -434,8 +479,9 @@ mod tests {
 
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
 
-        // 进入全屏,推进若干形变帧(均 `!settled`)。首帧即应派发终态尺寸预热恰好一条;
-        // 之后每帧 pending 定格——证明没按逐帧漂移 dims 追加派发。
+        // 进入全屏,推进若干形变帧(均 `!settled`)。首帧即应派发端点稳态尺寸预热
+        // (飞行层两端各一,终态全屏尺寸在内);之后每帧 pending 定格——证明没按逐帧
+        // 漂移 dims 追加派发。
         app.state.browse.fullscreen.set(true);
         let mut morph_pending = app.state.covers.encode_pending.borrow().clone();
         assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
@@ -448,10 +494,9 @@ mod tests {
             t.draw(|f| super::draw(f, &app))?;
             if frame_no == 0 {
                 morph_pending = app.state.covers.encode_pending.borrow().clone();
-                assert_eq!(
-                    morph_pending.len(),
-                    1,
-                    "首个形变帧应按终态全屏尺寸预热恰好一条"
+                assert!(
+                    !morph_pending.is_empty(),
+                    "首个形变帧应派发端点稳态尺寸预热"
                 );
             } else {
                 assert_eq!(
@@ -581,6 +626,247 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// 统计 buffer 中 fg 满足谓词的 cell 数(page morph 飞行层探针扫描共用)。
+    fn count_fg_cells(buf: &ratatui::buffer::Buffer, pred: impl Fn(Color) -> bool) -> usize {
+        let mut count = 0usize;
+        for y in buf.area.y..buf.area.y.saturating_add(buf.area.height) {
+            for x in buf.area.x..buf.area.x.saturating_add(buf.area.width) {
+                if buf.cell((x, y)).is_some_and(|c| pred(c.fg)) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        count
+    }
+
+    /// 品红×青 fade 混色判定:`Rgb(r, 255-r, 255)` 且远离两端纯色(±1 容忍整数 lerp 取整)。
+    fn is_fade_mix(c: Color) -> bool {
+        let Color::Rgb(r, g, b) = c else {
+            return false;
+        };
+        b == 255 && r != 0 && r != 255 && (i16::from(g) - (255 - i16::from(r))).abs() <= 1
+    }
+
+    /// Page morph 中途、两端图都在缓存:封面应为 fade 合成 halfblock(品红×青混色 cell),
+    /// 且无任一端纯色——主图随形变连续变身而非端点瞬换,面板自画已被抑制(不双画)。
+    #[test]
+    fn search_morph_crossfades_cover_when_both_cached() -> color_eyre::Result<()> {
+        use crate::test_support::app_in_search_morph;
+
+        let app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, is_fade_mix) > 0,
+            "应有品红×青 fade 混色 cell"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)),
+            0,
+            "browse 端纯品红应被抑制(飞行层接管,面板不自画)"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)),
+            0,
+            "detail 端纯青不应在中途出现"
+        );
+        Ok(())
+    }
+
+    /// Page morph 中途、仅 browse 端图在缓存:飞行层单图独飞(纯品红 halfblock 可见),
+    /// 不强行合成(无混色)。
+    #[test]
+    fn search_morph_single_cached_image_flies_solo() -> color_eyre::Result<()> {
+        use crate::test_support::app_in_search_morph;
+
+        let app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ false)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)) > 0,
+            "单端图应以 halfblock 独飞"
+        );
+        assert_eq!(count_fg_cells(buf, is_fade_mix), 0, "无第二图不应出现混色");
+        Ok(())
+    }
+
+    /// 退场(Search → Browse)morph 中途同样 fade 合成——方向只是进度走向,共用同一飞行层。
+    #[test]
+    fn search_morph_exit_direction_also_crossfades() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+        use crate::test_support::app_in_search_morph;
+
+        let mut app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut active = Toggle::new(8);
+        active.set(true);
+        for _ in 0..20 {
+            active.tick();
+        }
+        active.set(false);
+        for _ in 0..4 {
+            active.tick();
+        }
+        app.state.channel_search.active = active;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        assert!(
+            count_fg_cells(t.backend().buffer(), is_fade_mix) > 0,
+            "退场中途也应 fade 合成"
+        );
+        Ok(())
+    }
+
+    /// Page morph 首帧即按两端稳态尺寸预热封面编码;后续形变帧 pending 定格
+    /// (`(url, dims)` 去重,无逐帧 churn 派发)。
+    #[test]
+    fn search_morph_prewarms_endpoints_without_churn() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+        use crate::test_support::app_in_search_morph;
+
+        let mut app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut active = Toggle::new(8);
+        active.set(true);
+        active.tick();
+        app.state.channel_search.active = active;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let pending = app.state.covers.encode_pending.borrow().clone();
+        assert!(!pending.is_empty(), "首个形变帧应预热端点封面编码");
+        for _ in 0..3 {
+            app.state.channel_search.active.tick();
+            t.draw(|f| super::draw(f, &app))?;
+        }
+        assert_eq!(
+            *app.state.covers.encode_pending.borrow(),
+            pending,
+            "后续形变帧不应追加编码派发(churn)"
+        );
+        Ok(())
+    }
+
+    /// 造「Library 选中曲封面 A(品红)+ 在播曲封面 B(青)」的 App,`cache_*` 控制两图
+    /// 是否入缓存;fullscreen toggle 推到 4/8 拍形变中途。
+    fn app_in_fullscreen_morph(
+        cache_selected: bool,
+        cache_playing: bool,
+    ) -> color_eyre::Result<crate::app::App> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::render::anim::Toggle;
+        use crate::test_support::{app_with_library, solid_cover, song};
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url_a = MediaUrl::remote("https://x.y/selected-a.jpg")?;
+        let url_b = MediaUrl::remote("https://x.y/playing-b.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.cover_url = Some(url_a.clone());
+        }
+        // 在播曲另取一首、封面 B 与选中曲不同,逼出真正的跨图 fade。
+        let mut playing = song("playing");
+        playing.cover_url = Some(url_b.clone());
+        app.state.playback.track = Some(playing);
+        if cache_selected {
+            app.state
+                .covers
+                .cache
+                .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
+        }
+        if cache_playing {
+            app.state
+                .covers
+                .cache
+                .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
+        }
+        let mut fs = Toggle::new(8);
+        fs.set(true);
+        for _ in 0..4 {
+            fs.tick();
+        }
+        app.state.browse.fullscreen = fs;
+        Ok(app)
+    }
+
+    /// Browse → Fullscreen 形变中途、选中曲与在播曲封面都在缓存:飞行层跨端 fade 合成
+    /// (混色 cell),两端纯色均不出现——选中图不再原地收掉、在播图不再从零长出,
+    /// 而是一张图连续变身飞过去。
+    #[test]
+    fn fullscreen_morph_flies_crossfade_selected_to_playing() -> color_eyre::Result<()> {
+        let app =
+            app_in_fullscreen_morph(/*cache_selected*/ true, /*cache_playing*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, is_fade_mix) > 0,
+            "应有跨图 fade 混色 cell"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)),
+            0,
+            "选中曲纯品红应被抑制(不再原地收掉)"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)),
+            0,
+            "在播曲纯青不应中途出现(不再从零长出)"
+        );
+        Ok(())
+    }
+
+    /// 仅在播曲图缓存(选中曲图缺):fullscreen 飞行层不开(单端不优于现状收放兜底),
+    /// 维持现状——在播图 halfblock 随封面区长出(纯青可见)、无混色。
+    #[test]
+    fn fullscreen_morph_single_image_keeps_grow_path() -> color_eyre::Result<()> {
+        let app =
+            app_in_fullscreen_morph(/*cache_selected*/ false, /*cache_playing*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)) > 0,
+            "现状生长路径应保留(在播图 halfblock 长出)"
+        );
+        assert_eq!(count_fg_cells(buf, is_fade_mix), 0, "单端不应出现混色");
+        Ok(())
+    }
+
+    /// Fullscreen → Browse 退出形变中途同样跨端 fade——方向只是进度走向,共用同一飞行层。
+    #[test]
+    fn fullscreen_morph_exit_also_crossfades() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+
+        let mut app =
+            app_in_fullscreen_morph(/*cache_selected*/ true, /*cache_playing*/ true)?;
+        let mut fs = Toggle::new(8);
+        fs.set(true);
+        for _ in 0..20 {
+            fs.tick();
+        }
+        fs.set(false);
+        for _ in 0..4 {
+            fs.tick();
+        }
+        app.state.browse.fullscreen = fs;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        assert!(
+            count_fg_cells(t.backend().buffer(), is_fade_mix) > 0,
+            "退出形变中途也应 fade 合成"
+        );
         Ok(())
     }
 
