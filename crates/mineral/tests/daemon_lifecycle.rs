@@ -418,12 +418,13 @@ fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
 }
 
 /// 从 `stats status` 输出末行解析 `events: N`(格式 `plays: A   sessions: B   events: C`)。
+/// `stats status --format json` 的 `events` 字段(text 渲染是 human-readable 展示,
+/// 不是稳定契约——程序消费一律走 json,不解析表格文本)。
 fn parse_events(stdout: &str) -> Option<i64> {
-    stdout
-        .rsplit("events:")
-        .next()
-        .and_then(|tail| tail.split_whitespace().next())
-        .and_then(|n| n.parse::<i64>().ok())
+    serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()?
+        .get("events")?
+        .as_i64()
 }
 
 /// 端到端:真 daemon 起来写 app_lifecycle start(Server::spawn),SIGTERM graceful
@@ -435,7 +436,7 @@ fn daemon_records_app_lifecycle_around_run() -> color_eyre::Result<()> {
     // 直读 stats.db(离线,不占 busy):poll 到 start 事件落库(events≥1)。
     let deadline = Instant::now() + Duration::from_secs(10);
     let running = loop {
-        let out = daemon.cli_args_output(&["stats", "status"])?;
+        let out = daemon.cli_args_output(&["stats", "status", "--format", "json"])?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         if out.status.success()
             && let Some(n) = parse_events(&stdout)
@@ -454,10 +455,10 @@ fn daemon_records_app_lifecycle_around_run() -> color_eyre::Result<()> {
     // graceful 关停:daemon 记 app_lifecycle stop + flush,进程退出前必落库。
     daemon.sigterm()?;
     daemon.wait_for_exit()?;
-    let out = daemon.cli_args_output(&["stats", "status"])?;
+    let out = daemon.cli_args_output(&["stats", "status", "--format", "json"])?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let after = parse_events(&stdout)
-        .ok_or_else(|| color_eyre::eyre::eyre!("stop 后 status 无 events 行:\n{stdout}"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("stop 后 status json 无 events 字段:\n{stdout}"))?;
     assert!(
         after > running,
         "graceful stop 应 flush 落 app_lifecycle stop(running={running} → after={after}):\n{stdout}"

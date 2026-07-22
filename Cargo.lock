@@ -2743,6 +2743,7 @@ dependencies = [
  "mineral-tui",
  "nix",
  "predicates",
+ "serde_json",
  "tokio",
 ]
 

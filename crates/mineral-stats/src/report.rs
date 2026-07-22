@@ -1,11 +1,12 @@
 //! 查询结果领域类型 + 查询期口径。
 //!
 //! 数值聚合全在 stats.db(见 [`crate::StatsStore`] 的查询方法);歌名 / 艺人 / 专辑名
-//! 由 server / CLI 层拿 id 后回查 mineral.db 补齐,不在本 crate。
+//! 出自库内 `songs` / `song_artists` 维表,不跨库回查。
 //!
-//! `top_albums` / `top_artists` 按 plays 的 `context_ref` 聚合——即「从某专辑 / 艺人详情
-//! 页起播」的量(plays 不存 song→album 归属,无从按成员专辑聚合)。返回的 id 由此重建,
-//! 展示名由上层回查。
+//! `top_albums` / `top_artists` 是口味口径:按 `plays` JOIN `songs`(专辑)/
+//! `song_artists`(艺人)聚合——「听了哪张专辑 / 哪个艺人的歌」。与之对应的 context
+//! 口径(「从某专辑 / 艺人详情页起播」)走 [`crate::StatsStore::top_contexts`],
+//! 返回 [`ContextSlice`]。
 
 use mineral_model::{AlbumId, ArtistId, SongId};
 use serde::Serialize;
@@ -100,13 +101,13 @@ pub struct TopSong {
 /// top 专辑一项(按专辑语境 `context_ref` 聚合)。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TopAlbum {
-    /// 专辑 id(从 `plays.context_ref` 的 qualified 串重建)。
+    /// 专辑 id(由 `songs.ns` + `album_id` 重建)。
     pub album: AlbumId,
 
     /// 组内任意非空的显示名快照;全组缺名为 `None`(展示层回落 id)。
     pub name: Option<String>,
 
-    /// 从该专辑起播的次数。
+    /// 该专辑内歌曲的播放次数(口味口径:「听了这张专辑的歌」)。
     pub plays: i64,
 
     /// 收听 ms 总和。

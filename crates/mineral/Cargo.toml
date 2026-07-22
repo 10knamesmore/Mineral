@@ -43,6 +43,7 @@ predicates       = { workspace = true }
 mineral-model    = { workspace = true }
 mineral-protocol = { workspace = true }
 mineral-stats    = { workspace = true, features = ["fixture"] }
+serde_json       = { workspace = true }
 tokio            = { workspace = true }
 
 [lints]

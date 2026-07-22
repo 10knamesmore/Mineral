@@ -8,7 +8,7 @@ use mineral_model::{AlbumId, ArtistId, SourceKind};
 use crate::report::{ContextSlice, ReportOptions, TopAlbum, TopArtist, TopBy, TopSong};
 use crate::store::StatsStore;
 
-use super::shared::{song_id, split_qualified};
+use super::shared::song_id;
 
 /// `top_songs` / `top_repeat_songs` 的每行;`song` 由 ns+value 重建故经中转。
 struct TopSongRow {
@@ -28,19 +28,23 @@ struct TopSongRow {
     name: Option<String>,
 }
 
-/// `top_albums` 的每行(context_ref 聚合);typed id 由 `context_ref` 重建故经中转。
-struct TopContextRefRow {
-    /// 语境引用(qualified id 串)。
-    reference: String,
+/// `top_albums`(口味口径)的每行:按 `songs` 的 `album_id` 聚合。
+struct TopAlbumRow {
+    /// 来源 name。
+    ns: String,
 
-    /// 从该语境起播的次数。
+    /// 专辑裸 id。
+    album_id: String,
+
+    /// 专辑名;`songs.album_name` 无 NOT NULL 约束(理论上应与 `album_id` 成对出现),
+    /// `MAX` 兼给 SQLite 一个确定性取值。
+    album_name: Option<String>,
+
+    /// 该专辑内歌曲的播放次数。
     plays: i64,
 
     /// 累计收听 ms。
     listen_ms: i64,
-
-    /// 组内任意非空的显示名快照(`MAX` 略过 NULL);全组缺名为 `None`。
-    name: Option<String>,
 }
 
 /// `top_artists`(口味口径)的每行:按 `song_artists` 的 `artist_value` 聚合。
@@ -132,7 +136,9 @@ impl StatsStore {
         Ok(rows)
     }
 
-    /// top 专辑(按专辑语境 `context_ref` 聚合:从该专辑详情页起播的量;名字由上层回查)。
+    /// top 专辑(口味口径:按歌曲的 `songs.album_id` 归属聚合——「你听了哪张专辑的歌」,
+    /// 区别于 `top_contexts(Some("album"))` 的「你从谁的详情页起播」)。单曲(无专辑)
+    /// 与维表未覆盖的 `plays` 行(如贫投影从未富化)天然不进任何专辑的榜,不报错。
     ///
     /// # Params:
     ///   - `range`: 时间窗口
@@ -140,32 +146,65 @@ impl StatsStore {
     ///   - `options`: 有效播放阈值 + 榜长
     ///
     /// # Return:
-    ///   top 专辑列表(坏格式的 context_ref 跳过)
+    ///   top 专辑列表
     pub async fn top_albums(
         &self,
         range: Range<i64>,
         by: TopBy,
         options: &ReportOptions,
     ) -> color_eyre::Result<Vec<TopAlbum>> {
-        let rows = self
-            .top_context_refs(
-                range,
-                by,
-                "album",
-                options.min_listen_ms(),
-                options.top_limit(),
+        let Some(pool) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        let min = options.min_listen_ms();
+        let limit = options.top_limit();
+        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。INNER JOIN(非 LEFT):
+        // 无专辑(单曲)或维表未覆盖的歌天然不贡献任何专辑,不需要额外过滤。
+        let rows = match by {
+            TopBy::Plays => sqlx::query_as!(
+                TopAlbumRow,
+                r#"SELECT s.ns AS "ns!", s.album_id AS "album_id!",
+                    MAX(s.album_name) AS "album_name?: String",
+                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
+                   FROM plays p
+                   JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
+                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
+                     AND s.album_id IS NOT NULL
+                   GROUP BY s.ns, s.album_id ORDER BY 4 DESC, 5 DESC LIMIT ?"#,
+                range.start,
+                range.end,
+                min,
+                limit
             )
+            .fetch_all(pool)
             .await
-            .wrap_err("top_albums 查询失败")?;
+            .wrap_err("top_albums(plays) 查询失败")?,
+            TopBy::Time => sqlx::query_as!(
+                TopAlbumRow,
+                r#"SELECT s.ns AS "ns!", s.album_id AS "album_id!",
+                    MAX(s.album_name) AS "album_name?: String",
+                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
+                   FROM plays p
+                   JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
+                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
+                     AND s.album_id IS NOT NULL
+                   GROUP BY s.ns, s.album_id ORDER BY 5 DESC, 4 DESC LIMIT ?"#,
+                range.start,
+                range.end,
+                min,
+                limit
+            )
+            .fetch_all(pool)
+            .await
+            .wrap_err("top_albums(time) 查询失败")?,
+        };
         Ok(rows
             .into_iter()
-            .filter_map(|r| {
-                split_qualified(&r.reference).map(|(ns, value)| TopAlbum {
-                    album: AlbumId::new(ns, value),
-                    name: r.name.clone(),
-                    plays: r.plays,
-                    listen_ms: r.listen_ms,
-                })
+            .map(|r| TopAlbum {
+                album: AlbumId::new(SourceKind::from_name(&r.ns), r.album_id),
+                name: r.album_name,
+                plays: r.plays,
+                listen_ms: r.listen_ms,
             })
             .collect())
     }
@@ -240,64 +279,6 @@ impl StatsStore {
                 listen_ms: r.listen_ms,
             })
             .collect())
-    }
-
-    /// 按某语境 kind 聚合 `context_ref`(`top_albums` 专用;`kind` 是内部常量,非用户
-    /// 输入,但 `query!` 需字面量 SQL,故按 kind 值直接内联比对)。
-    async fn top_context_refs(
-        &self,
-        range: Range<i64>,
-        by: TopBy,
-        kind: &str,
-        min: i64,
-        limit: i64,
-    ) -> color_eyre::Result<Vec<TopContextRefRow>> {
-        let Some(pool) = self.pool() else {
-            return Ok(Vec::new());
-        };
-        // context_kind 由 kind 参数 bind(值,非列名);ORDER BY 列位随口径变故分两条。
-        // 名字取组内 MAX(context_name):快照列 NULL 被略过,带名行照亮全组(含历史行)。
-        let rows = match by {
-            TopBy::Plays => {
-                sqlx::query_as!(
-                    TopContextRefRow,
-                    r#"SELECT context_ref AS "reference!", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
-                    MAX(context_name) AS "name?: String"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND context_kind = ?
-                     AND context_ref IS NOT NULL AND listen_ms >= ?
-                   GROUP BY context_ref ORDER BY 2 DESC, 3 DESC LIMIT ?"#,
-                    range.start,
-                    range.end,
-                    kind,
-                    min,
-                    limit
-                )
-                .fetch_all(pool)
-                .await?
-            }
-            TopBy::Time => {
-                sqlx::query_as!(
-                    TopContextRefRow,
-                    r#"SELECT context_ref AS "reference!", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
-                    MAX(context_name) AS "name?: String"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND context_kind = ?
-                     AND context_ref IS NOT NULL AND listen_ms >= ?
-                   GROUP BY context_ref ORDER BY 3 DESC, 2 DESC LIMIT ?"#,
-                    range.start,
-                    range.end,
-                    kind,
-                    min,
-                    limit
-                )
-                .fetch_all(pool)
-                .await?
-            }
-        };
-        Ok(rows)
     }
 
     /// 单曲循环榜:`play_mode = 'repeat_one'` 的行按次数 top(反复循环的歌)。
@@ -470,68 +451,147 @@ mod tests {
         Ok(())
     }
 
-    /// top_albums:按专辑语境的 context_ref 聚合,typed id 重建;名字取组内
-    /// `MAX(context_name)`——旧行(快照 NULL)被后来带名的行照亮。
+    /// top_albums(口味口径):同专辑多首歌汇总播放次数 + listen_ms;单曲(无专辑)与
+    /// 没有 songs 维表覆盖的歌(未富化的贫投影)不进榜、不报错。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn top_albums_groups_by_context_ref() -> color_eyre::Result<()> {
-        use mineral_model::AlbumId;
+    async fn top_albums_aggregates_songs_in_album() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
         let sid = store
             .open_session(T0)
             .await?
             .ok_or_else(|| color_eyre::eyre::eyre!("session"))?;
-        // 同一专辑语境两行:先一行缺名(旧 client / 历史行),再一行带名快照。
-        let album_a_nameless = QueueContext::Album {
-            id: AlbumId::new(SourceKind::NETEASE, "aaa"),
-            name: None,
-        };
-        let album_a = QueueContext::Album {
-            id: AlbumId::new(SourceKind::NETEASE, "aaa"),
-            name: Some("Album A".to_owned()),
-        };
-        let album_b = QueueContext::Album {
-            id: AlbumId::new(SourceKind::BILIBILI, "bbb"),
-            name: None,
-        };
-        // album_a ×2、album_b ×1。
-        for (value, at, ctx) in [
-            ("1", T0, album_a_nameless.clone()),
-            ("2", T0 + HOUR, album_a.clone()),
-            ("3", T0 + 2 * HOUR, album_b.clone()),
-        ] {
-            let mut r = play(
+        // 专辑 A 两首歌(60s + 70s)。
+        store
+            .upsert_song(&mineral_test::with_album(mineral_test::song("1"), "A"))
+            .await?;
+        store
+            .upsert_song(&mineral_test::with_album(mineral_test::song("2"), "A"))
+            .await?;
+        store
+            .record_play(&play(
                 "netease",
-                value,
-                at,
+                "1",
+                T0,
                 60_000,
                 FinishReason::Eof,
                 None,
                 None,
                 sid,
-            );
-            r.context = ctx;
-            store.record_play(&r).await?;
-        }
+            ))
+            .await?;
+        store
+            .record_play(&play(
+                "netease",
+                "2",
+                T0 + HOUR,
+                70_000,
+                FinishReason::Eof,
+                None,
+                None,
+                sid,
+            ))
+            .await?;
+        // 歌 3:单曲(无专辑),不该进任何专辑的榜。
+        store.upsert_song(&mineral_test::song("3")).await?;
+        store
+            .record_play(&play(
+                "netease",
+                "3",
+                T0 + 2 * HOUR,
+                999_000,
+                FinishReason::Eof,
+                None,
+                None,
+                sid,
+            ))
+            .await?;
+        // 歌 4:无维表覆盖(未 upsert_song),不该进任何专辑的榜、不该报错。
+        store
+            .record_play(&play(
+                "netease",
+                "4",
+                T0 + 3 * HOUR,
+                999_000,
+                FinishReason::Eof,
+                None,
+                None,
+                sid,
+            ))
+            .await?;
+
         let opts = ReportOptions::builder()
             .min_listen_ms(0)
             .top_limit(10)
             .build();
         let albums = store.top_albums(0..i64::MAX, TopBy::Plays, &opts).await?;
-        assert_eq!(albums.len(), 2, "两个专辑语境");
+        assert_eq!(albums.len(), 1, "只有专辑 A,单曲与未覆盖的歌不贡献专辑");
         let top = albums
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("无专辑"))?;
-        assert_eq!(
-            top.album,
-            AlbumId::new(SourceKind::NETEASE, "aaa"),
-            "最多的专辑"
-        );
+        assert_eq!(top.album, AlbumId::new(SourceKind::NETEASE, "A"));
+        assert_eq!(top.name.as_deref(), Some("A"));
         assert_eq!(top.plays, 2);
-        assert_eq!(
-            top.name.as_deref(),
-            Some("Album A"),
-            "MAX 略过 NULL 快照,带名行照亮全组"
-        );
+        assert_eq!(top.listen_ms, 60_000 + 70_000);
+        Ok(())
+    }
+
+    /// top_albums 双排序 + 有效阈值:低于阈值的行整体不计入任何专辑的次数与时长。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn top_albums_dual_metric_with_min_filter() -> color_eyre::Result<()> {
+        let (_dir, store) = open_temp().await?;
+        let sid = store
+            .open_session(T0)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("session"))?;
+        store
+            .upsert_song(&mineral_test::with_album(mineral_test::song("1"), "A"))
+            .await?;
+        store
+            .upsert_song(&mineral_test::with_album(mineral_test::song("2"), "B"))
+            .await?;
+        // A:一次 130s(有效)。B:一次 5s(低于 30s 阈值,应被剔除)。
+        store
+            .record_play(&play(
+                "netease",
+                "1",
+                T0,
+                130_000,
+                FinishReason::Eof,
+                None,
+                None,
+                sid,
+            ))
+            .await?;
+        store
+            .record_play(&play(
+                "netease",
+                "2",
+                T0 + HOUR,
+                5_000,
+                FinishReason::Eof,
+                None,
+                None,
+                sid,
+            ))
+            .await?;
+
+        let by_plays = store
+            .top_albums(0..i64::MAX, TopBy::Plays, &options(30_000))
+            .await?;
+        let plays_order = by_plays
+            .iter()
+            .map(|a| (a.album.value().to_owned(), a.plays))
+            .collect::<Vec<_>>();
+        assert_eq!(plays_order, vec![("A".to_owned(), 1)], "B 被有效阈值剔除");
+
+        let by_time = store
+            .top_albums(0..i64::MAX, TopBy::Time, &options(30_000))
+            .await?;
+        let time_order = by_time
+            .iter()
+            .map(|a| (a.album.value().to_owned(), a.listen_ms))
+            .collect::<Vec<_>>();
+        assert_eq!(time_order, vec![("A".to_owned(), 130_000)]);
         Ok(())
     }
 

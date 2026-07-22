@@ -1,6 +1,7 @@
 //! `stats` 子命令的解析与执行:离线直读 stats.db(数值)+ mineral.db(名字回查),
 //! 不经 daemon,WAL 下与 daemon 并发写安全。
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
@@ -184,8 +185,9 @@ async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre
     let label = window.label(WindowDefault::CurrentYear, now)?;
     let opts = report_options(top)?;
     let sr = assemble::stats_report(&store, range, &opts).await?;
+    let color = std::io::stdout().is_terminal();
     let out = match format {
-        Format::Text => render::render_report(&sr, &label),
+        Format::Text => render::render_report(&sr, &label, color),
         Format::Json => serde_json::to_string_pretty(&sr).wrap_err("report json 序列化失败")?,
         Format::Md => render::report_md(&sr, &label),
     };
@@ -210,8 +212,9 @@ async fn top(
     let range = window.range(WindowDefault::All, now_ms()?)?;
     let opts = report_options(limit)?;
     let entries = assemble::top_entries(&store, category, range, by.into(), &opts).await?;
+    let color = std::io::stdout().is_terminal();
     let out = match format {
-        Format::Text => render::render_top(&entries, category.text_title()),
+        Format::Text => render::render_top(&entries, category.text_title(), color),
         Format::Json => serde_json::to_string_pretty(&entries).wrap_err("top json 序列化失败")?,
         Format::Md => render::top_md(&entries, category.md_title()),
     };
@@ -234,8 +237,9 @@ async fn history(
     let store = StatsStore::open(&db_path).await?;
     let range = window.range(WindowDefault::All, now_ms()?)?;
     let plays = store.recent_plays(range, source, i64::from(limit)).await?;
+    let color = std::io::stdout().is_terminal();
     let out = match format {
-        Format::Text => render::render_history(&plays),
+        Format::Text => render::render_history(&plays, color),
         Format::Json => serde_json::to_string_pretty(&plays).wrap_err("history json 序列化失败")?,
         Format::Md => render::history_md(&plays),
     };
@@ -261,8 +265,9 @@ async fn status(format: Format) -> color_eyre::Result<()> {
     let store = StatsStore::open(&db_path).await?;
     let report = store.status().await?;
     let size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let color = std::io::stdout().is_terminal();
     let out = match format {
-        Format::Text => render::render_status(&db_path, size, level, &report),
+        Format::Text => render::render_status(&db_path, size, level, &report, color),
         Format::Json => serde_json::to_string_pretty(&serde_json::json!({
             "path": db_path.display().to_string(),
             "size_bytes": size,

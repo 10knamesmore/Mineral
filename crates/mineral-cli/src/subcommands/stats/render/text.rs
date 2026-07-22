@@ -1,10 +1,19 @@
-//! `stats` 子命令的人读文本渲染(分节 + unicode 条形分布)。
+//! `stats` 子命令的人读文本渲染(comfy-table 表格 + 分级配色,风格同 `cache` 命令)。
+//!
+//! 渲染纯函数化(输入全显式给定),便于快照测试。颜色经 `color` 开关控制:`false`
+//! (非 tty / 测试)强制无 ANSI,`true`(tty)启用上色。
 
 use std::path::Path;
 
+use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+use comfy_table::presets::UTF8_FULL;
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use mineral_stats::{
-    Distributions, EventCount, FinishReason, NamedEntry, PlayTail, Slice, StatsReport, StatusReport,
+    EventCount, FinishReason, NamedEntry, PlayTail, Slice, StatsReport, StatusReport,
 };
+
+/// 分布条形格数。
+const BAR_WIDTH: usize = 20;
 
 /// stats.db 不存在时的友好提示(指向配置,不报错栈)。
 pub fn render_absent() -> String {
@@ -29,183 +38,273 @@ fn display_name(entry: &NamedEntry) -> &str {
     entry.name.as_deref().unwrap_or(&entry.id)
 }
 
-/// 一条 unicode 条形(按 `value/max` 比例填 `█`,至少满格 `width`)。空 max 出空条。
+/// 一条 unicode 条形(按 `value/max` 比例填 `█`)。空 max 出空条。
 fn bar(value: i64, max: i64, width: usize) -> String {
     if max <= 0 {
         return String::new();
     }
-    let filled = usize::try_from(value.saturating_mul(i64::try_from(width).unwrap_or(0)) / max)
+    let width_i = i64::try_from(width).unwrap_or(0);
+    let filled = usize::try_from(value.saturating_mul(width_i) / max)
         .unwrap_or(0)
         .min(width);
     "█".repeat(filled)
 }
 
-/// 渲染埋点系统自身状态。
+/// 建带圆角边框、关闭动态排版(列宽随内容、不换行,保证确定性)的基底表。
+fn base_table(color: bool) -> Table {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Disabled);
+    if color {
+        table.enforce_styling();
+    } else {
+        table.force_no_tty();
+    }
+    table
+}
+
+/// 表头单元格:加粗。
+fn head_cell(text: &str, color: bool) -> Cell {
+    let cell = Cell::new(text);
+    if color {
+        cell.add_attribute(Attribute::Bold)
+    } else {
+        cell
+    }
+}
+
+/// 行首标签单元格:加粗 + 青色。
+fn label_cell(text: &str, color: bool) -> Cell {
+    let cell = Cell::new(text);
+    if color {
+        cell.add_attribute(Attribute::Bold).fg(Color::Cyan)
+    } else {
+        cell
+    }
+}
+
+/// 条件上色:`color` 为真才给单元格上前景色。
+fn maybe_fg(cell: Cell, color: bool, fg: Color) -> Cell {
+    if color { cell.fg(fg) } else { cell }
+}
+
+/// 给一段表格文本加 `▸ 标题` 前缀行。
+fn labeled(title: &str, body: &str) -> String {
+    format!("▸ {title}\n{body}")
+}
+
+/// 结束原因的落库串(与 stats.db 一致)+ 语义配色:完播绿、跳过黄、停止灰、失败红。
+fn finish_cell(reason: FinishReason, color: bool) -> Cell {
+    let (text, fg) = match reason {
+        FinishReason::Eof => ("eof", Color::Green),
+        FinishReason::Skip => ("skip", Color::Yellow),
+        FinishReason::Stop => ("stop", Color::DarkGrey),
+        FinishReason::Error => ("error", Color::Red),
+    };
+    maybe_fg(Cell::new(text), color, fg)
+}
+
+/// 渲染埋点系统自身状态(kv 表:路径 / 大小 / 档位 / 覆盖窗 / 三项计数)。
 ///
 /// # Params:
 ///   - `path`: stats.db 路径
 ///   - `size_bytes`: db 文件字节数
 ///   - `level`: 当前采集档位串(off / core / full)
 ///   - `report`: 状态聚合
+///   - `color`: 是否上色(非 tty 传 `false`)
 ///
 /// # Return:
-///   多行状态文本
-pub fn render_status(path: &Path, size_bytes: u64, level: &str, report: &StatusReport) -> String {
+///   状态表文本
+pub fn render_status(
+    path: &Path,
+    size_bytes: u64,
+    level: &str,
+    report: &StatusReport,
+    color: bool,
+) -> String {
     let coverage = match (report.first_play_at, report.last_play_at) {
         (Some(first), Some(last)) => format!("{first} → {last}(epoch ms)"),
         _ => "(无播放记录)".to_owned(),
     };
-    format!(
-        "stats.db:  {}\n\
-         size:      {} bytes\n\
-         level:     {}\n\
-         coverage:  {}\n\
-         plays: {}   sessions: {}   events: {}",
-        path.display(),
-        size_bytes,
-        level,
-        coverage,
-        report.plays,
-        report.sessions,
-        report.events,
-    )
+    let level_fg = match level {
+        "full" => Color::Green,
+        "core" => Color::Yellow,
+        _ => Color::DarkGrey,
+    };
+    let mut table = base_table(color);
+    table.set_header(vec![head_cell("字段", color), head_cell("值", color)]);
+    table.add_row(vec![
+        label_cell("stats.db", color),
+        Cell::new(path.display().to_string()),
+    ]);
+    table.add_row(vec![
+        label_cell("size", color),
+        Cell::new(format!("{size_bytes} bytes")),
+    ]);
+    table.add_row(vec![
+        label_cell("level", color),
+        maybe_fg(Cell::new(level), color, level_fg),
+    ]);
+    table.add_row(vec![label_cell("coverage", color), Cell::new(coverage)]);
+    table.add_row(vec![
+        label_cell("plays / sessions / events", color),
+        Cell::new(format!(
+            "{} / {} / {}",
+            report.plays, report.sessions, report.events
+        )),
+    ]);
+    table.to_string()
 }
 
-/// 结束原因的落库串(与 stats.db 一致)。
-fn finish_str(reason: FinishReason) -> &'static str {
-    match reason {
-        FinishReason::Eof => "eof",
-        FinishReason::Skip => "skip",
-        FinishReason::Stop => "stop",
-        FinishReason::Error => "error",
-    }
-}
-
-/// 渲染最近播放流水 tail(每行:起播 ms · qualified id · 收听 ms · 结束原因)。
-pub fn render_history(plays: &[PlayTail]) -> String {
+/// 渲染最近播放流水 tail(表:起播 ms / 歌曲 / 收听 / 结束原因)。
+pub fn render_history(plays: &[PlayTail], color: bool) -> String {
     if plays.is_empty() {
         return "(无播放记录)".to_owned();
     }
-    plays
-        .iter()
-        .map(|p| {
-            format!(
-                "{}  {}  {}ms  {}",
-                p.started_at,
-                p.song.qualified(),
-                p.listen_ms,
-                finish_str(p.finish_reason)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// 渲染一张 top 榜(每行:排名 · 展示名 · 次数 · 收听);`header` 是榜标题行。
-pub fn render_top(entries: &[NamedEntry], header: &str) -> String {
-    if entries.is_empty() {
-        return format!("{header}\n  (无)");
+    let mut table = base_table(color);
+    table.set_header(vec![
+        head_cell("起播(ms)", color),
+        head_cell("歌曲", color),
+        head_cell("收听(ms)", color),
+        head_cell("结束", color),
+    ]);
+    for p in plays {
+        table.add_row(vec![
+            Cell::new(p.started_at),
+            Cell::new(p.song.qualified()),
+            Cell::new(p.listen_ms),
+            finish_cell(p.finish_reason, color),
+        ]);
     }
-    let lines = entries
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            format!(
-                "{:>2}. {}  {} 次  {}",
-                i + 1,
-                display_name(e),
-                e.plays,
-                fmt_listen(e.listen_ms)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("{header}\n{lines}")
+    table.to_string()
 }
 
-/// 渲染各事件表行数(每行:行数 + 表名,0 行也列出)。
-fn render_events(counts: &[EventCount]) -> String {
+/// 渲染一张 top 榜(表:排名 / 名称 / 次数 / 收听);`header` 是榜标题(不带尾冒号)。
+pub fn render_top(entries: &[NamedEntry], header: &str, color: bool) -> String {
+    if entries.is_empty() {
+        return format!("▸ {header}\n  (无)");
+    }
+    let mut table = base_table(color);
+    table.set_header(vec![
+        head_cell("#", color),
+        head_cell("名称", color),
+        head_cell("次数", color),
+        head_cell("收听", color),
+    ]);
+    for (i, e) in entries.iter().enumerate() {
+        table.add_row(vec![
+            Cell::new(i + 1),
+            Cell::new(display_name(e)),
+            maybe_fg(Cell::new(e.plays), color, Color::Green),
+            Cell::new(fmt_listen(e.listen_ms)),
+        ]);
+    }
+    labeled(header, &table.to_string())
+}
+
+/// 渲染各事件表行数(表:事件表 / 行数,0 行也列出)。
+fn events_table(counts: &[EventCount], color: bool) -> String {
     if counts.is_empty() {
         return "  (无)".to_owned();
     }
-    counts
-        .iter()
-        .map(|e| format!("  {:>8}  {}", e.count, e.table))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut table = base_table(color);
+    table.set_header(vec![head_cell("事件表", color), head_cell("行数", color)]);
+    for c in counts {
+        table.add_row(vec![Cell::new(&c.table), Cell::new(c.count)]);
+    }
+    table.to_string()
 }
 
-/// 渲染一组「值 → 次数」分布项(带比例条;空值显示占位)。
-fn render_slices(slices: &[Slice]) -> String {
+/// 渲染一组「值 → 次数」分布(表:值 / 次数 / 占比条;空值显示占位)。
+fn slices_table(slices: &[Slice], color: bool) -> String {
     if slices.is_empty() {
         return "  (无)".to_owned();
     }
     let max = slices.iter().map(|s| s.plays).max().unwrap_or(0);
-    slices
-        .iter()
-        .map(|s| {
-            let value = if s.value.is_empty() {
-                "(未知)"
-            } else {
-                &s.value
-            };
-            format!("  {:>6}  {:<12} {}", s.plays, value, bar(s.plays, max, 20))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// 一张带名 top 榜的分节(标题 + 榜体);空榜省略整节。
-fn top_section(title: &str, entries: &[NamedEntry]) -> String {
-    if entries.is_empty() {
-        return String::new();
+    let mut table = base_table(color);
+    table.set_header(vec![
+        head_cell("值", color),
+        head_cell("次数", color),
+        head_cell("分布", color),
+    ]);
+    for s in slices {
+        let value = if s.value.is_empty() {
+            "(未知)"
+        } else {
+            &s.value
+        };
+        table.add_row(vec![
+            Cell::new(value),
+            maybe_fg(Cell::new(s.plays), color, Color::Green),
+            maybe_fg(Cell::new(bar(s.plays, max, BAR_WIDTH)), color, Color::Cyan),
+        ]);
     }
-    format!("\n\n{}", render_top(entries, title))
+    table.to_string()
 }
 
-/// 渲染一屏盘点报告:窗口 + 总量 + 续航 / 发现 + top 歌 / 专辑 / 艺人 + 来源分布 + 事件量。
+/// 渲染一屏盘点报告:窗口 + 总量表 + top 歌 / 专辑 / 艺人 + 来源分布 + 事件量。
 ///
 /// # Params:
 ///   - `report`: 已落名的完整报告
 ///   - `window`: 窗口标签("2026" / "all" 等)
+///   - `color`: 是否上色
 ///
 /// # Return:
-///   多行报告文本
-pub fn render_report(report: &StatsReport, window: &str) -> String {
+///   多块报告文本
+pub fn render_report(report: &StatsReport, window: &str, color: bool) -> String {
     let t = &report.totals;
     let e = &report.endurance;
-    let head = format!(
-        "window:      {window}\n\
-         plays:       {}   completed: {}   skipped: {}\n\
-         listen:      {}\n\
-         songs:       {}   active days: {}   discoveries: {}\n\
-         sessions:    {}   longest: {}   streak: {}d",
-        t.plays,
-        t.completed,
-        t.skipped,
-        fmt_listen(t.listen_ms),
-        t.distinct_songs,
-        t.active_days,
-        report.discoveries.new_songs.len(),
-        e.sessions,
-        fmt_listen(e.longest_ms),
-        e.streak_days,
-    );
-    format!(
-        "{head}{songs}{albums}{artists}\n\n\
-         by source:\n{source}\n\n\
-         events:\n{events}",
-        songs = top_section("top songs:", &report.top_songs),
-        albums = top_section("top albums:", &report.top_albums),
-        artists = top_section("top artists:", &report.top_artists),
-        source = render_source(&report.distributions),
-        events = render_events(&report.events.table_counts),
-    )
-}
+    let mut totals_table = base_table(color);
+    totals_table.set_header(vec![head_cell("总览", color), head_cell("值", color)]);
+    totals_table.add_row(vec![label_cell("窗口", color), Cell::new(window)]);
+    totals_table.add_row(vec![
+        label_cell("播放 / 完播 / 跳过", color),
+        Cell::new(format!("{} / {} / {}", t.plays, t.completed, t.skipped)),
+    ]);
+    totals_table.add_row(vec![
+        label_cell("收听时长", color),
+        maybe_fg(Cell::new(fmt_listen(t.listen_ms)), color, Color::Green),
+    ]);
+    totals_table.add_row(vec![
+        label_cell("涉及歌曲 / 活跃天数 / 新发现", color),
+        Cell::new(format!(
+            "{} / {} / {}",
+            t.distinct_songs,
+            t.active_days,
+            report.discoveries.new_songs.len()
+        )),
+    ]);
+    totals_table.add_row(vec![
+        label_cell("会话 / 最长会话 / 连续天数", color),
+        Cell::new(format!(
+            "{} / {} / {}d",
+            e.sessions,
+            fmt_listen(e.longest_ms),
+            e.streak_days
+        )),
+    ]);
 
-/// 来源分布分节(空则占位)。
-fn render_source(dist: &Distributions) -> String {
-    render_slices(&dist.by_source)
+    let mut blocks = vec![totals_table.to_string()];
+    for (title, entries) in [
+        ("top songs", &report.top_songs),
+        ("top albums", &report.top_albums),
+        ("top artists", &report.top_artists),
+    ] {
+        if !entries.is_empty() {
+            blocks.push(render_top(entries, title, color));
+        }
+    }
+    blocks.push(labeled(
+        "by source",
+        &slices_table(&report.distributions.by_source, color),
+    ));
+    blocks.push(labeled(
+        "events",
+        &events_table(&report.events.table_counts, color),
+    ));
+    blocks.join("\n\n")
 }
 
 #[cfg(test)]
@@ -304,8 +403,14 @@ mod tests {
             first_play_at: Some(1000),
             last_play_at: Some(5000),
         };
-        let out = render_status(std::path::Path::new("/x/stats.db"), 4096, "full", &report);
-        assert!(out.contains("plays: 3"), "{out}");
+        let out = render_status(
+            std::path::Path::new("/x/stats.db"),
+            4096,
+            "full",
+            &report,
+            /*color*/ false,
+        );
+        assert!(out.contains('3'), "{out}");
         assert!(out.contains("full"), "{out}");
         assert!(out.contains("1000 → 5000"), "{out}");
     }
@@ -331,7 +436,7 @@ mod tests {
                 finish_reason: FinishReason::Skip,
             },
         ];
-        let out = render_history(&plays);
+        let out = render_history(&plays, /*color*/ false);
         assert!(out.contains("netease:1"), "{out}");
         assert!(out.contains("eof"), "{out}");
         assert!(out.contains("bilibili:BV2"), "{out}");
@@ -340,7 +445,7 @@ mod tests {
 
     #[test]
     fn history_empty_message() {
-        assert_eq!(render_history(&[]), "(无播放记录)");
+        assert_eq!(render_history(&[], /*color*/ false), "(无播放记录)");
     }
 
     /// top 榜用回查名,缺名回落 qualified id。
@@ -350,26 +455,26 @@ mod tests {
             named("netease:1", Some("稻香"), 9, 540_000),
             named("bilibili:BV2", None, 3, 180_000),
         ];
-        let out = render_top(&entries, "top songs:");
-        assert!(out.contains(" 1. 稻香"), "命中名:{out}");
-        assert!(out.contains(" 2. bilibili:BV2"), "缺名回落 id:{out}");
-        assert!(out.contains("9 次"), "{out}");
+        let out = render_top(&entries, "top songs", /*color*/ false);
+        assert!(out.contains("稻香"), "命中名:{out}");
+        assert!(out.contains("bilibili:BV2"), "缺名回落 id:{out}");
+        assert!(out.contains('9'), "{out}");
     }
 
     #[test]
     fn top_empty_message() {
-        assert!(render_top(&[], "top songs:").contains("(无)"));
+        assert!(render_top(&[], "top songs", /*color*/ false).contains("(无)"));
     }
 
     #[test]
     fn report_shows_window_totals_and_named_tops() {
         let report = sample_report();
-        let out = render_report(&report, "2026");
-        assert!(out.contains("window:      2026"), "{out}");
-        assert!(out.contains("plays:       12"), "{out}");
+        let out = render_report(&report, "2026", /*color*/ false);
+        assert!(out.contains("2026"), "{out}");
+        assert!(out.contains("12"), "{out}");
         assert!(out.contains("1h30m"), "{out}");
-        assert!(out.contains("discoveries: 2"), "{out}");
-        assert!(out.contains("streak: 3d"), "{out}");
+        assert!(out.contains('2'), "discoveries:{out}");
+        assert!(out.contains("3d"), "{out}");
         assert!(out.contains("稻香"), "top song 带名:{out}");
         assert!(out.contains("魔杰座"), "top album 带名:{out}");
         assert!(out.contains("周杰伦"), "top artist 带名:{out}");
@@ -382,7 +487,7 @@ mod tests {
     fn snap_report_text() {
         mineral_test::assert_snap!(
             "stats report text:窗口 + 总量 + 带名 top 三榜 + 条形来源分布 + 事件量",
-            render_report(&sample_report(), "2026")
+            render_report(&sample_report(), "2026", /*color*/ false)
         );
     }
 
@@ -395,7 +500,7 @@ mod tests {
         ];
         mineral_test::assert_snap!(
             "stats top songs text:命中名 + 缺名回落 qualified id",
-            render_top(&entries, "top songs:")
+            render_top(&entries, "top songs", /*color*/ false)
         );
     }
 }
