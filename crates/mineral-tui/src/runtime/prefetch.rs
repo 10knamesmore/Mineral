@@ -83,6 +83,17 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 }
                 push_if_new(get(sel.saturating_add(d)), &mut out);
             }
+            // 暖入口曲封面:drill 进选中歌单默认落到第 0 首,其封面在 Library 视图才首次
+            // 显示;此前从不预取(上面只取歌单封面),首次 drill 该曲封面是冷的、逐帧闪
+            // hash→halfblock→image。悬停期(曲目已加载)就把它拉进 cache,配合渲染侧 prewarm
+            // 让 drill 瞬间直接命中 kitty。只暖第 0 首:remembered-pos / deep-hit 的少数入口退化。
+            if let Some(first) = filtered
+                .get(sel)
+                .and_then(|p| state.library.tracks.get(&p.data.id))
+                .and_then(|tracks| tracks.first())
+            {
+                push_if_new(song_cover(&first.data), &mut out);
+            }
         }
         View::Library => {
             // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
@@ -465,6 +476,44 @@ mod tests {
     #[test]
     fn effective_radius_zero_at_pathological_budget() {
         assert_eq!(super::effective_cover_radius(64, 1, 384, 3), 0);
+    }
+
+    /// Playlists 视图悬停选中歌单、其曲目已加载:入口曲(第 0 首)封面应进 prefetch 集合。
+    /// 根因修复——Playlists 视图此前只预取歌单封面,不预取曲目封面,导致首次 drill 进 tracks
+    /// 时该曲封面是冷的、逐帧闪 hash→halfblock→image。悬停期先把入口曲封面暖进 cache。
+    #[test]
+    fn collects_selected_playlist_entry_track_cover() -> color_eyre::Result<()> {
+        use mineral_model::{Playlist, PlaylistId};
+
+        use crate::runtime::view_model::{PlaylistView, SongView};
+
+        let mut state = AppState::test_default()?;
+        state.browse.view.switch_to(View::Playlists);
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        state.library.playlists = vec![PlaylistView {
+            data: Playlist::builder()
+                .id(pid.clone())
+                .name("pl".to_owned())
+                .track_count(3)
+                .build(),
+        }];
+        let views = (0..3)
+            .map(|i| {
+                Ok(SongView {
+                    data: song_with_cover(i)?,
+                    loved: false,
+                    plays: None,
+                })
+            })
+            .collect::<color_eyre::Result<Vec<SongView>>>()?;
+        state.library.tracks.insert(pid, views);
+        state.browse.nav.playlist.set_sel(0);
+
+        assert!(
+            collected_has(&state, 0)?,
+            "入口曲(选中歌单第 0 首)封面应进 prefetch 集合"
+        );
+        Ok(())
     }
 
     /// 造一个「已进 Search 布局态、搜到 1 张专辑、光标停留超防抖窗」的 state。
