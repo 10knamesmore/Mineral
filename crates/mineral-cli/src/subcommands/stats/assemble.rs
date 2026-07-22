@@ -57,8 +57,12 @@ pub enum TopCategory {
     /// top 专辑
     Albums,
 
-    /// top 艺人
+    /// top 艺人(口味口径:按歌曲的 artists 归属聚合——「听了谁的歌」)
     Artists,
+
+    /// top 艺人页(context 口径:按起播语境聚合——「从谁的详情页起播」,与 `Artists`
+    /// 是两条不同的统计路径,不要混为一谈)
+    ArtistPages,
 
     /// top 歌单
     Playlists,
@@ -71,6 +75,7 @@ impl TopCategory {
             Self::Songs => "top songs:",
             Self::Albums => "top albums:",
             Self::Artists => "top artists:",
+            Self::ArtistPages => "top artist pages (by play-from-page count):",
             Self::Playlists => "top playlists:",
         }
     }
@@ -81,12 +86,13 @@ impl TopCategory {
             Self::Songs => "Top 歌曲",
             Self::Albums => "Top 专辑",
             Self::Artists => "Top 艺人",
+            Self::ArtistPages => "Top 艺人页(从详情页起播次数)",
             Self::Playlists => "Top 歌单",
         }
     }
 }
 
-/// 查一张 top 榜,统一成 `Vec<NamedEntry>`(四类别同一渲染形状,名字随查询直出)。
+/// 查一张 top 榜,统一成 `Vec<NamedEntry>`(各类别同一渲染形状,名字随查询直出)。
 ///
 /// # Params:
 ///   - `store`: stats.db 查询句柄
@@ -138,19 +144,35 @@ pub async fn top_entries(
                 listen_ms: t.listen_ms,
             })
             .collect(),
-        TopCategory::Playlists => store
-            .top_contexts(range, Some("playlist"), opts.top_limit())
+        TopCategory::ArtistPages => store
+            .top_contexts(
+                range,
+                Some("artist"),
+                opts.min_listen_ms(),
+                opts.top_limit(),
+            )
             .await?
             .into_iter()
-            .map(playlist_entry)
+            .map(context_entry)
+            .collect(),
+        TopCategory::Playlists => store
+            .top_contexts(
+                range,
+                Some("playlist"),
+                opts.min_listen_ms(),
+                opts.top_limit(),
+            )
+            .await?
+            .into_iter()
+            .map(context_entry)
             .collect(),
     };
     Ok(out)
 }
 
-/// 一条 playlist 语境 → 榜项:id 用 `context_ref`(qualified 串;无引用回落 `manual`),
-/// 名取组内 `context_name` 快照。
-fn playlist_entry(slice: ContextSlice) -> NamedEntry {
+/// 一条队列语境 → 榜项(`Playlists` / `ArtistPages` 共用):id 用 `context_ref`
+/// (qualified 串;无引用回落 `manual`),名取组内 `context_name` 快照。
+fn context_entry(slice: ContextSlice) -> NamedEntry {
     NamedEntry {
         id: slice.reference.unwrap_or_else(|| "manual".to_owned()),
         name: slice.name,
@@ -234,6 +256,46 @@ mod tests {
             Some("收藏夹"),
             "歌单名出自 context_name 快照"
         );
+        Ok(())
+    }
+
+    /// ArtistPages(context 口径「从谁的详情页起播」)与 Artists(口味口径「听了谁的歌」)
+    /// 是两条不同的查询路径:前者走 `top_contexts(Some("artist"))`,只认起播语境,
+    /// 不依赖 song_artists 维表,即便歌从未 upsert_song 富化过也照样计入。
+    #[tokio::test]
+    async fn artist_pages_category_uses_context_ref() -> color_eyre::Result<()> {
+        use mineral_model::{ArtistId, SourceKind};
+
+        let dir = tempfile::tempdir()?;
+        let store = StatsStore::open(&dir.path().join("stats.db")).await?;
+        let sid = store
+            .open_session(1000)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected session id"))?;
+        let mut record = play_record(sid);
+        record.context = QueueContext::Artist {
+            id: ArtistId::new(SourceKind::NETEASE, "art"),
+            name: Some("从详情页起播的艺人".to_owned()),
+        };
+        store.record_play(&record).await?;
+        let opts = ReportOptions::builder()
+            .min_listen_ms(0)
+            .top_limit(10)
+            .build();
+
+        let pages = top_entries(
+            &store,
+            TopCategory::ArtistPages,
+            0..i64::MAX,
+            TopBy::Plays,
+            &opts,
+        )
+        .await?;
+        let only = pages
+            .first()
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有 top 艺人页"))?;
+        assert_eq!(only.id, "netease:art");
+        assert_eq!(only.name.as_deref(), Some("从详情页起播的艺人"));
         Ok(())
     }
 }

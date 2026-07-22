@@ -127,9 +127,12 @@ mod tests {
         .fetch_one(pool)
         .await?;
         // 表数从事件表注册表派生(加表只改 EVENT_TABLES 一处,漏挂由
-        // prune_registry_matches_migration 兜):core 本体 plays + sessions + songs 维表。
-        let want = i64::try_from(crate::store::prune::EVENT_TABLES.len() + 3)?;
-        assert_eq!(count, want, "plays + sessions + songs 维表 + 全部事件表");
+        // prune_registry_matches_migration 兜):core 本体 plays + sessions + songs / song_artists 维表。
+        let want = i64::try_from(crate::store::prune::EVENT_TABLES.len() + 4)?;
+        assert_eq!(
+            count, want,
+            "plays + sessions + songs/song_artists 维表 + 全部事件表"
+        );
         Ok(())
     }
 

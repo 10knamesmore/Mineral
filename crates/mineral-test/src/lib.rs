@@ -3,7 +3,7 @@
 //! 收口可**跨 crate 复用**的测试零件,避免各 crate 各抄一份:
 //! - 快照断言宏 [`assert_snap!`] / [`assert_snap_debug!`](强制带中文 `description`)。
 //! - [`Song`](mineral_model::Song) 构造器 [`song`] + 函数式装饰 [`with_artist`] /
-//!   [`with_source`] / [`with_duration`]。
+//!   [`with_artists`] / [`with_source`] / [`with_duration`]。
 //! - 展示性 fixtures [`endserenading`] / [`chinese_football`] / [`qianzai_lyrics`]。
 //! - proptest 生成器 [`arb_song`]。
 //! - 测试 mock 命名空间 [`mock`]:进程内 HTTP server [`mock::serve_once`] + 喂直链的
@@ -25,7 +25,7 @@ pub mod mock;
 mod macros;
 
 pub use builders::{
-    song, with_album, with_alias, with_artist, with_duration, with_name, with_source,
+    song, with_album, with_alias, with_artist, with_artists, with_duration, with_name, with_source,
 };
 pub use fixtures::{aliased_song, chinese_football, endserenading};
 pub use lyrics::{feiyu_lyrics, feiyu_song, qianzai_lyrics, qianzai_song};

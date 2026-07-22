@@ -75,7 +75,7 @@ async fn report_suite(store: &StatsStore, opts: &ReportOptions) {
         .top_songs(0..i64::MAX, TopBy::Plays, opts)
         .await
         .unwrap();
-    store.top_contexts(0..i64::MAX, None, 20).await.unwrap();
+    store.top_contexts(0..i64::MAX, None, 0, 20).await.unwrap();
     store.discoveries(0..i64::MAX, 100).await.unwrap();
     store.endurance(0..i64::MAX).await.unwrap();
     store.event_summary(0..i64::MAX, 10).await.unwrap();
@@ -267,7 +267,7 @@ fn bench_report_year(c: &mut Criterion) {
     });
     group.bench_function("top_contexts", |b| {
         b.to_async(&rt)
-            .iter(|| async { store.top_contexts(0..i64::MAX, None, 20).await.unwrap() });
+            .iter(|| async { store.top_contexts(0..i64::MAX, None, 0, 20).await.unwrap() });
     });
     group.bench_function("recent_plays", |b| {
         b.to_async(&rt)

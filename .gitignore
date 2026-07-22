@@ -8,6 +8,9 @@ logs/
 .DS_Store
 # 脚本/bin 生成的、可丢的中间物(perf.data / 火焰图 svg / samply 产物等)
 scratch/
+# 本地 sqlx DATABASE_URL(改 SQL schema 时临时指向 scratch/ 的一次性库,见
+# scripts/sqlx-prepare.sh);内容因人而异,不进版本控制。
+.env
 # dhat 堆剖析产物(--features dhat-heap 运行时落盘)
 dhat-heap.json
 # superpowers 头脑风暴可视化伴侣的本地产物

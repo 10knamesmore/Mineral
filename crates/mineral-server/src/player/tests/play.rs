@@ -109,7 +109,7 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let contexts = store.top_contexts(0..i64::MAX, None, 10).await?;
+    let contexts = store.top_contexts(0..i64::MAX, None, 0, 10).await?;
     let playlist_slice = contexts
         .iter()
         .find(|c| c.kind == "playlist")

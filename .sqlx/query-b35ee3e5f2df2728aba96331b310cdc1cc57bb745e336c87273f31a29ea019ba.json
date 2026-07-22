@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT sa.ns AS \"ns!\", sa.artist_value AS \"artist_value!\",\n                    MAX(sa.artist_name) AS \"artist_name!: String\",\n                    COUNT(*) AS \"plays!: i64\", COALESCE(SUM(p.listen_ms), 0) AS \"listen_ms!: i64\"\n                   FROM plays p\n                   JOIN song_artists sa ON sa.ns = p.ns AND sa.song_value = p.song_value\n                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?\n                   GROUP BY sa.ns, sa.artist_value ORDER BY 4 DESC, 5 DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ns!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "artist_value!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "artist_name!: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "plays!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "listen_ms!: i64",
+        "ordinal": 4,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b35ee3e5f2df2728aba96331b310cdc1cc57bb745e336c87273f31a29ea019ba"
+}

@@ -927,7 +927,7 @@ mod tests {
         recorder.play_ended(FinishReason::Eof, /*listen_ms*/ 3000);
         drop(recorder);
         handle.await?;
-        let contexts = store.top_contexts(0..i64::MAX, None, 10).await?;
+        let contexts = store.top_contexts(0..i64::MAX, None, 0, 10).await?;
         let first = contexts
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("期望一条语境"))?;

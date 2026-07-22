@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT context_kind AS \"kind!\", context_ref AS \"reference\",\n                          COUNT(*) AS \"plays!: i64\", SUM(listen_ms) AS \"listen_ms!: i64\",\n                          MAX(context_name) AS \"name?: String\"\n                   FROM plays\n                   WHERE started_at >= ? AND started_at < ?\n                   GROUP BY context_kind, context_ref ORDER BY 3 DESC, context_kind LIMIT ?",
+  "query": "SELECT context_kind AS \"kind!\", context_ref AS \"reference\",\n                          COUNT(*) AS \"plays!: i64\", SUM(listen_ms) AS \"listen_ms!: i64\",\n                          MAX(context_name) AS \"name?: String\"\n                   FROM plays\n                   WHERE started_at >= ? AND started_at < ? AND listen_ms >= ?\n                   GROUP BY context_kind, context_ref ORDER BY 3 DESC, context_kind LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -30,7 +30,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -40,5 +40,5 @@
       null
     ]
   },
-  "hash": "5a7e615a718ab94b3aaa1243a088d53606eba5cc8c15dc9b188c9748b56f8963"
+  "hash": "7ab80e767a5878ef10734d63ca6ea93e33d22a700dd69ae097de563b4105ec45"
 }

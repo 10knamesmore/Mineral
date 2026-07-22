@@ -35,6 +35,25 @@ pub fn with_artist(mut s: Song, artist: &str) -> Song {
     s
 }
 
+/// 给一首 `Song` 挂上多个艺人(`id == name`,顺序即 `position`)。
+///
+/// # Params:
+///   - `s`: 原 `Song`
+///   - `artists`: 艺人名,主艺人在前
+///
+/// # Return:
+///   `artists` 被替换为对应顺序 `ArtistRef` 列表的 `Song`。
+pub fn with_artists(mut s: Song, artists: &[&str]) -> Song {
+    s.artists = artists
+        .iter()
+        .map(|&artist| ArtistRef {
+            id: ArtistId::new(s.id.namespace(), artist),
+            name: artist.to_owned(),
+        })
+        .collect();
+    s
+}
+
 /// 给一首 `Song` 挂上专辑(`id == name`,namespace 随歌曲走)。
 ///
 /// # Params:

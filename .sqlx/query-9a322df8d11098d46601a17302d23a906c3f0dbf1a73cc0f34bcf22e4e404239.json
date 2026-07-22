@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO song_artists (ns, song_value, position, artist_value, artist_name)\n                     VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "9a322df8d11098d46601a17302d23a906c3f0dbf1a73cc0f34bcf22e4e404239"
+}
