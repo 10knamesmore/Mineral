@@ -1,4 +1,37 @@
 # Changelog
+## [0.5.5] — 2026-07-23
+
+### Features
+
+- 队列结构编辑全栈 + 面板增强 + Lua 变换 ([`0a09eef`](https://github.com/10knamesmore/Mineral/commit/0a09eef3d649a27c316f4d90c1f5b314be2167c7))
+
+- Queue 浮层 / 模糊过滤——顶栏输入 + 命中高亮 + 按分排序 ([`dcd760c`](https://github.com/10knamesmore/Mineral/commit/dcd760c8601c0dbeb6ea0d0bdcaf006ce0936d49))
+
+- 全屏频谱高度响应式——占屏高百分比 + 上下限钳制 ([`fb0ecb1`](https://github.com/10knamesmore/Mineral/commit/fb0ecb1532e3481b6f8ac46c86e2692450d6de5c))
+
+- Top artists 改口味口径——听了谁的歌,而非从谁的页面起播 ([`539d357`](https://github.com/10knamesmore/Mineral/commit/539d357808cbc13ee5f6c9d08de1deaa18329bb2))
+
+- Top albums 改口味口径 + CLI 文本输出表格化 ([`39a609e`](https://github.com/10knamesmore/Mineral/commit/39a609e1f76542edbec12fb4e947bc593609e2fd))
+
+- 全屏歌词焦点行 seek 游标 + Enter 跳到该行 ([`b075c94`](https://github.com/10knamesmore/Mineral/commit/b075c94b106e5dfb5f99b9f06f177cb6e1a3d490))
+
+- 整屏形变封面飞行层——跨端 fade 飞行根治端点瞬换 ([`0656f79`](https://github.com/10knamesmore/Mineral/commit/0656f7969f65ac80f270dfa0a5b961965378440c))
+
+- 全屏氛围背景滞后跟随几何 + theme.background 消 toggle 跳变 ([`689db86`](https://github.com/10knamesmore/Mineral/commit/689db862ca95ba06b15f68462de53632b4d75912))
+
+- Selected 面板身份分层——标题/副信息/meta 三行居中,在播=标题行高亮 ([`0ce01fd`](https://github.com/10knamesmore/Mineral/commit/0ce01fd57bf0eaa492e4def065c008f27ea49ceb))
+
+- 滚动期 cache-hit 封面 halfblock 兜底——debounce 只挡高清编码 ([`395bf7e`](https://github.com/10knamesmore/Mineral/commit/395bf7e36c0d8180e772062e2ca5a4ada8fd5698))
+
+### Bug Fixes
+
+- 盲文频谱暗点保底改单向平滑,根除随背景漂移的移动黑斑 ([`4a1de68`](https://github.com/10knamesmore/Mineral/commit/4a1de6879f4a644a9a0fb19d61e9916b3a0feca3))
+
+- Play-next 补偿 remove 左移,紧随当前曲不再空一格 ([`4dc7cbe`](https://github.com/10knamesmore/Mineral/commit/4dc7cbe4fe473cf86bc79d3c6a6a63a571e69a04))
+
+- Playlists→tracks 首进封面消 hash 闪——悬停期暖入口曲第0首 ([`a36dc78`](https://github.com/10knamesmore/Mineral/commit/a36dc7840ecb45f4c779183b08b97375321e7c61))
+
+- 下钻 sweep 过场消背景露洞——copy_col 把离屏 Reset 底视作透明 ([`4504fe5`](https://github.com/10knamesmore/Mineral/commit/4504fe5a2f1d9a8777ec4cf525af12b78a41ab3e))
 ## [0.5.4] — 2026-07-18
 
 ### Features
