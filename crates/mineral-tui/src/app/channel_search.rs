@@ -1293,6 +1293,37 @@ mod tests {
         Ok(())
     }
 
+    /// cache hit 时滚动窗内应画 halfblock 低清真图(非留空):图已在 `covers.cache`,只把
+    /// 高清编码派发挡在防抖后。锁「滚动期封面不再空白」——消除快速滚过 prefetch 已拉到的
+    /// 邻近项时的空窗。
+    #[test]
+    fn search_cover_hit_paints_halfblock_while_scrolling() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut app, url) = app_with_covered_album()?;
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+        app.state.covers.cache.insert(&url, Arc::new(img));
+
+        let mut t = Terminal::new(TestBackend::new(120, 44))?;
+        // 窗内(选中刚变):cache hit → 画 halfblock 真图,但高清编码仍不派发。
+        app.state.channel_search.last_sel_change = Instant::now();
+        t.draw(|f| crate::view::draw(f, &app))?;
+        let detail = detail_rect(&app)?;
+        assert!(
+            half_cells(t.backend().buffer(), detail) > 0,
+            "滚动窗内 cache hit 应画 halfblock 真图,不留空"
+        );
+        assert!(
+            app.state.covers.encode_pending.borrow().is_empty(),
+            "滚动窗内仍不派发高清编码"
+        );
+        Ok(())
+    }
+
     /// cache miss 的程序化 hash 占位同样尊重滚动防抖:滚动中图位留空(不逐行闪不同色块),
     /// 停稳后才画占位。
     #[test]

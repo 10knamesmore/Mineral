@@ -159,7 +159,7 @@ return {
       max_dim = 384, -- 解码后等比缩放到的最大边,px;终端显示足够,大了费内存
       jpeg_quality = 100, -- 重编码质量 1-100;仅 storage = "resized" 时生效
       storage = "resized", -- "raw" | "resized";resized = 缓存命中只解 ≤max_dim 小图,CPU 大降
-      debounce_ms = 80, -- 列表滚动停稳多久才渲染真图;期间显示程序化色块占位
+      debounce_ms = 32, -- 列表滚动停稳多久才编码高清真图;期间 halfblock 低清兜底(cache hit)/ 程序化占位(miss)
       download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
       kitty_transmit = { -- kitty 图协议数据流式传输:编码就绪拆块逐帧发终端,首显只写占位符;仅 kitty 协议生效
