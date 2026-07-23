@@ -76,7 +76,10 @@ pub fn draw(
         .map(|a| format!(" ({a})"))
         .unwrap_or_default();
     let title_line = MarqueeCtx::new(state, theme, /*fade_to*/ theme.base).line(
-        vec![Span::styled(format!("{}{alias}", sv.data.name), title_style)],
+        vec![Span::styled(
+            format!("{}{alias}", sv.data.name),
+            title_style,
+        )],
         Slot::NowPlaying,
         &sv.data.id.qualified(),
         kv_area.width,
