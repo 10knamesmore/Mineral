@@ -23,7 +23,7 @@
 ## 特性
 
 - **多源融合** — `MusicChannel` trait 统一抽象搜索 / 详情 / 播放 URL / 歌词 / 用户数据;平铺数据模型跨源直接合并展示,新增音乐源不污染模型
-- **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接**
+- **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接(跨源的也一样!)**
 - **daemon 后台播放** — 播放核心独立进程,退出 TUI 音乐不停;重开无缝接回进度;多 client 可同时连接,共享同一份播放状态
 - **全屏沉浸态** — `z` 一键进出:封面 / 逐字歌词 / 频谱的沉浸布局,行间平移与逐字歌词高亮
 - **氛围背景** — 封面取色驱动:全屏调色板渐变背景 + 全局 accent 动态主题;背景随响度实时跳动(浓度 / 色斑 / 亮端 / 暗角),切歌封面转场
