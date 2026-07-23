@@ -168,7 +168,7 @@ mineral.on("track_finished", function(args)
         skips[args.song.id] = n
     end)
 end)
-mineral.hook("before_play", function(ctx)
+mineral.hook("before_stream", function(ctx)
     if (skips[ctx.song.id] or 0) >= 3 then
         return { skip = "跳过 3 次,自动拉黑" }
     end
@@ -179,7 +179,7 @@ end)
 
 ## 快捷键
 
-以下是默认键位,除两个硬编码逃生口(`Ctrl-c` / `Q`)外**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。
+以下是默认键位,除两个硬编码逃生口(`Ctrl-c` / `Q`)外**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。app 内按 `?` 看完整键表。
 
 <details open>
 <summary><b>全局</b></summary>
@@ -197,6 +197,7 @@ end)
 | `x`       | 关闭通知卡片(连按逐条关)                        |
 | `s`       | 打开搜索(进入在线搜索视图)                      |
 | `q`       | 退出(带确认)                                    |
+| `?`       | 打开快捷键帮助(app 内完整键表)                  |
 
 > 两个**硬编码逃生口**不可重映射:`Ctrl-c` 立即退出 TUI(不动 daemon);`Q`(Shift+q)退出 TUI **并停止 daemon**(无视 `kill_spawned_daemon_on_exit`;搜索输入态下 `Q` 当字符)。
 
@@ -221,6 +222,16 @@ end)
 | `[` / `]`                 | 详情页分区切换                        |
 | `o`                       | 操作菜单(选中曲 / 歌单)              |
 | `y`                       | 复制菜单(标题 / 艺人 / 链接…)        |
+
+</details>
+
+<details>
+<summary><b>播放队列浮层(<code>Tab</code> 打开)</b></summary>
+
+| 键                  | 动作                      |
+| ------------------- | ------------------------- |
+| `c`                 | 光标跳回在播条目          |
+| `Ctrl-j` / `Ctrl-k` | 选中条目下移 / 上移一格   |
 
 </details>
 

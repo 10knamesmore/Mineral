@@ -149,7 +149,7 @@ mineral.timer.after(5000, function() mineral.ui.toast("5 秒到") end)
 ```lua
 -- 拒播 30 秒以下的短音频(广告/试听残片)
 mineral.hook("before_stream", function(ctx)
-    if ctx.song.duration_ms > 0 and ctx.song.duration_ms < 30 * 1000 then
+    if ctx.song.duration_ms and ctx.song.duration_ms < 30 * 1000 then
         return { skip = "短于 30s" }
     end
 end)
@@ -231,6 +231,7 @@ mineral.player.play("netease:123")
 
 ```lua
 mineral.queue.list(function(songs, err) ... end)           -- 当前队列(只读)
+mineral.queue.set(reordered)                               -- 整表重排队列(读每项 id;须都在当前队列,外来 id 整次被拒)
 mineral.library.playlists(function(playlists, err) ... end) -- 用户歌单(跨源聚合)
 mineral.library.tracks("netease:pid", function(songs, err) ... end)
 mineral.library.search("关键词", { source = "netease", limit = 10 },
