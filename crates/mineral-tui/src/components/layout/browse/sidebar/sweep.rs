@@ -7,6 +7,7 @@
 use mineral_config::SweepStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use super::{library, playlists};
 use crate::render::theme::Theme;
@@ -84,7 +85,15 @@ fn copy_col(dst: &mut Buffer, area: Rect, src: &Buffer, dst_c: u16, src_c: u16) 
     let sx = area.x + src_c;
     for ry in area.y..area.y.saturating_add(area.height) {
         if let Some(cell) = src.cell((sx, ry)) {
-            let cell = cell.clone();
+            let mut cell = cell.clone();
+            // 离屏帧空 cell 的 Reset 底视作透明:回落到目标已铺的 backdrop 底(paint_backdrop
+            // 铺的 theme.background + 氛围场)。否则整格搬回会把 backdrop 盖成终端默认底,过场
+            // 期腾出/空白列露出终端底洞——稳态面板背景全靠底层 backdrop,离屏合成必须让它透出。
+            if matches!(cell.bg, Color::Reset)
+                && let Some(under) = dst.cell((dx, ry))
+            {
+                cell.set_bg(under.bg);
+            }
             if let Some(slot) = dst.cell_mut((dx, ry)) {
                 *slot = cell;
             }
@@ -207,6 +216,45 @@ mod tests {
             "Cover 端点同样退化"
         );
         Ok(())
+    }
+
+    /// copy_col 把离屏空 cell 的 Reset 底视作透明:搬回目标时保留目标已铺的 backdrop 底,
+    /// 只有源显式设的底才照搬。防回归:稳态左栏背景全靠底层 paint_backdrop,离屏 Buffer::empty
+    /// 的 Reset 底若被整格搬回会盖成终端默认底,playlist↔tracks 过场露洞。
+    #[test]
+    fn copy_col_treats_reset_bg_as_transparent() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Color;
+
+        let area = Rect::new(0, 0, 3, 2);
+        let backdrop = Color::Rgb(1, 2, 3);
+        let mut dst = Buffer::empty(area);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if let Some(c) = dst.cell_mut((x, y)) {
+                    c.set_bg(backdrop);
+                }
+            }
+        }
+        // 源:第 0 列全空(Reset 底);第 1 列一格有内容 + 显式红底。
+        let mut src = Buffer::empty(area);
+        if let Some(c) = src.cell_mut((1, 0)) {
+            c.set_symbol("x").set_bg(Color::Red);
+        }
+        super::copy_col(&mut dst, area, &src, /*dst_c*/ 0, /*src_c*/ 0);
+        super::copy_col(&mut dst, area, &src, /*dst_c*/ 1, /*src_c*/ 1);
+
+        assert_eq!(
+            dst.cell((0, 0)).map(|c| c.bg),
+            Some(backdrop),
+            "空 cell 的 Reset 底回落到 backdrop"
+        );
+        assert_eq!(
+            dst.cell((1, 0)).map(|c| c.bg),
+            Some(Color::Red),
+            "源显式设的底照搬,不被回落"
+        );
     }
 
     /// 打断反向:enter 到一半再 leave,缓动进度从当前值单调回落、不跳变(几何连续)。
