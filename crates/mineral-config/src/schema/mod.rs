@@ -67,7 +67,7 @@ pub use theme::{
     TextStyle, ThemeConfig, TokenName,
 };
 pub use toast::ToastConfig;
-pub use waveform::WaveformConfig;
+pub use waveform::{RevealConfig, WaveformConfig};
 pub use window_title::{
     TimeFormat, TimePreset, TitleField, TitleIcons, TitleSegment, WindowTitleConfig,
 };

@@ -5,14 +5,15 @@
 //! 软边窗口内让已播色与轨道色互相溶解(半径可配,0 = 硬边)。
 
 use mineral_audio::Bps;
-use mineral_model::Envelope;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use crate::components::layout::shared::transport::split_buffered_track;
+use crate::render::anim::ease_out;
 use crate::render::color::lerp_byte;
 use crate::render::palette::{CoverPalette, column_permille};
-use crate::render::theme::Theme;
+use crate::render::theme::{Ink, Theme};
+use crate::runtime::playback::EnvelopeState;
 use crate::runtime::state::AppState;
 
 /// 已播段取色策略:封面色板就绪时沿整条 bar 逐列渐变,否则单色。
@@ -59,9 +60,65 @@ pub struct WaveformCtx<'a> {
     /// 播放头软边半径(列,`tui.waveform.edge_radius` 现读):0 = 硬边。
     pub edge_radius: usize,
 
-    /// 当前曲包络(归属已校验);`None` = 未就绪,回落普通进度条。
-    pub envelope: Option<&'a Envelope>,
+    /// 入场揭示动画参数(`tui.waveform.reveal.*` 现读)。
+    pub reveal: RevealStyle,
+
+    /// 当前曲包络及其入场动画相位(归属已校验);`None` = 未就绪,回落普通进度条。
+    pub envelope: Option<&'a EnvelopeState>,
 }
+
+/// 波形入场揭示的形态参数(不含进度——进度在 [`EnvelopeState`] 上,随包络生灭)。
+#[derive(Clone, Copy, Debug)]
+pub struct RevealStyle {
+    /// 横扫占总时长的比例(千分比 `0..=1000`,`tui.waveform.reveal.sweep_ratio` 现读):
+    /// 余下为单列生长时长。满值 = 纯左→右擦除,`0` = 全条同时抬升。
+    pub sweep: u16,
+
+    /// 揭示边前沿的提亮强度(千分比 `0..=1000`,`tui.waveform.reveal.glow` 现读):
+    /// `0` = 无亮边。
+    pub glow: u16,
+}
+
+impl RevealStyle {
+    /// 第 `col` 列(共 `bar_w` 列)在整体进度 `progress` 下的揭示进度。
+    ///
+    /// 各列按 `sweep` 比例错开起跑(左列先跑),每列在余下的时长内**各自** ease-out
+    /// 长到位——两个方向合成一条对角线。
+    ///
+    /// # Params:
+    ///   - `col`: 列序号(从 0 起)
+    ///   - `bar_w`: 进度条总列数
+    ///   - `progress`: 整体线性进度(千分比 `0..=1000`,见 [`EnvelopeState::reveal`])
+    ///
+    /// # Return:
+    ///   该列揭示进度,千分比 `0..=1000`;`0` = 尚未揭示(渲染回落进度条中线)。
+    fn column(&self, col: usize, bar_w: usize, progress: u16) -> u16 {
+        let sweep = self.sweep.min(FULL_E3);
+        // 起跑时刻:末列恰在 `sweep` 处起跑,故整条在 `sweep + grow = 满值` 时收尾。
+        let start = match u16::try_from(bar_w.saturating_sub(1)) {
+            Ok(0) | Err(_) => 0,
+            Ok(last) => {
+                u16::try_from(u32::from(sweep) * u32::try_from(col).unwrap_or(0) / u32::from(last))
+                    .unwrap_or(sweep)
+            }
+        };
+        let Some(elapsed) = progress.checked_sub(start).filter(|e| *e > 0) else {
+            return 0;
+        };
+        let grow = FULL_E3 - sweep;
+        if grow == 0 {
+            return FULL_E3; // 纯擦除:起跑即到位
+        }
+        ease_out(
+            u16::try_from(u32::from(elapsed) * u32::from(FULL_E3) / u32::from(grow))
+                .unwrap_or(FULL_E3)
+                .min(FULL_E3),
+        )
+    }
+}
+
+/// 千分比满值(与 [`crate::render::anim`] 同一标度)。
+const FULL_E3: u16 = 1000;
 
 impl<'a> WaveformCtx<'a> {
     /// 从应用状态现读构造:包络经 [`crate::runtime::playback::Playback::current_envelope`]
@@ -94,6 +151,10 @@ impl<'a> WaveformCtx<'a> {
             played,
             contrast: *cfg.contrast(),
             edge_radius: *cfg.edge_radius(),
+            reveal: RevealStyle {
+                sweep: ratio_e3(*cfg.reveal().sweep_ratio()),
+                glow: ratio_e3(*cfg.reveal().glow()),
+            },
             envelope: state.playback.current_envelope(),
         }
     }
@@ -106,9 +167,25 @@ impl<'a> WaveformCtx<'a> {
             played: PlayedStyle::Solid(Color::Reset),
             contrast: 1.0,
             edge_radius: 0,
+            reveal: RevealStyle { sweep: 0, glow: 0 },
             envelope: None,
         }
     }
+}
+
+/// 配置里的 `0.0..=1.0` 比例 → 千分比定点(超界 clamp,NaN 归零)。
+///
+/// # Params:
+///   - `ratio`: 配置比例
+///
+/// # Return:
+///   千分比,`0..=1000`。
+#[allow(clippy::as_conversions)] // reason: 浮点比例到定点,值域已 clamp 进 0..=1000
+fn ratio_e3(ratio: f32) -> u16 {
+    if !ratio.is_finite() {
+        return 0;
+    }
+    (ratio * 1000.0).round().clamp(0.0, 1000.0) as u16
 }
 
 /// 响度 → 条高的对比 gamma 映射:`(v/255)^contrast × 255`,端点不动、单调。
@@ -219,6 +296,68 @@ fn mix_colors(a: Color, b: Color, num: u64, denom: u64) -> Color {
     }
 }
 
+/// 波形渲染需要的播放位置口径。
+#[derive(Clone, Copy, Debug)]
+pub struct PlayState {
+    /// 已播比例(播放头连续位置;整列数与软边比例都由它派生)。
+    pub progress: Bps,
+
+    /// 已缓冲比例(播放头之后拆亮 / 暗两段,与普通进度条同语义)。
+    pub buffered: Bps,
+}
+
+/// 未揭示列的进度条形态 cell:`━`(已播)/ `●`(播放头)/ `─`(轨道,已缓冲亮、未缓冲暗)。
+///
+/// 与 transport 回落分支的普通进度条**逐 cell 一致**——入场动画因此读作「波形把中线
+/// 从左往右推走」的形态转换,而不是波形凭空出现。
+///
+/// # Params:
+///   - `col`: 列序号
+///   - `filled`: 已播实心列数(播放头在第 `filled` 列)
+///   - `bright_end`: 轨道亮暗分界列
+///   - `theme`: 取色主题
+///   - `ink`: 对实际背景现算的弱化色阶
+///
+/// # Return:
+///   `(字形, 样式)`。
+fn plain_cell(
+    col: usize,
+    filled: usize,
+    bright_end: usize,
+    theme: &Theme,
+    ink: Ink,
+) -> (&'static str, Style) {
+    if col < filled {
+        ("━", Style::new().fg(theme.accent_2))
+    } else if col == filled {
+        (
+            "●",
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        )
+    } else if col < bright_end {
+        ("─", Style::new().fg(ink.muted))
+    } else {
+        ("─", Style::new().fg(ink.ghost))
+    }
+}
+
+/// 揭示边前沿提亮:正在生长的列朝 `theme.text` 混色,越接近到位越回落本色。
+///
+/// `column == 满值`(已到位)时混合比恒为 0,故动画放完那一帧与无动画时逐 cell 一致。
+///
+/// # Params:
+///   - `color`: 该列本色
+///   - `glow`: 提亮强度(千分比)
+///   - `column`: 该列揭示进度(千分比)
+///   - `theme`: 取色主题
+///
+/// # Return:
+///   提亮后的颜色。
+fn glow_mix(color: Color, glow: u16, column: u16, theme: &Theme) -> Color {
+    let num = u64::from(FULL_E3.saturating_sub(column)) * u64::from(glow) / u64::from(FULL_E3);
+    mix_colors(color, theme.text, num, u64::from(FULL_E3))
+}
+
 /// 波形进度条 span 序列(总 cell 宽恒 == `bar_w`,布局不抖)。
 ///
 /// 播放头不画异色块:`edge_radius > 0` 时,播放头前后各 `edge_radius` 列在已播色
@@ -226,49 +365,52 @@ fn mix_colors(a: Color, b: Color, num: u64, denom: u64) -> Color {
 /// 插值比例以**亚列精度**(万分之一列定点)跟随播放位置——整列量化会让整个
 /// 软边窗口随播放推进一格一格跳变,而不是连续滑过。
 ///
+/// 包络刚到达时整条按 [`RevealStyle`] 逐列揭示:未揭示列走 [`plain_cell`] 维持进度条
+/// 中线,已揭示列按该列进度从底部长到目标高度、前沿由 [`glow_mix`] 提亮。揭示满值后
+/// 这两层都退化为恒等,渲染回到纯稳态。
+///
 /// # Params:
-///   - `points`: 包络点(0..=255)
+///   - `env`: 当前曲包络及其揭示进度(归属校验在调用方)
 ///   - `bar_w`: 目标列数
-///   - `progress`: 已播比例(播放头连续位置;整列数与软边比例都由它派生)
-///   - `buffered`: 已缓冲比例(播放头之后拆亮 / 暗两段,与普通进度条同语义)
-///   - `played`: 已播段取色(单色或沿色带逐列渐变)
-///   - `contrast`: 对比 gamma(重采样后逐列映射;1 = 线性)
-///   - `edge_radius`: 播放头软边半径(列)
+///   - `play`: 播放位置口径
+///   - `wave`: 波形样式(取色 / 对比 / 软边 / 揭示形态)
 ///   - `theme`: 取色主题
+///   - `ink`: 对实际背景现算的弱化色阶(未揭示段的轨道色)
 ///
 /// # Return:
-///   按颜色分段合并后的 span 序列。
-#[allow(clippy::too_many_arguments)] // reason: 纯渲染零件,参数即全部输入,收拢成 struct 反而多一层搬运
+///   按样式分段合并后的 span 序列。
 pub(crate) fn waveform_spans(
-    points: &[u8],
+    env: &EnvelopeState,
     bar_w: usize,
-    progress: Bps,
-    buffered: Bps,
-    played: &PlayedStyle<'_>,
-    contrast: f32,
-    edge_radius: usize,
+    play: PlayState,
+    wave: &WaveformCtx<'_>,
     theme: &Theme,
+    ink: Ink,
 ) -> Vec<Span<'static>> {
-    let glyphs = resample_columns(points, bar_w)
+    if bar_w == 0 {
+        return Vec::new();
+    }
+    let heights = resample_columns(&env.envelope().points, bar_w)
         .iter()
-        .map(|&h| glyph_for(apply_contrast(h, contrast)))
-        .collect::<Vec<&'static str>>();
-    let filled = progress.of(bar_w).min(bar_w);
+        .map(|&h| apply_contrast(h, wave.contrast))
+        .collect::<Vec<u8>>();
+    let reveal = env.reveal();
+    let filled = play.progress.of(bar_w).min(bar_w);
     // 播放头连续位置(万分之一列定点):亚列偏移进入软边插值比例。
-    let head_e4 = u64::from(progress.get()).saturating_mul(u64::try_from(bar_w).unwrap_or(0));
+    let head_e4 = u64::from(play.progress.get()).saturating_mul(u64::try_from(bar_w).unwrap_or(0));
     // 轨道亮暗边界(已缓冲 overlay / 未缓冲 surface0);播完则无轨道。
     let bright_end = if filled < bar_w {
-        let (bright, _) = split_buffered_track(bar_w, filled, buffered);
+        let (bright, _) = split_buffered_track(bar_w, filled, play.buffered);
         filled + 1 + bright
     } else {
         bar_w
     };
     let column_e4 = |col: usize| u64::try_from(col).unwrap_or(0).saturating_mul(10_000);
-    let radius_e4 = u64::try_from(edge_radius)
+    let radius_e4 = u64::try_from(wave.edge_radius)
         .unwrap_or(0)
         .saturating_mul(10_000);
     let color_at = |col: usize| -> Color {
-        let played_color = played.color_at(col, bar_w);
+        let played_color = wave.played.color_at(col, bar_w);
         if filled >= bar_w {
             return played_color;
         }
@@ -277,7 +419,7 @@ pub(crate) fn waveform_spans(
         } else {
             theme.surface0
         };
-        if edge_radius == 0 {
+        if wave.edge_radius == 0 {
             // 硬边:播放头列并入已播渐变(渐变生长边缘即 seek 位置)。
             return if col <= filled {
                 played_color
@@ -297,31 +439,33 @@ pub(crate) fn waveform_spans(
         let num = col_e4.saturating_add(radius_e4).saturating_sub(head_e4);
         mix_colors(played_color, track_color, num, radius_e4.saturating_mul(2))
     };
-    let run = |range: std::ops::Range<usize>| -> String {
-        glyphs.get(range).unwrap_or_default().concat()
-    };
-    // 逐列取色,相邻同色列合并成一个 span(远离播放头的纯色区自然收敛成长 run)。
-    let mut spans = Vec::new();
-    if bar_w == 0 {
-        return spans;
-    }
-    let mut run_start = 0usize;
-    let mut run_color = color_at(0);
-    for col in 1..bar_w {
-        let color = color_at(col);
-        if color != run_color {
-            spans.push(Span::styled(
-                run(run_start..col),
-                Style::new().fg(run_color),
-            ));
-            run_start = col;
-            run_color = color;
+    let cell = |col: usize| -> (&'static str, Style) {
+        let column = wave.reveal.column(col, bar_w, reveal);
+        if column == 0 {
+            return plain_cell(col, filled, bright_end, theme, ink);
         }
+        // 生长:目标高度按该列进度缩放,再由 `glyph_for` 量化回 8 级阶梯。
+        let height = u8::try_from(
+            u32::from(heights.get(col).copied().unwrap_or(0)) * u32::from(column)
+                / u32::from(FULL_E3),
+        )
+        .unwrap_or(u8::MAX);
+        let color = glow_mix(color_at(col), wave.reveal.glow, column, theme);
+        (glyph_for(height), Style::new().fg(color))
+    };
+    // 逐列取样式,相邻同样式列合并成一个 span(远离播放头 / 揭示边的纯色区自然收敛成长 run)。
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let (_, mut run_style) = cell(0);
+    for col in 0..bar_w {
+        let (glyph, style) = cell(col);
+        if col > 0 && style != run_style {
+            spans.push(Span::styled(std::mem::take(&mut run), run_style));
+            run_style = style;
+        }
+        run.push_str(glyph);
     }
-    spans.push(Span::styled(
-        run(run_start..bar_w),
-        Style::new().fg(run_color),
-    ));
+    spans.push(Span::styled(run, run_style));
     spans
 }
 
@@ -331,9 +475,89 @@ mod tests {
     use ratatui::style::Color;
     use ratatui::text::Span;
 
-    use super::{PlayedStyle, glyph_for, resample_columns, waveform_spans};
+    use super::{
+        PlayState, PlayedStyle, RevealStyle, WaveformCtx, glyph_for, resample_columns,
+        waveform_spans,
+    };
     use crate::render::palette::{CoverPalette, Rgb, column_permille};
     use crate::render::theme::Theme;
+    use crate::runtime::playback::EnvelopeState;
+
+    /// 造一份**已放完入场动画**(揭示满值)的包络状态——稳态渲染的公共前置。
+    fn steady(points: Vec<u8>) -> EnvelopeState {
+        EnvelopeState::test_at(
+            crate::test_support::song("w").id,
+            mineral_model::Envelope { points, version: 1 },
+            /*reveal_e3*/ 1000,
+        )
+    }
+
+    /// 稳态渲染一条波形(参数与入场动画落地前的旧签名同形,便于既有断言直接沿用)。
+    #[allow(clippy::too_many_arguments)] // reason: 测试夹具,参数即被测函数的全部输入
+    fn render_steady(
+        points: Vec<u8>,
+        bar_w: usize,
+        progress: Bps,
+        buffered: Bps,
+        played: PlayedStyle<'_>,
+        edge_radius: usize,
+        theme: &Theme,
+    ) -> Vec<Span<'static>> {
+        let wave = WaveformCtx {
+            enabled: true,
+            played,
+            // 线性基线:这些断言锁重采样 / 字形 / 着色,gamma 语义由 apply_contrast 测试锁。
+            contrast: 1.0,
+            edge_radius,
+            reveal: RevealStyle {
+                sweep: 620,
+                glow: 850,
+            },
+            envelope: None,
+        };
+        waveform_spans(
+            &steady(points),
+            bar_w,
+            PlayState { progress, buffered },
+            &wave,
+            theme,
+            theme.ink_over(Color::Reset),
+        )
+    }
+
+    /// 揭示动画测试用的固定被测配置:40 列、已播 10 列、满缓冲、硬边(排除软边混色干扰)。
+    const REVEAL_BAR_W: usize = 40;
+
+    /// 按指定揭示进度 / 揭示形态渲染一条波形(其余参数取 [`REVEAL_BAR_W`] 那组固定态)。
+    fn render_reveal(reveal_e3: u16, sweep: u16, glow: u16, theme: &Theme) -> Vec<Span<'static>> {
+        let wave = WaveformCtx {
+            enabled: true,
+            played: PlayedStyle::Solid(Color::Rgb(200, 0, 0)),
+            contrast: 1.0,
+            edge_radius: 0,
+            reveal: RevealStyle { sweep, glow },
+            envelope: None,
+        };
+        let env = EnvelopeState::test_at(
+            crate::test_support::song("w").id,
+            mineral_model::Envelope {
+                points: vec![200u8; 200],
+                version: 1,
+            },
+            reveal_e3,
+        );
+        waveform_spans(
+            &env,
+            REVEAL_BAR_W,
+            PlayState {
+                progress: Bps::new(2_500), // 2500‱ × 40 = 已播 10 列
+                buffered: Bps::FULL,
+            },
+            &wave,
+            theme,
+            theme.ink_over(Color::Reset),
+        )
+    }
 
     /// 把 span 序列展开成逐 cell 的 `(字符, 前景色)`(块字符均为 1 cell 宽)。
     fn cells(spans: &[Span<'_>]) -> Vec<(char, Color)> {
@@ -347,6 +571,124 @@ mod tests {
                     .collect::<Vec<(char, Color)>>()
             })
             .collect()
+    }
+
+    /// 揭示满值 = 动画放完:此时 `glow` 取任何值渲染都逐 cell 相同(提亮比例恒为 0),
+    /// 且不残留任何进度条中线字形——稳态与「从未有过动画」不可区分。
+    #[test]
+    fn full_reveal_is_indistinguishable_from_no_animation() {
+        let theme = Theme::default();
+        let lit = cells(&render_reveal(
+            /*reveal_e3*/ 1000, /*sweep*/ 620, 1000, &theme,
+        ));
+        let dark = cells(&render_reveal(
+            /*reveal_e3*/ 1000, /*sweep*/ 620, 0, &theme,
+        ));
+        assert_eq!(lit, dark, "揭示满值时 glow 必须不再影响任何列");
+        assert!(
+            lit.iter().all(|(c, _)| !matches!(*c, '━' | '●' | '─')),
+            "满值不该残留进度条中线字形: {lit:?}"
+        );
+        assert_eq!(lit.len(), REVEAL_BAR_W, "总宽守恒");
+    }
+
+    /// 揭示为 0(包络刚到达那一帧):整条退化为普通进度条形态——已播 `━`、播放头 `●`、
+    /// 轨道 `─`,一个块字符都没有。动画因此是「中线被推走」而非波形凭空出现。
+    #[test]
+    fn zero_reveal_is_plain_progress_bar() {
+        let theme = Theme::default();
+        let cells = cells(&render_reveal(
+            /*reveal_e3*/ 0, /*sweep*/ 620, 850, &theme,
+        ));
+        assert_eq!(cells.len(), REVEAL_BAR_W, "总宽守恒");
+        for (col, (glyph, _)) in cells.iter().enumerate() {
+            let expected = match col.cmp(&10) {
+                std::cmp::Ordering::Less => '━',
+                std::cmp::Ordering::Equal => '●',
+                std::cmp::Ordering::Greater => '─',
+            };
+            assert_eq!(*glyph, expected, "第 {col} 列应是进度条形态");
+        }
+    }
+
+    /// 对角性:同一时刻,左列的揭示进度不低于右列——揭示边确实从左扫到右。
+    #[test]
+    fn reveal_sweeps_left_to_right() {
+        let style = RevealStyle {
+            sweep: 620,
+            glow: 850,
+        };
+        for reveal in (0..=1000u16).step_by(25) {
+            let mut prev = 1000u16;
+            for col in 0..REVEAL_BAR_W {
+                let p = style.column(col, REVEAL_BAR_W, reveal);
+                assert!(
+                    p <= prev,
+                    "reveal={reveal} 第 {col} 列不该比左邻更靠前: {p} > {prev}"
+                );
+                prev = p;
+            }
+        }
+    }
+
+    /// 单调性 + 收尾:整体进度推进时任何列的揭示进度都不倒退,且满值时**每一列**都到位
+    /// (末列起跑最晚,若配比算错会留一截永远长不满的尾巴)。
+    #[test]
+    fn reveal_is_monotonic_and_completes_every_column() {
+        let style = RevealStyle {
+            sweep: 620,
+            glow: 850,
+        };
+        for col in 0..REVEAL_BAR_W {
+            let mut prev = 0u16;
+            for reveal in 0..=1000u16 {
+                let p = style.column(col, REVEAL_BAR_W, reveal);
+                assert!(
+                    p >= prev,
+                    "第 {col} 列在 reveal={reveal} 处倒退: {p} < {prev}"
+                );
+                prev = p;
+            }
+            assert_eq!(prev, 1000, "第 {col} 列在满值时必须到位");
+        }
+    }
+
+    /// `sweep` 两端退化:满值 = 纯左→右擦除(每列非 0 即满,无生长中间态);
+    /// 0 = 全条同步抬升(各列进度恒等,无横向次序)。
+    #[test]
+    fn sweep_extremes_degenerate() {
+        let wipe = RevealStyle {
+            sweep: 1000,
+            glow: 0,
+        };
+        let rise = RevealStyle { sweep: 0, glow: 0 };
+        for reveal in (0..=1000u16).step_by(25) {
+            let first = rise.column(0, REVEAL_BAR_W, reveal);
+            for col in 0..REVEAL_BAR_W {
+                let w = wipe.column(col, REVEAL_BAR_W, reveal);
+                assert!(
+                    w == 0 || w == 1000,
+                    "纯擦除下第 {col} 列不该有生长中间态: {w}"
+                );
+                assert_eq!(
+                    rise.column(col, REVEAL_BAR_W, reveal),
+                    first,
+                    "全条抬升下第 {col} 列应与首列同步"
+                );
+            }
+        }
+    }
+
+    /// `ratio_e3`:常规比例四舍五入到千分比,超界 clamp,非有限值(NaN / inf)归零而非炸。
+    #[test]
+    fn ratio_e3_clamps_and_rejects_non_finite() {
+        assert_eq!(super::ratio_e3(0.62), 620);
+        assert_eq!(super::ratio_e3(0.0), 0);
+        assert_eq!(super::ratio_e3(1.0), 1000);
+        assert_eq!(super::ratio_e3(-0.5), 0, "负值 clamp 到 0");
+        assert_eq!(super::ratio_e3(3.0), 1000, "超界 clamp 到满值");
+        assert_eq!(super::ratio_e3(f32::NAN), 0, "NaN 归零");
+        assert_eq!(super::ratio_e3(f32::INFINITY), 0, "inf 归零");
     }
 
     /// contrast = 1 是恒等映射:与不加映射逐点相等(线性基线可显式关闭 gamma)。
@@ -428,13 +770,12 @@ mod tests {
         let points = vec![128u8; 200];
         let bar_w = 40usize;
         let render = |progress: Bps| -> Vec<(char, Color)> {
-            cells(&waveform_spans(
-                &points,
+            cells(&render_steady(
+                points.clone(),
                 bar_w,
                 progress,
                 Bps::FULL,
-                &PlayedStyle::Gradient(&palette),
-                /*contrast*/ 1.0,
+                PlayedStyle::Gradient(&palette),
                 /*edge_radius*/ 0,
                 &theme,
             ))
@@ -470,13 +811,12 @@ mod tests {
         let bar_w = 40usize;
         let filled = 10usize;
         let radius = 3usize;
-        let spans = waveform_spans(
-            &points,
+        let spans = render_steady(
+            points,
             bar_w,
             Bps::new(2_500), // 2500‱ × 40 = 已播 10 列
             Bps::new(5_000),
-            &PlayedStyle::Solid(played),
-            /*contrast*/ 1.0,
+            PlayedStyle::Solid(played),
             /*edge_radius*/ radius,
             &theme,
         );
@@ -533,13 +873,12 @@ mod tests {
         let bar_w = 40usize;
         let filled = 20usize;
         let radius = 3usize;
-        let cells = cells(&waveform_spans(
-            &points,
+        let cells = cells(&render_steady(
+            points,
             bar_w,
             Bps::new(5_000), // 恰在整列上(20.0 列):窗口中心即等比中点
             Bps::FULL,       // 满缓冲:轨道全 overlay,不引入亮暗边界干扰
-            &PlayedStyle::Solid(played),
-            /*contrast*/ 1.0,
+            PlayedStyle::Solid(played),
             /*edge_radius*/ radius,
             &theme,
         ));
@@ -570,13 +909,12 @@ mod tests {
         let points = vec![255u8; 200];
         let bar_w = 40usize;
         let at = |bps: u16| -> Vec<(char, Color)> {
-            cells(&waveform_spans(
-                &points,
+            cells(&render_steady(
+                points.clone(),
                 bar_w,
                 Bps::new(bps),
                 Bps::FULL,
-                &PlayedStyle::Solid(played),
-                /*contrast*/ 1.0,
+                PlayedStyle::Solid(played),
                 /*edge_radius*/ 3,
                 &theme,
             ))
@@ -608,13 +946,12 @@ mod tests {
         let points = vec![255u8; 200];
         let bar_w = 40usize;
         let filled = 20usize;
-        let cells = cells(&waveform_spans(
-            &points,
+        let cells = cells(&render_steady(
+            points,
             bar_w,
             Bps::new(5_000), // 5000‱ × 40 = 已播 20 列
             Bps::FULL,
-            &PlayedStyle::Solid(played),
-            /*contrast*/ 1.0,
+            PlayedStyle::Solid(played),
             /*edge_radius*/ 0,
             &theme,
         ));

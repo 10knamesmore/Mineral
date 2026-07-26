@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::text::{alias_span, center_bg};
-use crate::components::layout::shared::waveform::{WaveformCtx, waveform_spans};
+use crate::components::layout::shared::waveform::{PlayState, WaveformCtx, waveform_spans};
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
@@ -133,14 +133,16 @@ fn paint_progress(
             Style::new().fg(theme.accent),
         )];
         spans.extend(waveform_spans(
-            &envelope.points,
+            envelope,
             bar_w,
-            pb.ratio_bps(), // 连续比例:软边混色要亚列精度,量化在 waveform 内部做
-            pb.buffered_bps,
-            &wave.played,
-            wave.contrast,
-            wave.edge_radius,
+            PlayState {
+                // 连续比例:软边混色要亚列精度,量化在 waveform 内部做
+                progress: pb.ratio_bps(),
+                buffered: pb.buffered_bps,
+            },
+            wave,
             theme,
+            ink,
         ));
         spans.push(Span::styled(
             format!(" {total} "),
@@ -455,10 +457,10 @@ mod tests {
 
     use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
     use crate::components::layout::shared::marquee::MarqueeCtx;
-    use crate::components::layout::shared::waveform::{PlayedStyle, WaveformCtx};
+    use crate::components::layout::shared::waveform::{PlayedStyle, RevealStyle, WaveformCtx};
     use crate::render::theme::Theme;
     use crate::runtime::marquee::Marquees;
-    use crate::runtime::playback::{Playback, PlaybackOrigin};
+    use crate::runtime::playback::{EnvelopeState, Playback, PlaybackOrigin};
     use crate::test_support::{song, with_duration, with_name};
 
     /// 静止相位(停顿拉满)的 marquee 状态——本组多数测试关注点不在滚动。
@@ -848,13 +850,22 @@ mod tests {
         let points = (0..200u16)
             .map(|i| u8::try_from((u32::from(i) * 255) / 199).unwrap_or(255))
             .collect::<Vec<u8>>();
-        pb.envelope = Some((track_id, mineral_model::Envelope { points, version: 1 }));
+        // 揭示满值:本快照锁的是稳态形态,入场动画中途另有专门快照。
+        pb.envelope = Some(EnvelopeState::test_at(
+            track_id,
+            mineral_model::Envelope { points, version: 1 },
+            /*reveal_e3*/ 1000,
+        ));
         let wave = WaveformCtx {
             enabled: true,
             played: PlayedStyle::Solid(theme.accent_2),
             // 线性基线:快照锁重采样/字形/着色,gamma 语义由 waveform 纯函数测试锁。
             contrast: 1.0,
             edge_radius: 3,
+            reveal: RevealStyle {
+                sweep: 620,
+                glow: 850,
+            },
             envelope: pb.current_envelope(),
         };
         let mq = still_marquees();
@@ -882,12 +893,113 @@ mod tests {
             played: PlayedStyle::Solid(theme.accent_2),
             contrast: 2.0,
             edge_radius: 3,
+            reveal: RevealStyle {
+                sweep: 620,
+                glow: 850,
+            },
             envelope: None,
         };
         assert_eq!(
             render(&on_without_envelope)?,
             render(&WaveformCtx::off())?,
             "包络缺失时开关开与关必须逐 cell 一致"
+        );
+        Ok(())
+    }
+
+    /// 入场动画第一帧(揭示为 0)必须与波形**关闭态逐 cell 完全一致**——包络到达那一刻
+    /// 画面不跳变,动画从既有的普通进度条形态无缝接续长出波形。
+    #[test]
+    fn reveal_first_frame_matches_plain_bar() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(with_name(song("1"), "RevealStart"), 225_000));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        pb.buffered_bps = Bps::new(6_000);
+        let track_id = pb
+            .track
+            .as_ref()
+            .map(|s| s.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("track 必在"))?;
+        pb.envelope = Some(EnvelopeState::test_at(
+            track_id,
+            mineral_model::Envelope {
+                points: (0..200u16)
+                    .map(|i| u8::try_from(i % 256).unwrap_or(0))
+                    .collect(),
+                version: 1,
+            },
+            /*reveal_e3*/ 0,
+        ));
+        let render = |wave: &WaveformCtx<'_>| -> color_eyre::Result<ratatui::buffer::Buffer> {
+            let mut t = Terminal::new(TestBackend::new(64, 8))?;
+            let mq = still_marquees();
+            t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), wave, &theme))?;
+            Ok(t.backend().buffer().clone())
+        };
+        let starting = WaveformCtx {
+            enabled: true,
+            played: PlayedStyle::Solid(theme.accent_2),
+            contrast: 2.0,
+            edge_radius: 3,
+            reveal: RevealStyle {
+                sweep: 620,
+                glow: 850,
+            },
+            envelope: pb.current_envelope(),
+        };
+        assert_eq!(
+            render(&starting)?,
+            render(&WaveformCtx::off())?,
+            "揭示第一帧必须与普通进度条逐 cell 一致"
+        );
+        Ok(())
+    }
+
+    /// 入场动画中途(揭示 45%):左段已长成波形、揭示边前沿提亮、右段仍是进度条中线,
+    /// 三段共存于同一行且总宽不变。
+    #[test]
+    fn transport_waveform_reveal_midway_snapshot() -> color_eyre::Result<()> {
+        let mut t = Terminal::new(TestBackend::new(64, 8))?;
+        let theme = Theme::default();
+        let mut pb = Playback::new();
+        pb.track = Some(with_duration(
+            with_name(song("1"), "CrescendoTrack"),
+            225_000,
+        ));
+        pb.position_ms = 60_000;
+        pb.playing = true;
+        pb.volume_pct = 80;
+        let track_id = pb
+            .track
+            .as_ref()
+            .map(|s| s.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("track 必在"))?;
+        let points = (0..200u16)
+            .map(|i| u8::try_from((u32::from(i) * 255) / 199).unwrap_or(255))
+            .collect::<Vec<u8>>();
+        pb.envelope = Some(EnvelopeState::test_at(
+            track_id,
+            mineral_model::Envelope { points, version: 1 },
+            /*reveal_e3*/ 450,
+        ));
+        let wave = WaveformCtx {
+            enabled: true,
+            played: PlayedStyle::Solid(theme.accent_2),
+            contrast: 1.0,
+            edge_radius: 3,
+            reveal: RevealStyle {
+                sweep: 620,
+                glow: 850,
+            },
+            envelope: pb.current_envelope(),
+        };
+        let mq = still_marquees();
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &wave, &theme))?;
+        crate::test_support::assert_snap!(
+            "播放栏:波形入场动画中途(左波形 / 亮边 / 右中线三段共存)",
+            t.backend()
         );
         Ok(())
     }

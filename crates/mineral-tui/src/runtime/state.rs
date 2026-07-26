@@ -289,7 +289,19 @@ impl AppState {
         self.marquees.tick();
         self.vinyl.tick();
         self.dim.tick();
+        self.playback.tick_envelope_reveal();
         self.tick_lyric_scroll();
+    }
+
+    /// 波形入场揭示动画的全程拍数(`tui.waveform.reveal.duration_ms` 现读折算)。
+    ///
+    /// # Return:
+    ///   拍数,`1..=u16::MAX`(0ms 也占一拍,语义 = 一帧到位)。
+    pub(crate) fn waveform_reveal_ticks(&self) -> u16 {
+        crate::render::anim::ticks16_from_ms(
+            *self.cfg.tui().waveform().reveal().duration_ms(),
+            *self.cfg.tui().animation().frame_tick_ms(),
+        )
     }
 
     /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。

@@ -99,6 +99,9 @@ impl crate::app::App {
             *anim.focus_fade_ms(),
             tick_ms,
         ));
+        // 固化型(携带运行态):在途的波形入场揭示 retempo 保相位,不重播动画。
+        let reveal_ticks = self.state.waveform_reveal_ticks();
+        self.state.playback.retempo_envelope_reveal(reveal_ticks);
         self.state
             .spectrum
             .reconfigure(tui_cfg.spectrum().clone(), tick_ms);
@@ -223,6 +226,50 @@ mod tests {
             mineral_config::default_tree()?,
             overlay,
         )))
+    }
+
+    /// 波形入场动画时长热更:在途的揭示 retempo **保相位**(不重播,不跳变),
+    /// 只有后续推进速度变化。
+    #[test]
+    fn pushed_config_retempos_waveform_reveal_in_place() -> color_eyre::Result<()> {
+        use mineral_model::{Envelope, SongId, SourceKind};
+
+        use crate::runtime::playback::EnvelopeState;
+
+        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.state.playback.envelope = Some(EnvelopeState::new(
+            SongId::new(SourceKind::LOCAL, "a"),
+            Envelope {
+                points: vec![9],
+                version: 1,
+            },
+            /*ticks*/ 40,
+        ));
+        for _ in 0..10 {
+            app.state.playback.tick_envelope_reveal();
+        }
+        let mid = app
+            .state
+            .playback
+            .envelope
+            .as_ref()
+            .map(EnvelopeState::reveal)
+            .ok_or_else(|| color_eyre::eyre::eyre!("装载后应有包络"))?;
+        assert!(mid > 0 && mid < 1000, "前置:动画在途 ({mid})");
+
+        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": {
+            "waveform": { "reveal": { "duration_ms": 2000 } },
+        } }))?);
+        assert_eq!(
+            app.state
+                .playback
+                .envelope
+                .as_ref()
+                .map(EnvelopeState::reveal),
+            Some(mid),
+            "热更那一拍相位不该跳"
+        );
+        Ok(())
     }
 
     /// 推送应用:keymap / theme 热生效;成功路径静默,不打扰通知层。

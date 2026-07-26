@@ -487,9 +487,13 @@ impl App {
             self.queue_cursor_memo = Some(at);
         }
         if let Some(c) = sync.current {
-            // 包络随本段与 current_song 原子到达(归属由 server 组段保证)。
+            // 包络随本段与 current_song 原子到达(归属由 server 组段保证)。同一份包络重复
+            // 到达(同曲内 play_url 更新等)时 `sync_envelope` 原地保留,入场动画不重播。
             let song_id = c.current_song.as_ref().map(|s| s.id.clone());
-            self.state.playback.envelope = song_id.zip(c.current_envelope);
+            let ticks = self.state.waveform_reveal_ticks();
+            self.state
+                .playback
+                .sync_envelope(song_id, c.current_envelope, ticks);
             self.state.player.current = c.current_song.clone();
             self.state.playback.track = c.current_song;
             self.state.playback.play_url = c.play_url;

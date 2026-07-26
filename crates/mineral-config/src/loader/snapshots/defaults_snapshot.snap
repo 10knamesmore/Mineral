@@ -665,6 +665,11 @@ Config {
             cover_color: true,
             contrast: 2.0,
             edge_radius: 3,
+            reveal: RevealConfig {
+                duration_ms: 560,
+                sweep_ratio: 0.62,
+                glow: 0.85,
+            },
         },
         cover: CoverConfig {
             protocol: Auto,

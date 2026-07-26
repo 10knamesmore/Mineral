@@ -119,10 +119,16 @@ impl Transition {
     /// 当前进度经 cubic ease-out 映射后的值,千分比 `0..=1000`。快进慢出,**无回弹/
     /// 过冲**;进场退场同一条曲线(进度单调 → 值单调),不会超过满值。
     pub fn eased(&self) -> u16 {
-        // 1 - (1 - p)^3,p 取千分比;全程 u32 定点,1000^3 = 1e9 不溢出。
-        let inv = u32::from(FULL - self.progress);
-        let cube = inv * inv * inv / (u32::from(FULL) * u32::from(FULL));
-        u16::try_from(u32::from(FULL) - cube).unwrap_or(FULL)
+        ease_out(self.progress)
+    }
+
+    /// **未经**缓动的线性进度,千分比 `0..=1000`。
+    ///
+    /// 给「缓动不在整条进度上、而在派生的每个子单元上」的场景:波形入场揭示按列错开
+    /// 起跑,若先整体缓动再切列,横扫会先快后慢而单列生长是线性的;取线性进度、让每列
+    /// 各自 [`ease_out`],才是「每列都缓动到位」。
+    pub fn raw(&self) -> u16 {
+        self.progress
     }
 
     /// 朝**当前目标**减速的缓动,千分比 `0..=1000`:进场 `1-(1-p)³`(冲向满值再收束)、
@@ -373,6 +379,22 @@ pub(crate) fn lerp_u16(a: u16, b: u16, t: u16) -> u16 {
     // 朝零外侧 ±500 再整除 = 四舍五入(half away from zero),正负对称。
     let rounded = (scaled + if scaled >= 0 { 500 } else { -500 }) / 1000;
     u16::try_from((a + rounded).clamp(0, i32::from(u16::MAX))).unwrap_or(0)
+}
+
+/// cubic **ease-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比
+/// (`0..=1000`)。快进慢出,单调不过冲。[`Transition::eased`] 与波形入场的逐列揭示
+/// 共用这一条曲线。
+///
+/// # Params:
+///   - `progress`: 线性进度千分比,`0..=1000`(超出按上界处理)。
+///
+/// # Return:
+///   缓动后的千分比,`0..=1000`。
+pub fn ease_out(progress: u16) -> u16 {
+    // 1 - (1 - p)^3,p 取千分比;全程 u32 定点,1000^3 = 1e9 不溢出。
+    let inv = u32::from(FULL - progress.min(FULL));
+    let cube = inv * inv * inv / (u32::from(FULL) * u32::from(FULL));
+    u16::try_from(u32::from(FULL) - cube).unwrap_or(FULL)
 }
 
 /// cubic **ease-in-out** 映射:进度千分比 `progress`(`0..=1000`)→ 缓动值千分比

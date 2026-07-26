@@ -321,6 +321,16 @@ expression: "super::meta_config_lua()"
 ---@field cover_color? boolean 已播放段是否吃封面取色;关闭时用主题 accent。
 ---@field contrast? number 响度 → 条高的对比 gamma(渲染层幂映射 `v^contrast`,不改包络数据,改了即时生效): 1 = 线性,越大安静段压得越低、起伏越明显。
 ---@field edge_radius? integer 播放头软边半径(列):播放头前后各此数列在已播色与轨道色之间插值,边界雾化; 0 = 硬边(无播放头高亮,已播渐变的生长边缘即 seek 位置)。
+---@field reveal? mineral.RevealConfig 包络到达时波形的入场揭示动画。
+
+---波形入场揭示动画配置(挂在 `WaveformConfig` 下):包络到达时波形不瞬变,而是
+---揭示边从左扫到右、每列在被扫到时从底部长到目标高度,两个方向合成一条对角线。
+---
+---未揭示的列维持普通进度条形态(`━●─`),故整个过程读作「波形把中线推走」而非凭空出现。
+---@class mineral.RevealConfig
+---@field duration_ms? integer 动画总时长(毫秒);0 = 一帧到位(等同关闭动画,包络到达即整条波形就位)。
+---@field sweep_ratio? number 横扫占总时长的比例 0-1:余下部分是单列从底部长到目标高度的生长时长。 1 = 纯左→右擦除(列一到位就是满高),0 = 全条同时从底部抬升(无横向次序)。
+---@field glow? number 揭示边前沿的提亮强度 0-1:正在生长的列朝主题 `text` 混色,越接近到位越回落本色, 像一道光把波形画出来。0 = 无亮边(只剩对角揭示)。
 
 ---封面配置。
 ---@class mineral.CoverConfig
