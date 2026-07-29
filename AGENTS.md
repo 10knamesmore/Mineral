@@ -111,7 +111,7 @@ client 侧配置消费两条规矩:
 ### 体量约束(自动强制)
 
 * **单函数 ≤ 300 行**:由 `clippy::too_many_lines` 强制(阈值在 `clippy.toml`,与其他 lint 一起在 `cargo clippy` 时报错)。
-* **单文件 ≤ 800 行(不含 `#[cfg(test)] mod` 块)**:由 `.claude/hooks/check_file_size.py` 在 PostToolUse(Edit / Write / MultiEdit)时强制,> 500 行预警(stderr),> 800 行直接 exit 2 阻止本次工具调用。Hook 注册在 `.claude/settings.json`。
+* **单文件 ≤ 800 行(不含 `#[cfg(test)] mod` 块)**:Claude 由 `.claude/hooks/check_file_size.py` 在 PostToolUse(Edit / Write / MultiEdit)时检查,Codex 由 `.codex/hooks/check_file_size.py` 在 PostToolUse(Edit / Write)时检查;> 500 行预警(stderr),> 800 行 exit 2 要求拆分。Hook 分别注册在 `.claude/settings.json` 与 `.codex/hooks.json`。
 * 从大模块抽代码时,把对应测试和模块/类型文档**一并迁走**,不要留半截。
 
 ### 函数注释格式

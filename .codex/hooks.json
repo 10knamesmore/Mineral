@@ -1,0 +1,18 @@
+{
+  "description": "Mineral workspace hooks for Codex.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-cache python \"$(git rev-parse --show-toplevel)/.codex/hooks/check_file_size.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking Rust file size"
+          }
+        ]
+      }
+    ]
+  }
+}
