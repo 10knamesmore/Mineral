@@ -1,4 +1,4 @@
-//! 引擎线程主体:owns rodio device sink + Player + 内嵌 tokio runtime。
+//! 引擎线程主体:owns cpal output stream + rodio Player + 内嵌 tokio runtime。
 //!
 //! 命令通道处理 play/append_next/clear_next/pause/resume/stop/set_volume(语义不可合并)。
 //! seek 单独走 [`crate::handle::AudioHandle`] → mailbox(latest-wins),engine 每个 tick
@@ -7,6 +7,8 @@
 //! gapless:除「当前曲」外可多排一首「下一曲」decoder 进 rodio 队列([`crate::queue_slots`]
 //! 的 [`PlayHead`] 记账),当前曲自然耗尽时 rodio 零静音接续。预排远端曲的建流 / 预缓冲在
 //! runtime 上**链下**进行,就绪后经通道交回引擎线程 build decoder + `append`,不阻塞命令线程。
+
+mod output;
 
 use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
@@ -32,6 +34,7 @@ use stream_download::storage::temp::TempStorageProvider;
 
 use crate::bps::Bps;
 use crate::command::AudioCommand;
+use crate::engine::output::Output;
 use crate::file_storage::FileStorageProvider;
 use crate::handle::{AudioMode, EngineParams};
 use crate::policy::{download_reached_full, effective_byte_len};
@@ -117,30 +120,25 @@ fn engine_main(
     mode: AudioMode,
     params: &EngineParams,
 ) -> color_eyre::Result<()> {
-    let sink = match mode {
+    let output = match mode {
         AudioMode::ForceNull => None,
-        AudioMode::Auto => match rodio::DeviceSinkBuilder::open_default_sink() {
-            Ok(s) => Some(s),
+        AudioMode::Auto => match Output::open(pct_to_gain(*params.initial_volume())) {
+            Ok(output) => Some(output),
             Err(e) => {
                 mineral_log::warn!(
                     target: "audio",
-                    error = mineral_log::chain(&eyre!("rodio device sink: {e}")),
+                    error = mineral_log::chain(&e),
                     "no audio device; running in null mode (no sound)"
                 );
                 None
             }
         },
     };
-    let Some(mut stream_handle) = sink else {
+    let Some(output) = output else {
         io.snapshot.lock().backend = AudioBackend::Null;
         let _ = io.ready_tx.send(Ok(()));
         return run_null_mode(cmd_rx);
     };
-    // 默认 drop 时会向 stderr 打一行 "Audio playback has finished",TUI 退出后会污染终端,关掉。
-    stream_handle.log_on_drop(false);
-
-    let player = rodio::Player::connect_new(stream_handle.mixer());
-    player.set_volume(pct_to_gain(*params.initial_volume()));
 
     // multi_thread:stream-download 后台下载 task 必须在独立 worker 上持续被 poll,
     // 否则 block_on 一返回,reader.read 永远等不到字节,sink 一直空 → UI 一直 paused。
@@ -163,7 +161,7 @@ fn engine_main(
 
     let tick = Duration::from_millis(*params.tick_ms());
     let mut engine = Engine::new(
-        &player,
+        output,
         &rt,
         &io.tap_producer,
         &io.sr_atomic,
@@ -177,7 +175,7 @@ fn engine_main(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         engine.drain_next_built();
-        drain_seek(&io.seek_mailbox, &player);
+        engine.drain_seek(&io.seek_mailbox);
         engine.update_snapshot(&io.snapshot);
     }
     Ok(())
@@ -193,10 +191,10 @@ fn run_null_mode(cmd_rx: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()
     Ok(())
 }
 
-/// 引擎跨 tick 的可变状态 + 不可变依赖(player / rt / tap / 进度载体 / 链下结果通道)。
+/// 引擎跨 tick 的可变状态 + 不可变依赖(output / rt / tap / 进度载体 / 链下结果通道)。
 struct Engine<'a> {
-    /// rodio 播放器(队列)。
-    player: &'a rodio::Player,
+    /// 系统输出 stream + rodio 播放器队列。
+    output: Output,
 
     /// 内嵌 tokio runtime(远端建流 / 后台下载)。
     rt: &'a tokio::runtime::Runtime,
@@ -238,7 +236,7 @@ struct Engine<'a> {
 impl<'a> Engine<'a> {
     /// 构造引擎状态。
     fn new(
-        player: &'a rodio::Player,
+        output: Output,
         rt: &'a tokio::runtime::Runtime,
         tap_producer: &SharedProd,
         sr_atomic: &Arc<AtomicU32>,
@@ -246,7 +244,7 @@ impl<'a> Engine<'a> {
     ) -> Self {
         let (next_built_tx, next_built_rx) = mpsc::channel();
         Self {
-            player,
+            output,
             rt,
             tap_producer: Arc::clone(tap_producer),
             sr_atomic: Arc::clone(sr_atomic),
@@ -288,10 +286,12 @@ impl<'a> Engine<'a> {
                 layout,
             } => self.append_next(url, headers, capture, layout),
             AudioCommand::ClearNext => self.clear_next(),
-            AudioCommand::Pause => self.player.pause(),
-            AudioCommand::Resume => self.player.play(),
+            AudioCommand::Pause => self.output.player().pause(),
+            AudioCommand::Resume => self.output.player().play(),
             AudioCommand::Stop => self.stop(),
-            AudioCommand::SetVolume(pct) => self.player.set_volume(pct_to_gain(pct)),
+            AudioCommand::SetVolume(pct) => {
+                self.output.player().set_volume(pct_to_gain(pct));
+            }
         }
     }
 
@@ -308,7 +308,7 @@ impl<'a> Engine<'a> {
         // 切歌前先 disarm,旧曲尾巴(及已预排 next)的 sound_count 退潮不会被算成曲终。
         self.head.cur.occupied = false;
         self.head.next.occupied = false;
-        self.player.stop();
+        self.output.player().stop();
         self.pending_next_gen = 0;
         // 切歌即让采样率失效:流式 build 阻塞期间 snapshot 不刷新,不清零会残留上一首采样率
         // 直到本首 decoder 建好后才更新。此刻已 stop、无 PCM 喂频谱,清零安全。
@@ -326,7 +326,7 @@ impl<'a> Engine<'a> {
                 .buffer_bps
                 .store(Bps::FULL.get(), Ordering::Release);
         }
-        self.player.play();
+        self.output.player().play();
         self.cur_sample_rate = sr;
         self.sr_atomic.store(sr, Ordering::Relaxed);
         // append 内部已 fetch_add 把 sound_count 抬到 1,武装后下次 update_snapshot 看到的就是
@@ -424,7 +424,7 @@ impl<'a> Engine<'a> {
     fn stop(&mut self) {
         self.head.cur.occupied = false;
         self.head.next.occupied = false;
-        self.player.stop();
+        self.output.player().stop();
         self.pending_next_gen = 0;
     }
 
@@ -478,7 +478,8 @@ impl<'a> Engine<'a> {
             target: "audio", slot = "cur", sample_rate = sr, dur_ms = ?dur_ms,
             byte_len_known = byte_len.is_some(), "decoder ready"
         );
-        self.player
+        self.output
+            .player()
             .append(TapSource::new(decoder, Arc::clone(&self.tap_producer)));
         Ok((dur_ms, sr, local))
     }
@@ -503,7 +504,8 @@ impl<'a> Engine<'a> {
                         target: "audio", slot = "next", sample_rate = self.next_sample_rate,
                         dur_ms = ?dur_ms, byte_len_known, "decoder ready (prefetch)"
                     );
-                    self.player
+                    self.output
+                        .player()
                         .append(TapSource::new(decoder, Arc::clone(&self.tap_producer)));
                     if built.local_full {
                         self.progress
@@ -529,9 +531,9 @@ impl<'a> Engine<'a> {
 
     /// 把 player 当前播放状态拍进共享 snapshot,顺带观测 `len()` 推进 [`PlayHead`] 边界。
     fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
-        let pos_ms = duration_to_ms(self.player.get_pos());
-        let is_paused = self.player.is_paused();
-        let boundary = self.head.observe(self.player.len());
+        let pos_ms = duration_to_ms(self.output.player().get_pos());
+        let is_paused = self.output.player().is_paused();
+        let boundary = self.head.observe(self.output.player().len());
         if boundary == Boundary::Gapless {
             // 下一曲已轮转成当前曲:此刻才把采样率切过去,频谱不提前跳。
             self.cur_sample_rate = self.next_sample_rate;
@@ -539,6 +541,7 @@ impl<'a> Engine<'a> {
                 .store(self.cur_sample_rate, Ordering::Relaxed);
         }
         let playing = !is_paused && self.head.cur.occupied;
+        self.output.recover_if_stalled(playing, pos_ms);
         let f = self.head.snapshot_fields(&self.progress);
 
         let mut g = snapshot.lock();
@@ -556,16 +559,23 @@ impl<'a> Engine<'a> {
         g.sample_rate_hz = self.cur_sample_rate;
         // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
     }
-}
 
-/// mailbox 里有 pending seek 就 take 出来打一次 try_seek,latest-wins。
-/// 长按 ←/→ 时多次覆写只生效最后一次,避免堆积串行 seek 导致卡顿。
-fn drain_seek(seek_mailbox: &Arc<Mutex<Option<Duration>>>, player: &rodio::Player) {
-    let Some(target) = seek_mailbox.lock().take() else {
-        return;
-    };
-    if let Err(e) = player.try_seek(target) {
-        mineral_log::warn!(target: "audio", seek_to = ?target, error = mineral_log::chain(&e), "seek failed");
+    /// mailbox 里有 pending seek 就 take 出来打一次 `try_seek`，latest-wins。
+    ///
+    /// # Params:
+    ///   - `seek_mailbox`: 与 handle 共享的最新 seek 目标。
+    fn drain_seek(&self, seek_mailbox: &Arc<Mutex<Option<Duration>>>) {
+        let Some(target) = seek_mailbox.lock().take() else {
+            return;
+        };
+        if let Err(e) = self.output.player().try_seek(target) {
+            mineral_log::warn!(
+                target: "audio",
+                seek_to = ?target,
+                error = mineral_log::chain(&e),
+                "seek failed"
+            );
+        }
     }
 }
 
