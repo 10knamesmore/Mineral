@@ -32,7 +32,8 @@ pub use event::{
 };
 pub use frame::{Frame, RequestId};
 pub use handshake::{
-    ClientInfo, PkgVersion, RejectReason, ServerHello, Subscription, client_handshake,
+    ClientInfo, HandshakeRejected, PkgVersion, RejectReason, ServerHello, Subscription,
+    client_handshake,
 };
 pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
 pub use message::{

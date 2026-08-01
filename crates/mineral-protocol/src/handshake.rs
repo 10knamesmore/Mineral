@@ -4,7 +4,6 @@
 //! ([`PkgVersion::current`],workspace 统一版本,升版自动跟随、无手动 bump)。
 //! 不匹配时 server 回 `accepted == false`,client 提示重启 daemon 后干净退出。
 
-use color_eyre::eyre::eyre;
 use serde::{Deserialize, Serialize};
 
 /// 结构化包版本(workspace 统一版本)。两端相等才互通——同仓同发版前提下,
@@ -127,14 +126,12 @@ impl ServerHello {
         if self.accepted {
             return Ok(());
         }
-        match self.reason {
-            Some(RejectReason::VersionMismatch) => Err(eyre!(
-                "daemon 版本 {} 与 client 版本 {} 不一致,请重启 daemon",
-                self.version,
-                PkgVersion::current()
-            )),
-            None => Err(eyre!("daemon 拒绝了连接(未给出原因)")),
+        Err(HandshakeRejected {
+            reason: self.reason,
+            server_version: self.version,
+            client_version: PkgVersion::current(),
         }
+        .into())
     }
 
     /// 拒绝连接的应答。
@@ -147,6 +144,43 @@ impl ServerHello {
         }
     }
 }
+
+/// daemon 对握手的结构化拒绝。普通 client 将其作为人话错误展示;
+/// `mineral stop` 可据 [`Self::reason`] 精确识别版本错配并走进程信号 fallback。
+#[derive(Clone, Debug)]
+pub struct HandshakeRejected {
+    /// daemon 给出的拒绝原因。
+    reason: Option<RejectReason>,
+
+    /// daemon 自报的包版本。
+    server_version: PkgVersion,
+
+    /// 发起握手的 client 包版本。
+    client_version: PkgVersion,
+}
+
+impl HandshakeRejected {
+    /// 返回 daemon 给出的拒绝原因。
+    #[must_use]
+    pub fn reason(&self) -> Option<RejectReason> {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for HandshakeRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.reason {
+            Some(RejectReason::VersionMismatch) => write!(
+                f,
+                "daemon 版本 {} 与 client 版本 {} 不一致,请重启 daemon",
+                self.server_version, self.client_version
+            ),
+            None => f.write_str("daemon 拒绝了连接(未给出原因)"),
+        }
+    }
+}
+
+impl std::error::Error for HandshakeRejected {}
 
 /// 握手被拒的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

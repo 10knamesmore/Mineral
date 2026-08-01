@@ -25,6 +25,7 @@ mineral-protocol        = { workspace = true }
 mineral-script          = { workspace = true }
 mineral-server          = { workspace = true }
 mineral-stats           = { workspace = true }
+nix                     = { workspace = true }
 rustc-hash              = { workspace = true }
 serde_json              = { workspace = true }
 time                    = { workspace = true }
