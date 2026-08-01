@@ -333,7 +333,7 @@ mod tests {
             ))
             .name("歌单甲".to_owned())
             .track_count(1)
-            .songs(vec![song.clone()])
+            .entries(mineral_model::PlaylistEntry::enumerate(vec![song.clone()]))
             .build();
         let got = sender
             .render_copy_template(
@@ -676,7 +676,8 @@ mod tests {
         let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.queue.list(function(q, err)
-                mineral.ui.toast(#q .. ":" .. q[1].title .. ":" .. q[2].id)
+                mineral.ui.toast(#q .. ":" .. q[1].title .. ":" .. q[2].id
+                    .. ":" .. tostring(q[1].index))
             end)
             "#,
         )?;
@@ -686,7 +687,7 @@ mod tests {
         };
         let (first, second) = (song("1"), song("2"));
         let songs = vec![first.clone(), second.clone()];
-        let want = format!("2:{}:{}", first.name, second.id.qualified());
+        let want = format!("2:{}:{}:nil", first.name, second.id.qualified());
         sender.resolve(query, ResolveValue::Songs(songs));
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
@@ -758,7 +759,10 @@ mod tests {
             mineral.library.playlists(function(ps, err)
                 mineral.ui.toast(ps[1].id .. ":" .. ps[1].name .. ":" .. ps[1].track_count)
             end)
-            mineral.library.tracks("netease:p9", function(ts, err) end)
+            mineral.library.tracks("netease:p9", function(entries, err)
+                mineral.ui.toast(entries[1].index .. ":" .. entries[1].song.title
+                    .. ":" .. tostring(entries[1].song.index))
+            end)
             mineral.library.love("netease:5", true)
             mineral.library.love("netease:6", false)
             "#,
@@ -768,7 +772,11 @@ mod tests {
             color_eyre::eyre::bail!("期望 LibraryPlaylists,实得 {first:?}");
         };
         let tracks_cmd = cmd_rx.try_recv()?;
-        let ScriptCmd::LibraryTracks { playlist, .. } = &tracks_cmd else {
+        let ScriptCmd::LibraryTracks {
+            playlist,
+            query: tracks_query,
+        } = &tracks_cmd
+        else {
             color_eyre::eyre::bail!("期望 LibraryTracks,实得 {tracks_cmd:?}");
         };
         assert_eq!(playlist.qualified(), "netease:p9");
@@ -790,15 +798,32 @@ mod tests {
             query,
             ResolveValue::Playlists(vec![brief(SourceKind::NETEASE, "p1", "日常", 42)]),
         );
+        sender.resolve(
+            *tracks_query,
+            ResolveValue::PlaylistEntries(vec![
+                mineral_model::PlaylistEntry::builder()
+                    .index(mineral_model::CollectionIndex::new(7))
+                    .song(song("entry"))
+                    .build(),
+            ]),
+        );
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
-            vec![Event::Toast {
-                kind: ToastKind::Info,
-                content: vec![TextSpan::plain("netease:p1:日常:42")],
-                id: None,
-                ttl_secs: None,
-            }]
+            vec![
+                Event::Toast {
+                    kind: ToastKind::Info,
+                    content: vec![TextSpan::plain("netease:p1:日常:42")],
+                    id: None,
+                    ttl_secs: None,
+                },
+                Event::Toast {
+                    kind: ToastKind::Info,
+                    content: vec![TextSpan::plain("7:entry:nil")],
+                    id: None,
+                    ttl_secs: None,
+                },
+            ]
         );
         Ok(())
     }
@@ -810,7 +835,8 @@ mod tests {
         let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
             mineral.library.search("雨", function(songs, err)
-                mineral.ui.toast(#songs .. "/" .. tostring(err))
+                mineral.ui.toast(#songs .. "/" .. tostring(err)
+                    .. "/" .. tostring(songs[1].index))
             end)
             mineral.library.search("雪", { source = "netease", offset = 10, limit = 5 },
                 function(songs, err) end)
@@ -852,7 +878,7 @@ mod tests {
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: vec![TextSpan::plain("2/nil")],
+                content: vec![TextSpan::plain("2/nil/nil")],
                 id: None,
                 ttl_secs: None,
             }],

@@ -1,12 +1,14 @@
 //! 网易原生 DTO → `mineral_model` 类型的转换 helper。
 
 use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl,
-    Playlist, PlaylistId, Song, SongId, SourceKind,
+    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
+    CollectionIndex, MediaUrl, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId,
+    SourceKind,
 };
+use rustc_hash::FxHashMap;
 
 use crate::wire::artist::{ArtistAlbum, ArtistDetailResult};
-use crate::wire::playlist::PlaylistInfo;
+use crate::wire::playlist::{PlaylistInfo, TrackId};
 use crate::wire::search::{AlbumDetailResult, SearchAlbum, SearchArtist, SearchPlaylist};
 use crate::wire::song::{AlbumSong, Artist as WireArtist, SongUrl};
 
@@ -47,7 +49,7 @@ pub(crate) fn album_artist_refs(
 /// 专辑元信息 DTO + 已解析曲目 → 统一 [`Album`]。
 ///
 /// 搜索与详情共用:搜索结果只有元信息(`songs` 传空),详情端点元信息 + 曲目都全。
-pub(crate) fn album_dto_to_model(a: SearchAlbum, songs: Vec<Song>) -> Album {
+pub(crate) fn album_dto_to_model(a: SearchAlbum, tracks: Vec<AlbumTrack>) -> Album {
     Album::builder()
         .id(AlbumId::new(SourceKind::NETEASE, a.id.to_string()))
         .name(a.name)
@@ -57,7 +59,7 @@ pub(crate) fn album_dto_to_model(a: SearchAlbum, songs: Vec<Song>) -> Album {
         .publish_time_ms(a.publish_time)
         .track_count(Some(a.size))
         .cover_url(a.pic_url.as_deref().and_then(parse_remote))
-        .songs(songs)
+        .tracks(tracks)
         .build()
 }
 
@@ -68,14 +70,14 @@ pub(crate) fn album_detail_to_model(r: AlbumDetailResult) -> Album {
         .into_iter()
         .map(album_song_to_model)
         .collect::<Vec<Song>>();
-    album_dto_to_model(r.album, songs)
+    album_dto_to_model(r.album, AlbumTrack::enumerate(songs))
 }
 
 /// 歌单元信息 DTO + 已解析曲目 → 统一 [`Playlist`]。
 ///
 /// 详情与用户列表共用:详情端点元信息 + 曲目都有(`songs` 传全拉/缓存重建的曲目);
 /// 用户列表项只有元信息(`songs` 传空)。
-pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, songs: Vec<Song>) -> Playlist {
+pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, entries: Vec<PlaylistEntry>) -> Playlist {
     Playlist::builder()
         .id(PlaylistId::new(SourceKind::NETEASE, info.id.to_string()))
         .name(info.name.clone())
@@ -84,8 +86,42 @@ pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, songs: Vec<Song>) -> P
         .track_count(info.track_count)
         .play_count(info.play_count)
         .subscriber_count(info.subscribed_count)
-        .songs(songs)
+        .entries(entries)
         .build()
+}
+
+/// 以 authoritative `trackIds[]` array coordinate join Song metadata，保留缺 metadata 的 gap。
+///
+/// Metadata Vec 的自身顺序不参与 Playlist order；duplicate SongId 可在不同 index 生成多个
+/// relation occurrence。
+///
+/// # Params:
+///   - `track_ids`: 远端 canonical playlist order
+///   - `songs`: 远端或缓存重建得到的 Song metadata
+///
+/// # Return:
+///   成功 join 的 PlaylistEntry；missing metadata 只跳过该 entry，不重编号后续 index。
+pub(crate) fn playlist_entries_from_order(
+    track_ids: &[TrackId],
+    songs: Vec<Song>,
+) -> Vec<PlaylistEntry> {
+    let by_id = songs
+        .into_iter()
+        .map(|song| (song.id.clone(), song))
+        .collect::<FxHashMap<SongId, Song>>();
+    track_ids
+        .iter()
+        .zip(0_u64..)
+        .filter_map(|(track_id, index)| {
+            let id = SongId::new(SourceKind::NETEASE, track_id.id.to_string());
+            by_id.get(&id).cloned().map(|song| {
+                PlaylistEntry::builder()
+                    .index(CollectionIndex::new(index))
+                    .song(song)
+                    .build()
+            })
+        })
+        .collect()
 }
 
 /// 专辑/歌单/artist 详情里的 [`AlbumSong`](ar/al/dt 字段风格)→ 统一 [`Song`]。
@@ -423,9 +459,51 @@ mod tests {
         assert_eq!(album.name, "Chinese Football");
         assert_eq!(album.description, "成军四年的首张全长专辑。");
         assert_eq!(album.track_count, Some(13));
-        assert_eq!(album.songs.len(), 1);
+        assert_eq!(album.tracks.len(), 1);
+        assert_eq!(album.tracks.first().map(|track| track.index.get()), Some(0));
         assert!(album.cover_url.is_some());
         assert_eq!(album.id, AlbumId::new(SourceKind::NETEASE, "3314467"));
+        Ok(())
+    }
+
+    /// 多碟专辑只认响应顶层 `songs[]` 的 canonical order，并在 adapter boundary 摊平成
+    /// 连续 0-based index；`no` 在换碟后重新从 1 开始也不能让编号回退。
+    #[test]
+    fn album_multi_disc_flattens_top_level_order() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "album": {
+                "id": 42, "name": "Double Album", "size": 4,
+                "artists": [{ "id": 7, "name": "Artist" }]
+            },
+            "songs": [
+                { "id": 11, "name": "Disc 1 Track 1", "no": 1, "cd": "1",
+                  "ar": [{ "id": 7, "name": "Artist" }],
+                  "al": { "id": 42, "name": "Double Album" } },
+                { "id": 12, "name": "Disc 1 Track 2", "no": 2, "cd": "1",
+                  "ar": [{ "id": 7, "name": "Artist" }],
+                  "al": { "id": 42, "name": "Double Album" } },
+                { "id": 21, "name": "Disc 2 Track 1", "no": 1, "cd": "2",
+                  "ar": [{ "id": 7, "name": "Artist" }],
+                  "al": { "id": 42, "name": "Double Album" } },
+                { "id": 22, "name": "Disc 2 Track 2", "no": 2, "cd": "2",
+                  "ar": [{ "id": 7, "name": "Artist" }],
+                  "al": { "id": 42, "name": "Double Album" } }
+            ]
+        });
+        let dto: AlbumDetailResult = from_value(raw)?;
+        let album = album_detail_to_model(dto);
+        let ids = album
+            .tracks
+            .iter()
+            .map(|track| track.song.id.value())
+            .collect::<Vec<_>>();
+        let indexes = album
+            .tracks
+            .iter()
+            .map(|track| track.index.get())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["11", "12", "21", "22"]);
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
         Ok(())
     }
 
@@ -434,7 +512,7 @@ mod tests {
     fn playlist_detail_maps_meta_and_songs() -> color_eyre::Result<()> {
         use mineral_model::PlaylistId;
 
-        use super::{album_song_to_model, playlist_info_to_model};
+        use super::{album_song_to_model, playlist_entries_from_order, playlist_info_to_model};
         use crate::wire::playlist::PlaylistDetailResult;
 
         let raw = serde_json::json!({
@@ -443,7 +521,7 @@ mod tests {
                 "coverImgUrl": "https://p.music.126.net/c.jpg",
                 "trackCount": 147, "playCount": 8_941_862, "subscribedCount": 110_577,
                 "trackUpdateTime": 1_700_000_000_000_i64,
-                "trackIds": [{ "id": 1 }, { "id": 2 }],
+                "trackIds": [{ "id": 2 }, { "id": 1 }],
                 "tracks": [
                     { "id": 1, "name": "Plastic Love",
                       "ar": [{ "id": 9, "name": "竹内まりや" }],
@@ -457,13 +535,19 @@ mod tests {
             .into_iter()
             .map(album_song_to_model)
             .collect::<Vec<_>>();
-        let pl = playlist_info_to_model(&info, songs);
+        let entries = playlist_entries_from_order(&info.track_ids, songs);
+        let pl = playlist_info_to_model(&info, entries);
         assert_eq!(pl.name, "City Pop");
         assert_eq!(pl.description, "昭和旋律");
         assert_eq!(pl.track_count, 147);
         assert_eq!(pl.play_count, Some(8_941_862));
         assert_eq!(pl.subscriber_count, Some(110_577));
-        assert_eq!(pl.songs.len(), 1);
+        assert_eq!(pl.entries.len(), 1);
+        assert_eq!(
+            pl.entries.first().map(|entry| entry.index.get()),
+            Some(1),
+            "trackIds[0] metadata 缺失时，后续 Song 保留 authoritative index 1"
+        );
         assert_eq!(pl.id, PlaylistId::new(SourceKind::NETEASE, "12345"));
         Ok(())
     }
@@ -505,7 +589,7 @@ mod tests {
         let dto: ArtistAlbum = from_value(raw)?;
         let model = artist_album_to_model(dto);
         assert!(model.artists.is_empty());
-        assert!(model.songs.is_empty());
+        assert!(model.tracks.is_empty());
         assert_eq!(model.publish_time_ms, 715_000_000_000);
         Ok(())
     }

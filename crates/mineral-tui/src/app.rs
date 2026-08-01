@@ -1320,7 +1320,7 @@ mod tests {
             .state
             .filtered_tracks()
             .first()
-            .map(|sv| sv.data.id.clone())
+            .map(|entry| entry.data.song.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 没有曲目"))?;
 
         // 初始 loved = false。
@@ -1348,7 +1348,10 @@ mod tests {
             .filtered_tracks()
             .first()
             .is_some_and(|sv| sv.loved);
-        assert!(loved_after_first, "第一次按 f 后 SongView.loved 应为 true");
+        assert!(
+            loved_after_first,
+            "第一次按 f 后 PlaylistEntryView.loved 应为 true"
+        );
 
         // 再按 f → 翻转回 not loved。
         press(&mut app, KeyCode::Char('f'));
@@ -1367,7 +1370,7 @@ mod tests {
             .is_some_and(|sv| sv.loved);
         assert!(
             !loved_after_second,
-            "第二次按 f 后 SongView.loved 应为 false"
+            "第二次按 f 后 PlaylistEntryView.loved 应为 false"
         );
 
         Ok(())
@@ -1983,7 +1986,9 @@ mod tests {
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(crate::test_support::endserenading(4))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(4),
+                    ))
                     .build(),
             ),
         });

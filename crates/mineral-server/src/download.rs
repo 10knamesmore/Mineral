@@ -626,7 +626,13 @@ async fn collect_songs(player: &PlayerCore, target: &DownloadTarget) -> Result<V
             channel
                 .playlist_detail(id)
                 .await
-                .map(|pl| pl.songs)
+                .map(|playlist| {
+                    playlist
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.song)
+                        .collect()
+                })
                 .map_err(|e| {
                     mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "拉歌单曲目失败");
                     "下载失败: 拉歌单曲目失败".to_owned()

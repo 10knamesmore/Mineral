@@ -1,7 +1,7 @@
 //! TUI 交互手感段(挂在 `TuiConfig` 下,经 `cfg.tui().behavior()` 取)。
 //!
 //! const 审计补录的交互旋钮:音量/seek 步长、列表大步跳行、滚动步长与边距、
-//! 自拉起 daemon 的退出续命。
+//! Library 过滤起播范围、自拉起 daemon 的退出续命。
 //! 命令名 + 这些步长参数组装成可执行动作是 client 接线的事;本段只承载强类型值。
 
 use mineral_config_macros::{config_section, lua_enum};
@@ -43,6 +43,29 @@ pub struct BehaviorConfig {
     /// 歌单内光标位置记忆档:退出曲目列表时记住位置,下次进入恢复。
     /// 搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置。
     remember_track_pos: TrackPosMemory,
+
+    /// Library 过滤态起播时提交完整 collection，还是只提交当前匹配项。
+    filter_play_scope: FilterPlayScope,
+}
+
+/// Library 过滤态起播时建立播放队列的范围。
+#[lua_enum]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum FilterPlayScope {
+    /// 过滤只负责定位，播放队列仍包含当前完整 collection。
+    Collection,
+
+    /// 播放队列只包含当前过滤结果。
+    Matches,
+}
+
+impl FilterPlayScope {
+    /// 是否只用当前 filtered projection 建立播放队列。
+    pub fn matches_only(self) -> bool {
+        matches!(self, Self::Matches)
+    }
 }
 
 /// 歌单内光标位置记忆的生效档位。

@@ -88,12 +88,18 @@ impl PlayerCore {
         actor: mineral_stats::Actor,
     ) -> color_eyre::Result<()> {
         let ns = id.namespace();
-        {
+        let changed = {
             let _guard = self.inner.favorites_lock.lock().await;
-            self.persist().scope(ns).set_loved(id, loved).await?;
-            self.push_current_favorited_ids(ns).await;
+            let changed = self.persist().scope(ns).set_loved(id, loved).await?;
+            if changed {
+                self.push_current_favorited_ids(ns).await;
+            }
+            changed
+        };
+        if !changed {
+            return Ok(());
         }
-        self.record_love_change(id, loved, actor);
+        self.record_love_change(id, loved, actor, mineral_stats::LoveOrigin::User);
         // script/CLI love 只握 id(不像 TUI toggle 自带整首 Song):触发后台补 meta,让缺 meta
         // 的这首(及其它待补的)渐进进聚合视图。取消收藏无需 meta。
         if loved {
@@ -105,13 +111,19 @@ impl PlayerCore {
     }
 
     /// love 变更的埋点出口(显式设值 / 翻转共用;远端镜像结果本轮不追踪 → `None`)。
-    fn record_love_change(&self, id: &SongId, loved: bool, actor: mineral_stats::Actor) {
+    fn record_love_change(
+        &self,
+        id: &SongId,
+        loved: bool,
+        actor: mineral_stats::Actor,
+        origin: mineral_stats::LoveOrigin,
+    ) {
         self.record_behavior(
             actor,
             mineral_stats::BehaviorEvent::LoveChange {
                 song: id.clone(),
                 loved,
-                origin: mineral_stats::LoveOrigin::User,
+                origin,
                 remote_mirror: None,
             },
         );
@@ -147,11 +159,14 @@ impl PlayerCore {
                 );
             }
             let new = !scope.is_loved(&song.id).await?;
-            scope.set_loved(&song.id, new).await?;
+            let changed = scope.set_loved(&song.id, new).await?;
+            if !changed {
+                color_eyre::eyre::bail!("favorite toggle 未产生预期 transition");
+            }
             self.push_current_favorited_ids(ns).await;
             new
         };
-        self.record_love_change(&song.id, new, actor);
+        self.record_love_change(&song.id, new, actor, mineral_stats::LoveOrigin::User);
         self.refresh_aggregate_favorites().await;
         self.mirror_remote_favorite(&song.id, new).await;
         Ok(new)
@@ -189,36 +204,39 @@ impl PlayerCore {
         let imported = {
             let _guard = self.inner.favorites_lock.lock().await;
             let now = self.load_favorited_ids(source).await;
-            let scope = self.persist().scope(source);
-            let mut imported = 0_usize;
-            for id in &remote {
-                if !should_import(id, &before, &now) {
-                    continue;
+            let eligible = remote
+                .iter()
+                .filter(|id| should_import(id, &before, &now))
+                .cloned()
+                .collect::<FxHashSet<SongId>>();
+            let imported = match self.persist().import_favorites(&eligible).await {
+                Ok(imported) => imported,
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "favorites",
+                        source = source.name(),
+                        error = mineral_log::chain(&e),
+                        "远端红心 batch 导入 persist 失败"
+                    );
+                    Vec::new()
                 }
-                match scope.set_loved(id, /*loved*/ true).await {
-                    Ok(()) => imported = imported.saturating_add(1),
-                    Err(e) => {
-                        mineral_log::warn!(
-                            target: "favorites",
-                            source = source.name(),
-                            song = id.value(),
-                            error = mineral_log::chain(&e),
-                            "远端红心导入 persist 失败"
-                        );
-                    }
-                }
-            }
+            };
             self.push_current_favorited_ids(source).await;
             imported
         };
-        // 导入改变了收藏集才值得重合成聚合歌单(幂等导入也会走到,代价可接受:
-        // 一次本地 SQL + 一次事件推送)。
-        if imported > 0 {
-            self.refresh_aggregate_favorites().await;
+        for id in &imported {
+            self.record_love_change(
+                id,
+                /*loved*/ true,
+                mineral_stats::Actor::System,
+                mineral_stats::LoveOrigin::Import,
+            );
         }
-        // 导入的红心只有 id、无 meta,聚合视图重建不出;触发后台补 meta 逐步填满(单飞,
-        // 多源 sync 只跑一个 worker,它扫全部缺 meta 的收藏)。
-        self.spawn_meta_backfill();
+        if !imported.is_empty() {
+            self.refresh_aggregate_favorites().await;
+            // 只有新导入项会引入缺 meta 的可能；幂等 sync 不重复启动 worker。
+            self.spawn_meta_backfill();
+        }
     }
 
     /// 收藏集变化后重合成聚合歌单(mineral 源)并重推,两条出口各司其职:

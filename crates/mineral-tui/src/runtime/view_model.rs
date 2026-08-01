@@ -1,10 +1,9 @@
 //! 渲染层共享的 UI 装饰类型 — 不依赖任何具体 channel。
 //!
-//! 真实 channel 接入时,把 `mineral_model::Playlist` / `Song` 包装成
-//! [`PlaylistView`] / [`SongView`],额外字段(`loved` / `plays`)由具体
-//! channel 提供;不知道时给默认值。
+//! 真实 channel 接入时,把 `mineral_model::Playlist` / `PlaylistEntry` 包装成
+//! [`PlaylistView`] / [`PlaylistEntryView`]；额外字段(`loved` / `plays`)由 user-data 装饰。
 
-use mineral_model::{Playlist, Song};
+use mineral_model::{Playlist, PlaylistEntry};
 
 /// 一条歌单 + UI 装饰。
 #[derive(Clone, Debug)]
@@ -13,17 +12,17 @@ pub struct PlaylistView {
     pub data: Playlist,
 }
 
-/// 一首歌 + UI 装饰(`loved` / `plays`),channel 不提供时给默认值
-/// (`false` / `None`)。
+/// 一条 Playlist membership + Song UI 装饰。
+///
+/// Relation 保留 authoritative CollectionIndex；non-collection Song 不伪造 membership。
 #[derive(Clone, Debug)]
-pub struct SongView {
-    /// 底层 model。
-    pub data: Song,
+pub struct PlaylistEntryView {
+    /// 底层 model relation。
+    pub data: PlaylistEntry,
 
-    /// 是否已收藏。
+    /// 该 relation 指向的 Song 是否已收藏。
     pub loved: bool,
 
-    /// 远端真实累计播放次数;
-    /// `None` = 未知 / 未登录 / 未查到 / 该源不支持。
+    /// 该 relation 指向的 Song 的远端真实累计播放次数。
     pub plays: Option<u32>,
 }

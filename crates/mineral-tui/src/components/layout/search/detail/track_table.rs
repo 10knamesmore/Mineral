@@ -115,7 +115,7 @@ fn love_cell(loved: bool, theme: &Theme) -> Cell<'static> {
 }
 
 /// `#` 列：在播 → `♫`(accent)，否则 0 起序号。
-fn num_cell(idx: usize, is_current: bool, theme: &Theme) -> Cell<'static> {
+fn num_cell(idx: u64, is_current: bool, theme: &Theme) -> Cell<'static> {
     if is_current {
         Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
     } else {
@@ -128,14 +128,14 @@ fn num_cell(idx: usize, is_current: bool, theme: &Theme) -> Cell<'static> {
 ///
 /// # Params:
 ///   - `song`: 该行歌曲
-///   - `idx`: 0 起行号（在播则被 `♫` 取代）
+///   - `idx`: 0-based display index（在播则被 `♫` 取代）
 ///   - `loved`: 是否已收藏（♥）
 ///   - `is_current`: 是否当前在播（♫）
 ///   - `cols`: 中间列选择
 ///   - `marquee`: title 溢出滚动接线(仅光标选中行 `Some`,其余行截断)
 pub fn track_row(
     song: &Song,
-    idx: usize,
+    idx: u64,
     loved: bool,
     is_current: bool,
     cols: TrackColumns,

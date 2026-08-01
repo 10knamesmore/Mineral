@@ -16,7 +16,7 @@ use crate::components::layout::browse::spectrum::SpectrumState;
 use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::marquee::Marquees;
 use crate::runtime::playback::Playback;
-use crate::runtime::view_model::{PlaylistView, SongView};
+use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 mod browse;
 mod channel_search;
@@ -30,8 +30,8 @@ mod search;
 pub(crate) mod search_whitelist;
 mod view_switch;
 
-pub(crate) use browse::BrowseModel;
 pub use browse::BrowsePage;
+pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 pub use covers::{CoverHub, CoverTransition};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
@@ -393,13 +393,12 @@ impl AppState {
         ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms())
     }
 
-    /// 给定一首歌,根据当前 `library.liked_ids` / 未来其他 user-data 装饰成 SongView。
-    /// 这是 user-data 写入 SongView 的**唯一入口**;新增 user-data 字段时只改这里。
-    fn decorate(&self, song: Song) -> SongView {
-        let loved = self.is_liked(&song);
-        let plays = self.library.play_counts.get(&song.id).copied();
-        SongView {
-            data: song,
+    /// 给定一条 PlaylistEntry，根据当前 user-data 装饰 relation 指向的 Song。
+    fn decorate_entry(&self, entry: mineral_model::PlaylistEntry) -> PlaylistEntryView {
+        let loved = self.is_liked(&entry.song);
+        let plays = self.library.play_counts.get(&entry.song.id).copied();
+        PlaylistEntryView {
+            data: entry,
             loved,
             plays,
         }
@@ -429,18 +428,18 @@ impl AppState {
     }
 
     /// 某个 channel 的 user-data 到位 / 变化时,把 `library.tracks` 里属于该 source
-    /// 的 SongView 全部按当前 `decorate` 重建一遍。
+    /// 的 PlaylistEntryView 全部按当前 `decorate_entry` 重建一遍。
     /// 跨 source 的歌单不动(decoration data 是 per-source 的)。
     fn redecorate_for_source(&mut self, source: SourceKind) {
         let cache = std::mem::take(&mut self.library.tracks);
         self.library.tracks = cache
             .into_iter()
             .map(|(pid, tracks)| {
-                let next: Vec<SongView> = tracks
+                let next: Vec<PlaylistEntryView> = tracks
                     .into_iter()
                     .map(|sv| {
-                        if sv.data.source() == source {
-                            self.decorate(sv.data)
+                        if sv.data.song.source() == source {
+                            self.decorate_entry(sv.data)
                         } else {
                             sv
                         }
@@ -476,17 +475,17 @@ impl AppState {
                 // 歌单详情含元信息 + 曲目;library 与 detail 都只取曲目(歌单元信息走
                 // sidebar 列表那份 / detail 帧的 entity 占位)。
                 let decorated = playlist
-                    .songs
+                    .entries
                     .iter()
                     .cloned()
-                    .map(|data| self.decorate(data))
+                    .map(|data| self.decorate_entry(data))
                     .collect();
                 self.library.tracks.insert(id.clone(), decorated);
                 self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
                 self.apply_pending_restore(id);
                 // detail 歌单帧也吃这批曲目(若当前栈顶正等它)。
                 if let Some(kr) = self.channel_search.active_results_mut() {
-                    kr.fill_playlist_tracks(id, playlist.songs.clone());
+                    kr.fill_playlist_entries(id, playlist.entries.clone());
                 }
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
@@ -656,7 +655,7 @@ impl AppState {
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
-    pub fn current_tracks_slot(&self) -> Option<&Vec<SongView>> {
+    pub fn current_tracks_slot(&self) -> Option<&Vec<PlaylistEntryView>> {
         self.browse.current_tracks_slot(self.browse_model())
     }
 
@@ -665,7 +664,12 @@ impl AppState {
         self.library
             .tracks
             .get(id)
-            .map(|tracks| tracks.iter().filter_map(|sv| sv.data.duration_ms).sum())
+            .map(|tracks| {
+                tracks
+                    .iter()
+                    .filter_map(|entry| entry.data.song.duration_ms)
+                    .sum()
+            })
             .unwrap_or(0)
     }
 
@@ -713,8 +717,13 @@ impl AppState {
     /// 当前可见(被 search 过滤)的曲目列表。
     ///
     /// 命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分作为该曲分数。
-    pub fn filtered_tracks(&self) -> Vec<SongView> {
+    pub fn filtered_tracks(&self) -> Vec<PlaylistEntryView> {
         self.browse.filtered_tracks(self.browse_model())
+    }
+
+    /// 按当前配置建立 Library 起播队列，并保留选中 occurrence。
+    pub(crate) fn library_queue_projection(&self) -> Option<LibraryQueueProjection> {
+        self.browse.library_queue_projection(self.browse_model())
     }
 }
 
@@ -925,7 +934,7 @@ mod tests {
             mineral_model::Playlist::builder()
                 .id(pid.clone())
                 .name(String::new())
-                .songs(tracks)
+                .entries(mineral_model::PlaylistEntry::enumerate(tracks))
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
@@ -970,7 +979,7 @@ mod tests {
             mineral_model::Playlist::builder()
                 .id(pid.clone())
                 .name(String::new())
-                .songs(tracks)
+                .entries(mineral_model::PlaylistEntry::enumerate(tracks))
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
@@ -1016,7 +1025,7 @@ mod tests {
             mineral_model::Playlist::builder()
                 .id(other.clone())
                 .name(String::new())
-                .songs(tracks)
+                .entries(mineral_model::PlaylistEntry::enumerate(tracks))
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched {
@@ -1182,7 +1191,9 @@ mod tests {
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(crate::test_support::endserenading(3))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(3),
+                    ))
                     .build(),
             ),
         });
@@ -1195,7 +1206,7 @@ mod tests {
             .current()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail root"))?;
         match &frame.data {
-            Some(DetailData::Album(a)) => assert_eq!(a.songs.len(), 3, "专辑详情落帧"),
+            Some(DetailData::Album(a)) => assert_eq!(a.tracks.len(), 3, "专辑详情落帧"),
             _ => color_eyre::eyre::bail!("detail 帧应填 Album"),
         }
         Ok(())
@@ -1223,7 +1234,9 @@ mod tests {
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "OTHER"))
                     .name("other".to_owned())
-                    .songs(crate::test_support::endserenading(3))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(3),
+                    ))
                     .build(),
             ),
         });

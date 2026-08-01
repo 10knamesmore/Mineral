@@ -2,7 +2,9 @@
 
 use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
-use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{
+    AlbumId, ArtistId, CollectionIndex, MediaUrl, PlaylistId, Song, SongId, SourceKind,
+};
 
 use crate::ServerStore;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
@@ -42,7 +44,17 @@ pub struct HistoryEntry {
     pub listen_ms: u64,
 }
 
-/// 歌单缓存出参(曲目 id 保序，展示时配 song_meta 重建)。
+/// 一条持久化的 Playlist membership relation。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedPlaylistEntry {
+    /// Canonical snapshot 中的 0-based absolute coordinate。
+    pub index: CollectionIndex,
+
+    /// Relation 指向的 SongId，保留 Song 自己的 namespace。
+    pub song_id: SongId,
+}
+
+/// 歌单缓存出参(显式 relation 保序，展示时配 song_meta 重建)。
 #[derive(Debug, Clone)]
 pub struct PlaylistCacheEntry {
     /// 歌单名(可空)。
@@ -56,8 +68,8 @@ pub struct PlaylistCacheEntry {
     /// 曲目增删改/重排会更新它,供调用方做条件刷新的版本比对。
     pub track_update_time: Option<i64>,
 
-    /// 曲目 id(带本来源 namespace),按 position 保序。
-    pub track_values: Vec<SongId>,
+    /// Playlist membership，按 collection index 升序。
+    pub entries: Vec<CachedPlaylistEntry>,
 }
 
 /// 绑定单一来源 namespace 的结构态视图。降级 ServerStore 下所有方法 no-op/空。
@@ -348,9 +360,17 @@ impl NamespaceStore {
         let Some(pool) = self.persist.pool() else {
             return Ok(None);
         };
-        let Some(row) = sqlx::query_as::<_, (i64, i64, i64, Option<i64>, Option<i64>)>(
-            "SELECT play_count,skip_count,total_listen_ms,last_played_at,loved_at \
-             FROM song_stats WHERE namespace=? AND song_value=?",
+        let Some(row) = sqlx::query_as::<_, (i64, i64, i64, Option<i64>, i64)>(
+            "WITH wanted(namespace,song_value) AS (VALUES(?,?)) \
+             SELECT COALESCE(st.play_count,0),COALESCE(st.skip_count,0), \
+                    COALESCE(st.total_listen_ms,0),st.last_played_at, \
+                    CASE WHEN f.song_value IS NULL THEN 0 ELSE 1 END \
+             FROM wanted w \
+             LEFT JOIN song_stats st \
+               ON st.namespace=w.namespace AND st.song_value=w.song_value \
+             LEFT JOIN song_favorites f \
+               ON f.namespace=w.namespace AND f.song_value=w.song_value \
+             WHERE st.song_value IS NOT NULL OR f.song_value IS NOT NULL",
         )
         .bind(self.source.name())
         .bind(id.value())
@@ -361,45 +381,54 @@ impl NamespaceStore {
             return Ok(None);
         };
 
-        let (play_count, skip_count, total_listen_ms, last_played_at, loved_at) = row;
+        let (play_count, skip_count, total_listen_ms, last_played_at, loved) = row;
         Ok(Some(SongStats {
             play_count: u32::try_from(play_count)?,
             skip_count: u32::try_from(skip_count)?,
             total_listen_ms: u64::try_from(total_listen_ms)?,
             last_played_at,
-            loved: loved_at.is_some(),
+            loved: loved != 0,
         }))
     }
 
-    /// 设/取消一首歌的 love：写 `loved_at`(true=now，false=NULL)。降级 no-op。
+    /// 按状态 transition 设/取消一首歌的 favorite membership。降级 no-op。
     ///
     /// # Params:
     ///   - `id`: 歌曲 id
     ///   - `loved`: true=喜欢，false=取消
     ///
     /// # Return:
-    ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn set_loved(&self, id: &SongId, loved: bool) -> color_eyre::Result<()> {
+    ///   实际创建或删除 membership 返回 `true`；同状态 no-op 或降级返回 `false`。
+    pub async fn set_loved(&self, id: &SongId, loved: bool) -> color_eyre::Result<bool> {
         let Some(pool) = self.persist.pool() else {
-            return Ok(());
+            return Ok(false);
         };
         trace!(target: "persist", song = %id.value(), loved, "set_loved");
-        let at: Option<i64> = if loved {
-            Some(crate::db::time::now_ms())
+        let result = if loved {
+            let now = crate::db::time::now_ms();
+            sqlx::query(
+                "INSERT INTO song_favorites(namespace,song_value,entered_at) \
+                 VALUES(?,?,MAX(?,COALESCE((SELECT MAX(entered_at)+1 FROM song_favorites),?))) \
+                 ON CONFLICT(namespace,song_value) DO NOTHING",
+            )
+            .bind(self.source.name())
+            .bind(id.value())
+            .bind(now)
+            .bind(now)
+            .execute(pool)
+            .await
         } else {
-            None
+            sqlx::query("DELETE FROM song_favorites WHERE namespace=? AND song_value=?")
+                .bind(self.source.name())
+                .bind(id.value())
+                .execute(pool)
+                .await
         };
-        sqlx::query(
-            "INSERT INTO song_stats(namespace,song_value,loved_at) VALUES(?,?,?) \
-             ON CONFLICT(namespace,song_value) DO UPDATE SET loved_at=excluded.loved_at",
-        )
-        .bind(self.source.name())
-        .bind(id.value())
-        .bind(at)
-        .execute(pool)
-        .await
-        .wrap_err_with(|| format!("写 love 状态失败 song={}", id.value()))?;
-        Ok(())
+        let changed = result
+            .wrap_err_with(|| format!("写 favorite membership 失败 song={}", id.value()))?
+            .rows_affected()
+            > 0;
+        Ok(changed)
     }
 
     /// 是否 loved。降级 / 无记录返回 false。
@@ -408,37 +437,36 @@ impl NamespaceStore {
     ///   - `id`: 歌曲 id
     ///
     /// # Return:
-    ///   `loved_at` 非 NULL 时 true。
+    ///   存在 favorite membership 时 true。
     pub async fn is_loved(&self, id: &SongId) -> color_eyre::Result<bool> {
         let Some(pool) = self.persist.pool() else {
             return Ok(false);
         };
-        let row: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT loved_at FROM song_stats WHERE namespace=? AND song_value=?")
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM song_favorites WHERE namespace=? AND song_value=?")
                 .bind(self.source.name())
                 .bind(id.value())
                 .fetch_optional(pool)
                 .await
                 .wrap_err_with(|| format!("查 love 状态失败 song={}", id.value()))?;
-        Ok(matches!(row, Some((Some(_),))))
+        Ok(row.is_some())
     }
 
     /// 本来源全部 loved 歌 id 集合。降级返回空集。
     ///
     /// # Return:
-    ///   `loved_at` 非 NULL 的歌 id 集合。
+    ///   本 namespace 的 favorite SongId 集合。
     pub async fn loved_ids(&self) -> color_eyre::Result<rustc_hash::FxHashSet<SongId>> {
         let mut out = rustc_hash::FxHashSet::default();
         let Some(pool) = self.persist.pool() else {
             return Ok(out);
         };
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT song_value FROM song_stats WHERE namespace=? AND loved_at IS NOT NULL",
-        )
-        .bind(self.source.name())
-        .fetch_all(pool)
-        .await
-        .wrap_err("查 loved 列表失败")?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT song_value FROM song_favorites WHERE namespace=?")
+                .bind(self.source.name())
+                .fetch_all(pool)
+                .await
+                .wrap_err("查 loved 列表失败")?;
         for (v,) in rows {
             out.insert(SongId::new(self.source, v));
         }
@@ -533,13 +561,13 @@ impl NamespaceStore {
         Ok(())
     }
 
-    /// 写歌单缓存(覆盖：upsert 元信息 + 先删后插 tracks 保序，刷新 fetched_at)。降级 no-op。
+    /// 写歌单缓存(覆盖：upsert 元信息 + 先删后插 relation，刷新 fetched_at)。降级 no-op。
     ///
     /// # Params:
     ///   - `id`: 歌单 id
     ///   - `name`: 歌单名(可空)
     ///   - `track_update_time`: 歌单版本戳(网易云 `trackUpdateTime`,可空)
-    ///   - `track_values`: 曲目 id,按展示顺序(仅存其裸值,namespace 由本 store 隐含)
+    ///   - `entries`: 显式 index + SongId relation，Song namespace 不由 Playlist 隐含
     ///
     /// # Return:
     ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
@@ -548,17 +576,17 @@ impl NamespaceStore {
         id: &PlaylistId,
         name: Option<&str>,
         track_update_time: Option<i64>,
-        track_values: &[SongId],
+        entries: &[CachedPlaylistEntry],
     ) -> color_eyre::Result<()> {
         let Some(pool) = self.persist.pool() else {
             return Ok(());
         };
-        trace!(target: "persist", playlist = %id.value(), tracks = track_values.len(), "put_playlist_cache");
+        trace!(target: "persist", playlist = %id.value(), tracks = entries.len(), "put_playlist_cache");
         let ns = self.source.name();
         let pid = id.value();
 
-        // 多步写(playlist_cache upsert + playlist_tracks 先删后插)包进事务原子完成,
-        // 否则并发刷新同一歌单时 DELETE/INSERT 交错会撞 playlist_tracks 主键。
+        // 多步写(playlist_cache upsert + playlist_entries 先删后插)包进事务原子完成,
+        // 否则并发刷新同一歌单时 DELETE/INSERT 交错会撞 relation 主键。
         let mut tx = pool
             .begin()
             .await
@@ -580,26 +608,28 @@ impl NamespaceStore {
         .await
         .wrap_err_with(|| format!("upsert playlist_cache 失败 playlist={pid}"))?;
 
-        sqlx::query("DELETE FROM playlist_tracks WHERE namespace=? AND playlist_id=?")
+        sqlx::query("DELETE FROM playlist_entries WHERE playlist_namespace=? AND playlist_value=?")
             .bind(ns)
             .bind(pid)
             .execute(&mut *tx)
             .await
-            .wrap_err_with(|| format!("清空 playlist_tracks 失败 playlist={pid}"))?;
+            .wrap_err_with(|| format!("清空 playlist_entries 失败 playlist={pid}"))?;
 
-        for (i, v) in track_values.iter().enumerate() {
-            let pos = i64::try_from(i)?;
+        for entry in entries {
+            let index = i64::try_from(entry.index.get())?;
             sqlx::query(
-                "INSERT INTO playlist_tracks(namespace,playlist_id,position,song_value) \
-                 VALUES(?,?,?,?)",
+                "INSERT INTO playlist_entries(playlist_namespace,playlist_value,collection_index, \
+                                               song_namespace,song_value) \
+                 VALUES(?,?,?,?,?)",
             )
             .bind(ns)
             .bind(pid)
-            .bind(pos)
-            .bind(v.value())
+            .bind(index)
+            .bind(entry.song_id.namespace().name())
+            .bind(entry.song_id.value())
             .execute(&mut *tx)
             .await
-            .wrap_err_with(|| format!("写入 playlist_tracks 失败 playlist={pid} position={pos}"))?;
+            .wrap_err_with(|| format!("写入 playlist_entries 失败 playlist={pid} index={index}"))?;
         }
 
         tx.commit()
@@ -608,7 +638,7 @@ impl NamespaceStore {
         Ok(())
     }
 
-    /// 读歌单缓存(曲目按 position 升序)。降级 / 未命中返回 `None`。
+    /// 读歌单缓存(relation 按 collection index 升序)。降级 / 未命中返回 `None`。
     ///
     /// # Params:
     ///   - `id`: 歌单 id
@@ -636,30 +666,46 @@ impl NamespaceStore {
         let Some((name, fetched_at, track_update_time)) = head else {
             return Ok(None);
         };
-        let tracks: Vec<(String,)> = sqlx::query_as(
-            "SELECT song_value FROM playlist_tracks WHERE namespace=? AND playlist_id=? \
-             ORDER BY position",
+        let entries: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT collection_index,song_namespace,song_value FROM playlist_entries \
+             WHERE playlist_namespace=? AND playlist_value=? ORDER BY collection_index",
         )
         .bind(ns)
         .bind(pid)
         .fetch_all(pool)
         .await
-        .wrap_err_with(|| format!("查 playlist_tracks 失败 playlist={pid}"))?;
+        .wrap_err_with(|| format!("查 playlist_entries 失败 playlist={pid}"))?;
+        let entries = entries
+            .into_iter()
+            .map(|(index, namespace, value)| {
+                Ok(CachedPlaylistEntry {
+                    index: CollectionIndex::new(u64::try_from(index)?),
+                    song_id: SongId::new(SourceKind::from_name(&namespace), value),
+                })
+            })
+            .collect::<color_eyre::Result<Vec<CachedPlaylistEntry>>>()?;
         Ok(Some(PlaylistCacheEntry {
             name,
             fetched_at,
             track_update_time,
-            track_values: tracks
-                .into_iter()
-                .map(|(v,)| SongId::new(self.source, v))
-                .collect::<Vec<SongId>>(),
+            entries,
         }))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{ArtistId, ArtistRef, Song, SongId, SourceKind};
+    use mineral_model::{ArtistId, ArtistRef, CollectionIndex, Song, SongId, SourceKind};
+
+    use super::CachedPlaylistEntry;
+
+    /// 构造 playlist cache relation fixture。
+    fn cached(index: u64, source: SourceKind, value: &str) -> CachedPlaylistEntry {
+        CachedPlaylistEntry {
+            index: CollectionIndex::new(index),
+            song_id: SongId::new(source, value),
+        }
+    }
 
     #[tokio::test]
     async fn upsert_meta_then_get_roundtrips() -> color_eyre::Result<()> {
@@ -917,10 +963,21 @@ mod tests {
         let s = p.scope(SourceKind::NETEASE);
         let id = SongId::new(SourceKind::NETEASE, "123");
         assert!(!s.is_loved(&id).await?);
-        s.set_loved(&id, true).await?;
+        assert!(s.set_loved(&id, true).await?, "false -> true 应创建");
+        assert!(!s.set_loved(&id, true).await?, "true -> true 应 no-op");
         assert!(s.is_loved(&id).await?);
         assert!(s.loved_ids().await?.contains(&id));
-        s.set_loved(&id, false).await?;
+        let stats = s
+            .query_stats(&id)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("favorite-only Song 应有 stats projection"))?;
+        assert!(
+            stats.loved,
+            "favorite-only Song 必须从 song_favorites 读到 loved"
+        );
+        assert_eq!(stats.play_count, 0, "无 song_stats 行时播放计数投影为 0");
+        assert!(s.set_loved(&id, false).await?, "true -> false 应删除");
+        assert!(!s.set_loved(&id, false).await?, "false -> false 应 no-op");
         assert!(!s.is_loved(&id).await?);
         assert!(!s.loved_ids().await?.contains(&id));
         Ok(())
@@ -982,49 +1039,47 @@ mod tests {
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         let pid = mineral_model::PlaylistId::new(SourceKind::NETEASE, "p1");
-        let songs = vec![
-            SongId::new(SourceKind::NETEASE, "s1"),
-            SongId::new(SourceKind::NETEASE, "s2"),
-            SongId::new(SourceKind::NETEASE, "s3"),
+        let entries = vec![
+            cached(0, SourceKind::NETEASE, "s1"),
+            cached(3, SourceKind::BILIBILI, "s2"),
+            cached(9, SourceKind::NETEASE, "s3"),
         ];
-        s.put_playlist_cache(&pid, Some("我的歌单"), Some(1_775_781_450_653), &songs)
+        s.put_playlist_cache(&pid, Some("我的歌单"), Some(1_775_781_450_653), &entries)
             .await?;
         let got = s.get_playlist_cache(&pid).await?;
         assert!(got.is_some());
         if let Some(g) = got {
             assert_eq!(g.name, Some("我的歌单".to_owned()));
-            assert_eq!(g.track_values, songs); // 保序
+            assert_eq!(
+                g.entries, entries,
+                "index gap 与 mixed-source SongId 原值保留"
+            );
             assert!(g.fetched_at > 0);
             assert_eq!(g.track_update_time, Some(1_775_781_450_653)); // 版本戳 roundtrip
         }
         Ok(())
     }
 
-    /// 出参曲目是带本 store namespace 的结构化 `SongId`(非裸 `String`):写入裸值,
-    /// 读出时由 store 自己的 `source` 补全 namespace,消除消费端硬编码来源的需要。
+    /// 出参 SongId 保留 entry 自己的 namespace，不再由 Playlist store namespace 推断。
     #[tokio::test]
     async fn playlist_cache_returns_namespaced_song_ids() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::LOCAL);
         let pid = mineral_model::PlaylistId::new(SourceKind::LOCAL, "p1");
-        let tracks = vec![
-            SongId::new(SourceKind::LOCAL, "s1"),
-            SongId::new(SourceKind::LOCAL, "s2"),
+        let entries = vec![
+            cached(2, SourceKind::NETEASE, "s1"),
+            cached(8, SourceKind::BILIBILI, "s2"),
         ];
-        s.put_playlist_cache(&pid, Some("本地歌单"), Some(1), &tracks)
+        s.put_playlist_cache(&pid, Some("本地歌单"), Some(1), &entries)
             .await?;
         let Some(g) = s.get_playlist_cache(&pid).await? else {
             return Err(color_eyre::eyre::eyre!("应命中缓存"));
         };
-        assert_eq!(g.track_values, tracks, "保序且裸值一致");
-        for sid in &g.track_values {
-            assert_eq!(
-                sid.namespace(),
-                SourceKind::LOCAL,
-                "namespace 应为本 store 的 source"
-            );
-        }
+        assert_eq!(
+            g.entries, entries,
+            "mixed-source relation 应完整 round-trip"
+        );
         Ok(())
     }
 
@@ -1039,8 +1094,8 @@ mod tests {
             Some("v1"),
             Some(100),
             &[
-                SongId::new(SourceKind::NETEASE, "a"),
-                SongId::new(SourceKind::NETEASE, "b"),
+                cached(0, SourceKind::NETEASE, "a"),
+                cached(1, SourceKind::NETEASE, "b"),
             ],
         )
         .await?;
@@ -1048,14 +1103,18 @@ mod tests {
             &pid,
             Some("v2"),
             Some(200),
-            &[SongId::new(SourceKind::NETEASE, "c")],
+            &[cached(5, SourceKind::BILIBILI, "c")],
         )
         .await?; // 覆盖
         let got = s.get_playlist_cache(&pid).await?;
         assert!(got.is_some());
         if let Some(g) = got {
             assert_eq!(g.name, Some("v2".to_owned()));
-            assert_eq!(g.track_values, vec![SongId::new(SourceKind::NETEASE, "c")]); // 旧 a,b 不残留
+            assert_eq!(
+                g.entries,
+                vec![cached(5, SourceKind::BILIBILI, "c")],
+                "旧 a,b 不残留，explicit index/source 保留"
+            );
             assert_eq!(g.track_update_time, Some(200)); // 版本戳也被覆盖刷新
         }
         Ok(())

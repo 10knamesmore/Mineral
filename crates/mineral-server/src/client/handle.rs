@@ -4,8 +4,8 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, Event, PlayerSync, PlayerVersions,
-    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
+    CancelFilter, DownloadProgress, DownloadTarget, Event, PlayQueueError, PlayerSync,
+    PlayerVersions, QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 
@@ -465,15 +465,28 @@ impl Client for ClientHandle {
             mineral_stats::Actor::User,
         );
     }
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire) {
-        let count = i64::try_from(queue.len()).unwrap_or(i64::MAX);
-        self.player
-            .set_queue(queue, &target_id, queue_context_from_wire(context));
+    fn play_queue(
+        &self,
+        songs: Vec<Song>,
+        target: usize,
+        context: QueueContextWire,
+    ) -> Result<(), PlayQueueError> {
+        let count = i64::try_from(songs.len()).unwrap_or(i64::MAX);
+        let song = self
+            .player
+            .replace_queue(songs, target, queue_context_from_wire(context))?;
+        self.player.settle_interrupted();
+        self.player.play_song(
+            &song,
+            mineral_stats::PlayOrigin::Explicit,
+            mineral_stats::Actor::User,
+        );
         self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
             op: mineral_stats::QueueOp::Set,
             song: None,
             count,
         });
+        Ok(())
     }
     fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
         let id = song.id.clone();

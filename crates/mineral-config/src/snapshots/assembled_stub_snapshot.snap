@@ -93,6 +93,9 @@ expression: "super::meta_config_lua()"
 ---歌单内光标位置记忆的生效档位。
 ---@alias mineral.TrackPosMemory "off"|"session"|"persist"
 
+---Library 过滤态起播时建立播放队列的范围。
+---@alias mineral.FilterPlayScope "collection"|"matches"
+
 ---封面终端图协议选择。不依赖渲染 crate;接线处映射到 ratatui-image 的协议类型。
 ---@alias mineral.CoverProtocolMode "auto"|"halfblocks"|"kitty"|"sixel"|"iterm2"
 
@@ -147,7 +150,7 @@ expression: "super::meta_config_lua()"
 ---@class mineral.TuiConfig
 ---@field theme? mineral.ThemeConfig 主题色板段(14 token + 3 roles)。
 ---@field keys? mineral.KeysConfig 键位重映射段(动作 → 键)。
----@field behavior? mineral.BehaviorConfig 交互手感段(音量/seek 步长、列表跳行、daemon 续命开关)。
+---@field behavior? mineral.BehaviorConfig 交互手感段(音量/seek 步长、列表跳行、过滤起播范围、daemon 续命开关)。
 ---@field spectrum? mineral.SpectrumConfig 频谱面板段(观感开关 + 平滑/衰减 + peak 物理)。
 ---@field waveform? mineral.WaveformConfig 进度条波形段(振幅波形开关 + 封面取色开关)。
 ---@field cover? mineral.CoverConfig 封面段(抓取/缓存/并发 + kmeans 取色)。
@@ -264,6 +267,7 @@ expression: "super::meta_config_lua()"
 ---@field search_prefetch_rows? integer 搜索结果列懒分页预取触发半径:光标进入距已加载结果末行此行数内、且该 (源,kind) 桶 未榨干时,自动派发下一页搜索任务。越大越早预取(滚动越顺滑、请求越靠前)。
 ---@field kill_spawned_daemon_on_exit? boolean TUI 退出时是否杀掉自己拉起的 daemon;`false` = 续命后台播放,下次启动自动接回。 只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀。
 ---@field remember_track_pos? mineral.TrackPosMemory 歌单内光标位置记忆档:退出曲目列表时记住位置,下次进入恢复。 搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置。
+---@field filter_play_scope? mineral.FilterPlayScope Library 过滤态起播时提交完整 collection，还是只提交当前匹配项。
 
 ---频谱面板配置。
 ---@class mineral.SpectrumConfig

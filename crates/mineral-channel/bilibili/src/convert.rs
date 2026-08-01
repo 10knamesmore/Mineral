@@ -4,8 +4,8 @@
 //! `{bvid}:{page}` 形态(全局唯一;裸值喂后端时按 `:` 拆回 bvid + 分 P 号)。
 
 use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, AudioFormat, BitRate, MediaUrl, PlayUrl,
-    Playlist, PlaylistId, Song, SongId, SourceKind, StreamLayout,
+    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
+    MediaUrl, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind, StreamLayout,
 };
 
 use crate::wire::fav::{FavFolder, FavInfo, FavMedia};
@@ -182,7 +182,7 @@ pub(crate) fn view_to_album(info: VideoInfo) -> Album {
         .description(desc.unwrap_or_default())
         .publish_time_ms(pubdate.map(|s| s.saturating_mul(1000)).unwrap_or(0))
         .cover_url(cover)
-        .songs(songs)
+        .tracks(AlbumTrack::enumerate(songs))
         .build()
 }
 
@@ -351,7 +351,7 @@ pub(crate) fn fav_list_to_playlist(fid: &str, info: FavInfo, songs: Vec<Song>) -
         .description(info.intro.unwrap_or_default())
         .cover_url(info.cover.as_deref().and_then(cover_media_url))
         .track_count(track_count)
-        .songs(songs)
+        .entries(PlaylistEntry::enumerate(songs))
         .build()
 }
 
@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(album.description, "视频简介");
         assert_eq!(album.cover_url, MediaUrl::remote("https://x.jpg").ok());
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
-        assert!(album.songs.is_empty(), "搜索结果只给元信息,曲目走详情");
+        assert!(album.tracks.is_empty(), "搜索结果只给元信息,曲目走详情");
         let artist = album
             .artists
             .first()
@@ -544,15 +544,19 @@ mod tests {
         let album = view_to_album(info);
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
         assert_eq!(album.track_count, Some(2));
-        assert_eq!(album.songs.len(), 2);
-        let s0 = album
-            .songs
+        assert_eq!(album.tracks.len(), 2);
+        let track0 = album
+            .tracks
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有首曲"))?;
-        let s1 = album
-            .songs
+        let track1 = album
+            .tracks
             .get(1)
             .ok_or_else(|| color_eyre::eyre::eyre!("应有次曲"))?;
+        assert_eq!(track0.index.get(), 0);
+        assert_eq!(track1.index.get(), 1);
+        let s0 = &track0.song;
+        let s1 = &track1.song;
         assert_eq!(s0.id, SongId::new(SourceKind::BILIBILI, "BV1xx:1"));
         assert_eq!(s1.id, SongId::new(SourceKind::BILIBILI, "BV1xx:2"));
         assert_eq!(s0.name, "第一话");
@@ -574,11 +578,12 @@ mod tests {
         });
         let info: VideoInfo = from_value(raw)?;
         let album = view_to_album(info);
-        assert_eq!(album.songs.len(), 1);
-        let s = album
-            .songs
+        assert_eq!(album.tracks.len(), 1);
+        let s = &album
+            .tracks
             .first()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有单曲"))?;
+            .ok_or_else(|| color_eyre::eyre::eyre!("应有单曲"))?
+            .song;
         assert_eq!(s.id, SongId::new(SourceKind::BILIBILI, "BV1yy:1"));
         assert_eq!(s.name, "单P视频");
         assert_eq!(s.duration_ms, Some(100_000));
@@ -685,6 +690,15 @@ mod tests {
         assert_eq!(
             playlist.track_count, 2,
             "1 个收藏条目展开成 2 曲,计数随曲目"
+        );
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|entry| entry.index.get())
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "multi-page expansion 全部完成后才按最终 Song projection 编号"
         );
         Ok(())
     }
@@ -798,7 +812,7 @@ mod tests {
             album.track_count, None,
             "列表页不知 P 数(未知非 0),详情再补"
         );
-        assert!(album.songs.is_empty());
+        assert!(album.tracks.is_empty());
         let artist = album
             .artists
             .first()

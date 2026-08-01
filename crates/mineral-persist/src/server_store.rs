@@ -5,7 +5,7 @@ use std::sync::Arc;
 use color_eyre::eyre::WrapErr;
 use mineral_log::{info, warn};
 use mineral_model::{Song, SongId, SourceKind};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sqlx::SqlitePool;
 
 use crate::CacheIndex;
@@ -28,7 +28,7 @@ pub struct PlaylistCacheStats {
     /// `playlist_cache` 行数(缓存的歌单数)。
     pub playlists: u64,
 
-    /// `playlist_tracks` 行数(总曲目行数)。
+    /// `playlist_entries` 行数(总曲目 relation 数)。
     pub tracks: u64,
 }
 
@@ -118,7 +118,7 @@ impl ServerStore {
         }
     }
 
-    /// 全部源的 loved 歌曲(join meta 重建),按 `loved_at` 降序(最新收藏在顶),
+    /// 全部源的 loved 歌曲(join meta 重建),按 `entered_at` 降序(最新收藏在顶),
     /// 同毫秒收藏以 `(namespace, song_value)` 破平局,顺序稳定不随库文件重排。
     ///
     /// loved 但缺 meta 的行**跳过**——聚合视图与其曲目计数保持同口径,不出现「有行但
@@ -134,10 +134,9 @@ impl ServerStore {
         let meta_rows = sqlx::query_as::<_, SongMetaRow>(
             "SELECT m.namespace, m.song_value, m.name, m.alias, m.album_id, m.album_name, \
              m.duration_ms, m.cover_url \
-             FROM song_stats st \
-             JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
-             WHERE st.loved_at IS NOT NULL \
-             ORDER BY st.loved_at DESC, st.namespace, st.song_value",
+             FROM song_favorites f \
+             JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value \
+             ORDER BY f.entered_at DESC, f.namespace, f.song_value",
         )
         .fetch_all(pool)
         .await
@@ -145,9 +144,8 @@ impl ServerStore {
 
         let artist_rows: Vec<(String, String, String, String)> = sqlx::query_as(
             "SELECT a.namespace, a.song_value, a.artist_id, a.artist_name \
-             FROM song_stats st \
-             JOIN song_artists a ON a.namespace = st.namespace AND a.song_value = st.song_value \
-             WHERE st.loved_at IS NOT NULL \
+             FROM song_favorites f \
+             JOIN song_artists a ON a.namespace = f.namespace AND a.song_value = f.song_value \
              ORDER BY a.position",
         )
         .fetch_all(pool)
@@ -184,9 +182,8 @@ impl ServerStore {
             return Ok(0);
         };
         let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM song_stats st \
-             JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
-             WHERE st.loved_at IS NOT NULL",
+            "SELECT COUNT(*) FROM song_favorites f \
+             JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value",
         )
         .fetch_one(pool)
         .await
@@ -205,9 +202,9 @@ impl ServerStore {
             return Ok(Vec::new());
         };
         let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT st.namespace, st.song_value FROM song_stats st \
-             LEFT JOIN song_meta m ON m.namespace = st.namespace AND m.song_value = st.song_value \
-             WHERE st.loved_at IS NOT NULL AND m.song_value IS NULL",
+            "SELECT f.namespace, f.song_value FROM song_favorites f \
+             LEFT JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value \
+             WHERE m.song_value IS NULL",
         )
         .fetch_all(pool)
         .await
@@ -218,10 +215,69 @@ impl ServerStore {
             .collect())
     }
 
+    /// 把 remote membership snapshot 中尚未存在的 Song 作为同一 import batch 加入 Favorites。
+    ///
+    /// 整批只读取一次 `entered_at`；既有 membership 按 conflict no-op，不更新时间。返回顺序按
+    /// `(namespace, song_value)` 固定，与输入 HashSet iteration 无关。
+    ///
+    /// # Params:
+    ///   - `ids`: remote snapshot 中的全量 favorite SongId
+    ///
+    /// # Return:
+    ///   本次实际新插入的 SongId；降级句柄返回空。
+    pub async fn import_favorites(
+        &self,
+        ids: &FxHashSet<SongId>,
+    ) -> color_eyre::Result<Vec<SongId>> {
+        let Some(pool) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        let mut ordered = ids.iter().cloned().collect::<Vec<SongId>>();
+        ordered.sort_by(|left, right| {
+            left.namespace()
+                .name()
+                .cmp(right.namespace().name())
+                .then_with(|| left.value().cmp(right.value()))
+        });
+        let mut tx = pool
+            .begin()
+            .await
+            .wrap_err("开启 Favorites import 事务失败")?;
+        let (latest,): (Option<i64>,) =
+            sqlx::query_as("SELECT MAX(entered_at) FROM song_favorites")
+                .fetch_one(&mut *tx)
+                .await
+                .wrap_err("读取 Favorites 最新进入时间失败")?;
+        let now = crate::db::time::now_ms();
+        let entered_at = latest
+            .map(|value| value.saturating_add(1))
+            .map_or(now, |next| next.max(now));
+        let mut inserted = Vec::<SongId>::new();
+        for id in ordered {
+            let result = sqlx::query(
+                "INSERT INTO song_favorites(namespace,song_value,entered_at) VALUES(?,?,?) \
+                 ON CONFLICT(namespace,song_value) DO NOTHING",
+            )
+            .bind(id.namespace().name())
+            .bind(id.value())
+            .bind(entered_at)
+            .execute(&mut *tx)
+            .await
+            .wrap_err_with(|| format!("导入 favorite 失败 song={}", id.qualified()))?;
+            if result.rows_affected() > 0 {
+                inserted.push(id);
+            }
+        }
+        tx.commit()
+            .await
+            .wrap_err("提交 Favorites import 事务失败")?;
+        Ok(inserted)
+    }
+
     /// 歌单缓存计数(只读)。供 CLI `cache status` 展示用。
     ///
     /// # Return:
-    ///   启用态返回 `playlist_cache` / `playlist_tracks` 行数;降级句柄返回全 0。
+    ///   启用态返回 `playlist_cache` / `playlist_entries` 行数;降级句柄返回全 0。
     pub async fn playlist_cache_stats(&self) -> color_eyre::Result<PlaylistCacheStats> {
         let Some(pool) = self.pool() else {
             return Ok(PlaylistCacheStats {
@@ -233,23 +289,23 @@ impl ServerStore {
             .fetch_one(pool)
             .await
             .wrap_err("统计 playlist_cache 行数失败")?;
-        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_tracks")
+        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_entries")
             .fetch_one(pool)
             .await
-            .wrap_err("统计 playlist_tracks 行数失败")?;
+            .wrap_err("统计 playlist_entries 行数失败")?;
         Ok(PlaylistCacheStats {
             playlists: u64::try_from(playlists).unwrap_or(0),
             tracks: u64::try_from(tracks).unwrap_or(0),
         })
     }
 
-    /// 清空歌单缓存(`playlist_cache` + `playlist_tracks` 全部来源)。
+    /// 清空歌单缓存(`playlist_cache` + `playlist_entries` 全部来源)。
     ///
     /// 只清可重建的歌单缓存，**不动**播放统计 / love / 历史 / 会话 / song_meta。
     /// 降级句柄下 no-op。
     ///
     /// # Return:
-    ///   清理成功返回被清掉的计数(清理前 `playlist_cache` / `playlist_tracks` 行数);降级返回全 0。
+    ///   清理成功返回被清掉的计数(清理前 `playlist_cache` / `playlist_entries` 行数);降级返回全 0。
     pub async fn clear_playlist_caches(&self) -> color_eyre::Result<PlaylistCacheStats> {
         let Some(pool) = self.pool() else {
             return Ok(PlaylistCacheStats {
@@ -268,14 +324,14 @@ impl ServerStore {
             .fetch_one(&mut *tx)
             .await
             .wrap_err("统计 playlist_cache 行数失败")?;
-        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_tracks")
+        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_entries")
             .fetch_one(&mut *tx)
             .await
-            .wrap_err("统计 playlist_tracks 行数失败")?;
-        sqlx::query("DELETE FROM playlist_tracks")
+            .wrap_err("统计 playlist_entries 行数失败")?;
+        sqlx::query("DELETE FROM playlist_entries")
             .execute(&mut *tx)
             .await
-            .wrap_err("清空 playlist_tracks 失败")?;
+            .wrap_err("清空 playlist_entries 失败")?;
         sqlx::query("DELETE FROM playlist_cache")
             .execute(&mut *tx)
             .await
@@ -307,7 +363,7 @@ mod tests {
         assert!(ServerStore::disabled().pool().is_none());
     }
 
-    /// 跨源聚合:两源各一首 loved(带 meta)按 loved_at 降序返回;
+    /// 跨源聚合:两源各一首 loved(带 meta)按 entered_at 降序返回;
     /// 无 meta 的 loved 跳过;未 loved 的 meta 不出现。
     #[tokio::test]
     async fn loved_songs_aggregates_across_namespaces() -> color_eyre::Result<()> {
@@ -319,7 +375,7 @@ mod tests {
         let netease = p.scope(SourceKind::NETEASE);
         let bilibili = p.scope(SourceKind::BILIBILI);
 
-        // netease:较早收藏;bilibili:较晚收藏(手动定 loved_at,免同毫秒排序不稳)。
+        // netease:较早收藏;bilibili:较晚收藏(手动定 entered_at,免同毫秒排序不稳)。
         let n1 = with_artist(with_name(song("n1"), "Palisade"), "Mineral");
         netease.upsert_meta(&n1).await?;
         netease.set_loved(&n1.id, true).await?;
@@ -342,10 +398,10 @@ mod tests {
         let pool = p
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        sqlx::query("UPDATE song_stats SET loved_at = 100 WHERE song_value = 'n1'")
+        sqlx::query("UPDATE song_favorites SET entered_at = 100 WHERE song_value = 'n1'")
             .execute(pool)
             .await?;
-        sqlx::query("UPDATE song_stats SET loved_at = 200 WHERE song_value = 'b1'")
+        sqlx::query("UPDATE song_favorites SET entered_at = 200 WHERE song_value = 'b1'")
             .execute(pool)
             .await?;
 
@@ -354,7 +410,7 @@ mod tests {
         assert_eq!(
             names,
             vec!["夜間飛行", "Palisade"],
-            "按 loved_at 降序,缺 meta 的 ghost 跳过,未 loved 的不出现"
+            "按 entered_at 降序,缺 meta 的 ghost 跳过,未 loved 的不出现"
         );
         let first = songs
             .first()
@@ -430,7 +486,7 @@ mod tests {
         let pool = p
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        sqlx::query("UPDATE song_stats SET loved_at = 500")
+        sqlx::query("UPDATE song_favorites SET entered_at = 500")
             .execute(pool)
             .await?;
 
@@ -439,7 +495,149 @@ mod tests {
         assert_eq!(
             names,
             vec!["Alpha", "Beta"],
-            "同 loved_at 下按 song_value 升序(aaa 在 bbb 前),与插入序无关"
+            "同 entered_at 下按 song_value 升序(aaa 在 bbb 前),与插入序无关"
+        );
+        Ok(())
+    }
+
+    /// Remote import 一批共用 entered_at、按 id 稳定返回；重复 snapshot 是完整 no-op，
+    /// 后续新增 batch 排在旧 batch 前。
+    #[tokio::test]
+    async fn import_favorites_is_stable_idempotent_and_newest_first() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+        use mineral_test::{song, with_name};
+        use rustc_hash::FxHashSet;
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let netease = p.scope(SourceKind::NETEASE);
+        let bilibili = p.scope(SourceKind::BILIBILI);
+        let n = with_name(song("n"), "N");
+        netease.upsert_meta(&n).await?;
+        let mut b = with_name(song("b"), "B");
+        b.id = SongId::new(SourceKind::BILIBILI, "b");
+        bilibili.upsert_meta(&b).await?;
+
+        let first = FxHashSet::from_iter([n.id.clone(), b.id.clone()]);
+        assert_eq!(
+            p.import_favorites(&first).await?,
+            vec![b.id.clone(), n.id.clone()],
+            "返回顺序由 namespace/value 决定，不依赖 HashSet iteration"
+        );
+        assert!(
+            p.import_favorites(&first).await?.is_empty(),
+            "相同 snapshot 第二次应零 insert"
+        );
+        let pool = p
+            .pool()
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
+        let (distinct_times,): (i64,) =
+            sqlx::query_as("SELECT COUNT(DISTINCT entered_at) FROM song_favorites")
+                .fetch_one(pool)
+                .await?;
+        assert_eq!(distinct_times, 1, "同一 batch 必须共用 entered_at");
+
+        let newer = with_name(song("new"), "New");
+        netease.upsert_meta(&newer).await?;
+        let second = FxHashSet::from_iter([n.id.clone(), b.id.clone(), newer.id.clone()]);
+        assert_eq!(p.import_favorites(&second).await?, vec![newer.id]);
+        assert_eq!(
+            p.loved_songs()
+                .await?
+                .into_iter()
+                .map(|song| song.name)
+                .collect::<Vec<String>>(),
+            vec!["New".to_owned(), "B".to_owned(), "N".to_owned()],
+            "新 batch 应整体位于旧 batch 前，旧 membership 不重排"
+        );
+        Ok(())
+    }
+
+    /// 用户取消后重新收藏会取得新 entered_at 并回到顶部；同状态 set 不移动。
+    #[tokio::test]
+    async fn relove_returns_to_top_without_same_state_reorder() -> color_eyre::Result<()> {
+        use mineral_model::SourceKind;
+        use mineral_test::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let p = ServerStore::open(&dir.path().join("t.db")).await?;
+        let scope = p.scope(SourceKind::NETEASE);
+        let a = with_name(song("a"), "A");
+        let b = with_name(song("b"), "B");
+        scope.upsert_meta(&a).await?;
+        scope.upsert_meta(&b).await?;
+        assert!(scope.set_loved(&a.id, true).await?);
+        assert!(scope.set_loved(&b.id, true).await?);
+        assert!(
+            !scope.set_loved(&a.id, true).await?,
+            "true -> true 不应移动 A"
+        );
+        assert_eq!(
+            p.loved_songs()
+                .await?
+                .into_iter()
+                .map(|song| song.name)
+                .collect::<Vec<String>>(),
+            vec!["B".to_owned(), "A".to_owned()]
+        );
+        assert!(scope.set_loved(&a.id, false).await?);
+        assert!(scope.set_loved(&a.id, true).await?);
+        assert_eq!(
+            p.loved_songs()
+                .await?
+                .into_iter()
+                .map(|song| song.name)
+                .collect::<Vec<String>>(),
+            vec!["A".to_owned(), "B".to_owned()]
+        );
+        Ok(())
+    }
+
+    /// Metadata backfill 只让既有 favorite membership 变得可见，不更新时间也不把它冒充新收藏。
+    #[tokio::test]
+    async fn metadata_backfill_preserves_favorite_order() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+        use mineral_test::{song, with_name};
+
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+        let scope = persist.scope(SourceKind::NETEASE);
+        let old_id = SongId::new(SourceKind::NETEASE, "old-missing-meta");
+        assert!(scope.set_loved(&old_id, true).await?);
+        let newer = with_name(song("new-visible"), "New");
+        scope.upsert_meta(&newer).await?;
+        assert!(scope.set_loved(&newer.id, true).await?);
+        let pool = persist
+            .pool()
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
+        let before: (i64,) = sqlx::query_as(
+            "SELECT entered_at FROM song_favorites WHERE namespace=? AND song_value=?",
+        )
+        .bind(SourceKind::NETEASE.name())
+        .bind(old_id.value())
+        .fetch_one(pool)
+        .await?;
+
+        let old_meta = with_name(song("old-missing-meta"), "Old");
+        scope.upsert_meta(&old_meta).await?;
+
+        let after: (i64,) = sqlx::query_as(
+            "SELECT entered_at FROM song_favorites WHERE namespace=? AND song_value=?",
+        )
+        .bind(SourceKind::NETEASE.name())
+        .bind(old_id.value())
+        .fetch_one(pool)
+        .await?;
+        assert_eq!(after, before, "backfill 不得改 entered_at");
+        assert_eq!(
+            persist
+                .loved_songs()
+                .await?
+                .into_iter()
+                .map(|song| song.name)
+                .collect::<Vec<_>>(),
+            vec!["New".to_owned(), "Old".to_owned()],
+            "旧 membership 补齐 metadata 后按既有 entered_at 插回原位置"
         );
         Ok(())
     }
@@ -479,15 +677,25 @@ mod tests {
 
     #[tokio::test]
     async fn clear_playlist_caches_keeps_user_data() -> color_eyre::Result<()> {
-        use mineral_model::{PlaylistId, SongId, SourceKind};
+        use mineral_model::{CollectionIndex, PlaylistId, SongId, SourceKind};
+
+        use crate::CachedPlaylistEntry;
         let dir = tempfile::tempdir()?;
         let p = ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
         // 写入：歌单缓存(应被清) + 播放统计/love(应保留)
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         let song = SongId::new(SourceKind::NETEASE, "s1");
-        s.put_playlist_cache(&pid, Some("歌单"), Some(1), std::slice::from_ref(&song))
-            .await?;
+        s.put_playlist_cache(
+            &pid,
+            Some("歌单"),
+            Some(1),
+            &[CachedPlaylistEntry {
+                index: CollectionIndex::new(0),
+                song_id: song.clone(),
+            }],
+        )
+        .await?;
         s.record_play(&song, 1000).await?;
         s.set_loved(&song, true).await?;
 

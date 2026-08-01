@@ -197,42 +197,143 @@ fn mode_change_without_queue_mutation_does_not_bump() {
     assert_eq!(st.queue_version, v0);
 }
 
-/// set_queue(两种模式)必须推进 queue_version。
+/// replace_queue(两种模式)必须推进 queue_version。
 #[tokio::test]
-async fn set_queue_bumps_queue_version() -> color_eyre::Result<()> {
+async fn replace_queue_bumps_queue_version() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     let v0 = core.sync(PlayerVersions::default()).versions.queue;
-    core.set_queue(
+    core.replace_queue(
         vec![song("a"), song("b")],
-        &SongId::new(SourceKind::NETEASE, "a"),
+        0,
         mineral_stats::QueueContext::Unknown,
-    );
+    )?;
     let v1 = core.sync(PlayerVersions::default()).versions.queue;
-    assert_eq!(v1, v0 + 1, "顺序模式 set_queue 应 bump");
+    assert_eq!(v1, v0 + 1, "顺序模式 replace_queue 应 bump");
 
     core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User); // 进 Shuffle 本身也 bump 一次
     let v2 = core.sync(PlayerVersions::default()).versions.queue;
-    core.set_queue(
+    core.replace_queue(
         vec![song("c"), song("d")],
-        &SongId::new(SourceKind::NETEASE, "c"),
+        0,
         mineral_stats::QueueContext::Unknown,
-    );
+    )?;
     let v3 = core.sync(PlayerVersions::default()).versions.queue;
-    assert_eq!(v3, v2 + 1, "Shuffle 模式 set_queue 应 bump");
+    assert_eq!(v3, v2 + 1, "Shuffle 模式 replace_queue 应 bump");
     Ok(())
 }
 
-/// set_queue 硬上限:超长队列替换截断到 QUEUE_CAP(实际入队上限,非仅显示钳)。
+/// 超长 atomic replace 整体拒绝，不 truncate，也不修改已有 queue。
 #[tokio::test]
-async fn set_queue_truncates_to_cap() -> color_eyre::Result<()> {
+async fn replace_queue_rejects_over_cap_atomically() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     let cap = crate::queue::QUEUE_CAP;
     let over = (0..(cap + 5))
         .map(|i| song(&i.to_string()))
         .collect::<Vec<_>>();
-    core.set_queue(over, &song("0").id, mineral_stats::QueueContext::Unknown);
-    let len = core.inner.state.lock().queue.len();
-    assert_eq!(len, cap, "超长队列替换应截断到 QUEUE_CAP");
+    core.replace_queue(
+        vec![song("existing")],
+        0,
+        mineral_stats::QueueContext::Unknown,
+    )?;
+    let error = core
+        .replace_queue(over, 0, mineral_stats::QueueContext::Manual)
+        .err()
+        .ok_or_else(|| color_eyre::eyre::eyre!("超 cap 应拒绝"))?;
+    assert_eq!(
+        error,
+        mineral_protocol::PlayQueueError::CapacityExceeded { len: cap + 5, cap }
+    );
+    let ids = core.with_state(|state| {
+        state
+            .queue
+            .iter()
+            .map(|song| song.id.value().to_owned())
+            .collect::<Vec<String>>()
+    });
+    assert_eq!(ids, vec!["existing".to_owned()], "非法请求后原 queue 不变");
+    Ok(())
+}
+
+/// Empty 与越界 target 均 structured reject，且不会改已有 queue/context/cursor。
+#[tokio::test]
+async fn replace_queue_rejects_empty_and_invalid_target_atomically() -> color_eyre::Result<()> {
+    let core = core_with(Arc::default())?;
+    core.replace_queue(
+        vec![song("existing")],
+        0,
+        mineral_stats::QueueContext::Manual,
+    )?;
+    assert_eq!(
+        core.replace_queue(Vec::new(), 0, mineral_stats::QueueContext::Unknown),
+        Err(mineral_protocol::PlayQueueError::Empty)
+    );
+    assert_eq!(
+        core.replace_queue(vec![song("new")], 1, mineral_stats::QueueContext::Unknown,),
+        Err(mineral_protocol::PlayQueueError::TargetOutOfBounds { target: 1, len: 1 })
+    );
+    core.with_state(|state| {
+        assert_eq!(state.cursor, PlayCursor::InQueue(0));
+        assert_eq!(
+            state.queue.first().map(|song| song.id.value()),
+            Some("existing")
+        );
+        assert!(matches!(
+            state.queue_context,
+            mineral_stats::QueueContext::Manual
+        ));
+    });
+    Ok(())
+}
+
+/// Duplicate SongId 仍按 request-local target occurrence 起播，不吸附到 first match。
+#[tokio::test]
+async fn replace_queue_selects_exact_duplicate_occurrence() -> color_eyre::Result<()> {
+    let core = core_with(Arc::default())?;
+    let mut first = song("duplicate");
+    first.name = "first".to_owned();
+    let mut second = song("duplicate");
+    second.name = "second".to_owned();
+    let selected =
+        core.replace_queue(vec![first, second], 1, mineral_stats::QueueContext::Unknown)?;
+    assert_eq!(selected.name, "second");
+    core.with_state(|state| {
+        assert_eq!(state.cursor, PlayCursor::InQueue(1));
+        assert_eq!(
+            state.queue.get(1).map(|song| song.name.as_str()),
+            Some("second")
+        );
+    });
+    Ok(())
+}
+
+/// Shuffle 先摘出 exact target occurrence，再洗其余项并把 target 放到 queue[0]。
+#[tokio::test]
+async fn replace_queue_shuffle_keeps_exact_target_occurrence() -> color_eyre::Result<()> {
+    let core = core_with(Arc::default())?;
+    core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User);
+    let mut first = song("duplicate");
+    first.name = "first".to_owned();
+    let mut second = song("duplicate");
+    second.name = "second".to_owned();
+    let selected =
+        core.replace_queue(vec![first, second], 1, mineral_stats::QueueContext::Unknown)?;
+    assert_eq!(selected.name, "second");
+    core.with_state(|state| {
+        assert_eq!(state.cursor, PlayCursor::InQueue(0));
+        assert_eq!(
+            state.queue.first().map(|song| song.name.as_str()),
+            Some("second")
+        );
+        assert_eq!(
+            state
+                .original_queue
+                .as_ref()
+                .and_then(|queue| queue.get(1))
+                .map(|song| song.name.as_str()),
+            Some("second"),
+            "original_queue 保留提交顺序"
+        );
+    });
     Ok(())
 }
 
@@ -443,22 +544,22 @@ fn play_mode_str_is_debug_name() {
     assert_eq!(PlayMode::RepeatOne.name(), "RepeatOne");
 }
 
-/// set_queue 把队列语境存进 State,供起播时继承进 plays 的 context 列(§4 provenance)。
+/// replace_queue 把队列语境存进 State,供起播时继承进 plays 的 context 列。
 #[tokio::test]
-async fn set_queue_stores_context() -> color_eyre::Result<()> {
+async fn replace_queue_stores_context() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
     let id = mineral_model::PlaylistId::new(SourceKind::NETEASE, "42");
-    core.set_queue(
+    core.replace_queue(
         vec![song("a")],
-        &song("a").id,
+        0,
         mineral_stats::QueueContext::Playlist {
             id: id.clone(),
             name: None,
         },
-    );
+    )?;
     let matched = core.with_state(|st| {
         matches!(&st.queue_context, mineral_stats::QueueContext::Playlist { id: got, .. } if *got == id)
     });
-    assert!(matched, "set_queue 应把 Playlist 语境存进 State");
+    assert!(matched, "replace_queue 应把 Playlist 语境存进 State");
     Ok(())
 }

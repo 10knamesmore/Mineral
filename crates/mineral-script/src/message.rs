@@ -4,7 +4,7 @@
 //! [`ScriptCmd`] 是脚本 → daemon(Lua API 发出的播放器命令)。两侧都是
 //! **结构化** Rust 类型,Lua 字符串只出现在 VM 边界的适配层(`api` 模块)。
 
-use mineral_model::{Song, SongId};
+use mineral_model::{PlaylistEntry, Song, SongId};
 use mineral_protocol::PlayMode;
 
 /// daemon 投递给脚本线程的事件。携带 daemon 侧已有的完整模型
@@ -269,7 +269,7 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
-    /// 读指定歌单的曲目;结果以 [`ResolveValue::Songs`] 回投 `query`。
+    /// 读指定歌单的 membership relation;结果以 [`ResolveValue::PlaylistEntries`] 回投 `query`。
     LibraryTracks {
         /// 目标歌单。
         playlist: mineral_model::PlaylistId,
@@ -378,8 +378,11 @@ pub enum ResolveValue {
     /// per-song 持久值(`store.get` / `store.inc`)。
     Store(mineral_protocol::StoreValue),
 
-    /// 歌曲列表(`queue.list` / `library.tracks`),按序投影成 Lua 数组。
+    /// 无 collection membership 的歌曲列表(`queue.list` / `library.search`)。
     Songs(Vec<Song>),
+
+    /// Playlist membership 列表(`library.tracks`)，每项保留 0-based canonical index。
+    PlaylistEntries(Vec<PlaylistEntry>),
 
     /// 歌单列表(`library.playlists`)。
     Playlists(Vec<PlaylistBrief>),

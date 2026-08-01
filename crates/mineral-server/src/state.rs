@@ -34,7 +34,7 @@ pub(crate) struct State {
     /// 当前在播音频的来源(下载 / 缓存 / 远端);切歌时由 `play_song` 写入。
     pub(crate) play_origin: Option<PlaybackOrigin>,
 
-    /// 当前队列的语境(来自搜索 / 歌单 / 专辑 / 艺人 / 手动;`set_queue` 时写入)。
+    /// 当前队列的语境(来自搜索 / 歌单 / 专辑 / 艺人 / 手动;atomic `play_queue` 时写入)。
     /// 埋点 provenance:随该队列每个起播继承进 plays 的 context 列。
     pub(crate) queue_context: mineral_stats::QueueContext,
 

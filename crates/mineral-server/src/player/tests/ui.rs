@@ -396,11 +396,11 @@ fn terminal_states_last_wins_and_fallback() {
 #[tokio::test]
 async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
-    core.set_queue(
+    core.replace_queue(
         vec![song("a"), song("b")],
-        &SongId::new(SourceKind::NETEASE, "a"),
+        0,
         mineral_stats::QueueContext::Unknown,
-    );
+    )?;
     core.queue_insert_next(song("c"), mineral_stats::QueueContext::Manual);
     core.queue_append(song("d"), mineral_stats::QueueContext::Manual);
     {

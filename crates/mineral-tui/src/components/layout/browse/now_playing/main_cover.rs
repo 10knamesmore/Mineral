@@ -40,7 +40,7 @@ pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
         View::Library => state
             .filtered_tracks()
             .get(state.browse.nav.track.sel())
-            .and_then(|sv| sv.data.cover_url.clone()),
+            .and_then(|entry| entry.data.song.cover_url.clone()),
     }
 }
 

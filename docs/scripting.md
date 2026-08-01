@@ -233,7 +233,9 @@ mineral.player.play("netease:123")
 mineral.queue.list(function(songs, err) ... end)           -- 当前队列(只读)
 mineral.queue.set(reordered)                               -- 整表重排队列(读每项 id;须都在当前队列,外来 id 整次被拒)
 mineral.library.playlists(function(playlists, err) ... end) -- 用户歌单(跨源聚合)
-mineral.library.tracks("netease:pid", function(songs, err) ... end)
+mineral.library.tracks("netease:pid", function(entries, err)
+    -- entry = { index = 0, song = { id = "netease:123", title = "...", ... } }
+end)
 mineral.library.search("关键词", { source = "netease", limit = 10 },
     function(songs, err) ... end)                           -- opts 可省略
 mineral.library.song_url("bilibili:BV1xx:1",                 -- 解析可播 URL(按 id 的源取流)
@@ -241,6 +243,11 @@ mineral.library.song_url("bilibili:BV1xx:1",                 -- 解析可播 URL
 mineral.library.love("netease:123", true)                   -- 设 ♥(本地 + 远端)
 mineral.download("netease:123")                              -- 下载导出
 ```
+
+`library.tracks` 是 Playlist collection consumer，返回的每项都保留 model 的 0-based
+canonical `index`；即使 metadata 缺失造成 gap，也不会给后续 entry 重编号。`queue.list` 与
+`library.search` 返回的是裸 Song table，不属于 Album / Playlist membership，因此 Song table 本身
+没有 `index` 字段。
 
 ### per-song 持久 KV `mineral.store`
 

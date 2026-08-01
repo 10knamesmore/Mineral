@@ -9,7 +9,7 @@
 use mineral_model::{PlaylistId, SongId};
 use rustc_hash::FxHashMap;
 
-use crate::runtime::view_model::SongView;
+use crate::runtime::view_model::PlaylistEntryView;
 
 /// 歌单 id → 记忆位置 的内存表。
 pub type TrackPosMap = FxHashMap<PlaylistId, TrackPos>;
@@ -37,10 +37,10 @@ impl TrackPos {
     ///
     /// # Return:
     ///   恢复后的光标行下标。
-    pub fn resolve(&self, tracks: &[SongView]) -> usize {
+    pub fn resolve(&self, tracks: &[PlaylistEntryView]) -> usize {
         tracks
             .iter()
-            .position(|sv| sv.data.id == self.song_id)
+            .position(|entry| entry.data.song.id == self.song_id)
             .unwrap_or_else(|| self.index.min(tracks.len().saturating_sub(1)))
     }
 }
@@ -100,17 +100,17 @@ pub fn from_rows(rows: Vec<mineral_persist::TrackPosRow>) -> color_eyre::Result<
 mod tests {
     use mineral_model::{PlaylistId, SourceKind};
 
-    use crate::runtime::view_model::SongView;
+    use crate::runtime::view_model::PlaylistEntryView;
     use crate::test_support::song;
 
     use super::{TrackPos, TrackPosMap, from_rows, to_rows};
 
-    /// 把若干歌名包成 SongView 列表(loved / plays 取默认)。
-    fn views(names: &[&str]) -> Vec<SongView> {
-        names
-            .iter()
-            .map(|n| SongView {
-                data: song(n),
+    /// 把若干歌名包成 PlaylistEntryView 列表(loved / plays 取默认)。
+    fn views(names: &[&str]) -> Vec<PlaylistEntryView> {
+        mineral_model::PlaylistEntry::enumerate(names.iter().map(|name| song(name)).collect())
+            .into_iter()
+            .map(|data| PlaylistEntryView {
+                data,
                 loved: false,
                 plays: None,
             })

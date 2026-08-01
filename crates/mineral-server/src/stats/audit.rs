@@ -48,7 +48,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::CancelTasks(..) => Recorded("task_cancels"),
         Request::TaskSnapshot => NotAnEvent("轮询读:任务快照"),
         Request::PlaySong(..) => Recorded("plays"),
-        Request::SetQueue { .. } => Recorded("queue_ops"),
+        Request::PlayQueue { .. } => Recorded("queue_ops"),
         Request::QueueInsertNext { .. } => Recorded("queue_ops"),
         Request::QueueAppend { .. } => Recorded("queue_ops"),
         Request::QueueEdit { .. } => Recorded("queue_ops"),
@@ -156,9 +156,9 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
             "PlayerCore::record_mode_change(cycle / 直设 / 脚本共用)"
         }
         BehaviorEvent::LoveChange { .. } => {
-            "PlayerCore::record_love_change(set_favorite / toggle_favorite 共用)"
+            "PlayerCore::record_love_change(set_favorite / toggle_favorite / sync import 共用)"
         }
-        BehaviorEvent::QueueOp { .. } => "ClientHandle 的 set_queue / insert_next / append",
+        BehaviorEvent::QueueOp { .. } => "ClientHandle 的 play_queue / insert_next / append",
         BehaviorEvent::PlaylistOp { .. } => "playlist 写 task 终态(events.rs)",
         BehaviorEvent::Fetch { .. } => "channel_fetch 终态(events.rs)",
         BehaviorEvent::Download { .. } => "download.rs record_download(三种结局)",

@@ -6,13 +6,17 @@
 
 use std::sync::Arc;
 
-use mineral_model::Song;
 use mineral_protocol::{Event, TextSpan, ToastKind};
 use mlua::Lua;
 
 use crate::host::ScriptHost;
 use crate::message::{ScriptEvent, ScriptMsg};
 use crate::watchdog::{WatchdogConfig, call_guarded};
+
+mod projection;
+
+pub(crate) use projection::song_table;
+use projection::{album_table, artist_table, playlist_entry_table, playlist_table};
 
 /// 脚本错误 toast 的顶替键:连续失败替换内容续命,不在 client 端堆叠刷屏。
 const SCRIPT_ERROR_TOAST_ID: &str = "script.error";
@@ -188,6 +192,13 @@ fn resolve_query(
                 let list = lua.create_table()?;
                 for (i, song) in songs.iter().enumerate() {
                     list.set(i.wrapping_add(1), song_table(lua, song)?)?;
+                }
+                (mlua::Value::Table(list), mlua::Value::Nil)
+            }
+            ResolveValue::PlaylistEntries(entries) => {
+                let list = lua.create_table()?;
+                for (i, entry) in entries.iter().enumerate() {
+                    list.set(i.wrapping_add(1), playlist_entry_table(lua, entry)?)?;
                 }
                 (mlua::Value::Table(list), mlua::Value::Nil)
             }
@@ -533,154 +544,6 @@ fn ctx_table(
         table.set("search_query", query.clone())?;
     }
     Ok(table)
-}
-
-/// `Song` 在 Lua 侧的投影
-///
-/// id 用 `qualified()`(全局唯一,可直接回喂 `mineral.player.play`);
-/// `duration_ms` 时长未知时为 nil(脚本侧拼接 / 运算前需判空)。
-pub(crate) fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-    table.set("id", song.id.qualified())?;
-    table.set("title", song.name.clone())?;
-    table.set("duration_ms", song.duration_ms)?;
-    table.set(
-        "artists",
-        lua.create_sequence_from(song.artists.iter().map(|a| a.name.clone()))?,
-    )?;
-    // Option 字段拿不到 → 缺席(Lua 侧读出 nil)。
-    table.set("album", song.album.as_ref().map(|a| a.name.clone()))?;
-    // MediaUrl 统一投影成字符串:远端 = http(s) URL,本地 = 绝对路径。
-    table.set(
-        "cover_url",
-        song.cover_url.as_ref().map(ToString::to_string),
-    )?;
-    table.set(
-        "source_url",
-        song.source_url.as_ref().map(ToString::to_string),
-    )?;
-    table.set("source", song.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            song.source().name(),
-            /*kind*/ "song",
-            song.id.value(),
-        ),
-    )?;
-    Ok(table)
-}
-
-/// `Playlist` 在 Lua 侧的投影(复制模板 `context = "playlist"` 的实参)。
-fn playlist_table(lua: &Lua, playlist: &mineral_model::Playlist) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-    table.set("id", playlist.id.qualified())?;
-    table.set("name", playlist.name.clone())?;
-    table.set("description", playlist.description.clone())?;
-    table.set("track_count", playlist.track_count)?;
-    table.set(
-        "cover_url",
-        playlist.cover_url.as_ref().map(ToString::to_string),
-    )?;
-    table.set("source", playlist.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            playlist.source().name(),
-            /*kind*/ "playlist",
-            playlist.id.value(),
-        ),
-    )?;
-    let songs = lua.create_table()?;
-    for (i, s) in playlist.songs.iter().enumerate() {
-        songs.raw_set(i + 1, song_table(lua, s)?)?;
-    }
-    table.set("songs", songs)?;
-    Ok(table)
-}
-
-/// `Album` 在 Lua 侧的投影(复制模板 `context = "album"` 的实参)。`songs` 为已加载曲目
-/// (搜索投影常空,下钻 `album_detail` 后填充)。
-fn album_table(lua: &Lua, album: &mineral_model::Album) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-    table.set("id", album.id.qualified())?;
-    table.set("name", album.name.clone())?;
-    table.set(
-        "artists",
-        lua.create_sequence_from(album.artists.iter().map(|a| a.name.clone()))?,
-    )?;
-    table.set("description", album.description.clone())?;
-    table.set("track_count", album.track_count)?;
-    table.set(
-        "cover_url",
-        album.cover_url.as_ref().map(ToString::to_string),
-    )?;
-    table.set("source", album.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            album.source().name(),
-            /*kind*/ "album",
-            album.id.value(),
-        ),
-    )?;
-    let songs = lua.create_table()?;
-    for (i, s) in album.songs.iter().enumerate() {
-        songs.raw_set(i + 1, song_table(lua, s)?)?;
-    }
-    table.set("songs", songs)?;
-    Ok(table)
-}
-
-/// `Artist` 在 Lua 侧的投影(复制模板 `context = "artist"` 的实参)。`songs` 为代表 / 热门曲。
-fn artist_table(lua: &Lua, artist: &mineral_model::Artist) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-    table.set("id", artist.id.qualified())?;
-    table.set("name", artist.name.clone())?;
-    table.set("description", artist.description.clone())?;
-    table.set("follower_count", artist.follower_count)?;
-    table.set("album_count", artist.album_count)?;
-    table.set("song_count", artist.song_count)?;
-    table.set(
-        "avatar_url",
-        artist.avatar_url.as_ref().map(ToString::to_string),
-    )?;
-    table.set("source", artist.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            artist.source().name(),
-            /*kind*/ "artist",
-            artist.id.value(),
-        ),
-    )?;
-    let songs = lua.create_table()?;
-    for (i, s) in artist.songs.iter().enumerate() {
-        songs.raw_set(i + 1, song_table(lua, s)?)?;
-    }
-    table.set("songs", songs)?;
-    Ok(table)
-}
-
-/// 按 seed 进 registry 的源模板拼网页分享链接(占位语义——`{id}` 整段 / `{0}` 按 `:`
-/// 分段——见 [`mineral_channel_core::render_web_url`],与 TUI 复制菜单同一实现)。
-/// 未 seed / 源没有该实体的模板给 `None`(Lua 侧 `url` 为 nil)。
-///
-/// # Params:
-///   - `source`: 源名(`SourceKind::name`)
-///   - `kind`: `"song"` / `"playlist"` / `"album"` / `"artist"`(seed 表的二级键)
-///   - `raw_id`: 裸 id
-fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> {
-    let table: mlua::Table = lua
-        .named_registry_value(crate::host::WEB_URL_TEMPLATES)
-        .ok()?;
-    let entry: mlua::Table = table.get(source).ok()?;
-    let tpl: String = entry.get(kind).ok()?;
-    Some(mineral_channel_core::render_web_url(&tpl, raw_id))
 }
 
 /// 渲染一个复制模板:registry 函数表按下标取函数,实体投影成表喂入,看门狗

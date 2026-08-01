@@ -19,6 +19,8 @@ pub mod album;
 pub mod artist;
 /// 跨 channel 的归一化音质等级。
 pub mod bitrate;
+/// Album / Playlist 中 Song membership 的显式 relation。
+pub mod collection;
 /// 一首歌的全曲振幅包络(离线预计算,进度条波形渲染用)。
 pub mod envelope;
 /// 音频容器格式(边缘字符串、内部枚举)。
@@ -45,6 +47,7 @@ pub mod url;
 pub use album::Album;
 pub use artist::Artist;
 pub use bitrate::BitRate;
+pub use collection::{AlbumTrack, CollectionIndex, PlaylistEntry};
 pub use envelope::Envelope;
 pub use format::AudioFormat;
 pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};

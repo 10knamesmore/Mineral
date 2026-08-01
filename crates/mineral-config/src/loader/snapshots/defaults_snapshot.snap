@@ -618,6 +618,7 @@ Config {
             search_prefetch_rows: 8,
             kill_spawned_daemon_on_exit: true,
             remember_track_pos: Session,
+            filter_play_scope: Collection,
         },
         spectrum: SpectrumConfig {
             style: Bars,

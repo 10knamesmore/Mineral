@@ -381,14 +381,11 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.play_song(*song);
             Response::Ok
         }
-        Request::SetQueue {
-            queue,
-            target_id,
+        Request::PlayQueue {
+            songs,
+            target,
             context,
-        } => {
-            client.set_queue(queue, target_id, context);
-            Response::Ok
-        }
+        } => Response::PlayQueue(client.play_queue(songs, target, context)),
         Request::QueueInsertNext { song, context } => {
             client.queue_insert_next(*song, context);
             Response::Ok
@@ -499,7 +496,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::SubmitTask(..) => Some("SubmitTask"),
         Request::CancelTasks(_) => Some("CancelTasks"),
         Request::PlaySong(_) => Some("PlaySong"),
-        Request::SetQueue { .. } => Some("SetQueue"),
+        Request::PlayQueue { .. } => Some("PlayQueue"),
         Request::QueueInsertNext { .. } => Some("QueueInsertNext"),
         Request::QueueAppend { .. } => Some("QueueAppend"),
         Request::QueueEdit { .. } => Some("QueueEdit"),

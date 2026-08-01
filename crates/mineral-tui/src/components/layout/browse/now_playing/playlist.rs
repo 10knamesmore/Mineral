@@ -51,7 +51,7 @@ pub fn draw(
         // 悬停期就按封面区尺寸(两视图同几何)提前编码协议,使 drill 瞬间直接命中 kitty、
         // 不闪 hash→halfblock。图未预取到 cache 时 prewarm 无操作(fetch 侧负责先拉进来)。
         if let Some(first) = state.library.tracks.get(&p.data.id).and_then(|t| t.first())
-            && let Some(url) = first.data.cover_url.as_ref()
+            && let Some(url) = first.data.song.cover_url.as_ref()
         {
             cover_image::prewarm(state, picker, cover_area, url);
         }
@@ -119,8 +119,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
 
-    use crate::runtime::view_model::SongView;
-    use crate::test_support::{app_with_playlists_probed, song};
+    use crate::test_support::{app_with_playlists_probed, entry_views, song};
 
     /// Playlists 视图悬停选中歌单、入口曲(第 0 首)封面已在 `covers.cache`:渲染右栏时
     /// 应按封面区尺寸提前编码该曲协议(`encode_pending` 落一条),使 drill 进 tracks 瞬间
@@ -133,14 +132,10 @@ mod tests {
         let url = MediaUrl::remote("https://x.y/entry.jpg")?;
         let mut entry = song("s0");
         entry.cover_url = Some(url.clone());
-        app.state.library.tracks.insert(
-            pid,
-            vec![SongView {
-                data: entry,
-                loved: false,
-                plays: None,
-            }],
-        );
+        app.state
+            .library
+            .tracks
+            .insert(pid, entry_views(vec![entry]));
         app.state.browse.nav.playlist.set_sel(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));

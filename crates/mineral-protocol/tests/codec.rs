@@ -320,17 +320,22 @@ async fn round_trip_script_binds() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 带 Song payload 的 Request:PlaySong / SetQueue。
+/// 带 Song payload 的 Request:PlaySong / atomic PlayQueue。
 #[tokio::test]
 async fn round_trip_song_payload_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::PlaySong(Box::new(song("s1")))).await?;
-    req_round_trips(Request::SetQueue {
-        queue: vec![song("s1"), song("s2")],
-        target_id: SongId::new(SourceKind::NETEASE, "s2"),
+    req_round_trips(Request::PlayQueue {
+        songs: vec![song("s1"), song("s2")],
+        target: 1,
         context: mineral_protocol::QueueContextWire::Search {
             query: "李志".to_owned(),
         },
     })
+    .await?;
+    resp_round_trips(Response::PlayQueue(Ok(()))).await?;
+    resp_round_trips(Response::PlayQueue(Err(
+        mineral_protocol::PlayQueueError::TargetOutOfBounds { target: 2, len: 2 },
+    )))
     .await?;
     Ok(())
 }
@@ -426,7 +431,7 @@ async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
 }
 
 /// 属性测试:随机 `Request` 经 bincode 编/解码 Debug 恒等。覆盖手写 example 测不到的
-/// 字段组合(尤其 Song-laden 的 PlaySong / SetQueue)。framing(length-delimited)是上游
+/// 字段组合(尤其 Song-laden 的 PlaySong / PlayQueue)。framing(length-delimited)是上游
 /// codec,不在此重测;序列化保真才是本仓的风险点。
 mod proptests {
     use bincode::{deserialize, serialize};
@@ -456,10 +461,10 @@ mod proptests {
             any::<u8>().prop_map(Request::SetVolume),
             any::<usize>().prop_map(Request::PullPcm),
             arb_song().prop_map(|s| Request::PlaySong(Box::new(s))),
-            (vec(arb_song(), 0..4), any::<String>()).prop_map(|(queue, target)| {
-                Request::SetQueue {
-                    queue,
-                    target_id: SongId::new(SourceKind::NETEASE, target.as_str()),
+            (vec(arb_song(), 0..4), any::<usize>()).prop_map(|(songs, target)| {
+                Request::PlayQueue {
+                    songs,
+                    target,
                     context: mineral_protocol::QueueContextWire::Unknown,
                 }
             }),
@@ -586,7 +591,12 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
             Playlist::builder()
                 .id(PlaylistId::new(SourceKind::NETEASE, "pl"))
                 .name("收藏夹".to_owned())
-                .songs(vec![song("in-pl")])
+                .entries(vec![
+                    mineral_model::PlaylistEntry::builder()
+                        .index(mineral_model::CollectionIndex::new(0))
+                        .song(song("in-pl"))
+                        .build(),
+                ])
                 .build(),
         )),
     })

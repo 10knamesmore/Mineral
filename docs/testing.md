@@ -26,7 +26,7 @@
 * 快照断言宏 `assert_snap!` / `assert_snap_debug!`(强制中文 `description`)。
 * proptest 生成器 `arb_song()`。
 
-**只放跨 crate 能复用的(纯 `mineral-model` 类型)**;依赖某 crate 私有类型的 fixture(如 TUI 的 `state_with_*` 依赖 `AppState` / `SongView`)留在该 crate 自己的 `#[cfg(test)] mod test_support`,用 `pub(crate) use mineral_test::…` re-export 共享零件。`mineral-test` 依赖 `mineral-model`,而 `mineral-model` 测试又 dev-dep `mineral-test`——**经 dev-dependency 的依赖环 Cargo 允许**(dev-dep 不进正常构建图)。
+**只放跨 crate 能复用的(纯 `mineral-model` 类型)**;依赖某 crate 私有类型的 fixture(如 TUI 的 `state_with_*` 依赖 `AppState` / `PlaylistEntryView`)留在该 crate 自己的 `#[cfg(test)] mod test_support`,用 `pub(crate) use mineral_test::…` re-export 共享零件。`mineral-test` 依赖 `mineral-model`,而 `mineral-model` 测试又 dev-dep `mineral-test`——**经 dev-dependency 的依赖环 Cargo 允许**(dev-dep 不进正常构建图)。
 
 ## TUI 集成测试基建
 

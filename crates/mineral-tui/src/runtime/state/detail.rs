@@ -8,7 +8,8 @@ use std::cell::Cell;
 
 use mineral_channel_core::{ArtistSectionKind, ArtistSections};
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind, Song, SourceKind,
+    Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind,
+    Song, SourceKind,
 };
 use mineral_task::SearchPayload;
 
@@ -129,8 +130,8 @@ impl EntityRef {
 /// 一帧补拉到的数据。
 #[derive(Clone)]
 pub enum DetailData {
-    /// 曲目列表（歌单帧）。
-    Tracks(Vec<Song>),
+    /// Playlist membership 列表（歌单帧），保留 authoritative CollectionIndex。
+    PlaylistEntries(Vec<PlaylistEntry>),
 
     /// 专辑完整详情（元信息 + 曲目）——album 帧、以及 song 帧（看其所属专辑）。
     Album(Box<Album>),
@@ -333,8 +334,8 @@ impl DetailFrame {
                 }),
             ) => albs.len(),
             (EntityRef::Artist(_), _, _) => 0,
-            (_, _, Some(DetailData::Album(a))) => a.songs.len(),
-            (_, _, Some(DetailData::Tracks(songs))) => songs.len(),
+            (_, _, Some(DetailData::Album(a))) => a.tracks.len(),
+            (_, _, Some(DetailData::PlaylistEntries(entries))) => entries.len(),
             _ => 0,
         }
     }
@@ -361,12 +362,17 @@ impl DetailFrame {
                 }),
             ) => albs.get(sel).cloned().map(Box::new).map(EntityRef::Album),
             (EntityRef::Artist(_), _, _) => None,
-            (_, _, Some(DetailData::Album(a))) => {
-                a.songs.get(sel).cloned().map(Box::new).map(EntityRef::Song)
-            }
-            (_, _, Some(DetailData::Tracks(songs))) => {
-                songs.get(sel).cloned().map(Box::new).map(EntityRef::Song)
-            }
+            (_, _, Some(DetailData::Album(a))) => a
+                .tracks
+                .get(sel)
+                .map(|track| track.song.clone())
+                .map(Box::new)
+                .map(EntityRef::Song),
+            (_, _, Some(DetailData::PlaylistEntries(entries))) => entries
+                .get(sel)
+                .map(|entry| entry.song.clone())
+                .map(Box::new)
+                .map(EntityRef::Song),
             _ => None,
         }
     }
@@ -384,8 +390,12 @@ impl DetailFrame {
                 }),
             ) => a.songs.clone(),
             (EntityRef::Artist(_), _, _) => Vec::new(),
-            (_, _, Some(DetailData::Album(a))) => a.songs.clone(),
-            (_, _, Some(DetailData::Tracks(songs))) => songs.clone(),
+            (_, _, Some(DetailData::Album(a))) => {
+                a.tracks.iter().map(|track| track.song.clone()).collect()
+            }
+            (_, _, Some(DetailData::PlaylistEntries(entries))) => {
+                entries.iter().map(|entry| entry.song.clone()).collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -412,7 +422,7 @@ impl DetailFrame {
                 id: a.id.clone(),
                 name: Some(a.name.clone()),
             }),
-            (EntityRef::Playlist(p), _, Some(DetailData::Tracks(_))) => {
+            (EntityRef::Playlist(p), _, Some(DetailData::PlaylistEntries(_))) => {
                 Some(QueueContextWire::Playlist {
                     id: p.id.clone(),
                     name: Some(p.name.clone()),
@@ -469,16 +479,16 @@ impl DetailFrame {
         }
     }
 
-    /// 落 `Tracks` 数据（歌单帧）。
-    pub fn set_tracks(&mut self, songs: Vec<Song>) {
-        self.data = Some(DetailData::Tracks(songs));
+    /// 落 PlaylistEntry relation 数据（歌单帧）。
+    pub fn set_playlist_entries(&mut self, entries: Vec<PlaylistEntry>) {
+        self.data = Some(DetailData::PlaylistEntries(entries));
     }
 
     /// 落专辑完整详情（album 帧 / song 帧）。song 帧顺手把列表光标落到这首歌在专辑里的位置——
     /// 高亮 + `j/k` 起点一次对齐，让「选中歌在其所属专辑中」一目了然。
     pub fn set_album_detail(&mut self, album: Box<Album>) {
         if let EntityRef::Song(s) = &self.entity
-            && let Some(idx) = album.songs.iter().position(|t| t.id == s.id)
+            && let Some(idx) = album.tracks.iter().position(|track| track.song.id == s.id)
         {
             // 视口瞬时定位到这首歌(无平移);渲染端首帧按 scrolloff 钳,选中歌即带上下文出现。
             self.list.place(idx, 0);
@@ -1099,7 +1109,7 @@ mod tests {
         Album::builder()
             .id(AlbumId::new(SourceKind::NETEASE, raw))
             .name(format!("album {raw}"))
-            .songs(
+            .tracks(mineral_model::AlbumTrack::enumerate(
                 (0..n)
                     .map(|i| {
                         Song::builder()
@@ -1109,7 +1119,7 @@ mod tests {
                             .build()
                     })
                     .collect::<Vec<Song>>(),
-            )
+            ))
             .build()
     }
 
@@ -1133,7 +1143,10 @@ mod tests {
     #[test]
     fn row_entity_playlist_track() -> color_eyre::Result<()> {
         let mut frame = super::DetailFrame::new(EntityRef::Playlist(Box::new(playlist("pl"))));
-        frame.set_tracks(vec![song("s0", None), song("s1", None)]);
+        frame.set_playlist_entries(mineral_model::PlaylistEntry::enumerate(vec![
+            song("s0", None),
+            song("s1", None),
+        ]));
         frame.list_mut().set_sel(1);
         let Some(EntityRef::Song(s)) = frame.row_entity() else {
             color_eyre::eyre::bail!("歌单帧曲目行应取到 Song");

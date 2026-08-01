@@ -14,7 +14,7 @@ use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
 use crate::runtime::state::AppState;
-use crate::runtime::view_model::SongView;
+use crate::runtime::view_model::PlaylistEntryView;
 
 /// 渲染曲目详情(right pane)到 `area`。
 ///
@@ -24,13 +24,14 @@ use crate::runtime::view_model::SongView;
 pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
-    sv: &SongView,
+    entry: &PlaylistEntryView,
     current_id: Option<&SongId>,
     state: &AppState,
     picker: &Picker,
     theme: &Theme,
     cover_in_flight: bool,
 ) {
+    let song = &entry.data.song;
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -42,15 +43,14 @@ pub fn draw(
     };
 
     if !cover_in_flight {
-        let seed = sv
-            .data
+        let seed = song
             .album
             .as_ref()
-            .map_or_else(|| sv.data.name.clone(), |a| a.name.clone());
+            .map_or_else(|| song.name.clone(), |album| album.name.clone());
         cover_image::render_or_fallback(
             frame,
             cover_area,
-            sv.data.cover_url.as_ref(),
+            song.cover_url.as_ref(),
             state,
             picker,
             theme,
@@ -58,7 +58,7 @@ pub fn draw(
         );
     }
 
-    let is_current = current_id.is_some_and(|cid| cid == &sv.data.id);
+    let is_current = current_id.is_some_and(|current| current == &song.id);
 
     // 标题行:歌名独占一行(text + bold,居中,长名走 marquee,不再和艺人抢行)。选中 =
     // 在播时整行 accent 高亮——「选中」恒正常亮度,「在播」只是标题行换色;别名**跟随整行
@@ -69,31 +69,26 @@ pub fn draw(
     } else {
         Style::new().fg(theme.text).add_modifier(Modifier::BOLD)
     };
-    let alias = sv
-        .data
+    let alias = song
         .alias
         .as_deref()
         .map(|a| format!(" ({a})"))
         .unwrap_or_default();
     let title_line = MarqueeCtx::new(state, theme, /*fade_to*/ theme.base).line(
-        vec![Span::styled(
-            format!("{}{alias}", sv.data.name),
-            title_style,
-        )],
+        vec![Span::styled(format!("{}{alias}", song.name), title_style)],
         Slot::NowPlaying,
-        &sv.data.id.qualified(),
+        &song.id.qualified(),
         kv_area.width,
     );
 
     // 副信息行:艺人 · 专辑(专辑在此首次露面;无专辑只留艺人)。
-    let artist = sv
-        .data
+    let artist = song
         .artists
         .first()
         .map(|a| a.name.clone())
         .unwrap_or_default();
     let mut sub_spans = vec![Span::styled(artist, Style::new().fg(theme.subtext))];
-    if let Some(album) = sv.data.album.as_ref() {
+    if let Some(album) = song.album.as_ref() {
         sub_spans.push(Span::styled(" · ", Style::new().fg(theme.overlay)));
         sub_spans.push(Span::styled(
             album.name.clone(),
@@ -106,17 +101,17 @@ pub fn draw(
     );
 
     // meta 底行:时长 · ♥/♡ · plays(plays 缺失时省略该段),居中。
-    let len = format_ms_opt(sv.data.duration_ms);
+    let len = format_ms_opt(song.duration_ms);
     let mut meta_spans = vec![
         Span::styled(len, Style::new().fg(theme.overlay)),
         Span::styled(" · ", Style::new().fg(theme.overlay)),
-        if sv.loved {
+        if entry.loved {
             Span::styled("♥", Style::new().fg(theme.red))
         } else {
             Span::styled("♡", Style::new().fg(theme.overlay))
         },
     ];
-    if let Some(n) = sv.plays {
+    if let Some(n) = entry.plays {
         meta_spans.push(Span::styled(" · ", Style::new().fg(theme.overlay)));
         meta_spans.push(Span::styled(
             format!("{n} plays"),

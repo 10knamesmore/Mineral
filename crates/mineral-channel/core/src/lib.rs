@@ -68,17 +68,18 @@ pub trait MusicChannel: Send + Sync {
     /// 拉取若干歌曲的详情。
     async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>>;
 
-    /// 拉取一张专辑的完整详情:元信息(简介 / 发行信息 / 曲目数等)+ 曲目列表(`songs`)。
+    /// 拉取一张专辑的完整详情:元信息(简介 / 发行信息 / 曲目数等)+ 曲目 relation(`tracks`)。
     ///
     /// 返回**完整实体**而非裸曲目:上层要的是"这张专辑的完整视图",至于 channel 内部打几个
-    /// 端点拼出来是实现细节。只要曲目的调用方读 `.songs` 即可。
+    /// 端点拼出来是实现细节。只要曲目的调用方从 `.tracks` 投影 `.song` 即可。
     async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
         Err(Error::NotSupported)
     }
 
-    /// 拉取一个歌单的完整详情:元信息(名/简介/封面/计数)+ 曲目(`songs`)。
+    /// 拉取一个歌单的完整详情:元信息(名/简介/封面/计数)+ membership relation(`entries`)。
     ///
-    /// 同 [`Self::album_detail`] —— 返回完整实体而非裸曲目;只要曲目的调用方读 `.songs`。
+    /// 同 [`Self::album_detail`] —— 返回完整实体而非裸曲目;只要曲目的调用方从
+    /// `.entries` 投影 `.song`。
     async fn playlist_detail(&self, _id: &PlaylistId) -> Result<Playlist> {
         Err(Error::NotSupported)
     }
@@ -187,7 +188,7 @@ pub trait MusicChannel: Send + Sync {
 
     // ---------- 用户数据 / 装饰(可选) ----------
     // 这一组方法都是「同一登录用户视角下,跨歌曲的元信息」,bulk 一次拉满,
-    // 上层用来 decorate `SongView`。沿用 default `NotSupported` 模式。
+    // 上层用来 decorate Song 或 collection entry view。沿用 default `NotSupported` 模式。
     // 后续按需追加(`user_play_counts` / 关注列表 / 个人评分等)。
 
     /// 拉该源**远端**记录的喜欢(♥)歌曲 ID 集合(纯远端、read-only)。

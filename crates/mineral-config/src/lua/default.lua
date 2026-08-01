@@ -99,6 +99,7 @@ return {
       search_prefetch_rows = 8, -- 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且未榨干时,自动拉下一页
       kill_spawned_daemon_on_exit = true, -- 退出 TUI 连带关掉自己拉起的 daemon;false = 续命后台播放
       remember_track_pos = "session", -- 歌单内光标位置记忆:"off" 不记 | "session" 本次运行内 | "persist" 跨重启落盘
+      filter_play_scope = "collection", -- 过滤态起播:"collection" 播完整歌单 | "matches" 只播过滤结果
     },
     -- 频谱面板。时长旋钮均为毫秒,按 animation.frame_tick_ms 折算成拍,与帧率解耦。
     -- 条高动态 = 效果器 ADSR 包络:attack 起音 / decay 衰减(余韵) / release 释音,

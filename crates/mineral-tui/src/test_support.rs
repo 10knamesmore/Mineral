@@ -2,14 +2,16 @@
 //!
 //! 跨 crate 复用的零件(`song` / `with_*` / `endserenading` / `chinese_football` /
 //! `assert_snap!`)来自 [`mineral_test`];本模块只保留依赖 TUI 私有类型
-//! (`AppState` / `SongView` / `PlaylistView`)的 fixture。
+//! (`AppState` / `PlaylistEntryView` / `PlaylistView`)的 fixture。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{MediaUrl, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind};
+use mineral_model::{
+    MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
+};
 use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions, SongStatsWire};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
@@ -21,7 +23,7 @@ use crate::render::anim::Toggle;
 use crate::runtime::cover::encode::CoverEncoder;
 use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
-use crate::runtime::view_model::{PlaylistView, SongView};
+use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
@@ -59,6 +61,18 @@ pub(crate) fn mixed_source_songs() -> Vec<Song> {
     vec![netease, bilibili, local]
 }
 
+/// 按输入顺序枚举 0-based PlaylistEntry，并包成无装饰 PlaylistEntryView。
+pub(crate) fn entry_views(songs: Vec<Song>) -> Vec<PlaylistEntryView> {
+    PlaylistEntry::enumerate(songs)
+        .into_iter()
+        .map(|data| PlaylistEntryView {
+            data,
+            loved: false,
+            plays: None,
+        })
+        .collect()
+}
+
 /// 造一个选中混源歌单(source = mineral 的聚合收藏)的 `AppState`,view = Library,
 /// 曲目为 [`mixed_source_songs`],无在播(序号列不被 ♫ 占位)。
 pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
@@ -71,14 +85,13 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
         3,
     )];
     s.browse.view.switch_to(View::Library);
-    let views = mixed_source_songs()
+    let views = entry_views(mixed_source_songs())
         .into_iter()
-        .map(|data| SongView {
-            data,
+        .map(|entry| PlaylistEntryView {
             loved: true,
-            plays: None,
+            ..entry
         })
-        .collect::<Vec<SongView>>();
+        .collect();
     s.library.tracks.insert(pid, views);
     Ok(s)
 }
@@ -102,15 +115,15 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     s.browse.view.switch_to(View::Library);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
-    let views = tracks
-        .iter()
+    let views = PlaylistEntry::enumerate(tracks.clone())
+        .into_iter()
         .enumerate()
-        .map(|(i, t)| SongView {
-            data: t.clone(),
+        .map(|(i, data)| PlaylistEntryView {
+            data,
             loved: i == 1,
             plays: plays.get(i).copied(),
         })
-        .collect::<Vec<SongView>>();
+        .collect();
     s.player.current = tracks.first().cloned();
     s.library
         .tracks
@@ -169,14 +182,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
     )];
     s.browse.view.switch_to(View::Library);
     let tracks = chinese_football(4);
-    let views = tracks
-        .iter()
-        .map(|t| SongView {
-            data: t.clone(),
-            loved: false,
-            plays: None,
-        })
-        .collect::<Vec<SongView>>();
+    let views = entry_views(tracks.clone());
     s.player.current = tracks.first().cloned();
     s.library
         .tracks
@@ -204,14 +210,7 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
         make("无", "草东没有派对", "丑奴儿"),
     ];
 
-    let views = tracks
-        .iter()
-        .map(|t| SongView {
-            data: t.clone(),
-            loved: false,
-            plays: None,
-        })
-        .collect::<Vec<SongView>>();
+    let views = entry_views(tracks.to_vec());
     s.player.current = tracks.first().cloned();
     s.library
         .tracks
@@ -274,22 +273,31 @@ impl Client for TestClient {
             v.push(("play_song", song.id.qualified()));
         }
     }
-    fn set_queue(
+    fn play_queue(
         &self,
-        queue: Vec<Song>,
-        target_id: SongId,
+        songs: Vec<Song>,
+        target: usize,
         context: mineral_protocol::QueueContextWire,
-    ) {
-        // 记队列长 + 目标曲;供"detail 起播 = set_queue + play_song 两步"的回归断言。
+    ) -> Result<(), mineral_protocol::PlayQueueError> {
+        let len = songs.len();
+        let Some(target_song) = songs.get(target) else {
+            return if songs.is_empty() {
+                Err(mineral_protocol::PlayQueueError::Empty)
+            } else {
+                Err(mineral_protocol::PlayQueueError::TargetOutOfBounds { target, len })
+            };
+        };
+        // 记队列长 + exact target coordinate / Song;供 atomic 起播路径回归断言。
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push((
-                "set_queue",
-                format!("{}:{}", queue.len(), target_id.qualified()),
+                "play_queue",
+                format!("{len}:{target}:{}", target_song.id.qualified()),
             ));
         }
         if let Ok(mut v) = self.queue_contexts.lock() {
-            v.push(("set_queue", context));
+            v.push(("play_queue", context));
         }
+        Ok(())
     }
     fn queue_insert_next(&self, song: Song, context: mineral_protocol::QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
@@ -468,14 +476,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
             .build(),
     }];
     let tracks = endserenading(len);
-    let views = tracks
-        .iter()
-        .map(|t| SongView {
-            data: t.clone(),
-            loved: false,
-            plays: None,
-        })
-        .collect::<Vec<SongView>>();
+    let views = entry_views(tracks);
     app.state.library.tracks.insert(pid, views);
     app.state.browse.view.switch_to(View::Library);
     app.state.browse.nav.playlist.set_sel(0);
@@ -504,7 +505,7 @@ pub(crate) fn app_in_search_morph(
         .get_mut(&pid)
         .and_then(|views| views.get_mut(0))
     {
-        sv.data.cover_url = Some(url_a.clone());
+        sv.data.song.cover_url = Some(url_a.clone());
     }
     if cache_browse {
         app.state
@@ -582,14 +583,7 @@ pub(crate) fn app_with_library_probed(
         SourceKind::NETEASE,
         u64::try_from(len).unwrap_or(0),
     )];
-    let views = endserenading(len)
-        .iter()
-        .map(|t| SongView {
-            data: t.clone(),
-            loved: false,
-            plays: None,
-        })
-        .collect::<Vec<SongView>>();
+    let views = entry_views(endserenading(len));
     app.state.library.tracks.insert(pid, views);
     app.state.browse.view.switch_to(View::Library);
     app.state.browse.nav.track.set_sel(sel_track);
@@ -601,17 +595,14 @@ pub(crate) fn app_with_library_probed(
 pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = app_with_library(/*len*/ 0, /*sel_track*/ 0)?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    let views = (0..len)
+    let songs = (0..len)
         .map(|i| {
             let mut s = mineral_test::song(&format!("t{i}"));
             s.name = format!("Track {i:02}");
-            SongView {
-                data: s,
-                loved: false,
-                plays: None,
-            }
+            s
         })
-        .collect::<Vec<SongView>>();
+        .collect();
+    let views = entry_views(songs);
     app.state.library.tracks.insert(pid, views);
     app.state.browse.nav.track.set_sel(sel_track);
     Ok(app)
@@ -699,7 +690,7 @@ pub(crate) fn app_with_channel_search_probed(
 }
 
 /// 同 [`app_with_channel_search_probed`],但返回 `queue_ops`——供"detail 起播"类测试断言
-/// `set_queue` + `play_song` 两步都发生(只 set_queue 不 play_song 会"队列换了却不响")。
+/// atomic `play_queue` 携带 queue + exact target。
 pub(crate) fn app_with_channel_search_qprobed(
     searchable: Vec<SearchKind>,
 ) -> color_eyre::Result<(App, QueueOpsLog)> {

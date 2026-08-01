@@ -376,18 +376,13 @@ mod tests {
     fn playlists_search_deep_hit_snapshot() -> color_eyre::Result<()> {
         use mineral_model::{PlaylistId, SourceKind};
 
-        use crate::runtime::view_model::SongView;
-        use crate::test_support::{song, with_artist, with_name};
+        use crate::test_support::{entry_views, song, with_artist, with_name};
 
         let mut state = crate::test_support::state_with_playlists()?;
         let track = with_artist(with_name(song("s1"), "春日影"), "CRYCHIC");
         state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p2"),
-            vec![SongView {
-                data: track,
-                loved: false,
-                plays: None,
-            }],
+            entry_views(vec![track]),
         );
         state.library.tracks_generation = 1;
         state.browse.search.set_query("春日");
@@ -410,8 +405,7 @@ mod tests {
     fn playlists_search_deep_hit_alias_snapshot() -> color_eyre::Result<()> {
         use mineral_model::{PlaylistId, SourceKind};
 
-        use crate::runtime::view_model::SongView;
-        use crate::test_support::{song, with_alias, with_artist, with_name};
+        use crate::test_support::{entry_views, song, with_alias, with_artist, with_name};
 
         let mut state = crate::test_support::state_with_playlists()?;
         let track = with_alias(
@@ -420,11 +414,7 @@ mod tests {
         );
         state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p2"),
-            vec![SongView {
-                data: track,
-                loved: false,
-                plays: None,
-            }],
+            entry_views(vec![track]),
         );
         state.library.tracks_generation = 1;
         state.browse.search.set_query("mayo");

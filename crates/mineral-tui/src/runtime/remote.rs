@@ -21,9 +21,9 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed, PlayerSync,
-    PlayerVersions, QueueContextWire, Request, RequestId, Response, SongStatsWire, Subscription,
-    client_handshake, decode, encode, framed,
+    CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed,
+    PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire, Request, RequestId, Response,
+    SongStatsWire, Subscription, client_handshake, decode, encode, framed,
 };
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
@@ -276,12 +276,26 @@ impl Client for RemoteClient {
     fn play_song(&self, song: Song) {
         let _ = self.send_recv(Request::PlaySong(Box::new(song)));
     }
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire) {
-        let _ = self.send_recv(Request::SetQueue {
-            queue,
-            target_id,
+    fn play_queue(
+        &self,
+        songs: Vec<Song>,
+        target: usize,
+        context: QueueContextWire,
+    ) -> Result<(), PlayQueueError> {
+        match self.send_recv(Request::PlayQueue {
+            songs,
+            target,
             context,
-        });
+        }) {
+            Response::PlayQueue(result) => result,
+            Response::Error(message) => Err(PlayQueueError::Unavailable { message }),
+            other => {
+                warn_unexpected("play_queue", &other);
+                Err(PlayQueueError::Unavailable {
+                    message: "daemon 返回了非 PlayQueue response".to_owned(),
+                })
+            }
+        }
     }
     fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
         let _ = self.send_recv(Request::QueueInsertNext {

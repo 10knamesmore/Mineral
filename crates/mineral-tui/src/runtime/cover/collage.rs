@@ -16,7 +16,7 @@ use mineral_model::{MediaUrl, Playlist, SourceKind};
 
 use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::AppState;
-use crate::runtime::view_model::SongView;
+use crate::runtime::view_model::PlaylistEntryView;
 
 /// 拼贴最多取的成员封面数(2×2)。
 const MAX_TILES: usize = 4;
@@ -97,14 +97,16 @@ pub(crate) fn effective_cover_url(state: &AppState, playlist: &Playlist) -> Opti
 }
 
 /// 歌单内前 [`MAX_TILES`] 首**有封面**的歌的 `(来源, 封面 URL)`(按歌单顺序,早停)。
-fn member_covers(tracks: &[SongView]) -> Vec<(SourceKind, &MediaUrl)> {
+fn member_covers(tracks: &[PlaylistEntryView]) -> Vec<(SourceKind, &MediaUrl)> {
     tracks
         .iter()
-        .filter_map(|sv| {
-            sv.data
+        .filter_map(|entry| {
+            entry
+                .data
+                .song
                 .cover_url
                 .as_ref()
-                .map(|url| (sv.data.id.namespace(), url))
+                .map(|url| (entry.data.song.id.namespace(), url))
         })
         .take(MAX_TILES)
         .collect()
@@ -195,7 +197,7 @@ mod tests {
     use super::{collage_key, compose, effective_cover_url, member_covers, tick};
     use crate::runtime::cover::fetch::CoverFetcher;
     use crate::runtime::state::AppState;
-    use crate::runtime::view_model::SongView;
+    use crate::test_support::entry_views;
 
     /// 造一张纯色方图。
     fn solid(rgb: [u8; 3], side: u32) -> Arc<DynamicImage> {
@@ -279,15 +281,6 @@ mod tests {
             .build())
     }
 
-    /// 包一层 SongView(无装饰)。
-    fn view(song: Song) -> SongView {
-        SongView {
-            data: song,
-            loved: false,
-            plays: None,
-        }
-    }
-
     /// 成员选取:跳过无封面的歌、按序取前 4 首、超出截断。
     #[test]
     fn member_covers_picks_first_four_with_cover() -> color_eyre::Result<()> {
@@ -296,10 +289,11 @@ mod tests {
             .name("no cover".to_owned())
             .duration_ms(Some(1000))
             .build();
-        let mut tracks = vec![view(no_cover)];
+        let mut songs = vec![no_cover];
         for i in 1..=6 {
-            tracks.push(view(song_with_cover(SourceKind::NETEASE, i)?));
+            songs.push(song_with_cover(SourceKind::NETEASE, i)?);
         }
+        let tracks = entry_views(songs);
         let members = member_covers(&tracks);
         assert_eq!(members.len(), 4, "取前 4 首有封面的");
         let first = members.first().map(|(_, u)| u.to_string());
@@ -327,9 +321,10 @@ mod tests {
             SourceKind::MINERAL,
             u64::try_from(n).unwrap_or(0),
         )];
-        let tracks = (0..n)
-            .map(|i| Ok(view(song_with_cover(SourceKind::NETEASE, i)?)))
-            .collect::<color_eyre::Result<Vec<SongView>>>()?;
+        let songs = (0..n)
+            .map(|i| song_with_cover(SourceKind::NETEASE, i))
+            .collect::<color_eyre::Result<Vec<Song>>>()?;
+        let tracks = entry_views(songs);
         s.library.tracks.insert(pid, tracks);
         Ok(s)
     }

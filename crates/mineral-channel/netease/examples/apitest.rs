@@ -216,7 +216,7 @@ async fn main() -> color_eyre::Result<()> {
         if let Some(album) = song.album.clone() {
             let r = run("album_detail", async {
                 let v = ch.album_detail(&album.id).await?;
-                Ok(format!("{} tracks", v.songs.len()))
+                Ok(format!("{} tracks", v.tracks.len()))
             })
             .await;
             report.push(r);
@@ -337,7 +337,7 @@ async fn main() -> color_eyre::Result<()> {
             if let Some(p) = first_playlist {
                 let r = run("playlist_detail (我喜欢)", async {
                     let v = ch.playlist_detail(&p.id).await?;
-                    Ok(format!("{} tracks", v.songs.len()))
+                    Ok(format!("{} tracks", v.entries.len()))
                 })
                 .await;
                 report.push(r);

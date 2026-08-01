@@ -4,11 +4,11 @@
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
 use mineral_config::{AnimationConfig, TrailTimingConfig};
-use mineral_model::PlaylistId;
+use mineral_model::{PlaylistId, Song};
 
 use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
 use crate::runtime::deep_search::{self, DeepHit};
-use crate::runtime::view_model::{PlaylistView, SongView};
+use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 use super::View;
 use super::library::LibraryData;
@@ -26,6 +26,15 @@ pub(crate) struct BrowseModel<'a> {
 
     /// 全局配置(深度搜索权重 / 开关)。
     pub cfg: &'a mineral_config::Config,
+}
+
+/// Library 起播边界的 Song projection 与 exact target coordinate。
+pub(crate) struct LibraryQueueProjection {
+    /// 按配置范围投影出的播放队列。
+    pub(crate) songs: Vec<Song>,
+
+    /// `songs` 内选中 occurrence 的 0-based coordinate。
+    pub(crate) target: usize,
 }
 
 /// Browse 布局层的 view 状态(光标 / 视图 / 全屏 / 歌词 / 过滤)。
@@ -124,13 +133,16 @@ impl BrowsePage {
     }
 
     /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
-    pub fn current_tracks_slot<'a>(&self, model: BrowseModel<'a>) -> Option<&'a Vec<SongView>> {
+    pub fn current_tracks_slot<'a>(
+        &self,
+        model: BrowseModel<'a>,
+    ) -> Option<&'a Vec<PlaylistEntryView>> {
         self.selected_playlist(model)
             .and_then(|p| model.library.tracks.get(&p.data.id))
     }
 
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
-    pub fn current_tracks(&self, model: BrowseModel<'_>) -> Vec<SongView> {
+    pub fn current_tracks(&self, model: BrowseModel<'_>) -> Vec<PlaylistEntryView> {
         self.current_tracks_slot(model).cloned().unwrap_or_default()
     }
 
@@ -185,31 +197,29 @@ impl BrowsePage {
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分。
-    pub fn filtered_tracks(&self, model: BrowseModel<'_>) -> Vec<SongView> {
+    pub fn filtered_tracks(&self, model: BrowseModel<'_>) -> Vec<PlaylistEntryView> {
         let tracks = self.current_tracks(model);
         if self.search.query().is_empty() {
             return tracks;
         }
         self.search.sync_query();
-        let mut scored: Vec<(u32, SongView)> = tracks
+        let mut scored: Vec<(u32, PlaylistEntryView)> = tracks
             .into_iter()
             .filter_map(|sv| {
-                let name = self.search.match_for(&sv.data.name).map(|m| m.score);
+                let song = &sv.data.song;
+                let name = self.search.match_for(&song.name).map(|m| m.score);
                 // alias(译名/副标题)独立一段匹配,不与歌名拼接——否则「歌名 别名」被当整串,
                 // 搜别名会因中间隔着歌名而错配。展示了 alias 就得能搜到它(否则搜它反被滤掉)。
-                let alias = sv
-                    .data
+                let alias = song
                     .alias
                     .as_deref()
                     .and_then(|a| self.search.match_for(a).map(|m| m.score));
-                let artist = sv
-                    .data
+                let artist = song
                     .artists
                     .iter()
                     .filter_map(|a| self.search.match_for(&a.name).map(|m| m.score))
                     .max();
-                let album = sv
-                    .data
+                let album = song
                     .album
                     .as_ref()
                     .and_then(|a| self.search.match_for(&a.name).map(|m| m.score));
@@ -224,6 +234,48 @@ impl BrowsePage {
             .collect();
         scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
         scored.into_iter().map(|(_, sv)| sv).collect()
+    }
+
+    /// 按 `behavior.filter_play_scope` 建立 Library 起播队列，并保留过滤结果中选中的 exact
+    /// collection occurrence。
+    ///
+    /// `Collection` 档用 [`mineral_model::CollectionIndex`] 映射回完整 collection，不能按
+    /// SongId first-match，因为 Playlist 允许同一 Song 出现多次；`Matches` 档直接使用当前
+    /// filtered projection。选择失效时返回 `None`。
+    ///
+    /// # Params:
+    ///   - `model`: 当前 library 与配置借用
+    ///
+    /// # Return:
+    ///   可原子提交的 queue projection；当前选择无对应曲目时为 `None`。
+    pub(crate) fn library_queue_projection(
+        &self,
+        model: BrowseModel<'_>,
+    ) -> Option<LibraryQueueProjection> {
+        let filtered = self.filtered_tracks(model);
+        let filtered_target = self.nav.track.sel();
+        let selected_index = filtered.get(filtered_target)?.data.index;
+        if model
+            .cfg
+            .tui()
+            .behavior()
+            .filter_play_scope()
+            .matches_only()
+        {
+            Some(LibraryQueueProjection {
+                songs: filtered.into_iter().map(|entry| entry.data.song).collect(),
+                target: filtered_target,
+            })
+        } else {
+            let entries = self.current_tracks(model);
+            let target = entries
+                .iter()
+                .position(|entry| entry.data.index == selected_index)?;
+            Some(LibraryQueueProjection {
+                songs: entries.into_iter().map(|entry| entry.data.song).collect(),
+                target,
+            })
+        }
     }
 }
 

@@ -566,8 +566,8 @@ mod tests {
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
-            sv.data.cover_url = Some(url.clone());
-            app.state.playback.track = Some(sv.data.clone());
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state.covers.cache.insert(&url, Arc::new(img));
@@ -645,8 +645,8 @@ mod tests {
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
-            sv.data.cover_url = Some(url.clone());
-            app.state.playback.track = Some(sv.data.clone());
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
         }
         let mut img = image::RgbImage::new(64, 64);
         for p in img.pixels_mut() {
@@ -701,8 +701,8 @@ mod tests {
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
-            sv.data.cover_url = Some(url.clone());
-            app.state.playback.track = Some(sv.data.clone());
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
         }
         // 故意不往 covers.cache 塞图。
 
@@ -872,7 +872,7 @@ mod tests {
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
-            sv.data.cover_url = Some(url_a.clone());
+            sv.data.song.cover_url = Some(url_a.clone());
         }
         // 在播曲另取一首、封面 B 与选中曲不同,逼出真正的跨图 fade。
         let mut playing = song("playing");
@@ -992,8 +992,8 @@ mod tests {
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
-            sv.data.cover_url = Some(url.clone());
-            app.state.playback.track = Some(sv.data.clone());
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
         }
         let mut img = image::RgbImage::new(64, 64);
         for p in img.pixels_mut() {
@@ -1793,11 +1793,11 @@ mod tests {
             payload: SearchPayload::Playlists(vec![playlist]),
             has_more: None,
         });
-        // 歌单 root 帧补拉到曲目(DetailData::Tracks)。
+        // 歌单 root 帧补拉到 PlaylistEntry relation。
         if let Some(kr) = app.state.channel_search.active_results_mut()
             && let Some(frame) = kr.detail.current_mut()
         {
-            frame.set_tracks(songs.clone());
+            frame.set_playlist_entries(mineral_model::PlaylistEntry::enumerate(songs.clone()));
         }
         // 第 1 首在播(♫)、第 2 首已收藏(♥)。
         app.state.player.current = songs.first().cloned();
@@ -1992,7 +1992,7 @@ mod tests {
                     .publish_time_ms(1_672_329_600_000)
                     .company(Some("野生唱片".to_owned()))
                     .description(desc.to_owned())
-                    .songs(endserenading(3))
+                    .tracks(mineral_model::AlbumTrack::enumerate(endserenading(3)))
                     .build(),
             ),
         });

@@ -16,7 +16,7 @@ mod server_store;
 pub use cache_index::{CacheEntryStat, CacheIndex, CacheStats, Evicted};
 pub use client_store::{ClientStore, TrackPosRow};
 pub use db::{
-    HistoryEntry, NamespaceStore, PlaylistCacheEntry, RESERVED_KEYS, SessionSnapshot, SessionStore,
-    SongStats,
+    CachedPlaylistEntry, HistoryEntry, NamespaceStore, PlaylistCacheEntry, RESERVED_KEYS,
+    SessionSnapshot, SessionStore, SongStats,
 };
 pub use server_store::{PlaylistCacheStats, ServerStore};

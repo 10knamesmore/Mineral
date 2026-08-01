@@ -631,7 +631,13 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     return;
                 };
                 match channel.playlist_detail(&playlist).await {
-                    Ok(pl) => resolve_ok(&player, query, ResolveValue::Songs(pl.songs)),
+                    Ok(playlist) => {
+                        resolve_ok(
+                            &player,
+                            query,
+                            ResolveValue::PlaylistEntries(playlist.entries),
+                        );
+                    }
                     Err(e) => {
                         resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
                     }

@@ -3,7 +3,7 @@
 //! 详情栈复位到新选中实体。
 
 use mineral_channel_core::ArtistSections;
-use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId, Song};
+use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId};
 use mineral_task::SearchPayload;
 
 use crate::runtime::scroll::list::ScrollList;
@@ -156,12 +156,16 @@ impl KindResults {
     }
 
     /// PlaylistDetail 回包落当前帧（栈顶正等这个歌单时）。
-    pub fn fill_playlist_tracks(&mut self, id: &PlaylistId, tracks: Vec<Song>) {
+    pub fn fill_playlist_entries(
+        &mut self,
+        id: &PlaylistId,
+        entries: Vec<mineral_model::PlaylistEntry>,
+    ) {
         let Some(frame) = self.detail.current_mut() else {
             return;
         };
         if frame.entity.fetch() == Some(DetailFetch::PlaylistDetail(id.clone())) {
-            frame.set_tracks(tracks);
+            frame.set_playlist_entries(entries);
         }
     }
 

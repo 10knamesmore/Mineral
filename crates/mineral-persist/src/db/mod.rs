@@ -7,8 +7,10 @@ mod namespace;
 pub(crate) mod rows;
 mod session;
 mod song_kv;
-mod time;
+pub(crate) mod time;
 
-pub use namespace::{HistoryEntry, NamespaceStore, PlaylistCacheEntry, SongStats};
+pub use namespace::{
+    CachedPlaylistEntry, HistoryEntry, NamespaceStore, PlaylistCacheEntry, SongStats,
+};
 pub use session::{SessionSnapshot, SessionStore};
 pub use song_kv::RESERVED_KEYS;

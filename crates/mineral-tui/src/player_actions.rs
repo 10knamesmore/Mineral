@@ -66,7 +66,7 @@ impl App {
             Some(self.state.browse.search.query().to_owned())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
-        // Library 列表取选中行(SongView 已装饰)。
+        // Library 列表取选中行(PlaylistEntryView 已装饰)。
         let (view, selected_song, selected_loved) =
             if let Some(cursor) = self.overlays.active_queue_cursor(&self.state) {
                 // 队列浮层:唯一带脚本选中的浮层(取光标条目)。
@@ -94,8 +94,8 @@ impl App {
                                 .filtered_tracks()
                                 .into_iter()
                                 .nth(self.state.browse.nav.track.sel());
-                            let loved = sel.as_ref().map(|sv| sv.loved);
-                            (ViewKind::Tracks, sel.map(|sv| sv.data), loved)
+                            let loved = sel.as_ref().map(|entry| entry.loved);
+                            (ViewKind::Tracks, sel.map(|entry| entry.data.song), loved)
                         }
                     },
                 }
@@ -155,7 +155,7 @@ impl App {
         let filtered = self.state.filtered_tracks();
         if let Some(song) = filtered
             .get(self.state.browse.nav.track.sel())
-            .map(|sv| sv.data.clone())
+            .map(|entry| entry.data.song.clone())
         {
             // 触发持久化(daemon 写本地 + 远端,整首传入顺手落 meta);in-proc fire-and-forget。
             self.client.toggle_love(song.clone());
@@ -167,28 +167,17 @@ impl App {
     /// 执行 PopMenu 确认的动作(队列操作转 client;复制走系统剪贴板)。
     pub(crate) fn run_menu_action(&mut self, action: MenuAction) {
         match action {
-            // 替换队列并起播两步(漏 play_song 会换队不响,见 nav PlayQueue 注释);空 queue
-            // 退化为单曲队列,绝不给 set_queue 空列。
             MenuAction::Play {
-                song,
                 queue,
+                target,
                 context,
-            } => {
-                let target = song.id.clone();
-                let queue = if queue.is_empty() {
-                    vec![(*song).clone()]
-                } else {
-                    queue
-                };
-                self.client.set_queue(queue, target, context);
-                self.client.play_song(*song);
+            } => self.play_queue(queue, target, context),
+            MenuAction::PlayNext { song, context } => {
+                self.client.queue_insert_next(*song, context);
             }
-            MenuAction::PlayNext(song) => self
-                .client
-                .queue_insert_next(*song, mineral_protocol::QueueContextWire::Manual),
-            MenuAction::Append(song) => self
-                .client
-                .queue_append(*song, mineral_protocol::QueueContextWire::Manual),
+            MenuAction::Append { song, context } => {
+                self.client.queue_append(*song, context);
+            }
             MenuAction::Download(song) => self.client.download(DownloadTarget::Song(song)),
             MenuAction::QueueEdit(op) => self.apply_queue_edit(op),
             MenuAction::PlayContainer(container) => {
@@ -274,7 +263,7 @@ impl App {
                     .state
                     .filtered_tracks()
                     .get(self.state.browse.nav.track.sel())
-                    .map(|sv| sv.data.clone());
+                    .map(|entry| entry.data.song.clone());
                 if let Some(song) = song {
                     self.client.download(DownloadTarget::Song(Box::new(song)));
                 }
@@ -304,7 +293,7 @@ impl App {
                 (!views.is_empty()).then(|| {
                     views
                         .iter()
-                        .map(|sv| sv.data.clone())
+                        .map(|entry| entry.data.song.clone())
                         .collect::<Vec<Song>>()
                 })
             }
@@ -312,24 +301,35 @@ impl App {
         }
     }
 
-    /// 按模式入队一组曲目:Replace = 替换队列 + 起播首曲(空则 no-op,绝不发空 set_queue);
+    /// 原子替换 queue 并起播 exact target；structured reject 以 toast 反馈。
+    pub(crate) fn play_queue(
+        &mut self,
+        songs: Vec<Song>,
+        target: usize,
+        context: mineral_protocol::QueueContextWire,
+    ) {
+        if let Err(error) = self.client.play_queue(songs, target, context) {
+            self.notifications
+                .flash(tinted_text_item(error.to_string(), TextTint::Error));
+        }
+    }
+
+    /// 按模式入队一组曲目:Replace = 原子替换队列 + 起播首曲(空则 no-op);
     /// Append = 逐曲追加(无批量 API);InsertNext = 按原顺序插到当前曲之后。`context` 是这批
     /// 曲目的来源语境(容器身份),Replace 落队列级、Append / InsertNext 逐曲带上(整张专辑
     /// 插入,每首都归该专辑而非笼统 Manual)。
     fn enqueue_songs(
-        &self,
+        &mut self,
         songs: Vec<Song>,
         mode: PlayMode,
         context: mineral_protocol::QueueContextWire,
     ) {
         match mode {
             PlayMode::Replace => {
-                let Some(first) = songs.first().cloned() else {
+                if songs.is_empty() {
                     return;
-                };
-                let target = first.id.clone();
-                self.client.set_queue(songs, target, context);
-                self.client.play_song(first);
+                }
+                self.play_queue(songs, 0, context);
             }
             PlayMode::Append => {
                 for song in songs {
@@ -362,7 +362,11 @@ impl App {
         let (key, songs, context) = match ev {
             TaskEvent::AlbumDetailFetched { id, album } => (
                 DetailFetch::AlbumDetail(id.clone()).dedup_key(),
-                album.songs.clone(),
+                album
+                    .tracks
+                    .iter()
+                    .map(|track| track.song.clone())
+                    .collect(),
                 QueueContextWire::Album {
                     id: id.clone(),
                     name: Some(album.name.clone()),
@@ -370,7 +374,11 @@ impl App {
             ),
             TaskEvent::PlaylistDetailFetched { id, playlist } => (
                 DetailFetch::PlaylistDetail(id.clone()).dedup_key(),
-                playlist.songs.clone(),
+                playlist
+                    .entries
+                    .iter()
+                    .map(|entry| entry.song.clone())
+                    .collect(),
                 QueueContextWire::Playlist {
                     id: id.clone(),
                     name: Some(playlist.name.clone()),
@@ -442,20 +450,20 @@ mod tests {
         Album::builder()
             .id(AlbumId::new(SourceKind::NETEASE, raw))
             .name(format!("album {raw}"))
-            .songs(endserenading(n))
+            .tracks(mineral_model::AlbumTrack::enumerate(endserenading(n)))
             .build()
     }
 
     /// 容器播放全部(专辑曲目未加载)→ 先派发拉取 + 挂 pending、无即时入队;AlbumDetailFetched
-    /// 到货 fulfill → set_queue(全曲) + play_song(首曲)两步。
+    /// 到货 fulfill → atomic PlayQueue(全曲,target 0)。
     #[test]
     fn container_play_all_fetches_then_enqueues() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
         let album = album_with_songs("al1", 3);
         let first_id = album
-            .songs
+            .tracks
             .first()
-            .map(|s| s.id.qualified())
+            .map(|track| track.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("素材应有曲"))?;
         // 结果列专辑只有壳(无 songs)→ 触发拉取。
         let shell = Album::builder()
@@ -486,11 +494,8 @@ mod tests {
             .map_err(|e| color_eyre::eyre::eyre!("锁中毒: {e}"))?;
         assert_eq!(
             *ops,
-            vec![
-                ("set_queue", format!("3:{first_id}")),
-                ("play_song", first_id.clone()),
-            ],
-            "到货后整专辑替换队列 + 起播首曲"
+            vec![("play_queue", format!("3:0:{first_id}"))],
+            "到货后整专辑与 target 0 原子提交"
         );
         assert!(app.pending_container.is_empty(), "兑现后意图清除");
         Ok(())
@@ -502,9 +507,9 @@ mod tests {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
         let album = album_with_songs("al1", 2);
         let want: Vec<(&str, String)> = album
-            .songs
+            .tracks
             .iter()
-            .map(|s| ("append", s.id.qualified()))
+            .map(|track| ("append", track.song.id.qualified()))
             .collect();
         app.pending_container.insert(
             DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
@@ -586,7 +591,7 @@ mod tests {
             .map_err(|e| color_eyre::eyre::eyre!("锁中毒: {e}"))?;
         assert_eq!(
             ops.first(),
-            Some(&("set_queue", format!("2:{first}"))),
+            Some(&("play_queue", format!("2:0:{first}"))),
             "热门曲路到货才起播"
         );
         Ok(())
@@ -621,13 +626,13 @@ mod tests {
         assert_eq!(
             *got,
             vec![(
-                "set_queue",
+                "play_queue",
                 mineral_protocol::QueueContextWire::Album {
                     id: album.id.clone(),
                     name: Some(album.name.clone()),
                 }
             )],
-            "容器专辑起播 set_queue 带 Album 语境(带标题快照)"
+            "容器专辑起播 PlayQueue 带 Album 语境(带标题快照)"
         );
         Ok(())
     }
@@ -648,10 +653,10 @@ mod tests {
         });
         let album = album_with_songs("al1", 3);
         let want_reversed: Vec<(&str, String)> = album
-            .songs
+            .tracks
             .iter()
             .rev()
-            .map(|s| ("insert_next", s.id.qualified()))
+            .map(|track| ("insert_next", track.song.id.qualified()))
             .collect();
         app.pending_container.insert(
             DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
@@ -688,9 +693,9 @@ mod tests {
         assert!(app.state.player.queue.is_empty(), "前置:本地队列应为空");
         let album = album_with_songs("al1", 2);
         let want: Vec<(&str, String)> = album
-            .songs
+            .tracks
             .iter()
-            .map(|s| ("append", s.id.qualified()))
+            .map(|track| ("append", track.song.id.qualified()))
             .collect();
         app.pending_container.insert(
             DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
@@ -715,14 +720,14 @@ mod tests {
             .state
             .filtered_tracks()
             .first()
-            .map(|sv| sv.data.clone());
+            .map(|entry| entry.data.song.clone());
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Tracks);
         let want_sel = app
             .state
             .filtered_tracks()
             .get(1)
-            .map(|sv| sv.data.id.clone());
+            .map(|entry| entry.data.song.id.clone());
         assert_eq!(ctx.selected_song().as_ref().map(|s| s.id.clone()), want_sel);
         assert_eq!(
             *ctx.selected_loved(),

@@ -36,7 +36,7 @@ pub use animation::{
     MarqueeMode, MenuReveal, SearchFocusTransition, SweepStyle, TrailTimingConfig,
 };
 pub use audio::{AudioConfig, BackendKind};
-pub use behavior::{BehaviorConfig, TrackPosMemory};
+pub use behavior::{BehaviorConfig, FilterPlayScope, TrackPosMemory};
 pub use cache::CacheConfig;
 pub use config::{Config, TuiConfig};
 pub use copy::{COPY_TEMPLATE_FNS, CopyConfig, CopyContext, CopyTemplate};

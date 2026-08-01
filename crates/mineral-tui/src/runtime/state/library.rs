@@ -6,7 +6,7 @@
 use mineral_model::{Lyrics, PlaylistId, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::runtime::view_model::{PlaylistView, SongView};
+use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 /// 数据镜像/缓存域([`AppState`](crate::runtime::state::AppState) 的数据域)。
 pub struct LibraryData {
@@ -14,7 +14,7 @@ pub struct LibraryData {
     pub playlists: Vec<PlaylistView>,
 
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
-    pub tracks: FxHashMap<PlaylistId, Vec<SongView>>,
+    pub tracks: FxHashMap<PlaylistId, Vec<PlaylistEntryView>>,
 
     /// `tracks` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
     /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
@@ -29,11 +29,11 @@ pub struct LibraryData {
     /// 拉失败。channel 层已清洗,client 直接收整份,渲染时按需取各字段。
     pub lyrics: FxHashMap<SongId, Lyrics>,
 
-    /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 `SongView.loved` 用。
+    /// 各 channel 当前用户喜欢(♥)的歌曲 ID 集合;装饰 entry Song 用。
     /// 缺 source 时该 source 的歌全部按 `loved=false` 渲染。
     pub liked_ids: FxHashMap<SourceKind, FxHashSet<SongId>>,
 
-    /// 歌曲 id → 远端真实累计播放次数;装饰 `SongView.plays` 用。
+    /// 歌曲 id → 远端真实累计播放次数;装饰 entry Song 用。
     /// 缺 id = 还没查到 / 查失败(渲染成 `None`)。
     pub play_counts: FxHashMap<SongId, u32>,
 

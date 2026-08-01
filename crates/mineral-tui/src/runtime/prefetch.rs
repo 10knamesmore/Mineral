@@ -92,20 +92,22 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 .and_then(|p| state.library.tracks.get(&p.data.id))
                 .and_then(|tracks| tracks.first())
             {
-                push_if_new(song_cover(&first.data), &mut out);
+                push_if_new(song_cover(&first.data.song), &mut out);
             }
         }
         View::Library => {
-            // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(SongView Vec
+            // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(PlaylistEntryView Vec
             // clone <200 行 typical, <1ms),保持索引语义一致。
             let filtered = state.filtered_tracks();
             let sel = state.browse.nav.track.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
-                filtered.get(i).and_then(|sv| {
-                    sv.data
+                filtered.get(i).and_then(|entry| {
+                    entry
+                        .data
+                        .song
                         .cover_url
                         .as_ref()
-                        .map(|u| (sv.data.id.namespace(), u))
+                        .map(|url| (entry.data.song.id.namespace(), url))
                 })
             };
             push_if_new(get(sel), &mut out);
@@ -360,7 +362,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
         .get(state.browse.nav.track.sel())
-        .map(|sv| sv.data.id.clone())
+        .map(|entry| entry.data.song.id.clone())
 }
 
 /// sel 周围 `prefetch.radius` 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
@@ -485,7 +487,8 @@ mod tests {
     fn collects_selected_playlist_entry_track_cover() -> color_eyre::Result<()> {
         use mineral_model::{Playlist, PlaylistId};
 
-        use crate::runtime::view_model::{PlaylistView, SongView};
+        use crate::runtime::view_model::PlaylistView;
+        use crate::test_support::entry_views;
 
         let mut state = AppState::test_default()?;
         state.browse.view.switch_to(View::Playlists);
@@ -497,15 +500,10 @@ mod tests {
                 .track_count(3)
                 .build(),
         }];
-        let views = (0..3)
-            .map(|i| {
-                Ok(SongView {
-                    data: song_with_cover(i)?,
-                    loved: false,
-                    plays: None,
-                })
-            })
-            .collect::<color_eyre::Result<Vec<SongView>>>()?;
+        let songs = (0..3)
+            .map(song_with_cover)
+            .collect::<color_eyre::Result<Vec<Song>>>()?;
+        let views = entry_views(songs);
         state.library.tracks.insert(pid, views);
         state.browse.nav.playlist.set_sel(0);
 

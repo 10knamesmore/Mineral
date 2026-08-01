@@ -43,13 +43,13 @@ pub(crate) struct SearchCtx<'a> {
 
 /// Search 页吃完按键后吐给 App 的副作用意图;[`App::apply_search_effect`] 落地。
 pub(crate) enum SearchEffect {
-    /// 替换队列并起播(set_queue + play_song 两步)。
+    /// 原子替换队列并起播 exact target occurrence。
     PlayQueue {
         /// 替换进播放队列的曲目(整列结果 / 整列表)。
         queue: Vec<Song>,
 
-        /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
-        song: Box<Song>,
+        /// `queue` 内的 0-based exact target coordinate。
+        target: usize,
 
         /// 队列语境(埋点 provenance:顶层结果记搜索词、详情面板记容器身份)。
         context: mineral_protocol::QueueContextWire,
@@ -115,13 +115,9 @@ impl App {
         match eff {
             SearchEffect::PlayQueue {
                 queue,
-                song,
+                target,
                 context,
-            } => {
-                // 与 library / detail 起播一致:先建队列上下文,再起播选中曲(漏 play_song 会换队不响)。
-                self.client.set_queue(queue, song.id.clone(), context);
-                self.client.play_song(*song);
-            }
+            } => self.play_queue(queue, target, context),
             SearchEffect::Submit {
                 source,
                 kind,
@@ -283,9 +279,9 @@ impl SearchPage {
     /// album/artist/playlist(容器)→ 进 detail 面板浏览(纯状态,无副作用)。
     fn activate_search_result(&mut self) -> SearchEffect {
         match self.result_play_target() {
-            Some((queue, song)) => SearchEffect::PlayQueue {
+            Some((queue, target)) => SearchEffect::PlayQueue {
                 queue,
-                song: Box::new(song),
+                target,
                 context: self.search_context(),
             },
             None => {
@@ -312,14 +308,15 @@ impl SearchPage {
             .unwrap_or_else(|| self.search_context())
     }
 
-    /// 结果列选中行若是 song,给出(整列队列, 选中曲);非 song 结果(容器)→ `None`。
-    fn result_play_target(&self) -> Option<(Vec<Song>, Song)> {
+    /// 结果列选中行若是 song,给出(整列队列, exact target);非 song 结果(容器)→ `None`。
+    fn result_play_target(&self) -> Option<(Vec<Song>, usize)> {
         let kr = self.active_results()?;
         let SearchPayload::Songs(songs) = &kr.results else {
             return None;
         };
-        let song = songs.get(kr.sel())?.clone();
-        Some((songs.clone(), song))
+        let target = kr.sel();
+        songs.get(target)?;
+        Some((songs.clone(), target))
     }
 
     /// 面板下探(`drill_into`):results → 进 detail(song 进其专辑、容器进详情);
@@ -354,9 +351,9 @@ impl SearchPage {
                 }
                 SearchEffect::None
             }
-            DetailActivate::Play { queue, song } => SearchEffect::PlayQueue {
+            DetailActivate::Play { queue, target } => SearchEffect::PlayQueue {
                 queue,
-                song,
+                target,
                 context: self.detail_context(),
             },
             DetailActivate::None => SearchEffect::None,
@@ -388,11 +385,21 @@ impl SearchPage {
                 Some(DetailData::Artist {
                     detail: Some(a), ..
                 }),
-            ) => play_from(&a.songs, frame.list().sel()),
+            ) => play_from(a.songs.clone(), frame.list().sel()),
             // 专辑详情(专辑帧 / 歌曲帧看所属专辑)曲目 → 播放。
-            (_, _, Some(DetailData::Album(a))) => play_from(&a.songs, frame.list().sel()),
+            (_, _, Some(DetailData::Album(album))) => play_from(
+                album
+                    .tracks
+                    .iter()
+                    .map(|track| track.song.clone())
+                    .collect(),
+                frame.list().sel(),
+            ),
             // 曲目列表(歌单帧)→ 播放。
-            (_, _, Some(DetailData::Tracks(songs))) => play_from(songs, frame.list().sel()),
+            (_, _, Some(DetailData::PlaylistEntries(entries))) => play_from(
+                entries.iter().map(|entry| entry.song.clone()).collect(),
+                frame.list().sel(),
+            ),
             _ => DetailActivate::None,
         }
     }
@@ -495,8 +502,8 @@ enum DetailActivate {
         /// 替换进播放队列的曲目(整列表)。
         queue: Vec<Song>,
 
-        /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
-        song: Box<Song>,
+        /// `queue` 内的 0-based exact target coordinate。
+        target: usize,
     },
 
     /// 无可激活项(列表空 / 数据未到)。
@@ -504,13 +511,13 @@ enum DetailActivate {
 }
 
 /// 从列表第 `sel` 首构造「替换队列播放」动作(队列 = 整个列表);越界为 None。
-fn play_from(songs: &[Song], sel: usize) -> DetailActivate {
-    match songs.get(sel) {
-        Some(song) => DetailActivate::Play {
-            queue: songs.to_vec(),
-            song: Box::new(song.clone()),
-        },
-        None => DetailActivate::None,
+fn play_from(songs: Vec<Song>, target: usize) -> DetailActivate {
+    if songs.get(target).is_none() {
+        return DetailActivate::None;
+    }
+    DetailActivate::Play {
+        queue: songs,
+        target,
     }
 }
 
@@ -554,7 +561,7 @@ mod tests {
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(songs)
+                    .tracks(mineral_model::AlbumTrack::enumerate(songs))
                     .build(),
             ),
         });
@@ -569,9 +576,10 @@ mod tests {
             f.list_mut().set_sel(2);
         }
         match app.state.channel_search.detail_activate_action() {
-            DetailActivate::Play { queue, song } => {
+            DetailActivate::Play { queue, target } => {
                 assert_eq!(queue.len(), 4, "队列=专辑全部曲目");
-                assert_eq!(Some(&song.id), want.as_ref(), "起播=选中第 3 首");
+                assert_eq!(target, 2, "exact target=选中第 3 个 occurrence");
+                assert_eq!(queue.get(target).map(|song| &song.id), want.as_ref());
             }
             DetailActivate::Drill(_) => color_eyre::eyre::bail!("专辑详情曲目不应下钻"),
             DetailActivate::None => {
@@ -618,7 +626,7 @@ mod tests {
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(songs)
+                    .tracks(mineral_model::AlbumTrack::enumerate(songs))
                     .build(),
             ),
         });
@@ -715,7 +723,9 @@ mod tests {
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(crate::test_support::endserenading(4))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(4),
+                    ))
                     .build(),
             ),
         });
@@ -901,7 +911,7 @@ mod tests {
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(songs)
+                    .tracks(mineral_model::AlbumTrack::enumerate(songs))
                     .build(),
             ),
         });
@@ -913,7 +923,7 @@ mod tests {
         {
             f.list_mut().set_sel(1);
         }
-        // 走完整 handler:不只是返回动作,而要真发出 set_queue + play_song 两步。
+        // 走完整 handler:必须真发出 atomic PlayQueue。
         let eff = app
             .state
             .channel_search
@@ -926,15 +936,10 @@ mod tests {
             .as_ref()
             .map(mineral_model::SongId::qualified)
             .unwrap_or_default();
-        assert!(
-            ops.iter()
-                .any(|(op, arg)| *op == "set_queue" && arg == &format!("3:{want_q}")),
-            "应 set_queue(队列=3 曲、target=选中曲):{ops:?}"
-        );
-        assert!(
-            ops.iter()
-                .any(|(op, arg)| *op == "play_song" && arg == &want_q),
-            "回归:detail 起播必须 play_song(漏掉则队列换了却不响):{ops:?}"
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("3:1:{want_q}"))],
+            "detail 应原子提交 queue + exact target"
         );
         Ok(())
     }
@@ -967,7 +972,9 @@ mod tests {
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
-                    .songs(crate::test_support::endserenading(3))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(3),
+                    ))
                     .build(),
             ),
         });
@@ -1024,15 +1031,10 @@ mod tests {
         let ops = queue_ops
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
-        assert!(
-            ops.iter()
-                .any(|(op, arg)| *op == "set_queue" && arg == &format!("4:{want_q}")),
-            "song 结果 activate 应 set_queue(队列=4 条、target=选中第 3 首):{ops:?}"
-        );
-        assert!(
-            ops.iter()
-                .any(|(op, arg)| *op == "play_song" && arg == &want_q),
-            "song 结果 activate 应直接 play_song 选中曲:{ops:?}"
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("4:2:{want_q}"))],
+            "song 结果应原子提交 queue + exact target 2"
         );
         assert_eq!(
             app.state.channel_search.focus,
@@ -1116,7 +1118,9 @@ mod tests {
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .description("line1\nline2\nline3".to_owned())
-                    .songs(crate::test_support::endserenading(3))
+                    .tracks(mineral_model::AlbumTrack::enumerate(
+                        crate::test_support::endserenading(3),
+                    ))
                     .build(),
             ),
         });

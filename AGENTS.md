@@ -25,6 +25,8 @@ cargo clippy --workspace --all-targets -- -D warnings  # 严格 lint(包括函�
 
 **禁止**先跑部分测试再跑全量，浪费大头编译时间， 直接跑全量
 
+**版本号只由 CI release workflow 更新， 禁止手改版本**
+
 ## 架构要点
 
 ### 数据模型 = 跨 source 的契约
@@ -55,6 +57,7 @@ config.lua、合成 `merge(default, user, overlay)`、落型校验后经 `Event:
 文件**(TUI 启动本地 load 一次只是自举,连上即被推送顶替)。
 
 client 侧配置消费两条规矩:
+
 - **现读优先**:组件直接读 `state.cfg`(Arc,换整棵即热更),**不许**构造期把配置值
   拷进自己字段(第二数据源)。
 - 确需构造期折算 / 固化的(拍数折算、FFT 预计算、缓存预算),必须挂
@@ -82,37 +85,40 @@ client 侧配置消费两条规矩:
 
 ### 其余约定(未必经 lint,仍需遵守)
 
-* 禁止 `unsafe_code`、`unwrap`、`expect`、`panic!`、`as`(数值强转)、wildcard import(`use foo::*`)。需要数值转换时用 `TryFrom` / `try_into`;需要快速失败时用 `?` + `color_eyre::eyre::WrapErr`(`.wrap_err(...)` / `.wrap_err_with(...)`,trait 也兼容 `.context(...)` / `.with_context(...)`)。
-* 错误处理统一走 **color-eyre**:报错宏用 `color_eyre::eyre::eyre!` / `bail!`,Report 类型是 `color_eyre::Report`。**不要再引入 `anyhow`**。channel 层错误仍是 `mineral_channel_core::Error`(`Other` 变体内含 `color_eyre::Report`),边界处用 `.map_err(Error::Other)` 收敛。
-* **日志记错误统一用 `error = mineral_log::chain(&e)`**(内部 `format!("{e:#}")`):展开完整 context 链、单行、无 ANSI / backtrace。**不要**用 `error = %e`(Display 只给最外层一条,`.wrap_err()` 加的 context 全丢)或 `error = ?e`(color-eyre 的 Debug 带 ANSI 色码 + `Location` + `Backtrace`,污染纯文本日志文件)。错误想精确到字段时,在反序列化等边界用带路径的包装(如 netease `wire::de::from_value` 走 `serde_path_to_error`),让路径进入 message,`chain` 自然带出。
-* **不要 `use` 任何 `Result` 类型**。要么定义命名 `type ToolResult = ...`,要么签名直接写 `-> color_eyre::Result<T>` / `-> mineral_channel_core::Result<T>`。
-* 在测试函数里用 `?` + context 直接返回 `color_eyre::Result<()>`,业务断言用 `assert!` / `assert_eq!`,**不要 `unwrap`**。
-* 对不透明字面量参数(`None` / `true` / `false` / 数字)写 `/*param_name*/` 注释,名字必须与函数签名完全一致;字符/字符串字面量不需要。
-* 类型标注优先 turbofish:写 `Vec::<T>::new()`、`.collect::<Vec<T>>()`,而不是左侧 `: Vec<T>`。例外:trait object 向上转型(`let x: Arc<dyn Trait> = ...`)和无法推断的 `None`(`let x: Option<T> = None`)。
-* `format!` / `println!` 等参数尽量内联(clippy `uninlined_format_args`)。
-* 优先方法引用而非简单闭包;`match` 尽量穷尽,避免随手写 `_ =>`。
-- 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
-* **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。哨兵值的三宗罪:① 与合法值不可区分(`duration_ms: 0` 到底是「未知」还是「真的 0 秒」?调用方无从判断);② 把「缺失」的处理**静默**推给下游的隐式 fallback,而那个 fallback 可能本身就是错的(踩过的坑:`local_play_url` 用 `duration_ms: 0` 当「未知,让显示层回落列表元数据」,但列表元数据恰是错的全 BV 总长 → 进度条显示 2h);③ 编译器帮不上忙——`Option` 会强制每个消费点显式处理 `None`,哨兵值不会。缺失就让类型说出来,别用魔法数字。
+- 禁止 `unsafe_code`、`unwrap`、`expect`、`panic!`、`as`(数值强转)、wildcard import(`use foo::*`)。需要数值转换时用 `TryFrom` / `try_into`;需要快速失败时用 `?` + `color_eyre::eyre::WrapErr`(`.wrap_err(...)` / `.wrap_err_with(...)`,trait 也兼容 `.context(...)` / `.with_context(...)`)。
+- 错误处理统一走 **color-eyre**:报错宏用 `color_eyre::eyre::eyre!` / `bail!`,Report 类型是 `color_eyre::Report`。**不要再引入 `anyhow`**。channel 层错误仍是 `mineral_channel_core::Error`(`Other` 变体内含 `color_eyre::Report`),边界处用 `.map_err(Error::Other)` 收敛。
+- **日志记错误统一用 `error = mineral_log::chain(&e)`**(内部 `format!("{e:#}")`):展开完整 context 链、单行、无 ANSI / backtrace。**不要**用 `error = %e`(Display 只给最外层一条,`.wrap_err()` 加的 context 全丢)或 `error = ?e`(color-eyre 的 Debug 带 ANSI 色码 + `Location` + `Backtrace`,污染纯文本日志文件)。错误想精确到字段时,在反序列化等边界用带路径的包装(如 netease `wire::de::from_value` 走 `serde_path_to_error`),让路径进入 message,`chain` 自然带出。
+- **不要 `use` 任何 `Result` 类型**。要么定义命名 `type ToolResult = ...`,要么签名直接写 `-> color_eyre::Result<T>` / `-> mineral_channel_core::Result<T>`。
+- 在测试函数里用 `?` + context 直接返回 `color_eyre::Result<()>`,业务断言用 `assert!` / `assert_eq!`,**不要 `unwrap`**。
+- 对不透明字面量参数(`None` / `true` / `false` / 数字)写 `/*param_name*/` 注释,名字必须与函数签名完全一致;字符/字符串字面量不需要。
+- 类型标注优先 turbofish:写 `Vec::<T>::new()`、`.collect::<Vec<T>>()`,而不是左侧 `: Vec<T>`。例外:trait object 向上转型(`let x: Arc<dyn Trait> = ...`)和无法推断的 `None`(`let x: Option<T> = None`)。
+- `format!` / `println!` 等参数尽量内联(clippy `uninlined_format_args`)。
+- 优先方法引用而非简单闭包;`match` 尽量穷尽,避免随手写 `_ =>`。
+
+* 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
+
+- **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。哨兵值的三宗罪:① 与合法值不可区分(`duration_ms: 0` 到底是「未知」还是「真的 0 秒」?调用方无从判断);② 把「缺失」的处理**静默**推给下游的隐式 fallback,而那个 fallback 可能本身就是错的(踩过的坑:`local_play_url` 用 `duration_ms: 0` 当「未知,让显示层回落列表元数据」,但列表元数据恰是错的全 BV 总长 → 进度条显示 2h);③ 编译器帮不上忙——`Option` 会强制每个消费点显式处理 `None`,哨兵值不会。缺失就让类型说出来,别用魔法数字。
 
 ### 文档与可见性
 
-* 所有 `pub` 项必须有 `///` 文档,模块必须有 `//!`,`pub struct` 的每个字段都必须有 `///`. 模块层面的注释不要提到其他模块, 属于注释层面的耦合
-* `mod.rs`,`lib.rs` 仅用于模块导出/组织,**不要在 `mod.rs`,`lib.rs` 里写逻辑**。
-* 优先不要pub模块 + 显式 `pub use` 控制对外 API;不要顺手把内部 type 标 `pub`。
-* 对外配置类 struct 必须:私有字段 + `#[non_exhaustive]` + builder 构造 + getter 读取。Builder 默认用 `typed-builder`,getter 默认用 `derive-getters`。**禁止**新增可被外部用 `Struct { ... }` 字面量构造的配置 struct。
-* 结构体字段如果带文档或属性,字段块之间留一个空行,避免连续字段的注释/属性挤在一起。
+- 所有 `pub` 项必须有 `///` 文档,模块必须有 `//!`,`pub struct` 的每个字段都必须有 `///`. 模块层面的注释不要提到其他模块, 属于注释层面的耦合
+- `mod.rs`,`lib.rs` 仅用于模块导出/组织,**不要在 `mod.rs`,`lib.rs` 里写逻辑**。
+- 优先不要pub模块 + 显式 `pub use` 控制对外 API;不要顺手把内部 type 标 `pub`。
+- 对外配置类 struct 必须:私有字段 + `#[non_exhaustive]` + builder 构造 + getter 读取。Builder 默认用 `typed-builder`,getter 默认用 `derive-getters`。**禁止**新增可被外部用 `Struct { ... }` 字面量构造的配置 struct。
+- 结构体字段如果带文档或属性,字段块之间留一个空行,避免连续字段的注释/属性挤在一起。
 
 ### API 设计
 
-* 不要让调用点出现 `foo(false, None, 30)` 这种谜语写法。优先枚举 / 具名方法 / newtype。
-* 新增 trait 必须写文档说明其职责以及实现方应如何使用。
-- 任何时候涉及到ipc, 原则是**rust内部一定优先结构化, 不要String, 在边缘适配层再序列化**
+- 不要让调用点出现 `foo(false, None, 30)` 这种谜语写法。优先枚举 / 具名方法 / newtype。
+- 新增 trait 必须写文档说明其职责以及实现方应如何使用。
+
+* 任何时候涉及到ipc, 原则是**rust内部一定优先结构化, 不要String, 在边缘适配层再序列化**
 
 ### 体量约束(自动强制)
 
-* **单函数 ≤ 300 行**:由 `clippy::too_many_lines` 强制(阈值在 `clippy.toml`,与其他 lint 一起在 `cargo clippy` 时报错)。
-* **单文件 ≤ 800 行(不含 `#[cfg(test)] mod` 块)**:Claude 由 `.claude/hooks/check_file_size.py` 在 PostToolUse(Edit / Write / MultiEdit)时检查,Codex 由 `.codex/hooks/check_file_size.py` 在 PostToolUse(Edit / Write)时检查;> 500 行预警(stderr),> 800 行 exit 2 要求拆分。Hook 分别注册在 `.claude/settings.json` 与 `.codex/hooks.json`。
-* 从大模块抽代码时,把对应测试和模块/类型文档**一并迁走**,不要留半截。
+- **单函数 ≤ 300 行**:由 `clippy::too_many_lines` 强制(阈值在 `clippy.toml`,与其他 lint 一起在 `cargo clippy` 时报错)。
+- **单文件 ≤ 800 行(不含 `#[cfg(test)] mod` 块)**:Claude 由 `.claude/hooks/check_file_size.py` 在 PostToolUse(Edit / Write / MultiEdit)时检查,Codex 由 `.codex/hooks/check_file_size.py` 在 PostToolUse(Edit / Write)时检查;> 500 行预警(stderr),> 800 行 exit 2 要求拆分。Hook 分别注册在 `.claude/settings.json` 与 `.codex/hooks.json`。
+- 从大模块抽代码时,把对应测试和模块/类型文档**一并迁走**,不要留半截。
 
 ### 函数注释格式
 
@@ -130,18 +136,13 @@ client 侧配置消费两条规矩:
 
 **完整细则见 [`docs/testing.md`](docs/testing.md)**(选型矩阵 / `mineral-test` 共享库 / TUI 集成测试基建 / insta 约定 / CI)。TUI 测试通用方法论另见个人 `tui` skill。摘要:
 
-* 运行器 **nextest**:`cargo t`(全仓)/ `cargo td`(doctest,nextest 不跑)/ `cargo snap`(改快照后 review)。
-* **选型一句话**:逻辑/等价性 → `assert_eq!`;渲染/解析结构 → **insta 快照**;纯函数不变量 → **proptest**;CLI → `assert_cmd`;进程 e2e → `CARGO_BIN_EXE_*`;TUI 交互 → 造 `App` + 喂真实 `KeyEvent` + 跨 tick(`test_support::app_with_queue` / `TestClient` 已就位)。
-* **硬规矩**:测试**不豁免** workspace lints(无 `unwrap`/`expect`/`indexing_slicing`,helper/字段一样要 `///`);快照必带中文 `description`(走 `mineral_test::assert_snap!`);`.snap` 进 git、`cargo insta review` 人工确认,**严禁 `INSTA_UPDATE=always` 盲接受**。`#[cfg(test)] mod` 不计入 800 行上限。
+- 运行器 **nextest**:`cargo t`(全仓)/ `cargo td`(doctest,nextest 不跑)/ `cargo snap`(改快照后 review)。
+- **选型一句话**:逻辑/等价性 → `assert_eq!`;渲染/解析结构 → **insta 快照**;纯函数不变量 → **proptest**;CLI → `assert_cmd`;进程 e2e → `CARGO_BIN_EXE_*`;TUI 交互 → 造 `App` + 喂真实 `KeyEvent` + 跨 tick(`test_support::app_with_queue` / `TestClient` 已就位)。
+- **硬规矩**:测试**不豁免** workspace lints(无 `unwrap`/`expect`/`indexing_slicing`,helper/字段一样要 `///`);快照必带中文 `description`(走 `mineral_test::assert_snap!`);`.snap` 进 git、`cargo insta review` 人工确认,**严禁 `INSTA_UPDATE=always` 盲接受**。`#[cfg(test)] mod` 不计入 800 行上限。
 
 ## 一些容易踩的点
 
-* **不要为某个 channel 的特殊字段污染 `mineral-model`**——平铺合并是核心契约。
-* **配置的 LuaCATS stub 是 Rust schema 的派生物,不手写**(细则见 [`docs/config-schema-stub.md`](docs/config-schema-stub.md)):`meta/config.lua`(用户 LSP 补全)由 `config_section` / `source_section` / `lua_enum` 宏从 struct / enum 生成常量,`mineral-config/src/lua_stub.rs` 拼装,`config init` 落盘。加字段**只改 Rust struct + `///` + `default.lua`**,stub 自动跟(快照红 → `cargo snap`);加新段 / `lua_enum` 枚举须挂进拼装清单(漏挂 → 闭合性测试红);函数字段(`template` / `curate_playlists`)用 struct 级 `#[lua_extra_field]` 声明。**两条易踩**:① `config_section` 刻意不加 `#[serde(default)]`(default.lua 完整性守卫的地基,别破);② `///` 即用户 hover 文本,别写「字段私有 / 经 getter」这类 Rust 约定语(守卫拦)、默认值也别写进 `///`(与 default.lua 双源)。**另注**:`docs/configuration.md`(用户向配置指南,每个旋钮 + 默认值 + recipe)是**手写**的,不像 stub 那样自动跟 schema、也无守卫兜底——加 / 删 / 改字段名、改默认值、拆子表时都要**手动同步**对应段,否则漂移(删掉的键还留在文档、新段漏写、默认值与 default.lua 双源写岔)。
-* **新增行为入口 / 事件类型必须更新埋点 audit**:`mineral-server/src/stats/audit.rs` 有两层穷尽 `match`——入口层(`Request` / `ScriptCmd` / `ChannelFetchKind` / `PlaylistWriteOp`,加变体须补 `Recorded(表名)` 或 `NotAnEvent(理由)`)与事件层(`BehaviorEvent` / `SystemEvent`,加变体须补发射点账本),漏补即**编译失败**,并在 commit 说明埋点归属。别加 `_ =>` 兜底绕过。注意防线兜不住「不加任何变体的全新代码路径忘发既有事件」——那层靠触发链集成测试;新增 notify / 后台链路时给对应事件补一条触发测试。
-* **改动 `crypto/` 后必跑 `cargo test --test crypto_vectors`**,服务端解不出来不会立刻爆,而是返回 `code != 200` 的 JSON,排查成本高。
-* **TUI 错误恢复顺序**:`mineral/src/main.rs` 先 `color_eyre::install()`,再进 TUI;`mineral-tui` 的 `Tui::enter` 会取走当前 panic hook 并链式包一层,先 `restore_terminal()` 再调 prev。**不要**在 main 或 TUI 内部再装"裸"的 panic hook 绕过这条链——否则 panic 时彩色报告会被 alternate screen 吞掉,或者终端 raw mode 不恢复出现乱码。Result 冒泡走 `Tui::Drop` 的 `restore_terminal()`,顺序自然正确。
-* **音频无设备会降级 null 模式,不报错退出**:`mineral-audio` engine 拿不到默认输出设备(headless / 无声卡)时不 `return Err`,而是 warn + 置 `AudioSnapshot.backend = AudioBackend::Null` + 空跑(接受命令但不发声),daemon 照常 bind / serve / graceful shutdown。client 据此提示(CLI `status` 打 `backend: null`、TUI 顶栏 `⚠ 无音频设备`)。测试用 `AudioMode::ForceNull` / `MINERAL_AUDIO_NULL=1` env 确定性复现。**注**:`libasound2-dev` 是**编译期**依赖(alsa-sys),降级只省运行期声卡,省不了它。
-* **封面 fetcher 起不来也降级,不报错退出**:`CoverFetcher::spawn()`(isahc/TLS/证书问题)失败时 `mineral_tui::run` 不 `?` 冒泡,而是 warn + 退到 `CoverFetcher::disabled()`(null object:`request()` 静默丢、`drain_ready()` 恒空、**不依赖 tokio runtime**),封面不显示、其余照常。它也是 TUI 集成测试零依赖构造 `App` 的入口(见 [`docs/testing.md`](docs/testing.md))。
-* `cargo apitest` 会真打 `music.163.com`;离线环境会失败,这不是 bug。
-* `.claude/hooks/check_file_size.py` 用大括号配平剔除 `#[cfg(test)] mod` 块,字符串字面量里出现 `{` / `}` 可能误判;真遇到再升级到 `syn` AST。
+- **不要为某个 channel 的特殊字段污染 `mineral-model`**——平铺合并是核心契约。
+- **配置的 LuaCATS stub 是 Rust schema 的派生物,不手写**(细则见 [`docs/config-schema-stub.md`](docs/config-schema-stub.md)):`meta/config.lua`(用户 LSP 补全)由 `config_section` / `source_section` / `lua_enum` 宏从 struct / enum 生成常量,`mineral-config/src/lua_stub.rs` 拼装,`config init` 落盘。加字段**只改 Rust struct + `///` + `default.lua`**,stub 自动跟(快照红 → `cargo snap`);加新段 / `lua_enum` 枚举须挂进拼装清单(漏挂 → 闭合性测试红);函数字段(`template` / `curate_playlists`)用 struct 级 `#[lua_extra_field]` 声明。**两条易踩**:① `config_section` 刻意不加 `#[serde(default)]`(default.lua 完整性守卫的地基,别破);② `///` 即用户 hover 文本,别写「字段私有 / 经 getter」这类 Rust 约定语(守卫拦)、默认值也别写进 `///`(与 default.lua 双源)。**另注**:`docs/configuration.md`(用户向配置指南,每个旋钮 + 默认值 + recipe)是**手写**的,不像 stub 那样自动跟 schema、也无守卫兜底——加 / 删 / 改字段名、改默认值、拆子表时都要**手动同步**对应段,否则漂移(删掉的键还留在文档、新段漏写、默认值与 default.lua 双源写岔)。
+- **新增行为入口 / 事件类型必须更新埋点 audit**:`mineral-server/src/stats/audit.rs` 有两层穷尽 `match`——入口层(`Request` / `ScriptCmd` / `ChannelFetchKind` / `PlaylistWriteOp`,加变体须补 `Recorded(表名)` 或 `NotAnEvent(理由)`)与事件层(`BehaviorEvent` / `SystemEvent`,加变体须补发射点账本),漏补即**编译失败**,并在 commit 说明埋点归属。别加 `_ =>` 兜底绕过。注意防线兜不住「不加任何变体的全新代码路径忘发既有事件」——那层靠触发链集成测试;新增 notify / 后台链路时给对应事件补一条触发测试。
+- **TUI 错误恢复顺序**:`mineral/src/main.rs` 先 `color_eyre::install()`,再进 TUI;`mineral-tui` 的 `Tui::enter` 会取走当前 panic hook 并链式包一层,先 `restore_terminal()` 再调 prev。**不要**在 main 或 TUI 内部再装"裸"的 panic hook 绕过这条链——否则 panic 时彩色报告会被 alternate screen 吞掉,或者终端 raw mode 不恢复出现乱码。Result 冒泡走 `Tui::Drop` 的 `restore_terminal()`,顺序自然正确。

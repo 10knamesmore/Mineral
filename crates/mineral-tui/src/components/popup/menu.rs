@@ -30,13 +30,13 @@ pub(crate) enum MenuAction {
     /// 执行一次队列结构编辑(queue 浮层操作菜单的落地动作)。
     QueueEdit(mineral_protocol::QueueOp),
 
-    /// 替换队列并起播:`queue` = 所在列表整列(空则落地时退化为单曲队列),target = `song`。
+    /// 原子替换队列并起播 queue 中的 exact occurrence。
     Play {
-        /// 起播曲(也是 set_queue 的 target)。
-        song: Box<Song>,
-
-        /// 所在列表整列曲目(队列内容);空 Vec 落地时退化为 `[song]`。
+        /// 所在列表整列曲目(队列内容)。
         queue: Vec<Song>,
+
+        /// `queue` 内的 0-based exact target coordinate。
+        target: usize,
 
         /// 队列语境(埋点 provenance):按菜单打开时所在 surface 推导——库内歌曲归当前
         /// 歌单、搜索结果归搜索词、详情面板归当前容器身份,拿不到则 `Unknown`。
@@ -44,10 +44,22 @@ pub(crate) enum MenuAction {
     },
 
     /// 插播:插到当前曲之后(下一首播)。
-    PlayNext(Box<Song>),
+    PlayNext {
+        /// 要插播的 Song projection。
+        song: Box<Song>,
+
+        /// 该 row 所属 collection / search context。
+        context: mineral_protocol::QueueContextWire,
+    },
 
     /// 追加到队列末尾。
-    Append(Box<Song>),
+    Append {
+        /// 要追加的 Song projection。
+        song: Box<Song>,
+
+        /// 该 row 所属 collection / search context。
+        context: mineral_protocol::QueueContextWire,
+    },
 
     /// 下载这首。
     Download(Box<Song>),
@@ -401,8 +413,22 @@ mod tests {
     /// 操作菜单三项(模拟 Library 歌曲上下文)。
     fn action_items() -> Vec<MenuItem> {
         vec![
-            MenuItem::keyed('p', "Play next", MenuAction::PlayNext(song("s1"))),
-            MenuItem::keyed('a', "Append to queue", MenuAction::Append(song("s1"))),
+            MenuItem::keyed(
+                'p',
+                "Play next",
+                MenuAction::PlayNext {
+                    song: song("s1"),
+                    context: mineral_protocol::QueueContextWire::Manual,
+                },
+            ),
+            MenuItem::keyed(
+                'a',
+                "Append to queue",
+                MenuAction::Append {
+                    song: song("s1"),
+                    context: mineral_protocol::QueueContextWire::Manual,
+                },
+            ),
             MenuItem::keyed('d', "Download", MenuAction::Download(song("s1"))),
         ]
     }
@@ -424,7 +450,14 @@ mod tests {
         else {
             color_eyre::eyre::bail!("Enter 应产出菜单动作");
         };
-        assert_eq!(action, MenuAction::Append(song("s1")), "j 一步后确认第二项");
+        assert_eq!(
+            action,
+            MenuAction::Append {
+                song: song("s1"),
+                context: mineral_protocol::QueueContextWire::Manual,
+            },
+            "j 一步后确认第二项"
+        );
         // Last → 越底钳制在末项。
         menu.on_action(Action::MoveSelection(SelectionMove::Down(99)), &ctx);
         let OverlayResponse::Do(OverlayAction::Menu(action)) =
@@ -449,7 +482,10 @@ mod tests {
         };
         assert_eq!(
             action,
-            MenuAction::Append(song("s1")),
+            MenuAction::Append {
+                song: song("s1"),
+                context: mineral_protocol::QueueContextWire::Manual,
+            },
             "确认当前选中(第二项)"
         );
         Ok(())

@@ -19,7 +19,7 @@ use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
-use crate::runtime::view_model::SongView;
+use crate::runtime::view_model::PlaylistEntryView;
 
 /// 曲目表格的列布局:宽度档(是否放得下 artist/album)× 是否聚合面(mineral 源)。
 #[derive(Clone, Copy)]
@@ -92,7 +92,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 未知时长的曲目不计入合计(只反映已知部分)。
     let total_min = tracks
         .iter()
-        .filter_map(|s| s.data.duration_ms)
+        .filter_map(|entry| entry.data.song.duration_ms)
         .sum::<u64>()
         / 60_000;
     let placeholder = slot_placeholder(state, theme);
@@ -159,7 +159,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             .enumerate()
             .map(|(i, sv)| {
                 let marquee = row_marquee(i == sel, &marquee_ctx, Slot::BrowseSelected, title_w);
-                build_row(i, sv, state, theme, layout, marquee)
+                build_row(sv, state, theme, layout, marquee)
             })
             .collect()
     };
@@ -201,22 +201,22 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / ♫ 当前歌 / 高亮搜索词)。
 /// `layout` 决定列集:窄档省去 artist/album。
 fn build_row<'a>(
-    idx: usize,
-    sv: &'a SongView,
+    entry: &'a PlaylistEntryView,
     state: &AppState,
     theme: &Theme,
     layout: TrackLayout,
     marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
+    let song = &entry.data.song;
     let is_current = state
         .player
         .current
         .as_ref()
-        .is_some_and(|c| c.id == sv.data.id);
+        .is_some_and(|current| current.id == song.id);
 
     // 像 vim signcolumn 一样的 gutter:loved 显 ♥,否则空。永远占一格,
     // 不抖动后续列。
-    let love_cell = if sv.loved {
+    let love_cell = if entry.loved {
         Cell::from(Span::styled("♥", Style::new().fg(theme.red)))
     } else {
         Cell::from("")
@@ -226,26 +226,26 @@ fn build_row<'a>(
         Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
     } else if layout.aggregate && !layout.full {
         // 窄档聚合面:source 列插不起,序号承担源表示(染该行歌曲的源色)。
-        let src_color = crate::render::theme::resolve_source_color(
-            theme,
-            state.cfg.sources(),
-            sv.data.source(),
-        );
-        Cell::from(Span::styled(format!("{idx}"), Style::new().fg(src_color)))
+        let src_color =
+            crate::render::theme::resolve_source_color(theme, state.cfg.sources(), song.source());
+        Cell::from(Span::styled(
+            entry.data.index.get().to_string(),
+            Style::new().fg(src_color),
+        ))
     } else {
-        Cell::from(format!("{idx}"))
+        Cell::from(entry.data.index.get().to_string())
     };
 
-    let name_hits = state.browse.search.match_for(&sv.data.name).map(|m| m.hits);
+    let name_hits = state.browse.search.match_for(&song.name).map(|m| m.hits);
     let mut title_spans = highlight_indices(
-        &sv.data.name,
+        &song.name,
         name_hits.as_deref().unwrap_or(&[]),
         Style::new().fg(theme.text),
         theme,
     );
     // alias(译名 / 副标题)是歌名的暗色括注后缀;命中字符与主字段同款 search_hit
     // 高亮。hits 是相对 alias 文本的 char 下标。
-    if let Some(alias) = sv.data.alias.as_deref() {
+    if let Some(alias) = song.alias.as_deref() {
         let alias_hits = state.browse.search.match_for(alias).map(|m| m.hits);
         title_spans.extend(alias_suffix(
             alias,
@@ -256,23 +256,21 @@ fn build_row<'a>(
     let title_cell = match marquee {
         Some(m) => Cell::from(
             m.ctx
-                .line(title_spans, m.slot, &sv.data.id.qualified(), m.title_w),
+                .line(title_spans, m.slot, &song.id.qualified(), m.title_w),
         ),
         None => Cell::from(Line::from(title_spans)),
     };
 
-    let len = format_ms_opt(sv.data.duration_ms);
+    let len = format_ms_opt(song.duration_ms);
 
     let mut cells = vec![love_cell, num_cell, title_cell];
     if layout.full {
-        let artist = sv
-            .data
+        let artist = song
             .artists
             .first()
             .map(|a| a.name.clone())
             .unwrap_or_default();
-        let album = sv
-            .data
+        let album = song
             .album
             .as_ref()
             .map(|a| a.name.clone())
@@ -292,7 +290,7 @@ fn build_row<'a>(
             theme,
         ))));
         if layout.aggregate {
-            let src = sv.data.source();
+            let src = song.source();
             cells.push(Cell::from(Span::styled(
                 src.label(),
                 Style::new().fg(crate::render::theme::resolve_source_color(
@@ -305,7 +303,7 @@ fn build_row<'a>(
     }
     cells.push(Cell::from(len));
     let row = Row::new(cells);
-    if sv.data.unavailable {
+    if song.unavailable {
         row.style(theme.unavailable_row())
     } else {
         row
@@ -509,6 +507,47 @@ mod tests {
         Ok(())
     }
 
+    /// `/` filter 会按 fuzzy score 改写 view order；`#` 仍显示 PlaylistEntry 的
+    /// authoritative CollectionIndex，而不是过滤结果里的 view coordinate。
+    #[test]
+    fn library_filtered_reorder_preserves_relation_indexes_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SourceKind};
+        use mineral_test::{song, with_name};
+
+        use crate::runtime::view_model::PlaylistEntryView;
+
+        let mut state = crate::test_support::state_with_tracks()?;
+        let entry = |index, id, name| PlaylistEntryView {
+            data: PlaylistEntry::builder()
+                .index(CollectionIndex::new(index))
+                .song(with_name(song(id), name))
+                .build(),
+            loved: false,
+            plays: None,
+        };
+        state.library.tracks.insert(
+            PlaylistId::new(SourceKind::NETEASE, "p1"),
+            vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
+        );
+        state.browse.nav.track.set_sel(0);
+        state.browse.search.set_query("ab");
+
+        let indexes = state
+            .filtered_tracks()
+            .iter()
+            .map(|item| item.data.index.get())
+            .collect::<Vec<_>>();
+        assert_eq!(indexes, vec![2, 9], "exact match 应排在 fuzzy match 前");
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
+        draw_lib(&mut terminal, &state)?;
+        crate::test_support::assert_snap!(
+            "曲目列表:filter reorder 后 # 保留非连续 relation index 2/9",
+            terminal.backend()
+        );
+        Ok(())
+    }
+
     /// 左上角 source 徽标:单源歌单染该歌单真实 source 色,聚合面(mineral)染 mineral 色,
     /// 与 sidebar playlists 面 source 列同一套 [`resolve_source_color`]。
     #[test]
@@ -566,7 +605,7 @@ mod tests {
             .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
             .and_then(|views| views.get_mut(2))
         {
-            v.data = mineral_test::aliased_song();
+            v.data.song = mineral_test::aliased_song();
         }
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!(
@@ -590,20 +629,20 @@ mod tests {
             .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
             .and_then(|views| views.get_mut(2))
         {
-            v.data = mineral_test::aliased_song();
+            v.data.song = mineral_test::aliased_song();
         }
         state.browse.search.set_query("Mayoiuta");
         let filtered = state.filtered_tracks();
         assert!(
             filtered
                 .iter()
-                .any(|sv| sv.data.alias.as_deref() == Some("Mayoiuta")),
+                .any(|entry| entry.data.song.alias.as_deref() == Some("Mayoiuta")),
             "搜别名应命中该曲"
         );
         assert!(
             filtered
                 .iter()
-                .all(|sv| sv.data.alias.as_deref() == Some("Mayoiuta")),
+                .all(|entry| entry.data.song.alias.as_deref() == Some("Mayoiuta")),
             "只有别名命中的曲应留下(歌名/艺人/专辑都不含该词)"
         );
         Ok(())
@@ -629,10 +668,10 @@ mod tests {
             .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
         {
             if let Some(v) = views.get_mut(0) {
-                v.data = with_alias(with_name(song("s0"), "迷星叫"), "Mayoiuta");
+                v.data.song = with_alias(with_name(song("s0"), "迷星叫"), "Mayoiuta");
             }
             if let Some(v) = views.get_mut(1) {
-                v.data = with_alias(with_name(song("s1"), "叫喊迷星"), "Mayoiuta");
+                v.data.song = with_alias(with_name(song("s1"), "叫喊迷星"), "Mayoiuta");
             }
         }
         state.browse.nav.track.set_sel(1);

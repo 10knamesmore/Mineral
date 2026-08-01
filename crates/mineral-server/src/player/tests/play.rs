@@ -73,14 +73,14 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
     )?;
     let queued = song("q1");
     let playlist = mineral_model::PlaylistId::new(SourceKind::NETEASE, "pl");
-    core.set_queue(
+    core.replace_queue(
         vec![queued.clone()],
-        &queued.id,
+        0,
         mineral_stats::QueueContext::Playlist {
             id: playlist.clone(),
             name: None,
         },
-    );
+    )?;
     // 队列曲:继承队列级 Playlist context。
     core.play_song(
         &queued,
@@ -148,11 +148,11 @@ async fn direct_play_settles_interrupted_song() -> color_eyre::Result<()> {
         recorder,
     )?;
     let (a, b) = (song("a"), song("b"));
-    core.set_queue(
+    core.replace_queue(
         vec![a.clone(), b.clone()],
-        &a.id,
+        0,
         mineral_stats::QueueContext::Unknown,
-    );
+    )?;
     core.play_song(
         &a,
         mineral_stats::PlayOrigin::Explicit,
@@ -179,17 +179,17 @@ async fn direct_play_settles_interrupted_song() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// per-song 语境覆盖的生命周期:取用即消费(同 id 二次起播回落队列语境);set_queue 换
+/// per-song 语境覆盖的生命周期:取用即消费(同 id 二次起播回落队列语境);replace_queue 换
 /// 队列清空全部覆盖(未播插队曲的陈旧覆盖不得泄漏到新队列的同 id 起播)。
 #[tokio::test(flavor = "multi_thread")]
-async fn context_override_consumed_once_and_cleared_on_set_queue() -> color_eyre::Result<()> {
+async fn context_override_consumed_once_and_cleared_on_replace_queue() -> color_eyre::Result<()> {
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let core = core_with(calls)?;
     let playlist_context = || mineral_stats::QueueContext::Playlist {
         id: mineral_model::PlaylistId::new(SourceKind::NETEASE, "pl"),
         name: None,
     };
-    core.set_queue(vec![song("a")], &song("a").id, playlist_context());
+    core.replace_queue(vec![song("a")], 0, playlist_context())?;
     // 插队散曲:首次取用得覆盖,且取用即消费——再取回落队列语境。
     core.queue_insert_next(song("x"), mineral_stats::QueueContext::Manual);
     assert!(
@@ -208,13 +208,13 @@ async fn context_override_consumed_once_and_cleared_on_set_queue() -> color_eyre
     );
     // 未播就换队列:旧覆盖清空,同 id 在新队列起播不得继承陈旧 Manual。
     core.queue_insert_next(song("y"), mineral_stats::QueueContext::Manual);
-    core.set_queue(vec![song("y")], &song("y").id, playlist_context());
+    core.replace_queue(vec![song("y")], 0, playlist_context())?;
     assert!(
         matches!(
             core.take_play_context(&song("y").id),
             mineral_stats::QueueContext::Playlist { .. }
         ),
-        "set_queue 清空旧覆盖,不泄漏陈旧语境"
+        "replace_queue 清空旧覆盖,不泄漏陈旧语境"
     );
     Ok(())
 }

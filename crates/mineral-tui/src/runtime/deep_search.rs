@@ -172,7 +172,7 @@ fn build(
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
         for sv in tracks {
-            let Some(hit) = score_song(search, &sv.data, weights) else {
+            let Some(hit) = score_song(search, &sv.data.song, weights) else {
                 continue;
             };
             matched = matched.saturating_add(1);
@@ -322,9 +322,9 @@ mod tests {
 
     use super::HitField;
     use crate::runtime::state::AppState;
-    use crate::runtime::view_model::SongView;
     use crate::test_support::{
-        playlist_view, song, state_with_playlists, with_album, with_alias, with_artist, with_name,
+        entry_views, playlist_view, song, state_with_playlists, with_album, with_alias,
+        with_artist, with_name,
     };
 
     /// p2 的歌单 id(与 [`state_with_playlists`] 对齐)。
@@ -332,16 +332,9 @@ mod tests {
         PlaylistId::new(SourceKind::NETEASE, "p2")
     }
 
-    /// 把裸 Song 列表包成 SongView 塞进某歌单的 library.tracks 并 bump 版本。
+    /// 把裸 Song 列表包成 PlaylistEntryView 塞进某歌单的 library.tracks 并 bump 版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
-        let views = tracks
-            .into_iter()
-            .map(|data| SongView {
-                data,
-                loved: false,
-                plays: None,
-            })
-            .collect::<Vec<SongView>>();
+        let views = entry_views(tracks);
         s.library.tracks.insert(id.clone(), views);
         s.library.tracks_generation = s.library.tracks_generation.wrapping_add(1);
     }

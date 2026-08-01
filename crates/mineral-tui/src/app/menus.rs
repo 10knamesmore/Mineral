@@ -17,7 +17,7 @@ use crate::components::popup::{
 };
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
 use crate::runtime::scroll::viewport::pin_cursor;
-use crate::runtime::state::{DetailFrame, EntityRef, SearchFocus, View};
+use crate::runtime::state::{EntityRef, SearchFocus, View};
 
 use super::App;
 
@@ -62,6 +62,15 @@ pub(crate) struct ListSelection {
 
     /// 所在 list 面(操作项的导航语义按它分流)。
     pub surface: SurfaceKind,
+}
+
+/// 某个 surface 在 PlayQueue boundary 的 projection 与 exact target coordinate。
+struct SurfaceQueue {
+    /// Project 后的 queue。
+    songs: Vec<Song>,
+
+    /// `songs` 内的 exact selected occurrence。
+    target: usize,
 }
 
 impl App {
@@ -235,20 +244,41 @@ impl App {
     /// 列表整列作上下文);容器(专辑/歌单/artist)给播放全部 / 加入队列(见 [`container_action_items`])。
     fn action_items(&self, entity: &EntityRef, surface: SurfaceKind) -> Vec<MenuItem> {
         match entity {
-            EntityRef::Song(song) => vec![
-                MenuItem::keyed(
-                    'p',
-                    "Play",
-                    MenuAction::Play {
-                        song: song.clone(),
-                        queue: self.surface_song_queue(surface),
-                        context: self.surface_play_context(surface),
-                    },
-                ),
-                MenuItem::keyed('n', "Play next", MenuAction::PlayNext(song.clone())),
-                MenuItem::keyed('a', "Append to queue", MenuAction::Append(song.clone())),
-                MenuItem::keyed('d', "Download", MenuAction::Download(song.clone())),
-            ],
+            EntityRef::Song(song) => {
+                let context = self.surface_play_context(surface);
+                let mut items = Vec::new();
+                if let Some(surface_queue) = self.surface_queue(surface) {
+                    items.push(MenuItem::keyed(
+                        'p',
+                        "Play",
+                        MenuAction::Play {
+                            queue: surface_queue.songs,
+                            target: surface_queue.target,
+                            context: context.clone(),
+                        },
+                    ));
+                }
+                items.extend([
+                    MenuItem::keyed(
+                        'n',
+                        "Play next",
+                        MenuAction::PlayNext {
+                            song: song.clone(),
+                            context: context.clone(),
+                        },
+                    ),
+                    MenuItem::keyed(
+                        'a',
+                        "Append to queue",
+                        MenuAction::Append {
+                            song: song.clone(),
+                            context,
+                        },
+                    ),
+                    MenuItem::keyed('d', "Download", MenuAction::Download(song.clone())),
+                ]);
+                items
+            }
             EntityRef::Album(album) => container_action_items(ContainerRef::Album(album.clone())),
             EntityRef::Playlist(playlist) => {
                 container_action_items(ContainerRef::Playlist(playlist.clone()))
@@ -260,26 +290,32 @@ impl App {
     }
 
     /// 某 list 面的「整列歌曲」(`Play` 的队列上下文,语义同该面 activate 起播):
-    /// Library 取当前全列曲目(非过滤投影,与 Enter 一致)、search 结果列取整列结果(仅歌曲
-    /// kind),其余面无歌曲列表给空(落地时退化为单曲队列)。
-    fn surface_song_queue(&self, surface: SurfaceKind) -> Vec<Song> {
+    /// Library 按 `behavior.filter_play_scope` 取完整 collection 或当前过滤结果、search 结果列
+    /// 取整列结果(仅歌曲 kind)，并在同一 projection 上携带 exact target coordinate。
+    fn surface_queue(&self, surface: SurfaceKind) -> Option<SurfaceQueue> {
         match surface {
-            SurfaceKind::BrowseLibrary => self
-                .state
-                .current_tracks_slot()
-                .map(|v| v.iter().map(|sv| sv.data.clone()).collect::<Vec<Song>>())
-                .unwrap_or_default(),
-            SurfaceKind::SearchResults => self
-                .state
-                .channel_search
-                .active_results()
-                .and_then(|kr| match &kr.results {
-                    SearchPayload::Songs(v) => Some(v.clone()),
-                    SearchPayload::Albums(_)
-                    | SearchPayload::Playlists(_)
-                    | SearchPayload::Artists(_) => None,
-                })
-                .unwrap_or_default(),
+            SurfaceKind::BrowseLibrary => {
+                self.state
+                    .library_queue_projection()
+                    .map(|projection| SurfaceQueue {
+                        songs: projection.songs,
+                        target: projection.target,
+                    })
+            }
+            SurfaceKind::SearchResults => {
+                self.state
+                    .channel_search
+                    .active_results()
+                    .and_then(|kr| match &kr.results {
+                        SearchPayload::Songs(songs) => Some(SurfaceQueue {
+                            songs: songs.clone(),
+                            target: kr.sel(),
+                        }),
+                        SearchPayload::Albums(_)
+                        | SearchPayload::Playlists(_)
+                        | SearchPayload::Artists(_) => None,
+                    })
+            }
             // detail 面板当前区的整列歌曲（专辑/歌单曲目、artist 热门曲；Albums 区行是容器，
             // 走容器动作不取此）。
             SurfaceKind::SearchDetail => self
@@ -287,13 +323,15 @@ impl App {
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(DetailFrame::song_list)
-                .unwrap_or_default(),
-            SurfaceKind::BrowsePlaylists => Vec::new(),
+                .map(|frame| SurfaceQueue {
+                    songs: frame.song_list(),
+                    target: frame.list().sel(),
+                }),
+            SurfaceKind::BrowsePlaylists => None,
         }
     }
 
-    /// 某 list 面「整列起播」的队列语境(埋点 provenance,与 [`Self::surface_song_queue`] 取的
+    /// 某 list 面「整列起播」的队列语境(埋点 provenance,与 [`Self::surface_queue`] 取的
     /// 队列同源):Library 归当前歌单、search 结果列归搜索词、detail 面板归当前容器身份;
     /// Playlists 面选中的是容器本身(不在此起单曲队列)→ `Unknown`。
     fn surface_play_context(&self, surface: SurfaceKind) -> mineral_protocol::QueueContextWire {
@@ -331,10 +369,10 @@ impl App {
             EntityRef::Playlist(playlist) => {
                 let url = caps.and_then(|c| c.playlist_web_url().as_deref());
                 let mut items = playlist_copy_items(playlist, url);
-                // 模板实参带上已加载曲目:实体自带 songs 优先,空则退查 library 缓存。
+                // 模板实参带上已加载 membership:实体自带 entries 优先,空则退查 library 缓存。
                 let mut pl = (**playlist).clone();
-                if pl.songs.is_empty() {
-                    pl.songs = self
+                if pl.entries.is_empty() {
+                    pl.entries = self
                         .state
                         .library
                         .tracks
@@ -342,8 +380,8 @@ impl App {
                         .map(|views| {
                             views
                                 .iter()
-                                .map(|sv| sv.data.clone())
-                                .collect::<Vec<Song>>()
+                                .map(|entry| entry.data.clone())
+                                .collect::<Vec<mineral_model::PlaylistEntry>>()
                         })
                         .unwrap_or_default();
                 }
@@ -429,7 +467,7 @@ impl App {
         self.state
             .filtered_tracks()
             .get(self.state.browse.nav.track.sel())
-            .map(|sv| sv.data.clone())
+            .map(|entry| entry.data.song.clone())
     }
 
     /// Library 选中行的屏幕矩形。
@@ -794,15 +832,37 @@ mod tests {
         Ok(terminal)
     }
 
-    /// `o` @ Library:菜单弹出,快捷字母 `p`/`a` 把选中歌转成对应队列操作。
+    /// 给测试 App 热更 Library 过滤起播范围。
+    fn set_filter_play_scope(app: &mut App, scope: &str) -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            format!("return {{ tui = {{ behavior = {{ filter_play_scope = \"{scope}\" }} }} }}"),
+        )?;
+        let (cfg, warnings) = mineral_config::load(&path)?;
+        assert!(warnings.is_empty(), "配置字段应被 schema 接受:{warnings:?}");
+        app.apply_config(std::sync::Arc::new(cfg));
+        Ok(())
+    }
+
+    /// `o` @ Library:菜单弹出,快捷字母 `n`/`a` 把选中歌转成对应队列操作，并保留
+    /// 当前 Playlist context。
     #[test]
     fn o_menu_hotkeys_run_queue_ops() -> color_eyre::Result<()> {
-        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
+        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 1)?;
+        let queue_ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let queue_contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.client = std::sync::Arc::new(crate::test_support::TestClient {
+            queue_ops: std::sync::Arc::clone(&queue_ops),
+            queue_contexts: std::sync::Arc::clone(&queue_contexts),
+            ..crate::test_support::TestClient::default()
+        });
         let want_id = app
             .state
             .filtered_tracks()
             .get(1)
-            .map(|sv| sv.data.id.qualified())
+            .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
         draw_once(&app)?;
         press(&mut app, KeyCode::Char('o'));
@@ -821,11 +881,23 @@ mod tests {
             ],
             "n=插播 a=追加,都作用于选中歌"
         );
+        drop(ops);
+        let contexts = queue_contexts
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
+        let context = mineral_protocol::QueueContextWire::Playlist {
+            id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+            name: Some("EndSerenading".to_owned()),
+        };
+        assert_eq!(
+            *contexts,
+            vec![("insert_next", context.clone()), ("append", context),],
+            "Play next / Append 都沿用当前 Playlist context"
+        );
         Ok(())
     }
 
-    /// `o` → `p` = Play:整列(当前全列曲目)替换队列 + 起播选中曲,记 set_queue + play_song
-    /// 两步(canonical:p=Play 主操作,顶掉原 p=插播)。
+    /// `o` → `p` = Play:原子提交当前 projection + exact target occurrence。
     #[test]
     fn o_menu_play_replaces_queue_and_plays() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
@@ -833,7 +905,7 @@ mod tests {
             .state
             .filtered_tracks()
             .get(1)
-            .map(|sv| sv.data.id.qualified())
+            .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
         draw_once(&app)?;
         press(&mut app, KeyCode::Char('o'));
@@ -843,11 +915,63 @@ mod tests {
             .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
         assert_eq!(
             *ops,
-            vec![
-                ("set_queue", format!("3:{want_id}")),
-                ("play_song", want_id.clone()),
-            ],
-            "p=Play:整列(3)替换队列 + 起播选中曲,两步齐"
+            vec![("play_queue", format!("3:1:{want_id}"))],
+            "p=Play:整列(3)与 exact target 1 原子提交"
+        );
+        Ok(())
+    }
+
+    /// 默认 `collection`:过滤态 `o` → Play 仍提交完整歌单,并把 target 映射回原 occurrence。
+    #[test]
+    fn filtered_o_menu_play_defaults_to_full_collection() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
+        app.state.browse.search.set_query("Gjs");
+        let want_id = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|entry| entry.data.song.id.qualified())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
+        draw_once(&app)?;
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('p'));
+
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("3:2:{want_id}"))],
+            "默认应提交完整 collection,target 映射到原第 2 个 occurrence"
+        );
+        Ok(())
+    }
+
+    /// `matches`:过滤态 `o` → Play 只提交 filtered projection。
+    #[test]
+    fn filtered_o_menu_play_can_play_matches_only() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
+        set_filter_play_scope(&mut app, "matches")?;
+        app.state.browse.search.set_query("Gjs");
+        let want_id = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|entry| entry.data.song.id.qualified())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
+        draw_once(&app)?;
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('p'));
+
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("1:0:{want_id}"))],
+            "matches 档应只提交过滤结果"
         );
         Ok(())
     }
@@ -870,7 +994,7 @@ mod tests {
         assert_eq!(
             *got,
             vec![(
-                "set_queue",
+                "play_queue",
                 mineral_protocol::QueueContextWire::Playlist {
                     id: PlaylistId::new(SourceKind::NETEASE, "p1"),
                     name: Some("EndSerenading".to_owned()),
@@ -991,7 +1115,7 @@ mod tests {
             .state
             .filtered_tracks()
             .first()
-            .map(|sv| sv.data.clone())
+            .map(|entry| entry.data.song.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有首曲"))?;
         app.state.playback.play_url = Some(mineral_model::PlayUrl {
             song_id: playing.id.clone(),
@@ -1025,7 +1149,7 @@ mod tests {
             .state
             .filtered_tracks()
             .get(1)
-            .map(|sv| sv.data.clone())
+            .map(|entry| entry.data.song.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
         let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(other)));
         assert!(
@@ -1326,7 +1450,7 @@ mod tests {
         Album::builder()
             .id(id.clone())
             .name("EndSerenading".to_owned())
-            .songs(endserenading(n))
+            .tracks(mineral_model::AlbumTrack::enumerate(endserenading(n)))
             .build()
     }
 

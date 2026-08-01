@@ -1,57 +1,67 @@
 //! 队列编排与播放控制:替换 / 插入 / 追加队列、播放模式切换、上 / 下一首。
 
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{Song, SongId, SourceKind};
-use mineral_protocol::{PlayCursor, PlayMode, QueueEditOutcome, QueueOp};
+use mineral_model::{Song, SourceKind};
+use mineral_protocol::{PlayCursor, PlayMode, PlayQueueError, QueueEditOutcome, QueueOp};
 use rand::seq::SliceRandom;
 
 use super::PlayerCore;
 use crate::queue::{advance_next, advance_prev, apply_play_mode};
 
 impl PlayerCore {
-    /// 替换 queue。等价历史 `App::set_queue`。
+    /// 原子校验并替换 queue，按 request-local index 选择 exact target occurrence。
     ///
     /// # Params:
-    ///   - `new_queue`: 新队列
-    ///   - `target_id`: 队列中作为「当前」的歌
+    ///   - `new_queue`: 本次请求提交的新队列
+    ///   - `target`: `new_queue` 内的 0-based queue index
     ///   - `context`: 队列语境(埋点 provenance:随该队列每个起播继承)
-    pub fn set_queue(
+    ///
+    /// # Return:
+    ///   成功返回应立即起播的 target Song；invalid request 返回 structured error，状态不变。
+    pub fn replace_queue(
         &self,
         mut new_queue: Vec<Song>,
-        target_id: &SongId,
+        target: usize,
         context: mineral_stats::QueueContext,
-    ) {
-        // 队列硬上限:超长替换截断到 QUEUE_CAP(下标 0-based 故最大 9998,与序号显示上限一致)。
-        new_queue.truncate(crate::queue::QUEUE_CAP);
+    ) -> Result<Song, PlayQueueError> {
+        let len = new_queue.len();
+        if len == 0 {
+            return Err(PlayQueueError::Empty);
+        }
+        if len > crate::queue::QUEUE_CAP {
+            return Err(PlayQueueError::CapacityExceeded {
+                len,
+                cap: crate::queue::QUEUE_CAP,
+            });
+        }
+        let Some(target_song) = new_queue.get(target).cloned() else {
+            return Err(PlayQueueError::TargetOutOfBounds { target, len });
+        };
         {
             let mut st = self.inner.state.lock();
             mineral_log::info!(
                 target: "player",
                 len = new_queue.len(),
-                target_id = target_id.as_str(),
+                target,
+                target_id = target_song.id.as_str(),
                 mode = ?st.play_mode,
-                "set queue"
+                "replace queue"
             );
             st.queue_context = context;
             // 换队列 = 旧队列的 per-song 语境覆盖全部作废:未播插队曲的条目不清会永久
             // 残留(泄漏),且同 id 歌在新队列起播时会误继承陈旧语境、污染归属统计。
             st.context_overrides.clear();
             if matches!(st.play_mode, PlayMode::Shuffle) {
-                let mut shuffled = new_queue.clone();
-                shuffled.shuffle(&mut rand::rng());
-                if let Some(pos) = shuffled.iter().position(|s| s.id == *target_id) {
-                    shuffled.swap(0, pos);
-                }
-                st.original_queue = Some(new_queue);
-                st.queue = shuffled;
+                let original_queue = new_queue.clone();
+                let selected = new_queue.remove(target);
+                new_queue.shuffle(&mut rand::rng());
+                new_queue.insert(0, selected);
+                st.original_queue = Some(original_queue);
+                st.queue = new_queue;
                 st.cursor = PlayCursor::InQueue(0);
             } else {
-                let sel = new_queue
-                    .iter()
-                    .position(|s| s.id == *target_id)
-                    .unwrap_or(0);
                 st.queue = new_queue;
-                st.cursor = PlayCursor::InQueue(sel);
+                st.cursor = PlayCursor::InQueue(target);
                 st.original_queue = None;
             }
             // 换队列后已预排的下一曲可能不再是新队列的 next:作废,让 check_prefetch 按新队列重排。
@@ -61,6 +71,7 @@ impl PlayerCore {
         // 取消引擎里尚未 append 的待建预排(已 append 的无法摘除,会自然播完后由边界兜底)。
         self.inner.audio.clear_next();
         self.spawn_save_session();
+        Ok(target_song)
     }
 
     /// 插播:插到当前曲之后,不动队列级 context 与当前曲。

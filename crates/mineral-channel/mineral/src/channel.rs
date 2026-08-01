@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
 };
-use mineral_model::{BitRate, PlayUrl, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{
+    BitRate, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
+};
 use mineral_persist::ServerStore;
 
 /// `mineral:favorites` 歌单 id——本 channel 唯一一张 synthetic 歌单。
@@ -65,7 +67,7 @@ impl MineralChannel {
             .id(favorites_playlist_id())
             .name("Favorites".to_owned())
             .track_count(track_count)
-            .songs(songs)
+            .entries(PlaylistEntry::enumerate(songs))
             .build())
     }
 }
@@ -155,27 +157,42 @@ mod tests {
         assert_eq!(p.id, favorites_playlist_id());
         assert_eq!(p.name, "Favorites");
         assert_eq!(p.track_count, 2, "幽灵行(无 meta)不计入");
-        assert!(p.songs.is_empty(), "列表面不带曲目载荷");
+        assert!(p.entries.is_empty(), "列表面不带曲目载荷");
         Ok(())
     }
 
-    /// playlist_detail:favorites id 出全曲目(收藏时间降序,源 namespace 保留);
-    /// 其他 id 一律 NotSupported。
+    /// playlist_detail:favorites id 出全曲目(entered_at DESC,同批按 namespace/value 稳定),
+    /// relation 从 0 连续编号且源 namespace 保留;其他 id 一律 NotSupported。
     #[tokio::test]
     async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<()> {
         let (_dir, store) = store_with_favorites().await?;
         let ch = MineralChannel::new(store);
         let p = ch.playlist_detail(&favorites_playlist_id()).await?;
         assert_eq!(p.track_count, 2);
-        assert_eq!(p.songs.len(), 2, "detail 带全曲目,与 track_count 同口径");
-        let sources = p
-            .songs
+        assert_eq!(p.entries.len(), 2, "detail 带全曲目,与 track_count 同口径");
+        let names = p
+            .entries
             .iter()
-            .map(mineral_model::Song::source)
-            .collect::<Vec<SourceKind>>();
-        assert!(
-            sources.contains(&SourceKind::NETEASE) && sources.contains(&SourceKind::BILIBILI),
-            "曲目保留原源 namespace(播放据此路由回真实 channel)"
+            .map(|entry| entry.song.name.as_str())
+            .collect::<Vec<_>>();
+        let indexes = p
+            .entries
+            .iter()
+            .map(|entry| entry.index.get())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["夜間飛行", "Palisade"],
+            "后收藏的 bilibili 曲目排在先收藏的 netease 曲目前"
+        );
+        assert_eq!(indexes, vec![0, 1]);
+        assert_eq!(
+            p.entries.first().map(|entry| entry.song.source()),
+            Some(SourceKind::BILIBILI)
+        );
+        assert_eq!(
+            p.entries.get(1).map(|entry| entry.song.source()),
+            Some(SourceKind::NETEASE)
         );
 
         let other = mineral_model::PlaylistId::new(SourceKind::MINERAL, "nope");
@@ -192,7 +209,7 @@ mod tests {
         let ch = MineralChannel::new(ServerStore::disabled());
         let p = ch.playlist_detail(&favorites_playlist_id()).await?;
         assert_eq!(p.track_count, 0);
-        assert!(p.songs.is_empty());
+        assert!(p.entries.is_empty());
         Ok(())
     }
 

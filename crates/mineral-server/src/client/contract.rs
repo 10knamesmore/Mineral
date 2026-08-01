@@ -4,8 +4,8 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, PlayerSync, PlayerVersions, QueueContextWire,
-    QueueEditOutcome, QueueOp, SongStatsWire,
+    CancelFilter, DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions,
+    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 
@@ -36,13 +36,21 @@ pub trait Client: Send + Sync {
     /// submit SongUrl + submit Lyrics)。
     fn play_song(&self, song: Song);
 
-    /// 替换 queue + 设当前位置。Shuffle 模式下 server 端洗牌。
+    /// 原子替换 queue 并起播 request-local target occurrence。
     ///
     /// # Params:
-    ///   - `queue`: 新队列
-    ///   - `target_id`: 队列中作为「当前」的歌
+    ///   - `songs`: 新队列
+    ///   - `target`: `songs` 内的 0-based queue index
     ///   - `context`: 队列语境(埋点 provenance:该队列来自搜索 / 歌单 / 专辑 / 艺人 / 手动)
-    fn set_queue(&self, queue: Vec<Song>, target_id: SongId, context: QueueContextWire);
+    ///
+    /// # Return:
+    ///   成功起播返回 `Ok(())`；invalid queue 返回 structured error，状态不变。
+    fn play_queue(
+        &self,
+        songs: Vec<Song>,
+        target: usize,
+        context: QueueContextWire,
+    ) -> Result<(), PlayQueueError>;
 
     /// 插播:插到当前曲之后,不动队列级 context 与当前曲。
     ///

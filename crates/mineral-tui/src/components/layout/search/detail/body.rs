@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
 use mineral_config::SweepStyle;
-use mineral_model::{Album, Song};
+use mineral_model::{Album, AlbumTrack, PlaylistEntry, Song};
 
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
@@ -56,8 +56,8 @@ pub(super) fn draw_body(
     }
 }
 
-/// 非 artist 帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.songs`（同源
-/// 专辑无需再列 album 列），歌单帧来自 `Tracks`（混源，多列出 album）。
+/// 非 artist 帧主体：曲目列表（数据未到画骨架）。album / song 帧曲目来自 `Album.tracks`（同源
+/// 专辑无需再列 album 列），歌单帧来自 `PlaylistEntries`（混源，多列出 album）。
 fn draw_track_body(
     buf: &mut Buffer,
     body: Rect,
@@ -78,16 +78,16 @@ fn draw_track_body(
         Some(DetailData::Album(a)) => draw_track_list(
             buf,
             body,
-            &a.songs,
+            TrackList::Album(&a.tracks),
             paint,
             TrackColumns::new(/*artist*/ true, /*album*/ false),
             state,
             theme,
         ),
-        Some(DetailData::Tracks(songs)) => draw_track_list(
+        Some(DetailData::PlaylistEntries(entries)) => draw_track_list(
             buf,
             body,
-            songs,
+            TrackList::Playlist(entries),
             paint,
             TrackColumns::new(/*artist*/ true, /*album*/ true),
             state,
@@ -188,7 +188,7 @@ fn draw_artist_section(
         ) => draw_track_list(
             buf,
             list,
-            &a.songs,
+            TrackList::Songs(&a.songs),
             paint,
             TrackColumns::new(/*artist*/ false, /*album*/ true),
             state,
@@ -259,13 +259,13 @@ fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme:
 fn draw_track_list(
     buf: &mut Buffer,
     area: Rect,
-    songs: &[Song],
+    tracks: TrackList<'_>,
     paint: ListPaint<'_>,
     cols: TrackColumns,
     state: &AppState,
     theme: &Theme,
 ) {
-    if songs.is_empty() {
+    if tracks.is_empty() {
         // 已到货但 0 曲 → 静态空态(非 loading,数据已在手)。
         draw_empty(buf, area, "no tracks", theme);
         return;
@@ -284,16 +284,29 @@ fn draw_track_list(
     .copied()
     .unwrap_or(0);
     let sel = paint.list.sel();
-    let rows = songs.iter().enumerate().map(|(idx, s)| {
-        let loved = state.is_liked(s);
-        let is_current = state.player.current.as_ref().is_some_and(|c| c.id == s.id);
+    let rows = (0..tracks.len()).filter_map(|view_index| {
+        let (display_index, song) = tracks.row(view_index)?;
+        let loved = state.is_liked(song);
+        let is_current = state
+            .player
+            .current
+            .as_ref()
+            .is_some_and(|current| current.id == song.id);
         let marquee = row_marquee(
-            idx == sel,
+            view_index == sel,
             &marquee_ctx,
             Slot::SearchDetailSelected,
             title_w,
         );
-        track_table::track_row(s, idx, loved, is_current, cols, theme, marquee)
+        Some(track_table::track_row(
+            song,
+            display_index,
+            loved,
+            is_current,
+            cols,
+            theme,
+            marquee,
+        ))
     });
     let table = Table::new(rows, widths)
         .header(track_table::header_row(cols, theme))
@@ -306,10 +319,54 @@ fn draw_track_list(
         area,
         table,
         paint.list,
-        songs.len(),
+        tracks.len(),
         viewport,
         paint.motion,
     );
+}
+
+/// 曲目表的 relation-aware 数据源。view coordinate 只用于选中与滚动，`row` 同时返回
+/// authoritative display index 与 Song projection。
+#[derive(Clone, Copy)]
+enum TrackList<'a> {
+    /// 不属于 Album / Playlist relation 的普通 Song 列表，显示当前 view coordinate。
+    Songs(&'a [Song]),
+
+    /// Album relation，显示 `AlbumTrack.index`。
+    Album(&'a [AlbumTrack]),
+
+    /// Playlist relation，显示 `PlaylistEntry.index`。
+    Playlist(&'a [PlaylistEntry]),
+}
+
+impl<'a> TrackList<'a> {
+    /// 数据源是否为空。
+    fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    /// 数据源长度。
+    fn len(self) -> usize {
+        match self {
+            Self::Songs(songs) => songs.len(),
+            Self::Album(tracks) => tracks.len(),
+            Self::Playlist(entries) => entries.len(),
+        }
+    }
+
+    /// 按 view coordinate 读取显示 index 与 Song；relation 列表不把 view coordinate 冒充
+    /// canonical CollectionIndex。
+    fn row(self, view_index: usize) -> Option<(u64, &'a Song)> {
+        match self {
+            Self::Songs(songs) => u64::try_from(view_index).ok().zip(songs.get(view_index)),
+            Self::Album(tracks) => tracks
+                .get(view_index)
+                .map(|track| (track.index.get(), &track.song)),
+            Self::Playlist(entries) => entries
+                .get(view_index)
+                .map(|entry| (entry.index.get(), &entry.song)),
+        }
+    }
 }
 
 /// 专辑表（name/tracks/year/label，带表头）：artist Albums 区，`list` 选中行整行高亮（下钻入口）。

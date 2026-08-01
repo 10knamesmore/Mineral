@@ -46,7 +46,7 @@ mod tests {
     }
 
     /// 约束由库执行,不靠代码纪律:song_kv 的「vtype 与值列相符」CHECK、
-    /// session_state 的「当前曲成对可空」CHECK、playlist_tracks → playlist_cache 外键
+    /// session_state 的「当前曲成对可空」CHECK、playlist_entries → playlist_cache 外键
     /// (sqlx 的 sqlite 默认 pragma 带 `foreign_keys=ON`)各自拒绝坏行。
     #[tokio::test]
     async fn schema_constraints_reject_bad_rows() -> color_eyre::Result<()> {
@@ -71,14 +71,72 @@ mod tests {
         .await;
         assert!(half.is_err(), "当前曲半空对应被 CHECK 拒绝");
 
-        // playlist_tracks:引用不存在的 playlist_cache 行 → FK 拒绝。
+        // playlist_entries:引用不存在的 playlist_cache 行 → FK 拒绝。
         let orphan = sqlx::query(
-            "INSERT INTO playlist_tracks(namespace,playlist_id,position,song_value) \
-             VALUES ('netease','nope',0,'s1')",
+            "INSERT INTO playlist_entries(playlist_namespace,playlist_value,collection_index, \
+                                          song_namespace,song_value) \
+             VALUES ('netease','nope',0,'netease','s1')",
         )
         .execute(&pool)
         .await;
         assert!(orphan.is_err(), "孤儿曲目行应被外键拒绝");
+        Ok(())
+    }
+
+    /// 0004/0005 从旧 schema 原值迁移 favorite time、playlist position 与隐含 Song namespace。
+    #[tokio::test]
+    async fn relation_migrations_preserve_old_values() -> color_eyre::Result<()> {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_baseline.sql"))
+            .execute(&pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO song_stats(namespace,song_value,play_count,loved_at) \
+             VALUES('netease','song',3,123456)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO playlist_cache(namespace,playlist_id,fetched_at) \
+             VALUES('netease','playlist',1)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO playlist_tracks(namespace,playlist_id,position,song_value) \
+             VALUES('netease','playlist',7,'song')",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0004_song_favorites.sql"))
+            .execute(&pool)
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0005_playlist_entries.sql"))
+            .execute(&pool)
+            .await?;
+
+        let favorite: (String, String, i64) =
+            sqlx::query_as("SELECT namespace,song_value,entered_at FROM song_favorites")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(favorite, ("netease".to_owned(), "song".to_owned(), 123456));
+        let entry: (i64, String, String) = sqlx::query_as(
+            "SELECT collection_index,song_namespace,song_value FROM playlist_entries",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(entry, (7, "netease".to_owned(), "song".to_owned()));
+        let columns = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, i64)>(
+            "PRAGMA table_info(song_stats)",
+        )
+        .fetch_all(&pool)
+        .await?;
+        assert!(
+            columns
+                .iter()
+                .all(|(_, name, _, _, _, _)| name != "loved_at"),
+            "迁移后 song_stats 不应继续存 favorite fact"
+        );
         Ok(())
     }
 

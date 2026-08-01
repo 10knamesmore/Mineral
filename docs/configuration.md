@@ -204,6 +204,7 @@ return {
 | `search_prefetch_rows` | 8 | 搜索结果懒分页预取半径:光标距已加载末行 ≤ 此行数且未榨干时自动拉下一页 |
 | `kill_spawned_daemon_on_exit` | `true` | 退出 TUI 连带关掉自己拉起的 daemon;`false` = daemon 续命后台播放,下次启动自动接回。只影响本次亲手拉起的 daemon,attach 已有 daemon 不杀(想连 daemon 一起退用 `Q`,它无视本旋钮) |
 | `remember_track_pos` | `"session"` | 歌单内光标位置记忆:`"off"` 不记 / `"session"` 本次运行内 / `"persist"` 整表落 `tui.db` 跨重启;搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置 |
+| `filter_play_scope` | `"collection"` | Library 过滤态起播范围:`"collection"` 只用过滤定位并继续播放完整歌单;`"matches"` 只把当前过滤结果放进队列 |
 
 ## tui.spectrum — 频谱面板
 

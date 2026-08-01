@@ -25,13 +25,13 @@ use super::page::Page;
 /// Browse 页吃完按键后吐给 App 的副作用意图;[`App::apply_browse_effect`] 落地。
 /// Browse 自管纯 view 态动作;需要 model(client / 落盘 / lyrics)的操作经此冒泡。
 pub(crate) enum BrowseEffect {
-    /// 替换队列并起播(set_queue + play_song 两步;漏 play_song 会换队不响)。
+    /// 原子替换队列并起播 exact target occurrence。
     PlayQueue {
-        /// 替换进播放队列的曲目(当前歌单全部曲目)。
+        /// 替换进播放队列的曲目；Library 过滤态的范围由 `filter_play_scope` 决定。
         queue: Vec<Song>,
 
-        /// 起播曲目(也是 set_queue 的 target)。Box 平衡各变体大小。
-        song: Box<Song>,
+        /// `queue` 内的 0-based exact target coordinate。
+        target: usize,
 
         /// 队列语境(埋点 provenance:库内起播恒 Playlist{当前歌单 id})。
         context: mineral_protocol::QueueContextWire,
@@ -265,11 +265,11 @@ impl BrowsePage {
                         self.nav.playlist.set_sel(raw_idx);
                     }
                     if let Some(idx) = locate.and_then(|song_id| {
-                        model
-                            .library
-                            .tracks
-                            .get(&target_id)
-                            .and_then(|ts| ts.iter().position(|sv| sv.data.id == song_id))
+                        model.library.tracks.get(&target_id).and_then(|entries| {
+                            entries
+                                .iter()
+                                .position(|entry| entry.data.song.id == song_id)
+                        })
                     }) {
                         sel_track = idx;
                     } else if model.cfg.tui().behavior().remember_track_pos().enabled()
@@ -297,16 +297,9 @@ impl BrowsePage {
                 BrowseEffect::None
             }
             View::Library => {
-                let filtered = self.filtered_tracks(model);
-                let Some(song) = filtered.get(self.nav.track.sel()).map(|sv| sv.data.clone())
-                else {
+                let Some(projection) = self.library_queue_projection(model) else {
                     return BrowseEffect::None;
                 };
-                let queue: Vec<Song> = self
-                    .current_tracks(model)
-                    .into_iter()
-                    .map(|sv| sv.data)
-                    .collect();
                 // 埋点队列语境:库内起播来自当前歌单(nav.playlist.sel 在进库时已钉到它)。
                 let context = model.library.playlists.get(self.nav.playlist.sel()).map_or(
                     mineral_protocol::QueueContextWire::Unknown,
@@ -317,8 +310,8 @@ impl BrowsePage {
                 );
                 // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。
                 BrowseEffect::PlayQueue {
-                    queue,
-                    song: Box::new(song),
+                    queue: projection.songs,
+                    target: projection.target,
                     context,
                 }
             }
@@ -364,14 +357,14 @@ impl BrowsePage {
         let Some(song_id) = self
             .filtered_tracks(model)
             .get(self.nav.track.sel())
-            .map(|sv| sv.data.id.clone())
+            .map(|entry| entry.data.song.id.clone())
         else {
             return false;
         };
         let index = self
             .current_tracks(model)
             .iter()
-            .position(|sv| sv.data.id == song_id)
+            .position(|entry| entry.data.song.id == song_id)
             .unwrap_or(self.nav.track.sel());
         // 屏上相对行:光标减当前滚动目标(渲染端维护的视口首行)。
         let screen_row = self
@@ -412,12 +405,9 @@ impl App {
         match eff {
             BrowseEffect::PlayQueue {
                 queue,
-                song,
+                target,
                 context,
-            } => {
-                self.client.set_queue(queue, song.id.clone(), context);
-                self.client.play_song(*song);
-            }
+            } => self.play_queue(queue, target, context),
             BrowseEffect::ScrollLyrics(step) => self.state.scroll_lyrics(step),
             BrowseEffect::SeekLyricFocus => {
                 // 焦点行有时间戳才跳:seek 到该行起点,并把锚点钉在该行等 seek 落地再无缝
@@ -518,14 +508,28 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use mineral_model::SourceKind;
+    use mineral_model::{PlaylistId, SourceKind};
 
     use super::super::App;
-    use crate::test_support::app_with_library;
+    use crate::test_support::{app_with_library, app_with_library_probed};
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
     fn press(app: &mut App, code: KeyCode) {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
+    }
+
+    /// 给测试 App 热更 Library 过滤起播范围。
+    fn set_filter_play_scope(app: &mut App, scope: &str) -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.lua");
+        std::fs::write(
+            &path,
+            format!("return {{ tui = {{ behavior = {{ filter_play_scope = \"{scope}\" }} }} }}"),
+        )?;
+        let (cfg, warnings) = mineral_config::load(&path)?;
+        assert!(warnings.is_empty(), "配置字段应被 schema 接受:{warnings:?}");
+        app.apply_config(std::sync::Arc::new(cfg));
+        Ok(())
     }
 
     /// 列表导航逐键回归:j/k/J/K/g/G 在 Library 与 Playlists 两个视图移动选中,
@@ -572,7 +576,7 @@ mod tests {
         Ok(())
     }
 
-    /// Playlists 视图 `l` 进 Library;Library 视图 Enter 触发 set_queue+play
+    /// Playlists 视图 `l` 进 Library;Library 视图 Enter 触发 atomic PlayQueue
     /// (TestClient no-op,断 view 流转与不 panic)。
     #[test]
     fn l_enters_library_enter_plays() -> color_eyre::Result<()> {
@@ -600,6 +604,74 @@ mod tests {
             app.state.browse.view,
             crate::runtime::state::View::Library,
             "Enter 播放不切视图"
+        );
+        Ok(())
+    }
+
+    /// 默认 `collection`:过滤只定位,Enter 提交完整歌单并把 target 映射回原 occurrence。
+    #[test]
+    fn filtered_enter_defaults_to_full_collection() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
+        let playlist_id = PlaylistId::new(SourceKind::NETEASE, "p1");
+        let first_id = app
+            .state
+            .library
+            .tracks
+            .get(&playlist_id)
+            .and_then(|entries| entries.first())
+            .map(|entry| entry.data.song.id.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有首曲"))?;
+        let third = app
+            .state
+            .library
+            .tracks
+            .get_mut(&playlist_id)
+            .and_then(|entries| entries.get_mut(2))
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 3 首"))?;
+        third.data.song.id = first_id;
+        app.state.browse.search.set_query("Gjs");
+        let want_id = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|entry| entry.data.song.id.qualified())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
+
+        press(&mut app, KeyCode::Enter);
+
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("3:2:{want_id}"))],
+            "默认应提交完整 collection,target 映射到原第 2 个 occurrence"
+        );
+        Ok(())
+    }
+
+    /// `matches`:过滤态 Enter 只提交 filtered projection。
+    #[test]
+    fn filtered_enter_can_play_matches_only() -> color_eyre::Result<()> {
+        let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
+        set_filter_play_scope(&mut app, "matches")?;
+        app.state.browse.search.set_query("Gjs");
+        let want_id = app
+            .state
+            .filtered_tracks()
+            .first()
+            .map(|entry| entry.data.song.id.qualified())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
+
+        press(&mut app, KeyCode::Enter);
+
+        let ops = queue_ops
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+        assert_eq!(
+            *ops,
+            vec![("play_queue", format!("1:0:{want_id}"))],
+            "matches 档应只提交过滤结果"
         );
         Ok(())
     }
@@ -721,19 +793,15 @@ mod tests {
     fn enter_on_deep_hit_locates_song_in_library() -> color_eyre::Result<()> {
         use mineral_model::PlaylistId;
 
-        use crate::runtime::view_model::SongView;
-        use crate::test_support::{song, with_name};
+        use crate::test_support::{entry_views, song, with_name};
 
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
-        let views = ["甲", "乙", "春日影"]
+        let songs = ["甲", "乙", "春日影"]
             .into_iter()
-            .map(|n| SongView {
-                data: with_name(song(n), n),
-                loved: false,
-                plays: None,
-            })
-            .collect::<Vec<SongView>>();
+            .map(|name| with_name(song(name), name))
+            .collect();
+        let views = entry_views(songs);
         app.state.library.tracks.insert(pid, views);
         app.state.library.tracks_generation = 1;
 
@@ -766,8 +834,7 @@ mod tests {
     fn locate_on_enter_disabled_keeps_top() -> color_eyre::Result<()> {
         use mineral_model::PlaylistId;
 
-        use crate::runtime::view_model::SongView;
-        use crate::test_support::{song, with_name};
+        use crate::test_support::{entry_views, song, with_name};
 
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("config.lua");
@@ -779,14 +846,11 @@ mod tests {
         let (cfg, _warnings) = mineral_config::load(&path)?;
         app.apply_config(std::sync::Arc::new(cfg));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
-        let views = ["甲", "乙", "春日影"]
+        let songs = ["甲", "乙", "春日影"]
             .into_iter()
-            .map(|n| SongView {
-                data: with_name(song(n), n),
-                loved: false,
-                plays: None,
-            })
-            .collect::<Vec<SongView>>();
+            .map(|name| with_name(song(name), name))
+            .collect();
+        let views = entry_views(songs);
         app.state.library.tracks.insert(pid, views);
         app.state.library.tracks_generation = 1;
 
@@ -991,19 +1055,15 @@ mod tests {
         use mineral_model::PlaylistId;
 
         use crate::runtime::track_pos::TrackPos;
-        use crate::runtime::view_model::SongView;
-        use crate::test_support::{song, with_name};
+        use crate::test_support::{entry_views, song, with_name};
 
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
-        let views = ["甲", "乙", "春日影"]
+        let songs = ["甲", "乙", "春日影"]
             .into_iter()
-            .map(|n| SongView {
-                data: with_name(song(n), n),
-                loved: false,
-                plays: None,
-            })
-            .collect::<Vec<SongView>>();
+            .map(|name| with_name(song(name), name))
+            .collect();
+        let views = entry_views(songs);
         app.state.library.tracks.insert(pid.clone(), views);
         app.state.library.tracks_generation = 1;
         app.state.browse.nav.track_pos.insert(

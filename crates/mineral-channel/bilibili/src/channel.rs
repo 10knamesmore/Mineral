@@ -179,7 +179,8 @@ impl MusicChannel for BilibiliChannel {
             let info = api::view::video_info(&self.transport, &bvid)
                 .await
                 .map_err(map_err)?;
-            for song in convert::view_to_album(info).songs {
+            for track in convert::view_to_album(info).tracks {
+                let song = track.song;
                 if wanted.contains(song.id.as_str()) {
                     out.push(song);
                 }
@@ -267,7 +268,12 @@ impl MusicChannel for BilibiliChannel {
                 convert::FavEntryPlan::Single(song) => songs.push(song),
                 convert::FavEntryPlan::Expand { bvid, fallback } => {
                     match api::view::video_info(&self.transport, &bvid).await {
-                        Ok(info) => songs.extend(convert::view_to_album(info).songs),
+                        Ok(info) => songs.extend(
+                            convert::view_to_album(info)
+                                .tracks
+                                .into_iter()
+                                .map(|track| track.song),
+                        ),
                         Err(e) => {
                             let err = map_err(e);
                             if expansion_should_abort(&err) {
@@ -290,7 +296,7 @@ impl MusicChannel for BilibiliChannel {
             None => Ok(Playlist::builder()
                 .id(id.clone())
                 .name(fid.to_owned())
-                .songs(songs)
+                .entries(mineral_model::PlaylistEntry::enumerate(songs))
                 .build()),
         }
     }

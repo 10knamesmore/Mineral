@@ -71,7 +71,7 @@ pub struct TuiConfig {
     /// 键位重映射段(动作 → 键)。
     keys: KeysConfig,
 
-    /// 交互手感段(音量/seek 步长、列表跳行、daemon 续命开关)。
+    /// 交互手感段(音量/seek 步长、列表跳行、过滤起播范围、daemon 续命开关)。
     behavior: BehaviorConfig,
 
     /// 频谱面板段(观感开关 + 平滑/衰减 + peak 物理)。

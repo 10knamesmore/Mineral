@@ -2,7 +2,7 @@ use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use crate::{ids::PlaylistId, song::Song, source::SourceKind, url::MediaUrl};
+use crate::{collection::PlaylistEntry, ids::PlaylistId, source::SourceKind, url::MediaUrl};
 
 /// 一个歌单及其曲目。
 ///
@@ -24,7 +24,7 @@ pub struct Playlist {
     #[builder(default)]
     pub cover_url: Option<MediaUrl>,
 
-    /// 标称曲目数(可能与 `songs.len()` 不一致——分页或仅头部加载时)。
+    /// 标称曲目数(可能与 `entries.len()` 不一致——分页或仅头部加载时)。
     #[builder(default)]
     pub track_count: u64,
 
@@ -36,9 +36,9 @@ pub struct Playlist {
     #[builder(default)]
     pub subscriber_count: Option<u64>,
 
-    /// 已加载的曲目列表。
+    /// 已加载的 membership relation；每项保留 canonical snapshot 中的 0-based absolute index。
     #[builder(default)]
-    pub songs: Vec<Song>,
+    pub entries: Vec<PlaylistEntry>,
 }
 
 impl Playlist {

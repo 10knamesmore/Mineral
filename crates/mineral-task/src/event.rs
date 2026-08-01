@@ -40,7 +40,8 @@ pub enum TaskEvent {
     },
 
     /// 某源 canonical 收藏(♥)集已到:server 从本地 persist 读、经远端红心导入合并后推送,
-    /// client 据此装饰 SongView。非任务事件(server 直接推,不经 channel-fetch lane)。
+    /// client 据此装饰 Song / PlaylistEntry view。非任务事件(server 直接推,不经
+    /// channel-fetch lane)。
     LikedSongIdsFetched {
         /// 来源(source)。
         source: SourceKind,

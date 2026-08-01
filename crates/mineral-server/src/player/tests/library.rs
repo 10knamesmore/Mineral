@@ -449,9 +449,9 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
             _ => None,
         })
         .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应重推聚合歌单 detail"))?;
-    assert_eq!(detail.songs.len(), 1);
+    assert_eq!(detail.entries.len(), 1);
     assert_eq!(
-        detail.songs.first().map(|s| &s.id),
+        detail.entries.first().map(|entry| &entry.song.id),
         Some(&track.id),
         "聚合曲目保留原源 id"
     );
@@ -471,6 +471,63 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         .find(|p| p.id.namespace() == SourceKind::MINERAL)
         .ok_or_else(|| color_eyre::eyre::eyre!("快照应含 mineral 聚合歌单"))?;
     assert_eq!(fav.track_count, 1, "sidebar 计数跟随收藏数");
+    Ok(())
+}
+
+/// 显式 `set_favorite(true)` 是 transition API：相同状态第二次调用不重复 push canonical，
+/// 也不重复写 love_changes event。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_favorite_same_state_is_event_idempotent() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+    let stats = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(stats.clone(), params);
+    let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        url_delay: None,
+        liked_ids: None,
+        playlists: None,
+    });
+    let core = core_with_events_stats(
+        vec![channel],
+        persist,
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder.clone(),
+    )?;
+    let id = SongId::new(SourceKind::NETEASE, "same-state");
+    let mut rx = core.notify().subscribe();
+
+    core.set_favorite(&id, /*loved*/ true, mineral_stats::Actor::User)
+        .await?;
+    core.set_favorite(&id, /*loved*/ true, mineral_stats::Actor::User)
+        .await?;
+
+    let pushes = drain_hub_task_events(&mut rx)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                mineral_task::TaskEvent::LikedSongIdsFetched { source, .. }
+                    if *source == SourceKind::NETEASE
+            )
+        })
+        .count();
+    assert_eq!(pushes, 1, "same-state set 不重复 push canonical");
+    recorder.flush().await;
+    let summary = stats.event_summary(0..i64::MAX, /*limit*/ 10).await?;
+    assert_eq!(
+        summary
+            .love_by_origin
+            .iter()
+            .find(|bucket| bucket.label == "user")
+            .map(|bucket| bucket.count),
+        Some(1),
+        "same-state set 不重复写 user LoveChange"
+    );
     Ok(())
 }
 
@@ -576,18 +633,20 @@ async fn meta_backfill_covers_all_sources() -> color_eyre::Result<()> {
 }
 
 /// sync_favorites 把远端红心导入本地 persist(add-only,不删本地),并向 event hub
-/// 推 canonical(persist)favorited 集。回归:导入不得删掉本地独有的收藏(本地为准)。
-#[tokio::test]
+/// 推 canonical(persist)favorited 集。新导入只记一次 origin=import；相同 snapshot
+/// 再同步时零 insert、零 reorder、零重复 import event。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+    let stats = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(stats.clone(), params);
     let local_only = SongId::new(SourceKind::NETEASE, "B");
     persist
         .scope(SourceKind::NETEASE)
         .set_loved(&local_only, /*loved*/ true)
         .await?;
-    let core = core_with_persist(Arc::default(), persist.clone())?;
-
     let remote_only = SongId::new(SourceKind::NETEASE, "A");
     let remote: rustc_hash::FxHashSet<SongId> = [remote_only.clone()].into_iter().collect();
     let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
@@ -596,7 +655,18 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
         liked_ids: Some(remote),
         playlists: None,
     });
+    let core = core_with_events_stats(
+        vec![Arc::clone(&channel)],
+        persist.clone(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder.clone(),
+    )?;
     let mut rx = core.notify().subscribe();
+    core.sync_favorites(SourceKind::NETEASE, Arc::clone(&channel))
+        .await;
     core.sync_favorites(SourceKind::NETEASE, channel).await;
 
     let ids = persist.scope(SourceKind::NETEASE).loved_ids().await?;
@@ -620,6 +690,17 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
     assert!(
         last.contains(&remote_only) && last.contains(&local_only),
         "推给 client 的应是 persist canonical 集(A ∪ B)"
+    );
+    recorder.flush().await;
+    let summary = stats.event_summary(0..i64::MAX, /*limit*/ 10).await?;
+    assert_eq!(
+        summary
+            .love_by_origin
+            .iter()
+            .find(|bucket| bucket.label == "import")
+            .map(|bucket| bucket.count),
+        Some(1),
+        "远端 A 首次导入记一次 origin=import；第二次幂等同步不重复记"
     );
     Ok(())
 }

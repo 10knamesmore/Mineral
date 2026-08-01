@@ -10,6 +10,54 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CancelFilter, PlayerSync, PlayerVersions, QueueEditOutcome, QueueOp};
 
+/// Atomic PlayQueue request 的 validation error。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayQueueError {
+    /// 提交了空 queue，无法选择 target occurrence。
+    Empty,
+
+    /// Queue 超过 server 的 hard cap；请求整体拒绝，不 truncate。
+    CapacityExceeded {
+        /// 请求提交的 Song 数。
+        len: usize,
+
+        /// Server 接受的最大 Song 数。
+        cap: usize,
+    },
+
+    /// Target 不是本次提交 Song Vec 中的有效 queue index。
+    TargetOutOfBounds {
+        /// 请求提交的 0-based target index。
+        target: usize,
+
+        /// 请求提交的 Song 数。
+        len: usize,
+    },
+
+    /// IPC transport 或响应 contract 不可用，queue 未确认起播。
+    Unavailable {
+        /// 可供 UI 展示和日志定位的人读原因。
+        message: String,
+    },
+}
+
+impl std::fmt::Display for PlayQueueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("queue 不能为空"),
+            Self::CapacityExceeded { len, cap } => {
+                write!(f, "queue 长度 {len} 超过上限 {cap}")
+            }
+            Self::TargetOutOfBounds { target, len } => {
+                write!(f, "target {target} 越界，queue 长度为 {len}")
+            }
+            Self::Unavailable { message } => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for PlayQueueError {}
+
 /// 队列语境的 wire 形态:client 告知一个队列「来自哪」,server 映射进埋点 `QueueContext`
 /// 后随该队列每个 plays 行继承(单一 origin 有归属漏洞:从歌单点第一首后连播 20 首,
 /// 后 19 行只知 AutoAdvance,「最常听的歌单」就断了)。id 用 mineral_model 类型,天然可序列化。
@@ -169,13 +217,18 @@ pub enum Request {
     /// `Box` 是为了避免 enum 体积膨胀(`Song` 比平均 variant 大很多)。
     PlaySong(Box<Song>),
 
-    /// 替换 queue + 设当前位置。Shuffle 模式下 server 端洗牌。
-    /// 返回 [`Response::Ok`]。
-    SetQueue {
-        /// 新 queue。
-        queue: Vec<Song>,
-        /// queue 中作为「当前」的歌 id;server 据此设游标。
-        target_id: mineral_model::SongId,
+    /// 原子替换 queue 并起播 request-local target occurrence。
+    ///
+    /// Server 先完整验证空 queue、hard cap 与 target；失败返回
+    /// [`Response::PlayQueue`] 的 structured error 且状态完全不变。Shuffle 以 target
+    /// occurrence 为起播项，不按 SongId first-match。
+    PlayQueue {
+        /// 本次提交的新 queue。
+        songs: Vec<Song>,
+
+        /// `songs` 内的 0-based queue index，不是 CollectionIndex。
+        target: usize,
+
         /// 队列语境(埋点 provenance:该队列来自搜索 / 歌单 / 专辑 / 艺人 / 手动)。
         context: QueueContextWire,
     },
@@ -382,6 +435,9 @@ pub enum Response {
 
     /// 对应 [`Request::QueueEdit`]:本次编辑的结果。
     QueueEdited(QueueEditOutcome),
+
+    /// 对应 [`Request::PlayQueue`]：成功或 structured validation error。
+    PlayQueue(Result<(), PlayQueueError>),
 
     /// 对应 [`Request::QuerySongStats`]:命中返回统计,无记录返回 None。
     SongStats(Option<SongStatsWire>),

@@ -10,7 +10,7 @@ use crate::state::State;
 
 /// 队列硬上限:任何入队路径都不得让 `queue` 长度超过此值。
 ///
-/// 满时 [`append`] / [`insert_next`] 拒绝入队,[`super::PlayerCore::set_queue`] 截断到此长度。
+/// 满时 [`append`] / [`insert_next`] 拒绝入队，整队替换超限则整体拒绝。
 /// 取 9999 与序号显示上限一致(0-based 下标故最大 9998,四位数封顶)。
 pub(crate) const QUEUE_CAP: usize = 9999;
 

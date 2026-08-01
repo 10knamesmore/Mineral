@@ -315,7 +315,7 @@ impl MusicChannel for NeteaseChannel {
     /// - 版本变 / 无缓存 → 全拉(`limit=1000`)覆盖写回。
     /// - 轻请求失败 → 降级旧缓存曲目(元信息缺,只剩 id + 曲目),体验优先;无缓存才冒泡。
     ///
-    /// 缓存只存曲目(`Vec<Song>`),元信息每次从轻请求拿,故缓存结构不必随 model 扩张。
+    /// 缓存只存曲目 relation(index + SongId),元信息每次从轻请求拿,Song metadata 仍可独立更新。
     async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
         // 1. 轻量请求拿元信息 + 版本戳 + trackIds 顺序(limit=0,不拉 tracks)。
         let meta = match api::playlist::detail(&self.transport, id, 0).await {
@@ -331,7 +331,7 @@ impl MusicChannel for NeteaseChannel {
                     return Ok(Playlist::builder()
                         .id(id.clone())
                         .name(String::new())
-                        .songs(stale)
+                        .entries(stale)
                         .build());
                 }
                 return Err(map_err(e));
@@ -344,7 +344,7 @@ impl MusicChannel for NeteaseChannel {
             .collect::<Vec<String>>();
 
         // 2. 缓存命中且版本一致 → 按远端顺序由本地重建曲目;否则全拉覆盖写回。
-        let songs = if let Some(cached) = playlist_cache::try_rebuild_if_current(
+        let entries = if let Some(cached) = playlist_cache::try_rebuild_if_current(
             &self.persist,
             id,
             meta.track_update_time,
@@ -363,15 +363,16 @@ impl MusicChannel for NeteaseChannel {
                         .into_iter()
                         .map(convert::album_song_to_model)
                         .collect::<Vec<Song>>();
+                    let entries = convert::playlist_entries_from_order(&meta.track_ids, songs);
                     playlist_cache::store(
                         &self.persist,
                         id,
                         Some(&meta.name),
                         Some(meta.track_update_time),
-                        &songs,
+                        &entries,
                     )
                     .await;
-                    songs
+                    entries
                 }
                 Err(e) => {
                     if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
@@ -388,7 +389,7 @@ impl MusicChannel for NeteaseChannel {
                 }
             }
         };
-        Ok(convert::playlist_info_to_model(&meta, songs))
+        Ok(convert::playlist_info_to_model(&meta, entries))
     }
 
     /// 播放 URL,**双层降级**(spec §4.3):先打 v1(字符串等级),取到可播 url 即用;
