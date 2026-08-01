@@ -16,7 +16,6 @@ members = [
     "crates/mineral-spectrum",
     "crates/mineral-test",
     "crates/mineral-channel/core",
-    "crates/mineral-channel/mock",
     "crates/mineral-channel/netease",
     "crates/mineral-channel/bilibili",
     "crates/mineral-channel/mineral",
@@ -71,7 +70,6 @@ mineral-server          = { path = "crates/mineral-server" }
 mineral-spectrum        = { path = "crates/mineral-spectrum" }
 mineral-test            = { path = "crates/mineral-test" }
 mineral-channel-core    = { path = "crates/mineral-channel/core" }
-mineral-channel-mock    = { path = "crates/mineral-channel/mock" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili" }
 mineral-channel-mineral = { path = "crates/mineral-channel/mineral" }

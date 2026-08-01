@@ -717,7 +717,7 @@ expression: "super::meta_config_lua()"
 ---@field level? mineral.StatsLevel 采集档位:`off` 零写入 / `core` 播放+会话 / `full` 全谱交互。
 ---@field collect? table<string, boolean> 在档位基线上按事件微调(kind 名 → 是否采集);plays / sessions 是 core 本体、 校验期拒绝覆盖(见 `deserialize_collect`);未知 kind 名由 daemon 应用时按合法 kind 集警告。
 ---@field search_queries? mineral.SearchQueryMode 搜索词模式。
----@field exclude_sources? mineral.SourceName[] 完全不落库的来源 name(如 `mock`,防开发期污染年度统计)。
+---@field exclude_sources? mineral.SourceName[] 完全不落库的来源 name(如 `plugin-dev`)。
 ---@field session_gap_minutes? integer 播放活动间隔超过此值(分钟)切分新收听会话。
 ---@field retention_days? mineral.RetentionDays 流水保留天数;`false` = 永久(盘点跨年)。
 ---@field report? mineral.ReportConfig 查询期口径子表。

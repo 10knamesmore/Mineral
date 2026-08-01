@@ -54,13 +54,6 @@ impl SourceKind {
         label: "◆ mineral",
     };
 
-    /// 占位 / 测试用伪源 — 仅在启用 `mock` feature 时存在。
-    #[cfg(feature = "mock")]
-    pub const MOCK: Self = Self {
-        name: "mock",
-        label: "▒ mock",
-    };
-
     /// 铸造一个来源(插件 / 运行时扩展用)。
     ///
     /// # Params:
@@ -98,8 +91,6 @@ impl SourceKind {
             "local" => Self::LOCAL,
             "bilibili" => Self::BILIBILI,
             "mineral" => Self::MINERAL,
-            #[cfg(feature = "mock")]
-            "mock" => Self::MOCK,
             other => {
                 let interned = intern(other);
                 Self::from_static(interned, interned)

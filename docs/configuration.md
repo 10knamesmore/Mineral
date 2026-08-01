@@ -718,7 +718,7 @@ config.lua 顶层 `mineral.*` 调用的运行时参数,详见[脚本指南](./sc
 | `level` | `"full"` | 采集档位:`"off"` 零写入 / `"core"` 播放 + 会话 / `"full"` 全谱交互 |
 | `collect` | `{}` | 在档位基线上按事件微调(`kind = true / false`);`plays` / `sessions` 是 core 本体不可关(用 `level = "off"`) |
 | `search_queries` | `"raw"` | 搜索词:`"raw"` 原文 / `"hashed"` 不可逆散列(保次数去重,丢原文)/ `"off"` 不记 |
-| `exclude_sources` | `{}` | 完全不落库的来源(如 `{"mock"}`),防开发期 mock 播放污染统计 |
+| `exclude_sources` | `{}` | 完全不落库的来源(如 `{"plugin-dev"}`),防开发 source 播放污染统计 |
 | `session_gap_minutes` | 30 | 播放活动间隔超过此值(分钟)切分新收听会话 |
 | `retention_days` | `false` | 流水保留天数;`false` = 永久,正整数 = 保留 N 天 |
 | `report.min_listen_secs` | 30 | 有效播放阈值:听不足此秒数不计入 top 榜 / 完播率(流水照记) |

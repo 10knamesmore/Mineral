@@ -8,7 +8,7 @@ Mineral 是一个多源终端音乐播放器(ratatui),目前已落地"模型 + �
 
 ```bash
 cargo build                                       # 构建整个 workspace
-cargo run  -p mineral --features mock             # 运行 TUI,使用 mineral-channel-mock 喂假数据
+cargo run  -p mineral                             # 运行 TUI
 cargo t                                           # = nextest run --workspace --release(跑全仓测试,见下 alias)
 cargo td                                          # = test --workspace --doc --release(nextest 不跑 doctest,单独兜)
 cargo snap                                        # = insta test --test-runner nextest --review --release(改了快照时)
@@ -37,7 +37,7 @@ ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**
 - `value()` / `as_str()` 取**裸值**喂 channel 后端(网易云请求体要纯数字串)/ 日志;`qualified()`(= `namespace:value`)给任务去重键等需要全局唯一字符串的地方。
 - ID 派生 `Eq/Hash`(含 namespace),可直接当 HashMap key 而**不会跨源碰撞**。需要随机生成的 ID(如本地音乐)用 `define_uuid!` 的 `new_uuid(namespace)`。
 
-`SourceKind` 仿 `http::StatusCode`:**newtype + 关联常量**(`SourceKind::NETEASE` / `LOCAL` / `MOCK`),内部 `&'static str` 故 `Copy`、强类型、**开放**(插件经 `from_static` 运行时铸造)。**身份只认 `name`**——`label`(UI 展示名)是随 `name` 走的展示元数据,不参与 `Eq`/`Hash`/serde(序列化只写 `name`,反序列化按 `name` 解析回常量,未知名 intern)。因此 UI 给来源配展示名**不该 match `SourceKind`**,读 `.label()` 即可,插件源自动有合理展示。来源徽标**颜色**不挂在 `SourceKind` 上——它是 per-source 配置 `sources.<name>.color`(`ColorRef`),TUI 按 `name` 经自由函数 `render::theme::resolve_source_color(theme, sources, kind)` 解析(命中配置色、未配落 `theme.subtext` 中立兜底);因此配色同样不该 match。
+`SourceKind` 仿 `http::StatusCode`:**newtype + 关联常量**(`SourceKind::NETEASE` / `LOCAL` / `BILIBILI` / `MINERAL`),内部 `&'static str` 故 `Copy`、强类型、**开放**(插件经 `from_static` 运行时铸造)。**身份只认 `name`**——`label`(UI 展示名)是随 `name` 走的展示元数据,不参与 `Eq`/`Hash`/serde(序列化只写 `name`,反序列化按 `name` 解析回常量,未知名 intern)。因此 UI 给来源配展示名**不该 match `SourceKind`**,读 `.label()` 即可,插件源自动有合理展示。来源徽标**颜色**不挂在 `SourceKind` 上——它是 per-source 配置 `sources.<name>.color`(`ColorRef`),TUI 按 `name` 经自由函数 `render::theme::resolve_source_color(theme, sources, kind)` 解析(命中配置色、未配落 `theme.subtext` 中立兜底);因此配色同样不该 match。
 
 ### `MusicChannel` trait 是抽象边界
 
@@ -144,5 +144,4 @@ client 侧配置消费两条规矩:
 * **音频无设备会降级 null 模式,不报错退出**:`mineral-audio` engine 拿不到默认输出设备(headless / 无声卡)时不 `return Err`,而是 warn + 置 `AudioSnapshot.backend = AudioBackend::Null` + 空跑(接受命令但不发声),daemon 照常 bind / serve / graceful shutdown。client 据此提示(CLI `status` 打 `backend: null`、TUI 顶栏 `⚠ 无音频设备`)。测试用 `AudioMode::ForceNull` / `MINERAL_AUDIO_NULL=1` env 确定性复现。**注**:`libasound2-dev` 是**编译期**依赖(alsa-sys),降级只省运行期声卡,省不了它。
 * **封面 fetcher 起不来也降级,不报错退出**:`CoverFetcher::spawn()`(isahc/TLS/证书问题)失败时 `mineral_tui::run` 不 `?` 冒泡,而是 warn + 退到 `CoverFetcher::disabled()`(null object:`request()` 静默丢、`drain_ready()` 恒空、**不依赖 tokio runtime**),封面不显示、其余照常。它也是 TUI 集成测试零依赖构造 `App` 的入口(见 [`docs/testing.md`](docs/testing.md))。
 * `cargo apitest` 会真打 `music.163.com`;离线环境会失败,这不是 bug。
-* TUI 离线开发默认走 `cargo run -p mineral --features mock`;不带 feature 跑也能起来,但 `playlists` / `tracks_cache` 都是空。
 * `.claude/hooks/check_file_size.py` 用大括号配平剔除 `#[cfg(test)] mod` 块,字符串字面量里出现 `{` / `}` 可能误判;真遇到再升级到 `syn` AST。

@@ -2727,7 +2727,6 @@ dependencies = [
  "mineral-channel-bilibili",
  "mineral-channel-core",
  "mineral-channel-mineral",
- "mineral-channel-mock",
  "mineral-channel-netease",
  "mineral-cli",
  "mineral-config",
@@ -2825,18 +2824,6 @@ dependencies = [
  "mineral-persist",
  "mineral-test",
  "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "mineral-channel-mock"
-version = "0.5.5"
-dependencies = [
- "async-trait",
- "color-eyre",
- "mineral-channel-core",
- "mineral-model",
- "parking_lot",
  "tokio",
 ]
 
@@ -3186,7 +3173,6 @@ dependencies = [
  "kmeans_colors",
  "mineral-audio",
  "mineral-channel-core",
- "mineral-channel-mock",
  "mineral-config",
  "mineral-log",
  "mineral-macros",

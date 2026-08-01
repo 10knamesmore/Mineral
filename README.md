@@ -267,7 +267,7 @@ cargo snap                                # 跑测试 + review insta snap
 cargo td                                  # doctest(nextest 不跑,单独兜)
 cargo clippy
 cargo fmt
-cargo run -p mineral --features mock      # 离线开发:mock 数据源,零网络
+cargo run -p mineral                      # 运行 TUI
 ```
 
 测试体系细则见 [文档](./docs/testing.md)。

@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn exclude_sources_matches_by_ns() {
         let mut excl = FxHashSet::default();
-        excl.insert("mock".to_owned());
+        excl.insert("plugin-dev".to_owned());
         let p = StatsParams::builder()
             .level(Level::Full)
             .collect(FxHashMap::default())
@@ -192,7 +192,7 @@ mod tests {
             .gap_ms(0)
             .retention(Retention::Forever)
             .build();
-        assert!(p.excludes_source("mock"));
+        assert!(p.excludes_source("plugin-dev"));
         assert!(!p.excludes_source("netease"));
     }
 }

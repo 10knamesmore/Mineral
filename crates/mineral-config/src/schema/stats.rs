@@ -154,7 +154,7 @@ pub struct StatsConfig {
     /// 搜索词模式。
     search_queries: SearchQueryMode,
 
-    /// 完全不落库的来源 name(如 `mock`,防开发期污染年度统计)。
+    /// 完全不落库的来源 name(如 `plugin-dev`)。
     #[serde(deserialize_with = "super::de::string_list")]
     #[lua_type("mineral.SourceName[]")]
     exclude_sources: Vec<String>,

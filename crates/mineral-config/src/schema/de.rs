@@ -41,7 +41,7 @@ where
 /// 反序列化字符串列表,容忍 Lua 空表 `{}`。
 ///
 /// Lua 的 `{}` 既是空数组也是空表,mlua 落成空 map;而 `Vec<String>` 期望 sequence。
-/// 非空数组(如 `{"mock"}`,有整数键 1..n)正常走 seq。此 helper 把空 map 视作空
+/// 非空数组(如 `{"plugin-dev"}`,有整数键 1..n)正常走 seq。此 helper 把空 map 视作空
 /// 列表、逐元素取字符串,其余报错(经 `serde_path_to_error` 带路径)。
 ///
 /// # Params:

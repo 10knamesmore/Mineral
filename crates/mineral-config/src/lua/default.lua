@@ -459,7 +459,7 @@ return {
     level = "full", -- 采集档位: off 零写入 / core 播放+会话 / full 全谱交互
     collect = {}, -- 档位基线上按事件微调(kind = true/false);plays/sessions 是 core 本体不可关
     search_queries = "raw", -- 搜索词: raw 原文 / hashed 不可逆散列(保次数去重,丢原文) / off 不记
-    exclude_sources = {}, -- 完全不落库的来源(如 {"mock"}),防开发期 mock 播放污染年度统计
+    exclude_sources = {}, -- 完全不落库的来源(如 {"plugin-dev"})
     session_gap_minutes = 30, -- 播放活动间隔超过此值(分钟)切分新收听会话
     retention_days = false, -- 流水保留天数; false = 永久(盘点跨年,默认)
     report = { -- 查询期口径: 只影响报告计算, 不影响落库

@@ -178,8 +178,7 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
     }
 }
 
-/// 按可用凭证 / 编译 feature 收集所有 channel(目前是 mineral 聚合 + netease + bilibili
-/// + 可选 mock)。
+/// 按可用凭证收集所有 channel(目前是 mineral 聚合 + netease + bilibili)。
 ///
 /// **单个 channel 失败不阻塞**:某源构建失败(如凭证损坏)只 warn + 跳过,不拖垮其他源
 /// 或 daemon;空 channels 也是合法状态(没登录任何源),由 TUI 空状态提示兜。
@@ -215,8 +214,6 @@ fn build_channels(
             "bilibili channel 构建失败,跳过(不影响其他源 / daemon)"
         ),
     }
-    #[cfg(feature = "mock")]
-    channels.push(build_mock());
     Ok(channels)
 }
 
@@ -260,10 +257,4 @@ fn build_netease(
         .wrap_err("构造 NeteaseChannel 失败")?;
     let arc: Arc<dyn MusicChannel> = Arc::new(channel);
     Ok(Some(arc))
-}
-
-/// 构造一个永远在线的假数据 channel,离线开发用(`--features mock`)。
-#[cfg(feature = "mock")]
-fn build_mock() -> Arc<dyn MusicChannel> {
-    Arc::new(mineral_channel_mock::MockChannel::new())
 }
