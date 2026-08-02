@@ -1,7 +1,10 @@
 #!/bin/sh
 # 推送前:clippy + test 全跑(把关再分享,和 CI 的门一致)。
 # 测试用 cargo-nextest(需 `cargo install cargo-nextest`);doctest 另跑(nextest 不覆盖)。
+# SQLX_OFFLINE:强制走 .sqlx 离线缓存编译——本机 .env 的在线 DATABASE_URL 从不校验
+# 缓存新鲜度,不改 SQL 的人不该需要真库;改了 SQL 先跑 scripts/sqlx-prepare.sh。
 set -e
+export SQLX_OFFLINE=true
 echo "[pre-push] cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 echo "[pre-push] cargo nextest run --workspace (INSTA_UPDATE=no)"

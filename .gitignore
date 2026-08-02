@@ -3,6 +3,7 @@
 .nvim.lua
 TODO.md
 .todo.md
+specs/
 imgs/
 logs/
 .DS_Store
