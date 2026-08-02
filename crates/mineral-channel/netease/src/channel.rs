@@ -135,7 +135,8 @@ fn map_err(e: color_eyre::Report) -> Error {
     match e.downcast_ref::<ApiCodeError>() {
         Some(api) => match api.code {
             301 => Error::AuthRequired,
-            512 => Error::RateLimited,
+            // 405(操作频繁)与 512(风控/歌单容量)同为限流语义。
+            405 | 512 => Error::RateLimited,
             _ => Error::Api {
                 code: api.code,
                 message: api.message.clone(),
@@ -517,8 +518,8 @@ mod tests {
         };
         assert!(matches!(f(301), Error::AuthRequired));
         assert!(matches!(f(512), Error::RateLimited));
+        assert!(matches!(f(405), Error::RateLimited), "405 操作频繁同为限流");
         assert!(matches!(f(502), Error::Api { code: 502, .. }));
-        assert!(matches!(f(405), Error::Api { code: 405, .. }));
         assert!(matches!(
             super::map_err(eyre!("plain network-ish error")),
             Error::Other(_)

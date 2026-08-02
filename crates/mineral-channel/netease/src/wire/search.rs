@@ -2,6 +2,7 @@
 
 use serde::Deserialize;
 
+use super::de::string_or_null;
 use super::song::{AlbumSong, Artist};
 
 /// cloudsearch type=1（单曲）的响应：歌曲是 `ar`/`al`/`dt` 形态，复用 [`AlbumSong`]
@@ -54,8 +55,8 @@ pub struct SearchAlbum {
     #[serde(default)]
     pub artists: Vec<Artist>,
 
-    /// 描述。
-    #[serde(default)]
+    /// 描述(详情端点常给完整简介,部分专辑为 `null` → 空串)。
+    #[serde(default, deserialize_with = "string_or_null")]
     pub description: String,
 
     /// 发行方（唱片公司 / 厂牌），可为 null。
@@ -168,6 +169,20 @@ mod tests {
             "搜索歌曲列表(MyGO 迷星叫 tns=null+alia / 碧天伴走 tns=null 无 alia)解析结构",
             r
         );
+        Ok(())
+    }
+
+    /// `AlbumDetailResult.album.description` 可为 `null`(部分专辑无简介)→ 空串,不炸解析。
+    /// 回归:曾按 `String` 硬解,`null` 直接掀掉整个专辑详情(打标时专辑字段整组缺省)。
+    #[test]
+    fn album_detail_tolerates_null_description() -> color_eyre::Result<()> {
+        let raw = serde_json::json!({
+            "album": { "id": 31655, "name": "叶惠美", "description": null },
+            "songs": []
+        });
+        let r: super::AlbumDetailResult = from_value(raw)?;
+        assert_eq!(r.album.description, "");
+        assert_eq!(r.album.name, "叶惠美");
         Ok(())
     }
 
