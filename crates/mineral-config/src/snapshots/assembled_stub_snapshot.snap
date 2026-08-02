@@ -464,7 +464,6 @@ expression: "super::meta_config_lua()"
 ---@class mineral.PrefetchConfig
 ---@field radius? integer 通用预取半径:浏览列表选中行上下各预取此数条(封面 + 歌单曲目); 覆盖一屏 + 几次大跳即可。
 ---@field playback_cover_radius? integer 在播曲封面预取半径:沿播放队列前后各预取此数张,服务自动切歌。
----@field play_count_debounce_ms? integer 播放计数查询去抖(毫秒):选中某曲停留超过此时长才查它的远端播放次数; 太小翻列表会打满 API。
 ---@field prewarm_ahead? integer 全屏预热沿播放队列向前看的首数:提前编码封面,消自动切歌瞬间的占位闪; 每首一份终端图开销。
 
 ---搜索配置。
@@ -491,6 +490,7 @@ expression: "super::meta_config_lua()"
 
 ---channel 远程搜索两个下拉的白名单。
 ---@class mineral.ChannelSearchConfig
+---@field detail_debounce_ms? integer detail 驻留防抖(毫秒):光标停稳后才请求选中实体详情与封面; 避免快速翻列表时为掠过的实体发起 remote 请求。
 ---@field sources? mineral.SourceName[] source 白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。 source 名是开放 string(插件源可写),没加载的名字运行时静默跳过——同一份配置 跨机器可移植。空列表 = 消费侧防呆回退全量(按名字典序)。
 ---@field kinds? mineral.SearchKind[] kind 白名单:与各 source 声明的可搜集合求交,保配置顺序。 封闭枚举,typo 在加载期报落型告警。空列表 = 消费侧防呆回退全量(各 source 声明序)。
 

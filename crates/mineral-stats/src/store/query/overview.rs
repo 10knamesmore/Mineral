@@ -165,6 +165,7 @@ impl StatsStore {
             SongSummary,
             r#"SELECT
                 COUNT(*) AS "plays!: i64",
+                COALESCE(SUM(CASE WHEN finish_reason = 'eof' THEN 1 ELSE 0 END), 0) AS "completed!: i64",
                 COALESCE(SUM(CASE WHEN finish_reason = 'skip' THEN 1 ELSE 0 END), 0) AS "skips!: i64",
                 COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
                 MAX(started_at) AS "last_played_at?: i64"
@@ -213,6 +214,7 @@ mod tests {
             .await?
             .ok_or_else(|| color_eyre::eyre::eyre!("A 应有汇总"))?;
         assert_eq!(a.plays, 2);
+        assert_eq!(a.completed, 2, "A 两次均自然播完");
         assert_eq!(a.skips, 0);
         assert_eq!(a.listen_ms, 130_000);
         assert_eq!(a.last_played_at, Some(T0 + 14 * HOUR + 60_000));
@@ -221,6 +223,7 @@ mod tests {
             .song_summary(&song_id("netease", "2"))
             .await?
             .ok_or_else(|| color_eyre::eyre::eyre!("B 应有汇总"))?;
+        assert_eq!(b.completed, 0, "B 只有 skip，不算完整播放");
         assert_eq!(b.skips, 1);
 
         assert!(

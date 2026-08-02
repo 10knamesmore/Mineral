@@ -1,10 +1,11 @@
 //! 视口 prefetch:按 `sel ± [`RADIUS`]` 提前 fetch 用户即将看到的数据。
 //!
-//! 两件:
+//! 三件:
 //! - **cover**:封面在右栏 focus 时显示
 //! - **tracks**:歌单的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
+//! - **local play count**:Selected 展示当前歌曲在 Mineral 中自然播完的次数
 //!
-//! 两边都靠 scheduler 的 dedup 兜底重复请求,稳态下 tick 开销 = O(2·radius+1) hash 查找。
+//! 各路分别用 pending / requested 集去重，稳态下 tick 只做有界窗口 hash 查找。
 
 use mineral_channel_core::Page;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
@@ -14,7 +15,7 @@ use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, DetailFetch, View};
 
-/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌远端播放次数三路 prefetch,
+/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover::collage`])。
 pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
     request_covers(state, covers);
@@ -220,34 +221,30 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
     }
 }
 
-/// 选中某首歌停留超过 `prefetch.play_count_debounce_ms` 后,查它的远端真实累计播放次数。
+/// 查询当前选中歌曲在 Mineral 中自然播完的次数。
 ///
-/// 只查当前选中那一首(回忆坐标单首一请求,且只在 selected 详情展示);停留防抖
-/// 避免翻列表时为掠过的歌打满 API。`play_count_requested` 成败都记,不反复打同一首。
-/// 不预判来源能力 —— 不支持的源任务在 lane 里静默失败(debug),不把 channel 能力硬编码进 UI。
+/// 本地统计无需为 API 限流，选中后立即查询，不与 remote detail 共用驻留防抖。
+/// 成功值跨 selection 命中 cache；失败结果只在当前 selection 内抑制逐 tick 重试，离开
+/// 后再选中会重查。`stats.level = off` 或 source 被 `exclude_sources` 排除时不查询，字段
+/// 始终缺失。
 fn request_play_count(state: &mut AppState, client: &dyn Client) {
     if state.browse.view != View::Library {
-        return;
-    }
-    let debounce =
-        std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
-    if state.browse.nav.last_sel_change.elapsed() < debounce {
+        state.library.local_play_counts.leave_selection();
         return;
     }
     let Some(id) = selected_track_id(state) else {
+        state.library.local_play_counts.leave_selection();
         return;
     };
-    if state.library.play_count_requested.contains(&id) {
+    if !state.records_local_plays_for(id.namespace()) {
+        state.library.local_play_counts.leave_selection();
         return;
     }
-    mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "request remote play count");
-    client.submit_task(
-        TaskKind::ChannelFetch(ChannelFetchKind::RemotePlayCount {
-            song_id: id.clone(),
-        }),
-        Priority::User,
-    );
-    state.library.play_count_requested.insert(id);
+    if !state.library.local_play_counts.enter_selection(&id) {
+        return;
+    }
+    mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "query local completed play count");
+    client.request_song_stats(id);
 }
 
 /// search 布局态下，结果列/详情光标停留超防抖窗后，给当前 detail 栈顶帧补拉列表/详情
@@ -260,7 +257,7 @@ fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetch
         return;
     }
     let debounce =
-        std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
+        std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
     if state.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
@@ -303,7 +300,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
         return;
     }
     let debounce =
-        std::time::Duration::from_millis(*state.cfg.tui().prefetch().play_count_debounce_ms());
+        std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
     if state.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
@@ -393,10 +390,16 @@ fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
-    use super::collect_pending_covers;
+    use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+    use mineral_protocol::FinishReason;
+    use mineral_task::TaskEvent;
+
+    use super::{collect_pending_covers, request_play_count};
     use crate::runtime::state::{AppState, View};
+    use crate::test_support::{TestClient, state_with_mixed_tracks};
 
     /// 造一首带封面 URL 的歌:id = `s{i}`、cover = `https://cover/{i}.jpg`。
     fn song_with_cover(i: usize) -> color_eyre::Result<Song> {
@@ -414,6 +417,182 @@ mod tests {
         Ok(collect_pending_covers(state)
             .iter()
             .any(|(_, u)| *u == want))
+    }
+
+    /// 造一个 Library 刚选中 Bilibili 曲目的状态。
+    fn selected_bilibili_state() -> color_eyre::Result<AppState> {
+        let mut state = state_with_mixed_tracks()?;
+        state.browse.nav.track.set_sel(1);
+        state.browse.nav.last_sel_change = Instant::now();
+        Ok(state)
+    }
+
+    /// Selected 对所有 source 统一立即查询 Mineral 本地完整播放次数。
+    #[test]
+    fn selected_uses_local_completed_play_count_for_bilibili() -> color_eyre::Result<()> {
+        let mut state = selected_bilibili_state()?;
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            submitted: Arc::clone(&submitted),
+            song_stats_requests: Arc::clone(&queries),
+            ..TestClient::default()
+        };
+
+        request_play_count(&mut state, &client);
+
+        let id = SongId::new(SourceKind::BILIBILI, "b1");
+        let recorded_queries = queries
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("统计查询探针锁中毒: {e}"))?;
+        assert_eq!(recorded_queries.as_slice(), std::slice::from_ref(&id));
+        assert!(
+            submitted
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("任务探针锁中毒: {e}"))?
+                .is_empty(),
+            "本地统计不应提交 ChannelFetch::RemotePlayCount"
+        );
+        assert!(
+            state.library.local_play_counts.has_no_cached_values(),
+            "后台结果到达前不应伪造同步值"
+        );
+
+        state.apply(&TaskEvent::LocalPlayCountFetched {
+            song_id: id.clone(),
+            count: Some(7),
+        });
+
+        assert_eq!(state.library.local_play_counts.get(&id), Some(&7));
+        Ok(())
+    }
+
+    /// 成功值跨 selection 命中 cache；失败空值只在当前 selection 内抑制重试。
+    #[test]
+    fn successful_result_is_cached_while_failure_retries_on_reentry() -> color_eyre::Result<()> {
+        let mut state = selected_bilibili_state()?;
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            song_stats_requests: Arc::clone(&queries),
+            ..TestClient::default()
+        };
+        let bilibili = SongId::new(SourceKind::BILIBILI, "b1");
+        let netease = SongId::new(SourceKind::NETEASE, "1");
+
+        request_play_count(&mut state, &client);
+        state.apply(&TaskEvent::LocalPlayCountFetched {
+            song_id: bilibili.clone(),
+            count: Some(2),
+        });
+        state.apply_track_finished(&bilibili, FinishReason::Eof);
+        request_play_count(&mut state, &client);
+
+        state.browse.nav.track.set_sel(0);
+        request_play_count(&mut state, &client);
+
+        state.browse.nav.track.set_sel(1);
+        request_play_count(&mut state, &client);
+
+        state.browse.nav.track.set_sel(0);
+        request_play_count(&mut state, &client);
+        state.apply(&TaskEvent::LocalPlayCountFetched {
+            song_id: netease.clone(),
+            count: None,
+        });
+        request_play_count(&mut state, &client);
+
+        state.browse.nav.track.set_sel(1);
+        request_play_count(&mut state, &client);
+
+        state.browse.nav.track.set_sel(0);
+        request_play_count(&mut state, &client);
+
+        assert_eq!(
+            *queries
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("统计查询探针锁中毒: {e}"))?,
+            vec![bilibili.clone(), netease.clone(), netease]
+        );
+        assert_eq!(
+            state
+                .library
+                .local_play_counts
+                .get(&SongId::new(SourceKind::BILIBILI, "b1")),
+            Some(&3)
+        );
+        Ok(())
+    }
+
+    /// 查询期间发生 eof 时丢弃旧 response，离开再进入后允许重新读取 DB 新值。
+    #[test]
+    fn eof_invalidates_in_flight_play_count_response() -> color_eyre::Result<()> {
+        let mut state = selected_bilibili_state()?;
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            song_stats_requests: Arc::clone(&queries),
+            ..TestClient::default()
+        };
+        let id = SongId::new(SourceKind::BILIBILI, "b1");
+
+        request_play_count(&mut state, &client);
+        state.apply_track_finished(&id, FinishReason::Eof);
+        state.apply(&TaskEvent::LocalPlayCountFetched {
+            song_id: id.clone(),
+            count: Some(2),
+        });
+        request_play_count(&mut state, &client);
+
+        state.browse.view.switch_to(View::Playlists);
+        request_play_count(&mut state, &client);
+        state.browse.view.switch_to(View::Library);
+        request_play_count(&mut state, &client);
+
+        assert_eq!(state.library.local_play_counts.get(&id), None);
+        assert_eq!(
+            *queries
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("统计查询探针锁中毒: {e}"))?,
+            vec![id.clone(), id]
+        );
+        Ok(())
+    }
+
+    /// stats.level=off 时不查询、不缓存，Selected 的本地播放次数字段保持缺失。
+    #[test]
+    fn selected_play_count_stays_empty_when_stats_are_off() -> color_eyre::Result<()> {
+        let mut state = selected_bilibili_state()?;
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "stats": { "level": "off" } }),
+        );
+        state.cfg = Arc::new(
+            mineral_config::from_tree(&tree)
+                .map_err(|warning| color_eyre::eyre::eyre!("stats off 配置应合法: {warning}"))?,
+        );
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            submitted: Arc::clone(&submitted),
+            song_stats_requests: Arc::clone(&queries),
+            ..TestClient::default()
+        };
+
+        request_play_count(&mut state, &client);
+
+        assert!(
+            queries
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("统计查询探针锁中毒: {e}"))?
+                .is_empty()
+        );
+        assert!(
+            submitted
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("任务探针锁中毒: {e}"))?
+                .is_empty()
+        );
+        assert!(state.library.local_play_counts.has_no_cached_values());
+        Ok(())
     }
 
     /// 在播曲及其播放队列 ±[`PLAYBACK_COVER_RADIUS`] 邻居的封面进入 prefetch 集合。

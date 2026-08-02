@@ -380,19 +380,25 @@ impl ClientHandle {
         Ok(value)
     }
 
-    /// 查询一首歌的播放统计(persist),转成 protocol DTO。
+    /// 查询一首歌的本地播放统计，转成 protocol DTO。
+    ///
+    /// 当前不采集该来源(`stats.level = off` / `exclude_sources` / stats.db 降级)时返回
+    /// `None`，即使磁盘留有历史数据也不展示；启用采集但从未播放则返回零值。
     ///
     /// # Params:
-    ///   - `id`: 目标歌曲 id;其 namespace 决定 persist scope。
+    ///   - `id`: 目标歌曲 id；其 namespace 决定采集策略与 persist scope
     ///
     /// # Return:
-    ///   命中返回 [`mineral_protocol::SongStatsWire`],无记录返回 `None`。
+    ///   当前采集可用时返回 [`mineral_protocol::SongStatsWire`]，否则返回 `None`
     pub(crate) async fn query_song_stats_async(
         &self,
         id: &SongId,
     ) -> color_eyre::Result<Option<mineral_protocol::SongStatsWire>> {
-        // play/skip/listen/last 改由 stats.db 聚合(全量窗口);loved 是功能状态,仍读
-        // mineral.db。窗口语义与现状一致,wire 类型不变、client 零改动。
+        if !self.player.inner.stats.records_plays_for(id.namespace()) {
+            return Ok(None);
+        }
+        // complete/skip/listen/last 由 stats.db 聚合(全量窗口)；loved 是功能状态，仍读
+        // mineral.db。启用采集但没有事实行时构造零值，让 0 与未采集的 None 保持可区分。
         let summary = self.player.inner.stats.store().song_summary(id).await?;
         let loved = self
             .player
@@ -401,26 +407,23 @@ impl ClientHandle {
             .query_stats(id)
             .await?
             .is_some_and(|s| s.loved);
-        if summary.is_none() && !loved {
-            return Ok(None);
-        }
-        let wire = match summary {
-            Some(s) => mineral_protocol::SongStatsWire {
-                play_count: u32::try_from(s.plays).unwrap_or(u32::MAX),
+
+        Ok(Some(match summary {
+            Some(s) => SongStatsWire {
+                play_count: u32::try_from(s.completed).unwrap_or(u32::MAX),
                 skip_count: u32::try_from(s.skips).unwrap_or(u32::MAX),
                 total_listen_ms: u64::try_from(s.listen_ms).unwrap_or(0),
                 last_played_at: s.last_played_at,
                 loved,
             },
-            None => mineral_protocol::SongStatsWire {
+            None => SongStatsWire {
                 play_count: 0,
                 skip_count: 0,
                 total_listen_ms: 0,
                 last_played_at: None,
                 loved,
             },
-        };
-        Ok(Some(wire))
+        }))
     }
 }
 
@@ -591,9 +594,26 @@ impl Client for ClientHandle {
         false // 占位,不保证准确
     }
 
-    fn query_song_stats(&self, _id: SongId) -> Option<SongStatsWire> {
-        // in-proc 调试模式不支持同步查统计(无法 block on async),返回 None。
-        None
+    fn request_song_stats(&self, id: SongId) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let count = match this.query_song_stats_async(&id).await {
+                Ok(stats) => stats.map(|stats| stats.play_count),
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "client",
+                        song_id = id.as_str(),
+                        source = ?id.namespace(),
+                        error = mineral_log::chain(&e),
+                        "local play count query failed"
+                    );
+                    None
+                }
+            };
+            this.player
+                .notify()
+                .task_event(TaskEvent::LocalPlayCountFetched { song_id: id, count });
+        });
     }
 
     fn download(&self, target: DownloadTarget) {

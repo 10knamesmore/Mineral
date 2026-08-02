@@ -100,7 +100,7 @@ pub fn draw(
         kv_area,
     );
 
-    // meta 底行:时长 · ♥/♡ · plays(plays 缺失时省略该段),居中。
+    // meta 底行:时长 · ♥/♡ · Mineral 本地自然播完次数(未采集时省略),居中。
     let len = format_ms_opt(song.duration_ms);
     let mut meta_spans = vec![
         Span::styled(len, Style::new().fg(theme.overlay)),

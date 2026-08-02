@@ -94,6 +94,17 @@ pub enum TaskEvent {
         count: u32,
     },
 
+    /// Mineral 本地完整播放次数查询完成。
+    ///
+    /// 这是 client 后台查询的 completion event，不经 channel-fetch lane。
+    LocalPlayCountFetched {
+        /// 关联的歌曲 id。
+        song_id: SongId,
+
+        /// 自然播完次数；`None` 表示当前不采集或查询不可用。
+        count: Option<u32>,
+    },
+
     /// `Search` 任务成功:一页搜索结果已到。
     ///
     /// 回带完整请求四元组,client 据此配对到对应搜索会话;query 已变的

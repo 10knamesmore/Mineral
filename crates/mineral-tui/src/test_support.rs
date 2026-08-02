@@ -12,7 +12,7 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{
     MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
-use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions, SongStatsWire};
+use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use ratatui_image::picker::Picker;
@@ -228,6 +228,9 @@ pub(crate) struct TestClient {
     /// `submit_task` 收到的任务序列(深度搜索全量补拉等提交路径断言用)。
     pub(crate) submitted: Arc<Mutex<Vec<TaskKind>>>,
 
+    /// `request_song_stats` 收到的歌曲 ID 序列(Selected 本地播放次数查询断言用)。
+    pub(crate) song_stats_requests: Arc<Mutex<Vec<SongId>>>,
+
     /// 队列操作记录 `(操作名, 歌 id 全限定串)`(操作菜单的插播/追加路径断言用)。
     pub(crate) queue_ops: QueueOpsLog,
 
@@ -352,8 +355,10 @@ impl Client for TestClient {
         false
     }
 
-    fn query_song_stats(&self, _id: SongId) -> Option<SongStatsWire> {
-        None
+    fn request_song_stats(&self, id: SongId) {
+        if let Ok(mut requests) = self.song_stats_requests.lock() {
+            requests.push(id);
+        }
     }
 
     fn download(&self, _target: mineral_protocol::DownloadTarget) {}

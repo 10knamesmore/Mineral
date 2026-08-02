@@ -4,7 +4,8 @@
 //! 上的 [`Frame`] 管线。一条长寿命 worker task 持连接:请求经 [`RequestId`] 配对
 //! 应答(server 可在任意两帧之间交错下推 [`Frame::Event`],**不再假设「发一收一」**),
 //! event 缓冲在本地,App 每 tick 经 [`Client::drain_events`] 取走。
-//! sync 调用通过 std::sync::mpsc 阻塞等 reply。
+//! 需当场返回值的 sync 调用通过 std::sync::mpsc 等 reply；后台查询只入队，
+//! reply 由 worker 转成 completion event，不阻塞 TUI 调用线程。
 //!
 //! - **fire-and-forget 类**(play / pause / 等):仍然走 round-trip(协议层 server
 //!   每条 Request 必有 Response),但调用方丢弃 Response。
@@ -23,10 +24,10 @@ use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed,
     PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire, Request, RequestId, Response,
-    SongStatsWire, Subscription, client_handshake, decode, encode, framed,
+    Subscription, client_handshake, decode, encode, framed,
 };
 use mineral_server::Client;
-use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
 use rustc_hash::FxHashMap;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -34,18 +35,70 @@ use tokio::sync::mpsc;
 /// 握手自报的 client 名(TUI 形态;埋点按名归属各 client 的使用时长)。
 const CLIENT_NAME: &str = "mineral_tui";
 
-/// 一条等回复的请求。worker 收到后分配 [`RequestId`] 发出,应答按 id 配对回 `reply_tx`。
+/// 一条待发请求。worker 分配 [`RequestId`] 后发出，应答按 id 交给 completion。
 struct Pending {
     /// 待发送的请求。
     req: Request,
 
-    /// 同步 reply 通道发送端;worker 拿到配对的 Response 后 send 一次。
-    reply_tx: std::sync::mpsc::Sender<Response>,
+    /// 应答的消费方式。
+    completion: Completion,
+}
+
+/// 配对应答的消费目标。
+enum Completion {
+    /// 返回给正在等待的 sync 调用方。
+    Blocking(std::sync::mpsc::Sender<Response>),
+
+    /// 把本地播放次数投影成 TUI completion event。
+    LocalPlayCount {
+        /// 查询关联的歌曲。
+        song_id: SongId,
+    },
+}
+
+impl Completion {
+    /// 消费一条配对应答。
+    ///
+    /// # Params:
+    ///   - `response`: 与原请求 id 配对的 daemon 应答
+    ///   - `events`: completion event 的本地缓冲
+    fn resolve(self, response: Response, events: &Mutex<Vec<Event>>) {
+        match self {
+            Self::Blocking(tx) => drop(tx.send(response)),
+            Self::LocalPlayCount { song_id } => {
+                let count = match response {
+                    Response::SongStats(stats) => stats.map(|stats| stats.play_count),
+                    Response::Error(e) => {
+                        mineral_log::warn!(
+                            target: "ipc",
+                            song_id = song_id.as_str(),
+                            source = ?song_id.namespace(),
+                            message = e,
+                            "local play count query failed"
+                        );
+                        None
+                    }
+                    other => {
+                        warn_unexpected("request_song_stats", &other);
+                        None
+                    }
+                };
+                push_event(
+                    events,
+                    Event::Task(Box::new(TaskEvent::LocalPlayCountFetched {
+                        song_id,
+                        count,
+                    })),
+                );
+            }
+        }
+    }
 }
 
 /// TUI 端的远程 client。`Clone` 通过持 [`mpsc::UnboundedSender`] 廉价。
 pub struct RemoteClient {
-    /// 把 [`Pending`] 投递给后台 worker;worker drop 时 send 失败,sync 调用方拿到错误兜底。
+    /// 把 [`Pending`] 投递给后台 worker；worker drop 时同步请求拿错误兜底，
+    /// completion 请求落空值事件。
     req_tx: mpsc::UnboundedSender<Pending>,
 
     /// 链路是否仍可用。worker 检测到 daemon 断开后置 `false`,UI 据此干净退出。
@@ -109,7 +162,14 @@ impl RemoteClient {
     /// 发请求 + 阻塞等配对 reply。失败时返回 [`Response::Error`],由 trait 实现层兜底。
     fn send_recv(&self, req: Request) -> Response {
         let (tx, rx) = std::sync::mpsc::channel();
-        if self.req_tx.send(Pending { req, reply_tx: tx }).is_err() {
+        if self
+            .req_tx
+            .send(Pending {
+                req,
+                completion: Completion::Blocking(tx),
+            })
+            .is_err()
+        {
             return Response::Error("daemon disconnected".to_owned());
         }
         rx.recv()
@@ -119,10 +179,10 @@ impl RemoteClient {
 
 /// 后台 worker:持连接的读写两半,`select!` 双路驱动——
 /// 请求路:分配 [`RequestId`] 入飞行表后发出;
-/// 连接路:`Frame::Response` 按 id 配对回 reply 通道、`Frame::Event` 入本地缓冲。
+/// 连接路:`Frame::Response` 按 id 交给 completion、`Frame::Event` 入本地缓冲。
 ///
 /// 断链(读/写失败、EOF、解码失败)= 不重连:打一条 error 日志、置 `connected = false`、
-/// 给所有飞行中请求回 `Response::Error` 解除阻塞,然后退出。worker 退出后 `req_rx`
+/// 给所有飞行中 completion 回 `Response::Error` 解除阻塞或收束空值,然后退出。worker 退出后 `req_rx`
 /// drop,后续 [`RemoteClient::send_recv`] 的 `req_tx.send` 直接失败兜底,不再每 tick 刷屏。
 async fn worker(
     conn: Framed<UnixStream>,
@@ -132,7 +192,7 @@ async fn worker(
 ) {
     let (mut sink, mut stream) = conn.split();
     let mut next_id: u64 = 0;
-    let mut inflight = FxHashMap::<RequestId, std::sync::mpsc::Sender<Response>>::default();
+    let mut inflight = FxHashMap::<RequestId, Completion>::default();
     loop {
         tokio::select! {
             maybe_pending = req_rx.recv() => {
@@ -145,14 +205,14 @@ async fn worker(
                     Ok(b) => b,
                     Err(e) => {
                         mineral_log::warn!(target: "ipc", error = mineral_log::chain(&e), "请求编码失败");
-                        let _ = p.reply_tx.send(Response::Error(format!("ipc encode: {e}")));
+                        p.completion.resolve(Response::Error(format!("ipc encode: {e}")), &events);
                         continue;
                     }
                 };
-                inflight.insert(id, p.reply_tx);
+                inflight.insert(id, p.completion);
                 if let Err(e) = sink.send(bytes).await {
                     mineral_log::error!(target: "ipc", error = mineral_log::chain(&e), "daemon connection lost");
-                    fail_inflight(&connected, &mut inflight);
+                    fail_inflight(&connected, &mut inflight, &events);
                     return;
                 }
             }
@@ -162,24 +222,24 @@ async fn worker(
                         Ok(frame) => frame,
                         Err(e) => {
                             mineral_log::error!(target: "ipc", error = mineral_log::chain(&e), "daemon connection lost");
-                            fail_inflight(&connected, &mut inflight);
+                            fail_inflight(&connected, &mut inflight, &events);
                             return;
                         }
                     },
                     Some(Err(e)) => {
                         mineral_log::error!(target: "ipc", error = mineral_log::chain(&e), "daemon connection lost");
-                        fail_inflight(&connected, &mut inflight);
+                        fail_inflight(&connected, &mut inflight, &events);
                         return;
                     }
                     None => {
                         mineral_log::error!(target: "ipc", "daemon connection lost");
-                        fail_inflight(&connected, &mut inflight);
+                        fail_inflight(&connected, &mut inflight, &events);
                         return;
                     }
                 };
                 match frame {
                     Frame::Response { id, resp } => match inflight.remove(&id) {
-                        Some(tx) => drop(tx.send(*resp)),
+                        Some(completion) => completion.resolve(*resp, &events),
                         None => {
                             mineral_log::warn!(target: "ipc", id = id.value(), "无主应答,丢弃");
                         }
@@ -194,14 +254,23 @@ async fn worker(
     }
 }
 
-/// 断链收尾:置 disconnected,给所有飞行中请求回 `Response::Error` 解除调用方阻塞。
+/// 断链收尾:置 disconnected，用 `Response::Error` 收束所有飞行中 completion。
+///
+/// # Params:
+///   - `connected`: client 链路状态
+///   - `inflight`: 尚未收到配对应答的 completion
+///   - `events`: completion event 的本地缓冲
 fn fail_inflight(
     connected: &AtomicBool,
-    inflight: &mut FxHashMap<RequestId, std::sync::mpsc::Sender<Response>>,
+    inflight: &mut FxHashMap<RequestId, Completion>,
+    events: &Mutex<Vec<Event>>,
 ) {
     connected.store(false, Ordering::Release);
-    for (_, tx) in inflight.drain() {
-        let _ = tx.send(Response::Error("ipc: daemon disconnected".to_owned()));
+    for (_, completion) in inflight.drain() {
+        completion.resolve(
+            Response::Error("ipc: daemon disconnected".to_owned()),
+            events,
+        );
     }
 }
 
@@ -409,10 +478,24 @@ impl Client for RemoteClient {
         }
     }
 
-    fn query_song_stats(&self, id: SongId) -> Option<SongStatsWire> {
-        match self.send_recv(Request::QuerySongStats(id)) {
-            Response::SongStats(stats) => stats,
-            _ => None,
+    fn request_song_stats(&self, id: SongId) {
+        if self
+            .req_tx
+            .send(Pending {
+                req: Request::QuerySongStats(id.clone()),
+                completion: Completion::LocalPlayCount {
+                    song_id: id.clone(),
+                },
+            })
+            .is_err()
+        {
+            push_event(
+                &self.events,
+                Event::Task(Box::new(TaskEvent::LocalPlayCountFetched {
+                    song_id: id,
+                    count: None,
+                })),
+            );
         }
     }
 
@@ -462,9 +545,10 @@ mod tests {
     use std::time::Duration;
 
     use color_eyre::eyre::{WrapErr, eyre};
+    use mineral_model::{SongId, SourceKind};
     use mineral_protocol::{
         ClientInfo, Event, Frame, PkgVersion, RejectReason, Request, Response, ServerHello,
-        Subscription, TextSpan, ToastKind, framed, recv, send,
+        SongStatsWire, Subscription, TextSpan, ToastKind, framed, recv, send,
     };
     use mineral_server::Client;
     use tokio::net::{UnixListener, UnixStream};
@@ -692,6 +776,72 @@ mod tests {
         assert!(client.drain_events().is_empty(), "drain 是消费式语义");
 
         drop(client); // worker 退出 → server 侧 recv 返回 None。
+        server.await??;
+        std::fs::remove_file(&sock)?;
+        Ok(())
+    }
+
+    /// Song stats 查询只入队，不在 TUI 调用线程等 daemon 的 DB 结果。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn song_stats_request_returns_before_delayed_response() -> color_eyre::Result<()> {
+        let (listener, sock) = temp_listener()?;
+        let server = tokio::spawn(accept_and_handshake(listener, |mut conn| async move {
+            let frame: Frame = recv(&mut conn)
+                .await?
+                .ok_or_else(|| eyre!("server 没收到统计请求"))?;
+            let Frame::Request { id, req } = frame else {
+                return Err(eyre!("应是 Request"));
+            };
+            assert!(
+                matches!(req, Request::QuerySongStats(_)),
+                "应发 QuerySongStats，实际 {req:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            send(
+                &mut conn,
+                &Frame::Response {
+                    id,
+                    resp: Box::new(Response::SongStats(Some(SongStatsWire {
+                        play_count: 7,
+                        skip_count: 2,
+                        total_listen_ms: 123_000,
+                        last_played_at: Some(456),
+                        loved: false,
+                    }))),
+                },
+            )
+            .await?;
+            let _ = recv::<Frame, _>(&mut conn).await;
+            Ok(())
+        }));
+
+        let client = RemoteClient::connect(&sock).await?;
+        let id = SongId::new(SourceKind::BILIBILI, "b1");
+        let started = std::time::Instant::now();
+        client.request_song_stats(id.clone());
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "request_song_stats 不应等待 300ms response"
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut fetched = None;
+        while std::time::Instant::now() < deadline {
+            for event in client.drain_events() {
+                if let Event::Task(task) = event
+                    && let mineral_task::TaskEvent::LocalPlayCountFetched { song_id, count } = *task
+                {
+                    fetched = Some((song_id, count));
+                }
+            }
+            if fetched.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(fetched, Some((id, Some(7))));
+
+        drop(client);
         server.await??;
         std::fs::remove_file(&sock)?;
         Ok(())

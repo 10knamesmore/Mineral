@@ -125,6 +125,10 @@ fn task_event_round_trip() -> color_eyre::Result<()> {
             source: SourceKind::NETEASE,
             ids: FxHashSet::default(),
         },
+        TaskEvent::LocalPlayCountFetched {
+            song_id: SongId::new(SourceKind::NETEASE, "s"),
+            count: Some(7),
+        },
         TaskEvent::PlaylistDetailFetched {
             id: PlaylistId::new(SourceKind::NETEASE, "p"),
             playlist: Box::new(

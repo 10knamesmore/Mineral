@@ -462,7 +462,6 @@ snap 回终端图协议高清。转场窗口恰好盖住新图的离线编码期
 |---|---|---|
 | `radius` | 64 | 列表选中行上下各预取条数(封面 + 歌单曲目) |
 | `playback_cover_radius` | 3 | 沿播放队列给在播曲前后各预取几张封面,服务自动切歌 |
-| `play_count_debounce_ms` | 500 | 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API |
 | `prewarm_ahead` | 1 | 全屏稳态提前编码后几首封面,消自动切歌的占位闪 |
 
 ## tui.search — 搜索
@@ -490,6 +489,7 @@ Search 布局态两个下拉框(source / kind)的白名单:列出即暴露、顺
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
+| `detail_debounce_ms` | 500 | 光标停稳后才请求选中实体的 remote detail 与封面,防快速翻列表产生无用请求 |
 | `sources` | `["netease", "bilibili"]` | source 下拉白名单+顺序;source 名开放(插件源可写),没加载的名字静默跳过 |
 | `kinds` | `["song", "album", "artist", "playlist", "user"]` | kind 下拉白名单+顺序(封闭集合),与各 source 声明的可搜集合求交 |
 

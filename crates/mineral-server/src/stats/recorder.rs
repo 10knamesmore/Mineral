@@ -251,6 +251,24 @@ impl StatsRecorder {
         &self.store
     }
 
+    /// 当前是否会为指定 source 记录播放统计。
+    ///
+    /// 同时检查数据库是否可用、运行时采集档位与 `exclude_sources`。查询端必须复用本判定，
+    /// 否则 `level = off` 或排除来源时会把历史残留误展示成仍在采集的统计。
+    ///
+    /// # Params:
+    ///   - `source`: 要查询的歌曲来源
+    ///
+    /// # Return:
+    ///   该来源当前会记录播放统计时为 `true`
+    pub fn records_plays_for(&self, source: SourceKind) -> bool {
+        if !self.store.enabled() {
+            return false;
+        }
+        let params = self.params.load();
+        params.records_plays() && !params.excludes_source(source.name())
+    }
+
     /// 通道满 / 已关累计丢弃的命令总数(埋点故障域可观测;测试与压测断言用)。
     pub fn dropped_count(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
@@ -719,6 +737,34 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let store = StatsStore::open(&dir.path().join("stats.db")).await?;
         Ok((dir, store))
+    }
+
+    /// 单曲统计可用性跟随运行时采集档位、来源排除与数据库降级状态。
+    #[tokio::test]
+    async fn records_plays_for_reflects_runtime_policy() -> color_eyre::Result<()> {
+        let (_dir, store) = temp_store().await?;
+        let (recorder, _actor) = StatsRecorder::spawn(store, full_params());
+        assert!(recorder.records_plays_for(SourceKind::NETEASE));
+
+        let mut excluded = FxHashSet::default();
+        excluded.insert(SourceKind::BILIBILI.name().to_owned());
+        recorder.set_params(
+            StatsParams::builder()
+                .level(Level::Core)
+                .collect(FxHashMap::default())
+                .search_queries(SearchQueryMode::Off)
+                .exclude_sources(excluded)
+                .gap_ms(30 * 60_000)
+                .retention(Retention::Forever)
+                .build(),
+        );
+        assert!(recorder.records_plays_for(SourceKind::NETEASE));
+        assert!(!recorder.records_plays_for(SourceKind::BILIBILI));
+
+        recorder.set_params(super::off_params());
+        assert!(!recorder.records_plays_for(SourceKind::NETEASE));
+        assert!(!StatsRecorder::disabled().records_plays_for(SourceKind::NETEASE));
+        Ok(())
     }
 
     /// 与 full_params 同,但 retention 设为保留 `days` 天。

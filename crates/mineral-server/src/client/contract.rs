@@ -5,7 +5,7 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{MediaUrl, Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions,
-    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
+    QueueContextWire, QueueEditOutcome, QueueOp,
 };
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 
@@ -161,14 +161,14 @@ pub trait Client: Send + Sync {
         Err("复制模板不可用(当前 client 不支持)".to_owned())
     }
 
-    /// 查询一首歌的播放统计;无记录 / 不可用返回 `None`。
+    /// 后台查询一首歌的 Mineral 本地播放统计。
     ///
     /// # Params:
     ///   - `id`: 目标歌曲 id。
     ///
-    /// # Return:
-    ///   有记录时返回 [`SongStatsWire`],否则 `None`。
-    fn query_song_stats(&self, id: SongId) -> Option<SongStatsWire>;
+    /// 结果经 [`mineral_task::TaskEvent::LocalPlayCountFetched`] 进入事件缓冲；本方法只
+    /// 入队并立即返回，不等 IPC 或 DB。
+    fn request_song_stats(&self, id: SongId);
 
     /// 下载(永久导出 + 顺带填 cache)单曲 / 整张歌单。fire-and-forget,server 后台跑,
     /// 进度 / 完成经 [`mineral_task::TaskEvent::Notice`] 回传。

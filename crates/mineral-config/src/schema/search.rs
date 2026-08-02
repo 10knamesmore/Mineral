@@ -51,6 +51,10 @@ pub struct DeepWeights {
 /// channel 远程搜索两个下拉的白名单。
 #[config_section]
 pub struct ChannelSearchConfig {
+    /// detail 驻留防抖(毫秒):光标停稳后才请求选中实体详情与封面;
+    /// 避免快速翻列表时为掠过的实体发起 remote 请求。
+    detail_debounce_ms: u64,
+
     /// source 白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
     /// source 名是开放 string(插件源可写),没加载的名字运行时静默跳过——同一份配置
     /// 跨机器可移植。空列表 = 消费侧防呆回退全量(按名字典序)。

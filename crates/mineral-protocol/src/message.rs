@@ -158,7 +158,7 @@ pub enum DownloadTarget {
 /// 一首歌的播放统计快照(IPC 出参)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SongStatsWire {
-    /// 完整播放次数。
+    /// 在 Mineral 中自然播完的次数(`finish_reason = eof`)。
     pub play_count: u32,
 
     /// 跳过次数。
@@ -296,7 +296,8 @@ pub enum Request {
     /// 跨源聚合视图(全源收藏)才能离线重建出歌名 / 艺人 / 时长。
     ToggleLove(Box<Song>),
 
-    /// 查询一首歌的播放统计。返回 [`Response::SongStats`]。
+    /// 查询一首歌的 Mineral 本地播放统计。返回 [`Response::SongStats`]；当前未采集该
+    /// source 时为 `None`，启用采集但从未播放时为零值。
     QuerySongStats(SongId),
 
     // ---- 下载 ----
@@ -439,7 +440,7 @@ pub enum Response {
     /// 对应 [`Request::PlayQueue`]：成功或 structured validation error。
     PlayQueue(Result<(), PlayQueueError>),
 
-    /// 对应 [`Request::QuerySongStats`]:命中返回统计,无记录返回 None。
+    /// 对应 [`Request::QuerySongStats`]：当前采集可用时返回统计，否则为 `None`。
     SongStats(Option<SongStatsWire>),
 
     /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。

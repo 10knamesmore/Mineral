@@ -6,7 +6,7 @@ use std::time::Duration;
 use mineral_channel_core::Page;
 use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId, SearchKind, Song, SourceKind};
 use mineral_spectrum::SpectrumComputer;
-use mineral_task::{SearchPayload, TaskEvent};
+use mineral_task::SearchPayload;
 use ratatui::layout::Rect;
 use rustc_hash::FxHashMap;
 
@@ -23,11 +23,13 @@ mod channel_search;
 mod covers;
 mod detail;
 mod library;
+mod lifecycle;
 mod lyric;
 mod nav;
 mod player;
 mod search;
 pub(crate) mod search_whitelist;
+mod task_event;
 mod view_switch;
 
 pub use browse::BrowsePage;
@@ -161,7 +163,7 @@ pub struct AppState {
     /// 不支持的终端永不发事件,降级方向必须是「恒聚焦」。
     pub dim: Toggle,
 
-    /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/播放次数装饰)。
+    /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/本地完整播放次数装饰)。
     pub library: LibraryData,
 
     /// 脚本下发的窗口标题整串覆盖(`Event::WindowTitleOverride` 落地;
@@ -396,11 +398,41 @@ impl AppState {
     /// 给定一条 PlaylistEntry，根据当前 user-data 装饰 relation 指向的 Song。
     fn decorate_entry(&self, entry: mineral_model::PlaylistEntry) -> PlaylistEntryView {
         let loved = self.is_liked(&entry.song);
-        let plays = self.library.play_counts.get(&entry.song.id).copied();
+        let plays = self.library.local_play_counts.get(&entry.song.id).copied();
         PlaylistEntryView {
             data: entry,
             loved,
             plays,
+        }
+    }
+
+    /// 当前配置是否允许记录指定 source 的本地播放统计。
+    ///
+    /// # Params:
+    ///   - `source`: 目标歌曲来源
+    ///
+    /// # Return:
+    ///   `stats.level` 非 off 且 source 未被排除时为 `true`
+    pub(crate) fn records_local_plays_for(&self, source: SourceKind) -> bool {
+        *self.cfg.stats().level() != mineral_config::StatsLevel::Off
+            && !self
+                .cfg
+                .stats()
+                .exclude_sources()
+                .iter()
+                .any(|excluded| excluded == source.name())
+    }
+
+    /// 清空本地播放次数的查询状态与所有已装饰值。
+    ///
+    /// 配置热更时调用，确保切到 `stats.level = off` / 排除来源后旧值立即消失；重新启用后
+    /// 下一次驻留会重新查询，不复用停采期间可能过期的缓存。
+    pub(crate) fn clear_local_play_counts(&mut self) {
+        self.library.local_play_counts.clear();
+        for tracks in self.library.tracks.values_mut() {
+            for entry in tracks {
+                entry.plays = None;
+            }
         }
     }
 
@@ -448,74 +480,6 @@ impl AppState {
                 (pid, next)
             })
             .collect();
-    }
-
-    /// 把任务事件应用到状态。**4c 后**:server 端 PlayerCore 已 filter 掉
-    /// `PlayUrlReady` / `LyricsReady`(自己消化进 PlayerSync 的 current 重段),client 这里
-    /// 只剩 playlists / tracks / liked_ids 三类。
-    pub fn apply(&mut self, event: &TaskEvent) {
-        match event {
-            TaskEvent::LibrarySnapshot { playlists } => {
-                // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
-                // 变换后),client 不再自行按源拼接。
-                self.library.playlists = playlists
-                    .iter()
-                    .cloned()
-                    .map(|data| PlaylistView { data })
-                    .collect();
-                if self.browse.nav.playlist.sel() >= self.library.playlists.len() {
-                    self.browse.nav.playlist.set_sel(0);
-                }
-            }
-            // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
-            TaskEvent::PlaylistsFetched { .. } => {}
-            // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
-            TaskEvent::FetchDone { .. } => {}
-            TaskEvent::PlaylistDetailFetched { id, playlist } => {
-                // 歌单详情含元信息 + 曲目;library 与 detail 都只取曲目(歌单元信息走
-                // sidebar 列表那份 / detail 帧的 entity 占位)。
-                let decorated = playlist
-                    .entries
-                    .iter()
-                    .cloned()
-                    .map(|data| self.decorate_entry(data))
-                    .collect();
-                self.library.tracks.insert(id.clone(), decorated);
-                self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
-                self.apply_pending_restore(id);
-                // detail 歌单帧也吃这批曲目(若当前栈顶正等它)。
-                if let Some(kr) = self.channel_search.active_results_mut() {
-                    kr.fill_playlist_entries(id, playlist.entries.clone());
-                }
-            }
-            TaskEvent::LikedSongIdsFetched { source, ids } => {
-                self.library.liked_ids.insert(*source, ids.clone());
-                self.redecorate_for_source(*source);
-            }
-            TaskEvent::RemotePlayCountFetched { song_id, count } => {
-                self.library.play_counts.insert(song_id.clone(), *count);
-                self.redecorate_for_source(song_id.namespace());
-            }
-            // server 已 filter,理论不会到 client。defensive:跳过。
-            TaskEvent::PlayUrlReady { .. }
-            | TaskEvent::SongUrlFailed { .. }
-            | TaskEvent::LyricsReady { .. } => {}
-            TaskEvent::SearchResults {
-                source,
-                kind,
-                query,
-                page,
-                payload,
-                has_more,
-            } => self.apply_search_results(*source, *kind, query, *page, payload, *has_more),
-            TaskEvent::ArtistDetailFetched { id, artist } => self.apply_artist_detail(id, artist),
-            TaskEvent::ArtistAlbumsFetched { id, albums, .. } => {
-                self.apply_artist_albums(id, albums);
-            }
-            TaskEvent::AlbumDetailFetched { id, album } => self.apply_album_detail(id, album),
-            // 歌单写操作完结由后续里程碑(歌单管理)消费;先吞掉保持 match 穷尽。
-            TaskEvent::PlaylistWriteDone { .. } => {}
-        }
     }
 
     /// 把一页搜索结果落进配对的会话：按事件自带 `source` 找会话、`query` 配对（源级，

@@ -799,7 +799,6 @@ Config {
         prefetch: PrefetchConfig {
             radius: 64,
             playback_cover_radius: 3,
-            play_count_debounce_ms: 500,
             prewarm_ahead: 1,
         },
         search: SearchConfig {
@@ -814,6 +813,7 @@ Config {
                 locate_on_enter: true,
             },
             channel: ChannelSearchConfig {
+                detail_debounce_ms: 500,
                 sources: [
                     "netease",
                     "bilibili",

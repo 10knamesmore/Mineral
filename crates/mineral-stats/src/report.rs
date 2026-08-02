@@ -319,8 +319,11 @@ pub struct StatusReport {
 /// 单曲汇总(QuerySongStats 改口用,全量窗口)。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SongSummary {
-    /// 播放次数。
+    /// 已结算播放记录数；包含 eof / skip / stop / error。
     pub plays: i64,
+
+    /// 完整播放次数(finish_reason=eof)。
+    pub completed: i64,
 
     /// 跳歌次数。
     pub skips: i64,

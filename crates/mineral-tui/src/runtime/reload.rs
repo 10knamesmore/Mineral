@@ -26,6 +26,9 @@ impl crate::app::App {
     /// # Params:
     ///   - `cfg`: 新有效配置(`Arc` 共享只读)
     pub(crate) fn apply_config(&mut self, cfg: Arc<mineral_config::Config>) {
+        // stats 策略可能从记录切到 off / 排除来源；先清旧装饰。重新启用时当前选中曲会
+        // 经驻留查询补回，绝不展示停采前的陈旧缓存。
+        self.state.clear_local_play_counts();
         self.state.cfg = cfg;
         let cfg = Arc::clone(&self.state.cfg);
         let tui_cfg = cfg.tui();
@@ -217,7 +220,7 @@ mod tests {
     use mineral_protocol::BusValue;
 
     use crate::runtime::action::Action;
-    use crate::test_support::app_with_queue;
+    use crate::test_support::{app_with_library, app_with_queue};
 
     /// 造一帧「default.lua + overlay」合成的有效配置树(wire 形),
     /// 与 daemon 侧合成路径同构。
@@ -305,6 +308,43 @@ mod tests {
             app.notifications.entry_count(),
             entries_before,
             "成功应用应静默,不新增通知"
+        );
+        Ok(())
+    }
+
+    /// 配置热更清掉本地播放次数缓存与已装饰值；切到 off 后旧统计不会残留在 Selected。
+    #[test]
+    fn pushed_config_clears_local_play_counts() -> color_eyre::Result<()> {
+        use mineral_model::{SongId, SourceKind};
+
+        let mut app = app_with_library(1, 0)?;
+        let id = SongId::new(SourceKind::NETEASE, "1");
+        assert!(app.state.library.local_play_counts.enter_selection(&id));
+        assert!(app.state.library.local_play_counts.complete(&id, Some(3)));
+        let entry = app
+            .state
+            .library
+            .tracks
+            .values_mut()
+            .flat_map(|tracks| tracks.iter_mut())
+            .next()
+            .ok_or_else(|| color_eyre::eyre::eyre!("前置:Library 应有一首歌"))?;
+        entry.plays = Some(3);
+
+        app.apply_pushed_config(pushed_tree(
+            serde_json::json!({ "stats": { "level": "off" } }),
+        )?);
+
+        assert!(app.state.library.local_play_counts.has_no_cached_values());
+        assert!(app.state.library.local_play_counts.is_idle());
+        assert!(
+            app.state
+                .library
+                .tracks
+                .values()
+                .flat_map(|tracks| tracks.iter())
+                .all(|entry| entry.plays.is_none()),
+            "已装饰的 Selected 值也必须清空"
         );
         Ok(())
     }

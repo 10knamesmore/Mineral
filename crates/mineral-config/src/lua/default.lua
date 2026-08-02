@@ -254,7 +254,6 @@ return {
     prefetch = {
       radius = 64, -- 列表选中行上下各预取条数(封面 + 歌单曲目)
       playback_cover_radius = 3, -- 沿播放队列给在播曲前后各预取几张封面
-      play_count_debounce_ms = 500, -- 选中停留超过此毫秒才查远端播放次数,防翻列表打满 API
       prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
     },
     -- 搜索:本地过滤(`/`)与 channel 远程搜索是两套互不相关的旋钮,分挂 deep / channel 子表。
@@ -275,6 +274,7 @@ return {
       -- channel 搜索两个下拉的白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
       -- source 名开放(插件源可写),没加载的名字静默跳过;空列表 = 防呆回退全量。
       channel = {
+        detail_debounce_ms = 500, -- 光标停稳后才请求 remote detail 与封面,防快速翻列表产生无用请求
         sources = { "netease", "bilibili" },
         -- 封闭集合 song/album/artist/playlist/user,与各 source 可搜集合求交(保此处顺序)
         kinds = { "song", "album", "artist", "playlist", "user" },
