@@ -342,6 +342,23 @@ impl CacheIndex {
         }
     }
 
+    /// 枚举全部条目:`(key, 绝对路径)`,文件已漂走的跳过(读内存镜像 + 逐条 `is_file`)。
+    /// 供存量回填类维护操作用。
+    ///
+    /// # Return:
+    ///   启用态返回全部在盘条目(顺序不定);降级态返回空。
+    pub fn entries(&self) -> Vec<(String, PathBuf)> {
+        let Some(backend) = self.backend.as_ref() else {
+            return Vec::new();
+        };
+        let idx = backend.index.lock();
+        idx.map
+            .iter()
+            .map(|(key, e)| (key.clone(), backend.root.join(&e.relpath)))
+            .filter(|(_, path)| path.is_file())
+            .collect()
+    }
+
     /// 清空整张索引:删所有文件 + `DELETE FROM <table>` + 清镜像。供 CLI「清理缓存」用。
     ///
     /// # Return:
@@ -691,6 +708,41 @@ mod tests {
             reopened.get("ne:1:exhigh").is_some(),
             "写穿透后重开应仍命中,不再依赖 Drop flush"
         );
+        Ok(())
+    }
+
+    /// entries 枚举:带 key 与绝对路径;漂走的文件跳过;降级态为空。
+    #[tokio::test]
+    async fn entries_lists_live_files_with_keys() -> color_eyre::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path().join("root");
+        let idx = CacheIndex::open(
+            mem_pool().await?,
+            "audio_cache",
+            root.clone(),
+            Some(1_000_000),
+        )
+        .await?;
+        let src = make_src(d.path(), "cap1.part", b"A")?;
+        idx.record_file("ne:1:exhigh", &src, "netease/exhigh/a", "x.mp3")
+            .await?;
+        let src2 = make_src(d.path(), "cap2.part", b"B")?;
+        idx.record_file("ne:2:lossless", &src2, "netease/lossless/b", "y.flac")
+            .await?;
+        // 漂走一条:索引在、文件删。
+        let gone = idx.get("ne:2:lossless");
+        if let Some(p) = gone {
+            std::fs::remove_file(p)?;
+        }
+
+        let entries = idx.entries();
+        assert_eq!(entries.len(), 1, "漂走的应跳过: {entries:?}");
+        let Some((key, path)) = entries.first() else {
+            return Err(color_eyre::eyre::eyre!("应剩一条"));
+        };
+        assert_eq!(key, "ne:1:exhigh");
+        assert!(path.starts_with(&root), "应给绝对路径: {}", path.display());
+        assert!(CacheIndex::disabled().entries().is_empty(), "降级态应为空");
         Ok(())
     }
 

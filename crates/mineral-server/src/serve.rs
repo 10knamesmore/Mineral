@@ -458,6 +458,11 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             Response::Ok
         }
         Request::DownloadProgress => Response::DownloadProgress(client.download_progress()),
+        Request::TagBackfill => match client.tag_backfill_async().await {
+            Ok(counts) => Response::TagBackfill(counts),
+            Err(e) => Response::Error(mineral_log::chain(&e)),
+        },
+        Request::TagProgress => Response::TagProgress(client.tag_progress()),
         Request::TerminalState {
             rows,
             cols,
@@ -484,6 +489,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         | Request::PlayerSync(_)
         | Request::TaskSnapshot
         | Request::DownloadProgress
+        | Request::TagProgress
         // 拖动 resize 会连发,不记。
         | Request::TerminalState { .. }
         | Request::PullPcm(_) => None,
@@ -514,6 +520,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::ToggleLove(_) => Some("ToggleLove"),
         Request::QuerySongStats(_) => Some("QuerySongStats"),
         Request::Download(_) => Some("Download"),
+        Request::TagBackfill => Some("TagBackfill"),
         Request::Shutdown => Some("Shutdown"),
     }
 }

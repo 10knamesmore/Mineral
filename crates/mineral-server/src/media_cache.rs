@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use mineral_model::{AudioFormat, BitRate, Song, SongId};
+use mineral_model::{AudioFormat, BitRate, Song, SongId, SourceKind};
 use mineral_persist::{CacheIndex, ServerStore};
 
 /// 单段文件名 / 目录名的最大字节数(留余量,远低于 255 上限)。
@@ -104,6 +104,21 @@ impl MediaCache {
         let (subdir, file_name) = library_relpath(song, quality, format);
         self.index.record_file(&key, src, &subdir, &file_name).await
     }
+
+    /// 枚举全部在盘缓存条目:`(SongId, quality, 绝对路径)`(回填打标的缓存侧 inventory)。
+    ///
+    /// # Return:
+    ///   键解析失败(不该发生,键是我方 [`cache_key`] 产的)的条目跳过;降级态返回空。
+    pub(crate) fn entries(&self) -> Vec<(SongId, BitRate, PathBuf)> {
+        self.index
+            .entries()
+            .into_iter()
+            .filter_map(|(key, path)| {
+                let (id, quality) = parse_cache_key(&key)?;
+                Some((id, quality, path))
+            })
+            .collect()
+    }
 }
 
 /// 一首歌在库里的相对落点 `(subdir, file_name)` = `<source>/<quality>/<album>` + `<title>.<ext>`。
@@ -160,6 +175,21 @@ pub(crate) fn library_dir_and_stem(song: &Song, quality: BitRate) -> (String, St
 ///   形如 `netease:186016:lossless`。
 pub(crate) fn cache_key(song_id: &SongId, quality: BitRate) -> String {
     format!("{}:{}", song_id.qualified(), quality.as_str())
+}
+
+/// [`cache_key`] 的反解析。namespace 段不含冒号(从左切)、quality 段在最后(从右切),
+/// value 段即使含冒号也不受影响。
+///
+/// # Params:
+///   - `key`: 缓存索引键
+///
+/// # Return:
+///   `(SongId, quality)`;格式或 quality token 异常返回 `None`。
+fn parse_cache_key(key: &str) -> Option<(SongId, BitRate)> {
+    let (qualified, quality) = key.rsplit_once(':')?;
+    let quality = BitRate::from_token(quality)?;
+    let (ns, value) = qualified.split_once(':')?;
+    Some((SongId::new(SourceKind::from_name(ns), value), quality))
 }
 
 /// 库内专辑目录 `<source>/<quality>/<album>`(各段已 sanitize;`album` 为 `None` / 空 → `_unknown`)。
@@ -329,6 +359,29 @@ mod tests {
         assert!(!src.exists(), "源 capture 文件应被移走");
         // 不同音质不命中(键含音质)。
         assert!(cache.get(&s.id, BitRate::Exhigh).is_none());
+        Ok(())
+    }
+
+    /// entries 枚举:入库条目按 `(SongId, quality, 绝对路径)` 结构化还原;禁用态为空。
+    #[tokio::test]
+    async fn entries_roundtrips_id_and_quality() -> color_eyre::Result<()> {
+        let d = tempfile::tempdir()?;
+        let cache = open_cache(&d.path().join("t.db"), d.path().join("cache")).await?;
+        let s = song("186016", "晴天", Some("叶惠美"));
+        let src = d.path().join("capture.part");
+        std::fs::write(&src, b"FLACdata")?;
+        cache
+            .put_played(&s, BitRate::Lossless, Some(&AudioFormat::Flac), &src)
+            .await?;
+        let entries = cache.entries();
+        assert_eq!(entries.len(), 1, "应只有一条: {entries:?}");
+        let Some((id, quality, path)) = entries.first() else {
+            return Err(color_eyre::eyre::eyre!("应有一条"));
+        };
+        assert_eq!(id, &s.id, "SongId 应逆解析还原");
+        assert_eq!(*quality, BitRate::Lossless);
+        assert!(path.ends_with("netease/lossless/叶惠美/晴天.flac"));
+        assert!(MediaCache::disabled().entries().is_empty(), "禁用态应为空");
         Ok(())
     }
 

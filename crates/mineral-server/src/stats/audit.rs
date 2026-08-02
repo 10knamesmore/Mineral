@@ -63,6 +63,9 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::ToggleLove(..) => Recorded("love_changes"),
         Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询(改口读 stats.db)"),
         Request::Download(..) => Recorded("downloads"),
+        // 回填只复用既有 tagging 队列(无新行为事实);单曲成败走日志,不落行为表。
+        Request::TagBackfill => NotAnEvent("维护操作:存量文件回填打标"),
+        Request::TagProgress => NotAnEvent("轮询读:打标进度"),
         Request::DownloadProgress => NotAnEvent("轮询读:下载进度"),
         Request::InvokeAction { .. } => Recorded("action_invocations"),
         Request::RenderCopyTemplate { .. } => Recorded("copy_renders"),

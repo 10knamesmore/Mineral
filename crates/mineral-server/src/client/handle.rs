@@ -425,6 +425,34 @@ impl ClientHandle {
             },
         }))
     }
+
+    /// 存量回填:枚举缓存 + 导出候选,逐文件投递打标队列。计数语义(受理数)见
+    /// [`crate::tagging::backfill`]。
+    ///
+    /// # Return:
+    ///   两侧(缓存 / 导出)受理计数,转 protocol DTO。
+    pub(crate) async fn tag_backfill_async(
+        &self,
+    ) -> color_eyre::Result<mineral_protocol::TagBackfillWire> {
+        let counts = crate::tagging::backfill(&self.player).await?;
+        Ok(mineral_protocol::TagBackfillWire {
+            cached: counts.cached,
+            exported: counts.exported,
+        })
+    }
+
+    /// 打标进度快照(回填 CLI 轮询渲染用),转 protocol DTO。
+    ///
+    /// # Return:
+    ///   受理 / 处理完 / 失败三元组(累计计数;开关关闭恒零)。
+    pub(crate) fn tag_progress(&self) -> mineral_protocol::TagProgressWire {
+        let p = self.player.tagging().progress();
+        mineral_protocol::TagProgressWire {
+            submitted: p.submitted,
+            processed: p.processed,
+            failed: p.failed,
+        }
+    }
 }
 
 impl Client for ClientHandle {

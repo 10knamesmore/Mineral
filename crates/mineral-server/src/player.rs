@@ -62,6 +62,9 @@ pub(crate) struct Inner {
     /// 下载任务入队端:`download()` 把目标投进来,单 worker 串行消费(避免并发下载竞争)。
     download_tx: tokio::sync::mpsc::UnboundedSender<DownloadTarget>,
 
+    /// 打标队列投递端:下载 / 缓存落盘后投一曲(开关关闭为 null-object,见 [`crate::tagging`])。
+    tagging: crate::tagging::TaggingQueue,
+
     /// 未完成的下载批数(入队 +1、批处理完 -1);0→1 开新会话、归 0 结束会话并出完成提示。
     download_pending: Arc<std::sync::atomic::AtomicUsize>,
 
@@ -190,6 +193,13 @@ impl PlayerCore {
         let Sinks { notify, stats } = sinks;
         let (http, music_dir) = crate::download::open_env(config.download().dir().as_deref());
         let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
+        let tagging = crate::tagging::TaggingQueue::spawn(
+            *config.download().tagging(),
+            &channels,
+            http.as_ref(),
+            &persist,
+            *config.download().tagging_workers(),
+        );
         let library = crate::library::Library::new(
             channels
                 .iter()
@@ -207,6 +217,7 @@ impl PlayerCore {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             download_tx,
             download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tagging,
             notify,
             stats,
             props: crate::props::PropsWatch::default(),
@@ -301,6 +312,11 @@ impl PlayerCore {
     /// 下载进度共享态句柄(下载任务实时写入)。
     pub(crate) fn progress_handle(&self) -> &Arc<Mutex<DownloadProgress>> {
         &self.inner.download_progress
+    }
+
+    /// 打标队列投递端(下载 / 缓存落盘后投一曲;开关关闭为 null-object)。
+    pub(crate) fn tagging(&self) -> &crate::tagging::TaggingQueue {
+        &self.inner.tagging
     }
 
     /// 在线播放音质(配置 `audio.playback_quality`)。

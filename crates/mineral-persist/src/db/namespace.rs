@@ -245,6 +245,48 @@ impl NamespaceStore {
         Ok(Some(row.into_song(artist_rows)?))
     }
 
+    /// 列出本 namespace 全部歌曲元数据(回填类维护操作的 inventory)。
+    ///
+    /// # Return:
+    ///   全部可重建的 [`Song`](顺序不定);降级返回空 vec。
+    pub async fn list_meta(&self) -> color_eyre::Result<Vec<Song>> {
+        let Some(pool) = self.persist.pool() else {
+            return Ok(Vec::new());
+        };
+        let ns = self.source.name();
+        let metas = sqlx::query_as::<_, SongMetaRow>(
+            "SELECT namespace, song_value, name, alias, album_id, album_name, duration_ms, \
+             cover_url FROM song_meta WHERE namespace = ?",
+        )
+        .bind(ns)
+        .fetch_all(pool)
+        .await
+        .wrap_err_with(|| format!("列出 song_meta 失败 ns={ns}"))?;
+        let artist_rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT song_value, artist_id, artist_name FROM song_artists \
+             WHERE namespace = ? ORDER BY song_value, position",
+        )
+        .bind(ns)
+        .fetch_all(pool)
+        .await
+        .wrap_err_with(|| format!("列出 song_artists 失败 ns={ns}"))?;
+        // song_value → 保序艺人组(查询已按 song_value 聚簇、position 升序)。
+        let mut by_song = rustc_hash::FxHashMap::<String, Vec<SongArtistRow>>::default();
+        for (song_value, artist_id, artist_name) in artist_rows {
+            by_song.entry(song_value).or_default().push(SongArtistRow {
+                artist_id,
+                artist_name,
+            });
+        }
+        metas
+            .into_iter()
+            .map(|row| {
+                let artists = by_song.remove(&row.song_value).unwrap_or_default();
+                row.into_song(artists)
+            })
+            .collect()
+    }
+
     /// 按 album id 回查专辑名(取任一成员歌 `song_meta.album_name`;专辑名只作为歌的投影存,
     /// 无独立专辑表)。降级 / 未命中返回 `Ok(None)`。
     ///
@@ -729,6 +771,50 @@ mod tests {
             assert_eq!(g.artists.len(), song.artists.len());
             assert_eq!(g.duration_ms, Some(200_000));
         }
+        Ok(())
+    }
+
+    /// list_meta:枚举全量并按 song_artists 保序重建艺人;不同 namespace 互不漏;降级为空。
+    #[tokio::test]
+    async fn list_meta_returns_all_with_ordered_artists() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
+        let s = p.scope(SourceKind::NETEASE);
+        let mk = |v: &str, name: &str, artists: Vec<ArtistRef>| {
+            Song::builder()
+                .id(SongId::new(SourceKind::NETEASE, v))
+                .name(name.to_owned())
+                .artists(artists)
+                .build()
+        };
+        let a = |id: &str, name: &str| ArtistRef {
+            id: ArtistId::new(SourceKind::NETEASE, id),
+            name: name.to_owned(),
+        };
+        s.upsert_meta(&mk("1", "晴天", vec![a("j", "周杰伦"), a("x", "第二艺人")]))
+            .await?;
+        s.upsert_meta(&mk("2", "无艺人歌", Vec::new())).await?;
+        // 另一 namespace 的歌不应混入。
+        p.scope(SourceKind::BILIBILI)
+            .upsert_meta(
+                &Song::builder()
+                    .id(SongId::new(SourceKind::BILIBILI, "BV1"))
+                    .name("B站歌".to_owned())
+                    .build(),
+            )
+            .await?;
+
+        let all = s.list_meta().await?;
+        assert_eq!(all.len(), 2, "本 namespace 应只有两首: {all:?}");
+        let Some(one) = all.iter().find(|x| x.id.value() == "1") else {
+            return Err(color_eyre::eyre::eyre!("应含 id=1"));
+        };
+        let names = one
+            .artists
+            .iter()
+            .map(|x| x.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["周杰伦", "第二艺人"], "艺人应保序");
         Ok(())
     }
 

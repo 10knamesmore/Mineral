@@ -38,7 +38,7 @@ pub use handshake::{
 pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
 pub use message::{
     CopyTemplateCtx, DownloadProgress, DownloadTarget, PlayQueueError, QueueContextWire, Request,
-    Response, SongStatsWire,
+    Response, SongStatsWire, TagBackfillWire, TagProgressWire,
 };
 pub use mineral_task::ChannelFetchKindTag;
 pub use oneshot::OneshotClient;

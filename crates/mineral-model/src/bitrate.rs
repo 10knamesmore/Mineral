@@ -48,6 +48,17 @@ impl BitRate {
             Self::Hires => "hires",
         }
     }
+
+    /// [`as_str`](Self::as_str) 的反解析(缓存键 / 目录名 → 音质)。
+    ///
+    /// # Params:
+    ///   - `token`: 小写 token(如 `lossless`)
+    ///
+    /// # Return:
+    ///   命中的音质;未知 token 为 `None`。
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.as_str() == token)
+    }
 }
 
 #[cfg(test)]
@@ -61,6 +72,15 @@ mod tests {
         assert_eq!(BitRate::Standard.as_str(), "standard");
         assert_eq!(BitRate::Higher.as_str(), "higher");
         assert_eq!(BitRate::Hires.as_str(), "hires");
+    }
+
+    /// `as_str` / `from_token` 互逆。
+    #[test]
+    fn from_token_roundtrips() {
+        for b in BitRate::ALL {
+            assert_eq!(BitRate::from_token(b.as_str()), Some(b));
+        }
+        assert_eq!(BitRate::from_token("master"), None);
     }
 
     /// Ord 必须是音频质量升序,解析器据此「取最高可用音质」。

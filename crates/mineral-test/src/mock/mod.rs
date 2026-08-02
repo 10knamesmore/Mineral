@@ -3,9 +3,10 @@
 //! - [`serve_once`] / [`serve_once_status`]:进程内一次性 HTTP server。
 //! - [`UrlChannel`]:返回固定直链的 mock channel。
 //! - [`DetailChannel`]:`songs_detail` 返回预置曲目的 mock channel。
+//! - [`CannedChannel`]:`album_detail` / `lyrics` 返回罐头数据并计歌词调用数的 mock channel。
 
 mod channel;
 mod http;
 
-pub use channel::{DetailChannel, UrlChannel};
+pub use channel::{CannedChannel, DetailChannel, UrlChannel};
 pub use http::{serve_once, serve_once_status};

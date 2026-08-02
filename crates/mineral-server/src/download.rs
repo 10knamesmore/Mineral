@@ -400,7 +400,11 @@ pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
                         if let Some(path) = cache.get(&cap.song.id, cap.quality) {
                             // 收割成功 = 该曲首次拥有完整本地副本:补算包络。若它仍在播,
                             // 算完即推,播放中段波形直接点亮;不在播则落库待下次直取。
-                            player.ensure_envelope(cap.song.id.clone(), path);
+                            player.ensure_envelope(cap.song.id.clone(), path.clone());
+                            // 缓存文件落盘 → 异步打标(写引擎走副本 + rename,不伤在播 fd)。
+                            player
+                                .tagging()
+                                .enqueue(cap.song.clone(), path, cap.quality);
                         }
                         (mineral_stats::CacheHarvestOutcome::Cached, bytes)
                     }
@@ -515,6 +519,9 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
                 player
                     .notify()
                     .download_completed(song, &path, quality, format.as_ref());
+                player
+                    .tagging()
+                    .enqueue(song.clone(), path.clone(), quality);
                 let path_str = path.display().to_string();
                 record_download(
                     player,

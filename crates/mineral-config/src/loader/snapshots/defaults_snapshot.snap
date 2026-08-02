@@ -980,6 +980,8 @@ Config {
     download: DownloadConfig {
         quality: Lossless,
         dir: None,
+        tagging: true,
+        tagging_workers: 4,
     },
     sources: SourcesConfig {
         netease: NeteaseSection {

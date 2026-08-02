@@ -293,6 +293,14 @@ fn core_with_events_stats(
             .map(|ch| ch.source())
             .collect::<Vec<SourceKind>>(),
     );
+    // 测试不起打标 worker(关闭态 null-object)。
+    let tagging = crate::tagging::TaggingQueue::spawn(
+        /*enabled*/ false,
+        &[],
+        None,
+        &persist,
+        /*workers*/ 1,
+    );
     let inner = Arc::new(Inner {
         audio,
         scheduler,
@@ -304,6 +312,7 @@ fn core_with_events_stats(
         download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
         download_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        tagging,
         // 多数测试无脚本;hook 拦截测试经 `core_with_script` 注入。
         notify: crate::notify::Notifier::new(events, script),
         stats,

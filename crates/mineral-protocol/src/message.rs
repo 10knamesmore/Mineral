@@ -174,6 +174,29 @@ pub struct SongStatsWire {
     pub loved: bool,
 }
 
+/// [`Request::TagBackfill`] 的回执:回填候选按侧受理计数。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagBackfillWire {
+    /// 缓存侧(播放缓存索引)受理数。
+    pub cached: u32,
+
+    /// 导出侧(stats 下载记录 + song_meta 枚举)受理数。
+    pub exported: u32,
+}
+
+/// [`Request::TagProgress`] 的回执:打标队列累计进度(daemon 生命周期内单调)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagProgressWire {
+    /// 已受理(未被去重丢弃)的任务数。
+    pub submitted: u64,
+
+    /// 已处理完(成功 + 容器不支持跳过 + 失败)的任务数。
+    pub processed: u64,
+
+    /// 其中失败数(写盘错误)。
+    pub failed: u64,
+}
+
 /// Client → Server 命令。每条 [`Request`] 一定有一条对应的 [`Response`]。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -307,6 +330,14 @@ pub enum Request {
 
     /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。返回 [`Response::DownloadProgress`]。
     DownloadProgress,
+
+    /// 回填存量落盘文件(下载导出 + 播放缓存)的内嵌 metadata tag:server 枚举候选后
+    /// 后台串行打标(与新落盘同一条 tagging 队列)。返回 [`Response::TagBackfill`]
+    /// 的受理计数(打标本身 fire-and-forget,单曲成败见 daemon 日志)。
+    TagBackfill,
+
+    /// 拉一次打标进度快照(回填 CLI 轮询渲染进度用)。返回 [`Response::TagProgress`]。
+    TagProgress,
 
     // ---- 脚本 ----
     /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
@@ -445,6 +476,12 @@ pub enum Response {
 
     /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。
     DownloadProgress(DownloadProgress),
+
+    /// 对应 [`Request::TagBackfill`]:两侧(缓存 / 导出)的受理计数。
+    TagBackfill(TagBackfillWire),
+
+    /// 对应 [`Request::TagProgress`]:当前打标进度快照。
+    TagProgress(TagProgressWire),
 
     /// 对应 [`Request::ChannelCaps`]:每个已注册 channel 的能力声明。
     ChannelCaps(Vec<(mineral_model::SourceKind, mineral_channel_core::ChannelCaps)>),

@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-server/src/config.rs
-assertion_line: 143
 description: "ServerConfig(default.lua → daemon 切片映射,行为不变守卫)"
 expression: "ServerConfig::from_config(&cfg)"
 ---
@@ -32,6 +31,8 @@ ServerConfig {
     download: DownloadConfig {
         quality: Lossless,
         dir: None,
+        tagging: true,
+        tagging_workers: 4,
     },
     daemon: DaemonConfig {
         gapless_prefetch_ms: 10000,

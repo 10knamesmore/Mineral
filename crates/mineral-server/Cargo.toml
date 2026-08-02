@@ -35,6 +35,7 @@ rand         = { workspace = true }
 reqwest      = { workspace = true }
 serde         = { workspace = true }
 serde_json    = { workspace = true }
+time          = { workspace = true }
 tokio         = { workspace = true }
 typed-builder = { workspace = true }
 url           = { workspace = true }

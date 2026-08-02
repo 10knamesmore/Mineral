@@ -454,6 +454,8 @@ mod proptests {
             Just(Request::PrevOrRestart),
             Just(Request::NextSong),
             Just(Request::Shutdown),
+            Just(Request::TagBackfill),
+            Just(Request::TagProgress),
             (any::<u64>(), any::<u64>()).prop_map(|(queue, current)| {
                 Request::PlayerSync(PlayerVersions { queue, current })
             }),

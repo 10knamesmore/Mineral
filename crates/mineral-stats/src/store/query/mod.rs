@@ -7,6 +7,7 @@
 //! 按查询族拆分子模块([`overview`] 总量/流水、[`top`] 排行榜、[`distributions`] 分布、
 //! [`discoveries`] 新发现、[`endurance`] 续航),`shared` 收口跨族共用的 id 重建 helper。
 
+mod backfill;
 mod discoveries;
 mod distributions;
 mod endurance;

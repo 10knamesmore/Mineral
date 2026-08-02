@@ -41,6 +41,7 @@ mod server;
 mod session;
 mod state;
 mod stats;
+mod tagging;
 
 pub use client::{Client, ClientHandle};
 pub use config::{ServerConfig, resolve_audio_mode};
