@@ -12,10 +12,18 @@ use unicode_width::UnicodeWidthStr;
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::text::{alias_span, center_bg};
 use crate::components::layout::shared::waveform::{PlayState, WaveformCtx, waveform_spans};
+use crate::render::cells::left_eighth;
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
+
+/// bar 模式下位于轨道左侧的固定 label。
+const VOLUME_LABEL: &str = " vol ";
+/// bar 模式为右侧百分比保留的固定 cells 数。
+const VOLUME_PERCENT_WIDTH: usize = 5;
+/// 响应式 volume bar 允许占用的最大 cells 数。
+const MAX_VOLUME_BAR_WIDTH: usize = 12;
 
 /// 渲染 Transport 面板到给定 [`Rect`]。
 pub fn draw(
@@ -298,16 +306,7 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     ])
     .areas(area);
 
-    const BAR_W: usize = 10;
-    let filled = usize::from(pb.volume_pct) * BAR_W / 100;
-    let fill = "█".repeat(filled);
-    let empty = "░".repeat(BAR_W.saturating_sub(filled));
-    let vol = Line::from(vec![
-        Span::styled(" vol ", Style::new().fg(ink.muted)),
-        Span::styled(fill, Style::new().fg(theme.accent)),
-        Span::styled(empty, Style::new().fg(ink.ghost)),
-        Span::styled(format!(" {}%", pb.volume_pct), Style::new().fg(ink.strong)),
-    ]);
+    let vol = volume_line(vol_area.width, pb.volume_pct, theme, ink);
     frame.render_widget(Paragraph::new(vol).alignment(Alignment::Left), vol_area);
 
     let mode = Line::from(vec![
@@ -348,6 +347,63 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
         Span::raw(" "),
     ]);
     frame.render_widget(Paragraph::new(fmt).alignment(Alignment::Right), fmt_area);
+}
+
+/// 按 vol 分区宽度构造响应式 volume indicator。
+///
+/// # Params:
+///   - `area_width`: vol 分区当前宽度
+///   - `volume_pct`: 当前音量百分比
+///   - `theme`: 当前主题
+///   - `ink`: 按实际背景解析的弱化色阶
+///
+/// # Return:
+///   能容纳 bar 时返回 `vol + bar + 百分比`;否则只返回百分比数字。
+fn volume_line(area_width: u16, volume_pct: u8, theme: &Theme, ink: Ink) -> Line<'static> {
+    let Some(bar_width) = volume_bar_width(area_width) else {
+        return Line::from(Span::styled(
+            format!("{volume_pct}%"),
+            Style::new().fg(ink.strong),
+        ));
+    };
+
+    let filled_eighths = usize::from(volume_pct.min(100)) * bar_width * 8 / 100;
+    let full_cells = filled_eighths / 8;
+    let partial = u32::try_from(filled_eighths % 8)
+        .ok()
+        .filter(|eighths| *eighths > 0)
+        .map(left_eighth);
+    let occupied_cells = full_cells + usize::from(partial.is_some());
+    let mut spans = vec![
+        Span::styled(VOLUME_LABEL, Style::new().fg(ink.muted)),
+        Span::styled("█".repeat(full_cells), Style::new().fg(theme.accent)),
+    ];
+    spans.extend(
+        partial.map(|glyph| Span::styled(glyph, Style::new().fg(theme.accent).bg(ink.ghost))),
+    );
+    spans.push(Span::styled(
+        " ".repeat(bar_width.saturating_sub(occupied_cells)),
+        Style::new().bg(ink.ghost),
+    ));
+    spans.push(Span::styled(
+        format!(" {volume_pct:>3}%"),
+        Style::new().fg(ink.strong),
+    ));
+    Line::from(spans)
+}
+
+/// 解析当前分区能容纳的 bar 宽度。
+///
+/// # Params:
+///   - `area_width`: vol 分区当前宽度
+///
+/// # Return:
+///   `Some(1..=12)` 表示绘制 bar;空间不足时返回 `None`，由调用方降级为纯数字。
+fn volume_bar_width(area_width: u16) -> Option<usize> {
+    let available = usize::from(area_width)
+        .saturating_sub(VOLUME_LABEL.width())
+        .saturating_sub(VOLUME_PERCENT_WIDTH);
+    (available > 0).then_some(available.min(MAX_VOLUME_BAR_WIDTH))
 }
 
 /// 把 channel 实测的 format / 位深 / 采样率 / 码率拼成 fmt 段文本,如 `FLAC 24bit/96kHz 999kbps`。
@@ -455,7 +511,10 @@ mod tests {
     use mineral_audio::Bps;
     use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
 
-    use super::{fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track};
+    use super::{
+        fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track, volume_bar_width,
+        volume_line,
+    };
     use crate::components::layout::shared::marquee::MarqueeCtx;
     use crate::components::layout::shared::waveform::{PlayedStyle, RevealStyle, WaveformCtx};
     use crate::render::theme::Theme;
@@ -477,6 +536,59 @@ mod tests {
             fade_to: ratatui::style::Color::Reset,
             fade_cols: 3,
         }
+    }
+
+    /// vol 分区宽度扣除 label 与固定百分比栏后,bar 从 1 cell 伸缩到 12 cells 封顶。
+    #[test]
+    fn volume_bar_width_is_responsive_and_capped() {
+        assert_eq!(volume_bar_width(10), None);
+        assert_eq!(volume_bar_width(11), Some(1));
+        assert_eq!(volume_bar_width(16), Some(6));
+        assert_eq!(volume_bar_width(22), Some(12));
+        assert_eq!(volume_bar_width(u16::MAX), Some(12));
+    }
+
+    /// vol 分区连 1 cell bar 都容不下时,只保留自然宽度的百分比数字。
+    #[test]
+    fn narrow_volume_line_keeps_only_percentage() {
+        let theme = Theme::default();
+        let ink = theme.ink_over(Color::Reset);
+        assert_eq!(String::from(volume_line(10, 80, &theme, ink)), "80%");
+        assert_eq!(String::from(volume_line(10, 100, &theme, ink)), "100%");
+    }
+
+    /// bar 的 fractional fill 复用横向八分块,右侧未填充 track 只占 background。
+    #[test]
+    fn volume_line_uses_horizontal_eighth_cell() {
+        let theme = Theme::default();
+        let ink = theme.ink_over(Color::Reset);
+        assert_eq!(
+            String::from(volume_line(22, 62, &theme, ink)),
+            " vol ███████▍      62%"
+        );
+    }
+
+    /// fractional cell 与右侧未填充 cells 共享 ghost background,不夹 `░` glyph。
+    #[test]
+    fn volume_unfilled_track_uses_background() -> color_eyre::Result<()> {
+        let theme = Theme::default();
+        let ink = theme.ink_over(Color::Reset);
+        let line = volume_line(22, 62, &theme, ink);
+        let partial = line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "▍")
+            .ok_or_else(|| color_eyre::eyre::eyre!("volume line 缺 3/8 partial cell"))?;
+        assert_eq!(partial.style.fg, Some(theme.accent));
+        assert_eq!(partial.style.bg, Some(ink.ghost));
+        let unfilled = line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "    ")
+            .ok_or_else(|| color_eyre::eyre::eyre!("volume line 缺 4 cells 未填充 track"))?;
+        assert_eq!(unfilled.style.fg, None);
+        assert_eq!(unfilled.style.bg, Some(ink.ghost));
+        Ok(())
     }
 
     /// 长曲名溢出:顶行按 marquee 相位滚动——推进拍数后开头滚出、窗口从对应列起。
