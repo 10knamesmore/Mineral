@@ -9,6 +9,7 @@ use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
 use mineral_config::DaemonLoad;
+use mineral_playback::{PlaybackProvider, PlaybackRegistry};
 use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
@@ -89,8 +90,17 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
         } = loaded;
         let script = mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
         let persist = open_persist().await;
-        let channels = build_channels(persist.clone(), config.sources())?;
-        mineral_cli::serve_run(channels, persist, config, script, config_tree, config_path).await
+        let sources = build_sources(persist.clone(), config.sources())?;
+        mineral_cli::serve_run(
+            sources.channels,
+            sources.playback,
+            persist,
+            config,
+            script,
+            config_tree,
+            config_path,
+        )
+        .await
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
@@ -152,15 +162,26 @@ async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
     // in-proc 模式下持久化降级为 disabled:调试路径无需落盘。
     let (config, warnings) = load_config()?;
     log_config_warnings(&warnings);
-    let (channels, persist) = match launch {
+    let (sources, persist) = match launch {
         Launch::InProc => {
             let p = mineral_persist::ServerStore::disabled();
-            let ch = build_channels(p.clone(), config.sources())?;
-            (ch, p)
+            let sources = build_sources(p.clone(), config.sources())?;
+            (sources, p)
         }
-        Launch::Auto | Launch::Connect => (Vec::new(), mineral_persist::ServerStore::disabled()),
+        Launch::Auto | Launch::Connect => (
+            BuiltSources::empty(),
+            mineral_persist::ServerStore::disabled(),
+        ),
     };
-    mineral_tui::run(channels, launch, persist, config, warnings).await
+    mineral_tui::run(
+        sources.channels,
+        sources.playback,
+        launch,
+        persist,
+        config,
+        warnings,
+    )
+    .await
 }
 
 /// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;
@@ -186,18 +207,22 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
 /// # Params:
 ///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
 ///   - `sources`: 音乐源段配置(netease 的 timeout / proxy / 并发)。
-fn build_channels(
+fn build_sources(
     persist: mineral_persist::ServerStore,
     sources: &mineral_config::SourcesConfig,
-) -> color_eyre::Result<Vec<Arc<dyn MusicChannel>>> {
+) -> color_eyre::Result<BuiltSources> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
+    let mut providers = Vec::<Arc<dyn PlaybackProvider>>::new();
     // 聚合源(全源收藏投影):纯 persist 投影、无凭证依赖,恒注册。放列表首位,
     // 其歌单列表(本地 SQL)最先就绪,聚合收藏歌单自然排 sidebar 顶部。
     channels.push(Arc::new(mineral_channel_mineral::MineralChannel::new(
         persist.clone(),
     )));
     match build_netease(persist, sources.netease()) {
-        Ok(Some(c)) => channels.push(c),
+        Ok(Some(pair)) => {
+            channels.push(pair.channel);
+            providers.push(pair.provider);
+        }
         Ok(None) => mineral_log::info!(target: "channel", "netease 未登录,跳过"),
         Err(e) => mineral_log::warn!(
             target: "channel",
@@ -207,14 +232,20 @@ fn build_channels(
     }
     // B站 guest 模式无需登录即可搜索/详情/取流,故恒尝试构建。
     match build_bilibili(sources.bilibili()) {
-        Ok(c) => channels.push(c),
+        Ok(pair) => {
+            channels.push(pair.channel);
+            providers.push(pair.provider);
+        }
         Err(e) => mineral_log::warn!(
             target: "channel",
             error = mineral_log::chain(&e),
             "bilibili channel 构建失败,跳过(不影响其他源 / daemon)"
         ),
     }
-    Ok(channels)
+    Ok(BuiltSources {
+        channels,
+        playback: PlaybackRegistry::new(providers)?,
+    })
 }
 
 /// 构造 guest B站 channel(公开端点:搜索 / 详情 / 取流,无需登录)。
@@ -224,9 +255,7 @@ fn build_channels(
 ///
 /// # Params:
 ///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。
-fn build_bilibili(
-    bilibili: &mineral_config::BilibiliSection,
-) -> color_eyre::Result<Arc<dyn MusicChannel>> {
+fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> color_eyre::Result<SourcePair> {
     let bc = mineral_cli::bilibili_config_from(bilibili);
     // 有存储凭证 → 带登录态(解锁我的收藏夹 / 高码率);否则 guest。
     let channel = match mineral_channel_bilibili::load_stored().wrap_err("读取 B站凭证失败")?
@@ -235,8 +264,10 @@ fn build_bilibili(
             .wrap_err("构造带登录态 BilibiliChannel 失败")?,
         None => BilibiliChannel::new(&bc).wrap_err("构造 BilibiliChannel 失败")?,
     };
-    let arc: Arc<dyn MusicChannel> = Arc::new(channel);
-    Ok(arc)
+    let concrete = Arc::new(channel);
+    let channel: Arc<dyn MusicChannel> = concrete.clone();
+    let provider: Arc<dyn PlaybackProvider> = concrete;
+    Ok(SourcePair { channel, provider })
 }
 
 /// 读本地凭证 → 构造 [`NeteaseChannel`];没凭证返回 `Ok(None)`(尚未登录,正常)。
@@ -248,13 +279,43 @@ fn build_bilibili(
 fn build_netease(
     persist: mineral_persist::ServerStore,
     netease: &mineral_config::NeteaseSection,
-) -> color_eyre::Result<Option<Arc<dyn MusicChannel>>> {
+) -> color_eyre::Result<Option<SourcePair>> {
     let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
         return Ok(None);
     };
     let nc = mineral_cli::netease_config_from(netease);
     let channel = NeteaseChannel::with_credential(&nc, &auth.music_u, auth.user_id, persist)
         .wrap_err("构造 NeteaseChannel 失败")?;
-    let arc: Arc<dyn MusicChannel> = Arc::new(channel);
-    Ok(Some(arc))
+    let concrete = Arc::new(channel);
+    let channel: Arc<dyn MusicChannel> = concrete.clone();
+    let provider: Arc<dyn PlaybackProvider> = concrete;
+    Ok(Some(SourcePair { channel, provider }))
+}
+
+/// Channel and playback dependencies assembled for one process.
+struct BuiltSources {
+    /// Catalog, library, and user-data connectors.
+    channels: Vec<Arc<dyn MusicChannel>>,
+
+    /// Playback resource providers keyed by source identity.
+    playback: PlaybackRegistry,
+}
+
+impl BuiltSources {
+    /// Returns an empty dependency set for remote-client startup modes.
+    fn empty() -> Self {
+        Self {
+            channels: Vec::new(),
+            playback: PlaybackRegistry::empty(),
+        }
+    }
+}
+
+/// Sibling channel and playback provider handles for one concrete source adapter.
+struct SourcePair {
+    /// Catalog, library, and user-data connector.
+    channel: Arc<dyn MusicChannel>,
+
+    /// Playback resource provider.
+    provider: Arc<dyn PlaybackProvider>,
 }

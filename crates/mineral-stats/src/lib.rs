@@ -22,7 +22,7 @@ pub use event::{
     HookKind, HookStage, LifecyclePhase, LifecycleWho, LoveOrigin, OpOutcome, PauseAction,
     PlaylistError, PlaylistOpKind, PlaylistRef, PrefetchResolution, PrefetchSource, QueueOp,
     RejectReason, RemoteMirror, ScriptEvent, SearchOutcome, SearchTargetKind, SpawnOutcome,
-    StatsEvent, StoreOp, SystemEvent, UrlOutcome, query_hash,
+    StatsEvent, StoreOp, StreamOutcome, SystemEvent, query_hash,
 };
 pub use params::{Level, Retention, SearchQueryMode, StatsParams};
 pub use play::{PlayAudioSnapshot, PlayRecord};

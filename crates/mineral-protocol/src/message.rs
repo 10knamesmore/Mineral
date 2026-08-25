@@ -4,7 +4,7 @@
 //! 调用方根据自己发的 `Request` 决定预期。错误统一走 [`Response::Error`]。
 
 use mineral_audio::AudioSnapshot;
-use mineral_model::{AlbumId, ArtistId, MediaUrl, PlaylistId, Song, SongId};
+use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 use serde::{Deserialize, Serialize};
 
@@ -201,9 +201,6 @@ pub struct TagProgressWire {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
     // ---- 播放控制 ----
-    /// 切到指定 URL 播放(对应 [`mineral_server::ClientHandle::play`])。
-    Play(MediaUrl),
-
     /// 暂停。
     Pause,
 
@@ -233,10 +230,7 @@ pub enum Request {
     TaskSnapshot,
 
     // ---- Player 业务 ----(server 持权威 PlayerState)
-    /// Client 选了一首歌。Server 内部跑完整 play 流程(cancel 旧 SongUrl/Lyrics、
-    /// audio.stop、记录 current_song、命中 prefetched 直接 audio.play、否则
-    /// 提交新 SongUrl/Lyrics 任务,等 PlayUrlReady 后内部 audio.play)。
-    /// 返回 [`Response::Ok`]。
+    /// Selects one song as current playback. Returns [`Response::Ok`].
     /// `Box` 是为了避免 enum 体积膨胀(`Song` 比平均 variant 大很多)。
     PlaySong(Box<Song>),
 

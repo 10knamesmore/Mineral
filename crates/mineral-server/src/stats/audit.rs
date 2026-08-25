@@ -33,9 +33,6 @@ enum TrackingDecision {
 fn audit_request(req: &Request) -> TrackingDecision {
     use TrackingDecision::{NotAnEvent, Recorded};
     match req {
-        Request::Play(..) => {
-            NotAnEvent("低层音频 URL 播放指令;播放事实经 play_song 起播链落 plays")
-        }
         Request::Pause => Recorded("pauses"),
         Request::Resume => Recorded("pauses"),
         Request::Stop => Recorded("plays"),
@@ -105,7 +102,9 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
         ScriptCmd::LibrarySearch { .. } => {
             NotAnEvent("触发搜索 task;searches 在终态记,见 audit_fetch_kind")
         }
-        ScriptCmd::LibrarySongUrl { .. } => NotAnEvent("触发取链 task;url_resolutions 在终态记"),
+        ScriptCmd::LibrarySongUrl { .. } => {
+            NotAnEvent("查询 direct media capability;stream_resolutions 在 provider resolve 终态记")
+        }
         ScriptCmd::SetLoved { .. } => Recorded("love_changes"),
         ScriptCmd::Spawn { .. } => Recorded("spawns"),
         ScriptCmd::SpawnKill { .. } => {
@@ -116,12 +115,11 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
     }
 }
 
-/// 取数 task 入口的埋点归属(穷尽)。取链 / 搜索有专表,其余归 `fetches`。
+/// 取数 task 入口的埋点归属(穷尽)。搜索有专表,其余归 `fetches`。
 fn audit_fetch_kind(kind: &ChannelFetchKind) -> TrackingDecision {
     use TrackingDecision::Recorded;
     match kind {
         ChannelFetchKind::Search { .. } => Recorded("searches"),
-        ChannelFetchKind::SongUrl { .. } => Recorded("url_resolutions"),
         ChannelFetchKind::MyPlaylists { .. } => Recorded("fetches"),
         ChannelFetchKind::PlaylistDetail { .. } => Recorded("fetches"),
         ChannelFetchKind::Lyrics { .. } => Recorded("fetches"),
@@ -184,7 +182,7 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
 /// 系统域事件的发射点账本(穷尽)。新增 [`SystemEvent`] 变体不补此处即编译失败。
 fn audit_system_emitters(event: &SystemEvent) -> &'static str {
     match event {
-        SystemEvent::UrlResolution { .. } => "events.rs handle_play_url_ready / 取链失败分支",
+        SystemEvent::StreamResolution { .. } => "playback.rs provider resolve success / failure",
         SystemEvent::HookFire { .. } => "hook_bridge 各提交点裁决回来处",
         SystemEvent::GaplessBoundary { .. } => "gapless.rs check_advance 边界裁决",
         SystemEvent::Prefetch { .. } => "gapless.rs 预取武装 / 否决 / 失败各终态",
@@ -222,7 +220,7 @@ mod tests {
         "fullscreen_changes",
         "connection_rejects",
         "app_lifecycle",
-        "url_resolutions",
+        "stream_resolutions",
         "hook_fires",
         "gapless_boundaries",
         "prefetches",
@@ -252,7 +250,7 @@ mod tests {
         "task_cancels",
         "spawns",
         "searches",
-        "url_resolutions",
+        "stream_resolutions",
         "fetches",
         "playlist_ops",
     ];

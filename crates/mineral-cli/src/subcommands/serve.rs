@@ -10,7 +10,8 @@ use std::sync::Arc;
 use color_eyre::eyre::{WrapErr, bail};
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
-use mineral_server::{Server, ServerConfig, resolve_audio_mode};
+use mineral_playback::PlaybackRegistry;
+use mineral_server::{Server, ServerConfig, SourceBackends, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -26,6 +27,7 @@ const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 ///
 /// # Params:
 ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
+///   - `playback`: 按 source 注册的播放资源 provider。
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
 ///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
 ///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
@@ -33,6 +35,7 @@ const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 ///   - `config_path`: 用户 config.lua 路径(热重载 mtime 轮询的目标)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
+    playback: PlaybackRegistry,
     persist: ServerStore,
     config: mineral_config::Config,
     script: mineral_server::ScriptParts,
@@ -78,7 +81,10 @@ pub async fn run(
     // 留一份句柄给停机路径记 app_lifecycle stop + 发 Shutdown(server 会 move 走原句柄)。
     let stats_stop = stats.clone();
     let server = Server::spawn(
-        channels,
+        SourceBackends::builder()
+            .channels(channels)
+            .playback(playback)
+            .build(),
         audio_mode,
         persist,
         ServerConfig::from_config(&config),

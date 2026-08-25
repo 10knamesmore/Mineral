@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use mineral_model::SongId;
+use mineral_playback::PlaybackRequest;
 use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
 use mineral_script::{
@@ -16,6 +18,7 @@ use mineral_script::{
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio_util::sync::CancellationToken;
 
 use crate::player::PlayerCore;
 
@@ -327,6 +330,41 @@ fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
     }
 }
 
+/// Resolves `library.song_url` and returns the provider's direct media capability.
+fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
+    let Some(provider) = player.playback().get(song.namespace()) else {
+        let e = color_eyre::eyre::eyre!(
+            "no playback provider for source {}",
+            song.namespace().name()
+        );
+        resolve_err(player, query, &e);
+        return;
+    };
+    let player = player.clone();
+    tokio::spawn(async move {
+        let request = PlaybackRequest::new(song.clone(), player.playback_quality());
+        match provider.resolve(request, CancellationToken::new()).await {
+            Ok(prepared) => match prepared.direct_media() {
+                Some(media) => resolve_ok(
+                    &player,
+                    query,
+                    ResolveValue::DirectMedia(Box::new(media.clone())),
+                ),
+                None => {
+                    let e = color_eyre::eyre::eyre!(
+                        "{} has no direct media capability",
+                        song.qualified()
+                    );
+                    resolve_err(&player, query, &e);
+                }
+            },
+            Err(e) => {
+                resolve_err(&player, query, &e);
+            }
+        }
+    });
+}
+
 /// 跑一次 `library.search` 并回投结果。
 ///
 /// 限定源:查不到对应 channel / 该源失败都回 `(nil, err)`。
@@ -464,7 +502,7 @@ fn record_spawn(
 /// 把一条脚本命令落到 player 执行面(与 client Request 同一些方法)。
 fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
     // 传输类命令(暂停 / 跳转 / 音量 / 模式)一律走 PlayerCore 的 transport 方法,与
-    // client Handler 同一执行 + 埋点出口——脚本操作以 actor=Script 入库,不再漏记。
+    // client Handler 同一执行 + 埋点出口——脚本操作以 actor=Script 入库。
     match cmd {
         ScriptCmd::Toggle => player.toggle_playback(mineral_stats::Actor::Script),
         ScriptCmd::Next => player.next_song(mineral_stats::Actor::Script),
@@ -609,7 +647,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             });
         }
         ScriptCmd::LibraryPlaylists { query } => {
-            // 读聚合快照,不再逐源真拉:与 client 严格同一份出口变换结果。
+            // 读聚合快照,与 client 严格同一份出口变换结果(不逐源真拉)。
             // 初始完备前(daemon 启动早期)query 停靠,完备时刻由管线统一 resolve。
             if let Some(snapshot) = player.library_snapshot_or_park(query) {
                 let briefs = snapshot
@@ -657,32 +695,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 resolve_search(&player, term, source, page, query).await;
             });
         }
-        ScriptCmd::LibrarySongUrl { song, query } => {
-            let Some(channel) = player.channel_for(song.namespace()).cloned() else {
-                let e =
-                    color_eyre::eyre::eyre!("no channel for source {}", song.namespace().name());
-                resolve_err(player, query, &e);
-                return;
-            };
-            let player = player.clone();
-            tokio::spawn(async move {
-                let ids = [song.clone()];
-                match channel.song_urls(&ids, player.playback_quality()).await {
-                    Ok(mut urls) => match urls.pop() {
-                        Some(play_url) => {
-                            resolve_ok(&player, query, ResolveValue::PlayUrl(Box::new(play_url)));
-                        }
-                        None => {
-                            let e = color_eyre::eyre::eyre!("{} 无可播 URL", song.qualified());
-                            resolve_err(&player, query, &e);
-                        }
-                    },
-                    Err(e) => {
-                        resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
-                    }
-                }
-            });
-        }
+        ScriptCmd::LibrarySongUrl { song, query } => apply_library_song_url(player, song, query),
         ScriptCmd::Spawn { id, spec, query } => {
             // spec 随即被 run_child 移走,先留程序名给埋点。
             let program = spec.program().to_owned();

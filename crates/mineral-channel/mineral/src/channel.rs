@@ -4,9 +4,7 @@ use async_trait::async_trait;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
 };
-use mineral_model::{
-    BitRate, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
-};
+use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 
 /// `mineral:favorites` 歌单 id——本 channel 唯一一张 synthetic 歌单。
@@ -20,8 +18,8 @@ pub fn favorites_playlist_id() -> PlaylistId {
 /// 跨源聚合 channel:source 为 [`SourceKind::MINERAL`],把 persist 的全源收藏
 /// 投影成一张 `Favorites` 歌单。
 ///
-/// 搜索 / 详情 / 取流一律 `NotSupported`——歌单里每首歌的 id 保留**原源** namespace,
-/// 播放与详情由调度层按 id 路由回真实 channel,本 channel 不会收到这些调用。
+/// 搜索 / 详情一律 `NotSupported`——歌单里每首歌的 id 保留**原源** namespace,
+/// 播放按 id 路由到对应 Playback provider,本 channel 不参与播放资源解析。
 /// 收藏的写入也不经它(favorites 编排直写 persist),它是纯只读投影。
 pub struct MineralChannel {
     /// persist 句柄(loved + meta 的事实来源)。
@@ -95,10 +93,6 @@ impl MusicChannel for MineralChannel {
     }
 
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> Result<Vec<PlayUrl>> {
         Err(Error::NotSupported)
     }
 

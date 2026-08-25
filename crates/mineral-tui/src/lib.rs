@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
+use mineral_playback::PlaybackRegistry;
 use mineral_server::{Client, Server};
 use ratatui_image::picker::Picker;
 
@@ -50,11 +51,13 @@ pub enum Launch {
 /// # Params:
 ///   - `channels`: 仅 [`Launch::InProc`] 用到(已构造好的全部音乐源,空 vec 也合法);
 ///     `Auto` / `Connect` 下忽略 —— channels 由独立 daemon 进程自己持有。
+///   - `playback`: 仅 [`Launch::InProc`] 使用的播放资源 provider registry。
 ///   - `launch`: 启动模式。
 ///   - `persist`: 持久化句柄,仅 [`Launch::InProc`] 时透传给 [`Server::spawn`];
 ///     `Auto` / `Connect` 下传入的句柄不被使用(daemon 进程自己持有 persist)。
 pub async fn run(
     channels: Vec<Arc<dyn MusicChannel>>,
+    playback: PlaybackRegistry,
     launch: Launch,
     persist: ServerStore,
     config: mineral_config::Config,
@@ -111,7 +114,10 @@ pub async fn run(
                 *cfg.audio().backend(),
             );
             let server = Server::spawn(
-                channels,
+                mineral_server::SourceBackends::builder()
+                    .channels(channels)
+                    .playback(playback)
+                    .build(),
                 audio_mode,
                 persist,
                 mineral_server::ServerConfig::from_config(&cfg),

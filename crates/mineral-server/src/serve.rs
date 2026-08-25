@@ -346,10 +346,6 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
         mineral_log::debug!(target: "ipc", request = name, "handle request");
     }
     match req {
-        Request::Play(url) => {
-            client.play(url);
-            Response::Ok
-        }
         Request::Pause => {
             client.pause();
             Response::Ok
@@ -493,7 +489,6 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         // 拖动 resize 会连发,不记。
         | Request::TerminalState { .. }
         | Request::PullPcm(_) => None,
-        Request::Play(_) => Some("Play"),
         Request::Pause => Some("Pause"),
         Request::Resume => Some("Resume"),
         Request::Stop => Some("Stop"),

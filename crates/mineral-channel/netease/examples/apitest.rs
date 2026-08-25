@@ -33,7 +33,7 @@
 //! [✓] search_songs           ↳ 5 hits, first: "晴天"
 //! [✓] songs_detail           ↳ 1 song
 //! [✓] album_detail           ↳ 11 tracks
-//! [✓] song_urls (Higher)     ↳ url scheme=https, format=mp3
+//! [✓] playback resolve (Higher)    ↳ url scheme=https, format=mp3
 //! [✓] lyrics                 ↳ lrc=Some, yrc=Some
 //!
 //! === 3. 登录态 ===
@@ -52,6 +52,8 @@ use mineral_channel_netease::transport::client::RequestSpec;
 use mineral_channel_netease::transport::headers::UaKind;
 use mineral_channel_netease::transport::url::Crypto;
 use mineral_channel_netease::{NeteaseChannel, NeteaseConfig};
+use mineral_playback::{DirectLocator, PlaybackProvider, PlaybackRequest};
+use tokio_util::sync::CancellationToken;
 
 /// example 用的基线参数(无配置语境,写死;生产默认见 mineral-config 的 default.lua)。
 fn netease_config() -> NeteaseConfig {
@@ -62,7 +64,7 @@ fn netease_config() -> NeteaseConfig {
         .build()
 }
 
-use mineral_model::{BitRate, MediaUrl};
+use mineral_model::BitRate;
 use serde_json::json;
 
 /// 凭证来源,用于决定 section 3/4 的行为。
@@ -222,17 +224,21 @@ async fn main() -> color_eyre::Result<()> {
             report.push(r);
         }
 
-        let r = run("song_urls (Higher)", async {
-            let v = ch.song_urls(&[song.id.clone()], BitRate::Higher).await?;
-            let u = v.first();
-            Ok(match u {
-                Some(p) => format!(
+        let r = run("playback resolve (Higher)", async {
+            let prepared = ch
+                .resolve(
+                    PlaybackRequest::new(song.id.clone(), BitRate::Higher),
+                    CancellationToken::new(),
+                )
+                .await?;
+            Ok(match prepared.direct_media() {
+                Some(media) => format!(
                     "1 url, scheme={}, format={}",
-                    match &p.url {
-                        MediaUrl::Remote(u) => u.scheme(),
-                        MediaUrl::Local(_) => "local",
+                    match media.locator() {
+                        DirectLocator::Remote(remote) => remote.url().scheme(),
+                        DirectLocator::Local(_) => "local",
                     },
-                    p.format.as_ref().map_or("?", |f| f.as_str())
+                    media.info().format.as_ref().map_or("?", |f| f.as_str())
                 ),
                 None => "0 urls (可能需要登录)".into(),
             })

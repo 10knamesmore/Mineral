@@ -315,22 +315,22 @@ fn paint_vol_mode(frame: &mut Frame<'_>, area: Rect, pb: &Playback, theme: &Them
     ]);
     frame.render_widget(Paragraph::new(mode).alignment(Alignment::Center), mode_area);
 
-    // PlayUrl 在 PlayUrlReady / prefetch 命中后写入,切歌瞬间清 None;没拿到时整段显 `—`。
-    // 采样率取 engine 实测(pb.sample_rate_hz),与 format / bitrate(PlayUrl 实测)同为「当前在播」口径。
+    // Opened media facts 随快照在 open 后下来,切歌瞬间清 None;没拿到时整段显 `—`。
+    // 采样率取 engine 实测,与 format / bitrate 同为当前 decoder input 口径。
     let (text, color) = pb
-        .play_url
+        .media_info
         .as_ref()
-        .map(|pu| {
+        .map(|info| {
             (
                 fmt_spec_label(
-                    pu.format.as_ref(),
-                    pu.bit_depth,
+                    info.format.as_ref(),
+                    info.bit_depth,
                     pb.sample_rate_hz,
-                    pu.bitrate_bps,
+                    info.bitrate_bps,
                 ),
                 fmt_tier_color(
-                    pu.format.as_ref().is_some_and(AudioFormat::is_lossless),
-                    pu.bitrate_bps,
+                    info.format.as_ref().is_some_and(AudioFormat::is_lossless),
+                    info.bitrate_bps,
                     theme,
                     ink,
                 ),
@@ -489,7 +489,7 @@ fn origin_badge(origin: PlaybackOrigin, theme: &Theme, ink: Ink) -> (&'static st
 
 /// 按 channel **实测**的格式(无损与否)+ 实际码率分 5 档配色。
 ///
-/// 刻意不读 `PlayUrl::quality`——那是请求侧的归一化等级,channel 可「尽力提供」
+/// 刻意不读 `PlaybackMediaInfo::quality`——那是请求侧的归一化等级,channel 可「尽力提供」
 /// 返回完全不同的实际音质(如 local channel 无视请求)。显示音质必须以实测为准。
 fn fmt_tier_color(lossless: bool, bitrate_bps: Option<u32>, theme: &Theme, ink: Ink) -> Color {
     match (lossless, bitrate_bps) {
@@ -509,7 +509,7 @@ mod tests {
     use ratatui::style::Color;
 
     use mineral_audio::Bps;
-    use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl};
+    use mineral_model::{AudioFormat, BitRate, PlaybackMediaInfo};
 
     use super::{
         fmt_sample_rate, fmt_spec_label, fmt_tier_color, split_buffered_track, volume_bar_width,
@@ -634,7 +634,7 @@ mod tests {
         Ok(())
     }
 
-    /// 造一个「播放中 + 指定来源 + PlayUrl」的 Playback,供来源徽标快照。
+    /// 造一个带媒体事实与指定来源的 Playback,供来源徽标快照。
     fn pb_with_origin(
         origin: PlaybackOrigin,
         format: Option<AudioFormat>,
@@ -649,16 +649,13 @@ mod tests {
         pb.playing = true;
         pb.volume_pct = 80;
         pb.play_origin = Some(origin);
-        pb.play_url = Some(PlayUrl {
+        pb.media_info = Some(PlaybackMediaInfo {
             song_id,
-            url: MediaUrl::Local("/x".into()),
             bitrate_bps,
             quality: BitRate::Lossless,
             size: None,
             format,
             bit_depth,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Contiguous,
             substituted: false,
         });
         pb

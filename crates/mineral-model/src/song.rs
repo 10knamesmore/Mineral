@@ -45,7 +45,7 @@ pub struct Song {
     pub cover_url: Option<MediaUrl>,
 
     /// 这首歌的"原始位置"——本地源就是音频文件路径(`Local`);
-    /// 远端源若已下载到缓存可以填 `Local`,否则为 `None`,需走 `song_urls`。
+    /// 远端源若已下载到缓存可以填 `Local`,否则为 `None`,需走 playback provider。
     #[builder(default)]
     pub source_url: Option<MediaUrl>,
 

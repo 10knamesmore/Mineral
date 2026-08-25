@@ -14,10 +14,23 @@ use std::path::{Path, PathBuf};
 
 use lofty::file::AudioFile;
 use lofty::probe::Probe;
-use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song};
+use mineral_model::{AudioFormat, BitRate, PlaybackMediaInfo, Song};
+use mineral_playback::DirectMedia;
 use mineral_protocol::PlaybackOrigin;
 
 use crate::media_cache::{MediaCache, library_dir_and_stem};
+
+/// Mineral-owned local cache or download-library playback hit.
+pub(crate) struct LocalMediaHit {
+    /// Absolute decoder-ready media path.
+    pub(crate) path: PathBuf,
+
+    /// Quality represented by the local file.
+    pub(crate) quality: BitRate,
+
+    /// Cache or download-library provenance.
+    pub(crate) origin: PlaybackOrigin,
+}
 
 /// 把 `song` 解析到本地音频文件(音质 `>= want` 的最高可用副本)。
 ///
@@ -36,19 +49,27 @@ pub(crate) fn resolve_local(
     download_root: Option<&Path>,
     song: &Song,
     want: BitRate,
-) -> Option<(PathBuf, BitRate, PlaybackOrigin)> {
+) -> Option<LocalMediaHit> {
     // ALL 升序 → rev() 高到低;低于 want 即可停(后续只会更低)。
     for &q in BitRate::ALL.iter().rev() {
         if q < want {
             break;
         }
         if let Some(path) = media_cache.get(&song.id, q) {
-            return Some((path, q, PlaybackOrigin::Cache));
+            return Some(LocalMediaHit {
+                path,
+                quality: q,
+                origin: PlaybackOrigin::Cache,
+            });
         }
         if let Some(root) = download_root
             && let Some(path) = probe_export(root, song, q)
         {
-            return Some((path, q, PlaybackOrigin::Download));
+            return Some(LocalMediaHit {
+                path,
+                quality: q,
+                origin: PlaybackOrigin::Download,
+            });
         }
     }
     None
@@ -85,11 +106,11 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
     None
 }
 
-/// 为本地命中的文件构造 [`PlayUrl`],供 transport 显 format / bitrate / 位深。
+/// Builds the direct-media capability for a local cache or download-library hit.
 ///
 /// format、bitrate、位深都按**文件内容**经 lofty 读出(见 [`probe_format_props`],不信文件名
 /// 扩展名)。lofty 取不到 bitrate 时回退「文件大小 / 时长」的均值估算;时长未知或 stat 失败
-/// 时 bitrate 记 0。位深仅无损容器有值,有损 / 取不到为 `None`。
+/// 时 bitrate 为 `None`。位深仅无损容器有值,有损 / 取不到为 `None`。
 ///
 /// # Params:
 ///   - `song`: 命中的歌曲(取 id 与时长)
@@ -97,26 +118,23 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
 ///   - `quality`: 命中的音质档
 ///
 /// # Return:
-///   填好 format / bitrate / 位深 / size / quality 的 `PlayUrl`(`url` = `Local(path)`)。
-pub(crate) fn local_play_url(song: &Song, path: &Path, quality: BitRate) -> PlayUrl {
+///   Direct local media with probed source-neutral facts.
+pub(crate) fn local_media(song: &Song, path: &Path, quality: BitRate) -> DirectMedia {
     let size = std::fs::metadata(path).map(|m| m.len()).ok();
     let (format, probed_kbps, bit_depth) = probe_format_props(path);
     let bitrate_bps = probed_kbps
         .and_then(|kbps| kbps.checked_mul(1000))
         .or_else(|| est_bitrate_bps(size, song.duration_ms));
-    PlayUrl {
+    let info = PlaybackMediaInfo {
         song_id: song.id.clone(),
-        url: MediaUrl::Local(path.to_path_buf()),
         bitrate_bps,
         quality,
         size,
         format,
         bit_depth,
-        stream_headers: Vec::new(),
-        // 本地文件恒 seekable(磁盘全扫快):缓存命中的分片流(如 B站 .aac)重播也能向后 seek。
-        layout: mineral_model::StreamLayout::Contiguous,
         substituted: false,
-    }
+    };
+    DirectMedia::local(info, path.to_path_buf())
 }
 
 /// 按**文件内容**(经 lofty)读出 `(格式, 码率kbps)`——全程不碰扩展名。
@@ -241,13 +259,12 @@ fn is_audio_ext(ext: &str) -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use mineral_model::{
-        AlbumId, AlbumRef, AudioFormat, BitRate, MediaUrl, Song, SongId, SourceKind,
-    };
+    use mineral_model::{AlbumId, AlbumRef, AudioFormat, BitRate, Song, SongId, SourceKind};
     use mineral_persist::ServerStore;
+    use mineral_playback::DirectLocator;
     use mineral_protocol::PlaybackOrigin;
 
-    use super::{local_play_url, probe_export, resolve_local};
+    use super::{local_media, probe_export, resolve_local};
     use crate::media_cache::{MediaCache, library_relpath};
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {
@@ -318,17 +335,16 @@ mod tests {
         )
         .await?;
 
-        let Some((path, q, origin)) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh)
-        else {
+        let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中 cache"));
         };
-        assert_eq!(q, BitRate::Exhigh);
-        assert_eq!(origin, PlaybackOrigin::Cache);
-        assert_eq!(std::fs::read(&path)?, b"AUDIO");
+        assert_eq!(hit.quality, BitRate::Exhigh);
+        assert_eq!(hit.origin, PlaybackOrigin::Cache);
+        assert_eq!(std::fs::read(&hit.path)?, b"AUDIO");
         Ok(())
     }
 
-    /// 回归(本次 bug):盘上有下载文件、**无任何索引登记**,离线仍应命中并播放(高于 want 的最高音质)。
+    /// 盘上有下载文件、**无任何索引登记**,离线仍应命中并播放(高于 want 的最高音质)。
     #[tokio::test]
     async fn download_only_hit() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
@@ -337,14 +353,17 @@ mod tests {
         let s = song("1", "晴天", Some("叶惠美"));
         put_download(&root, &s, BitRate::Lossless, &AudioFormat::Flac, b"FLAC")?;
 
-        let Some((path, q, origin)) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh)
-        else {
+        let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中下载导出文件"));
         };
-        assert_eq!(q, BitRate::Lossless, "下载是 Lossless,>= Exhigh 应命中");
-        assert_eq!(origin, PlaybackOrigin::Download);
-        assert!(path.ends_with("netease/lossless/叶惠美/晴天.flac"));
-        assert_eq!(std::fs::read(&path)?, b"FLAC");
+        assert_eq!(
+            hit.quality,
+            BitRate::Lossless,
+            "下载是 Lossless,>= Exhigh 应命中"
+        );
+        assert_eq!(hit.origin, PlaybackOrigin::Download);
+        assert!(hit.path.ends_with("netease/lossless/叶惠美/晴天.flac"));
+        assert_eq!(std::fs::read(&hit.path)?, b"FLAC");
         Ok(())
     }
 
@@ -367,12 +386,11 @@ mod tests {
         .await?;
         put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, b"FROM_DL")?;
 
-        let Some((path, _, origin)) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh)
-        else {
+        let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中"));
         };
-        assert_eq!(origin, PlaybackOrigin::Cache, "同音质应取 cache");
-        assert_eq!(std::fs::read(&path)?, b"FROM_CACHE", "同音质应取 cache");
+        assert_eq!(hit.origin, PlaybackOrigin::Cache, "同音质应取 cache");
+        assert_eq!(std::fs::read(&hit.path)?, b"FROM_CACHE", "同音质应取 cache");
         Ok(())
     }
 
@@ -395,13 +413,16 @@ mod tests {
         .await?;
         put_download(&root, &s, BitRate::Lossless, &AudioFormat::Flac, b"FROM_DL")?;
 
-        let Some((path, q, origin)) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh)
-        else {
+        let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中"));
         };
-        assert_eq!(q, BitRate::Lossless);
-        assert_eq!(origin, PlaybackOrigin::Download, "更高音质应取下载导出");
-        assert_eq!(std::fs::read(&path)?, b"FROM_DL", "更高音质应取下载导出");
+        assert_eq!(hit.quality, BitRate::Lossless);
+        assert_eq!(hit.origin, PlaybackOrigin::Download, "更高音质应取下载导出");
+        assert_eq!(
+            std::fs::read(&hit.path)?,
+            b"FROM_DL",
+            "更高音质应取下载导出"
+        );
         Ok(())
     }
 
@@ -506,23 +527,28 @@ mod tests {
         v
     }
 
-    /// 回归(本次 bug):ID3 前缀的 mp3(缓存 / 下载库里 NetEase exhigh 的样子)经 `local_play_url`
-    /// 应判出 `Mp3`——旧实现用 `from_buffer` 见 ID3 即 None、format 落空,本测试守住改走 `Probe` 后的行为。
+    /// ID3 前缀的 mp3(缓存 / 下载库里 NetEase exhigh 的形态)经 `local_media` 应判出
+    /// `Mp3`:`from_buffer` 见 ID3 前缀即返回 None(与字节多少无关),识别必须走 `Probe`
+    /// (跳过标签再认帧)。
     #[tokio::test]
-    async fn local_play_url_detects_id3_prefixed_mp3() -> color_eyre::Result<()> {
+    async fn local_media_detects_id3_prefixed_mp3() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let s = song("1", "环岛", Some("夜晚做决定"));
         let bytes = id3_prefixed_mp3();
-        // 坐实旧路径为何失效:from_buffer 见 ID3 前缀直接认不出(与字节多少无关)。
+        // 坐实 `from_buffer` 为何不适用:见 ID3 前缀直接认不出。
         assert!(
             lofty::file::FileType::from_buffer(&bytes).is_none(),
-            "from_buffer 对 ID3 前缀应返回 None(正是本 bug 根因)"
+            "from_buffer 对 ID3 前缀应返回 None"
         );
 
         let abs = put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, &bytes)?;
-        let pu = local_play_url(&s, &abs, BitRate::Exhigh);
-        assert_eq!(pu.format, Some(AudioFormat::Mp3), "ID3 前缀的 mp3 应判 Mp3");
+        let media = local_media(&s, &abs, BitRate::Exhigh);
+        assert_eq!(
+            media.info().format,
+            Some(AudioFormat::Mp3),
+            "ID3 前缀的 mp3 应判 Mp3"
+        );
         Ok(())
     }
 
@@ -530,7 +556,7 @@ mod tests {
     /// 文件 → 仍判 WAV,且 bitrate 来自 lofty 解析(8000Hz/8bit/单声道 = 64kbps),
     /// **不等于** size/时长 估算(8044B/1s ≈ 64352bps),证明走的是真实解析。
     #[tokio::test]
-    async fn local_play_url_format_and_bitrate_from_content() -> color_eyre::Result<()> {
+    async fn local_media_format_and_bitrate_from_content() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let mut s = song("1", "晴天", Some("叶惠美"));
@@ -548,26 +574,26 @@ mod tests {
             "盘上是 .flac 名"
         );
 
-        let pu = local_play_url(&s, &abs, BitRate::Lossless);
+        let media = local_media(&s, &abs, BitRate::Lossless);
         assert_eq!(
-            pu.format,
+            media.info().format,
             Some(AudioFormat::Wav),
             "应按内容判 WAV,而非文件名的 .flac"
         );
-        assert_eq!(pu.size, Some(8044));
+        assert_eq!(media.info().size, Some(8044));
         assert_eq!(
-            pu.bitrate_bps,
+            media.info().bitrate_bps,
             Some(64_000),
             "lofty 解析 64kbps(非 size/时长 估算)"
         );
-        assert_eq!(pu.quality, BitRate::Lossless);
-        assert!(matches!(pu.url, MediaUrl::Local(_)));
+        assert_eq!(media.info().quality, BitRate::Lossless);
+        assert!(matches!(media.locator(), DirectLocator::Local(_)));
         Ok(())
     }
 
     /// 无法识别的内容 → format 空、lofty 无 bitrate → 回退 size/时长 估算。
     #[tokio::test]
-    async fn local_play_url_unknown_content_estimates_bitrate() -> color_eyre::Result<()> {
+    async fn local_media_unknown_content_estimates_bitrate() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let mut s = song("1", "晴天", Some("叶惠美"));
@@ -581,10 +607,10 @@ mod tests {
             &[0u8; 16000],
         )?;
 
-        let pu = local_play_url(&s, &abs, BitRate::Lossless);
-        assert!(pu.format.is_none(), "乱字节识别不出格式 → None");
+        let media = local_media(&s, &abs, BitRate::Lossless);
+        assert!(media.info().format.is_none(), "乱字节识别不出格式 → None");
         assert_eq!(
-            pu.bitrate_bps,
+            media.info().bitrate_bps,
             Some(128_000),
             "回退估算:16000B/1s → 128kbps"
         );
@@ -593,7 +619,7 @@ mod tests {
 
     /// 既识别不出格式、时长又未知(None)→ bitrate 为 None(估算直接短路)。
     #[tokio::test]
-    async fn local_play_url_unknown_content_zero_duration() -> color_eyre::Result<()> {
+    async fn local_media_unknown_content_without_duration() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("music");
         let s = song("1", "晴天", Some("叶惠美")); // duration_ms = None
@@ -605,9 +631,9 @@ mod tests {
             &[0u8; 8000],
         )?;
 
-        let pu = local_play_url(&s, &abs, BitRate::Lossless);
-        assert!(pu.format.is_none());
-        assert_eq!(pu.bitrate_bps, None, "时长未知且无解析 → None");
+        let media = local_media(&s, &abs, BitRate::Lossless);
+        assert!(media.info().format.is_none());
+        assert_eq!(media.info().bitrate_bps, None, "时长未知且无解析 → None");
         Ok(())
     }
 

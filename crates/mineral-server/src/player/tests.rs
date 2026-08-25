@@ -1,6 +1,7 @@
 //! player 单元测试的共享夹具:mock channel + `core_with*` 组装器 + 造数据 helper。
 //! 各主题测试文件（[`hooks`] 等）经 `use super::*` 复用。
 
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -12,10 +13,14 @@ use mineral_channel_core::{
     ChannelCaps, Error, MusicChannel, Page, Result as ChannelResult, SearchHits,
 };
 use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
-    SourceKind,
+    Album, AlbumId, AlbumRef, Artist, BitRate, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId,
+    Song, SongId, SourceKind,
 };
 use mineral_persist::ServerStore;
+use mineral_playback::{
+    DirectMedia, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
+    PlaybackRequest, PreparedPlayback, SeekSupport,
+};
 use mineral_protocol::{PlayCursor, PlayMode, PlaybackOrigin, PlayerVersions};
 use mineral_task::Scheduler;
 use mineral_test::mock::{UrlChannel, serve_once};
@@ -37,14 +42,134 @@ struct RecordingChannel {
     /// 已记录的 on_played 调用:(歌曲 id、是否完播、收听毫秒)。
     calls: Arc<Mutex<Vec<(SongId, bool, u64)>>>,
 
-    /// `song_urls` 失败前的人为延迟(竞态敏感的测试用它撑开时序窗口)。
-    url_delay: Option<Duration>,
-
     /// `liked_song_ids` 返回的远端红心集;`None` → NotSupported(favorite 导入测试用 `Some`)。
     liked_ids: Option<rustc_hash::FxHashSet<SongId>>,
 
     /// `my_playlists` 返回的歌单列表;`None` → NotSupported(库聚合测试用 `Some`)。
     playlists: Option<Vec<Playlist>>,
+}
+
+/// Deterministic playback provider used by server tests.
+struct TestPlaybackProvider {
+    /// Source identity served by this provider.
+    source: SourceKind,
+
+    /// Artificial resolve delay for stale-completion tests.
+    delay: Duration,
+
+    /// Whether resolve should fail instead of returning prepared media.
+    fail: bool,
+
+    /// Whether the prepared plan exposes a direct capability.
+    direct: bool,
+}
+
+/// In-memory prepared media with an optional direct capability for hook projections.
+struct TestPreparedPlayback {
+    /// Direct capability exposed before open.
+    direct: Option<DirectMedia>,
+
+    /// Final facts returned by open even when no direct capability exists.
+    info: PlaybackMediaInfo,
+}
+
+#[async_trait]
+impl PlaybackProvider for TestPlaybackProvider {
+    fn source(&self) -> SourceKind {
+        self.source
+    }
+
+    async fn resolve(
+        &self,
+        request: PlaybackRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+        if !self.delay.is_zero() {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(color_eyre::eyre::eyre!("test playback resolve cancelled"));
+                }
+                () = tokio::time::sleep(self.delay) => {}
+            }
+        }
+        if cancellation.is_cancelled() {
+            return Err(color_eyre::eyre::eyre!("test playback resolve cancelled"));
+        }
+        if self.fail {
+            return Err(color_eyre::eyre::eyre!("test playback unavailable"));
+        }
+        let info = PlaybackMediaInfo {
+            song_id: request.song_id().clone(),
+            bitrate_bps: Some(320_000),
+            quality: request.quality(),
+            size: Some(4),
+            format: Some(mineral_model::AudioFormat::Mp3),
+            bit_depth: None,
+            substituted: false,
+        };
+        let url = url::Url::parse(&format!(
+            "https://example.com/{}.mp3",
+            request.song_id().value()
+        ))?;
+        let direct = self.direct.then(|| {
+            DirectMedia::remote(
+                info.clone(),
+                url,
+                Vec::new(),
+                mineral_model::StreamLayout::Contiguous,
+            )
+        });
+        Ok(Box::new(TestPreparedPlayback { direct, info }))
+    }
+}
+
+#[async_trait]
+impl PreparedPlayback for TestPreparedPlayback {
+    fn direct_media(&self) -> Option<&DirectMedia> {
+        self.direct.as_ref()
+    }
+
+    async fn open(self: Box<Self>, options: OpenOptions) -> color_eyre::Result<OpenedMedia> {
+        if options.cancellation().is_cancelled() {
+            return Err(color_eyre::eyre::eyre!("test playback open cancelled"));
+        }
+        let bytes = b"test".to_vec();
+        let byte_len = Some(u64::try_from(bytes.len())?);
+        let reader: Box<dyn MediaReader> = Box::new(Cursor::new(bytes));
+        Ok(OpenedMedia::new(
+            reader,
+            SeekSupport::RandomAccess,
+            byte_len,
+            self.info,
+            None,
+            options.cancellation().clone(),
+        ))
+    }
+}
+
+/// Builds one test registry for every source represented by the channel list.
+fn test_playback_registry(
+    channels: &[Arc<dyn MusicChannel>],
+    delay: Duration,
+    fail: bool,
+    direct: bool,
+) -> color_eyre::Result<PlaybackRegistry> {
+    let mut sources = rustc_hash::FxHashSet::default();
+    let providers = channels
+        .iter()
+        .filter_map(|channel| sources.insert(channel.source()).then_some(channel.source()))
+        .map(|source| {
+            let provider: Arc<dyn PlaybackProvider> = Arc::new(TestPlaybackProvider {
+                source,
+                delay,
+                fail,
+                direct,
+            });
+            provider
+        })
+        .collect::<Vec<Arc<dyn PlaybackProvider>>>();
+    PlaybackRegistry::new(providers)
 }
 
 #[async_trait]
@@ -89,13 +214,6 @@ impl MusicChannel for RecordingChannel {
     }
 
     async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
-        Err(Error::NotSupported)
-    }
-
-    async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> ChannelResult<Vec<PlayUrl>> {
-        if let Some(delay) = self.url_delay {
-            tokio::time::sleep(delay).await;
-        }
         Err(Error::NotSupported)
     }
 
@@ -146,7 +264,6 @@ fn core_with_persist(
 ) -> color_eyre::Result<PlayerCore> {
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls,
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -205,6 +322,23 @@ fn core_with_script_stats(
     script: &str,
     stats: crate::StatsRecorder,
 ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+    core_with_script_playback(
+        script,
+        stats,
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+    )
+}
+
+/// Builds a script-enabled core with explicit test playback behavior.
+fn core_with_script_playback(
+    script: &str,
+    stats: crate::StatsRecorder,
+    delay: Duration,
+    fail: bool,
+    direct: bool,
+) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
     use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -219,13 +353,15 @@ fn core_with_script_stats(
         .hard_wall(Duration::from_secs(1))
         .build();
     let runtime = ScriptRuntime::spawn(lua, host, watchdog, &sender)?;
-    let core = core_with_events_stats(
-        vec![Arc::new(RecordingChannel {
-            calls: Arc::default(),
-            url_delay: None,
-            liked_ids: None,
-            playlists: None,
-        })],
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        liked_ids: None,
+        playlists: None,
+    })];
+    let playback = test_playback_registry(&channels, delay, fail, direct)?;
+    let core = core_with_events_stats_playback(
+        channels,
+        playback,
         ServerStore::disabled(),
         /*music_dir*/ None,
         MediaCache::disabled(),
@@ -283,6 +419,36 @@ fn core_with_events_stats(
     script: Option<mineral_script::ScriptSender>,
     stats: crate::StatsRecorder,
 ) -> color_eyre::Result<PlayerCore> {
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+    )?;
+    core_with_events_stats_playback(
+        channels,
+        playback,
+        persist,
+        music_dir,
+        media_cache,
+        events,
+        script,
+        stats,
+    )
+}
+
+/// Test core builder with an explicit playback registry.
+#[allow(clippy::too_many_arguments)] // Test fixture injection dimensions are independent.
+fn core_with_events_stats_playback(
+    channels: Vec<Arc<dyn MusicChannel>>,
+    playback: PlaybackRegistry,
+    persist: ServerStore,
+    music_dir: Option<PathBuf>,
+    media_cache: MediaCache,
+    events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
+    script: Option<mineral_script::ScriptSender>,
+    stats: crate::StatsRecorder,
+) -> color_eyre::Result<PlayerCore> {
     // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
     let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
     let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
@@ -305,9 +471,9 @@ fn core_with_events_stats(
         audio,
         scheduler,
         channels,
+        playback,
         persist,
         media_cache: Arc::new(media_cache),
-        http: None,
         music_dir,
         download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
         download_tx: tokio::sync::mpsc::unbounded_channel().0,
@@ -327,6 +493,7 @@ fn core_with_events_stats(
         favorites_lock: tokio::sync::Mutex::new(()),
         last_session_save: Mutex::new(std::time::Instant::now()),
         playback_quality: *cfg.playback_quality(),
+        playback_prefetch_bytes: *cfg.engine().prefetch_bytes(),
         envelope_params: cfg.envelope().clone(),
         gapless_prefetch_ms: *cfg.daemon().gapless_prefetch_ms(),
         prev_restart_threshold_ms: *cfg.daemon().prev_restart_threshold_ms(),
@@ -385,22 +552,6 @@ fn sel_of(st: &State) -> usize {
 /// 取队列各歌 id(原序)。
 fn ids(songs: &[Song]) -> Vec<&str> {
     songs.iter().map(|s| s.id.as_str()).collect()
-}
-
-/// 造一个指向 example.com 的远端 [`PlayUrl`](版本 bump 测试用)。
-fn test_play_url(id: &str) -> color_eyre::Result<PlayUrl> {
-    Ok(PlayUrl {
-        song_id: SongId::new(SourceKind::NETEASE, id),
-        url: mineral_model::MediaUrl::remote(&format!("https://example.com/{id}.mp3"))?,
-        bitrate_bps: Some(320_000),
-        quality: BitRate::Higher,
-        size: None,
-        format: Some(mineral_model::AudioFormat::Mp3),
-        bit_depth: None,
-        stream_headers: Vec::new(),
-        layout: mineral_model::StreamLayout::Contiguous,
-        substituted: false,
-    })
 }
 
 /// 取队列各歌 id 并排序(用于「内容集合不变」断言,不看顺序)。

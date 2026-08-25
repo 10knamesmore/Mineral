@@ -1,7 +1,7 @@
 //! 播放 view-model。状态由 [`mineral_audio::AudioHandle::snapshot`] 在每个 UI tick 灌入。
 
 use mineral_audio::{AudioBackend, AudioSnapshot, Bps};
-use mineral_model::{Envelope, PlayUrl, Song, SongId};
+use mineral_model::{DirectMedia, Envelope, PlaybackMediaInfo, Song, SongId};
 pub use mineral_protocol::{PlayMode, PlaybackOrigin};
 
 use crate::render::anim::Transition;
@@ -20,9 +20,11 @@ pub struct Playback {
     /// 播放模式。
     pub mode: PlayMode,
 
-    /// 当前曲目解析后的 PlayUrl(format / bitrate / size)。
-    /// 切歌时清成 `None`,PlayUrlReady 或 prefetch 命中后写入。transport 用它显 `fmt`。
-    pub play_url: Option<PlayUrl>,
+    /// Optional direct access used by copy actions for the current media.
+    pub direct_media: Option<DirectMedia>,
+
+    /// Final source-neutral facts for the opened decoder input.
+    pub media_info: Option<PlaybackMediaInfo>,
 
     /// 当前在播音频的来源(下载 / 缓存 / 远端);transport 用它显来源徽标。`None` = 未知。
     pub play_origin: Option<PlaybackOrigin>,
@@ -49,7 +51,7 @@ pub struct Playback {
     /// 与 `track` **原子到达**。**读取走 [`Self::current_envelope`]**(只认归属当前 track 的),
     /// 换曲时旧包络被新段整体顶替、归属校验再兜一层,无需显式清空。
     ///
-    /// 写入走 [`Self::sync_envelope`]——重段每次到达都会灌这个字段(同一首歌内 play_url
+    /// 写入走 [`Self::sync_envelope`]——重段每次到达都会灌这个字段(同一首歌内 media facts
     /// 更新也算一次),直接重建会让入场动画反复从头重播。
     pub envelope: Option<EnvelopeState>,
 }
@@ -174,7 +176,7 @@ pub enum PrefetchStage {
 }
 
 /// 歌词时间轴的信任档。歌词永远来自歌曲原源,音频流却可能被拦截脚本顶换
-/// ([`mineral_model::PlayUrl::substituted`])——顶换后时间轴是「借来的」,
+/// ([`mineral_model::PlaybackMediaInfo::substituted`])——顶换后时间轴是「借来的」,
 /// 按实测时长差分档降级,不做伪精度对齐。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SyncTrust {
@@ -201,7 +203,8 @@ impl Playback {
             playing: false,
             volume_pct: 100,
             mode: PlayMode::Sequential,
-            play_url: None,
+            direct_media: None,
+            media_info: None,
             play_origin: None,
             audio_backend: AudioBackend::Device,
             buffered_bps: Bps::ZERO,
@@ -227,7 +230,7 @@ impl Playback {
     /// 消费重段送来的包络:**同一份((归属, 版本)未变)原地保留**,只有换曲 / 换版本
     /// 才重建并重播入场动画。
     ///
-    /// 重段每次到达都会调这里(同一首歌内 play_url 更新也会来一次),无条件重建会让
+    /// 重段每次到达都会调这里(同一首歌内 media facts 更新也会来一次),无条件重建会让
     /// 入场动画反复从头重播。
     ///
     /// # Params:
@@ -269,11 +272,11 @@ impl Playback {
     /// 当前曲目时长(ms);`None` = 无 track / 两口径都未知。优先取 song 元数据,
     /// 因为 decoder 探出 duration 比 song 元数据慢一帧、且部分容器探不出来。
     ///
-    /// 例外:**顶换流**([`mineral_model::PlayUrl::substituted`])的元数据时长描述的
+    /// 例外:**顶换流**([`mineral_model::PlaybackMediaInfo::substituted`])的元数据时长描述的
     /// 是原源音频,不是实际在播的流——decoder 一探出实测就切实测(总时长 / 进度条 /
     /// 按比例 seek 随之对齐替身流);未探出前仍回落元数据。
     pub fn duration_ms(&self) -> Option<u64> {
-        if self.play_url.as_ref().is_some_and(|u| u.substituted)
+        if self.substituted()
             && let Some(engine) = self.engine_duration_ms
         {
             return Some(engine);
@@ -292,7 +295,7 @@ impl Playback {
     /// # Return:
     ///   时间轴信任档;歌词面板与窗口标题据此决定是否认「当前行」。
     pub(crate) fn sync_trust(&self) -> SyncTrust {
-        if !self.play_url.as_ref().is_some_and(|u| u.substituted) {
+        if !self.substituted() {
             return SyncTrust::Native;
         }
         // 必须直读 song 元数据:`duration_ms()` 对顶换流已切实测口径,拿它比实测差恒 0。
@@ -321,6 +324,13 @@ impl Playback {
             buffered_bps: snap.next_buffered_bps,
             download_complete: snap.next_download_complete,
         };
+    }
+
+    /// Returns whether the effective opened media was substituted by a hook.
+    fn substituted(&self) -> bool {
+        self.media_info
+            .as_ref()
+            .is_some_and(|info| info.substituted)
     }
 }
 
@@ -357,24 +367,21 @@ mod tests {
     fn sync_trust_tiers_by_duration_gap() {
         use super::SyncTrust;
 
-        let play_url = |substituted: bool| mineral_model::PlayUrl {
+        let media_info = |substituted: bool| mineral_model::PlaybackMediaInfo {
             song_id: SongId::new(SourceKind::NETEASE, "1"),
-            url: mineral_model::MediaUrl::Local("/x".into()),
             bitrate_bps: None,
             quality: mineral_model::BitRate::Standard,
             size: None,
             format: Some(mineral_model::AudioFormat::Mp3),
             bit_depth: None,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Contiguous,
             substituted,
         };
         let mut pb = with_track(/*duration_ms*/ 269_000, /*position_ms*/ 0);
-        pb.play_url = Some(play_url(/*substituted*/ false));
+        pb.media_info = Some(media_info(/*substituted*/ false));
         pb.engine_duration_ms = Some(300_000);
         assert_eq!(pb.sync_trust(), SyncTrust::Native, "原源流时长差不参与");
 
-        pb.play_url = Some(play_url(/*substituted*/ true));
+        pb.media_info = Some(media_info(/*substituted*/ true));
         pb.engine_duration_ms = None;
         assert_eq!(pb.sync_trust(), SyncTrust::Borrowed, "未探出先不判失真");
         pb.engine_duration_ms = Some(270_500);
@@ -406,16 +413,13 @@ mod tests {
     #[test]
     fn duration_ms_prefers_engine_for_substituted_stream() {
         let mut pb = with_track(296_533, 0);
-        pb.play_url = Some(mineral_model::PlayUrl {
+        pb.media_info = Some(mineral_model::PlaybackMediaInfo {
             song_id: SongId::new(SourceKind::NETEASE, "185868"),
-            url: mineral_model::MediaUrl::Local("/sub.m4s".into()),
             bitrate_bps: None,
             quality: mineral_model::BitRate::Standard,
             size: None,
             format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Chunked,
             substituted: true,
         });
         assert_eq!(pb.duration_ms(), Some(296_533), "未探出前回落元数据");
@@ -423,8 +427,8 @@ mod tests {
         assert_eq!(pb.duration_ms(), Some(298_000), "探出后以替身流实测为准");
 
         // 原源流:实测在手也不切口径。
-        if let Some(pu) = pb.play_url.as_mut() {
-            pu.substituted = false;
+        if let Some(info) = pb.media_info.as_mut() {
+            info.substituted = false;
         }
         assert_eq!(pb.duration_ms(), Some(296_533), "原源流恒元数据");
     }
@@ -545,7 +549,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("装载后应有包络"))?;
         assert!(mid > 0, "前置:动画已起步");
 
-        // 同一份重复到达(同曲内 play_url 更新等):相位不动。
+        // 同一份重复到达(同曲内 media facts 更新等):相位不动。
         pb.sync_envelope(Some(id.clone()), Some(envelope(1)), /*ticks*/ 10);
         assert_eq!(
             pb.envelope.as_ref().map(EnvelopeState::reveal),

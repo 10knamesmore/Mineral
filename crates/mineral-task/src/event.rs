@@ -2,8 +2,7 @@
 
 use mineral_channel_core::Page;
 use mineral_model::{
-    Album, Artist, ArtistId, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song, SongId,
-    SourceKind,
+    Album, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -17,8 +16,6 @@ use crate::write::{PlaylistWriteOp, WriteError};
 /// 失败任务不发 event(只在 [`crate::TaskHandle::done`] 上拿到 [`crate::TaskOutcome::Failed`]),
 /// 详细错误进 mineral-log。**例外之一:[`TaskEvent::PlaylistWriteDone`] 失败也发**——
 /// 写操作的失败必须到达用户(toast + 清 pending 标记),不能只留在日志里。
-/// **例外之二:[`TaskEvent::SongUrlFailed`]**——取链失败是播放钩子的 `unplayable`
-/// 触发信号(脚本可跨源补救),必须进事件循环而不只是日志。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
@@ -33,7 +30,7 @@ pub enum TaskEvent {
     /// 用户歌单库合并快照:server 聚合各源列表(经出口变换)后的整表,
     /// **全量替换**语义,顺序即展示序。非任务事件(server 聚合态直接推,
     /// 不经 channel-fetch lane);[`TaskEvent::PlaylistsFetched`] 是它的
-    /// server 内部原料,不再直达 client。
+    /// server 内部原料,不直接转发 client。
     LibrarySnapshot {
         /// 合并后的歌单列表(展示序)。
         playlists: Vec<Playlist>,
@@ -57,23 +54,6 @@ pub enum TaskEvent {
 
         /// 完整歌单(含曲目)。
         playlist: Box<Playlist>,
-    },
-
-    /// `SongUrl` 任务成功:可播放 URL 解析就绪。
-    PlayUrlReady {
-        /// 关联的歌曲 id。
-        song_id: SongId,
-
-        /// 解析出的播放 URL + 元信息。
-        play_url: PlayUrl,
-    },
-
-    /// `SongUrl` 任务失败(channel 报错 / 返回空 url 列表):这首当下无可播 URL。
-    /// server 据此在提交点 fire `before_stream`(`unplayable` 信号),脚本可跨源
-    /// 补救;无脚本时维持原失败语义。取消的任务(切歌砍队)不发。
-    SongUrlFailed {
-        /// 关联的歌曲 id。
-        song_id: SongId,
     },
 
     /// `Lyrics` 任务成功:歌词数据就绪。
@@ -171,7 +151,7 @@ pub enum TaskEvent {
     },
 
     /// 任意 channel 取数收束(成功 / 失败 / 取消都发)。纯埋点信号(fetches),与具体
-    /// 结果事件(`PlayUrlReady` / `SearchResults` 等)并行——server 记录后不转发 client。
+    /// 结果(`SearchResults` 等事件)并行——server 记录后不转发 client。
     FetchDone {
         /// 取数种类。
         kind: ChannelFetchKindTag,

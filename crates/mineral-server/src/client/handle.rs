@@ -2,7 +2,7 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, DownloadProgress, DownloadTarget, Event, PlayQueueError, PlayerSync,
     PlayerVersions, QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
@@ -456,14 +456,6 @@ impl ClientHandle {
 }
 
 impl Client for ClientHandle {
-    fn play(&self, url: MediaUrl) {
-        // PlayerCore 内部的 audio handle 暴露不出来直接调,留给 server-internal
-        // 使用 (PlayUrlReady → audio.play)。client 这条路径目前只在 status 之类
-        // 工具里调,直接 fire 给 audio (经 player) 是 OK 的:暂以 stop 兼容,
-        // 真要播请走 play_song。
-        // ——但 mineral status 也不调这个。本方法保留不删,日后 debug 可用。
-        let _ = url;
-    }
     fn pause(&self) {
         // 传输面(执行 + 埋点)统一走 PlayerCore 的 transport 方法,client 只穿透 actor。
         self.player.pause_playback(mineral_stats::Actor::User);

@@ -13,19 +13,17 @@ pub mod error;
 pub mod hits;
 /// 列表分页参数。
 pub mod page;
-
 pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
 pub use credential::Credential;
 pub use error::{Error, Result};
 pub use hits::SearchHits;
 pub use page::Page;
-
 use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, Song, SongId,
-    SourceKind, UserId,
+    Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
+    UserId,
 };
 
 /// 接入一个音乐源的 channel(连接器)统一接口。
@@ -43,8 +41,8 @@ pub trait MusicChannel: Send + Sync {
     fn caps(&self) -> ChannelCaps;
 
     // ---------- 搜索 ----------
-    // 返回 [`SearchHits`] 而非裸 Vec:榨干与否由源显式表态(`has_more`),上层不再只能
-    // 靠「返回条数 < limit」推断——页码型分页 / 服务端固定页大小的源那样会误判。
+    // 返回 [`SearchHits`] 而非裸 Vec:榨干与否由源显式表态(`has_more`);上层不应仅凭
+    // 「返回条数 < limit」推断——页码型分页 / 服务端固定页大小的源那样会误判。
     // 无翻页元信息的源 `Vec::into()` 即可(`has_more = None`,上层回退条数推断)。
 
     /// 搜索单曲(可选)。
@@ -153,9 +151,6 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
-    // ---------- 播放 ----------
-    /// 解析若干歌曲在指定音质下的播放 URL。
-    async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> Result<Vec<PlayUrl>>;
     /// 拉取一首歌的歌词(可选)。
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         Err(Error::NotSupported)

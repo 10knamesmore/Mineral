@@ -6,17 +6,17 @@
 
 use mineral_model::SongId;
 
-/// 取链结局(url_resolutions.outcome)。
+/// 执行契约解析结局(stream_resolutions.outcome)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "snake_case")]
-pub enum UrlOutcome {
-    /// 拿到可播 URL。
+pub enum StreamOutcome {
+    /// 拿到执行契约。
     Ok,
 
     /// 后端返回空(无可播源,区别于报错)。
     Empty,
 
-    /// 取链报错。
+    /// 解析报错。
     Error,
 }
 
@@ -152,8 +152,8 @@ pub enum ScriptEvent {
 /// 带 [`SongId`] 的字段落库拆成 `ns` + `song_value`。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemEvent {
-    /// 取播放 URL(url_resolutions)。
-    UrlResolution {
+    /// 解析播放执行契约(stream_resolutions)。
+    StreamResolution {
         /// 目标歌曲。
         song: SongId,
 
@@ -161,9 +161,9 @@ pub enum SystemEvent {
         quality_requested: String,
 
         /// 结局。
-        outcome: UrlOutcome,
+        outcome: StreamOutcome,
 
-        /// 是否为预取取链(非当前起播)。
+        /// 是否为预取解析(非当前起播)。
         for_prefetch: bool,
     },
 
@@ -250,7 +250,7 @@ impl SystemEvent {
     /// 事件对应的目标表名(= [`crate::StatsEvent::kind_name`] 的系统域分支)。
     pub(crate) fn table(&self) -> &'static str {
         match self {
-            Self::UrlResolution { .. } => "url_resolutions",
+            Self::StreamResolution { .. } => "stream_resolutions",
             Self::HookFire { .. } => "hook_fires",
             Self::GaplessBoundary { .. } => "gapless_boundaries",
             Self::Prefetch { .. } => "prefetches",
@@ -270,7 +270,7 @@ impl SystemEvent {
     ///   来源 name;事件不归属任何来源为 `None`
     pub(crate) fn source_name(&self) -> Option<&str> {
         match self {
-            Self::UrlResolution { song, .. }
+            Self::StreamResolution { song, .. }
             | Self::GaplessBoundary { song, .. }
             | Self::Prefetch { song, .. }
             | Self::CacheHarvest { song, .. } => Some(song.namespace().name()),

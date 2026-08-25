@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use crate::event::SystemEvent;
 use crate::{
     CacheHarvestOutcome, FailOpen, GaplessResult, HookDecision, HookKind, HookStage,
-    PrefetchResolution, PrefetchSource, ScriptEvent, UrlOutcome,
+    PrefetchResolution, PrefetchSource, ScriptEvent, StreamOutcome,
 };
 
 /// 系统域每张表都有的公共写入列 + live 连接句柄(无 actor)。
@@ -43,12 +43,12 @@ pub(super) async fn write(
         session_id,
     };
     match event {
-        SystemEvent::UrlResolution {
+        SystemEvent::StreamResolution {
             song,
             quality_requested,
             outcome,
             for_prefetch,
-        } => write_url_resolution(&w, song, quality_requested, *outcome, *for_prefetch).await,
+        } => write_stream_resolution(&w, song, quality_requested, *outcome, *for_prefetch).await,
         SystemEvent::HookFire {
             song,
             hook,
@@ -81,19 +81,19 @@ pub(super) async fn write(
     }
 }
 
-/// 落 url_resolutions 一行。
-async fn write_url_resolution(
+/// 落 stream_resolutions 一行。
+async fn write_stream_resolution(
     w: &SystemWrite<'_>,
     song: &SongId,
     quality_requested: &str,
-    outcome: UrlOutcome,
+    outcome: StreamOutcome,
     for_prefetch: bool,
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     let for_prefetch = i64::from(for_prefetch);
     sqlx::query!(
-        "INSERT INTO url_resolutions (ts, session_id, ns, song_value, quality_requested, outcome, for_prefetch) \
+        "INSERT INTO stream_resolutions (ts, session_id, ns, song_value, quality_requested, outcome, for_prefetch) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         w.ts,
         w.session_id,
@@ -105,7 +105,7 @@ async fn write_url_resolution(
     )
     .execute(w.pool)
     .await
-    .wrap_err("record_event url_resolutions 落库失败")?;
+    .wrap_err("record_event stream_resolutions 落库失败")?;
     Ok(())
 }
 
@@ -269,7 +269,7 @@ async fn write_config_reload(w: &SystemWrite<'_>) -> color_eyre::Result<()> {
 mod tests {
     use crate::event::{
         CacheHarvestOutcome, FailOpen, GaplessResult, HookDecision, HookKind, HookStage,
-        PrefetchResolution, PrefetchSource, StatsEvent, SystemEvent, UrlOutcome,
+        PrefetchResolution, PrefetchSource, StatsEvent, StreamOutcome, SystemEvent,
     };
     use crate::store::StatsStore;
     use mineral_model::{SongId, SourceKind};
@@ -293,20 +293,20 @@ mod tests {
         SongId::new(SourceKind::NETEASE, "42")
     }
 
-    /// url_resolutions:empty 与 error 两种 outcome 落库后可区分。
+    /// stream_resolutions:empty 与 error 两种 outcome 落库后可区分。
     #[tokio::test]
-    async fn record_url_resolution_empty_vs_error() -> color_eyre::Result<()> {
+    async fn record_stream_resolution_empty_vs_error() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
-        let empty = StatsEvent::System(SystemEvent::UrlResolution {
+        let empty = StatsEvent::System(SystemEvent::StreamResolution {
             song: song(),
             quality_requested: "lossless".to_owned(),
-            outcome: UrlOutcome::Empty,
+            outcome: StreamOutcome::Empty,
             for_prefetch: false,
         });
-        let error = StatsEvent::System(SystemEvent::UrlResolution {
+        let error = StatsEvent::System(SystemEvent::StreamResolution {
             song: song(),
             quality_requested: "lossless".to_owned(),
-            outcome: UrlOutcome::Error,
+            outcome: StreamOutcome::Error,
             for_prefetch: true,
         });
         store.record_event(1000, None, &empty).await?;
@@ -314,11 +314,11 @@ mod tests {
 
         #[derive(sqlx::FromRow)]
         struct Row {
-            outcome: UrlOutcome,
+            outcome: StreamOutcome,
             for_prefetch: i64,
         }
         let rows = sqlx::query_as::<_, Row>(
-            "SELECT outcome, for_prefetch FROM url_resolutions ORDER BY id",
+            "SELECT outcome, for_prefetch FROM stream_resolutions ORDER BY id",
         )
         .fetch_all(live(&store)?)
         .await?;
@@ -328,9 +328,9 @@ mod tests {
         let second = rows
             .get(1)
             .ok_or_else(|| color_eyre::eyre::eyre!("expected second row"))?;
-        assert_eq!(first.outcome, UrlOutcome::Empty);
+        assert_eq!(first.outcome, StreamOutcome::Empty);
         assert_eq!(first.for_prefetch, 0);
-        assert_eq!(second.outcome, UrlOutcome::Error);
+        assert_eq!(second.outcome, StreamOutcome::Error);
         assert_eq!(second.for_prefetch, 1);
         Ok(())
     }

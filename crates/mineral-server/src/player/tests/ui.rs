@@ -440,7 +440,6 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -512,7 +511,6 @@ async fn config_reload_records_system_event() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -558,7 +556,6 @@ async fn playlist_op_records_to_stats_db() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -607,7 +604,6 @@ async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()>
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];

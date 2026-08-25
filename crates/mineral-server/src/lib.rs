@@ -30,6 +30,8 @@ mod media;
 mod media_cache;
 mod notify;
 mod pcm;
+mod playback;
+mod playback_instance;
 mod player;
 mod props;
 mod queue;
@@ -49,7 +51,7 @@ pub use mineral_audio::AudioMode;
 pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
 pub use script_bridge::{ScriptParts, ScriptPumps, ScriptReloadParts};
 pub use script_reload::spawn_script_reloader;
-pub use server::Server;
+pub use server::{Server, SourceBackends};
 pub use stats::{
     PendingPlay, StatsRecorder, now_ms, params_from_config, pending_from_start, stats_play_mode,
 };

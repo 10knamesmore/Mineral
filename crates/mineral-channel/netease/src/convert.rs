@@ -2,9 +2,10 @@
 
 use mineral_model::{
     Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
-    CollectionIndex, MediaUrl, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId,
-    SourceKind,
+    CollectionIndex, MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song,
+    SongId, SourceKind,
 };
+use mineral_playback::DirectMedia;
 use rustc_hash::FxHashMap;
 
 use crate::wire::artist::{ArtistAlbum, ArtistDetailResult};
@@ -211,37 +212,36 @@ pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
         .build()
 }
 
-/// 播放 URL 端点 DTO 列表 → [`PlayUrl`] 列表,丢弃不可播的项(判据见 [`song_url_to_play`])。
+/// 播放 URL 端点 DTO 列表 → [`DirectMedia`] 列表,丢弃不可播的项。
 ///
-/// `quality` 是请求时的目标音质,原样回填 [`PlayUrl`] 的 `quality`(响应不含等级回执)。
-pub(crate) fn play_urls(dtos: Vec<SongUrl>, quality: BitRate) -> Vec<PlayUrl> {
+/// `quality` 是请求时的目标音质,原样回填 [`PlaybackMediaInfo`](响应不含等级回执)。
+pub(crate) fn to_direct_media(dtos: Vec<SongUrl>, quality: BitRate) -> Vec<DirectMedia> {
     dtos.into_iter()
-        .filter_map(|d| song_url_to_play(d, quality))
+        .filter_map(|dto| song_url_to_direct(dto, quality))
         .collect()
 }
 
 /// 整批条目是否都**显式**报了「本源无资源」(单曲级 `code` 非 200)。
 ///
 /// 全灰时 legacy 端点同样不会有资源,调用方据此省掉降级那一跳、直接返回空
-/// (task 层继而发 `SongUrlFailed`,unplayable 拦截口接手)。只认显式 code——
+/// (playback orchestration 继而进入 unplayable 拦截口)。只认显式 code——
 /// code 缺失或试听片段不算,那些情形 legacy 仍可能给出完整流。
 pub(crate) fn all_explicitly_unavailable(dtos: &[SongUrl]) -> bool {
     !dtos.is_empty() && dtos.iter().all(|d| d.code.is_some_and(|c| c != 200))
 }
 
-/// 单条播放 URL DTO → [`PlayUrl`];不可播返回 `None`。
+/// 单条播放 URL DTO → direct remote media;不可播返回 `None`。
 ///
 /// 不可播三口:单曲级 `code` 非 200(实测无版权曲为 404,url 同时为 null)、
 /// `freeTrialInfo` 非空(url 只是试听片段——接受它会把片段当整曲播放并入缓存)、
 /// url 缺失。
-fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
+fn song_url_to_direct(d: SongUrl, quality: BitRate) -> Option<DirectMedia> {
     if d.code.is_some_and(|c| c != 200) || d.free_trial_info.is_some() {
         return None;
     }
-    let url = MediaUrl::remote(&d.url?).ok()?;
-    Some(PlayUrl {
+    let url = url::Url::parse(&d.url?).ok()?;
+    let info = PlaybackMediaInfo {
         song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
-        url,
         // wire 层 br / size 缺字段经 serde default 落 0,在此边界转 None,哨兵不进模型。
         bitrate_bps: (d.br > 0).then_some(d.br),
         quality,
@@ -249,12 +249,15 @@ fn song_url_to_play(d: SongUrl, quality: BitRate) -> Option<PlayUrl> {
         format: d.format.filter(|s| !s.is_empty()).map(AudioFormat::from),
         // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
         bit_depth: None,
-        // 网易云音频 CDN 直链自足,不需附加取流头。
-        stream_headers: Vec::new(),
-        // 网易云是整块直链(MP3/FLAC),随机访问廉价,正常 seekable 打开。
-        layout: mineral_model::StreamLayout::Contiguous,
         substituted: false,
-    })
+    };
+    // 网易云音频 CDN 直链自足,不需附加取流头;整块直链(MP3 / FLAC)随机访问廉价。
+    Some(DirectMedia::remote(
+        info,
+        url,
+        Vec::new(),
+        mineral_model::StreamLayout::Contiguous,
+    ))
 }
 
 #[cfg(test)]
@@ -271,7 +274,7 @@ mod tests {
     fn grey_entry_is_rejected_and_detected() -> color_eyre::Result<()> {
         use mineral_model::BitRate;
 
-        use super::{all_explicitly_unavailable, play_urls};
+        use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
         // 2026-07-04 实测 /song/enhance/player/url/v1 对无版权曲(id 186016)的形态。
@@ -284,8 +287,8 @@ mod tests {
             "整批显式非 200 应判定为本源无资源"
         );
         assert!(
-            play_urls(vec![grey], BitRate::Exhigh).is_empty(),
-            "灰歌条目不得产出 PlayUrl"
+            to_direct_media(vec![grey], BitRate::Exhigh).is_empty(),
+            "灰歌条目不得产出 Direct media"
         );
         assert!(
             !all_explicitly_unavailable(&[]),
@@ -300,7 +303,7 @@ mod tests {
     fn trial_fragment_is_not_playable() -> color_eyre::Result<()> {
         use mineral_model::BitRate;
 
-        use super::{all_explicitly_unavailable, play_urls};
+        use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
         let trial: SongUrl = from_value(serde_json::json!({
@@ -313,7 +316,7 @@ mod tests {
             "试听不算显式无资源,legacy 降级仍要走"
         );
         assert!(
-            play_urls(vec![trial], BitRate::Exhigh).is_empty(),
+            to_direct_media(vec![trial], BitRate::Exhigh).is_empty(),
             "试听片段不得当完整可播流放行"
         );
         Ok(())
@@ -324,7 +327,7 @@ mod tests {
     fn playable_entry_survives_mixed_batch() -> color_eyre::Result<()> {
         use mineral_model::BitRate;
 
-        use super::{all_explicitly_unavailable, play_urls};
+        use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
         let batch: Vec<SongUrl> = vec![
@@ -338,9 +341,12 @@ mod tests {
             }))?,
         ];
         assert!(!all_explicitly_unavailable(&batch), "混批不算全灰");
-        let urls = play_urls(batch, BitRate::Exhigh);
-        assert_eq!(urls.len(), 1, "只有可播条目产出");
-        assert_eq!(urls.first().map(|u| u.song_id.as_str()), Some("1862188922"));
+        let streams = to_direct_media(batch, BitRate::Exhigh);
+        assert_eq!(streams.len(), 1, "只有可播条目产出");
+        assert_eq!(
+            streams.first().map(|s| s.info().song_id.as_str()),
+            Some("1862188922")
+        );
         Ok(())
     }
 
@@ -437,7 +443,7 @@ mod tests {
     }
 
     /// 专辑详情(顶层元信息 + 曲目)→ model:简介 / track_count / 曲目 / 封面 / id 都到位。
-    /// 锁住"详情端点独家给的 description 不再被丢"这一重构要点。
+    /// description 只由详情端点提供,必须保留进专辑信息。
     #[test]
     fn album_detail_maps_meta_and_songs() -> color_eyre::Result<()> {
         let raw = serde_json::json!({

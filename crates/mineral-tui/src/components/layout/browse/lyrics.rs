@@ -1042,16 +1042,13 @@ mod tests {
             .as_ref()
             .map(|s| s.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有当前歌"))?;
-        state.playback.play_url = Some(mineral_model::PlayUrl {
+        state.playback.media_info = Some(mineral_model::PlaybackMediaInfo {
             song_id,
-            url: mineral_model::MediaUrl::remote("https://cdn.example/sub.m4s")?,
             bitrate_bps: None,
             quality: mineral_model::BitRate::Standard,
             size: None,
             format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Chunked,
             substituted: true,
         });
         // 元数据时长 vs 实测差 30s:确定失真。直读元数据(`duration_ms()` 对顶换流

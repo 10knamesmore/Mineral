@@ -411,24 +411,27 @@ impl App {
 
     /// 选中歌**恰是当前在播歌**时,给出其音频流地址的复制项:带取流头的源(如 B 站需
     /// Referer / UA,裸链接贴出去 403)拼成 curl 片段,无头源给裸 URL / 本地路径。
-    /// 非在播歌 client 手里没有已解析的 PlayUrl,不出该项——按需解析得走 server 往返,
-    /// 不值得为一个复制项发请求。
+    /// 非在播歌没有随 current snapshot 下发的 direct media,因此不提供该项。
     fn stream_copy_item(&self, song_id: &mineral_model::SongId) -> Option<MenuItem> {
-        let play_url = self.state.playback.play_url.as_ref()?;
-        if &play_url.song_id != song_id {
+        let direct = self.state.playback.direct_media.as_ref()?;
+        if &direct.info().song_id != song_id {
             return None;
         }
-        Some(if play_url.stream_headers.is_empty() {
+        let headers = direct
+            .locator()
+            .remote()
+            .map_or(&[][..], mineral_model::RemoteLocator::headers);
+        Some(if headers.is_empty() {
             MenuItem::keyed(
                 's',
                 "Copy stream URL",
-                MenuAction::Copy(play_url.url.to_string()),
+                MenuAction::Copy(direct.locator().media_url().to_string()),
             )
         } else {
             MenuItem::keyed(
                 's',
                 "Copy stream (curl)",
-                MenuAction::Copy(stream_curl(play_url)),
+                MenuAction::Copy(stream_curl(direct)),
             )
         })
     }
@@ -563,13 +566,18 @@ fn shell_squote(s: &str) -> String {
 
 /// 带取流头的流地址拼成可直接执行的 curl 片段。B 站等源的音频直链缺 Referer / UA 会 403,
 /// 裸 URL 贴到浏览器 / curl 里没用,复制就得连头一起给。
-fn stream_curl(play_url: &mineral_model::PlayUrl) -> String {
-    let headers = play_url
-        .stream_headers
+fn stream_curl(direct: &mineral_model::DirectMedia) -> String {
+    let headers = direct
+        .locator()
+        .remote()
+        .map_or(&[][..], mineral_model::RemoteLocator::headers)
         .iter()
         .map(|(k, v)| format!("-H {} ", shell_squote(&format!("{k}: {v}"))))
         .collect::<String>();
-    format!("curl {headers}{}", shell_squote(&play_url.url.to_string()))
+    format!(
+        "curl {headers}{}",
+        shell_squote(&direct.locator().media_url().to_string())
+    )
 }
 
 /// 把 config 的自定义模板项追加到内置项之后:按 `context` 过滤,与已有项
@@ -1117,18 +1125,20 @@ mod tests {
             .first()
             .map(|entry| entry.data.song.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有首曲"))?;
-        app.state.playback.play_url = Some(mineral_model::PlayUrl {
-            song_id: playing.id.clone(),
-            url: mineral_model::MediaUrl::remote("https://cdn.example/a.m4s")?,
-            bitrate_bps: None,
-            quality: mineral_model::BitRate::Standard,
-            size: None,
-            format: Some(mineral_model::AudioFormat::Aac),
-            bit_depth: None,
-            stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
-            layout: mineral_model::StreamLayout::Contiguous,
-            substituted: false,
-        });
+        app.state.playback.direct_media = Some(mineral_model::DirectMedia::remote(
+            mineral_model::PlaybackMediaInfo {
+                song_id: playing.id.clone(),
+                bitrate_bps: None,
+                quality: mineral_model::BitRate::Standard,
+                size: None,
+                format: Some(mineral_model::AudioFormat::Aac),
+                bit_depth: None,
+                substituted: false,
+            },
+            "https://cdn.example/a.m4s".parse()?,
+            vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
+            mineral_model::StreamLayout::Contiguous,
+        ));
         let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(playing)));
         let stream = items
             .iter()
@@ -1154,7 +1164,7 @@ mod tests {
         let items = app.copy_items(&crate::runtime::state::EntityRef::Song(Box::new(other)));
         assert!(
             !items.iter().any(|it| it.label.starts_with("Copy stream")),
-            "非在播歌无已解析 PlayUrl,不出流地址项"
+            "非在播歌无 direct media,不出流地址项"
         );
         Ok(())
     }

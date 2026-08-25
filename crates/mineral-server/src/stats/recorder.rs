@@ -64,7 +64,7 @@ pub struct PendingPlay {
     /// 总长快照 ms;探不出为 `None`。
     pub duration_ms_snapshot: Option<i64>,
 
-    /// 音频快照(起播时未知,play_url 就绪后经 enrich 整组补)。
+    /// 音频快照(起播时未知,resolved 就绪后经 enrich 整组补)。
     pub audio: PlayAudioSnapshot,
 
     /// 音频本体来源位置。
@@ -100,7 +100,7 @@ enum StatsCommand {
         event: Box<StatsEvent>,
     },
 
-    /// 富化在播行的音频快照(play_url 就绪后整组补;脚本改写后再补一次、`substituted`
+    /// 富化在播行的音频快照(resolved 就绪后整组补;脚本改写后再补一次、`substituted`
     /// 随快照带 true)。pending 缺席(起播被 gate / 已结算)则丢弃。
     EnrichAudio(PlayAudioSnapshot),
 
@@ -154,7 +154,7 @@ pub fn stats_play_mode(mode: mineral_protocol::PlayMode) -> mineral_stats::PlayM
 /// 由起播现场构造起播快照:`playback_origin` 从 wire 映射;`play_origin` 与 `actor`
 /// 都由点播调用点穿透——**actor 不从 origin 派生**:next / prev 的 origin 是
 /// AutoAdvance(推进方式),发起者却可能是用户按键 / 脚本 / EOF 自治,两维独立;
-/// `context` 由队列语境继承(client 建队列时告知),format 等 play_url 快照后续经
+/// `context` 由队列语境继承(client 建队列时告知),format 等 resolved 快照后续经
 /// enrich 补。
 ///
 /// # Params:
@@ -437,7 +437,7 @@ impl StatsRecorder {
         });
     }
 
-    /// play_url 就绪后富化在播行的音频快照(整组覆盖);pending 缺席则 actor 侧丢弃。
+    /// resolved 就绪后富化在播行的音频快照(整组覆盖);pending 缺席则 actor 侧丢弃。
     /// 起播已带的 playback_origin 不在此改。
     ///
     /// # Params:

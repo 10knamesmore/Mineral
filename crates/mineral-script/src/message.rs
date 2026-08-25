@@ -296,8 +296,8 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
-    /// 解析一首歌的可播 URL(按 id 的 namespace 找 channel 取流);结果以
-    /// [`ResolveValue::PlayUrl`] 回投 `query`,无可播资源时回错误。
+    /// Resolves optional direct media for a song; the result is returned through
+    /// [`ResolveValue::DirectMedia`] 回投 `query`,无 direct media 时回错误。
     LibrarySongUrl {
         /// 目标歌(namespace 决定走哪个 channel)。
         song: SongId,
@@ -387,9 +387,9 @@ pub enum ResolveValue {
     /// 歌单列表(`library.playlists`)。
     Playlists(Vec<PlaylistBrief>),
 
-    /// 一首歌的可播 URL + 元信息(`library.song_url`),投影含取流头/布局,
+    /// Direct media exposed through `library.song_url`, including headers and layout,
     /// 可直接回填 hook 的改写返回值。
-    PlayUrl(Box<mineral_model::PlayUrl>),
+    DirectMedia(Box<mineral_model::DirectMedia>),
 
     /// 子进程结束(`mineral.spawn` 回调)。
     Spawn(crate::proc::SpawnResult),

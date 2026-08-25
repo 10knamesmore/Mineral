@@ -418,23 +418,6 @@ async fn lyrics_ready_bumps_only_on_store() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// PlayUrlReady 命中当前歌写 play_url → bump;不命中任何路由 → 不 bump。
-#[tokio::test]
-async fn play_url_ready_bumps_only_on_current() -> color_eyre::Result<()> {
-    let core = core_with(Arc::default())?;
-    core.with_state(|st| st.current_song = Some(song("a")));
-    let v0 = core.sync(PlayerVersions::default()).versions.current;
-
-    core.handle_play_url_ready(&SongId::new(SourceKind::NETEASE, "x"), test_play_url("x")?);
-    let v1 = core.sync(PlayerVersions::default()).versions.current;
-    assert_eq!(v1, v0, "无人认领的 URL 被丢弃,不应 bump");
-
-    core.handle_play_url_ready(&SongId::new(SourceKind::NETEASE, "a"), test_play_url("a")?);
-    let v2 = core.sync(PlayerVersions::default()).versions.current;
-    assert_eq!(v2, v0 + 1, "命中当前歌写 play_url 应 bump");
-    Ok(())
-}
-
 /// apply_play_mode:进入 Shuffle 触发 enter(置顶 + 存 original),退回触发 exit(还原)。
 #[test]
 fn apply_enter_then_exit_shuffle() {

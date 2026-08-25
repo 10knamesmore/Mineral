@@ -29,7 +29,8 @@ struct Inner {
     /// 中央 ongoing 状态(任务表 + dedup 索引)。
     ongoing: Arc<Ongoing>,
 
-    /// 中央事件 buffer:lane worker 推、UI 主循环 [`Scheduler::drain_events`] 拉。
+    /// 中央事件 buffer(纯 [`TaskEvent`] 事实,可 serde):lane worker 推、消费方
+    /// [`Scheduler::drain_events`] 拉。
     events: Arc<Mutex<Vec<TaskEvent>>>,
 
     /// ChannelFetch lane(per-channel worker 池)。
@@ -152,7 +153,8 @@ impl Scheduler {
         self.inner.ongoing.cancel_where(&pred);
     }
 
-    /// 从中央事件 buffer 拿走全部已积攒的事件,buffer 清空。UI 主循环 tick 时调一次。
+    /// 从中央事件 buffer 拿走全部已积攒的事件(纯 [`TaskEvent`] 事实),buffer 清空。
+    /// 消费方主循环 tick 时调一次。
     pub fn drain_events(&self) -> Vec<TaskEvent> {
         std::mem::take(&mut *self.inner.events.lock())
     }

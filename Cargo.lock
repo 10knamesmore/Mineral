@@ -2735,6 +2735,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-playback",
  "mineral-protocol",
  "mineral-script",
  "mineral-server",
@@ -2754,17 +2755,16 @@ dependencies = [
  "derive-getters",
  "mineral-log",
  "mineral-model",
+ "mineral-playback",
  "mineral-test",
  "parking_lot",
  "proptest",
  "ringbuf",
  "rodio",
  "serde",
- "stream-download",
  "tempfile",
- "tokio",
+ "tokio-util",
  "typed-builder",
- "url",
 ]
 
 [[package]]
@@ -2783,6 +2783,7 @@ dependencies = [
  "mineral-log",
  "mineral-model",
  "mineral-paths",
+ "mineral-playback",
  "mineral-test",
  "once_cell",
  "qrcode",
@@ -2793,6 +2794,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "typed-builder",
  "url",
 ]
@@ -2850,6 +2852,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-playback",
  "mineral-test",
  "num-bigint",
  "num-traits",
@@ -2865,6 +2868,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "typed-builder",
  "url",
 ]
@@ -2886,6 +2890,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-playback",
  "mineral-protocol",
  "mineral-script",
  "mineral-server",
@@ -3013,6 +3018,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mineral-playback"
+version = "0.5.5"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "color-eyre",
+ "futures-util",
+ "mineral-log",
+ "mineral-model",
+ "reqwest",
+ "rustc-hash 2.1.2",
+ "stream-download",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "mineral-protocol"
 version = "0.5.5"
 dependencies = [
@@ -3081,6 +3104,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-playback",
  "mineral-protocol",
  "mineral-script",
  "mineral-stats",
@@ -3097,8 +3121,10 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokio-util",
  "typed-builder",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3138,7 +3164,6 @@ dependencies = [
  "mineral-log",
  "mineral-model",
  "parking_lot",
- "proptest",
  "rustc-hash 2.1.2",
  "serde",
  "tokio",
@@ -3153,10 +3178,12 @@ dependencies = [
  "color-eyre",
  "mineral-channel-core",
  "mineral-model",
+ "mineral-playback",
  "proptest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "url",
 ]
 
@@ -3181,6 +3208,7 @@ dependencies = [
  "mineral-model",
  "mineral-paths",
  "mineral-persist",
+ "mineral-playback",
  "mineral-protocol",
  "mineral-server",
  "mineral-spectrum",
@@ -6043,6 +6071,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

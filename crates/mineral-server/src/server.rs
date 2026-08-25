@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
+use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{Event, PlayMode};
 use mineral_task::Scheduler;
 use tokio::net::UnixListener;
@@ -17,6 +18,17 @@ use crate::media_cache::MediaCache;
 use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
 use crate::serve;
+
+/// Catalog channels and playback providers assembled for one server process.
+#[non_exhaustive]
+#[derive(typed_builder::TypedBuilder)]
+pub struct SourceBackends {
+    /// Catalog, library, and user-data connectors.
+    pub(crate) channels: Vec<Arc<dyn MusicChannel>>,
+
+    /// Playback resource providers keyed by source identity.
+    pub(crate) playback: PlaybackRegistry,
+}
 
 /// 后台 server。`spawn` 启动 audio engine + scheduler + PlayerCore + PCM puller,
 /// 投递初始任务,对外发 [`ClientHandle`]。
@@ -46,15 +58,15 @@ impl Server {
     /// 启动 audio engine + scheduler + PlayerCore + PCM puller,投递初始任务。
     ///
     /// # Params:
-    ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
+    ///   - `sources`: Catalog channels and playback providers. Empty sets are valid.
     ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
-    ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`] 供后续 B-T7 起使用。
+    ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`](收藏 / 歌曲元数据等经它落库)。
     ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
     ///   - `config_tree`: 有效配置底树(加载管线产物;配置宿主初始状态,握手
     ///     订阅 `Config` 的 client 重放它)。
     ///   - `script`: 脚本线程投递句柄(daemon 启用脚本时传 `Some`,其余 `None`)。
     pub async fn spawn(
-        channels: Vec<Arc<dyn MusicChannel>>,
+        sources: SourceBackends,
         audio_mode: AudioMode,
         persist: ServerStore,
         config: ServerConfig,
@@ -62,8 +74,9 @@ impl Server {
         script: Option<mineral_script::ScriptSender>,
         stats: crate::StatsRecorder,
     ) -> color_eyre::Result<Self> {
+        let channels = &sources.channels;
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
-        let scheduler = Scheduler::new(&channels, *config.channel_workers_per());
+        let scheduler = Scheduler::new(channels, *config.channel_workers_per());
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
@@ -73,7 +86,7 @@ impl Server {
         let player = PlayerCore::spawn(
             audio,
             scheduler,
-            channels,
+            sources,
             persist,
             media_cache,
             crate::player::SpawnConfig {
@@ -269,13 +282,13 @@ async fn heartbeat(player: PlayerCore, connections: Arc<serve::ConnRegistry>, in
                     st.play_mode,
                     st.queue.len(),
                     st.cursor,
-                    st.play_url
+                    st.media_info
                         .as_ref()
-                        .and_then(|p| p.format.as_ref())
+                        .and_then(|info| info.format.as_ref())
                         .map_or_else(|| "-".to_owned(), |f| f.as_str().to_owned()),
-                    st.play_url
+                    st.media_info
                         .as_ref()
-                        .and_then(|p| p.bitrate_bps)
+                        .and_then(|info| info.bitrate_bps)
                         .map_or_else(|| "-".to_owned(), |b| (b / 1000).to_string()),
                     st.current_lyrics.is_some(),
                 )

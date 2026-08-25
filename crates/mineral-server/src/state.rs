@@ -1,12 +1,15 @@
 //! 服务端持有的「播放上下文」内部状态。[`crate::player::PlayerCore`] 用 `Mutex<State>` 包它,
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
-use mineral_model::{Envelope, PlayUrl, Song, SongId};
+use mineral_model::{Envelope, PlaybackMediaInfo, Song, SongId};
+use mineral_playback::DirectMedia;
 use mineral_protocol::{
     CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
 };
 
 use crate::download::Capturing;
+use crate::gapless::PrefetchState;
+use crate::playback_instance::PlaybackSlot;
 
 /// 一次队列编辑前的队列全貌,供撤销还原。
 ///
@@ -28,8 +31,14 @@ pub(crate) struct State {
     /// 当前在播的歌。
     pub(crate) current_song: Option<Song>,
 
-    /// 当前歌的播放 URL(从 SongUrlReady 写入)。
-    pub(crate) play_url: Option<PlayUrl>,
+    /// Active current playback attempt and its cancellation root.
+    pub(crate) current_slot: Option<PlaybackSlot>,
+
+    /// Final facts of the decoder input currently submitted to audio.
+    pub(crate) media_info: Option<PlaybackMediaInfo>,
+
+    /// Optional direct capability associated with the current opened media.
+    pub(crate) direct_media: Option<DirectMedia>,
 
     /// 当前在播音频的来源(下载 / 缓存 / 远端);切歌时由 `play_song` 写入。
     pub(crate) play_origin: Option<PlaybackOrigin>,
@@ -68,16 +77,12 @@ pub(crate) struct State {
     /// `current` 版本;`sync` 组段时按当前曲过滤,故串曲的迟到包络天然不外发。
     pub(crate) current_envelope: Option<(SongId, Envelope)>,
 
-    /// 正在预拉(已发起 SongUrl 任务、URL 尚未回来)的下一曲 id;URL 到达时据此认领。
-    /// 切歌 / 采纳后复位,避免对同一 next 重复预拉。
-    pub(crate) prefetch_fired_for: Option<SongId>,
+    /// Exclusive lifecycle of the next-song preparation attempt.
+    pub(crate) prefetch: PrefetchState,
 
     /// 当前正在 capture(边播边落盘)的曲;自然播完 → 入缓存,中途打断 → 删残件。
     /// 命中缓存直接本地播时为 `None`(无需 capture)。
     pub(crate) capturing: Option<Capturing>,
-
-    /// 已预排进 rodio 队列、等当前曲播完无缝接续的下一曲及其记账(gapless)。
-    pub(crate) queued: Option<crate::gapless::Queued>,
 
     /// 本预取窗口内被 hook 否决(`Skip`)的队列**下标**:`next_index` 预测/推进时越过,
     /// 队列本身不动。按下标记(与推进「以下标为真相」同条,重复曲互不吸附);任何队列
@@ -89,7 +94,7 @@ pub(crate) struct State {
     /// 经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否附带 queue 重段。
     pub(crate) queue_version: u64,
 
-    /// current_song / play_url / lyrics 的版本号,语义同 `queue_version`。
+    /// current_song / media facts / lyrics 的版本号,语义同 `queue_version`。
     pub(crate) current_version: u64,
 }
 
@@ -98,7 +103,9 @@ impl State {
     pub(crate) fn empty() -> Self {
         Self {
             current_song: None,
-            play_url: None,
+            current_slot: None,
+            media_info: None,
+            direct_media: None,
             play_origin: None,
             queue_context: mineral_stats::QueueContext::Unknown,
             context_overrides: rustc_hash::FxHashMap::default(),
@@ -110,9 +117,8 @@ impl State {
             current_lyrics: None,
             current_lyrics_song_id: None,
             current_envelope: None,
-            prefetch_fired_for: None,
+            prefetch: PrefetchState::default(),
             capturing: None,
-            queued: None,
             prefetch_vetoed: Vec::new(),
             queue_version: 1,
             current_version: 1,
@@ -123,9 +129,14 @@ impl State {
     /// 在下个 tick 按当前队列重排。队列变更 / 插播 / 追加 / 切歌等改变「下一首」预测
     /// 的地方调用;引擎里可能已建的 next 槽由调用方另行 `audio.clear_next()`。
     pub(crate) fn invalidate_prefetch(&mut self) {
-        self.queued = None;
-        self.prefetch_fired_for = None;
+        drop(self.prefetch.invalidate());
         self.prefetch_vetoed.clear();
+    }
+
+    /// Cancels active prefetch work and returns armed facts for capture cleanup.
+    pub(crate) fn take_prefetch(&mut self) -> Option<crate::gapless::Queued> {
+        self.prefetch_vetoed.clear();
+        self.prefetch.invalidate()
     }
 
     /// 队列结构编辑后的预取维护——**精确**作废,不照抄 [`Self::invalidate_prefetch`]。
@@ -138,19 +149,14 @@ impl State {
     ///   预排是否被作废(为真时调用方需同步取消引擎侧待建预排)。
     pub(crate) fn revalidate_prefetch_after_edit(&mut self) -> bool {
         self.prefetch_vetoed.clear();
-        let armed = self
-            .queued
-            .as_ref()
-            .map(|q| q.song.id.clone())
-            .or_else(|| self.prefetch_fired_for.clone());
+        let armed = self.prefetch.song_id().cloned();
         let Some(armed) = armed else {
             return false;
         };
         if crate::queue::next_in_queue(self).is_some_and(|next| next.id == armed) {
             return false;
         }
-        self.queued = None;
-        self.prefetch_fired_for = None;
+        drop(self.prefetch.invalidate());
         true
     }
 
@@ -170,7 +176,8 @@ impl State {
         });
         let current = (known.current != self.current_version).then(|| CurrentSync {
             current_song: self.current_song.clone(),
-            play_url: self.play_url.clone(),
+            direct_media: self.direct_media.clone(),
+            media_info: self.media_info.clone(),
             current_lyrics: self.current_lyrics.clone(),
             current_lyrics_song_id: self.current_lyrics_song_id.clone(),
             // 只带归属当前曲的包络:预排下一曲 / 迟到旧曲的包络虽存在 slot 里,
@@ -199,7 +206,7 @@ impl State {
         self.queue_version += 1;
     }
 
-    /// current_song / play_url / lyrics 发生变更后调用,推进版本号。
+    /// current_song / resolved / lyrics 发生变更后调用,推进版本号。
     pub(crate) fn bump_current(&mut self) {
         self.current_version += 1;
     }

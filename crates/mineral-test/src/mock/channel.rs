@@ -9,14 +9,17 @@ use mineral_channel_core::{
     Result as ChannelResult, SearchHits,
 };
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, AudioFormat, BitRate, Lyrics, MediaUrl, PlayUrl, Playlist,
-    PlaylistId, Song, SongId, SourceKind,
+    Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId,
+    Song, SongId, SourceKind,
 };
+use mineral_playback::{
+    DirectMedia, DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
+};
+use tokio_util::sync::CancellationToken;
 
-/// mock channel:`song_urls` 返回指向给定 URL 的 Remote 直链(格式恒 FLAC),其余方法
-/// 一律 `NotSupported`。来源恒 `NETEASE`。
+/// Mock channel/provider resolving a fixed remote FLAC URL.
 pub struct UrlChannel {
-    /// `song_urls` 要返回的直链(通常是 [`super::serve_once`] 的地址)。
+    /// Playback provider remote URL, usually returned by [`super::serve_once`].
     pub url: url::Url,
 }
 
@@ -61,22 +64,6 @@ impl MusicChannel for UrlChannel {
         Err(Error::NotSupported)
     }
 
-    async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> ChannelResult<Vec<PlayUrl>> {
-        let id = ids.first().cloned().ok_or(Error::NotSupported)?;
-        Ok(vec![PlayUrl {
-            song_id: id,
-            url: MediaUrl::Remote(self.url.clone()),
-            bitrate_bps: None,
-            quality,
-            size: None,
-            format: Some(AudioFormat::Flac),
-            bit_depth: Some(24),
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Contiguous,
-            substituted: false,
-        }])
-    }
-
     async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {
         Err(Error::NotSupported)
     }
@@ -92,6 +79,36 @@ impl MusicChannel for UrlChannel {
         _listen_ms: u64,
     ) -> ChannelResult<()> {
         Ok(())
+    }
+}
+
+#[async_trait]
+impl PlaybackProvider for UrlChannel {
+    fn source(&self) -> SourceKind {
+        SourceKind::NETEASE
+    }
+
+    async fn resolve(
+        &self,
+        request: PlaybackRequest,
+        _cancellation: CancellationToken,
+    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+        let info = PlaybackMediaInfo {
+            song_id: request.song_id().clone(),
+            bitrate_bps: None,
+            quality: request.quality(),
+            size: None,
+            format: Some(AudioFormat::Flac),
+            bit_depth: Some(24),
+            substituted: false,
+        };
+        let media = DirectMedia::remote(
+            info,
+            self.url.clone(),
+            Vec::new(),
+            mineral_model::StreamLayout::Contiguous,
+        );
+        Ok(DirectPreparedPlayback::boxed(media))
     }
 }
 
@@ -203,10 +220,6 @@ impl MusicChannel for CannedChannel {
         Err(Error::NotSupported)
     }
 
-    async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> ChannelResult<Vec<PlayUrl>> {
-        Err(Error::NotSupported)
-    }
-
     async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {
         self.lyrics_calls
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -246,9 +259,5 @@ impl MusicChannel for DetailChannel {
             .filter(|s| ids.contains(&s.id))
             .cloned()
             .collect())
-    }
-
-    async fn song_urls(&self, _ids: &[SongId], _quality: BitRate) -> ChannelResult<Vec<PlayUrl>> {
-        Err(Error::NotSupported)
     }
 }

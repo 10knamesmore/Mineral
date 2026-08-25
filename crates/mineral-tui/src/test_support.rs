@@ -258,7 +258,6 @@ pub(crate) type QueueContextLog =
 pub(crate) type QueueEditLog = Arc<Mutex<Vec<mineral_protocol::QueueOp>>>;
 
 impl Client for TestClient {
-    fn play(&self, _url: MediaUrl) {}
     fn pause(&self) {}
     fn resume(&self) {}
     fn stop(&self) {}

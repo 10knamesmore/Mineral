@@ -20,7 +20,7 @@ use color_eyre::eyre::WrapErr;
 use futures_util::{SinkExt, StreamExt};
 use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed,
     PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire, Request, RequestId, Response,
@@ -288,9 +288,6 @@ fn warn_unexpected(method: &'static str, resp: &Response) {
 }
 
 impl Client for RemoteClient {
-    fn play(&self, url: MediaUrl) {
-        let _ = self.send_recv(Request::Play(url));
-    }
     fn pause(&self) {
         let _ = self.send_recv(Request::Pause);
     }
@@ -858,7 +855,10 @@ mod tests {
     )> {
         let cfg = mineral_config::Config::defaults()?;
         let server = mineral_server::Server::spawn(
-            /*channels*/ Vec::new(),
+            mineral_server::SourceBackends::builder()
+                .channels(Vec::new())
+                .playback(mineral_playback::PlaybackRegistry::empty())
+                .build(),
             mineral_server::AudioMode::ForceNull,
             mineral_persist::ServerStore::disabled(),
             mineral_server::ServerConfig::from_config(&cfg),

@@ -41,9 +41,6 @@ impl MusicChannel for WritableChannel {
     async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
         Err(Error::NotSupported)
     }
-    async fn song_urls(&self, _ids: &[SongId], _q: BitRate) -> ChannelResult<Vec<PlayUrl>> {
-        Err(Error::NotSupported)
-    }
     async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {
         Err(Error::NotSupported)
     }
@@ -180,7 +177,6 @@ fn core_with_curate(
     let core = core_with_events(
         vec![Arc::new(RecordingChannel {
             calls: Arc::default(),
-            url_delay: None,
             liked_ids: None,
             playlists: Some(playlists),
         })],
@@ -199,7 +195,6 @@ async fn library_snapshot_identity_without_script() -> color_eyre::Result<()> {
     let core = core_with_channels(
         vec![Arc::new(RecordingChannel {
             calls: Arc::default(),
-            url_delay: None,
             liked_ids: None,
             playlists: Some(vec![
                 named_playlist("p1", "日常"),
@@ -302,7 +297,6 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
         .build();
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: Some(vec![named_playlist("p1", "日常")]),
     })];
@@ -402,7 +396,6 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
     let channels: Vec<Arc<dyn MusicChannel>> = vec![
         Arc::new(RecordingChannel {
             calls: Arc::default(),
-            url_delay: None,
             liked_ids: None,
             playlists: None,
         }),
@@ -485,7 +478,6 @@ async fn set_favorite_same_state_is_event_idempotent() -> color_eyre::Result<()>
     let (recorder, _actor) = crate::StatsRecorder::spawn(stats.clone(), params);
     let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     });
@@ -651,7 +643,6 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
     let remote: rustc_hash::FxHashSet<SongId> = [remote_only.clone()].into_iter().collect();
     let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: Some(remote),
         playlists: None,
     });

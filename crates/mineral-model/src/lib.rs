@@ -21,6 +21,8 @@ pub mod artist;
 pub mod bitrate;
 /// Album / Playlist 中 Song membership 的显式 relation。
 pub mod collection;
+/// Optional direct media access and source-neutral playback facts.
+pub mod direct_media;
 /// 一首歌的全曲振幅包络(离线预计算,进度条波形渲染用)。
 pub mod envelope;
 /// 音频容器格式(边缘字符串、内部枚举)。
@@ -29,8 +31,6 @@ pub mod format;
 pub mod ids;
 /// 一首歌的歌词集合(行级 LRC、逐字、翻译、罗马音)。
 pub mod lyrics;
-/// 一首歌的可播放 URL + 元信息。
-pub mod play_url;
 /// 歌单及其曲目列表。
 pub mod playlist;
 /// 在 Song / Album 中嵌入的 ArtistRef / AlbumRef 轻引用。
@@ -48,13 +48,15 @@ pub use album::Album;
 pub use artist::Artist;
 pub use bitrate::BitRate;
 pub use collection::{AlbumTrack, CollectionIndex, PlaylistEntry};
+pub use direct_media::{
+    DirectLocator, DirectMedia, PlaybackMediaInfo, RemoteLocator, StreamLayout,
+};
 pub use envelope::Envelope;
 pub use format::AudioFormat;
 pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};
 pub use lyrics::{
     LineKind, LyricLine, Lyrics, Word, current_line, has_timed, has_words, parse_lrc, to_lrc_string,
 };
-pub use play_url::{PlayUrl, StreamLayout};
 pub use playlist::Playlist;
 pub use refs::{AlbumRef, ArtistRef};
 pub use search::SearchKind;

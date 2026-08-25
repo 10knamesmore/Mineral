@@ -12,11 +12,15 @@ use mineral_channel_core::{
     SearchHits,
 };
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind,
-    Song, SongId, SourceKind, UserId,
+    Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
+    SourceKind, UserId,
 };
 use mineral_persist::ServerStore;
+use mineral_playback::{
+    DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
+};
 use rustc_hash::FxHashSet;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::ApiCodeError;
 
@@ -393,26 +397,6 @@ impl MusicChannel for NeteaseChannel {
         Ok(convert::playlist_info_to_model(&meta, entries))
     }
 
-    /// 播放 URL,**双层降级**(spec §4.3):先打 v1(字符串等级),取到可播 url 即用;
-    /// v1 出错或只回试听片段(映射后为空)再降级 legacy(数字 br)。例外:v1 整批显式
-    /// 报非 200(无版权,实测 404 + url null)时 legacy 同样无资源,不降级、直接空
-    /// ——上层据空列表发 `SongUrlFailed`,拦截口的脚本可跨源补救。
-    async fn song_urls(&self, ids: &[SongId], quality: BitRate) -> Result<Vec<PlayUrl>> {
-        if let Ok(dtos) = api::song::song_url_v1(&self.transport, ids, quality).await {
-            if convert::all_explicitly_unavailable(&dtos) {
-                return Ok(Vec::new());
-            }
-            let urls = convert::play_urls(dtos, quality);
-            if !urls.is_empty() {
-                return Ok(urls);
-            }
-        }
-        let dtos = api::song::song_url_legacy(&self.transport, ids, quality)
-            .await
-            .map_err(map_err)?;
-        Ok(convert::play_urls(dtos, quality))
-    }
-
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {
         api::lyric::lyrics(&self.transport, id)
             .await
@@ -491,8 +475,47 @@ impl MusicChannel for NeteaseChannel {
             .map_err(Error::Other)
     }
 
-    // on_played 打点职责移交 daemon 的 StatsRecorder(见 mineral-server::stats):channel
-    // 不再本地落库,回到 trait 默认空实现(其他源不实现也不丢数据)。
+    // on_played 打点由 daemon 的 StatsRecorder 负责(见 mineral-server::stats):channel
+    // 用 trait 默认空实现(其他源不实现也不丢数据)。
+}
+
+#[async_trait]
+impl PlaybackProvider for NeteaseChannel {
+    fn source(&self) -> SourceKind {
+        SourceKind::NETEASE
+    }
+
+    /// Resolves a Netease song using the v1 endpoint with legacy fallback.
+    async fn resolve(
+        &self,
+        request: PlaybackRequest,
+        cancellation: CancellationToken,
+    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+        if cancellation.is_cancelled() {
+            return Err(eyre!("playback resolve cancelled"));
+        }
+        let ids = [request.song_id().clone()];
+        if let Ok(dtos) = api::song::song_url_v1(&self.transport, &ids, request.quality()).await {
+            if convert::all_explicitly_unavailable(&dtos) {
+                return Err(eyre!("netease song has no playable media"));
+            }
+            if let Some(media) = convert::to_direct_media(dtos, request.quality())
+                .into_iter()
+                .next()
+            {
+                return Ok(DirectPreparedPlayback::boxed(media));
+            }
+        }
+        if cancellation.is_cancelled() {
+            return Err(eyre!("playback resolve cancelled"));
+        }
+        let dtos = api::song::song_url_legacy(&self.transport, &ids, request.quality()).await?;
+        let media = convert::to_direct_media(dtos, request.quality())
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("netease song has no playable media"))?;
+        Ok(DirectPreparedPlayback::boxed(media))
+    }
 }
 
 #[cfg(test)]
@@ -546,7 +569,7 @@ mod tests {
     /// `liked_song_ids` 与 `set_loved` 都返回 [`Error::NotSupported`]。
     ///
     /// 本地 favorited 集与本地写入统一由 server 经 persist 负责(不在 channel 降级),
-    /// 故 channel 未登录时不再读本地 loved_ids(回归:曾在此降级读本地)。
+    /// 故匿名 channel 不读本地 loved_ids。
     #[tokio::test]
     async fn favorite_methods_not_supported_when_anonymous() -> color_eyre::Result<()> {
         let config = NeteaseConfig::builder()

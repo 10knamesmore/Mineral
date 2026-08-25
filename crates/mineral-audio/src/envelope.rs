@@ -14,7 +14,7 @@
 
 use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::Envelope;
 use rodio::Source;
 
@@ -336,7 +336,10 @@ pub fn envelope_from_file(
     path: &std::path::Path,
     params: &EnvelopeParams,
 ) -> color_eyre::Result<Envelope> {
-    let (reader, byte_len) = crate::engine::open_local(path)?;
+    let file = std::fs::File::open(path)
+        .wrap_err_with(|| format!("打开本地音频失败: {}", path.display()))?;
+    let byte_len = file.metadata().ok().map(|metadata| metadata.len());
+    let reader = std::io::BufReader::new(file);
     let decoder = crate::engine::build_decoder(reader, byte_len)?;
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();

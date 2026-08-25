@@ -13,8 +13,8 @@ use crate::{
     Actor, BehaviorEvent, CacheHarvestOutcome, FetchOutcome, FetchTrigger, FinishReason,
     GaplessResult, HookDecision, HookKind, HookStage, LoveOrigin, PauseAction, PlayOrigin,
     PlayRecord, PlaybackOrigin, PrefetchResolution, PrefetchSource, QueueContext, QueueOp,
-    RemoteMirror, SearchOutcome, SearchTargetKind, StatsEvent, StatsStore, SystemEvent, UrlOutcome,
-    query_hash,
+    RemoteMirror, SearchOutcome, SearchTargetKind, StatsEvent, StatsStore, StreamOutcome,
+    SystemEvent, query_hash,
 };
 
 /// 一年窗口毫秒跨度(种子时间戳落在 `[0, YEAR_MS)`,单调铺开)。
@@ -200,7 +200,7 @@ fn behavior(i: i64, event: BehaviorEvent) -> StatsEvent {
 /// 造第 `i` 条交互事件(12 类轮转,横跨行为域 7 表 + 系统域 5 表)。
 ///
 /// 覆盖的表:searches / seeks / pauses / volume_changes / love_changes / queue_ops /
-/// fetches(行为域)+ url_resolutions / hook_fires / prefetches / cache_harvests /
+/// fetches(行为域)+ stream_resolutions / hook_fires / prefetches / cache_harvests /
 /// gapless_boundaries(系统域)。列值全由 `i` 派生,确定性。
 ///
 /// # Params:
@@ -282,10 +282,10 @@ pub fn event(i: i64) -> StatsEvent {
                 latency_ms: 20 + i.rem_euclid(400),
             },
         ),
-        7 => StatsEvent::System(SystemEvent::UrlResolution {
+        7 => StatsEvent::System(SystemEvent::StreamResolution {
             song,
             quality_requested: "lossless".to_owned(),
-            outcome: UrlOutcome::Ok,
+            outcome: StreamOutcome::Ok,
             for_prefetch: i % 3 == 0,
         }),
         8 => StatsEvent::System(SystemEvent::HookFire {

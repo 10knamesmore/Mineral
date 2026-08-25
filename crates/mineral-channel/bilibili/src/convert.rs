@@ -5,8 +5,10 @@
 
 use mineral_model::{
     Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
-    MediaUrl, PlayUrl, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind, StreamLayout,
+    MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
+    StreamLayout,
 };
+use mineral_playback::DirectMedia;
 
 use crate::wire::fav::{FavFolder, FavInfo, FavMedia};
 use crate::wire::playurl::{DashAudio, PlayUrlResult};
@@ -186,7 +188,7 @@ pub(crate) fn view_to_album(info: VideoInfo) -> Album {
         .build()
 }
 
-/// 取流必带的请求头:B站音频 `baseUrl` 播放要 `Referer` **且** 浏览器 `User-Agent`,随 `PlayUrl`
+/// 取流必带的请求头:B站音频 `baseUrl` 播放要 `Referer` **且** 浏览器 `User-Agent`,随 Direct media
 /// 经 IPC 穿透到播放/下载层(见 `stream_headers` 通道)。
 ///
 /// upos CDN 两个头都校验——curl 实测:缺任一(仅 Referer / 仅 UA)都 403,两者齐备才 206。
@@ -200,37 +202,40 @@ fn playback_stream_headers() -> Vec<(String, String)> {
     ]
 }
 
-/// playurl DTO → [`PlayUrl`];无可用音频轨返回 `None`。
+/// playurl DTO → direct remote media;无可用音频轨返回 `None`。
 ///
 /// 选轨:有无损(flac)优先取无损,否则取 `id` 最大的普通音频轨。音质/格式按 `id` + `codecs`
-/// 归一化;url 带上取流 [`playback_stream_headers`]。
+/// 归一化;取流头经 [`playback_stream_headers`] 烤进内建 http 行为。
 ///
 /// # Params:
 ///   - `song_id`: 目标分 P 的 SongId(`{bvid}:{page}`)
 ///   - `result`: playurl 响应的 `data`
 ///
 /// # Return:
-///   可播的 [`PlayUrl`];无音频轨 / url 解析失败为 `None`。
-pub(crate) fn playurl_to_play(song_id: SongId, result: PlayUrlResult) -> Option<PlayUrl> {
+///   可播的执行契约;无音频轨 / url 解析失败为 `None`。
+pub(crate) fn playurl_to_media(song_id: SongId, result: PlayUrlResult) -> Option<DirectMedia> {
     let dash = result.dash?;
     let flac_audio = dash.flac.and_then(|f| f.audio);
     let best = best_audio(flac_audio, dash.audio.unwrap_or_default())?;
     let (quality, format) = classify_audio(best.id, best.codecs.as_deref());
-    let url = MediaUrl::remote(&best.base_url).ok()?;
-    Some(PlayUrl {
+    let url = url::Url::parse(&best.base_url).ok()?;
+    let info = PlaybackMediaInfo {
         song_id,
-        url,
         bitrate_bps: best.bandwidth.and_then(|b| u32::try_from(b).ok()),
         quality,
         // playurl 接口不给文件大小。
         size: None,
         format: Some(format),
         bit_depth: None,
-        stream_headers: playback_stream_headers(),
-        // B站音频是分片 fMP4:告知播放层以流式打开,避免 seekable 全扫导致起播前拉整段。
-        layout: StreamLayout::Chunked,
         substituted: false,
-    })
+    };
+    // B站音频是分片 fMP4:告知播放层以流式打开,避免 seekable 全扫导致起播前拉整段。
+    Some(DirectMedia::remote(
+        info,
+        url,
+        playback_stream_headers(),
+        StreamLayout::Chunked,
+    ))
 }
 
 /// 选最优音频轨:无损轨(若有)优先,否则普通轨里取 `id` 最大(质量最高)。
@@ -337,7 +342,7 @@ fn fav_media_to_song(media: FavMedia) -> Option<Song> {
 /// 收藏夹详情(元信息 + 已解析曲目)→ [`Playlist`]。
 ///
 /// `track_count` 取实际曲目行数而非元信息 `media_count`:多 P 条目展开后一个收藏
-/// 条目对应多首曲目,条目数不再描述曲目数。
+/// 条目对应多首曲目,条目数不等于曲目数。
 ///
 /// # Params:
 ///   - `fid`: 收藏夹 id(响应 `info` 里不带,由调用方从请求透传)
@@ -428,14 +433,14 @@ mod tests {
     use crate::wire::search::SearchVideoItem;
     use crate::wire::view::VideoInfo;
 
-    /// playurl → PlayUrl:取 id 最大的音频轨、映射 Exhigh/AAC、**带上 Referer + UA 取流头**
+    /// playurl → Direct media:取 id 最大的音频轨、映射 Exhigh/AAC、**带上 Referer + UA 取流头**
     /// (B站 baseUrl 播放两者缺一即 403),bitrate 落 bandwidth。
     ///
     /// 回归:真实响应每项**同时**带 `baseUrl` + `base_url`(值同)。DTO 只认 `baseUrl`,
     /// 不给 `base_url` alias,否则 serde 报 `duplicate field baseUrl`、取流失败卡开头。
     #[test]
     fn playurl_maps_best_audio_with_referer() -> color_eyre::Result<()> {
-        use super::playurl_to_play;
+        use super::playurl_to_media;
         use crate::wire::playurl::PlayUrlResult;
 
         let raw = serde_json::json!({
@@ -445,27 +450,32 @@ mod tests {
             ] }
         });
         let dto: PlayUrlResult = from_value(raw)?;
-        let pu = playurl_to_play(SongId::new(SourceKind::BILIBILI, "BV1xx:1"), dto)
-            .ok_or_else(|| color_eyre::eyre::eyre!("应产出 PlayUrl"))?;
+        let media = playurl_to_media(SongId::new(SourceKind::BILIBILI, "BV1xx:1"), dto)
+            .ok_or_else(|| color_eyre::eyre::eyre!("应产出 direct media"))?;
         assert_eq!(
-            pu.url,
+            media.locator().media_url(),
             MediaUrl::remote("https://cdn/192k.m4s")?,
             "取 id 最大轨"
         );
-        assert_eq!(pu.quality, mineral_model::BitRate::Exhigh);
-        assert_eq!(pu.bitrate_bps, Some(320_000));
+        assert_eq!(media.info().quality, mineral_model::BitRate::Exhigh);
+        assert_eq!(media.info().bitrate_bps, Some(320_000));
         assert_eq!(
-            pu.stream_headers,
-            vec![
-                (
-                    "Referer".to_owned(),
-                    crate::transport::headers::REFERER.to_owned()
-                ),
-                (
-                    "User-Agent".to_owned(),
-                    crate::transport::headers::UA.to_owned()
-                ),
-            ],
+            media
+                .locator()
+                .remote()
+                .map(mineral_playback::RemoteLocator::headers),
+            Some(
+                &[
+                    (
+                        "Referer".to_owned(),
+                        crate::transport::headers::REFERER.to_owned()
+                    ),
+                    (
+                        "User-Agent".to_owned(),
+                        crate::transport::headers::UA.to_owned()
+                    ),
+                ][..]
+            ),
             "取流必须同时带 Referer + UA,否则 baseUrl 403(curl 实测:缺任一即 403,两者齐备 206)"
         );
         Ok(())
@@ -474,7 +484,7 @@ mod tests {
     /// flac 轨存在时优先取无损(Lossless/Flac)。
     #[test]
     fn playurl_prefers_flac_when_present() -> color_eyre::Result<()> {
-        use super::playurl_to_play;
+        use super::playurl_to_media;
         use crate::wire::playurl::PlayUrlResult;
 
         let raw = serde_json::json!({
@@ -484,11 +494,14 @@ mod tests {
             }
         });
         let dto: PlayUrlResult = from_value(raw)?;
-        let pu = playurl_to_play(SongId::new(SourceKind::BILIBILI, "BV1xx:1"), dto)
-            .ok_or_else(|| color_eyre::eyre::eyre!("应产出 PlayUrl"))?;
-        assert_eq!(pu.url, MediaUrl::remote("https://cdn/flac.m4s")?);
-        assert_eq!(pu.quality, mineral_model::BitRate::Lossless);
-        assert_eq!(pu.format, Some(mineral_model::AudioFormat::Flac));
+        let media = playurl_to_media(SongId::new(SourceKind::BILIBILI, "BV1xx:1"), dto)
+            .ok_or_else(|| color_eyre::eyre::eyre!("应产出 direct media"))?;
+        assert_eq!(
+            media.locator().media_url(),
+            MediaUrl::remote("https://cdn/flac.m4s")?
+        );
+        assert_eq!(media.info().quality, mineral_model::BitRate::Lossless);
+        assert_eq!(media.info().format, Some(mineral_model::AudioFormat::Flac));
         Ok(())
     }
 
@@ -664,7 +677,7 @@ mod tests {
     }
 
     /// 收藏夹详情 → Playlist:track_count 取实际曲目行数——多 P 条目展开后行数多于
-    /// 收藏条目数,元信息里的 media_count(条目数)不再描述曲目数。
+    /// 收藏条目数,元信息里的 media_count(条目数)不等于曲目数。
     #[test]
     fn fav_list_track_count_follows_expanded_songs() -> color_eyre::Result<()> {
         use mineral_model::{PlaylistId, Song};

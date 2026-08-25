@@ -13,5 +13,5 @@ pub use behavior::{
 pub use stats_event::StatsEvent;
 pub use system::{
     CacheHarvestOutcome, FailOpen, GaplessResult, HookDecision, HookKind, HookStage,
-    PrefetchResolution, PrefetchSource, ScriptEvent, SystemEvent, UrlOutcome,
+    PrefetchResolution, PrefetchSource, ScriptEvent, StreamOutcome, SystemEvent,
 };

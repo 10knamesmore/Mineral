@@ -61,8 +61,8 @@ pub enum SearchOutcome {
 /// 取数种类(fetches.fetch_kind)。
 ///
 /// 与 server 侧取数任务种类同构但独立定义(stats 不依赖 task 层),边界转换在 server;
-/// 落库串与既有 snake_case 词汇一致。搜索 / 取链除各自专表外也在 fetches 记一行收束
-/// (专表富化,fetches 是取数全谱)。
+/// 落库串与既有 snake_case 词汇一致。搜索除专表外也在 fetches 记一行收束
+/// (专表富化,fetches 是 channel 取数全谱)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "snake_case")]
 pub enum FetchKind {
@@ -71,9 +71,6 @@ pub enum FetchKind {
 
     /// 歌单详情。
     PlaylistDetail,
-
-    /// 播放直链。
-    SongUrl,
 
     /// 歌词。
     Lyrics,

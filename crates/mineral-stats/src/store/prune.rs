@@ -31,7 +31,7 @@ pub(crate) const EVENT_TABLES: &[&str] = &[
     "connection_rejects",
     "client_connections",
     "app_lifecycle",
-    "url_resolutions",
+    "stream_resolutions",
     "hook_fires",
     "gapless_boundaries",
     "prefetches",

@@ -20,6 +20,7 @@ mineral-media        = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-persist      = { workspace = true }
+mineral-playback     = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-stats        = { workspace = true }
 mineral-task         = { workspace = true }
@@ -37,8 +38,10 @@ serde         = { workspace = true }
 serde_json    = { workspace = true }
 time          = { workspace = true }
 tokio         = { workspace = true }
+tokio-util    = { workspace = true }
 typed-builder = { workspace = true }
 url           = { workspace = true }
+uuid          = { workspace = true }
 
 [dev-dependencies]
 insta             = { workspace = true }

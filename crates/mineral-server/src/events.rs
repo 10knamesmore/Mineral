@@ -1,11 +1,10 @@
-//! scheduler 任务事件的消化与分流。
+//! Scheduler channel-data event consumption and forwarding.
 //!
-//! 每 tick 一次 drain:`PlayUrlReady` / `LyricsReady` 在 server 内部消化
-//! (进 PlayerSync 的 current 重段,不转发);`PlaylistsFetched` 进歌单库
-//! 聚合态(client 只见出口变换后的 LibrarySnapshot);`PlaylistWriteDone`
-//! 成功时先触发缓存收敛再转发;其余经 event hub 推送给订阅 client。
+//! `LyricsReady` 在 server 内部消化(进 PlayerSync 的 current 重段,不转发);
+//! `PlaylistsFetched` 进歌单库聚合态(client 只见出口变换后的 LibrarySnapshot);
+//! `PlaylistWriteDone` 成功时先触发缓存收敛再转发;其余经 event hub 推送给订阅 client。
 
-use mineral_model::{PlayUrl, Song, SongId};
+use mineral_model::SongId;
 use mineral_task::{ChannelFetchKind, PlaylistWriteOp, Priority, TaskEvent, TaskKind, WriteError};
 
 use crate::player::PlayerCore;
@@ -22,8 +21,8 @@ fn map_write_error(e: &WriteError) -> mineral_stats::PlaylistError {
 }
 
 impl PlayerCore {
-    /// 一次 drain scheduler events,分类:PlayUrlReady/LyricsReady 内部消化、
-    /// PlaylistWriteDone 成功先收敛缓存、全部业务事件 push 到 client_events buffer。
+    /// 一次 drain:把 TaskEvent 分类——LyricsReady 内部消化、PlaylistWriteDone 成功先收敛缓存、
+    /// 其余 push 到 client_events buffer。
     pub(crate) fn consume_events_once(&self) {
         let events = self.inner.scheduler.drain_events();
         if events.is_empty() {
@@ -32,12 +31,6 @@ impl PlayerCore {
         let mut forward = Vec::with_capacity(events.len());
         for ev in events {
             match ev {
-                TaskEvent::PlayUrlReady { song_id, play_url } => {
-                    self.handle_play_url_ready(&song_id, play_url);
-                }
-                TaskEvent::SongUrlFailed { song_id } => {
-                    self.handle_song_url_failed(&song_id);
-                }
                 TaskEvent::LyricsReady { song_id, lyrics } => {
                     self.handle_lyrics_ready(&song_id, lyrics);
                 }
@@ -113,108 +106,6 @@ impl PlayerCore {
         }
     }
 
-    /// PlayUrlReady 命中当前歌 → audio.play + 写 play_url;命中正在预拉的下一首 → gapless 预排;否则丢。
-    pub(crate) fn handle_play_url_ready(&self, song_id: &SongId, play_url: PlayUrl) {
-        // 先在锁内分类(三选一),放锁后再做会重新加锁的动作(play_capturing / gapless 预排)。
-        enum Route {
-            Current(Option<Box<Song>>),
-            Prefetch,
-            Drop,
-        }
-        let route = {
-            let mut st = self.inner.state.lock();
-            let want = st.current_song.as_ref().map(|t| &t.id);
-            if want == Some(song_id) {
-                st.play_url = Some(play_url.clone());
-                st.bump_current();
-                Route::Current(st.current_song.clone().map(Box::new))
-            } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
-                Route::Prefetch
-            } else {
-                Route::Drop
-            }
-        };
-        // 埋点:取链成功(url_resolutions;Drop=队列已变的陈旧结果,意图不明,不记)。
-        match &route {
-            Route::Current(_) => {
-                self.record_url_resolution(song_id, mineral_stats::UrlOutcome::Ok, false);
-                // 富化在播行的音频快照:此 URL 即当前起播曲的(Prefetch 的是下一曲、不改
-                // 当前 pending;Drop 已作废)。
-                self.enrich_from_play_url(&play_url);
-            }
-            Route::Prefetch => {
-                self.record_url_resolution(song_id, mineral_stats::UrlOutcome::Ok, true);
-            }
-            Route::Drop => {}
-        }
-        match route {
-            Route::Current(song) => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "play", "play url ready");
-                if let Some(song) = song {
-                    // 拦截桥:无脚本同步直走,有脚本异步裁决(play_url 已在锁内写过,
-                    // 桥内回填同值幂等;改写时回填改写值)。
-                    crate::hook_bridge::before_stream(self, &song, play_url);
-                }
-            }
-            Route::Prefetch => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch", "play url ready");
-                // 拦截桥(预取提交点):无脚本直走武装,有脚本异步裁决后再武装/否决。
-                crate::hook_bridge::on_prefetch_ready(self, song_id, play_url);
-            }
-            Route::Drop => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "play url ready");
-            }
-        }
-    }
-
-    /// SongUrlFailed 命中当前歌 → 即时口 unplayable 拦截(无脚本维持
-    /// `track_finished("error")` 的原失败语义);命中正在预拉的下一首 → 预取口
-    /// unplayable 拦截(无脚本静默,边界 Fallback 兜底);否则丢。
-    pub(crate) fn handle_song_url_failed(&self, song_id: &SongId) {
-        enum Route {
-            Current(Box<Song>),
-            Prefetch,
-            Drop,
-        }
-        let route = {
-            let st = self.inner.state.lock();
-            let want = st.current_song.as_ref().map(|t| &t.id);
-            if want == Some(song_id) {
-                match st.current_song.clone() {
-                    Some(song) => Route::Current(Box::new(song)),
-                    None => Route::Drop,
-                }
-            } else if st.prefetch_fired_for.as_ref() == Some(song_id) {
-                Route::Prefetch
-            } else {
-                Route::Drop
-            }
-        };
-        // 埋点:取链失败(url_resolutions;Drop=陈旧结果不记)。
-        match &route {
-            Route::Current(_) => {
-                self.record_url_resolution(song_id, mineral_stats::UrlOutcome::Error, false);
-            }
-            Route::Prefetch => {
-                self.record_url_resolution(song_id, mineral_stats::UrlOutcome::Error, true);
-            }
-            Route::Drop => {}
-        }
-        match route {
-            Route::Current(song) => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "unplayable", "song url failed");
-                crate::hook_bridge::on_unplayable_current(self, &song);
-            }
-            Route::Prefetch => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "prefetch_unplayable", "song url failed");
-                crate::hook_bridge::on_unplayable_prefetch(self, song_id);
-            }
-            Route::Drop => {
-                mineral_log::debug!(target: "player", song_id = song_id.as_str(), action = "drop", "song url failed");
-            }
-        }
-    }
-
     /// LyricsReady 命中当前歌 → 写入 current_lyrics + 配对 song_id;否则丢(只缓存当前歌)。
     pub(crate) fn handle_lyrics_ready(&self, song_id: &SongId, lyrics: mineral_model::Lyrics) {
         let mut st = self.inner.state.lock();
@@ -255,7 +146,6 @@ impl PlayerCore {
             mineral_task::ChannelFetchKindTag::PlaylistDetail => {
                 mineral_stats::FetchKind::PlaylistDetail
             }
-            mineral_task::ChannelFetchKindTag::SongUrl => mineral_stats::FetchKind::SongUrl,
             mineral_task::ChannelFetchKindTag::Lyrics => mineral_stats::FetchKind::Lyrics,
             mineral_task::ChannelFetchKindTag::RemotePlayCount => {
                 mineral_stats::FetchKind::RemotePlayCount
@@ -402,20 +292,20 @@ impl PlayerCore {
         });
     }
 
-    /// 记一次取播放链结局(url_resolutions;系统域,无 actor)。
+    /// 记一次取播放链结局(stream_resolutions;系统域,无 actor)。
     ///
     /// # Params:
     ///   - `song`: 取链的歌曲
     ///   - `outcome`: 结局(拿到 / 空 / 报错)
     ///   - `for_prefetch`: 是否为预取取链(非当前起播)
-    fn record_url_resolution(
+    pub(crate) fn record_stream_resolution(
         &self,
         song: &SongId,
-        outcome: mineral_stats::UrlOutcome,
+        outcome: mineral_stats::StreamOutcome,
         for_prefetch: bool,
     ) {
         self.inner.stats.event(mineral_stats::StatsEvent::System(
-            mineral_stats::SystemEvent::UrlResolution {
+            mineral_stats::SystemEvent::StreamResolution {
                 song: song.clone(),
                 quality_requested: self.playback_quality().as_str().to_owned(),
                 outcome,

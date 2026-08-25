@@ -2,9 +2,7 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, BitRate, MediaUrl, Playlist, PlaylistId, SongId, SourceKind,
-};
+use mineral_model::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, ChannelFetchKindTag, CopyTemplateCtx, CurrentSync, DownloadProgress,
     DownloadTarget, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef, QueueSync,
@@ -62,35 +60,13 @@ async fn resp_round_trips(resp: Response) -> color_eyre::Result<()> {
 }
 
 #[tokio::test]
-async fn round_trip_request_play() -> color_eyre::Result<()> {
-    let (a, b) = duplex(64 * 1024);
-    let mut sender = framed(a);
-    let mut receiver = framed(b);
-
-    let url = MediaUrl::remote("https://example.com/song.mp3")?;
-    let req = Request::Play(url.clone());
-    json_round_trips(&req)?;
-    send(&mut sender, &req).await?;
-    let got: Request = recv(&mut receiver)
-        .await?
-        .ok_or_else(|| eyre!("frame missing"))?;
-    if let Request::Play(u) = got {
-        assert_eq!(u, url);
-    } else {
-        return Err(eyre!("unexpected variant: {got:?}"));
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
     let (a, b) = duplex(64 * 1024);
     let mut sender = framed(a);
     let mut receiver = framed(b);
 
-    let kind = TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
+    let kind = TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
         song_id: SongId::new(SourceKind::NETEASE, "12345"),
-        quality: BitRate::Higher,
     });
     let req = Request::SubmitTask(kind.clone(), Priority::User);
     json_round_trips(&req)?;
@@ -114,8 +90,8 @@ async fn round_trip_request_cancel_tasks() -> color_eyre::Result<()> {
     let mut receiver = framed(b);
 
     let filter = CancelFilter::ChannelFetchKinds(vec![
-        ChannelFetchKindTag::SongUrl,
         ChannelFetchKindTag::Lyrics,
+        ChannelFetchKindTag::PlaylistDetail,
     ]);
     let req = Request::CancelTasks(filter.clone());
     json_round_trips(&req)?;
@@ -398,7 +374,8 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
         }),
         current: Some(CurrentSync {
             current_song: Some(song("b")),
-            play_url: None,
+            direct_media: None,
+            media_info: None,
             current_lyrics: None,
             current_lyrics_song_id: None,
             // 包络随 current 段上线:points 字节与算法版本不变形。

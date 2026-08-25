@@ -6,7 +6,7 @@
 //! 每个拦截点各有一个 ctx struct(字段集互不迁就),新增拦截点 = 新 struct +
 //! 新消息变体 + 新发送入口,不动既有类型。
 
-use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song, StreamLayout};
+use mineral_model::{AudioFormat, BitRate, DirectMedia, MediaUrl, Song, StreamLayout};
 
 /// 拦截点类别(注册名 / 回调桶键)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,26 +81,44 @@ pub struct BeforeStreamCtx {
     /// 触发拦截的歌。
     song: Box<Song>,
 
-    /// 宿主解析出的原始播放 URL;`None` = 解析失败(取链失败 / 灰歌),
-    /// 即「unplayable」信号——脚本可改写顶入可播流。
-    original: Option<Box<PlayUrl>>,
+    /// Optional direct access to a playable prepared resource.
+    original: Option<Box<DirectMedia>>,
+
+    /// Whether provider/local resolution produced a playable prepared resource.
+    playable: bool,
 
     /// 提交点口味。
     mode: HookMode,
 }
 
 impl BeforeStreamCtx {
-    /// 打包入参快照。
+    /// Creates a playable hook context with optional direct media.
     ///
     /// # Params:
     ///   - `song`: 触发歌
     ///   - `mode`: 提交点口味
-    ///   - `original`: 原始 URL;`None` = 无可播 URL(unplayable)
+    ///   - `original`: Optional direct media; absence does not make the resource unplayable.
     #[must_use]
-    pub fn new(song: Song, mode: HookMode, original: Option<PlayUrl>) -> Self {
+    pub fn playable(song: Song, mode: HookMode, original: Option<DirectMedia>) -> Self {
         Self {
             song: Box::new(song),
             original: original.map(Box::new),
+            playable: true,
+            mode,
+        }
+    }
+
+    /// Creates an explicitly unplayable hook context.
+    ///
+    /// # Params:
+    ///   - `song`: Triggering song.
+    ///   - `mode`: Immediate or prefetch commit point.
+    #[must_use]
+    pub fn unavailable(song: Song, mode: HookMode) -> Self {
+        Self {
+            song: Box::new(song),
+            original: None,
+            playable: false,
             mode,
         }
     }
@@ -111,9 +129,9 @@ impl BeforeStreamCtx {
         &self.song
     }
 
-    /// 原始 URL / 音质(只读);`None` = 无可播 URL。
+    /// Returns optional direct media; `None` may still represent a playable plan.
     #[must_use]
-    pub fn original(&self) -> Option<&PlayUrl> {
+    pub fn original(&self) -> Option<&DirectMedia> {
         self.original.as_deref()
     }
 
@@ -123,10 +141,10 @@ impl BeforeStreamCtx {
         self.mode
     }
 
-    /// 是否「无可播 URL」(取链失败 / 灰歌)——`original` 缺席的便利投影。
+    /// Returns whether resource resolution failed to produce a playable plan.
     #[must_use]
     pub fn unplayable(&self) -> bool {
-        self.original.is_none()
+        !self.playable
     }
 }
 
@@ -137,21 +155,38 @@ pub struct BeforeDownloadCtx {
     /// 待下载的歌。
     song: Box<Song>,
 
-    /// 取到的下载直链;`None` = 宿主没解析出直链。
-    original: Option<Box<PlayUrl>>,
+    /// Optional direct access exposed by the prepared download.
+    original: Option<Box<DirectMedia>>,
+
+    /// Whether provider resolution produced a playable prepared resource.
+    playable: bool,
 }
 
 impl BeforeDownloadCtx {
-    /// 打包入参快照。
+    /// Creates a playable download context with optional direct media.
     ///
     /// # Params:
     ///   - `song`: 待下载歌
-    ///   - `original`: 下载直链;`None` = 无直链
+    ///   - `original`: Optional direct media; absence does not make the resource unplayable.
     #[must_use]
-    pub fn new(song: Song, original: Option<PlayUrl>) -> Self {
+    pub fn playable(song: Song, original: Option<DirectMedia>) -> Self {
         Self {
             song: Box::new(song),
             original: original.map(Box::new),
+            playable: true,
+        }
+    }
+
+    /// Creates an explicitly unplayable download context.
+    ///
+    /// # Params:
+    ///   - `song`: Download target.
+    #[must_use]
+    pub fn unavailable(song: Song) -> Self {
+        Self {
+            song: Box::new(song),
+            original: None,
+            playable: false,
         }
     }
 
@@ -161,16 +196,16 @@ impl BeforeDownloadCtx {
         &self.song
     }
 
-    /// 下载直链 / 音质(只读);`None` = 无直链。
+    /// Returns optional direct media; `None` may still represent an exportable plan.
     #[must_use]
-    pub fn original(&self) -> Option<&PlayUrl> {
+    pub fn original(&self) -> Option<&DirectMedia> {
         self.original.as_deref()
     }
 
-    /// 是否无直链——`original` 缺席的便利投影。
+    /// Returns whether resource resolution failed to produce a playable plan.
     #[must_use]
     pub fn unplayable(&self) -> bool {
-        self.original.is_none()
+        !self.playable
     }
 }
 

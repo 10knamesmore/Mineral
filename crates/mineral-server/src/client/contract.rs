@@ -2,7 +2,7 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
     CancelFilter, DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp,
@@ -15,9 +15,6 @@ use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
 /// 内部 I/O,但调用方期望 < 1ms。出错时返回值类用「合理默认值」兜底。
 pub trait Client: Send + Sync {
     // ---- 低级播放控制(给 SetVolume / Pause / Resume / Seek 等无业务语义的) ----
-    /// 切到这个 URL,从头播。**通常 client 不应直调** —— 用 [`Self::play_song`] 让
-    /// server 跑完整流程;此方法是低级入口,主要给 `mineral status` 等 debug client 用。
-    fn play(&self, url: MediaUrl);
     /// 暂停。
     fn pause(&self);
     /// 从暂停恢复。
@@ -32,8 +29,7 @@ pub trait Client: Send + Sync {
     fn audio_snapshot(&self) -> AudioSnapshot;
 
     // ---- Player 业务 ----
-    /// Client 选了一首歌。Server 跑完整 play 流程(stop + cancel + 命中 prefetch /
-    /// submit SongUrl + submit Lyrics)。
+    /// Selects one song as current playback.
     fn play_song(&self, song: Song);
 
     /// 原子替换 queue 并起播 request-local target occurrence。

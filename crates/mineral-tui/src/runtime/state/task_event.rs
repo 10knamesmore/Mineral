@@ -14,7 +14,7 @@ impl AppState {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
                 // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
-                // 变换后),client 不再自行按源拼接。
+                // 变换后),client 不自行按源拼接。
                 self.library.playlists = playlists
                     .iter()
                     .cloned()
@@ -63,9 +63,7 @@ impl AppState {
                 }
             }
             // server 已 filter,理论不会到 client。defensive:跳过。
-            TaskEvent::PlayUrlReady { .. }
-            | TaskEvent::SongUrlFailed { .. }
-            | TaskEvent::LyricsReady { .. } => {}
+            TaskEvent::LyricsReady { .. } => {}
             TaskEvent::SearchResults {
                 source,
                 kind,

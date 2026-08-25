@@ -120,7 +120,6 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     for (tag, label) in [
         (ChannelFetchKindTag::MyPlaylists, "pl"),
         (ChannelFetchKindTag::PlaylistDetail, "tr"),
-        (ChannelFetchKindTag::SongUrl, "song"),
         (ChannelFetchKindTag::Lyrics, "lyr"),
     ] {
         let n = by.get(&tag).copied().unwrap_or(0);

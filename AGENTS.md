@@ -1,8 +1,12 @@
 ## 仓库总览
 
-Mineral 是一个多源终端音乐播放器(ratatui),目前已落地"模型 + 网易云 channel + TUI 雏形",目标是把本地音乐与多个云源合并为一组统一的 `Vec<Song>` 供 UI 消费。
+Mineral 是一个多源终端音乐播放器(ratatui), 整个仓库是单一 cargo workspace
 
-整个仓库是单一 cargo workspace(根目录 `Cargo.toml`),成员通过 glob 声明:
+目前只有我一个人开发
+
+只要这句话还存在, mineral就属于pre release 迭代期间, **禁止考虑任何持久化兼容**, 允许破坏更新, 一切设计不应该被`向后兼容`捆住手脚
+
+埋点sql走 migration(我个人使用使用希望), 其他的不管是sql/json文件/路径契约都是可以重建的, 如果有充足的理由证明破坏更新后是更好的设计, 直接做, 本地文件可以rm
 
 ## 常用命令
 

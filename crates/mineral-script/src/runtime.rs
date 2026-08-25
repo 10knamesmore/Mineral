@@ -703,10 +703,10 @@ mod tests {
         Ok(())
     }
 
-    /// library.song_url:发 LibrarySongUrl 命令,回投的 PlayUrl 投影字段
+    /// library.song_url:发 LibrarySongUrl 命令,回投 direct media 的 Lua 字段
     /// (url/quality/headers/layout)与 hook 改写返回值同形。
     #[test]
-    fn library_song_url_resolves_play_url_projection() -> color_eyre::Result<()> {
+    fn library_song_url_resolves_direct_media_projection() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
         let (runtime, sender, mut cmd_rx, mut push_rx) = spawn_with_cmds(
             r#"
@@ -721,19 +721,21 @@ mod tests {
             color_eyre::eyre::bail!("期望 LibrarySongUrl,实得 {cmd:?}");
         };
         assert_eq!(song.qualified(), "bilibili:BV1xx:1");
-        let play_url = mineral_model::PlayUrl {
-            song_id: song,
-            url: "https://cdn.example/a.m4s".parse::<mineral_model::MediaUrl>()?,
-            bitrate_bps: Some(192_000),
-            quality: mineral_model::BitRate::Exhigh,
-            size: None,
-            format: Some(mineral_model::AudioFormat::Aac),
-            bit_depth: None,
-            stream_headers: vec![("Referer".to_owned(), "https://www.bilibili.com/".to_owned())],
-            layout: mineral_model::StreamLayout::Chunked,
-            substituted: false,
-        };
-        sender.resolve(query, ResolveValue::PlayUrl(Box::new(play_url)));
+        let direct = mineral_model::DirectMedia::remote(
+            mineral_model::PlaybackMediaInfo {
+                song_id: song,
+                bitrate_bps: Some(192_000),
+                quality: mineral_model::BitRate::Exhigh,
+                size: None,
+                format: Some(mineral_model::AudioFormat::Aac),
+                bit_depth: None,
+                substituted: false,
+            },
+            "https://cdn.example/a.m4s".parse()?,
+            vec![("Referer".to_owned(), "https://www.bilibili.com/".to_owned())],
+            mineral_model::StreamLayout::Chunked,
+        );
+        sender.resolve(query, ResolveValue::DirectMedia(Box::new(direct)));
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
@@ -745,7 +747,7 @@ mod tests {
                 id: None,
                 ttl_secs: None,
             }],
-            "PlayUrl 投影字段应与 hook 改写返回值同形"
+            "direct media 投影字段应与 hook 改写返回值同形"
         );
         Ok(())
     }
@@ -1133,39 +1135,39 @@ mod tests {
     }
 
     /// 拦截测试用的取流直链(固定歌 + 远端 URL)。
-    fn hook_play_url() -> color_eyre::Result<mineral_model::PlayUrl> {
+    fn hook_direct_media() -> color_eyre::Result<mineral_model::DirectMedia> {
         use color_eyre::eyre::WrapErr;
         let target = song("1");
-        Ok(mineral_model::PlayUrl {
-            song_id: target.id.clone(),
-            url: "https://example.com/a.flac"
-                .parse::<mineral_model::MediaUrl>()
-                .wrap_err("parse url")?,
-            bitrate_bps: None,
-            quality: mineral_model::BitRate::Exhigh,
-            size: None,
-            format: Some(mineral_model::AudioFormat::Flac),
-            bit_depth: None,
-            stream_headers: Vec::new(),
-            layout: mineral_model::StreamLayout::Contiguous,
-            substituted: false,
-        })
+        Ok(mineral_model::DirectMedia::remote(
+            mineral_model::PlaybackMediaInfo {
+                song_id: target.id.clone(),
+                bitrate_bps: None,
+                quality: mineral_model::BitRate::Exhigh,
+                size: None,
+                format: Some(mineral_model::AudioFormat::Flac),
+                bit_depth: None,
+                substituted: false,
+            },
+            "https://example.com/a.flac".parse().wrap_err("parse url")?,
+            Vec::new(),
+            mineral_model::StreamLayout::Contiguous,
+        ))
     }
 
     /// `before_stream` 拦截测试用的入参快照。
     fn hook_ctx() -> color_eyre::Result<crate::hooks::BeforeStreamCtx> {
-        Ok(crate::hooks::BeforeStreamCtx::new(
+        Ok(crate::hooks::BeforeStreamCtx::playable(
             song("1"),
             crate::hooks::HookMode::Immediate,
-            Some(hook_play_url()?),
+            Some(hook_direct_media()?),
         ))
     }
 
     /// `before_download` 拦截测试用的入参快照。
     fn download_ctx() -> color_eyre::Result<crate::hooks::BeforeDownloadCtx> {
-        Ok(crate::hooks::BeforeDownloadCtx::new(
+        Ok(crate::hooks::BeforeDownloadCtx::playable(
             song("1"),
-            Some(hook_play_url()?),
+            Some(hook_direct_media()?),
         ))
     }
 
@@ -1389,7 +1391,7 @@ mod tests {
             end)
             "#,
         )?;
-        let ctx = BeforeStreamCtx::new(song("1"), HookMode::Prefetch, /*original*/ None);
+        let ctx = BeforeStreamCtx::unavailable(song("1"), HookMode::Prefetch);
         let decision = sender
             .intercept_stream(ctx, std::time::Duration::from_secs(5))
             .await;

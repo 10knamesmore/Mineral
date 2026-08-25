@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_model::{MediaUrl, StreamLayout};
+use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Split};
 use ringbuf::{HeapCons, HeapRb};
@@ -147,85 +147,53 @@ impl AudioHandle {
         Ok((handle, tap))
     }
 
-    /// 切到这个 URL,从头播。已有曲目会被立刻打断。
+    /// Plays already-opened decoder-ready media from the beginning.
     ///
     /// # Params:
-    ///   - `url`: 播放源
-    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
-    ///   - `layout`: 流的容器布局(分片远端流以流式打开,避免起播预扫全片)
-    pub fn play(&self, url: MediaUrl, headers: Vec<(String, String)>, layout: StreamLayout) {
+    ///   - `media`: Already-opened decoder-ready media.
+    pub fn play(&self, media: OpenedMedia) {
         self.send(AudioCommand::Play {
-            url,
-            headers,
+            media,
             capture: None,
-            layout,
         });
     }
 
-    /// 同 [`Self::play`],但把下载的字节捕获到 `capture` 路径(供播完后入缓存)。
-    ///
-    /// 仅对 `Remote` 有意义;`Local` 时 `capture` 被忽略。
+    /// Plays opened media while persisting the encoded bytes read by the decoder.
     ///
     /// # Params:
-    ///   - `url`: 播放源
-    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
+    ///   - `media`: Already-opened decoder-ready media.
     ///   - `capture`: 捕获落盘路径
-    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
-    pub fn play_capturing(
-        &self,
-        url: MediaUrl,
-        headers: Vec<(String, String)>,
-        capture: std::path::PathBuf,
-        layout: StreamLayout,
-    ) {
+    pub fn play_capturing(&self, media: OpenedMedia, capture: std::path::PathBuf) {
         self.send(AudioCommand::Play {
-            url,
-            headers,
+            media,
             capture: Some(capture),
-            layout,
         });
     }
 
-    /// 预排下一曲(无 capture),供当前曲播完后无缝接续。
-    ///
-    /// 仅 `Remote` 走链下建流;不打断当前播放。缓冲不及时可用 [`Self::clear_next`] 撤销。
+    /// Appends opened media for gapless continuation without interrupting current playback.
     ///
     /// # Params:
-    ///   - `url`: 下一曲播放源
-    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
-    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
-    pub fn append_next(&self, url: MediaUrl, headers: Vec<(String, String)>, layout: StreamLayout) {
+    ///   - `media`: Already-opened decoder-ready next media.
+    pub fn append_next(&self, media: OpenedMedia) {
         self.send(AudioCommand::AppendNext {
-            url,
-            headers,
+            media,
             capture: None,
-            layout,
         });
     }
 
-    /// 同 [`Self::append_next`],但把下载字节捕获到 `capture` 路径(供播完入缓存)。
+    /// Appends opened media and persists the encoded bytes consumed by its decoder.
     ///
     /// # Params:
-    ///   - `url`: 下一曲播放源(仅 `Remote` 时 capture 生效)
-    ///   - `headers`: 取流附加请求头(如 B站 baseUrl 需 `Referer`);空 = 无附加头
+    ///   - `media`: Already-opened decoder-ready next media.
     ///   - `capture`: 捕获落盘路径
-    ///   - `layout`: 流的容器布局(分片远端流以流式打开)
-    pub fn append_next_capturing(
-        &self,
-        url: MediaUrl,
-        headers: Vec<(String, String)>,
-        capture: std::path::PathBuf,
-        layout: StreamLayout,
-    ) {
+    pub fn append_next_capturing(&self, media: OpenedMedia, capture: std::path::PathBuf) {
         self.send(AudioCommand::AppendNext {
-            url,
-            headers,
+            media,
             capture: Some(capture),
-            layout,
         });
     }
 
-    /// 撤销尚未 append 的待建下一曲(已 append 则无效)。
+    /// Cancels and disarms the decoder appended for gapless playback.
     pub fn clear_next(&self) {
         self.send(AudioCommand::ClearNext);
     }
@@ -273,14 +241,37 @@ impl AudioHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
     use std::time::Duration;
 
-    use mineral_model::{MediaUrl, StreamLayout};
+    use mineral_model::{BitRate, PlaybackMediaInfo, SongId, SourceKind};
+    use mineral_playback::{OpenedMedia, SeekSupport};
+    use tokio_util::sync::CancellationToken;
 
     use crate::handle::AudioMode;
     use crate::snapshot::AudioBackend;
 
     use super::{AudioHandle, EngineParams};
+
+    /// Creates deterministic already-opened media for null-mode command tests.
+    fn test_media() -> OpenedMedia {
+        OpenedMedia::new(
+            Box::new(Cursor::new(Vec::<u8>::new())),
+            SeekSupport::RandomAccess,
+            Some(0),
+            PlaybackMediaInfo {
+                song_id: SongId::new(SourceKind::NETEASE, "t"),
+                bitrate_bps: None,
+                quality: BitRate::Exhigh,
+                size: None,
+                format: None,
+                bit_depth: None,
+                substituted: false,
+            },
+            None,
+            CancellationToken::new(),
+        )
+    }
 
     /// 测试基线参数(任意合理值;生产默认的唯一真相源是 mineral-config 的 default.lua)。
     fn params(initial_volume: u8) -> EngineParams {
@@ -321,11 +312,7 @@ mod tests {
         handle.pause();
         handle.resume();
         // gapless 预排命令也得被接受、不 panic(null 模式静默丢弃)。
-        handle.append_next(
-            MediaUrl::remote("https://example.com/next.mp3")?,
-            Vec::new(),
-            StreamLayout::Contiguous,
-        );
+        handle.append_next(test_media());
         handle.clear_next();
         handle.stop();
         assert_eq!(

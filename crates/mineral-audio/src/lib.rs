@@ -4,12 +4,11 @@
 //! 转给 worker。snapshot 用 `Arc<Mutex<_>>` 共享给 UI 周期 polling。
 
 mod bps;
+mod capture;
 mod command;
 mod engine;
 mod envelope;
-mod file_storage;
 mod handle;
-mod policy;
 mod queue_slots;
 mod snapshot;
 mod tap;

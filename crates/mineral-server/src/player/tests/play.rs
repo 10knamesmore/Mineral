@@ -13,7 +13,6 @@ async fn play_records_to_stats_db() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -48,7 +47,7 @@ async fn play_records_to_stats_db() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// §4 per-song 覆盖:队列级 context 是 Playlist,插队一首带 Manual 覆盖的散曲;播放该散曲
+/// per-song 覆盖:队列级 context 是 Playlist,插队一首带 Manual 覆盖的散曲;播放该散曲
 /// 的行记 manual、播放队列曲的行记 playlist —— 插队曲不污染歌单归属。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Result<()> {
@@ -58,7 +57,6 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -134,7 +132,6 @@ async fn direct_play_settles_interrupted_song() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -219,27 +216,32 @@ async fn context_override_consumed_once_and_cleared_on_replace_queue() -> color_
     Ok(())
 }
 
-/// SongUrl 取链失败 → `SongUrlFailed` 事件 → unplayable 口(无脚本)推
-/// `TrackFinished{reason: Error}`(RecordingChannel 的 `song_urls` 恒 `Err`)。
-/// 事件由 tick 的 drain 消化,测试里手动泵 `consume_events_once`。
+/// Provider resolve failure enters the unplayable path and emits TrackFinished(Error).
 #[tokio::test(flavor = "multi_thread")]
-async fn play_song_url_failure_notifies_error() -> color_eyre::Result<()> {
+async fn play_stream_resolve_failure_notifies_error() -> color_eyre::Result<()> {
     use mineral_protocol::{Event, FinishReason};
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls,
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
-    let core = core_with_events(
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ true,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
         channels,
+        playback,
         ServerStore::disabled(),
         /*music_dir*/ None,
         MediaCache::disabled(),
         events_tx,
         /*script*/ None,
+        crate::StatsRecorder::disabled(),
     )?;
     let target = song("e1");
     core.play_song(
@@ -249,7 +251,6 @@ async fn play_song_url_failure_notifies_error() -> color_eyre::Result<()> {
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        core.consume_events_once();
         match events_rx.try_recv() {
             Ok(Event::TrackFinished { song_id, reason }) => {
                 assert_eq!(song_id, target.id);
@@ -267,36 +268,44 @@ async fn play_song_url_failure_notifies_error() -> color_eyre::Result<()> {
     }
 }
 
-/// 取链失败但用户已切走(失败的不是当前曲)→ 不报 Error(防迟到误报)。
+/// A delayed provider failure cannot notify for an instance cancelled by a later play intent.
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_url_failure_does_not_notify() -> color_eyre::Result<()> {
     use mineral_protocol::Event;
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
-    // 失败前人为延迟:保证「切走」必然发生在任务失败之前,时序确定不 flaky。
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls,
-        url_delay: Some(Duration::from_millis(200)),
         liked_ids: None,
         playlists: None,
     })];
-    let core = core_with_events(
+    let playback = test_playback_registry(
+        &channels,
+        Duration::from_millis(200),
+        /*fail*/ true,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
         channels,
+        playback,
         ServerStore::disabled(),
         /*music_dir*/ None,
         MediaCache::disabled(),
         events_tx,
         /*script*/ None,
+        crate::StatsRecorder::disabled(),
     )?;
     core.play_song(
         &song("e1"),
         mineral_stats::PlayOrigin::Explicit,
         mineral_stats::Actor::User,
     );
-    // 立即切走:当前曲不再是 e1,e1 的失败(SongUrlFailed 分流落 Drop)不该报。
-    core.with_state(|st| st.current_song = Some(song("e2")));
+    core.play_song(
+        &song("e2"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
     tokio::time::sleep(Duration::from_millis(500)).await;
-    core.consume_events_once();
     while let Ok(event) = events_rx.try_recv() {
         assert!(
             !matches!(event, Event::TrackFinished { ref song_id, .. } if song_id == &song("e1").id),
@@ -306,8 +315,7 @@ async fn stale_url_failure_does_not_notify() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 取链失败经 handle_song_url_failed 落一条 url_resolutions(Error);真 recorder 写库,
-/// 证 events.rs 接线产数据(非仅编译)。
+/// Provider resolve failure records stream_resolutions(Error).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -316,12 +324,18 @@ async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
-    let core = core_with_events_stats(
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ true,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
         channels,
+        playback,
         ServerStore::disabled(),
         /*music_dir*/ None,
         MediaCache::disabled(),
@@ -333,15 +347,14 @@ async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
         &song("e1"),
         mineral_stats::PlayOrigin::Explicit,
         mineral_stats::Actor::User,
-    ); // song_urls 恒 Err → SongUrlFailed
+    );
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        core.consume_events_once();
         if store.status().await?.events >= 1 {
             break;
         }
         if std::time::Instant::now() > deadline {
-            color_eyre::eyre::bail!("超时:url_resolutions 未落库");
+            color_eyre::eyre::bail!("超时:stream_resolutions 未落库");
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -360,7 +373,6 @@ async fn lyrics_fetch_records_to_stats_db() -> color_eyre::Result<()> {
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -403,12 +415,25 @@ async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
         st.queue = vec![song("a"), song("b")];
         st.cursor = mineral_protocol::PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
-        st.queued = Some(crate::gapless::Queued {
-            song: song("b"),
-            play_url: None,
-            origin: PlaybackOrigin::Remote,
-            capturing: None,
-        });
+        let slot = crate::playback_instance::PlaybackSlot::new(song("b").id);
+        st.prefetch.arm(
+            slot,
+            crate::gapless::Queued {
+                song: song("b"),
+                media_info: PlaybackMediaInfo {
+                    song_id: song("b").id,
+                    bitrate_bps: None,
+                    quality: BitRate::Higher,
+                    size: None,
+                    format: None,
+                    bit_depth: None,
+                    substituted: false,
+                },
+                direct_media: None,
+                origin: PlaybackOrigin::Remote,
+                capturing: None,
+            },
+        );
     }
     core.play_song(
         &song("a"),
@@ -416,7 +441,7 @@ async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
         mineral_stats::Actor::User,
     );
     assert!(
-        core.inner.state.lock().queued.is_none(),
+        !core.inner.state.lock().prefetch.is_armed(),
         "手动切歌应清掉过期预排"
     );
     Ok(())
@@ -433,10 +458,71 @@ async fn play_song_without_local_marks_remote() -> color_eyre::Result<()> {
         mineral_stats::PlayOrigin::Explicit,
         mineral_stats::Actor::User,
     );
+    let opened = wait_until(|| {
+        core.sync(PlayerVersions::default()).play_origin == Some(PlaybackOrigin::Remote)
+    })
+    .await;
+    assert!(opened, "remote prepared playback should become current");
     assert_eq!(
         core.sync(PlayerVersions::default()).play_origin,
         Some(PlaybackOrigin::Remote),
         "无本地副本应标记为远端"
+    );
+    Ok(())
+}
+
+/// A Mineral-owned local hit bypasses an unavailable source provider and preserves Source identity.
+#[tokio::test]
+async fn local_hit_bypasses_failing_provider() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let music_dir = dir.path().join("music");
+    let target = song_with_album("local-hit", "Local hit", "Album");
+    let (subdir, file_name) = crate::media_cache::library_relpath(
+        &target,
+        BitRate::Lossless,
+        Some(&mineral_model::AudioFormat::Flac),
+    );
+    let path = music_dir.join(subdir).join(file_name);
+    let parent = path
+        .parent()
+        .ok_or_else(|| color_eyre::eyre::eyre!("local test path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    std::fs::write(&path, b"prepared-local")?;
+
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel::default())];
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ true,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
+        channels,
+        playback,
+        ServerStore::disabled(),
+        Some(music_dir),
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        crate::StatsRecorder::disabled(),
+    )?;
+    core.play_song(
+        &target,
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
+    let opened = wait_until(|| {
+        core.with_state(|state| {
+            state.direct_media.as_ref().is_some_and(|media| {
+                media.locator().local_path() == Some(path.as_path())
+                    && media.info().song_id.namespace() == SourceKind::NETEASE
+            })
+        })
+    })
+    .await;
+    assert!(
+        opened,
+        "local hit should open without consulting the failing provider"
     );
     Ok(())
 }
@@ -472,13 +558,12 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
 
     // 1. 真下载到 music_dir(走进程内 HTTP server)。
     let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
-    let dl_channel = UrlChannel { url };
-    let http = reqwest::Client::new();
+    let provider: Arc<dyn PlaybackProvider> = Arc::new(UrlChannel { url });
+    let playback = PlaybackRegistry::new(vec![provider])?;
     let progress = Arc::new(Mutex::new(DownloadProgress::default()));
     download_song(
-        &dl_channel,
+        &playback,
         &crate::download::DownloadEnv {
-            http: &http,
             music_dir: &music_dir,
             hooks: &crate::hook_bridge::HookGate::disabled(),
         },
@@ -493,7 +578,6 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls,
-        url_delay: None,
         liked_ids: None,
         playlists: None,
     })];
@@ -504,6 +588,20 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         mineral_stats::Actor::User,
     );
 
+    let opened = wait_until(|| {
+        let sync = core.sync(PlayerVersions::default());
+        sync.play_origin == Some(PlaybackOrigin::Download)
+            && sync.current.is_some_and(|current| {
+                current
+                    .media_info
+                    .is_some_and(|info| info.quality == BitRate::Lossless)
+            })
+    })
+    .await;
+    assert!(
+        opened,
+        "download-library media should open before snapshot assertion"
+    );
     // 3. 应解析到刚下载的 lossless。
     let sync = core.sync(PlayerVersions::default());
     assert_eq!(
@@ -511,11 +609,15 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         Some(PlaybackOrigin::Download),
         "下载的歌应从下载库播放,而非缓存 / 网络"
     );
-    let pu = sync
+    let direct = sync
         .current
         .ok_or_else(|| color_eyre::eyre::eyre!("known=0 应返回 current 重段"))?
-        .play_url
-        .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应填 play_url"))?;
-    assert_eq!(pu.quality, BitRate::Lossless, "命中音质应为 lossless");
+        .direct_media
+        .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应提供 direct media"))?;
+    assert_eq!(
+        direct.info().quality,
+        BitRate::Lossless,
+        "命中音质应为 lossless"
+    );
     Ok(())
 }

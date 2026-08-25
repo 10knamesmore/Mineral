@@ -1,121 +1,74 @@
-//! 引擎线程主体:owns cpal output stream + rodio Player + 内嵌 tokio runtime。
-//!
-//! 命令通道处理 play/append_next/clear_next/pause/resume/stop/set_volume(语义不可合并)。
-//! seek 单独走 [`crate::handle::AudioHandle`] → mailbox(latest-wins),engine 每个 tick
-//! `take()` 一次实际打 demuxer ——抗住长按 ←/→ 的 30Hz key-repeat。
-//!
-//! gapless:除「当前曲」外可多排一首「下一曲」decoder 进 rodio 队列([`crate::queue_slots`]
-//! 的 [`PlayHead`] 记账),当前曲自然耗尽时 rodio 零静音接续。预排远端曲的建流 / 预缓冲在
-//! runtime 上**链下**进行,就绪后经通道交回引擎线程 build decoder + `append`,不阻塞命令线程。
+//! Audio engine thread consuming already-opened encoded media.
 
 mod output;
 
-use std::io::{BufReader, Read, Seek};
-use std::path::PathBuf;
+use std::io::{Read, Seek};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_model::{MediaUrl, StreamLayout};
+use mineral_playback::{MediaReader, OpenedMedia, SeekSupport};
 use parking_lot::Mutex;
 use rodio::Source;
 use rodio::decoder::DecoderBuilder;
-use stream_download::Settings;
-use stream_download::StreamDownload;
-use stream_download::StreamPhase;
-use stream_download::StreamState;
-use stream_download::http::HttpStream;
-use stream_download::http::reqwest::Client;
-use stream_download::source::SourceStream;
-use stream_download::storage::StorageProvider;
-use stream_download::storage::temp::TempStorageProvider;
+use rodio::source::SeekError;
+use tokio_util::sync::CancellationToken;
 
-use crate::bps::Bps;
+use crate::capture::{CaptureReader, CaptureState};
 use crate::command::AudioCommand;
 use crate::engine::output::Output;
-use crate::file_storage::FileStorageProvider;
 use crate::handle::{AudioMode, EngineParams};
-use crate::policy::{download_reached_full, effective_byte_len};
-use crate::queue_slots::{Boundary, PlayHead, SharedProgress, Slot};
+use crate::queue_slots::{Boundary, PlayHead, Slot};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
 
-/// 把 0..=100 的 pct 映射成 rodio 的线性 gain(0.0..=1.0),走 cubic 感知曲线。
-///
-/// 人耳响度感大致是 PCM 增益的立方根关系 —— 线性 50% gain 听上去 ≈ "85% 响"。
-/// 用 `gain = (pct/100)^3` 反转:UI 显示 50% 时听上去也大约半响,音量条手感才"自然"。
-/// Spotify / VLC / Audacious 都用这条。
-fn pct_to_gain(pct: u8) -> f32 {
-    let p = f32::from(pct.min(100)) / 100.0;
-    p * p * p
+/// Maps a UI volume percentage onto perceptual cubic gain.
+fn pct_to_gain(percent: u8) -> f32 {
+    let ratio = f32::from(percent.min(100)) / 100.0;
+    ratio * ratio * ratio
 }
 
-/// `Read + Seek + Send + Sync` 的对象安全别名:把不同 `StorageProvider` 的 reader
-/// (远端流 / 本地文件)装箱成同一类型,链下建好的下一曲 reader 经统一通道交回引擎线程。
-///
-/// `Box<dyn ReadSeek>` 经 std 的 `impl<R: Read+?Sized> Read for Box<R>`(Seek 同理)自动
-/// 获得 Read/Seek(`dyn ReadSeek` 含超 trait),无需手写转发 impl。
-pub(crate) trait ReadSeek: Read + Seek + Send + Sync {}
-impl<T: Read + Seek + Send + Sync> ReadSeek for T {}
-
-/// 链下建好的下一曲:reader 已就绪(预缓冲完成),交回引擎线程 build decoder + append。
-struct NextBuilt {
-    /// 已就绪的装箱 reader(远端 StreamDownload / 本地 BufReader)。
-    reader: Box<dyn ReadSeek>,
-
-    /// 已知字节长度(供 decoder seekable;`None` 仅能向前 seek)。
-    byte_len: Option<u64>,
-
-    /// 本次预排的流代号(与 `pending_next_gen` 比对,挡掉 ClearNext / 被新预排取代的迟到结果)。
-    stream_gen: u64,
-
-    /// 本曲占用的进度槽下标(0/1)。
-    progress_idx: usize,
-
-    /// 本地源:无网络下载,append 后直接把缓冲置满。
-    local_full: bool,
-}
-
-/// handle ↔ engine 的共享接线:snapshot / seek mailbox / ready 上报 / PCM tap。
-/// 收成一个结构体跨线程整体移交,避免引擎入口参数爆炸。
+/// Shared handles transferred into the dedicated audio thread.
 pub(crate) struct EngineIo {
-    /// engine 周期性写入、UI tick 读取的最新播放状态。
+    /// Latest audio snapshot.
     pub(crate) snapshot: Arc<Mutex<AudioSnapshot>>,
 
-    /// 与 handle 共享的 latest-wins seek 目标位置。
+    /// Latest-wins seek mailbox.
     pub(crate) seek_mailbox: Arc<Mutex<Option<Duration>>>,
 
-    /// 引擎完成 sink/runtime 初始化后立刻汇报,UI 才返回 handle。
+    /// Engine startup result channel.
     pub(crate) ready_tx: mpsc::SyncSender<color_eyre::Result<()>>,
 
-    /// PCM tap 共享写端。
+    /// PCM spectrum tap producer.
     pub(crate) tap_producer: SharedProd,
 
-    /// 当前出声曲目的采样率原子(UI spectrum 读)。
+    /// Current sample rate shared with the spectrum consumer.
     pub(crate) sr_atomic: Arc<AtomicU32>,
 }
 
-/// 引擎线程入口。
+/// Runs the audio engine until every command sender is dropped.
+///
+/// # Params:
+///   - `commands`: Audio command receiver.
+///   - `io`: Shared snapshot, startup, seek, and PCM handles.
+///   - `mode`: Requested audio backend mode.
+///   - `params`: Audio engine configuration.
 pub(crate) fn run(
-    cmd_rx: &mpsc::Receiver<AudioCommand>,
+    commands: &mpsc::Receiver<AudioCommand>,
     io: &EngineIo,
     mode: AudioMode,
     params: &EngineParams,
 ) {
-    if let Err(e) = engine_main(cmd_rx, io, mode, params) {
-        mineral_log::error!(target: "audio", error = mineral_log::chain(&e), "engine exited");
+    if let Err(error) = engine_main(commands, io, mode, params) {
+        mineral_log::error!(target: "audio", error = mineral_log::chain(&error), "engine exited");
     }
 }
 
-/// 引擎主循环:初始化 sink/runtime,失败时通过 `ready_tx` 上报,然后循环 recv 命令 +
-/// drain 链下建好的下一曲 + drain seek + 刷 snapshot。
-///
-/// 无音频设备(或 [`AudioMode::ForceNull`])不算错:置 [`AudioBackend::Null`]、报 ready、进
-/// [`run_null_mode`] 空跑——daemon 照常 bind / serve / graceful shutdown,client 据 snapshot 提示降级。
+/// Initializes output and runs the command/snapshot loop.
 fn engine_main(
-    cmd_rx: &mpsc::Receiver<AudioCommand>,
+    commands: &mpsc::Receiver<AudioCommand>,
     io: &EngineIo,
     mode: AudioMode,
     params: &EngineParams,
@@ -124,11 +77,11 @@ fn engine_main(
         AudioMode::ForceNull => None,
         AudioMode::Auto => match Output::open(pct_to_gain(*params.initial_volume())) {
             Ok(output) => Some(output),
-            Err(e) => {
+            Err(error) => {
                 mineral_log::warn!(
                     target: "audio",
-                    error = mineral_log::chain(&e),
-                    "no audio device; running in null mode (no sound)"
+                    error = mineral_log::chain(&error),
+                    "no audio device; running in null mode"
                 );
                 None
             }
@@ -137,641 +90,300 @@ fn engine_main(
     let Some(output) = output else {
         io.snapshot.lock().backend = AudioBackend::Null;
         let _ = io.ready_tx.send(Ok(()));
-        return run_null_mode(cmd_rx);
+        return run_null_mode(commands);
     };
-
-    // multi_thread:stream-download 后台下载 task 必须在独立 worker 上持续被 poll,
-    // 否则 block_on 一返回,reader.read 永远等不到字节,sink 一直空 → UI 一直 paused。
-    // 3 个 worker:gapless 预排会让当前曲 + 下一曲两路下载并发,留一个余量。
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(3)
-        .enable_all()
-        .thread_name("mineral-audio-rt")
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let err = eyre!("tokio runtime: {e}");
-            let _ = io.ready_tx.send(Err(eyre!("tokio runtime: {e}")));
-            return Err(err);
-        }
-    };
-
     let _ = io.ready_tx.send(Ok(()));
-
+    let mut engine = Engine::new(output, &io.tap_producer, &io.sr_atomic);
     let tick = Duration::from_millis(*params.tick_ms());
-    let mut engine = Engine::new(
-        output,
-        &rt,
-        &io.tap_producer,
-        &io.sr_atomic,
-        *params.prefetch_bytes(),
-    );
-
     loop {
-        match cmd_rx.recv_timeout(tick) {
-            Ok(cmd) => engine.handle_command(cmd),
+        match commands.recv_timeout(tick) {
+            Ok(command) => engine.handle_command(command),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        engine.drain_next_built();
         engine.drain_seek(&io.seek_mailbox);
         engine.update_snapshot(&io.snapshot);
     }
     Ok(())
 }
 
-/// 无设备降级循环:没有 sink / runtime,只 drain 命令通道直到发送端全 drop。
-///
-/// 命令被静默丢弃(无处发声);`set_volume` 等仍由 handle 直接写 snapshot,不依赖此处。
-/// 关键是线程**一直活着**,daemon 不会因「audio 起不来」而退出。
-fn run_null_mode(cmd_rx: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()> {
-    // 命令静默丢弃(无 sink 可发声);recv 阻塞到发送端全 drop(daemon 退出)才返回。
-    while cmd_rx.recv().is_ok() {}
+/// Drains commands without touching an audio device.
+fn run_null_mode(commands: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()> {
+    while commands.recv().is_ok() {}
     Ok(())
 }
 
-/// 引擎跨 tick 的可变状态 + 不可变依赖(output / rt / tap / 进度载体 / 链下结果通道)。
-struct Engine<'a> {
-    /// 系统输出 stream + rodio 播放器队列。
+/// Mutable state owned by the audio engine thread.
+struct Engine {
+    /// System output stream and rodio queue.
     output: Output,
 
-    /// 内嵌 tokio runtime(远端建流 / 后台下载)。
-    rt: &'a tokio::runtime::Runtime,
-
-    /// PCM tap 共享写端(每首曲目包一个 [`TapSource`])。
+    /// Shared PCM tap producer.
     tap_producer: SharedProd,
 
-    /// 当前出声曲目的采样率原子(UI spectrum 读);在起播 / 边界轮转时精确写。
-    sr_atomic: Arc<AtomicU32>,
+    /// Current sample rate shared with the spectrum consumer.
+    sample_rate: Arc<AtomicU32>,
 
-    /// 双槽共享下载 / 缓冲进度。
-    progress: Arc<SharedProgress>,
-
-    /// 链下建好的下一曲发送端(spawn 任务用)。
-    next_built_tx: mpsc::Sender<NextBuilt>,
-
-    /// 链下建好的下一曲接收端(引擎主循环每 tick drain)。
-    next_built_rx: mpsc::Receiver<NextBuilt>,
-
-    /// 2-slot 播放头(当前曲 + 已预排下一曲的记账、边界推进)。
+    /// Current and gapless-prefetched decoder accounting.
     head: PlayHead,
-
-    /// 单调流代号种子:每次 Play / AppendNext 自增分配,全局唯一不复用。
-    gen_seq: u64,
-
-    /// 当前等待链下结果的预排代号(0 = 无);ClearNext / 被新预排取代时作废。
-    pending_next_gen: u64,
-
-    /// 当前曲采样率(边界轮转时由 `next_sample_rate` 顶上,写进 `sr_atomic`)。
-    cur_sample_rate: u32,
-
-    /// 已预排下一曲的采样率(append 时记下,等轮转成当前曲才写 `sr_atomic`)。
-    next_sample_rate: u32,
-
-    /// 流式播放起播前预拉的字节数(配置 `audio.prefetch_bytes`)。
-    prefetch_bytes: u64,
 }
 
-impl<'a> Engine<'a> {
-    /// 构造引擎状态。
-    fn new(
-        output: Output,
-        rt: &'a tokio::runtime::Runtime,
-        tap_producer: &SharedProd,
-        sr_atomic: &Arc<AtomicU32>,
-        prefetch_bytes: u64,
-    ) -> Self {
-        let (next_built_tx, next_built_rx) = mpsc::channel();
+impl Engine {
+    /// Creates engine state around an initialized output.
+    fn new(output: Output, tap_producer: &SharedProd, sample_rate: &Arc<AtomicU32>) -> Self {
         Self {
             output,
-            rt,
             tap_producer: Arc::clone(tap_producer),
-            sr_atomic: Arc::clone(sr_atomic),
-            progress: Arc::new(SharedProgress::default()),
-            next_built_tx,
-            next_built_rx,
+            sample_rate: Arc::clone(sample_rate),
             head: PlayHead::default(),
-            gen_seq: 0,
-            pending_next_gen: 0,
-            cur_sample_rate: 0,
-            next_sample_rate: 0,
-            prefetch_bytes,
         }
     }
 
-    /// 分配一个新的全局唯一流代号。
-    fn next_gen(&mut self) -> u64 {
-        self.gen_seq += 1;
-        self.gen_seq
-    }
-
-    /// 处理一条命令。错误就地 warn,不冒泡(单命令失败不该掀掉引擎线程)。
-    fn handle_command(&mut self, cmd: AudioCommand) {
-        match cmd {
-            AudioCommand::Play {
-                url,
-                headers,
-                capture,
-                layout,
-            } => {
-                if let Err(e) = self.play(url, headers, capture, layout) {
-                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "play error");
+    /// Applies one command and contains command-local failures.
+    fn handle_command(&mut self, command: AudioCommand) {
+        match command {
+            AudioCommand::Play { media, capture } => {
+                if let Err(error) = self.play(media, capture.as_deref()) {
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "play error");
                 }
             }
-            AudioCommand::AppendNext {
-                url,
-                headers,
-                capture,
-                layout,
-            } => self.append_next(url, headers, capture, layout),
+            AudioCommand::AppendNext { media, capture } => {
+                if let Err(error) = self.append_next(media, capture.as_deref()) {
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "prefetch decode error");
+                }
+            }
             AudioCommand::ClearNext => self.clear_next(),
             AudioCommand::Pause => self.output.player().pause(),
             AudioCommand::Resume => self.output.player().play(),
             AudioCommand::Stop => self.stop(),
-            AudioCommand::SetVolume(pct) => {
-                self.output.player().set_volume(pct_to_gain(pct));
+            AudioCommand::SetVolume(percent) => {
+                self.output.player().set_volume(pct_to_gain(percent));
             }
         }
     }
 
-    /// 切到 `url` 从头播(cut-over):停掉当前队列(含已预排的 next)、作废待建预排,
-    /// 解码 + append 新曲后起播,武装 [`PlayHead`] 当前槽。
+    /// Replaces the output queue with one already-opened current media item.
     fn play(
         &mut self,
-        url: MediaUrl,
-        headers: Vec<(String, String)>,
-        capture: Option<PathBuf>,
-        layout: StreamLayout,
+        media: OpenedMedia,
+        capture: Option<&std::path::Path>,
     ) -> color_eyre::Result<()> {
-        mineral_log::info!(target: "audio", url = %url, capture = ?capture, "start decoding");
-        // 切歌前先 disarm,旧曲尾巴(及已预排 next)的 sound_count 退潮不会被算成曲终。
-        self.head.cur.occupied = false;
-        self.head.next.occupied = false;
+        let song_id = media.info().song_id.qualified();
         self.output.player().stop();
-        self.pending_next_gen = 0;
-        // 切歌即让采样率失效:流式 build 阻塞期间 snapshot 不刷新,不清零会残留上一首采样率
-        // 直到本首 decoder 建好后才更新。此刻已 stop、无 PCM 喂频谱,清零安全。
-        self.cur_sample_rate = 0;
-        self.sr_atomic.store(0, Ordering::Relaxed);
-
-        let track_gen = self.next_gen();
-        let idx = 0;
-        self.reset_progress(idx, track_gen);
-        let (dur_ms, sr, local) =
-            self.build_and_append_blocking(url, headers, capture, track_gen, idx, layout)?;
-        if local {
-            self.progress
-                .slot(idx)
-                .buffer_bps
-                .store(Bps::FULL.get(), Ordering::Release);
-        }
+        self.head.stop();
+        self.sample_rate.store(0, Ordering::Relaxed);
+        let slot = self.append_opened(media, capture, "current")?;
+        mineral_log::info!(target: "audio", song_id, "start decoding");
         self.output.player().play();
-        self.cur_sample_rate = sr;
-        self.sr_atomic.store(sr, Ordering::Relaxed);
-        // append 内部已 fetch_add 把 sound_count 抬到 1,武装后下次 update_snapshot 看到的就是
-        // 已占用,不存在「武装后第一 tick 就空」的 race。
-        self.head.start(Slot {
-            stream_gen: track_gen,
-            duration_ms: dur_ms,
-            progress_idx: idx,
-            occupied: true,
-        });
+        self.sample_rate.store(slot.sample_rate, Ordering::Relaxed);
+        self.head.start(slot);
         Ok(())
     }
 
-    /// 预排下一曲:占用另一进度槽,远端走链下建流(就绪后 drain 才 append),本地立即排进通道。
-    /// 当前无曲在播时忽略(上层不该在停止态预排)。
+    /// Appends already-opened next media behind current without reopening it.
     fn append_next(
         &mut self,
-        url: MediaUrl,
-        headers: Vec<(String, String)>,
-        capture: Option<PathBuf>,
-        layout: StreamLayout,
-    ) {
+        media: OpenedMedia,
+        capture: Option<&std::path::Path>,
+    ) -> color_eyre::Result<()> {
         if !self.head.cur.occupied {
-            return;
+            media.cancellation().cancel();
+            return Ok(());
         }
-        if self.head.next.occupied {
-            // 已有预排;上层应先消化边界再排。忽略以免双排。
-            return;
-        }
-        let track_gen = self.next_gen();
-        let idx = if self.head.cur.progress_idx == 0 {
-            1
-        } else {
-            0
-        };
-        self.reset_progress(idx, track_gen);
-        self.pending_next_gen = track_gen;
-        mineral_log::debug!(target: "audio", url = %url, stream_gen = track_gen, "append next (prefetch)");
-        match url {
-            MediaUrl::Remote(u) => {
-                let tx = self.next_built_tx.clone();
-                let progress = Arc::clone(&self.progress);
-                let prefetch_bytes = self.prefetch_bytes;
-                self.rt.spawn(async move {
-                    let target = StreamTarget { url: u, headers };
-                    match create_stream(target, capture, track_gen, idx, progress, prefetch_bytes)
-                        .await
-                    {
-                        Ok((reader, byte_len)) => {
-                            // 预排远端流同样按布局 gate:分片流丢 byte_len,drain 时以非 seekable 打开。
-                            let byte_len = effective_byte_len(byte_len, /*local*/ false, layout);
-                            let _ = tx.send(NextBuilt {
-                                reader,
-                                byte_len,
-                                stream_gen: track_gen,
-                                progress_idx: idx,
-                                local_full: false,
-                            });
-                        }
-                        Err(e) => {
-                            mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "prefetch next stream failed");
-                        }
-                    }
-                });
-            }
-            MediaUrl::Local(p) => match open_local(&p) {
-                Ok((reader, byte_len)) => {
-                    let _ = self.next_built_tx.send(NextBuilt {
-                        reader,
-                        byte_len,
-                        stream_gen: track_gen,
-                        progress_idx: idx,
-                        local_full: true,
-                    });
-                }
-                Err(e) => {
-                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "prefetch next local open failed");
-                }
-            },
-        }
+        self.head.clear_next();
+        let slot = self.append_opened(media, capture, "next")?;
+        self.head.arm_next(slot);
+        Ok(())
     }
 
-    /// 撤销「尚未 append」的待建下一曲:作废 pending 代号,迟到的链下结果按代号丢弃。
-    /// 已 append(next 槽占用)则无法从 rodio 队列摘除(仅 next 未就绪时才会被调),no-op。
-    fn clear_next(&mut self) {
-        if self.head.next.occupied {
-            mineral_log::debug!(target: "audio", "clear_next: 已 append,无法撤销");
-            return;
-        }
-        self.pending_next_gen = 0;
-    }
-
-    /// 用户主动停止:disarm 当前 + 已预排,停队列,作废待建预排。snapshot 经槽未占用自动回落
-    /// (buffered / download_complete / duration 归零),无需手动清。
-    fn stop(&mut self) {
-        self.head.cur.occupied = false;
-        self.head.next.occupied = false;
-        self.output.player().stop();
-        self.pending_next_gen = 0;
-    }
-
-    /// 复位某进度槽:绑定新代号、缓冲归零。`done_gen` 不复位——代号单调不复用,旧值永不等于新代号。
-    fn reset_progress(&self, idx: usize, track_gen: u64) {
-        let slot = self.progress.slot(idx);
-        slot.buffer_gen.store(track_gen, Ordering::Release);
-        slot.buffer_bps.store(0, Ordering::Release);
-    }
-
-    /// 同步(block_on)建流 + build decoder + append 当前曲(cut-over 的有意阻塞,沿用历史行为)。
-    ///
-    /// # Return:
-    ///   `(duration_ms, sample_rate, is_local)`;`duration_ms` 为 `None` = decoder 探不出总长
-    ///   (分片容器流式打开)。
-    fn build_and_append_blocking(
-        &self,
-        url: MediaUrl,
-        headers: Vec<(String, String)>,
-        capture: Option<PathBuf>,
-        track_gen: u64,
-        idx: usize,
-        layout: StreamLayout,
-    ) -> color_eyre::Result<(Option<u64>, u32, bool)> {
-        let (reader, byte_len, local) = match url {
-            MediaUrl::Remote(u) => {
-                let progress = Arc::clone(&self.progress);
-                let target = StreamTarget { url: u, headers };
-                let (reader, byte_len) = self.rt.block_on(create_stream(
-                    target,
-                    capture,
-                    track_gen,
-                    idx,
-                    progress,
-                    self.prefetch_bytes,
-                ))?;
-                (reader, byte_len, false)
-            }
-            MediaUrl::Local(p) => {
-                let (reader, byte_len) = open_local(&p)?;
-                (reader, byte_len, true)
-            }
-        };
-        // 分片远端流(如 B站 fMP4)丢弃 byte_len → 解码器非 seekable、open 不预扫全片,秒起播。
-        let byte_len = effective_byte_len(byte_len, local, layout);
+    /// Builds and appends one decoder, returning its slot accounting.
+    fn append_opened(
+        &mut self,
+        media: OpenedMedia,
+        capture: Option<&std::path::Path>,
+        slot_name: &'static str,
+    ) -> color_eyre::Result<Slot> {
+        let byte_len = (media.seek_support() == SeekSupport::RandomAccess)
+            .then_some(media.byte_len())
+            .flatten();
+        let transfer = media.transfer().cloned();
+        let cancellation = media.cancellation().clone();
+        let reader = media.into_reader();
+        let (reader, capture_state) = wrap_capture(reader, capture, byte_len);
         let decoder = build_decoder(reader, byte_len)?;
-        let dur_ms = decoder.total_duration().map(duration_to_ms);
-        let sr = u32::from(decoder.sample_rate());
-        // 采样率 / byte_len 入日志:曲间采样率不一致或 byte_len 缺失会影响无缝衔接,便于现场排查。
+        let duration_ms = decoder.total_duration().map(duration_to_ms);
+        let sample_rate = u32::from(decoder.sample_rate());
         mineral_log::info!(
-            target: "audio", slot = "cur", sample_rate = sr, dur_ms = ?dur_ms,
-            byte_len_known = byte_len.is_some(), "decoder ready"
+            target: "audio",
+            slot = slot_name,
+            sample_rate,
+            duration_ms = ?duration_ms,
+            byte_len_known = byte_len.is_some(),
+            "decoder ready"
         );
+        let source = InstanceSource::new(decoder, cancellation.clone());
         self.output
             .player()
-            .append(TapSource::new(decoder, Arc::clone(&self.tap_producer)));
-        Ok((dur_ms, sr, local))
+            .append(TapSource::new(source, Arc::clone(&self.tap_producer)));
+        Ok(Slot {
+            duration_ms,
+            sample_rate,
+            transfer,
+            capture: capture_state,
+            cancellation: Some(cancellation),
+            occupied: true,
+        })
     }
 
-    /// drain 链下建好的下一曲:仍是当前等待的预排、且当前在播、next 槽空 → build decoder + append +
-    /// 武装 next 槽;代号不匹配(ClearNext / 被取代)直接丢弃,其 reader drop 即取消后台下载。
-    fn drain_next_built(&mut self) {
-        while let Ok(built) = self.next_built_rx.try_recv() {
-            if built.stream_gen != self.pending_next_gen
-                || !self.head.cur.occupied
-                || self.head.next.occupied
-            {
-                continue;
-            }
-            let byte_len_known = built.byte_len.is_some();
-            match build_decoder(built.reader, built.byte_len) {
-                Ok(decoder) => {
-                    let dur_ms = decoder.total_duration().map(duration_to_ms);
-                    self.next_sample_rate = u32::from(decoder.sample_rate());
-                    // 预排曲同样记采样率 / byte_len(便于排查曲间衔接)。
-                    mineral_log::info!(
-                        target: "audio", slot = "next", sample_rate = self.next_sample_rate,
-                        dur_ms = ?dur_ms, byte_len_known, "decoder ready (prefetch)"
-                    );
-                    self.output
-                        .player()
-                        .append(TapSource::new(decoder, Arc::clone(&self.tap_producer)));
-                    if built.local_full {
-                        self.progress
-                            .slot(built.progress_idx)
-                            .buffer_bps
-                            .store(Bps::FULL.get(), Ordering::Release);
-                    }
-                    self.head.arm_next(Slot {
-                        stream_gen: built.stream_gen,
-                        duration_ms: dur_ms,
-                        progress_idx: built.progress_idx,
-                        occupied: true,
-                    });
-                    self.pending_next_gen = 0;
-                }
-                Err(e) => {
-                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&e), "prefetch next decode failed");
-                    self.pending_next_gen = 0;
-                }
-            }
-        }
+    /// Cancels an armed prefetched decoder; its source drains silently when reached.
+    fn clear_next(&mut self) {
+        self.head.clear_next();
     }
 
-    /// 把 player 当前播放状态拍进共享 snapshot,顺带观测 `len()` 推进 [`PlayHead`] 边界。
-    fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
-        let pos_ms = duration_to_ms(self.output.player().get_pos());
-        let is_paused = self.output.player().is_paused();
-        let boundary = self.head.observe(self.output.player().len());
-        if boundary == Boundary::Gapless {
-            // 下一曲已轮转成当前曲:此刻才把采样率切过去,频谱不提前跳。
-            self.cur_sample_rate = self.next_sample_rate;
-            self.sr_atomic
-                .store(self.cur_sample_rate, Ordering::Relaxed);
-        }
-        let playing = !is_paused && self.head.cur.occupied;
-        self.output.recover_if_stalled(playing, pos_ms);
-        let f = self.head.snapshot_fields(&self.progress);
-
-        let mut g = snapshot.lock();
-        g.playing = playing;
-        g.position_ms = pos_ms;
-        g.duration_ms = f.duration_ms;
-        g.track_finished_seq = f.track_finished_seq;
-        g.current_track_token = f.current_track_token;
-        g.download_complete = f.download_complete;
-        g.buffered_bps = f.buffered_bps;
-        g.next_duration_ms = f.next_duration_ms;
-        g.next_buffered_bps = f.next_buffered_bps;
-        g.next_ready = f.next_ready;
-        g.next_download_complete = f.next_download_complete;
-        g.sample_rate_hz = self.cur_sample_rate;
-        // volume_pct 由 handle.set_volume 直接维护,引擎不反查。
+    /// Stops output and cancels both decoder slots.
+    fn stop(&mut self) {
+        self.head.stop();
+        self.output.player().stop();
+        self.sample_rate.store(0, Ordering::Relaxed);
     }
 
-    /// mailbox 里有 pending seek 就 take 出来打一次 `try_seek`，latest-wins。
-    ///
-    /// # Params:
-    ///   - `seek_mailbox`: 与 handle 共享的最新 seek 目标。
-    fn drain_seek(&self, seek_mailbox: &Arc<Mutex<Option<Duration>>>) {
-        let Some(target) = seek_mailbox.lock().take() else {
+    /// Applies one pending latest-wins seek request.
+    fn drain_seek(&self, mailbox: &Arc<Mutex<Option<Duration>>>) {
+        let Some(target) = mailbox.lock().take() else {
             return;
         };
-        if let Err(e) = self.output.player().try_seek(target) {
+        if let Err(error) = self.output.player().try_seek(target) {
             mineral_log::warn!(
                 target: "audio",
                 seek_to = ?target,
-                error = mineral_log::chain(&e),
+                error = mineral_log::chain(&error),
                 "seek failed"
             );
         }
     }
-}
 
-/// 打开本地文件成装箱 reader(+ 已知字节长度,供 decoder seekable)。
-pub(crate) fn open_local(
-    p: &std::path::Path,
-) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)> {
-    let file = std::fs::File::open(p).map_err(|e| eyre!("open {}: {e}", p.display()))?;
-    let byte_len = file.metadata().ok().map(|m| m.len());
-    Ok((Box::new(BufReader::new(file)), byte_len))
-}
-
-/// 取流目标:远端音频 URL + 附加请求头(如 B站 baseUrl 需 `Referer`)。二者是「怎么取这条流」
-/// 的一体两面,合并成一个参数,避免建流函数参数膨胀。
-struct StreamTarget {
-    /// 远端音频 URL。
-    url: url::Url,
-
-    /// 取流附加请求头;空 = 无附加头,走默认无头 client。
-    headers: Vec<(String, String)>,
-}
-
-/// 起 stream-download(远端):建 HTTP 流、装好缓冲进度回调(写指定进度槽,代号门控挡旧流)、
-/// capture(非空)时 spawn 完成 waiter store 下完代号,返回装箱 reader + 字节长度。
-///
-/// # Params:
-///   - `target`: 取流目标(远端 URL + 取流头)
-///   - `capture`: 落盘路径(`Some` = 持久 capture 供入缓存,`None` = 会自删的 temp)
-///   - `stream_gen`: 本流代号
-///   - `progress_idx`: 写入的进度槽下标
-///   - `progress`: 双槽共享进度
-///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
-///
-/// # Return:
-///   `(装箱 reader, 字节长度)`;字节长度 `None` 表示无 `Content-Length`。
-async fn create_stream(
-    target: StreamTarget,
-    capture: Option<PathBuf>,
-    stream_gen: u64,
-    progress_idx: usize,
-    progress: Arc<SharedProgress>,
-    prefetch_bytes: u64,
-) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)> {
-    match capture {
-        Some(path) => {
-            stream_with_provider(
-                target,
-                FileStorageProvider::new(path.clone()),
-                stream_gen,
-                progress_idx,
-                progress,
-                // 下完 waiter 核对该落盘文件字节数达 content_length 才标下完(挡截断)。
-                /*verify_path*/
-                Some(path),
-                prefetch_bytes,
-            )
-            .await
+    /// Updates shared playback state and observes natural decoder boundaries.
+    fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
+        let position_ms = duration_to_ms(self.output.player().get_pos());
+        let paused = self.output.player().is_paused();
+        let boundary = self.head.observe(self.output.player().len());
+        if boundary == Boundary::Gapless {
+            self.sample_rate
+                .store(self.head.cur.sample_rate, Ordering::Relaxed);
         }
-        None => {
-            stream_with_provider(
-                target,
-                TempStorageProvider::new(),
-                stream_gen,
-                progress_idx,
-                progress,
-                /*verify_path*/ None,
-                prefetch_bytes,
-            )
-            .await
-        }
+        let playing = !paused && self.head.cur.occupied;
+        self.output.recover_if_stalled(playing, position_ms);
+        let fields = self.head.snapshot_fields();
+        let mut current = snapshot.lock();
+        current.playing = playing;
+        current.position_ms = position_ms;
+        current.duration_ms = fields.duration_ms;
+        current.track_finished_seq = fields.track_finished_seq;
+        current.current_track_token = fields.current_track_token;
+        current.download_complete = fields.download_complete;
+        current.buffered_bps = fields.buffered_bps;
+        current.next_duration_ms = fields.next_duration_ms;
+        current.next_buffered_bps = fields.next_buffered_bps;
+        current.next_ready = fields.next_ready;
+        current.next_download_complete = fields.next_download_complete;
+        current.sample_rate_hz = self.head.cur.sample_rate;
     }
 }
 
-/// 把 `(name, value)` 头烤进一个 reqwest client 的 `default_headers`,供取流请求带上。
-///
-/// 用 `append`(非 `insert`):保序、允许重复同名头。非法头(名/值不合 HTTP 规范)跳过并 warn,
-/// 不掀掉整条请求;client build 失败(TLS 初始化等真错)冒泡。
-///
-/// # Params:
-///   - `headers`: 待注入的请求头(调用方已保证非空)
-///
-/// # Return:
-///   预配置好 `default_headers` 的 reqwest client
-fn client_with_headers(headers: &[(String, String)]) -> color_eyre::Result<Client> {
-    use stream_download::http::reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-
-    let mut map = HeaderMap::new();
-    for (name, value) in headers {
-        match (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            (Ok(n), Ok(v)) => {
-                map.append(n, v);
-            }
-            _ => mineral_log::warn!(target: "audio", header = %name, "跳过非法取流头"),
-        }
-    }
-    Client::builder()
-        .default_headers(map)
-        .build()
-        .map_err(|e| eyre!("build headed http client: {e}"))
-}
-
-/// 用给定 `StorageProvider` 起 stream-download(两种 provider 走同一泛型路径,差别只在 `provider`)。
-///
-/// # Params:
-///   - `verify_path`: capture 落盘路径(`Some` = capture 播放,spawn waiter 等下完并**核对字节数**;
-///     `None` = 非 capture,不 spawn waiter)
-///   - `prefetch_bytes`: 起播前预拉的字节数(配置 `audio.prefetch_bytes`)
-async fn stream_with_provider<P>(
-    target: StreamTarget,
-    provider: P,
-    stream_gen: u64,
-    progress_idx: usize,
-    progress: Arc<SharedProgress>,
-    verify_path: Option<PathBuf>,
-    prefetch_bytes: u64,
-) -> color_eyre::Result<(Box<dyn ReadSeek>, Option<u64>)>
-where
-    P: StorageProvider + 'static,
-    P::Reader: Read + Seek + Send + Sync + 'static,
-{
-    let StreamTarget { url, headers } = target;
-    // 空头走默认 client(零行为变化,netease/local 保持原路径);带头则建一个把这些头烤进
-    // `default_headers` 的 reqwest client——B站 baseUrl 取流必须带 `Referer`,否则 403。
-    let stream = if headers.is_empty() {
-        HttpStream::<Client>::create(url)
-            .await
-            .map_err(|e| eyre!("http stream: {e}"))?
-    } else {
-        let client = client_with_headers(&headers)?;
-        HttpStream::new(client, url)
-            .await
-            .map_err(|e| eyre!("http stream (headed): {e}"))?
+/// Wraps a prepared reader with a post-preparation capture tee when requested.
+fn wrap_capture(
+    reader: Box<dyn MediaReader>,
+    path: Option<&std::path::Path>,
+    expected_len: Option<u64>,
+) -> (Box<dyn MediaReader>, Option<CaptureState>) {
+    let Some(path) = path else {
+        return (reader, None);
     };
-    let len = stream.content_length();
-    let total = len.unwrap_or(0);
-    let prog = Arc::clone(&progress);
-    let settings = Settings::default()
-        .prefetch_bytes(prefetch_bytes)
-        .on_progress(
-            move |_stream: &HttpStream<Client>, state: StreamState, _cancel| {
-                // 切歌 / 换预排后旧流的迟到回调(代号不匹配)直接忽略,不污染当前缓冲。
-                let slot = prog.slot(progress_idx);
-                if slot.buffer_gen.load(Ordering::Acquire) != stream_gen {
-                    return;
-                }
-                let bps = match state.phase {
-                    // 长度未知(无 Content-Length)时比例恒零,下完瞬间补满。
-                    StreamPhase::Complete => Bps::FULL,
-                    _ => Bps::ratio(state.current_position, total),
-                };
-                slot.buffer_bps.store(bps.get(), Ordering::Release);
-            },
-        );
-    let reader = StreamDownload::from_stream(stream, provider, settings)
-        .await
-        .map_err(|e| eyre!("stream-download init: {e}"))?;
-    // capture 播放:拿 download handle,spawn 一个 waiter 等整段下完后 store 本曲代号。
-    // 必须在 reader 被 decoder 消费前取 handle。
-    if let Some(vpath) = verify_path {
-        let handle = reader.handle();
-        let done = Arc::clone(&progress);
-        tokio::spawn(async move {
-            handle.wait_for_completion().await;
-            // stream_download 在下载出错/断连时也 signal complete;核对落盘字节数达 content_length
-            // 才标下完,否则截断文件会被 harvest 进缓存、之后播放解码 IO 错。
-            let file_len = tokio::fs::metadata(&vpath)
-                .await
-                .map(|m| m.len())
-                .unwrap_or(0);
-            if download_reached_full(file_len, len) {
-                done.slot(progress_idx)
-                    .done_gen
-                    .store(stream_gen, Ordering::Release);
-            } else {
-                mineral_log::warn!(
-                    target: "audio",
-                    stream_gen,
-                    file_len,
-                    expected = len.unwrap_or(0),
-                    "capture 未下完整段(截断),不标下完、不入缓存"
-                );
-            }
-        });
+    match CaptureReader::open_writer(path) {
+        Ok(writer) => {
+            let (reader, state) = CaptureReader::new(reader, writer, expected_len);
+            (Box::new(reader), Some(state))
+        }
+        Err(error) => {
+            mineral_log::warn!(
+                target: "audio",
+                error = mineral_log::chain(&error),
+                "capture unavailable; continuing without capture"
+            );
+            (reader, None)
+        }
     }
-    Ok((Box::new(reader), len))
 }
 
-/// 用 [`DecoderBuilder`] 构造 decoder,**`byte_len` 已知时一并塞进**。
-///
-/// 关键:rodio `Decoder::new()` 默认 `is_seekable=false`,Symphonia 在源不可
-/// 随机访问时只能向前 seek(后退会返 `ForwardOnly` → `RandomAccessNotSupported`)
-/// —— 表现就是按 ← 没反应。`with_byte_len` 会一并把 `is_seekable` 置 true。
-/// `byte_len` 未知时退化到默认行为(只能向前 seek),至少不比之前差。
+/// Source wrapper ending immediately after playback instance cancellation.
+struct InstanceSource<S> {
+    /// Decoder producing PCM samples.
+    inner: S,
+
+    /// Playback instance cancellation token.
+    cancellation: CancellationToken,
+}
+
+impl<S> InstanceSource<S> {
+    /// Wraps one decoder with its instance token.
+    fn new(inner: S, cancellation: CancellationToken) -> Self {
+        Self {
+            inner,
+            cancellation,
+        }
+    }
+}
+
+impl<S> Iterator for InstanceSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cancellation.is_cancelled() {
+            None
+        } else {
+            self.inner.next()
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<S> Source for InstanceSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
+        if self.cancellation.is_cancelled() {
+            return Err(SeekError::NotSupported {
+                underlying_source: std::any::type_name::<Self>(),
+            });
+        }
+        self.inner.try_seek(position)
+    }
+}
+
+/// Builds a rodio decoder and enables arbitrary seek only when byte length is known.
 pub(crate) fn build_decoder<R>(
     reader: R,
     byte_len: Option<u64>,
@@ -780,82 +392,13 @@ where
     R: Read + Seek + Send + Sync + 'static,
 {
     let mut builder = DecoderBuilder::new().with_data(reader);
-    if let Some(len) = byte_len {
-        builder = builder.with_byte_len(len);
+    if let Some(length) = byte_len {
+        builder = builder.with_byte_len(length);
     }
-    builder.build().map_err(|e| eyre!("decode: {e}"))
+    builder.build().map_err(|error| eyre!("decode: {error}"))
 }
 
-/// `Duration` → ms,超过 `u64::MAX` 时饱和(实际曲长不会触达)。
-fn duration_to_ms(d: Duration) -> u64 {
-    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use parking_lot::Mutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    use crate::engine::{StreamTarget, create_stream};
-    use crate::queue_slots::SharedProgress;
-
-    /// `create_stream` 把 `headers` 注入 HTTP 取流请求:B站 baseUrl 播放必须带 `Referer`,否则
-    /// 403。起一个记录请求头的本地 server,用带 Referer 的 headers 建流,断言 server 收到该头。
-    ///
-    /// 直接测 `create_stream`(而非经 `AudioHandle::play`):`ForceNull` 模式走 `run_null_mode`
-    /// 短路建流、`Auto` 又需真声卡,都测不到取流路径;`create_stream` 是取流链的真实汇聚点。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn create_stream_injects_headers_into_http_request() -> color_eyre::Result<()> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let addr = listener.local_addr()?;
-        let recorded = Arc::new(Mutex::new(None::<String>));
-        let rec = Arc::clone(&recorded);
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 2048];
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                let req = buf
-                    .get(..n)
-                    .map(|b| String::from_utf8_lossy(b).into_owned())
-                    .unwrap_or_default();
-                *rec.lock() = Some(req);
-                let body = b"FAKEDATA";
-                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
-                drop(sock.write_all(head.as_bytes()).await);
-                drop(sock.write_all(body).await);
-                drop(sock.shutdown().await);
-            }
-        });
-
-        let url = url::Url::parse(&format!("http://{addr}/a.mp3"))?;
-        let progress = Arc::new(SharedProgress::default());
-        let target = StreamTarget {
-            url,
-            headers: vec![("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
-        };
-        // body 非有效音频,建流本身不解码,故忽略返回;只验证请求已带上 header。
-        let _ = create_stream(
-            target, /*capture*/ None, /*stream_gen*/ 1, /*progress_idx*/ 0,
-            progress, /*prefetch_bytes*/ 0,
-        )
-        .await;
-
-        let raw = recorded.lock().clone().unwrap_or_default();
-        // HTTP header 名大小写不敏感(hyper 发小写),按名匹配、value 保原样。
-        let referer = raw.lines().find_map(|line| {
-            line.split_once(':').and_then(|(name, value)| {
-                name.trim()
-                    .eq_ignore_ascii_case("referer")
-                    .then(|| value.trim().to_owned())
-            })
-        });
-        assert_eq!(
-            referer.as_deref(),
-            Some("https://www.bilibili.com"),
-            "create_stream 应把 headers 注入 HTTP 请求;实际收到:\n{raw}"
-        );
-        Ok(())
-    }
+/// Converts a duration to milliseconds with saturation on impossible overflow.
+fn duration_to_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

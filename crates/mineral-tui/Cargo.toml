@@ -28,6 +28,7 @@ mineral-macros       = { workspace = true }
 mineral-model        = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-persist      = { workspace = true }
+mineral-playback     = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-server       = { workspace = true }
 mineral-task         = { workspace = true }

@@ -5,7 +5,7 @@
 //! glyph / label 这两个 UI 字面量跟着挪过来 —— 字符画放 protocol 不优雅,
 //! 但避免 mineral-tui 跨 crate 加 inherent impl 的麻烦,**够用**。
 
-use mineral_model::{Envelope, PlayUrl, Song, SongId};
+use mineral_model::{DirectMedia, Envelope, PlaybackMediaInfo, Song, SongId};
 use serde::{Deserialize, Serialize};
 
 /// 播放循环模式。
@@ -256,7 +256,7 @@ pub struct PlayerVersions {
     /// queue + original_queue 的版本。
     pub queue: u64,
 
-    /// current_song / play_url / lyrics 的版本。
+    /// current song、media facts 与 lyrics 的版本。
     pub current: u64,
 }
 
@@ -301,8 +301,11 @@ pub struct CurrentSync {
     /// 当前在播的歌(`None` 表示从未播过 / 已 stop)。
     pub current_song: Option<Song>,
 
-    /// 当前歌的播放 URL 元信息(format / bitrate);transport 用。
-    pub play_url: Option<PlayUrl>,
+    /// Optional direct access to the current media; absence does not mean unplayable.
+    pub direct_media: Option<DirectMedia>,
+
+    /// Final source-neutral facts for the opened decoder input.
+    pub media_info: Option<PlaybackMediaInfo>,
 
     /// 当前歌的歌词原文(server 端缓存最新一首)。client 拿来解析成行。
     pub current_lyrics: Option<mineral_model::Lyrics>,

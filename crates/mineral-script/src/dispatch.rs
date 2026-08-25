@@ -206,8 +206,8 @@ fn resolve_query(
                 mlua::Value::Table(briefs_table(lua, playlists)?),
                 mlua::Value::Nil,
             ),
-            ResolveValue::PlayUrl(play_url) => (
-                mlua::Value::Table(play_url_table(lua, play_url)?),
+            ResolveValue::DirectMedia(direct) => (
+                mlua::Value::Table(direct_media_table(lua, direct)?),
                 mlua::Value::Nil,
             ),
             ResolveValue::Spawn(result) => {
@@ -297,26 +297,31 @@ fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event
     }
 }
 
-/// [`PlayUrl`](mineral_model::PlayUrl) 在 Lua 侧的投影(`library.song_url` 回调入参)。
+/// Projects direct media into the Lua `library.song_url` callback shape.
 ///
 /// 字段名与 hook 改写返回值([`RewriteSpec`](crate::hooks::RewriteSpec) 的 Lua 形态)
 /// 对齐——`url` / `quality` / `headers`(`{{name, value}}` 数组)/ `layout`,回调里可
 /// 原样喂给 `ctx.resolve(...)` 完成顶入;另带 `song_id` / `bitrate_bps` / `size` /
 /// `format` 供匹配逻辑参考。
-fn play_url_table(lua: &Lua, play_url: &mineral_model::PlayUrl) -> mlua::Result<mlua::Table> {
+fn direct_media_table(lua: &Lua, direct: &mineral_model::DirectMedia) -> mlua::Result<mlua::Table> {
     let entry = lua.create_table()?;
-    entry.set("song_id", play_url.song_id.qualified())?;
-    entry.set("url", play_url.url.to_string())?;
-    entry.set("quality", play_url.quality.as_str())?;
+    let info = direct.info();
+    entry.set("song_id", info.song_id.qualified())?;
+    entry.set("url", direct.locator().media_url().to_string())?;
+    entry.set("quality", info.quality.as_str())?;
     // bitrate_bps / size / format 未知时为 nil(脚本侧参考前需判空)。
-    entry.set("bitrate_bps", play_url.bitrate_bps)?;
-    entry.set("size", play_url.size)?;
+    entry.set("bitrate_bps", info.bitrate_bps)?;
+    entry.set("size", info.size)?;
     entry.set(
         "format",
-        play_url.format.as_ref().map(|f| f.as_str().to_owned()),
+        info.format.as_ref().map(|f| f.as_str().to_owned()),
     )?;
     let headers = lua.create_table()?;
-    for (i, (name, value)) in play_url.stream_headers.iter().enumerate() {
+    let direct_headers = direct
+        .locator()
+        .remote()
+        .map_or(&[][..], mineral_model::RemoteLocator::headers);
+    for (i, (name, value)) in direct_headers.iter().enumerate() {
         let pair = lua.create_table()?;
         pair.raw_set(1, name.clone())?;
         pair.raw_set(2, value.clone())?;
@@ -325,7 +330,7 @@ fn play_url_table(lua: &Lua, play_url: &mineral_model::PlayUrl) -> mlua::Result<
     entry.set("headers", headers)?;
     entry.set(
         "layout",
-        match play_url.layout {
+        match direct.layout() {
             mineral_model::StreamLayout::Contiguous => "contiguous",
             mineral_model::StreamLayout::Chunked => "chunked",
         },

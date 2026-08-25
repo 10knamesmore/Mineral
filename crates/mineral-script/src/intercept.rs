@@ -40,8 +40,8 @@ pub(crate) fn run_stream(
             let table = lua.create_table()?;
             table.set("song", song_table(lua, ctx.song())?)?;
             if let Some(original) = ctx.original() {
-                table.set("url", original.url.to_string())?;
-                table.set("quality", original.quality.as_str())?;
+                table.set("url", original.locator().media_url().to_string())?;
+                table.set("quality", original.info().quality.as_str())?;
             }
             table.set("kind", HookKind::BeforeStream.as_str())?;
             table.set("mode", ctx.mode().as_str())?;
@@ -73,8 +73,8 @@ pub(crate) fn run_download(
             let table = lua.create_table()?;
             table.set("song", song_table(lua, ctx.song())?)?;
             if let Some(original) = ctx.original() {
-                table.set("url", original.url.to_string())?;
-                table.set("quality", original.quality.as_str())?;
+                table.set("url", original.locator().media_url().to_string())?;
+                table.set("quality", original.info().quality.as_str())?;
             }
             table.set("kind", HookKind::BeforeDownload.as_str())?;
             table.set("unplayable", ctx.unplayable())?;

@@ -54,7 +54,7 @@ impl ChannelFetchLane {
     /// # Params:
     ///   - `channels`: 源 channel 列表,按 `source()` 去重后入 lane
     ///   - `ongoing`: 共享的中央状态(worker 完成时 `remove(id)`)
-    ///   - `event_tx`: 中央事件 buffer 的发送端
+    ///   - `event_tx`: 中央事件 buffer(纯 [`TaskEvent`] 事实)
     ///   - `workers_per_channel`: 每个 channel 的 worker 数(user/bg 两级队列共享)
     pub fn spawn(
         channels: &[Arc<dyn MusicChannel>],
@@ -198,7 +198,8 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
     let _ = done_tx.send(outcome);
 }
 
-/// 真正调 channel 的实现:按 kind 分派,把结果包成 [`TaskEvent`] 写进事件 buffer,失败统一变 `Failed`。
+/// 真正调 channel 的实现:按 kind 分派。事实结果包成 [`TaskEvent`] 写进事件 buffer;
+/// 失败统一变 `Failed`。
 async fn execute(
     channel: &Arc<dyn MusicChannel>,
     kind: &ChannelFetchKind,
@@ -244,48 +245,6 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::SongUrl { song_id, quality } => {
-            let ids = [song_id.clone()];
-            match channel.song_urls(&ids, *quality).await {
-                Ok(mut urls) => match urls.pop() {
-                    Some(play_url) => {
-                        event_tx.lock().push(TaskEvent::PlayUrlReady {
-                            song_id: song_id.clone(),
-                            play_url,
-                        });
-                        TaskOutcome::Ok
-                    }
-                    None => {
-                        mineral_log::warn!(
-                            target: "channel_fetch",
-                            source = ?song_id.namespace(),
-                            op = "song_url",
-                            song_id = song_id.as_str(),
-                            "channel returned empty url list"
-                        );
-                        // 空列表 = 灰歌的常见形态,与报错同为「无可播 URL」信号。
-                        event_tx.lock().push(TaskEvent::SongUrlFailed {
-                            song_id: song_id.clone(),
-                        });
-                        TaskOutcome::Failed
-                    }
-                },
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        source = ?song_id.namespace(),
-                        op = "song_url",
-                        song_id = song_id.as_str(),
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    event_tx.lock().push(TaskEvent::SongUrlFailed {
-                        song_id: song_id.clone(),
-                    });
-                    TaskOutcome::Failed
-                }
-            }
-        }
         ChannelFetchKind::Lyrics { song_id } => match channel.lyrics(song_id).await {
             Ok(lyrics) => {
                 event_tx.lock().push(TaskEvent::LyricsReady {

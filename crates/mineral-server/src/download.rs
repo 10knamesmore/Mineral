@@ -1,20 +1,20 @@
-//! 不依赖播放的下载:给定 [`Song`] → `song_urls` 拿直链 → 整段 HTTP GET → **永久导出**。
+//! Provider-backed download/export draining decoder-ready opened media to permanent storage.
 //!
-//! 这是可复用单元——键位下载单曲 / 歌单批量、将来 gapless 预下载都调 [`download_song`]:
+//! 这是可复用单元——键位下载单曲 / 歌单批量等场景都调 [`download_song`]:
 //! 导出落 `<music_dir>/<source>/<quality>/<album>/<title>.<ext>`(永久、不受缓存 LRU 驱逐);
-//! 播放解析(见 [`crate::resolve`])直接探测该目录命中,**无需再复制进缓存**。
+//! 播放解析(见 [`crate::resolve`])直接探测该目录命中,不复制进缓存。provider resolve/open
+//! 产生 decoder-ready encoded media，export 顺序写入 preparation 后的 bytes。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{WrapErr, eyre};
-use futures_util::StreamExt;
-use mineral_channel_core::MusicChannel;
-use mineral_model::{AudioFormat, BitRate, MediaUrl, PlayUrl, Song};
+use mineral_model::{AudioFormat, BitRate, Song};
+use mineral_playback::{OpenOptions, PlaybackRegistry, PlaybackRequest};
 use mineral_protocol::{DownloadProgress, DownloadTarget};
 use parking_lot::Mutex;
-use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::media_cache::library_relpath;
 use crate::player::PlayerCore;
@@ -23,7 +23,7 @@ use crate::player::PlayerCore;
 /// 供完成提示分流统计。hook 裁决随结局携带——埋点据此落 downloads.hooked 列,脚本
 /// veto 与幂等跳过在库里才分得开。
 pub(crate) enum DownloadOutcome {
-    /// 真正流式下载并永久导出(完成事件下发用)。
+    /// Prepared media was permanently exported.
     Downloaded {
         /// 落盘路径。
         path: PathBuf,
@@ -31,7 +31,7 @@ pub(crate) enum DownloadOutcome {
         /// 实际下载音质(hook 改写后的有效值)。
         quality: mineral_model::BitRate,
 
-        /// 容器格式(channel 实际提供;拿不到为 `None`)。
+        /// Provider 最终交付的容器格式;拿不到为 `None`。
         format: Option<mineral_model::AudioFormat>,
 
         /// before_download 的裁决(未改写为 `None`、改写为 `Rewrite`)。
@@ -54,8 +54,8 @@ pub(crate) enum SkipCause {
     HookVeto,
 }
 
-/// 解析下载环境:HTTP client(整段 GET 用)+ 永久导出根目录。
-/// 任一不可用时对应项为 `None`(下载整体降级为「不可用」,只 warn 不阻断启动)。
+/// 解析下载环境:永久导出根目录。不可用时为 `None`(下载整体降级为「不可用」,
+/// 只 warn 不阻断启动)。
 ///
 /// 导出目录优先级:config(`download.dir`)> 平台默认(`~/Music/mineral`)。
 /// config.lua 是唯一用户真相源,不设环境变量逃逸口。
@@ -64,13 +64,9 @@ pub(crate) enum SkipCause {
 ///   - `config_dir`: 配置的下载目录(`download.dir`;`None` = 未配置)
 ///
 /// # Return:
-///   `(http, music_dir)`,各自失败为 `None`。
-pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, Option<PathBuf>) {
-    let http = reqwest::Client::builder().build().ok();
-    if http.is_none() {
-        mineral_log::warn!(target: "download", "HTTP client 构建失败,下载不可用");
-    }
-    let music_dir = if let Some(d) = config_dir {
+///   导出根目录;解析失败为 `None`。
+pub(crate) fn open_env(config_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(d) = config_dir {
         Some(d.to_path_buf())
     } else {
         match mineral_paths::music_export_dir() {
@@ -80,17 +76,13 @@ pub(crate) fn open_env(config_dir: Option<&Path>) -> (Option<reqwest::Client>, O
                 None
             }
         }
-    };
-    (http, music_dir)
+    }
 }
 
-/// 下载环境:HTTP client + 导出根目录 + 脚本拦截门
+/// 下载环境:导出根目录 + 脚本拦截门
 /// (`process_target` 从 [`PlayerCore`] 取齐,单测各自注入)。
 #[derive(Clone, Copy)]
 pub(crate) struct DownloadEnv<'a> {
-    /// 复用的 HTTP client。
-    pub(crate) http: &'a reqwest::Client,
-
     /// 永久导出根目录(如 `~/Music/mineral`)。
     pub(crate) music_dir: &'a Path,
 
@@ -98,38 +90,32 @@ pub(crate) struct DownloadEnv<'a> {
     pub(crate) hooks: &'a crate::hook_bridge::HookGate,
 }
 
-/// 下载一首歌:**流式** GET(边下边写、边算速度写进度)→ 永久导出。
-/// 该歌该音质已在导出库(文件系统即真相)则跳过,连直链都不取(按文件存在幂等)。
+/// Resolves and opens one prepared playback, then drains its encoded bytes to permanent storage.
+/// 该歌该音质已在导出库(文件系统即真相)则跳过,不调用 provider。
 ///
-/// 不再复制进缓存:导出目录本身即播放解析的命中源(见 [`crate::resolve`]),复制只会徒增
-/// 双份存储、并让播放走 LRU 副本而非永久文件。
+/// 导出目录本身即播放解析的命中源(见 [`crate::resolve`]),不复制进缓存——复制只会
+/// 徒增双份存储、并让播放走 LRU 副本而非永久文件。
 ///
 /// # Params:
-///   - `channel`: 该曲来源的 channel(取直链)
-///   - `http`: 复用的 HTTP client
-///   - `music_dir`: 永久导出根目录(如 `~/Music/mineral`)
+///   - `playback`: Playback provider registry.
 ///   - `song`: 要下载的歌
 ///   - `quality`: 下载音质
-///   - `env`: 下载环境(HTTP client + 导出根目录 + 脚本拦截门)
+///   - `env`: 下载环境(导出根目录 + 脚本拦截门)
 ///   - `progress`: 下载进度共享态(本函数实时写 `bytes_done`/`bytes_total`/`speed_bps`)
 ///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
 ///
 /// # Return:
 ///   下载成功 → `Ok(Downloaded)`;已下载 / 脚本跳过 → `Ok(Skipped)`;
-///   取链 / 网络 / 写盘失败 → `Err`。
+///   provider resolve/open、reader 或写盘失败 → `Err`。
 pub(crate) async fn download_song(
-    channel: &dyn MusicChannel,
+    playback: &PlaybackRegistry,
     env: &DownloadEnv<'_>,
     song: &Song,
     quality: BitRate,
     progress: &Arc<Mutex<DownloadProgress>>,
     speed_tick: Duration,
 ) -> color_eyre::Result<DownloadOutcome> {
-    let DownloadEnv {
-        http,
-        music_dir,
-        hooks,
-    } = *env;
+    let DownloadEnv { music_dir, hooks } = *env;
     // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
@@ -138,38 +124,26 @@ pub(crate) async fn download_song(
         });
     }
 
-    // 2. 取直链 + 实际格式(格式定扩展名,得在算导出路径前拿到)。
-    let urls = channel
-        .song_urls(std::slice::from_ref(&song.id), quality)
-        .await
-        .map_err(|e| eyre!("song_urls: {e}"))?;
-    let mut play_url = urls
-        .into_iter()
-        .next()
-        .ok_or_else(|| eyre!("无可用播放 URL: {}", song.id.qualified()))?;
+    let provider = playback
+        .get(song.source())
+        .ok_or_else(|| eyre!("no playback provider for {:?}", song.source()))?;
+    let cancellation = CancellationToken::new();
+    let mut prepared = provider
+        .resolve(
+            PlaybackRequest::new(song.id.clone(), quality),
+            cancellation.child_token(),
+        )
+        .await?;
 
-    // 2.5 脚本拦截:before_download(取链后、算导出路径 / 写盘前)。裁决记进 hooked
-    // 随结局带出(埋点落 downloads.hooked 列)。
-    let mut quality = quality;
     let mut hooked = mineral_stats::DownloadHook::None;
-    match hooks.before_download(song, &play_url).await {
+    match hooks.before_download(song, prepared.direct_media()).await {
         mineral_script::HookDecision::Continue => {}
         mineral_script::HookDecision::Rewrite(spec) => {
             hooked = mineral_stats::DownloadHook::Rewrite;
-            if let Some(url) = spec.new_url() {
-                play_url.url = url.clone();
-            }
-            if let Some(new_quality) = spec.new_quality() {
-                play_url.quality = new_quality;
-                // 导出路径按音质标注,改写音质要一并体现。
-                quality = new_quality;
-            }
-            mineral_log::info!(
-                target: "script",
-                song_id = song.id.as_str(),
-                url = %play_url.url,
-                "before_download 改写下载直链"
-            );
+            let original_direct = prepared.direct_media().cloned();
+            prepared =
+                crate::hook_bridge::rewrite_prepared(&song.id, original_direct.as_ref(), &spec)
+                    .ok_or_else(|| eyre!("download rewrite has no direct replacement"))?;
         }
         mineral_script::HookDecision::Skip { reason } => {
             mineral_log::info!(
@@ -183,33 +157,46 @@ pub(crate) async fn download_song(
             });
         }
     }
-    let (subdir, file_name) = library_relpath(song, quality, play_url.format.as_ref());
+    let opened = prepared
+        .open(OpenOptions::new(
+            cancellation.child_token(),
+            /*prefetch_bytes*/ 0,
+        ))
+        .await?;
+    let quality = opened.info().quality;
+    let format = opened.info().format.clone();
+    let byte_len = opened.byte_len();
+    let (subdir, file_name) = library_relpath(song, quality, format.as_ref());
     // 命名即身份:不做 ` (N)` 去重——同名直接落同一路径(本曲重下已被上面的幂等挡住;同源同专辑
     // 同名的另一首歌会与之共用一个文件,概率极低,换来「文件系统即唯一真相」)。
     let export = music_dir.join(&subdir).join(&file_name);
-    let remote = match play_url.url {
-        MediaUrl::Remote(u) => u,
-        MediaUrl::Local(p) => {
-            return Err(eyre!("song_urls 返回本地路径,无需下载: {}", p.display()));
-        }
-    };
-
-    // 3. 流式下载到 `<export>.part-dl`,边写边更新进度 / 速度。
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .wrap_err_with(|| format!("创建导出目录失败 {}", parent.display()))?;
     }
     let part = export.with_extension("part-dl");
-    stream_to_file(
-        http,
-        remote,
-        &part,
-        progress,
-        speed_tick,
-        &play_url.stream_headers,
-    )
-    .await?;
+    let reader = opened.into_reader();
+    let progress_handle = Arc::clone(progress);
+    let part_for_write = part.clone();
+    tokio::task::spawn_blocking(move || {
+        drain_opened(
+            reader,
+            &part_for_write,
+            byte_len,
+            &progress_handle,
+            speed_tick,
+        )
+    })
+    .await
+    .map_err(|error| eyre!("download writer task: {error}"))??;
+    {
+        // 无 Content-Length 时 total 从未上报,下完以实际字节数补满。
+        let mut p = progress.lock();
+        if p.bytes_total == 0 {
+            p.bytes_total = p.bytes_done;
+        }
+    }
 
     // 4. 完成 → rename 为正式导出(永久)。
     tokio::fs::rename(&part, &export)
@@ -219,95 +206,9 @@ pub(crate) async fn download_song(
     Ok(DownloadOutcome::Downloaded {
         path: export,
         quality,
-        format: play_url.format.clone(),
+        format,
         hooked,
     })
-}
-
-/// 流式把 `url` 下载到 `dst`,逐 chunk 写盘并按 `speed_tick` 节流更新 `progress` 的
-/// `bytes_done` / `bytes_total` / 平滑 `speed_bps`(整数 EMA)。
-///
-/// # Params:
-///   - `http`: HTTP client
-///   - `url`: 直链
-///   - `dst`: 目标(临时)文件
-///   - `progress`: 进度共享态
-///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
-///
-/// # Return:
-///   下完返回 `Ok(())`。
-async fn stream_to_file(
-    http: &reqwest::Client,
-    url: url::Url,
-    dst: &Path,
-    progress: &Arc<Mutex<DownloadProgress>>,
-    speed_tick: Duration,
-    headers: &[(String, String)],
-) -> color_eyre::Result<()> {
-    use reqwest::header::{HeaderName, HeaderValue};
-
-    let mut req = http.get(url);
-    // 取流附加头(如 B站 baseUrl 下载需 `Referer`);非法头跳过并 warn,不掀掉整条下载。
-    for (name, value) in headers {
-        match (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            (Ok(n), Ok(v)) => req = req.header(n, v),
-            _ => mineral_log::warn!(target: "download", header = %name, "跳过非法取流头"),
-        }
-    }
-    let resp = req
-        .send()
-        .await
-        .wrap_err("下载请求失败")?
-        .error_for_status()
-        .wrap_err("下载响应非 2xx")?;
-    let total = resp.content_length().unwrap_or(0);
-    {
-        let mut p = progress.lock();
-        p.bytes_done = 0;
-        p.bytes_total = total;
-        p.speed_bps = 0;
-    }
-    let mut file = tokio::fs::File::create(dst)
-        .await
-        .wrap_err_with(|| format!("创建下载临时文件失败 {}", dst.display()))?;
-    let mut stream = resp.bytes_stream();
-    let mut done = 0u64;
-    let mut ema = 0u64;
-    let mut win_start = Instant::now();
-    let mut win_bytes = 0u64;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.wrap_err("下载流读取失败")?;
-        file.write_all(&chunk)
-            .await
-            .wrap_err("写下载临时文件失败")?;
-        done = done.saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
-        let dt = win_start.elapsed();
-        if dt >= speed_tick {
-            let dt_ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX).max(1);
-            let inst = done.saturating_sub(win_bytes).saturating_mul(1000) / dt_ms;
-            // 整数 EMA:0.6 旧 + 0.4 新,首样本直接采用。
-            ema = if ema == 0 {
-                inst
-            } else {
-                (ema.saturating_mul(3) + inst.saturating_mul(2)) / 5
-            };
-            let mut p = progress.lock();
-            p.bytes_done = done;
-            p.speed_bps = ema;
-            win_start = Instant::now();
-            win_bytes = done;
-        }
-    }
-    file.flush().await.wrap_err("flush 下载临时文件失败")?;
-    let mut p = progress.lock();
-    p.bytes_done = done;
-    if p.bytes_total == 0 {
-        p.bytes_total = done;
-    }
-    Ok(())
 }
 
 /// 一首正在 capture(边播边落盘)的曲的上下文:播完 / 下完后据此入缓存,中途打断则删 `path`。
@@ -325,34 +226,58 @@ pub(crate) struct Capturing {
     pub(crate) path: PathBuf,
 }
 
-/// 以远端 URL 起播,并(缓存可用时)把下载字节 capture 到临时文件、登记 [`Capturing`]
-/// 供下完 / 播完入缓存;缓存禁用时退回普通播放。
-///
-/// # Params:
-///   - `player`: 播放核心(取 audio / media_cache、登记 capturing)
-///   - `song`: 在播的歌
-///   - `pu`: 该歌的播放 URL(取 `url` 起播、`format` 定扩展名)
-///   - `quality`: 入库音质(与请求一致)
-pub(crate) fn play_capturing(player: &PlayerCore, song: &Song, pu: &PlayUrl, quality: BitRate) {
-    match player.media_cache().capture_path(&song.id, quality) {
-        Some(path) => {
-            player.audio().play_capturing(
-                pu.url.clone(),
-                pu.stream_headers.clone(),
-                path.clone(),
-                pu.layout,
-            );
-            player.set_capturing(Capturing {
-                song: song.clone(),
-                quality,
-                format: pu.format.clone(),
-                path,
-            });
+/// Drains one synchronous opened-media reader into a permanent part file.
+fn drain_opened(
+    mut reader: Box<dyn mineral_playback::MediaReader>,
+    part: &Path,
+    byte_len: Option<u64>,
+    progress: &Arc<Mutex<DownloadProgress>>,
+    speed_tick: Duration,
+) -> color_eyre::Result<()> {
+    use std::io::{Read as _, Write as _};
+
+    let mut writer = std::fs::File::create(part)
+        .wrap_err_with(|| format!("create download part {}", part.display()))?;
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut done = 0u64;
+    let mut ema = None::<u64>;
+    let mut window_start = Instant::now();
+    let mut window_bytes = 0u64;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
         }
-        None => player
-            .audio()
-            .play(pu.url.clone(), pu.stream_headers.clone(), pu.layout),
+        let bytes = buffer
+            .get(..read)
+            .ok_or_else(|| eyre!("opened reader returned invalid byte count"))?;
+        writer.write_all(bytes)?;
+        done = done.saturating_add(u64::try_from(read)?);
+        let mut state = progress.lock();
+        state.bytes_done = done;
+        if let Some(total) = byte_len {
+            state.bytes_total = total;
+        }
+        let elapsed = window_start.elapsed();
+        if elapsed >= speed_tick {
+            let elapsed_ms = u64::try_from(elapsed.as_millis())?.max(1);
+            let instant = done.saturating_sub(window_bytes).saturating_mul(1000) / elapsed_ms;
+            let smoothed = ema.map_or(instant, |old| {
+                (old.saturating_mul(3) + instant.saturating_mul(2)) / 5
+            });
+            ema = Some(smoothed);
+            state.speed_bps = smoothed;
+            window_start = Instant::now();
+            window_bytes = done;
+        }
     }
+    writer.flush()?;
+    if let Some(expected) = byte_len
+        && done < expected
+    {
+        return Err(eyre!("download truncated: {done} / {expected} bytes"));
+    }
+    Ok(())
 }
 
 /// 把一首已下完的 capture 文件后台收编进缓存(spawn_blocking,不阻塞 loop)。
@@ -456,10 +381,10 @@ pub(crate) async fn worker(
 ///   - `player`: 播放核心
 ///   - `target`: 下载目标
 async fn process_target(player: &PlayerCore, target: DownloadTarget) {
-    let (Some(http), Some(music_dir)) = (player.http(), player.music_dir()) else {
+    let Some(music_dir) = player.music_dir() else {
         player.notify().toast(
             mineral_protocol::ToastKind::Warn,
-            "下载不可用(无 HTTP client / 音乐目录)".to_owned(),
+            "下载不可用(无音乐导出目录)".to_owned(),
         );
         return;
     };
@@ -476,16 +401,8 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
     if matches!(target, DownloadTarget::Playlist(_)) {
         player.progress_handle().lock().total += songs.len();
     }
-    let Some(channel) = songs
-        .first()
-        .and_then(|s| player.channel_for(s.source()))
-        .cloned()
-    else {
-        return;
-    };
     let hooks = player.hook_gate();
     let env = DownloadEnv {
-        http,
         music_dir,
         hooks: &hooks,
     };
@@ -497,7 +414,7 @@ async fn process_target(player: &PlayerCore, target: DownloadTarget) {
             p.speed_bps = 0;
         }
         let outcome = download_song(
-            channel.as_ref(),
+            player.playback(),
             &env,
             song,
             player.download_quality(),
@@ -654,6 +571,7 @@ mod tests {
 
     use mineral_model::{AlbumId, AlbumRef, BitRate, Song, SongId, SourceKind};
     use mineral_persist::ServerStore;
+    use mineral_playback::{PlaybackProvider, PlaybackRegistry};
     use mineral_protocol::DownloadProgress;
     use mineral_test::mock::{UrlChannel, serve_once};
     use parking_lot::Mutex;
@@ -676,6 +594,12 @@ mod tests {
             .build()
     }
 
+    /// Registers one fixed-URL test playback provider.
+    fn playback(channel: UrlChannel) -> color_eyre::Result<PlaybackRegistry> {
+        let provider: Arc<dyn PlaybackProvider> = Arc::new(channel);
+        PlaybackRegistry::new(vec![provider])
+    }
+
     /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache
     /// (否则双份存储,且播放会走 LRU 缓存副本而非永久下载文件)。带 `fill_cache` 时此断言变红。
     // multi_thread:走真实 TCP I/O(serve_once 的 server 任务 + reqwest client),单线程
@@ -689,15 +613,13 @@ mod tests {
         let music_dir = dir.path().join("music");
 
         let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
-        let channel = UrlChannel { url };
-        let http = reqwest::Client::new();
+        let playback = playback(UrlChannel { url })?;
         let progress = Arc::new(Mutex::new(DownloadProgress::default()));
         let s = song();
 
         let outcome = download_song(
-            &channel,
+            &playback,
             &super::DownloadEnv {
-                http: &http,
                 music_dir: &music_dir,
                 hooks: &crate::hook_bridge::HookGate::disabled(),
             },
@@ -751,9 +673,9 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let music_dir = dir.path().join("music");
         // 直链指向无人监听的端口:skip 生效就不会有任何网络请求。
-        let channel = UrlChannel {
+        let playback = playback(UrlChannel {
             url: "http://127.0.0.1:9/dead.flac".parse()?,
-        };
+        })?;
         let (runtime, gate) = script_gate(
             r#"
             mineral.hook("before_download", function(ctx)
@@ -762,9 +684,8 @@ mod tests {
             "#,
         )?;
         let outcome = download_song(
-            &channel,
+            &playback,
             &super::DownloadEnv {
-                http: &reqwest::Client::new(),
                 music_dir: &music_dir,
                 hooks: &gate,
             },
@@ -794,9 +715,9 @@ mod tests {
         let music_dir = dir.path().join("music");
         let live = serve_once(b"FAKEFLACDATA".to_vec()).await?;
         // 原直链是死地址:下载成功本身就证明改写生效。
-        let channel = UrlChannel {
+        let playback = playback(UrlChannel {
             url: "http://127.0.0.1:9/dead.flac".parse()?,
-        };
+        })?;
         let (runtime, gate) = script_gate(&format!(
             r#"
             mineral.hook("before_download", function(ctx)
@@ -805,9 +726,8 @@ mod tests {
             "#
         ))?;
         let outcome = download_song(
-            &channel,
+            &playback,
             &super::DownloadEnv {
-                http: &reqwest::Client::new(),
                 music_dir: &music_dir,
                 hooks: &gate,
             },
@@ -826,65 +746,6 @@ mod tests {
             "导出路径应按改写后的音质(standard)标注"
         );
         drop(runtime);
-        Ok(())
-    }
-
-    /// `stream_to_file` 把 `PlayUrl.stream_headers` 注入下载请求:B站 baseUrl 下载必须带
-    /// `Referer`,否则 403。起一个记录请求头的本地 server,带 Referer 下载,断言 server 收到该头。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stream_to_file_injects_stream_headers() -> color_eyre::Result<()> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let addr = listener.local_addr()?;
-        let recorded = Arc::new(Mutex::new(None::<String>));
-        let rec = Arc::clone(&recorded);
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 2048];
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                let req = buf
-                    .get(..n)
-                    .map(|b| String::from_utf8_lossy(b).into_owned())
-                    .unwrap_or_default();
-                *rec.lock() = Some(req);
-                let body = b"FAKEDATA";
-                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
-                drop(sock.write_all(head.as_bytes()).await);
-                drop(sock.write_all(body).await);
-                drop(sock.shutdown().await);
-            }
-        });
-
-        let dir = tempfile::tempdir()?;
-        let dst = dir.path().join("out.part-dl");
-        let http = reqwest::Client::new();
-        let progress = Arc::new(Mutex::new(DownloadProgress::default()));
-        let url = url::Url::parse(&format!("http://{addr}/a.mp3"))?;
-        super::stream_to_file(
-            &http,
-            url,
-            &dst,
-            &progress,
-            Duration::from_millis(100),
-            &[("Referer".to_owned(), "https://www.bilibili.com".to_owned())],
-        )
-        .await?;
-
-        let raw = recorded.lock().clone().unwrap_or_default();
-        // HTTP header 名大小写不敏感(hyper 发小写),按名匹配、value 保原样。
-        let referer = raw.lines().find_map(|line| {
-            line.split_once(':').and_then(|(name, value)| {
-                name.trim()
-                    .eq_ignore_ascii_case("referer")
-                    .then(|| value.trim().to_owned())
-            })
-        });
-        assert_eq!(
-            referer.as_deref(),
-            Some("https://www.bilibili.com"),
-            "stream_to_file 应把 headers 注入下载请求;实际收到:\n{raw}"
-        );
         Ok(())
     }
 }

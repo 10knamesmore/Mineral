@@ -2,16 +2,18 @@
 //! 以及预排 / 并发 capture 收割相关的纯状态变换。
 //!
 //! 引擎([`mineral_audio`])在当前曲自然耗尽时已把下一曲零静音接上;服务端这边只需在
-//! 边界处把记账状态轮转过来(current=queued、queue_sel 推进、play_url/origin/capturing
+//! 边界处把记账状态轮转过来(current=queued、queue_sel 推进、resolved/origin/capturing
 //! 轮转、歌词与预拉复位),**不**重新 `play_song`(音频没有中断)。
 
-use std::path::PathBuf;
+mod state;
 
-use mineral_model::{BitRate, MediaUrl, PlayUrl, Song, SongId};
+use mineral_model::{Song, SongId};
+use mineral_playback::{DirectMedia, OpenedMedia};
 use mineral_protocol::{PlayCursor, PlaybackOrigin};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::download::Capturing;
+use crate::playback_instance::PlaybackSlot;
 use crate::player::PlayerCore;
 use crate::queue::{advance_next, next_in_queue, next_index};
 use crate::state::State;
@@ -37,20 +39,7 @@ pub(crate) fn record_prefetch(
     ));
 }
 
-/// 一首「已预排进 rodio 队列、等当前曲播完接续」的下一曲及其播放记账。
-pub(crate) struct Queued {
-    /// 预排的下一曲。
-    pub(crate) song: Song,
-
-    /// 该曲播放 URL(本地命中或远端取链;`None` 表示尚未填)。
-    pub(crate) play_url: Option<PlayUrl>,
-
-    /// 该曲来源(下载 / 缓存 / 远端),边界轮转时顶进 `play_origin`。
-    pub(crate) origin: PlaybackOrigin,
-
-    /// 该曲的 capture 上下文(远端可缓存时 `Some`;RepeatOne 同曲循环 / 本地命中为 `None`)。
-    pub(crate) capturing: Option<Capturing>,
-}
+pub(crate) use state::{PrefetchState, Queued};
 
 /// 曲终(finished_seq 前进)时服务端该走的推进动作。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,7 +78,7 @@ pub(crate) fn decide_advance(finished_advanced: bool, playing: bool, has_queued:
 }
 
 /// 无缝边界已由引擎完成轮转(下一曲正在播),服务端据此把「已预排」扶正为「当前」:
-/// current=queued、queue_sel 推进到它在队列的位置、play_url/origin/capturing 轮转、
+/// current=queued、queue_sel 推进到它在队列的位置、resolved/origin/capturing 轮转、
 /// 歌词与预拉状态复位。
 ///
 /// # Params:
@@ -98,8 +87,11 @@ pub(crate) fn decide_advance(finished_advanced: bool, playing: bool, has_queued:
 /// # Return:
 ///   被顶替的旧当前歌 id(供打点);无已预排曲则 `None` 且不改状态。
 pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
-    let queued = st.queued.take()?;
+    let (slot, queued) = st.prefetch.take_armed()?;
     let old_id = st.current_song.as_ref().map(|s| s.id.clone());
+    if let Some(current) = st.current_slot.take() {
+        current.cancel();
+    }
     // 游标此刻仍指旧当前曲(或其接续点);预排曲就是当时 next_index 算出的那一首(队列一变
     // 即作废预排),故按下标推进,**不**按 queued.song 身份 first-match——重复曲会把下标
     // 吸附到首个副本。轮转到队列内的曲即离开悬空态。
@@ -107,12 +99,13 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
         st.cursor = PlayCursor::InQueue(idx);
     }
     st.current_song = Some(queued.song);
-    st.play_url = queued.play_url;
+    st.current_slot = Some(slot);
+    st.media_info = Some(queued.media_info);
+    st.direct_media = queued.direct_media;
     st.play_origin = Some(queued.origin);
     st.capturing = queued.capturing;
     st.current_lyrics = None;
     st.current_lyrics_song_id = None;
-    st.prefetch_fired_for = None;
     // 边界消费:本窗口的否决已完成使命(预测/推进都越过了被否决曲),清空。
     st.prefetch_vetoed.clear();
     st.bump_current();
@@ -145,8 +138,7 @@ fn prefetch_window_open(
     duration_ms.saturating_sub(position_ms) <= window_ms
 }
 
-/// gapless 预排:进入曲终前窗口(配置 `daemon.gapless_prefetch_ms`)时,据下一曲来源预排 decoder 进引擎队列
-/// ——本地命中 / RepeatOne 直排,远端先取链 → [`on_prefetch_url_ready`] 再排。本曲只触发一次。
+/// Starts one independent provider/local prefetch attempt inside the gapless window.
 pub(crate) fn check_prefetch(player: &PlayerCore) {
     let snap = player.audio_snapshot();
     let metadata_duration_ms =
@@ -159,201 +151,102 @@ pub(crate) fn check_prefetch(player: &PlayerCore) {
     ) {
         return;
     }
-    let (cur_id, next) = player.with_state(|st| {
-        let Some(cur_id) = st.current_song.as_ref().map(|s| s.id.clone()) else {
-            return (None, None);
-        };
-        // 已排好下一曲 → 不重复。
-        if st.queued.is_some() {
-            return (Some(cur_id), None);
+    let next = player.with_state(|st| {
+        st.current_song.as_ref()?;
+        if st.prefetch.is_armed() {
+            return None;
         }
         let next = next_in_queue(st);
-        // 已对这首 next 发起过预拉 → 不重复(prefetch_fired_for 记的是正在预拉的下一曲 id)。
         if let Some(n) = next.as_ref()
-            && st.prefetch_fired_for.as_ref() == Some(&n.id)
+            && st
+                .prefetch
+                .song_id()
+                .is_some_and(|song_id| *song_id == n.id)
         {
-            return (Some(cur_id), None);
+            return None;
         }
-        (Some(cur_id), next)
+        next
     });
-    let (Some(cur_id), Some(next)) = (cur_id, next) else {
+    let Some(next) = next else {
         return;
     };
-    player.with_state(|st| st.prefetch_fired_for = Some(next.id.clone()));
-
-    if next.id == cur_id {
-        // RepeatOne:同曲循环。
-        queue_repeatone(player, next);
-    } else if let Some((path, quality, origin)) = crate::resolve::resolve_local(
-        player.media_cache(),
-        player.music_dir(),
-        &next,
-        player.playback_quality(),
-    ) {
-        // 预排命中本地:提前把下一曲包络算好落库(adopt 边界经 replay 直取,零等待)。
-        player.ensure_envelope(next.id.clone(), path.clone());
-        queue_local_next(player, next, path, quality, origin);
-    } else {
-        player.submit_task(
-            TaskKind::ChannelFetch(ChannelFetchKind::SongUrl {
-                song_id: next.id,
-                quality: player.playback_quality(),
-            }),
-            Priority::Background,
-        );
-    }
-}
-
-/// RepeatOne 循环预排:复用当前曲 play_url 直接预排,**capture 传 None**——首遍播放已在缓存,
-/// 复用同一临时路径的第二路写会撞坏在写文件(取舍 3)。
-fn queue_repeatone(player: &PlayerCore, next: Song) {
-    let (pu, origin) = player.with_state(|st| (st.play_url.clone(), st.play_origin));
-    let Some(pu) = pu else {
-        return; // 当前 url 尚未就绪(极少),本轮不排。
-    };
-    player
-        .audio()
-        .append_next(pu.url.clone(), pu.stream_headers.clone(), pu.layout);
-    let song_id = next.id.clone();
+    let slot = PlaybackSlot::new(next.id.clone());
     player.with_state(|st| {
-        st.queued = Some(Queued {
-            song: next,
-            play_url: Some(pu),
-            origin: origin.unwrap_or(PlaybackOrigin::Remote),
-            capturing: None,
-        });
+        st.prefetch.replace_opening(slot.clone());
     });
-    record_prefetch(
-        player,
-        song_id,
-        mineral_stats::PrefetchSource::RepeatOne,
-        mineral_stats::PrefetchResolution::Armed,
-    );
+    crate::playback::start_prefetch(player, next, slot);
 }
 
-/// 本地命中的下一曲:直接以本地路径预排(已在缓存 / 下载库,无需 capture)。
-fn queue_local_next(
+/// Arms already-opened next media and records its promotion facts.
+///
+/// # Params:
+///   - `player`: Playback owner.
+///   - `song`: Prefetched song snapshot.
+///   - `slot`: Still-active prefetch ownership slot.
+///   - `opened`: Already-opened decoder input.
+///   - `direct`: Optional direct capability.
+///   - `origin`: Cache, download-library, or provider provenance.
+///   - `cacheable`: Whether post-preparation bytes may enter the cache.
+pub(crate) fn arm_opened(
     player: &PlayerCore,
-    next: Song,
-    path: PathBuf,
-    quality: BitRate,
+    song: Song,
+    slot: &PlaybackSlot,
+    opened: OpenedMedia,
+    direct: Option<DirectMedia>,
     origin: PlaybackOrigin,
+    cacheable: bool,
 ) {
-    let pu = crate::resolve::local_play_url(&next, &path, quality);
-    // 本地文件无需附加取流头;本地恒 seekable(Contiguous)。
-    player.audio().append_next(
-        MediaUrl::Local(path),
-        Vec::new(),
-        mineral_model::StreamLayout::Contiguous,
-    );
-    let song_id = next.id.clone();
-    player.with_state(|st| {
-        st.queued = Some(Queued {
-            song: next,
-            play_url: Some(pu),
-            origin,
-            capturing: None,
-        });
+    let info = opened.info().clone();
+    let capture = cacheable
+        .then(|| {
+            player
+                .media_cache()
+                .capture_path(&song.id, player.playback_quality())
+        })
+        .flatten();
+    let armed = player.with_state(|st| {
+        let Some(active) = st.prefetch.take_opening(slot.instance_id, &song.id) else {
+            return false;
+        };
+        let capturing = match capture {
+            Some(path) => {
+                player.audio().append_next_capturing(opened, path.clone());
+                Some(Capturing {
+                    song: song.clone(),
+                    quality: player.playback_quality(),
+                    format: info.format.clone(),
+                    path,
+                })
+            }
+            None => {
+                player.audio().append_next(opened);
+                None
+            }
+        };
+        st.prefetch.arm(
+            active,
+            Queued {
+                song: song.clone(),
+                media_info: info.clone(),
+                direct_media: direct,
+                origin,
+                capturing,
+            },
+        );
+        true
     });
-    record_prefetch(
-        player,
-        song_id,
-        mineral_stats::PrefetchSource::Local,
-        mineral_stats::PrefetchResolution::Armed,
-    );
-}
-
-/// 远端预排曲取链就绪:据缓存可用与否带 / 不带 capture 预排,登记 [`Queued`]。
-/// 队列已变(找不到该曲)则丢弃。
-///
-/// # Params:
-///   - `song_id`: 取链回来的曲 id(应为已发起预排的下一曲)
-///   - `play_url`: 取到的播放 URL
-pub(crate) fn on_prefetch_url_ready(player: &PlayerCore, song_id: &SongId, play_url: PlayUrl) {
-    let next = player.with_state(|st| st.queue.iter().find(|s| s.id == *song_id).cloned());
-    let Some(next) = next else {
+    if !armed {
         return;
-    };
-    match player
-        .media_cache()
-        .capture_path(&next.id, player.playback_quality())
-    {
-        Some(path) => {
-            player.audio().append_next_capturing(
-                play_url.url.clone(),
-                play_url.stream_headers.clone(),
-                path.clone(),
-                play_url.layout,
-            );
-            let cap = Capturing {
-                song: next.clone(),
-                quality: player.playback_quality(),
-                format: play_url.format.clone(),
-                path,
-            };
-            player.with_state(|st| {
-                st.queued = Some(Queued {
-                    song: next,
-                    play_url: Some(play_url),
-                    origin: PlaybackOrigin::Remote,
-                    capturing: Some(cap),
-                });
-            });
-        }
-        None => {
-            player.audio().append_next(
-                play_url.url.clone(),
-                play_url.stream_headers.clone(),
-                play_url.layout,
-            );
-            player.with_state(|st| {
-                st.queued = Some(Queued {
-                    song: next,
-                    play_url: Some(play_url),
-                    origin: PlaybackOrigin::Remote,
-                    capturing: None,
-                });
-            });
-        }
     }
-    record_prefetch(
-        player,
-        song_id.clone(),
-        mineral_stats::PrefetchSource::Remote,
-        mineral_stats::PrefetchResolution::Armed,
-    );
-}
-
-/// 脚本改写的预排曲:按 effective 直接武装,**不 capture**——缓存按
-/// song_id+quality 入键,改写内容与原曲是否一致由脚本自负,污染缓存代价高。
-/// 队列已变(找不到该曲)则丢弃。
-///
-/// # Params:
-///   - `song_id`: 目标曲 id(应为已发起预排的下一曲)
-///   - `play_url`: 改写后的播放 URL(含取流头 / 布局)
-pub(crate) fn on_prefetch_rewritten(player: &PlayerCore, song_id: &SongId, play_url: PlayUrl) {
-    let next = player.with_state(|st| st.queue.iter().find(|s| s.id == *song_id).cloned());
-    let Some(next) = next else {
-        return;
+    let source = match origin {
+        PlaybackOrigin::Cache | PlaybackOrigin::Download => mineral_stats::PrefetchSource::Local,
+        PlaybackOrigin::Remote => mineral_stats::PrefetchSource::Remote,
     };
-    player.audio().append_next(
-        play_url.url.clone(),
-        play_url.stream_headers.clone(),
-        play_url.layout,
-    );
-    player.with_state(|st| {
-        st.queued = Some(Queued {
-            song: next,
-            play_url: Some(play_url),
-            origin: PlaybackOrigin::Remote,
-            capturing: None,
-        });
-    });
     record_prefetch(
         player,
-        song_id.clone(),
-        mineral_stats::PrefetchSource::Remote,
-        mineral_stats::PrefetchResolution::Rewritten,
+        song.id,
+        source,
+        mineral_stats::PrefetchResolution::Armed,
     );
 }
 
@@ -368,7 +261,11 @@ pub(crate) fn check_harvest(player: &PlayerCore) {
         }
     }
     if snap.next_download_complete {
-        let cap = player.with_state(|st| st.queued.as_mut().and_then(|q| q.capturing.take()));
+        let cap = player.with_state(|st| {
+            st.prefetch
+                .queued_mut()
+                .and_then(|queued| queued.capturing.take())
+        });
         if let Some(cap) = cap {
             crate::download::spawn_harvest(player, cap);
         }
@@ -391,7 +288,8 @@ pub(crate) fn check_advance(player: &PlayerCore) {
         drop(std::fs::remove_file(&cap.path));
     }
 
-    let (old, has_queued) = player.with_state(|st| (st.current_song.clone(), st.queued.is_some()));
+    let (old, has_queued) =
+        player.with_state(|st| (st.current_song.clone(), st.prefetch.is_armed()));
     let boundary_song = old.as_ref().map(|s| s.id.clone());
     // 自然播完 = 听了整首;duration 未知时退用 position。
     if let Some(old) = old {
@@ -434,12 +332,12 @@ pub(crate) fn check_advance(player: &PlayerCore) {
             player.with_state(|st| {
                 let _ = adopt_queued(st);
             });
-            let (new, play_mode, playback_origin, play_url) = player.with_state(|st| {
+            let (new, play_mode, playback_origin, media_info) = player.with_state(|st| {
                 (
                     st.current_song.clone(),
                     st.play_mode,
                     st.play_origin,
-                    st.play_url.clone(),
+                    st.media_info.clone(),
                 )
             });
             if let Some(s) = new {
@@ -460,9 +358,8 @@ pub(crate) fn check_advance(player: &PlayerCore) {
                 ) {
                     player.inner.stats.play_started(pending);
                 }
-                // 富化音频快照:预排 URL 已轮转进 play_url。
-                if let Some(pu) = play_url {
-                    player.enrich_from_play_url(&pu);
+                if let Some(info) = media_info {
+                    player.enrich_from_media_info(&info);
                 }
                 player.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Lyrics { song_id: s.id }),
@@ -475,7 +372,7 @@ pub(crate) fn check_advance(player: &PlayerCore) {
         }
         Advance::Fallback => {
             // 清掉过期预排(+ 删其半截 capture 残件)+ 引擎里可能的待建 next,走兜底重播。
-            let stale = player.with_state(|st| st.queued.take());
+            let stale = player.with_state(State::take_prefetch);
             if let Some(cap) = stale.and_then(|q| q.capturing) {
                 drop(std::fs::remove_file(&cap.path));
             }
@@ -496,10 +393,12 @@ pub(crate) fn check_advance(player: &PlayerCore) {
 
 #[cfg(test)]
 mod tests {
+    use mineral_model::{BitRate, PlaybackMediaInfo};
     use mineral_protocol::{PlayCursor, PlaybackOrigin};
     use mineral_test::song;
 
     use super::{Advance, Queued, adopt_queued, decide_advance, prefetch_window_open};
+    use crate::playback_instance::PlaybackSlot;
     use crate::state::State;
 
     /// prefetch_window_open:decoder 实测优先;实测探不出(分片 fMP4 流式打开)回落元数据
@@ -568,13 +467,26 @@ mod tests {
         st.queue = vec![song("a"), song("b")];
         st.cursor = PlayCursor::InQueue(0);
         st.current_song = Some(song("a"));
-        st.prefetch_fired_for = Some(song("a").id);
-        st.queued = Some(Queued {
-            song: song("b"),
-            play_url: None,
-            origin: PlaybackOrigin::Remote,
-            capturing: None,
-        });
+        st.current_slot = Some(PlaybackSlot::new(song("a").id));
+        let next_slot = PlaybackSlot::new(song("b").id);
+        st.prefetch.arm(
+            next_slot,
+            Queued {
+                song: song("b"),
+                media_info: PlaybackMediaInfo {
+                    song_id: song("b").id,
+                    bitrate_bps: None,
+                    quality: BitRate::Higher,
+                    size: None,
+                    format: None,
+                    bit_depth: None,
+                    substituted: false,
+                },
+                direct_media: None,
+                origin: PlaybackOrigin::Remote,
+                capturing: None,
+            },
+        );
 
         let old = adopt_queued(&mut st);
         assert_eq!(old, Some(song("a").id), "应返回被顶替的旧当前歌 id");
@@ -585,8 +497,7 @@ mod tests {
         );
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "游标应定位到 b");
         assert_eq!(st.play_origin, Some(PlaybackOrigin::Remote));
-        assert!(st.queued.is_none(), "queued 应被取走");
-        assert!(st.prefetch_fired_for.is_none(), "预拉触发标记应复位");
+        assert!(!st.prefetch.is_armed(), "armed prefetch 应被取走");
     }
 
     /// adopt_queued:无已预排曲时返回 None 且不动当前歌。

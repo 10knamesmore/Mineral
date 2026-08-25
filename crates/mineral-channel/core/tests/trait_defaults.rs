@@ -5,8 +5,7 @@
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, SearchHits};
 use mineral_model::{
-    Album, AlbumId, ArtistId, BitRate, Lyrics, PlayUrl, Playlist, PlaylistId, SearchKind, Song,
-    SongId, SourceKind,
+    Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
 
 /// 只实现必需方法的最小桩 channel,所有可选能力全部走 trait 默认实现。
@@ -62,14 +61,6 @@ impl MusicChannel for BareChannel {
     }
 
     async fn playlist_detail(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Playlist> {
-        Err(Error::NotSupported)
-    }
-
-    async fn song_urls(
-        &self,
-        _ids: &[SongId],
-        _quality: BitRate,
-    ) -> mineral_channel_core::Result<Vec<PlayUrl>> {
         Err(Error::NotSupported)
     }
 

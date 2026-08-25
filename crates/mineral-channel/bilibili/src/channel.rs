@@ -2,17 +2,21 @@
 //!
 //! 业务层:组合 `api/` 端点(协议 → DTO)与 `convert`(DTO → mineral-model),收敛错误为
 //! `mineral_channel_core::Error`。B站取流需先经 view 定位分 P 的 cid,再打 playurl,故
-//! `song_urls` 每首两跳(view + playurl);详情/搜索是单跳。
+//! Playback provider resolve 每首两跳(view + playurl);详情/搜索是单跳。
 
 use async_trait::async_trait;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
 };
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, BitRate, PlayUrl, Playlist, PlaylistId, SearchKind, Song,
-    SongId, SourceKind, UserId,
+    Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
+    UserId,
+};
+use mineral_playback::{
+    DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
 };
 use rustc_hash::FxHashSet;
+use tokio_util::sync::CancellationToken;
 
 use crate::api;
 use crate::config::BilibiliConfig;
@@ -225,30 +229,6 @@ impl MusicChannel for BilibiliChannel {
             .collect())
     }
 
-    async fn song_urls(&self, ids: &[SongId], _quality: BitRate) -> Result<Vec<PlayUrl>> {
-        // 每首两跳:view 定位分 P cid → playurl 取 dash.audio → convert 带上 Referer 取流头。
-        // 音质档由 B站按登录态定(guest 封顶),故 `quality` 暂不下发。
-        let mut out = Vec::<PlayUrl>::new();
-        for id in ids {
-            let Some((bvid, page)) = parse_song_ref(id) else {
-                continue;
-            };
-            let info = api::view::video_info(&self.transport, &bvid)
-                .await
-                .map_err(map_err)?;
-            let Some(cid) = cid_for_page(&info, page) else {
-                continue;
-            };
-            let result = api::playurl::playurl(&self.transport, &bvid, cid)
-                .await
-                .map_err(map_err)?;
-            if let Some(pu) = convert::playurl_to_play(id.clone(), result) {
-                out.push(pu);
-            }
-        }
-        Ok(out)
-    }
-
     async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
         // 收藏夹内容:翻页拉全条目,单 P 直接成曲;多 P 条目逐 BV 拉 view 展开成逐 P 曲目
         // (串行:只有多 P 条目才多这一跳,音乐向收藏夹里量级很小)。view 失败分两类:该视频
@@ -315,6 +295,36 @@ impl MusicChannel for BilibiliChannel {
             .into_iter()
             .map(convert::fav_folder_to_playlist)
             .collect())
+    }
+}
+
+#[async_trait]
+impl PlaybackProvider for BilibiliChannel {
+    fn source(&self) -> SourceKind {
+        SourceKind::BILIBILI
+    }
+
+    /// Resolves one Bilibili page into its best available audio track.
+    async fn resolve(
+        &self,
+        request: PlaybackRequest,
+        cancellation: CancellationToken,
+    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+        if cancellation.is_cancelled() {
+            return Err(color_eyre::eyre::eyre!("playback resolve cancelled"));
+        }
+        let (bvid, page) = parse_song_ref(request.song_id())
+            .ok_or_else(|| color_eyre::eyre::eyre!("invalid Bilibili song id"))?;
+        let info = api::view::video_info(&self.transport, &bvid).await?;
+        let cid = cid_for_page(&info, page)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bilibili page missing"))?;
+        if cancellation.is_cancelled() {
+            return Err(color_eyre::eyre::eyre!("playback resolve cancelled"));
+        }
+        let result = api::playurl::playurl(&self.transport, &bvid, cid).await?;
+        let media = convert::playurl_to_media(request.song_id().clone(), result)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bilibili audio track missing"))?;
+        Ok(DirectPreparedPlayback::boxed(media))
     }
 }
 
