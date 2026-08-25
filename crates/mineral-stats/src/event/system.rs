@@ -90,9 +90,6 @@ pub enum PrefetchSource {
 
     /// 远端流。
     Remote,
-
-    /// 单曲循环(复用当前）。
-    RepeatOne,
 }
 
 /// 预取的裁决(prefetches.resolution)。

@@ -252,3 +252,50 @@ async fn before_stream_records_hook_fire() -> color_eyre::Result<()> {
     drop(runtime);
     Ok(())
 }
+
+/// 预取被 hook 改写:prefetches 应留 Rewritten → Armed 裁决序列(连
+/// stream_resolutions(Ok) 与 hook_fires(Rewrite) 共 4 条事件)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefetch_rewrite_records_rewritten_then_armed() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let replacement = dir.path().join("replacement.mp3");
+    std::fs::write(&replacement, b"replacement")?;
+    let script = format!(
+        r#"
+            mineral.hook("before_stream", function(ctx)
+                if ctx.mode == "prefetch" then
+                    return {{ url = "file://{}", quality = "standard" }}
+                end
+            end)
+            "#,
+        replacement.display()
+    );
+    let (core, runtime) = core_with_script_playback(
+        &script,
+        recorder,
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+    )?;
+    let next = song("b");
+    let slot = crate::playback_instance::PlaybackSlot::new(next.id.clone());
+    core.with_state(|state| {
+        state.queue = vec![song("a"), next.clone()];
+        state.cursor = mineral_protocol::PlayCursor::InQueue(0);
+        state.current_song = Some(song("a"));
+        state.prefetch.replace_opening(slot.clone());
+    });
+    crate::playback::start_prefetch(&core, next, slot);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while store.status().await?.events < 4 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:Rewritten / Armed 裁决未落库");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(runtime);
+    Ok(())
+}

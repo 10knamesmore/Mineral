@@ -433,46 +433,36 @@ mod tests {
         Ok(())
     }
 
-    /// prefetches:song 拆两列、source / resolution 各落值(armed / vetoed 两态)。
+    /// prefetches:song 拆两列、source / resolution 各落值(armed / vetoed / rewritten / failed 四态)。
     #[tokio::test]
-    async fn record_prefetch_armed_and_vetoed() -> color_eyre::Result<()> {
+    async fn record_prefetch_resolutions() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
-        store
-            .record_event(
-                4000,
-                None,
-                &StatsEvent::System(SystemEvent::Prefetch {
-                    song: song(),
-                    source: PrefetchSource::Remote,
-                    resolution: PrefetchResolution::Armed,
-                }),
-            )
-            .await?;
-        store
-            .record_event(
-                4001,
-                None,
-                &StatsEvent::System(SystemEvent::Prefetch {
-                    song: song(),
-                    source: PrefetchSource::Local,
-                    resolution: PrefetchResolution::Vetoed,
-                }),
-            )
-            .await?;
+        let cases = [
+            (PrefetchSource::Remote, PrefetchResolution::Armed),
+            (PrefetchSource::Local, PrefetchResolution::Vetoed),
+            (PrefetchSource::Remote, PrefetchResolution::Rewritten),
+            (PrefetchSource::Local, PrefetchResolution::Failed),
+        ];
+        for (i, (source, resolution)) in cases.iter().enumerate() {
+            store
+                .record_event(
+                    4000 + i64::try_from(i)?,
+                    None,
+                    &StatsEvent::System(SystemEvent::Prefetch {
+                        song: song(),
+                        source: *source,
+                        resolution: *resolution,
+                    }),
+                )
+                .await?;
+        }
 
         let rows = sqlx::query_as::<_, (PrefetchSource, PrefetchResolution)>(
             "SELECT source, resolution FROM prefetches ORDER BY id",
         )
         .fetch_all(live(&store)?)
         .await?;
-        let first = rows
-            .first()
-            .ok_or_else(|| color_eyre::eyre::eyre!("expected first row"))?;
-        let second = rows
-            .get(1)
-            .ok_or_else(|| color_eyre::eyre::eyre!("expected second row"))?;
-        assert_eq!(*first, (PrefetchSource::Remote, PrefetchResolution::Armed));
-        assert_eq!(*second, (PrefetchSource::Local, PrefetchResolution::Vetoed));
+        assert_eq!(rows, cases);
         Ok(())
     }
 

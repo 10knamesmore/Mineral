@@ -185,7 +185,9 @@ fn audit_system_emitters(event: &SystemEvent) -> &'static str {
         SystemEvent::StreamResolution { .. } => "playback.rs provider resolve success / failure",
         SystemEvent::HookFire { .. } => "hook_bridge 各提交点裁决回来处",
         SystemEvent::GaplessBoundary { .. } => "gapless.rs check_advance 边界裁决",
-        SystemEvent::Prefetch { .. } => "gapless.rs 预取武装 / 否决 / 失败各终态",
+        SystemEvent::Prefetch { .. } => {
+            "gapless.rs 武装 + hook_bridge.rs 否决 + playback.rs 改写 / 失败"
+        }
         SystemEvent::CacheHarvest { .. } => "download.rs spawn_harvest 收割终态",
         SystemEvent::CacheEviction { .. } => "media_cache 淘汰点",
         SystemEvent::ScriptLifecycle { .. } => "script_reload + script_bridge 生命周期回调",

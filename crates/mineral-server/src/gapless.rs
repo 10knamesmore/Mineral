@@ -39,6 +39,20 @@ pub(crate) fn record_prefetch(
     ));
 }
 
+/// 预取来源按落库口径归并:本地副本(缓存 / 下载库)→ `Local`,远端流 → `Remote`。
+///
+/// # Params:
+///   - `origin`: 播放来源事实
+///
+/// # Return:
+///   对应的预取来源。
+pub(crate) fn prefetch_source(origin: PlaybackOrigin) -> mineral_stats::PrefetchSource {
+    match origin {
+        PlaybackOrigin::Cache | PlaybackOrigin::Download => mineral_stats::PrefetchSource::Local,
+        PlaybackOrigin::Remote => mineral_stats::PrefetchSource::Remote,
+    }
+}
+
 pub(crate) use state::{PrefetchState, Queued};
 
 /// 曲终(finished_seq 前进)时服务端该走的推进动作。
@@ -238,10 +252,7 @@ pub(crate) fn arm_opened(
     if !armed {
         return;
     }
-    let source = match origin {
-        PlaybackOrigin::Cache | PlaybackOrigin::Download => mineral_stats::PrefetchSource::Local,
-        PlaybackOrigin::Remote => mineral_stats::PrefetchSource::Remote,
-    };
+    let source = prefetch_source(origin);
     record_prefetch(
         player,
         song.id,

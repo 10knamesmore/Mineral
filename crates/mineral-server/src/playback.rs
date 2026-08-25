@@ -179,7 +179,7 @@ async fn run(
                         error = mineral_log::chain(&error),
                         "prepared playback open failed"
                     );
-                    finish_unplayable(player, &song, role);
+                    finish_unplayable(player, &song, role, Some(origin));
                 }
                 return;
             }
@@ -221,7 +221,7 @@ fn select_plan(
         HookDecision::Continue => match resolution {
             Resolution::Playable(plan) => Some(plan),
             Resolution::Unplayable => {
-                finish_unplayable(player, song, role);
+                finish_unplayable(player, song, role, None);
                 None
             }
         },
@@ -232,9 +232,19 @@ fn select_plan(
             };
             let Some(prepared) = crate::hook_bridge::rewrite_prepared(&song.id, original, &rewrite)
             else {
-                finish_unplayable(player, song, role);
+                finish_unplayable(player, song, role, None);
                 return None;
             };
+            // 埋点:预取被插件改写记 Rewritten(产物按 Remote,与下方 origin 一致);
+            // 之后装填成功还会再记一条 Armed,同一预取在 prefetches 表留下裁决序列。
+            if role.is_prefetch() {
+                crate::gapless::record_prefetch(
+                    player,
+                    song.id.clone(),
+                    mineral_stats::PrefetchSource::Remote,
+                    mineral_stats::PrefetchResolution::Rewritten,
+                );
+            }
             Some(ResolvedPlan {
                 prepared,
                 origin: PlaybackOrigin::Remote,
@@ -354,9 +364,30 @@ fn matches_slot(player: &PlayerCore, slot: &PlaybackSlot, role: PlaybackRole) ->
 }
 
 /// Applies the established unresolved/open-failure behavior for one role.
-fn finish_unplayable(player: &PlayerCore, song: &Song, role: PlaybackRole) {
+///
+/// # Params:
+///   - `player`: Playback owner.
+///   - `song`: Failed song.
+///   - `role`: Current or prefetch failure behavior.
+///   - `origin`: 已解析出的来源(open 失败时);resolve 失败尚无来源,传 `None` 按远端记——
+///     `resolve` 只有 provider 路径会失败(本地命中必返 `Ok`),归类不失真。
+fn finish_unplayable(
+    player: &PlayerCore,
+    song: &Song,
+    role: PlaybackRole,
+    origin: Option<PlaybackOrigin>,
+) {
     match role {
         PlaybackRole::Current => crate::hook_bridge::finish_failed(player, song),
-        PlaybackRole::Prefetch => {}
+        // 预取失败不走错误完播(当前曲还在响),记一条 prefetches(Failed) 裁决即可。
+        PlaybackRole::Prefetch => crate::gapless::record_prefetch(
+            player,
+            song.id.clone(),
+            origin.map_or(
+                mineral_stats::PrefetchSource::Remote,
+                crate::gapless::prefetch_source,
+            ),
+            mineral_stats::PrefetchResolution::Failed,
+        ),
     }
 }

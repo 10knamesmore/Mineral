@@ -361,6 +361,54 @@ async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 预取 resolve 失败:除 stream_resolutions(Error, for_prefetch) 外还应记一条
+/// prefetches(Failed) 裁决 —— 等到 2 条事件才证明失败发射点接线真产数据。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefetch_resolve_failure_records_failed() -> color_eyre::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
+    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
+    let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
+        calls: Arc::default(),
+        liked_ids: None,
+        playlists: None,
+    })];
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ true,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
+        channels,
+        playback,
+        ServerStore::disabled(),
+        /*music_dir*/ None,
+        MediaCache::disabled(),
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        recorder,
+    )?;
+    let next = song("b");
+    let slot = crate::playback_instance::PlaybackSlot::new(next.id.clone());
+    core.with_state(|state| {
+        state.queue = vec![song("a"), next.clone()];
+        state.cursor = PlayCursor::InQueue(0);
+        state.current_song = Some(song("a"));
+        state.prefetch.replace_opening(slot.clone());
+    });
+    crate::playback::start_prefetch(&core, next, slot);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while store.status().await?.events < 2 {
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:prefetches(Failed) 未落库");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Ok(())
+}
+
 /// 一次真 Lyrics 取数经 scheduler 收束 → 发 FetchDone → 记一条 fetches;真 recorder 落库,
 /// 证 mineral-task lane 埋点信号 + events.rs 接线全链产数据。Lyrics 不触发其他 stats 事件,
 /// 故 events 恰为 1(隔离 fetch)。
