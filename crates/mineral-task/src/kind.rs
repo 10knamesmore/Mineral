@@ -4,7 +4,6 @@ use mineral_channel_core::Page;
 use mineral_model::{AlbumId, ArtistId, PlaylistId, SearchKind, SongId, SourceKind};
 use serde::{Deserialize, Serialize};
 
-use crate::lane::Lane;
 use crate::write::PlaylistWriteOp;
 
 /// 一个待调度任务的所有信息。具体业务参数挂在子枚举里。
@@ -13,20 +12,12 @@ pub enum TaskKind {
     /// channel 数据拉取。
     ChannelFetch(ChannelFetchKind),
 
-    /// 歌单写操作(per-source 串行执行,见 `Lane::PlaylistWrite`)。
+    /// 歌单写操作，由每个 source 的专用 worker 串行执行。
     PlaylistWrite(PlaylistWriteOp),
     // 后续:PlayPrep / AuthRefresh / PrePreload / LocalScan
 }
 
 impl TaskKind {
-    /// 该任务路由到的 lane。
-    pub fn lane(&self) -> Lane {
-        match self {
-            Self::ChannelFetch(_) => Lane::ChannelFetch,
-            Self::PlaylistWrite(_) => Lane::PlaylistWrite,
-        }
-    }
-
     /// 用于 ongoing 去重:相同 key 的任务在 ongoing 里只保留一条;后到的命中既存任务。
     pub fn dedup_key(&self) -> DedupKey {
         match self {
@@ -156,8 +147,7 @@ impl ChannelFetchKind {
 
 /// [`ChannelFetchKind`] 的 wire-friendly 标签:无字段 enum,可哈希、可序列化。
 ///
-/// 用于:跨进程「按种类砍一批」(见 `mineral_protocol::CancelFilter`)、按 kind 计数
-/// (见 [`crate::Snapshot::by_kind`])。
+/// 用于按 fetch kind 统计运行中的任务数量。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChannelFetchKindTag {
     /// 对应 [`ChannelFetchKind::MyPlaylists`]。

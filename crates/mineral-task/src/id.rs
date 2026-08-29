@@ -5,21 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 /// 全进程唯一的任务 id。
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId(u64);
-
-impl TaskId {
-    /// 暴露内部数值,主要给日志 / debug 用。
-    pub fn raw(self) -> u64 {
-        self.0
-    }
-}
-
-impl std::fmt::Display for TaskId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "T{}", self.0)
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TaskId(u64);
 
 /// 单调递增的 id 分配器。
 #[derive(Debug, Default)]

@@ -17,7 +17,7 @@ use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{
     DownloadProgress, DownloadTarget, PlayCursor, PlaybackOrigin, PlayerSync, PlayerVersions,
 };
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskId, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskKind};
 use parking_lot::Mutex;
 
 use crate::download;
@@ -439,17 +439,9 @@ impl PlayerCore {
         self.inner.audio.snapshot()
     }
 
-    /// 直通:client submit 任务(playlists/tracks 类 prefetch)。
-    pub fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {
-        self.inner.scheduler.submit(kind, priority).id
-    }
-
-    /// 直通:client cancel(用于切 view 时砍 prefetch)。
-    pub fn cancel_tasks_where<F>(&self, pred: F)
-    where
-        F: Fn(&TaskKind) -> bool + Send + Sync,
-    {
-        self.inner.scheduler.cancel_where(pred);
+    /// 把 client 请求交给 scheduler；返回时不等待任务完成。
+    pub fn submit_task(&self, kind: TaskKind, priority: Priority) {
+        self.inner.scheduler.submit(kind, priority);
     }
 
     // ---- player 业务 ----
@@ -476,7 +468,7 @@ impl PlayerCore {
             title = %song.name,
             "play song"
         );
-        // Lyrics remains channel data; playback work is cancelled by the instance slots below.
+        // 这里只取消旧歌词拉取；播放实例由下方 slot 生命周期负责取消。
         self.inner
             .scheduler
             .cancel_where(|k| matches!(k, TaskKind::ChannelFetch(ChannelFetchKind::Lyrics { .. })));

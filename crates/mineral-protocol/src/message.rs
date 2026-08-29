@@ -5,10 +5,10 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
-use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskKind};
 use serde::{Deserialize, Serialize};
 
-use crate::{CancelFilter, PlayerSync, PlayerVersions, QueueEditOutcome, QueueOp};
+use crate::{PlayerSync, PlayerVersions, QueueEditOutcome, QueueOp};
 
 /// Atomic PlayQueue request 的 validation error。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,11 +220,8 @@ pub enum Request {
     AudioSnapshot,
 
     // ---- 任务调度 ----
-    /// 提交一个任务。返回 [`Response::TaskId`]。
+    /// 提交一个任务。返回 [`Response::Ok`]，不等待任务完成。
     SubmitTask(TaskKind, Priority),
-
-    /// 按过滤条件批量取消任务。返回 [`Response::Ok`]。
-    CancelTasks(CancelFilter),
 
     /// 拉一次 scheduler 状态快照。返回 [`Response::TaskSnapshot`]。
     TaskSnapshot,
@@ -427,14 +424,11 @@ pub enum Request {
 /// Server → Client 应答。
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
-    /// 无返回值的命令成功(play / pause / resume / stop / seek / set_volume / cancel_tasks)。
+    /// 无返回值的命令成功。
     Ok,
 
     /// 对应 [`Request::AudioSnapshot`]。
     AudioSnapshot(AudioSnapshot),
-
-    /// 对应 [`Request::SubmitTask`]。
-    TaskId(TaskId),
 
     /// 对应 [`Request::TaskSnapshot`]。
     TaskSnapshot(Snapshot),

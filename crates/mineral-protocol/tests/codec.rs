@@ -4,11 +4,11 @@ use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
 use mineral_model::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ChannelFetchKindTag, CopyTemplateCtx, CurrentSync, DownloadProgress,
-    DownloadTarget, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef, QueueSync,
-    Request, Response, ScriptBind, SongStatsWire, StoreValue, ViewKind, framed, recv, send,
+    CopyTemplateCtx, CurrentSync, DownloadProgress, DownloadTarget, KeyContext, PlayMode,
+    PlayerSync, PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind,
+    SongStatsWire, StoreValue, ViewKind, framed, recv, send,
 };
-use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskId, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskKind};
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 use tokio::io::duplex;
@@ -77,30 +77,6 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
     if let Request::SubmitTask(k, p) = got {
         assert_eq!(k, kind);
         assert_eq!(p, Priority::User);
-    } else {
-        return Err(eyre!("unexpected variant: {got:?}"));
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn round_trip_request_cancel_tasks() -> color_eyre::Result<()> {
-    let (a, b) = duplex(64 * 1024);
-    let mut sender = framed(a);
-    let mut receiver = framed(b);
-
-    let filter = CancelFilter::ChannelFetchKinds(vec![
-        ChannelFetchKindTag::Lyrics,
-        ChannelFetchKindTag::PlaylistDetail,
-    ]);
-    let req = Request::CancelTasks(filter.clone());
-    json_round_trips(&req)?;
-    send(&mut sender, &req).await?;
-    let got: Request = recv(&mut receiver)
-        .await?
-        .ok_or_else(|| eyre!("frame missing"))?;
-    if let Request::CancelTasks(f) = got {
-        assert_eq!(f, filter);
     } else {
         return Err(eyre!("unexpected variant: {got:?}"));
     }
@@ -336,14 +312,12 @@ async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Response variant 的 round-trip:Ok / TaskId / TaskEvents / TaskSnapshot / PcmData。
+/// Response variant 的 round-trip:Ok / TaskSnapshot / PcmData。
 #[tokio::test]
 async fn round_trip_responses() -> color_eyre::Result<()> {
     resp_round_trips(Response::Ok).await?;
-    resp_round_trips(Response::TaskId(TaskId::default())).await?;
     resp_round_trips(Response::TaskSnapshot(Snapshot {
         running: 2,
-        by_lane: Default::default(),
         by_kind: Default::default(),
     }))
     .await?;

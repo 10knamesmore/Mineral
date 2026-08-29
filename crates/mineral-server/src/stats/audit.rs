@@ -42,7 +42,6 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::SubmitTask(..) => {
             NotAnEvent("任务提交;取数事件在 task 终态记,见 audit_fetch_kind")
         }
-        Request::CancelTasks(..) => Recorded("task_cancels"),
         Request::TaskSnapshot => NotAnEvent("轮询读:任务快照"),
         Request::PlaySong(..) => Recorded("plays"),
         Request::PlayQueue { .. } => Recorded("queue_ops"),
@@ -163,7 +162,6 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
         BehaviorEvent::PlaylistOp { .. } => "playlist 写 task 终态(events.rs)",
         BehaviorEvent::Fetch { .. } => "channel_fetch 终态(events.rs)",
         BehaviorEvent::Download { .. } => "download.rs record_download(三种结局)",
-        BehaviorEvent::TaskCancel { .. } => "ClientHandle::cancel_tasks",
         BehaviorEvent::CopyRender { .. } => "serve.rs RenderCopyTemplate",
         BehaviorEvent::ActionInvocation { .. } => "serve.rs InvokeAction",
         BehaviorEvent::ConfigOverride { .. } => "script_bridge ConfigOverride",
@@ -197,8 +195,8 @@ fn audit_system_emitters(event: &SystemEvent) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    /// 真实事件表 + plays 事实表(与 `mineral-stats` migrations 建的 28 张事件表 + `plays`
-    /// 同源;mineral-stats 侧有测试把那 28 张与 migrations 对账,此处复制其名做本 crate 侧
+    /// 真实事件表 + plays 事实表(与 `mineral-stats` migrations 建的事件表 + `plays`
+    /// 同源;mineral-stats 侧有测试把这些表与 migrations 对账,此处复制其名做本 crate 侧
     /// 的表名核对)。
     const REAL_TABLES: &[&str] = &[
         "plays",
@@ -212,7 +210,6 @@ mod tests {
         "playlist_ops",
         "fetches",
         "downloads",
-        "task_cancels",
         "copy_renders",
         "action_invocations",
         "config_overrides",
@@ -249,7 +246,6 @@ mod tests {
         "app_lifecycle",
         "action_invocations",
         "copy_renders",
-        "task_cancels",
         "spawns",
         "searches",
         "stream_resolutions",

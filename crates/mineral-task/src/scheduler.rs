@@ -12,7 +12,6 @@ use crate::handle::TaskHandle;
 use crate::id::{Priority, TaskId};
 use crate::kind::ChannelFetchKindTag;
 use crate::kind::TaskKind;
-use crate::lane::Lane;
 use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
 use crate::lanes::playlist_write::{Job as PlaylistWriteJob, PlaylistWriteLane};
 use crate::ongoing::{Bind, Ongoing};
@@ -40,17 +39,14 @@ struct Inner {
     playlist_write: PlaylistWriteLane,
 }
 
-/// `Scheduler::snapshot` 的返回:当前 running 数与按 lane / kind 的拆分。
+/// `Scheduler::snapshot` 的返回:当前 running 数与按 fetch kind 的拆分。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// 全部 lane 的 running 任务总数。
+    /// 全部 running 任务总数。
     pub running: usize,
 
-    /// 每个 lane 的 running 任务计数(无任务的 lane 不出现)。
-    pub by_lane: FxHashMap<Lane, usize>,
-
     /// `ChannelFetch` 任务按 [`ChannelFetchKindTag`] 细分(其它种类不在此 map)。
-    /// UI 用它做「`pl:1 tr:2 song:1 lyr:0 ♥:0`」级别的拆分显示。
+    /// UI 用它显示 `pl:1 tr:2 song:1 lyr:0 ♥:0` 级别的拆分。
     pub by_kind: FxHashMap<ChannelFetchKindTag, usize>,
 }
 
@@ -91,10 +87,11 @@ impl Scheduler {
             Bind::Fresh {
                 id,
                 handle,
+                cancel,
                 done_tx,
             } => {
                 mineral_log::debug!(target: "scheduler", task_id = ?id, kind = ?kind, priority = ?priority, "submit new task");
-                self.dispatch(id, kind, priority, &handle, done_tx);
+                self.dispatch(id, kind, priority, cancel, done_tx);
                 handle
             }
         }
@@ -106,7 +103,7 @@ impl Scheduler {
         id: TaskId,
         kind: TaskKind,
         priority: Priority,
-        handle: &TaskHandle,
+        cancel: tokio_util::sync::CancellationToken,
         done_tx: tokio::sync::oneshot::Sender<crate::outcome::TaskOutcome>,
     ) {
         match kind {
@@ -119,7 +116,7 @@ impl Scheduler {
                         id,
                         kind: k,
                         priority,
-                        cancel: handle.cancel.clone(),
+                        cancel,
                         done_tx,
                     },
                 );
@@ -131,7 +128,7 @@ impl Scheduler {
                     PlaylistWriteJob {
                         id,
                         op,
-                        cancel: handle.cancel.clone(),
+                        cancel,
                         done_tx,
                     },
                     &self.inner.events,
@@ -140,12 +137,7 @@ impl Scheduler {
         }
     }
 
-    /// 单个取消。命中既存任务时 cancel 其 token;worker 在下个 await 点感知。
-    pub fn cancel(&self, id: TaskId) {
-        self.inner.ongoing.cancel(id);
-    }
-
-    /// 批量取消满足谓词的任务。常用于"输入又变了,砍掉所有 Search"等场景。
+    /// 取消满足谓词的内部任务；worker 在下个 await 点停止。
     pub fn cancel_where<F>(&self, pred: F)
     where
         F: Fn(&TaskKind) -> bool + Send + Sync,
@@ -164,7 +156,6 @@ impl Scheduler {
         let counts = self.inner.ongoing.snapshot();
         Snapshot {
             running: counts.running,
-            by_lane: counts.by_lane,
             by_kind: counts.by_kind,
         }
     }

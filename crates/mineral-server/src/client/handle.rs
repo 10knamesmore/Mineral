@@ -4,10 +4,10 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, Event, PlayQueueError, PlayerSync,
-    PlayerVersions, QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
+    DownloadProgress, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
+    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskEvent, TaskKind};
 
 use super::contract::Client;
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
@@ -562,19 +562,8 @@ impl Client for ClientHandle {
         self.player.sync(known)
     }
 
-    fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {
-        self.player.submit_task(kind, priority)
-    }
-    fn cancel_tasks(&self, filter: CancelFilter) {
-        let filter_tags = match &filter {
-            CancelFilter::ChannelFetchKinds(tags) => tags
-                .iter()
-                .map(|t| format!("{t:?}"))
-                .collect::<Vec<_>>()
-                .join(","),
-        };
-        self.player.cancel_tasks_where(move |k| filter.matches(k));
-        self.record_behavior(mineral_stats::BehaviorEvent::TaskCancel { filter_tags });
+    fn submit_task(&self, kind: TaskKind, priority: Priority) {
+        self.player.submit_task(kind, priority);
     }
     fn drain_events(&self) -> Vec<Event> {
         let mut rx = self.events.lock();

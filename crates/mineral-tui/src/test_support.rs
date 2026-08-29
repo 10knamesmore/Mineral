@@ -12,9 +12,9 @@ use mineral_channel_core::ChannelCaps;
 use mineral_model::{
     MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
-use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions};
+use mineral_protocol::{PlayerSync, PlayerVersions};
 use mineral_server::Client;
-use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskKind};
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
@@ -330,17 +330,14 @@ impl Client for TestClient {
     fn player_sync(&self, _known: PlayerVersions) -> PlayerSync {
         PlayerSync::default()
     }
-    fn submit_task(&self, kind: TaskKind, _priority: Priority) -> TaskId {
+    fn submit_task(&self, kind: TaskKind, _priority: Priority) {
         if let Ok(mut v) = self.submitted.lock() {
             v.push(kind);
         }
-        TaskId::default()
     }
-    fn cancel_tasks(&self, _filter: CancelFilter) {}
     fn task_snapshot(&self) -> Snapshot {
         Snapshot {
             running: 0,
-            by_lane: FxHashMap::default(),
             by_kind: FxHashMap::default(),
         }
     }

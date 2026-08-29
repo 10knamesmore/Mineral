@@ -22,12 +22,12 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed,
-    PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire, Request, RequestId, Response,
-    Subscription, client_handshake, decode, encode, framed,
+    ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed, PlayQueueError, PlayerSync,
+    PlayerVersions, QueueContextWire, Request, RequestId, Response, Subscription, client_handshake,
+    decode, encode, framed,
 };
 use mineral_server::Client;
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskEvent, TaskKind};
 use rustc_hash::FxHashMap;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -312,18 +312,11 @@ impl Client for RemoteClient {
             }
         }
     }
-    fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId {
+    fn submit_task(&self, kind: TaskKind, priority: Priority) {
         match self.send_recv(Request::SubmitTask(kind, priority)) {
-            Response::TaskId(id) => id,
-            other => {
-                warn_unexpected("submit_task", &other);
-                // submit 失败时返回 default TaskId(0);调用方都 fire-and-forget,无影响。
-                TaskId::default()
-            }
+            Response::Ok => {}
+            other => warn_unexpected("submit_task", &other),
         }
-    }
-    fn cancel_tasks(&self, filter: CancelFilter) {
-        let _ = self.send_recv(Request::CancelTasks(filter));
     }
     fn task_snapshot(&self) -> Snapshot {
         match self.send_recv(Request::TaskSnapshot) {
@@ -332,7 +325,6 @@ impl Client for RemoteClient {
                 warn_unexpected("task_snapshot", &other);
                 Snapshot {
                     running: 0,
-                    by_lane: FxHashMap::default(),
                     by_kind: FxHashMap::default(),
                 }
             }

@@ -1,15 +1,8 @@
-//! Wire-friendly 化的回归测试:验证 ClientHandle 暴露面上所有 wire-bound 类型
-//! 都能 serde round-trip。这是 IPC 化的硬前置——这个测试一直绿,IPC transport
-//! 落地时只需在 mineral-server 内加一层编解码 adapter,客户端调用方零改动。
-//!
-//! `ClientHandle` 本身不在测试范围:它内部持 Arc handle 是同进程实现细节,
-//! 跨进程时整体被 RemoteClient 替代。这里只测「方法签名上出现的 enum / id /
-//! snapshot / filter」是否真能过 wire。
+//! 验证 client/server 边界上的任务与事件类型能经过 serde 往返。
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{PlaylistId, SongId, SourceKind};
-use mineral_server::{CancelFilter, ChannelFetchKindTag};
-use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskId, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use rustc_hash::FxHashSet;
 
 fn round_trip<T>(v: &T) -> color_eyre::Result<T>
@@ -62,53 +55,17 @@ fn task_kind_round_trip() -> color_eyre::Result<()> {
 }
 
 #[test]
-fn priority_and_task_id_round_trip() -> color_eyre::Result<()> {
+fn priority_round_trip() -> color_eyre::Result<()> {
     for p in [Priority::Background, Priority::User] {
         let back = round_trip(&p)?;
         assert_eq!(p, back);
     }
-    // TaskId 内部 u64,我们没有公开构造器,但 Default-able 类型可以塞个数字 JSON 反过来 parse
-    let id_json = "42";
-    let id: TaskId = serde_json::from_str(id_json)?;
-    let s = serde_json::to_string(&id)?;
-    assert_eq!(s, id_json);
-    Ok(())
-}
-
-#[test]
-fn cancel_filter_round_trip() -> color_eyre::Result<()> {
-    let cases = vec![
-        CancelFilter::ChannelFetchKinds(vec![
-            ChannelFetchKindTag::Lyrics,
-            ChannelFetchKindTag::PlaylistDetail,
-        ]),
-        CancelFilter::ChannelFetchKinds(vec![]),
-    ];
-    for f in &cases {
-        let back = round_trip(f)?;
-        assert_eq!(f, &back);
-    }
-    Ok(())
-}
-
-#[test]
-fn cancel_filter_matches_only_intended_kinds() -> color_eyre::Result<()> {
-    let lyrics = TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
-        song_id: SongId::new(SourceKind::NETEASE, "s"),
-    });
-    let myplaylists = TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
-        source: SourceKind::NETEASE,
-    });
-
-    let f = CancelFilter::ChannelFetchKinds(vec![ChannelFetchKindTag::Lyrics]);
-    assert!(f.matches(&lyrics));
-    assert!(!f.matches(&myplaylists));
     Ok(())
 }
 
 #[test]
 fn task_event_round_trip() -> color_eyre::Result<()> {
-    // TaskEvent 没派 PartialEq(Lyrics/Playlist 等也没),所以只测「能编+能 decode」。
+    // TaskEvent 没派 PartialEq(Lyrics/Playlist 等也没),所以只验证能编译并 decode。
     let cases = vec![
         TaskEvent::PlaylistsFetched {
             source: SourceKind::NETEASE,

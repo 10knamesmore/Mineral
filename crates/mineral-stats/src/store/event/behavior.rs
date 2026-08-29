@@ -147,7 +147,6 @@ pub(super) async fn write(
             )
             .await
         }
-        BehaviorEvent::TaskCancel { filter_tags } => write_task_cancel(&w, filter_tags).await,
         BehaviorEvent::CopyRender {
             template_index,
             ctx_kind,
@@ -490,21 +489,6 @@ async fn write_download(
     .execute(w.pool)
     .await
     .wrap_err("record_event downloads 落库失败")?;
-    Ok(())
-}
-
-/// 落 task_cancels 一行。
-async fn write_task_cancel(w: &BehaviorWrite<'_>, filter_tags: &str) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO task_cancels (ts, session_id, actor, filter_tags) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        filter_tags,
-    )
-    .execute(w.pool)
-    .await
-    .wrap_err("record_event task_cancels 落库失败")?;
     Ok(())
 }
 

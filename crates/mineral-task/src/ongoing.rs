@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 use crate::handle::{SharedDone, TaskHandle, shared_done};
 use crate::id::{IdAllocator, Priority, TaskId};
 use crate::kind::{ChannelFetchKindTag, DedupKey, TaskKind};
-use crate::lane::Lane;
 use crate::outcome::TaskOutcome;
 use tokio::sync::oneshot;
 
@@ -19,7 +18,7 @@ pub(crate) struct TaskMeta {
     /// 优先级,escalate 决策时与新提交比较。
     pub priority: Priority,
 
-    /// 取消令牌,与 [`TaskHandle`] 共享。
+    /// 取消令牌,与 worker 共享。
     pub cancel: CancellationToken,
 
     /// 终态 future,可被多个 waiter 共同 await。
@@ -27,11 +26,9 @@ pub(crate) struct TaskMeta {
 }
 
 impl TaskMeta {
-    /// 用 `id` 拼出对外的 [`TaskHandle`](共享 cancel + done)。
-    fn handle(&self, id: TaskId) -> TaskHandle {
+    /// 构造共享同一终态的 [`TaskHandle`]。
+    fn handle(&self) -> TaskHandle {
         TaskHandle {
-            id,
-            cancel: self.cancel.clone(),
             done: self.done.clone(),
         }
     }
@@ -68,6 +65,9 @@ pub(crate) enum Bind {
         /// 给提交方持有的 handle。
         handle: TaskHandle,
 
+        /// 给对应 worker 的取消令牌。
+        cancel: CancellationToken,
+
         /// 给 worker 上报终态的 oneshot 发送端。
         done_tx: oneshot::Sender<TaskOutcome>,
     },
@@ -97,7 +97,7 @@ impl Ongoing {
         if let Some(existing_id) = inner.by_dedup.get(&dedup).copied() {
             if let Some(existing) = inner.tasks.get(&existing_id) {
                 if priority <= existing.priority {
-                    return Bind::Shared(existing.handle(existing_id));
+                    return Bind::Shared(existing.handle());
                 }
                 // escalate:cancel 旧、走下面的新建路径。
                 mineral_log::info!(
@@ -119,15 +119,16 @@ impl Ongoing {
         let meta = TaskMeta {
             kind,
             priority,
-            cancel,
+            cancel: cancel.clone(),
             done,
         };
-        let handle = meta.handle(id);
+        let handle = meta.handle();
         inner.tasks.insert(id, meta);
         inner.by_dedup.insert(dedup, id);
         Bind::Fresh {
             id,
             handle,
+            cancel,
             done_tx,
         }
     }
@@ -145,14 +146,6 @@ impl Ongoing {
         }
     }
 
-    /// 单个取消。命中就 cancel 对应 token。
-    pub fn cancel(&self, id: TaskId) {
-        let inner = self.inner.lock();
-        if let Some(meta) = inner.tasks.get(&id) {
-            meta.cancel.cancel();
-        }
-    }
-
     /// 批量取消满足谓词的任务。
     pub fn cancel_where(&self, pred: &(dyn Fn(&TaskKind) -> bool + Send + Sync)) {
         let inner = self.inner.lock();
@@ -166,18 +159,14 @@ impl Ongoing {
     /// 当前 running 计数(含 enqueued 未真正开跑的)。
     pub fn snapshot(&self) -> SnapshotCounts {
         let inner = self.inner.lock();
-        let mut by_lane = FxHashMap::<Lane, usize>::default();
         let mut by_kind = FxHashMap::<ChannelFetchKindTag, usize>::default();
         for meta in inner.tasks.values() {
-            *by_lane.entry(meta.kind.lane()).or_insert(0) += 1;
-            // by_kind 只细分 ChannelFetch;其余种类(PlaylistWrite 等)由 by_lane 计数。
             if let TaskKind::ChannelFetch(k) = &meta.kind {
                 *by_kind.entry(ChannelFetchKindTag::of(k)).or_insert(0) += 1;
             }
         }
         SnapshotCounts {
             running: inner.tasks.len(),
-            by_lane,
             by_kind,
         }
     }
@@ -187,9 +176,6 @@ impl Ongoing {
 pub(crate) struct SnapshotCounts {
     /// 当前 ongoing 总数(含已 enqueue 但未真正开跑)。
     pub running: usize,
-
-    /// 按 [`Lane`] 分桶的计数。
-    pub by_lane: FxHashMap<Lane, usize>,
 
     /// ChannelFetch 任务按 [`ChannelFetchKindTag`] 细分(其它 kind 不在此 map)。
     pub by_kind: FxHashMap<ChannelFetchKindTag, usize>,

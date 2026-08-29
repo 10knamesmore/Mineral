@@ -48,7 +48,7 @@ mod tagging;
 pub use client::{Client, ClientHandle};
 pub use config::{ServerConfig, resolve_audio_mode};
 pub use mineral_audio::AudioMode;
-pub use mineral_protocol::{CancelFilter, ChannelFetchKindTag};
+pub use mineral_protocol::ChannelFetchKindTag;
 pub use script_bridge::{ScriptParts, ScriptPumps, ScriptReloadParts};
 pub use script_reload::spawn_script_reloader;
 pub use server::{Server, SourceBackends};

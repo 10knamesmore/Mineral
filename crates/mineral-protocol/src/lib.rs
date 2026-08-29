@@ -13,7 +13,6 @@
 //!   错配回 `Hello { accepted: false }`,client 提示重启 daemon。
 //! - **错误**: server 端处理异常用 [`Response::Error`] 兜底;不再额外的 Status code
 
-mod cancel;
 mod codec;
 mod event;
 mod frame;
@@ -25,7 +24,6 @@ mod player;
 mod queue_edit;
 mod store;
 
-pub use cancel::CancelFilter;
 pub use codec::{Framed, decode, encode, framed, recv, send};
 pub use event::{
     BusValue, Event, FinishReason, PropName, PropValue, SpanAlign, SpanFg, TextSpan, ToastKind,

@@ -20,7 +20,6 @@ pub(crate) const EVENT_TABLES: &[&str] = &[
     "playlist_ops",
     "fetches",
     "downloads",
-    "task_cancels",
     "copy_renders",
     "action_invocations",
     "config_overrides",

@@ -4,10 +4,10 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    CancelFilter, DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions,
-    QueueContextWire, QueueEditOutcome, QueueOp,
+    DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire,
+    QueueEditOutcome, QueueOp,
 };
-use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
+use mineral_task::{Priority, Snapshot, TaskKind};
 
 /// Client → Server 调用面的抽象。
 ///
@@ -90,10 +90,8 @@ pub trait Client: Send + Sync {
     fn player_sync(&self, known: PlayerVersions) -> PlayerSync;
 
     // ---- 任务调度(直通,playlists/tracks 类 prefetch 用) ----
-    /// 提交一个任务,返回任务 id。
-    fn submit_task(&self, kind: TaskKind, priority: Priority) -> TaskId;
-    /// 按 [`CancelFilter`] 批量取消。
-    fn cancel_tasks(&self, filter: CancelFilter);
+    /// 提交一个任务；返回时只表示 scheduler 已受理，不表示任务完成。
+    fn submit_task(&self, kind: TaskKind, priority: Priority);
     /// 当前 scheduler 状态快照。
     fn task_snapshot(&self) -> Snapshot;
 

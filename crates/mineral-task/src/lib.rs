@@ -9,7 +9,6 @@ mod event;
 mod handle;
 mod id;
 mod kind;
-mod lane;
 mod lanes;
 mod ongoing;
 mod outcome;
@@ -18,9 +17,8 @@ mod write;
 
 pub use event::{SearchPayload, TaskEvent};
 pub use handle::TaskHandle;
-pub use id::{Priority, TaskId};
+pub use id::Priority;
 pub use kind::{ChannelFetchKind, ChannelFetchKindTag, DedupKey, TaskKind};
-pub use lane::Lane;
 pub use outcome::TaskOutcome;
 pub use scheduler::{Scheduler, Snapshot};
 pub use write::{PlaylistWriteOp, WriteError};

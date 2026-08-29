@@ -264,7 +264,6 @@ impl AppState {
             images,
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
-                by_lane: FxHashMap::default(),
                 by_kind: FxHashMap::default(),
             },
             marquees: Marquees::from_config(anim.marquee(), tick_ms),

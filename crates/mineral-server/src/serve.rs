@@ -367,9 +367,8 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             Response::Ok
         }
         Request::AudioSnapshot => Response::AudioSnapshot(client.audio_snapshot()),
-        Request::SubmitTask(kind, priority) => Response::TaskId(client.submit_task(kind, priority)),
-        Request::CancelTasks(filter) => {
-            client.cancel_tasks(filter);
+        Request::SubmitTask(kind, priority) => {
+            client.submit_task(kind, priority);
             Response::Ok
         }
         Request::TaskSnapshot => Response::TaskSnapshot(client.task_snapshot()),
@@ -495,7 +494,6 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::Seek(_) => Some("Seek"),
         Request::SetVolume(_) => Some("SetVolume"),
         Request::SubmitTask(..) => Some("SubmitTask"),
-        Request::CancelTasks(_) => Some("CancelTasks"),
         Request::PlaySong(_) => Some("PlaySong"),
         Request::PlayQueue { .. } => Some("PlayQueue"),
         Request::QueueInsertNext { .. } => Some("QueueInsertNext"),

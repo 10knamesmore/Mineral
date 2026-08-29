@@ -398,7 +398,7 @@ pub enum AudioBackend {
     Null,
 }
 
-/// 行为域事件:20 个变体一一对应行为域 20 张事件表。
+/// 行为域事件；每个变体对应一张强 schema 事件表。
 ///
 /// 变体的具名字段 = 对应表的专有列(公共列 ts / session_id / actor 在
 /// [`crate::StatsEvent::Behavior`] 层携带)。带 [`SongId`] 的字段落库时拆成
@@ -561,12 +561,6 @@ pub enum BehaviorEvent {
         path: Option<String>,
     },
 
-    /// 批量任务取消(task_cancels)。
-    TaskCancel {
-        /// 取消所用的过滤标签串。
-        filter_tags: String,
-    },
-
     /// 文案渲染(copy_renders)。
     CopyRender {
         /// 命中的模板序号。
@@ -689,7 +683,6 @@ impl BehaviorEvent {
             Self::PlaylistOp { .. } => "playlist_ops",
             Self::Fetch { .. } => "fetches",
             Self::Download { .. } => "downloads",
-            Self::TaskCancel { .. } => "task_cancels",
             Self::CopyRender { .. } => "copy_renders",
             Self::ActionInvocation { .. } => "action_invocations",
             Self::ConfigOverride { .. } => "config_overrides",
@@ -725,7 +718,6 @@ impl BehaviorEvent {
             }
             Self::VolumeChange { .. }
             | Self::ModeChange { .. }
-            | Self::TaskCancel { .. }
             | Self::CopyRender { .. }
             | Self::ActionInvocation { .. }
             | Self::ConfigOverride { .. }
