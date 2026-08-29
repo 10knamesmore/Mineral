@@ -576,8 +576,8 @@ mod tests {
     /// 揭示满值 = 动画放完:此时 `glow` 取任何值渲染都逐 cell 相同(提亮比例恒为 0),
     /// 且不残留任何进度条中线字形——稳态与「从未有过动画」不可区分。
     #[test]
-    fn full_reveal_is_indistinguishable_from_no_animation() {
-        let theme = Theme::default();
+    fn full_reveal_is_indistinguishable_from_no_animation() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let lit = cells(&render_reveal(
             /*reveal_e3*/ 1000, /*sweep*/ 620, 1000, &theme,
         ));
@@ -590,13 +590,14 @@ mod tests {
             "满值不该残留进度条中线字形: {lit:?}"
         );
         assert_eq!(lit.len(), REVEAL_BAR_W, "总宽守恒");
+        Ok(())
     }
 
     /// 揭示为 0(包络刚到达那一帧):整条退化为普通进度条形态——已播 `━`、播放头 `●`、
     /// 轨道 `─`,一个块字符都没有。动画因此是「中线被推走」而非波形凭空出现。
     #[test]
-    fn zero_reveal_is_plain_progress_bar() {
-        let theme = Theme::default();
+    fn zero_reveal_is_plain_progress_bar() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let cells = cells(&render_reveal(
             /*reveal_e3*/ 0, /*sweep*/ 620, 850, &theme,
         ));
@@ -609,6 +610,7 @@ mod tests {
             };
             assert_eq!(*glyph, expected, "第 {col} 列应是进度条形态");
         }
+        Ok(())
     }
 
     /// 对角性:同一时刻,左列的揭示进度不低于右列——揭示边确实从左扫到右。
@@ -760,7 +762,7 @@ mod tests {
     /// 且列色只随列位置定、不随 filled 变——播放推进只是逐列揭开静态渐变,不整体变色。
     #[test]
     fn gradient_played_colors_follow_palette() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let palette = CoverPalette::new(vec![
             Rgb::new(20, 10, 60),
             Rgb::new(120, 60, 160),
@@ -804,8 +806,8 @@ mod tests {
     /// surface0 在后不交错),混色只出现在播放头软边窗口内,且**无任何白块列**
     /// (theme.text)——播放头指示完全由颜色过渡承担。
     #[test]
-    fn spans_conserve_width_and_partition_colors() {
-        let theme = Theme::default();
+    fn spans_conserve_width_and_partition_colors() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let played = Color::Rgb(226, 184, 107);
         let points = vec![128u8; 200];
         let bar_w = 40usize;
@@ -861,13 +863,14 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// 软边混色精确性:窗口中心(播放头列)是两端色的等比中点,窗口两端逐渐
     /// 收敛到纯色——用与实现同一把 mix 尺子对照,锁死插值比例。
     #[test]
     fn soft_edge_blends_between_played_and_track() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let played = Color::Rgb(200, 0, 0);
         let points = vec![255u8; 200];
         let bar_w = 40usize;
@@ -903,8 +906,8 @@ mod tests {
     /// 播放头亚列精度:seek 位置在同一整列内滑动(整列数不变)时,软边混色比例
     /// 必须跟着连续变化——列级量化会让整个窗口一格一格跳变。
     #[test]
-    fn sub_column_seek_shifts_blend_smoothly() {
-        let theme = Theme::default();
+    fn sub_column_seek_shifts_blend_smoothly() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let played = Color::Rgb(200, 0, 0);
         let points = vec![255u8; 200];
         let bar_w = 40usize;
@@ -935,13 +938,14 @@ mod tests {
             }
             prev = next;
         }
+        Ok(())
     }
 
     /// edge_radius = 0 退化为硬边:播放头列并入已播渐变,其后立即轨道色,
     /// 全程只有纯色、无混色列(即「纯渐变生长」形态)。
     #[test]
-    fn edge_radius_zero_is_hard_edge() {
-        let theme = Theme::default();
+    fn edge_radius_zero_is_hard_edge() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let played = Color::Rgb(200, 0, 0);
         let points = vec![255u8; 200];
         let bar_w = 40usize;
@@ -959,5 +963,6 @@ mod tests {
             let expected = if col <= filled { played } else { theme.overlay };
             assert_eq!(*c, expected, "硬边下第 {col} 列必须是纯色");
         }
+        Ok(())
     }
 }

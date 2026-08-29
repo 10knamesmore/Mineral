@@ -20,15 +20,24 @@ use rustc_hash::FxHashMap;
 use crate::app::App;
 use crate::image::ImageEngine;
 use crate::render::anim::Toggle;
+use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
-    assert_snap, assert_snap_debug, chinese_football, endserenading, feiyu_lyrics, feiyu_song,
-    qianzai_lyrics, qianzai_song, song, with_album, with_alias, with_artist, with_duration,
-    with_name,
+    assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
+    qianzai_song, song, with_album, with_alias, with_artist, with_duration, with_name,
 };
+
+/// 从内置默认配置构造测试主题。
+///
+/// # Return:
+///   与生产启动相同配置路径生成的主题；`default.lua` 无法加载时返回错误。
+pub(crate) fn default_theme() -> color_eyre::Result<Theme> {
+    let cfg = mineral_config::Config::defaults()?;
+    Ok(Theme::from_config(cfg.tui().theme()))
+}
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
 pub(crate) fn playlist_view(

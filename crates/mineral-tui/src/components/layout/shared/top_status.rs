@@ -158,7 +158,8 @@ mod tests {
     fn top_status_playlists_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_playlists()?;
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!("顶栏:Playlists 标签态", t.backend());
         Ok(())
     }
@@ -168,7 +169,8 @@ mod tests {
     fn top_status_library_queue_open_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let state = crate::test_support::state_with_tracks()?;
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!("顶栏:Library 标签 + 队列打开", t.backend());
         Ok(())
     }
@@ -191,7 +193,7 @@ mod tests {
     /// 终端失焦:整行前景向背景渐变——中途帧介于聚焦色与终态色之间,三态互异。
     #[test]
     fn top_status_unfocused_fade_dims_foreground() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
         let focused = origin_fg(&state, &theme)?;
         state.dim.set(true);
@@ -216,12 +218,13 @@ mod tests {
     fn top_status_unfocused_badge_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let mut state = crate::test_support::state_with_playlists()?;
+        let theme = crate::test_support::default_theme()?;
         state.dim.set(true);
         state.dim.set(true);
         for _ in 0..30 {
             state.dim.tick();
         }
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!("顶栏:终端失焦徽标", t.backend());
         Ok(())
     }
@@ -232,7 +235,8 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 1))?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.playback.audio_backend = mineral_audio::AudioBackend::Null;
-        t.draw(|f| super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!("顶栏:无音频设备降级徽标", t.backend());
         Ok(())
     }

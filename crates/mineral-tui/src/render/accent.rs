@@ -153,9 +153,8 @@ mod tests {
 
     use super::{AccentFade, AccentPair};
     use crate::render::palette::Rgb;
-    use crate::render::theme::Theme;
 
-    /// 测试目标色对:红 / 蓝(与 mocha 默认 accent 都拉得开)。
+    /// 测试目标色对:红 / 蓝(与默认配置的 accent 都拉得开)。
     fn red_blue() -> AccentPair {
         AccentPair {
             accent: Rgb::new(200, 40, 40),
@@ -165,17 +164,18 @@ mod tests {
 
     /// 初态(无封面目标)是恒等合成:effective 与 base 逐字段一致。
     #[test]
-    fn settled_none_is_identity() {
-        let base = Theme::mocha_mauve();
+    fn settled_none_is_identity() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let fade = AccentFade::new(/*fade_ticks*/ 10);
         let effective = fade.apply(base);
         assert_eq!(format!("{effective:?}"), format!("{base:?}"));
+        Ok(())
     }
 
     /// 设目标后:起点 = base 色,中点 = 线性插值,到程 = 目标色;其余 token 不动。
     #[test]
-    fn fades_to_target_then_settles() {
-        let base = Theme::mocha_mauve();
+    fn fades_to_target_then_settles() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let mut fade = AccentFade::new(/*fade_ticks*/ 10);
         fade.set_target(Some(red_blue()), &base);
         assert_eq!(
@@ -201,12 +201,13 @@ mod tests {
         let done = fade.apply(base);
         assert_eq!(done.accent, Color::Rgb(200, 40, 40));
         assert_eq!(done.accent_2, Color::Rgb(40, 40, 200));
+        Ok(())
     }
 
     /// 打断:渐变途中换目标,起点冻结为打断那刻的可见色——换目标前后 apply 同色,不跳变。
     #[test]
-    fn retarget_freezes_current_color_no_jump() {
-        let base = Theme::mocha_mauve();
+    fn retarget_freezes_current_color_no_jump() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let mut fade = AccentFade::new(/*fade_ticks*/ 10);
         fade.set_target(Some(red_blue()), &base);
         for _ in 0..4 {
@@ -221,12 +222,13 @@ mod tests {
             &base,
         );
         assert_eq!(fade.apply(base).accent, before, "打断那帧不应跳色");
+        Ok(())
     }
 
     /// 回落:静止在封面色上后目标置 `None`,渐变回 base 静态 token。
     #[test]
-    fn fades_back_to_base() {
-        let base = Theme::mocha_mauve();
+    fn fades_back_to_base() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let mut fade = AccentFade::new(/*fade_ticks*/ 10);
         fade.set_target(Some(red_blue()), &base);
         for _ in 0..10 {
@@ -239,12 +241,13 @@ mod tests {
             fade.tick();
         }
         assert_eq!(fade.apply(base).accent, base.accent, "到程应回到 base");
+        Ok(())
     }
 
     /// retempo 保相位:半程改时长,进度比例不变(apply 结果那一帧不动)。
     #[test]
-    fn retempo_preserves_phase() {
-        let base = Theme::mocha_mauve();
+    fn retempo_preserves_phase() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let mut fade = AccentFade::new(/*fade_ticks*/ 10);
         fade.set_target(Some(red_blue()), &base);
         for _ in 0..5 {
@@ -257,12 +260,13 @@ mod tests {
             before,
             "retempo 不应改变当前帧颜色"
         );
+        Ok(())
     }
 
     /// 同目标重复投喂是空操作:进度不归零(防热更路径重启渐变)。
     #[test]
-    fn same_target_does_not_restart() {
-        let base = Theme::mocha_mauve();
+    fn same_target_does_not_restart() -> color_eyre::Result<()> {
+        let base = crate::test_support::default_theme()?;
         let mut fade = AccentFade::new(/*fade_ticks*/ 10);
         fade.set_target(Some(red_blue()), &base);
         for _ in 0..7 {
@@ -271,5 +275,6 @@ mod tests {
         let before = fade.apply(base).accent;
         fade.set_target(Some(red_blue()), &base);
         assert_eq!(fade.apply(base).accent, before, "同目标不应重启渐变");
+        Ok(())
     }
 }

@@ -550,28 +550,30 @@ mod tests {
 
     /// vol 分区连 1 cell bar 都容不下时,只保留自然宽度的百分比数字。
     #[test]
-    fn narrow_volume_line_keeps_only_percentage() {
-        let theme = Theme::default();
+    fn narrow_volume_line_keeps_only_percentage() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         assert_eq!(String::from(volume_line(10, 80, &theme, ink)), "80%");
         assert_eq!(String::from(volume_line(10, 100, &theme, ink)), "100%");
+        Ok(())
     }
 
     /// bar 的 fractional fill 复用横向八分块,右侧未填充 track 只占 background。
     #[test]
-    fn volume_line_uses_horizontal_eighth_cell() {
-        let theme = Theme::default();
+    fn volume_line_uses_horizontal_eighth_cell() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         assert_eq!(
             String::from(volume_line(22, 62, &theme, ink)),
             " vol ███████▍      62%"
         );
+        Ok(())
     }
 
     /// fractional cell 与右侧未填充 cells 共享 ghost background,不夹 `░` glyph。
     #[test]
     fn volume_unfilled_track_uses_background() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         let line = volume_line(22, 62, &theme, ink);
         let partial = line
@@ -594,6 +596,7 @@ mod tests {
     /// 长曲名溢出:顶行按 marquee 相位滚动——推进拍数后开头滚出、窗口从对应列起。
     #[test]
     fn transport_long_title_marquees() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
         let mut pb = Playback::new();
         pb.track = Some(with_name(
@@ -602,16 +605,7 @@ mod tests {
         ));
         let render = |mq: &Marquees| -> color_eyre::Result<String> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
-            t.draw(|f| {
-                super::draw(
-                    f,
-                    f.area(),
-                    &pb,
-                    &ctx(mq),
-                    &WaveformCtx::off(),
-                    &Theme::default(),
-                )
-            })?;
+            t.draw(|f| super::draw(f, f.area(), &pb, &ctx(mq), &WaveformCtx::off(), &theme))?;
             let buf = t.backend().buffer();
             // y=1:边框内顶行(now-line)。
             Ok((0..buf.area.width)
@@ -676,7 +670,9 @@ mod tests {
         /// 无损只配 `{accent, yellow}`、有损只配 `{green, text, overlay}`——两类配色不串。
         #[test]
         fn prop_tier_color_partitioned(lossless in any::<bool>(), bitrate in 0u32..3_000_000) {
-            let theme = Theme::default();
+            let theme = crate::test_support::default_theme().map_err(|e| {
+                proptest::test_runner::TestCaseError::fail(format!("加载默认主题失败: {e}"))
+            })?;
             let ink = theme.ink_over(ratatui::style::Color::Reset);
             let c = fmt_tier_color(lossless, Some(bitrate), &theme, ink);
             if lossless {
@@ -694,7 +690,9 @@ mod tests {
             b2 in 0u32..3_000_000,
         ) {
             let (lo, hi) = if b1 <= b2 { (b1, b2) } else { (b2, b1) };
-            let theme = Theme::default();
+            let theme = crate::test_support::default_theme().map_err(|e| {
+                proptest::test_runner::TestCaseError::fail(format!("加载默认主题失败: {e}"))
+            })?;
             let ink = theme.ink_over(ratatui::style::Color::Reset);
             let r_lo = tier_rank(fmt_tier_color(lossless, Some(lo), &theme, ink), &theme);
             let r_hi = tier_rank(fmt_tier_color(lossless, Some(hi), &theme, ink), &theme);
@@ -779,6 +777,7 @@ mod tests {
     /// 且 vol / mode / fmt 三块三等分铺开。
     #[test]
     fn transport_fmt_bit_hz_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
         let mut pb = pb_with_origin(
             PlaybackOrigin::Download,
@@ -788,16 +787,7 @@ mod tests {
         );
         pb.sample_rate_hz = 96_000;
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!(
             "播放栏:fmt 含位深+采样率(flac 24bit/96kHz)",
             t.backend()
@@ -808,19 +798,11 @@ mod tests {
     /// 无 track:transport 空态。
     #[test]
     fn transport_no_track_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let pb = Playback::new();
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:无曲目空态", t.backend());
         Ok(())
     }
@@ -828,6 +810,7 @@ mod tests {
     /// 播放中:进度条 + 时间 + 音量(EndSerenading 首曲 LoveLetterTypewriter)。
     #[test]
     fn transport_playing_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
@@ -838,16 +821,7 @@ mod tests {
         pb.playing = true;
         pb.volume_pct = 80;
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!(
             "播放栏:播放中(LoveLetterTypewriter,进度条 + 音量)",
             t.backend()
@@ -858,21 +832,13 @@ mod tests {
     /// 曲名带别名:顶行后缀暗色 ` (alias)`,与曲目列表同形式(真实样本 迷星叫 / Mayoiuta)。
     #[test]
     fn transport_alias_suffix_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(mineral_test::aliased_song());
         pb.playing = true;
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:曲名带别名,后缀暗色 (alias)", t.backend());
         Ok(())
     }
@@ -880,6 +846,7 @@ mod tests {
     /// 暂停 + 长歌名(EndSerenading 末曲 TheLastWordIsRejoice,验证长名对齐 / 截断)。
     #[test]
     fn transport_paused_long_title_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
@@ -889,16 +856,7 @@ mod tests {
         pb.position_ms = 30_000;
         pb.playing = false;
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!(
             "播放栏:暂停 + 长歌名(TheLastWordIsRejoice)",
             t.backend()
@@ -910,6 +868,7 @@ mod tests {
     /// 居中对齐 / 截断。
     #[test]
     fn transport_cjk_title_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
@@ -919,16 +878,7 @@ mod tests {
         pb.position_ms = 60_000;
         pb.playing = true;
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!(
             "播放栏:CJK 长歌名(地球上最后一个EMO男孩,中英混排)",
             t.backend()
@@ -941,7 +891,7 @@ mod tests {
     #[test]
     fn transport_waveform_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
             with_name(song("1"), "CrescendoTrack"),
@@ -986,7 +936,7 @@ mod tests {
     /// 回落语义:开关开但包络缺失时,渲染与关闭态逐 cell 完全一致(普通进度条)。
     #[test]
     fn waveform_without_envelope_falls_back_to_plain_bar() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(with_name(song("1"), "NoEnvelope"), 225_000));
         pb.position_ms = 60_000;
@@ -1020,7 +970,7 @@ mod tests {
     /// 画面不跳变,动画从既有的普通进度条形态无缝接续长出波形。
     #[test]
     fn reveal_first_frame_matches_plain_bar() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(with_name(song("1"), "RevealStart"), 225_000));
         pb.position_ms = 60_000;
@@ -1071,7 +1021,7 @@ mod tests {
     #[test]
     fn transport_waveform_reveal_midway_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
             with_name(song("1"), "CrescendoTrack"),
@@ -1116,9 +1066,9 @@ mod tests {
     /// prefetch 标记的 (字形, 颜色) 映射——未预排无标记;拉取中暗(muted 档)、就绪亮(green),
     /// 字形恒 `⇣` 只换色,布局不抖。
     #[test]
-    fn prefetch_marker_maps_glyph_and_color() {
+    fn prefetch_marker_maps_glyph_and_color() -> color_eyre::Result<()> {
         use crate::runtime::playback::PrefetchStage;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         assert_eq!(
             super::prefetch_marker(PrefetchStage::Idle, &theme, ink),
@@ -1132,11 +1082,13 @@ mod tests {
             super::prefetch_marker(PrefetchStage::Ready, &theme, ink),
             Some(("⇣", theme.green))
         );
+        Ok(())
     }
 
     /// prefetch 标记渲染:next 已预排时 `[⏭]` 右侧 gap 第一格画 `⇣`,按钮行总宽不变。
     #[test]
     fn transport_prefetch_marker_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();
         pb.track = Some(with_duration(
@@ -1149,16 +1101,7 @@ mod tests {
         pb.prefetch.ready = true;
         pb.prefetch.buffered_bps = Bps::new(4_000);
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:gapless prefetch 标记(⏭ 右侧 ⇣)", t.backend());
         Ok(())
     }
@@ -1167,7 +1110,7 @@ mod tests {
     /// 文本快照不记前景色,这里直接读 `⇣` cell 的 fg 钉死。
     #[test]
     fn transport_prefetch_marker_colors() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         /// 渲染一帧,取 `⇣` cell 的前景色(无标记则 None)。
         fn marker_fg(pb: &Playback, theme: &Theme) -> color_eyre::Result<Option<Color>> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
@@ -1202,8 +1145,8 @@ mod tests {
 
     /// 来源徽标的 (字形, 颜色) 映射——文本快照不记颜色,这里把三态钉死。
     #[test]
-    fn origin_badge_maps_glyph_and_color() {
-        let theme = Theme::default();
+    fn origin_badge_maps_glyph_and_color() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         assert_eq!(
             super::origin_badge(PlaybackOrigin::Download, &theme, ink),
@@ -1217,12 +1160,14 @@ mod tests {
             super::origin_badge(PlaybackOrigin::Remote, &theme, ink),
             ("○", ink.muted)
         );
+        Ok(())
     }
 
     /// 氛围背景(真彩 bg)下,transport 弱化色阶(探边框 faint 档)对实际背景混合:
     /// 蓝底与红底下 fg 不同且贴向各自背景——不再是固定 token。
     #[test]
     fn transport_ink_follows_actual_bg() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let probe = |bg: Color| -> color_eyre::Result<Color> {
             let mut t = Terminal::new(TestBackend::new(50, 8))?;
             let mut pb = Playback::new();
@@ -1234,14 +1179,7 @@ mod tests {
                     ratatui::widgets::Block::new().style(ratatui::style::Style::new().bg(bg)),
                     area,
                 );
-                super::draw(
-                    f,
-                    area,
-                    &pb,
-                    &ctx(&mq),
-                    &WaveformCtx::off(),
-                    &Theme::default(),
-                );
+                super::draw(f, area, &pb, &ctx(&mq), &WaveformCtx::off(), &theme);
             })?;
             let cell = t
                 .backend()
@@ -1264,6 +1202,7 @@ mod tests {
     /// 来源徽标:download(↓ 绿,FLAC 999kbps)。
     #[test]
     fn transport_origin_download_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
         let pb = pb_with_origin(
             PlaybackOrigin::Download,
@@ -1272,16 +1211,7 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 download(↓ 绿)", t.backend());
         Ok(())
     }
@@ -1289,6 +1219,7 @@ mod tests {
     /// 来源徽标:cache(◆ 蓝,FLAC 999kbps)。
     #[test]
     fn transport_origin_cache_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
         let pb = pb_with_origin(
             PlaybackOrigin::Cache,
@@ -1297,16 +1228,7 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 cache(◆ 蓝)", t.backend());
         Ok(())
     }
@@ -1314,6 +1236,7 @@ mod tests {
     /// 来源徽标:remote(○ 灰,MP3 320kbps)。
     #[test]
     fn transport_origin_remote_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 8))?;
         let pb = pb_with_origin(
             PlaybackOrigin::Remote,
@@ -1322,16 +1245,7 @@ mod tests {
             /*bit_depth*/ None,
         );
         let mq = still_marquees();
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &pb,
-                &ctx(&mq),
-                &WaveformCtx::off(),
-                &Theme::default(),
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &pb, &ctx(&mq), &WaveformCtx::off(), &theme))?;
         crate::test_support::assert_snap!("播放栏:来源徽标 remote(○ 灰)", t.backend());
         Ok(())
     }
@@ -1340,7 +1254,7 @@ mod tests {
     /// 近底),两色不交错且都非空。文本快照不记前景色,故这里直接读 `cell.fg` 钉死颜色与顺序。
     #[test]
     fn transport_buffer_overlay_colors() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(Color::Reset);
         let mut t = Terminal::new(TestBackend::new(50, 8))?;
         let mut pb = Playback::new();

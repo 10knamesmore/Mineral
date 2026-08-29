@@ -348,14 +348,14 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::TrackLayout;
-    use crate::render::theme::Theme;
     use crate::runtime::state::{AppState, View};
 
     /// 用本视图渲染入口画一帧(`60×12` ⇒ body 视口 = 12 - 边框 2 - 表头 1 = 9 行)。
     fn draw_lib(t: &mut Terminal<TestBackend>, state: &AppState) -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, state, &theme);
         })?;
         Ok(())
     }
@@ -494,11 +494,12 @@ mod tests {
     /// 已选歌单 + 3 首曲目(CJK 歌名 / 收藏 / 当前在播标记)。
     #[test]
     fn library_with_tracks_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
@@ -556,7 +557,7 @@ mod tests {
 
         use crate::render::theme::resolve_source_color;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let fg_of = |t: &Terminal<TestBackend>, ch: &str| -> Option<ratatui::style::Color> {
             let buf = t.backend().buffer();
             (0..buf.area.width)
@@ -659,7 +660,7 @@ mod tests {
 
         use crate::test_support::{song, with_alias, with_name};
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_tracks()?;
         // 前两首各带别名 Mayoiuta(歌名各异、都不含 "mayo"),搜 "mayo" 二者皆命中。
         if let Some(views) = state
@@ -716,12 +717,13 @@ mod tests {
     /// 选中歌单但曲目未到(library.tracks 空)→ loading 态。
     #[test]
     fn library_loading_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.browse.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!("曲目列表:选中歌单但曲目未到(loading)", t.backend());
         Ok(())
@@ -778,7 +780,7 @@ mod tests {
 
         use crate::render::theme::resolve_source_color;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let state = crate::test_support::state_with_mixed_tracks()?;
         let mut t = Terminal::new(TestBackend::new(50, 12))?;
         draw_lib(&mut t, &state)?;
@@ -813,11 +815,12 @@ mod tests {
     /// 「不是人人都能穿十号球衣」,验证 title/artist/album 三列宽字符不串列。
     #[test]
     fn library_cjk_tracks_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let state = crate::test_support::state_with_cjk_tracks()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "曲目列表:CJK 曲目(Chinese Football)Full 档宽字符对齐",
@@ -829,11 +832,12 @@ mod tests {
     /// 窄面板(width=44 < 56)退到 Song 档:只剩 ♥ / # / title / len,artist/album 省去。
     #[test]
     fn library_narrow_song_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(44, 12))?;
         let state = crate::test_support::state_with_tracks()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "曲目列表:窄面板退到 Song 档(只剩歌名,无 artist/album)",
@@ -846,11 +850,12 @@ mod tests {
     /// 三列的渲染与对齐(其余 Full 档 fixture 的 album 为空,覆盖不到这条路径)。
     #[test]
     fn library_album_tracks_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let state = crate::test_support::state_with_album()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "曲目列表:带 album 数据的 Full 档(title/artist/album 三列对齐)",

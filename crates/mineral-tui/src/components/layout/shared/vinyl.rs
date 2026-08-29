@@ -162,7 +162,6 @@ mod tests {
     use ratatui::style::Color;
 
     use super::{VinylSpin, render_to};
-    use crate::render::theme::Theme;
 
     /// 一圈恰 600 步的 spin(rev 9600ms ÷ tick 16ms),推进 `ticks` 步。
     fn spin_at(ticks: u32) -> VinylSpin {
@@ -177,7 +176,12 @@ mod tests {
     fn fg_at(ticks: u32, x: u16, y: u16) -> color_eyre::Result<Color> {
         let area = Rect::new(0, 0, 32, 16);
         let mut buf = Buffer::empty(area);
-        render_to(&mut buf, area, &spin_at(ticks), &Theme::mocha_mauve());
+        render_to(
+            &mut buf,
+            area,
+            &spin_at(ticks),
+            &crate::test_support::default_theme()?,
+        );
         let cell = buf
             .cell((x, y))
             .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?;
@@ -189,7 +193,7 @@ mod tests {
     /// 这些区域与相位无关,任意 phase 恒定。
     #[test]
     fn static_layers_hit_expected_palette() -> color_eyre::Result<()> {
-        let t = Theme::mocha_mauve();
+        let t = crate::test_support::default_theme()?;
         // cell(16,8) 上半像素 = (16,16):r≈0.044 落轴孔。
         assert_eq!(fg_at(/*ticks*/ 0, 16, 8)?, t.crust, "盘心轴孔应为 crust");
         // (17,16):曼哈顿距离 0.125 < 0.16 落 ◆ 徽记。
@@ -208,7 +212,7 @@ mod tests {
     /// 转过 1/4 圈(150/600)后瓣转到竖直方向,同一 cell 回落沟纹色(crust 环带)。
     #[test]
     fn sheen_lobe_rotates_with_phase() -> color_eyre::Result<()> {
-        let t = Theme::mocha_mauve();
+        let t = crate::test_support::default_theme()?;
         // cell(24,8) 上半像素 = (24,16):r≈0.53、角≈0.06 rad,贴 +x 轴瓣心;
         // Bayer(0,0) 阈值最低,高光必亮。
         assert_eq!(
@@ -226,14 +230,15 @@ mod tests {
 
     /// 零面积区直接返回,不写任何 cell(消极空间守卫)。
     #[test]
-    fn zero_area_is_noop() {
+    fn zero_area_is_noop() -> color_eyre::Result<()> {
         let mut buf = Buffer::empty(Rect::new(0, 0, 4, 2));
         render_to(
             &mut buf,
             Rect::new(0, 0, 0, 0),
             &spin_at(0),
-            &Theme::mocha_mauve(),
+            &crate::test_support::default_theme()?,
         );
         assert_eq!(buf, Buffer::empty(Rect::new(0, 0, 4, 2)), "零面积不落笔");
+        Ok(())
     }
 }

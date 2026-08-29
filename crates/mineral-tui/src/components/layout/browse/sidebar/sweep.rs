@@ -107,26 +107,19 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::render::anim::Transition;
-    use crate::render::theme::Theme;
     use crate::runtime::state::View;
     use mineral_config::SweepStyle;
 
     /// 把一帧 sweep 合成画到 `TestBackend` 并返回其快照串。
     fn render_sweep(eased: u16, style: SweepStyle) -> color_eyre::Result<String> {
+        let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_tracks()?;
         // sweep 同屏要两视图都有内容:playlists 与选中歌单的 tracks。
         state.browse.view.switch_to(View::Library);
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::draw(
-                f.buffer_mut(),
-                area,
-                &state,
-                &Theme::default(),
-                eased,
-                style,
-            );
+            super::draw(f.buffer_mut(), area, &state, &theme, eased, style);
         })?;
         Ok(format!("{:?}", t.backend()))
     }
@@ -134,6 +127,7 @@ mod tests {
     /// Push 中途帧:歌单左移、曲目从右补入,两块同屏。
     #[test]
     fn push_midframe_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
         state.browse.view.switch_to(View::Library);
@@ -143,7 +137,7 @@ mod tests {
                 f.buffer_mut(),
                 area,
                 &state,
-                &Theme::default(),
+                &theme,
                 /*eased*/ 500,
                 SweepStyle::Push,
             );
@@ -155,6 +149,7 @@ mod tests {
     /// Cover 中途帧:歌单原地不动,曲目从右覆盖(左缘见 Library 边框竖线)。
     #[test]
     fn cover_midframe_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
         state.browse.view.switch_to(View::Library);
@@ -164,7 +159,7 @@ mod tests {
                 f.buffer_mut(),
                 area,
                 &state,
-                &Theme::default(),
+                &theme,
                 /*eased*/ 500,
                 SweepStyle::Cover,
             );
@@ -177,12 +172,13 @@ mod tests {
     /// 两种 style 在端点结果相同(无中途叠加)。
     #[test]
     fn endpoints_degenerate_to_single_view() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let state = crate::test_support::state_with_tracks()?;
         // eased=0:渲染 = 纯 Playlists(与 playlists::render_to 一致)。
         let mut tp = Terminal::new(TestBackend::new(40, 12))?;
         tp.draw(|f| {
             let area = f.area();
-            super::playlists::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::playlists::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         let pure_pl = format!("{:?}", tp.backend());
         assert_eq!(
@@ -202,7 +198,7 @@ mod tests {
         lib_state.browse.view.switch_to(View::Library);
         tl.draw(|f| {
             let area = f.area();
-            super::library::render_to(f.buffer_mut(), area, &lib_state, &Theme::default());
+            super::library::render_to(f.buffer_mut(), area, &lib_state, &theme);
         })?;
         let pure_lib = format!("{:?}", tl.backend());
         assert_eq!(

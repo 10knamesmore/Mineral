@@ -199,9 +199,7 @@ mod tests {
         use ratatui::style::Modifier;
         use ratatui::widgets::Table;
 
-        use crate::render::theme::Theme;
-
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let normal = mineral_test::song("ok");
         let mut grey = mineral_test::song("grey");
         grey.unavailable = true;
@@ -233,9 +231,7 @@ mod tests {
         use ratatui::backend::TestBackend;
         use ratatui::widgets::Table;
 
-        use crate::render::theme::Theme;
-
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         // 真实译名样本:迷星叫 / 叫喊迷星(分隔符 / 括号已由 alias_span 单测锁定,此处验渲染颜色)。
         let song = mineral_test::aliased_song();
         let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
@@ -274,11 +270,10 @@ mod tests {
         use crate::components::layout::shared::marquee::{
             MarqueeCtx, RowMarquee, resolve_column_widths,
         };
-        use crate::render::theme::Theme;
         use crate::runtime::marquee::{Marquees, Slot};
         use crate::test_support::{song, with_name};
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let long = with_name(song("1"), "abcdefghijklmnopqrstuvwxyz0123456789");
         let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
         let widths = cols.widths();

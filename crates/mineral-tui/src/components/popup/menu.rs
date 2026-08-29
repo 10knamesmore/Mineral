@@ -396,7 +396,6 @@ mod tests {
         Overlay, OverlayAction, OverlayResponse, render_overlay,
     };
     use crate::components::popup::placement::Placement;
-    use crate::render::theme::Theme;
     use crate::runtime::action::{Action, SelectionMove};
     use crate::runtime::state::AppState;
 
@@ -535,6 +534,7 @@ mod tests {
     /// 锚定渲染快照:锚点下方弹出、快捷字母列、首项高亮、危险项红色置底。
     #[test]
     fn menu_anchored_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
         let ctx = AppState::test_default()?;
         let mut items = action_items();
@@ -554,7 +554,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(

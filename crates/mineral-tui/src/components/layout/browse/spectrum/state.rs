@@ -792,7 +792,6 @@ mod tests {
         ColorParams, SNAPSHOT_SAMPLES, SpectrumColor, SpectrumState, alpha_from_t90, fall_per_tick,
     };
     use crate::render::palette::{CoverPalette, Rgb};
-    use crate::render::theme::Theme;
 
     /// 测试用主循环帧间隔(= default.lua 的 `animation.frame_tick_ms`)。
     const TICK_MS: u64 = 16;
@@ -974,14 +973,15 @@ mod tests {
     fn waterfall_renders_history_across_width_change() -> color_eyre::Result<()> {
         let mut narrow = Terminal::new(TestBackend::new(40, 10))?;
         let mut state = waterfall_state()?;
-        narrow.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        narrow.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let bars = jagged_bars(state.target_bars.get());
         for _ in 0..40 {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
         // 切到更宽的面板(模拟 fullscreen 通栏),历史行长(38)< 新内宽(78)。
         let mut wide = Terminal::new(TestBackend::new(80, 10))?;
-        wide.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        wide.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let buf = wide.backend().buffer();
         let has_glyph = (1..79_u16).any(|x| {
             buf.cell((x, 1))
@@ -996,12 +996,13 @@ mod tests {
     fn waterfall_heat_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = waterfall_state()?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let bars = jagged_bars(state.target_bars.get());
         for _ in 0..80 {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!(
             "waterfall 热力半块稳态(历史 20 帧,▀ 铺满上部)",
             terminal.backend()
@@ -1015,14 +1016,15 @@ mod tests {
     fn waterfall_heat_cell_packs_two_frames() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = waterfall_state()?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let n = state.target_bars.get();
         // 幅度随 tick 递增:相邻两帧历史必然不同 → 顶行格 fg ≠ bg。
         for step in 0..80_u16 {
             let bars = vec![(step % 60) + 4; n];
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let buf = terminal.backend().buffer();
         let cell = buf
             .cell((40, 1)) // 面板内区顶行中列
@@ -1105,7 +1107,8 @@ mod tests {
         let mut state = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
             "style": "terrain",
         } } }))?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let n = state.target_bars.get();
         // 幅度随 tick 波动:相邻层轮廓不同,遮挡关系可见。
         for step in 0..64_u16 {
@@ -1117,7 +1120,7 @@ mod tests {
                 .collect::<Vec<u16>>();
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!(
             "terrain 山脊地形稳态(最前活层 + 历史层进度上浮,画家算法遮挡)",
             terminal.backend()
@@ -1231,11 +1234,12 @@ mod tests {
     fn scope_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = scope_state()?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         // 填满面板点宽(字符列 × 2)的包络列,楔形从左(旧,响)衰减到右(新,静)。
         let samples = sine_samples(state.target_bars.get() * 2, per_column(&state)?);
         state.tick_scope(100 /*volume_pct*/, &samples, SCOPE_TEST_SR);
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!(
             "scope 示波器稳态(楔形正弦包络,Braille 跨中线右新左旧)",
             terminal.backend()
@@ -1250,7 +1254,8 @@ mod tests {
         let state = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
             "style": "scope",
         } } }))?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let buf = terminal.backend().buffer();
         // 面板内区垂直中部应有非空字形(Braille 中线)。
         let mid_y = buf.area().height / 2;
@@ -1399,7 +1404,8 @@ mod tests {
     fn spectrum_baseline_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
         let state = spectrum_state()?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!("频谱静默基线(SpectrumState::new())", terminal.backend());
         Ok(())
     }
@@ -1418,13 +1424,14 @@ mod tests {
     fn spectrum_with_audio_full_width_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
+        let theme = crate::test_support::default_theme()?;
         // 先 draw 一帧让渲染层把 target_bars 设成真实内宽。
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         let bars = jagged_bars(state.target_bars.get());
         for _ in 0..30 {
             state.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!(
             "频谱有音频(mock bars,占满宽度有起伏)",
             terminal.backend()
@@ -1438,11 +1445,12 @@ mod tests {
     fn spectrum_silent_full_width_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         for _ in 0..30 {
             state.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
-        terminal.draw(|f| super::super::draw(f, f.area(), &state, &Theme::default()))?;
+        terminal.draw(|f| super::super::draw(f, f.area(), &state, &theme))?;
         crate::test_support::assert_snap!(
             "频谱无音频(idle baseline,占满宽度无起伏)",
             terminal.backend()
@@ -1454,7 +1462,7 @@ mod tests {
     #[test]
     fn cover_transition_settles_to_fixed() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        s.begin_cover_transition(fixed_palette()?, &Theme::default());
+        s.begin_cover_transition(fixed_palette()?, &crate::test_support::default_theme()?);
         assert!(
             matches!(s.color, SpectrumColor::Transition { .. }),
             "begin 后应进 Transition"
@@ -1473,7 +1481,7 @@ mod tests {
     #[test]
     fn clear_cover_returns_to_hue() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        s.begin_cover_transition(fixed_palette()?, &Theme::default());
+        s.begin_cover_transition(fixed_palette()?, &crate::test_support::default_theme()?);
         s.clear_cover();
         assert!(matches!(s.color, SpectrumColor::Hue), "clear 后应回 Hue");
         Ok(())
@@ -1482,7 +1490,7 @@ mod tests {
     /// `Hue` 态 tick 推进 `hue_phase`;`CoverFixed` 态 tick 不改色(端点两帧一致)。
     #[test]
     fn hue_advances_but_coverfixed_is_frozen() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut s = spectrum_state()?;
         let before = s.hue_phase;
         s.tick(false /*playing*/, 100 /*volume_pct*/, None);
@@ -1509,7 +1517,7 @@ mod tests {
     fn settled_dark_low_cover(mut state: SpectrumState) -> color_eyre::Result<SpectrumState> {
         let pal = CoverPalette::new(vec![Rgb::new(18, 18, 26), Rgb::new(235, 235, 235)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        state.begin_cover_transition(pal, &Theme::default());
+        state.begin_cover_transition(pal, &crate::test_support::default_theme()?);
         for _ in 0..state.timing.fade_ticks {
             state.tick(false /*playing*/, 100 /*volume_pct*/, None);
         }
@@ -1520,6 +1528,7 @@ mod tests {
     /// 背景比暗点亮时,旧双向保底会把暗点往黑压到近黑;单向 `soften_over_bg` 只提亮,
     /// 故最小亮度有底、不落近黑。
     fn min_lit_dot_luma(state: &SpectrumState, bg: Color) -> color_eyre::Result<i32> {
+        let theme = crate::test_support::default_theme()?;
         use ratatui::layout::Position;
 
         let (w, h) = (48_u16, 12_u16);
@@ -1533,7 +1542,7 @@ mod tests {
                     }
                 }
             }
-            super::super::draw(f, area, state, &Theme::default());
+            super::super::draw(f, area, state, &theme);
         })?;
 
         let buf = terminal.backend().buffer().clone();
@@ -1588,6 +1597,7 @@ mod tests {
     /// 若沿用单中心(右侧亮 bg),左点会被判「已分开」不抬、埋进本地暗底成 muddy。
     #[test]
     fn scope_dots_lift_against_local_dark_bg() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use ratatui::layout::Position;
 
         let state = settled_dark_low_cover(scope_state()?)?;
@@ -1608,7 +1618,7 @@ mod tests {
                     }
                 }
             }
-            super::super::draw(f, area, &state, &Theme::default());
+            super::super::draw(f, area, &state, &theme);
         })?;
 
         let buf = terminal.backend().buffer().clone();
@@ -1640,8 +1650,8 @@ mod tests {
 
     /// `Hue` 态:所有列端点相同(与旧单色实现等价,零回归)。
     #[test]
-    fn hue_columns_are_uniform() {
-        let theme = Theme::default();
+    fn hue_columns_are_uniform() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let color = SpectrumColor::Hue;
         let first = color.column_endpoints(
             /*col*/ 0,
@@ -1666,12 +1676,13 @@ mod tests {
         );
         assert_eq!(first, mid);
         assert_eq!(mid, last);
+        Ok(())
     }
 
     /// `CoverFixed` 态:底色沿频率轴推进,首列 ≠ 末列。
     #[test]
     fn coverfixed_columns_span_frequency() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let color = SpectrumColor::CoverFixed {
             palette: fixed_palette()?,
         };
@@ -1697,7 +1708,7 @@ mod tests {
     /// 等于 `CoverFixed`。
     #[test]
     fn transition_endpoints_match_start_and_end() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let palette = fixed_palette()?;
         let frozen = 42.0_f32;
 
@@ -1758,7 +1769,7 @@ mod tests {
     /// 锁住"当前可见色 → 新色"的预期。
     #[test]
     fn transition_from_cover_starts_at_previous_cover() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let red = CoverPalette::new(vec![
             Rgb::new(120, 20, 20),
             Rgb::new(200, 40, 40),
@@ -1810,7 +1821,7 @@ mod tests {
     /// 让列位置正落在采样网格上,端点可逐列**精确**比较(无插值弦差)。
     #[test]
     fn interrupting_transition_starts_from_visible_mix() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let red = CoverPalette::new(vec![
             Rgb::new(120, 20, 20),
             Rgb::new(200, 40, 40),
@@ -1882,7 +1893,7 @@ mod tests {
     /// `CoverFixed` 态沿频率轴铺色 → 两端不等。
     #[test]
     fn bars_render_wires_per_column_color() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         let mut state = spectrum_state()?;
         // 先渲一帧让 target_bars = 真实内宽,再喂音频让条形铺满底行。

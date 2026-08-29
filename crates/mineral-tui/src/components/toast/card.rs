@@ -540,7 +540,6 @@ mod tests {
 
     use super::{Card, CardMotion, CardTtl, plain_body, plain_line};
     use crate::components::toast::notifications::TextTint;
-    use crate::render::theme::Theme;
 
     /// 与 default.lua 默认一致的动画拍数(96ms ÷ 16ms)。
     const ANIM_TICKS: u16 = 6;
@@ -562,7 +561,7 @@ mod tests {
 
     /// 渲染一张卡到 80x10 的内存终端。
     fn draw(card: &Card, motion: CardMotion) -> color_eyre::Result<Terminal<TestBackend>> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 10))?;
         let w = card.width("x");
         let h = card.height();
@@ -653,7 +652,7 @@ mod tests {
     /// 标题 spans 落色:无样式 span 用级别色(accent),带 fg 的 span 覆盖为指定色。
     #[test]
     fn styled_title_spans_color_cells() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut title = plain_line("ab");
         let mut styled = TextSpan::plain("cd");
         styled.fg = Some(SpanFg::Green);
@@ -749,7 +748,7 @@ mod tests {
     #[test]
     fn styled_spans_color_and_modifier_reach_cells() -> color_eyre::Result<()> {
         use ratatui::style::Modifier;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut card = Card::new(
             TextTint::Normal,
             Vec::new(),
@@ -803,7 +802,7 @@ mod tests {
     /// 错误级卡片边框用红色(快照抓不到色,逐 cell 验)。
     #[test]
     fn error_card_border_is_red() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut card = Card::new(
             TextTint::Error,
             plain_line("出错"),
@@ -837,7 +836,7 @@ mod tests {
     /// 前沿是多格渐变带(带内相邻格颜色互异、非端点色),画在边框上的标题文字不被染暗。
     #[test]
     fn ttl_border_decays_from_top_left_toward_bottom_right() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let total = Duration::from_secs(8);
         let born = Instant::now();
         let mut card = Card::new(

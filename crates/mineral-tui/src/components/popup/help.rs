@@ -536,7 +536,6 @@ mod tests {
 
     use super::{HelpOverlay, chip_text};
     use crate::components::popup::component::render_overlay;
-    use crate::render::theme::Theme;
     use crate::runtime::action::Action;
     use crate::runtime::keymap::Keymap;
     use crate::runtime::state::AppState;
@@ -555,6 +554,7 @@ mod tests {
     /// 多键条目只露前 2 帽 + `+N`,一屏放完无滚动指示。
     #[test]
     fn help_wide_columns_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(130, 32))?;
         let ctx = AppState::test_default()?;
         let overlay = help_overlay_from_defaults()?;
@@ -566,7 +566,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(
@@ -579,6 +579,7 @@ mod tests {
     /// 窄矮终端(46×18):塌到单列,放不完 → 底边出现行窗指示,内容从首组开始。
     #[test]
     fn help_narrow_single_column_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(46, 18))?;
         let ctx = AppState::test_default()?;
         let overlay = help_overlay_from_defaults()?;
@@ -590,7 +591,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(

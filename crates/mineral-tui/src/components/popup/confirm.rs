@@ -87,12 +87,12 @@ mod tests {
 
     use super::ConfirmOverlay;
     use crate::components::popup::component::render_overlay;
-    use crate::render::theme::Theme;
     use crate::runtime::state::AppState;
 
     /// quit confirm modal 渲染快照(完全展开)。
     #[test]
     fn confirm_overlay_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         let ctx = AppState::test_default()?;
         let overlay = ConfirmOverlay;
@@ -104,7 +104,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!("退出确认 modal(y 确认 / n 取消)", terminal.backend());
@@ -115,6 +115,7 @@ mod tests {
     /// 四沿是体色八分块,边框未进窗口故不可见。
     #[test]
     fn confirm_mid_reveal_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         let ctx = AppState::test_default()?;
         let overlay = ConfirmOverlay;
@@ -126,7 +127,7 @@ mod tests {
                 /*scale*/ 700,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(

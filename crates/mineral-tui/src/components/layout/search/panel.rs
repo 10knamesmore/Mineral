@@ -553,7 +553,7 @@ mod tests {
     use rustc_hash::FxHashMap;
 
     use crate::components::layout::shared::marquee::MarqueeCtx;
-    use crate::render::theme::{Theme, resolve_source_color};
+    use crate::render::theme::resolve_source_color;
     use crate::runtime::marquee::{Marquees, Slot};
     use crate::runtime::state::{PromptSegment, SearchPage};
 
@@ -582,7 +582,7 @@ mod tests {
 
         use crate::test_support::{song, with_name};
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let payload = SearchPayload::Songs(vec![with_name(
             song("1"),
             "abcdefghijklmnopqrstuvwxyz0123456789",
@@ -622,7 +622,7 @@ mod tests {
         use mineral_task::SearchPayload;
         use ratatui::widgets::Table;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         // 真实译名样本:迷星叫 / 叫喊迷星;第二行无别名对照(分隔符 / 括号由 alias_span 单测锁定)。
         let payload = SearchPayload::Songs(vec![
             mineral_test::aliased_song(),
@@ -736,6 +736,7 @@ mod tests {
     /// draw_prompt 快照:填充背景的 source / kind chip(去 sigil、含图标)+ 光标落词中(te|st)。
     #[test]
     fn prompt_chips_and_cursor_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut rs = entered(vec![SearchKind::Song]);
         if let Some(s) = rs.current_mut() {
             for c in "test".chars() {
@@ -751,7 +752,7 @@ mod tests {
                 f,
                 f.area(),
                 &rs,
-                &Theme::default(),
+                &theme,
                 cfg.sources(),
                 /*border_focused*/ true,
             )

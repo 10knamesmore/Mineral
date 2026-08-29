@@ -671,7 +671,6 @@ mod tests {
     fn text_of(spans: &[Span<'_>]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
     }
-    use crate::render::theme::Theme;
 
     use super::{manual_cell_anchor, scroll_anchor, scroll_progress};
 
@@ -744,17 +743,10 @@ mod tests {
     /// 无当前歌 / 无歌词缓存 → fallback 态。
     #[test]
     fn lyrics_fallback_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = AppState::test_default()?;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!("歌词:无当前歌 / 无缓存 → fallback", t.backend());
         Ok(())
     }
@@ -762,20 +754,13 @@ mod tests {
     /// 逐字 + 翻译档:每个可见原文行下方紧跟翻译副行,标识 `synced ✦ · 译`。
     #[test]
     fn lyrics_words_with_translation_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
         )?;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!("歌词:逐字 + 翻译副行(所有可见行)", t.backend());
         Ok(())
     }
@@ -785,6 +770,7 @@ mod tests {
     /// 这里按同一条 overlay 合成路径(merge_tree + from_tree)造有效配置。
     #[test]
     fn lyrics_compact_gap_override_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let mut state =
             crate::test_support::state_with_lyrics(LyricExtra::None, /*with_words*/ false)?;
@@ -795,15 +781,7 @@ mod tests {
         state.cfg = std::sync::Arc::new(
             mineral_config::from_tree(&tree).map_err(|w| color_eyre::eyre::eyre!("{w}"))?,
         );
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!(
             "歌词:脚本覆盖 compact_line_gap=1 → 行间垫空行",
             t.backend()
@@ -814,20 +792,13 @@ mod tests {
     /// 行级(无逐字)+ 罗马音档:标识 `synced · 音`,每行下方紧跟罗马音副行。
     #[test]
     fn lyrics_lrc_with_romanization_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Romanization,
             /*with_words*/ false,
         )?;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!("歌词:行级 + 罗马音副行", t.backend());
         Ok(())
     }
@@ -835,17 +806,10 @@ mod tests {
     /// 无翻译 / 无罗马音(《飞鱼转身》)→ 右上不显示 `[t]` 提示,只有左上数据档。
     #[test]
     fn lyrics_no_extra_hides_hint_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let state = crate::test_support::state_with_lrc_only()?;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!("歌词:无副歌词 → 右上无 [t] 提示", t.backend());
         Ok(())
     }
@@ -854,20 +818,13 @@ mod tests {
     /// line[00:59.31] 起 +2.69s,远超过渡窗口 → 锚点已吸附、无交叉淡入。
     #[test]
     fn lyrics_immersive_steady_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 20))?;
         let state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
         )?;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Immersive,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Immersive))?;
         crate::test_support::assert_snap!("全屏歌词:稳态(当前行居中 + 行间距)", t.backend());
         Ok(())
     }
@@ -877,6 +834,7 @@ mod tests {
     /// 淡 `-`(seek 游标,提示 Enter 跳到此行)。
     #[test]
     fn lyrics_immersive_manual_scroll_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 20))?;
         let mut state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
@@ -884,15 +842,7 @@ mod tests {
         )?;
         // 脱离播放、锚定在当前播放行下方 2 行(已 settle):当前行仍在窗内但离开正中。
         state.debug_scroll_lyrics_to_settled(2);
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Immersive,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Immersive))?;
         crate::test_support::assert_snap!(
             "全屏歌词:脱离播放手动下滚 2 行(居中在锚定行,当前行离开正中)",
             t.backend()
@@ -904,21 +854,14 @@ mod tests {
     /// 上方露空白;弹回由状态层驱动,渲染只画当帧锚点。
     #[test]
     fn lyrics_immersive_overscroll_top_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 20))?;
         let mut state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
         )?;
         state.debug_scroll_lyrics_to_milli(-1500);
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Immersive,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Immersive))?;
         crate::test_support::assert_snap!(
             "全屏歌词:顶部过冲帧(首行离开上界,上方露空白)",
             t.backend()
@@ -930,6 +873,7 @@ mod tests {
     /// 下方露空白。
     #[test]
     fn lyrics_immersive_overscroll_bottom_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 20))?;
         let mut state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
@@ -943,15 +887,7 @@ mod tests {
         )
         .unwrap_or(0);
         state.debug_scroll_lyrics_to_milli(max_line * 1000 + 1500);
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Immersive,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Immersive))?;
         crate::test_support::assert_snap!(
             "全屏歌词:底部过冲帧(末行越过中心,下方露空白)",
             t.backend()
@@ -964,21 +900,14 @@ mod tests {
     /// 相邻行视觉行距=3、中间帧可见。
     #[test]
     fn lyrics_immersive_scroll_midframe_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 20))?;
         let mut state = crate::test_support::state_with_lyrics(
             LyricExtra::Translation,
             /*with_words*/ true,
         )?;
         state.playback.position_ms = 66_510;
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Immersive,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Immersive))?;
         crate::test_support::assert_snap!(
             "全屏歌词:跨行过渡中途(缓动平移 + 高亮交叉淡入 + 行间距)",
             t.backend()
@@ -988,9 +917,9 @@ mod tests {
 
     /// 左上数据档三档 × 时间轴信任档(文本形状;颜色不进文本快照)。
     #[test]
-    fn title_left_tiers() {
+    fn title_left_tiers() -> color_eyre::Result<()> {
         use super::SyncTrust;
-        let th = Theme::default();
+        let th = crate::test_support::default_theme()?;
         let ink = th.ink_over(ratatui::style::Color::Reset);
         assert_eq!(
             text_of(&title_left_spans(false, false, SyncTrust::Native, &th, ink)),
@@ -1027,12 +956,14 @@ mod tests {
             text_of(&title_left_spans(false, false, SyncTrust::Broken, &th, ink)),
             " lyrics "
         );
+        Ok(())
     }
 
     /// 顶换流时长差超阈(Broken):放弃逐行同步——窗口锚回篇首、无当前行高亮,
     /// 标识换 `unsynced`(对照同 fixture 的居中同步帧)。
     #[test]
     fn lyrics_substituted_broken_goes_static_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(64, 14))?;
         let mut state =
             crate::test_support::state_with_lyrics(LyricExtra::None, /*with_words*/ false)?;
@@ -1060,15 +991,7 @@ mod tests {
             .and_then(|t| t.duration_ms)
             .unwrap_or(0);
         state.playback.engine_duration_ms = Some(meta_ms + 30_000);
-        t.draw(|f| {
-            super::draw(
-                f,
-                f.area(),
-                &state,
-                &Theme::default(),
-                super::LyricMode::Compact,
-            )
-        })?;
+        t.draw(|f| super::draw(f, f.area(), &state, &theme, super::LyricMode::Compact))?;
         crate::test_support::assert_snap!(
             "歌词:顶换流时长失真 → 放弃同步(静态篇首 + unsynced 标识)",
             t.backend()
@@ -1078,8 +1001,8 @@ mod tests {
 
     /// 右上副歌词档 + 按键提示;无副歌词时为空(不显示)。
     #[test]
-    fn title_right_hint() {
-        let th = Theme::default();
+    fn title_right_hint() -> color_eyre::Result<()> {
+        let th = crate::test_support::default_theme()?;
         let ink = th.ink_over(ratatui::style::Color::Reset);
         assert_eq!(text_of(&title_right_spans(false, None, &th, ink)), "");
         assert_eq!(
@@ -1114,6 +1037,7 @@ mod tests {
             )),
             " ro · [t] "
         );
+        Ok(())
     }
 
     /// 氛围背景(真彩 bg)下,远端歌词行的前景贴向**实际**背景:蓝底下蓝分量占优、
@@ -1121,6 +1045,7 @@ mod tests {
     /// 「越远越显眼」的回归钉)。
     #[test]
     fn far_rows_fade_toward_actual_bg() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use ratatui::style::Color;
 
         // 探针:自上而下找第一个含非空字符的歌词行(跳过边框行/列),返回其 fg。
@@ -1137,13 +1062,7 @@ mod tests {
                     ratatui::widgets::Block::new().style(ratatui::style::Style::new().bg(bg)),
                     area,
                 );
-                super::draw(
-                    f,
-                    area,
-                    &state,
-                    &Theme::default(),
-                    super::LyricMode::Compact,
-                );
+                super::draw(f, area, &state, &theme, super::LyricMode::Compact);
             })?;
             let buf = t.backend().buffer();
             let area = *buf.area();

@@ -86,7 +86,6 @@ mod tests {
     use ratatui::style::Style;
 
     use super::{alias_suffix, highlight_indices};
-    use crate::render::theme::Theme;
 
     /// 拿 spans 的 `content` 字符串(转成 `&str`)序列,便于 `assert_eq!` 整体比较。
     fn contents<'a>(spans: &'a [ratatui::text::Span<'a>]) -> Vec<&'a str> {
@@ -95,48 +94,53 @@ mod tests {
 
     /// 空 hits → 整段 base 样式,单 Span。
     #[test]
-    fn empty_hits_single_base_span() {
-        let theme = Theme::default();
+    fn empty_hits_single_base_span() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let spans = highlight_indices("春日影", &[], Style::new(), &theme);
         assert_eq!(contents(&spans), vec!["春日影"]);
+        Ok(())
     }
 
     /// 全命中 → 单 hit Span。
     #[test]
-    fn all_hits_single_hit_span() {
-        let theme = Theme::default();
+    fn all_hits_single_hit_span() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let spans = highlight_indices("春日影", &[0, 1, 2], Style::new(), &theme);
         assert_eq!(contents(&spans), vec!["春日影"]);
+        Ok(())
     }
 
     /// 间断命中:`春_影` 高亮 → ["春" hit, "日" base, "影" hit] 三段。
     #[test]
-    fn scattered_hits_splits_into_runs() {
-        let theme = Theme::default();
+    fn scattered_hits_splits_into_runs() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let spans = highlight_indices("春日影", &[0, 2], Style::new(), &theme);
         assert_eq!(contents(&spans), vec!["春", "日", "影"]);
+        Ok(())
     }
 
     /// 混 ASCII + Han:hits 落在 ASCII 段。
     #[test]
-    fn ascii_hits_in_mixed() {
-        let theme = Theme::default();
+    fn ascii_hits_in_mixed() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let spans = highlight_indices("春 MyGO", &[2, 3, 4, 5], Style::new(), &theme);
         assert_eq!(contents(&spans), vec!["春 ", "MyGO"]);
+        Ok(())
     }
 
     /// 越界 hit 不导致 panic / index error,直接被丢弃。
     #[test]
-    fn out_of_range_hits_skipped() {
-        let theme = Theme::default();
+    fn out_of_range_hits_skipped() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let spans = highlight_indices("ab", &[0, 5], Style::new(), &theme);
         assert_eq!(contents(&spans), vec!["a", "b"]);
+        Ok(())
     }
 
     /// 主字段命中:命中段换成 search_hit 色 + 叠字体效果;非命中段保持 base 色。
     #[test]
     fn primary_hit_swaps_to_search_hit_color() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let base = Style::new().fg(theme.overlay);
         let spans = highlight_indices("春日影", &[0], base, &theme);
         let hit = spans
@@ -158,7 +162,7 @@ mod tests {
     /// (与主字段命中同款,不因从属地位弱化)。
     #[test]
     fn alias_suffix_dim_wrapper_primary_hits() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let spans = alias_suffix("Mayoiuta", &[0, 1, 2, 3], &theme);
         assert_eq!(contents(&spans), vec![" (", "Mayo", "iuta", ")"]);
         let hit = spans

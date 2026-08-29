@@ -346,7 +346,6 @@ mod tests {
     use crate::components::popup::component::{
         Overlay, OverlayAction, OverlayResponse, render_overlay,
     };
-    use crate::render::theme::Theme;
     use crate::runtime::action::{Action, SelectionMove};
     use crate::runtime::state::AppState;
     use crate::test_support::endserenading;
@@ -381,6 +380,7 @@ mod tests {
     /// 只有那一行标 `▶`——历史 bug 按歌曲身份匹配会把两个副本一起点亮(count==2)。
     #[test]
     fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_test::song;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = AppState::test_default()?;
@@ -389,7 +389,7 @@ mod tests {
         ctx.playback.track = Some(song("a"));
         let overlay = QueueOverlay::new(2);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         assert_eq!(
             count_symbol(t.backend(), "▶"),
@@ -406,7 +406,7 @@ mod tests {
 
         use crate::render::theme::resolve_source_color;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut ctx = AppState::test_default()?;
         ctx.player.queue = crate::test_support::mixed_source_songs();
         let overlay = QueueOverlay::new(0);
@@ -438,7 +438,7 @@ mod tests {
 
         use crate::render::theme::resolve_source_color;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let ctx = ctx_with_queue(3, /*current*/ None)?;
         let overlay = QueueOverlay::new(0);
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
@@ -460,6 +460,7 @@ mod tests {
     /// 空 queue,完全展开。
     #[test]
     fn queue_empty_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
         let ctx = AppState::test_default()?;
         let overlay = QueueOverlay::new(0);
@@ -471,7 +472,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!("队列浮层:空队列", t.backend());
@@ -482,11 +483,12 @@ mod tests {
     /// backend=100(默认停靠占宽 36% → 浮层 36 → 内区 34)落 Song 档。
     #[test]
     fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let ctx = ctx_with_queue(3, Some(1))?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦",
@@ -499,6 +501,7 @@ mod tests {
     /// 设够宽的 frame_area 让右下不退化;playing + 固定 now 让 ends 钟点稳定可锁。
     #[test]
     fn queue_footer_end_clock_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use chrono::TimeZone;
 
         let mut t = Terminal::new(TestBackend::new(160, 24))?;
@@ -515,7 +518,7 @@ mod tests {
         );
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层底栏:左下 n/total,右下 剩余曲目·时长→预计播完钟点",
@@ -527,6 +530,7 @@ mod tests {
     /// 队列浮层收藏列:已收藏行画实心 ♥,未收藏行留空(不画空心 ♡,免满屏噪音)。
     #[test]
     fn queue_love_column_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = ctx_with_queue(3, Some(1))?;
         // 标记第 0、2 首为已收藏(第 1 首留未收藏,同屏对照)。
@@ -538,7 +542,7 @@ mod tests {
         }
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:♥ 列——第 0/2 首已收藏画实心,第 1 首(在播)未收藏留空",
@@ -551,6 +555,7 @@ mod tests {
     /// 锁住「新增渲染面漏挂 alias 后缀」的回归。
     #[test]
     fn queue_alias_suffix_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = ctx_with_queue(3, Some(1))?;
         // 真实样本:迷星叫 / 别名 Mayoiuta。
@@ -559,7 +564,7 @@ mod tests {
         }
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:歌名带译名别名,标题后缀暗色 (alias)",
@@ -572,11 +577,12 @@ mod tests {
     /// 只剩 # / title / len,artist 省去。
     #[test]
     fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
         let ctx = ctx_with_queue(3, Some(1))?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:窄浮层退到 Song 档(只剩歌名,无 artist)",
@@ -589,11 +595,12 @@ mod tests {
     /// 放得下 artist 但塞不进 album——锁住「中档不硬塞 album 挤瘦 title/artist」。
     #[test]
     fn queue_mid_full_no_album_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(140, 20))?;
         let ctx = ctx_with_queue(3, Some(1))?;
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:中宽保持 Full 档(有 artist,无 album)",
@@ -608,6 +615,7 @@ mod tests {
     /// 覆盖不到这条路径。
     #[test]
     fn queue_wide_album_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_test::{song, with_album, with_artist, with_duration, with_name};
         let make = |name: &str, artist: &str, album: &str| {
             with_album(
@@ -624,7 +632,7 @@ mod tests {
         ];
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:宽浮层 Wide 档 album 列有内容(短英文/长英文/CJK)",
@@ -637,6 +645,7 @@ mod tests {
     /// 回归历史 bug——固定 3 宽会把 `1234` 截成 `123`。光标定在 1234 使该行进视口。
     #[test]
     fn queue_wide_index_no_truncation_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 16))?;
         let mut ctx = AppState::test_default()?;
         ctx.player.queue = (0..1300)
@@ -644,7 +653,7 @@ mod tests {
             .collect();
         let overlay = QueueOverlay::new(1234);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:超千首序号列 4 宽,4 位下标完整不截断",
@@ -657,6 +666,7 @@ mod tests {
     /// 随前沿平移可见,左边框尚未进场。
     #[test]
     fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(60, 20))?;
         let ctx = ctx_with_queue(3, None)?;
         let overlay = QueueOverlay::new(0);
@@ -668,7 +678,7 @@ mod tests {
                 /*scale*/ 500,
                 true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(
@@ -682,6 +692,7 @@ mod tests {
     /// 验证滑入不一格一格跳。
     #[test]
     fn queue_h_grow_smooth_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         let ctx = ctx_with_queue(3, None)?;
         let overlay = QueueOverlay::new(0);
@@ -693,7 +704,7 @@ mod tests {
                 /*scale*/ 505,
                 true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!(
@@ -706,12 +717,13 @@ mod tests {
     /// 全屏布局下停靠右半(`fullscreen=true`),完全展开:浮层贴右缘、避开左侧封面。
     #[test]
     fn queue_fullscreen_dock_right_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = ctx_with_queue(3, Some(1))?;
         ctx.browse.fullscreen.set(true);
         let overlay = QueueOverlay::new(0);
         t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default());
+            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!("队列浮层:全屏布局停靠右半(避开左侧封面)", t.backend());
         Ok(())
@@ -769,7 +781,7 @@ mod tests {
         use crate::render::color::lerp_color;
         use crate::runtime::state::OverlayReveal;
 
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let ctx = ctx_with_queue(4, None)?;
         let full = u64::from(OverlayReveal::FULL);
         let half = lerp_color(theme.surface0, theme.base, full / 2, full);
@@ -1110,7 +1122,8 @@ mod tests {
         ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
         let mut overlay = QueueOverlay::new(0);
         overlay.search.set_query("al");
-        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme))?;
         crate::test_support::assert_snap!(
             "队列浮层:/al 过滤——命中行高亮 + 按分排序 + 顶栏 /al 输入 + 底栏命中位/数",
             t.backend()
@@ -1126,7 +1139,8 @@ mod tests {
         ctx.player.queue = named(&["alpha", "beta"]);
         let mut overlay = QueueOverlay::new(0);
         overlay.search.set_query("zzzzz");
-        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &Theme::default()))?;
+        let theme = crate::test_support::default_theme()?;
+        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme))?;
         crate::test_support::assert_snap!("队列浮层:过滤无命中——居中占位", t.backend());
         Ok(())
     }

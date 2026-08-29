@@ -556,7 +556,6 @@ mod tests {
 
     use super::{LiveSlot, Notifications, text_item};
     use crate::components::toast::card::plain_line;
-    use crate::render::theme::Theme;
 
     /// 多行内容(如带 traceback 的错误)只取首行:宽度按首行算,
     /// 不被换行后的长尾撑满全屏。
@@ -595,7 +594,7 @@ mod tests {
     /// live + flash 并存:`下载中` 在上、`出错了` 在下,各自居中括号。
     #[test]
     fn stack_live_above_flash_snapshot() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut n = notifications();
         n.flash_text("出错了".to_owned());
         for _ in 0..8 {
@@ -703,7 +702,7 @@ mod tests {
     #[test]
     fn cards_stack_below_flash_snapshot() -> color_eyre::Result<()> {
         use super::TextTint;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut n = notifications();
         n.flash_text("音量 32".to_owned());
         n.push_card(
@@ -731,7 +730,7 @@ mod tests {
     #[test]
     fn immersive_essential_only_snapshot() -> color_eyre::Result<()> {
         use super::{TextTint, tinted_text_item};
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut n = notifications();
         n.flash_text("普通提示不该出现".to_owned());
         n.flash(tinted_text_item("播放失败".to_owned(), TextTint::Error));
@@ -763,7 +762,7 @@ mod tests {
     #[test]
     fn z_transition_midpoint_interpolates_anchors() -> color_eyre::Result<()> {
         use super::TextTint;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut n = notifications();
         n.flash_text("普通提示收缩中".to_owned());
         n.push_card(
@@ -914,7 +913,7 @@ mod tests {
     /// 进出场动画中途一帧:括号区由中心横向展开,尚未铺满。
     #[test]
     fn toast_midexpand_snapshot() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut n = notifications();
         for _ in 0..2 {
             n.set_live(

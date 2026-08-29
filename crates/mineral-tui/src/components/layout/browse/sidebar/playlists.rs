@@ -279,7 +279,6 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::position_label;
-    use crate::render::theme::Theme;
     use crate::runtime::state::AppState;
 
     /// `position_label`:1-based 当前位 / 总数;空列表 `0 / 0`;越界 clamp。
@@ -294,11 +293,12 @@ mod tests {
     /// 3 个混源歌单列表(name 列 Fill(1) 后列宽确定,不再 flaky)。
     #[test]
     fn playlists_list_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = crate::test_support::state_with_playlists()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:3 个混源歌单(EndSerenading / 本地)",
@@ -310,13 +310,14 @@ mod tests {
     /// 搜索输入态:标题挂 `/查询█`(末尾光标方块,表示正在输入)。
     #[test]
     fn playlists_search_active_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.browse.search.typing = true;
         state.browse.search.set_query("春日影");
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!("歌单列表:搜索输入态(标题 /春日影█)", t.backend());
         Ok(())
@@ -325,6 +326,7 @@ mod tests {
     /// 拼音首字母搜索:输入 `cry` → 命中「春日影」,Han 三字均高亮(反向映射)。
     #[test]
     fn playlists_search_pinyin_initials_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_model::SourceKind;
 
         let mut state = AppState::test_default()?;
@@ -336,7 +338,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:首字母 cry 命中「春日影」(汉字三字均高亮)",
@@ -348,6 +350,7 @@ mod tests {
     /// 全拼搜索:输入 `chunying` → 命中「春日影」,春 + 影 高亮(日的 ri 未命中)。
     #[test]
     fn playlists_search_pinyin_full_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_model::SourceKind;
 
         let mut state = AppState::test_default()?;
@@ -361,7 +364,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:全拼 chunying 命中「春日影」(春 + 影 高亮)",
@@ -374,6 +377,7 @@ mod tests {
     /// match 列展示 `♪ 春日影 · CRYCHIC`(命中字符同款高亮)。
     #[test]
     fn playlists_search_deep_hit_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_model::{PlaylistId, SourceKind};
 
         use crate::test_support::{entry_views, song, with_artist, with_name};
@@ -390,7 +394,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(64, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:深度命中(match 列展示 ♪ 春日影 · CRYCHIC,命中高亮)",
@@ -403,6 +407,7 @@ mod tests {
     /// match 列展示 `♪ 迷星叫 (Mayoiuta) · MyGO!!!!!`。
     #[test]
     fn playlists_search_deep_hit_alias_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         use mineral_model::{PlaylistId, SourceKind};
 
         use crate::test_support::{entry_views, song, with_alias, with_artist, with_name};
@@ -422,7 +427,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:别名深度命中(match 列 ♪ 迷星叫 (Mayoiuta) · MyGO!!!!!,别名括注 dim)",
@@ -434,12 +439,13 @@ mod tests {
     /// 搜索零命中(无在飞索引):居中「无匹配」提示而非纯空白。
     #[test]
     fn playlists_search_no_match_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.browse.search.set_query("zzz");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!("歌单列表:搜索零命中(居中「无匹配」)", t.backend());
         Ok(())
@@ -449,6 +455,7 @@ mod tests {
     /// 此刻搜不到 ≠ 真没有。
     #[test]
     fn playlists_search_indexing_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.browse.search.set_query("zzz");
         state
@@ -458,7 +465,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!(
             "歌单列表:零命中且索引在飞(badge ⟳3 + 居中「索引中」)",
@@ -470,11 +477,12 @@ mod tests {
     /// 空列表(尚未加载 / 未登录)。
     #[test]
     fn playlists_empty_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let state = AppState::test_default()?;
         t.draw(|f| {
             let area = f.area();
-            super::render_to(f.buffer_mut(), area, &state, &Theme::default());
+            super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
         crate::test_support::assert_snap!("歌单列表:空态(未加载 / 未登录)", t.backend());
         Ok(())

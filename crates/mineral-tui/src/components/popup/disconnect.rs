@@ -75,12 +75,12 @@ mod tests {
 
     use super::DisconnectOverlay;
     use crate::components::popup::component::render_overlay;
-    use crate::render::theme::Theme;
     use crate::runtime::state::AppState;
 
     /// 断连提示 modal 的渲染快照:话术 + 退出提示居中,带红框(完全展开)。
     #[test]
     fn disconnect_overlay_snapshot() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         let ctx = AppState::test_default()?;
         let overlay = DisconnectOverlay;
@@ -92,7 +92,7 @@ mod tests {
                 /*scale*/ 1000,
                 /*focused*/ true,
                 &ctx,
-                &Theme::default(),
+                &theme,
             );
         })?;
         crate::test_support::assert_snap!("daemon 断连提示 modal(等按键退出)", terminal.backend());

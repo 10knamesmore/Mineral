@@ -261,7 +261,6 @@ mod tests {
 
     use super::{complete, download, fmt_speed};
     use crate::components::toast::toast::{Toast, ToastItem};
-    use crate::render::theme::Theme;
 
     #[test]
     fn speed_units() {
@@ -281,7 +280,7 @@ mod tests {
     /// 下载进度条:展开到位,topbar 一行 `[ 进度条 % 速度 done/total ]`(聚合计数,如 2/24)。
     #[test]
     fn download_bar_snapshot() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let dp = DownloadProgress {
             active: true,
             done: 2,
@@ -310,7 +309,7 @@ mod tests {
     /// 颜色另见 [`complete_colors_ok_green_skip_yellow_fail_red`]。
     #[test]
     fn complete_snapshot() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(3, 2, 1), 8);
 
@@ -326,7 +325,7 @@ mod tests {
     /// 完成提示只有成功(skip=fail=0)→ `下载完成 ✓5`。
     #[test]
     fn complete_snapshot_ok_only() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(5, 0, 0), 8);
 
@@ -342,7 +341,7 @@ mod tests {
     /// 整批都已存在(ok=fail=0)→ 前缀变 `已下载`,只显示 `⊙N`。
     #[test]
     fn complete_snapshot_all_skipped() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
         expand(&mut toast, || complete(0, 2, 0), 8);
 
@@ -358,7 +357,7 @@ mod tests {
     /// 颜色断言(snapshot 抓不到色):✓ 那格 fg = 绿、⊙ = 黄、✗ = 红。
     #[test]
     fn complete_colors_ok_green_skip_yellow_fail_red() -> color_eyre::Result<()> {
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         let item = complete(3, 2, 1);
         let mut t = Terminal::new(TestBackend::new(30, 1))?;
         t.draw(|f| {

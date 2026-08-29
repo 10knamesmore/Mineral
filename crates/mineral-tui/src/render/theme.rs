@@ -191,46 +191,6 @@ impl Theme {
         }
     }
 
-    /// 默认主题:Catppuccin Mocha,accent = mauve / accent_2 = sapphire。
-    ///
-    /// **仅供测试对照与 `Default`**(spec Q5 裁决):生产构造一律走 [`Theme::from_config`],
-    /// 与 `default.lua` 的 theme 段同值(由 `from_defaults_matches_mocha_mauve` 守卫)。
-    pub const fn mocha_mauve() -> Self {
-        Self {
-            base: Color::Rgb(0x1e, 0x1e, 0x2e),
-            mantle: Color::Rgb(0x18, 0x18, 0x25),
-            crust: Color::Rgb(0x11, 0x11, 0x1b),
-            surface0: Color::Rgb(0x31, 0x32, 0x44),
-            surface1: Color::Rgb(0x45, 0x47, 0x5a),
-            overlay: Color::Rgb(0x6c, 0x70, 0x86),
-            subtext: Color::Rgb(0xa6, 0xad, 0xc8),
-            text: Color::Rgb(0xcd, 0xd6, 0xf4),
-            accent: Color::Rgb(0xcb, 0xa6, 0xf7),
-            accent_2: Color::Rgb(0x74, 0xc7, 0xec),
-            red: Color::Rgb(0xf3, 0x8b, 0xa8),
-            yellow: Color::Rgb(0xf9, 0xe2, 0xaf),
-            green: Color::Rgb(0xa6, 0xe3, 0xa1),
-            peach: Color::Rgb(0xfa, 0xb3, 0x87),
-            // background 与 default.lua 的 `background = "base"` 对齐(resolve 到 base 同值)。
-            background: Color::Rgb(0x1e, 0x1e, 0x2e),
-            // search_hit 与 default.lua 的 `{ color = "peach",
-            // modifiers = { "bold", "underline", "italic" } }` 对齐。
-            search_hit_color: Color::Rgb(0xfa, 0xb3, 0x87),
-            search_hit_modifier: Modifier::BOLD
-                .union(Modifier::UNDERLINED)
-                .union(Modifier::ITALIC),
-            // 与 default.lua 的 text_alpha 对齐;strong/muted/faint 取自 mocha 中间色阶
-            // 在 base→text 上的天然 alpha 位置(三通道一致,回落色与混合色 ≈ 同值),
-            // ghost 刻意压到近乎贴底(淡出终点要真隐没,不对齐 surface0)。
-            text_alpha: TextAlpha {
-                strong: 780,
-                muted: 450,
-                faint: 220,
-                ghost: 10,
-            },
-        }
-    }
-
     /// 按实际背景现算四档次级文本色;回落链(bg → `base` → 静态 token)见
     /// [`Theme::text_over`]。
     ///
@@ -378,36 +338,11 @@ fn ansi_color(slot: AnsiSlot) -> Color {
     }
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self::mocha_mauve()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use mineral_model::SourceKind;
 
     use super::{Theme, resolve_source_color};
-
-    /// 不写配置:from_config(defaults) 与 mocha_mauve 逐 token 一致(行为不变守卫;Theme 派生
-    /// Debug,整体快照钉死)。
-    #[test]
-    fn from_defaults_matches_mocha_mauve() -> color_eyre::Result<()> {
-        let cfg = mineral_config::Config::defaults()?;
-        let t = Theme::from_config(cfg.tui().theme());
-        let legacy = Theme::mocha_mauve();
-        assert_eq!(
-            format!("{t:?}"),
-            format!("{legacy:?}"),
-            "默认配置应逐字段等于 mocha_mauve"
-        );
-        crate::test_support::assert_snap_debug!(
-            "Theme 默认值(from_config(defaults) = mocha_mauve)",
-            t
-        );
-        Ok(())
-    }
 
     /// theme.background 落地:默认 `"base"` → 与 base 同色(消跳变的地基);覆盖为
     /// `{ reset = true }` → `Color::Reset`(不填,渲染层据此跳过铺底、回到旧行为)。
@@ -457,7 +392,7 @@ mod tests {
     }
 
     /// 逐旋钮生效:search_hit 改成固定 hex 色 + 仅斜体,落地字段跟着变;
-    /// token 写法(默认 peach)随主题联动由 defaults 守卫覆盖。
+    /// token 写法(默认 peach)随主题联动由默认配置测试覆盖。
     #[test]
     fn search_hit_override_takes_effect() -> color_eyre::Result<()> {
         use ratatui::style::Modifier;
@@ -498,7 +433,11 @@ mod tests {
         assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
         let t = Theme::from_config(cfg.tui().theme());
         assert_eq!(t.accent, ratatui::style::Color::Rgb(0x10, 0x20, 0x30));
-        assert_eq!(t.base, Theme::mocha_mauve().base, "未改 token 不受影响");
+        assert_eq!(
+            t.base,
+            crate::test_support::default_theme()?.base,
+            "未改 token 不受影响"
+        );
         Ok(())
     }
 
@@ -507,7 +446,7 @@ mod tests {
     fn ansi_slots_resolve_to_named_colors() -> color_eyre::Result<()> {
         use ratatui::style::Color;
 
-        let theme = Theme::mocha_mauve();
+        let theme = crate::test_support::default_theme()?;
         let cases = [
             ("black", Color::Black),
             ("red", Color::Red),
@@ -539,7 +478,7 @@ mod tests {
     /// `reset` 具体色经 resolve 落到终端默认(`Color::Reset`)。
     #[test]
     fn reset_value_resolves_to_reset() -> color_eyre::Result<()> {
-        let theme = Theme::mocha_mauve();
+        let theme = crate::test_support::default_theme()?;
         let cv = serde_json::from_value::<mineral_config::ColorValue>(
             serde_json::json!({ "reset": true }),
         )?;
@@ -573,26 +512,27 @@ mod tests {
     /// `ink_over` 真彩背景:四档 = `lerp(bg, text, alpha)`,黑底下即 text 的等比暗化;
     /// 换一个背景四档全部跟着动(对实际背景混合,不是固定 token)。
     #[test]
-    fn ink_over_composites_on_rgb_bg() {
+    fn ink_over_composites_on_rgb_bg() -> color_eyre::Result<()> {
         use ratatui::style::Color;
 
-        let mut theme = Theme::mocha_mauve();
+        let mut theme = crate::test_support::default_theme()?;
         theme.text = Color::Rgb(200, 100, 50);
         let ink = theme.ink_over(Color::Rgb(0, 0, 0));
         assert_eq!(ink.strong, Color::Rgb(156, 78, 39), "780‰ × text(黑底)");
         assert_eq!(ink.muted, Color::Rgb(90, 45, 22), "450‰ × text(黑底)");
         let shifted = theme.ink_over(Color::Rgb(100, 100, 100));
         assert_ne!(shifted.strong, ink.strong, "背景变则档位色跟着变");
+        Ok(())
     }
 
     /// `ink_over` 回落链:采不到真彩背景(Reset / ANSI cell)按「背景 ≈ base」混合
     /// ——browse 无人铺 bg 的面也因此吃到 `text_alpha`,不依赖氛围背景;`base` /
     /// `text` 也非真彩才回落静态 token。
     #[test]
-    fn ink_over_falls_back_to_base_then_tokens() {
+    fn ink_over_falls_back_to_base_then_tokens() -> color_eyre::Result<()> {
         use ratatui::style::Color;
 
-        let theme = Theme::mocha_mauve();
+        let theme = crate::test_support::default_theme()?;
         let over_base = theme.ink_over(theme.base);
         for bg in [Color::Reset, Color::Blue] {
             let ink = theme.ink_over(bg);
@@ -602,7 +542,7 @@ mod tests {
             assert_eq!(ink.ghost, over_base.ghost, "ghost 同上");
         }
 
-        let mut ansi_base = Theme::mocha_mauve();
+        let mut ansi_base = crate::test_support::default_theme()?;
         ansi_base.base = Color::Reset;
         let ink = ansi_base.ink_over(Color::Reset);
         assert_eq!(ink.strong, ansi_base.subtext, "base 非真彩回落 subtext");
@@ -610,22 +550,23 @@ mod tests {
         assert_eq!(ink.faint, ansi_base.surface1, "faint 回落 surface1");
         assert_eq!(ink.ghost, ansi_base.surface0, "ghost 回落 surface0");
 
-        let mut ansi_text = Theme::mocha_mauve();
+        let mut ansi_text = crate::test_support::default_theme()?;
         ansi_text.text = Color::White;
         assert!(
             ansi_text.text_over(Color::Rgb(0, 0, 0), 500).is_none(),
             "text 非真彩同样回落"
         );
+        Ok(())
     }
 
-    /// 默认 alpha 阶梯与 mocha 静态 token 对齐:在 base 底色上混出的 strong/muted/faint
+    /// 默认 alpha 阶梯与默认配置 token 对齐:在 base 底色上混出的 strong/muted/faint
     /// 与 subtext/overlay/surface1 逐通道差 ≤ 1——无氛围背景时观感基本不漂移的地基。
     /// ghost 刻意不对齐 surface0(淡出终点压到近乎贴底),只钉「明显暗于 faint」。
     #[test]
-    fn default_ladder_matches_mocha_tokens() -> color_eyre::Result<()> {
+    fn default_ladder_matches_config_tokens() -> color_eyre::Result<()> {
         use ratatui::style::Color;
 
-        let theme = Theme::mocha_mauve();
+        let theme = crate::test_support::default_theme()?;
         let ink = theme.ink_over(theme.base);
         let close = |got: Color, want: Color| -> color_eyre::Result<()> {
             let (Color::Rgb(gr, gg, gb), Color::Rgb(wr, wg, wb)) = (got, want) else {

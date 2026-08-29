@@ -697,7 +697,7 @@ mod tests {
     ) -> color_eyre::Result<Terminal<TestBackend>> {
         let mut terminal = Terminal::new(TestBackend::new(40, 16))?;
         let ctx = AppState::test_default()?;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         terminal.draw(|f| {
             let area = f.area();
             let c = fixture.chrome();
@@ -885,7 +885,7 @@ mod tests {
             MenuReveal::Morph,
             MenuAlign::Center,
         )?;
-        let theme = Theme::default();
+        let theme = crate::test_support::default_theme()?;
         assert_eq!(sym(&terminal, 7, 3), "╭", "形变盒左上圆角");
         assert_eq!(
             fg(&terminal, 7, 3),
