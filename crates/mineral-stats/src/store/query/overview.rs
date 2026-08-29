@@ -154,7 +154,7 @@ impl StatsStore {
         .wrap_err("totals 查询失败")
     }
 
-    /// 单曲全量汇总(QuerySongStats 改口用);从未播放返回 `None`。
+    /// 返回 `QuerySongStats` 使用的单曲全量汇总；从未播放返回 `None`。
     pub async fn song_summary(&self, id: &SongId) -> color_eyre::Result<Option<SongSummary>> {
         let Some(pool) = self.pool() else {
             return Ok(None);

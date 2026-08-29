@@ -223,10 +223,10 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
-    /// 播放打点(fire-and-forget 语义):一首歌完整播完或被跳过时上报。
+    /// 通知 channel 一首歌已经结束播放，不阻塞播放链路。
     ///
-    /// channel 据此累计本地统计(播放次数 / 跳过 / 收听时长 / 历史),也可顺手做
-    /// 远端听歌打卡。默认 no-op(返回 `Ok`),不支持的 channel 静默忽略。
+    /// daemon 的 stats recorder 独立记录本地播放事实；channel 只处理来源服务特有的上报，
+    /// 例如远端听歌打卡。默认 no-op，不支持的 channel 静默忽略。
     ///
     /// # Params:
     ///   - `id`: 歌曲

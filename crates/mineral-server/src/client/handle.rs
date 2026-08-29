@@ -404,9 +404,8 @@ impl ClientHandle {
             .player
             .persist()
             .scope(id.namespace())
-            .query_stats(id)
-            .await?
-            .is_some_and(|s| s.loved);
+            .is_loved(id)
+            .await?;
 
         Ok(Some(match summary {
             Some(s) => SongStatsWire {

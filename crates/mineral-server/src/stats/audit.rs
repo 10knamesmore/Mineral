@@ -57,7 +57,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::PullPcm(..) => NotAnEvent("读:拉 PCM 数据"),
         Request::DaemonInfo => NotAnEvent("读:daemon 信息"),
         Request::ToggleLove(..) => Recorded("love_changes"),
-        Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询(改口读 stats.db)"),
+        Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询，事实来自 stats.db"),
         Request::Download(..) => Recorded("downloads"),
         // 回填只复用既有 tagging 队列(无新行为事实);单曲成败走日志,不落行为表。
         Request::TagBackfill => NotAnEvent("维护操作:存量文件回填打标"),

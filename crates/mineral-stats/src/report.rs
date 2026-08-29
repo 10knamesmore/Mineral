@@ -316,7 +316,7 @@ pub struct StatusReport {
     pub last_play_at: Option<i64>,
 }
 
-/// 单曲汇总(QuerySongStats 改口用,全量窗口)。
+/// `QuerySongStats` 使用的单曲全量汇总。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SongSummary {
     /// 已结算播放记录数；包含 eof / skip / stop / error。

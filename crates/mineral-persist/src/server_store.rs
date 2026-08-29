@@ -683,7 +683,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let p = ServerStore::open(&dir.path().join("t.db")).await?;
         let s = p.scope(SourceKind::NETEASE);
-        // 写入：歌单缓存(应被清) + 播放统计/love(应保留)
+        // 写入歌单缓存和用户状态；清理只应删除前者。
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         let song = SongId::new(SourceKind::NETEASE, "s1");
         s.put_playlist_cache(
@@ -696,8 +696,8 @@ mod tests {
             }],
         )
         .await?;
-        s.record_play(&song, 1000).await?;
         s.set_loved(&song, true).await?;
+        s.set_rating(&song, Some(4)).await?;
 
         // 清理前计数:1 个歌单、1 条曲目。
         let before = p.playlist_cache_stats().await?;
@@ -715,9 +715,9 @@ mod tests {
         let after = p.playlist_cache_stats().await?;
         assert_eq!(after.playlists, 0);
         assert_eq!(after.tracks, 0);
-        // 但统计 + love 还在
-        assert!(s.query_stats(&song).await?.is_some());
+        // 收藏与评分仍在。
         assert!(s.is_loved(&song).await?);
+        assert_eq!(s.query_rating(&song).await?, Some(4));
         Ok(())
     }
 }

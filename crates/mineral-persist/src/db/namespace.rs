@@ -9,41 +9,6 @@ use mineral_model::{
 use crate::ServerStore;
 use crate::db::rows::{SongArtistRow, SongMetaRow};
 
-/// 一首歌的聚合统计(出参)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SongStats {
-    /// 完整播放次数。
-    pub play_count: u32,
-
-    /// 跳过次数。
-    pub skip_count: u32,
-
-    /// 累计收听毫秒。
-    pub total_listen_ms: u64,
-
-    /// 最近播放 unix ms(无则 None)。
-    pub last_played_at: Option<i64>,
-
-    /// 是否 loved。
-    pub loved: bool,
-}
-
-/// 一条播放历史(出参)。
-#[derive(Debug, Clone)]
-pub struct HistoryEntry {
-    /// 歌曲 id(带本来源 namespace;展示时配 song_meta 重建 Song)。
-    pub song_id: SongId,
-
-    /// 播放时刻 unix ms。
-    pub played_at: i64,
-
-    /// 是否完整播完。
-    pub completed: bool,
-
-    /// 本次收听毫秒。
-    pub listen_ms: u64,
-}
-
 /// 一条持久化的 Playlist membership relation。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedPlaylistEntry {
@@ -335,104 +300,6 @@ impl NamespaceStore {
         Ok(row.map(|(n,)| n))
     }
 
-    /// 记一次完整播放：play_count+1、累加时长、刷新 last_played_at。降级 no-op。
-    ///
-    /// # Params:
-    ///   - `id`: 歌曲 id(用其裸值入库)
-    ///   - `listen_ms`: 本次收听毫秒
-    ///
-    /// # Return:
-    ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn record_play(&self, id: &SongId, listen_ms: u64) -> color_eyre::Result<()> {
-        let Some(pool) = self.persist.pool() else {
-            return Ok(());
-        };
-        trace!(target: "persist", song = %id.value(), "record_play");
-        let listen = i64::try_from(listen_ms)?;
-        sqlx::query(
-            "INSERT INTO song_stats(namespace,song_value,play_count,total_listen_ms,last_played_at) \
-             VALUES(?,?,1,?,?) \
-             ON CONFLICT(namespace,song_value) DO UPDATE SET \
-               play_count=play_count+1, \
-               total_listen_ms=total_listen_ms+excluded.total_listen_ms, \
-               last_played_at=excluded.last_played_at",
-        )
-        .bind(self.source.name())
-        .bind(id.value())
-        .bind(listen)
-        .bind(crate::db::time::now_ms())
-        .execute(pool)
-        .await
-        .wrap_err_with(|| format!("记录播放统计失败 song={}", id.value()))?;
-        Ok(())
-    }
-
-    /// 记一次跳过：skip_count+1。降级 no-op。
-    ///
-    /// # Params:
-    ///   - `id`: 歌曲 id(用其裸值入库)
-    ///
-    /// # Return:
-    ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn record_skip(&self, id: &SongId) -> color_eyre::Result<()> {
-        let Some(pool) = self.persist.pool() else {
-            return Ok(());
-        };
-        trace!(target: "persist", song = %id.value(), "record_skip");
-        sqlx::query(
-            "INSERT INTO song_stats(namespace,song_value,skip_count) VALUES(?,?,1) \
-             ON CONFLICT(namespace,song_value) DO UPDATE SET skip_count=skip_count+1",
-        )
-        .bind(self.source.name())
-        .bind(id.value())
-        .execute(pool)
-        .await
-        .wrap_err_with(|| format!("记录跳过统计失败 song={}", id.value()))?;
-        Ok(())
-    }
-
-    /// 查一首歌的聚合统计。降级或无记录返回 `Ok(None)`。
-    ///
-    /// # Params:
-    ///   - `id`: 歌曲 id(裸值用于查 song_stats)
-    ///
-    /// # Return:
-    ///   命中返回 `Ok(Some(stats))`,否则 `Ok(None)`。
-    pub async fn query_stats(&self, id: &SongId) -> color_eyre::Result<Option<SongStats>> {
-        let Some(pool) = self.persist.pool() else {
-            return Ok(None);
-        };
-        let Some(row) = sqlx::query_as::<_, (i64, i64, i64, Option<i64>, i64)>(
-            "WITH wanted(namespace,song_value) AS (VALUES(?,?)) \
-             SELECT COALESCE(st.play_count,0),COALESCE(st.skip_count,0), \
-                    COALESCE(st.total_listen_ms,0),st.last_played_at, \
-                    CASE WHEN f.song_value IS NULL THEN 0 ELSE 1 END \
-             FROM wanted w \
-             LEFT JOIN song_stats st \
-               ON st.namespace=w.namespace AND st.song_value=w.song_value \
-             LEFT JOIN song_favorites f \
-               ON f.namespace=w.namespace AND f.song_value=w.song_value \
-             WHERE st.song_value IS NOT NULL OR f.song_value IS NOT NULL",
-        )
-        .bind(self.source.name())
-        .bind(id.value())
-        .fetch_optional(pool)
-        .await
-        .wrap_err_with(|| format!("查播放统计失败 song={}", id.value()))?
-        else {
-            return Ok(None);
-        };
-
-        let (play_count, skip_count, total_listen_ms, last_played_at, loved) = row;
-        Ok(Some(SongStats {
-            play_count: u32::try_from(play_count)?,
-            skip_count: u32::try_from(skip_count)?,
-            total_listen_ms: u64::try_from(total_listen_ms)?,
-            last_played_at,
-            loved: loved != 0,
-        }))
-    }
-
     /// 按状态 transition 设/取消一首歌的 favorite membership。降级 no-op。
     ///
     /// # Params:
@@ -513,94 +380,6 @@ impl NamespaceStore {
             out.insert(SongId::new(self.source, v));
         }
         Ok(out)
-    }
-
-    /// 追加一条播放历史。降级 no-op。
-    ///
-    /// # Params:
-    ///   - `id`: 歌曲 id
-    ///   - `completed`: 是否完整播完(false=跳过)
-    ///   - `listen_ms`: 本次收听毫秒
-    ///
-    /// # Return:
-    ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn push_history(
-        &self,
-        id: &SongId,
-        completed: bool,
-        listen_ms: u64,
-    ) -> color_eyre::Result<()> {
-        let Some(pool) = self.persist.pool() else {
-            return Ok(());
-        };
-        trace!(target: "persist", song = %id.value(), completed, "push_history");
-        let listen = i64::try_from(listen_ms)?;
-        sqlx::query(
-            "INSERT INTO play_history(namespace,song_value,played_at,completed,listen_ms) \
-             VALUES(?,?,?,?,?)",
-        )
-        .bind(self.source.name())
-        .bind(id.value())
-        .bind(crate::db::time::now_ms())
-        .bind(i64::from(completed))
-        .bind(listen)
-        .execute(pool)
-        .await
-        .wrap_err_with(|| format!("追加播放历史失败 song={}", id.value()))?;
-        Ok(())
-    }
-
-    /// 最近 `limit` 条历史(本来源，按 played_at 倒序——最新在前)。降级返回空。
-    ///
-    /// # Params:
-    ///   - `limit`: 最多返回条数
-    ///
-    /// # Return:
-    ///   历史条目列表，最新优先。
-    pub async fn recent_history(&self, limit: u32) -> color_eyre::Result<Vec<HistoryEntry>> {
-        let mut out = Vec::new();
-        let Some(pool) = self.persist.pool() else {
-            return Ok(out);
-        };
-        let lim = i64::from(limit);
-        let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
-            "SELECT song_value,played_at,completed,listen_ms FROM play_history \
-             WHERE namespace=? ORDER BY played_at DESC, id DESC LIMIT ?",
-        )
-        .bind(self.source.name())
-        .bind(lim)
-        .fetch_all(pool)
-        .await
-        .wrap_err("查最近播放历史失败")?;
-        for (song_value, played_at, completed, listen_ms) in rows {
-            out.push(HistoryEntry {
-                song_id: SongId::new(self.source, song_value),
-                played_at,
-                completed: completed != 0,
-                listen_ms: u64::try_from(listen_ms)?,
-            });
-        }
-        Ok(out)
-    }
-
-    /// 裁剪保留窗口：删 `played_at` 早于 `before_ms` 的历史。降级 no-op。
-    ///
-    /// # Params:
-    ///   - `before_ms`: 阈值 unix ms，早于它的记录删除
-    ///
-    /// # Return:
-    ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn prune_history(&self, before_ms: i64) -> color_eyre::Result<()> {
-        let Some(pool) = self.persist.pool() else {
-            return Ok(());
-        };
-        sqlx::query("DELETE FROM play_history WHERE namespace=? AND played_at < ?")
-            .bind(self.source.name())
-            .bind(before_ms)
-            .execute(pool)
-            .await
-            .wrap_err_with(|| format!("裁剪播放历史失败 before_ms={before_ms}"))?;
-        Ok(())
     }
 
     /// 写歌单缓存(覆盖：upsert 元信息 + 先删后插 relation，刷新 fetched_at)。降级 no-op。
@@ -1009,40 +788,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn play_then_skip_accumulates() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::NETEASE);
-        let id = SongId::new(SourceKind::NETEASE, "123");
-        s.record_play(&id, 200_000).await?;
-        s.record_play(&id, 180_000).await?;
-        s.record_skip(&id).await?;
-        let st = s.query_stats(&id).await?;
-        assert!(st.is_some());
-        if let Some(st) = st {
-            assert_eq!(st.play_count, 2);
-            assert_eq!(st.skip_count, 1);
-            assert_eq!(st.total_listen_ms, 380_000);
-            assert!(st.last_played_at.is_some());
-            assert!(!st.loved);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn query_stats_miss_returns_none() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::NETEASE);
-        assert!(
-            s.query_stats(&SongId::new(SourceKind::NETEASE, "x"))
-                .await?
-                .is_none()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn love_toggle_and_list() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
@@ -1053,15 +798,6 @@ mod tests {
         assert!(!s.set_loved(&id, true).await?, "true -> true 应 no-op");
         assert!(s.is_loved(&id).await?);
         assert!(s.loved_ids().await?.contains(&id));
-        let stats = s
-            .query_stats(&id)
-            .await?
-            .ok_or_else(|| color_eyre::eyre::eyre!("favorite-only Song 应有 stats projection"))?;
-        assert!(
-            stats.loved,
-            "favorite-only Song 必须从 song_favorites 读到 loved"
-        );
-        assert_eq!(stats.play_count, 0, "无 song_stats 行时播放计数投影为 0");
         assert!(s.set_loved(&id, false).await?, "true -> false 应删除");
         assert!(!s.set_loved(&id, false).await?, "false -> false 应 no-op");
         assert!(!s.is_loved(&id).await?);
@@ -1080,42 +816,6 @@ mod tests {
             .await?;
         assert_eq!(netease.loved_ids().await?.len(), 1);
         assert_eq!(local.loved_ids().await?.len(), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn history_push_and_recent() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::NETEASE);
-        let id = SongId::new(SourceKind::NETEASE, "123");
-        s.push_history(&id, /*completed*/ true, 200_000).await?;
-        s.push_history(&id, /*completed*/ false, 5_000).await?;
-        let recent = s.recent_history(10).await?;
-        assert_eq!(recent.len(), 2);
-        // 最新(第二条 completed=false)在前
-        let Some(first) = recent.first() else {
-            return Err(color_eyre::eyre::eyre!("empty"));
-        };
-        assert!(!first.completed);
-        assert_eq!(first.listen_ms, 5_000);
-        let Some(second) = recent.get(1) else {
-            return Err(color_eyre::eyre::eyre!("no second"));
-        };
-        assert!(second.completed);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn prune_history_removes_old() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::NETEASE);
-        let id = SongId::new(SourceKind::NETEASE, "123");
-        s.push_history(&id, /*completed*/ true, 100).await?;
-        // 用一个未来的阈值删掉所有(played_at < 远未来)
-        s.prune_history(i64::MAX).await?;
-        assert_eq!(s.recent_history(10).await?.len(), 0);
         Ok(())
     }
 
