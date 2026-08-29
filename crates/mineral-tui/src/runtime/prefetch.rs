@@ -26,7 +26,7 @@ pub fn tick(state: &mut AppState, client: &dyn Client) {
 }
 
 /// 看 view 决定的 sel 周围 `prefetch.radius` 内未 cache / pending 的封面,
-/// sel 优先 → 外扩提交 source warm。来源随封面一起带出，决定落盘子目录。
+/// sel 优先 → 外扩提交真实低清 preview。来源随封面一起带出，决定落盘子目录。
 fn request_covers(state: &mut AppState) {
     let items = collect_pending_covers(state);
     state.images.prefetch(items);
@@ -75,7 +75,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             }
             // 暖入口曲封面:drill 进选中歌单默认落到第 0 首,其封面在 Library 视图才首次
             // 显示;此前从不预取(上面只取歌单封面),首次 drill 该曲封面是冷的、逐帧闪
-            // 随机封面→halfblock→终端图片。悬停期(曲目已加载)就把它拉进 cache，配合渲染侧 prepare
+            // 空白→preview→halfblock→终端图片。悬停期(曲目已加载)先生成 preview，配合渲染侧 prepare
             // 让 drill 瞬间直接命中 kitty。只暖第 0 首:remembered-pos / deep-hit 的少数入口退化。
             if let Some(first) = filtered
                 .get(sel)
@@ -227,7 +227,7 @@ fn request_detail(state: &mut AppState, client: &dyn Client) {
 ///
 /// 与 detail fetch 去重解耦：选中项随 `[ ]` 切区 / 光标移动而变，每 tick 看一眼，靠
 /// 图片引擎的 cache/pending 去重兜重复。沿用 detail 驻留防抖窗，避免快速翻列表时
-/// 给下载队列灌一堆滚过即弃的图；不投则右栏副头图会一直显示随机封面。
+/// 给下载队列灌一堆滚过即弃的图；不投则右栏副头图会一直留空。
 fn request_detail_selected_cover(state: &mut AppState) {
     if !state.channel_search.active.on() {
         return;

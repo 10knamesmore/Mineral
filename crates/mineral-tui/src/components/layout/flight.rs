@@ -4,7 +4,7 @@
 //! 可以直接 place。根治端点整帧瞬换，以及两端各自收放造成的不连续。
 //!
 //! 开层条件随形变而异:search 端点内容整帧瞬换、无自己的图收放路径,故 [`plan`] 单端就绪
-//! 即开(退化为该端收缩 / 生长)；fullscreen 侧本就有独立收放兜底(halfblock / 随机封面 /
+//! 即开(退化为该端收缩 / 生长)；fullscreen 侧本就有独立收放兜底(halfblock / preview / 空白 /
 //! 待机唱片纹),单端飞行不优于现状还会顶掉兜底,故 [`plan_fullscreen`] 两端都就绪才开。
 //! 不开层时面板保持自画,调用方据计划是否 `Some` 决定抑制面板主图防双画。
 
@@ -17,7 +17,6 @@ use crate::components::layout::search::detail;
 use crate::components::layout::shared::compute::Areas;
 use crate::components::layout::shared::transform::{lerp_rect, zero_center};
 use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
-use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, EntityRef};
 
 /// 飞行一端：端点稳态的封面区几何与图片身份。
@@ -116,14 +115,7 @@ fn resolve_end(area: Rect, url: MediaUrl, state: &AppState) -> Option<FlightEnd>
 ///   - `plan`: [`plan`] 产出的飞行计划
 ///   - `progress`: morph 进度(已缓动千分比,0 = browse 端、1000 = search 端)
 ///   - `state`: 图片缓存与终端成品状态
-///   - `theme`: 随机 fallback 使用的当前主题
-pub(crate) fn render(
-    frame: &mut Frame<'_>,
-    plan: &FlightPlan,
-    progress: u16,
-    state: &AppState,
-    theme: &Theme,
-) {
+pub(crate) fn render(frame: &mut Frame<'_>, plan: &FlightPlan, progress: u16, state: &AppState) {
     let square = |area: Rect| state.images.square_area(area);
     match (&plan.from, &plan.to) {
         (Some(from), Some(to)) => {
@@ -138,7 +130,6 @@ pub(crate) fn render(
                 rect,
                 frame.buffer_mut(),
                 ImageRenderPhase::Resizing,
-                theme,
             );
         }
         // 单端:图沿自身中心收缩 / 生长(与消失面板的 collapse 语义同款),不强行合成。
@@ -152,7 +143,6 @@ pub(crate) fn render(
                 rect,
                 frame.buffer_mut(),
                 ImageRenderPhase::Resizing,
-                theme,
             );
         }
         (None, Some(to)) => {
@@ -163,7 +153,6 @@ pub(crate) fn render(
                 rect,
                 frame.buffer_mut(),
                 ImageRenderPhase::Resizing,
-                theme,
             );
         }
         (None, None) => {}
@@ -183,7 +172,7 @@ mod tests {
     use crate::components::layout::shared::compute::{compute, compute_search};
     use crate::test_support::app_in_search_morph;
 
-    /// 两端图都未入缓存时不开飞行层，面板继续显示随机封面。
+    /// 两端完整解码图都未入缓存时不开飞行层。
     #[test]
     fn plan_none_without_cached_images() -> color_eyre::Result<()> {
         let app = app_in_search_morph(/*cache_browse*/ false, /*cache_detail*/ false)?;

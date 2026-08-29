@@ -70,7 +70,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             let plan = flight::plan(&normal, &search, &app.state);
             paint_search(frame, &areas, app, plan.is_some());
             if let Some(plan) = &plan {
-                flight::render(frame, plan, t, &app.state, &app.theme);
+                flight::render(frame, plan, t, &app.state);
             }
         }
     } else {
@@ -280,7 +280,7 @@ fn paint_fullscreen(
         theme,
     );
     match flight {
-        Some((plan, progress)) => flight::render(frame, plan, progress, &app.state, theme),
+        Some((plan, progress)) => flight::render(frame, plan, progress, &app.state),
         None => {
             if let Some(c) = areas.cover.and_then(nonempty) {
                 draw_fullscreen_cover(frame, c, steady_cover, app);
@@ -428,7 +428,6 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
                 area,
                 frame.buffer_mut(),
                 ImageRenderPhase::Stable,
-                theme,
             );
             app.state.images.prepare(&transition.to_url, area);
             prewarm_upcoming(app, area);
@@ -441,13 +440,12 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
             area,
             frame.buffer_mut(),
             ImageRenderPhase::Stable,
-            theme,
         );
         // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
-        // 直接 place，消掉切歌瞬间的随机 fallback 闪烁。
+        // 直接 place，避免切歌瞬间出现空白。
         prewarm_upcoming(app, area);
     } else {
-        // 形变期：halfblock 随封面区长大；无真实图片时渲染随机封面。
+        // 形变期：halfblock 随封面区长大；无真实图片时保留背景。
         app.state.images.render(
             ImageContent::Display {
                 url: track.cover_url.as_ref(),
@@ -455,7 +453,6 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
             area,
             frame.buffer_mut(),
             ImageRenderPhase::Resizing,
-            theme,
         );
         // 进入方向:终态封面区固定可知,按它把当前曲的协议编码与形变动画并行预热,
         // 落定即命中直接上真图,消「落定后先糊后清晰」的等待。`(url, dims)` 去重,整段
@@ -668,10 +665,10 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏形变中途：有 `cover_url` 但图尚未解码时显示随机封面，不应出现真实图片的
-    /// 品红像素。与上一例对照，证明只在缓存命中时显示真实图片。
+    /// 全屏形变中途：完整解码图与 preview 都未命中时不绘制图片，不应出现品红像素。
+    /// 与上一例对照，证明没有可用图片时封面区留空。
     #[test]
-    fn fullscreen_morph_without_cached_image_shows_random_fallback() -> color_eyre::Result<()> {
+    fn fullscreen_morph_without_cached_image_omits_real_pixels() -> color_eyre::Result<()> {
         use mineral_model::{MediaUrl, PlaylistId, SourceKind};
 
         use crate::test_support::app_with_library;
@@ -1018,7 +1015,7 @@ mod tests {
     }
 
     /// 全屏稳态切歌转场中途:封面区画两图合成的 halfblock 混色帧(fade 中点 = 均值色),
-    /// 而非任一原图或随机封面，证明转场窗口接管了稳态渲染路径。
+    /// 而非任一原图，证明转场窗口接管了稳态渲染路径。
     #[test]
     fn fullscreen_transition_paints_halfblock_blend() -> color_eyre::Result<()> {
         use std::sync::Arc;

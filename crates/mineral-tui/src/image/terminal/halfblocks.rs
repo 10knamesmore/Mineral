@@ -56,6 +56,13 @@ impl HalfblocksImage {
             }
         }
     }
+
+    /// 返回上下半块 RGB 像素缓冲的常驻字节数。
+    pub(super) fn resident_bytes(&self) -> u64 {
+        u64::from(self.pixels.width())
+            .saturating_mul(u64::from(self.pixels.height()))
+            .saturating_mul(3)
+    }
 }
 
 /// 返回一个 RGB 像素对应的 ratatui 颜色。

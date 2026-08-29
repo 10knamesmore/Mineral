@@ -1,4 +1,4 @@
-//! Library 视图右栏：曲目封面或随机封面 + 标题/副信息两行 + 底部 meta 行。
+//! Library 视图右栏：曲目封面 + 标题/副信息两行 + 底部 meta 行。
 
 use mineral_model::SongId;
 use ratatui::Frame;
@@ -48,7 +48,6 @@ pub fn draw(
             cover_area,
             frame.buffer_mut(),
             state.image_render_phase(),
-            theme,
         );
     }
 

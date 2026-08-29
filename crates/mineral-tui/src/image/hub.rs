@@ -1,7 +1,7 @@
 //! 图片管线的 client 端状态：解码图与色板缓存、在飞集合、终端图片成品。
 //!
-//! source warm、按需 decode 与 encode worker 的结果都在这里落地。预取只准备磁盘源数据；
-//! 渲染 miss 登记 decode demand，由主循环统一调度。
+//! preview、按需 decode 与 encode worker 的结果都在这里落地。预取生成低清真实封面；稳定
+//! 渲染 miss 登记完整 decode demand，由主循环统一调度。
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -9,11 +9,12 @@ use std::sync::Arc;
 use image::DynamicImage;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
+use ratatui::layout::Rect;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::cache::{CoverCache, TerminalImageCache};
 use super::graphics::{TerminalBackend, TerminalGraphics};
-use super::key::{ImageIdentity, TerminalImageKey};
+use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
 #[cfg(test)]
 use super::terminal::TerminalImage;
 use crate::image::encode::{CoverEncoder, EncodeRequest, EncodeResult};
@@ -28,6 +29,32 @@ struct ImageWorkers {
 
     /// 终端图片编码 worker。
     encoder: CoverEncoder,
+}
+
+/// 一种已在稳定布局中出现的 preview 目标尺寸。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PreviewTarget {
+    /// 目标 cell 宽高。
+    cells: (u16, u16),
+
+    /// cell 几何折算出的真实像素尺寸。
+    pixels: PixelSize,
+}
+
+impl PreviewTarget {
+    /// 从目标区域与终端 cell 像素尺寸构造 preview 几何。
+    fn from_area(area: Rect, cell_pixels: (u16, u16)) -> Self {
+        let cells = (area.width, area.height);
+        Self {
+            cells,
+            pixels: PixelSize::from_cells(cells, cell_pixels),
+        }
+    }
+
+    /// 为图片身份构造 preview 缓存键。
+    fn key(self, identity: ImageIdentity) -> TerminalImageKey {
+        TerminalImageKey::rasterized(identity, self.pixels)
+    }
 }
 
 /// 一段进行中的全屏切歌封面转场:新旧两图按样式逐帧合成 halfblock,推满落定回
@@ -69,23 +96,29 @@ pub struct ImageEngine {
     /// 只随封面**身份变化**更新,对逐出免疫。`None` = 取色失败 / 无封面(回落单色)。
     pub current_palette: Option<CoverPalette>,
 
-    /// 正在执行的 source warm 或 decode URL；只表达真实 in-flight。
+    /// 正在执行的 preview 或 decode URL；只表达真实 in-flight。
     pub pending: FxHashSet<MediaUrl>,
 
     /// 已知图片 URL 对应的来源；render miss 据此选择磁盘缓存子目录。
     source_by_url: FxHashMap<MediaUrl, SourceKind>,
 
-    /// 本进程已完成 source warm 的 Remote URL；decoded LRU 淘汰不清除此状态。
-    prefetched_sources: FxHashSet<MediaUrl>,
+    /// 本进程 preview 失败的 URL；与完整 decode 失败分离，稳定显示仍可按需尝试。
+    preview_failures: FxHashSet<MediaUrl>,
 
-    /// 本进程 source warm 失败的 URL；与 decode 失败分离，实际显示仍可按需尝试。
-    source_failures: FxHashSet<MediaUrl>,
+    /// 上一帧稳定布局观察到的 preview 尺寸；渲染持共享引用，故内部可变。
+    observed_preview_targets: RefCell<FxHashSet<PreviewTarget>>,
+
+    /// 当前预取拍使用的 preview 尺寸，由 [`Self::tick`] 从上一帧观察值刷新。
+    preview_targets: Vec<PreviewTarget>,
 
     /// 实际显示或显式 prepare 提出的 decode demand；渲染只持共享引用，故内部可变。
     decode_demand: RefCell<FxHashSet<MediaUrl>>,
 
-    /// 本进程按需 decode 失败的 URL；失败 fallback 稳定显示，不逐帧重试。
+    /// 本进程按需 decode 失败的 URL；失败后继续显示 preview，preview 也没有才为空白。
     decode_failures: RefCell<FxHashSet<MediaUrl>>,
+
+    /// 协议无关的真实封面低清 preview 缓存；协议切换和完整 decoded LRU 逐出都不清理。
+    pub preview_images: TerminalImageCache,
 
     /// 终端图片成品缓存(字节预算 LRU;越 `tui.cover.cache.protocol` 逐出最久未渲染)。
     /// 成品保留协议渲染状态与资源，render 命中后无需每帧重编；逐出的图片滚回时
@@ -150,6 +183,7 @@ impl ImageEngine {
         terminal_backend: TerminalBackend,
     ) -> Self {
         let image_budget = *cfg.tui().cover().cache().image();
+        let preview_budget = *cfg.tui().cover().cache().preview();
         let protocol_budget = *cfg.tui().cover().cache().protocol();
         Self {
             cfg,
@@ -160,10 +194,12 @@ impl ImageEngine {
             current_palette: None,
             pending: FxHashSet::default(),
             source_by_url: FxHashMap::default(),
-            prefetched_sources: FxHashSet::default(),
-            source_failures: FxHashSet::default(),
+            preview_failures: FxHashSet::default(),
+            observed_preview_targets: RefCell::new(FxHashSet::default()),
+            preview_targets: Vec::new(),
             decode_demand: RefCell::new(FxHashSet::default()),
             decode_failures: RefCell::new(FxHashSet::default()),
+            preview_images: TerminalImageCache::new(preview_budget),
             terminal_images: TerminalImageCache::new(protocol_budget),
             workers: ImageWorkers { fetcher, encoder },
             encode_pending: RefCell::new(FxHashSet::default()),
@@ -187,9 +223,10 @@ impl ImageEngine {
     ///   - `cfg`: 新的有效配置
     pub(crate) fn apply_config(&mut self, cfg: Arc<mineral_config::Config>) {
         let image_budget = *cfg.tui().cover().cache().image();
+        let preview_budget = *cfg.tui().cover().cache().preview();
         let protocol_budget = *cfg.tui().cover().cache().protocol();
         self.cfg = cfg;
-        self.set_budgets(image_budget, protocol_budget);
+        self.set_budgets(image_budget, preview_budget, protocol_budget);
         self.apply_graphics_mode();
     }
 
@@ -229,6 +266,17 @@ impl ImageEngine {
             .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
     }
 
+    /// 插入一条测试用真实低清 preview。
+    #[cfg(test)]
+    pub(crate) fn insert_test_preview(&self, url: &MediaUrl, cells: (u16, u16)) {
+        let key = TerminalImageKey::rasterized(
+            ImageIdentity::Url(url.clone()),
+            PixelSize::from_cells(cells, self.cell_pixels()),
+        );
+        self.preview_images
+            .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
+    }
+
     /// 将配置的协议模式应用到当前终端能力。
     fn apply_graphics_mode(&mut self) {
         let mode = *self.cfg.tui().cover().protocol();
@@ -243,17 +291,24 @@ impl ImageEngine {
         self.encode_pending.borrow_mut().clear();
     }
 
-    /// 现调两层缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
+    /// 现调三层 RAM 缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
     /// 原图侧被逐出项的派生物(协议 / 色板 / 频谱标记)照常联动清理。
     ///
     /// # Params:
     ///   - `image_budget`: 原图缓存新预算(配置 `tui.cover.cache.image`)
+    ///   - `preview_budget`: preview 缓存新预算(配置 `tui.cover.cache.preview`)
     ///   - `protocol_budget`: 协议缓存新预算(配置 `tui.cover.cache.protocol`)
-    pub(crate) fn set_budgets(&mut self, image_budget: u64, protocol_budget: u64) {
+    pub(crate) fn set_budgets(
+        &mut self,
+        image_budget: u64,
+        preview_budget: u64,
+        protocol_budget: u64,
+    ) {
         let evicted = self.cache.set_budget(image_budget);
         for url in evicted {
             self.discard_derived(&url);
         }
+        self.preview_images.set_budget(preview_budget);
         self.terminal_images.set_budget(protocol_budget);
     }
 
@@ -268,21 +323,17 @@ impl ImageEngine {
         }
     }
 
-    /// 消费 source warm 与 decode completion，并结束对应 in-flight。
+    /// 消费 preview 与 decode completion，并结束对应 in-flight。
     fn drain_cover_completions(&mut self) {
         for completion in self.workers.fetcher.drain_ready() {
             match completion {
-                CoverCompletion::SourceReady { url } => {
-                    self.pending.remove(&url);
-                    self.source_failures.remove(&url);
-                    self.prefetched_sources.insert(url);
-                }
+                CoverCompletion::Preview(ready) => self.install_preview(ready),
                 CoverCompletion::Decoded(ready) => self.install_decoded_cover(ready),
                 CoverCompletion::Failed { url, kind } => {
                     self.pending.remove(&url);
                     match kind {
-                        CoverRequestKind::WarmSource => {
-                            self.source_failures.insert(url);
+                        CoverRequestKind::Preview => {
+                            self.preview_failures.insert(url);
                         }
                         CoverRequestKind::Decode => {
                             self.decode_demand.borrow_mut().remove(&url);
@@ -294,18 +345,31 @@ impl ImageEngine {
         }
     }
 
+    /// 把低清真实封面装入独立 preview LRU。
+    ///
+    /// # Params:
+    ///   - `ready`: preview 键、halfblock 成品与字节数
+    fn install_preview(&mut self, ready: crate::image::fetch::CoverPreviewReady) {
+        self.pending.remove(&ready.url);
+        self.preview_failures.remove(&ready.url);
+        mineral_log::debug!(
+            target: "prefetch",
+            url = %ready.url,
+            bytes = ready.bytes,
+            "cover preview ready"
+        );
+        self.preview_images
+            .insert(&ready.key, ready.image, ready.bytes);
+    }
+
     /// 把按需解码结果写入 RAM LRU，并清理旧终端派生物。
     ///
     /// # Params:
-    ///   - `ready`: 解码图、色板与磁盘源数据状态
+    ///   - `ready`: 解码图与色板
     fn install_decoded_cover(&mut self, ready: crate::image::fetch::CoverReady) {
         self.pending.remove(&ready.url);
         self.decode_demand.borrow_mut().remove(&ready.url);
         self.decode_failures.borrow_mut().remove(&ready.url);
-        if ready.source_cached {
-            self.source_failures.remove(&ready.url);
-            self.prefetched_sources.insert(ready.url.clone());
-        }
         if let Some(palette) = ready.palette {
             self.palettes.insert(ready.url.clone(), palette);
         }
@@ -342,23 +406,62 @@ impl ImageEngine {
     ///   - `current_cover`: 当前播放图片身份
     ///   - `fullscreen_stable`: 全屏布局是否已经稳定
     pub(crate) fn tick(&mut self, current_cover: Option<MediaUrl>, fullscreen_stable: bool) {
+        self.refresh_preview_targets();
         self.drain_cover_completions();
         self.schedule_decode_demand();
         self.drain_ready_terminal_images();
         self.sync_transition(current_cover, fullscreen_stable);
     }
 
-    /// 返回正在执行的图片 source warm 与 decode 总数。
+    /// 返回正在执行的图片 preview 与 decode 总数。
     pub(crate) fn loading_count(&self) -> usize {
         self.pending.len()
     }
 
-    /// 返回 Remote 图片是否仍需要 source warm。
-    fn should_warm_source(&self, url: &MediaUrl) -> bool {
-        matches!(url, MediaUrl::Remote(_))
-            && !self.cache.contains_key(url)
-            && !self.prefetched_sources.contains(url)
-            && !self.source_failures.contains(url)
+    /// 把上一帧渲染观察到的 preview 尺寸交给本拍预取，并清空观察集合。
+    fn refresh_preview_targets(&mut self) {
+        self.preview_targets = self
+            .observed_preview_targets
+            .get_mut()
+            .drain()
+            .collect::<Vec<PreviewTarget>>();
+        self.preview_targets.sort_by_key(|target| {
+            (
+                target.cells.0,
+                target.cells.1,
+                target.pixels.width(),
+                target.pixels.height(),
+            )
+        });
+    }
+
+    /// 记录稳定布局实际使用的 preview 尺寸，供下一拍半径预取复用。
+    ///
+    /// # Params:
+    ///   - `area`: 已按终端几何收成正方形的图片区域
+    pub(crate) fn observe_preview_target(&self, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        self.observed_preview_targets
+            .borrow_mut()
+            .insert(PreviewTarget::from_area(area, self.cell_pixels()));
+    }
+
+    /// 为 URL 与目标区域构造 preview 缓存键。
+    ///
+    /// # Params:
+    ///   - `url`: 图片源 URL
+    ///   - `area`: preview 的目标 cell 区域
+    pub(crate) fn preview_key(&self, url: &MediaUrl, area: Rect) -> TerminalImageKey {
+        PreviewTarget::from_area(area, self.cell_pixels()).key(ImageIdentity::Url(url.clone()))
+    }
+
+    /// 返回图片与尺寸是否仍需要生成 preview。
+    fn should_prepare_preview(&self, url: &MediaUrl, key: &TerminalImageKey) -> bool {
+        !self.cache.contains_key(url)
+            && !self.preview_images.contains(key)
+            && !self.preview_failures.contains(url)
             && !self.pending.contains(url)
             && !self.decode_demand.borrow().contains(url)
     }
@@ -386,7 +489,7 @@ impl ImageEngine {
         }
     }
 
-    /// 去重并提交一批 Remote 压缩源数据预取候选。
+    /// 去重并为上一帧稳定布局提交真实低清 preview 候选。
     ///
     /// # Params:
     ///   - `candidates`: 按优先顺序排列的来源与 URL
@@ -394,16 +497,37 @@ impl ImageEngine {
         &mut self,
         candidates: impl IntoIterator<Item = (SourceKind, MediaUrl)>,
     ) {
+        let targets = self.preview_targets.clone();
         for (source, url) in candidates {
             self.source_by_url.insert(url.clone(), source);
-            if !self.should_warm_source(&url) {
+            if self.cache.contains_key(&url) {
                 continue;
             }
-            self.pending.insert(url.clone());
-            mineral_log::debug!(target: "prefetch", url = %url, source = ?source, "warm cover source");
-            if !self.workers.fetcher.warm_source(source, url.clone()) {
-                self.pending.remove(&url);
-                self.source_failures.insert(url);
+            for target in &targets {
+                let key = target.key(ImageIdentity::Url(url.clone()));
+                if !self.should_prepare_preview(&url, &key) {
+                    continue;
+                }
+                self.pending.insert(url.clone());
+                mineral_log::debug!(
+                    target: "prefetch",
+                    url = %url,
+                    ?source,
+                    cell_width = target.cells.0,
+                    cell_height = target.cells.1,
+                    pixel_width = target.pixels.width(),
+                    pixel_height = target.pixels.height(),
+                    "generate cover preview"
+                );
+                if !self
+                    .workers
+                    .fetcher
+                    .preview(source, url.clone(), key, target.cells)
+                {
+                    self.pending.remove(&url);
+                    self.preview_failures.insert(url.clone());
+                }
+                break;
             }
         }
     }

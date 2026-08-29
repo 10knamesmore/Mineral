@@ -1,7 +1,8 @@
-//! 根据图片内容和渲染阶段统一选择终端成品、halfblock 或随机 fallback。
+//! 根据图片内容和渲染阶段统一选择终端成品或 halfblock。
 //!
 //! 稳定区域可以复用缓存的终端成品；区域逐帧变化或离屏合成只使用纯 cell
-//! halfblock。终端成品未就绪时当前帧仍显示低清图片，并在允许的阶段投递后台编码。
+//! halfblock。终端成品未就绪时当前帧仍显示低清图片，并在允许的阶段投递后台编码；
+//! 完整源图片未就绪时优先显示真实低清 preview；preview 也未就绪时保留调用方背景。
 
 use std::sync::Arc;
 
@@ -14,10 +15,10 @@ use ratatui::style::{Color, Style};
 use crate::image::encode::EncodeRequest;
 use crate::render::color::lerp_byte;
 
+use super::ImageEngine;
 use super::geometry::{square_cells, square_subarea};
 use super::graphics::GraphicsProtocol;
 use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
-use super::{ImageEngine, fallback};
 
 /// 双图合成方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +46,7 @@ impl From<mineral_config::CoverTransitionStyle> for BlendStyle {
 /// 一次图片渲染所需的内容。
 #[derive(Clone, Copy)]
 pub(crate) enum ImageContent<'a> {
-    /// 显示单张 URL 图片；真实图片未解码时显示随机 fallback。
+    /// 显示单张 URL 图片；完整图片未解码时显示 preview，preview 也未就绪时不绘制。
     Display {
         /// 真实图片 URL。
         url: Option<&'a MediaUrl>,
@@ -107,20 +108,18 @@ impl ImageEngine {
     ///   - `area`: 调用方提供的 cell 区域
     ///   - `buf`: 当前屏幕或离屏缓冲
     ///   - `phase`: 当前互斥渲染阶段
-    ///   - `theme`: 随机 fallback 使用的当前主题
     pub(crate) fn render(
         &self,
         content: ImageContent<'_>,
         area: Rect,
         buf: &mut Buffer,
         phase: ImageRenderPhase,
-        theme: &crate::render::theme::Theme,
     ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
         match content {
-            ImageContent::Display { url } => self.render_display(url, area, buf, phase, theme),
+            ImageContent::Display { url } => self.render_display(url, area, buf, phase),
             ImageContent::Blend {
                 from,
                 to,
@@ -136,7 +135,6 @@ impl ImageEngine {
                 area,
                 buf,
                 phase,
-                theme,
             ),
         }
     }
@@ -163,14 +161,13 @@ impl ImageEngine {
         square_subarea(area, self.cell_pixels())
     }
 
-    /// 显示单图；真实图片未解码时直接绘制随机 fallback。
+    /// 显示单图；完整图片未解码时优先显示 preview，否则保留现有背景。
     fn render_display(
         &self,
         url: Option<&MediaUrl>,
         area: Rect,
         buf: &mut Buffer,
         phase: ImageRenderPhase,
-        theme: &crate::render::theme::Theme,
     ) {
         let target = match phase {
             ImageRenderPhase::Offscreen => square_cells(area),
@@ -178,13 +175,24 @@ impl ImageEngine {
                 square_subarea(area, self.cell_pixels())
             }
         };
+        if matches!(
+            phase,
+            ImageRenderPhase::Stable | ImageRenderPhase::Scrolling
+        ) {
+            self.observe_preview_target(target);
+        }
         if phase == ImageRenderPhase::Stable
             && let Some(url) = url
         {
             self.demand_decode(url);
         }
         let Some((identity, image)) = self.resolve_display(url) else {
-            fallback::render_random(buf, target, theme);
+            if let Some(url) = url {
+                let key = self.preview_key(url, target);
+                let _ = self
+                    .preview_images
+                    .render_if_ready(&key, |preview| preview.render(target, buf));
+            }
             return;
         };
         if matches!(
@@ -207,19 +215,18 @@ impl ImageEngine {
         }
     }
 
-    /// 合成两张已解码图片；任一未就绪时显示进场图片或随机 fallback。
+    /// 合成两张已解码图片；任一未就绪时尝试显示进场图片。
     fn render_blend(
         &self,
         content: BlendContent<'_>,
         area: Rect,
         buf: &mut Buffer,
         phase: ImageRenderPhase,
-        theme: &crate::render::theme::Theme,
     ) {
         let (Some(from_image), Some(to_image)) =
             (self.cache.get(content.from), self.cache.get(content.to))
         else {
-            self.render_display(Some(content.to), area, buf, phase, theme);
+            self.render_display(Some(content.to), area, buf, phase);
             return;
         };
         let target = match phase {

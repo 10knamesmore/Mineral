@@ -160,16 +160,17 @@ return {
         glow = 0.85, -- 揭示边前沿朝 text 提亮的强度 0-1;0 = 无亮边
       },
     },
-    -- 封面管线:抓取原始压缩字节 → 磁盘缓存 → 解码 → k-means 取色喂频谱。
+    -- 封面管线:抓取原始压缩字节 → 磁盘缓存 + 低清 preview → 按需完整解码 → k-means 取色。
     cover = {
       protocol = "auto", -- 终端图协议:"auto" 探测协商 | "halfblocks" | "kitty" | "sixel" | "iterm2";Kitty 要求 POSIX shared memory
       http_timeout_secs = 30, -- 单张封面下载超时,秒
-      debounce_ms = 32, -- 列表滚动停稳多久才编码高清真图;期间 halfblock 低清兜底(cache hit)/ 程序化占位(miss)
+      debounce_ms = 32, -- 列表滚动停稳多久才解码并编码高清真图;期间优先显示真实 preview
       download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
       cache = { -- 缓存预算(LRU,满了自动驱逐);磁盘项改小不立刻删文件,下次写入时驱逐
         disk = 4 * GB, -- 磁盘缓存上限,字节
         image = 128 * MB, -- 解码原图 RAM 预算,字节;越界逐出最久未显示者
+        preview = 16 * MB, -- 低清 preview RAM 预算,字节;完整图 miss 时快速滚动仍可显示真实封面
         protocol = 64 * MB, -- 终端图片成品 RAM 预算,字节;越界逐出最久未渲染者
       },
       kmeans = { -- 取色(频谱封面配色);取出的色不满意再动
@@ -244,9 +245,9 @@ return {
     },
     -- 预取:提前抓即将看到的数据,用网络/内存开销换流畅度。
     prefetch = {
-      radius = 64, -- 列表选中行上下各预取条数(封面压缩源落磁盘 + 歌单曲目)
+      radius = 64, -- 列表选中行上下各预取条数(封面压缩源落磁盘并生成低清 preview + 歌单曲目)
       playback_cover_radius = 3, -- 沿播放队列给在播曲前后各预取几张封面
-      prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
+      prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的空白闪
     },
     -- 搜索:本地过滤(`/`)与 channel 远程搜索是两套互不相关的旋钮,分挂 deep / channel 子表。
     search = {

@@ -1328,35 +1328,50 @@ mod tests {
         Ok(())
     }
 
-    /// cache miss 时滚动期与停稳期都显示会话内稳定的随机封面；滚动期仍不提交终端图片编码。
+    /// 完整图 cache miss 时：preview 未就绪先留空，preview 到达后滚动期与停稳期都显示
+    /// 真实低清封面；滚动期仍不提交终端图片编码。
     #[test]
-    fn search_cover_random_fallback_stays_visible_while_scrolling() -> color_eyre::Result<()> {
+    fn search_cover_preview_replaces_blank_while_scrolling() -> color_eyre::Result<()> {
         use std::time::Instant;
 
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (mut app, _url) = app_with_covered_album()?;
+        let (mut app, url) = app_with_covered_album()?;
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
-        // 窗内：真实图片未解码时显示随机封面。
+        // 窗内：真实图片未解码时不画图片。
         app.state.channel_search.last_sel_change = Instant::now();
         t.draw(|f| crate::view::draw(f, &app))?;
         let detail = detail_rect(&app)?;
+        assert_eq!(
+            half_cells(t.backend().buffer(), detail),
+            0,
+            "滚动窗内 cache miss 应保持空白"
+        );
+        let cover = crate::components::layout::search::detail::header_cover_area(
+            detail, /*is_artist*/ false,
+        )
+        .ok_or_else(|| color_eyre::eyre::eyre!("detail 应有封面区"))?;
+        let target = app.state.images.square_area(cover);
+        app.state
+            .images
+            .insert_test_preview(&url, (target.width, target.height));
+        t.draw(|f| crate::view::draw(f, &app))?;
         assert!(
             half_cells(t.backend().buffer(), detail) > 0,
-            "滚动窗内 cache miss 应显示随机封面"
+            "preview 到达后滚动窗内应显示真实低清封面"
         );
         assert!(
             app.state.images.encode_pending.borrow().is_empty(),
-            "滚动窗内不应提交随机封面的终端编码"
+            "滚动窗内不应提交终端图片编码"
         );
-        // 停稳：真实图片仍未解码，继续显示会话内稳定的随机封面。
+        // 停稳：完整图片仍未解码，继续显示 preview。
         app.state.channel_search.last_sel_change = rewound();
         t.draw(|f| crate::view::draw(f, &app))?;
         assert!(
             half_cells(t.backend().buffer(), detail) > 0,
-            "停稳后应继续显示随机封面"
+            "停稳后的完整图 cache miss 应继续显示 preview"
         );
         Ok(())
     }

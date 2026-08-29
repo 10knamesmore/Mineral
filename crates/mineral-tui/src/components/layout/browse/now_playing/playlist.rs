@@ -1,4 +1,4 @@
-//! Playlists 视图右栏：歌单拼贴或随机封面 + 歌单名/meta 两行 + 底部简介行。
+//! Playlists 视图右栏：歌单拼贴 + 歌单名/meta 两行 + 底部简介行。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -34,7 +34,7 @@ pub fn draw(
     };
 
     if !cover_in_flight {
-        // Mineral 聚合歌单无自带封面：拼贴就绪时显示合成图，未就绪显示随机封面。
+        // Mineral 聚合歌单无自带封面：拼贴就绪时显示合成图，未就绪时留空。
         let cover = crate::image::collage::effective_cover_url(state, &p.data);
         state.images.render(
             ImageContent::Display {
@@ -43,7 +43,6 @@ pub fn draw(
             cover_area,
             frame.buffer_mut(),
             state.image_render_phase(),
-            theme,
         );
         // 暖入口曲封面:drill 进本歌单默认落到第 0 首,其封面在 Library 视图才首次显示。
         // 悬停期按封面区尺寸提前准备终端图片，使 drill 瞬间直接命中。图尚未解码时

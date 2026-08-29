@@ -27,6 +27,25 @@ pub(crate) enum TerminalImage {
 }
 
 impl TerminalImage {
+    /// 生成与终端协议无关的低清 halfblock preview 及其常驻字节数。
+    ///
+    /// # Params:
+    ///   - `source`: 已解码原图
+    ///   - `pixels`: preview 对应的目标像素尺寸
+    ///   - `cells`: preview 对应的目标 cell 宽高
+    ///
+    /// # Return:
+    ///   halfblock preview 与 RGB 像素缓冲字节数
+    pub(crate) fn halfblock_preview(
+        source: &DynamicImage,
+        pixels: PixelSize,
+        cells: (u16, u16),
+    ) -> (Self, u64) {
+        let preview = HalfblocksImage::encode(source, pixels, cells);
+        let bytes = preview.resident_bytes();
+        (Self::Halfblocks(preview), bytes)
+    }
+
     /// 按当前 terminal backend 编码一张图片。
     ///
     /// # Params:

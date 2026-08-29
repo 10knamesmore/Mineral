@@ -1,18 +1,18 @@
 ---
 source: crates/mineral-tui/src/view.rs
-description: "Search 歌手结果:歌手名 · 关注数缩写 两列对齐"
+description: "Search artist 结果:artist 名 · 关注数缩写 两列对齐"
 expression: t.backend()
 ---
 "╭search────────────────────────────────────────────────────────────────────────╮"
 "│ ♫ netease   ✦ artists  football                                              │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
 "╭results─────────────────────╮╭✦ artist · Chinese Football─────────────────────╮"
-"│  artist              fans  ││▀▀▀▀▀▀▀▀▀▀▀▀  Chinese Football     ▀▀▀▀▀▀▀▀▀▀▀▀ │"
-"│▌ Chinese Football    42k   ││▀▀▀▀▀▀▀▀▀▀▀▀  42,000 fans          ▀▀▀▀▀▀▀▀▀▀▀▀ │"
-"│  American Football   1M    ││▀▀▀▀▀▀▀▀▀▀▀▀                       ▀▀▀▀▀▀▀▀▀▀▀▀ │"
-"│                            ││▀▀▀▀▀▀▀▀▀▀▀▀                       ▀▀▀▀▀▀▀▀▀▀▀▀ │"
-"│                            ││▀▀▀▀▀▀▀▀▀▀▀▀                       ▀▀▀▀▀▀▀▀▀▀▀▀ │"
-"│                            ││▀▀▀▀▀▀▀▀▀▀▀▀                       ▀▀▀▀▀▀▀▀▀▀▀▀ │"
+"│  artist              fans  ││              Chinese Football                  │"
+"│▌ Chinese Football    42k   ││              42,000 fans                       │"
+"│  American Football   1M    ││                                                │"
+"│                            ││                                                │"
+"│                            ││                                                │"
+"│                            ││                                                │"
 "│                            ││                  ────────────                  │"
 "│                            ││Top Songs  Albums   [ / ] section               │"
 "│                            ││  ⠋ loading                                     │"

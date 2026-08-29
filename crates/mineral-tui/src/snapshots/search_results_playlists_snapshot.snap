@@ -7,12 +7,12 @@ expression: t.backend()
 "│ ♫ netease   ▤ playlists  indie                                               │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
 "╭results─────────────────────╮╭▤ playlist · Bedroom Pop────────────────────────╮"
-"│  playlist            tracks││ ▀▀▀▀▀▀▀▀▀▀▀▀  Bedroom Pop                      │"
-"│▌ Bedroom Pop         42    ││ ▀▀▀▀▀▀▀▀▀▀▀▀  42 tracks                        │"
-"│  Math Rock 精选      128   ││ ▀▀▀▀▀▀▀▀▀▀▀▀                                   │" Hidden by multi-width symbols: [(14, " "), (16, " ")]
-"│                            ││ ▀▀▀▀▀▀▀▀▀▀▀▀                                   │"
-"│                            ││ ▀▀▀▀▀▀▀▀▀▀▀▀                                   │"
-"│                            ││ ▀▀▀▀▀▀▀▀▀▀▀▀                                   │"
+"│  playlist            tracks││               Bedroom Pop                      │"
+"│▌ Bedroom Pop         42    ││               42 tracks                        │"
+"│  Math Rock 精选      128   ││                                                │" Hidden by multi-width symbols: [(14, " "), (16, " ")]
+"│                            ││                                                │"
+"│                            ││                                                │"
+"│                            ││                                                │"
 "│                            ││                  ────────────                  │"
 "│                            ││  ⠋ loading                                     │"
 "│                            ││                                                │"

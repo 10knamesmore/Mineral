@@ -593,7 +593,7 @@ mod tests {
         Ok(())
     }
 
-    /// 封面缓存预算归 `tui.cover.cache`(disk/image/protocol,client 进程的旋钮),
+    /// 封面缓存预算归 `tui.cover.cache`(disk/image/preview/protocol,client 进程的旋钮),
     /// 顶层 `cache` 只剩 daemon 的 audio_capacity;新路径可独立覆盖,写旧顶层
     /// 字段报 unknown field(带路径)回落默认,提示用户迁移。
     #[test]
@@ -603,12 +603,17 @@ mod tests {
         assert_eq!(*cache.disk(), 4 * 1024 * 1024 * 1024, "磁盘配额默认 4GB");
         assert_eq!(*cache.image(), 128 * 1024 * 1024, "原图 RAM 预算默认 128MB");
         assert_eq!(
+            *cache.preview(),
+            8 * 1024 * 1024,
+            "preview RAM 预算默认 8MB"
+        );
+        assert_eq!(
             *cache.protocol(),
             64 * 1024 * 1024,
             "协议 RAM 预算默认 64MB"
         );
 
-        // 新路径单字段覆盖:其余两档仍默认(深合并)。
+        // 新路径单字段覆盖:其余三档仍默认(深合并)。
         let path = temp_config(
             "covercache",
             "return { tui = { cover = { cache = { image = 42 } } } }",
@@ -621,6 +626,16 @@ mod tests {
             *cfg.tui().cover().cache().disk(),
             4 * 1024 * 1024 * 1024,
             "其余档仍默认"
+        );
+        assert_eq!(
+            *cfg.tui().cover().cache().preview(),
+            8 * 1024 * 1024,
+            "preview 预算仍默认"
+        );
+        assert_eq!(
+            *cfg.tui().cover().cache().protocol(),
+            64 * 1024 * 1024,
+            "协议预算仍默认"
         );
 
         // 旧顶层路径已迁走:报 unknown field 回落默认,不静默吞。

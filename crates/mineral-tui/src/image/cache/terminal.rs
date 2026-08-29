@@ -1,7 +1,7 @@
-//! 终端图片成品的字节预算 LRU 缓存。
+//! 可直接写入终端 cell buffer 的图片成品字节预算 LRU。
 //!
-//! Kitty 源图片只按图片身份缓存一次，显示尺寸由 placement 决定；Sixel、iTerm2 与
-//! halfblocks 成品按目标像素尺寸并存。当前协议属于整个 terminal backend，不在槽位记录。
+//! 同一实现由独立实例分别承载协议无关 preview 与当前 terminal backend 成品。Kitty 源图片
+//! 只按图片身份缓存一次；preview、Sixel、iTerm2 与 halfblocks 按目标像素尺寸并存。
 //!
 //! 每条字节由编码 worker 估算(源像素 + 目标编码尺寸)后随结果带入,本缓存只记账不重算。
 
@@ -47,7 +47,7 @@ pub(crate) struct TerminalImageCache {
     /// 内部可变状态。
     inner: RefCell<Inner>,
 
-    /// 字节预算上限(来自配置 `tui.cover.cache.protocol`)。
+    /// 字节预算上限，由所属 preview 或 terminal cache 配置提供。
     budget: u64,
 }
 

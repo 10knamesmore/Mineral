@@ -487,7 +487,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
 
 /// 造「page morph(Browse ↔ Search)中途」的 [`App`]:Library 选中曲带封面 A(纯品红),
 /// search 端 album 结果已成 detail 根帧、头图 B(纯青);`cache_*` 控制两端图是否入
-/// 图片解码缓存，覆盖双图合成、单图独飞与随机 fallback。morph 停在 4/8 拍中途。
+/// 图片解码缓存，覆盖双图合成、单图独飞与 preview 未就绪时留空。morph 停在 4/8 拍中途。
 pub(crate) fn app_in_search_morph(
     cache_browse: bool,
     cache_detail: bool,

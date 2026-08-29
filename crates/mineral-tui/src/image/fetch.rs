@@ -1,7 +1,7 @@
 //! Client 端的封面源数据预取与按需解码 worker。
 //!
-//! 若干 tokio worker共享一条结构化请求队列。source warm 只把 Remote 压缩字节落磁盘；
-//! decode 请求才在 `spawn_blocking` 中生成完整像素与色板。
+//! 若干 tokio worker 共享一条结构化请求队列。preview 请求准备压缩源并生成目标尺寸的
+//! halfblock 低清图；decode 请求生成完整像素与色板。
 //! 跟 mineral-task 的 lane 不同,本 fetcher **归 client 所有** —— 封面是装饰性
 //! 资源,server 不该管。多 client 各持一个 fetcher,各 fetch 各 cache。
 //!
@@ -10,7 +10,7 @@
 //!   减一条复杂度,跟现在(server 端 cancel 后的 cache 命中行为)对齐。
 //! - **不做内部 dedup**:dedup 由 [`crate::image::ImageEngine`] 的 pending 集合负责。
 //!   fetcher 单纯 FIFO worker pool。
-//! - **完成态完整**:source warm / decode 成败都会回传 completion，让调用方结束 in-flight。
+//! - **完成态完整**:preview / decode 成败都会回传 completion，让调用方结束 in-flight。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +27,24 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::image::colors::extract_palette;
+use crate::image::key::TerminalImageKey;
+use crate::image::terminal::TerminalImage;
 use crate::render::palette::CoverPalette;
+
+/// worker 生成的一张真实封面低清 preview。
+pub(crate) struct CoverPreviewReady {
+    /// 封面来源 URL。
+    pub url: MediaUrl,
+
+    /// 图片身份与目标像素尺寸组成的 preview 键。
+    pub key: TerminalImageKey,
+
+    /// 可直接写入 ratatui buffer 的 halfblock preview。
+    pub image: TerminalImage,
+
+    /// preview RGB 像素缓冲常驻字节数。
+    pub bytes: u64,
+}
 
 /// worker 完成一张封面的产物:图必有,色板尽力而为。
 ///
@@ -42,9 +59,6 @@ pub(crate) struct CoverReady {
 
     /// 从图提取的频谱色板;取色失败为 `None`(频谱回退 hue 漂移)。
     pub palette: Option<CoverPalette>,
-
-    /// Remote 压缩源数据是否已确认写入或命中磁盘缓存。
-    pub source_cached: bool,
 }
 
 /// 解码产物:内存图 + 尽力而为的频谱色板。一次 `spawn_blocking` 内算完(都是 CPU 活儿)。
@@ -56,53 +70,53 @@ struct DecodedCover {
     palette: Option<CoverPalette>,
 }
 
-/// blocking 解码产物：内存图与仍归调用方所有的原始压缩字节。
-struct DecodedBytes {
-    /// 解码 + 取色结果。
-    decoded: DecodedCover,
-
-    /// 写回磁盘缓存的原始压缩字节。
-    source_bytes: Vec<u8>,
-}
-
-/// 一次按需解码的完整产物。
-struct LoadedCover {
-    /// 解码图与色板。
-    decoded: DecodedCover,
-
-    /// Remote 压缩源数据是否已确认位于磁盘缓存。
-    source_cached: bool,
-}
-
 /// 图片 worker 请求类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CoverRequestKind {
-    /// 只把 Remote 压缩源数据准备到磁盘缓存。
-    WarmSource,
+    /// 准备压缩源并生成真实低清 preview。
+    Preview,
 
     /// 读取本地源数据并生成完整解码图与色板。
     Decode,
 }
 
-/// 一次图片 worker 请求。
-struct CoverRequest {
+/// 一次 preview worker 请求。
+struct PreviewRequest {
     /// 图片来源，决定 Remote 文件的缓存子目录。
     source: SourceKind,
 
     /// 图片源 URL。
     url: MediaUrl,
 
-    /// 本次请求只预取源数据还是需要解码。
-    kind: CoverRequestKind,
+    /// 图片身份与目标像素尺寸组成的 preview 键。
+    key: TerminalImageKey,
+
+    /// preview 对应的目标 cell 宽高。
+    cells: (u16, u16),
+}
+
+/// 一次完整解码 worker 请求。
+struct DecodeRequest {
+    /// 图片来源，决定 Remote 文件的缓存子目录。
+    source: SourceKind,
+
+    /// 图片源 URL。
+    url: MediaUrl,
+}
+
+/// 图片 worker 的结构化请求。
+enum CoverRequest {
+    /// 生成低清 preview。
+    Preview(PreviewRequest),
+
+    /// 生成完整解码图与色板。
+    Decode(DecodeRequest),
 }
 
 /// 一次图片 worker 完成事件。
 pub(crate) enum CoverCompletion {
-    /// Remote 压缩源数据已经位于磁盘缓存。
-    SourceReady {
-        /// 已准备完成的图片 URL。
-        url: MediaUrl,
-    },
+    /// 低清 preview 已经可以显示。
+    Preview(CoverPreviewReady),
 
     /// 图片已解码，可以进入 RAM LRU。
     Decoded(CoverReady),
@@ -120,9 +134,9 @@ pub(crate) enum CoverCompletion {
 /// 完成 buffer 类型别名。worker 端 push、client tick 端 drain。
 type ReadyBuf = Arc<Mutex<Vec<CoverCompletion>>>;
 
-/// Client 端封面 fetcher。`spawn` 起 worker 池;`request` 投递;`drain_ready` 拉就绪。
+/// Client 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪。
 pub(crate) struct CoverFetcher {
-    /// 待执行的 source warm / decode 请求队列。
+    /// 待执行的 preview / decode 请求队列。
     req_tx: mpsc::UnboundedSender<CoverRequest>,
 
     /// worker 完成后塞结果的 buffer;client tick `drain_ready()` 一次拿走。
@@ -208,8 +222,8 @@ impl CoverFetcher {
     /// 禁用态 fetcher:不起 worker、不建 isahc client,纯 null object。
     ///
     /// 用于封面降级场景——headless / 无网 / isahc 建不起来(TLS / 证书),或测试里
-    /// 不需要真抓图时。`request()` 静默丢弃(channel 无人收,send 失败已被忽略),
-    /// `drain_ready()` 恒空。与 [`CoverFetcher::spawn`] 不同,**不需要 tokio runtime**。
+    /// 不需要真抓图时。请求会留在禁用态 channel，`drain_ready()` 恒空。
+    /// 与 [`CoverFetcher::spawn`] 不同,**不需要 tokio runtime**。
     pub(crate) fn disabled() -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
         Self {
@@ -219,16 +233,31 @@ impl CoverFetcher {
         }
     }
 
-    /// 投递一次 Remote 压缩源数据预取请求。
+    /// 投递一次真实低清 preview 请求。
     ///
     /// # Params:
     ///   - `source`: 来源，决定缓存子目录
     ///   - `url`: 图片源 URL
+    ///   - `key`: 图片身份与目标像素尺寸组成的 preview 键
+    ///   - `cells`: preview 对应的目标 cell 宽高
     ///
     /// # Return:
     ///   worker 队列仍可接收请求时返回 `true`
-    pub(crate) fn warm_source(&self, source: SourceKind, url: MediaUrl) -> bool {
-        self.request(source, url, CoverRequestKind::WarmSource)
+    pub(crate) fn preview(
+        &self,
+        source: SourceKind,
+        url: MediaUrl,
+        key: TerminalImageKey,
+        cells: (u16, u16),
+    ) -> bool {
+        self.req_tx
+            .send(CoverRequest::Preview(PreviewRequest {
+                source,
+                url,
+                key,
+                cells,
+            }))
+            .is_ok()
     }
 
     /// 投递一次完整图片解码请求。
@@ -240,29 +269,18 @@ impl CoverFetcher {
     /// # Return:
     ///   worker 队列仍可接收请求时返回 `true`
     pub(crate) fn decode(&self, source: SourceKind, url: MediaUrl) -> bool {
-        self.request(source, url, CoverRequestKind::Decode)
+        self.req_tx
+            .send(CoverRequest::Decode(DecodeRequest { source, url }))
+            .is_ok()
     }
 
     /// 把全部图片 worker completion 拿走。client 主循环 tick 调一次。
     pub(crate) fn drain_ready(&self) -> Vec<CoverCompletion> {
         std::mem::take(&mut *self.ready.lock())
     }
-
-    /// 向 worker 队列投递一个结构化请求。
-    ///
-    /// # Params:
-    ///   - `source`: 图片来源
-    ///   - `url`: 图片源 URL
-    ///   - `kind`: source warm 或 decode
-    ///
-    /// # Return:
-    ///   请求是否进入队列
-    fn request(&self, source: SourceKind, url: MediaUrl, kind: CoverRequestKind) -> bool {
-        self.req_tx.send(CoverRequest { source, url, kind }).is_ok()
-    }
 }
 
-/// worker 主循环：串行领取请求，完成 source warm 或 decode 后推送完整 completion。
+/// worker 主循环：串行领取请求，完成 preview 或 decode 后推送完整 completion。
 async fn worker_loop(
     rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<CoverRequest>>>,
     ready: ReadyBuf,
@@ -286,7 +304,7 @@ async fn worker_loop(
 /// 执行一个结构化图片请求并生成必达 completion。
 ///
 /// # Params:
-///   - `request`: source warm 或 decode 请求
+///   - `request`: preview 或 decode 请求
 ///   - `client`: Remote 图片 HTTP 客户端
 ///   - `cache`: 可用的磁盘缓存
 ///   - `cfg`: 解码与取色配置
@@ -299,66 +317,64 @@ async fn complete_request(
     cache: Option<&Arc<CacheIndex>>,
     cfg: &Arc<CoverConfig>,
 ) -> CoverCompletion {
-    let CoverRequest { source, url, kind } = request;
-    match kind {
-        CoverRequestKind::WarmSource => {
-            if warm_remote_source(source, &url, client, cache).await {
-                CoverCompletion::SourceReady { url }
+    match request {
+        CoverRequest::Preview(request) => {
+            let url = request.url.clone();
+            if let Some(preview) = fetch_preview(request, client, cache).await {
+                CoverCompletion::Preview(preview)
             } else {
-                CoverCompletion::Failed { url, kind }
+                CoverCompletion::Failed {
+                    url,
+                    kind: CoverRequestKind::Preview,
+                }
             }
         }
-        CoverRequestKind::Decode => {
-            if let Some(loaded) = fetch_and_decode(source, &url, client, cache, cfg).await {
+        CoverRequest::Decode(DecodeRequest { source, url }) => {
+            if let Some(decoded) = fetch_and_decode(source, &url, client, cache, cfg).await {
                 CoverCompletion::Decoded(CoverReady {
                     url,
-                    image: Arc::new(loaded.decoded.image),
-                    palette: loaded.decoded.palette,
-                    source_cached: loaded.source_cached,
+                    image: Arc::new(decoded.image),
+                    palette: decoded.palette,
                 })
             } else {
-                CoverCompletion::Failed { url, kind }
+                CoverCompletion::Failed {
+                    url,
+                    kind: CoverRequestKind::Decode,
+                }
             }
         }
     }
 }
 
-/// 把 Remote 图片压缩源数据准备到磁盘，不执行解码或取色。
+/// 读取压缩源并生成目标尺寸的真实 halfblock preview。
 ///
 /// # Params:
-///   - `source`: 来源，决定缓存子目录
-///   - `url`: 图片源 URL
-///   - `client`: HTTP 客户端
-///   - `cache`: 磁盘缓存；不可用时无法完成预取
+///   - `request`: 来源、URL 与 preview 几何
+///   - `client`: Remote 图片 HTTP 客户端
+///   - `cache`: 可用的磁盘缓存
 ///
 /// # Return:
-///   源数据已经命中或成功写入磁盘缓存时返回 `true`
-async fn warm_remote_source(
-    source: SourceKind,
-    url: &MediaUrl,
+///   可直接缓存并渲染的 preview；取源或生成失败返回 `None`
+async fn fetch_preview(
+    request: PreviewRequest,
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
-) -> bool {
-    let MediaUrl::Remote(remote) = url else {
-        return true;
-    };
-    let Some(cache) = cache else {
-        return false;
-    };
-    let key = remote.as_str();
-    if cache.get(key).is_some() {
-        return true;
-    }
-    let started = std::time::Instant::now();
-    let raw = match download(client, key).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "fetch failed");
-            return false;
-        }
-    };
-    log_downloaded(key, started, raw.len());
-    store_source(cache, source, key, &raw).await
+) -> Option<CoverPreviewReady> {
+    let PreviewRequest {
+        source,
+        url,
+        key,
+        cells,
+    } = request;
+    let source_bytes = load_source(source, &url, client, cache).await?;
+    let pixels = key.pixels()?;
+    let (image, bytes) = preview_blocking(&url, source_bytes, pixels, cells).await?;
+    Some(CoverPreviewReady {
+        url,
+        key,
+        image,
+        bytes,
+    })
 }
 
 /// 取一张封面并解码成内存图,优先磁盘缓存。
@@ -383,56 +399,57 @@ async fn fetch_and_decode(
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
     cfg: &Arc<CoverConfig>,
-) -> Option<LoadedCover> {
+) -> Option<DecodedCover> {
+    let source_bytes = load_source(source, url, client, cache).await?;
+    decode_blocking(url, source_bytes, cfg).await
+}
+
+/// 读取 Local 源或取得 Remote 压缩字节，Remote miss 时下载并尝试写入磁盘缓存。
+///
+/// # Params:
+///   - `source`: 来源，决定 Remote 缓存子目录
+///   - `url`: 图片源 URL
+///   - `client`: Remote 图片 HTTP 客户端
+///   - `cache`: 可用的磁盘缓存
+///
+/// # Return:
+///   压缩源字节；读取或下载失败返回 `None`
+async fn load_source(
+    source: SourceKind,
+    url: &MediaUrl,
+    client: &HttpClient,
+    cache: Option<&Arc<CacheIndex>>,
+) -> Option<Vec<u8>> {
     match url {
-        MediaUrl::Remote(u) => {
-            let key = u.as_str();
+        MediaUrl::Remote(remote) => {
+            let key = remote.as_str();
             if let Some(bytes) = cached_read(key, cache).await {
-                return decode_blocking(url, bytes, cfg)
-                    .await
-                    .map(|decoded| LoadedCover {
-                        decoded: decoded.decoded,
-                        source_cached: true,
-                    });
+                return Some(bytes);
             }
             let started = std::time::Instant::now();
-            let raw = match download(client, key).await {
-                Ok(b) => b,
-                Err(e) => {
-                    mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "fetch failed");
+            let bytes = match download(client, key).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "fetch failed");
                     return None;
                 }
             };
-            log_downloaded(key, started, raw.len());
-            let DecodedBytes {
-                decoded,
-                source_bytes,
-            } = decode_blocking(url, raw, cfg).await?;
-            let source_cached = if let Some(cache) = cache {
-                store_source(cache, source, key, &source_bytes).await
-            } else {
-                false
-            };
-            Some(LoadedCover {
-                decoded,
-                source_cached,
-            })
+            log_downloaded(key, started, bytes.len());
+            if let Some(cache) = cache {
+                let _ = store_source(cache, source, key, &bytes).await;
+            }
+            Some(bytes)
         }
-        MediaUrl::Local(p) => {
-            let bytes = match tokio::fs::read(p).await {
-                Ok(b) => b,
-                Err(e) => {
-                    let e = color_eyre::Report::new(e);
-                    mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&e), "read file failed");
+        MediaUrl::Local(path) => {
+            let bytes = match tokio::fs::read(path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let error = color_eyre::Report::new(error);
+                    mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "read file failed");
                     return None;
                 }
             };
-            decode_blocking(url, bytes, cfg)
-                .await
-                .map(|decoded| LoadedCover {
-                    decoded: decoded.decoded,
-                    source_cached: true,
-                })
+            Some(bytes)
         }
     }
 }
@@ -490,7 +507,42 @@ async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>>
     resp.bytes().await.map_err(|e| eyre!("read body: {e}"))
 }
 
-/// 在 blocking 池解码字节成内存图。
+/// 在 blocking 池把压缩源生成目标尺寸的 halfblock preview。
+///
+/// # Params:
+///   - `url`: 仅用于日志
+///   - `bytes`: 待解码字节
+///   - `pixels`: preview 对应的目标像素尺寸
+///   - `cells`: preview 对应的目标 cell 宽高
+///
+/// # Return:
+///   preview 与常驻字节数；失败返回 `None`
+async fn preview_blocking(
+    url: &MediaUrl,
+    bytes: Vec<u8>,
+    pixels: crate::image::key::PixelSize,
+    cells: (u16, u16),
+) -> Option<(TerminalImage, u64)> {
+    let preview = tokio::task::spawn_blocking(move || -> color_eyre::Result<_> {
+        let image = decode(&bytes)?;
+        Ok(TerminalImage::halfblock_preview(&image, pixels, cells))
+    })
+    .await;
+    match preview {
+        Ok(Ok(preview)) => Some(preview),
+        Ok(Err(error)) => {
+            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "preview generation failed");
+            None
+        }
+        Err(error) => {
+            let error = color_eyre::Report::new(error);
+            mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "preview task join failed");
+            None
+        }
+    }
+}
+
+/// 在 blocking 池解码字节成完整内存图并提取色板。
 ///
 /// # Params:
 ///   - `url`: 仅用于日志
@@ -498,20 +550,17 @@ async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>>
 ///   - `cfg`: 封面段配置(kmeans)
 ///
 /// # Return:
-///   解码后的图、色板与原始压缩字节；失败返回 `None`(已打日志)。
+///   解码后的图与色板；失败返回 `None`(已打日志)。
 async fn decode_blocking(
     url: &MediaUrl,
     bytes: Vec<u8>,
     cfg: &Arc<CoverConfig>,
-) -> Option<DecodedBytes> {
+) -> Option<DecodedCover> {
     let cfg = Arc::clone(cfg);
-    let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedBytes> {
+    let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
         let image = decode(&bytes)?;
         let palette = extract_palette(&image, cfg.kmeans());
-        Ok(DecodedBytes {
-            decoded: DecodedCover { image, palette },
-            source_bytes: bytes,
-        })
+        Ok(DecodedCover { image, palette })
     })
     .await;
     match decoded {

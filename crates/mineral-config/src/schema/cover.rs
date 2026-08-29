@@ -15,7 +15,7 @@ pub struct CoverConfig {
     /// 单张封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
 
-    /// 封面切换去抖(毫秒):列表滚动停稳此时长才开始渲染真图,期间显示程序化色块占位。
+    /// 封面切换去抖(毫秒):列表滚动停稳此时长才开始完整解码与终端编码，期间优先显示真实 preview。
     debounce_ms: u64,
 
     /// 封面下载并发 worker 数,≥1。
@@ -27,12 +27,12 @@ pub struct CoverConfig {
     /// kmeans 取色参数(封面派生配色)。
     kmeans: KmeansConfig,
 
-    /// 缓存预算(磁盘配额 + 两层 RAM 预算)。
+    /// 缓存预算(磁盘配额 + 三层 RAM 预算)。
     cache: CoverCacheConfig,
 }
 
-/// 封面缓存预算(挂在 `CoverConfig` 下)。三档都是 client 进程的旋钮:
-/// 磁盘是跨进程共享的持久文件,两层 RAM 是本进程常驻内存。
+/// 封面缓存预算(挂在 `CoverConfig` 下)。四档都是 client 进程的旋钮:
+/// 磁盘是跨进程共享的持久文件,三层 RAM 是本进程常驻内存。
 #[config_section]
 pub struct CoverCacheConfig {
     /// 磁盘缓存容量上限(字节),保存下载得到的原始压缩字节;可写算式如 `4 * 1024 ^ 3`。
@@ -44,7 +44,12 @@ pub struct CoverCacheConfig {
     #[serde(deserialize_with = "de::u64_lossy")]
     image: u64,
 
-    /// 已编码终端协议 RAM 预算(字节)。是 `image` 之外的第二层常驻 RAM，
+    /// 低清 preview RAM 预算(字节)。preview 按图片与目标像素尺寸缓存，完整解码图被逐出后
+    /// 仍可在快速滚动时显示；越界即逐出最久未渲染的 preview。
+    #[serde(deserialize_with = "de::u64_lossy")]
+    preview: u64,
+
+    /// 已编码终端协议 RAM 预算(字节)。
     /// 保存 Kitty 资源句柄或 Sixel、iTerm2、halfblocks 成品。
     /// 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
     #[serde(deserialize_with = "de::u64_lossy")]

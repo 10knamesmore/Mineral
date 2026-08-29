@@ -156,10 +156,9 @@ fn draw_frame_real(
             cover_a,
             frame.buffer_mut(),
             state.image_render_phase(),
-            theme,
         );
     }
-    // artist 帧右栏:当前列表选中项封面(随 [ ] 切区 / 光标移动;图未到 / 滚动期走占位)。
+    // artist 帧右栏:当前列表选中项封面(随 [ ] 切区 / 光标移动;preview 也未到时留空)。
     if let Some(right_a) = right_a {
         let sel_cover = dframe.selected_cover();
         state.images.render(
@@ -167,7 +166,6 @@ fn draw_frame_real(
             right_a,
             frame.buffer_mut(),
             state.image_render_phase(),
-            theme,
         );
     }
     let buf = frame.buffer_mut();
@@ -177,7 +175,7 @@ fn draw_frame_real(
     draw_body(buf, body, dframe, state, theme, advancing(state));
 }
 
-/// 把一帧渲染到离屏 Buffer：真实头图走 halfblock，缺图时走随机封面。
+/// 把一帧渲染到离屏 Buffer：完整图走 halfblock，否则尝试 preview，均缺失时留空。
 fn render_frame_to(
     buf: &mut Buffer,
     inner: Rect,
@@ -197,7 +195,6 @@ fn render_frame_to(
             cover_a,
             buf,
             ImageRenderPhase::Offscreen,
-            theme,
         );
     }
     if let Some(right_a) = right_a {
@@ -208,7 +205,6 @@ fn render_frame_to(
             right_a,
             buf,
             ImageRenderPhase::Offscreen,
-            theme,
         );
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
