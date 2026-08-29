@@ -1,4 +1,4 @@
-//! Library 视图右栏:程序化封面(以专辑名为种子) + 标题/副信息两行 + 底部 meta 行。
+//! Library 视图右栏：曲目封面或随机封面 + 标题/副信息两行 + 底部 meta 行。
 
 use mineral_model::SongId;
 use ratatui::Frame;
@@ -6,10 +6,9 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui_image::picker::Picker;
 
-use crate::components::layout::shared::cover_image;
 use crate::components::layout::shared::marquee::MarqueeCtx;
+use crate::image::ImageContent;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
@@ -27,7 +26,6 @@ pub fn draw(
     entry: &PlaylistEntryView,
     current_id: Option<&SongId>,
     state: &AppState,
-    picker: &Picker,
     theme: &Theme,
     cover_in_flight: bool,
 ) {
@@ -43,18 +41,14 @@ pub fn draw(
     };
 
     if !cover_in_flight {
-        let seed = song
-            .album
-            .as_ref()
-            .map_or_else(|| song.name.clone(), |album| album.name.clone());
-        cover_image::render_or_fallback(
-            frame,
+        state.images.render(
+            ImageContent::Display {
+                url: song.cover_url.as_ref(),
+            },
             cover_area,
-            song.cover_url.as_ref(),
-            state,
-            picker,
+            frame.buffer_mut(),
+            state.image_render_phase(),
             theme,
-            &seed,
         );
     }
 

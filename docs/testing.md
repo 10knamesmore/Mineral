@@ -33,8 +33,8 @@
 `mineral-tui` 是 client/server 架构(App 每帧从 server 拉 `PlayerSnapshot` 灌进本地镜像)。要测「按键 → 状态 → 跨 tick → 渲染」这条真实链路,基建已就位,**直接用**:
 
 * **`mineral_tui::test_support::TestClient`**:no-op 实现 `mineral_server::Client`(读取类返 `Default`、命令类静默吞),不接真 daemon / server。
-* **`mineral_tui::test_support::app_with_queue(len, current_idx) -> App`**:接 `TestClient` + 禁用封面、填好 queue 的 `App`,**普通同步构造,不需 tokio runtime**。新场景照抄它再加 fixture。
-* **`CoverFetcher::disabled()`**(`crates/mineral-tui/src/cover.rs`):不依赖 runtime 的 null object,让 `App::new` 脱离 cover/tokio 耦合。它也是**生产降级落点**(`spawn()` 失败时 `warn! + disabled()` 兜底,见 CLAUDE.md「容易踩的点」)。
+* **`mineral_tui::test_support::app_with_queue(len, current_idx) -> App`**:接 `TestClient`、不启动图片 worker、填好 queue 的 `App`,**普通同步构造,不需 tokio runtime**。新场景照抄它再加 fixture。
+* **`ImageEngine::disabled()`**(`crates/mineral-tui/src/image/hub.rs`):测试专用的 null object,不启动图片 worker,让 `App::new` 的同步 fixture 不依赖 tokio runtime。生产环境由 `run_app` 构造并注入完整图片引擎。
 
 写法:测试放 `app.rs` 等的 `#[cfg(test)] mod tests` 内(同模块可直接调私有 `handle_event` / `apply_player_snapshot` / `toggle_queue`):
 

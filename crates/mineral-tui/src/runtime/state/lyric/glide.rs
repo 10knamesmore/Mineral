@@ -454,7 +454,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
         let (cfg, warnings) = loaded?;
         assert!(warnings.is_empty(), "覆盖配置应干净落型: {warnings:?}");
-        let mut s = fullscreen_with_cfg(AppState::new(std::sync::Arc::new(cfg)), timed_lines())?;
+        let mut s = fullscreen_with_cfg(
+            AppState::test_with_config(std::sync::Arc::new(cfg)),
+            timed_lines(),
+        )?;
         s.scroll_lyrics(ScrollStep::LineUp); // 行 0 再上滚:阻尼后 333 → 夹到 100
         assert_eq!(to_milli(&s), Some(-100), "过冲被配置上限夹住");
         Ok(())

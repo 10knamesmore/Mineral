@@ -130,9 +130,10 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
             ));
         }
     }
-    if state.covers.loading > 0 {
+    let loading = state.images.loading_count();
+    if loading > 0 {
         spans.push(Span::styled(
-            format!("cover:{} ", state.covers.loading),
+            format!("cover:{loading} "),
             Style::new().fg(theme.peach),
         ));
     }

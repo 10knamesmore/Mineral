@@ -426,7 +426,7 @@ mod tests {
         )?;
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
-        let mut s = AppState::new(Arc::new(cfg));
+        let mut s = AppState::test_with_config(Arc::new(cfg));
         s.library.playlists = vec![playlist_view(
             "p2",
             "The Power of Failing",
@@ -469,7 +469,7 @@ mod tests {
         )?;
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
-        let mut s = AppState::new(Arc::new(cfg));
+        let mut s = AppState::test_with_config(Arc::new(cfg));
         s.library.playlists = vec![playlist_view(
             "p2",
             "The Power of Failing",

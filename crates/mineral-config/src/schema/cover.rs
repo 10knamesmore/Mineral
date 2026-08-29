@@ -1,6 +1,4 @@
 //! 封面段(挂在 `TuiConfig` 下):抓取 / 缓存 / 并发 + kmeans 取色参数。
-//!
-//! [`CoverStorageMode`] 与渲染层存储模式语义对齐,但保持解耦——接线处做映射。
 
 use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
@@ -10,21 +8,12 @@ use crate::schema::de;
 /// 封面配置。
 #[config_section]
 pub struct CoverConfig {
-    /// 封面终端图协议:自动探测(含已知不合成图环境的降级)或强制指定;
-    /// 强制档无视降级信号,是误降 / 确认环境可用时的逃生门。
+    /// 封面终端图协议:自动探测(含已知不合成图环境的降级)或指定协议。
+    /// Kitty 只在 POSIX shared memory 可用时生效；其他指定协议无视降级信号。
     protocol: CoverProtocolMode,
 
     /// 单张封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
-
-    /// 封面解码后等比缩放到的最大边长(像素);终端显示 ~240px 足够,大了费内存。
-    max_dim: u32,
-
-    /// 封面 JPEG 重编码质量(1-100);**仅 `storage = "resized"` 时生效**。
-    jpeg_quality: u8,
-
-    /// 封面磁盘存储模式。
-    storage: CoverStorageMode,
 
     /// 封面切换去抖(毫秒):列表滚动停稳此时长才开始渲染真图,期间显示程序化色块占位。
     debounce_ms: u64,
@@ -35,9 +24,6 @@ pub struct CoverConfig {
     /// 封面终端协议编码并发 worker 数,≥1。
     encode_workers: usize,
 
-    /// kitty 图协议数据流式传输(编码就绪后拆块逐帧发给终端,消首次显示的单帧卡顿)。
-    kitty_transmit: KittyTransmitConfig,
-
     /// kmeans 取色参数(封面派生配色)。
     kmeans: KmeansConfig,
 
@@ -45,26 +31,11 @@ pub struct CoverConfig {
     cache: CoverCacheConfig,
 }
 
-/// kitty 图协议数据流式传输段(挂在 `CoverConfig` 下)。已编码封面的图数据不等首次
-/// 显示才整段发给终端,而是编码就绪后拆成完整转义单元、逐帧按预算流式发送;首次显示
-/// 只写占位符。全屏大图的传输序列可达数 MB,一帧内整段发送会造成可感卡顿。
-///
-/// 仅对 kitty graphics protocol 生效(数据传输与显示分离是它独有的形态);
-/// sixel / iTerm2 inline 图数据即显示,无从提前传输,此段对它们无操作。
-#[config_section]
-pub struct KittyTransmitConfig {
-    /// 是否启用(关闭则图数据在首次显示那一帧整段发送)。
-    enabled: bool,
-
-    /// 每帧发送的图数据预算(KiB);越大传完越快,单帧终端解析负担越重。
-    per_tick_kb: u32,
-}
-
 /// 封面缓存预算(挂在 `CoverConfig` 下)。三档都是 client 进程的旋钮:
 /// 磁盘是跨进程共享的持久文件,两层 RAM 是本进程常驻内存。
 #[config_section]
 pub struct CoverCacheConfig {
-    /// 磁盘缓存容量上限(字节),存原始/重编码封面文件;可写算式如 `4 * 1024 ^ 3`。
+    /// 磁盘缓存容量上限(字节),保存下载得到的原始压缩字节;可写算式如 `4 * 1024 ^ 3`。
     #[serde(deserialize_with = "de::u64_lossy")]
     disk: u64,
 
@@ -73,31 +44,27 @@ pub struct CoverCacheConfig {
     #[serde(deserialize_with = "de::u64_lossy")]
     image: u64,
 
-    /// 已编码终端协议 RAM 预算(字节)。是 `image` 之外的第二层常驻 RAM:
-    /// 每个协议留着源图副本 + kitty/sixel 编码序列,全屏大图可达 MB 级。
+    /// 已编码终端协议 RAM 预算(字节)。是 `image` 之外的第二层常驻 RAM，
+    /// 保存 Kitty 资源句柄或 Sixel、iTerm2、halfblocks 成品。
     /// 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
     #[serde(deserialize_with = "de::u64_lossy")]
     protocol: u64,
-
-    /// 同一张封面并存的已编码尺寸数,≥1;常规面板与全屏各占一份,
-    /// 超出时逐出该封面最久未渲染的尺寸。
-    sizes_per_image: usize,
 }
 
-/// 封面终端图协议选择。不依赖渲染 crate;接线处映射到 ratatui-image 的协议类型。
+/// 封面终端图协议选择。
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum CoverProtocolMode {
-    /// 启动时向终端探测能力自动协商;已知「探测穿透、渲染却不合成图数据」的环境
+    /// 启动时向终端探测能力自动协商；已知探测穿透但渲染不合成图数据的环境
     /// (如 zellij)自动降级半块字符,开箱不乱码。
     Auto,
 
     /// 强制半块字符渲染(任何终端 / multiplexer 都正确,清晰度最低)。
     Halfblocks,
 
-    /// 强制 kitty graphics protocol。
+    /// 使用 kitty graphics protocol；POSIX shared memory 不可用时保留启动协商结果。
     Kitty,
 
     /// 强制 sixel。
@@ -105,19 +72,6 @@ pub enum CoverProtocolMode {
 
     /// 强制 iTerm2 inline 图协议。
     Iterm2,
-}
-
-/// 封面磁盘存储模式。不依赖渲染 crate;接线处映射到具体实现。
-#[lua_enum]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum CoverStorageMode {
-    /// 原始下载字节(无损原图,扩展名按字节嗅探)。
-    Raw,
-
-    /// 解码缩放后重编码 JPEG(体积小,锁定 ≤ `max_dim`)。
-    Resized,
 }
 
 /// 全屏切歌封面转场段(挂在 `TuiConfig` 下)。转场期封面以字符半块像素级合成,

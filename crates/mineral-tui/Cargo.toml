@@ -10,11 +10,14 @@ rust-version.workspace = true
 
 [dependencies]
 arboard              = { workspace = true }
+arc-swap             = { workspace = true }
+base64               = { workspace = true }
 chrono               = { workspace = true }
 color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
 futures-util         = { workspace = true }
 image                = { workspace = true }
+icy_sixel            = { workspace = true }
 isahc                = { workspace = true }
 kmeans_colors        = { workspace = true }
 palette              = { workspace = true }
@@ -35,7 +38,6 @@ mineral-task         = { workspace = true }
 nix                  = { workspace = true }
 rand                 = { workspace = true }
 ratatui              = { workspace = true }
-ratatui-image        = { workspace = true }
 rustc-hash           = { workspace = true }
 unicode-width        = { workspace = true }
 nucleo-matcher       = { workspace = true }

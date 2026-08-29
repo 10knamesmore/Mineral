@@ -5,6 +5,7 @@ compile_error!("Windows 暂不支持");
 
 mod app;
 mod components;
+mod image;
 mod player_actions;
 mod render;
 mod runtime;
@@ -19,11 +20,11 @@ use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
 use mineral_playback::PlaybackRegistry;
 use mineral_server::{Client, Server};
-use ratatui_image::picker::Picker;
 
 use app::App;
-use runtime::cover::encode::CoverEncoder;
-use runtime::cover::fetch::CoverFetcher;
+use image::ImageEngine;
+use image::fetch::CoverFetcher;
+use image::graphics::TerminalGraphics;
 use runtime::remote::RemoteClient;
 use runtime::ui::prefs::{UiPrefs, open_client_store};
 use tui::Tui;
@@ -143,7 +144,7 @@ pub async fn run(
     }
 }
 
-/// 拿到一个 client(in-proc 或 remote 都行),进 alternate screen,起 ratatui-image picker,
+/// 拿到一个 client(in-proc 或 remote 都行),进 alternate screen,探测终端图片能力,
 /// 跑 [`App::run`] 直到退出,最后还原终端。
 ///
 /// # Params:
@@ -164,23 +165,11 @@ fn run_app(
     if *cfg.tui().window_title().enabled() {
         tui.push_title_stack()?;
     }
-    // Picker::from_query_stdio 必须在进 alternate screen 之后、读 events 之前调,
-    // 因为它会临时往 stdio 写探测 escape 序列读响应。失败 fallback 到 8x16 fixed
-    // font 用 halfblocks 渲染,不阻塞启动。
-    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
-    // 编码器 worker 在此 spawn(run_app 跑在 tokio runtime 线程上,满足 tokio::spawn)。
-    // 封面 resize + kitty 编码落 worker 的 spawn_blocking 不卡渲染;picker 随每个编码请求
-    // 携带(见 `EncodeRequest`),故字号变化后 worker 即用新 picker。
-    let cover_encoder = CoverEncoder::spawn(*cfg.tui().cover().encode_workers());
-    let mut app = App::new(
-        client,
-        cover_fetcher,
-        cover_encoder,
-        picker,
-        tui.launch_cursor(),
-        cfg,
-        ui_prefs,
-    );
+    // 图片能力探测必须在进 alternate screen 之后、读 events 之前执行，因为底层会临时
+    // 往 stdio 写探测 escape 序列并读取响应。
+    let graphics = TerminalGraphics::query();
+    let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics);
+    let mut app = App::new(client, images, tui.launch_cursor(), cfg, ui_prefs);
     // 启动期配置提示卡:config.lua 缺失提醒 init;降级告警与日志双轨呈现。
     let config_path = mineral_paths::config_dir()
         .ok()

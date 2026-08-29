@@ -15,13 +15,11 @@ use mineral_model::{
 use mineral_protocol::{CancelFilter, PlayerSync, PlayerVersions};
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskId, TaskKind};
-use ratatui_image::picker::Picker;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
+use crate::image::ImageEngine;
 use crate::render::anim::Toggle;
-use crate::runtime::cover::encode::CoverEncoder;
-use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
@@ -382,7 +380,7 @@ impl Client for TestClient {
     }
 }
 
-/// 以 defaults 配置(= 接线前硬编码常量)造一个接 [`TestClient`] + 禁用封面的裸 [`App`]。
+/// 以 defaults 配置(= 接线前硬编码常量)造一个接 [`TestClient`] 且不启动图片 worker 的裸 [`App`]。
 fn test_app() -> color_eyre::Result<App> {
     test_app_with(Arc::new(TestClient::default()))
 }
@@ -390,11 +388,10 @@ fn test_app() -> color_eyre::Result<App> {
 /// 同 [`test_app`],client 由调用方注入(需要探针 / 自定义剧本的测试用)。
 fn test_app_with(client: Arc<dyn Client>) -> color_eyre::Result<App> {
     let cfg = Arc::new(mineral_config::Config::defaults()?);
+    let images = ImageEngine::disabled(Arc::clone(&cfg));
     Ok(App::new(
         client,
-        CoverFetcher::disabled(),
-        CoverEncoder::disabled(),
-        Picker::from_fontsize((8, 16)),
+        images,
         /*launch_anchor*/ None,
         cfg,
         crate::runtime::ui::prefs::UiPrefs::disabled(),
@@ -409,7 +406,7 @@ fn fill_queue(app: &mut App, len: usize, current_idx: usize) {
     app.state.player.queue = queue;
 }
 
-/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:queue 填《EndSerenading》前 `len` 首,
+/// 造一个接 [`TestClient`] 且不启动图片 worker 的 [`App`]:queue 填《EndSerenading》前 `len` 首,
 /// 当前在播设为第 `current_idx` 首。同步构造,不需 tokio runtime。
 pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
@@ -467,7 +464,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
     Ok((app, submitted))
 }
 
-/// 造一个接 [`TestClient`] + 禁用封面的 [`App`]:Library 视图,填《EndSerenading》前 `len`
+/// 造一个接 [`TestClient`] 且不启动图片 worker 的 [`App`]:Library 视图,填《EndSerenading》前 `len`
 /// 首到歌单 `"p1"`,选中第 `sel_track` 首(从 0 起)。同步构造,不需 tokio runtime。
 pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
@@ -490,7 +487,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
 
 /// 造「page morph(Browse ↔ Search)中途」的 [`App`]:Library 选中曲带封面 A(纯品红),
 /// search 端 album 结果已成 detail 根帧、头图 B(纯青);`cache_*` 控制两端图是否入
-/// `covers.cache`,覆盖双图合成 / 单图独飞 / 无图回退三形态。morph 停在 4/8 拍中途。
+/// 图片解码缓存，覆盖双图合成、单图独飞与随机 fallback。morph 停在 4/8 拍中途。
 pub(crate) fn app_in_search_morph(
     cache_browse: bool,
     cache_detail: bool,
@@ -513,7 +510,7 @@ pub(crate) fn app_in_search_morph(
     }
     if cache_browse {
         app.state
-            .covers
+            .images
             .cache
             .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
     }
@@ -546,7 +543,7 @@ pub(crate) fn app_in_search_morph(
     });
     if cache_detail {
         app.state
-            .covers
+            .images
             .cache
             .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
     }
@@ -612,7 +609,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
     Ok(app)
 }
 
-/// 造一个接 [`TestClient`] + 禁用封面、**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
+/// 造一个接 [`TestClient`]、不启动图片 worker 且**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
 /// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
 pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
     Ok(seed_fullscreen(test_app()?))

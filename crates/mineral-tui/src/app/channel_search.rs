@@ -1214,7 +1214,7 @@ mod tests {
     }
 
     /// 造一个「结果列 1 张带封面专辑、其详情帧在 detail 栈顶」的 probed App,返回封面 URL。
-    /// 封面防抖系列测试共用(是否把图塞进 covers.cache 由各测试自定)。
+    /// 图片防抖系列测试共用；是否把图塞进解码缓存由各测试自定。
     fn app_with_covered_album() -> color_eyre::Result<(crate::App, mineral_model::MediaUrl)> {
         use mineral_model::{Album, AlbumId, MediaUrl};
 
@@ -1251,7 +1251,7 @@ mod tests {
         .ok_or_else(|| color_eyre::eyre::eyre!("search 布局应有 detail 面板"))
     }
 
-    /// 数 `rect` 内半字符封面 cell(`▀`)——hash 占位与 halfblock 真图都用它,0 = 图位留空。
+    /// 数 `rect` 内的 halfblock 图片 cell(`▀`)。
     fn half_cells(buf: &ratatui::buffer::Buffer, rect: ratatui::layout::Rect) -> usize {
         let mut n = 0usize;
         for y in rect.y..rect.y.saturating_add(rect.height) {
@@ -1276,28 +1276,28 @@ mod tests {
 
         let (mut app, url) = app_with_covered_album()?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.covers.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):不投编码。
         app.state.channel_search.last_sel_change = Instant::now();
         t.draw(|f| crate::view::draw(f, &app))?;
         assert!(
-            app.state.covers.encode_pending.borrow().is_empty(),
+            app.state.images.encode_pending.borrow().is_empty(),
             "滚动窗内不应派发封面编码"
         );
         // 停稳(窗外):恰好派发一次。
         app.state.channel_search.last_sel_change = rewound();
         t.draw(|f| crate::view::draw(f, &app))?;
         assert_eq!(
-            app.state.covers.encode_pending.borrow().len(),
+            app.state.images.encode_pending.borrow().len(),
             1,
             "停稳后应恰好派发一次封面编码"
         );
         Ok(())
     }
 
-    /// cache hit 时滚动窗内应画 halfblock 低清真图(非留空):图已在 `covers.cache`,只把
+    /// cache hit 时滚动窗内应画 halfblock 低清真图(非留空)：图已解码，只把
     /// 高清编码派发挡在防抖后。锁「滚动期封面不再空白」——消除快速滚过 prefetch 已拉到的
     /// 邻近项时的空窗。
     #[test]
@@ -1310,7 +1310,7 @@ mod tests {
 
         let (mut app, url) = app_with_covered_album()?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.covers.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):cache hit → 画 halfblock 真图,但高清编码仍不派发。
@@ -1322,16 +1322,15 @@ mod tests {
             "滚动窗内 cache hit 应画 halfblock 真图,不留空"
         );
         assert!(
-            app.state.covers.encode_pending.borrow().is_empty(),
+            app.state.images.encode_pending.borrow().is_empty(),
             "滚动窗内仍不派发高清编码"
         );
         Ok(())
     }
 
-    /// cache miss 的程序化 hash 占位同样尊重滚动防抖:滚动中图位留空(不逐行闪不同色块),
-    /// 停稳后才画占位。
+    /// cache miss 时滚动期与停稳期都显示会话内稳定的随机封面；滚动期仍不提交终端图片编码。
     #[test]
-    fn search_cover_hash_respects_scroll_debounce() -> color_eyre::Result<()> {
+    fn search_cover_random_fallback_stays_visible_while_scrolling() -> color_eyre::Result<()> {
         use std::time::Instant;
 
         use ratatui::Terminal;
@@ -1340,21 +1339,24 @@ mod tests {
         let (mut app, _url) = app_with_covered_album()?;
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
-        // 窗内:图未拉到(cache miss)也不画 hash 占位,留空。
+        // 窗内：真实图片未解码时显示随机封面。
         app.state.channel_search.last_sel_change = Instant::now();
         t.draw(|f| crate::view::draw(f, &app))?;
         let detail = detail_rect(&app)?;
-        assert_eq!(
-            half_cells(t.backend().buffer(), detail),
-            0,
-            "滚动窗内 cache miss 应留空,不闪 hash 占位"
+        assert!(
+            half_cells(t.backend().buffer(), detail) > 0,
+            "滚动窗内 cache miss 应显示随机封面"
         );
-        // 停稳:画程序化 hash 占位。
+        assert!(
+            app.state.images.encode_pending.borrow().is_empty(),
+            "滚动窗内不应提交随机封面的终端编码"
+        );
+        // 停稳：真实图片仍未解码，继续显示会话内稳定的随机封面。
         app.state.channel_search.last_sel_change = rewound();
         t.draw(|f| crate::view::draw(f, &app))?;
         assert!(
             half_cells(t.backend().buffer(), detail) > 0,
-            "停稳后应画程序化 hash 占位"
+            "停稳后应继续显示随机封面"
         );
         Ok(())
     }

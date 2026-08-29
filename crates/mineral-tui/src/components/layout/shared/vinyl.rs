@@ -1,4 +1,4 @@
-//! not playing 待机封面:旋转唱片纹(`▀` 半字符逐 cell 绘制,与程序化封面同一套正方几何)。
+//! not playing 待机封面：旋转唱片纹(`▀` 半字符逐 cell 绘制)。
 //!
 //! 同心沟纹 + 双对称高光瓣绕盘心缓慢旋转 + peach 标贴中央嵌 ◆ 徽记;颜色全取主题调色盘,
 //! 高光衰减边缘用 4×4 Bayer 有序抖动落到「亮/不亮」两档。纯 cell 绘制、不碰终端图协议,
@@ -9,7 +9,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
-use crate::components::layout::shared::cover;
 use crate::render::theme::Theme;
 
 /// 待机唱片纹的旋转状态:相位计数 + 一圈总步数(挂 `AppState`,主循环每 tick 推进一步)。
@@ -78,14 +77,14 @@ const SHEEN_TAPER: f32 = 1.4;
 /// 4×4 Bayer 有序抖动矩阵(0..16),终端上把连续高光强度落成两档的标准做法。
 const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
-/// 在 `area` 内画待机唱片纹(几何同程序化封面:`square_cells` 正方化、居中)。
+/// 在 `area` 内画待机唱片纹，使用图片模块的 cell 正方几何。
 pub fn render(frame: &mut Frame<'_>, area: Rect, spin: &VinylSpin, theme: &Theme) {
     render_to(frame.buffer_mut(), area, spin, theme);
 }
 
 /// [`render`] 的 [`Buffer`] 版:每个 cell 上/下两个逻辑像素分别采样,`▀` 的 fg/bg 落色。
 pub fn render_to(buf: &mut Buffer, area: Rect, spin: &VinylSpin, theme: &Theme) {
-    let sq = cover::square_cells(area);
+    let sq = crate::image::square_cells(area);
     if sq.width == 0 || sq.height == 0 {
         return;
     }

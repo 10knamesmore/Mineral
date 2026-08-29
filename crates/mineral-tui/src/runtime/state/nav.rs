@@ -24,7 +24,7 @@ pub struct NavState {
     /// 还停在该歌单且光标未动过则补落位,否则作废。
     pub pending_track_restore: Option<PendingRestore>,
 
-    /// 上一次选中行变化的时间(navigation key 命中时刷新)。cover_image 用它做
+    /// 上一次选中行变化的时间(navigation key 命中时刷新)。[`crate::image::render`] 用它做
     /// 防抖:连续滚动时跳过昂贵的 protocol 构建,稳态后再上图。
     pub last_sel_change: Instant,
 }

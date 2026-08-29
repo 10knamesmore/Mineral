@@ -160,25 +160,17 @@ return {
         glow = 0.85, -- 揭示边前沿朝 text 提亮的强度 0-1;0 = 无亮边
       },
     },
-    -- 封面管线:抓取 → 解码缩放 → 磁盘缓存 → k-means 取色喂频谱。
+    -- 封面管线:抓取原始压缩字节 → 磁盘缓存 → 解码 → k-means 取色喂频谱。
     cover = {
-      protocol = "auto", -- 终端图协议:"auto" 探测协商(zellij 等不合成图的环境自动降半块) | "halfblocks" | "kitty" | "sixel" | "iterm2" 强制(无视降级信号)
+      protocol = "auto", -- 终端图协议:"auto" 探测协商 | "halfblocks" | "kitty" | "sixel" | "iterm2";Kitty 要求 POSIX shared memory
       http_timeout_secs = 30, -- 单张封面下载超时,秒
-      max_dim = 384, -- 解码后等比缩放到的最大边,px;终端显示足够,大了费内存
-      jpeg_quality = 100, -- 重编码质量 1-100;仅 storage = "resized" 时生效
-      storage = "resized", -- "raw" | "resized";resized = 缓存命中只解 ≤max_dim 小图,CPU 大降
       debounce_ms = 32, -- 列表滚动停稳多久才编码高清真图;期间 halfblock 低清兜底(cache hit)/ 程序化占位(miss)
       download_workers = 12, -- 封面下载并发 worker 数
       encode_workers = 2, -- 终端图片协议编码并发 worker 数
-      kitty_transmit = { -- kitty 图协议数据流式传输:编码就绪拆块逐帧发终端,首显只写占位符;仅 kitty 协议生效
-        enabled = true,
-        per_tick_kb = 768, -- 每帧发送预算 KiB;越大传完越快,单帧终端解析负担越重
-      },
       cache = { -- 缓存预算(LRU,满了自动驱逐);磁盘项改小不立刻删文件,下次写入时驱逐
         disk = 4 * GB, -- 磁盘缓存上限,字节
         image = 128 * MB, -- 解码原图 RAM 预算,字节;越界逐出最久未显示者
-        protocol = 64 * MB, -- 已编码终端协议(序列+源图副本)RAM 预算,字节;越界逐出最久未渲染者
-        sizes_per_image = 3, -- 同一封面并存的已编码尺寸数;常规面板/全屏各占一份,超出逐最久未渲染
+        protocol = 64 * MB, -- 终端图片成品 RAM 预算,字节;越界逐出最久未渲染者
       },
       kmeans = { -- 取色(频谱封面配色);取出的色不满意再动
         sample_dim = 64, -- 取色采样边长:64² ≈ 4 千像素,够聚类、极省 CPU
@@ -252,7 +244,7 @@ return {
     },
     -- 预取:提前抓即将看到的数据,用网络/内存开销换流畅度。
     prefetch = {
-      radius = 64, -- 列表选中行上下各预取条数(封面 + 歌单曲目)
+      radius = 64, -- 列表选中行上下各预取条数(封面压缩源落磁盘 + 歌单曲目)
       playback_cover_radius = 3, -- 沿播放队列给在播曲前后各预取几张封面
       prewarm_ahead = 1, -- 全屏稳态提前编码后几首封面,消自动切歌的占位闪
     },

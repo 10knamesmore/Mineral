@@ -21,7 +21,7 @@ use crate::render::palette::{CoverPalette, Rgb};
 /// → 按 Lab 明度升序转回 sRGB。
 ///
 /// # Params:
-///   - `img`: 已解码(且 worker 已 resize 到配置上限内)的封面图
+///   - `img`: 已解码的完整封面图
 ///   - `k`: k-means 取色旋钮(配置 `tui.cover.kmeans` 段)
 ///
 /// # Return:
@@ -343,7 +343,7 @@ mod tests {
     }
 
     /// 取色确定性:同一张大图调两次,色板逐字节相等(thumbnail 是确定性 box filter,
-    /// k-means seed 固定)。频谱「过渡完就静止」依赖这一点。
+    /// k-means seed 固定)。频谱过渡完就静止依赖这一点。
     #[test]
     fn palette_is_deterministic() -> color_eyre::Result<()> {
         let img = banded_image_sized(

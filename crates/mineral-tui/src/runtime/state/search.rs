@@ -21,7 +21,7 @@ pub struct SearchState {
     pub typing: bool,
 
     /// 本地搜索的模糊匹配器(fzf 风格子序列 + 中文拼音/首字母联合)。
-    /// `&self` 路径下要复用 buffer,因此包 `RefCell`,与 `covers.protocols` 同理。
+    /// `&self` 路径下要复用 buffer，因此包 `RefCell`，与 `images.terminal_images` 同理。
     pub matcher: RefCell<FuzzyMatcher>,
 
     /// 文本 → 预处理 [`MatchableText`] 的缓存。键是原始文本(歌名 / 艺人名 / 专辑名 /

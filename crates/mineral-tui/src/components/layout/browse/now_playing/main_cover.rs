@@ -30,17 +30,18 @@ pub(crate) fn sections(area: Rect) -> Option<[Rect; 3]> {
     )
 }
 
-/// 面板当前会画的主封面 URL(随 browse 视图分派:Playlists 取选中歌单的有效封面、
-/// Library 取选中曲封面);无选中 / 无图为 `None`。
+/// 返回面板当前主封面的 URL。
 pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
     match state.browse.view.current() {
-        View::Playlists => state
-            .selected_playlist()
-            .and_then(|p| crate::runtime::cover::collage::effective_cover_url(state, &p.data)),
-        View::Library => state
-            .filtered_tracks()
-            .get(state.browse.nav.track.sel())
-            .and_then(|entry| entry.data.song.cover_url.clone()),
+        View::Playlists => {
+            let playlist = state.selected_playlist()?;
+            crate::image::collage::effective_cover_url(state, &playlist.data)
+        }
+        View::Library => {
+            let tracks = state.filtered_tracks();
+            let song = &tracks.get(state.browse.nav.track.sel())?.data.song;
+            song.cover_url.clone()
+        }
     }
 }
 

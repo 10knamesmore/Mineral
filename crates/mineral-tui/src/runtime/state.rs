@@ -20,7 +20,6 @@ use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 mod browse;
 mod channel_search;
-mod covers;
 mod detail;
 mod library;
 mod lifecycle;
@@ -32,10 +31,12 @@ pub(crate) mod search_whitelist;
 mod task_event;
 mod view_switch;
 
+#[cfg(test)]
+pub use crate::image::CoverTransition;
+pub use crate::image::ImageEngine;
 pub use browse::BrowsePage;
 pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
-pub use covers::{CoverHub, CoverTransition};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
 pub use player::PlayerMirror;
@@ -182,13 +183,13 @@ pub struct AppState {
     /// 频谱 FFT 计算器:吃 PCM 样本,出 64 根条的目标高度。
     pub fft: SpectrumComputer,
 
-    /// 封面管线状态(原图/色板缓存、在飞集合、已编码协议)。
-    pub covers: CoverHub,
+    /// 图片引擎状态(原图/色板缓存、在飞集合与终端成品)。
+    pub images: ImageEngine,
 
     /// 后台 server scheduler 当前快照(每 tick 由 App 从 `Client::task_snapshot`
     /// 灌入)。**只含**:server 端 ChannelFetch lane(playlists / tracks /
-    /// song-url / lyrics / liked)。封面是 client-local 的 [`CoverFetcher`],
-    /// 不在这里——见 [`CoverHub::loading`]。
+    /// song-url / lyrics / liked)。封面由 client-local 的 [`ImageEngine`] 管理,
+    /// 不在这里。
     /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
     pub tasks_snapshot: mineral_task::Snapshot,
 
@@ -224,12 +225,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// 把应用动画与滚动状态折算为图片引擎需要的互斥渲染阶段。
+    pub(crate) fn image_render_phase(&self) -> crate::image::ImageRenderPhase {
+        if !self.browse.fullscreen.settled() || !self.channel_search.active.settled() {
+            crate::image::ImageRenderPhase::Resizing
+        } else if self.is_scrolling() {
+            crate::image::ImageRenderPhase::Scrolling
+        } else {
+            crate::image::ImageRenderPhase::Stable
+        }
+    }
+
     /// 构造空状态(所有列表 / 缓存初始为空,等 [`AppState::apply`] 增量填充);
     /// 过渡时长 / 频谱旋钮 / 各段手感由注入的配置落地。
     ///
     /// # Params:
     ///   - `cfg`: 已加载的全局配置(`Arc` 共享,渲染/运行时模块经 `state.cfg` 读)
-    pub fn new(cfg: Arc<mineral_config::Config>) -> Self {
+    ///   - `images`: 已完成 worker 与 terminal backend 接线的图片引擎
+    pub fn new(cfg: Arc<mineral_config::Config>, images: ImageEngine) -> Self {
         let anim = cfg.tui().animation();
         let tick_ms = *anim.frame_tick_ms();
         Self {
@@ -248,10 +261,7 @@ impl AppState {
             playback: Playback::new(),
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
-            covers: CoverHub::new(
-                *cfg.tui().cover().cache().image(),
-                *cfg.tui().cover().cache().protocol(),
-            ),
+            images,
             tasks_snapshot: mineral_task::Snapshot {
                 running: 0,
                 by_lane: FxHashMap::default(),
@@ -273,7 +283,15 @@ impl AppState {
     /// 测试构造:defaults 配置(= 接线前硬编码常量)的空状态。
     #[cfg(test)]
     pub(crate) fn test_default() -> color_eyre::Result<Self> {
-        Ok(Self::new(Arc::new(mineral_config::Config::defaults()?)))
+        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        Ok(Self::test_with_config(cfg))
+    }
+
+    /// 测试构造：用指定配置与禁用 worker 的图片引擎创建空状态。
+    #[cfg(test)]
+    pub(crate) fn test_with_config(cfg: Arc<mineral_config::Config>) -> Self {
+        let images = ImageEngine::disabled(Arc::clone(&cfg));
+        Self::new(cfg, images)
     }
 
     /// 终端是否持有输入焦点。从 [`Self::dim`] 反读(变灰 = 未聚焦);上报 daemon 用。

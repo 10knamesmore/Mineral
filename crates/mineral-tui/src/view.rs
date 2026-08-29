@@ -17,7 +17,8 @@ use crate::components::layout::shared::compute::{
 };
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::waveform::WaveformCtx;
-use crate::components::layout::shared::{cover_image, top_status, transform, transport, vinyl};
+use crate::components::layout::shared::{top_status, transform, transport, vinyl};
+use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
 use crate::render::ambient;
 use crate::runtime::state::SearchFocus;
 
@@ -69,7 +70,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             let plan = flight::plan(&normal, &search, &app.state);
             paint_search(frame, &areas, app, plan.is_some());
             if let Some(plan) = &plan {
-                flight::render(frame, plan, t, &app.state, &app.picker);
+                flight::render(frame, plan, t, &app.state, &app.theme);
             }
         }
     } else {
@@ -102,12 +103,7 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
     sidebar::draw(frame, areas.left, &app.state, theme);
     if let Some(right) = areas.right {
         now_playing::draw(
-            frame,
-            right,
-            &app.state,
-            &app.picker,
-            theme,
-            /*cover_in_flight*/ false,
+            frame, right, &app.state, theme, /*cover_in_flight*/ false,
         );
     }
     if let Some(lyr) = areas.lyrics {
@@ -181,20 +177,12 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight
     }
     if let Some(right) = areas.right.and_then(nonempty) {
         if show_browse {
-            now_playing::draw(
-                frame,
-                right,
-                &app.state,
-                &app.picker,
-                theme,
-                cover_in_flight,
-            );
+            now_playing::draw(frame, right, &app.state, theme, cover_in_flight);
         } else {
             detail::draw(
                 frame,
                 right,
                 &app.state,
-                &app.picker,
                 theme,
                 border_focused(SearchFocus::Detail),
                 cover_in_flight,
@@ -271,7 +259,7 @@ fn paint_fullscreen(
         sidebar::draw(frame, r, &app.state, theme);
     }
     if let Some(r) = areas.right.and_then(nonempty) {
-        now_playing::draw(frame, r, &app.state, &app.picker, theme, flight.is_some());
+        now_playing::draw(frame, r, &app.state, theme, flight.is_some());
     }
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
@@ -292,7 +280,7 @@ fn paint_fullscreen(
         theme,
     );
     match flight {
-        Some((plan, progress)) => flight::render(frame, plan, progress, &app.state, &app.picker),
+        Some((plan, progress)) => flight::render(frame, plan, progress, &app.state, theme),
         None => {
             if let Some(c) = areas.cover.and_then(nonempty) {
                 draw_fullscreen_cover(frame, c, steady_cover, app);
@@ -348,12 +336,7 @@ fn now_playing_cover_skip(app: &App, right: Option<Rect>) -> Option<Rect> {
     let right = nonempty(right?)?;
     let url = now_playing::main_cover::url(&app.state)?;
     let [cover_sec, _, _] = now_playing::main_cover::sections(right)?;
-    let target = cover_image::square_subarea(nonempty(cover_sec)?, app.picker.font_size());
-    app.state
-        .covers
-        .protocols
-        .ready_for_render(&url, (target.width, target.height))
-        .then_some(target)
+    app.state.images.ready_area(&url, nonempty(cover_sec)?)
 }
 
 /// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时空操作(保留终端默认
@@ -414,16 +397,11 @@ fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
     }
     let track = app.state.playback.track.as_ref()?;
     let url = track.cover_url.as_ref()?;
-    let target = cover_image::square_subarea(cover.and_then(nonempty)?, app.picker.font_size());
-    app.state
-        .covers
-        .protocols
-        .ready_for_render(url, (target.width, target.height))
-        .then_some(target)
+    app.state.images.ready_area(url, cover.and_then(nonempty)?)
 }
 
-/// 全屏独立封面:跟**在播曲**;形变中画 halfblock / 程序化色块(便宜),稳态全屏才上真图
-/// (避免形变期每帧尺寸变导致 protocol 重编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
+/// 全屏独立封面跟随在播曲；形变中只画 halfblock，稳态全屏才使用终端图片成品
+/// (避免形变期每帧尺寸变化导致重复编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
 /// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
 ///
 /// # Params:
@@ -434,43 +412,50 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
         vinyl::render(frame, area, &app.state.vinyl, theme);
         return;
     };
-    let seed = track
-        .album
-        .as_ref()
-        .map_or_else(|| track.name.clone(), |a| a.name.clone());
     if app.state.browse.fullscreen.at_max() {
         // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
         // 新图的离线编码期;同时按当前尺寸预热新图协议((url, dims) 去重),推满落定
         // 直接 place 高清零闪。缺任一图回落常规路径。
-        if let Some(transition) = app.state.covers.transition.as_ref()
-            && cover_image::render_transition(frame, area, transition, &app.state, &app.picker)
-        {
-            cover_image::prewarm(&app.state, &app.picker, area, &transition.to_url);
+        if let Some(transition) = app.state.images.transition.as_ref() {
+            let style = BlendStyle::from(*app.state.cfg.tui().cover_transition().style());
+            app.state.images.render(
+                ImageContent::Blend {
+                    from: &transition.from_url,
+                    to: &transition.to_url,
+                    progress: transition.anim.eased_in_out(),
+                    style,
+                },
+                area,
+                frame.buffer_mut(),
+                ImageRenderPhase::Stable,
+                theme,
+            );
+            app.state.images.prepare(&transition.to_url, area);
             prewarm_upcoming(app, area);
             return;
         }
-        cover_image::render_or_fallback(
-            frame,
+        app.state.images.render(
+            ImageContent::Display {
+                url: track.cover_url.as_ref(),
+            },
             area,
-            track.cover_url.as_ref(),
-            &app.state,
-            &app.picker,
+            frame.buffer_mut(),
+            ImageRenderPhase::Stable,
             theme,
-            &seed,
         );
         // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
-        // 直接 place,消掉切歌瞬间的程序化占位闪。
+        // 直接 place，消掉切歌瞬间的随机 fallback 闪烁。
         prewarm_upcoming(app, area);
     } else {
-        // 形变期:halfblock 真图(命中缓存)随封面区长大,无图退程序化色块;均不碰 kitty 协议。
-        cover_image::render_morph(
-            frame,
+        // 形变期：halfblock 随封面区长大；无真实图片时渲染随机封面。
+        app.state.images.render(
+            ImageContent::Display {
+                url: track.cover_url.as_ref(),
+            },
             area,
-            track.cover_url.as_ref(),
-            &app.state,
-            &app.picker,
+            frame.buffer_mut(),
+            ImageRenderPhase::Resizing,
             theme,
-            &seed,
         );
         // 进入方向:终态封面区固定可知,按它把当前曲的协议编码与形变动画并行预热,
         // 落定即命中直接上真图,消「落定后先糊后清晰」的等待。`(url, dims)` 去重,整段
@@ -480,7 +465,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
             && let (Some(url), Some(steady)) =
                 (track.cover_url.as_ref(), steady_cover.and_then(nonempty))
         {
-            cover_image::prewarm(&app.state, &app.picker, steady, url);
+            app.state.images.prepare(url, steady);
         }
     }
 }
@@ -499,7 +484,7 @@ fn prewarm_upcoming(app: &App, area: Rect) {
             .get(pos.saturating_add(d))
             .and_then(|s| s.cover_url.as_ref())
         {
-            cover_image::prewarm(&app.state, &app.picker, area, url);
+            app.state.images.prepare(url, area);
         }
     }
 }
@@ -570,7 +555,7 @@ mod tests {
             app.state.playback.track = Some(sv.data.song.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.covers.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert(&url, Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -582,7 +567,7 @@ mod tests {
         // (飞行层两端各一,终态全屏尺寸在内);之后每帧 pending 定格——证明没按逐帧
         // 漂移 dims 追加派发。
         app.state.browse.fullscreen.set(true);
-        let mut morph_pending = app.state.covers.encode_pending.borrow().clone();
+        let mut morph_pending = app.state.images.encode_pending.borrow().clone();
         assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
         for frame_no in 0..5 {
             app.state.browse.fullscreen.tick();
@@ -592,14 +577,14 @@ mod tests {
             );
             t.draw(|f| super::draw(f, &app))?;
             if frame_no == 0 {
-                morph_pending = app.state.covers.encode_pending.borrow().clone();
+                morph_pending = app.state.images.encode_pending.borrow().clone();
                 assert!(
                     !morph_pending.is_empty(),
                     "首个形变帧应派发端点稳态尺寸预热"
                 );
             } else {
                 assert_eq!(
-                    *app.state.covers.encode_pending.borrow(),
+                    *app.state.images.encode_pending.borrow(),
                     morph_pending,
                     "后续形变帧不应追加封面编码派发(churn)"
                 );
@@ -617,15 +602,15 @@ mod tests {
         assert!(app.state.browse.fullscreen.settled(), "形变应在上限内落定");
         t.draw(|f| super::draw(f, &app))?;
         assert_eq!(
-            *app.state.covers.encode_pending.borrow(),
+            *app.state.images.encode_pending.borrow(),
             morph_pending,
             "稳态渲染应命中预热的同 (url, dims) 去重,不再追加派发"
         );
         Ok(())
     }
 
-    /// 全屏形变中途:在播曲封面已在 `covers.cache` → 封面区渲 halfblock 真图(像素色),
-    /// 而非程序化主题色块。用纯品红测试图(UI 别处不会出现 `Rgb(255,0,255)`),扫全 buffer
+    /// 全屏形变中途：在播曲封面已解码时，封面区渲染 halfblock 真图。用纯品红测试图
+    /// (UI 别处不会出现 `Rgb(255,0,255)`)，扫全 buffer
     /// 断言存在该 fg 的 cell —— 不依赖 morph 中途封面区精确坐标。
     #[test]
     fn fullscreen_morph_paints_real_cover_as_halfblock() -> color_eyre::Result<()> {
@@ -653,7 +638,7 @@ mod tests {
             *p = image::Rgb([255, 0, 255]);
         }
         app.state
-            .covers
+            .images
             .cache
             .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
 
@@ -683,10 +668,10 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏形变中途:有 `cover_url` 但图未入 `covers.cache` → 退程序化色块,封面区不应出现
-    /// 真图像素色(品红)。与上一例对照,证明只在缓存命中时上真图。
+    /// 全屏形变中途：有 `cover_url` 但图尚未解码时显示随机封面，不应出现真实图片的
+    /// 品红像素。与上一例对照，证明只在缓存命中时显示真实图片。
     #[test]
-    fn fullscreen_morph_without_cached_image_stays_procedural() -> color_eyre::Result<()> {
+    fn fullscreen_morph_without_cached_image_shows_random_fallback() -> color_eyre::Result<()> {
         use mineral_model::{MediaUrl, PlaylistId, SourceKind};
 
         use crate::test_support::app_with_library;
@@ -704,7 +689,7 @@ mod tests {
             sv.data.song.cover_url = Some(url.clone());
             app.state.playback.track = Some(sv.data.song.clone());
         }
-        // 故意不往 covers.cache 塞图。
+        // 故意不把真实图片放进解码缓存。
 
         app.state.browse.fullscreen.set(true);
         for _ in 0..5 {
@@ -834,14 +819,14 @@ mod tests {
         app.state.channel_search.active = active;
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
         t.draw(|f| super::draw(f, &app))?;
-        let pending = app.state.covers.encode_pending.borrow().clone();
+        let pending = app.state.images.encode_pending.borrow().clone();
         assert!(!pending.is_empty(), "首个形变帧应预热端点封面编码");
         for _ in 0..3 {
             app.state.channel_search.active.tick();
             t.draw(|f| super::draw(f, &app))?;
         }
         assert_eq!(
-            *app.state.covers.encode_pending.borrow(),
+            *app.state.images.encode_pending.borrow(),
             pending,
             "后续形变帧不应追加编码派发(churn)"
         );
@@ -880,13 +865,13 @@ mod tests {
         app.state.playback.track = Some(playing);
         if cache_selected {
             app.state
-                .covers
+                .images
                 .cache
                 .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
         }
         if cache_playing {
             app.state
-                .covers
+                .images
                 .cache
                 .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
         }
@@ -969,12 +954,10 @@ mod tests {
         Ok(())
     }
 
-    /// 回归:切到全屏**落定瞬间**的 hash 闪。稳态首帧该曲全屏尺寸 kitty 协议尚未编码(在途),
-    /// 封面区应继续画 halfblock 真图、不得退程序化 hash 色块。构造:稳态全屏 + 缓存图就绪 +
-    /// `covers.protocols` 空(逼走「编码在途」回退路径)+ 脱离滚动防抖。断言全 buffer 仍含
-    /// 真图像素色(品红)。
+    /// 稳态首帧终端图片尚未编码时，应继续显示 halfblock 真图。构造稳态全屏、解码图就绪、
+    /// 终端图片缓存为空，并断言 buffer 仍含真实图片的品红像素。
     #[test]
-    fn fullscreen_steady_pending_encode_shows_halfblock_not_hash() -> color_eyre::Result<()> {
+    fn fullscreen_steady_pending_encode_shows_real_halfblock() -> color_eyre::Result<()> {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
@@ -1000,15 +983,15 @@ mod tests {
             *p = image::Rgb([255, 0, 255]);
         }
         app.state
-            .covers
+            .images
             .cache
             .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
-        // 脱离滚动防抖,确保不是 `is_scrolling` 早退(那会留空、非 hash,测错原因)。
+        // 脱离滚动防抖，确保走稳定阶段的编码在途路径。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
 
-        // 全屏稳态(一步到位);不放任何已编码协议 → 首帧走「kitty 编码在途」回退。
+        // 全屏稳态(一步到位)；不放终端图片成品，首帧走编码在途的 halfblock 路径。
         let mut fs = Toggle::new(1);
         fs.set(true);
         fs.tick();
@@ -1029,13 +1012,13 @@ mod tests {
         }
         assert!(
             count > 0,
-            "稳态 kitty 编码在途时封面区应为 halfblock 真图(品红),不得闪 hash;实得 {count}"
+            "稳态终端图片编码在途时封面区应为 halfblock 真图(品红);实得 {count}"
         );
         Ok(())
     }
 
     /// 全屏稳态切歌转场中途:封面区画两图合成的 halfblock 混色帧(fade 中点 = 均值色),
-    /// 而非任一原图 / 程序化色块——证明转场窗口接管了稳态渲染路径。
+    /// 而非任一原图或随机封面，证明转场窗口接管了稳态渲染路径。
     #[test]
     fn fullscreen_transition_paints_halfblock_blend() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -1055,15 +1038,15 @@ mod tests {
             }
             Arc::new(image::DynamicImage::ImageRgb8(img))
         };
-        app.state.covers.cache.insert(&from_url, solid(200, 0, 0));
-        app.state.covers.cache.insert(&to_url, solid(0, 0, 200));
+        app.state.images.cache.insert(&from_url, solid(200, 0, 0));
+        app.state.images.cache.insert(&to_url, solid(0, 0, 200));
         if let Some(track) = app.state.playback.track.as_mut() {
             track.cover_url = Some(to_url.clone());
         }
         // 转场推到恰好半程(2 拍全程推 1 拍 → 500‰,eased_in_out 过中点仍 500)。
         let mut anim = Transition::expanding(2);
         anim.tick();
-        app.state.covers.transition = Some(CoverTransition {
+        app.state.images.transition = Some(CoverTransition {
             from_url,
             to_url,
             anim,
@@ -1107,7 +1090,7 @@ mod tests {
         }
         let pal = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
             .ok_or_else(|| eyre!("非空色板"))?;
-        app.state.covers.palettes.insert(url, pal);
+        app.state.images.palettes.insert(url, pal);
         app.sync_cover_palette();
         for _ in 0..400 {
             app.tick_cover_fades();
@@ -1275,8 +1258,8 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏稳态:下一首(queue 中在播曲的紧邻后继)的封面应被**提前编码**——其 (url, dims)
-    /// 进 `covers.encode_pending`。这样自动切歌时协议已就绪、直接 place,不闪程序化占位。
+    /// 全屏稳态：下一首(queue 中在播曲的紧邻后继)应按目标像素尺寸提前准备终端图片，
+    /// 自动切歌时可以直接 place。
     #[test]
     fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -1293,7 +1276,7 @@ mod tests {
             }
             if i <= 1 {
                 let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-                app.state.covers.cache.insert(&url, Arc::new(img));
+                app.state.images.cache.insert(&url, Arc::new(img));
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
@@ -1310,11 +1293,11 @@ mod tests {
         let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
         let warmed = app
             .state
-            .covers
+            .images
             .encode_pending
             .borrow()
             .iter()
-            .any(|(u, _)| *u == next_url);
+            .any(|key| key.matches_url(&next_url));
         assert!(warmed, "全屏稳态应提前编码下一首封面");
         Ok(())
     }

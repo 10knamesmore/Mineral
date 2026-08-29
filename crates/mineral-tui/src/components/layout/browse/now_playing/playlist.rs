@@ -1,13 +1,12 @@
-//! Playlists 视图右栏:程序化封面 + 歌单名/meta 两行(居中) + 底部简介行(空显占位)。
+//! Playlists 视图右栏：歌单拼贴或随机封面 + 歌单名/meta 两行 + 底部简介行。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui_image::picker::Picker;
 
-use crate::components::layout::shared::cover_image;
+use crate::image::ImageContent;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
@@ -21,7 +20,6 @@ pub fn draw(
     area: Rect,
     p: &PlaylistView,
     state: &AppState,
-    picker: &Picker,
     theme: &Theme,
     cover_in_flight: bool,
 ) {
@@ -36,24 +34,24 @@ pub fn draw(
     };
 
     if !cover_in_flight {
-        // mineral 聚合歌单无自带封面:拼贴就绪时给合成键,未就绪回落程序化占位。
-        let cover = crate::runtime::cover::collage::effective_cover_url(state, &p.data);
-        cover_image::render_or_fallback(
-            frame,
+        // Mineral 聚合歌单无自带封面：拼贴就绪时显示合成图，未就绪显示随机封面。
+        let cover = crate::image::collage::effective_cover_url(state, &p.data);
+        state.images.render(
+            ImageContent::Display {
+                url: cover.as_ref(),
+            },
             cover_area,
-            cover.as_ref(),
-            state,
-            picker,
+            frame.buffer_mut(),
+            state.image_render_phase(),
             theme,
-            &p.data.name,
         );
         // 暖入口曲封面:drill 进本歌单默认落到第 0 首,其封面在 Library 视图才首次显示。
-        // 悬停期就按封面区尺寸(两视图同几何)提前编码协议,使 drill 瞬间直接命中 kitty、
-        // 不闪 hash→halfblock。图未预取到 cache 时 prewarm 无操作(fetch 侧负责先拉进来)。
+        // 悬停期按封面区尺寸提前准备终端图片，使 drill 瞬间直接命中。图尚未解码时
+        // prepare 无操作，fetch 侧负责先拉进缓存。
         if let Some(first) = state.library.tracks.get(&p.data.id).and_then(|t| t.first())
             && let Some(url) = first.data.song.cover_url.as_ref()
         {
-            cover_image::prewarm(state, picker, cover_area, url);
+            state.images.prepare(url, cover_area);
         }
     }
 
@@ -121,10 +119,8 @@ mod tests {
 
     use crate::test_support::{app_with_playlists_probed, entry_views, song};
 
-    /// Playlists 视图悬停选中歌单、入口曲(第 0 首)封面已在 `covers.cache`:渲染右栏时
-    /// 应按封面区尺寸提前编码该曲协议(`encode_pending` 落一条),使 drill 进 tracks 瞬间
-    /// 直接命中 kitty、不闪 hash→halfblock。歌单本身无封面(程序化占位、不编码),故
-    /// pending 里唯一的条目就是入口曲封面——反证预热的正是入口曲。
+    /// Playlists 视图悬停选中歌单、入口曲图片已解码时，渲染右栏应按封面区尺寸提前准备
+    /// 该曲的终端图片，使 drill 进 tracks 后能直接命中。
     #[test]
     fn playlist_detail_prewarms_entry_track_cover() -> color_eyre::Result<()> {
         let (mut app, _tasks) = app_with_playlists_probed()?;
@@ -139,11 +135,11 @@ mod tests {
         app.state.browse.nav.playlist.set_sel(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.covers.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert(&url, Arc::new(img));
 
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         assert!(
-            app.state.covers.encode_pending.borrow().is_empty(),
+            app.state.images.encode_pending.borrow().is_empty(),
             "前置:尚未渲染,encode_pending 为空"
         );
         let p = app
@@ -156,15 +152,14 @@ mod tests {
                 Rect::new(0, 0, 40, 20),
                 p,
                 &app.state,
-                &app.picker,
                 &app.theme,
                 /*cover_in_flight*/ false,
             );
         })?;
 
-        let pending = app.state.covers.encode_pending.borrow();
+        let pending = app.state.images.encode_pending.borrow();
         assert!(
-            pending.iter().any(|(u, _)| u == &url),
+            pending.iter().any(|key| key.matches_url(&url)),
             "入口曲封面应被按封面区尺寸提前编码(encode_pending 应含其 URL)"
         );
         Ok(())

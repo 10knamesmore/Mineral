@@ -12,27 +12,24 @@ use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
-use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单 tracks + 选中歌本地完整播放次数三路 prefetch,
-/// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover::collage`])。
-pub fn tick(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
-    request_covers(state, covers);
+/// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::image::collage`])。
+pub fn tick(state: &mut AppState, client: &dyn Client) {
+    request_covers(state);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
-    request_detail(state, client, covers);
-    request_detail_selected_cover(state, covers);
-    crate::runtime::cover::collage::tick(state, covers);
+    request_detail(state, client);
+    request_detail_selected_cover(state);
+    crate::image::collage::tick(state);
 }
 
 /// 看 view 决定的 sel 周围 `prefetch.radius` 内未 cache / pending 的封面,
-/// sel 优先 → 外扩 提交给 client 端 fetcher。来源随封面一起带出(决定落盘子目录)。
-fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
+/// sel 优先 → 外扩提交 source warm。来源随封面一起带出，决定落盘子目录。
+fn request_covers(state: &mut AppState) {
     let items = collect_pending_covers(state);
-    for (source, url) in items {
-        ensure_cover(state, covers, source, url);
-    }
+    state.images.prefetch(items);
 }
 
 /// 收集未 cache、未 pending 的 `(来源, 封面 URL)`,两条轴:浏览选中 sel ± `prefetch.radius`
@@ -43,17 +40,9 @@ fn request_covers(state: &mut AppState, covers: &CoverFetcher) {
 fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     let radius = *state.cfg.tui().prefetch().radius();
     let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
-    // 浏览窗口邻居预取按封面内存预算收窄,避免预算装不下整窗时的逐出↔重取 thrash。
-    // sel(下方 push_if_new(get(sel)))与 playback 封面不受此约束、恒预取。
-    let eff_radius = effective_cover_radius(
-        radius,
-        *state.cfg.tui().cover().cache().image(),
-        *state.cfg.tui().cover().max_dim(),
-        playback_radius,
-    );
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
-    let cache = &state.covers.cache;
-    let pending = &state.covers.pending;
+    let cache = &state.images.cache;
+    let pending = &state.images.pending;
     let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
                        out: &mut Vec<(SourceKind, MediaUrl)>| {
         if let Some((source, u)) = item
@@ -78,7 +67,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 })
             };
             push_if_new(get(sel), &mut out);
-            for d in 1..=eff_radius {
+            for d in 1..=radius {
                 if let Some(idx) = sel.checked_sub(d) {
                     push_if_new(get(idx), &mut out);
                 }
@@ -86,7 +75,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             }
             // 暖入口曲封面:drill 进选中歌单默认落到第 0 首,其封面在 Library 视图才首次
             // 显示;此前从不预取(上面只取歌单封面),首次 drill 该曲封面是冷的、逐帧闪
-            // hash→halfblock→image。悬停期(曲目已加载)就把它拉进 cache,配合渲染侧 prewarm
+            // 随机封面→halfblock→终端图片。悬停期(曲目已加载)就把它拉进 cache，配合渲染侧 prepare
             // 让 drill 瞬间直接命中 kitty。只暖第 0 首:remembered-pos / deep-hit 的少数入口退化。
             if let Some(first) = filtered
                 .get(sel)
@@ -112,7 +101,7 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 })
             };
             push_if_new(get(sel), &mut out);
-            for d in 1..=eff_radius {
+            for d in 1..=radius {
                 if let Some(idx) = sel.checked_sub(d) {
                     push_if_new(get(idx), &mut out);
                 }
@@ -145,62 +134,6 @@ fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
 /// 从一首歌取 `(来源, 封面 URL)`;无封面返回 `None`。来源由 id namespace 派生。
 fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
     s.cover_url.as_ref().map(|u| (s.id.namespace(), u))
-}
-
-/// 封面预取的有效半径:取"配置半径"与"预算能留住的半径"的小者。
-///
-/// 封面内存缓存有字节上限(`tui.cover.cache.image`);若预取窗口 `sel ± radius` 装不下,拉进来的
-/// 图会被 LRU 立刻逐出、下 tick 又因"不在 cache"被重取,陷入逐出↔重解码的 livelock(CPU 打满、
-/// 可见图在真图/占位间闪)。故按预算能容纳的封面数折算出半径上限,与配置半径取小者。
-///
-/// 选中项与 playback 封面在收集处**无条件**预取、不受此约束,故返回 0 也不会"一张都取不到"。
-///
-/// # Params:
-///   - `radius`: 配置的浏览预取半径(`prefetch.radius`)
-///   - `cover_memory`: 封面内存缓存字节预算(`tui.cover.cache.image`)
-///   - `max_dim`: 封面缩放后最大边(`cover.max_dim`),用于保守估单张字节
-///   - `playback_radius`: 在播队列预取半径(`prefetch.playback_cover_radius`),预留其名额
-///
-/// # Return:
-///   收窄后的浏览窗口封面预取半径(可为 0)
-fn effective_cover_radius(
-    radius: usize,
-    cover_memory: u64,
-    max_dim: u32,
-    playback_radius: usize,
-) -> usize {
-    // 保守估:方图 max_dim² × RGB(3)。实际多为长边=max_dim 的非方图、字节更小,故此估偏大 →
-    // 折算半径偏保守(宁可少取,不冒 thrash 险)。
-    let per_cover = u64::from(max_dim)
-        .saturating_mul(u64::from(max_dim))
-        .saturating_mul(3)
-        .max(1);
-    let capacity = cover_memory / per_cover;
-    // 先扣掉必显名额:选中项(1)+ 在播曲 ± playback_radius(2·r+1),剩下的才分给浏览窗口两侧邻居。
-    let reserve = u64::try_from(playback_radius)
-        .unwrap_or(u64::MAX)
-        .saturating_mul(2)
-        .saturating_add(2);
-    let neighbor_budget = capacity.saturating_sub(reserve);
-    // 窗口两侧共 2·radius 张邻居,故预算半径 = neighbor_budget / 2。
-    let budget_radius = usize::try_from(neighbor_budget / 2).unwrap_or(usize::MAX);
-    radius.min(budget_radius)
-}
-
-/// 把 `url` 标 pending 并丢给 [`CoverFetcher`];已 cache 或已 pending 时直接返回。
-/// `source` 随请求带给 fetcher(决定缓存落盘子目录)。
-pub(crate) fn ensure_cover(
-    state: &mut AppState,
-    covers: &CoverFetcher,
-    source: SourceKind,
-    url: MediaUrl,
-) {
-    if state.covers.cache.contains_key(&url) || state.covers.pending.contains(&url) {
-        return;
-    }
-    state.covers.pending.insert(url.clone());
-    mineral_log::debug!(target: "prefetch", url = %url, source = ?source, "request cover");
-    covers.request(source, url);
 }
 
 /// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
@@ -248,11 +181,11 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
 }
 
 /// search 布局态下，结果列/详情光标停留超防抖窗后，给当前 detail 栈顶帧补拉列表/详情
-/// （Background 优先级），并把该实体封面搭车投给 fetcher。
+/// （Background 优先级），并把该实体封面搭车投给图片引擎。
 ///
 /// 同帧只派一次（`DetailFrame.requested`）；移光标 / 下钻换新帧后可再派——失败的帧换走
 /// 再回即重试（驻留窗口重新触发），与 spec「预览失败驻留重试」一致。布局态未开则不派。
-fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetcher) {
+fn request_detail(state: &mut AppState, client: &dyn Client) {
     if !state.channel_search.active.on() {
         return;
     }
@@ -286,16 +219,16 @@ fn request_detail(state: &mut AppState, client: &dyn Client, covers: &CoverFetch
     mineral_log::debug!(target: "prefetch", ?source, key = %fetch.dedup_key(), "request detail");
     submit_detail_tasks(client, fetch);
     if let Some(url) = cover {
-        ensure_cover(state, covers, source, url);
+        state.images.prefetch([(source, url)]);
     }
 }
 
-/// search 布局态下，给当前 detail 帧列表选中项的封面搭车投 fetcher（artist 帧右栏副头图用）。
+/// search 布局态下，给当前 detail 帧列表选中项的封面搭车投图片引擎（artist 帧右栏副头图用）。
 ///
 /// 与 detail fetch 去重解耦：选中项随 `[ ]` 切区 / 光标移动而变，每 tick 看一眼，靠
-/// [`ensure_cover`] 的 cache/pending 去重兜重复。沿用 detail 驻留防抖窗，避免快速翻列表时
-/// 给 fetcher 灌一堆滚过即弃的图；不投则右栏副头图永远停在程序化占位。
-fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
+/// 图片引擎的 cache/pending 去重兜重复。沿用 detail 驻留防抖窗，避免快速翻列表时
+/// 给下载队列灌一堆滚过即弃的图；不投则右栏副头图会一直显示随机封面。
+fn request_detail_selected_cover(state: &mut AppState) {
     if !state.channel_search.active.on() {
         return;
     }
@@ -304,7 +237,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
     if state.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
-    // 先取出 (source, url) 再释放 channel_search 借用，避免与 ensure_cover 的 &mut 冲突。
+    // 先取出 (source, url) 再释放 channel_search 借用，避免与图片引擎的 &mut 冲突。
     // 来源用所在 artist 帧的 fetch source（选中歌/专辑与 artist 同 channel，落盘子目录一致）。
     let intent = {
         let Some(kr) = state.channel_search.active_results() else {
@@ -319,7 +252,7 @@ fn request_detail_selected_cover(state: &mut AppState, covers: &CoverFetcher) {
         }
     };
     if let Some((source, url)) = intent {
-        ensure_cover(state, covers, source, url);
+        state.images.prefetch([(source, url)]);
     }
 }
 
@@ -632,36 +565,9 @@ mod tests {
         Ok(())
     }
 
-    /// 预算充裕:128MB ÷ (384²×3) ≈ 303 张,远超半径 64 的窗口 → 不收窄,行为不变。
-    #[test]
-    fn effective_radius_full_when_budget_ample() {
-        assert_eq!(
-            super::effective_cover_radius(
-                /*radius*/ 64,
-                /*cover_memory*/ 128 * 1024 * 1024,
-                /*max_dim*/ 384,
-                /*playback_radius*/ 3,
-            ),
-            64
-        );
-    }
-
-    /// 预算偏紧:16MB ≈ 37 张,装不下 ±64 窗口 → 收窄到 (0, 64) 之间,消除 thrash。
-    #[test]
-    fn effective_radius_shrinks_when_budget_tight() {
-        let r = super::effective_cover_radius(64, 16 * 1024 * 1024, 384, 3);
-        assert!(r > 0 && r < 64, "应收窄到 (0,64),实得 {r}");
-    }
-
-    /// 病态预算:1 字节 → 邻居半径归 0(选中项与 playback 封面在收集处无条件预取,不受此约束)。
-    #[test]
-    fn effective_radius_zero_at_pathological_budget() {
-        assert_eq!(super::effective_cover_radius(64, 1, 384, 3), 0);
-    }
-
     /// Playlists 视图悬停选中歌单、其曲目已加载:入口曲(第 0 首)封面应进 prefetch 集合。
     /// 根因修复——Playlists 视图此前只预取歌单封面,不预取曲目封面,导致首次 drill 进 tracks
-    /// 时该曲封面是冷的、逐帧闪 hash→halfblock→image。悬停期先把入口曲封面暖进 cache。
+    /// 时该曲封面是冷的；悬停期先把入口曲封面暖进 cache。
     #[test]
     fn collects_selected_playlist_entry_track_cover() -> color_eyre::Result<()> {
         use mineral_model::{Playlist, PlaylistId};
@@ -740,11 +646,10 @@ mod tests {
         Ok(state)
     }
 
-    /// 录提交任务的 client + disabled fetcher，驱动一次 request_detail，返回提交的任务。
+    /// 录提交任务的 client，驱动一次 request_detail，返回提交的任务。
     fn drive_detail(state: &mut AppState) -> color_eyre::Result<Vec<mineral_task::TaskKind>> {
         use std::sync::{Arc, Mutex};
 
-        use crate::runtime::cover::fetch::CoverFetcher;
         use crate::test_support::TestClient;
 
         let submitted = Arc::new(Mutex::new(Vec::new()));
@@ -752,7 +657,7 @@ mod tests {
             submitted: Arc::clone(&submitted),
             ..TestClient::default()
         };
-        super::request_detail(state, &client, &CoverFetcher::disabled());
+        super::request_detail(state, &client);
         let tasks = submitted
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?

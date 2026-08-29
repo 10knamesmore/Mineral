@@ -533,7 +533,7 @@ pub struct DetailStack {
     transition: Transition,
 
     /// 过渡中的「出发帧」+ 方向（`true` = push 右入、`false` = pop 左入）；settled 后清空。
-    /// 滑动期离屏合成此帧与当前帧，头图走程序化占位（不上 kitty 真图）。
+    /// 滑动期离屏合成此帧与当前帧，头图使用 halfblock。
     sweep_from: Option<(Box<DetailFrame>, bool)>,
 }
 

@@ -125,7 +125,7 @@ impl<'a> WaveformCtx<'a> {
     /// 归属校验;已播段在 `cover_color` 开且当前曲封面取色就绪时沿整条色带逐列渐变
     /// (与频谱同一份 kmeans 产物、同一空间语义),否则回落主题 accent_2 单色。
     ///
-    /// 色板取自 [`crate::runtime::state::covers::CoverHub::current_palette`](随封面身份变化的
+    /// 色板取自 [`crate::image::ImageEngine::current_palette`](随封面身份变化的
     /// 稳定拷贝)而非原图 LRU 派生的 `palettes`——后者被 browse 滚动 churn 逐出又重取,
     /// 直接读会让渐变在 Gradient↔Solid 间闪烁。
     ///
@@ -139,7 +139,7 @@ impl<'a> WaveformCtx<'a> {
         let cfg = state.cfg.tui().waveform();
         let played = if *cfg.cover_color() {
             state
-                .covers
+                .images
                 .current_palette
                 .as_ref()
                 .map_or(PlayedStyle::Solid(theme.accent_2), PlayedStyle::Gradient)

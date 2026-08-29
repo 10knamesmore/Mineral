@@ -1,5 +1,5 @@
 //! 封面色的消费协调:当前播放封面的色板就绪后,同时驱动频谱色场过渡、
-//! waveform 的在播色板(`covers.current_palette`)与动态 accent 渐变
+//! waveform 的在播色板(`images.current_palette`)与动态 accent 渐变
 //! (共用同一次封面身份 diff,过渡时长各自独立)。
 //!
 //! 身份判定(`cover_url` 变化、色带是否就绪)全在 app 层;频谱与 accent 状态机
@@ -7,17 +7,17 @@
 
 use std::sync::Arc;
 
-use crate::runtime::cover::colors::derive_accents;
+use crate::image::colors::derive_accents;
 
 impl crate::app::App {
     /// 协调当前播放封面的配色消费:新封面取色就绪则从**当前可见配色**缓动过去,
     /// 否则保持现状。频谱走 `begin_cover_transition` / `clear_cover`,waveform 现读
-    /// `covers.current_palette`,动态 accent 走 `accent_fade.set_target`、全屏氛围背景
+    /// `images.current_palette`，动态 accent 走 `accent_fade.set_target`、全屏氛围背景
     /// 走 `ambient.set_target`(两者关闭时恒投 `None`)。
     ///
     /// - 当前封面与 `spectrum_cover` 一致 → 不动。
     /// - 当前封面变了 + 色带已就绪 → 频谱过渡 + accent / 氛围渐变到封面色,记下 key。
-    /// - 当前封面变了 + 图已到但**取色失败**(在 `covers.cache` 却不在 `covers.palettes`)
+    /// - 当前封面变了 + 图已到但取色失败(在图片缓存却不在色板缓存)
     ///   → 频谱回退 hue、accent / 氛围渐变回 base,标记已处理。
     /// - 当前封面变了 + 图还在抓 → **保持当前可见态**(上一张封面继续显示),下个 tick 再看。
     ///   这是"红专辑换蓝专辑 → 红→蓝"的关键:抓图途中不回退,等蓝就绪直接红→蓝。
@@ -30,19 +30,19 @@ impl crate::app::App {
             .as_ref()
             .and_then(|s| s.cover_url.clone());
         let Some(url) = cur else {
-            if self.state.covers.spectrum_cover.is_some() {
+            if self.state.images.spectrum_cover.is_some() {
                 self.state.spectrum.clear_cover();
                 self.accent_fade.set_target(/*to*/ None, &self.theme_base);
                 self.feed_ambient(/*palette*/ None);
-                self.state.covers.spectrum_cover = None;
-                self.state.covers.current_palette = None;
+                self.state.images.spectrum_cover = None;
+                self.state.images.current_palette = None;
             }
             return;
         };
-        if self.state.covers.spectrum_cover.as_ref() == Some(&url) {
+        if self.state.images.spectrum_cover.as_ref() == Some(&url) {
             return;
         }
-        if let Some(palette) = self.state.covers.palettes.get(&url).cloned() {
+        if let Some(palette) = self.state.images.palettes.get(&url).cloned() {
             let accents = self
                 .dynamic_accent_enabled()
                 .then(|| derive_accents(&palette));
@@ -51,15 +51,15 @@ impl crate::app::App {
             self.state
                 .spectrum
                 .begin_cover_transition(palette.clone(), &self.theme);
-            self.state.covers.spectrum_cover = Some(url);
-            self.state.covers.current_palette = Some(palette);
-        } else if self.state.covers.cache.contains_key(&url) {
+            self.state.images.spectrum_cover = Some(url);
+            self.state.images.current_palette = Some(palette);
+        } else if self.state.images.cache.contains_key(&url) {
             // 图已回但无色板 = 取色失败:回退,标记已处理(不再每帧重试)。
             self.state.spectrum.clear_cover();
             self.accent_fade.set_target(/*to*/ None, &self.theme_base);
             self.feed_ambient(/*palette*/ None);
-            self.state.covers.spectrum_cover = Some(url);
-            self.state.covers.current_palette = None;
+            self.state.images.spectrum_cover = Some(url);
+            self.state.images.current_palette = None;
         }
         // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
     }
@@ -108,8 +108,8 @@ mod tests {
     use mineral_model::MediaUrl;
     use ratatui::style::Color;
 
+    use crate::image::colors::derive_accents;
     use crate::render::palette::{CoverPalette, Rgb};
-    use crate::runtime::cover::colors::derive_accents;
     use crate::test_support::app_with_queue;
 
     /// 造一个非空测试色板。
@@ -128,11 +128,11 @@ mod tests {
         if let Some(song) = app.state.player.current.as_mut() {
             song.cover_url = Some(blue);
         }
-        app.state.covers.spectrum_cover = Some(red.clone());
+        app.state.images.spectrum_cover = Some(red.clone());
         // blue 的色板 / 图都还没到 —— sync 应原地保持(不清、不抢先标记)。
         app.sync_cover_palette();
         assert_eq!(
-            app.state.covers.spectrum_cover.as_ref(),
+            app.state.images.spectrum_cover.as_ref(),
             Some(&red),
             "抓图途中应保持上一张封面"
         );
@@ -148,15 +148,15 @@ mod tests {
             song.cover_url = Some(blue.clone());
         }
         let pal = palette(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])?;
-        app.state.covers.palettes.insert(blue.clone(), pal);
+        app.state.images.palettes.insert(blue.clone(), pal);
         app.sync_cover_palette();
         assert_eq!(
-            app.state.covers.spectrum_cover.as_ref(),
+            app.state.images.spectrum_cover.as_ref(),
             Some(&blue),
             "色板就绪应记下并触发过渡"
         );
         assert!(
-            app.state.covers.current_palette.is_some(),
+            app.state.images.current_palette.is_some(),
             "waveform 的在播色板应同步建立"
         );
         Ok(())
@@ -173,7 +173,7 @@ mod tests {
             song.cover_url = Some(blue.clone());
         }
         let pal = palette(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])?;
-        app.state.covers.palettes.insert(blue, pal.clone());
+        app.state.images.palettes.insert(blue, pal.clone());
         app.sync_cover_palette();
         // 默认 fade_ms 3000 / tick 16ms ≈ 188 拍,推 400 拍余量到程。
         for _ in 0..400 {
@@ -209,7 +209,7 @@ mod tests {
             song.cover_url = Some(blue.clone());
         }
         let pal = palette(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])?;
-        app.state.covers.palettes.insert(blue, pal.clone());
+        app.state.images.palettes.insert(blue, pal.clone());
         app.sync_cover_palette();
         for _ in 0..20 {
             app.tick_cover_fades();
@@ -235,7 +235,7 @@ mod tests {
             song.cover_url = Some(blue.clone());
         }
         let pal = palette(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])?;
-        app.state.covers.palettes.insert(blue, pal);
+        app.state.images.palettes.insert(blue, pal);
         app.sync_cover_palette();
         for _ in 0..400 {
             app.tick_cover_fades();
@@ -251,7 +251,7 @@ mod tests {
         }
         assert_eq!(app.theme.accent, base_accent, "无封面应渐变回 base accent");
         assert!(
-            app.state.covers.current_palette.is_none(),
+            app.state.images.current_palette.is_none(),
             "无封面时 waveform 的在播色板应清空"
         );
         Ok(())

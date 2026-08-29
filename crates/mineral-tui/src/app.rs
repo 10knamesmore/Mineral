@@ -14,19 +14,17 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use mineral_protocol::PlayerSync;
 use mineral_server::Client;
 use ratatui::layout::Position;
-use ratatui_image::picker::{Picker, ProtocolType};
 
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
 use crate::components::toast::download_toast::DownloadNotifier;
 use rustc_hash::FxHashMap;
 
 use crate::components::toast::notifications::Notifications;
+use crate::image::ImageEngine;
 use crate::player_actions::PlayMode;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
-use crate::runtime::cover::encode::CoverEncoder;
-use crate::runtime::cover::fetch::CoverFetcher;
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, PageKind};
 use crate::runtime::ui::prefs::UiPrefs;
@@ -35,12 +33,10 @@ use crate::tui::Tui;
 use crate::view::draw;
 
 mod channel_search;
-mod cover_colors;
 mod cover_transition;
 mod menus;
 mod nav;
 mod page;
-mod picker;
 mod push_events;
 mod queue_edit;
 mod spectrum_feed;
@@ -104,29 +100,11 @@ pub struct App {
     /// [`Client`] trait 抽象。**player 业务在 server 端**;App 只 forward 意图。
     pub(crate) client: Arc<dyn Client>,
 
-    /// Client 端 cover fetcher。封面是 client-local 资源,不归 server 管。
-    cover_fetcher: CoverFetcher,
-
-    /// Client 端 cover 编码器:把封面 resize + kitty 编码挪出渲染线程(worker 上跑),
-    /// `drain` 回填 `covers.protocols`。与 `cover_fetcher` 互补成完整异步封面管线。
-    cover_encoder: CoverEncoder,
-
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
     pub(crate) notifications: Notifications,
 
     /// 下载 → 通知层的翻译器(持下载专属去重状态);通知层之上的众多使用方之一。
     download_notifier: DownloadNotifier,
-
-    /// 终端图片协议能力(探测结果,可能被配置强制项 / zellij 降级改写协议类型)。
-    pub picker: Picker,
-
-    /// 启动探测协商出的原始协议类型。`picker` 的协议可被 `cover.protocol` 强制项改写,
-    /// 配置切回 `"auto"` 时凭它还原——**不能**重探(`from_query_stdio` 抢 stdin 吞按键)。
-    negotiated_protocol: ProtocolType,
-
-    /// 命中的图协议降级信号(启动探测一次,`None` = 无):auto 档据此落半块字符,
-    /// 强制档无视(逃生门)。信号判据见 `picker::graphics_fallback_signal`。
-    graphics_fallback: Option<&'static str>,
 
     /// 进 alternate screen 前捕获的终端光标位置,作为整屏 expand/collapse 的缩放锚点:
     /// expand 从此点铺开、collapse 收回此点(对得上 `LeaveAlternateScreen` 后光标实际
@@ -158,17 +136,14 @@ impl App {
     ///
     /// # Params:
     ///   - `client`: 跟 server 交互的句柄
-    ///   - `cover_fetcher`: client 端 cover fetcher
-    ///   - `picker`: 终端图片协议能力
+    ///   - `images`: 已完成 worker 与 terminal backend 接线的图片引擎
     ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
     ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
     ///   - `cfg`: 已加载的全局配置(`Arc` 共享只读)
     ///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档在此落进 state)
     pub fn new(
         client: Arc<dyn Client>,
-        cover_fetcher: CoverFetcher,
-        cover_encoder: CoverEncoder,
-        picker: Picker,
+        images: ImageEngine,
         launch_anchor: Option<Position>,
         cfg: Arc<mineral_config::Config>,
         ui_prefs: UiPrefs,
@@ -195,20 +170,16 @@ impl App {
             ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
         let window_title = WindowTitle::new(tui_cfg.window_title());
-        let mut state = AppState::new(cfg);
+        let mut state = AppState::new(cfg, images);
         // 各源能力声明:启动拉一次进镜像,UI 据此画入口(in-proc 即时;daemon 模式走 IPC)。
         state.caps = client.channel_caps().into_iter().collect();
-        // 把渲染处投递编码请求的发送端接到真实 worker(禁用态编码器是无接收端的 sender)。
-        state.covers.encode_tx = cover_encoder.sender();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.browse.lyric_view.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
         state.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();
         let notice_hint = Self::compose_notice_hint(&keymap);
-        let negotiated_protocol = picker.protocol_type();
-        let graphics_fallback = picker::graphics_fallback_signal();
-        let mut app = Self {
+        Self {
             should_quit: false,
             theme,
             theme_base,
@@ -224,22 +195,15 @@ impl App {
             stop_daemon_on_quit: false,
             last_tick: Instant::now(),
             client,
-            cover_fetcher,
-            cover_encoder,
             notifications,
             download_notifier: DownloadNotifier::new(),
-            picker,
-            negotiated_protocol,
-            graphics_fallback,
             launch_anchor,
             ui_prefs,
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
             window_title,
-        };
-        app.apply_cover_protocol();
-        app
+        }
     }
 
     /// 主循环帧间隔(现读配置 `animation.frame_tick_ms`,热更下一帧生效)。
@@ -327,8 +291,6 @@ impl App {
             }
 
             tui.draw(|f| draw(f, self))?;
-            // 帧已完整落盘,此刻直写的 kitty 图数据单元不会插进半帧输出。
-            self.flush_kitty_transmit(tui)?;
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {
@@ -350,21 +312,8 @@ impl App {
                 self.tick_overlays();
                 let sync = self.client.player_sync(self.state.player.versions);
                 self.apply_player_sync(sync);
-                self.state.covers.drain_ready_covers(&self.cover_fetcher);
-                self.sync_cover_palette();
-                self.tick_cover_fades();
-                self.sync_cover_transition();
-                let cover_cfg = self.state.cfg.tui().cover();
-                let sizes_per_image = *cover_cfg.cache().sizes_per_image();
-                let stream_transmit = *cover_cfg.kitty_transmit().enabled();
-                self.state.covers.drain_ready_protocols(
-                    &self.cover_encoder,
-                    sizes_per_image,
-                    stream_transmit,
-                );
-                crate::runtime::prefetch::tick(&mut self.state, &*self.client, &self.cover_fetcher);
+                self.tick_images();
                 self.state.tasks_snapshot = self.client.task_snapshot();
-                self.state.covers.loading = self.state.covers.pending.len();
                 // 每帧把下载进度喂进通知层(翻译成常驻进度 / 完成 flash),再推进所有通知动画。
                 let dp = self.client.download_progress();
                 self.download_notifier.feed(&mut self.notifications, &dp);
@@ -383,24 +332,19 @@ impl App {
         Ok(())
     }
 
-    /// 把 backlog 里待传的 kitty 封面图数据按预算写一批给终端(流式传输,消首显尖峰)。
-    ///
-    /// 在两次 draw 之间调用。写达终端**之后**才应用完成标记——放行渲染命中必须晚于
-    /// 图数据送达,占位符绝不指向终端还没收全的图。预算现读配置,热更下一帧生效;
-    /// 开关只拦「取出」(见 `drain_ready_protocols`),已入队的存量任务照常排空,
-    /// 否则关掉开关会把半途的图永远饿死在 backlog 里。
-    fn flush_kitty_transmit(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        let per_tick_kb = *self.state.cfg.tui().cover().kitty_transmit().per_tick_kb();
-        let budget = usize::try_from(per_tick_kb)
-            .unwrap_or(usize::MAX)
-            .saturating_mul(1024)
-            .max(1);
-        let Some(batch) = self.state.covers.drain_transmit(budget) else {
-            return Ok(());
-        };
-        tui.write_raw(batch.bytes.as_bytes())?;
-        self.state.covers.finish_transmitted(&batch.completed);
-        Ok(())
+    /// 推进图片引擎、图片相关预取与封面配色消费。
+    fn tick_images(&mut self) {
+        let current_cover = self
+            .state
+            .playback
+            .track
+            .as_ref()
+            .and_then(|track| track.cover_url.clone());
+        let fullscreen_stable = self.state.browse.fullscreen.at_max();
+        self.state.images.tick(current_cover, fullscreen_stable);
+        crate::runtime::prefetch::tick(&mut self.state, &*self.client);
+        self.sync_cover_palette();
+        self.tick_cover_fades();
     }
 
     /// 推进浮层动画一拍;并处理「全屏下居中浮层刚被移除」的封面残影。
@@ -409,16 +353,17 @@ impl App {
     /// 占位符打包在该行**最左 cell**、其余 cell `set_skip(true)`,而 ratatui 的 buffer diff
     /// 跳过未变 cell —— 浮层只盖了封面中段、没碰最左驱动 cell,关闭后那几行不会自行重发,
     /// 中段残留浮层底色(残影)。故在该居中浮层(退场动画放完)真正出栈的那一拍,清一次封面
-    /// 协议缓存:下一帧 `cover_image` 按需重建、重新 transmit + 全量 re-place,残影消除。
+    /// 终端图片缓存：下一帧由 [`crate::image::ImageEngine`] 按需重建、重新 transmit 并
+    /// 全量 re-place，消除残影。
     ///
     /// **仅对居中浮层做此事**:停靠浮层(queue 贴右)不压封面,清它纯属白白触发封面重新解码
-    /// / base64 编码(几十毫秒、卡掉一帧),故停靠浮层出栈不刷新。
+    /// / 终端协议编码(几十毫秒、卡掉一帧),故停靠浮层出栈不刷新。
     fn tick_overlays(&mut self) {
         let before = self.overlays.len();
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
         if self.state.browse.fullscreen.on() && closing_centered && self.overlays.len() < before {
-            self.state.covers.protocols.clear();
+            self.state.images.terminal_images.clear();
         }
     }
 
@@ -458,8 +403,8 @@ impl App {
             tracks_cached = s.library.tracks.len(),
             tracks_requested = s.library.tracks_requested.len(),
             lyrics_cached = s.library.lyrics.len(),
-            covers_cached = s.covers.cache.len(),
-            covers_pending = s.covers.pending.len(),
+            covers_cached = s.images.cache.len(),
+            covers_pending = s.images.loading_count(),
             liked,
             queue_len = s.player.queue.len(),
             "client status"
@@ -514,7 +459,7 @@ impl App {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
             Event::Resize(..) => {
-                self.refresh_picker_font();
+                self.state.images.refresh_cell_pixels();
                 self.report_terminal_state();
             }
             Event::FocusGained => self.set_focus(/*focused*/ true),
@@ -798,7 +743,7 @@ mod tests {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
     }
 
-    /// 回归:全屏下关闭居中浮层(quit 确认)后,封面协议缓存被清空 —— 据此下一帧重建并全量
+    /// 回归：全屏下关闭居中浮层(quit 确认)后，终端图片缓存被清空，据此下一帧重建并全量
     /// re-place,消除「居中浮层压过封面中段、关闭后 kitty 行不自重发」留下的残影。
     #[test]
     fn fullscreen_overlay_close_clears_cover_protocol() -> color_eyre::Result<()> {
@@ -809,30 +754,21 @@ mod tests {
         let mut app = app_in_fullscreen()?;
         assert!(app.state.browse.fullscreen.on(), "前置:已稳态进入全屏");
 
-        // 模拟封面已渲染:塞一个协议缓存条目。
+        // 模拟封面已渲染：塞一个终端图片缓存条目。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
-        let proto = app.picker.new_resize_protocol(img);
-        app.state.covers.protocols.insert(
-            &url,
-            (10, 10),
-            proto,
-            /*bytes*/ 0,
-            /*sizes_per_image*/ 3,
-            /*awaiting_transmit*/ false,
-        );
+        app.state.images.insert_test_terminal_image(&url, (10, 10));
         assert!(
-            !app.state.covers.protocols.is_empty(),
+            !app.state.images.terminal_images.is_empty(),
             "前置:封面协议条目已就位"
         );
 
-        // 开一个居中浮层(quit 确认)并推满进场动画。开着的全程 len 不减,协议缓存不应被动。
+        // 开一个居中浮层并推满进场动画；浮层尚未出栈时终端图片缓存不应被清空。
         app.overlays.push(super::OverlayKind::confirm());
         for _ in 0..40 {
             app.tick_overlays();
         }
         assert!(
-            !app.state.covers.protocols.is_empty(),
+            !app.state.images.terminal_images.is_empty(),
             "浮层开着时(未出栈)不应清空封面协议"
         );
 
@@ -842,14 +778,14 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            app.state.covers.protocols.is_empty(),
+            app.state.images.terminal_images.is_empty(),
             "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
         );
         Ok(())
     }
 
     /// 回归:全屏下关闭**停靠**浮层(queue,贴右不碰封面)**不应**清空封面协议 —— 清了会白白
-    /// 触发封面重新解码 / base64 编码,造成关闭动画途中全局卡顿。
+    /// 触发封面重新解码 / 终端协议编码,造成关闭动画途中全局卡顿。
     #[test]
     fn fullscreen_queue_close_keeps_cover_protocol() -> color_eyre::Result<()> {
         use mineral_model::MediaUrl;
@@ -859,16 +795,7 @@ mod tests {
         let mut app = app_in_fullscreen()?;
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(32, 32));
-        let proto = app.picker.new_resize_protocol(img);
-        app.state.covers.protocols.insert(
-            &url,
-            (10, 10),
-            proto,
-            /*bytes*/ 0,
-            /*sizes_per_image*/ 3,
-            /*awaiting_transmit*/ false,
-        );
+        app.state.images.insert_test_terminal_image(&url, (10, 10));
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
         app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));
@@ -881,7 +808,7 @@ mod tests {
         }
 
         assert!(
-            !app.state.covers.protocols.is_empty(),
+            !app.state.images.terminal_images.is_empty(),
             "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
         );
         Ok(())

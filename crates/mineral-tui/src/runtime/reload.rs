@@ -31,6 +31,7 @@ impl crate::app::App {
         self.state.clear_local_play_counts();
         self.state.cfg = cfg;
         let cfg = Arc::clone(&self.state.cfg);
+        self.state.images.apply_config(Arc::clone(&cfg));
         let tui_cfg = cfg.tui();
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
@@ -48,11 +49,11 @@ impl crate::app::App {
             ));
         let accent_target = (*dynamic.enabled()).then(|| {
             self.state
-                .covers
+                .images
                 .spectrum_cover
                 .as_ref()
-                .and_then(|url| self.state.covers.palettes.get(url))
-                .map(crate::runtime::cover::colors::derive_accents)
+                .and_then(|url| self.state.images.palettes.get(url))
+                .map(crate::image::colors::derive_accents)
         });
         self.accent_fade
             .set_target(accent_target.flatten(), &self.theme_base);
@@ -64,12 +65,12 @@ impl crate::app::App {
             crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
-        let ambient_palette = self.state.covers.current_palette.clone();
+        let ambient_palette = self.state.images.current_palette.clone();
         self.feed_ambient(ambient_palette.as_ref());
         // 固化型(携带运行态):响度包络只重设时间基准,包络值 / 峰值跟踪保留不跳。
         self.ambient_pulse.retempo(tick_ms);
         // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
-        if let Some(active) = self.state.covers.transition.as_mut() {
+        if let Some(active) = self.state.images.transition.as_mut() {
             active.anim.retempo(crate::render::anim::ticks16_from_ms(
                 *tui_cfg.cover_transition().duration_ms(),
                 tick_ms,
@@ -113,12 +114,6 @@ impl crate::app::App {
         if self.state.fft.params() != &params {
             self.state.fft = mineral_spectrum::SpectrumComputer::new(params);
         }
-        self.state.covers.set_budgets(
-            *tui_cfg.cover().cache().image(),
-            *tui_cfg.cover().cache().protocol(),
-        );
-        // 固化型(改写 picker):封面终端图协议强制项;协议变了其内部清协议缓存逼全量重编。
-        self.apply_cover_protocol();
     }
 
     /// 消费一帧 daemon 推送的有效配置树:落型成功即应用;失败(版本偏斜等,
@@ -349,47 +344,43 @@ mod tests {
         Ok(())
     }
 
-    /// 封面终端图协议强制项热更:强制档改写 picker 并清协议缓存(逼全量重编码),
-    /// 切回 auto 还原启动协商结果。
+    /// 图协议配置热更：替换 terminal backend 并清空终端图片缓存，切回 auto 时恢复
+    /// 启动协商结果。
     #[test]
     fn pushed_config_forces_cover_protocol() -> color_eyre::Result<()> {
         use mineral_model::MediaUrl;
-        use ratatui_image::picker::ProtocolType;
+
+        use crate::image::GraphicsProtocol;
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let negotiated = app.picker.protocol_type();
-        assert_ne!(negotiated, ProtocolType::Kitty, "前置:测试 picker 非 kitty");
-        // 塞一个协议缓存条目,验证协议切换会清缓存。
-        let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 16));
-        let proto = app.picker.new_resize_protocol(img);
-        app.state.covers.protocols.insert(
-            &url,
-            (10, 10),
-            proto,
-            /*bytes*/ 0,
-            /*sizes_per_image*/ 3,
-            /*awaiting_transmit*/ false,
+        let negotiated = app.state.images.graphics_protocol();
+        assert_ne!(
+            negotiated,
+            GraphicsProtocol::Sixel,
+            "前置:测试 terminal backend 非 sixel"
         );
+        // 塞一个终端图片条目，验证 backend 替换会清缓存。
+        let url = MediaUrl::remote("https://x.y/c.jpg")?;
+        app.state.images.insert_test_terminal_image(&url, (10, 10));
 
         app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "cover": { "protocol": "kitty" } } }),
+            serde_json::json!({ "tui": { "cover": { "protocol": "sixel" } } }),
         )?);
         assert_eq!(
-            app.picker.protocol_type(),
-            ProtocolType::Kitty,
-            "强制档改写 picker"
+            app.state.images.graphics_protocol(),
+            GraphicsProtocol::Sixel,
+            "强制档替换 terminal backend"
         );
         assert!(
-            app.state.covers.protocols.is_empty(),
-            "协议切换应清协议缓存逼重编"
+            app.state.images.terminal_images.is_empty(),
+            "backend 替换应清终端图片缓存"
         );
 
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "cover": { "protocol": "auto" } } }),
         )?);
         assert_eq!(
-            app.picker.protocol_type(),
+            app.state.images.graphics_protocol(),
             negotiated,
             "切回 auto 还原启动协商结果(不重探)"
         );
@@ -560,7 +551,7 @@ mod tests {
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.covers.palettes.insert(url, palette);
+        app.state.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..400 {
             app.tick_cover_fades();
@@ -595,7 +586,7 @@ mod tests {
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.covers.palettes.insert(url, palette);
+        app.state.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..20 {
             app.tick_cover_fades();
@@ -624,7 +615,7 @@ mod tests {
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.covers.palettes.insert(url, palette);
+        app.state.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         Ok(app)
     }
@@ -761,7 +752,7 @@ mod tests {
         for _ in 0..5 {
             anim.tick();
         }
-        app.state.covers.transition = Some(CoverTransition {
+        app.state.images.transition = Some(CoverTransition {
             from_url: MediaUrl::remote("https://x.y/a.jpg")?,
             to_url: MediaUrl::remote("https://x.y/b.jpg")?,
             anim,
@@ -772,7 +763,7 @@ mod tests {
         )?);
         let active = app
             .state
-            .covers
+            .images
             .transition
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("在途转场不应被热更清掉"))?;
@@ -792,13 +783,13 @@ mod tests {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let url = mineral_model::MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8));
-        let evicted = app.state.covers.cache.insert(&url, Arc::new(img));
+        let evicted = app.state.images.cache.insert(&url, Arc::new(img));
         assert!(evicted.is_empty(), "预算内不逐出");
-        assert_eq!(app.state.covers.cache.len(), 1, "前置:已缓存一张");
+        assert_eq!(app.state.images.cache.len(), 1, "前置:已缓存一张");
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "cover": { "cache": { "image": 0 } } } }),
         )?);
-        assert_eq!(app.state.covers.cache.len(), 0, "预算缩到 0 应立即逐出");
+        assert_eq!(app.state.images.cache.len(), 0, "预算缩到 0 应立即逐出");
         Ok(())
     }
 

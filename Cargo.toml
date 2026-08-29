@@ -51,9 +51,10 @@ derive_setters     = "0.1"
 futures-util       = "0.3"
 hex                = "0.4"
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+icy_sixel          = "0.1.3"
 isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
-nix                = { version = "0.29", features = ["signal"] }
+nix                = { version = "0.29", features = ["fs", "mman", "poll", "signal"] }
 lofty              = "0.22"
 mlua               = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 mineral-audio           = { path = "crates/mineral-audio" }
@@ -103,7 +104,6 @@ rustc-hash         = "2"
 unicode-width      = "0.2"
 comfy-table        = "7"
 ratatui            = "0.29"
-ratatui-image      = "8.0"
 rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac", "wav"] }
 stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

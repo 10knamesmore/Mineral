@@ -17,8 +17,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
+use crate::image::colors::lerp_lab;
 use crate::render::palette::{CoverPalette, Rgb};
-use crate::runtime::cover::colors::lerp_lab;
 
 /// 氛围渐变状态机:从「切换那刻的可见锚点色」在 Lab 空间过渡到目标色板。
 ///
@@ -528,8 +528,8 @@ mod tests {
     use ratatui::style::{Color, Style};
 
     use super::{AmbientGradient, LoudnessPulse, render, rgb_of, rotated_pos};
+    use crate::image::colors::lerp_lab;
     use crate::render::palette::{CoverPalette, Rgb};
-    use crate::runtime::cover::colors::lerp_lab;
 
     /// 测试底色(mocha base 同值,便于人查)。
     const BASE: Rgb = Rgb {

@@ -1,8 +1,8 @@
 //! Search detail 面板：实体详情栈顶帧的页头式渲染——左正方头图 + 右元数据，其下曲目/
 //! 专辑列表；artist 帧多一行热门曲/专辑双区 Tab。数据未到画占位骨架。
 //!
-//! 稳态直接画在主帧（头图走 covers 管线的真图）；下钻/返回滑动期，出发帧与目标帧各渲染到
-//! 离屏 Buffer（头图走程序化占位、不上 kitty 真图，根治图像穿透），再按 sweep 进度列合成。
+//! 稳态直接画在主帧；下钻/返回滑动期，出发帧与目标帧各渲染到离屏 Buffer，图片统一
+//! 使用 halfblock，再按 sweep 进度逐列合成。
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -10,7 +10,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
-use ratatui_image::picker::Picker;
 
 mod body;
 mod description;
@@ -20,10 +19,10 @@ mod sweep;
 mod title;
 mod track_table;
 
-use crate::components::layout::shared::cover_image;
+use crate::image::{ImageContent, ImageRenderPhase};
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
+use crate::runtime::state::{AppState, DetailData, DetailFrame, EntityRef};
 
 use self::body::draw_body;
 use self::meta::{album_card_lines, artist_counts, with_commas};
@@ -52,7 +51,6 @@ pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
     state: &AppState,
-    picker: &Picker,
     theme: &Theme,
     border_focused: bool,
     cover_in_flight: bool,
@@ -111,7 +109,6 @@ pub fn draw(
                 inner,
                 dframe,
                 state,
-                picker,
                 theme,
                 kr.detail.depth() > 0,
                 cover_in_flight,
@@ -137,14 +134,13 @@ pub(crate) fn header_cover_area(area: Rect, is_artist: bool) -> Option<Rect> {
     (cover_a.width > 0).then_some(cover_a)
 }
 
-/// 稳态一帧：头图走 covers 管线真图，元数据 + 列表画主帧。
+/// 稳态一帧：头图走图片引擎，元数据与列表画主帧。
 #[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
 fn draw_frame_real(
     frame: &mut Frame<'_>,
     inner: Rect,
     dframe: &DetailFrame,
     state: &AppState,
-    picker: &Picker,
     theme: &Theme,
     show_back: bool,
     cover_in_flight: bool,
@@ -153,27 +149,25 @@ fn draw_frame_real(
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
     if !cover_in_flight {
-        cover_image::render_or_fallback(
-            frame,
+        state.images.render(
+            ImageContent::Display {
+                url: dframe.entity.cover(),
+            },
             cover_a,
-            dframe.entity.cover(),
-            state,
-            picker,
+            frame.buffer_mut(),
+            state.image_render_phase(),
             theme,
-            header_seed(&dframe.entity),
         );
     }
     // artist 帧右栏:当前列表选中项封面(随 [ ] 切区 / 光标移动;图未到 / 滚动期走占位)。
     if let Some(right_a) = right_a {
         let sel_cover = dframe.selected_cover();
-        cover_image::render_or_fallback(
-            frame,
+        state.images.render(
+            ImageContent::Display { url: sel_cover },
             right_a,
-            sel_cover,
-            state,
-            picker,
+            frame.buffer_mut(),
+            state.image_render_phase(),
             theme,
-            selected_seed(dframe),
         );
     }
     let buf = frame.buffer_mut();
@@ -183,7 +177,7 @@ fn draw_frame_real(
     draw_body(buf, body, dframe, state, theme, advancing(state));
 }
 
-/// 把一帧渲染到（离屏）Buffer：头图走程序化占位（滑动期不上真图），元数据 + 列表照画。
+/// 把一帧渲染到离屏 Buffer：真实头图走 halfblock，缺图时走随机封面。
 fn render_frame_to(
     buf: &mut Buffer,
     inner: Rect,
@@ -196,23 +190,25 @@ fn render_frame_to(
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let (cover_a, meta_a, right_a) = split_head(head, is_artist);
     if cover_a.width > 0 && !cover_in_flight {
-        cover_image::render_morph_to(
-            buf,
+        state.images.render(
+            ImageContent::Display {
+                url: dframe.entity.cover(),
+            },
             cover_a,
-            dframe.entity.cover(),
-            state,
+            buf,
+            ImageRenderPhase::Offscreen,
             theme,
-            header_seed(&dframe.entity),
         );
     }
     if let Some(right_a) = right_a {
-        cover_image::render_morph_to(
-            buf,
+        state.images.render(
+            ImageContent::Display {
+                url: dframe.selected_cover(),
+            },
             right_a,
-            dframe.selected_cover(),
-            state,
+            buf,
+            ImageRenderPhase::Offscreen,
             theme,
-            selected_seed(dframe),
         );
     }
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
@@ -339,42 +335,6 @@ fn split_head(head: Rect, with_right: bool) -> (Rect, Rect, Option<Rect>) {
     }
 }
 
-/// artist 帧当前 section 选中项的 fallback seed（歌用所属专辑名、专辑用专辑名）；
-/// 非 artist / 数据未到 → `""`。封面本身走 [`DetailFrame::selected_cover`]。
-fn selected_seed(dframe: &DetailFrame) -> &str {
-    let (EntityRef::Artist(_), Some(DetailData::Artist { detail, albums })) =
-        (&dframe.entity, &dframe.data)
-    else {
-        return "";
-    };
-    match dframe.section {
-        // 歌的头图 = 其所属专辑封面；seed 用专辑名（同专辑共享一张占位）。
-        ArtistSection::Hot => detail
-            .as_ref()
-            .and_then(|a| a.songs.get(dframe.list().sel()))
-            .map_or("", |s| {
-                s.album
-                    .as_ref()
-                    .map_or(s.name.as_str(), |al| al.name.as_str())
-            }),
-        ArtistSection::Albums => albums
-            .as_ref()
-            .and_then(|v| v.get(dframe.list().sel()))
-            .map_or("", |al| al.name.as_str()),
-    }
-}
-
-/// 头图程序化 fallback 的 seed：歌曲用所属专辑名（同专辑共享一张）、其余用自身名。
-fn header_seed(entity: &EntityRef) -> &str {
-    match entity {
-        EntityRef::Song(s) => s
-            .album
-            .as_ref()
-            .map_or(s.name.as_str(), |a| a.name.as_str()),
-        other => other.name(),
-    }
-}
-
 /// 元数据区：上半固定 header（名 + 次行 + 计量，wrap 折行），下半是独立可滚动简介视口
 /// （C-d/u/b/f 滚动，按 `\n` 多行渲染、溢出画滚动条）。两者间留一行视觉间隔。
 fn draw_meta(buf: &mut Buffer, meta_a: Rect, dframe: &DetailFrame, theme: &Theme, show_back: bool) {
@@ -465,7 +425,7 @@ fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
                 )));
             }
             if let Some(counts) = artist_counts(a) {
-                lines.push(Line::from(Span::styled(counts, dim)));
+                lines.push(Span::styled(counts, dim).into());
             }
             lines
         }

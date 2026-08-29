@@ -1,12 +1,11 @@
 //! 右栏 Now Playing detail:Playlists 视图显示歌单 meta,Library 视图显示
-//! 当前选中曲目 meta;一律包含程序化封面 + KV 区。
+//! 当前选中曲目 meta；一律包含图片区与 KV 区。
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
-use ratatui_image::picker::Picker;
 
 use crate::render::theme::Theme;
 use crate::runtime::state::{AppState, View};
@@ -23,13 +22,12 @@ pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
     state: &AppState,
-    picker: &Picker,
     theme: &Theme,
     cover_in_flight: bool,
 ) {
     match state.browse.view.current() {
         View::Playlists => match state.selected_playlist() {
-            Some(p) => playlist::draw(frame, area, p, state, picker, theme, cover_in_flight),
+            Some(p) => playlist::draw(frame, area, p, state, theme, cover_in_flight),
             None => paint_empty(frame, area, theme),
         },
         View::Library => {
@@ -37,16 +35,7 @@ pub fn draw(
             match tracks.get(state.browse.nav.track.sel()) {
                 Some(sv) => {
                     let current_id = state.playback.track.as_ref().map(|t| &t.id);
-                    track::draw(
-                        frame,
-                        area,
-                        sv,
-                        current_id,
-                        state,
-                        picker,
-                        theme,
-                        cover_in_flight,
-                    );
+                    track::draw(frame, area, sv, current_id, state, theme, cover_in_flight);
                 }
                 None => paint_empty(frame, area, theme),
             }
