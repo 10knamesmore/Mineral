@@ -1,8 +1,4 @@
-//! 登录相关端点。
-//!
-//! 当前覆盖:
-//! - `LoginRefreshService`(`/weapi/login/token/refresh`):用 jar 里的 `MUSIC_U` 续签
-//! - `LoginQRService`(`GetKey`/`CheckQR`):二维码登录
+//! 网易云二维码登录端点。
 
 use color_eyre::eyre::eyre;
 use serde_json::json;
@@ -18,19 +14,6 @@ use crate::transport::url::Crypto;
 pub struct LoginQrCode {
     pub url: String,
     pub unikey: String,
-}
-
-pub async fn login_refresh(transport: &Transport) -> Result<()> {
-    transport
-        .request(RequestSpec {
-            path: "/weapi/login/token/refresh",
-            crypto: Crypto::Weapi,
-            params: serde_json::Map::new(),
-            ua: UaKind::Pc,
-        })
-        .await?;
-    mineral_log::info!(target: "login", "login token refreshed");
-    Ok(())
 }
 
 /// 调 `GetKey` 拿 unikey,拼出二维码 URL。

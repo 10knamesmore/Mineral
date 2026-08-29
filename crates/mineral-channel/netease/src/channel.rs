@@ -8,8 +8,7 @@ use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Credential, Error, MusicChannel, Page, Result,
-    SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
@@ -401,20 +400,6 @@ impl MusicChannel for NeteaseChannel {
         api::lyric::lyrics(&self.transport, id)
             .await
             .map_err(map_err)
-    }
-
-    async fn login(&self, credential: Credential) -> Result<()> {
-        match credential {
-            Credential::Cookie(_) => {
-                // 已在 transport 的 cookie jar 内;还需要触发 token 续签来确保有效。
-                api::login::login_refresh(&self.transport)
-                    .await
-                    .map_err(map_err)
-            }
-            // 邮箱/手机密码登录的端点已废弃且不稳定,暂不支持;
-            // 推荐用二维码或导入 cookie。
-            _ => Err(Error::NotSupported),
-        }
     }
 
     async fn user_playlists(&self, uid: &UserId) -> Result<Vec<Playlist>> {

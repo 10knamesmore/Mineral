@@ -5,8 +5,6 @@
 
 /// channel 能力声明。
 pub mod caps;
-/// 登录凭证类型。
-pub mod credential;
 /// channel 公共错误类型与 `Result` 别名。
 pub mod error;
 /// 搜索命中页(含显式翻页信号)。
@@ -14,7 +12,6 @@ pub mod hits;
 /// 列表分页参数。
 pub mod page;
 pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
-pub use credential::Credential;
 pub use error::{Error, Result};
 pub use hits::SearchHits;
 pub use page::Page;
@@ -156,12 +153,7 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
-    // ---------- 用户 / 登录(可选) ----------
-    /// 用给定凭证登录(可选)。
-    async fn login(&self, _credential: Credential) -> Result<()> {
-        Err(Error::NotSupported)
-    }
-
+    // ---------- 用户歌单(可选) ----------
     /// 拉取指定 uid 用户的歌单列表(可选)。
     ///
     /// 用于"看其他人的歌单"等需要显式 uid 的场景;TUI 默认走 [`Self::my_playlists`]。

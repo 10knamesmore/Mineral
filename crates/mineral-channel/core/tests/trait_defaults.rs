@@ -1,9 +1,10 @@
-//! `MusicChannel` 新增方法默认实现的契约测试:
-//! 写操作与 `artist_albums` 未被实现方覆盖时,必须返回 [`Error::NotSupported`],
-//! 保证老 channel 在 trait 扩展后行为不变(运行时兜底,与 caps 声明互为防线)。
+//! `MusicChannel` 可选方法默认实现的契约测试。
+//!
+//! 写操作与 `artist_albums` 未被实现方覆盖时返回 [`Error::NotSupported`]，作为 caps 声明之外的
+//! 运行时防线。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Credential, Error, MusicChannel, Page, SearchHits};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, SearchHits};
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
@@ -67,12 +68,6 @@ impl MusicChannel for BareChannel {
     async fn lyrics(&self, _id: &SongId) -> mineral_channel_core::Result<Lyrics> {
         Err(Error::NotSupported)
     }
-}
-
-/// 避免未使用警告:桩 channel 不需要登录,但 Credential 导入用于确认 trait 面没变。
-#[allow(dead_code)]
-fn credential_type_still_exported(c: Credential) -> Credential {
-    c
 }
 
 #[tokio::test]

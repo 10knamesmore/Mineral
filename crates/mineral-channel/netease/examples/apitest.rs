@@ -39,14 +39,14 @@
 //! === 3. 登录态 ===
 //! (跳过:无登录凭证)
 //!
-//! === Summary === 7/7 passed
+//! === Summary === <passed>/<total> passed
 //! ```
 //!
 //! 失败用例不会 abort 后续——一次跑完看到全部结果。
 
 use std::io::Write;
 
-use mineral_channel_core::{Credential, MusicChannel, Page};
+use mineral_channel_core::{MusicChannel, Page};
 use mineral_channel_netease::credential::load_stored;
 use mineral_channel_netease::transport::client::RequestSpec;
 use mineral_channel_netease::transport::headers::UaKind;
@@ -272,15 +272,6 @@ async fn main() -> color_eyre::Result<()> {
     if !has_cookie {
         println!("(跳过:无登录凭证)");
     } else {
-        let env_cookie = std::env::var("NETEASE_MUSIC_U").ok();
-        let r = run("login (token refresh)", async {
-            ch.login(Credential::Cookie(env_cookie.clone().unwrap_or_default()))
-                .await?;
-            Ok("refreshed".into())
-        })
-        .await;
-        report.push(r);
-
         // 注意:UserPlaylistService 需要 uid;为简化,先调 /api/nuser/account/get 拿 uid
         let r = run("user account → uid", async {
             let mut p = serde_json::Map::new();
