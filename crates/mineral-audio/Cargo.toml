@@ -1,6 +1,6 @@
 [package]
 name        = "mineral-audio"
-description = "音频播放引擎(rodio + symphonia + stream-download)"
+description = "音频播放引擎(rodio + symphonia)"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true

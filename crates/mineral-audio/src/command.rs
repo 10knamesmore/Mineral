@@ -1,31 +1,15 @@
-//! UI → engine 的命令枚举。
-
-use std::path::PathBuf;
+//! AudioHandle 投递给 engine 线程的内部命令。
 
 use mineral_playback::OpenedMedia;
 
 /// 投递给 engine 主循环的一条指令。
 pub(crate) enum AudioCommand {
     /// Replaces current playback with already-opened media.
-    ///
-    /// When `capture` is present, decoder reads are persisted at their encoded offsets.
-    Play {
-        /// Already-opened decoder-ready encoded media.
-        media: OpenedMedia,
-
-        /// Optional post-preparation capture path.
-        capture: Option<PathBuf>,
-    },
+    Play(OpenedMedia),
     /// Appends an already-opened decoder behind the current decoder for gapless playback.
     ///
     /// Unlike [`Self::Play`], this command does not stop or resume the current decoder.
-    AppendNext {
-        /// Already-opened decoder-ready next media.
-        media: OpenedMedia,
-
-        /// Optional post-preparation capture path.
-        capture: Option<PathBuf>,
-    },
+    AppendNext(OpenedMedia),
     /// Cancels and disarms the decoder appended for gapless playback.
     ClearNext,
     /// 暂停当前曲目。

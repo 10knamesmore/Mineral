@@ -1194,8 +1194,8 @@ mod tests {
             Some(theme.ink_over(Color::Reset).muted),
             "Fetching 应 muted 档"
         );
-        // 字节下完:亮色就绪。
-        pb.prefetch.download_complete = true;
+        // producer 下载完成后缓冲满值:亮色就绪。
+        pb.prefetch.buffered_bps = Bps::FULL;
         assert_eq!(marker_fg(&pb, &theme)?, Some(theme.green), "Ready 应 green");
         Ok(())
     }

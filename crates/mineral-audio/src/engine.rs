@@ -9,14 +9,13 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use color_eyre::eyre::eyre;
-use mineral_playback::{MediaReader, OpenedMedia, SeekSupport};
+use mineral_playback::{OpenedMedia, SeekSupport};
 use parking_lot::Mutex;
 use rodio::Source;
 use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
 use tokio_util::sync::CancellationToken;
 
-use crate::capture::{CaptureReader, CaptureState};
 use crate::command::AudioCommand;
 use crate::engine::output::Output;
 use crate::handle::{AudioMode, EngineParams};
@@ -142,13 +141,13 @@ impl Engine {
     /// Applies one command and contains command-local failures.
     fn handle_command(&mut self, command: AudioCommand) {
         match command {
-            AudioCommand::Play { media, capture } => {
-                if let Err(error) = self.play(media, capture.as_deref()) {
+            AudioCommand::Play(media) => {
+                if let Err(error) = self.play(media) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "play error");
                 }
             }
-            AudioCommand::AppendNext { media, capture } => {
-                if let Err(error) = self.append_next(media, capture.as_deref()) {
+            AudioCommand::AppendNext(media) => {
+                if let Err(error) = self.append_next(media) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "prefetch decode error");
                 }
             }
@@ -163,16 +162,12 @@ impl Engine {
     }
 
     /// Replaces the output queue with one already-opened current media item.
-    fn play(
-        &mut self,
-        media: OpenedMedia,
-        capture: Option<&std::path::Path>,
-    ) -> color_eyre::Result<()> {
+    fn play(&mut self, media: OpenedMedia) -> color_eyre::Result<()> {
         let song_id = media.info().song_id.qualified();
         self.output.player().stop();
         self.head.stop();
         self.sample_rate.store(0, Ordering::Relaxed);
-        let slot = self.append_opened(media, capture, "current")?;
+        let slot = self.append_opened(media, "current")?;
         mineral_log::info!(target: "audio", song_id, "start decoding");
         self.output.player().play();
         self.sample_rate.store(slot.sample_rate, Ordering::Relaxed);
@@ -181,17 +176,13 @@ impl Engine {
     }
 
     /// Appends already-opened next media behind current without reopening it.
-    fn append_next(
-        &mut self,
-        media: OpenedMedia,
-        capture: Option<&std::path::Path>,
-    ) -> color_eyre::Result<()> {
+    fn append_next(&mut self, media: OpenedMedia) -> color_eyre::Result<()> {
         if !self.head.cur.occupied {
             media.cancellation().cancel();
             return Ok(());
         }
         self.head.clear_next();
-        let slot = self.append_opened(media, capture, "next")?;
+        let slot = self.append_opened(media, "next")?;
         self.head.arm_next(slot);
         Ok(())
     }
@@ -200,7 +191,6 @@ impl Engine {
     fn append_opened(
         &mut self,
         media: OpenedMedia,
-        capture: Option<&std::path::Path>,
         slot_name: &'static str,
     ) -> color_eyre::Result<Slot> {
         let byte_len = (media.seek_support() == SeekSupport::RandomAccess)
@@ -209,7 +199,6 @@ impl Engine {
         let transfer = media.transfer().cloned();
         let cancellation = media.cancellation().clone();
         let reader = media.into_reader();
-        let (reader, capture_state) = wrap_capture(reader, capture, byte_len);
         let decoder = build_decoder(reader, byte_len)?;
         let duration_ms = decoder.total_duration().map(duration_to_ms);
         let sample_rate = u32::from(decoder.sample_rate());
@@ -229,7 +218,6 @@ impl Engine {
             duration_ms,
             sample_rate,
             transfer,
-            capture: capture_state,
             cancellation: Some(cancellation),
             occupied: true,
         })
@@ -280,38 +268,11 @@ impl Engine {
         current.duration_ms = fields.duration_ms;
         current.track_finished_seq = fields.track_finished_seq;
         current.current_track_token = fields.current_track_token;
-        current.download_complete = fields.download_complete;
         current.buffered_bps = fields.buffered_bps;
         current.next_duration_ms = fields.next_duration_ms;
         current.next_buffered_bps = fields.next_buffered_bps;
         current.next_ready = fields.next_ready;
-        current.next_download_complete = fields.next_download_complete;
         current.sample_rate_hz = self.head.cur.sample_rate;
-    }
-}
-
-/// Wraps a prepared reader with a post-preparation capture tee when requested.
-fn wrap_capture(
-    reader: Box<dyn MediaReader>,
-    path: Option<&std::path::Path>,
-    expected_len: Option<u64>,
-) -> (Box<dyn MediaReader>, Option<CaptureState>) {
-    let Some(path) = path else {
-        return (reader, None);
-    };
-    match CaptureReader::open_writer(path) {
-        Ok(writer) => {
-            let (reader, state) = CaptureReader::new(reader, writer, expected_len);
-            (Box::new(reader), Some(state))
-        }
-        Err(error) => {
-            mineral_log::warn!(
-                target: "audio",
-                error = mineral_log::chain(&error),
-                "capture unavailable; continuing without capture"
-            );
-            (reader, None)
-        }
     }
 }
 

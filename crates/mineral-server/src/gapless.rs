@@ -1,8 +1,8 @@
 //! 服务端 gapless 编排:把「已预排的下一曲」状态在无缝边界处扶正为「当前曲」,
-//! 以及预排 / 并发 capture 收割相关的纯状态变换。
+//! 以及预排相关的纯状态变换。
 //!
 //! 引擎([`mineral_audio`])在当前曲自然耗尽时已把下一曲零静音接上;服务端这边只需在
-//! 边界处把记账状态轮转过来(current=queued、queue_sel 推进、resolved/origin/capturing
+//! 边界处把记账状态轮转过来(current=queued、queue_sel 推进、resolved/origin
 //! 轮转、歌词与预拉复位),**不**重新 `play_song`(音频没有中断)。
 
 mod state;
@@ -12,7 +12,6 @@ use mineral_playback::{DirectMedia, OpenedMedia};
 use mineral_protocol::{PlayCursor, PlaybackOrigin};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
-use crate::download::Capturing;
 use crate::playback_instance::PlaybackSlot;
 use crate::player::PlayerCore;
 use crate::queue::{advance_next, next_in_queue, next_index};
@@ -92,7 +91,7 @@ pub(crate) fn decide_advance(finished_advanced: bool, playing: bool, has_queued:
 }
 
 /// 无缝边界已由引擎完成轮转(下一曲正在播),服务端据此把「已预排」扶正为「当前」:
-/// current=queued、queue_sel 推进到它在队列的位置、resolved/origin/capturing 轮转、
+/// current=queued、queue_sel 推进到它在队列的位置、resolved/origin 轮转、
 /// 歌词与预拉状态复位。
 ///
 /// # Params:
@@ -117,7 +116,6 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     st.media_info = Some(queued.media_info);
     st.direct_media = queued.direct_media;
     st.play_origin = Some(queued.origin);
-    st.capturing = queued.capturing;
     st.current_lyrics = None;
     st.current_lyrics_song_id = None;
     // 边界消费:本窗口的否决已完成使命(预测/推进都越过了被否决曲),清空。
@@ -200,7 +198,6 @@ pub(crate) fn check_prefetch(player: &PlayerCore) {
 ///   - `opened`: Already-opened decoder input.
 ///   - `direct`: Optional direct capability.
 ///   - `origin`: Cache, download-library, or provider provenance.
-///   - `cacheable`: Whether post-preparation bytes may enter the cache.
 pub(crate) fn arm_opened(
     player: &PlayerCore,
     song: Song,
@@ -208,35 +205,13 @@ pub(crate) fn arm_opened(
     opened: OpenedMedia,
     direct: Option<DirectMedia>,
     origin: PlaybackOrigin,
-    cacheable: bool,
 ) {
     let info = opened.info().clone();
-    let capture = cacheable
-        .then(|| {
-            player
-                .media_cache()
-                .capture_path(&song.id, player.playback_quality())
-        })
-        .flatten();
     let armed = player.with_state(|st| {
         let Some(active) = st.prefetch.take_opening(slot.instance_id, &song.id) else {
             return false;
         };
-        let capturing = match capture {
-            Some(path) => {
-                player.audio().append_next_capturing(opened, path.clone());
-                Some(Capturing {
-                    song: song.clone(),
-                    quality: player.playback_quality(),
-                    format: info.format.clone(),
-                    path,
-                })
-            }
-            None => {
-                player.audio().append_next(opened);
-                None
-            }
-        };
+        player.audio().append_next(opened);
         st.prefetch.arm(
             active,
             Queued {
@@ -244,7 +219,6 @@ pub(crate) fn arm_opened(
                 media_info: info.clone(),
                 direct_media: direct,
                 origin,
-                capturing,
             },
         );
         true
@@ -261,29 +235,7 @@ pub(crate) fn arm_opened(
     );
 }
 
-/// 收割已下完的 capture 进缓存:当前曲(`download_complete`)+ 已预排曲(`next_download_complete`),
-/// 两路并发各取各的 [`Capturing`](不同曲不同临时路径,结构上不撞)。
-pub(crate) fn check_harvest(player: &PlayerCore) {
-    let snap = player.audio_snapshot();
-    if snap.download_complete {
-        let cap = player.with_state(|st| st.capturing.take());
-        if let Some(cap) = cap {
-            crate::download::spawn_harvest(player, cap);
-        }
-    }
-    if snap.next_download_complete {
-        let cap = player.with_state(|st| {
-            st.prefetch
-                .queued_mut()
-                .and_then(|queued| queued.capturing.take())
-        });
-        if let Some(cap) = cap {
-            crate::download::spawn_harvest(player, cap);
-        }
-    }
-}
-
-/// gapless 边界推进:曲终(`track_finished_seq` 前进)→ 收割旧曲 capture、完播打点,
+/// gapless 边界推进:曲终(`track_finished_seq` 前进)→ 完播打点,
 /// 据是否真无缝(仍出声 + 有预排)采纳已预排曲([`adopt_queued`]),否则兜底 `play_song`(有间隙)。
 pub(crate) fn check_advance(player: &PlayerCore) {
     let snap = player.audio_snapshot();
@@ -291,13 +243,6 @@ pub(crate) fn check_advance(player: &PlayerCore) {
         return;
     }
     player.set_last_seen_finished_seq(snap.track_finished_seq);
-
-    // 曲终时 capture 还在 → 它没被 check_harvest(先于本函数跑,见 play.rs 调用序)按 download_complete
-    // 收走 = 下载未真完成。半截 capture 无用(截断文件入缓存后回放会解码 IO 错),删残件、不入缓存。
-    let old_cap = player.with_state(|st| st.capturing.take());
-    if let Some(cap) = old_cap {
-        drop(std::fs::remove_file(&cap.path));
-    }
 
     let (old, has_queued) =
         player.with_state(|st| (st.current_song.clone(), st.prefetch.is_armed()));
@@ -382,11 +327,8 @@ pub(crate) fn check_advance(player: &PlayerCore) {
             player.spawn_save_session();
         }
         Advance::Fallback => {
-            // 清掉过期预排(+ 删其半截 capture 残件)+ 引擎里可能的待建 next,走兜底重播。
-            let stale = player.with_state(State::take_prefetch);
-            if let Some(cap) = stale.and_then(|q| q.capturing) {
-                drop(std::fs::remove_file(&cap.path));
-            }
+            // 清掉过期预排和引擎里可能的待建 next，走兜底重播。
+            drop(player.with_state(State::take_prefetch));
             player.audio().clear_next();
             // 按下标推进 queue_sel(advance_next),play_song 据守卫保留它,重复曲不回退。
             let next = player.with_state(advance_next);
@@ -495,7 +437,6 @@ mod tests {
                 },
                 direct_media: None,
                 origin: PlaybackOrigin::Remote,
-                capturing: None,
             },
         );
 

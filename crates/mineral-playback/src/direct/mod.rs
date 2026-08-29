@@ -3,5 +3,6 @@
 mod prepared;
 mod reader;
 mod remote;
+mod storage;
 
 pub use prepared::DirectPreparedPlayback;

@@ -3,7 +3,6 @@
 use mineral_model::{DirectMedia, PlaybackMediaInfo, Song, SongId};
 use mineral_protocol::PlaybackOrigin;
 
-use crate::download::Capturing;
 use crate::playback_instance::{PlaybackInstanceId, PlaybackSlot};
 
 /// Media and accounting facts already armed behind the current decoder.
@@ -19,9 +18,6 @@ pub(crate) struct Queued {
 
     /// Cache, download-library, or provider origin promoted with the song.
     pub(crate) origin: PlaybackOrigin,
-
-    /// Post-preparation capture promoted with the song when enabled.
-    pub(crate) capturing: Option<Capturing>,
 }
 
 /// Exclusive lifecycle of the next-song preparation attempt.
@@ -64,6 +60,7 @@ impl PrefetchState {
     }
 
     /// Returns mutable armed media facts.
+    #[cfg(test)]
     pub(crate) fn queued_mut(&mut self) -> Option<&mut Queued> {
         match self {
             Self::Armed { queued, .. } => Some(queued),
@@ -119,7 +116,7 @@ impl PrefetchState {
         Some((slot, *queued))
     }
 
-    /// Cancels the active slot and returns armed media facts for capture cleanup.
+    /// Cancels the active slot and returns its armed media facts.
     pub(crate) fn invalidate(&mut self) -> Option<Queued> {
         match std::mem::take(self) {
             Self::Idle => None,

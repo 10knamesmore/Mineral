@@ -479,7 +479,6 @@ async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
                 },
                 direct_media: None,
                 origin: PlaybackOrigin::Remote,
-                capturing: None,
             },
         );
     }

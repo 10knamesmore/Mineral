@@ -1,19 +1,25 @@
 //! HTTP byte acquisition adapted to a synchronous buffered reader.
 
 use std::fmt::{Debug, Display};
+use std::io::{Read, Seek};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use color_eyre::eyre::{WrapErr, eyre};
+use color_eyre::eyre::{WrapErr, bail, eyre};
 use futures_util::{Stream, TryStreamExt};
 use reqwest::header::{self, HeaderValue};
 use stream_download::source::{DecodeError, SourceStream};
+use stream_download::storage::StorageProvider;
 use stream_download::storage::temp::TempStorageProvider;
-use stream_download::{Settings, StreamDownload, StreamPhase, StreamState};
+use stream_download::{Settings, StreamDownload, StreamHandle, StreamPhase, StreamState};
 use tokio_util::sync::CancellationToken;
 
-use crate::{MediaReader, RemoteLocator, TransferState};
+use super::storage::CaptureStorageProvider;
+use crate::{
+    CaptureReceipt, CaptureTarget, CapturedMedia, MediaReader, RemoteLocator, TransferState,
+};
 
 /// A buffered remote reader plus its transfer facts.
 pub(super) struct OpenedRemote {
@@ -25,6 +31,21 @@ pub(super) struct OpenedRemote {
 
     /// Shared transfer progress.
     pub(super) transfer: TransferState,
+
+    /// Producer-owned capture completion when a target was requested.
+    pub(super) capture: Option<CaptureReceipt>,
+}
+
+/// Type-erased stream-download reader with its producer lifecycle handles.
+struct BufferedRemote {
+    /// Synchronous reader backed by the selected storage provider.
+    reader: Box<dyn MediaReader>,
+
+    /// Completion signal from the stream-download producer.
+    completion: StreamHandle,
+
+    /// Cancellation handle for the producer task.
+    cancellation: CancellationToken,
 }
 
 /// Error wrapper satisfying stream-download's external decode-error trait.
@@ -172,6 +193,7 @@ impl Stream for RemoteStream {
 /// # Params:
 ///   - `locator`: Remote access description.
 ///   - `prefetch_bytes`: Bytes to prepare before returning.
+///   - `capture_target`: Optional persistent destination for the prepared media.
 ///   - `cancellation`: Playback-instance cancellation root.
 ///
 /// # Return:
@@ -179,6 +201,7 @@ impl Stream for RemoteStream {
 pub(super) async fn open_remote(
     locator: RemoteLocator,
     prefetch_bytes: u64,
+    capture_target: Option<CaptureTarget>,
     cancellation: CancellationToken,
 ) -> color_eyre::Result<OpenedRemote> {
     let stream = RemoteStream::create(locator)
@@ -186,19 +209,54 @@ pub(super) async fn open_remote(
         .map_err(|error| eyre!("open remote media: {error}"))?;
     let byte_len = stream.content_length();
     let transfer = TransferState::new(byte_len);
-    let observed = transfer.clone();
-    let settings = Settings::default()
-        .prefetch_bytes(prefetch_bytes)
-        .on_progress(move |_stream: &RemoteStream, state: StreamState, _cancel| {
-            observed.set_downloaded(state.current_position);
-            if state.phase == StreamPhase::Complete {
-                observed.mark_complete();
-            }
-        });
-    let reader = StreamDownload::from_stream(stream, TempStorageProvider::new(), settings)
-        .await
-        .map_err(|error| eyre!("buffer remote media: {error}"))?;
-    let producer_cancellation = reader.get_cancellation_token();
+    let (buffered, capture) = match capture_target {
+        Some(target) => {
+            let buffered = buffer_with_storage(
+                stream,
+                CaptureStorageProvider::new(target.path().to_path_buf()),
+                prefetch_bytes,
+                &transfer,
+            )
+            .await?;
+            let receipt = CaptureReceipt::new({
+                let completion = buffered.completion.clone();
+                let transfer = transfer.clone();
+                async move {
+                    completion.wait_for_completion().await;
+                    let path = target.path().to_path_buf();
+                    let result = verify_capture(path.clone(), byte_len, &transfer).await;
+                    if result.is_err()
+                        && let Err(error) = tokio::fs::remove_file(&path).await
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        mineral_log::warn!(
+                            target: "playback",
+                            path = %path.display(),
+                            error = mineral_log::chain(&error),
+                            "清理未完成 capture 失败"
+                        );
+                    }
+                    result
+                }
+            });
+            (buffered, Some(receipt))
+        }
+        None => (
+            buffer_with_storage(
+                stream,
+                TempStorageProvider::new(),
+                prefetch_bytes,
+                &transfer,
+            )
+            .await?,
+            None,
+        ),
+    };
+    let BufferedRemote {
+        reader,
+        cancellation: producer_cancellation,
+        ..
+    } = buffered;
     let producer_finished = producer_cancellation.clone();
     tokio::spawn(async move {
         tokio::select! {
@@ -208,10 +266,82 @@ pub(super) async fn open_remote(
         }
     });
     Ok(OpenedRemote {
-        reader: Box::new(reader),
+        reader,
         byte_len,
         transfer,
+        capture,
     })
+}
+
+/// Starts stream-download with one concrete storage provider.
+///
+/// # Params:
+///   - `stream`: Reopenable remote byte source.
+///   - `storage`: Temporary or persistent producer storage.
+///   - `prefetch_bytes`: Bytes to prepare before returning.
+///   - `transfer`: Shared producer progress.
+///
+/// # Return:
+///   Type-erased reader plus producer completion and cancellation handles.
+async fn buffer_with_storage<P>(
+    stream: RemoteStream,
+    storage: P,
+    prefetch_bytes: u64,
+    transfer: &TransferState,
+) -> color_eyre::Result<BufferedRemote>
+where
+    P: StorageProvider + 'static,
+    P::Reader: Read + Seek + Send + Sync + 'static,
+{
+    let observed = transfer.clone();
+    let settings = Settings::default()
+        .prefetch_bytes(prefetch_bytes)
+        .on_progress(move |_stream: &RemoteStream, state: StreamState, _cancel| {
+            observed.set_downloaded(state.current_position);
+            if state.phase == StreamPhase::Complete {
+                observed.mark_complete();
+            }
+        });
+    let reader = StreamDownload::from_stream(stream, storage, settings)
+        .await
+        .map_err(|error| eyre!("buffer remote media: {error}"))?;
+    Ok(BufferedRemote {
+        completion: reader.handle(),
+        cancellation: reader.get_cancellation_token(),
+        reader: Box::new(reader),
+    })
+}
+
+/// Verifies that stream-download reached its successful terminal phase and filled the target.
+///
+/// # Params:
+///   - `path`: Persistent capture path.
+///   - `expected_len`: Full encoded byte length when known.
+///   - `transfer`: Producer progress containing the successful terminal phase.
+///
+/// # Return:
+///   Verified capture and its byte length.
+///
+/// # Error:
+///   Returns when the producer stopped early, metadata is unavailable, or the file is truncated.
+async fn verify_capture(
+    path: PathBuf,
+    expected_len: Option<u64>,
+    transfer: &TransferState,
+) -> color_eyre::Result<CapturedMedia> {
+    if !transfer.snapshot().complete {
+        bail!("capture producer ended before download completed");
+    }
+    let bytes = tokio::fs::metadata(&path)
+        .await
+        .wrap_err_with(|| format!("read capture metadata {}", path.display()))?
+        .len();
+    if let Some(expected) = expected_len
+        && bytes < expected
+    {
+        bail!("capture truncated: {bytes} / {expected} bytes");
+    }
+    Ok(CapturedMedia::new(path, bytes))
 }
 
 /// Builds an HTTP client carrying direct-media request headers.

@@ -152,22 +152,7 @@ impl AudioHandle {
     /// # Params:
     ///   - `media`: Already-opened decoder-ready media.
     pub fn play(&self, media: OpenedMedia) {
-        self.send(AudioCommand::Play {
-            media,
-            capture: None,
-        });
-    }
-
-    /// Plays opened media while persisting the encoded bytes read by the decoder.
-    ///
-    /// # Params:
-    ///   - `media`: Already-opened decoder-ready media.
-    ///   - `capture`: 捕获落盘路径
-    pub fn play_capturing(&self, media: OpenedMedia, capture: std::path::PathBuf) {
-        self.send(AudioCommand::Play {
-            media,
-            capture: Some(capture),
-        });
+        self.send(AudioCommand::Play(media));
     }
 
     /// Appends opened media for gapless continuation without interrupting current playback.
@@ -175,22 +160,7 @@ impl AudioHandle {
     /// # Params:
     ///   - `media`: Already-opened decoder-ready next media.
     pub fn append_next(&self, media: OpenedMedia) {
-        self.send(AudioCommand::AppendNext {
-            media,
-            capture: None,
-        });
-    }
-
-    /// Appends opened media and persists the encoded bytes consumed by its decoder.
-    ///
-    /// # Params:
-    ///   - `media`: Already-opened decoder-ready next media.
-    ///   - `capture`: 捕获落盘路径
-    pub fn append_next_capturing(&self, media: OpenedMedia, capture: std::path::PathBuf) {
-        self.send(AudioCommand::AppendNext {
-            media,
-            capture: Some(capture),
-        });
+        self.send(AudioCommand::AppendNext(media));
     }
 
     /// Cancels and disarms the decoder appended for gapless playback.

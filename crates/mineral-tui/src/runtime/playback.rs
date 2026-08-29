@@ -136,25 +136,19 @@ pub struct Prefetch {
 
     /// 缓冲比例(未预排恒零)。
     pub buffered_bps: Bps,
-
-    /// 远端字节是否已下完(仅 capture 流会置 true;本地曲恒 false,
-    /// 其「就绪」由缓冲已满表达,见 [`Prefetch::stage`])。
-    pub download_complete: bool,
 }
 
 impl Prefetch {
     /// 归纳预排阶段(transport prefetch 标记的判定口径)。
     ///
-    /// 「就绪」= 字节下完 **或** 缓冲已满:`download_complete` 仅 capture 流的 waiter
-    /// 会置 true,本地曲 / 纯流式靠缓冲满格(本地 append 即满)兜住,
-    /// 否则它们会永远卡在「拉取中」。
+    /// producer 下载完成或本地媒体 append 后，缓冲比例到满值，预排随即就绪。
     ///
     /// # Return:
     ///   当前 [`PrefetchStage`]。
     pub fn stage(&self) -> PrefetchStage {
         if !self.ready {
             PrefetchStage::Idle
-        } else if self.download_complete || self.buffered_bps.is_full() {
+        } else if self.buffered_bps.is_full() {
             PrefetchStage::Ready
         } else {
             PrefetchStage::Fetching
@@ -171,7 +165,7 @@ pub enum PrefetchStage {
     /// 已预排进队列,远端字节仍在拉取。
     Fetching,
 
-    /// 已就绪:字节下完(capture)或缓冲已满(本地 / 纯流式),曲终可无缝接续。
+    /// 已就绪:producer 下载完成或本地媒体已完整 append，曲终可无缝接续。
     Ready,
 }
 
@@ -322,7 +316,6 @@ impl Playback {
         self.prefetch = Prefetch {
             ready: snap.next_ready,
             buffered_bps: snap.next_buffered_bps,
-            download_complete: snap.next_download_complete,
         };
     }
 
@@ -479,13 +472,11 @@ mod tests {
         let snap = mineral_audio::AudioSnapshot {
             next_ready: true,
             next_buffered_bps: Bps::new(6_000),
-            next_download_complete: true,
             ..mineral_audio::AudioSnapshot::default()
         };
         pb.apply_audio_snapshot(snap);
         assert!(pb.prefetch.ready);
         assert_eq!(pb.prefetch.buffered_bps, Bps::new(6_000));
-        assert!(pb.prefetch.download_complete);
     }
 
     /// 包络只在归属当前曲时可见:匹配可见、异曲包络(迟到事件)不可见、
@@ -611,7 +602,7 @@ mod tests {
     }
 
     /// `Prefetch::stage` 三态归纳:未预排 → Idle;已预排未稳 → Fetching;
-    /// 字节下完(capture)或缓冲已满(本地曲 append 即满 / 纯流式拉完)→ Ready。
+    /// producer 下载完成或本地曲 append 后缓冲满值 → Ready。
     #[test]
     fn prefetch_stage_cases() {
         use super::{Prefetch, PrefetchStage};
@@ -622,11 +613,7 @@ mod tests {
         pf.ready = true;
         pf.buffered_bps = Bps::new(4_000);
         assert_eq!(pf.stage(), PrefetchStage::Fetching);
-        // capture 字节下完 → 就绪。
-        pf.download_complete = true;
-        assert_eq!(pf.stage(), PrefetchStage::Ready);
-        // 本地 / 纯流式:done_gen 不写,但缓冲已满 → 同样就绪。
-        pf.download_complete = false;
+        // producer 下载完成或本地曲 append 后缓冲满值 → 就绪。
         pf.buffered_bps = Bps::FULL;
         assert_eq!(pf.stage(), PrefetchStage::Ready);
     }

@@ -5,7 +5,7 @@ use std::io::{Read, Seek};
 use mineral_model::PlaybackMediaInfo;
 use tokio_util::sync::CancellationToken;
 
-use super::TransferState;
+use super::{CaptureReceipt, CaptureTarget, TransferState};
 
 /// Object-safe synchronous decoder input facade.
 pub trait MediaReader: Read + Seek + Send + Sync {}
@@ -23,6 +23,10 @@ pub enum SeekSupport {
 }
 
 /// Execution controls supplied when consuming a prepared playback.
+///
+/// A capture target requests a complete producer-owned copy of the prepared encoded media. The
+/// provider reports its terminal result through [`OpenedMedia::take_capture`]; decoder reads never
+/// define capture completion.
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct OpenOptions {
@@ -31,6 +35,9 @@ pub struct OpenOptions {
 
     /// Bytes the built-in streaming opener should prepare before returning.
     prefetch_bytes: u64,
+
+    /// Optional destination for a complete copy of the prepared encoded media.
+    capture_target: Option<CaptureTarget>,
 }
 
 impl OpenOptions {
@@ -44,7 +51,18 @@ impl OpenOptions {
         Self {
             cancellation,
             prefetch_bytes,
+            capture_target: None,
         }
+    }
+
+    /// Requests producer-owned capture into a unique temporary path.
+    ///
+    /// # Params:
+    ///   - `target`: Destination for the complete prepared encoded media.
+    #[must_use]
+    pub fn capture_to(mut self, target: CaptureTarget) -> Self {
+        self.capture_target = Some(target);
+        self
     }
 
     /// Returns the playback instance cancellation token.
@@ -57,6 +75,12 @@ impl OpenOptions {
     #[must_use]
     pub fn prefetch_bytes(&self) -> u64 {
         self.prefetch_bytes
+    }
+
+    /// Returns the requested capture target.
+    #[must_use]
+    pub fn capture_target(&self) -> Option<&CaptureTarget> {
+        self.capture_target.as_ref()
     }
 }
 
@@ -76,6 +100,9 @@ pub struct OpenedMedia {
 
     /// Streaming transfer progress when a producer is involved.
     transfer: Option<TransferState>,
+
+    /// Producer-owned completion receipt for the requested capture.
+    capture: Option<CaptureReceipt>,
 
     /// Cancellation token governing reader lifetime.
     cancellation: CancellationToken,
@@ -106,8 +133,19 @@ impl OpenedMedia {
             byte_len,
             info,
             transfer,
+            capture: None,
             cancellation,
         }
+    }
+
+    /// Attaches the producer-owned completion receipt for a requested capture.
+    ///
+    /// # Params:
+    ///   - `capture`: Receipt that verifies the complete prepared media file.
+    #[must_use]
+    pub fn with_capture(mut self, capture: CaptureReceipt) -> Self {
+        self.capture = Some(capture);
+        self
     }
 
     /// Returns the reader access capability.
@@ -132,6 +170,11 @@ impl OpenedMedia {
     #[must_use]
     pub fn transfer(&self) -> Option<&TransferState> {
         self.transfer.as_ref()
+    }
+
+    /// Takes the producer-owned capture receipt, if capture was requested and accepted.
+    pub fn take_capture(&mut self) -> Option<CaptureReceipt> {
+        self.capture.take()
     }
 
     /// Returns the token governing the reader lifetime.

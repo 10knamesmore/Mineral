@@ -8,6 +8,12 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PlaybackInstanceId(Uuid);
 
+impl std::fmt::Display for PlaybackInstanceId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 impl PlaybackInstanceId {
     /// Creates a fresh process-local playback identity.
     pub(crate) fn new() -> Self {

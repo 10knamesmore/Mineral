@@ -4,7 +4,6 @@ use mineral_playback::TransferState;
 use tokio_util::sync::CancellationToken;
 
 use crate::bps::Bps;
-use crate::capture::CaptureState;
 
 /// Audio-engine accounting for one appended decoder.
 #[derive(Clone, Default)]
@@ -17,9 +16,6 @@ pub(crate) struct Slot {
 
     /// Producer transfer progress for streaming media.
     pub(crate) transfer: Option<TransferState>,
-
-    /// Post-preparation capture completion when capture is enabled.
-    pub(crate) capture: Option<CaptureState>,
 
     /// Cancellation token governing this decoder and its producer.
     pub(crate) cancellation: Option<CancellationToken>,
@@ -36,12 +32,12 @@ impl Slot {
         }
     }
 
-    /// Returns source-neutral buffering and capture completion facts.
-    fn progress(&self) -> (Bps, bool) {
+    /// Returns source-neutral producer buffering progress.
+    fn buffered_bps(&self) -> Bps {
         if !self.occupied {
-            return (Bps::ZERO, false);
+            return Bps::ZERO;
         }
-        let buffered = match &self.transfer {
+        match &self.transfer {
             None => Bps::FULL,
             Some(transfer) => {
                 let snapshot = transfer.snapshot();
@@ -53,9 +49,7 @@ impl Slot {
                         .map_or(Bps::ZERO, |total| Bps::ratio(snapshot.downloaded, total))
                 }
             }
-        };
-        let captured = self.capture.as_ref().is_some_and(CaptureState::complete);
-        (buffered, captured)
+        }
     }
 }
 
@@ -126,14 +120,13 @@ impl PlayHead {
 
     /// Produces fields copied into the public audio snapshot.
     pub(crate) fn snapshot_fields(&self) -> GaplessFields {
-        let (buffered_bps, download_complete) = self.cur.progress();
-        let (next_buffered_bps, next_download_complete) = self.next.progress();
+        let buffered_bps = self.cur.buffered_bps();
+        let next_buffered_bps = self.next.buffered_bps();
         GaplessFields {
             current_track_token: self.track_token,
             track_finished_seq: self.finished_seq,
             duration_ms: self.cur.occupied.then_some(self.cur.duration_ms).flatten(),
             buffered_bps,
-            download_complete,
             next_duration_ms: self
                 .next
                 .occupied
@@ -141,7 +134,6 @@ impl PlayHead {
                 .flatten(),
             next_buffered_bps,
             next_ready: self.next.occupied,
-            next_download_complete,
         }
     }
 
@@ -182,9 +174,6 @@ pub(crate) struct GaplessFields {
     /// Current producer buffer ratio.
     pub(crate) buffered_bps: Bps,
 
-    /// Whether the current post-preparation capture is complete.
-    pub(crate) download_complete: bool,
-
     /// Next decoder duration.
     pub(crate) next_duration_ms: Option<u64>,
 
@@ -193,9 +182,6 @@ pub(crate) struct GaplessFields {
 
     /// Whether the next decoder is armed.
     pub(crate) next_ready: bool,
-
-    /// Whether the next post-preparation capture is complete.
-    pub(crate) next_download_complete: bool,
 }
 
 #[cfg(test)]
@@ -252,7 +238,6 @@ mod tests {
     fn empty_slots_have_zero_progress() {
         let fields = PlayHead::default().snapshot_fields();
         assert_eq!(fields.buffered_bps, Bps::ZERO);
-        assert!(!fields.download_complete);
         assert_eq!(fields.next_buffered_bps, Bps::ZERO);
         assert!(!fields.next_ready);
     }

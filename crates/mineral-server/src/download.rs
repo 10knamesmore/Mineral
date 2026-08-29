@@ -211,8 +211,8 @@ pub(crate) async fn download_song(
     })
 }
 
-/// 一首正在 capture(边播边落盘)的曲的上下文:播完 / 下完后据此入缓存,中途打断则删 `path`。
-pub(crate) struct Capturing {
+/// 已由 producer 校验完整、等待收编进音频缓存的播放媒体。
+pub(crate) struct CaptureHarvest {
     /// 在播的歌(组库路径取 source / album / title)。
     pub(crate) song: Song,
 
@@ -222,7 +222,7 @@ pub(crate) struct Capturing {
     /// 实际音频格式(决定扩展名;未知按音质兜底)。
     pub(crate) format: Option<AudioFormat>,
 
-    /// capture 落盘临时路径(engine 正往这写)。
+    /// 已完整落盘的唯一临时路径。
     pub(crate) path: PathBuf,
 }
 
@@ -280,15 +280,14 @@ fn drain_opened(
     Ok(())
 }
 
-/// 把一首已下完的 capture 文件后台收编进缓存(spawn_blocking,不阻塞 loop)。
-/// 文件缺失 / 空(下载未完成)→ 不入缓存并删残件。
+/// 把一首 producer 已校验完整的 capture 文件收编进缓存。
+/// 文件在等待期间消失或变空时不入缓存，并清理残件。
 ///
 /// # Params:
 ///   - `player`: 播放核心(取 media_cache)
-///   - `cap`: 该曲的 capture 上下文
-pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
-    let cache = Arc::clone(player.media_cache());
-    let player = player.clone();
+///   - `cap`: 已完成 capture 的歌曲、媒体事实与临时路径
+pub(crate) async fn harvest_capture(player: &PlayerCore, cap: CaptureHarvest) {
+    let cache = player.media_cache();
     // 埋点用:song / quality / format 先留(cap 随后在 match 里借用)。format 未知时落
     // 显式 "unknown"(cache_harvests.format 为 NOT NULL,比空串更可辨)。
     let song_id = cap.song.id.clone();
@@ -298,60 +297,58 @@ pub(crate) fn spawn_harvest(player: &PlayerCore, cap: Capturing) {
         .as_ref()
         .map_or("unknown", mineral_model::AudioFormat::as_str)
         .to_owned();
-    // async task(非 spawn_blocking):put_played 要 await DB 写穿透;入库内部的大拷贝由它自己
-    // 再下沉到 spawn_blocking。metadata 是一次快速 stat,async 里直接调可接受。
-    tokio::spawn(async move {
-        let (outcome, bytes) = match std::fs::metadata(&cap.path) {
-            Ok(m) if m.len() > 0 => {
-                let bytes = i64::try_from(m.len()).ok();
-                match cache
-                    .put_played(&cap.song, cap.quality, cap.format.as_ref(), &cap.path)
-                    .await
-                {
-                    Err(e) => {
-                        mineral_log::warn!(target: "player", error = mineral_log::chain(&e), "音频入缓存失败");
-                        (mineral_stats::CacheHarvestOutcome::Discarded, bytes)
+    let (outcome, bytes) = match std::fs::metadata(&cap.path) {
+        Ok(metadata) if metadata.len() > 0 => {
+            let bytes = i64::try_from(metadata.len()).ok();
+            match cache
+                .put_played(&cap.song, cap.quality, cap.format.as_ref(), &cap.path)
+                .await
+            {
+                Err(error) => {
+                    mineral_log::warn!(target: "player", error = mineral_log::chain(&error), "音频入缓存失败");
+                    (mineral_stats::CacheHarvestOutcome::Discarded, bytes)
+                }
+                Ok(evicted) => {
+                    for eviction in evicted {
+                        player.inner.stats.event(mineral_stats::StatsEvent::System(
+                            mineral_stats::SystemEvent::CacheEviction {
+                                cache_key: eviction.key,
+                                bytes: i64::try_from(eviction.bytes).unwrap_or(i64::MAX),
+                            },
+                        ));
                     }
-                    Ok(evicted) => {
-                        // 埋点:本次入库触发的 LRU 驱逐(cache_evictions;系统域,无 actor)。
-                        for ev in evicted {
-                            player.inner.stats.event(mineral_stats::StatsEvent::System(
-                                mineral_stats::SystemEvent::CacheEviction {
-                                    cache_key: ev.key,
-                                    bytes: i64::try_from(ev.bytes).unwrap_or(i64::MAX),
-                                },
-                            ));
-                        }
-                        if let Some(path) = cache.get(&cap.song.id, cap.quality) {
-                            // 收割成功 = 该曲首次拥有完整本地副本:补算包络。若它仍在播,
-                            // 算完即推,播放中段波形直接点亮;不在播则落库待下次直取。
-                            player.ensure_envelope(cap.song.id.clone(), path.clone());
-                            // 缓存文件落盘 → 异步打标(写引擎走副本 + rename,不伤在播 fd)。
-                            player
-                                .tagging()
-                                .enqueue(cap.song.clone(), path, cap.quality);
-                        }
-                        (mineral_stats::CacheHarvestOutcome::Cached, bytes)
+                    if let Some(path) = cache.get(&cap.song.id, cap.quality) {
+                        mineral_log::info!(
+                            target: "player",
+                            song_id = %cap.song.id.qualified(),
+                            path = %path.display(),
+                            "playback capture cached"
+                        );
+                        // 当前曲会在计算完成时收到包络；已切走或仍在预排时先落库供之后重放。
+                        player.ensure_envelope(cap.song.id.clone(), path.clone());
+                        player
+                            .tagging()
+                            .enqueue(cap.song.clone(), path, cap.quality);
                     }
+                    (mineral_stats::CacheHarvestOutcome::Cached, bytes)
                 }
             }
-            _ => {
-                mineral_log::debug!(target: "player", "capture 文件缺失/空,不入缓存");
-                drop(std::fs::remove_file(&cap.path));
-                (mineral_stats::CacheHarvestOutcome::Discarded, None)
-            }
-        };
-        // 埋点:边播边收割结局(cache_harvests;系统域)。
-        player.inner.stats.event(mineral_stats::StatsEvent::System(
-            mineral_stats::SystemEvent::CacheHarvest {
-                song: song_id,
-                quality,
-                format,
-                outcome,
-                bytes,
-            },
-        ));
-    });
+        }
+        _ => {
+            mineral_log::debug!(target: "player", "capture 文件缺失/空,不入缓存");
+            drop(std::fs::remove_file(&cap.path));
+            (mineral_stats::CacheHarvestOutcome::Discarded, None)
+        }
+    };
+    player.inner.stats.event(mineral_stats::StatsEvent::System(
+        mineral_stats::SystemEvent::CacheHarvest {
+            song: song_id,
+            quality,
+            format,
+            outcome,
+            bytes,
+        },
+    ));
 }
 
 /// 下载 worker:**单线串行**消费队列,把所有目标聚合进**同一进度会话**(`done`/`total`

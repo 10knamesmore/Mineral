@@ -7,7 +7,6 @@ use mineral_protocol::{
     CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
 };
 
-use crate::download::Capturing;
 use crate::gapless::PrefetchState;
 use crate::playback_instance::PlaybackSlot;
 
@@ -80,10 +79,6 @@ pub(crate) struct State {
     /// Exclusive lifecycle of the next-song preparation attempt.
     pub(crate) prefetch: PrefetchState,
 
-    /// 当前正在 capture(边播边落盘)的曲;自然播完 → 入缓存,中途打断 → 删残件。
-    /// 命中缓存直接本地播时为 `None`(无需 capture)。
-    pub(crate) capturing: Option<Capturing>,
-
     /// 本预取窗口内被 hook 否决(`Skip`)的队列**下标**:`next_index` 预测/推进时越过,
     /// 队列本身不动。按下标记(与推进「以下标为真相」同条,重复曲互不吸附);任何队列
     /// 变更/切歌/边界消费都清空,故下标不会陈旧。生命周期整族挂靠预取簿记
@@ -118,7 +113,6 @@ impl State {
             current_lyrics_song_id: None,
             current_envelope: None,
             prefetch: PrefetchState::default(),
-            capturing: None,
             prefetch_vetoed: Vec::new(),
             queue_version: 1,
             current_version: 1,

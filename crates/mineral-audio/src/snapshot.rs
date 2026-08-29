@@ -40,11 +40,6 @@ pub struct AudioSnapshot {
     /// client(CLI status / TUI 顶栏)据此提示用户。
     pub backend: AudioBackend,
 
-    /// 当前曲目的**远端字节是否已下完**(仅 capture 播放有意义;本地 / 非 capture 恒 false)。
-    /// 一完成即为 true,不必等播放结束——上层据此把 capture 文件 harvest 进缓存。切歌后
-    /// 在新曲下完前回落为 false。
-    pub download_complete: bool,
-
     /// 当前曲目已缓冲到的比例。本地 / 已完整缓存恒满;远端流式播放时由 stream-download
     /// 的下载进度回调驱动,随已下字节占总字节推进。总长未知(无 Content-Length)时维持
     /// 零,直到整段下完跳满。切歌瞬间回落零。
@@ -62,9 +57,6 @@ pub struct AudioSnapshot {
 
     /// 已预排的下一曲是否缓冲到「可无缝接续」(已 append 进 rodio 队列即为 true)。
     pub next_ready: bool,
-
-    /// 已预排的下一曲远端字节是否已下完(capture 预排有意义;否则 false)。
-    pub next_download_complete: bool,
 
     /// 当前曲目采样率(Hz),由 decoder 解出后写入;无缝边界轮转时切到下一曲的值。
     /// 没在播 / 未探出为 0。transport 据此在 fmt 段显采样率(如 `44.1kHz`)。

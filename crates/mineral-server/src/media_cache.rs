@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use mineral_model::{AudioFormat, BitRate, Song, SongId, SourceKind};
 use mineral_persist::{CacheIndex, ServerStore};
 
+use crate::playback_instance::PlaybackInstanceId;
+
 /// 单段文件名 / 目录名的最大字节数(留余量,远低于 255 上限)。
 const SEGMENT_MAX_BYTES: usize = 200;
 
@@ -57,18 +59,24 @@ impl MediaCache {
         }
     }
 
-    /// capture 临时落点 `<root>/tmp/<sanitized-key>.part`,与最终库路径同分区(harvest 走 rename)。
+    /// capture 临时落点 `<root>/tmp/<sanitized-key>-<instance>.part`,与最终库路径同分区。
     ///
     /// # Params:
     ///   - `song_id`: 歌曲 ID
     ///   - `quality`: 入库音质
+    ///   - `instance_id`: 本次 playback instance，隔离同曲并发 capture
     ///
     /// # Return:
     ///   临时路径;缓存禁用返回 `None`。
-    pub(crate) fn capture_path(&self, song_id: &SongId, quality: BitRate) -> Option<PathBuf> {
+    pub(crate) fn capture_path(
+        &self,
+        song_id: &SongId,
+        quality: BitRate,
+        instance_id: PlaybackInstanceId,
+    ) -> Option<PathBuf> {
         let root = self.root.as_ref()?;
         let safe = sanitize_segment(&cache_key(song_id, quality), "capture");
-        Some(root.join("tmp").join(format!("{safe}.part")))
+        Some(root.join("tmp").join(format!("{safe}-{instance_id}.part")))
     }
 
     /// 命中返回缓存音频文件的绝对路径(可直接 `MediaUrl::Local` 播放),否则 `None`。
@@ -277,6 +285,8 @@ mod tests {
 
     use mineral_persist::ServerStore;
 
+    use crate::playback_instance::PlaybackInstanceId;
+
     use super::{
         MediaCache, cache_key, ext_for, library_relpath, sanitize_segment, truncate_bytes,
     };
@@ -437,14 +447,15 @@ mod tests {
         Ok(())
     }
 
-    /// capture_path 落在缓存根的 tmp/ 下、带 .part 后缀;键里的冒号被 sanitize 成 `_`。
+    /// capture_path 落在缓存根的 tmp/ 下，并以 playback instance 隔离同曲并发写入。
     #[tokio::test]
     async fn capture_path_under_tmp() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let dir = d.path().join("cache");
         let cache = open_cache(&d.path().join("t.db"), dir.clone()).await?;
         let s = song("186016", "晴天", None);
-        let Some(p) = cache.capture_path(&s.id, BitRate::Lossless) else {
+        let instance_id = PlaybackInstanceId::new();
+        let Some(p) = cache.capture_path(&s.id, BitRate::Lossless, instance_id) else {
             return Err(color_eyre::eyre::eyre!("启用态应给 capture 路径"));
         };
         assert!(
@@ -453,8 +464,8 @@ mod tests {
             p.display()
         );
         assert_eq!(
-            p.file_name().and_then(|s| s.to_str()),
-            Some("netease_186016_lossless.part")
+            p.file_name().and_then(|name| name.to_str()),
+            Some(format!("netease_186016_lossless-{instance_id}.part").as_str())
         );
         Ok(())
     }
@@ -465,7 +476,11 @@ mod tests {
         let cache = MediaCache::disabled();
         let s = song("1", "x", None);
         assert!(cache.get(&s.id, BitRate::Lossless).is_none());
-        assert!(cache.capture_path(&s.id, BitRate::Lossless).is_none());
+        assert!(
+            cache
+                .capture_path(&s.id, BitRate::Lossless, PlaybackInstanceId::new())
+                .is_none()
+        );
         // put_played 不报错(src 不存在也无所谓,直接返回 Ok)。
         cache
             .put_played(

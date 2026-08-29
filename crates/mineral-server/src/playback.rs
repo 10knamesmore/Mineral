@@ -2,13 +2,13 @@
 
 use mineral_model::Song;
 use mineral_playback::{
-    DirectMedia, DirectPreparedPlayback, OpenOptions, OpenedMedia, PlaybackRequest,
-    PreparedPlayback,
+    CaptureReceipt, CaptureTarget, DirectMedia, DirectPreparedPlayback, OpenOptions, OpenedMedia,
+    PlaybackRequest, PreparedPlayback,
 };
 use mineral_protocol::PlaybackOrigin;
 use mineral_script::{HookDecision, HookMode};
 
-use crate::download::Capturing;
+use crate::download::CaptureHarvest;
 use crate::hook_bridge::StreamAvailability;
 use crate::playback_instance::PlaybackSlot;
 use crate::player::PlayerCore;
@@ -162,11 +162,21 @@ async fn run(
         cacheable,
         local_path,
     } = plan;
-    let options = OpenOptions::new(
+    let capture_path = cacheable
+        .then(|| {
+            player
+                .media_cache()
+                .capture_path(&song.id, player.playback_quality(), slot.instance_id)
+        })
+        .flatten();
+    let mut options = OpenOptions::new(
         slot.cancellation.child_token(),
         player.playback_prefetch_bytes(),
     );
-    let opened = tokio::select! {
+    if let Some(path) = &capture_path {
+        options = options.capture_to(CaptureTarget::new(path.clone()));
+    }
+    let mut opened = tokio::select! {
         biased;
         () = slot.cancellation.cancelled() => return,
         result = prepared.open(options) => match result {
@@ -185,6 +195,26 @@ async fn run(
             }
         },
     };
+    match opened.take_capture() {
+        Some(capture) => spawn_capture_harvest(
+            player,
+            song.clone(),
+            player.playback_quality(),
+            opened.info().format.clone(),
+            capture,
+        ),
+        None if capture_path.is_some() => {
+            if let Some(path) = capture_path {
+                drop(std::fs::remove_file(path));
+            }
+            mineral_log::warn!(
+                target: "playback",
+                song_id = %song.id.qualified(),
+                "prepared playback ignored requested capture target"
+            );
+        }
+        None => {}
+    }
     if !matches_slot(player, &slot, role) {
         drop(opened);
         return;
@@ -193,13 +223,59 @@ async fn run(
         player.ensure_envelope(song.id.clone(), path.clone());
     }
     match role {
-        PlaybackRole::Current => {
-            start_opened_current(player, &song, &slot, opened, direct, origin, cacheable)
-        }
+        PlaybackRole::Current => start_opened_current(player, &slot, opened, direct, origin),
         PlaybackRole::Prefetch => {
-            crate::gapless::arm_opened(player, song, &slot, opened, direct, origin, cacheable)
+            crate::gapless::arm_opened(player, song, &slot, opened, direct, origin)
         }
     }
+}
+
+/// Waits for producer capture completion, then harvests the verified file into cache.
+///
+/// # Params:
+///   - `player`: Playback owner.
+///   - `song`: Song metadata used to build the readable cache path.
+///   - `quality`: Cache quality key for this playback request.
+///   - `format`: Prepared media format used for the cache extension.
+///   - `capture`: Producer-owned completion receipt.
+fn spawn_capture_harvest(
+    player: &PlayerCore,
+    song: Song,
+    quality: mineral_model::BitRate,
+    format: Option<mineral_model::AudioFormat>,
+    capture: CaptureReceipt,
+) {
+    let player = player.clone();
+    tokio::spawn(async move {
+        match capture.wait().await {
+            Ok(captured) => {
+                mineral_log::info!(
+                    target: "playback",
+                    song_id = %song.id.qualified(),
+                    bytes = captured.bytes(),
+                    "playback capture completed"
+                );
+                crate::download::harvest_capture(
+                    &player,
+                    CaptureHarvest {
+                        song,
+                        quality,
+                        format,
+                        path: captured.into_path(),
+                    },
+                )
+                .await;
+            }
+            Err(error) => {
+                mineral_log::warn!(
+                    target: "playback",
+                    song_id = %song.id.qualified(),
+                    error = mineral_log::chain(&error),
+                    "playback capture failed"
+                );
+            }
+        }
+    });
 }
 
 /// Applies one hook decision to playable or unplayable resolution.
@@ -306,21 +382,12 @@ async fn resolve(
 /// Starts already-opened current media and updates snapshot/stats facts.
 fn start_opened_current(
     player: &PlayerCore,
-    song: &Song,
     slot: &PlaybackSlot,
     opened: OpenedMedia,
     direct: Option<DirectMedia>,
     origin: PlaybackOrigin,
-    cacheable: bool,
 ) {
     let info = opened.info().clone();
-    let capture = cacheable
-        .then(|| {
-            player
-                .media_cache()
-                .capture_path(&song.id, player.playback_quality())
-        })
-        .flatten();
     let started = player.with_state(|state| {
         if !state
             .current_slot
@@ -329,18 +396,7 @@ fn start_opened_current(
         {
             return false;
         }
-        match capture {
-            Some(path) => {
-                player.audio().play_capturing(opened, path.clone());
-                state.capturing = Some(Capturing {
-                    song: song.clone(),
-                    quality: player.playback_quality(),
-                    format: info.format.clone(),
-                    path,
-                });
-            }
-            None => player.audio().play(opened),
-        }
+        player.audio().play(opened);
         state.play_origin = Some(origin);
         state.media_info = Some(info.clone());
         state.direct_media = direct;

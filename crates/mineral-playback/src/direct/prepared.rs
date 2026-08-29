@@ -77,13 +77,20 @@ impl DirectPreparedPlayback {
             .cloned()
             .ok_or_else(|| eyre!("direct media is not remote"))?;
         let cancellation = options.cancellation().clone();
+        let capture_target = options.capture_target().cloned();
         let opened = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
                 return Err(eyre!("playback instance cancelled during remote open"));
             }
-            result = open_remote(remote, options.prefetch_bytes(), cancellation.clone()) => result?,
+            result = open_remote(
+                remote,
+                options.prefetch_bytes(),
+                capture_target,
+                cancellation.clone(),
+            ) => result?,
         };
+        let capture = opened.capture;
         let (reader, seek_support, byte_len): (Box<dyn MediaReader>, SeekSupport, Option<u64>) =
             match self.media.layout() {
                 StreamLayout::Contiguous => {
@@ -95,14 +102,19 @@ impl DirectPreparedPlayback {
                     None,
                 ),
             };
-        Ok(OpenedMedia::new(
+        let media = OpenedMedia::new(
             Box::new(CancellationReader::new(reader, cancellation.clone())),
             seek_support,
             byte_len,
             self.media.info().clone(),
             Some(opened.transfer),
             cancellation,
-        ))
+        );
+        Ok(if let Some(capture) = capture {
+            media.with_capture(capture)
+        } else {
+            media
+        })
     }
 }
 

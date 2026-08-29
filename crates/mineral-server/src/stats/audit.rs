@@ -188,7 +188,7 @@ fn audit_system_emitters(event: &SystemEvent) -> &'static str {
         SystemEvent::Prefetch { .. } => {
             "gapless.rs 武装 + hook_bridge.rs 否决 + playback.rs 改写 / 失败"
         }
-        SystemEvent::CacheHarvest { .. } => "download.rs spawn_harvest 收割终态",
+        SystemEvent::CacheHarvest { .. } => "download.rs harvest_capture 收割终态",
         SystemEvent::CacheEviction { .. } => "media_cache 淘汰点",
         SystemEvent::ScriptLifecycle { .. } => "script_reload + script_bridge 生命周期回调",
         SystemEvent::ConfigReload => "config_host 重载成功处",

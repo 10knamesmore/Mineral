@@ -7,7 +7,8 @@ mod registry;
 
 pub use direct::DirectPreparedPlayback;
 pub use media::{
-    MediaReader, OpenOptions, OpenedMedia, SeekSupport, TransferSnapshot, TransferState,
+    CaptureReceipt, CaptureTarget, CapturedMedia, MediaReader, OpenOptions, OpenedMedia,
+    SeekSupport, TransferSnapshot, TransferState,
 };
 pub use mineral_model::{DirectLocator, DirectMedia, RemoteLocator};
 pub use provider::{PlaybackProvider, PlaybackRequest, PreparedPlayback};

@@ -1,9 +1,8 @@
 //! 服务端 PlayerCore — 集中持有「播放上下文」(current_song / queue / play_mode /
 //! media_info / current_lyrics / prefetched 等),让 daemon 自治 auto-next、不依赖 client。
 //!
-//! 长跑后台 loop 周期做四件事:drain scheduler 产出(消化 LyricsReady,其余推 client)、
-//! auto-next(监听 `track_finished_seq`)、prefetch 下一曲媒体、harvest
-//! 下完的 capture。下载走独立单 worker 串行消费队列(见 [`crate::download`])。
+//! 长跑后台 loop 周期 drain scheduler 产出、推进 auto-next、预排下一曲并维护会话状态。
+//! playback capture 由 producer 完成事件触发，下载走独立单 worker 串行消费队列。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -481,7 +480,6 @@ impl PlayerCore {
         self.inner
             .scheduler
             .cancel_where(|k| matches!(k, TaskKind::ChannelFetch(ChannelFetchKind::Lyrics { .. })));
-        let prev_download_complete = self.inner.audio.snapshot().download_complete;
         self.inner.audio.stop();
         let local_hit = crate::resolve::resolve_local(
             &self.inner.media_cache,
@@ -494,12 +492,12 @@ impl PlayerCore {
             .map_or(PlaybackOrigin::Remote, |hit| hit.origin);
         let slot = crate::playback_instance::PlaybackSlot::new(song.id.clone());
 
-        let (interrupted, stale_queued) = {
+        {
             let mut st = self.inner.state.lock();
             if let Some(current) = st.current_slot.take() {
                 current.cancel();
             }
-            let stale_queued = st.take_prefetch();
+            drop(st.take_prefetch());
             st.current_song = Some(song.clone());
             // 仅当游标尚未指向本曲时才按身份 first-match 定位(列表点歌入口)。
             // 顺序推进入口(advance_next/advance_prev)已把游标钉到精确下标,这里
@@ -522,9 +520,7 @@ impl PlayerCore {
             st.current_lyrics = None;
             st.current_lyrics_song_id = None;
             st.bump_current();
-            let interrupted = st.capturing.take();
-            (interrupted, stale_queued)
-        };
+        }
         // 埋点:起播语境快照(origin / actor 由调用点穿透;context 经 take_play_context
         // 消费 per-song 覆盖或继承队列级语境;format 等 resolved 快照随后经 enrich 补;
         // 时钟异常拿不出起播时刻则本次不记)。
@@ -540,18 +536,6 @@ impl PlayerCore {
             context,
         ) {
             self.inner.stats.play_started(pending);
-        }
-        if let Some(cap) = interrupted {
-            // 切歌时若该曲已下完(且 harvest 轮询还没来得及处理)→ 照样入缓存;否则是 half,删残件。
-            if prev_download_complete {
-                download::spawn_harvest(self, cap);
-            } else {
-                drop(std::fs::remove_file(&cap.path));
-            }
-        }
-        if let Some(cap) = stale_queued.and_then(|q| q.capturing) {
-            // 被丢弃的预排曲:删其半截 capture 残件。
-            drop(std::fs::remove_file(&cap.path));
         }
         // 对齐 finished_seq,防止 audio.stop() 极端时序下被旧 seq 误触发。
         let seq = self.inner.audio.snapshot().track_finished_seq;
@@ -657,13 +641,12 @@ impl PlayerCore {
 
     // ---- 长跑后台 task ----
 
-    /// 长跑后台 loop:每 tick 一次 events drain + harvest + auto-next + prefetch 检查。
+    /// 长跑后台 loop:每 tick 一次 events drain + auto-next + prefetch 检查。
     async fn background_loop(self) {
         let mut tick = tokio::time::interval(Duration::from_millis(self.inner.player_tick_ms));
         loop {
             tick.tick().await;
             self.consume_events_once();
-            gapless::check_harvest(&self);
             gapless::check_advance(&self);
             gapless::check_prefetch(&self);
             self.check_props();

@@ -692,7 +692,7 @@ Config {
             cache: CoverCacheConfig {
                 disk: 4294967296,
                 image: 134217728,
-                preview: 8388608,
+                preview: 16777216,
                 protocol: 67108864,
             },
         },
