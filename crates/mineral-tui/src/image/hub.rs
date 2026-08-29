@@ -70,7 +70,8 @@ pub struct CoverTransition {
     pub anim: Transition,
 }
 
-/// 负责图片获取、终端成品缓存、渲染政策与 worker/backend 生命周期的中央引擎。
+/// 负责图片请求生命周期、终端成品缓存、渲染政策与 worker/backend 生命周期的中央引擎。
+/// preview 与 decode 候选的缓存、失败和在途判断均在此收敛。
 pub struct ImageEngine {
     /// 与应用状态共享的当前配置，整棵替换后所有现读政策立即生效。
     cfg: Arc<mineral_config::Config>,
@@ -97,7 +98,7 @@ pub struct ImageEngine {
     pub current_palette: Option<CoverPalette>,
 
     /// 正在执行的 preview 或 decode URL；只表达真实 in-flight。
-    pub pending: FxHashSet<MediaUrl>,
+    pending: FxHashSet<MediaUrl>,
 
     /// 已知图片 URL 对应的来源；render miss 据此选择磁盘缓存子目录。
     source_by_url: FxHashMap<MediaUrl, SourceKind>,

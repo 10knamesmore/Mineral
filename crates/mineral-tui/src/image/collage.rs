@@ -39,9 +39,7 @@ pub(crate) fn tick(state: &mut AppState) {
             continue;
         };
         for (source, url) in &members {
-            if !state.images.cache.contains_key(url) && !state.images.pending.contains(url) {
-                requests.push((*source, (*url).clone()));
-            }
+            requests.push((*source, (*url).clone()));
         }
         // 先用 contains_key 数就绪(不 touch LRU):已按当前就绪数拼过就别再逐张 get
         // 续命成员图——拼完的成员图让 LRU 自然淘汰。
@@ -329,17 +327,12 @@ mod tests {
         Ok(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?)
     }
 
-    /// 成员图未就绪:tick 只把成员封面标 pending(请求已投),不合成。
+    /// 禁用 fetcher 会同步结束成员请求，不留下 loading，也不合成空拼贴。
     #[test]
-    fn tick_requests_member_covers() -> color_eyre::Result<()> {
+    fn disabled_fetcher_settles_member_requests() -> color_eyre::Result<()> {
         let mut s = mineral_state(4)?;
         tick(&mut s);
-        for i in 0..4 {
-            assert!(
-                s.images.pending.contains(&cover_url(i)?),
-                "成员 {i} 封面应已标 pending"
-            );
-        }
+        assert_eq!(s.images.loading_count(), 0, "禁用 fetcher 不应留下在途请求");
         assert!(s.images.collage_ready.is_empty(), "无就绪成员不应合成");
         assert!(
             effective_cover_url(

@@ -5,7 +5,8 @@
 //! - **tracks**:歌单的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
 //! - **local play count**:Selected 展示当前歌曲在 Mineral 中自然播完的次数
 //!
-//! 各路分别用 pending / requested 集去重，稳态下 tick 只做有界窗口 hash 查找。
+//! 封面路径只选择候选并做单批 URL 去重，请求生命周期由图片引擎管理；其余路径用各自的
+//! requested 状态避免重复提交。稳态下 tick 只做有界窗口 hash 查找。
 
 use mineral_channel_core::Page;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
@@ -25,29 +26,26 @@ pub fn tick(state: &mut AppState, client: &dyn Client) {
     crate::image::collage::tick(state);
 }
 
-/// 看 view 决定的 sel 周围 `prefetch.radius` 内未 cache / pending 的封面,
-/// sel 优先 → 外扩提交真实低清 preview。来源随封面一起带出，决定落盘子目录。
+/// 看 view 决定的 sel 周围 `prefetch.radius` 收集封面候选，sel 优先向外扩展。
+/// 来源随封面一起带出，决定图片引擎使用的落盘子目录。
 fn request_covers(state: &mut AppState) {
-    let items = collect_pending_covers(state);
+    let items = collect_cover_candidates(state);
     state.images.prefetch(items);
 }
 
-/// 收集未 cache、未 pending 的 `(来源, 封面 URL)`,两条轴:浏览选中 sel ± `prefetch.radius`
-/// (随 view 取歌单 / 歌曲列表),以及在播曲 ± `prefetch.playback_cover_radius`(沿播放队列)。
-/// 后者与 view 无关——全屏渲染的是在播曲,且自动切歌的下一首也要先就绪。
+/// 收集 `(来源, 封面 URL)` 候选并在单批内按 URL 去重，两条轴:浏览选中 sel ±
+/// `prefetch.radius`(随 view 取歌单 / 歌曲列表),以及在播曲 ±
+/// `prefetch.playback_cover_radius`(沿播放队列)。后者与 view 无关——全屏渲染的是在播曲，
+/// 且自动切歌的下一首也要先就绪。缓存、失败和在途状态由图片引擎判断。
 ///
 /// 来源从所在条目的 id namespace 派生(歌单 / 歌曲都带源)。
-fn collect_pending_covers(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+fn collect_cover_candidates(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
     let radius = *state.cfg.tui().prefetch().radius();
     let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
-    let cache = &state.images.cache;
-    let pending = &state.images.pending;
     let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
                        out: &mut Vec<(SourceKind, MediaUrl)>| {
         if let Some((source, u)) = item
-            && !cache.contains_key(u)
-            && !pending.contains(u)
             && !out.iter().any(|(_, existing)| existing == u)
         {
             out.push((source, u.clone()));
@@ -226,7 +224,7 @@ fn request_detail(state: &mut AppState, client: &dyn Client) {
 /// search 布局态下，给当前 detail 帧列表选中项的封面搭车投图片引擎（artist 帧右栏副头图用）。
 ///
 /// 与 detail fetch 去重解耦：选中项随 `[ ]` 切区 / 光标移动而变，每 tick 看一眼，靠
-/// 图片引擎的 cache/pending 去重兜重复。沿用 detail 驻留防抖窗，避免快速翻列表时
+/// 图片引擎按缓存、失败和在途状态去重。沿用 detail 驻留防抖窗，避免快速翻列表时
 /// 给下载队列灌一堆滚过即弃的图；不投则右栏副头图会一直留空。
 fn request_detail_selected_cover(state: &mut AppState) {
     if !state.channel_search.active.on() {
@@ -330,7 +328,7 @@ mod tests {
     use mineral_protocol::FinishReason;
     use mineral_task::TaskEvent;
 
-    use super::{collect_pending_covers, request_play_count};
+    use super::{collect_cover_candidates, request_play_count};
     use crate::runtime::state::{AppState, View};
     use crate::test_support::{TestClient, state_with_mixed_tracks};
 
@@ -347,7 +345,7 @@ mod tests {
     /// 收集结果里是否含某序号歌的封面 URL。
     fn collected_has(state: &AppState, i: usize) -> color_eyre::Result<bool> {
         let want = MediaUrl::remote(&format!("https://cover/{i}.jpg"))?;
-        Ok(collect_pending_covers(state)
+        Ok(collect_cover_candidates(state)
             .iter()
             .any(|(_, u)| *u == want))
     }

@@ -10,7 +10,8 @@
 //!   减一条复杂度,跟现在(server 端 cancel 后的 cache 命中行为)对齐。
 //! - **不做内部 dedup**:dedup 由 [`crate::image::ImageEngine`] 的 pending 集合负责。
 //!   fetcher 单纯 FIFO worker pool。
-//! - **完成态完整**:preview / decode 成败都会回传 completion，让调用方结束 in-flight。
+//! - **完成态完整**:健康 worker 的 preview / decode 成败都会回传 completion；关闭的队列
+//!   同步拒绝请求，让调用方立即结束 in-flight。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,16 +135,14 @@ pub(crate) enum CoverCompletion {
 /// 完成 buffer 类型别名。worker 端 push、client tick 端 drain。
 type ReadyBuf = Arc<Mutex<Vec<CoverCompletion>>>;
 
-/// Client 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪。
+/// Client 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪；
+/// 禁用态使用关闭的请求队列同步拒绝投递。
 pub(crate) struct CoverFetcher {
     /// 待执行的 preview / decode 请求队列。
     req_tx: mpsc::UnboundedSender<CoverRequest>,
 
     /// worker 完成后塞结果的 buffer;client tick `drain_ready()` 一次拿走。
     ready: ReadyBuf,
-
-    /// 禁用态保留接收端，让既有无 runtime fixture 可以观察已提交请求。
-    _disabled_rx: Option<mpsc::UnboundedReceiver<CoverRequest>>,
 }
 
 /// 封面磁盘缓存句柄(可缺):命中省一次网络往返。`None` 表示缓存不可用
@@ -184,11 +183,7 @@ impl CoverFetcher {
                 worker_loop(rx, ready, client, cache, cfg).await;
             });
         }
-        Ok(Self {
-            req_tx: tx,
-            ready,
-            _disabled_rx: None,
-        })
+        Ok(Self { req_tx: tx, ready })
     }
 
     /// 打开封面磁盘缓存(`cover_cache` 表落共享的 `tui.db`,文件落 `cover_cache_dir`)。
@@ -222,14 +217,15 @@ impl CoverFetcher {
     /// 禁用态 fetcher:不起 worker、不建 isahc client,纯 null object。
     ///
     /// 用于封面降级场景——headless / 无网 / isahc 建不起来(TLS / 证书),或测试里
-    /// 不需要真抓图时。请求会留在禁用态 channel，`drain_ready()` 恒空。
+    /// 不需要真抓图时。请求队列保持关闭，preview / decode 投递返回 `false`，
+    /// `drain_ready()` 恒空。
     /// 与 [`CoverFetcher::spawn`] 不同,**不需要 tokio runtime**。
     pub(crate) fn disabled() -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
+        drop(rx);
         Self {
             req_tx: tx,
             ready: Arc::new(Mutex::new(Vec::new())),
-            _disabled_rx: Some(rx),
         }
     }
 
