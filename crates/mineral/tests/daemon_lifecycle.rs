@@ -195,6 +195,7 @@ fn serve_command(root: &std::path::Path, sock_dir: &std::path::Path) -> Command 
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_DATA_HOME", root.join("data"))
         .env("MINERAL_SOCKET_DIR", sock_dir)
+        .env("RUST_LOG", "info")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
