@@ -340,7 +340,7 @@ impl DetailFrame {
         }
     }
 
-    /// 当前区列表选中行对应的实体（detail 焦点的行级菜单 `y`/`o` 据此构造项）：歌单/专辑/
+    /// 当前区列表选中行对应的实体（detail 焦点的行级动作据此构造目标）：歌单/专辑/
     /// 歌曲帧曲目行、artist Hot 区热门曲 → `Song`；artist Albums 区 → `Album`（容器，菜单走
     /// 播放全部）；数据未到 / 越界 → `None`。与 [`Self::list_len`] 同一套
     /// `(entity, section, data)` 分流——`j`/`k` 钳的行与菜单取的行必须是同一行。

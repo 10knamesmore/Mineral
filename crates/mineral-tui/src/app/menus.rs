@@ -83,17 +83,17 @@ impl App {
             return None;
         }
         if self.state.channel_search.active.on() {
-            let kr = self.state.channel_search.active_results()?;
+            let entity = self.state.channel_search.selected_entity()?;
             return match self.state.channel_search.focus {
                 SearchFocus::Results => Some(ListSelection {
-                    entity: EntityRef::from_payload(&kr.results, kr.sel())?,
+                    entity,
                     anchor: self.search_row_anchor()?,
                     surface: SurfaceKind::SearchResults,
                 }),
                 // detail 焦点:当前区选中行的实体（曲目 / artist 某区），锚到 detail 面板内
                 // 该列表区的选中行下方。
                 SearchFocus::Detail => Some(ListSelection {
-                    entity: kr.detail.current()?.row_entity()?,
+                    entity,
                     anchor: self.search_detail_row_anchor()?,
                     surface: SurfaceKind::SearchDetail,
                 }),

@@ -10,6 +10,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent};
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Album, SearchKind, Song, SourceKind};
+use mineral_protocol::DownloadTarget;
 use mineral_task::{ChannelFetchKind, Priority, SearchPayload, TaskKind};
 use rustc_hash::FxHashMap;
 
@@ -55,6 +56,9 @@ pub(crate) enum SearchEffect {
         context: mineral_protocol::QueueContextWire,
     },
 
+    /// 下载 Search 当前光标指向的歌曲。
+    Download(Box<Song>),
+
     /// 提交一条首页搜索任务(User 优先级)。
     Submit {
         /// 目标 source。
@@ -83,7 +87,7 @@ pub(crate) enum SearchEffect {
         offset: u32,
     },
 
-    /// 非搜索动词回落全局 dispatch(transport / 退出确认等照常生效)。
+    /// Search 未接管的动词回落全局 dispatch(transport / 退出确认等照常生效)。
     Dispatch(Action),
 
     /// 纯状态改动,无副作用。
@@ -118,6 +122,9 @@ impl App {
                 target,
                 context,
             } => self.play_queue(queue, target, context),
+            SearchEffect::Download(song) => {
+                self.client.download(DownloadTarget::Song(song));
+            }
             SearchEffect::Submit {
                 source,
                 kind,
@@ -174,8 +181,9 @@ impl Page for SearchPage {
 }
 
 impl SearchPage {
-    /// 面板(results / detail)导航:搜索界面非文本输入,只截获面板导航,其余键回落全局
-    /// dispatch（[`SearchEffect::Dispatch`]）——transport(播放/音量/seek/模式)、退出确认等照常生效。
+    /// 面板(results / detail)导航:搜索界面非文本输入,截获面板导航与当前行下载,其余键
+    /// 回落全局 dispatch（[`SearchEffect::Dispatch`]）——transport(播放/音量/seek/模式)、
+    /// 退出确认等照常生效。
     ///
     /// 截获:回 prompt 的模式键直拦;`activate` 前进、`back` 后退;`move_*` 移结果光标
     /// (仅结果列焦点;detail 焦点忽略——既不动 results 也不回落去动浏览列表)。
@@ -199,6 +207,7 @@ impl SearchPage {
                 self.cycle_detail_section(ctx.sweep_ticks);
                 SearchEffect::None
             }
+            Some(Action::DownloadSelection) => self.download_selected_song(),
             // detail 焦点下 C-d/u/b/f 滚头部简介(与列表光标 j/k 分治、键不重叠);
             // 其它焦点不接管并回落全局 dispatch。
             Some(Action::Scroll(step)) if self.focus == SearchFocus::Detail => {
@@ -211,6 +220,30 @@ impl SearchPage {
             }
             Some(other) => SearchEffect::Dispatch(other),
             None => SearchEffect::None,
+        }
+    }
+
+    /// 把 Search 当前光标行转换成单曲下载意图；容器行没有对应下载语义时为空操作。
+    fn download_selected_song(&self) -> SearchEffect {
+        match self.selected_entity() {
+            Some(EntityRef::Song(song)) => SearchEffect::Download(song),
+            Some(EntityRef::Album(_) | EntityRef::Artist(_) | EntityRef::Playlist(_)) | None => {
+                SearchEffect::None
+            }
+        }
+    }
+
+    /// 返回 Search 当前面板光标指向的实体；prompt 焦点、数据未到或光标越界时为 `None`。
+    pub(crate) fn selected_entity(&self) -> Option<EntityRef> {
+        match self.focus {
+            SearchFocus::Results => self
+                .active_results()
+                .and_then(|results| EntityRef::from_payload(&results.results, results.sel())),
+            SearchFocus::Detail => self
+                .active_results()
+                .and_then(|results| results.detail.current())
+                .and_then(crate::runtime::state::DetailFrame::row_entity),
+            SearchFocus::Prompt => None,
         }
     }
 
