@@ -314,7 +314,7 @@ mod tests {
 
     use super::{SpectrumComputer, SpectrumParams};
 
-    /// 测试默认条数(跟原 `BARS` 常量一致,后续如果不再用 64 测试改这一处)。
+    /// 测试基线使用的频谱条数。
     const TEST_BARS: usize = 64;
 
     /// 测试窗大小(与测试基线参数一致)。

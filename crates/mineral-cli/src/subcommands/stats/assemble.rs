@@ -2,7 +2,7 @@
 //!
 //! 展示名不跨库:歌名 JOIN 库内 songs 维表,专辑 / 艺人 / 歌单名取 plays 行的
 //! `context_name` 快照聚合。装配好的 [`RawReport`] 交 `mineral_stats::combine` 纯函数
-//! 成形——与将来 TUI 盘点页经 daemon 出报告复用同一装配,不重复口径。
+//! 成形；渲染层不另行查询名称或重算统计口径。
 
 use std::ops::Range;
 
@@ -10,7 +10,7 @@ use mineral_stats::{
     ContextSlice, NamedEntry, RawReport, ReportOptions, StatsReport, StatsStore, TopBy, combine,
 };
 
-/// 装配一份完整盘点报告(§8.1 全套,名字随查询直出)。
+/// 装配一份完整盘点报告；展示名随 stats.db 查询结果直出。
 ///
 /// # Params:
 ///   - `store`: stats.db 查询句柄
@@ -27,7 +27,7 @@ pub async fn stats_report(
     Ok(combine(raw_report(store, range, opts).await?))
 }
 
-/// 跑 §8.1 九项查询,拼成 [`RawReport`]。
+/// 查询 [`RawReport`] 的全部统计维度并装配原始报告。
 async fn raw_report(
     store: &StatsStore,
     range: Range<i64>,

@@ -1,6 +1,6 @@
 -- deep_merge(base, override):返回新表;override 的键覆盖 base。
 -- 两侧同键且都是「map 表」→ 递归深合并;否则(标量 / 数组 / 类型不一)→ override 整体替换。
--- 数组判定:序列表(连续整数键从 1 起)视为数组,整体替换不逐元素合并(设计 D3)。
+-- 数组判定:序列表(连续整数键从 1 起)视为数组,整体替换不逐元素合并。
 
 -- 连续整数键检测;空表视为非数组(空 override 对 map base = 不改变,保 merge(d,{})==d)。
 local function is_array(t)

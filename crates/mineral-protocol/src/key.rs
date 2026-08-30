@@ -67,7 +67,7 @@ pub struct PlaylistRef {
 /// 职责边界:只携带 **daemon 不知道的 client 侧信息**(在看什么 / 选中什么 /
 /// 搜索词);播放器态(音量 / 进度 / 队列)归属性树 `mineral.get`,不在此重复。
 ///
-/// 私有字段 + builder 构造 + getter 读取;加字段经 builder 是兼容增量。
+/// 字段私有,调用方通过 builder 构造、通过 getter 读取。
 #[derive(
     Clone,
     Debug,

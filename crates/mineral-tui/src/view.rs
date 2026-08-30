@@ -250,7 +250,7 @@ fn paint_fullscreen(
     app: &App,
     flight: Option<(&flight::FlightPlan, u16)>,
 ) {
-    // 氛围背景已由 `paint_backdrop` 在布局分派前整屏铺就(滞后跟随门控),此处不再自铺。
+    // `paint_backdrop` 在布局分派前统一铺氛围背景(受滞后跟随门控)，本分支只画内容层。
     let theme = &app.theme;
     if let Some(r) = nonempty(areas.top_status) {
         top_status::draw(frame, r, &app.state, theme);
@@ -339,8 +339,8 @@ fn now_playing_cover_skip(app: &App, right: Option<Rect>) -> Option<Rect> {
     app.state.images.ready_area(&url, nonempty(cover_sec)?)
 }
 
-/// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时空操作(保留终端默认
-/// 底,即旧行为)。`skip` 区不刷(见 [`ambient_skip_rect`])。
+/// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时不改已有背景。
+/// `skip` 区不刷(见 [`ambient_skip_rect`])。
 fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
     if matches!(color, Color::Reset) {
         return;
@@ -520,14 +520,9 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏进入形变:不按逐帧漂移的 dims 派发编码(churn),预热只按**端点稳态尺寸**
-    /// (封面飞行层两端各一)——编码与形变动画并行,落定即命中。从零 pending 起步
-    /// (不先渲常规帧:常规面板与全屏封面的正方 cell 尺寸在部分终端几何下会撞同值,
-    /// 基线派发会掩蔽预热条目)。三段断言:
-    /// ① 首个形变帧后 pending 即有端点预热条目;
-    /// ② 后续形变帧 pending 不再变(逐帧漂移 dims 一条都没混进来);
-    /// ③ 落定 at_max 渲稳态帧后 pending 仍不变——稳态渲染与预热撞同一 `(url, dims)` 去重,
-    ///    反证预热用的正是终态尺寸(错一个 cell 都会多出一条)。
+    /// 全屏形变只能按两端稳态尺寸预热；中间帧不得按逐帧尺寸追加编码。测试不先渲染常规
+    /// 帧，避免常规封面尺寸恰好与端点相同时掩盖预热请求；落定帧必须命中相同
+    /// `(url, dims)` 去重键。
     #[test]
     fn fullscreen_morph_prewarms_steady_cover_once() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -560,9 +555,7 @@ mod tests {
 
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
 
-        // 进入全屏,推进若干形变帧(均 `!settled`)。首帧即应派发端点稳态尺寸预热
-        // (飞行层两端各一,终态全屏尺寸在内);之后每帧 pending 定格——证明没按逐帧
-        // 漂移 dims 追加派发。
+        // 从空 pending 开始形变,使首帧暴露端点预热请求。
         app.state.browse.fullscreen.set(true);
         let mut morph_pending = app.state.images.encode_pending.borrow().clone();
         assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
@@ -588,8 +581,6 @@ mod tests {
             }
         }
 
-        // 推进到落定(at_max),渲稳态全屏帧:稳态渲染的派发应与预热同 key 去重,
-        // pending 纹丝不动 —— 反证预热 dims 与稳态渲染 dims 完全一致。
         for _ in 0..1_000 {
             if app.state.browse.fullscreen.settled() {
                 break;
@@ -601,7 +592,7 @@ mod tests {
         assert_eq!(
             *app.state.images.encode_pending.borrow(),
             morph_pending,
-            "稳态渲染应命中预热的同 (url, dims) 去重,不再追加派发"
+            "稳态渲染应命中预热的同一 (url, dims) 去重键"
         );
         Ok(())
     }
@@ -665,8 +656,7 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏形变中途：完整解码图与 preview 都未命中时不绘制图片，不应出现品红像素。
-    /// 与上一例对照，证明没有可用图片时封面区留空。
+    /// 全屏形变中途没有完整解码图或 preview 时，封面区不绘制图片像素。
     #[test]
     fn fullscreen_morph_without_cached_image_omits_real_pixels() -> color_eyre::Result<()> {
         use mineral_model::{MediaUrl, PlaylistId, SourceKind};
@@ -802,8 +792,7 @@ mod tests {
         Ok(())
     }
 
-    /// Page morph 首帧即按两端稳态尺寸预热封面编码;后续形变帧 pending 定格
-    /// (`(url, dims)` 去重,无逐帧 churn 派发)。
+    /// Page morph 只为两端稳态尺寸派发封面编码；中间帧命中 `(url, dims)` 去重。
     #[test]
     fn search_morph_prewarms_endpoints_without_churn() -> color_eyre::Result<()> {
         use crate::render::anim::Toggle;
@@ -881,9 +870,8 @@ mod tests {
         Ok(app)
     }
 
-    /// Browse → Fullscreen 形变中途、选中曲与在播曲封面都在缓存:飞行层跨端 fade 合成
-    /// (混色 cell),两端纯色均不出现——选中图不再原地收掉、在播图不再从零长出,
-    /// 而是一张图连续变身飞过去。
+    /// Browse → Fullscreen 形变中途、选中曲与在播曲封面都在缓存时，飞行层跨端 fade
+    /// 只产生混色 cell，不渲染任一端点的纯色帧。
     #[test]
     fn fullscreen_morph_flies_crossfade_selected_to_playing() -> color_eyre::Result<()> {
         let app =
@@ -898,18 +886,17 @@ mod tests {
         assert_eq!(
             count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)),
             0,
-            "选中曲纯品红应被抑制(不再原地收掉)"
+            "形变中途不应出现选中曲的纯品红端点帧"
         );
         assert_eq!(
             count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)),
             0,
-            "在播曲纯青不应中途出现(不再从零长出)"
+            "形变中途不应出现播放曲的纯青端点帧"
         );
         Ok(())
     }
 
-    /// 仅在播曲图缓存(选中曲图缺):fullscreen 飞行层不开(单端不优于现状收放兜底),
-    /// 维持现状——在播图 halfblock 随封面区长出(纯青可见)、无混色。
+    /// 仅在播曲图缓存时 fullscreen 飞行层不开，halfblock 随封面区长出且不产生混色。
     #[test]
     fn fullscreen_morph_single_image_keeps_grow_path() -> color_eyre::Result<()> {
         let app =
@@ -919,7 +906,7 @@ mod tests {
         let buf = t.backend().buffer();
         assert!(
             count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)) > 0,
-            "现状生长路径应保留(在播图 halfblock 长出)"
+            "单端缓存时应由 halfblock 生长路径渲染在播图"
         );
         assert_eq!(count_fg_cells(buf, is_fade_mix), 0, "单端不应出现混色");
         Ok(())
@@ -1014,8 +1001,7 @@ mod tests {
         Ok(())
     }
 
-    /// 全屏稳态切歌转场中途:封面区画两图合成的 halfblock 混色帧(fade 中点 = 均值色),
-    /// 而非任一原图，证明转场窗口接管了稳态渲染路径。
+    /// 全屏稳态切歌转场中途，封面区绘制两图合成的 halfblock 混色帧，而非任一原图。
     #[test]
     fn fullscreen_transition_paints_halfblock_blend() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -1145,10 +1131,8 @@ mod tests {
         Ok(())
     }
 
-    /// `ambient.enabled = false` 且已静止在底色场:氛围层整段跳过铺场。为把它与
-    /// `theme.background` 整屏填充区分开,这里一并 `background = reset`(关掉纯色填充)——
-    /// 即便滞后跟随已推满、渲染入口活着,顶行角落 bg 仍保持未写入(终端默认),
-    /// 证明关闭态氛围层常态零开销。
+    /// `ambient.enabled = false` 时氛围层不铺场。测试同时设置 `background = reset` 以隔离
+    /// 主题底色填充；滞后进度推满后，顶行角落仍必须保持终端默认背景。
     #[test]
     fn fullscreen_ambient_disabled_skips_painting() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;

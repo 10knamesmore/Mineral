@@ -183,7 +183,7 @@ impl BrowsePage {
 
     /// 某歌单的深度命中展示载荷(克隆一份给渲染)。空 query / 无命中返回 `None`。
     ///
-    /// 调用前提:本帧已有人调过 [`Self::filtered_playlists`],缓存已就绪;这里不再 ensure。
+    /// 调用前提:本帧已调用 [`Self::filtered_playlists`]，深度搜索缓存已经就绪。
     pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<DeepHit> {
         if self.search.query().is_empty() {
             return None;

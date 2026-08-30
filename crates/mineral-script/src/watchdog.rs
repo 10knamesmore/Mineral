@@ -10,8 +10,7 @@ use std::time::Instant;
 
 use mlua::{FromLuaMulti, HookTriggers, IntoLuaMulti, Lua, VmState};
 
-/// 看门狗参数。全必填(默认值是 PR-4 配置三件套的事,
-/// `default.lua` 是唯一默认真相源,这里不重复)。
+/// 看门狗参数。字段全必填；默认值只由 `default.lua` 提供。
 #[derive(Clone, Copy, Debug, derive_getters::Getters, typed_builder::TypedBuilder)]
 pub struct WatchdogConfig {
     /// 每多少条 VM 指令检查一次墙钟(越小越灵敏、开销越大)。

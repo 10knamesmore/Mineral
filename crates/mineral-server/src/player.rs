@@ -446,7 +446,7 @@ impl PlayerCore {
 
     // ---- player 业务 ----
 
-    /// Enter 一首歌。等价历史 `App::submit_play_song`。
+    /// 建立一首歌的播放状态并启动媒体解析。
     ///
     /// **不结算上一首**:自然 EOF / next / prev / stop 各路径已在调用前按各自语义
     /// (eof / skip / stop)结算;直接改播入口(client `PlaySong` / 脚本 `Play`)须先调

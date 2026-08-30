@@ -382,7 +382,7 @@ pub struct RawReport {
     pub events: EventSummary,
 }
 
-/// 一份装配好的完整盘点报告(§8.1 全套,名字随库直出)。
+/// 一份装配好的完整盘点报告；展示名由 stats.db 查询结果提供。
 #[derive(Clone, Debug, Serialize)]
 #[non_exhaustive]
 pub struct StatsReport {
@@ -417,7 +417,7 @@ pub struct StatsReport {
 /// 纯函数:把 stats.db 直出的原始聚合装配成完整报告。
 ///
 /// 名字已由查询层就地 JOIN / 快照聚合得出(stats.db 自足,不回查其他数据库);缺名
-/// 保持 `None`,展示层回落 id。无 IO——server 出报告与将来 TUI 盘点页复用同一装配。
+/// 保持 `None`,展示层回落 id。此函数不执行 IO。
 ///
 /// # Params:
 ///   - `raw`: stats.db 直出的原始聚合

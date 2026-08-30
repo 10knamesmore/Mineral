@@ -17,8 +17,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # ALSA 开发头文件是**编译期**依赖:rodio/cpal 经 alsa-sys → pkg-config 链接
-      # libasound,缺它 build 直接挂。运行期无声卡由 audio engine 降级 null 兜底,
-      # 不再需要 PulseAudio null-sink 那套运行期 hack。
+      # libasound,缺它 build 直接挂。AudioMode::Auto 在无输出设备时使用 null backend,
+      # 因此 job 不需要运行期音频 sink。
       - name: 安装 ALSA 开发库
         run: |
           sudo apt-get update

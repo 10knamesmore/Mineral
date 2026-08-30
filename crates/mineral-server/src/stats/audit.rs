@@ -59,7 +59,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::ToggleLove(..) => Recorded("love_changes"),
         Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询，事实来自 stats.db"),
         Request::Download(..) => Recorded("downloads"),
-        // 回填只复用既有 tagging 队列(无新行为事实);单曲成败走日志,不落行为表。
+        // 回填复用 tagging 队列,不记录独立行为事件;单曲成败只写日志。
         Request::TagBackfill => NotAnEvent("维护操作:存量文件回填打标"),
         Request::TagProgress => NotAnEvent("轮询读:打标进度"),
         Request::DownloadProgress => NotAnEvent("轮询读:下载进度"),
@@ -253,7 +253,7 @@ mod tests {
         "playlist_ops",
     ];
 
-    /// §9.8 对账:audit 声称记入的每张表都真实存在于 migrations(防表名拼错 / 迁移漂移)。
+    /// audit 声称记入的每张表都必须存在于 migrations,防止表名拼错或迁移漂移。
     #[test]
     fn audit_recorded_tables_exist_in_migrations() {
         for table in AUDIT_TABLES {

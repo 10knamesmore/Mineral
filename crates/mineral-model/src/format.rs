@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 /// 「尽力提供」返回意料外的值),进 model 时归一化到本枚举。未识别的值**保留原文**
 /// 落入 [`AudioFormat::Other`],既不丢信息也不会反序列化失败。
 ///
-/// serde 经 `from = "String"` / `into = "String"` 把本枚举当**纯字符串**进出,
-/// 所以序列化结果与旧的 `String` 字段完全一致——wire 协议不变。
+/// serde 经 `from = "String"` / `into = "String"` 把本枚举编码为纯字符串。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum AudioFormat {
@@ -120,7 +119,7 @@ mod tests {
 
     #[test]
     fn serde_is_plain_string() -> color_eyre::Result<()> {
-        // 序列化结果应与旧 String 字段一致(纯字符串,非 tagged enum)。
+        // wire 形状是纯字符串,不是 tagged enum。
         assert_eq!(serde_json::to_string(&AudioFormat::Flac)?, "\"flac\"");
         assert_eq!(
             serde_json::from_str::<AudioFormat>("\"mp3\"")?,

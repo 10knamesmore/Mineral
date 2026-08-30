@@ -116,7 +116,6 @@ pub(crate) async fn download_song(
     speed_tick: Duration,
 ) -> color_eyre::Result<DownloadOutcome> {
     let DownloadEnv { music_dir, hooks } = *env;
-    // 1. 幂等:该歌该音质已在导出库 → 跳过(文件系统即真相,按 <album>/<title>.* 反查)。
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
         return Ok(DownloadOutcome::Skipped {
@@ -167,8 +166,8 @@ pub(crate) async fn download_song(
     let format = opened.info().format.clone();
     let byte_len = opened.byte_len();
     let (subdir, file_name) = library_relpath(song, quality, format.as_ref());
-    // 命名即身份:不做 ` (N)` 去重——同名直接落同一路径(本曲重下已被上面的幂等挡住;同源同专辑
-    // 同名的另一首歌会与之共用一个文件,概率极低,换来「文件系统即唯一真相」)。
+    // 路径不含 SongId:相同 source、quality、album 与清洗后 title 的歌曲映射到同一文件;
+    // 已存在的同路径文件会被上面的 probe_export 视为已导出。
     let export = music_dir.join(&subdir).join(&file_name);
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
@@ -198,7 +197,7 @@ pub(crate) async fn download_song(
         }
     }
 
-    // 4. 完成 → rename 为正式导出(永久)。
+    // rename 是正式文件对 probe_export 可见的提交点。
     tokio::fs::rename(&part, &export)
         .await
         .wrap_err_with(|| format!("rename 导出失败 {}", export.display()))?;

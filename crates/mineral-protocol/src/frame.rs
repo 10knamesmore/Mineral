@@ -32,8 +32,7 @@ impl RequestId {
 /// 连接建立后 client 必须先发 [`Frame::Handshake`],等到 [`Frame::Hello`]
 /// (`accepted == true`)后才可发 [`Frame::Request`]。
 ///
-/// codec 无关:本类型只 derive `Serialize`/`Deserialize`,bincode(今)与 JSON
-/// (将来)切换不改本定义(守卫见 `tests/frame.rs` 双 codec round-trip)。
+/// 本类型只定义 serde 形状;具体字节编码由 crate 的 codec 边界负责。
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Frame {
     /// client → server:握手首帧(先于任何 [`Frame::Request`])。

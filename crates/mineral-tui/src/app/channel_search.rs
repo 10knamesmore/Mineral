@@ -199,8 +199,8 @@ impl SearchPage {
                 self.cycle_detail_section(ctx.sweep_ticks);
                 SearchEffect::None
             }
-            // detail 焦点下 C-d/u/b/f 滚头部简介(与列表光标 j/k 分治、键不重叠);其它焦点
-            // 不接管(回落,与改前一致)。
+            // detail 焦点下 C-d/u/b/f 滚头部简介(与列表光标 j/k 分治、键不重叠);
+            // 其它焦点不接管并回落全局 dispatch。
             Some(Action::Scroll(step)) if self.focus == SearchFocus::Detail => {
                 self.scroll_detail_description(step, ctx.behavior);
                 SearchEffect::None
@@ -530,9 +530,8 @@ mod tests {
     use super::DetailActivate;
     use crate::runtime::state::SearchFocus;
 
-    /// 回归锁:专辑详情(`DetailData::Album`)里 activate 选中曲必须返回 `Play`(队列=专辑曲目、
-    /// target=选中曲),而非静默 `None`。album 帧从 `Tracks` 改存 `Album` 后,
-    /// `detail_activate_action` 曾漏补 `Album` 臂、落进 catch-all,导致专辑详情按播放键无反应。
+    /// 专辑详情(`DetailData::Album`)里 activate 选中曲必须返回 `Play`(队列=专辑曲目、
+    /// target=选中曲)；若落进 catch-all 返回 `None`,播放键会静默无效。
     #[test]
     fn album_detail_activate_plays_selected_track() -> color_eyre::Result<()> {
         let (mut app, _submitted) =
@@ -944,8 +943,7 @@ mod tests {
         Ok(())
     }
 
-    /// F2 回归:detail 面板起播记容器语境而非搜索词——专辑详情曲目 activate 产出的 PlayQueue
-    /// 应带 Album{id},否则整批播放被 albums-via-context 误算成 search。
+    /// detail 面板从专辑曲目起播时必须携带 Album 语境，不能沿用外层搜索词。
     #[test]
     fn detail_album_play_carries_album_context() -> color_eyre::Result<()> {
         let (mut app, _q) =
@@ -1264,8 +1262,7 @@ mod tests {
         n
     }
 
-    /// 封面编码派发尊重滚动防抖:选中刚变(窗内)图位留空、不投编码;停稳(窗外)才派发一次。
-    /// search 面板此前从不刷新时间戳,该防抖在 search 布局下恒失效——此测锁两半行为。
+    /// 封面编码派发尊重 search 面板的滚动防抖：选中刚变时不投编码，停稳后只派发一次。
     #[test]
     fn search_cover_encode_respects_scroll_debounce() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -1297,9 +1294,8 @@ mod tests {
         Ok(())
     }
 
-    /// cache hit 时滚动窗内应画 halfblock 低清真图(非留空)：图已解码，只把
-    /// 高清编码派发挡在防抖后。锁「滚动期封面不再空白」——消除快速滚过 prefetch 已拉到的
-    /// 邻近项时的空窗。
+    /// cache hit 时滚动窗内应绘制 halfblock 低清真图；防抖只延迟高清编码派发，不能让
+    /// 已预取的邻近项封面留空。
     #[test]
     fn search_cover_hit_paints_halfblock_while_scrolling() -> color_eyre::Result<()> {
         use std::sync::Arc;

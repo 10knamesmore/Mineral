@@ -116,7 +116,7 @@ enum StatsCommand {
 }
 
 /// 当前 Unix epoch 毫秒;系统时钟早于 1970(RTC 异常)拿不出诚实时间戳,返回 `None`
-/// (调用方本轮不记,不用哨兵值冒充);溢出钳 i64::MAX(纯理论上限)。
+/// (调用方跳过该次记录,不用哨兵值冒充);溢出钳 i64::MAX(纯理论上限)。
 pub fn now_ms() -> Option<i64> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
@@ -470,8 +470,8 @@ async fn run(
     let mut tracker = SessionTracker::default();
     // 在播语境 + 其归属会话 id。
     let mut pending: Option<(PendingPlay, i64)> = None;
-    // retention 每日巡检:首拍延后一天(不在启动瞬间裁),之后每天一次。经同一 actor 走
-    // prune,唯一 writer 不变量不破(§5.5)。错过的拍跳过而非补齐(prune 幂等)。
+    // retention 每日巡检:首拍延后一天(不在启动瞬间裁),之后每天一次。prune 经同一
+    // actor 串行执行,保持唯一 writer;错过的拍跳过而非补齐(prune 幂等)。
     let start = tokio::time::Instant::now() + Duration::from_secs(SECONDS_PER_DAY);
     let mut retention_tick = tokio::time::interval_at(start, Duration::from_secs(SECONDS_PER_DAY));
     retention_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -629,7 +629,7 @@ async fn run_retention(store: &StatsStore, params: &Arc<ArcSwap<StatsParams>>) {
     }
 }
 
-/// 保留 `days` 天的裁剪水位(now − days);系统时间异常 / 溢出返回 `None`(本轮不裁)。
+/// 保留 `days` 天的裁剪水位(now − days);系统时间异常 / 溢出返回 `None`(该次不裁)。
 fn retention_before_ms(days: u32) -> Option<i64> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -799,7 +799,7 @@ mod tests {
 
     /// pending_from_start:origin 与 actor 两维独立穿透——用户按 next 是
     /// (AutoAdvance, User),脚本切歌是 (AutoAdvance, Script),EOF 自治是
-    /// (AutoAdvance, System),不再从 origin 派生 actor。
+    /// (AutoAdvance, System)。
     #[test]
     fn pending_from_start_carries_actor_and_origin() -> color_eyre::Result<()> {
         use mineral_stats::PlayOrigin;
@@ -1044,7 +1044,7 @@ mod tests {
         Ok(())
     }
 
-    /// retention Days(n):裁掉 n 天前的流水,保留窗口内的(§5.5;直调巡检,不等 timer)。
+    /// retention Days(n):直调巡检会裁掉 n 天前的流水并保留窗口内记录。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn retention_days_prunes_ancient_keeps_recent() -> color_eyre::Result<()> {
         let (_dir, store) = temp_store().await?;

@@ -430,8 +430,8 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// §7.2 config re-apply:改 `stats.level` 经配置热更真改采集行为 —— 覆盖 off 门掉 A,
-/// 撤覆盖回 base(full)记 B。证明 reapply_stats 折算喂到了 recorder。
+/// `stats.level` 热更会立即重配 recorder:覆盖为 off 时 A 不采集,
+/// 撤销覆盖回 base(full)后 B 被记录。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;

@@ -11,9 +11,9 @@ audience: 维护者 / agent
 
 ## 一句话
 
-用户在编辑器里写 `config.lua` 时看到的字段补全 / 类型检查 / 悬浮文档,来自一份 LuaCATS 类型 stub(`~/.config/mineral/lua/meta/config.lua`)。**这份 stub 不是手写的**——它是 Rust 配置 schema(`crates/mineral-config/src/schema/*.rs` 里的 struct / enum)经宏投影出来的。改字段**只改 Rust**,stub 自动跟。
+用户在编辑器里写 `config.lua` 时看到的字段补全 / 类型检查 / 悬浮文档,来自一份 LuaCATS 类型 stub(`~/.config/mineral/lua/meta/config.lua`)。**这份 stub 不是手写的**——它是 Rust 配置 schema(`crates/mineral-config/src/schema/*.rs` 里的 struct / enum)经宏投影出来的。改字段时修改 Rust schema 与 `default.lua`,不手工修改 stub。
 
-**核心动机**:配置 schema 从前散在三处——Rust struct、`default.lua`(默认值)、`meta/config.lua`(类型注解),改一处忘另一处就 drift(埋点系统合入时 stats 段就漏进了 stub,animation 也少两个字段)。现在 Rust struct 是**单一真相源**,其余两者要么由 serde 落型钉死(default.lua),要么由宏生成(stub)。
+**核心动机**:Rust struct 负责配置字段、类型与文档的 schema；`default.lua` 负责默认值,并由 serde 落型校验完整性；`meta/config.lua` 的类型注解由宏从 Rust schema 生成。手工维护第三份字段 schema 会允许这些定义静默 drift。
 
 ## 数据流
 
@@ -96,7 +96,11 @@ flowchart TD
 pub struct CopyTemplate { /* key/label/context 三个真实字段 */ }
 ```
 
-全仓当前有 5 处:`copy.templates[].template` + 四处 `curate_playlists`(跨源一处 + 每个源 section 一处)。
+所有声明以 schema source 为准,不在文档中维护数量清单:
+
+```bash
+rg -n '#\[lua_extra_field' crates/mineral-config/src/schema
+```
 
 **新增函数字段时**:在 `extract_lua_fns` 挂提取器的同时,给对应 struct 补 `#[lua_extra_field]`。这条人肉关联记在 `extract_lua_fns` 的注释旁。守卫方向是安全的——stub 声明了而 Rust 没摘 → 快照会变;但「Rust 摘了而 stub 没声明」查不到(树里本就没有),靠这条纪律兜。
 
@@ -123,7 +127,7 @@ pub struct CopyTemplate { /* key/label/context 三个真实字段 */ }
 
 - **A 档(已机械钉死)**:`BitRate`、`SearchKind`——变体守卫逐变体 serialize 与 alias 比对,漂移必红。形式手写,实质自动同步。
 - **B 档(字面量守卫)**:`AnsiSlot`(16 槽名)、`MenuAlign`(3 关键字)、`RetentionDays`(`false|integer`)——`handwritten_alias_literals_deserialize` 把每个字面量喂真实 Deserialize,写错字 / Rust 收紧接受集就红。
-- **C 档(纯手写)**:`ColorValue` / `ColorRef` / `KeyBinding` / `TimeFormat` 的**形态结构**、`CuratePlaylistsFn` 签名、`TitleSegment`(untagged 复合枚举摊成的 class)——「语法」是 Visitor 里的任意代码或纯 Lua 概念,宏与测试都够不着全自动。改对应 Visitor 时**顺手改 `aliases.lua`**,Rust 侧各自模块已有的 Visitor 行为测试锚住落型正确性。C 档的变更频率 = 值语法大改,一年难得一次。
+- **C 档(纯手写)**:`ColorValue` / `ColorRef` / `KeyBinding` / `TimeFormat` 的**形态结构**、`CuratePlaylistsFn` 签名、`TitleSegment`(untagged 复合枚举摊成的 class)——「语法」是 Visitor 里的任意代码或纯 Lua 概念,宏与测试都够不着全自动。改对应 Visitor 时**同步修改 `aliases.lua`**,Rust 侧各自模块已有的 Visitor 行为测试锚住落型正确性。
 
 ## 关键不变量 —— 别踩
 

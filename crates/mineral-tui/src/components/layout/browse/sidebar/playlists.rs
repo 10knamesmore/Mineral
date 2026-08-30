@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(position_label(9, 3), " 3 / 3 ");
     }
 
-    /// 3 个混源歌单列表(name 列 Fill(1) 后列宽确定,不再 flaky)。
+    /// 3 个混源歌单列表；name 列使用 `Fill(1)`，列宽由可用区域确定。
     #[test]
     fn playlists_list_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;

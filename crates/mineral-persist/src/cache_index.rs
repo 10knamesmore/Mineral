@@ -1,9 +1,7 @@
 //! DB-backed 文件缓存索引:内存镜像(sync 读)+ SQLite 写穿透(async 写)。
 //!
-//! 替代旧的 `BlobCache`(bincode sidecar)与 `DownloadIndex`。落盘是带可读名的原文件
-//! (`<root>/<subdir>/<file_name>`,可被播放器 / 看图器直接打开);身份 → 文件的映射存进
-//! SQLite 一张 `(key, relpath, bytes, last_access)` 表,**每次写当场 `UPSERT`**(无 Drop-only
-//! flush、无丢数据窗口)。
+//! 缓存文件以 `<root>/<subdir>/<file_name>` 落盘,身份到文件的映射存进 SQLite 的
+//! `(key, relpath, bytes, last_access)` 表。每次写入当场 `UPSERT`,不依赖 Drop flush。
 //!
 //! 读路径全 **sync**(内存镜像):供 `resolve_local` 在 sync 播放解析里命中本地副本。命中只是
 //! 优化、永不是正确性依赖——任何漂移(文件缺失)一律当 miss,内存删项自愈;DB 里的死记录由下次
@@ -63,7 +61,7 @@ struct Backend {
     /// 文件根目录;`relpath` 相对它,`get` 返回 `root.join(relpath)`。
     root: PathBuf,
 
-    /// 容量上限(字节);`None` = 不驱逐(永久导出索引)。
+    /// 容量上限(字节);`None` = 不驱逐。
     capacity: Option<u64>,
 
     /// 内存镜像。
@@ -689,7 +687,7 @@ mod tests {
         Ok(())
     }
 
-    /// 核心回归:写入后**不靠 Drop**,另起实例从同 DB + 同盘 open 仍命中(就是本次 bug 的修复点)。
+    /// 写穿透不依赖 Drop flush；从同一 DB 与目录重开实例后仍须命中。
     #[tokio::test]
     async fn survives_reopen_without_drop() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
@@ -706,7 +704,7 @@ mod tests {
         let reopened = CacheIndex::open(pool, "audio_cache", root, Some(1_000_000)).await?;
         assert!(
             reopened.get("ne:1:exhigh").is_some(),
-            "写穿透后重开应仍命中,不再依赖 Drop flush"
+            "写穿透后重开应仍命中,无需 Drop flush"
         );
         Ok(())
     }

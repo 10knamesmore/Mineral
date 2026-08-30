@@ -1163,8 +1163,7 @@ mod tests {
         Ok(())
     }
 
-    /// 氛围背景(真彩 bg)下,transport 弱化色阶(探边框 faint 档)对实际背景混合:
-    /// 蓝底与红底下 fg 不同且贴向各自背景——不再是固定 token。
+    /// 氛围背景(真彩 bg)下，transport 弱化色阶按实际背景混合；蓝底与红底得到不同前景色。
     #[test]
     fn transport_ink_follows_actual_bg() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;

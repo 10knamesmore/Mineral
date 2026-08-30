@@ -395,9 +395,8 @@ mod tests {
         Ok(())
     }
 
-    /// 回归(本次 bug):harvest 入库后**整个 MediaCache + DB 连接池销毁**(模拟 daemon 重启,
-    /// 不做任何显式 flush —— 正是旧 `BlobCache` 只靠 Drop flush 的崩点),用同一 db 文件 +
-    /// 同一缓存目录重开 → 仍命中同一文件;再 harvest 同曲应**原地覆盖、绝不产生 ` (2)`**。
+    /// 写穿透必须在没有显式 flush 的进程边界后保持命中;同一 db 与缓存目录重开后,
+    /// 再次 harvest 同曲应原地覆盖且不产生 ` (2)`。
     #[tokio::test]
     async fn survives_daemon_restart_no_redownload_dup() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
@@ -416,17 +415,16 @@ mod tests {
                 return Err(color_eyre::eyre::eyre!("入库后应命中"));
             };
             p
-            // cache(连同它持有的连接池)在此 drop —— 无显式 flush。
+            // cache 连同连接池在此 drop,且不显式 flush。
         };
 
-        // 模拟重启:同 db 文件 + 同缓存目录重开一个全新 MediaCache(全新连接池)。
         let reopened = open_cache(&db, dir.clone()).await?;
         let Some(p2) = reopened.get(&s.id, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("重启后应仍命中,不该回退重下"));
         };
         assert_eq!(p2, first_path, "重启后应命中同一文件");
 
-        // 再 harvest 一次同曲(若 get 没命中、走了重下 capture 才会发生)→ 同 key 原地覆盖。
+        // 同 key 重复 harvest 必须原地覆盖。
         let src2 = d.path().join("cap2.part");
         std::fs::write(&src2, b"AUDIO2")?;
         reopened

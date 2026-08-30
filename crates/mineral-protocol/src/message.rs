@@ -1,7 +1,7 @@
 //! IPC 消息类型 — [`Request`] 与 [`Response`]。
 //!
-//! 与 [`mineral_server::ClientHandle`] 的方法 1:1 对应;`Response` 的 variant 由
-//! 调用方根据自己发的 `Request` 决定预期。错误统一走 [`Response::Error`]。
+//! `Response` 的 variant 由调用方根据自己发出的 [`Request`] 决定预期;
+//! server 处理失败统一返回 [`Response::Error`]。
 
 use mineral_audio::AudioSnapshot;
 use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};

@@ -2,7 +2,7 @@
 //!
 //! 播放 URL 有两个网易端点:v1(`/weapi/song/enhance/player/url/v1`,字符串等级)与
 //! legacy(`/api/song/enhance/player/url`,数字 br)。两者各是纯端点、返回 [`SongUrl`] 列表;
-//! spec §4.3 的"v1 失败 / 仅试听 → 降级 legacy"双层降级编排在 channel 层,不在本层。
+//! "v1 失败 / 仅试听 → 降级 legacy"的编排由 channel 层负责。
 
 use color_eyre::eyre::eyre;
 use mineral_model::{BitRate, SongId};
@@ -108,8 +108,6 @@ pub async fn song_url_legacy(
 }
 
 /// 组装 `/api/radio/like` 请求所需的 params。
-///
-/// 独立提取为纯函数,方便单元测试在不实发请求的情况下验证字段正确性。
 ///
 /// # Params:
 ///   - `id`: 目标歌曲,取裸值作为 `trackId`

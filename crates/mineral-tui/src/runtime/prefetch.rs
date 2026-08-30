@@ -71,10 +71,9 @@ fn collect_cover_candidates(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
                 }
                 push_if_new(get(sel.saturating_add(d)), &mut out);
             }
-            // 暖入口曲封面:drill 进选中歌单默认落到第 0 首,其封面在 Library 视图才首次
-            // 显示;此前从不预取(上面只取歌单封面),首次 drill 该曲封面是冷的、逐帧闪
-            // 空白→preview→halfblock→终端图片。悬停期(曲目已加载)先生成 preview，配合渲染侧 prepare
-            // 让 drill 瞬间直接命中 kitty。只暖第 0 首:remembered-pos / deep-hit 的少数入口退化。
+            // 暖入口曲封面:drill 进选中歌单默认落到第 0 首,悬停期(曲目已加载)先生成
+            // preview，配合渲染侧 prepare 让 drill 瞬间直接命中 kitty。只暖第 0 首；
+            // remembered-pos / deep-hit 的其他入口按常规取图路径加载。
             if let Some(first) = filtered
                 .get(sel)
                 .and_then(|p| state.library.tracks.get(&p.data.id))
@@ -563,9 +562,8 @@ mod tests {
         Ok(())
     }
 
-    /// Playlists 视图悬停选中歌单、其曲目已加载:入口曲(第 0 首)封面应进 prefetch 集合。
-    /// 根因修复——Playlists 视图此前只预取歌单封面,不预取曲目封面,导致首次 drill 进 tracks
-    /// 时该曲封面是冷的；悬停期先把入口曲封面暖进 cache。
+    /// Playlists 视图悬停选中歌单且曲目已加载时，第 0 首入口曲封面应进 prefetch 集合，
+    /// 使默认 drill 入口命中已预热的 cache。
     #[test]
     fn collects_selected_playlist_entry_track_cover() -> color_eyre::Result<()> {
         use mineral_model::{Playlist, PlaylistId};

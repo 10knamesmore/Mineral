@@ -14,7 +14,6 @@ pub enum TaskKind {
 
     /// 歌单写操作，由每个 source 的专用 worker 串行执行。
     PlaylistWrite(PlaylistWriteOp),
-    // 后续:PlayPrep / AuthRefresh / PrePreload / LocalScan
 }
 
 impl TaskKind {

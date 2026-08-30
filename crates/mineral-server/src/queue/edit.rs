@@ -397,7 +397,7 @@ mod tests {
     }
 
     /// 回归:被移动项在**当前曲之前**时,「紧随当前曲」要紧挨着落,中间不空一格。
-    /// 历史 bug——`after_current_pos` 给原始空间绝对点,remove 前移下标后没补偿,a 落到 d 后面。
+    /// 若 `after_current_pos` 不补偿 remove 导致的下标前移,a 会落到 d 后面。
     #[test]
     fn move_after_current_from_before_lands_snug() {
         let mut st = state(2); // 当前 c(下标 2)

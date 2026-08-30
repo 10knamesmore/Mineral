@@ -966,8 +966,7 @@ mod tests {
         Ok(())
     }
 
-    /// sweep_frames 的进度走 ease-in-out（与 artist 双区切换、左栏视图切换同曲线），
-    /// 不再是单向 ease-out——下钻/返回过渡与其余 sweep 对齐的回归守卫。
+    /// `sweep_frames` 使用 ease-in-out，与 artist 双区切换和左栏视图切换保持同一曲线。
     #[test]
     fn sweep_uses_ease_in_out_curve() -> color_eyre::Result<()> {
         use crate::render::anim::Transition;
@@ -986,7 +985,11 @@ mod tests {
             reference.eased_in_out(),
             "下钻 sweep 取 ease-in-out 曲线"
         );
-        assert_ne!(eased, reference.eased(), "不再是单向 ease-out");
+        assert_ne!(
+            eased,
+            reference.eased(),
+            "ease-in-out 不得退化为单向 ease-out"
+        );
         Ok(())
     }
 

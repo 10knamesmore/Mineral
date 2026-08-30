@@ -196,7 +196,7 @@ mod tests {
         );
     }
 
-    /// 词感知折行：拉丁词整体不拆，放不下就整体换行（不再「Fo / otball」拦腰断）。
+    /// 词感知折行：拉丁词整体不拆，放不下就整体换行。
     #[test]
     fn wrap_keeps_latin_words_whole() {
         assert_eq!(

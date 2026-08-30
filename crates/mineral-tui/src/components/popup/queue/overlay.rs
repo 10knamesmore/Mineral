@@ -376,8 +376,8 @@ mod tests {
         n
     }
 
-    /// 回归:队列含重复曲、在播锚点落在**第二个**副本时,
-    /// 只有那一行标 `▶`——历史 bug 按歌曲身份匹配会把两个副本一起点亮(count==2)。
+    /// 队列含重复曲、在播锚点落在**第二个**副本时,只有该行标 `▶`；
+    /// 按歌曲身份匹配会把两个副本一起点亮。
     #[test]
     fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
@@ -431,7 +431,7 @@ mod tests {
         Ok(())
     }
 
-    /// 同源 queue:序号也无条件染该源色(整列同色),不再退中立灰。
+    /// 同源 queue 的序号列也统一使用该 source 的配置色。
     #[test]
     fn queue_single_source_also_tints_index() -> color_eyre::Result<()> {
         use mineral_model::SourceKind;
@@ -641,8 +641,8 @@ mod tests {
         Ok(())
     }
 
-    /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断。
-    /// 回归历史 bug——固定 3 宽会把 `1234` 截成 `123`。光标定在 1234 使该行进视口。
+    /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断；
+    /// 固定 3 宽会把 `1234` 截成 `123`。光标定在 1234 使该行进视口。
     #[test]
     fn queue_wide_index_no_truncation_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
@@ -927,11 +927,7 @@ mod tests {
             o.on_action(Action::MoveSelection(SelectionMove::Down(3)), &ctx),
             Some(OverlayResponse::Consumed)
         ));
-        assert_eq!(
-            o.cursor(),
-            5,
-            "大步下移越界钳到末行(步长来自注入,不再本地 const)"
-        );
+        assert_eq!(o.cursor(), 5, "大步下移越界钳到末行(步长来自注入配置)");
 
         assert!(matches!(
             o.on_action(Action::ActivateSelection, &ctx),

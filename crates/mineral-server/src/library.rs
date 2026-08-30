@@ -94,7 +94,7 @@ impl Library {
             .unwrap_or_default()
     }
 
-    /// 本轮需要(重)算 per-source curate 的源:已有原始数据但缓存缺席。
+    /// 需要计算 per-source curate 的源:已有原始数据但缓存缺席。
     fn stale_sources(&self) -> Vec<(SourceKind, Vec<Playlist>)> {
         let st = self.state.lock();
         self.order

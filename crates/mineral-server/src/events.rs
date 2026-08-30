@@ -22,7 +22,7 @@ fn map_write_error(e: &WriteError) -> mineral_stats::PlaylistError {
 
 impl PlayerCore {
     /// 一次 drain:把 TaskEvent 分类——LyricsReady 内部消化、PlaylistWriteDone 成功先收敛缓存、
-    /// 其余 push 到 client_events buffer。
+    /// 其余通过 event hub 推给订阅 client。
     pub(crate) fn consume_events_once(&self) {
         let events = self.inner.scheduler.drain_events();
         if events.is_empty() {

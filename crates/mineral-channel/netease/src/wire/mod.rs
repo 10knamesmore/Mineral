@@ -1,8 +1,8 @@
 //! 网易云 API 的线上协议结构（serde 反序列化目标）。
 //!
 //! 这一层是「接收网易云原生 JSON 的形态」——字段名、类型按对方协议给，
-//! 与上层 `mineral-model` 的规范化领域类型分离。各 `api/*.rs` 拿到 `serde_json::Value`
-//! 后，先 `serde_json::from_value::<wire::T>(...)` 反序列化，再 `into()` 成 `model::T`。
+//! 与上层 `mineral-model` 的规范化领域类型分离。各 API 模块通过 [`de::from_value`]
+//! 反序列化并保留字段路径错误,再由 `convert` 模块显式映射到 model 类型。
 
 #![allow(dead_code)]
 

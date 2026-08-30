@@ -102,7 +102,7 @@ fn parse_json_line(line: &str) -> Option<LyricLine> {
         });
     }
 
-    // 否则 credits 纯文本行:拼接各 tx,保留(不再丢)。
+    // 没有逐字 timing 的 credits 行拼接各 tx,保留为纯文本。
     let text = dto
         .c
         .iter()
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn keeps_json_credits_as_plain() {
-        // credits(只有 tx,无 tr)现在保留为纯文本行,不再跳过。
+        // 只有 tx、没有 tr 的 credits 保留为纯文本行。
         let s = r#"{"t":0,"c":[{"tx":"作词:"}]}
 {"t":0,"c":[{"tx":"作曲:"}]}
 [2000,1500](2000,500,0)歌词"#;
@@ -307,7 +307,7 @@ mod tests {
 
     // ───────────────── 真实数据 ─────────────────
     // 用真打网易云存下来的原始 yrc 文本(`lyric_fixtures/*.yrc`)做断言。开头几行 credits
-    // (`{"t":..,"c":[{"tx":"作词: "},..]}`,纯 tx 无 tr)现在保留为 Plain 行,故断言走
+    // (`{"t":..,"c":[{"tx":"作词: "},..]}`,纯 tx 无 tr)保留为 Plain 行,故断言走
     // `first_word_line` 取首条逐字行。
 
     #[test]

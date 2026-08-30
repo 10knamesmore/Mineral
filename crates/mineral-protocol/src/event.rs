@@ -344,8 +344,7 @@ pub enum ToastKind {
     Error,
 }
 
-/// 曲目结束原因。Phase 1 只保证 `Eof` / `Skip` 可靠、`Stop` best-effort;
-/// `Error` 随 player 级播放失败信号在 Phase 2 接入(变体先定形)。
+/// 曲目结束事件携带的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FinishReason {
     /// 自然播完。
@@ -431,10 +430,10 @@ impl<'de> Deserialize<'de> for PropName {
     }
 }
 
-/// 把一个运行时字符串固化成 `&'static str`,带去重池避免重复泄漏。
+/// 把一个运行时字符串固化成 `&'static str`;相同内容复用池中条目。
 ///
-/// 仅在反序列化遇到未知属性名时走到;属性集合有界,泄漏有界。
-/// (与 `mineral_model::source` 的 intern 同款实现 —— 各 crate 私有,不共享池。)
+/// 每个不同的未知属性名都会保留到进程结束,数量不受本函数限制。该池与
+/// `mineral_model::source` 的池彼此独立。
 fn intern(s: &str) -> &'static str {
     static POOL: OnceLock<Mutex<FxHashSet<&'static str>>> = OnceLock::new();
     let pool = POOL.get_or_init(|| Mutex::new(FxHashSet::default()));
@@ -450,12 +449,11 @@ fn intern(s: &str) -> &'static str {
     leaked
 }
 
-/// 属性值的协议化载荷。窄变体(Bool/Int/Str/None)覆盖本期全部可观测属性,
+/// 属性值的协议化载荷。窄变体(Bool/Int/Str/Table/None)覆盖属性树允许的形状,
 /// **不**引入 `serde_json::Value` 兜底;整首 `Song` 不上属性树(`player.song`
 /// 只携带 qualified id 字符串,接收方按需另拉详情)。
 ///
-/// 无浮点变体是有意的:f64 无 `Eq`(NaN 自反性陷阱),会堵死将来的去重 / 索引
-/// 场景;首个真浮点属性出现时再追加变体(两端同仓同发版,零迁移成本)。
+/// 无浮点变体是有意的:f64 无 `Eq`(NaN 自反性陷阱),会破坏属性缓存的比较与回放语义。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PropValue {
     /// 布尔。

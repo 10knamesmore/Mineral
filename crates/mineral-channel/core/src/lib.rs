@@ -163,12 +163,10 @@ pub trait MusicChannel: Send + Sync {
 
     /// 拉取**该 channel 实例自身上下文中**的"我的歌单"。
     ///
-    /// 这是 TUI 跨 channel 平等取数的入口:
-    /// - 网易云:实例内部已绑定登录用户 uid,内部转发给 [`Self::user_playlists`]。
-    /// - 本地:遍历配置里的扫描根。
-    /// - 没有"用户"概念或未登录时:返回 [`Error::NotSupported`]。
+    /// 这是跨 channel 聚合当前用户歌单的入口。实例已绑定用户身份时可转发给
+    /// [`Self::user_playlists`];没有当前用户歌单能力或未登录时返回 [`Error::NotSupported`]。
     ///
-    /// TUI 看到 `NotSupported` 视为该 channel 不贡献歌单,正常继续从其他 channel 拉。
+    /// 聚合层把 `NotSupported` 视为该 channel 空贡献,并继续从其他 channel 拉取。
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
         Err(Error::NotSupported)
     }
@@ -176,7 +174,6 @@ pub trait MusicChannel: Send + Sync {
     // ---------- 用户数据 / 装饰(可选) ----------
     // 这一组方法都是「同一登录用户视角下,跨歌曲的元信息」,bulk 一次拉满,
     // 上层用来 decorate Song 或 collection entry view。沿用 default `NotSupported` 模式。
-    // 后续按需追加(`user_play_counts` / 关注列表 / 个人评分等)。
 
     /// 拉该源**远端**记录的喜欢(♥)歌曲 ID 集合(纯远端、read-only)。
     ///

@@ -1,20 +1,14 @@
 //! Server 端 PCM 中继:把 [`SpectrumTap`] 收纳到 server 内部,client 通过 `pull` 拉。
 //!
-//! 解决「`SpectrumTap` 跨不了进程」的限制 —— 让 in-proc 和 connect 走同一接口。
+//! [`SpectrumTap`] 留在 server 进程内,本地与 IPC client 都通过同一 pull 接口读取。
 //!
 //! ## 实现:on-demand pull + 多游标 fan-out(无独立节奏)
 //!
-//! audio engine 内部的 SPSC ring 已有 4096 sample (~85ms @ 48kHz) 缓冲,远大于
-//! client 30fps tick (33ms) 的间隔。中间再加一层 worker buffer 是冗余 —— 直接
-//! `pull` 时 lock + `pop_into` 即可。
-//!
-//! 历史曾用 16ms tick worker drain 到 VecDeque,但那一层引入最坏 16ms 额外延迟,
-//! spectrum 看着会「慢半拍」。on-demand pull 让最坏延迟 ≈ 一个 client tick gap (~5ms)。
+//! 每次 `pull` 在锁内排空 tap 当前可读样本并注入 [`FanOut`],没有独立后台节奏。
 //!
 //! 多 client:tap 消费是破坏式的,直接共享会互抢样本。任一 `pull` 先把 ring 的新
 //! 样本 drain 进短历史窗口([`FanOut`]),再按**调用方自己的游标**切片——drain 仍由
-//! pull 触发、无独立节奏,上述低延迟语义原样保留;落后超出窗口的游标跳到最新
-//! (频谱是瞬时可视化,补旧样本无意义)。
+//! pull 触发;落后超出窗口的游标跳到窗口起点(频谱是瞬时可视化,补窗口外样本无意义)。
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -23,8 +17,7 @@ use mineral_audio::SpectrumTap;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
-/// 历史窗口样本数上限(@48kHz ≈ 340ms):容纳最慢消费者一次 UI 卡顿的落后量,
-/// 超出即跳最新。与 event hub capacity 同类的容量护栏,非行为旋钮。
+/// fan-out 历史窗口的样本数上限;游标落到窗口外时从现存窗口起点继续。
 const MAX_HISTORY: usize = 16 * 1024;
 
 /// usize → u64(64 位平台恒成功;仅为绕过 `as` 禁用的显式转换)。

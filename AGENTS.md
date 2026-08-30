@@ -35,21 +35,21 @@ cargo clippy --workspace --all-targets -- -D warnings  # 严格 lint(包括函�
 
 ### 数据模型 = 跨 source 的契约
 
-`mineral-model` 的设计原则是"平铺合并":模型里没有 source-specific 字段。任何 channel 实现都把网络/本地原始数据先映射到 `mineral-model` 的类型,再交给上层。这意味着新增 channel 时,**不要**给 `Song` 加 source-only 字段——要么提升为通用字段,要么保留在 channel 内部 dto 里。来源**不再是独立字段**:`Song::source()` / `Album::source()` 等从各自 `id` 的 namespace 派生(见下)。
+`mineral-model` 的设计原则是"平铺合并":模型里没有 source-specific 字段。任何 channel 实现都把网络/本地原始数据先映射到 `mineral-model` 的类型,再交给上层。这意味着新增 channel 时,**不要**给 `Song` 加 source-only 字段——要么提升为通用字段,要么保留在 channel 内部 dto 里。来源由 ID namespace 表达:`Song::source()` / `Album::source()` 等从各自 `id` 派生(见下)。
 
 ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成,是**结构化**的 `{ namespace: SourceKind, value: IdString }`——来源是 ID 的内在属性,全局唯一性由类型强制(裸值只在 source 内唯一)。约定:
 
-- **构造统一走 `Id::new(namespace, value)` 单入口**(如 `SongId::new(SourceKind::NETEASE, raw)`)。未来换 namespace 表示只动这一处。
+- **构造统一走 `Id::new(namespace, value)` 单入口**(如 `SongId::new(SourceKind::NETEASE, raw)`)。namespace 的构造规则集中在这一入口。
 - `value()` / `as_str()` 取**裸值**喂 channel 后端(网易云请求体要纯数字串)/ 日志;`qualified()`(= `namespace:value`)给任务去重键等需要全局唯一字符串的地方。
 - ID 派生 `Eq/Hash`(含 namespace),可直接当 HashMap key 而**不会跨源碰撞**。需要随机生成的 ID(如本地音乐)用 `define_uuid!` 的 `new_uuid(namespace)`。
 
 `SourceKind` 仿 `http::StatusCode`:**newtype + 关联常量**(`SourceKind::NETEASE` / `LOCAL` / `BILIBILI` / `MINERAL`),内部 `&'static str` 故 `Copy`、强类型、**开放**(插件经 `from_static` 运行时铸造)。**身份只认 `name`**——`label`(UI 展示名)是随 `name` 走的展示元数据,不参与 `Eq`/`Hash`/serde(序列化只写 `name`,反序列化按 `name` 解析回常量,未知名 intern)。因此 UI 给来源配展示名**不该 match `SourceKind`**,读 `.label()` 即可,插件源自动有合理展示。来源徽标**颜色**不挂在 `SourceKind` 上——它是 per-source 配置 `sources.<name>.color`(`ColorRef`),TUI 按 `name` 经自由函数 `render::theme::resolve_source_color(theme, sources, kind)` 解析(命中配置色、未配落 `theme.subtext` 中立兜底);因此配色同样不该 match。
 
-### `MusicChannel` trait 是抽象边界
+### channel 与 playback provider 是独立边界
 
-`mineral-channel-core::MusicChannel`(`async_trait`)定义了所有 channel 必须实现的方法:搜索、详情、播放 URL、歌词、可选的登录/用户播放列表。**TUI 只面向这个 trait 编程**.。
+`mineral-channel-core::MusicChannel`(`async_trait`)定义 catalog、library 与 user-data 操作:搜索、详情、歌词、用户歌单和喜欢状态等能力。`mineral-playback::PlaybackProvider` 独立负责把 song identity 解析为可打开的播放资源，并封装来源鉴权与媒体 preparation。server 面向这两个 trait 组合能力；TUI 通过 `mineral_server::Client` 发请求，不直接调用来源适配器。
 
-**术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是取数的**连接器 / 适配器**(回答"用哪个后端去取"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索 / 详情 / 取 URL 的后端实现时用 **channel**。同名异义的 `rodio` 声道 / `tokio` channel 与本词表无关,别牵连。
+**术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是 catalog / library / user-data 的**连接器 / 适配器**(回答"用哪个后端取数"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索、详情、歌词或用户数据后端时用 **channel**;讲播放资源解析与打开时用 **playback provider**。同名异义的 `rodio` 声道 / `tokio` channel 与本词表无关,别牵连。
 
 ### 配置托管:daemon 是唯一 watcher,client 只消费推送
 
@@ -90,7 +90,7 @@ client 侧配置消费两条规矩:
 ### 其余约定(未必经 lint,仍需遵守)
 
 - 禁止 `unsafe_code`、`unwrap`、`expect`、`panic!`、`as`(数值强转)、wildcard import(`use foo::*`)。需要数值转换时用 `TryFrom` / `try_into`;需要快速失败时用 `?` + `color_eyre::eyre::WrapErr`(`.wrap_err(...)` / `.wrap_err_with(...)`,trait 也兼容 `.context(...)` / `.with_context(...)`)。
-- 错误处理统一走 **color-eyre**:报错宏用 `color_eyre::eyre::eyre!` / `bail!`,Report 类型是 `color_eyre::Report`。**不要再引入 `anyhow`**。channel 层错误仍是 `mineral_channel_core::Error`(`Other` 变体内含 `color_eyre::Report`),边界处用 `.map_err(Error::Other)` 收敛。
+- 错误处理统一走 **color-eyre**:报错宏用 `color_eyre::eyre::eyre!` / `bail!`,Report 类型是 `color_eyre::Report`。**禁止引入 `anyhow`**。channel 层错误是 `mineral_channel_core::Error`(`Other` 变体内含 `color_eyre::Report`),边界处用 `.map_err(Error::Other)` 收敛。
 - **日志记错误统一用 `error = mineral_log::chain(&e)`**(内部 `format!("{e:#}")`):展开完整 context 链、单行、无 ANSI / backtrace。**不要**用 `error = %e`(Display 只给最外层一条,`.wrap_err()` 加的 context 全丢)或 `error = ?e`(color-eyre 的 Debug 带 ANSI 色码 + `Location` + `Backtrace`,污染纯文本日志文件)。错误想精确到字段时,在反序列化等边界用带路径的包装(如 netease `wire::de::from_value` 走 `serde_path_to_error`),让路径进入 message,`chain` 自然带出。
 - **不要 `use` 任何 `Result` 类型**。要么定义命名 `type ToolResult = ...`,要么签名直接写 `-> color_eyre::Result<T>` / `-> mineral_channel_core::Result<T>`。
 - 在测试函数里用 `?` + context 直接返回 `color_eyre::Result<()>`,业务断言用 `assert!` / `assert_eq!`,**不要 `unwrap`**。
@@ -101,7 +101,7 @@ client 侧配置消费两条规矩:
 
 * 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
 
-- **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。哨兵值的三宗罪:① 与合法值不可区分(`duration_ms: 0` 到底是「未知」还是「真的 0 秒」?调用方无从判断);② 把「缺失」的处理**静默**推给下游的隐式 fallback,而那个 fallback 可能本身就是错的(踩过的坑:`local_play_url` 用 `duration_ms: 0` 当「未知,让显示层回落列表元数据」,但列表元数据恰是错的全 BV 总长 → 进度条显示 2h);③ 编译器帮不上忙——`Option` 会强制每个消费点显式处理 `None`,哨兵值不会。缺失就让类型说出来,别用魔法数字。
+- **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。哨兵值的问题是:① 与合法值不可区分(`duration_ms: 0` 到底是「未知」还是「真的 0 秒」?调用方无从判断);② 把「缺失」的处理**静默**推给下游的隐式 fallback;例如 `duration_ms: 0` 若表示未知,显示层可能回落到错误的列表元数据,把全 BV 总长显示成单曲时长;③ 编译器帮不上忙——`Option` 会强制每个消费点显式处理 `None`,哨兵值不会。缺失就让类型说出来,别用魔法数字。
 
 ### 文档与可见性
 
@@ -138,7 +138,7 @@ client 侧配置消费两条规矩:
 
 ## 测试约定
 
-**完整细则见 [`docs/testing.md`](docs/testing.md)**(选型矩阵 / `mineral-test` 共享库 / TUI 集成测试基建 / insta 约定 / CI)。TUI 测试通用方法论另见个人 `tui` skill。摘要:
+**完整细则见 [`docs/testing.md`](docs/testing.md)**(选型矩阵 / `mineral-test` 共享库 / TUI 集成测试基建 / insta 约定 / CI)。摘要:
 
 - 运行器 **nextest**:`cargo t`(全仓)/ `cargo td`(doctest,nextest 不跑)/ `cargo snap`(改快照后 review)。
 - **选型一句话**:逻辑/等价性 → `assert_eq!`;渲染/解析结构 → **insta 快照**;纯函数不变量 → **proptest**;CLI → `assert_cmd`;进程 e2e → `CARGO_BIN_EXE_*`;TUI 交互 → 造 `App` + 喂真实 `KeyEvent` + 跨 tick(`test_support::app_with_queue` / `TestClient` 已就位)。

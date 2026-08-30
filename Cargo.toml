@@ -185,10 +185,10 @@ uninlined_format_args             = "deny"
 cloned_instead_of_copied          = "deny"
 manual_let_else                   = "deny"
 
-# --- 项目特化（保留原有偏好） ---
+# --- 项目特化 ---
 # 避免先 format 再 push 到 String 的低效模式。
 format_push_string  = "deny"
-# 允许 if/else 分支相同（对称性/未来扩展）。
+# 允许对称分支显式保留相同实现。
 if_same_then_else   = "allow"
 # 允许只有 len() 没有 is_empty()。
 len_without_is_empty = "allow"
@@ -199,7 +199,7 @@ module_inception    = "allow"
 # 建议使用 `Self` 而不是显式类型名。
 use_self            = "deny"
 
-# --- 体量约束（CLAUDE.md 体量约束节，函数级；阈值见 clippy.toml）---
+# --- 体量约束（AGENTS.md「体量约束」节，函数级；阈值见 clippy.toml）---
 too_many_lines      = "deny"
 
 # --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
@@ -207,7 +207,7 @@ missing_docs_in_private_items = "deny"
 
 # 发布构建:在默认 release(opt-level=3)基础上压榨运行性能 + 顺手收体积。
 # 一次性代价是全量 release 编译明显变慢(lto + 单 codegen-unit)。panic 保留默认 unwind
-# (TUI panic hook 链恢复终端需要,见 mineral-tui)。
+# (TUI panic hook 链恢复终端需要,见 `crates/mineral-tui/src/tui.rs` 的 `Tui::enter`)。
 [profile.release]
 lto = "thin"          # 跨 crate 链接时优化(thin:收益大、比 fat 快)
 codegen-units = 1     # 合并 codegen 单元,优化更彻底(牺牲并行编译)

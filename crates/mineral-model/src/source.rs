@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// 标识一份资源(歌曲、专辑……)的来源(source)——强类型、开放集合、自描述。
 ///
 /// 仿 `http::StatusCode` 的「newtype + 关联常量」:内置源是常量
-/// ([`SourceKind::NETEASE`] 等),将来插件源可经 [`SourceKind::from_static`] 在运行时铸造。
+/// ([`SourceKind::NETEASE`] 等),运行时扩展源可经 [`SourceKind::from_static`] 构造。
 /// 全字段都是 `Copy`,故可零成本嵌进每个 ID 的 namespace。
 ///
 /// **身份只看 [`name`](SourceKind::name)**——`label` 是随 `name` 走的展示元数据,**不参与**
@@ -84,7 +84,7 @@ impl SourceKind {
     ///   - `name`: 稳定标识(与 [`name`](Self::name) 对称)
     ///
     /// # Return:
-    ///   命中内置常量则返回之;未知名(将来插件) intern 成 `&'static str` 并给默认展示(label = name)。
+    ///   命中内置常量则返回之;未知名 intern 成 `&'static str` 并给默认展示(label = name)。
     pub fn from_name(name: &str) -> Self {
         match name {
             "netease" => Self::NETEASE,
@@ -99,9 +99,9 @@ impl SourceKind {
     }
 }
 
-/// 把一个运行时字符串固化成 `&'static str`,带去重池避免重复泄漏。
+/// 把一个运行时字符串固化成 `&'static str`;相同内容复用池中条目。
 ///
-/// 仅在反序列化遇到未知来源名时走到;来源集合极小,泄漏有界。
+/// 每个不同的未知来源名都会保留到进程结束,数量不受本函数限制。
 fn intern(s: &str) -> &'static str {
     static POOL: OnceLock<Mutex<FxHashSet<&'static str>>> = OnceLock::new();
     let pool = POOL.get_or_init(|| Mutex::new(FxHashSet::default()));

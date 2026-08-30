@@ -199,7 +199,7 @@ async fn wait_store_int(
     use mineral_protocol::StoreValue;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        // 连接失败也重试:单 client daemon,上一个 CLI 进程断开与 busy 清理有竞窗。
+        // 脚本落库与 IPC 观察不同步；值未到或临时连接失败时都重试到截止时间。
         match store_get(socket, song.clone(), key).await {
             Ok(got) if got == StoreValue::Int(want) => return Ok(()),
             Ok(got) if Instant::now() > deadline => {

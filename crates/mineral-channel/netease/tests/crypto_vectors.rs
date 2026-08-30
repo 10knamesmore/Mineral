@@ -170,7 +170,7 @@ fn eapi_form_body_matches_reference() {
     let text = r#"{"id":"123","cp":"false","header":{"os":"ios"}}"#;
     let ours = eapi(logical, text);
 
-    // 参考实现:严格按 spec §1.3
+    // 独立按 EAPI 的摘要与加密规则组装参考结果。
     let message = format!("nobody{logical}use{text}md5forencrypt");
     let mut hasher = Md5::new();
     hasher.update(message.as_bytes());

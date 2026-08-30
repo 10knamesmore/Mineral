@@ -97,7 +97,7 @@ impl Scheduler {
         }
     }
 
-    /// 把新建任务路由到对应 lane(目前只有 ChannelFetch)。
+    /// 把新建任务路由到对应的 source-specific lane。
     fn dispatch(
         &self,
         id: TaskId,

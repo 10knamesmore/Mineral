@@ -449,7 +449,7 @@ fn core_with_events_stats_playback(
     script: Option<mineral_script::ScriptSender>,
     stats: crate::StatsRecorder,
 ) -> color_eyre::Result<PlayerCore> {
-    // 配置切片取 defaults(= 接线前硬编码常量),测试行为与历史一致。
+    // fixture 从唯一默认配置源派生 server 切片。
     let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
     let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
     let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;

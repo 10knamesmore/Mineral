@@ -123,7 +123,7 @@ pub fn resolve_audio_mode(env_null: bool, backend: BackendKind) -> AudioMode {
     }
     match backend {
         BackendKind::Null => AudioMode::ForceNull,
-        // BackendKind 是 #[non_exhaustive]:未来新增后端在接线前一律按 Auto 兜底。
+        // BackendKind 是 #[non_exhaustive];本接线不识别的变体按 Auto 处理。
         BackendKind::Auto | _ => AudioMode::Auto,
     }
 }

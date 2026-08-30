@@ -21,9 +21,8 @@ const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 
 /// daemon 入口。需要 caller 已 `tokio::Runtime::block_on` 或在 async ctx 中调。
 ///
-/// accept loop 与关闭信号(SIGINT / SIGTERM)竞争:收到信号时主动停掉 server
-/// (走 [`Server::shutdown`] 的 Drop 链)并 unlink socket 文件,避免残留 stale
-/// socket 留给下次启动清理。
+/// accept loop 与 SIGINT、SIGTERM 及 IPC 关停通知竞争。任一路径结束后都会进入共同收尾：
+/// flush 埋点、显式调用 [`Server::shutdown`]、等待埋点 actor，并 unlink socket 文件。
 ///
 /// # Params:
 ///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
@@ -116,7 +115,7 @@ pub async fn run(
     };
 
     // graceful 收尾:先记 daemon stop 并 flush(保证落库不被进程退出截断),
-    // 再停 server(Drop 链停 audio engine / scheduler)+ 清 socket。
+    // 再释放 server 句柄、等待埋点 actor 并清理 socket。
     mineral_log::info!(target: "daemon", "shutting down");
     stats_stop.daemon_stopped();
     stats_stop.flush().await;

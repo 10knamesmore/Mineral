@@ -1,4 +1,4 @@
-//! stats 热路径与查询压测(criterion;spec §9.1)。
+//! stats 热路径、持续写入吞吐、聚合查询与库体积的 criterion 基准。
 //!
 //! 纯 measurement:热路径(gating / 散列 / 落库)在采集侧跑,查询在 CLI / 报告层跑。
 //! 种子数据走 [`mineral_stats::fixture`] 的确定性生成器(与聚合正确性测试同源),量级
@@ -97,8 +97,7 @@ fn bench_query_hash(c: &mut Criterion) {
     });
 }
 
-/// 落库吞吐:单行 record_play / 单条 record_event(actor 串行落库的每单位开销;
-/// spec §9.1「落库总耗时」的每行核心,通道 / actor 包裹层近乎零开销)。
+/// 落库吞吐:单行 `record_play` / 单条 `record_event` 的每单位开销。
 fn bench_writes(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let (_dir, store, sid) = rt.block_on(async {
@@ -135,12 +134,10 @@ fn bench_writes(c: &mut Criterion) {
 /// 每次迭代灌入的行数(throughput bench 按元素数报 elem/s)。
 const THROUGHPUT_BATCH: i64 = 1_000;
 
-/// 落库吞吐(elem/s):单写 actor 串行落库的**持续**吞吐上限。
+/// 落库吞吐(elem/s):单任务串行调用 [`StatsStore`] 的持续数据库写入速率。
 ///
-/// 采集侧非阻塞 `try_send` 可瞬时吞入(4096 缓冲,受 gating + 散列 + try_send 的纳秒级
-/// 开销约束),但持续吞吐由 actor 的落库速率封顶——即此处所测。`record_event` 是纯事件
-/// 流;`mixed_play_event` 掺 1/5 播放行,近真实会话负载。这也是 spec §9.1「actor 吞吐 /
-/// 落库总耗时」的直读。
+/// 此基准不包含 recorder 的 gating、散列与 channel 开销，只测 actor 最终执行的 store
+/// 写入工作。`record_event` 是纯事件流；`mixed_play_event` 掺 1/5 播放行,模拟混合会话负载。
 fn bench_throughput(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let (_dir, store, sid) = rt.block_on(async {
@@ -222,7 +219,7 @@ fn bench_queries_1k(c: &mut Criterion) {
     group.finish();
 }
 
-/// 查询压测(年量级:10⁴ plays + 10⁵ events)+ 库体积(spec §9.1)。
+/// 在约 10⁴ 条播放和 10⁵ 条事件上测量聚合查询与数据库体积。
 ///
 /// 一次年量级种子既喂查询压测(各单项 + 全套 `report` 体感),又量 stats.db 磁盘占用
 /// (验证「一年 < 几十 MB」假设),打印留档。

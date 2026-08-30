@@ -29,7 +29,7 @@ struct TrackLayout {
     full: bool,
 
     /// 聚合面(source = mineral 的跨源歌单,如全源收藏合集):宽档在 album 后插
-    /// per-song `source` 徽标列;窄档插不起 11 格列,改为序号染该行歌曲的源色(与
+    /// per-song `source` 徽标列;窄档由序号染该行歌曲的源色(与
     /// queue 同一手法)。普通单源歌单为 `false`,天然无需 per-song source 表示。
     aggregate: bool,
 }
@@ -368,8 +368,8 @@ mod tests {
             .collect()
     }
 
-    /// nvim 手感回归:G 滚到底后向上走,光标在 scrolloff 安全区内时视口纹丝不动
-    /// (修掉「光标钉死视口底边、列表粘着光标滚」的旧行为);越过安全边界才上滚。
+    /// G 滚到底后向上走时,光标留在 scrolloff 安全区内不会移动视口;
+    /// 只有越过安全边界才向上滚动。
     #[test]
     fn library_bottom_then_up_keeps_viewport() -> color_eyre::Result<()> {
         let mut app = crate::test_support::app_with_long_library(30, /*sel_track*/ 29)?;

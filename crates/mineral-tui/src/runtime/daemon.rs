@@ -90,8 +90,8 @@ pub(crate) fn should_kill_spawned(kill_on_exit: bool, spawned: bool) -> bool {
 /// spawn 后轮询重连,直到 daemon bind 好 socket。
 ///
 /// 每轮额外 `try_wait` 看 daemon 子进程是否已经退出——退了就立刻捞它的 stderr 把**真因**
-/// 内联进报错(不再干等到超时),避免出现「did not become ready」这种无信息量的超时。
-/// 连上但被拒(busy / 版本)同样立即报错,不重试到超时。
+/// 内联进报错,避免把明确的启动失败延迟成「did not become ready」超时。
+/// 连上但因版本不匹配被拒时同样立即报错,不重试到超时。
 async fn connect_with_retry(socket: &Path, child: &mut Child) -> color_eyre::Result<RemoteClient> {
     let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
     loop {

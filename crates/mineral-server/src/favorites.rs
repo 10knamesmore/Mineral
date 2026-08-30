@@ -110,7 +110,8 @@ impl PlayerCore {
         Ok(())
     }
 
-    /// love 变更的埋点出口(显式设值 / 翻转共用;远端镜像结果本轮不追踪 → `None`)。
+    /// love 变更的埋点出口(显式设值 / 翻转共用);远端镜像结果未回传到此入口,
+    /// 因此 `remote_mirror` 记为 `None`。
     fn record_love_change(
         &self,
         id: &SongId,

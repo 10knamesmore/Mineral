@@ -164,7 +164,7 @@ pub trait Client: Send + Sync {
     /// 入队并立即返回，不等 IPC 或 DB。
     fn request_song_stats(&self, id: SongId);
 
-    /// 下载(永久导出 + 顺带填 cache)单曲 / 整张歌单。fire-and-forget,server 后台跑,
+    /// 永久导出单曲 / 整张歌单。fire-and-forget,server 后台跑,
     /// 进度 / 完成经 [`mineral_task::TaskEvent::Notice`] 回传。
     ///
     /// # Params:

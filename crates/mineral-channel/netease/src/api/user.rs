@@ -1,7 +1,7 @@
-//! 当前登录用户相关的端点。
+//! 当前登录用户的身份与喜欢歌曲端点。
 //!
-//! 目前只暴露一个能力:从 cookie jar 出发拿到登录用户的 `userId`。
-//! 这是后续 `user_playlists` 必需的入参,把它独立抽出来,避免上层重复手抠 JSON。
+//! `account_uid` 在二维码登录成功后补齐持久化凭证中的用户身份;
+//! `liked_song_ids` 返回该身份的远端喜欢歌曲集合。
 
 use color_eyre::eyre::eyre;
 use mineral_model::{SongId, SourceKind, UserId};

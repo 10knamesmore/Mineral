@@ -15,7 +15,7 @@ pub enum Crypto {
     Linuxapi,
 }
 
-/// 按 spec §2.1 改写 URL。
+/// 按加密类型改写 URL。
 ///
 /// - `Crypto::Weapi` → `/\w*api/` 替换为 `/weapi/`
 /// - `Crypto::Eapi`  → `/\w*api/` 替换为 `/eapi/`

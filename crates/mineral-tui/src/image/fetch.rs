@@ -5,13 +5,10 @@
 //! 跟 mineral-task 的 lane 不同,本 fetcher **归 client 所有** —— 封面是装饰性
 //! 资源,server 不该管。多 client 各持一个 fetcher,各 fetch 各 cache。
 //!
-//! 设计取舍:
-//! - **不做 cancel**:用户切走时积压 fetch 仍跑完,结果进 cache 放着;下次显示直接命中。
-//!   减一条复杂度,跟现在(server 端 cancel 后的 cache 命中行为)对齐。
-//! - **不做内部 dedup**:dedup 由 [`crate::image::ImageEngine`] 的 pending 集合负责。
-//!   fetcher 单纯 FIFO worker pool。
-//! - **完成态完整**:健康 worker 的 preview / decode 成败都会回传 completion；关闭的队列
-//!   同步拒绝请求，让调用方立即结束 in-flight。
+//! 请求入队后会运行到完成，即使用户已经切走也会把结果留在 cache。重复请求由
+//! [`crate::image::ImageEngine`] 的 pending 集合拦截，fetcher 只负责 FIFO worker pool。
+//! 健康 worker 的 preview / decode 成败都会回传 completion；关闭的队列同步拒绝请求，
+//! 让调用方立即结束 in-flight。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,8 +46,7 @@ pub(crate) struct CoverPreviewReady {
 
 /// worker 完成一张封面的产物:图必有,色板尽力而为。
 ///
-/// `ReadyBuf` 的元素从元组升成结构体,遵守"跨边界优先结构化"约定;`palette` 为
-/// `Option` 让取色失败不挡封面图本身回传(取色是封面的附属信息)。
+/// `palette` 为 `Option`，因此取色失败不会阻止封面图本身回传。
 pub(crate) struct CoverReady {
     /// 封面来源 URL(= 缓存键 / drain 回填键)。
     pub url: MediaUrl,

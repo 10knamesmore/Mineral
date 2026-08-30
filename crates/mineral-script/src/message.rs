@@ -42,7 +42,7 @@ pub enum ScriptEvent {
         format: Option<mineral_model::AudioFormat>,
     },
 
-    /// 属性树某项变更(PR-3 接 `mineral.observe` 后真正消费;变体先定形)。
+    /// 属性树某项变更；`mineral.observe` 的匹配回调消费该事件。
     PropertyChanged {
         /// 属性键。
         key: PropKey,
@@ -178,8 +178,8 @@ pub enum PropValue {
     None,
 }
 
-/// 脚本发往 daemon 的播放器命令。daemon 侧由独立 task drain 并落到
-/// player / download 执行面(PR-4 接线)。
+/// 脚本发往 daemon 的播放器命令。daemon 侧由独立 task drain，并交给 player 或
+/// download 执行面。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptCmd {
     /// 播放 / 暂停切换。

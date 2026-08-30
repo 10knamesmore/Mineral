@@ -264,8 +264,7 @@ fn second_daemon_is_refused() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// server 被 `kill`(SIGTERM)时应记关停日志,不是 silent dead。
-/// (SIGKILL 物理上无法打日志,不在此覆盖。)
+/// server 收到 SIGTERM 时记录关停日志；SIGKILL 不提供日志保证。
 #[test]
 fn daemon_logs_shutdown_on_sigterm() -> color_eyre::Result<()> {
     let mut daemon = Daemon::spawn("logterm")?;
@@ -282,15 +281,12 @@ fn daemon_logs_shutdown_on_sigterm() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 单个 channel 凭证损坏时,daemon **不该整体退出**——只跳过该源 + 记 warn,照常 bind /
-/// serve。验证「单 channel 失败不阻塞 daemon」。
+/// 单个 channel 凭证损坏时,daemon 只跳过该源并记 warn，仍照常 bind / serve。
 #[test]
 fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn_failing_credential("badcred")?;
 
-    // 单 client 设计:不做独立 wait_ready 探测(探测连接释放 busy 的窗口会跟紧接的
-    // status 撞成 busy)。直接重试 status —— 它本身就是就绪探测,连不上 / 瞬时 busy
-    // 都重试到成功。能成功即证明坏凭证下 daemon 仍 bind + serve。
+    // 直接把 status 作为就绪探测，成功即证明坏凭证没有阻止 daemon bind / serve。
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if daemon.status_output()?.status.success() {
@@ -310,16 +306,14 @@ fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// `mineral stop`:经 IPC 请求 daemon 优雅退出。覆盖「CLI → Request::Shutdown →
-/// dispatch → serve select → graceful 收尾」整条链:进程退出、socket 被清理、
-/// 日志可见关停原因。
+/// `mineral stop` 经 IPC 请求 daemon 优雅退出：进程退出、socket 被清理且日志记录原因。
 #[test]
 fn daemon_stops_on_ipc_shutdown() -> color_eyre::Result<()> {
     let mut daemon = Daemon::spawn_null("ipcstop")?;
 
-    // 与 status 测试相反,stop **必须**先 wait_ready:它对「连不上」是幂等成功
+    // stop **必须**先 wait_ready:它对「连不上」是幂等成功
     // (确保不在跑的语义),daemon 未 bind 时拿它当就绪探测会假阳性通过。
-    // ready 之后再重试 —— 探测连接释放 busy 的短窗里 stop 可能被拒,重试兜住。
+    // ready 之后仍重试，以覆盖进程就绪与 IPC 请求之间的传输时序。
     daemon.wait_ready()?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -388,15 +382,11 @@ fn stop_without_daemon_succeeds_idempotently() -> color_eyre::Result<()> {
 }
 
 /// 强制 null 后端的 daemon:`mineral status` 应连上、退出码 0、且报告 backend 降级。
-/// 覆盖「engine null → AudioSnapshot.backend → IPC → CLI status 感知」整条链。
 #[test]
 fn daemon_status_reports_null_backend() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn_null("nullstatus")?;
 
-    // 不做独立的 wait_ready 探测连接 —— daemon 是单 client 设计(serve.rs),探测连接
-    // 释放 busy 标志的短窗口会跟紧接的 `mineral status` 撞成「daemon busy」。改成直接
-    // 重试 status:它本身就是就绪探测,连不上(daemon 未起)/ 瞬时 busy 都重试到成功,
-    // 全程只有这一个 client,无竞态。
+    // 直接把 status 作为就绪探测，避免为同一断言额外建立探测连接。
     let deadline = Instant::now() + Duration::from_secs(10);
     let stdout = loop {
         let out = daemon.status_output()?;

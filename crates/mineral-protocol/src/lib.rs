@@ -9,9 +9,9 @@
 //!   [`Frame::Handshake`](版本守门 + 订阅集),server 回 [`Frame::Hello`];之后
 //!   [`Frame::Request`]/[`Frame::Response`] 经 [`RequestId`] 配对,server 可在任意
 //!   时刻交错下推 [`Frame::Event`](按订阅集过滤)。
-//! - **版本守门**: 无协商 —— 两端包版本([`PkgVersion`])相等才互通,
+//! - **版本守门**: [`PkgVersion::compatible_with`] 决定两端包版本是否互通;
 //!   错配回 `Hello { accepted: false }`,client 提示重启 daemon。
-//! - **错误**: server 端处理异常用 [`Response::Error`] 兜底;不再额外的 Status code
+//! - **错误**: server 端处理异常用 [`Response::Error`] 表达。
 
 mod codec;
 mod event;

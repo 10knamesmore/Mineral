@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn error_carries_field_path() -> super::Result<()> {
         // 第 2 条的 id 类型错误(给字符串):错误应精确到 `[1].id`,而非裸 "invalid type"。
-        // (用 id 而非 al.name —— 后者已被 string_or_null 容忍,不再报错。)
+        // al.name 使用 string_or_null,因此以严格的 id 字段触发错误。
         let raw = serde_json::json!([
             { "id": 1, "name": "ok", "ar": [], "al": { "id": 2, "name": null }, "dt": 0 },
             { "id": "not-a-number", "name": "x", "ar": [], "al": { "id": 3, "name": "a" }, "dt": 0 }

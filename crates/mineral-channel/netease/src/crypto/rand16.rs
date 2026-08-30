@@ -2,7 +2,7 @@ use rand::Rng;
 
 use super::constants::STD_CHARS;
 
-/// 生成 16 字节随机 key,以及它的"同字符反序"版本(spec §3.4)。
+/// 生成 16 字节随机 key,以及它的同字符反序版本。
 ///
 /// 注意两个数组**字符相同、顺序相反**——不是各自独立随机。
 pub fn new_len16_rand() -> ([u8; 16], [u8; 16]) {

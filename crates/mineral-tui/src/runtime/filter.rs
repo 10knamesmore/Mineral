@@ -18,8 +18,7 @@ use smallvec::SmallVec;
 
 /// 一条预处理过的可匹配文本:原文 + 拼音 + 首字母 + 反向映射索引。
 ///
-/// 用 [`MatchableText::new`] 构造一次,后续每次查询变化时只跑 [`FuzzyMatcher::score`],
-/// 不再重算拼音。
+/// [`MatchableText::new`] 计算一次拼音索引；每次查询变化只运行 [`FuzzyMatcher::score`]。
 pub struct MatchableText {
     /// 拼接好的 haystack:`<original>\0<pinyin>\0<initials>`。
     /// 直接以 char 数组形态存,匹配时 0 拷贝交给 nucleo 的 [`Utf32Str::Unicode`]。
@@ -420,7 +419,7 @@ mod tests {
         Ok(())
     }
 
-    /// 切换 query 后 last_query 同步更新,新 query 与之前判等不再返回旧 Pattern。
+    /// query 变化会同步更新缓存 Pattern；重复设置同一 query 保持幂等。
     #[test]
     fn fuzzy_set_query_idempotent() -> color_eyre::Result<()> {
         let mut m = FuzzyMatcher::new();

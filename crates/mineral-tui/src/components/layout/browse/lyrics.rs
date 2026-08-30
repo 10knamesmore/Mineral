@@ -642,8 +642,8 @@ fn push_char_spans<'a>(
             .saturating_add((i_u64 + 1) * total_dur / n_u64);
         let char_dur = char_end.saturating_sub(char_start).max(1);
         let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
-        // wipe 起点用 unlit(strong 档对实际背景混合,跟 d=1 邻居同亮度,中心行未唱
-        // 部分不再「比周围暗」);终点 accent 跟 lrc 兜底中心行同色;整行 BOLD 提亮。
+        // wipe 起点用 unlit(strong 档对实际背景混合,跟 d=1 邻居同亮度)，终点 accent
+        // 跟 lrc 兜底中心行同色；整行 BOLD 提亮。
         let color = lerp_color(unlit, theme.accent, elapsed, char_dur);
 
         let next_byte = byte_cursor.saturating_add(ch.len_utf8());
@@ -1040,9 +1040,8 @@ mod tests {
         Ok(())
     }
 
-    /// 氛围背景(真彩 bg)下,远端歌词行的前景贴向**实际**背景:蓝底下蓝分量占优、
-    /// 红底下红分量占优——淡出终点跟随背景,不再是固定 token(亮主题 + 氛围场上
-    /// 「越远越显眼」的回归钉)。
+    /// 氛围背景(真彩 bg)下,远端歌词行的前景淡向**实际**背景：蓝底下蓝分量占优，
+    /// 红底下红分量占优，避免固定 token 让远端行比近端行更醒目。
     #[test]
     fn far_rows_fade_toward_actual_bg() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;

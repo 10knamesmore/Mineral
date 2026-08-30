@@ -322,7 +322,7 @@ mod tests {
         );
     }
 
-    // ───────────────── 新行为:JSON 行 / 无时间戳 / 混排 / Design X ─────────────────
+    // ───────────────── JSON 行 / 无时间戳 / 混排 ─────────────────
 
     #[test]
     fn parses_json_credit_line_with_timestamp() {
@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn design_x_keeps_unknown_bracket_verbatim() {
+    fn unknown_bracket_line_is_preserved_verbatim() {
         // 非时间戳、非已知 meta 的 [..] 整行原样当文本(不剥离)。
         assert_eq!(
             parse_lrc("[Verse 1]let it go"),

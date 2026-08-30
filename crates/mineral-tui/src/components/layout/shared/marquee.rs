@@ -273,8 +273,8 @@ pub(crate) fn marquee_line(
                 if ch_start >= start && ch_end <= end {
                     out.push(ch, faded(span.style, ch_start, ch_end));
                 } else {
-                    // 跨窗口边界的半字:可见列数补等宽空格。头部别改成「回退对齐整字」
-                    // ——试过:双宽字消失时同一画面停两拍,比一列空格闪更卡。
+                    // 跨窗口边界的半字按可见列数补空格。若头部回退对齐整字，双宽字
+                    // 消失时同一画面会停两拍，破坏 offset 的匀速相位。
                     let visible = ch_end.min(end) - ch_start.max(start);
                     for _ in 0..visible {
                         out.push(' ', span.style);
@@ -620,8 +620,7 @@ mod tests {
         assert_eq!(line_text(&wrapped), line_text(&base), "offset 应模周期等价");
     }
 
-    /// CJK 双宽字符切在半格:头尾跨界都补等宽空格,相位严格随 offset 匀速推进。
-    /// 别改成「头部回退对齐整字」——试过:双宽字消失时同一画面停两拍,比空格闪更卡。
+    /// CJK 双宽字符切在半格时，头尾跨界都补等宽空格，使相位严格随 offset 匀速推进。
     #[test]
     fn cjk_half_glyph_padded_with_space() {
         // 循环序列 "迷星叫 "(宽 7),offset 1 起取 4 列:

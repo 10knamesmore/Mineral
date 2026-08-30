@@ -4,7 +4,7 @@
 
 ## 心智模型
 
-- **脚本在 daemon 里跑**,不在 TUI 里。TUI 只是触发面之一(绑键)和输出面之一(toast)。CLI、未来的其他 client 共享同一份脚本。
+- **脚本在 daemon 里跑**,不在 TUI 里。TUI 只是触发面之一(绑键)和输出面之一(toast)；连接同一 daemon 的 TUI 与 CLI 共享同一份脚本状态。
 - **单线程串行**:所有回调在一条专用脚本线程上排队执行,无重入、无并发,不需要锁。代价是慢回调会排队拖后面的——耗时活交给 `mineral.spawn`(子进程)或拆小。
 - **错误被隔离**:单个回调出错只记日志 + toast 提示,其他回调、播放本体不受影响;脚本整体加载失败时 daemon 照常启动(无脚本模式)。
 - **看门狗**:回调超 100ms 记 warn,超 1000ms 被强制中断(只杀本次调用,脚本仍存活)。阈值可调,见文末配置表。
@@ -261,7 +261,7 @@ mineral.store.set("netease:123", "plugin.note", nil)   -- nil = 删除
 ```
 
 - 值是标量:integer / number / string / boolean
-- 键建议带 `.` 前缀命名空间(如 `plugin.xxx`),与未来一等字段隔开
+- 键建议使用带 `.` 分隔的命名空间前缀(如 `plugin.xxx`),隔离不同脚本或插件的数据
 - 保留键拒写:`local_play_count` / `rating` / `last_played`
 
 ---

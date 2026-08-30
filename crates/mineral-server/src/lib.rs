@@ -1,20 +1,13 @@
-//! Mineral 后台 server 单进程骨架。
+//! 承载 Mineral 的后台播放、取数、任务调度与 client 接入。
 //!
-//! 把 audio engine、task scheduler、channels 等「server 角色」对象收成 [`Server`],
-//! 对外发 [`ClientHandle`] 作为 client 的指令面。当前实现是同进程 ——
-//! 所有方法都只是把调用透传给底层 [`mineral_audio::AudioHandle`] /
-//! [`mineral_task::Scheduler`]。未来真要拆双进程时,只换 [`ClientHandle`] 内部
-//! 实现(改成 unix socket / serde 编码),签名保持稳定,client 调用方零改动。
+//! [`Server`] 持有进程内资源,可通过 [`Server::client`] 创建本地 [`ClientHandle`],
+//! 也可通过 [`Server::serve`] 在 Unix socket 上接入独立 client。
 //!
 //! ## 角色边界
 //!
-//! - **Server**:拥有 audio engine 线程、task worker、channels;在 [`Server::spawn`]
-//!   时启动,在被 drop 时清理。提供 [`Server::client`] 发 cheap-clone handle、
-//!   [`Server::take_spectrum_tap`] 拿走唯一的 PCM 旁路 consumer、[`Server::shutdown`]
-//!   显式终止。
-//! - **ClientHandle**:`Clone`,只暴露「调命令 + 拉 snapshot + 拉事件」。**不要**
-//!   在签名里漏出 `&AudioHandle` / `&Scheduler` 这种内部类型,否则将来换 IPC 时
-//!   破坏调用方。
+//! - **Server**:拥有 audio engine、task worker、channels、playback providers 与事件 hub,
+//!   并提供本地 handle、IPC accept loop 与关停入口。
+//! - **ClientHandle**:`Clone`,只暴露命令、snapshot 与事件接口,不泄漏 server 内部句柄。
 
 mod client;
 mod config;

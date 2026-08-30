@@ -236,8 +236,8 @@ fn resolve_query(
 
 /// 把一个事件分发给对应桶里的全部回调(注册顺序)。
 ///
-/// 回调统一收**单一 args table**(nvim autocmd 风格):以后给事件加字段
-/// 零破坏,LSP 侧由 meta stub 的 per-event `@class` + `@overload` 给强类型。
+/// 回调统一收**单一 args table**(nvim autocmd 风格),使事件字段集中在一个载荷中;
+/// LSP 侧由 meta stub 的 per-event `@class` + `@overload` 提供强类型。
 fn dispatch_event(lua: &Lua, host: &ScriptHost, watchdog: &WatchdogConfig, event: ScriptEvent) {
     match event {
         ScriptEvent::TrackStarted { song } => {

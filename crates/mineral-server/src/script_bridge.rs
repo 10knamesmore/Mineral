@@ -535,7 +535,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                         mineral_stats::Actor::Script,
                     );
                 }
-                // 队列外跳播是后续能力;当前 warn 丢弃,不拉详情。
+                // Play 只解析当前队列中的完整 Song;队列外 id 不拉详情并明确告警。
                 None => mineral_log::warn!(
                     target: "script",
                     song_id = id.qualified(),

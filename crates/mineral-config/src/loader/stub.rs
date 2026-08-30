@@ -45,8 +45,8 @@ pub fn inject_noop_host(lua: &Lua) -> color_eyre::Result<()> {
 mod tests {
     use super::inject_noop_host;
 
-    /// 守卫:用户 config.lua 顶层对 `mineral` 的**任意**用法(已知 API、
-    /// 未来新增、甚至拼错的名字)在非 daemon 进程 eval 都不报错——否则
+    /// 守卫:用户 config.lua 顶层对 `mineral` 的**任意**用法(已知、未知或拼错的名字)
+    /// 在非 daemon 进程 eval 都不报错——否则
     /// 整份配置回落默认,keys / theme 全丢。
     #[test]
     fn absorber_stub_swallows_any_usage() -> color_eyre::Result<()> {
@@ -68,7 +68,7 @@ mod tests {
             -- 返回值可继续链式使用(timer handle 范式)
             local t = mineral.timer.every(1000, function() end)
             t:stop(); t:resume(); t:kill()
-            -- 未来新增 / 拼错的名字同样静默(零同步压力的设计本意)
+            -- 未知 / 拼错的名字同样静默
             mineral.future_api.deeply.nested("arg"):chained():more()
             "#,
         )

@@ -88,8 +88,8 @@ pub(crate) fn parse_playlist_id(raw: &str) -> mlua::Result<mineral_model::Playli
     ))
 }
 
-/// 开放 store key 推荐带 `.` 前缀(如 `plugin.skipcount`):与未来一等字段名
-/// 隔开命名空间。无前缀只 warn 不拒(渐进约定;`store.set` / `store.inc` 共用)。
+/// 开放 store key 推荐使用带 `.` 分隔的命名空间前缀(如 `plugin.skipcount`)。
+/// 未分隔命名空间只 warn 不拒；`store.set` 与 `store.inc` 共用此约定。
 ///
 /// # Params:
 ///   - `key`: 脚本侧输入的开放键
@@ -98,7 +98,7 @@ pub(crate) fn warn_unprefixed_key(key: &str) {
         mineral_log::warn!(
             target: "script",
             key,
-            "store key 建议带 `.` 前缀(如 \"plugin.{key}\"),避免与未来一等字段冲突"
+            "store key 建议使用命名空间前缀(如 \"plugin.{key}\"),隔离插件数据"
         );
     }
 }

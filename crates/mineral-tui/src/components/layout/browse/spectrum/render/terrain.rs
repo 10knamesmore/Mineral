@@ -107,7 +107,7 @@ struct RidgePainter {
     layers_f: f32,
 
     /// 远层亮度保底(0..=1):越旧的层亮度衰减到此为止,不再往 `dim_anchor` 以下沉。
-    /// 0 = 远层淡到全隐(旧行为);1 = 全层等亮、无纵深。
+    /// 0 = 远层淡到全隐;1 = 全层等亮、无纵深。
     fade_floor: f32,
 }
 
@@ -173,8 +173,8 @@ fn sample(layer: &[f32], px: usize, point_w: usize) -> f32 {
 }
 
 /// 深度 → 山脊亮度系数:近层(`depth` 0)满亮 1.0,越旧越暗,但**保底不低于**
-/// `fade_floor`——远层不再往 `dim_anchor` 以下沉、隐入背景。`fade_floor = 0` 复原
-/// 「淡到全隐」的旧行为,`= 1` 则全层等亮(无纵深)。
+/// `fade_floor`——远层不再往 `dim_anchor` 以下沉、隐入背景。`fade_floor = 0` 时
+/// 远层淡到全隐,`= 1` 时全层等亮(无纵深)。
 ///
 /// # Params:
 ///   - `depth`: 层深度(0 = 最前山脊,越旧越大;含推层进度小数)
@@ -201,7 +201,7 @@ mod tests {
         }
     }
 
-    /// 最旧层(depth ≥ layers)落到保底 `fade_floor`,不再更暗;`= 0` 复原旧行为(全隐)。
+    /// 最旧层(depth ≥ layers)落到保底 `fade_floor`,不再更暗;`= 0` 时全隐。
     #[test]
     fn oldest_layer_clamped_to_floor() {
         assert!((depth_brightness(8.0, 8.0, 0.30) - 0.30).abs() < 1e-6);

@@ -143,7 +143,7 @@ expression: "super::meta_config_lua()"
 
 ---TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是
 ---in-repo client,在协议上无特权,只有「打包特权」。第三方 client 的配置活在
----自己生态,不进本文件;未来 in-repo client 平行加段。
+---自己生态,不进本文件。
 ---@class mineral.TuiConfig
 ---@field theme? mineral.ThemeConfig 主题色板段(14 token + 3 roles)。
 ---@field keys? mineral.KeysConfig 键位重映射段(动作 → 键)。

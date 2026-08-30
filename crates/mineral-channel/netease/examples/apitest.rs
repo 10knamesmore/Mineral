@@ -534,17 +534,17 @@ async fn run_section6_playlist_write(
     report.push(r);
 }
 
-/// 写死的 "Endserenading" 歌单 id(用户自己的私有歌单,基本不动)。
+/// 手工登录联调用的 "Endserenading" 私有歌单 fixture id。
 ///
-/// 运行时**直接 ping 这个固定 id**,不查本地 DB、不拉 `my_playlists` 列表
-/// (那样会依赖特定用户/运行时状态,别人跑就全 fail)。来源:
+/// 运行时直接 ping 固定 id,不从当前账号的 `my_playlists` 动态选择。凭证必须有权访问
+/// 该私有歌单,其他账号运行此 probe 预期失败。fixture 来源:
 /// `https://music.163.com/#/playlist?id=8411923778`。
 const ENDSERENADING_PLAYLIST_ID: &str = "8411923778";
 
 /// 探测用的公开歌单(网易云飙升榜,100 首,无需登录),用于对比 limit=0 vs limit=1000。
 const PROBE_PUBLIC_PLAYLIST_ID: &str = "19723756";
 
-/// 探测 `limit=0` 是否省掉 `tracks` 大头(B 方案"轻量版本请求"的前提)。
+/// 探测 `limit=0` 是否省掉 `tracks` 大头,验证轻量版本请求的协议前提。
 ///
 /// 对同一公开歌单分别用 `limit=0` / `limit=1000` 打 `/api/v6/playlist/detail`,
 /// 打印各自的 `tracks` 数、`trackIds` 数、`trackUpdateTime`、body 字节数。

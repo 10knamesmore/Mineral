@@ -57,8 +57,8 @@ fn prev_wraps_and_repeats_one() {
 }
 
 /// 回归:队列含交替重复曲时,顺序推进必须按下标单向前进、走到队尾后停,
-/// **不得**在两个重复副本之间来回吸附成无限循环(历史 bug:落地按歌曲身份
-/// first-match 定位,重复曲把 queue_sel 拽回首个副本)。
+/// **不得**在两个重复副本之间来回吸附成无限循环。按歌曲身份 first-match 定位会
+/// 把游标拽回首个副本并触发该循环。
 #[test]
 fn advance_next_walks_past_duplicates_without_looping() {
     // gk 在下标 1/3、400 在下标 2/5;从正在播的 400(下标 2)起逐首推进。

@@ -81,7 +81,7 @@ mod tests {
         Ok(())
     }
 
-    /// 新图未入缓存:不转场(维持现状行为),但显示身份已跟上——图迟到后**不再**补转场。
+    /// 新图未入缓存时不启动转场，但立即更新显示身份；图片迟到后也不补启动转场。
     #[test]
     fn switch_with_missing_image_does_not_transition() -> color_eyre::Result<()> {
         let a = MediaUrl::remote("https://x.y/a.jpg")?;

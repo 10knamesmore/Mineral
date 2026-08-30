@@ -29,7 +29,7 @@ pub enum SearchFocus {
     /// 结果列导航态
     Results,
 
-    /// 详情面板态（实体详情 / 后续操作）
+    /// 实体详情与详情操作面板态
     Detail,
 }
 

@@ -413,7 +413,7 @@ pub(crate) async fn backfill(
         cached: 0,
         exported: 0,
     };
-    // 已带当前版本水印的文件跳过(增量回填);阻塞读在每文件 ~ms 级,维护操作可接受。
+    // 回填在投递前同步逐文件探测水印;已带当前版本水印的文件跳过。
     for (id, quality, path) in cached {
         if write::has_watermark(&path) {
             continue;

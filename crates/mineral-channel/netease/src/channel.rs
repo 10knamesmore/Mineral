@@ -321,7 +321,6 @@ impl MusicChannel for NeteaseChannel {
     ///
     /// 缓存只存曲目 relation(index + SongId),元信息每次从轻请求拿,Song metadata 仍可独立更新。
     async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
-        // 1. 轻量请求拿元信息 + 版本戳 + trackIds 顺序(limit=0,不拉 tracks)。
         let meta = match api::playlist::detail(&self.transport, id, 0).await {
             Ok(r) => r.playlist,
             Err(e) => {
@@ -347,7 +346,6 @@ impl MusicChannel for NeteaseChannel {
             .map(|t| t.id.to_string())
             .collect::<Vec<String>>();
 
-        // 2. 缓存命中且版本一致 → 按远端顺序由本地重建曲目;否则全拉覆盖写回。
         let entries = if let Some(cached) = playlist_cache::try_rebuild_if_current(
             &self.persist,
             id,
@@ -459,9 +457,6 @@ impl MusicChannel for NeteaseChannel {
             .await
             .map_err(Error::Other)
     }
-
-    // on_played 打点由 daemon 的 StatsRecorder 负责(见 mineral-server::stats):channel
-    // 用 trait 默认空实现(其他源不实现也不丢数据)。
 }
 
 #[async_trait]

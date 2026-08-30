@@ -199,10 +199,10 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
     }
 }
 
-/// 按可用凭证收集所有 channel(目前是 mineral 聚合 + netease + bilibili)。
+/// 构造内建 channel 与对应的 playback provider。
 ///
-/// **单个 channel 失败不阻塞**:某源构建失败(如凭证损坏)只 warn + 跳过,不拖垮其他源
-/// 或 daemon;空 channels 也是合法状态(没登录任何源),由 TUI 空状态提示兜。
+/// Mineral 聚合 channel 恒注册。单个远端源构建失败(如凭证损坏)只 warn + 跳过,
+/// 不阻塞其他源或 daemon。
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
@@ -248,10 +248,9 @@ fn build_sources(
     })
 }
 
-/// 构造 guest B站 channel(公开端点:搜索 / 详情 / 取流,无需登录)。
+/// 构造 B站 channel；有已存凭证时带登录态，否则使用 guest 模式。
 ///
-/// 与 netease 不同,B站不需要预存凭证即可用,故恒返回一个 channel(非 `Option`);
-/// 登录(解锁高码率 / 私密收藏夹)是后续阶段。
+/// guest 模式可访问搜索、详情与取流等公开端点；登录态额外提供我的收藏夹与高码率。
 ///
 /// # Params:
 ///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。

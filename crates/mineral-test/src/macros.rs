@@ -4,8 +4,8 @@
 //! 宏体展开成 `insta::…`,在**调用方 crate** 解析 —— 故用到这两个宏的 crate 必须自带
 //! `insta` 的 dev-dependency(本仓现有调用方都已具备)。
 //!
-//! 两个宏都关掉 insta 的 `prepend_module_to_snapshot`:`.snap` 文件名只取测试函数名、
-//! 不再拼模块路径(模块归属由所在 `snapshots/` 目录体现)。如此模块搬迁时快照**跟着目录
+//! 两个宏都关掉 insta 的 `prepend_module_to_snapshot`:`.snap` 文件名只取测试函数名，
+//! 模块归属由所在 `snapshots/` 目录体现。模块搬迁时快照**跟着目录
 //! 走、文件名不变**。代价是唯一性约束降为「同一 `snapshots/` 目录内函数名不得重名」——
 //! 即同目录的兄弟源文件之间,快照测试函数要起不同名字。
 

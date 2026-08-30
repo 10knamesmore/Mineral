@@ -1,7 +1,6 @@
 //! 「转 Client」的领域动作执行器:播放控制 / love / 下载 / 脚本动作。
 //!
-//! 从 app 模块拆出的 `App` 方法集(单文件体量约束);执行点仍是
-//! `App::dispatch`,这里只放函数体。
+//! 实现 `App` 的播放控制、love、下载与脚本动作；入口由 `App::dispatch` 调用。
 
 use mineral_model::Song;
 use mineral_protocol::DownloadTarget;
@@ -597,8 +596,7 @@ mod tests {
         Ok(())
     }
 
-    /// F1 回归:容器播放(专辑)起播记 Album 语境——此前 `enqueue_songs` 硬编码 Unknown,
-    /// albums-via-context 统计因此恒空。
+    /// 容器播放从专辑起播时必须携带 Album 语境，否则 albums-via-context 统计无法归属。
     #[test]
     fn container_play_carries_album_context() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
@@ -801,8 +799,7 @@ mod tests {
         Ok(())
     }
 
-    /// channel 搜索布局态:脚本 ctx 报 Search(回归 bug④——曾漏 channel_search 分支,
-    /// 在 channel 搜索里误报成看穿到的下层主视图)。
+    /// channel 搜索布局态的脚本上下文必须报 Search，不能看穿到下层主视图。
     #[test]
     fn keyctx_channel_search_reports_search() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
@@ -816,8 +813,7 @@ mod tests {
         Ok(())
     }
 
-    /// 非 queue 浮层(确认框)对脚本 ctx 透明:看穿到下层布局层。channel 搜索态上叠确认框,
-    /// ctx 仍报 Search(回归:active_layer 重构不得改这条透明语义)。
+    /// 非 queue 浮层(确认框)对脚本上下文透明；channel 搜索态上叠确认框仍报 Search。
     #[test]
     fn keyctx_non_queue_overlay_is_transparent() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;

@@ -72,9 +72,8 @@ fn reload_once(
 ) {
     // 新 host 复用同两条通道:泵与 daemon 侧持有的发送端全部不动。
     let host = ScriptHost::new(parts.cmd_tx.clone(), parts.push_tx.clone());
-    // eval 前播种当前属性值:observe「订阅即回放」与顶层 get 立即可用。
-    // 已知小竞窗:eval 窗口内的属性变更投给垂死的旧 VM,新 VM 种子略旧 ——
-    // 实际只波及 position(秒级自愈),不值得二次 diff。
+    // eval 前播种一个时点快照,使 observe 能回放、顶层 get 可立即读取。
+    // eval 期间发生的任意属性变更仍可能只投给旧 VM;新 VM 要等该属性下次变化才会收到更新。
     host.seed_props((parts.props_snapshot)());
     let loaded = mineral_config::load_with_vm(config_path, |lua| {
         install_api(lua, &host).map_err(color_eyre::Report::new)

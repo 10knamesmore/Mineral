@@ -172,7 +172,7 @@ fn report_options(top_override: Option<u32>) -> color_eyre::Result<ReportOptions
         .build())
 }
 
-/// `stats report`:§8.1 全套装配 + 回查名,按 `--format` 出 text / json / md。
+/// `stats report`:装配完整报告与展示名,按 `--format` 输出 text、json 或 markdown。
 async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre::Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {

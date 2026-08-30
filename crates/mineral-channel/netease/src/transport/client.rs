@@ -146,8 +146,7 @@ impl Transport {
         let (ua, body) = match spec.crypto {
             Crypto::Weapi => (pick_user_agent(spec.ua), weapi(&json_text)),
             Crypto::Eapi => {
-                // EAPI 的 url_path 用 service 写的逻辑路径(`spec.path`),
-                // 不是改写后的实际 URL(spec §1.3 关键易错点)
+                // EAPI 的摘要绑定 service 写的逻辑路径(`spec.path`),不是改写后的实际 URL。
                 (pick_user_agent(spec.ua), eapi(spec.path, &json_text))
             }
             Crypto::Linuxapi => {

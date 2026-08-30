@@ -49,8 +49,7 @@ impl AppState {
                 self.library.liked_ids.insert(*source, ids.clone());
                 self.redecorate_for_source(*source);
             }
-            // RemotePlayCount 基础设施暂时保留，但 Selected 已统一改读 Mineral 本地统计；
-            // 收到旧任务 / 外部任务的结果也不能污染本地指标。
+            // Selected 只展示 Mineral 本地统计；远端累计播放次数不参与该投影。
             TaskEvent::RemotePlayCountFetched { .. } => {}
             TaskEvent::LocalPlayCountFetched { song_id, count } => {
                 let count = if self.records_local_plays_for(song_id.namespace()) {
@@ -77,7 +76,7 @@ impl AppState {
                 self.apply_artist_albums(id, albums);
             }
             TaskEvent::AlbumDetailFetched { id, album } => self.apply_album_detail(id, album),
-            // 歌单写操作完结由后续里程碑(歌单管理)消费;先吞掉保持 match 穷尽。
+            // 写成功后的列表收敛由 server 触发的 LibrarySnapshot 完成；完成事件本身不改 AppState。
             TaskEvent::PlaylistWriteDone { .. } => {}
         }
     }

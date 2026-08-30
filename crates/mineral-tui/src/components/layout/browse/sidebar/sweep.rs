@@ -59,7 +59,7 @@ pub fn draw(
                 }
             }
             // 旧视图整体左移 advance,新视图从右补入。
-            // SweepStyle 是 #[non_exhaustive]:未来新风格接线前按 Push 兜底。
+            // SweepStyle 是 #[non_exhaustive];本接线不识别的变体按 Push 处理。
             SweepStyle::Push | _ => {
                 if c + advance < w {
                     (&pl, c + advance)

@@ -5,7 +5,7 @@ use super::constants::{
     EAPI_KEY, EAPI_MD5_INFIX, EAPI_MD5_PREFIX, EAPI_MD5_SUFFIX, EAPI_SEPARATOR,
 };
 
-/// EAPI 加密入口(spec §1.3)。
+/// EAPI 加密入口。
 ///
 /// `url_logical_path` 必须用 service 的"逻辑路径"(`Options.Url`,例如
 /// `/api/song/lyric/v1`)而不是请求实际打到的 `/eapi/...`——MD5 包裹时用的就是

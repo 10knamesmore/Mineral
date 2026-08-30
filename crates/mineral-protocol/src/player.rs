@@ -1,9 +1,7 @@
-//! 播放循环模式 + Server 端持有的播放状态快照。
+//! 定义播放循环模式及 server 向 client 同步的播放状态。
 //!
-//! `PlayMode` 历史在 mineral-tui::playback;搬来这里因为 server 端也要决定
-//! `next_song` / `prev_song`,且需要走 wire([`PlayerSync`] 的字段)。
-//! glyph / label 这两个 UI 字面量跟着挪过来 —— 字符画放 protocol 不优雅,
-//! 但避免 mineral-tui 跨 crate 加 inherent impl 的麻烦,**够用**。
+//! [`PlayMode`] 同时提供队列推进语义、持久化与脚本字符串,以及 transport 控件使用的
+//! glyph / label;[`PlayerSync`] 按版本拆分轻量状态与可选重段。
 
 use mineral_model::{DirectMedia, Envelope, PlaybackMediaInfo, Song, SongId};
 use serde::{Deserialize, Serialize};
@@ -56,9 +54,9 @@ impl PlayMode {
         }
     }
 
-    /// 稳定字符串名(会话持久化用),与 [`Self::from_name`] 对偶。
+    /// 会话持久化使用的稳定字符串名,与 [`Self::from_name`] 对偶。
     ///
-    /// 值与历史上落库的 Debug 名一致(`"Sequential"` 等),存量会话库无缝。
+    /// 值是精确的变体名(`"Sequential"` 等)。
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -75,7 +73,7 @@ impl PlayMode {
     ///   - `name`: 稳定名字符串(落库值)
     ///
     /// # Return:
-    ///   对应档位;未知名(脏数据 / 未来新档回退旧版)为 `None`,调用方自行降级。
+    ///   对应档位;未知或无效的落库值为 `None`,调用方自行降级。
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -89,9 +87,8 @@ impl PlayMode {
 
     /// 脚本边界的蛇形稳定名(Lua 生态惯例),与 [`Self::from_script_name`] 对偶。
     ///
-    /// 与 [`Self::name`](落库格式,变体名形式)是**两套**字符串:落库的不能动
-    /// (存量会话库),脚本面(`mineral.player.set_mode` / 属性树 `player.mode`
-    /// 的值)统一用这套蛇形。
+    /// 与 [`Self::name`](落库格式,变体名形式)是两套字符串;脚本面
+    /// (`mineral.player.set_mode` / 属性树 `player.mode`)统一使用蛇形名。
     #[must_use]
     pub fn script_name(self) -> &'static str {
         match self {
@@ -380,14 +377,13 @@ mod tests {
         );
     }
 
-    /// `name` / `from_name` 对偶:四档 round-trip;且 `name` 与 Debug 名一致
-    /// (历史会话库存的是 Debug 名,守住存量兼容)。
+    /// `name` / `from_name` 对偶,且持久化 token 与变体名一致。
     #[test]
     fn play_mode_name_round_trips_and_matches_debug() {
         let mut m = PlayMode::Sequential;
         for _ in 0..4 {
             assert_eq!(PlayMode::from_name(m.name()), Some(m));
-            assert_eq!(m.name(), format!("{m:?}"), "name 应与历史 Debug 落库值一致");
+            assert_eq!(m.name(), format!("{m:?}"), "持久化 token 应与变体名一致");
             m = m.cycle();
         }
     }

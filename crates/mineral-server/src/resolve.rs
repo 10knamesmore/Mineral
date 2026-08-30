@@ -6,9 +6,9 @@
 //! 优先缓存)。
 //!
 //! 下载导出**不过索引**:导出目录(`~/Music/mineral`)就是权威——按
-//! `<source>/<quality>/<album>/<title>.<ext>` 重算专辑目录并 stat,文件在即可播。历史下载、换机
-//! 拷库、手动放进去的文件一律可见,不受任何索引漂移影响。代价是命名即身份:同源同专辑同名的两首歌
-//! 落到同一路径(下载侧按文件存在幂等,不产生 ` (N)` 副本),概率极低。
+//! `<source>/<quality>/<album>/<title>.<ext>` 重算专辑目录并 stat,符合布局的复制或手工放入文件
+//! 同样可见。路径不含 SongId,因此相同 source、quality、album 与清洗后 title 的歌曲会命中
+//! 同一个文件;下载侧也按该路径是否存在执行幂等跳过。
 
 use std::path::{Path, PathBuf};
 
@@ -20,9 +20,9 @@ use mineral_protocol::PlaybackOrigin;
 
 use crate::media_cache::{MediaCache, library_dir_and_stem};
 
-/// Mineral-owned local cache or download-library playback hit.
+/// Mineral-owned local cache or download-library encoded-media candidate.
 pub(crate) struct LocalMediaHit {
-    /// Absolute decoder-ready media path.
+    /// Absolute candidate path passed to the local-media opener.
     pub(crate) path: PathBuf,
 
     /// Quality represented by the local file.

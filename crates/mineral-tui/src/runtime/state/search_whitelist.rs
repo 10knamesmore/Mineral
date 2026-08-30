@@ -1,7 +1,7 @@
 //! channel 搜索下拉的配置白名单:类型 + 过滤/定序规则。
 //!
-//! 白名单语义:列出即暴露、顺序即下拉顺序。默认名单的唯一真相在 default.lua(代码不再
-//! 持有一份);空列表走逐层防呆回退——配置滤空时宁可全暴露,不让搜索页变空壳。
+//! 白名单语义:列出即暴露、顺序即下拉顺序。默认名单只由 default.lua 提供；空列表走
+//! 逐层防呆回退——配置滤空时宁可全暴露,不让搜索页变空壳。
 
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{SearchKind, SourceKind};

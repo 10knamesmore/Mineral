@@ -24,7 +24,7 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
     }
     let mut spans = Vec::<Span<'static>>::new();
     if state.browse.search.typing {
-        // 输入态:光标反色罩在文本光标处(before|after)的字符上,不再恒在词尾。
+        // 输入态:光标反色罩在 `before|after` 分隔处的字符上。
         let (before, after) = state.browse.search.query_split();
         let base = Style::new().fg(theme.peach);
         spans.extend(cursor_spans(format!("/{before}"), after, base));

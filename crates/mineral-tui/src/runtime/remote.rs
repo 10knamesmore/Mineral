@@ -1,8 +1,8 @@
 //! TUI 端的远程 client:同进程接口,跨进程实现。
 //!
 //! 实现 [`mineral_server::Client`] trait,所有方法 sync 接口,内部走 unix socket
-//! 上的 [`Frame`] 管线。一条长寿命 worker task 持连接:请求经 [`RequestId`] 配对
-//! 应答(server 可在任意两帧之间交错下推 [`Frame::Event`],**不再假设「发一收一」**),
+//! 上的 [`Frame`] 管线。一条长寿命 worker task 持连接:请求经 [`RequestId`] 配对应答,
+//! server 可在任意两帧之间交错下推 [`Frame::Event`],
 //! event 缓冲在本地,App 每 tick 经 [`Client::drain_events`] 取走。
 //! 需当场返回值的 sync 调用通过 std::sync::mpsc 等 reply；后台查询只入队，
 //! reply 由 worker 转成 completion event，不阻塞 TUI 调用线程。

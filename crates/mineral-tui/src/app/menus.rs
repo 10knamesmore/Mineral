@@ -438,8 +438,7 @@ impl App {
 
     /// Search 结果列选中行的屏幕矩形。
     ///
-    /// 走结果列的 [`ScrollList`] 只读 offset 还原(与左栏 row_anchor 同款),滚动到任意位置都对——
-    /// 不再假设 offset 恒 0。
+    /// 走结果列的 [`ScrollList`] 读取 offset 还原屏幕行，与左栏 `row_anchor` 使用同一算法。
     fn search_row_anchor(&self) -> Option<Rect> {
         let panel = compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).left;
         let kr = self.state.channel_search.active_results()?;
@@ -984,7 +983,7 @@ mod tests {
         Ok(())
     }
 
-    /// F1 回归:Library 上 o→Play 记当前歌单语境(此前菜单单曲 Play 硬编码 Unknown)。
+    /// Library 的菜单 Play 必须携带当前歌单语境。
     #[test]
     fn o_menu_play_carries_playlist_context() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
@@ -1412,8 +1411,7 @@ mod tests {
         Ok(())
     }
 
-    /// 内聚 resolver 落地:search 结果列 Song(队列动作)与 Album 容器(播放全部/加入队列)
-    /// 上 `o` 都弹操作菜单(此前 active.on() 早退静默)。
+    /// search 结果列的 Song 与 Album 容器都由 resolver 提供操作菜单。
     #[test]
     fn o_in_search_results_opens_action_menu_for_song_and_container() -> color_eyre::Result<()> {
         // Song 结果:o 弹菜单。
@@ -1491,8 +1489,7 @@ mod tests {
         Ok(app)
     }
 
-    /// detail 焦点:专辑详情曲目行上 `o` 弹操作菜单(Song 队列动作)。回归:detail 焦点
-    /// 此前 `active.on()` 早退静默。
+    /// detail 焦点下，专辑详情曲目行的 `o` 打开 Song 队列操作菜单。
     #[test]
     fn o_in_search_detail_opens_action_menu_for_track() -> color_eyre::Result<()> {
         let mut app = app_in_album_detail()?;

@@ -5,7 +5,7 @@ use super::constants::{IV, PRESET_KEY};
 use super::rand16::new_len16_rand;
 use super::rsa::rsa_no_padding_encrypt;
 
-/// WEAPI 加密入口(spec §1.1)。
+/// WEAPI 加密入口。
 ///
 /// 输入是一段 JSON 文本(已经包含业务参数 + `csrf_token`),输出是
 /// `application/x-www-form-urlencoded` 形式的 form body 字符串,

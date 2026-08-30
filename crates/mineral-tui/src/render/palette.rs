@@ -91,9 +91,7 @@ impl CoverPalette {
 
     /// 重点色切片(Lab 明度升序)。
     ///
-    /// `sample` / `column_endpoints` 内部直接读字段,故非 test 构建暂无生产消费者;
-    /// 由跨模块测试(`image::colors` 断言取色结果)与未来"频谱外取色复用"读取。
-    #[allow(dead_code)] // reason: 见上,getter 当前仅测试 / 未来消费者用
+    /// 图像取色会读取该切片派生 LCh 色带；调用方不得改变排序。
     pub fn swatches(&self) -> &[Rgb] {
         &self.swatches
     }

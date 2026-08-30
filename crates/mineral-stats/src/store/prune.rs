@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(count(pool, "searches").await?, 1, "水位后的事件保留");
         assert_eq!(count(pool, "sessions").await?, 1, "被引用会话保留,不撞外键");
 
-        // 水位推进过 T2:事件删净后会话失去引用,本轮一并删——自愈,不留孤儿。
+        // 水位推进过 T2:事件删净后会话失去引用,该次一并删——自愈,不留孤儿。
         store.prune(t2 + 1).await?;
         assert_eq!(count(pool, "searches").await?, 0);
         assert_eq!(count(pool, "sessions").await?, 0, "失去引用后会话补删");

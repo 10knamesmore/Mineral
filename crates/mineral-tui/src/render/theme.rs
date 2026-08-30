@@ -9,11 +9,6 @@ use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier, Style};
 
 /// 一组完整的 UI 颜色 token。
-///
-/// 阶段 2 仅用到 `surface1 / subtext / accent / overlay` 等子集,其余字段在
-/// 后续阶段(transport / spectrum / lyrics / overlay 等)启用,因此暂用
-/// `#[allow(dead_code)]` 抑制 dead-code 警告。
-#[allow(dead_code)] // reason: 后续阶段会逐步用到全部颜色 token
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     /// 主背景。
@@ -344,8 +339,8 @@ mod tests {
 
     use super::{Theme, resolve_source_color};
 
-    /// theme.background 落地:默认 `"base"` → 与 base 同色(消跳变的地基);覆盖为
-    /// `{ reset = true }` → `Color::Reset`(不填,渲染层据此跳过铺底、回到旧行为)。
+    /// theme.background 默认 `"base"` 时与 base 同色；覆盖为 `{ reset = true }` 时
+    /// 解析为 `Color::Reset`,渲染层据此跳过铺底。
     #[test]
     fn background_resolves_base_by_default_and_reset_override() -> color_eyre::Result<()> {
         use ratatui::style::Color;

@@ -143,7 +143,7 @@ pub struct KeysConfig {
 /// 一个动作的键绑定:单键(`"space"`)或键数组(`{"n", "j"}`)。
 ///
 /// 反序列化时每个键字符串经 [`KeyChord::parse`] 归一;数组语义是整体替换
-/// (与深合并一致,见主设计 D3)。内部存 `Vec<KeyChord>`,经 [`Self::chords`] 读。
+/// (与配置深合并的数组规则一致)。内部存 `Vec<KeyChord>`,经 [`Self::chords`] 读。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
     /// 绑定到该动作的归一化和弦(可多键)。

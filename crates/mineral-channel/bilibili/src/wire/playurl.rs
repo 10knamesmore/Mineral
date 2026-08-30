@@ -8,7 +8,7 @@ use serde::Deserialize;
 /// playurl 响应的 `data` 主体。
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlayUrlResult {
-    /// DASH 分离流(音视频分轨);MVP 只取音频轨。
+    /// DASH 分离流(音视频分轨);Mineral 只消费音频轨。
     pub dash: Option<Dash>,
 }
 

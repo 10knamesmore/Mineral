@@ -12,7 +12,6 @@ pub enum LayoutMode {
 }
 
 /// 主界面所有面板的位置矩形。
-#[allow(dead_code)] // reason: `mode` 字段保留给后续焦点路由分支
 #[derive(Clone, Copy, Debug)]
 pub struct Areas {
     /// 实际选用的布局模式。
@@ -158,7 +157,7 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 ///
 /// # Params:
 ///   - `area`: 可用区域
-///   - `_cfg`: 布局段;暂未读,保留入参令三个布局端点签名一致(备后续响应式宽度比)
+///   - `_cfg`: 布局段；此端点与其他布局计算函数保持同一调用接口
 pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas {
     // search 态顶行被 prompt 接管:不留 status bar,prompt 紧贴 area 顶。
     let [search_prompt, body] =

@@ -1,10 +1,8 @@
 //! 顶层 [`App`] 状态与同步主事件循环。
 //!
-//! **4c 重构后**:player 业务(submit_play_song / next/prev/cycle_mode / queue 管理 /
-//! auto-next / prefetch)整体搬到 server (`mineral_server::PlayerCore`)。App 退化
-//! 为「转发用户意图 + 渲染 server 状态镜像」。每帧 tick 做一次版本门控同步
-//! (PlayerSync,报已持版本、只收落后的重段)灌进 AppState 镜像;按键直接转
-//! `client.play_song / cycle_play_mode / ...` 等高级意图。
+//! 播放、队列、自动续播与预取由 `mineral_server::PlayerCore` 负责；App 转发用户意图并
+//! 渲染 server 状态镜像。每帧 tick 携带已持版本请求 [`PlayerSync`]，只应用版本落后的
+//! 状态段；按键通过 `client.play_song`、`cycle_play_mode` 等高层命令发往 server。
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -236,8 +234,8 @@ impl App {
         // 启动上报一次终端状态(此后 Resize / 全屏切换增量上报)。
         self.report_terminal_state();
 
-        // 退出信号 watcher:SIGTERM / SIGINT / SIGHUP 进来时不再 silent kill,而是由
-        // 后台 task 记日志 + 置标志,主循环据此走正常退出(`Tui::exit` 还原终端)。
+        // SIGTERM / SIGINT / SIGHUP 由 watcher 记日志并置标志,主循环据此走正常退出,
+        // 让 `Tui::exit` 有机会还原终端。
         let shutdown = crate::runtime::signal::spawn_watcher()?;
 
         while !self.should_quit {
@@ -879,9 +877,8 @@ mod tests {
         Ok(())
     }
 
-    /// 集成回归:Tab 开队列 → 按键经 dispatch 路由到 queue 浮层移动光标,且**不被
-    /// server sync tick 弹回**。此前 apply 每帧用 server 的
-    /// 「在播锚点」覆盖 UI 光标,导致按键看似无效;现在光标归 overlay 私有、只 clamp。
+    /// queue 光标归 overlay 所有；server sync 更新队列时只钳制越界位置，不能用在播锚点
+    /// 覆盖用户刚完成的导航。
     #[test]
     fn queue_nav_moves_and_survives_snapshot_tick() -> color_eyre::Result<()> {
         // queue 6 首,当前在播第 2 首(idx 2)。
@@ -1667,8 +1664,7 @@ mod tests {
         Ok(())
     }
 
-    /// detail 焦点下 `move_*` 不移 results 光标:detail 是独立面板,其内容滚动是后续里程碑,
-    /// 当前 j/k 在 detail 应无操作(而非偷偷动 results 的 sel)。
+    /// detail 焦点下 `move_*` 是 no-op,不得移动 results 光标。
     #[test]
     fn detail_focus_move_does_not_touch_results() -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;

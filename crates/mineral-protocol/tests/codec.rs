@@ -124,7 +124,7 @@ async fn round_trip_response_error() -> color_eyre::Result<()> {
     let mut sender = framed(a);
     let mut receiver = framed(b);
 
-    let msg = "daemon busy: another client is connected";
+    let msg = "request failed: channel unavailable";
     let resp = Response::Error(msg.to_owned());
     json_round_trips(&resp)?;
     send(&mut sender, &resp).await?;
@@ -499,8 +499,7 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 下载 / 进程信息 / 复制模板 / 终端上报的 round-trip(此前无覆盖的变体补齐,
-/// 双 codec 经 helper 一并守住)。
+/// 下载、进程信息、复制模板与终端上报必须同时通过 JSON 和 bincode round-trip。
 #[tokio::test]
 async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
     req_round_trips(Request::DaemonInfo).await?;
@@ -530,7 +529,7 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
     }))
     .await?;
 
-    // 复制模板:四种实体 ctx 各一(Playlist/Album/Artist 载荷此前从未过 wire 测试)。
+    // 复制模板覆盖 Song、Playlist、Album 与 Artist 四种实体上下文。
     req_round_trips(Request::RenderCopyTemplate {
         index: 2,
         ctx: CopyTemplateCtx::Song(Box::new(song("cp"))),

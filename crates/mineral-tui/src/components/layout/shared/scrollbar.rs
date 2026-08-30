@@ -66,8 +66,7 @@ pub(crate) fn draw_scrollbar(
 mod tests {
     use super::scrollbar_thumb;
 
-    /// 回归锁(用户实测两 bug):滚动条滑块长度恒定(不随 off「一长一短蠕动」)、到顶贴顶、
-    /// **到底滑块底边正好贴轨道底**(此前到底了滑块还没到底、误导下面有内容)。
+    /// 滚动条滑块长度不随 offset 改变；offset 两端必须分别贴住轨道顶边和底边。
     #[test]
     fn scrollbar_thumb_constant_len_and_flush_bottom() {
         let (total, viewport, track) = (50u16, 10u16, 8u16);
@@ -80,11 +79,7 @@ mod tests {
         assert_eq!(len_0, len_max, "滑块长度不随 off 变(到底)");
         // 到顶贴顶、到底贴底。
         assert_eq!(top_0, 0, "off=0 滑块贴顶");
-        assert_eq!(
-            top_max + len_max,
-            track,
-            "off=max 滑块底边贴轨道底(回归:到底滑块没到底)"
-        );
+        assert_eq!(top_max + len_max, track, "off=max 时滑块底边必须贴住轨道底");
     }
 
     /// 内容恰好不溢出(total==viewport):滑块满轨、贴顶(不会出现半截滑块)。

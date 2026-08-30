@@ -170,8 +170,8 @@ impl SpectrumColor {
     /// - `Hue` / `CoverFixed` / `Snapshot`:无随帧推进的内部进度,原样返回(精确)。
     /// - `Transition`(换歌打断):把打断那刻的可见色场沿频率轴均匀采 [`SNAPSHOT_SAMPLES`]
     ///   点,烘焙成底/顶两条色带([`Self::Snapshot`])——新过渡从可见中间色继续渐变,
-    ///   不跳回打断目标。任一采样点非真彩(`Color::Rgb`)时无法入带,退化为打断目标色场
-    ///   (与真彩路径相比只少了中间色连续性,行为同旧实现)。
+    ///   不跳回打断目标。任一采样点非真彩(`Color::Rgb`)时无法入带,退化为打断目标色场,
+    ///   仅失去中间色连续性。
     ///
     /// # Params:
     ///   - `theme`: 过渡起点为 `Hue` 时换算端点色用
@@ -613,7 +613,7 @@ impl SpectrumState {
         &self.bars
     }
 
-    /// 推进配色状态机一拍(替换原先裸 `hue_phase` 自增):
+    /// 推进配色状态机一拍:
     ///
     /// - `Hue`:`hue_rotate` 时 `hue_phase` 自增、绕 `hue_cycle_ticks` 取模。
     /// - `Transition`:`frame += 1`,到 `cover_fade_ticks` 转 `CoverFixed`(hue 停转)。
@@ -1439,8 +1439,8 @@ mod tests {
         Ok(())
     }
 
-    /// 无音频(idle)宽面板快照:内宽 78 > 64,验证 baseline 铺满整宽且各列等高无起伏。
-    /// tick 走 `None` 路径,本是宽面板右侧空白 bug 的现场,此处锁住修复后行为。
+    /// 无音频(idle)宽面板快照:内宽 78 > 64；`None` tick 路径仍须让 baseline
+    /// 铺满整宽且各列等高无起伏。
     #[test]
     fn spectrum_silent_full_width_snapshot() -> color_eyre::Result<()> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;

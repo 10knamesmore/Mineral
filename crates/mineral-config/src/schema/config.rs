@@ -62,7 +62,7 @@ pub struct Config {
 
 /// TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是
 /// in-repo client,在协议上无特权,只有「打包特权」。第三方 client 的配置活在
-/// 自己生态,不进本文件;未来 in-repo client 平行加段。
+/// 自己生态,不进本文件。
 #[config_section]
 pub struct TuiConfig {
     /// 主题色板段(14 token + 3 roles)。

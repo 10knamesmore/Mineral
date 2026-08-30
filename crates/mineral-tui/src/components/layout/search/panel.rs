@@ -24,7 +24,7 @@ use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
 
-/// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调(spec §1.2 当前焦点面板边框高亮)。
+/// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调。
 fn border_style(focused: bool, theme: &Theme) -> Style {
     let color = if focused { theme.accent } else { theme.overlay };
     Style::new().fg(color)

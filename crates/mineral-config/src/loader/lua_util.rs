@@ -3,8 +3,7 @@
 use mlua::{Table, Value};
 
 /// [`table_path`] 的点号语法糖:`table_at!(merged, tui.copy.templates)`
-/// = `table_path(merged, &["tui", "copy", "templates"])`。键须是合法标识符;
-/// 将来出现带 `-` 等的键再给字符串字面量分支。
+/// = `table_path(merged, &["tui", "copy", "templates"])`。键必须是合法标识符。
 /// (与函数不同名是刻意的:`use` 再导出宏时,同名函数会在值命名空间撞车。)
 macro_rules! table_at {
     ($root:expr, $($key:ident).+) => {

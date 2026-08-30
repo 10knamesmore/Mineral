@@ -20,7 +20,7 @@ pub(super) enum SweepLayer {
 /// sweep 合成的纯几何：给定风格 / 方向 / 当前列 `c` / 区宽 `w` / 目标已进列数 `advance`，
 /// 定出该列取出发帧还是目标帧、及其相对列号。`is_push`（下钻）目标从右来、否则（返回）从
 /// 左来；[`SweepStyle::Cover`] 出发帧原地不动、[`SweepStyle::Push`] 出发帧整体让位。下钻 /
-/// 返回 sweep 与 artist 双区切换共用此一处映射——动法不再各写一套、不会再漂移。
+/// 返回 sweep 与 artist 双区切换共用此映射，相同风格与方向得到相同列运动。
 ///
 /// # Params:
 ///   - `style`: 过渡风格（配置 `view_sweep`）
@@ -55,7 +55,7 @@ pub(super) fn sweep_column(
                 (SweepLayer::From, c)
             }
         }
-        // 非穷尽（`#[non_exhaustive]`）→ 未接线的新风格按 Push 兜底。
+        // SweepStyle 是 #[non_exhaustive];本接线不识别的变体按 Push 处理。
         SweepStyle::Push | _ => {
             if is_push {
                 // 出发帧整体左移 advance、目标从右补入。

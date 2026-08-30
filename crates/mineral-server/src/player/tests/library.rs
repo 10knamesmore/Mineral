@@ -449,8 +449,8 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         "聚合曲目保留原源 id"
     );
 
-    // F1 回归:sidebar 计数经 client 认得的 LibrarySnapshot 更新,快照里 mineral 聚合歌单的
-    // track_count 跟随收藏数。直推 PlaylistsFetched 会被 client apply 丢弃,故这里改断言这条。
+    // sidebar 只消费 LibrarySnapshot,因此聚合歌单的 track_count 必须在该快照中跟随收藏数;
+    // 原始 PlaylistsFetched 不会更新 sidebar。
     let snapshot = events
         .iter()
         .rev()

@@ -34,7 +34,7 @@ once_cell       = { workspace = true }
 md-5            = { workspace = true }
 hex            = { workspace = true }
 
-# CLI(二维码登录,stage 3)
+# CLI(二维码登录)
 clap       = { workspace = true }
 qrcode     = { workspace = true }
 

@@ -43,7 +43,7 @@ pub struct Server {
     /// 在线 client 数。
     connections: Arc<serve::ConnRegistry>,
 
-    /// Event 推送 hub:生产者(脚本运行时 / 将来的 daemon 内事件源)经
+    /// Event 推送 hub:daemon 内生产者经
     /// [`Server::event_sink`] 拿发送端;每条 client 连接握手后 subscribe,按
     /// 订阅集过滤下发。无订阅者时 send 失败即丢(advisory 语义)。
     events: broadcast::Sender<Event>,
@@ -80,7 +80,7 @@ impl Server {
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
-        // 容量按「单 client + advisory 语义」取小;积压时 event_pump 收 Lagged 丢弃。
+        // 每个订阅者最多保留 256 条 advisory event；落后的 event_pump 收 Lagged 并跳过旧帧。
         let (events, _) = broadcast::channel::<Event>(/*capacity*/ 256);
         let notify = crate::notify::Notifier::new(events.clone(), script);
         let player = PlayerCore::spawn(
@@ -160,7 +160,8 @@ impl Server {
         crate::media::start(self.player.clone())
     }
 
-    /// 显式 shutdown。drop 自身,利用 PlayerCore / AudioHandle / Scheduler 现有 Drop 链。
+    /// 消费 server 句柄。daemon 关停路径在 accept loop 结束后调用,
+    /// 随后由 Tokio runtime 退出终止其余后台任务。
     pub fn shutdown(self) {
         drop(self);
     }

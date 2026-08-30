@@ -70,7 +70,7 @@ impl std::fmt::Display for IdString {
 /// - `pub struct $name { namespace: $ns, value: IdString }`(私有字段,只能经 `new` 构造)
 /// - `Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize`
 /// - `new(namespace, value)` / `namespace()` / `value()` / `as_str()` / `qualified()`
-/// - `Display`(输出**裸值**,与历史 `{id}` 格式点兼容)
+/// - `Display`(输出源内裸值;全局限定形式显式走 `qualified()`)
 ///
 /// # 使用要求
 ///
@@ -123,7 +123,7 @@ macro_rules! define_id {
                 self.value.as_str()
             }
 
-            /// [`Self::value`] 的别名,保持历史调用点行为(返回裸值)。
+            /// [`Self::value`] 的别名,返回源内裸值。
             #[inline]
             pub fn as_str(&self) -> &str {
                 self.value.as_str()

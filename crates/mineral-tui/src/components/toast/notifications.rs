@@ -23,9 +23,7 @@ use crate::components::toast::toast::{Toast, ToastItem};
 use crate::render::anim::lerp_u16;
 use crate::render::theme::Theme;
 
-/// 一次性通知存活时长;[`Notifications::flash`] 推送的条目超过它后自动退场。
-/// 常驻进度源标识。仿 [`mineral_model::SourceKind`] 范式:newtype + 关联常量,
-/// `Copy`、强类型、**开放**(未来加源只追加常量,通知层零改)。
+/// 常驻进度源标识；同一标识的新内容会顶替原条目。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LiveSlot(&'static str);
 
@@ -304,7 +302,7 @@ impl Notifications {
             .any(|c| c.id().is_some_and(|cid| cid == id) && !c.leaving())
     }
 
-    /// 每帧推进:① 过期 flash 触发退场;② 推进每条动画;③ 移除已休眠(退场归零)的条目。
+    /// 推进通知生命周期：使到期项退场、推进动画并移除已经休眠的条目。
     pub(crate) fn tick(&mut self) {
         self.prune_expired(Instant::now());
         for entry in &mut self.entries {

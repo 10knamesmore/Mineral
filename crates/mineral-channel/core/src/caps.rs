@@ -5,8 +5,8 @@ use mineral_model::SearchKind;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-/// artist 详情可含的分区种类。**穷尽枚举**(刻意非 `#[non_exhaustive]`):未来加新区(单曲 /
-/// 合辑 / 出现于 等)时加一个变体,编译器即点出所有待处理的 match,不漏。各源在
+/// artist 详情可含的分区种类。**穷尽枚举**(刻意非 `#[non_exhaustive]`):新增分区种类时,
+/// 编译器会点出所有需要同步处理的 match。各源在
 /// [`ArtistSections`] 里按需列出自己有哪些区。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

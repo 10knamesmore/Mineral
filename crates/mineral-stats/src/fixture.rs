@@ -369,7 +369,7 @@ pub async fn seed(store: &StatsStore, plays: i64, events: i64) -> color_eyre::Re
     Ok(())
 }
 
-/// 年量级默认档(~10⁴ 播放 + 10⁵ 事件):spec §9.1 查询压测 / 库体积的种子规模。
+/// 为查询压测与库体积测量生成约 10⁴ 条播放和 10⁵ 条事件。
 ///
 /// # Params:
 ///   - `store`: 目标 stats.db 句柄

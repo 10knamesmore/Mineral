@@ -1,7 +1,9 @@
-//! 会话持久化(存储 + 读取,本轮不做自动恢复):快照组装、即时 / 节流落盘。
+//! 会话快照的组装、即时 / 节流落盘与读取。
 //!
-//! 从 player 模块拆出的 `PlayerCore` 会话方法集;状态经 `Inner` 的
-//! crate 内字段直接读取。
+//! 启动接线只把快照中的播放模式应用到 player;队列、进度与音量仍保留在快照中,
+//! 但不自动应用。
+//!
+//! 本模块实现 `PlayerCore` 的会话方法,并在 crate 内读取 `Inner` 状态。
 
 use std::time::Instant;
 
@@ -41,7 +43,7 @@ impl PlayerCore {
         });
     }
 
-    /// 读回上次会话快照(不应用到播放状态,本轮仅供启动日志确认能读到)。
+    /// 读回上次会话快照;本方法不修改播放状态。
     ///
     /// # Return:
     ///   上次会话;无历史 / 降级 persist 返回 `Ok(None)`。
@@ -53,7 +55,7 @@ impl PlayerCore {
     /// 状态变化类 save 走各自的即时 [`Self::spawn_save_session`],此处只补周期进度。
     ///
     /// **空态守卫**:无当前曲且队列为空(如 daemon 刚启动还没人播)不落盘——空态没有
-    /// 进度可刷,落盘只会用空快照覆盖上次会话的队列/进度,那是将来队列恢复要吃的数据。
+    /// 进度可刷,落盘只会用空快照覆盖上次非空会话的队列与进度。
     pub(crate) fn check_session_save(&self) {
         {
             let mut last = self.inner.last_session_save.lock();

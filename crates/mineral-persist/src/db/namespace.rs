@@ -846,7 +846,7 @@ mod tests {
         Ok(())
     }
 
-    /// 出参 SongId 保留 entry 自己的 namespace，不再由 Playlist store namespace 推断。
+    /// 出参 SongId 使用 entry 自己的 namespace,不从 Playlist store namespace 推断。
     #[tokio::test]
     async fn playlist_cache_returns_namespaced_song_ids() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;

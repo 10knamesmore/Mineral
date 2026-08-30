@@ -1,4 +1,4 @@
-//! 歌词端点(spec §4.4):合并 LRC(`/api/song/lyric`,linuxapi)和
+//! 合并 LRC(`/api/song/lyric`,linuxapi)和
 //! YRC(`/api/song/lyric/v1`,eapi)两次调用,装配成一条统一行序列。
 
 use mineral_model::{LyricLine, Lyrics, SongId, parse_lrc};
@@ -36,7 +36,7 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Ly
     let mut lrc_v1 = Vec::<LyricLine>::new();
     let mut yrc_lines = Vec::<LyricLine>::new();
 
-    // ---- 旧版 LyricService(linuxapi)拿 LRC + 翻译 ----
+    // ---- LyricService(linuxapi)拿 LRC + 翻译 ----
     let mut p = serde_json::Map::new();
     p.insert("id".into(), json!(id.as_str()));
     p.insert("lv".into(), json!("-1"));
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn real_lrc_keeps_credits_then_lyrics() {
-        // rejoice.lrc 开头是 JSON credits(作词/作曲),现在保留为带时间戳的 Plain 行;正文随后。
+        // rejoice.lrc 开头的 JSON credits 应成为带时间戳的 Plain 行,正文随后。
         let lines = parse_lrc(include_str!("lyric_fixtures/rejoice.lrc"));
         assert_eq!(first(&lines), Some((Some(0), "作词: Mineral".to_owned())));
         assert_eq!(
@@ -141,7 +141,8 @@ mod tests {
     #[test]
     fn real_lrc_colon_variant() {
         // ひとひら《The Sound of Summer Coming》—— 网易把厘秒也用冒号分隔的变体
-        // [01:08:30],曾导致 TUI 解析不出歌词。清洗后应等价于 [01:08.30] = 68300ms。
+        // [01:08:30];若不支持该分隔形式,TUI 会漏掉这行。清洗后应等价于
+        // [01:08.30] = 68300ms。
         let lines = parse_lrc(include_str!("lyric_fixtures/hitohira.lrc"));
         assert_eq!(
             time_of(&lines, "迷子も2人でいれば散歩みたいね"),

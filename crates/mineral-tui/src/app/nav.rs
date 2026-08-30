@@ -703,8 +703,7 @@ mod tests {
         Ok(())
     }
 
-    /// 搜索输入态光标编辑:左移光标后插入落在词中间(deep-search `/` 框获得光标能力,
-    /// 不再 append-only)。
+    /// 搜索输入态按光标位置插入字符，而不是固定追加到 query 末尾。
     #[test]
     fn search_cursor_edits_mid_query() -> color_eyre::Result<()> {
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
@@ -1148,7 +1147,7 @@ mod tests {
     }
 
     /// 全屏手动浏览(已脱离)时 Enter 跳到焦点行:seek 到该行时间戳 + 回附着态。
-    /// 附着态(未脱离)时 Enter 无跳转、维持现状(全屏无列表可 activate)。
+    /// 附着态(未脱离)时 Enter 不跳转也不改变状态(全屏无列表可 activate)。
     #[test]
     fn fullscreen_enter_seeks_to_focus_line() -> color_eyre::Result<()> {
         use crate::runtime::action::ScrollStep;

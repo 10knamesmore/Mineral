@@ -162,8 +162,7 @@ async fn report_loop(player: PlayerCore, service: MediaService) {
     loop {
         tick.tick().await;
         let now = Instant::now();
-        // in-process 直读 State 需要的三个字段(歌 + 歌词 + 模式),不再拉含整个
-        // queue 的全量快照(queue 这里用不上,clone 它纯浪费)。
+        // in-process 只克隆上报所需的歌、歌词与模式,避免为媒体服务复制整条 queue。
         let (current_song, current_lyrics, play_mode) = player.with_state(|st| {
             (
                 st.current_song.clone(),

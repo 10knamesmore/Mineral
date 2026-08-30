@@ -53,7 +53,7 @@ pub fn draw(
 
     let is_current = current_id.is_some_and(|current| current == &song.id);
 
-    // 标题行:歌名独占一行(text + bold,居中,长名走 marquee,不再和艺人抢行)。选中 =
+    // 标题行:歌名独占一行(text + bold,居中,长名走 marquee)。选中 =
     // 在播时整行 accent 高亮——「选中」恒正常亮度,「在播」只是标题行换色;别名**跟随整行
     // style**(playing 与歌名一起 accent、否则一起 bold),靠括号而非颜色表达次级——避免
     // 像列表那样单独染 dim 造成高亮态 bright-dim-bright 断层。
