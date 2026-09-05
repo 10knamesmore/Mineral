@@ -407,6 +407,11 @@ impl ImageEngine {
     ///   - `current_cover`: 当前播放图片身份
     ///   - `fullscreen_stable`: 全屏布局是否已经稳定
     pub(crate) fn tick(&mut self, current_cover: Option<MediaUrl>, fullscreen_stable: bool) {
+        for url in self.cache.advance_frame() {
+            self.discard_derived(&url);
+        }
+        self.preview_images.advance_frame();
+        self.terminal_images.advance_frame();
         self.refresh_preview_targets();
         self.drain_cover_completions();
         self.schedule_decode_demand();
@@ -617,6 +622,8 @@ impl ImageEngine {
             return;
         }
         self.encode_pending.borrow_mut().remove(&result.key);
+        mineral_log::debug!(target: "cover_cache", key = ?result.key, bytes = result.bytes,
+            "terminal image ready");
         self.terminal_images
             .insert(&result.key, result.terminal_image, result.bytes);
     }

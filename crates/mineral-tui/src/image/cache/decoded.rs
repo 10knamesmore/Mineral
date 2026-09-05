@@ -3,14 +3,14 @@
 //! 渲染路径只有 `&AppState`,故 `get` 用 `&self` + 内部 `Cell` 记 LRU 顺序
 //! (`Cell::set` 对 `Copy` 类型无运行时借用检查,无 panic 面);逐出只发生在
 //! `&mut self` 的 `insert`。按字节而非条数封顶:封面尺寸不一,唯有字节预算能把
-//! 常驻内存钉死在一个数上,与图大小解耦。
+//! 非可见工作集限制在预算内；实际显示的大图可以超额留驻，离屏后正常回收。
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use image::DynamicImage;
 use mineral_model::MediaUrl;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 一条缓存项。
 struct Entry {
@@ -26,9 +26,8 @@ struct Entry {
 
 /// 封面原图缓存:字节预算 LRU。
 ///
-/// `get` 命中即把该项标为最近使用(经内部 `Cell`),从而保护正在显示/在播的封面
-/// 不被逐出;`insert` 后若越预算,逐出最久未用项并返回其 URL 列表,供上层联动清理
-/// 由该图派生的协议 / 色板缓存,避免"协议在但原图没了"的裂缝。
+/// `get` 更新 LRU，渲染另行登记可见工作集。回填超预算时只逐出未显示的图片，
+/// 返回其 URL 供调用方清理派生的协议和色板；大图不会因后台预热而反复重解码。
 pub(crate) struct CoverCache {
     /// URL → 缓存项。
     entries: FxHashMap<MediaUrl, Entry>,
@@ -41,6 +40,12 @@ pub(crate) struct CoverCache {
 
     /// 字节预算上限(来自配置 `tui.cover.cache.image`)。
     budget: u64,
+
+    /// 上一帧实际显示的图片，后台解码回填不能逐出它们。
+    visible: FxHashSet<MediaUrl>,
+
+    /// 本帧渲染所需的图片，包含尚未解码的 URL。
+    observed: RefCell<FxHashSet<MediaUrl>>,
 }
 
 impl CoverCache {
@@ -54,6 +59,8 @@ impl CoverCache {
             total_bytes: 0,
             tick: Cell::new(0),
             budget,
+            visible: FxHashSet::default(),
+            observed: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -67,6 +74,23 @@ impl CoverCache {
     /// 是否已缓存该 URL。**不**更新 LRU 顺序(探测用,非显示,不该借此续命)。
     pub(crate) fn contains_key(&self, url: &MediaUrl) -> bool {
         self.entries.contains_key(url)
+    }
+
+    /// 登记当前帧实际显示的图片；预取和预编码不调用此入口。
+    pub(crate) fn observe_visible(&self, url: &MediaUrl) {
+        self.observed.borrow_mut().insert(url.clone());
+    }
+
+    /// 在解码回填前更新可见工作集；离屏图片重新受预算约束。
+    pub(crate) fn advance_frame(&mut self) -> Vec<MediaUrl> {
+        let observed = std::mem::take(self.observed.get_mut());
+        let released = self.visible.iter().any(|url| !observed.contains(url));
+        self.visible = observed;
+        if released {
+            self.evict_over_budget(/*keep*/ None)
+        } else {
+            Vec::new()
+        }
     }
 
     /// 当前缓存条数。
@@ -96,11 +120,10 @@ impl CoverCache {
             self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
         }
         self.total_bytes = self.total_bytes.saturating_add(bytes);
-        self.evict_over_budget(url)
+        self.evict_over_budget(Some(url))
     }
 
-    /// 现调字节预算(配置热更):缩小立即逐出最久未用项直到回落,**不清整表**;
-    /// 调大只放宽上限。
+    /// 热更新字节预算，立即回收超预算的未显示图片，保留可见工作集。
     ///
     /// # Params:
     ///   - `budget`: 新预算(字节)
@@ -109,22 +132,7 @@ impl CoverCache {
     ///   被逐出的 URL 列表(派生物联动清理用);未触发逐出时为空。
     pub(crate) fn set_budget(&mut self, budget: u64) -> Vec<MediaUrl> {
         self.budget = budget;
-        let mut evicted = Vec::<MediaUrl>::new();
-        while self.total_bytes > self.budget {
-            let victim = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_used.get())
-                .map(|(url, _)| url.clone());
-            let Some(victim) = victim else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&victim) {
-                self.total_bytes = self.total_bytes.saturating_sub(entry.bytes);
-            }
-            evicted.push(victim);
-        }
-        evicted
+        self.evict_over_budget(/*keep*/ None)
     }
 
     /// 取下一个访问序号(单调递增,`wrapping` 免溢出 panic —— u64 实际到不了上限)。
@@ -136,18 +144,21 @@ impl CoverCache {
 
     /// 逐出最久未用项直到回落预算内。`keep` 是刚插入项,永不逐出 —— 防单张即超预算时
     /// 把自己也逐掉(此时它超额留驻,靠下次 `insert` 引入更小工作集时自然回落)。
-    fn evict_over_budget(&mut self, keep: &MediaUrl) -> Vec<MediaUrl> {
+    fn evict_over_budget(&mut self, keep: Option<&MediaUrl>) -> Vec<MediaUrl> {
         let mut evicted = Vec::<MediaUrl>::new();
         while self.total_bytes > self.budget {
             let victim = self
                 .entries
                 .iter()
-                .filter(|(url, _)| *url != keep)
+                .filter(|(url, _)| Some(*url) != keep && !self.visible.contains(*url))
                 .min_by_key(|(_, entry)| entry.last_used.get())
                 .map(|(url, _)| url.clone());
             let Some(victim) = victim else {
                 break;
             };
+            mineral_log::debug!(target: "cover_cache", url = %victim,
+                cached_bytes = self.total_bytes, budget_bytes = self.budget,
+                visible_images = self.visible.len(), "evict decoded cover outside visible working set");
             if let Some(entry) = self.entries.remove(&victim) {
                 self.total_bytes = self.total_bytes.saturating_sub(entry.bytes);
             }
@@ -230,6 +241,33 @@ mod tests {
 
         assert_eq!(evicted, vec![u0.clone()], "无 touch 时逐出最早插入的 u0");
         assert!(!cache.contains_key(&u0));
+        Ok(())
+    }
+
+    /// 可见原图不能被后台解码逐出，否则终端成品也会被联动清理。
+    #[test]
+    fn visible_covers_survive_background_decode_until_hidden() -> color_eyre::Result<()> {
+        let mut cache = CoverCache::new(/*budget*/ 50_000);
+        let (first, second, warm) = (url(0)?, url(1)?, url(2)?);
+        cache.observe_visible(&first);
+        cache.observe_visible(&second);
+        assert!(cache.advance_frame().is_empty());
+        assert!(cache.insert(&first, img(/*side*/ 100)).is_empty());
+        assert!(cache.insert(&second, img(/*side*/ 100)).is_empty());
+        for _ in 0..3 {
+            assert!(cache.insert(&warm, img(/*side*/ 50)).is_empty());
+            assert!(cache.get(&first).is_some());
+            assert!(cache.get(&second).is_some());
+            cache.observe_visible(&first);
+            cache.observe_visible(&second);
+            assert!(cache.advance_frame().is_empty());
+        }
+        cache.observe_visible(&first);
+        let evicted = cache.advance_frame();
+        assert!(evicted.contains(&second), "离屏大图必须可被回收");
+        assert!(cache.get(&first).is_some());
+        assert!(!cache.contains_key(&second));
+        assert!(cache.total_bytes <= cache.budget);
         Ok(())
     }
 

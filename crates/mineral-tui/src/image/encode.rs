@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 use super::graphics::TerminalBackend;
-use super::key::{PixelSize, TerminalImageKey};
+use super::key::TerminalImageKey;
 use super::terminal::TerminalImage;
 
 /// 一次终端图片编码请求。
@@ -141,19 +141,18 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
     let graphics = backend.graphics_for(generation)?;
     let pixels = key.pixels();
     let encoded = tokio::task::spawn_blocking(move || {
-        let source_bytes = u64::try_from(image.as_bytes().len()).unwrap_or(u64::MAX);
         let terminal_image =
             TerminalImage::encode(&image, pixels, (target.width, target.height), &graphics)?;
-        let encoded_bytes = encoded_bytes_estimate(pixels, &image);
-        color_eyre::Result::<_>::Ok((terminal_image, source_bytes, encoded_bytes))
+        let bytes = terminal_image.resident_bytes();
+        color_eyre::Result::<_>::Ok((terminal_image, bytes))
     })
     .await;
     match encoded {
-        Ok(Ok((terminal_image, source_bytes, encoded_bytes))) => Some(EncodeResult {
+        Ok(Ok((terminal_image, bytes))) => Some(EncodeResult {
             key,
             generation,
             terminal_image,
-            bytes: source_bytes.saturating_add(encoded_bytes),
+            bytes,
         }),
         Ok(Err(error)) => {
             mineral_log::warn!(
@@ -169,23 +168,6 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
             None
         }
     }
-}
-
-/// 按 rasterized 目标或 Kitty 原图尺寸估算终端成品记账值。
-///
-/// # Params:
-///   - `pixels`: rasterized 目标像素尺寸；Kitty 为 `None`
-///   - `source`: 已解码原图
-///
-/// # Return:
-///   估算字节数
-fn encoded_bytes_estimate(pixels: Option<PixelSize>, source: &DynamicImage) -> u64 {
-    let (width, height) = pixels.map_or_else(
-        || (source.width(), source.height()),
-        |pixels| (pixels.width(), pixels.height()),
-    );
-    let area = u64::from(width).saturating_mul(u64::from(height));
-    area.saturating_mul(4).saturating_mul(4) / 3
 }
 
 #[cfg(test)]
@@ -244,6 +226,45 @@ mod tests {
                 matches!(&r.terminal_image, TerminalImage::Halfblocks(_)),
                 "Halfblocks backend 必须产出对应终端图片"
             );
+            assert_eq!(
+                r.bytes,
+                20 * 10 * 2 * 3,
+                "只计半块 RGB 成品，不计原图和已释放的缩放缓冲"
+            );
+        }
+        Ok(())
+    }
+
+    /// 两张实际故障尺寸的 Kitty 封面应能同时装入用户的 128 MiB 协议缓存。
+    #[test]
+    fn two_3000px_kitty_covers_fit_128_mib() -> color_eyre::Result<()> {
+        use crate::image::cache::TerminalImageCache;
+        use crate::image::graphics::TerminalRelay;
+        use crate::image::kitty::KittyImage;
+
+        let cache = TerminalImageCache::new(/*budget*/ 128 * 1024 * 1024);
+        let graphics = TerminalGraphics::fixed((8, 16));
+        let source = image::DynamicImage::ImageRgb8(image::RgbImage::new(3000, 3000));
+        let mut keys = Vec::new();
+        for title in ["swiss-army-romance", "places-you-have-come-to-fear"] {
+            let key = TerminalImageKey::source(ImageIdentity::Url(MediaUrl::remote(&format!(
+                "https://example.com/{title}.jpg"
+            ))?));
+            let image = TerminalImage::Kitty(KittyImage::encode(
+                &source,
+                graphics.allocate_kitty_image_id(),
+                TerminalRelay::Direct,
+            )?);
+            let bytes = image.resident_bytes();
+            assert!(
+                (36_000_000..37_000_000).contains(&bytes),
+                "RGBA payload 加少量控制序列，应约 34.3 MiB"
+            );
+            cache.insert(&key, image, bytes);
+            keys.push(key);
+        }
+        for key in keys {
+            assert!(cache.ready(&key), "两张图必须同时留驻，不能互相逐出");
         }
         Ok(())
     }

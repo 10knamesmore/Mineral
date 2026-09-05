@@ -63,4 +63,9 @@ impl SixelImage {
     pub(super) fn render(&self, area: Rect, buffer: &mut Buffer) {
         self.image.render(area, buffer);
     }
+
+    /// 返回 Sixel 控制序列的实际分配字节数。
+    pub(super) fn resident_bytes(&self) -> u64 {
+        self.image.resident_bytes()
+    }
 }

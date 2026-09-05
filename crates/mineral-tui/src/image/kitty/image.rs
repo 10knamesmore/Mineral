@@ -18,7 +18,7 @@ pub(crate) struct KittyImage {
     transmission: Option<String>,
 
     /// shared memory 资源句柄，保留到终端读取或缓存成品逐出。
-    _resource: SharedMemory,
+    resource: SharedMemory,
 
     /// 图形控制序列的终端 relay 形态。
     relay: TerminalRelay,
@@ -53,7 +53,7 @@ impl KittyImage {
         Ok(Self {
             image_id,
             transmission: Some(transmission),
-            _resource: resource,
+            resource,
             relay,
         })
     }
@@ -67,5 +67,14 @@ impl KittyImage {
             &mut self.transmission,
             self.relay,
         );
+    }
+
+    /// 返回 RGBA shared memory 与尚未发送的控制序列占用，不重复计入解码原图。
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.resource.resident_bytes().saturating_add(
+            self.transmission.as_ref().map_or(0, |command| {
+                u64::try_from(command.capacity()).unwrap_or(u64::MAX)
+            }),
+        )
     }
 }

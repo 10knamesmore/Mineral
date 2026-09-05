@@ -169,6 +169,9 @@ impl ImageEngine {
         buf: &mut Buffer,
         phase: ImageRenderPhase,
     ) {
+        if let Some(url) = url {
+            self.cache.observe_visible(url);
+        }
         let target = match phase {
             ImageRenderPhase::Offscreen => square_cells(area),
             ImageRenderPhase::Stable | ImageRenderPhase::Scrolling | ImageRenderPhase::Resizing => {
@@ -223,6 +226,8 @@ impl ImageEngine {
         buf: &mut Buffer,
         phase: ImageRenderPhase,
     ) {
+        self.cache.observe_visible(content.from);
+        self.cache.observe_visible(content.to);
         let (Some(from_image), Some(to_image)) =
             (self.cache.get(content.from), self.cache.get(content.to))
         else {

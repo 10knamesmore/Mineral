@@ -40,18 +40,18 @@ pub struct CoverCacheConfig {
     disk: u64,
 
     /// 解码原图 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是常驻 RAM 的
-    /// 解码位图,越界即逐出最久未显示的封面,把进程内存钉死在此数。
+    /// 解码位图。优先逐出最久未显示的封面；当前可见工作集可暂时超额，离屏后回收。
     #[serde(deserialize_with = "de::u64_lossy")]
     image: u64,
 
     /// 低清 preview RAM 预算(字节)。preview 按图片与目标像素尺寸缓存，完整解码图被逐出后
-    /// 仍可在快速滚动时显示；越界即逐出最久未渲染的 preview。
+    /// 仍可在快速滚动时显示；优先逐出未显示的 preview，当前可见工作集可暂时超额。
     #[serde(deserialize_with = "de::u64_lossy")]
     preview: u64,
 
     /// 已编码终端协议 RAM 预算(字节)。
     /// 保存 Kitty 资源句柄或 Sixel、iTerm2、halfblocks 成品。
-    /// 越界即逐出最久未渲染的协议(可后台重编,不损正确性)。
+    /// 按成品实际持有的数据记账；优先逐出未显示的成品，当前可见工作集可暂时超额。
     #[serde(deserialize_with = "de::u64_lossy")]
     protocol: u64,
 }

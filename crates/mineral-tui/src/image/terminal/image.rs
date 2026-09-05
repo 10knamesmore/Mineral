@@ -107,6 +107,16 @@ impl TerminalImage {
         }
     }
 
+    /// 返回该成品持有的像素或协议 payload 字节数；解码原图由独立缓存记账。
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        match self {
+            Self::Kitty(image) => image.resident_bytes(),
+            Self::Sixel(image) => image.resident_bytes(),
+            Self::Iterm2(image) => image.resident_bytes(),
+            Self::Halfblocks(image) => image.resident_bytes(),
+        }
+    }
+
     /// 构造缓存测试使用的最小 halfblocks 成品。
     #[cfg(test)]
     pub(crate) fn test_halfblocks() -> Self {

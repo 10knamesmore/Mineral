@@ -3,11 +3,11 @@
 //! 同一实现由独立实例分别承载协议无关 preview 与当前 terminal backend 成品。Kitty 源图片
 //! 只按图片身份缓存一次；preview、Sixel、iTerm2 与 halfblocks 按目标像素尺寸并存。
 //!
-//! 每条字节由编码 worker 估算(源像素 + 目标编码尺寸)后随结果带入,本缓存只记账不重算。
+//! 每条字节由编码成品报告，缓存只记账不重算。上一帧实际显示的工作集不被后台预热逐出。
 
 use std::cell::RefCell;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::image::key::{ImageIdentity, TerminalImageKey};
 use crate::image::terminal::TerminalImage;
@@ -20,7 +20,7 @@ struct Slot {
     /// 图片引擎自己的终端图片成品。
     image: TerminalImage,
 
-    /// 编码 worker 给出的终端成品常驻字节估算，记账用。
+    /// 终端成品实际持有的像素或协议 payload 字节数，记账用。
     bytes: u64,
 
     /// 上次被渲染命中的单调序号;最小者最久未渲染,优先逐出。
@@ -37,12 +37,18 @@ struct Inner {
 
     /// 单调访问计数器,每次 `render_if_ready` / `insert` 自增后赋给 `last_used`。
     tick: u64,
+
+    /// 上一帧实际显示的成品，回填期间保留整个可见工作集。
+    visible: FxHashSet<TerminalImageKey>,
+
+    /// 本帧渲染请求过的键，包含尚在编码的成品。
+    observed: FxHashSet<TerminalImageKey>,
 }
 
 /// 终端图片成品缓存：字节预算 LRU。
 ///
 /// 渲染命中即 touch(保护正在显示的协议),`insert` 越预算逐出最久未渲染槽。
-/// 协议是可廉价重建的渲染加速物,故逐出无损正确性,只是滚回时短暂走 halfblock 兜底。
+/// 当前可见工作集可暂时超过预算，避免反复逐出、编码和 halfblock 闪动。
 pub(crate) struct TerminalImageCache {
     /// 内部可变状态。
     inner: RefCell<Inner>,
@@ -62,6 +68,8 @@ impl TerminalImageCache {
                 entries: FxHashMap::default(),
                 total_bytes: 0,
                 tick: 0,
+                visible: FxHashSet::default(),
+                observed: FxHashSet::default(),
             }),
             budget,
         }
@@ -81,6 +89,7 @@ impl TerminalImageCache {
         render: impl FnOnce(&mut TerminalImage),
     ) -> bool {
         let mut inner = self.inner.borrow_mut();
+        inner.observed.insert(key.clone());
         inner.tick = inner.tick.wrapping_add(1);
         let tick = inner.tick;
         let Some(slot) = inner
@@ -108,12 +117,23 @@ impl TerminalImageCache {
         self.contains(key)
     }
 
+    /// 在 worker 回填前更新可见工作集；图片离开屏幕后回收超预算成品。
+    pub(crate) fn advance_frame(&self) {
+        let mut inner = self.inner.borrow_mut();
+        let observed = std::mem::take(&mut inner.observed);
+        let released = inner.visible.iter().any(|key| !observed.contains(key));
+        inner.visible = observed;
+        if released {
+            Self::evict_over_budget(&mut inner, self.budget, /*keep*/ None);
+        }
+    }
+
     /// 装入一条编码好的终端图片：相同键替换现有项，全局越字节预算逐出最久未渲染槽。
     ///
     /// # Params:
     ///   - `key`: 源图片或 rasterized 成品身份
     ///   - `image`: 编码好的终端图片
-    ///   - `bytes`: 该协议估算的常驻字节数(worker 侧算好带入)
+    ///   - `bytes`: 该成品持有的像素或协议 payload 字节数
     pub(crate) fn insert(&self, key: &TerminalImageKey, image: TerminalImage, bytes: u64) {
         let inner = &mut *self.inner.borrow_mut();
         inner.tick = inner.tick.wrapping_add(1);
@@ -148,8 +168,7 @@ impl TerminalImageCache {
         }
     }
 
-    /// 现调字节预算(配置热更):缩小立即逐出最久未渲染槽直到回落,**不清整表**
-    /// (被逐出的滚回时后台重编,不损正确性);调大只放宽上限。
+    /// 热更新字节预算，立即回收超预算的未显示成品，保留可见工作集。
     ///
     /// # Params:
     ///   - `budget`: 新预算(字节)
@@ -164,6 +183,8 @@ impl TerminalImageCache {
         let mut inner = self.inner.borrow_mut();
         inner.entries.clear();
         inner.total_bytes = 0;
+        inner.visible.clear();
+        inner.observed.clear();
     }
 
     /// 是否为空(测试 / 断言用)。
@@ -180,11 +201,15 @@ impl TerminalImageCache {
                 .iter()
                 .flat_map(|(identity, slots)| slots.iter().map(move |slot| (identity, slot)))
                 .filter(|(_, slot)| keep != Some(&slot.key))
+                .filter(|(_, slot)| !inner.visible.contains(&slot.key))
                 .min_by_key(|(_, s)| s.last_used)
                 .map(|(_, slot)| slot.key.clone());
             let Some(victim) = victim else {
                 break;
             };
+            mineral_log::debug!(target: "cover_cache", key = ?victim,
+                cached_bytes = inner.total_bytes, budget_bytes = budget,
+                visible_images = inner.visible.len(), "evict terminal image outside visible working set");
             Self::remove_slot(inner, &victim);
         }
     }
@@ -314,6 +339,37 @@ mod tests {
         assert!(!contains(&cache, &u1, (10, 10)), "u1 最久未渲染,被逐");
         assert!(contains(&cache, &u0, (10, 10)), "u0 被 render 保护");
         assert!(contains(&cache, &u3, (10, 10)), "刚插入的 u3 留驻");
+        Ok(())
+    }
+
+    /// 同屏图片总量超过预算时保持稳定，离屏后重新受预算约束。
+    #[test]
+    fn visible_images_survive_budget_pressure_until_hidden() -> color_eyre::Result<()> {
+        let cache = TerminalImageCache::new(/*budget*/ 150);
+        let (first, second, warm) = (url(0)?, url(1)?, url(2)?);
+        // 两个显示位置即便尚未编码，也应进入下一拍回填时的可见工作集。
+        assert!(!render(&cache, &first, (10, 10), |_| {}));
+        assert!(!render(&cache, &second, (10, 10), |_| {}));
+        cache.advance_frame();
+        insert(&cache, &first, (10, 10), proto(), /*bytes*/ 100);
+        insert(&cache, &second, (10, 10), proto(), /*bytes*/ 100);
+        for _ in 0..3 {
+            insert(&cache, &warm, (10, 10), proto(), /*bytes*/ 25);
+            assert!(
+                render(&cache, &first, (10, 10), |_| {}),
+                "第一张不能退回 halfblock"
+            );
+            assert!(
+                render(&cache, &second, (10, 10), |_| {}),
+                "第二张不能退回 halfblock"
+            );
+            cache.advance_frame();
+        }
+        assert!(render(&cache, &first, (10, 10), |_| {}));
+        cache.advance_frame();
+        assert!(contains(&cache, &first, (10, 10)));
+        assert!(!contains(&cache, &second, (10, 10)), "离屏后应恢复预算约束");
+        assert!(cache.inner.borrow().total_bytes <= cache.budget);
         Ok(())
     }
 

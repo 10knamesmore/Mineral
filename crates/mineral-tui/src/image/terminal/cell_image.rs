@@ -15,6 +15,11 @@ impl CellImage {
         Self { data }
     }
 
+    /// 返回缓存控制序列的实际分配字节数。
+    pub(super) fn resident_bytes(&self) -> u64 {
+        u64::try_from(self.data.capacity()).unwrap_or(u64::MAX)
+    }
+
     /// 写入控制序列并保护其覆盖的 cell 不被普通文本覆写。
     pub(super) fn render(&self, area: Rect, buffer: &mut Buffer) {
         if area.width == 0 || area.height == 0 {

@@ -13,6 +13,9 @@ use nix::unistd::ftruncate;
 pub(super) struct SharedMemory {
     /// 传给终端的 POSIX shared memory 名称。
     name: String,
+
+    /// 为完整 RGBA payload 预留的字节数。
+    bytes: u64,
 }
 
 impl SharedMemory {
@@ -32,7 +35,8 @@ impl SharedMemory {
             Mode::S_IRUSR | Mode::S_IWUSR,
         )
         .wrap_err_with(|| format!("create kitty shared memory {name}"))?;
-        let resource = Self { name };
+        let bytes = u64::try_from(rgba.len()).wrap_err("convert kitty payload size")?;
+        let resource = Self { name, bytes };
         write_shared_memory(&fd, rgba)?;
         Ok(resource)
     }
@@ -40,6 +44,11 @@ impl SharedMemory {
     /// 返回传给 Kitty 命令的 shared memory 名称。
     pub(super) fn name(&self) -> &str {
         &self.name
+    }
+
+    /// 返回 shared memory payload 的预算占用。
+    pub(super) const fn resident_bytes(&self) -> u64 {
+        self.bytes
     }
 }
 
