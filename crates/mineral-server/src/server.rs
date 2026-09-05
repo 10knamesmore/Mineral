@@ -80,6 +80,7 @@ impl Server {
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;
+        let music_dir = crate::download::open_env(config.download().dir().as_deref());
         // 每个订阅者最多保留 256 条 advisory event；落后的 event_pump 收 Lagged 并跳过旧帧。
         let (events, _) = broadcast::channel::<Event>(/*capacity*/ 256);
         let notify = crate::notify::Notifier::new(events.clone(), script);
@@ -87,8 +88,11 @@ impl Server {
             audio,
             scheduler,
             sources,
-            persist,
-            media_cache,
+            crate::player::PlayerStorage {
+                persist,
+                media_cache,
+                music_dir,
+            },
             crate::player::SpawnConfig {
                 slices: &config,
                 tree: config_tree,
@@ -162,7 +166,8 @@ impl Server {
 
     /// 消费 server 句柄。daemon 关停路径在 accept loop 结束后调用,
     /// 随后由 Tokio runtime 退出终止其余后台任务。
-    pub fn shutdown(self) {
+    pub async fn shutdown(self) {
+        self.player.shutdown_downloads().await;
         drop(self);
     }
 

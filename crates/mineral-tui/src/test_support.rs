@@ -377,8 +377,16 @@ impl Client for TestClient {
         Err("test stub".to_owned())
     }
 
-    fn download_progress(&self) -> mineral_protocol::DownloadProgress {
-        mineral_protocol::DownloadProgress::default()
+    fn download_summary(&self) -> mineral_protocol::DownloadSummary {
+        mineral_protocol::DownloadSummary::default()
+    }
+
+    fn download_snapshot(&self) -> Vec<mineral_protocol::SongDownloadView> {
+        Vec::new()
+    }
+
+    fn stop_download(&self, _id: mineral_protocol::DownloadId) -> color_eyre::Result<()> {
+        Ok(())
     }
 
     fn request_daemon_shutdown(&self) {

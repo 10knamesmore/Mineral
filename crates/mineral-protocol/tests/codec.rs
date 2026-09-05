@@ -2,11 +2,14 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SongId, SourceKind};
+use mineral_model::{
+    Album, AlbumId, Artist, ArtistId, BitRate, Playlist, PlaylistId, SongId, SourceKind,
+};
 use mineral_protocol::{
-    CopyTemplateCtx, CurrentSync, DownloadProgress, DownloadTarget, KeyContext, PlayMode,
-    PlayerSync, PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind,
-    SongStatsWire, StoreValue, ViewKind, framed, recv, send,
+    CopyTemplateCtx, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary,
+    DownloadTarget, DownloadWave, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef,
+    QueueSync, Request, Response, ScriptBind, SongDownloadView, SongStatsWire, StoreValue,
+    ViewKind, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskKind};
 use mineral_test::song;
@@ -513,21 +516,39 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
         PlaylistId::new(SourceKind::NETEASE, "p1"),
     )))
     .await?;
-    req_round_trips(Request::DownloadProgress).await?;
-    resp_round_trips(Response::DownloadProgress(DownloadProgress {
-        active: true,
-        done: 3,
-        total: 10,
+    let download_id = DownloadId::new("download-1".to_owned());
+    let download_view = SongDownloadView {
+        id: download_id.clone(),
+        song: Box::new(song("dl-view")),
+        origin: DownloadOrigin::Direct,
+        status: DownloadStatus::Downloading,
+        quality: BitRate::Lossless,
         bytes_done: 1_024,
-        bytes_total: 4_096,
+        bytes_total: Some(4_096),
         speed_bps: 512,
-        queued: 1,
-        result_seq: 2,
-        last_ok: 5,
-        last_skip: 1,
-        last_fail: 0,
+        failure: None,
+    };
+    req_round_trips(Request::DownloadSummary).await?;
+    req_round_trips(Request::DownloadSnapshot).await?;
+    req_round_trips(Request::StopDownload(download_id)).await?;
+    resp_round_trips(Response::Ok).await?;
+    resp_round_trips(Response::Error("unknown download identity".to_owned())).await?;
+    resp_round_trips(Response::DownloadSummary(DownloadSummary {
+        active: 1,
+        queued: 2,
+        preparing_playlists: 1,
+        speed_bps: 512,
+        latest_wave: Some(DownloadWave {
+            sequence: 3,
+            downloaded: 5,
+            already_present: 1,
+            skipped_by_hook: 0,
+            failed: 1,
+            stopped: 1,
+        }),
     }))
     .await?;
+    resp_round_trips(Response::DownloadSnapshot(vec![download_view])).await?;
 
     // 复制模板覆盖 Song、Playlist、Album 与 Artist 四种实体上下文。
     req_round_trips(Request::RenderCopyTemplate {

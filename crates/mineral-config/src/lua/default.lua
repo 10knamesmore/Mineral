@@ -51,6 +51,7 @@ return {
       toggle_fullscreen = "z",
       open_search = "s",
       open_queue = "<Tab>",
+      open_downloads = "D",
       quit = "q",
       open_help = "?",
       cycle_lyric = "t",
@@ -394,6 +395,7 @@ return {
   download = {
     quality = "lossless", -- standard | higher | exhigh | lossless | hires;与播放音质独立
     dir = nil, -- 下载导出目录,绝对路径;缺省走默认(~/Music/mineral)
+    max_concurrent = 3, -- 同时执行的单曲下载上限(Tokio tasks + blocking writers)
     tagging = true, -- 落盘(下载导出 / 播放缓存)后给音频文件内嵌 metadata tag(标题/艺人/封面/歌词等)
     tagging_workers = 4, -- 打标并发 worker 数(1 = 串行;也是对源站请求并发的放大系数)
   },

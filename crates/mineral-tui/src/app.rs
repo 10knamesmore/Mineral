@@ -312,9 +312,15 @@ impl App {
                 self.apply_player_sync(sync);
                 self.tick_images();
                 self.state.tasks_snapshot = self.client.task_snapshot();
-                // 每帧把下载进度喂进通知层(翻译成常驻进度 / 完成 flash),再推进所有通知动画。
-                let dp = self.client.download_progress();
-                self.download_notifier.feed(&mut self.notifications, &dp);
+                // Small summary 常态轮询；完整 rows 仅在 Downloads overlay 存在时拉取。
+                let summary = self.client.download_summary();
+                self.download_notifier
+                    .feed(&mut self.notifications, &summary);
+                self.state.downloads_summary = summary;
+                if self.overlays.has_downloads() {
+                    self.state.downloads = self.client.download_snapshot();
+                    self.overlays.clamp_downloads(self.state.downloads.len());
+                }
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
                 self.state.now.set(chrono::Local::now());
@@ -559,6 +565,7 @@ impl App {
             Action::ToggleFullscreen => self.toggle_fullscreen(),
             Action::OpenSearchView => self.open_search_view(),
             Action::OpenQueue => self.open_queue(),
+            Action::OpenDownloads => self.open_downloads(),
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
             Action::Scroll(step) => self.scroll(step),
@@ -640,6 +647,16 @@ impl App {
                 self.transition = Some(Transition::collapsing(self.transition_ticks()));
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
+            OverlayAction::StopDownload(id) => {
+                if let Err(error) = self.client.stop_download(id.clone()) {
+                    mineral_log::warn!(
+                        target: "download",
+                        download_id = %id,
+                        error = mineral_log::chain(&error),
+                        "download Stop failed"
+                    );
+                }
+            }
             OverlayAction::PlayQueueIndex(i) => {
                 if let Some(song) = self.state.player.queue.get(i).cloned() {
                     self.client.play_song(song);
@@ -686,6 +703,7 @@ impl App {
                 | Action::NextSong
                 | Action::DismissNotice
                 | Action::OpenHelp
+                | Action::OpenDownloads
         )
     }
 
@@ -700,6 +718,12 @@ impl App {
             .filter(|at| *at < self.state.player.queue.len())
             .unwrap_or(fallback);
         self.overlays.push(OverlayKind::queue(sel));
+    }
+
+    /// Opens the docked flat Song downloads overlay.
+    fn open_downloads(&mut self) {
+        self.state.downloads = self.client.download_snapshot();
+        self.overlays.push(OverlayKind::downloads());
     }
 
     /// 打开键位 cheatsheet:目录与关闭提示在打开瞬间从 keymap 快照(重映射 /

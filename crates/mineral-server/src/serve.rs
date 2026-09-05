@@ -451,7 +451,12 @@ async fn dispatch(req: Request, client: &ClientHandle) -> Response {
             client.download(target);
             Response::Ok
         }
-        Request::DownloadProgress => Response::DownloadProgress(client.download_progress()),
+        Request::DownloadSummary => Response::DownloadSummary(client.download_summary()),
+        Request::DownloadSnapshot => Response::DownloadSnapshot(client.download_snapshot()),
+        Request::StopDownload(id) => match client.stop_download(id) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(mineral_log::chain(&error)),
+        },
         Request::TagBackfill => match client.tag_backfill_async().await {
             Ok(counts) => Response::TagBackfill(counts),
             Err(e) => Response::Error(mineral_log::chain(&e)),
@@ -482,7 +487,8 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::AudioSnapshot
         | Request::PlayerSync(_)
         | Request::TaskSnapshot
-        | Request::DownloadProgress
+        | Request::DownloadSummary
+        | Request::DownloadSnapshot
         | Request::TagProgress
         // 拖动 resize 会连发,不记。
         | Request::TerminalState { .. }
@@ -512,6 +518,7 @@ fn req_log_name(req: &Request) -> Option<&'static str> {
         Request::ToggleLove(_) => Some("ToggleLove"),
         Request::QuerySongStats(_) => Some("QuerySongStats"),
         Request::Download(_) => Some("Download"),
+        Request::StopDownload(_) => Some("StopDownload"),
         Request::TagBackfill => Some("TagBackfill"),
         Request::Shutdown => Some("Shutdown"),
     }

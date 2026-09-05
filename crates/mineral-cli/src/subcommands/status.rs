@@ -5,7 +5,7 @@
 
 use color_eyre::eyre::bail;
 use mineral_audio::{AudioBackend, AudioSnapshot};
-use mineral_protocol::{DownloadProgress, OneshotClient, Request, Response};
+use mineral_protocol::{DownloadSummary, OneshotClient, Request, Response};
 
 /// `mineral status` 入口:连 daemon socket(含握手)→ 依次拉快照 / pid / 下载进度 → 打印。
 pub async fn run() -> color_eyre::Result<()> {
@@ -24,14 +24,14 @@ pub async fn run() -> color_eyre::Result<()> {
         other => bail!("unexpected response: {other:?}"),
     };
 
-    let progress = match client.request(Request::DownloadProgress).await? {
-        Response::DownloadProgress(p) => p,
+    let summary = match client.request(Request::DownloadSummary).await? {
+        Response::DownloadSummary(summary) => summary,
         Response::Error(msg) => bail!("daemon error: {msg}"),
         other => bail!("unexpected response: {other:?}"),
     };
 
-    let download = if progress.active {
-        format!("\ndownload:   {}", render_download(&progress))
+    let download = if summary.active > 0 || summary.queued > 0 || summary.preparing_playlists > 0 {
+        format!("\ndownload:   {}", render_download(&summary))
     } else {
         String::new()
     };
@@ -39,16 +39,15 @@ pub async fn run() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 把下载进度渲染成一行:`3/12  62%  2.4 MB/s`(仅 `active` 时由 caller 打出)。
-fn render_download(dp: &DownloadProgress) -> String {
-    let pct = dp
-        .bytes_done
-        .saturating_mul(100)
-        .checked_div(dp.bytes_total)
-        .unwrap_or(0)
-        .min(100);
-    let cur = dp.done.saturating_add(1).min(dp.total.max(1));
-    format!("{cur}/{}  {pct}%  {}", dp.total, format_speed(dp.speed_bps))
+/// Renders active, queued, playlist preparation, and aggregate speed in one line.
+fn render_download(summary: &DownloadSummary) -> String {
+    format!(
+        "{} active  {} queued  {} preparing  {}",
+        summary.active,
+        summary.queued,
+        summary.preparing_playlists,
+        format_speed(summary.speed_bps)
+    )
 }
 
 /// 速度(字节/秒)→ 人读字符串,整数定点。

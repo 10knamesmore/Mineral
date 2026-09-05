@@ -48,6 +48,18 @@ _Avoid_: Source, Raw media
 Mineral 在 cache 或 download library 中找到、准备作为 decoder input 打开的 encoded media candidate；它保留 song 原有 Source identity，不等于 Local source。
 _Avoid_: Local source, Playback provider result
 
+**Song download**:
+当前 daemon session 内一首 Song 的手动永久导出 lifecycle；它有稳定 identity、进度、结果和 Stop 能力。Playlist submission 只展开出多个独立 Song downloads，不形成父级。
+_Avoid_: Download task, Download item, Playlist download
+
+**Download attempt**:
+Song download 的唯一一次进程内执行，由 DownloadId 和 cancellation token 标识；Stop 后等待 writer 收尾，再进入终态。重新提交创建新的 Song download，不复用已结束的 identity。
+_Avoid_: Song download, Playback instance
+
+**Export commit**:
+把 complete unique partial 安装为正式 download export；这是 `DownloadCompleted` 的提交点，Stop 不删除已经 commit 的文件。
+_Avoid_: Tagging completion, Temporary file, Cache harvest
+
 **Scan function**:
 本地 library 的可替换形成规则；它决定文件系统内容如何成为 playlists，以及在文件 metadata 上应用哪些 projection patches。
 _Avoid_: Fixed scanner

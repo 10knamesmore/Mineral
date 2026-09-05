@@ -143,6 +143,7 @@ impl Keymap {
                 toggle_fullscreen => ToggleFullscreen, "Fullscreen";
                 open_search => OpenSearchView, "Search view";
                 open_queue => OpenQueue, "Queue";
+                open_downloads => OpenDownloads, "Downloads";
                 enter_search => EnterSearch, "Search input";
                 cycle_lyric => CycleLyricExtra, "Lyric language";
                 quit => OpenQuitConfirm, "Quit";
@@ -287,6 +288,7 @@ mod tests {
             ("z", Action::ToggleFullscreen),
             ("s", Action::OpenSearchView),
             ("<Tab>", Action::OpenQueue),
+            ("D", Action::OpenDownloads),
             ("q", Action::OpenQuitConfirm),
             ("t", Action::CycleLyricExtra),
             ("/", Action::EnterSearch),

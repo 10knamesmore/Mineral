@@ -14,6 +14,7 @@
 //! - **错误**: server 端处理异常用 [`Response::Error`] 表达。
 
 mod codec;
+mod download;
 mod event;
 mod frame;
 mod handshake;
@@ -25,6 +26,10 @@ mod queue_edit;
 mod store;
 
 pub use codec::{Framed, decode, encode, framed, recv, send};
+pub use download::{
+    DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadTarget, DownloadWave,
+    SongDownloadView,
+};
 pub use event::{
     BusValue, Event, FinishReason, PropName, PropValue, SpanAlign, SpanFg, TextSpan, ToastKind,
 };
@@ -35,8 +40,8 @@ pub use handshake::{
 };
 pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
 pub use message::{
-    CopyTemplateCtx, DownloadProgress, DownloadTarget, PlayQueueError, QueueContextWire, Request,
-    Response, SongStatsWire, TagBackfillWire, TagProgressWire,
+    CopyTemplateCtx, PlayQueueError, QueueContextWire, Request, Response, SongStatsWire,
+    TagBackfillWire, TagProgressWire,
 };
 pub use mineral_task::ChannelFetchKindTag;
 pub use oneshot::OneshotClient;

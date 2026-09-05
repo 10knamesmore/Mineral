@@ -9,6 +9,7 @@
 mod component;
 mod confirm;
 mod disconnect;
+mod download;
 mod help;
 mod menu;
 mod placement;

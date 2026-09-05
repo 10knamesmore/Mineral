@@ -54,7 +54,7 @@ impl<'a> MarqueeCtx<'a> {
     /// # Params:
     ///   - `spans`: 已组装的标题 spans(各段样式切片后保留)
     ///   - `slot`: 渲染位
-    ///   - `identity`: 当前显示对象身份(歌的 `qualified()` id)
+    ///   - `identity`: 当前显示对象的稳定 ID
     ///   - `window_w`: 可用窗口宽(列)
     ///
     /// # Return:

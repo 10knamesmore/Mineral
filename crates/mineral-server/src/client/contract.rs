@@ -4,8 +4,8 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions, QueueContextWire,
-    QueueEditOutcome, QueueOp,
+    DownloadId, DownloadSummary, DownloadTarget, PlayQueueError, PlayerSync, PlayerVersions,
+    QueueContextWire, QueueEditOutcome, QueueOp, SongDownloadView,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -164,15 +164,20 @@ pub trait Client: Send + Sync {
     /// 入队并立即返回，不等 IPC 或 DB。
     fn request_song_stats(&self, id: SongId);
 
-    /// 永久导出单曲 / 整张歌单。fire-and-forget,server 后台跑,
-    /// 进度 / 完成经 [`mineral_task::TaskEvent::Notice`] 回传。
+    /// 提交单曲 / 歌单下载；状态通过下载汇总和列表查询读取。
     ///
     /// # Params:
     ///   - `target`: 下载目标(单曲 / 歌单)
     fn download(&self, target: DownloadTarget);
 
-    /// 拉一次下载进度快照。无下载时 `active == false`。
-    fn download_progress(&self) -> DownloadProgress;
+    /// 拉取每 tick 使用的小型下载汇总。
+    fn download_summary(&self) -> DownloadSummary;
+
+    /// 拉取当前 daemon session 的平铺 Song download 列表。
+    fn download_snapshot(&self) -> Vec<SongDownloadView>;
+
+    /// Stop 一个 queued 或 active Song download；terminal 不变，未知 identity 或通信失败返回错误。
+    fn stop_download(&self, id: DownloadId) -> color_eyre::Result<()>;
 
     /// 上报终端 UI 状态(resize / 全屏切换时调;值没变调用方应去抖不发)。
     /// daemon 灌属性树 `terminal` 复合属性供脚本 observe。fire-and-forget。

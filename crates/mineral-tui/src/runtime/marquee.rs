@@ -24,6 +24,9 @@ pub(crate) enum Slot {
     /// 队列浮层选中行。
     QueueSelected,
 
+    /// 下载浮层选中行。
+    DownloadSelected,
+
     /// transport 面板顶行(当前曲)。
     Transport,
 
@@ -33,7 +36,7 @@ pub(crate) enum Slot {
 
 /// 一个槽的滚动相位:显示身份 + 起始拍。
 struct SlotPhase {
-    /// 槽当前显示对象的身份(歌的 `qualified()` id);变化即重置相位。
+    /// 槽当前显示对象的稳定 ID；变化即重置相位。
     identity: String,
 
     /// 相位起点(全局帧计数值)。
@@ -170,7 +173,7 @@ impl Marquees {
     ///
     /// # Params:
     ///   - `slot`: 渲染位
-    ///   - `identity`: 当前显示对象身份(歌的 `qualified()` id)
+    ///   - `identity`: 当前显示对象的稳定 ID
     ///   - `content_w`: 标题内容显示宽(列)
     ///   - `window_w`: 可用窗口宽(列)
     ///   - `gap_w`: 循环间隔串显示宽(列)

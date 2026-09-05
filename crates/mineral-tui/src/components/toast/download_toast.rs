@@ -1,12 +1,9 @@
-//! 下载这个**通知使用方**:把 [`DownloadProgress`] 翻译进通知层 + 下载专属内容实现
-//! (进度条 [`DownloadItem`]、完成提示 [`CompleteItem`])。
+//! 下载这个通知使用方:把 [`DownloadSummary`] 翻译进通知层 + 下载专属内容实现。
 //!
-//! [`DownloadNotifier`] 持有下载专属去重状态(`last_result_seq`),每帧 [`DownloadNotifier::feed`]
-//! 把进度喂成 `set_live(LiveSlot::DOWNLOAD, …)`、把一批下载的成败翻译成一条完成 `flash`。
-//! 通知层完全不感知「下载」—— 各内容实现作为 [`ToastItem`] 自己决定怎么画(进度条按进度在红→绿
-//! 之间渐变、用 1/8 子格 [`crate::render::cells::left_eighth`] 平滑填充)。
+//! [`DownloadNotifier`] 持有 wave sequence 去重状态，每帧把 active/queued summary 喂成 live toast，
+//! 把一波下载的结果翻译成一条完成 flash。
 
-use mineral_protocol::DownloadProgress;
+use mineral_protocol::{DownloadSummary, DownloadWave};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Style, Stylize};
@@ -17,175 +14,141 @@ use ratatui::widgets::Paragraph;
 
 use crate::components::toast::notifications::{LiveSlot, Notifications};
 use crate::components::toast::toast::ToastItem;
-use crate::render::cells::left_eighth;
-use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 
 /// 下载 → 通知层的翻译器,持有下载专属去重状态。
 pub(crate) struct DownloadNotifier {
-    /// 已消费到的下载完成计数;`DownloadProgress.result_seq` 增长一次 → 自发一条完成 flash。
-    last_result_seq: u64,
+    /// 已消费到的 wave sequence；增长一次只发一条完成 flash。
+    last_wave_sequence: u64,
 }
 
 impl DownloadNotifier {
     /// 新建翻译器。
     pub(crate) fn new() -> Self {
-        Self { last_result_seq: 0 }
+        Self {
+            last_wave_sequence: 0,
+        }
     }
 
     /// 每帧:把当前下载进度喂进通知层。
     ///
-    /// - `dp.active` → `set_live(LiveSlot::DOWNLOAD, Some(进度条))`,否则置 `None`(退场);
-    /// - `dp.result_seq` 增长且有成败 → 推一条完成 `flash`。
+    /// 有 queued/active/preparing 时保留 live summary；最新 wave sequence 增长时发一条 flash。
     ///
     /// # Params:
     ///   - `n`: 通知层
-    ///   - `dp`: 本帧拉到的下载进度
-    pub(crate) fn feed(&mut self, n: &mut Notifications, dp: &DownloadProgress) {
-        if dp.result_seq != self.last_result_seq {
-            self.last_result_seq = dp.result_seq;
-            if dp.last_ok + dp.last_skip + dp.last_fail > 0 {
-                n.flash(complete(dp.last_ok, dp.last_skip, dp.last_fail));
-            }
+    ///   - `summary`: 本帧拉到的小型下载汇总
+    pub(crate) fn feed(&mut self, n: &mut Notifications, summary: &DownloadSummary) {
+        if let Some(wave) = &summary.latest_wave
+            && wave.sequence != self.last_wave_sequence
+        {
+            self.last_wave_sequence = wave.sequence;
+            n.flash(complete(wave.clone()));
         }
-        n.set_live(LiveSlot::DOWNLOAD, dp.active.then(|| download(dp.clone())));
+        let active = summary.active > 0 || summary.queued > 0 || summary.preparing_playlists > 0;
+        n.set_live(
+            LiveSlot::DOWNLOAD,
+            active.then(|| download(summary.clone())),
+        );
     }
 }
 
-/// 进度条字符宽。
-const BAR_CELLS: u16 = 12;
-
-/// 下载进度做的 toast 内容:`[████▌░░░ 62% 2.4MB/s 3/12]`,进度条按进度变色。
+/// Download live toast content.
 pub(crate) struct DownloadItem {
-    /// 进度快照。
-    progress: DownloadProgress,
+    /// Small download summary.
+    summary: DownloadSummary,
 }
 
 /// 用一份下载进度构造 toast 内容(boxed,交给 [`crate::components::toast::notifications::Notifications::set_live`])。
 ///
 /// # Params:
-///   - `progress`: 下载进度快照
+///   - `summary`: 小型下载汇总
 ///
 /// # Return:
 ///   boxed [`ToastItem`]。
-fn download(progress: DownloadProgress) -> Box<dyn ToastItem> {
-    Box::new(DownloadItem { progress })
+fn download(summary: DownloadSummary) -> Box<dyn ToastItem> {
+    Box::new(DownloadItem { summary })
 }
 
 impl DownloadItem {
-    /// 完成百分比(0..=100)。
-    fn pct(&self) -> u64 {
-        self.progress
-            .bytes_done
-            .saturating_mul(100)
-            .checked_div(self.progress.bytes_total)
-            .unwrap_or(0)
-            .min(100)
-    }
-
-    /// 进度条右侧的文字后缀:` 62% 2.4MB/s 2/24`(`done/total`,前置一空格与进度条分隔)。
-    fn suffix(&self) -> String {
-        let p = &self.progress;
-        format!(
-            " {}% {} {}/{}",
-            self.pct(),
-            fmt_speed(p.speed_bps),
-            p.done,
-            p.total
-        )
+    /// Human-readable live summary.
+    fn label(&self) -> String {
+        let summary = &self.summary;
+        let mut parts = Vec::<String>::new();
+        if summary.active > 0 {
+            parts.push(format!("↓ {} songs", summary.active));
+        }
+        if summary.queued > 0 {
+            parts.push(format!("{} queued", summary.queued));
+        }
+        if summary.preparing_playlists > 0 {
+            parts.push(format!(
+                "preparing {} playlist",
+                summary.preparing_playlists
+            ));
+        }
+        if summary.speed_bps > 0 {
+            parts.push(fmt_speed(summary.speed_bps));
+        }
+        parts.push("D details".to_owned());
+        parts.join(" · ")
     }
 }
 
 impl ToastItem for DownloadItem {
     fn width(&self) -> u16 {
-        let suffix = u16::try_from(UnicodeWidthStr::width(self.suffix().as_str())).unwrap_or(0);
-        BAR_CELLS.saturating_add(suffix)
+        u16::try_from(UnicodeWidthStr::width(self.label().as_str())).unwrap_or(0)
     }
 
     fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-        let pct = self.pct();
-        // 进度条按进度在 红 → 绿 之间渐变。
-        let fill = lerp_color(theme.red, theme.green, pct, 100);
-        // 1/8 子格精度:总覆盖 eighths,落到整格 + 一个残格。
-        let eighths = pct.saturating_mul(u64::from(BAR_CELLS)).saturating_mul(8) / 100;
-        let full = usize::try_from(eighths / 8)
-            .unwrap_or(0)
-            .min(usize::from(BAR_CELLS));
-        let rem = u32::try_from(eighths % 8).unwrap_or(0);
-        let mut spans = Vec::<Span<'static>>::new();
-        spans.push(Span::styled("█".repeat(full), Style::new().fg(fill)));
-        let mut used = full;
-        if rem > 0 && used < usize::from(BAR_CELLS) {
-            spans.push(Span::styled(
-                left_eighth(rem).to_owned(),
-                Style::new().fg(fill).bg(theme.overlay),
-            ));
-            used += 1;
-        }
-        let track = usize::from(BAR_CELLS).saturating_sub(used);
-        if track > 0 {
-            spans.push(Span::styled(
-                "░".repeat(track),
-                Style::new().fg(theme.overlay),
-            ));
-        }
-        spans.push(Span::raw(self.suffix()).fg(theme.subtext));
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.base)),
+            Paragraph::new(Line::from(Span::raw(self.label()).fg(theme.subtext)))
+                .style(Style::new().bg(theme.base)),
             area,
         );
     }
 }
 
-/// 下载完成提示 toast 内容:`✓N`(绿,真下载)+ `⊙N`(黄,已存在跳过)+ `✗M`(红,失败),
-/// **只显示非零部分**。
+/// Settled-wave toast content. Downloaded, already-present, hook-skipped, failed, and stopped
+/// segments are shown only when nonzero.
 pub(crate) struct CompleteItem {
-    /// 真正下载成功首数。
-    ok: usize,
-
-    /// 已存在跳过首数。
-    skip: usize,
-
-    /// 失败首数。
-    fail: usize,
+    /// Settled wave counts.
+    wave: DownloadWave,
 }
 
 /// 用一批下载的成败 / 跳过数构造完成提示 toast 内容(boxed)。
 ///
 /// # Params:
-///   - `ok`: 真正下载成功首数
-///   - `skip`: 已存在跳过首数
-///   - `fail`: 失败首数
+///   - `wave`: Settled wave counts.
 ///
 /// # Return:
 ///   boxed [`ToastItem`]。
-fn complete(ok: usize, skip: usize, fail: usize) -> Box<dyn ToastItem> {
-    Box::new(CompleteItem { ok, skip, fail })
+fn complete(wave: DownloadWave) -> Box<dyn ToastItem> {
+    Box::new(CompleteItem { wave })
 }
 
 impl CompleteItem {
     /// 文字前缀:有真下载 → `下载完成`;否则有失败 → `下载失败`;否则(全已存在)→ `已下载`。
     fn prefix(&self) -> &'static str {
-        if self.ok > 0 {
-            "下载完成"
-        } else if self.fail > 0 {
-            "下载失败"
-        } else {
-            "已下载"
-        }
+        "Downloads finished"
     }
 
-    /// 纯文本形态(量宽用),如 `下载完成 ✓3 ⊙2 ✗1` / `已下载 ⊙2`。
+    /// Plain-text form used for width measurement.
     fn label(&self) -> String {
         let mut parts = vec![self.prefix().to_owned()];
-        if self.ok > 0 {
-            parts.push(format!("✓{}", self.ok));
+        if self.wave.downloaded > 0 {
+            parts.push(format!("✓{}", self.wave.downloaded));
         }
-        if self.skip > 0 {
-            parts.push(format!("⊙{}", self.skip));
+        if self.wave.already_present > 0 {
+            parts.push(format!("⊙ already {}", self.wave.already_present));
         }
-        if self.fail > 0 {
-            parts.push(format!("✗{}", self.fail));
+        if self.wave.skipped_by_hook > 0 {
+            parts.push(format!("⊘ skipped {}", self.wave.skipped_by_hook));
+        }
+        if self.wave.failed > 0 {
+            parts.push(format!("✗ failed {}", self.wave.failed));
+        }
+        if self.wave.stopped > 0 {
+            parts.push(format!("■ stopped {}", self.wave.stopped));
         }
         parts.join(" ")
     }
@@ -204,25 +167,39 @@ impl ToastItem for CompleteItem {
             Span::raw(" "),
             Span::styled(self.prefix(), Style::new().fg(theme.subtext)),
         ];
-        if self.ok > 0 {
+        if self.wave.downloaded > 0 {
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("✓{}", self.ok),
+                format!("✓{}", self.wave.downloaded),
                 Style::new().fg(theme.green),
             ));
         }
-        if self.skip > 0 {
+        if self.wave.already_present > 0 {
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("⊙{}", self.skip),
+                format!("⊙ already {}", self.wave.already_present),
                 Style::new().fg(theme.yellow),
             ));
         }
-        if self.fail > 0 {
+        if self.wave.skipped_by_hook > 0 {
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("✗{}", self.fail),
+                format!("⊘ skipped {}", self.wave.skipped_by_hook),
+                Style::new().fg(theme.yellow),
+            ));
+        }
+        if self.wave.failed > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("✗ failed {}", self.wave.failed),
                 Style::new().fg(theme.red),
+            ));
+        }
+        if self.wave.stopped > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("■ stopped {}", self.wave.stopped),
+                Style::new().fg(theme.overlay),
             ));
         }
         spans.push(Span::raw(" "));
@@ -255,12 +232,24 @@ fn fmt_speed(bps: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::DownloadProgress;
+    use mineral_protocol::{DownloadSummary, DownloadWave};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     use super::{complete, download, fmt_speed};
     use crate::components::toast::toast::{Toast, ToastItem};
+
+    /// Builds settled wave counts for existing toast tests.
+    fn wave(downloaded: usize, already_present: usize, failed: usize) -> DownloadWave {
+        DownloadWave {
+            sequence: 1,
+            downloaded,
+            already_present,
+            skipped_by_hook: 0,
+            failed,
+            stopped: 0,
+        }
+    }
 
     #[test]
     fn speed_units() {
@@ -277,21 +266,19 @@ mod tests {
         }
     }
 
-    /// 下载进度条:展开到位,topbar 一行 `[ 进度条 % 速度 done/total ]`(聚合计数,如 2/24)。
+    /// 下载 live summary 展开到位。
     #[test]
     fn download_bar_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
-        let dp = DownloadProgress {
-            active: true,
-            done: 2,
-            total: 24,
-            bytes_done: 62,
-            bytes_total: 100,
+        let summary = DownloadSummary {
+            active: 2,
+            queued: 5,
+            preparing_playlists: 0,
             speed_bps: 2_516_582,
-            ..DownloadProgress::default()
+            latest_wave: None,
         };
         let mut toast = Toast::new(/*anim_ticks*/ 6);
-        expand(&mut toast, || download(dp.clone()), 8);
+        expand(&mut toast, || download(summary.clone()), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
@@ -299,58 +286,61 @@ mod tests {
             toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
         crate::test_support::assert_snap!(
-            "下载进度条 toast:展开到位,[进度条 % 速度 done/total](聚合计数 2/24)",
+            "下载 summary toast:2 active,5 queued,aggregate speed,D details",
             t.backend()
         );
         Ok(())
     }
 
-    /// 下载完成提示三态:`下载完成 ✓3 ⊙2 ✗1`,只显示非零部分(布局)。
+    /// Settled-wave toast shows each nonzero outcome segment.
     /// 颜色另见 [`complete_colors_ok_green_skip_yellow_fail_red`]。
     #[test]
     fn complete_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
-        expand(&mut toast, || complete(3, 2, 1), 8);
+        expand(&mut toast, || complete(wave(3, 2, 1)), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
             toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
-        crate::test_support::assert_snap!("下载完成提示:✓3 ⊙2 ✗1(真下载/已存在/失败)", t.backend());
+        crate::test_support::assert_snap!(
+            "下载 wave 完成提示:downloaded / already-present / failed",
+            t.backend()
+        );
         Ok(())
     }
 
-    /// 完成提示只有成功(skip=fail=0)→ `下载完成 ✓5`。
+    /// A wave with only committed downloads shows one outcome segment.
     #[test]
     fn complete_snapshot_ok_only() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
-        expand(&mut toast, || complete(5, 0, 0), 8);
+        expand(&mut toast, || complete(wave(5, 0, 0)), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
             toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
-        crate::test_support::assert_snap!("下载完成提示:全成功 → 只 ✓5", t.backend());
+        crate::test_support::assert_snap!("下载 wave 完成提示:仅 downloaded", t.backend());
         Ok(())
     }
 
-    /// 整批都已存在(ok=fail=0)→ 前缀变 `已下载`,只显示 `⊙N`。
+    /// A wave with only existing exports shows one outcome segment.
     #[test]
     fn complete_snapshot_all_skipped() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut toast = Toast::new(/*anim_ticks*/ 6);
-        expand(&mut toast, || complete(0, 2, 0), 8);
+        expand(&mut toast, || complete(wave(0, 2, 0)), 8);
 
         let mut t = Terminal::new(TestBackend::new(60, 3))?;
         t.draw(|f| {
             let area = f.area();
             toast.render(f, area, &theme, /*blend*/ 0, /*shrink*/ 1000);
         })?;
-        crate::test_support::assert_snap!("下载完成提示:整批已存在 → 已下载 ⊙2", t.backend());
+        crate::test_support::assert_snap!("下载 wave 完成提示:仅 already-present", t.backend());
         Ok(())
     }
 
@@ -358,14 +348,14 @@ mod tests {
     #[test]
     fn complete_colors_ok_green_skip_yellow_fail_red() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
-        let item = complete(3, 2, 1);
-        let mut t = Terminal::new(TestBackend::new(30, 1))?;
+        let item = complete(wave(3, 2, 1));
+        let mut t = Terminal::new(TestBackend::new(80, 1))?;
         t.draw(|f| {
             let area = f.area();
             item.render(f, area, &theme);
         })?;
         let buf = t.backend().buffer();
-        // 行形如 " 下载完成 ✓3 ⊙2 ✗1 ":找 ✓ / ⊙ / ✗ 所在 cell,核对 fg。
+        // Locate the outcome glyph cells and verify their semantic colors.
         let mut green = false;
         let mut yellow = false;
         let mut red = false;

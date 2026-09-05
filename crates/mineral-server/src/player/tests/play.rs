@@ -532,7 +532,7 @@ async fn local_hit_bypasses_failing_provider() -> color_eyre::Result<()> {
     let path = music_dir.join(subdir).join(file_name);
     let parent = path
         .parent()
-        .ok_or_else(|| color_eyre::eyre::eyre!("local test path has no parent"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("download fixture has no parent"))?;
     std::fs::create_dir_all(parent)?;
     std::fs::write(&path, b"prepared-local")?;
 
@@ -547,7 +547,7 @@ async fn local_hit_bypasses_failing_provider() -> color_eyre::Result<()> {
         channels,
         playback,
         ServerStore::disabled(),
-        Some(music_dir),
+        Some(music_dir.as_path()),
         MediaCache::disabled(),
         tokio::sync::broadcast::channel(/*capacity*/ 8).0,
         /*script*/ None,
@@ -607,7 +607,8 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
     let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
     let provider: Arc<dyn PlaybackProvider> = Arc::new(UrlChannel { url });
     let playback = PlaybackRegistry::new(vec![provider])?;
-    let progress = Arc::new(Mutex::new(DownloadProgress::default()));
+    let download_id = mineral_protocol::DownloadId::new("playback-download".to_owned());
+    let cancellation = tokio_util::sync::CancellationToken::new();
     download_song(
         &playback,
         &crate::download::DownloadEnv {
@@ -616,7 +617,11 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         },
         &s,
         BitRate::Lossless,
-        &progress,
+        crate::download::DownloadAttempt {
+            id: &download_id,
+            cancellation: &cancellation,
+        },
+        Arc::new(|_update| {}),
         /*speed_tick*/ Duration::from_millis(150),
     )
     .await?;
@@ -628,7 +633,22 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         liked_ids: None,
         playlists: None,
     })];
-    let core = core_with_channels(channels, persist, Some(music_dir), media_cache)?;
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+    )?;
+    let core = core_with_events_stats_playback(
+        channels,
+        playback,
+        persist,
+        Some(music_dir.as_path()),
+        media_cache,
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        crate::StatsRecorder::disabled(),
+    )?;
     core.play_song(
         &s,
         mineral_stats::PlayOrigin::Explicit,

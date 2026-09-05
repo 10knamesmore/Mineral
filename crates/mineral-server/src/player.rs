@@ -2,9 +2,8 @@
 //! media_info / current_lyrics / prefetched 等),让 daemon 自治 auto-next、不依赖 client。
 //!
 //! 长跑后台 loop 周期 drain scheduler 产出、推进 auto-next、预排下一曲并维护会话状态。
-//! playback capture 由 producer 完成事件触发，下载走独立单 worker 串行消费队列。
+//! playback capture 由 producer 完成事件触发，手动下载由独立 [`download::DownloadManager`] 托管。
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -15,7 +14,8 @@ use mineral_model::{BitRate, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, PlayCursor, PlaybackOrigin, PlayerSync, PlayerVersions,
+    DownloadId, DownloadSummary, DownloadTarget, PlayCursor, PlaybackOrigin, PlayerSync,
+    PlayerVersions, SongDownloadView,
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskKind};
 use parking_lot::Mutex;
@@ -53,21 +53,14 @@ pub(crate) struct Inner {
     /// 音频本体缓存(命中直接本地播、播完入缓存);禁用环境为 null-object。
     media_cache: Arc<MediaCache>,
 
-    /// 永久下载导出根目录(`~/Music/mineral`);播放解析据此**直接探盘**命中已下载副本、
-    /// 跳过网络;解析失败为 `None`(下载不可用)。
-    music_dir: Option<PathBuf>,
+    /// 永久下载导出根目录；播放与幂等检查按歌曲元数据派生路径。
+    music_dir: Option<std::path::PathBuf>,
 
-    /// 下载进度共享态:下载任务实时写,client(TUI 弹窗 / CLI status)轮询读。
-    download_progress: Arc<Mutex<DownloadProgress>>,
-
-    /// 下载任务入队端:`download()` 把目标投进来,单 worker 串行消费(避免并发下载竞争)。
-    download_tx: tokio::sync::mpsc::UnboundedSender<DownloadTarget>,
+    /// Session-only Song download lifecycle owner。
+    pub(crate) downloads: download::DownloadManager,
 
     /// 打标队列投递端:下载 / 缓存落盘后投一曲(开关关闭为 null-object,见 [`crate::tagging`])。
     tagging: crate::tagging::TaggingQueue,
-
-    /// 未完成的下载批数(入队 +1、批处理完 -1);0→1 开新会话、归 0 结束会话并出完成提示。
-    download_pending: Arc<std::sync::atomic::AtomicUsize>,
 
     /// 事件通知双路出口(event hub + 脚本线程)。
     pub(crate) notify: crate::notify::Notifier,
@@ -128,12 +121,6 @@ pub(crate) struct Inner {
     /// 会话「位置刷新」的节流间隔(配置 `daemon.session_save_secs`)。
     pub(crate) session_save: Duration,
 
-    /// 下载音质(配置 `download.quality`,与播放音质各自独立)。
-    download_quality: BitRate,
-
-    /// 下载测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)。
-    download_speed_tick: Duration,
-
     /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
     media_report_interval_ms: u64,
 
@@ -170,6 +157,18 @@ pub(crate) struct Sinks {
     pub(crate) stats: crate::StatsRecorder,
 }
 
+/// Local persistence and media stores injected into [`PlayerCore::spawn`].
+pub(crate) struct PlayerStorage {
+    /// Song metadata, library state, sessions, and durable file indexes.
+    pub(crate) persist: ServerStore,
+
+    /// Evictable playback media cache.
+    pub(crate) media_cache: MediaCache,
+
+    /// Permanent download export root; `None` means downloads are unavailable.
+    pub(crate) music_dir: Option<std::path::PathBuf>,
+}
+
 impl PlayerCore {
     /// 起 PlayerCore 并 spawn 长跑 task(events drain + auto-next + prefetch tick)。
     ///
@@ -177,16 +176,14 @@ impl PlayerCore {
     ///   - `audio`: 底层音频引擎句柄。
     ///   - `scheduler`: 任务调度器。
     ///   - `sources`: Catalog channels and playback providers.
-    ///   - `persist`: 持久化句柄,存入 [`Inner`](收藏 / 歌曲元数据等经它落库)。
-    ///   - `media_cache`: 音频本体缓存;无音频缓存环境传 [`MediaCache::disabled`]。
+    ///   - `storage`: Local persistence, playback cache, and permanent download root.
     ///   - `spawn_config`: 配置侧参数包(切片 + 有效配置底树)。
     ///   - `sinks`: 事件通知 + 埋点 recorder 两个 fire-and-forget 出口。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
         sources: SourceBackends,
-        persist: ServerStore,
-        media_cache: MediaCache,
+        storage: PlayerStorage,
         spawn_config: SpawnConfig<'_>,
         sinks: Sinks,
     ) -> Self {
@@ -195,9 +192,12 @@ impl PlayerCore {
             tree: config_tree,
         } = spawn_config;
         let Sinks { notify, stats } = sinks;
+        let PlayerStorage {
+            persist,
+            media_cache,
+            music_dir,
+        } = storage;
         let SourceBackends { channels, playback } = sources;
-        let music_dir = crate::download::open_env(config.download().dir().as_deref());
-        let (download_tx, download_rx) = tokio::sync::mpsc::unbounded_channel();
         // 打标队列拉封面用的共享 client；media export 由 Playback provider 独立 open。
         let tagging_http = reqwest::Client::builder().build().ok();
         if tagging_http.is_none() {
@@ -216,6 +216,23 @@ impl PlayerCore {
                 .map(|ch| ch.source())
                 .collect::<Vec<SourceKind>>(),
         );
+        let downloads = download::DownloadManager::spawn(
+            download::DownloadRuntime {
+                music_dir: music_dir.clone(),
+                channels: channels.clone(),
+                playback: playback.clone(),
+                hooks: crate::hook_bridge::HookGate::new(
+                    notify.script_sender(),
+                    Duration::from_millis(*config.hook_timeout_ms()),
+                ),
+                tagging: tagging.clone(),
+                notify: notify.clone(),
+                stats: stats.clone(),
+                speed_tick: Duration::from_millis(*config.daemon().download_speed_tick_ms()),
+            },
+            *config.download().quality(),
+            *config.download().max_concurrent(),
+        );
         let inner = Arc::new(Inner {
             audio,
             scheduler,
@@ -224,9 +241,7 @@ impl PlayerCore {
             persist,
             media_cache: Arc::new(media_cache),
             music_dir,
-            download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
-            download_tx,
-            download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            downloads,
             tagging,
             notify,
             stats,
@@ -246,8 +261,6 @@ impl PlayerCore {
             prev_restart_threshold_ms: *config.daemon().prev_restart_threshold_ms(),
             player_tick_ms: *config.daemon().player_tick_ms(),
             session_save: Duration::from_secs(*config.daemon().session_save_secs()),
-            download_quality: *config.download().quality(),
-            download_speed_tick: Duration::from_millis(*config.daemon().download_speed_tick_ms()),
             media_report_interval_ms: *config.daemon().report_interval_ms(),
             media_seek_threshold_ms: *config.daemon().seek_threshold_ms(),
             hook_timeout: Duration::from_millis(*config.hook_timeout_ms()),
@@ -260,10 +273,6 @@ impl PlayerCore {
         let me = Self { inner };
         let bg = me.clone();
         tokio::spawn(async move { bg.background_loop().await });
-        // 下载 worker:单线串行消费队列,所有目标聚合进同一进度会话。
-        let dl = me.clone();
-        let pending = Arc::clone(&me.inner.download_pending);
-        tokio::spawn(async move { download::worker(dl, download_rx, pending).await });
         me
     }
 
@@ -315,14 +324,9 @@ impl PlayerCore {
         &self.inner.media_cache
     }
 
-    /// 永久下载导出根目录;解析失败为 `None`(下载不可用)。
+    /// 永久下载导出根目录；不可用时为 `None`。
     pub(crate) fn music_dir(&self) -> Option<&std::path::Path> {
         self.inner.music_dir.as_deref()
-    }
-
-    /// 下载进度共享态句柄(下载任务实时写入)。
-    pub(crate) fn progress_handle(&self) -> &Arc<Mutex<DownloadProgress>> {
-        &self.inner.download_progress
     }
 
     /// 打标队列投递端(下载 / 缓存落盘后投一曲;开关关闭为 null-object)。
@@ -345,11 +349,6 @@ impl PlayerCore {
         self.inner.gapless_prefetch_ms
     }
 
-    /// 下载音质(配置 `download.quality`)。
-    pub(crate) fn download_quality(&self) -> BitRate {
-        self.inner.download_quality
-    }
-
     /// 同步拦截 hook 软超时(配置 `script.hook_timeout_ms`)。
     pub(crate) fn hook_timeout(&self) -> Duration {
         self.inner.hook_timeout
@@ -358,11 +357,6 @@ impl PlayerCore {
     /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
     pub(crate) fn spawn_max_concurrent(&self) -> usize {
         self.inner.spawn_max_concurrent
-    }
-
-    /// 下载测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)。
-    pub(crate) fn download_speed_tick(&self) -> Duration {
-        self.inner.download_speed_tick
     }
 
     /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
@@ -375,29 +369,29 @@ impl PlayerCore {
         self.inner.media_seek_threshold_ms
     }
 
-    /// 当前下载进度快照(client 轮询:TUI 弹窗 / CLI status)。
-    pub(crate) fn download_progress(&self) -> DownloadProgress {
-        self.inner.download_progress.lock().clone()
+    /// Returns the current small download summary.
+    pub(crate) fn download_summary(&self) -> DownloadSummary {
+        self.inner.downloads.summary()
     }
 
-    /// 把下载目标入队:单 worker 串行消费,聚合进同一进度会话(再点一个 → total 累加,如 2/21→2/24)。
+    /// Returns the current flat Song download snapshot.
+    pub(crate) fn download_snapshot(&self) -> Vec<SongDownloadView> {
+        self.inner.downloads.snapshot()
+    }
+
+    /// Submits a Song or playlist to the session download manager.
     pub(crate) fn download(&self, target: DownloadTarget) {
-        // 入队即记账:新会话(pending 0→1)重置计数;单曲已知数立刻 +1(歌单数等 worker 拉到再加)。
-        let first = self.inner.download_pending.fetch_add(1, Ordering::AcqRel) == 0;
-        {
-            let mut p = self.inner.download_progress.lock();
-            if first {
-                *p = DownloadProgress {
-                    active: true,
-                    result_seq: p.result_seq,
-                    ..DownloadProgress::default()
-                };
-            }
-            if matches!(target, DownloadTarget::Song(_)) {
-                p.total += 1;
-            }
-        }
-        let _ = self.inner.download_tx.send(target);
+        self.inner.downloads.submit(target)
+    }
+
+    /// Stops one queued or active Song download.
+    pub(crate) fn stop_download(&self, id: &DownloadId) -> color_eyre::Result<()> {
+        self.inner.downloads.stop(id)
+    }
+
+    /// Cancels and waits for all active Song downloads during daemon shutdown.
+    pub(crate) async fn shutdown_downloads(&self) {
+        self.inner.downloads.shutdown().await;
     }
 
     /// 持久化句柄引用,供 [`crate::client::ClientHandle`] 查 love / 统计。

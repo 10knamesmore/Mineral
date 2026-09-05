@@ -11,6 +11,7 @@ use ratatui::widgets::Block;
 use crate::components::popup::component::{Chrome, Overlay, OverlayResponse, render_overlay};
 use crate::components::popup::confirm::ConfirmOverlay;
 use crate::components::popup::disconnect::DisconnectOverlay;
+use crate::components::popup::download::DownloadOverlay;
 use crate::components::popup::help::HelpOverlay;
 use crate::components::popup::menu::PopMenu;
 use crate::components::popup::queue::QueueOverlay;
@@ -26,6 +27,9 @@ const INSTANT_TICKS: u16 = 1;
 pub(crate) enum OverlayKind {
     /// 浮动播放队列。
     Queue(QueueOverlay),
+
+    /// Flat Song downloads dock.
+    Downloads(DownloadOverlay),
 
     /// 退出确认。
     Confirm(ConfirmOverlay),
@@ -44,6 +48,11 @@ impl OverlayKind {
     /// 浮动队列,光标定位到 `sel`(通常是在播歌下标)。
     pub(crate) fn queue(sel: usize) -> Self {
         Self::Queue(QueueOverlay::new(sel))
+    }
+
+    /// Flat Song downloads dock.
+    pub(crate) fn downloads() -> Self {
+        Self::Downloads(DownloadOverlay::new())
     }
 
     /// 退出确认。
@@ -74,6 +83,7 @@ impl Overlay for OverlayKind {
     fn chrome(&self) -> Chrome {
         match self {
             Self::Queue(o) => o.chrome(),
+            Self::Downloads(o) => o.chrome(),
             Self::Confirm(o) => o.chrome(),
             Self::Disconnect(o) => o.chrome(),
             Self::Menu(o) => o.chrome(),
@@ -84,6 +94,7 @@ impl Overlay for OverlayKind {
     fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
         match self {
             Self::Queue(o) => o.block(ctx, theme, focused),
+            Self::Downloads(o) => o.block(ctx, theme, focused),
             Self::Confirm(o) => o.block(ctx, theme, focused),
             Self::Disconnect(o) => o.block(ctx, theme, focused),
             Self::Menu(o) => o.block(ctx, theme, focused),
@@ -94,6 +105,7 @@ impl Overlay for OverlayKind {
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         match self {
             Self::Queue(o) => o.render_content(buf, inner, ctx, theme),
+            Self::Downloads(o) => o.render_content(buf, inner, ctx, theme),
             Self::Confirm(o) => o.render_content(buf, inner, ctx, theme),
             Self::Disconnect(o) => o.render_content(buf, inner, ctx, theme),
             Self::Menu(o) => o.render_content(buf, inner, ctx, theme),
@@ -104,6 +116,7 @@ impl Overlay for OverlayKind {
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
         match self {
             Self::Queue(o) => o.on_key(key, ctx),
+            Self::Downloads(o) => o.on_key(key, ctx),
             Self::Confirm(o) => o.on_key(key, ctx),
             Self::Disconnect(o) => o.on_key(key, ctx),
             Self::Menu(o) => o.on_key(key, ctx),
@@ -114,6 +127,7 @@ impl Overlay for OverlayKind {
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
         match self {
             Self::Queue(o) => o.on_action(action, ctx),
+            Self::Downloads(o) => o.on_action(action, ctx),
             Self::Confirm(o) => o.on_action(action, ctx),
             Self::Disconnect(o) => o.on_action(action, ctx),
             Self::Menu(o) => o.on_action(action, ctx),
@@ -285,6 +299,22 @@ impl OverlayStack {
         for m in &mut self.stack {
             if let OverlayKind::Queue(q) = &mut m.kind {
                 q.clamp(len);
+            }
+        }
+    }
+
+    /// Whether a Downloads overlay remains mounted.
+    pub(crate) fn has_downloads(&self) -> bool {
+        self.stack
+            .iter()
+            .any(|mounted| matches!(mounted.kind, OverlayKind::Downloads(_)))
+    }
+
+    /// Clamps every mounted Downloads cursor after a snapshot length change.
+    pub(crate) fn clamp_downloads(&mut self, len: usize) {
+        for mounted in &mut self.stack {
+            if let OverlayKind::Downloads(downloads) = &mut mounted.kind {
+                downloads.clamp(len);
             }
         }
     }

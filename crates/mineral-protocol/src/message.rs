@@ -8,7 +8,10 @@ use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
 use mineral_task::{Priority, Snapshot, TaskKind};
 use serde::{Deserialize, Serialize};
 
-use crate::{PlayerSync, PlayerVersions, QueueEditOutcome, QueueOp};
+use crate::{
+    DownloadId, DownloadSummary, DownloadTarget, PlayerSync, PlayerVersions, QueueEditOutcome,
+    QueueOp, SongDownloadView,
+};
 
 /// Atomic PlayQueue request 的 validation error。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,55 +107,6 @@ pub enum QueueContextWire {
 
     /// 未标注(缺省)。
     Unknown,
-}
-
-/// 下载进度快照(client 每 tick 轮询,驱动 top-center 进度弹窗)。
-///
-/// `active == false` 时其余字段无意义(无下载在跑),client 据此收起弹窗。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DownloadProgress {
-    /// 当前是否有下载任务在跑。
-    pub active: bool,
-
-    /// 本批已完成首数。
-    pub done: usize,
-
-    /// 本批总首数(单曲为 1)。
-    pub total: usize,
-
-    /// 当前这首已下字节。
-    pub bytes_done: u64,
-
-    /// 当前这首总字节(拿不到为 0,进度条退化为 spinner 语义)。
-    pub bytes_total: u64,
-
-    /// 当前瞬时下载速度(字节/秒,已平滑)。
-    pub speed_bps: u64,
-
-    /// 队列中**还在等待**的批数(不含正在下的这批)。串行下载,>0 表示后面还排着。
-    pub queued: usize,
-
-    /// 已完成批次计数(每批下完 +1);client 据其增长触发一次「完成提示」。
-    pub result_seq: u64,
-
-    /// 最近完成那批**真正下载**的成功首数(配合 `result_seq` 读)。
-    pub last_ok: usize,
-
-    /// 最近完成那批**已存在跳过**的首数(配合 `result_seq` 读)。
-    pub last_skip: usize,
-
-    /// 最近完成那批的失败首数(配合 `result_seq` 读)。
-    pub last_fail: usize,
-}
-
-/// 下载目标:单曲(tracks 视图选中)或整张歌单(playlist 视图选中)。
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DownloadTarget {
-    /// 下载一首歌。`Box` 避免 enum 体积膨胀(`Song` 较大)。
-    Song(Box<Song>),
-
-    /// 下载整张歌单的全部曲目(server 端自行拉 tracks)。
-    Playlist(PlaylistId),
 }
 
 /// 一首歌的播放统计快照(IPC 出参)。
@@ -315,12 +269,18 @@ pub enum Request {
     QuerySongStats(SongId),
 
     // ---- 下载 ----
-    /// 下载(永久导出 + 顺带填 cache)单曲 / 整张歌单。fire-and-forget,server 后台跑。
-    /// 返回 [`Response::Ok`]。
+    /// 提交单曲或歌单下载。返回 [`Response::Ok`]；下载状态由汇总和列表查询提供。
     Download(DownloadTarget),
 
-    /// 拉一次下载进度快照(TUI 进度弹窗 / CLI status 用)。返回 [`Response::DownloadProgress`]。
-    DownloadProgress,
+    /// 拉取每 tick 使用的小型下载汇总。返回 [`Response::DownloadSummary`]。
+    DownloadSummary,
+
+    /// 拉取当前 daemon session 的平铺 Song download 列表。
+    /// 返回 [`Response::DownloadSnapshot`]。
+    DownloadSnapshot,
+
+    /// Stop 一个 Song download。已知 identity 返回 [`Response::Ok`]，未知 identity 返回 [`Response::Error`]。
+    StopDownload(DownloadId),
 
     /// 回填存量落盘文件(下载导出 + 播放缓存)的内嵌 metadata tag:server 枚举候选后
     /// 后台串行打标(与新落盘同一条 tagging 队列)。返回 [`Response::TagBackfill`]
@@ -462,8 +422,11 @@ pub enum Response {
     /// 对应 [`Request::QuerySongStats`]：当前采集可用时返回统计，否则为 `None`。
     SongStats(Option<SongStatsWire>),
 
-    /// 对应 [`Request::DownloadProgress`]:当前下载进度快照。
-    DownloadProgress(DownloadProgress),
+    /// 对应 [`Request::DownloadSummary`]:小型下载汇总。
+    DownloadSummary(DownloadSummary),
+
+    /// 对应 [`Request::DownloadSnapshot`]:平铺 Song download 列表。
+    DownloadSnapshot(Vec<SongDownloadView>),
 
     /// 对应 [`Request::TagBackfill`]:两侧(缓存 / 导出)的受理计数。
     TagBackfill(TagBackfillWire),

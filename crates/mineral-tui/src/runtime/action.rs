@@ -26,6 +26,9 @@ pub enum Action {
     /// 打开浮动播放队列(光标定位到在播歌)。
     OpenQueue,
 
+    /// 打开 Downloads 停靠浮层。
+    OpenDownloads,
+
     /// 打开退出确认浮层。
     OpenQuitConfirm,
 

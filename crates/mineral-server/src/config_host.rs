@@ -159,6 +159,7 @@ impl PlayerCore {
         self.report_evicted_overrides(&evicted);
         if changed {
             self.reapply_stats(&effective);
+            self.reapply_downloads(&effective);
             self.notify().config_changed(BusValue::from_json(effective));
         }
     }
@@ -208,6 +209,7 @@ impl PlayerCore {
         self.report_evicted_overrides(&evicted);
         if changed {
             self.reapply_stats(&effective);
+            self.reapply_downloads(&effective);
             self.notify().config_changed(BusValue::from_json(effective));
         }
     }
@@ -230,6 +232,19 @@ impl PlayerCore {
                 .set_params(crate::params_from_config(config.stats())),
             Err(e) => {
                 mineral_log::warn!(target: "stats", error = mineral_log::chain(&e), "配置落型失败,保持旧采集参数");
+            }
+        }
+    }
+
+    /// Applies download quality and concurrency changes to later Song admissions.
+    fn reapply_downloads(&self, effective: &serde_json::Value) {
+        match serde_json::from_value::<mineral_config::Config>(effective.clone()) {
+            Ok(config) => self.inner.downloads.set_config(
+                *config.download().quality(),
+                *config.download().max_concurrent(),
+            ),
+            Err(error) => {
+                mineral_log::warn!(target: "download", error = mineral_log::chain(&error), "配置落型失败,保持旧下载参数");
             }
         }
     }

@@ -2,7 +2,7 @@
 //! 各主题测试文件（[`hooks`] 等）经 `use super::*` 复用。
 
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -27,7 +27,7 @@ use mineral_test::mock::{UrlChannel, serve_once};
 use mineral_test::song;
 use parking_lot::Mutex;
 
-use super::{DownloadProgress, Inner, MediaCache, PlayerCore};
+use super::{Inner, MediaCache, PlayerCore};
 use crate::download::download_song;
 use crate::queue::{
     advance_next, advance_prev, apply_play_mode, enter_shuffle, exit_shuffle, next_in_queue,
@@ -289,7 +289,7 @@ fn core_with_persist(
 fn core_with_channels(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
-    music_dir: Option<PathBuf>,
+    music_dir: Option<&Path>,
     media_cache: MediaCache,
 ) -> color_eyre::Result<PlayerCore> {
     core_with_events(
@@ -300,6 +300,31 @@ fn core_with_channels(
         // 测试出口:event hub 无订阅者(send 即丢)。
         tokio::sync::broadcast::channel(/*capacity*/ 8).0,
         /*script*/ None,
+    )
+}
+
+/// Builds a core with an explicit permanent download root.
+fn core_with_channels_music_dir(
+    channels: Vec<Arc<dyn MusicChannel>>,
+    persist: ServerStore,
+    media_cache: MediaCache,
+    music_dir: &Path,
+) -> color_eyre::Result<PlayerCore> {
+    let playback = test_playback_registry(
+        &channels,
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+    )?;
+    core_with_events_stats_playback(
+        channels,
+        playback,
+        persist,
+        Some(music_dir),
+        media_cache,
+        tokio::sync::broadcast::channel(/*capacity*/ 8).0,
+        /*script*/ None,
+        crate::StatsRecorder::disabled(),
     )
 }
 
@@ -386,7 +411,7 @@ fn core_with_script_playback(
 fn core_with_events(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
-    music_dir: Option<PathBuf>,
+    music_dir: Option<&Path>,
     media_cache: MediaCache,
     events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
     script: Option<mineral_script::ScriptSender>,
@@ -413,7 +438,7 @@ fn core_with_events(
 fn core_with_events_stats(
     channels: Vec<Arc<dyn MusicChannel>>,
     persist: ServerStore,
-    music_dir: Option<PathBuf>,
+    music_dir: Option<&Path>,
     media_cache: MediaCache,
     events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
     script: Option<mineral_script::ScriptSender>,
@@ -443,7 +468,7 @@ fn core_with_events_stats_playback(
     channels: Vec<Arc<dyn MusicChannel>>,
     playback: PlaybackRegistry,
     persist: ServerStore,
-    music_dir: Option<PathBuf>,
+    music_dir: Option<&Path>,
     media_cache: MediaCache,
     events: tokio::sync::broadcast::Sender<mineral_protocol::Event>,
     script: Option<mineral_script::ScriptSender>,
@@ -467,6 +492,25 @@ fn core_with_events_stats_playback(
         &persist,
         /*workers*/ 1,
     );
+    let notify = crate::notify::Notifier::new(events, script);
+    let music_dir = music_dir.map(Path::to_path_buf);
+    let downloads = crate::download::DownloadManager::spawn(
+        crate::download::DownloadRuntime {
+            music_dir: music_dir.clone(),
+            channels: channels.clone(),
+            playback: playback.clone(),
+            hooks: crate::hook_bridge::HookGate::new(
+                notify.script_sender(),
+                Duration::from_millis(*cfg.hook_timeout_ms()),
+            ),
+            tagging: tagging.clone(),
+            notify: notify.clone(),
+            stats: stats.clone(),
+            speed_tick: Duration::from_millis(*cfg.daemon().download_speed_tick_ms()),
+        },
+        *cfg.download().quality(),
+        *cfg.download().max_concurrent(),
+    );
     let inner = Arc::new(Inner {
         audio,
         scheduler,
@@ -475,12 +519,10 @@ fn core_with_events_stats_playback(
         persist,
         media_cache: Arc::new(media_cache),
         music_dir,
-        download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
-        download_tx: tokio::sync::mpsc::unbounded_channel().0,
-        download_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        downloads,
         tagging,
         // 多数测试无脚本;hook 拦截测试经 `core_with_script` 注入。
-        notify: crate::notify::Notifier::new(events, script),
+        notify,
         stats,
         props: crate::props::PropsWatch::default(),
         ui_state: Mutex::new(crate::props::TerminalStates::default()),
@@ -499,8 +541,6 @@ fn core_with_events_stats_playback(
         prev_restart_threshold_ms: *cfg.daemon().prev_restart_threshold_ms(),
         player_tick_ms: *cfg.daemon().player_tick_ms(),
         session_save: Duration::from_secs(*cfg.daemon().session_save_secs()),
-        download_quality: *cfg.download().quality(),
-        download_speed_tick: Duration::from_millis(*cfg.daemon().download_speed_tick_ms()),
         media_report_interval_ms: *cfg.daemon().report_interval_ms(),
         media_seek_threshold_ms: *cfg.daemon().seek_threshold_ms(),
         hook_timeout: Duration::from_millis(*cfg.hook_timeout_ms()),

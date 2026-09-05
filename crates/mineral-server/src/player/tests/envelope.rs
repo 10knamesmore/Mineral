@@ -7,19 +7,19 @@ use mineral_model::{AudioFormat, Envelope};
 use mineral_protocol::PlayerVersions;
 
 use super::*;
-use crate::media_cache::library_relpath;
 
-/// 把一首歌的真实 WAV 按下载导出布局写进 `root`(恒幅样本,保证可解码出包络)。
+/// 把一首真实 WAV 写入歌曲元数据派生的下载路径。
 fn put_wav_download(root: &Path, s: &Song) -> color_eyre::Result<()> {
-    let (subdir, file_name) = library_relpath(s, BitRate::Lossless, Some(&AudioFormat::Wav));
-    let abs = root.join(&subdir).join(&file_name);
-    if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let (subdir, file_name) =
+        crate::media_cache::library_relpath(s, BitRate::Lossless, Some(&AudioFormat::Wav));
+    let path = root.join(subdir).join(file_name);
+    let parent = path
+        .parent()
+        .ok_or_else(|| color_eyre::eyre::eyre!("download fixture has no parent"))?;
+    std::fs::create_dir_all(parent)?;
     let samples = vec![8_000i16; 8_000];
-    mineral_test::write_wav(
-        &abs, &samples, /*channels*/ 1, /*sample_rate*/ 8_000,
-    )
+    mineral_test::write_wav(&path, &samples, 1, 8_000)?;
+    Ok(())
 }
 
 /// 轮询 `sync` 直到当前曲段(`CurrentSync`)携带包络(或超时),返回 (当前曲 id, 包络)。
@@ -44,11 +44,11 @@ async fn local_hit_computes_and_pushes_envelope() -> color_eyre::Result<()> {
     let root = d.path().join("music");
     let s = song("1");
     put_wav_download(&root, &s)?;
-    let core = core_with_channels(
+    let core = core_with_channels_music_dir(
         vec![Arc::new(RecordingChannel::default())],
         persist.clone(),
-        Some(root),
         MediaCache::disabled(),
+        &root,
     )?;
 
     core.play_song(
@@ -94,11 +94,11 @@ async fn db_hit_pushes_cached_envelope_without_recompute() -> color_eyre::Result
         .scope(SourceKind::NETEASE)
         .put_envelope(&s.id, &fingerprint)
         .await?;
-    let core = core_with_channels(
+    let core = core_with_channels_music_dir(
         vec![Arc::new(RecordingChannel::default())],
         persist,
-        Some(root),
         MediaCache::disabled(),
+        &root,
     )?;
 
     core.play_song(

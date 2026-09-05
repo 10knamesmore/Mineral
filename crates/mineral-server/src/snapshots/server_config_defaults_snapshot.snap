@@ -31,6 +31,7 @@ ServerConfig {
     download: DownloadConfig {
         quality: Lossless,
         dir: None,
+        max_concurrent: 3,
         tagging: true,
         tagging_workers: 4,
     },

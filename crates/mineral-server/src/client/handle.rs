@@ -4,8 +4,8 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    DownloadProgress, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
-    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
+    DownloadId, DownloadSummary, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
+    QueueContextWire, QueueEditOutcome, QueueOp, SongDownloadView, SongStatsWire,
 };
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskKind};
 
@@ -625,11 +625,19 @@ impl Client for ClientHandle {
     }
 
     fn download(&self, target: DownloadTarget) {
-        self.player.download(target);
+        self.player.download(target)
     }
 
-    fn download_progress(&self) -> DownloadProgress {
-        self.player.download_progress()
+    fn download_summary(&self) -> DownloadSummary {
+        self.player.download_summary()
+    }
+
+    fn download_snapshot(&self) -> Vec<SongDownloadView> {
+        self.player.download_snapshot()
+    }
+
+    fn stop_download(&self, id: DownloadId) -> color_eyre::Result<()> {
+        self.player.stop_download(&id)
     }
 
     fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {

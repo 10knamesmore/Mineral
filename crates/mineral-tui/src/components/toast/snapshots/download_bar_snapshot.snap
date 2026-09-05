@@ -1,8 +1,8 @@
 ---
-source: crates/mineral-tui/src/download_toast.rs
-description: "下载进度条 toast:展开到位,[进度条 % 速度 done/total](聚合计数 2/24)"
+source: crates/mineral-tui/src/components/toast/download_toast.rs
+description: "下载 summary toast:2 active,5 queued,aggregate speed,D details"
 expression: t.backend()
 ---
-"              [███████▍░░░░ 62% 2.3MB/s 2/24]               "
+"        [↓ 2 songs · 5 queued · 2.3MB/s · D details]        "
 "                                                            "
 "                                                            "

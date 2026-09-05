@@ -128,6 +128,9 @@ pub(crate) enum OverlayAction {
     /// queue 浮层:下载第 `0` 项(下标)。
     DownloadQueueIndex(usize),
 
+    /// Downloads overlay stops one exact session-local Song download.
+    StopDownload(mineral_protocol::DownloadId),
+
     /// queue 浮层:把某项在队列里移一格。
     ReorderQueueIndex {
         /// 待移动项的当前下标。

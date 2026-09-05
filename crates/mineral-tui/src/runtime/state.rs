@@ -193,6 +193,12 @@ pub struct AppState {
     /// `by_kind` 给 top_status 显示「pl:N tr:N ...」按 kind 拆分用。
     pub tasks_snapshot: mineral_task::Snapshot,
 
+    /// Small download summary polled every tick.
+    pub downloads_summary: mineral_protocol::DownloadSummary,
+
+    /// Flat Song download snapshot, refreshed only while Downloads overlay is open.
+    pub downloads: Vec<mineral_protocol::SongDownloadView>,
+
     /// 已加载的全局配置(`Arc` 共享只读):渲染 / 运行时模块经此读各段旋钮
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
     pub cfg: Arc<mineral_config::Config>,
@@ -266,6 +272,8 @@ impl AppState {
                 running: 0,
                 by_kind: FxHashMap::default(),
             },
+            downloads_summary: mineral_protocol::DownloadSummary::default(),
+            downloads: Vec::new(),
             marquees: Marquees::from_config(anim.marquee(), tick_ms),
             vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
                 *anim.vinyl_rev_ms(),

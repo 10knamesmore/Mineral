@@ -35,6 +35,9 @@ pub struct KeysConfig {
     /// 打开浮动播放队列(已开时再按 = 关闭)。
     open_queue: KeyBinding,
 
+    /// 打开 Downloads 停靠浮层(已开时再按 = 关闭)。
+    open_downloads: KeyBinding,
+
     /// 打开退出确认浮层。
     quit: KeyBinding,
 

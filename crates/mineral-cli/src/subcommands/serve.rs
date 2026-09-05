@@ -119,7 +119,7 @@ pub async fn run(
     mineral_log::info!(target: "daemon", "shutting down");
     stats_stop.daemon_stopped();
     stats_stop.flush().await;
-    server.shutdown();
+    server.shutdown().await;
     // 埋点优雅停机:发 Shutdown 让 actor 把在播 pending 结算成 stop 行,带超时 await join
     // (在播行丢失由此收窄到仅硬 kill;超时兜底不无限阻塞退出)。
     stats_stop.shutdown().await;

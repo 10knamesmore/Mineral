@@ -20,6 +20,7 @@ pub(crate) enum StreamAvailability<'a> {
 }
 
 /// Script interception entry shared by playback and download orchestration.
+#[derive(Clone)]
 pub(crate) struct HookGate {
     /// Script runtime sender; absence means unconditional continue.
     sender: Option<ScriptSender>,
@@ -29,6 +30,15 @@ pub(crate) struct HookGate {
 }
 
 impl HookGate {
+    /// Creates a gate around an optional script runtime sender.
+    ///
+    /// # Params:
+    ///   - `sender`: Script runtime sender, or `None` when hooks are unavailable.
+    ///   - `timeout`: Immediate hook timeout.
+    pub(crate) fn new(sender: Option<ScriptSender>, timeout: Duration) -> Self {
+        Self { sender, timeout }
+    }
+
     /// Creates a gate that always continues.
     #[cfg(test)]
     pub(crate) fn disabled() -> Self {
@@ -45,10 +55,7 @@ impl HookGate {
     ///   - `timeout`: Immediate hook timeout.
     #[cfg(test)]
     pub(crate) fn with_sender(sender: ScriptSender, timeout: Duration) -> Self {
-        Self {
-            sender: Some(sender),
-            timeout,
-        }
+        Self::new(Some(sender), timeout)
     }
 
     /// Returns an attached sender when script interception is active.
@@ -81,10 +88,7 @@ impl HookGate {
 impl PlayerCore {
     /// Creates the hook gate configured for this server.
     pub(crate) fn hook_gate(&self) -> HookGate {
-        HookGate {
-            sender: self.script_sender(),
-            timeout: self.hook_timeout(),
-        }
+        HookGate::new(self.script_sender(), self.hook_timeout())
     }
 }
 

@@ -158,6 +158,7 @@ return {
 | `next` / `prev` | `n` / `p` | 下一首 / 上一首(分界见 `daemon.prev_restart_threshold_ms`) |
 | `toggle_fullscreen` | `z` | 进 / 退全屏播放态 |
 | `open_queue` | `<Tab>` | 播放队列浮层(再按关闭) |
+| `open_downloads` | `D` | Downloads 停靠浮层(再按关闭) |
 | `quit` | `q` | 退出确认 |
 | `cycle_lyric` | `t` | 歌词副轨:原文 → 翻译 → 罗马音 |
 | `enter_search` | `/` | 当前列表行内过滤搜索(全屏态屏蔽) |
@@ -629,12 +630,14 @@ LRU,满了自动驱逐;改小不立刻删文件,下次写入时驱逐。可写�
 
 ## download — 下载导出
 
-永久导出,不受缓存容量约束。
+永久导出,不受缓存容量约束。文件按 `<source>/<quality>/<album>/<title>.<ext>` 组织；目标路径已有
+音频文件时直接跳过，不覆盖，也不创建编号副本。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `quality` | `"lossless"` | 下载音质,与播放音质相互独立 |
 | `dir` | `nil`(= `~/Music/mineral`) | 导出目录,绝对路径 |
+| `max_concurrent` | `3` | 同时执行的单曲下载上限,必须至少为 1;每项占一个 Tokio task 和至多一个 blocking writer |
 | `tagging` | `true` | 落盘(下载导出 / 播放缓存)后给音频文件内嵌 metadata tag(标题 / 艺人 / 专辑 / 封面 / 歌词等);后台打标,失败只记日志,不影响下载与播放 |
 | `tagging_workers` | `4` | 打标并发 worker 数(`1` = 串行;也是对源站请求并发的放大系数) |
 

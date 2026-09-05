@@ -1,7 +1,8 @@
 //! Provider-backed download/export draining decoder-ready opened media to permanent storage.
 //!
-//! 这是可复用单元——键位下载单曲 / 歌单批量等场景都调 [`download_song`]:
-//! 导出落 `<music_dir>/<source>/<quality>/<album>/<title>.<ext>`(永久、不受缓存 LRU 驱逐);
+//! 这是可复用 transfer 单元；session lifecycle、并发 admission 与 Stop 由 [`DownloadManager`] 负责。
+//! 导出落 `<music_dir>/<source>/<quality>/<album>/<title>.ext`；目标路径存在即跳过，不覆盖也不分配副本。
+//! 导出永久保留，不受缓存 LRU 驱逐；
 //! 播放解析(见 [`crate::resolve`])直接探测该目录命中,不复制进缓存。provider resolve/open
 //! 产生 decoder-ready encoded media，export 顺序写入 preparation 后的 bytes。
 
@@ -12,12 +13,49 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::{AudioFormat, BitRate, Song};
 use mineral_playback::{OpenOptions, PlaybackRegistry, PlaybackRequest};
-use mineral_protocol::{DownloadProgress, DownloadTarget};
-use parking_lot::Mutex;
+use mineral_protocol::DownloadId;
 use tokio_util::sync::CancellationToken;
 
 use crate::media_cache::library_relpath;
 use crate::player::PlayerCore;
+
+mod manager;
+
+pub(crate) use manager::{DownloadManager, DownloadRuntime};
+
+/// Callback shared by the async opener and blocking writer.
+type TransferReporter = Arc<dyn Fn(TransferUpdate) + Send + Sync>;
+
+/// Identity and cancellation state of one admitted attempt.
+pub(crate) struct DownloadAttempt<'a> {
+    /// Session-local Song download identity.
+    pub(crate) id: &'a DownloadId,
+
+    /// Cooperative cancellation handle.
+    pub(crate) cancellation: &'a CancellationToken,
+}
+
+/// Transfer progress reported back to the lifecycle owner.
+#[derive(Clone, Copy)]
+pub(crate) enum TransferUpdate {
+    /// Opened media is being drained.
+    Downloading {
+        /// Effective quality after hook/provider resolution.
+        quality: BitRate,
+
+        /// Bytes written to the partial.
+        bytes_done: u64,
+
+        /// Provider-declared total bytes, when available.
+        bytes_total: Option<u64>,
+
+        /// Smoothed bytes per second.
+        speed_bps: u64,
+    },
+
+    /// The complete partial is about to be committed.
+    Finalizing,
+}
 
 /// 一首下载的结局(`Err` 另表失败):区分「真正下载」与两类跳过(幂等 / 脚本否决),
 /// 供完成提示分流统计。hook 裁决随结局携带——埋点据此落 downloads.hooked 列,脚本
@@ -42,10 +80,14 @@ pub(crate) enum DownloadOutcome {
     Skipped {
         /// 跳过成因。
         cause: SkipCause,
+
+        /// Quality identity used by the skipped export decision.
+        quality: BitRate,
     },
 }
 
 /// 一次下载跳过的成因(埋点 hooked 列据此分流)。
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum SkipCause {
     /// 目标文件已存在,幂等跳过(hooked=none)。
     AlreadyExists,
@@ -91,7 +133,7 @@ pub(crate) struct DownloadEnv<'a> {
 }
 
 /// Resolves and opens one prepared playback, then drains its encoded bytes to permanent storage.
-/// 该歌该音质已在导出库(文件系统即真相)则跳过,不调用 provider。
+/// 该歌该音质的派生标题路径已存在则跳过，不调用 provider。
 ///
 /// 导出目录本身即播放解析的命中源(见 [`crate::resolve`]),不复制进缓存——复制只会
 /// 徒增双份存储、并让播放走 LRU 副本而非永久文件。
@@ -101,7 +143,8 @@ pub(crate) struct DownloadEnv<'a> {
 ///   - `song`: 要下载的歌
 ///   - `quality`: 下载音质
 ///   - `env`: 下载环境(导出根目录 + 脚本拦截门)
-///   - `progress`: 下载进度共享态(本函数实时写 `bytes_done`/`bytes_total`/`speed_bps`)
+///   - `attempt`: Unique download identity and cancellation handle.
+///   - `reporter`: Lifecycle progress callback.
 ///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
 ///
 /// # Return:
@@ -112,7 +155,8 @@ pub(crate) async fn download_song(
     env: &DownloadEnv<'_>,
     song: &Song,
     quality: BitRate,
-    progress: &Arc<Mutex<DownloadProgress>>,
+    attempt: DownloadAttempt<'_>,
+    reporter: TransferReporter,
     speed_tick: Duration,
 ) -> color_eyre::Result<DownloadOutcome> {
     let DownloadEnv { music_dir, hooks } = *env;
@@ -120,19 +164,20 @@ pub(crate) async fn download_song(
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
         return Ok(DownloadOutcome::Skipped {
             cause: SkipCause::AlreadyExists,
+            quality,
         });
     }
 
     let provider = playback
         .get(song.source())
         .ok_or_else(|| eyre!("no playback provider for {:?}", song.source()))?;
-    let cancellation = CancellationToken::new();
     let mut prepared = provider
         .resolve(
             PlaybackRequest::new(song.id.clone(), quality),
-            cancellation.child_token(),
+            attempt.cancellation.child_token(),
         )
         .await?;
+    ensure_not_cancelled(attempt.cancellation)?;
 
     let mut hooked = mineral_stats::DownloadHook::None;
     match hooks.before_download(song, prepared.direct_media()).await {
@@ -153,61 +198,87 @@ pub(crate) async fn download_song(
             );
             return Ok(DownloadOutcome::Skipped {
                 cause: SkipCause::HookVeto,
+                quality,
             });
         }
     }
     let opened = prepared
         .open(OpenOptions::new(
-            cancellation.child_token(),
+            attempt.cancellation.child_token(),
             /*prefetch_bytes*/ 0,
         ))
         .await?;
+    ensure_not_cancelled(attempt.cancellation)?;
     let quality = opened.info().quality;
     let format = opened.info().format.clone();
     let byte_len = opened.byte_len();
     let (subdir, file_name) = library_relpath(song, quality, format.as_ref());
-    // 路径不含 SongId:相同 source、quality、album 与清洗后 title 的歌曲映射到同一文件;
-    // 已存在的同路径文件会被上面的 probe_export 视为已导出。
     let export = music_dir.join(&subdir).join(&file_name);
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .wrap_err_with(|| format!("创建导出目录失败 {}", parent.display()))?;
     }
-    let part = export.with_extension("part-dl");
+    let part = owned_partial_path(&export, attempt.id);
     let reader = opened.into_reader();
-    let progress_handle = Arc::clone(progress);
+    reporter(TransferUpdate::Downloading {
+        quality,
+        bytes_done: 0,
+        bytes_total: byte_len,
+        speed_bps: 0,
+    });
+    let progress_reporter = Arc::clone(&reporter);
+    let cancellation = attempt.cancellation.clone();
     let part_for_write = part.clone();
-    tokio::task::spawn_blocking(move || {
+    let write_result = tokio::task::spawn_blocking(move || {
         drain_opened(
             reader,
             &part_for_write,
+            quality,
             byte_len,
-            &progress_handle,
+            &cancellation,
+            &progress_reporter,
             speed_tick,
         )
     })
     .await
-    .map_err(|error| eyre!("download writer task: {error}"))??;
-    {
-        // 无 Content-Length 时 total 从未上报,下完以实际字节数补满。
-        let mut p = progress.lock();
-        if p.bytes_total == 0 {
-            p.bytes_total = p.bytes_done;
+    .map_err(|error| eyre!("download writer task: {error}"))?;
+    if let Err(error) = write_result {
+        remove_owned_partial(&part).await;
+        return Err(error);
+    }
+    if let Err(error) = ensure_not_cancelled(attempt.cancellation) {
+        remove_owned_partial(&part).await;
+        return Err(error);
+    }
+    reporter(TransferUpdate::Finalizing);
+    if let Err(error) = ensure_not_cancelled(attempt.cancellation) {
+        remove_owned_partial(&part).await;
+        return Err(error);
+    }
+    match tokio::fs::hard_link(&part, &export).await {
+        Ok(()) => {
+            remove_owned_partial(&part).await;
+            mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
+            Ok(DownloadOutcome::Downloaded {
+                path: export,
+                quality,
+                format,
+                hooked,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            remove_owned_partial(&part).await;
+            Ok(DownloadOutcome::Skipped {
+                cause: SkipCause::AlreadyExists,
+                quality,
+            })
+        }
+        Err(error) => {
+            remove_owned_partial(&part).await;
+            Err(error).wrap_err_with(|| format!("commit download export {}", export.display()))
         }
     }
-
-    // rename 是正式文件对 probe_export 可见的提交点。
-    tokio::fs::rename(&part, &export)
-        .await
-        .wrap_err_with(|| format!("rename 导出失败 {}", export.display()))?;
-    mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
-    Ok(DownloadOutcome::Downloaded {
-        path: export,
-        quality,
-        format,
-        hooked,
-    })
 }
 
 /// 已由 producer 校验完整、等待收编进音频缓存的播放媒体。
@@ -229,8 +300,10 @@ pub(crate) struct CaptureHarvest {
 fn drain_opened(
     mut reader: Box<dyn mineral_playback::MediaReader>,
     part: &Path,
+    quality: BitRate,
     byte_len: Option<u64>,
-    progress: &Arc<Mutex<DownloadProgress>>,
+    cancellation: &CancellationToken,
+    reporter: &TransferReporter,
     speed_tick: Duration,
 ) -> color_eyre::Result<()> {
     use std::io::{Read as _, Write as _};
@@ -243,6 +316,7 @@ fn drain_opened(
     let mut window_start = Instant::now();
     let mut window_bytes = 0u64;
     loop {
+        ensure_not_cancelled(cancellation)?;
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
@@ -252,11 +326,6 @@ fn drain_opened(
             .ok_or_else(|| eyre!("opened reader returned invalid byte count"))?;
         writer.write_all(bytes)?;
         done = done.saturating_add(u64::try_from(read)?);
-        let mut state = progress.lock();
-        state.bytes_done = done;
-        if let Some(total) = byte_len {
-            state.bytes_total = total;
-        }
         let elapsed = window_start.elapsed();
         if elapsed >= speed_tick {
             let elapsed_ms = u64::try_from(elapsed.as_millis())?.max(1);
@@ -265,18 +334,101 @@ fn drain_opened(
                 (old.saturating_mul(3) + instant.saturating_mul(2)) / 5
             });
             ema = Some(smoothed);
-            state.speed_bps = smoothed;
+            reporter(TransferUpdate::Downloading {
+                quality,
+                bytes_done: done,
+                bytes_total: byte_len,
+                speed_bps: smoothed,
+            });
             window_start = Instant::now();
             window_bytes = done;
         }
     }
     writer.flush()?;
+    reporter(TransferUpdate::Downloading {
+        quality,
+        bytes_done: done,
+        bytes_total: byte_len,
+        speed_bps: ema.unwrap_or_default(),
+    });
     if let Some(expected) = byte_len
         && done < expected
     {
         return Err(eyre!("download truncated: {done} / {expected} bytes"));
     }
     Ok(())
+}
+
+/// Fails an attempt after cooperative cancellation was requested.
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> color_eyre::Result<()> {
+    if cancellation.is_cancelled() {
+        Err(eyre!("download stopped"))
+    } else {
+        Ok(())
+    }
+}
+
+/// Builds the partial path owned by this download's sole execution.
+fn owned_partial_path(export: &Path, id: &DownloadId) -> PathBuf {
+    let extension = export
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("media");
+    export.with_extension(format!("{extension}.mineral-{}.part-dl", id.as_str()))
+}
+
+/// Removes one known owned partial, ignoring an already-absent file.
+async fn remove_owned_partial(path: &Path) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            mineral_log::warn!(target: "download", path = %path.display(), error = mineral_log::chain(&error), "failed to remove owned partial");
+        }
+    }
+}
+
+/// Removes crash leftovers before the manager accepts any new work.
+pub(crate) fn cleanup_orphan_partials(root: &Path) {
+    match cleanup_owned_tree(root) {
+        Ok(removed) if removed > 0 => {
+            mineral_log::info!(target: "download", root = %root.display(), removed, "orphan download partials removed");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            mineral_log::warn!(target: "download", root = %root.display(), error = mineral_log::chain(&error), "orphan partial cleanup failed");
+        }
+    }
+}
+
+/// Recursively removes only files matching Mineral's owned partial suffix contract.
+fn cleanup_owned_tree(root: &Path) -> color_eyre::Result<usize> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).wrap_err_with(|| format!("read {}", root.display())),
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry.wrap_err_with(|| format!("read entry under {}", root.display()))?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            removed = removed.saturating_add(cleanup_owned_tree(&path)?);
+        } else if file_type.is_file() && is_owned_partial(&path) {
+            std::fs::remove_file(&path)
+                .wrap_err_with(|| format!("remove orphan partial {}", path.display()))?;
+            removed = removed.saturating_add(1);
+        }
+    }
+    Ok(removed)
+}
+
+/// Whether a file name proves it belongs to the manager's unique partial contract.
+fn is_owned_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.contains(".mineral-") && name.ends_with(".part-dl"))
 }
 
 /// 把一首 producer 已校验完整的 capture 文件收编进缓存。
@@ -350,217 +502,6 @@ pub(crate) async fn harvest_capture(player: &PlayerCore, cap: CaptureHarvest) {
     ));
 }
 
-/// 下载 worker:**单线串行**消费队列,把所有目标聚合进**同一进度会话**(`done`/`total`
-/// 按歌曲数累加,如 2/21 加一个 3 首歌单 → 2/24)。`pending` 归 0(本批是最后一个)即收尾。
-///
-/// # Params:
-///   - `player`: 播放核心
-///   - `rx`: 下载目标接收端
-///   - `pending`: 与 `download()` 共享的未完成批数(归 0 → 会话结束)
-pub(crate) async fn worker(
-    player: PlayerCore,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<DownloadTarget>,
-    pending: Arc<std::sync::atomic::AtomicUsize>,
-) {
-    while let Some(target) = rx.recv().await {
-        process_target(&player, target).await;
-        // 本批处理完。pending 归 0(无后续)→ 会话收尾:出完成提示 + 复位进度。
-        if pending.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-            finalize(&player);
-        }
-    }
-}
-
-/// 处理一个下载目标:解析歌曲(歌单此时才知数 → 累加 `total`),逐首串行下载、累加 `done`/成败。
-///
-/// # Params:
-///   - `player`: 播放核心
-///   - `target`: 下载目标
-async fn process_target(player: &PlayerCore, target: DownloadTarget) {
-    let Some(music_dir) = player.music_dir() else {
-        player.notify().toast(
-            mineral_protocol::ToastKind::Warn,
-            "下载不可用(无音乐导出目录)".to_owned(),
-        );
-        return;
-    };
-    let songs = match collect_songs(player, &target).await {
-        Ok(s) => s,
-        Err(text) => {
-            player
-                .notify()
-                .toast(mineral_protocol::ToastKind::Warn, text);
-            return;
-        }
-    };
-    // 单曲已在 `download()` 入队时计过 total;歌单数现在才知,补加。
-    if matches!(target, DownloadTarget::Playlist(_)) {
-        player.progress_handle().lock().total += songs.len();
-    }
-    let hooks = player.hook_gate();
-    let env = DownloadEnv {
-        music_dir,
-        hooks: &hooks,
-    };
-    for song in &songs {
-        {
-            let mut p = player.progress_handle().lock();
-            p.bytes_done = 0;
-            p.bytes_total = 0;
-            p.speed_bps = 0;
-        }
-        let outcome = download_song(
-            player.playback(),
-            &env,
-            song,
-            player.download_quality(),
-            player.progress_handle(),
-            player.download_speed_tick(),
-        )
-        .await;
-        let mut p = player.progress_handle().lock();
-        p.done += 1;
-        match outcome {
-            Ok(DownloadOutcome::Downloaded {
-                path,
-                quality,
-                format,
-                hooked,
-            }) => {
-                p.last_ok += 1;
-                drop(p);
-                player
-                    .notify()
-                    .download_completed(song, &path, quality, format.as_ref());
-                player
-                    .tagging()
-                    .enqueue(song.clone(), path.clone(), quality);
-                let path_str = path.display().to_string();
-                record_download(
-                    player,
-                    song,
-                    quality.as_str(),
-                    format.as_ref().map(mineral_model::AudioFormat::as_str),
-                    mineral_stats::DownloadOutcome::Downloaded,
-                    hooked,
-                    Some(path_str.as_str()),
-                );
-                p = player.progress_handle().lock();
-            }
-            Ok(DownloadOutcome::Skipped { cause }) => {
-                p.last_skip += 1;
-                drop(p);
-                // 幂等跳过 hooked=none;脚本 veto 记 skip——两类跳过在库里分得开。
-                let hooked = match cause {
-                    super::download::SkipCause::AlreadyExists => mineral_stats::DownloadHook::None,
-                    super::download::SkipCause::HookVeto => mineral_stats::DownloadHook::Skip,
-                };
-                record_download(
-                    player,
-                    song,
-                    player.download_quality().as_str(),
-                    None,
-                    mineral_stats::DownloadOutcome::Skipped,
-                    hooked,
-                    None,
-                );
-            }
-            Err(e) => {
-                drop(p);
-                mineral_log::warn!(target: "download", song_id = song.id.as_str(), error = mineral_log::chain(&e), "下载失败");
-                record_download(
-                    player,
-                    song,
-                    player.download_quality().as_str(),
-                    None,
-                    mineral_stats::DownloadOutcome::Failed,
-                    mineral_stats::DownloadHook::None,
-                    None,
-                );
-                player.progress_handle().lock().last_fail += 1;
-            }
-        }
-    }
-}
-
-/// 记一次下载事件(system 触发;`hooked` 由 [`DownloadOutcome`] / [`SkipCause`] 带出)。
-#[allow(clippy::too_many_arguments)] // downloads 一行的固有列,拆结构体反增噪
-fn record_download(
-    player: &PlayerCore,
-    song: &Song,
-    quality: &str,
-    format: Option<&str>,
-    outcome: mineral_stats::DownloadOutcome,
-    hooked: mineral_stats::DownloadHook,
-    path: Option<&str>,
-) {
-    player
-        .inner
-        .stats
-        .event(mineral_stats::StatsEvent::Behavior {
-            actor: mineral_stats::Actor::System,
-            event: mineral_stats::BehaviorEvent::Download {
-                song: song.id.clone(),
-                quality: quality.to_owned(),
-                format: format.map(str::to_owned),
-                outcome,
-                hooked,
-                path: path.map(str::to_owned),
-            },
-        });
-}
-
-/// 会话收尾:`result_seq` +1(client 据其增长出一次完成提示),复位进度态、`active=false`;
-/// 保留 `last_ok`/`last_fail`/`result_seq` 供 client 读取(下次会话开始时由 `download()` 复位)。
-///
-/// # Params:
-///   - `player`: 播放核心
-fn finalize(player: &PlayerCore) {
-    let mut p = player.progress_handle().lock();
-    p.result_seq = p.result_seq.wrapping_add(1);
-    p.active = false;
-    p.done = 0;
-    p.total = 0;
-    p.bytes_done = 0;
-    p.bytes_total = 0;
-    p.speed_bps = 0;
-    p.queued = 0;
-}
-
-/// 把下载目标解析成待下歌曲列表:单曲直接 1 首;歌单 server 端拉 tracks。
-///
-/// # Params:
-///   - `player`: 播放核心(歌单拉 tracks 用 channel)
-///   - `target`: 下载目标
-///
-/// # Return:
-///   待下歌曲;失败返回 `Err(给用户看的提示文本)`。
-async fn collect_songs(player: &PlayerCore, target: &DownloadTarget) -> Result<Vec<Song>, String> {
-    match target {
-        DownloadTarget::Song(song) => Ok(vec![song.as_ref().clone()]),
-        DownloadTarget::Playlist(id) => {
-            let channel = player
-                .channel_for(id.namespace())
-                .cloned()
-                .ok_or_else(|| "下载失败: 该来源无对应 channel".to_owned())?;
-            channel
-                .playlist_detail(id)
-                .await
-                .map(|playlist| {
-                    playlist
-                        .entries
-                        .into_iter()
-                        .map(|entry| entry.song)
-                        .collect()
-                })
-                .map_err(|e| {
-                    mineral_log::warn!(target: "download", error = mineral_log::chain(&e), "拉歌单曲目失败");
-                    "下载失败: 拉歌单曲目失败".to_owned()
-                })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -568,15 +509,14 @@ mod tests {
     use mineral_model::{AlbumId, AlbumRef, BitRate, Song, SongId, SourceKind};
     use mineral_persist::ServerStore;
     use mineral_playback::{PlaybackProvider, PlaybackRegistry};
-    use mineral_protocol::DownloadProgress;
+    use mineral_protocol::DownloadId;
     use mineral_test::mock::{UrlChannel, serve_once};
-    use parking_lot::Mutex;
+    use tokio_util::sync::CancellationToken;
 
     use std::time::Duration;
 
-    use super::{DownloadOutcome, download_song};
+    use super::{DownloadAttempt, DownloadEnv, DownloadOutcome, download_song};
     use crate::media_cache::MediaCache;
-    use crate::resolve::probe_export;
 
     /// 一首带专辑的测试歌曲。
     fn song() -> Song {
@@ -596,6 +536,30 @@ mod tests {
         PlaybackRegistry::new(vec![provider])
     }
 
+    /// Runs one transfer with an isolated identity and no-op progress reporter.
+    async fn download_for_test(
+        playback: &PlaybackRegistry,
+        env: &DownloadEnv<'_>,
+        song: &Song,
+        quality: BitRate,
+    ) -> color_eyre::Result<DownloadOutcome> {
+        let id = DownloadId::new("test-download".to_owned());
+        let cancellation = CancellationToken::new();
+        download_song(
+            playback,
+            env,
+            song,
+            quality,
+            DownloadAttempt {
+                id: &id,
+                cancellation: &cancellation,
+            },
+            Arc::new(|_update| {}),
+            /*speed_tick*/ Duration::from_millis(150),
+        )
+        .await
+    }
+
     /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache
     /// (否则双份存储,且播放会走 LRU 缓存副本而非永久下载文件)。带 `fill_cache` 时此断言变红。
     // multi_thread:走真实 TCP I/O(serve_once 的 server 任务 + reqwest client),单线程
@@ -610,19 +574,16 @@ mod tests {
 
         let url = serve_once(b"FAKEFLACDATA".to_vec()).await?;
         let playback = playback(UrlChannel { url })?;
-        let progress = Arc::new(Mutex::new(DownloadProgress::default()));
         let s = song();
 
-        let outcome = download_song(
+        let outcome = download_for_test(
             &playback,
-            &super::DownloadEnv {
+            &DownloadEnv {
                 music_dir: &music_dir,
                 hooks: &crate::hook_bridge::HookGate::disabled(),
             },
             &s,
             BitRate::Lossless,
-            &progress,
-            /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
         assert!(
@@ -630,7 +591,7 @@ mod tests {
             "应真正下载"
         );
         assert!(
-            probe_export(&music_dir, &s, BitRate::Lossless).is_some(),
+            crate::resolve::probe_export(&music_dir, &s, BitRate::Lossless).is_some(),
             "永久下载文件应已落盘"
         );
         assert!(
@@ -679,16 +640,14 @@ mod tests {
             end)
             "#,
         )?;
-        let outcome = download_song(
+        let outcome = download_for_test(
             &playback,
-            &super::DownloadEnv {
+            &DownloadEnv {
                 music_dir: &music_dir,
                 hooks: &gate,
             },
             &song(),
             BitRate::Lossless,
-            &Arc::new(Mutex::new(DownloadProgress::default())),
-            /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
         assert!(
@@ -696,7 +655,7 @@ mod tests {
             "hook 跳过应记 Skipped"
         );
         assert!(
-            probe_export(&music_dir, &song(), BitRate::Lossless).is_none(),
+            crate::resolve::probe_export(&music_dir, &song(), BitRate::Lossless).is_none(),
             "跳过不应落盘"
         );
         drop(runtime);
@@ -721,16 +680,14 @@ mod tests {
             end)
             "#
         ))?;
-        let outcome = download_song(
+        let outcome = download_for_test(
             &playback,
-            &super::DownloadEnv {
+            &DownloadEnv {
                 music_dir: &music_dir,
                 hooks: &gate,
             },
             &song(),
             BitRate::Lossless,
-            &Arc::new(Mutex::new(DownloadProgress::default())),
-            /*speed_tick*/ Duration::from_millis(150),
         )
         .await?;
         assert!(
@@ -738,7 +695,7 @@ mod tests {
             "改写到活地址应下载成功"
         );
         assert!(
-            probe_export(&music_dir, &song(), BitRate::Standard).is_some(),
+            crate::resolve::probe_export(&music_dir, &song(), BitRate::Standard).is_some(),
             "导出路径应按改写后的音质(standard)标注"
         );
         drop(runtime);

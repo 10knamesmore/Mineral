@@ -553,7 +553,9 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     .cloned()
             });
             match song {
-                Some(song) => player.download(DownloadTarget::Song(Box::new(song))),
+                Some(song) => {
+                    player.download(DownloadTarget::Song(Box::new(song)));
+                }
                 None => mineral_log::warn!(
                     target: "script",
                     song_id = id.qualified(),

@@ -59,10 +59,12 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::ToggleLove(..) => Recorded("love_changes"),
         Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询，事实来自 stats.db"),
         Request::Download(..) => Recorded("downloads"),
+        Request::DownloadSummary => NotAnEvent("轮询读:下载汇总"),
+        Request::DownloadSnapshot => NotAnEvent("按需读:下载明细"),
+        Request::StopDownload(..) => NotAnEvent("session control:只写 structured log"),
         // 回填复用 tagging 队列,不记录独立行为事件;单曲成败只写日志。
         Request::TagBackfill => NotAnEvent("维护操作:存量文件回填打标"),
         Request::TagProgress => NotAnEvent("轮询读:打标进度"),
-        Request::DownloadProgress => NotAnEvent("轮询读:下载进度"),
         Request::InvokeAction { .. } => Recorded("action_invocations"),
         Request::RenderCopyTemplate { .. } => Recorded("copy_renders"),
         Request::StoreGet { .. } => NotAnEvent("读:per-song KV 读"),

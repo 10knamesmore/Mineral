@@ -22,9 +22,9 @@ use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    ClientInfo, DownloadProgress, DownloadTarget, Event, Frame, Framed, PlayQueueError, PlayerSync,
-    PlayerVersions, QueueContextWire, Request, RequestId, Response, Subscription, client_handshake,
-    decode, encode, framed,
+    ClientInfo, DownloadId, DownloadSummary, DownloadTarget, Event, Frame, Framed, PlayQueueError,
+    PlayerSync, PlayerVersions, QueueContextWire, Request, RequestId, Response, SongDownloadView,
+    Subscription, client_handshake, decode, encode, framed,
 };
 use mineral_server::Client;
 use mineral_task::{Priority, Snapshot, TaskEvent, TaskKind};
@@ -489,7 +489,10 @@ impl Client for RemoteClient {
     }
 
     fn download(&self, target: DownloadTarget) {
-        let _ = self.send_recv(Request::Download(target));
+        match self.send_recv(Request::Download(target)) {
+            Response::Ok => {}
+            other => warn_unexpected("download", &other),
+        }
     }
 
     fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
@@ -501,13 +504,31 @@ impl Client for RemoteClient {
         });
     }
 
-    fn download_progress(&self) -> DownloadProgress {
-        match self.send_recv(Request::DownloadProgress) {
-            Response::DownloadProgress(p) => p,
+    fn download_summary(&self) -> DownloadSummary {
+        match self.send_recv(Request::DownloadSummary) {
+            Response::DownloadSummary(summary) => summary,
             other => {
-                warn_unexpected("download_progress", &other);
-                DownloadProgress::default()
+                warn_unexpected("download_summary", &other);
+                DownloadSummary::default()
             }
+        }
+    }
+
+    fn download_snapshot(&self) -> Vec<SongDownloadView> {
+        match self.send_recv(Request::DownloadSnapshot) {
+            Response::DownloadSnapshot(snapshot) => snapshot,
+            other => {
+                warn_unexpected("download_snapshot", &other);
+                Vec::new()
+            }
+        }
+    }
+
+    fn stop_download(&self, id: DownloadId) -> color_eyre::Result<()> {
+        match self.send_recv(Request::StopDownload(id)) {
+            Response::Ok => Ok(()),
+            Response::Error(message) => color_eyre::eyre::bail!("{message}"),
+            other => color_eyre::eyre::bail!("unexpected StopDownload response: {other:?}"),
         }
     }
 

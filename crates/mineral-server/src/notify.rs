@@ -12,6 +12,7 @@ use crate::player::PlayerCore;
 
 /// 双路事件出口。wire 路无订阅者 send 失败即丢(advisory);脚本路未启用
 /// (无用户脚本)为 `None`,fire-and-forget。
+#[derive(Clone)]
 pub(crate) struct Notifier {
     /// wire 路:event hub 发送端,serve 层按握手订阅集过滤下发。
     events: broadcast::Sender<Event>,
@@ -28,6 +29,11 @@ impl Notifier {
     ///   - `script`: 脚本投递句柄(无用户脚本传 `None`)
     pub(crate) fn new(events: broadcast::Sender<Event>, script: Option<ScriptSender>) -> Self {
         Self { events, script }
+    }
+
+    /// Returns the attached script sender for constructing side-system hook gates.
+    pub(crate) fn script_sender(&self) -> Option<ScriptSender> {
+        self.script.clone()
     }
 
     /// 在播曲目变更:仅脚本路(wire 侧 client 经 `PlayerSync` / 属性订阅
