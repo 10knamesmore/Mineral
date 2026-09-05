@@ -1,4 +1,47 @@
 # Changelog
+## [0.5.6] — 2026-09-05
+
+### Breaking Changes
+
+- Unify stores on SeaORM and Rust migrations ([`1760558`](https://github.com/10knamesmore/Mineral/commit/17605584b92733b3eba8c86c00fad16b735e04f2))
+
+### Features
+
+- 包络完成时, 有一个sweep动画 ([`d3e7c39`](https://github.com/10knamesmore/Mineral/commit/d3e7c394fd54d3d5772e94f3b81d9278bc74ed7c))
+
+- Preserve song collection order ([`d903aaf`](https://github.com/10knamesmore/Mineral/commit/d903aaf430835cbf792990dcd3f9162d8005bc19))
+
+- Show local completed play counts ([`3a788fc`](https://github.com/10knamesmore/Mineral/commit/3a788fcee40235424e20fd72f4d8f305d5a41b97))
+
+- 落盘歌曲内嵌 metadata tag + mineral tag --all 回填 ([`99156c5`](https://github.com/10knamesmore/Mineral/commit/99156c56daf8a27b1ddef9d8db18668c4d410123))
+
+- Make transport volume responsive ([`5635626`](https://github.com/10knamesmore/Mineral/commit/5635626fb263b0de547732994e99b621174bb9e0))
+
+- Stream layer phase 3 media preparation boundary ([`f4657b9`](https://github.com/10knamesmore/Mineral/commit/f4657b967babcfb38bb0ba387b1127feed930c01))
+
+- Add prefetched cover previews ([`b73fa00`](https://github.com/10knamesmore/Mineral/commit/b73fa00055544c2cee4994a5f201b5b8bccd2ed8))
+
+- Add concurrent downloads and status overlay ([`8784f7a`](https://github.com/10knamesmore/Mineral/commit/8784f7ad5a80c654cd98cebc571ac285eed258c8))
+
+### Bug Fixes
+
+- Recover stalled output stream ([`b87853c`](https://github.com/10knamesmore/Mineral/commit/b87853ce3501b808b0b7577b87de34fd61d637bd))
+
+- Stop version-mismatched daemon ([`9a45e5c`](https://github.com/10knamesmore/Mineral/commit/9a45e5cf98caae7c55ab45dd0b3f73e805a0b6f1))
+
+- 405 映射 RateLimited,album.description 容忍 null ([`ce2d329`](https://github.com/10knamesmore/Mineral/commit/ce2d329b15f44966e6f06b738469187c52cb35bd))
+
+- 补齐 prefetches 改写/失败发射点,删除死变体 RepeatOne ([`a4deeec`](https://github.com/10knamesmore/Mineral/commit/a4deeecc70eaaf8995072c6cc8a65609fce93817))
+
+- Harvest capture on producer completion ([`dac7521`](https://github.com/10knamesmore/Mineral/commit/dac7521a7c87b6b8ed4aa4aec02524198419142f))
+
+- Route search downloads to selected song ([`5c6d727`](https://github.com/10knamesmore/Mineral/commit/5c6d72783d4a4d2060e877cacf14b3a182919e61))
+
+- Stabilize large covers under cache pressure ([`ec12c68`](https://github.com/10knamesmore/Mineral/commit/ec12c687dbaf37a273921feb60ade9b9f78d98c1))
+
+### Performance
+
+- Cache filtered tracks and render only visible rows ([`3fa7e0f`](https://github.com/10knamesmore/Mineral/commit/3fa7e0f0a032d9e99b6161d802f114b272363ced))
 ## [0.5.5] — 2026-07-23
 
 ### Features
