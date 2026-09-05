@@ -5,9 +5,11 @@
 //! 职责,查询侧对时间窗做跨源聚合。库内无 JSON:每类事件一张强 schema 专表。
 
 mod context;
+mod entity;
 mod event;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+mod migration;
 mod params;
 mod play;
 mod report;

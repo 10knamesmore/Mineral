@@ -2,12 +2,17 @@
 
 use std::ops::Range;
 
+use super::shared::plays_in;
+use crate::entity::{plays, sessions};
 use color_eyre::eyre::WrapErr as _;
+use sea_orm::sea_query::{self, Expr, ExprTrait, Func, Iden, Order, Query, WindowStatement};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait};
 
 use crate::report::Endurance;
 use crate::store::StatsStore;
 
 /// `endurance` 单行;avg/longest 未结束会话为 NULL,故经中转 unwrap_or。
+#[derive(sea_orm::FromQueryResult)]
 struct EnduranceRow {
     /// 会话数。
     sessions: i64,
@@ -31,7 +36,7 @@ impl StatsStore {
     /// # Return:
     ///   续航聚合;无数据各项为 0
     pub async fn endurance(&self, range: Range<i64>) -> color_eyre::Result<Endurance> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Endurance {
                 sessions: 0,
                 avg_ms: 0,
@@ -39,42 +44,100 @@ impl StatsStore {
                 streak_days: 0,
             });
         };
-        let row = sqlx::query_as!(
-            EnduranceRow,
-            r#"SELECT COUNT(*) AS "sessions!: i64",
-                      CAST(AVG(ended_at - started_at) AS INTEGER) AS "avg_ms?: i64",
-                      MAX(ended_at - started_at) AS "longest_ms?: i64"
-               FROM sessions WHERE started_at >= ? AND started_at < ?"#,
-            range.start,
-            range.end
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("endurance 查询失败")?;
-        // 最长连续听歌天数:UTC 日去重后,`day − ROW_NUMBER()` 同值即连续段,取最大段长。
-        let streak_days = sqlx::query_scalar!(
-            r#"SELECT COALESCE(MAX(run_len), 0) AS "streak!: i64" FROM (
-                 SELECT COUNT(*) AS run_len FROM (
-                   SELECT day - ROW_NUMBER() OVER (ORDER BY day) AS grp FROM (
-                     SELECT DISTINCT started_at / 1000 / 86400 AS day
-                     FROM plays WHERE started_at >= ? AND started_at < ?
-                   )
-                 ) GROUP BY grp
-               )"#,
-            range.start,
-            range.end
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("endurance streak 查询失败")?;
+        let duration = Expr::col((sessions::Entity, sessions::Column::EndedAt))
+            .sub(Expr::col((sessions::Entity, sessions::Column::StartedAt)));
+        let row = sessions::Entity::find()
+            .select_only()
+            .column_as(sessions::Column::Id.count(), EnduranceColumn::Sessions)
+            .column_as(
+                duration.clone().avg().cast_as(Integer),
+                EnduranceColumn::AvgMs,
+            )
+            .column_as(duration.max(), EnduranceColumn::LongestMs)
+            .filter(sessions::Column::StartedAt.gte(range.start))
+            .filter(sessions::Column::StartedAt.lt(range.end))
+            .into_model::<EnduranceRow>()
+            .one(db)
+            .await
+            .wrap_err("endurance 查询失败")?
+            .ok_or_else(|| color_eyre::eyre::eyre!("endurance 聚合未返回行"))?;
+        let days = plays_in(range)
+            .select_only()
+            .column_as(
+                Expr::col((plays::Entity, plays::Column::StartedAt))
+                    .div(1000)
+                    .div(86400),
+                EnduranceColumn::Day,
+            )
+            .distinct()
+            .into_query();
+        let ranked = Query::select()
+            .column(EnduranceColumn::Day)
+            .expr_window_as(
+                Func::cust(RowNumber),
+                WindowStatement::new()
+                    .order_by(EnduranceColumn::Day, Order::Asc)
+                    .to_owned(),
+                EnduranceColumn::Rank,
+            )
+            .from_subquery(days, EnduranceColumn::Days)
+            .to_owned();
+        let runs = Query::select()
+            .expr_as(
+                Expr::col(sea_orm::sea_query::Asterisk).count(),
+                EnduranceColumn::RunLen,
+            )
+            .from_subquery(ranked, EnduranceColumn::Ranked)
+            .add_group_by([Expr::col(EnduranceColumn::Day).sub(Expr::col(EnduranceColumn::Rank))])
+            .to_owned();
+        let longest = Query::select()
+            .expr(Expr::col(EnduranceColumn::RunLen).max().if_null(0))
+            .from_subquery(runs, EnduranceColumn::Runs)
+            .to_owned();
+        let result = db
+            .query_one(&longest)
+            .await
+            .wrap_err("endurance streak 查询失败")?
+            .ok_or_else(|| color_eyre::eyre::eyre!("endurance streak 聚合未返回行"))?;
         Ok(Endurance {
             sessions: row.sessions,
             avg_ms: row.avg_ms.unwrap_or(0),
             longest_ms: row.longest_ms.unwrap_or(0),
-            streak_days,
+            streak_days: result.try_get_by_index(/*index*/ 0)?,
         })
     }
 }
+
+/// 会话汇总和连续日期查询使用的列与中间结果名称。
+#[derive(Clone, Copy, Debug, sea_orm::DeriveColumn)]
+enum EnduranceColumn {
+    /// 会话数量。
+    Sessions,
+    /// 平均会话时长。
+    AvgMs,
+    /// 最长会话时长。
+    LongestMs,
+    /// UTC 日期序号。
+    Day,
+    /// 日期的连续排名。
+    Rank,
+    /// 连续段长度。
+    RunLen,
+    /// 去重后的日期集合。
+    Days,
+    /// 已排名的日期集合。
+    Ranked,
+    /// 连续日期段集合。
+    Runs,
+}
+
+/// SQLite 的窗口排名函数。
+#[derive(Iden)]
+struct RowNumber;
+
+/// SQLite 的整数转换类型。
+#[derive(Iden)]
+struct Integer;
 
 #[cfg(test)]
 mod tests {

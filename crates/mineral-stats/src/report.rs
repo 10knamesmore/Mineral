@@ -61,7 +61,7 @@ pub enum BucketBy {
 }
 
 /// 总量汇总。
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, sea_orm::FromQueryResult)]
 pub struct Totals {
     /// 收听 ms 总和。
     pub listen_ms: i64,
@@ -131,7 +131,7 @@ pub struct TopArtist {
 }
 
 /// 时段分桶一项。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, sea_orm::FromQueryResult)]
 pub struct Bucket {
     /// 桶键(Hour 0-23 / Weekday 0-6 / Month 1-12)。
     pub key: i64,
@@ -179,7 +179,7 @@ pub struct Distributions {
 }
 
 /// 一个队列语境的播放聚合(top contexts:最常从哪听)。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, sea_orm::FromQueryResult)]
 pub struct ContextSlice {
     /// 语境类型(search / playlist / album / artist / manual / unknown)。
     pub kind: String,
@@ -209,7 +209,7 @@ pub struct EventCount {
 
 /// 一个「标签 → 计数」分桶项(event_summary 的各维分桶通用:outcome / decision / event /
 /// 搜索词 / 动作名 / fetch_kind 等)。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, sea_orm::FromQueryResult)]
 pub struct Tally {
     /// 分桶标签。
     pub label: String,
@@ -317,7 +317,7 @@ pub struct StatusReport {
 }
 
 /// `QuerySongStats` 使用的单曲全量汇总。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, sea_orm::FromQueryResult)]
 pub struct SongSummary {
     /// 已结算播放记录数；包含 eof / skip / stop / error。
     pub plays: i64,

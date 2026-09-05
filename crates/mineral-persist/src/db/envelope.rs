@@ -3,9 +3,12 @@
 //! 包络与音质无关(振幅形状跨码率基本一致),按 `(namespace, song_value)` 每曲一行;
 //! 读取按算法版本过滤,版本不符视同缺失,由产出方重算覆盖,不让旧算法数据毒化渲染。
 
+use crate::entity::song_envelope;
 use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
 use mineral_model::{Envelope, SongId};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use crate::db::namespace::NamespaceStore;
 
@@ -19,22 +22,30 @@ impl NamespaceStore {
     /// # Return:
     ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
     pub async fn put_envelope(&self, id: &SongId, envelope: &Envelope) -> color_eyre::Result<()> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
-        trace!(target: "persist", song = %id.value(), version = envelope.version, "put_envelope");
-        sqlx::query(
-            "INSERT INTO song_envelope(namespace,song_value,version,points,updated_at) \
-             VALUES(?,?,?,?,?) \
-             ON CONFLICT(namespace,song_value) DO UPDATE SET \
-               version=excluded.version, points=excluded.points, updated_at=excluded.updated_at",
+        trace!(target: "persist", song = id.value(), version = envelope.version, "put_envelope");
+        song_envelope::Entity::insert(song_envelope::ActiveModel {
+            namespace: Set(self.namespace().to_owned()),
+            song_value: Set(id.value().to_owned()),
+            version: Set(i64::from(envelope.version)),
+            points: Set(envelope.points.clone()),
+            updated_at: Set(crate::db::time::now_ms()),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                song_envelope::Column::Namespace,
+                song_envelope::Column::SongValue,
+            ])
+            .update_columns([
+                song_envelope::Column::Version,
+                song_envelope::Column::Points,
+                song_envelope::Column::UpdatedAt,
+            ])
+            .to_owned(),
         )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(i64::from(envelope.version))
-        .bind(envelope.points.as_slice())
-        .bind(crate::db::time::now_ms())
-        .execute(pool)
+        .exec_without_returning(db)
         .await
         .wrap_err_with(|| format!("写包络失败 song={}", id.value()))?;
         Ok(())
@@ -54,19 +65,19 @@ impl NamespaceStore {
         id: &SongId,
         version: u16,
     ) -> color_eyre::Result<Option<Envelope>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(None);
         };
-        let row: Option<(Vec<u8>,)> = sqlx::query_as(
-            "SELECT points FROM song_envelope WHERE namespace=? AND song_value=? AND version=?",
-        )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(i64::from(version))
-        .fetch_optional(pool)
-        .await
-        .wrap_err_with(|| format!("读包络失败 song={}", id.value()))?;
-        Ok(row.map(|(points,)| Envelope { points, version }))
+        let row =
+            song_envelope::Entity::find_by_id((self.namespace().to_owned(), id.value().to_owned()))
+                .filter(song_envelope::Column::Version.eq(i64::from(version)))
+                .one(db)
+                .await
+                .wrap_err_with(|| format!("读包络失败 song={}", id.value()))?;
+        Ok(row.map(|row| Envelope {
+            points: row.points,
+            version,
+        }))
     }
 }
 

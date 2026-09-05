@@ -2,8 +2,11 @@
 
 use std::path::PathBuf;
 
+use crate::DownloadOutcome;
+use crate::entity::downloads;
 use color_eyre::eyre::WrapErr;
 use mineral_model::{BitRate, SongId, SourceKind};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::store::StatsStore;
 
@@ -20,13 +23,12 @@ impl StatsStore {
         let Some(pool) = self.pool() else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query!(
-            "SELECT ns, song_value, quality, path FROM downloads \
-             WHERE outcome = 'downloaded' AND path IS NOT NULL"
-        )
-        .fetch_all(pool)
-        .await
-        .wrap_err("successful_downloads 查询失败")?;
+        let rows = downloads::Entity::find()
+            .filter(downloads::Column::Outcome.eq(DownloadOutcome::Downloaded))
+            .filter(downloads::Column::Path.is_not_null())
+            .all(pool)
+            .await
+            .wrap_err("successful_downloads 查询失败")?;
         Ok(rows
             .into_iter()
             .filter_map(|r| {

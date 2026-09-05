@@ -1,7 +1,7 @@
-//! stats.db 存储层:句柄([`handle`])+ 事实写入([`write`])+ 事件写入([`event`])+
-//! 维表维护([`songs`])+ 裁剪([`prune`])+ 聚合查询([`query`])+ 事件盘点([`summary`])。
+//! 播放事实、事件和歌曲维度的持久化及聚合查询。
 
 mod event;
+mod event_table;
 mod handle;
 mod prune;
 mod query;

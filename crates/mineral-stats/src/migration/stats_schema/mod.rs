@@ -1,0 +1,34 @@
+//! 初始版本的表结构与约束快照。
+
+pub(super) mod action_invocations;
+pub(super) mod app_lifecycle;
+pub(super) mod bus_messages;
+pub(super) mod cache_evictions;
+pub(super) mod cache_harvests;
+pub(super) mod client_connections;
+pub(super) mod config_overrides;
+pub(super) mod config_reloads;
+pub(super) mod connection_rejects;
+pub(super) mod copy_renders;
+pub(super) mod downloads;
+pub(super) mod fetches;
+pub(super) mod fullscreen_changes;
+pub(super) mod gapless_boundaries;
+pub(super) mod hook_fires;
+pub(super) mod love_changes;
+pub(super) mod mode_changes;
+pub(super) mod pauses;
+pub(super) mod playlist_ops;
+pub(super) mod plays;
+pub(super) mod prefetches;
+pub(super) mod queue_ops;
+pub(super) mod script_lifecycle;
+pub(super) mod searches;
+pub(super) mod seeks;
+pub(super) mod sessions;
+pub(super) mod song_artists;
+pub(super) mod songs;
+pub(super) mod spawns;
+pub(super) mod store_writes;
+pub(super) mod stream_resolutions;
+pub(super) mod volume_changes;

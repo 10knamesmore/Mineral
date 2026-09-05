@@ -1,8 +1,8 @@
-//! 行为域事件的落库:每张表一条编译期校验的 `query!`。
+//! 行为域事件到持久化实体的具名字段映射。
 
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
-use sqlx::SqlitePool;
+use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::event::BehaviorEvent;
 use crate::vocab::Actor;
@@ -15,7 +15,7 @@ use crate::{
 /// 行为域每张表都有的公共写入列 + live 连接句柄。
 struct BehaviorWrite<'a> {
     /// live 连接池。
-    pool: &'a SqlitePool,
+    pool: &'a DatabaseConnection,
 
     /// 事件时刻 epoch ms。
     ts: i64,
@@ -29,7 +29,7 @@ struct BehaviorWrite<'a> {
 
 /// 按变体把一条行为域事件落到对应表。公共列(ts / session_id / actor)在此汇入。
 pub(super) async fn write(
-    pool: &SqlitePool,
+    pool: &DatabaseConnection,
     ts: i64,
     session_id: Option<i64>,
     actor: Actor,
@@ -233,21 +233,20 @@ async fn write_search(
     result_count: Option<i64>,
     outcome: SearchOutcome,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO searches (ts, session_id, actor, query, query_hash, kind, source, page, result_count, outcome) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        term.raw,
-        term.hash,
-        kind as _,
-        source,
-        page,
-        result_count,
-        outcome as _,
-    )
-    .execute(w.pool)
+    crate::entity::searches::Entity::insert(crate::entity::searches::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        query: Set(term.raw.map(str::to_owned)),
+        query_hash: Set(term.hash.to_owned()),
+        kind: Set(kind),
+        source: Set(source.to_owned()),
+        page: Set(page),
+        result_count: Set(result_count),
+        outcome: Set(outcome),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event searches 落库失败")?;
     Ok(())
@@ -262,18 +261,17 @@ async fn write_seek(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO seeks (ts, session_id, actor, ns, song_value, from_ms, to_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        ns,
-        song_value,
-        from_ms,
-        to_ms,
-    )
-    .execute(w.pool)
+    crate::entity::seeks::Entity::insert(crate::entity::seeks::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        from_ms: Set(from_ms),
+        to_ms: Set(to_ms),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event seeks 落库失败")?;
     Ok(())
@@ -288,18 +286,17 @@ async fn write_pause(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO pauses (ts, session_id, actor, ns, song_value, at_ms, action) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        ns,
-        song_value,
-        at_ms,
-        action as _,
-    )
-    .execute(w.pool)
+    crate::entity::pauses::Entity::insert(crate::entity::pauses::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        at_ms: Set(at_ms),
+        action: Set(action),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event pauses 落库失败")?;
     Ok(())
@@ -311,15 +308,15 @@ async fn write_volume_change(
     from_pct: i64,
     to_pct: i64,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO volume_changes (ts, session_id, actor, from_pct, to_pct) VALUES (?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        from_pct,
-        to_pct,
-    )
-    .execute(w.pool)
+    crate::entity::volume_changes::Entity::insert(crate::entity::volume_changes::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        from_pct: Set(from_pct),
+        to_pct: Set(to_pct),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event volume_changes 落库失败")?;
     Ok(())
@@ -331,15 +328,15 @@ async fn write_mode_change(
     from_mode: crate::PlayMode,
     to_mode: crate::PlayMode,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO mode_changes (ts, session_id, actor, from_mode, to_mode) VALUES (?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        from_mode as _,
-        to_mode as _,
-    )
-    .execute(w.pool)
+    crate::entity::mode_changes::Entity::insert(crate::entity::mode_changes::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        from_mode: Set(from_mode),
+        to_mode: Set(to_mode),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event mode_changes 落库失败")?;
     Ok(())
@@ -356,19 +353,18 @@ async fn write_love_change(
     let ns = song.namespace().name();
     let song_value = song.value();
     let loved = i64::from(loved);
-    sqlx::query!(
-        "INSERT INTO love_changes (ts, session_id, actor, ns, song_value, loved, origin, remote_mirror) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        ns,
-        song_value,
-        loved,
-        origin as _,
-        remote_mirror as _,
-    )
-    .execute(w.pool)
+    crate::entity::love_changes::Entity::insert(crate::entity::love_changes::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        loved: Set(loved),
+        origin: Set(origin),
+        remote_mirror: Set(remote_mirror),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event love_changes 落库失败")?;
     Ok(())
@@ -382,18 +378,17 @@ async fn write_queue_op(
     count: i64,
 ) -> color_eyre::Result<()> {
     let (ns, song_value) = split_song(song);
-    sqlx::query!(
-        "INSERT INTO queue_ops (ts, session_id, actor, op, ns, song_value, count) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        op as _,
-        ns,
-        song_value,
-        count,
-    )
-    .execute(w.pool)
+    crate::entity::queue_ops::Entity::insert(crate::entity::queue_ops::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        op: Set(op),
+        ns: Set(ns.map(str::to_owned)),
+        song_value: Set(song_value.map(str::to_owned)),
+        count: Set(count),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event queue_ops 落库失败")?;
     Ok(())
@@ -411,21 +406,20 @@ async fn write_playlist_op(
 ) -> color_eyre::Result<()> {
     let (ns, song_value) = split_song(song);
     let playlist_ref = playlist_ref.to_column();
-    sqlx::query!(
-        "INSERT INTO playlist_ops (ts, session_id, actor, op, playlist_ref, ns, song_value, song_count, outcome, error_kind) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        op as _,
-        playlist_ref,
-        ns,
-        song_value,
-        song_count,
-        outcome as _,
-        error_kind as _,
-    )
-    .execute(w.pool)
+    crate::entity::playlist_ops::Entity::insert(crate::entity::playlist_ops::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        op: Set(op),
+        playlist_ref: Set(playlist_ref),
+        ns: Set(ns.map(str::to_owned)),
+        song_value: Set(song_value.map(str::to_owned)),
+        song_count: Set(song_count),
+        outcome: Set(outcome),
+        error_kind: Set(error_kind),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event playlist_ops 落库失败")?;
     Ok(())
@@ -441,20 +435,19 @@ async fn write_fetch(
     outcome: FetchOutcome,
     latency_ms: i64,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO fetches (ts, session_id, actor, fetch_kind, source, target_ref, trigger, outcome, latency_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        fetch_kind as _,
-        source,
-        target_ref,
-        trigger as _,
-        outcome as _,
-        latency_ms,
-    )
-    .execute(w.pool)
+    crate::entity::fetches::Entity::insert(crate::entity::fetches::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        fetch_kind: Set(fetch_kind),
+        source: Set(source.to_owned()),
+        target_ref: Set(target_ref.map(str::to_owned)),
+        trigger: Set(trigger),
+        outcome: Set(outcome),
+        latency_ms: Set(latency_ms),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event fetches 落库失败")?;
     Ok(())
@@ -472,21 +465,20 @@ async fn write_download(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO downloads (ts, session_id, actor, ns, song_value, quality, format, outcome, hooked, path) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        ns,
-        song_value,
-        quality,
-        format,
-        outcome as _,
-        hooked as _,
-        path,
-    )
-    .execute(w.pool)
+    crate::entity::downloads::Entity::insert(crate::entity::downloads::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        quality: Set(quality.to_owned()),
+        format: Set(format.map(str::to_owned)),
+        outcome: Set(outcome),
+        hooked: Set(hooked),
+        path: Set(path.map(str::to_owned)),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event downloads 落库失败")?;
     Ok(())
@@ -500,18 +492,17 @@ async fn write_copy_render(
     target_ref: Option<&str>,
     outcome: OpOutcome,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO copy_renders (ts, session_id, actor, template_index, ctx_kind, target_ref, outcome) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        template_index,
-        ctx_kind as _,
-        target_ref,
-        outcome as _,
-    )
-    .execute(w.pool)
+    crate::entity::copy_renders::Entity::insert(crate::entity::copy_renders::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        template_index: Set(template_index),
+        ctx_kind: Set(ctx_kind),
+        target_ref: Set(target_ref.map(str::to_owned)),
+        outcome: Set(outcome),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event copy_renders 落库失败")?;
     Ok(())
@@ -524,17 +515,18 @@ async fn write_action_invocation(
     trigger: ActionTrigger,
     outcome: OpOutcome,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO action_invocations (ts, session_id, actor, name, trigger, outcome) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        name,
-        trigger as _,
-        outcome as _,
+    crate::entity::action_invocations::Entity::insert(
+        crate::entity::action_invocations::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            actor: Set(w.actor),
+            name: Set(name.to_owned()),
+            trigger: Set(trigger),
+            outcome: Set(outcome),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event action_invocations 落库失败")?;
     Ok(())
@@ -542,14 +534,14 @@ async fn write_action_invocation(
 
 /// 落 config_overrides 一行。
 async fn write_config_override(w: &BehaviorWrite<'_>, path: &str) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO config_overrides (ts, session_id, actor, path) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        path,
-    )
-    .execute(w.pool)
+    crate::entity::config_overrides::Entity::insert(crate::entity::config_overrides::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        path: Set(path.to_owned()),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event config_overrides 落库失败")?;
     Ok(())
@@ -564,18 +556,17 @@ async fn write_store_write(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO store_writes (ts, session_id, actor, ns, song_value, key, op) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        ns,
-        song_value,
-        key,
-        op as _,
-    )
-    .execute(w.pool)
+    crate::entity::store_writes::Entity::insert(crate::entity::store_writes::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        key: Set(key.to_owned()),
+        op: Set(op),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event store_writes 落库失败")?;
     Ok(())
@@ -588,17 +579,16 @@ async fn write_spawn(
     outcome: SpawnOutcome,
     exit_code: Option<i64>,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO spawns (ts, session_id, actor, program, outcome, exit_code) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        program,
-        outcome as _,
-        exit_code,
-    )
-    .execute(w.pool)
+    crate::entity::spawns::Entity::insert(crate::entity::spawns::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        program: Set(program.to_owned()),
+        outcome: Set(outcome),
+        exit_code: Set(exit_code),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event spawns 落库失败")?;
     Ok(())
@@ -606,14 +596,14 @@ async fn write_spawn(
 
 /// 落 bus_messages 一行。
 async fn write_bus_message(w: &BehaviorWrite<'_>, name: &str) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO bus_messages (ts, session_id, actor, name) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        name,
-    )
-    .execute(w.pool)
+    crate::entity::bus_messages::Entity::insert(crate::entity::bus_messages::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        name: Set(name.to_owned()),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event bus_messages 落库失败")?;
     Ok(())
@@ -625,14 +615,16 @@ async fn write_fullscreen_change(
     fullscreen: bool,
 ) -> color_eyre::Result<()> {
     let fullscreen = i64::from(fullscreen);
-    sqlx::query!(
-        "INSERT INTO fullscreen_changes (ts, session_id, actor, fullscreen) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        fullscreen,
+    crate::entity::fullscreen_changes::Entity::insert(
+        crate::entity::fullscreen_changes::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            actor: Set(w.actor),
+            fullscreen: Set(fullscreen),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event fullscreen_changes 落库失败")?;
     Ok(())
@@ -643,14 +635,16 @@ async fn write_connection_reject(
     w: &BehaviorWrite<'_>,
     reason: RejectReason,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO connection_rejects (ts, session_id, actor, reason) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        reason as _,
+    crate::entity::connection_rejects::Entity::insert(
+        crate::entity::connection_rejects::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            actor: Set(w.actor),
+            reason: Set(reason),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event connection_rejects 落库失败")?;
     Ok(())
@@ -663,17 +657,18 @@ async fn write_client_connection(
     duration_ms: i64,
     concurrent: i64,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO client_connections (ts, session_id, actor, client, duration_ms, concurrent) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        client,
-        duration_ms,
-        concurrent,
+    crate::entity::client_connections::Entity::insert(
+        crate::entity::client_connections::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            actor: Set(w.actor),
+            client: Set(client.to_owned()),
+            duration_ms: Set(duration_ms),
+            concurrent: Set(concurrent),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event client_connections 落库失败")?;
     Ok(())
@@ -689,19 +684,18 @@ async fn write_app_lifecycle(
     client_version: Option<&str>,
 ) -> color_eyre::Result<()> {
     let session_restored = session_restored.map(i64::from);
-    sqlx::query!(
-        "INSERT INTO app_lifecycle (ts, session_id, actor, who, phase, audio_backend, session_restored, client_version) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        w.actor as _,
-        who as _,
-        phase as _,
-        audio_backend as _,
-        session_restored,
-        client_version,
-    )
-    .execute(w.pool)
+    crate::entity::app_lifecycle::Entity::insert(crate::entity::app_lifecycle::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        actor: Set(w.actor),
+        who: Set(who),
+        phase: Set(phase),
+        audio_backend: Set(audio_backend),
+        session_restored: Set(session_restored),
+        client_version: Set(client_version.map(str::to_owned)),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event app_lifecycle 落库失败")?;
     Ok(())
@@ -716,7 +710,7 @@ mod tests {
     use crate::store::StatsStore;
     use crate::vocab::Actor;
     use mineral_model::{SongId, SourceKind};
-    use sqlx::SqlitePool;
+    use sea_orm::{DatabaseConnection, EntityTrait, QuerySelect};
 
     /// 建落盘临时库并开一个会话,返回目录守卫、句柄与会话 id。
     async fn open_temp() -> color_eyre::Result<(tempfile::TempDir, StatsStore, i64)> {
@@ -730,7 +724,7 @@ mod tests {
     }
 
     /// 从句柄取 live pool。
-    fn live(store: &StatsStore) -> color_eyre::Result<&SqlitePool> {
+    fn live(store: &StatsStore) -> color_eyre::Result<&DatabaseConnection> {
         store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))
@@ -754,7 +748,7 @@ mod tests {
         };
         store.record_event(2000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             query: Option<String>,
             kind: SearchTargetKind,
@@ -764,11 +758,33 @@ mod tests {
             actor: Actor,
             session_id: Option<i64>,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT query, kind, page, result_count, outcome, actor, session_id FROM searches",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::searches::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::Query,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::Kind,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::Page,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::ResultCount,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::Actor,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::searches::Column::SessionId,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.query, None);
         assert_eq!(row.kind, SearchTargetKind::Album);
         assert_eq!(row.page, 2);
@@ -794,7 +810,7 @@ mod tests {
         };
         store.record_event(3000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             ns: String,
             song_value: String,
@@ -802,11 +818,27 @@ mod tests {
             origin: LoveOrigin,
             remote_mirror: Option<String>,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT ns, song_value, loved, origin, remote_mirror FROM love_changes",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::love_changes::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::love_changes::Column::Ns,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::love_changes::Column::SongValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::love_changes::Column::Loved,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::love_changes::Column::Origin,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::love_changes::Column::RemoteMirror,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.ns, "netease");
         assert_eq!(row.song_value, "42");
         assert_eq!(row.loved, 1, "bool true 存 1");
@@ -835,7 +867,7 @@ mod tests {
         };
         store.record_event(4000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             op: String,
             playlist_ref: String,
@@ -844,11 +876,30 @@ mod tests {
             outcome: OpOutcome,
             error_kind: Option<PlaylistError>,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT op, playlist_ref, song_value, song_count, outcome, error_kind FROM playlist_ops",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::playlist_ops::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::Op,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::PlaylistRef,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::SongValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::SongCount,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::playlist_ops::Column::ErrorKind,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.op, "add");
         assert_eq!(row.playlist_ref, "netease:7");
         assert_eq!(row.song_value, Some("42".to_owned()));
@@ -872,16 +923,31 @@ mod tests {
         };
         store.record_event(5000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             op: QueueOp,
             ns: Option<String>,
             song_value: Option<String>,
             count: i64,
         }
-        let row = sqlx::query_as::<_, Row>("SELECT op, ns, song_value, count FROM queue_ops")
-            .fetch_one(live(&store)?)
-            .await?;
+        let row = crate::entity::queue_ops::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::queue_ops::Column::Op,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::queue_ops::Column::Ns,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::queue_ops::Column::SongValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::queue_ops::Column::Count,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.op, QueueOp::Set);
         assert_eq!(row.ns, None);
         assert_eq!(row.song_value, None);
@@ -901,14 +967,23 @@ mod tests {
         };
         store.record_event(6000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             reason: crate::event::RejectReason,
             actor: Actor,
         }
-        let row = sqlx::query_as::<_, Row>("SELECT reason, actor FROM connection_rejects")
-            .fetch_one(live(&store)?)
-            .await?;
+        let row = crate::entity::connection_rejects::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::connection_rejects::Column::Reason,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::connection_rejects::Column::Actor,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.reason, crate::event::RejectReason::VersionMismatch);
         assert_eq!(row.actor, Actor::System);
         Ok(())
@@ -928,18 +1003,31 @@ mod tests {
         };
         store.record_event(7000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             client: String,
             duration_ms: i64,
             concurrent: i64,
             actor: Actor,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT client, duration_ms, concurrent, actor FROM client_connections",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::client_connections::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::client_connections::Column::Client,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::client_connections::Column::DurationMs,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::client_connections::Column::Concurrent,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::client_connections::Column::Actor,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.client, "tui");
         assert_eq!(row.duration_ms, 65_000);
         assert_eq!(row.concurrent, 2);
@@ -962,18 +1050,31 @@ mod tests {
         };
         store.record_event(7000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             template_index: i64,
             ctx_kind: crate::event::CopyContext,
             target_ref: Option<String>,
             outcome: OpOutcome,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT template_index, ctx_kind, target_ref, outcome FROM copy_renders",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::copy_renders::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::copy_renders::Column::TemplateIndex,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::copy_renders::Column::CtxKind,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::copy_renders::Column::TargetRef,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::copy_renders::Column::Outcome,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.template_index, 3);
         assert_eq!(row.ctx_kind, crate::event::CopyContext::Playlist);
         assert_eq!(row.target_ref, Some("netease:99".to_owned()));
@@ -995,16 +1096,31 @@ mod tests {
         };
         store.record_event(8000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             program: String,
             outcome: crate::event::SpawnOutcome,
             exit_code: Option<i64>,
             actor: Actor,
         }
-        let row = sqlx::query_as::<_, Row>("SELECT program, outcome, exit_code, actor FROM spawns")
-            .fetch_one(live(&store)?)
-            .await?;
+        let row = crate::entity::spawns::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::spawns::Column::Program,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::spawns::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::spawns::Column::ExitCode,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::spawns::Column::Actor,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.program, "notify-send");
         assert_eq!(row.outcome, crate::event::SpawnOutcome::Exited);
         assert_eq!(row.exit_code, Some(0));
@@ -1024,14 +1140,23 @@ mod tests {
         };
         store.record_event(9000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             name: String,
             actor: Actor,
         }
-        let row = sqlx::query_as::<_, Row>("SELECT name, actor FROM bus_messages")
-            .fetch_one(live(&store)?)
-            .await?;
+        let row = crate::entity::bus_messages::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::bus_messages::Column::Name,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::bus_messages::Column::Actor,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.name, "myplugin.tick");
         assert_eq!(row.actor, Actor::Script);
         Ok(())
@@ -1055,7 +1180,7 @@ mod tests {
         };
         store.record_event(10_000, Some(sid), &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             fetch_kind: String,
             target_ref: Option<String>,
@@ -1063,11 +1188,27 @@ mod tests {
             outcome: FetchOutcome,
             latency_ms: i64,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT fetch_kind, target_ref, trigger, outcome, latency_ms FROM fetches",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::fetches::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::fetches::Column::FetchKind,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::fetches::Column::TargetRef,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::fetches::Column::Trigger,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::fetches::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::fetches::Column::LatencyMs,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.fetch_kind, "playlist_detail");
         assert_eq!(row.target_ref, Some("netease:7".to_owned()));
         assert_eq!(row.trigger, FetchTrigger::System);

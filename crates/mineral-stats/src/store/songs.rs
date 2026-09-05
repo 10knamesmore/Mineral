@@ -1,7 +1,14 @@
 //! songs 维表维护:播放路径 write-through 的歌曲展示元数据。
 
+use crate::entity::{song_artists, songs};
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::Song;
+use sea_orm::sea_query::{self, Expr, Func, Iden, OnConflict};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+
+/// 冲突更新中本次待写入的记录。
+#[derive(Iden)]
+struct Excluded;
 
 use crate::store::StatsStore;
 
@@ -17,67 +24,67 @@ impl StatsStore {
     /// # Params:
     ///   - `song`: 起播时刻在手的完整歌曲元数据
     pub async fn upsert_song(&self, song: &Song) -> color_eyre::Result<()> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
         let ns = song.id.namespace().name();
-        let song_value = song.id.value();
-        let album_id = song.album.as_ref().map(|a| a.id.value().to_owned());
-        let album_name = song.album.as_ref().map(|a| a.name.clone());
-        let duration_ms = song.duration_ms.map(i64::try_from).transpose()?;
-        let mut tx = pool
+        let value = song.id.value();
+        let tx = db
             .begin()
             .await
-            .wrap_err_with(|| format!("upsert_song 开事务失败 song={song_value}"))?;
-        sqlx::query!(
-            "INSERT INTO songs (ns, song_value, name, alias, album_id, album_name, duration_ms)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(ns, song_value) DO UPDATE SET
-             name = excluded.name,
-             alias = COALESCE(excluded.alias, songs.alias),
-             album_id = COALESCE(excluded.album_id, songs.album_id),
-             album_name = COALESCE(excluded.album_name, songs.album_name),
-             duration_ms = COALESCE(excluded.duration_ms, songs.duration_ms)",
-            ns,
-            song_value,
-            song.name,
-            song.alias,
-            album_id,
-            album_name,
-            duration_ms,
-        )
-        .execute(&mut *tx)
+            .wrap_err_with(|| format!("upsert_song 开事务失败 song={value}"))?;
+        let mut merge = OnConflict::columns([songs::Column::Ns, songs::Column::SongValue]);
+        merge.update_column(songs::Column::Name);
+        for column in [
+            songs::Column::Alias,
+            songs::Column::AlbumId,
+            songs::Column::AlbumName,
+            songs::Column::DurationMs,
+        ] {
+            merge.value(
+                column,
+                Func::coalesce([
+                    Expr::col((Excluded, column)),
+                    Expr::col((songs::Entity, column)),
+                ]),
+            );
+        }
+        songs::Entity::insert(songs::ActiveModel {
+            ns: Set(ns.to_owned()),
+            song_value: Set(value.to_owned()),
+            name: Set(song.name.clone()),
+            alias: Set(song.alias.clone()),
+            album_id: Set(song.album.as_ref().map(|album| album.id.value().to_owned())),
+            album_name: Set(song.album.as_ref().map(|album| album.name.clone())),
+            duration_ms: Set(song.duration_ms.map(i64::try_from).transpose()?),
+        })
+        .on_conflict(merge)
+        .exec_without_returning(&tx)
         .await
-        .wrap_err_with(|| format!("upsert_song 落库失败 song={song_value}"))?;
+        .wrap_err_with(|| format!("upsert_song 落库失败 song={value}"))?;
         if !song.artists.is_empty() {
-            sqlx::query!(
-                "DELETE FROM song_artists WHERE ns = ? AND song_value = ?",
-                ns,
-                song_value,
-            )
-            .execute(&mut *tx)
-            .await
-            .wrap_err_with(|| format!("upsert_song 清艺人行失败 song={song_value}"))?;
-            for (index, artist) in song.artists.iter().enumerate() {
-                let position = i64::try_from(index)?;
-                let artist_value = artist.id.value();
-                sqlx::query!(
-                    "INSERT INTO song_artists (ns, song_value, position, artist_value, artist_name)
-                     VALUES (?, ?, ?, ?, ?)",
-                    ns,
-                    song_value,
-                    position,
-                    artist_value,
-                    artist.name,
-                )
-                .execute(&mut *tx)
+            song_artists::Entity::delete_many()
+                .filter(song_artists::Column::Ns.eq(ns))
+                .filter(song_artists::Column::SongValue.eq(value))
+                .exec(&tx)
                 .await
-                .wrap_err_with(|| format!("upsert_song 写艺人行失败 song={song_value}"))?;
+                .wrap_err_with(|| format!("upsert_song 清艺人行失败 song={value}"))?;
+            for (position, artist) in song.artists.iter().enumerate() {
+                song_artists::Entity::insert(song_artists::ActiveModel {
+                    ns: Set(ns.to_owned()),
+                    song_value: Set(value.to_owned()),
+                    position: Set(i64::try_from(position)?),
+                    artist_value: Set(artist.id.value().to_owned()),
+                    artist_name: Set(artist.name.clone()),
+                })
+                .exec_without_returning(&tx)
+                .await
+                .wrap_err_with(|| format!("upsert_song 写艺人行失败 song={value}"))?;
             }
         }
         tx.commit()
             .await
-            .wrap_err_with(|| format!("upsert_song 提交事务失败 song={song_value}"))?;
+            .wrap_err_with(|| format!("upsert_song 提交事务失败 song={value}"))?;
         Ok(())
     }
 }
@@ -86,9 +93,11 @@ impl StatsStore {
 mod tests {
     use crate::store::StatsStore;
     use mineral_test::{song, with_album, with_alias, with_artists, with_duration, with_name};
+    use sea_orm::sea_query::ExprTrait;
+    use sea_orm::{EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
     /// 读回断言用的维表行。
-    #[derive(sqlx::FromRow)]
+    #[derive(sea_orm::FromQueryResult)]
     struct SongRow {
         /// 歌名。
         name: String,
@@ -107,7 +116,7 @@ mod tests {
     }
 
     /// 读回断言用的艺人维表行。
-    #[derive(sqlx::FromRow)]
+    #[derive(sea_orm::FromQueryResult)]
     struct ArtistRow {
         /// 专辑内曲序意义上的排位(艺人在歌里的顺序,主艺人在前)。
         position: i64,
@@ -129,13 +138,35 @@ mod tests {
         let pool = store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))?;
-        let row = sqlx::query_as::<_, SongRow>(
-            "SELECT name, alias, album_id, album_name, duration_ms FROM songs \
-             WHERE ns = 'netease' AND song_value = ?",
-        )
-        .bind(value)
-        .fetch_one(pool)
-        .await?;
+        let row = crate::entity::songs::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::songs::Column::Name,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::songs::Column::Alias,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::songs::Column::AlbumId,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::songs::Column::AlbumName,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::songs::Column::DurationMs,
+            ))
+            .filter(
+                sea_orm::sea_query::Expr::col(crate::entity::songs::Column::Ns)
+                    .eq(sea_orm::sea_query::Expr::value("netease"))
+                    .and(
+                        sea_orm::sea_query::Expr::col(crate::entity::songs::Column::SongValue)
+                            .eq(sea_orm::sea_query::Expr::value(value)),
+                    ),
+            )
+            .into_model::<SongRow>()
+            .one(pool)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         Ok(row)
     }
 
@@ -143,13 +174,33 @@ mod tests {
         let pool = store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))?;
-        let rows = sqlx::query_as::<_, ArtistRow>(
-            "SELECT position, artist_value, artist_name FROM song_artists \
-             WHERE ns = 'netease' AND song_value = ? ORDER BY position",
-        )
-        .bind(value)
-        .fetch_all(pool)
-        .await?;
+        let rows = crate::entity::song_artists::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::song_artists::Column::Position,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::song_artists::Column::ArtistValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::song_artists::Column::ArtistName,
+            ))
+            .filter(
+                sea_orm::sea_query::Expr::col(crate::entity::song_artists::Column::Ns)
+                    .eq(sea_orm::sea_query::Expr::value("netease"))
+                    .and(
+                        sea_orm::sea_query::Expr::col(
+                            crate::entity::song_artists::Column::SongValue,
+                        )
+                        .eq(sea_orm::sea_query::Expr::value(value)),
+                    ),
+            )
+            .order_by_asc(sea_orm::sea_query::Expr::col(
+                crate::entity::song_artists::Column::Position,
+            ))
+            .into_model::<ArtistRow>()
+            .all(pool)
+            .await?;
         Ok(rows)
     }
 

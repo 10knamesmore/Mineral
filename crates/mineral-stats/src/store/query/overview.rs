@@ -2,16 +2,22 @@
 
 use std::ops::Range;
 
+use crate::entity::{plays, sessions};
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
+use sea_orm::sea_query::{Expr, ExprTrait, Func, Query};
+use sea_orm::{
+    ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
+};
 
 use crate::report::{PlayTail, SongSummary, StatusReport, Totals};
 use crate::store::StatsStore;
 use crate::vocab::FinishReason;
 
-use super::shared::{PlayTailRow, song_id};
+use super::shared::{Date, PlayTailRow, ReportColumn, plays_in, song_id};
 
 /// `status` 主查询单行(events 由各事件表另算,故不直落 StatusReport)。
+#[derive(FromQueryResult)]
 struct StatusRow {
     /// plays 行数。
     plays: i64,
@@ -42,53 +48,40 @@ impl StatsStore {
         source: Option<&str>,
         limit: i64,
     ) -> color_eyre::Result<Vec<PlayTail>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        // source 过滤与否 bind 集不同,天然拆两条编译期查询(同 top_contexts 的 kind 分支)。
-        let rows = match source {
-            Some(ns) => sqlx::query_as!(
-                PlayTailRow,
-                r#"SELECT ns, song_value, started_at, listen_ms,
-                          finish_reason AS "finish_reason: FinishReason"
-                   FROM plays WHERE started_at >= ? AND started_at < ? AND ns = ?
-                   ORDER BY started_at DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                ns,
-                limit
-            )
-            .fetch_all(pool)
+        let mut query = plays_in(range).select_only().columns([
+            plays::Column::Ns,
+            plays::Column::SongValue,
+            plays::Column::StartedAt,
+            plays::Column::ListenMs,
+            plays::Column::FinishReason,
+        ]);
+        if let Some(source) = source {
+            query = query.filter(plays::Column::Ns.eq(source));
+        }
+        let rows = query
+            .order_by_desc(plays::Column::StartedAt)
+            .limit(u64::try_from(limit).ok())
+            .into_model::<PlayTailRow>()
+            .all(db)
             .await
-            .wrap_err("recent_plays(source) 查询失败")?,
-            None => sqlx::query_as!(
-                PlayTailRow,
-                r#"SELECT ns, song_value, started_at, listen_ms,
-                          finish_reason AS "finish_reason: FinishReason"
-                   FROM plays WHERE started_at >= ? AND started_at < ?
-                   ORDER BY started_at DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                limit
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("recent_plays 查询失败")?,
-        };
+            .wrap_err("recent_plays 查询失败")?;
         Ok(rows
             .into_iter()
-            .map(|r| PlayTail {
-                song: song_id(&r.ns, &r.song_value),
-                started_at: r.started_at,
-                listen_ms: r.listen_ms,
-                finish_reason: r.finish_reason,
+            .map(|row| PlayTail {
+                song: song_id(&row.ns, &row.song_value),
+                started_at: row.started_at,
+                listen_ms: row.listen_ms,
+                finish_reason: row.finish_reason,
             })
             .collect())
     }
 
     /// 埋点系统自身状态:plays / sessions / 全部事件表行数 + 播放时间覆盖。
     pub async fn status(&self) -> color_eyre::Result<StatusReport> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(StatusReport {
                 plays: 0,
                 sessions: 0,
@@ -97,23 +90,47 @@ impl StatsStore {
                 last_play_at: None,
             });
         };
-        let row = sqlx::query_as!(
-            StatusRow,
-            r#"SELECT (SELECT COUNT(*) FROM plays) AS "plays!",
-                      (SELECT COUNT(*) FROM sessions) AS "sessions!",
-                      (SELECT MIN(started_at) FROM plays) AS "first_play_at?",
-                      (SELECT MAX(started_at) FROM plays) AS "last_play_at?""#,
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("status 查询失败")?;
+        let query = Query::select()
+            .expr_as(
+                plays::Entity::find()
+                    .select_only()
+                    .expr(plays::Column::Id.count())
+                    .into_query(),
+                ReportColumn::Plays,
+            )
+            .expr_as(
+                sessions::Entity::find()
+                    .select_only()
+                    .expr(sessions::Column::Id.count())
+                    .into_query(),
+                ReportColumn::Sessions,
+            )
+            .expr_as(
+                plays::Entity::find()
+                    .select_only()
+                    .expr(plays::Column::StartedAt.min())
+                    .into_query(),
+                ReportColumn::FirstPlayAt,
+            )
+            .expr_as(
+                plays::Entity::find()
+                    .select_only()
+                    .expr(plays::Column::StartedAt.max())
+                    .into_query(),
+                ReportColumn::LastPlayAt,
+            )
+            .to_owned();
+        let row = StatusRow::find_by_statement(db.get_database_backend().build(&query))
+            .one(db)
+            .await
+            .wrap_err("status 查询失败")?
+            .ok_or_else(|| color_eyre::eyre::eyre!("status 聚合未返回行"))?;
         let mut events = 0_i64;
         for table in crate::store::prune::EVENT_TABLES {
-            let n = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(pool)
+            events += table
+                .count(db, /*range*/ None)
                 .await
-                .wrap_err_with(|| format!("status count {table} 失败"))?;
-            events += n;
+                .wrap_err_with(|| format!("status count {} 失败", table.name()))?;
         }
         Ok(StatusReport {
             plays: row.plays,
@@ -126,61 +143,73 @@ impl StatsStore {
 
     /// 总量:收听 ms / 播放次数 / 完播数 / 跳歌数 / 涉及歌曲数 / 活跃天数(UTC 日)。
     pub async fn totals(&self, range: Range<i64>) -> color_eyre::Result<Totals> {
-        let Some(pool) = self.pool() else {
-            return Ok(Totals {
-                listen_ms: 0,
-                plays: 0,
-                completed: 0,
-                skipped: 0,
-                distinct_songs: 0,
-                active_days: 0,
-            });
+        let Some(db) = self.pool() else {
+            return Ok(Totals::default());
         };
-        sqlx::query_as!(
-            Totals,
-            r#"SELECT
-                COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
-                COUNT(*) AS "plays!: i64",
-                COALESCE(SUM(CASE WHEN finish_reason = 'eof' THEN 1 ELSE 0 END), 0) AS "completed!: i64",
-                COALESCE(SUM(CASE WHEN finish_reason = 'skip' THEN 1 ELSE 0 END), 0) AS "skipped!: i64",
-                COUNT(DISTINCT ns || ':' || song_value) AS "distinct_songs!: i64",
-                COUNT(DISTINCT date(started_at / 1000, 'unixepoch')) AS "active_days!: i64"
-               FROM plays WHERE started_at >= ? AND started_at < ?"#,
-            range.start,
-            range.end
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("totals 查询失败")
+        let distinct_songs = plays_in(range.clone())
+            .select_only()
+            .columns([plays::Column::Ns, plays::Column::SongValue])
+            .distinct()
+            .into_query();
+        let song_count = Query::select()
+            .expr(Expr::col(sea_orm::sea_query::Asterisk).count())
+            .from_subquery(distinct_songs, ReportColumn::DistinctSongs)
+            .to_owned();
+        let day = Func::cust(Date).args([
+            Expr::col((plays::Entity, plays::Column::StartedAt)).div(1000),
+            Expr::value("unixepoch"),
+        ]);
+        plays_in(range)
+            .select_only()
+            .column_as(
+                plays::Column::ListenMs.sum().if_null(0),
+                ReportColumn::ListenMs,
+            )
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(finish_count(FinishReason::Eof), ReportColumn::Completed)
+            .column_as(finish_count(FinishReason::Skip), ReportColumn::Skipped)
+            .column_as(Expr::from(song_count), ReportColumn::DistinctSongs)
+            .column_as(Expr::from(day).count_distinct(), ReportColumn::ActiveDays)
+            .into_model::<Totals>()
+            .one(db)
+            .await
+            .wrap_err("totals 查询失败")?
+            .ok_or_else(|| color_eyre::eyre::eyre!("totals 聚合未返回行"))
     }
 
     /// 返回 `QuerySongStats` 使用的单曲全量汇总；从未播放返回 `None`。
     pub async fn song_summary(&self, id: &SongId) -> color_eyre::Result<Option<SongSummary>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(None);
         };
-        let ns = id.namespace().name();
-        let value = id.value();
-        let row = sqlx::query_as!(
-            SongSummary,
-            r#"SELECT
-                COUNT(*) AS "plays!: i64",
-                COALESCE(SUM(CASE WHEN finish_reason = 'eof' THEN 1 ELSE 0 END), 0) AS "completed!: i64",
-                COALESCE(SUM(CASE WHEN finish_reason = 'skip' THEN 1 ELSE 0 END), 0) AS "skips!: i64",
-                COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64",
-                MAX(started_at) AS "last_played_at?: i64"
-               FROM plays WHERE ns = ? AND song_value = ?"#,
-            ns,
-            value
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("song_summary 查询失败")?;
-        if row.plays == 0 {
-            return Ok(None);
-        }
-        Ok(Some(row))
+        let row = plays::Entity::find()
+            .select_only()
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(finish_count(FinishReason::Eof), ReportColumn::Completed)
+            .column_as(finish_count(FinishReason::Skip), ReportColumn::Skips)
+            .column_as(
+                plays::Column::ListenMs.sum().if_null(0),
+                ReportColumn::ListenMs,
+            )
+            .column_as(plays::Column::StartedAt.max(), ReportColumn::LastPlayedAt)
+            .filter(plays::Column::Ns.eq(id.namespace().name()))
+            .filter(plays::Column::SongValue.eq(id.value()))
+            .into_model::<SongSummary>()
+            .one(db)
+            .await
+            .wrap_err("song_summary 查询失败")?
+            .ok_or_else(|| color_eyre::eyre::eyre!("song_summary 聚合未返回行"))?;
+        Ok((row.plays != 0).then_some(row))
     }
+}
+
+/// 统计指定结束原因；空集合的结果为零。
+fn finish_count(reason: FinishReason) -> Expr {
+    Expr::Case(Box::new(
+        Expr::case(plays::Column::FinishReason.eq(reason), 1).finally(0),
+    ))
+    .sum()
+    .if_null(0)
 }
 
 #[cfg(test)]

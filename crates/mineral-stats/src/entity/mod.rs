@@ -1,0 +1,34 @@
+//! 持久化记录及其表、列和写入模型。
+
+pub(crate) mod action_invocations;
+pub(crate) mod app_lifecycle;
+pub(crate) mod bus_messages;
+pub(crate) mod cache_evictions;
+pub(crate) mod cache_harvests;
+pub(crate) mod client_connections;
+pub(crate) mod config_overrides;
+pub(crate) mod config_reloads;
+pub(crate) mod connection_rejects;
+pub(crate) mod copy_renders;
+pub(crate) mod downloads;
+pub(crate) mod fetches;
+pub(crate) mod fullscreen_changes;
+pub(crate) mod gapless_boundaries;
+pub(crate) mod hook_fires;
+pub(crate) mod love_changes;
+pub(crate) mod mode_changes;
+pub(crate) mod pauses;
+pub(crate) mod playlist_ops;
+pub(crate) mod plays;
+pub(crate) mod prefetches;
+pub(crate) mod queue_ops;
+pub(crate) mod script_lifecycle;
+pub(crate) mod searches;
+pub(crate) mod seeks;
+pub(crate) mod sessions;
+pub(crate) mod song_artists;
+pub(crate) mod songs;
+pub(crate) mod spawns;
+pub(crate) mod store_writes;
+pub(crate) mod stream_resolutions;
+pub(crate) mod volume_changes;

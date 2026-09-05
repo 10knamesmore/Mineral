@@ -10,9 +10,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::entity::{track_pos, ui_prefs};
+use crate::migration::ClientMigrator;
 use color_eyre::eyre::WrapErr;
 use mineral_model::{PlaylistId, SongId, SourceKind};
-use sqlx::SqlitePool;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{DatabaseConnection, EntityTrait, Set, TransactionTrait};
+use sea_orm_migration::MigratorTrait;
 
 use crate::CacheIndex;
 
@@ -36,7 +40,7 @@ pub struct TrackPosRow {
 /// 客户端持久化句柄。持有 `tui.db` 连接池,按需打开其中的缓存索引表 / 读写 UI 偏好。
 pub struct ClientStore {
     /// `tui.db` 连接池。
-    pool: SqlitePool,
+    pool: DatabaseConnection,
 }
 
 impl ClientStore {
@@ -54,15 +58,9 @@ impl ClientStore {
 
     /// 用现成连接池组装句柄并跑 client 库迁移(测试用内存池入口)。
     ///
-    /// 与 server 库同一纪律(每次结构变更新增 `migrations_client/NNNN_*.sql`,
-    /// 永不改已发布迁移);唯 `cover_cache` 因表名运行时参数化留在
-    /// [`CacheIndex`] 的建表代码里。
-    async fn with_pool(pool: SqlitePool) -> color_eyre::Result<Self> {
-        /// client 库(tui.db)的版本化迁移,编译期嵌入二进制。
-        static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations_client");
-        MIGRATOR.run(&pool).await.wrap_err(
-            "client 库 schema 迁移失败;若此库建于迁移机制引入之前,请停掉 daemon 后运行 \
-             `mineral cache reset --yes` 删库重建",
+    async fn with_pool(pool: DatabaseConnection) -> color_eyre::Result<Self> {
+        ClientMigrator::up(&pool, /*steps*/ None).await.wrap_err(
+            "client 库 schema 迁移失败;若此库建于迁移机制引入之前,请运行 mineral cache reset --yes 重建",
         )?;
         Ok(Self { pool })
     }
@@ -80,7 +78,13 @@ impl ClientStore {
         root: PathBuf,
         capacity: u64,
     ) -> color_eyre::Result<CacheIndex> {
-        CacheIndex::open(self.pool.clone(), "cover_cache", root, Some(capacity)).await
+        CacheIndex::open(
+            self.pool.clone(),
+            crate::cache_index::CacheTable::Cover,
+            root,
+            Some(capacity),
+        )
+        .await
     }
 
     /// 读一条 UI 偏好(`ui_prefs` 表)。
@@ -91,11 +95,11 @@ impl ClientStore {
     /// # Return:
     ///   键存在为 `Some(值)`,不存在为 `None`。
     pub async fn get_pref(&self, key: &str) -> color_eyre::Result<Option<String>> {
-        sqlx::query_scalar::<_, String>("SELECT value FROM ui_prefs WHERE key = ?1")
-            .bind(key)
-            .fetch_optional(&self.pool)
+        Ok(ui_prefs::Entity::find_by_id(key)
+            .one(&self.pool)
             .await
-            .wrap_err_with(|| format!("读 ui_prefs 失败 key={key}"))
+            .wrap_err_with(|| format!("读 ui_prefs 失败 key={key}"))?
+            .map(|row| row.value))
     }
 
     /// 写一条 UI 偏好(单条 upsert,同键覆盖)。
@@ -104,13 +108,16 @@ impl ClientStore {
     ///   - `key`: 偏好键
     ///   - `value`: 偏好值(调用方自行定义稳定字符串编码)
     pub async fn set_pref(&self, key: &str, value: &str) -> color_eyre::Result<()> {
-        sqlx::query(
-            "INSERT INTO ui_prefs (key, value) VALUES (?1, ?2) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ui_prefs::Entity::insert(ui_prefs::ActiveModel {
+            key: Set(key.to_owned()),
+            value: Set(value.to_owned()),
+        })
+        .on_conflict(
+            OnConflict::column(ui_prefs::Column::Key)
+                .update_column(ui_prefs::Column::Value)
+                .to_owned(),
         )
-        .bind(key)
-        .bind(value)
-        .execute(&self.pool)
+        .exec_without_returning(&self.pool)
         .await
         .wrap_err_with(|| format!("写 ui_prefs 失败 key={key}"))?;
         Ok(())
@@ -121,27 +128,22 @@ impl ClientStore {
     /// # Return:
     ///   全部行(顺序不保证;客户端按歌单 id 入 map);行下标为负(库损坏)时报错。
     pub async fn load_track_positions(&self) -> color_eyre::Result<Vec<TrackPosRow>> {
-        let rows: Vec<(String, String, String, String, i64, i64)> = sqlx::query_as(
-            "SELECT playlist_namespace, playlist_value, song_namespace, song_value, \
-             sel_index, screen_row FROM track_pos",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .wrap_err("读 track_pos 失败")?;
+        let rows = track_pos::Entity::find()
+            .all(&self.pool)
+            .await
+            .wrap_err("读 track_pos 失败")?;
         rows.into_iter()
-            .map(
-                |(playlist_ns, playlist_value, song_ns, song_value, sel_index, screen_row)| {
-                    Ok(TrackPosRow {
-                        playlist: PlaylistId::new(
-                            SourceKind::from_name(&playlist_ns),
-                            playlist_value,
-                        ),
-                        song: SongId::new(SourceKind::from_name(&song_ns), song_value),
-                        index: u64::try_from(sel_index)?,
-                        screen_row: u64::try_from(screen_row)?,
-                    })
-                },
-            )
+            .map(|row| {
+                Ok(TrackPosRow {
+                    playlist: PlaylistId::new(
+                        SourceKind::from_name(&row.playlist_namespace),
+                        row.playlist_value,
+                    ),
+                    song: SongId::new(SourceKind::from_name(&row.song_namespace), row.song_value),
+                    index: u64::try_from(row.sel_index)?,
+                    screen_row: u64::try_from(row.screen_row)?,
+                })
+            })
             .collect()
     }
 
@@ -150,28 +152,25 @@ impl ClientStore {
     /// # Params:
     ///   - `rows`: 当前全量记忆(表规模 ~ 歌单数)
     pub async fn replace_track_positions(&self, rows: &[TrackPosRow]) -> color_eyre::Result<()> {
-        let mut tx = self
+        let tx = self
             .pool
             .begin()
             .await
             .wrap_err("开启 track_pos 事务失败")?;
-        sqlx::query("DELETE FROM track_pos")
-            .execute(&mut *tx)
+        track_pos::Entity::delete_many()
+            .exec(&tx)
             .await
             .wrap_err("清 track_pos 失败")?;
         for row in rows {
-            sqlx::query(
-                "INSERT INTO track_pos (playlist_namespace, playlist_value, \
-                 song_namespace, song_value, sel_index, screen_row) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )
-            .bind(row.playlist.namespace().name())
-            .bind(row.playlist.value())
-            .bind(row.song.namespace().name())
-            .bind(row.song.value())
-            .bind(i64::try_from(row.index)?)
-            .bind(i64::try_from(row.screen_row)?)
-            .execute(&mut *tx)
+            track_pos::Entity::insert(track_pos::ActiveModel {
+                playlist_namespace: Set(row.playlist.namespace().name().to_owned()),
+                playlist_value: Set(row.playlist.value().to_owned()),
+                song_namespace: Set(row.song.namespace().name().to_owned()),
+                song_value: Set(row.song.value().to_owned()),
+                sel_index: Set(i64::try_from(row.index)?),
+                screen_row: Set(i64::try_from(row.screen_row)?),
+            })
+            .exec_without_returning(&tx)
             .await
             .wrap_err_with(|| format!("写 track_pos 失败 playlist={}", row.playlist.value()))?;
         }
@@ -182,16 +181,15 @@ impl ClientStore {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sea_orm::{ConnectOptions, Database};
 
     use super::ClientStore;
 
     /// 开一个内存 sqlite 的 [`ClientStore`](每个测试独立)。
     async fn mem_store() -> color_eyre::Result<ClientStore> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await?;
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(/*value*/ 1);
+        let pool = Database::connect(options).await?;
         ClientStore::with_pool(pool).await
     }
 

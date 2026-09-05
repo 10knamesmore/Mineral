@@ -2,15 +2,20 @@
 
 use std::ops::Range;
 
+use crate::PlayMode;
+use crate::entity::{plays, song_artists, songs};
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::{AlbumId, ArtistId, SourceKind};
+use sea_orm::sea_query::{Expr, ExprTrait};
+use sea_orm::{ColumnTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, Select};
 
 use crate::report::{ContextSlice, ReportOptions, TopAlbum, TopArtist, TopBy, TopSong};
 use crate::store::StatsStore;
 
-use super::shared::song_id;
+use super::shared::{ReportColumn, artist_dimension, plays_in, song_dimension, song_id};
 
 /// `top_songs` / `top_repeat_songs` 的每行;`song` 由 ns+value 重建故经中转。
+#[derive(sea_orm::FromQueryResult)]
 struct TopSongRow {
     /// 来源 name。
     ns: String,
@@ -29,6 +34,7 @@ struct TopSongRow {
 }
 
 /// `top_albums`(口味口径)的每行:按 `songs` 的 `album_id` 聚合。
+#[derive(sea_orm::FromQueryResult)]
 struct TopAlbumRow {
     /// 来源 name。
     ns: String,
@@ -48,6 +54,7 @@ struct TopAlbumRow {
 }
 
 /// `top_artists`(口味口径)的每行:按 `song_artists` 的 `artist_value` 聚合。
+#[derive(sea_orm::FromQueryResult)]
 struct TopArtistRow {
     /// 来源 name。
     ns: String,
@@ -74,66 +81,25 @@ impl StatsStore {
         by: TopBy,
         options: &ReportOptions,
     ) -> color_eyre::Result<Vec<TopSong>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let min = options.min_listen_ms();
-        let limit = options.top_limit();
-        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。songs 维表 LEFT JOIN
-        // 在 (ns, song_value) 键上,与 GROUP BY 键一致——s.name 组内恒定,裸取合法。
-        let rows = match by {
-            TopBy::Plays => sqlx::query_as!(
-                TopSongRow,
-                r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
-                    s.name AS "name?"
-                   FROM plays p
-                   LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                   GROUP BY p.ns, p.song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
-            )
-            .fetch_all(pool)
+        let query =
+            song_ranking(range).filter(plays::Column::ListenMs.gte(options.min_listen_ms()));
+        let rows = rank(query, by, options.top_limit())
+            .into_model::<TopSongRow>()
+            .all(db)
             .await
-            .wrap_err("top_songs(plays) 查询失败")?
+            .wrap_err("top_songs 查询失败")?;
+        Ok(rows
             .into_iter()
-            .map(|r| TopSong {
-                song: song_id(&r.ns, &r.song_value),
-                name: r.name,
-                plays: r.plays,
-                listen_ms: r.listen_ms,
+            .map(|row| TopSong {
+                song: song_id(&row.ns, &row.song_value),
+                name: row.name,
+                plays: row.plays,
+                listen_ms: row.listen_ms,
             })
-            .collect(),
-            TopBy::Time => sqlx::query_as!(
-                TopSongRow,
-                r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
-                    s.name AS "name?"
-                   FROM plays p
-                   LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                   GROUP BY p.ns, p.song_value ORDER BY 4 DESC, 3 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("top_songs(time) 查询失败")?
-            .into_iter()
-            .map(|r| TopSong {
-                song: song_id(&r.ns, &r.song_value),
-                name: r.name,
-                plays: r.plays,
-                listen_ms: r.listen_ms,
-            })
-            .collect(),
-        };
-        Ok(rows)
+            .collect())
     }
 
     /// top 专辑(口味口径:按歌曲的 `songs.album_id` 归属聚合——「你听了哪张专辑的歌」,
@@ -153,58 +119,35 @@ impl StatsStore {
         by: TopBy,
         options: &ReportOptions,
     ) -> color_eyre::Result<Vec<TopAlbum>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let min = options.min_listen_ms();
-        let limit = options.top_limit();
-        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。INNER JOIN(非 LEFT):
-        // 无专辑(单曲)或维表未覆盖的歌天然不贡献任何专辑,不需要额外过滤。
-        let rows = match by {
-            TopBy::Plays => sqlx::query_as!(
-                TopAlbumRow,
-                r#"SELECT s.ns AS "ns!", s.album_id AS "album_id!",
-                    MAX(s.album_name) AS "album_name?: String",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays p
-                   JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                     AND s.album_id IS NOT NULL
-                   GROUP BY s.ns, s.album_id ORDER BY 4 DESC, 5 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
+        let query = plays_in(range)
+            .select_only()
+            .columns([songs::Column::Ns, songs::Column::AlbumId])
+            .column_as(songs::Column::AlbumName.max(), ReportColumn::AlbumName)
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(
+                plays::Column::ListenMs.sum().if_null(0),
+                ReportColumn::ListenMs,
             )
-            .fetch_all(pool)
+            .join(JoinType::InnerJoin, song_dimension())
+            .filter(plays::Column::ListenMs.gte(options.min_listen_ms()))
+            .filter(songs::Column::AlbumId.is_not_null())
+            .group_by(songs::Column::Ns)
+            .group_by(songs::Column::AlbumId);
+        let rows = rank(query, by, options.top_limit())
+            .into_model::<TopAlbumRow>()
+            .all(db)
             .await
-            .wrap_err("top_albums(plays) 查询失败")?,
-            TopBy::Time => sqlx::query_as!(
-                TopAlbumRow,
-                r#"SELECT s.ns AS "ns!", s.album_id AS "album_id!",
-                    MAX(s.album_name) AS "album_name?: String",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays p
-                   JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                     AND s.album_id IS NOT NULL
-                   GROUP BY s.ns, s.album_id ORDER BY 5 DESC, 4 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("top_albums(time) 查询失败")?,
-        };
+            .wrap_err("top_albums 查询失败")?;
         Ok(rows
             .into_iter()
-            .map(|r| TopAlbum {
-                album: AlbumId::new(SourceKind::from_name(&r.ns), r.album_id),
-                name: r.album_name,
-                plays: r.plays,
-                listen_ms: r.listen_ms,
+            .map(|row| TopAlbum {
+                album: AlbumId::new(SourceKind::from_name(&row.ns), row.album_id),
+                name: row.album_name,
+                plays: row.plays,
+                listen_ms: row.listen_ms,
             })
             .collect())
     }
@@ -227,56 +170,37 @@ impl StatsStore {
         by: TopBy,
         options: &ReportOptions,
     ) -> color_eyre::Result<Vec<TopArtist>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let min = options.min_listen_ms();
-        let limit = options.top_limit();
-        // ORDER BY 列随口径变(列位不可 bind),故按 TopBy 分两条。INNER JOIN(非 LEFT):
-        // 没有 song_artists 行的歌天然不贡献任何艺人,不需要额外过滤。
-        let rows = match by {
-            TopBy::Plays => sqlx::query_as!(
-                TopArtistRow,
-                r#"SELECT sa.ns AS "ns!", sa.artist_value AS "artist_value!",
-                    MAX(sa.artist_name) AS "artist_name!: String",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays p
-                   JOIN song_artists sa ON sa.ns = p.ns AND sa.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                   GROUP BY sa.ns, sa.artist_value ORDER BY 4 DESC, 5 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
+        let query = plays_in(range)
+            .select_only()
+            .columns([song_artists::Column::Ns, song_artists::Column::ArtistValue])
+            .column_as(
+                song_artists::Column::ArtistName.max(),
+                ReportColumn::ArtistName,
             )
-            .fetch_all(pool)
-            .await
-            .wrap_err("top_artists(plays) 查询失败")?,
-            TopBy::Time => sqlx::query_as!(
-                TopArtistRow,
-                r#"SELECT sa.ns AS "ns!", sa.artist_value AS "artist_value!",
-                    MAX(sa.artist_name) AS "artist_name!: String",
-                    COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64"
-                   FROM plays p
-                   JOIN song_artists sa ON sa.ns = p.ns AND sa.song_value = p.song_value
-                   WHERE p.started_at >= ? AND p.started_at < ? AND p.listen_ms >= ?
-                   GROUP BY sa.ns, sa.artist_value ORDER BY 5 DESC, 4 DESC LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(
+                plays::Column::ListenMs.sum().if_null(0),
+                ReportColumn::ListenMs,
             )
-            .fetch_all(pool)
+            .join(JoinType::InnerJoin, artist_dimension())
+            .filter(plays::Column::ListenMs.gte(options.min_listen_ms()))
+            .group_by(song_artists::Column::Ns)
+            .group_by(song_artists::Column::ArtistValue);
+        let rows = rank(query, by, options.top_limit())
+            .into_model::<TopArtistRow>()
+            .all(db)
             .await
-            .wrap_err("top_artists(time) 查询失败")?,
-        };
+            .wrap_err("top_artists 查询失败")?;
         Ok(rows
             .into_iter()
-            .map(|r| TopArtist {
-                artist: ArtistId::new(SourceKind::from_name(&r.ns), r.artist_value),
-                name: Some(r.artist_name),
-                plays: r.plays,
-                listen_ms: r.listen_ms,
+            .map(|row| TopArtist {
+                artist: ArtistId::new(SourceKind::from_name(&row.ns), row.artist_value),
+                name: Some(row.artist_name),
+                plays: row.plays,
+                listen_ms: row.listen_ms,
             })
             .collect())
     }
@@ -294,32 +218,22 @@ impl StatsStore {
         range: Range<i64>,
         limit: i64,
     ) -> color_eyre::Result<Vec<TopSong>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query_as!(
-            TopSongRow,
-            r#"SELECT p.ns AS "ns!", p.song_value AS "song_value!",
-                COUNT(*) AS "plays!: i64", COALESCE(SUM(p.listen_ms), 0) AS "listen_ms!: i64",
-                s.name AS "name?"
-               FROM plays p
-               LEFT JOIN songs s ON s.ns = p.ns AND s.song_value = p.song_value
-               WHERE p.started_at >= ? AND p.started_at < ? AND p.play_mode = 'repeat_one'
-               GROUP BY p.ns, p.song_value ORDER BY 3 DESC, 4 DESC LIMIT ?"#,
-            range.start,
-            range.end,
-            limit
-        )
-        .fetch_all(pool)
-        .await
-        .wrap_err("top_repeat_songs 查询失败")?;
+        let query = song_ranking(range).filter(plays::Column::PlayMode.eq(PlayMode::RepeatOne));
+        let rows = rank(query, TopBy::Plays, limit)
+            .into_model::<TopSongRow>()
+            .all(db)
+            .await
+            .wrap_err("top_repeat_songs 查询失败")?;
         Ok(rows
             .into_iter()
-            .map(|r| TopSong {
-                song: song_id(&r.ns, &r.song_value),
-                name: r.name,
-                plays: r.plays,
-                listen_ms: r.listen_ms,
+            .map(|row| TopSong {
+                song: song_id(&row.ns, &row.song_value),
+                name: row.name,
+                plays: row.plays,
+                listen_ms: row.listen_ms,
             })
             .collect())
     }
@@ -343,48 +257,61 @@ impl StatsStore {
         min: i64,
         limit: i64,
     ) -> color_eyre::Result<Vec<ContextSlice>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        // 按 kind 过滤时只 GROUP BY ref(kind 恒定);全类混排则 kind+ref 双分组。SUM(listen_ms)
-        // 分组内恒有行故强制非空;两支 bind 集不同,天然拆两条编译期查询。
-        let rows = match kind {
-            Some(k) => sqlx::query_as!(
-                ContextSlice,
-                r#"SELECT context_kind AS "kind!", context_ref AS "reference",
-                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64",
-                          MAX(context_name) AS "name?: String"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND context_kind = ? AND listen_ms >= ?
-                   GROUP BY context_ref ORDER BY 3 DESC, context_ref LIMIT ?"#,
-                range.start,
-                range.end,
-                k,
-                min,
-                limit
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("top_contexts(kind) 查询失败")?,
-            None => sqlx::query_as!(
-                ContextSlice,
-                r#"SELECT context_kind AS "kind!", context_ref AS "reference",
-                          COUNT(*) AS "plays!: i64", SUM(listen_ms) AS "listen_ms!: i64",
-                          MAX(context_name) AS "name?: String"
-                   FROM plays
-                   WHERE started_at >= ? AND started_at < ? AND listen_ms >= ?
-                   GROUP BY context_kind, context_ref ORDER BY 3 DESC, context_kind LIMIT ?"#,
-                range.start,
-                range.end,
-                min,
-                limit
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("top_contexts 查询失败")?,
+        let mut query = plays_in(range)
+            .select_only()
+            .column_as(plays::Column::ContextKind, ReportColumn::Kind)
+            .column_as(plays::Column::ContextRef, ReportColumn::Reference)
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(plays::Column::ListenMs.sum(), ReportColumn::ListenMs)
+            .column_as(plays::Column::ContextName.max(), ReportColumn::Name)
+            .filter(plays::Column::ListenMs.gte(min))
+            .group_by(plays::Column::ContextKind)
+            .group_by(plays::Column::ContextRef)
+            .order_by_desc(Expr::col(ReportColumn::Plays));
+        query = match kind {
+            Some(kind) => query
+                .filter(plays::Column::ContextKind.eq(kind))
+                .order_by_asc(plays::Column::ContextRef),
+            None => query.order_by_asc(plays::Column::ContextKind),
         };
-        Ok(rows)
+        query
+            .limit(u64::try_from(limit).ok())
+            .into_model::<ContextSlice>()
+            .all(db)
+            .await
+            .wrap_err("top_contexts 查询失败")
     }
+}
+
+/// 按歌曲身份聚合播放与歌曲维表。
+fn song_ranking(range: Range<i64>) -> Select<plays::Entity> {
+    plays_in(range)
+        .select_only()
+        .columns([plays::Column::Ns, plays::Column::SongValue])
+        .column(songs::Column::Name)
+        .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+        .column_as(
+            plays::Column::ListenMs.sum().if_null(0),
+            ReportColumn::ListenMs,
+        )
+        .join(JoinType::LeftJoin, song_dimension())
+        .group_by(plays::Column::Ns)
+        .group_by(plays::Column::SongValue)
+}
+
+/// 指定次数或时长优先级；负数榜长沿用 SQLite 的不限条数语义。
+fn rank(mut query: Select<plays::Entity>, by: TopBy, limit: i64) -> Select<plays::Entity> {
+    let columns = match by {
+        TopBy::Plays => [ReportColumn::Plays, ReportColumn::ListenMs],
+        TopBy::Time => [ReportColumn::ListenMs, ReportColumn::Plays],
+    };
+    for column in columns {
+        query = query.order_by_desc(Expr::col(column));
+    }
+    query.limit(u64::try_from(limit).ok())
 }
 
 #[cfg(test)]

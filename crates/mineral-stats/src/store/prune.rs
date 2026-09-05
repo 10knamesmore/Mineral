@@ -1,44 +1,13 @@
 //! retention:按时间裁剪 stats.db 的旧流水。
 
+use crate::entity::{plays, sessions};
 use color_eyre::eyre::WrapErr as _;
+use sea_orm::sea_query::{Condition, Expr, ExprTrait, Query};
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, TransactionTrait};
 
 use crate::store::StatsStore;
 
-/// 所有按 `ts` 裁剪的事件表。**单一真相源**:新增事件表必须补进来,由完整性测试
-/// `prune_registry_matches_migration` 兜住漏项(漏则测试红,而非静默漏删)。plays /
-/// sessions 不在此(裁剪列不同:started_at / ended_at,单独 query 处理);songs /
-/// song_artists 维表不在此(维度非流水,任意年代的事实行都要 JOIN 它们出名 / 出艺人,
-/// 永不裁剪)。
-pub(crate) const EVENT_TABLES: &[&str] = &[
-    "searches",
-    "seeks",
-    "pauses",
-    "volume_changes",
-    "mode_changes",
-    "love_changes",
-    "queue_ops",
-    "playlist_ops",
-    "fetches",
-    "downloads",
-    "copy_renders",
-    "action_invocations",
-    "config_overrides",
-    "store_writes",
-    "spawns",
-    "bus_messages",
-    "fullscreen_changes",
-    "connection_rejects",
-    "client_connections",
-    "app_lifecycle",
-    "stream_resolutions",
-    "hook_fires",
-    "gapless_boundaries",
-    "prefetches",
-    "cache_harvests",
-    "cache_evictions",
-    "script_lifecycle",
-    "config_reloads",
-];
+pub(crate) use super::event_table::EVENT_TABLES;
 
 /// 某名是否是合法的全谱事件 kind(= 事件表名)。config `stats.collect` 校验未知 kind 用:
 /// `plays` / `sessions` 是 core 本体、不在此集(它们的开关由 `level` 定,不能经 collect 覆盖)。
@@ -49,7 +18,7 @@ pub(crate) const EVENT_TABLES: &[&str] = &[
 /// # Return:
 ///   是事件表之一返回 `true`
 pub fn is_event_kind(name: &str) -> bool {
-    EVENT_TABLES.contains(&name)
+    EVENT_TABLES.iter().any(|table| table.name() == name)
 }
 
 impl StatsStore {
@@ -64,30 +33,27 @@ impl StatsStore {
     /// # Params:
     ///   - `before_ms`: 裁剪水位;严格早于此的行被删
     pub async fn prune(&self, before_ms: i64) -> color_eyre::Result<()> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
-        let mut tx = pool.begin().await.wrap_err("prune 事务开启失败")?;
-        sqlx::query!("DELETE FROM plays WHERE started_at < ?", before_ms)
-            .execute(&mut *tx)
+        let tx = db.begin().await.wrap_err("prune 事务开启失败")?;
+        plays::Entity::delete_many()
+            .filter(plays::Column::StartedAt.lt(before_ms))
+            .exec(&tx)
             .await
             .wrap_err("prune plays 失败")?;
         for table in EVENT_TABLES {
-            // 表名是内部常量(非用户输入),值走 bind;事件表统一 ts 列。
-            sqlx::query(&format!("DELETE FROM {table} WHERE ts < ?"))
-                .bind(before_ms)
-                .execute(&mut *tx)
+            table
+                .delete_before(&tx, before_ms)
                 .await
-                .wrap_err_with(|| format!("prune {table} 失败"))?;
+                .wrap_err_with(|| format!("prune {} 失败", table.name()))?;
         }
-        sqlx::query(&format!(
-            "DELETE FROM sessions WHERE ended_at < ? AND {}",
-            unreferenced_session_guard()
-        ))
-        .bind(before_ms)
-        .execute(&mut *tx)
-        .await
-        .wrap_err("prune sessions 失败")?;
+        sessions::Entity::delete_many()
+            .filter(sessions::Column::EndedAt.lt(before_ms))
+            .filter(unreferenced_session_guard(None))
+            .exec(&tx)
+            .await
+            .wrap_err("prune sessions 失败")?;
         tx.commit().await.wrap_err("prune 提交失败")?;
         Ok(())
     }
@@ -105,74 +71,69 @@ impl StatsStore {
     /// # Return:
     ///   将被删除的总行数
     pub async fn count_before(&self, before_ms: i64) -> color_eyre::Result<i64> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(0);
         };
-        let mut total = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "n!: i64" FROM plays WHERE started_at < ?"#,
-            before_ms
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("count_before plays 失败")?;
+        let mut total = i64::try_from(
+            plays::Entity::find()
+                .filter(plays::Column::StartedAt.lt(before_ms))
+                .count(db)
+                .await
+                .wrap_err("count_before plays 失败")?,
+        )?;
         for table in EVENT_TABLES {
-            // 表名是内部常量(非用户输入);事件表统一 ts 列。
-            total +=
-                sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table} WHERE ts < ?"))
-                    .bind(before_ms)
-                    .fetch_one(pool)
-                    .await
-                    .wrap_err_with(|| format!("count_before {table} 失败"))?;
+            total += table
+                .count(db, Some(i64::MIN..before_ms))
+                .await
+                .wrap_err_with(|| format!("count_before {} 失败", table.name()))?;
         }
-        total += sqlx::query_scalar::<_, i64>(&format!(
-            "SELECT COUNT(*) FROM sessions WHERE ended_at < ?1 AND {}",
-            surviving_reference_guard()
-        ))
-        .bind(before_ms)
-        .fetch_one(pool)
-        .await
-        .wrap_err("count_before sessions 失败")?;
+        total += i64::try_from(
+            sessions::Entity::find()
+                .filter(sessions::Column::EndedAt.lt(before_ms))
+                .filter(unreferenced_session_guard(Some(before_ms)))
+                .count(db)
+                .await
+                .wrap_err("count_before sessions 失败")?,
+        )?;
         Ok(total)
     }
 }
 
-/// sessions 删除守卫:全部子表(plays + 事件表)均无引用本会话的行。表名全为内部
-/// 常量,拼接安全;引用列统一叫 `session_id`(migration 约定)。
-fn unreferenced_session_guard() -> String {
-    std::iter::once("plays")
-        .chain(EVENT_TABLES.iter().copied())
-        .map(|table| format!("NOT EXISTS (SELECT 1 FROM {table} WHERE session_id = sessions.id)"))
-        .collect::<Vec<String>>()
-        .join(" AND ")
-}
-
-/// dry-run 版守卫:模拟「水位内子行已删」后的引用判定——只把 `ts`(plays 为
-/// `started_at`)不早于水位的行算作存活引用,与实删口径一致。复用外层的水位 bind
-/// (SQLite 的 `?` 按位置复用需重复出现,这里每张表引用同一水位值,统一用 `?1`)。
-fn surviving_reference_guard() -> String {
-    std::iter::once(("plays", "started_at"))
-        .chain(EVENT_TABLES.iter().map(|&table| (table, "ts")))
-        .map(|(table, ts_column)| {
-            format!(
-                "NOT EXISTS (SELECT 1 FROM {table} WHERE session_id = sessions.id AND {ts_column} >= ?1)"
-            )
-        })
-        .collect::<Vec<String>>()
-        .join(" AND ")
+/// 排除仍被播放或事件引用的会话；预览时只考虑水位之后的存活行。
+fn unreferenced_session_guard(surviving_since: Option<i64>) -> Condition {
+    let mut plays_query = Query::select();
+    plays_query
+        .expr(Expr::value(1))
+        .from(plays::Entity)
+        .and_where(
+            Expr::col((plays::Entity, plays::Column::SessionId))
+                .equals((sessions::Entity, sessions::Column::Id)),
+        );
+    if let Some(since) = surviving_since {
+        plays_query.and_where(Expr::col(plays::Column::StartedAt).gte(since));
+    }
+    let mut condition = Condition::all().add(Expr::exists(plays_query).not());
+    for table in EVENT_TABLES {
+        condition = condition.add(table.has_no_reference(surviving_since));
+    }
+    condition
 }
 
 #[cfg(test)]
 mod tests {
     use super::EVENT_TABLES;
     use crate::context::QueueContext;
+    use crate::entity::{plays, sessions};
     use crate::event::{BehaviorEvent, SearchOutcome, SearchTargetKind, StatsEvent};
+    use crate::migration::test_support::table_names;
     use crate::play::PlayRecord;
     use crate::store::StatsStore;
     use crate::vocab::{Actor, FinishReason, PlayOrigin, PlaybackOrigin};
     use color_eyre::eyre::WrapErr as _;
     use mineral_model::{SongId, SourceKind};
     use rustc_hash::FxHashSet;
-    use sqlx::SqlitePool;
+    use sea_orm::DatabaseConnection;
+    use sea_orm::{EntityTrait, PaginatorTrait};
 
     async fn open_temp() -> color_eyre::Result<(tempfile::TempDir, StatsStore)> {
         let dir = tempfile::tempdir()?;
@@ -180,7 +141,7 @@ mod tests {
         Ok((dir, store))
     }
 
-    fn live(store: &StatsStore) -> color_eyre::Result<&SqlitePool> {
+    fn live(store: &StatsStore) -> color_eyre::Result<&DatabaseConnection> {
         store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("期望 live pool"))
@@ -222,29 +183,32 @@ mod tests {
         }
     }
 
-    async fn count(pool: &SqlitePool, table: &str) -> color_eyre::Result<i64> {
-        sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(pool)
-            .await
-            .wrap_err_with(|| format!("count {table} 失败"))
+    async fn count(pool: &DatabaseConnection, table: &str) -> color_eyre::Result<i64> {
+        match table {
+            "plays" => Ok(i64::try_from(plays::Entity::find().count(pool).await?)?),
+            "sessions" => Ok(i64::try_from(sessions::Entity::find().count(pool).await?)?),
+            name => {
+                EVENT_TABLES
+                    .iter()
+                    .find(|table| table.name() == name)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("unknown event table {name}"))?
+                    .count(pool, /*range*/ None)
+                    .await
+            }
+        }
     }
 
     #[tokio::test]
     async fn prune_registry_matches_migration() -> color_eyre::Result<()> {
         let (_dir, store) = open_temp().await?;
-        let pool = live(&store)?;
-        let db_tables = sqlx::query_scalar::<_, String>(
-            "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name NOT IN ('plays', 'sessions', 'songs', 'song_artists', '_sqlx_migrations') \
-             AND name NOT LIKE 'sqlite_%'",
-        )
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .collect::<FxHashSet<String>>();
+        let db_tables = table_names(live(&store)?)
+            .await?
+            .into_iter()
+            .filter(|name| !["plays", "sessions", "songs", "song_artists"].contains(&name.as_str()))
+            .collect::<FxHashSet<String>>();
         let registry = EVENT_TABLES
             .iter()
-            .map(|s| (*s).to_owned())
+            .map(|table| table.name().to_owned())
             .collect::<FxHashSet<String>>();
         assert_eq!(
             registry, db_tables,
@@ -364,7 +328,11 @@ mod tests {
         assert!(!super::is_event_kind("sessions"), "core 本体不是事件 kind");
         assert!(!super::is_event_kind("nope_typo"), "未知名");
         // 与登记表一致:每张 EVENT_TABLE 都判 true。
-        assert!(super::EVENT_TABLES.iter().all(|t| super::is_event_kind(t)));
+        assert!(
+            super::EVENT_TABLES
+                .iter()
+                .all(|t| super::is_event_kind(t.name()))
+        );
     }
 
     #[tokio::test]

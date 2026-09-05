@@ -1,7 +1,10 @@
 //! plays / sessions 事实行的写入。
 
+use crate::entity::sessions;
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::AudioFormat;
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use crate::play::PlayRecord;
 use crate::store::StatsStore;
@@ -15,31 +18,29 @@ impl StatsStore {
         let Some(pool) = self.pool() else {
             return Ok(None);
         };
-        let id = sqlx::query!(
-            "INSERT INTO sessions (started_at, ended_at) VALUES (?, ?)",
-            started_at,
-            started_at
-        )
-        .execute(pool)
+        let id = crate::entity::sessions::Entity::insert(crate::entity::sessions::ActiveModel {
+            started_at: Set(started_at),
+            ended_at: Set(started_at),
+            ..Default::default()
+        })
+        .exec(pool)
         .await
         .wrap_err("open_session 落库失败")?
-        .last_insert_rowid();
+        .last_insert_id;
         Ok(Some(id))
     }
 
     /// 随播放活动推进,更新会话结束时刻。降级时 no-op。
     pub async fn touch_session(&self, session_id: i64, ended_at: i64) -> color_eyre::Result<()> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
-        sqlx::query!(
-            "UPDATE sessions SET ended_at = ? WHERE id = ?",
-            ended_at,
-            session_id
-        )
-        .execute(pool)
-        .await
-        .wrap_err("touch_session 落库失败")?;
+        sessions::Entity::update_many()
+            .col_expr(sessions::Column::EndedAt, Expr::value(ended_at))
+            .filter(sessions::Column::Id.eq(session_id))
+            .exec(db)
+            .await
+            .wrap_err("touch_session 落库失败")?;
         Ok(())
     }
 
@@ -64,37 +65,32 @@ impl StatsStore {
             .map(|f| i64::from(f.is_lossless()));
         let quality = rec.audio.quality.map(|q| q.as_str());
         let substituted = i64::from(rec.audio.substituted);
-        sqlx::query!(
-            "INSERT INTO plays (
-                ns, song_value, started_at, ended_at, listen_ms, duration_ms_snapshot,
-                finish_reason, skip_at_ms, play_mode, session_id, origin_kind, actor,
-                context_kind, context_ref, context_name, audio_format, is_lossless,
-                bitrate_bps, quality, bit_depth, playback_origin, substituted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ns,
-            song_value,
-            rec.started_at,
-            rec.ended_at,
-            rec.listen_ms,
-            rec.duration_ms_snapshot,
-            rec.finish_reason as _,
-            rec.skip_at_ms,
-            rec.play_mode as _,
-            rec.session_id,
-            rec.origin as _,
-            rec.actor as _,
-            context_kind,
-            context_ref,
-            context_name,
-            audio_format,
-            is_lossless,
-            rec.audio.bitrate_bps,
-            quality,
-            rec.audio.bit_depth,
-            rec.playback_origin as _,
-            substituted,
-        )
-        .execute(pool)
+        crate::entity::plays::Entity::insert(crate::entity::plays::ActiveModel {
+            ns: Set(ns.to_owned()),
+            song_value: Set(song_value.to_owned()),
+            started_at: Set(rec.started_at),
+            ended_at: Set(rec.ended_at),
+            listen_ms: Set(rec.listen_ms),
+            duration_ms_snapshot: Set(rec.duration_ms_snapshot),
+            finish_reason: Set(rec.finish_reason),
+            skip_at_ms: Set(rec.skip_at_ms),
+            play_mode: Set(rec.play_mode),
+            session_id: Set(rec.session_id),
+            origin_kind: Set(rec.origin),
+            actor: Set(rec.actor),
+            context_kind: Set(context_kind.to_owned()),
+            context_ref: Set(context_ref.map(str::to_owned)),
+            context_name: Set(context_name.map(str::to_owned)),
+            audio_format: Set(audio_format.map(str::to_owned)),
+            is_lossless: Set(is_lossless),
+            bitrate_bps: Set(rec.audio.bitrate_bps),
+            quality: Set(quality.map(str::to_owned)),
+            bit_depth: Set(rec.audio.bit_depth),
+            playback_origin: Set(rec.playback_origin),
+            substituted: Set(substituted),
+            ..Default::default()
+        })
+        .exec(pool)
         .await
         .wrap_err_with(|| format!("record_play 落库失败 song={song_value}"))?;
         Ok(())
@@ -108,9 +104,11 @@ mod tests {
     use crate::store::StatsStore;
     use crate::vocab::{Actor, FinishReason, PlayOrigin, PlaybackOrigin};
     use mineral_model::{AudioFormat, BitRate, PlaylistId, SongId, SourceKind};
+    use sea_orm::sea_query::ExprTrait;
+    use sea_orm::{EntityTrait, QueryFilter, QuerySelect};
 
-    /// 读回断言用的行结构(运行期 query_as + 类型化枚举 decode)。
-    #[derive(sqlx::FromRow)]
+    /// 读回断言使用的字段投影，包含类型化的枚举值。
+    #[derive(sea_orm::FromQueryResult)]
     struct PlayRow {
         /// 来源 name。
         ns: String,
@@ -189,13 +187,57 @@ mod tests {
         let pool = store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))?;
-        let row = sqlx::query_as::<_, PlayRow>(
-            "SELECT ns, song_value, listen_ms, finish_reason, play_mode, session_id, \
-             origin_kind, actor, context_kind, context_ref, context_name, audio_format, \
-             is_lossless, playback_origin, substituted FROM plays",
-        )
-        .fetch_one(pool)
-        .await?;
+        let row = crate::entity::plays::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::Ns,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::SongValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::ListenMs,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::FinishReason,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::PlayMode,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::SessionId,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::OriginKind,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::Actor,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::ContextKind,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::ContextRef,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::ContextName,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::AudioFormat,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::IsLossless,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::PlaybackOrigin,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::plays::Column::Substituted,
+            ))
+            .into_model::<PlayRow>()
+            .one(pool)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.ns, "netease");
         assert_eq!(row.song_value, "42");
         assert_eq!(row.listen_ms, 3000);
@@ -236,10 +278,19 @@ mod tests {
         let pool = store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))?;
-        let ended = sqlx::query_scalar::<_, i64>("SELECT ended_at FROM sessions WHERE id = ?")
-            .bind(sid)
-            .fetch_one(pool)
-            .await?;
+        let ended = crate::entity::sessions::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::sessions::Column::EndedAt,
+            ))
+            .filter(
+                sea_orm::sea_query::Expr::col(crate::entity::sessions::Column::Id)
+                    .eq(sea_orm::sea_query::Expr::value(sid)),
+            )
+            .into_tuple::<i64>()
+            .one(pool)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(ended, 5000);
         Ok(())
     }

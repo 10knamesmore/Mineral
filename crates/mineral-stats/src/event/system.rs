@@ -7,8 +7,8 @@
 use mineral_model::SongId;
 
 /// 执行契约解析结局(stream_resolutions.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum StreamOutcome {
     /// 拿到执行契约。
     Ok,
@@ -21,8 +21,8 @@ pub enum StreamOutcome {
 }
 
 /// 触发的插件 hook(hook_fires.hook)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum HookKind {
     /// 起播前 hook。
     BeforeStream,
@@ -32,8 +32,8 @@ pub enum HookKind {
 }
 
 /// hook 触发的时机(hook_fires.stage)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum HookStage {
     /// 即时(当前曲）。
     Immediate,
@@ -43,8 +43,8 @@ pub enum HookStage {
 }
 
 /// hook 的裁决(hook_fires.decision)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum HookDecision {
     /// 放行不改。
     Continue,
@@ -57,8 +57,8 @@ pub enum HookDecision {
 }
 
 /// hook 失败时的 fail-open 原因(hook_fires.fail_open);正常裁决为 `None`。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum FailOpen {
     /// 超时。
     Timeout,
@@ -71,8 +71,8 @@ pub enum FailOpen {
 }
 
 /// 无缝衔接的边界裁决(gapless_boundaries.result)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum GaplessResult {
     /// 采纳无缝边界。
     Adopt,
@@ -82,8 +82,8 @@ pub enum GaplessResult {
 }
 
 /// 预取的来源(prefetches.source)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum PrefetchSource {
     /// 本地文件。
     Local,
@@ -93,8 +93,8 @@ pub enum PrefetchSource {
 }
 
 /// 预取的裁决(prefetches.resolution)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum PrefetchResolution {
     /// 已装填待播。
     Armed,
@@ -110,8 +110,8 @@ pub enum PrefetchResolution {
 }
 
 /// 边播边收割的落库结局(cache_harvests.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum CacheHarvestOutcome {
     /// 入缓存。
     Cached,
@@ -121,8 +121,8 @@ pub enum CacheHarvestOutcome {
 }
 
 /// 脚本生命周期事件(script_lifecycle.event)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum ScriptEvent {
     /// 首次加载。
     Load,

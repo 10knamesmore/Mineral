@@ -14,6 +14,7 @@
 
 use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
 use mineral_persist::{CachedPlaylistEntry, ServerStore};
+use rustc_hash::FxHashMap;
 
 /// 版本比对决策:本地缓存能否直接复用(免全拉)。纯函数,便于单测。
 ///
@@ -109,7 +110,7 @@ pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Ve
     }
 }
 
-/// 把持久化 relation 逐个 `get_meta` 重建成 PlaylistEntry，meta 缺失只跳过该 index。
+/// 按来源批量读取 metadata，再按原 relation 顺序重建；缺失只跳过该 index。
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄
@@ -118,26 +119,37 @@ pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Ve
 /// # Return:
 ///   重建出的 relation(保留 index 与顺序);全缺时为空 vec。
 async fn rebuild(persist: &ServerStore, entries: &[CachedPlaylistEntry]) -> Vec<PlaylistEntry> {
-    let mut out = Vec::with_capacity(entries.len());
+    let mut by_source = FxHashMap::<SourceKind, Vec<SongId>>::default();
     for entry in entries {
-        let store = persist.scope(entry.song_id.namespace());
-        match store.get_meta(&entry.song_id).await {
-            Ok(Some(song)) => out.push(
-                PlaylistEntry::builder()
-                    .index(entry.index)
-                    .song(song)
-                    .build(),
-            ),
-            Ok(None) => {}
-            Err(e) => {
-                mineral_log::warn!(target: "netease", song = %entry.song_id.value(), error = mineral_log::chain(&e), "读 song_meta 失败,跳过该首");
+        by_source
+            .entry(entry.song_id.namespace())
+            .or_default()
+            .push(entry.song_id.clone());
+    }
+    let mut metadata = FxHashMap::default();
+    for (source, ids) in by_source {
+        match persist.scope(source).get_meta_batch(&ids).await {
+            Ok(songs) => metadata.extend(songs),
+            Err(error) => {
+                mineral_log::warn!(target: "netease", source = source.name(), songs = ids.len(),
+                    error = mineral_log::chain(&error), "读取歌单 metadata 批次失败");
             }
         }
     }
-    out
+    entries
+        .iter()
+        .filter_map(|entry| {
+            metadata.get(&entry.song_id).cloned().map(|song| {
+                PlaylistEntry::builder()
+                    .index(entry.index)
+                    .song(song)
+                    .build()
+            })
+        })
+        .collect()
 }
 
-/// 远端全拉到歌单后写回缓存:每首 `upsert_meta` + 整张 `put_playlist_cache`(含版本戳)。
+/// 远端歌单到货后按来源批量写入 metadata，再写完整 relation 与版本戳。
 ///
 /// best-effort:任一步失败只 warn,不影响返回给上层的远端结果。
 ///
@@ -156,15 +168,22 @@ pub async fn store(
 ) {
     let scope = persist.scope(SourceKind::NETEASE);
     let mut cached_entries = Vec::with_capacity(entries.len());
+    let mut by_source = FxHashMap::<SourceKind, Vec<&mineral_model::Song>>::default();
     for entry in entries {
-        let song_scope = persist.scope(entry.song.source());
-        if let Err(e) = song_scope.upsert_meta(&entry.song).await {
-            mineral_log::warn!(target: "netease", song = %entry.song.id.value(), error = mineral_log::chain(&e), "upsert song_meta 失败");
-        }
+        by_source
+            .entry(entry.song.source())
+            .or_default()
+            .push(&entry.song);
         cached_entries.push(CachedPlaylistEntry {
             index: entry.index,
             song_id: entry.song.id.clone(),
         });
+    }
+    for (source, songs) in by_source {
+        if let Err(error) = persist.scope(source).upsert_meta_batch(&songs).await {
+            mineral_log::warn!(target: "netease", source = source.name(), songs = songs.len(),
+                error = mineral_log::chain(&error), "写入歌单 metadata 批次失败");
+        }
     }
     if let Err(e) = scope
         .put_playlist_cache(id, name, track_update_time, &cached_entries)
@@ -180,6 +199,37 @@ mod tests {
     use mineral_persist::{CachedPlaylistEntry, ServerStore};
 
     use super::{cache_is_current, store, try_load_stale, try_rebuild_if_current};
+
+    /// 批量 metadata 读取不得合并 relation；相同裸 ID 的不同来源也必须独立。
+    #[tokio::test]
+    async fn batch_rebuild_preserves_duplicates_and_source_identity() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let persist = ServerStore::open(&dir.path().join("test.db")).await?;
+        let id = PlaylistId::new(SourceKind::NETEASE, "555");
+        let netease = mineral_test::with_name(mineral_test::song("42"), "网易歌曲");
+        let bilibili = mineral_test::with_source(
+            mineral_test::with_name(mineral_test::song("42"), "视频音轨"),
+            SourceKind::BILIBILI,
+        );
+        let entries = [(4, netease.clone()), (8, bilibili), (12, netease)]
+            .into_iter()
+            .map(|(index, song)| {
+                PlaylistEntry::builder()
+                    .index(CollectionIndex::new(index))
+                    .song(song)
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        store(&persist, &id, Some("混源歌单"), Some(700), &entries).await;
+        let rebuilt = try_load_stale(&persist, &id)
+            .await
+            .ok_or_else(|| color_eyre::eyre::eyre!("已写入歌单应能重建"))?;
+        assert_eq!(
+            rebuilt, entries,
+            "各 relation 的坐标、重复次数与歌曲来源都应保持"
+        );
+        Ok(())
+    }
 
     /// 版本戳完全相等才复用缓存。
     #[test]

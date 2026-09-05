@@ -2,7 +2,26 @@
 
 use std::ops::Range;
 
+use super::shared::{ReportColumn, plays_in};
+use crate::entity::plays;
 use color_eyre::eyre::WrapErr as _;
+use sea_orm::sea_query::{self, Expr, ExprTrait, Func, Iden};
+use sea_orm::{ColumnTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+
+/// SQLite 的时间格式化函数。
+#[derive(Iden)]
+struct Strftime;
+
+/// SQLite 的整数转换类型。
+#[derive(Iden)]
+struct Integer;
+
+/// 时间分桶的输出键。
+#[derive(Clone, Copy, Debug, sea_orm::DeriveColumn)]
+enum BucketColumn {
+    /// 分桶的数值键。
+    Key,
+}
 
 use crate::report::{Bucket, BucketBy, Distributions, Slice};
 use crate::store::StatsStore;
@@ -14,52 +33,34 @@ impl StatsStore {
         range: Range<i64>,
         by: BucketBy,
     ) -> color_eyre::Result<Vec<Bucket>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        // strftime 格式随维度变(嵌在 SQL 结构里),故按 BucketBy 分三条。
-        let rows = match by {
-            BucketBy::Hour => sqlx::query_as!(
-                Bucket,
-                r#"SELECT key AS "key!: i64", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-                   FROM (SELECT CAST(strftime('%H', started_at / 1000, 'unixepoch') AS INTEGER) AS key, listen_ms
-                         FROM plays WHERE started_at >= ? AND started_at < ?)
-                   GROUP BY key ORDER BY key"#,
-                range.start,
-                range.end
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("listen_buckets(hour) 查询失败")?,
-            BucketBy::Weekday => sqlx::query_as!(
-                Bucket,
-                r#"SELECT key AS "key!: i64", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-                   FROM (SELECT CAST(strftime('%w', started_at / 1000, 'unixepoch') AS INTEGER) AS key, listen_ms
-                         FROM plays WHERE started_at >= ? AND started_at < ?)
-                   GROUP BY key ORDER BY key"#,
-                range.start,
-                range.end
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("listen_buckets(weekday) 查询失败")?,
-            BucketBy::Month => sqlx::query_as!(
-                Bucket,
-                r#"SELECT key AS "key!: i64", COUNT(*) AS "plays!: i64",
-                    COALESCE(SUM(listen_ms), 0) AS "listen_ms!: i64"
-                   FROM (SELECT CAST(strftime('%m', started_at / 1000, 'unixepoch') AS INTEGER) AS key, listen_ms
-                         FROM plays WHERE started_at >= ? AND started_at < ?)
-                   GROUP BY key ORDER BY key"#,
-                range.start,
-                range.end
-            )
-            .fetch_all(pool)
-            .await
-            .wrap_err("listen_buckets(month) 查询失败")?,
+        let format = match by {
+            BucketBy::Hour => "%H",
+            BucketBy::Weekday => "%w",
+            BucketBy::Month => "%m",
         };
-        Ok(rows)
+        let key = Expr::from(Func::cust(Strftime).args([
+            Expr::value(format),
+            Expr::col((plays::Entity, plays::Column::StartedAt)).div(1000),
+            Expr::value("unixepoch"),
+        ]))
+        .cast_as(Integer);
+        plays_in(range)
+            .select_only()
+            .column_as(key.clone(), BucketColumn::Key)
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .column_as(
+                plays::Column::ListenMs.sum().if_null(0),
+                ReportColumn::ListenMs,
+            )
+            .group_by(key.clone())
+            .order_by_asc(key)
+            .into_model::<Bucket>()
+            .all(db)
+            .await
+            .wrap_err("listen_buckets 查询失败")
     }
 
     /// 各维度分布(来源 / 发起方式 / 模式 / 格式 / 音质 / 来源位置)+ 无损播放数。
@@ -67,22 +68,32 @@ impl StatsStore {
         let Some(pool) = self.pool() else {
             return Ok(Distributions::default());
         };
-        let lossless_plays = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "count!: i64" FROM plays
-               WHERE started_at >= ? AND started_at < ? AND is_lossless = 1"#,
-            range.start,
-            range.end
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("distributions(lossless) 查询失败")?;
+        let lossless_plays = i64::try_from(
+            plays_in(range.clone())
+                .filter(plays::Column::IsLossless.eq(1))
+                .count(pool)
+                .await
+                .wrap_err("distributions(lossless) 查询失败")?,
+        )?;
         Ok(Distributions {
-            by_source: self.distribution_by(range.clone(), "ns").await?,
-            by_origin: self.distribution_by(range.clone(), "origin_kind").await?,
-            by_play_mode: self.distribution_by(range.clone(), "play_mode").await?,
-            by_format: self.distribution_by(range.clone(), "audio_format").await?,
-            by_quality: self.distribution_by(range.clone(), "quality").await?,
-            by_playback_origin: self.distribution_by(range, "playback_origin").await?,
+            by_source: self
+                .distribution_by(range.clone(), plays::Column::Ns)
+                .await?,
+            by_origin: self
+                .distribution_by(range.clone(), plays::Column::OriginKind)
+                .await?,
+            by_play_mode: self
+                .distribution_by(range.clone(), plays::Column::PlayMode)
+                .await?,
+            by_format: self
+                .distribution_by(range.clone(), plays::Column::AudioFormat)
+                .await?,
+            by_quality: self
+                .distribution_by(range.clone(), plays::Column::Quality)
+                .await?,
+            by_playback_origin: self
+                .distribution_by(range, plays::Column::PlaybackOrigin)
+                .await?,
             lossless_plays,
         })
     }
@@ -92,20 +103,23 @@ impl StatsStore {
     async fn distribution_by(
         &self,
         range: Range<i64>,
-        column: &str,
+        column: plays::Column,
     ) -> color_eyre::Result<Vec<Slice>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query_as::<_, (String, i64)>(&format!(
-            "SELECT COALESCE({column}, '') AS value, COUNT(*) AS plays FROM plays \
-             WHERE started_at >= ? AND started_at < ? GROUP BY value ORDER BY plays DESC, value"
-        ))
-        .bind(range.start)
-        .bind(range.end)
-        .fetch_all(pool)
-        .await
-        .wrap_err_with(|| format!("distribution_by {column} 查询失败"))?;
+        let label = Expr::col((plays::Entity, column)).if_null("");
+        let rows = plays_in(range)
+            .select_only()
+            .expr(label.clone())
+            .column_as(plays::Column::Id.count(), ReportColumn::Plays)
+            .group_by(label.clone())
+            .order_by_desc(Expr::col(ReportColumn::Plays))
+            .order_by_asc(label)
+            .into_tuple::<(String, i64)>()
+            .all(db)
+            .await
+            .wrap_err_with(|| format!("distribution_by {column:?} 查询失败"))?;
         Ok(rows
             .into_iter()
             .map(|(value, plays)| Slice { value, plays })

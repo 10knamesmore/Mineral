@@ -14,7 +14,11 @@ use color_eyre::eyre::WrapErr;
 use mineral_log::{debug, trace};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use sqlx::SqlitePool;
+use sea_orm::DatabaseConnection;
+
+mod storage;
+use storage::CacheRow;
+pub(crate) use storage::CacheTable;
 
 /// 单条索引项(内存镜像)。
 struct Entry {
@@ -53,10 +57,10 @@ struct Index {
 /// 真实后端(启用态)。
 struct Backend {
     /// sqlite 连接池(daemon 复用 `mineral.db`;client 自开 `tui.db`)。
-    pool: SqlitePool,
+    pool: DatabaseConnection,
 
-    /// 索引表名(我方选定的静态名,直接拼进 SQL;非外部输入,无注入)。
-    table: &'static str,
+    /// 缓存用途，映射到对应的持久化实体。
+    table: CacheTable,
 
     /// 文件根目录;`relpath` 相对它,`get` 返回 `root.join(relpath)`。
     root: PathBuf,
@@ -108,33 +112,22 @@ impl CacheIndex {
     ///
     /// # Params:
     ///   - `pool`: sqlite 连接池(调用方持有 / 复用)
-    ///   - `table`: 索引表名(我方静态选定)
+    ///   - `table`: 缓存用途
     ///   - `root`: 文件根目录
     ///   - `capacity`: 容量上限字节;`None` 不驱逐
     ///
     /// # Return:
     ///   就绪索引;建表 / 载入失败返回 `Err`(调用方可降级到 [`Self::disabled`])。
-    pub async fn open(
-        pool: SqlitePool,
-        table: &'static str,
+    pub(crate) async fn open(
+        pool: DatabaseConnection,
+        table: CacheTable,
         root: PathBuf,
         capacity: Option<u64>,
     ) -> color_eyre::Result<Self> {
-        sqlx::query(&format!(
-            "CREATE TABLE IF NOT EXISTS {table} \
-             (key TEXT PRIMARY KEY, relpath TEXT NOT NULL, \
-              bytes INTEGER NOT NULL, last_access INTEGER NOT NULL)"
-        ))
-        .execute(&pool)
-        .await
-        .wrap_err_with(|| format!("建缓存索引表失败 table={table}"))?;
-
-        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(&format!(
-            "SELECT key, relpath, bytes, last_access FROM {table}"
-        ))
-        .fetch_all(&pool)
-        .await
-        .wrap_err_with(|| format!("载入缓存索引失败 table={table}"))?;
+        let rows = table
+            .load(&pool)
+            .await
+            .wrap_err_with(|| format!("载入缓存索引失败 table={}", table.name()))?;
 
         let backend = Backend {
             pool,
@@ -150,7 +143,7 @@ impl CacheIndex {
         backend.reconcile(rows).await?;
         debug!(
             target: "persist",
-            table,
+            table = table.name(),
             entries = backend.index.lock().map.len(),
             "缓存索引就绪"
         );
@@ -389,10 +382,11 @@ impl CacheIndex {
         for entry in &entries {
             drop(std::fs::remove_file(backend.root.join(&entry.relpath)));
         }
-        sqlx::query(&format!("DELETE FROM {}", backend.table))
-            .execute(&backend.pool)
+        backend
+            .table
+            .clear(&backend.pool)
             .await
-            .wrap_err_with(|| format!("清空缓存索引表失败 table={}", backend.table))?;
+            .wrap_err_with(|| format!("清空缓存索引表失败 table={}", backend.table.name()))?;
         Ok(CacheStats {
             root: Some(backend.root.clone()),
             entries,
@@ -411,11 +405,17 @@ impl Backend {
     ///
     /// # Return:
     ///   对账成功返回 `Ok(())`。
-    async fn reconcile(&self, rows: Vec<(String, String, i64, i64)>) -> color_eyre::Result<()> {
+    async fn reconcile(&self, rows: Vec<CacheRow>) -> color_eyre::Result<()> {
         let mut dead = Vec::<String>::new();
         {
             let mut idx = self.index.lock();
-            for (key, relpath, bytes, last_access) in rows {
+            for CacheRow {
+                key,
+                relpath,
+                bytes,
+                last_access,
+            } in rows
+            {
                 if !self.root.join(&relpath).is_file() {
                     dead.push(key);
                     continue;
@@ -475,31 +475,27 @@ impl Backend {
         bytes: u64,
         last_access: u64,
     ) -> color_eyre::Result<()> {
-        trace!(target: "persist", table = self.table, key, "缓存索引 upsert");
-        sqlx::query(&format!(
-            "INSERT INTO {}(key, relpath, bytes, last_access) VALUES(?,?,?,?) \
-             ON CONFLICT(key) DO UPDATE SET \
-               relpath=excluded.relpath, bytes=excluded.bytes, last_access=excluded.last_access",
-            self.table
-        ))
-        .bind(key)
-        .bind(relpath)
-        .bind(i64::try_from(bytes)?)
-        .bind(i64::try_from(last_access)?)
-        .execute(&self.pool)
-        .await
-        .wrap_err_with(|| format!("缓存索引 upsert 失败 table={} key={key}", self.table))?;
-        Ok(())
+        trace!(target: "persist", table = self.table.name(), key, "缓存索引 upsert");
+        self.table
+            .upsert(
+                &self.pool,
+                CacheRow {
+                    key: key.to_owned(),
+                    relpath: relpath.to_owned(),
+                    bytes: i64::try_from(bytes)?,
+                    last_access: i64::try_from(last_access)?,
+                },
+            )
+            .await
+            .wrap_err_with(|| format!("缓存索引 upsert 失败 table={} key={key}", self.table.name()))
     }
 
     /// `DELETE` 一行。
     async fn delete_row(&self, key: &str) -> color_eyre::Result<()> {
-        sqlx::query(&format!("DELETE FROM {} WHERE key=?", self.table))
-            .bind(key)
-            .execute(&self.pool)
+        self.table
+            .delete(&self.pool, key)
             .await
-            .wrap_err_with(|| format!("缓存索引 delete 失败 table={} key={key}", self.table))?;
-        Ok(())
+            .wrap_err_with(|| format!("缓存索引 delete 失败 table={} key={key}", self.table.name()))
     }
 
     /// 超容量驱逐:按 `last_access` 升序删最旧(删文件 + `DELETE` 行 + 改 `total_bytes`),
@@ -649,17 +645,18 @@ fn dedup_rel(root: &Path, subdir: &str, file_name: &str) -> String {
 mod tests {
     use std::path::Path;
 
-    use sqlx::SqlitePool;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sea_orm::DatabaseConnection;
+
+    use super::CacheTable;
+    use sea_orm::{ConnectOptions, Database};
 
     use super::{CacheIndex, Evicted};
 
     /// 开一个内存 sqlite 池(每个测试独立)。
-    async fn mem_pool() -> color_eyre::Result<SqlitePool> {
-        Ok(SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await?)
+    async fn mem_pool() -> color_eyre::Result<DatabaseConnection> {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(/*value*/ 1);
+        Ok(Database::connect(options).await?)
     }
 
     /// 在 `dir` 下造一个内容为 `data` 的源文件(模拟 capture 落盘),返回其路径。
@@ -674,7 +671,8 @@ mod tests {
     async fn record_file_then_get() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        let idx =
+            CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
         let src = make_src(d.path(), "cap.part", b"AUDIO")?;
         idx.record_file("ne:1:exhigh", &src, "netease/exhigh/专辑", "晴天.mp3")
             .await?;
@@ -694,14 +692,19 @@ mod tests {
         let root = d.path().join("root");
         let pool = mem_pool().await?;
         {
-            let idx = CacheIndex::open(pool.clone(), "audio_cache", root.clone(), Some(1_000_000))
-                .await?;
+            let idx = CacheIndex::open(
+                pool.clone(),
+                CacheTable::Audio,
+                root.clone(),
+                Some(1_000_000),
+            )
+            .await?;
             let src = make_src(d.path(), "cap.part", b"AUDIO")?;
             idx.record_file("ne:1:exhigh", &src, "netease/exhigh/x", "a.mp3")
                 .await?;
             // 不 flush、不 drop 即"重开"(同池模拟进程内换实例;真实是新进程读同文件)。
         }
-        let reopened = CacheIndex::open(pool, "audio_cache", root, Some(1_000_000)).await?;
+        let reopened = CacheIndex::open(pool, CacheTable::Audio, root, Some(1_000_000)).await?;
         assert!(
             reopened.get("ne:1:exhigh").is_some(),
             "写穿透后重开应仍命中,无需 Drop flush"
@@ -716,7 +719,7 @@ mod tests {
         let root = d.path().join("root");
         let idx = CacheIndex::open(
             mem_pool().await?,
-            "audio_cache",
+            CacheTable::Audio,
             root.clone(),
             Some(1_000_000),
         )
@@ -749,7 +752,8 @@ mod tests {
     async fn drift_is_miss() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        let idx =
+            CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
         let src = make_src(d.path(), "cap.part", b"X")?;
         idx.record_file("k", &src, "sub", "a.mp3").await?;
         let Some(path) = idx.get("k") else {
@@ -766,7 +770,7 @@ mod tests {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
         // 容量 10 字节。
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(10)).await?;
+        let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(10)).await?;
         idx.record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
             .await?; // 5
         idx.record_file("b", &make_src(d.path(), "b", b"12345")?, "s", "b.bin")
@@ -785,7 +789,7 @@ mod tests {
     async fn record_file_returns_evicted_entries() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(10)).await?;
+        let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(10)).await?;
         let first = idx
             .record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
             .await?;
@@ -812,7 +816,8 @@ mod tests {
     async fn dedups_colliding_name() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        let idx =
+            CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
         idx.record_file("k1", &make_src(d.path(), "a", b"one")?, "s", "T.mp3")
             .await?;
         idx.record_file("k2", &make_src(d.path(), "b", b"two")?, "s", "T.mp3")
@@ -832,7 +837,7 @@ mod tests {
         let root = d.path().join("root");
         std::fs::create_dir_all(root.join("sub"))?;
         std::fs::write(root.join("sub/x.flac"), b"BIGFLAC")?;
-        let idx = CacheIndex::open(mem_pool().await?, "no_evict", root, None).await?;
+        let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, None).await?;
         idx.record("ne:1:lossless", "sub/x.flac", 7).await?;
         assert!(idx.get("ne:1:lossless").is_some());
         Ok(())
@@ -854,7 +859,8 @@ mod tests {
     async fn clear_removes_everything() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        let idx =
+            CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
         idx.record_file("k", &make_src(d.path(), "a", b"hello")?, "s", "a.bin")
             .await?;
         let removed = idx.clear().await?;
@@ -874,7 +880,8 @@ mod tests {
     async fn snapshot_reports_entries_and_capacity() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path().join("root");
-        let idx = CacheIndex::open(mem_pool().await?, "audio_cache", root, Some(1_000_000)).await?;
+        let idx =
+            CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
         idx.record_file("k1", &make_src(d.path(), "a", b"123")?, "s", "a.bin")
             .await?;
         idx.record_file("k2", &make_src(d.path(), "b", b"45")?, "s", "b.bin")

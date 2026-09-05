@@ -6,12 +6,17 @@ use color_eyre::eyre::WrapErr;
 use mineral_log::{info, warn};
 use mineral_model::{Song, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
-use sqlx::SqlitePool;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, JoinType, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
+};
 
 use crate::CacheIndex;
-use crate::db::rows::{SongArtistRow, SongMetaRow};
+use crate::db::rows::SongArtistRow;
 use crate::db::schema::ensure_schema;
 use crate::db::{NamespaceStore, SessionStore};
+use crate::entity::{playlist_cache, playlist_entries, song_artists, song_favorites, song_meta};
 
 /// 持久化服务句柄。廉价 clone(内部 `Arc`)。
 ///
@@ -35,7 +40,7 @@ pub struct PlaylistCacheStats {
 /// 内部后端:真实 sqlite 或降级 null。
 enum Backend {
     /// 真实 sqlite 连接池。
-    Sqlite(SqlitePool),
+    Sqlite(DatabaseConnection),
 
     /// 降级:写丢弃、读空。
     Disabled,
@@ -73,7 +78,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   启用时为底层连接池,降级时为 `None`。
-    pub(crate) fn pool(&self) -> Option<&SqlitePool> {
+    pub(crate) fn pool(&self) -> Option<&DatabaseConnection> {
         match self.backend.as_ref() {
             Backend::Sqlite(p) => Some(p),
             Backend::Disabled => None,
@@ -113,7 +118,15 @@ impl ServerStore {
         capacity: u64,
     ) -> color_eyre::Result<CacheIndex> {
         match self.pool() {
-            Some(pool) => CacheIndex::open(pool.clone(), "audio_cache", root, Some(capacity)).await,
+            Some(pool) => {
+                CacheIndex::open(
+                    pool.clone(),
+                    crate::cache_index::CacheTable::Audio,
+                    root,
+                    Some(capacity),
+                )
+                .await
+            }
             None => Ok(CacheIndex::disabled()),
         }
     }
@@ -128,45 +141,58 @@ impl ServerStore {
     /// # Return:
     ///   跨 namespace 的收藏 `Vec<Song>`。
     pub async fn loved_songs(&self) -> color_eyre::Result<Vec<Song>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let meta_rows = sqlx::query_as::<_, SongMetaRow>(
-            "SELECT m.namespace, m.song_value, m.name, m.alias, m.album_id, m.album_name, \
-             m.duration_ms, m.cover_url \
-             FROM song_favorites f \
-             JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value \
-             ORDER BY f.entered_at DESC, f.namespace, f.song_value",
-        )
-        .fetch_all(pool)
-        .await
-        .wrap_err("查跨源 loved 元数据失败")?;
-
-        let artist_rows: Vec<(String, String, String, String)> = sqlx::query_as(
-            "SELECT a.namespace, a.song_value, a.artist_id, a.artist_name \
-             FROM song_favorites f \
-             JOIN song_artists a ON a.namespace = f.namespace AND a.song_value = f.song_value \
-             ORDER BY a.position",
-        )
-        .fetch_all(pool)
-        .await
-        .wrap_err("查跨源 loved 艺人失败")?;
-        let mut artists_by_song = FxHashMap::<(String, String), Vec<SongArtistRow>>::default();
-        for (namespace, song_value, artist_id, artist_name) in artist_rows {
-            artists_by_song
-                .entry((namespace, song_value))
+        let rows = song_meta::Entity::find()
+            .join(
+                JoinType::InnerJoin,
+                song_meta::Entity::belongs_to(song_favorites::Entity)
+                    .from((song_meta::Column::Namespace, song_meta::Column::SongValue))
+                    .to((
+                        song_favorites::Column::Namespace,
+                        song_favorites::Column::SongValue,
+                    ))
+                    .into(),
+            )
+            .order_by_desc(song_favorites::Column::EnteredAt)
+            .order_by_asc(song_favorites::Column::Namespace)
+            .order_by_asc(song_favorites::Column::SongValue)
+            .all(db)
+            .await
+            .wrap_err("查跨源 loved 元数据失败")?;
+        let artist_rows = song_artists::Entity::find()
+            .join(
+                JoinType::InnerJoin,
+                song_artists::Entity::belongs_to(song_favorites::Entity)
+                    .from((
+                        song_artists::Column::Namespace,
+                        song_artists::Column::SongValue,
+                    ))
+                    .to((
+                        song_favorites::Column::Namespace,
+                        song_favorites::Column::SongValue,
+                    ))
+                    .into(),
+            )
+            .order_by_asc(song_artists::Column::Position)
+            .all(db)
+            .await
+            .wrap_err("查跨源 loved 艺人失败")?;
+        let mut artists = FxHashMap::<(String, String), Vec<SongArtistRow>>::default();
+        for row in artist_rows {
+            artists
+                .entry((row.namespace, row.song_value))
                 .or_default()
                 .push(SongArtistRow {
-                    artist_id,
-                    artist_name,
+                    artist_id: row.artist_id,
+                    artist_name: row.artist_name,
                 });
         }
-
-        meta_rows
-            .into_iter()
+        rows.into_iter()
             .map(|row| {
                 let key = (row.namespace.clone(), row.song_value.clone());
-                row.into_song(artists_by_song.remove(&key).unwrap_or_default())
+                row.into_song(artists.remove(&key).unwrap_or_default())
             })
             .collect()
     }
@@ -178,17 +204,23 @@ impl ServerStore {
     /// # Return:
     ///   有 meta 的跨源收藏数。
     pub async fn loved_count(&self) -> color_eyre::Result<u64> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(0);
         };
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM song_favorites f \
-             JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value",
-        )
-        .fetch_one(pool)
-        .await
-        .wrap_err("统计跨源 loved 计数失败")?;
-        u64::try_from(count).wrap_err("loved 计数转 u64 失败")
+        song_meta::Entity::find()
+            .join(
+                JoinType::InnerJoin,
+                song_meta::Entity::belongs_to(song_favorites::Entity)
+                    .from((song_meta::Column::Namespace, song_meta::Column::SongValue))
+                    .to((
+                        song_favorites::Column::Namespace,
+                        song_favorites::Column::SongValue,
+                    ))
+                    .into(),
+            )
+            .count(db)
+            .await
+            .wrap_err("统计跨源 loved 计数失败")
     }
 
     /// 全部源里 loved 但**缺 meta** 的歌 id(sync 导入的远端红心先只有 id、无 meta)。
@@ -198,20 +230,27 @@ impl ServerStore {
     /// # Return:
     ///   跨 namespace 的缺 meta 收藏 id(namespace 从行内 `SourceKind::from_name` 还原)。
     pub async fn missing_meta_loved_ids(&self) -> color_eyre::Result<Vec<SongId>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT f.namespace, f.song_value FROM song_favorites f \
-             LEFT JOIN song_meta m ON m.namespace = f.namespace AND m.song_value = f.song_value \
-             WHERE m.song_value IS NULL",
-        )
-        .fetch_all(pool)
-        .await
-        .wrap_err("查缺 meta 的 loved 行失败")?;
+        let rows = song_favorites::Entity::find()
+            .join(
+                JoinType::LeftJoin,
+                song_favorites::Entity::belongs_to(song_meta::Entity)
+                    .from((
+                        song_favorites::Column::Namespace,
+                        song_favorites::Column::SongValue,
+                    ))
+                    .to((song_meta::Column::Namespace, song_meta::Column::SongValue))
+                    .into(),
+            )
+            .filter(song_meta::Column::SongValue.is_null())
+            .all(db)
+            .await
+            .wrap_err("查缺 meta 的 loved 行失败")?;
         Ok(rows
             .into_iter()
-            .map(|(namespace, value)| SongId::new(SourceKind::from_name(&namespace), value))
+            .map(|row| SongId::new(SourceKind::from_name(&row.namespace), row.song_value))
             .collect())
     }
 
@@ -239,32 +278,41 @@ impl ServerStore {
                 .cmp(right.namespace().name())
                 .then_with(|| left.value().cmp(right.value()))
         });
-        let mut tx = pool
+        let tx = pool
             .begin()
             .await
             .wrap_err("开启 Favorites import 事务失败")?;
-        let (latest,): (Option<i64>,) =
-            sqlx::query_as("SELECT MAX(entered_at) FROM song_favorites")
-                .fetch_one(&mut *tx)
-                .await
-                .wrap_err("读取 Favorites 最新进入时间失败")?;
+        let latest = song_favorites::Entity::find()
+            .select_only()
+            .expr(song_favorites::Column::EnteredAt.max())
+            .into_tuple::<Option<i64>>()
+            .one(&tx)
+            .await
+            .wrap_err("读取 Favorites 最新进入时间失败")?
+            .flatten();
         let now = crate::db::time::now_ms();
         let entered_at = latest
             .map(|value| value.saturating_add(1))
             .map_or(now, |next| next.max(now));
         let mut inserted = Vec::<SongId>::new();
         for id in ordered {
-            let result = sqlx::query(
-                "INSERT INTO song_favorites(namespace,song_value,entered_at) VALUES(?,?,?) \
-                 ON CONFLICT(namespace,song_value) DO NOTHING",
+            let result = song_favorites::Entity::insert(song_favorites::ActiveModel {
+                namespace: Set(id.namespace().name().to_owned()),
+                song_value: Set(id.value().to_owned()),
+                entered_at: Set(entered_at),
+            })
+            .on_conflict(
+                OnConflict::columns([
+                    song_favorites::Column::Namespace,
+                    song_favorites::Column::SongValue,
+                ])
+                .do_nothing()
+                .to_owned(),
             )
-            .bind(id.namespace().name())
-            .bind(id.value())
-            .bind(entered_at)
-            .execute(&mut *tx)
+            .exec_without_returning(&tx)
             .await
             .wrap_err_with(|| format!("导入 favorite 失败 song={}", id.qualified()))?;
-            if result.rows_affected() > 0 {
+            if result > 0 {
                 inserted.push(id);
             }
         }
@@ -279,24 +327,21 @@ impl ServerStore {
     /// # Return:
     ///   启用态返回 `playlist_cache` / `playlist_entries` 行数;降级句柄返回全 0。
     pub async fn playlist_cache_stats(&self) -> color_eyre::Result<PlaylistCacheStats> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(PlaylistCacheStats {
                 playlists: 0,
                 tracks: 0,
             });
         };
-        let (playlists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_cache")
-            .fetch_one(pool)
+        let playlists = playlist_cache::Entity::find()
+            .count(db)
             .await
             .wrap_err("统计 playlist_cache 行数失败")?;
-        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_entries")
-            .fetch_one(pool)
+        let tracks = playlist_entries::Entity::find()
+            .count(db)
             .await
             .wrap_err("统计 playlist_entries 行数失败")?;
-        Ok(PlaylistCacheStats {
-            playlists: u64::try_from(playlists).unwrap_or(0),
-            tracks: u64::try_from(tracks).unwrap_or(0),
-        })
+        Ok(PlaylistCacheStats { playlists, tracks })
     }
 
     /// 清空歌单缓存(`playlist_cache` + `playlist_entries` 全部来源)。
@@ -307,48 +352,46 @@ impl ServerStore {
     /// # Return:
     ///   清理成功返回被清掉的计数(清理前 `playlist_cache` / `playlist_entries` 行数);降级返回全 0。
     pub async fn clear_playlist_caches(&self) -> color_eyre::Result<PlaylistCacheStats> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(PlaylistCacheStats {
                 playlists: 0,
                 tracks: 0,
             });
         };
         info!(target: "persist", "清理歌单缓存");
-        // 两表清理包进事务,避免中途失败留下半清状态(tracks 清了 cache 没清)。
-        // 先在同一事务里 COUNT 出清理前计数作为回执,再 DELETE,保证回执与实际删除一致。
-        let mut tx = pool
+        let tx = db
             .begin()
             .await
             .wrap_err("开启 clear_playlist_caches 事务失败")?;
-        let (playlists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_cache")
-            .fetch_one(&mut *tx)
+        let playlists = playlist_cache::Entity::find()
+            .count(&tx)
             .await
             .wrap_err("统计 playlist_cache 行数失败")?;
-        let (tracks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM playlist_entries")
-            .fetch_one(&mut *tx)
+        let tracks = playlist_entries::Entity::find()
+            .count(&tx)
             .await
             .wrap_err("统计 playlist_entries 行数失败")?;
-        sqlx::query("DELETE FROM playlist_entries")
-            .execute(&mut *tx)
+        playlist_entries::Entity::delete_many()
+            .exec(&tx)
             .await
             .wrap_err("清空 playlist_entries 失败")?;
-        sqlx::query("DELETE FROM playlist_cache")
-            .execute(&mut *tx)
+        playlist_cache::Entity::delete_many()
+            .exec(&tx)
             .await
             .wrap_err("清空 playlist_cache 失败")?;
         tx.commit()
             .await
             .wrap_err("提交 clear_playlist_caches 事务失败")?;
-        Ok(PlaylistCacheStats {
-            playlists: u64::try_from(playlists).unwrap_or(0),
-            tracks: u64::try_from(tracks).unwrap_or(0),
-        })
+        Ok(PlaylistCacheStats { playlists, tracks })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ServerStore;
+    use crate::entity::song_favorites;
+    use sea_orm::sea_query::{Expr, ExprTrait};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
     #[tokio::test]
     async fn open_creates_db_and_schema() -> color_eyre::Result<()> {
@@ -398,11 +441,15 @@ mod tests {
         let pool = p
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        sqlx::query("UPDATE song_favorites SET entered_at = 100 WHERE song_value = 'n1'")
-            .execute(pool)
+        song_favorites::Entity::update_many()
+            .col_expr(song_favorites::Column::EnteredAt, Expr::value(100i64))
+            .filter(song_favorites::Column::SongValue.eq("n1"))
+            .exec(pool)
             .await?;
-        sqlx::query("UPDATE song_favorites SET entered_at = 200 WHERE song_value = 'b1'")
-            .execute(pool)
+        song_favorites::Entity::update_many()
+            .col_expr(song_favorites::Column::EnteredAt, Expr::value(200i64))
+            .filter(song_favorites::Column::SongValue.eq("b1"))
+            .exec(pool)
             .await?;
 
         let songs = p.loved_songs().await?;
@@ -486,8 +533,9 @@ mod tests {
         let pool = p
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        sqlx::query("UPDATE song_favorites SET entered_at = 500")
-            .execute(pool)
+        song_favorites::Entity::update_many()
+            .col_expr(song_favorites::Column::EnteredAt, Expr::value(500i64))
+            .exec(pool)
             .await?;
 
         let songs = p.loved_songs().await?;
@@ -531,10 +579,13 @@ mod tests {
         let pool = p
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        let (distinct_times,): (i64,) =
-            sqlx::query_as("SELECT COUNT(DISTINCT entered_at) FROM song_favorites")
-                .fetch_one(pool)
-                .await?;
+        let (distinct_times,): (i64,) = song_favorites::Entity::find()
+            .select_only()
+            .expr(Expr::col(song_favorites::Column::EnteredAt).count_distinct())
+            .into_tuple::<(i64,)>()
+            .one(pool)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing favorite count"))?;
         assert_eq!(distinct_times, 1, "同一 batch 必须共用 entered_at");
 
         let newer = with_name(song("new"), "New");
@@ -610,24 +661,30 @@ mod tests {
         let pool = persist
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
-        let before: (i64,) = sqlx::query_as(
-            "SELECT entered_at FROM song_favorites WHERE namespace=? AND song_value=?",
-        )
-        .bind(SourceKind::NETEASE.name())
-        .bind(old_id.value())
-        .fetch_one(pool)
-        .await?;
+        let before: (i64,) = song_favorites::Entity::find_by_id((
+            SourceKind::NETEASE.name().to_owned(),
+            old_id.value().to_owned(),
+        ))
+        .select_only()
+        .column(song_favorites::Column::EnteredAt)
+        .into_tuple::<(i64,)>()
+        .one(pool)
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing favorite timestamp"))?;
 
         let old_meta = with_name(song("old-missing-meta"), "Old");
         scope.upsert_meta(&old_meta).await?;
 
-        let after: (i64,) = sqlx::query_as(
-            "SELECT entered_at FROM song_favorites WHERE namespace=? AND song_value=?",
-        )
-        .bind(SourceKind::NETEASE.name())
-        .bind(old_id.value())
-        .fetch_one(pool)
-        .await?;
+        let after: (i64,) = song_favorites::Entity::find_by_id((
+            SourceKind::NETEASE.name().to_owned(),
+            old_id.value().to_owned(),
+        ))
+        .select_only()
+        .column(song_favorites::Column::EnteredAt)
+        .into_tuple::<(i64,)>()
+        .one(pool)
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing favorite timestamp"))?;
         assert_eq!(after, before, "backfill 不得改 entered_at");
         assert_eq!(
             persist

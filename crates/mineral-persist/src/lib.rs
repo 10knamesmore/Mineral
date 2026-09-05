@@ -10,6 +10,8 @@
 mod cache_index;
 mod client_store;
 mod db;
+mod entity;
+mod migration;
 mod pool;
 mod server_store;
 

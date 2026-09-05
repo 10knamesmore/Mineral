@@ -1,19 +1,13 @@
-//! 结构态 schema:版本化迁移(`migrations/` 编译期嵌入,启动时按序补跑)。
-//!
-//! 规矩:每次结构变更**新增**一个 `migrations/NNNN_*.sql`,**永不改已发布的迁移**——
-//! 迁移器对已应用条目做 checksum 校验,改历史会让所有老库启动报 `VersionMismatch`。
-//! 需要程序逻辑的数据修复不进迁移:结构由迁移管,数据由启动时的幂等修复步管
-//! (靠数据自身状态判断是否还需要做,如 `WHERE new_col IS NULL`)。
+//! 服务状态数据库的结构初始化。
 
 use color_eyre::eyre::WrapErr;
 use mineral_log::debug;
-use sqlx::SqlitePool;
+use sea_orm::DatabaseConnection;
+use sea_orm_migration::MigratorTrait;
 
-/// 全部版本化迁移,编译期嵌入二进制(用户机器上不需要 SQL 文件)。
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+use crate::migration::ServerMigrator;
 
-/// 把库推进到最新 schema 版本(幂等:已应用的迁移经 `_sqlx_migrations` 记账跳过,
-/// 新库从零建齐)。每条迁移与其记账在同一事务里,不产生「跑一半」的脏库。
+/// 按迁移账本应用尚未执行的 Rust 结构变更，每一步在事务内完成。
 ///
 /// # Params:
 ///   - `pool`: 已打开的 sqlite 连接池
@@ -21,8 +15,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// # Return:
 ///   迁移到最新版本返回 `Ok(())`;建于迁移机制之前的老库(表已存在、无记账)会在
 ///   baseline 撞「表已存在」报错,错误指引用户重建。
-pub(crate) async fn ensure_schema(pool: &SqlitePool) -> color_eyre::Result<()> {
-    MIGRATOR.run(pool).await.wrap_err(
+pub(crate) async fn ensure_schema(pool: &DatabaseConnection) -> color_eyre::Result<()> {
+    ServerMigrator::up(pool, /*steps*/ None).await.wrap_err(
         "schema 迁移失败;若此库建于迁移机制引入之前,请停掉 daemon 后运行 \
          `mineral cache reset --yes` 删库重建(会丢失播放统计 / 喜欢 / 历史)",
     )?;
@@ -32,132 +26,140 @@ pub(crate) async fn ensure_schema(pool: &SqlitePool) -> color_eyre::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::sqlite::SqlitePoolOptions;
-
     use super::ensure_schema;
+    use crate::entity::{playlist_entries, session_state, song_favorites, song_kv, song_meta};
+    use crate::migration::{ClientMigrator, ServerMigrator};
+    use sea_orm::sea_query::{ColumnDef, Table};
+    use sea_orm::{
+        ConnectOptions, ConnectionTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
+        Set,
+    };
+    use sea_orm_migration::MigratorTrait;
 
-    /// 迁移幂等:跑两次第二次经记账全跳过,不因「表已存在」报错。
+    /// 每次验证使用独立的单连接内存数据库。
+    async fn memory_database() -> color_eyre::Result<DatabaseConnection> {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(/*value*/ 1);
+        Ok(Database::connect(options).await?)
+    }
+
+    /// 已应用的迁移重复运行时不重建表。
     #[tokio::test]
     async fn ensure_schema_is_idempotent() -> color_eyre::Result<()> {
-        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
-        ensure_schema(&pool).await?;
-        ensure_schema(&pool).await?;
+        let db = memory_database().await?;
+        ensure_schema(&db).await?;
+        ensure_schema(&db).await?;
         Ok(())
     }
 
-    /// 约束由库执行,不靠代码纪律:song_kv 的「vtype 与值列相符」CHECK、
-    /// session_state 的「当前曲成对可空」CHECK、playlist_entries → playlist_cache 外键
-    /// (sqlx 的 sqlite 默认 pragma 带 `foreign_keys=ON`)各自拒绝坏行。
+    /// 值类型、成对歌曲身份和歌单外键必须由数据库拒绝非法记录。
     #[tokio::test]
     async fn schema_constraints_reject_bad_rows() -> color_eyre::Result<()> {
-        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
-        ensure_schema(&pool).await?;
-
-        // song_kv:vtype='int' 但 int_val 为 NULL → CHECK 拒绝。
-        let kv = sqlx::query(
-            "INSERT INTO song_kv(namespace,song_value,key,vtype,text_val) \
-             VALUES ('netease','1','k','int','oops')",
-        )
-        .execute(&pool)
+        let db = memory_database().await?;
+        ensure_schema(&db).await?;
+        let kv = song_kv::Entity::insert(song_kv::ActiveModel {
+            namespace: Set("netease".to_owned()),
+            song_value: Set("1".to_owned()),
+            key: Set("k".to_owned()),
+            vtype: Set("int".to_owned()),
+            text_val: Set(Some("oops".to_owned())),
+            int_val: Set(None),
+            real_val: Set(None),
+        })
+        .exec_without_returning(&db)
         .await;
         assert!(kv.is_err(), "vtype 与值列不符应被 CHECK 拒绝");
-
-        // session_state:cur_namespace 有值而 cur_song_value 为 NULL(半空对)→ CHECK 拒绝。
-        let half = sqlx::query(
-            "INSERT INTO session_state(id,cur_namespace,cur_song_value,position_ms,play_mode,volume,updated_at) \
-             VALUES (0,'netease',NULL,0,'sequential',1.0,0)",
-        )
-        .execute(&pool)
+        let half = session_state::Entity::insert(session_state::ActiveModel {
+            id: Set(0),
+            cur_namespace: Set(Some("netease".to_owned())),
+            cur_song_value: Set(None),
+            position_ms: Set(0),
+            play_mode: Set("sequential".to_owned()),
+            volume: Set(1.0),
+            updated_at: Set(0),
+        })
+        .exec_without_returning(&db)
         .await;
         assert!(half.is_err(), "当前曲半空对应被 CHECK 拒绝");
-
-        // playlist_entries:引用不存在的 playlist_cache 行 → FK 拒绝。
-        let orphan = sqlx::query(
-            "INSERT INTO playlist_entries(playlist_namespace,playlist_value,collection_index, \
-                                          song_namespace,song_value) \
-             VALUES ('netease','nope',0,'netease','s1')",
-        )
-        .execute(&pool)
+        let orphan = playlist_entries::Entity::insert(playlist_entries::ActiveModel {
+            playlist_namespace: Set("netease".to_owned()),
+            playlist_value: Set("nope".to_owned()),
+            collection_index: Set(0),
+            song_namespace: Set("netease".to_owned()),
+            song_value: Set("s1".to_owned()),
+        })
+        .exec_without_returning(&db)
         .await;
         assert!(orphan.is_err(), "孤儿曲目行应被外键拒绝");
         Ok(())
     }
 
-    /// 0004/0005 从旧 schema 原值迁移 favorite time、playlist position 与隐含 Song namespace。
+    /// server 的 down 删除全部表，随后 up 可重新建立可写入的数据库。
     #[tokio::test]
-    async fn relation_migrations_preserve_old_values() -> color_eyre::Result<()> {
-        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
-        sqlx::raw_sql(include_str!("../../migrations/0001_baseline.sql"))
-            .execute(&pool)
-            .await?;
-        sqlx::query(
-            "INSERT INTO song_stats(namespace,song_value,play_count,loved_at) \
-             VALUES('netease','song',3,123456)",
-        )
-        .execute(&pool)
+    async fn server_migration_up_down_up() -> color_eyre::Result<()> {
+        let db = memory_database().await?;
+        ServerMigrator::up(&db, /*steps*/ None).await?;
+        song_favorites::Entity::insert(song_favorites::ActiveModel {
+            namespace: Set("netease".to_owned()),
+            song_value: Set("song".to_owned()),
+            entered_at: Set(123456),
+        })
+        .exec_without_returning(&db)
         .await?;
-        sqlx::query(
-            "INSERT INTO playlist_cache(namespace,playlist_id,fetched_at) \
-             VALUES('netease','playlist',1)",
-        )
-        .execute(&pool)
-        .await?;
-        sqlx::query(
-            "INSERT INTO playlist_tracks(namespace,playlist_id,position,song_value) \
-             VALUES('netease','playlist',7,'song')",
-        )
-        .execute(&pool)
-        .await?;
-        sqlx::raw_sql(include_str!("../../migrations/0004_song_favorites.sql"))
-            .execute(&pool)
-            .await?;
-        sqlx::raw_sql(include_str!("../../migrations/0005_playlist_entries.sql"))
-            .execute(&pool)
-            .await?;
-
-        let favorite: (String, String, i64) =
-            sqlx::query_as("SELECT namespace,song_value,entered_at FROM song_favorites")
-                .fetch_one(&pool)
-                .await?;
-        assert_eq!(favorite, ("netease".to_owned(), "song".to_owned(), 123456));
-        let entry: (i64, String, String) = sqlx::query_as(
-            "SELECT collection_index,song_namespace,song_value FROM playlist_entries",
-        )
-        .fetch_one(&pool)
-        .await?;
-        assert_eq!(entry, (7, "netease".to_owned(), "song".to_owned()));
-        let columns = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, i64)>(
-            "PRAGMA table_info(song_stats)",
-        )
-        .fetch_all(&pool)
-        .await?;
-        assert!(
-            columns
-                .iter()
-                .all(|(_, name, _, _, _, _)| name != "loved_at"),
-            "迁移后 song_stats 不应继续存 favorite fact"
-        );
+        assert_eq!(song_favorites::Entity::find().count(&db).await?, 1);
+        ServerMigrator::down(&db, /*steps*/ None).await?;
+        assert!(song_favorites::Entity::find().count(&db).await.is_err());
+        ServerMigrator::up(&db, /*steps*/ None).await?;
+        assert_eq!(song_favorites::Entity::find().count(&db).await?, 0);
         Ok(())
     }
 
-    /// 建于迁移机制之前的老库(表已存在、无迁移记账):baseline 裸建表撞错,
-    /// 错误信息带 `mineral cache reset` 重建指引——刻意响亮失败,不静默收编旧结构。
+    /// client 的 up/down 可往返，回滚后偏好表被移除。
+    #[tokio::test]
+    async fn client_migration_up_down_up() -> color_eyre::Result<()> {
+        let db = memory_database().await?;
+        ClientMigrator::up(&db, /*steps*/ None).await?;
+        assert_eq!(crate::entity::ui_prefs::Entity::find().count(&db).await?, 0);
+        ClientMigrator::down(&db, /*steps*/ None).await?;
+        assert!(
+            crate::entity::ui_prefs::Entity::find()
+                .count(&db)
+                .await
+                .is_err()
+        );
+        ClientMigrator::up(&db, /*steps*/ None).await?;
+        assert_eq!(crate::entity::ui_prefs::Entity::find().count(&db).await?, 0);
+        Ok(())
+    }
+
+    /// 无迁移记录的已有结构响亮失败，并提供重建指引。
     #[tokio::test]
     async fn pre_migration_db_fails_loud_with_reset_hint() -> color_eyre::Result<()> {
-        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
-        sqlx::raw_sql(
-            "CREATE TABLE song_meta (\
-                 namespace TEXT NOT NULL,\
-                 song_value TEXT NOT NULL,\
-                 name TEXT NOT NULL,\
-                 duration_ms INTEGER NOT NULL,\
-                 PRIMARY KEY (namespace, song_value));",
+        let db = memory_database().await?;
+        db.execute(
+            Table::create()
+                .table(song_meta::Entity)
+                .col(
+                    ColumnDef::new(song_meta::Column::Namespace)
+                        .text()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(song_meta::Column::SongValue)
+                        .text()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(song_meta::Column::Name).text().not_null())
+                .col(
+                    ColumnDef::new(song_meta::Column::DurationMs)
+                        .integer()
+                        .not_null(),
+                ),
         )
-        .execute(&pool)
         .await?;
-        let err = match ensure_schema(&pool).await {
+        let err = match ensure_schema(&db).await {
             Ok(()) => return Err(color_eyre::eyre::eyre!("老库应报错而非静默通过")),
-            Err(e) => e,
+            Err(error) => error,
         };
         let chain = format!("{err:#}");
         assert!(

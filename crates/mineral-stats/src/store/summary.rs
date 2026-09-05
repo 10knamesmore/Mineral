@@ -1,9 +1,14 @@
 //! full 档事件盘点(`event_summary`):各事件表计数 + 多维分桶。
 //!
-//! 各分桶是 `(标签, 计数)`;表 / 列是内部常量故分桶走编译期 `query!`,唯 table_counts 因
-//! 表名动态走运行期 `query`(与 prune 逐表同理)。全部带时间窗(事件行的 `ts` 列)。
+//! 各分桶以实体字段指定标签与时间窗口，事件集合统一参与盘点。
 
+use crate::entity::{
+    action_invocations, cache_harvests, downloads, fetches, gapless_boundaries, hook_fires,
+    love_changes, script_lifecycle, searches,
+};
 use color_eyre::eyre::WrapErr as _;
+use sea_orm::sea_query::{Expr, ExprTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select};
 
 use crate::report::{EventCount, EventSummary, Tally};
 use crate::store::StatsStore;
@@ -24,148 +29,123 @@ impl StatsStore {
         range: std::ops::Range<i64>,
         limit: i64,
     ) -> color_eyre::Result<EventSummary> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(EventSummary::default());
         };
-        let (lo, hi) = (range.start, range.end);
-
-        // 各事件表行数(表名动态,运行期 query;表名是内部常量非用户输入)。
-        let mut table_counts = Vec::<EventCount>::with_capacity(EVENT_TABLES.len());
-        for &table in EVENT_TABLES {
-            let count = sqlx::query_scalar::<_, i64>(&format!(
-                "SELECT COUNT(*) FROM {table} WHERE ts >= ? AND ts < ?"
-            ))
-            .bind(lo)
-            .bind(hi)
-            .fetch_one(pool)
-            .await
-            .wrap_err_with(|| format!("event_summary count {table} 失败"))?;
+        let mut table_counts = Vec::with_capacity(EVENT_TABLES.len());
+        for table in EVENT_TABLES {
             table_counts.push(EventCount {
-                table: table.to_owned(),
-                count,
+                table: table.name().to_owned(),
+                count: table
+                    .count(db, Some(range.clone()))
+                    .await
+                    .wrap_err_with(|| format!("event_summary count {} 失败", table.name()))?,
             });
         }
-
-        // top 搜索词:按 query_hash 去重(标签取原文,缺则回落散列)。
-        let top_searches = sqlx::query_as!(
-            Tally,
-            r#"SELECT COALESCE(query, query_hash) AS "label!: String", COUNT(*) AS "count!: i64"
-               FROM searches WHERE ts >= ? AND ts < ?
-               GROUP BY COALESCE(query, query_hash) ORDER BY 2 DESC LIMIT ?"#,
-            lo,
-            hi,
-            limit
+        let top_searches = tally::<searches::Entity>(
+            Expr::col((searches::Entity, searches::Column::Query))
+                .if_null(Expr::col((searches::Entity, searches::Column::QueryHash))),
+            searches::Column::Id,
+            searches::Column::Ts,
+            range.clone(),
+            Some(limit),
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary top_searches 失败")?;
-
-        // love 新增按 origin 分桶(仅 loved=1)。
-        let love_by_origin = sqlx::query_as!(
-            Tally,
-            r#"SELECT origin AS "label!", COUNT(*) AS "count!: i64"
-               FROM love_changes WHERE ts >= ? AND ts < ? AND loved = 1
-               GROUP BY origin ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let love_by_origin = tally::<love_changes::Entity>(
+            Expr::col((love_changes::Entity, love_changes::Column::Origin)),
+            love_changes::Column::Id,
+            love_changes::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .filter(love_changes::Column::Loved.eq(1))
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary love_by_origin 失败")?;
-
-        // 下载三态。
-        let downloads_by_outcome = sqlx::query_as!(
-            Tally,
-            r#"SELECT outcome AS "label!", COUNT(*) AS "count!: i64"
-               FROM downloads WHERE ts >= ? AND ts < ?
-               GROUP BY outcome ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let downloads_by_outcome = tally::<downloads::Entity>(
+            Expr::col((downloads::Entity, downloads::Column::Outcome)),
+            downloads::Column::Id,
+            downloads::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary downloads_by_outcome 失败")?;
-
-        // 缓存收割。
-        let harvests_by_outcome = sqlx::query_as!(
-            Tally,
-            r#"SELECT outcome AS "label!", COUNT(*) AS "count!: i64"
-               FROM cache_harvests WHERE ts >= ? AND ts < ?
-               GROUP BY outcome ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let harvests_by_outcome = tally::<cache_harvests::Entity>(
+            Expr::col((cache_harvests::Entity, cache_harvests::Column::Outcome)),
+            cache_harvests::Column::Id,
+            cache_harvests::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary harvests_by_outcome 失败")?;
-
-        // top 下钻页(fetch_kind)。
-        let top_fetches = sqlx::query_as!(
-            Tally,
-            r#"SELECT fetch_kind AS "label!", COUNT(*) AS "count!: i64"
-               FROM fetches WHERE ts >= ? AND ts < ?
-               GROUP BY fetch_kind ORDER BY 2 DESC LIMIT ?"#,
-            lo,
-            hi,
-            limit
+        let top_fetches = tally::<fetches::Entity>(
+            Expr::col((fetches::Entity, fetches::Column::FetchKind)),
+            fetches::Column::Id,
+            fetches::Column::Ts,
+            range.clone(),
+            Some(limit),
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary top_fetches 失败")?;
-
-        // top 具名动作。
-        let top_actions = sqlx::query_as!(
-            Tally,
-            r#"SELECT name AS "label!", COUNT(*) AS "count!: i64"
-               FROM action_invocations WHERE ts >= ? AND ts < ?
-               GROUP BY name ORDER BY 2 DESC LIMIT ?"#,
-            lo,
-            hi,
-            limit
+        let top_actions = tally::<action_invocations::Entity>(
+            Expr::col((action_invocations::Entity, action_invocations::Column::Name)),
+            action_invocations::Column::Id,
+            action_invocations::Column::Ts,
+            range.clone(),
+            Some(limit),
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary top_actions 失败")?;
-
-        // 补救漏斗:hook_fires 按 decision。
-        let hooks_by_decision = sqlx::query_as!(
-            Tally,
-            r#"SELECT decision AS "label!", COUNT(*) AS "count!: i64"
-               FROM hook_fires WHERE ts >= ? AND ts < ?
-               GROUP BY decision ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let hooks_by_decision = tally::<hook_fires::Entity>(
+            Expr::col((hook_fires::Entity, hook_fires::Column::Decision)),
+            hook_fires::Column::Id,
+            hook_fires::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary hooks_by_decision 失败")?;
-
-        // 无缝率:gapless_boundaries 按 result。
-        let gapless_by_result = sqlx::query_as!(
-            Tally,
-            r#"SELECT result AS "label!", COUNT(*) AS "count!: i64"
-               FROM gapless_boundaries WHERE ts >= ? AND ts < ?
-               GROUP BY result ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let gapless_by_result = tally::<gapless_boundaries::Entity>(
+            Expr::col((
+                gapless_boundaries::Entity,
+                gapless_boundaries::Column::Result,
+            )),
+            gapless_boundaries::Column::Id,
+            gapless_boundaries::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary gapless_by_result 失败")?;
-
-        // 脚本健康:script_lifecycle 按 event。
-        let script_by_event = sqlx::query_as!(
-            Tally,
-            r#"SELECT event AS "label!", COUNT(*) AS "count!: i64"
-               FROM script_lifecycle WHERE ts >= ? AND ts < ?
-               GROUP BY event ORDER BY 2 DESC"#,
-            lo,
-            hi
+        let script_by_event = tally::<script_lifecycle::Entity>(
+            Expr::col((script_lifecycle::Entity, script_lifecycle::Column::Event)),
+            script_lifecycle::Column::Id,
+            script_lifecycle::Column::Ts,
+            range.clone(),
+            /*limit*/ None,
         )
-        .fetch_all(pool)
+        .into_model::<Tally>()
+        .all(db)
         .await
         .wrap_err("event_summary script_by_event 失败")?;
-
         Ok(EventSummary {
             table_counts,
             top_searches,
@@ -179,6 +159,34 @@ impl StatsStore {
             script_by_event,
         })
     }
+}
+
+/// 标签分桶的输出列。
+#[derive(Clone, Copy, Debug, sea_orm::DeriveColumn)]
+enum TallyColumn {
+    /// 分桶标签。
+    Label,
+    /// 事件数量。
+    Count,
+}
+
+/// 按实体字段分桶；负数榜长沿用 SQLite 不限条数语义。
+fn tally<E: EntityTrait>(
+    label: Expr,
+    id: E::Column,
+    timestamp: E::Column,
+    range: std::ops::Range<i64>,
+    limit: Option<i64>,
+) -> Select<E> {
+    E::find()
+        .select_only()
+        .column_as(label.clone(), TallyColumn::Label)
+        .column_as(id.count(), TallyColumn::Count)
+        .filter(timestamp.gte(range.start))
+        .filter(timestamp.lt(range.end))
+        .group_by(label)
+        .order_by_desc(Expr::col(TallyColumn::Count))
+        .limit(limit.and_then(|limit| u64::try_from(limit).ok()))
 }
 
 #[cfg(test)]

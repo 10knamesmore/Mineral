@@ -1,40 +1,14 @@
-//! db 行结构体与 mineral-model 互转。
+//! 持久化记录与歌曲模型之间的转换。
 
 use std::str::FromStr;
 
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, Song, SongId, SourceKind};
-use sqlx::FromRow;
+use sea_orm::FromQueryResult;
 
-/// `song_meta` 行。
-#[derive(FromRow)]
-pub(crate) struct SongMetaRow {
-    /// 来源稳定名。
-    pub namespace: String,
-
-    /// 源内裸值。
-    pub song_value: String,
-
-    /// 歌名。
-    pub name: String,
-
-    /// 别名(译名 / 副标题等替代显示名,可空)。
-    pub alias: Option<String>,
-
-    /// 专辑裸 id(可空)。
-    pub album_id: Option<String>,
-
-    /// 专辑名(可空)。
-    pub album_name: Option<String>,
-
-    /// 时长毫秒(sqlite INTEGER → i64);`NULL` = 未知。
-    pub duration_ms: Option<i64>,
-
-    /// 封面 MediaUrl 序列化串(可空)。
-    pub cover_url: Option<String>,
-}
+pub(crate) use crate::entity::song_meta::Model as SongMetaRow;
 
 /// `song_artists` 行(仅取重建艺人所需字段)。
-#[derive(FromRow)]
+#[derive(FromQueryResult)]
 pub(crate) struct SongArtistRow {
     /// 艺人裸 id。
     pub artist_id: String,

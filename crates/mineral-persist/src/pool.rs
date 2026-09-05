@@ -1,11 +1,9 @@
-//! 共享的 sqlite 连接逻辑:[`ServerStore`](crate::ServerStore) 与
-//! [`ClientStore`](crate::ClientStore) 各自打开自己的库文件都走这里,单一真相源。
+//! SQLite 文件数据库的单连接初始化。
 
 use std::path::Path;
 
 use color_eyre::eyre::WrapErr;
-use sqlx::SqlitePool;
-use sqlx::sqlite::SqlitePoolOptions;
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 
 /// 连接(或创建)一个 sqlite 库文件,返回单连接池。
 ///
@@ -16,11 +14,11 @@ use sqlx::sqlite::SqlitePoolOptions;
 ///
 /// # Return:
 ///   就绪连接池;连接失败返回 `Err`。
-pub(crate) async fn connect(db_path: &Path) -> color_eyre::Result<SqlitePool> {
+pub(crate) async fn connect(db_path: &Path) -> color_eyre::Result<DatabaseConnection> {
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
+    let mut options = ConnectOptions::new(url);
+    options.max_connections(/*value*/ 1);
+    Database::connect(options)
         .await
         .wrap_err_with(|| format!("连接 sqlite 失败 path={}", db_path.display()))
 }

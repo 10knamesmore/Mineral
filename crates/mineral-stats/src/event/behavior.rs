@@ -2,7 +2,7 @@
 //!
 //! 每个变体一一对应一张强 schema 事件表,变体的具名字段 = 该表除公共列
 //! (id / ts / session_id / actor)外的专有列。取值有限、进 SQL CHECK 的列在此用
-//! `sqlx::Type` 小枚举表示,写时直接 bind、读时 `as "col: T"` decode。
+//! SeaORM 受控枚举表示，实体读写直接使用枚举值。
 
 use mineral_model::{PlaylistId, SongId, SourceKind};
 
@@ -28,8 +28,8 @@ pub fn query_hash(query: &str) -> String {
 /// 搜索目标类型(searches.kind)。
 ///
 /// 是领域 `SearchKind` 的落库子集——埋点只记这四类实体搜索,不含用户搜索。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum SearchTargetKind {
     /// 单曲搜索。
     Song,
@@ -45,8 +45,8 @@ pub enum SearchTargetKind {
 }
 
 /// 一次搜索的结局(searches.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum SearchOutcome {
     /// 正常返回结果。
     Ok,
@@ -63,8 +63,8 @@ pub enum SearchOutcome {
 /// 与 server 侧取数任务种类同构但独立定义(stats 不依赖 task 层),边界转换在 server;
 /// 落库串与既有 snake_case 词汇一致。搜索除专表外也在 fetches 记一行收束
 /// (专表富化,fetches 是 channel 取数全谱)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum FetchKind {
     /// 我的歌单列表。
     MyPlaylists,
@@ -92,8 +92,8 @@ pub enum FetchKind {
 }
 
 /// 歌单写操作类型(playlist_ops.op)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum PlaylistOpKind {
     /// 新建歌单。
     Create,
@@ -147,8 +147,8 @@ impl PlaylistRef {
 }
 
 /// 暂停 / 恢复动作(pauses.action)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum PauseAction {
     /// 暂停播放。
     Pause,
@@ -158,8 +158,8 @@ pub enum PauseAction {
 }
 
 /// 一次收藏变更的发起语义(love_changes.origin)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum LoveOrigin {
     /// 用户显式操作。
     User,
@@ -169,8 +169,8 @@ pub enum LoveOrigin {
 }
 
 /// 收藏变更向远端镜像的结果(love_changes.remote_mirror)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum RemoteMirror {
     /// 远端同步成功。
     Ok,
@@ -183,8 +183,8 @@ pub enum RemoteMirror {
 }
 
 /// 队列写操作类型(queue_ops.op)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum QueueOp {
     /// 整队替换。
     Set,
@@ -218,8 +218,8 @@ pub enum QueueOp {
 }
 
 /// 二值操作结局(playlist_ops / copy_renders / action_invocations 的 outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum OpOutcome {
     /// 操作成功。
     Ok,
@@ -229,8 +229,8 @@ pub enum OpOutcome {
 }
 
 /// 歌单写操作的失败归类(playlist_ops.error_kind)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum PlaylistError {
     /// 需要登录。
     AuthRequired,
@@ -249,8 +249,8 @@ pub enum PlaylistError {
 }
 
 /// 取数的触发方(fetches.trigger)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum FetchTrigger {
     /// 用户操作触发。
     User,
@@ -260,8 +260,8 @@ pub enum FetchTrigger {
 }
 
 /// 一次取数的结局(fetches.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum FetchOutcome {
     /// 正常返回。
     Ok,
@@ -274,8 +274,8 @@ pub enum FetchOutcome {
 }
 
 /// 一次下载的结局(downloads.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum DownloadOutcome {
     /// 完成下载。
     Downloaded,
@@ -288,8 +288,8 @@ pub enum DownloadOutcome {
 }
 
 /// 下载路径上插件顶换的结果(downloads.hooked)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum DownloadHook {
     /// 未介入。
     None,
@@ -302,8 +302,8 @@ pub enum DownloadHook {
 }
 
 /// 渲染文案的上下文类型(copy_renders.ctx_kind)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum CopyContext {
     /// 单曲文案。
     Song,
@@ -319,8 +319,8 @@ pub enum CopyContext {
 }
 
 /// action 的触发面(action_invocations.trigger)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum ActionTrigger {
     /// TUI 交互触发。
     Tui,
@@ -330,8 +330,8 @@ pub enum ActionTrigger {
 }
 
 /// per-song KV 写操作类型(store_writes.op)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum StoreOp {
     /// 覆写值。
     Set,
@@ -341,8 +341,8 @@ pub enum StoreOp {
 }
 
 /// 子进程的收束方式(spawns.outcome)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum SpawnOutcome {
     /// 正常退出。
     Exited,
@@ -355,8 +355,8 @@ pub enum SpawnOutcome {
 }
 
 /// 拒绝新连接的原因(connection_rejects.reason)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum RejectReason {
     /// 已有 client 占用。
     Busy,
@@ -366,8 +366,8 @@ pub enum RejectReason {
 }
 
 /// 生命周期事件的主体(app_lifecycle.who)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum LifecycleWho {
     /// 常驻 daemon。
     Daemon,
@@ -377,8 +377,8 @@ pub enum LifecycleWho {
 }
 
 /// 生命周期阶段(app_lifecycle.phase)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum LifecyclePhase {
     /// 启动。
     Start,
@@ -388,8 +388,8 @@ pub enum LifecyclePhase {
 }
 
 /// daemon 启动时的音频后端(app_lifecycle.audio_backend)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[sqlx(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sea_orm::EnumIter, sea_orm::DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text", rename_all = "snake_case")]
 pub enum AudioBackend {
     /// 拿到真实输出设备。
     Device,

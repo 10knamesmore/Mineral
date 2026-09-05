@@ -4,10 +4,13 @@
 //! 开放 key 与一等字段的路由(`rating` 等保留名改走专用方法)由上层(Lua API)
 //! 负责;本层对保留键写入直接拒绝,防止旁路。
 
+use crate::entity::{song_kv, song_stats};
 use color_eyre::eyre::{WrapErr, bail};
 use mineral_log::trace;
 use mineral_model::SongId;
 use mineral_protocol::StoreValue;
+use sea_orm::sea_query::{self, Expr, ExprTrait, Iden, OnConflict};
+use sea_orm::{DbErr, EntityTrait, Set};
 
 use crate::db::namespace::NamespaceStore;
 
@@ -17,8 +20,9 @@ pub const RESERVED_KEYS: [&str; 3] = ["local_play_count", "rating", "last_played
 /// rating 合法上限(0..=5)。
 const RATING_MAX: u8 = 5;
 
-/// `song_kv` 一行的原始列:(vtype, int_val, real_val, text_val)。
-type KvRow = (String, Option<i64>, Option<f64>, Option<String>);
+/// 冲突更新中本次待写入的记录。
+#[derive(Iden)]
+struct Excluded;
 
 impl NamespaceStore {
     /// 读一条开放 KV;降级 / 未命中返回 `Ok(StoreValue::Nil)`。
@@ -30,23 +34,21 @@ impl NamespaceStore {
     /// # Return:
     ///   命中返回标量值,未命中返回 `StoreValue::Nil`。
     pub async fn kv_get(&self, id: &SongId, key: &str) -> color_eyre::Result<StoreValue> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(StoreValue::Nil);
         };
-        let row: Option<KvRow> = sqlx::query_as(
-            "SELECT vtype,int_val,real_val,text_val FROM song_kv \
-             WHERE namespace=? AND song_value=? AND key=?",
-        )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(key)
-        .fetch_optional(pool)
+        let Some(row) = song_kv::Entity::find_by_id((
+            self.namespace().to_owned(),
+            id.value().to_owned(),
+            key.to_owned(),
+        ))
+        .one(db)
         .await
-        .wrap_err_with(|| format!("读 song_kv 失败 song={} key={key}", id.value()))?;
-        let Some((vtype, int_val, real_val, text_val)) = row else {
+        .wrap_err_with(|| format!("读 song_kv 失败 song={} key={key}", id.value()))?
+        else {
             return Ok(StoreValue::Nil);
         };
-        decode_value(&vtype, int_val, real_val, text_val)
+        decode_value(&row.vtype, row.int_val, row.real_val, row.text_val)
             .wrap_err_with(|| format!("song_kv 值重建失败 song={} key={key}", id.value()))
     }
 
@@ -68,36 +70,46 @@ impl NamespaceStore {
         if RESERVED_KEYS.contains(&key) {
             bail!("key {key:?} 是保留的一等字段,不能写入开放 KV(走专用方法)");
         }
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
-        trace!(target: "persist", song = %id.value(), key, "kv_set");
+        trace!(target: "persist", song = id.value(), key, "kv_set");
         if matches!(value, StoreValue::Nil) {
-            sqlx::query("DELETE FROM song_kv WHERE namespace=? AND song_value=? AND key=?")
-                .bind(self.namespace())
-                .bind(id.value())
-                .bind(key)
-                .execute(pool)
-                .await
-                .wrap_err_with(|| format!("删 song_kv 失败 song={} key={key}", id.value()))?;
+            song_kv::Entity::delete_by_id((
+                self.namespace().to_owned(),
+                id.value().to_owned(),
+                key.to_owned(),
+            ))
+            .exec(db)
+            .await
+            .wrap_err_with(|| format!("删 song_kv 失败 song={} key={key}", id.value()))?;
             return Ok(());
         }
         let (vtype, int_val, real_val, text_val) = encode_value(value);
-        sqlx::query(
-            "INSERT INTO song_kv(namespace,song_value,key,vtype,int_val,real_val,text_val) \
-             VALUES(?,?,?,?,?,?,?) \
-             ON CONFLICT(namespace,song_value,key) DO UPDATE SET \
-             vtype=excluded.vtype,int_val=excluded.int_val,\
-             real_val=excluded.real_val,text_val=excluded.text_val",
+        song_kv::Entity::insert(song_kv::ActiveModel {
+            namespace: Set(self.namespace().to_owned()),
+            song_value: Set(id.value().to_owned()),
+            key: Set(key.to_owned()),
+            vtype: Set(vtype.to_owned()),
+            int_val: Set(int_val),
+            real_val: Set(real_val),
+            text_val: Set(text_val),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                song_kv::Column::Namespace,
+                song_kv::Column::SongValue,
+                song_kv::Column::Key,
+            ])
+            .update_columns([
+                song_kv::Column::Vtype,
+                song_kv::Column::IntVal,
+                song_kv::Column::RealVal,
+                song_kv::Column::TextVal,
+            ])
+            .to_owned(),
         )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(key)
-        .bind(vtype)
-        .bind(int_val)
-        .bind(real_val)
-        .bind(text_val)
-        .execute(pool)
+        .exec_without_returning(db)
         .await
         .wrap_err_with(|| format!("写 song_kv 失败 song={} key={key}", id.value()))?;
         Ok(())
@@ -124,30 +136,43 @@ impl NamespaceStore {
         if RESERVED_KEYS.contains(&key) {
             bail!("key {key:?} 是保留的一等字段,不能写入开放 KV(走专用方法)");
         }
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(StoreValue::Nil);
         };
-        trace!(target: "persist", song = %id.value(), key, delta, "kv_inc");
-        // 单语句 upsert-自增:不存在则以 delta 起步;存在但类型不是 int 时
-        // WHERE 子句让 UPDATE 不命中,RETURNING 无行,下面按错误处理。
-        let row: Option<(i64,)> = sqlx::query_as(
-            "INSERT INTO song_kv(namespace,song_value,key,vtype,int_val) \
-             VALUES(?,?,?,'int',?) \
-             ON CONFLICT(namespace,song_value,key) DO UPDATE SET \
-             int_val=song_kv.int_val+excluded.int_val \
-             WHERE song_kv.vtype='int' \
-             RETURNING int_val",
+        trace!(target: "persist", song = id.value(), key, delta, "kv_inc");
+        let result = song_kv::Entity::insert(song_kv::ActiveModel {
+            namespace: Set(self.namespace().to_owned()),
+            song_value: Set(id.value().to_owned()),
+            key: Set(key.to_owned()),
+            vtype: Set("int".to_owned()),
+            int_val: Set(Some(delta)),
+            real_val: Set(None),
+            text_val: Set(None),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                song_kv::Column::Namespace,
+                song_kv::Column::SongValue,
+                song_kv::Column::Key,
+            ])
+            .value(
+                song_kv::Column::IntVal,
+                Expr::col((song_kv::Entity, song_kv::Column::IntVal))
+                    .add(Expr::col((Excluded, song_kv::Column::IntVal))),
+            )
+            .action_and_where(Expr::col((song_kv::Entity, song_kv::Column::Vtype)).eq("int"))
+            .to_owned(),
         )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(key)
-        .bind(delta)
-        .fetch_optional(pool)
-        .await
-        .wrap_err_with(|| format!("自增 song_kv 失败 song={} key={key}", id.value()))?;
-        let Some((value,)) = row else {
-            bail!("key {key:?} 现有值不是整数,不能自增");
+        .exec_with_returning(db)
+        .await;
+        let row = match result {
+            Err(DbErr::RecordNotInserted) => bail!("key {key:?} 现有值不是整数,不能自增"),
+            other => other
+                .wrap_err_with(|| format!("自增 song_kv 失败 song={} key={key}", id.value()))?,
         };
+        let value = row
+            .int_val
+            .ok_or_else(|| color_eyre::eyre::eyre!("song_kv 整数值缺失 key={key}"))?;
         Ok(StoreValue::Int(value))
     }
 
@@ -157,24 +182,27 @@ impl NamespaceStore {
     ///   - `id`: 歌曲 id
     ///   - `rating`: 0..=5;`None` 清空;>5 返回 `Err`
     pub async fn set_rating(&self, id: &SongId, rating: Option<u8>) -> color_eyre::Result<()> {
-        if let Some(r) = rating
-            && r > RATING_MAX
+        if let Some(rating) = rating
+            && rating > RATING_MAX
         {
-            bail!("rating {r} 越界(合法 0..={RATING_MAX})");
+            bail!("rating {rating} 越界(合法 0..={RATING_MAX})");
         }
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(());
         };
-        trace!(target: "persist", song = %id.value(), ?rating, "set_rating");
-        let value = rating.map(i64::from);
-        sqlx::query(
-            "INSERT INTO song_stats(namespace,song_value,rating) VALUES(?,?,?) \
-             ON CONFLICT(namespace,song_value) DO UPDATE SET rating=excluded.rating",
+        trace!(target: "persist", song = id.value(), ?rating, "set_rating");
+        song_stats::Entity::insert(song_stats::ActiveModel {
+            namespace: Set(self.namespace().to_owned()),
+            song_value: Set(id.value().to_owned()),
+            rating: Set(rating.map(i64::from)),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::columns([song_stats::Column::Namespace, song_stats::Column::SongValue])
+                .update_column(song_stats::Column::Rating)
+                .to_owned(),
         )
-        .bind(self.namespace())
-        .bind(id.value())
-        .bind(value)
-        .execute(pool)
+        .exec_without_returning(db)
         .await
         .wrap_err_with(|| format!("写 rating 失败 song={}", id.value()))?;
         Ok(())
@@ -188,20 +216,18 @@ impl NamespaceStore {
     /// # Return:
     ///   已评分返回 `Some(0..=5)`。
     pub async fn query_rating(&self, id: &SongId) -> color_eyre::Result<Option<u8>> {
-        let Some(pool) = self.pool() else {
+        let Some(db) = self.pool() else {
             return Ok(None);
         };
-        let row: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT rating FROM song_stats WHERE namespace=? AND song_value=?")
-                .bind(self.namespace())
-                .bind(id.value())
-                .fetch_optional(pool)
+        let row =
+            song_stats::Entity::find_by_id((self.namespace().to_owned(), id.value().to_owned()))
+                .one(db)
                 .await
                 .wrap_err_with(|| format!("查 rating 失败 song={}", id.value()))?;
-        let Some((Some(raw),)) = row else {
-            return Ok(None);
-        };
-        Ok(Some(u8::try_from(raw)?))
+        row.and_then(|row| row.rating)
+            .map(u8::try_from)
+            .transpose()
+            .map_err(Into::into)
     }
 }
 

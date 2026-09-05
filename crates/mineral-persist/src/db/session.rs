@@ -1,14 +1,14 @@
 //! 全局会话存储。
 
+use crate::entity::{session_queue, session_state};
 use color_eyre::eyre::WrapErr;
 use mineral_log::debug;
 use mineral_model::{SongId, SourceKind};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{EntityTrait, QueryOrder, Set, TransactionTrait};
 
 use crate::ServerStore;
 use crate::db::time::now_ms;
-
-/// `session_state` 单例行的列投影:`(cur_namespace, cur_song_value, position_ms, play_mode, volume)`。
-type SessionStateRow = (Option<String>, Option<String>, i64, String, f64);
 
 /// 会话快照：重启恢复"上次听到哪"。队列可跨 namespace。
 #[derive(Debug, Clone)]
@@ -52,42 +52,51 @@ impl SessionStore {
     /// # Return:
     ///   成功返回 `Ok(())`；降级(无 pool)也静默成功。
     pub async fn save(&self, snap: &SessionSnapshot) -> color_eyre::Result<()> {
-        let Some(pool) = self.persist.pool() else {
+        let Some(db) = self.persist.pool() else {
             return Ok(());
         };
         debug!(target: "persist", queue_len = snap.queue.len(), "保存会话");
-        let pos = i64::try_from(snap.position_ms)?;
-        let (cur_ns, cur_val): (Option<&str>, Option<String>) = match &snap.current {
-            Some(id) => (Some(id.namespace().name()), Some(id.value().to_owned())),
-            None => (None, None),
-        };
-        // 多步写(session_state upsert + session_queue 先清后插)包进事务原子完成,
-        // 否则并发 save(状态变化 + 15s 节流可能同时触发)交错会撞 session_queue 主键。
-        let mut tx = pool.begin().await.wrap_err("开启 save 会话事务失败")?;
-        sqlx::query(
-            "INSERT INTO session_state(id,cur_namespace,cur_song_value,position_ms,play_mode,volume,updated_at)
-             VALUES(0,?,?,?,?,?,?)
-             ON CONFLICT(id) DO UPDATE SET
-               cur_namespace=excluded.cur_namespace, cur_song_value=excluded.cur_song_value,
-               position_ms=excluded.position_ms, play_mode=excluded.play_mode,
-               volume=excluded.volume, updated_at=excluded.updated_at",
+        let tx = db.begin().await.wrap_err("开启 save 会话事务失败")?;
+        session_state::Entity::insert(session_state::ActiveModel {
+            id: Set(0),
+            cur_namespace: Set(snap
+                .current
+                .as_ref()
+                .map(|id| id.namespace().name().to_owned())),
+            cur_song_value: Set(snap.current.as_ref().map(|id| id.value().to_owned())),
+            position_ms: Set(i64::try_from(snap.position_ms)?),
+            play_mode: Set(snap.play_mode.clone()),
+            volume: Set(snap.volume),
+            updated_at: Set(now_ms()),
+        })
+        .on_conflict(
+            OnConflict::column(session_state::Column::Id)
+                .update_columns([
+                    session_state::Column::CurNamespace,
+                    session_state::Column::CurSongValue,
+                    session_state::Column::PositionMs,
+                    session_state::Column::PlayMode,
+                    session_state::Column::Volume,
+                    session_state::Column::UpdatedAt,
+                ])
+                .to_owned(),
         )
-        .bind(cur_ns).bind(cur_val).bind(pos).bind(&snap.play_mode).bind(snap.volume).bind(now_ms())
-        .execute(&mut *tx).await
+        .exec_without_returning(&tx)
+        .await
         .wrap_err("保存会话状态(session_state)失败")?;
-        sqlx::query("DELETE FROM session_queue")
-            .execute(&mut *tx)
+        session_queue::Entity::delete_many()
+            .exec(&tx)
             .await
             .wrap_err("清空会话队列(session_queue)失败")?;
-        for (i, id) in snap.queue.iter().enumerate() {
-            let p = i64::try_from(i)?;
-            sqlx::query("INSERT INTO session_queue(position,namespace,song_value) VALUES(?,?,?)")
-                .bind(p)
-                .bind(id.namespace().name())
-                .bind(id.value())
-                .execute(&mut *tx)
-                .await
-                .wrap_err_with(|| format!("写入会话队列项失败 position={p}"))?;
+        for (index, id) in snap.queue.iter().enumerate() {
+            session_queue::Entity::insert(session_queue::ActiveModel {
+                position: Set(i64::try_from(index)?),
+                namespace: Set(id.namespace().name().to_owned()),
+                song_value: Set(id.value().to_owned()),
+            })
+            .exec_without_returning(&tx)
+            .await
+            .wrap_err_with(|| format!("写入会话队列项失败 position={index}"))?;
         }
         tx.commit().await.wrap_err("提交 save 会话事务失败")?;
         Ok(())
@@ -98,35 +107,34 @@ impl SessionStore {
     /// # Return:
     ///   命中返回完整会话(队列按 position 升序重建)，否则 None。
     pub async fn load(&self) -> color_eyre::Result<Option<SessionSnapshot>> {
-        let Some(pool) = self.persist.pool() else {
+        let Some(db) = self.persist.pool() else {
             return Ok(None);
         };
-        let head: Option<SessionStateRow> = sqlx::query_as(
-            "SELECT cur_namespace,cur_song_value,position_ms,play_mode,volume FROM session_state WHERE id=0",
-        )
-        .fetch_optional(pool).await
-        .wrap_err("读会话状态(session_state)失败")?;
-        let Some((cur_ns, cur_val, pos, play_mode, volume)) = head else {
+        let Some(head) = session_state::Entity::find_by_id(0)
+            .one(db)
+            .await
+            .wrap_err("读会话状态(session_state)失败")?
+        else {
             return Ok(None);
         };
-        let current = match (cur_ns, cur_val) {
-            (Some(ns), Some(v)) => Some(SongId::new(SourceKind::from_name(&ns), v)),
+        let current = match (head.cur_namespace, head.cur_song_value) {
+            (Some(ns), Some(value)) => Some(SongId::new(SourceKind::from_name(&ns), value)),
             _ => None,
         };
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT namespace,song_value FROM session_queue ORDER BY position")
-                .fetch_all(pool)
-                .await
-                .wrap_err("读会话队列(session_queue)失败")?;
+        let rows = session_queue::Entity::find()
+            .order_by_asc(session_queue::Column::Position)
+            .all(db)
+            .await
+            .wrap_err("读会话队列(session_queue)失败")?;
         let queue = rows
             .into_iter()
-            .map(|(ns, v)| SongId::new(SourceKind::from_name(&ns), v))
-            .collect::<Vec<SongId>>();
+            .map(|row| SongId::new(SourceKind::from_name(&row.namespace), row.song_value))
+            .collect();
         Ok(Some(SessionSnapshot {
             current,
-            position_ms: u64::try_from(pos)?,
-            play_mode,
-            volume,
+            position_ms: u64::try_from(head.position_ms)?,
+            play_mode: head.play_mode,
+            volume: head.volume,
             queue,
         }))
     }

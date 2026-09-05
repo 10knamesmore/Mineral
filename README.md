@@ -270,7 +270,7 @@ cargo fmt
 cargo run -p mineral                      # 运行 TUI
 ```
 
-测试体系细则见 [文档](./docs/testing.md)。
+测试体系细则见 [文档](./docs/testing.md)，数据库实体与迁移约定见 [持久化开发指南](./docs/persistence.md)。
 
 ## 致谢
 

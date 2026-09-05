@@ -7,6 +7,7 @@ mod namespace;
 pub(crate) mod rows;
 mod session;
 mod song_kv;
+mod song_meta;
 pub(crate) mod time;
 
 pub use namespace::{CachedPlaylistEntry, NamespaceStore, PlaylistCacheEntry};

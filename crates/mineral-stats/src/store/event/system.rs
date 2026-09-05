@@ -2,7 +2,7 @@
 
 use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
-use sqlx::SqlitePool;
+use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::event::SystemEvent;
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
 /// 系统域每张表都有的公共写入列 + live 连接句柄(无 actor)。
 struct SystemWrite<'a> {
     /// live 连接池。
-    pool: &'a SqlitePool,
+    pool: &'a DatabaseConnection,
 
     /// 事件时刻 epoch ms。
     ts: i64,
@@ -32,7 +32,7 @@ fn split_song(song: Option<&SongId>) -> (Option<&str>, Option<&str>) {
 
 /// 按变体把一条系统域事件落到对应表。公共列(ts / session_id)在此汇入。
 pub(super) async fn write(
-    pool: &SqlitePool,
+    pool: &DatabaseConnection,
     ts: i64,
     session_id: Option<i64>,
     event: &SystemEvent,
@@ -92,18 +92,19 @@ async fn write_stream_resolution(
     let ns = song.namespace().name();
     let song_value = song.value();
     let for_prefetch = i64::from(for_prefetch);
-    sqlx::query!(
-        "INSERT INTO stream_resolutions (ts, session_id, ns, song_value, quality_requested, outcome, for_prefetch) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        ns,
-        song_value,
-        quality_requested,
-        outcome as _,
-        for_prefetch,
+    crate::entity::stream_resolutions::Entity::insert(
+        crate::entity::stream_resolutions::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            ns: Set(ns.to_owned()),
+            song_value: Set(song_value.to_owned()),
+            quality_requested: Set(quality_requested.to_owned()),
+            outcome: Set(outcome),
+            for_prefetch: Set(for_prefetch),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event stream_resolutions 落库失败")?;
     Ok(())
@@ -119,19 +120,18 @@ async fn write_hook_fire(
     fail_open: Option<FailOpen>,
 ) -> color_eyre::Result<()> {
     let (ns, song_value) = split_song(song);
-    sqlx::query!(
-        "INSERT INTO hook_fires (ts, session_id, ns, song_value, hook, stage, decision, fail_open) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        ns,
-        song_value,
-        hook as _,
-        stage as _,
-        decision as _,
-        fail_open as _,
-    )
-    .execute(w.pool)
+    crate::entity::hook_fires::Entity::insert(crate::entity::hook_fires::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        ns: Set(ns.map(str::to_owned)),
+        song_value: Set(song_value.map(str::to_owned)),
+        hook: Set(hook),
+        stage: Set(stage),
+        decision: Set(decision),
+        fail_open: Set(fail_open),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event hook_fires 落库失败")?;
     Ok(())
@@ -145,16 +145,17 @@ async fn write_gapless_boundary(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO gapless_boundaries (ts, session_id, ns, song_value, result) \
-         VALUES (?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        ns,
-        song_value,
-        result as _,
+    crate::entity::gapless_boundaries::Entity::insert(
+        crate::entity::gapless_boundaries::ActiveModel {
+            ts: Set(w.ts),
+            session_id: Set(w.session_id),
+            ns: Set(ns.to_owned()),
+            song_value: Set(song_value.to_owned()),
+            result: Set(result),
+            ..Default::default()
+        },
     )
-    .execute(w.pool)
+    .exec(w.pool)
     .await
     .wrap_err("record_event gapless_boundaries 落库失败")?;
     Ok(())
@@ -169,17 +170,16 @@ async fn write_prefetch(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO prefetches (ts, session_id, ns, song_value, source, resolution) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        ns,
-        song_value,
-        source as _,
-        resolution as _,
-    )
-    .execute(w.pool)
+    crate::entity::prefetches::Entity::insert(crate::entity::prefetches::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        source: Set(source),
+        resolution: Set(resolution),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event prefetches 落库失败")?;
     Ok(())
@@ -196,19 +196,18 @@ async fn write_cache_harvest(
 ) -> color_eyre::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
-    sqlx::query!(
-        "INSERT INTO cache_harvests (ts, session_id, ns, song_value, quality, format, outcome, bytes) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        ns,
-        song_value,
-        quality,
-        format,
-        outcome as _,
-        bytes,
-    )
-    .execute(w.pool)
+    crate::entity::cache_harvests::Entity::insert(crate::entity::cache_harvests::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        ns: Set(ns.to_owned()),
+        song_value: Set(song_value.to_owned()),
+        quality: Set(quality.to_owned()),
+        format: Set(format.to_owned()),
+        outcome: Set(outcome),
+        bytes: Set(bytes),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event cache_harvests 落库失败")?;
     Ok(())
@@ -220,14 +219,14 @@ async fn write_cache_eviction(
     cache_key: &str,
     bytes: i64,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO cache_evictions (ts, session_id, cache_key, bytes) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        cache_key,
-        bytes,
-    )
-    .execute(w.pool)
+    crate::entity::cache_evictions::Entity::insert(crate::entity::cache_evictions::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        cache_key: Set(cache_key.to_owned()),
+        bytes: Set(bytes),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event cache_evictions 落库失败")?;
     Ok(())
@@ -239,14 +238,14 @@ async fn write_script_lifecycle(
     event: ScriptEvent,
     detail: Option<&str>,
 ) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO script_lifecycle (ts, session_id, event, detail) VALUES (?, ?, ?, ?)",
-        w.ts,
-        w.session_id,
-        event as _,
-        detail,
-    )
-    .execute(w.pool)
+    crate::entity::script_lifecycle::Entity::insert(crate::entity::script_lifecycle::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        event: Set(event),
+        detail: Set(detail.map(str::to_owned)),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event script_lifecycle 落库失败")?;
     Ok(())
@@ -254,12 +253,12 @@ async fn write_script_lifecycle(
 
 /// 落 config_reloads 一行(无专有列)。
 async fn write_config_reload(w: &SystemWrite<'_>) -> color_eyre::Result<()> {
-    sqlx::query!(
-        "INSERT INTO config_reloads (ts, session_id) VALUES (?, ?)",
-        w.ts,
-        w.session_id,
-    )
-    .execute(w.pool)
+    crate::entity::config_reloads::Entity::insert(crate::entity::config_reloads::ActiveModel {
+        ts: Set(w.ts),
+        session_id: Set(w.session_id),
+        ..Default::default()
+    })
+    .exec(w.pool)
     .await
     .wrap_err("record_event config_reloads 落库失败")?;
     Ok(())
@@ -273,7 +272,7 @@ mod tests {
     };
     use crate::store::StatsStore;
     use mineral_model::{SongId, SourceKind};
-    use sqlx::SqlitePool;
+    use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, QuerySelect};
 
     /// 建落盘临时库(系统域事件 session_id 直接落 NULL,免开会话)。
     async fn open_temp() -> color_eyre::Result<(tempfile::TempDir, StatsStore)> {
@@ -283,7 +282,7 @@ mod tests {
     }
 
     /// 从句柄取 live pool。
-    fn live(store: &StatsStore) -> color_eyre::Result<&SqlitePool> {
+    fn live(store: &StatsStore) -> color_eyre::Result<&DatabaseConnection> {
         store
             .pool()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected live pool"))
@@ -312,16 +311,25 @@ mod tests {
         store.record_event(1000, None, &empty).await?;
         store.record_event(1001, None, &error).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             outcome: StreamOutcome,
             for_prefetch: i64,
         }
-        let rows = sqlx::query_as::<_, Row>(
-            "SELECT outcome, for_prefetch FROM stream_resolutions ORDER BY id",
-        )
-        .fetch_all(live(&store)?)
-        .await?;
+        let rows = crate::entity::stream_resolutions::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::stream_resolutions::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::stream_resolutions::Column::ForPrefetch,
+            ))
+            .order_by_asc(sea_orm::sea_query::Expr::col(
+                crate::entity::stream_resolutions::Column::Id,
+            ))
+            .into_model::<Row>()
+            .all(live(&store)?)
+            .await?;
         let first = rows
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected first row"))?;
@@ -348,7 +356,7 @@ mod tests {
         });
         store.record_event(2000, None, &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             ns: Option<String>,
             song_value: Option<String>,
@@ -356,11 +364,27 @@ mod tests {
             decision: HookDecision,
             fail_open: Option<FailOpen>,
         }
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT ns, song_value, hook, decision, fail_open FROM hook_fires",
-        )
-        .fetch_one(live(&store)?)
-        .await?;
+        let row = crate::entity::hook_fires::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::hook_fires::Column::Ns,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::hook_fires::Column::SongValue,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::hook_fires::Column::Hook,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::hook_fires::Column::Decision,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::hook_fires::Column::FailOpen,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.ns, None);
         assert_eq!(row.song_value, None);
         assert_eq!(row.hook, HookKind::BeforeStream);
@@ -394,11 +418,17 @@ mod tests {
             )
             .await?;
 
-        let results = sqlx::query_as::<_, (GaplessResult,)>(
-            "SELECT result FROM gapless_boundaries ORDER BY id",
-        )
-        .fetch_all(live(&store)?)
-        .await?;
+        let results = crate::entity::gapless_boundaries::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::gapless_boundaries::Column::Result,
+            ))
+            .order_by_asc(sea_orm::sea_query::Expr::col(
+                crate::entity::gapless_boundaries::Column::Id,
+            ))
+            .into_tuple::<(GaplessResult,)>()
+            .all(live(&store)?)
+            .await?;
         let first = results
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected first row"))?;
@@ -420,14 +450,23 @@ mod tests {
         });
         store.record_event(3000, None, &event).await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             cache_key: String,
             bytes: i64,
         }
-        let row = sqlx::query_as::<_, Row>("SELECT cache_key, bytes FROM cache_evictions")
-            .fetch_one(live(&store)?)
-            .await?;
+        let row = crate::entity::cache_evictions::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_evictions::Column::CacheKey,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_evictions::Column::Bytes,
+            ))
+            .into_model::<Row>()
+            .one(live(&store)?)
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected database row"))?;
         assert_eq!(row.cache_key, "netease:42:lossless");
         assert_eq!(row.bytes, 8_388_608);
         Ok(())
@@ -457,11 +496,20 @@ mod tests {
                 .await?;
         }
 
-        let rows = sqlx::query_as::<_, (PrefetchSource, PrefetchResolution)>(
-            "SELECT source, resolution FROM prefetches ORDER BY id",
-        )
-        .fetch_all(live(&store)?)
-        .await?;
+        let rows = crate::entity::prefetches::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::prefetches::Column::Source,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::prefetches::Column::Resolution,
+            ))
+            .order_by_asc(sea_orm::sea_query::Expr::col(
+                crate::entity::prefetches::Column::Id,
+            ))
+            .into_tuple::<(PrefetchSource, PrefetchResolution)>()
+            .all(live(&store)?)
+            .await?;
         assert_eq!(rows, cases);
         Ok(())
     }
@@ -498,17 +546,29 @@ mod tests {
             )
             .await?;
 
-        #[derive(sqlx::FromRow)]
+        #[derive(sea_orm::FromQueryResult)]
         struct Row {
             format: String,
             outcome: CacheHarvestOutcome,
             bytes: Option<i64>,
         }
-        let rows = sqlx::query_as::<_, Row>(
-            "SELECT format, outcome, bytes FROM cache_harvests ORDER BY id",
-        )
-        .fetch_all(live(&store)?)
-        .await?;
+        let rows = crate::entity::cache_harvests::Entity::find()
+            .select_only()
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_harvests::Column::Format,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_harvests::Column::Outcome,
+            ))
+            .expr(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_harvests::Column::Bytes,
+            ))
+            .order_by_asc(sea_orm::sea_query::Expr::col(
+                crate::entity::cache_harvests::Column::Id,
+            ))
+            .into_model::<Row>()
+            .all(live(&store)?)
+            .await?;
         let first = rows
             .first()
             .ok_or_else(|| color_eyre::eyre::eyre!("expected first row"))?;

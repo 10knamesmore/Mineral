@@ -10,7 +10,9 @@ rust-version.workspace = true
 
 [dependencies]
 color-eyre  = { workspace = true }
-sqlx        = { workspace = true }
+sea-orm     = { workspace = true }
+sea-orm-migration = { workspace = true }
+async-trait = { workspace = true }
 tokio       = { workspace = true }
 rustc-hash  = { workspace = true }
 parking_lot = { workspace = true }

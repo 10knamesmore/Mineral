@@ -15,7 +15,9 @@ fixture = []
 
 [dependencies]
 color-eyre    = { workspace = true }
-sqlx          = { workspace = true }
+sea-orm       = { workspace = true }
+sea-orm-migration = { workspace = true }
+async-trait   = { workspace = true }
 tokio         = { workspace = true }
 mineral-model = { workspace = true }
 rustc-hash    = { workspace = true }
