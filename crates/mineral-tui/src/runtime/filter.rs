@@ -271,6 +271,14 @@ impl FuzzyMatcher {
         let hits = text.map_back(&self.indices_buf);
         Some(Match { score, hits })
     }
+
+    /// 只求排序分，不生成高亮下标；批量筛选用，实际显示时再取完整匹配。
+    pub(crate) fn score_only(&mut self, text: &MatchableText) -> Option<u32> {
+        if !self.is_active() {
+            return None;
+        }
+        self.pattern.score(text.haystack_view(), &mut self.matcher)
+    }
 }
 
 impl Default for FuzzyMatcher {

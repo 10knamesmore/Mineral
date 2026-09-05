@@ -1,7 +1,6 @@
 //! 本地模糊过滤搜索域:查询串 / 输入态 + matcher、预处理缓存、深度搜索缓存。
 //!
-//! 只负责「单段文本怎么匹配」;跨集合的过滤排序(歌单 / 曲目列表)是
-//! [`AppState`](crate::runtime::state::AppState) 的跨域查询,留在那边。
+//! 文本预处理可跨查询复用；匹配分用于筛选，高亮下标按显示需求生成。
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -80,8 +79,7 @@ impl SearchState {
 
     /// 对单段文本跑一次匹配,返回 score + 已映射回原文 char 下标的 `hits`。
     ///
-    /// 空 query / 不命中都返回 `None`。每帧渲染时按需调用(已带 MatchableText 缓存
-    /// + matcher buffer 复用,开销可忽略)。
+    /// 空 query / 不命中都返回 `None`。仅为需要显示的文本求高亮下标。
     pub fn match_for(&self, text: &str) -> Option<Match> {
         if self.input.is_empty() {
             return None;
@@ -89,6 +87,36 @@ impl SearchState {
         self.sync_query();
         let mt = self.matchable_for(text);
         self.matcher.borrow_mut().score(&mt)
+    }
+
+    /// 歌名、别名、任一艺人或专辑名的最高匹配分；各字段独立匹配。
+    pub(crate) fn song_score(&self, song: &mineral_model::Song) -> Option<u32> {
+        let name = self.score_for(&song.name);
+        let alias = song.alias.as_deref().and_then(|text| self.score_for(text));
+        let artist = song
+            .artists
+            .iter()
+            .filter_map(|artist| self.score_for(&artist.name))
+            .max();
+        let album = song
+            .album
+            .as_ref()
+            .and_then(|album| self.score_for(&album.name));
+        name.into_iter()
+            .chain(alias)
+            .chain(artist)
+            .chain(album)
+            .max()
+    }
+
+    /// 批量筛选时只计算分数，不做高亮下标的反向映射。
+    fn score_for(&self, text: &str) -> Option<u32> {
+        if self.input.is_empty() {
+            return None;
+        }
+        self.sync_query();
+        let text = self.matchable_for(text);
+        self.matcher.borrow_mut().score_only(&text)
     }
 
     /// 拿 / 构造 一份预处理过的 `MatchableText`。首次见到的文本会算一次拼音。

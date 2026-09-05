@@ -3,6 +3,8 @@
 //! 与模型数据(library / caps / player)分离——模型留在外层聚合态,Browse 决策时按需借入。
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
+use std::cell::RefCell;
+
 use mineral_config::{AnimationConfig, TrailTimingConfig};
 use mineral_model::{PlaylistId, Song};
 
@@ -15,6 +17,7 @@ use super::library::LibraryData;
 use super::lyric::view::LyricView;
 use super::nav::NavState;
 use super::search::SearchState;
+use super::track_filter::{FilteredTracks, TrackFilterCache};
 use super::view_switch::ViewSwitch;
 
 /// Browse 视图逻辑所需的只读模型借用:歌曲库 + 配置——过滤 / 深度搜索 / 选中都读它,
@@ -60,6 +63,9 @@ pub struct BrowsePage {
 
     /// `/` 模糊搜索状态(查询串 / 输入态 + 模糊匹配基建)。
     pub search: SearchState,
+
+    /// 当前歌单过滤后的下标与时长；数据或查询变化时重建。
+    filtered_tracks: RefCell<TrackFilterCache>,
 }
 
 impl BrowsePage {
@@ -80,6 +86,7 @@ impl BrowsePage {
             lyric_view: LyricView::new(),
             nav: NavState::new(),
             search: SearchState::new(),
+            filtered_tracks: RefCell::new(TrackFilterCache::default()),
         }
     }
 
@@ -142,8 +149,8 @@ impl BrowsePage {
     }
 
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。
-    pub fn current_tracks(&self, model: BrowseModel<'_>) -> Vec<PlaylistEntryView> {
-        self.current_tracks_slot(model).cloned().unwrap_or_default()
+    pub fn current_tracks<'a>(&self, model: BrowseModel<'a>) -> &'a [PlaylistEntryView] {
+        self.current_tracks_slot(model).map_or(&[], Vec::as_slice)
     }
 
     /// 当前可见(被 search 过滤)的歌单列表。
@@ -197,43 +204,19 @@ impl BrowsePage {
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分。
-    pub fn filtered_tracks(&self, model: BrowseModel<'_>) -> Vec<PlaylistEntryView> {
-        let tracks = self.current_tracks(model);
-        if self.search.query().is_empty() {
-            return tracks;
-        }
-        self.search.sync_query();
-        let mut scored: Vec<(u32, PlaylistEntryView)> = tracks
-            .into_iter()
-            .filter_map(|sv| {
-                let song = &sv.data.song;
-                let name = self.search.match_for(&song.name).map(|m| m.score);
-                // alias(译名/副标题)独立一段匹配,不与歌名拼接——否则「歌名 别名」被当整串,
-                // 搜别名会因中间隔着歌名而错配。展示了 alias 就得能搜到它(否则搜它反被滤掉)。
-                let alias = song
-                    .alias
-                    .as_deref()
-                    .and_then(|a| self.search.match_for(a).map(|m| m.score));
-                let artist = song
-                    .artists
-                    .iter()
-                    .filter_map(|a| self.search.match_for(&a.name).map(|m| m.score))
-                    .max();
-                let album = song
-                    .album
-                    .as_ref()
-                    .and_then(|a| self.search.match_for(&a.name).map(|m| m.score));
-                let best = name
-                    .into_iter()
-                    .chain(alias)
-                    .chain(artist)
-                    .chain(album)
-                    .max()?;
-                Some((best, sv))
-            })
-            .collect();
-        scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
-        scored.into_iter().map(|(_, sv)| sv).collect()
+    pub(crate) fn filtered_tracks<'a>(&self, model: BrowseModel<'a>) -> FilteredTracks<'a> {
+        let Some(playlist) = self.selected_playlist(model) else {
+            return FilteredTracks::empty();
+        };
+        let Some(entries) = model.library.tracks.get(&playlist.data.id) else {
+            return FilteredTracks::empty();
+        };
+        self.filtered_tracks.borrow_mut().view(
+            &playlist.data.id,
+            model.library.tracks_generation,
+            entries,
+            &self.search,
+        )
     }
 
     /// 按 `behavior.filter_play_scope` 建立 Library 起播队列，并保留过滤结果中选中的 exact
@@ -263,7 +246,10 @@ impl BrowsePage {
             .matches_only()
         {
             Some(LibraryQueueProjection {
-                songs: filtered.into_iter().map(|entry| entry.data.song).collect(),
+                songs: filtered
+                    .iter()
+                    .map(|entry| entry.data.song.clone())
+                    .collect(),
                 target: filtered_target,
             })
         } else {
@@ -272,7 +258,10 @@ impl BrowsePage {
                 .iter()
                 .position(|entry| entry.data.index == selected_index)?;
             Some(LibraryQueueProjection {
-                songs: entries.into_iter().map(|entry| entry.data.song).collect(),
+                songs: entries
+                    .iter()
+                    .map(|entry| entry.data.song.clone())
+                    .collect(),
                 target,
             })
         }

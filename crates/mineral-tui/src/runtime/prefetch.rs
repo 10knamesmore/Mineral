@@ -83,8 +83,7 @@ fn collect_cover_candidates(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             }
         }
         View::Library => {
-            // sel 是 filtered 索引,sel-first + 邻居全走 filtered_tracks(PlaylistEntryView Vec
-            // clone <200 行 typical, <1ms),保持索引语义一致。
+            // sel 与邻居均按过滤视图下标读取；视图借用曲目，不复制整个歌单。
             let filtered = state.filtered_tracks();
             let sel = state.browse.nav.track.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {

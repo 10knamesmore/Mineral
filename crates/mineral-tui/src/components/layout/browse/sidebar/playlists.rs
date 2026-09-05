@@ -61,11 +61,6 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let header =
         Row::new(header_cells).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row<'_>> = rows_data
-        .into_iter()
-        .map(|p| build_row(p, state, theme, show_match))
-        .collect();
-
     // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
     // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
     // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
@@ -79,16 +74,21 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         Constraint::Length(5),
     ]);
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(block)
-        .row_highlight_style(
-            Style::new()
-                .bg(theme.surface0)
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▌ ");
+    let build_table = |visible: std::ops::Range<usize>| {
+        let rows = visible
+            .filter_map(|index| rows_data.get(index))
+            .map(|p| build_row(p, state, theme, show_match));
+        Table::new(rows, widths)
+            .header(header)
+            .block(block)
+            .row_highlight_style(
+                Style::new()
+                    .bg(theme.surface0)
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌ ")
+    };
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),理由同 library。
@@ -104,7 +104,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     render_scroll_table(
         buf,
         area,
-        table,
+        build_table,
         &state.browse.nav.playlist,
         total,
         viewport,

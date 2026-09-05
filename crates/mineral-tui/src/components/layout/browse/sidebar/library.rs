@@ -90,11 +90,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
 
     let tracks = state.filtered_tracks();
     // 未知时长的曲目不计入合计(只反映已知部分)。
-    let total_min = tracks
-        .iter()
-        .filter_map(|entry| entry.data.song.duration_ms)
-        .sum::<u64>()
-        / 60_000;
+    let total_min = tracks.total_duration_ms() / 60_000;
     let placeholder = slot_placeholder(state, theme);
     let pos = position_label(state.browse.nav.track.sel(), tracks.len());
 
@@ -151,29 +147,31 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .copied()
         .unwrap_or(0);
     let sel = state.browse.nav.track.sel();
-    let rows: Vec<Row<'_>> = if let Some(row) = placeholder {
-        vec![row]
-    } else {
-        tracks
-            .iter()
-            .enumerate()
-            .map(|(i, sv)| {
-                let marquee = row_marquee(i == sel, &marquee_ctx, Slot::BrowseSelected, title_w);
-                build_row(sv, state, theme, layout, marquee)
-            })
-            .collect()
-    };
+    let build_table = |visible: std::ops::Range<usize>| {
+        let rows: Vec<Row<'_>> = if let Some(row) = placeholder {
+            vec![row]
+        } else {
+            visible
+                .filter_map(|i| tracks.get(i).map(|entry| (i, entry)))
+                .map(|(i, sv)| {
+                    let marquee =
+                        row_marquee(i == sel, &marquee_ctx, Slot::BrowseSelected, title_w);
+                    build_row(sv, state, theme, layout, marquee)
+                })
+                .collect()
+        };
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(block)
-        .row_highlight_style(
-            Style::new()
-                .bg(theme.surface0)
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▌ ");
+        Table::new(rows, widths)
+            .header(header)
+            .block(block)
+            .row_highlight_style(
+                Style::new()
+                    .bg(theme.surface0)
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌ ")
+    };
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
     // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),收缩中的 viewport 不得改写
@@ -190,7 +188,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     render_scroll_table(
         buf,
         area,
-        table,
+        build_table,
         &state.browse.nav.track,
         tracks.len(),
         viewport,

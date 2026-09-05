@@ -231,32 +231,32 @@ impl Overlay for DownloadOverlay {
             .copied()
             .unwrap_or_default();
         let marquee_ctx = MarqueeCtx::new(ctx, theme, theme.surface0);
-        let rows = ctx
-            .downloads
-            .iter()
-            .enumerate()
-            .map(|(index, download)| {
-                let marquee = row_marquee(
-                    index == self.list.sel(),
-                    &marquee_ctx,
-                    Slot::DownloadSelected,
-                    title_width,
-                );
-                DownloadRow { download }.render(theme, marquee)
-            })
-            .collect::<Vec<_>>();
-        let table = Table::new(rows, widths)
-            .row_highlight_style(
-                Style::new()
-                    .bg(theme.surface0)
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▌ ");
+        let build_table = |visible: std::ops::Range<usize>| {
+            let rows = visible
+                .filter_map(|index| ctx.downloads.get(index).map(|download| (index, download)))
+                .map(|(index, download)| {
+                    let marquee = row_marquee(
+                        index == self.list.sel(),
+                        &marquee_ctx,
+                        Slot::DownloadSelected,
+                        title_width,
+                    );
+                    DownloadRow { download }.render(theme, marquee)
+                })
+                .collect::<Vec<_>>();
+            Table::new(rows, widths)
+                .row_highlight_style(
+                    Style::new()
+                        .bg(theme.surface0)
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▌ ")
+        };
         render_scroll_table(
             buf,
             inner,
-            table,
+            build_table,
             &self.list,
             ctx.downloads.len(),
             usize::from(inner.height),

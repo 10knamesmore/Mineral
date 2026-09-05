@@ -174,38 +174,44 @@ impl Overlay for QueueOverlay {
             return;
         }
         let sel = self.list.sel();
-        let rows: Vec<Row<'_>> = visible
-            .iter()
-            .enumerate()
-            .filter_map(|(view_i, &raw_i)| {
-                let s = ctx.player.queue.get(raw_i)?;
-                let decor = RowDecor {
-                    // ▶ / # 按队列真实下标,不随过滤重排漂移。
-                    is_current: current_idx == Some(raw_i),
-                    loved: ctx.is_liked(s),
-                    index_fg: resolve_source_color(theme, ctx.cfg.sources(), s.source()),
-                    marquee: row_marquee(view_i == sel, &marquee_ctx, Slot::QueueSelected, title_w),
-                    hits: self.row_hits(s),
-                };
-                Some(build_row(raw_i, s, theme, cols, decor))
-            })
-            .collect();
+        let build_table = |window: std::ops::Range<usize>| {
+            let rows: Vec<Row<'_>> = window
+                .filter_map(|view_i| visible.get(view_i).map(|raw_i| (view_i, raw_i)))
+                .filter_map(|(view_i, &raw_i)| {
+                    let s = ctx.player.queue.get(raw_i)?;
+                    let decor = RowDecor {
+                        // ▶ / # 按队列真实下标,不随过滤重排漂移。
+                        is_current: current_idx == Some(raw_i),
+                        loved: ctx.is_liked(s),
+                        index_fg: resolve_source_color(theme, ctx.cfg.sources(), s.source()),
+                        marquee: row_marquee(
+                            view_i == sel,
+                            &marquee_ctx,
+                            Slot::QueueSelected,
+                            title_w,
+                        ),
+                        hits: self.row_hits(s),
+                    };
+                    Some(build_row(raw_i, s, theme, cols, decor))
+                })
+                .collect();
 
-        // 焦点让给压在上面的菜单时,选中高亮按其揭开进度淡向底色——两层同时全亮会读成
-        // 「两处都在等输入」。用同一个进度插值,交接与菜单的淡入严格同拍。
-        let yielded = ctx.overlay_reveal.get().yielded();
-        let (num, denom) = (u64::from(yielded), u64::from(OverlayReveal::FULL));
-        let highlight_bg = lerp_color(theme.surface0, theme.base, num, denom);
-        let highlight_fg = lerp_color(theme.accent, theme.subtext, num, denom);
-        let table = Table::new(rows, widths)
-            .header(header)
-            .row_highlight_style(
-                Style::new()
-                    .bg(highlight_bg)
-                    .fg(highlight_fg)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▌ ");
+            // 焦点让给压在上面的菜单时,选中高亮按其揭开进度淡向底色——两层同时全亮会读成
+            // 「两处都在等输入」。用同一个进度插值,交接与菜单的淡入严格同拍。
+            let yielded = ctx.overlay_reveal.get().yielded();
+            let (num, denom) = (u64::from(yielded), u64::from(OverlayReveal::FULL));
+            let highlight_bg = lerp_color(theme.surface0, theme.base, num, denom);
+            let highlight_fg = lerp_color(theme.accent, theme.subtext, num, denom);
+            Table::new(rows, widths)
+                .header(header)
+                .row_highlight_style(
+                    Style::new()
+                        .bg(highlight_bg)
+                        .fg(highlight_fg)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▌ ")
+        };
 
         // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
         // 行数按过滤视图长度(而非队列全长),视口 / offset 才与实际画的行数对齐。
@@ -213,7 +219,7 @@ impl Overlay for QueueOverlay {
         render_scroll_table(
             buf,
             inner,
-            table,
+            build_table,
             &self.list,
             visible.len(),
             viewport,

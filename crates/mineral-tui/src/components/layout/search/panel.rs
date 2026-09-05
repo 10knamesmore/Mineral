@@ -321,27 +321,32 @@ pub fn draw_results(
         }
         return;
     };
-    let (header, rows, widths) = result_table(
-        &kr.results,
-        kr.list().sel(),
-        // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
-        // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
-        &MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0),
-        inner.width,
-        theme,
-    );
-    // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
-    let highlight = highlight_style(
-        theme,
-        rs.focus_permille(
-            *state.cfg.tui().animation().search_focus_transition(),
-            SearchFocus::Results,
-        ),
-    );
-    let table = Table::new(rows, widths)
-        .header(Row::new(header).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD)))
-        .row_highlight_style(highlight)
-        .highlight_symbol("▌ ");
+    let build_table = |visible| {
+        let (header, rows, widths) = result_table(
+            &kr.results,
+            visible,
+            kr.list().sel(),
+            // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
+            // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
+            &MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0),
+            inner.width,
+            theme,
+        );
+        // 整行底色高亮(对齐 tracks/playlist/queue 的 row_highlight):bg 铺满整行,非仅文字变色。
+        let highlight = highlight_style(
+            theme,
+            rs.focus_permille(
+                *state.cfg.tui().animation().search_focus_transition(),
+                SearchFocus::Results,
+            ),
+        );
+        Table::new(rows, widths)
+            .header(
+                Row::new(header).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD)),
+            )
+            .row_highlight_style(highlight)
+            .highlight_symbol("▌ ")
+    };
     // 视口行数 = 内区高 - 表头(边框归 block);offset 跨帧持久 + 缓动平移。
     // 退场 morph 中面板是收缩瞬态(只读展示,不得用瞬态 viewport 改写滚动目标),仅稳态(at_max)推进。
     let viewport = usize::from(inner.height.saturating_sub(1));
@@ -356,7 +361,7 @@ pub fn draw_results(
     render_scroll_table(
         frame.buffer_mut(),
         inner,
-        table,
+        build_table,
         kr.list(),
         kr.len(),
         viewport,
@@ -399,6 +404,7 @@ fn draw_centered_hint(frame: &mut Frame<'_>, inner: Rect, text: &str, theme: &Th
 /// 列为裸数字,含义由表头说明(同 library 约定),省去逐行重复单位词。
 fn result_table(
     payload: &SearchPayload,
+    visible: std::ops::Range<usize>,
     sel: usize,
     marquee: &MarqueeCtx<'_>,
     inner_w: u16,
@@ -423,6 +429,8 @@ fn result_table(
             let rows = songs
                 .iter()
                 .enumerate()
+                .skip(visible.start)
+                .take(visible.len())
                 .map(|(idx, s)| {
                     let mut title_spans = vec![Span::styled(s.name.clone(), main)];
                     title_spans.extend(alias_span(s.alias.as_deref(), theme.overlay));
@@ -459,6 +467,8 @@ fn result_table(
         SearchPayload::Albums(albums) => {
             let rows = albums
                 .iter()
+                .skip(visible.start)
+                .take(visible.len())
                 .map(|a| {
                     let tracks = a
                         .track_count
@@ -488,6 +498,8 @@ fn result_table(
         SearchPayload::Playlists(playlists) => {
             let rows = playlists
                 .iter()
+                .skip(visible.start)
+                .take(visible.len())
                 .map(|p| {
                     Row::new(vec![
                         Cell::from(Span::styled(p.name.clone(), main)),
@@ -505,6 +517,8 @@ fn result_table(
         SearchPayload::Artists(artists) => {
             let rows = artists
                 .iter()
+                .skip(visible.start)
+                .take(visible.len())
                 .map(|a| {
                     Row::new(vec![
                         Cell::from(Span::styled(a.name.clone(), main)),
@@ -591,6 +605,7 @@ mod tests {
         let render = |mq: &Marquees| -> color_eyre::Result<String> {
             let (_header, rows, widths) = super::result_table(
                 &payload,
+                0..1,
                 /*sel*/ 0,
                 &marquee_ctx(mq),
                 /*inner_w*/ 40,
@@ -631,6 +646,7 @@ mod tests {
         let still = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ u32::MAX);
         let (_header, rows, widths) = super::result_table(
             &payload,
+            0..2,
             /*sel*/ 0,
             &marquee_ctx(&still),
             /*inner_w*/ 50,

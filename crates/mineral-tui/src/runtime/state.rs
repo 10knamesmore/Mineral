@@ -29,6 +29,7 @@ mod player;
 mod search;
 pub(crate) mod search_whitelist;
 mod task_event;
+mod track_filter;
 mod view_switch;
 
 #[cfg(test)]
@@ -706,7 +707,7 @@ impl AppState {
     /// 当前可见(被 search 过滤)的曲目列表。
     ///
     /// 命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分作为该曲分数。
-    pub fn filtered_tracks(&self) -> Vec<PlaylistEntryView> {
+    pub(crate) fn filtered_tracks(&self) -> track_filter::FilteredTracks<'_> {
         self.browse.filtered_tracks(self.browse_model())
     }
 

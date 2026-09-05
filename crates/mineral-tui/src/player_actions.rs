@@ -91,10 +91,13 @@ impl App {
                             let sel = self
                                 .state
                                 .filtered_tracks()
-                                .into_iter()
-                                .nth(self.state.browse.nav.track.sel());
+                                .get(self.state.browse.nav.track.sel());
                             let loved = sel.as_ref().map(|entry| entry.loved);
-                            (ViewKind::Tracks, sel.map(|entry| entry.data.song), loved)
+                            (
+                                ViewKind::Tracks,
+                                sel.map(|entry| entry.data.song.clone()),
+                                loved,
+                            )
                         }
                     },
                 }

@@ -284,40 +284,42 @@ fn draw_track_list(
     .copied()
     .unwrap_or(0);
     let sel = paint.list.sel();
-    let rows = (0..tracks.len()).filter_map(|view_index| {
-        let (display_index, song) = tracks.row(view_index)?;
-        let loved = state.is_liked(song);
-        let is_current = state
-            .player
-            .current
-            .as_ref()
-            .is_some_and(|current| current.id == song.id);
-        let marquee = row_marquee(
-            view_index == sel,
-            &marquee_ctx,
-            Slot::SearchDetailSelected,
-            title_w,
-        );
-        Some(track_table::track_row(
-            song,
-            display_index,
-            loved,
-            is_current,
-            cols,
-            theme,
-            marquee,
-        ))
-    });
-    let table = Table::new(rows, widths)
-        .header(track_table::header_row(cols, theme))
-        .row_highlight_style(highlight_style(theme, paint.focus_permille))
-        .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
+    let build_table = |visible: std::ops::Range<usize>| {
+        let rows = visible.filter_map(|view_index| {
+            let (display_index, song) = tracks.row(view_index)?;
+            let loved = state.is_liked(song);
+            let is_current = state
+                .player
+                .current
+                .as_ref()
+                .is_some_and(|current| current.id == song.id);
+            let marquee = row_marquee(
+                view_index == sel,
+                &marquee_ctx,
+                Slot::SearchDetailSelected,
+                title_w,
+            );
+            Some(track_table::track_row(
+                song,
+                display_index,
+                loved,
+                is_current,
+                cols,
+                theme,
+                marquee,
+            ))
+        });
+        Table::new(rows, widths)
+            .header(track_table::header_row(cols, theme))
+            .row_highlight_style(highlight_style(theme, paint.focus_permille))
+            .highlight_symbol(track_table::HIGHLIGHT_SYMBOL)
+    };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
     render_scroll_table(
         buf,
         area,
-        table,
+        build_table,
         paint.list,
         tracks.len(),
         viewport,
@@ -390,34 +392,41 @@ fn draw_album_list(
         Cell::from("label"),
     ])
     .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
-    let rows = albums.iter().map(|a| {
-        // 曲目数未知(搜索 / 投稿列表投影)画 `-`,别画 `0` 冒充空专辑;下钻 album_detail 回填真值。
-        let tracks = a.track_count.map_or_else(|| "-".to_owned(), with_commas);
-        let year = publish_year(a.publish_time_ms).map_or_else(String::new, |y| y.to_string());
-        let label = a.company.as_deref().unwrap_or_default().to_owned();
-        Row::new(vec![
-            Cell::from(Span::styled(a.name.clone(), Style::new().fg(theme.text))),
-            Cell::from(Span::styled(tracks, meta)),
-            Cell::from(Span::styled(year, meta)),
-            Cell::from(Span::styled(label, meta)),
-        ])
-    });
-    let widths = [
-        Constraint::Fill(3),
-        Constraint::Length(6),
-        Constraint::Length(6),
-        Constraint::Fill(2),
-    ];
-    let table = Table::new(rows, widths)
-        .header(header)
-        .row_highlight_style(highlight_style(theme, paint.focus_permille))
-        .highlight_symbol(track_table::HIGHLIGHT_SYMBOL);
+    let build_table = |visible: std::ops::Range<usize>| {
+        let rows = albums
+            .iter()
+            .skip(visible.start)
+            .take(visible.len())
+            .map(|a| {
+                // 曲目数未知(搜索 / 投稿列表投影)画 `-`,别画 `0` 冒充空专辑;下钻 album_detail 回填真值。
+                let tracks = a.track_count.map_or_else(|| "-".to_owned(), with_commas);
+                let year =
+                    publish_year(a.publish_time_ms).map_or_else(String::new, |y| y.to_string());
+                let label = a.company.as_deref().unwrap_or_default().to_owned();
+                Row::new(vec![
+                    Cell::from(Span::styled(a.name.clone(), Style::new().fg(theme.text))),
+                    Cell::from(Span::styled(tracks, meta)),
+                    Cell::from(Span::styled(year, meta)),
+                    Cell::from(Span::styled(label, meta)),
+                ])
+            });
+        let widths = [
+            Constraint::Fill(3),
+            Constraint::Length(6),
+            Constraint::Length(6),
+            Constraint::Fill(2),
+        ];
+        Table::new(rows, widths)
+            .header(header)
+            .row_highlight_style(highlight_style(theme, paint.focus_permille))
+            .highlight_symbol(track_table::HIGHLIGHT_SYMBOL)
+    };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
     render_scroll_table(
         buf,
         area,
-        table,
+        build_table,
         paint.list,
         albums.len(),
         viewport,
