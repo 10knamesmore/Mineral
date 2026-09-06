@@ -9,7 +9,7 @@ use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
 use crate::subcommands::stats::{self, StatsCommand};
-use crate::subcommands::{status, stop, tag};
+use crate::subcommands::{status, stop};
 
 /// 多源终端音乐播放器。无子命令时进入 TUI。
 #[derive(Debug, Parser)]
@@ -81,13 +81,6 @@ pub enum Command {
 
     /// 请求后台 daemon 优雅退出;
     Stop,
-
-    /// 回填落盘文件(下载导出 + 播放缓存)的内嵌 metadata tag(标题 / 艺人 / 封面 / 歌词等)
-    Tag {
-        /// 覆盖全部存量文件(批量操作,必须显式给出)。
-        #[arg(long)]
-        all: bool,
-    },
 }
 
 /// 执行解析后的 CLI 命令。**不处理 [`Command::Serve`]**——那个需要 channels,
@@ -114,7 +107,6 @@ async fn run_async(command: Command) -> color_eyre::Result<()> {
         Command::Stats { cmd } => stats::run(cmd).await,
         Command::Status => status::run().await,
         Command::Stop => stop::run().await,
-        Command::Tag { all } => tag::run(all).await,
         Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
     }
 }
