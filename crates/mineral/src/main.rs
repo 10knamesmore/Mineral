@@ -10,7 +10,6 @@ use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
 use mineral_config::DaemonLoad;
 use mineral_playback::{PlaybackProvider, PlaybackRegistry};
-use mineral_tui::Launch;
 use tokio::runtime::Runtime;
 
 mod os;
@@ -35,7 +34,7 @@ fn main() -> color_eyre::Result<()> {
             #[cfg(feature = "dhat-heap")]
             let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
-            runtime.block_on(run_tui(args.connect))
+            runtime.block_on(run_tui())
         }
     }
 }
@@ -146,17 +145,12 @@ async fn open_persist() -> mineral_persist::ServerStore {
     }
 }
 
-/// 起 TUI:Auto 优先 attach 已有 daemon、没有则 spawn 一个独立 daemon 再 attach;
-/// Connect 强制连已有 daemon。
-async fn run_tui(connect: bool) -> color_eyre::Result<()> {
-    let launch = if connect {
-        Launch::Connect
-    } else {
-        Launch::Auto
-    };
+/// 起 TUI:优先 attach 已有 daemon、没有则 spawn 一个独立 daemon 再 attach;
+/// channels / playback / persist 都由 daemon 进程持有,TUI 进程不构造音乐源。
+async fn run_tui() -> color_eyre::Result<()> {
     let (config, warnings) = load_config()?;
     log_config_warnings(&warnings);
-    mineral_tui::run(launch, config, warnings).await
+    mineral_tui::run(config, warnings).await
 }
 
 /// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;

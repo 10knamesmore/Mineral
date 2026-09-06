@@ -22,32 +22,16 @@ use app::App;
 use image::ImageEngine;
 use image::fetch::CoverFetcher;
 use image::graphics::TerminalGraphics;
-use runtime::remote::RemoteClient;
 use runtime::ui::prefs::{UiPrefs, open_client_store};
 use tui::Tui;
 
-/// TUI 的启动模式。决定 daemon 连接的来源。
-pub enum Launch {
-    /// 默认:优先 attach 已有 daemon;没有则 spawn 一个独立 `mineral serve`
-    /// 子进程再 attach。client 退出时是否连带 kill 掉自己 spawn 的 daemon,由
-    /// daemon 模块内的 const 旋钮决定(当前 = 一起退)。
-    Auto,
-
-    /// 强制连已有 daemon(连不上即报错,**不** spawn)。
-    Connect,
-}
-
-/// 启动 TUI。
-///
-/// 两种模式见 [`Launch`]。所有模式下 spectrum 都走 `client.pull_pcm` —— PCM 中继
-/// 统一在 server 内部,TUI 经 IPC 拉。
+/// 启动 TUI:优先 attach 已有 daemon、没有则 spawn 一个独立 `mineral serve`
+/// 子进程再 attach。
 ///
 /// # Params:
-///   - `launch`: 启动模式。
 ///   - `config`: 已加载的用户配置(TUI bootstrap 用,连上 daemon 后由推送顶替)。
 ///   - `warnings`: 配置降级告警,启动后经通知层 toast 呈现。
 pub async fn run(
-    launch: Launch,
     config: mineral_config::Config,
     warnings: Vec<mineral_config::ConfigWarning>,
 ) -> color_eyre::Result<()> {
@@ -76,25 +60,16 @@ pub async fn run(
         CoverFetcher::disabled()
     });
 
-    match launch {
-        Launch::Auto => {
-            let socket = mineral_paths::socket_path()?;
-            let kill_on_exit = *cfg.tui().behavior().kill_spawned_daemon_on_exit();
-            let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
-            let result = run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings);
-            // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
-            // (handle 为 None)留着不动。
-            if let Some(handle) = handle {
-                handle.shutdown_if_owned();
-            }
-            result
-        }
-        Launch::Connect => {
-            let socket = mineral_paths::socket_path()?;
-            let client = RemoteClient::connect(&socket).await?;
-            run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings)
-        }
+    let socket = mineral_paths::socket_path()?;
+    let kill_on_exit = *cfg.tui().behavior().kill_spawned_daemon_on_exit();
+    let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
+    let result = run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings);
+    // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
+    // (handle 为 None)留着不动。
+    if let Some(handle) = handle {
+        handle.shutdown_if_owned();
     }
+    result
 }
 
 /// 拿到一个 client(经 IPC 连 daemon),进 alternate screen,探测终端图片能力,

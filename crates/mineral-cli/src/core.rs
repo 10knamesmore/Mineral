@@ -23,10 +23,6 @@ pub struct Args {
     /// subcommand; omit to launch the TUI
     #[command(subcommand)]
     pub command: Option<Command>,
-
-    /// connect to a running daemon
-    #[arg(long)]
-    pub connect: bool,
 }
 
 /// 顶层子命令。
