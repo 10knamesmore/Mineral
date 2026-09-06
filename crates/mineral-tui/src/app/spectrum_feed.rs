@@ -4,7 +4,7 @@
 use crate::app::App;
 
 impl App {
-    /// 把 client.pull_pcm 拿到的样本喂给 fft computer。in-proc 和 connect 走同一路径。
+    /// 把 client.pull_pcm 拿到的样本喂给 fft computer。所有启动模式走同一路径。
     /// 消费口按渲染风格分路:scope 直接吃时域样本(state 侧聚合成滚动包络),
     /// 其余走 FFT 条高。样本无条件进 FFT 环形窗,风格切回条形家族时窗还是热的。
     pub(super) fn update_spectrum(&mut self) {

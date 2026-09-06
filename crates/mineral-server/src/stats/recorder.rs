@@ -236,7 +236,7 @@ impl StatsRecorder {
     }
 
     /// 降级 no-op 句柄(无 actor / 无写库):所有打点静默丢弃、查询返回空。供无持久化的
-    /// 路径(in-proc TUI、测试)构造 [`PlayerCore`] 用。
+    /// 路径(测试)构造 [`PlayerCore`] 用。
     pub fn disabled() -> Self {
         Self {
             params: Arc::new(ArcSwap::from_pointee(off_params())),

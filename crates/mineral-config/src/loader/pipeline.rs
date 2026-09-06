@@ -237,7 +237,7 @@ impl Config {
 }
 
 /// 纯默认配置的合成树(eval `default.lua`,函数字段已摘)。与
-/// [`Config::defaults`] 同源;供无真实加载管线的场合(in-proc 调试 / 测试)
+/// [`Config::defaults`] 同源;供无真实加载管线的场合(测试)
 /// 当配置宿主的静态底树。
 ///
 /// # Return:

@@ -24,26 +24,17 @@ pub struct ClientHandle {
     /// PCM 旁路读端,频谱 UI 用。
     pcm: PcmPuller,
 
-    /// event hub 订阅端(in-proc 推送通路:Toast / StoreChanged 等;
-    /// 多 clone 共享同一订阅——in-proc 只有一个消费者)。
-    events: std::sync::Arc<parking_lot::Mutex<tokio::sync::broadcast::Receiver<Event>>>,
-
     /// 本 handle 归属的连接 id:wire 接入经 [`Self::for_connection`] 每连接
-    /// 唯一,per-conn 状态(终端上报 / PCM 游标)以它归属;in-proc 恒 0。
+    /// 唯一,per-conn 状态(终端上报 / PCM 游标)以它归属。
     conn: u64,
 }
 
 impl ClientHandle {
     /// 同进程构造,Server 启动后用持有的 `player` / `pcm` 直接拼成 handle。
-    pub(crate) fn new(
-        player: PlayerCore,
-        pcm: PcmPuller,
-        events: tokio::sync::broadcast::Receiver<Event>,
-    ) -> Self {
+    pub(crate) fn new(player: PlayerCore, pcm: PcmPuller) -> Self {
         Self {
             player,
             pcm,
-            events: std::sync::Arc::new(parking_lot::Mutex::new(events)),
             conn: 0,
         }
     }
@@ -564,20 +555,6 @@ impl Client for ClientHandle {
     fn submit_task(&self, kind: TaskKind, priority: Priority) {
         self.player.submit_task(kind, priority);
     }
-    fn drain_events(&self) -> Vec<Event> {
-        let mut rx = self.events.lock();
-        let mut events = Vec::new();
-        loop {
-            match rx.try_recv() {
-                Ok(event) => events.push(event),
-                // 积压被挤掉(in-proc 每 tick drain,正常到不了):跳过继续收。
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
-                    mineral_log::warn!(target: "client", skipped, "event hub 积压,推送被丢弃");
-                }
-                Err(_empty_or_closed) => return events,
-            }
-        }
-    }
     fn task_snapshot(&self) -> Snapshot {
         self.player.task_snapshot()
     }
@@ -587,15 +564,16 @@ impl Client for ClientHandle {
     }
 
     fn toggle_love(&self, song: Song) -> bool {
-        // in-proc 降级:fire-and-forget 触发完整 toggle(查+翻转+set_loved),返回乐观占位。
-        // TUI 会乐观更新本地态,不依赖此返回值。
+        // trait 面是同步调用,真实 toggle 要异步写库,故 fire-and-forget 触发完整
+        // toggle(查+翻转+set_loved),返回占位;调用方应乐观更新本地 loved 态,
+        // 不依赖此返回值。wire 接入走 [`Self::toggle_love_async`] 拿真实结果。
         let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = this.toggle_love_async(&song).await {
                 mineral_log::warn!(
                     target: "client",
                     error = mineral_log::chain(&e),
-                    "in-proc toggle_love 失败"
+                    "toggle_love 失败"
                 );
             }
         });

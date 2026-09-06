@@ -102,14 +102,15 @@ pub trait Client: Send + Sync {
     // ---- 喜欢 / 统计 ----
     /// 切换一首歌的喜欢(♥)状态,返回切换后的新 loved 态。
     ///
-    /// daemon 模式经 IPC 拿到真实结果;in-proc 模式 fire-and-forget,返回值为乐观占位
-    /// (调用方应自行乐观更新本地 loved 态,不强依赖此返回值)。
+    /// 真实 toggle 是异步写库,trait 面是同步调用,实现按自己的通路取折中:IPC 实现
+    /// 经 wire 拿真实结果;无异步面的实现(测试桩)返回占位,调用方应自行乐观更新
+    /// 本地 loved 态,不强依赖此返回值。
     ///
     /// # Params:
     ///   - `song`: 目标歌曲(整首传入,server 顺手落 meta 供聚合视图重建)。
     ///
     /// # Return:
-    ///   切换后的 loved 状态(daemon 模式为真实值;in-proc 为占位 `false`)。
+    ///   切换后的 loved 状态(真实值或占位,见上)。
     fn toggle_love(&self, song: Song) -> bool;
 
     /// 触发脚本具名动作(`mineral.action` 注册)。
@@ -132,13 +133,13 @@ pub trait Client: Send + Sync {
 
     /// 拉取脚本 `mineral.bind` 的键绑定表(启动 / 配置重载后调,合进自己的 keymap)。
     ///
-    /// 默认空(in-proc 调试模式不起脚本线程,空表即正确语义);daemon 模式经 IPC 拿真表。
+    /// 默认空(测试 client 不接脚本线程,空表即正确语义);daemon 模式经 IPC 拿真表。
     fn script_binds(&self) -> Vec<mineral_protocol::ScriptBind> {
         Vec::new()
     }
 
     /// 渲染一个复制模板(daemon 脚本运行时执行 config `copy.templates[index]`
-    /// 的函数)。默认不可用(in-proc 调试模式无脚本线程);daemon 模式经 IPC。
+    /// 的函数)。默认不可用(测试 client 无脚本线程);daemon 模式经 IPC。
     ///
     /// # Params:
     ///   - `index`: 模板下标(0-based,对位 config 数组序)。
@@ -212,7 +213,7 @@ pub trait Client: Send + Sync {
     /// 调用方侧缓冲,每 tick drain;任务 / 数据事件也经
     /// [`mineral_protocol::Event::Task`] 走此通道)。
     ///
-    /// 跨进程实现返回缓冲的推送;同进程 / 测试实现用默认空(in-proc 无推送通道)。
+    /// 跨进程实现返回缓冲的推送;测试实现用默认空。
     fn drain_events(&self) -> Vec<mineral_protocol::Event> {
         Vec::new()
     }

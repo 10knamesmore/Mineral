@@ -861,7 +861,7 @@ mod tests {
     ///
     /// # Return:
     ///   (event hub 发送端, serve loop task, socket 路径)。caller 负责 abort task、删 socket。
-    async fn spawn_inproc_server() -> color_eyre::Result<(
+    async fn spawn_test_server() -> color_eyre::Result<(
         tokio::sync::broadcast::Sender<Event>,
         tokio::task::JoinHandle<color_eyre::Result<()>>,
         PathBuf,
@@ -892,7 +892,7 @@ mod tests {
     /// PropertyChanged 被过滤不到达。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn event_push_end_to_end() -> color_eyre::Result<()> {
-        let (sink, serve, sock) = spawn_inproc_server().await?;
+        let (sink, serve, sock) = spawn_test_server().await?;
 
         let client = RemoteClient::connect(&sock).await?;
         // 未订阅类别先推(若过滤失效,它会先于 Toast 到达而被断言抓到)。
@@ -947,7 +947,7 @@ mod tests {
     /// 一个断开不影响另一个。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_clients_both_served() -> color_eyre::Result<()> {
-        let (_sink, serve, sock) = spawn_inproc_server().await?;
+        let (_sink, serve, sock) = spawn_test_server().await?;
 
         let first = RemoteClient::connect(&sock).await?;
         let second = RemoteClient::connect(&sock)
@@ -973,7 +973,7 @@ mod tests {
     /// 且 Hello 带 server 真实版本。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stale_version_rejected_by_server() -> color_eyre::Result<()> {
-        let (_sink, serve, sock) = spawn_inproc_server().await?;
+        let (_sink, serve, sock) = spawn_test_server().await?;
 
         let stream = UnixStream::connect(&sock).await?;
         let mut conn = framed(stream);

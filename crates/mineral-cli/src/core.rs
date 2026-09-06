@@ -25,12 +25,8 @@ pub struct Args {
     pub command: Option<Command>,
 
     /// connect to a running daemon
-    #[arg(long, conflicts_with = "in_proc")]
-    pub connect: bool,
-
-    /// run the server inside the TUI process (no daemon / socket)
     #[arg(long)]
-    pub in_proc: bool,
+    pub connect: bool,
 }
 
 /// 顶层子命令。

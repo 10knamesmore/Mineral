@@ -86,16 +86,15 @@ pub struct App {
     pub(crate) transition: Option<Transition>,
 
     /// Shift+Q「退出并停止 daemon」标记:置位后退出收缩动画收尾时向 daemon 投递
-    /// shutdown(无视 `kill_spawned_daemon_on_exit` 旋钮与 Auto/Connect 模式;
-    /// in-proc 的 client 实现是 no-op)。普通退出 / Ctrl-C / 断连不置位。
+    /// shutdown(无视 `kill_spawned_daemon_on_exit` 旋钮;测试 client 是 no-op)。普通退出 / Ctrl-C / 断连不置位。
     stop_daemon_on_quit: bool,
 
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
     /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
-    /// 实现可能是同进程 `ClientHandle`,也可能是跨进程 `RemoteClient`,通过
-    /// [`Client`] trait 抽象。**player 业务在 server 端**;App 只 forward 意图。
+    /// 实现是跨进程 `RemoteClient`,经 [`Client`] trait 抽象。**player 业务在
+    /// server 端**;App 只 forward 意图。
     pub(crate) client: Arc<dyn Client>,
 
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
@@ -150,7 +149,7 @@ impl App {
         let theme_base = Theme::from_config(tui_cfg.theme());
         let theme = Arc::new(theme_base);
         let mut keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        // 脚本 `mineral.bind` 的键合进查表(daemon 模式拉真表;in-proc 恒空)。
+        // 脚本 `mineral.bind` 的键合进查表(daemon 模式经 client 拉真表)。
         keymap.append_script_binds(&client.script_binds());
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
@@ -169,7 +168,7 @@ impl App {
         );
         let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg, images);
-        // 各源能力声明:启动拉一次进镜像,UI 据此画入口(in-proc 即时;daemon 模式走 IPC)。
+        // 各源能力声明:启动拉一次进镜像,UI 据此画入口(经 client,daemon 模式走 IPC)。
         state.caps = client.channel_caps().into_iter().collect();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.browse.lyric_view.extra = ui_prefs.initial_lyric_extra();
@@ -219,7 +218,7 @@ impl App {
     /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
     /// (节奏由配置 `animation.frame_tick_ms` 决定,默认 ~60fps)。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        // 启动时同步一次(versions 初始为 0 → 必然全量),in-proc / connect 都立即
+        // 启动时同步一次(versions 初始为 0 → 必然全量),连上即看到 server 状态;
         // 看到 server 状态;与 tick 路径同一条 sync 通道,无特殊分支。
         let sync = self.client.player_sync(self.state.player.versions);
         self.apply_player_sync(sync);

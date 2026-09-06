@@ -2,8 +2,7 @@
 //! 把控件发来的命令转成播放控制。
 //!
 //! 只在 daemon(常驻 server)里启用 —— 系统媒体控件控制的是常驻播放,关掉 TUI
-//! 仍然有效。in-proc 模式(TUI 自起 server)不调用本模块,避免多实例抢同一条
-//! D-Bus 总线名。
+//! 仍然有效,避免多实例抢同一条 D-Bus 总线名。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

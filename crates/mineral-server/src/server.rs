@@ -103,7 +103,7 @@ impl Server {
         // 同步 await:保证在 serve / 首次 PlayerSync 之前生效,client 一连上看到的就是恢复后的模式。
         let session_restored = restore_last_session(&player).await;
         // 埋点:daemon 启动(app_lifecycle;audio 已 spawn 故后端已定,会话恢复已知)。
-        // in-proc TUI 传 disabled recorder → 此调用静默 no-op,不污染。
+        // daemon 总要发,recorder 降级 disabled 时此调用静默 no-op。
         let audio_backend = match player.audio_snapshot().backend {
             mineral_audio::AudioBackend::Device => mineral_stats::AudioBackend::Device,
             mineral_audio::AudioBackend::Null => mineral_stats::AudioBackend::Null,
@@ -149,11 +149,7 @@ impl Server {
 
     /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。
     pub fn client(&self) -> ClientHandle {
-        ClientHandle::new(
-            self.player.clone(),
-            self.pcm.clone(),
-            self.events.subscribe(),
-        )
+        ClientHandle::new(self.player.clone(), self.pcm.clone())
     }
 
     /// 接入系统媒体服务(Linux MPRIS):上报当前播放、响应媒体键 / 桌面控件。

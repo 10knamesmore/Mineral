@@ -35,7 +35,7 @@ fn main() -> color_eyre::Result<()> {
             #[cfg(feature = "dhat-heap")]
             let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
-            runtime.block_on(run_tui(args.connect, args.in_proc))
+            runtime.block_on(run_tui(args.connect))
         }
     }
 }
@@ -146,42 +146,17 @@ async fn open_persist() -> mineral_persist::ServerStore {
     }
 }
 
-/// 起 TUI:in-proc 模式自己 build channels;Auto / Connect 跳过(daemon 进程自己持有)。
-///
-/// `connect` 与 `in_proc` 由 clap `conflicts_with` 保证互斥,故三态映射安全。
-async fn run_tui(connect: bool, in_proc: bool) -> color_eyre::Result<()> {
-    let launch = if in_proc {
-        Launch::InProc
-    } else if connect {
+/// 起 TUI:Auto 优先 attach 已有 daemon、没有则 spawn 一个独立 daemon 再 attach;
+/// Connect 强制连已有 daemon。
+async fn run_tui(connect: bool) -> color_eyre::Result<()> {
+    let launch = if connect {
         Launch::Connect
     } else {
         Launch::Auto
     };
-    // 只有 in-proc 模式 client 与 server 同进程,需要本地 channels;Auto / Connect 下
-    // channels 由独立 daemon 进程持有,省去 build_channels 也省去重复读凭证。
-    // in-proc 模式下持久化降级为 disabled:调试路径无需落盘。
     let (config, warnings) = load_config()?;
     log_config_warnings(&warnings);
-    let (sources, persist) = match launch {
-        Launch::InProc => {
-            let p = mineral_persist::ServerStore::disabled();
-            let sources = build_sources(p.clone(), config.sources())?;
-            (sources, p)
-        }
-        Launch::Auto | Launch::Connect => (
-            BuiltSources::empty(),
-            mineral_persist::ServerStore::disabled(),
-        ),
-    };
-    mineral_tui::run(
-        sources.channels,
-        sources.playback,
-        launch,
-        persist,
-        config,
-        warnings,
-    )
-    .await
+    mineral_tui::run(launch, config, warnings).await
 }
 
 /// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;
@@ -298,16 +273,6 @@ struct BuiltSources {
 
     /// Playback resource providers keyed by source identity.
     playback: PlaybackRegistry,
-}
-
-impl BuiltSources {
-    /// Returns an empty dependency set for remote-client startup modes.
-    fn empty() -> Self {
-        Self {
-            channels: Vec::new(),
-            playback: PlaybackRegistry::empty(),
-        }
-    }
 }
 
 /// Sibling channel and playback provider handles for one concrete source adapter.

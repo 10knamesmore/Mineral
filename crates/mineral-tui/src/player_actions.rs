@@ -159,7 +159,8 @@ impl App {
             .get(self.state.browse.nav.track.sel())
             .map(|entry| entry.data.song.clone())
         {
-            // 触发持久化(daemon 写本地 + 远端,整首传入顺手落 meta);in-proc fire-and-forget。
+            // 触发持久化(daemon 写本地 + 远端,整首传入顺手落 meta);TUI 侧
+            // fire-and-forget,daemon 异步落库。
             self.client.toggle_love(song.clone());
             // 乐观翻转:♥ 立即变,不等 server 确认。
             self.state.toggle_loved_local(&song);
