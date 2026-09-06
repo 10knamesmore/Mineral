@@ -11,23 +11,23 @@ use color_eyre::eyre::{WrapErr as _, bail};
 /// 一天的毫秒数(窗口端点折算用)。
 const DAY_MS: i64 = 86_400_000;
 
-/// 报告时间窗(三式互斥;缺省语义由子命令经 [`WindowDefault`] 定)。
+/// report time window (mutually exclusive; default set per subcommand via [`WindowDefault`])
 #[derive(Args, Debug, Clone)]
 #[group(multiple = false)]
 pub struct Window {
-    /// 某一年(如 2026):该年 1 月 1 日至次年 1 月 1 日(UTC)。
+    /// a year (e.g. 2026)
     #[arg(long)]
     year: Option<i32>,
 
-    /// 起始日 YYYY-MM-DD(含),须与 `--to` 成对。
+    /// start date YYYY-MM-DD; requires --to
     #[arg(long, requires = "to")]
     from: Option<String>,
 
-    /// 结束日 YYYY-MM-DD(含),须与 `--from` 成对。
+    /// end date YYYY-MM-DD; requires --from
     #[arg(long, requires = "from")]
     to: Option<String>,
 
-    /// 全量窗口(不设时间边界)。
+    /// all time
     #[arg(long)]
     all: bool,
 }
@@ -42,10 +42,10 @@ pub enum WindowDefault {
     All,
 }
 
-/// 输出格式
+/// output format
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// 默认
+    /// default
     Text,
 
     /// json
@@ -55,13 +55,13 @@ pub enum Format {
     Md,
 }
 
-/// 榜单排序口径(CLI `--by`);映射到 [`mineral_stats::TopBy`]。
+/// chart sort key (CLI `--by`); maps to [`mineral_stats::TopBy`]
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum By {
-    /// 按播放次数。
+    /// by play count
     Plays,
 
-    /// 按收听时长。
+    /// by listening time
     Time,
 }
 
@@ -88,11 +88,11 @@ impl Window {
             return year_range(year);
         }
         if let (Some(from), Some(to)) = (&self.from, &self.to) {
-            let start = day_start_ms(from).wrap_err("--from 日期无效")?;
-            let to_start = day_start_ms(to).wrap_err("--to 日期无效")?;
+            let start = day_start_ms(from).wrap_err("invalid --from date")?;
+            let to_start = day_start_ms(to).wrap_err("invalid --to date")?;
             // 反向窗口(from 晚于 to)会产出空区间、报告静默全空;显式报错而非 swap。
             if start > to_start {
-                bail!("--from 晚于 --to({from} > {to}):时间窗为空");
+                bail!("--from after --to ({from} > {to}): empty window");
             }
             // to 含当天,故 end 取 to 次日零点(半开区间上界)。
             return Ok(start..to_start.saturating_add(DAY_MS));
@@ -141,7 +141,7 @@ fn year_range(year: i32) -> color_eyre::Result<Range<i64>> {
 /// 当前 epoch ms 落在哪个 UTC 年。
 fn current_year(now_ms: i64) -> color_eyre::Result<i32> {
     Ok(time::OffsetDateTime::from_unix_timestamp(now_ms / 1000)
-        .wrap_err("当前时间换算失败")?
+        .wrap_err("failed to convert current time")?
         .year())
 }
 
@@ -154,20 +154,20 @@ pub fn day_start_ms(ymd: &str) -> color_eyre::Result<i64> {
     let day = parts.next().and_then(|s| s.parse::<u8>().ok());
     match (year, month, day, parts.next()) {
         (Some(y), Some(m), Some(d), None) => calendar_ms(y, m, d),
-        _ => bail!("日期须为 YYYY-MM-DD:{ymd:?}"),
+        _ => bail!("date must be YYYY-MM-DD: {ymd:?}"),
     }
 }
 
 /// `(year, month 1-12, day)` → 当日零点 epoch ms(UTC)。
 fn calendar_ms(year: i32, month: u8, day: u8) -> color_eyre::Result<i64> {
-    let month = time::Month::try_from(month).wrap_err_with(|| format!("月份非法:{month}"))?;
+    let month = time::Month::try_from(month).wrap_err_with(|| format!("invalid month: {month}"))?;
     let date = time::Date::from_calendar_date(year, month, day)
-        .wrap_err_with(|| format!("日期非法:{year}-{month:?}-{day}"))?;
+        .wrap_err_with(|| format!("invalid date: {year}-{month:?}-{day}"))?;
     date.midnight()
         .assume_utc()
         .unix_timestamp()
         .checked_mul(1000)
-        .ok_or_else(|| color_eyre::eyre::eyre!("时间戳溢出 i64"))
+        .ok_or_else(|| color_eyre::eyre::eyre!("timestamp overflow"))
 }
 
 #[cfg(test)]

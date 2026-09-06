@@ -79,8 +79,8 @@ fn cache_clean_succeeds_on_fresh_env() -> color_eyre::Result<()> {
         .args(["cache", "clean"])
         .assert()
         .success()
-        .stdout(contains("已清空"))
-        .stdout(contains("共释放"));
+        .stdout(contains("cleared"))
+        .stdout(contains("freed"));
     Ok(())
 }
 
@@ -91,8 +91,8 @@ fn cache_status_succeeds_on_fresh_env() -> color_eyre::Result<()> {
         .args(["cache", "status"])
         .assert()
         .success()
-        .stdout(contains("音频"))
-        .stdout(contains("歌单"));
+        .stdout(contains("audio"))
+        .stdout(contains("playlist"));
     Ok(())
 }
 
@@ -169,7 +169,7 @@ async fn stats_report_json_and_prune_plan_over_seeded_db() -> color_eyre::Result
         .args(["stats", "prune", "--before", "2099-01-01"])
         .assert()
         .success()
-        .stdout(contains("将删除"));
+        .stdout(contains("Will delete"));
 
     // 计划态未动盘:db 里仍是 5 行 plays。
     let store = StatsStore::open(&stats_db).await?;

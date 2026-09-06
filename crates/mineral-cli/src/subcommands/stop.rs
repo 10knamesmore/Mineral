@@ -26,12 +26,12 @@ pub async fn run() -> color_eyre::Result<()> {
     // 连不上 = daemon 不在跑 → 幂等成功。连上后优先走 IPC;只有 daemon 明确
     // 回 VersionMismatch 才 signal 内核确认的 socket peer,避免误杀无关进程。
     let Ok(stream) = UnixStream::connect(&socket_path).await else {
-        println!("没有在跑的 daemon");
+        println!("no daemon running");
         return Ok(());
     };
     request_shutdown_with(stream, send_sigterm).await?;
     wait_for_exit(&socket_path).await?;
-    println!("daemon 已停止");
+    println!("daemon stopped");
     Ok(())
 }
 
@@ -61,9 +61,9 @@ where
                 return Err(error);
             }
             let pid = peer_pid
-                .wrap_err("读取 daemon socket peer credentials 失败")?
+                .wrap_err("failed to read daemon socket peer credentials")?
                 .ok_or_else(|| {
-                    color_eyre::eyre::eyre!("当前系统无法从 Unix socket 获取 daemon pid")
+                    color_eyre::eyre::eyre!("unable to get the daemon pid from the unix socket")
                 })?;
             signal_peer(pid)?;
             return Ok(());
@@ -85,7 +85,7 @@ where
 ///   - `pid`: Unix socket peer 的进程 id。
 fn send_sigterm(pid: i32) -> color_eyre::Result<()> {
     kill(Pid::from_raw(pid), Signal::SIGTERM)
-        .wrap_err_with(|| format!("向版本不兼容的 daemon(pid {pid})发送 SIGTERM"))
+        .wrap_err_with(|| format!("send SIGTERM to version-incompatible daemon (pid {pid})"))
 }
 
 /// 等 daemon 收尾并 unlink socket,确保返回后可以立即重新启动。
@@ -97,7 +97,7 @@ async fn wait_for_exit(socket_path: &std::path::Path) -> color_eyre::Result<()> 
     while socket_path.exists() {
         if Instant::now() >= deadline {
             bail!(
-                "daemon 没有在 {EXIT_TIMEOUT:?} 内退出(socket {} 仍在)",
+                "daemon did not exit within {EXIT_TIMEOUT:?} (socket {} still present)",
                 socket_path.display()
             );
         }

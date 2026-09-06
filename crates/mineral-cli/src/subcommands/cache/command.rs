@@ -9,22 +9,22 @@ use mineral_persist::{CacheStats, ClientStore, ServerStore};
 
 use super::render::{self, AudioEntry, AudioInput, CoverInput};
 
-/// 缓存管理。
+/// cache management
 #[derive(Debug, Subcommand)]
 pub enum CacheCommand {
-    /// 展示音频 / 封面 / 歌单缓存的当前状态
+    /// current audio / cover / playlist cache status
     Status {
-        /// 展示逐条清单与按音质分布等更详细信息
+        /// show per-item details and quality breakdown
         #[arg(long)]
         detail: bool,
     },
 
-    /// 清理音频 / 封面 / 歌单缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果
+    /// clear audio / cover / playlist caches (keeps play stats / favorites / history)
     Clean,
 
-    /// 完全删除所缓存，包括db 与 cover/audio/playlists
+    /// delete all caches
     Reset {
-        /// 确认执行
+        /// confirm the operation
         #[arg(long)]
         yes: bool,
     },
@@ -160,19 +160,19 @@ fn reset(yes: bool) -> color_eyre::Result<()> {
 /// 删除(或计划删除)单个库文件,产出渲染行。不存在 → 「不存在」。
 fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
     let outcome = if !yes {
-        "将删除"
+        "will delete"
     } else {
         match std::fs::remove_file(path) {
-            Ok(()) => "已删除",
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "不存在",
+            Ok(()) => "deleted",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
             Err(e) => {
-                return Err(e).wrap_err_with(|| format!("删除 {} 失败", path.display()));
+                return Err(e).wrap_err_with(|| format!("failed to delete {}", path.display()));
             }
         }
     };
     Ok(render::ResetRow {
         path: path.display().to_string(),
-        kind: "库文件",
+        kind: "db file",
         outcome,
     })
 }
@@ -180,19 +180,19 @@ fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::R
 /// 删除(或计划删除)单个缓存目录,产出渲染行。不存在 → 「不存在」。
 fn reset_dir(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
     let outcome = if !yes {
-        "将删除"
+        "will delete"
     } else {
         match std::fs::remove_dir_all(path) {
-            Ok(()) => "已删除",
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "不存在",
+            Ok(()) => "deleted",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
             Err(e) => {
-                return Err(e).wrap_err_with(|| format!("删除 {} 失败", path.display()));
+                return Err(e).wrap_err_with(|| format!("failed to delete {}", path.display()));
             }
         }
     };
     Ok(render::ResetRow {
         path: path.display().to_string(),
-        kind: "缓存目录",
+        kind: "cache dir",
         outcome,
     })
 }

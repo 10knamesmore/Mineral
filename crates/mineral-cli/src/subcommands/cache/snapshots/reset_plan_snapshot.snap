@@ -3,13 +3,13 @@ source: crates/mineral-cli/src/subcommands/cache/render.rs
 description: "cache reset 计划态:目标清单 + --yes 确认提示"
 expression: out
 ---
-╭──────────────────────┬──────────┬────────╮
-│ 目标                 ┆ 类别     ┆ 结果   │
-╞══════════════════════╪══════════╪════════╡
-│ /data/mineral.db     ┆ 库文件   ┆ 将删除 │
-├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┤
-│ /data/mineral.db-wal ┆ 库文件   ┆ 将删除 │
-├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┤
-│ /cache/audio         ┆ 缓存目录 ┆ 将删除 │
-╰──────────────────────┴──────────┴────────╯
-未执行:确认无误后先停掉 daemon,再加 --yes 运行(会丢播放统计 / 喜欢 / 历史)。
+╭──────────────────────┬───────────┬─────────────╮
+│ target               ┆ type      ┆ result      │
+╞══════════════════════╪═══════════╪═════════════╡
+│ /data/mineral.db     ┆ db file   ┆ will delete │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ /data/mineral.db-wal ┆ db file   ┆ will delete │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ /cache/audio         ┆ cache dir ┆ will delete │
+╰──────────────────────┴───────────┴─────────────╯
+Dry run. Stop the daemon first, then run with --yes (play stats / favorites / history will be lost).

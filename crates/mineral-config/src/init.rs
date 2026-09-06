@@ -38,8 +38,8 @@ impl std::fmt::Display for InitOutcome {
     /// 单行展示(供 CLI 打印)。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Written(path) => write!(f, "写入   {}", path.display()),
-            Self::Skipped(path) => write!(f, "跳过   {}(已存在)", path.display()),
+            Self::Written(path) => write!(f, "wrote    {}", path.display()),
+            Self::Skipped(path) => write!(f, "skipped  {} (exists)", path.display()),
         }
     }
 }

@@ -25,42 +25,42 @@ pub fn render_check(
     color: bool,
 ) -> String {
     let mut lines = Vec::<String>::new();
-    lines.push(paint("Mineral 配置诊断", "1;36", color));
-    lines.push(format!("  音量: {}", config.audio().volume()));
+    lines.push(paint("Mineral configuration check", "1;36", color));
+    lines.push(format!("  volume: {}", config.audio().volume()));
     lines.push(format!(
-        "  音频后端: {}",
+        "  audio backend: {}",
         backend_name(config.audio().backend())
     ));
     lines.push(format!(
-        "  音频缓存(字节): {}",
+        "  audio cache (bytes): {}",
         config.cache().audio_capacity()
     ));
     lines.push(format!(
-        "  封面缓存(字节): {}",
+        "  cover cache (bytes): {}",
         config.tui().cover().cache().disk()
     ));
     lines.push(format!(
-        "  下载音质: {}",
+        "  download quality: {}",
         quality_name(config.download().quality())
     ));
     lines.push(format!(
-        "  下载目录: {}",
+        "  download dir: {}",
         dir_label(config, default_download_dir)
     ));
     lines.push(format!(
-        "  网易云超时(秒): {}",
+        "  netease timeout (s): {}",
         config.sources().netease().timeout_secs()
     ));
     lines.push(format!(
-        "  gapless 预取(ms): {}",
+        "  gapless prefetch (ms): {}",
         config.daemon().gapless_prefetch_ms()
     ));
 
     if warnings.is_empty() {
-        lines.push(paint("配置有效,无警告。", "32", color));
+        lines.push(paint("Config OK, no warnings.", "32", color));
     } else {
         lines.push(paint(
-            &format!("有 {} 条警告(已回落默认):", warnings.len()),
+            &format!("{} warning(s) (using defaults):", warnings.len()),
             "1;31",
             color,
         ));
@@ -82,7 +82,7 @@ pub fn render_check(
 fn dir_label(config: &Config, default_download_dir: &Path) -> String {
     match config.download().dir() {
         Some(path) => path.display().to_string(),
-        None => format!("{} (默认)", default_download_dir.display()),
+        None => format!("{} (default)", default_download_dir.display()),
     }
 }
 

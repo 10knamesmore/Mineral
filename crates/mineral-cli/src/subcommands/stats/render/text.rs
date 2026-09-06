@@ -17,8 +17,8 @@ const BAR_WIDTH: usize = 20;
 
 /// stats.db 不存在时的友好提示(指向配置,不报错栈)。
 pub fn render_absent() -> String {
-    "stats.db 尚不存在——从未采集,或 stats.level = \"off\"。\n\
-     开启采集:在 config.lua 里设 stats.level = \"core\"(播放 + 会话)或 \"full\"(全谱交互)。"
+    "stats.db does not exist yet — nothing recorded, or stats.level = \"off\".\n\
+     To enable: set stats.level = \"core\" (plays + sessions) or \"full\" (all interactions) in config.lua."
         .to_owned()
 }
 
@@ -126,7 +126,7 @@ pub fn render_status(
 ) -> String {
     let coverage = match (report.first_play_at, report.last_play_at) {
         (Some(first), Some(last)) => format!("{first} → {last}(epoch ms)"),
-        _ => "(无播放记录)".to_owned(),
+        _ => "(no plays)".to_owned(),
     };
     let level_fg = match level {
         "full" => Color::Green,
@@ -134,7 +134,7 @@ pub fn render_status(
         _ => Color::DarkGrey,
     };
     let mut table = base_table(color);
-    table.set_header(vec![head_cell("字段", color), head_cell("值", color)]);
+    table.set_header(vec![head_cell("field", color), head_cell("value", color)]);
     table.add_row(vec![
         label_cell("stats.db", color),
         Cell::new(path.display().to_string()),
@@ -161,14 +161,14 @@ pub fn render_status(
 /// 渲染最近播放流水 tail(表:起播 ms / 歌曲 / 收听 / 结束原因)。
 pub fn render_history(plays: &[PlayTail], color: bool) -> String {
     if plays.is_empty() {
-        return "(无播放记录)".to_owned();
+        return "(no plays)".to_owned();
     }
     let mut table = base_table(color);
     table.set_header(vec![
-        head_cell("起播(ms)", color),
-        head_cell("歌曲", color),
-        head_cell("收听(ms)", color),
-        head_cell("结束", color),
+        head_cell("started (ms)", color),
+        head_cell("song", color),
+        head_cell("listened (ms)", color),
+        head_cell("finish", color),
     ]);
     for p in plays {
         table.add_row(vec![
@@ -184,14 +184,14 @@ pub fn render_history(plays: &[PlayTail], color: bool) -> String {
 /// 渲染一张 top 榜(表:排名 / 名称 / 次数 / 收听);`header` 是榜标题(不带尾冒号)。
 pub fn render_top(entries: &[NamedEntry], header: &str, color: bool) -> String {
     if entries.is_empty() {
-        return format!("▸ {header}\n  (无)");
+        return format!("▸ {header}\n  (none)");
     }
     let mut table = base_table(color);
     table.set_header(vec![
         head_cell("#", color),
-        head_cell("名称", color),
-        head_cell("次数", color),
-        head_cell("收听", color),
+        head_cell("name", color),
+        head_cell("plays", color),
+        head_cell("listened", color),
     ]);
     for (i, e) in entries.iter().enumerate() {
         table.add_row(vec![
@@ -207,10 +207,10 @@ pub fn render_top(entries: &[NamedEntry], header: &str, color: bool) -> String {
 /// 渲染各事件表行数(表:事件表 / 行数,0 行也列出)。
 fn events_table(counts: &[EventCount], color: bool) -> String {
     if counts.is_empty() {
-        return "  (无)".to_owned();
+        return "  (none)".to_owned();
     }
     let mut table = base_table(color);
-    table.set_header(vec![head_cell("事件表", color), head_cell("行数", color)]);
+    table.set_header(vec![head_cell("table", color), head_cell("rows", color)]);
     for c in counts {
         table.add_row(vec![Cell::new(&c.table), Cell::new(c.count)]);
     }
@@ -220,18 +220,18 @@ fn events_table(counts: &[EventCount], color: bool) -> String {
 /// 渲染一组「值 → 次数」分布(表:值 / 次数 / 占比条;空值显示占位)。
 fn slices_table(slices: &[Slice], color: bool) -> String {
     if slices.is_empty() {
-        return "  (无)".to_owned();
+        return "  (none)".to_owned();
     }
     let max = slices.iter().map(|s| s.plays).max().unwrap_or(0);
     let mut table = base_table(color);
     table.set_header(vec![
-        head_cell("值", color),
-        head_cell("次数", color),
-        head_cell("分布", color),
+        head_cell("value", color),
+        head_cell("plays", color),
+        head_cell("distribution", color),
     ]);
     for s in slices {
         let value = if s.value.is_empty() {
-            "(未知)"
+            "(unknown)"
         } else {
             &s.value
         };
@@ -257,18 +257,21 @@ pub fn render_report(report: &StatsReport, window: &str, color: bool) -> String 
     let t = &report.totals;
     let e = &report.endurance;
     let mut totals_table = base_table(color);
-    totals_table.set_header(vec![head_cell("总览", color), head_cell("值", color)]);
-    totals_table.add_row(vec![label_cell("窗口", color), Cell::new(window)]);
+    totals_table.set_header(vec![
+        head_cell("overview", color),
+        head_cell("value", color),
+    ]);
+    totals_table.add_row(vec![label_cell("window", color), Cell::new(window)]);
     totals_table.add_row(vec![
-        label_cell("播放 / 完播 / 跳过", color),
+        label_cell("plays / completed / skipped", color),
         Cell::new(format!("{} / {} / {}", t.plays, t.completed, t.skipped)),
     ]);
     totals_table.add_row(vec![
-        label_cell("收听时长", color),
+        label_cell("listening time", color),
         maybe_fg(Cell::new(fmt_listen(t.listen_ms)), color, Color::Green),
     ]);
     totals_table.add_row(vec![
-        label_cell("涉及歌曲 / 活跃天数 / 新发现", color),
+        label_cell("songs / active days / discoveries", color),
         Cell::new(format!(
             "{} / {} / {}",
             t.distinct_songs,
@@ -277,7 +280,7 @@ pub fn render_report(report: &StatsReport, window: &str, color: bool) -> String 
         )),
     ]);
     totals_table.add_row(vec![
-        label_cell("会话 / 最长会话 / 连续天数", color),
+        label_cell("sessions / longest / streak", color),
         Cell::new(format!(
             "{} / {} / {}d",
             e.sessions,
@@ -445,7 +448,7 @@ mod tests {
 
     #[test]
     fn history_empty_message() {
-        assert_eq!(render_history(&[], /*color*/ false), "(无播放记录)");
+        assert_eq!(render_history(&[], /*color*/ false), "(no plays)");
     }
 
     /// top 榜用回查名,缺名回落 qualified id。
@@ -463,7 +466,7 @@ mod tests {
 
     #[test]
     fn top_empty_message() {
-        assert!(render_top(&[], "top songs", /*color*/ false).contains("(无)"));
+        assert!(render_top(&[], "top songs", /*color*/ false).contains("(none)"));
     }
 
     #[test]
@@ -478,7 +481,7 @@ mod tests {
         assert!(out.contains("稻香"), "top song 带名:{out}");
         assert!(out.contains("魔杰座"), "top album 带名:{out}");
         assert!(out.contains("周杰伦"), "top artist 带名:{out}");
-        assert!(out.contains("(未知)"), "空来源桶占位:{out}");
+        assert!(out.contains("(unknown)"), "空来源桶占位:{out}");
         assert!(out.contains("searches"), "事件量:{out}");
     }
 

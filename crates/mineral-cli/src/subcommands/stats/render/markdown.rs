@@ -30,7 +30,7 @@ fn top_block(title: &str, entries: &[NamedEntry]) -> String {
         .enumerate()
         .map(|(i, e)| {
             format!(
-                "{}. {} — {} 次 · {}",
+                "{}. {} — {} plays · {}",
                 i + 1,
                 display_name(e),
                 e.plays,
@@ -48,7 +48,7 @@ fn slice_table(slices: &[Slice]) -> String {
         .iter()
         .map(|s| {
             let value = if s.value.is_empty() {
-                "(未知)"
+                "(unknown)"
             } else {
                 &s.value
             };
@@ -56,7 +56,7 @@ fn slice_table(slices: &[Slice]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("| 值 | 次数 |\n|---|---|\n{rows}")
+    format!("| value | plays |\n|---|---|\n{rows}")
 }
 
 /// 渲染一份盘点报告为 markdown(总览 + top 榜 + 来源分布)。
@@ -71,12 +71,12 @@ pub fn report_md(report: &StatsReport, window: &str) -> String {
     let t = &report.totals;
     let e = &report.endurance;
     let overview = format!(
-        "# Mineral 盘点 · {window}\n\n\
-         ## 总览\n\
-         - 播放 {} 次(完播 {} · 跳过 {})\n\
-         - 收听 {}\n\
-         - 涉及 {} 首 · 活跃 {} 天 · 新发现 {} 首\n\
-         - 会话 {} · 最长 {} · 最长连续 {} 天",
+        "# Mineral Recap · {window}\n\n\
+         ## Overview\n\
+         - {} plays ({} completed · {} skipped)\n\
+         - {} listening\n\
+         - {} songs · {} active days · {} new\n\
+         - {} sessions · longest {} · {} day streak",
         t.plays,
         t.completed,
         t.skipped,
@@ -89,10 +89,10 @@ pub fn report_md(report: &StatsReport, window: &str) -> String {
         e.streak_days,
     );
     format!(
-        "{overview}{songs}{albums}{artists}\n\n## 来源分布\n{source}",
-        songs = top_block("Top 歌曲", &report.top_songs),
-        albums = top_block("Top 专辑", &report.top_albums),
-        artists = top_block("Top 艺人", &report.top_artists),
+        "{overview}{songs}{albums}{artists}\n\n## Source Distribution\n{source}",
+        songs = top_block("Top Songs", &report.top_songs),
+        albums = top_block("Top Albums", &report.top_albums),
+        artists = top_block("Top Artists", &report.top_artists),
         source = slice_table(&report.distributions.by_source),
     )
 }
@@ -100,7 +100,7 @@ pub fn report_md(report: &StatsReport, window: &str) -> String {
 /// 渲染一张 top 榜为 markdown 有序列表。
 pub fn top_md(entries: &[NamedEntry], title: &str) -> String {
     if entries.is_empty() {
-        return format!("## {title}\n\n(无)");
+        return format!("## {title}\n\n(none)");
     }
     top_block(title, entries).trim_start().to_owned()
 }
@@ -108,7 +108,7 @@ pub fn top_md(entries: &[NamedEntry], title: &str) -> String {
 /// 渲染最近播放流水为 markdown 表。
 pub fn history_md(plays: &[PlayTail]) -> String {
     if plays.is_empty() {
-        return "(无播放记录)".to_owned();
+        return "(no plays)".to_owned();
     }
     let rows = plays
         .iter()
@@ -123,18 +123,18 @@ pub fn history_md(plays: &[PlayTail]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("| 起播(ms) | 歌曲 | 收听(ms) | 结束 |\n|---|---|---|---|\n{rows}")
+    format!("| started (ms) | song | listened (ms) | finish |\n|---|---|---|---|\n{rows}")
 }
 
 /// 渲染埋点系统状态为 markdown。
 pub fn status_md(path: &Path, size_bytes: u64, level: &str, report: &StatusReport) -> String {
     let coverage = match (report.first_play_at, report.last_play_at) {
         (Some(first), Some(last)) => format!("{first} → {last}"),
-        _ => "(无播放记录)".to_owned(),
+        _ => "(no plays)".to_owned(),
     };
     format!(
-        "## stats 状态\n\n\
-         | 项 | 值 |\n|---|---|\n\
+        "## Stats Status\n\n\
+         | field | value |\n|---|---|\n\
          | db | {} |\n| size | {} bytes |\n| level | {} |\n\
          | coverage | {} |\n| plays | {} |\n| sessions | {} |\n| events | {} |",
         path.display(),
@@ -218,13 +218,13 @@ mod tests {
     #[test]
     fn report_md_has_headings_and_names() {
         let md = report_md(&sample_report(), "2026");
-        assert!(md.starts_with("# Mineral 盘点 · 2026"), "{md}");
-        assert!(md.contains("## Top 歌曲"), "{md}");
-        assert!(md.contains("1. 稻香 — 9 次"), "{md}");
-        assert!(md.contains("## 来源分布"), "{md}");
+        assert!(md.starts_with("# Mineral Recap · 2026"), "{md}");
+        assert!(md.contains("## Top Songs"), "{md}");
+        assert!(md.contains("1. 稻香 — 9 plays"), "{md}");
+        assert!(md.contains("## Source Distribution"), "{md}");
         assert!(md.contains("| netease | 8 |"), "{md}");
         // 空榜省略整节。
-        assert!(!md.contains("## Top 专辑"), "空专辑榜不出节:{md}");
+        assert!(!md.contains("## Top Albums"), "空专辑榜不出节:{md}");
     }
 
     /// 报告 markdown 存档形态的整体形状。
@@ -238,9 +238,9 @@ mod tests {
 
     #[test]
     fn top_md_empty_and_nonempty() {
-        assert!(top_md(&[], "Top 歌曲").contains("(无)"));
-        let md = top_md(&[named("netease:1", Some("稻香"), 9, 540_000)], "Top 歌曲");
-        assert!(md.starts_with("## Top 歌曲"), "{md}");
+        assert!(top_md(&[], "Top Songs").contains("(none)"));
+        let md = top_md(&[named("netease:1", Some("稻香"), 9, 540_000)], "Top Songs");
+        assert!(md.starts_with("## Top Songs"), "{md}");
         assert!(md.contains("1. 稻香"), "{md}");
     }
 }

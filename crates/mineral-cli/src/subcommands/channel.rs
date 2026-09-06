@@ -6,21 +6,21 @@ use mineral_channel_bilibili::cli::BilibiliCli;
 use mineral_channel_netease::NeteaseConfig;
 use mineral_channel_netease::cli::NeteaseCli;
 
-/// `channel` 子命令的参数。
+/// Arguments for the `channel` subcommand.
 #[derive(Debug, ClapArgs)]
 pub struct ChannelArgs {
-    /// 选择音乐源。
+    /// choose a source
     #[command(subcommand)]
     pub channel: ChannelCommand,
 }
 
-/// 支持的音乐源。
+/// Supported music sources.
 #[derive(Debug, Subcommand)]
 pub enum ChannelCommand {
-    /// 网易云音乐
+    /// NetEase Cloud Music
     Netease(NeteaseCli),
 
-    /// 哔哩哔哩
+    /// Bilibili
     Bilibili(BilibiliCli),
 }
 

@@ -11,27 +11,24 @@ use crate::subcommands::config::{self, ConfigCommand};
 use crate::subcommands::stats::{self, StatsCommand};
 use crate::subcommands::{status, stop};
 
-/// 多源终端音乐播放器。无子命令时进入 TUI。
+/// Multi-source terminal music player. Omit the subcommand to enter the TUI.
 #[derive(Debug, Parser)]
 #[command(
     name = "mineral",
     version,
-    about = "Mineral — 多源终端音乐播放器",
+    about = "Mineral — multi-source terminal music player",
     long_about = None,
 )]
 pub struct Args {
-    /// 子命令;省略则进入 TUI。
+    /// subcommand; omit to launch the TUI
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// 强制连接到已经在跑的后台 daemon(由 `mineral serve` 起),连不上即报错;
-    /// 关闭 TUI 时不停 daemon,音乐继续播。默认(不带此 flag)会在没有 daemon 时
-    /// 自动 spawn 一个。
+    /// connect to a running daemon
     #[arg(long, conflicts_with = "in_proc")]
     pub connect: bool,
 
-    /// in-proc 模式:TUI 自己在同进程内起 server,不走 daemon / socket。
-    /// 调试与离线开发用;关闭 TUI = 进程退 = server 一起退。
+    /// run the server inside the TUI process (no daemon / socket)
     #[arg(long)]
     pub in_proc: bool,
 }
@@ -39,47 +36,47 @@ pub struct Args {
 /// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// 触发 config.lua 里 `mineral.action` 注册的具名动作(连 daemon)。
+    /// run a named action registered in `mineral.action`
     Action {
-        /// 动作注册名,如 "my.skip_short"。
+        /// registered action name, e.g. "my.skip_short"
         name: String,
 
-        /// 传给动作回调的位置实参(Lua 侧经 `ctx.args` 读取);可省。
+        /// positional arguments passed to the action callback (read via `ctx.args` in Lua); optional
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
 
-    /// 缓存管理
+    /// cache management
     Cache {
-        /// cache 下的具体子命令。
+        /// cache subcommand
         #[command(subcommand)]
         cmd: CacheCommand,
     },
 
-    /// 管理音乐源
+    /// manage music sources
     Channel(ChannelArgs),
 
-    /// 用户配置
+    /// user configuration
     Config {
-        /// config 下的具体子命令
+        /// config subcommand
         #[command(subcommand)]
         cmd: ConfigCommand,
     },
 
-    /// 启动后台播放 daemon
+    /// start the background playback daemon
     Serve,
 
-    /// 埋点数据查询
+    /// query analytics data
     Stats {
-        /// stats 下的具体子命令
+        /// stats subcommand
         #[command(subcommand)]
         cmd: StatsCommand,
     },
 
-    /// 显示当前播放状态
+    /// show current playback status
     Status,
 
-    /// 请求后台 daemon 优雅退出;
+    /// exit daemon
     Stop,
 }
 

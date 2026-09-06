@@ -30,18 +30,18 @@ const STATUS_NOT_CONFIRMED: i64 = 86090;
 /// 登录状态:二维码已失效。
 const STATUS_EXPIRED: i64 = 86038;
 
-/// 哔哩哔哩操作。
+/// Bilibili operations.
 #[derive(Debug, ClapArgs)]
 pub struct BilibiliCli {
-    /// 选择操作。
+    /// choose an action
     #[command(subcommand)]
     pub command: BilibiliCommand,
 }
 
-/// 哔哩哔哩子命令。
+/// Bilibili subcommands.
 #[derive(Debug, Subcommand)]
 pub enum BilibiliCommand {
-    /// 扫码登录
+    /// log in with QR code
     Login,
 }
 
@@ -61,7 +61,7 @@ async fn run_login(config: &BilibiliConfig) -> color_eyre::Result<()> {
     let channel = BilibiliChannel::new(config)?;
     let qr = generate(channel.transport()).await?;
     render_qr(&qr.url)?;
-    eprintln!("等待 B站 App 扫码并确认...");
+    eprintln!("Waiting for the Bilibili app to scan and confirm...");
 
     let mut last: Option<i64> = None;
     loop {
@@ -74,24 +74,24 @@ async fn run_login(config: &BilibiliConfig) -> color_eyre::Result<()> {
             STATUS_SUCCESS => {
                 let auth = extract_auth(&channel)?;
                 let path = save(&auth)?;
-                println!("登录成功,凭证已写入 {}", path.display());
+                println!("Logged in. Credentials saved to {}", path.display());
                 return Ok(());
             }
             STATUS_NOT_SCANNED | STATUS_NOT_CONFIRMED => {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => return Err(eyre!("二维码登录已取消")),
+                    _ = tokio::signal::ctrl_c() => return Err(eyre!("QR login cancelled")),
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                 }
             }
-            STATUS_EXPIRED => return Err(eyre!("二维码已过期,请重新执行登录命令")),
-            other => return Err(eyre!("未知二维码登录状态码: {other}")),
+            STATUS_EXPIRED => return Err(eyre!("QR code expired; run login again")),
+            other => return Err(eyre!("unknown QR login status code: {other}")),
         }
     }
 }
 
 /// 把 url 编成二维码并按 unicode dense 1x2 字符块输出到 stdout。
 fn render_qr(url: &str) -> color_eyre::Result<()> {
-    let code = QrCode::new(url.as_bytes()).context("生成二维码失败")?;
+    let code = QrCode::new(url.as_bytes()).context("failed to generate QR code")?;
     let rendered = code.render::<unicode::Dense1x2>().quiet_zone(true).build();
     println!("{rendered}");
     Ok(())
@@ -100,8 +100,8 @@ fn render_qr(url: &str) -> color_eyre::Result<()> {
 /// 把轮询状态码翻成中文提示(过渡态打 stderr,终态由调用方处理)。
 fn print_status_hint(code: i64) {
     match code {
-        STATUS_NOT_SCANNED => eprintln!("状态: 等待扫码"),
-        STATUS_NOT_CONFIRMED => eprintln!("状态: 等待手机确认"),
+        STATUS_NOT_SCANNED => eprintln!("status: waiting for scan"),
+        STATUS_NOT_CONFIRMED => eprintln!("status: waiting for phone confirmation"),
         _ => {}
     }
 }
@@ -111,12 +111,14 @@ fn extract_auth(channel: &BilibiliChannel) -> color_eyre::Result<StoredBilibiliA
     let jar = channel
         .transport()
         .cookie_jar()
-        .ok_or_else(|| eyre!("二维码登录后未拿到 cookie jar"))?;
+        .ok_or_else(|| eyre!("no cookie jar after QR login"))?;
     let uri: Uri = BASE_URL.parse().context("parse bilibili base uri failed")?;
     let get = |name: &str| jar.get_by_name(&uri, name).map(|c| c.value().to_owned());
-    let sessdata = get("SESSDATA").ok_or_else(|| eyre!("登录成功但 jar 中无 SESSDATA"))?;
+    let sessdata =
+        get("SESSDATA").ok_or_else(|| eyre!("SESSDATA not found in cookie jar after login"))?;
     let bili_jct = get("bili_jct").unwrap_or_default();
-    let dede_user_id = get("DedeUserID").ok_or_else(|| eyre!("登录成功但 jar 中无 DedeUserID"))?;
+    let dede_user_id =
+        get("DedeUserID").ok_or_else(|| eyre!("DedeUserID not found in cookie jar after login"))?;
     Ok(StoredBilibiliAuth {
         sessdata,
         bili_jct,

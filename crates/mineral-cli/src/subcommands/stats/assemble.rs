@@ -48,27 +48,25 @@ async fn raw_report(
     })
 }
 
-/// `top` 的单榜类别
+/// chart categories for `top`
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum TopCategory {
-    /// top 歌曲
+    /// top songs
     Songs,
 
-    /// top 专辑(口味口径:按歌曲的 album_id 归属聚合——「听了哪张专辑的歌」)
+    /// top albums
     Albums,
 
-    /// top 专辑页(context 口径:按起播语境聚合——「从谁的详情页起播」,与 `Albums`
-    /// 是两条不同的统计路径,不要混为一谈)
+    /// top album pages
     AlbumPages,
 
-    /// top 艺人(口味口径:按歌曲的 artists 归属聚合——「听了谁的歌」)
+    /// top artists
     Artists,
 
-    /// top 艺人页(context 口径:按起播语境聚合——「从谁的详情页起播」,与 `Artists`
-    /// 是两条不同的统计路径,不要混为一谈)
+    /// top artist pages
     ArtistPages,
 
-    /// top 歌单
+    /// top playlists
     Playlists,
 }
 
@@ -85,15 +83,15 @@ impl TopCategory {
         }
     }
 
-    /// markdown 渲染的榜标题(`"Top 歌曲"` 等)。
+    /// markdown 渲染的榜标题(`"Top Songs"` 等)。
     pub fn md_title(self) -> &'static str {
         match self {
-            Self::Songs => "Top 歌曲",
-            Self::Albums => "Top 专辑",
-            Self::AlbumPages => "Top 专辑页(从详情页起播次数)",
-            Self::Artists => "Top 艺人",
-            Self::ArtistPages => "Top 艺人页(从详情页起播次数)",
-            Self::Playlists => "Top 歌单",
+            Self::Songs => "Top Songs",
+            Self::Albums => "Top Albums",
+            Self::AlbumPages => "Top Album Pages (plays from detail page)",
+            Self::Artists => "Top Artists",
+            Self::ArtistPages => "Top Artist Pages (plays from detail page)",
+            Self::Playlists => "Top Playlists",
         }
     }
 }

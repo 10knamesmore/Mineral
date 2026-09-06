@@ -12,87 +12,87 @@ use super::assemble::{self, TopCategory};
 use super::render;
 use super::window::{self, By, Format, Window, WindowDefault};
 
-/// 埋点数据查询(离线直读)。
+/// analytics data query (read offline)
 #[derive(Debug, Subcommand)]
 pub enum StatsCommand {
-    /// 埋点系统自身状态
+    /// show analytics system status
     Status {
-        /// 输出格式
+        /// output format
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 最近播放流水
+    /// show recent playback history
     History {
-        /// 时间窗(缺省全量)
+        /// time window (default: all)
         #[command(flatten)]
         window: Window,
 
-        /// 展示条数
+        /// number of entries to show
         #[arg(long, default_value_t = 20)]
         limit: u32,
 
-        /// 只看某来源(如 `netease` / `bilibili`)
+        /// filter by source (e.g. `netease` / `bilibili`)
         #[arg(long)]
         source: Option<String>,
 
-        /// 输出格式
+        /// output format
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 单榜查询
+    /// query a single chart
     Top {
-        /// 榜类别
+        /// chart category
         #[arg(value_enum)]
         category: TopCategory,
 
-        /// 时间窗(缺省全量)
+        /// time window (default: all)
         #[command(flatten)]
         window: Window,
 
-        /// 排序口径
+        /// sort key
         #[arg(long, value_enum, default_value = "plays")]
         by: By,
 
-        /// 榜单长度
+        /// chart length
         #[arg(long)]
         limit: Option<u32>,
 
-        /// 输出格式
+        /// output format
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 盘点报告主入口
+    /// generate the recap report
     Report {
-        /// 时间窗(缺省当前年)
+        /// time window (default: current year)
         #[command(flatten)]
         window: Window,
 
-        /// 覆盖各 top 榜长度
+        /// override top chart length
         #[arg(long)]
         top: Option<u32>,
 
-        /// 输出格式
+        /// output format
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
 
-    /// 一次性裁剪
+    /// prune old plays
     Prune {
-        /// 早于当日零点(UTC)的流水被删
+        /// delete plays before this day
         #[arg(long)]
         before: String,
 
-        /// 确认执行
+        /// confirm the operation
         #[arg(long)]
         yes: bool,
     },
 
-    /// 清空 stats.db(连同 -wal/-shm 伴生文件)
+    /// clear stats.db
     Reset {
-        /// 确认执行
+        /// confirm the operation
         #[arg(long)]
         yes: bool,
     },
@@ -140,9 +140,9 @@ fn stats_db_path() -> color_eyre::Result<PathBuf> {
 fn now_ms() -> color_eyre::Result<i64> {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .wrap_err("系统时间早于 UNIX epoch")?
+        .wrap_err("system time before UNIX epoch")?
         .as_millis();
-    i64::try_from(ms).wrap_err("时间戳溢出 i64")
+    i64::try_from(ms).wrap_err("timestamp overflow")
 }
 
 /// 离线读配置的 `stats.report` 段,折算成查询期口径 [`ReportOptions`]。
@@ -160,11 +160,11 @@ fn report_options(top_override: Option<u32>) -> color_eyre::Result<ReportOptions
         mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
     let report = config.stats().report();
     let min_listen_ms = i64::try_from(*report.min_listen_secs())
-        .wrap_err("stats.report.min_listen_secs 溢出 i64")?
+        .wrap_err("stats.report.min_listen_secs overflow")?
         .saturating_mul(1000);
     let top_limit = match top_override {
         Some(n) => i64::from(n),
-        None => i64::try_from(*report.top_limit()).wrap_err("stats.report.top_limit 溢出 i64")?,
+        None => i64::try_from(*report.top_limit()).wrap_err("stats.report.top_limit overflow")?,
     };
     Ok(ReportOptions::builder()
         .min_listen_ms(min_listen_ms)
@@ -188,7 +188,9 @@ async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_report(&sr, &label, color),
-        Format::Json => serde_json::to_string_pretty(&sr).wrap_err("report json 序列化失败")?,
+        Format::Json => {
+            serde_json::to_string_pretty(&sr).wrap_err("failed to serialize report to json")?
+        }
         Format::Md => render::report_md(&sr, &label),
     };
     println!("{out}");
@@ -215,7 +217,9 @@ async fn top(
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_top(&entries, category.text_title(), color),
-        Format::Json => serde_json::to_string_pretty(&entries).wrap_err("top json 序列化失败")?,
+        Format::Json => {
+            serde_json::to_string_pretty(&entries).wrap_err("failed to serialize top to json")?
+        }
         Format::Md => render::top_md(&entries, category.md_title()),
     };
     println!("{out}");
@@ -240,7 +244,9 @@ async fn history(
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_history(&plays, color),
-        Format::Json => serde_json::to_string_pretty(&plays).wrap_err("history json 序列化失败")?,
+        Format::Json => {
+            serde_json::to_string_pretty(&plays).wrap_err("failed to serialize history to json")?
+        }
         Format::Md => render::history_md(&plays),
     };
     println!("{out}");
@@ -278,7 +284,7 @@ async fn status(format: Format) -> color_eyre::Result<()> {
             "first_play_at": report.first_play_at,
             "last_play_at": report.last_play_at,
         }))
-        .wrap_err("status json 序列化失败")?,
+        .wrap_err("failed to serialize status to json")?,
         Format::Md => render::status_md(&db_path, size, level, &report),
     };
     println!("{out}");
@@ -292,15 +298,17 @@ async fn prune(before: &str, yes: bool) -> color_eyre::Result<()> {
         println!("{}", render::render_absent());
         return Ok(());
     }
-    let cutoff = window::day_start_ms(before).wrap_err("--before 日期无效")?;
+    let cutoff = window::day_start_ms(before).wrap_err("invalid --before date")?;
     let store = StatsStore::open(&db_path).await?;
     if !yes {
         let n = store.count_before(cutoff).await?;
-        println!("将删除 {before} 之前的 {n} 行流水(plays + 事件表 + 旧会话);加 --yes 执行。");
+        println!(
+            "Will delete {n} rows before {before} (plays + event tables + stale sessions). Run with --yes to execute."
+        );
         return Ok(());
     }
     store.prune(cutoff).await?;
-    println!("已删除 {before} 之前的流水。");
+    println!("Deleted plays before {before}.");
     Ok(())
 }
 
@@ -318,11 +326,11 @@ fn reset(yes: bool) -> color_eyre::Result<()> {
         .filter(|p| p.exists())
         .collect::<Vec<_>>();
     if existing.is_empty() {
-        println!("stats.db 不存在,无需清空。");
+        println!("stats.db does not exist; nothing to clear.");
         return Ok(());
     }
     if !yes {
-        println!("将删除(加 --yes 执行):");
+        println!("Will delete (run with --yes):");
         for p in &existing {
             println!("  {}", p.display());
         }
@@ -331,7 +339,7 @@ fn reset(yes: bool) -> color_eyre::Result<()> {
     for p in &existing {
         remove(p)?;
     }
-    println!("已清空 stats.db（删 {} 个文件）", existing.len());
+    println!("Cleared stats.db (deleted {} file(s))", existing.len());
     Ok(())
 }
 
@@ -340,6 +348,6 @@ fn remove(path: &Path) -> color_eyre::Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).wrap_err_with(|| format!("删除 {} 失败", path.display())),
+        Err(e) => Err(e).wrap_err_with(|| format!("failed to delete {}", path.display())),
     }
 }

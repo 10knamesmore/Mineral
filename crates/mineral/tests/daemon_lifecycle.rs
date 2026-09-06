@@ -375,7 +375,7 @@ fn stop_without_daemon_succeeds_idempotently() -> color_eyre::Result<()> {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("没有在跑的 daemon"),
+        stdout.contains("no daemon running"),
         "应人话提示无 daemon,实际 stdout:\n{stdout}"
     );
     Ok(())

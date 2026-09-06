@@ -72,16 +72,19 @@ pub(super) fn render_status(
 ) -> String {
     let mut blocks = vec![summary_table(audio, cover, playlist, color)];
     if !audio.entries.is_empty() {
-        blocks.push(labeled("分格式", &format_table(&audio.entries, color)));
+        blocks.push(labeled("by format", &format_table(&audio.entries, color)));
         if let Some(table) = extremes_table(&audio.entries, now, color) {
-            blocks.push(labeled("最旧 / 最新", &table));
+            blocks.push(labeled("oldest / newest", &table));
         }
         if detail {
-            blocks.push(labeled("按音质", &quality_table(&audio.entries, color)));
-            blocks.push(labeled("逐条", &detail_table(&audio.entries, now, color)));
+            blocks.push(labeled("by quality", &quality_table(&audio.entries, color)));
+            blocks.push(labeled(
+                "details",
+                &detail_table(&audio.entries, now, color),
+            ));
         }
     } else {
-        blocks.push("（音频缓存为空）".to_owned());
+        blocks.push("(no audio cache)".to_owned());
     }
     blocks.join("\n")
 }
@@ -104,32 +107,32 @@ pub(super) fn render_clean(
 ) -> String {
     let mut table = base_table(color);
     table.set_header(vec![
-        head_cell("区域", color),
-        head_cell("清理前", color),
-        head_cell("之后", color),
+        head_cell("area", color),
+        head_cell("before", color),
+        head_cell("after", color),
     ]);
     table.add_row(vec![
-        label_cell("音频", color),
+        label_cell("audio", color),
         Cell::new(format!(
-            "{} 条 / {}",
+            "{} files / {}",
             audio.entries.len(),
             human_bytes(audio.total_bytes)
         )),
         cleared_cell(color),
     ]);
     table.add_row(vec![
-        label_cell("封面", color),
+        label_cell("cover", color),
         Cell::new(format!(
-            "{} 条 / {}",
+            "{} files / {}",
             cover.entries.len(),
             human_bytes(cover.total_bytes)
         )),
         cleared_cell(color),
     ]);
     table.add_row(vec![
-        label_cell("歌单", color),
+        label_cell("playlist", color),
         Cell::new(format!(
-            "{} 个歌单 / {} 曲目",
+            "{} playlists / {} tracks",
             playlist.playlists, playlist.tracks
         )),
         cleared_cell(color),
@@ -146,10 +149,10 @@ pub(super) fn render_clean(
                 mtime: None,
             })
             .collect::<Vec<_>>();
-        blocks.push(labeled("音频分格式", &format_table(&entries, color)));
+        blocks.push(labeled("audio by format", &format_table(&entries, color)));
     }
     let freed = audio.total_bytes.saturating_add(cover.total_bytes);
-    blocks.push(format!("共释放 {}", human_bytes(freed)));
+    blocks.push(format!("{} freed", human_bytes(freed)));
     blocks.join("\n")
 }
 
@@ -158,10 +161,10 @@ pub(super) struct ResetRow {
     /// 绝对路径展示串。
     pub(super) path: String,
 
-    /// 类别标签(「库文件」/「缓存目录」)。
+    /// 类别标签(`db file` / `cache dir`)。
     pub(super) kind: &'static str,
 
-    /// 结果列文本:计划态「将删除」;执行态「已删除」/「不存在」。
+    /// 结果列文本:计划态 `will delete`;执行态 `deleted` / `missing`。
     pub(super) outcome: &'static str,
 }
 
@@ -177,9 +180,9 @@ pub(super) struct ResetRow {
 pub(super) fn render_reset(rows: &[ResetRow], executed: bool, color: bool) -> String {
     let mut table = base_table(color);
     table.set_header(vec![
-        head_cell("目标", color),
-        head_cell("类别", color),
-        head_cell("结果", color),
+        head_cell("target", color),
+        head_cell("type", color),
+        head_cell("result", color),
     ]);
     for r in rows {
         table.add_row(vec![
@@ -189,9 +192,9 @@ pub(super) fn render_reset(rows: &[ResetRow], executed: bool, color: bool) -> St
         ]);
     }
     let hint = if executed {
-        "重建完成:下次启动 daemon 会按最新 schema 建库(播放统计 / 喜欢 / 历史已清空)。"
+        "Done. The daemon rebuilds the db on next start (play stats / favorites / history cleared)."
     } else {
-        "未执行:确认无误后先停掉 daemon,再加 --yes 运行(会丢播放统计 / 喜欢 / 历史)。"
+        "Dry run. Stop the daemon first, then run with --yes (play stats / favorites / history will be lost)."
     };
     format!("{table}\n{hint}")
 }
@@ -204,9 +207,9 @@ fn summary_table(
     color: bool,
 ) -> String {
     let mut table = base_table(color);
-    table.set_header(vec![head_cell("缓存", color), head_cell("状态", color)]);
+    table.set_header(vec![head_cell("cache", color), head_cell("status", color)]);
     table.add_row(vec![
-        label_cell("音频", color),
+        label_cell("audio", color),
         usage_cell(
             audio.total_bytes,
             audio.capacity,
@@ -215,13 +218,13 @@ fn summary_table(
         ),
     ]);
     table.add_row(vec![
-        label_cell("封面", color),
+        label_cell("cover", color),
         usage_cell(cover.total_bytes, cover.capacity, cover.count, color),
     ]);
     table.add_row(vec![
-        label_cell("歌单", color),
+        label_cell("playlist", color),
         Cell::new(format!(
-            "{} 个歌单 · {} 曲目",
+            "{} playlists · {} tracks",
             playlist.playlists, playlist.tracks
         )),
     ]);
@@ -234,11 +237,11 @@ fn usage_cell(total: u64, capacity: Option<u64>, count: usize, color: bool) -> C
     match occupancy(total, capacity) {
         Some((pct, bar)) => {
             let cap = human_bytes(capacity.unwrap_or(0));
-            let cell = Cell::new(format!("{used} / {cap}  {bar} {pct}%  · {count} 条"));
+            let cell = Cell::new(format!("{used} / {cap}  {bar} {pct}%  · {count} items"));
             maybe_fg(cell, color, level_color(pct))
         }
         None => maybe_fg(
-            Cell::new(format!("{used}  · {count} 条")),
+            Cell::new(format!("{used}  · {count} items")),
             color,
             Color::Green,
         ),
@@ -247,12 +250,12 @@ fn usage_cell(total: u64, capacity: Option<u64>, count: usize, color: bool) -> C
 
 /// 分格式表:按扩展名聚合(条数 + 大小)。
 fn format_table(entries: &[AudioEntry], color: bool) -> String {
-    group_table(entries, color, "格式", |rel| audio_ext(rel).to_owned())
+    group_table(entries, color, "format", |rel| audio_ext(rel).to_owned())
 }
 
 /// 按音质表:按 relpath 第 2 段聚合。
 fn quality_table(entries: &[AudioEntry], color: bool) -> String {
-    group_table(entries, color, "音质", |rel| {
+    group_table(entries, color, "quality", |rel| {
         audio_quality(rel).to_owned()
     })
 }
@@ -267,8 +270,8 @@ fn group_table(
     let mut table = base_table(color);
     table.set_header(vec![
         head_cell(key_header, color),
-        head_cell("条数", color),
-        head_cell("大小", color),
+        head_cell("items", color),
+        head_cell("size", color),
     ]);
     for (name, count, bytes) in group_by(entries, key) {
         table.add_row(vec![
@@ -292,16 +295,16 @@ fn extremes_table(entries: &[AudioEntry], now: SystemTime, color: bool) -> Optio
     let mut table = base_table(color);
     table.set_header(vec![
         head_cell("", color),
-        head_cell("条目", color),
-        head_cell("时间", color),
+        head_cell("entry", color),
+        head_cell("age", color),
     ]);
     table.add_row(vec![
-        label_cell("最旧", color),
+        label_cell("oldest", color),
         Cell::new(oldest.0.relpath.clone()),
         Cell::new(relative_age(now, oldest.1)),
     ]);
     table.add_row(vec![
-        label_cell("最新", color),
+        label_cell("newest", color),
         Cell::new(newest.0.relpath.clone()),
         Cell::new(relative_age(now, newest.1)),
     ]);
@@ -315,11 +318,11 @@ fn detail_table(entries: &[AudioEntry], now: SystemTime, color: bool) -> String 
 
     let mut table = base_table(color);
     table.set_header(vec![
-        head_cell("标题", color),
-        head_cell("音质", color),
-        head_cell("格式", color),
-        head_cell("大小", color),
-        head_cell("入库", color),
+        head_cell("title", color),
+        head_cell("quality", color),
+        head_cell("format", color),
+        head_cell("size", color),
+        head_cell("added", color),
     ]);
     for e in rows {
         let age = e
@@ -383,7 +386,7 @@ fn size_cell(bytes: u64, color: bool) -> Cell {
 
 /// 「已清空」单元格:暗灰。
 fn cleared_cell(color: bool) -> Cell {
-    maybe_fg(Cell::new("已清空"), color, Color::DarkGrey)
+    maybe_fg(Cell::new("cleared"), color, Color::DarkGrey)
 }
 
 /// 条件上色:`color` 为真才给单元格上前景色。
@@ -439,36 +442,36 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// 相对时间:`刚刚` / `N 分钟前` / `N 小时前` / `N 天前`。时光倒流(now < t)记为 `刚刚`。
+/// 相对时间:`just now` / `N min ago` / `N h ago` / `N d ago`。时光倒流(now < t)记为 `just now`。
 fn relative_age(now: SystemTime, t: SystemTime) -> String {
     let secs = now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
     if secs < 60 {
-        "刚刚".to_owned()
+        "just now".to_owned()
     } else if secs < 3600 {
-        format!("{} 分钟前", secs / 60)
+        format!("{} min ago", secs / 60)
     } else if secs < 86400 {
-        format!("{} 小时前", secs / 3600)
+        format!("{} h ago", secs / 3600)
     } else {
-        format!("{} 天前", secs / 86400)
+        format!("{} d ago", secs / 86400)
     }
 }
 
-/// 取 relpath 末段文件名的扩展名;无扩展名记 `无扩展`。
+/// 取 relpath 末段文件名的扩展名;无扩展名记 `(none)`。
 fn audio_ext(relpath: &str) -> &str {
     let file = relpath.rsplit('/').next().unwrap_or(relpath);
     match file.rsplit_once('.') {
         Some((_, ext)) if !ext.is_empty() => ext,
-        _ => "无扩展",
+        _ => "(none)",
     }
 }
 
-/// 取 relpath 第 2 段(音质目录层);缺失记 `未知`。
+/// 取 relpath 第 2 段(音质目录层);缺失记 `(unknown)`。
 fn audio_quality(relpath: &str) -> &str {
     relpath
         .split('/')
         .nth(1)
         .filter(|s| !s.is_empty())
-        .unwrap_or("未知")
+        .unwrap_or("(unknown)")
 }
 
 /// 取 relpath 末段文件名去扩展名后的主干(标题)。
@@ -547,24 +550,24 @@ mod tests {
         assert_eq!(audio_ext(rel), "flac");
         assert_eq!(audio_quality(rel), "lossless");
         assert_eq!(audio_title(rel), "晴天");
-        assert_eq!(audio_ext("netease/exhigh/x/无后缀"), "无扩展");
+        assert_eq!(audio_ext("netease/exhigh/x/无后缀"), "(none)");
     }
 
     #[test]
     fn relative_age_buckets() {
         let now = anchor();
-        assert_eq!(relative_age(now, now), "刚刚");
+        assert_eq!(relative_age(now, now), "just now");
         assert_eq!(
             relative_age(now, now - Duration::from_secs(120)),
-            "2 分钟前"
+            "2 min ago"
         );
         assert_eq!(
             relative_age(now, now - Duration::from_secs(7200)),
-            "2 小时前"
+            "2 h ago"
         );
         assert_eq!(
             relative_age(now, now - Duration::from_secs(3 * 86400)),
-            "3 天前"
+            "3 d ago"
         );
     }
 
@@ -676,18 +679,18 @@ mod tests {
         let rows = vec![
             super::ResetRow {
                 path: "/data/mineral.db".to_owned(),
-                kind: "库文件",
-                outcome: "将删除",
+                kind: "db file",
+                outcome: "will delete",
             },
             super::ResetRow {
                 path: "/data/mineral.db-wal".to_owned(),
-                kind: "库文件",
-                outcome: "将删除",
+                kind: "db file",
+                outcome: "will delete",
             },
             super::ResetRow {
                 path: "/cache/audio".to_owned(),
-                kind: "缓存目录",
-                outcome: "将删除",
+                kind: "cache dir",
+                outcome: "will delete",
             },
         ];
         let out = super::render_reset(&rows, /*executed*/ false, /*color*/ false);

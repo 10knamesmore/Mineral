@@ -4,13 +4,13 @@ use std::io::IsTerminal;
 
 use clap::Subcommand;
 
-/// config 下的具体子命令。
+/// config subcommand
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// 生成配置模板 + LSP stub + `.luarc.json`(已存在的 config.lua 不覆盖)。
+    /// generate a config template
     Init,
 
-    /// 加载并校验配置,打印诊断(有效配置摘要 + 警告)。
+    /// load and validate the config
     Check,
 }
 
