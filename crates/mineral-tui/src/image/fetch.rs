@@ -516,8 +516,8 @@ async fn preview_blocking(
     cells: (u16, u16),
 ) -> Option<(TerminalImage, u64)> {
     let preview = tokio::task::spawn_blocking(move || -> color_eyre::Result<_> {
-        let image = decode(&bytes)?;
-        Ok(TerminalImage::halfblock_preview(&image, pixels, cells))
+        let image = super::preview_decode::decode(&bytes, cells)?;
+        Ok(TerminalImage::halfblock_preview(image, pixels, cells))
     })
     .await;
     match preview {

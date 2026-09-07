@@ -14,6 +14,7 @@ mod cache;
 mod hub;
 mod key;
 mod kitty;
+mod preview_decode;
 mod render;
 mod resize;
 mod terminal;

@@ -17,6 +17,7 @@ color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
 futures-util         = { workspace = true }
 image                = { workspace = true }
+jpeg-decoder         = { workspace = true }
 icy_sixel            = { workspace = true }
 isahc                = { workspace = true }
 kmeans_colors        = { workspace = true }
