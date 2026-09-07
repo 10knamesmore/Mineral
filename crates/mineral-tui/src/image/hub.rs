@@ -327,19 +327,29 @@ impl ImageEngine {
     /// 消费 preview 与 decode completion，并结束对应 in-flight。
     fn drain_cover_completions(&mut self) {
         for completion in self.workers.fetcher.drain_ready() {
-            match completion {
-                CoverCompletion::Preview(ready) => self.install_preview(ready),
-                CoverCompletion::Decoded(ready) => self.install_decoded_cover(ready),
-                CoverCompletion::Failed { url, kind } => {
-                    self.pending.remove(&url);
-                    match kind {
-                        CoverRequestKind::Preview => {
-                            self.preview_failures.insert(url);
-                        }
-                        CoverRequestKind::Decode => {
-                            self.decode_demand.borrow_mut().remove(&url);
-                            self.decode_failures.borrow_mut().insert(url);
-                        }
+            self.apply_completion(completion);
+        }
+    }
+
+    /// 应用一条图片 worker 完成事件:安装 preview / 显示图，并结束对应 in-flight。
+    fn apply_completion(&mut self, completion: CoverCompletion) {
+        match completion {
+            CoverCompletion::Preview(ready) => self.install_preview(ready),
+            CoverCompletion::PreviewAndDecoded { preview, full } => {
+                // 非 JPEG 源一次解码的双产物:preview 先显示,显示图进入 RAM LRU。
+                self.install_preview(preview);
+                self.install_decoded_cover(full);
+            }
+            CoverCompletion::Decoded(ready) => self.install_decoded_cover(ready),
+            CoverCompletion::Failed { url, kind } => {
+                self.pending.remove(&url);
+                match kind {
+                    CoverRequestKind::Preview => {
+                        self.preview_failures.insert(url);
+                    }
+                    CoverRequestKind::Decode => {
+                        self.decode_demand.borrow_mut().remove(&url);
+                        self.decode_failures.borrow_mut().insert(url);
                     }
                 }
             }
@@ -630,5 +640,80 @@ impl ImageEngine {
             "terminal image ready");
         self.terminal_images
             .insert(&result.key, result.terminal_image, result.bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use image::{DynamicImage, RgbImage};
+    use mineral_model::MediaUrl;
+
+    use super::ImageEngine;
+    use crate::image::fetch::{CoverCompletion, CoverPreviewReady, CoverReady};
+    use crate::image::key::{ImageIdentity, PixelSize, TerminalImageKey};
+    use crate::image::terminal::TerminalImage;
+
+    /// 造一个使用默认配置的测试图片引擎(不起 worker)。
+    fn engine() -> color_eyre::Result<ImageEngine> {
+        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        Ok(ImageEngine::disabled(cfg))
+    }
+
+    /// 造一个 preview 完成(不带显示图,JPEG 语义)。
+    fn preview_ready(url: &MediaUrl) -> CoverPreviewReady {
+        let key = TerminalImageKey::rasterized(
+            ImageIdentity::Url(url.clone()),
+            PixelSize::from_cells(/*cells*/ (4, 4), /*cell_pixels*/ (8, 16)),
+        );
+        CoverPreviewReady {
+            url: url.clone(),
+            key,
+            image: TerminalImage::test_halfblocks(),
+            bytes: 1,
+        }
+    }
+
+    /// 非 JPEG 源的一次解码双产物落地:preview 与显示图一起装好,显示图满足 decode demand。
+    #[test]
+    fn combined_preview_installs_preview_and_full_image() -> color_eyre::Result<()> {
+        let mut engine = engine()?;
+        let url = MediaUrl::remote("https://example.com/c.png")?;
+        let image = Arc::new(DynamicImage::ImageRgb8(RgbImage::new(16, 16)));
+        engine.decode_demand.borrow_mut().insert(url.clone());
+        engine.pending.insert(url.clone());
+
+        engine.apply_completion(CoverCompletion::PreviewAndDecoded {
+            preview: preview_ready(&url),
+            full: CoverReady {
+                url: url.clone(),
+                image,
+                palette: None,
+            },
+        });
+
+        assert!(engine.cache.contains_key(&url), "显示图应进 RAM LRU");
+        assert!(!engine.pending.contains(&url), "in-flight 应结束");
+        assert!(
+            !engine.decode_demand.borrow().contains(&url),
+            "decode demand 应被显示图满足"
+        );
+        Ok(())
+    }
+
+    /// 纯 preview(JPEG 语义)只进 preview LRU,不占显示图缓存。
+    #[test]
+    fn plain_preview_does_not_populate_full_image_cache() -> color_eyre::Result<()> {
+        let mut engine = engine()?;
+        let url = MediaUrl::remote("https://example.com/c.jpg")?;
+
+        engine.apply_completion(CoverCompletion::Preview(preview_ready(&url)));
+
+        assert!(
+            !engine.cache.contains_key(&url),
+            "JPEG preview 不应占显示图缓存"
+        );
+        Ok(())
     }
 }
