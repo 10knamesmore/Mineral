@@ -2,6 +2,7 @@
 
 mod command;
 mod image;
+mod pixels;
 mod placement;
 mod probe;
 mod shared_memory;

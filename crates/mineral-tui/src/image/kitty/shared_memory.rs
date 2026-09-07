@@ -14,20 +14,20 @@ pub(super) struct SharedMemory {
     /// 传给终端的 POSIX shared memory 名称。
     name: String,
 
-    /// 为完整 RGBA payload 预留的字节数。
+    /// 为完整 RGB / RGBA payload 预留的字节数。
     bytes: u64,
 }
 
 impl SharedMemory {
-    /// 创建权限仅限当前用户的 shared memory object 并写入完整 RGBA8 字节。
+    /// 创建权限仅限当前用户的 shared memory object 并写入完整像素字节。
     ///
     /// # Params:
     ///   - `image_id`: 资源名中的 image id
-    ///   - `rgba`: 完整 RGBA8 字节
+    ///   - `pixels`: 与传输命令格式一致的完整 RGB8 / RGBA8 字节
     ///
     /// # Return:
     ///   保持资源生命周期的句柄
-    pub(super) fn create(image_id: u32, rgba: &[u8]) -> color_eyre::Result<Self> {
+    pub(super) fn create(image_id: u32, pixels: &[u8]) -> color_eyre::Result<Self> {
         let name = format!("/mineral-{image_id}");
         let fd = shm_open(
             name.as_str(),
@@ -35,9 +35,9 @@ impl SharedMemory {
             Mode::S_IRUSR | Mode::S_IWUSR,
         )
         .wrap_err_with(|| format!("create kitty shared memory {name}"))?;
-        let bytes = u64::try_from(rgba.len()).wrap_err("convert kitty payload size")?;
+        let bytes = u64::try_from(pixels.len()).wrap_err("convert kitty payload size")?;
         let resource = Self { name, bytes };
-        write_shared_memory(&fd, rgba)?;
+        write_shared_memory(&fd, pixels)?;
         Ok(resource)
     }
 

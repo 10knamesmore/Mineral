@@ -257,8 +257,8 @@ mod tests {
             )?);
             let bytes = image.resident_bytes();
             assert!(
-                (36_000_000..37_000_000).contains(&bytes),
-                "RGBA payload 加少量控制序列，应约 34.3 MiB"
+                (27_000_000..28_000_000).contains(&bytes),
+                "RGB payload 加少量控制序列，应约 25.7 MiB"
             );
             cache.insert(&key, image, bytes);
             keys.push(key);

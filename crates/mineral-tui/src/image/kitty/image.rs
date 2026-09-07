@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::command::transmit_shared_memory;
+use super::pixels::PixelData;
 use super::placement::render;
 use super::shared_memory::SharedMemory;
 use crate::image::graphics::TerminalRelay;
@@ -42,14 +43,19 @@ impl KittyImage {
         image_id: u32,
         relay: TerminalRelay,
     ) -> color_eyre::Result<Self> {
-        let rgba = source.to_rgba8();
-        let resource = SharedMemory::create(image_id, rgba.as_raw())?;
+        let pixels = PixelData::from_image(source);
+        let resource = SharedMemory::create(image_id, &pixels.bytes)?;
         let transmission = transmit_shared_memory(
             image_id,
-            (rgba.width(), rgba.height()),
+            (source.width(), source.height()),
+            pixels.format,
             resource.name(),
             relay,
         );
+        mineral_log::debug!(target: "cover", image_id,
+            width = source.width(), height = source.height(),
+            pixel_format = ?pixels.format, payload_bytes = resource.resident_bytes(),
+            "Kitty image prepared");
         Ok(Self {
             image_id,
             transmission: Some(transmission),
@@ -69,12 +75,71 @@ impl KittyImage {
         );
     }
 
-    /// 返回 RGBA shared memory 与尚未发送的控制序列占用，不重复计入解码原图。
+    /// 返回 RGB / RGBA shared memory 与尚未发送的控制序列占用，不重复计入解码原图。
     pub(crate) fn resident_bytes(&self) -> u64 {
         self.resource.resident_bytes().saturating_add(
             self.transmission.as_ref().map_or(0, |command| {
                 u64::try_from(command.capacity()).unwrap_or(u64::MAX)
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsRawFd;
+
+    use image::{DynamicImage, GrayAlphaImage, LumaA, Rgb, RgbImage, Rgba, RgbaImage};
+    use nix::fcntl::OFlag;
+    use nix::sys::mman::shm_open;
+    use nix::sys::stat::{Mode, fstat};
+
+    use super::KittyImage;
+    use crate::image::graphics::{TerminalGraphics, TerminalRelay};
+
+    /// 终端声明的格式、shared memory 实际长度和缓存字节数必须一致。
+    #[test]
+    fn transmission_matches_shared_memory_layout() -> color_eyre::Result<()> {
+        let graphics = TerminalGraphics::fixed((8, 16));
+        // RGB / RGBA payload 均按 64 KiB 对齐，避免 fstat 的页对齐长度混入像素记账断言。
+        for (source, format, payload_bytes) in [
+            (
+                DynamicImage::ImageRgb8(RgbImage::from_pixel(256, 256, Rgb([10, 20, 30]))),
+                ",f=24,",
+                256 * 256 * 3_u64,
+            ),
+            (
+                DynamicImage::ImageRgba8(RgbaImage::from_pixel(256, 256, Rgba([10, 20, 30, 128]))),
+                ",f=32,",
+                256 * 256 * 4,
+            ),
+            (
+                DynamicImage::ImageLumaA8(GrayAlphaImage::from_pixel(256, 256, LumaA([42, 64]))),
+                ",f=32,",
+                256 * 256 * 4,
+            ),
+        ] {
+            let image = KittyImage::encode(
+                &source,
+                graphics.allocate_kitty_image_id(),
+                TerminalRelay::Direct,
+            )?;
+            let transmission = image
+                .transmission
+                .as_ref()
+                .ok_or_else(|| color_eyre::eyre::eyre!("missing Kitty transmission"))?;
+            assert!(transmission.contains(format), "{transmission:?}");
+            let fd = shm_open(image.resource.name(), OFlag::O_RDONLY, Mode::empty())?;
+            assert_eq!(
+                u64::try_from(fstat(fd.as_raw_fd())?.st_size)?,
+                payload_bytes
+            );
+            assert_eq!(image.resource.resident_bytes(), payload_bytes);
+            assert_eq!(
+                image.resident_bytes(),
+                payload_bytes + u64::try_from(transmission.capacity())?,
+            );
+        }
+        Ok(())
     }
 }

@@ -349,7 +349,7 @@ return {
 | `preview` | `16 * 1024 ^ 2`(16 MiB) | 低清 preview RAM 预算;按图片与目标像素尺寸 LRU，完整图 miss 时仍可显示真实封面 |
 | `protocol` | `64 * 1024 ^ 2`(64 MiB) | 终端图片成品 RAM 预算;越界逐出最久未渲染者 |
 
-三层 RAM 缓存优先逐出未显示的图片。当前可见工作集超过预算时允许暂时超额，离屏后回收，避免大图反复退回 halfblock。协议缓存按成品实际持有的数据记账；Kitty 计入 RGBA shared memory，不重复计入解码原图或 base64 膨胀。
+三层 RAM 缓存优先逐出未显示的图片。当前可见工作集超过预算时允许暂时超额，离屏后回收，避免大图反复退回 halfblock。协议缓存按成品实际持有的数据记账；Kitty 按实际 RGB / RGBA 格式计入 shared memory，不重复计入解码原图或 base64 膨胀。RGB8 / RGBA8 原图直接借用像素写入 shared memory，其他格式转换为 RGBA8 后写入。
 
 `kmeans` 子表(取色;取出的色不满意再动):
 

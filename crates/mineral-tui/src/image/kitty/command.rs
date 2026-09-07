@@ -3,6 +3,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
+use super::pixels::PixelFormat;
 use crate::image::graphics::TerminalRelay;
 
 /// 构造 POSIX shared memory 图片传输命令。
@@ -12,17 +13,20 @@ use crate::image::graphics::TerminalRelay;
 /// # Params:
 ///   - `image_id`: 非零 Kitty image id
 ///   - `pixels`: 原始图片像素宽高
+///   - `format`: shared memory 中的像素格式
 ///   - `name`: POSIX shared memory 名称
 ///   - `relay`: 终端 relay 形态
 pub(super) fn transmit_shared_memory(
     image_id: u32,
     pixels: (u32, u32),
+    format: PixelFormat,
     name: &str,
     relay: TerminalRelay,
 ) -> String {
     let payload = STANDARD.encode(name);
+    let bits_per_pixel = format.bits_per_pixel();
     relay.wrap(format!(
-        "\x1b_Gq=2,i={image_id},a=t,f=32,t=s,s={},v={};{payload}\x1b\\",
+        "\x1b_Gq=2,i={image_id},a=t,f={bits_per_pixel},t=s,s={},v={};{payload}\x1b\\",
         pixels.0, pixels.1
     ))
 }
@@ -66,6 +70,7 @@ mod tests {
 
     use super::{create_virtual_placement, query_shared_memory, transmit_shared_memory};
     use crate::image::graphics::TerminalRelay;
+    use crate::image::kitty::pixels::PixelFormat;
 
     /// shared memory 传输只携带资源名称，placement 独立声明显示尺寸。
     #[test]
@@ -73,7 +78,13 @@ mod tests {
         let name = "/mineral-kitty";
         let encoded = STANDARD.encode(name);
         assert_eq!(
-            transmit_shared_memory(11, (16, 32), name, TerminalRelay::Direct),
+            transmit_shared_memory(
+                /*image_id*/ 11,
+                (16, 32),
+                PixelFormat::Rgba8,
+                name,
+                TerminalRelay::Direct,
+            ),
             format!("\x1b_Gq=2,i=11,a=t,f=32,t=s,s=16,v=32;{encoded}\x1b\\")
         );
         assert_eq!(
