@@ -1,7 +1,7 @@
 //! Client 端的封面源数据预取与按需解码 worker。
 //!
 //! 若干 tokio worker 共享一条结构化请求队列。preview 请求准备压缩源并生成目标尺寸的
-//! halfblock 低清图；decode 请求生成完整像素与色板。
+//! halfblock 低清图；decode 请求按配置尺寸生成像素与色板。
 //! 跟 mineral-task 的 lane 不同,本 fetcher **归 client 所有** —— 封面是装饰性
 //! 资源,server 不该管。多 client 各持一个 fetcher,各 fetch 各 cache。
 //!
@@ -18,7 +18,7 @@ use image::DynamicImage;
 use isahc::AsyncReadResponseExt;
 use isahc::HttpClient;
 use isahc::config::Configurable;
-use mineral_config::CoverConfig;
+use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::{CacheIndex, ClientStore};
 use parking_lot::Mutex;
@@ -73,7 +73,7 @@ pub(crate) enum CoverRequestKind {
     /// 准备压缩源并生成真实低清 preview。
     Preview,
 
-    /// 读取本地源数据并生成完整解码图与色板。
+    /// 读取本地源数据并按配置尺寸生成图片与色板。
     Decode,
 }
 
@@ -92,13 +92,16 @@ struct PreviewRequest {
     cells: (u16, u16),
 }
 
-/// 一次完整解码 worker 请求。
+/// 一次按配置尺寸解码 worker 请求。
 struct DecodeRequest {
     /// 图片来源，决定 Remote 文件的缓存子目录。
     source: SourceKind,
 
     /// 图片源 URL。
     url: MediaUrl,
+
+    /// 提交请求时的解码目标，取自当前有效配置。
+    pixels: CoverDecodePixelsConfig,
 }
 
 /// 图片 worker 的结构化请求。
@@ -106,7 +109,7 @@ enum CoverRequest {
     /// 生成低清 preview。
     Preview(PreviewRequest),
 
-    /// 生成完整解码图与色板。
+    /// 按配置尺寸生成图片与色板。
     Decode(DecodeRequest),
 }
 
@@ -257,12 +260,22 @@ impl CoverFetcher {
     /// # Params:
     ///   - `source`: 来源，决定 Remote 缓存子目录
     ///   - `url`: 图片源 URL
+    ///   - `pixels`: 当前配置的解码目标
     ///
     /// # Return:
     ///   worker 队列仍可接收请求时返回 `true`
-    pub(crate) fn decode(&self, source: SourceKind, url: MediaUrl) -> bool {
+    pub(crate) fn decode(
+        &self,
+        source: SourceKind,
+        url: MediaUrl,
+        pixels: CoverDecodePixelsConfig,
+    ) -> bool {
         self.req_tx
-            .send(CoverRequest::Decode(DecodeRequest { source, url }))
+            .send(CoverRequest::Decode(DecodeRequest {
+                source,
+                url,
+                pixels,
+            }))
             .is_ok()
     }
 
@@ -321,8 +334,13 @@ async fn complete_request(
                 }
             }
         }
-        CoverRequest::Decode(DecodeRequest { source, url }) => {
-            if let Some(decoded) = fetch_and_decode(source, &url, client, cache, cfg).await {
+        CoverRequest::Decode(DecodeRequest {
+            source,
+            url,
+            pixels,
+        }) => {
+            if let Some(decoded) = fetch_and_decode(source, &url, client, cache, cfg, pixels).await
+            {
                 CoverCompletion::Decoded(CoverReady {
                     url,
                     image: Arc::new(decoded.image),
@@ -382,6 +400,7 @@ async fn fetch_preview(
 ///   - `client`: isahc 客户端(Remote 走它)
 ///   - `cache`: 磁盘缓存(可缺;`None` 直连不缓存)
 ///   - `cfg`: 封面段配置(kmeans)
+///   - `pixels`: 提交请求时的解码目标
 ///
 /// # Return:
 ///   解码后的图 + 色板;任一步失败返回 `None`。
@@ -391,9 +410,10 @@ async fn fetch_and_decode(
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
     cfg: &Arc<CoverConfig>,
+    pixels: CoverDecodePixelsConfig,
 ) -> Option<DecodedCover> {
     let source_bytes = load_source(source, url, client, cache).await?;
-    decode_blocking(url, source_bytes, cfg).await
+    decode_blocking(url, source_bytes, cfg, pixels).await
 }
 
 /// 读取 Local 源或取得 Remote 压缩字节，Remote miss 时下载并尝试写入磁盘缓存。
@@ -516,7 +536,7 @@ async fn preview_blocking(
     cells: (u16, u16),
 ) -> Option<(TerminalImage, u64)> {
     let preview = tokio::task::spawn_blocking(move || -> color_eyre::Result<_> {
-        let image = super::preview_decode::decode(&bytes, cells)?;
+        let image = super::decode::preview(&bytes, cells)?;
         Ok(TerminalImage::halfblock_preview(image, pixels, cells))
     })
     .await;
@@ -540,6 +560,7 @@ async fn preview_blocking(
 ///   - `url`: 仅用于日志
 ///   - `bytes`: 待解码字节
 ///   - `cfg`: 封面段配置(kmeans)
+///   - `pixels`: 提交请求时的解码目标
 ///
 /// # Return:
 ///   解码后的图与色板；失败返回 `None`(已打日志)。
@@ -547,10 +568,15 @@ async fn decode_blocking(
     url: &MediaUrl,
     bytes: Vec<u8>,
     cfg: &Arc<CoverConfig>,
+    pixels: CoverDecodePixelsConfig,
 ) -> Option<DecodedCover> {
     let cfg = Arc::clone(cfg);
     let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
-        let image = decode(&bytes)?;
+        let image = super::decode::display(&bytes, &pixels)?;
+        mineral_log::debug!(target: "cover",
+            target_width = pixels.width().get(), target_height = pixels.height().get(),
+            decoded_width = image.width(), decoded_height = image.height(),
+            decoded_bytes = image.as_bytes().len(), "display cover decoded");
         let palette = extract_palette(&image, cfg.kmeans());
         Ok(DecodedCover { image, palette })
     })
@@ -566,16 +592,6 @@ async fn decode_blocking(
             None
         }
     }
-}
-
-/// 同步把压缩字节解码成 image。CPU 密集，由 [`decode_blocking`] 在 blocking pool 调用。
-///
-/// # Params:
-///   - `bytes`: 封面图原始字节(任意 image 支持的编码)
-/// # Return:
-///   解码后的完整图片；解码失败返回 `Err`。
-fn decode(bytes: &[u8]) -> color_eyre::Result<DynamicImage> {
-    image::load_from_memory(bytes).map_err(|e| eyre!("decode: {e}"))
 }
 
 /// 把 Remote 压缩源数据写入磁盘缓存。
@@ -642,7 +658,7 @@ mod tests {
     use image::{DynamicImage, ImageFormat, RgbImage};
     use mineral_persist::ClientStore;
 
-    use super::{cached_read, cover_file_name, decode, download, sniff_ext};
+    use super::{cached_read, cover_file_name, download, sniff_ext};
 
     /// PID + 纳秒后缀的唯一临时目录。
     fn temp_dir() -> std::path::PathBuf {
@@ -700,21 +716,6 @@ mod tests {
         let jpg = jpeg_bytes(/*w*/ 10, /*h*/ 10)?;
         assert_eq!(sniff_ext(&jpg), "jpg");
         Ok(())
-    }
-
-    /// decode 保留源图片尺寸，不做全局缩放。
-    #[test]
-    fn decode_keeps_source_dimensions() -> color_eyre::Result<()> {
-        let bytes = png_bytes(/*w*/ 1024, /*h*/ 1024)?;
-        let decoded = decode(&bytes)?;
-        assert_eq!((decoded.width(), decoded.height()), (1024, 1024));
-        Ok(())
-    }
-
-    /// 坏字节解码失败返回 `Err`,不 panic。
-    #[test]
-    fn garbage_bytes_error() {
-        assert!(decode(b"not an image").is_err());
     }
 
     /// 缓存命中时 `cached_read` 直读缓存文件返回字节(结构上不碰网络——它不收 client)。

@@ -689,6 +689,10 @@ Config {
             debounce_ms: 32,
             download_workers: 12,
             encode_workers: 2,
+            decode_pixels: CoverDecodePixelsConfig {
+                width: 1024,
+                height: 1024,
+            },
             kmeans: KmeansConfig {
                 sample_dim: 64,
                 swatches: 6,

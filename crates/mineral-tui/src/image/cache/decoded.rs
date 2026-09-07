@@ -1,4 +1,4 @@
-//! 封面原图的字节预算 LRU 缓存。
+//! 封面像素的字节预算 LRU 缓存。
 //!
 //! 渲染路径只有 `&AppState`,故 `get` 用 `&self` + 内部 `Cell` 记 LRU 顺序
 //! (`Cell::set` 对 `Copy` 类型无运行时借用检查,无 panic 面);逐出只发生在
@@ -14,7 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 一条缓存项。
 struct Entry {
-    /// 解码后的封面原图(像素缓冲是常驻内存大头)。
+    /// 按配置尺寸解码的封面像素(像素缓冲是常驻内存大头)。
     image: Arc<DynamicImage>,
 
     /// 该图像素字节数,记账用,免逐出时重算。
@@ -24,7 +24,7 @@ struct Entry {
     last_used: Cell<u64>,
 }
 
-/// 封面原图缓存:字节预算 LRU。
+/// 封面像素缓存:字节预算 LRU。
 ///
 /// `get` 更新 LRU，渲染另行登记可见工作集。回填超预算时只逐出未显示的图片，
 /// 返回其 URL 供调用方清理派生的协议和色板；大图不会因后台预热而反复重解码。
@@ -52,7 +52,7 @@ impl CoverCache {
     /// 建空缓存,字节预算为 `budget`。
     ///
     /// # Params:
-    ///   - `budget`: 常驻原图的字节上限;`insert` 越过即逐出最久未用项
+    ///   - `budget`: 常驻像素的字节上限;`insert` 越过即逐出最久未用项
     pub(crate) fn new(budget: u64) -> Self {
         Self {
             entries: FxHashMap::default(),
@@ -102,7 +102,7 @@ impl CoverCache {
     ///
     /// # Params:
     ///   - `url`: 封面 URL(内部 clone 一份作 key)
-    ///   - `image`: 解码后的原图
+    ///   - `image`: 解码后的图片
     ///
     /// # Return:
     ///   被逐出的 URL 列表(不含刚插入的 `url`);未触发逐出时为空。

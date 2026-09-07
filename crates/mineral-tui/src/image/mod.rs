@@ -4,6 +4,7 @@
 
 pub(crate) mod collage;
 pub(crate) mod colors;
+mod decode;
 mod encode;
 pub(crate) mod fetch;
 mod geometry;
@@ -14,7 +15,6 @@ mod cache;
 mod hub;
 mod key;
 mod kitty;
-mod preview_decode;
 mod render;
 mod resize;
 mod terminal;

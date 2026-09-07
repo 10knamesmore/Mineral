@@ -13,6 +13,11 @@ pub(crate) struct PixelSize {
 }
 
 impl PixelSize {
+    /// 从像素宽高构造尺寸。
+    pub(crate) const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
     /// 从 cell 区域与单 cell 像素尺寸计算目标像素尺寸。
     ///
     /// # Params:

@@ -23,7 +23,7 @@ pub(crate) struct EncodeRequest {
     /// 提交任务时的 terminal backend generation。
     pub generation: u64,
 
-    /// 待编码的完整解码图；仅 rasterized 协议在 worker 内缩放。
+    /// 待编码的缓存像素；仅 rasterized 协议在 worker 内缩放。
     pub image: Arc<DynamicImage>,
 
     /// 目标 cell 区域；协议 placement 与 halfblocks 网格使用其宽高。

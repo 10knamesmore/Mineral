@@ -6,7 +6,7 @@ use mineral_config_macros::config_section;
 #[config_section]
 pub struct PrefetchConfig {
     /// 通用预取半径:浏览列表选中行上下各预取此数条。封面压缩源落磁盘并生成当前布局的
-    /// 低清 preview，完整解码图不因半径常驻 RAM；同时预取歌单曲目。
+    /// 低清 preview，高清像素不因半径常驻 RAM；同时预取歌单曲目。
     radius: usize,
 
     /// 在播曲封面预取半径:沿播放队列前后各预取此数张,服务自动切歌。

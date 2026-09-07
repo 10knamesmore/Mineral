@@ -475,7 +475,7 @@ impl ImageEngine {
     /// 登记一张实际显示或显式 prepare 所需的图片；下次 tick 按需解码。
     ///
     /// # Params:
-    ///   - `url`: 需要完整像素的图片 URL
+    ///   - `url`: 需要解码像素的图片 URL
     pub(crate) fn demand_decode(&self, url: &MediaUrl) {
         if self.cache.contains_key(url) || self.decode_failures.borrow().contains(url) {
             return;
@@ -483,10 +483,10 @@ impl ImageEngine {
         self.decode_demand.borrow_mut().insert(url.clone());
     }
 
-    /// 为非渲染消费者登记来源并立即请求完整解码图。
+    /// 为非渲染消费者登记来源并立即请求解码图。
     ///
     /// # Params:
-    ///   - `candidates`: 需要完整像素的来源与 URL
+    ///   - `candidates`: 需要解码像素的来源与 URL
     pub(crate) fn load(&mut self, candidates: impl IntoIterator<Item = (SourceKind, MediaUrl)>) {
         for (source, url) in candidates {
             self.source_by_url.insert(url.clone(), source);
@@ -554,7 +554,7 @@ impl ImageEngine {
     /// 在来源已知且没有同 URL in-flight 时提交一次 decode。
     ///
     /// # Params:
-    ///   - `url`: 需要完整像素的图片 URL
+    ///   - `url`: 需要解码像素的图片 URL
     fn request_decode(&mut self, url: &MediaUrl) {
         if self.cache.contains_key(url) || self.decode_failures.borrow().contains(url) {
             self.decode_demand.borrow_mut().remove(url);
@@ -568,7 +568,11 @@ impl ImageEngine {
         };
         self.pending.insert(url.clone());
         mineral_log::debug!(target: "prefetch", url = %url, ?source, "decode demanded cover");
-        if !self.workers.fetcher.decode(source, url.clone()) {
+        if !self.workers.fetcher.decode(
+            source,
+            url.clone(),
+            self.cfg.tui().cover().decode_pixels().clone(),
+        ) {
             self.pending.remove(url);
             self.decode_demand.borrow_mut().remove(url);
             self.decode_failures.borrow_mut().insert(url.clone());

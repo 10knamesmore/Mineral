@@ -1,5 +1,7 @@
 //! 封面段(挂在 `TuiConfig` 下):抓取 / 缓存 / 并发 + kmeans 取色参数。
 
+use std::num::NonZeroU32;
+
 use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
@@ -15,7 +17,7 @@ pub struct CoverConfig {
     /// 单张封面下载 HTTP 超时(秒)。
     http_timeout_secs: u64,
 
-    /// 封面切换去抖(毫秒):列表滚动停稳此时长才开始完整解码与终端编码，期间优先显示真实 preview。
+    /// 封面切换去抖(毫秒):列表滚动停稳此时长才准备高清像素与终端成品，期间优先显示真实 preview。
     debounce_ms: u64,
 
     /// 封面下载并发 worker 数,≥1。
@@ -24,11 +26,27 @@ pub struct CoverConfig {
     /// 封面终端协议编码并发 worker 数,≥1。
     encode_workers: usize,
 
+    /// 封面解码的目标像素尺寸；修改后用于后续解码，已缓存图片继续复用。
+    decode_pixels: CoverDecodePixelsConfig,
+
     /// kmeans 取色参数(封面派生配色)。
     kmeans: KmeansConfig,
 
     /// 缓存预算(磁盘配额 + 三层 RAM 预算)。
     cache: CoverCacheConfig,
+}
+
+/// 封面解码目标；保持原图比例，选择两轴均达到目标的最低解码档位，小图不放大。
+#[config_section]
+#[derive(typed_builder::TypedBuilder)]
+pub struct CoverDecodePixelsConfig {
+    /// 目标宽度，单位像素，须大于零。
+    #[lua_type("integer")]
+    width: NonZeroU32,
+
+    /// 目标高度，单位像素，须大于零。
+    #[lua_type("integer")]
+    height: NonZeroU32,
 }
 
 /// 封面缓存预算(挂在 `CoverConfig` 下)。四档都是 client 进程的旋钮:
@@ -39,12 +57,12 @@ pub struct CoverCacheConfig {
     #[serde(deserialize_with = "de::u64_lossy")]
     disk: u64,
 
-    /// 解码原图 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是常驻 RAM 的
-    /// 解码位图。优先逐出最久未显示的封面；当前可见工作集可暂时超额，离屏后回收。
+    /// 已准备的高清像素 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是按配置尺寸
+    /// 解码的位图。优先逐出最久未显示的封面；当前可见工作集可暂时超额，离屏后回收。
     #[serde(deserialize_with = "de::u64_lossy")]
     image: u64,
 
-    /// 低清 preview RAM 预算(字节)。preview 按图片与目标像素尺寸缓存，完整解码图被逐出后
+    /// 低清 preview RAM 预算(字节)。preview 按图片与目标像素尺寸缓存，高清像素被逐出后
     /// 仍可在快速滚动时显示；优先逐出未显示的 preview，当前可见工作集可暂时超额。
     #[serde(deserialize_with = "de::u64_lossy")]
     preview: u64,
