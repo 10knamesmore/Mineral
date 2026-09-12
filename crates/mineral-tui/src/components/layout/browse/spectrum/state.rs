@@ -536,6 +536,12 @@ impl SpectrumState {
         self.advance_color();
     }
 
+    /// 清空 scope 的连续波形历史(流换代 / 缺口后重置,不混用旧流样本)。
+    pub(crate) fn reset_stream(&mut self) {
+        self.wave.clear();
+        self.wave_carry.clear();
+    }
+
     /// scope 一列聚合的样本数(`scope.column_ms` 按采样率折算,至少 1)。
     fn scope_samples_per_column(&self, sample_rate: u32) -> usize {
         let column_ms = u64::from(*self.cfg.scope().column_ms()).max(1);

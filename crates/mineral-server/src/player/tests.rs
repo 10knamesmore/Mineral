@@ -485,13 +485,8 @@ fn core_with_events_stats_playback(
             .collect::<Vec<SourceKind>>(),
     );
     // 测试不起打标 worker(关闭态 null-object)。
-    let tagging = crate::tagging::TaggingQueue::spawn(
-        /*enabled*/ false,
-        &[],
-        None,
-        &persist,
-        /*workers*/ 1,
-    );
+    let tagging =
+        crate::tagging::TaggingQueue::spawn(/*enabled*/ false, &[], None, /*workers*/ 1);
     let notify = crate::notify::Notifier::new(events, script);
     let music_dir = music_dir.map(Path::to_path_buf);
     let downloads = crate::download::DownloadManager::spawn(
@@ -512,6 +507,7 @@ fn core_with_events_stats_playback(
         *cfg.download().max_concurrent(),
     );
     let inner = Arc::new(Inner {
+        state_changes: crate::state::StatePublisher::new().1,
         audio,
         scheduler,
         channels,

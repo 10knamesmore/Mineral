@@ -64,9 +64,6 @@ pub struct ClientInfo {
     /// client 实现的自报名(如 `tui` / `cli`;开放命名空间,新 client 形态
     /// 自取名即可)。daemon 不据此分派任何行为,只作观测归属。
     pub name: String,
-
-    /// 期望接收的推送类别;不订阅的类别 server 不下发。一次性 CLI 命令订空集。
-    pub subscriptions: Vec<Subscription>,
 }
 
 impl ClientInfo {
@@ -74,13 +71,11 @@ impl ClientInfo {
     ///
     /// # Params:
     ///   - `name`: client 实现的自报名(如 `tui` / `cli`)
-    ///   - `subscriptions`: 期望接收的推送类别
     #[must_use]
-    pub fn new(name: &str, subscriptions: Vec<Subscription>) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
             version: PkgVersion::current(),
             name: name.to_owned(),
-            subscriptions,
         }
     }
 
@@ -189,48 +184,8 @@ pub enum RejectReason {
     VersionMismatch,
 }
 
-/// client 侧握手单入口:发 [`Frame::Handshake`](crate::Frame::Handshake)、等
-/// [`Frame::Hello`](crate::Frame::Hello)、校验 accepted。oneshot 与长连接 client 共用。
-///
-/// **发送失败也先读一帧再定罪**:server 的 busy 拒绝不等握手帧就回 Hello 并关连接,
-/// 此时本端的握手帧可能撞上已关 socket(EPIPE)——真正的原因在缓冲里的 Hello,
-/// 优先把它捞出来报人话,而不是报一条没信息量的 broken pipe。
-///
-/// # Params:
-///   - `conn`: 已建立的 framed 连接
-///   - `info`: 握手信息(版本 + 订阅集)
-///
-/// # Errors
-/// 握手被拒(busy / 版本不匹配)/ 对端没回 Hello / 连接被关。
-pub async fn client_handshake<S>(
-    conn: &mut crate::Framed<S>,
-    info: ClientInfo,
-) -> color_eyre::Result<()>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    use color_eyre::eyre::{WrapErr, bail};
-
-    use crate::codec::{recv, send};
-    use crate::frame::Frame;
-
-    let sent = send(conn, &Frame::Handshake(info)).await;
-    match recv::<Frame, _>(conn).await {
-        Ok(Some(Frame::Hello(hello))) => hello.ensure_accepted(),
-        Ok(Some(other)) => bail!("握手应答应是 Hello,实际收到 {other:?}"),
-        Ok(None) => {
-            sent.wrap_err("发送握手帧失败")?;
-            bail!("daemon 在握手期间关闭了连接(版本过旧的 daemon 不认识握手帧,重启 daemon 试试)")
-        }
-        Err(recv_err) => {
-            sent.wrap_err("发送握手帧失败")?;
-            Err(recv_err).wrap_err("等待握手应答")
-        }
-    }
-}
-
 /// 订阅类别(client 想收哪类 [`Event`](crate::Event),按类别整组订阅)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Subscription {
     /// 属性变更([`Event::PropertyChanged`](crate::Event::PropertyChanged))。
     Property,

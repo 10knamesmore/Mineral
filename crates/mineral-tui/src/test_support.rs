@@ -7,20 +7,23 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
+use mineral_client::operation::Outcome;
+use mineral_client::state::{PlaybackMirror, PlayerMirror, WindowTitleOverride};
 use mineral_model::{
     MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
-use mineral_protocol::{PlayerSync, PlayerVersions};
-use mineral_server::Client;
+use mineral_protocol::{
+    DownloadSummary, Event, FailureKind, KeyContext, QueueContextWire, QueueEditOutcome, QueueOp,
+    SubscriptionTopic,
+};
 use mineral_task::{Priority, Snapshot, TaskKind};
-use rustc_hash::FxHashMap;
 
 use crate::app::App;
 use crate::image::ImageEngine;
 use crate::render::anim::Toggle;
 use crate::render::theme::Theme;
+use crate::runtime::backend::{Backend, BackendBootstrap, Completion, CompletionQueue};
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
@@ -225,8 +228,8 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
     Ok(s)
 }
 
-/// no-op [`Client`]:所有调用静默吞掉、读取类返回默认值。供测试构造 [`App`] 而不接
-/// 真实 server / daemon。
+/// 进程内测试后端:读取测试注入的镜像,按操作记录探针或投递预设结论。
+/// 未模拟的操作为空操作;构造 [`App`] 时无需连接 daemon。
 #[derive(Default)]
 pub(crate) struct TestClient {
     /// `request_daemon_shutdown` 调用计数(Shift+Q「退出并停止 daemon」路径断言用)。
@@ -252,6 +255,30 @@ pub(crate) struct TestClient {
 
     /// `seek` 收到的目标位置(ms)序列(全屏歌词 Enter 跳到焦点行的绝对 seek 路径断言用)。
     pub(crate) seeks: Arc<Mutex<Vec<u64>>>,
+
+    /// 完成事件队列(测试可注入结论)。
+    pub(crate) completions: Arc<CompletionQueue>,
+
+    /// 播放镜像(默认空;测试可直接改)。
+    pub(crate) player: PlayerMirror,
+
+    /// 播放锚点镜像。
+    pub(crate) playback: PlaybackMirror,
+
+    /// 任务摘要。
+    pub(crate) tasks: Option<Snapshot>,
+
+    /// 下载摘要。
+    pub(crate) downloads_summary: DownloadSummary,
+
+    /// 待消费事件。
+    pub(crate) events: Arc<Mutex<Vec<Event>>>,
+
+    /// PCM 样本。
+    pub(crate) pcm: Arc<Mutex<Vec<f32>>>,
+
+    /// PCM 断续标记。
+    pub(crate) pcm_discontinuity: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
@@ -264,51 +291,124 @@ pub(crate) type QueueContextLog =
 /// [`TestClient::queue_edits`] 的记录容器:编辑操作序列。
 pub(crate) type QueueEditLog = Arc<Mutex<Vec<mineral_protocol::QueueOp>>>;
 
-impl Client for TestClient {
+impl Backend for TestClient {
+    fn bootstrap(&self) -> BackendBootstrap {
+        BackendBootstrap::default()
+    }
+
+    fn completions(&self) -> &Arc<CompletionQueue> {
+        &self.completions
+    }
+
+    fn refresh_script_binds(&self) {}
+
+    fn connected(&self) -> bool {
+        true
+    }
+
+    fn drain_events(&self) -> Vec<Event> {
+        self.events
+            .lock()
+            .map(|mut guard| guard.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    fn events_dropped(&self) -> u64 {
+        0
+    }
+
+    fn with_player(&self, f: &mut dyn FnMut(&PlayerMirror)) {
+        f(&self.player);
+    }
+
+    fn with_playback(&self, f: &mut dyn FnMut(&PlaybackMirror)) {
+        f(&self.playback);
+    }
+
+    fn tasks(&self) -> Option<Snapshot> {
+        self.tasks.clone()
+    }
+
+    fn downloads_summary(&self) -> DownloadSummary {
+        self.downloads_summary.clone()
+    }
+
+    fn downloads_detail(&self) -> Option<mineral_client::state::DownloadsDetailMirror> {
+        None
+    }
+
+    fn window_title_override(&self) -> WindowTitleOverride {
+        WindowTitleOverride::NotKnown
+    }
+
+    fn subscribe(&self, _topic: SubscriptionTopic) {}
+
+    fn unsubscribe(&self, _topic: SubscriptionTopic) {}
+
+    fn drain_pcm(&self) -> Vec<f32> {
+        self.pcm
+            .lock()
+            .map(|mut guard| guard.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    fn take_pcm_discontinuity(&self) -> bool {
+        self.pcm_discontinuity.swap(false, Ordering::SeqCst)
+    }
+
     fn pause(&self) {}
+
     fn resume(&self) {}
-    fn stop(&self) {}
+
     fn seek(&self, position_ms: u64) {
         if let Ok(mut v) = self.seeks.lock() {
             v.push(position_ms);
         }
     }
+
     fn set_volume(&self, _pct: u8) {}
-    fn audio_snapshot(&self) -> AudioSnapshot {
-        AudioSnapshot::default()
-    }
+
+    fn cycle_play_mode(&self) {}
+
+    fn prev_or_restart(&self) {}
+
+    fn next_song(&self) {}
+
     fn play_song(&self, song: Song) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("play_song", song.id.qualified()));
         }
     }
-    fn play_queue(
-        &self,
-        songs: Vec<Song>,
-        target: usize,
-        context: mineral_protocol::QueueContextWire,
-    ) -> Result<(), mineral_protocol::PlayQueueError> {
+
+    fn play_queue(&self, songs: Vec<Song>, target: usize, context: QueueContextWire) {
         let len = songs.len();
-        let Some(target_song) = songs.get(target) else {
-            return if songs.is_empty() {
-                Err(mineral_protocol::PlayQueueError::Empty)
-            } else {
-                Err(mineral_protocol::PlayQueueError::TargetOutOfBounds { target, len })
-            };
+        let outcome = match songs.get(target) {
+            Some(target_song) => {
+                if let Ok(mut v) = self.queue_ops.lock() {
+                    v.push((
+                        "play_queue",
+                        format!("{len}:{target}:{}", target_song.id.qualified()),
+                    ));
+                }
+                if let Ok(mut v) = self.queue_contexts.lock() {
+                    v.push(("play_queue", context));
+                }
+                Outcome::Applied(())
+            }
+            None if songs.is_empty() => Outcome::Failed {
+                kind: FailureKind::Invalid,
+                detail: mineral_protocol::PlayQueueError::Empty.to_string(),
+            },
+            None => Outcome::Failed {
+                kind: FailureKind::Invalid,
+                detail: mineral_protocol::PlayQueueError::TargetOutOfBounds { target, len }
+                    .to_string(),
+            },
         };
-        // 记队列长 + exact target coordinate / Song;供 atomic 起播路径回归断言。
-        if let Ok(mut v) = self.queue_ops.lock() {
-            v.push((
-                "play_queue",
-                format!("{len}:{target}:{}", target_song.id.qualified()),
-            ));
-        }
-        if let Ok(mut v) = self.queue_contexts.lock() {
-            v.push(("play_queue", context));
-        }
-        Ok(())
+        self.completions.push(Completion::PlayQueue(outcome));
     }
-    fn queue_insert_next(&self, song: Song, context: mineral_protocol::QueueContextWire) {
+
+    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("insert_next", song.id.qualified()));
         }
@@ -316,7 +416,8 @@ impl Client for TestClient {
             v.push(("insert_next", context));
         }
     }
-    fn queue_append(&self, song: Song, context: mineral_protocol::QueueContextWire) {
+
+    fn queue_append(&self, song: Song, context: QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
             v.push(("append", song.id.qualified()));
         }
@@ -324,38 +425,35 @@ impl Client for TestClient {
             v.push(("append", context));
         }
     }
-    fn queue_edit(&self, op: mineral_protocol::QueueOp) -> mineral_protocol::QueueEditOutcome {
+
+    fn queue_edit(&self, op: QueueOp) {
         if let Ok(mut v) = self.queue_edits.lock() {
             v.push(op);
         }
-        mineral_protocol::QueueEditOutcome::Applied
+        self.completions
+            .push(Completion::QueueEdit(Outcome::Applied(
+                QueueEditOutcome::Applied,
+            )));
     }
-    fn channel_caps(&self) -> Vec<(SourceKind, mineral_channel_core::ChannelCaps)> {
-        Vec::new()
-    }
-    fn cycle_play_mode(&self) {}
-    fn prev_or_restart(&self) {}
-    fn next_song(&self) {}
-    fn player_sync(&self, _known: PlayerVersions) -> PlayerSync {
-        PlayerSync::default()
-    }
+
     fn submit_task(&self, kind: TaskKind, _priority: Priority) {
         if let Ok(mut v) = self.submitted.lock() {
             v.push(kind);
         }
     }
-    fn task_snapshot(&self) -> Snapshot {
-        Snapshot {
-            running: 0,
-            by_kind: FxHashMap::default(),
-        }
-    }
-    fn pull_pcm(&self, _n: usize) -> (Vec<f32>, u32) {
-        (Vec::new(), 0)
+
+    fn download(&self, _target: mineral_protocol::DownloadTarget) {}
+
+    fn stop_download(&self, _id: mineral_protocol::DownloadId) {
+        self.completions
+            .push(Completion::StopDownload(Outcome::Applied(())));
     }
 
-    fn toggle_love(&self, _song: Song) -> bool {
-        false
+    fn toggle_love(&self, song: Song) {
+        self.completions.push(Completion::Love {
+            song_id: song.id.clone(),
+            outcome: Outcome::Applied(false),
+        });
     }
 
     fn request_song_stats(&self, id: SongId) {
@@ -364,43 +462,32 @@ impl Client for TestClient {
         }
     }
 
-    fn download(&self, _target: mineral_protocol::DownloadTarget) {}
+    fn invoke_action(&self, _name: &str, _ctx: Option<KeyContext>) {}
 
-    fn render_copy_template(
-        &self,
-        index: usize,
-        _ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<String, String> {
+    fn render_copy_template(&self, index: usize, _ctx: mineral_protocol::CopyTemplateCtx) {
         if let Ok(mut v) = self.copy_template_calls.lock() {
             v.push(index);
         }
-        Err("test stub".to_owned())
+        self.completions
+            .push(Completion::CopyTemplate(Outcome::Applied(Err(
+                "test stub".to_owned()
+            ))));
     }
 
-    fn download_summary(&self) -> mineral_protocol::DownloadSummary {
-        mineral_protocol::DownloadSummary::default()
-    }
-
-    fn download_snapshot(&self) -> Vec<mineral_protocol::SongDownloadView> {
-        Vec::new()
-    }
-
-    fn stop_download(&self, _id: mineral_protocol::DownloadId) -> color_eyre::Result<()> {
-        Ok(())
-    }
+    fn report_terminal_state(&self, _rows: u16, _cols: u16, _fullscreen: bool, _focused: bool) {}
 
     fn request_daemon_shutdown(&self) {
         self.daemon_shutdowns.fetch_add(1, Ordering::SeqCst);
     }
 }
 
-/// 以 defaults 配置(= 接线前硬编码常量)造一个接 [`TestClient`] 且不启动图片 worker 的裸 [`App`]。
+/// 以默认配置构造接入 [`TestClient`] 的 [`App`],不启动图片 worker。
 fn test_app() -> color_eyre::Result<App> {
     test_app_with(Arc::new(TestClient::default()))
 }
 
 /// 同 [`test_app`],client 由调用方注入(需要探针 / 自定义剧本的测试用)。
-fn test_app_with(client: Arc<dyn Client>) -> color_eyre::Result<App> {
+fn test_app_with(client: Arc<dyn Backend>) -> color_eyre::Result<App> {
     let cfg = Arc::new(mineral_config::Config::defaults()?);
     let images = ImageEngine::disabled(Arc::clone(&cfg));
     Ok(App::new(

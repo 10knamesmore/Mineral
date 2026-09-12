@@ -12,6 +12,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{WrapErr, bail};
+use mineral_protocol::SocketWire;
 
 /// 隔离环境里的一个 daemon 子进程;Drop 时 kill 子进程并清临时目录。
 struct Daemon {
@@ -169,23 +170,22 @@ fn registered_action_runs_and_failures_surface() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 经 wire 读一条 per-song 持久值(连 socket → 握手 → `StoreGet`)。
+/// 经会话读一条 per-song 持久值(连 socket → 握手 → `StoreGet`)。
 async fn store_get(
     socket: &std::path::Path,
     song: mineral_model::SongId,
     key: &str,
 ) -> color_eyre::Result<mineral_protocol::StoreValue> {
-    use mineral_protocol::{OneshotClient, Request, Response};
-    let mut client = OneshotClient::connect(socket).await?;
-    match client
-        .request(Request::StoreGet {
-            song,
-            key: key.to_owned(),
-        })
-        .await?
-    {
-        Response::StoreValue(value) => Ok(value),
-        other => bail!("unexpected response: {other:?}"),
+    use mineral_client::Client;
+    use mineral_client::connection::ClientConfig;
+    use mineral_client::operation::Outcome;
+    let wire = SocketWire::connect(socket).await?;
+    let client = Client::from_wire(Box::new(wire), "script_hooks", ClientConfig::cli())
+        .await
+        .map_err(color_eyre::Report::new)?;
+    match client.store_get(song, key).await {
+        Outcome::Applied(value) => Ok(value),
+        other => bail!("unexpected outcome: {other:?}"),
     }
 }
 
@@ -327,7 +327,9 @@ fn action_without_script_reports_disabled() -> color_eyre::Result<()> {
 /// 多 client 并存:常驻连接挂着时,oneshot CLI 照常服务,且常驻连接不被顶掉。
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_clients_are_served() -> color_eyre::Result<()> {
-    use mineral_protocol::{OneshotClient, Request, Response};
+    use mineral_client::Client;
+    use mineral_client::connection::ClientConfig;
+    use mineral_client::operation::Outcome;
     let daemon = Daemon::spawn(
         "multi",
         Some(
@@ -339,19 +341,22 @@ async fn concurrent_clients_are_served() -> color_eyre::Result<()> {
     )?;
     daemon.wait_ready()?;
     // 常驻连接:完成握手后一直挂着(模拟常开的 TUI)。
-    let mut resident = OneshotClient::connect(&daemon.socket).await?;
-    // 常驻在线时 oneshot CLI 子进程照常服务(自己连、自己断)。
+    let wire = SocketWire::connect(&daemon.socket).await?;
+    let resident = Client::from_wire(Box::new(wire), "resident", ClientConfig::default())
+        .await
+        .map_err(color_eyre::Report::new)?;
+    // 常驻在线时 CLI 子进程照常服务(自己连、自己断)。
     let out = daemon.action_output("e2e.ping")?;
     assert!(
         out.status.success(),
-        "常驻连接在线时 oneshot 应照常服务,stderr: {}",
+        "常驻连接在线时 CLI 应照常服务,stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     // 常驻连接不受后来 client 影响:随后的请求仍正常应答。
-    let resp = resident.request(Request::DaemonInfo).await?;
+    let pid = resident.daemon_info().await;
     assert!(
-        matches!(resp, Response::DaemonInfo { .. }),
-        "常驻连接应不被顶掉,实得 {resp:?}"
+        matches!(pid, Outcome::Applied(_)),
+        "常驻连接应不被顶掉,实得 {pid:?}"
     );
     Ok(())
 }

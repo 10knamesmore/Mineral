@@ -1,0 +1,179 @@
+//! 从 client 订阅镜像同步 App 状态,并把操作完成事件收敛成 UI 反馈。
+//!
+//! 每帧一次纯本地内存读,不产生 IPC;版本一致时连队列重段都不构造(直接跳过),
+//! UI 自有状态不被推送覆盖。
+
+use std::time::Instant;
+
+use mineral_client::operation::Outcome;
+use mineral_client::state::WindowTitleOverride;
+use mineral_protocol::{PlayerSync, QueueEditOutcome, QueueSync, SubscriptionTopic};
+
+use crate::components::toast::notifications::{TextTint, tinted_text_item};
+use crate::runtime::backend::Completion;
+
+use super::App;
+
+impl App {
+    /// 把镜像当前状态灌进 App 状态(每帧调一次,纯本地读)。
+    pub(super) fn sync_from_backend(&mut self) {
+        // 播放锚点:位置用本地单调钟推进,其余字段照抄权威值。
+        let mut anchor = mineral_audio::AudioSnapshot::default();
+        let mut position = 0_u64;
+        self.client.with_playback(&mut |playback| {
+            anchor = *playback.anchor();
+            position = playback.position_ms(Instant::now());
+        });
+        anchor.position_ms = position;
+        self.state.playback.apply_audio_snapshot(anchor);
+
+        // 播放镜像:版本一致时跳过(光标 / 模式 / 来源都随版本 bump 变化)。
+        let known = self.state.player.versions;
+        let mut sync = None;
+        self.client.with_player(&mut |player| {
+            let versions = player.versions();
+            if versions != known {
+                sync = Some(PlayerSync {
+                    versions,
+                    cursor: player.cursor(),
+                    play_mode: player.play_mode(),
+                    play_origin: player.play_origin(),
+                    queue: (known.queue != versions.queue).then(|| QueueSync {
+                        queue: player.queue().to_vec(),
+                        original_queue: player
+                            .original_queue()
+                            .map(<[mineral_model::Song]>::to_vec),
+                    }),
+                    current: (known.current != versions.current)
+                        .then(|| player.current().cloned())
+                        .flatten(),
+                });
+            }
+        });
+        if let Some(sync) = sync {
+            self.apply_player_sync(sync);
+        }
+
+        if let Some(tasks) = self.client.tasks() {
+            self.state.tasks_snapshot = tasks;
+        }
+        let summary = self.client.downloads_summary();
+        self.download_notifier
+            .feed(&mut self.notifications, &summary);
+        self.state.downloads_summary = summary;
+        self.sync_downloads_subscription();
+
+        if self.state.window_title_override.is_none()
+            && let WindowTitleOverride::Set(text) = self.client.window_title_override()
+        {
+            self.state.window_title_override = text;
+        }
+    }
+
+    /// Downloads 浮层生命周期 ↔ 明细订阅生命周期。
+    fn sync_downloads_subscription(&mut self) {
+        let open = self.overlays.has_downloads();
+        if open == self.downloads_subscribed {
+            if open && let Some(detail) = self.client.downloads_detail() {
+                self.state.downloads = detail.rows();
+                self.overlays.clamp_downloads(self.state.downloads.len());
+            }
+            return;
+        }
+        self.downloads_subscribed = open;
+        if open {
+            self.client.subscribe(SubscriptionTopic::DownloadsDetail);
+        } else {
+            self.client.unsubscribe(SubscriptionTopic::DownloadsDetail);
+            self.state.downloads.clear();
+        }
+    }
+
+    /// 取走操作完成事件并给出 UI 反馈。
+    pub(super) fn drain_completions(&mut self) {
+        for completion in self.completions.drain() {
+            self.apply_completion(completion);
+        }
+    }
+
+    /// 应用一条完成事件。
+    fn apply_completion(&mut self, completion: Completion) {
+        match completion {
+            Completion::PlayQueue(outcome) => match outcome {
+                // Applied 只承载成功;业务失败在 client 侧已归一 `Failed`(见
+                // `Client::play_queue` 的载荷译码)。
+                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
+                    self.notifications
+                        .flash(tinted_text_item(detail, TextTint::Error));
+                }
+                Outcome::Applied(_) | Outcome::Accepted(_) => {}
+            },
+            Completion::QueueEdit(outcome) => match outcome {
+                Outcome::Applied(QueueEditOutcome::Stale)
+                | Outcome::Accepted(QueueEditOutcome::Stale) => {
+                    self.notifications.flash(tinted_text_item(
+                        "queue changed elsewhere, nothing done".to_owned(),
+                        TextTint::Error,
+                    ));
+                }
+                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
+                    self.notifications
+                        .flash(tinted_text_item(detail, TextTint::Error));
+                }
+                Outcome::Applied(_) | Outcome::Accepted(_) => {}
+            },
+            Completion::ScriptAction { name, outcome } => {
+                if let Some(message) = completion_failure(&outcome) {
+                    self.notifications.flash(tinted_text_item(
+                        format!("{name}: {message}"),
+                        TextTint::Error,
+                    ));
+                }
+            }
+            Completion::CopyTemplate(outcome) => match outcome {
+                Outcome::Applied(Ok(text)) => self.copy_to_clipboard(&text),
+                Outcome::Applied(Err(message)) => {
+                    self.notifications
+                        .flash(tinted_text_item(message, TextTint::Error));
+                }
+                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
+                    self.notifications
+                        .flash(tinted_text_item(detail, TextTint::Error));
+                }
+                Outcome::Accepted(_) => {
+                    self.notifications
+                        .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
+                }
+            },
+            Completion::Love { song_id, outcome } => {
+                // 服务端结论为准:失败提示;成功时订阅刷新会校正乐观值。
+                if let Outcome::Failed { detail, .. } | Outcome::Unknown { detail } = outcome {
+                    mineral_log::warn!(
+                        target: "tui",
+                        song_id = song_id.as_str(),
+                        detail,
+                        "喜欢切换未成功"
+                    );
+                    self.notifications
+                        .flash(tinted_text_item(detail, TextTint::Error));
+                }
+            }
+            Completion::StopDownload(outcome) => {
+                if let Some(message) = completion_failure(&outcome) {
+                    self.notifications
+                        .flash(tinted_text_item(message, TextTint::Error));
+                }
+            }
+            Completion::ScriptBinds(binds) => self.apply_script_binds(&binds),
+        }
+    }
+}
+
+/// 完成结论 → 失败文案(`Applied` / `Accepted` 为 `None`)。
+fn completion_failure<T>(outcome: &Outcome<T>) -> Option<String> {
+    match outcome {
+        Outcome::Failed { detail, .. } => Some(detail.clone()),
+        Outcome::Unknown { detail } => Some(detail.clone()),
+        Outcome::Applied(_) | Outcome::Accepted(_) => None,
+    }
+}

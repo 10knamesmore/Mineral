@@ -1,34 +1,46 @@
-//! `mineral status` — connect daemon socket,拉一次 audio snapshot 打印。
+//! `mineral status` — 连 daemon socket,订阅播放锚点与下载摘要,打印一次快照。
 //!
-//! 验证 IPC 链路是否通。daemon 没起 / socket 文件 stale / 版本不匹配 → 友好报错
-//! (握手与配对语义在 [`OneshotClient`] 内)。
+//! 验证会话链路是否通。daemon 没起 / socket 文件 stale / 版本不匹配 → 友好报错
+//! (握手与配对语义在 [`mineral_client::Client`] 内)。
 
-use color_eyre::eyre::bail;
+use std::time::Duration;
+
+use color_eyre::eyre::{WrapErr, bail};
 use mineral_audio::{AudioBackend, AudioSnapshot};
-use mineral_protocol::{DownloadSummary, OneshotClient, Request, Response};
+use mineral_client::Client;
+use mineral_client::connection::ClientConfig;
+use mineral_client::operation::Outcome;
+use mineral_protocol::{DownloadSummary, SocketWire, SubscriptionTopic};
 
-/// `mineral status` 入口:连 daemon socket(含握手)→ 依次拉快照 / pid / 下载进度 → 打印。
+/// 等待 daemon 推送首帧订阅数据的上限(daemon 订阅即推,正常在毫秒级)。
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `mineral status` 入口:连 daemon(含握手)→ 订阅播放 / 下载 → 打印一次快照。
 pub async fn run() -> color_eyre::Result<()> {
     let socket_path = mineral_paths::socket_path()?;
-    let mut client = OneshotClient::connect(&socket_path).await?;
+    let wire = SocketWire::connect(&socket_path)
+        .await
+        .wrap_err("连不上 daemon;先跑 `mineral serve`")?;
+    let client = Client::from_wire(Box::new(wire), "mineral_status", ClientConfig::default())
+        .await
+        .wrap_err("连不上 daemon;先跑 `mineral serve`")?;
+    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::DownloadsSummary);
+    client.wait_subscriptions_ready(READY_TIMEOUT).await;
 
-    let snap = match client.request(Request::AudioSnapshot).await? {
-        Response::AudioSnapshot(snap) => snap,
-        Response::Error(msg) => bail!("daemon error: {msg}"),
-        other => bail!("unexpected response: {other:?}"),
+    let pid = match client.daemon_info().await {
+        Outcome::Applied(pid) => pid,
+        Outcome::Accepted(pid) => pid,
+        Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
+            bail!("daemon error: {detail}")
+        }
     };
 
-    let pid = match client.request(Request::DaemonInfo).await? {
-        Response::DaemonInfo { pid } => pid,
-        Response::Error(msg) => bail!("daemon error: {msg}"),
-        other => bail!("unexpected response: {other:?}"),
-    };
-
-    let summary = match client.request(Request::DownloadSummary).await? {
-        Response::DownloadSummary(summary) => summary,
-        Response::Error(msg) => bail!("daemon error: {msg}"),
-        other => bail!("unexpected response: {other:?}"),
-    };
+    let mut snap = client.playback_snapshot();
+    snap.position_ms = client.playback_position_ms();
+    let summary = client
+        .mirror()
+        .read_downloads_summary(DownloadSummary::clone);
 
     let download = if summary.active > 0 || summary.queued > 0 || summary.preparing_playlists > 0 {
         format!("\ndownload:   {}", render_download(&summary))

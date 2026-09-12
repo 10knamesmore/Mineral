@@ -4,7 +4,7 @@ mod output;
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -45,6 +45,9 @@ pub(crate) struct EngineIo {
 
     /// Current sample rate shared with the spectrum consumer.
     pub(crate) sr_atomic: Arc<AtomicU32>,
+
+    /// 累计尝试写入 tap 的 mono 样本数(缺口辨认)。
+    pub(crate) tap_pushed: Arc<AtomicU64>,
 }
 
 /// Runs the audio engine until every command sender is dropped.
@@ -92,7 +95,7 @@ fn engine_main(
         return run_null_mode(commands);
     };
     let _ = io.ready_tx.send(Ok(()));
-    let mut engine = Engine::new(output, &io.tap_producer, &io.sr_atomic);
+    let mut engine = Engine::new(output, &io.tap_producer, &io.sr_atomic, &io.tap_pushed);
     let tick = Duration::from_millis(*params.tick_ms());
     loop {
         match commands.recv_timeout(tick) {
@@ -123,17 +126,26 @@ struct Engine {
     /// Current sample rate shared with the spectrum consumer.
     sample_rate: Arc<AtomicU32>,
 
+    /// 累计尝试写入 tap 的 mono 样本数(缺口辨认)。
+    tap_pushed: Arc<AtomicU64>,
+
     /// Current and gapless-prefetched decoder accounting.
     head: PlayHead,
 }
 
 impl Engine {
     /// Creates engine state around an initialized output.
-    fn new(output: Output, tap_producer: &SharedProd, sample_rate: &Arc<AtomicU32>) -> Self {
+    fn new(
+        output: Output,
+        tap_producer: &SharedProd,
+        sample_rate: &Arc<AtomicU32>,
+        tap_pushed: &Arc<AtomicU64>,
+    ) -> Self {
         Self {
             output,
             tap_producer: Arc::clone(tap_producer),
             sample_rate: Arc::clone(sample_rate),
+            tap_pushed: Arc::clone(tap_pushed),
             head: PlayHead::default(),
         }
     }
@@ -211,9 +223,11 @@ impl Engine {
             "decoder ready"
         );
         let source = InstanceSource::new(decoder, cancellation.clone());
-        self.output
-            .player()
-            .append(TapSource::new(source, Arc::clone(&self.tap_producer)));
+        self.output.player().append(TapSource::new(
+            source,
+            Arc::clone(&self.tap_producer),
+            Arc::clone(&self.tap_pushed),
+        ));
         Ok(Slot {
             duration_ms,
             sample_rate,

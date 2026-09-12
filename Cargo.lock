@@ -2912,6 +2912,7 @@ dependencies = [
  "mineral-channel-mineral",
  "mineral-channel-netease",
  "mineral-cli",
+ "mineral-client",
  "mineral-config",
  "mineral-log",
  "mineral-media",
@@ -2923,9 +2924,12 @@ dependencies = [
  "mineral-script",
  "mineral-server",
  "mineral-stats",
+ "mineral-task",
+ "mineral-test",
  "mineral-tui",
  "nix",
  "predicates",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -3068,6 +3072,7 @@ dependencies = [
  "mineral-channel-bilibili",
  "mineral-channel-core",
  "mineral-channel-netease",
+ "mineral-client",
  "mineral-config",
  "mineral-log",
  "mineral-model",
@@ -3085,6 +3090,29 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "mineral-client"
+version = "0.5.6"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "mineral-audio",
+ "mineral-channel-core",
+ "mineral-log",
+ "mineral-model",
+ "mineral-protocol",
+ "mineral-task",
+ "mineral-test",
+ "parking_lot",
+ "rustc-hash 2.1.2",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3225,6 +3253,7 @@ dependencies = [
 name = "mineral-protocol"
 version = "0.5.6"
 dependencies = [
+ "async-trait",
  "bincode",
  "bytes",
  "color-eyre",
@@ -3240,6 +3269,8 @@ dependencies = [
  "rustc-hash 2.1.2",
  "serde",
  "serde_json",
+ "strum_macros 0.27.2",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "typed-builder",
@@ -3394,6 +3425,7 @@ dependencies = [
  "kmeans_colors",
  "mineral-audio",
  "mineral-channel-core",
+ "mineral-client",
  "mineral-config",
  "mineral-log",
  "mineral-macros",
@@ -5550,7 +5582,7 @@ version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.26.4",
 ]
 
 [[package]]
@@ -5569,6 +5601,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
  "syn 2.0.117",
 ]
 
@@ -6121,6 +6165,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6131,6 +6185,8 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
@@ -6138,6 +6194,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

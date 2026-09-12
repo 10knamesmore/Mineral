@@ -8,6 +8,7 @@ mod tests;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use mineral_channel_core::MusicChannel;
@@ -73,6 +74,12 @@ struct ManagerInner {
     /// Wakes the admission loop after submit, completion, Stop, or config change.
     wake: Notify,
 
+    /// 明细变更 generation:订阅者被唤醒后拉取快照 / 增量。
+    changes: tokio::sync::watch::Sender<u64>,
+
+    /// 下一个变更 generation。
+    change_seq: AtomicU64,
+
     /// Wakes graceful shutdown waiters after active-attempt changes.
     quiesced: Notify,
 
@@ -113,11 +120,14 @@ impl DownloadManager {
     ///   - `quality`: Quality applied to new submissions.
     ///   - `max_concurrent`: Maximum active Song attempts, validated as positive by config loading.
     pub(crate) fn spawn(runtime: DownloadRuntime, quality: BitRate, max_concurrent: usize) -> Self {
+        let (changes, _changes_rx) = tokio::sync::watch::channel(0_u64);
         let manager = Self {
             inner: Arc::new(ManagerInner {
                 runtime,
                 state: Mutex::new(ManagerState::new(quality, max_concurrent)),
                 wake: Notify::new(),
+                changes,
+                change_seq: AtomicU64::new(0),
                 quiesced: Notify::new(),
                 shutdown: CancellationToken::new(),
             }),
@@ -141,6 +151,22 @@ impl DownloadManager {
         state.max_concurrent = max_concurrent;
         drop(state);
         self.inner.wake.notify_one();
+        self.bump();
+    }
+
+    /// 明细变更订阅端(初值为当前 generation)。
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.changes.subscribe()
+    }
+
+    /// 发布一次明细变更(无订阅者时静默)。
+    fn bump(&self) {
+        let next = self
+            .inner
+            .change_seq
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let _ = self.inner.changes.send(next);
     }
 
     /// Accepts a Song immediately or starts asynchronous playlist expansion.
@@ -154,6 +180,7 @@ impl DownloadManager {
                     let mut state = self.inner.state.lock();
                     state.preparing_playlists = state.preparing_playlists.saturating_add(1);
                 }
+                self.bump();
                 let manager = self.clone();
                 tokio::spawn(async move { manager.expand_playlist(id).await });
             }
@@ -218,6 +245,7 @@ impl DownloadManager {
             "download Stop accepted"
         );
         self.inner.wake.notify_one();
+        self.bump();
         Ok(())
     }
 
@@ -294,6 +322,7 @@ impl DownloadManager {
             state.finish_wave_if_idle();
         }
         self.inner.wake.notify_one();
+        self.bump();
     }
 
     /// Inserts or deduplicates one flat Song row.
@@ -349,6 +378,7 @@ impl DownloadManager {
             "Song download admitted"
         );
         self.inner.wake.notify_one();
+        self.bump();
     }
 
     /// Runs the bounded admission loop until graceful shutdown.
@@ -456,6 +486,8 @@ impl DownloadManager {
                 row.view.speed_bps = 0;
             }
         }
+        drop(state);
+        self.bump();
     }
 
     /// Reconciles one completion and runs after-commit side effects outside the state lock.
@@ -495,6 +527,7 @@ impl DownloadManager {
         }
         self.run_completion_effect(attempt, effect);
         self.inner.wake.notify_one();
+        self.bump();
         self.inner.quiesced.notify_waiters();
     }
 

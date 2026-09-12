@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use color_eyre::eyre::{OptionExt, eyre};
 use mineral_model::BitRate;
-use mineral_persist::ServerStore;
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{DownloadId, DownloadOrigin, DownloadStatus, SongDownloadView};
 use mineral_test::mock::{UrlChannel, serve_once};
@@ -25,7 +24,6 @@ async fn manager(
     playback: PlaybackRegistry,
 ) -> color_eyre::Result<(DownloadManager, tempfile::TempDir)> {
     let dir = tempfile::tempdir()?;
-    let persist = ServerStore::open(&dir.path().join("state.db")).await?;
     let (events, _) = tokio::sync::broadcast::channel(/*capacity*/ 16);
     let runtime = DownloadRuntime {
         music_dir: Some(dir.path().join("music")),
@@ -36,7 +34,6 @@ async fn manager(
             /*enabled*/ false,
             &[],
             /*http*/ None,
-            &persist,
             /*workers*/ 1,
         ),
         notify: crate::notify::Notifier::new(events, /*script*/ None),
@@ -49,6 +46,8 @@ async fn manager(
                 runtime,
                 state: Mutex::new(ManagerState::new(BitRate::Lossless, max_concurrent)),
                 wake: Notify::new(),
+                changes: tokio::sync::watch::channel(0_u64).0,
+                change_seq: std::sync::atomic::AtomicU64::new(0),
                 quiesced: Notify::new(),
                 shutdown: CancellationToken::new(),
             }),

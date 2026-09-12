@@ -14,6 +14,7 @@ use ringbuf::traits::Producer;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 共享 producer 别名:一个 engine 生命期内多次切歌共用同一个 ringbuf 写端。
 ///
@@ -30,6 +31,9 @@ pub(crate) struct TapSource<S> {
     /// 共享 ringbuf 写端。满了 try_push 直接 drop。
     producer: SharedProd,
 
+    /// 累计尝试写入的 mono 样本数(含因环满被丢弃的)。消费方据此辨认上游缺口。
+    pushed: Arc<AtomicU64>,
+
     /// 通道数。`Source::channels` 返回 `NonZero<u16>`,这里缓存原生 u16 方便累加。
     channels: u16,
 
@@ -45,11 +49,12 @@ where
     S: Source<Item = f32>,
 {
     /// 包装 `inner`(采样率由引擎另行在合适时机写 sr 原子,见模块注释)。
-    pub(crate) fn new(inner: S, producer: SharedProd) -> Self {
+    pub(crate) fn new(inner: S, producer: SharedProd, pushed: Arc<AtomicU64>) -> Self {
         let channels = u16::from(inner.channels());
         Self {
             inner,
             producer,
+            pushed,
             channels,
             accum: 0.0,
             samples_in_frame: 0,
@@ -71,6 +76,8 @@ where
         if self.samples_in_frame >= n {
             let avg = self.accum / f32::from(n);
             // 满了就丢,绝不阻塞 mixer 回调线程。lock 非竞争 ≈ 5ns。
+            // 计数在 try_push 之前:丢掉的样本也算进流位置,消费方才能看出缺口。
+            self.pushed.fetch_add(1, Ordering::Relaxed);
             let _ = self.producer.lock().try_push(avg);
             self.accum = 0.0;
             self.samples_in_frame = 0;

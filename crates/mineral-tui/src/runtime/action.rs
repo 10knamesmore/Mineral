@@ -7,8 +7,8 @@
 ///
 /// 分两族:
 /// - **视图动作**:依赖 TUI 本地态(选中 / 视图 / 搜索 / 全屏 / 浮层),进程内执行。
-/// - **领域动作**:转发为 [`mineral_server::Client`] 命令;执行点按下时从 `AppState`
-///   解出具体目标(如选中歌)。Action 本身只带「不依赖运行期状态」的参数(步长等)。
+/// - **领域动作**:转发为 [`Backend`](crate::runtime::backend::Backend) 命令;执行点按下时从
+///   `AppState` 解出具体目标(如选中歌)。Action 本身只带「不依赖运行期状态」的参数(步长等)。
 ///
 /// 不持有 song_id 之类运行期句柄:那是 dispatch 时从选中行解析的,因此同一静态 Action
 /// 可由 default.lua 或用户 config.lua 重映射到不同按键。

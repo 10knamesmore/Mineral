@@ -38,11 +38,8 @@ impl App {
             return;
         };
         let ctx = self.collect_key_context();
-        if let Some(err) = self.client.invoke_action(&name, Some(ctx)) {
-            use crate::components::toast::notifications::{TextTint, tinted_text_item};
-            self.notifications
-                .flash(tinted_text_item(err, TextTint::Error));
-        }
+        // 结论异步回流(完成事件带动作名),失败时提示;按键立即继续。
+        self.client.invoke_action(&name, Some(ctx));
     }
 
     /// 采集按键瞬间的上下文快照(脚本动作的 `ctx` 实参)。
@@ -195,23 +192,16 @@ impl App {
                 self.start_container_play(&container, PlayMode::InsertNext);
             }
             MenuAction::Copy(text) => self.copy_to_clipboard(&text),
-            // 同步等 daemon 渲染(IPC 往返 + Lua 执行,看门狗 hard wall 封顶):
-            // 复制是低频操作,与 invoke_action 同款阻塞语义。
+            // 渲染在 daemon 脚本运行时,结论异步回流(低频操作,按键不等)。
             MenuAction::CopyTemplate { index, ctx } => {
-                match self.client.render_copy_template(index, ctx) {
-                    Ok(text) => self.copy_to_clipboard(&text),
-                    Err(msg) => {
-                        self.notifications
-                            .flash(tinted_text_item(msg, TextTint::Error));
-                    }
-                }
+                self.client.render_copy_template(index, ctx);
             }
         }
     }
 
     /// 把文本写进系统剪贴板:成功 flash `Copied: …`(超长截断),失败 error toast。
     /// 句柄懒初始化、终身持有(理由见字段文档)。
-    fn copy_to_clipboard(&mut self, text: &str) {
+    pub(crate) fn copy_to_clipboard(&mut self, text: &str) {
         if self.clipboard.is_none() {
             match arboard::Clipboard::new() {
                 Ok(cb) => self.clipboard = Some(cb),
@@ -306,17 +296,14 @@ impl App {
         }
     }
 
-    /// 原子替换 queue 并起播 exact target；structured reject 以 toast 反馈。
+    /// 原子替换 queue 并起播 exact target;structured reject 由完成事件提示。
     pub(crate) fn play_queue(
         &mut self,
         songs: Vec<Song>,
         target: usize,
         context: mineral_protocol::QueueContextWire,
     ) {
-        if let Err(error) = self.client.play_queue(songs, target, context) {
-            self.notifications
-                .flash(tinted_text_item(error.to_string(), TextTint::Error));
-        }
+        self.client.play_queue(songs, target, context);
     }
 
     /// 按模式入队一组曲目:Replace = 原子替换队列 + 起播首曲(空则 no-op);

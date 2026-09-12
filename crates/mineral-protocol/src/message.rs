@@ -3,15 +3,12 @@
 //! `Response` 的 variant 由调用方根据自己发出的 [`Request`] 决定预期;
 //! server 处理失败统一返回 [`Response::Error`]。
 
-use mineral_audio::AudioSnapshot;
 use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
-use mineral_task::{Priority, Snapshot, TaskKind};
+use mineral_task::{Priority, TaskKind};
 use serde::{Deserialize, Serialize};
+use strum_macros::IntoStaticStr;
 
-use crate::{
-    DownloadId, DownloadSummary, DownloadTarget, PlayerSync, PlayerVersions, QueueEditOutcome,
-    QueueOp, SongDownloadView,
-};
+use crate::{DownloadId, DownloadTarget, QueueEditOutcome, QueueOp};
 
 /// Atomic PlayQueue request 的 validation error。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,31 +125,11 @@ pub struct SongStatsWire {
     pub loved: bool,
 }
 
-/// [`Request::TagBackfill`] 的回执:回填候选按侧受理计数。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TagBackfillWire {
-    /// 缓存侧(播放缓存索引)受理数。
-    pub cached: u32,
-
-    /// 导出侧(stats 下载记录 + song_meta 枚举)受理数。
-    pub exported: u32,
-}
-
-/// [`Request::TagProgress`] 的回执:打标队列累计进度(daemon 生命周期内单调)。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TagProgressWire {
-    /// 已受理(未被去重丢弃)的任务数。
-    pub submitted: u64,
-
-    /// 已处理完(成功 + 容器不支持跳过 + 失败)的任务数。
-    pub processed: u64,
-
-    /// 其中失败数(写盘错误)。
-    pub failed: u64,
-}
-
-/// Client → Server 命令。每条 [`Request`] 一定有一条对应的 [`Response`]。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// client → daemon 的业务请求。
+///
+/// 转成静态字符串时返回 snake_case 请求名称，供日志标识操作。
+#[derive(Clone, Debug, Serialize, Deserialize, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum Request {
     // ---- 播放控制 ----
     /// 暂停。
@@ -170,15 +147,9 @@ pub enum Request {
     /// 设置音量百分比(0..=100)。
     SetVolume(u8),
 
-    /// 拉一次音频快照。返回 [`Response::AudioSnapshot`]。
-    AudioSnapshot,
-
     // ---- 任务调度 ----
     /// 提交一个任务。返回 [`Response::Ok`]，不等待任务完成。
     SubmitTask(TaskKind, Priority),
-
-    /// 拉一次 scheduler 状态快照。返回 [`Response::TaskSnapshot`]。
-    TaskSnapshot,
 
     // ---- Player 业务 ----(server 持权威 PlayerState)
     /// Selects one song as current playback. Returns [`Response::Ok`].
@@ -242,23 +213,13 @@ pub enum Request {
     /// `n` 键:按当前 mode 切下一首。返回 [`Response::Ok`]。
     NextSong,
 
-    /// 版本门控的播放状态同步:client 报自己已有的版本号(0 = 一无所有),
-    /// server 仅在版本落后时附带对应重段。启动与每 tick 同一条路径。
-    /// 返回 [`Response::PlayerSync`]。
-    PlayerSync(PlayerVersions),
-
-    // ---- PCM 流 ----
-    /// 拉最多 N 个 f32 PCM 样本(单声道,FFT 输入用)。
-    /// 返回 [`Response::PcmData`]。
-    PullPcm(usize),
-
     // ---- 诊断 ----
     /// 拉一次 daemon 进程信息(pid 等)。返回 [`Response::DaemonInfo`]。
     /// 给运维 / 性能剖析定位 daemon 进程用(`mineral status` 会打出 pid)。
     DaemonInfo,
 
     // ---- love / 统计 ----
-    /// 切换一首歌的喜欢(♥)状态。返回 [`Response::LoveToggled`](切换后的新状态)。
+    /// 切换一首歌的喜欢(♥)状态。返回 [`Response::LoveToggled`]，携带切换后的新状态。
     ///
     /// 携带整首 [`Song`] 而非裸 id:server 落 love 的同时把元数据写进 persist,
     /// 跨源聚合视图(全源收藏)才能离线重建出歌名 / 艺人 / 时长。
@@ -272,23 +233,8 @@ pub enum Request {
     /// 提交单曲或歌单下载。返回 [`Response::Ok`]；下载状态由汇总和列表查询提供。
     Download(DownloadTarget),
 
-    /// 拉取每 tick 使用的小型下载汇总。返回 [`Response::DownloadSummary`]。
-    DownloadSummary,
-
-    /// 拉取当前 daemon session 的平铺 Song download 列表。
-    /// 返回 [`Response::DownloadSnapshot`]。
-    DownloadSnapshot,
-
     /// Stop 一个 Song download。已知 identity 返回 [`Response::Ok`]，未知 identity 返回 [`Response::Error`]。
     StopDownload(DownloadId),
-
-    /// 回填存量落盘文件(下载导出 + 播放缓存)的内嵌 metadata tag:server 枚举候选后
-    /// 后台串行打标(与新落盘同一条 tagging 队列)。返回 [`Response::TagBackfill`]
-    /// 的受理计数(打标本身 fire-and-forget,单曲成败见 daemon 日志)。
-    TagBackfill,
-
-    /// 拉一次打标进度快照(回填 CLI 轮询渲染进度用)。返回 [`Response::TagProgress`]。
-    TagProgress,
 
     // ---- 脚本 ----
     /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
@@ -337,18 +283,8 @@ pub enum Request {
         value: crate::StoreValue,
     },
 
-    /// per-song 数值自增。返回 [`Response::StoreValue`](自增后的值)。
-    StoreInc {
-        /// 目标歌。
-        song: SongId,
-        /// 开放键。
-        key: String,
-        /// 增量(可负)。
-        delta: i64,
-    },
-
     /// 拉取脚本 `mineral.bind` 产生的键绑定表(client 启动 / 配置重载后调,
-    /// 合进自己的 keymap)。返回 [`Response::ScriptBinds`](无脚本为空)。
+    /// 合进自己的 keymap)。返回 [`Response::ScriptBinds`]，无脚本时为空。
     ScriptBinds,
 
     // ---- UI 状态上报 ----
@@ -382,27 +318,10 @@ pub enum Request {
 }
 
 /// Server → Client 应答。
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     /// 无返回值的命令成功。
     Ok,
-
-    /// 对应 [`Request::AudioSnapshot`]。
-    AudioSnapshot(AudioSnapshot),
-
-    /// 对应 [`Request::TaskSnapshot`]。
-    TaskSnapshot(Snapshot),
-
-    /// 对应 [`Request::PlayerSync`]。`Box` 避免 enum 体积膨胀。
-    PlayerSync(Box<PlayerSync>),
-
-    /// 对应 [`Request::PullPcm`]。
-    PcmData {
-        /// 0..=N 个样本(可能短于 caller 请求的 N;0 = 当前没数据)。
-        samples: Vec<f32>,
-        /// 当前 audio 采样率(Hz);0 = 还没在播。client 用它驱动 fft。
-        sample_rate: u32,
-    },
 
     /// 对应 [`Request::DaemonInfo`]。
     DaemonInfo {
@@ -422,22 +341,10 @@ pub enum Response {
     /// 对应 [`Request::QuerySongStats`]：当前采集可用时返回统计，否则为 `None`。
     SongStats(Option<SongStatsWire>),
 
-    /// 对应 [`Request::DownloadSummary`]:小型下载汇总。
-    DownloadSummary(DownloadSummary),
-
-    /// 对应 [`Request::DownloadSnapshot`]:平铺 Song download 列表。
-    DownloadSnapshot(Vec<SongDownloadView>),
-
-    /// 对应 [`Request::TagBackfill`]:两侧(缓存 / 导出)的受理计数。
-    TagBackfill(TagBackfillWire),
-
-    /// 对应 [`Request::TagProgress`]:当前打标进度快照。
-    TagProgress(TagProgressWire),
-
     /// 对应 [`Request::ChannelCaps`]:每个已注册 channel 的能力声明。
     ChannelCaps(Vec<(mineral_model::SourceKind, mineral_channel_core::ChannelCaps)>),
 
-    /// 对应 [`Request::StoreGet`] / [`Request::StoreInc`]:标量值(未命中 `Nil`)。
+    /// 对应 [`Request::StoreGet`]:标量值(未命中 `Nil`)。
     StoreValue(crate::StoreValue),
 
     /// 对应 [`Request::ScriptBinds`]:脚本 bind 表(注册顺序;无脚本为空)。

@@ -25,6 +25,7 @@ palette              = { workspace = true }
 parking_lot          = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
+mineral-client       = { workspace = true }
 mineral-config       = { workspace = true }
 mineral-spectrum     = { workspace = true }
 mineral-log          = { workspace = true }

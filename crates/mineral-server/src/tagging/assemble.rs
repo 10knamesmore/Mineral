@@ -6,8 +6,6 @@
 //! 单次运行内不对坏专辑反复重试)。
 //!
 //! 全部 best-effort:单项失败降级为缺字段——对应 tag 不写,其余字段照常落盘。
-//! 但**可重试失败**(网络错误等,非能力缺失)会让整体标记 `degraded`:写引擎据此
-//! 不写打标水印,下次回填自动重试本文件。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,9 +33,9 @@ pub(crate) struct AlbumTags {
     label: Option<String>,
 }
 
-/// 专辑详情缓存:qualified album id → (字段, 是否可重试失败)。
+/// 专辑详情缓存:qualified album id → 字段(`None` = 拉取失败,运行内不再重试)。
 /// worker 共享;一次运行内同一张专辑只拉一次(含失败)。
-pub(crate) type AlbumCache = Arc<Mutex<FxHashMap<String, (Option<AlbumTags>, bool)>>>;
+pub(crate) type AlbumCache = Arc<Mutex<FxHashMap<String, Option<AlbumTags>>>>;
 
 /// 采集一首歌的 [`SongTags`]:自有字段直接映射;专辑 / 歌词 / 封面三路并发补齐。
 ///
@@ -48,19 +46,18 @@ pub(crate) type AlbumCache = Arc<Mutex<FxHashMap<String, (Option<AlbumTags>, boo
 ///   - `album_cache`: 专辑详情缓存(worker 共享)
 ///
 /// # Return:
-///   `(tags, degraded)`:`degraded = true` 表示有「可重试失败」,调用方不应写水印。
+///   采集到的字段集合(缺项即 `None` / 空)。
 pub(crate) async fn collect(
     channel: &dyn MusicChannel,
     http: Option<&reqwest::Client>,
     song: &Song,
     album_cache: &AlbumCache,
-) -> (SongTags, bool) {
+) -> SongTags {
     let (album, lyrics, cover) = tokio::join!(
         fetch_album(channel, song, album_cache),
         fetch_lyrics(channel, song),
         fetch_cover(http, song),
     );
-    let degraded = album.1 || lyrics.1 || cover.1;
     let mut tags = SongTags {
         title: (!song.name.is_empty()).then(|| song.name.clone()),
         artists: song
@@ -69,20 +66,19 @@ pub(crate) async fn collect(
             .map(|a| a.name.clone())
             .collect::<Vec<_>>(),
         album: song.album.as_ref().map(|a| a.name.clone()),
-        lyrics_lrc: lyrics.0,
-        cover: cover.0,
+        lyrics_lrc: lyrics,
+        cover,
         ..SongTags::default()
     };
-    if let Some(album_tags) = album.0 {
+    if let Some(album_tags) = album {
         tags.album_artists = album_tags.artists;
         tags.year = album_tags.year;
         tags.label = album_tags.label;
     }
-    (tags, degraded)
+    tags
 }
 
-/// 拉专辑字段(带缓存 + 限流退避):无专辑引用 → `(None, 非失败)`;`NotSupported` = 能力
-/// 缺失,不算可重试失败。
+/// 拉取并缓存专辑字段;限流时退避重试,最终失败(含能力缺失)记警告并缓存为 `None`。
 ///
 /// # Params:
 ///   - `channel`: 该歌来源的 channel
@@ -90,36 +86,30 @@ pub(crate) async fn collect(
 ///   - `cache`: 专辑详情缓存
 ///
 /// # Return:
-///   `(字段, 是否可重试失败)`。
+///   专辑字段;无专辑引用 / 拉取失败为 `None`。
 async fn fetch_album(
     channel: &dyn MusicChannel,
     song: &Song,
     cache: &AlbumCache,
-) -> (Option<AlbumTags>, bool) {
-    let Some(album_ref) = song.album.as_ref() else {
-        return (None, false);
-    };
+) -> Option<AlbumTags> {
+    let album_ref = song.album.as_ref()?;
     let key = album_ref.id.qualified();
     if let Some(hit) = cache.lock().get(&key) {
         return hit.clone();
     }
     let result = match with_backoff(|| channel.album_detail(&album_ref.id)).await {
-        Ok(album) => (
-            Some(AlbumTags {
-                artists: album
-                    .artists
-                    .iter()
-                    .map(|a| a.name.clone())
-                    .collect::<Vec<_>>(),
-                year: publish_year(album.publish_time_ms).and_then(|y| u32::try_from(y).ok()),
-                label: album.company.clone(),
-            }),
-            false,
-        ),
+        Ok(album) => Some(AlbumTags {
+            artists: album
+                .artists
+                .iter()
+                .map(|a| a.name.clone())
+                .collect::<Vec<_>>(),
+            year: publish_year(album.publish_time_ms).and_then(|y| u32::try_from(y).ok()),
+            label: album.company.clone(),
+        }),
         Err(e) => {
-            let retryable = !matches!(e, ChannelError::NotSupported);
             mineral_log::warn!(target: "tagging", song_id = song.id.as_str(), error = mineral_log::chain(&e), "拉专辑详情失败,专辑字段缺省");
-            (None, retryable)
+            None
         }
     };
     cache.lock().insert(key, result.clone());
@@ -130,17 +120,14 @@ async fn fetch_album(
 /// 不记日志。
 ///
 /// # Return:
-///   `(lrc 文本, 是否可重试失败)`。
-async fn fetch_lyrics(channel: &dyn MusicChannel, song: &Song) -> (Option<String>, bool) {
+///   lrc 文本;无歌词 / 拉取失败为 `None`。
+async fn fetch_lyrics(channel: &dyn MusicChannel, song: &Song) -> Option<String> {
     match with_backoff(|| channel.lyrics(&song.id)).await {
-        Ok(lyrics) if !lyrics.lines.is_empty() => {
-            (Some(mineral_model::to_lrc_string(&lyrics.lines)), false)
-        }
-        Ok(_) => (None, false),
-        Err(ChannelError::NotSupported) => (None, false),
+        Ok(lyrics) if !lyrics.lines.is_empty() => Some(mineral_model::to_lrc_string(&lyrics.lines)),
+        Ok(_) | Err(ChannelError::NotSupported) => None,
         Err(e) => {
             mineral_log::warn!(target: "tagging", song_id = song.id.as_str(), error = mineral_log::chain(&e), "拉歌词失败,歌词字段缺省");
-            (None, true)
+            None
         }
     }
 }
@@ -153,8 +140,7 @@ const BACKOFFS: [Duration; 3] = [
 ];
 
 /// 限流退避包装:channel 调用命中 `RateLimited` 时按 [`BACKOFFS`] 退避重试,其余结果
-/// (成功 / 其他错误)原样返回。限流是服务端临时状态——立刻当失败会让本文件永远
-/// 拿不到水印、每次回填都白跑一遍。
+/// (成功 / 其他错误)原样返回。限流是服务端临时状态,立刻当失败会让本文件本轮缺字段。
 ///
 /// # Params:
 ///   - `call`: channel 调用工厂(重试时重新调用)
@@ -196,10 +182,10 @@ where
 /// 拉封面:GET `cover_url` 字节(mime 留待写引擎按字节 sniff)。
 ///
 /// # Return:
-///   `(图片字节, 是否可重试失败)`。
-async fn fetch_cover(http: Option<&reqwest::Client>, song: &Song) -> (Option<Vec<u8>>, bool) {
+///   图片字节;无封面 / 拉取失败为 `None`。
+async fn fetch_cover(http: Option<&reqwest::Client>, song: &Song) -> Option<Vec<u8>> {
     let (Some(http), Some(MediaUrl::Remote(url))) = (http, &song.cover_url) else {
-        return (None, false);
+        return None;
     };
     let result = async {
         let resp = http
@@ -212,10 +198,10 @@ async fn fetch_cover(http: Option<&reqwest::Client>, song: &Song) -> (Option<Vec
     }
     .await;
     match result {
-        Ok(bytes) => (Some(bytes.to_vec()), false),
+        Ok(bytes) => Some(bytes.to_vec()),
         Err(e) => {
             mineral_log::warn!(target: "tagging", song_id = song.id.as_str(), error = mineral_log::chain(&e), "拉封面失败,封面字段缺省");
-            (None, true)
+            None
         }
     }
 }
@@ -308,7 +294,7 @@ mod tests {
         Arc::new(Mutex::new(FxHashMap::default()))
     }
 
-    /// 全链路采集:自有字段 + 专辑 + 歌词 + 封面(本地一次性 server)全部到位,无 degraded。
+    /// 全链路采集:自有字段 + 专辑 + 歌词 + 封面(本地一次性 server)全部到位。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn collect_full() -> color_eyre::Result<()> {
         let cover_url = serve_once(b"PNG-BYTES".to_vec()).await?;
@@ -318,9 +304,7 @@ mod tests {
             ..CannedChannel::empty()
         };
         let http = reqwest::Client::new();
-        let (tags, degraded) =
-            collect(&channel, Some(&http), &song(Some(cover_url)), &cache()).await;
-        assert!(!degraded, "全部成功不应 degraded");
+        let tags = collect(&channel, Some(&http), &song(Some(cover_url)), &cache()).await;
         assert_eq!(tags.title.as_deref(), Some("晴天"));
         assert_eq!(tags.artists, vec!["周杰伦", "第二艺人"]);
         assert_eq!(tags.album.as_deref(), Some("叶惠美"));
@@ -358,19 +342,17 @@ mod tests {
         Ok(())
     }
 
-    /// 单项失败降级:专辑详情 / 歌词 / 封面全挂,自有字段不受影响;
-    /// 封面 GET 失败是可重试失败 → degraded(不写水印)。
+    /// 单项失败降级为缺字段:专辑详情 / 歌词 / 封面全挂,自有字段不受影响。
     #[tokio::test]
     async fn failures_degrade_to_missing_fields() -> color_eyre::Result<()> {
         // 封面指向无人监听的端口 → GET 必失败。
-        let (tags, degraded) = collect(
+        let tags = collect(
             &CannedChannel::empty(),
             Some(&reqwest::Client::new()),
             &song(Some("http://127.0.0.1:9/dead.jpg".parse()?)),
             &cache(),
         )
         .await;
-        assert!(degraded, "封面 GET 失败应标 degraded(不写水印)");
         assert_eq!(tags.title.as_deref(), Some("晴天"));
         assert_eq!(tags.artists, vec!["周杰伦", "第二艺人"]);
         assert_eq!(tags.album.as_deref(), Some("叶惠美"));
@@ -379,21 +361,6 @@ mod tests {
         assert_eq!(tags.label, None, "专辑详情失败 → 厂牌缺省");
         assert_eq!(tags.lyrics_lrc, None, "歌词不支持 → 歌词缺省");
         assert_eq!(tags.cover, None, "封面 GET 失败 → 封面缺省");
-        Ok(())
-    }
-
-    /// 能力缺失(NotSupported)不算可重试失败 → 不 degraded(照写水印,不反复重试)。
-    #[tokio::test]
-    async fn not_supported_is_not_degraded() -> color_eyre::Result<()> {
-        let (tags, degraded) = collect(
-            &CannedChannel::empty(),
-            /*http*/ None,
-            &song(/*cover*/ None),
-            &cache(),
-        )
-        .await;
-        assert!(!degraded, "NotSupported 是能力缺失,不应 degraded");
-        assert_eq!(tags.title.as_deref(), Some("晴天"));
         Ok(())
     }
 

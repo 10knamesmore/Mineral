@@ -1,42 +1,32 @@
-//! [`ClientHandle`]:[`Client`] 契约的同进程实现。
+//! [`ClientHandle`]:daemon 内部业务调用面。
 
-use mineral_audio::AudioSnapshot;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    DownloadId, DownloadSummary, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
-    QueueContextWire, QueueEditOutcome, QueueOp, SongDownloadView, SongStatsWire,
+    DownloadId, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
+    QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
-use mineral_task::{Priority, Snapshot, TaskEvent, TaskKind};
+use mineral_task::{Priority, TaskEvent, TaskKind};
 
-use super::contract::Client;
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
-use crate::pcm::PcmPuller;
 use crate::player::PlayerCore;
 
-/// 同进程 client handle:持 [`PlayerCore`] + [`PcmPuller`] 的 Arc 句柄,
-/// 所有调用直接 forward。`Clone` 廉价。
+/// 同进程 client handle:持 [`PlayerCore`] 的 Arc 句柄,所有调用直接 forward。
+/// `Clone` 廉价。
 #[derive(Clone)]
 pub struct ClientHandle {
     /// Player 业务核心(队列/播放模式/任务调度)。
     player: PlayerCore,
 
-    /// PCM 旁路读端,频谱 UI 用。
-    pcm: PcmPuller,
-
     /// 本 handle 归属的连接 id:wire 接入经 [`Self::for_connection`] 每连接
-    /// 唯一,per-conn 状态(终端上报 / PCM 游标)以它归属。
+    /// 唯一,per-conn 状态(终端上报)以它归属。
     conn: u64,
 }
 
 impl ClientHandle {
-    /// 同进程构造,Server 启动后用持有的 `player` / `pcm` 直接拼成 handle。
-    pub(crate) fn new(player: PlayerCore, pcm: PcmPuller) -> Self {
-        Self {
-            player,
-            pcm,
-            conn: 0,
-        }
+    /// 同进程构造,Server 启动后用持有的 `player` 直接拼成 handle。
+    pub(crate) fn new(player: PlayerCore) -> Self {
+        Self { player, conn: 0 }
     }
 
     /// 派生某条 wire 连接专属的 handle(serve 层 accept 时调)。
@@ -200,7 +190,7 @@ impl ClientHandle {
     ///   本次编辑的结果。
     pub(crate) async fn queue_edit_async(&self, op: QueueOp) -> QueueEditOutcome {
         let QueueOp::ApplyTransform { index, selected } = op else {
-            return <Self as Client>::queue_edit(self, op);
+            return self.queue_edit(&op);
         };
         let (queue, current) = self
             .player
@@ -332,10 +322,9 @@ impl ClientHandle {
     }
 
     /// 本连接断开的收尾(serve 层连接收尾调):移除其终端上报(全部离线时
-    /// `terminal` 属性回 None)与 PCM 游标。
+    /// `terminal` 属性回 None)。
     pub(crate) fn connection_closed(&self) {
         self.player.clear_terminal_state(self.conn);
-        self.pcm.drop_cursor(self.conn);
     }
 
     /// 拉取脚本 bind 表(serve 层处理 `ScriptBinds` 用);无脚本 / 线程退出为空。
@@ -344,31 +333,6 @@ impl ClientHandle {
             return Vec::new();
         };
         script.script_binds().await.unwrap_or_default()
-    }
-
-    /// per-song 数值自增(serve 层处理 `StoreInc` 用);成功推 `StoreChanged`。
-    ///
-    /// # Params:
-    ///   - `id`: 目标歌
-    ///   - `key`: 开放键
-    ///   - `delta`: 增量(可负)
-    ///
-    /// # Return:
-    ///   自增后的值。
-    pub(crate) async fn store_inc_async(
-        &self,
-        id: &SongId,
-        key: &str,
-        delta: i64,
-    ) -> color_eyre::Result<mineral_protocol::StoreValue> {
-        let value = self
-            .player
-            .persist()
-            .scope(id.namespace())
-            .kv_inc(id, key, delta)
-            .await?;
-        self.player.notify().store_changed(id, key);
-        Ok(value)
     }
 
     /// 查询一首歌的本地播放统计，转成 protocol DTO。
@@ -415,70 +379,59 @@ impl ClientHandle {
             },
         }))
     }
-
-    /// 存量回填:枚举缓存 + 导出候选,逐文件投递打标队列。计数语义(受理数)见
-    /// [`crate::tagging::backfill`]。
-    ///
-    /// # Return:
-    ///   两侧(缓存 / 导出)受理计数,转 protocol DTO。
-    pub(crate) async fn tag_backfill_async(
-        &self,
-    ) -> color_eyre::Result<mineral_protocol::TagBackfillWire> {
-        let counts = crate::tagging::backfill(&self.player).await?;
-        Ok(mineral_protocol::TagBackfillWire {
-            cached: counts.cached,
-            exported: counts.exported,
-        })
-    }
-
-    /// 打标进度快照(回填 CLI 轮询渲染用),转 protocol DTO。
-    ///
-    /// # Return:
-    ///   受理 / 处理完 / 失败三元组(累计计数;开关关闭恒零)。
-    pub(crate) fn tag_progress(&self) -> mineral_protocol::TagProgressWire {
-        let p = self.player.tagging().progress();
-        mineral_protocol::TagProgressWire {
-            submitted: p.submitted,
-            processed: p.processed,
-            failed: p.failed,
-        }
-    }
 }
 
-impl Client for ClientHandle {
-    fn pause(&self) {
+impl ClientHandle {
+    /// 暂停播放。
+    pub(crate) fn pause(&self) {
         // 传输面(执行 + 埋点)统一走 PlayerCore 的 transport 方法,client 只穿透 actor。
         self.player.pause_playback(mineral_stats::Actor::User);
     }
-    fn resume(&self) {
+
+    /// 从暂停恢复。
+    pub(crate) fn resume(&self) {
         self.player.resume_playback(mineral_stats::Actor::User);
     }
-    fn stop(&self) {
+
+    /// 停止当前曲目。
+    pub(crate) fn stop(&self) {
         self.player.stop_playback();
     }
-    fn seek(&self, position_ms: u64) {
+
+    /// 跳到绝对位置(ms)。
+    pub(crate) fn seek(&self, position_ms: u64) {
         self.player
             .seek_playback(position_ms, mineral_stats::Actor::User);
     }
-    fn set_volume(&self, pct: u8) {
+
+    /// 设置音量百分比(0..=100)。
+    pub(crate) fn set_volume(&self, pct: u8) {
         self.player
             .set_playback_volume(pct, mineral_stats::Actor::User);
     }
-    fn audio_snapshot(&self) -> AudioSnapshot {
-        self.player.audio().snapshot()
-    }
 
-    fn play_song(&self, song: Song) {
+    /// 直接播放一首歌。
+    pub(crate) fn play_song(&self, song: &Song) {
         // 直接改播会顶掉在播曲:先按 skip 结算它(next/prev/EOF 各有自己的结算,唯独这
         // 条显式点播路径需要在此结算,否则被打断曲的 plays 行丢失)。
         self.player.settle_interrupted();
         self.player.play_song(
-            &song,
+            song,
             mineral_stats::PlayOrigin::Explicit,
             mineral_stats::Actor::User,
         );
     }
-    fn play_queue(
+
+    /// 原子替换 queue 并起播 request-local target occurrence。
+    ///
+    /// # Params:
+    ///   - `songs`: 新队列
+    ///   - `target`: `songs` 内的 0-based queue index
+    ///   - `context`: 队列语境(埋点 provenance)
+    ///
+    /// # Return:
+    ///   成功起播返回 `Ok(())`;invalid queue 返回 structured error,状态不变。
+    pub(crate) fn play_queue(
         &self,
         songs: Vec<Song>,
         target: usize,
@@ -501,7 +454,13 @@ impl Client for ClientHandle {
         });
         Ok(())
     }
-    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
+
+    /// 插播:插到当前曲之后,不动队列级 context 与当前曲。
+    ///
+    /// # Params:
+    ///   - `song`: 待插播的歌
+    ///   - `context`: 该曲来源语境
+    pub(crate) fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
         let id = song.id.clone();
         self.player
             .queue_insert_next(song, queue_context_from_wire(context));
@@ -511,7 +470,13 @@ impl Client for ClientHandle {
             count: 1,
         });
     }
-    fn queue_append(&self, song: Song, context: QueueContextWire) {
+
+    /// 追加到队列末尾,不动队列级 context 与当前曲。
+    ///
+    /// # Params:
+    ///   - `song`: 待追加的歌
+    ///   - `context`: 该曲来源语境
+    pub(crate) fn queue_append(&self, song: Song, context: QueueContextWire) {
         let id = song.id.clone();
         self.player
             .queue_append(song, queue_context_from_wire(context));
@@ -521,104 +486,102 @@ impl Client for ClientHandle {
             count: 1,
         });
     }
-    fn queue_edit(&self, op: QueueOp) -> QueueEditOutcome {
+
+    /// 队列结构编辑:删除 / 重排 / 批量清理 / 撤销。
+    ///
+    /// # Params:
+    ///   - `op`: 待执行的操作
+    ///
+    /// # Return:
+    ///   本次编辑的结果。
+    pub(crate) fn queue_edit(&self, op: &QueueOp) -> QueueEditOutcome {
         let before = self.player.with_state(|st| st.queue.len());
-        let outcome = self.player.queue_edit(&op);
+        let outcome = self.player.queue_edit(op);
         if matches!(outcome, QueueEditOutcome::Applied) {
             let after = self.player.with_state(|st| st.queue.len());
             self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
-                op: stats_queue_op(&op),
-                song: edited_song_id(&op),
+                op: stats_queue_op(op),
+                song: edited_song_id(op),
                 // 纯重排不改长度,记 1 条「受影响」;批量清理记实际删除条数。
                 count: i64::try_from(before.abs_diff(after).max(1)).unwrap_or(i64::MAX),
             });
         }
         outcome
     }
-    fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
+
+    /// 全部已注册 channel 的能力声明。
+    pub(crate) fn channel_caps(&self) -> Vec<(SourceKind, ChannelCaps)> {
         self.player.channel_caps()
     }
-    fn cycle_play_mode(&self) {
+
+    /// `m` 键:cycle PlayMode。
+    pub(crate) fn cycle_play_mode(&self) {
         // mode_changes 埋点在 PlayerCore 单点(cycle / 直设 / 脚本共用)。
         self.player.cycle_play_mode(mineral_stats::Actor::User);
     }
-    fn prev_or_restart(&self) {
+
+    /// `p` 键:进度 > 阈值时回开头,否则跳上一首。
+    pub(crate) fn prev_or_restart(&self) {
         self.player.prev_or_restart(mineral_stats::Actor::User);
     }
-    fn next_song(&self) {
+
+    /// `n` 键:按 PlayMode 切下一首。
+    pub(crate) fn next_song(&self) {
         self.player.next_song(mineral_stats::Actor::User);
     }
-    fn player_sync(&self, known: PlayerVersions) -> PlayerSync {
+
+    /// 版本门控的播放状态同步。
+    ///
+    /// # Params:
+    ///   - `known`: client 已持有的版本号(0 = 一无所有)
+    pub(crate) fn player_sync(&self, known: PlayerVersions) -> PlayerSync {
         self.player.sync(known)
     }
 
-    fn submit_task(&self, kind: TaskKind, priority: Priority) {
+    /// 播放状态变更订阅端。
+    pub(crate) fn state_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.player.state_changes()
+    }
+
+    /// 提交一个任务。
+    ///
+    /// # Params:
+    ///   - `kind`: 任务类型
+    ///   - `priority`: 优先级
+    pub(crate) fn submit_task(&self, kind: TaskKind, priority: Priority) {
         self.player.submit_task(kind, priority);
     }
-    fn task_snapshot(&self) -> Snapshot {
-        self.player.task_snapshot()
-    }
 
-    fn pull_pcm(&self, n: usize) -> (Vec<f32>, u32) {
-        self.pcm.pull(self.conn, n)
-    }
-
-    fn toggle_love(&self, song: Song) -> bool {
-        // trait 面是同步调用,真实 toggle 要异步写库,故 fire-and-forget 触发完整
-        // toggle(查+翻转+set_loved),返回占位;调用方应乐观更新本地 loved 态,
-        // 不依赖此返回值。wire 接入走 [`Self::toggle_love_async`] 拿真实结果。
-        let this = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = this.toggle_love_async(&song).await {
-                mineral_log::warn!(
-                    target: "client",
-                    error = mineral_log::chain(&e),
-                    "toggle_love 失败"
-                );
-            }
-        });
-        false // 占位,不保证准确
-    }
-
-    fn request_song_stats(&self, id: SongId) {
-        let this = self.clone();
-        tokio::spawn(async move {
-            let count = match this.query_song_stats_async(&id).await {
-                Ok(stats) => stats.map(|stats| stats.play_count),
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "client",
-                        song_id = id.as_str(),
-                        source = ?id.namespace(),
-                        error = mineral_log::chain(&e),
-                        "local play count query failed"
-                    );
-                    None
-                }
-            };
-            this.player
-                .notify()
-                .task_event(TaskEvent::LocalPlayCountFetched { song_id: id, count });
-        });
-    }
-
-    fn download(&self, target: DownloadTarget) {
+    /// 提交单曲 / 歌单下载。
+    ///
+    /// # Params:
+    ///   - `target`: 下载目标
+    pub(crate) fn download(&self, target: DownloadTarget) {
         self.player.download(target)
     }
 
-    fn download_summary(&self) -> DownloadSummary {
-        self.player.download_summary()
+    /// Stop 一个下载。
+    ///
+    /// # Params:
+    ///   - `id`: 下载 id
+    pub(crate) fn stop_download(&self, id: &DownloadId) -> color_eyre::Result<()> {
+        self.player.stop_download(id)
     }
 
-    fn download_snapshot(&self) -> Vec<SongDownloadView> {
-        self.player.download_snapshot()
-    }
-
-    fn stop_download(&self, id: DownloadId) -> color_eyre::Result<()> {
-        self.player.stop_download(&id)
-    }
-
-    fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {
+    /// 上报终端 UI 状态。
+    ///
+    /// # Params:
+    ///   - `rows`: 终端行数
+    ///   - `cols`: 终端列数
+    ///   - `fullscreen`: 是否全屏播放态
+    ///   - `focused`: 终端是否持有焦点
+    pub(crate) fn report_terminal_state(
+        &self,
+        rows: u16,
+        cols: u16,
+        fullscreen: bool,
+        focused: bool,
+    ) {
         let toggled = self.player.set_terminal_state(
             self.conn,
             crate::props::TerminalReport {

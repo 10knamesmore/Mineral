@@ -16,12 +16,14 @@ mod view;
 
 use std::sync::Arc;
 
-use mineral_server::Client;
+use mineral_client::Client;
+use mineral_protocol::{Subscription, SubscriptionTopic};
 
 use app::App;
 use image::ImageEngine;
 use image::fetch::CoverFetcher;
 use image::graphics::TerminalGraphics;
+use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue};
 use runtime::ui::prefs::{UiPrefs, open_client_store};
 use tui::Tui;
 
@@ -63,7 +65,16 @@ pub async fn run(
     let socket = mineral_paths::socket_path()?;
     let kill_on_exit = *cfg.tui().behavior().kill_spawned_daemon_on_exit();
     let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
-    let result = run_app(Arc::new(client), cover_fetcher, ui_prefs, cfg, &warnings);
+    let client = Arc::new(client);
+    let backend = Arc::new(build_backend(Arc::clone(&client)).await);
+    let result = run_app(
+        backend,
+        Arc::clone(&client),
+        cover_fetcher,
+        ui_prefs,
+        cfg,
+        &warnings,
+    );
     // client 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
     // (handle 为 None)留着不动。
     if let Some(handle) = handle {
@@ -72,15 +83,57 @@ pub async fn run(
     result
 }
 
-/// 拿到一个 client(经 IPC 连 daemon),进 alternate screen,探测终端图片能力,
-/// 跑 [`App::run`] 直到退出,最后还原终端。
+/// 申请常驻订阅、拉齐自举数据并组装生产后端。
 ///
 /// # Params:
-///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档等,`App::new` 内落地)
-///   - `cfg`: 已加载的全局配置(主题 / 键表 / 各段手感在 `App::new` 内落地)
-///   - `warnings`: 配置降级告警,启动后经通知层 toast 呈现
+///   - `client`: 已连接的会话 client
+///
+/// # Return:
+///   后端实现(完成事件队列挂在它身上)。
+async fn build_backend(client: Arc<Client>) -> ClientBackend {
+    // 常驻订阅:播放 / 锚点 / 任务 / 下载摘要 / 事件类别 / PCM。
+    for topic in [
+        SubscriptionTopic::Player,
+        SubscriptionTopic::Playback,
+        SubscriptionTopic::Tasks,
+        SubscriptionTopic::DownloadsSummary,
+        SubscriptionTopic::Pcm,
+        SubscriptionTopic::Events(Subscription::Toast),
+        SubscriptionTopic::Events(Subscription::Lifecycle),
+        SubscriptionTopic::Events(Subscription::Config),
+        SubscriptionTopic::Events(Subscription::WindowTitle),
+        SubscriptionTopic::Events(Subscription::Task),
+    ] {
+        let _ = client.subscribe(topic);
+    }
+    // 自举:能力表 + 脚本绑定(失败时退化为空表,UI 照常可用)。
+    let bootstrap = BackendBootstrap {
+        channel_caps: client
+            .channel_caps()
+            .await
+            .into_success()
+            .unwrap_or_default(),
+        script_binds: client
+            .script_binds()
+            .await
+            .into_success()
+            .unwrap_or_default(),
+    };
+    let completions = CompletionQueue::new();
+    ClientBackend::new(client, bootstrap, completions)
+}
+
+/// 进 alternate screen,探测终端图片能力,跑 [`App::run`] 直到退出,最后还原终端。
+///
+/// # Params:
+///   - `backend`: 后端端口(生产实现为 client 会话)
+///   - `client`: 持有至 UI 退出的会话句柄
+///   - `ui_prefs`: 已读回初值的 UI 偏好句柄
+///   - `cfg`: 已加载的全局配置
+///   - `warnings`: 配置降级告警
 fn run_app(
-    client: Arc<dyn Client>,
+    backend: Arc<dyn Backend>,
+    client: Arc<Client>,
     cover_fetcher: CoverFetcher,
     ui_prefs: UiPrefs,
     cfg: Arc<mineral_config::Config>,
@@ -97,7 +150,7 @@ fn run_app(
     // 往 stdio 写探测 escape 序列并读取响应。
     let graphics = TerminalGraphics::query();
     let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics);
-    let mut app = App::new(client, images, tui.launch_cursor(), cfg, ui_prefs);
+    let mut app = App::new(backend, images, tui.launch_cursor(), cfg, ui_prefs);
     // 启动期配置提示卡:config.lua 缺失提醒 init;降级告警与日志双轨呈现。
     let config_path = mineral_paths::config_dir()
         .ok()
@@ -105,5 +158,6 @@ fn run_app(
     app.notify_startup_config(config_path.as_deref(), warnings);
     let result = app.run(&mut tui);
     tui.exit()?;
+    drop(client);
     result
 }

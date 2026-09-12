@@ -28,16 +28,16 @@
 
 ## TUI 集成测试基建
 
-`mineral-tui` 是 client/server 架构(App 每帧从 server 拉 `PlayerSnapshot` 灌进本地镜像)。测试「按键 → 状态 → 跨 tick → 渲染」链路时使用以下基建:
+`mineral-tui` 是 client 架构(App 每帧从 `mineral_client` 镜像投影出 `AppState`)。测试「按键 → 状态 → 跨 tick → 渲染」链路时使用以下基建:
 
-* **`mineral_tui::test_support::TestClient`**:no-op 实现 `mineral_server::Client`(读取类返 `Default`、命令类静默吞),不接真 daemon / server。
+* **`mineral_tui::test_support::TestClient`**:进程内实现 `mineral_tui::runtime::backend::Backend`,读取测试注入的镜像(默认空),按操作记录探针或投递预设 `Completion`;未模拟的操作为空操作,无需连接 daemon。
 * **`mineral_tui::test_support::app_with_queue(len, current_idx) -> App`**:接 `TestClient`、不启动图片 worker、填好 queue 的 `App`,**普通同步构造,不需 tokio runtime**。新场景照抄它再加 fixture。
 * **`ImageEngine::disabled()`**(`crates/mineral-tui/src/image/hub.rs`):测试专用的 null object,不启动图片 worker,让 `App::new` 的同步 fixture 不依赖 tokio runtime。生产环境由 `run_app` 构造并注入完整图片引擎。
 
-写法:测试放 `app.rs` 等的 `#[cfg(test)] mod tests` 内(同模块可直接调私有 `handle_event` / `apply_player_snapshot` / `toggle_queue`):
+写法:测试放 `app.rs` 等的 `#[cfg(test)] mod tests` 内(同模块可直接调私有 `handle_event` / `apply_player_sync` / `toggle_queue`):
 
 * 喂键:`app.handle_event(&Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty())))`(`KeyEvent::new` 默认 `kind = Press`,正好过事件入口的 Press 过滤)。
-* 模拟 server tick:手搓 `PlayerSnapshot`(全 pub 字段 + `..Default::default()`)调 `apply_player_snapshot`。
+* 模拟一帧同步:手搓 `PlayerSync`(全 pub 字段 + `..Default::default()`)调 `apply_player_sync`;播放锚点直接改 `app.state.playback`。
 * 断言状态走 `assert_eq!`,视觉回归再补一张 `view::draw` / 组件 `draw` 的 insta 快照。
 
 **这套专抓单元测试碰不到的时序 bug**:用户用按键改了 UI 状态、下一帧 tick 又从 server snapshot 覆盖回去(典型:UI 光标 vs server 的播放位置锚点共用字段)。参考 `app.rs` 的 `queue_nav_moves_and_survives_snapshot_tick` / `queue_cursor_decoupled_*`。

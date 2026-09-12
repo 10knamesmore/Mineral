@@ -16,6 +16,7 @@ mineral-audio           = { workspace = true }
 mineral-channel-core    = { workspace = true }
 mineral-channel-netease = { workspace = true }
 mineral-channel-bilibili = { workspace = true }
+mineral-client          = { workspace = true }
 mineral-config          = { workspace = true }
 mineral-log             = { workspace = true }
 mineral-model           = { workspace = true }

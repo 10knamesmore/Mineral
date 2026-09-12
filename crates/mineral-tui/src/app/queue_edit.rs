@@ -1,13 +1,13 @@
 //! queue 浮层发起的队列结构编辑:定位构造、请求发送、回执处理。
 //!
-//! 队列是后端权威态,这里**不本地预改**队列内容——新样子随后由 server 推送带来。
+//! 队列是后端权威态,这里**不本地预改**队列内容——新样子随后由订阅推送带来。
 //! 本地抢跑会在编辑被拒时留下一个服务端并不存在的画面。
+//! 回执(含过期定位)由完成事件异步回流,不在按键路径等待。
 
-use mineral_protocol::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
+use mineral_protocol::{QueueAnchor, QueueOp, QueuePos};
 
 use super::App;
 use crate::components::popup::OverlayAction;
-use crate::components::toast::notifications::{TextTint, tinted_text_item};
 
 impl App {
     /// 处理 queue 浮层产出的编辑类动作。
@@ -69,20 +69,12 @@ impl App {
         self.apply_queue_edit(build(anchor));
     }
 
-    /// 送一次队列编辑并按回执提示。
+    /// 送一次队列编辑(回执由完成事件处理,不在按键路径等)。
     ///
     /// # Params:
     ///   - `op`: 待执行的操作
     pub(crate) fn apply_queue_edit(&mut self, op: QueueOp) {
-        match self.client.queue_edit(op) {
-            // 不自动重试:重试会在用户看不见的情况下作用到另一首歌上。
-            QueueEditOutcome::Stale => {
-                self.notifications.flash(tinted_text_item(
-                    "queue changed elsewhere, nothing done".to_owned(),
-                    TextTint::Error,
-                ));
-            }
-            QueueEditOutcome::Applied | QueueEditOutcome::NoOp => {}
-        }
+        // 不自动重试:重试会在用户看不见的情况下作用到另一首歌上。
+        self.client.queue_edit(op);
     }
 }

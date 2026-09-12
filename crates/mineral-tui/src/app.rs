@@ -1,8 +1,7 @@
 //! 顶层 [`App`] 状态与同步主事件循环。
 //!
-//! 播放、队列、自动续播与预取由 `mineral_server::PlayerCore` 负责；App 转发用户意图并
-//! 渲染 server 状态镜像。每帧 tick 携带已持版本请求 [`PlayerSync`]，只应用版本落后的
-//! 状态段；按键通过 `client.play_song`、`cycle_play_mode` 等高层命令发往 server。
+//! 播放、队列、自动续播与预取由 daemon 负责;App 从本地订阅镜像读状态,
+//! 把用户意图入队交给后端,绘制与输入处理无需等待 IPC 应答。操作结论经完成事件回流。
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -10,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mineral_protocol::PlayerSync;
-use mineral_server::Client;
 use ratatui::layout::Position;
 
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, OverlayStack};
@@ -23,6 +21,7 @@ use crate::player_actions::PlayMode;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
+use crate::runtime::backend::Backend;
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::state::{AppState, PageKind};
 use crate::runtime::ui::prefs::UiPrefs;
@@ -30,6 +29,7 @@ use crate::runtime::window_title::{TitleContext, WindowTitle};
 use crate::tui::Tui;
 use crate::view::draw;
 
+mod backend_sync;
 mod channel_search;
 mod cover_transition;
 mod menus;
@@ -92,10 +92,16 @@ pub struct App {
     /// 上一次 tick 时间。
     pub last_tick: Instant,
 
-    /// Server client:所有「调命令 / 拉 snapshot / 拉事件」都走它。
-    /// 实现是跨进程 `RemoteClient`,经 [`Client`] trait 抽象。**player 业务在
-    /// server 端**;App 只 forward 意图。
-    pub(crate) client: Arc<dyn Client>,
+    /// 操作完成事件队列(后端写入,每帧 drain)。
+    completions: Arc<crate::runtime::backend::CompletionQueue>,
+
+    /// Downloads 明细订阅是否处于打开状态(浮层生命周期驱动)。
+    downloads_subscribed: bool,
+
+    /// Server client:所有「调命令 / 读镜像 / 取事件」都走它。
+    /// 实现是 [`crate::runtime::backend::ClientBackend`](经 [`Backend`] 抽象);
+    /// **player 业务在 daemon 端**;App 只 forward 意图并读订阅镜像。
+    pub(crate) client: Arc<dyn Backend>,
 
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
     pub(crate) notifications: Notifications,
@@ -139,18 +145,20 @@ impl App {
     ///   - `cfg`: 已加载的全局配置(`Arc` 共享只读)
     ///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档在此落进 state)
     pub fn new(
-        client: Arc<dyn Client>,
+        client: Arc<dyn Backend>,
         images: ImageEngine,
         launch_anchor: Option<Position>,
         cfg: Arc<mineral_config::Config>,
         ui_prefs: UiPrefs,
     ) -> Self {
+        let completions = Arc::clone(client.completions());
         let tui_cfg = cfg.tui();
         let theme_base = Theme::from_config(tui_cfg.theme());
         let theme = Arc::new(theme_base);
         let mut keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        // 脚本 `mineral.bind` 的键合进查表(daemon 模式经 client 拉真表)。
-        keymap.append_script_binds(&client.script_binds());
+        // 脚本 `mineral.bind` 的键合进查表(连接后一次拉齐的自举数据)。
+        let bootstrap = client.bootstrap();
+        keymap.append_script_binds(&bootstrap.script_binds);
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         let accent_fade = crate::render::accent::AccentFade::new(
@@ -168,8 +176,8 @@ impl App {
         );
         let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg, images);
-        // 各源能力声明:启动拉一次进镜像,UI 据此画入口(经 client,daemon 模式走 IPC)。
-        state.caps = client.channel_caps().into_iter().collect();
+        // 各源能力声明:连接后自举一次进镜像,UI 据此画入口。
+        state.caps = bootstrap.channel_caps.into_iter().collect();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.browse.lyric_view.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
@@ -191,6 +199,8 @@ impl App {
             transition: None,
             stop_daemon_on_quit: false,
             last_tick: Instant::now(),
+            completions,
+            downloads_subscribed: false,
             client,
             notifications,
             download_notifier: DownloadNotifier::new(),
@@ -218,10 +228,8 @@ impl App {
     /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
     /// (节奏由配置 `animation.frame_tick_ms` 决定,默认 ~60fps)。
     pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        // 启动时同步一次(versions 初始为 0 → 必然全量),连上即看到 server 状态;
-        // 看到 server 状态;与 tick 路径同一条 sync 通道,无特殊分支。
-        let sync = self.client.player_sync(self.state.player.versions);
-        self.apply_player_sync(sync);
+        // 启动时先灌一次镜像(订阅已在连接后建立,首帧通常已到达)。
+        self.sync_from_backend();
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
         self.transition = Some(Transition::expanding(self.transition_ticks()));
@@ -302,24 +310,12 @@ impl App {
                     continue;
                 }
                 self.drain_push_events();
-                let snap = self.client.audio_snapshot();
-                self.state.playback.apply_audio_snapshot(snap);
+                self.drain_completions();
+                self.sync_from_backend();
                 self.update_spectrum();
                 self.state.tick_frame();
                 self.tick_overlays();
-                let sync = self.client.player_sync(self.state.player.versions);
-                self.apply_player_sync(sync);
                 self.tick_images();
-                self.state.tasks_snapshot = self.client.task_snapshot();
-                // Small summary 常态轮询；完整 rows 仅在 Downloads overlay 存在时拉取。
-                let summary = self.client.download_summary();
-                self.download_notifier
-                    .feed(&mut self.notifications, &summary);
-                self.state.downloads_summary = summary;
-                if self.overlays.has_downloads() {
-                    self.state.downloads = self.client.download_snapshot();
-                    self.overlays.clamp_downloads(self.state.downloads.len());
-                }
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
                 self.state.now.set(chrono::Local::now());
@@ -410,14 +406,15 @@ impl App {
             covers_pending = s.images.loading_count(),
             liked,
             queue_len = s.player.queue.len(),
+            events_dropped = self.client.events_dropped(),
             "client status"
         );
     }
 
-    /// 把 server 的版本门控同步灌进 AppState 镜像。每 `TICK` 调一次。
+    /// 把 client 镜像的版本门控同步灌进 AppState 投影。每帧调一次。
     ///
     /// 核心语义:**重段缺席 ≠ 清空**——`None` 表示「与已有版本一致」,镜像原地保持;
-    /// 只有 `Some` 才整体替换。轻段(play_mode / play_origin)每 tick 照常灌。
+    /// 只有 `Some` 才整体替换。轻段(play_mode / play_origin)随重段一起到达。
     fn apply_player_sync(&mut self, sync: PlayerSync) {
         self.state.player.versions = sync.versions;
         self.state.playback.play_origin = sync.play_origin;
@@ -647,14 +644,7 @@ impl App {
             }
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::StopDownload(id) => {
-                if let Err(error) = self.client.stop_download(id.clone()) {
-                    mineral_log::warn!(
-                        target: "download",
-                        download_id = %id,
-                        error = mineral_log::chain(&error),
-                        "download Stop failed"
-                    );
-                }
+                self.client.stop_download(id);
             }
             OverlayAction::PlayQueueIndex(i) => {
                 if let Some(song) = self.state.player.queue.get(i).cloned() {
@@ -721,7 +711,6 @@ impl App {
 
     /// Opens the docked flat Song downloads overlay.
     fn open_downloads(&mut self) {
-        self.state.downloads = self.client.download_snapshot();
         self.overlays.push(OverlayKind::downloads());
     }
 
@@ -974,8 +963,8 @@ mod tests {
         let mut app = app_with_queue(2, /*current_idx*/ 0)?;
         let sync = PlayerSync {
             versions: mineral_protocol::PlayerVersions {
-                queue: 7,
-                current: 9,
+                queue: mineral_protocol::SegmentVersion::new(7),
+                current: mineral_protocol::SegmentVersion::new(9),
             },
             queue: Some(QueueSync {
                 queue: endserenading(4),
@@ -985,8 +974,14 @@ mod tests {
         };
         app.apply_player_sync(sync);
         assert_eq!(app.state.player.queue.len(), 4, "queue 重段应整体替换");
-        assert_eq!(app.state.player.versions.queue, 7);
-        assert_eq!(app.state.player.versions.current, 9);
+        assert_eq!(
+            app.state.player.versions.queue,
+            mineral_protocol::SegmentVersion::new(7)
+        );
+        assert_eq!(
+            app.state.player.versions.current,
+            mineral_protocol::SegmentVersion::new(9)
+        );
         Ok(())
     }
 

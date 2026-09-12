@@ -19,6 +19,7 @@ use mineral_protocol::{
 };
 use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskKind};
 use parking_lot::Mutex;
+use tokio::sync::watch;
 
 use crate::download;
 use crate::gapless;
@@ -81,6 +82,9 @@ pub(crate) struct Inner {
 
     /// 播放上下文(队列/当前歌/歌词/预拉状态)。
     pub(crate) state: Mutex<State>,
+
+    /// 播放状态变更订阅端(订阅者被唤醒后按自己已知版本拉取重段)。
+    pub(crate) state_changes: watch::Receiver<u64>,
 
     /// 已转发给 client 的最新 finished seq;auto-next 监听它。
     last_seen_finished_seq: AtomicU64,
@@ -207,7 +211,6 @@ impl PlayerCore {
             *config.download().tagging(),
             &channels,
             tagging_http.as_ref(),
-            &persist,
             *config.download().tagging_workers(),
         );
         let library = crate::library::Library::new(
@@ -233,6 +236,7 @@ impl PlayerCore {
             *config.download().quality(),
             *config.download().max_concurrent(),
         );
+        let (publisher, state_changes) = crate::state::StatePublisher::new();
         let inner = Arc::new(Inner {
             audio,
             scheduler,
@@ -249,6 +253,7 @@ impl PlayerCore {
             ui_state: Mutex::new(crate::props::TerminalStates::default()),
             config_host: crate::config_host::ConfigHost::new(config_tree),
             state: Mutex::new(State::empty()),
+            state_changes,
             last_seen_finished_seq: AtomicU64::new(0),
             envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
             library,
@@ -270,14 +275,20 @@ impl PlayerCore {
                 *config.favorites_backfill_max_concurrent(),
             ),
         });
+        inner.state.lock().publisher = Some(publisher);
         let me = Self { inner };
         let bg = me.clone();
         tokio::spawn(async move { bg.background_loop().await });
         me
     }
 
+    /// 播放状态变更订阅端(会话发布器被唤醒后按自己已知版本拉取重段)。
+    pub(crate) fn state_changes(&self) -> watch::Receiver<u64> {
+        self.inner.state_changes.clone()
+    }
+
     /// 版本门控同步:client 报已持版本号,仅落后部分以重段返回(语义见 [`PlayerSync`])。
-    /// `known = 0` 时等价旧的全量 snapshot,启动 / tick 同一条路径。
+    /// `known = 0` 时发送完整快照,启动 / tick 同一条路径。
     pub fn sync(&self, known: PlayerVersions) -> PlayerSync {
         self.inner.state.lock().sync(known)
     }
@@ -377,6 +388,11 @@ impl PlayerCore {
     /// Returns the current flat Song download snapshot.
     pub(crate) fn download_snapshot(&self) -> Vec<SongDownloadView> {
         self.inner.downloads.snapshot()
+    }
+
+    /// 下载明细变更订阅端(领域发布器用)。
+    pub(crate) fn download_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.downloads.changes()
     }
 
     /// Submits a Song or playlist to the session download manager.

@@ -38,11 +38,9 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::Stop => Recorded("plays"),
         Request::Seek(..) => Recorded("seeks"),
         Request::SetVolume(..) => Recorded("volume_changes"),
-        Request::AudioSnapshot => NotAnEvent("轮询读:音频状态快照"),
         Request::SubmitTask(..) => {
             NotAnEvent("任务提交;取数事件在 task 终态记,见 audit_fetch_kind")
         }
-        Request::TaskSnapshot => NotAnEvent("轮询读:任务快照"),
         Request::PlaySong(..) => Recorded("plays"),
         Request::PlayQueue { .. } => Recorded("queue_ops"),
         Request::QueueInsertNext { .. } => Recorded("queue_ops"),
@@ -53,23 +51,15 @@ fn audit_request(req: &Request) -> TrackingDecision {
         // 切上首=skip 记 plays;回曲首(超阈值)分支另记 seeks,主归属取 plays。
         Request::PrevOrRestart => Recorded("plays"),
         Request::NextSong => Recorded("plays"),
-        Request::PlayerSync(..) => NotAnEvent("读:播放器版本同步"),
-        Request::PullPcm(..) => NotAnEvent("读:拉 PCM 数据"),
         Request::DaemonInfo => NotAnEvent("读:daemon 信息"),
         Request::ToggleLove(..) => Recorded("love_changes"),
         Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询，事实来自 stats.db"),
         Request::Download(..) => Recorded("downloads"),
-        Request::DownloadSummary => NotAnEvent("轮询读:下载汇总"),
-        Request::DownloadSnapshot => NotAnEvent("按需读:下载明细"),
         Request::StopDownload(..) => NotAnEvent("session control:只写 structured log"),
-        // 回填复用 tagging 队列,不记录独立行为事件;单曲成败只写日志。
-        Request::TagBackfill => NotAnEvent("维护操作:存量文件回填打标"),
-        Request::TagProgress => NotAnEvent("轮询读:打标进度"),
         Request::InvokeAction { .. } => Recorded("action_invocations"),
         Request::RenderCopyTemplate { .. } => Recorded("copy_renders"),
         Request::StoreGet { .. } => NotAnEvent("读:per-song KV 读"),
         Request::StoreSet { .. } => Recorded("store_writes"),
-        Request::StoreInc { .. } => Recorded("store_writes"),
         Request::ScriptBinds => NotAnEvent("读:脚本键位绑定查询"),
         Request::TerminalState { .. } => Recorded("fullscreen_changes"),
         Request::Shutdown => Recorded("app_lifecycle"),
@@ -164,18 +154,18 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
         BehaviorEvent::PlaylistOp { .. } => "playlist 写 task 终态(events.rs)",
         BehaviorEvent::Fetch { .. } => "channel_fetch 终态(events.rs)",
         BehaviorEvent::Download { .. } => "download.rs record_download(三种结局)",
-        BehaviorEvent::CopyRender { .. } => "serve.rs RenderCopyTemplate",
-        BehaviorEvent::ActionInvocation { .. } => "serve.rs InvokeAction",
+        BehaviorEvent::CopyRender { .. } => "ipc dispatch 的 RenderCopyTemplate 慢路径",
+        BehaviorEvent::ActionInvocation { .. } => "ipc dispatch 的 InvokeAction 慢路径",
         BehaviorEvent::ConfigOverride { .. } => "script_bridge ConfigOverride",
-        BehaviorEvent::StoreWrite { .. } => "serve.rs / script_bridge 的 StoreSet / StoreInc",
+        BehaviorEvent::StoreWrite { .. } => {
+            "ipc dispatch 的 StoreSet / script_bridge 的 StoreSet / StoreInc"
+        }
         BehaviorEvent::Spawn { .. } => "script_bridge 子进程收束回调",
         BehaviorEvent::BusMessage { .. } => "script_bridge 事件总线",
-        BehaviorEvent::FullscreenChange { .. } => "serve.rs TerminalState",
-        BehaviorEvent::ConnectionReject { .. } => "client.rs record_connection_reject",
-        BehaviorEvent::ClientConnection { .. } => "serve.rs ConnGuard drop",
-        BehaviorEvent::AppLifecycle { .. } => {
-            "recorder.daemon_lifecycle + serve.rs client 生命周期"
-        }
+        BehaviorEvent::FullscreenChange { .. } => "ipc dispatch 的 TerminalState",
+        BehaviorEvent::ConnectionReject { .. } => "ipc::handshake record_connection_reject",
+        BehaviorEvent::ClientConnection { .. } => "ipc::ConnGuard drop",
+        BehaviorEvent::AppLifecycle { .. } => "recorder.daemon_lifecycle + ipc 会话生命周期",
     }
 }
 

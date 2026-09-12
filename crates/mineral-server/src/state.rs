@@ -1,14 +1,51 @@
 //! 服务端持有的「播放上下文」内部状态。[`crate::player::PlayerCore`] 用 `Mutex<State>` 包它,
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use mineral_model::{Envelope, PlaybackMediaInfo, Song, SongId};
 use mineral_playback::DirectMedia;
 use mineral_protocol::{
     CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
+    SegmentVersion,
 };
+use tokio::sync::watch;
 
 use crate::gapless::PrefetchState;
 use crate::playback_instance::PlaybackSlot;
+
+/// 播放状态变更发布器:queue / current 版本每次推进都唤醒订阅者。
+///
+/// 只发布单调 generation。每个订阅者被唤醒后按自己的已知版本读取状态,
+/// 仅克隆版本不一致的重段。
+pub(crate) struct StatePublisher {
+    /// 最新 generation(初始 0 = 无变更)。
+    tx: watch::Sender<u64>,
+
+    /// 下一个 generation 值。
+    next: AtomicU64,
+}
+
+impl StatePublisher {
+    /// 创建发布器与订阅端。
+    pub(crate) fn new() -> (Arc<Self>, watch::Receiver<u64>) {
+        let (tx, rx) = watch::channel(0_u64);
+        (
+            Arc::new(Self {
+                tx,
+                next: AtomicU64::new(0),
+            }),
+            rx,
+        )
+    }
+
+    /// 发布一次变更(无订阅者时静默)。
+    fn publish(&self) {
+        let value = self.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        let _ = self.tx.send(value);
+    }
+}
 
 /// 一次队列编辑前的队列全貌,供撤销还原。
 ///
@@ -85,12 +122,16 @@ pub(crate) struct State {
     /// (见 [`Self::invalidate_prefetch`])。
     pub(crate) prefetch_vetoed: Vec<usize>,
 
-    /// queue + original_queue 的版本号。从 1 起步(0 = client 一无所有),变更处
-    /// 经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否附带 queue 重段。
-    pub(crate) queue_version: u64,
+    /// queue + original_queue 的版本号。从 [`SegmentVersion::FIRST`] 起步(0 = client
+    /// 一无所有),变更处经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否
+    /// 附带 queue 重段。
+    pub(crate) queue_version: SegmentVersion,
 
     /// current_song / media facts / lyrics 的版本号,语义同 `queue_version`。
-    pub(crate) current_version: u64,
+    pub(crate) current_version: SegmentVersion,
+
+    /// 变更发布器(单测的 `State::empty` 为 `None`)。
+    pub(crate) publisher: Option<Arc<StatePublisher>>,
 }
 
 impl State {
@@ -114,8 +155,9 @@ impl State {
             current_envelope: None,
             prefetch: PrefetchState::default(),
             prefetch_vetoed: Vec::new(),
-            queue_version: 1,
-            current_version: 1,
+            queue_version: SegmentVersion::FIRST,
+            current_version: SegmentVersion::FIRST,
+            publisher: None,
         }
     }
 
@@ -197,12 +239,21 @@ impl State {
 
     /// queue / original_queue 发生变更后调用,推进版本号让 client 下次同步收到重段。
     pub(crate) fn bump_queue(&mut self) {
-        self.queue_version += 1;
+        self.queue_version = self.queue_version.next();
+        self.publish();
     }
 
     /// current_song / resolved / lyrics 发生变更后调用,推进版本号。
     pub(crate) fn bump_current(&mut self) {
-        self.current_version += 1;
+        self.current_version = self.current_version.next();
+        self.publish();
+    }
+
+    /// 唤醒状态订阅者(未接入发布器时为空操作)。
+    fn publish(&self) {
+        if let Some(publisher) = &self.publisher {
+            publisher.publish();
+        }
     }
 
     /// 收下一份算好 / db 命中的包络:仅当它归属**当前曲**才落 slot 并 bump `current`
@@ -219,7 +270,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use color_eyre::eyre::eyre;
-    use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions};
+    use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions, SegmentVersion};
     use mineral_test::song;
     use pretty_assertions::assert_eq;
 
@@ -240,8 +291,8 @@ mod tests {
     fn sync_zero_versions_gets_full_payload() -> color_eyre::Result<()> {
         let st = populated();
         let sync = st.sync(PlayerVersions::default());
-        assert_eq!(sync.versions.queue, 1);
-        assert_eq!(sync.versions.current, 1);
+        assert_eq!(sync.versions.queue, SegmentVersion::FIRST);
+        assert_eq!(sync.versions.current, SegmentVersion::FIRST);
         assert_eq!(sync.cursor, PlayCursor::InQueue(1));
         assert_eq!(sync.play_mode, PlayMode::RepeatAll);
         let q = sync.queue.ok_or_else(|| eyre!("queue 重段应存在"))?;
@@ -257,8 +308,8 @@ mod tests {
     fn sync_matching_versions_light_only() {
         let st = populated();
         let sync = st.sync(PlayerVersions {
-            queue: 1,
-            current: 1,
+            queue: SegmentVersion::FIRST,
+            current: SegmentVersion::FIRST,
         });
         assert!(sync.queue.is_none());
         assert!(sync.current.is_none());
@@ -272,10 +323,10 @@ mod tests {
         let mut st = populated();
         st.bump_queue();
         let sync = st.sync(PlayerVersions {
-            queue: 1,
-            current: 1,
+            queue: SegmentVersion::FIRST,
+            current: SegmentVersion::FIRST,
         });
-        assert_eq!(sync.versions.queue, 2);
+        assert_eq!(sync.versions.queue, SegmentVersion::new(2));
         assert!(sync.queue.is_some());
         assert!(sync.current.is_none());
     }
@@ -286,10 +337,10 @@ mod tests {
         let mut st = populated();
         st.bump_current();
         let sync = st.sync(PlayerVersions {
-            queue: 1,
-            current: 1,
+            queue: SegmentVersion::FIRST,
+            current: SegmentVersion::FIRST,
         });
-        assert_eq!(sync.versions.current, 2);
+        assert_eq!(sync.versions.current, SegmentVersion::new(2));
         assert!(sync.queue.is_none());
         assert!(sync.current.is_some());
     }

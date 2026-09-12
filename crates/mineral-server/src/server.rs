@@ -14,10 +14,11 @@ use tokio::sync::{Notify, broadcast};
 
 use crate::client::ClientHandle;
 use crate::config::ServerConfig;
+use crate::ipc::{ConnRegistry, SessionServices};
 use crate::media_cache::MediaCache;
-use crate::pcm::PcmPuller;
+use crate::pcm_relay::PcmRelay;
 use crate::player::PlayerCore;
-use crate::serve;
+use crate::publisher::DomainPublishers;
 
 /// Catalog channels and playback providers assembled for one server process.
 #[non_exhaustive]
@@ -36,21 +37,18 @@ pub struct Server {
     /// PlayerCore — 业务状态 + 自治 auto-next + events 中继。
     player: PlayerCore,
 
-    /// PCM 中继 — 收纳 SpectrumTap,client 通过 pull_pcm 拉。
-    pcm: PcmPuller,
+    /// 领域发布器 — 会话订阅的共享快照源。
+    publishers: DomainPublishers,
 
-    /// 在线连接注册表,与 [`serve::run`] 的 accept loop 共享:心跳据此报
-    /// 在线 client 数。
-    connections: Arc<serve::ConnRegistry>,
+    /// 在线连接注册表,与 accept loop 共享:心跳据此报在线 client 数。
+    connections: Arc<ConnRegistry>,
 
     /// Event 推送 hub:daemon 内生产者经
-    /// [`Server::event_sink`] 拿发送端;每条 client 连接握手后 subscribe,按
-    /// 订阅集过滤下发。无订阅者时 send 失败即丢(advisory 语义)。
+    /// [`Server::event_sink`] 拿发送端;会话按订阅集过滤下发。
     events: broadcast::Sender<Event>,
 
     /// daemon 级关停通知:client 经 IPC 发 `Request::Shutdown` 时唤醒,daemon
-    /// 入口经 [`Server::shutdown_requested`] 等待。`Notify` 自带 permit 语义,
-    /// 先 notify 后 await 也不丢;重复 Shutdown 幂等。
+    /// 入口经 [`Server::shutdown_requested`] 等待。
     shutdown: Arc<Notify>,
 }
 
@@ -114,8 +112,9 @@ impl Server {
             .daemon_started(audio_backend, session_restored);
         // 第一次 initial loads — 为「daemon 起来无 client 也能后台 prefetch」考虑。
         player.refresh_initial_loads();
-        let pcm = PcmPuller::spawn(spectrum_tap);
-        let connections = Arc::new(serve::ConnRegistry::new());
+        let pcm = PcmRelay::spawn(spectrum_tap, player.audio().clone());
+        let publishers = crate::publisher::spawn(&player, events.clone(), pcm);
+        let connections = Arc::new(ConnRegistry::new());
         tokio::spawn(heartbeat(
             player.clone(),
             Arc::clone(&connections),
@@ -124,7 +123,7 @@ impl Server {
         mineral_log::debug!(target: "server", "server components ready");
         Ok(Self {
             player,
-            pcm,
+            publishers,
             connections,
             events,
             shutdown: Arc::new(Notify::new()),
@@ -149,7 +148,7 @@ impl Server {
 
     /// 拿一个 client handle。clone 廉价(全 Arc 内部),可任意复制给多处调用。
     pub fn client(&self) -> ClientHandle {
-        ClientHandle::new(self.player.clone(), self.pcm.clone())
+        ClientHandle::new(self.player.clone())
     }
 
     /// 接入系统媒体服务(Linux MPRIS):上报当前播放、响应媒体键 / 桌面控件。
@@ -174,25 +173,23 @@ impl Server {
         self.shutdown.notified().await;
     }
 
-    /// IPC accept loop:每条新 connection 走握手守门 + [`mineral_protocol::Frame`]
-    /// 管线(id 配对应答 + 订阅过滤的 Event 下推)。多 client:连接数不设限,
-    /// 每条独立 task / writer / 订阅。
+    /// IPC accept loop:每条新 connection 走会话握手 + 结构化消息管线(请求合批
+    /// 配对 + 按订阅主题的状态发布)。多 client:连接数不设限,每条独立 task /
+    /// writer / 订阅泵。
     ///
     /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
-    /// ——数据现状已由握手重放兜底,这里是连接时顺手保鲜远端数据
-    /// (dedup 命中既存任务时无副作用)。
+    /// ——数据现状已由订阅初始快照兜底,这里是连接时顺手保鲜远端数据。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
-        serve::run(
-            listener,
-            self.client(),
-            Arc::clone(&self.connections),
-            self.events.clone(),
-            on_connect,
-            Arc::clone(&self.shutdown),
-        )
-        .await
+        let services = Arc::new(SessionServices {
+            client: self.client(),
+            registry: Arc::clone(&self.connections),
+            publishers: self.publishers.clone(),
+            shutdown: Arc::clone(&self.shutdown),
+            on_connect: Arc::new(on_connect),
+        });
+        crate::ipc::run(listener, services).await
     }
 }
 
@@ -269,7 +266,7 @@ async fn restore_last_session(player: &PlayerCore) -> bool {
 ///
 /// # Params:
 ///   - `interval_secs`: 心跳间隔(秒,配置 `daemon.heartbeat_secs`)
-async fn heartbeat(player: PlayerCore, connections: Arc<serve::ConnRegistry>, interval_secs: u64) {
+async fn heartbeat(player: PlayerCore, connections: Arc<ConnRegistry>, interval_secs: u64) {
     let start = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
     loop {

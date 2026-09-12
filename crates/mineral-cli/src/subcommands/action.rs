@@ -4,7 +4,10 @@
 //! 错误(未注册 / 脚本未启用 / 执行失败)原样打到 stderr 并非零退出。
 
 use color_eyre::eyre::bail;
-use mineral_protocol::{OneshotClient, Request, Response};
+use mineral_client::Client;
+use mineral_client::connection::ClientConfig;
+use mineral_client::operation::Outcome;
+use mineral_protocol::SocketWire;
 
 /// `mineral action` 入口:连 daemon socket(含握手)→ 触发动作 → 按结果退出。
 ///
@@ -13,20 +16,22 @@ use mineral_protocol::{OneshotClient, Request, Response};
 ///   - `args`: 位置实参,原样带给动作回调(Lua 侧 `ctx.args`)
 pub async fn run(name: &str, args: &[String]) -> color_eyre::Result<()> {
     let socket_path = mineral_paths::socket_path()?;
-    let mut client = OneshotClient::connect(&socket_path).await?;
+    let wire = SocketWire::connect(&socket_path).await?;
+    let client =
+        Client::from_wire(Box::new(wire), "mineral_action", ClientConfig::default()).await?;
+    // CLI 无界面,采不到按键上下文。
     match client
-        .request(Request::InvokeAction {
-            name: name.to_owned(),
-            ctx: None, // CLI 无界面,采不到按键上下文
-            args: args.to_vec(),
-        })
-        .await?
+        .invoke_action(name, /*ctx*/ None, args.to_vec())
+        .await
     {
-        Response::Ok => {
+        Outcome::Applied(()) => {
             println!("action {name:?} done");
             Ok(())
         }
-        Response::Error(msg) => bail!("{msg}"),
-        other => bail!("unexpected response: {other:?}"),
+        Outcome::Accepted(()) => {
+            println!("action {name:?} accepted");
+            Ok(())
+        }
+        Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => bail!("{detail}"),
     }
 }

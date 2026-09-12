@@ -19,10 +19,6 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem};
 
-/// 打标水印(写入 `EncodedBy`):标记「本文件已被当前版本打标流程完整处理过」,回填据此
-/// 跳过增量。**tag 结构变更(增删字段)时必须 bump 版本号**,老文件由此自然重打。
-const TAG_WATERMARK: &str = "mineral-tag/1";
-
 /// 一首歌的内嵌 metadata 集合。字段为 `None` / 空 vec = 不写对应 tag(采集方
 /// 单项失败即降级为缺字段,见 `super::assemble`)。
 #[derive(Clone, Debug, Default)]
@@ -70,19 +66,13 @@ pub(crate) enum WriteOutcome {
 /// # Params:
 ///   - `path`: 目标音频文件
 ///   - `tags`: 要写的 tag 集合
-///   - `watermark`: 是否写打标水印(`EncodedBy`);采集有「可重试失败」时传 `false`,
-///     让下次回填重试本文件(见 [`TAG_WATERMARK`])
 ///
 /// # Return:
 ///   写入成功 / 容器不支持;copy、探测 IO、写盘、rename 失败返回 `Err`。
-pub(crate) fn write_tags(
-    path: &Path,
-    tags: &SongTags,
-    watermark: bool,
-) -> color_eyre::Result<WriteOutcome> {
+pub(crate) fn write_tags(path: &Path, tags: &SongTags) -> color_eyre::Result<WriteOutcome> {
     let tmp = path.with_extension("part-tag");
     std::fs::copy(path, &tmp).wrap_err_with(|| format!("复制到临时副本失败 {}", tmp.display()))?;
-    match tag_in_place(&tmp, tags, watermark) {
+    match tag_in_place(&tmp, tags) {
         Ok(WriteOutcome::Tagged) => {
             std::fs::rename(&tmp, path)
                 .wrap_err_with(|| format!("rename 回目标失败 {}", path.display()))?;
@@ -105,11 +95,10 @@ pub(crate) fn write_tags(
 /// # Params:
 ///   - `path`: 临时副本路径(可原地改写)
 ///   - `tags`: 要写的 tag 集合
-///   - `watermark`: 是否写打标水印
 ///
 /// # Return:
 ///   写入成功 / 容器不支持;打开、探测、写盘失败返回 `Err`。
-fn tag_in_place(path: &Path, tags: &SongTags, watermark: bool) -> color_eyre::Result<WriteOutcome> {
+fn tag_in_place(path: &Path, tags: &SongTags) -> color_eyre::Result<WriteOutcome> {
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -131,9 +120,6 @@ fn tag_in_place(path: &Path, tags: &SongTags, watermark: bool) -> color_eyre::Re
         .cloned()
         .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
     fill_tag(&mut tag, tags, file_type);
-    if watermark {
-        tag.insert_text(ItemKey::EncodedBy, TAG_WATERMARK.to_owned());
-    }
     // save_to 内部从**当前偏移**重新探测容器(guess_inner 以 stream_position 为起点),
     // 上面的 read() 已把偏移推到文件中部——不 rewind,FLAC magic / MP4 atom 全读岔。
     // 别把这句挪进 save_to 之后,也别指望 lofty 替你复位。
@@ -247,30 +233,6 @@ fn collapse_multi_value(ilst: &mut Ilst, ident: [u8; 4], values: &[String]) {
     if let Some(atom) = Atom::from_collection(AtomIdent::Fourcc(ident), data) {
         ilst.replace_atom(atom);
     }
-}
-
-/// 探测文件是否已带当前版本打标水印(回填增量跳过的判据)。
-///
-/// # Params:
-///   - `path`: 音频文件路径
-///
-/// # Return:
-///   `true` = 已带当前版本水印(跳过);打不开 / 探测失败 / 无水印 / 旧版本均 `false`。
-pub(crate) fn has_watermark(path: &Path) -> bool {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let Ok(probed) = Probe::new(&mut file).guess_file_type() else {
-        return false;
-    };
-    let Ok(tagged) = probed.read() else {
-        return false;
-    };
-    tagged
-        .primary_tag()
-        .and_then(|t| t.get_string(&ItemKey::EncodedBy).map(str::to_owned))
-        .as_deref()
-        == Some(TAG_WATERMARK)
 }
 
 /// 按 magic bytes sniff 图片 mime(不信任 URL 后缀)。
@@ -450,10 +412,7 @@ mod tests {
     #[test]
     fn roundtrip_mp3() -> color_eyre::Result<()> {
         let (_dir, path) = stage(MP3, "tone.mp3")?;
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &full_tags())?, WriteOutcome::Tagged);
         assert_full_tags(&path, "mp3")?;
         assert_multi_value_generic(&path, "mp3")
     }
@@ -461,10 +420,7 @@ mod tests {
     #[test]
     fn roundtrip_flac() -> color_eyre::Result<()> {
         let (_dir, path) = stage(FLAC, "tone.flac")?;
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &full_tags())?, WriteOutcome::Tagged);
         assert_full_tags(&path, "flac")?;
         assert_multi_value_generic(&path, "flac")
     }
@@ -472,10 +428,7 @@ mod tests {
     #[test]
     fn roundtrip_m4a() -> color_eyre::Result<()> {
         let (_dir, path) = stage(M4A, "tone.m4a")?;
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &full_tags())?, WriteOutcome::Tagged);
         assert_full_tags(&path, "m4a")?;
         assert_multi_value_mp4(&path)
     }
@@ -484,10 +437,7 @@ mod tests {
     #[test]
     fn roundtrip_adts_via_prepended_id3v2() -> color_eyre::Result<()> {
         let (_dir, path) = stage(ADTS, "tone.aac")?;
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &full_tags())?, WriteOutcome::Tagged);
         assert_full_tags(&path, "adts")?;
         assert_multi_value_generic(&path, "adts")
     }
@@ -498,10 +448,7 @@ mod tests {
     fn replace_is_atomic_for_existing_readers() -> color_eyre::Result<()> {
         let (_dir, path) = stage(MP3, "tone.mp3")?;
         let mut old_reader = std::fs::File::open(&path)?;
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &full_tags())?, WriteOutcome::Tagged);
         let mut old_bytes = Vec::new();
         old_reader.read_to_end(&mut old_bytes)?;
         assert_eq!(old_bytes, MP3, "旧 fd 应读到原始未打 tag 内容");
@@ -513,7 +460,7 @@ mod tests {
     fn garbage_is_skipped_untouched() -> color_eyre::Result<()> {
         let (_dir, path) = stage(b"NOT-AUDIO-GARBAGE", "garbage.bin")?;
         assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
+            write_tags(&path, &full_tags())?,
             WriteOutcome::SkippedUnsupported
         );
         assert_eq!(std::fs::read(&path)?, b"NOT-AUDIO-GARBAGE", "原文件应不变");
@@ -521,24 +468,6 @@ mod tests {
             !path.with_extension("part-tag").exists(),
             "跳过后应无残留副本"
         );
-        Ok(())
-    }
-
-    /// 水印:`watermark: true` 写入后 `has_watermark` 命中(回填将跳过);`false` 不写。
-    #[test]
-    fn watermark_marks_tagged_files() -> color_eyre::Result<()> {
-        let (_dir, path) = stage(MP3, "tone.mp3")?;
-        assert!(!has_watermark(&path), "新文件应无水印");
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ false)?,
-            WriteOutcome::Tagged
-        );
-        assert!(!has_watermark(&path), "watermark: false 不应留水印");
-        assert_eq!(
-            write_tags(&path, &full_tags(), /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
-        assert!(has_watermark(&path), "写入后应带当前版本水印");
         Ok(())
     }
 
@@ -554,7 +483,7 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("应有父目录"))?
             .to_path_buf();
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555))?;
-        let result = write_tags(&path, &full_tags(), /*watermark*/ true);
+        let result = write_tags(&path, &full_tags());
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755))?;
         assert!(result.is_err(), "只读目录应报错");
         assert_eq!(std::fs::read(&path)?, MP3, "原文件应不变");
@@ -572,10 +501,7 @@ mod tests {
         // 合法 webp 头(RIFF....WEBP;内容无所谓,写引擎不解析图片)。
         tags.cover = Some(b"RIFF\x1A\x00\x00\x00WEBPVP8 ".to_vec());
         let (_dir, path) = stage(M4A, "tone.m4a")?;
-        assert_eq!(
-            write_tags(&path, &tags, /*watermark*/ true)?,
-            WriteOutcome::Tagged
-        );
+        assert_eq!(write_tags(&path, &tags)?, WriteOutcome::Tagged);
         let mut file = std::fs::File::open(&path)?;
         let tagged = Probe::new(&mut file).guess_file_type()?.read()?;
         let tag = tagged

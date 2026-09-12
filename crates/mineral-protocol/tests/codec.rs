@@ -8,16 +8,16 @@ use mineral_model::{
 use mineral_protocol::{
     CopyTemplateCtx, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary,
     DownloadTarget, DownloadWave, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef,
-    QueueSync, Request, Response, ScriptBind, SongDownloadView, SongStatsWire, StoreValue,
-    ViewKind, framed, recv, send,
+    QueueSync, Request, Response, ScriptBind, SegmentVersion, SongDownloadView, SongStatsWire,
+    StoreValue, ViewKind, framed, recv, send,
 };
-use mineral_task::{ChannelFetchKind, Priority, Snapshot, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 use tokio::io::duplex;
 
-/// 同一值经 serde_json 往返,断言 Debug 保真。codec 可换的守卫(与 tests/frame.rs
-/// 的 `dual_codec_roundtrip` 同约定):wire 类型只许依赖 serde derive,不许绑死
+/// 同一值经 serde_json 往返,断言 Debug 保真。codec 可换的守卫(会话层同类守卫见
+/// tests/session_codec.rs):wire 类型只许依赖 serde derive,不许绑死
 /// bincode。framed bincode 路径由调用方覆盖。
 fn json_round_trips<T>(value: &T) -> color_eyre::Result<()>
 where
@@ -41,6 +41,24 @@ async fn req_round_trips(req: Request) -> color_eyre::Result<()> {
     let want = format!("{req:?}");
     send(&mut sender, &req).await?;
     let got: Request = recv(&mut receiver)
+        .await?
+        .ok_or_else(|| eyre!("frame missing"))?;
+    assert_eq!(format!("{got:?}"), want);
+    Ok(())
+}
+
+/// 同 [`req_round_trips`],任意 serde 载荷版(会话更新载荷等)。
+async fn value_round_trips<T>(value: T) -> color_eyre::Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
+{
+    json_round_trips(&value)?;
+    let (a, b) = duplex(64 * 1024);
+    let mut sender = framed(a);
+    let mut receiver = framed(b);
+    let want = format!("{value:?}");
+    send(&mut sender, &value).await?;
+    let got: T = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
     assert_eq!(format!("{got:?}"), want);
@@ -87,11 +105,7 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
 }
 
 #[tokio::test]
-async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
-    let (a, b) = duplex(64 * 1024);
-    let mut sender = framed(a);
-    let mut receiver = framed(b);
-
+async fn round_trip_response_playback_payload() -> color_eyre::Result<()> {
     let snap = AudioSnapshot {
         playing: true,
         position_ms: 12_345,
@@ -107,17 +121,7 @@ async fn round_trip_response_audio_snapshot() -> color_eyre::Result<()> {
         next_ready: true,
         sample_rate_hz: 44_100,
     };
-    let resp = Response::AudioSnapshot(snap);
-    json_round_trips(&resp)?;
-    send(&mut sender, &resp).await?;
-    let got: Response = recv(&mut receiver)
-        .await?
-        .ok_or_else(|| eyre!("frame missing"))?;
-    if let Response::AudioSnapshot(s) = got {
-        assert_eq!(s, snap);
-    } else {
-        return Err(eyre!("unexpected variant: {got:?}"));
-    }
+    value_round_trips(mineral_protocol::UpdatePayload::Playback(Box::new(snap))).await?;
     Ok(())
 }
 
@@ -149,20 +153,17 @@ async fn req_resp_pair_over_one_stream() -> color_eyre::Result<()> {
     let mut client = framed(client_side);
     let mut server = framed(server_side);
 
-    // client → server: AudioSnapshot 请求
-    send(&mut client, &Request::AudioSnapshot).await?;
+    send(&mut client, &Request::DaemonInfo).await?;
     let req: Request = recv(&mut server)
         .await?
         .ok_or_else(|| eyre!("server got nothing"))?;
-    assert!(matches!(req, Request::AudioSnapshot));
+    assert!(matches!(req, Request::DaemonInfo));
 
-    // server → client: 回 snapshot
-    let snap = AudioSnapshot::default();
-    send(&mut server, &Response::AudioSnapshot(snap)).await?;
+    send(&mut server, &Response::DaemonInfo { pid: 4242 }).await?;
     let resp: Response = recv(&mut client)
         .await?
         .ok_or_else(|| eyre!("client got nothing"))?;
-    assert!(matches!(resp, Response::AudioSnapshot(_)));
+    assert!(matches!(resp, Response::DaemonInfo { pid: 4242 }));
     Ok(())
 }
 
@@ -177,13 +178,6 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::CyclePlayMode).await?;
     req_round_trips(Request::PrevOrRestart).await?;
     req_round_trips(Request::NextSong).await?;
-    req_round_trips(Request::TaskSnapshot).await?;
-    req_round_trips(Request::PlayerSync(PlayerVersions {
-        queue: 3,
-        current: 7,
-    }))
-    .await?;
-    req_round_trips(Request::PullPcm(256)).await?;
     req_round_trips(Request::Shutdown).await?;
     Ok(())
 }
@@ -201,12 +195,6 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
         song: id.clone(),
         key: "plugin.x".to_owned(),
         value: StoreValue::Text("值".to_owned()),
-    })
-    .await?;
-    req_round_trips(Request::StoreInc {
-        song: id.clone(),
-        key: "plugin.n".to_owned(),
-        delta: -3,
     })
     .await?;
     resp_round_trips(Response::StoreValue(StoreValue::Real(2.5))).await?;
@@ -315,20 +303,10 @@ async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Response variant 的 round-trip:Ok / TaskSnapshot / PcmData。
+/// Response variant 的 round-trip:Ok。
 #[tokio::test]
 async fn round_trip_responses() -> color_eyre::Result<()> {
     resp_round_trips(Response::Ok).await?;
-    resp_round_trips(Response::TaskSnapshot(Snapshot {
-        running: 2,
-        by_kind: Default::default(),
-    }))
-    .await?;
-    resp_round_trips(Response::PcmData {
-        samples: vec![0.0, 0.5, -0.5],
-        sample_rate: 44_100,
-    })
-    .await?;
     Ok(())
 }
 
@@ -337,8 +315,8 @@ async fn round_trip_responses() -> color_eyre::Result<()> {
 async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
     let sync = PlayerSync {
         versions: PlayerVersions {
-            queue: 4,
-            current: 9,
+            queue: SegmentVersion::new(4),
+            current: SegmentVersion::new(9),
         },
         cursor: mineral_protocol::PlayCursor::InQueue(1),
         play_mode: PlayMode::Shuffle,
@@ -360,7 +338,11 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
             }),
         }),
     };
-    resp_round_trips(Response::PlayerSync(Box::new(sync))).await?;
+    value_round_trips(mineral_protocol::UpdatePayload::Player {
+        sync: Box::new(sync),
+        queue_parts: 0,
+    })
+    .await?;
     Ok(())
 }
 
@@ -369,8 +351,8 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
 async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
     let sync = PlayerSync {
         versions: PlayerVersions {
-            queue: 4,
-            current: 9,
+            queue: SegmentVersion::new(4),
+            current: SegmentVersion::new(9),
         },
         cursor: mineral_protocol::PlayCursor::InQueue(2),
         play_mode: PlayMode::RepeatAll,
@@ -378,7 +360,11 @@ async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
         queue: None,
         current: None,
     };
-    resp_round_trips(Response::PlayerSync(Box::new(sync))).await?;
+    value_round_trips(mineral_protocol::UpdatePayload::Player {
+        sync: Box::new(sync),
+        queue_parts: 0,
+    })
+    .await?;
     Ok(())
 }
 
@@ -388,7 +374,7 @@ async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
 mod proptests {
     use bincode::{deserialize, serialize};
     use mineral_model::{SongId, SourceKind};
-    use mineral_protocol::{PlayerVersions, Request};
+    use mineral_protocol::Request;
     use mineral_test::arb_song;
     use proptest::collection::vec;
     use proptest::prelude::{Just, Strategy, any, prop_oneof, proptest};
@@ -400,20 +386,12 @@ mod proptests {
             Just(Request::Pause),
             Just(Request::Resume),
             Just(Request::Stop),
-            Just(Request::AudioSnapshot),
-            Just(Request::TaskSnapshot),
             Just(Request::CyclePlayMode),
             Just(Request::PrevOrRestart),
             Just(Request::NextSong),
             Just(Request::Shutdown),
-            Just(Request::TagBackfill),
-            Just(Request::TagProgress),
-            (any::<u64>(), any::<u64>()).prop_map(|(queue, current)| {
-                Request::PlayerSync(PlayerVersions { queue, current })
-            }),
             any::<u64>().prop_map(Request::Seek),
             any::<u8>().prop_map(Request::SetVolume),
-            any::<usize>().prop_map(Request::PullPcm),
             arb_song().prop_map(|s| Request::PlaySong(Box::new(s))),
             (vec(arb_song(), 0..4), any::<usize>()).prop_map(|(songs, target)| {
                 Request::PlayQueue {
@@ -528,27 +506,30 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
         speed_bps: 512,
         failure: None,
     };
-    req_round_trips(Request::DownloadSummary).await?;
-    req_round_trips(Request::DownloadSnapshot).await?;
     req_round_trips(Request::StopDownload(download_id)).await?;
     resp_round_trips(Response::Ok).await?;
     resp_round_trips(Response::Error("unknown download identity".to_owned())).await?;
-    resp_round_trips(Response::DownloadSummary(DownloadSummary {
-        active: 1,
-        queued: 2,
-        preparing_playlists: 1,
-        speed_bps: 512,
-        latest_wave: Some(DownloadWave {
-            sequence: 3,
-            downloaded: 5,
-            already_present: 1,
-            skipped_by_hook: 0,
-            failed: 1,
-            stopped: 1,
-        }),
-    }))
+    value_round_trips(mineral_protocol::UpdatePayload::DownloadsSummary(
+        DownloadSummary {
+            active: 1,
+            queued: 2,
+            preparing_playlists: 1,
+            speed_bps: 512,
+            latest_wave: Some(DownloadWave {
+                sequence: 3,
+                downloaded: 5,
+                already_present: 1,
+                skipped_by_hook: 0,
+                failed: 1,
+                stopped: 1,
+            }),
+        },
+    ))
     .await?;
-    resp_round_trips(Response::DownloadSnapshot(vec![download_view])).await?;
+    value_round_trips(mineral_protocol::UpdatePayload::DownloadsDetailSnapshot(
+        vec![download_view],
+    ))
+    .await?;
 
     // 复制模板覆盖 Song、Playlist、Album 与 Artist 四种实体上下文。
     req_round_trips(Request::RenderCopyTemplate {

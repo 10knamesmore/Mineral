@@ -1,7 +1,7 @@
 //! UI 持有的 audio handle:线程安全、可 clone,所有方法都是非阻塞。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -68,6 +68,9 @@ pub struct SpectrumTap {
 
     /// 当前轨道采样率(Hz),engine 在每首歌包 TapSource 时写入。
     sample_rate: Arc<AtomicU32>,
+
+    /// 累计尝试写入的 mono 样本数(含丢弃);与消费计数比较可辨认上游缺口。
+    pushed: Arc<AtomicU64>,
 }
 
 impl SpectrumTap {
@@ -79,6 +82,11 @@ impl SpectrumTap {
     /// 当前轨道的采样率(Hz)。0 = 还没开始播。
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate.load(Ordering::Relaxed)
+    }
+
+    /// 累计尝试写入的 mono 样本数(单调;包含因环满被丢弃的样本)。
+    pub fn pushed_total(&self) -> u64 {
+        self.pushed.load(Ordering::Relaxed)
     }
 }
 
@@ -111,6 +119,7 @@ impl AudioHandle {
         let (producer, consumer) = rb.split();
         let shared_prod: SharedProd = Arc::new(Mutex::new(producer));
         let sr_atomic = Arc::new(AtomicU32::new(0));
+        let tap_pushed = Arc::new(AtomicU64::new(0));
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<color_eyre::Result<()>>(1);
         let io = engine::EngineIo {
@@ -119,6 +128,7 @@ impl AudioHandle {
             ready_tx,
             tap_producer: Arc::clone(&shared_prod),
             sr_atomic: Arc::clone(&sr_atomic),
+            tap_pushed: Arc::clone(&tap_pushed),
         };
         thread::Builder::new()
             .name(String::from("mineral-audio"))
@@ -143,6 +153,7 @@ impl AudioHandle {
         let tap = SpectrumTap {
             consumer,
             sample_rate: sr_atomic,
+            pushed: tap_pushed,
         };
         Ok((handle, tap))
     }

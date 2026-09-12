@@ -150,6 +150,13 @@ impl SpectrumComputer {
         }
     }
 
+    /// 清空样本环(流换代 / 缺口后重置,避免新旧流样本混入同一窗)。
+    pub fn reset(&mut self) {
+        self.in_buf.fill(0.0);
+        self.write_idx = 0;
+        self.filled = 0;
+    }
+
     /// 算一窗。
     ///
     /// # Params:

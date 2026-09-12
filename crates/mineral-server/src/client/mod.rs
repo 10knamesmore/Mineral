@@ -1,8 +1,6 @@
-//! Client 调用面:抽象契约与其同进程实现。
+//! Client 调用面:同进程业务句柄与其 wire 适配。
 
-mod contract;
 mod handle;
 mod wire;
 
-pub use contract::Client;
 pub use handle::ClientHandle;

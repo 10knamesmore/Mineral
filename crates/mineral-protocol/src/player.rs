@@ -87,7 +87,7 @@ impl PlayMode {
 
     /// 脚本边界的蛇形稳定名(Lua 生态惯例),与 [`Self::from_script_name`] 对偶。
     ///
-    /// 与 [`Self::name`](落库格式,变体名形式)是两套字符串;脚本面
+    /// 与 [`Self::name`] 的落库格式（变体名形式）是两套字符串；脚本面
     /// (`mineral.player.set_mode` / 属性树 `player.mode`)统一使用蛇形名。
     #[must_use]
     pub fn script_name(self) -> &'static str {
@@ -243,27 +243,59 @@ impl PlayCursor {
     }
 }
 
-/// Client 已持有的播放状态版本号,随 [`crate::Request::PlayerSync`] 上报。
-///
-/// `0` = 一无所有(启动初次同步);server 端版本从 1 起步、per-process 单调递增,
-/// 故 0 必然不匹配、必然换回全量重段。版本号只在单条连接内有意义(断链即退出,
-/// 无跨连接陈旧版本问题)。
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct PlayerVersions {
-    /// queue + original_queue 的版本。
-    pub queue: u64,
+/// 播放状态中队列或当前曲片段的版本,用于判断同步时是否需要附带该片段。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SegmentVersion(u64);
 
-    /// current song、media facts 与 lyrics 的版本。
-    pub current: u64,
+impl SegmentVersion {
+    /// 用裸值构造(协议测试 / 夹具用;业务推进走 [`Self::next`])。
+    ///
+    /// # Params:
+    ///   - `value`: 版本号裸值
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 未初始化(镜像侧:重段还没到过)。
+    pub const ZERO: Self = Self(0);
+
+    /// 首个有效版本(daemon 侧:空队列也是有效状态,须 ≥1 表示已就绪)。
+    pub const FIRST: Self = Self(1);
+
+    /// 推进一版;达到 `u64::MAX` 时保持饱和。
+    #[must_use]
+    pub fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+
+    /// 是否从未变更(等于 `ZERO`)。
+    #[must_use]
+    pub fn is_initial(self) -> bool {
+        self.0 == 0
+    }
 }
 
-/// 每 tick 的播放状态同步应答:轻段恒有(<100B),重段仅 client 版本落后时附带。
+/// 队列与当前曲的版本组合。daemon 随 [`PlayerSync`] 下发,client 在订阅时携带已知版本。
+///
+/// [`SegmentVersion::ZERO`] 表示尚未收到该片段;daemon 从 [`SegmentVersion::FIRST`]
+/// 起步,因此初次同步会附带完整数据。版本只在当前会话内使用,断连后不跨会话复用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerVersions {
+    /// queue + original_queue 的版本。
+    pub queue: SegmentVersion,
+
+    /// current song、media facts 与 lyrics 的版本。
+    pub current: SegmentVersion,
+}
+
+/// 播放状态同步载荷:轻段始终携带,重段仅已知版本与 daemon 版本不一致时附带。
 ///
 /// 重段缺席(`None`)语义是「与你已有的一致」,**不是清空** —— client 必须保持
 /// 上次应用的镜像不动。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PlayerSync {
-    /// server 当前版本;client 收下后于下次请求回报。
+    /// server 当前版本;client 在后续订阅携带已知版本,daemon 据此只发增量重段。
     pub versions: PlayerVersions,
 
     /// queue 中「当前歌」的位置。轻段。

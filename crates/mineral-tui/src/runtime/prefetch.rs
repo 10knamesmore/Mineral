@@ -8,16 +8,16 @@
 //! 封面路径只选择候选并做单批 URL 去重，请求生命周期由图片引擎管理；其余路径用各自的
 //! requested 状态避免重复提交。稳态下 tick 只做有界窗口 hash 查找。
 
+use crate::runtime::backend::Backend;
 use mineral_channel_core::Page;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
-use mineral_server::Client;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::image::collage`])。
-pub fn tick(state: &mut AppState, client: &dyn Client) {
+pub fn tick(state: &mut AppState, client: &dyn Backend) {
     request_covers(state);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
@@ -134,7 +134,7 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 
 /// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
 /// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
-fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
+fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
     if state.browse.view != View::Playlists {
         return;
     }
@@ -156,7 +156,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Client) {
 /// 成功值跨 selection 命中 cache；失败结果只在当前 selection 内抑制逐 tick 重试，离开
 /// 后再选中会重查。`stats.level = off` 或 source 被 `exclude_sources` 排除时不查询，字段
 /// 始终缺失。
-fn request_play_count(state: &mut AppState, client: &dyn Client) {
+fn request_play_count(state: &mut AppState, client: &dyn Backend) {
     if state.browse.view != View::Library {
         state.library.local_play_counts.leave_selection();
         return;
@@ -181,7 +181,7 @@ fn request_play_count(state: &mut AppState, client: &dyn Client) {
 ///
 /// 同帧只派一次（`DetailFrame.requested`）；移光标 / 下钻换新帧后可再派——失败的帧换走
 /// 再回即重试（驻留窗口重新触发），与 spec「预览失败驻留重试」一致。布局态未开则不派。
-fn request_detail(state: &mut AppState, client: &dyn Client) {
+fn request_detail(state: &mut AppState, client: &dyn Backend) {
     if !state.channel_search.active.on() {
         return;
     }
@@ -253,7 +253,7 @@ fn request_detail_selected_cover(state: &mut AppState) {
 }
 
 /// 按 [`DetailFetch`] 派对应的 channel 拉取任务（artist 两路：详情 + 专辑列表；其余单路）。
-pub(crate) fn submit_detail_tasks(client: &dyn Client, fetch: DetailFetch) {
+pub(crate) fn submit_detail_tasks(client: &dyn Backend, fetch: DetailFetch) {
     match fetch {
         DetailFetch::AlbumDetail(id) => {
             client.submit_task(

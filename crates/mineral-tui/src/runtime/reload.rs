@@ -38,7 +38,8 @@ impl crate::app::App {
         // 固化型(重建即换,无运行态):主题色 token / 窗口标题模板 / keymap 查表。
         self.theme_base = crate::render::theme::Theme::from_config(tui_cfg.theme());
         self.window_title = crate::runtime::window_title::WindowTitle::new(tui_cfg.window_title());
-        self.rebuild_keymap();
+        let binds = self.client.bootstrap().script_binds;
+        self.apply_script_binds(&binds);
         // 固化型(携带运行态):动态 accent 渐变 retempo 保相位;开关与目标就地重算——
         // 开着按当前已应用封面重投(同目标空操作,刚打开则渐变过去),关了渐变回 base。
         let dynamic = tui_cfg.theme().dynamic();
@@ -192,18 +193,20 @@ impl crate::app::App {
         }
     }
 
-    /// daemon 推送 `ScriptReloaded` 后刷新脚本 bind 键(配置部分不动,
-    /// 用现行 `state.cfg` 重建 keymap 再合新 bind 表)。
+    /// daemon 推送 `ScriptReloaded` 后重新拉取脚本 bind 表(结果经完成事件回流)。
     pub(crate) fn refresh_script_binds(&mut self) {
-        self.rebuild_keymap();
+        self.client.refresh_script_binds();
     }
 
-    /// 以现行配置重建 keymap 并合入 daemon 的 bind 表;卡片关闭键提示随表刷新。
-    fn rebuild_keymap(&mut self) {
+    /// 以现行配置重建 keymap 并合入给定 bind 表;卡片关闭键提示随表刷新。
+    ///
+    /// # Params:
+    ///   - `binds`: 脚本绑定表
+    pub(crate) fn apply_script_binds(&mut self, binds: &[mineral_protocol::ScriptBind]) {
         let tui_cfg = self.state.cfg.tui();
         let mut keymap =
             crate::runtime::keymap::Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        keymap.append_script_binds(&self.client.script_binds());
+        keymap.append_script_binds(binds);
         self.notice_hint = Self::compose_notice_hint(&keymap);
         self.keymap = keymap;
     }

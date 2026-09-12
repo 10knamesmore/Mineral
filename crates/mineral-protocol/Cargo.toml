@@ -21,10 +21,13 @@ derive-getters = { workspace = true }
 rustc-hash     = { workspace = true }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
+strum_macros   = { workspace = true }
+thiserror      = { workspace = true }
 tokio          = { workspace = true }
 tokio-util     = { workspace = true }
 futures-util   = { workspace = true }
 typed-builder  = { workspace = true }
+async-trait    = { workspace = true }
 
 [dev-dependencies]
 tokio             = { workspace = true, features = ["macros", "io-util"] }

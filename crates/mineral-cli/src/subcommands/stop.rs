@@ -1,5 +1,5 @@
-//! `mineral stop` — 请求后台 daemon 优雅退出([`Request::Shutdown`]),
-//! 版本握手不兼容时向 socket peer 发 SIGTERM;`mineral status` 的对偶。
+//! `mineral stop` — 请求后台 daemon 优雅退出,版本握手不兼容时向 socket peer 发 SIGTERM;
+//! `mineral status` 的对偶。
 //!
 //! 语义是「**确保** daemon 不在跑」:daemon 本就没跑时幂等成功(exit 0),
 //! 脚本里可无脑调用。返回前轮询 socket 文件消失——返回即收尾真完成,
@@ -8,7 +8,9 @@
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{WrapErr, bail};
-use mineral_protocol::{HandshakeRejected, OneshotClient, RejectReason, Request, Response};
+use mineral_client::Client;
+use mineral_client::connection::{ClientConfig, ConnectError};
+use mineral_protocol::{RejectReason, SocketWire};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::net::UnixStream;
@@ -23,7 +25,7 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 ///   退出返回 `Err`。
 pub async fn run() -> color_eyre::Result<()> {
     let socket_path = mineral_paths::socket_path()?;
-    // 连不上 = daemon 不在跑 → 幂等成功。连上后优先走 IPC;只有 daemon 明确
+    // 连不上 = daemon 不在跑 → 幂等成功。连上后优先走会话协议;只有 daemon 明确
     // 回 VersionMismatch 才 signal 内核确认的 socket peer,避免误杀无关进程。
     let Ok(stream) = UnixStream::connect(&socket_path).await else {
         println!("no daemon running");
@@ -35,7 +37,7 @@ pub async fn run() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 优先经 IPC 请求关停;握手明确因版本错配被拒时,向 Unix socket peer 发信号。
+/// 优先经会话协议请求关停;握手明确因版本错配被拒时,向 Unix socket peer 发信号。
 ///
 /// `signal_peer` 作为参数让测试能验证目标 pid 而不真的终止测试进程。
 ///
@@ -44,38 +46,34 @@ pub async fn run() -> color_eyre::Result<()> {
 ///   - `signal_peer`: 向已确认 peer pid 投递关停信号的实现。
 ///
 /// # Return:
-///   shutdown 请求已经通过 IPC 或进程信号投递。
+///   shutdown 请求已经通过会话协议或进程信号投递。
 async fn request_shutdown_with<F>(stream: UnixStream, signal_peer: F) -> color_eyre::Result<()>
 where
     F: FnOnce(i32) -> color_eyre::Result<()>,
 {
-    // 必须在 OneshotClient 消费 stream 前读取;版本拒绝后 daemon 会主动关连接。
+    // 必须在会话层消费 stream 前读取;版本拒绝后 daemon 会主动关连接。
     let peer_pid = stream.peer_cred().map(|credentials| credentials.pid());
-    let mut client = match OneshotClient::from_stream(stream).await {
-        Ok(client) => client,
-        Err(error) => {
-            let Some(rejected) = error.downcast_ref::<HandshakeRejected>() else {
-                return Err(error);
-            };
-            if rejected.reason() != Some(RejectReason::VersionMismatch) {
-                return Err(error);
+    let wire = SocketWire::from_stream(stream);
+    let client =
+        match Client::from_wire(Box::new(wire), "mineral_stop", ClientConfig::default()).await {
+            Ok(client) => client,
+            Err(ConnectError::Rejected(rejected)) => {
+                if rejected.reason() != Some(RejectReason::VersionMismatch) {
+                    return Err(ConnectError::Rejected(rejected).into());
+                }
+                let pid = peer_pid
+                    .wrap_err("failed to read daemon socket peer credentials")?
+                    .ok_or_else(|| {
+                        color_eyre::eyre::eyre!("unable to get the daemon pid from the unix socket")
+                    })?;
+                signal_peer(pid)?;
+                return Ok(());
             }
-            let pid = peer_pid
-                .wrap_err("failed to read daemon socket peer credentials")?
-                .ok_or_else(|| {
-                    color_eyre::eyre::eyre!("unable to get the daemon pid from the unix socket")
-                })?;
-            signal_peer(pid)?;
-            return Ok(());
-        }
-    };
-    match client.request(Request::Shutdown).await {
-        Ok(Response::Ok) => {}
-        Ok(other) => bail!("unexpected response: {other:?}"),
-        // ack 是尽力而为:daemon 收到请求即开始收尾,应答可能没写完连接就关了。
-        // EOF / 写失败不当失败,由下面的 socket 消失轮询裁决。
-        Err(_) => {}
-    }
+            Err(error) => return Err(error.into()),
+        };
+    // ack 是尽力而为:daemon 收到请求即开始收尾,应答可能没写完连接就关了。
+    // `Unknown` 不当失败,由下面的 socket 消失轮询裁决。
+    let _ = client.shutdown().await;
     Ok(())
 }
 
@@ -111,7 +109,9 @@ mod tests {
     use std::cell::Cell;
 
     use color_eyre::eyre::eyre;
-    use mineral_protocol::{Frame, RejectReason, ServerHello, framed, recv, send};
+    use mineral_protocol::{
+        MessageBatch, RejectReason, ServerHello, SessionMessage, SocketWire, Wire,
+    };
 
     use super::request_shutdown_with;
 
@@ -120,18 +120,18 @@ mod tests {
     async fn version_mismatch_falls_back_to_peer_signal() -> color_eyre::Result<()> {
         let (client_stream, server_stream) = tokio::net::UnixStream::pair()?;
         let server = tokio::spawn(async move {
-            let mut conn = framed(server_stream);
-            let first = recv::<Frame, _>(&mut conn)
+            let mut wire = SocketWire::from_stream(server_stream);
+            let batch = wire
+                .recv()
                 .await?
                 .ok_or_else(|| eyre!("server 没收到握手"))?;
             assert!(
-                matches!(first, Frame::Handshake(_)),
-                "首帧应为握手,实际 {first:?}"
+                matches!(batch.messages.first(), Some(SessionMessage::Hello(_))),
+                "首帧应为 Hello,实际 {batch:?}"
             );
-            send(
-                &mut conn,
-                &Frame::Hello(ServerHello::reject(RejectReason::VersionMismatch)),
-            )
+            wire.send(MessageBatch::one(SessionMessage::Welcome(
+                ServerHello::reject(RejectReason::VersionMismatch),
+            )))
             .await?;
             Ok::<(), color_eyre::Report>(())
         });
