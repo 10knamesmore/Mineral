@@ -9,18 +9,25 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SongStats {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 播放次数。
     PlayCount,
+
     /// 跳过次数。
     SkipCount,
+
     /// 累计收听毫秒数。
     TotalListenMs,
+
     /// 最近播放时间，Unix 毫秒。
     LastPlayedAt,
+
     /// 用户评分。
     Rating,
 }

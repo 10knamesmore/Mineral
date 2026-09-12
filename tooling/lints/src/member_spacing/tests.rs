@@ -1,6 +1,8 @@
 //! 验证成员空行的词法边界、遍历范围和完整诊断位置。
 
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use color_eyre::eyre::{ContextCompat, WrapErr};
 use rustc_session::lint::Level;
@@ -46,13 +48,13 @@ fn assert_member_diagnostic(text: &str, member: &str) -> color_eyre::Result<()> 
     Ok(())
 }
 
-/// 结构体具名字段、枚举变体及变体字段即使没有文档或属性，也必须以空行分隔。
+/// 具名字段和枚举变体即使没有文档或属性，也必须以空行分隔。
 ///
 /// # Params:
 ///   无。
 ///
 /// # Return:
-///   紧邻的具名字段、元组字段和变体均被准确报告。
+///   紧邻的具名字段和变体均被准确报告。
 #[test]
 fn rejects_adjacent_members_with_or_without_docs_and_attributes() -> color_eyre::Result<()> {
     let cases = [
@@ -86,15 +88,6 @@ fn rejects_adjacent_members_with_or_without_docs_and_attributes() -> color_eyre:
             "enum Value { Named { first: u8,\n#[cfg(any())]\nsecond: u16 } }",
             "#[cfg(any())]\nsecond: u16",
         ),
-        ("enum Value { Tuple(u8,\nu16) }", "u16"),
-        (
-            "enum Value { Tuple(u8,\n/// 第二字段。\nu16) }",
-            "/// 第二字段。\nu16",
-        ),
-        (
-            "enum Value { Tuple(u8,\n#[cfg(any())]\nu16) }",
-            "#[cfg(any())]\nu16",
-        ),
     ];
     for (text, member) in cases {
         assert_member_diagnostic(text, member)?;
@@ -102,12 +95,12 @@ fn rejects_adjacent_members_with_or_without_docs_and_attributes() -> color_eyre:
     Ok(())
 }
 
-/// tuple struct 的字段间距不受检查，兼容 rustfmt 合并后的格式。
+/// 元组结构体和元组变体的字段间距不受检查，兼容 rustfmt 合并后的格式。
 ///
 /// # Return:
-///   紧邻字段、字段文档与属性、局部及未启用的 tuple struct 均通过。
+///   紧邻字段、字段文档与属性、局部及未启用的元组定义均通过。
 #[test]
-fn skips_tuple_struct_field_spacing() -> color_eyre::Result<()> {
+fn skips_unnamed_field_spacing() -> color_eyre::Result<()> {
     for text in [
         "struct Pair(u8, u16);",
         "struct Pair(u8,\nu16);",
@@ -116,9 +109,75 @@ fn skips_tuple_struct_field_spacing() -> color_eyre::Result<()> {
         "#[cfg(any())]\nstruct Pair(u8, u16);",
         "fn run() { struct Local(u8,\nu16); }",
         "//! 中文前缀。\nstruct 记录(u8,\n/// 第二成员。\n#[cfg(any())]\nu16);",
+        "enum Value { Tuple(u8, u16) }",
+        "enum Value { Tuple(u8,\nu16) }",
+        "enum Value { Tuple(u8,\n/// 第二字段。\nu16) }",
+        "enum Value { Tuple(u8,\n#[cfg(any())]\nu16) }",
+        "#[cfg(any())]\nenum Value { Tuple(u8, u16) }",
+        "fn run() { enum Local { Tuple(u8,\nu16) } }",
+        "//! 中文前缀。\nenum 记录 { 内容(u8,\n/// 第二成员。\n#[cfg(any())]\nu16) }",
     ] {
         assert!(check_text(text)?.is_empty(), "源码：{text}");
     }
+    Ok(())
+}
+
+/// rustfmt 移除元组字段间空行后，合法源码仍能通过间距检查。
+///
+/// # Return:
+///   真实格式器输出不会触发成员间距诊断。
+#[test]
+fn accepts_rustfmt_output_for_unnamed_fields() -> color_eyre::Result<()> {
+    let source = r#"
+struct Pair(
+    /// 第一字段。
+    u8,
+
+    /// 第二字段。
+    u16,
+);
+
+enum Value {
+    Tuple(
+        /// 第一字段。
+        u8,
+
+        /// 第二字段。
+        u16,
+    ),
+
+    Named {
+        /// 第一字段。
+        first: u8,
+
+        /// 第二字段。
+        second: u16,
+    },
+}
+"#;
+    let mut formatter = Command::new("rustfmt")
+        .args(["--emit", "stdout", "--edition", "2024"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .wrap_err("启动 rustfmt")?;
+    let mut input = formatter.stdin.take().wrap_err("取得 rustfmt 输入管道")?;
+    input
+        .write_all(source.as_bytes())
+        .wrap_err("写入待格式化源码")?;
+    drop(input);
+    let output = formatter.wait_with_output().wrap_err("等待 rustfmt 输出")?;
+    assert!(
+        output.status.success(),
+        "rustfmt 失败：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let formatted = String::from_utf8(output.stdout).wrap_err("读取 rustfmt 源码输出")?;
+    assert!(
+        check_text(&formatted)?.is_empty(),
+        "格式化结果：{formatted}"
+    );
     Ok(())
 }
 
@@ -172,7 +231,6 @@ fn permits_blank_lines_with_crlf_tabs_and_trailing_comments() -> color_eyre::Res
             format!("struct Named {{ first: u8,{gap}second: u16 }}"),
             format!("enum Value {{ First,{gap}Second }}"),
             format!("enum Value {{ Named {{ first: u8,{gap}second: u16 }} }}"),
-            format!("enum Value {{ Tuple(u8,{gap}u16) }}"),
         ] {
             assert!(check_text(&text)?.is_empty(), "源码：{text}");
         }
@@ -293,7 +351,10 @@ fn checks_disabled_cfg_items_members_and_local_types() -> color_eyre::Result<()>
             "fn run() { enum Local { Named { first: u8,\nsecond: u16 } } }",
             "second: u16",
         ),
-        ("fn run() { enum Local { Tuple(u8,\nu16) } }", "u16"),
+        (
+            "enum Value { Tuple([u8; { struct Nested { first: u8,\nsecond: u16 } 1 }], u16) }",
+            "second: u16",
+        ),
     ];
     for (text, member) in cases {
         assert_member_diagnostic(text, member)?;
@@ -344,7 +405,7 @@ fn run(value: Named, tuple: Tuple) {
 ///   无。
 ///
 /// # Return:
-///   具名字段、元组字段和变体均从首条文档开始报告。
+///   具名字段和变体均从首条文档开始报告。
 #[test]
 fn reports_chinese_members_from_their_first_doc_and_attributes() -> color_eyre::Result<()> {
     let documentation = "/// 第二成员的中文说明。\n#[cfg(any())]\n";
@@ -360,7 +421,6 @@ fn reports_chinese_members_from_their_first_doc_and_attributes() -> color_eyre::
             "次项: u16",
             " } }",
         ),
-        ("//! 中文前缀。\nenum 记录 { 内容(u8,\n", "u16", ") }"),
     ] {
         let member = format!("{documentation}{name}");
         let text = format!("{prefix}{member}{suffix}");

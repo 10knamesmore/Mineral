@@ -9,18 +9,25 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Songs {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 展示名称。
     Name,
+
     /// 别名或译名。
     Alias,
+
     /// 来源内专辑身份。
     AlbumId,
+
     /// 专辑名称。
     AlbumName,
+
     /// 已知时长，单位毫秒。
     DurationMs,
 }

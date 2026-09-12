@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::super::state::SpectrumState;
-use super::BrailleGrid;
+use super::braille::BrailleGrid;
 use crate::components::layout::shared::text::column_bg;
 use crate::render::color::{lerp_color, luma255_of, soften_over_bg};
 use crate::render::palette::ColumnColors;

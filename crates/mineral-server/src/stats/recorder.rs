@@ -236,7 +236,7 @@ impl StatsRecorder {
     }
 
     /// 降级 no-op 句柄(无 actor / 无写库):所有打点静默丢弃、查询返回空。供无持久化的
-    /// 路径(测试)构造 [`PlayerCore`] 用。
+    /// 路径(测试)构造 `PlayerCore` 用。
     pub fn disabled() -> Self {
         Self {
             params: Arc::new(ArcSwap::from_pointee(off_params())),
@@ -279,7 +279,7 @@ impl StatsRecorder {
         self.params.store(Arc::new(params));
     }
 
-    /// 优雅停机:发 [`StatsCommand::Shutdown`] 让 actor 结算在播 pending 为 stop 后退出。
+    /// 优雅停机:发 `StatsCommand::Shutdown` 让 actor 结算在播 pending 为 stop 后退出。
     /// 降级(无 actor)即刻返回;actor 已退时发送失败也无碍。
     pub async fn shutdown(&self) {
         let Some(tx) = &self.tx else {

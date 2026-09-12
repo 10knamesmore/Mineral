@@ -9,9 +9,9 @@ use syn::visit::{self, Visit};
 use crate::source_files::{ParsedSource, Violation, check_sources};
 
 declare_lint! {
-    /// 要求结构体具名字段、枚举变体及变体字段之间留出空行。
+    /// 要求具名字段和枚举变体之间留出空行。
     ///
-    /// tuple struct 的字段不检查间距，以兼容 rustfmt 的格式化结果。
+    /// 元组结构体和元组变体的字段不检查间距，因为 rustfmt 会移除其字段间的空行。
     pub(crate) MINERAL_MEMBER_SPACING,
     Warn,
     "type members must be separated by a blank line"
@@ -116,7 +116,7 @@ impl<'ast> Visit<'ast> for MemberVisitor<'_> {
         visit::visit_item_enum(self, item);
     }
 
-    /// 检查枚举变体内部的具名或元组字段。
+    /// 检查枚举变体内部的具名字段，并继续访问所有字段中的嵌套类型。
     ///
     /// # Params:
     ///   - `variant`: 当前枚举变体。
@@ -124,7 +124,9 @@ impl<'ast> Visit<'ast> for MemberVisitor<'_> {
     /// # Return:
     ///   收集变体字段及其嵌套定义的诊断。
     fn visit_variant(&mut self, variant: &'ast syn::Variant) {
-        self.check_members(&variant.fields);
+        if let syn::Fields::Named(fields) = &variant.fields {
+            self.check_members(&fields.named);
+        }
         visit::visit_variant(self, variant);
     }
 }

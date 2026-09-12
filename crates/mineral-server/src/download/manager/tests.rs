@@ -13,7 +13,10 @@ use parking_lot::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use super::{DownloadManager, DownloadRuntime, Lane, ManagerInner, ManagerState};
+use super::admission::Lane;
+use super::lifecycle::ManagerInner;
+use super::state::ManagerState;
+use super::{DownloadManager, DownloadRuntime};
 use crate::download::{
     DownloadAttempt, DownloadEnv, DownloadOutcome, TransferUpdate, download_song,
 };
@@ -205,7 +208,11 @@ async fn stop_after_export_commit_preserves_download() -> color_eyre::Result<()>
         row(&manager, &attempt.id)?.status,
         DownloadStatus::Downloaded
     );
-    assert_eq!(std::fs::read(path)?, contents, "Stop 不删除已提交文件");
+    assert_eq!(
+        tokio::fs::read(path).await?,
+        contents,
+        "Stop 不删除已提交文件"
+    );
     assert_eq!(manager.summary().active, 0);
     Ok(())
 }

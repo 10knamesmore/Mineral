@@ -166,6 +166,7 @@ impl StatsStore {
 enum TallyColumn {
     /// 分桶标签。
     Label,
+
     /// 事件数量。
     Count,
 }

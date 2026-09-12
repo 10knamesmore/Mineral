@@ -27,7 +27,7 @@ const MIN_FFT_SIZE: usize = 64;
 pub struct SpectrumParams {
     /// FFT 窗大小(样本)。4096 在 48kHz 下 ≈ 85ms:低频 bin 间距 ~12Hz,细节足;
     /// 代价是瞬态被窗摊开、起播首窗延迟 ≈ 窗长。**建议 2 的幂**(否则 FFT 退化到
-    /// 大常数路径);下限 [`MIN_FFT_SIZE`],构造时自动钳。
+    /// 大常数路径);下限为 64 个样本,构造时自动钳。
     fft_size: usize,
 
     /// 频率轴下界(Hz)。低于此频率的 bin 不参与桶映射。

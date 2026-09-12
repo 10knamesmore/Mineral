@@ -151,18 +151,25 @@ impl ChannelFetchKind {
 pub enum ChannelFetchKindTag {
     /// 对应 [`ChannelFetchKind::MyPlaylists`]。
     MyPlaylists,
+
     /// 对应 [`ChannelFetchKind::PlaylistDetail`]。
     PlaylistDetail,
+
     /// 对应 [`ChannelFetchKind::Lyrics`]。
     Lyrics,
+
     /// 对应 [`ChannelFetchKind::RemotePlayCount`]。
     RemotePlayCount,
+
     /// 对应 [`ChannelFetchKind::Search`]。
     Search,
+
     /// 对应 [`ChannelFetchKind::ArtistDetail`]。
     ArtistDetail,
+
     /// 对应 [`ChannelFetchKind::ArtistAlbums`]。
     ArtistAlbums,
+
     /// 对应 [`ChannelFetchKind::AlbumDetail`]。
     AlbumDetail,
 }

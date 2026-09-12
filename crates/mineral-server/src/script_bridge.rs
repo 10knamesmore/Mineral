@@ -171,7 +171,7 @@ pub struct ScriptPumps {
 /// 的 observe 回放 / 顶层 get 要等属性下次真变更)。
 pub(crate) type PropsSnapshot = Arc<dyn Fn() -> Vec<(PropKey, PropValue)> + Send + Sync>;
 
-/// [`ScriptPumps::start`] 拆出的热重载接线件(交给
+/// `ScriptPumps::start` 拆出的热重载接线件(交给
 /// [`crate::script_reload::spawn_script_reloader`])。
 pub struct ScriptReloadParts {
     /// 命令通道发送端(重载的新 host 用)。

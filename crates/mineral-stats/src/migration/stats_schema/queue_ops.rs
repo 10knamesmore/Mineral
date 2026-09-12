@@ -10,20 +10,28 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum QueueOps {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 执行的操作。
     Op,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 涉及的条目数量。
     Count,
 }

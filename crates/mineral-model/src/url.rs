@@ -12,6 +12,7 @@ use url::Url;
 pub enum MediaUrl {
     /// 远端 URL,scheme 通常是 `http`/`https`。
     Remote(Url),
+
     /// 本地文件路径。
     Local(PathBuf),
 }

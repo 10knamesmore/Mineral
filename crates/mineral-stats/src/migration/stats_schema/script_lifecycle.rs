@@ -10,14 +10,19 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum ScriptLifecycle {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 脚本生命周期事件。
     Event,
+
     /// 事件详情。
     Detail,
 }

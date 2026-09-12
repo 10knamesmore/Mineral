@@ -9,10 +9,13 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SongFavorites {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 加入收藏的时间，Unix 毫秒。
     EnteredAt,
 }

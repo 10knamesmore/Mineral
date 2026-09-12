@@ -310,7 +310,7 @@ mod tests {
         bytes: &[u8],
     ) -> color_eyre::Result<()> {
         let src = tmp_dir.join(format!("cap-{}-{}.part", s.id.value(), quality.as_str()));
-        std::fs::write(&src, bytes)?;
+        tokio::fs::write(&src, bytes).await?;
         cache
             .put_played(s, quality, Some(format), &src)
             .await
@@ -340,7 +340,7 @@ mod tests {
         };
         assert_eq!(hit.quality, BitRate::Exhigh);
         assert_eq!(hit.origin, PlaybackOrigin::Cache);
-        assert_eq!(std::fs::read(&hit.path)?, b"AUDIO");
+        assert_eq!(tokio::fs::read(&hit.path).await?, b"AUDIO");
         Ok(())
     }
 
@@ -363,7 +363,7 @@ mod tests {
         );
         assert_eq!(hit.origin, PlaybackOrigin::Download);
         assert!(hit.path.ends_with("netease/lossless/叶惠美/晴天.flac"));
-        assert_eq!(std::fs::read(&hit.path)?, b"FLAC");
+        assert_eq!(tokio::fs::read(&hit.path).await?, b"FLAC");
         Ok(())
     }
 
@@ -390,7 +390,11 @@ mod tests {
             return Err(color_eyre::eyre::eyre!("应命中"));
         };
         assert_eq!(hit.origin, PlaybackOrigin::Cache, "同音质应取 cache");
-        assert_eq!(std::fs::read(&hit.path)?, b"FROM_CACHE", "同音质应取 cache");
+        assert_eq!(
+            tokio::fs::read(&hit.path).await?,
+            b"FROM_CACHE",
+            "同音质应取 cache"
+        );
         Ok(())
     }
 
@@ -419,7 +423,7 @@ mod tests {
         assert_eq!(hit.quality, BitRate::Lossless);
         assert_eq!(hit.origin, PlaybackOrigin::Download, "更高音质应取下载导出");
         assert_eq!(
-            std::fs::read(&hit.path)?,
+            tokio::fs::read(&hit.path).await?,
             b"FROM_DL",
             "更高音质应取下载导出"
         );
@@ -469,7 +473,7 @@ mod tests {
         let s = song("1", "晴天", Some("叶惠美"));
         let dir = root.join("netease/lossless/叶惠美");
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("晴天.part-dl"), b"HALF")?;
+        tokio::fs::write(dir.join("晴天.part-dl"), b"HALF").await?;
 
         assert!(
             resolve_local(&cache, Some(&root), &s, BitRate::Exhigh).is_none(),

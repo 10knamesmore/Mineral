@@ -14,6 +14,7 @@ use tokio::sync::Semaphore;
 /// 之后的 `acquire` 也能立刻拿到,避免测试里的"先 notify 再 await"竞态。
 struct FakeChannel {
     playlists: Vec<Playlist>,
+
     gate: Option<Arc<Semaphore>>,
 }
 

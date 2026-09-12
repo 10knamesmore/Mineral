@@ -19,6 +19,79 @@ mod common;
 use common::server::{accept_handshake, request_ids};
 use common::transport::TestTransport;
 
+/// 重复结果只被丢弃，同批有效结果和后续请求仍正常交付。
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_result_does_not_stop_delivery() -> color_eyre::Result<()> {
+    for transport in TestTransport::ALL {
+        let (client_wire, server_wire) = transport.pair(/*capacity*/ 8)?;
+        let server = tokio::spawn(async move {
+            let mut wire = server_wire;
+            accept_handshake(&mut wire).await?;
+            let batch = wire.recv().await?.ok_or_else(|| eyre!("没有收到请求"))?;
+            let mut ids = request_ids(&batch).into_iter();
+            assert_eq!(ids.len(), 2, "{transport:?}: {batch:?}");
+            let first = ids.next().ok_or_else(|| eyre!("缺少第一条请求"))?;
+            let second = ids.next().ok_or_else(|| eyre!("缺少第二条请求"))?;
+            let replies = [first, first, second]
+                .into_iter()
+                .map(|id| SessionResult {
+                    id,
+                    result: OperationResult::Query(Box::new(Response::DaemonInfo {
+                        pid: std::process::id(),
+                    })),
+                })
+                .collect();
+            wire.send(MessageBatch::one(SessionMessage::Results(replies)))
+                .await?;
+
+            let batch = wire
+                .recv()
+                .await?
+                .ok_or_else(|| eyre!("没有收到后续请求"))?;
+            let ids = request_ids(&batch);
+            assert_eq!(ids.len(), 1, "{transport:?}: {batch:?}");
+            let id = ids.first().copied().ok_or_else(|| eyre!("缺少后续请求"))?;
+            wire.send(MessageBatch::one(SessionMessage::Results(vec![
+                SessionResult {
+                    id,
+                    result: OperationResult::Query(Box::new(Response::DaemonInfo {
+                        pid: std::process::id(),
+                    })),
+                },
+            ])))
+            .await?;
+            Ok::<_, color_eyre::Report>(())
+        });
+        let client = Client::from_wire(
+            client_wire,
+            "duplicate_result",
+            ClientConfig {
+                max_in_flight: 2,
+                ..ClientConfig::default()
+            },
+        )
+        .await?;
+        let (first, second) = timeout(Duration::from_secs(/*secs*/ 5), async {
+            tokio::join!(client.daemon_info(), client.daemon_info())
+        })
+        .await?;
+        for outcome in [first, second] {
+            assert!(
+                matches!(outcome, Outcome::Applied(pid) if pid == std::process::id()),
+                "{transport:?}: 重复结果不应阻断有效结果: {outcome:?}"
+            );
+        }
+        let outcome = timeout(Duration::from_secs(/*secs*/ 5), client.daemon_info()).await?;
+        assert!(
+            matches!(outcome, Outcome::Applied(pid) if pid == std::process::id()),
+            "{transport:?}: 后续请求应成功: {outcome:?}"
+        );
+        server.await??;
+        client.close();
+    }
+    Ok(())
+}
+
 /// 不等待者的拒绝日志包含请求身份与原因，等待者仍得到失败，两种结果均释放额度。
 /// 使用单线程 runtime，让会话任务共享本测试线程的日志 subscriber。
 #[tokio::test(flavor = "current_thread")]

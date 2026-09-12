@@ -9,8 +9,10 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum UiPrefs {
     /// 数据表。
     Table,
+
     /// 记录键。
     Key,
+
     /// 保存的文本值。
     Value,
 }

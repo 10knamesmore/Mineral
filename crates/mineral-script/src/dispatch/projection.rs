@@ -154,3 +154,74 @@ fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> 
     let template: String = entry.get(kind).ok()?;
     Some(mineral_channel_core::render_web_url(&template, raw_id))
 }
+
+/// Projects direct media into the Lua `library.song_url` callback shape.
+///
+/// 字段名与 hook 改写返回值([`RewriteSpec`](crate::hooks::RewriteSpec) 的 Lua 形态)
+/// 对齐——`url` / `quality` / `headers`(`{{name, value}}` 数组)/ `layout`,回调里可
+/// 原样喂给 `ctx.resolve(...)` 完成顶入;另带 `song_id` / `bitrate_bps` / `size` /
+/// `format` 供匹配逻辑参考。
+pub(super) fn direct_media_table(
+    lua: &Lua,
+    direct: &mineral_model::DirectMedia,
+) -> mlua::Result<mlua::Table> {
+    let entry = lua.create_table()?;
+    let info = direct.info();
+    entry.set("song_id", info.song_id.qualified())?;
+    entry.set("url", direct.locator().media_url().to_string())?;
+    entry.set("quality", info.quality.as_str())?;
+    // bitrate_bps / size / format 未知时为 nil(脚本侧参考前需判空)。
+    entry.set("bitrate_bps", info.bitrate_bps)?;
+    entry.set("size", info.size)?;
+    entry.set(
+        "format",
+        info.format.as_ref().map(|f| f.as_str().to_owned()),
+    )?;
+    let headers = lua.create_table()?;
+    let direct_headers = direct
+        .locator()
+        .remote()
+        .map_or(&[][..], mineral_model::RemoteLocator::headers);
+    for (i, (name, value)) in direct_headers.iter().enumerate() {
+        let pair = lua.create_table()?;
+        pair.raw_set(1, name.clone())?;
+        pair.raw_set(2, value.clone())?;
+        headers.raw_set(i.wrapping_add(1), pair)?;
+    }
+    entry.set("headers", headers)?;
+    entry.set(
+        "layout",
+        match direct.layout() {
+            mineral_model::StreamLayout::Contiguous => "contiguous",
+            mineral_model::StreamLayout::Chunked => "chunked",
+        },
+    )?;
+    Ok(entry)
+}
+
+/// `PlaylistBrief` 在 Lua 侧的投影:`library.playlists` 回调与 curate
+/// transform 入参共用。id 用 `qualified()`;Option 字段缺席为 nil;
+/// `source` 是便利字段(跨源函数里免解析 id)。
+fn brief_table(lua: &Lua, brief: &crate::message::PlaylistBrief) -> mlua::Result<mlua::Table> {
+    let entry = lua.create_table()?;
+    entry.set("id", brief.id.qualified())?;
+    entry.set("name", brief.name.clone())?;
+    entry.set("track_count", brief.track_count)?;
+    entry.set("description", brief.description.clone())?;
+    entry.set("play_count", brief.play_count)?;
+    entry.set("subscriber_count", brief.subscriber_count)?;
+    entry.set("source", brief.id.namespace().name())?;
+    Ok(entry)
+}
+
+/// 一组 `PlaylistBrief` 投影成 Lua 数组(按序)。
+pub(super) fn briefs_table(
+    lua: &Lua,
+    briefs: &[crate::message::PlaylistBrief],
+) -> mlua::Result<mlua::Table> {
+    let list = lua.create_table()?;
+    for (i, brief) in briefs.iter().enumerate() {
+        list.raw_set(i.wrapping_add(1), brief_table(lua, brief)?)?;
+    }
+    Ok(list)
+}

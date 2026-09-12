@@ -1,7 +1,7 @@
 //! Mineral 跨平台路径解析。
 //!
-//! config / data / cache / 音乐目录在所有 unix(含 **macOS**)统一走 XDG(见 [`xdg`]);
-//! runtime / IPC socket 因平台差异(macOS 无 `XDG_RUNTIME_DIR`)单独处理(见 [`socket`])。
+//! config / data / cache / 音乐目录在所有 Unix(含 **macOS**)统一走 XDG；
+//! runtime / IPC socket 因平台差异(macOS 无 `XDG_RUNTIME_DIR`)单独处理。
 
 #[cfg(windows)]
 compile_error!("Windows 暂不支持");
@@ -67,8 +67,8 @@ pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
 /// 客户端(TUI)持久化数据库文件(`<data_dir>/tui.db`)。
 ///
 /// 与 server 的 `mineral.db` 同目录的另一个 sqlite 文件,存封面缓存索引、UI 偏好和
-/// 歌单曲目位置等客户端态。数据库放 data_dir(持久),封面文件本体仍落
-/// [`cover_cache_dir`](可被清理)。
+/// 歌单曲目位置等客户端态。数据库放 data_dir(持久),封面文件本体仍落在
+/// 可清理的 [`cover_cache_dir`]。
 ///
 /// # Return:
 ///   解析得到的文件路径。本函数不创建目录。

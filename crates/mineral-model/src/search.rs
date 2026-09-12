@@ -6,12 +6,16 @@ use serde::{Deserialize, Serialize};
 pub enum SearchKind {
     /// 单曲。
     Song,
+
     /// 专辑。
     Album,
+
     /// 艺人。
     Artist,
+
     /// 歌单。
     Playlist,
+
     /// 用户。
     User,
 }

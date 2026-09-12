@@ -16,18 +16,25 @@ use serde::{Deserialize, Serialize};
 pub enum AudioFormat {
     /// MP3(有损)。
     Mp3,
+
     /// FLAC(无损)。
     Flac,
+
     /// AAC / M4A(有损)。
     Aac,
+
     /// Ogg Vorbis(有损)。
     Ogg,
+
     /// WAV(无损 PCM)。
     Wav,
+
     /// Monkey's Audio(无损)。
     Ape,
+
     /// Apple Lossless(无损)。
     Alac,
+
     /// 未识别格式(保留 channel 原文,不丢信息)。「格式缺失」不进本枚举——
     /// 用 `Option<AudioFormat>` 的 `None` 表达,别造空串变体。
     Other(String),

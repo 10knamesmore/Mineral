@@ -8,8 +8,10 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, EntityName};
 enum SqliteMaster {
     /// 结构目录。
     Table,
+
     /// 对象类型。
     Type,
+
     /// 对象名称。
     Name,
 }

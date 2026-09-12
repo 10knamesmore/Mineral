@@ -7,6 +7,7 @@ use crate::ids::{AlbumId, ArtistId};
 pub struct ArtistRef {
     /// 艺人 ID。
     pub id: ArtistId,
+
     /// 艺名。
     pub name: String,
 }
@@ -16,6 +17,7 @@ pub struct ArtistRef {
 pub struct AlbumRef {
     /// 专辑 ID。
     pub id: AlbumId,
+
     /// 专辑名。
     pub name: String,
 }

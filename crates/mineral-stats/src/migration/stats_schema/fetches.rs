@@ -10,24 +10,34 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Fetches {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 获取目标类型。
     FetchKind,
+
     /// 来源标识。
     Source,
+
     /// 目标身份。
     TargetRef,
+
     /// 触发方式。
     Trigger,
+
     /// 操作结果。
     Outcome,
+
     /// 操作耗时，单位毫秒。
     LatencyMs,
 }

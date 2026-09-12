@@ -322,7 +322,7 @@ mod tests {
         let s = song("186016", "晴天", Some("叶惠美"));
         // 模拟 capture 落盘文件。
         let src = d.path().join("capture.part");
-        std::fs::write(&src, b"FLACdata")?;
+        tokio::fs::write(&src, b"FLACdata").await?;
         cache
             .put_played(&s, BitRate::Lossless, Some(&AudioFormat::Flac), &src)
             .await?;
@@ -335,7 +335,7 @@ mod tests {
             "应落到可读库路径: {}",
             path.display()
         );
-        assert_eq!(std::fs::read(&path)?, b"FLACdata");
+        assert_eq!(tokio::fs::read(&path).await?, b"FLACdata");
         assert!(!src.exists(), "源 capture 文件应被移走");
         // 不同音质不命中(键含音质)。
         assert!(cache.get(&s.id, BitRate::Exhigh).is_none());
@@ -354,7 +354,7 @@ mod tests {
         let first_path = {
             let cache = open_cache(&db, dir.clone()).await?;
             let src = d.path().join("cap.part");
-            std::fs::write(&src, b"AUDIO")?;
+            tokio::fs::write(&src, b"AUDIO").await?;
             cache
                 .put_played(&s, BitRate::Exhigh, Some(&AudioFormat::Mp3), &src)
                 .await?;
@@ -373,7 +373,7 @@ mod tests {
 
         // 同 key 重复 harvest 必须原地覆盖。
         let src2 = d.path().join("cap2.part");
-        std::fs::write(&src2, b"AUDIO2")?;
+        tokio::fs::write(&src2, b"AUDIO2").await?;
         reopened
             .put_played(&s, BitRate::Exhigh, Some(&AudioFormat::Mp3), &src2)
             .await?;

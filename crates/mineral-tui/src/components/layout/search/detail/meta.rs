@@ -1,13 +1,125 @@
-//! 实体详情头部的元数据文本格式化:专辑卡片行(名 / 艺人 / 计量)、发行年份、艺人计数、
-//! 千分位数字。纯文本构造,不碰 Buffer。
+//! 实体详情头部的元数据呈现：选择名称、艺人、计量与简介文本，绘制固定头部和独立滚动的简介视口。
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use mineral_model::{Album, Artist};
 
 use crate::components::layout::search::panel::join_artists;
 use crate::render::theme::Theme;
+use crate::runtime::state::{DetailData, DetailFrame, EntityRef};
+
+use super::description;
+
+/// 元数据区：上半固定 header（名 + 次行 + 计量，wrap 折行），下半是独立可滚动简介视口
+/// （C-d/u/b/f 滚动，按 `\n` 多行渲染、溢出画滚动条）。两者间留一行视觉间隔。
+pub(super) fn draw_meta(
+    buf: &mut Buffer,
+    meta_a: Rect,
+    dframe: &DetailFrame,
+    theme: &Theme,
+    show_back: bool,
+) {
+    let pad = Rect::new(
+        meta_a.x.saturating_add(1),
+        meta_a.y,
+        meta_a.width.saturating_sub(1),
+        meta_a.height,
+    );
+    if pad.width == 0 || pad.height == 0 {
+        return;
+    }
+    let mut header = meta_lines(dframe, theme);
+    if show_back {
+        header.push(Line::from(Span::styled(
+            "‹ Esc back",
+            Style::new().fg(theme.peach),
+        )));
+    }
+    // header 占其行数 + 1 行间隔；简介拿剩余高度（不足时 Layout 自动裁）。
+    let head_h = u16::try_from(header.len()).unwrap_or(0).saturating_add(1);
+    let [head_a, desc_a] =
+        Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(pad);
+    Widget::render(
+        Paragraph::new(header).wrap(Wrap { trim: false }),
+        head_a,
+        buf,
+    );
+    description::draw_description(
+        buf,
+        desc_a,
+        frame_description(dframe),
+        dframe.description_scroll(),
+        theme,
+    );
+}
+
+/// 当前帧头部该展示的简介原文（歌曲取其所属专辑的、专辑/artist 取聚合 detail 的、歌单取自身的）；
+/// 拿不到为空串（不渲染）。
+fn frame_description(dframe: &DetailFrame) -> &str {
+    match &dframe.entity {
+        EntityRef::Song(_) => match &dframe.data {
+            Some(DetailData::Album(a)) => &a.description,
+            _ => "",
+        },
+        EntityRef::Album(_) => dframe.album_meta().map_or("", |a| a.description.as_str()),
+        EntityRef::Artist(_) => dframe.artist_meta().map_or("", |a| a.description.as_str()),
+        EntityRef::Playlist(p) => &p.description,
+    }
+}
+
+/// 元数据行内容（按实体类型）。artist 帧的计数/简介取 fetch 回来的完整 detail——结果列那份
+/// `entity` 来自搜索端点，无 `album_count`/`song_count`/`description`；未到货退回 `entity`。
+fn meta_lines(dframe: &DetailFrame, theme: &Theme) -> Vec<Line<'static>> {
+    let name = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
+    let sub = Style::new().fg(theme.subtext);
+    let dim = Style::new().fg(theme.overlay);
+    match &dframe.entity {
+        EntityRef::Song(s) => match &dframe.data {
+            // 歌曲的详情即其所属专辑:专辑详情到货就照专辑卡片画(名/艺人/计量/简介),与
+            // 「直接搜 album」的详情同一套;未到货退回歌名 + 艺人占位（专辑名作标题）。
+            Some(DetailData::Album(a)) => album_card_lines(a, theme),
+            _ => {
+                let title = s
+                    .album
+                    .as_ref()
+                    .map_or_else(|| s.name.clone(), |a| a.name.clone());
+                vec![
+                    Line::from(Span::styled(title, name)),
+                    Line::from(Span::styled(join_artists(&s.artists), sub)),
+                ]
+            }
+        },
+        EntityRef::Album(entity_a) => {
+            // 整份用 album_meta 选定的 album（fetch 完整 detail 优先、entity 占位兜底）。
+            album_card_lines(dframe.album_meta().unwrap_or(&**entity_a), theme)
+        }
+        EntityRef::Artist(entity_a) => {
+            // 整份用 artist_meta 选定的 artist（fetch 完整 detail 优先、entity 占位兜底）；
+            // 渲染层只读字段，不关心数据来自哪个端点——聚合已在 channel 边缘完成。
+            let a = dframe.artist_meta().unwrap_or(&**entity_a);
+            let mut lines = vec![Line::from(Span::styled(a.name.clone(), name))];
+            // 粉丝数未知(接口没给)整行省略,不画 `0 fans` 撒谎。
+            if let Some(fans) = a.follower_count {
+                lines.push(Line::from(Span::styled(
+                    format!("{} fans", with_commas(fans)),
+                    sub,
+                )));
+            }
+            if let Some(counts) = artist_counts(a) {
+                lines.push(Span::styled(counts, dim).into());
+            }
+            lines
+        }
+        EntityRef::Playlist(p) => vec![
+            Line::from(Span::styled(p.name.clone(), name)),
+            Line::from(Span::styled(format!("{} tracks", p.track_count), sub)),
+        ],
+    }
+}
 
 /// u64 千分位：`8900000` → `8,900,000`（detail 头部宽，展示完整数而非缩写）。
 pub(crate) fn with_commas(n: u64) -> String {

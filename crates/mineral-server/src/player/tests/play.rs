@@ -1,7 +1,23 @@
 //! play_song:取链失败 · stale 丢弃 · 本地/远端标记 · 下载后起播。
 
-use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use mineral_channel_core::MusicChannel;
+use mineral_model::{AlbumId, AlbumRef, BitRate, PlaybackMediaInfo, Song, SongId, SourceKind};
+use mineral_persist::ServerStore;
+use mineral_playback::{PlaybackProvider, PlaybackRegistry};
+use mineral_protocol::{PlayCursor, PlaybackOrigin, PlayerVersions};
+use mineral_test::mock::{UrlChannel, serve_once};
+use mineral_test::song;
+use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
+
+use super::backends::{RecordingChannel, test_playback_registry};
+use super::fixtures::{core_with, core_with_events_stats, core_with_events_stats_playback};
+use super::waiting::wait_until;
+use crate::download::download_song;
+use crate::media_cache::MediaCache;
 
 /// 端到端:play_song → play_started、spawn_on_played → play_ended,真 recorder 把一次
 /// 播放写进 stats.db —— 证明埋点接线真产数据(非仅编译通过)。
@@ -534,7 +550,7 @@ async fn local_hit_bypasses_failing_provider() -> color_eyre::Result<()> {
         .parent()
         .ok_or_else(|| color_eyre::eyre::eyre!("download fixture has no parent"))?;
     std::fs::create_dir_all(parent)?;
-    std::fs::write(&path, b"prepared-local")?;
+    tokio::fs::write(&path, b"prepared-local").await?;
 
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel::default())];
     let playback = test_playback_registry(

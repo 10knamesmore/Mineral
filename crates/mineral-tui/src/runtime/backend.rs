@@ -39,6 +39,7 @@ pub(crate) enum Completion {
     ScriptAction {
         /// 动作注册名(提示用)。
         name: String,
+
         /// 结论。
         outcome: Outcome<()>,
     },
@@ -50,6 +51,7 @@ pub(crate) enum Completion {
     Love {
         /// 目标歌曲(提示 / 校正归属用)。
         song_id: SongId,
+
         /// 切换后的权威状态。
         outcome: Outcome<bool>,
     },

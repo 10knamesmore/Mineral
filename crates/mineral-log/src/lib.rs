@@ -1,7 +1,7 @@
 //! Mineral 全局日志 facade。
 //!
 //! 对外:re-export `tracing` 的 [`trace!`] / [`debug!`] / [`info!`] / [`warn!`] / [`error!`]
-//! 与 [`instrument`]、[`span!`]、[`event!`] —— 业务代码 `use mineral_log::warn;` 即可,
+//! 与 [`macro@instrument`]、[`span!`]、[`event!`] —— 业务代码 `use mineral_log::warn;` 即可,
 //! 不需要直接依赖 `tracing`。
 //!
 //! 后端:[`init`] 安装一个 `tracing-subscriber`,把日志写到

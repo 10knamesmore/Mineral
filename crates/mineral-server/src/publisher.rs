@@ -149,20 +149,28 @@ fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnap
 struct PlaybackSignature {
     /// 是否在出声。
     playing: bool,
+
     /// 时长。
     duration_ms: Option<u64>,
+
     /// 音量。
     volume_pct: u8,
+
     /// 曲终 latch。
     track_finished_seq: u64,
+
     /// 后端形态。
     backend: mineral_audio::AudioBackend,
+
     /// 轨道令牌。
     current_track_token: u64,
+
     /// 预排时长。
     next_duration_ms: Option<u64>,
+
     /// 预排就绪。
     next_ready: bool,
+
     /// 采样率。
     sample_rate_hz: u32,
 }

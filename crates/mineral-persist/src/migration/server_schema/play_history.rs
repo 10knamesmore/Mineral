@@ -9,16 +9,22 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum PlayHistory {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 播放发生时间，Unix 毫秒。
     PlayedAt,
+
     /// 是否完整播放。
     Completed,
+
     /// 实际收听毫秒数。
     ListenMs,
 }

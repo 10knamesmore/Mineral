@@ -13,30 +13,43 @@ use ratatui::style::{Color, Modifier, Style};
 pub struct Theme {
     /// 主背景。
     pub base: Color,
+
     /// 次背景(嵌套面板)。
     pub mantle: Color,
+
     /// 第三背景(底部 transport / cmd 行)。
     pub crust: Color,
+
     /// 行选中 / 进度条 track。
     pub surface0: Color,
+
     /// 未聚焦边框 / 分隔线。
     pub surface1: Color,
+
     /// 暗淡文本 / 二级标签。
     pub overlay: Color,
+
     /// 三级文本(metadata)。
     pub subtext: Color,
+
     /// 主文本。
     pub text: Color,
+
     /// 主强调色:选中 / 聚焦边框 / 当前播放。
     pub accent: Color,
+
     /// 副强调色:进度条填充 / 频谱顶段。
     pub accent_2: Color,
+
     /// 错误 / 删除 / love 标记。
     pub red: Color,
+
     /// 暂停指示。
     pub yellow: Color,
+
     /// 播放指示。
     pub green: Color,
+
     /// 命令 / 搜索前缀。
     pub peach: Color,
 

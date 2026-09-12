@@ -10,22 +10,31 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum AppLifecycle {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 生命周期所属组件。
     Who,
+
     /// 生命周期阶段。
     Phase,
+
     /// 音频后端。
     AudioBackend,
+
     /// 是否恢复已有会话。
     SessionRestored,
+
     /// 客户端版本。
     ClientVersion,
 }

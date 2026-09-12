@@ -2,11 +2,18 @@
 //! db 命中直采缓存数据不重算。
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
-use mineral_model::{AudioFormat, Envelope};
+use mineral_model::{AudioFormat, BitRate, Envelope, Song, SongId, SourceKind};
+use mineral_persist::ServerStore;
 use mineral_protocol::PlayerVersions;
+use mineral_test::song;
 
-use super::*;
+use super::backends::RecordingChannel;
+use super::fixtures::core_with_channels_music_dir;
+use crate::media_cache::MediaCache;
+use crate::player::PlayerCore;
 
 /// 把一首真实 WAV 写入歌曲元数据派生的下载路径。
 fn put_wav_download(root: &Path, s: &Song) -> color_eyre::Result<()> {

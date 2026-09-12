@@ -9,12 +9,16 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum CoverCache {
     /// 数据表。
     Table,
+
     /// 记录键。
     Key,
+
     /// 相对缓存根目录的路径。
     Relpath,
+
     /// 文件字节数。
     Bytes,
+
     /// 最近访问的逻辑时钟。
     LastAccess,
 }

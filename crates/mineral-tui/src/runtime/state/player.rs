@@ -43,3 +43,62 @@ impl PlayerMirror {
         }
     }
 }
+
+impl super::AppState {
+    /// 当前在播歌在 queue 中的下标(打开浮层定位光标 / prefetch 邻居 / 封面预热都用它)。
+    /// 无在播曲返回 `None`。
+    ///
+    /// 优先信任 server 的在播锚点——队列含重复曲时,这是唯一能精确指出在播是哪一行的
+    /// 依据(按歌曲身份 first-match 会错指到首个副本)。仅当锚点确实指向在播歌时采纳;
+    /// 否则(在播歌不在队列 / 锚点陈旧)退回身份 first-match,保住「在播曲不在队列」时
+    /// 返回 `None` 的既有语义。
+    ///
+    /// 锚点悬空(在播曲已被摘出队列但仍在响)时直接返回 `None` 且**不**回落身份匹配:
+    /// 队列里若还留着同一首歌的另一份,回落会把那一行错点亮成「正在播」。
+    pub fn queue_current_index(&self) -> Option<usize> {
+        let id = &self.playback.track.as_ref()?.id;
+        let sel = self.player.cursor.queue_index()?;
+        if self.player.queue.get(sel).is_some_and(|s| &s.id == id) {
+            return Some(sel);
+        }
+        self.player.queue.iter().position(|s| &s.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::AppState;
+    use crate::test_support::endserenading;
+
+    /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
+    #[test]
+    fn queue_current_index_finds_playing() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
+        let queue = endserenading(5);
+        s.playback.track = queue.get(2).cloned();
+        s.player.queue = queue;
+        assert_eq!(s.queue_current_index(), Some(2));
+
+        s.playback.track = None;
+        assert_eq!(s.queue_current_index(), None);
+        Ok(())
+    }
+
+    /// 重复曲:`queue_current_index` 采纳 server 锚点,精确指向在播的那个
+    /// 副本,而非按身份回退到首个副本。
+    #[test]
+    fn queue_current_index_prefers_anchor_over_identity() -> color_eyre::Result<()> {
+        use mineral_test::song;
+        let mut s = AppState::test_default()?;
+        s.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
+        s.playback.track = Some(song("a"));
+        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
+        assert_eq!(s.queue_current_index(), Some(2), "应采纳锚点,而非首个 a@0");
+
+        // 锚点不指向在播歌(在播曲不在队列)→ 退回身份匹配,找不到返回 None。
+        s.playback.track = Some(song("z"));
+        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2);
+        assert_eq!(s.queue_current_index(), None, "在播曲不在队列时仍返回 None");
+        Ok(())
+    }
+}

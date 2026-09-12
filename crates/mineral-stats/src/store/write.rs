@@ -112,32 +112,46 @@ mod tests {
     struct PlayRow {
         /// 来源 name。
         ns: String,
+
         /// 裸歌曲 id。
         song_value: String,
+
         /// 实际收听 ms。
         listen_ms: i64,
+
         /// 结束原因(TEXT → 枚举)。
         finish_reason: FinishReason,
+
         /// 播放模式串。
         play_mode: String,
+
         /// 会话 id。
         session_id: i64,
+
         /// 发起方式(TEXT → 枚举)。
         origin_kind: PlayOrigin,
+
         /// 发起方(TEXT → 枚举)。
         actor: Actor,
+
         /// 上下文 kind。
         context_kind: String,
+
         /// 上下文 ref。
         context_ref: Option<String>,
+
         /// 上下文显示名快照。
         context_name: Option<String>,
+
         /// 格式串。
         audio_format: Option<String>,
+
         /// 无损标记(现算,0/1)。
         is_lossless: Option<i64>,
+
         /// 来源位置(TEXT → 枚举)。
         playback_origin: PlaybackOrigin,
+
         /// 顶换标记(0/1)。
         substituted: i64,
     }

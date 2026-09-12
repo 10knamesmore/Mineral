@@ -346,7 +346,7 @@ const ANSI_SLOT_NAMES: [&str; 16] = [
 ];
 
 impl<'de> Deserialize<'de> for AnsiSlot {
-    /// 具名(∈ [`ANSI_SLOT_NAMES`])或编号(`0..=15`);越界 / 未知名报错。
+    /// 具名(∈ `ANSI_SLOT_NAMES`)或编号(`0..=15`);越界 / 未知名报错。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -436,7 +436,7 @@ pub enum TextStyle {
     CrossedOut,
 }
 
-/// 一个合法的 color token 名(∈ [`TOKEN_NAMES`])。反序列化时校验取值范围。
+/// 一个合法的 color token 名(∈ `TOKEN_NAMES`)。反序列化时校验取值范围。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenName {
     /// 经校验的 token 名(保证 ∈ [`TOKEN_NAMES`])。
@@ -454,7 +454,7 @@ impl TokenName {
 }
 
 impl<'de> Deserialize<'de> for TokenName {
-    /// 解析 token 名:必须 ∈ [`TOKEN_NAMES`],否则报错(经 `serde_path_to_error` 带路径)。
+    /// 解析 token 名:必须 ∈ `TOKEN_NAMES`,否则报错(经 `serde_path_to_error` 带路径)。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

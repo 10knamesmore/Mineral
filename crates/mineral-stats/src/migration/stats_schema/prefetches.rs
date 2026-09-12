@@ -10,18 +10,25 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Prefetches {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 来源标识。
     Source,
+
     /// 预取结果。
     Resolution,
 }

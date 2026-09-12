@@ -177,6 +177,7 @@ pub enum Request {
     QueueInsertNext {
         /// 待插播的歌(`Box` 避免 enum 体积膨胀)。
         song: Box<Song>,
+
         /// 该曲的来源语境(埋点 per-song 覆盖:插队散曲不继承队列级 context)。
         context: QueueContextWire,
     },
@@ -186,6 +187,7 @@ pub enum Request {
     QueueAppend {
         /// 待追加的歌(`Box` 避免 enum 体积膨胀)。
         song: Box<Song>,
+
         /// 该曲的来源语境(埋点 per-song 覆盖:同插播)。
         context: QueueContextWire,
     },
@@ -269,6 +271,7 @@ pub enum Request {
     StoreGet {
         /// 目标歌。
         song: SongId,
+
         /// 开放键(如 `plugin.skipcount`)。
         key: String,
     },
@@ -277,8 +280,10 @@ pub enum Request {
     StoreSet {
         /// 目标歌。
         song: SongId,
+
         /// 开放键。
         key: String,
+
         /// 标量值。
         value: crate::StoreValue,
     },

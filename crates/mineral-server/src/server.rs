@@ -58,7 +58,7 @@ impl Server {
     /// # Params:
     ///   - `sources`: Catalog channels and playback providers. Empty sets are valid.
     ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
-    ///   - `persist`: 持久化句柄,透传给 [`PlayerCore::spawn`](收藏 / 歌曲元数据等经它落库)。
+    ///   - `persist`: 持久化句柄,透传给 `PlayerCore::spawn`(收藏 / 歌曲元数据等经它落库)。
     ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
     ///   - `config_tree`: 有效配置底树(加载管线产物;配置宿主初始状态,握手
     ///     订阅 `Config` 的 client 重放它)。
@@ -177,7 +177,7 @@ impl Server {
     /// 配对 + 按订阅主题的状态发布)。多 client:连接数不设限,每条独立 task /
     /// writer / 订阅泵。
     ///
-    /// 每条新 connection 接受后,内部重跑 [`PlayerCore::refresh_initial_loads`]
+    /// 每条新 connection 接受后,内部重跑 `PlayerCore::refresh_initial_loads`
     /// ——数据现状已由订阅初始快照兜底,这里是连接时顺手保鲜远端数据。
     pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
         let player = self.player.clone();

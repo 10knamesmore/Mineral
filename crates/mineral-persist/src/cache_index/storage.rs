@@ -12,6 +12,7 @@ use crate::entity::{audio_cache, cover_cache};
 pub(crate) enum CacheTable {
     /// 音频本体缓存。
     Audio,
+
     /// 封面缓存。
     Cover,
 }

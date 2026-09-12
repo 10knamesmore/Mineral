@@ -13,6 +13,7 @@ use crate::transport::url::Crypto;
 #[derive(Debug, Clone)]
 pub struct LoginQrCode {
     pub url: String,
+
     pub unikey: String,
 }
 

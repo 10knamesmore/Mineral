@@ -751,11 +751,17 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             query: Option<String>,
+
             kind: SearchTargetKind,
+
             page: i64,
+
             result_count: Option<i64>,
+
             outcome: SearchOutcome,
+
             actor: Actor,
+
             session_id: Option<i64>,
         }
         let row = crate::entity::searches::Entity::find()
@@ -813,9 +819,13 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             ns: String,
+
             song_value: String,
+
             loved: i64,
+
             origin: LoveOrigin,
+
             remote_mirror: Option<String>,
         }
         let row = crate::entity::love_changes::Entity::find()
@@ -870,10 +880,15 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             op: String,
+
             playlist_ref: String,
+
             song_value: Option<String>,
+
             song_count: i64,
+
             outcome: OpOutcome,
+
             error_kind: Option<PlaylistError>,
         }
         let row = crate::entity::playlist_ops::Entity::find()
@@ -926,8 +941,11 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             op: QueueOp,
+
             ns: Option<String>,
+
             song_value: Option<String>,
+
             count: i64,
         }
         let row = crate::entity::queue_ops::Entity::find()
@@ -970,6 +988,7 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             reason: crate::event::RejectReason,
+
             actor: Actor,
         }
         let row = crate::entity::connection_rejects::Entity::find()
@@ -1006,8 +1025,11 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             client: String,
+
             duration_ms: i64,
+
             concurrent: i64,
+
             actor: Actor,
         }
         let row = crate::entity::client_connections::Entity::find()
@@ -1053,8 +1075,11 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             template_index: i64,
+
             ctx_kind: crate::event::CopyContext,
+
             target_ref: Option<String>,
+
             outcome: OpOutcome,
         }
         let row = crate::entity::copy_renders::Entity::find()
@@ -1099,8 +1124,11 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             program: String,
+
             outcome: crate::event::SpawnOutcome,
+
             exit_code: Option<i64>,
+
             actor: Actor,
         }
         let row = crate::entity::spawns::Entity::find()
@@ -1143,6 +1171,7 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             name: String,
+
             actor: Actor,
         }
         let row = crate::entity::bus_messages::Entity::find()
@@ -1183,9 +1212,13 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             fetch_kind: String,
+
             target_ref: Option<String>,
+
             trigger: FetchTrigger,
+
             outcome: FetchOutcome,
+
             latency_ms: i64,
         }
         let row = crate::entity::fetches::Entity::find()

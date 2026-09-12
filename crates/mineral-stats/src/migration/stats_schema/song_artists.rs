@@ -9,14 +9,19 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SongArtists {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 原始排列位置。
     Position,
+
     /// 来源内艺人身份。
     ArtistValue,
+
     /// 艺人名称。
     ArtistName,
 }

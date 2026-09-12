@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 pub enum LayoutMode {
     /// 完整布局:左半 lyrics、右半 spectrum(上)+ transport(下),顶部 + 底部状态行。
     Full,
+
     /// 紧凑模式(终端过小):仅 top status / left / transport / status bar。
     Compact,
 }
@@ -16,10 +17,13 @@ pub enum LayoutMode {
 pub struct Areas {
     /// 实际选用的布局模式。
     pub mode: LayoutMode,
+
     /// 顶部状态行(1 行)。
     pub top_status: Rect,
+
     /// 左栏(playlists / library) — search 端点复用为结果(results)列。
     pub left: Rect,
+
     /// 右栏(now playing detail) — Compact 模式下为 `None`。search 端点复用为详情(detail)面板。
     pub right: Option<Rect>,
 
@@ -30,10 +34,13 @@ pub struct Areas {
     /// 独立封面面板矩形。常规 Full/Compact 由 now_playing 内部画封面,此处仅作**全屏形变的
     /// 起点锚点**(封面从此格脱出);全屏布局为左列上方(transport 在其下)。Compact 无锚点为 `None`。
     pub cover: Option<Rect>,
+
     /// 底部左半:lyrics 面板,占满 bottom 全高 — Compact 模式下为 `None`。
     pub lyrics: Option<Rect>,
+
     /// 底部右半上:spectrum 可视化 — Compact 模式下为 `None`。
     pub spectrum: Option<Rect>,
+
     /// 底部右半下(Full)/ 底部全宽(Compact):transport 进度条。
     pub transport: Rect,
 }

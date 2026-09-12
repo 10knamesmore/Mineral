@@ -12,6 +12,7 @@ pub enum Error {
     Api {
         /// channel 自定义的错误 code。
         code: i64,
+
         /// 错误描述。
         message: String,
     },

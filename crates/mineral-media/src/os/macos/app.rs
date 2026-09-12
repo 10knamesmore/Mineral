@@ -45,7 +45,7 @@ pub fn macos_init_app() -> color_eyre::Result<MacApp> {
 
 /// 在主线程阻塞 pump run loop,直到 `should_stop()` 为真。
 ///
-/// 按 [`PUMP_SLICE_SECS`] 切片运行 run loop:每片让系统派发媒体命令 block,片末
+/// 按 `PUMP_SLICE_SECS` 切片运行 run loop:每片让系统派发媒体命令 block,片末
 /// 检查停止条件。无更多事件时 `runMode_beforeDate` 会睡到 limit,不忙等。
 ///
 /// # Params:

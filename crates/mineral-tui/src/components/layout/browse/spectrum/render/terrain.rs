@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use super::super::state::{SPECTRUM_RES, SpectrumState};
-use super::BrailleGrid;
+use super::braille::BrailleGrid;
 use crate::components::layout::shared::text::{center_bg, column_bg};
 use crate::render::color::{lerp_color, luma255_of, soften_over_bg};
 use crate::render::palette::ColumnColors;

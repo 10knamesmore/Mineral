@@ -10,26 +10,37 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Searches {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 搜索文本。
     Query,
+
     /// 搜索文本摘要。
     QueryHash,
+
     /// 搜索目标类型。
     Kind,
+
     /// 来源标识。
     Source,
+
     /// 请求页码。
     Page,
+
     /// 结果数量。
     ResultCount,
+
     /// 操作结果。
     Outcome,
 }

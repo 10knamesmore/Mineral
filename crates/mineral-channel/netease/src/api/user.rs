@@ -22,7 +22,7 @@ use crate::wire::user::LikeListResp;
 ///   - `transport`: 已注入登录 cookie 的 [`Transport`]
 ///
 /// # Return:
-///   登录用户的 [`UserId`](mineral_model::UserId);未登录或 cookie 失效时返回 `Err`。
+///   登录用户的 [`UserId`];未登录或 cookie 失效时返回 `Err`。
 pub async fn account_uid(transport: &Transport) -> Result<UserId> {
     let v = transport
         .request(RequestSpec {

@@ -7,8 +7,11 @@ pub const UA_MOBILE: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac 
 #[derive(Clone, Copy, Debug)]
 pub enum UaKind {
     Pc,
+
     Mobile,
+
     Linux,
+
     Any,
 }
 

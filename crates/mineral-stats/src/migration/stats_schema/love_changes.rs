@@ -10,22 +10,31 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum LoveChanges {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 变更后的收藏状态。
     Loved,
+
     /// 收藏操作来源。
     Origin,
+
     /// 远端同步结果。
     RemoteMirror,
 }

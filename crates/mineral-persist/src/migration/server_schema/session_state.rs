@@ -9,18 +9,25 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SessionState {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 当前歌曲来源。
     CurNamespace,
+
     /// 当前歌曲身份。
     CurSongValue,
+
     /// 播放进度，单位毫秒。
     PositionMs,
+
     /// 播放模式。
     PlayMode,
+
     /// 音量比例。
     Volume,
+
     /// 最近更新时间，Unix 毫秒。
     UpdatedAt,
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Page {
     /// 起始偏移(从 0 起)。
     pub offset: u32,
+
     /// 单页返回上限。
     pub limit: u32,
 }

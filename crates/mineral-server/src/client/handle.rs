@@ -11,7 +11,7 @@ use mineral_task::{Priority, TaskEvent, TaskKind};
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
 use crate::player::PlayerCore;
 
-/// 同进程 client handle:持 [`PlayerCore`] 的 Arc 句柄,所有调用直接 forward。
+/// 同进程 client handle:持 `PlayerCore` 的 Arc 句柄,所有调用直接 forward。
 /// `Clone` 廉价。
 #[derive(Clone)]
 pub struct ClientHandle {

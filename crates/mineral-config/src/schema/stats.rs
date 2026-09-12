@@ -147,7 +147,7 @@ pub struct StatsConfig {
     level: StatsLevel,
 
     /// 在档位基线上按事件微调(kind 名 → 是否采集);plays / sessions 是 core 本体、
-    /// 校验期拒绝覆盖(见 [`deserialize_collect`]);未知 kind 名由 daemon 应用时按合法 kind 集警告。
+    /// 校验期拒绝覆盖(见 `deserialize_collect`);未知 kind 名由 daemon 应用时按合法 kind 集警告。
     #[serde(deserialize_with = "deserialize_collect")]
     collect: FxHashMap<String, bool>,
 

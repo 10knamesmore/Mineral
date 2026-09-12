@@ -108,7 +108,7 @@ impl NamespaceStore {
     /// 列出本 namespace 全部歌曲元数据(回填类维护操作的 inventory)。
     ///
     /// # Return:
-    ///   全部可重建的 [`Song`](顺序不定);降级返回空 vec。
+    ///   全部可重建的 [`Song`]（顺序不定）;降级返回空 vec。
     pub async fn list_meta(&self) -> color_eyre::Result<Vec<Song>> {
         let Some(pool) = self.pool() else {
             return Ok(Vec::new());

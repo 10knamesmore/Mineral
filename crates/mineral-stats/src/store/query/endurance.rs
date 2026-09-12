@@ -113,20 +113,28 @@ impl StatsStore {
 enum EnduranceColumn {
     /// 会话数量。
     Sessions,
+
     /// 平均会话时长。
     AvgMs,
+
     /// 最长会话时长。
     LongestMs,
+
     /// UTC 日期序号。
     Day,
+
     /// 日期的连续排名。
     Rank,
+
     /// 连续段长度。
     RunLen,
+
     /// 去重后的日期集合。
     Days,
+
     /// 已排名的日期集合。
     Ranked,
+
     /// 连续日期段集合。
     Runs,
 }

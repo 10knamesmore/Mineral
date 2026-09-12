@@ -1,7 +1,14 @@
 //! Playback hook behavior across playable, no-direct, unplayable, and prefetch plans.
 
-use super::*;
+use std::time::Duration;
+
+use mineral_model::{BitRate, Song};
+use mineral_test::song;
 use pretty_assertions::assert_eq;
+
+use super::fixtures::{core_with_script, core_with_script_playback, core_with_script_stats};
+use super::waiting::wait_until;
+use crate::player::PlayerCore;
 
 /// Starts an explicit test playback.
 fn play(core: &PlayerCore, target: &Song) {
@@ -53,7 +60,7 @@ async fn playable_without_direct_is_not_reported_unplayable() -> color_eyre::Res
 async fn rewrite_replaces_direct_media_before_open() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let replacement = dir.path().join("replacement.mp3");
-    std::fs::write(&replacement, b"replacement")?;
+    tokio::fs::write(&replacement, b"replacement").await?;
     let script = format!(
         r#"
             mineral.hook("before_stream", function(ctx)
@@ -123,7 +130,7 @@ async fn immediate_skip_advances_to_next() -> color_eyre::Result<()> {
 async fn unplayable_rewrite_opens_fallback() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let replacement = dir.path().join("rescue.m4a");
-    std::fs::write(&replacement, b"rescue")?;
+    tokio::fs::write(&replacement, b"rescue").await?;
     let script = format!(
         r#"
             mineral.hook("before_stream", function(ctx)
@@ -262,7 +269,7 @@ async fn prefetch_rewrite_records_rewritten_then_armed() -> color_eyre::Result<(
     let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let replacement = dir.path().join("replacement.mp3");
-    std::fs::write(&replacement, b"replacement")?;
+    tokio::fs::write(&replacement, b"replacement").await?;
     let script = format!(
         r#"
             mineral.hook("before_stream", function(ctx)

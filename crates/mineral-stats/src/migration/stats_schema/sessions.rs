@@ -9,10 +9,13 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Sessions {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 开始时间，Unix 毫秒。
     StartedAt,
+
     /// 结束时间，Unix 毫秒。
     EndedAt,
 }

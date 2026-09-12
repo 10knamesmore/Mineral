@@ -54,7 +54,7 @@ pub struct AlbumSong {
     pub name: String,
 
     /// 译名（`tns`；外文曲名的中文翻译）。真实数据里常为**显式 `null`**(不是缺失、也不是
-    /// `[]`),`#[serde(default)]` 兜不住 null,故走 [`null_or_vec_skip_null`](null → 空)。
+    /// `[]`),`#[serde(default)]` 兜不住 null,故走 `null_or_vec_skip_null`(null → 空)。
     #[serde(default, deserialize_with = "null_or_vec_skip_null")]
     pub tns: Vec<String>,
 

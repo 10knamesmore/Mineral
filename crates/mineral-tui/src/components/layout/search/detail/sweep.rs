@@ -1,11 +1,13 @@
-//! 下钻 / 返回与 artist 双区切换共用的横向 sweep 列合成原语：纯几何（某屏幕列取样自哪一帧的
-//! 哪一列）+ 列搬运。上层（出发 / 目标帧各自离屏渲染、按风格与方向驱动）在父模块，这里只
-//! 管「第 c 列该取谁的第几列」与「把一列搬过去」。
+//! 下钻 / 返回与 artist 双区切换共用的横向 sweep 列合成原语：计算每列的取样帧与源列号，
+//! 并把列写入目标缓冲，保留透明背景。
 
 use mineral_config::SweepStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+
+/// 缓动进度满值（千分比）。
+pub(super) const FULL: u32 = 1000;
 
 /// 横向 sweep 合成时，某屏幕列取样自哪一帧。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

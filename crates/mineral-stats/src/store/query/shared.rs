@@ -35,34 +35,49 @@ pub(super) struct PlayTailRow {
 pub(super) enum ReportColumn {
     /// 播放次数。
     Plays,
+
     /// 收听毫秒数。
     ListenMs,
+
     /// 专辑名称。
     AlbumName,
+
     /// 艺人名称。
     ArtistName,
+
     /// 上下文类型。
     Kind,
+
     /// 上下文身份。
     Reference,
+
     /// 展示名称。
     Name,
+
     /// 会话数量。
     Sessions,
+
     /// 最早播放时间。
     FirstPlayAt,
+
     /// 最晚播放时间。
     LastPlayAt,
+
     /// 完整播放次数。
     Completed,
+
     /// 跳过次数。
     Skipped,
+
     /// 单曲跳过次数。
     Skips,
+
     /// 不同歌曲数量。
     DistinctSongs,
+
     /// 活跃日期数。
     ActiveDays,
+
     /// 单曲最近播放时间。
     LastPlayedAt,
 }

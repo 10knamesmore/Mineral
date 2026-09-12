@@ -1,7 +1,35 @@
 //! playlist 写收敛 · library 快照 curate · toggle_favorite 聚合。
 
-use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, SearchHits};
+use mineral_model::{Album, AlbumId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_persist::ServerStore;
+use mineral_test::song;
 use pretty_assertions::assert_eq;
+
+use super::backends::RecordingChannel;
+use super::fixtures::{
+    core_with, core_with_channels, core_with_events, core_with_events_stats, core_with_persist,
+};
+use crate::media_cache::MediaCache;
+use crate::player::PlayerCore;
+
+/// 从 hub 订阅端取走已推送的任务事件([`mineral_protocol::Event::Task`] 拆箱,
+/// 其余类别忽略)。订阅必须先于触发动作,broadcast 不补发历史。
+fn drain_hub_task_events(
+    rx: &mut tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
+) -> Vec<mineral_task::TaskEvent> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let mineral_protocol::Event::Task(te) = ev {
+            out.push(*te);
+        }
+    }
+    out
+}
 
 /// 只支持建单/列单的写桩 channel(写收敛链路测试用)。
 struct WritableChannel;
@@ -23,36 +51,48 @@ impl MusicChannel for WritableChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
+    async fn search_songs(
+        &self,
+        _q: &str,
+        _p: Page,
+    ) -> mineral_channel_core::Result<SearchHits<Song>> {
         Err(Error::NotSupported)
     }
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Album>> {
+    async fn search_albums(
+        &self,
+        _q: &str,
+        _p: Page,
+    ) -> mineral_channel_core::Result<SearchHits<Album>> {
         Err(Error::NotSupported)
     }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Playlist>> {
+    async fn search_playlists(
+        &self,
+        _q: &str,
+        _p: Page,
+    ) -> mineral_channel_core::Result<SearchHits<Playlist>> {
         Err(Error::NotSupported)
     }
-    async fn songs_detail(&self, _ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+    async fn songs_detail(&self, _ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
+    async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
-    async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
+    async fn playlist_detail(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Playlist> {
         Err(Error::NotSupported)
     }
-    async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {
+    async fn lyrics(&self, _id: &SongId) -> mineral_channel_core::Result<Lyrics> {
         Err(Error::NotSupported)
     }
 
-    async fn create_playlist(&self, name: &str) -> ChannelResult<Playlist> {
+    async fn create_playlist(&self, name: &str) -> mineral_channel_core::Result<Playlist> {
         Ok(Playlist::builder()
             .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))
             .name(name.to_owned())
             .build())
     }
 
-    async fn my_playlists(&self) -> ChannelResult<Vec<Playlist>> {
+    async fn my_playlists(&self) -> mineral_channel_core::Result<Vec<Playlist>> {
         Ok(vec![
             Playlist::builder()
                 .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))

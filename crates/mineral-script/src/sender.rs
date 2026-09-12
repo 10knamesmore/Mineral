@@ -8,7 +8,7 @@ use crate::message::{
 };
 
 /// daemon 侧持有的脚本投递句柄(fire-and-forget),带**热重载间接层**:
-/// 内层是当前脚本线程的消息入口,[`Self::attach`] 在重载时原子换新,
+/// 内层是当前脚本线程的消息入口,`Self::attach` 在重载时原子换新,
 /// 持有者(Notifier / 泵)无感。未挂线程(无脚本 / 重载窗口)时投递静默丢、
 /// 查询立即回"未启用"。
 ///
@@ -21,7 +21,7 @@ pub struct ScriptSender {
 }
 
 impl ScriptSender {
-    /// 建一个未挂线程的句柄(daemon 装配期先建,脚本线程起来后 [`Self::attach`])。
+    /// 建一个未挂线程的句柄(daemon 装配期先建,脚本线程起来后 `Self::attach`)。
     #[must_use]
     pub fn detached() -> Self {
         Self {
@@ -64,7 +64,7 @@ impl ScriptSender {
         let _ = self.try_send(ScriptMsg::Event(event));
     }
 
-    /// 回投一次异步查询的结果(daemon 泵完成 [`ScriptCmd`] 查询后调)。
+    /// 回投一次异步查询的结果(daemon 泵完成 [`crate::ScriptCmd`] 查询后调)。
     ///
     /// # Params:
     ///   - `query`: 查询句柄(随查询命令带出的那个)

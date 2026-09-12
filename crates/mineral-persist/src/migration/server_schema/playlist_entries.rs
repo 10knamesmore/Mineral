@@ -10,14 +10,19 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum PlaylistEntries {
     /// 数据表。
     Table,
+
     /// 歌单来源。
     PlaylistNamespace,
+
     /// 来源内歌单身份。
     PlaylistValue,
+
     /// 歌单条目的原始位置。
     CollectionIndex,
+
     /// 歌曲来源。
     SongNamespace,
+
     /// 来源内歌曲身份。
     SongValue,
 }

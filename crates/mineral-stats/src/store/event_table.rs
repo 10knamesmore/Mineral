@@ -11,58 +11,85 @@ use crate::entity;
 pub(crate) enum EventTable {
     /// searches 事件。
     Searches,
+
     /// seeks 事件。
     Seeks,
+
     /// pauses 事件。
     Pauses,
+
     /// volume_changes 事件。
     VolumeChanges,
+
     /// mode_changes 事件。
     ModeChanges,
+
     /// love_changes 事件。
     LoveChanges,
+
     /// queue_ops 事件。
     QueueOps,
+
     /// playlist_ops 事件。
     PlaylistOps,
+
     /// fetches 事件。
     Fetches,
+
     /// downloads 事件。
     Downloads,
+
     /// copy_renders 事件。
     CopyRenders,
+
     /// action_invocations 事件。
     ActionInvocations,
+
     /// config_overrides 事件。
     ConfigOverrides,
+
     /// store_writes 事件。
     StoreWrites,
+
     /// spawns 事件。
     Spawns,
+
     /// bus_messages 事件。
     BusMessages,
+
     /// fullscreen_changes 事件。
     FullscreenChanges,
+
     /// connection_rejects 事件。
     ConnectionRejects,
+
     /// client_connections 事件。
     ClientConnections,
+
     /// app_lifecycle 事件。
     AppLifecycle,
+
     /// stream_resolutions 事件。
     StreamResolutions,
+
     /// hook_fires 事件。
     HookFires,
+
     /// gapless_boundaries 事件。
     GaplessBoundaries,
+
     /// prefetches 事件。
     Prefetches,
+
     /// cache_harvests 事件。
     CacheHarvests,
+
     /// cache_evictions 事件。
     CacheEvictions,
+
     /// script_lifecycle 事件。
     ScriptLifecycle,
+
     /// config_reloads 事件。
     ConfigReloads,
 }

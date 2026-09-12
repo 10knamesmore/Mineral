@@ -1,7 +1,7 @@
 //! WBI 签名算法:`mixin_key` 重排 + query 编码 + `w_rid` 计算。
 //!
 //! 算法(对齐官方 wbi 规范):
-//! 1. `mixin_key` = `img_key + sub_key` 拼成 64 位串,按 [`MIXIN_KEY_ENC_TAB`] 重排后**取前 32
+//! 1. `mixin_key` = `img_key + sub_key` 拼成 64 位串,按 `MIXIN_KEY_ENC_TAB` 重排后**取前 32
 //!    字符**(重排即得,**不**套 md5)。
 //! 2. 请求参数加 `wts`(unix 秒),按 key 字典序拼 query,值经 [`wbi_encode`] 百分号编码。
 //! 3. `w_rid = md5(sorted_query + mixin_key)`(小写 hex)。
@@ -17,7 +17,7 @@ const MIXIN_KEY_ENC_TAB: [usize; 64] = [
 
 /// 由 `img_key` / `sub_key` 派生 `mixin_key`。
 ///
-/// 把两个 key 拼成 64 位串,按 [`MIXIN_KEY_ENC_TAB`] 重排后取前 32 字符。索引经 `get` 取,
+/// 把两个 key 拼成 64 位串,按 `MIXIN_KEY_ENC_TAB` 重排后取前 32 字符。索引经 `get` 取,
 /// 越界项(理论上不会,key 恒 32 位)静默跳过,不 panic。
 ///
 /// # Params:
@@ -72,7 +72,7 @@ fn hex_upper_nibble(nibble: u8) -> char {
 
 /// 对参数签名,返回带 `wts` + `w_rid` 的完整 query 串。
 ///
-/// `wts` 显式传入(而非内部取时间)以便 test vector 钉死;生产侧由 [`sign`] 包一层取当前时间。
+/// `wts` 显式传入(而非内部取时间)以便 test vector 钉死;生产侧由 transport 取当前时间后传入。
 ///
 /// # Params:
 ///   - `params`: 业务参数(不含 `wts`/`w_rid`);函数内部会追加 `wts` 并按 key 排序

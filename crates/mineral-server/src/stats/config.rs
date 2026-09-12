@@ -12,7 +12,7 @@ use mineral_config::{
 };
 use mineral_stats::{Level, Retention, SearchQueryMode, StatsParams};
 
-/// 把 `stats` 配置段折算成 [`StatsParams`](采集侧运行时参数)。
+/// 把 `stats` 配置段折算成 [`StatsParams`]（采集侧运行时参数）。
 ///
 /// # Params:
 ///   - `cfg`: effective 配置的 `stats` 段

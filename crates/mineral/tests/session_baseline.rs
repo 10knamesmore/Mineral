@@ -203,10 +203,13 @@ struct Report {
 struct Daemon {
     /// 子进程。
     child: Child,
+
     /// 隔离根目录(随进程清理)。
     root: PathBuf,
+
     /// socket 目录(随进程清理)。
     sock_dir: PathBuf,
+
     /// socket 路径。
     socket: PathBuf,
 }
@@ -476,7 +479,9 @@ async fn session_baseline() -> color_eyre::Result<()> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
         "../../specs/26-09-07-client-daemon-sessions/artifacts/baseline-ipc-new-protocol.json",
     );
-    std::fs::write(&path, serde_json::to_string_pretty(&report)?).wrap_err("write report")?;
+    tokio::fs::write(&path, serde_json::to_string_pretty(&report)?)
+        .await
+        .wrap_err("write report")?;
     println!("wrote {}", path.display());
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())

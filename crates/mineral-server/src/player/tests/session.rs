@@ -1,7 +1,17 @@
 //! session 快照 · save/load 往返 · restore play_mode · 周期保存。
 
-use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use mineral_model::SongId;
+use mineral_persist::ServerStore;
+use mineral_protocol::PlayMode;
+use mineral_test::song;
+use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
+
+use super::fixtures::{core_with, core_with_persist};
+use super::waiting::drain_spawned;
 
 /// volume_pct(u8 0..=100)→ f64 0.0..=1.0:80 → 0.8。
 #[tokio::test]

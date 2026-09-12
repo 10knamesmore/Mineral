@@ -13,10 +13,13 @@ use ratatui::layout::Rect;
 pub(crate) enum Placement {
     /// 锚点下方。
     Below,
+
     /// 锚点上方。
     Above,
+
     /// 锚点右侧。
     Right,
+
     /// 锚点左侧。
     Left,
 }

@@ -10,50 +10,73 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Plays {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 开始时间，Unix 毫秒。
     StartedAt,
+
     /// 结束时间，Unix 毫秒。
     EndedAt,
+
     /// 实际收听毫秒数。
     ListenMs,
+
     /// 播放开始时已知的时长，单位毫秒。
     DurationMsSnapshot,
+
     /// 播放结束原因。
     FinishReason,
+
     /// 跳过时的播放进度，单位毫秒。
     SkipAtMs,
+
     /// 播放模式。
     PlayMode,
+
     /// 所属会话身份。
     SessionId,
+
     /// 播放发起方式。
     OriginKind,
+
     /// 行为发起方。
     Actor,
+
     /// 队列上下文类型。
     ContextKind,
+
     /// 队列上下文身份。
     ContextRef,
+
     /// 实际音频格式。
     AudioFormat,
+
     /// 是否无损音频。
     IsLossless,
+
     /// 实际码率，单位 bit/s。
     BitrateBps,
+
     /// 音质标识。
     Quality,
+
     /// 采样位深。
     BitDepth,
+
     /// 音频资源来源位置。
     PlaybackOrigin,
+
     /// 是否使用替代资源。
     Substituted,
+
     /// 队列上下文名称。
     ContextName,
 }

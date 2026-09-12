@@ -9,10 +9,13 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SessionQueue {
     /// 数据表。
     Table,
+
     /// 原始排列位置。
     Position,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
 }

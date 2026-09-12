@@ -170,6 +170,7 @@ mod tests {
     pub(crate) enum Ns {
         /// 变体 A。
         A,
+
         /// 变体 B。
         B,
     }

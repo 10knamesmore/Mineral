@@ -9,14 +9,19 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SongEnvelope {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 数据编码版本。
     Version,
+
     /// 包络点编码。
     Points,
+
     /// 最近更新时间，Unix 毫秒。
     UpdatedAt,
 }

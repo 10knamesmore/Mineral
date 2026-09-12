@@ -10,20 +10,28 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum StreamResolutions {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 请求的音质。
     QualityRequested,
+
     /// 操作结果。
     Outcome,
+
     /// 是否用于预取。
     ForPrefetch,
 }

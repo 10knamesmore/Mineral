@@ -314,6 +314,7 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             outcome: StreamOutcome,
+
             for_prefetch: i64,
         }
         let rows = crate::entity::stream_resolutions::Entity::find()
@@ -359,9 +360,13 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             ns: Option<String>,
+
             song_value: Option<String>,
+
             hook: HookKind,
+
             decision: HookDecision,
+
             fail_open: Option<FailOpen>,
         }
         let row = crate::entity::hook_fires::Entity::find()
@@ -453,6 +458,7 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             cache_key: String,
+
             bytes: i64,
         }
         let row = crate::entity::cache_evictions::Entity::find()
@@ -549,7 +555,9 @@ mod tests {
         #[derive(sea_orm::FromQueryResult)]
         struct Row {
             format: String,
+
             outcome: CacheHarvestOutcome,
+
             bytes: Option<i64>,
         }
         let rows = crate::entity::cache_harvests::Entity::find()

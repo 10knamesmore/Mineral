@@ -11,12 +11,16 @@ use crate::render::anim::Transition;
 pub struct Playback {
     /// 当前曲目(没有就播不出来)。
     pub track: Option<Song>,
+
     /// 进度(ms)。
     pub position_ms: u64,
+
     /// 是否在播放。
     pub playing: bool,
+
     /// 音量 0..=100。
     pub volume_pct: u8,
+
     /// 播放模式。
     pub mode: PlayMode,
 

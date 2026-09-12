@@ -12,10 +12,13 @@ pub enum PlayMode {
     /// 顺序播放(到底停止)。
     #[default]
     Sequential,
+
     /// 随机播放(进 Shuffle 时洗一次 queue,之后顺序推)。
     Shuffle,
+
     /// 整列循环。
     RepeatAll,
+
     /// 单曲循环。
     RepeatOne,
 }

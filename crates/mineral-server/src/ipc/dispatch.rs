@@ -14,8 +14,10 @@ pub(crate) enum AsyncRequest {
     InvokeAction {
         /// 动作名。
         name: String,
+
         /// 按键上下文。
         ctx: Option<mineral_protocol::KeyContext>,
+
         /// 位置实参。
         args: Vec<String>,
     },
@@ -24,6 +26,7 @@ pub(crate) enum AsyncRequest {
     RenderCopyTemplate {
         /// 模板下标。
         index: usize,
+
         /// 模板实体。
         ctx: mineral_protocol::CopyTemplateCtx,
     },
@@ -32,6 +35,7 @@ pub(crate) enum AsyncRequest {
     StoreGet {
         /// 目标歌。
         song: mineral_model::SongId,
+
         /// 开放键。
         key: String,
     },
@@ -40,8 +44,10 @@ pub(crate) enum AsyncRequest {
     StoreSet {
         /// 目标歌。
         song: mineral_model::SongId,
+
         /// 开放键。
         key: String,
+
         /// 标量值。
         value: mineral_protocol::StoreValue,
     },

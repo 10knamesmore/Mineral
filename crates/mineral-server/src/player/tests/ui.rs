@@ -1,7 +1,18 @@
 //! 配置宿主(覆盖合成 / 校验剔除 / 标题覆盖)· terminal 属性上报 · queue 插入编辑。
 
-use super::*;
+use std::sync::Arc;
+
+use mineral_channel_core::MusicChannel;
+use mineral_model::SourceKind;
+use mineral_persist::ServerStore;
+use mineral_protocol::PlayMode;
+use mineral_test::song;
 use pretty_assertions::assert_eq;
+
+use super::backends::RecordingChannel;
+use super::fixtures::{core_with, core_with_events, core_with_events_stats};
+use crate::media_cache::MediaCache;
+use crate::player::PlayerCore;
 
 /// 造一个带 event hub 接收端的 core(配置宿主 / 属性下发断言用)。
 fn core_with_hub() -> color_eyre::Result<(

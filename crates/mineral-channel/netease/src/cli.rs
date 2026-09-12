@@ -1,6 +1,6 @@
 //! 网易云 channel 的 CLI 子命令实现。
 //!
-//! 顶层 [`mineral-cli`] 通过 [`NeteaseCli`] 把 `mineral channel netease ...` 这一支
+//! 顶层 `mineral-cli` 通过 [`NeteaseCli`] 把 `mineral channel netease ...` 这一支
 //! 整体转发到这里，具体的登录流程、二维码渲染、凭证写入都在本模块内闭环。
 
 use std::time::Duration;

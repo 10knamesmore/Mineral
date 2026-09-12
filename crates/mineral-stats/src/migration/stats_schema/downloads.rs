@@ -10,26 +10,37 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum Downloads {
     /// 数据表。
     Table,
+
     /// 记录身份。
     Id,
+
     /// 事件时间，Unix 毫秒。
     Ts,
+
     /// 所属会话身份。
     SessionId,
+
     /// 行为发起方。
     Actor,
+
     /// 来源稳定名。
     Ns,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 音质标识。
     Quality,
+
     /// 音频格式。
     Format,
+
     /// 操作结果。
     Outcome,
+
     /// 下载 hook 执行结果。
     Hooked,
+
     /// 操作涉及的路径。
     Path,
 }

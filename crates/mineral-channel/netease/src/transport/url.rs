@@ -11,7 +11,9 @@ static API_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"/\w*api/").unwrap());
 #[derive(Clone, Copy, Debug)]
 pub enum Crypto {
     Weapi,
+
     Eapi,
+
     Linuxapi,
 }
 

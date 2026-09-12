@@ -20,11 +20,11 @@ use crate::runtime::state::{
     AppState, ArtistSection, DetailData, DetailFrame, EntityRef, SearchFocus,
 };
 
+use super::geometry::split_artist_body;
 use super::meta::{publish_year, with_commas};
 use super::placeholder::{draw_empty, draw_loading, loading_glyph};
-use super::sweep::{SweepLayer, copy_col, sweep_column};
+use super::sweep::{FULL, SweepLayer, copy_col, sweep_column};
 use super::track_table::{self, TrackColumns, highlight_style};
-use super::{FULL, split_artist_body};
 
 /// 列表区渲染上下文:光标 + 视口态 + 本帧推进语义 + 面板焦点。穿过 body 渲染链时合并一束传,
 /// 压参数个数。

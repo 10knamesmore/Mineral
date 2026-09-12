@@ -63,7 +63,7 @@ pub enum TitleSegment {
         suffix: String,
 
         /// 时间字段（`Position` / `Duration`）的渲染格式；非时间字段忽略。
-        /// 省略即 [`TimeFormat::Preset(TimePreset::Clock)`]——这是段内可选属性的类型语义，
+        /// 省略即 `TimeFormat::Preset(TimePreset::Clock)`——这是段内可选属性的类型语义，
         /// 非配置默认（用户数组内逐段可选，`default.lua` 填不进来）。
         #[serde(default)]
         format: TimeFormat,

@@ -9,14 +9,19 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum PlaylistCache {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌单身份。
     PlaylistId,
+
     /// 展示名称。
     Name,
+
     /// 取回时间，Unix 毫秒。
     FetchedAt,
+
     /// 来源提供的曲目更新时间。
     TrackUpdateTime,
 }

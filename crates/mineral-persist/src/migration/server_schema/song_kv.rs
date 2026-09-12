@@ -10,18 +10,25 @@ use sea_orm::sea_query::{
 pub(in crate::migration) enum SongKv {
     /// 数据表。
     Table,
+
     /// 来源稳定名。
     Namespace,
+
     /// 来源内歌曲身份。
     SongValue,
+
     /// 记录键。
     Key,
+
     /// 值的类型标签。
     Vtype,
+
     /// 整数或布尔值。
     IntVal,
+
     /// 实数值。
     RealVal,
+
     /// 文本值。
     TextVal,
 }

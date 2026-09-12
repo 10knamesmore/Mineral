@@ -83,16 +83,22 @@ pub struct HighpassParams {
 struct Biquad {
     /// 分子系数 z^0。
     b0: f64,
+
     /// 分子系数 z^-1。
     b1: f64,
+
     /// 分子系数 z^-2。
     b2: f64,
+
     /// 分母系数 z^-1(a0 已归一进其余系数)。
     a1: f64,
+
     /// 分母系数 z^-2。
     a2: f64,
+
     /// 延迟状态 1。
     z1: f64,
+
     /// 延迟状态 2。
     z2: f64,
 }
@@ -115,6 +121,7 @@ impl Biquad {
 struct KWeighting {
     /// 高频搁架级。
     shelf: Biquad,
+
     /// RLB 高通级。
     highpass: Biquad,
 }

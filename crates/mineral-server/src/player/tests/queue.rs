@@ -1,7 +1,47 @@
 //! queue 导航 · shuffle · play_mode · version bump · skip 记录。
 
-use super::*;
+use std::sync::Arc;
+
+use mineral_model::{Lyrics, Song, SongId, SourceKind};
+use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions};
+use mineral_test::song;
+use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
+
+use super::fixtures::core_with;
+use super::waiting::drain_spawned;
+use crate::queue::{
+    advance_next, advance_prev, apply_play_mode, enter_shuffle, exit_shuffle, next_in_queue,
+    prev_index,
+};
+use crate::state::State;
+
+/// 造一个含队列的 State:queue=ids、游标附着在 sel、current=queue[sel]、mode。
+fn state_with(ids: &[&str], sel: usize, mode: PlayMode) -> State {
+    let mut st = State::empty();
+    st.queue = ids.iter().map(|&i| song(i)).collect();
+    st.cursor = PlayCursor::InQueue(sel);
+    st.current_song = st.queue.get(sel).cloned();
+    st.play_mode = mode;
+    st
+}
+
+/// 游标的基准下标——只关心「推进算到第几位」的断言用它,不必区分附着 / 悬空。
+fn sel_of(st: &State) -> usize {
+    st.cursor.anchor()
+}
+
+/// 取队列各歌 id(原序)。
+fn ids(songs: &[Song]) -> Vec<&str> {
+    songs.iter().map(|s| s.id.as_str()).collect()
+}
+
+/// 取队列各歌 id 并排序(用于「内容集合不变」断言,不看顺序)。
+fn ids_sorted(songs: &[Song]) -> Vec<&str> {
+    let mut v = ids(songs);
+    v.sort_unstable();
+    v
+}
 
 #[test]
 fn next_sequential_stops_at_end() {

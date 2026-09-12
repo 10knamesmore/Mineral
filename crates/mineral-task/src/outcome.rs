@@ -8,7 +8,7 @@ pub enum TaskOutcome {
     /// 业务成功。
     Ok,
 
-    /// 被 [`crate::Scheduler::cancel`] 取消(或被 escalate 替换)。
+    /// 被 [`crate::Scheduler::cancel_where`] 取消(或被 escalate 替换)。
     Cancelled,
 
     /// 业务失败,具体错误已写入 `mineral-log`。
