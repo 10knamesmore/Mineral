@@ -265,10 +265,11 @@ cargo snap                                # 跑测试 + review insta snap
 cargo td                                  # doctest(nextest 不跑,单独兜)
 cargo clippy
 cargo fmt
+cargo dylint --all -- --locked --workspace --all-targets  # 自定义 lint
 cargo run -p mineral                      # 运行 TUI
 ```
 
-测试体系细则见 [文档](./docs/testing.md)，数据库实体与迁移约定见 [持久化开发指南](./docs/persistence.md)。
+测试体系与自定义 lint 的使用见 [测试文档](./docs/testing.md)，数据库实体与迁移约定见 [持久化开发指南](./docs/persistence.md)。
 
 ## 致谢
 

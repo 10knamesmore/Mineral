@@ -1,0 +1,55 @@
+[[calls]]
+path = "std::thread::functions::sleep"
+reason = "thread sleep blocks the executor thread; use an async timer"
+
+[[calls]]
+path = "std::thread::functions::sleep_until"
+reason = "thread sleep blocks the executor thread; use an async timer"
+
+[[calls]]
+path = "std::thread::functions::park"
+reason = "parking blocks the executor thread; use async synchronization or a blocking worker"
+
+[[calls]]
+path = "std::thread::functions::park_timeout"
+reason = "parking blocks the executor thread; use async synchronization or a blocking worker"
+
+[[calls]]
+path = "std::thread::join_handle::JoinHandle::join"
+reason = "joining waits for a thread to finish; move it to a blocking worker"
+
+[[calls]]
+path = "std::sync::mpsc::Receiver::recv"
+reason = "receiving blocks the executor thread; use an async receiver"
+
+[[calls]]
+path = "std::sync::mpsc::Receiver::recv_timeout"
+reason = "receiving blocks the executor thread; use an async receiver"
+
+[[calls]]
+path = "std::sync::mpsc::SyncSender::send"
+reason = "sending can block until channel capacity is available; use an async sender"
+
+[[calls]]
+path = "std::fs::read"
+reason = "filesystem I/O blocks the executor thread; use async I/O or a blocking worker"
+
+[[calls]]
+path = "std::fs::read_to_string"
+reason = "filesystem I/O blocks the executor thread; use async I/O or a blocking worker"
+
+[[calls]]
+path = "std::fs::write"
+reason = "filesystem I/O blocks the executor thread; use async I/O or a blocking worker"
+
+[[calls]]
+path = "std::fs::File::sync_all"
+reason = "flushing file data to disk blocks the executor thread; use async I/O or a blocking worker"
+
+[[calls]]
+path = "tokio::sync::mpsc::bounded::Receiver::blocking_recv"
+reason = "blocking receive blocks the executor thread; use the async receiver API"
+
+[[calls]]
+path = "tokio::sync::mpsc::bounded::Sender::blocking_send"
+reason = "blocking send blocks the executor thread; use the async sender API"

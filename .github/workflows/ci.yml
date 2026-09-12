@@ -28,12 +28,35 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: 安装 Dylint nightly
+        working-directory: tooling/lints
+        run: rustup toolchain install
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tooling/lints -> target
 
       # nextest 作运行器(进程隔离 + daemon e2e 串行组,见 .config/nextest.toml)。
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+
+      - name: 安装 Dylint
+        run: cargo install --locked cargo-dylint dylint-link
+
+      - name: lint 库自检
+        working-directory: tooling/lints
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo nextest run --locked --release --all-targets --no-fail-fast
+          cargo doc --locked --no-deps --document-private-items
+          cargo dylint --path . -- --locked --all-targets
+
+      - name: 自定义 lint
+        run: cargo dylint --all -- --locked --workspace --all-targets
 
       - name: fmt
         run: cargo fmt --all --check
@@ -52,10 +75,10 @@ jobs:
       # INSTA_UPDATE=no:快照不匹配 / 缺基准直接失败,绝不在 CI 写 .snap.new。
       # --no-fail-fast:不提前收手,一次跑完拿到完整失败清单(suite 很快,省时可忽略)。
       - name: test
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --locked --workspace --release --no-fail-fast
         env:
           INSTA_UPDATE: "no"
 
       # nextest 不跑 doctest,单独兜底。
       - name: doctest
-        run: cargo test --workspace --doc
+        run: cargo test --locked --workspace --doc --release

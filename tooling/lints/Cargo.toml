@@ -1,0 +1,37 @@
+[package]
+name = "mineral_lints"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[lints.rust]
+warnings = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+missing_docs_in_private_items = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+as_conversions = "deny"
+
+[dependencies]
+dylint_linting = "6.0"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+serde = { version = "1", features = ["derive"] }
+syn = { version = "2", features = ["full", "visit"] }
+toml = "1.1"
+walkdir = "2.5"
+
+[dev-dependencies]
+color-eyre = "0.6"
+dylint_testing = "6.0"
+
+[package.metadata.rust-analyzer]
+rustc_private = true

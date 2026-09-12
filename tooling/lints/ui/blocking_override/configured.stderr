@@ -1,0 +1,11 @@
+error: blocking call `configured::custom_wait` in an async body
+  --> $DIR/configured.rs:8:5
+   |
+LL |     custom_wait();
+   |     ^^^^^^^^^^^^^
+   |
+   = note: configured blocking operation
+   = note: `#[deny(mineral_blocking_in_async)]` on by default
+
+error: aborting due to 1 previous error
+

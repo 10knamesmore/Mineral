@@ -1,0 +1,63 @@
+error: blocking call `std::thread::functions::sleep` in an async body
+  --> $DIR/rejected.rs:7:5
+   |
+LL |     pause(Duration::ZERO);
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: thread sleep blocks the executor thread; use an async timer
+note: the lint level is defined here
+  --> $DIR/rejected.rs:3:9
+   |
+LL | #![deny(mineral_blocking_in_async)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: blocking call `std::thread::functions::sleep` in an async body
+  --> $DIR/rejected.rs:8:5
+   |
+LL |     std::thread::sleep(Duration::ZERO);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: thread sleep blocks the executor thread; use an async timer
+
+error: blocking call `std::sync::mpsc::Receiver::recv` in an async body
+  --> $DIR/rejected.rs:9:13
+   |
+LL |     let _ = receiver.recv();
+   |             ^^^^^^^^^^^^^^^
+   |
+   = note: receiving blocks the executor thread; use an async receiver
+
+error: blocking call `std::sync::mpsc::Receiver::recv` in an async body
+  --> $DIR/rejected.rs:10:13
+   |
+LL |     let _ = Receiver::recv(&receiver);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: receiving blocks the executor thread; use an async receiver
+
+error: blocking call `std::fs::read` in an async body
+  --> $DIR/rejected.rs:11:13
+   |
+LL |     let _ = std::fs::read("unused");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: filesystem I/O blocks the executor thread; use async I/O or a blocking worker
+
+error: blocking call `std::thread::functions::sleep` in an async body
+  --> $DIR/rejected.rs:12:21
+   |
+LL |     let _ = async { pause(Duration::ZERO) };
+   |                     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: thread sleep blocks the executor thread; use an async timer
+
+error: blocking call `std::thread::functions::sleep` in an async body
+  --> $DIR/rejected.rs:13:22
+   |
+LL |     let _ = async || pause(Duration::ZERO);
+   |                      ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: thread sleep blocks the executor thread; use an async timer
+
+error: aborting due to 7 previous errors
+

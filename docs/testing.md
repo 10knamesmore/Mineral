@@ -55,6 +55,6 @@
 
 ## CI / 本地 git hooks
 
-* **CI**以 `.github/workflows/ci.yml` 为准:pull request 以及向 `main` / `dev` 的 push 会检查 Rust 格式、Lua 资产的 StyLua 格式、strict clippy、workspace nextest(`INSTA_UPDATE=no`)与 doctest。job 安装 `libasound2-dev` 满足 alsa-sys 的**编译期**依赖；`AudioHandle::spawn` 在无输出设备时降级为 null backend,不需要运行期音频设备。
-* **本地 git hooks**(`.githooks/`,走 `core.hooksPath`):**pre-commit** 只 `cargo fmt --all --check`(秒级);**pre-push** 跑 `clippy -D warnings` + `cargo nextest run` + `cargo test --doc`。新 clone 后启用一次:`git config core.hooksPath .githooks`。
-* **Agent hooks**:`.claude/settings.json` 与 `.codex/hooks.json` 在文件编辑后运行各自的 `check_file_size.py`(Rust 文件 ≤ 800 行)。格式化仍显式运行 `cargo fmt`。
+* **CI**以 `.github/workflows/ci.yml` 为准:pull request 以及向 `main` / `dev` 的 push 会检查 Rust 格式、Lua 资产的 StyLua 格式、strict clippy、全仓 release nextest(`INSTA_UPDATE=no`)、release doctest 与 Dylint。job 安装 `libasound2-dev` 满足 alsa-sys 的**编译期**依赖；`AudioHandle::spawn` 在无输出设备时降级为 null backend,不需要运行期音频设备。
+* **本地 git hooks**(`.githooks/`,走 `core.hooksPath`):**pre-commit** 只 `cargo fmt --all --check`；**pre-push** 直接编排 Dylint 库自检、全仓自定义规则、格式、严格 Clippy、release nextest 与 release doctest。新 clone 后启用一次:`git config --local core.hooksPath .githooks`。
+* **Dylint** 使用 `tooling/lints` 独立 workspace。CLI 通过 `cargo install --locked cargo-dylint dylint-link` 安装，库依赖使用普通版本范围。编译器以 [rust-toolchain.toml](../tooling/lints/rust-toolchain.toml) 为准，采用 [官方模板](https://github.com/trailofbits/dylint/blob/89aa87985c0dcbc7ca2f7976d746f264b96c3528/internal/template/rust-toolchain.toml) 的日期版 nightly，CI 从同一文件安装。升级工具链后须重新验证 lint 库及目标 workspace。普通 `cargo check` / `cargo clippy` 不加载自定义规则；手动检查全仓自定义规则可运行 `cargo dylint --all -- --locked --workspace --all-targets`。UI 诊断使用 Dylint 的 compiletest `.stderr`，更新时逐条核对真实输出。

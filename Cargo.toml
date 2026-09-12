@@ -30,6 +30,9 @@ resolver = "2"
 [workspace.metadata]
 name = "mineral"
 
+[workspace.metadata.dylint]
+libraries = [{ path = "tooling/lints" }]
+
 [workspace.package]
 version     = "0.5.6"
 edition     = "2024"
