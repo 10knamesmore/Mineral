@@ -12,6 +12,7 @@ use color_eyre::eyre::{WrapErr, bail, eyre};
 use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
 use mineral_client::operation::Outcome;
+use mineral_client::state::PlayerMirror;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
     PlayMode, QueueContextWire, Request, SocketWire, Subscription, SubscriptionTopic,
@@ -415,7 +416,7 @@ async fn play_mode_cycle_pushes_every_step() -> color_eyre::Result<()> {
     // 空队列:进 Shuffle 不洗牌(不动版本),仍须推送。
     client.fire(Request::CyclePlayMode);
     wait_until("空队列下模式推送", || {
-        client.mirror().read_player(|player| player.play_mode()) == PlayMode::Shuffle
+        client.mirror().read_player(PlayerMirror::play_mode) == PlayMode::Shuffle
     })
     .await?;
 
@@ -438,7 +439,7 @@ async fn play_mode_cycle_pushes_every_step() -> color_eyre::Result<()> {
         client.fire(Request::CyclePlayMode);
         let label = format!("模式推送到位 {expected:?}");
         wait_until(&label, || {
-            client.mirror().read_player(|player| player.play_mode()) == expected
+            client.mirror().read_player(PlayerMirror::play_mode) == expected
         })
         .await?;
     }
