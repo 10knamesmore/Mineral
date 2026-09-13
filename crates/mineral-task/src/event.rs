@@ -13,7 +13,8 @@ use crate::write::{PlaylistWriteOp, WriteError};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
-/// 搜索失败或取消时发 [`TaskEvent::SearchPageFailed`]，client 据此清除待收取页标记；
+/// 搜索或艺人专辑页失败、取消时，分别发 [`TaskEvent::SearchPageFailed`] 或
+/// [`TaskEvent::ArtistAlbumsPageFailed`]，client 据此清除待收取页标记。
 /// 歌单写操作的失败由 [`TaskEvent::PlaylistWriteDone`] 携带结构化错误。
 /// 所有 channel 取数终态另发 [`TaskEvent::FetchDone`] 供 server 记录埋点，详细错误进 mineral-log。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,7 +106,7 @@ pub enum TaskEvent {
         /// 结果载荷(变体与 `kind` 一致)。
         payload: SearchPayload,
 
-        /// channel 的显式翻页信号(`SearchHits::has_more` 透传):`None` = 源不知道,
+        /// channel 的显式翻页信号(`PageResult::has_more` 透传):`None` = 源不知道,
         /// client 回退「返回条数 < limit 即榨干」推断。
         #[serde(default)]
         has_more: Option<bool>,
@@ -147,6 +148,20 @@ pub enum TaskEvent {
 
         /// 专辑列表(曲目留空)。
         albums: Vec<Album>,
+
+        /// channel 的翻页信号；`None` 时 client 按返回条数与请求 `limit` 判断末页。
+        has_more: Option<bool>,
+    },
+
+    /// `ArtistAlbums` 任务失败或取消，client 据此释放对应艺人、页请求的待收取标记。
+    ///
+    /// 回带与 [`TaskEvent::ArtistAlbumsFetched`] 相同的艺人和分页参数，不携带内部错误文本。
+    ArtistAlbumsPageFailed {
+        /// 艺人 id，包含来源身份。
+        id: ArtistId,
+
+        /// 失败或取消的分页请求。
+        page: Page,
     },
 
     /// `AlbumDetail` 任务成功:专辑完整详情(元信息 + 曲目)已到。

@@ -1,6 +1,6 @@
 //! 视频搜索端点(`wbi/search/type`,WBI 签名 + 需 buvid3)。
 
-use mineral_channel_core::SearchHits;
+use mineral_channel_core::PageResult;
 use mineral_model::{Album, Artist};
 
 use crate::convert::{search_user_to_artist, search_video_to_album};
@@ -29,7 +29,7 @@ pub async fn search_albums(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<SearchHits<Album>> {
+) -> color_eyre::Result<PageResult<Album>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -48,7 +48,7 @@ pub async fn search_albums(
         .into_iter()
         .filter_map(search_video_to_album)
         .collect::<Vec<Album>>();
-    Ok(SearchHits {
+    Ok(PageResult {
         items,
         has_more: result.num_pages.map(|total| page < total),
     })
@@ -71,7 +71,7 @@ pub async fn search_artists(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<SearchHits<Artist>> {
+) -> color_eyre::Result<PageResult<Artist>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -89,7 +89,7 @@ pub async fn search_artists(
         .into_iter()
         .filter_map(search_user_to_artist)
         .collect::<Vec<Artist>>();
-    Ok(SearchHits {
+    Ok(PageResult {
         items,
         has_more: result.num_pages.map(|total| page < total),
     })

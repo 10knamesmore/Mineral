@@ -570,6 +570,7 @@ mod tests {
             id: aid.clone(),
             page: Page::default(),
             albums: Vec::new(),
+            has_more: None,
         });
         assert!(
             queue_ops

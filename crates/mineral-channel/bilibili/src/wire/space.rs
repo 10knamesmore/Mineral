@@ -45,6 +45,26 @@ pub struct ArcSearchResult {
     /// 列表容器;缺失视为空页。
     #[serde(default)]
     pub list: Option<ArcSearchList>,
+
+    /// 投稿总数、当前页码与服务端页大小；缺失时由原始列表条数判断末页。
+    #[serde(default)]
+    pub page: Option<ArcSearchPage>,
+}
+
+/// 投稿列表响应的分页计数。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArcSearchPage {
+    /// 匹配的投稿总数。
+    #[serde(default)]
+    pub count: Option<u64>,
+
+    /// 当前页码，从 1 起。
+    #[serde(default)]
+    pub pn: Option<u32>,
+
+    /// 服务端本页采用的页大小。
+    #[serde(default)]
+    pub ps: Option<u32>,
 }
 
 /// 投稿列表容器。
@@ -142,6 +162,7 @@ mod tests {
     fn missing_list_is_none() -> color_eyre::Result<()> {
         let r: ArcSearchResult = from_value(serde_json::json!({}))?;
         assert!(r.list.is_none());
+        assert!(r.page.is_none());
         Ok(())
     }
 }

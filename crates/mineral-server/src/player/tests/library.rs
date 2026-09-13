@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, SearchHits};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
 use mineral_model::{Album, AlbumId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
 use mineral_test::song;
@@ -55,21 +55,21 @@ impl MusicChannel for WritableChannel {
         &self,
         _q: &str,
         _p: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Song>> {
+    ) -> mineral_channel_core::Result<PageResult<Song>> {
         Err(Error::NotSupported)
     }
     async fn search_albums(
         &self,
         _q: &str,
         _p: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Album>> {
+    ) -> mineral_channel_core::Result<PageResult<Album>> {
         Err(Error::NotSupported)
     }
     async fn search_playlists(
         &self,
         _q: &str,
         _p: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Playlist>> {
+    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {

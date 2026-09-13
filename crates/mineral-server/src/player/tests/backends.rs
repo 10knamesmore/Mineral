@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, SearchHits};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
 use mineral_model::{
     Album, AlbumId, Artist, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId,
     SourceKind,
@@ -174,7 +174,7 @@ impl MusicChannel for RecordingChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Song>> {
+    ) -> mineral_channel_core::Result<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 
@@ -182,7 +182,7 @@ impl MusicChannel for RecordingChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Album>> {
+    ) -> mineral_channel_core::Result<PageResult<Album>> {
         Err(Error::NotSupported)
     }
 
@@ -190,7 +190,7 @@ impl MusicChannel for RecordingChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Playlist>> {
+    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
 

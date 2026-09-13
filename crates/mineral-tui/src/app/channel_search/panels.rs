@@ -105,34 +105,39 @@ impl SearchPage {
         }
     }
 
-    /// 面板导航:results 焦点移结果列(可能触发懒分页预取,故回传 effect)、detail 焦点移
-    /// 当前区列表(无副作用)。
+    /// 移动当前面板的列表光标；结果列与艺人专辑列表近底时预取各自的下一页。
     ///
     /// # Params:
     ///   - `mv`: 选择移动
-    ///   - `prefetch_rows`: 结果列预取触发半径(`behavior.search_prefetch_rows`)
+    ///   - `prefetch_rows`: 列表预取触发半径(`behavior.search_prefetch_rows`)
     fn move_search_panel(&mut self, mv: SelectionMove, prefetch_rows: u16) -> SearchEffect {
         match self.focus {
             SearchFocus::Results => self.move_search_result_sel(mv, prefetch_rows),
-            SearchFocus::Detail => {
-                self.move_detail_list_sel(mv);
-                SearchEffect::None
-            }
+            SearchFocus::Detail => self.move_detail_list_sel(mv, prefetch_rows),
             SearchFocus::Prompt => SearchEffect::None,
         }
     }
 
-    /// detail 列表光标(钳当前区列表长度)。
-    fn move_detail_list_sel(&mut self, mv: SelectionMove) {
+    /// 移动详情光标并钳在当前列表内；Albums 区近底时登记该艺人的待收取页。
+    fn move_detail_list_sel(&mut self, mv: SelectionMove, prefetch_rows: u16) -> SearchEffect {
         self.last_sel_change = Instant::now();
         let Some(kr) = self.active_results_mut() else {
-            return;
+            return SearchEffect::None;
         };
         let Some(frame) = kr.detail.current_mut() else {
-            return;
+            return SearchEffect::None;
         };
         let len = frame.list_len();
         frame.list_mut().move_by(mv, len);
+        let rows_to_bottom = len.saturating_sub(1).saturating_sub(frame.list().sel());
+        if rows_to_bottom > usize::from(prefetch_rows) {
+            return SearchEffect::None;
+        }
+        frame
+            .request_artist_albums_page()
+            .map_or(SearchEffect::None, |(id, page)| {
+                SearchEffect::FetchArtistAlbums { id, page }
+            })
     }
 
     /// 按配置步长移动结果光标或滚动详情简介。结果沿用列表移动的边界钳制、详情复位和
@@ -278,6 +283,7 @@ impl SearchPage {
                     albums: Some(albs), ..
                 }),
             ) => albs
+                .items()
                 .get(frame.list().sel())
                 .map_or(DetailActivate::None, |a| {
                     DetailActivate::Drill(Box::new(a.clone()))
@@ -776,6 +782,7 @@ mod tests {
         app.state.apply(&TaskEvent::ArtistAlbumsFetched {
             id: aid,
             page: Page::default(),
+            has_more: None,
             albums: vec![
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))

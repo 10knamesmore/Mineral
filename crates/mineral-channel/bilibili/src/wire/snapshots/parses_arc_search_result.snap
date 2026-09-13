@@ -48,4 +48,17 @@ ArcSearchResult {
             ],
         },
     ),
+    page: Some(
+        ArcSearchPage {
+            count: Some(
+                89,
+            ),
+            pn: Some(
+                1,
+            ),
+            ps: Some(
+                30,
+            ),
+        },
+    ),
 }

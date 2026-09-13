@@ -199,7 +199,17 @@ fn draw_artist_section(
             Some(DetailData::Artist {
                 albums: Some(albs), ..
             }),
-        ) => draw_album_list(buf, list, albs, paint, theme),
+        ) => {
+            if albs.items().is_empty() && albs.has_more() {
+                if albs.is_loading() {
+                    draw_loading(buf, list, loading_glyph(state), theme);
+                } else {
+                    draw_empty(buf, list, "more albums available", theme);
+                }
+            } else {
+                draw_album_list(buf, list, albs.items(), paint, theme);
+            }
+        }
         // 该区数据未到货 → 旋转 loading。
         _ => draw_loading(buf, list, loading_glyph(state), theme),
     }

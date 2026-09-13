@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
 use mineral_persist::ServerStore;
@@ -88,7 +88,7 @@ impl MusicChannel for MineralChannel {
             .build()
     }
 
-    async fn search_songs(&self, _query: &str, _page: Page) -> Result<SearchHits<Song>> {
+    async fn search_songs(&self, _query: &str, _page: Page) -> Result<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 

@@ -417,11 +417,13 @@ async fn run_artist_readonly(
     report.push(r);
 
     let r = run("artist_albums", async {
-        let v = ch.artist_albums(&artist.id, Page::new(0, 10)).await?;
+        let result = ch.artist_albums(&artist.id, Page::new(0, 10)).await?;
         Ok(format!(
             "{} albums{}",
-            v.len(),
-            v.first()
+            result.items.len(),
+            result
+                .items
+                .first()
                 .map(|a| format!(", first: \"{}\"", a.name))
                 .unwrap_or_default()
         ))

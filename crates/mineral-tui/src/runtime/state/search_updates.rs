@@ -67,10 +67,25 @@ impl AppState {
         }
     }
 
-    /// 将艺人专辑列表应用到所有会话中匹配的保留帧。
-    pub(super) fn apply_artist_albums(&mut self, id: &ArtistId, albums: &[Album]) {
+    /// 将艺人专辑分页应用到匹配的保留帧；每帧只接受首页或自己的待收取页。
+    pub(super) fn apply_artist_albums(
+        &mut self,
+        id: &ArtistId,
+        albums: &[Album],
+        page: Page,
+        has_more: Option<bool>,
+    ) {
+        mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, loaded = albums.len(), ?has_more, "receive artist albums page");
         for results in self.channel_search.retained_results_mut() {
-            results.fill_artist_albums(id, albums);
+            results.fill_artist_albums(id, albums, page, has_more);
+        }
+    }
+
+    /// 释放匹配保留帧中的失败续页，下次近底导航重试原页。
+    pub(super) fn apply_artist_albums_page_failed(&mut self, id: &ArtistId, page: Page) {
+        mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, "artist albums page failed or cancelled");
+        for results in self.channel_search.retained_results_mut() {
+            results.fail_artist_albums_page(id, page);
         }
     }
 
@@ -338,6 +353,7 @@ mod tests {
                 id: artist.id.clone(),
                 page: Page::default(),
                 albums: vec![album.clone()],
+                has_more: None,
             };
             let (first, second) = if albums_first {
                 (&albums_event, &detail_event)
@@ -385,7 +401,7 @@ mod tests {
                     albums: Some(albums),
                 }) => {
                     assert_eq!(**received, artist);
-                    assert_eq!(*albums, vec![album]);
+                    assert_eq!(albums.items(), &[album]);
                 }
                 _ => color_eyre::eyre::bail!("返回父帧后应有两路艺人数据"),
             }
@@ -500,6 +516,7 @@ mod tests {
             id: artist.id.clone(),
             page: Page::default(),
             albums: vec![album_fixture("al1")],
+            has_more: None,
         });
         s.channel_search.select_kind(SearchKind::Artist);
         assert!(
@@ -735,6 +752,7 @@ mod tests {
             id,
             page: Page::default(),
             albums: vec![album_fixture("al1"), album_fixture("al2")],
+            has_more: None,
         });
         let kr = s
             .channel_search
@@ -747,7 +765,11 @@ mod tests {
         match &frame.data {
             Some(DetailData::Artist { detail, albums }) => {
                 assert!(detail.is_some(), "热门曲那一路到货");
-                assert_eq!(albums.as_ref().map(Vec::len), Some(2), "专辑那一路到货");
+                assert_eq!(
+                    albums.as_ref().map(|albums| albums.items().len()),
+                    Some(2),
+                    "专辑那一路到货"
+                );
             }
             _ => color_eyre::eyre::bail!("detail 帧应是 Artist"),
         }

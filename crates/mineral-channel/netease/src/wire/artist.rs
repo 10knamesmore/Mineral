@@ -66,6 +66,10 @@ pub struct ArtistAlbumsResult {
     /// 专辑列表(网易云字段名如此,不只"热门",分页翻完即全集)。
     #[serde(default, rename = "hotAlbums")]
     pub hot_albums: Vec<ArtistAlbum>,
+
+    /// 是否还有下一页；缺失或 null 时保持未知。
+    #[serde(default)]
+    pub more: Option<bool>,
 }
 
 /// artist 专辑列表里的专辑项。

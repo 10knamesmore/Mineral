@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
@@ -155,13 +155,13 @@ impl MusicChannel for BilibiliChannel {
             .build()
     }
 
-    async fn search_albums(&self, query: &str, page: Page) -> Result<SearchHits<Album>> {
+    async fn search_albums(&self, query: &str, page: Page) -> Result<PageResult<Album>> {
         api::search::search_albums(&self.transport, query, page_number(page), page.limit)
             .await
             .map_err(map_err)
     }
 
-    async fn search_artists(&self, query: &str, page: Page) -> Result<SearchHits<Artist>> {
+    async fn search_artists(&self, query: &str, page: Page) -> Result<PageResult<Artist>> {
         api::search::search_artists(&self.transport, query, page_number(page), page.limit)
             .await
             .map_err(map_err)
@@ -209,7 +209,7 @@ impl MusicChannel for BilibiliChannel {
         Ok(convert::card_to_artist(id.clone(), card))
     }
 
-    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
+    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
         // UP 主投稿,每 BV 一张专辑(元信息版,P 数/曲目详情走 album_detail)。
         let result = api::space::arc_videos(
             &self.transport,
@@ -220,13 +220,7 @@ impl MusicChannel for BilibiliChannel {
         )
         .await
         .map_err(map_err)?;
-        Ok(result
-            .list
-            .map(|l| l.vlist)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(convert::arc_video_to_album)
-            .collect())
+        Ok(convert::arc_videos_to_albums(result, page))
     }
 
     async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {

@@ -4,7 +4,7 @@
 
 use crossterm::event::KeyEvent;
 use mineral_channel_core::ChannelCaps;
-use mineral_model::{SearchKind, Song, SourceKind};
+use mineral_model::{ArtistId, SearchKind, Song, SourceKind};
 use mineral_protocol::DownloadTarget;
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use rustc_hash::FxHashMap;
@@ -73,6 +73,15 @@ pub(crate) enum SearchEffect {
         query: String,
 
         /// 待收取页的分页参数，页大小沿用首页。
+        page: mineral_channel_core::Page,
+    },
+
+    /// 预取艺人专辑续页，详情帧已登记待收取页。
+    FetchArtistAlbums {
+        /// 艺人完整身份，回包据此更新保留的详情帧。
+        id: ArtistId,
+
+        /// 待收取页的分页参数。
         page: mineral_channel_core::Page,
     },
 
@@ -152,6 +161,13 @@ impl App {
                         query,
                         page,
                     }),
+                    Priority::User,
+                );
+            }
+            SearchEffect::FetchArtistAlbums { id, page } => {
+                mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, "request artist albums page");
+                self.client.submit_task(
+                    TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id, page }),
                     Priority::User,
                 );
             }

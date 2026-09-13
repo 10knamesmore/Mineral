@@ -78,8 +78,16 @@ impl AppState {
                 page,
             } => self.apply_search_page_failed(*source, *kind, query, *page),
             TaskEvent::ArtistDetailFetched { id, artist } => self.apply_artist_detail(id, artist),
-            TaskEvent::ArtistAlbumsFetched { id, albums, .. } => {
-                self.apply_artist_albums(id, albums);
+            TaskEvent::ArtistAlbumsFetched {
+                id,
+                albums,
+                page,
+                has_more,
+            } => {
+                self.apply_artist_albums(id, albums, *page, *has_more);
+            }
+            TaskEvent::ArtistAlbumsPageFailed { id, page } => {
+                self.apply_artist_albums_page_failed(id, *page);
             }
             TaskEvent::AlbumDetailFetched { id, album } => self.apply_album_detail(id, album),
             // 写成功后的列表收敛由 server 触发的 LibrarySnapshot 完成；完成事件本身不改 AppState。

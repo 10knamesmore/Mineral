@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicUsize;
 
 use async_trait::async_trait;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page,
-    Result as ChannelResult, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult,
+    Result as ChannelResult,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId,
@@ -40,15 +40,15 @@ impl MusicChannel for UrlChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Album>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
 
@@ -189,15 +189,15 @@ impl MusicChannel for CannedChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Album>> {
         Err(Error::NotSupported)
     }
 
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
 
@@ -248,7 +248,7 @@ impl MusicChannel for DetailChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<SearchHits<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 

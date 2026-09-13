@@ -7,10 +7,11 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use super::frame::draw_frame_real;
+use super::placeholder::loading_glyph;
 use super::title;
 use super::transition::{SweepArgs, draw_sweep};
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, ArtistAlbums};
 
 /// 画 detail 面板：bordered 外框 + 当前栈顶帧。空结果/无栈画空框；滑动期走 sweep 合成。
 ///
@@ -36,15 +37,18 @@ pub fn draw(
         .border_style(Style::new().fg(color))
         .border_type(BorderType::Rounded)
         .title(title::for_panel(state, area.width));
-    // 左下角位置标:当前栈顶帧当前区列表 ` n / total `(数据未到 len 0 不显)。detail 非分页
-    // (一次拉全),故无 results 列那种 `+`。
+    // 艺人专辑未收齐时以 `+` 标记已加载数量，续页等待期间保留列表并显示 loading。
     if let Some(dframe) = results.and_then(|kr| kr.detail.current()) {
         let len = dframe.list_len();
-        if len > 0 {
-            block = block.title_bottom(
-                Line::from(detail_position_label(dframe.list().sel(), len))
-                    .style(Style::new().fg(theme.overlay)),
-            );
+        let albums = dframe.current_album_list();
+        let has_more = albums.is_some_and(ArtistAlbums::has_more);
+        if len > 0 || has_more {
+            let mut label = detail_position_label(dframe.list().sel(), len, has_more);
+            if albums.is_some_and(ArtistAlbums::is_loading) {
+                label.push_str(loading_glyph(state));
+                label.push_str(" loading ");
+            }
+            block = block.title_bottom(Line::from(label).style(Style::new().fg(theme.overlay)));
         }
     }
     let inner = block.inner(area);
@@ -87,11 +91,8 @@ pub fn draw(
     }
 }
 
-/// detail 面板左下角 ` n / total `(1-based 当前位 / 当前区列表长度)。调用方已保证 `total != 0`。
-///
-/// # Params:
-///   - `sel`: 0-based 选中行
-///   - `total`: 当前区列表长度
-fn detail_position_label(sel: usize, total: usize) -> String {
-    format!(" {} / {total} ", sel.saturating_add(1).min(total))
+/// detail 面板的位置标；尚有下一页时在已加载数量后加 `+`，空页当前位置为 0。
+fn detail_position_label(sel: usize, total: usize, has_more: bool) -> String {
+    let more = if has_more { "+" } else { "" };
+    format!(" {} / {total}{more} ", sel.saturating_add(1).min(total))
 }

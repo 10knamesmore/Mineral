@@ -3,6 +3,7 @@
 //! 内容层级映射:分 P → [`Song`],视频(BV)→ [`Album`],单 P 视频即一首歌。SongId 用
 //! `{bvid}:{page}` 形态(全局唯一;裸值喂后端时按 `:` 拆回 bvid + 分 P 号)。
 
+use mineral_channel_core::{Page, PageResult};
 use mineral_model::{
     Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
     MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
@@ -13,7 +14,7 @@ use mineral_playback::DirectMedia;
 use crate::wire::fav::{FavFolder, FavInfo, FavMedia};
 use crate::wire::playurl::{DashAudio, PlayUrlResult};
 use crate::wire::search::{SearchUserItem, SearchVideoItem};
-use crate::wire::space::{ArcVideoItem, CardInfo, CardResult};
+use crate::wire::space::{ArcSearchResult, ArcVideoItem, CardInfo, CardResult};
 use crate::wire::view::{VideoInfo, VideoOwner, VideoPage};
 
 /// 去掉标题里的 `<em ...>` / `</em>` 高亮标签(B站搜索给命中词裹上的 keyword 标记)。
@@ -405,6 +406,23 @@ pub(crate) fn card_to_artist(id: ArtistId, result: CardResult) -> Artist {
         .album_count(result.archive_count.and_then(|n| u64::try_from(n).ok()))
         .avatar_url(card.face.as_deref().and_then(cover_media_url))
         .build()
+}
+
+/// 转换投稿专辑页，优先按响应的总数、页码和页大小判断是否还有下一页。
+///
+/// 响应缺少完整分页计数时，用过滤前的投稿条数与请求 `limit` 比较；
+/// 缺少 BV 号的条目仍占据来源页中的位置，不能因丢弃这些条目而误判末页。
+pub(crate) fn arc_videos_to_albums(result: ArcSearchResult, page: Page) -> PageResult<Album> {
+    let videos = result.list.map(|list| list.vlist).unwrap_or_default();
+    let raw_count = videos.len();
+    let has_more = result
+        .page
+        .and_then(|page| Some(u64::from(page.pn?) * u64::from(page.ps?) < page.count?))
+        .unwrap_or(u32::try_from(raw_count).unwrap_or(u32::MAX) >= page.limit);
+    PageResult::new(
+        videos.into_iter().filter_map(arc_video_to_album).collect(),
+        has_more,
+    )
 }
 
 /// 投稿视频条目 → [`Album`](BV 即专辑,元信息版:曲目留空,P 数未知留 `None`,详情走
@@ -835,6 +853,81 @@ mod tests {
             album.cover_url,
             MediaUrl::remote("https://i0.hdslb.com/a.jpg").ok()
         );
+        Ok(())
+    }
+
+    /// 服务端页大小与请求不同时，首尾页判断仍服从响应计数，过滤条目不改变判断。
+    #[test]
+    fn arc_video_pages_use_response_counts() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+
+        use super::arc_videos_to_albums;
+        use crate::wire::space::ArcSearchResult;
+
+        for (pagination, expected) in [
+            (serde_json::json!({ "count": 89, "pn": 1, "ps": 30 }), true),
+            (serde_json::json!({ "count": 89, "pn": 3, "ps": 30 }), false),
+            (serde_json::json!({ "count": 60, "pn": 2, "ps": 30 }), false),
+        ] {
+            let dto = from_value::<ArcSearchResult>(serde_json::json!({
+                "list": { "vlist": [
+                    { "bvid": "BV1xx", "title": "投稿一" },
+                    { "title": "缺少 BV 号" }
+                ] },
+                "page": pagination
+            }))?;
+            let result = arc_videos_to_albums(dto, Page::new(0, 50));
+            assert_eq!(result.has_more, Some(expected));
+            assert_eq!(result.items.len(), 1);
+            assert_eq!(
+                result.items.first().map(|album| &album.id),
+                Some(&AlbumId::new(SourceKind::BILIBILI, "BV1xx"))
+            );
+        }
+        Ok(())
+    }
+
+    /// 无完整分页计数时，满页即使全部缺少 BV 号也允许继续；原始短页和空页才结束。
+    #[test]
+    fn arc_video_pages_count_items_before_filtering() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+
+        use super::arc_videos_to_albums;
+        use crate::wire::space::ArcSearchResult;
+
+        for (raw, expected_items, expected_more) in [
+            (
+                serde_json::json!({ "list": { "vlist": [
+                    { "bvid": "BV1xx" }, { "title": "缺少 BV 号" }
+                ] } }),
+                1,
+                true,
+            ),
+            (
+                serde_json::json!({ "list": { "vlist": [{}, {}] } }),
+                0,
+                true,
+            ),
+            (
+                serde_json::json!({
+                    "list": { "vlist": [{}, {}] },
+                    "page": { "count": 89 }
+                }),
+                0,
+                true,
+            ),
+            (
+                serde_json::json!({ "list": { "vlist": [{ "bvid": "BV1xx" }] } }),
+                1,
+                false,
+            ),
+            (serde_json::json!({}), 0, false),
+        ] {
+            let dto = from_value::<ArcSearchResult>(raw)?;
+            let result = arc_videos_to_albums(dto, Page::new(2, 2));
+            assert_eq!(result.items.len(), expected_items);
+            assert_eq!(result.has_more, Some(expected_more));
+        }
         Ok(())
     }
 

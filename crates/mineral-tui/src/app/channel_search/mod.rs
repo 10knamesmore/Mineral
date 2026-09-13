@@ -5,6 +5,8 @@ mod panels;
 mod prompt;
 
 #[cfg(test)]
+mod artist_albums_tests;
+#[cfg(test)]
 mod pagination_tests;
 
 pub(crate) use effects::{SearchCtx, SearchEffect};

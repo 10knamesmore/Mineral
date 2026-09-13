@@ -1867,7 +1867,7 @@ mod tests {
             && let Some(frame) = kr.detail.current_mut()
         {
             frame.set_artist_detail(Box::new(detail));
-            frame.set_artist_albums(albums);
+            frame.set_artist_albums(albums, Page::default(), None);
         }
         app.state.channel_search.focus = SearchFocus::Detail;
         Ok(app)

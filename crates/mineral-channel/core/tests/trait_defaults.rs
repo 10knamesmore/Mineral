@@ -4,7 +4,7 @@
 //! 运行时防线。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, SearchHits};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
@@ -33,7 +33,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Song>> {
+    ) -> mineral_channel_core::Result<PageResult<Song>> {
         Err(Error::NotSupported)
     }
 
@@ -41,7 +41,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Album>> {
+    ) -> mineral_channel_core::Result<PageResult<Album>> {
         Err(Error::NotSupported)
     }
 
@@ -49,7 +49,7 @@ impl MusicChannel for BareChannel {
         &self,
         _query: &str,
         _page: Page,
-    ) -> mineral_channel_core::Result<SearchHits<Playlist>> {
+    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
 

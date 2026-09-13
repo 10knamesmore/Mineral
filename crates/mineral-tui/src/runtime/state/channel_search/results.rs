@@ -9,6 +9,7 @@ use mineral_task::SearchPayload;
 use crate::runtime::scroll::list::ScrollList;
 
 use super::super::detail::{DetailFetch, DetailStack, EntityRef};
+use super::super::pagination::ListPagination;
 
 /// 某个 (source, kind) 的一桶搜索结果：累积页 + 光标 + 翻页游标 + 该实体的详情栈。
 ///
@@ -21,7 +22,7 @@ pub struct KindResults {
     list: ScrollList,
 
     /// 续页进度与待收取请求；随结果桶保留，编辑 query 或重新搜索时一起销毁。
-    pagination: SearchPagination,
+    pagination: ListPagination,
 
     /// 当前选中实体的详情栈（root 随 `sel` 复位、下钻 push/pop）。
     pub detail: DetailStack,
@@ -30,32 +31,6 @@ pub struct KindResults {
     /// 尚未落定。由 [`Self::apply_sections`] 在首页到货后按 caps 落定,`set_sel` 复位新 root 时复用
     /// （无需再查 caps）——新建 / 复位的 artist root 帧据此把分区收到首个可用区。
     sections: Option<ArtistSections>,
-}
-
-/// 保存一个结果桶的分页状态，页大小沿用首页请求。
-struct SearchPagination {
-    /// 下一页请求；offset 按已收取页数 × limit 推进，不能按实际条数推进，
-    /// 否则页码型来源的短页会导致页号折回或跳页。
-    next_page: Page,
-
-    /// 已发出、尚未消费成功或失败回包的续页。scheduler 完成任务不会清除此状态。
-    pending_page: Option<Page>,
-
-    /// 来源明确没有下一页，或缺少显式信号且收到短页；为真时停止预取。
-    exhausted: bool,
-}
-
-/// 榨干判定:源显式表态（`has_more`）优先,`None` 回退「短页即榨干」推断。
-///
-/// # Params:
-///   - `loaded`: 本页实际返回条数
-///   - `limit`: 请求页大小
-///   - `has_more`: 源的显式翻页信号
-fn page_exhausts(loaded: u32, limit: u32, has_more: Option<bool>) -> bool {
-    match has_more {
-        Some(more) => !more,
-        None => loaded < limit,
-    }
 }
 
 impl KindResults {
@@ -69,15 +44,10 @@ impl KindResults {
         let count = payload_len(&payload);
         let detail = EntityRef::from_payload(&payload, 0)
             .map_or_else(DetailStack::empty, DetailStack::rooted);
-        let loaded = u32::try_from(count).unwrap_or(u32::MAX);
         Self {
             results: payload,
             list: ScrollList::new(),
-            pagination: SearchPagination {
-                next_page: Page::new(limit, limit),
-                pending_page: None,
-                exhausted: page_exhausts(loaded, limit, has_more),
-            },
+            pagination: ListPagination::first_page(count, Page::new(0, limit), has_more),
             detail,
             sections: None,
         }
@@ -102,13 +72,7 @@ impl KindResults {
 
     /// 登记待收取的下一页，供调用方提交任务；已在等待或没有更多结果时不重复请求。
     pub(crate) fn request_next_page(&mut self) -> Option<Page> {
-        let pagination = &mut self.pagination;
-        if pagination.exhausted || pagination.pending_page.is_some() {
-            return None;
-        }
-        let page = pagination.next_page;
-        pagination.pending_page = Some(page);
-        Some(page)
+        self.pagination.request_next_page()
     }
 
     /// 只追加当前待收取页；重复、未请求或分页参数不符的回包不改变结果与分页进度。
@@ -119,31 +83,24 @@ impl KindResults {
         page: Page,
         has_more: Option<bool>,
     ) -> bool {
-        let pagination = &mut self.pagination;
-        if pagination.pending_page != Some(page) || pagination.next_page != page {
-            mineral_log::debug!(target: "tui", ?page, pending = ?pagination.pending_page, expected = ?pagination.next_page, "ignore unexpected search page");
+        if !self
+            .pagination
+            .accept_page(payload_len(&payload), page, has_more)
+        {
             return false;
         }
-        let added = u32::try_from(payload_len(&payload)).unwrap_or(u32::MAX);
         extend_payload(&mut self.results, payload);
-        pagination.pending_page = None;
-        pagination.next_page.offset = page.offset.saturating_add(page.limit);
-        pagination.exhausted = page_exhausts(added, page.limit, has_more);
-        mineral_log::debug!(target: "tui", ?page, added, next_offset = pagination.next_page.offset, exhausted = pagination.exhausted, "append search page");
         true
     }
 
     /// 失败或取消只释放对应的待收取页，保留游标与结果；下次近底导航可重试同一页。
     pub(super) fn fail_page(&mut self, page: Page) {
-        if self.pagination.pending_page == Some(page) {
-            self.pagination.pending_page = None;
-            mineral_log::debug!(target: "tui", ?page, "release failed search page for retry");
-        }
+        self.pagination.fail_page(page);
     }
 
-    /// 是否已收齐结果，供底标区分 `n/∞` 与 `n/n`。
+    /// 是否已收齐结果，供底标决定是否在已加载数量后显示 `+`。
     pub fn exhausted(&self) -> bool {
-        self.pagination.exhausted
+        self.pagination.exhausted()
     }
 
     /// 当前结果条数。
@@ -216,13 +173,39 @@ impl KindResults {
         }
     }
 
-    /// 将艺人专辑列表填入所有匹配的保留帧，与已收到的热门曲合并。
-    pub fn fill_artist_albums(&mut self, id: &ArtistId, albums: &[Album]) {
+    /// 将艺人专辑页交给所有匹配的保留帧，各帧按自己的请求进度接收。
+    ///
+    /// # Params:
+    ///   - `id`: 回包所属艺人，用于匹配保留帧。
+    ///   - `albums`: 本页实际返回的专辑。
+    ///   - `page`: 回包对应的分页参数。
+    ///   - `has_more`: 来源的显式翻页信号。
+    pub fn fill_artist_albums(
+        &mut self,
+        id: &ArtistId,
+        albums: &[Album],
+        page: Page,
+        has_more: Option<bool>,
+    ) {
         for frame in self
             .detail
             .matching_frames_mut(DetailFetch::Artist(id.clone()))
         {
-            frame.set_artist_albums(albums.to_vec());
+            frame.set_artist_albums(albums.to_vec(), page, has_more);
+        }
+    }
+
+    /// 将失败页交给所有匹配的保留帧，释放各帧对应的待收取续页。
+    ///
+    /// # Params:
+    ///   - `id`: 失败任务所属艺人，用于匹配保留帧。
+    ///   - `page`: 失败或取消任务携带的分页参数。
+    pub fn fail_artist_albums_page(&mut self, id: &ArtistId, page: Page) {
+        for frame in self
+            .detail
+            .matching_frames_mut(DetailFetch::Artist(id.clone()))
+        {
+            frame.fail_artist_albums_page(page);
         }
     }
 }
@@ -292,7 +275,8 @@ mod tests {
         assert_eq!(kr.len(), 5, "5 条入桶");
         assert!(!kr.exhausted(), "满页（= limit）不判榨干");
         assert_eq!(
-            kr.pagination.next_page.offset, 5,
+            kr.pagination.expected_page().offset,
+            5,
             "下一页从 limit 起(页对齐)"
         );
         assert_eq!(kr.detail.depth(), 0, "detail root 落首项、无下钻");
@@ -319,7 +303,8 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
         assert!(!kr.exhausted(), "源显式 has_more=true → 短页不判榨干");
         assert_eq!(
-            kr.pagination.next_page.offset, 5,
+            kr.pagination.expected_page().offset,
+            5,
             "next_offset 页对齐推进,与实际条数(2)无关"
         );
 
@@ -390,7 +375,8 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("桶应在"))?;
         assert_eq!(kr.len(), 7, "两页累积");
         assert_eq!(
-            kr.pagination.next_page.offset, 10,
+            kr.pagination.expected_page().offset,
+            10,
             "offset 页对齐推到 2 × limit"
         );
         assert!(kr.exhausted(), "短二页榨干");

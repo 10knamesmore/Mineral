@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, Result, SearchHits,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
@@ -176,7 +176,7 @@ impl MusicChannel for NeteaseChannel {
             .build()
     }
 
-    async fn search_songs(&self, query: &str, page: Page) -> Result<SearchHits<Song>> {
+    async fn search_songs(&self, query: &str, page: Page) -> Result<PageResult<Song>> {
         let dto = api::search::search_songs(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -189,7 +189,7 @@ impl MusicChannel for NeteaseChannel {
             .into())
     }
 
-    async fn search_albums(&self, query: &str, page: Page) -> Result<SearchHits<Album>> {
+    async fn search_albums(&self, query: &str, page: Page) -> Result<PageResult<Album>> {
         let dto = api::search::search_albums(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -202,7 +202,7 @@ impl MusicChannel for NeteaseChannel {
             .into())
     }
 
-    async fn search_playlists(&self, query: &str, page: Page) -> Result<SearchHits<Playlist>> {
+    async fn search_playlists(&self, query: &str, page: Page) -> Result<PageResult<Playlist>> {
         let dto = api::search::search_playlists(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -214,7 +214,7 @@ impl MusicChannel for NeteaseChannel {
             .into())
     }
 
-    async fn search_artists(&self, query: &str, page: Page) -> Result<SearchHits<Artist>> {
+    async fn search_artists(&self, query: &str, page: Page) -> Result<PageResult<Artist>> {
         let dto = api::search::search_artists(&self.transport, query, page.offset, page.limit)
             .await
             .map_err(map_err)?;
@@ -248,15 +248,11 @@ impl MusicChannel for NeteaseChannel {
         Ok(convert::artist_detail_to_model(detail, fans))
     }
 
-    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<Vec<Album>> {
+    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
         let dto = api::artist::albums(&self.transport, id, page.offset, page.limit)
             .await
             .map_err(map_err)?;
-        Ok(dto
-            .hot_albums
-            .into_iter()
-            .map(convert::artist_album_to_model)
-            .collect())
+        Ok(convert::artist_albums_to_model(dto))
     }
 
     async fn create_playlist(&self, name: &str) -> Result<Playlist> {

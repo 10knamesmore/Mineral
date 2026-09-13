@@ -1230,6 +1230,7 @@ mod tests {
             id,
             page: Page::default(),
             albums: vec![test_album("a1"), test_album("a2")],
+            has_more: None,
         });
         app.state.channel_search.set_focus(SearchFocus::Results);
         press(&mut app, KeyCode::Char('l')); // results → detail
@@ -1627,6 +1628,7 @@ mod tests {
                 id: artist.id,
                 page: Page::default(),
                 albums: vec![album()],
+                has_more: None,
             });
             press(&mut app, KeyCode::Enter);
             press(&mut app, KeyCode::Char('j'));

@@ -6,7 +6,7 @@
 
 use std::cell::Cell;
 
-use mineral_channel_core::{ArtistSectionKind, ArtistSections};
+use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind,
     Song, SourceKind,
@@ -15,6 +15,8 @@ use mineral_task::SearchPayload;
 
 use crate::render::anim::{Toggle, Transition};
 use crate::runtime::scroll::list::ScrollList;
+
+use super::ArtistAlbums;
 
 /// 一帧详情要补拉的内容（携带目标 id，供派发与回包配对）。
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -141,8 +143,8 @@ pub enum DetailData {
         /// artist 详情（`songs` 为热门曲），`None` = 未到。
         detail: Option<Box<Artist>>,
 
-        /// 专辑列表，`None` = 未到。
-        albums: Option<Vec<Album>>,
+        /// 已加载的专辑及其独立分页状态，`None` 表示首页未到。
+        albums: Option<ArtistAlbums>,
     },
 }
 
@@ -338,7 +340,7 @@ impl DetailFrame {
                 Some(DetailData::Artist {
                     albums: Some(albs), ..
                 }),
-            ) => albs.len(),
+            ) => albs.items().len(),
             (EntityRef::Artist(_), _, _) => 0,
             (_, _, Some(DetailData::Album(a))) => a.tracks.len(),
             (_, _, Some(DetailData::PlaylistEntries(entries))) => entries.len(),
@@ -366,7 +368,12 @@ impl DetailFrame {
                 Some(DetailData::Artist {
                     albums: Some(albs), ..
                 }),
-            ) => albs.get(sel).cloned().map(Box::new).map(EntityRef::Album),
+            ) => albs
+                .items()
+                .get(sel)
+                .cloned()
+                .map(Box::new)
+                .map(EntityRef::Album),
             (EntityRef::Artist(_), _, _) => None,
             (_, _, Some(DetailData::Album(a))) => a
                 .tracks
@@ -480,7 +487,7 @@ impl DetailFrame {
                 .and_then(|s| s.cover_url.as_ref()),
             ArtistSection::Albums => albums
                 .as_ref()
-                .and_then(|v| v.get(self.list.sel()))
+                .and_then(|v| v.items().get(self.list.sel()))
                 .and_then(|al| al.cover_url.as_ref()),
         }
     }
@@ -516,16 +523,66 @@ impl DetailFrame {
         }
     }
 
-    /// 落 artist 专辑列表那一路；与 `detail` 那一路合并。
-    pub fn set_artist_albums(&mut self, albums: Vec<Album>) {
-        match &mut self.data {
-            Some(DetailData::Artist { albums: slot, .. }) => *slot = Some(albums),
-            _ => {
+    /// 合并艺人专辑首页或待收取续页，保留热门曲、分区、光标和视口。
+    /// 已有首页后忽略重复首页，避免另一保留帧的预取回包清掉已累积的续页。
+    pub fn set_artist_albums(&mut self, albums: Vec<Album>, page: Page, has_more: Option<bool>) {
+        let Some(DetailData::Artist { albums: slot, .. }) = &mut self.data else {
+            if page.offset == 0 {
                 self.data = Some(DetailData::Artist {
                     detail: None,
-                    albums: Some(albums),
+                    albums: Some(ArtistAlbums::first_page(albums, page, has_more)),
                 });
             }
+            return;
+        };
+        match slot {
+            None if page.offset == 0 => {
+                *slot = Some(ArtistAlbums::first_page(albums, page, has_more));
+            }
+            Some(loaded) if page.offset > 0 => {
+                loaded.append_page(albums, page, has_more);
+            }
+            _ => {}
+        }
+    }
+
+    /// 当前 Albums 区的已加载艺人专辑列表；其它分区或首页未到时没有列表。
+    pub fn current_album_list(&self) -> Option<&ArtistAlbums> {
+        match (&self.entity, self.section, &self.data) {
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Albums,
+                Some(DetailData::Artist { albums, .. }),
+            ) => albums.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// 在 Albums 区登记下一页；回包到达前不重复请求，热门曲区不触发专辑分页。
+    pub(crate) fn request_artist_albums_page(&mut self) -> Option<(ArtistId, Page)> {
+        let (
+            EntityRef::Artist(artist),
+            ArtistSection::Albums,
+            Some(DetailData::Artist {
+                albums: Some(albums),
+                ..
+            }),
+        ) = (&self.entity, self.section, &mut self.data)
+        else {
+            return None;
+        };
+        let page = albums.request_next_page()?;
+        Some((artist.id.clone(), page))
+    }
+
+    /// 失败或取消只释放对应的艺人专辑续页；保留列表，下次近底导航重试原页。
+    pub(crate) fn fail_artist_albums_page(&mut self, page: Page) {
+        if let Some(DetailData::Artist {
+            albums: Some(albums),
+            ..
+        }) = &mut self.data
+        {
+            albums.fail_page(page);
         }
     }
 }
@@ -667,7 +724,7 @@ mod tests {
     };
     use mineral_task::SearchPayload;
 
-    use mineral_channel_core::{ArtistSectionKind, ArtistSections};
+    use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
 
     use super::{ArtistSection, DetailFetch, DetailStack, EntityRef};
 
@@ -866,7 +923,7 @@ mod tests {
 
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         frame.set_artist_detail(Box::new(detail));
-        frame.set_artist_albums(vec![album0]);
+        frame.set_artist_albums(vec![album0], Page::default(), None);
 
         frame.section = ArtistSection::Hot;
         assert_eq!(
@@ -1194,7 +1251,7 @@ mod tests {
             .build();
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         frame.set_artist_detail(Box::new(detail));
-        frame.set_artist_albums(vec![album("a0"), album("a1")]);
+        frame.set_artist_albums(vec![album("a0"), album("a1")], Page::default(), None);
 
         frame.section = ArtistSection::Hot;
         frame.list_mut().set_sel(1);
@@ -1228,7 +1285,7 @@ mod tests {
             .build();
         let mut artist_frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         artist_frame.set_artist_detail(Box::new(detail));
-        artist_frame.set_artist_albums(vec![album("a0")]);
+        artist_frame.set_artist_albums(vec![album("a0")], Page::default(), None);
         artist_frame.section = ArtistSection::Hot;
         assert_eq!(artist_frame.song_list().len(), 2, "Hot 区 = 热门曲");
         artist_frame.section = ArtistSection::Albums;

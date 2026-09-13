@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult, Result};
 use mineral_model::{
-    Album, AlbumId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
+    Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
 use mineral_task::{
     ChannelFetchKind, ChannelFetchKindTag, Priority, Scheduler, SearchPayload, TaskEvent, TaskKind,
@@ -13,7 +13,7 @@ use mineral_task::{
 };
 use tokio::sync::Semaphore;
 
-/// fake channel:歌单、歌词与歌曲搜索成功且可被 gate 阻塞，其他端点返回 NotSupported。
+/// fake channel:歌单、歌词与歌曲搜索成功，艺人专辑页可配置，以上端点均可被 gate 阻塞。
 ///
 /// 用 Semaphore 而非 Notify 当 gate ——`add_permits` 即使在没人 await 时调用,
 /// 之后的 `acquire` 也能立刻拿到,避免测试里的"先 notify 再 await"竞态。
@@ -21,11 +21,14 @@ struct FakeChannel {
     /// 当前用户的歌单。
     playlists: Vec<Playlist>,
 
-    /// 每个 permit 放行一次成功端点调用。
+    /// 每个 permit 放行一次调用，艺人专辑页可在放行后返回失败。
     gate: Option<Arc<Semaphore>>,
 
-    /// 每次进入歌曲搜索端点时提供一个 permit，供测试确定取消时机。
-    search_started: Arc<Semaphore>,
+    /// 每次进入搜索或艺人专辑分页端点时提供一个 permit，供测试确定取消时机。
+    page_started: Arc<Semaphore>,
+
+    /// 艺人专辑页的响应；`None` 表示端点返回 NotSupported。
+    artist_albums: Option<PageResult<Album>>,
 }
 
 impl FakeChannel {
@@ -37,7 +40,8 @@ impl FakeChannel {
         Self {
             playlists: vec![pl],
             gate,
-            search_started: Arc::new(Semaphore::new(0)),
+            page_started: Arc::new(Semaphore::new(0)),
+            artist_albums: None,
         }
     }
 
@@ -68,15 +72,15 @@ impl MusicChannel for FakeChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<SearchHits<Song>> {
-        self.search_started.add_permits(1);
+    async fn search_songs(&self, _q: &str, _p: Page) -> Result<PageResult<Song>> {
+        self.page_started.add_permits(1);
         self.maybe_wait().await;
-        Ok(SearchHits::new(Vec::new(), false))
+        Ok(PageResult::new(Vec::new(), false))
     }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<SearchHits<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> Result<PageResult<Album>> {
         Err(Error::NotSupported)
     }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<SearchHits<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
@@ -91,6 +95,11 @@ impl MusicChannel for FakeChannel {
             .id(id.clone())
             .name(String::new())
             .build())
+    }
+    async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<PageResult<Album>> {
+        self.page_started.add_permits(1);
+        self.maybe_wait().await;
+        self.artist_albums.clone().ok_or(Error::NotSupported)
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         self.maybe_wait().await;
@@ -266,7 +275,7 @@ async fn search_failure_emits_request_and_fetch_done() -> color_eyre::Result<()>
 async fn search_cancellation_emits_request_before_and_during_execution() -> color_eyre::Result<()> {
     for cancel_while_running in [false, true] {
         let channel = FakeChannel::new(Some(Arc::new(Semaphore::new(0))));
-        let search_started = Arc::clone(&channel.search_started);
+        let page_started = Arc::clone(&channel.page_started);
         let channel: Arc<dyn MusicChannel> = Arc::new(channel);
         let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
         let source = SourceKind::NETEASE;
@@ -283,7 +292,7 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
             Priority::User,
         );
         if cancel_while_running {
-            tokio::time::timeout(std::time::Duration::from_secs(5), search_started.acquire())
+            tokio::time::timeout(std::time::Duration::from_secs(5), page_started.acquire())
                 .await??
                 .forget();
         }
@@ -318,7 +327,7 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
                 ..
             } if *event_source == source
         )));
-        assert_eq!(search_started.available_permits(), 0);
+        assert_eq!(page_started.available_permits(), 0);
     }
     Ok(())
 }
@@ -371,6 +380,145 @@ async fn successful_search_emits_results_without_failure() -> color_eyre::Result
     Ok(())
 }
 
+/// 艺人专辑页的三种翻页状态与非空载荷原样到达 client，成功不能额外发失败事件。
+#[tokio::test]
+async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
+    for has_more in [Some(true), Some(false), None] {
+        let albums = vec![
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, "a1"))
+                .name("续页专辑".to_owned())
+                .build(),
+        ];
+        let mut channel = FakeChannel::new(None);
+        channel.artist_albums = Some(PageResult {
+            items: albums.clone(),
+            has_more,
+        });
+        let channel: Arc<dyn MusicChannel> = Arc::new(channel);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let id = ArtistId::new(SourceKind::NETEASE, "artist1");
+        let artist_ref = id.qualified();
+        let page = Page::new(60, 20);
+        let h = sched.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
+                id: id.clone(),
+                page,
+            }),
+            Priority::User,
+        );
+        assert_eq!(h.done().await, TaskOutcome::Ok);
+
+        let events = sched.drain_events();
+        assert_eq!(events.len(), 2, "专辑页结果 + FetchDone: {events:?}");
+        assert!(events.contains(&TaskEvent::ArtistAlbumsFetched {
+            id,
+            page,
+            albums,
+            has_more,
+        }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TaskEvent::FetchDone {
+                kind: ChannelFetchKindTag::ArtistAlbums,
+                source,
+                target_ref: Some(target),
+                from_user: true,
+                outcome: TaskOutcome::Ok,
+                ..
+            } if *source == SourceKind::NETEASE && target == &artist_ref
+        )));
+    }
+    Ok(())
+}
+
+/// 艺人专辑页失败时回带艺人和分页请求，且保留失败埋点。
+#[tokio::test]
+async fn artist_albums_failure_emits_request_and_fetch_done() -> color_eyre::Result<()> {
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 1);
+    let id = ArtistId::new(SourceKind::NETEASE, "artist1");
+    let artist_ref = id.qualified();
+    let page = Page::new(60, 20);
+    let h = sched.submit(
+        TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
+            id: id.clone(),
+            page,
+        }),
+        Priority::User,
+    );
+    assert_eq!(h.done().await, TaskOutcome::Failed);
+
+    let events = sched.drain_events();
+    assert_eq!(events.len(), 2, "专辑页失败事件 + FetchDone: {events:?}");
+    assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, page }));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TaskEvent::FetchDone {
+            kind: ChannelFetchKindTag::ArtistAlbums,
+            source,
+            target_ref: Some(target),
+            from_user: true,
+            outcome: TaskOutcome::Failed,
+            ..
+        } if *source == SourceKind::NETEASE && target == &artist_ref
+    )));
+    Ok(())
+}
+
+/// 执行前和端点等待期间取消艺人专辑页，都回带请求且保留取消埋点。
+#[tokio::test]
+async fn artist_albums_cancel_before_and_during_execution() -> color_eyre::Result<()> {
+    for cancel_while_running in [false, true] {
+        let channel = FakeChannel::new(Some(Arc::new(Semaphore::new(0))));
+        let page_started = Arc::clone(&channel.page_started);
+        let channel: Arc<dyn MusicChannel> = Arc::new(channel);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let id = ArtistId::new(SourceKind::NETEASE, "artist1");
+        let artist_ref = id.qualified();
+        let page = Page::new(90, 15);
+        let h = sched.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
+                id: id.clone(),
+                page,
+            }),
+            Priority::User,
+        );
+        if cancel_while_running {
+            tokio::time::timeout(std::time::Duration::from_secs(5), page_started.acquire())
+                .await??
+                .forget();
+        }
+        // 当前线程 runtime 在首次 await 前不运行 worker，覆盖执行前已取消的分支。
+        sched.cancel_where(|task| {
+            matches!(
+                task,
+                TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { .. })
+            )
+        });
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), h.done()).await?,
+            TaskOutcome::Cancelled
+        );
+
+        let events = sched.drain_events();
+        assert_eq!(events.len(), 2, "专辑页取消事件 + FetchDone: {events:?}");
+        assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, page }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TaskEvent::FetchDone {
+                kind: ChannelFetchKindTag::ArtistAlbums,
+                source,
+                target_ref: Some(target),
+                from_user: true,
+                outcome: TaskOutcome::Cancelled,
+                ..
+            } if *source == SourceKind::NETEASE && target == &artist_ref
+        )));
+        assert_eq!(page_started.available_permits(), 0);
+    }
+    Ok(())
+}
+
 // ---------------- PlaylistWrite lane ----------------
 
 /// 记录写调用时序的桩 channel:每次 rename 记 start/end 各一条,中间 sleep
@@ -397,13 +545,13 @@ impl MusicChannel for WriteRecorder {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<SearchHits<Song>> {
+    async fn search_songs(&self, _q: &str, _p: Page) -> Result<PageResult<Song>> {
         Err(Error::NotSupported)
     }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<SearchHits<Album>> {
+    async fn search_albums(&self, _q: &str, _p: Page) -> Result<PageResult<Album>> {
         Err(Error::NotSupported)
     }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<SearchHits<Playlist>> {
+    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {

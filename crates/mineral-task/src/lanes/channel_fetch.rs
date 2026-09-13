@@ -166,7 +166,7 @@ async fn next_job(
 }
 
 /// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
-/// 搜索失败或取消时发 [`TaskEvent::SearchPageFailed`]，所有终态另发 [`TaskEvent::FetchDone`]。
+/// 搜索与艺人专辑页失败或取消时回带对应分页请求，所有终态另发 [`TaskEvent::FetchDone`]。
 /// 事件均在通知 `done_tx` 前写入 buffer。
 async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
     let Job {
@@ -187,20 +187,27 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
         }
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    if outcome != TaskOutcome::Ok
-        && let ChannelFetchKind::Search {
-            source,
-            kind,
-            query,
-            page,
-        } = &kind
-    {
-        event_tx.lock().push(TaskEvent::SearchPageFailed {
-            source: *source,
-            kind: *kind,
-            query: query.clone(),
-            page: *page,
-        });
+    if outcome != TaskOutcome::Ok {
+        match &kind {
+            ChannelFetchKind::Search {
+                source,
+                kind,
+                query,
+                page,
+            } => event_tx.lock().push(TaskEvent::SearchPageFailed {
+                source: *source,
+                kind: *kind,
+                query: query.clone(),
+                page: *page,
+            }),
+            ChannelFetchKind::ArtistAlbums { id, page } => {
+                event_tx.lock().push(TaskEvent::ArtistAlbumsPageFailed {
+                    id: id.clone(),
+                    page: *page,
+                });
+            }
+            _ => {}
+        }
     }
     // 埋点信号:取数收束(fetches)。server 记录后不转发 client。
     event_tx.lock().push(TaskEvent::FetchDone {
@@ -310,7 +317,7 @@ async fn execute(
             query,
             page,
         } => {
-            // 每 arm 把 SearchHits 拆成 (载荷, 显式翻页信号) 一并透传给 client。
+            // 每 arm 把 PageResult 拆成 (载荷, 显式翻页信号) 一并透传给 client。
             let result = match kind {
                 mineral_model::SearchKind::Song => {
                     channel.search_songs(query, *page).await.map(|hits| {
@@ -395,11 +402,21 @@ async fn execute(
         },
         ChannelFetchKind::ArtistAlbums { id, page } => {
             match channel.artist_albums(id, *page).await {
-                Ok(albums) => {
+                Ok(result) => {
+                    mineral_log::debug!(
+                        target: "channel_fetch",
+                        source = ?id.namespace(),
+                        artist_id = id.as_str(),
+                        ?page,
+                        albums = result.items.len(),
+                        has_more = ?result.has_more,
+                        "artist albums page fetched"
+                    );
                     event_tx.lock().push(TaskEvent::ArtistAlbumsFetched {
                         id: id.clone(),
                         page: *page,
-                        albums,
+                        albums: result.items,
+                        has_more: result.has_more,
                     });
                     TaskOutcome::Ok
                 }
@@ -409,6 +426,7 @@ async fn execute(
                         source = ?id.namespace(),
                         op = "artist_albums",
                         artist_id = id.as_str(),
+                        ?page,
                         error = mineral_log::chain(&e),
                         "channel fetch failed"
                     );

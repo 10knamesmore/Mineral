@@ -1,5 +1,6 @@
 //! 网易原生 DTO → `mineral_model` 类型的转换 helper。
 
+use mineral_channel_core::PageResult;
 use mineral_model::{
     Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
     CollectionIndex, MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song,
@@ -8,7 +9,7 @@ use mineral_model::{
 use mineral_playback::DirectMedia;
 use rustc_hash::FxHashMap;
 
-use crate::wire::artist::{ArtistAlbum, ArtistDetailResult};
+use crate::wire::artist::{ArtistAlbum, ArtistAlbumsResult, ArtistDetailResult};
 use crate::wire::playlist::{PlaylistInfo, TrackId};
 use crate::wire::search::{AlbumDetailResult, SearchAlbum, SearchArtist, SearchPlaylist};
 use crate::wire::song::{AlbumSong, Artist as WireArtist, SongUrl};
@@ -197,6 +198,18 @@ pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -
         .avatar_url(parse_remote_opt(r.artist.pic_url.as_deref()))
         .songs(r.hot_songs.into_iter().map(album_song_to_model).collect())
         .build()
+}
+
+/// 转换艺人专辑页，并保留响应的 `more`；字段缺失时由上层按条数判断。
+pub(crate) fn artist_albums_to_model(result: ArtistAlbumsResult) -> PageResult<Album> {
+    PageResult {
+        items: result
+            .hot_albums
+            .into_iter()
+            .map(artist_album_to_model)
+            .collect(),
+        has_more: result.more,
+    }
 }
 
 /// artist 专辑列表项 → 统一 [`Album`](曲目留空,按需走 `album_detail`)。
@@ -581,6 +594,34 @@ mod tests {
         assert_eq!(model.song_count, Some(2570));
         assert_eq!(model.follower_count, Some(8_900_000));
         mineral_test::assert_snap_debug!("artist 详情映射成统一 Artist(Beyond + 1 热门曲)", model);
+        Ok(())
+    }
+
+    /// 专辑页保留明确的 more；缺失或 null 不得变成末页信号。
+    #[test]
+    fn artist_albums_preserve_pagination_signal() -> color_eyre::Result<()> {
+        use super::artist_albums_to_model;
+        use crate::wire::artist::ArtistAlbumsResult;
+
+        for (pagination, expected) in [
+            (serde_json::json!({ "more": true }), Some(true)),
+            (serde_json::json!({ "more": false }), Some(false)),
+            (serde_json::json!({ "more": null }), None),
+            (serde_json::json!({}), None),
+        ] {
+            let mut raw = pagination;
+            raw["hotAlbums"] = serde_json::json!([
+                { "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 }
+            ]);
+            let dto = from_value::<ArtistAlbumsResult>(raw)?;
+            let result = artist_albums_to_model(dto);
+            assert_eq!(result.has_more, expected);
+            assert_eq!(result.items.len(), 1);
+            assert_eq!(
+                result.items.first().map(|album| &album.id),
+                Some(&mineral_model::AlbumId::new(SourceKind::NETEASE, "8"))
+            );
+        }
         Ok(())
     }
 
