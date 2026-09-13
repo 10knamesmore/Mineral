@@ -19,10 +19,10 @@ use crate::pcm_relay::PcmRelay;
 use crate::player::PlayerCore;
 
 /// 播放锚点采样节奏。
-const PLAYBACK_SAMPLE_MS: u64 = 200;
+const PLAYBACK_SAMPLE_MS: u64 = 100;
 
 /// 播放中重锚周期(位置由 client 本地推进,这里只做周期校准)。
-const PLAYBACK_REANCHOR_MS: u64 = 1000;
+const PLAYBACK_REANCHOR_MS: u64 = 100;
 
 /// 任务摘要采样节奏。
 const TASKS_SAMPLE_MS: u64 = 250;
@@ -120,7 +120,7 @@ pub(crate) fn spawn(
     }
 }
 
-/// 播放锚点发布:状态签名变化立即发,播放中每秒重锚一次。
+/// 采样播放锚点:状态签名变化时发布,播放中按重锚周期校准位置。
 fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnapshot>> {
     let (tx, rx) = watch::channel(Arc::new(audio.snapshot()));
     tokio::spawn(async move {
