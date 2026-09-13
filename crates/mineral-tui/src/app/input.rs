@@ -948,8 +948,7 @@ mod tests {
         Ok(())
     }
 
-    /// 结果列光标进入「距底 prefetch_rows 行内」且未榨干 → 自动派发翻页(offset>0)Search
-    /// 任务(lazy 分页的 client 触发;scheduler 按 offset 进 dedup key 防重)。顶部不预取。
+    /// 结果列光标进入预取半径后请求下一页；收包前连续移动只提交一次，页大小沿用首页。
     #[test]
     fn results_prefetch_dispatches_next_page_near_bottom() -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
@@ -972,21 +971,24 @@ mod tests {
             has_more: None,
         });
 
-        let next_page_offset = |tasks: &[TaskKind]| {
-            tasks.iter().find_map(|k| match k {
-                TaskKind::ChannelFetch(ChannelFetchKind::Search { page, .. })
-                    if page.offset > 0 =>
-                {
-                    Some(page.offset)
-                }
-                _ => None,
-            })
+        let requested_pages = |tasks: &[TaskKind]| {
+            tasks
+                .iter()
+                .filter_map(|k| match k {
+                    TaskKind::ChannelFetch(ChannelFetchKind::Search { page, .. })
+                        if page.offset > 0 =>
+                    {
+                        Some(*page)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         };
 
         // 顶部、未移动:不预取下一页。
         {
             let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
-            assert_eq!(next_page_offset(&tasks), None, "顶部不预取下一页");
+            assert!(requested_pages(&tasks).is_empty(), "顶部不预取下一页");
         }
 
         // 光标连按下移到底 → 进入距底范围 → 预取 offset = next_offset(10)的下一页。
@@ -995,9 +997,9 @@ mod tests {
         }
         let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
         assert_eq!(
-            next_page_offset(&tasks),
-            Some(10),
-            "光标近底自动预取下一页(offset = next_offset)"
+            requested_pages(&tasks),
+            vec![Page::new(10, 10)],
+            "光标近底只请求一次下一页，offset 和 limit 沿用首页分页"
         );
         Ok(())
     }

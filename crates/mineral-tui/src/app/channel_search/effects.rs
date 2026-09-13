@@ -61,8 +61,7 @@ pub(crate) enum SearchEffect {
         query: String,
     },
 
-    /// 懒分页预取下一页(`offset > 0`):光标近结果列底时按当前 source/kind/query 续拉。与
-    /// [`Self::Submit`] 同走 Search 任务,只 `page.offset` 非零;offset 进 dedup key,在途同页并掉。
+    /// 预取下一页：结果桶已登记待收取页，消费成功或失败回包前不再生成同桶的续页意图。
     FetchMore {
         /// 目标 source。
         source: SourceKind,
@@ -73,8 +72,8 @@ pub(crate) enum SearchEffect {
         /// 查询词(与首页同词,续拉同一桶)。
         query: String,
 
-        /// 下一页 offset(= `next_offset`,页对齐:已请求页数 × limit)。
-        offset: u32,
+        /// 待收取页的分页参数，页大小沿用首页。
+        page: mineral_channel_core::Page,
     },
 
     /// Search 未接管的动词回落全局 dispatch(transport / 退出确认等照常生效)。
@@ -136,17 +135,14 @@ impl App {
                 source,
                 kind,
                 query,
-                offset,
+                page,
             } => {
-                // 续拉用与首页一致的页大小(`Page::default().limit`):榨干推断与 next_offset
-                // 页对齐都锚定同一 limit,混用会让 offset↔页号换算错位;offset 进 dedup key。
-                let limit = mineral_channel_core::Page::default().limit;
                 mineral_log::debug!(
                     target: "tui",
                     source = ?source,
                     kind = ?kind,
-                    offset,
-                    limit,
+                    offset = page.offset,
+                    limit = page.limit,
                     "提交搜索结果分页预取"
                 );
                 self.client.submit_task(
@@ -154,7 +150,7 @@ impl App {
                         source,
                         kind,
                         query,
-                        page: mineral_channel_core::Page::new(offset, limit),
+                        page,
                     }),
                     Priority::User,
                 );

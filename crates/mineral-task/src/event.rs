@@ -13,9 +13,9 @@ use crate::write::{PlaylistWriteOp, WriteError};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
-/// 失败任务不发 event(只在 [`crate::TaskHandle::done`] 上拿到 [`crate::TaskOutcome::Failed`]),
-/// 详细错误进 mineral-log。**例外之一:[`TaskEvent::PlaylistWriteDone`] 失败也发**——
-/// 写操作的失败必须到达用户(toast + 清 pending 标记),不能只留在日志里。
+/// 搜索失败或取消时发 [`TaskEvent::SearchPageFailed`]，client 据此清除待收取页标记；
+/// 歌单写操作的失败由 [`TaskEvent::PlaylistWriteDone`] 携带结构化错误。
+/// 所有 channel 取数终态另发 [`TaskEvent::FetchDone`] 供 server 记录埋点，详细错误进 mineral-log。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TaskEvent {
     /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
@@ -109,6 +109,23 @@ pub enum TaskEvent {
         /// client 回退「返回条数 < limit 即榨干」推断。
         #[serde(default)]
         has_more: Option<bool>,
+    },
+
+    /// `Search` 任务失败或取消，client 据此释放对应请求的待收取页标记。
+    ///
+    /// 回带与 [`TaskEvent::SearchResults`] 相同的请求四元组，不携带内部错误文本。
+    SearchPageFailed {
+        /// 来源(source)。
+        source: SourceKind,
+
+        /// 搜索实体类型。
+        kind: SearchKind,
+
+        /// 关键词。
+        query: String,
+
+        /// 分页参数。
+        page: Page,
     },
 
     /// `ArtistDetail` 任务成功:artist 简介 + 热门曲目已到。

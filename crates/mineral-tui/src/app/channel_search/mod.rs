@@ -4,4 +4,7 @@ mod effects;
 mod panels;
 mod prompt;
 
+#[cfg(test)]
+mod pagination_tests;
+
 pub(crate) use effects::{SearchCtx, SearchEffect};

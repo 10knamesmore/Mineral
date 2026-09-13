@@ -364,34 +364,35 @@ impl SearchPage {
         };
         // set_sel 内联 detail 复位(真移动才复位、钳制不动则保留下钻栈)。
         kr.set_sel(next);
-        // 预取:光标距已加载末行 ≤ prefetch_rows 且桶未榨干 → 续拉 next_offset 那页(在途去重
-        // 交给 scheduler)。kr 派生量先落本地释放可变借用,才能再不可变借 self 组 effect。
-        let exhausted = kr.exhausted;
         let rows_to_bottom = last.saturating_sub(kr.sel());
-        let next_offset = kr.next_offset;
-        if exhausted || rows_to_bottom > usize::from(prefetch_rows) {
+        if rows_to_bottom > usize::from(prefetch_rows) {
             return SearchEffect::None;
         }
-        self.fetch_more_effect(next_offset)
+        self.fetch_more_effect()
     }
 
-    /// 用当前 source/kind/query 组一条续拉(`offset > 0`)[`SearchEffect::FetchMore`];缺
-    /// source / 会话 / query 空 → [`SearchEffect::None`]。
-    fn fetch_more_effect(&self, offset: u32) -> SearchEffect {
+    /// 登记当前桶待收取的续页并生成提交意图；等待回包期间不重复请求。
+    fn fetch_more_effect(&mut self) -> SearchEffect {
         let Some(source) = self.source else {
             return SearchEffect::None;
         };
-        let Some(session) = self.current() else {
+        let Some(session) = self.current_mut() else {
             return SearchEffect::None;
         };
         if session.query().is_empty() {
             return SearchEffect::None;
         }
+        let Some(results) = session.kind_results_mut() else {
+            return SearchEffect::None;
+        };
+        let Some(page) = results.request_next_page() else {
+            return SearchEffect::None;
+        };
         SearchEffect::FetchMore {
             source,
             kind: session.kind,
             query: session.query().to_owned(),
-            offset,
+            page,
         }
     }
 }

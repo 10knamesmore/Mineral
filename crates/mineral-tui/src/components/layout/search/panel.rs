@@ -295,7 +295,7 @@ pub fn draw_results(
     // 左下角位置标:lazy 分页未榨干显 `n / total+`(至少 total、可能更多),短页确认榨干才去 `+`。
     if let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) {
         block = block.title_bottom(
-            Line::from(result_position_label(kr.sel(), kr.len(), kr.exhausted))
+            Line::from(result_position_label(kr.sel(), kr.len(), kr.exhausted()))
                 .style(Style::new().fg(theme.overlay)),
         );
     }

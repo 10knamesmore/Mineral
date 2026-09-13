@@ -24,8 +24,7 @@ pub struct SearchSession {
     by_kind: FxHashMap<SearchKind, KindResults>,
 
     /// 首页搜索在飞中的 kind（提交即置位、首页到货清位）。渲染层据此把「正在搜」与「搜到
-    /// 0 条」「尚未搜索」三态分开。读失败无事件 → 不清 → 持续显 loading,重 Enter 重提交
-    /// （与 spec「读失败=停留 loading + 驻留重试」一致）。
+    /// 0 条」「尚未搜索」三态分开。首页失败保持 loading，用户可按 Enter 重新提交。
     in_flight: FxHashSet<SearchKind>,
 }
 
@@ -138,7 +137,7 @@ impl SearchSession {
         self.in_flight.clear();
     }
 
-    /// 把一页结果落进 `by_kind[kind]`：首页新建桶、翻页 append 既有桶。
+    /// 把一页结果落进 `by_kind[kind]`：首页新建桶，续页仅接收该桶待收取的页；返回是否接收。
     ///
     /// # Params:
     ///   - `kind`: 事件自带的 kind（决定存哪个桶）
@@ -151,14 +150,24 @@ impl SearchSession {
         payload: SearchPayload,
         page: Page,
         has_more: Option<bool>,
-    ) {
+    ) -> bool {
         if page.offset == 0 {
             // 首页到货:清 loading（即便 0 条也算「搜完了」→ 渲染层转 no results）。
             self.in_flight.remove(&kind);
             self.by_kind
                 .insert(kind, KindResults::first_page(payload, page.limit, has_more));
-        } else if let Some(bucket) = self.by_kind.get_mut(&kind) {
-            bucket.append_page(payload, page.limit, has_more);
+            true
+        } else {
+            self.by_kind
+                .get_mut(&kind)
+                .is_some_and(|bucket| bucket.append_page(payload, page, has_more))
+        }
+    }
+
+    /// 释放对应 kind 的失败续页；首页失败保留现有 loading 与手动重新提交行为。
+    pub(crate) fn fail_page(&mut self, kind: SearchKind, page: Page) {
+        if let Some(bucket) = self.by_kind.get_mut(&kind) {
+            bucket.fail_page(page);
         }
     }
 

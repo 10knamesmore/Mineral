@@ -71,6 +71,12 @@ impl AppState {
                 payload,
                 has_more,
             } => self.apply_search_results(*source, *kind, query, *page, payload, *has_more),
+            TaskEvent::SearchPageFailed {
+                source,
+                kind,
+                query,
+                page,
+            } => self.apply_search_page_failed(*source, *kind, query, *page),
             TaskEvent::ArtistDetailFetched { id, artist } => self.apply_artist_detail(id, artist),
             TaskEvent::ArtistAlbumsFetched { id, albums, .. } => {
                 self.apply_artist_albums(id, albums);

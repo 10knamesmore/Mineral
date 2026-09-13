@@ -37,9 +37,26 @@ impl AppState {
         if session.query() != query {
             return;
         }
-        session.apply_page(kind, payload.clone(), page, has_more);
+        if !session.apply_page(kind, payload.clone(), page, has_more) {
+            return;
+        }
         if let Some(sections) = sections {
             session.apply_sections(kind, sections);
+        }
+    }
+
+    /// 按请求的 source、kind、query 与分页参数释放失败续页；切 source / kind 后仍更新原桶。
+    pub(super) fn apply_search_page_failed(
+        &mut self,
+        source: SourceKind,
+        kind: SearchKind,
+        query: &str,
+        page: Page,
+    ) {
+        if let Some(session) = self.channel_search.session_for_mut(source)
+            && session.query() == query
+        {
+            session.fail_page(kind, page);
         }
     }
 

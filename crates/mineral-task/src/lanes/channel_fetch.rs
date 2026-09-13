@@ -166,7 +166,8 @@ async fn next_job(
 }
 
 /// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
-/// 收束后另发一条 [`TaskEvent::FetchDone`] 埋点信号(成功 / 失败 / 取消都发)。
+/// 搜索失败或取消时发 [`TaskEvent::SearchPageFailed`]，所有终态另发 [`TaskEvent::FetchDone`]。
+/// 事件均在通知 `done_tx` 前写入 buffer。
 async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
     let Job {
         id: _,
@@ -186,6 +187,21 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
         }
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if outcome != TaskOutcome::Ok
+        && let ChannelFetchKind::Search {
+            source,
+            kind,
+            query,
+            page,
+        } = &kind
+    {
+        event_tx.lock().push(TaskEvent::SearchPageFailed {
+            source: *source,
+            kind: *kind,
+            query: query.clone(),
+            page: *page,
+        });
+    }
     // 埋点信号:取数收束(fetches)。server 记录后不转发 client。
     event_tx.lock().push(TaskEvent::FetchDone {
         kind: ChannelFetchKindTag::of(&kind),

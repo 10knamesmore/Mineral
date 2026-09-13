@@ -4,18 +4,28 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, Result, SearchHits};
-use mineral_model::{Album, AlbumId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
-use mineral_task::{ChannelFetchKind, Priority, Scheduler, TaskEvent, TaskKind, TaskOutcome};
+use mineral_model::{
+    Album, AlbumId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
+};
+use mineral_task::{
+    ChannelFetchKind, ChannelFetchKindTag, Priority, Scheduler, SearchPayload, TaskEvent, TaskKind,
+    TaskOutcome,
+};
 use tokio::sync::Semaphore;
 
-/// fake channel:my_playlists/playlist_detail 可被 gate 阻塞,其他端点全部 NotSupported。
+/// fake channel:歌单、歌词与歌曲搜索成功且可被 gate 阻塞，其他端点返回 NotSupported。
 ///
 /// 用 Semaphore 而非 Notify 当 gate ——`add_permits` 即使在没人 await 时调用,
 /// 之后的 `acquire` 也能立刻拿到,避免测试里的"先 notify 再 await"竞态。
 struct FakeChannel {
+    /// 当前用户的歌单。
     playlists: Vec<Playlist>,
 
+    /// 每个 permit 放行一次成功端点调用。
     gate: Option<Arc<Semaphore>>,
+
+    /// 每次进入歌曲搜索端点时提供一个 permit，供测试确定取消时机。
+    search_started: Arc<Semaphore>,
 }
 
 impl FakeChannel {
@@ -27,6 +37,7 @@ impl FakeChannel {
         Self {
             playlists: vec![pl],
             gate,
+            search_started: Arc::new(Semaphore::new(0)),
         }
     }
 
@@ -48,7 +59,7 @@ impl MusicChannel for FakeChannel {
 
     fn caps(&self) -> ChannelCaps {
         ChannelCaps::builder()
-            .searchable(Vec::new())
+            .searchable(vec![SearchKind::Song])
             .playlist_edit(false)
             .artist_sections(mineral_channel_core::ArtistSections::new(vec![
                 mineral_channel_core::ArtistSectionKind::TopSongs,
@@ -58,7 +69,9 @@ impl MusicChannel for FakeChannel {
     }
 
     async fn search_songs(&self, _q: &str, _p: Page) -> Result<SearchHits<Song>> {
-        Err(Error::NotSupported)
+        self.search_started.add_permits(1);
+        self.maybe_wait().await;
+        Ok(SearchHits::new(Vec::new(), false))
     }
     async fn search_albums(&self, _q: &str, _p: Page) -> Result<SearchHits<Album>> {
         Err(Error::NotSupported)
@@ -207,6 +220,157 @@ async fn lyrics_emits_event() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 搜索端点失败时回带完整请求，且保留失败埋点。
+#[tokio::test]
+async fn search_failure_emits_request_and_fetch_done() -> color_eyre::Result<()> {
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let source = SourceKind::NETEASE;
+    let kind = SearchKind::Album;
+    let query = "续页失败".to_owned();
+    let page = Page::new(60, 20);
+    let h = sched.submit(
+        TaskKind::ChannelFetch(ChannelFetchKind::Search {
+            source,
+            kind,
+            query: query.clone(),
+            page,
+        }),
+        Priority::User,
+    );
+    assert_eq!(h.done().await, TaskOutcome::Failed);
+
+    let events = sched.drain_events();
+    assert_eq!(events.len(), 2, "失败事件 + FetchDone: {events:?}");
+    assert!(events.contains(&TaskEvent::SearchPageFailed {
+        source,
+        kind,
+        query,
+        page,
+    }));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TaskEvent::FetchDone {
+            kind: ChannelFetchKindTag::Search,
+            source: event_source,
+            target_ref: None,
+            from_user: true,
+            outcome: TaskOutcome::Failed,
+            ..
+        } if *event_source == source
+    )));
+    Ok(())
+}
+
+/// 排队期间和端点执行期间取消搜索，都会回带请求并保留取消埋点。
+#[tokio::test]
+async fn search_cancellation_emits_request_before_and_during_execution() -> color_eyre::Result<()> {
+    for cancel_while_running in [false, true] {
+        let channel = FakeChannel::new(Some(Arc::new(Semaphore::new(0))));
+        let search_started = Arc::clone(&channel.search_started);
+        let channel: Arc<dyn MusicChannel> = Arc::new(channel);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let source = SourceKind::NETEASE;
+        let kind = SearchKind::Song;
+        let query = "取消续页".to_owned();
+        let page = Page::new(90, 15);
+        let h = sched.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::Search {
+                source,
+                kind,
+                query: query.clone(),
+                page,
+            }),
+            Priority::User,
+        );
+        if cancel_while_running {
+            tokio::time::timeout(std::time::Duration::from_secs(5), search_started.acquire())
+                .await??
+                .forget();
+        }
+        // 当前线程 runtime 在首次 await 前不运行 worker，覆盖排队时已取消的分支。
+        sched.cancel_where(|task| {
+            matches!(
+                task,
+                TaskKind::ChannelFetch(ChannelFetchKind::Search { .. })
+            )
+        });
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), h.done()).await?,
+            TaskOutcome::Cancelled
+        );
+
+        let events = sched.drain_events();
+        assert_eq!(events.len(), 2, "取消事件 + FetchDone: {events:?}");
+        assert!(events.contains(&TaskEvent::SearchPageFailed {
+            source,
+            kind,
+            query,
+            page,
+        }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TaskEvent::FetchDone {
+                kind: ChannelFetchKindTag::Search,
+                source: event_source,
+                target_ref: None,
+                from_user: true,
+                outcome: TaskOutcome::Cancelled,
+                ..
+            } if *event_source == source
+        )));
+        assert_eq!(search_started.available_permits(), 0);
+    }
+    Ok(())
+}
+
+/// 成功搜索只发送结果与成功埋点，不能误发释放待收取页的失败事件。
+#[tokio::test]
+async fn successful_search_emits_results_without_failure() -> color_eyre::Result<()> {
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let source = SourceKind::NETEASE;
+    let kind = SearchKind::Song;
+    let query = "成功续页".to_owned();
+    let page = Page::new(40, 10);
+    let h = sched.submit(
+        TaskKind::ChannelFetch(ChannelFetchKind::Search {
+            source,
+            kind,
+            query: query.clone(),
+            page,
+        }),
+        Priority::User,
+    );
+    assert_eq!(h.done().await, TaskOutcome::Ok);
+
+    let events = sched.drain_events();
+    assert_eq!(events.len(), 2, "搜索结果 + FetchDone: {events:?}");
+    assert!(events.contains(&TaskEvent::SearchResults {
+        source,
+        kind,
+        query,
+        page,
+        payload: SearchPayload::Songs(Vec::new()),
+        has_more: Some(false),
+    }));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TaskEvent::FetchDone {
+            kind: ChannelFetchKindTag::Search,
+            source: event_source,
+            target_ref: None,
+            from_user: true,
+            outcome: TaskOutcome::Ok,
+            ..
+        } if *event_source == source
+    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::SearchPageFailed { .. }))
+    );
+    Ok(())
+}
+
 // ---------------- PlaylistWrite lane ----------------
 
 /// 记录写调用时序的桩 channel:每次 rename 记 start/end 各一条,中间 sleep
@@ -300,8 +464,7 @@ async fn playlist_writes_run_serially_in_submit_order() -> color_eyre::Result<()
     Ok(())
 }
 
-/// 写操作失败也发事件(与 ChannelFetch"失败只留日志"刻意不同),
-/// 且错误结构化(默认 trait 实现 → NotSupported)。
+/// 写操作失败时发送结构化错误事件（默认 trait 实现返回 NotSupported）。
 #[tokio::test]
 async fn playlist_write_failure_emits_error_event() -> color_eyre::Result<()> {
     // FakeChannel 没实现写方法 → trait 默认 NotSupported
