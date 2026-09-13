@@ -25,8 +25,8 @@ impl AppState {
         payload: &SearchPayload,
         has_more: Option<bool>,
     ) {
-        // caps 先读:随后 session 借走 self.channel_search。artist 源的可用分区落定桶级判定,让 artist
-        // root 帧把分区收到首个可用区(无热门曲的源如 B站即只有 Albums;含后续 set_sel 复位)。
+        // caps 先读，随后 session 借走 channel_search。仅首页建桶时设置默认分区；
+        // 续页保留已操作的详情导航，新选中实体的默认分区由结果桶保存的能力初始化。
         let sections = self
             .caps
             .get(&source)
@@ -40,7 +40,10 @@ impl AppState {
         if !session.apply_page(kind, payload.clone(), page, has_more) {
             return;
         }
-        if let Some(sections) = sections {
+        if page.offset == 0
+            && let Some(sections) = sections
+        {
+            mineral_log::debug!(target: "tui", ?source, ?kind, "initialize search detail sections");
             session.apply_sections(kind, sections);
         }
     }
@@ -247,6 +250,175 @@ mod tests {
             .and_then(|results| results.detail.current_mut())
             .ok_or_else(|| color_eyre::eyre::eyre!("应有详情帧"))?;
         frame.mark_requested();
+        Ok(())
+    }
+
+    /// 搜索续页追加艺人时保留已选 Albums 的导航和切区动画，离屏回包也不重置。
+    #[test]
+    fn artist_search_page_preserves_detail_navigation() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::scroll::list::ScrollMotion;
+        use crate::runtime::state::{ArtistSection, EntityRef};
+
+        for switch_kind in [false, true] {
+            let mut state = state_searching("q", SearchKind::Artist)?;
+            state.apply(&TaskEvent::SearchResults {
+                source: SourceKind::NETEASE,
+                kind: SearchKind::Artist,
+                query: "q".to_owned(),
+                page: Page::new(0, 1),
+                payload: SearchPayload::Artists(vec![artist_fixture("first")]),
+                has_more: Some(true),
+            });
+            assert_eq!(current_frame(&state)?.section, ArtistSection::Hot);
+            let results = state
+                .channel_search
+                .active_results_mut()
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
+            assert_eq!(results.request_next_page(), Some(Page::new(1, 1)));
+            let frame = results
+                .detail
+                .current_mut()
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人详情"))?;
+            let mut artist = artist_fixture("first");
+            artist.songs = crate::test_support::endserenading(2);
+            frame.set_artist_detail(Box::new(artist));
+            frame.set_artist_albums(
+                (0..8)
+                    .map(|index| album_fixture(&format!("album-{index}")))
+                    .collect(),
+                Page::default(),
+                Some(false),
+            );
+            frame.cycle_section(8);
+            frame.list_mut().place(6, 2);
+            frame.nudge_description(3);
+            state.channel_search.tick();
+            state.channel_search.tick();
+            let section_motion = current_frame(&state)?.section_eased();
+            assert!(section_motion.is_some(), "回包发生在切区动画期间");
+            assert_eq!(
+                current_frame(&state)?
+                    .list()
+                    .offset(8, 3, ScrollMotion::Frozen),
+                4
+            );
+
+            if switch_kind {
+                state.channel_search.select_kind(SearchKind::Album);
+            }
+            state.apply(&TaskEvent::SearchResults {
+                source: SourceKind::NETEASE,
+                kind: SearchKind::Artist,
+                query: "q".to_owned(),
+                page: Page::new(1, 1),
+                payload: SearchPayload::Artists(vec![artist_fixture("second")]),
+                has_more: Some(false),
+            });
+            if switch_kind {
+                state.channel_search.select_kind(SearchKind::Artist);
+            }
+            let results = state
+                .channel_search
+                .active_results()
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
+            assert_eq!(results.len(), 2, "续页必须实际追加，不能丢弃回包来保留导航");
+            assert_eq!(results.sel(), 0);
+            let frame = current_frame(&state)?;
+            assert_eq!(frame.section, ArtistSection::Albums);
+            assert_eq!(frame.list().sel(), 6);
+            assert_eq!(frame.list().offset(8, 3, ScrollMotion::Frozen), 4);
+            assert_eq!(frame.description_scroll().get(), 3);
+            assert_eq!(frame.section_eased(), section_motion);
+            assert!(matches!(frame.row_entity(), Some(EntityRef::Album(album))
+                if album.id == album_fixture("album-6").id));
+
+            state
+                .channel_search
+                .active_results_mut()
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?
+                .set_sel(1);
+            let frame = current_frame(&state)?;
+            assert!(matches!(&frame.entity, EntityRef::Artist(artist)
+                if artist.id == artist_fixture("second").id));
+            assert_eq!(
+                frame.section,
+                ArtistSection::Hot,
+                "真正选择新艺人时初始化默认分区"
+            );
+            assert_eq!(frame.list().sel(), 0);
+            assert!(frame.section_eased().is_none());
+        }
+        Ok(())
+    }
+
+    /// 只提供 Albums 的来源在首页及续页艺人的新详情帧中都默认展示 Albums。
+    #[test]
+    fn album_only_source_initializes_first_and_later_artist_frames() -> color_eyre::Result<()> {
+        use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps, Page};
+        use mineral_model::{Artist, ArtistId};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::{ArtistSection, EntityRef};
+
+        let mut state = state_searching("q", SearchKind::Artist)?;
+        state.caps.insert(
+            SourceKind::BILIBILI,
+            ChannelCaps::builder()
+                .searchable(vec![SearchKind::Artist])
+                .playlist_edit(false)
+                .artist_sections(ArtistSections::new(vec![ArtistSectionKind::Albums]))
+                .build(),
+        );
+        state
+            .channel_search
+            .switch_source(SourceKind::BILIBILI, &state.caps);
+        state
+            .channel_search
+            .current_mut()
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少 Bilibili 搜索会话"))?
+            .set_query("q");
+        for offset in 0..2 {
+            if offset > 0 {
+                assert_eq!(
+                    state
+                        .channel_search
+                        .active_results_mut()
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?
+                        .request_next_page(),
+                    Some(Page::new(1, 1))
+                );
+            }
+            let id = ArtistId::new(SourceKind::BILIBILI, format!("uploader-{offset}"));
+            state.apply(&TaskEvent::SearchResults {
+                source: SourceKind::BILIBILI,
+                kind: SearchKind::Artist,
+                query: "q".to_owned(),
+                page: Page::new(offset, 1),
+                payload: SearchPayload::Artists(vec![
+                    Artist::builder()
+                        .id(id.clone())
+                        .name(format!("UP {offset}"))
+                        .build(),
+                ]),
+                has_more: Some(offset == 0),
+            });
+            let results = state
+                .channel_search
+                .active_results_mut()
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
+            assert_eq!(results.len(), usize::try_from(offset + 1)?);
+            results.set_sel(usize::try_from(offset)?);
+            let frame = current_frame(&state)?;
+            assert!(matches!(&frame.entity, EntityRef::Artist(artist) if artist.id == id));
+            assert_eq!(frame.section, ArtistSection::Albums);
+            assert_eq!(
+                frame.artist_sections().map(ArtistSections::kinds),
+                Some([ArtistSectionKind::Albums].as_slice())
+            );
+        }
         Ok(())
     }
 
