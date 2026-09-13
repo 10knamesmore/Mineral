@@ -287,7 +287,8 @@ mod tests {
 
     use super::App;
     use crate::test_support::{
-        app_with_library, app_with_queue, app_with_queue_probed, endserenading,
+        app_with_library, app_with_queue, app_with_queue_probed, app_with_queue_volume_probed,
+        endserenading,
     };
 
     /// 喂一个 Press 键给 App(走真实事件入口 `handle_event`)。
@@ -412,13 +413,15 @@ mod tests {
     /// 集成:`?` 弹出 cheatsheet → 再按 `?` 收起(toggle);开着时播放控制键半穿透。
     #[test]
     fn question_mark_toggles_help_overlay() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let (mut app, volumes) = app_with_queue_volume_probed(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('?'));
         assert!(app.overlays.has_help(), "? 应弹出 cheatsheet");
-        // 半穿透:help 开着按音量键仍生效(白名单放行,乐观更新可观测)。
-        let before = app.state.playback.volume_pct;
+        // 半穿透:help 开着按音量键仍生效(白名单放行,命令已发出)。
         press(&mut app, KeyCode::Char('-'));
-        assert_ne!(app.state.playback.volume_pct, before, "音量键应穿透");
+        assert!(
+            volumes.lock().is_ok_and(|sent| !sent.is_empty()),
+            "音量键应穿透"
+        );
         press(&mut app, KeyCode::Char('?'));
         for _ in 0..16 {
             app.overlays.tick();
@@ -698,20 +701,32 @@ mod tests {
         Ok(())
     }
 
-    /// 音量 / seek 逐键回归:`+`/`=`/`-`/`_` 走本地乐观值(±5 钳 0..=100);
-    /// `←`/`→`/`Shift+←`/`Shift+→` 只发 server 命令,本地 position 无回显。
+    /// 音量键按 `volume_step` 从当前音量算出目标发给 daemon(`+`/`=` 加,`-`/`_` 减,
+    /// 钳 0..=100);本地不乐观回写,屏幕数值只认 daemon 推送。
+    ///
+    /// seek 只发 server 命令,本地 position 无回显。
     #[test]
     fn volume_and_seek_via_keymap() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(1, /*current_idx*/ 0)?;
-        app.state.playback.volume_pct = 50;
-        press(&mut app, KeyCode::Char('+'));
-        assert_eq!(app.state.playback.volume_pct, 55, "+ 加 5");
-        press(&mut app, KeyCode::Char('='));
-        assert_eq!(app.state.playback.volume_pct, 60, "= 与 + 同义");
-        press(&mut app, KeyCode::Char('-'));
-        assert_eq!(app.state.playback.volume_pct, 55, "- 减 5");
-        press(&mut app, KeyCode::Char('_'));
-        assert_eq!(app.state.playback.volume_pct, 50, "_ 与 - 同义");
+        let (mut app, volumes) = app_with_queue_volume_probed(1, /*current_idx*/ 0)?;
+
+        // 每次按键前把当前音量置成 daemon 已确认值(真实路径下由每帧同步灌入)。
+        for (key, base, expected) in [
+            (KeyCode::Char('+'), 50_u8, 55_u8),
+            (KeyCode::Char('='), 55, 60),
+            (KeyCode::Char('-'), 60, 55),
+            (KeyCode::Char('_'), 55, 50),
+            (KeyCode::Char('+'), 100, 100),
+            (KeyCode::Char('-'), 0, 0),
+        ] {
+            app.state.playback.volume_pct = base;
+            press(&mut app, key);
+            assert_eq!(
+                volumes.lock().ok().and_then(|sent| sent.last().copied()),
+                Some(expected),
+                "{key:?} 在 {base}% 上应发 {expected}%"
+            );
+            assert_eq!(app.state.playback.volume_pct, base, "本地不乐观回写");
+        }
 
         // seek 是 server 往返,本地 position 不乐观回显;此处只确认按键被消化不 panic。
         app.state.playback.position_ms = 60_000;

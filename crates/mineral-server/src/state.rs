@@ -245,17 +245,17 @@ impl State {
     /// queue / original_queue 发生变更后调用,推进版本号让 client 下次同步收到重段。
     pub(crate) fn bump_queue(&mut self) {
         self.queue_version = self.queue_version.next();
-        self.publish();
+        self.notify_subscribers();
     }
 
     /// current_song / resolved / lyrics 发生变更后调用,推进版本号。
     pub(crate) fn bump_current(&mut self) {
         self.current_version = self.current_version.next();
-        self.publish();
+        self.notify_subscribers();
     }
 
-    /// 唤醒状态订阅者(未接入发布器时为空操作)。
-    fn publish(&self) {
+    /// 唤醒状态订阅者:订阅者被唤醒后按自己的已知版本重读状态(未接入发布器时空操作)。
+    pub(crate) fn notify_subscribers(&self) {
         if let Some(publisher) = &self.publisher {
             publisher.publish();
         }

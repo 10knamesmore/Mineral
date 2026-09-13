@@ -19,6 +19,7 @@ parking_lot     = { workspace = true }
 ringbuf         = { workspace = true }
 rodio           = { workspace = true }
 serde           = { workspace = true }
+tokio           = { workspace = true }
 tokio-util      = { workspace = true }
 typed-builder   = { workspace = true }
 

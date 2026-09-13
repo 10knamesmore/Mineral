@@ -121,13 +121,12 @@ impl App {
         }
     }
 
-    /// 在当前音量上加/减 `delta`,clamp 到 0..=100,本地立即更新避免 UI 滞后。
+    /// 在当前音量上加/减 `delta`,clamp 到 0..=100,只发命令。
     pub(crate) fn nudge_volume(&mut self, delta: i16) {
         let cur = i16::from(self.state.playback.volume_pct);
         let new = cur.saturating_add(delta).clamp(0, 100);
         let pct = u8::try_from(new).unwrap_or(self.state.playback.volume_pct);
         self.client.set_volume(pct);
-        self.state.playback.volume_pct = pct;
     }
 
     /// 相对当前位置跳 `delta_s` 秒,clamp 到 [0, duration];时长未知时无法 clamp,不跳。

@@ -259,6 +259,9 @@ pub(crate) struct TestClient {
     /// `seek` 收到的目标位置(ms)序列(全屏歌词 Enter 跳到焦点行的绝对 seek 路径断言用)。
     pub(crate) seeks: Arc<Mutex<Vec<u64>>>,
 
+    /// `set_volume` 收到的目标音量序列(音量键路径断言用)。
+    pub(crate) volumes: Arc<Mutex<Vec<u8>>>,
+
     /// 完成事件队列(测试可注入结论)。
     pub(crate) completions: Arc<CompletionQueue>,
 
@@ -369,7 +372,11 @@ impl Backend for TestClient {
         }
     }
 
-    fn set_volume(&self, _pct: u8) {}
+    fn set_volume(&self, pct: u8) {
+        if let Ok(mut v) = self.volumes.lock() {
+            v.push(pct);
+        }
+    }
 
     fn cycle_play_mode(&self) {}
 
@@ -523,6 +530,21 @@ pub(crate) fn app_with_queue(len: usize, current_idx: usize) -> color_eyre::Resu
     let mut app = test_app()?;
     fill_queue(&mut app, len, current_idx);
     Ok(app)
+}
+
+/// 同 [`app_with_queue`],额外返回 `set_volume` 收到的目标音量序列(音量键路径断言用)。
+pub(crate) fn app_with_queue_volume_probed(
+    len: usize,
+    current_idx: usize,
+) -> color_eyre::Result<(App, Arc<Mutex<Vec<u8>>>)> {
+    let volumes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let client = TestClient {
+        volumes: Arc::clone(&volumes),
+        ..TestClient::default()
+    };
+    let mut app = test_app_with(Arc::new(client))?;
+    fill_queue(&mut app, len, current_idx);
+    Ok((app, volumes))
 }
 
 /// 同 [`app_with_queue`],额外返回 [`TestClient`] 的 daemon shutdown 请求计数器

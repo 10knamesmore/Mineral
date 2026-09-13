@@ -13,7 +13,9 @@ use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
 use mineral_client::operation::Outcome;
 use mineral_model::{Song, SongId, SourceKind};
-use mineral_protocol::{QueueContextWire, Request, SocketWire, Subscription, SubscriptionTopic};
+use mineral_protocol::{
+    PlayMode, QueueContextWire, Request, SocketWire, Subscription, SubscriptionTopic,
+};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use tokio::time::timeout;
 
@@ -396,6 +398,50 @@ async fn playback_subscription_pushes_anchor() -> color_eyre::Result<()> {
         anchor.position_ms,
         "停止态位置不应本地推进"
     );
+    Ok(())
+}
+
+/// `m` 键(cycle play mode)每一步都推送到 client。
+///
+/// 覆盖两种不动队列版本的切换:两个非 Shuffle 档之间,以及空队列进 Shuffle
+/// (洗牌提前返回)。这两种情况都等不到队列变更顺带唤醒。
+#[tokio::test]
+async fn play_mode_cycle_pushes_every_step() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn("play-mode", None)?;
+    daemon.wait_ready()?;
+    let client = daemon.connect("play-mode").await?;
+    client.subscribe(SubscriptionTopic::Player);
+
+    // 空队列:进 Shuffle 不洗牌(不动版本),仍须推送。
+    client.fire(Request::CyclePlayMode);
+    wait_until("空队列下模式推送", || {
+        client.mirror().read_player(|player| player.play_mode()) == PlayMode::Shuffle
+    })
+    .await?;
+
+    // 队列非空后走完剩下三档,其中两次只在两个非 Shuffle 档之间切换。
+    let outcome = client
+        .play_queue(songs(3), /*target*/ 0, QueueContextWire::Manual)?
+        .outcome()
+        .await;
+    assert!(outcome.is_success(), "建立队列应成功: {outcome:?}");
+    wait_until("队列同步", || {
+        client.mirror().read_player(|player| player.queue().len()) == 3
+    })
+    .await?;
+
+    for expected in [
+        PlayMode::RepeatAll,
+        PlayMode::RepeatOne,
+        PlayMode::Sequential,
+    ] {
+        client.fire(Request::CyclePlayMode);
+        let label = format!("模式推送到位 {expected:?}");
+        wait_until(&label, || {
+            client.mirror().read_player(|player| player.play_mode()) == expected
+        })
+        .await?;
+    }
     Ok(())
 }
 

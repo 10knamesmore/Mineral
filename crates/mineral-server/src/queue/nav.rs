@@ -136,6 +136,8 @@ pub(crate) fn advance_prev(st: &mut State) -> Option<Song> {
 
 /// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。
 ///
+/// 模式落在轻段,重段没变也要让订阅者重读(边界处已改队列的,唤醒被 watch 合并)。
+///
 /// # Params:
 ///   - `st`: 播放状态(写 play_mode,边界处改 queue)
 ///   - `new`: 目标模式
@@ -151,6 +153,9 @@ pub(crate) fn apply_play_mode(st: &mut State, new: PlayMode) {
         (true, false) => exit_shuffle(st),
         _ => {}
     }
+    // 队列没动的两档之间(以及空队列的 shuffle 边界)只改了轻段:不唤醒的话 client
+    // 会一直显示旧模式。
+    st.notify_subscribers();
 }
 
 /// 队列重排后重新定位游标的锚点歌——附着态锚当前曲,悬空态锚「接续曲」。

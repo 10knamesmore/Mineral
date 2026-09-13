@@ -11,6 +11,7 @@ use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Split};
 use ringbuf::{HeapCons, HeapRb};
+use tokio::sync::Notify;
 
 use crate::command::AudioCommand;
 use crate::engine;
@@ -56,6 +57,10 @@ struct Inner {
 
     /// 最新待执行的 seek 目标位置;engine 每 tick `take()` 一次实际打 demuxer,长按 ←/→ 时只生效最后一次。
     seek_mailbox: Arc<Mutex<Option<Duration>>>,
+
+    /// 快照写入信号:每次 `snapshot` 被改写唤醒一个等待者,读取方据此即时跟进
+    /// (见 [`AudioHandle::snapshot_changes`])。
+    snapshot_changes: Arc<Notify>,
 }
 
 /// PCM tap:UI 端独占,持有 ringbuf 读端 + 当前轨道 sample_rate。
@@ -114,6 +119,7 @@ impl AudioHandle {
         }));
 
         let seek_mailbox = Arc::new(Mutex::new(None::<Duration>));
+        let snapshot_changes = Arc::new(Notify::new());
 
         let rb = HeapRb::<f32>::new(*params.tap_capacity());
         let (producer, consumer) = rb.split();
@@ -125,6 +131,7 @@ impl AudioHandle {
         let io = engine::EngineIo {
             snapshot: Arc::clone(&snapshot),
             seek_mailbox: Arc::clone(&seek_mailbox),
+            snapshot_changes: Arc::clone(&snapshot_changes),
             ready_tx,
             tap_producer: Arc::clone(&shared_prod),
             sr_atomic: Arc::clone(&sr_atomic),
@@ -148,6 +155,7 @@ impl AudioHandle {
                 cmd_tx,
                 snapshot,
                 seek_mailbox,
+                snapshot_changes,
             }),
         };
         let tap = SpectrumTap {
@@ -205,12 +213,21 @@ impl AudioHandle {
     pub fn set_volume(&self, pct: u8) {
         let clamped = pct.min(100);
         self.inner.snapshot.lock().volume_pct = clamped;
+        self.inner.snapshot_changes.notify_one();
         self.send(AudioCommand::SetVolume(clamped));
     }
 
     /// UI tick 拉一次:engine 已经更新过的最新状态。
     pub fn snapshot(&self) -> AudioSnapshot {
         *self.inner.snapshot.lock()
+    }
+
+    /// 快照写入信号:wait 它即可在快照变化后立即重读,不必定频轮询。
+    ///
+    /// 只表示「可能变了」——等待者醒来后自行比较值;信号在无等待者时留一个配额,
+    /// 不会因为读得慢而丢掉一次唤醒。
+    pub fn snapshot_changes(&self) -> Arc<Notify> {
+        Arc::clone(&self.inner.snapshot_changes)
     }
 
     /// 内部统一的发送入口:engine 已退时静默忽略(UI 关闭路径合法)。

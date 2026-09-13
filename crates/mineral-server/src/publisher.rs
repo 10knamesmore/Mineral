@@ -18,7 +18,8 @@ use tokio::sync::{broadcast, watch};
 use crate::pcm_relay::PcmRelay;
 use crate::player::PlayerCore;
 
-/// 播放锚点采样节奏。
+/// 播放锚点兜底采样节拍:快照写入信号负责即时发布,此拍只兜底漏发的唤醒,
+/// 并充当位置重锚的检查节拍。
 const PLAYBACK_SAMPLE_MS: u64 = 100;
 
 /// 播放中重锚周期(位置由 client 本地推进,这里只做周期校准)。
@@ -121,14 +122,21 @@ pub(crate) fn spawn(
 }
 
 /// 采样播放锚点:状态签名变化时发布,播放中按重锚周期校准位置。
+///
+/// 快照写入会立即唤醒(见 [`AudioHandle::snapshot_changes`]),音量 / 起停这类
+/// 由写入点驱动的变化因此不必等采样拍。
 fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnapshot>> {
     let (tx, rx) = watch::channel(Arc::new(audio.snapshot()));
+    let changes = audio.snapshot_changes();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(PLAYBACK_SAMPLE_MS));
         let mut last_signature: Option<PlaybackSignature> = None;
         let mut last_sent = std::time::Instant::now();
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                () = changes.notified() => {}
+            }
             let snapshot = audio.snapshot();
             let signature = PlaybackSignature::of(&snapshot);
             let changed = last_signature.as_ref() != Some(&signature);
@@ -345,11 +353,37 @@ fn diff_downloads(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use mineral_audio::{AudioHandle, AudioMode};
     use mineral_model::{BitRate, Song};
     use mineral_protocol::{DownloadId, DownloadOrigin, DownloadStatus, SongDownloadView};
     use mineral_test::song;
+    use tokio::task::yield_now;
+    use tokio::time::timeout;
 
-    use super::diff_downloads;
+    use super::{diff_downloads, spawn_playback_publisher};
+
+    /// 音量变化立即推送,不等兜底采样拍。
+    ///
+    /// 上限 50ms 小于采样节拍 100ms:少了快照写入信号必然超时。
+    #[tokio::test]
+    async fn volume_change_publishes_without_waiting_for_sample_tick() -> color_eyre::Result<()> {
+        let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
+        let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
+        let mut rx = spawn_playback_publisher(audio.clone());
+        // 先让发布器把首帧发掉,后面只认音量那一次推送。
+        yield_now().await;
+        rx.borrow_and_update();
+
+        audio.set_volume(42);
+
+        timeout(Duration::from_millis(50), rx.changed())
+            .await
+            .map_err(|_elapsed| color_eyre::eyre::eyre!("音量变化未即时推送"))??;
+        assert_eq!(rx.borrow().volume_pct, 42);
+        Ok(())
+    }
 
     /// 造一行下载明细。
     fn row(id: &str, status: DownloadStatus, bytes: u64) -> SongDownloadView {

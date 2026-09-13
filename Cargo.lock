@@ -2950,6 +2950,7 @@ dependencies = [
  "rodio",
  "serde",
  "tempfile",
+ "tokio",
  "tokio-util",
  "typed-builder",
 ]

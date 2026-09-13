@@ -6,6 +6,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use tokio::sync::Notify;
 
 use super::output::Output;
 use super::playback::{Engine, pct_to_gain};
@@ -21,6 +22,9 @@ pub(crate) struct EngineIo {
 
     /// Latest-wins seek mailbox.
     pub(crate) seek_mailbox: Arc<Mutex<Option<Duration>>>,
+
+    /// 快照写入信号:每轮 `update_snapshot` 后唤醒等待者(发布器即时推送)。
+    pub(crate) snapshot_changes: Arc<Notify>,
 
     /// Engine startup result channel.
     pub(crate) ready_tx: mpsc::SyncSender<color_eyre::Result<()>>,
@@ -90,6 +94,7 @@ fn engine_main(
         }
         engine.drain_seek(&io.seek_mailbox);
         engine.update_snapshot(&io.snapshot);
+        io.snapshot_changes.notify_one();
     }
     Ok(())
 }

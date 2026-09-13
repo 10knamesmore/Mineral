@@ -1,7 +1,8 @@
 //! 进程内音频引擎:消费已打开媒体并负责 decode、输出、gapless 与 PCM tap。
 //!
 //! 引擎跑在专属 OS 线程,owns rodio `OutputStream` 与 `Sink`;mpsc 命令通道把 UI 操作
-//! 转给 worker。snapshot 用 `Arc<Mutex<_>>` 共享给 UI 周期 polling。
+//! 转给 worker。snapshot 用 `Arc<Mutex<_>>` 共享给 UI;每次写入经
+//! [`AudioHandle::snapshot_changes`] 发信号,订阅方据此即时推送,不必定频轮询。
 
 mod bps;
 mod command;
