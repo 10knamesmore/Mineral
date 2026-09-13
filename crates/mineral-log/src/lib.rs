@@ -1,13 +1,5 @@
 //! Mineral 全局日志 facade。
 //!
-//! 对外:re-export `tracing` 的 [`trace!`] / [`debug!`] / [`info!`] / [`warn!`] / [`error!`]
-//! 与 [`macro@instrument`]、[`span!`]、[`event!`] —— 业务代码 `use mineral_log::warn;` 即可,
-//! 不需要直接依赖 `tracing`。
-//!
-//! 后端:[`init`] 安装一个 `tracing-subscriber`,把日志写到
-//! `<cache_dir>/mineral.log.YYYY-MM-DD`(daily-rolling,non-blocking writer)。
-//! 过滤档位走 `RUST_LOG`,缺省 `info`。
-//!
 //! 用法:
 //!
 //! ```ignore
@@ -22,32 +14,27 @@
 //! mineral_log::warn!(target: "channel_fetch", ?source, "no channel registered");
 //! ```
 
-pub use tracing::{Level, debug, error, event, info, instrument, span, trace, warn};
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+mod macros;
 
 use color_eyre::eyre::{WrapErr, eyre};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
 /// 把错误渲染成**单行的完整 context 链**(eyre 的 `{:#}`),供日志 `error` 字段用。
-///
-/// 三种格式化的取舍:
-/// - `{}`(tracing `%e`):只最外层一条 message,`.wrap_err()` 加的 context 全丢,查问题看不全。
-/// - `{:?}`(tracing `?e`):color-eyre 的 Debug —— 带 ANSI 颜色 + `Location` + `Backtrace`,
-///   是给终端看的「报告」,塞进日志字段就是一坨噪音(还污染纯文本日志)。
-/// - `{:#}`(本函数):完整 context 链用 `: ` 串成单行,无颜色、无 backtrace —— 既全又干净。
-///
-/// # Params:
-///   - `e`: 任意实现 `Display` 的错误(eyre `Report` / `thiserror` enum / std error 皆可)。
-///
-/// # Return:
-///   形如 `顶层 context: 中层: 底层` 的单行字符串。
 pub fn chain(e: impl std::fmt::Display) -> String {
     format!("{e:#}")
 }
 
 /// 滚动日志文件名前缀;tracing-appender 会附加 `.YYYY-MM-DD`。
 const LOG_FILE_PREFIX: &str = "mineral.log";
+
+/// 日志文件总数上限(含当前文件);启动与每日轮转时由 appender 先删除最早创建的文件。
+const MAX_LOG_FILES: usize = 7;
 
 /// 日志文件所在目录(`<cache_dir>`),给上层做「详见日志」类提示用。
 ///
@@ -63,31 +50,15 @@ pub fn log_dir() -> color_eyre::Result<std::path::PathBuf> {
 /// 行为:
 /// - 文件:`<cache_dir>/mineral.log.YYYY-MM-DD`,daily 轮转,non-blocking
 /// - 格式:本地时间(`HH:MM:SS.mmm`,日期见文件名)+ 级别 + target + `file:line` + 消息/字段
-/// - 过滤:`RUST_LOG` 环境变量,缺省 `info`;额外压低 symphonia / isahc 等第三方噪音
 /// - 不输出到 stdout/stderr(避免与 TUI alternate screen 撞)
 ///
 /// # Return:
 ///   `WorkerGuard` —— 在 `main` 顶层 `let _g = ...?;` 持有即可。
 pub fn init() -> color_eyre::Result<WorkerGuard> {
-    let log_dir = mineral_paths::cache_dir().wrap_err("locate cache dir for log")?;
-    std::fs::create_dir_all(&log_dir)
-        .wrap_err_with(|| format!("create log dir {}", log_dir.display()))?;
-
-    let appender = tracing_appender::rolling::daily(&log_dir, LOG_FILE_PREFIX);
+    let appender = file_appender(&log_dir()?)?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
-
-    // 第三方噪音压制指令放在 base 之前:base(`RUST_LOG` 或缺省 `info`)里用户对同一
-    // target 的显式指令优先级更高(per-target 比全局更具体),可覆盖这里的默认压制;
-    // 缺省 / 全局档位不会盖掉更具体的 per-target 压制。于是即便开全局 `debug`,这些
-    // 第三方库也只到 warn,不会淹没自己的埋点。涵盖两条噪音源:
-    //   - 解码:symphonia(mp3 underflow 刷屏)
-    //   - 网络:isahc(netease)、reqwest / hyper / hyper_util / stream_download(audio 流下载)
-    let base = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned());
-    let filter = EnvFilter::new(format!(
-        "symphonia=warn,symphonia_bundle_mp3=error,\
-         isahc=error,reqwest=warn,hyper=warn,hyper_util=warn,stream_download=warn,\
-         {base}"
-    ));
+    let directives = std::env::var("RUST_LOG").ok();
+    let filter = log_filter(directives.as_deref());
 
     tracing_subscriber::fmt()
         .with_writer(writer)
@@ -101,4 +72,26 @@ pub fn init() -> color_eyre::Result<WorkerGuard> {
         .map_err(|e| eyre!("install tracing subscriber: {e}"))?;
 
     Ok(guard)
+}
+
+/// 创建日志目录并打开当日日志;appender 在启动及轮转时清理超额的旧日志。
+fn file_appender(directory: &std::path::Path) -> color_eyre::Result<RollingFileAppender> {
+    std::fs::create_dir_all(directory)
+        .wrap_err_with(|| format!("create log dir {}", directory.display()))?;
+    RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(LOG_FILE_PREFIX)
+        .max_log_files(MAX_LOG_FILES)
+        .build(directory)
+        .wrap_err_with(|| format!("open rolling log in {}", directory.display()))
+}
+
+/// 合成默认级别与 `RUST_LOG`;用户同名 target 指令覆盖默认值,更具体的 target 优先。
+fn log_filter(directives: Option<&str>) -> EnvFilter {
+    let mut filter = "warn,mineral=info".to_owned();
+    if let Some(directives) = directives {
+        filter.push(',');
+        filter.push_str(directives);
+    }
+    EnvFilter::new(filter)
 }

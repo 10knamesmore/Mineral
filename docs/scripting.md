@@ -763,7 +763,7 @@ end)
 
 ## 排错
 
-- **日志**:`~/.cache/mineral/mineral.log`,脚本相关条目 target 是 `script`
+- **日志**:`~/.cache/mineral/mineral.log.YYYY-MM-DD`,脚本相关条目 target 是 `mineral::script`
 - **手动触发**:`mineral action <名字>` 不开 TUI 直接调动作,看输出最快
 - **回调被中断**:日志里有 watchdog 记录;检查是否做了同步耗时活,改 `mineral.spawn`
 - **重载没生效**:语法错误时保留旧脚本,toast 会报错误位置;`mineral config check` 离线验语法
