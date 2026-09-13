@@ -1,6 +1,6 @@
 //! 导航:按 [`PlayMode`] 推「下一首 / 上一首」,以及进 / 退 shuffle 边界的洗牌 / 还原。
 //!
-//! 全部是面向 [`State`] 的自由函数(shuffle 三件改 State,其余只读)。
+//! 入队与 shuffle 在调用方持有的同一把状态锁内修改队列。
 
 use mineral_model::Song;
 use mineral_protocol::{PlayCursor, PlayMode};
@@ -10,14 +10,9 @@ use crate::state::State;
 
 /// 队列硬上限:任何入队路径都不得让 `queue` 长度超过此值。
 ///
-/// 满时 [`append`] / [`insert_next`] 拒绝入队，整队替换超限则整体拒绝。
+/// [`append`] / [`insert_next`] 的整组歌曲容纳不下时整体拒绝，整队替换超限也整体拒绝。
 /// 取 9999 与序号显示上限一致(0-based 下标故最大 9998,四位数封顶)。
 pub(crate) const QUEUE_CAP: usize = 9999;
-
-/// 队列是否已达 [`QUEUE_CAP`](满则拒绝再入队)。
-fn at_capacity(st: &State) -> bool {
-    st.queue.len() >= QUEUE_CAP
-}
 
 /// 按 [`PlayMode`] 计算「下一首」的**下标**:Sequential 到尾返回 None,Repeat/Shuffle 环回 0,RepeatOne 原地。
 ///
@@ -204,20 +199,29 @@ pub(crate) fn exit_shuffle(st: &mut State) {
     st.bump_queue();
 }
 
-/// 插播:`song` 插到当前曲之后;shuffle 模式下同步插入 `original_queue` 的
-/// 当前曲之后(退出 shuffle 时位置仍合理)。不动 `queue_sel` 与当前曲。
-pub(crate) fn insert_next(st: &mut State, song: Song) {
-    if at_capacity(st) {
-        mineral_log::debug!(target: "player", cap = QUEUE_CAP, "queue at capacity, insert dropped");
-        return;
+/// 将整组歌曲按输入顺序插到当前曲之后，保留重复项；shuffle 原序同步插入。
+/// 悬空时插在接续点前，空队列从头插入；游标与当前曲不变。
+/// 空批次或容量不足返回 `false`，不修改任何状态。
+pub(crate) fn insert_next(st: &mut State, songs: &[Song]) -> bool {
+    let before = st.queue.len();
+    let count = songs.len();
+    if count == 0 {
+        return false;
+    }
+    if count > QUEUE_CAP.saturating_sub(before) {
+        mineral_log::debug!(target: "player", mode = "next", count, before, after = before, cap = QUEUE_CAP, "queue batch rejected: capacity exceeded");
+        return false;
     }
     let orig_at = original_insert_pos(st);
     let pos = after_current_pos(st);
-    st.queue.insert(pos, song.clone());
+    st.queue.splice(pos..pos, songs.iter().cloned());
     if let Some(orig) = st.original_queue.as_mut() {
-        orig.insert(orig_at.min(orig.len()), song);
+        let at = orig_at.min(orig.len());
+        orig.splice(at..at, songs.iter().cloned());
     }
     st.bump_queue();
+    mineral_log::info!(target: "player", mode = "next", count, before, after = st.queue.len(), "queue batch inserted");
+    true
 }
 
 /// 「当前曲之后」在 `queue` 中的插入下标。
@@ -252,17 +256,25 @@ fn original_insert_pos(st: &State) -> usize {
     }
 }
 
-/// 追加到队列末尾;shuffle 模式下同步追加 `original_queue`。
-pub(crate) fn append(st: &mut State, song: Song) {
-    if at_capacity(st) {
-        mineral_log::debug!(target: "player", cap = QUEUE_CAP, "queue at capacity, append dropped");
-        return;
+/// 将整组歌曲按输入顺序追加到队尾，保留重复项；shuffle 原序同步追加。
+/// 空批次或容量不足返回 `false`，不修改任何状态。
+pub(crate) fn append(st: &mut State, songs: &[Song]) -> bool {
+    let before = st.queue.len();
+    let count = songs.len();
+    if count == 0 {
+        return false;
     }
-    st.queue.push(song.clone());
+    if count > QUEUE_CAP.saturating_sub(before) {
+        mineral_log::debug!(target: "player", mode = "append", count, before, after = before, cap = QUEUE_CAP, "queue batch rejected: capacity exceeded");
+        return false;
+    }
+    st.queue.extend_from_slice(songs);
     if let Some(orig) = st.original_queue.as_mut() {
-        orig.push(song);
+        orig.extend_from_slice(songs);
     }
     st.bump_queue();
+    mineral_log::info!(target: "player", mode = "append", count, before, after = st.queue.len(), "queue batch appended");
+    true
 }
 
 #[cfg(test)]
@@ -364,25 +376,108 @@ mod tests {
         Ok(())
     }
 
-    /// 队列硬上限 [`QUEUE_CAP`]:满队列 append / insert_next 均 no-op,长度不越界。
+    /// 容量不足时拒绝整组；恰好填满可入队，满队列不再接受单首。
     #[test]
     fn queue_capacity_is_capped() {
-        let mut st = State::empty();
-        st.queue = (0..QUEUE_CAP).map(|i| song(&i.to_string())).collect();
-        assert_eq!(st.queue.len(), QUEUE_CAP);
-        append(&mut st, song("overflow"));
-        assert_eq!(st.queue.len(), QUEUE_CAP, "满队列 append 应被拒");
-        insert_next(&mut st, song("overflow2"));
-        assert_eq!(st.queue.len(), QUEUE_CAP, "满队列 insert_next 应被拒");
+        for enqueue in [append, insert_next] {
+            let mut st = State::empty();
+            st.queue = (0..QUEUE_CAP - 2).map(|i| song(&i.to_string())).collect();
+            let before = st.queue.clone();
+            let version = st.queue_version;
+            assert!(!enqueue(&mut st, &[song("a"), song("b"), song("c")]));
+            assert_eq!(st.queue, before, "剩余容量不足时不得截取部分入队");
+            assert_eq!(st.queue_version, version);
+            assert!(enqueue(&mut st, &[song("a"), song("b")]));
+            assert_eq!(st.queue.len(), QUEUE_CAP);
+            assert_eq!(st.queue_version, version.next(), "整组只发布一次队列变更");
+            assert!(!enqueue(&mut st, &[song("overflow")]));
+            assert_eq!(st.queue.len(), QUEUE_CAP);
+            assert_eq!(st.queue_version, version.next());
+        }
     }
 
-    /// 未满时 append / insert_next 照常入队(守卫不误伤正常路径)。
+    /// 空队列整组入队保序且保留重复项，包括 shuffle 与悬空游标。
     #[test]
     fn under_capacity_still_enqueues() {
-        let mut st = State::empty();
-        append(&mut st, song("a"));
-        insert_next(&mut st, song("b"));
-        assert_eq!(st.queue.len(), 2, "未满时正常入队");
+        for enqueue in [append, insert_next] {
+            for mode in [PlayMode::Sequential, PlayMode::Shuffle] {
+                for cursor in [
+                    PlayCursor::InQueue(0),
+                    PlayCursor::Detached { resume_at: 0 },
+                ] {
+                    let mut st = State::empty();
+                    st.play_mode = mode;
+                    st.cursor = cursor;
+                    let batch = [song("a"), song("b"), song("a")];
+                    let version = st.queue_version;
+                    assert!(enqueue(&mut st, &batch));
+                    assert_eq!(st.queue, batch);
+                    assert_eq!(st.cursor, cursor);
+                    assert_eq!(st.current_song, None);
+                    assert_eq!(st.queue_version, version.next());
+                    assert!(!enqueue(&mut st, &[]));
+                    assert_eq!(st.queue, batch);
+                    assert_eq!(st.queue_version, version.next());
+                }
+            }
+        }
+    }
+
+    /// 悬空时 Next 插在接续曲前，Append 仍追加队尾；退出 shuffle 后整组顺序不变。
+    #[test]
+    fn detached_batches_preserve_successor_and_shuffle_order() {
+        for resume_at in [0, 1, 2] {
+            let mut st = detached_state(PlayMode::Shuffle);
+            st.cursor = PlayCursor::Detached { resume_at };
+            st.original_queue = Some(vec![song("c"), song("b")]);
+            assert!(insert_next(&mut st, &[song("x"), song("y"), song("x")]));
+            assert_eq!(next_index(&st), Some(resume_at));
+            assert_eq!(
+                st.queue.get(resume_at..resume_at + 3),
+                Some([song("x"), song("y"), song("x")].as_slice())
+            );
+            assert!(append(&mut st, &[song("z"), song("z")]));
+            assert_eq!(
+                st.queue.get(st.queue.len() - 2..),
+                Some([song("z"), song("z")].as_slice())
+            );
+            assert_eq!(st.current_song, Some(song("a")));
+            assert_eq!(st.cursor, PlayCursor::Detached { resume_at });
+
+            super::exit_shuffle(&mut st);
+            let expected = match resume_at {
+                0 => vec![
+                    song("c"),
+                    song("x"),
+                    song("y"),
+                    song("x"),
+                    song("b"),
+                    song("z"),
+                    song("z"),
+                ],
+                1 => vec![
+                    song("x"),
+                    song("y"),
+                    song("x"),
+                    song("c"),
+                    song("b"),
+                    song("z"),
+                    song("z"),
+                ],
+                _ => vec![
+                    song("c"),
+                    song("b"),
+                    song("x"),
+                    song("y"),
+                    song("x"),
+                    song("z"),
+                    song("z"),
+                ],
+            };
+            assert_eq!(st.queue, expected);
+            assert_eq!(super::next_in_queue(&st), Some(song("x")));
+            assert_eq!(st.current_song, Some(song("a")));
+        }
     }
 
     /// 无否决时行为与既有语义一致(回归保护)。

@@ -104,7 +104,7 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
     core.spawn_on_played(queued.id.clone(), mineral_stats::FinishReason::Eof, 60_000);
     // 插队散曲带 Manual 覆盖:播它的行应记 manual 而非 playlist。
     let inserted = song("ins");
-    core.queue_insert_next(inserted.clone(), mineral_stats::QueueContext::Manual);
+    assert!(core.queue_insert_next(vec![inserted.clone()], mineral_stats::QueueContext::Manual));
     core.play_song(
         &inserted,
         mineral_stats::PlayOrigin::Explicit,
@@ -203,15 +203,20 @@ async fn context_override_consumed_once_and_cleared_on_replace_queue() -> color_
         name: None,
     };
     core.replace_queue(vec![song("a")], 0, playlist_context())?;
-    // 插队散曲:首次取用得覆盖,且取用即消费——再取回落队列语境。
-    core.queue_insert_next(song("x"), mineral_stats::QueueContext::Manual);
-    assert!(
-        matches!(
-            core.take_play_context(&song("x").id),
-            mineral_stats::QueueContext::Manual
-        ),
-        "首次取用命中覆盖"
-    );
+    // 整组歌曲各自获得一次语境覆盖，任一首起播不消费其他歌曲的覆盖。
+    assert!(core.queue_insert_next(
+        vec![song("x"), song("x2")],
+        mineral_stats::QueueContext::Manual
+    ));
+    for id in ["x", "x2"] {
+        assert!(
+            matches!(
+                core.take_play_context(&song(id).id),
+                mineral_stats::QueueContext::Manual
+            ),
+            "整组中的每首歌首次取用均命中覆盖"
+        );
+    }
     assert!(
         matches!(
             core.take_play_context(&song("x").id),
@@ -220,7 +225,7 @@ async fn context_override_consumed_once_and_cleared_on_replace_queue() -> color_
         "覆盖取用即消费,二次取回落队列语境"
     );
     // 未播就换队列:旧覆盖清空,同 id 在新队列起播不得继承陈旧 Manual。
-    core.queue_insert_next(song("y"), mineral_stats::QueueContext::Manual);
+    assert!(core.queue_insert_next(vec![song("y")], mineral_stats::QueueContext::Manual));
     core.replace_queue(vec![song("y")], 0, playlist_context())?;
     assert!(
         matches!(

@@ -134,12 +134,12 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
                 client.play_queue(songs, target, context),
             ))
         }
-        Request::QueueInsertNext { song, context } => {
-            client.queue_insert_next(*song, context);
+        Request::QueueInsertNext { songs, context } => {
+            client.queue_insert_next(songs, context);
             OperationResult::Applied
         }
-        Request::QueueAppend { song, context } => {
-            client.queue_append(*song, context);
+        Request::QueueAppend { songs, context } => {
+            client.queue_append(songs, context);
             OperationResult::Applied
         }
         Request::CyclePlayMode => {

@@ -254,11 +254,11 @@ async fn multi_client_edits_converge() -> color_eyre::Result<()> {
     assert!(outcome.is_success());
     first.wait_player_ready(WAIT).await;
     first.fire(Request::QueueAppend {
-        song: Box::new(mineral_test::song("from-a")),
+        songs: vec![mineral_test::song("from-a")],
         context: QueueContextWire::Manual,
     });
     second.fire(Request::QueueAppend {
-        song: Box::new(mineral_test::song("from-b")),
+        songs: vec![mineral_test::song("from-b")],
         context: QueueContextWire::Manual,
     });
     wait_until("两个 client 的追加都可见", || {
@@ -300,6 +300,76 @@ async fn player_queue_fragments_over_socket() -> color_eyre::Result<()> {
         client.mirror().read_player(|player| player.queue().len()) == 600
     })
     .await?;
+    Ok(())
+}
+
+/// 500 首队列整组追加或插播 1000 首，经真实 socket 后完整保序，重叠歌曲不去重。
+#[tokio::test]
+async fn large_queue_batches_arrive_complete_and_in_order() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn("queue-batch", None)?;
+    daemon.wait_ready()?;
+    let client = daemon.connect("queue-batch").await?;
+    client.subscribe(SubscriptionTopic::Player);
+    let original = songs(500);
+    let batch = songs(1000);
+    for insert_next in [false, true] {
+        let outcome = client
+            .play_queue(
+                original.clone(),
+                /*target*/ 200,
+                QueueContextWire::Manual,
+            )?
+            .outcome()
+            .await;
+        assert!(outcome.is_success(), "建立原队列应成功: {outcome:?}");
+        wait_until("原队列 500 首已同步", || {
+            client.mirror().read_player(|player| player.queue().len()) == 500
+        })
+        .await?;
+        let request = if insert_next {
+            Request::QueueInsertNext {
+                songs: batch.clone(),
+                context: QueueContextWire::Manual,
+            }
+        } else {
+            Request::QueueAppend {
+                songs: batch.clone(),
+                context: QueueContextWire::Manual,
+            }
+        };
+        client.fire(request);
+        wait_until("批量入队后应有 1500 首", || {
+            client.mirror().read_player(|player| player.queue().len()) == 1500
+        })
+        .await?;
+        let expected = if insert_next {
+            original
+                .iter()
+                .take(201)
+                .chain(batch.iter())
+                .chain(original.iter().skip(201))
+                .map(|song| song.id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            original
+                .iter()
+                .chain(batch.iter())
+                .map(|song| song.id.clone())
+                .collect()
+        };
+        client.mirror().read_player(|player| {
+            assert_eq!(
+                player
+                    .queue()
+                    .iter()
+                    .map(|song| song.id.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+                "插播={insert_next}: 所有歌曲、顺序和重复项都应保留"
+            );
+            assert_eq!(player.cursor(), mineral_protocol::PlayCursor::InQueue(200));
+        });
+    }
     Ok(())
 }
 

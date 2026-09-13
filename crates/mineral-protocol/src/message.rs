@@ -172,23 +172,25 @@ pub enum Request {
         context: QueueContextWire,
     },
 
-    /// 插播:插到当前曲之后,不动播放上下文与当前曲。
-    /// Shuffle 模式下同步插入 original_queue(当前曲后)。返回 [`Response::Ok`]。
+    /// 按输入顺序将整组歌曲插到当前曲之后，不动当前曲与队列级来源语境。
+    /// 空队列从头插入；Shuffle 模式同步插入 original_queue。
+    /// 空批次或整组超过队列容量时不修改队列。返回 [`Response::Ok`]。
     QueueInsertNext {
-        /// 待插播的歌(`Box` 避免 enum 体积膨胀)。
-        song: Box<Song>,
+        /// 待插播的整组歌曲，保留顺序和重复项。
+        songs: Vec<Song>,
 
-        /// 该曲的来源语境(埋点 per-song 覆盖:插队散曲不继承队列级 context)。
+        /// 这组歌曲的来源语境，起播时覆盖队列级语境。
         context: QueueContextWire,
     },
 
-    /// 追加到队列末尾,不动播放上下文与当前曲。
-    /// Shuffle 模式下同步追加 original_queue 末尾。返回 [`Response::Ok`]。
+    /// 按输入顺序将整组歌曲追加到队尾，不动当前曲与队列级来源语境。
+    /// Shuffle 模式同步追加 original_queue。
+    /// 空批次或整组超过队列容量时不修改队列。返回 [`Response::Ok`]。
     QueueAppend {
-        /// 待追加的歌(`Box` 避免 enum 体积膨胀)。
-        song: Box<Song>,
+        /// 待追加的整组歌曲，保留顺序和重复项。
+        songs: Vec<Song>,
 
-        /// 该曲的来源语境(埋点 per-song 覆盖:同插播)。
+        /// 这组歌曲的来源语境，起播时覆盖队列级语境。
         context: QueueContextWire,
     },
 

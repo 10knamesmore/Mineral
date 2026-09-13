@@ -247,7 +247,7 @@ pub(crate) struct TestClient {
     /// 队列操作记录 `(操作名, 歌 id 全限定串)`(操作菜单的插播/追加路径断言用)。
     pub(crate) queue_ops: QueueOpsLog,
 
-    /// 队列操作的语境记录 `(操作名, 队列语境)`(埋点 provenance 路径断言用)。
+    /// 每次队列请求的语境记录 `(操作名, 队列语境)`；批量请求只记录一次。
     pub(crate) queue_contexts: QueueContextLog,
 
     /// `render_copy_template` 收到的模板下标记录(恒回 `Err`,避免测试真碰系统剪贴板)。
@@ -411,18 +411,22 @@ impl Backend for TestClient {
         self.completions.push(Completion::PlayQueue(outcome));
     }
 
-    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
+    fn queue_insert_next(&self, songs: Vec<Song>, context: QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
-            v.push(("insert_next", song.id.qualified()));
+            v.extend(
+                songs
+                    .iter()
+                    .map(|song| ("insert_next", song.id.qualified())),
+            );
         }
         if let Ok(mut v) = self.queue_contexts.lock() {
             v.push(("insert_next", context));
         }
     }
 
-    fn queue_append(&self, song: Song, context: QueueContextWire) {
+    fn queue_append(&self, songs: Vec<Song>, context: QueueContextWire) {
         if let Ok(mut v) = self.queue_ops.lock() {
-            v.push(("append", song.id.qualified()));
+            v.extend(songs.iter().map(|song| ("append", song.id.qualified())));
         }
         if let Ok(mut v) = self.queue_contexts.lock() {
             v.push(("append", context));

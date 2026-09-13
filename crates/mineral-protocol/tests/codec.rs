@@ -450,12 +450,12 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
     ))
     .await?;
     req_round_trips(Request::QueueInsertNext {
-        song: Box::new(song("ins")),
+        songs: vec![song("ins1"), song("ins2"), song("ins1")],
         context: mineral_protocol::QueueContextWire::Manual,
     })
     .await?;
     req_round_trips(Request::QueueAppend {
-        song: Box::new(song("app")),
+        songs: vec![song("app1"), song("app2"), song("app1")],
         context: mineral_protocol::QueueContextWire::Search {
             query: "q".to_owned(),
         },

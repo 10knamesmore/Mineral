@@ -298,6 +298,63 @@ async fn replace_queue_rejects_over_cap_atomically() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 空批次与容量不足均保持整份队列、语境和正在进行的预取，shuffle 原序也不变。
+#[tokio::test]
+async fn enqueue_rejects_batches_without_changing_playback_state() -> color_eyre::Result<()> {
+    for enqueue in [
+        crate::player::PlayerCore::queue_append,
+        crate::player::PlayerCore::queue_insert_next,
+    ] {
+        for mode in [PlayMode::Sequential, PlayMode::Shuffle] {
+            let core = core_with(Arc::default())?;
+            let queue = (0..crate::queue::QUEUE_CAP - 1)
+                .map(|i| song(&i.to_string()))
+                .collect::<Vec<_>>();
+            let original = (mode == PlayMode::Shuffle).then(|| queue.clone());
+            let prefetch = crate::playback_instance::PlaybackSlot::new(song("1").id);
+            let versions = core.with_state(|st| {
+                st.queue = queue.clone();
+                st.original_queue = original.clone();
+                st.play_mode = mode;
+                st.current_song = Some(song("0"));
+                st.cursor = PlayCursor::InQueue(0);
+                st.queue_context = mineral_stats::QueueContext::Manual;
+                st.context_overrides.insert(
+                    song("0").id.qualified(),
+                    mineral_stats::QueueContext::Manual,
+                );
+                st.prefetch.replace_opening(prefetch.clone());
+                st.prefetch_vetoed = vec![2];
+                (st.queue_version, st.current_version)
+            });
+            for batch in [vec![song("0"), song("overflow")], Vec::new()] {
+                assert!(!enqueue(&core, batch, mineral_stats::QueueContext::Unknown));
+                core.with_state(|st| {
+                    assert_eq!(st.queue, queue);
+                    assert_eq!(st.original_queue, original);
+                    assert_eq!(st.queue_context, mineral_stats::QueueContext::Manual);
+                    assert_eq!(st.context_overrides.len(), 1);
+                    assert_eq!(
+                        st.context_overrides.get(&song("0").id.qualified()),
+                        Some(&mineral_stats::QueueContext::Manual)
+                    );
+                    assert_eq!(st.cursor, PlayCursor::InQueue(0));
+                    assert_eq!(st.current_song, Some(song("0")));
+                    assert_eq!(st.play_mode, mode);
+                    assert_eq!((st.queue_version, st.current_version), versions);
+                    assert_eq!(
+                        st.prefetch.slot().map(|slot| slot.instance_id),
+                        Some(prefetch.instance_id)
+                    );
+                    assert_eq!(st.prefetch_vetoed, vec![2]);
+                    assert!(!prefetch.cancellation.is_cancelled());
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Empty 与越界 target 均 structured reject，且不会改已有 queue/context/cursor。
 #[tokio::test]
 async fn replace_queue_rejects_empty_and_invalid_target_atomically() -> color_eyre::Result<()> {

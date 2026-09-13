@@ -224,19 +224,19 @@ pub(crate) trait Backend: Send + Sync {
     ///   - `context`: 队列语境
     fn play_queue(&self, songs: Vec<Song>, target: usize, context: QueueContextWire);
 
-    /// 插播到当前曲之后。
+    /// 一次提交整组歌曲，按原序插播到当前曲之后。
     ///
     /// # Params:
-    ///   - `song`: 待插播歌曲
-    ///   - `context`: 来源语境
-    fn queue_insert_next(&self, song: Song, context: QueueContextWire);
+    ///   - `songs`: 待插播歌曲，保留重复项
+    ///   - `context`: 这组歌曲的来源语境
+    fn queue_insert_next(&self, songs: Vec<Song>, context: QueueContextWire);
 
-    /// 追加到队列末尾。
+    /// 一次提交整组歌曲，按原序追加到队列末尾。
     ///
     /// # Params:
-    ///   - `song`: 待追加歌曲
-    ///   - `context`: 来源语境
-    fn queue_append(&self, song: Song, context: QueueContextWire);
+    ///   - `songs`: 待追加歌曲，保留重复项
+    ///   - `context`: 这组歌曲的来源语境
+    fn queue_append(&self, songs: Vec<Song>, context: QueueContextWire);
 
     /// 队列结构编辑(结论经完成事件回流)。
     ///
@@ -475,18 +475,13 @@ impl Backend for ClientBackend {
         );
     }
 
-    fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
-        self.client.fire(Request::QueueInsertNext {
-            song: Box::new(song),
-            context,
-        });
+    fn queue_insert_next(&self, songs: Vec<Song>, context: QueueContextWire) {
+        self.client
+            .fire(Request::QueueInsertNext { songs, context });
     }
 
-    fn queue_append(&self, song: Song, context: QueueContextWire) {
-        self.client.fire(Request::QueueAppend {
-            song: Box::new(song),
-            context,
-        });
+    fn queue_append(&self, songs: Vec<Song>, context: QueueContextWire) {
+        self.client.fire(Request::QueueAppend { songs, context });
     }
 
     fn queue_edit(&self, op: QueueOp) {

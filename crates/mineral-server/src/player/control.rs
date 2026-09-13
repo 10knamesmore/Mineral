@@ -74,38 +74,63 @@ impl PlayerCore {
         Ok(target_song)
     }
 
-    /// 插播:插到当前曲之后,不动队列级 context 与当前曲。
+    /// 将整组歌曲保序插到当前曲之后，保留重复项；队列级 context、游标与当前曲不变。
+    /// 悬空时插在接续点前，空队列从头插入。
     ///
     /// # Params:
-    ///   - `song`: 待插播的歌
-    ///   - `context`: 该曲来源语境(落 per-song 覆盖:起播时用它而非队列级 context)
-    pub fn queue_insert_next(&self, song: Song, context: mineral_stats::QueueContext) {
-        {
+    ///   - `songs`: 本次插播的整组歌曲
+    ///   - `context`: 整组的来源语境，按歌曲 ID 写入起播时消费的语境覆盖
+    ///
+    /// # Return:
+    ///   实际入队返回 `true`；空批次或容量不足返回 `false`，不改状态、预取或会话。
+    pub fn queue_insert_next(
+        &self,
+        songs: Vec<Song>,
+        context: mineral_stats::QueueContext,
+    ) -> bool {
+        let snapshot = {
             let mut st = self.inner.state.lock();
-            st.context_overrides.insert(song.id.qualified(), context);
-            crate::queue::insert_next(&mut st, song);
-            // 下一首变了:作废已排的 gapless 预排,让 check_prefetch 重排
+            if !crate::queue::insert_next(&mut st, &songs) {
+                return false;
+            }
+            let contexts = std::iter::repeat_n(context, songs.len());
+            for (song, context) in songs.into_iter().zip(contexts) {
+                st.context_overrides.insert(song.id.qualified(), context);
+            }
+            // 整组入队后统一作废 gapless 预排，让 check_prefetch 按新队列重排。
             st.invalidate_prefetch();
-        }
+            self.snapshot_session_with_state(&st)
+        };
         self.inner.audio.clear_next();
-        self.spawn_save_session();
+        self.spawn_save_session_snapshot(snapshot);
+        true
     }
 
-    /// 追加到队列末尾,不动队列级 context 与当前曲。
-    /// 当前曲恰在尾部时"下一首"会变,保守作废预排(与插播同样处理)。
+    /// 将整组歌曲保序追加到队尾，保留重复项；队列级 context、游标与当前曲不变。
+    /// 当前曲在尾部时下一首会改变，因此入队后统一作废预排。
     ///
     /// # Params:
-    ///   - `song`: 待追加的歌
-    ///   - `context`: 该曲来源语境(落 per-song 覆盖:同插播)
-    pub fn queue_append(&self, song: Song, context: mineral_stats::QueueContext) {
-        {
+    ///   - `songs`: 本次追加的整组歌曲
+    ///   - `context`: 整组的来源语境，按歌曲 ID 写入起播时消费的语境覆盖
+    ///
+    /// # Return:
+    ///   实际入队返回 `true`；空批次或容量不足返回 `false`，不改状态、预取或会话。
+    pub fn queue_append(&self, songs: Vec<Song>, context: mineral_stats::QueueContext) -> bool {
+        let snapshot = {
             let mut st = self.inner.state.lock();
-            st.context_overrides.insert(song.id.qualified(), context);
-            crate::queue::append(&mut st, song);
+            if !crate::queue::append(&mut st, &songs) {
+                return false;
+            }
+            let contexts = std::iter::repeat_n(context, songs.len());
+            for (song, context) in songs.into_iter().zip(contexts) {
+                st.context_overrides.insert(song.id.qualified(), context);
+            }
             st.invalidate_prefetch();
-        }
+            self.snapshot_session_with_state(&st)
+        };
         self.inner.audio.clear_next();
-        self.spawn_save_session();
+        self.spawn_save_session_snapshot(snapshot);
+        true
     }
 
     /// 队列结构编辑:删除 / 重排 / 批量清理 / 撤销。

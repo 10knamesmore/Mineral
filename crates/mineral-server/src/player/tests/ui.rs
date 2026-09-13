@@ -403,7 +403,7 @@ fn terminal_states_last_wins_and_fallback() {
     assert_eq!(states.current(), None, "全部离线回 None");
 }
 
-/// 插播插到当前位置后、追加进末尾,当前位置不动;shuffle 下 original_queue 同步。
+/// 整组插播与追加保序、不去重、不改当前曲；每组只发布一次，shuffle 原序同步。
 #[tokio::test]
 async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
     let core = core_with(Arc::default())?;
@@ -412,32 +412,97 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
         0,
         mineral_stats::QueueContext::Unknown,
     )?;
-    core.queue_insert_next(song("c"), mineral_stats::QueueContext::Manual);
-    core.queue_append(song("d"), mineral_stats::QueueContext::Manual);
-    {
-        let st = core.inner.state.lock();
-        let ids = st
-            .queue
-            .iter()
-            .map(|s| s.id.as_str().to_owned())
-            .collect::<Vec<String>>();
-        assert_eq!(ids, ["a", "c", "b", "d"]);
-        assert_eq!(st.cursor, mineral_protocol::PlayCursor::InQueue(0));
-    }
-    core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User);
-    core.queue_insert_next(song("e"), mineral_stats::QueueContext::Manual);
-    {
-        let st = core.inner.state.lock();
-        let orig = st
-            .original_queue
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("shuffle 后应有 original_queue"))?;
-        assert!(
-            orig.iter().any(|s| s.id.as_str() == "e"),
-            "original_queue 应同步插入"
+    let version = core.with_state(|st| {
+        st.current_song = Some(song("a"));
+        st.prefetch_vetoed = vec![1];
+        st.queue_version
+    });
+    assert!(core.queue_insert_next(
+        vec![song("c"), song("c2"), song("c")],
+        mineral_stats::QueueContext::Manual,
+    ));
+    core.with_state(|st| {
+        assert_eq!(st.queue_version, version.next());
+        assert!(st.prefetch_vetoed.is_empty());
+    });
+    assert!(core.queue_append(
+        vec![song("d"), song("d2"), song("d")],
+        mineral_stats::QueueContext::Manual,
+    ));
+    core.with_state(|st| {
+        assert_eq!(
+            st.queue,
+            vec![
+                song("a"),
+                song("c"),
+                song("c2"),
+                song("c"),
+                song("b"),
+                song("d"),
+                song("d2"),
+                song("d")
+            ]
         );
-        assert!(st.queue.iter().any(|s| s.id.as_str() == "e"));
-    }
+        assert_eq!(st.cursor, mineral_protocol::PlayCursor::InQueue(0));
+        assert_eq!(st.current_song, Some(song("a")));
+        assert_eq!(st.queue_version, version.next().next());
+        assert_eq!(st.queue_context, mineral_stats::QueueContext::Unknown);
+        for id in ["c", "c2", "d", "d2"] {
+            assert_eq!(
+                st.context_overrides.get(&song(id).id.qualified()),
+                Some(&mineral_stats::QueueContext::Manual)
+            );
+        }
+    });
+    core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User);
+    assert!(core.queue_insert_next(
+        vec![song("e"), song("e2"), song("e")],
+        mineral_stats::QueueContext::Manual,
+    ));
+    assert!(core.queue_append(
+        vec![song("f"), song("f2"), song("f")],
+        mineral_stats::QueueContext::Manual,
+    ));
+    core.with_state(|st| {
+        assert_eq!(
+            st.queue.get(1..4),
+            Some([song("e"), song("e2"), song("e")].as_slice())
+        );
+        assert_eq!(
+            st.queue.get(st.queue.len() - 3..),
+            Some([song("f"), song("f2"), song("f")].as_slice())
+        );
+        assert_eq!(st.cursor, mineral_protocol::PlayCursor::InQueue(0));
+        assert_eq!(st.current_song, Some(song("a")));
+        assert_eq!(
+            st.original_queue,
+            Some(vec![
+                song("a"),
+                song("e"),
+                song("e2"),
+                song("e"),
+                song("c"),
+                song("c2"),
+                song("c"),
+                song("b"),
+                song("d"),
+                song("d2"),
+                song("d"),
+                song("f"),
+                song("f2"),
+                song("f")
+            ])
+        );
+    });
+    core.set_play_mode(PlayMode::Sequential, mineral_stats::Actor::User);
+    core.with_state(|st| {
+        assert_eq!(
+            st.queue.get(1..4),
+            Some([song("e"), song("e2"), song("e")].as_slice())
+        );
+        assert_eq!(st.cursor, mineral_protocol::PlayCursor::InQueue(0));
+        assert_eq!(st.current_song, Some(song("a")));
+    });
     Ok(())
 }
 

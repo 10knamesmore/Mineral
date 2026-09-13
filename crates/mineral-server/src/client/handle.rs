@@ -455,36 +455,50 @@ impl ClientHandle {
         Ok(())
     }
 
-    /// 插播:插到当前曲之后,不动队列级 context 与当前曲。
+    /// 保序插播整组歌曲，实际入队后只记一条操作统计；单首记录歌曲 ID，多首只记录数量。
     ///
     /// # Params:
-    ///   - `song`: 待插播的歌
-    ///   - `context`: 该曲来源语境
-    pub(crate) fn queue_insert_next(&self, song: Song, context: QueueContextWire) {
-        let id = song.id.clone();
-        self.player
-            .queue_insert_next(song, queue_context_from_wire(context));
-        self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
-            op: mineral_stats::QueueOp::InsertNext,
-            song: Some(id),
-            count: 1,
-        });
+    ///   - `songs`: 本次插播的整组歌曲，保留重复项
+    ///   - `context`: 整组的来源语境
+    pub(crate) fn queue_insert_next(&self, songs: Vec<Song>, context: QueueContextWire) {
+        let count = songs.len();
+        let song = match songs.as_slice() {
+            [song] => Some(song.id.clone()),
+            _ => None,
+        };
+        if self
+            .player
+            .queue_insert_next(songs, queue_context_from_wire(context))
+        {
+            self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
+                op: mineral_stats::QueueOp::InsertNext,
+                song,
+                count: i64::try_from(count).unwrap_or(i64::MAX),
+            });
+        }
     }
 
-    /// 追加到队列末尾,不动队列级 context 与当前曲。
+    /// 保序追加整组歌曲，实际入队后只记一条操作统计；单首记录歌曲 ID，多首只记录数量。
     ///
     /// # Params:
-    ///   - `song`: 待追加的歌
-    ///   - `context`: 该曲来源语境
-    pub(crate) fn queue_append(&self, song: Song, context: QueueContextWire) {
-        let id = song.id.clone();
-        self.player
-            .queue_append(song, queue_context_from_wire(context));
-        self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
-            op: mineral_stats::QueueOp::Append,
-            song: Some(id),
-            count: 1,
-        });
+    ///   - `songs`: 本次追加的整组歌曲，保留重复项
+    ///   - `context`: 整组的来源语境
+    pub(crate) fn queue_append(&self, songs: Vec<Song>, context: QueueContextWire) {
+        let count = songs.len();
+        let song = match songs.as_slice() {
+            [song] => Some(song.id.clone()),
+            _ => None,
+        };
+        if self
+            .player
+            .queue_append(songs, queue_context_from_wire(context))
+        {
+            self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
+                op: mineral_stats::QueueOp::Append,
+                song,
+                count: i64::try_from(count).unwrap_or(i64::MAX),
+            });
+        }
     }
 
     /// 队列结构编辑:删除 / 重排 / 批量清理 / 撤销。

@@ -20,8 +20,12 @@ impl PlayerCore {
     /// # Return:
     ///   组装好的 [`SessionSnapshot`]。
     pub(crate) fn snapshot_session(&self) -> SessionSnapshot {
+        self.snapshot_session_with_state(&self.inner.state.lock())
+    }
+
+    /// 从调用方已锁定的状态取会话快照，使队列修改与保存内容属于同一次操作。
+    pub(crate) fn snapshot_session_with_state(&self, st: &crate::state::State) -> SessionSnapshot {
         let audio = self.inner.audio.snapshot();
-        let st = self.inner.state.lock();
         SessionSnapshot {
             current: st.current_song.as_ref().map(|s| s.id.clone()),
             position_ms: audio.position_ms,
@@ -34,7 +38,11 @@ impl PlayerCore {
     /// fire-and-forget 落盘当前会话:snapshot 在 spawn **前**组装好(锁不跨 await),
     /// owned move 进 task;失败仅 warn。降级 persist 下 save 自动 no-op。
     pub(crate) fn spawn_save_session(&self) {
-        let snap = self.snapshot_session();
+        self.spawn_save_session_snapshot(self.snapshot_session());
+    }
+
+    /// 异步保存已组装的快照，不再读取播放状态；失败仅记日志。
+    pub(crate) fn spawn_save_session_snapshot(&self, snap: SessionSnapshot) {
         let persist = self.inner.persist.clone();
         tokio::spawn(async move {
             if let Err(e) = persist.session().save(&snap).await {

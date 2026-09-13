@@ -136,22 +136,52 @@ async fn periodic_save_skips_empty_state_preserving_last_session() -> color_eyre
     Ok(())
 }
 
-/// fire-and-forget 的 spawn_save_session 最终能让 load 读到会话(不断言精确字段值,
-/// 只确认接线打通、数据落盘)。
+/// 整组入队保存完整保序队列；容量拒绝与空批次不覆盖已经保存的会话。
 #[tokio::test]
-async fn spawn_save_session_persists_something() -> color_eyre::Result<()> {
+async fn batch_enqueue_saves_only_accepted_changes() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let persist = ServerStore::open(&dir.path().join("t.db")).await?;
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
     let core = core_with_persist(calls, persist)?;
 
-    core.replace_queue(
-        vec![song("a"), song("b")],
-        0,
+    assert!(core.queue_append(
+        vec![song("a"), song("b"), song("a")],
         mineral_stats::QueueContext::Unknown,
-    )?;
+    ));
     drain_spawned().await;
 
-    assert!(core.load_session().await?.is_some(), "save 后应能读到会话");
+    let saved = core
+        .load_session()
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("入队后应保存会话"))?;
+    assert_eq!(saved.queue, vec![song("a").id, song("b").id, song("a").id]);
+
+    core.with_state(|st| {
+        st.queue = (0..crate::queue::QUEUE_CAP - 1)
+            .map(|i| song(&i.to_string()))
+            .collect();
+    });
+    for enqueue in [
+        crate::player::PlayerCore::queue_append,
+        crate::player::PlayerCore::queue_insert_next,
+    ] {
+        assert!(!enqueue(
+            &core,
+            vec![song("x"), song("y")],
+            mineral_stats::QueueContext::Manual
+        ));
+        assert!(!enqueue(
+            &core,
+            Vec::new(),
+            mineral_stats::QueueContext::Manual
+        ));
+    }
+    drain_spawned().await;
+
+    let after = core
+        .load_session()
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("拒绝入队后应保留会话"))?;
+    assert_eq!(after.queue, saved.queue, "未实际入队时不得保存当前状态");
     Ok(())
 }

@@ -22,7 +22,7 @@ pub(crate) enum PlayMode {
     /// 追加到队尾。
     Append,
 
-    /// 按原顺序插到当前曲之后(下一首起连播);本地队列为空时退化为追加。
+    /// 按原顺序插到当前曲之后；daemon 队列为空时从头插入，不自动起播。
     InsertNext,
 }
 
@@ -188,10 +188,10 @@ impl App {
                 context,
             } => self.play_queue(queue, target, context),
             MenuAction::PlayNext { song, context } => {
-                self.client.queue_insert_next(*song, context);
+                self.client.queue_insert_next(vec![*song], context);
             }
             MenuAction::Append { song, context } => {
-                self.client.queue_append(*song, context);
+                self.client.queue_append(vec![*song], context);
             }
             MenuAction::Download(song) => {
                 self.client.download(DownloadTarget::Song(song));
@@ -321,42 +321,29 @@ impl App {
         self.client.play_queue(songs, target, context);
     }
 
-    /// 按模式入队一组曲目:Replace = 原子替换队列 + 起播首曲(空则 no-op);
-    /// Append = 逐曲追加(无批量 API);InsertNext = 按原顺序插到当前曲之后。`context` 是这批
-    /// 曲目的来源语境(容器身份),Replace 落队列级、Append / InsertNext 逐曲带上(整张专辑
-    /// 插入,每首都归该专辑而非笼统 Manual)。
+    /// 将容器曲目作为一次请求提交，空容器不操作。
+    /// Replace 替换队列并起播首曲；Append / InsertNext 由 daemon 按原序整组入队。
+    /// `context` 随整组传递，使每首歌起播时归属该容器。
     fn enqueue_songs(
         &mut self,
         songs: Vec<Song>,
         mode: PlayMode,
         context: mineral_protocol::QueueContextWire,
     ) {
+        if songs.is_empty() {
+            return;
+        }
+        mineral_log::info!(
+            target: "tui",
+            mode = ?mode,
+            count = songs.len(),
+            context = ?context,
+            "enqueue container songs"
+        );
         match mode {
-            PlayMode::Replace => {
-                if songs.is_empty() {
-                    return;
-                }
-                self.play_queue(songs, 0, context);
-            }
-            PlayMode::Append => {
-                for song in songs {
-                    self.client.queue_append(song, context.clone());
-                }
-            }
-            PlayMode::InsertNext => {
-                // insert_next 恒插在当前曲后一位:倒序逐曲喂入才把整组还原成原序连播
-                // (正序会逐首顶到最前、把顺序翻过来)。本地队列为空时插入点数学退化
-                // (无当前曲、queue_sel 悬空),改逐曲 append 保序(同 Append,不起播)。
-                if self.state.player.queue.is_empty() {
-                    for song in songs {
-                        self.client.queue_append(song, context.clone());
-                    }
-                } else {
-                    for song in songs.into_iter().rev() {
-                        self.client.queue_insert_next(song, context.clone());
-                    }
-                }
-            }
+            PlayMode::Replace => self.play_queue(songs, 0, context),
+            PlayMode::Append => self.client.queue_append(songs, context),
+            PlayMode::InsertNext => self.client.queue_insert_next(songs, context),
         }
     }
 
@@ -508,9 +495,9 @@ mod tests {
         Ok(())
     }
 
-    /// 容器加入队列(Append 模式)→ fulfill 后逐曲 queue_append、保序。
+    /// 容器详情到货后，追加请求保留全部歌曲的顺序。
     #[test]
-    fn container_append_all_enqueues_each() -> color_eyre::Result<()> {
+    fn container_append_all_keeps_order() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
         let album = album_with_songs("al1", 2);
         let want: Vec<(&str, String)> = album
@@ -529,7 +516,74 @@ mod tests {
         let ops = queue_ops
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("锁中毒: {e}"))?;
-        assert_eq!(*ops, want, "逐曲 append 保序");
+        assert_eq!(*ops, want, "追加保留容器原序");
+        Ok(())
+    }
+
+    /// 千首歌单的追加和插播各提交一次，避免歌曲数消耗请求额度。
+    #[test]
+    fn large_cached_playlist_submits_one_queue_request() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use crate::test_support::{TestClient, app_with_long_library};
+
+        for mode in [PlayMode::Append, PlayMode::InsertNext] {
+            let mut app = app_with_long_library(/*len*/ 1000, /*sel_track*/ 0)?;
+            let client = Arc::new(TestClient::default());
+            app.client = client.clone();
+            let playlist = app
+                .state
+                .library
+                .playlists
+                .first()
+                .ok_or_else(|| color_eyre::eyre::eyre!("应有测试歌单"))?
+                .data
+                .clone();
+            let songs = app
+                .state
+                .library
+                .tracks
+                .get(&playlist.id)
+                .ok_or_else(|| color_eyre::eyre::eyre!("应有缓存曲目"))?
+                .iter()
+                .map(|entry| entry.data.song.clone())
+                .collect::<Vec<_>>();
+            app.state.player.queue = songs.iter().take(500).cloned().collect();
+            let container = Box::new(ContainerRef::Playlist(Box::new(playlist.clone())));
+            let (operation, action) = if mode == PlayMode::Append {
+                ("append", MenuAction::AppendContainer(container))
+            } else {
+                ("insert_next", MenuAction::PlayNextContainer(container))
+            };
+            app.run_menu_action(action);
+            let operations = client
+                .queue_ops
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
+            assert_eq!(
+                *operations,
+                songs
+                    .iter()
+                    .map(|song| (operation, song.id.qualified()))
+                    .collect::<Vec<_>>(),
+                "{mode:?} 应保留全部 1000 首及其顺序"
+            );
+            let contexts = client
+                .queue_contexts
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
+            assert_eq!(
+                *contexts,
+                vec![(
+                    operation,
+                    QueueContextWire::Playlist {
+                        id: playlist.id,
+                        name: Some(playlist.name),
+                    }
+                )],
+                "{mode:?} 整张歌单只提交一次"
+            );
+        }
         Ok(())
     }
 
@@ -644,12 +698,10 @@ mod tests {
         Ok(())
     }
 
-    /// InsertNext 容器(本地队列非空):倒序逐曲 `queue_insert_next`——server 恒插当前曲
-    /// 后一位,倒序喂入恰把专辑还原成原序连播;语境逐曲带 Album 身份。
+    /// 整张专辑按原序提交一次插播请求，并携带 Album 语境。
     #[test]
-    fn container_play_next_inserts_reversed_keeping_order() -> color_eyre::Result<()> {
+    fn container_play_next_submits_one_batch_in_order() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
-        // 本地队列非空 → 走倒序 insert_next 分支。
         app.state.player.queue = endserenading(1);
         let queue_ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let queue_contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -659,12 +711,11 @@ mod tests {
             ..crate::test_support::TestClient::default()
         });
         let album = album_with_songs("al1", 3);
-        let want_reversed: Vec<(&str, String)> = album
+        let want = album
             .tracks
             .iter()
-            .rev()
             .map(|track| ("insert_next", track.song.id.qualified()))
-            .collect();
+            .collect::<Vec<_>>();
         app.pending_container.insert(
             DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
             PlayMode::InsertNext,
@@ -676,34 +727,35 @@ mod tests {
         let ops = queue_ops
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
-        assert_eq!(*ops, want_reversed, "倒序 insert_next 恰按专辑原序连播");
+        assert_eq!(*ops, want, "插播请求保留专辑原序");
         let ctxs = queue_contexts
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("queue_contexts 锁中毒: {e}"))?;
-        assert!(
-            ctxs.iter().all(|(op, ctx)| *op == "insert_next"
-                && *ctx
-                    == QueueContextWire::Album {
-                        id: album.id.clone(),
-                        name: Some(album.name.clone()),
-                    }),
-            "插播语境逐曲归 Album 身份,非笼统 Manual"
+        assert_eq!(
+            *ctxs,
+            vec![(
+                "insert_next",
+                QueueContextWire::Album {
+                    id: album.id.clone(),
+                    name: Some(album.name.clone()),
+                },
+            )],
+            "整张专辑只提交一次，语境归 Album 身份"
         );
         Ok(())
     }
 
-    /// InsertNext 容器(本地队列为空):插入点数学退化,改逐曲 `queue_append` 正序——
-    /// 与 Append all 同款保序,不自动起播。
+    /// 本地队列为空时仍提交原序插播请求，由 daemon 决定插入位置。
     #[test]
-    fn container_play_next_on_empty_queue_appends_in_order() -> color_eyre::Result<()> {
+    fn container_play_next_on_empty_queue_keeps_insert_intent() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
         assert!(app.state.player.queue.is_empty(), "前置:本地队列应为空");
         let album = album_with_songs("al1", 2);
-        let want: Vec<(&str, String)> = album
+        let want = album
             .tracks
             .iter()
-            .map(|track| ("append", track.song.id.qualified()))
-            .collect();
+            .map(|track| ("insert_next", track.song.id.qualified()))
+            .collect::<Vec<_>>();
         app.pending_container.insert(
             DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
             PlayMode::InsertNext,
@@ -715,7 +767,7 @@ mod tests {
         let ops = queue_ops
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
-        assert_eq!(*ops, want, "空队列退化为逐曲 append 正序");
+        assert_eq!(*ops, want, "本地空队列不改变插播意图或歌曲顺序");
         Ok(())
     }
 
