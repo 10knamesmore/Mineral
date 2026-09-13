@@ -263,8 +263,8 @@ fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme:
     Widget::render(Paragraph::new(line), area, buf);
 }
 
-/// 曲目表（♥/#/title/[artist]/[album]/len，带表头）：对齐 browse library 表风格。
-/// `cols` 选中间列、按面板宽度降级；`list` 选中行整行高亮 + nvim 视口滚动,在播歌 `#` 列显 `♫`、
+/// 曲目表（♥/title/[artist]/[album]/len，带表头）：对齐 browse library 表风格。
+/// `cols` 选中间列、按面板宽度降级；`list` 选中行整行高亮 + nvim 视口滚动，
 /// 已收藏显 `♥`。`motion` 定推进(稳态)/ 冻结(离屏)。
 fn draw_track_list(
     buf: &mut Buffer,
@@ -290,34 +290,21 @@ fn draw_track_list(
         &widths,
         display_width(track_table::HIGHLIGHT_SYMBOL),
     )
-    .get(2)
+    .get(1)
     .copied()
     .unwrap_or(0);
     let sel = paint.list.sel();
     let build_table = |visible: std::ops::Range<usize>| {
         let rows = visible.filter_map(|view_index| {
-            let (display_index, song) = tracks.row(view_index)?;
+            let song = tracks.song(view_index)?;
             let loved = state.is_liked(song);
-            let is_current = state
-                .player
-                .current
-                .as_ref()
-                .is_some_and(|current| current.id == song.id);
             let marquee = row_marquee(
                 view_index == sel,
                 &marquee_ctx,
                 Slot::SearchDetailSelected,
                 title_w,
             );
-            Some(track_table::track_row(
-                song,
-                display_index,
-                loved,
-                is_current,
-                cols,
-                theme,
-                marquee,
-            ))
+            Some(track_table::track_row(song, loved, cols, theme, marquee))
         });
         Table::new(rows, widths)
             .header(track_table::header_row(cols, theme))
@@ -337,17 +324,16 @@ fn draw_track_list(
     );
 }
 
-/// 曲目表的 relation-aware 数据源。view coordinate 只用于选中与滚动，`row` 同时返回
-/// authoritative display index 与 Song projection。
+/// 曲目表的数据源，按列表位置读取歌曲。
 #[derive(Clone, Copy)]
 enum TrackList<'a> {
-    /// 不属于 Album / Playlist relation 的普通 Song 列表，显示当前 view coordinate。
+    /// 普通歌曲列表，如艺人热门曲目。
     Songs(&'a [Song]),
 
-    /// Album relation，显示 `AlbumTrack.index`。
+    /// 专辑曲目，按专辑提供的顺序显示。
     Album(&'a [AlbumTrack]),
 
-    /// Playlist relation，显示 `PlaylistEntry.index`。
+    /// 歌单条目，按歌单提供的顺序显示。
     Playlist(&'a [PlaylistEntry]),
 }
 
@@ -366,17 +352,12 @@ impl<'a> TrackList<'a> {
         }
     }
 
-    /// 按 view coordinate 读取显示 index 与 Song；relation 列表不把 view coordinate 冒充
-    /// canonical CollectionIndex。
-    fn row(self, view_index: usize) -> Option<(u64, &'a Song)> {
+    /// 按列表位置读取歌曲，超出列表范围时返回 `None`。
+    fn song(self, view_index: usize) -> Option<&'a Song> {
         match self {
-            Self::Songs(songs) => u64::try_from(view_index).ok().zip(songs.get(view_index)),
-            Self::Album(tracks) => tracks
-                .get(view_index)
-                .map(|track| (track.index.get(), &track.song)),
-            Self::Playlist(entries) => entries
-                .get(view_index)
-                .map(|entry| (entry.index.get(), &entry.song)),
+            Self::Songs(songs) => songs.get(view_index),
+            Self::Album(tracks) => tracks.get(view_index).map(|track| &track.song),
+            Self::Playlist(entries) => entries.get(view_index).map(|entry| &entry.song),
         }
     }
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-tui/src/view.rs
+assertion_line: 1996
 description: "Search 专辑 detail 简介滚到底:窗口在尾部 + 滚动条滑块贴轨道底"
 expression: t.backend()
 ---
@@ -20,10 +21,10 @@ expression: t.backend()
 "│                                            ││                       制作：Chinese Football                          █│" Hidden by multi-width symbols: [(71, " "), (73, " "), (75, " ")]
 "│                                            ││                       封面插画：史悲                                  █│" Hidden by multi-width symbols: [(71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " "), (83, " ")]
 "│                                            ││                              ────────────                              │"
-"│                                            ││    #    title                             artist                 len   │"
-"│                                            ││▌   0    LoveLetterTypewriter              Mineral                3:45  │"
-"│                                            ││    1    Palisade                          Mineral                4:31  │"
-"│                                            ││    2    Gjs                               Mineral                4:46  │"
+"│                                            ││    title                                artist                   len   │"
+"│                                            ││▌   LoveLetterTypewriter                 Mineral                  3:45  │"
+"│                                            ││    Palisade                             Mineral                  4:31  │"
+"│                                            ││    Gjs                                  Mineral                  4:46  │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"

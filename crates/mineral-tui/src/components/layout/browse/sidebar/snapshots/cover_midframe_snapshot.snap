@@ -1,13 +1,14 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/sweep.rs
+assertion_line: 167
 description: "Cover 中途:曲目从右覆盖、左缘竖线"
 expression: t.backend()
 ---
 "╭ playlists ────────╭ ♫ netease tracks /"
-"│  name      source │    #    title     "
-"│▌ EndSerena ♫ netea│    ♫    LoveLetter"
-"│  The Power ♫ netea│▌ ♥ 1    Palisade  "
-"│  本地音乐  □ local│    2    Gjs       " Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " ")]
+"│  name      source │    title          "
+"│▌ EndSerena ♫ netea│    LoveLetterTypew"
+"│  The Power ♫ netea│▌ ♥ Palisade       "
+"│  本地音乐  □ local│    Gjs            " Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " ")]
 "│                   │                   "
 "│                   │                   "
 "│                   │                   "

@@ -1,13 +1,14 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/sweep.rs
+assertion_line: 145
 description: "Push 中途:歌单左移、曲目从右补入"
 expression: t.backend()
 ---
 "───────────────────╮╭ ♫ netease tracks /"
-"     length   items││    #    title     "
-"se   13m      10   ││    ♫    LoveLetter"
-"se   —        8    ││▌ ♥ 1    Palisade  "
-"     —        5    ││    2    Gjs       "
+"     length   items││    title          "
+"se   13m      10   ││    LoveLetterTypew"
+"se   —        8    ││▌ ♥ Palisade       "
+"     —        5    ││    Gjs            "
 "                   ││                   "
 "                   ││                   "
 "                   ││                   "

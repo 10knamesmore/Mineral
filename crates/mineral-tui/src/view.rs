@@ -1700,8 +1700,8 @@ mod tests {
         Ok(())
     }
 
-    /// Search 歌单 detail 曲目表:对齐 browse library 风格 —— ♥/#/title/artist/album/len 六列 +
-    /// 表头,在播歌 # 列显 ♫、收藏歌显 ♥。宽 120 让 detail 面板够 Full 档(artist/album 不退)。
+    /// Search 歌单 detail 曲目表:对齐 browse library 风格，♥/title/artist/album/len 五列 +
+    /// 表头，收藏歌显 ♥。宽 120 让 detail 面板够 Full 档(artist/album 不退)。
     #[test]
     fn search_detail_playlist_tracks_snapshot() -> color_eyre::Result<()> {
         use mineral_channel_core::Page;
@@ -1763,8 +1763,7 @@ mod tests {
         {
             frame.set_playlist_entries(mineral_model::PlaylistEntry::enumerate(songs.clone()));
         }
-        // 第 1 首在播(♫)、第 2 首已收藏(♥)。
-        app.state.player.current = songs.first().cloned();
+        // 第 2 首已收藏(♥)。
         let liked = songs
             .get(1)
             .ok_or_else(|| eyre!("fixture 应有第 2 首"))?
@@ -1775,7 +1774,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 26))?;
         t.draw(|f| super::draw(f, &app))?;
         crate::test_support::assert_snap!(
-            "Search 歌单 detail 曲目表:♥/#/title/artist/album/len 六列 + 表头(♫ 在播 / ♥ 收藏)",
+            "Search 歌单 detail 曲目表:♥/title/artist/album/len 五列 + 表头(♥ 收藏)",
             t.backend()
         );
         Ok(())

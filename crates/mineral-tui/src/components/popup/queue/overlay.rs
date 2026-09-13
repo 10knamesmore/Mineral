@@ -16,7 +16,7 @@ use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
 use crate::render::color::lerp_color;
-use crate::render::theme::{Theme, resolve_source_color};
+use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll;
@@ -146,14 +146,9 @@ impl Overlay for QueueOverlay {
     }
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
-        // ▶ 标记按 server 的在播位置锚点定位(queue_current_index,下标优先),
-        // 不用歌曲身份匹配——队列含重复曲时身份会把所有副本一起点亮。
+        // 在播样式按 server 的队列位置锚点定位;按歌曲身份匹配会点亮重复曲的所有副本。
         let current_idx = ctx.queue_current_index();
-        // 列规格:文本档位按浮层内宽选(窄浮层退到「歌本身」),序号列宽按队列规模选
-        // (≤999 首 3 宽,超过 4 宽,避免 4 位下标被定宽截断)。
-        let cols = QueueColumns::resolve(inner.width, ctx.player.queue.len());
-        // 序号无条件染该行歌曲的源色(零列宽成本地表示来源):同源队列整列同色即
-        // 该队列来源,混源队列则逐行不同。
+        let cols = QueueColumns::for_width(inner.width);
         let header = Row::new(cols.header_cells())
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
@@ -161,8 +156,7 @@ impl Overlay for QueueOverlay {
         // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
         // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
         let marquee_ctx = MarqueeCtx::new(ctx, theme, /*fade_to*/ theme.surface0);
-        // highlight_symbol "▌ " 恒占 2 列;title 是第 2 列(# / ♥ 之后)。下标必须跟着
-        // 列序走——取错列会让 marquee 按那一列的宽度去裁标题(取到 ♥ 列就只剩 2 格)。
+        // highlight_symbol "▌ " 占 2 格;marquee 按 TITLE_COL 指向的标题列宽度裁切。
         let title_w = resolve_column_widths(inner.width, &widths, 2)
             .get(TITLE_COL)
             .copied()
@@ -180,10 +174,9 @@ impl Overlay for QueueOverlay {
                 .filter_map(|(view_i, &raw_i)| {
                     let s = ctx.player.queue.get(raw_i)?;
                     let decor = RowDecor {
-                        // ▶ / # 按队列真实下标,不随过滤重排漂移。
+                        // 在播样式按队列真实下标定位,不随过滤重排漂移。
                         is_current: current_idx == Some(raw_i),
                         loved: ctx.is_liked(s),
-                        index_fg: resolve_source_color(theme, ctx.cfg.sources(), s.source()),
                         marquee: row_marquee(
                             view_i == sel,
                             &marquee_ctx,
@@ -192,7 +185,7 @@ impl Overlay for QueueOverlay {
                         ),
                         hits: self.row_hits(s),
                     };
-                    Some(build_row(raw_i, s, theme, cols, decor))
+                    Some(build_row(s, theme, cols, decor))
                 })
                 .collect();
 
@@ -361,105 +354,59 @@ mod tests {
         let mut s = AppState::test_default()?;
         let queue = endserenading(len);
         s.playback.track = current.and_then(|i| queue.get(i).cloned());
-        // 游标是 ▶ 标记的下标依据(server 在播锚点的镜像)。
+        // 游标是队列在播行的下标依据(server 在播锚点的镜像)。
         s.player.cursor = mineral_protocol::PlayCursor::InQueue(current.unwrap_or(0));
         s.player.queue = queue;
         Ok(s)
     }
 
-    /// 数缓冲区里某符号出现的次数(lint 安全,经 `buf.cell` 取值不裸索引)。
-    fn count_symbol(backend: &TestBackend, sym: &str) -> usize {
-        let buf = backend.buffer();
-        let area = buf.area;
-        let mut n = 0;
-        for y in 0..area.height {
-            for x in 0..area.width {
-                if buf.cell((x, y)).is_some_and(|c| c.symbol() == sym) {
-                    n += 1;
-                }
-            }
-        }
-        n
-    }
-
-    /// 队列含重复曲、在播锚点落在**第二个**副本时,只有该行标 `▶`；
-    /// 按歌曲身份匹配会把两个副本一起点亮。
+    /// 队列含重复曲、在播锚点落在第二个副本时,只有该行加在播下划线。
+    /// 光标选中其他行时,在播行的歌名仍使用 accent 前景。
     #[test]
     fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
         use mineral_test::song;
+        use ratatui::style::Modifier;
+
+        use crate::components::popup::component::dock_full_rect;
+
+        let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(100, 24))?;
         let mut ctx = AppState::test_default()?;
         ctx.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
         ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
         ctx.playback.track = Some(song("a"));
-        let overlay = QueueOverlay::new(2);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        assert_eq!(
-            count_symbol(t.backend(), "▶"),
-            1,
-            "重复曲只应有一行标在播,不能两个副本一起亮"
-        );
-        Ok(())
-    }
-
-    /// 混源 queue:`#` 序号按该行歌曲的源色着色;未配置色的源(local)退中立兜底。
-    #[test]
-    fn queue_mixed_source_tints_index() -> color_eyre::Result<()> {
-        use mineral_model::SourceKind;
-
-        use crate::render::theme::resolve_source_color;
-
-        let theme = crate::test_support::default_theme()?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = crate::test_support::mixed_source_songs();
         let overlay = QueueOverlay::new(0);
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        let fg_of = |ch: &str| -> Option<ratatui::style::Color> {
-            let buf = t.backend().buffer();
-            let area = buf.area;
-            (0..area.height).find_map(|y| {
-                (0..area.width)
-                    .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == ch).map(|c| c.fg))
-            })
-        };
-        // 行 0(netease)是光标行:row_highlight_style 盖掉 cell 级前景(accent),
-        // 序号源色暂不可见——与设计一致,故断言非选中的行 1 / 2。
-        assert_eq!(fg_of("0"), Some(theme.accent), "光标行序号被高亮前景覆盖");
-        let bilibili = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::BILIBILI);
-        assert_eq!(fg_of("1"), Some(bilibili), "bilibili 行序号染 bilibili 色");
-        assert_eq!(fg_of("2"), Some(theme.subtext), "local 未配置色,退中立兜底");
-        Ok(())
-    }
-
-    /// 同源 queue 的序号列也统一使用该 source 的配置色。
-    #[test]
-    fn queue_single_source_also_tints_index() -> color_eyre::Result<()> {
-        use mineral_model::SourceKind;
-
-        use crate::render::theme::resolve_source_color;
-
-        let theme = crate::test_support::default_theme()?;
-        let ctx = ctx_with_queue(3, /*current*/ None)?;
-        let overlay = QueueOverlay::new(0);
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
         t.draw(|f| {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         let buf = t.backend().buffer();
-        let area = buf.area;
-        let fg = (0..area.height).find_map(|y| {
-            (0..area.width)
-                .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == "1").map(|c| c.fg))
-        });
-        // endserenading 全 netease:非选中行序号染 netease 源色。
-        let netease = resolve_source_color(&theme, ctx.cfg.sources(), SourceKind::NETEASE);
-        assert_eq!(fg, Some(netease), "同源 queue 序号也染该源色");
+        let inner = overlay
+            .block(&ctx, &theme, true)
+            .inner(dock_full_rect(buf.area, &ctx));
+        for (raw_i, song) in ctx.player.queue.iter().enumerate() {
+            let y = inner.y + 1 + u16::try_from(raw_i)?;
+            let underlined = (inner.x..inner.right()).any(|x| {
+                buf.cell((x, y))
+                    .is_some_and(|cell| cell.modifier.contains(Modifier::UNDERLINED))
+            });
+            assert_eq!(
+                underlined,
+                raw_i == 2,
+                "只有在播锚点行应带下划线,队列下标 {raw_i}"
+            );
+            let title = (inner.x..inner.right())
+                .find_map(|x| {
+                    buf.cell((x, y))
+                        .filter(|cell| cell.symbol() == song.name.as_str())
+                })
+                .ok_or_else(|| color_eyre::eyre::eyre!("队列下标 {raw_i} 应显示歌名"))?;
+            let expected_fg = if raw_i == 0 || raw_i == 2 {
+                theme.accent
+            } else {
+                theme.text
+            };
+            assert_eq!(title.fg, expected_fg, "队列下标 {raw_i} 的歌名前景");
+        }
         Ok(())
     }
 
@@ -497,7 +444,7 @@ mod tests {
             render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
         })?;
         crate::test_support::assert_snap!(
-            "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦",
+            "队列浮层:EndSerenading 前 3 曲,当前在播(下划线)+ 聚焦",
             t.backend()
         );
         Ok(())
@@ -580,7 +527,7 @@ mod tests {
     }
 
     /// 小终端(backend=60,默认停靠占宽 36% → 浮层 21 → 内区 19)落 Song 档:
-    /// 只剩 # / title / len,artist 省去。
+    /// 只剩 ♥ / title / len,artist 省去。
     #[test]
     fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
@@ -616,7 +563,7 @@ mod tests {
     }
 
     /// 宽终端(backend=170,默认停靠占宽 36% → 浮层 61 → 内区 59)落 Wide 档:
-    /// # / title / artist / album / len。三首歌 album 全有值(短英文 / 长英文 / CJK
+    /// ♥ / title / artist / album / len。三首歌 album 全有值(短英文 / 长英文 / CJK
     /// 混排),验证 album 列有内容时多文本列渲染不串列;其余 fixture 的 album 多为空,
     /// 覆盖不到这条路径。
     #[test]
@@ -642,27 +589,6 @@ mod tests {
         })?;
         crate::test_support::assert_snap!(
             "队列浮层:宽浮层 Wide 档 album 列有内容(短英文/长英文/CJK)",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 超千首队列:序号列自适应到 4 宽,4 位下标(1000+)完整渲染不被截断；
-    /// 固定 3 宽会把 `1234` 截成 `123`。光标定在 1234 使该行进视口。
-    #[test]
-    fn queue_wide_index_no_truncation_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 16))?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = (0..1300)
-            .map(|i| mineral_test::song(&format!("q{i}")))
-            .collect();
-        let overlay = QueueOverlay::new(1234);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:超千首序号列 4 宽,4 位下标完整不截断",
             t.backend()
         );
         Ok(())

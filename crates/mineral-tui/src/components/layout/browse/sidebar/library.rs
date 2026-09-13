@@ -24,20 +24,18 @@ use crate::runtime::view_model::PlaylistEntryView;
 /// 曲目表格的列布局:宽度档(是否放得下 artist/album)× 是否聚合面(mineral 源)。
 #[derive(Clone, Copy)]
 struct TrackLayout {
-    /// 宽档:♥ / # / title / artist / album / len,文本列比例 Fill(3:2:2);
-    /// `false` 为窄档 ♥ / # / title / len——artist/album 放不下,退到「歌本身」。
+    /// 宽档:♥ / title / artist / album / len,文本列比例 Fill(3:2:2);
+    /// `false` 为窄档 ♥ / title / len，省去 artist/album。
     full: bool,
 
     /// 聚合面(source = mineral 的跨源歌单,如全源收藏合集):宽档在 album 后插
-    /// per-song `source` 徽标列;窄档由序号染该行歌曲的源色(与
-    /// queue 同一手法)。普通单源歌单为 `false`,天然无需 per-song source 表示。
+    /// 每首歌的 source 徽标列，窄档省去。普通单源歌单为 `false`。
     aggregate: bool,
 }
 
 impl TrackLayout {
-    /// 按面板宽度与曲目集合选布局。宽度阈值:普通面 56(低于此 3 个文本列各分不到约 12 格,
-    /// 退到只剩歌名);聚合面还要塞 11 格 source 列,阈值抬到 68(56 + 列宽及间隔),否则
-    /// 56~67 格会挤瘦 artist/album——窄档改由序号染色承担源表示,不硬塞列。
+    /// 按面板宽度与曲目集合选布局。普通面 56 格起显示 artist/album；
+    /// 聚合面还需 11 格 source 列及间隔，68 格起使用宽档。
     fn new(width: u16, aggregate: bool) -> Self {
         let full_threshold = if aggregate { 68 } else { 56 };
         Self {
@@ -48,7 +46,7 @@ impl TrackLayout {
 
     /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
     fn header_cells(self) -> Vec<Cell<'static>> {
-        let mut cells = vec![Cell::from(""), Cell::from("#"), Cell::from("title")];
+        let mut cells = vec![Cell::from(""), Cell::from("title")];
         if self.full {
             cells.push(Cell::from("artist"));
             cells.push(Cell::from("album"));
@@ -63,7 +61,7 @@ impl TrackLayout {
     /// 列宽约束:定宽小列用 Length,文本列用比例 Fill;source 列与
     /// playlists sidebar 的同名列等宽。
     fn widths(self) -> Vec<Constraint> {
-        let mut widths = vec![Constraint::Length(1), Constraint::Length(4)];
+        let mut widths = vec![Constraint::Length(1)];
         if self.full {
             widths.extend([
                 Constraint::Fill(3),
@@ -127,7 +125,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         );
 
     // 按面板宽度 × 是否聚合面选布局:窄屏放不下 artist/album 时退到「歌本身」
-    // (♥ # title len);聚合面(source = mineral 的跨源歌单)额外带 per-song source
+    // (♥ title len);聚合面(source = mineral 的跨源歌单)宽档额外带 per-song source
     // 表示。跨源的只有 mineral 源歌单,故看歌单 source 而非遍历曲目。
     let aggregate = state
         .selected_playlist()
@@ -143,7 +141,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
     // Table 带边框 block:列在 inner(左右各 -1)上求解;选中符 "▌ " 恒占 2 列。
     let title_w = resolve_column_widths(area.width.saturating_sub(2), &widths, 2)
-        .get(2)
+        .get(1)
         .copied()
         .unwrap_or(0);
     let sel = state.browse.nav.track.sel();
@@ -196,7 +194,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     );
 }
 
-/// 把一首歌组装成 library 表格的一行(loved 标记 / ♫ 当前歌 / 高亮搜索词)。
+/// 把一首歌组装成 library 表格的一行(loved 标记 / 高亮搜索词)。
 /// `layout` 决定列集:窄档省去 artist/album。
 fn build_row<'a>(
     entry: &'a PlaylistEntryView,
@@ -206,32 +204,12 @@ fn build_row<'a>(
     marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
     let song = &entry.data.song;
-    let is_current = state
-        .player
-        .current
-        .as_ref()
-        .is_some_and(|current| current.id == song.id);
-
     // 像 vim signcolumn 一样的 gutter:loved 显 ♥,否则空。永远占一格,
     // 不抖动后续列。
     let love_cell = if entry.loved {
         Cell::from(Span::styled("♥", Style::new().fg(theme.red)))
     } else {
         Cell::from("")
-    };
-
-    let num_cell = if is_current {
-        Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
-    } else if layout.aggregate && !layout.full {
-        // 窄档聚合面:source 列插不起,序号承担源表示(染该行歌曲的源色)。
-        let src_color =
-            crate::render::theme::resolve_source_color(theme, state.cfg.sources(), song.source());
-        Cell::from(Span::styled(
-            entry.data.index.get().to_string(),
-            Style::new().fg(src_color),
-        ))
-    } else {
-        Cell::from(entry.data.index.get().to_string())
     };
 
     let name_hits = state.browse.search.match_for(&song.name).map(|m| m.hits);
@@ -261,7 +239,7 @@ fn build_row<'a>(
 
     let len = format_ms_opt(song.duration_ms);
 
-    let mut cells = vec![love_cell, num_cell, title_cell];
+    let mut cells = vec![love_cell, title_cell];
     if layout.full {
         let artist = song
             .artists
@@ -320,11 +298,9 @@ fn position_label(sel: usize, total: usize) -> String {
 /// 选中歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
 /// 「无匹配」行;正常情况返回 `None`(走 tracks 渲染)。
 fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
-    // 占位文本落在 title 列(前两格留给 gutter / #),避免被 Length(1) 的 gutter 截成
-    // 单字。两档列集的第 3 列都是 title,故位置通用。
+    // 占位文本落在 title 列，首格留给收藏标记，避免占位文本被截成单字。
     let placeholder_row = |text: &'static str| {
         Row::new(vec![
-            Cell::from(""),
             Cell::from(""),
             Cell::from(Span::styled(text, Style::new().fg(theme.overlay))),
         ])
@@ -489,7 +465,7 @@ mod tests {
         Ok(())
     }
 
-    /// 已选歌单 + 3 首曲目(CJK 歌名 / 收藏 / 当前在播标记)。
+    /// 已选歌单 + 3 首曲目(CJK 歌名 / 收藏)。
     #[test]
     fn library_with_tracks_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
@@ -499,15 +475,11 @@ mod tests {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &theme);
         })?;
-        crate::test_support::assert_snap!(
-            "曲目列表:EndSerenading 前 3 曲(♫ 当前 / ♥ 收藏)",
-            t.backend()
-        );
+        crate::test_support::assert_snap!("曲目列表:EndSerenading 前 3 曲(♥ 收藏)", t.backend());
         Ok(())
     }
 
-    /// `/` filter 会按 fuzzy score 改写 view order；`#` 仍显示 PlaylistEntry 的
-    /// authoritative CollectionIndex，而不是过滤结果里的 view coordinate。
+    /// `/` filter 按 fuzzy score 重排曲目，保留条目原有的 CollectionIndex。
     #[test]
     fn library_filtered_reorder_preserves_relation_indexes_snapshot() -> color_eyre::Result<()> {
         use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SourceKind};
@@ -541,7 +513,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         draw_lib(&mut terminal, &state)?;
         crate::test_support::assert_snap!(
-            "曲目列表:filter reorder 后 # 保留非连续 relation index 2/9",
+            "曲目列表:filter 按匹配分重排，歌名与选中行对齐",
             terminal.backend()
         );
         Ok(())
@@ -738,8 +710,7 @@ mod tests {
         Ok(())
     }
 
-    /// 聚合面阈值抬到 68:56~67 格插不起 11 格 source 列,退窄档(full=false)让序号染色兜底;
-    /// 普通面仍 56 格进宽档,聚合面 68 格进宽档。
+    /// 聚合面 68 格起显示 source 列，普通面 56 格进宽档。
     #[test]
     fn aggregate_layout_threshold_leaves_room_for_source_column() {
         assert!(
@@ -770,45 +741,6 @@ mod tests {
         Ok(())
     }
 
-    /// 混源歌单窄档(Song 档):source 列插不起,序号改染该行歌曲的源色
-    /// (与 queue 同一手法);同源歌单序号保持中立灰。
-    #[test]
-    fn library_mixed_source_narrow_tints_index() -> color_eyre::Result<()> {
-        use mineral_model::SourceKind;
-
-        use crate::render::theme::resolve_source_color;
-
-        let theme = crate::test_support::default_theme()?;
-        let state = crate::test_support::state_with_mixed_tracks()?;
-        let mut t = Terminal::new(TestBackend::new(50, 12))?;
-        draw_lib(&mut t, &state)?;
-        // body 行 y=2 起,序号列字符 '0'/'1'/'2';逐行找到序号 cell 断言前景色。
-        let fg_of = |y: u16, ch: &str| -> Option<ratatui::style::Color> {
-            let buf = t.backend().buffer();
-            (0..buf.area.width)
-                .find_map(|x| buf.cell((x, y)).filter(|c| c.symbol() == ch).map(|c| c.fg))
-        };
-        // 行 0(netease)是选中行:row_highlight_style 盖掉 cell 级前景(accent),
-        // 序号源色暂不可见——与设计一致,故断言非选中的行 1 / 2。
-        assert_eq!(
-            fg_of(2, "0"),
-            Some(theme.accent),
-            "选中行序号被高亮前景覆盖"
-        );
-        let bilibili = resolve_source_color(&theme, state.cfg.sources(), SourceKind::BILIBILI);
-        assert_eq!(
-            fg_of(3, "1"),
-            Some(bilibili),
-            "bilibili 行序号染 bilibili 色"
-        );
-        assert_eq!(
-            fg_of(4, "2"),
-            Some(theme.subtext),
-            "local 未配置色,退中立兜底"
-        );
-        Ok(())
-    }
-
     /// CJK 曲目(Chinese Football)在 Full 档多列里的宽字符对齐(width=80)—— 含最长的
     /// 「不是人人都能穿十号球衣」,验证 title/artist/album 三列宽字符不串列。
     #[test]
@@ -827,7 +759,7 @@ mod tests {
         Ok(())
     }
 
-    /// 窄面板(width=44 < 56)退到 Song 档:只剩 ♥ / # / title / len,artist/album 省去。
+    /// 窄面板(width=44 < 56)退到 Song 档:只剩 ♥ / title / len,artist/album 省去。
     #[test]
     fn library_narrow_song_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;

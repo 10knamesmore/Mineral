@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-tui/src/view.rs
+assertion_line: 1910
 description: "Search artist detail 切区中途:Top Songs↔Albums 横向合成(列表区,Tab/头图不滑)"
 expression: t.backend()
 ---
@@ -15,9 +16,9 @@ expression: t.backend()
 "│                                            ││                                                                        │"
 "│                                            ││                              ────────────                              │"
 "│                                            ││Top Songs  Albums   [ / ] section                                       │"
-"│                                            ││                            album                  len     name         │"
-"│                                            ││tterTypewriter              EndSerenading          3:45  ▌ EndSerenading│"
-"│                                            ││de                          EndSerenading          4:31    ThePowerOfFai│"
+"│                                            ││                          album                    len     name         │"
+"│                                            ││ypewriter                 EndSerenading            3:45  ▌ EndSerenading│"
+"│                                            ││                          EndSerenading            4:31    ThePowerOfFai│"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "╰ 1 / 1 ─────────────────────────────────────╯╰ 1 / 2 ─────────────────────────────────────────────────────────────────╯"

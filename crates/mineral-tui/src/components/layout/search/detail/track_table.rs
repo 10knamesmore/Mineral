@@ -1,8 +1,6 @@
-//! 曲目表的列布局与行装配：browse library 表与 search detail 曲目表共用一套列集，
-//! 杜绝两处各写一份 ♥/#/title/artist/album/len 而风格漂移。
+//! Search detail 曲目表的列布局与文本行装配。
 //!
-//! 固定列：♥ gutter（loved 标记）+ # （在播 ♫ / 0 起序号）+ title …… + len；
-//! 中间 artist / album 两列按上下文（[`TrackColumns`]）与面板宽度增减。
+//! 固定列为 ♥ / title / len，artist / album 按上下文与面板宽度增减。
 
 use ratatui::layout::Constraint;
 use ratatui::style::{Modifier, Style};
@@ -24,7 +22,7 @@ pub const HIGHLIGHT_SYMBOL: &str = "▌ ";
 /// 保两表窄屏行为一致）。
 const NARROW_W: u16 = 56;
 
-/// 曲目表的中间可选列。`♥`/`#`/`title`/`len` 恒在，`artist`/`album` 按上下文增减。
+/// 曲目表的中间可选列。`♥`/`title`/`len` 恒在，`artist`/`album` 按上下文增减。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TrackColumns {
     /// 是否含 artist 列。
@@ -51,7 +49,7 @@ impl TrackColumns {
 
     /// 表头单元格（与 [`Self::widths`] / [`track_row`] 的列集严格一致）。
     pub fn header_cells(self) -> Vec<Cell<'static>> {
-        let mut cells = vec![Cell::from(""), Cell::from("#"), Cell::from("title")];
+        let mut cells = vec![Cell::from(""), Cell::from("title")];
         if self.artist {
             cells.push(Cell::from("artist"));
         }
@@ -64,7 +62,7 @@ impl TrackColumns {
 
     /// 列宽约束：定宽小列用 Length，文本列用比例 Fill（title 在有中间列时占大头）。
     pub fn widths(self) -> Vec<Constraint> {
-        let mut w = vec![Constraint::Length(1), Constraint::Length(4)];
+        let mut w = vec![Constraint::Length(1)];
         if self.artist || self.album {
             w.push(Constraint::Fill(3));
             if self.artist {
@@ -114,30 +112,17 @@ fn love_cell(loved: bool, theme: &Theme) -> Cell<'static> {
     }
 }
 
-/// `#` 列：在播 → `♫`(accent)，否则 0 起序号。
-fn num_cell(idx: u64, is_current: bool, theme: &Theme) -> Cell<'static> {
-    if is_current {
-        Cell::from(Span::styled("♫", Style::new().fg(theme.accent)))
-    } else {
-        Cell::from(format!("{idx}"))
-    }
-}
-
 /// 把一首裸 [`Song`] 装配成曲目表的一行（纯文本，无搜索高亮）：
-/// ♥ / #（在播 ♫ / 序号）/ title / [artist 首位] / [album] / len。
+/// ♥ / title / [artist 首位] / [album] / len。
 ///
 /// # Params:
 ///   - `song`: 该行歌曲
-///   - `idx`: 0-based display index（在播则被 `♫` 取代）
 ///   - `loved`: 是否已收藏（♥）
-///   - `is_current`: 是否当前在播（♫）
 ///   - `cols`: 中间列选择
 ///   - `marquee`: title 溢出滚动接线(仅光标选中行 `Some`,其余行截断)
 pub fn track_row(
     song: &Song,
-    idx: u64,
     loved: bool,
-    is_current: bool,
     cols: TrackColumns,
     theme: &Theme,
     marquee: Option<RowMarquee<'_>>,
@@ -151,11 +136,7 @@ pub fn track_row(
         ),
         None => Cell::from(Line::from(title_spans)),
     };
-    let mut cells = vec![
-        love_cell(loved, theme),
-        num_cell(idx, is_current, theme),
-        title_cell,
-    ];
+    let mut cells = vec![love_cell(loved, theme), title_cell];
     if cols.artist {
         let artist = song
             .artists
@@ -206,12 +187,10 @@ mod tests {
         let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
         let rows = vec![
             super::track_row(
-                &normal, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
-                /*marquee*/ None,
+                &normal, /*loved*/ false, cols, &theme, /*marquee*/ None,
             ),
             super::track_row(
-                &grey, 1, /*loved*/ false, /*is_current*/ false, cols, &theme,
-                /*marquee*/ None,
+                &grey, /*loved*/ false, cols, &theme, /*marquee*/ None,
             ),
         ];
         let mut t = Terminal::new(TestBackend::new(40, 4))?;
@@ -236,8 +215,7 @@ mod tests {
         let song = mineral_test::aliased_song();
         let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
         let rows = vec![super::track_row(
-            &song, 0, /*loved*/ false, /*is_current*/ false, cols, &theme,
-            /*marquee*/ None,
+            &song, /*loved*/ false, cols, &theme, /*marquee*/ None,
         )];
         let mut t = Terminal::new(TestBackend::new(40, 2))?;
         t.draw(|f| f.render_widget(Table::new(rows, cols.widths()), f.area()))?;
@@ -279,7 +257,7 @@ mod tests {
         let widths = cols.widths();
         // 测试渲染无 TableState 选中 → selection_w 0。
         let title_w = resolve_column_widths(/*total_w*/ 40, &widths, /*selection_w*/ 0)
-            .get(2)
+            .get(1)
             .copied()
             .ok_or_else(|| color_eyre::eyre::eyre!("缺 title 列"))?;
         let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
@@ -293,9 +271,7 @@ mod tests {
             };
             let rows = vec![super::track_row(
                 &long,
-                0,
                 /*loved*/ false,
-                /*is_current*/ false,
                 cols,
                 &theme,
                 Some(RowMarquee {
@@ -340,13 +316,13 @@ mod tests {
         }
     }
 
-    /// 列数随中间列增减：base 4 列(♥/#/title/len) + artist + album。
+    /// 列数随中间列增减：base 3 列(♥/title/len) + artist + album。
     #[test]
     fn column_count_tracks_flags() {
-        assert_eq!(TrackColumns::new(false, false).widths().len(), 4);
-        assert_eq!(TrackColumns::new(true, false).widths().len(), 5);
-        assert_eq!(TrackColumns::new(false, true).widths().len(), 5);
-        assert_eq!(TrackColumns::new(true, true).widths().len(), 6);
+        assert_eq!(TrackColumns::new(false, false).widths().len(), 3);
+        assert_eq!(TrackColumns::new(true, false).widths().len(), 4);
+        assert_eq!(TrackColumns::new(false, true).widths().len(), 4);
+        assert_eq!(TrackColumns::new(true, true).widths().len(), 5);
     }
 
     /// 窄屏降级：宽度 < 56 砍掉 artist/album，≥ 56 原样保留。

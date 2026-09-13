@@ -142,7 +142,7 @@ fn lerp_color(from: Color, to: Color, permille: u32) -> Color {
 }
 
 /// 曲目行 title 的 marquee 接线(调用方仅对光标选中行传 `Some`;
-/// ♫ 在播行刻意不滚——非焦点处常驻动画干扰,想读全长歌名把光标移过去即可)。
+/// 未选中的在播行也维持截断，避免非焦点处常驻动画干扰)。
 pub(crate) struct RowMarquee<'a> {
     /// 共享上下文。
     pub(crate) ctx: &'a MarqueeCtx<'a>,
@@ -154,7 +154,7 @@ pub(crate) struct RowMarquee<'a> {
     pub(crate) title_w: u16,
 }
 
-/// 仅光标选中行给 marquee 接线,其余行(含 ♫ 在播行)`None` 维持截断。
+/// 仅光标选中行给 marquee 接线,其余行(含在播行)`None` 维持截断。
 ///
 /// # Params:
 ///   - `is_selected`: 该行是否为光标选中行

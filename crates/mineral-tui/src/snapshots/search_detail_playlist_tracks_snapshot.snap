@@ -1,6 +1,7 @@
 ---
 source: crates/mineral-tui/src/view.rs
-description: "Search 歌单 detail 曲目表:♥/#/title/artist/album/len 六列 + 表头(♫ 在播 / ♥ 收藏)"
+assertion_line: 1776
+description: "Search 歌单 detail 曲目表:♥/title/artist/album/len 五列 + 表头(♥ 收藏)"
 expression: t.backend()
 ---
 "╭search────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
@@ -14,10 +15,10 @@ expression: t.backend()
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "│                                            ││                              ────────────                              │"
-"│                                            ││    #    title                   artist           album           len   │"
-"│                                            ││▌   ♫    Endserenading           Mineral          EndSerenading   3:45  │"
-"│                                            ││  ♥ 1    守门员                  Chinese Football Chinese Footbal 3:53  │" Hidden by multi-width symbols: [(57, " "), (59, " "), (61, " ")]
-"│                                            ││    2    Palisade                Mineral          EndSerenading   4:31  │"
+"│                                            ││    title                     artist            album             len   │"
+"│                                            ││▌   Endserenading             Mineral           EndSerenading     3:45  │"
+"│                                            ││  ♥ 守门员                    Chinese Football  Chinese Football  3:53  │" Hidden by multi-width symbols: [(52, " "), (54, " "), (56, " ")]
+"│                                            ││    Palisade                  Mineral           EndSerenading     4:31  │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"
 "╰ 1 / 1 ─────────────────────────────────────╯╰ 1 / 3 ─────────────────────────────────────────────────────────────────╯"

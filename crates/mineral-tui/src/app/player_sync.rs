@@ -14,7 +14,7 @@ impl App {
         self.state.playback.play_origin = sync.play_origin;
         self.state.playback.mode = sync.play_mode;
         // 在播位置锚点是轻段,每 tick 灌(prev/next 可在 queue 列表不变时单独前进)。
-        // 它是 queue 浮层 ▶ 标记的下标依据——区别于纯客户端的 UI 光标(后者只钳防越界)。
+        // 它决定 queue 浮层的在播行样式，独立于客户端的 UI 光标(后者只钳防越界)。
         self.state.player.cursor = sync.cursor;
         if let Some(q) = sync.queue {
             self.state.player.queue = q.queue;

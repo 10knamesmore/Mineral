@@ -1,14 +1,15 @@
 ---
 source: crates/mineral-tui/src/components/popup/queue/overlay.rs
-description: "队列浮层:EndSerenading 前 3 曲,当前在播(▶)+ 聚焦"
+assertion_line: 446
+description: "队列浮层:EndSerenading 前 3 曲,当前在播(下划线)+ 聚焦"
 expression: t.backend()
 ---
 "                                                                                                    "
 "╭ queue ───────────────────────────╮                                                                "
-"│    #   title               len   │                                                                "
-"│▌   0   LoveLetterTypewrite 3:45  │                                                                "
-"│    ▶   Palisade            4:31  │                                                                "
-"│    2   Gjs                 4:46  │                                                                "
+"│    title                   len   │                                                                "
+"│▌   LoveLetterTypewriter    3:45  │                                                                "
+"│    Palisade                4:31  │                                                                "
+"│    Gjs                     4:46  │                                                                "
 "│                                  │                                                                "
 "│                                  │                                                                "
 "│                                  │                                                                "

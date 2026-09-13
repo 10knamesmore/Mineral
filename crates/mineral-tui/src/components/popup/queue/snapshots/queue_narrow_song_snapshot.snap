@@ -1,14 +1,15 @@
 ---
 source: crates/mineral-tui/src/components/popup/queue/overlay.rs
+assertion_line: 540
 description: "队列浮层:窄浮层退到 Song 档(只剩歌名,无 artist)"
 expression: t.backend()
 ---
 "                                                            "
 "╭ queue ────────────╮                                       "
-"│    #   titl len   │                                       "
-"│▌   0   Love 3:45  │                                       "
-"│    ▶   Pali 4:31  │                                       "
-"│    2   Gjs  4:46  │                                       "
+"│    title    len   │                                       "
+"│▌   LoveLett 3:45  │                                       "
+"│    Palisade 4:31  │                                       "
+"│    Gjs      4:46  │                                       "
 "│                   │                                       "
 "│                   │                                       "
 "│                   │                                       "

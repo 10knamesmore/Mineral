@@ -84,7 +84,7 @@ pub(crate) fn entry_views(songs: Vec<Song>) -> Vec<PlaylistEntryView> {
 }
 
 /// 造一个选中混源歌单(source = mineral 的聚合收藏)的 `AppState`,view = Library,
-/// 曲目为 [`mixed_source_songs`],无在播(序号列不被 ♫ 占位)。
+/// 曲目为 [`mixed_source_songs`]，无在播曲。
 pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     let pid = PlaylistId::new(SourceKind::MINERAL, "favorites");

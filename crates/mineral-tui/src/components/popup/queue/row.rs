@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Row};
 use smallvec::SmallVec;
 
-use super::columns::{QueueCols, QueueColumns};
+use super::columns::QueueColumns;
 use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::marquee::RowMarquee;
 use crate::render::theme::Theme;
@@ -31,18 +31,13 @@ pub(super) struct RowHits {
     pub(super) album: SmallVec<[u32; 8]>,
 }
 
-/// 一行的可变装饰:在播标记、收藏态、源色、跑马灯、模糊命中。
-///
-/// 收成一份随行传递,避免行组装函数摊开五六个位置参数。
+/// 一行的在播样式、收藏态、跑马灯与模糊命中。
 pub(super) struct RowDecor<'m> {
     /// 该行是否是当前在播曲。
     pub(super) is_current: bool,
 
     /// 该行是否已收藏。
     pub(super) loved: bool,
-
-    /// 序号列的源色(整列同色即该队列单一来源)。
-    pub(super) index_fg: ratatui::style::Color,
 
     /// 选中行的跑马灯上下文;非选中行为 `None`。
     pub(super) marquee: Option<RowMarquee<'m>>,
@@ -53,13 +48,11 @@ pub(super) struct RowDecor<'m> {
 
 /// 把一首歌组成 queue 表格的一行。
 ///
-/// 当前在播行:行首 `▶` + 整行 `accent` 前景(与选中行的「背景块」区分),在播标记
-/// 语义优先于源色;其余行序号用源色,歌名用主文本色,艺术家用次要色,层级分明。
-/// 选中行的高亮背景由 Table 的 `row_highlight_style` 叠加,与在播前景着色天然兼容
-/// (背景块视觉优先)。`cols` 决定列集:窄档省去 artist,宽档多出 album。
+/// 当前在播行的歌名、艺人、专辑和时长使用 `accent` 前景,整行加下划线。
+/// 其他行歌名用主文本色,艺人、专辑和时长用次要色。选中行的高亮背景由 Table 的
+/// `row_highlight_style` 叠加。`cols` 决定列集:窄档省去 artist,宽档多出 album。
 ///
 /// # Params:
-///   - `idx`: 该行在队列中的下标
 ///   - `song`: 该行歌曲
 ///   - `theme`: 主题色板
 ///   - `cols`: 列规格
@@ -68,24 +61,15 @@ pub(super) struct RowDecor<'m> {
 /// # Return:
 ///   组装好的表格行。
 pub(super) fn build_row<'a>(
-    idx: usize,
     song: &'a Song,
     theme: &Theme,
     cols: QueueColumns,
     decor: RowDecor<'_>,
 ) -> Row<'a> {
-    let (lead, title_fg, sub_fg) = if decor.is_current {
-        (
-            Span::styled("▶", Style::new().fg(theme.accent)),
-            theme.accent,
-            theme.accent,
-        )
+    let (title_fg, sub_fg) = if decor.is_current {
+        (theme.accent, theme.accent)
     } else {
-        (
-            Span::styled(idx.to_string(), Style::new().fg(decor.index_fg)),
-            theme.text,
-            theme.subtext,
-        )
+        (theme.text, theme.subtext)
     };
 
     let mut title_spans = highlight_indices(
@@ -105,8 +89,8 @@ pub(super) fn build_row<'a>(
         ),
         None => Cell::from(Line::from(title_spans)),
     };
-    let mut cells = vec![love_cell(decor.loved, theme), Cell::from(lead), title_cell];
-    if matches!(cols.text, QueueCols::Wide | QueueCols::Full) {
+    let mut cells = vec![love_cell(decor.loved, theme), title_cell];
+    if matches!(cols, QueueColumns::Wide | QueueColumns::Full) {
         let artist = song
             .artists
             .first()
@@ -118,7 +102,7 @@ pub(super) fn build_row<'a>(
             theme,
         ))));
     }
-    if matches!(cols.text, QueueCols::Wide) {
+    if matches!(cols, QueueColumns::Wide) {
         let album = song
             .album
             .as_ref()

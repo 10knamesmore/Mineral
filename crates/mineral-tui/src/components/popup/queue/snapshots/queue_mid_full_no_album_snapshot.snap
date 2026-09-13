@@ -1,14 +1,15 @@
 ---
 source: crates/mineral-tui/src/components/popup/queue/overlay.rs
+assertion_line: 558
 description: "队列浮层:中宽保持 Full 档(有 artist,无 album)"
 expression: t.backend()
 ---
 "                                                                                                                                            "
 "╭ queue ─────────────────────────────────────────╮                                                                                          "
-"│    #   title               artist        len   │                                                                                          "
-"│▌   0   LoveLetterTypewrite Mineral       3:45  │                                                                                          "
-"│    ▶   Palisade            Mineral       4:31  │                                                                                          "
-"│    2   Gjs                 Mineral       4:46  │                                                                                          "
+"│    title                  artist         len   │                                                                                          "
+"│▌   LoveLetterTypewriter   Mineral        3:45  │                                                                                          "
+"│    Palisade               Mineral        4:31  │                                                                                          "
+"│    Gjs                    Mineral        4:46  │                                                                                          "
 "│                                                │                                                                                          "
 "│                                                │                                                                                          "
 "│                                                │                                                                                          "
