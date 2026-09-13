@@ -241,6 +241,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         tracks.len(),
         motion,
         state.minimap_cursor_ticks(),
+        state.cfg.tui().minimap(),
     );
     let entries = tracks
         .iter()

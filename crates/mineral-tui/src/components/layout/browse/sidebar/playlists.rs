@@ -172,6 +172,7 @@ fn paint_minimap(
         total,
         motion,
         state.minimap_cursor_ticks(),
+        state.cfg.tui().minimap(),
     );
     render_minimap(
         buf,

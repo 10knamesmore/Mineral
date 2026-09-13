@@ -158,6 +158,7 @@ expression: "super::meta_config_lua()"
 ---@field search? mineral.SearchConfig 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
 ---@field lyrics? mineral.LyricsConfig 歌词段(行距 + 滚动手感)。
 ---@field animation? mineral.AnimationConfig 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
+---@field minimap? mineral.MinimapConfig 列表 minimap 段(光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
 ---@field toast? mineral.ToastConfig toast 段(顶栏通知停留时长)。
 ---@field layout? mineral.LayoutConfig 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。
 ---@field copy? mineral.CopyConfig copy 段(复制菜单的自定义模板)。
@@ -544,6 +545,11 @@ expression: "super::meta_config_lua()"
 ---溢出标题往返滚动(`mode = "bounce"`)独有配置。
 ---@class mineral.MarqueeBounceConfig
 ---@field edge_pause_ms? integer 到达两端后的停顿毫秒(读完首 / 尾再折返);0 = 不停顿直接折返。
+
+---列表右边框 minimap 配置。
+---@class mineral.MinimapConfig
+---@field halo_rows? integer 光晕半径(轨道行数)
+---@field magnet_dots? integer 吸附区半径
 
 ---toast 配置。
 ---@class mineral.ToastConfig

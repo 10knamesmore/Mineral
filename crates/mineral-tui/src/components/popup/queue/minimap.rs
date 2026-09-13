@@ -39,6 +39,7 @@ impl QueueOverlay {
                 glide_ticks: ctx.list_glide_ticks(),
             },
             ctx.minimap_cursor_ticks(),
+            ctx.cfg.tui().minimap(),
         );
         let entries = visible.iter().enumerate().filter_map(|(index, &raw)| {
             ctx.player.queue.get(raw).map(|song| MinimapEntry {

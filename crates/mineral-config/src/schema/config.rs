@@ -17,6 +17,7 @@ use super::download::DownloadConfig;
 use super::keys::KeysConfig;
 use super::layout::LayoutConfig;
 use super::lyrics::LyricsConfig;
+use super::minimap::MinimapConfig;
 use super::prefetch::PrefetchConfig;
 use super::queue::QueueConfig;
 use super::script::ScriptConfig;
@@ -100,6 +101,9 @@ pub struct TuiConfig {
 
     /// 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
     animation: AnimationConfig,
+
+    /// 列表 minimap 段(光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
+    minimap: MinimapConfig,
 
     /// toast 段(顶栏通知停留时长)。
     toast: ToastConfig,

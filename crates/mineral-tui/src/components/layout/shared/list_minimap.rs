@@ -18,13 +18,7 @@ const DOT_ROWS_PER_CELL: u64 = 4;
 /// 右列四点组成轨道，整格颜色兼作喜欢标记；左列只放光标点。
 const TRACK_DOTS: u8 = 0xB8;
 
-/// 光晕半径（轨道行数）：超过此距离的格子保持纯轨道色。
-const HALO_RADIUS_ROWS: u64 = 5;
-
-/// 吸附区半径（盲文点）：光标点上下各两个点内就被吸走。
-const MAGNET_DOT_ROWS: u64 = 2;
-
-/// 本帧 minimap 的光标输入：位置与吸附进度都是列表级动画，随渲染模式切换推进语义。
+/// 本帧 minimap 的输入：位置与吸附进度是列表级动画，几何旋钮每帧现读配置。
 #[derive(Clone, Copy)]
 pub(crate) struct MinimapCursor<'a> {
     /// 光标在整份列表中的归一化位置，范围为 `0..=POSITION_SCALE`；`None` = 没有光标。
@@ -38,22 +32,37 @@ pub(crate) struct MinimapCursor<'a> {
 
     /// 稳态实拍推进动画；离屏合成与形变帧只读采样。
     pub(crate) advancing: bool,
+
+    /// 光晕半径
+    pub(crate) halo_rows: u64,
+
+    /// 吸附区半径
+    pub(crate) magnet_dots: u64,
 }
 
 impl<'a> MinimapCursor<'a> {
-    /// 从列表的光标动画与本帧渲染模式组装输入。
+    /// 从列表的光标动画、本帧渲染模式与 minimap 配置组装输入。
     ///
     /// # Params:
     ///   - `list`: 该列表的滚动 / 动画态；光标位置与吸附进度都从它取。
     ///   - `len`: 当前显示列表长度。
     ///   - `motion`: 稳态实拍推进一拍，离屏合成只读采样。
     ///   - `ticks`: 当前配置折算的光标移动拍数。
-    pub(crate) fn new(list: &'a ScrollList, len: usize, motion: ScrollMotion, ticks: u16) -> Self {
+    ///   - `minimap`: 当前 `tui.minimap` 段（现读，热更即生效）。
+    pub(crate) fn new(
+        list: &'a ScrollList,
+        len: usize,
+        motion: ScrollMotion,
+        ticks: u16,
+        minimap: &mineral_config::MinimapConfig,
+    ) -> Self {
         Self {
             position: list.position(len, motion, ticks),
             magnet: list.magnet(),
             ticks,
             advancing: matches!(motion, ScrollMotion::Advancing { .. }),
+            halo_rows: *minimap.halo_rows(),
+            magnet_dots: *minimap.magnet_dots(),
         }
     }
 }
@@ -84,8 +93,8 @@ struct RowMarkers {
 ///
 /// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道：喜欢整格染红、
 /// 光晕混色，左列只归光标。在播格显示 `◆`：没被吸住时保持主题绿；光标点进入
-/// [`MAGNET_DOT_ROWS`] 个点内就被吸走——光标点不显示，`◆` 按 [`MagnetProgress`]
-/// 缓动淡向光标色，光晕同步淡出。空列表保留淡色盲文轨道。
+/// `tui.minimap.magnet_dots` 个点内就被吸走——光标点不显示，`◆` 按
+/// [`MagnetProgress`] 缓动淡向光标色，光晕同步淡出。空列表保留淡色盲文轨道。
 ///
 /// # Params:
 ///   - `buf`: 已绘制面板边框的当前帧缓冲区；保留每格原有背景和字体效果。
@@ -106,10 +115,17 @@ pub(crate) fn render_minimap(
         return;
     }
 
+    let MinimapCursor {
+        position,
+        magnet,
+        ticks,
+        advancing,
+        halo_rows,
+        magnet_dots,
+    } = cursor;
     let row_span = u64::from(track.height - 1);
     let dot_span = u64::from(track.height) * DOT_ROWS_PER_CELL - 1;
-    let cursor_position = cursor
-        .position
+    let cursor_position = position
         .filter(|_| total > 0)
         .map(|position| u64::from(position) * dot_span);
     let cursor_dot = cursor_position.map(nearest_dot_row);
@@ -141,14 +157,14 @@ pub(crate) fn render_minimap(
 
     // 光标点落进在播点的吸附区就被吸走：区内不画光标点，只留那一格的在播标记。
     let absorbed = match (cursor_dot, nearest_playing) {
-        (Some(cursor), Some(playing)) => cursor.abs_diff(playing) <= MAGNET_DOT_ROWS,
+        (Some(at), Some(playing)) => at.abs_diff(playing) <= magnet_dots,
         _ => false,
     };
     // 吸附的颜色是缓动过渡：在播格淡向光标色，光晕同步淡出。
-    let absorb = u64::from(if cursor.advancing {
-        cursor.magnet.advance(absorbed, cursor.ticks)
+    let absorb = u64::from(if advancing {
+        magnet.advance(absorbed, ticks)
     } else {
-        cursor.magnet.frozen()
+        magnet.frozen()
     });
     let cursor_dot = cursor_dot.filter(|_| !absorbed);
     // 光晕在字符格中心采样；首末点超出中心范围时贴到端点，保持端点光标明亮。
@@ -159,7 +175,7 @@ pub(crate) fn render_minimap(
     });
     for (y, markers) in (track.top()..track.bottom()).zip(rows) {
         let row = u64::from(y - track.top());
-        let strength = halo_position.map_or(0, |position| halo_strength(row, position));
+        let strength = halo_position.map_or(0, |position| halo_strength(row, position, halo_rows));
         // 吸住的光晕按同一进度淡出，离开吸附区时再淡回来。
         let glow = strength * (1000 - absorb) / 1000;
         let center = cursor_dot.filter(|dot| dot / DOT_ROWS_PER_CELL == row);
@@ -214,13 +230,14 @@ fn marker_dot(dot_row: u64) -> u8 {
 /// # Params:
 ///   - `row`: 从轨道首行起算的整数行偏移。
 ///   - `position`: 光标的定点行位置，每行以 `POSITION_SCALE` 个单位表示。
+///   - `rows`: 光晕半径（轨道行数）；`0` 按一行算，光标自己那一格始终最亮。
 ///
 /// # Return:
 ///   `0..=1000` 的混色比例；保留小数行距离，使邻格颜色随光标连续变化。
-fn halo_strength(row: u64, position: u64) -> u64 {
+fn halo_strength(row: u64, position: u64, rows: u64) -> u64 {
     let distance =
         (row * u64::from(POSITION_SCALE)).abs_diff(position) * 1000 / u64::from(POSITION_SCALE);
-    let radius = HALO_RADIUS_ROWS * 1000;
+    let radius = rows.max(1) * 1000;
     let remaining = radius.saturating_sub(distance);
     remaining * remaining * 1000 / (radius * radius)
 }
@@ -236,6 +253,12 @@ mod tests {
     use crate::render::theme::Theme;
     use crate::runtime::scroll::position::POSITION_SCALE;
     use crate::test_support::default_theme;
+
+    /// 测试用的光晕半径（轨道行数）。
+    const HALO_ROWS: u64 = 5;
+
+    /// 测试用的吸附区半径（盲文点）。
+    const MAGNET_DOTS: u64 = 2;
 
     /// 读取必须存在的测试格；坐标错误时让测试返回带坐标的错误。
     ///
@@ -272,6 +295,8 @@ mod tests {
             magnet: &MagnetProgress::default(),
             ticks: 1,
             advancing: true,
+            halo_rows: HALO_ROWS,
+            magnet_dots: MAGNET_DOTS,
         };
         render_minimap(buf, track, total, cursor, entries, theme);
     }
@@ -460,6 +485,48 @@ mod tests {
         Ok(())
     }
 
+    /// 两个几何旋钮真的驱动渲染：光晕半径决定溢出多远，吸附半径决定吸走范围。
+    #[test]
+    fn minimap_geometry_follows_configuration() -> color_eyre::Result<()> {
+        let mut theme = default_theme()?;
+        theme.surface1 = Color::Rgb(0, 0, 0);
+        theme.accent = Color::Rgb(240, 240, 240);
+        let track = Rect::new(0, 0, 1, 9);
+        // 在播点固定在 18 行；光标停在 28（区外、光晕可见）或 20（吸附边缘）。
+        let render = |halo_rows: u64, magnet_dots: u64, dot: u32| {
+            let mut buf = Buffer::empty(track);
+            render_minimap(
+                &mut buf,
+                track,
+                9,
+                MinimapCursor {
+                    position: Some(dot * POSITION_SCALE / 35),
+                    magnet: &MagnetProgress::default(),
+                    ticks: 1,
+                    advancing: true,
+                    halo_rows,
+                    magnet_dots,
+                },
+                std::iter::once(MinimapEntry {
+                    index: 4,
+                    loved: false,
+                    playing: true,
+                }),
+                &theme,
+            );
+            buf
+        };
+        let tight = render(1, MAGNET_DOTS, 28);
+        assert_eq!(cell(&tight, 0, 3)?.fg, theme.surface1, "半径 1 不外溢");
+        let wide = render(5, MAGNET_DOTS, 28);
+        assert_ne!(cell(&wide, 0, 3)?.fg, theme.surface1, "半径 5 点到第 3 行");
+        let unabsorbed = render(HALO_ROWS, 0, 20);
+        assert_eq!(cell(&unabsorbed, 0, 5)?.symbol(), "⢹", "半径 0 留下光标点");
+        let absorbed = render(HALO_ROWS, 2, 20);
+        assert_eq!(cell(&absorbed, 0, 5)?.symbol(), "⢸", "半径 2 吸走光标点");
+        Ok(())
+    }
+
     /// 吸附进出是缓动而非瞬变：在播格颜色逐帧淡向光标色，光晕同步淡出。
     #[test]
     fn magnet_fades_the_playing_color_across_frames() -> color_eyre::Result<()> {
@@ -477,6 +544,8 @@ mod tests {
                     magnet: &magnet,
                     ticks: 8,
                     advancing: true,
+                    halo_rows: HALO_ROWS,
+                    magnet_dots: MAGNET_DOTS,
                 },
                 std::iter::once(MinimapEntry {
                     index: 4,
