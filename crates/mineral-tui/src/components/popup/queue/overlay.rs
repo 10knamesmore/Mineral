@@ -1,5 +1,7 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
+use std::time::Instant;
+
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,14 +9,16 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Row, Table, Widget};
 
-use super::columns::{QueueColumns, TITLE_COL};
+use super::columns::QueueColumns;
 use super::footer::remaining_label;
 use super::row::{RowDecor, build_row};
-use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
+use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rects, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::thumbnails::{render_table_thumbnails, thumbnail_phase};
 use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
 };
+use crate::image::ImageRenderPhase;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
@@ -38,6 +42,9 @@ pub(crate) struct QueueOverlay {
     /// `deep_cache` 对队列恒空、不触碰。装箱是因 [`SearchState`](crate::runtime::state::SearchState)
     /// 内含 nucleo matcher + 多份缓存体量大,直接嵌入会让 `OverlayKind` 各变体尺寸悬殊。
     pub(super) search: Box<crate::runtime::state::SearchState>,
+
+    /// 最近的光标或过滤变化,用于缩略图编码防抖;时长从当前配置读取。
+    pub(super) last_sel_change: Instant,
 }
 
 impl QueueOverlay {
@@ -46,12 +53,17 @@ impl QueueOverlay {
         Self {
             list: ScrollList::at(sel),
             search: Box::new(crate::runtime::state::SearchState::new()),
+            last_sel_change: Instant::now(),
         }
     }
 
     /// 把光标钳到 `[0, len-1]`(队列变短后防越界);空队列归 0。
     pub(crate) fn clamp(&mut self, len: usize) {
+        let selected = self.list.sel();
         self.list.clamp(len);
+        if self.list.sel() != selected {
+            self.last_sel_change = Instant::now();
+        }
     }
 
     /// 当前光标行(过滤视图位;集成测试断言用)。脚本 ctx 采集要队列真实下标走
@@ -148,7 +160,8 @@ impl Overlay for QueueOverlay {
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         // 在播样式按 server 的队列位置锚点定位;按歌曲身份匹配会点亮重复曲的所有副本。
         let current_idx = ctx.queue_current_index();
-        let cols = QueueColumns::for_width(inner.width);
+        let cols =
+            QueueColumns::for_width(inner.width).with_thumbnails(ctx.images.supports_thumbnails());
         let header = Row::new(cols.header_cells())
             .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
 
@@ -156,11 +169,11 @@ impl Overlay for QueueOverlay {
         // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
         // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
         let marquee_ctx = MarqueeCtx::new(ctx, theme, /*fade_to*/ theme.surface0);
-        // highlight_symbol "▌ " 占 2 格;marquee 按 TITLE_COL 指向的标题列宽度裁切。
-        let title_w = resolve_column_widths(inner.width, &widths, 2)
-            .get(TITLE_COL)
-            .copied()
-            .unwrap_or(0);
+        // highlight_symbol "▌ " 占 2 格;标题与封面共用 Table 的实际列边界。
+        let columns = resolve_column_rects(inner, &widths, 2);
+        let title_w = columns
+            .get(cols.title_index())
+            .map_or(0, |column| column.width);
         // 过滤视图:按匹配分降序的队列真实下标;无过滤词恒等 `0..len`。空命中时画占位。
         let visible = self.visible(ctx);
         if visible.is_empty() && self.is_filtering() {
@@ -209,18 +222,40 @@ impl Overlay for QueueOverlay {
         // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
         // 行数按过滤视图长度(而非队列全长),视口 / offset 才与实际画的行数对齐。
         let viewport = usize::from(inner.height.saturating_sub(1));
-        render_scroll_table(
+        let motion = ScrollMotion::Advancing {
+            scrolloff: ctx.scrolloff(),
+            glide_ticks: ctx.list_glide_ticks(),
+        };
+        let window = render_scroll_table(
             buf,
             inner,
             build_table,
             &self.list,
             visible.len(),
             viewport,
-            ScrollMotion::Advancing {
-                scrolloff: ctx.scrolloff(),
-                glide_ticks: ctx.list_glide_ticks(),
-            },
+            motion,
         );
+        if cols.thumbnails
+            && let Some(column) = columns.get(1)
+        {
+            let phase = if ctx.overlay_reveal.get().own < OverlayReveal::FULL {
+                ImageRenderPhase::Offscreen
+            } else {
+                thumbnail_phase(ctx, motion, self.last_sel_change)
+            };
+            render_table_thumbnails(
+                buf,
+                &ctx.images,
+                *column,
+                window.map(|view_index| {
+                    visible
+                        .get(view_index)
+                        .and_then(|&raw_index| ctx.player.queue.get(raw_index))
+                        .and_then(|song| song.cover_url.as_ref())
+                }),
+                phase,
+            );
+        }
     }
 
     fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
@@ -244,7 +279,7 @@ impl Overlay for QueueOverlay {
         let len = visible.len();
         let sel = self.list.sel();
         let raw = visible.get(sel).copied();
-        match action {
+        let response = match action {
             Action::MoveSelection(mv) => {
                 self.list.move_by(mv, len);
                 Some(OverlayResponse::Consumed)
@@ -332,7 +367,11 @@ impl Overlay for QueueOverlay {
             }
             // 其余(播放控制族等)不认 → 回落 on_key(Pass 半穿透)。
             _ => None,
+        };
+        if self.list.sel() != sel {
+            self.last_sel_change = Instant::now();
         }
+        response
     }
 }
 
@@ -406,6 +445,133 @@ mod tests {
                 theme.text
             };
             assert_eq!(title.fg, expected_fg, "队列下标 {raw_i} 的歌名前景");
+        }
+        Ok(())
+    }
+
+    /// 封面跟随过滤后的行与滚动视口,不覆盖标题、间隔和在播标记;抽屉动画中留空。
+    #[test]
+    fn queue_thumbnails_follow_filtered_rows_and_keep_text() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+        use ratatui::buffer::{Buffer, Cell};
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+
+        use crate::components::layout::shared::thumbnails::THUMBNAIL_COLUMNS;
+        use crate::image::{ImageEngine, ImageRenderPhase};
+        use crate::runtime::scroll::list::ScrollMotion;
+        use crate::runtime::state::OverlayReveal;
+
+        let theme = crate::test_support::default_theme()?;
+        let mut ctx = AppState::test_default()?;
+        ctx.images = ImageEngine::disabled_kitty(Arc::clone(&ctx.cfg));
+        let mut previews = Vec::new();
+        for index in 0..12 {
+            let name = format!(
+                "{}-{index:02}",
+                if index % 2 == 0 { "keep" } else { "skip" }
+            );
+            let mut song = mineral_test::song(&name);
+            if index == 4 {
+                previews.push(None);
+            } else {
+                let url = MediaUrl::remote(&format!("https://example.com/queue-{index}.png"))?;
+                ctx.images.insert_test_thumbnail(&url)?;
+                let mut probe = Buffer::empty(Rect::new(0, 0, THUMBNAIL_COLUMNS, 1));
+                ctx.images.render_thumbnail(
+                    Some(&url),
+                    probe.area,
+                    &mut probe,
+                    ImageRenderPhase::Stable,
+                );
+                previews.push(
+                    probe
+                        .cell((0, 0))
+                        .map(|cell| (cell.symbol().to_owned(), cell.fg, cell.underline_color)),
+                );
+                song.cover_url = Some(url);
+            }
+            ctx.player.queue.push(song);
+        }
+        ctx.playback.track = ctx.player.queue.get(6).cloned();
+        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(6);
+        for width in [40, 50, 80] {
+            let area = Rect::new(7, 3, width, 4);
+            let viewport = usize::from(area.height - 1);
+            let mut overlay = QueueOverlay::new(0);
+            overlay.search.set_query("keep");
+            let visible = overlay.visible(&ctx);
+            assert_eq!(visible, vec![0, 2, 4, 6, 8, 10]);
+            ctx.overlay_reveal.set(OverlayReveal {
+                own: OverlayReveal::FULL,
+                above: 0,
+            });
+            let mut buffer = Buffer::empty(area);
+            overlay.render_content(&mut buffer, area, &ctx, &theme);
+            let title_x = (area.left()..area.right())
+                .find(|&x| {
+                    buffer
+                        .cell((x, area.y))
+                        .is_some_and(|cell| cell.symbol() == "t")
+                })
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少 queue title 表头"))?;
+            for frame in 0..12 {
+                if frame == 1 {
+                    overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
+                }
+                let mut buffer = Buffer::empty(area);
+                overlay.render_content(&mut buffer, area, &ctx, &theme);
+                let offset = overlay
+                    .list
+                    .offset(visible.len(), viewport, ScrollMotion::Frozen);
+                for (row, &raw_index) in visible.iter().skip(offset).take(viewport).enumerate() {
+                    let y = area.y + 1 + u16::try_from(row)?;
+                    let song = ctx
+                        .player
+                        .queue
+                        .get(raw_index)
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少队列曲目"))?;
+                    let text = (title_x..area.right())
+                        .filter_map(|x| buffer.cell((x, y)).map(Cell::symbol))
+                        .collect::<String>();
+                    assert!(text.contains(&song.name), "图片后的标题应完整显示: {text}");
+                    let cell = buffer
+                        .cell((title_x - THUMBNAIL_COLUMNS - 1, y))
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少队列图片格"))?;
+                    if let Some((symbol, foreground, underline)) =
+                        previews.get(raw_index).and_then(Option::as_ref)
+                    {
+                        assert_eq!(
+                            (cell.symbol(), cell.fg, cell.underline_color),
+                            (symbol.as_str(), *foreground, *underline),
+                            "封面身份必须对应 {raw_index}"
+                        );
+                    } else {
+                        assert_eq!(cell.symbol(), " ", "缺图的行必须留空");
+                    }
+                    assert_eq!(buffer.cell((title_x - 1, y)).map(Cell::symbol), Some(" "));
+                    // 查询只命中 keep;连字符不吃搜索字体效果,用于辨认在播行的下划线。
+                    assert_eq!(buffer.cell((title_x + 4, y)).map(Cell::symbol), Some("-"));
+                    assert_eq!(
+                        buffer
+                            .cell((title_x + 4, y))
+                            .is_some_and(|cell| cell.modifier.contains(Modifier::UNDERLINED)),
+                        raw_index == 6,
+                        "未命中字符只在在播行带下划线"
+                    );
+                }
+            }
+            ctx.overlay_reveal.set(OverlayReveal { own: 500, above: 0 });
+            let mut animating = Buffer::empty(area);
+            overlay.render_content(&mut animating, area, &ctx, &theme);
+            assert!(
+                animating
+                    .content
+                    .iter()
+                    .all(|cell| !cell.symbol().contains('\u{10EEEE}'))
+            );
         }
         Ok(())
     }

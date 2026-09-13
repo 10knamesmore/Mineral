@@ -1,7 +1,7 @@
 //! Client 端终端图片编码器。
 //!
-//! 渲染线程只提交缓存未命中的请求；worker 在 blocking pool 中为 Kitty 准备原图
-//! shared memory，或为其他协议完成目标尺寸缩放与编码。主循环再按 terminal backend
+//! 渲染线程只提交缓存未命中的请求；worker 在 blocking pool 中为 Kitty 准备原图或
+//! 行内缩略图的 shared memory，为其他协议完成目标尺寸缩放与编码。主循环按 terminal backend
 //! generation 接收成品；编码期间渲染路径继续使用 halfblock，不等待后台任务。
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub(crate) struct EncodeRequest {
     /// 提交任务时的 terminal backend generation。
     pub generation: u64,
 
-    /// 待编码的缓存像素；仅 rasterized 协议在 worker 内缩放。
+    /// 待编码的缓存像素；行内缩略图与 rasterized 协议在 worker 内缩放。
     pub image: Arc<DynamicImage>,
 
     /// 目标 cell 区域；协议 placement 与 halfblocks 网格使用其宽高。

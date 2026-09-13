@@ -4,7 +4,7 @@ use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::command::transmit_shared_memory;
+use super::command::{create_virtual_placement, transmit_shared_memory};
 use super::pixels::PixelData;
 use super::placement::render;
 use super::shared_memory::SharedMemory;
@@ -17,6 +17,9 @@ pub(crate) struct KittyImage {
 
     /// 首次 placement 前尚未写给终端的 shared memory 传输命令。
     transmission: Option<String>,
+
+    /// 最近排入输出的行内 placement;列宽变化时重建,图片像素继续复用。
+    inline_placement: Option<u32>,
 
     /// shared memory 资源句柄，保留到终端读取或缓存成品逐出。
     resource: SharedMemory,
@@ -59,6 +62,7 @@ impl KittyImage {
         Ok(Self {
             image_id,
             transmission: Some(transmission),
+            inline_placement: None,
             resource,
             relay,
         })
@@ -73,6 +77,23 @@ impl KittyImage {
             &mut self.transmission,
             self.relay,
         );
+    }
+
+    /// 绘制纯 Unicode 的行内封面;首次传输图片,列宽变化时更新 placement。
+    pub(crate) fn render_inline(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
+        let placement_id = super::placement::render_inline(area, buffer, self.image_id);
+        if self.inline_placement == Some(placement_id) {
+            return None;
+        }
+        self.inline_placement = Some(placement_id);
+        let mut command = self.transmission.take().unwrap_or_default();
+        command.push_str(&create_virtual_placement(
+            self.image_id,
+            placement_id,
+            (area.width, 1),
+            self.relay,
+        ));
+        Some(command)
     }
 
     /// 返回 RGB / RGBA shared memory 与尚未发送的控制序列占用，不重复计入解码原图。

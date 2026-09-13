@@ -390,6 +390,51 @@ impl DetailFrame {
         }
     }
 
+    /// 借用当前分区指定行的封面，并从该行歌曲或专辑的 ID namespace 取得来源。
+    ///
+    /// # Params:
+    ///   - `index`: 当前分区列表中的行下标，与光标和渲染使用同一索引
+    ///
+    /// # Return:
+    ///   行内实体的来源与封面；数据未到、越界或该行无封面时返回 `None`。
+    pub(crate) fn row_cover(&self, index: usize) -> Option<(SourceKind, &MediaUrl)> {
+        let song = match (&self.entity, self.section, &self.data) {
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Hot,
+                Some(DetailData::Artist {
+                    detail: Some(artist),
+                    ..
+                }),
+            ) => artist.songs.get(index),
+            (
+                EntityRef::Artist(_),
+                ArtistSection::Albums,
+                Some(DetailData::Artist {
+                    albums: Some(albums),
+                    ..
+                }),
+            ) => {
+                let album = albums.items().get(index)?;
+                return album
+                    .cover_url
+                    .as_ref()
+                    .map(|url| (album.id.namespace(), url));
+            }
+            (EntityRef::Artist(_), _, _) => None,
+            (_, _, Some(DetailData::Album(album))) => {
+                album.tracks.get(index).map(|track| &track.song)
+            }
+            (_, _, Some(DetailData::PlaylistEntries(entries))) => {
+                entries.get(index).map(|entry| &entry.song)
+            }
+            _ => None,
+        }?;
+        song.cover_url
+            .as_ref()
+            .map(|url| (song.id.namespace(), url))
+    }
+
     /// 当前区作为「歌曲列表」的视图（`Play` 的队列上下文 = 这一列整列，语义同 activate
     /// 起播）：歌单/专辑/歌曲帧曲目、artist Hot 区热门曲；artist Albums 区（行是专辑容器，不入
     /// 队）/ 数据未到 → 空。与 [`Self::row_entity`] 取 `Song` 的几路一一对应。
@@ -475,21 +520,10 @@ impl DetailFrame {
     /// 当前区列表选中项的封面（artist 帧：Hot→歌的专辑封面 / Albums→专辑封面）；非 artist
     /// 帧 / 数据未到 / 选中项无封面 → `None`。供右栏副头图渲染与 prefetch 搭车共用。
     pub fn selected_cover(&self) -> Option<&MediaUrl> {
-        let (EntityRef::Artist(_), Some(DetailData::Artist { detail, albums })) =
-            (&self.entity, &self.data)
-        else {
+        if !matches!(self.entity, EntityRef::Artist(_)) {
             return None;
-        };
-        match self.section {
-            ArtistSection::Hot => detail
-                .as_ref()
-                .and_then(|a| a.songs.get(self.list.sel()))
-                .and_then(|s| s.cover_url.as_ref()),
-            ArtistSection::Albums => albums
-                .as_ref()
-                .and_then(|v| v.items().get(self.list.sel()))
-                .and_then(|al| al.cover_url.as_ref()),
         }
+        self.row_cover(self.list.sel()).map(|(_, url)| url)
     }
 
     /// 落 PlaylistEntry relation 数据（歌单帧）。

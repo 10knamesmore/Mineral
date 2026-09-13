@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
 
 use super::command::create_virtual_placement;
 use crate::image::graphics::TerminalRelay;
@@ -92,6 +93,32 @@ pub(super) fn render(
             cell.set_symbol(&symbol);
         }
     }
+}
+
+/// 逐格写入一行 Unicode 图片字符,保留表格背景;指令由调用方在出帧前发送。
+///
+/// 控制序列不能放进 symbol，否则 ratatui 会把参数算进字符宽度并跳过后面的名称。
+/// 每格带独立的图片列下标,返回当前列宽对应的 placement id。
+pub(super) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u32 {
+    let [high, red, green, blue] = image_id.to_be_bytes();
+    let placement = placement_id(area.width, 1);
+    let [_, placement_red, placement_green, placement_blue] = placement.to_be_bytes();
+    for column in 0..area.width {
+        if let Some(cell) = buffer.cell_mut((area.x + column, area.y)) {
+            cell.set_symbol(&format!(
+                "{PLACEHOLDER}{}{}{}",
+                diacritic(0),
+                diacritic(column),
+                diacritic(u16::from(high)),
+            ));
+            cell.set_style(
+                Style::new()
+                    .fg(Color::Rgb(red, green, blue))
+                    .underline_color(Color::Rgb(placement_red, placement_green, placement_blue)),
+            );
+        }
+    }
+    placement
 }
 
 /// 把不超过 297 的 cell 宽高编码成非零 18-bit placement id。
@@ -458,6 +485,53 @@ mod tests {
                 .symbol()
                 .contains("\u{10EEEE}\u{030D}\u{0305}\u{034B}"),
             "第二行须使用下一项 row diacritic"
+        );
+        Ok(())
+    }
+
+    /// 单格图片不得让 ratatui 跳过相邻名称；重画和擦除都保留正确 diff 与行背景。
+    #[test]
+    fn inline_image_keeps_neighboring_text_in_diff() -> color_eyre::Result<()> {
+        use ratatui::style::{Color, Style};
+        use unicode_width::UnicodeWidthStr as _;
+
+        let area = Rect::new(0, 0, 20, 3);
+        let empty = Buffer::empty(area);
+        let mut image = empty.clone();
+        image.set_style(Rect::new(0, 1, 20, 1), Style::new().bg(Color::Blue));
+        image.set_string(4, 1, "cover name", Style::new().fg(Color::Yellow));
+        super::render_inline(Rect::new(2, 1, 1, 1), &mut image, 0x0A0B_0C0D);
+        let thumbnail = image
+            .cell((2, 1))
+            .ok_or_else(|| eyre!("missing thumbnail"))?;
+        assert_eq!(thumbnail.symbol().width(), 1);
+        assert!(!thumbnail.symbol().contains('\x1b'));
+        assert_eq!(thumbnail.bg, Color::Blue);
+        assert_eq!(thumbnail.fg, Color::Rgb(11, 12, 13));
+        assert_eq!(thumbnail.underline_color, Color::Rgb(0, 2, 1));
+
+        let changes = empty.diff(&image);
+        for x in 4..14 {
+            assert!(
+                changes
+                    .iter()
+                    .any(|(column, row, _)| *column == x && *row == 1),
+                "图片后的名称第 {x} 列不能被 diff 跳过"
+            );
+        }
+        let mut text = image.clone();
+        text.set_string(2, 1, " ", Style::new().fg(Color::Yellow));
+        text.set_string(4, 1, "next title", Style::new().fg(Color::Yellow));
+        let changes = image.diff(&text);
+        assert!(
+            changes
+                .iter()
+                .any(|(x, y, cell)| *x == 2 && *y == 1 && cell.symbol() == " ")
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|(x, y, cell)| *x == 4 && *y == 1 && cell.symbol() == "n")
         );
         Ok(())
     }

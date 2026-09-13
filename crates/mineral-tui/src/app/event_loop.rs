@@ -87,7 +87,10 @@ impl App {
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
                 // 清掉转场:本分支不推进它,启动即断连否则会把扩大动画卡在空屏。
                 self.transition = None;
-                tui.draw(|f| draw(f, self))?;
+                tui.draw(|f| {
+                    draw(f, self);
+                    self.state.images.flush_graphics_commands()
+                })?;
                 if event::poll(self.frame_tick())?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
@@ -98,7 +101,10 @@ impl App {
                 continue;
             }
 
-            tui.draw(|f| draw(f, self))?;
+            tui.draw(|f| {
+                draw(f, self);
+                self.state.images.flush_graphics_commands()
+            })?;
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {
@@ -144,7 +150,8 @@ impl App {
             .and_then(|track| track.cover_url.clone());
         let fullscreen_stable = self.state.browse.fullscreen.at_max();
         self.state.images.tick(current_cover, fullscreen_stable);
-        crate::runtime::prefetch::tick(&mut self.state, &*self.client);
+        let queue_covers = self.overlays.queue_cover_candidates(&self.state);
+        crate::runtime::prefetch::tick(&mut self.state, &*self.client, queue_covers);
         self.sync_cover_palette();
         self.tick_cover_fades();
     }

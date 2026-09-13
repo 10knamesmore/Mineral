@@ -10,9 +10,12 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use mineral_config::SweepStyle;
 use mineral_model::{Album, AlbumTrack, PlaylistEntry, Song};
 
-use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths, row_marquee};
+use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rects, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::text::display_width;
+use crate::components::layout::shared::thumbnails::{
+    THUMBNAIL_COLUMNS, render_table_thumbnails, thumbnail_phase,
+};
 use crate::render::theme::Theme;
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
@@ -207,7 +210,7 @@ fn draw_artist_section(
                     draw_empty(buf, list, "more albums available", theme);
                 }
             } else {
-                draw_album_list(buf, list, albs.items(), paint, theme);
+                draw_album_list(buf, list, albs.items(), paint, state, theme);
             }
         }
         // 该区数据未到货 → 旋转 loading。
@@ -280,19 +283,14 @@ fn draw_track_list(
         draw_empty(buf, area, "no tracks", theme);
         return;
     }
-    let cols = cols.for_width(area.width);
+    let show_cover = state.images.supports_thumbnails();
+    let cols = cols.with_thumbnails(show_cover).for_width(area.width);
     let widths = cols.widths();
     // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
     // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
     let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
-    let title_w = resolve_column_widths(
-        area.width,
-        &widths,
-        display_width(track_table::HIGHLIGHT_SYMBOL),
-    )
-    .get(1)
-    .copied()
-    .unwrap_or(0);
+    let columns = resolve_column_rects(area, &widths, display_width(track_table::HIGHLIGHT_SYMBOL));
+    let title_w = columns.get(cols.title_index()).map_or(0, |r| r.width);
     let sel = paint.list.sel();
     let build_table = |visible: std::ops::Range<usize>| {
         let rows = visible.filter_map(|view_index| {
@@ -313,7 +311,7 @@ fn draw_track_list(
     };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
-    render_scroll_table(
+    let visible = render_scroll_table(
         buf,
         area,
         build_table,
@@ -322,9 +320,18 @@ fn draw_track_list(
         viewport,
         paint.motion,
     );
+    if show_cover && let Some(column) = columns.get(1) {
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            visible.map(|index| tracks.song(index).and_then(|song| song.cover_url.as_ref())),
+            thumbnail_phase(state, paint.motion, state.channel_search.last_sel_change),
+        );
+    }
 }
 
-/// 曲目表的数据源，按列表位置读取歌曲。
+/// 曲目表的数据源，按列表位置读取歌曲，供文本与封面共用同一视口。
 #[derive(Clone, Copy)]
 enum TrackList<'a> {
     /// 普通歌曲列表，如艺人热门曲目。
@@ -368,6 +375,7 @@ fn draw_album_list(
     area: Rect,
     albums: &[Album],
     paint: ListPaint<'_>,
+    state: &AppState,
     theme: &Theme,
 ) {
     if albums.is_empty() {
@@ -376,13 +384,28 @@ fn draw_album_list(
         return;
     }
     let meta = Style::new().fg(theme.overlay);
-    let header = Row::new(vec![
+    let show_cover = state.images.supports_thumbnails();
+    let mut header_cells = Vec::<Cell<'_>>::new();
+    let mut widths = Vec::<Constraint>::new();
+    if show_cover {
+        header_cells.push(Cell::from(""));
+        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
+    }
+    header_cells.extend([
         Cell::from("name"),
         Cell::from("tracks"),
         Cell::from("year"),
         Cell::from("label"),
-    ])
-    .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+    ]);
+    widths.extend([
+        Constraint::Fill(3),
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Fill(2),
+    ]);
+    let header =
+        Row::new(header_cells).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
+    let columns = resolve_column_rects(area, &widths, display_width(track_table::HIGHLIGHT_SYMBOL));
     let build_table = |visible: std::ops::Range<usize>| {
         let rows = albums
             .iter()
@@ -394,19 +417,18 @@ fn draw_album_list(
                 let year =
                     publish_year(a.publish_time_ms).map_or_else(String::new, |y| y.to_string());
                 let label = a.company.as_deref().unwrap_or_default().to_owned();
-                Row::new(vec![
+                let mut cells = Vec::<Cell<'_>>::new();
+                if show_cover {
+                    cells.push(Cell::from(""));
+                }
+                cells.extend([
                     Cell::from(Span::styled(a.name.clone(), Style::new().fg(theme.text))),
                     Cell::from(Span::styled(tracks, meta)),
                     Cell::from(Span::styled(year, meta)),
                     Cell::from(Span::styled(label, meta)),
-                ])
+                ]);
+                Row::new(cells)
             });
-        let widths = [
-            Constraint::Fill(3),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Fill(2),
-        ];
         Table::new(rows, widths)
             .header(header)
             .row_highlight_style(highlight_style(theme, paint.focus_permille))
@@ -414,7 +436,7 @@ fn draw_album_list(
     };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
-    render_scroll_table(
+    let visible = render_scroll_table(
         buf,
         area,
         build_table,
@@ -423,4 +445,148 @@ fn draw_album_list(
         viewport,
         paint.motion,
     );
+    if show_cover && let Some(column) = columns.first() {
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            visible.map(|index| albums.get(index).and_then(|album| album.cover_url.as_ref())),
+            thumbnail_phase(state, paint.motion, state.channel_search.last_sel_change),
+        );
+    }
+}
+
+/// 曲目与艺人专辑列表的图片列渲染回归。
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mineral_model::{Album, AlbumId, MediaUrl, SourceKind};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use super::{ListPaint, TrackList, draw_album_list, draw_track_list};
+    use crate::image::ImageEngine;
+    use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+    use crate::runtime::state::AppState;
+    use crate::test_support::{song, with_name};
+
+    /// 曲目和艺人专辑都在名称前显示封面，缺图保留行位置，Frozen 只保留空图片列。
+    #[test]
+    fn detail_thumbnail_columns_keep_names_and_freeze_offscreen() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
+        let mut state = AppState::test_default()?;
+        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        let url = MediaUrl::remote("https://example.com/detail-cover.png")?;
+        state.images.insert_test_thumbnail(&url)?;
+        let mut covered = with_name(song("covered"), "Alpha");
+        covered.cover_url = Some(url.clone());
+        let missing = with_name(song("missing"), "Beta");
+        let mut later = with_name(song("later"), "Gamma");
+        later.cover_url = Some(url.clone());
+        let songs = [covered, missing, later];
+        let albums = songs
+            .iter()
+            .map(|song| {
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, song.name.clone()))
+                    .name(song.name.clone())
+                    .cover_url(song.cover_url.clone())
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        let list = ScrollList::new();
+        let area = Rect::new(7, 4, 60, 5);
+        for is_album in [false, true] {
+            let render = |buf: &mut Buffer, motion| {
+                let paint = ListPaint {
+                    list: &list,
+                    motion,
+                    focus_permille: 1000,
+                };
+                if is_album {
+                    draw_album_list(buf, area, &albums, paint, &state, &theme);
+                } else {
+                    draw_track_list(
+                        buf,
+                        area,
+                        TrackList::Songs(&songs),
+                        paint,
+                        super::TrackColumns::new(false, true),
+                        &state,
+                        &theme,
+                    );
+                }
+            };
+            let mut stable = Buffer::empty(area);
+            render(
+                &mut stable,
+                ScrollMotion::Advancing {
+                    scrolloff: 0,
+                    glide_ticks: 1,
+                },
+            );
+            let name_x = (area.left()..area.right())
+                .find(|&x| {
+                    stable
+                        .cell((x, area.y + 1))
+                        .is_some_and(|c| c.symbol() == "A")
+                })
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少详情名称"))?;
+            let cover_x = name_x - super::THUMBNAIL_COLUMNS - 1;
+            assert_eq!(
+                stable
+                    .cell((cover_x, area.y))
+                    .map(ratatui::buffer::Cell::symbol),
+                Some(" ")
+            );
+            for (row, name) in ["A", "B", "G"].into_iter().enumerate() {
+                let y = area.y + 1 + u16::try_from(row)?;
+                assert_eq!(
+                    stable.cell((name_x, y)).map(ratatui::buffer::Cell::symbol),
+                    Some(name)
+                );
+                assert_eq!(
+                    stable
+                        .cell((name_x - 1, y))
+                        .map(ratatui::buffer::Cell::symbol),
+                    Some(" ")
+                );
+                assert_eq!(
+                    stable
+                        .cell((cover_x, y))
+                        .is_some_and(|c| c.symbol().contains('\u{10EEEE}')),
+                    row != 1,
+                    "无封面的中间行不能挤掉后续封面"
+                );
+            }
+            assert_eq!(
+                stable.cell((name_x, area.y + 1)).map(|c| (c.fg, c.bg)),
+                Some((theme.accent, theme.surface0)),
+                "封面 overlay 不改变名称高亮"
+            );
+            let mut frozen = Buffer::empty(area);
+            render(&mut frozen, ScrollMotion::Frozen);
+            assert!(
+                frozen
+                    .content
+                    .iter()
+                    .all(|c| !c.symbol().contains('\x1b') && !c.symbol().contains('\u{10EEEE}')),
+                "Frozen 不能输出图形控制序列"
+            );
+            assert_eq!(
+                frozen
+                    .cell((cover_x, area.y + 1))
+                    .map(ratatui::buffer::Cell::symbol),
+                Some(" ")
+            );
+            assert_eq!(
+                frozen
+                    .cell((name_x, area.y + 1))
+                    .map(ratatui::buffer::Cell::symbol),
+                Some("A")
+            );
+        }
+        Ok(())
+    }
 }

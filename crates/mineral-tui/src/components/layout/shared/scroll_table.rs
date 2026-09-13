@@ -22,6 +22,9 @@ use crate::runtime::scroll::viewport::pin_cursor;
 ///   - `len`: 列表总行数
 ///   - `viewport`: 视口数据行数
 ///   - `motion`: 视口推进语义
+///
+/// # Return:
+///   本帧实际构造的可见范围；行上 overlay 必须复用它，避免再次求 offset 推进滚动。
 pub(crate) fn render_scroll_table<'a>(
     buf: &mut Buffer,
     area: Rect,
@@ -30,15 +33,16 @@ pub(crate) fn render_scroll_table<'a>(
     len: usize,
     viewport: usize,
     motion: ScrollMotion,
-) {
+) -> Range<usize> {
     let offset = list.offset(len, viewport, motion);
     let visible = offset..offset.saturating_add(viewport).min(len);
-    let table = build_table(visible);
+    let table = build_table(visible.clone());
     // Table 只含可见窗口，高亮下标也必须平移到窗口内；逻辑光标和滚动仍使用完整列表。
     let mut state = TableState::default().with_selected(Some(
         pin_cursor(list.sel(), offset, viewport).saturating_sub(offset),
     ));
     StatefulWidget::render(table, area, buf, &mut state);
+    visible
 }
 
 #[cfg(test)]

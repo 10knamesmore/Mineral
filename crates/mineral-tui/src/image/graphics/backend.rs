@@ -190,6 +190,18 @@ impl TerminalGraphics {
         )
     }
 
+    /// 构造无需终端探测、允许 shared memory 编码的 Kitty 测试能力。
+    #[cfg(test)]
+    pub(crate) fn fixed_kitty(cell_pixels: (u16, u16)) -> Self {
+        Self::from_parts(
+            GraphicsProtocol::Kitty,
+            cell_pixels,
+            None,
+            true,
+            TerminalRelay::Direct,
+        )
+    }
+
     /// 返回当前生效的终端图片协议。
     pub(crate) const fn protocol(&self) -> GraphicsProtocol {
         self.protocol

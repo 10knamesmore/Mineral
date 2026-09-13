@@ -54,6 +54,15 @@ pub(crate) enum TerminalImageKey {
     /// Kitty 经 shared memory 发送的源图片；显示尺寸属于 placement。
     Source(ImageIdentity),
 
+    /// 行内封面的低清像素或 Kitty 成品，由各自的缓存持有，独立于完整解码图。
+    Thumbnail {
+        /// 原始图片身份。
+        identity: ImageIdentity,
+
+        /// 等比采样的像素上限;Kitty 按行内 placement 决定最终显示尺寸。
+        pixels: PixelSize,
+    },
+
     /// Sixel、iTerm2 或 halfblocks 按目标像素生成的成品。
     Rasterized {
         /// 原始图片身份。
@@ -70,6 +79,11 @@ impl TerminalImageKey {
         Self::Source(identity)
     }
 
+    /// 构造按低清采样上限缓存的 Kitty 缩略图键。
+    pub(crate) const fn thumbnail(identity: ImageIdentity, pixels: PixelSize) -> Self {
+        Self::Thumbnail { identity, pixels }
+    }
+
     /// 构造按目标像素缓存的 rasterized 成品键。
     ///
     /// # Params:
@@ -82,15 +96,17 @@ impl TerminalImageKey {
     /// 返回原始图片身份。
     pub(crate) const fn identity(&self) -> &ImageIdentity {
         match self {
-            Self::Source(identity) | Self::Rasterized { identity, .. } => identity,
+            Self::Source(identity)
+            | Self::Thumbnail { identity, .. }
+            | Self::Rasterized { identity, .. } => identity,
         }
     }
 
-    /// 返回 rasterized 成品的目标像素尺寸；源图片返回 `None`。
+    /// 返回缩略图或 rasterized 成品的目标像素尺寸；源图片返回 `None`。
     pub(crate) const fn pixels(&self) -> Option<PixelSize> {
         match self {
             Self::Source(_) => None,
-            Self::Rasterized { pixels, .. } => Some(*pixels),
+            Self::Thumbnail { pixels, .. } | Self::Rasterized { pixels, .. } => Some(*pixels),
         }
     }
 

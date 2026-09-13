@@ -89,8 +89,12 @@ pub(super) fn build_row<'a>(
         ),
         None => Cell::from(Line::from(title_spans)),
     };
-    let mut cells = vec![love_cell(decor.loved, theme), title_cell];
-    if matches!(cols, QueueColumns::Wide | QueueColumns::Full) {
+    let mut cells = vec![love_cell(decor.loved, theme)];
+    if cols.thumbnails {
+        cells.push(Cell::from(""));
+    }
+    cells.push(title_cell);
+    if cols.artist {
         let artist = song
             .artists
             .first()
@@ -102,7 +106,7 @@ pub(super) fn build_row<'a>(
             theme,
         ))));
     }
-    if matches!(cols, QueueColumns::Wide) {
+    if cols.album {
         let album = song
             .album
             .as_ref()

@@ -1,7 +1,7 @@
 //! 可直接写入终端 cell buffer 的图片成品字节预算 LRU。
 //!
 //! 同一实现由独立实例分别承载协议无关 preview 与当前 terminal backend 成品。Kitty 源图片
-//! 只按图片身份缓存一次；preview、Sixel、iTerm2 与 halfblocks 按目标像素尺寸并存。
+//! 只按图片身份缓存一次；行内缩略图、preview、Sixel、iTerm2 与 halfblocks 按目标像素尺寸并存。
 //!
 //! 每条字节由编码成品报告，缓存只记账不重算。上一帧实际显示的工作集不被后台预热逐出。
 
@@ -14,7 +14,7 @@ use crate::image::terminal::TerminalImage;
 
 /// 某图片身份的一条终端成品槽。
 struct Slot {
-    /// 源图片或 rasterized 成品的缓存键。
+    /// 源图片、行内缩略图或 rasterized 成品的缓存键。
     key: TerminalImageKey,
 
     /// 图片引擎自己的终端图片成品。
@@ -29,7 +29,7 @@ struct Slot {
 
 /// 缓存内部可变状态(渲染路径持 `&AppState`,故整体走 `RefCell`)。
 struct Inner {
-    /// 图片身份 → 源图片或各 rasterized 尺寸的槽。
+    /// 图片身份 → 源图片、行内缩略图或各 rasterized 尺寸的槽。
     entries: FxHashMap<ImageIdentity, Vec<Slot>>,
 
     /// 当前占用字节合计(所有 [`Slot::bytes`] 之和)。
@@ -166,6 +166,27 @@ impl TerminalImageCache {
                 .fold(0u64, |acc, s| acc.saturating_add(s.bytes));
             inner.total_bytes = inner.total_bytes.saturating_sub(freed);
         }
+    }
+
+    /// 原图逐出或重新解码时移除高清成品，独立的行内缩略图继续受协议预算管理。
+    pub(crate) fn remove_decoded(&self, identity: &ImageIdentity) {
+        let mut inner = self.inner.borrow_mut();
+        let Some(slots) = inner.entries.get_mut(identity) else {
+            return;
+        };
+        let mut freed = 0_u64;
+        slots.retain(|slot| {
+            if matches!(slot.key, TerminalImageKey::Thumbnail { .. }) {
+                true
+            } else {
+                freed = freed.saturating_add(slot.bytes);
+                false
+            }
+        });
+        if slots.is_empty() {
+            inner.entries.remove(identity);
+        }
+        inner.total_bytes = inner.total_bytes.saturating_sub(freed);
     }
 
     /// 热更新字节预算，立即回收超预算的未显示成品，保留可见工作集。

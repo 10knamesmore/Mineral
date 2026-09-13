@@ -8,6 +8,7 @@ use mineral_config::CoverConfig;
 use mineral_persist::CacheIndex;
 
 use crate::image::colors::extract_palette;
+use crate::image::key::TerminalImageKey;
 use crate::image::terminal::TerminalImage;
 use crate::render::palette::CoverPalette;
 
@@ -59,14 +60,22 @@ pub(super) async fn fetch_preview(
     } = request;
     let bytes = load_source(source, &url, client, cache).await?;
     let pixels = key.pixels()?;
+    let thumbnail = matches!(&key, TerminalImageKey::Thumbnail { .. });
 
     let result = {
         let cfg = Arc::clone(cfg);
         let preview = tokio::task::spawn_blocking(move || -> color_eyre::Result<PreviewResult> {
+            let sample = |image| {
+                if thumbnail {
+                    TerminalImage::thumbnail_preview(&image, pixels)
+                } else {
+                    TerminalImage::halfblock_preview(image, pixels, cells)
+                }
+            };
             if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {
                 // JPEG 走低档位 IDCT 缩小解码,preview 很便宜;显示图仍需单独 decode,不带 full。
                 let image = crate::image::decode::preview(&bytes, cells)?;
-                let (preview, resident) = TerminalImage::halfblock_preview(image, pixels, cells);
+                let (preview, resident) = sample(image);
                 return Ok(PreviewResult {
                     preview,
                     resident,
@@ -77,8 +86,7 @@ pub(super) async fn fetch_preview(
             // 显示图(供 RAM LRU)与 preview 源,复用同次解码,避免后续 decode 再解一遍。
             let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
             let palette = extract_palette(&image, cfg.kmeans());
-            let (preview, resident) =
-                TerminalImage::halfblock_preview(image.clone(), pixels, cells);
+            let (preview, resident) = sample(image.clone());
             Ok(PreviewResult {
                 preview,
                 resident,

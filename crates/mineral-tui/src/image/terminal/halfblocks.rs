@@ -37,6 +37,15 @@ impl HalfblocksImage {
         Self { pixels }
     }
 
+    /// 等比生成无补边的低清像素,供 Kitty 行内封面复用;留白由最终 placement 决定。
+    pub(super) fn thumbnail(source: &DynamicImage, pixels: PixelSize) -> Self {
+        Self {
+            pixels: source
+                .thumbnail(pixels.width(), pixels.height())
+                .into_rgb8(),
+        }
+    }
+
     /// 把 halfblock 像素网格写入 ratatui buffer。
     pub(super) fn render(&self, area: Rect, buffer: &mut Buffer) {
         let width = area
@@ -57,6 +66,11 @@ impl HalfblocksImage {
                 buffer.set_string(area.x + column, area.y + row, "▀", style);
             }
         }
+    }
+
+    /// 借用已采样的低清像素，供行内 Kitty 封面复用，避免重新解码原图。
+    pub(super) fn pixels(&self) -> &RgbImage {
+        &self.pixels
     }
 
     /// 返回上下半块 RGB 像素缓冲的常驻字节数。

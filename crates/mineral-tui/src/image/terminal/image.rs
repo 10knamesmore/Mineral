@@ -46,11 +46,18 @@ impl TerminalImage {
         (Self::Halfblocks(preview), bytes)
     }
 
+    /// 为行内封面采样无补边的等比小图,复用 preview 的 RGB 存储与预算。
+    pub(crate) fn thumbnail_preview(source: &DynamicImage, pixels: PixelSize) -> (Self, u64) {
+        let preview = HalfblocksImage::thumbnail(source, pixels);
+        let bytes = preview.resident_bytes();
+        (Self::Halfblocks(preview), bytes)
+    }
+
     /// 按当前 terminal backend 编码一张图片。
     ///
     /// # Params:
     ///   - `source`: 已解码原图
-    ///   - `pixels`: rasterized 协议的目标像素尺寸；Kitty 为 `None`
+    ///   - `pixels`: 目标像素尺寸；Kitty 大图为 `None`，行内封面保留低清采样分辨率
     ///   - `cells`: 目标 cell 宽高
     ///   - `graphics`: 当前 terminal backend 状态
     ///
@@ -66,11 +73,14 @@ impl TerminalImage {
         graphics: &TerminalGraphics,
     ) -> color_eyre::Result<Self> {
         match graphics.protocol() {
-            GraphicsProtocol::Kitty => Ok(Self::Kitty(KittyImage::encode(
-                source,
-                graphics.allocate_kitty_image_id(),
-                graphics.relay(),
-            )?)),
+            GraphicsProtocol::Kitty => {
+                let thumbnail = pixels.map(|size| source.thumbnail(size.width(), size.height()));
+                Ok(Self::Kitty(KittyImage::encode(
+                    thumbnail.as_ref().unwrap_or(source),
+                    graphics.allocate_kitty_image_id(),
+                    graphics.relay(),
+                )?))
+            }
             GraphicsProtocol::Sixel => {
                 let pixels = raster_pixels(pixels)?;
                 Ok(Self::Sixel(SixelImage::encode(
@@ -94,6 +104,22 @@ impl TerminalImage {
                     source, pixels, cells,
                 )))
             }
+        }
+    }
+
+    /// 复制已采样的低清像素供行内封面编码，其他协议成品不提供像素。
+    pub(crate) fn halfblock_source(&self) -> Option<DynamicImage> {
+        match self {
+            Self::Halfblocks(image) => Some(DynamicImage::ImageRgb8(image.pixels().clone())),
+            _ => None,
+        }
+    }
+
+    /// 写入一个纯 Unicode Kitty 占位 cell，返回须在 cell 输出前发送的图片指令。
+    pub(crate) fn render_inline(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
+        match self {
+            Self::Kitty(image) => image.render_inline(area, buffer),
+            _ => None,
         }
     }
 

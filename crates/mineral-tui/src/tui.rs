@@ -111,12 +111,12 @@ impl Tui {
         self.launch_cursor
     }
 
-    /// 渲染一帧。
+    /// 渲染一帧；回调可在 cell 输出前发送图片指令，失败则终止本帧。
     pub fn draw<F>(&mut self, f: F) -> color_eyre::Result<()>
     where
-        F: FnOnce(&mut Frame<'_>),
+        F: FnOnce(&mut Frame<'_>) -> io::Result<()>,
     {
-        self.terminal.draw(f)?;
+        self.terminal.try_draw(f)?;
         Ok(())
     }
 }

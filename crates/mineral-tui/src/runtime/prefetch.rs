@@ -1,13 +1,14 @@
-//! 视口 prefetch:按 `sel ± [`RADIUS`]` 提前 fetch 用户即将看到的数据。
+//! 视口 prefetch:按 `sel ± prefetch.radius` 提前 fetch 用户即将看到的数据。
 //!
 //! 三件:
-//! - **cover**:封面在右栏 focus 时显示
+//! - **cover**:供主图与 Kitty 列表缩略图显示
 //! - **tracks**:歌单的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
 //! - **local play count**:Selected 展示当前歌曲在 Mineral 中自然播完的次数
 //!
 //! 封面路径只选择候选并做单批 URL 去重，请求生命周期由图片引擎管理；其余路径用各自的
-//! requested 状态避免重复提交。稳态下 tick 只做有界窗口 hash 查找。
+//! requested 状态避免重复提交。稳态下 tick 只检查各自的预取窗口。
 
+use crate::image::graphics::GraphicsProtocol;
 use crate::runtime::backend::Backend;
 use mineral_channel_core::Page;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
@@ -17,29 +18,32 @@ use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::image::collage`])。
-pub fn tick(state: &mut AppState, client: &dyn Backend) {
-    request_covers(state);
+/// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
+pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
+    request_covers(state, queue_covers);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
     request_detail(state, client);
-    request_detail_selected_cover(state);
+    request_detail_covers(state);
     crate::image::collage::tick(state);
 }
 
-/// 看 view 决定的 sel 周围 `prefetch.radius` 收集封面候选，sel 优先向外扩展。
+/// 合并队列光标、Browse 与在播位置的封面候选,共用图片引擎的预取入口。
 /// 来源随封面一起带出，决定图片引擎使用的落盘子目录。
-fn request_covers(state: &mut AppState) {
-    let items = collect_cover_candidates(state);
+fn request_covers(state: &mut AppState, queue_covers: Vec<(SourceKind, MediaUrl)>) {
+    let items = collect_cover_candidates(state, queue_covers);
     state.images.prefetch(items);
 }
 
-/// 收集 `(来源, 封面 URL)` 候选并在单批内按 URL 去重，两条轴:浏览选中 sel ±
-/// `prefetch.radius`(随 view 取歌单 / 歌曲列表),以及在播曲 ±
-/// `prefetch.playback_cover_radius`(沿播放队列)。后者与 view 无关——全屏渲染的是在播曲，
-/// 且自动切歌的下一首也要先就绪。缓存、失败和在途状态由图片引擎判断。
+/// 合并队列光标、Browse 光标与在播位置的候选,单批按 URL 去重。
 ///
-/// 来源从所在条目的 id namespace 派生(歌单 / 歌曲都带源)。
-fn collect_cover_candidates(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+/// 队列光标候选由浮层按过滤视图与 `prefetch.radius` 提供,优先提交;
+/// Browse 使用同一列表半径,在播位置沿播放队列使用 `playback_cover_radius`。
+/// 来源从条目的 id namespace 派生;缓存、失败和在途状态由图片引擎判断。
+fn collect_cover_candidates(
+    state: &AppState,
+    queue_covers: Vec<(SourceKind, MediaUrl)>,
+) -> Vec<(SourceKind, MediaUrl)> {
     let radius = *state.cfg.tui().prefetch().radius();
     let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
@@ -51,6 +55,9 @@ fn collect_cover_candidates(state: &AppState) -> Vec<(SourceKind, MediaUrl)> {
             out.push((source, u.clone()));
         }
     };
+    for (source, url) in queue_covers {
+        push_if_new(Some((source, &url)), &mut out);
+    }
     match state.browse.view.current() {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
@@ -219,37 +226,62 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
     }
 }
 
-/// search 布局态下，给当前 detail 帧列表选中项的封面搭车投图片引擎（artist 帧右栏副头图用）。
+/// 为 detail 的选中副头图与 Kitty 行缩略图预取封面，请求去重由图片引擎管理。
 ///
-/// 与 detail fetch 去重解耦：选中项随 `[ ]` 切区 / 光标移动而变，每 tick 看一眼，靠
-/// 图片引擎按缓存、失败和在途状态去重。沿用 detail 驻留防抖窗，避免快速翻列表时
-/// 给下载队列灌一堆滚过即弃的图；不投则右栏副头图会一直留空。
-fn request_detail_selected_cover(state: &mut AppState) {
+/// # Params:
+///   - `state`: 当前配置、detail 列表与图片引擎
+fn request_detail_covers(state: &mut AppState) {
+    let items = collect_detail_cover_candidates(state, state.images.graphics_protocol());
+    state.images.prefetch(items);
+}
+
+/// 驻留超过 detail 防抖窗后，按选中行优先、向两侧外扩的顺序收集封面并按 URL 去重。
+/// Kitty 现读 `prefetch.radius`，只收该半径内的行；其余协议只收 artist 选中副头图。
+///
+/// # Params:
+///   - `state`: 当前搜索布局、栈顶 detail 帧与有效配置
+///   - `protocol`: 图片引擎当前生效的协议，包含终端能力限制后的结果
+fn collect_detail_cover_candidates(
+    state: &AppState,
+    protocol: GraphicsProtocol,
+) -> Vec<(SourceKind, MediaUrl)> {
     if !state.channel_search.active.on() {
-        return;
+        return Vec::new();
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
     if state.channel_search.last_sel_change.elapsed() < debounce {
-        return;
+        return Vec::new();
     }
-    // 先取出 (source, url) 再释放 channel_search 借用，避免与图片引擎的 &mut 冲突。
-    // 来源用所在 artist 帧的 fetch source（选中歌/专辑与 artist 同 channel，落盘子目录一致）。
-    let intent = {
-        let Some(kr) = state.channel_search.active_results() else {
-            return;
-        };
-        let Some(frame) = kr.detail.current() else {
-            return;
-        };
-        match (frame.selected_cover().cloned(), frame.entity.fetch()) {
-            (Some(url), Some(fetch)) => Some((fetch.source(), url)),
-            _ => None,
+    let Some(frame) = state
+        .channel_search
+        .active_results()
+        .and_then(|results| results.detail.current())
+    else {
+        return Vec::new();
+    };
+    let radius = match protocol {
+        GraphicsProtocol::Kitty => *state.cfg.tui().prefetch().radius(),
+        _ if frame.selected_cover().is_some() => 0,
+        _ => return Vec::new(),
+    };
+    let sel = frame.list().sel();
+    let mut out = Vec::<(SourceKind, MediaUrl)>::new();
+    let mut consider = |index| {
+        if let Some((source, url)) = frame.row_cover(index)
+            && !out.iter().any(|(_, existing)| existing == url)
+        {
+            out.push((source, url.clone()));
         }
     };
-    if let Some((source, url)) = intent {
-        state.images.prefetch([(source, url)]);
+    consider(sel);
+    for distance in 1..=radius {
+        if let Some(index) = sel.checked_sub(distance) {
+            consider(index);
+        }
+        consider(sel.saturating_add(distance));
     }
+    out
 }
 
 /// 按 [`DetailFetch`] 派对应的 channel 拉取任务（artist 两路：详情 + 专辑列表；其余单路）。
@@ -322,12 +354,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
-    use mineral_model::{MediaUrl, Song, SongId, SourceKind};
+    use mineral_model::{
+        Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, MediaUrl, Playlist, PlaylistEntry,
+        PlaylistId, SearchKind, Song, SongId, SourceKind,
+    };
     use mineral_protocol::FinishReason;
     use mineral_task::TaskEvent;
 
-    use super::{collect_cover_candidates, request_play_count};
-    use crate::runtime::state::{AppState, View};
+    use super::{collect_cover_candidates, collect_detail_cover_candidates, request_play_count};
+    use crate::image::graphics::GraphicsProtocol;
+    use crate::runtime::state::{AppState, ArtistSection, DetailFrame, EntityRef, View};
     use crate::test_support::{TestClient, state_with_mixed_tracks};
 
     /// 造一首带封面 URL 的歌:id = `s{i}`、cover = `https://cover/{i}.jpg`。
@@ -340,10 +376,90 @@ mod tests {
             .build())
     }
 
+    /// Queue 过滤后的光标与在播位置共用候选集合,热改列表半径且跨路径按 URL 去重。
+    #[test]
+    fn queue_selection_joins_existing_cover_prefetch() -> color_eyre::Result<()> {
+        use crate::components::popup::{OverlayKind, OverlayStack};
+        use crate::image::ImageEngine;
+        use crate::runtime::action::{Action, SelectionMove};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = AppState::test_default()?;
+        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        state.player.queue = (0..8)
+            .map(|index| {
+                let mut song = song_with_cover(index)?;
+                song.name = if index % 2 == 0 { "kept" } else { "other" }.to_owned();
+                if index == 2 {
+                    song.id = SongId::new(SourceKind::BILIBILI, "selected");
+                }
+                Ok(song)
+            })
+            .collect::<color_eyre::Result<Vec<_>>>()?;
+        state.playback.track = state.player.queue.first().cloned();
+        state.player.cursor = mineral_protocol::PlayCursor::InQueue(0);
+        let mut overlays = OverlayStack::new(1);
+        overlays.push(OverlayKind::queue(0));
+        overlays.dispatch_key(
+            &KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            Some(Action::EnterSearch),
+            &state,
+        );
+        for character in "kept".chars() {
+            overlays.dispatch_key(
+                &KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                None,
+                &state,
+            );
+        }
+        overlays.dispatch_key(
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            None,
+            &state,
+        );
+        overlays.dispatch_key(
+            &KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            Some(Action::MoveSelection(SelectionMove::Down(1))),
+            &state,
+        );
+        assert_eq!(overlays.active_queue_cursor(&state), Some(2));
+        for (radius, indices) in [(0, vec![2, 0]), (1, vec![2, 0, 4]), (0, vec![2, 0])] {
+            let tree = mineral_config::merge_tree(
+                mineral_config::default_tree()?,
+                serde_json::json!({"tui": {"prefetch": {"radius": radius, "playback_cover_radius": 0}}}),
+            );
+            state.cfg = Arc::new(
+                mineral_config::from_tree(&tree)
+                    .map_err(|warning| color_eyre::eyre::eyre!("预取配置无效: {warning}"))?,
+            );
+            let expected = indices
+                .into_iter()
+                .map(|index| {
+                    let song = state
+                        .player
+                        .queue
+                        .get(index)
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少队列曲目"))?;
+                    Ok((
+                        song.source(),
+                        song.cover_url
+                            .clone()
+                            .ok_or_else(|| color_eyre::eyre::eyre!("夹具应有封面"))?,
+                    ))
+                })
+                .collect::<color_eyre::Result<Vec<_>>>()?;
+            assert_eq!(
+                collect_cover_candidates(&state, overlays.queue_cover_candidates(&state)),
+                expected
+            );
+        }
+        Ok(())
+    }
+
     /// 收集结果里是否含某序号歌的封面 URL。
     fn collected_has(state: &AppState, i: usize) -> color_eyre::Result<bool> {
         let want = MediaUrl::remote(&format!("https://cover/{i}.jpg"))?;
-        Ok(collect_cover_candidates(state)
+        Ok(collect_cover_candidates(state, Vec::new())
             .iter()
             .any(|(_, u)| *u == want))
     }
@@ -639,6 +755,232 @@ mod tests {
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
         Ok(state)
+    }
+
+    /// 有行封面的 detail 列表类型；歌曲详情展示所属专辑的曲目。
+    const DETAIL_COVER_LISTS: [(SearchKind, ArtistSection); 5] = [
+        (SearchKind::Playlist, ArtistSection::Hot),
+        (SearchKind::Album, ArtistSection::Hot),
+        (SearchKind::Song, ArtistSection::Hot),
+        (SearchKind::Artist, ArtistSection::Hot),
+        (SearchKind::Artist, ArtistSection::Albums),
+    ];
+
+    /// 借用预取测试中的当前 detail 帧；夹具缺帧时返回错误。
+    ///
+    /// # Params:
+    ///   - `state`: 已进入搜索布局并载入结果的测试状态
+    fn detail_cover_frame(state: &mut AppState) -> color_eyre::Result<&mut DetailFrame> {
+        state
+            .channel_search
+            .active_results_mut()
+            .and_then(|results| results.detail.current_mut())
+            .ok_or_else(|| color_eyre::eyre::eyre!("封面预取夹具应有当前 detail 帧"))
+    }
+
+    /// 构造七行封面的 detail，容器来自网易云，奇数下标行来自 Bilibili，光标下标为 3。
+    ///
+    /// # Params:
+    ///   - `kind`: detail 根实体类型
+    ///   - `section`: artist 当前分区；其它实体使用 Hot
+    fn detail_cover_state(
+        kind: SearchKind,
+        section: ArtistSection,
+    ) -> color_eyre::Result<AppState> {
+        let mut state = searching_album_state()?;
+        let songs = (0..7)
+            .map(|index| {
+                let mut song = song_with_cover(index)?;
+                if !index.is_multiple_of(2) {
+                    song.id = SongId::new(SourceKind::BILIBILI, format!("s{index}"));
+                }
+                Ok(song)
+            })
+            .collect::<color_eyre::Result<Vec<Song>>>()?;
+        let frame = detail_cover_frame(&mut state)?;
+        match kind {
+            SearchKind::Playlist => {
+                frame.entity = EntityRef::Playlist(Box::new(
+                    Playlist::builder()
+                        .id(PlaylistId::new(SourceKind::NETEASE, "playlist"))
+                        .name("playlist".to_owned())
+                        .build(),
+                ));
+                frame.set_playlist_entries(PlaylistEntry::enumerate(songs));
+            }
+            SearchKind::Album | SearchKind::Song => {
+                let mut album = Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "album"))
+                    .name("album".to_owned())
+                    .build();
+                frame.entity = if kind == SearchKind::Album {
+                    EntityRef::Album(Box::new(album.clone()))
+                } else {
+                    let mut song = song_with_cover(0)?;
+                    song.album = Some(AlbumRef {
+                        id: album.id.clone(),
+                        name: album.name.clone(),
+                    });
+                    EntityRef::Song(Box::new(song))
+                };
+                album.tracks = AlbumTrack::enumerate(songs);
+                frame.set_album_detail(Box::new(album));
+            }
+            SearchKind::Artist => {
+                let mut artist = Artist::builder()
+                    .id(ArtistId::new(SourceKind::NETEASE, "artist"))
+                    .name("artist".to_owned())
+                    .build();
+                frame.entity = EntityRef::Artist(Box::new(artist.clone()));
+                let albums = songs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, song)| {
+                        Ok(Album::builder()
+                            .id(AlbumId::new(song.id.namespace(), format!("album{index}")))
+                            .name(format!("album {index}"))
+                            .cover_url(Some(MediaUrl::remote(&format!(
+                                "https://album-cover/{index}.jpg"
+                            ))?))
+                            .build())
+                    })
+                    .collect::<color_eyre::Result<Vec<Album>>>()?;
+                artist.songs = songs;
+                frame.set_artist_detail(Box::new(artist));
+                frame.set_artist_albums(albums, mineral_channel_core::Page::default(), None);
+            }
+            SearchKind::User => color_eyre::eyre::bail!("用户结果没有 detail 曲目或专辑列表"),
+        }
+        frame.section = section;
+        frame.list_mut().set_sel(3);
+        Ok(state)
+    }
+
+    /// 从默认配置覆盖浏览预取半径，供同一状态替换配置验证热更。
+    ///
+    /// # Params:
+    ///   - `radius`: 选中行上下各自允许预取的行数
+    fn prefetch_radius_config(radius: usize) -> color_eyre::Result<Arc<mineral_config::Config>> {
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "tui": { "prefetch": { "radius": radius } } }),
+        );
+        Ok(Arc::new(mineral_config::from_tree(&tree).map_err(
+            |warning| color_eyre::eyre::eyre!("预取半径配置应合法: {warning}"),
+        )?))
+    }
+
+    /// 将预期行顺序转成夹具封面，保留奇数行的 Bilibili 来源。
+    ///
+    /// # Params:
+    ///   - `indices`: 预期的行下标及提交顺序
+    ///   - `section`: 热门曲与专辑使用不同 URL，避免错误分区仍命中断言
+    fn expected_detail_covers(
+        indices: &[usize],
+        section: ArtistSection,
+    ) -> color_eyre::Result<Vec<(SourceKind, MediaUrl)>> {
+        let host = match section {
+            ArtistSection::Hot => "cover",
+            ArtistSection::Albums => "album-cover",
+        };
+        indices
+            .iter()
+            .map(|index| {
+                let source = if index.is_multiple_of(2) {
+                    SourceKind::NETEASE
+                } else {
+                    SourceKind::BILIBILI
+                };
+                Ok((
+                    source,
+                    MediaUrl::remote(&format!("https://{host}/{index}.jpg"))?,
+                ))
+            })
+            .collect()
+    }
+
+    /// 各类 detail 都按行内来源预取；半径 0→2→0 热更立即改变范围并保留选中优先顺序。
+    #[test]
+    fn detail_covers_follow_live_radius_for_every_list() -> color_eyre::Result<()> {
+        let selected_only = prefetch_radius_config(0)?;
+        let neighbors = prefetch_radius_config(2)?;
+        for (kind, section) in DETAIL_COVER_LISTS {
+            let mut state = detail_cover_state(kind, section)?;
+            for (cfg, indices) in [
+                (&selected_only, vec![3]),
+                (&neighbors, vec![3, 2, 4, 1, 5]),
+                (&selected_only, vec![3]),
+            ] {
+                state.cfg = Arc::clone(cfg);
+                assert_eq!(
+                    collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty),
+                    expected_detail_covers(&indices, section)?,
+                    "{kind:?}/{section:?} 应只预取半径内行，来源由该行 ID 决定"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 列表首尾不补齐另一侧的配额，未加载列表也不产生行封面候选。
+    #[test]
+    fn detail_covers_stop_at_list_edges() -> color_eyre::Result<()> {
+        let mut state = detail_cover_state(SearchKind::Playlist, ArtistSection::Hot)?;
+        state.cfg = prefetch_radius_config(2)?;
+        for (sel, indices) in [(0, vec![0, 1, 2]), (6, vec![6, 5, 4])] {
+            detail_cover_frame(&mut state)?.list_mut().set_sel(sel);
+            assert_eq!(
+                collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty),
+                expected_detail_covers(&indices, ArtistSection::Hot)?
+            );
+        }
+        detail_cover_frame(&mut state)?.data = None;
+        assert!(collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
+        Ok(())
+    }
+
+    /// 非 Kitty 协议仅保留 artist 当前分区的选中副头图，来源仍取行内实体。
+    #[test]
+    fn detail_covers_on_other_protocols_only_prefetch_artist_selection() -> color_eyre::Result<()> {
+        let cfg = prefetch_radius_config(2)?;
+        for (kind, section) in DETAIL_COVER_LISTS {
+            let mut state = detail_cover_state(kind, section)?;
+            state.cfg = Arc::clone(&cfg);
+            let expected = if kind == SearchKind::Artist {
+                expected_detail_covers(&[3], section)?
+            } else {
+                Vec::new()
+            };
+            for protocol in [
+                GraphicsProtocol::Halfblocks,
+                GraphicsProtocol::Sixel,
+                GraphicsProtocol::Iterm2,
+            ] {
+                assert_eq!(
+                    collect_detail_cover_candidates(&state, protocol),
+                    expected,
+                    "{protocol:?}: {kind:?}/{section:?} 不应预取邻居缩略图"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Kitty 行缩略图沿用 detail 驻留防抖；退出搜索布局后不提交 detail 封面。
+    #[test]
+    fn detail_covers_keep_search_activation_and_dwell_gates() -> color_eyre::Result<()> {
+        let mut state = detail_cover_state(SearchKind::Playlist, ArtistSection::Hot)?;
+        state.cfg = prefetch_radius_config(2)?;
+        assert!(!collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
+
+        let settled_selection = state.channel_search.last_sel_change;
+        state.channel_search.last_sel_change = Instant::now();
+        assert!(collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
+
+        state.channel_search.last_sel_change = settled_selection;
+        state.channel_search.active.set(false);
+        assert!(collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
+        Ok(())
     }
 
     /// 录提交任务的 client，驱动一次 request_detail，返回提交的任务。

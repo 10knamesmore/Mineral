@@ -11,9 +11,13 @@ use mineral_model::SourceKind;
 use super::badge::search_badge;
 use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
 use crate::components::layout::shared::marquee::{
-    MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
+    MarqueeCtx, RowMarquee, resolve_column_rects, row_marquee,
 };
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::text::display_width;
+use crate::components::layout::shared::thumbnails::{
+    THUMBNAIL_COLUMNS, render_table_thumbnails, thumbnail_phase,
+};
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
@@ -21,7 +25,10 @@ use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistEntryView;
 
-/// 曲目表格的列布局:宽度档(是否放得下 artist/album)× 是否聚合面(mineral 源)。
+/// Table 选中符；列矩形求解使用同一显示宽度。
+const HIGHLIGHT_SYMBOL: &str = "▌ ";
+
+/// 按面板宽度、歌单来源与图片协议选择曲目表列集。
 #[derive(Clone, Copy)]
 struct TrackLayout {
     /// 宽档:♥ / title / artist / album / len,文本列比例 Fill(3:2:2);
@@ -31,22 +38,40 @@ struct TrackLayout {
     /// 聚合面(source = mineral 的跨源歌单,如全源收藏合集):宽档在 album 后插
     /// 每首歌的 source 徽标列，窄档省去。普通单源歌单为 `false`。
     aggregate: bool,
+
+    /// 当前协议支持 Kitty 缩略图时，在 title 前保留图片列。
+    thumbnails: bool,
 }
 
 impl TrackLayout {
     /// 按面板宽度与曲目集合选布局。普通面 56 格起显示 artist/album；
     /// 聚合面还需 11 格 source 列及间隔，68 格起使用宽档。
-    fn new(width: u16, aggregate: bool) -> Self {
+    ///
+    /// # Params:
+    ///   - `width`: 含边框的面板宽度，单位 cell
+    ///   - `aggregate`: 歌单是否属于 mineral 聚合来源，需要逐曲显示 source
+    ///   - `thumbnails`: 当前图片协议是否支持行内 Kitty 封面
+    fn new(width: u16, aggregate: bool, thumbnails: bool) -> Self {
         let full_threshold = if aggregate { 68 } else { 56 };
         Self {
             full: width >= full_threshold,
             aggregate,
+            thumbnails,
         }
+    }
+
+    /// 返回 title 列下标，供 marquee 与 loading 行使用同一列位置。
+    fn title_index(self) -> usize {
+        1 + usize::from(self.thumbnails)
     }
 
     /// 表头单元格(与 [`Self::widths`] / [`build_row`] 的列集严格一致)。
     fn header_cells(self) -> Vec<Cell<'static>> {
-        let mut cells = vec![Cell::from(""), Cell::from("title")];
+        let mut cells = vec![Cell::from("")];
+        if self.thumbnails {
+            cells.push(Cell::from(""));
+        }
+        cells.push(Cell::from("title"));
         if self.full {
             cells.push(Cell::from("artist"));
             cells.push(Cell::from("album"));
@@ -62,6 +87,9 @@ impl TrackLayout {
     /// playlists sidebar 的同名列等宽。
     fn widths(self) -> Vec<Constraint> {
         let mut widths = vec![Constraint::Length(1)];
+        if self.thumbnails {
+            widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
+        }
         if self.full {
             widths.extend([
                 Constraint::Fill(3),
@@ -89,7 +117,6 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     // 未知时长的曲目不计入合计(只反映已知部分)。
     let total_min = tracks.total_duration_ms() / 60_000;
-    let placeholder = slot_placeholder(state, theme);
     let pos = position_label(state.browse.nav.track.sel(), tracks.len());
 
     // 左上角 source 徽标:标出当前歌单挂靠的来源(聚合面挂靠 mineral,单源面挂靠其真实
@@ -130,7 +157,8 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let aggregate = state
         .selected_playlist()
         .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
-    let layout = TrackLayout::new(area.width, aggregate);
+    let layout = TrackLayout::new(area.width, aggregate, state.images.supports_thumbnails());
+    let placeholder = slot_placeholder(state, theme, layout);
 
     let header = Row::new(layout.header_cells())
         .style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
@@ -139,11 +167,8 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
     // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
     let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
-    // Table 带边框 block:列在 inner(左右各 -1)上求解;选中符 "▌ " 恒占 2 列。
-    let title_w = resolve_column_widths(area.width.saturating_sub(2), &widths, 2)
-        .get(1)
-        .copied()
-        .unwrap_or(0);
+    let columns = resolve_column_rects(block.inner(area), &widths, display_width(HIGHLIGHT_SYMBOL));
+    let title_w = columns.get(layout.title_index()).map_or(0, |r| r.width);
     let sel = state.browse.nav.track.sel();
     let build_table = |visible: std::ops::Range<usize>| {
         let rows: Vec<Row<'_>> = if let Some(row) = placeholder {
@@ -168,14 +193,15 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▌ ")
+            .highlight_symbol(HIGHLIGHT_SYMBOL)
     };
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),收缩中的 viewport 不得改写
-    // 滚动目标(否则回浏览态时选中行换屏上位置 + 多一段平移)。
+    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，不用临时高度改写滚动目标。
     let viewport = usize::from(area.height.saturating_sub(3));
-    let motion = if state.browse.fullscreen.at_min() {
+    let motion = if state.browse.fullscreen.at_min()
+        && (state.browse.view.at_min() || state.browse.view.at_max())
+    {
         ScrollMotion::Advancing {
             scrolloff: state.scrolloff(),
             glide_ticks: state.list_glide_ticks(),
@@ -183,7 +209,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     } else {
         ScrollMotion::Frozen
     };
-    render_scroll_table(
+    let visible = render_scroll_table(
         buf,
         area,
         build_table,
@@ -192,6 +218,21 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         viewport,
         motion,
     );
+    if layout.thumbnails
+        && let Some(column) = columns.get(1)
+    {
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            visible.map(|index| {
+                tracks
+                    .get(index)
+                    .and_then(|entry| entry.data.song.cover_url.as_ref())
+            }),
+            thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
+        );
+    }
 }
 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / 高亮搜索词)。
@@ -239,7 +280,11 @@ fn build_row<'a>(
 
     let len = format_ms_opt(song.duration_ms);
 
-    let mut cells = vec![love_cell, title_cell];
+    let mut cells = vec![love_cell];
+    if layout.thumbnails {
+        cells.push(Cell::from(""));
+    }
+    cells.push(title_cell);
     if layout.full {
         let artist = song
             .artists
@@ -296,14 +341,15 @@ fn position_label(sel: usize, total: usize) -> String {
 }
 
 /// 选中歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
-/// 「无匹配」行;正常情况返回 `None`(走 tracks 渲染)。
-fn slot_placeholder<'a>(state: &AppState, theme: &Theme) -> Option<Row<'a>> {
-    // 占位文本落在 title 列，首格留给收藏标记，避免占位文本被截成单字。
+/// 「无匹配」行;正常情况返回 `None`(走 tracks 渲染)。占位文本按 `layout` 落在 title 列。
+fn slot_placeholder<'a>(state: &AppState, theme: &Theme, layout: TrackLayout) -> Option<Row<'a>> {
     let placeholder_row = |text: &'static str| {
-        Row::new(vec![
-            Cell::from(""),
-            Cell::from(Span::styled(text, Style::new().fg(theme.overlay))),
-        ])
+        let mut cells = vec![Cell::from(""); layout.title_index()];
+        cells.push(Cell::from(Span::styled(
+            text,
+            Style::new().fg(theme.overlay),
+        )));
+        Row::new(cells)
     };
     if state.current_tracks_slot().is_none() {
         return state
@@ -340,6 +386,149 @@ mod tests {
         (0..buf.area.width)
             .filter_map(|x| buf.cell((x, y)).map(ratatui::buffer::Cell::symbol))
             .collect()
+    }
+
+    /// 缓动大跳逐帧保持封面与文本同一视口，缺图行不压缩后续封面，离屏阶段只留空列。
+    #[test]
+    fn thumbnails_follow_one_scroll_step_and_freeze_for_sweep() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        use crate::image::{ImageEngine, ImageRenderPhase};
+        use crate::runtime::scroll::list::ScrollMotion;
+
+        let theme = crate::test_support::default_theme()?;
+        let mut app = crate::test_support::app_with_long_library(30, 0)?;
+        let state = &mut app.state;
+        state.browse.view.retempo(1);
+        state.browse.view.tick();
+        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        let entries = state
+            .library
+            .tracks
+            .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少测试曲目"))?;
+        let mut previews = Vec::new();
+        for (index, entry) in entries.iter_mut().enumerate() {
+            if index % 3 == 1 {
+                entry.data.song.cover_url = None;
+                previews.push(None);
+                continue;
+            }
+            let url = MediaUrl::remote(&format!("https://example.com/track-{index}.png"))?;
+            entry.data.song.cover_url = Some(url.clone());
+            state.images.insert_test_thumbnail(&url)?;
+            let mut probe = Buffer::empty(Rect::new(0, 0, super::THUMBNAIL_COLUMNS, 1));
+            state.images.render_thumbnail(
+                Some(&url),
+                probe.area,
+                &mut probe,
+                ImageRenderPhase::Stable,
+            );
+            previews.push(
+                probe
+                    .cell((0, 0))
+                    .map(|cell| (cell.symbol().to_owned(), cell.fg, cell.underline_color)),
+            );
+        }
+        let area = Rect::new(4, 3, 60, 8);
+        let viewport = usize::from(area.height - 3);
+        let motion = ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        };
+        let mut thumbnail_x = None;
+        for selected in [0, 20, 1] {
+            state.browse.nav.track.set_sel(selected);
+            for _ in 0..4 {
+                let reference = state.browse.nav.track.clone();
+                let offset = reference.offset(previews.len(), viewport, motion);
+                let mut buf = Buffer::empty(area);
+                super::render_to(&mut buf, area, state, &theme);
+                assert_eq!(
+                    state
+                        .browse
+                        .nav
+                        .track
+                        .offset(previews.len(), viewport, ScrollMotion::Frozen),
+                    offset,
+                    "每帧只推进一次视口"
+                );
+                let title_x = (area.left()..area.right())
+                    .find(|&x| buf.cell((x, area.y + 1)).is_some_and(|c| c.symbol() == "t"))
+                    .ok_or_else(|| color_eyre::eyre::eyre!("缺少 title 表头"))?;
+                thumbnail_x = Some(title_x - super::THUMBNAIL_COLUMNS - 1);
+                for row in 0..viewport {
+                    let index = offset + row;
+                    let y = area.y + 2 + u16::try_from(row)?;
+                    let title = (title_x..area.right())
+                        .filter_map(|x| buf.cell((x, y)))
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>();
+                    assert!(
+                        title.starts_with(&format!("Track {index:02}")),
+                        "文本须来自本帧视口"
+                    );
+                    let cell = buf
+                        .cell((title_x - super::THUMBNAIL_COLUMNS - 1, y))
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少图片格"))?;
+                    if let Some((symbol, foreground, underline)) =
+                        previews.get(index).and_then(Option::as_ref)
+                    {
+                        assert_eq!(
+                            (cell.symbol(), cell.fg, cell.underline_color),
+                            (symbol.as_str(), *foreground, *underline),
+                            "第 {index} 曲的 Kitty image id 与 placement 必须和 title 同行"
+                        );
+                    } else {
+                        assert_eq!(cell.symbol(), " ", "没有封面的行应留空");
+                    }
+                    assert_eq!(
+                        buf.cell((title_x - 1, y))
+                            .map(ratatui::buffer::Cell::symbol),
+                        Some(" ")
+                    );
+                }
+            }
+        }
+        state.browse.view.retempo(8);
+        state.browse.view.switch_to(View::Playlists);
+        state.browse.view.tick();
+        let mut offscreen = Buffer::empty(area);
+        super::render_to(&mut offscreen, area, state, &theme);
+        assert!(
+            offscreen
+                .content
+                .iter()
+                .all(|c| !c.symbol().contains('\u{10EEEE}') && !c.symbol().contains('\x1b')),
+            "sweep 离屏帧不得含图形控制序列"
+        );
+        let x = thumbnail_x.ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
+        assert_eq!(
+            offscreen
+                .cell((x, area.y + 2))
+                .map(ratatui::buffer::Cell::symbol),
+            Some(" ")
+        );
+        state.browse.view.retempo(1);
+        state.browse.view.switch_to(View::Library);
+        state.browse.view.tick();
+        state.browse.fullscreen = crate::render::anim::Toggle::new(8);
+        state.browse.fullscreen.set(true);
+        state.browse.fullscreen.tick();
+        let mut morph = Buffer::empty(area);
+        super::render_to(&mut morph, area, state, &theme);
+        assert!(
+            morph
+                .content
+                .iter()
+                .all(|c| !c.symbol().contains('\x1b') && !c.symbol().contains('\u{10EEEE}')),
+            "fullscreen morph 不得输出图形控制序列"
+        );
+        Ok(())
     }
 
     /// G 滚到底后向上走时,光标留在 scrolloff 安全区内不会移动视口;
@@ -714,15 +903,15 @@ mod tests {
     #[test]
     fn aggregate_layout_threshold_leaves_room_for_source_column() {
         assert!(
-            !TrackLayout::new(60, /*aggregate*/ true).full,
+            !TrackLayout::new(60, /*aggregate*/ true, /*thumbnails*/ false).full,
             "聚合面 60 格退窄档(插不起 source 列)"
         );
         assert!(
-            TrackLayout::new(56, /*aggregate*/ false).full,
+            TrackLayout::new(56, /*aggregate*/ false, /*thumbnails*/ false).full,
             "普通面 56 格进宽档"
         );
         assert!(
-            TrackLayout::new(68, /*aggregate*/ true).full,
+            TrackLayout::new(68, /*aggregate*/ true, /*thumbnails*/ false).full,
             "聚合面 68 格进宽档"
         );
     }

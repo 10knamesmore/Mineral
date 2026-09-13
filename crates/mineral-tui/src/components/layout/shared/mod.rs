@@ -8,6 +8,7 @@ pub mod scroll_table;
 pub mod scrollbar;
 pub mod spinner;
 pub mod text;
+pub(crate) mod thumbnails;
 pub mod top_status;
 pub mod transform;
 pub mod transport;

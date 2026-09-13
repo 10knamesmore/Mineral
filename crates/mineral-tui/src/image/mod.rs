@@ -18,6 +18,7 @@ mod kitty;
 mod render;
 mod resize;
 mod terminal;
+mod thumbnail;
 
 pub(crate) use geometry::square_cells;
 #[cfg(test)]

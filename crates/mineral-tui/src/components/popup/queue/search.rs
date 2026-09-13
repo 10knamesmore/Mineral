@@ -4,6 +4,8 @@
 //! 底层播放队列不发任何编辑。输入态键处理与浏览页 `/` 同构:Enter 保留词退输入、
 //! Esc 清词退出、逐字改词把光标复位到最相关行。
 
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mineral_model::Song;
 use ratatui::style::Style;
@@ -60,6 +62,7 @@ impl QueueOverlay {
         self.search.typing = true;
         self.search.clear();
         self.list.set_sel(0);
+        self.last_sel_change = Instant::now();
     }
 
     /// 清掉过滤词、退出过滤:光标落回原选中歌的队列真实下标(词清后视图恒等,
@@ -69,6 +72,7 @@ impl QueueOverlay {
         self.search.typing = false;
         self.search.clear();
         self.list.set_sel(raw);
+        self.last_sel_change = Instant::now();
     }
 
     /// `/` 输入态按键:与浏览页 `/` 同构。改词后光标复位到最相关行(过滤视图首行)。
@@ -76,6 +80,7 @@ impl QueueOverlay {
     ///
     /// 带 CONTROL 的字符键一律吞掉——否则 `<C-d>` 族滚动键会把裸字符塞进 query。
     pub(super) fn on_search_key(&mut self, key: &KeyEvent) -> OverlayResponse {
+        let previous_query = self.search.query().to_owned();
         match key.code {
             KeyCode::Esc => {
                 self.search.typing = false;
@@ -108,6 +113,9 @@ impl QueueOverlay {
                 self.search.edit(InputRequest::End);
             }
             _ => {}
+        }
+        if self.search.query() != previous_query {
+            self.last_sel_change = Instant::now();
         }
         OverlayResponse::Consumed
     }

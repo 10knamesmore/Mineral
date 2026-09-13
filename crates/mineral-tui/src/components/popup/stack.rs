@@ -3,6 +3,7 @@
 //! 进退场 / 延迟移除全在本模块,使用方碰都不碰动画。
 
 use crossterm::event::KeyEvent;
+use mineral_model::{MediaUrl, SourceKind};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -285,6 +286,19 @@ impl OverlayStack {
             Some(OverlayKind::Queue(q)) => q.raw_cursor(ctx),
             _ => None,
         }
+    }
+
+    /// 收集尚未关闭的队列光标候选,供运行时与其他封面合并预取。
+    pub(crate) fn queue_cover_candidates(&self, ctx: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+        self.stack
+            .iter()
+            .filter(|mounted| !mounted.anim.leaving())
+            .filter_map(|mounted| match &mounted.kind {
+                OverlayKind::Queue(queue) => Some(queue),
+                _ => None,
+            })
+            .flat_map(|queue| queue.cover_candidates(ctx))
+            .collect()
     }
 
     /// 栈内是否有断连提示(据此进入 fatal 模式:跳过后端同步、任意键退出)。

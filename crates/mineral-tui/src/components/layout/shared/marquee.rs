@@ -189,14 +189,34 @@ pub(crate) fn resolve_column_widths(
     widths: &[Constraint],
     selection_w: u16,
 ) -> Vec<u16> {
+    resolve_column_rects(Rect::new(0, 0, total_w, 1), widths, selection_w)
+        .iter()
+        .map(|r| r.width)
+        .collect()
+}
+
+/// 用 Table 相同的列约束求屏幕矩形，供标题切片与列内图片 overlay 共用。
+///
+/// # Params:
+///   - `area`: 扣除 block 边框后的表格区域；返回列保留该区域的 y 与高度
+///   - `widths`: 与 `Table::new` 相同的列宽约束，列间距固定为 Table 默认的 1 cell
+///   - `selection_w`: 有选中行时的选中符显示宽度，无选中行时为 0
+///
+/// # Return:
+///   与 `widths` 等长的列矩形；窄屏挤掉的列宽为 0，调用方不得扩大它。
+pub(crate) fn resolve_column_rects(
+    area: Rect,
+    widths: &[Constraint],
+    selection_w: u16,
+) -> Vec<Rect> {
     let [_selection, columns_area] =
         Layout::horizontal([Constraint::Length(selection_w), Constraint::Fill(0)])
-            .areas(Rect::new(0, 0, total_w, 1));
+            .areas(Rect::new(0, 0, area.width, 1));
     Layout::horizontal(widths.iter().copied())
         .spacing(1)
         .split(columns_area)
         .iter()
-        .map(|r| r.width)
+        .map(|column| Rect::new(area.x + column.x, area.y, column.width, area.height))
         .collect()
 }
 

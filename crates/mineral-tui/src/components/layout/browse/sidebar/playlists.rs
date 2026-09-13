@@ -8,12 +8,20 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, 
 
 use super::badge::search_badge;
 use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
+use crate::components::layout::shared::marquee::resolve_column_rects;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
+use crate::components::layout::shared::text::display_width;
+use crate::components::layout::shared::thumbnails::{
+    THUMBNAIL_COLUMNS, render_table_thumbnails, thumbnail_phase,
+};
 use crate::render::theme::Theme;
 use crate::runtime::deep_search::HitField;
 use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistView;
+
+/// Table 选中符；列矩形求解使用同一显示宽度。
+const HIGHLIGHT_SYMBOL: &str = "▌ ";
 
 /// 渲染 Playlists 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
@@ -49,7 +57,12 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 确有深度命中时多一列「match」展示歌单内命中歌曲;纯歌单名命中 / 空 query
     // 不占位,不挤压 name 列宽。
     let show_match = state.has_deep_hits();
-    let mut header_cells = vec![Cell::from("name")];
+    let show_cover = state.images.supports_thumbnails();
+    let mut header_cells = Vec::<Cell<'_>>::new();
+    if show_cover {
+        header_cells.push(Cell::from(""));
+    }
+    header_cells.push(Cell::from("name"));
     if show_match {
         header_cells.push(Cell::from("match"));
     }
@@ -64,7 +77,11 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
     // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
     // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
-    let mut widths = vec![Constraint::Fill(1)];
+    let mut widths = Vec::<Constraint>::new();
+    if show_cover {
+        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
+    }
+    widths.push(Constraint::Fill(1));
     if show_match {
         widths.push(Constraint::Fill(1));
     }
@@ -74,10 +91,11 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         Constraint::Length(5),
     ]);
 
+    let columns = resolve_column_rects(block.inner(area), &widths, display_width(HIGHLIGHT_SYMBOL));
     let build_table = |visible: std::ops::Range<usize>| {
         let rows = visible
             .filter_map(|index| rows_data.get(index))
-            .map(|p| build_row(p, state, theme, show_match));
+            .map(|p| build_row(p, state, theme, show_match, show_cover));
         Table::new(rows, widths)
             .header(header)
             .block(block)
@@ -87,13 +105,15 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▌ ")
+            .highlight_symbol(HIGHLIGHT_SYMBOL)
     };
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    // 全屏 morph 中面板 rect 是插值瞬态:只读展示(Frozen),理由同 library。
+    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，并保留空封面列。
     let viewport = usize::from(area.height.saturating_sub(3));
-    let motion = if state.browse.fullscreen.at_min() {
+    let motion = if state.browse.fullscreen.at_min()
+        && (state.browse.view.at_min() || state.browse.view.at_max())
+    {
         ScrollMotion::Advancing {
             scrolloff: state.scrolloff(),
             glide_ticks: state.list_glide_ticks(),
@@ -101,7 +121,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     } else {
         ScrollMotion::Frozen
     };
-    render_scroll_table(
+    let visible = render_scroll_table(
         buf,
         area,
         build_table,
@@ -110,6 +130,22 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         viewport,
         motion,
     );
+    if show_cover && let Some(column) = columns.first() {
+        let covers = visible
+            .map(|index| {
+                rows_data.get(index).and_then(|playlist| {
+                    crate::image::collage::effective_cover_url(state, &playlist.data)
+                })
+            })
+            .collect::<Vec<_>>();
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            covers.iter().map(Option::as_ref),
+            thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
+        );
+    }
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 / 总时长 / 曲目数)。
@@ -118,6 +154,7 @@ fn build_row<'a>(
     state: &AppState,
     theme: &Theme,
     show_match: bool,
+    show_cover: bool,
 ) -> Row<'a> {
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {
@@ -136,12 +173,16 @@ fn build_row<'a>(
     let src = p.data.source();
 
     let name_hits = state.browse.search.match_for(&p.data.name).map(|m| m.hits);
-    let mut cells = vec![Cell::from(Line::from(highlight_indices(
+    let mut cells = Vec::<Cell<'_>>::new();
+    if show_cover {
+        cells.push(Cell::from(""));
+    }
+    cells.push(Cell::from(Line::from(highlight_indices(
         &p.data.name,
         name_hits.as_deref().unwrap_or(&[]),
         Style::new().fg(theme.text),
         theme,
-    )))];
+    ))));
     if show_match {
         cells.push(deep_hit_cell(p, state, theme));
     }
@@ -303,6 +344,114 @@ mod tests {
         crate::test_support::assert_snap!(
             "歌单列表:3 个混源歌单(EndSerenading / 本地)",
             t.backend()
+        );
+        Ok(())
+    }
+
+    /// Kitty 封面保留选中行样式与一格名称间距；缺图不移位，其他协议维持旧文本位置。
+    #[test]
+    fn thumbnails_preserve_selected_row_and_text_spacing() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::{Modifier, Style};
+
+        use crate::image::{ImageEngine, ImageRenderPhase};
+
+        let theme = crate::test_support::default_theme()?;
+        let mut state = crate::test_support::state_with_playlists()?;
+        let url = MediaUrl::remote("https://example.com/playlist-cover.png")?;
+        state
+            .library
+            .playlists
+            .first_mut()
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少测试歌单"))?
+            .data
+            .cover_url = Some(url.clone());
+        let area = Rect::new(4, 3, 64, 8);
+        let mut text = Buffer::empty(area);
+        super::render_to(&mut text, area, &state, &theme);
+        let first_row = area.y + 2;
+        let old_name_x = (area.left()..area.right())
+            .find(|&x| text.cell((x, first_row)).is_some_and(|c| c.symbol() == "E"))
+            .ok_or_else(|| color_eyre::eyre::eyre!("旧布局缺少歌单名称"))?;
+        assert!(
+            text.content
+                .iter()
+                .all(|c| !c.symbol().contains('\u{10EEEE}'))
+        );
+
+        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        state.images.insert_test_thumbnail(&url)?;
+        let mut expected = Buffer::empty(Rect::new(0, 0, super::THUMBNAIL_COLUMNS, 1));
+        expected.set_style(
+            expected.area,
+            Style::new()
+                .bg(theme.surface0)
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+        for _ in 0..2 {
+            state.images.render_thumbnail(
+                Some(&url),
+                expected.area,
+                &mut expected,
+                ImageRenderPhase::Stable,
+            );
+        }
+        let mut kitty = Buffer::empty(area);
+        super::render_to(&mut kitty, area, &state, &theme);
+        for column in 0..super::THUMBNAIL_COLUMNS {
+            assert_eq!(
+                kitty.cell((old_name_x + column, first_row)),
+                expected.cell((column, 0)),
+                "选中行必须在高亮后覆盖同一 Kitty 图片"
+            );
+        }
+        let name_x = old_name_x + super::THUMBNAIL_COLUMNS + 1;
+        assert!(
+            kitty
+                .cell((old_name_x, first_row))
+                .is_some_and(|c| c.symbol().contains('\u{10EEEE}'))
+        );
+        assert_eq!(
+            kitty
+                .cell((name_x - 1, first_row))
+                .map(ratatui::buffer::Cell::symbol),
+            Some(" ")
+        );
+        assert_eq!(
+            kitty
+                .cell((name_x, first_row))
+                .map(ratatui::buffer::Cell::symbol),
+            Some("E")
+        );
+        assert_eq!(
+            kitty
+                .cell((old_name_x, first_row + 1))
+                .map(ratatui::buffer::Cell::symbol),
+            Some(" "),
+            "没有封面的下一行保留空图片格"
+        );
+        assert_eq!(
+            kitty
+                .cell((name_x, first_row + 1))
+                .map(ratatui::buffer::Cell::symbol),
+            Some("T")
+        );
+        assert_eq!(
+            kitty
+                .cell((old_name_x, first_row - 1))
+                .map(ratatui::buffer::Cell::symbol),
+            Some(" "),
+            "图片列表头为空"
+        );
+        assert_eq!(
+            kitty.cell((name_x, first_row)).map(|c| (c.fg, c.bg)),
+            Some((theme.accent, theme.surface0)),
+            "名称保留整行高亮"
         );
         Ok(())
     }

@@ -1,6 +1,7 @@
 //! Search detail 曲目表的列布局与文本行装配。
 //!
 //! 固定列为 ♥ / title / len，artist / album 按上下文与面板宽度增减。
+//! Kitty 支持缩略图时在 title 前预留图片列，由调用方在整行高亮后覆盖封面。
 
 use ratatui::layout::Constraint;
 use ratatui::style::{Modifier, Style};
@@ -11,6 +12,7 @@ use mineral_model::Song;
 
 use crate::components::layout::shared::marquee::RowMarquee;
 use crate::components::layout::shared::text::alias_span;
+use crate::components::layout::shared::thumbnails::THUMBNAIL_COLUMNS;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
@@ -30,18 +32,45 @@ pub struct TrackColumns {
 
     /// 是否含 album 列。
     pub album: bool,
+
+    /// 当前协议支持 Kitty 缩略图时，在 title 前保留图片列。
+    thumbnails: bool,
 }
 
 impl TrackColumns {
     /// 构造一组列选择。
     pub fn new(artist: bool, album: bool) -> Self {
-        Self { artist, album }
+        Self {
+            artist,
+            album,
+            thumbnails: false,
+        }
+    }
+
+    /// 按当前图片协议能力启用图片列，图片未就绪时仍保留该列。
+    ///
+    /// # Params:
+    ///   - `enabled`: `ImageEngine::supports_thumbnails` 返回的当前能力
+    pub(super) fn with_thumbnails(self, enabled: bool) -> Self {
+        Self {
+            thumbnails: enabled,
+            ..self
+        }
+    }
+
+    /// 返回 title 列下标，供 marquee 使用包含图片列的实际宽度。
+    pub(super) fn title_index(self) -> usize {
+        1 + usize::from(self.thumbnails)
     }
 
     /// 按面板宽度降级：窄于 [`NARROW_W`] 时砍掉 artist/album（响应式，不写死字符数）。
     pub fn for_width(self, width: u16) -> Self {
         if width < NARROW_W {
-            Self::new(/*artist*/ false, /*album*/ false)
+            Self {
+                artist: false,
+                album: false,
+                ..self
+            }
         } else {
             self
         }
@@ -49,7 +78,11 @@ impl TrackColumns {
 
     /// 表头单元格（与 [`Self::widths`] / [`track_row`] 的列集严格一致）。
     pub fn header_cells(self) -> Vec<Cell<'static>> {
-        let mut cells = vec![Cell::from(""), Cell::from("title")];
+        let mut cells = vec![Cell::from("")];
+        if self.thumbnails {
+            cells.push(Cell::from(""));
+        }
+        cells.push(Cell::from("title"));
         if self.artist {
             cells.push(Cell::from("artist"));
         }
@@ -63,6 +96,9 @@ impl TrackColumns {
     /// 列宽约束：定宽小列用 Length，文本列用比例 Fill（title 在有中间列时占大头）。
     pub fn widths(self) -> Vec<Constraint> {
         let mut w = vec![Constraint::Length(1)];
+        if self.thumbnails {
+            w.push(Constraint::Length(THUMBNAIL_COLUMNS));
+        }
         if self.artist || self.album {
             w.push(Constraint::Fill(3));
             if self.artist {
@@ -113,7 +149,7 @@ fn love_cell(loved: bool, theme: &Theme) -> Cell<'static> {
 }
 
 /// 把一首裸 [`Song`] 装配成曲目表的一行（纯文本，无搜索高亮）：
-/// ♥ / title / [artist 首位] / [album] / len。
+/// ♥ / [封面空列] / title / [artist 首位] / [album] / len。
 ///
 /// # Params:
 ///   - `song`: 该行歌曲
@@ -136,7 +172,11 @@ pub fn track_row(
         ),
         None => Cell::from(Line::from(title_spans)),
     };
-    let mut cells = vec![love_cell(loved, theme), title_cell];
+    let mut cells = vec![love_cell(loved, theme)];
+    if cols.thumbnails {
+        cells.push(Cell::from(""));
+    }
+    cells.push(title_cell);
     if cols.artist {
         let artist = song
             .artists
@@ -238,7 +278,7 @@ mod tests {
     }
 
     /// 传 marquee 的行:title 溢出按相位滚动,推进拍数后从对应列起显示;
-    /// title 列宽经 resolve_column_widths 解算,与 Table 实际列边界一致。
+    /// 两种协议布局下 title 都使用自己的实际宽度，启用的空图片列保持静止。
     #[test]
     fn marquee_row_title_scrolls() -> color_eyre::Result<()> {
         use ratatui::Terminal;
@@ -253,49 +293,68 @@ mod tests {
 
         let theme = crate::test_support::default_theme()?;
         let long = with_name(song("1"), "abcdefghijklmnopqrstuvwxyz0123456789");
-        let cols = TrackColumns::new(/*artist*/ false, /*album*/ false);
-        let widths = cols.widths();
-        // 测试渲染无 TableState 选中 → selection_w 0。
-        let title_w = resolve_column_widths(/*total_w*/ 40, &widths, /*selection_w*/ 0)
-            .get(1)
-            .copied()
-            .ok_or_else(|| color_eyre::eyre::eyre!("缺 title 列"))?;
-        let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
-        let render = |mq: &Marquees| -> color_eyre::Result<String> {
-            let ctx = MarqueeCtx {
-                marquees: mq,
-                gap: "  ✦  ",
-                gap_style: ratatui::style::Style::new(),
-                fade_to: ratatui::style::Color::Reset,
-                fade_cols: 3,
+        for thumbnails in [false, true] {
+            let cols =
+                TrackColumns::new(/*artist*/ false, /*album*/ false).with_thumbnails(thumbnails);
+            let widths = cols.widths();
+            // 测试渲染无 TableState 选中 → selection_w 0。
+            let title_w =
+                resolve_column_widths(/*total_w*/ 40, &widths, /*selection_w*/ 0)
+                    .get(cols.title_index())
+                    .copied()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("缺 title 列"))?;
+            let mut mq = Marquees::test_loop(/*step_ticks*/ 1, /*pause_ticks*/ 0);
+            let render = |mq: &Marquees| -> color_eyre::Result<String> {
+                let ctx = MarqueeCtx {
+                    marquees: mq,
+                    gap: "  ✦  ",
+                    gap_style: ratatui::style::Style::new(),
+                    fade_to: ratatui::style::Color::Reset,
+                    fade_cols: 3,
+                };
+                let rows = vec![super::track_row(
+                    &long,
+                    /*loved*/ false,
+                    cols,
+                    &theme,
+                    Some(RowMarquee {
+                        ctx: &ctx,
+                        slot: Slot::BrowseSelected,
+                        title_w,
+                    }),
+                )];
+                let mut t = Terminal::new(TestBackend::new(40, 1))?;
+                t.draw(|f| f.render_widget(Table::new(rows, widths.clone()), f.area()))?;
+                let buf = t.backend().buffer();
+                if thumbnails {
+                    let cover_column =
+                        crate::components::layout::shared::marquee::resolve_column_rects(
+                            buf.area, &widths, 0,
+                        )
+                        .get(1)
+                        .copied()
+                        .ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
+                    assert_eq!(
+                        buf.cell((cover_column.x, 0))
+                            .map(ratatui::buffer::Cell::symbol),
+                        Some(" "),
+                        "marquee 仅滚 title，图片列保持空格等待 overlay"
+                    );
+                }
+                Ok((0..buf.area.width)
+                    .filter_map(|x| buf.cell((x, 0)).map(ratatui::buffer::Cell::symbol))
+                    .collect::<String>())
             };
-            let rows = vec![super::track_row(
-                &long,
-                /*loved*/ false,
-                cols,
-                &theme,
-                Some(RowMarquee {
-                    ctx: &ctx,
-                    slot: Slot::BrowseSelected,
-                    title_w,
-                }),
-            )];
-            let mut t = Terminal::new(TestBackend::new(40, 1))?;
-            t.draw(|f| f.render_widget(Table::new(rows, widths.clone()), f.area()))?;
-            let buf = t.backend().buffer();
-            Ok((0..buf.area.width)
-                .filter_map(|x| buf.cell((x, 0)).map(ratatui::buffer::Cell::symbol))
-                .collect::<String>())
-        };
-        assert!(render(&mq)?.contains("abcdef"), "建档帧应从歌名开头显示");
-        for _ in 0..4 {
-            mq.tick();
+            assert!(render(&mq)?.contains("abcdef"), "建档帧应从歌名开头显示");
+            for _ in 0..4 {
+                mq.tick();
+            }
+            let scrolled = render(&mq)?;
+            assert!(
+                scrolled.contains("efghij") && !scrolled.contains("abcd"),
+                "推进 4 拍后应从第 5 字符起、开头滚出: {scrolled}"
+            );
         }
-        let scrolled = render(&mq)?;
-        assert!(
-            scrolled.contains("efghij") && !scrolled.contains("abcd"),
-            "推进 4 拍后应从第 5 字符起、开头滚出: {scrolled}"
-        );
         Ok(())
     }
 

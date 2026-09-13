@@ -71,7 +71,7 @@ impl ArtistAlbumsTest {
         test.app.state.channel_search.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .ok_or_else(|| eyre!("无法设置驻留时间"))?;
-        crate::runtime::prefetch::tick(&mut test.app.state, &*test.app.client);
+        crate::runtime::prefetch::tick(&mut test.app.state, &*test.app.client, Vec::new());
         assert_eq!(
             test.requested_pages()?,
             vec![Page::default()],

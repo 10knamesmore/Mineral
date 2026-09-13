@@ -37,8 +37,11 @@ struct PreviewTarget {
     /// 目标 cell 宽高。
     cells: (u16, u16),
 
-    /// cell 几何折算出的真实像素尺寸。
+    /// 目标像素尺寸；普通 preview 来自 cell 几何，行内封面使用低清采样上限。
     pixels: PixelSize,
+
+    /// 是否供行内封面编码读取像素，其缓存键与屏上的 halfblock preview 隔离。
+    thumbnail: bool,
 }
 
 impl PreviewTarget {
@@ -48,12 +51,26 @@ impl PreviewTarget {
         Self {
             cells,
             pixels: PixelSize::from_cells(cells, cell_pixels),
+            thumbnail: false,
+        }
+    }
+
+    /// 行内封面等比采样到 32×32 以内,不补边、不保留完整解码图。
+    fn thumbnail() -> Self {
+        Self {
+            cells: (32, 16),
+            pixels: PixelSize::new(32, 32),
+            thumbnail: true,
         }
     }
 
     /// 为图片身份构造 preview 缓存键。
     fn key(self, identity: ImageIdentity) -> TerminalImageKey {
-        TerminalImageKey::rasterized(identity, self.pixels)
+        if self.thumbnail {
+            TerminalImageKey::thumbnail(identity, self.pixels)
+        } else {
+            TerminalImageKey::rasterized(identity, self.pixels)
+        }
     }
 }
 
@@ -80,7 +97,7 @@ pub struct ImageEngine {
     terminal_backend: TerminalBackend,
 
     /// 已拉好的封面原始图(字节预算 LRU;越 `tui.cover.cache.image` 逐出最久未用)。
-    /// 逐出项派生的终端图片与色板由 fetch drain 联动清理，不留悬挂。
+    /// 逐出时联动清理高清终端成品与色板；行内缩略图保留自己的小像素资源。
     pub cache: CoverCache,
 
     /// 已取色的封面色板(URL → 频谱 2D 色场的重点色,Lab 明度升序)。
@@ -125,6 +142,9 @@ pub struct ImageEngine {
     /// 成品保留协议渲染状态与资源，render 命中后无需每帧重编；逐出的图片滚回时
     /// 后台重编，其间使用 halfblock。
     pub terminal_images: TerminalImageCache,
+
+    /// 本帧行内图片的传输与 placement 指令；在 ratatui 输出 cell 之前统一发送。
+    pub(super) graphics_commands: RefCell<String>,
 
     /// 由图片引擎独占的下载与终端成品编码 worker。
     workers: ImageWorkers,
@@ -176,6 +196,41 @@ impl ImageEngine {
         )
     }
 
+    /// 构造支持 Kitty 的测试引擎；不启动 worker，也不探测真实终端。
+    #[cfg(test)]
+    pub(crate) fn disabled_kitty(cfg: Arc<mineral_config::Config>) -> Self {
+        let backend = TerminalBackend::new(
+            TerminalGraphics::fixed_kitty((8, 16)),
+            mineral_config::CoverProtocolMode::Kitty,
+        );
+        Self::from_parts(
+            cfg,
+            CoverFetcher::disabled(),
+            CoverEncoder::disabled(),
+            backend,
+        )
+    }
+
+    /// 插入一张真实 Kitty 缩略图，供列表布局与终端输出测试使用。
+    #[cfg(test)]
+    pub(crate) fn insert_test_thumbnail(&self, url: &MediaUrl) -> color_eyre::Result<()> {
+        let pixels = PreviewTarget::thumbnail().pixels;
+        let key = self.thumbnail_preview_key(url);
+        let source = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            32,
+            32,
+            image::Rgb([180, 80, 40]),
+        ));
+        let graphics = self
+            .terminal_backend
+            .graphics_for(self.graphics_generation())
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing test terminal backend"))?;
+        let image = TerminalImage::encode(&source, Some(pixels), (1, 1), &graphics)?;
+        let bytes = image.resident_bytes();
+        self.terminal_images.insert(&key, image, bytes);
+        Ok(())
+    }
+
     /// 从已经确定的 worker 与 backend 构造图片引擎状态。
     fn from_parts(
         cfg: Arc<mineral_config::Config>,
@@ -202,6 +257,7 @@ impl ImageEngine {
             decode_failures: RefCell::new(FxHashSet::default()),
             preview_images: TerminalImageCache::new(preview_budget),
             terminal_images: TerminalImageCache::new(protocol_budget),
+            graphics_commands: RefCell::new(String::new()),
             workers: ImageWorkers { fetcher, encoder },
             encode_pending: RefCell::new(FxHashSet::default()),
             transition: None,
@@ -290,10 +346,11 @@ impl ImageEngine {
     fn clear_terminal_state(&mut self) {
         self.terminal_images.clear();
         self.encode_pending.borrow_mut().clear();
+        self.graphics_commands.borrow_mut().clear();
     }
 
     /// 现调三层 RAM 缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
-    /// 原图侧被逐出项的派生物(协议 / 色板 / 频谱标记)照常联动清理。
+    /// 原图侧被逐出项的高清协议成品、色板与频谱标记照常联动清理，保留行内缩略图。
     ///
     /// # Params:
     ///   - `image_budget`: 原图缓存新预算(配置 `tui.cover.cache.image`)
@@ -386,17 +443,17 @@ impl ImageEngine {
         }
         let evicted = self.cache.insert(&ready.url, ready.image);
         self.terminal_images
-            .remove(&ImageIdentity::Url(ready.url.clone()));
+            .remove_decoded(&ImageIdentity::Url(ready.url.clone()));
         for url in evicted {
             self.discard_derived(&url);
         }
     }
 
-    /// 清掉某封面 URL 派生的一切：终端图片、取色色板；若它正是频谱当前色场来源，
-    /// 一并解除标记让频谱下 tick 回退 hue。原图已被 LRU 逐出,这些派生物再留即悬挂。
+    /// 原图逐出后清理高清成品与色板，保留拥有独立小像素资源的行内封面。
+    /// 若它正是频谱当前色场来源，一并解除标记，让下一拍重新同步色场。
     fn discard_derived(&mut self, url: &MediaUrl) {
         self.terminal_images
-            .remove(&ImageIdentity::Url(url.clone()));
+            .remove_decoded(&ImageIdentity::Url(url.clone()));
         self.palettes.remove(url);
         if self.spectrum_cover.as_ref() == Some(url) {
             self.spectrum_cover = None;
@@ -447,6 +504,7 @@ impl ImageEngine {
                 target.cells.1,
                 target.pixels.width(),
                 target.pixels.height(),
+                target.thumbnail,
             )
         });
     }
@@ -462,6 +520,18 @@ impl ImageEngine {
         self.observed_preview_targets
             .borrow_mut()
             .insert(PreviewTarget::from_area(area, self.cell_pixels()));
+    }
+
+    /// 记录行内封面的低清采样上限；实际 URL 仍由配置半径内的 prefetch 候选决定。
+    pub(super) fn observe_thumbnail_target(&self) {
+        self.observed_preview_targets
+            .borrow_mut()
+            .insert(PreviewTarget::thumbnail());
+    }
+
+    /// 返回行内封面复用的低清 preview 键。
+    pub(super) fn thumbnail_preview_key(&self, url: &MediaUrl) -> TerminalImageKey {
+        PreviewTarget::thumbnail().key(ImageIdentity::Url(url.clone()))
     }
 
     /// 为 URL 与目标区域构造 preview 缓存键。
@@ -699,6 +769,173 @@ mod tests {
             !engine.decode_demand.borrow().contains(&url),
             "decode demand 应被显示图满足"
         );
+        Ok(())
+    }
+
+    /// 行内封面只消费预取结果;方图与矩形图都保留原比例,未预取的行不下载或完整解码。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn thumbnails_use_prefetched_pixels_without_full_decode() -> color_eyre::Result<()> {
+        use crate::image::{ImageRenderPhase, fetch::CoverFetcher, graphics::TerminalGraphics};
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use std::time::Duration;
+
+        let sample_limit = super::PreviewTarget::thumbnail().pixels;
+        for (width, height, width_divisor, height_divisor) in
+            [(512, 512, 1, 1), (256, 512, 2, 1), (512, 256, 1, 2)]
+        {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("cover.jpg");
+            image::RgbImage::from_fn(width, height, |x, y| {
+                image::Rgb([
+                    if x < 256 { 220 } else { 20 },
+                    if y < 256 { 180 } else { 40 },
+                    80,
+                ])
+            })
+            .save(&path)?;
+            let url = MediaUrl::local(path);
+            let outside_radius = MediaUrl::remote("https://example.com/not-prefetched.jpg")?;
+            let cfg = Arc::new(mineral_config::Config::defaults()?);
+            let fetcher = CoverFetcher::spawn(cfg.tui().cover().clone(), 0, None).await?;
+            let mut engine = ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
+            assert_ne!(
+                engine.thumbnail_preview_key(&url),
+                engine.preview_key(&url, Rect::new(0, 0, 4, 2)),
+                "32×32 采样图不能与相同物理尺寸的 4×2 cell preview 混用"
+            );
+            let area = Rect::new(0, 0, 1, 1);
+            let mut buffer = Buffer::empty(area);
+            engine.render_thumbnail(
+                Some(&outside_radius),
+                area,
+                &mut buffer,
+                ImageRenderPhase::Stable,
+            );
+            engine.tick(None, false);
+            engine.prefetch([(mineral_model::SourceKind::NETEASE, url.clone())]);
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    engine.tick(None, false);
+                    engine.render_thumbnail(
+                        Some(&url),
+                        area,
+                        &mut buffer,
+                        ImageRenderPhase::Stable,
+                    );
+                    if buffer
+                        .cell((0, 0))
+                        .is_some_and(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await?;
+
+            assert!(
+                engine.decode_demand.borrow().is_empty(),
+                "行缩略图不能触发完整解码"
+            );
+            assert!(engine.pending.is_empty(), "只有显式预取的封面应完成请求");
+            assert!(!engine.source_by_url.contains_key(&outside_radius));
+            assert!(
+                !engine.cache.contains_key(&url),
+                "JPEG 缩略图不能占用完整图缓存"
+            );
+            let key = engine.thumbnail_preview_key(&url);
+            assert!(engine.terminal_images.render_if_ready(&key, |image| {
+                assert!(
+                    image.resident_bytes()
+                        <= u64::from(sample_limit.width()) * u64::from(sample_limit.height()) * 4,
+                    "行内 shared memory 不超过低清像素的 RGBA 预算"
+                );
+            }));
+            let commands = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
+            assert!(commands.contains("a=t,"), "图片传输须在 cell 外排队");
+            assert!(commands.contains("a=p,U=1,c=1,r=1"));
+            assert!(
+                commands.contains(&format!(
+                    "s={},v={};",
+                    sample_limit.width() / width_divisor,
+                    sample_limit.height() / height_divisor
+                )),
+                "传输应保留无补边的小图比例,显示尺寸交给 Kitty: {commands:?}"
+            );
+            engine.render_thumbnail(Some(&url), area, &mut buffer, ImageRenderPhase::Stable);
+            assert!(
+                engine.graphics_commands.borrow().is_empty(),
+                "重画不重复传输或建立 placement"
+            );
+            let mut expanded = Buffer::empty(Rect::new(0, 0, 2, 1));
+            engine.render_thumbnail(
+                Some(&url),
+                expanded.area,
+                &mut expanded,
+                ImageRenderPhase::Stable,
+            );
+            let resized = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
+            assert!(resized.contains("a=p,U=1,c=2,r=1"));
+            assert!(
+                !resized.contains("a=t,"),
+                "拓宽图片列只更新 placement,不重传像素"
+            );
+            assert_ne!(
+                expanded.cell((0, 0)).map(ratatui::buffer::Cell::symbol),
+                expanded.cell((1, 0)).map(ratatui::buffer::Cell::symbol),
+                "两格必须寻址图片的不同列"
+            );
+
+            engine.install_decoded_cover(CoverReady {
+                url: url.clone(),
+                image: Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64))),
+                palette: None,
+            });
+            engine.set_budgets(0, 16 * 1024, 16 * 1024);
+            assert!(!engine.cache.contains_key(&url));
+            assert!(
+                engine.terminal_images.ready(&key),
+                "完整图回填和逐出不得清掉独立缩略图"
+            );
+        }
+        Ok(())
+    }
+
+    /// 离屏、缩放与滚动不启动行内编码；非 Kitty 不注册采样尺寸。
+    #[test]
+    fn thumbnail_render_phases_do_not_create_hidden_work() -> color_eyre::Result<()> {
+        use crate::image::ImageRenderPhase;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        let mut kitty = ImageEngine::disabled_kitty(cfg);
+        let url = MediaUrl::remote("https://example.com/cover.jpg")?;
+        kitty.cache.insert(
+            &url,
+            Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64))),
+        );
+        let area = Rect::new(0, 0, 1, 1);
+        for phase in [
+            ImageRenderPhase::Offscreen,
+            ImageRenderPhase::Resizing,
+            ImageRenderPhase::Scrolling,
+        ] {
+            kitty.render_thumbnail(Some(&url), area, &mut Buffer::empty(area), phase);
+            assert!(kitty.encode_pending.borrow().is_empty());
+            assert!(kitty.decode_demand.borrow().is_empty());
+            assert!(kitty.graphics_commands.borrow().is_empty());
+        }
+        let other = engine()?;
+        other.render_thumbnail(
+            Some(&url),
+            area,
+            &mut Buffer::empty(area),
+            ImageRenderPhase::Stable,
+        );
+        assert!(other.observed_preview_targets.borrow().is_empty());
         Ok(())
     }
 
