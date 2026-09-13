@@ -10,7 +10,9 @@ use ratatui::symbols::braille;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::scroll::position::{MagnetProgress, POSITION_SCALE, relative_position};
+use crate::runtime::scroll::position::{
+    MagnetProgress, POSITION_SCALE, boundary_position, relative_position,
+};
 
 /// 盲文字符每格的纵向点数，光标以四分之一格移动。
 const DOT_ROWS_PER_CELL: u64 = 4;
@@ -72,7 +74,7 @@ pub(crate) struct MinimapEntry {
     /// 从零开始的过滤视图序号；大于等于列表总数时不参与绘制。
     pub(crate) index: usize,
 
-    /// 曲目是否已喜欢；所在格轨道整格染红，不动左列。
+    /// 曲目是否已喜欢；它占的那一段轨道整格染红，不动左列。
     pub(crate) loved: bool,
 
     /// 曲目是否在播；所在格显示菱形，同时是光标的吸附目标。
@@ -91,10 +93,11 @@ struct RowMarkers {
 
 /// 把整份列表的位置与标记绘制到右边框的数据行上。
 ///
-/// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道：喜欢整格染红、
-/// 光晕混色，左列只归光标。在播格显示 `◆`：没被吸住时保持主题绿；光标点进入
-/// `tui.minimap.magnet_dots` 个点内就被吸走——光标点不显示，`◆` 按
-/// [`MagnetProgress`] 缓动淡向光标色，光晕同步淡出。空列表保留淡色盲文轨道。
+/// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道：喜欢染红自己那一份
+/// 等分区间（相邻两项共用边界，连着的喜欢在轨道上连成一片）、光晕混色，左列只归光标。
+/// 在播格显示 `◆`：没被吸住时保持主题绿；光标点进入 `tui.minimap.magnet_dots` 个点内
+/// 就被吸走——光标点不显示，`◆` 按 [`MagnetProgress`] 缓动淡向光标色，光晕同步淡出。
+/// 空列表保留淡色盲文轨道。
 ///
 /// # Params:
 ///   - `buf`: 已绘制面板边框的当前帧缓冲区；保留每格原有背景和字体效果。
@@ -140,18 +143,26 @@ pub(crate) fn render_minimap(
         };
         // 先投影到盲文点再合并到字符格，保证标记与光标使用同一坐标。
         let dot = nearest_dot_row(u64::from(position) * dot_span);
-        if entry.playing
-            && let Some(cursor) = cursor_dot
-            && nearest_playing.is_none_or(|best| cursor.abs_diff(dot) < cursor.abs_diff(best))
-        {
-            nearest_playing = Some(dot);
+        if entry.playing {
+            if let Some(cursor) = cursor_dot
+                && nearest_playing.is_none_or(|best| cursor.abs_diff(dot) < cursor.abs_diff(best))
+            {
+                nearest_playing = Some(dot);
+            }
+            if let Some(row) = row_index(dot)
+                && let Some(markers) = rows.get_mut(row)
+            {
+                markers.playing = true;
+            }
         }
-        let Ok(row) = usize::try_from(dot / DOT_ROWS_PER_CELL) else {
-            continue;
-        };
-        if let Some(markers) = rows.get_mut(row) {
-            markers.loved |= entry.loved;
-            markers.playing |= entry.playing;
+        // 喜欢染红整项在全列表中的等分区间：相邻两项共用边界，连着的喜欢连成一片。
+        if entry.loved
+            && let Some((first, last)) = loved_span(entry.index, total, dot_span)
+            && let Some((first, last)) = row_index(first).zip(row_index(last))
+        {
+            for markers in rows.iter_mut().skip(first).take(last - first + 1) {
+                markers.loved = true;
+            }
         }
     }
 
@@ -210,6 +221,34 @@ pub(crate) fn render_minimap(
 ///   - `position`: 从轨道首点起算的位置，每个点距以 `POSITION_SCALE` 个单位表示。
 fn nearest_dot_row(position: u64) -> u64 {
     (position + u64::from(POSITION_SCALE) / 2) / u64::from(POSITION_SCALE)
+}
+
+/// 喜欢标记在轨道上覆盖的盲文点区间（闭区间）。
+///
+/// 第 `index` 项占它与前后邻居的中点之间那一份轨道，首末项贴住轨道两端；相邻两项因此
+/// 共用一条边界，连着的喜欢在轨道上首尾相接。
+///
+/// # Params:
+///   - `index`: 当前显示顺序中的下标，越界时钳到末项。
+///   - `total`: 当前显示列表的总项数；空列表没有区间。
+///   - `dot_span`: 轨道末点的序号。
+fn loved_span(index: usize, total: usize, dot_span: u64) -> Option<(u64, u64)> {
+    let last = total.checked_sub(1)?;
+    let index = index.min(last);
+    let start = boundary_position(index, total)?;
+    let end = boundary_position(index + 1, total)?;
+    Some((
+        nearest_dot_row(u64::from(start) * dot_span),
+        nearest_dot_row(u64::from(end) * dot_span),
+    ))
+}
+
+/// 盲文点所属的轨道行偏移。
+///
+/// # Params:
+///   - `dot`: 从轨道首点起算的整数点位；行数受 `u16` 限制，点位总能落在 `usize` 内。
+fn row_index(dot: u64) -> Option<usize> {
+    usize::try_from(dot / DOT_ROWS_PER_CELL).ok()
 }
 
 /// 把全轨道点位转成盲文左列的单点掩码，即光标在格内的精确点位。
@@ -399,6 +438,77 @@ mod tests {
                 1,
                 "轨道内只显示一个光标中心"
             );
+        }
+        Ok(())
+    }
+
+    /// 短列表里连着的喜欢在轨道上连成一片：红色按各项的等分区间铺满，隔一项则留空。
+    #[test]
+    fn adjacent_loved_tracks_tint_one_continuous_run() -> color_eyre::Result<()> {
+        let theme = default_theme()?;
+        let track = Rect::new(0, 0, 1, 9);
+        let render = |loved: &[usize]| {
+            let mut buf = Buffer::empty(track);
+            render_pinned(
+                &mut buf,
+                track,
+                3,
+                None,
+                loved.iter().map(|&index| MinimapEntry {
+                    index,
+                    loved: true,
+                    playing: false,
+                }),
+                &theme,
+            );
+            buf
+        };
+        // 第 0、1 项连着：两项的区间在盲文点 9 处相接，红色从轨道首行连到第 6 行。
+        let run = render(&[0, 1]);
+        for y in 0..=6 {
+            assert_eq!(cell(&run, 0, y)?.fg, theme.red, "第 {y} 行属于连着的喜欢段");
+        }
+        for y in 7..9 {
+            assert_eq!(cell(&run, 0, y)?.fg, theme.surface1, "第 {y} 行在段外");
+        }
+        // 第 0、2 项之间隔着第 1 项：各自红自己那一份，中间三行仍是轨道色。
+        let apart = render(&[0, 2]);
+        for y in 0..=2 {
+            assert_eq!(cell(&apart, 0, y)?.fg, theme.red, "第 {y} 行属于第 0 项");
+        }
+        for y in 3..=5 {
+            assert_eq!(
+                cell(&apart, 0, y)?.fg,
+                theme.surface1,
+                "第 {y} 行属于没喜欢的第 1 项"
+            );
+        }
+        for y in 6..9 {
+            assert_eq!(cell(&apart, 0, y)?.fg, theme.red, "第 {y} 行属于第 2 项");
+        }
+        Ok(())
+    }
+
+    /// 单项列表里唯一一项占满整条轨道；空列表没有喜欢可染。
+    #[test]
+    fn single_item_loved_run_covers_the_whole_rail() -> color_eyre::Result<()> {
+        let theme = default_theme()?;
+        let track = Rect::new(0, 0, 1, 9);
+        let mut buf = Buffer::empty(track);
+        render_pinned(
+            &mut buf,
+            track,
+            1,
+            None,
+            std::iter::once(MinimapEntry {
+                index: 0,
+                loved: true,
+                playing: false,
+            }),
+            &theme,
+        );
+        for y in track.top()..track.bottom() {
+            assert_eq!(cell(&buf, 0, y)?.fg, theme.red, "第 {y} 行属于唯一一项");
         }
         Ok(())
     }

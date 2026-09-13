@@ -17,12 +17,44 @@ pub(crate) const MAGNET_FULL: u16 = 1000;
 ///   - `total`: 当前显示列表的总项数。
 pub(crate) fn relative_position(index: usize, total: usize) -> Option<u32> {
     let last = total.checked_sub(1)?;
-    if last == 0 {
+    scaled_position(
+        u128::try_from(index.min(last)).ok()?,
+        u128::try_from(last).ok()?,
+    )
+}
+
+/// 第 `boundary` 条等分边界的位置：它上下两项在中点分界，首末边界贴住两端。
+///
+/// 与 [`relative_position`] 是同一投影：第 `index` 项占
+/// `boundary_position(index, total)..=boundary_position(index + 1, total)`，
+/// 相邻两项的区间首尾相接，且各自包住自己的点位。
+///
+/// # Params:
+///   - `boundary`: 边界上方的项序号；`0` 是列表最顶端，大于等于 `total` 时贴住满值。
+///   - `total`: 当前显示列表的总项数；空列表没有边界，单项占满整条。
+pub(crate) fn boundary_position(boundary: usize, total: usize) -> Option<u32> {
+    let last = total.checked_sub(1)?;
+    if boundary == 0 {
         return Some(0);
     }
-    let index = u128::try_from(index.min(last)).ok()?;
-    let last = u128::try_from(last).ok()?;
-    u32::try_from(index * u128::from(POSITION_SCALE) / last).ok()
+    if boundary >= total {
+        return Some(POSITION_SCALE);
+    }
+    // 相邻两项的中点：(2 * boundary - 1) / (2 * last)。
+    let numerator = 2 * u128::try_from(boundary).ok()? - 1;
+    scaled_position(numerator, 2 * u128::try_from(last).ok()?)
+}
+
+/// 把 `numerator / denominator` 映射到首项为零、末项为满值的位置；分母为零时只剩顶端。
+///
+/// # Params:
+///   - `numerator`: 分子。
+///   - `denominator`: 分母。
+fn scaled_position(numerator: u128, denominator: u128) -> Option<u32> {
+    if denominator == 0 {
+        return Some(0);
+    }
+    u32::try_from(numerator * u128::from(POSITION_SCALE) / denominator).ok()
 }
 
 /// 跟随列表光标的显示位置；首帧与列表长度变化直接定位，导航时从眼前位置缓动。
@@ -180,7 +212,10 @@ impl MagnetProgress {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListPosition, MAGNET_FULL, MagnetProgress, POSITION_SCALE, relative_position};
+    use super::{
+        ListPosition, MAGNET_FULL, MagnetProgress, POSITION_SCALE, boundary_position,
+        relative_position,
+    };
 
     /// 长列表保留小步移动，空列表与单项都有明确端点语义。
     #[test]
@@ -194,6 +229,54 @@ mod tests {
             relative_position(usize::MAX, usize::MAX),
             Some(POSITION_SCALE)
         );
+    }
+
+    /// 等分边界首末贴住两端、逐项递增，且每项的点位落在自己的区间里。
+    #[test]
+    fn boundaries_partition_the_list_around_each_point() -> color_eyre::Result<()> {
+        assert_eq!(boundary_position(0, 0), None);
+        assert_eq!(boundary_position(0, 1), Some(0));
+        assert_eq!(
+            boundary_position(1, 1),
+            Some(POSITION_SCALE),
+            "单项占满整条"
+        );
+        assert_eq!(
+            boundary_position(1, 3),
+            Some(250_000),
+            "边界取相邻两项的中点"
+        );
+        assert_eq!(boundary_position(2, 3), Some(750_000));
+        assert_eq!(
+            boundary_position(9, 3),
+            Some(POSITION_SCALE),
+            "越界边界钳到满值"
+        );
+        for total in [2_usize, 3, 101, 100_001] {
+            let mut previous = 0;
+            for index in 0..total {
+                let start = boundary_position(index, total).ok_or_else(|| {
+                    color_eyre::eyre::eyre!("{total} 项第 {index} 项缺少起始边界")
+                })?;
+                let end = boundary_position(index + 1, total).ok_or_else(|| {
+                    color_eyre::eyre::eyre!("{total} 项第 {index} 项缺少结束边界")
+                })?;
+                let point = relative_position(index, total)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("{total} 项第 {index} 项缺少点位"))?;
+                assert!(
+                    previous <= start && start <= point && point <= end,
+                    "{total} 项第 {index} 项: 区间 [{start}, {end}] 未按序包住点位 {point}"
+                );
+                if index == 0 {
+                    assert_eq!(start, 0, "首边界贴住顶端");
+                }
+                if index + 1 == total {
+                    assert_eq!(end, POSITION_SCALE, "末边界贴住末端");
+                }
+                previous = start;
+            }
+        }
+        Ok(())
     }
 
     /// 吸附进度线性缓动到目标；冻结采样不多推进，重置后直接回零。
