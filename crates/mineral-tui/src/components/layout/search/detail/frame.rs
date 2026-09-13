@@ -58,8 +58,13 @@ pub(super) fn draw_frame_real(
     let buf = frame.buffer_mut();
     draw_meta(buf, meta_a, dframe, theme, show_back);
     draw_delimiter(buf, delim, theme);
-    // 稳态实拍:列表视口推进缓动(每帧恰一次)。
-    draw_body(buf, body, dframe, state, theme, advancing(state));
+    // 页面形变按端点离屏绘制，视口在搜索页落定后再推进。
+    let motion = if state.channel_search.active.at_max() {
+        advancing(state)
+    } else {
+        ScrollMotion::Frozen
+    };
+    draw_body(buf, body, dframe, state, theme, motion);
 }
 
 /// 把一帧渲染到离屏 Buffer：完整图走 halfblock，否则尝试 preview，均缺失时留空。

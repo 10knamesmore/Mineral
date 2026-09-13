@@ -49,7 +49,10 @@ pub enum PageKind {
 impl AppState {
     /// 把应用动画与滚动状态折算为图片引擎需要的互斥渲染阶段。
     pub(crate) fn image_render_phase(&self) -> crate::image::ImageRenderPhase {
-        if !self.browse.fullscreen.settled() || !self.channel_search.active.settled() {
+        if !self.browse.fullscreen.settled()
+            || !self.channel_search.active.settled()
+            || !(self.browse.view.at_min() || self.browse.view.at_max())
+        {
             crate::image::ImageRenderPhase::Resizing
         } else if self.is_scrolling() {
             crate::image::ImageRenderPhase::Scrolling

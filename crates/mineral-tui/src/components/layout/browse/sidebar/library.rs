@@ -203,6 +203,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，不用临时高度改写滚动目标。
     let viewport = usize::from(area.height.saturating_sub(3));
     let motion = if state.browse.fullscreen.at_min()
+        && state.channel_search.active.at_min()
         && (state.browse.view.at_min() || state.browse.view.at_max())
     {
         ScrollMotion::Advancing {

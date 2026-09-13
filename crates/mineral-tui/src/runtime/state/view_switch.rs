@@ -34,6 +34,7 @@ impl ViewSwitch {
     /// 中途反向只改目标不跳变。
     pub fn switch_to(&mut self, view: View) {
         self.0.set(view == View::Library);
+        mineral_log::debug!(target: "tui", ?view, progress = self.raw(), "browse view transition");
     }
 
     /// 推进过渡一拍。
@@ -57,6 +58,11 @@ impl ViewSwitch {
     /// 进度处于 Library 端点(满值):sidebar 直接画 Library 单视图。
     pub fn at_max(&self) -> bool {
         self.0.at_max()
+    }
+
+    /// 未缓动的视图进度，右侧详情据此与左栏横向过渡同步交接。
+    pub(crate) fn raw(&self) -> u16 {
+        self.0.raw()
     }
 
     /// 当前过渡位置经 ease-in-out 映射的千分比(`0` = Playlists、满值 = Library),喂 sweep。

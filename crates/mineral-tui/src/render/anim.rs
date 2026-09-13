@@ -205,6 +205,11 @@ impl Toggle {
         self.0.tick();
     }
 
+    /// 未缓动的千分比进度，供同一次过渡的文字明暗与几何分别取曲线。
+    pub(crate) fn raw(&self) -> u16 {
+        self.0.raw()
+    }
+
     /// 当前进度经 ease-in-out 映射的渲染值,千分比 `0..=1000`。
     pub fn eased_in_out(&self) -> u16 {
         self.0.eased_in_out()

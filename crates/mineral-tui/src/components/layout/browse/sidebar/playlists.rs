@@ -40,8 +40,9 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
 
-    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，光标位置因此也停在原地。
+    // 页面形变与 view sweep 冻结视口和 minimap 光标，避免离屏绘制推进导航状态。
     let motion = if state.browse.fullscreen.at_min()
+        && state.channel_search.active.at_min()
         && (state.browse.view.at_min() || state.browse.view.at_max())
     {
         ScrollMotion::Advancing {

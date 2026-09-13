@@ -591,6 +591,9 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     let views = entry_views(tracks);
     app.state.library.tracks.insert(pid, views);
     app.state.browse.view.switch_to(View::Library);
+    while !app.state.browse.view.at_max() {
+        app.state.browse.view.tick();
+    }
     app.state.browse.nav.playlist.set_sel(0);
     app.state.browse.nav.track.set_sel(sel_track);
     Ok(app)
@@ -698,6 +701,9 @@ pub(crate) fn app_with_library_probed(
     let views = entry_views(endserenading(len));
     app.state.library.tracks.insert(pid, views);
     app.state.browse.view.switch_to(View::Library);
+    while !app.state.browse.view.at_max() {
+        app.state.browse.view.tick();
+    }
     app.state.browse.nav.track.set_sel(sel_track);
     Ok((app, queue_ops))
 }

@@ -32,7 +32,16 @@ pub(crate) fn sections(area: Rect) -> Option<[Rect; 3]> {
 
 /// 返回面板当前主封面的 URL。
 pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
-    match state.browse.view.current() {
+    url_for_view(state, state.browse.view.current())
+}
+
+/// 返回指定视图的选中项封面，供过渡两端独立取图。
+///
+/// # Params:
+///   - `state`: 当前歌单和曲目选择
+///   - `view`: Playlists 取歌单封面，Library 取选中曲目封面
+pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
+    match view {
         View::Playlists => {
             let playlist = state.selected_playlist()?;
             crate::image::collage::effective_cover_url(state, &playlist.data)

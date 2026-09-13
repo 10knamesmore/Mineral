@@ -148,6 +148,12 @@ impl App {
             return;
         }
         self.state.browse.fullscreen.toggle();
+        mineral_log::debug!(
+            target: "tui",
+            fullscreen = self.state.browse.fullscreen.on(),
+            progress = self.state.browse.fullscreen.raw(),
+            "fullscreen layout transition"
+        );
         self.report_terminal_state();
     }
 
@@ -157,9 +163,16 @@ impl App {
         if self.state.browse.fullscreen.on() {
             return;
         }
+        let entering_from_browse = self.state.channel_search.active.at_min();
         self.state.channel_search.active.toggle();
-        // 进入(而非退出)时挑默认源 + 建会话;退出保留会话(切回恢复)。
-        if self.state.channel_search.active.on() {
+        mineral_log::debug!(
+            target: "tui",
+            search = self.state.channel_search.active.on(),
+            progress = self.state.channel_search.active.raw(),
+            "search layout transition"
+        );
+        // 从浏览端点进入时建立会话；中途反向沿用搜索焦点与输入状态。
+        if self.state.channel_search.active.on() && entering_from_browse {
             self.state.channel_search.enter(&self.state.caps);
         }
     }
@@ -779,6 +792,37 @@ mod tests {
 
         press(&mut app, KeyCode::Esc);
         assert!(!app.state.channel_search.active.on(), "Esc 退 search 布局");
+        Ok(())
+    }
+
+    /// 搜索面板上的 s 退场后再按 s，反向沿用同一焦点和进度。
+    #[test]
+    fn reversing_search_exit_keeps_panel_focus() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+
+        for focus in [SearchFocus::Results, SearchFocus::Detail] {
+            let (mut app, _) =
+                crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+            app.state.channel_search.set_focus(focus);
+            app.state.channel_search.active.retempo(8);
+            press(&mut app, KeyCode::Char('s'));
+            assert!(!app.state.channel_search.active.on(), "面板上的 s 启动退场");
+            for _ in 0..2 {
+                app.state.channel_search.active.tick();
+            }
+            let progress = app.state.channel_search.active.raw();
+            assert!(
+                !app.state.channel_search.active.at_min(),
+                "前置：仍在退场途中"
+            );
+            press(&mut app, KeyCode::Char('s'));
+            assert!(app.state.channel_search.active.on(), "再次按 s 反向进入");
+            assert_eq!(app.state.channel_search.active.raw(), progress);
+            assert_eq!(
+                app.state.channel_search.focus, focus,
+                "反向不能重置搜索焦点"
+            );
+        }
         Ok(())
     }
 

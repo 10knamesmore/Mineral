@@ -5,3 +5,4 @@ pub mod browse;
 pub mod flight;
 pub mod search;
 pub mod shared;
+pub(crate) mod transition;

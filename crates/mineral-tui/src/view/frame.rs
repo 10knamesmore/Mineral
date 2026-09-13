@@ -1,0 +1,2131 @@
+//! 主帧渲染入口。
+
+use super::page_morph;
+
+use ratatui::Frame;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders};
+
+use mineral_config::SearchFocusTransition;
+
+use crate::app::App;
+use crate::components::layout::browse::{lyrics, now_playing, sidebar, spectrum};
+use crate::components::layout::search::{detail, panel};
+use crate::components::layout::shared::compute::{
+    Areas, compute, compute_fullscreen, compute_search,
+};
+use crate::components::layout::shared::marquee::MarqueeCtx;
+use crate::components::layout::shared::waveform::WaveformCtx;
+use crate::components::layout::shared::{top_status, transform, transport, vinyl};
+use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
+use crate::render::ambient;
+use crate::runtime::state::SearchFocus;
+
+/// 渲染当前页面；形变期间合成两端稳定排版，封面和播放信息独立移动。
+/// 通知与浮层叠在页面之上，最后绘制启动或退出的整屏边框。
+pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    let theme = &app.theme;
+    // 回写本帧面积:按键路径(弹菜单求锚点)据此重算布局,不依赖 TTY 查询。
+    app.state.frame_area.set(frame.area());
+    let layout_cfg = app.state.cfg.tui().layout();
+    let normal = compute(frame.area(), layout_cfg);
+
+    // 整屏背景底(在任何布局面板之下):先铺 `theme.background`(普通页也有底色,消除进退
+    // 全屏时与沉浸背景的色跳变),再叠氛围场——氛围由滞后跟随门控,进 / 退全屏时背景色慢
+    // 半拍淡入 / 淡出,退出时越过恢复的列表界面慢褪。
+    paint_backdrop(frame, app, &normal, layout_cfg);
+
+    // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
+    if !app.state.browse.fullscreen.at_min() {
+        let full = compute_fullscreen(frame.area(), layout_cfg);
+        if app.state.browse.fullscreen.at_max() {
+            paint_fullscreen(frame, &full, app);
+        } else {
+            page_morph::fullscreen(frame, &normal, &full, app);
+        }
+    } else if !app.state.channel_search.active.at_min() {
+        let search = compute_search(frame.area(), layout_cfg);
+        if app.state.channel_search.active.at_max() {
+            paint_search(frame, &search, app, /*cover_in_flight*/ false);
+        } else {
+            page_morph::search(frame, &normal, &search, app);
+        }
+    } else {
+        paint_browse(frame, &normal, app);
+    }
+
+    // topbar 通知层 / 浮层栈:整屏转场(启动扩大 / 退出收缩)期间不画;全屏形变不抑制。
+    // 通知锚点恒用常规顶栏行(全屏顶栏已收掉,仍从屏顶向下堆叠)。沉浸进度直接喂
+    // 形变缓动值:z 切换期间通知锚点随布局连续插值(居中 ↔ 右上),不瞬移。
+    if app.transition.is_none() {
+        app.notifications.render(
+            frame,
+            normal.top_status,
+            theme,
+            app.state.browse.fullscreen.eased_in_out(),
+            &app.notice_hint,
+        );
+        app.overlays.render(frame, frame.area(), &app.state, theme);
+    }
+
+    if let Some(anim) = &app.transition {
+        transform::clip_scaled(frame, frame.area(), anim.eased(), app.launch_anchor, theme);
+    }
+}
+
+/// 常规(浏览态)布局:把各 area 分发给对应组件渲染。
+fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+    let theme = &app.theme;
+    top_status::draw(frame, areas.top_status, &app.state, theme);
+    sidebar::draw(frame, areas.left, &app.state, theme);
+    if let Some(right) = areas.right {
+        now_playing::draw(
+            frame, right, &app.state, theme, /*cover_in_flight*/ false,
+        );
+    }
+    if let Some(lyr) = areas.lyrics {
+        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
+    }
+    if let Some(spec) = areas.spectrum {
+        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+    }
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(&app.state, theme),
+        theme,
+    );
+}
+
+/// Search 稳态布局：prompt 接管顶行，主体为结果与详情面板，播放栏全宽贴底。
+///
+/// 焦点高亮边框两种过渡(config `search_focus_transition`):`Instant` 时各面板按当前焦点直接
+/// 高亮;`Slide` 滑动期把所有面板边框压暗,改由一个 accent 浮动环从旧面板矩形 lerp 到新面板。
+///
+/// `cover_in_flight`:page morph 封面飞行层已接管主图(now_playing 封面 / detail 头图),
+/// 面板跳过自画防双画。
+fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight: bool) {
+    let theme = &app.theme;
+    let rs = &app.state.channel_search;
+    let sliding = matches!(
+        app.state.cfg.tui().animation().search_focus_transition(),
+        SearchFocusTransition::Slide
+    ) && !rs.focus_ring.settled();
+    // 滑动期所有面板边框压暗,高亮交给浮动环;否则当前焦点面板边框高亮。
+    let border_focused = |panel: SearchFocus| !sliding && rs.focus == panel;
+
+    if let Some(prompt) = areas.search_prompt {
+        panel::draw_prompt(
+            frame,
+            prompt,
+            rs,
+            theme,
+            app.state.cfg.sources(),
+            border_focused(SearchFocus::Prompt),
+        );
+    }
+    if let Some(left) = nonempty(areas.left) {
+        panel::draw_results(
+            frame,
+            left,
+            &app.state,
+            theme,
+            border_focused(SearchFocus::Results),
+        );
+    }
+    if let Some(right) = areas.right.and_then(nonempty) {
+        detail::draw(
+            frame,
+            right,
+            &app.state,
+            theme,
+            border_focused(SearchFocus::Detail),
+            cover_in_flight,
+        );
+    }
+    // 焦点环:滑动期画 accent 浮动边框,从旧面板矩形几何插值到新面板矩形(border-only,不清内容)。
+    if sliding
+        && let (Some(from), Some(to)) = (
+            search_focus_rect(areas, rs.prev_focus),
+            search_focus_rect(areas, rs.focus),
+        )
+    {
+        let ring = transform::lerp_rect(from, to, rs.focus_ring.eased_in_out());
+        frame.render_widget(
+            Block::new()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(theme.accent)),
+            ring,
+        );
+    }
+    // chip 下拉(source/kind)画在最后,盖在 results 面板之上。
+    if let Some(prompt) = areas.search_prompt {
+        panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
+    }
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(&app.state, theme),
+        theme,
+    );
+}
+
+/// 焦点对应的面板矩形(prompt 行 / results 左 / detail 右);该面板在当前端点不存在为 `None`。
+/// 焦点环滑动据此取两端矩形插值。
+fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
+    match focus {
+        SearchFocus::Prompt => areas.search_prompt,
+        SearchFocus::Results => nonempty(areas.left),
+        SearchFocus::Detail => areas.right.and_then(nonempty),
+    }
+}
+
+/// 全屏稳态：频谱、播放栏、封面与沉浸歌词。
+fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
+    let theme = &app.theme;
+    if let Some(spec) = areas.spectrum.and_then(nonempty) {
+        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+    }
+    // marquee 边缘 fade 的目标 = transport 面实际背景(ambient 场色);采到 Reset
+    // (ambient 关 / ANSI 主题)回落 base,与非全屏调用点一致。
+    let marquee_fade_to =
+        match crate::components::layout::shared::text::center_bg(frame, areas.transport) {
+            bg @ ratatui::style::Color::Rgb(..) => bg,
+            _ => theme.base,
+        };
+    transport::draw(
+        frame,
+        areas.transport,
+        &app.state.playback,
+        &MarqueeCtx::new(&app.state, theme, marquee_fade_to),
+        &WaveformCtx::new(&app.state, theme),
+        theme,
+    );
+    if let Some(c) = areas.cover.and_then(nonempty) {
+        draw_fullscreen_cover(frame, c, areas.cover, app);
+    }
+    if let Some(lyr) = areas.lyrics.and_then(nonempty) {
+        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Immersive);
+    }
+}
+
+/// 整屏背景底:布局面板之下的两层——先 `theme.background` 纯色填充,再叠氛围渐变场。
+///
+/// 普通页面本无底色(逐格终端默认),进 / 退全屏时整屏刷成沉浸底会瞬跳;这里给普通页也
+/// 铺 `theme.background`(默认 = `base` = 氛围场在浓度 0 时的底色),两端连续。氛围场再叠
+/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变);全屏真图区两层都挖洞,防每帧
+/// 改图 cell 的 bg 触发图协议载荷 diff 重发。
+fn paint_backdrop(
+    frame: &mut Frame<'_>,
+    app: &App,
+    normal: &Areas,
+    layout_cfg: &mineral_config::LayoutConfig,
+) {
+    let area = frame.area();
+    let skip = backdrop_skip(app, area, normal, layout_cfg);
+    fill_bg(frame.buffer_mut(), area, app.theme.background, skip);
+    draw_ambient(frame, app, skip);
+}
+
+/// 本帧铺底 / 氛围都要挖的真图洞(防每帧改图 cell 的 bg 触发图协议载荷 diff 重发):
+///   - 全屏稳态(`at_max`):全屏封面真图区(见 [`ambient_skip_rect`]);
+///   - 退出残留期(几何已回列表 `at_min`、氛围仍在褪):now_playing 面板的真图封面区;
+///   - 其余(形变途中 halfblock 不透明覆盖 / 无氛围):无洞。
+fn backdrop_skip(
+    app: &App,
+    area: Rect,
+    normal: &Areas,
+    layout_cfg: &mineral_config::LayoutConfig,
+) -> Option<Rect> {
+    let fullscreen = &app.state.browse.fullscreen;
+    if fullscreen.at_max() {
+        return ambient_skip_rect(app, compute_fullscreen(area, layout_cfg).cover);
+    }
+    if fullscreen.at_min() && app.state.browse.ambient_reveal.active() {
+        return now_playing_cover_skip(app, normal.right);
+    }
+    None
+}
+
+/// now_playing 面板当前 place 的真图封面视觉区(用于退出残留期挖洞);面板不画真图
+/// (无选中 / 无图 / 协议未就绪 / halfblock 兜底)时为 `None`。
+fn now_playing_cover_skip(app: &App, right: Option<Rect>) -> Option<Rect> {
+    let right = nonempty(right?)?;
+    let url = now_playing::main_cover::url(&app.state)?;
+    let [cover_sec, _, _] = now_playing::main_cover::sections(right)?;
+    app.state.images.ready_area(&url, nonempty(cover_sec)?)
+}
+
+/// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时不改已有背景。
+/// `skip` 区不刷(见 [`ambient_skip_rect`])。
+fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
+    if matches!(color, Color::Reset) {
+        return;
+    }
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if skip.is_some_and(|hole| hole.contains(Position::new(x, y))) {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(color);
+            }
+        }
+    }
+}
+
+/// 氛围渐变场:整屏铺当前封面调色板驱动的渐变场,浓度由**滞后跟随**进度驱动——进 / 退全屏
+/// 时背景色慢半拍淡入 / 淡出,退出时几何已回列表、场仍越过列表慢褪(故门控用
+/// `ambient_reveal.active()` 而非全屏几何)。跟随静止在关态时整段跳过(背景填充已铺底);
+/// 功能关且色板淡出已到底、或 ANSI 主题无真彩底色时同样跳过。
+fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
+    if !app.state.browse.ambient_reveal.active() {
+        return;
+    }
+    let cfg = app.state.cfg.tui().ambient();
+    if !*cfg.enabled() && app.ambient.settled_at_base() {
+        return;
+    }
+    let Some(base) = ambient::rgb_of(app.theme.base) else {
+        return;
+    };
+    let area = frame.area();
+    ambient::render(
+        frame.buffer_mut(),
+        area,
+        &app.ambient,
+        base,
+        cfg,
+        app.state.browse.ambient_reveal.progress(),
+        app.ambient_pulse.level_permille(cfg.pulse()),
+        skip,
+    );
+}
+
+/// 本帧全屏封面确定会以终端图协议真图 place 时,其视觉正方区——ambient 不铺这个洞。
+///
+/// 图协议把整段载荷藏在图区首 cell 的 symbol 里:ambient 逐帧改那格 bg,diff 会每帧
+/// 重发载荷——iTerm2 / sixel(数据即显示、序列自带擦行)表现为整图持续闪烁。图不透明,
+/// 跳过零视觉损失。转场 / halfblock 兜底途中此区被不透明半块整面覆盖,跳过同样无害;
+/// 等图空窗 / 无轨待机盘则返回 `None` 照常铺场(那里没有不透明覆盖,挖洞会露出底色)。
+fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
+    if !app.state.browse.fullscreen.at_max() {
+        return None;
+    }
+    let track = app.state.playback.track.as_ref()?;
+    let url = track.cover_url.as_ref()?;
+    app.state.images.ready_area(url, cover.and_then(nonempty)?)
+}
+
+/// 全屏独立封面跟随在播曲；形变中只画 halfblock，稳态全屏才使用终端图片成品
+/// (避免形变期每帧尺寸变化导致重复编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
+/// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
+///
+/// # Params:
+///   - `steady_cover`: 终态全屏封面区,进入方向的形变期按它预热当前曲协议编码
+pub(super) fn draw_fullscreen_cover(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    steady_cover: Option<Rect>,
+    app: &App,
+) {
+    let theme = &app.theme;
+    let Some(track) = app.state.playback.track.as_ref() else {
+        vinyl::render(frame, area, &app.state.vinyl, theme);
+        return;
+    };
+    if app.state.browse.fullscreen.at_max() {
+        // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
+        // 新图的离线编码期;同时按当前尺寸预热新图协议((url, dims) 去重),推满落定
+        // 直接 place 高清零闪。缺任一图回落常规路径。
+        if let Some(transition) = app.state.images.transition.as_ref() {
+            let style = BlendStyle::from(*app.state.cfg.tui().cover_transition().style());
+            app.state.images.render(
+                ImageContent::Blend {
+                    from: &transition.from_url,
+                    to: &transition.to_url,
+                    progress: transition.anim.eased_in_out(),
+                    style,
+                    advance: transition.advance,
+                },
+                area,
+                frame.buffer_mut(),
+                ImageRenderPhase::Stable,
+            );
+            app.state.images.prepare(&transition.to_url, area);
+            prewarm_upcoming(app, area);
+            return;
+        }
+        app.state.images.render(
+            ImageContent::Display {
+                url: track.cover_url.as_ref(),
+            },
+            area,
+            frame.buffer_mut(),
+            ImageRenderPhase::Stable,
+        );
+        // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
+        // 直接 place，避免切歌瞬间出现空白。
+        prewarm_upcoming(app, area);
+    } else {
+        // 形变期：halfblock 随封面区长大；无真实图片时保留背景。
+        app.state.images.render(
+            ImageContent::Display {
+                url: track.cover_url.as_ref(),
+            },
+            area,
+            frame.buffer_mut(),
+            ImageRenderPhase::Resizing,
+        );
+        // 进入方向:终态封面区固定可知,按它把当前曲的协议编码与形变动画并行预热,
+        // 落定即命中直接上真图,消「落定后先糊后清晰」的等待。`(url, dims)` 去重,整段
+        // 形变只投一次;**绝不按形变中逐帧漂移的 `area` 预热**(那是 churn)。退出方向
+        // 不预热——面板尺寸协议在多尺寸槽位下仍在缓存,回去即命中。
+        if app.state.browse.fullscreen.on()
+            && let (Some(url), Some(steady)) =
+                (track.cover_url.as_ref(), steady_cover.and_then(nonempty))
+        {
+            app.state.images.prepare(url, steady);
+        }
+    }
+}
+
+/// 全屏稳态:给在播曲前后各 `prefetch.prewarm_ahead` 首(图已就绪者)的封面按当前尺寸提前
+/// 编码,切歌(`n` / `p` / 自动接续)时协议已就绪、直接 place 无闪,切歌转场也才拿得到进场图。
+/// 邻居按播放模式环回算(环回那一端也要预热);无在播 / 该首无封面 → 跳过。
+fn prewarm_upcoming(app: &App, area: Rect) {
+    let ahead = *app.state.cfg.tui().prefetch().prewarm_ahead();
+    for idx in app.state.queue_neighbor_indexes(ahead) {
+        if let Some(url) = app
+            .state
+            .player
+            .queue
+            .get(idx)
+            .and_then(|s| s.cover_url.as_ref())
+        {
+            app.state.images.prepare(url, area);
+        }
+    }
+}
+
+/// 非空矩形过滤:宽高都 > 0 才返回 `Some`,供 `.and_then` 链跳过零面积面板。
+pub(super) fn nonempty(r: Rect) -> Option<Rect> {
+    (r.width > 0 && r.height > 0).then_some(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::eyre::eyre;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Position;
+    use ratatui::style::Color;
+
+    use crate::render::anim::{Toggle, Transition};
+    use crate::test_support::{app_in_fullscreen, app_with_queue, app_with_search};
+
+    /// theme.background 整屏填充:普通浏览页每格底色刷成背景填充色(默认 = base),
+    /// 与全屏沉浸背景在浓度 0 时同底,消除进退全屏的色跳变。面板只画前景不改 bg,
+    /// 故取任一非封面 cell 验证底色即可。
+    #[test]
+    fn backdrop_fills_browse_with_background_color() -> color_eyre::Result<()> {
+        let app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        let base = app.theme.base;
+        assert!(matches!(base, Color::Rgb(..)), "前置:默认主题 base 为真彩");
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        let cell = buf
+            .cell(Position::new(1, 1))
+            .ok_or_else(|| eyre!("cell 越界"))?;
+        assert_eq!(cell.bg, base, "普通页每格底色应为背景填充色(base)");
+        Ok(())
+    }
+
+    /// 全屏形变只能按两端稳态尺寸预热；中间帧不得按逐帧尺寸追加编码。测试不先渲染常规
+    /// 帧，避免常规封面尺寸恰好与端点相同时掩盖预热请求；落定帧必须命中相同
+    /// `(url, dims)` 去重键。
+    #[test]
+    fn fullscreen_morph_prewarms_steady_cover_once() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
+        }
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+        app.state.images.cache.insert(&url, Arc::new(img));
+        // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
+        app.state.browse.nav.last_sel_change = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+
+        // 从空 pending 开始形变,使首帧暴露端点预热请求。
+        app.state.browse.fullscreen.set(true);
+        let mut morph_pending = app.state.images.encode_pending.borrow().clone();
+        assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
+        for frame_no in 0..5 {
+            app.state.browse.fullscreen.tick();
+            assert!(
+                !app.state.browse.fullscreen.settled(),
+                "测试需停留在形变中途"
+            );
+            t.draw(|f| super::draw(f, &app))?;
+            if frame_no == 0 {
+                morph_pending = app.state.images.encode_pending.borrow().clone();
+                assert!(
+                    !morph_pending.is_empty(),
+                    "首个形变帧应派发端点稳态尺寸预热"
+                );
+            } else {
+                assert_eq!(
+                    *app.state.images.encode_pending.borrow(),
+                    morph_pending,
+                    "后续形变帧不应追加封面编码派发(churn)"
+                );
+            }
+        }
+
+        for _ in 0..1_000 {
+            if app.state.browse.fullscreen.settled() {
+                break;
+            }
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(app.state.browse.fullscreen.settled(), "形变应在上限内落定");
+        t.draw(|f| super::draw(f, &app))?;
+        assert_eq!(
+            *app.state.images.encode_pending.borrow(),
+            morph_pending,
+            "稳态渲染应命中预热的同一 (url, dims) 去重键"
+        );
+        Ok(())
+    }
+
+    /// 全屏形变中途：在播曲封面已解码时，封面区渲染 halfblock 真图。用纯品红测试图
+    /// (UI 别处不会出现 `Rgb(255,0,255)`)，扫全 buffer
+    /// 断言存在该 fg 的 cell —— 不依赖 morph 中途封面区精确坐标。
+    #[test]
+    fn fullscreen_morph_paints_real_cover_as_halfblock() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
+        }
+        let mut img = image::RgbImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([255, 0, 255]);
+        }
+        app.state
+            .images
+            .cache
+            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+
+        app.state.browse.fullscreen.set(true);
+        for _ in 0..5 {
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(!app.state.browse.fullscreen.settled(), "测试需停留形变中途");
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        let mut count = 0usize;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == magenta) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "形变期封面区应有 halfblock 真图(品红)cell,实得 {count}"
+        );
+        Ok(())
+    }
+
+    /// 全屏形变中途没有完整解码图或 preview 时，封面区不绘制图片像素。
+    #[test]
+    fn fullscreen_morph_without_cached_image_omits_real_pixels() -> color_eyre::Result<()> {
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
+        }
+        // 故意不把真实图片放进解码缓存。
+
+        app.state.browse.fullscreen.set(true);
+        for _ in 0..5 {
+            app.state.browse.fullscreen.tick();
+        }
+        assert!(!app.state.browse.fullscreen.settled(), "测试需停留形变中途");
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                assert!(
+                    !buf.cell((x, y)).is_some_and(|c| c.fg == magenta),
+                    "无缓存图时不应出现真图像素色"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 统计 buffer 中 fg 满足谓词的 cell 数(page morph 飞行层探针扫描共用)。
+    fn count_fg_cells(buf: &ratatui::buffer::Buffer, pred: impl Fn(Color) -> bool) -> usize {
+        let mut count = 0usize;
+        for y in buf.area.y..buf.area.y.saturating_add(buf.area.height) {
+            for x in buf.area.x..buf.area.x.saturating_add(buf.area.width) {
+                if buf.cell((x, y)).is_some_and(|c| pred(c.fg)) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        count
+    }
+
+    /// 品红×青 fade 混色判定:`Rgb(r, 255-r, 255)` 且远离两端纯色(±1 容忍整数 lerp 取整)。
+    fn is_fade_mix(c: Color) -> bool {
+        let Color::Rgb(r, g, b) = c else {
+            return false;
+        };
+        b == 255 && r != 0 && r != 255 && (i16::from(g) - (255 - i16::from(r))).abs() <= 1
+    }
+
+    /// Page morph 中途、两端图都在缓存:封面应为 fade 合成 halfblock(品红×青混色 cell),
+    /// 且无任一端纯色——主图随形变连续变身而非端点瞬换,面板自画已被抑制(不双画)。
+    #[test]
+    fn search_morph_crossfades_cover_when_both_cached() -> color_eyre::Result<()> {
+        use crate::test_support::app_in_search_morph;
+
+        let app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, is_fade_mix) > 0,
+            "应有品红×青 fade 混色 cell"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)),
+            0,
+            "browse 端纯品红应被抑制(飞行层接管,面板不自画)"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)),
+            0,
+            "detail 端纯青不应在中途出现"
+        );
+        Ok(())
+    }
+
+    /// Page morph 中途、仅 browse 端图在缓存:飞行层单图独飞(纯品红 halfblock 可见),
+    /// 不强行合成(无混色)。
+    #[test]
+    fn search_morph_single_cached_image_flies_solo() -> color_eyre::Result<()> {
+        use crate::test_support::app_in_search_morph;
+
+        let app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ false)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)) > 0,
+            "单端图应以 halfblock 独飞"
+        );
+        assert_eq!(count_fg_cells(buf, is_fade_mix), 0, "无第二图不应出现混色");
+        Ok(())
+    }
+
+    /// 退场(Search → Browse)morph 中途同样 fade 合成——方向只是进度走向,共用同一飞行层。
+    #[test]
+    fn search_morph_exit_direction_also_crossfades() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+        use crate::test_support::app_in_search_morph;
+
+        let mut app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut active = Toggle::new(8);
+        active.set(true);
+        for _ in 0..20 {
+            active.tick();
+        }
+        active.set(false);
+        for _ in 0..4 {
+            active.tick();
+        }
+        app.state.channel_search.active = active;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        assert!(
+            count_fg_cells(t.backend().buffer(), is_fade_mix) > 0,
+            "退场中途也应 fade 合成"
+        );
+        Ok(())
+    }
+
+    /// Page morph 只为两端稳态尺寸派发封面编码；中间帧命中 `(url, dims)` 去重。
+    #[test]
+    fn search_morph_prewarms_endpoints_without_churn() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+        use crate::test_support::app_in_search_morph;
+
+        let mut app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        let mut active = Toggle::new(8);
+        active.set(true);
+        active.tick();
+        app.state.channel_search.active = active;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let pending = app.state.images.encode_pending.borrow().clone();
+        assert!(!pending.is_empty(), "首个形变帧应预热端点封面编码");
+        for _ in 0..3 {
+            app.state.channel_search.active.tick();
+            t.draw(|f| super::draw(f, &app))?;
+        }
+        assert_eq!(
+            *app.state.images.encode_pending.borrow(),
+            pending,
+            "后续形变帧不应追加编码派发(churn)"
+        );
+        Ok(())
+    }
+
+    /// 造「Library 选中曲封面 A(品红)+ 在播曲封面 B(青)」的 App,`cache_*` 控制两图
+    /// 是否入缓存;fullscreen toggle 推到 4/8 拍形变中途。
+    fn app_in_fullscreen_morph(
+        cache_selected: bool,
+        cache_playing: bool,
+    ) -> color_eyre::Result<crate::app::App> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::render::anim::Toggle;
+        use crate::test_support::{app_with_library, solid_cover, song};
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url_a = MediaUrl::remote("https://x.y/selected-a.jpg")?;
+        let url_b = MediaUrl::remote("https://x.y/playing-b.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.song.cover_url = Some(url_a.clone());
+        }
+        // 在播曲另取一首、封面 B 与选中曲不同,逼出真正的跨图 fade。
+        let mut playing = song("playing");
+        playing.cover_url = Some(url_b.clone());
+        app.state.playback.track = Some(playing);
+        if cache_selected {
+            app.state
+                .images
+                .cache
+                .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
+        }
+        if cache_playing {
+            app.state
+                .images
+                .cache
+                .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
+        }
+        let mut fs = Toggle::new(8);
+        fs.set(true);
+        for _ in 0..4 {
+            fs.tick();
+        }
+        app.state.browse.fullscreen = fs;
+        Ok(app)
+    }
+
+    /// Browse → Fullscreen 形变中途、选中曲与在播曲封面都在缓存时，飞行层跨端 fade
+    /// 只产生混色 cell，不渲染任一端点的纯色帧。
+    #[test]
+    fn fullscreen_morph_flies_crossfade_selected_to_playing() -> color_eyre::Result<()> {
+        let app =
+            app_in_fullscreen_morph(/*cache_selected*/ true, /*cache_playing*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, is_fade_mix) > 0,
+            "应有跨图 fade 混色 cell"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(255, 0, 255)),
+            0,
+            "形变中途不应出现选中曲的纯品红端点帧"
+        );
+        assert_eq!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)),
+            0,
+            "形变中途不应出现播放曲的纯青端点帧"
+        );
+        // 页面正文不能把穿过歌词区域的封面擦成空格或单色背景。
+        let area = buf.area;
+        let cfg = app.state.cfg.tui().layout();
+        let normal = super::compute(area, cfg);
+        let full = super::compute_fullscreen(area, cfg);
+        let plan = crate::components::layout::flight::plan_fullscreen(&normal, &full, &app.state)
+            .ok_or_else(|| color_eyre::eyre::eyre!("前置：两端封面均已就绪"))?;
+        let mut cover_only = Terminal::new(TestBackend::new(area.width, area.height))?;
+        cover_only.draw(|frame| {
+            crate::components::layout::flight::render(
+                frame,
+                &plan,
+                app.state.browse.fullscreen.eased_in_out(),
+                &app.state,
+            );
+        })?;
+        let expected_cover = cover_only.backend().buffer();
+        for (index, expected) in expected_cover.content.iter().enumerate() {
+            if expected.symbol() == "▀" {
+                let actual = buf
+                    .cell(expected_cover.pos_of(index))
+                    .ok_or_else(|| color_eyre::eyre::eyre!("封面像素越界"))?;
+                assert_eq!(actual.symbol(), expected.symbol(), "飞行封面不能被页面清空");
+                assert_eq!(actual.fg, expected.fg);
+                assert_eq!(actual.bg, expected.bg);
+            }
+        }
+        Ok(())
+    }
+
+    /// 仅在播曲图缓存时 fullscreen 飞行层不开，halfblock 随封面区长出且不产生混色。
+    #[test]
+    fn fullscreen_morph_single_image_keeps_grow_path() -> color_eyre::Result<()> {
+        let app =
+            app_in_fullscreen_morph(/*cache_selected*/ false, /*cache_playing*/ true)?;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        assert!(
+            count_fg_cells(buf, |c| c == Color::Rgb(0, 255, 255)) > 0,
+            "单端缓存时应由 halfblock 生长路径渲染在播图"
+        );
+        assert_eq!(count_fg_cells(buf, is_fade_mix), 0, "单端不应出现混色");
+        Ok(())
+    }
+
+    /// Fullscreen → Browse 退出形变中途同样跨端 fade——方向只是进度走向,共用同一飞行层。
+    #[test]
+    fn fullscreen_morph_exit_also_crossfades() -> color_eyre::Result<()> {
+        use crate::render::anim::Toggle;
+
+        let mut app =
+            app_in_fullscreen_morph(/*cache_selected*/ true, /*cache_playing*/ true)?;
+        let mut fs = Toggle::new(8);
+        fs.set(true);
+        for _ in 0..20 {
+            fs.tick();
+        }
+        fs.set(false);
+        for _ in 0..4 {
+            fs.tick();
+        }
+        app.state.browse.fullscreen = fs;
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        assert!(
+            count_fg_cells(t.backend().buffer(), is_fade_mix) > 0,
+            "退出形变中途也应 fade 合成"
+        );
+        Ok(())
+    }
+
+    /// 稳态首帧终端图片尚未编码时，应继续显示 halfblock 真图。构造稳态全屏、解码图就绪、
+    /// 终端图片缓存为空，并断言 buffer 仍含真实图片的品红像素。
+    #[test]
+    fn fullscreen_steady_pending_encode_shows_real_halfblock() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+
+        use crate::test_support::app_with_library;
+
+        let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+        if let Some(sv) = app
+            .state
+            .library
+            .tracks
+            .get_mut(&pid)
+            .and_then(|views| views.get_mut(0))
+        {
+            sv.data.song.cover_url = Some(url.clone());
+            app.state.playback.track = Some(sv.data.song.clone());
+        }
+        let mut img = image::RgbImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([255, 0, 255]);
+        }
+        app.state
+            .images
+            .cache
+            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+        // 脱离滚动防抖，确保走稳定阶段的编码在途路径。
+        app.state.browse.nav.last_sel_change = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        // 全屏稳态(一步到位)；不放终端图片成品，首帧走编码在途的 halfblock 路径。
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let magenta = Color::Rgb(255, 0, 255);
+        let buf = t.backend().buffer();
+        let mut count = 0usize;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == magenta) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "稳态终端图片编码在途时封面区应为 halfblock 真图(品红);实得 {count}"
+        );
+        Ok(())
+    }
+
+    /// 全屏稳态切歌转场中途，封面区绘制两图合成的 halfblock 混色帧，而非任一原图。
+    #[test]
+    fn fullscreen_transition_paints_halfblock_blend() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        use crate::render::anim::Transition;
+        use crate::runtime::state::CoverTransition;
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let from_url = MediaUrl::remote("https://x.y/from.jpg")?;
+        let to_url = MediaUrl::remote("https://x.y/to.jpg")?;
+        let solid = |r: u8, g: u8, b: u8| {
+            let mut img = image::RgbImage::new(16, 16);
+            for p in img.pixels_mut() {
+                *p = image::Rgb([r, g, b]);
+            }
+            Arc::new(image::DynamicImage::ImageRgb8(img))
+        };
+        app.state.images.cache.insert(&from_url, solid(200, 0, 0));
+        app.state.images.cache.insert(&to_url, solid(0, 0, 200));
+        if let Some(track) = app.state.playback.track.as_mut() {
+            track.cover_url = Some(to_url.clone());
+        }
+        // 转场推到恰好半程(2 拍全程推 1 拍 → 500‰,eased_in_out 过中点仍 500)。
+        let mut anim = Transition::expanding(2);
+        anim.tick();
+        app.state.images.transition = Some(CoverTransition {
+            from_url,
+            to_url,
+            advance: Some(mineral_protocol::AdvanceKind::Next),
+            anim,
+        });
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let blend = Color::Rgb(100, 0, 100);
+        let buf = t.backend().buffer();
+        let mut count = 0_usize;
+        for y in 0..40_u16 {
+            for x in 0..120_u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.fg == blend) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            count > 0,
+            "转场半程封面区应出现红蓝均值色 halfblock,实得 {count}"
+        );
+        Ok(())
+    }
+
+    /// 全屏稳态 + 在播色板就绪:氛围背景整屏铺 bg——顶行角落(无组件写 bg)应为
+    /// 真彩场色且偏离纯底色(封面色可见)。
+    #[test]
+    fn fullscreen_ambient_paints_background() -> color_eyre::Result<()> {
+        use mineral_model::MediaUrl;
+
+        use crate::render::palette::{CoverPalette, Rgb};
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let url = MediaUrl::remote("https://x.y/cover.jpg")?;
+        if let Some(song) = app.state.player.current.as_mut() {
+            song.cover_url = Some(url.clone());
+        }
+        let pal = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
+            .ok_or_else(|| eyre!("非空色板"))?;
+        app.state.images.palettes.insert(url, pal);
+        app.sync_cover_palette();
+        for _ in 0..400 {
+            app.tick_cover_fades();
+        }
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app); // 滞后跟随推满,氛围场浓度到位
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert!(
+            matches!(bg, Color::Rgb(..)),
+            "全屏顶行角落应铺氛围 bg,实得 {bg:?}"
+        );
+        assert_ne!(bg, app.theme.base, "场色应偏离纯底色(封面色可见)");
+        Ok(())
+    }
+
+    /// 滞后跟随进度推满:全屏已 on 时把 `ambient_reveal` 缓到满(delay + ease),
+    /// 使氛围场以满浓度渲染(供直接钉 `fullscreen` 而绕过主循环的渲染测试用)。
+    fn settle_ambient_reveal(app: &mut crate::app::App) {
+        for _ in 0..80 {
+            app.state.browse.tick_ambient_reveal();
+        }
+    }
+
+    /// 全屏稳态 + 无在播色板:氛围场静止在底色——整屏铺出的是纯底色平场
+    /// (功能开着就不透出终端默认背景,切歌淡入无缝)。
+    #[test]
+    fn fullscreen_ambient_without_palette_paints_flat_base() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app);
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert_eq!(bg, app.theme.base, "无色板时应铺纯底色平场");
+        Ok(())
+    }
+
+    /// `ambient.enabled = false` 时氛围层不铺场。测试同时设置 `background = reset` 以隔离
+    /// 主题底色填充；滞后进度推满后，顶行角落仍必须保持终端默认背景。
+    #[test]
+    fn fullscreen_ambient_disabled_skips_painting() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        app.apply_pushed_config(mineral_protocol::BusValue::from_json(
+            mineral_config::merge_tree(
+                mineral_config::default_tree()?,
+                serde_json::json!({ "tui": {
+                    "ambient": { "enabled": false },
+                    "theme": { "background": { "reset": true } },
+                } }),
+            ),
+        ));
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+        settle_ambient_reveal(&mut app);
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = t
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .ok_or_else(|| eyre!("cell 越界"))?
+            .bg;
+        assert_eq!(
+            bg,
+            Color::Reset,
+            "关闭且静止时氛围层不应写任何 bg(填充也已关)"
+        );
+        Ok(())
+    }
+
+    /// 退出收缩动画中途一帧:边框已向内收,框外清成背景、框内保留界面内容。
+    #[test]
+    fn quit_shrink_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        // collapsing(18) 推进 12 tick → 收到约 70%,边框明显内收。
+        let mut anim = Transition::collapsing(18);
+        for _ in 0..12 {
+            anim.tick();
+        }
+        app.transition = Some(anim);
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "退出收缩动画中途:边框内收、框外清空、框内留内容",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 启动扩大动画中途一帧:边框由中心向外扩,框外仍清成背景、框内已露界面内容。
+    #[test]
+    fn startup_expand_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        // expanding(18) 推进 6 tick → 扩到约 30%,边框尚小、由中心向外。
+        let mut anim = Transition::expanding(18);
+        for _ in 0..6 {
+            anim.tick();
+        }
+        app.transition = Some(anim);
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "启动扩大动画中途:边框由中心外扩、框外清空、框内露内容",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 带启动锚点的退出收缩:锚点设在左下角(4, 20),收缩框应偏向该点而非居中
+    /// —— 上方/右侧清空区明显大于下方/左侧,验证「朝光标真实位置收」。
+    #[test]
+    fn collapse_toward_anchor_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        app.launch_anchor = Some(Position { x: 4, y: 20 });
+        let mut anim = Transition::collapsing(18);
+        for _ in 0..12 {
+            anim.tick();
+        }
+        app.transition = Some(anim);
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!("退出收缩朝左下锚点:收缩框偏左下、非居中", t.backend());
+        Ok(())
+    }
+
+    /// 全屏稳态一帧:只剩 cover(左)/ lyrics(右)/ spectrum + transport(贴底通栏),
+    /// 顶栏 / 侧栏 / now_playing 全部退场。
+    #[test]
+    fn fullscreen_steady_snapshot() -> color_eyre::Result<()> {
+        let app = app_in_fullscreen()?;
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "全屏稳态:cover 左 / lyrics 右 / spectrum+transport 贴底",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏稳态：下一首(queue 中在播曲的紧邻后继)应按目标像素尺寸提前准备终端图片，
+    /// 自动切歌时可以直接 place。
+    #[test]
+    fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        // 给队列每首塞封面 URL;在播曲(queue[0])与下一首(queue[1])的图放进 cache
+        // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
+        for i in 0..3 {
+            let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
+            if let Some(s) = app.state.player.queue.get_mut(i) {
+                s.cover_url = Some(url.clone());
+            }
+            if i <= 1 {
+                let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+                app.state.images.cache.insert(&url, Arc::new(img));
+            }
+        }
+        // 重新同步在播曲(带上刚塞的封面 URL)。
+        app.state.playback.track = app.state.player.queue.first().cloned();
+        // 稳态全屏:一步推到满值。
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
+        let warmed = app
+            .state
+            .images
+            .encode_pending
+            .borrow()
+            .iter()
+            .any(|key| key.matches_url(&next_url));
+        assert!(warmed, "全屏稳态应提前编码下一首封面");
+        Ok(())
+    }
+
+    /// 全屏稳态也预热上一首封面:`p` 落回去那首同样要进场图已解码,转场才开得起来。
+    #[test]
+    fn fullscreen_steady_prewarms_previous_cover() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        // 在播曲取中间那首,前后各有邻居。
+        let mut app = app_with_queue(3, /*current_idx*/ 1)?;
+        for i in 0..3 {
+            let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
+            if let Some(s) = app.state.player.queue.get_mut(i) {
+                s.cover_url = Some(url.clone());
+            }
+            let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+            app.state.images.cache.insert(&url, Arc::new(img));
+        }
+        app.state.playback.track = app.state.player.queue.get(1).cloned();
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let pending = app.state.images.encode_pending.borrow();
+        for (idx, label) in [(0, "上一首"), (2, "下一首")] {
+            let url = MediaUrl::remote(&format!("https://prewarm/{idx}.jpg"))?;
+            assert!(
+                pending.iter().any(|key| key.matches_url(&url)),
+                "全屏稳态应提前编码{label}封面"
+            );
+        }
+        Ok(())
+    }
+
+    /// Search 布局稳态一帧(无 caps 空态):prompt 行提示无可搜索源、results / detail 仅外框、
+    /// transport 全宽贴底;lyrics / spectrum / now_playing 退场。
+    #[test]
+    fn search_steady_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_search()?;
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 稳态空态:prompt 提示无可搜索源 + results/detail 外框 + transport 全宽",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 焦点面板边框高亮:prompt 焦点时 prompt 框 accent、results 框 overlay;切 results 焦点反之。
+    #[test]
+    fn focused_panel_border_is_accent() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_model::SearchKind;
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        let accent = app.theme.accent;
+        let overlay = app.theme.overlay;
+        // prompt 边框左上角在 (0,0)(接管顶行);results 边框左上角在 (0,3)(prompt 占 3 行)。
+        let border_fg = |app: &crate::app::App, x: u16, y: u16| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(80, 24))?;
+            t.draw(|f| super::draw(f, app))?;
+            Ok(t.backend()
+                .buffer()
+                .cell((x, y))
+                .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?
+                .fg)
+        };
+
+        assert_eq!(
+            border_fg(&app, 0, 0)?,
+            accent,
+            "prompt 焦点 → prompt 框 accent"
+        );
+        assert_eq!(
+            border_fg(&app, 0, 3)?,
+            overlay,
+            "results 未焦点 → results 框 overlay"
+        );
+
+        app.state.channel_search.focus = SearchFocus::Results;
+        assert_eq!(
+            border_fg(&app, 0, 0)?,
+            overlay,
+            "prompt 失焦 → prompt 框 overlay"
+        );
+        assert_eq!(
+            border_fg(&app, 0, 3)?,
+            accent,
+            "results 焦点 → results 框 accent"
+        );
+        Ok(())
+    }
+
+    /// 空结果(尚未搜索)时结果列画**居中 lite 提示**,而非可高亮的列表行:
+    /// 结果列 inner 区不应出现任何 surface0 选中高亮带。
+    #[test]
+    fn empty_results_hint_is_not_highlighted_row() -> color_eyre::Result<()> {
+        use crate::runtime::state::SearchFocus;
+        use mineral_model::SearchKind;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        // 焦点落结果列(若 hint 被当成可选行,这里就会被高亮——正是要规避的)。
+        app.state.channel_search.focus = SearchFocus::Results;
+        let surface0 = app.theme.surface0;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let buf = t.backend().buffer();
+        // 结果列在左半(x < 30)、prompt 框(y < 3)之下;只扫结果区,空结果不应有整行底色带
+        // (prompt 行的类型徽章本就用 surface0 填底,不在此判定范围)。
+        let mut banded = false;
+        for y in 3..24u16 {
+            for x in 0..30u16 {
+                if buf.cell((x, y)).is_some_and(|c| c.bg == surface0) {
+                    banded = true;
+                }
+            }
+        }
+        assert!(!banded, "空结果的 hint 不应是高亮选中行");
+        Ok(())
+    }
+
+    /// Search 空结果稳态:结果列画**居中** lite 提示(无可高亮行),prompt / detail 外框照常。
+    #[test]
+    fn search_empty_results_hint_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        let (app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 空结果:results 列居中 lite 提示(非高亮行) + prompt/detail 外框",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 首页在飞:results 列画旋转 spinner「searching」,与「到货 0 条」「尚未搜索」区分。
+    #[test]
+    fn search_loading_spinner_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("x");
+        }
+        // 模拟刚提交首页、结果未到:当前 kind 标在飞。spinner 计数 0 → 首帧 ⠋(无 tick,确定性)。
+        app.state.channel_search.mark_loading(SearchKind::Song);
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 首页在飞:results 列居中旋转 spinner「⠋ searching」(区别于空态 / idle)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 到货 0 条:results 列画「no results」(bucket 存在但空),区别于 idle 的「type a query」。
+    #[test]
+    fn search_no_results_hint_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("zzzz");
+        }
+        // 到货 0 条:bucket 建起但空 → no results(apply_page 顺手清 loading)。
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "zzzz".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(Vec::new()),
+            has_more: None,
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 到货 0 条:results 列居中「no results」(bucket 在但空,区别于 idle)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 结果列选中行**整行**底色高亮(对齐 tracks/playlist/queue 的 row_highlight,非仅文字变色):
+    /// 选中行尾部空白 cell 也带 surface0 底色,非选中行不带。
+    #[test]
+    fn selected_result_row_has_full_width_highlight() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        app.state.channel_search.focus = SearchFocus::Results;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("x");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "x".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
+        });
+        // 选中第 2 行(短名 "Gjs · Mineral",尾部留白便于验整行底色)。
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            kr.set_sel(2);
+        }
+        let surface0 = app.theme.surface0;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        let bg = |x: u16, y: u16| -> color_eyre::Result<Color> {
+            Ok(t.backend()
+                .buffer()
+                .cell((x, y))
+                .ok_or_else(|| eyre!("cell ({x},{y}) 越界"))?
+                .bg)
+        };
+        // 结果列起于 y=3(prompt 接管顶行,占 3 行),inner 首行 y=4 是表头,数据行从 y=5 起;
+        // 选中第 2 行在 y=7。x=20 是该行尾部留白。
+        assert_eq!(bg(20, 7)?, surface0, "选中行尾部空白也应带整行底色");
+        assert_ne!(bg(20, 5)?, surface0, "非选中数据行不带底色");
+        Ok(())
+    }
+
+    /// Search 结果稳态一帧:token prompt 渲染 源徽章 + 类型徽章 + query + 光标,
+    /// results 列渲染单曲行(光标行高亮)。
+    #[test]
+    fn search_results_steady_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("serenading");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
+        });
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 结果稳态:prompt 源/类型徽章 + query + 光标,results 单曲行高亮",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 中帧：两列文字按端点排版交接，prompt 淡入，播放栏持续移动。
+    #[test]
+    fn search_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_search()?;
+        // 覆盖成形变中途:从零 expanding 推进约半程(9/18 tick)。
+        let mut anim = Toggle::new(18);
+        anim.set(true);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.channel_search.active = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 形变中途：文字固定排版淡化交接，prompt 淡入，播放栏持续移动",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 退场中帧：沿同一内容与几何曲线折返，搜索文字淡出、浏览文字淡入。
+    #[test]
+    fn search_leave_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("serenading");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
+        });
+        // 推满进场再收起半程(18 拍到顶、再 leave 9 拍):退场中途 on()=false、非端点。
+        let mut anim = Toggle::new(18);
+        anim.set(true);
+        for _ in 0..18 {
+            anim.tick();
+        }
+        anim.set(false);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.channel_search.active = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 退场形变中途：搜索文字淡出、浏览文字淡入，播放栏持续移动",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 非焦点结果列的选中行走**暗调高亮**(subtext,非 accent):焦点在 prompt 时仍标出
+    /// "回得去"的光标位置而不抢视觉;切回结果列焦点则恢复 accent 亮高亮。
+    #[test]
+    fn unfocused_results_row_uses_dim_highlight() -> color_eyre::Result<()> {
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("serenading");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
+        });
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            kr.set_sel(2);
+        }
+        let accent = app.theme.accent;
+        let subtext = app.theme.subtext;
+        // 选中第 2 行 → inner y=7(prompt 3 + 边框 1 + 表头 1 + 2);x=20 是该行(整行高亮)。
+        let row_fg = |app: &crate::app::App| -> color_eyre::Result<Color> {
+            let mut t = Terminal::new(TestBackend::new(80, 24))?;
+            t.draw(|f| super::draw(f, app))?;
+            Ok(t.backend()
+                .buffer()
+                .cell((20, 7))
+                .ok_or_else(|| eyre!("cell (20,7) 越界"))?
+                .fg)
+        };
+
+        // 默认焦点在 prompt:结果列选中行走暗调(subtext)。
+        assert_eq!(row_fg(&app)?, subtext, "非焦点结果列 → 暗调高亮(subtext)");
+        app.state.channel_search.focus = SearchFocus::Results;
+        assert_eq!(row_fg(&app)?, accent, "焦点结果列 → accent 亮高亮");
+        Ok(())
+    }
+
+    /// Search 焦点环滑动中途一帧:焦点 prompt→results,accent 浮动边框悬在两面板矩形之间,
+    /// 两面板自身边框压暗(高亮交给浮动环)。
+    #[test]
+    fn search_focus_ring_slide_midframe_snapshot() -> color_eyre::Result<()> {
+        use mineral_model::SearchKind;
+
+        use crate::render::anim::Transition;
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        app.state.channel_search.set_focus(SearchFocus::Results);
+        // 焦点环推进约半程(9/18),环悬在 prompt 与 results 矩形之间。
+        let mut ring = Transition::expanding(18);
+        for _ in 0..9 {
+            ring.tick();
+        }
+        app.state.channel_search.focus_ring = ring;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 焦点环滑动中途:accent 浮动边框悬在 prompt 与 results 之间,两面板边框压暗",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search detail 焦点稳态:detail 框 accent 高亮、results 框压暗且选中行走暗调高亮。
+    #[test]
+    fn search_detail_focused_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("serenading");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Song,
+            query: "serenading".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Songs(endserenading(4)),
+            has_more: None,
+        });
+        // 直接置焦点 detail(环 settle,不滑动):detail 高亮、results 暗调。
+        app.state.channel_search.focus = SearchFocus::Detail;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search detail 焦点:detail 框 accent + results 框暗调 + 选中行暗调高亮",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 歌单 detail 曲目表:对齐 browse library 风格，♥/title/artist/album/len 五列 +
+    /// 表头，收藏歌显 ♥。宽 120 让 detail 面板够 Full 档(artist/album 不退)。
+    #[test]
+    fn search_detail_playlist_tracks_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{
+            AlbumId, AlbumRef, ArtistId, ArtistRef, Playlist, PlaylistId, SearchKind, Song, SongId,
+            SourceKind,
+        };
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Playlist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("emo");
+        }
+        let track = |id: &str, name: &str, artist: &str, album: &str, dur: u64| {
+            Song::builder()
+                .id(SongId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, id),
+                    name: artist.to_owned(),
+                }])
+                .album(Some(AlbumRef {
+                    id: AlbumId::new(SourceKind::NETEASE, id),
+                    name: album.to_owned(),
+                }))
+                .duration_ms(Some(dur))
+                .build()
+        };
+        let songs = vec![
+            track("1", "Endserenading", "Mineral", "EndSerenading", 225_000),
+            track(
+                "2",
+                "守门员",
+                "Chinese Football",
+                "Chinese Football",
+                233_000,
+            ),
+            track("3", "Palisade", "Mineral", "EndSerenading", 271_000),
+        ];
+        let playlist = Playlist::builder()
+            .id(PlaylistId::new(SourceKind::NETEASE, "pl1"))
+            .name("emo mix".to_owned())
+            .track_count(3)
+            .build();
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Playlist,
+            query: "emo".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Playlists(vec![playlist]),
+            has_more: None,
+        });
+        // 歌单 root 帧补拉到 PlaylistEntry relation。
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.set_playlist_entries(mineral_model::PlaylistEntry::enumerate(songs.clone()));
+        }
+        // 第 2 首已收藏(♥)。
+        let liked = songs
+            .get(1)
+            .ok_or_else(|| eyre!("fixture 应有第 2 首"))?
+            .clone();
+        app.state.toggle_loved_local(&liked);
+        app.state.channel_search.focus = SearchFocus::Detail;
+
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌单 detail 曲目表:♥/title/artist/album/len 五列 + 表头(♥ 收藏)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 造一个带热门曲 + 专辑列表的 artist detail 帧(测试 helper)：搜索 artist → root 帧补拉
+    /// detail(热门曲) + albums(带 track_count/发行年/厂牌)。返回已置焦 detail 的 App。
+    fn app_with_artist_detail() -> color_eyre::Result<crate::app::App> {
+        use mineral_channel_core::Page;
+        use mineral_model::{
+            Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, SearchKind, Song, SongId,
+            SourceKind,
+        };
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("mineral");
+        }
+        let result_artist = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("Mineral".to_owned())
+            .follower_count(Some(176_393))
+            .build();
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Artist,
+            query: "mineral".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Artists(vec![result_artist]),
+            has_more: None,
+        });
+        let hot = |id: &str, name: &str, album: &str, dur: u64| {
+            Song::builder()
+                .id(SongId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, "ar"),
+                    name: "Mineral".to_owned(),
+                }])
+                .album(Some(AlbumRef {
+                    id: AlbumId::new(SourceKind::NETEASE, "al1"),
+                    name: album.to_owned(),
+                }))
+                .duration_ms(Some(dur))
+                .build()
+        };
+        let detail = Artist::builder()
+            .id(ArtistId::new(SourceKind::NETEASE, "ar"))
+            .name("Mineral".to_owned())
+            .follower_count(Some(176_393))
+            .album_count(Some(2))
+            .song_count(Some(21))
+            .description("Texas emo, 1994–1998".to_owned())
+            .songs(vec![
+                hot("1", "LoveLetterTypewriter", "EndSerenading", 225_000),
+                hot("2", "Palisade", "EndSerenading", 271_000),
+            ])
+            .build();
+        let album = |id: &str, name: &str, n: u64, ms: i64, co: &str| {
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .track_count(Some(n))
+                .publish_time_ms(ms)
+                .company(Some(co.to_owned()))
+                .build()
+        };
+        let albums = vec![
+            album(
+                "al1",
+                "EndSerenading",
+                10,
+                1_443_196_800_000,
+                "Crank! Records",
+            ),
+            album(
+                "al2",
+                "ThePowerOfFailing",
+                11,
+                1_577_808_000_000,
+                "Crank! Records",
+            ),
+        ];
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.set_artist_detail(Box::new(detail));
+            frame.set_artist_albums(albums, Page::default(), None);
+        }
+        app.state.channel_search.focus = SearchFocus::Detail;
+        Ok(app)
+    }
+
+    /// Search artist detail 的 Albums 区:专辑表 name/tracks/year/label 四列 + 表头。
+    #[test]
+    fn search_detail_artist_albums_snapshot() -> color_eyre::Result<()> {
+        use crate::runtime::state::ArtistSection;
+
+        let mut app = app_with_artist_detail()?;
+        if let Some(kr) = app.state.channel_search.active_results_mut()
+            && let Some(frame) = kr.detail.current_mut()
+        {
+            frame.section = ArtistSection::Albums;
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search artist detail Albums 区:专辑表 name/tracks/year/label 四列 + 表头",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search artist detail 双区切换中途一帧:Top Songs 与 Albums 列表横向合成(尊重 view_sweep)。
+    #[test]
+    fn search_detail_section_sweep_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_with_artist_detail()?;
+        if let Some(kr) = app.state.channel_search.active_results_mut() {
+            if let Some(frame) = kr.detail.current_mut() {
+                frame.cycle_section(/*ticks*/ 8);
+            }
+            // 推进约 3/8:既非起点也非终点,两区列表同屏合成。
+            for _ in 0..3 {
+                kr.detail.tick();
+            }
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 26))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search artist detail 切区中途:Top Songs↔Albums 横向合成(列表区,Tab/头图不滑)",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 造一个带多段简介(含 \n\n 段落 + \n 制作名单)的专辑 detail 帧(测试 helper)：
+    /// 搜专辑 → root 帧补拉完整 detail(含 description)。返回已置焦 detail 的 App。
+    fn app_with_album_description() -> color_eyre::Result<crate::app::App> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Album, AlbumId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        use crate::runtime::state::SearchFocus;
+        use crate::test_support::endserenading;
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("winlose");
+        }
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "winlose".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("Win&Lose".to_owned())
+                    .build(),
+            ]),
+            has_more: None,
+        });
+        // 仿网易云原文:段落用 \n\n、制作名单用 \n。换行必须渲染成多行(非塞进一个 Line);
+        // 长到溢出简介区,触发滚动条 + 让滚动演示有意义。
+        let desc = "三年过去，还是没能成为一个厉害的大人。Chinese Football也没能成为一个摇滚天团。\n\n游戏一旦开始就注定会有一个结局。\n胜利或失败。\n\n每个人都想成为赢家，用胜利的喜悦去回报付出的时间。\n\n只是偶尔还会发梦，梦到还未走向最终的结局。（文/徐波）\n\n发行厂牌：野生唱片\n发行编号：WILD-022\n录音师：骷髅，李珂\n混音/母带：骷髅\n制作：Chinese Football\n封面插画：史悲";
+        app.state.apply(&TaskEvent::AlbumDetailFetched {
+            id: AlbumId::new(SourceKind::NETEASE, "al1"),
+            album: Box::new(
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
+                    .name("Win&Lose".to_owned())
+                    .track_count(Some(12))
+                    .publish_time_ms(1_672_329_600_000)
+                    .company(Some("野生唱片".to_owned()))
+                    .description(desc.to_owned())
+                    .tracks(mineral_model::AlbumTrack::enumerate(endserenading(3)))
+                    .build(),
+            ),
+        });
+        app.state.channel_search.focus = SearchFocus::Detail;
+        Ok(app)
+    }
+
+    /// Search 专辑 detail 头部简介:网易云多段原文按 \n 渲染成多行(修「整段塞一个 Line、换行
+    /// 被吞」),header 下独立简介区,溢出末列画滚动条。
+    #[test]
+    fn search_detail_album_description_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_album_description()?;
+        // 高 40:让 head 简介区有多行,既展示多段换行又仍溢出(滚动条可见)。
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 专辑 detail 简介:多段原文按 \\n 多行渲染 + 溢出滚动条",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// Search 专辑 detail 简介滚到底:窗口落在简介尾部(header 不动),滚动条滑块底边贴轨道底
+    /// (回归用户实测——到底了滑块却没到底的误导)。nudge 一个大值,render 端 clamp 到 max offset。
+    #[test]
+    fn search_detail_description_scrolled_snapshot() -> color_eyre::Result<()> {
+        let app = app_with_album_description()?;
+        if let Some(frame) = app
+            .state
+            .channel_search
+            .active_results()
+            .and_then(|kr| kr.detail.current())
+        {
+            frame.nudge_description(/*delta*/ 1000);
+        }
+        let mut t = Terminal::new(TestBackend::new(120, 40))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 专辑 detail 简介滚到底:窗口在尾部 + 滚动条滑块贴轨道底",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 专辑结果:结果列按类型走「专辑名 · 艺人」两列对齐(非纯单行文字)。
+    #[test]
+    fn search_results_albums_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Album, AlbumId, ArtistId, ArtistRef, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("mineral");
+        }
+        let album = |id: &str, name: &str, who: &str| {
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .artists(vec![ArtistRef {
+                    id: ArtistId::new(SourceKind::NETEASE, id),
+                    name: who.to_owned(),
+                }])
+                .build()
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Album,
+            query: "mineral".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Albums(vec![
+                album("1", "Power", "Mineral"),
+                album("2", "EndSerenading", "Mineral"),
+            ]),
+            has_more: None,
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!("Search 专辑结果:专辑名 · 艺人 两列对齐", t.backend());
+        Ok(())
+    }
+
+    /// 歌单结果:结果列走「歌单名 · N tracks」两列对齐。
+    #[test]
+    fn search_results_playlists_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Playlist, PlaylistId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Playlist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("indie");
+        }
+        let playlist = |id: &str, name: &str, count: u64| {
+            Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .track_count(count)
+                .build()
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Playlist,
+            query: "indie".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Playlists(vec![
+                playlist("1", "Bedroom Pop", 42),
+                playlist("2", "Math Rock 精选", 128),
+            ]),
+            has_more: None,
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search 歌单结果:歌单名 · N tracks 两列对齐",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// artist 结果:结果列走「artist 名 · 关注数缩写」两列对齐(humanize:42k / 1M)。
+    #[test]
+    fn search_results_artists_snapshot() -> color_eyre::Result<()> {
+        use mineral_channel_core::Page;
+        use mineral_model::{Artist, ArtistId, SearchKind, SourceKind};
+        use mineral_task::{SearchPayload, TaskEvent};
+
+        let (mut app, _submitted) =
+            crate::test_support::app_with_channel_search_probed(vec![SearchKind::Artist])?;
+        if let Some(session) = app.state.channel_search.current_mut() {
+            session.set_query("football");
+        }
+        let artist = |id: &str, name: &str, followers: u64| {
+            Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, id))
+                .name(name.to_owned())
+                .follower_count(Some(followers))
+                .build()
+        };
+        app.state.apply(&TaskEvent::SearchResults {
+            source: SourceKind::NETEASE,
+            kind: SearchKind::Artist,
+            query: "football".to_owned(),
+            page: Page::default(),
+            payload: SearchPayload::Artists(vec![
+                artist("1", "Chinese Football", 42_000),
+                artist("2", "American Football", 1_500_000),
+            ]),
+            has_more: None,
+        });
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "Search artist 结果:artist 名 · 关注数缩写 两列对齐",
+            t.backend()
+        );
+        Ok(())
+    }
+
+    /// 全屏中帧：封面与当前歌词交叉移动，其他文字固定排版淡化交接。
+    #[test]
+    fn fullscreen_morph_midframe_snapshot() -> color_eyre::Result<()> {
+        let mut app = app_in_fullscreen()?;
+        // 覆盖成形变中途:expanding 推进 9 tick(约半程,未到满)。
+        let mut anim = Toggle::new(18);
+        anim.set(true);
+        for _ in 0..9 {
+            anim.tick();
+        }
+        app.state.browse.fullscreen = anim;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+        crate::test_support::assert_snap!(
+            "全屏形变中途：封面与当前歌词交叉移动，其他文字固定排版淡化交接",
+            t.backend()
+        );
+        Ok(())
+    }
+}
