@@ -448,6 +448,31 @@ impl App {
         self.apply_browse_effect(eff);
     }
 
+    /// `c` 跳到 Library 里的在播曲:按歌曲身份在过滤视图里定位,同曲多份取首个
+    /// ——曲目没有像 queue 那样的在播位置锚点。只移光标,视口交给渲染端 Advancing
+    /// 缓动滚过去;歌单面 / 全屏态与无在播 / 无命中时空操作。
+    pub(super) fn jump_to_current(&mut self) {
+        if self.state.browse.fullscreen.on() || self.state.browse.view.current() != View::Library {
+            return;
+        }
+        let Some(playing) = self.state.playback.track.as_ref() else {
+            return;
+        };
+        let Some(index) = self
+            .state
+            .filtered_tracks()
+            .iter()
+            .position(|entry| entry.data.song.id == playing.id)
+        else {
+            return;
+        };
+        if index == self.state.browse.nav.track.sel() {
+            return;
+        }
+        self.state.browse.nav.track.set_sel(index);
+        self.state.browse.nav.last_sel_change = Instant::now();
+    }
+
     /// 列表光标移动 forwarder(dispatch / scroll 走它);逻辑在 [`BrowsePage::move_selection`]。
     pub(super) fn move_selection(&mut self, mv: SelectionMove) {
         self.state.browse.move_selection(
@@ -573,6 +598,39 @@ mod tests {
         assert_eq!(app.state.browse.nav.playlist.sel(), 1, "k 上移一行");
         press(&mut app, KeyCode::Char('g'));
         assert_eq!(app.state.browse.nav.playlist.sel(), 0, "g 跳首行");
+        Ok(())
+    }
+
+    /// `c` 在曲目列表里跳到在播曲;被过滤掉 / 在歌单面时不乱动。
+    #[test]
+    fn jump_to_current_moves_track_cursor() -> color_eyre::Result<()> {
+        let mut app = app_with_library(/*len*/ 10, /*sel_track*/ 0)?;
+        let playing = app
+            .state
+            .filtered_tracks()
+            .iter()
+            .nth(4)
+            .map(|entry| entry.data.song.clone())
+            .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 5 首"))?;
+        app.state.playback.track = Some(playing);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.state.browse.nav.track.sel(), 4, "c 跳到在播曲");
+
+        // 在播曲被搜索滤掉:没有目标就留在原地。
+        app.state.browse.search.set_query("absent");
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.state.browse.nav.track.sel(), 4, "命中不到就不动");
+
+        // 歌单面没有在播概念:按了不动。
+        app.state.browse.search.clear();
+        app.state
+            .browse
+            .view
+            .switch_to(crate::runtime::state::View::Playlists);
+        app.state.browse.nav.playlist.set_sel(1);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.state.browse.nav.playlist.sel(), 1, "歌单光标不动");
+        assert_eq!(app.state.browse.nav.track.sel(), 4, "曲目光标也不变");
         Ok(())
     }
 

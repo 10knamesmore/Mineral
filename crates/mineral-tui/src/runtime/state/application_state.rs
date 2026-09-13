@@ -189,6 +189,12 @@ impl AppState {
         usize::from(*self.cfg.tui().behavior().scrolloff())
     }
 
+    /// 现读 minimap 光标移动时长与帧间隔；在途动画每帧使用该值重设速度。
+    pub(crate) fn minimap_cursor_ticks(&self) -> u16 {
+        let anim = self.cfg.tui().animation();
+        ticks16_from_ms(*anim.minimap_cursor_ms(), *anim.frame_tick_ms())
+    }
+
     /// 列表视口滚动平移的缓动拍数(配置 `animation.list_scroll_ms` 折算)。
     pub(crate) fn list_glide_ticks(&self) -> u16 {
         let anim = self.cfg.tui().animation();

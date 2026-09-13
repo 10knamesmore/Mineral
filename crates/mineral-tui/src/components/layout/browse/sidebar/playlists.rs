@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, 
 
 use super::badge::search_badge;
 use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
+use crate::components::layout::shared::list_minimap::{MinimapCursor, render_minimap};
 use crate::components::layout::shared::marquee::resolve_column_rects;
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::text::display_width;
@@ -39,11 +40,24 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
 
+    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，光标位置因此也停在原地。
+    let motion = if state.browse.fullscreen.at_min()
+        && (state.browse.view.at_min() || state.browse.view.at_max())
+    {
+        ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        }
+    } else {
+        ScrollMotion::Frozen
+    };
+
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
     if state.library.playlists.is_empty() && state.browse.search.query().is_empty() {
         paint_empty_state(buf, area, state, theme, block);
+        paint_minimap(buf, area, state, theme, total, motion);
         return;
     }
 
@@ -51,6 +65,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
     if total == 0 && !state.browse.search.query().is_empty() {
         paint_no_match(buf, area, state, theme, block);
+        paint_minimap(buf, area, state, theme, total, motion);
         return;
     }
 
@@ -109,18 +124,8 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     };
 
     // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，并保留空封面列。
+    // 全屏 morph 瞬态布局冻结视口，并保留空封面列。
     let viewport = usize::from(area.height.saturating_sub(3));
-    let motion = if state.browse.fullscreen.at_min()
-        && (state.browse.view.at_min() || state.browse.view.at_max())
-    {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
     let visible = render_scroll_table(
         buf,
         area,
@@ -146,6 +151,41 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
         );
     }
+    paint_minimap(buf, area, state, theme, total, motion);
+}
+
+/// 在面板右边框画全列表位置：歌单只有光标，没有喜欢 / 在播标记。
+///
+/// # Params:
+///   - `total`: 当前过滤视图的歌单总数；为零时只留轨道（空态 / 零命中同样有轨道）。
+///   - `motion`: 视口滚动态，与列表导航共用，决定光标位置是否缓动。
+fn paint_minimap(
+    buf: &mut Buffer,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    total: usize,
+    motion: ScrollMotion,
+) {
+    let cursor = MinimapCursor::new(
+        &state.browse.nav.playlist,
+        total,
+        motion,
+        state.minimap_cursor_ticks(),
+    );
+    render_minimap(
+        buf,
+        Rect::new(
+            area.right().saturating_sub(1),
+            area.y.saturating_add(1),
+            area.width.min(1),
+            area.height.saturating_sub(2),
+        ),
+        total,
+        cursor,
+        std::iter::empty(),
+        theme,
+    );
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 / 总时长 / 曲目数)。
@@ -329,6 +369,29 @@ mod tests {
         assert_eq!(position_label(0, 3), " 1 / 3 ");
         assert_eq!(position_label(2, 3), " 3 / 3 ");
         assert_eq!(position_label(9, 3), " 3 / 3 ");
+    }
+
+    /// 歌单列表的右边框走同一条盲文轨道：表头行到底行都在，且只有光标没有标记。
+    #[test]
+    fn playlists_minimap_shows_only_the_cursor() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
+        let mut t = Terminal::new(TestBackend::new(40, 12))?;
+        let mut state = crate::test_support::state_with_playlists()?;
+        state.browse.nav.playlist.place(/*sel*/ 0, /*scroll*/ 0);
+        t.draw(|f| {
+            let area = f.area();
+            super::render_to(f.buffer_mut(), area, &state, &theme);
+        })?;
+        let buf = t.backend().buffer();
+        let symbol = |y: u16| buf.cell((39, y)).map(ratatui::buffer::Cell::symbol);
+        assert_eq!(symbol(1), Some("⢹"), "光标落在轨道首行（表头行）");
+        let cursor_cells = (1..=10)
+            .filter(|&y| symbol(y).is_some_and(|s| matches!(s, "⢹" | "⢺" | "⢼" | "⣸")))
+            .count();
+        assert_eq!(cursor_cells, 1, "歌单只画光标，没有喜欢 / 在播标记");
+        assert!(symbol(2).is_some_and(|s| s == "⢸"), "其余行是纯轨道");
+        assert_eq!(symbol(11), Some("╯"), "底边圆角与计数不受轨道影响");
+        Ok(())
     }
 
     /// 3 个混源歌单列表；name 列使用 `Fill(1)`，列宽由可用区域确定。

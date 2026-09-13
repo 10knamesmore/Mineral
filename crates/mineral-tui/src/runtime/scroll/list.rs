@@ -1,4 +1,4 @@
-//! 可滚动列表的完整 UI-local 态:光标(选中行)+ 视口滚动(nvim 手感 + 缓动平移)二者绑定。
+//! 可滚动列表的完整 UI-local 态:光标(选中行)+ 视口滚动(nvim 手感 + 缓动平移)+ minimap 动画。
 //!
 //! 把 [`ListCursor`] 与 [`ListScroll`] 收成一个部件,杜绝「有光标无滚动」——任何列表面持一个
 //! `ScrollList` 即同时拿到选中与滚动,渲染统一经 [`Self::offset`] 出 offset 再喂
@@ -12,6 +12,7 @@
 
 use crate::runtime::action::SelectionMove;
 use crate::runtime::scroll::cursor::ListCursor;
+use crate::runtime::scroll::position::{ListPosition, MagnetProgress};
 use crate::runtime::scroll::viewport::ListScroll;
 
 /// 渲染时视口的推进语义(喂给 [`ScrollList::offset`])。
@@ -38,6 +39,12 @@ pub(crate) struct ScrollList {
 
     /// 视口滚动态(跨帧持久 offset + 缓动平移,走 [`ListScroll`])。
     scroll: ListScroll,
+
+    /// 全列表位置标记的缓动；与视口分开推进，视口未滚动时仍能跟随光标。
+    position: ListPosition,
+
+    /// 光标吸进在播标记后的颜色过渡；与位置同在渲染路径推进，视口无关。
+    magnet: MagnetProgress,
 }
 
 impl ScrollList {
@@ -46,6 +53,8 @@ impl ScrollList {
         Self {
             cursor: ListCursor::new(0),
             scroll: ListScroll::new(),
+            position: ListPosition::default(),
+            magnet: MagnetProgress::default(),
         }
     }
 
@@ -103,6 +112,26 @@ impl ScrollList {
     pub(crate) fn place(&mut self, sel: usize, anchor: usize) {
         self.cursor.set(sel);
         self.scroll.snap_to(sel.saturating_sub(anchor));
+        self.position.reset();
+        self.magnet.reset();
+    }
+
+    /// 返回全列表位置标记的本帧坐标；空列表为 None，满值见 `position::POSITION_SCALE`。
+    ///
+    /// # Params:
+    ///   - `len`: 当前显示列表长度。
+    ///   - `motion`: 稳态绘制推进一拍，离屏合成只读采样，不影响视口。
+    ///   - `ticks`: 当前配置折算的光标移动拍数。
+    pub(crate) fn position(&self, len: usize, motion: ScrollMotion, ticks: u16) -> Option<u32> {
+        match motion {
+            ScrollMotion::Advancing { .. } => self.position.advance(self.sel(), len, ticks),
+            ScrollMotion::Frozen => self.position.frozen(self.sel(), len),
+        }
+    }
+
+    /// 光标吸进在播标记后的颜色过渡进度（[`MagnetProgress`]）。
+    pub(crate) fn magnet(&self) -> &MagnetProgress {
+        &self.magnet
     }
 
     /// 当前滚动目标(视口首行)。位置记忆记录「光标屏上相对行」时读取。

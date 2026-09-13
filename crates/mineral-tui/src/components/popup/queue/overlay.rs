@@ -258,6 +258,17 @@ impl Overlay for QueueOverlay {
         }
     }
 
+    fn render_border(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        inner: Rect,
+        ctx: &AppState,
+        theme: &Theme,
+    ) {
+        self.render_minimap(buf, area, inner, ctx, theme);
+    }
+
     fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
         // `/` 输入态:吞键进过滤词(文本编辑),优先于一切动作与半穿透。
         if self.is_typing() {

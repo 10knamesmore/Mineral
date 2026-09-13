@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/loader/pipeline.rs
+assertion_line: 368
 description: 默认配置全量(default.lua → Config)
 expression: "format!(\"{cfg:#?}\")"
 ---
@@ -848,6 +849,7 @@ Config {
             transition_ms: 288,
             sweep_ms: 288,
             list_scroll_ms: 280,
+            minimap_cursor_ms: 240,
             fullscreen_ms: 288,
             ambient_trail: AmbientTrailConfig {
                 enter: TrailTimingConfig {

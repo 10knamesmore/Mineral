@@ -114,6 +114,24 @@ impl Overlay for OverlayKind {
         }
     }
 
+    fn render_border(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        inner: Rect,
+        ctx: &AppState,
+        theme: &Theme,
+    ) {
+        match self {
+            Self::Queue(o) => o.render_border(buf, area, inner, ctx, theme),
+            Self::Downloads(o) => o.render_border(buf, area, inner, ctx, theme),
+            Self::Confirm(o) => o.render_border(buf, area, inner, ctx, theme),
+            Self::Disconnect(o) => o.render_border(buf, area, inner, ctx, theme),
+            Self::Menu(o) => o.render_border(buf, area, inner, ctx, theme),
+            Self::Help(o) => o.render_border(buf, area, inner, ctx, theme),
+        }
+    }
+
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
         match self {
             Self::Queue(o) => o.on_key(key, ctx),

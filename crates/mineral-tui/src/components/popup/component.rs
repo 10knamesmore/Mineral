@@ -1,8 +1,7 @@
 //! 浮层基础组件:统一的 [`Overlay`] 抽象。
 //!
-//! chrome 自动提供居中 layout + 中心缩放弹出动画;实现方只声明四件事(外框尺寸、
-//! 外框 Block、内容渲染、按键响应),既不持有动画状态(由 stack 托管 [`Transition`]),
-//! 也不直接操作 App —— 按键产出 [`OverlayAction`] 回传执行,绕开双重可变借用。
+//! chrome 提供居中布局与弹出动画；实现方声明外框、内容与边框绘制、按键响应。
+//! 浮层开合动画由 stack 托管 [`Transition`]；按键产出 [`OverlayAction`] 回传 App 执行。
 
 use crossterm::event::KeyEvent;
 use mineral_config::{MenuAlign, MenuReveal};
@@ -144,10 +143,10 @@ pub(crate) enum OverlayAction {
     Menu(super::menu::MenuAction),
 }
 
-/// 浮层抽象:实现方只声明四件事,chrome 自动包办居中 layout + 弹出动画。
+/// 浮层的布局、绘制与按键接口；chrome 统一提供居中布局和弹出动画。
 ///
-/// 实现方**不持有动画状态**([`Transition`] 由 stack 托管),也不直接操作 App ——
-/// 按键产出 [`OverlayAction`] 回传执行。
+/// 浮层开合的 [`Transition`] 由 stack 托管；内容可持有自己的 UI 状态。
+/// 按键通过 [`OverlayAction`] 回传 App 执行。
 ///
 /// [`Transition`]: crate::render::anim::Transition
 pub(crate) trait Overlay {
@@ -165,6 +164,22 @@ pub(crate) trait Overlay {
     /// 内容先按满尺寸渲染到离屏缓冲再按进度搬运可见窗口(不随动画逐帧 reflow),
     /// 实现方不必关心进度。面向 [`Buffer`] 而非 `Frame`,离屏与上屏共用一个入口。
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme);
+
+    /// 在完整面板的内容绘制后装饰边框；直绘与离屏合成共用，随浮层一起裁剪和平移。
+    ///
+    /// # Params:
+    ///   - `buf`: 包含完整面板的绘制目标。
+    ///   - `area`: 完全展开的面板矩形，包含边框。
+    ///   - `inner`: 同一外框计算出的内容区，供边框装饰避开标题与表头。
+    fn render_border(
+        &self,
+        _buf: &mut Buffer,
+        _area: Rect,
+        _inner: Rect,
+        _ctx: &AppState,
+        _theme: &Theme,
+    ) {
+    }
 
     /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 只读后端态(如队列长度,用于
     /// 钳制光标);浮层与 `AppState` 是 App 的平级字段,可同时借用。
@@ -262,6 +277,7 @@ pub(crate) fn render_overlay<O: Overlay>(
         let inner = block.inner(base);
         frame.render_widget(block, base);
         overlay.render_content(frame.buffer_mut(), inner, ctx, theme);
+        overlay.render_border(frame.buffer_mut(), base, inner, ctx, theme);
     } else {
         // 动画途中:锚定浮层方向性揭开(贴锚边先出现),停靠浮层滑入(内容随前沿
         // 平移),居中浮层中心揭开(内容定格)。
@@ -299,6 +315,7 @@ fn render_offscreen<O: Overlay>(
     let inner = block.inner(full);
     block.render(full, &mut buf);
     overlay.render_content(&mut buf, inner, ctx, theme);
+    overlay.render_border(&mut buf, full, inner, ctx, theme);
     buf
 }
 

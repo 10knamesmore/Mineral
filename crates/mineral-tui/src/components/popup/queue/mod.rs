@@ -3,6 +3,7 @@
 mod columns;
 mod covers;
 mod footer;
+mod minimap;
 mod overlay;
 mod row;
 mod search;

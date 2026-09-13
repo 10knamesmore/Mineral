@@ -1,17 +1,18 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/playlists.rs
+assertion_line: 534
 description: "歌单列表:搜索输入态(标题 /春日影█)"
 expression: t.backend()
 ---
 "╭ playlists /春日影 ───────────────────╮" Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " ")]
-"│                                      │"
-"│            no match found            │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
+"│                                      ⢸"
+"│            no match found            ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
 "╰ 0 / 0 ───────────────────────────────╯"

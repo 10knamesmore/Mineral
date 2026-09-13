@@ -229,6 +229,69 @@ mod tests {
         )))
     }
 
+    /// minimap 时长热更保留显示位置，下一帧按新速度推进；0ms 能直接收敛到目标。
+    #[test]
+    fn pushed_config_changes_minimap_speed_without_jumping() -> color_eyre::Result<()> {
+        use crate::runtime::scroll::list::ScrollMotion;
+        use crate::runtime::scroll::position::POSITION_SCALE;
+
+        let mut app = crate::test_support::app_with_long_library(101, 0)?;
+        let motion = ScrollMotion::Advancing {
+            scrolloff: app.state.scrolloff(),
+            glide_ticks: app.state.list_glide_ticks(),
+        };
+        let ticks = app.state.minimap_cursor_ticks();
+        app.state.browse.nav.track.position(101, motion, ticks);
+        app.state.browse.nav.track.set_sel(100);
+        for _ in 0..3 {
+            app.state.browse.nav.track.position(101, motion, ticks);
+        }
+        let before = app
+            .state
+            .browse
+            .nav
+            .track
+            .position(101, ScrollMotion::Frozen, ticks);
+        assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
+        let reference = app.state.browse.nav.track.clone();
+        app.apply_pushed_config(pushed_tree(serde_json::json!({
+            "tui": { "animation": { "minimap_cursor_ms": 1600 } }
+        }))?);
+        let slow_ticks = app.state.minimap_cursor_ticks();
+        assert_eq!(
+            app.state
+                .browse
+                .nav
+                .track
+                .position(101, ScrollMotion::Frozen, slow_ticks),
+            before
+        );
+        let slow = app.state.browse.nav.track.position(101, motion, slow_ticks);
+        let fast = reference.position(101, motion, ticks);
+        assert!(slow.zip(before).is_some_and(|(now, old)| now > old));
+        assert!(slow.zip(fast).is_some_and(|(slow, fast)| slow < fast));
+        app.apply_pushed_config(pushed_tree(serde_json::json!({
+            "tui": { "animation": { "minimap_cursor_ms": 0 } }
+        }))?);
+        assert_eq!(
+            app.state
+                .browse
+                .nav
+                .track
+                .position(101, ScrollMotion::Frozen, 1),
+            slow
+        );
+        assert_eq!(
+            app.state
+                .browse
+                .nav
+                .track
+                .position(101, motion, app.state.minimap_cursor_ticks()),
+            Some(POSITION_SCALE)
+        );
+        Ok(())
+    }
+
     /// 波形入场动画时长热更:在途的揭示 retempo **保相位**(不重播,不跳变),
     /// 只有后续推进速度变化。
     #[test]

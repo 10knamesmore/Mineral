@@ -3,6 +3,7 @@
 
 pub mod compute;
 pub mod highlight;
+pub(crate) mod list_minimap;
 pub mod marquee;
 pub mod scroll_table;
 pub mod scrollbar;

@@ -21,6 +21,9 @@ pub struct AnimationConfig {
     /// 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
     list_scroll_ms: u32,
 
+    /// 列表 minimap 光标的位置缓动时长(毫秒)，独立于视口滚动；0 为一帧到位。
+    minimap_cursor_ms: u32,
+
     /// 全屏播放态进退场形变动画时长(毫秒)。
     fullscreen_ms: u32,
 

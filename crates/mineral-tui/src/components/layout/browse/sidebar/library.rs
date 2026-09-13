@@ -10,6 +10,9 @@ use mineral_model::SourceKind;
 
 use super::badge::search_badge;
 use crate::components::layout::shared::highlight::{alias_suffix, highlight_indices};
+use crate::components::layout::shared::list_minimap::{
+    MinimapCursor, MinimapEntry, render_minimap,
+};
 use crate::components::layout::shared::marquee::{
     MarqueeCtx, RowMarquee, resolve_column_rects, row_marquee,
 };
@@ -233,6 +236,39 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
         );
     }
+    let cursor = MinimapCursor::new(
+        &state.browse.nav.track,
+        tracks.len(),
+        motion,
+        state.minimap_cursor_ticks(),
+    );
+    let entries = tracks
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| MinimapEntry {
+            index,
+            loved: entry.loved,
+            // 播放态只有歌曲身份；歌单中同曲的各个位置都标出，不借用队列下标冒充歌单位置。
+            playing: state
+                .playback
+                .track
+                .as_ref()
+                .is_some_and(|song| song.id == entry.data.song.id),
+        });
+    // 右边框从表头行一直到底部计数行，覆盖整份列表。
+    render_minimap(
+        buf,
+        Rect::new(
+            area.right().saturating_sub(1),
+            area.y.saturating_add(1),
+            area.width.min(1),
+            area.height.saturating_sub(2),
+        ),
+        tracks.len(),
+        cursor,
+        entries,
+        theme,
+    );
 }
 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / 高亮搜索词)。
@@ -651,6 +687,61 @@ mod tests {
         }
         let sel_row = (2..=10_u16).find(|&y| row(&t, y).contains('▌'));
         assert_eq!(sel_row, Some(7), "选中行应停在距视口底 scrolloff 行处");
+        Ok(())
+    }
+
+    /// minimap 使用过滤后的顺序；歌单里当前歌曲的各个副本都可见，空命中不残留标记。
+    #[test]
+    fn minimap_follows_filtered_order_and_playing_song_identity() -> color_eyre::Result<()> {
+        use crate::runtime::view_model::PlaylistEntryView;
+        use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SourceKind};
+
+        let mut state = crate::test_support::state_with_tracks()?;
+        let playing = mineral_test::song("keep");
+        state.playback.track = Some(playing.clone());
+        let entries = [mineral_test::song("skip"), playing.clone(), playing]
+            .into_iter()
+            .zip([7, 17, 27])
+            .map(|(song, index)| PlaylistEntryView {
+                data: PlaylistEntry::builder()
+                    .index(CollectionIndex::new(index))
+                    .song(song)
+                    .build(),
+                loved: false,
+                plays: None,
+            })
+            .collect();
+        state
+            .library
+            .tracks
+            .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), entries);
+        state.browse.search.set_query("keep");
+        state.browse.nav.track.place(0, 0);
+        let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
+        draw_lib(&mut terminal, &state)?;
+        let buffer = terminal.backend().buffer();
+        // 表头行也属于轨道：两个过滤命中（同一首歌的两份）落在首末行。
+        assert_eq!(
+            buffer.cell((59, 1)).map(ratatui::buffer::Cell::symbol),
+            Some("◆")
+        );
+        assert_eq!(
+            buffer.cell((59, 10)).map(ratatui::buffer::Cell::symbol),
+            Some("◆")
+        );
+        assert_eq!(
+            buffer.cell((59, 11)).map(ratatui::buffer::Cell::symbol),
+            Some("╯")
+        );
+        state.browse.search.set_query("absent");
+        draw_lib(&mut terminal, &state)?;
+        assert!((1..11).all(|y| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((59, y))
+                .is_some_and(|cell| cell.symbol() == "⢸")
+        }));
         Ok(())
     }
 

@@ -1,17 +1,18 @@
 ---
 source: crates/mineral-tui/src/components/layout/browse/sidebar/playlists.rs
+assertion_line: 682
 description: "歌单列表:零命中且索引在飞(badge ⟳3 + 居中「索引中」)"
 expression: t.backend()
 ---
 "╭ playlists /zzz ⟳3────────────────────╮"
-"│                                      │"
-"│        indexing(3 playlists)…        │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
+"│                                      ⢸"
+"│        indexing(3 playlists)…        ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
+"│                                      ⢸"
 "╰ 0 / 0 ───────────────────────────────╯"

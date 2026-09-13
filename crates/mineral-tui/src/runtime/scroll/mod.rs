@@ -3,4 +3,5 @@
 
 pub(crate) mod cursor;
 pub(crate) mod list;
+pub(crate) mod position;
 pub(crate) mod viewport;

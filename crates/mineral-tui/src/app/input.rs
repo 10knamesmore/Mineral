@@ -118,7 +118,12 @@ impl App {
             // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
             Action::DrillIntoSelection | Action::CycleDetailSection => {}
             // 仅 queue 浮层内有意义(由其 on_action 消费);其它布局态落此 = no-op。
-            Action::ReorderSelection(_) | Action::JumpToCurrent => {}
+            Action::ReorderSelection(_) => {}
+            // `c` 跳在播曲:queue 浮层自管,Browse 页落到曲目列表(歌单面没有在播概念)。
+            Action::JumpToCurrent if matches!(self.state.page_kind(), PageKind::Browse) => {
+                self.jump_to_current();
+            }
+            Action::JumpToCurrent => {}
         }
     }
 

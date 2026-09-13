@@ -289,6 +289,7 @@ return {
       transition_ms = 288, -- 启动扩大 / 退出收缩整屏转场
       sweep_ms = 288, -- 侧栏 歌单↔曲目 切换扫入
       list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
+      minimap_cursor_ms = 240, -- 右边框 minimap 光标位置缓动；0 = 一帧到位
       fullscreen_ms = 288, -- 全屏进退场形变
       ambient_trail = { -- 全屏氛围背景滞后跟随几何形变(follow-through);进/退各一套时长
         enter = { delay_ms = 80, ease_ms = 740 }, -- 进全屏:优雅慢入(先僵 delay 再 ease-out 缓入;都 0 = 同步无滞后)
