@@ -1,14 +1,14 @@
-//! 将版本门控的播放镜像投影为队列、在播曲和歌词状态。
+//! 将播放镜像投影为 UI 状态:轻量字段每帧更新,队列与当前曲按版本替换。
 
 use mineral_protocol::PlayerSync;
 
 use super::App;
 
 impl App {
-    /// 把 client 镜像的版本门控同步灌进 AppState 投影。每帧调一次。
+    /// 应用 client 播放镜像的轻量状态,并替换版本有变化的重段。
     ///
-    /// 核心语义:**重段缺席 ≠ 清空**——`None` 表示「与已有版本一致」,镜像原地保持;
-    /// 只有 `Some` 才整体替换。轻段(play_mode / play_origin)随重段一起到达。
+    /// 重段为 `None` 表示与已有版本一致,保留原值;为 `Some` 时整体替换。
+    /// 模式、光标和来源始终更新,不依赖重段是否变化。
     pub(super) fn apply_player_sync(&mut self, sync: PlayerSync) {
         self.state.player.versions = sync.versions;
         self.state.playback.play_origin = sync.play_origin;
@@ -21,8 +21,7 @@ impl App {
             self.state.player.original_queue = q.original_queue;
             self.overlays.clamp_queue(self.state.player.queue.len());
         }
-        // 浮层开着时持续记账:关闭是动画式的(close_top 后浮层还在栈上退场几帧),
-        // 挂在关闭那一刻反而要挑时点,不如每 tick 抄一份现值。
+        // 同步时记录活跃队列浮层选中项的真实下标,供下次打开时恢复。
         if let Some(at) = self.overlays.active_queue_cursor(&self.state) {
             self.queue_cursor_memo = Some(at);
         }
@@ -50,31 +49,36 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{PlayerSync, QueueSync};
+    use mineral_protocol::{PlayMode, PlayerSync, QueueSync};
 
     use crate::test_support::{app_with_queue, endserenading};
 
-    /// 版本门控的关键语义回归:重段缺席(版本一致的稳态 tick)= 「与已有一致」,
-    /// **不是清空** —— queue / current 镜像必须原地保持。
+    /// 四档模式都能仅靠轻段更新,重段缺席时保留已有队列与当前曲。
     #[test]
     fn light_only_sync_keeps_queue_and_current() -> color_eyre::Result<()> {
         let mut app = app_with_queue(6, /*current_idx*/ 2)?;
-        let queue_before = app.state.player.queue.len();
+        let queue_before = app.state.player.queue.clone();
         let current_before = app.state.player.current.clone();
         assert!(current_before.is_some(), "前置:有在播歌");
 
-        // 稳态 tick:两重段都缺席,只有轻段。
-        app.apply_player_sync(PlayerSync::default());
+        for mode in [
+            PlayMode::Shuffle,
+            PlayMode::RepeatAll,
+            PlayMode::RepeatOne,
+            PlayMode::Sequential,
+        ] {
+            app.apply_player_sync(PlayerSync {
+                play_mode: mode,
+                ..Default::default()
+            });
 
-        assert_eq!(
-            app.state.player.queue.len(),
-            queue_before,
-            "queue 不得被清空"
-        );
-        assert_eq!(
-            app.state.player.current, current_before,
-            "current 不得被清空"
-        );
+            assert_eq!(app.state.playback.mode, mode);
+            assert_eq!(app.state.player.queue, queue_before, "queue 应保持原值");
+            assert_eq!(
+                app.state.player.current, current_before,
+                "current 应保持原值"
+            );
+        }
         Ok(())
     }
 

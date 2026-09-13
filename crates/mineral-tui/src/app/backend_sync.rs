@@ -27,10 +27,14 @@ impl App {
         anchor.position_ms = position;
         self.state.playback.apply_audio_snapshot(anchor);
 
-        // 播放镜像:版本一致时跳过(光标 / 模式 / 来源都随版本 bump 变化)。
+        // 模式、光标和来源每帧读取;队列与当前曲重段按版本复制。
         let known = self.state.player.versions;
         let mut sync = None;
         self.client.with_player(&mut |player| {
+            self.state.playback.mode = player.play_mode();
+            self.state.playback.play_origin = player.play_origin();
+            self.state.player.cursor = player.cursor();
+
             let versions = player.versions();
             if versions != known {
                 sync = Some(PlayerSync {
@@ -175,5 +179,40 @@ fn completion_failure<T>(outcome: &Outcome<T>) -> Option<String> {
         Outcome::Failed { detail, .. } => Some(detail.clone()),
         Outcome::Unknown { detail } => Some(detail.clone()),
         Outcome::Applied(_) | Outcome::Accepted(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mineral_protocol::{PlayCursor, PlayMode, PlaybackOrigin};
+
+    use crate::test_support::app_with_queue;
+
+    /// 重段版本相同时仍从后端镜像刷新轻量状态,并保留已有队列与当前曲。
+    #[test]
+    fn backend_sync_refreshes_light_state_without_section_changes() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        let queue_before = app.state.player.queue.clone();
+        let current_before = app.state.player.current.clone();
+        let versions_before = app.state.player.versions;
+        app.state.playback.mode = PlayMode::RepeatOne;
+        app.state.playback.play_origin = Some(PlaybackOrigin::Remote);
+        app.state.player.cursor = PlayCursor::InQueue(2);
+
+        // 测试后端的镜像是顺序播放,与 UI 持有相同的重段版本。
+        app.client.with_player(&mut |player| {
+            assert_eq!(player.versions(), versions_before);
+            assert_eq!(player.play_mode(), PlayMode::Sequential);
+        });
+        app.sync_from_backend();
+
+        assert_eq!(app.state.playback.mode, PlayMode::Sequential);
+        assert_eq!(app.state.playback.play_origin, None);
+        assert_eq!(app.state.player.cursor, PlayCursor::InQueue(0));
+        assert_eq!(app.state.player.versions, versions_before);
+        assert_eq!(app.state.player.queue, queue_before);
+        assert_eq!(app.state.player.current, current_before);
+        assert_eq!(app.state.playback.track, current_before);
+        Ok(())
     }
 }
