@@ -1481,7 +1481,7 @@ mod tests {
                 /*has_more*/ None,
             );
             if let Some(kr) = session.kind_results_mut() {
-                kr.fill_album_detail(&al_id, Box::new(album_with_tracks(&al_id, 3)));
+                kr.fill_album_detail(&al_id, &album_with_tracks(&al_id, 3));
             }
         }
         app.state.channel_search.set_focus(SearchFocus::Detail);

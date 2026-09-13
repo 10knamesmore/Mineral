@@ -40,9 +40,9 @@ impl AppState {
                 self.library.tracks.insert(id.clone(), decorated);
                 self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
                 self.apply_pending_restore(id);
-                // detail 歌单帧也吃这批曲目(若当前栈顶正等它)。
-                if let Some(kr) = self.channel_search.active_results_mut() {
-                    kr.fill_playlist_entries(id, playlist.entries.clone());
+                // 搜索页保留的歌单帧按 ID 更新，切 source / kind 后也能收到曲目。
+                for results in self.channel_search.retained_results_mut() {
+                    results.fill_playlist_entries(id, &playlist.entries);
                 }
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {

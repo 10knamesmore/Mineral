@@ -305,9 +305,15 @@ impl DetailFrame {
         }
     }
 
-    /// 是否还需派 detail 拉取：未派过且数据未到（防风暴；失败后换帧即可重试）。
+    /// 未派过请求且数据未齐时需要预取；艺人详情与专辑列表必须分别到达。
+    /// 已请求的帧不逐 tick 重发，避免等待回包时重复提交。
     pub fn needs_fetch(&self) -> bool {
-        !self.requested && self.data.is_none()
+        let incomplete = match &self.data {
+            None => true,
+            Some(DetailData::Artist { detail, albums }) => detail.is_none() || albums.is_none(),
+            Some(DetailData::Album(_) | DetailData::PlaylistEntries(_)) => false,
+        };
+        !self.requested && incomplete
     }
 
     /// 标记已派 detail 拉取（同帧不重复发）。
@@ -484,10 +490,11 @@ impl DetailFrame {
         self.data = Some(DetailData::PlaylistEntries(entries));
     }
 
-    /// 落专辑完整详情（album 帧 / song 帧）。song 帧顺手把列表光标落到这首歌在专辑里的位置——
-    /// 高亮 + `j/k` 起点一次对齐，让「选中歌在其所属专辑中」一目了然。
+    /// 落专辑完整详情（album 帧 / song 帧）。song 帧首次到货时定位到这首歌在专辑中的位置；
+    /// 后续回包更新数据并保留用户的光标与视口。
     pub fn set_album_detail(&mut self, album: Box<Album>) {
-        if let EntityRef::Song(s) = &self.entity
+        if self.data.is_none()
+            && let EntityRef::Song(s) = &self.entity
             && let Some(idx) = album.tracks.iter().position(|track| track.song.id == s.id)
         {
             // 视口瞬时定位到这首歌(无平移);渲染端首帧按 scrolloff 钳,选中歌即带上下文出现。
@@ -564,6 +571,24 @@ impl DetailStack {
     /// 当前帧（可变）；空栈为 `None`。
     pub fn current_mut(&mut self) -> Option<&mut DetailFrame> {
         self.frames.last_mut()
+    }
+
+    /// 找出仍保留且对应同一实体详情的帧，包括下钻后留在栈底的父帧。
+    /// 过渡动画的出发帧只是绘制副本，不参与回包更新。
+    pub(super) fn matching_frames_mut(
+        &mut self,
+        fetch: DetailFetch,
+    ) -> impl Iterator<Item = &mut DetailFrame> {
+        self.frames
+            .iter_mut()
+            .enumerate()
+            .filter_map(move |(depth, frame)| {
+                if frame.entity.fetch().as_ref() != Some(&fetch) {
+                    return None;
+                }
+                mineral_log::debug!(target: "tui", ?fetch, depth, "apply detail response to retained frame");
+                Some(frame)
+            })
     }
 
     /// 下钻一帧（push），arm `ticks` 拍右入滑动。空栈时忽略（无 root 不该下钻）。

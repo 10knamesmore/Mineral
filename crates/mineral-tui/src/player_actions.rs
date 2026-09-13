@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::components::popup::{ContainerRef, MenuAction};
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::action::ScriptSlot;
-use crate::runtime::state::{ActiveLayer, DetailFetch, View};
+use crate::runtime::state::{ActiveLayer, DetailFetch, EntityRef, PageKind, View};
 
 /// 容器入队模式:替换队列起播 / 追加到队尾 / 按序插播(由 `PlayContainer` /
 /// `AppendContainer` / `PlayNextContainer` 决定)。
@@ -144,24 +144,39 @@ impl App {
         self.client.seek(new_u);
     }
 
-    /// 切换选中曲的 ♥:转发持久化意图 + 本地乐观翻转。仅 Library 有曲可选;全屏态屏蔽。
+    /// 持久化并乐观切换当前页面选中歌曲的喜欢态。Search 取结果或详情曲目，Browse 取
+    /// Library 曲目；容器行、空行和全屏态不操作。
     pub(crate) fn toggle_love_selection(&mut self) {
-        if self.state.browse.fullscreen.on()
-            || !matches!(self.state.browse.view.current(), View::Library)
-        {
+        let song = match self.state.page_kind() {
+            PageKind::Search => match self.state.channel_search.selected_entity() {
+                Some(EntityRef::Song(song)) => Some(*song),
+                Some(EntityRef::Album(_) | EntityRef::Artist(_) | EntityRef::Playlist(_))
+                | None => None,
+            },
+            PageKind::Browse => {
+                if self.state.browse.fullscreen.on()
+                    || self.state.browse.view.current() != View::Library
+                {
+                    return;
+                }
+                self.state
+                    .filtered_tracks()
+                    .get(self.state.browse.nav.track.sel())
+                    .map(|entry| entry.data.song.clone())
+            }
+        };
+        let Some(song) = song else {
             return;
-        }
-        let filtered = self.state.filtered_tracks();
-        if let Some(song) = filtered
-            .get(self.state.browse.nav.track.sel())
-            .map(|entry| entry.data.song.clone())
-        {
-            // 触发持久化(daemon 写本地 + 远端,整首传入顺手落 meta);TUI 侧
-            // fire-and-forget,daemon 异步落库。
-            self.client.toggle_love(song.clone());
-            // 乐观翻转:♥ 立即变,不等 server 确认。
-            self.state.toggle_loved_local(&song);
-        }
+        };
+        mineral_log::info!(
+            target: "tui",
+            song_id = %song.id,
+            page = ?self.state.page_kind(),
+            "切换当前页面选中歌曲的喜欢状态"
+        );
+        // 整首交给 daemon 持久化歌曲元信息及喜欢态，界面不等待异步回执。
+        self.client.toggle_love(song.clone());
+        self.state.toggle_loved_local(&song);
     }
 
     /// 执行 PopMenu 确认的动作(队列操作转 client;复制走系统剪贴板)。

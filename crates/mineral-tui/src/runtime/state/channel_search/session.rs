@@ -60,6 +60,11 @@ impl SearchSession {
         self.by_kind.get_mut(&self.kind)
     }
 
+    /// 遍历本会话保留的结果桶，供详情回包更新非当前 kind 的帧。
+    pub(super) fn retained_results_mut(&mut self) -> impl Iterator<Item = &mut KindResults> {
+        self.by_kind.values_mut()
+    }
+
     /// 切当前 kind（不动其它桶，同词切回复用）。
     pub fn set_kind(&mut self, kind: SearchKind) {
         self.kind = kind;
@@ -80,21 +85,21 @@ impl SearchSession {
     #[cfg(test)]
     pub fn set_query(&mut self, q: impl Into<String>) {
         self.input.set_text(q);
-        self.by_kind.clear();
+        self.clear_results();
     }
 
-    /// 在光标处插入字符、光标右移一格，并作废所有 kind 桶（换词 → 旧结果过期）。
+    /// 在光标处插入字符、光标右移一格，并作废所有 kind 的结果与加载状态。
     pub fn push_query_char(&mut self, c: char) {
         self.input.apply(InputRequest::Insert(c));
-        self.by_kind.clear();
+        self.clear_results();
     }
 
-    /// 退格：删光标前一字符。光标 > 0 才删（删了返回 `true` 并作废结果桶），词首
+    /// 退格：删光标前一字符。光标 > 0 才删（删了返回 `true` 并作废结果与加载状态），词首
     /// 返回 `false`（键路由据此知道「无字可删」而静默吞键）。
     pub fn pop_query_char(&mut self) -> bool {
         let changed = self.input.apply(InputRequest::DeletePrev);
         if changed {
-            self.by_kind.clear();
+            self.clear_results();
         }
         changed
     }
@@ -125,10 +130,11 @@ impl SearchSession {
         self.input.split()
     }
 
-    /// 作废全部 kind 桶（显式重新提交时清旧词缓存）。
+    /// 编辑搜索词或显式重新提交时，作废全部 kind 的结果与加载状态。
+    /// 新请求由提交入口重新标记；只编辑未提交时保持未搜索状态。
     pub fn clear_results(&mut self) {
+        mineral_log::debug!(target: "tui", results = self.by_kind.len(), pending = self.in_flight.len(), "invalidate search results and loading");
         self.by_kind.clear();
-        // 换词作废旧 loading 态;新提交随即重置当前 kind。
         self.in_flight.clear();
     }
 
@@ -216,6 +222,24 @@ mod tests {
         s.cursor_end();
         s.cursor_right();
         assert_eq!(s.query_split(), ("ab", ""), "右移越界钳词尾");
+    }
+
+    /// 光标操作和词首退格不改变文本，不能取消已提交搜索的加载状态。
+    #[test]
+    fn cursor_moves_and_empty_backspace_keep_pending_search() {
+        let mut s = SearchSession::new(SearchKind::Song);
+        s.set_query("query");
+        s.mark_in_flight(SearchKind::Song);
+        s.cursor_left();
+        s.cursor_right();
+        s.cursor_home();
+        assert!(!s.pop_query_char());
+        s.cursor_end();
+        assert_eq!(s.query(), "query");
+        assert!(
+            s.is_loading(SearchKind::Song),
+            "未改文本时保留已提交请求的加载状态"
+        );
     }
 
     /// 多字节(CJK)光标:byte 偏移按 char 边界,`query_split` 不切坏字符。

@@ -32,8 +32,8 @@ impl SearchPage {
     /// 回落全局 dispatch（[`SearchEffect::Dispatch`]）——transport(播放/音量/seek/模式)、
     /// 退出确认等照常生效。
     ///
-    /// 截获:回 prompt 的模式键直拦;`activate` 前进、`back` 后退;`move_*` 移结果光标
-    /// (仅结果列焦点;detail 焦点忽略——既不动 results 也不回落去动浏览列表)。
+    /// `activate` 前进、`back` 后退；移动键操作当前面板的列表，滚动键按配置步长移动
+    /// 结果光标或详情简介。`EnterSearch` 回到 Query 输入段并保留搜索词。
     fn handle_search_panel_key(&mut self, key: &KeyEvent, ctx: SearchCtx<'_>) -> SearchEffect {
         // Tab 回 prompt 是 search 布局态的模态逃逸:全局 Tab 绑 OpenQueue,扁平 keymap 无法让
         // 同一键在 search 内另作他用,故此处保留裸拦截;其余面板动词都走 keymap → Action。
@@ -55,10 +55,14 @@ impl SearchPage {
                 SearchEffect::None
             }
             Some(Action::DownloadSelection) => self.download_selected_song(),
-            // detail 焦点下 C-d/u/b/f 滚头部简介(与列表光标 j/k 分治、键不重叠);
-            // 其它焦点不接管并回落全局 dispatch。
-            Some(Action::Scroll(step)) if self.focus == SearchFocus::Detail => {
-                self.scroll_detail_description(step, ctx.behavior);
+            Some(Action::Scroll(step)) => self.scroll_search_panel(step, ctx.behavior),
+            Some(Action::EnterSearch) => {
+                mineral_log::debug!(
+                    target: "tui",
+                    focus = ?self.focus,
+                    "搜索面板返回查询输入"
+                );
+                self.set_focus(SearchFocus::Prompt);
                 SearchEffect::None
             }
             Some(Action::BackOrClearSearch) => {
@@ -131,17 +135,37 @@ impl SearchPage {
         frame.list_mut().move_by(mv, len);
     }
 
-    /// detail 焦点滚头部简介:按方向 + 档位(逐行 / 翻页)平移简介滚动 offset,档步长取
-    /// `behavior`(与歌词 / 列表 / 队列滚动同源)。上界由 render 端按折行内容高度钳;
-    /// 无活跃结果 / 无栈顶帧 → no-op。
-    fn scroll_detail_description(
+    /// 按配置步长移动结果光标或滚动详情简介。结果沿用列表移动的边界钳制、详情复位和
+    /// 分页预取，视口由渲染端按 scrolloff 跟随；详情简介上界由渲染端按折行高度钳制。
+    fn scroll_search_panel(
         &mut self,
         step: ScrollStep,
         behavior: &mineral_config::BehaviorConfig,
-    ) {
+    ) -> SearchEffect {
         let delta = step_delta(step, behavior);
-        if let Some(frame) = self.active_results().and_then(|kr| kr.detail.current()) {
-            frame.nudge_description(delta);
+        mineral_log::debug!(
+            target: "tui",
+            focus = ?self.focus,
+            delta,
+            "滚动搜索面板"
+        );
+        match self.focus {
+            SearchFocus::Results => {
+                let rows = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
+                let movement = if delta >= 0 {
+                    SelectionMove::Down(rows)
+                } else {
+                    SelectionMove::Up(rows)
+                };
+                self.move_search_result_sel(movement, *behavior.search_prefetch_rows())
+            }
+            SearchFocus::Detail => {
+                if let Some(frame) = self.active_results().and_then(|kr| kr.detail.current()) {
+                    frame.nudge_description(delta);
+                }
+                SearchEffect::None
+            }
+            SearchFocus::Prompt => SearchEffect::None,
         }
     }
 

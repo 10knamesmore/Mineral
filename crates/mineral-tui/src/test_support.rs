@@ -241,6 +241,9 @@ pub(crate) struct TestClient {
     /// `request_song_stats` 收到的歌曲 ID 序列(Selected 本地播放次数查询断言用)。
     pub(crate) song_stats_requests: Arc<Mutex<Vec<SongId>>>,
 
+    /// `toggle_love` 收到的歌曲序列，用于核对喜欢态持久化请求的目标。
+    pub(crate) love_requests: Arc<Mutex<Vec<Song>>>,
+
     /// 队列操作记录 `(操作名, 歌 id 全限定串)`(操作菜单的插播/追加路径断言用)。
     pub(crate) queue_ops: QueueOpsLog,
 
@@ -450,6 +453,9 @@ impl Backend for TestClient {
     }
 
     fn toggle_love(&self, song: Song) {
+        if let Ok(mut requests) = self.love_requests.lock() {
+            requests.push(song.clone());
+        }
         self.completions.push(Completion::Love {
             song_id: song.id.clone(),
             outcome: Outcome::Applied(false),

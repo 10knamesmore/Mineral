@@ -136,56 +136,53 @@ impl KindResults {
         }
     }
 
-    /// AlbumDetail 回包落当前帧——仅当栈顶帧正等这张专辑（歌曲帧拉所属专辑、专辑帧拉自身）。
-    /// 帧已切走（移光标 / 下钻 / 切 source）则丢弃。
-    ///
-    /// 顺带**回填结果列**:搜索投影的 Album 曲目数未知(列表画 `-`),下钻拿到真值后写回同 id 的
-    /// 列表行,回列表即显真数、不再是 `-`(帧已切走仍回填,列表值与详情一致)。
-    pub fn fill_album_detail(&mut self, id: &AlbumId, album: Box<Album>) {
+    /// 将专辑详情填入所有匹配的保留帧，并回填结果列同 ID 专辑的曲目数。
+    /// 歌曲帧按所属专辑匹配；移动结果光标后已销毁的帧不再接收。
+    pub fn fill_album_detail(&mut self, id: &AlbumId, album: &Album) {
         if let SearchPayload::Albums(albums) = &mut self.results {
             for listed in albums.iter_mut().filter(|a| a.id == *id) {
                 listed.track_count = album.track_count;
             }
         }
-        let Some(frame) = self.detail.current_mut() else {
-            return;
-        };
-        if frame.entity.fetch() == Some(DetailFetch::AlbumDetail(id.clone())) {
-            frame.set_album_detail(album);
+        for frame in self
+            .detail
+            .matching_frames_mut(DetailFetch::AlbumDetail(id.clone()))
+        {
+            frame.set_album_detail(Box::new(album.clone()));
         }
     }
 
-    /// PlaylistDetail 回包落当前帧（栈顶正等这个歌单时）。
+    /// 将歌单曲目填入所有匹配的保留帧。
     pub fn fill_playlist_entries(
         &mut self,
         id: &PlaylistId,
-        entries: Vec<mineral_model::PlaylistEntry>,
+        entries: &[mineral_model::PlaylistEntry],
     ) {
-        let Some(frame) = self.detail.current_mut() else {
-            return;
-        };
-        if frame.entity.fetch() == Some(DetailFetch::PlaylistDetail(id.clone())) {
-            frame.set_playlist_entries(entries);
+        for frame in self
+            .detail
+            .matching_frames_mut(DetailFetch::PlaylistDetail(id.clone()))
+        {
+            frame.set_playlist_entries(entries.to_vec());
         }
     }
 
-    /// ArtistDetail 回包（热门曲那一路）落当前帧（栈顶正等这个 artist 时）。
-    pub fn fill_artist_detail(&mut self, id: &ArtistId, artist: Box<Artist>) {
-        let Some(frame) = self.detail.current_mut() else {
-            return;
-        };
-        if frame.entity.fetch() == Some(DetailFetch::Artist(id.clone())) {
-            frame.set_artist_detail(artist);
+    /// 将艺人详情填入所有匹配的保留帧，与已收到的专辑列表合并。
+    pub fn fill_artist_detail(&mut self, id: &ArtistId, artist: &Artist) {
+        for frame in self
+            .detail
+            .matching_frames_mut(DetailFetch::Artist(id.clone()))
+        {
+            frame.set_artist_detail(Box::new(artist.clone()));
         }
     }
 
-    /// ArtistAlbums 回包（专辑列表那一路）落当前帧（栈顶正等这个 artist 时）。
-    pub fn fill_artist_albums(&mut self, id: &ArtistId, albums: Vec<Album>) {
-        let Some(frame) = self.detail.current_mut() else {
-            return;
-        };
-        if frame.entity.fetch() == Some(DetailFetch::Artist(id.clone())) {
-            frame.set_artist_albums(albums);
+    /// 将艺人专辑列表填入所有匹配的保留帧，与已收到的热门曲合并。
+    pub fn fill_artist_albums(&mut self, id: &ArtistId, albums: &[Album]) {
+        for frame in self
+            .detail
+            .matching_frames_mut(DetailFetch::Artist(id.clone()))
+        {
+            frame.set_artist_albums(albums.to_vec());
         }
     }
 }
@@ -402,7 +399,7 @@ mod tests {
             .name("album a1".to_owned())
             .track_count(Some(11))
             .build();
-        kr.fill_album_detail(&AlbumId::new(SourceKind::NETEASE, "a1"), Box::new(detailed));
+        kr.fill_album_detail(&AlbumId::new(SourceKind::NETEASE, "a1"), &detailed);
 
         let SearchPayload::Albums(after) = &kr.results else {
             color_eyre::eyre::bail!("应是 Albums 桶");

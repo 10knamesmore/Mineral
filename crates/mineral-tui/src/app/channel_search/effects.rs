@@ -25,7 +25,7 @@ pub(crate) struct SearchCtx<'a> {
     /// 键位表(面板动词自查表;prompt 仍走裸键)。
     pub keymap: &'a Keymap,
 
-    /// 交互手感段(detail 简介滚动的逐行 / 翻页档步长来源)。
+    /// 结果列表与详情简介的滚动步长、结果分页预取半径。
     pub behavior: &'a mineral_config::BehaviorConfig,
 
     /// detail 下钻 / 返回滑动拍数(App 从动画配置预算好传入)。
@@ -141,6 +141,14 @@ impl App {
                 // 续拉用与首页一致的页大小(`Page::default().limit`):榨干推断与 next_offset
                 // 页对齐都锚定同一 limit,混用会让 offset↔页号换算错位;offset 进 dedup key。
                 let limit = mineral_channel_core::Page::default().limit;
+                mineral_log::debug!(
+                    target: "tui",
+                    source = ?source,
+                    kind = ?kind,
+                    offset,
+                    limit,
+                    "提交搜索结果分页预取"
+                );
                 self.client.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Search {
                         source,

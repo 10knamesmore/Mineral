@@ -1392,6 +1392,471 @@ mod tests {
         Ok(())
     }
 
+    /// Search 面板按键只操作当前页面的选中实体、滚动和查询输入。
+    mod search_panel_routing {
+        use std::sync::Arc;
+
+        use color_eyre::eyre::eyre;
+        use mineral_channel_core::Page;
+        use mineral_model::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, Song, SongId};
+        use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+
+        use super::{App, KeyCode, SearchKind, SourceKind, press, press_ctrl};
+        use crate::runtime::state::{EntityRef, PromptSegment, SearchFocus, View};
+        use crate::test_support::{
+            TestClient, app_with_channel_search_probed, app_with_long_library, song,
+        };
+
+        /// 构造与后台 Library 不同的搜索曲目，避免选错目标被同一 ID 掩盖。
+        fn search_songs(len: usize) -> Vec<Song> {
+            (0..len).map(|i| song(&format!("search-{i}"))).collect()
+        }
+
+        /// 在保留过滤词和列表位置的 Library 上提交搜索，并注入结果及请求探针。
+        fn search_over_browse(
+            kind: SearchKind,
+            payload: SearchPayload,
+            has_more: bool,
+        ) -> color_eyre::Result<(App, Arc<TestClient>)> {
+            let (mut app, _) = app_with_channel_search_probed(vec![kind])?;
+            let browse = app_with_long_library(64, 22)?;
+            app.state.browse = browse.state.browse;
+            app.state.library = browse.state.library;
+            app.state.browse.search.set_query("Track");
+            app.state.browse.nav.track.place(22, 4);
+            let client = Arc::new(TestClient::default());
+            app.client = client.clone();
+            for c in "remote".chars() {
+                press(&mut app, KeyCode::Char(c));
+            }
+            press(&mut app, KeyCode::Enter);
+            app.state.apply(&TaskEvent::SearchResults {
+                source: SourceKind::NETEASE,
+                kind,
+                query: "remote".to_owned(),
+                page: Page::default(),
+                payload,
+                has_more: Some(has_more),
+            });
+            client
+                .submitted
+                .lock()
+                .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                .clear();
+            assert_browse_unchanged(&app);
+            Ok((app, client))
+        }
+
+        /// 后台 Browse 保留视图、过滤输入、两个列表的位置和所有歌曲的喜欢态。
+        fn assert_browse_unchanged(app: &App) {
+            assert_eq!(app.state.browse.view.current(), View::Library);
+            assert_eq!(app.state.browse.search.query(), "Track");
+            assert!(!app.state.browse.search.typing);
+            assert_eq!(app.state.browse.nav.playlist.sel(), 0);
+            assert_eq!(app.state.browse.nav.playlist.scroll_target(), 0);
+            assert_eq!(app.state.browse.nav.track.sel(), 22);
+            assert_eq!(app.state.browse.nav.track.scroll_target(), 18);
+            assert!(
+                app.state
+                    .library
+                    .tracks
+                    .values()
+                    .flatten()
+                    .all(|entry| !entry.loved)
+            );
+        }
+
+        /// 读取实际发给后端的喜欢态持久化请求目标。
+        fn love_targets(client: &TestClient) -> color_eyre::Result<Vec<SongId>> {
+            Ok(client
+                .love_requests
+                .lock()
+                .map_err(|e| eyre!("喜欢探针锁中毒: {e}"))?
+                .iter()
+                .map(|song| song.id.clone())
+                .collect())
+        }
+
+        /// 热更为可区分的滚动步长，验证按键处理现读配置。
+        fn configure_scroll(app: &mut App) -> color_eyre::Result<()> {
+            let tree = mineral_config::merge_tree(
+                mineral_config::default_tree()?,
+                serde_json::json!({ "tui": { "behavior": {
+                    "line_scroll_rows": 3,
+                    "page_scroll_rows": 11,
+                    "search_prefetch_rows": 2
+                } } }),
+            );
+            app.apply_pushed_config(mineral_protocol::BusValue::from_json(tree));
+            assert_eq!(*app.state.cfg.tui().behavior().line_scroll_rows(), 3);
+            assert_eq!(*app.state.cfg.tui().behavior().page_scroll_rows(), 11);
+            Ok(())
+        }
+
+        /// 构造搜索结果中的专辑壳，详情通过独立回包注入。
+        fn album() -> Album {
+            Album::builder()
+                .id(AlbumId::new(SourceKind::NETEASE, "search-album"))
+                .name("Search Album".to_owned())
+                .build()
+        }
+
+        /// Results 的 f 持久化当前曲目，两次按键乐观翻转喜欢态。
+        #[test]
+        fn results_f_persists_selected_song() -> color_eyre::Result<()> {
+            let songs = search_songs(3);
+            let selected = songs
+                .get(1)
+                .ok_or_else(|| eyre!("缺少第二首搜索曲目"))?
+                .clone();
+            let (mut app, client) =
+                search_over_browse(SearchKind::Song, SearchPayload::Songs(songs), false)?;
+            press(&mut app, KeyCode::Char('j'));
+            press(&mut app, KeyCode::Char('f'));
+            assert_eq!(love_targets(&client)?, vec![selected.id.clone()]);
+            assert!(app.state.is_liked(&selected));
+            assert_browse_unchanged(&app);
+
+            press(&mut app, KeyCode::Char('f'));
+            assert_eq!(
+                love_targets(&client)?,
+                vec![selected.id.clone(), selected.id.clone()]
+            );
+            assert!(!app.state.is_liked(&selected));
+            assert_browse_unchanged(&app);
+            Ok(())
+        }
+
+        /// Detail 未加载时 f 不操作；专辑详情到货后，f 持久化详情列表当前曲目。
+        #[test]
+        fn detail_f_persists_selected_track_after_loading() -> color_eyre::Result<()> {
+            let album = album();
+            let (mut app, client) = search_over_browse(
+                SearchKind::Album,
+                SearchPayload::Albums(vec![album.clone()]),
+                false,
+            )?;
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(app.state.channel_search.focus, SearchFocus::Detail);
+            press(&mut app, KeyCode::Char('f'));
+            assert!(love_targets(&client)?.is_empty());
+            assert_browse_unchanged(&app);
+
+            let songs = search_songs(3);
+            let selected = songs
+                .get(1)
+                .ok_or_else(|| eyre!("缺少第二首专辑曲目"))?
+                .clone();
+            let mut detailed_album = album;
+            detailed_album.tracks = mineral_model::AlbumTrack::enumerate(songs);
+            app.state.apply(&TaskEvent::AlbumDetailFetched {
+                id: detailed_album.id.clone(),
+                album: Box::new(detailed_album),
+            });
+            press(&mut app, KeyCode::Char('j'));
+            press(&mut app, KeyCode::Char('f'));
+            assert_eq!(love_targets(&client)?, vec![selected.id.clone()]);
+            assert!(app.state.is_liked(&selected));
+            assert_browse_unchanged(&app);
+            Ok(())
+        }
+
+        /// Results 的专辑、艺人、歌单和空结果没有单曲喜欢语义。
+        #[test]
+        fn results_f_ignores_containers_and_empty_rows() -> color_eyre::Result<()> {
+            let artist = Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, "search-artist"))
+                .name("Search Artist".to_owned())
+                .build();
+            let playlist = Playlist::builder()
+                .id(PlaylistId::new(SourceKind::NETEASE, "search-playlist"))
+                .name("Search Playlist".to_owned())
+                .build();
+            for (kind, payload) in [
+                (SearchKind::Album, SearchPayload::Albums(vec![album()])),
+                (SearchKind::Artist, SearchPayload::Artists(vec![artist])),
+                (
+                    SearchKind::Playlist,
+                    SearchPayload::Playlists(vec![playlist]),
+                ),
+                (SearchKind::Song, SearchPayload::Songs(Vec::new())),
+            ] {
+                let (mut app, client) = search_over_browse(kind, payload, false)?;
+                press(&mut app, KeyCode::Char('f'));
+                assert!(
+                    love_targets(&client)?.is_empty(),
+                    "{kind:?} 不应发送喜欢请求"
+                );
+                assert!(
+                    app.state
+                        .library
+                        .liked_ids
+                        .values()
+                        .all(rustc_hash::FxHashSet::is_empty)
+                );
+                assert_browse_unchanged(&app);
+            }
+            Ok(())
+        }
+
+        /// 艺人 Detail 的热门曲可喜欢；切到专辑行或曲目光标越界后 f 不操作。
+        #[test]
+        fn artist_detail_f_uses_only_song_rows() -> color_eyre::Result<()> {
+            let songs = search_songs(2);
+            let selected = songs
+                .get(1)
+                .ok_or_else(|| eyre!("缺少第二首热门曲"))?
+                .clone();
+            let artist = Artist::builder()
+                .id(ArtistId::new(SourceKind::NETEASE, "search-artist"))
+                .name("Search Artist".to_owned())
+                .songs(songs)
+                .build();
+            let (mut app, client) = search_over_browse(
+                SearchKind::Artist,
+                SearchPayload::Artists(vec![artist.clone()]),
+                false,
+            )?;
+            app.state.apply(&TaskEvent::ArtistDetailFetched {
+                id: artist.id.clone(),
+                artist: Box::new(artist.clone()),
+            });
+            app.state.apply(&TaskEvent::ArtistAlbumsFetched {
+                id: artist.id,
+                page: Page::default(),
+                albums: vec![album()],
+            });
+            press(&mut app, KeyCode::Enter);
+            press(&mut app, KeyCode::Char('j'));
+            press(&mut app, KeyCode::Char('f'));
+            assert_eq!(love_targets(&client)?, vec![selected.id.clone()]);
+
+            app.state
+                .channel_search
+                .active_results_mut()
+                .and_then(|results| results.detail.current_mut())
+                .ok_or_else(|| eyre!("缺少艺人详情"))?
+                .list_mut()
+                .set_sel(2);
+            press(&mut app, KeyCode::Char('f'));
+            press(&mut app, KeyCode::Char(']'));
+            press(&mut app, KeyCode::Char('f'));
+            assert_eq!(love_targets(&client)?, vec![selected.id.clone()]);
+            assert!(app.state.is_liked(&selected));
+            assert_browse_unchanged(&app);
+            Ok(())
+        }
+
+        /// 四个滚动键使用热更步长移动 Results，远离底部时不预取，也不滚后台列表。
+        #[test]
+        fn results_scroll_uses_configured_steps() -> color_eyre::Result<()> {
+            let (mut app, client) = search_over_browse(
+                SearchKind::Song,
+                SearchPayload::Songs(search_songs(40)),
+                true,
+            )?;
+            configure_scroll(&mut app)?;
+            for (key, selected) in [('d', 3), ('u', 0), ('f', 11), ('b', 0), ('b', 0)] {
+                press_ctrl(&mut app, KeyCode::Char(key));
+                assert_eq!(
+                    app.state
+                        .channel_search
+                        .active_results()
+                        .ok_or_else(|| eyre!("缺少结果"))?
+                        .sel(),
+                    selected,
+                    "Ctrl-{key}"
+                );
+                assert_browse_unchanged(&app);
+            }
+            assert!(
+                client
+                    .submitted
+                    .lock()
+                    .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                    .is_empty()
+            );
+            Ok(())
+        }
+
+        /// Results 滚动近底触发下一页；光标移动复位详情，末行钳制保留下钻栈，榨干后停预取。
+        #[test]
+        fn results_scroll_preserves_prefetch_and_detail_reset() -> color_eyre::Result<()> {
+            let (mut app, client) = search_over_browse(
+                SearchKind::Song,
+                SearchPayload::Songs(search_songs(40)),
+                true,
+            )?;
+            configure_scroll(&mut app)?;
+            let results = app
+                .state
+                .channel_search
+                .active_results_mut()
+                .ok_or_else(|| eyre!("缺少结果"))?;
+            results.set_sel(36);
+            results.detail.push(EntityRef::Album(Box::new(album())), 1);
+            press_ctrl(&mut app, KeyCode::Char('d'));
+            let results = app
+                .state
+                .channel_search
+                .active_results()
+                .ok_or_else(|| eyre!("缺少结果"))?;
+            assert_eq!(results.sel(), 39);
+            assert_eq!(results.detail.depth(), 0);
+            assert!(
+                matches!(&results.detail.current().ok_or_else(|| eyre!("缺少详情根帧"))?.entity,
+                EntityRef::Song(song) if song.id == SongId::new(SourceKind::NETEASE, "search-39"))
+            );
+            {
+                let submitted = client
+                    .submitted
+                    .lock()
+                    .map_err(|e| eyre!("任务探针锁中毒: {e}"))?;
+                assert_eq!(submitted.len(), 1);
+                assert!(
+                    matches!(submitted.first(), Some(TaskKind::ChannelFetch(ChannelFetchKind::Search {
+                    source, kind, query, page
+                })) if *source == SourceKind::NETEASE && *kind == SearchKind::Song && query == "remote"
+                    && *page == Page::new(Page::default().limit, Page::default().limit))
+                );
+            }
+            let results = app
+                .state
+                .channel_search
+                .active_results_mut()
+                .ok_or_else(|| eyre!("缺少结果"))?;
+            results.detail.push(EntityRef::Album(Box::new(album())), 1);
+            press_ctrl(&mut app, KeyCode::Char('f'));
+            let results = app
+                .state
+                .channel_search
+                .active_results()
+                .ok_or_else(|| eyre!("缺少结果"))?;
+            assert_eq!(results.sel(), 39);
+            assert_eq!(results.detail.depth(), 1, "光标未移动时保留下钻栈");
+            let requests_before_exhausted = client
+                .submitted
+                .lock()
+                .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                .len();
+
+            app.state.apply(&TaskEvent::SearchResults {
+                source: SourceKind::NETEASE,
+                kind: SearchKind::Song,
+                query: "remote".to_owned(),
+                page: Page::new(Page::default().limit, Page::default().limit),
+                payload: SearchPayload::Songs(Vec::new()),
+                has_more: Some(false),
+            });
+            press_ctrl(&mut app, KeyCode::Char('f'));
+            assert_eq!(
+                client
+                    .submitted
+                    .lock()
+                    .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                    .len(),
+                requests_before_exhausted,
+                "榨干后不再提交分页"
+            );
+            assert_browse_unchanged(&app);
+            Ok(())
+        }
+
+        /// Detail 的四个滚动键保留滚简介语义，详情曲目和后台 Browse 的位置都不变。
+        #[test]
+        fn detail_scroll_keeps_list_positions() -> color_eyre::Result<()> {
+            let album = album();
+            let (mut app, client) = search_over_browse(
+                SearchKind::Album,
+                SearchPayload::Albums(vec![album.clone()]),
+                false,
+            )?;
+            let mut detailed_album = album;
+            detailed_album.description = "line\n".repeat(40);
+            detailed_album.tracks = mineral_model::AlbumTrack::enumerate(search_songs(3));
+            app.state.apply(&TaskEvent::AlbumDetailFetched {
+                id: detailed_album.id.clone(),
+                album: Box::new(detailed_album),
+            });
+            configure_scroll(&mut app)?;
+            press(&mut app, KeyCode::Enter);
+            for (key, offset) in [('d', 3), ('u', 0), ('f', 11), ('b', 0), ('b', 0)] {
+                press_ctrl(&mut app, KeyCode::Char(key));
+                let results = app
+                    .state
+                    .channel_search
+                    .active_results()
+                    .ok_or_else(|| eyre!("缺少结果"))?;
+                let frame = results.detail.current().ok_or_else(|| eyre!("缺少详情"))?;
+                assert_eq!(frame.description_scroll().get(), offset, "Ctrl-{key}");
+                assert_eq!(frame.list().sel(), 0);
+                assert_eq!(results.sel(), 0);
+                assert_browse_unchanged(&app);
+            }
+            assert!(
+                client
+                    .submitted
+                    .lock()
+                    .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                    .is_empty()
+            );
+            Ok(())
+        }
+
+        /// Results 和 Detail 的 / 都回 Query 输入段，保留搜索词及后台 Browse 过滤状态。
+        #[test]
+        fn slash_returns_to_query_without_changing_browse() -> color_eyre::Result<()> {
+            for focus in [SearchFocus::Results, SearchFocus::Detail] {
+                let (mut app, client) = search_over_browse(
+                    SearchKind::Song,
+                    SearchPayload::Songs(search_songs(3)),
+                    false,
+                )?;
+                app.state.channel_search.set_focus(SearchFocus::Prompt);
+                app.state
+                    .channel_search
+                    .set_prompt_seg(PromptSegment::Kind, 0);
+                app.state.channel_search.set_focus(focus);
+                press(&mut app, KeyCode::Char('/'));
+                assert_eq!(app.state.channel_search.focus, SearchFocus::Prompt);
+                assert_eq!(
+                    app.state.channel_search.prompt_focus(),
+                    Some(PromptSegment::Query)
+                );
+                assert!(!app.state.channel_search.seg_open());
+                assert!(app.state.channel_search.active.on());
+                assert_eq!(
+                    app.state
+                        .channel_search
+                        .current()
+                        .ok_or_else(|| eyre!("缺少搜索会话"))?
+                        .query(),
+                    "remote"
+                );
+                assert!(
+                    client
+                        .submitted
+                        .lock()
+                        .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+                        .is_empty()
+                );
+                assert_browse_unchanged(&app);
+
+                press(&mut app, KeyCode::Char('!'));
+                assert_eq!(
+                    app.state
+                        .channel_search
+                        .current()
+                        .ok_or_else(|| eyre!("缺少搜索会话"))?
+                        .query(),
+                    "remote!"
+                );
+                assert_browse_unchanged(&app);
+            }
+            Ok(())
+        }
+    }
+
     /// 全屏态内 `Tab` 仍打开 queue 浮层(浮层是独立层),光标落在在播歌。
     #[test]
     fn fullscreen_tab_still_opens_queue() -> color_eyre::Result<()> {

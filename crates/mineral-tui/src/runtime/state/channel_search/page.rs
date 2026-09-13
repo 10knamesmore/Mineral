@@ -403,6 +403,13 @@ impl SearchPage {
         self.current_mut().and_then(SearchSession::kind_results_mut)
     }
 
+    /// 遍历所有会话保留的结果桶；实体详情按完整 ID 配对，不受当前 source / kind 影响。
+    pub(crate) fn retained_results_mut(&mut self) -> impl Iterator<Item = &mut KindResults> {
+        self.sessions
+            .values_mut()
+            .flat_map(SearchSession::retained_results_mut)
+    }
+
     /// 按 source 找会话（可变）：搜索回包按事件自带 source 配对（可能非当前 source）。
     pub fn session_for_mut(&mut self, source: SourceKind) -> Option<&mut SearchSession> {
         self.sessions.get_mut(&source)
