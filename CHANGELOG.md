@@ -1,4 +1,61 @@
 # Changelog
+## [0.5.7] — 2026-09-13
+
+### Features
+
+- Decode covers to configured pixel target ([`92e0fe3`](https://github.com/10knamesmore/Mineral/commit/92e0fe3a8fdaab603cf6e1ad66c04d51b9a7f7a4))
+
+- Add custom Dylint checks ([`46366e9`](https://github.com/10knamesmore/Mineral/commit/46366e9962c4261b7f5766d57255ab7d8954081e))
+
+- Remove index columns from tracks and queue ([`1d60674`](https://github.com/10knamesmore/Mineral/commit/1d60674a2746e3a8f0571fe9a1dd85a42f9e268d))
+
+- Add Kitty cover thumbnails to lists ([`78ff49d`](https://github.com/10knamesmore/Mineral/commit/78ff49d70c1d19b87eadf8a50fae68d30b15aae4))
+
+- Add cursor minimaps to tracks, queue and playlists ([`32b517d`](https://github.com/10knamesmore/Mineral/commit/32b517d669baa388afdc4ab4efbe97778495696e))
+
+- Expose minimap halo and magnet radii as tui.minimap ([`fd023a1`](https://github.com/10knamesmore/Mineral/commit/fd023a15dbab955654f366be83ccbc6e9fe82cc6))
+
+- Mark the playing track row like the queue ([`28bed60`](https://github.com/10knamesmore/Mineral/commit/28bed607237d41fa88654167630803116ede2915))
+
+- Reverse the fullscreen cover transition on prev ([`201815d`](https://github.com/10knamesmore/Mineral/commit/201815d3c40c209de1561bb43366d518fd633b7b))
+
+- Fade page text in place during layout transitions ([`4af141b`](https://github.com/10knamesmore/Mineral/commit/4af141b32f0674bdad428b85a8256d1fec1c4153))
+
+- Skip the selected cover fade when both sides share a picture ([`f67ca83`](https://github.com/10knamesmore/Mineral/commit/f67ca833f73a834bc023722bd3fe8d1fc0b912b2))
+
+### Bug Fixes
+
+- Correct search key routing and async state updates ([`661d33f`](https://github.com/10knamesmore/Mineral/commit/661d33fe408e75d8387006a2e92e22b396bf0cf7))
+
+- Bound retention and namespace application targets ([`5c87df6`](https://github.com/10knamesmore/Mineral/commit/5c87df636ad62a0c767169fdf6e211468eee6ef7))
+
+- Prevent duplicate search pages and skipped results ([`1982cf7`](https://github.com/10knamesmore/Mineral/commit/1982cf793ffb179b03c3a0372b738b4c4f79a400))
+
+- Paginate artist albums and uploader videos ([`bd105e2`](https://github.com/10knamesmore/Mineral/commit/bd105e2766d951db4cb8aaacbd6916462dbaa479))
+
+- Preserve artist section across search pages ([`9dc749a`](https://github.com/10knamesmore/Mineral/commit/9dc749afde5d3f117e970791b38e81e9d6854b00))
+
+- Reduce progress update intervals to 100ms ([`cc793c7`](https://github.com/10knamesmore/Mineral/commit/cc793c7bb64eb3a48a89b2f47a1356deb8653431))
+
+- Refresh light playback state every frame ([`92ccd24`](https://github.com/10knamesmore/Mineral/commit/92ccd247dee212a2c1b303fb45b463bc4c2c7673))
+
+- Submit playlist additions as single batches ([`1193adc`](https://github.com/10knamesmore/Mineral/commit/1193adc23778ec4e63a7bd2d1f6cdbc4ab526cd5))
+
+- Push light state when it changes ([`88a3b83`](https://github.com/10knamesmore/Mineral/commit/88a3b839466b4bb30142a34f2232a25c4e24bd6b))
+
+- Extract the playing cover palette without fullscreen ([`7cdba6a`](https://github.com/10knamesmore/Mineral/commit/7cdba6a534b688de8ba88aaaa5ca5c1e38cd4969))
+
+- Redundant closure ([`e9699f6`](https://github.com/10knamesmore/Mineral/commit/e9699f61fb6586c9ffe155c4781bb77c12d7068c))
+
+- Keep adjacent loved tracks contiguous on the minimap ([`099a632`](https://github.com/10knamesmore/Mineral/commit/099a632f79ada00753d16785f748693f0bc8e001))
+
+### Performance
+
+- Avoid copying native Kitty image pixels ([`39899e9`](https://github.com/10knamesmore/Mineral/commit/39899e9d1519110bfc83671e4c460d9a75cc2c3b))
+
+- Reduce halfblock preview decoding and filtering cost ([`b96d2b5`](https://github.com/10knamesmore/Mineral/commit/b96d2b5f96696a710b40fdcf0cf80149fc64a867))
+
+- Reuse preview decode for non-JPEG covers ([`6865d1c`](https://github.com/10knamesmore/Mineral/commit/6865d1c5b08b1eaea8f0fbc219f843cd46413c39))
 ## [0.5.6] — 2026-09-05
 
 ### Breaking Changes
