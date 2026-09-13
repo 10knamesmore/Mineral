@@ -18,6 +18,7 @@ use super::graphics::{TerminalBackend, TerminalGraphics};
 use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
 #[cfg(test)]
 use super::terminal::TerminalImage;
+use crate::image::CoverFingerprint;
 use crate::image::encode::{CoverEncoder, EncodeRequest, EncodeResult};
 use crate::image::fetch::{CoverCompletion, CoverFetcher, CoverRequestKind};
 use crate::render::anim::{Transition, ticks16_from_ms};
@@ -376,9 +377,11 @@ impl ImageEngine {
     }
 
     /// 塞入一张本地合成图(歌单拼贴),与 fetch 回填同规则:清掉该 key 旧协议(下次渲染
-    /// 按新图重建),被逐出项的派生物联动清理。
+    /// 按新图重建),被逐出项的派生物联动清理。拼贴图小、且只在重拼时合成一次,
+    /// 指纹就地算。
     pub(crate) fn insert_synthesized(&mut self, url: &MediaUrl, image: Arc<DynamicImage>) {
-        let evicted = self.cache.insert(url, image);
+        let fingerprint = CoverFingerprint::of(&image);
+        let evicted = self.cache.insert(url, image, fingerprint);
         self.terminal_images
             .remove(&ImageIdentity::Url(url.clone()));
         for u in evicted {
@@ -451,7 +454,9 @@ impl ImageEngine {
         if let Some(palette) = ready.palette {
             self.palettes.insert(ready.url.clone(), palette);
         }
-        let evicted = self.cache.insert(&ready.url, ready.image);
+        let evicted = self
+            .cache
+            .insert(&ready.url, ready.image, ready.fingerprint);
         self.terminal_images
             .remove_decoded(&ImageIdentity::Url(ready.url.clone()));
         for url in evicted {
@@ -746,6 +751,7 @@ mod tests {
     use mineral_model::MediaUrl;
 
     use super::ImageEngine;
+    use crate::image::CoverFingerprint;
     use crate::image::fetch::{CoverCompletion, CoverPreviewReady, CoverReady};
     use crate::image::key::{ImageIdentity, PixelSize, TerminalImageKey};
     use crate::image::terminal::TerminalImage;
@@ -783,6 +789,7 @@ mod tests {
             preview: preview_ready(&url),
             full: CoverReady {
                 url: url.clone(),
+                fingerprint: CoverFingerprint::of(&image),
                 image,
                 palette: None,
             },
@@ -913,9 +920,11 @@ mod tests {
                 "两格必须寻址图片的不同列"
             );
 
+            let full = Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64)));
             engine.install_decoded_cover(CoverReady {
                 url: url.clone(),
-                image: Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64))),
+                fingerprint: CoverFingerprint::of(&full),
+                image: full,
                 palette: None,
             });
             engine.set_budgets(0, 16 * 1024, 16 * 1024);
@@ -938,7 +947,7 @@ mod tests {
         let cfg = Arc::new(mineral_config::Config::defaults()?);
         let mut kitty = ImageEngine::disabled_kitty(cfg);
         let url = MediaUrl::remote("https://example.com/cover.jpg")?;
-        kitty.cache.insert(
+        kitty.cache.insert_test(
             &url,
             Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64))),
         );

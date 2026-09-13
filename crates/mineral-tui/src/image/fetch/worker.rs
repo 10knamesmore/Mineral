@@ -48,6 +48,7 @@ pub(super) async fn complete_request(
                 CoverCompletion::Decoded(CoverReady {
                     url,
                     image: Arc::new(decoded.image),
+                    fingerprint: decoded.fingerprint,
                     palette: decoded.palette,
                 })
             } else {

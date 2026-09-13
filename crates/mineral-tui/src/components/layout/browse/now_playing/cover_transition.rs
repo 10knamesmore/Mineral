@@ -1,4 +1,5 @@
-//! 在固定封面区域交叉渐变歌单与选中曲目图片，并预热两端稳定尺寸。
+//! 在固定封面区域交叉渐变歌单与选中曲目图片，并预热两端稳定尺寸；两端本来就是同一
+//! 张封面时没有可看的渐变，直接沿用稳态成品图。
 
 use mineral_model::MediaUrl;
 use ratatui::Frame;
@@ -30,6 +31,22 @@ pub(super) fn draw(
     };
     let from = main_cover::url_for_view(state, View::Playlists);
     let to = main_cover::url_for_view(state, View::Library);
+    // 两端本来就是同一张封面(URL 相同,或 Netease 那种同图多 URL 的内容指纹相同)时没有
+    // 可看的交叉渐变:按稳态贴成品图,免得中途把已经清晰的图退回 halfblock 再闪回来。
+    if same_picture(state, from.as_ref(), to.as_ref()) {
+        if let (Some(from), Some(to)) = (&from, &to) {
+            // 两端都留在本帧可见工作集里:判据要在整段切换里稳定,不被后台逐出翻掉。
+            state.images.observe_visible(from);
+            state.images.observe_visible(to);
+        }
+        state.images.render(
+            ImageContent::Display { url: from.as_ref() },
+            cover_area,
+            frame.buffer_mut(),
+            ImageRenderPhase::Stable,
+        );
+        return;
+    }
     let square = state.images.square_area(cover_area);
 
     if let (Some(from), Some(to)) = (&from, &to)
@@ -59,6 +76,15 @@ pub(super) fn draw(
 
     for url in [from.as_ref(), to.as_ref()].into_iter().flatten() {
         state.images.prepare(url, cover_area);
+    }
+}
+
+/// 两端是不是同一张封面:都没有、URL 相同,或已解码像素判为同一张图。
+fn same_picture(state: &AppState, from: Option<&MediaUrl>, to: Option<&MediaUrl>) -> bool {
+    match (from, to) {
+        (None, None) => true,
+        (Some(from), Some(to)) => *from == *to || state.images.same_picture(from, to),
+        _ => false,
     }
 }
 

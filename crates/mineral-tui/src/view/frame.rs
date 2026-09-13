@@ -475,7 +475,7 @@ mod tests {
             app.state.playback.track = Some(sv.data.song.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert_test(&url, Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -556,7 +556,7 @@ mod tests {
         app.state
             .images
             .cache
-            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+            .insert_test(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
 
         app.state.browse.fullscreen.set(true);
         for _ in 0..5 {
@@ -781,13 +781,13 @@ mod tests {
             app.state
                 .images
                 .cache
-                .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
+                .insert_test(&url_a, Arc::new(solid_cover(255, 0, 255)));
         }
         if cache_playing {
             app.state
                 .images
                 .cache
-                .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
+                .insert_test(&url_b, Arc::new(solid_cover(0, 255, 255)));
         }
         let mut fs = Toggle::new(8);
         fs.set(true);
@@ -924,7 +924,7 @@ mod tests {
         app.state
             .images
             .cache
-            .insert(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
+            .insert_test(&url, Arc::new(image::DynamicImage::ImageRgb8(img)));
         // 脱离滚动防抖，确保走稳定阶段的编码在途路径。
         app.state.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -976,8 +976,14 @@ mod tests {
             }
             Arc::new(image::DynamicImage::ImageRgb8(img))
         };
-        app.state.images.cache.insert(&from_url, solid(200, 0, 0));
-        app.state.images.cache.insert(&to_url, solid(0, 0, 200));
+        app.state
+            .images
+            .cache
+            .insert_test(&from_url, solid(200, 0, 0));
+        app.state
+            .images
+            .cache
+            .insert_test(&to_url, solid(0, 0, 200));
         if let Some(track) = app.state.playback.track.as_mut() {
             track.cover_url = Some(to_url.clone());
         }
@@ -1213,7 +1219,7 @@ mod tests {
             }
             if i <= 1 {
                 let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-                app.state.images.cache.insert(&url, Arc::new(img));
+                app.state.images.cache.insert_test(&url, Arc::new(img));
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
@@ -1254,7 +1260,7 @@ mod tests {
                 s.cover_url = Some(url.clone());
             }
             let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-            app.state.images.cache.insert(&url, Arc::new(img));
+            app.state.images.cache.insert_test(&url, Arc::new(img));
         }
         app.state.playback.track = app.state.player.queue.get(1).cloned();
         let mut fs = Toggle::new(1);

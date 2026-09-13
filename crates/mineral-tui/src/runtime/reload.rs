@@ -850,7 +850,7 @@ mod tests {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let url = mineral_model::MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8));
-        let evicted = app.state.images.cache.insert(&url, Arc::new(img));
+        let evicted = app.state.images.cache.insert_test(&url, Arc::new(img));
         assert!(evicted.is_empty(), "预算内不逐出");
         assert_eq!(app.state.images.cache.len(), 1, "前置:已缓存一张");
         app.apply_pushed_config(pushed_tree(

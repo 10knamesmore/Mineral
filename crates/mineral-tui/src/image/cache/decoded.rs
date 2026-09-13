@@ -12,10 +12,15 @@ use image::DynamicImage;
 use mineral_model::MediaUrl;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::image::CoverFingerprint;
+
 /// 一条缓存项。
 struct Entry {
     /// 按配置尺寸解码的封面像素(像素缓冲是常驻内存大头)。
     image: Arc<DynamicImage>,
+
+    /// 内容指纹：同一张图的不同 URL(Netease 尺寸变体)靠它相认。
+    fingerprint: CoverFingerprint,
 
     /// 该图像素字节数,记账用,免逐出时重算。
     bytes: u64,
@@ -76,6 +81,28 @@ impl CoverCache {
         self.entries.contains_key(url)
     }
 
+    /// 测试用插入:指纹就地从图里算(测试只关心账目与逐出)。
+    #[cfg(test)]
+    pub(crate) fn insert_test(
+        &mut self,
+        url: &MediaUrl,
+        image: Arc<DynamicImage>,
+    ) -> Vec<MediaUrl> {
+        let fingerprint = CoverFingerprint::of(&image);
+        self.insert(url, image, fingerprint)
+    }
+
+    /// 两张已解码封面是否同一张图(内容指纹比对)。**不**更新 LRU 顺序。
+    ///
+    /// # Params:
+    ///   - `left` / `right`: 待比较的两个封面 URL;任一未解码时为 `false`
+    pub(crate) fn same_picture(&self, left: &MediaUrl, right: &MediaUrl) -> bool {
+        let (Some(left), Some(right)) = (self.entries.get(left), self.entries.get(right)) else {
+            return false;
+        };
+        left.fingerprint.matches(&right.fingerprint)
+    }
+
     /// 登记当前帧实际显示的图片；预取和预编码不调用此入口。
     pub(crate) fn observe_visible(&self, url: &MediaUrl) {
         self.observed.borrow_mut().insert(url.clone());
@@ -103,16 +130,23 @@ impl CoverCache {
     /// # Params:
     ///   - `url`: 封面 URL(内部 clone 一份作 key)
     ///   - `image`: 解码后的图片
+    ///   - `fingerprint`: 该图的内容指纹(解码 worker 里算好)
     ///
     /// # Return:
     ///   被逐出的 URL 列表(不含刚插入的 `url`);未触发逐出时为空。
-    pub(crate) fn insert(&mut self, url: &MediaUrl, image: Arc<DynamicImage>) -> Vec<MediaUrl> {
+    pub(crate) fn insert(
+        &mut self,
+        url: &MediaUrl,
+        image: Arc<DynamicImage>,
+        fingerprint: CoverFingerprint,
+    ) -> Vec<MediaUrl> {
         let bytes = image_bytes(&image);
         let last_used = Cell::new(self.next_tick());
         if let Some(old) = self.entries.insert(
             url.clone(),
             Entry {
                 image,
+                fingerprint,
                 bytes,
                 last_used,
             },
@@ -197,7 +231,7 @@ mod tests {
     fn under_budget_keeps_all() -> color_eyre::Result<()> {
         let mut cache = CoverCache::new(/*budget*/ 1_000_000);
         for n in 0..3 {
-            let evicted = cache.insert(&url(n)?, img(100));
+            let evicted = cache.insert_test(&url(n)?, img(100));
             assert!(evicted.is_empty(), "第 {n} 张未越预算不应逐出");
         }
         assert_eq!(cache.len(), 3);
@@ -211,14 +245,14 @@ mod tests {
         // 单张 30_000 字节;预算 100_000 恰容 3 张,第 4 张触发逐 1。
         let mut cache = CoverCache::new(/*budget*/ 100_000);
         let (u0, u1, u2, u3) = (url(0)?, url(1)?, url(2)?, url(3)?);
-        cache.insert(&u0, img(100));
-        cache.insert(&u1, img(100));
-        cache.insert(&u2, img(100));
+        cache.insert_test(&u0, img(100));
+        cache.insert_test(&u1, img(100));
+        cache.insert_test(&u2, img(100));
 
         // touch u0 → 变最近;此刻最久未用是 u1。
         assert!(cache.get(&u0).is_some());
 
-        let evicted = cache.insert(&u3, img(100));
+        let evicted = cache.insert_test(&u3, img(100));
 
         assert_eq!(evicted, vec![u1.clone()], "应逐出最久未用的 u1");
         assert!(!cache.contains_key(&u1), "u1 已被逐");
@@ -233,11 +267,11 @@ mod tests {
     fn without_touch_evicts_oldest_inserted() -> color_eyre::Result<()> {
         let mut cache = CoverCache::new(/*budget*/ 100_000);
         let (u0, u1, u2, u3) = (url(0)?, url(1)?, url(2)?, url(3)?);
-        cache.insert(&u0, img(100));
-        cache.insert(&u1, img(100));
-        cache.insert(&u2, img(100));
+        cache.insert_test(&u0, img(100));
+        cache.insert_test(&u1, img(100));
+        cache.insert_test(&u2, img(100));
 
-        let evicted = cache.insert(&u3, img(100));
+        let evicted = cache.insert_test(&u3, img(100));
 
         assert_eq!(evicted, vec![u0.clone()], "无 touch 时逐出最早插入的 u0");
         assert!(!cache.contains_key(&u0));
@@ -252,10 +286,10 @@ mod tests {
         cache.observe_visible(&first);
         cache.observe_visible(&second);
         assert!(cache.advance_frame().is_empty());
-        assert!(cache.insert(&first, img(/*side*/ 100)).is_empty());
-        assert!(cache.insert(&second, img(/*side*/ 100)).is_empty());
+        assert!(cache.insert_test(&first, img(/*side*/ 100)).is_empty());
+        assert!(cache.insert_test(&second, img(/*side*/ 100)).is_empty());
         for _ in 0..3 {
-            assert!(cache.insert(&warm, img(/*side*/ 50)).is_empty());
+            assert!(cache.insert_test(&warm, img(/*side*/ 50)).is_empty());
             assert!(cache.get(&first).is_some());
             assert!(cache.get(&second).is_some());
             cache.observe_visible(&first);
@@ -275,13 +309,13 @@ mod tests {
     #[test]
     fn oversized_single_stays_after_evicting_rest() -> color_eyre::Result<()> {
         let mut cache = CoverCache::new(/*budget*/ 100_000);
-        cache.insert(&url(0)?, img(100)); // 30_000
-        cache.insert(&url(1)?, img(100)); // 30_000
-        cache.insert(&url(2)?, img(100)); // 30_000
+        cache.insert_test(&url(0)?, img(100)); // 30_000
+        cache.insert_test(&url(1)?, img(100)); // 30_000
+        cache.insert_test(&url(2)?, img(100)); // 30_000
 
         // 一张 200×200 = 120_000 字节,单张即超 100_000 预算。
         let big = url(9)?;
-        let evicted = cache.insert(&big, img(200));
+        let evicted = cache.insert_test(&big, img(200));
 
         assert_eq!(evicted.len(), 3, "三张小图全被逐");
         assert!(cache.contains_key(&big), "超额大图仍留驻,不自逐");

@@ -1185,7 +1185,7 @@ mod tests {
 
         let (mut app, url) = app_with_covered_album()?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert_test(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):不投编码。
@@ -1218,7 +1218,7 @@ mod tests {
 
         let (mut app, url) = app_with_covered_album()?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert_test(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):cache hit → 画 halfblock 真图,但高清编码仍不派发。

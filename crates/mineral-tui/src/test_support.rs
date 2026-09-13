@@ -626,7 +626,7 @@ pub(crate) fn app_in_search_morph(
         app.state
             .images
             .cache
-            .insert(&url_a, Arc::new(solid_cover(255, 0, 255)));
+            .insert_test(&url_a, Arc::new(solid_cover(255, 0, 255)));
     }
     let url_b = MediaUrl::remote("https://x.y/detail-b.jpg")?;
     app.state.caps.insert(
@@ -659,7 +659,7 @@ pub(crate) fn app_in_search_morph(
         app.state
             .images
             .cache
-            .insert(&url_b, Arc::new(solid_cover(0, 255, 255)));
+            .insert_test(&url_b, Arc::new(solid_cover(0, 255, 255)));
     }
     let mut active = Toggle::new(8);
     active.set(true);

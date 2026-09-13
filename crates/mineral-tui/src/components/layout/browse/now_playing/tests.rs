@@ -50,13 +50,13 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
         state
             .images
             .cache
-            .insert(&from, Arc::new(solid_cover(200, 0, 0)));
+            .insert_test(&from, Arc::new(solid_cover(200, 0, 0)));
     }
     if cache_track {
         state
             .images
             .cache
-            .insert(&to, Arc::new(solid_cover(0, 0, 200)));
+            .insert_test(&to, Arc::new(solid_cover(0, 0, 200)));
     }
     Ok(state)
 }
@@ -257,6 +257,90 @@ fn covers_crossfade_in_place_and_prewarm_both_endpoints() -> color_eyre::Result<
         }
     }
     Ok(())
+}
+
+/// 页面切换中途的封面像素必须与端点稳态逐格一致(同一张封面不换画法)。
+///
+/// # Params:
+///   - `state`: 两端指向同一张封面的状态，尚未切换视图
+///   - `steady_cover_url`: 稳态端点实际贴的封面(切换中途也应贴它)
+fn assert_steady_cover_through_switch(
+    state: &mut AppState,
+    theme: &Theme,
+    steady_cover_url: &MediaUrl,
+) -> color_eyre::Result<()> {
+    let [cover, _, _] = sections()?;
+    let square = state.images.square_area(cover);
+    state
+        .images
+        .insert_test_terminal_image(steady_cover_url, (square.width, square.height));
+
+    // 端点稳态帧：成品图就绪时贴的是终端图片本身。
+    let steady = render(state, theme, false)?;
+    state.browse.view.switch_to(View::Library);
+    state.browse.view.tick();
+    assert!(
+        !state.browse.view.at_min() && !state.browse.view.at_max(),
+        "前置：视图切换进行中"
+    );
+    let midway = render(state, theme, false)?;
+    let mut pixels = 0_u16;
+    for y in square.top()..square.bottom() {
+        for x in square.left()..square.right() {
+            let expected = steady.cell((x, y)).ok_or_else(|| eyre!("封面格越界"))?;
+            let actual = midway.cell((x, y)).ok_or_else(|| eyre!("封面格越界"))?;
+            if expected.symbol() != "▀" && actual.symbol() != "▀" {
+                // 封面没画到的格子归背景与正文淡出,空格上的 fg 不可见。
+                continue;
+            }
+            pixels = pixels.saturating_add(1);
+            assert_eq!(
+                (actual.symbol(), actual.fg, actual.bg),
+                (expected.symbol(), expected.fg, expected.bg),
+                "同一张封面在中途不应换一种画法"
+            );
+        }
+    }
+    assert!(pixels > 0, "前置:封面像素应落在测试区域");
+    Ok(())
+}
+
+/// 歌单与曲目本就是同一张封面(同一 URL)时不做交叉渐变。
+#[test]
+fn identical_covers_keep_the_steady_image_through_the_switch() -> color_eyre::Result<()> {
+    let mut state = state_with_covers(true, true)?;
+    let theme = default_theme()?;
+    let shared = cover_url(&state, View::Playlists)?;
+    let playlist_id = state
+        .selected_playlist()
+        .ok_or_else(|| eyre!("缺少歌单"))?
+        .data
+        .id
+        .clone();
+    let selected = state
+        .library
+        .tracks
+        .get_mut(&playlist_id)
+        .and_then(|entries| entries.get_mut(1))
+        .ok_or_else(|| eyre!("缺少曲目"))?;
+    selected.data.song.cover_url = Some(shared.clone());
+    assert_steady_cover_through_switch(&mut state, &theme, &shared)
+}
+
+/// URL 不同但图是同一张(Netease 那种尺寸变体)时同样不做交叉渐变。
+#[test]
+fn matching_cover_pixels_keep_the_steady_image_through_the_switch() -> color_eyre::Result<()> {
+    let mut state = state_with_covers(true, true)?;
+    let theme = default_theme()?;
+    let playlist_url = cover_url(&state, View::Playlists)?;
+    let track_url = cover_url(&state, View::Library)?;
+    assert_ne!(playlist_url, track_url, "前置:两端 URL 不同");
+    // 两图内容仅差一档压缩/重采样噪声，应被内容指纹认成同一张。
+    state
+        .images
+        .cache
+        .insert_test(&track_url, Arc::new(solid_cover(201, 0, 0)));
+    assert_steady_cover_through_switch(&mut state, &theme, &playlist_url)
 }
 
 /// 一端没有 URL，或 URL 尚无完整图时，另一端在固定位置渐变到实际背景。

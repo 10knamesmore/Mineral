@@ -8,15 +8,19 @@ use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
 
+use crate::image::CoverFingerprint;
 use crate::image::colors::extract_palette;
 use crate::render::palette::CoverPalette;
 
 use super::source::load_source;
 
-/// 解码产物:内存图 + 尽力而为的频谱色板。一次 `spawn_blocking` 内算完(都是 CPU 活儿)。
+/// 解码产物:内存图 + 内容指纹 + 尽力而为的频谱色板。一次 `spawn_blocking` 内算完(都是 CPU 活儿)。
 pub(super) struct DecodedCover {
     /// 解码后的内存图。
     pub(super) image: DynamicImage,
+
+    /// 图片内容指纹(同一张图的不同 URL 靠它相认)。
+    pub(super) fingerprint: CoverFingerprint,
 
     /// 从图提取的频谱色板(取色失败为 `None`)。
     pub(super) palette: Option<CoverPalette>,
@@ -57,7 +61,12 @@ pub(super) async fn fetch_and_decode(
                     decoded_width = image.width(), decoded_height = image.height(),
                     decoded_bytes = image.as_bytes().len(), "display cover decoded");
         let palette = extract_palette(&image, cfg.kmeans());
-        Ok(DecodedCover { image, palette })
+        let fingerprint = CoverFingerprint::of(&image);
+        Ok(DecodedCover {
+            image,
+            fingerprint,
+            palette,
+        })
     })
     .await;
 

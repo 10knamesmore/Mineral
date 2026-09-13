@@ -12,6 +12,7 @@ pub(crate) mod graphics;
 
 mod accent;
 mod cache;
+mod fingerprint;
 mod hub;
 mod key;
 mod kitty;
@@ -20,6 +21,7 @@ mod resize;
 mod terminal;
 mod thumbnail;
 
+pub(crate) use fingerprint::CoverFingerprint;
 pub(crate) use geometry::square_cells;
 #[cfg(test)]
 pub(crate) use graphics::GraphicsProtocol;

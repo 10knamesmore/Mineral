@@ -134,7 +134,7 @@ mod tests {
         app.state.browse.nav.playlist.set_sel(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert(&url, Arc::new(img));
+        app.state.images.cache.insert_test(&url, Arc::new(img));
 
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         assert!(

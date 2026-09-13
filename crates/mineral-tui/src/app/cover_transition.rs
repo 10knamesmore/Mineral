@@ -55,7 +55,7 @@ mod tests {
     /// 往缓存塞一张该 URL 的解码图。
     fn cache_image(app: &mut crate::app::App, url: &MediaUrl) {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 16));
-        app.state.images.cache.insert(url, Arc::new(img));
+        app.state.images.cache.insert_test(url, Arc::new(img));
     }
 
     /// 把在播曲封面换成 `url`(模拟切歌后的 playback 镜像)。

@@ -354,7 +354,9 @@ mod tests {
     fn tick_composes_progressively() -> color_eyre::Result<()> {
         let mut s = mineral_state(4)?;
         for i in 0..2 {
-            s.images.cache.insert(&cover_url(i)?, solid([200, 0, 0], 8));
+            s.images
+                .cache
+                .insert_test(&cover_url(i)?, solid([200, 0, 0], 8));
         }
         tick(&mut s);
         let playlist = s
@@ -372,7 +374,9 @@ mod tests {
         );
 
         for i in 2..4 {
-            s.images.cache.insert(&cover_url(i)?, solid([0, 200, 0], 8));
+            s.images
+                .cache
+                .insert_test(&cover_url(i)?, solid([0, 200, 0], 8));
         }
         tick(&mut s);
         assert_eq!(

@@ -7,6 +7,7 @@ use mineral_config::CoverDecodePixelsConfig;
 use mineral_model::{MediaUrl, SourceKind};
 use parking_lot::Mutex;
 
+use crate::image::CoverFingerprint;
 use crate::image::key::TerminalImageKey;
 use crate::image::terminal::TerminalImage;
 use crate::render::palette::CoverPalette;
@@ -71,6 +72,9 @@ pub(crate) struct CoverReady {
 
     /// 解码后的内存图。
     pub image: Arc<DynamicImage>,
+
+    /// 图片内容指纹；同一张图的不同 URL 靠它相认。
+    pub fingerprint: CoverFingerprint,
 
     /// 从图提取的频谱色板;取色失败为 `None`(频谱回退 hue 漂移)。
     pub palette: Option<CoverPalette>,

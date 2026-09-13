@@ -158,6 +158,22 @@ impl ImageEngine {
         self.prepare_image(ImageIdentity::Url(url.clone()), image, target);
     }
 
+    /// 两张已解码封面是否同一张图(内容指纹比对)。任一未解码时为 `false`。
+    ///
+    /// # Params:
+    ///   - `left` / `right`: 待比较的两个封面 URL
+    pub(crate) fn same_picture(&self, left: &MediaUrl, right: &MediaUrl) -> bool {
+        self.cache.same_picture(left, right)
+    }
+
+    /// 把一个 URL 登记进本帧可见工作集，预算逐出会跳过它们。
+    ///
+    /// # Params:
+    ///   - `url`: 本帧确实参与展示的封面
+    pub(crate) fn observe_visible(&self, url: &MediaUrl) {
+        self.cache.observe_visible(url);
+    }
+
     /// 返回 URL 图片已经可用的终端成品区域。
     pub(crate) fn ready_area(&self, url: &MediaUrl, area: Rect) -> Option<Rect> {
         let target = square_subarea(area, self.cell_pixels());

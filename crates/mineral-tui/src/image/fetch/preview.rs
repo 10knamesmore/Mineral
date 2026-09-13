@@ -7,6 +7,7 @@ use isahc::HttpClient;
 use mineral_config::CoverConfig;
 use mineral_persist::CacheIndex;
 
+use crate::image::CoverFingerprint;
 use crate::image::colors::extract_palette;
 use crate::image::key::TerminalImageKey;
 use crate::image::terminal::TerminalImage;
@@ -19,6 +20,9 @@ use super::types::{CoverPreviewReady, CoverReady, PreviewRequest};
 pub(super) struct PreviewFull {
     /// 按配置尺寸解码的显示图(供 RAM LRU,消费方与 decode 落地一致)。
     image: Arc<DynamicImage>,
+
+    /// 图片内容指纹(同一张图的不同 URL 靠它相认)。
+    fingerprint: CoverFingerprint,
 
     /// 尽力而为的频谱色板。
     palette: Option<CoverPalette>,
@@ -86,12 +90,14 @@ pub(super) async fn fetch_preview(
             // 显示图(供 RAM LRU)与 preview 源,复用同次解码,避免后续 decode 再解一遍。
             let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
             let palette = extract_palette(&image, cfg.kmeans());
+            let fingerprint = CoverFingerprint::of(&image);
             let (preview, resident) = sample(image.clone());
             Ok(PreviewResult {
                 preview,
                 resident,
                 full: Some(PreviewFull {
                     image: Arc::new(image),
+                    fingerprint,
                     palette,
                 }),
             })
@@ -114,6 +120,7 @@ pub(super) async fn fetch_preview(
     let full = result.full.map(|full| CoverReady {
         url: url.clone(),
         image: full.image,
+        fingerprint: full.fingerprint,
         palette: full.palette,
     });
     Some((
