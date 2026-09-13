@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use mineral_model::{Lyrics, Song, SongId, SourceKind};
-use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions};
+use mineral_protocol::{AdvanceKind, PlayCursor, PlayMode, PlayerVersions};
 use mineral_test::song;
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
@@ -545,6 +545,56 @@ fn apply_between_non_shuffle_keeps_queue() {
     apply_play_mode(&mut st, PlayMode::RepeatOne);
     assert_eq!(ids(&st.queue), vec!["a", "b", "c"]);
     assert!(st.original_queue.is_none());
+}
+
+/// 进入档位随 current 段外发:`n` / `p` 各自作数,直接改播(点播)记随机访问。
+#[tokio::test]
+async fn sync_reports_advance_kind() -> color_eyre::Result<()> {
+    let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
+    let core = core_with(calls)?;
+    {
+        let mut st = core.inner.state.lock();
+        st.queue = vec![song("a"), song("b"), song("c")];
+        st.cursor = PlayCursor::InQueue(1);
+        st.current_song = Some(song("b"));
+        st.play_mode = PlayMode::Sequential;
+    }
+    let advance_of = |st: &mut State| {
+        st.sync(PlayerVersions::default())
+            .current
+            .and_then(|c| c.advance)
+    };
+
+    core.next_song(mineral_stats::Actor::User);
+    drain_spawned().await;
+    assert_eq!(
+        core.with_state(advance_of),
+        Some(AdvanceKind::Next),
+        "n 应记成下一首推进"
+    );
+
+    // 测试里播放位置为 0(≤ `prev_restart_threshold_ms`)→ `p` 真正后退到上一首。
+    core.prev_or_restart(mineral_stats::Actor::User);
+    drain_spawned().await;
+    assert_eq!(
+        core.with_state(advance_of),
+        Some(AdvanceKind::Prev),
+        "p 应记成上一首推进"
+    );
+
+    // 直接改播队列里的另一首:跳过顺序,记随机访问。
+    core.play_song(
+        &song("c"),
+        mineral_stats::PlayOrigin::Explicit,
+        mineral_stats::Actor::User,
+    );
+    drain_spawned().await;
+    assert_eq!(
+        core.with_state(advance_of),
+        Some(AdvanceKind::RandomAccess),
+        "点播应记随机访问"
+    );
+    Ok(())
 }
 
 /// next_song(手动跳过):对刚播完的旧歌打 `(old_id, false, position_ms)` 点。

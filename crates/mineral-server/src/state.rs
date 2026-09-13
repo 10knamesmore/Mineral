@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use mineral_model::{Envelope, PlaybackMediaInfo, Song, SongId};
 use mineral_playback::DirectMedia;
 use mineral_protocol::{
-    CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
-    SegmentVersion,
+    AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
+    QueueSync, SegmentVersion,
 };
 use tokio::sync::watch;
 
@@ -103,6 +103,9 @@ pub(crate) struct State {
     /// 当前播放模式(顺序 / 单曲 / 列表循环 / shuffle)。
     pub(crate) play_mode: PlayMode,
 
+    /// 当前曲的进入档位, 恒指向 `current_song`
+    pub(crate) advance: Option<(SongId, AdvanceKind)>,
+
     /// 当前歌的歌词(从 LyricsReady 写入)。
     pub(crate) current_lyrics: Option<mineral_model::Lyrics>,
 
@@ -143,6 +146,7 @@ impl State {
             media_info: None,
             direct_media: None,
             play_origin: None,
+            advance: None,
             queue_context: mineral_stats::QueueContext::Unknown,
             context_overrides: rustc_hash::FxHashMap::default(),
             queue: Vec::new(),
@@ -223,6 +227,7 @@ impl State {
                 .as_ref()
                 .filter(|(id, _)| self.current_song.as_ref().is_some_and(|s| s.id == *id))
                 .map(|(_, envelope)| envelope.clone()),
+            advance: self.advance.as_ref().map(|(_, kind)| *kind),
         });
         PlayerSync {
             versions: PlayerVersions {

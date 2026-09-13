@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use mineral_model::{Song, SongId};
-use mineral_protocol::{PlayCursor, PlaybackOrigin};
+use mineral_protocol::{AdvanceKind, PlayCursor, PlaybackOrigin};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use super::PlayerCore;
@@ -54,6 +54,15 @@ impl PlayerCore {
             }
             drop(st.take_prefetch());
             st.current_song = Some(song.clone());
+            // 进入档位:顺序推进入口(advance_next / advance_prev)已按目标曲写好 Next / Prev,
+            // 留着;其余入口(点播 / 替换队列 / 会话恢复)都是「直接跳到某一首」,记随机访问。
+            st.advance = Some((
+                song.id.clone(),
+                st.advance
+                    .take()
+                    .filter(|(id, _)| id == &song.id)
+                    .map_or(AdvanceKind::RandomAccess, |(_, kind)| kind),
+            ));
             // 仅当游标尚未指向本曲时才按身份 first-match 定位(列表点歌入口)。
             // 顺序推进入口(advance_next/advance_prev)已把游标钉到精确下标,这里
             // 必须保留——否则队列里有重复曲时,first-match 会把下标拽回首个副本,两首交替

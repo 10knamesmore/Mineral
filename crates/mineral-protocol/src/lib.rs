@@ -42,8 +42,8 @@ pub use message::{
 };
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{
-    CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions, QueueSync,
-    Repeat, SegmentVersion,
+    AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
+    QueueSync, Repeat, SegmentVersion,
 };
 pub use queue_edit::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
 pub use session::{

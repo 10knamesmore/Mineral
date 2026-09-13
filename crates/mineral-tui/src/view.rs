@@ -424,6 +424,7 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
                     to: &transition.to_url,
                     progress: transition.anim.eased_in_out(),
                     style,
+                    advance: transition.advance,
                 },
                 area,
                 frame.buffer_mut(),
@@ -467,18 +468,17 @@ fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, steady_cover: Option
     }
 }
 
-/// 全屏稳态:给在播曲之后 `prefetch.prewarm_ahead` 首(图已就绪者)的封面按当前尺寸提前编码,
-/// 自动切歌时协议已就绪、直接 place 无闪。无在播 / 队尾越界 / 该首无封面 → 跳过。
+/// 全屏稳态:给在播曲前后各 `prefetch.prewarm_ahead` 首(图已就绪者)的封面按当前尺寸提前
+/// 编码,切歌(`n` / `p` / 自动接续)时协议已就绪、直接 place 无闪,切歌转场也才拿得到进场图。
+/// 邻居按播放模式环回算(环回那一端也要预热);无在播 / 该首无封面 → 跳过。
 fn prewarm_upcoming(app: &App, area: Rect) {
-    let Some(pos) = app.state.queue_current_index() else {
-        return;
-    };
-    for d in 1..=*app.state.cfg.tui().prefetch().prewarm_ahead() {
+    let ahead = *app.state.cfg.tui().prefetch().prewarm_ahead();
+    for idx in app.state.queue_neighbor_indexes(ahead) {
         if let Some(url) = app
             .state
             .player
             .queue
-            .get(pos.saturating_add(d))
+            .get(idx)
             .and_then(|s| s.cover_url.as_ref())
         {
             app.state.images.prepare(url, area);
@@ -1032,6 +1032,7 @@ mod tests {
         app.state.images.transition = Some(CoverTransition {
             from_url,
             to_url,
+            advance: Some(mineral_protocol::AdvanceKind::Next),
             anim,
         });
         let mut fs = Toggle::new(1);
@@ -1280,6 +1281,43 @@ mod tests {
             .iter()
             .any(|key| key.matches_url(&next_url));
         assert!(warmed, "全屏稳态应提前编码下一首封面");
+        Ok(())
+    }
+
+    /// 全屏稳态也预热上一首封面:`p` 落回去那首同样要进场图已解码,转场才开得起来。
+    #[test]
+    fn fullscreen_steady_prewarms_previous_cover() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        // 在播曲取中间那首,前后各有邻居。
+        let mut app = app_with_queue(3, /*current_idx*/ 1)?;
+        for i in 0..3 {
+            let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
+            if let Some(s) = app.state.player.queue.get_mut(i) {
+                s.cover_url = Some(url.clone());
+            }
+            let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+            app.state.images.cache.insert(&url, Arc::new(img));
+        }
+        app.state.playback.track = app.state.player.queue.get(1).cloned();
+        let mut fs = Toggle::new(1);
+        fs.set(true);
+        fs.tick();
+        app.state.browse.fullscreen = fs;
+
+        let mut t = Terminal::new(TestBackend::new(80, 24))?;
+        t.draw(|f| super::draw(f, &app))?;
+
+        let pending = app.state.images.encode_pending.borrow();
+        for (idx, label) in [(0, "上一首"), (2, "下一首")] {
+            let url = MediaUrl::remote(&format!("https://prewarm/{idx}.jpg"))?;
+            assert!(
+                pending.iter().any(|key| key.matches_url(&url)),
+                "全屏稳态应提前编码{label}封面"
+            );
+        }
         Ok(())
     }
 

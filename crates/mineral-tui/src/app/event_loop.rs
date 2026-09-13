@@ -148,8 +148,12 @@ impl App {
             .track
             .as_ref()
             .and_then(|track| track.cover_url.clone());
+        // 当前曲的进入档位是 server 事实:切歌转场据此定向,`Prev` 之外都按下一首。
+        let advance = self.state.player.current_advance;
         let fullscreen_stable = self.state.browse.fullscreen.at_max();
-        self.state.images.tick(current_cover, fullscreen_stable);
+        self.state
+            .images
+            .tick(current_cover, advance, fullscreen_stable);
         let queue_covers = self.overlays.queue_cover_candidates(&self.state);
         crate::runtime::prefetch::tick(&mut self.state, &*self.client, queue_covers);
         self.sync_cover_palette();

@@ -126,6 +126,8 @@ pub(crate) fn render(frame: &mut Frame<'_>, plan: &FlightPlan, progress: u16, st
                     to: &to.url,
                     progress,
                     style: BlendStyle::Fade,
+                    // 页面形变的两端是同一张封面,没有推进档位。
+                    advance: None,
                 },
                 rect,
                 frame.buffer_mut(),

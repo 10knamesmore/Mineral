@@ -34,6 +34,7 @@ impl App {
                 .playback
                 .sync_envelope(song_id, c.current_envelope, ticks);
             self.state.player.current = c.current_song.clone();
+            self.state.player.current_advance = c.advance;
             self.state.playback.track = c.current_song;
             self.state.playback.direct_media = c.direct_media;
             self.state.playback.media_info = c.media_info;
@@ -79,6 +80,44 @@ mod tests {
                 "current 应保持原值"
             );
         }
+        Ok(())
+    }
+
+    /// 进入档位随 current 段到达并留在镜像里(重段缺席不改它),供切歌转场定向。
+    #[test]
+    fn current_advance_follows_current_segment() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(2, /*current_idx*/ 0)?;
+        let song = app
+            .state
+            .player
+            .queue
+            .first()
+            .cloned()
+            .ok_or_else(|| color_eyre::eyre::eyre!("前置:队列应有歌"))?;
+        app.apply_player_sync(PlayerSync {
+            versions: mineral_protocol::PlayerVersions {
+                queue: mineral_protocol::SegmentVersion::ZERO,
+                current: mineral_protocol::SegmentVersion::new(3),
+            },
+            current: Some(mineral_protocol::CurrentSync {
+                current_song: Some(song),
+                advance: Some(mineral_protocol::AdvanceKind::Prev),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            app.state.player.current_advance,
+            Some(mineral_protocol::AdvanceKind::Prev)
+        );
+
+        // 轻段同步(无 current 重段)不碰它——档位描述的是当前这首歌。
+        app.apply_player_sync(PlayerSync::default());
+        assert_eq!(
+            app.state.player.current_advance,
+            Some(mineral_protocol::AdvanceKind::Prev),
+            "重段缺席应保留"
+        );
         Ok(())
     }
 

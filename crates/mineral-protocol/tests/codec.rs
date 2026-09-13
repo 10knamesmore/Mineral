@@ -6,10 +6,10 @@ use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, Playlist, PlaylistId, SongId, SourceKind,
 };
 use mineral_protocol::{
-    CopyTemplateCtx, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary,
-    DownloadTarget, DownloadWave, KeyContext, PlayMode, PlayerSync, PlayerVersions, PlaylistRef,
-    QueueSync, Request, Response, ScriptBind, SegmentVersion, SongDownloadView, SongStatsWire,
-    StoreValue, ViewKind, framed, recv, send,
+    AdvanceKind, CopyTemplateCtx, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus,
+    DownloadSummary, DownloadTarget, DownloadWave, KeyContext, PlayMode, PlayerSync,
+    PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind, SegmentVersion,
+    SongDownloadView, SongStatsWire, StoreValue, ViewKind, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use mineral_test::song;
@@ -336,6 +336,8 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
                 points: vec![0, 128, 255],
                 version: 1,
             }),
+            // 进入档位随 current 段上线。
+            advance: Some(AdvanceKind::Prev),
         }),
     };
     value_round_trips(mineral_protocol::UpdatePayload::Player {

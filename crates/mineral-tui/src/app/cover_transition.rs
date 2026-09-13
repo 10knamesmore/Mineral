@@ -10,9 +10,12 @@ impl crate::app::App {
             .track
             .as_ref()
             .and_then(|track| track.cover_url.clone());
-        self.state
-            .images
-            .sync_transition(current_cover, self.state.browse.fullscreen.at_max());
+        let advance = self.state.player.current_advance;
+        self.state.images.sync_transition(
+            current_cover,
+            advance,
+            self.state.browse.fullscreen.at_max(),
+        );
     }
 }
 
@@ -21,6 +24,7 @@ mod tests {
     use std::sync::Arc;
 
     use mineral_model::MediaUrl;
+    use mineral_protocol::AdvanceKind;
 
     use crate::render::anim::Toggle;
     use crate::test_support::app_with_queue;
@@ -78,6 +82,59 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("应开启转场"))?;
         assert_eq!(t.from_url, a, "from 应是切歌前显示的图");
         assert_eq!(t.to_url, b, "to 应是新在播图");
+        Ok(())
+    }
+
+    /// 进入档位原样落到转场上(渲染再把 `Prev` 之外的都当下一首);尚未收到也为 `None`。
+    #[test]
+    fn transition_carries_advance_kind() -> color_eyre::Result<()> {
+        for advance in [
+            Some(AdvanceKind::Next),
+            Some(AdvanceKind::Prev),
+            Some(AdvanceKind::RandomAccess),
+            None,
+        ] {
+            let a = MediaUrl::remote("https://x.y/a.jpg")?;
+            let b = MediaUrl::remote("https://x.y/b.jpg")?;
+            let mut app = steady_fullscreen_showing(&a)?;
+            app.state.player.current_advance = advance;
+            cache_image(&mut app, &b);
+            switch_track_cover(&mut app, &b);
+            app.sync_cover_transition();
+            let t = app
+                .state
+                .images
+                .transition
+                .as_ref()
+                .ok_or_else(|| color_eyre::eyre::eyre!("应开启转场"))?;
+            assert_eq!(t.advance, advance, "转场应照抄当前曲的进入档位");
+        }
+        Ok(())
+    }
+
+    /// 转场中途又切到第三首且它图未解码:旧的一对不能继续画(否则闪回旧图再跳新图)。
+    #[test]
+    fn switching_mid_transition_drops_stale_pair() -> color_eyre::Result<()> {
+        let a = MediaUrl::remote("https://x.y/a.jpg")?;
+        let b = MediaUrl::remote("https://x.y/b.jpg")?;
+        let c = MediaUrl::remote("https://x.y/c.jpg")?;
+        let mut app = steady_fullscreen_showing(&a)?;
+        cache_image(&mut app, &b);
+        switch_track_cover(&mut app, &b);
+        app.sync_cover_transition();
+        assert!(app.state.images.transition.is_some(), "前置:第一段转场已开");
+
+        switch_track_cover(&mut app, &c); // c 故意不入缓存
+        app.sync_cover_transition();
+        assert!(
+            app.state.images.transition.is_none(),
+            "新图缺解码时不得留着旧的一对继续画"
+        );
+        assert_eq!(
+            app.state.images.displayed_cover.as_ref(),
+            Some(&c),
+            "显示身份仍应跟上"
+        );
         Ok(())
     }
 

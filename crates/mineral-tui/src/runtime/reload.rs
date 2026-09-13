@@ -821,6 +821,7 @@ mod tests {
         app.state.images.transition = Some(CoverTransition {
             from_url: MediaUrl::remote("https://x.y/a.jpg")?,
             to_url: MediaUrl::remote("https://x.y/b.jpg")?,
+            advance: None,
             anim,
         });
         let before = anim.eased_in_out();

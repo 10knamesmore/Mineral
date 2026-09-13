@@ -1,7 +1,7 @@
 //! 曲终推进裁决与已预排媒体的状态轮转。
 
 use mineral_model::SongId;
-use mineral_protocol::PlayCursor;
+use mineral_protocol::{AdvanceKind, PlayCursor};
 
 use crate::queue::next_index;
 use crate::state::State;
@@ -63,6 +63,9 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
     if let Some(idx) = next_index(st) {
         st.cursor = PlayCursor::InQueue(idx);
     }
+    // 无缝接续也是一次「下一首」推进:落账进入档位,与 [`crate::queue::advance_next`]
+    // 同一条语义(client 全屏切歌转场据此定向)。
+    st.advance = Some((queued.song.id.clone(), AdvanceKind::Next));
     st.current_song = Some(queued.song);
     st.current_slot = Some(slot);
     st.media_info = Some(queued.media_info);
@@ -79,7 +82,7 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
 #[cfg(test)]
 mod tests {
     use mineral_model::{BitRate, PlaybackMediaInfo};
-    use mineral_protocol::{PlayCursor, PlaybackOrigin};
+    use mineral_protocol::{AdvanceKind, PlayCursor, PlaybackOrigin};
     use mineral_test::song;
 
     use super::{Advance, adopt_queued, decide_advance};
@@ -156,6 +159,11 @@ mod tests {
         );
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "游标应定位到 b");
         assert_eq!(st.play_origin, Some(PlaybackOrigin::Remote));
+        assert_eq!(
+            st.advance,
+            Some((song("b").id, AdvanceKind::Next)),
+            "无缝接续也是一次下一首推进(client 转场据此定向)"
+        );
         assert!(!st.prefetch.is_armed(), "armed prefetch 应被取走");
     }
 

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use image::{DynamicImage, Rgb, RgbImage};
 use mineral_model::MediaUrl;
+use mineral_protocol::AdvanceKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -65,6 +66,9 @@ pub(crate) enum ImageContent<'a> {
 
         /// 合成方式。
         style: BlendStyle,
+
+        /// 进入档位；`Prev` 反转向,其余按「下一首」。
+        advance: Option<AdvanceKind>,
     },
 }
 
@@ -82,6 +86,9 @@ struct BlendContent<'a> {
 
     /// 合成方式。
     style: BlendStyle,
+
+    /// 进入档位；`Prev` 反转向,其余按「下一首」。
+    advance: Option<AdvanceKind>,
 }
 
 /// 决定终端图片是否可以安全复用的互斥渲染阶段。
@@ -125,12 +132,14 @@ impl ImageEngine {
                 to,
                 progress,
                 style,
+                advance,
             } => self.render_blend(
                 BlendContent {
                     from,
                     to,
                     progress,
                     style,
+                    advance,
                 },
                 area,
                 buf,
@@ -241,15 +250,16 @@ impl ImageEngine {
                 square_subarea(area, self.cell_pixels())
             }
         };
-        let composite = compose_transition(
-            from_image,
-            to_image,
-            u32::from(target.width),
-            u32::from(target.height).saturating_mul(2),
-            content.style,
-            content.progress,
-            permille_of_scale(self.transition_zoom_scale()),
-        );
+        let composite = compose_transition(BlendFrame {
+            from: from_image,
+            to: to_image,
+            px_w: u32::from(target.width),
+            px_h: u32::from(target.height).saturating_mul(2),
+            style: content.style,
+            progress_permille: content.progress,
+            advance: content.advance,
+            zoom_scale_permille: permille_of_scale(self.transition_zoom_scale()),
+        });
         render_halfblock_to(buf, target, &DynamicImage::ImageRgb8(composite));
     }
 
@@ -298,21 +308,49 @@ impl ImageEngine {
     }
 }
 
+/// 一帧双图合成的像素级输入:两图已解码、输出像素网格已定。
+#[derive(Clone, Copy)]
+struct BlendFrame<'a> {
+    /// 退场图。
+    from: &'a DynamicImage,
+
+    /// 进场图。
+    to: &'a DynamicImage,
+
+    /// 输出像素网格宽(cell 列数)。
+    px_w: u32,
+
+    /// 输出像素网格高(cell 行数 × 2)。
+    px_h: u32,
+
+    /// 合成方式。
+    style: BlendStyle,
+
+    /// 合成进度,范围 `0..=1000`(已缓动)。
+    progress_permille: u16,
+
+    /// 进入档位；`Prev` 反转向,其余按「下一首」。
+    advance: Option<AdvanceKind>,
+
+    /// zoom 样式的缩放幅度(‰,`permille_of_scale` 折算)。
+    zoom_scale_permille: u32,
+}
+
 /// 把新旧两张图片按样式与进度合成一帧 halfblock 像素图。
 ///
 /// # Params:
-///   - `px_w` / `px_h`: 输出像素网格(宽 = cell 列数,高 = cell 行数 × 2)
-///   - `progress_permille`: 转场进度(‰,已缓动)
-///   - `zoom_scale_permille`: zoom 样式的缩放幅度(‰,`permille_of_scale` 折算)
-fn compose_transition(
-    from: &DynamicImage,
-    to: &DynamicImage,
-    px_w: u32,
-    px_h: u32,
-    style: BlendStyle,
-    progress_permille: u16,
-    zoom_scale_permille: u32,
-) -> RgbImage {
+///   - `frame`: 一帧合成的完整像素级输入
+fn compose_transition(frame: BlendFrame<'_>) -> RgbImage {
+    let BlendFrame {
+        from,
+        to,
+        px_w,
+        px_h,
+        style,
+        progress_permille,
+        advance,
+        zoom_scale_permille,
+    } = frame;
     let old = from
         .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
         .to_rgb8();
@@ -322,26 +360,32 @@ fn compose_transition(
     let p = u64::from(progress_permille.min(1000));
     match style {
         BlendStyle::Slide => RgbImage::from_fn(px_w, px_h, |x, y| {
-            // 旧图整体左移 p·w 退场,新图贴着旧图右缘推入。
-            let shifted = x.saturating_add(
-                u32::try_from(u64::from(px_w).saturating_mul(p) / 1000).unwrap_or(0),
-            );
-            if shifted < px_w {
-                pixel_at(&old, shifted, y)
-            } else {
-                pixel_at(&new, shifted - px_w, y)
+            let shift = u32::try_from(u64::from(px_w).saturating_mul(p) / 1000).unwrap_or(0);
+            match advance {
+                Some(AdvanceKind::Prev) => {
+                    if x >= shift {
+                        pixel_at(&old, x - shift, y)
+                    } else {
+                        pixel_at(&new, x + px_w - shift, y)
+                    }
+                }
+                Some(AdvanceKind::Next | AdvanceKind::RandomAccess) | None => {
+                    let shifted = x.saturating_add(shift);
+                    if shifted < px_w {
+                        pixel_at(&old, shifted, y)
+                    } else {
+                        pixel_at(&new, shifted - px_w, y)
+                    }
+                }
             }
         }),
         BlendStyle::Zoom => {
-            // 旧图 1 → scale 放大退场,新图 scale → 1 回缩落定,透明度随进度交叉。
-            let step =
-                u32::try_from(u64::from(zoom_scale_permille.saturating_sub(1000)) * p / 1000)
-                    .unwrap_or(0);
-            let grow = 1000_u32.saturating_add(step);
-            let shrink = zoom_scale_permille.saturating_sub(step).max(1000);
+            // 旧图从静止尺寸出发、新图落定回静止尺寸,透明度随进度交叉。
+            let (old_scale, new_scale) =
+                zoom_scales(advance, progress_permille, zoom_scale_permille);
             RgbImage::from_fn(px_w, px_h, |x, y| {
-                let Rgb([old_r, old_g, old_b]) = sample_zoomed(&old, x, y, grow);
-                let Rgb([new_r, new_g, new_b]) = sample_zoomed(&new, x, y, shrink);
+                let Rgb([old_r, old_g, old_b]) = sample_zoomed(&old, x, y, old_scale);
+                let Rgb([new_r, new_g, new_b]) = sample_zoomed(&new, x, y, new_scale);
                 Rgb([
                     lerp_byte(old_r, new_r, p, 1000),
                     lerp_byte(old_g, new_g, p, 1000),
@@ -361,6 +405,43 @@ fn compose_transition(
     }
 }
 
+/// [`BlendStyle::Zoom`] 在进度 `progress_permille`(‰)下给退场图 / 进场图的采样缩放(千分比)。
+///
+/// 两端都锚在 1000(静止尺寸),收尾不跳变。`Next` 迎面推近(退场图放大到
+/// `zoom_scale_permille`、进场图从那里回缩落定),`Prev` 反向退远(退场图缩小到倒数、
+/// 进场图从那里推进落定)。
+///
+/// # Params:
+///   - `advance`: 进入档位;`Prev` 反转向,其余都按 `Next` 算
+///   - `progress_permille`: 转场进度(‰)
+///   - `zoom_scale_permille`: 缩放幅度(≥ 1000;1000 = 无缩放)
+///
+/// # Return:
+///   `(退场图缩放, 进场图缩放)`。
+fn zoom_scales(
+    advance: Option<AdvanceKind>,
+    progress_permille: u16,
+    zoom_scale_permille: u32,
+) -> (u32, u32) {
+    let p = u64::from(progress_permille.min(1000));
+    let scale = zoom_scale_permille.max(1000);
+    let span = u64::from(scale.saturating_sub(1000));
+    match advance {
+        Some(AdvanceKind::Prev) => {
+            // 远端 = 静止尺寸 / 缩放幅度(千分比倒数,整数取整);退场图 1000 → 远端,
+            // 进场图远端 → 1000。
+            let far = 1_000_000 / scale;
+            let travel =
+                u32::try_from(u64::from(1000_u32.saturating_sub(far)) * p / 1000).unwrap_or(0);
+            (1000_u32.saturating_sub(travel), far.saturating_add(travel))
+        }
+        Some(AdvanceKind::Next | AdvanceKind::RandomAccess) | None => {
+            let step = u32::try_from(span * p / 1000).unwrap_or(0);
+            (1000_u32.saturating_add(step), scale.saturating_sub(step))
+        }
+    }
+}
+
 /// 越界安全取像素(合成坐标域与图同构,黑色 fallback 仅兜类型穷尽)。
 fn pixel_at(img: &RgbImage, x: u32, y: u32) -> Rgb<u8> {
     img.get_pixel_checked(x, y)
@@ -369,7 +450,8 @@ fn pixel_at(img: &RgbImage, x: u32, y: u32) -> Rgb<u8> {
 }
 
 /// 以图心为原点按千分比缩放采样:输出坐标映射回源坐标 `c + (v - c)·1000 / scale`。
-/// `scale ≥ 1000` 时采样窗内收不出界,仍 clamp 兜边。
+/// `scale ≥ 1000` 时采样窗内收不出界;`scale < 1000`(上一首的 zoom 向远处退去)采样窗
+/// 越过图缘,出界处 clamp 到边缘像素。
 fn sample_zoomed(img: &RgbImage, x: u32, y: u32, scale_permille: u32) -> Rgb<u8> {
     let scale = i64::from(scale_permille.max(1));
     let map = |v: u32, dim: u32| -> u32 {
@@ -471,8 +553,9 @@ mod tests {
         Ok(())
     }
 
-    use super::{BlendStyle, compose_transition};
+    use super::{BlendFrame, BlendStyle, compose_transition};
     use image::Rgb as PxRgb;
+    use mineral_protocol::AdvanceKind;
 
     /// 造一张纯色图。
     fn solid(r: u8, g: u8, b: u8) -> DynamicImage {
@@ -483,18 +566,43 @@ mod tests {
         DynamicImage::ImageRgb8(img)
     }
 
+    /// 造一张左右不对称的横向渐变图(R 随列递增,镜像与否一眼可辨)。
+    fn gradient() -> DynamicImage {
+        let mut img = RgbImage::new(16, 16);
+        for (x, _y, p) in img.enumerate_pixels_mut() {
+            let shade = u8::try_from(x.saturating_mul(16)).unwrap_or(255);
+            *p = PxRgb([shade, 255 - shade, 64]);
+        }
+        DynamicImage::ImageRgb8(img)
+    }
+
+    /// 造一张「左右两半各一色」的图:内容有左右之分,镜像与否一眼可辨。
+    fn half_blocks(left: PxRgb<u8>, right: PxRgb<u8>) -> DynamicImage {
+        let mut img = RgbImage::new(16, 16);
+        for (x, _y, p) in img.enumerate_pixels_mut() {
+            *p = if x < 8 { left } else { right };
+        }
+        DynamicImage::ImageRgb8(img)
+    }
+
+    /// 造一份 8×8 的 fade 合成输入;各用例按需覆写样式 / 进度 / 方向。
+    fn frame<'a>(from: &'a DynamicImage, to: &'a DynamicImage) -> BlendFrame<'a> {
+        BlendFrame {
+            from,
+            to,
+            px_w: 8,
+            px_h: 8,
+            style: BlendStyle::Fade,
+            progress_permille: 500,
+            advance: None,
+            zoom_scale_permille: 1120,
+        }
+    }
+
     /// fade 中点:纯红 → 纯蓝在 500‰ 处逐像素恰为均值(整数 lerp 无偏差)。
     #[test]
     fn compose_fade_midpoint_is_average() -> color_eyre::Result<()> {
-        let out = compose_transition(
-            &solid(200, 0, 0),
-            &solid(0, 0, 200),
-            /*px_w*/ 8,
-            /*px_h*/ 8,
-            BlendStyle::Fade,
-            /*progress_permille*/ 500,
-            /*zoom_scale_permille*/ 1120,
-        );
+        let out = compose_transition(frame(&solid(200, 0, 0), &solid(0, 0, 200)));
         for p in out.pixels() {
             assert_eq!(*p, PxRgb([100, 0, 100]), "中点应为两图均值");
         }
@@ -504,15 +612,11 @@ mod tests {
     /// slide 中点:旧图左移半宽——左半是旧图(右半部分内容),右半是推入的新图。
     #[test]
     fn compose_slide_midpoint_splits_frame() -> color_eyre::Result<()> {
-        let out = compose_transition(
-            &solid(200, 0, 0),
-            &solid(0, 0, 200),
-            /*px_w*/ 8,
-            /*px_h*/ 4,
-            BlendStyle::Slide,
-            /*progress_permille*/ 500,
-            /*zoom_scale_permille*/ 1120,
-        );
+        let out = compose_transition(BlendFrame {
+            style: BlendStyle::Slide,
+            px_h: 4,
+            ..frame(&solid(200, 0, 0), &solid(0, 0, 200))
+        });
         assert_eq!(
             out.get_pixel_checked(0, 0).copied(),
             Some(PxRgb([200, 0, 0])),
@@ -526,25 +630,149 @@ mod tests {
         Ok(())
     }
 
-    /// zoom 端点:进度 0 恰为旧图、进度 1000 恰为新图(缩放与透明度都归位,落定零漂移)。
+    /// 上一首的 slide 只把位移换向、**不镜像内容**:旧图右移退场(可见的仍是它的左半)、
+    /// 新图从左缘推入(可见的仍是它的右半);`Next` / `RandomAccess` / 尚未收到都走正向。
+    /// 逐半块断言的是「哪一张的哪一半显在哪一侧」——按镜像列采样的实现会把左右两块对调。
+    #[test]
+    fn compose_slide_backward_flips_motion_not_content() -> color_eyre::Result<()> {
+        let from = half_blocks(PxRgb([200, 0, 0]), PxRgb([0, 200, 0])); // 旧图:红左 / 绿右
+        let to = half_blocks(PxRgb([0, 0, 200]), PxRgb([200, 200, 0])); // 新图:蓝左 / 黄右
+        let compose = |advance| {
+            compose_transition(BlendFrame {
+                style: BlendStyle::Slide,
+                px_h: 4,
+                advance,
+                ..frame(&from, &to)
+            })
+        };
+        let pixel = |out: &RgbImage, x: u32| out.get_pixel_checked(x, 0).copied();
+
+        for forward in [
+            Some(AdvanceKind::Next),
+            Some(AdvanceKind::RandomAccess),
+            None,
+        ] {
+            let out = compose(forward);
+            assert_eq!(
+                pixel(&out, 1),
+                Some(PxRgb([0, 200, 0])),
+                "正向({forward:?}):左半应是旧图的右半(它正向左退场)"
+            );
+            assert_eq!(
+                pixel(&out, 5),
+                Some(PxRgb([0, 0, 200])),
+                "正向({forward:?}):右半应是新图的左半(它从右缘推入)"
+            );
+        }
+
+        let backward = compose(Some(AdvanceKind::Prev));
+        assert_eq!(
+            pixel(&backward, 1),
+            Some(PxRgb([200, 200, 0])),
+            "上一首:左半应是新图的右半(它从左缘推入)"
+        );
+        assert_eq!(
+            pixel(&backward, 5),
+            Some(PxRgb([200, 0, 0])),
+            "上一首:右半应是旧图的左半(它正向右退场,内容不翻)"
+        );
+
+        // 内容不镜像(渐变方向):旧图退场段里的 R 通道须与源图同向递增。
+        let (ramp, solid_to) = (gradient(), solid(0, 0, 200));
+        let out = compose_transition(BlendFrame {
+            style: BlendStyle::Slide,
+            px_h: 4,
+            advance: Some(AdvanceKind::Prev),
+            ..frame(&ramp, &solid_to)
+        });
+        let reds = (4..8)
+            .map(|x| {
+                out.get_pixel_checked(x, 0)
+                    .map(|p| p.0[0])
+                    .ok_or_else(|| color_eyre::eyre::eyre!("({x},0) 越界"))
+            })
+            .collect::<color_eyre::Result<Vec<u8>>>()?;
+        assert!(
+            reds.windows(2).all(|w| matches!(w, [a, b] if a < b)),
+            "旧图退场段应与源图同向,不能镜像: {reds:?}"
+        );
+        Ok(())
+    }
+
+    /// zoom 端点:进度 0 恰为旧图、进度 1000 恰为新图(各档位都缩放与透明度归位,
+    /// 落定零漂移)。
     #[test]
     fn compose_zoom_endpoints_are_exact() -> color_eyre::Result<()> {
         let endpoints = [(0_u16, PxRgb([200, 0, 0])), (1000_u16, PxRgb([0, 0, 200]))];
-        for (progress, expected) in endpoints {
-            let out = compose_transition(
-                &solid(200, 0, 0),
-                &solid(0, 0, 200),
-                /*px_w*/ 8,
-                /*px_h*/ 8,
-                BlendStyle::Zoom,
-                progress,
-                /*zoom_scale_permille*/ 1120,
-            );
-            for p in out.pixels() {
-                assert_eq!(*p, expected, "进度 {progress}‰ 应为端点原图");
+        for advance in [
+            None,
+            Some(AdvanceKind::Next),
+            Some(AdvanceKind::Prev),
+            Some(AdvanceKind::RandomAccess),
+        ] {
+            for (progress, expected) in endpoints {
+                let out = compose_transition(BlendFrame {
+                    style: BlendStyle::Zoom,
+                    progress_permille: progress,
+                    advance,
+                    ..frame(&solid(200, 0, 0), &solid(0, 0, 200))
+                });
+                for p in out.pixels() {
+                    assert_eq!(*p, expected, "{advance:?} 进度 {progress}‰ 应为端点原图");
+                }
             }
         }
         Ok(())
+    }
+
+    /// zoom 深度方向:各档位两端都锚在静止尺寸(旧图从静止出发、新图落定回静止,收尾不跳变),
+    /// 中段下一首(含随机访问)迎面推近、上一首反向退远。
+    #[test]
+    fn zoom_scales_anchor_endpoints_and_flip_depth() {
+        use super::zoom_scales;
+        for advance in [
+            None,
+            Some(AdvanceKind::Next),
+            Some(AdvanceKind::Prev),
+            Some(AdvanceKind::RandomAccess),
+        ] {
+            assert_eq!(
+                zoom_scales(
+                    advance, /*progress_permille*/ 0, /*zoom_scale_permille*/ 1120
+                )
+                .0,
+                1000,
+                "{advance:?} 退场图应从静止尺寸出发"
+            );
+            assert_eq!(
+                zoom_scales(
+                    advance, /*progress_permille*/ 1000, /*zoom_scale_permille*/ 1120
+                )
+                .1,
+                1000,
+                "{advance:?} 进场图应落定回静止尺寸"
+            );
+        }
+        assert_eq!(
+            zoom_scales(None, 500, 1120),
+            zoom_scales(Some(AdvanceKind::Next), 500, 1120),
+            "尚未收到按下一首算"
+        );
+        assert_eq!(
+            zoom_scales(Some(AdvanceKind::RandomAccess), 500, 1120),
+            zoom_scales(Some(AdvanceKind::Next), 500, 1120),
+            "随机访问与下一首同幕"
+        );
+        let (next_old, next_new) = zoom_scales(Some(AdvanceKind::Next), 500, 1120);
+        assert!(
+            next_old > 1000 && next_new > 1000,
+            "下一首中段应迎面推近: {next_old} / {next_new}"
+        );
+        let (prev_old, prev_new) = zoom_scales(Some(AdvanceKind::Prev), 500, 1120);
+        assert!(
+            prev_old < 1000 && prev_new < 1000,
+            "上一首中段应向远处退去: {prev_old} / {prev_new}"
+        );
     }
 
     /// 上半红 / 下半蓝：顶 cell 取顶部像素，底 cell 取底部像素，证明采样来自输入图。

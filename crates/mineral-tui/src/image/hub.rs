@@ -9,6 +9,7 @@ use std::sync::Arc;
 use image::DynamicImage;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
+use mineral_protocol::AdvanceKind;
 use ratatui::layout::Rect;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -83,7 +84,11 @@ pub struct CoverTransition {
     /// 进场封面(在播新图)。
     pub to_url: MediaUrl,
 
-    /// 转场进度(进场方向,推满即落定;时长 = `cover_transition.duration_ms`)。
+    /// 进场档位:server 报告的当前曲进入档位(`Prev` 反向位移,不镜像内容);`None` = 尚未收到 /
+    /// 无在播曲,与 `Next` / `RandomAccess` 一样按「下一首」动效渲染。
+    pub advance: Option<AdvanceKind>,
+
+    /// 转场进程(推满即落定;时长 = `cover_transition.duration_ms`)。
     pub anim: Transition,
 }
 
@@ -405,6 +410,11 @@ impl ImageEngine {
                         self.preview_failures.insert(url);
                     }
                     CoverRequestKind::Decode => {
+                        mineral_log::warn!(
+                            target: "cover_cache",
+                            url = %url,
+                            "封面解码失败:该 URL 不再重试"
+                        );
                         self.decode_demand.borrow_mut().remove(&url);
                         self.decode_failures.borrow_mut().insert(url);
                     }
@@ -472,8 +482,14 @@ impl ImageEngine {
     ///
     /// # Params:
     ///   - `current_cover`: 当前播放图片身份
+    ///   - `advance`: 当前曲的进入档位(server 事实;`None` = 尚未收到 / 无在播曲)
     ///   - `fullscreen_stable`: 全屏布局是否已经稳定
-    pub(crate) fn tick(&mut self, current_cover: Option<MediaUrl>, fullscreen_stable: bool) {
+    pub(crate) fn tick(
+        &mut self,
+        current_cover: Option<MediaUrl>,
+        advance: Option<AdvanceKind>,
+        fullscreen_stable: bool,
+    ) {
         for url in self.cache.advance_frame() {
             self.discard_derived(&url);
         }
@@ -483,7 +499,7 @@ impl ImageEngine {
         self.drain_cover_completions();
         self.schedule_decode_demand();
         self.drain_ready_terminal_images();
-        self.sync_transition(current_cover, fullscreen_stable);
+        self.sync_transition(current_cover, advance, fullscreen_stable);
     }
 
     /// 返回正在执行的图片 preview 与 decode 总数。
@@ -660,9 +676,15 @@ impl ImageEngine {
     }
 
     /// 推进或创建全屏切图转场。
+    ///
+    /// # Params:
+    ///   - `current_cover`: 当前播放图片身份
+    ///   - `advance`: 当前曲的进入档位(`Prev` 反转向,其余按下一首)
+    ///   - `fullscreen_stable`: 全屏布局是否已经稳定
     pub(crate) fn sync_transition(
         &mut self,
         current_cover: Option<MediaUrl>,
+        advance: Option<AdvanceKind>,
         fullscreen_stable: bool,
     ) {
         if let Some(active) = self.transition.as_mut() {
@@ -680,21 +702,24 @@ impl ImageEngine {
             return;
         }
         let previous = std::mem::replace(&mut self.displayed_cover, current_cover.clone());
-        let transition = self.cfg.tui().cover_transition();
-        if !*transition.enabled() {
-            return;
-        }
+        // 身份已换:旧转场画的封面不再是当前这一对,无论等下开不开得起新转场都得先撤掉,
+        // 否则它会继续画一对过期封面(表现为闪回旧图再跳新图)。
+        self.transition = None;
+        let cfg = self.cfg.tui().cover_transition();
         let (Some(from_url), Some(to_url)) = (previous, current_cover) else {
             return;
         };
-        if !(self.cache.contains_key(&from_url) && self.cache.contains_key(&to_url)) {
+        let from_decoded = self.cache.contains_key(&from_url);
+        let to_decoded = self.cache.contains_key(&to_url);
+        if !*cfg.enabled() || !from_decoded || !to_decoded {
             return;
         }
         self.transition = Some(CoverTransition {
             from_url,
             to_url,
+            advance,
             anim: Transition::expanding(ticks16_from_ms(
-                *transition.duration_ms(),
+                *cfg.duration_ms(),
                 *self.cfg.tui().animation().frame_tick_ms(),
             )),
         });
@@ -812,12 +837,12 @@ mod tests {
                 &mut buffer,
                 ImageRenderPhase::Stable,
             );
-            engine.tick(None, false);
+            engine.tick(None, /*advance*/ None, false);
             engine.prefetch([(mineral_model::SourceKind::NETEASE, url.clone())]);
 
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    engine.tick(None, false);
+                    engine.tick(None, /*advance*/ None, false);
                     engine.render_thumbnail(
                         Some(&url),
                         area,

@@ -3,7 +3,7 @@
 //! 入队与 shuffle 在调用方持有的同一把状态锁内修改队列。
 
 use mineral_model::Song;
-use mineral_protocol::{PlayCursor, PlayMode};
+use mineral_protocol::{AdvanceKind, PlayCursor, PlayMode};
 use rand::seq::SliceRandom;
 
 use crate::state::State;
@@ -101,28 +101,37 @@ pub(crate) fn next_in_queue(st: &State) -> Option<Song> {
 /// 顺序推进到「下一首」:把 `queue_sel` 钉到 [`next_index`] 的下标并返回该曲。
 /// 切歌入口(`n` 键 / gapless 兜底)走这条,确保位置按下标单向前进。
 ///
+/// 同时在 `st.advance` 落账「这首歌是随下一首推进进来的」——client 的全屏切歌转场据此
+/// 定向;直接起播它的 [`crate::player::PlayerCore::play_song`] 只认这条账,别的入口记
+/// `RandomAccess`。
+///
 /// # Params:
-///   - `st`: 播放状态(写 `queue_sel`)
+///   - `st`: 播放状态(写 `queue_sel` / `advance`)
 ///
 /// # Return:
 ///   推进到的歌;到尾(Sequential)无下一首则不动、返回 `None`。
 pub(crate) fn advance_next(st: &mut State) -> Option<Song> {
     let idx = next_index(st)?;
+    let song = st.queue.get(idx).cloned()?;
     st.cursor = PlayCursor::InQueue(idx);
-    st.queue.get(idx).cloned()
+    st.advance = Some((song.id.clone(), AdvanceKind::Next));
+    Some(song)
 }
 
 /// 顺序后退到「上一首」:把 `queue_sel` 钉到 [`prev_index`] 的下标并返回该曲。
+/// `st.advance` 的落账同 [`advance_next`],档位为 `Prev`。
 ///
 /// # Params:
-///   - `st`: 播放状态(写 `queue_sel`)
+///   - `st`: 播放状态(写 `queue_sel` / `advance`)
 ///
 /// # Return:
 ///   后退到的歌;在首位(Sequential)无上一首则不动、返回 `None`。
 pub(crate) fn advance_prev(st: &mut State) -> Option<Song> {
     let idx = prev_index(st)?;
+    let song = st.queue.get(idx).cloned()?;
     st.cursor = PlayCursor::InQueue(idx);
-    st.queue.get(idx).cloned()
+    st.advance = Some((song.id.clone(), AdvanceKind::Prev));
+    Some(song)
 }
 
 /// 设置 PlayMode,并在进 / 退 Shuffle 边界处洗牌或还原 queue。模式不变则 no-op。
@@ -279,10 +288,10 @@ pub(crate) fn append(st: &mut State, songs: &[Song]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{PlayCursor, PlayMode};
+    use mineral_protocol::{AdvanceKind, PlayCursor, PlayMode};
     use mineral_test::song;
 
-    use super::{QUEUE_CAP, advance_next, append, insert_next, next_index};
+    use super::{QUEUE_CAP, advance_next, advance_prev, append, insert_next, next_index};
     use crate::state::State;
 
     /// 造一个 3 曲队列(a/b/c),当前在 a,指定模式。
@@ -374,6 +383,28 @@ mod tests {
         assert_eq!(next.id, song("c").id, "Fallback 推进应越过被否决的 b");
         assert_eq!(st.cursor, PlayCursor::InQueue(2));
         Ok(())
+    }
+
+    /// 顺序推进两个档位各写各的进入账,推到的歌与账上一致。
+    #[test]
+    fn advance_writes_kind_account() -> color_eyre::Result<()> {
+        let mut st = state_with_mode(PlayMode::Sequential);
+        let _ = advance_next(&mut st).ok_or_else(|| color_eyre::eyre::eyre!("应有下一首"))?;
+        assert_eq!(st.advance, Some((song("b").id, AdvanceKind::Next)));
+        let _ = advance_prev(&mut st).ok_or_else(|| color_eyre::eyre::eyre!("应有上一首"))?;
+        assert_eq!(st.advance, Some((song("a").id, AdvanceKind::Prev)));
+        Ok(())
+    }
+
+    /// 无下一首 / 上一首时不写账:推进没发生,进入档位也就不存在。
+    #[test]
+    fn advance_without_target_writes_nothing() {
+        let mut st = State::empty();
+        st.queue = vec![song("a")];
+        st.cursor = PlayCursor::InQueue(0);
+        assert!(advance_next(&mut st).is_none());
+        assert!(advance_prev(&mut st).is_none());
+        assert_eq!(st.advance, None, "没推进就不该留下档位账");
     }
 
     /// 容量不足时拒绝整组；恰好填满可入队，满队列不再接受单首。

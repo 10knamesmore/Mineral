@@ -12,6 +12,10 @@ pub struct PlayerMirror {
     /// server 同步的当前在播曲；没有在播曲时为 `None`。
     pub current: Option<Song>,
 
+    /// 当前曲的进入档位(随 current 段到达;`None` = 尚未收到 / 无在播曲)。全屏切歌转场
+    /// 据此定向:`Prev` 取反向动效,其余(含 `RandomAccess`)都按下一首。
+    pub current_advance: Option<mineral_protocol::AdvanceKind>,
+
     /// 浮动 queue 当前曲目列表(后端权威态)。
     pub queue: Vec<Song>,
 
@@ -36,6 +40,7 @@ impl PlayerMirror {
     pub(crate) fn new() -> Self {
         Self {
             current: None,
+            current_advance: None,
             queue: Vec::new(),
             cursor: mineral_protocol::PlayCursor::default(),
             original_queue: None,
@@ -63,12 +68,80 @@ impl super::AppState {
         }
         self.player.queue.iter().position(|s| &s.id == id)
     }
+
+    /// 在播曲前后各 `range` 首在 `queue` 中的下标,按播放模式的环回语义算——切歌落点
+    /// (`n` / `p` / 自动接续)走的就是这些位置,封面预热必须跟上,否则环回那一端永远冷。
+    /// Sequential 到两端即止;其余模式(`RepeatAll` / `Shuffle` / `RepeatOne`)环回。
+    ///
+    /// # Params:
+    ///   - `range`: 前后各看几首
+    ///
+    /// # Return:
+    ///   邻居下标(前一 / 后一交替,去重);无在播曲 / 空队列返回空。
+    pub fn queue_neighbor_indexes(&self, range: usize) -> Vec<usize> {
+        let len = self.player.queue.len();
+        let Some(pos) = self.queue_current_index() else {
+            return Vec::new();
+        };
+        if range == 0 {
+            return Vec::new();
+        }
+        let wraps = self.playback.mode != mineral_protocol::PlayMode::Sequential;
+        let mut out = Vec::with_capacity(range.saturating_mul(2));
+        for d in 1..=range {
+            let neighbors = if wraps {
+                let step = d % len;
+                [Some((pos + len - step) % len), Some((pos + step) % len)]
+            } else {
+                [pos.checked_sub(d), (pos + d < len).then_some(pos + d)]
+            };
+            for idx in neighbors.into_iter().flatten() {
+                if !out.contains(&idx) {
+                    out.push(idx);
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::AppState;
     use crate::test_support::endserenading;
+
+    /// 邻居按播放模式环回:Shuffle 下 pos=0 的「上一首」是队尾(daemon 的 `prev_index`
+    /// 就是 `(cur + len - 1) % len`),Sequential 则到两端为止。
+    #[test]
+    fn queue_neighbor_indexes_follow_play_mode_wrap() -> color_eyre::Result<()> {
+        let mut s = AppState::test_default()?;
+        let queue = endserenading(5);
+        s.playback.track = queue.first().cloned();
+        s.player.queue = queue;
+
+        s.playback.mode = mineral_protocol::PlayMode::Shuffle;
+        assert_eq!(
+            s.queue_neighbor_indexes(1),
+            vec![4, 1],
+            "队首的上一首应环回队尾"
+        );
+        assert_eq!(s.queue_neighbor_indexes(2), vec![4, 1, 3, 2]);
+
+        s.playback.mode = mineral_protocol::PlayMode::Sequential;
+        assert_eq!(
+            s.queue_neighbor_indexes(1),
+            vec![1],
+            "顺序模式队首没有上一首"
+        );
+
+        s.playback.track = s.player.queue.get(4).cloned();
+        assert_eq!(
+            s.queue_neighbor_indexes(1),
+            vec![3],
+            "顺序模式队尾没有下一首"
+        );
+        Ok(())
+    }
 
     /// `queue_current_index` 命中在播歌下标;无在播曲返回 `None`。
     #[test]

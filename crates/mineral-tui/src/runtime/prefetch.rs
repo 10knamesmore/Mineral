@@ -21,6 +21,7 @@ use crate::runtime::state::{AppState, DetailFetch, View};
 /// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
 pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
     request_covers(state, queue_covers);
+    request_playback_cover_decodes(state);
     request_playlist_tracks(state, client);
     request_play_count(state, client);
     request_detail(state, client);
@@ -137,6 +138,22 @@ fn collect_cover_candidates(
 /// 从一首歌取 `(来源, 封面 URL)`;无封面返回 `None`。来源由 id namespace 派生。
 fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
     s.cover_url.as_ref().map(|u| (s.id.namespace(), u))
+}
+
+/// 在播曲前后 `prefetch.prewarm_ahead` 首的封面立即登记解码。
+///
+/// 切歌转场要两图都已解码才开(`ImageEngine::sync_transition`),邻居封面只有提前解码才赶得上;
+/// 不等全屏稳态帧、任何视图都跑,否则刚启动 / 刚进全屏按 `n` / `p` 只能瞬切。
+fn request_playback_cover_decodes(state: &mut AppState) {
+    let ahead = *state.cfg.tui().prefetch().prewarm_ahead();
+    let neighbors = state
+        .queue_neighbor_indexes(ahead)
+        .into_iter()
+        .filter_map(|idx| state.player.queue.get(idx))
+        .filter_map(song_cover)
+        .map(|(source, url)| (source, url.clone()))
+        .collect::<Vec<_>>();
+    state.images.load(neighbors);
 }
 
 /// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。

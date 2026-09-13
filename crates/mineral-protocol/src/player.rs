@@ -327,6 +327,19 @@ pub struct QueueSync {
     pub original_queue: Option<Vec<Song>>,
 }
 
+/// 当前曲的进入档位——它是怎么进播放的。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdvanceKind {
+    /// 推进到下一首(`n` 键 / 自然播完接续 / 越过队列边界)。
+    Next,
+
+    /// 后退到上一首(`p` 键)。
+    Prev,
+
+    /// 随机访问:跳过顺序、直接起播某一首。
+    RandomAccess,
+}
+
 /// [`PlayerSync`] 的 current 重段:当前歌上下文,随 `current` 版本整体更替。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CurrentSync {
@@ -349,6 +362,9 @@ pub struct CurrentSync {
     /// 算完经一次 `current` 版本 bump 补发)。归属恒等于 `current_song`——server 端
     /// 组段时按当前曲过滤,client 直接采用无需再猜归属。
     pub current_envelope: Option<Envelope>,
+
+    /// 当前曲的进入档位;`None` = 没有在播曲(从未播过 / 已 stop)。
+    pub advance: Option<AdvanceKind>,
 }
 
 #[cfg(test)]
