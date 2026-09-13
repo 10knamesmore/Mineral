@@ -272,7 +272,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     );
 }
 
-/// 把一首歌组装成 library 表格的一行(loved 标记 / 高亮搜索词)。
+/// 把一首歌组装成 library 表格的一行(loved 标记 / 在播行装饰 / 高亮搜索词)。
 /// `layout` 决定列集:窄档省去 artist/album。
 fn build_row<'a>(
     entry: &'a PlaylistEntryView,
@@ -282,6 +282,16 @@ fn build_row<'a>(
     marquee: Option<RowMarquee<'_>>,
 ) -> Row<'a> {
     let song = &entry.data.song;
+    let is_current = state
+        .playback
+        .track
+        .as_ref()
+        .is_some_and(|playing| playing.id == song.id);
+    let (title_fg, artist_fg, album_fg) = if is_current {
+        (theme.accent, theme.accent, theme.accent)
+    } else {
+        (theme.text, theme.subtext, theme.overlay)
+    };
     // 像 vim signcolumn 一样的 gutter:loved 显 ♥,否则空。永远占一格,
     // 不抖动后续列。
     let love_cell = if entry.loved {
@@ -294,7 +304,7 @@ fn build_row<'a>(
     let mut title_spans = highlight_indices(
         &song.name,
         name_hits.as_deref().unwrap_or(&[]),
-        Style::new().fg(theme.text),
+        Style::new().fg(title_fg),
         theme,
     );
     // alias(译名 / 副标题)是歌名的暗色括注后缀;命中字符与主字段同款 search_hit
@@ -338,13 +348,13 @@ fn build_row<'a>(
         cells.push(Cell::from(Line::from(highlight_indices(
             &artist,
             artist_hits.as_deref().unwrap_or(&[]),
-            Style::new().fg(theme.subtext),
+            Style::new().fg(artist_fg),
             theme,
         ))));
         cells.push(Cell::from(Line::from(highlight_indices(
             &album,
             album_hits.as_deref().unwrap_or(&[]),
-            Style::new().fg(theme.overlay),
+            Style::new().fg(album_fg),
             theme,
         ))));
         if layout.aggregate {
@@ -360,11 +370,19 @@ fn build_row<'a>(
         }
     }
     cells.push(Cell::from(len));
-    let row = Row::new(cells);
-    if song.unavailable {
-        row.style(theme.unavailable_row())
+    let mut style = if song.unavailable {
+        theme.unavailable_row()
     } else {
+        Style::new()
+    };
+    if is_current {
+        style = style.fg(theme.accent).add_modifier(Modifier::UNDERLINED);
+    }
+    let row = Row::new(cells);
+    if style == Style::new() {
         row
+    } else {
+        row.style(style)
     }
 }
 
@@ -961,6 +979,84 @@ mod tests {
         assert!(
             dim_chars.contains("iuta)"),
             "未命中别名字符与括号应保持 overlay 暗调,实际: {dim_chars:?}"
+        );
+        Ok(())
+    }
+
+    /// 在播行与 queue 同款:文本列换 accent、整行下划线,时长格靠整行 fg 接住;
+    /// 非在播行两样都不带,右边框轨道格也不吃行装饰。
+    #[test]
+    fn playing_row_takes_the_queue_decoration() -> color_eyre::Result<()> {
+        use ratatui::style::Modifier;
+
+        let theme = crate::test_support::default_theme()?;
+        let mut state = crate::test_support::state_with_tracks()?;
+        // 与渲染同源的可见顺序:首行设为在播(fixture 选中的是第二首,两行互不掩盖)。
+        let (names, playing) = {
+            let visible = state.filtered_tracks();
+            (
+                visible
+                    .iter()
+                    .map(|entry| entry.data.song.name.clone())
+                    .collect::<Vec<_>>(),
+                visible.first().map(|entry| entry.data.song.clone()),
+            )
+        };
+        let playing = playing.ok_or_else(|| color_eyre::eyre::eyre!("缺少测试曲目"))?;
+        let plain = names
+            .get(2)
+            .cloned()
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少第三首测试曲目"))?;
+        state.playback.track = Some(playing.clone());
+
+        let mut t = Terminal::new(TestBackend::new(80, 12))?;
+        draw_lib(&mut t, &state)?;
+
+        let buf = t.backend().buffer();
+        // y=2 起是曲目 body:按名字定位两行,标题列取表头 `title` 的起点。
+        let body_row = |name: &str| (2..buf.area.height).find(|&y| row(&t, y).contains(name));
+        let playing_y = body_row(&playing.name)
+            .ok_or_else(|| color_eyre::eyre::eyre!("在播行未渲染: {}", playing.name))?;
+        let plain_y =
+            body_row(&plain).ok_or_else(|| color_eyre::eyre::eyre!("非在播行未渲染: {plain}"))?;
+        let title_x = u16::try_from(
+            row(&t, 1)
+                .find("title")
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少表头"))?,
+        )?;
+        let title = |y: u16| buf.cell((title_x, y));
+        assert_eq!(
+            title(playing_y).map(|c| c.fg),
+            Some(theme.accent),
+            "在播行标题用 accent(行文本 {:?})",
+            row(&t, playing_y)
+        );
+        assert!(
+            title(playing_y).is_some_and(|c| c.modifier.contains(Modifier::UNDERLINED)),
+            "在播行整行加下划线"
+        );
+        assert_eq!(
+            title(plain_y).map(|c| c.fg),
+            Some(theme.text),
+            "非在播行标题保持主文本色(行文本 {:?})",
+            row(&t, plain_y)
+        );
+        assert!(
+            title(plain_y).is_none_or(|c| !c.modifier.contains(Modifier::UNDERLINED)),
+            "非在播行不带下划线"
+        );
+        // 时长格没有自己的前景,靠整行 fg 接住 accent。
+        assert!(
+            (0..buf.area.width)
+                .filter_map(|x| buf.cell((x, playing_y)))
+                .any(|c| c.symbol() == ":" && c.fg == theme.accent),
+            "时长格也吃到整行 accent"
+        );
+        // 轨道画在面板边框列(表格区之外),不吃在播行的下划线。
+        assert!(
+            buf.cell((buf.area.width - 1, playing_y))
+                .is_some_and(|c| !c.modifier.contains(Modifier::UNDERLINED)),
+            "轨道格不吃行装饰"
         );
         Ok(())
     }
