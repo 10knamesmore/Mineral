@@ -140,20 +140,28 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
     s.cover_url.as_ref().map(|u| (s.id.namespace(), u))
 }
 
-/// 在播曲前后 `prefetch.prewarm_ahead` 首的封面立即登记解码。
+/// 在播曲及其前后 `prefetch.prewarm_ahead` 首的封面立即登记完整解码。
 ///
-/// 切歌转场要两图都已解码才开(`ImageEngine::sync_transition`),邻居封面只有提前解码才赶得上;
-/// 不等全屏稳态帧、任何视图都跑,否则刚启动 / 刚进全屏按 `n` / `p` 只能瞬切。
+/// - 在播曲自身:频谱 / 动态 accent 的色板只在完整解码时提取,而浏览态没有主图渲染来登记
+///   这次解码(now_playing 面板跟的是选中项,列表走低清缩略图),不显式登记就只能等进全屏
+///   才开始取色。
+/// - 前后邻居:切歌转场要两图都已解码才开(`ImageEngine::sync_transition`),邻居封面只有提前
+///   解码才赶得上;不等全屏稳态帧、任何视图都跑,否则刚启动 / 刚进全屏按 `n` / `p` 只能瞬切。
 fn request_playback_cover_decodes(state: &mut AppState) {
     let ahead = *state.cfg.tui().prefetch().prewarm_ahead();
-    let neighbors = state
-        .queue_neighbor_indexes(ahead)
-        .into_iter()
-        .filter_map(|idx| state.player.queue.get(idx))
-        .filter_map(song_cover)
-        .map(|(source, url)| (source, url.clone()))
-        .collect::<Vec<_>>();
-    state.images.load(neighbors);
+    let mut covers = Vec::<(SourceKind, MediaUrl)>::new();
+    if let Some((source, url)) = state.playback.track.as_ref().and_then(song_cover) {
+        covers.push((source, url.clone()));
+    }
+    covers.extend(
+        state
+            .queue_neighbor_indexes(ahead)
+            .into_iter()
+            .filter_map(|idx| state.player.queue.get(idx))
+            .filter_map(song_cover)
+            .map(|(source, url)| (source, url.clone())),
+    );
+    state.images.load(covers);
 }
 
 /// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
@@ -691,6 +699,64 @@ mod tests {
         state.playback.track = Some(song_with_cover(42)?);
 
         assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");
+        Ok(())
+    }
+
+    /// 在播曲封面的色板必须在浏览态就提取出来:JPEG preview 不带色板,只有完整解码会取色,
+    /// 而不进全屏就没有主图渲染来登记这次解码。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn playing_cover_palette_ready_without_fullscreen() -> color_eyre::Result<()> {
+        use std::time::Duration;
+
+        use crate::image::ImageEngine;
+        use crate::image::fetch::CoverFetcher;
+        use crate::image::graphics::TerminalGraphics;
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("cover.jpg");
+        image::RgbImage::from_fn(/*w*/ 96, /*h*/ 96, |x, y| {
+            image::Rgb(if (x / 16 + y / 16).is_multiple_of(2) {
+                [210, 60, 40]
+            } else {
+                [30, 70, 200]
+            })
+        })
+        .save(&path)?;
+        let url = MediaUrl::local(path);
+
+        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        let fetcher = CoverFetcher::spawn(cfg.tui().cover().clone(), /*capacity*/ 0, None).await?;
+        let mut state = AppState::test_default()?;
+        state.cfg = Arc::clone(&cfg);
+        state.images = ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
+
+        let playing = Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, "playing"))
+            .name("playing".to_owned())
+            .cover_url(Some(url.clone()))
+            .build();
+        // 队列第二首无封面:本 tick 唯一可能的解码目标就是在播曲封面自己。
+        let mut no_cover = song_with_cover(1)?;
+        no_cover.cover_url = None;
+        state.player.queue = vec![playing.clone(), no_cover];
+        state.playback.track = Some(playing);
+
+        super::tick(&mut state, &TestClient::default(), Vec::new());
+        let ready = tokio::time::timeout(Duration::from_secs(5), async {
+            while !state.images.palettes.contains_key(&url) {
+                state.images.tick(
+                    Some(url.clone()),
+                    /*advance*/ None,
+                    /*fullscreen_stable*/ false,
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            ready.is_ok(),
+            "浏览态(无主图渲染)就应完整解码在播曲封面并取色"
+        );
         Ok(())
     }
 
