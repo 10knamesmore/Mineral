@@ -154,7 +154,7 @@ impl BrowsePage {
     }
 
     /// 深度搜索数据保障:Playlists 视图 + deep 开启时,列出所有未拉取 / 未请求的歌单(待补拉);
-    /// 非该状态返回空。提任务 + 标记 `tracks_requested` 由落地端做(成败都标,失败不反复重提交)。
+    /// 非该状态返回空；落地端交给统一提交层并去重，容量不足由提交层重试。
     fn deep_search_pending(&self, model: BrowseModel<'_>) -> Vec<PlaylistId> {
         if self.view != View::Playlists || !*model.cfg.tui().search().deep().enabled() {
             return Vec::new();
@@ -425,11 +425,20 @@ impl App {
                 .ui_prefs
                 .save_track_positions(&self.state.browse.nav.track_pos),
             BrowseEffect::SubmitDeepSearch(ids) => {
-                // 失败 / 已请求都标记,避免反复重提交。
+                let selected = self
+                    .state
+                    .filtered_playlists()
+                    .get(self.state.browse.nav.playlist.sel())
+                    .map(|playlist| playlist.data.id.clone());
                 for id in ids {
+                    let priority = if selected.as_ref() == Some(&id) {
+                        Priority::User
+                    } else {
+                        Priority::Background
+                    };
                     self.client.submit_task(
                         TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
-                        Priority::Background,
+                        priority,
                     );
                     self.state.library.tracks_requested.insert(id);
                 }

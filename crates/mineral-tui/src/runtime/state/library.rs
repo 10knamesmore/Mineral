@@ -22,9 +22,8 @@ pub struct LibraryData {
     /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
     pub tracks_generation: u64,
 
-    /// 已提交过 `PlaylistDetail` 请求的歌单(成败都记)。prefetch 据此去重,
-    /// 避免**失败**歌单(`tracks` 永远不会被填)被每帧无限重提交而刷屏。
-    /// 图片请求使用独立的 completion 生命周期，本集合只服务歌单详情任务。
+    /// 已交给统一提交层的歌单；容量不足由提交层保留并重试，prefetch 不重复登记。
+    /// 远端任务失败或结果未知后不会自动重发。
     pub tracks_requested: FxHashSet<PlaylistId>,
 
     /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /

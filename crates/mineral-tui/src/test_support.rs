@@ -456,6 +456,15 @@ impl Backend for TestClient {
         }
     }
 
+    // 测试后端立即接收任务，没有待提交积压。
+    fn flush_task_submissions(&self) {}
+
+    fn prioritize_task(&self, _kind: &TaskKind) {}
+
+    fn pending_task_count(&self) -> usize {
+        0
+    }
+
     fn download(&self, _target: mineral_protocol::DownloadTarget) {}
 
     fn stop_download(&self, _id: mineral_protocol::DownloadId) {

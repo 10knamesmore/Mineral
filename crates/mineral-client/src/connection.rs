@@ -29,9 +29,9 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            outbound_capacity: 256,
+            outbound_capacity: 2048,
             max_batch: 64,
-            max_in_flight: 128,
+            max_in_flight: 1024,
             event_capacity: 4096,
             pcm_window: 32 * 1024,
         }

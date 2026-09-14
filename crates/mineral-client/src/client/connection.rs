@@ -186,12 +186,7 @@ impl Client {
     ///   - `request`: 要交给 daemon 执行的业务请求。
     pub fn fire(&self, request: mineral_protocol::Request) {
         let request_name = <&'static str>::from(&request);
-        let target = ResultTarget::LogFailures { request_name };
-        if let Err(error) =
-            self.session
-                .handle
-                .submit(request, target, self.session.config.max_in_flight)
-        {
+        if let Err(error) = self.try_fire(request) {
             mineral_log::warn!(
                 target: "ipc",
                 method = request_name,
@@ -199,5 +194,25 @@ impl Client {
                 "本地未提交"
             );
         }
+    }
+
+    /// 尝试将请求放入本地发送队列；daemon 的业务失败仍由会话记录日志。
+    ///
+    /// # Params:
+    ///   - `request`: 要交给 daemon 的请求。
+    ///
+    /// # Return:
+    ///   `Ok(())` 只表示本地入队，不表示 daemon 已受理或任务已完成。
+    ///
+    /// # Errors:
+    ///   队列满、在途超限或连接已断开时返回未提交原因，由调用方处理和记录。
+    pub fn try_fire(&self, request: mineral_protocol::Request) -> Result<(), SubmitError> {
+        let request_name = <&'static str>::from(&request);
+        self.session.handle.submit(
+            request,
+            ResultTarget::LogFailures { request_name },
+            self.session.config.max_in_flight,
+        )?;
+        Ok(())
     }
 }

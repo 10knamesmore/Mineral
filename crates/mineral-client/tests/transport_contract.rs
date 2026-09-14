@@ -416,6 +416,10 @@ async fn in_flight_limit_is_enforced() -> color_eyre::Result<()> {
         client.submit(Request::Pause, applied).err(),
         Some(SubmitError::InFlightLimit)
     );
+    assert_eq!(
+        client.try_fire(Request::Pause),
+        Err(SubmitError::InFlightLimit)
+    );
     Ok(())
 }
 
@@ -440,6 +444,30 @@ async fn outbound_queue_is_bounded() -> color_eyre::Result<()> {
         client.submit(Request::Pause, applied).err(),
         Some(SubmitError::QueueFull)
     );
+    assert_eq!(client.try_fire(Request::Pause), Err(SubmitError::QueueFull));
+    Ok(())
+}
+
+/// 实际歌单库的 377 条补全请求可在同一次调用中提交，不依赖 writer 恰好及时排空。
+#[tokio::test]
+async fn default_capacity_accepts_library_indexing_burst() -> color_eyre::Result<()> {
+    let client = Client::from_wire(
+        Box::new(StallingWire::new(/*stall_after*/ 1)),
+        "library-index",
+        ClientConfig::default(),
+    )
+    .await?;
+    for index in 0..377 {
+        client.try_fire(Request::SubmitTask(
+            mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail {
+                id: mineral_model::PlaylistId::new(
+                    mineral_model::SourceKind::NETEASE,
+                    index.to_string(),
+                ),
+            }),
+            mineral_task::Priority::Background,
+        ))?;
+    }
     Ok(())
 }
 

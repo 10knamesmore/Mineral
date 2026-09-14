@@ -125,6 +125,7 @@ impl App {
                 self.state.tick_frame();
                 self.tick_overlays();
                 self.tick_images();
+                self.client.flush_task_submissions();
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
                 self.state.now.set(chrono::Local::now());
@@ -215,6 +216,7 @@ impl App {
             playlists = s.library.playlists.len(),
             tracks_cached = s.library.tracks.len(),
             tracks_requested = s.library.tracks_requested.len(),
+            tasks_pending = self.client.pending_task_count(),
             lyrics_cached = s.library.lyrics.len(),
             covers_cached = s.images.cache.len(),
             covers_pending = s.images.loading_count(),

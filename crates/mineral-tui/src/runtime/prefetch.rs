@@ -164,9 +164,26 @@ fn request_playback_cover_decodes(state: &mut AppState) {
     state.images.load(covers);
 }
 
-/// 看 sel_playlist 周围 `prefetch.radius` 内未 cache 的歌单,提交 PlaylistDetail。
-/// 只在 Playlists view 下生效 —— Library view 的当前 playlist 一定已经 cache(进 view 的前提)。
+/// 列表页登记光标附近的歌单预取；进入曲目页后仍提升当前歌单的待提交优先级。
 fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
+    let selected = match state.browse.view.current() {
+        View::Playlists => state
+            .filtered_playlists()
+            .get(state.browse.nav.playlist.sel())
+            .map(|playlist| playlist.data.id.clone()),
+        View::Library => state
+            .library
+            .playlists
+            .get(state.browse.nav.playlist.sel())
+            .map(|playlist| playlist.data.id.clone()),
+    };
+    if !state.channel_search.active.on()
+        && let Some(id) = selected
+    {
+        client.prioritize_task(&TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
+            id,
+        }));
+    }
     if state.browse.view != View::Playlists {
         return;
     }
@@ -176,8 +193,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
             Priority::User,
         );
-        // 成败都记:失败歌单的 library.tracks 永远不会被填,只有靠这里去重才不会
-        // 每帧重提交(scheduler dedup 只在任务进行中有效,失败瞬间完成就失效)。
+        // 记录已经交给提交层的意图；容量不足时由提交层保留并重试。
         state.library.tracks_requested.insert(id);
     }
 }
