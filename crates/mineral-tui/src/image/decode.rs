@@ -7,6 +7,7 @@ use image::{DynamicImage, GrayImage, ImageFormat, RgbImage};
 use jpeg_decoder::{CodingProcess, Decoder, ImageInfo, PixelFormat};
 
 use super::key::PixelSize;
+use super::resize::thumbnail_exact;
 
 /// 按配置准备显示像素，保持比例且不放大；无缩小解码能力的格式先完整解码再缩小。
 ///
@@ -49,8 +50,7 @@ pub(super) fn display(
             required.height(),
         )
     };
-    // 区域采样避免源宽度乘目标高度的浮点滤波中间缓冲。
-    Ok(image.thumbnail_exact(width, height))
+    Ok(thumbnail_exact(&image, width, height))
 }
 
 /// JPEG 使用不低于两倍 halfblock 网格的 IDCT 缩放，其余编码保持原有解码路径。

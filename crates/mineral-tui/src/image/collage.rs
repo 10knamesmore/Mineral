@@ -11,11 +11,12 @@
 use std::sync::Arc;
 
 use image::DynamicImage;
-use image::imageops::FilterType;
 use mineral_model::{MediaUrl, Playlist, SourceKind};
 
 use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistEntryView;
+
+use super::resize::resize_to_fill;
 
 /// 拼贴最多取的成员封面数(2×2)。
 const MAX_TILES: usize = 4;
@@ -140,7 +141,7 @@ fn fnv64(hash: u64, bytes: &[u8]) -> u64 {
 ///
 /// 布局:1 张全铺;2 张左右对分;3 张左列整高 + 右列上下两块;4 张(及以上取前 4)
 /// 2×2 四象限(左上 → 右上 → 左下 → 右下)。输出边长取成员最小短边，避免放大任一
-/// 来源图；每块 `resize_to_fill` 居中裁剪。
+/// 来源图；每块按目标比例缩放并居中裁剪。
 ///
 /// # Params:
 ///   - `images`: 已就绪的成员图(歌单顺序)
@@ -154,9 +155,7 @@ fn compose(images: &[Arc<DynamicImage>]) -> Option<DynamicImage> {
         .max(2);
     let half = size / 2;
     let rest = size - half;
-    let tile = |img: &DynamicImage, w: u32, h: u32| {
-        img.resize_to_fill(w, h, FilterType::Triangle).to_rgb8()
-    };
+    let tile = |img: &DynamicImage, w: u32, h: u32| resize_to_fill(img, w, h).into_rgb8();
     let mut canvas = image::RgbImage::new(size, size);
     let mut put = |img: &DynamicImage, x: u32, y: u32, w: u32, h: u32| {
         image::imageops::replace(&mut canvas, &tile(img, w, h), i64::from(x), i64::from(y));

@@ -10,6 +10,7 @@ use super::sixel::SixelImage;
 use crate::image::graphics::{GraphicsProtocol, TerminalGraphics};
 use crate::image::key::PixelSize;
 use crate::image::kitty::KittyImage;
+use crate::image::resize::thumbnail;
 
 /// 一张可 place 到终端的已编码图片。
 pub(crate) enum TerminalImage {
@@ -74,7 +75,7 @@ impl TerminalImage {
     ) -> color_eyre::Result<Self> {
         match graphics.protocol() {
             GraphicsProtocol::Kitty => {
-                let thumbnail = pixels.map(|size| source.thumbnail(size.width(), size.height()));
+                let thumbnail = pixels.map(|size| thumbnail(source, size.width(), size.height()));
                 Ok(Self::Kitty(KittyImage::encode(
                     thumbnail.as_ref().unwrap_or(source),
                     graphics.allocate_kitty_image_id(),

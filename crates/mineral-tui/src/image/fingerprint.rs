@@ -2,7 +2,8 @@
 //! 认不出它们；这里把解码图降到固定灰度网格，用平均像素差相认。
 
 use image::DynamicImage;
-use image::imageops::FilterType;
+
+use super::resize::resize_exact;
 
 /// 指纹网格边长(像素)。
 const GRID: u32 = 16;
@@ -32,9 +33,7 @@ impl CoverFingerprint {
             side,
             side,
         );
-        let sampled = square
-            .resize_exact(GRID, GRID, FilterType::Triangle)
-            .to_luma8();
+        let sampled = resize_exact(&square, GRID, GRID).into_luma8();
         Self {
             gray: sampled.into_raw().into_boxed_slice(),
         }
