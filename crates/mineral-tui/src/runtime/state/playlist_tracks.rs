@@ -35,8 +35,10 @@ enum RequestState {
     /// 尚未提交，或先前请求已成功收束。
     #[default]
     Idle,
+
     /// 已提交，等待结果。
     Pending,
+
     /// 上一次请求失败。
     Failed,
 }

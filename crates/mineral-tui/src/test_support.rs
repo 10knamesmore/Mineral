@@ -4,6 +4,8 @@
 //! `assert_snap!`)来自 [`mineral_test`];本模块只保留依赖 TUI 私有类型
 //! (`AppState` / `PlaylistEntryView` / `PlaylistView`)的 fixture。
 
+#![cfg(test)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
