@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
 use crate::image::key::PixelSize;
+use crate::image::resize::{resize_exact, thumbnail, thumbnail_exact};
 
 /// 一张按目标 cell 网格编码的 halfblocks 图片。
 pub(crate) struct HalfblocksImage {
@@ -31,18 +32,14 @@ impl HalfblocksImage {
         let height = u32::from(cells.1).saturating_mul(2);
         let sampled = sample_halfblocks(source.borrow(), target_pixels, cells);
         drop(source);
-        let pixels = DynamicImage::ImageRgba8(sampled)
-            .resize_exact(width, height, image::imageops::FilterType::Triangle)
-            .into_rgb8();
+        let pixels = resize_exact(&DynamicImage::ImageRgba8(sampled), width, height).into_rgb8();
         Self { pixels }
     }
 
     /// 等比生成无补边的低清像素,供 Kitty 行内封面复用;留白由最终 placement 决定。
     pub(super) fn thumbnail(source: &DynamicImage, pixels: PixelSize) -> Self {
         Self {
-            pixels: source
-                .thumbnail(pixels.width(), pixels.height())
-                .into_rgb8(),
+            pixels: thumbnail(source, pixels.width(), pixels.height()).into_rgb8(),
         }
     }
 
@@ -126,9 +123,7 @@ fn sample_halfblocks(
     };
     let sample_width = scaled_axis(fitted_width, width, target_width).min(width);
     let sample_height = scaled_axis(fitted_height, height, target_height).min(height);
-    let sampled = source
-        .thumbnail_exact(sample_width, sample_height)
-        .into_rgba8();
+    let sampled = thumbnail_exact(source, sample_width, sample_height).into_rgba8();
     image::imageops::overlay(&mut canvas, &sampled, 0, 0);
     canvas
 }

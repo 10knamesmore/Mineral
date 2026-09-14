@@ -20,6 +20,7 @@ use super::ImageEngine;
 use super::geometry::{square_cells, square_subarea};
 use super::graphics::GraphicsProtocol;
 use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
+use super::resize::resize_exact;
 
 /// 双图合成方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,12 +368,8 @@ fn compose_transition(frame: BlendFrame<'_>) -> RgbImage {
         advance,
         zoom_scale_permille,
     } = frame;
-    let old = from
-        .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
-        .to_rgb8();
-    let new = to
-        .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
-        .to_rgb8();
+    let old = resize_exact(from, px_w, px_h).into_rgb8();
+    let new = resize_exact(to, px_w, px_h).into_rgb8();
     let p = u64::from(progress_permille.min(1000));
     match style {
         BlendStyle::Slide => RgbImage::from_fn(px_w, px_h, |x, y| {
@@ -487,11 +484,11 @@ fn permille_of_scale(scale: f32) -> u32 {
 
 /// 把已解码图片按 halfblock(`▀`)逐 cell 画进 `area`。
 ///
-/// 正方区由调用方算好再传入)。每 cell:上半像素 → fg、下半像素 → bg;源图先 `resize_exact`
+/// 正方区由调用方算好再传入)。每 cell:上半像素 → fg、下半像素 → bg;源图先采样
 /// 到 `area.width × area.height*2` 像素再逐 cell 采样。
 ///
 /// 纯写终端 cell、不持有终端 image id 或协议缓冲，区域逐帧变化时可以安全重画。
-/// 降采样在渲染线程同步做:源图 ≤ 384px、目标几十像素,Triangle 一次亚毫秒级。
+/// 降采样在渲染线程同步完成，优先使用 SIMD Triangle 核处理已解码图片。
 ///
 /// # Params:
 ///   - `buf`: 目标缓冲(屏上 / 离屏皆可)
@@ -503,9 +500,7 @@ pub(crate) fn render_halfblock_to(buf: &mut Buffer, area: Rect, image: &DynamicI
     }
     let px_w = u32::from(area.width);
     let px_h = u32::from(area.height).saturating_mul(2);
-    let small = image
-        .resize_exact(px_w, px_h, image::imageops::FilterType::Triangle)
-        .to_rgb8();
+    let small = resize_exact(image, px_w, px_h).into_rgb8();
     let sample = |x: u32, y: u32| -> Color {
         small.get_pixel_checked(x, y).map_or(Color::Reset, |p| {
             let Rgb([r, g, b]) = *p;

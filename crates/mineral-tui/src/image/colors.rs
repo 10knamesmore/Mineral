@@ -13,6 +13,8 @@ use palette::{FromColor, IntoColor, Lab, Lch, Srgb};
 use crate::render::accent::AccentPair;
 use crate::render::palette::{CoverPalette, Rgb};
 
+use super::resize::thumbnail;
+
 /// 从一张封面图提取频谱色板(Lab 明度升序的重点色)。
 ///
 /// 流程:缩到 `kmeans.sample_dim` 采样图(取色不需要全分辨率;box filter 确定性 +
@@ -33,7 +35,7 @@ pub fn extract_palette(
     // 大图先降采样:聚类只看颜色分布,sample_dim² 样本足够;box filter 极快且确定。
     let dim = (*k.sample_dim()).max(1);
     let rgb = if img.width() > dim || img.height() > dim {
-        img.thumbnail(dim, dim).to_rgb8()
+        thumbnail(img, dim, dim).into_rgb8()
     } else {
         img.to_rgb8()
     };

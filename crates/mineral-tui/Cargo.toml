@@ -15,6 +15,7 @@ base64               = { workspace = true }
 chrono               = { workspace = true }
 color-eyre           = { workspace = true }
 crossterm            = { workspace = true }
+fast_image_resize    = { workspace = true }
 futures-util         = { workspace = true }
 image                = { workspace = true }
 jpeg-decoder         = { workspace = true }
