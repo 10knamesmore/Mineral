@@ -60,7 +60,11 @@ impl MusicChannel for UrlChannel {
         Err(Error::NotSupported)
     }
 
-    async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
 
@@ -216,7 +220,11 @@ impl MusicChannel for CannedChannel {
         self.album.clone().ok_or(Error::NotSupported)
     }
 
-    async fn playlist_detail(&self, _id: &PlaylistId) -> ChannelResult<Playlist> {
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
 

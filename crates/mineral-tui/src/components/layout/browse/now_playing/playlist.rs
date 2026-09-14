@@ -127,10 +127,14 @@ mod tests {
         let url = MediaUrl::remote("https://x.y/entry.jpg")?;
         let mut entry = song("s0");
         entry.cover_url = Some(url.clone());
-        app.state
-            .library
-            .tracks
-            .insert(pid, entry_views(vec![entry]));
+        app.state.library.tracks.insert(
+            pid,
+            crate::runtime::state::PlaylistTracks {
+                entries: entry_views(vec![entry]),
+                complete: true,
+                next_offset: None,
+            },
+        );
         app.state.browse.nav.playlist.set_sel(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));

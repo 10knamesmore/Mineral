@@ -1528,7 +1528,7 @@ mod tests {
                     .library
                     .tracks
                     .values()
-                    .flatten()
+                    .flat_map(|tracks| tracks.iter())
                     .all(|entry| !entry.loved)
             );
         }

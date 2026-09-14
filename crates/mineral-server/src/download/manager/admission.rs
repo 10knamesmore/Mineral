@@ -48,7 +48,7 @@ impl DownloadManager {
             .find(|channel| channel.source() == id.namespace())
             .cloned();
         let result = match channel {
-            Some(channel) => channel.playlist_detail(&id).await.map_err(|error| {
+            Some(channel) => channel.playlist_detail(&id, mineral_channel_core::PlaylistLoad::Complete).await.map_err(|error| {
                 mineral_log::warn!(target: "download", playlist_id = %id.qualified(), error = mineral_log::chain(&error), "playlist expansion failed");
                 "Download failed: could not load playlist".to_owned()
             }),
@@ -57,10 +57,10 @@ impl DownloadManager {
         match result {
             Ok(playlist) if !self.inner.shutdown.is_cancelled() => {
                 let origin = DownloadOrigin::Playlist(PlaylistRef {
-                    id: playlist.id,
-                    name: playlist.name,
+                    id: playlist.playlist.id,
+                    name: playlist.playlist.name,
                 });
-                for entry in playlist.entries {
+                for entry in playlist.playlist.entries {
                     self.admit_song(&entry.song, origin.clone(), Lane::Playlist);
                 }
             }

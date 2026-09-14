@@ -89,12 +89,18 @@ impl MusicChannel for FakeChannel {
     async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
         Err(Error::NotSupported)
     }
-    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> Result<mineral_channel_core::PlaylistDetail> {
         self.maybe_wait().await;
-        Ok(Playlist::builder()
-            .id(id.clone())
-            .name(String::new())
-            .build())
+        Ok(mineral_channel_core::PlaylistDetail::complete(
+            Playlist::builder()
+                .id(id.clone())
+                .name(String::new())
+                .build(),
+        ))
     }
     async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<PageResult<Album>> {
         self.page_started.add_permits(1);
@@ -122,6 +128,7 @@ fn my_playlists_kind() -> TaskKind {
 fn playlist_tracks_kind() -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
         id: PlaylistId::new(SourceKind::NETEASE, "p1"),
+        load: mineral_channel_core::PlaylistLoad::Complete,
     })
 }
 
@@ -560,7 +567,11 @@ impl MusicChannel for WriteRecorder {
     async fn album_detail(&self, _id: &mineral_model::AlbumId) -> Result<mineral_model::Album> {
         Err(Error::NotSupported)
     }
-    async fn playlist_detail(&self, _id: &PlaylistId) -> Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {

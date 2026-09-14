@@ -318,7 +318,14 @@ mod tests {
             .map(|i| song_with_cover(SourceKind::NETEASE, i))
             .collect::<color_eyre::Result<Vec<Song>>>()?;
         let tracks = entry_views(songs);
-        s.library.tracks.insert(pid, tracks);
+        s.library.tracks.insert(
+            pid,
+            crate::runtime::state::PlaylistTracks {
+                entries: tracks,
+                complete: true,
+                next_offset: None,
+            },
+        );
         Ok(s)
     }
 

@@ -59,6 +59,12 @@ pub async fn run(args: ChannelArgs) -> color_eyre::Result<()> {
 ///   网易云构造参数。
 pub fn netease_config_from(section: &mineral_config::NeteaseSection) -> NeteaseConfig {
     NeteaseConfig::builder()
+        .playlist_fetch(
+            mineral_channel_netease::config::PlaylistFetchConfig::builder()
+                .batch_size(*section.playlist_fetch().batch_size())
+                .max_concurrent(*section.playlist_fetch().max_concurrent())
+                .build(),
+        )
         .max_connections(*section.max_connections())
         .proxy(section.proxy().clone())
         .timeout_secs(*section.timeout_secs())

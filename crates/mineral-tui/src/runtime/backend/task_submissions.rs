@@ -120,6 +120,7 @@ mod tests {
         TaskKind::ChannelFetch(match index % 4 {
             0 => ChannelFetchKind::PlaylistDetail {
                 id: PlaylistId::new(SourceKind::NETEASE, id),
+                load: mineral_channel_core::PlaylistLoad::Complete,
             },
             1 => ChannelFetchKind::AlbumDetail {
                 id: AlbumId::new(SourceKind::NETEASE, id),

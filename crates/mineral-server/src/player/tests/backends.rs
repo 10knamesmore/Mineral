@@ -202,7 +202,11 @@ impl MusicChannel for RecordingChannel {
         Err(Error::NotSupported)
     }
 
-    async fn playlist_detail(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> mineral_channel_core::Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
 

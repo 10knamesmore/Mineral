@@ -42,6 +42,7 @@ fn task_kind_round_trip() -> color_eyre::Result<()> {
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
             id: PlaylistId::new(SourceKind::NETEASE, "p123"),
+            load: mineral_channel_core::PlaylistLoad::Complete,
         }),
         TaskKind::ChannelFetch(ChannelFetchKind::Lyrics {
             song_id: SongId::new(SourceKind::NETEASE, "s456"),
@@ -81,12 +82,13 @@ fn task_event_round_trip() -> color_eyre::Result<()> {
         },
         TaskEvent::PlaylistDetailFetched {
             id: PlaylistId::new(SourceKind::NETEASE, "p"),
-            playlist: Box::new(
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
                 mineral_model::Playlist::builder()
                     .id(PlaylistId::new(SourceKind::NETEASE, "p"))
                     .name(String::new())
                     .build(),
-            ),
+            )),
         },
     ];
     for ev in &cases {

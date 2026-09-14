@@ -22,6 +22,7 @@ async fn shared_submitter_delivers_tasks_after_socket_backpressure() -> color_ey
         let tasks = vec![
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
                 id: PlaylistId::new(SourceKind::NETEASE, "playlist"),
+                load: mineral_channel_core::PlaylistLoad::Complete,
             }),
             TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail {
                 id: AlbumId::new(SourceKind::NETEASE, "album"),

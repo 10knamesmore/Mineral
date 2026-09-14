@@ -1,5 +1,7 @@
 //! `NeteaseChannel` 的构造参数([`NeteaseConfig`])。
 
+use std::num::NonZeroUsize;
+
 /// `NeteaseChannel` 的构造参数。私有字段 + builder 构造 + getter 读取。
 ///
 /// **所有字段必填,本类型不携带默认值**:默认值的唯一真相源是 mineral-config 的
@@ -16,6 +18,19 @@ pub struct NeteaseConfig {
 
     /// 单次请求超时(秒)。
     timeout_secs: u64,
+
+    /// 歌单浏览和完整加载共用的请求批次参数。
+    playlist_fetch: PlaylistFetchConfig,
+}
+
+/// 网易歌曲详情的批次大小与同一歌单内的并发上限；默认值由 default.lua 提供。
+#[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]
+pub struct PlaylistFetchConfig {
+    /// 浏览歌单时每批覆盖的 ID 数量，也是单次歌曲详情请求的上限；必须大于零。
+    batch_size: NonZeroUsize,
+
+    /// 一个歌单最多同时发出的歌曲详情请求数；必须大于零。
+    max_concurrent: NonZeroUsize,
 }
 
 #[cfg(test)]
@@ -26,6 +41,12 @@ mod tests {
     #[test]
     fn builder_sets_fields() {
         let c = NeteaseConfig::builder()
+            .playlist_fetch(
+                crate::config::PlaylistFetchConfig::builder()
+                    .batch_size(std::num::NonZeroUsize::new(500).unwrap())
+                    .max_concurrent(std::num::NonZeroUsize::new(3).unwrap())
+                    .build(),
+            )
             .timeout_secs(7)
             .max_connections(3)
             .proxy(Some("socks5://127.0.0.1:1080".to_owned()))

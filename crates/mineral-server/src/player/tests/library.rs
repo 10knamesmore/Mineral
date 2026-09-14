@@ -78,7 +78,11 @@ impl MusicChannel for WritableChannel {
     async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
-    async fn playlist_detail(&self, _id: &PlaylistId) -> mineral_channel_core::Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> mineral_channel_core::Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
     async fn lyrics(&self, _id: &SongId) -> mineral_channel_core::Result<Lyrics> {
@@ -474,10 +478,10 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         .iter()
         .rev()
         .find_map(|e| match e {
-            mineral_task::TaskEvent::PlaylistDetailFetched { id, playlist }
+            mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. }
                 if id.namespace() == SourceKind::MINERAL =>
             {
-                Some(playlist)
+                Some(&detail.playlist)
             }
             _ => None,
         })

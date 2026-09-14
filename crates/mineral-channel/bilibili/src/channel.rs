@@ -223,7 +223,11 @@ impl MusicChannel for BilibiliChannel {
         Ok(convert::arc_videos_to_albums(result, page))
     }
 
-    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> Result<mineral_channel_core::PlaylistDetail> {
         // 收藏夹内容:翻页拉全条目,单 P 直接成曲;多 P 条目逐 BV 拉 view 展开成逐 P 曲目
         // (串行:只有多 P 条目才多这一跳,音乐向收藏夹里量级很小)。view 失败分两类:该视频
         // 自身内容错误(删除 / 解析异常)降级为标 unavailable 的单行,整夹不因单条失效视频而空;
@@ -265,14 +269,15 @@ impl MusicChannel for BilibiliChannel {
                 }
             }
         }
-        match list.info {
-            Some(info) => Ok(convert::fav_list_to_playlist(fid, info, songs)),
-            None => Ok(Playlist::builder()
+        let playlist = match list.info {
+            Some(info) => convert::fav_list_to_playlist(fid, info, songs),
+            None => Playlist::builder()
                 .id(id.clone())
                 .name(fid.to_owned())
                 .entries(mineral_model::PlaylistEntry::enumerate(songs))
-                .build()),
-        }
+                .build(),
+        };
+        Ok(mineral_channel_core::PlaylistDetail::complete(playlist))
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {

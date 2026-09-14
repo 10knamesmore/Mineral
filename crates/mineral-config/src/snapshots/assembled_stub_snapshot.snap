@@ -1,6 +1,6 @@
 ---
 source: crates/mineral-config/src/lua_stub.rs
-assertion_line: 355
+assertion_line: 358
 description: meta/config.lua 生成全文(preamble + aliases + 宏生成 class/alias)
 expression: "super::meta_config_lua()"
 ---
@@ -264,7 +264,7 @@ expression: "super::meta_config_lua()"
 ---@field scrolloff? integer 光标与列表视口上下边缘保持的最小行距(nvim `scrolloff`);`0` = 贴边才滚, ≥ 半视口时光标近似居中。
 ---@field line_scroll_rows? integer 单行档滚动(`<C-d>` / `<C-u>`)一次移动的行数,≥1。列表与全屏歌词共用。
 ---@field page_scroll_rows? integer 翻页档滚动(`<C-f>` / `<C-b>`)一次移动的行数,≥1。
----@field search_prefetch_rows? integer 搜索结果列懒分页预取触发半径:光标进入距已加载结果末行此行数内、且该 (源,kind) 桶 未榨干时,自动派发下一页搜索任务。越大越早预取(滚动越顺滑、请求越靠前)。
+---@field search_prefetch_rows? integer 搜索结果、艺人专辑和歌单曲目的分页预取半径:光标距已加载末行不超过此行数且还有 更多时,自动拉下一页。越大越早预取(滚动越顺滑、请求越靠前)。
 ---@field kill_spawned_daemon_on_exit? boolean TUI 退出时是否杀掉自己拉起的 daemon;`false` = 续命后台播放,下次启动自动接回。 只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀。
 ---@field remember_track_pos? mineral.TrackPosMemory 歌单内光标位置记忆档:退出曲目列表时记住位置,下次进入恢复。 搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置。
 ---@field filter_play_scope? mineral.FilterPlayScope Library 过滤态起播时提交完整 collection，还是只提交当前匹配项。
@@ -667,7 +667,13 @@ expression: "super::meta_config_lua()"
 ---@field proxy? string|false 代理:`Some(url)` = 代理地址(如 `socks5://127.0.0.1:1080` / `http://...`); `None`(Lua `false`)= 不走代理,不接受 `true`。
 ---@field max_connections? integer 到该源的最大并发连接数(`0` = 不限)。
 ---@field color? mineral.ColorRef 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
+---@field playlist_fetch? mineral.PlaylistFetchSection 歌单曲目按需加载时的网易请求参数。
 ---@field curate_playlists? mineral.CuratePlaylistsFn 该源歌单列表的呈现策展(过滤/改名/重排)
+
+---网易歌单曲目的请求批次；浏览续页和整张加载的触发时机由调用方决定。
+---@class mineral.PlaylistFetchSection
+---@field batch_size? integer 浏览歌单时每批覆盖的 ID 数量，也是单次歌曲详情请求的上限；须大于零。
+---@field max_concurrent? integer 同一歌单内并发的歌曲详情请求数；须大于零。
 
 ---哔哩哔哩源段。
 ---

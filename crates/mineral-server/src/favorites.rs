@@ -271,11 +271,15 @@ impl PlayerCore {
                 }
             };
             for p in &playlists {
-                match channel.playlist_detail(&p.id).await {
+                match channel
+                    .playlist_detail(&p.id, mineral_channel_core::PlaylistLoad::Complete)
+                    .await
+                {
                     Ok(playlist) => {
                         self.notify().task_event(TaskEvent::PlaylistDetailFetched {
                             id: p.id.clone(),
-                            playlist: Box::new(playlist),
+                            detail: Box::new(playlist),
+                            load: mineral_channel_core::PlaylistLoad::Complete,
                         });
                     }
                     Err(e) => {

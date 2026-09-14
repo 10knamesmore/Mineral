@@ -26,7 +26,6 @@ use crate::error::ApiCodeError;
 use crate::api;
 use crate::config::NeteaseConfig;
 use crate::convert;
-use crate::playlist_cache;
 use crate::transport::Transport;
 
 /// 网易云 channel 实例。
@@ -39,6 +38,9 @@ pub struct NeteaseChannel {
 
     /// 本地持久化句柄;降级(`ServerStore::disabled()`)时所有读写 no-op,播放不受影响。
     persist: ServerStore,
+
+    /// 歌单曲目请求批次，在 channel 构造时由来源配置注入。
+    playlist: crate::playlist::PlaylistLoader,
 }
 
 impl NeteaseChannel {
@@ -52,6 +54,7 @@ impl NeteaseChannel {
             transport: Transport::new(config)?,
             user_id: None,
             persist,
+            playlist: crate::playlist::PlaylistLoader::new(config.playlist_fetch()),
         })
     }
 
@@ -118,6 +121,7 @@ impl NeteaseChannel {
             transport: Transport::from_cookie_jar(config, jar)?,
             user_id,
             persist,
+            playlist: crate::playlist::PlaylistLoader::new(config.playlist_fetch()),
         })
     }
 
@@ -307,87 +311,16 @@ impl MusicChannel for NeteaseChannel {
         Ok(convert::album_detail_to_model(dto))
     }
 
-    /// 歌单完整详情(元信息 + 曲目),配 persist 缓存(版本号 `trackUpdateTime` 条件刷新)。
-    ///
-    /// 元信息从轻量请求(同端点 `limit=0`)拿——它返回 playlist 对象(名/简介/封面/计数/
-    /// 版本戳 + `trackIds` 顺序),不含 tracks 大头。曲目则:
-    /// - 缓存命中且版本一致 → 本地 song_meta 按远端顺序重建,省拉上千首。
-    /// - 版本变 / 无缓存 → 全拉(`limit=1000`)覆盖写回。
-    /// - 轻请求失败 → 降级旧缓存曲目(元信息缺,只剩 id + 曲目),体验优先;无缓存才冒泡。
-    ///
-    /// 缓存只存曲目 relation(index + SongId),元信息每次从轻请求拿,Song metadata 仍可独立更新。
-    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
-        let meta = match api::playlist::detail(&self.transport, id, 0).await {
-            Ok(r) => r.playlist,
-            Err(e) => {
-                if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
-                    mineral_log::warn!(
-                        target: "netease",
-                        playlist = %id.value(),
-                        error = mineral_log::chain(&e),
-                        "歌单元信息轻请求失败,降级返回旧缓存曲目(元信息缺)"
-                    );
-                    return Ok(Playlist::builder()
-                        .id(id.clone())
-                        .name(String::new())
-                        .entries(stale)
-                        .build());
-                }
-                return Err(map_err(e));
-            }
-        };
-        let track_ids = meta
-            .track_ids
-            .iter()
-            .map(|t| t.id.to_string())
-            .collect::<Vec<String>>();
-
-        let entries = if let Some(cached) = playlist_cache::try_rebuild_if_current(
-            &self.persist,
-            id,
-            meta.track_update_time,
-            &track_ids,
-        )
-        .await
-        {
-            cached
-        } else {
-            match api::playlist::detail(&self.transport, id, 1000).await {
-                Ok(full) => {
-                    let mut tracks = full.playlist.tracks;
-                    // 权限数组与 tracks 平行给在响应根,对回后判灰才有依据。
-                    crate::wire::song::merge_privileges(&mut tracks, full.privileges);
-                    let songs = tracks
-                        .into_iter()
-                        .map(convert::album_song_to_model)
-                        .collect::<Vec<Song>>();
-                    let entries = convert::playlist_entries_from_order(&meta.track_ids, songs);
-                    playlist_cache::store(
-                        &self.persist,
-                        id,
-                        Some(&meta.name),
-                        Some(meta.track_update_time),
-                        &entries,
-                    )
-                    .await;
-                    entries
-                }
-                Err(e) => {
-                    if let Some(stale) = playlist_cache::try_load_stale(&self.persist, id).await {
-                        mineral_log::warn!(
-                            target: "netease",
-                            playlist = %id.value(),
-                            error = mineral_log::chain(&e),
-                            "歌单曲目全拉失败,降级返回旧缓存曲目"
-                        );
-                        stale
-                    } else {
-                        return Err(map_err(e));
-                    }
-                }
-            }
-        };
-        Ok(convert::playlist_info_to_model(&meta, entries))
+    /// 预览或完整加载由歌单模块执行，远端请求失败映射为公共 channel 错误。
+    async fn playlist_detail(
+        &self,
+        id: &PlaylistId,
+        load: mineral_channel_core::PlaylistLoad,
+    ) -> Result<mineral_channel_core::PlaylistDetail> {
+        self.playlist
+            .load(&self.transport, &self.persist, id, load)
+            .await
+            .map_err(map_err)
     }
 
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {
@@ -549,6 +482,12 @@ mod tests {
     #[tokio::test]
     async fn favorite_methods_not_supported_when_anonymous() -> color_eyre::Result<()> {
         let config = NeteaseConfig::builder()
+            .playlist_fetch(
+                crate::config::PlaylistFetchConfig::builder()
+                    .batch_size(std::num::NonZeroUsize::new(500).unwrap())
+                    .max_concurrent(std::num::NonZeroUsize::new(3).unwrap())
+                    .build(),
+            )
             .max_connections(0)
             .proxy(None)
             .timeout_secs(100)

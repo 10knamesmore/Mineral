@@ -102,7 +102,14 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
             ..entry
         })
         .collect();
-    s.library.tracks.insert(pid, views);
+    s.library.tracks.insert(
+        pid,
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     Ok(s)
 }
 
@@ -135,9 +142,14 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
         })
         .collect();
     s.player.current = tracks.first().cloned();
-    s.library
-        .tracks
-        .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
+    s.library.tracks.insert(
+        PlaylistId::new(SourceKind::NETEASE, "p1"),
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     s.browse.nav.track.set_sel(1);
     Ok(s)
 }
@@ -194,9 +206,14 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
     let tracks = chinese_football(4);
     let views = entry_views(tracks.clone());
     s.player.current = tracks.first().cloned();
-    s.library
-        .tracks
-        .insert(PlaylistId::new(SourceKind::NETEASE, "cf"), views);
+    s.library.tracks.insert(
+        PlaylistId::new(SourceKind::NETEASE, "cf"),
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     Ok(s)
 }
 
@@ -222,9 +239,14 @@ pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
 
     let views = entry_views(tracks.to_vec());
     s.player.current = tracks.first().cloned();
-    s.library
-        .tracks
-        .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), views);
+    s.library.tracks.insert(
+        PlaylistId::new(SourceKind::NETEASE, "p1"),
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     Ok(s)
 }
 
@@ -620,7 +642,14 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     }];
     let tracks = endserenading(len);
     let views = entry_views(tracks);
-    app.state.library.tracks.insert(pid, views);
+    app.state.library.tracks.insert(
+        pid,
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     app.state.browse.view.switch_to(View::Library);
     while !app.state.browse.view.at_max() {
         app.state.browse.view.tick();
@@ -730,7 +759,14 @@ pub(crate) fn app_with_library_probed(
         u64::try_from(len).unwrap_or(0),
     )];
     let views = entry_views(endserenading(len));
-    app.state.library.tracks.insert(pid, views);
+    app.state.library.tracks.insert(
+        pid,
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     app.state.browse.view.switch_to(View::Library);
     while !app.state.browse.view.at_max() {
         app.state.browse.view.tick();
@@ -752,7 +788,14 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
         })
         .collect();
     let views = entry_views(songs);
-    app.state.library.tracks.insert(pid, views);
+    app.state.library.tracks.insert(
+        pid,
+        crate::runtime::state::PlaylistTracks {
+            entries: views,
+            complete: true,
+            next_offset: None,
+        },
+    );
     app.state.browse.nav.track.set_sel(sel_track);
     Ok(app)
 }

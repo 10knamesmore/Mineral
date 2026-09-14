@@ -600,7 +600,11 @@ mod tests {
         let track = with_artist(with_name(song("s1"), "春日影"), "CRYCHIC");
         state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p2"),
-            entry_views(vec![track]),
+            crate::runtime::state::PlaylistTracks {
+                entries: entry_views(vec![track]),
+                complete: true,
+                next_offset: None,
+            },
         );
         state.library.tracks_generation = 1;
         state.browse.search.set_query("春日");
@@ -633,7 +637,11 @@ mod tests {
         );
         state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p2"),
-            entry_views(vec![track]),
+            crate::runtime::state::PlaylistTracks {
+                entries: entry_views(vec![track]),
+                complete: true,
+                next_offset: None,
+            },
         );
         state.library.tracks_generation = 1;
         state.browse.search.set_query("mayo");
@@ -672,10 +680,17 @@ mod tests {
         let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
         state.browse.search.set_query("zzz");
-        state
-            .tasks_snapshot
-            .by_kind
-            .insert(mineral_task::ChannelFetchKindTag::PlaylistDetail, 3);
+        let ids = state
+            .library
+            .playlists
+            .iter()
+            .map(|playlist| playlist.data.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            state
+                .library
+                .request_playlist(id, mineral_channel_core::PlaylistLoad::Complete);
+        }
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();

@@ -100,11 +100,17 @@ impl MusicChannel for MineralChannel {
         Ok(vec![self.build_favorites(/*with_songs*/ false).await?])
     }
 
-    async fn playlist_detail(&self, id: &PlaylistId) -> Result<Playlist> {
+    async fn playlist_detail(
+        &self,
+        id: &PlaylistId,
+        _load: mineral_channel_core::PlaylistLoad,
+    ) -> Result<mineral_channel_core::PlaylistDetail> {
         if *id != favorites_playlist_id() {
             return Err(Error::NotSupported);
         }
-        self.build_favorites(/*with_songs*/ true).await
+        self.build_favorites(/*with_songs*/ true)
+            .await
+            .map(mineral_channel_core::PlaylistDetail::complete)
     }
 }
 
@@ -161,7 +167,13 @@ mod tests {
     async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<()> {
         let (_dir, store) = store_with_favorites().await?;
         let ch = MineralChannel::new(store);
-        let p = ch.playlist_detail(&favorites_playlist_id()).await?;
+        let p = ch
+            .playlist_detail(
+                &favorites_playlist_id(),
+                mineral_channel_core::PlaylistLoad::Complete,
+            )
+            .await?
+            .playlist;
         assert_eq!(p.track_count, 2);
         assert_eq!(p.entries.len(), 2, "detail 带全曲目,与 track_count 同口径");
         let names = p
@@ -191,7 +203,11 @@ mod tests {
 
         let other = mineral_model::PlaylistId::new(SourceKind::MINERAL, "nope");
         assert!(
-            matches!(ch.playlist_detail(&other).await, Err(Error::NotSupported)),
+            matches!(
+                ch.playlist_detail(&other, mineral_channel_core::PlaylistLoad::Complete)
+                    .await,
+                Err(Error::NotSupported)
+            ),
             "未知 id 不臆造歌单"
         );
         Ok(())
@@ -201,7 +217,13 @@ mod tests {
     #[tokio::test]
     async fn disabled_store_yields_empty_favorites() -> color_eyre::Result<()> {
         let ch = MineralChannel::new(ServerStore::disabled());
-        let p = ch.playlist_detail(&favorites_playlist_id()).await?;
+        let p = ch
+            .playlist_detail(
+                &favorites_playlist_id(),
+                mineral_channel_core::PlaylistLoad::Complete,
+            )
+            .await?
+            .playlist;
         assert_eq!(p.track_count, 0);
         assert!(p.entries.is_empty());
         Ok(())

@@ -750,9 +750,18 @@ mod tests {
         playlist.entries = PlaylistEntry::enumerate(crate::test_support::endserenading(2));
         s.apply(&TaskEvent::PlaylistDetailFetched {
             id: playlist.id.clone(),
-            playlist: Box::new(playlist.clone()),
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
+                playlist.clone(),
+            )),
         });
-        assert_eq!(s.library.tracks.get(&playlist.id).map(Vec::len), Some(2));
+        assert_eq!(
+            s.library
+                .tracks
+                .get(&playlist.id)
+                .map(|tracks| tracks.len()),
+            Some(2)
+        );
         s.channel_search.select_kind(SearchKind::Playlist);
         match &current_frame(&s)?.data {
             Some(DetailData::PlaylistEntries(entries)) => assert_eq!(*entries, playlist.entries),

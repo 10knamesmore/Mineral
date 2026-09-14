@@ -1,5 +1,6 @@
 //! 把后台任务与数据 completion event 收敛进应用状态。
 
+use mineral_channel_core::PlaylistLoad;
 use mineral_task::TaskEvent;
 
 use super::AppState;
@@ -28,22 +29,72 @@ impl AppState {
             TaskEvent::PlaylistsFetched { .. } => {}
             // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
             TaskEvent::FetchDone { .. } => {}
-            TaskEvent::PlaylistDetailFetched { id, playlist } => {
-                // 歌单详情含元信息 + 曲目;library 与 detail 都只取曲目(歌单元信息走
-                // sidebar 列表那份 / detail 帧的 entity 占位)。
+            TaskEvent::PlaylistDetailFetched { id, load, detail } => {
+                self.library.finish_playlist(id, *load, true);
+                // 完整结果到达后，晚到的预览只能收束自身请求，不能降级数据。
+                if !detail.complete && self.library.playlist_complete(id) {
+                    return;
+                }
+                if let Some(existing) = self.library.tracks.get(id) {
+                    if let PlaylistLoad::More { offset } = load
+                        && existing.next_offset != Some(*offset)
+                    {
+                        return;
+                    }
+                    if *load == PlaylistLoad::Preview
+                        && !detail.complete
+                        && existing
+                            .next_offset
+                            .is_some_and(|old| detail.next_offset.is_none_or(|new| old > new))
+                    {
+                        return;
+                    }
+                }
+                let playlist = &detail.playlist;
+                let selected_index = (self.browse.view == super::View::Library)
+                    .then(|| {
+                        self.selected_playlist()
+                            .filter(|p| p.data.id == *id)
+                            .and_then(|_| {
+                                self.filtered_tracks()
+                                    .get(self.browse.nav.track.sel())
+                                    .map(|entry| entry.data.index)
+                            })
+                    })
+                    .flatten();
                 let decorated = playlist
                     .entries
                     .iter()
                     .cloned()
                     .map(|data| self.decorate_entry(data))
                     .collect();
-                self.library.tracks.insert(id.clone(), decorated);
+                self.library.tracks.insert(
+                    id.clone(),
+                    super::PlaylistTracks {
+                        entries: decorated,
+                        complete: detail.complete,
+                        next_offset: detail.next_offset,
+                    },
+                );
                 self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
+                let position = selected_index.and_then(|index| {
+                    self.filtered_tracks()
+                        .iter()
+                        .position(|entry| entry.data.index == index)
+                });
+                if let Some(position) = position {
+                    self.browse.nav.track.set_sel(position);
+                }
                 self.apply_pending_restore(id);
                 // 搜索页保留的歌单帧按 ID 更新，切 source / kind 后也能收到曲目。
-                for results in self.channel_search.retained_results_mut() {
-                    results.fill_playlist_entries(id, &playlist.entries);
+                if detail.complete {
+                    for results in self.channel_search.retained_results_mut() {
+                        results.fill_playlist_entries(id, &playlist.entries);
+                    }
                 }
+            }
+            TaskEvent::PlaylistDetailFailed { id, load } => {
+                self.library.finish_playlist(id, *load, false);
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
                 self.library.liked_ids.insert(*source, ids.clone());

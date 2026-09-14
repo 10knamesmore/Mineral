@@ -8,7 +8,9 @@ use std::collections::hash_map::Entry;
 use mineral_model::{Lyrics, PlaylistId, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
+use super::playlist_tracks::{PlaylistRequests, PlaylistTracks};
+use crate::runtime::view_model::PlaylistView;
+use mineral_channel_core::PlaylistLoad;
 
 /// 数据镜像/缓存域([`AppState`](crate::runtime::state::AppState) 的数据域)。
 pub struct LibraryData {
@@ -16,7 +18,7 @@ pub struct LibraryData {
     pub playlists: Vec<PlaylistView>,
 
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
-    pub tracks: FxHashMap<PlaylistId, Vec<PlaylistEntryView>>,
+    pub tracks: FxHashMap<PlaylistId, PlaylistTracks>,
 
     /// `tracks` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
     /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
@@ -24,7 +26,7 @@ pub struct LibraryData {
 
     /// 已交给统一提交层的歌单；容量不足由提交层保留并重试，prefetch 不重复登记。
     /// 远端任务失败或结果未知后不会自动重发。
-    pub tracks_requested: FxHashSet<PlaylistId>,
+    pub tracks_requested: FxHashMap<PlaylistId, PlaylistRequests>,
 
     /// 歌曲 id → 完整结构化歌词(原文 / 逐字 / 翻译 / 罗马音);不在 map 里表示还没拉到 /
     /// 拉失败。channel 层已清洗,client 直接收整份,渲染时按需取各字段。
@@ -39,13 +41,78 @@ pub struct LibraryData {
 }
 
 impl LibraryData {
+    /// 正在补齐的歌单数；同一歌单的预览不会额外计入索引进度。
+    pub(crate) fn completing_playlists(&self) -> usize {
+        self.tracks_requested
+            .values()
+            .filter(|requests| requests.completing())
+            .count()
+    }
+
+    /// 判断现有数据与在途请求是否已经覆盖加载意图。
+    pub(crate) fn needs_playlist(
+        &self,
+        id: &PlaylistId,
+        load: PlaylistLoad,
+        retry_failed: bool,
+    ) -> bool {
+        if self
+            .tracks
+            .get(id)
+            .is_some_and(|tracks| tracks.complete || load == PlaylistLoad::Preview)
+        {
+            return false;
+        }
+        if let PlaylistLoad::More { offset } = load
+            && self.tracks.get(id).and_then(|tracks| tracks.next_offset) != Some(offset)
+        {
+            return false;
+        }
+        self.tracks_requested
+            .get(id)
+            .is_none_or(|requests| requests.can_request(load, retry_failed))
+    }
+
+    /// 光标接近末行时检查续页；失败仅在下一次导航动作后重试。
+    pub(crate) fn needs_playlist_page(
+        &mut self,
+        id: &PlaylistId,
+        offset: u64,
+        changed_at: std::time::Instant,
+    ) -> bool {
+        let retry = self
+            .tracks_requested
+            .entry(id.clone())
+            .or_default()
+            .observe_page_navigation(changed_at);
+        self.needs_playlist(id, PlaylistLoad::More { offset }, retry)
+    }
+
+    /// 登记一次提交；与后端按加载意图生成的去重键一致。
+    pub(crate) fn request_playlist(&mut self, id: PlaylistId, load: PlaylistLoad) {
+        self.tracks_requested.entry(id).or_default().requested(load);
+    }
+
+    /// 收束对应请求，数据更新由 AppState 统一处理。
+    pub(crate) fn finish_playlist(&mut self, id: &PlaylistId, load: PlaylistLoad, success: bool) {
+        self.tracks_requested
+            .entry(id.clone())
+            .or_default()
+            .finished(load, success);
+    }
+
+    /// 整张操作只消费完整结果，空歌单同样可以是完整结果。
+    pub(crate) fn playlist_complete(&self, id: &PlaylistId) -> bool {
+        self.tracks.get(id).is_some_and(|tracks| tracks.complete)
+    }
+
     /// 构造空数据域(全部缓存为空,等 server 事件增量填充)。
     pub(crate) fn new() -> Self {
         Self {
             playlists: Vec::new(),
             tracks: FxHashMap::default(),
             tracks_generation: 0,
-            tracks_requested: FxHashSet::default(),
+            tracks_requested: FxHashMap::default(),
             lyrics: FxHashMap::default(),
             liked_ids: FxHashMap::default(),
             local_play_counts: LocalPlayCounts::new(),

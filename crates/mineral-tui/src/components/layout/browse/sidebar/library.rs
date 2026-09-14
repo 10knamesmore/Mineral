@@ -120,7 +120,16 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let tracks = state.filtered_tracks();
     // 未知时长的曲目不计入合计(只反映已知部分)。
     let total_min = tracks.total_duration_ms() / 60_000;
-    let pos = position_label(state.browse.nav.track.sel(), tracks.len());
+    let playlist_tracks = state
+        .selected_playlist()
+        .and_then(|p| state.library.tracks.get(&p.data.id));
+    let has_more = playlist_tracks.is_some_and(|tracks| !tracks.complete);
+    let duration_status = if playlist_tracks.is_some_and(|tracks| tracks.complete) {
+        "total"
+    } else {
+        "more"
+    };
+    let pos = position_label(state.browse.nav.track.sel(), tracks.len(), has_more);
 
     // 左上角 source 徽标:标出当前歌单挂靠的来源(聚合面挂靠 mineral,单源面挂靠其真实
     // 来源),与 sidebar playlists 面的 source 列同色,离开 sidebar(全屏)时仍能辨源。
@@ -149,7 +158,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
         .title_bottom(
-            Line::from(format!("{total_min}m total"))
+            Line::from(format!("{total_min}m {duration_status}"))
                 .right_aligned()
                 .style(Style::new().fg(theme.overlay)),
         );
@@ -387,13 +396,11 @@ fn build_row<'a>(
     }
 }
 
-/// 拼 ` n / total ` 的 footer 标签;空列表显示 `0 / 0`。
-fn position_label(sel: usize, total: usize) -> String {
-    if total == 0 {
-        " 0 / 0 ".to_owned()
-    } else {
-        format!(" {} / {total} ", sel.saturating_add(1).min(total))
-    }
+/// 拼 ` n / loaded ` 的 footer 标签；还有未加载曲目时在数量后加 `+`。
+fn position_label(sel: usize, total: usize, has_more: bool) -> String {
+    let position = sel.saturating_add(1).min(total);
+    let more = if has_more { "+" } else { "" };
+    format!(" {position} / {total}{more} ")
 }
 
 /// 选中歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
@@ -442,6 +449,50 @@ mod tests {
         (0..buf.area.width)
             .filter_map(|x| buf.cell((x, y)).map(ratatui::buffer::Cell::symbol))
             .collect()
+    }
+
+    /// 两侧页脚随完整性更新；首批尚未到达时也不能把时长标为 total。
+    #[test]
+    fn tracks_footer_marks_more_pages() -> color_eyre::Result<()> {
+        let mut app = crate::test_support::app_with_long_library(500, 0)?;
+        let id = app
+            .state
+            .selected_playlist()
+            .ok_or_else(|| color_eyre::eyre::eyre!("playlist"))?
+            .data
+            .id
+            .clone();
+        let tracks = app
+            .state
+            .library
+            .tracks
+            .get_mut(&id)
+            .ok_or_else(|| color_eyre::eyre::eyre!("tracks"))?;
+        tracks.complete = false;
+        tracks.next_offset = Some(500);
+        let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
+        draw_lib(&mut terminal, &app.state)?;
+        assert!(row(&terminal, 11).contains("1 / 500+"));
+        assert!(row(&terminal, 11).contains("m more"));
+        assert!(!row(&terminal, 11).contains("m total"));
+        let tracks = app
+            .state
+            .library
+            .tracks
+            .get_mut(&id)
+            .ok_or_else(|| color_eyre::eyre::eyre!("tracks"))?;
+        tracks.complete = true;
+        tracks.next_offset = None;
+        draw_lib(&mut terminal, &app.state)?;
+        assert!(row(&terminal, 11).contains("1 / 500 "));
+        assert!(!row(&terminal, 11).contains("500+"));
+        assert!(row(&terminal, 11).contains("m total"));
+        assert!(!row(&terminal, 11).contains("m more"));
+        app.state.library.tracks.remove(&id);
+        draw_lib(&mut terminal, &app.state)?;
+        assert!(row(&terminal, 11).contains("0m more"));
+        assert_eq!(super::position_label(0, 0, false), " 0 / 0 ");
+        Ok(())
     }
 
     /// 缓动大跳逐帧保持封面与文本同一视口，缺图行不压缩后续封面，离屏阶段只留空列。
@@ -731,10 +782,14 @@ mod tests {
                 plays: None,
             })
             .collect();
-        state
-            .library
-            .tracks
-            .insert(PlaylistId::new(SourceKind::NETEASE, "p1"), entries);
+        state.library.tracks.insert(
+            PlaylistId::new(SourceKind::NETEASE, "p1"),
+            crate::runtime::state::PlaylistTracks {
+                entries,
+                complete: true,
+                next_offset: None,
+            },
+        );
         state.browse.search.set_query("keep");
         state.browse.nav.track.place(0, 0);
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
@@ -798,7 +853,11 @@ mod tests {
         };
         state.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
-            vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
+            crate::runtime::state::PlaylistTracks {
+                entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
+                complete: true,
+                next_offset: None,
+            },
         );
         state.browse.nav.track.set_sel(0);
         state.browse.search.set_query("ab");

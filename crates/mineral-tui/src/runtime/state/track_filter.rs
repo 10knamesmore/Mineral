@@ -196,13 +196,14 @@ mod tests {
     fn replace_tracks(state: &mut AppState, id: &PlaylistId, entries: Vec<PlaylistEntry>) {
         state.apply(&TaskEvent::PlaylistDetailFetched {
             id: id.clone(),
-            playlist: Box::new(
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
                 Playlist::builder()
                     .id(id.clone())
                     .name("歌单".to_owned())
                     .entries(entries)
                     .build(),
-            ),
+            )),
         });
     }
 

@@ -146,6 +146,7 @@ impl BrowsePage {
     ) -> Option<&'a Vec<PlaylistEntryView>> {
         self.selected_playlist(model)
             .and_then(|p| model.library.tracks.get(&p.data.id))
+            .map(|tracks| &tracks.entries)
     }
 
     /// 当前选中歌单的曲目列表(slot 未到位时返回空)。

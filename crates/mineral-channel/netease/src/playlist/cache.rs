@@ -1,32 +1,23 @@
-//! 歌单曲目的本地缓存接线(版本号条件刷新)。
+//! 按远端歌单顺序重建已缓存的曲目；返回部分数据不代表歌单已经完整。
 //!
-//! `songs_in_playlist` 是大头(一个歌单上千首),给它配一层 persist 缓存。
-//! 刷新策略是**版本号(`trackUpdateTime`)条件刷新,远端为准**:
-//! - 先轻量拿远端版本戳 + 全量 trackIds 顺序(不拉完整 tracks)。
-//! - 缓存命中且版本戳一致 → 用本地 song_meta 按【远端 trackIds 顺序】重建
-//!   `Vec<PlaylistEntry>`(顺序与 index 以远端为准),省掉拉上千首完整 tracks 的开销。
-//! - 版本变 / 无缓存 / 旧缓存无版本戳 → 全拉远端覆盖,写回(含新版本戳)。
-//! - 轻请求网络失败 → 降级旧缓存(忽略版本),体验优先;无缓存才冒泡 Err。
-//!
-//! **缓存只是优化、永不是正确性依赖**:远端是事实来源,版本戳一变即全拉覆盖,
-//! 命中也以远端 trackIds 顺序重建。重建时 meta 缺失的歌跳过——宁可缺几首也不返回
-//! 脏数据;整张全缺则视作未命中,触发全拉。
+//! 版本一致时复用 song_meta，缺失详情由歌单加载模块按请求意图补齐。
+//! 预览的轻请求失败时可以重建旧关系；完整请求不能用旧缓存冒充成功。
 
 use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
 use mineral_persist::{CachedPlaylistEntry, ServerStore};
 use rustc_hash::FxHashMap;
 
-/// 版本比对决策:本地缓存能否直接复用(免全拉)。纯函数,便于单测。
+/// 版本比对决策:本地缓存能否直接复用(复用已有 metadata)。纯函数,便于单测。
 ///
 /// "远端为准"体现在:仅当本地有明确版本戳(`Some`)且与远端**完全相等**才复用;
-/// 旧缓存无版本戳(`None`)一律不复用,走全拉补上版本戳。
+/// 旧缓存无版本戳(`None`)一律不复用,按加载意图重新取数并补上版本戳。
 ///
 /// # Params:
 ///   - `cached`: 本地缓存的版本戳(旧库 / 未知为 `None`)
 ///   - `remote`: 远端当前版本戳
 ///
 /// # Return:
-///   可复用本地缓存返回 `true`,否则 `false`(需全拉)。
+///   可复用本地缓存返回 `true`,否则 `false`(需按加载意图取数)。
 fn cache_is_current(cached: Option<i64>, remote: i64) -> bool {
     cached == Some(remote)
 }
@@ -35,7 +26,7 @@ fn cache_is_current(cached: Option<i64>, remote: i64) -> bool {
 /// `Vec<PlaylistEntry>`。
 ///
 /// 顺序以远端 `track_ids` 为准(它是最新的)。某首 meta 缺失就跳过该首(不致命);
-/// 整张一首都重建不出 → 返回 `None`(触发上层全拉)。版本不一致 / 无缓存也返回 `None`。
+/// 整张一首都重建不出 → 返回 `None`(上层按加载意图取数)。版本不一致 / 无缓存也返回 `None`。
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄
@@ -61,7 +52,7 @@ pub async fn try_rebuild_if_current(
         }
     };
     if !cache_is_current(entry.track_update_time, remote_tut) {
-        mineral_log::debug!(target: "netease", playlist = %id.value(), "歌单版本变更或缓存无版本戳,回退全拉");
+        mineral_log::debug!(target: "netease", playlist = %id.value(), "歌单版本变更或缓存无版本戳,重新获取所需曲目");
         return None;
     }
     // 命中:按远端最新顺序重建(而非本地缓存顺序),顺序以远端为准。
@@ -149,56 +140,39 @@ async fn rebuild(persist: &ServerStore, entries: &[CachedPlaylistEntry]) -> Vec<
         .collect()
 }
 
-/// 远端歌单到货后按来源批量写入 metadata，再写完整 relation 与版本戳。
-///
-/// best-effort:任一步失败只 warn,不影响返回给上层的远端结果。
-///
-/// # Params:
-///   - `persist`: 持久化句柄
-///   - `id`: 歌单 id
-///   - `name`: 歌单名(可空)
-///   - `track_update_time`: 远端版本戳(`trackUpdateTime`,可空)
-///   - `entries`: 远端 authoritative relation
-pub async fn store(
-    persist: &ServerStore,
-    id: &PlaylistId,
-    name: Option<&str>,
-    track_update_time: Option<i64>,
-    entries: &[PlaylistEntry],
-) {
-    let scope = persist.scope(SourceKind::NETEASE);
-    let mut cached_entries = Vec::with_capacity(entries.len());
-    let mut by_source = FxHashMap::<SourceKind, Vec<&mineral_model::Song>>::default();
-    for entry in entries {
-        by_source
-            .entry(entry.song.source())
-            .or_default()
-            .push(&entry.song);
-        cached_entries.push(CachedPlaylistEntry {
-            index: entry.index,
-            song_id: entry.song.id.clone(),
-        });
-    }
-    for (source, songs) in by_source {
-        if let Err(error) = persist.scope(source).upsert_meta_batch(&songs).await {
-            mineral_log::warn!(target: "netease", source = source.name(), songs = songs.len(),
-                error = mineral_log::chain(&error), "写入歌单 metadata 批次失败");
-        }
-    }
-    if let Err(e) = scope
-        .put_playlist_cache(id, name, track_update_time, &cached_entries)
-        .await
-    {
-        mineral_log::warn!(target: "netease", playlist = %id.value(), error = mineral_log::chain(&e), "写歌单缓存失败");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
     use mineral_persist::{CachedPlaylistEntry, ServerStore};
 
-    use super::{cache_is_current, store, try_load_stale, try_rebuild_if_current};
+    use super::{cache_is_current, try_load_stale, try_rebuild_if_current};
+
+    /// 写入指定版本及曲目，供缓存重建测试使用。
+    async fn seed_cache(
+        persist: &ServerStore,
+        id: &PlaylistId,
+        name: Option<&str>,
+        version: Option<i64>,
+        entries: &[PlaylistEntry],
+    ) -> color_eyre::Result<()> {
+        for entry in entries {
+            persist
+                .scope(entry.song.source())
+                .upsert_meta_batch(&[&entry.song])
+                .await?;
+        }
+        let relations = entries
+            .iter()
+            .map(|entry| CachedPlaylistEntry {
+                index: entry.index,
+                song_id: entry.song.id.clone(),
+            })
+            .collect::<Vec<_>>();
+        persist
+            .scope(SourceKind::NETEASE)
+            .put_playlist_cache(id, name, version, &relations)
+            .await
+    }
 
     /// 批量 metadata 读取不得合并 relation；相同裸 ID 的不同来源也必须独立。
     #[tokio::test]
@@ -220,7 +194,7 @@ mod tests {
                     .build()
             })
             .collect::<Vec<_>>();
-        store(&persist, &id, Some("混源歌单"), Some(700), &entries).await;
+        seed_cache(&persist, &id, Some("混源歌单"), Some(700), &entries).await?;
         let rebuilt = try_load_stale(&persist, &id)
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("已写入歌单应能重建"))?;
@@ -239,7 +213,7 @@ mod tests {
         assert!(!cache_is_current(Some(101), 100));
     }
 
-    /// 旧库缓存无版本戳(None)一律不复用,走全拉补版本戳。
+    /// 旧库缓存无版本戳(None)一律不复用,由上层补版本戳。
     #[test]
     fn none_version_never_current() {
         assert!(!cache_is_current(None, 100));
@@ -260,7 +234,7 @@ mod tests {
             mineral_test::song("10003"),
         ];
         let entries = PlaylistEntry::enumerate(songs);
-        store(&persist, &id, Some("我的歌单"), Some(700), &entries).await;
+        seed_cache(&persist, &id, Some("我的歌单"), Some(700), &entries).await?;
 
         // 远端版本一致,但 trackIds 给出新顺序 3,1,2 → 重建应跟远端
         let remote_ids = vec!["10003".to_owned(), "10001".to_owned(), "10002".to_owned()];
@@ -275,27 +249,27 @@ mod tests {
         Ok(())
     }
 
-    /// 版本不一致时返回 None(触发上层全拉)。
+    /// 版本不一致时返回 None(上层按加载意图取数)。
     #[tokio::test]
     async fn version_mismatch_misses() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
-        store(
+        seed_cache(
             &persist,
             &id,
             Some("我的歌单"),
             Some(700),
             &PlaylistEntry::enumerate(vec![mineral_test::song("10001")]),
         )
-        .await;
+        .await?;
         // 远端版本戳变成 800
         let remote_ids = vec!["10001".to_owned()];
         assert!(
             try_rebuild_if_current(&persist, &id, 800, &remote_ids)
                 .await
                 .is_none(),
-            "版本变更应 miss → 全拉"
+            "版本变更不得复用旧歌单快照"
         );
         Ok(())
     }
@@ -315,7 +289,7 @@ mod tests {
         Ok(())
     }
 
-    /// store 写回后 try_load_stale 能按缓存自身顺序重建(降级路径)。
+    /// 缓存写回后 try_load_stale 能按缓存自身顺序重建(降级路径)。
     #[tokio::test]
     async fn stale_rebuilds_in_cached_order() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -323,7 +297,7 @@ mod tests {
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
         let songs = vec![mineral_test::song("10001"), mineral_test::song("10002")];
         let entries = PlaylistEntry::enumerate(songs);
-        store(&persist, &id, Some("我的歌单"), Some(700), &entries).await;
+        seed_cache(&persist, &id, Some("我的歌单"), Some(700), &entries).await?;
 
         let Some(rebuilt) = try_load_stale(&persist, &id).await else {
             return Err(color_eyre::eyre::eyre!("有缓存应能降级重建"));

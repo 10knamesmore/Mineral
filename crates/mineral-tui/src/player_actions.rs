@@ -29,6 +29,50 @@ pub(crate) enum PlayMode {
 /// 复制成功 toast 里展示的内容上限(字符);超出截断加省略号,防长模板把顶栏挤爆。
 const COPY_TOAST_MAX_CHARS: usize = 48;
 
+/// 等待补齐后执行的歌单起播；位置使用原始 relation index，过滤词在发起时固定。
+pub(crate) struct PendingPlaylistPlay {
+    /// 发起起播的歌单。
+    playlist: mineral_model::PlaylistId,
+
+    /// 发起操作时的条目；补齐后同时核对原始位置和歌曲身份。
+    target: mineral_model::PlaylistEntry,
+
+    /// 仅播放匹配项时使用的查询词；None 表示整张歌单。
+    query: Option<String>,
+
+    /// 发起操作时的展示名称。
+    name: Option<String>,
+}
+
+impl PendingPlaylistPlay {
+    /// 在完整结果中按原位置定位，并复用本地搜索的匹配和稳定排序语义。
+    fn resolve(&self, entries: &[mineral_model::PlaylistEntry]) -> Option<(Vec<Song>, usize)> {
+        let mut selected = entries.iter().collect::<Vec<_>>();
+        if let Some(query) = &self.query {
+            let mut search = crate::runtime::state::SearchState::new();
+            for character in query.chars() {
+                search.edit(crate::runtime::line_input::InputRequest::Insert(character));
+            }
+            let mut scored = selected
+                .into_iter()
+                .filter_map(|entry| search.song_score(&entry.song).map(|score| (score, entry)))
+                .collect::<Vec<_>>();
+            scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+            selected = scored.into_iter().map(|(_, entry)| entry).collect();
+        }
+        let target = selected.iter().position(|entry| {
+            entry.index == self.target.index && entry.song.id == self.target.song.id
+        })?;
+        Some((
+            selected
+                .into_iter()
+                .map(|entry| entry.song.clone())
+                .collect(),
+            target,
+        ))
+    }
+}
+
 impl App {
     /// 触发 `tui.keys.script` 绑定的脚本动作:槽位 → 注册名 → daemon;
     /// daemon 报错(未注册 / 脚本未启用 / 执行失败)时 toast 提示。
@@ -283,13 +327,20 @@ impl App {
     /// 容器「播放全部 / 加入队列 / 按序插播」入口:已加载曲目直接入队;未加载则派发详情拉取 +
     /// 登记待兑现意图,`*Fetched` 到货由 [`Self::fulfill_pending_container`] 入队。
     fn start_container_play(&mut self, container: &ContainerRef, mode: PlayMode) {
+        if mode == PlayMode::Replace {
+            self.pending_playlist_play = None;
+        }
         // 先 owned 取出已加载曲目(释放对 state 的借用),再碰 client / pending。
         if let Some(songs) = self.container_loaded_songs(container) {
             self.enqueue_songs(songs, mode, container_context(container));
             return;
         }
         let fetch = container_fetch(container);
-        crate::runtime::prefetch::submit_detail_tasks(&*self.client, fetch.clone());
+        crate::runtime::prefetch::submit_detail_tasks(
+            &*self.client,
+            &mut self.state.library,
+            fetch.clone(),
+        );
         self.pending_container.insert(fetch.dedup_key(), mode);
     }
 
@@ -299,12 +350,10 @@ impl App {
         match container {
             ContainerRef::Playlist(p) => {
                 let views = self.state.library.tracks.get(&p.id)?;
-                (!views.is_empty()).then(|| {
-                    views
-                        .iter()
-                        .map(|entry| entry.data.song.clone())
-                        .collect::<Vec<Song>>()
-                })
+                if !views.complete {
+                    return None;
+                }
+                Some(views.iter().map(|entry| entry.data.song.clone()).collect())
             }
             ContainerRef::Album(_) | ContainerRef::Artist(_) => None,
         }
@@ -317,6 +366,51 @@ impl App {
         target: usize,
         context: mineral_protocol::QueueContextWire,
     ) {
+        self.pending_playlist_play = None;
+        if let mineral_protocol::QueueContextWire::Playlist { id, name } = &context
+            && let Some(tracks) = self
+                .state
+                .library
+                .tracks
+                .get(id)
+                .filter(|tracks| !tracks.complete)
+            && let Some(selected) = songs.get(target)
+        {
+            // 相同 SongId 的第几次出现必须保留，不能把重复歌曲都定位到首个 occurrence。
+            let occurrence = songs
+                .iter()
+                .take(target)
+                .filter(|song| song.id == selected.id)
+                .count();
+            if let Some(entry) = tracks
+                .iter()
+                .filter(|entry| entry.data.song.id == selected.id)
+                .nth(occurrence)
+            {
+                let query = (self
+                    .state
+                    .cfg
+                    .tui()
+                    .behavior()
+                    .filter_play_scope()
+                    .matches_only()
+                    && !self.state.browse.search.query().is_empty())
+                .then(|| self.state.browse.search.query().to_owned());
+                self.pending_playlist_play = Some(PendingPlaylistPlay {
+                    playlist: id.clone(),
+                    target: entry.data.clone(),
+                    query,
+                    name: name.clone(),
+                });
+                crate::runtime::prefetch::submit_detail_tasks(
+                    &*self.client,
+                    &mut self.state.library,
+                    DetailFetch::PlaylistDetail(id.clone()),
+                );
+                mineral_log::info!(target: "tui", playlist = %id, "等待完整歌单后起播");
+                return;
+            }
+        }
         self.client.play_queue(songs, target, context);
     }
 
@@ -351,6 +445,55 @@ impl App {
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
         use mineral_protocol::QueueContextWire;
+        if let TaskEvent::PlaylistDetailFailed {
+            id,
+            load: mineral_channel_core::PlaylistLoad::Complete,
+        } = ev
+        {
+            let container = self
+                .pending_container
+                .remove(&DetailFetch::PlaylistDetail(id.clone()).dedup_key())
+                .is_some();
+            let selection = self
+                .pending_playlist_play
+                .as_ref()
+                .is_some_and(|pending| pending.playlist == *id);
+            if selection {
+                self.pending_playlist_play = None;
+            }
+            if container || selection {
+                self.notifications.flash(tinted_text_item(
+                    "Could not load the complete playlist".to_owned(),
+                    TextTint::Error,
+                ));
+            }
+            return;
+        }
+        if let TaskEvent::PlaylistDetailFetched { id, detail, .. } = ev
+            && detail.complete
+            && self
+                .pending_playlist_play
+                .as_ref()
+                .is_some_and(|pending| pending.playlist == *id)
+            && let Some(pending) = self.pending_playlist_play.take()
+        {
+            if let Some((songs, target)) = pending.resolve(&detail.playlist.entries) {
+                self.client.play_queue(
+                    songs,
+                    target,
+                    QueueContextWire::Playlist {
+                        id: id.clone(),
+                        name: pending.name,
+                    },
+                );
+            } else {
+                mineral_log::warn!(target: "tui", playlist = %id, song = %pending.target.song.id, "歌单补齐后起播目标已变化");
+                self.notifications.flash(tinted_text_item(
+                    "The selected playlist entry has changed".to_owned(),
+                    TextTint::Error,
+                ));
+            }
+        }
         // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / artist),与登记意图时的容器同一身份。
         let (key, songs, context) = match ev {
             TaskEvent::AlbumDetailFetched { id, album } => (
@@ -365,16 +508,17 @@ impl App {
                     name: Some(album.name.clone()),
                 },
             ),
-            TaskEvent::PlaylistDetailFetched { id, playlist } => (
+            TaskEvent::PlaylistDetailFetched { id, detail, .. } if detail.complete => (
                 DetailFetch::PlaylistDetail(id.clone()).dedup_key(),
-                playlist
+                detail
+                    .playlist
                     .entries
                     .iter()
                     .map(|entry| entry.song.clone())
                     .collect(),
                 QueueContextWire::Playlist {
                     id: id.clone(),
-                    name: Some(playlist.name.clone()),
+                    name: Some(detail.playlist.name.clone()),
                 },
             ),
             TaskEvent::ArtistDetailFetched { id, artist } => (
@@ -437,6 +581,85 @@ mod tests {
     use crate::test_support::{
         app_with_library, app_with_library_probed, app_with_queue, endserenading,
     };
+
+    /// 首批起播等待完整结果；补进中间缺口后仍定位到同一重复歌曲 occurrence。
+    #[test]
+    fn partial_playlist_waits_for_complete_queue_and_preserves_occurrence() -> color_eyre::Result<()>
+    {
+        use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
+        use mineral_model::{CollectionIndex, Playlist, PlaylistEntry, PlaylistId};
+        let (mut app, queue_ops) = app_with_library_probed(2, 1)?;
+        let id = PlaylistId::new(SourceKind::NETEASE, "p1");
+        let repeated = mineral_test::song("repeat");
+        let preview_entries = [0, 2]
+            .into_iter()
+            .map(|index| {
+                PlaylistEntry::builder()
+                    .index(CollectionIndex::new(index))
+                    .song(repeated.clone())
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        let preview = TaskEvent::PlaylistDetailFetched {
+            id: id.clone(),
+            load: PlaylistLoad::Preview,
+            detail: Box::new(PlaylistDetail {
+                playlist: Playlist::builder()
+                    .id(id.clone())
+                    .name("p".to_owned())
+                    .track_count(3)
+                    .entries(preview_entries)
+                    .build(),
+                complete: false,
+                next_offset: None,
+            }),
+        };
+        // Replace the fixture's complete data with an actual first response.
+        app.state.library.tracks.remove(&id);
+        app.state.apply(&preview);
+        app.play_queue(
+            vec![repeated.clone(), repeated.clone()],
+            1,
+            QueueContextWire::Playlist {
+                id: id.clone(),
+                name: Some("p".to_owned()),
+            },
+        );
+        app.fulfill_pending_container(&preview);
+        assert!(
+            queue_ops
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
+                .is_empty(),
+            "首批不得入队"
+        );
+        let full = TaskEvent::PlaylistDetailFetched {
+            id: id.clone(),
+            load: PlaylistLoad::Complete,
+            detail: Box::new(PlaylistDetail::complete(
+                Playlist::builder()
+                    .id(id)
+                    .name("p".to_owned())
+                    .track_count(3)
+                    .entries(PlaylistEntry::enumerate(vec![
+                        repeated.clone(),
+                        mineral_test::song("middle"),
+                        repeated.clone(),
+                    ]))
+                    .build(),
+            )),
+        };
+        app.state.apply(&full);
+        app.fulfill_pending_container(&full);
+        assert_eq!(
+            *queue_ops
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("{e}"))?,
+            vec![("play_queue", format!("3:2:{}", repeated.id.qualified()))]
+        );
+        assert!(app.pending_playlist_play.is_none());
+        Ok(())
+    }
 
     /// 造带 `n` 首曲的专辑(容器播放测试素材)。
     fn album_with_songs(raw: &str, n: usize) -> Album {

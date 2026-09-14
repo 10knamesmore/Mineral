@@ -58,7 +58,7 @@ pub use script::ScriptConfig;
 pub use search::{ChannelSearchConfig, DeepSearchConfig, DeepWeights, SearchConfig};
 pub use sources::{
     BackfillSection, BilibiliSection, CURATE_PLAYLISTS_MERGED_FN, CURATE_PLAYLISTS_SOURCE_FNS,
-    MineralSection, NeteaseSection, SourcesConfig,
+    MineralSection, NeteaseSection, PlaylistFetchSection, SourcesConfig,
 };
 pub use spectrum::{
     BarsConfig, ScopeConfig, SpectrumConfig, SpectrumStyle, TerrainConfig, WaterfallConfig,

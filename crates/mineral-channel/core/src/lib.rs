@@ -12,6 +12,8 @@ pub mod page;
 pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
 pub use error::{Error, Result};
 pub use page::{Page, PageResult};
+mod playlist;
+pub use playlist::{PlaylistDetail, PlaylistLoad};
 use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
@@ -68,11 +70,15 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
-    /// 拉取一个歌单的完整详情:元信息(名/简介/封面/计数)+ membership relation(`entries`)。
+    /// 按加载意图获取歌单；预览可返回首批，完整加载须检查所有曲目。
     ///
-    /// 同 [`Self::album_detail`] —— 返回完整实体而非裸曲目;只要曲目的调用方从
-    /// `.entries` 投影 `.song`。
-    async fn playlist_detail(&self, _id: &PlaylistId) -> Result<Playlist> {
+    /// channel 决定远端批次和缓存策略，并显式报告完整性。完整加载请求失败时返回
+    /// 错误，不能把旧缓存或首批伪装成完整结果。
+    async fn playlist_detail(
+        &self,
+        _id: &PlaylistId,
+        _load: PlaylistLoad,
+    ) -> Result<PlaylistDetail> {
         Err(Error::NotSupported)
     }
     /// 拉取艺人详情(可选)。

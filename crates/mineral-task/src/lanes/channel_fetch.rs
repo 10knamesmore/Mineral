@@ -189,6 +189,12 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     if outcome != TaskOutcome::Ok {
         match &kind {
+            ChannelFetchKind::PlaylistDetail { id, load } => {
+                event_tx.lock().push(TaskEvent::PlaylistDetailFailed {
+                    id: id.clone(),
+                    load: *load,
+                })
+            }
             ChannelFetchKind::Search {
                 source,
                 kind,
@@ -248,26 +254,29 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::PlaylistDetail { id } => match channel.playlist_detail(id).await {
-            Ok(playlist) => {
-                event_tx.lock().push(TaskEvent::PlaylistDetailFetched {
-                    id: id.clone(),
-                    playlist: Box::new(playlist),
-                });
-                TaskOutcome::Ok
+        ChannelFetchKind::PlaylistDetail { id, load } => {
+            match channel.playlist_detail(id, *load).await {
+                Ok(detail) => {
+                    event_tx.lock().push(TaskEvent::PlaylistDetailFetched {
+                        id: id.clone(),
+                        load: *load,
+                        detail: Box::new(detail),
+                    });
+                    TaskOutcome::Ok
+                }
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        source = ?id.namespace(),
+                        op = "playlist_detail",
+                        playlist_id = id.as_str(),
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
+                    );
+                    TaskOutcome::Failed
+                }
             }
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "channel_fetch",
-                    source = ?id.namespace(),
-                    op = "playlist_detail",
-                    playlist_id = id.as_str(),
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
-                );
-                TaskOutcome::Failed
-            }
-        },
+        }
         ChannelFetchKind::Lyrics { song_id } => match channel.lyrics(song_id).await {
             Ok(lyrics) => {
                 event_tx.lock().push(TaskEvent::LyricsReady {

@@ -44,6 +44,7 @@ serde_path_to_error = { workspace = true }
 
 # 工具
 async-trait = { workspace = true }
+futures-util = { workspace = true }
 once_cell   = { workspace = true }
 rand        = { workspace = true }
 color-eyre  = { workspace = true }
@@ -57,6 +58,7 @@ clap   = { workspace = true }
 qrcode = { workspace = true }
 
 [dev-dependencies]
+mineral-config = { workspace = true }
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对
 openssl      = { workspace = true }
 tempfile     = "3"

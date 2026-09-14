@@ -42,7 +42,7 @@ pub mod credential;
 pub mod crypto;
 pub mod device;
 mod error;
-mod playlist_cache;
+mod playlist;
 pub mod transport;
 pub mod wire;
 

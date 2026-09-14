@@ -48,13 +48,25 @@ pub enum TaskEvent {
         ids: FxHashSet<SongId>,
     },
 
-    /// `PlaylistDetail` 任务成功:歌单完整详情(元信息 + 曲目)已到。
+    /// 歌单首批、续页或完整加载已到；消费者必须检查结果的完整性。
     PlaylistDetailFetched {
         /// 歌单 id。
         id: PlaylistId,
 
-        /// 完整歌单(含曲目)。
-        playlist: Box<Playlist>,
+        /// 本次请求的加载意图。
+        load: mineral_channel_core::PlaylistLoad,
+
+        /// 元信息、曲目及完整性。
+        detail: Box<mineral_channel_core::PlaylistDetail>,
+    },
+
+    /// 歌单请求失败或取消；保留已展示的曲目，释放对应在途状态。
+    PlaylistDetailFailed {
+        /// 目标歌单。
+        id: PlaylistId,
+
+        /// 失败请求的加载意图。
+        load: mineral_channel_core::PlaylistLoad,
     },
 
     /// `Lyrics` 任务成功:歌词数据就绪。

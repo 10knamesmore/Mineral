@@ -58,6 +58,14 @@ use tokio_util::sync::CancellationToken;
 /// example 用的基线参数(无配置语境,写死;生产默认见 mineral-config 的 default.lua)。
 fn netease_config() -> NeteaseConfig {
     NeteaseConfig::builder()
+        .playlist_fetch({
+            let defaults = mineral_config::Config::defaults().expect("valid default config");
+            let fetch = defaults.sources().netease().playlist_fetch();
+            mineral_channel_netease::config::PlaylistFetchConfig::builder()
+                .batch_size(*fetch.batch_size())
+                .max_concurrent(*fetch.max_concurrent())
+                .build()
+        })
         .max_connections(0)
         .proxy(None)
         .timeout_secs(100)
@@ -333,7 +341,10 @@ async fn main() -> color_eyre::Result<()> {
 
             if let Some(p) = first_playlist {
                 let r = run("playlist_detail (我喜欢)", async {
-                    let v = ch.playlist_detail(&p.id).await?;
+                    let v = ch
+                        .playlist_detail(&p.id, mineral_channel_core::PlaylistLoad::Complete)
+                        .await?
+                        .playlist;
                     Ok(format!("{} tracks", v.entries.len()))
                 })
                 .await;

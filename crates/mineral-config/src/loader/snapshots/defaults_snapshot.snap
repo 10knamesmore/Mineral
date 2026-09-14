@@ -1012,6 +1012,10 @@ Config {
                     },
                 ),
             ),
+            playlist_fetch: PlaylistFetchSection {
+                batch_size: 500,
+                max_concurrent: 3,
+            },
         },
         bilibili: BilibiliSection {
             timeout_secs: 100,

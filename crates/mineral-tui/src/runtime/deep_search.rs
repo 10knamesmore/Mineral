@@ -171,7 +171,7 @@ fn build(
     for (pid, tracks) in &library.tracks {
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
-        for sv in tracks {
+        for sv in &tracks.entries {
             let Some(hit) = score_song(search, &sv.data.song, weights) else {
                 continue;
             };
@@ -335,7 +335,14 @@ mod tests {
     /// 把裸 Song 列表包成 PlaylistEntryView 塞进某歌单的 library.tracks 并 bump 版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
         let views = entry_views(tracks);
-        s.library.tracks.insert(id.clone(), views);
+        s.library.tracks.insert(
+            id.clone(),
+            crate::runtime::state::PlaylistTracks {
+                entries: views,
+                complete: true,
+                next_offset: None,
+            },
+        );
         s.library.tracks_generation = s.library.tracks_generation.wrapping_add(1);
     }
 

@@ -4,6 +4,7 @@
 //! 不用 `#[serde(untagged)]`(避免其错误路径含糊)。
 
 use mineral_config_macros::{config_section, source_section};
+use std::num::NonZeroUsize;
 
 use crate::schema::theme::ColorRef;
 
@@ -100,7 +101,22 @@ pub struct BilibiliSection {}
     "mineral.CuratePlaylistsFn",
     "该源歌单列表的呈现策展(过滤/改名/重排)"
 )]
-pub struct NeteaseSection {}
+pub struct NeteaseSection {
+    /// 歌单曲目按需加载时的网易请求参数。
+    playlist_fetch: PlaylistFetchSection,
+}
+
+/// 网易歌单曲目的请求批次；浏览续页和整张加载的触发时机由调用方决定。
+#[config_section]
+pub struct PlaylistFetchSection {
+    /// 浏览歌单时每批覆盖的 ID 数量，也是单次歌曲详情请求的上限；须大于零。
+    #[lua_type("integer")]
+    batch_size: NonZeroUsize,
+
+    /// 同一歌单内并发的歌曲详情请求数；须大于零。
+    #[lua_type("integer")]
+    max_concurrent: NonZeroUsize,
+}
 
 /// 反序列化代理设置:Lua `false` → `None`(禁用);字符串 → `Some(url)`。
 /// `true` 等其他形态报错(经 `serde_path_to_error` 带路径)。
@@ -155,6 +171,17 @@ impl serde::de::Visitor<'_> for ProxyVisitor {
 mod tests {
     use super::NeteaseSection;
 
+    /// 两个批次参数必须为正数，避免空批次或永远无法开始的请求。
+    #[test]
+    fn playlist_fetch_rejects_zero_limits() {
+        for value in [
+            serde_json::json!({"batch_size": 0, "max_concurrent": 3}),
+            serde_json::json!({"batch_size": 500, "max_concurrent": 0}),
+        ] {
+            assert!(serde_json::from_value::<super::PlaylistFetchSection>(value).is_err());
+        }
+    }
+
     /// 默认配置含 mineral 聚合源段(唯一旋钮 color),`source_colors` 出其条目
     /// (TUI 徽标据此着色,缺了就退中立兜底色)。
     #[test]
@@ -173,6 +200,7 @@ mod tests {
     #[test]
     fn proxy_false_is_none() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
+            "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
             "timeout_secs": 100_u64, "proxy": false, "max_connections": 0_u64, "color": "red",
         }))?;
         assert_eq!(*s.proxy(), None);
@@ -182,6 +210,7 @@ mod tests {
     #[test]
     fn proxy_string_is_some() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
+            "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
             "timeout_secs": 100_u64, "proxy": "socks5://127.0.0.1:1080", "max_connections": 0_u64, "color": "red",
         }))?;
         assert_eq!(s.proxy().as_deref(), Some("socks5://127.0.0.1:1080"));
@@ -192,7 +221,8 @@ mod tests {
     fn proxy_true_errors() {
         assert!(
             serde_json::from_value::<NeteaseSection>(serde_json::json!({
-                "timeout_secs": 100_u64, "proxy": true, "max_connections": 0_u64, "color": "red",
+                "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
+            "timeout_secs": 100_u64, "proxy": true, "max_connections": 0_u64, "color": "red",
             }))
             .is_err(),
             "proxy = true 应报错"

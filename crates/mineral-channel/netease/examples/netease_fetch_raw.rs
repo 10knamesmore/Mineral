@@ -147,6 +147,14 @@ async fn main() -> Result<()> {
 /// 用已存登录态构造 channel;未登录则匿名(仅公开端点可用)。
 fn build_channel() -> Result<NeteaseChannel> {
     let cfg = NeteaseConfig::builder()
+        .playlist_fetch({
+            let defaults = mineral_config::Config::defaults().expect("valid default config");
+            let fetch = defaults.sources().netease().playlist_fetch();
+            mineral_channel_netease::config::PlaylistFetchConfig::builder()
+                .batch_size(*fetch.batch_size())
+                .max_concurrent(*fetch.max_concurrent())
+                .build()
+        })
         .max_connections(0)
         .proxy(None)
         .timeout_secs(100)

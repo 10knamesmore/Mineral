@@ -670,12 +670,15 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     resolve_err(&player, query, &e);
                     return;
                 };
-                match channel.playlist_detail(&playlist).await {
+                match channel
+                    .playlist_detail(&playlist, mineral_channel_core::PlaylistLoad::Complete)
+                    .await
+                {
                     Ok(playlist) => {
                         resolve_ok(
                             &player,
                             query,
-                            ResolveValue::PlaylistEntries(playlist.entries),
+                            ResolveValue::PlaylistEntries(playlist.playlist.entries),
                         );
                     }
                     Err(e) => {

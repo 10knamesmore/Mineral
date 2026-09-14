@@ -165,8 +165,9 @@ impl BrowsePage {
             .iter()
             .map(|p| &p.data.id)
             .filter(|id| {
-                !model.library.tracks.contains_key(*id)
-                    && !model.library.tracks_requested.contains(*id)
+                model
+                    .library
+                    .needs_playlist(id, mineral_channel_core::PlaylistLoad::Complete, true)
             })
             .cloned()
             .collect()
@@ -277,7 +278,12 @@ impl BrowsePage {
                     {
                         // 记忆恢复:深度命中优先(显式搜索意图压过历史位置),走到这里说明无命中。
                         // 曲目还没拉到时挂 pending,等 `PlaylistDetailFetched` 补落位。
-                        if let Some(tracks) = model.library.tracks.get(&target_id) {
+                        if let Some(tracks) =
+                            model.library.tracks.get(&target_id).filter(|tracks| {
+                                tracks.complete
+                                    || tracks.iter().any(|entry| entry.data.song.id == pos.song_id)
+                            })
+                        {
                             sel_track = pos.resolve(tracks);
                             // 恢复屏上相对位置:该行回到离开时的视口行,而非统一顶到 scrolloff 位。
                             screen_anchor = Some(pos.screen_row);
@@ -437,10 +443,15 @@ impl App {
                         Priority::Background
                     };
                     self.client.submit_task(
-                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
+                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
+                            id: id.clone(),
+                            load: mineral_channel_core::PlaylistLoad::Complete,
+                        }),
                         priority,
                     );
-                    self.state.library.tracks_requested.insert(id);
+                    self.state
+                        .library
+                        .request_playlist(id, mineral_channel_core::PlaylistLoad::Complete);
                 }
             }
             BrowseEffect::Dispatch(action) => self.dispatch(action),
@@ -868,7 +879,14 @@ mod tests {
             .map(|name| with_name(song(name), name))
             .collect();
         let views = entry_views(songs);
-        app.state.library.tracks.insert(pid, views);
+        app.state.library.tracks.insert(
+            pid,
+            crate::runtime::state::PlaylistTracks {
+                entries: views,
+                complete: true,
+                next_offset: None,
+            },
+        );
         app.state.library.tracks_generation = 1;
 
         press(&mut app, KeyCode::Char('/'));
@@ -917,7 +935,14 @@ mod tests {
             .map(|name| with_name(song(name), name))
             .collect();
         let views = entry_views(songs);
-        app.state.library.tracks.insert(pid, views);
+        app.state.library.tracks.insert(
+            pid,
+            crate::runtime::state::PlaylistTracks {
+                entries: views,
+                complete: true,
+                next_offset: None,
+            },
+        );
         app.state.library.tracks_generation = 1;
 
         press(&mut app, KeyCode::Char('/'));
@@ -980,6 +1005,30 @@ mod tests {
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
         assert_eq!(tasks.len(), 3, "Library 视图进搜索态不应提交补拉");
+        Ok(())
+    }
+
+    /// 已有首批的歌单仍须加入深度搜索的完整加载范围。
+    #[test]
+    fn deep_search_upgrades_cached_previews() -> color_eyre::Result<()> {
+        let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
+        let id = PlaylistId::new(SourceKind::NETEASE, "p1");
+        app.state.library.tracks.insert(
+            id.clone(),
+            crate::runtime::state::PlaylistTracks {
+                entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
+                complete: false,
+                next_offset: None,
+            },
+        );
+        app.state
+            .library
+            .request_playlist(id.clone(), mineral_channel_core::PlaylistLoad::Preview);
+        press(&mut app, KeyCode::Char('/'));
+        let tasks = submitted
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        assert!(tasks.iter().any(|kind| matches!(kind, mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail { id: requested, load: mineral_channel_core::PlaylistLoad::Complete }) if requested == &id)));
         Ok(())
     }
 
@@ -1130,7 +1179,14 @@ mod tests {
             .map(|name| with_name(song(name), name))
             .collect();
         let views = entry_views(songs);
-        app.state.library.tracks.insert(pid.clone(), views);
+        app.state.library.tracks.insert(
+            pid.clone(),
+            crate::runtime::state::PlaylistTracks {
+                entries: views,
+                complete: true,
+                next_offset: None,
+            },
+        );
         app.state.library.tracks_generation = 1;
         app.state.browse.nav.track_pos.insert(
             pid,

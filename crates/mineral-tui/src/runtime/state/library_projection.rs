@@ -10,7 +10,7 @@ impl AppState {
     /// 曲目到达时兑现挂起的位置恢复(进歌单时曲目还没拉到的延迟落位)。
     ///
     /// 仅当用户仍停在该歌单的 Library 视图、且光标未被动过(还在进入时的第 0 行)
-    /// 才落位——不抢用户操作;无论是否落位,匹配歌单的 pending 都就此消费。
+    /// 才落位——不抢用户操作；目标曲目尚未加载时保留 pending。
     ///
     /// # Params:
     ///   - `id`: 刚落 cache 的歌单
@@ -37,6 +37,14 @@ impl AppState {
         let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
             return;
         };
+        if !tracks.complete
+            && !tracks
+                .iter()
+                .any(|entry| entry.data.song.id == pending.pos.song_id)
+        {
+            self.browse.nav.pending_track_restore = Some(pending);
+            return;
+        }
         let sel = pending.pos.resolve(tracks);
         // 与 activate 的即时恢复同语义:光标落位 + 按屏上相对行瞬时还原视口。
         self.browse.nav.track.place(sel, pending.pos.screen_row);
@@ -77,7 +85,7 @@ impl AppState {
     pub(crate) fn clear_local_play_counts(&mut self) {
         self.library.local_play_counts.clear();
         for tracks in self.library.tracks.values_mut() {
-            for entry in tracks {
+            for entry in &mut tracks.entries {
                 entry.plays = None;
             }
         }
@@ -114,7 +122,10 @@ impl AppState {
         self.library.tracks = cache
             .into_iter()
             .map(|(pid, tracks)| {
-                let next: Vec<PlaylistEntryView> = tracks
+                let complete = tracks.complete;
+                let next_offset = tracks.next_offset;
+                let next = tracks
+                    .entries
                     .into_iter()
                     .map(|sv| {
                         if sv.data.song.source() == source {
@@ -124,7 +135,14 @@ impl AppState {
                         }
                     })
                     .collect();
-                (pid, next)
+                (
+                    pid,
+                    super::PlaylistTracks {
+                        entries: next,
+                        complete,
+                        next_offset,
+                    },
+                )
             })
             .collect();
     }
@@ -358,7 +376,11 @@ mod tests {
                 .entries(mineral_model::PlaylistEntry::enumerate(tracks))
                 .build(),
         );
-        s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
+        s.apply(&TaskEvent::PlaylistDetailFetched {
+            id: pid,
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
+        });
         assert_eq!(s.browse.nav.track.sel(), 2, "曲目到达后应补落位到记忆行");
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
@@ -403,7 +425,11 @@ mod tests {
                 .entries(mineral_model::PlaylistEntry::enumerate(tracks))
                 .build(),
         );
-        s.apply(&TaskEvent::PlaylistDetailFetched { id: pid, playlist });
+        s.apply(&TaskEvent::PlaylistDetailFetched {
+            id: pid,
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
+        });
         assert_eq!(s.browse.nav.track.sel(), 1, "用户已动光标,不得抢落位");
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
@@ -451,7 +477,8 @@ mod tests {
         );
         s.apply(&TaskEvent::PlaylistDetailFetched {
             id: other,
-            playlist,
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
         assert_eq!(s.browse.nav.track.sel(), 0);
         assert!(

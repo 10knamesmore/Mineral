@@ -97,7 +97,7 @@ return {
       scrolloff = 3, -- 光标与列表视口上下边缘的最小行距(nvim 'scrolloff');0 = 贴边才滚
       line_scroll_rows = 1, -- 单行档滚动(<C-d>/<C-u>)一次滚的行数;列表与全屏歌词共用
       page_scroll_rows = 15, -- 翻页档滚动(<C-f>/<C-b>)一次滚的行数
-      search_prefetch_rows = 8, -- 搜索结果及艺人专辑列表的分页预取半径:尚有更多且光标距已加载末行 ≤ 此行数时拉下一页
+      search_prefetch_rows = 8, -- 搜索结果、艺人专辑和歌单曲目的分页预取半径:尚有更多且光标距已加载末行 ≤ 此行数时拉下一页
       kill_spawned_daemon_on_exit = true, -- 退出 TUI 连带关掉自己拉起的 daemon;false = 续命后台播放
       remember_track_pos = "session", -- 歌单内光标位置记忆:"off" 不记 | "session" 本次运行内 | "persist" 跨重启落盘
       filter_play_scope = "collection", -- 过滤态起播:"collection" 播完整歌单 | "matches" 只播过滤结果
@@ -417,6 +417,10 @@ return {
       },
     },
     netease = {
+      playlist_fetch = {
+        batch_size = 500, -- 浏览歌单每批的范围及单次歌曲详情请求的 ID 上限
+        max_concurrent = 3, -- 一个歌单内同时进行的歌曲详情请求数
+      },
       timeout_secs = 100, -- 单次 API 请求超时,秒
       proxy = false, -- false = 禁用;字符串 = 代理 URL(如 "socks5://127.0.0.1:1080")
       max_connections = 0, -- 到源的最大并发连接,0 = 不限

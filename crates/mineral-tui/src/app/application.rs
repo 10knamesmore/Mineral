@@ -110,6 +110,9 @@ pub struct App {
     /// 取载荷入队并清除(入队走 client,故意图落 App 而非 state)。同 key 后发覆盖、切走不命中即丢。
     pub(crate) pending_container: FxHashMap<String, PlayMode>,
 
+    /// 首批可见时发起的起播意图；完整曲目到货后保留原始位置和过滤词兑现。
+    pub(crate) pending_playlist_play: Option<crate::player_actions::PendingPlaylistPlay>,
+
     /// 终端窗口标题管理器（任务栏 / tab 标题）。
     pub(crate) window_title: WindowTitle,
 }
@@ -189,6 +192,7 @@ impl App {
             last_terminal_report: None,
             clipboard: None,
             pending_container: FxHashMap::default(),
+            pending_playlist_play: None,
             window_title,
         }
     }

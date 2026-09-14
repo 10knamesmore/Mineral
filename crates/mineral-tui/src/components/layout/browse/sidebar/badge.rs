@@ -44,17 +44,12 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
     spans
 }
 
-/// 深度索引在飞的歌单数:Playlists 视图 + deep 开启 + PlaylistDetail 任务计数 > 0。
+/// 深度索引中正在补齐的歌单数；首批预览不重复计数。
 /// 不在此状态返回 `None`(badge 不缀)。搜不到时用户据此区分「真没有」和「还没拉完」。
 pub fn indexing_count(state: &AppState) -> Option<usize> {
     if state.browse.view != View::Playlists || !*state.cfg.tui().search().deep().enabled() {
         return None;
     }
-    let n = state
-        .tasks_snapshot
-        .by_kind
-        .get(&mineral_task::ChannelFetchKindTag::PlaylistDetail)
-        .copied()
-        .unwrap_or(0);
+    let n = state.library.completing_playlists();
     (n > 0).then_some(n)
 }

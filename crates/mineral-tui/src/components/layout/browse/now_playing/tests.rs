@@ -40,10 +40,14 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     let playlist_id = playlist.data.id.clone();
     let mut selected = with_name(song("selected"), "Track detail");
     selected.cover_url = Some(to.clone());
-    state
-        .library
-        .tracks
-        .insert(playlist_id, entry_views(vec![song("entry"), selected]));
+    state.library.tracks.insert(
+        playlist_id,
+        crate::runtime::state::PlaylistTracks {
+            entries: entry_views(vec![song("entry"), selected]),
+            complete: true,
+            next_offset: None,
+        },
+    );
     state.browse.nav.track.set_sel(1);
     state.browse.view.retempo(4);
     if cache_playlist {

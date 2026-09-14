@@ -460,6 +460,7 @@ async fn default_capacity_accepts_library_indexing_burst() -> color_eyre::Result
     for index in 0..377 {
         client.try_fire(Request::SubmitTask(
             mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail {
+                load: mineral_channel_core::PlaylistLoad::Complete,
                 id: mineral_model::PlaylistId::new(
                     mineral_model::SourceKind::NETEASE,
                     index.to_string(),
