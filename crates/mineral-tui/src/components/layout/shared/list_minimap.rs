@@ -35,7 +35,7 @@ pub(crate) struct MinimapCursor<'a> {
     /// 稳态实拍推进动画；离屏合成与形变帧只读采样。
     pub(crate) advancing: bool,
 
-    /// 光晕半径
+    /// 最小光晕半径（轨道行数），与条目平分范围取较大值。
     pub(crate) halo_rows: u64,
 
     /// 吸附区半径
@@ -93,8 +93,9 @@ struct RowMarkers {
 
 /// 把整份列表的位置与标记绘制到右边框的数据行上。
 ///
-/// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道：喜欢染红自己那一份
-/// 等分区间（相邻两项共用边界，连着的喜欢在轨道上连成一片）、光晕混色，左列只归光标。
+/// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道，按相邻条目的中点
+/// 划分 per-item 平分区间：喜欢标记染红条目所属区间，光晕按区间计算半径，并至少扩展
+/// 配置指定的行数；左列只归光标。
 /// 在播格显示 `◆`：没被吸住时保持主题绿；光标点进入 `tui.minimap.magnet_dots` 个点内
 /// 就被吸走——光标点不显示，`◆` 按 [`MagnetProgress`] 缓动淡向光标色，光晕同步淡出。
 /// 空列表保留淡色盲文轨道。
@@ -184,9 +185,10 @@ pub(crate) fn render_minimap(
         (position.saturating_sub(cell_center) / DOT_ROWS_PER_CELL)
             .min(row_span * u64::from(POSITION_SCALE))
     });
+    let halo = halo_position.zip(halo_radius(total, dot_span, halo_rows));
     for (y, markers) in (track.top()..track.bottom()).zip(rows) {
         let row = u64::from(y - track.top());
-        let strength = halo_position.map_or(0, |position| halo_strength(row, position, halo_rows));
+        let strength = halo.map_or(0, |(position, radius)| halo_strength(row, position, radius));
         // 吸住的光晕按同一进度淡出，离开吸附区时再淡回来。
         let glow = strength * (1000 - absorb) / 1000;
         let center = cursor_dot.filter(|dot| dot / DOT_ROWS_PER_CELL == row);
@@ -223,7 +225,7 @@ fn nearest_dot_row(position: u64) -> u64 {
     (position + u64::from(POSITION_SCALE) / 2) / u64::from(POSITION_SCALE)
 }
 
-/// 喜欢标记在轨道上覆盖的盲文点区间（闭区间）。
+/// 将条目的 per-item 平分区间投影为喜欢标记覆盖的盲文点区间（闭区间）。
 ///
 /// 第 `index` 项占它与前后邻居的中点之间那一份轨道，首末项贴住轨道两端；相邻两项因此
 /// 共用一条边界，连着的喜欢在轨道上首尾相接。
@@ -264,21 +266,36 @@ fn marker_dot(dot_row: u64) -> u8 {
     }
 }
 
-/// 按距离计算千分比光晕强度：中心满亮，向外按二次曲线衰减，到光晕半径处归零。
+/// 按 per-item 平分区间计算光晕半径：相邻条目间距的一半，单项覆盖整条轨道。
+///
+/// # Params:
+///   - `total`: 当前过滤视图的条目总数；空列表没有光晕。
+///   - `dot_span`: 轨道末点的序号。
+///   - `min_rows`: 最小半径（轨道行数）；至少一行以保持密集列表的光标可见。
+///
+/// # Return:
+///   以 `POSITION_SCALE` 为一行的半径，保留平分后的不足一行部分。
+fn halo_radius(total: usize, dot_span: u64, min_rows: u64) -> Option<u64> {
+    let item_radius = u64::from(boundary_position(1, total)?) * dot_span / DOT_ROWS_PER_CELL;
+    let min_radius = min_rows.max(1).saturating_mul(u64::from(POSITION_SCALE));
+    Some(item_radius.max(min_radius))
+}
+
+/// 按距离计算千分比光晕强度：中心满亮，向外按二次曲线先快后慢衰减，到半径处归零。
 ///
 /// # Params:
 ///   - `row`: 从轨道首行起算的整数行偏移。
 ///   - `position`: 光标的定点行位置，每行以 `POSITION_SCALE` 个单位表示。
-///   - `rows`: 光晕半径（轨道行数）；`0` 按一行算，光标自己那一格始终最亮。
+///   - `radius`: [`halo_radius`] 计算的正半径，与 `position` 使用同一单位。
 ///
 /// # Return:
 ///   `0..=1000` 的混色比例；保留小数行距离，使邻格颜色随光标连续变化。
-fn halo_strength(row: u64, position: u64, rows: u64) -> u64 {
-    let distance =
-        (row * u64::from(POSITION_SCALE)).abs_diff(position) * 1000 / u64::from(POSITION_SCALE);
-    let radius = rows.max(1) * 1000;
-    let remaining = radius.saturating_sub(distance);
-    remaining * remaining * 1000 / (radius * radius)
+fn halo_strength(row: u64, position: u64, radius: u64) -> u64 {
+    let distance = (row * u64::from(POSITION_SCALE)).abs_diff(position);
+    let fraction = (distance * 1000 / radius).min(1000);
+    // (1 - distance / radius)^2：中心附近下降较快，越靠近边缘收尾越柔和。
+    let remaining = 1000 - fraction;
+    remaining * remaining / 1000
 }
 
 /// 验证压缩标记、轨道边界和逐格颜色变化的渲染约定。
@@ -293,7 +310,7 @@ mod tests {
     use crate::runtime::scroll::position::POSITION_SCALE;
     use crate::test_support::default_theme;
 
-    /// 测试用的光晕半径（轨道行数）。
+    /// 测试用的最小光晕半径（轨道行数）。
     const HALO_ROWS: u64 = 5;
 
     /// 测试用的吸附区半径（盲文点）。
@@ -595,7 +612,7 @@ mod tests {
         Ok(())
     }
 
-    /// 两个几何旋钮真的驱动渲染：光晕半径决定溢出多远，吸附半径决定吸走范围。
+    /// 密集列表的光晕受最小半径控制，吸附半径决定吸走范围。
     #[test]
     fn minimap_geometry_follows_configuration() -> color_eyre::Result<()> {
         let mut theme = default_theme()?;
@@ -634,6 +651,63 @@ mod tests {
         assert_eq!(cell(&unabsorbed, 0, 5)?.symbol(), "⢹", "半径 0 留下光标点");
         let absorbed = render(HALO_ROWS, 2, 20);
         assert_eq!(cell(&absorbed, 0, 5)?.symbol(), "⢸", "半径 2 吸走光标点");
+        Ok(())
+    }
+
+    /// 喜欢标记与光晕共用 per-item 平分区间，随轨道高度和条目数变化；单项占满轨道。
+    #[test]
+    fn halo_and_loved_markers_share_per_item_partitions() -> color_eyre::Result<()> {
+        let mut theme = default_theme()?;
+        theme.surface1 = Color::Rgb(0, 0, 0);
+        theme.accent = Color::Rgb(240, 240, 240);
+        for (total, height) in [(3, 41), (3, 81), (9, 81), (1, 41)] {
+            let track = Rect::new(0, 0, 1, height);
+            for index in [0, total / 2, total - 1] {
+                let mut loved = Buffer::empty(track);
+                render_pinned(
+                    &mut loved,
+                    track,
+                    total,
+                    None,
+                    std::iter::once(MinimapEntry {
+                        index,
+                        loved: true,
+                        playing: false,
+                    }),
+                    &theme,
+                );
+                let mut halo = Buffer::empty(track);
+                render_pinned(
+                    &mut halo,
+                    track,
+                    total,
+                    crate::runtime::scroll::position::relative_position(index, total),
+                    std::iter::empty(),
+                    &theme,
+                );
+                let partition_start = loved.content.iter().position(|cell| cell.fg == theme.red);
+                let partition_end = loved.content.iter().rposition(|cell| cell.fg == theme.red);
+                let cursor_row = halo.content.iter().position(|cell| cell.symbol() != "⢸");
+                let (Some(start), Some(end), Some(center)) =
+                    (partition_start, partition_end, cursor_row)
+                else {
+                    color_eyre::eyre::bail!("非空列表必须显示条目区间和光标");
+                };
+                // 渐变尾部可能被 RGB 量化为底色；用区间内半段验证范围随条目数和高度扩展。
+                let inner_half = (start + center) / 2..=(end + center) / 2;
+                for y in 0..height {
+                    let fg = cell(&halo, 0, y)?.fg;
+                    if cell(&loved, 0, y)?.fg != theme.red {
+                        assert_eq!(fg, theme.surface1, "第 {y} 行在 per-item 区间外");
+                    } else if inner_half.contains(&usize::from(y)) {
+                        assert_ne!(
+                            fg, theme.surface1,
+                            "{height} 行轨道、{total} 项中的第 {index} 项：第 {y} 行在区间内半段"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -877,7 +951,7 @@ mod tests {
         Ok(())
     }
 
-    /// 光晕从中心向外二次衰减：光标前后四行逐行变暗，五行外恢复纯轨道色。
+    /// 光晕向外二次衰减，先快后慢、上下对称，并在半径边缘恢复纯轨道色。
     #[test]
     fn glow_spreads_wider_with_strict_falloff() -> color_eyre::Result<()> {
         let mut theme = default_theme()?;
@@ -904,11 +978,17 @@ mod tests {
         };
         assert_eq!(brightness(5)?, accent_red, "光标中心满亮");
         let mut previous = accent_red;
+        let mut previous_drop = None;
         for distance in 1..=4 {
             let below = brightness(5 + distance)?;
             let above = brightness(5 - distance)?;
             assert_eq!(below, above, "居中光标的光晕应上下对称");
             assert!(below < previous, "中心外第 {distance} 行应更暗");
+            let drop = previous - below;
+            if let Some(previous_drop) = previous_drop {
+                assert!(drop < previous_drop, "越靠近边缘，每行亮度下降越慢");
+            }
+            previous_drop = Some(drop);
             previous = below;
         }
         assert!(previous > 0, "光晕至少覆盖中心外四行");

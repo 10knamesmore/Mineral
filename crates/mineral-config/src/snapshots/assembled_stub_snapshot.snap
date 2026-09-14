@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-config/src/lua_stub.rs
-assertion_line: 358
 description: meta/config.lua 生成全文(preamble + aliases + 宏生成 class/alias)
 expression: "super::meta_config_lua()"
 ---
@@ -158,7 +157,7 @@ expression: "super::meta_config_lua()"
 ---@field search? mineral.SearchConfig 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
 ---@field lyrics? mineral.LyricsConfig 歌词段(行距 + 滚动手感)。
 ---@field animation? mineral.AnimationConfig 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
----@field minimap? mineral.MinimapConfig 列表 minimap 段(光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
+---@field minimap? mineral.MinimapConfig 列表 minimap 段(最小光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
 ---@field toast? mineral.ToastConfig toast 段(顶栏通知停留时长)。
 ---@field layout? mineral.LayoutConfig 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。
 ---@field copy? mineral.CopyConfig copy 段(复制菜单的自定义模板)。
@@ -548,7 +547,7 @@ expression: "super::meta_config_lua()"
 
 ---列表右边框 minimap 配置。
 ---@class mineral.MinimapConfig
----@field halo_rows? integer 光晕半径(轨道行数)
+---@field halo_rows? integer 最小光晕半径(轨道行数)
 ---@field magnet_dots? integer 吸附区半径
 
 ---toast 配置。

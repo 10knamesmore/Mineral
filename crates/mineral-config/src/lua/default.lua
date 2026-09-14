@@ -323,7 +323,7 @@ return {
     -- 列表右边框 minimap(整份列表的位置轨道)。光标移动与吸附过渡的时长见
     -- animation.minimap_cursor_ms。
     minimap = {
-      halo_rows = 5, -- 光晕半径(轨道行数):强调色向上下各淡出这么远;0/1 = 只亮光标那一格
+      halo_rows = 5, -- 最小光晕半径(轨道行数);0/1 至少保留一行
       magnet_dots = 2, -- 吸附区半径(盲文点):光标点离在播点这么近就被吸走;0 = 只有重合才算
     },
     toast = {

@@ -102,7 +102,7 @@ pub struct TuiConfig {
     /// 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
     animation: AnimationConfig,
 
-    /// 列表 minimap 段(光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
+    /// 列表 minimap 段(最小光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
     minimap: MinimapConfig,
 
     /// toast 段(顶栏通知停留时长)。
