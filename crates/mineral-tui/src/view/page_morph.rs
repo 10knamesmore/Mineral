@@ -58,7 +58,7 @@ pub(super) fn search(frame: &mut Frame<'_>, normal: &Areas, search: &Areas, app:
         transition::panel(frame, Some(&source), None, current, raw, &app.theme);
     }
     if let Some(cover) = cover {
-        flight::render(frame, &cover, eased, &app.state);
+        flight::render(frame, &cover, eased, &app.state, &app.theme);
     }
     persistent_transport(frame, areas.transport, app);
     if let Some(prompt) = areas.search_prompt {
@@ -131,7 +131,7 @@ pub(super) fn fullscreen(frame: &mut Frame<'_>, normal: &Areas, full: &Areas, ap
         lyrics.draw_panel(frame, &app.theme);
     }
     match cover {
-        Some(cover) => flight::render(frame, &cover, eased, &app.state),
+        Some(cover) => flight::render(frame, &cover, eased, &app.state, &app.theme),
         None => {
             if let Some(area) = areas.cover.and_then(nonempty) {
                 draw_fullscreen_cover(frame, area, full.cover, app);
