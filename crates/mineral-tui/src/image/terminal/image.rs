@@ -36,7 +36,7 @@ impl TerminalImage {
     ///   - `cells`: preview 对应的目标 cell 宽高
     ///
     /// # Return:
-    ///   halfblock preview 与 RGB 像素缓冲字节数
+    ///   halfblock preview 与 RGBA 像素缓冲字节数
     pub(crate) fn halfblock_preview(
         source: DynamicImage,
         pixels: PixelSize,
@@ -47,7 +47,7 @@ impl TerminalImage {
         (Self::Halfblocks(preview), bytes)
     }
 
-    /// 为行内封面采样无补边的等比小图,复用 preview 的 RGB 存储与预算。
+    /// 为行内封面采样无补边的等比小图,复用 preview 的 RGBA 存储与预算。
     pub(crate) fn thumbnail_preview(source: &DynamicImage, pixels: PixelSize) -> (Self, u64) {
         let preview = HalfblocksImage::thumbnail(source, pixels);
         let bytes = preview.resident_bytes();
@@ -111,7 +111,7 @@ impl TerminalImage {
     /// 复制已采样的低清像素供行内封面编码，其他协议成品不提供像素。
     pub(crate) fn halfblock_source(&self) -> Option<DynamicImage> {
         match self {
-            Self::Halfblocks(image) => Some(DynamicImage::ImageRgb8(image.pixels().clone())),
+            Self::Halfblocks(image) => Some(DynamicImage::ImageRgba8(image.pixels().clone())),
             _ => None,
         }
     }
@@ -124,14 +124,15 @@ impl TerminalImage {
         }
     }
 
-    /// 把成品 place 到 ratatui buffer。
-    pub(crate) fn render(&mut self, area: Rect, buffer: &mut Buffer) {
+    /// 把成品写入 buffer；返回须在 cell 出帧前发送的 Kitty 指令。
+    pub(crate) fn render(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
         match self {
-            Self::Kitty(image) => image.render(area, buffer),
+            Self::Kitty(image) => return image.render_inline(area, buffer),
             Self::Sixel(image) => image.render(area, buffer),
             Self::Iterm2(image) => image.render(area, buffer),
             Self::Halfblocks(image) => image.render(area, buffer),
         }
+        None
     }
 
     /// 返回该成品持有的像素或协议 payload 字节数；解码原图由独立缓存记账。

@@ -33,7 +33,7 @@ pub(super) struct PreviewResult {
     /// 可直接写入 ratatui buffer 的 halfblock preview。
     preview: TerminalImage,
 
-    /// preview RGB 像素缓冲常驻字节数。
+    /// preview RGBA 像素缓冲常驻字节数。
     resident: u64,
 
     /// 非 JPEG 源复用同次解码的显示图与色板;JPEG 的 preview 是低档位缩小解码,不带。

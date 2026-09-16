@@ -219,8 +219,8 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 ///
 /// 普通页面本无底色(逐格终端默认),进 / 退全屏时整屏刷成沉浸底会瞬跳;这里给普通页也
 /// 铺 `theme.background`(默认 = `base` = 氛围场在浓度 0 时的底色),两端连续。氛围场再叠
-/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变);全屏真图区两层都挖洞,防每帧
-/// 改图 cell 的 bg 触发图协议载荷 diff 重发。
+/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变)。Sixel / iTerm2 实际图区
+/// 避开背景重绘，防止首 cell 改色触发图协议载荷重发；其他区域保留动态背景。
 fn paint_backdrop(
     frame: &mut Frame<'_>,
     app: &App,
@@ -236,7 +236,7 @@ fn paint_backdrop(
 /// 本帧铺底 / 氛围都要挖的真图洞(防每帧改图 cell 的 bg 触发图协议载荷 diff 重发):
 ///   - 全屏稳态(`at_max`):全屏封面真图区(见 [`ambient_skip_rect`]);
 ///   - 退出残留期(几何已回列表 `at_min`、氛围仍在褪):now_playing 面板的真图封面区;
-///   - 其余(形变途中 halfblock 不透明覆盖 / 无氛围):无洞。
+///   - 其余(Kitty / halfblock / 形变途中):无洞。
 fn backdrop_skip(
     app: &App,
     area: Rect,
@@ -308,14 +308,10 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
     );
 }
 
-/// 本帧全屏封面确定会以终端图协议真图 place 时,其视觉正方区——ambient 不铺这个洞。
-///
-/// 图协议把整段载荷藏在图区首 cell 的 symbol 里:ambient 逐帧改那格 bg,diff 会每帧
-/// 重发载荷——iTerm2 / sixel(数据即显示、序列自带擦行)表现为整图持续闪烁。图不透明,
-/// 跳过零视觉损失。转场 / halfblock 兜底途中此区被不透明半块整面覆盖,跳过同样无害;
-/// 等图空窗 / 无轨待机盘则返回 `None` 照常铺场(那里没有不透明覆盖,挖洞会露出底色)。
+/// Sixel / iTerm2 的实际图片外框避开背景重绘，防止首 cell 改色导致重发载荷。
+/// Kitty 逐格保留背景；halfblock 和转场按透明度合成，这些路径都不挖洞。
 fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
-    if !app.state.browse.fullscreen.at_max() {
+    if !app.state.browse.fullscreen.at_max() || app.state.images.transition.is_some() {
         return None;
     }
     let track = app.state.playback.track.as_ref()?;
@@ -830,6 +826,8 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("前置：两端封面均已就绪"))?;
         let mut cover_only = Terminal::new(TestBackend::new(area.width, area.height))?;
         cover_only.draw(|frame| {
+            // 透明边缘与正文帧使用同一背景，仍逐格验证封面没有被后画的页面内容擦除。
+            super::paint_backdrop(frame, &app, &normal, cfg);
             crate::components::layout::flight::render(
                 frame,
                 &plan,

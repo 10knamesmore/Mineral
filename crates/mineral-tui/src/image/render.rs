@@ -6,21 +6,20 @@
 
 use std::sync::Arc;
 
-use image::{DynamicImage, Rgb, RgbImage};
+use image::{DynamicImage, Rgba, RgbaImage};
 use mineral_model::MediaUrl;
 use mineral_protocol::AdvanceKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
 
 use crate::image::encode::EncodeRequest;
 use crate::render::color::lerp_byte;
 
 use super::ImageEngine;
-use super::geometry::{square_cells, square_subarea};
+use super::geometry::{fitted_area, square_subarea};
 use super::graphics::GraphicsProtocol;
 use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
-use super::resize::resize_exact;
+use super::terminal::{render_pixels, sample_pixels};
 
 /// 双图合成方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +155,7 @@ impl ImageEngine {
             self.demand_decode(url);
             return;
         };
+        let target = fitted_area(target, &image, self.cell_pixels());
         self.prepare_image(ImageIdentity::Url(url.clone()), image, target);
     }
 
@@ -175,9 +175,20 @@ impl ImageEngine {
         self.cache.observe_visible(url);
     }
 
-    /// 返回 URL 图片已经可用的终端成品区域。
+    /// 返回需要避开背景重绘的协议覆盖区；Kitty 和 halfblock 保留逐格动态背景。
     pub(crate) fn ready_area(&self, url: &MediaUrl, area: Rect) -> Option<Rect> {
-        let target = square_subarea(area, self.cell_pixels());
+        if matches!(
+            self.graphics_protocol(),
+            GraphicsProtocol::Kitty | GraphicsProtocol::Halfblocks
+        ) {
+            return None;
+        }
+        let image = self.cache.get(url)?;
+        let target = fitted_area(
+            square_subarea(area, self.cell_pixels()),
+            image,
+            self.cell_pixels(),
+        );
         let key = self.terminal_key(ImageIdentity::Url(url.clone()), target);
         self.terminal_images.ready(&key).then_some(target)
     }
@@ -198,12 +209,7 @@ impl ImageEngine {
         if let Some(url) = url {
             self.cache.observe_visible(url);
         }
-        let target = match phase {
-            ImageRenderPhase::Offscreen => square_cells(area),
-            ImageRenderPhase::Stable | ImageRenderPhase::Scrolling | ImageRenderPhase::Resizing => {
-                square_subarea(area, self.cell_pixels())
-            }
-        };
+        let target = square_subarea(area, self.cell_pixels());
         if matches!(
             phase,
             ImageRenderPhase::Stable | ImageRenderPhase::Scrolling
@@ -218,27 +224,32 @@ impl ImageEngine {
         let Some((identity, image)) = self.resolve_display(url) else {
             if let Some(url) = url {
                 let key = self.preview_key(url, target);
-                let _ = self
-                    .preview_images
-                    .render_if_ready(&key, |preview| preview.render(target, buf));
+                let _ = self.preview_images.render_if_ready(&key, |preview| {
+                    let _ = preview.render(target, buf);
+                });
             }
             return;
         };
+        let target = fitted_area(target, &image, self.cell_pixels());
         if matches!(
             phase,
             ImageRenderPhase::Resizing | ImageRenderPhase::Offscreen
         ) {
-            render_halfblock_to(buf, target, &image);
+            render_halfblock_to(buf, target, &image, self.cell_pixels());
             return;
         }
         let key = self.terminal_key(identity.clone(), target);
         let rendered = self
             .terminal_images
-            .render_if_ready(&key, |terminal_image| terminal_image.render(target, buf));
+            .render_if_ready(&key, |terminal_image| {
+                if let Some(command) = terminal_image.render(target, buf) {
+                    self.graphics_commands.borrow_mut().push_str(&command);
+                }
+            });
         if rendered {
             return;
         }
-        render_halfblock_to(buf, target, &image);
+        render_halfblock_to(buf, target, &image, self.cell_pixels());
         if phase == ImageRenderPhase::Stable {
             self.prepare_image(identity, image, target);
         }
@@ -262,22 +273,22 @@ impl ImageEngine {
         };
         let target = match phase {
             ImageRenderPhase::Resizing => area,
-            ImageRenderPhase::Offscreen => square_cells(area),
-            ImageRenderPhase::Stable | ImageRenderPhase::Scrolling => {
-                square_subarea(area, self.cell_pixels())
-            }
+            ImageRenderPhase::Offscreen
+            | ImageRenderPhase::Stable
+            | ImageRenderPhase::Scrolling => square_subarea(area, self.cell_pixels()),
         };
         let composite = compose_transition(BlendFrame {
             from: from_image,
             to: to_image,
             px_w: u32::from(target.width),
             px_h: u32::from(target.height).saturating_mul(2),
+            cell_pixels: self.cell_pixels(),
             style: content.style,
             progress_permille: content.progress,
             advance: content.advance,
             zoom_scale_permille: permille_of_scale(self.transition_zoom_scale()),
         });
-        render_halfblock_to(buf, target, &DynamicImage::ImageRgb8(composite));
+        render_pixels(&composite, target, buf);
     }
 
     /// 返回已经解码的真实图片。
@@ -315,6 +326,9 @@ impl ImageEngine {
             return;
         }
         if self.encode_pending.borrow_mut().insert(key.clone()) {
+            mineral_log::debug!(target: "cover", source_width = image.width(), source_height = image.height(),
+                cells = ?(target.width, target.height), cell_pixels = ?self.cell_pixels(),
+                protocol = ?self.graphics_protocol(), "prepare fitted cover image");
             self.request_encode(EncodeRequest {
                 key,
                 generation: self.graphics_generation(),
@@ -340,6 +354,9 @@ struct BlendFrame<'a> {
     /// 输出像素网格高(cell 行数 × 2)。
     px_h: u32,
 
+    /// 终端 cell 的真实像素宽高，动画与协议图使用相同比例。
+    cell_pixels: (u16, u16),
+
     /// 合成方式。
     style: BlendStyle,
 
@@ -357,22 +374,27 @@ struct BlendFrame<'a> {
 ///
 /// # Params:
 ///   - `frame`: 一帧合成的完整像素级输入
-fn compose_transition(frame: BlendFrame<'_>) -> RgbImage {
+fn compose_transition(frame: BlendFrame<'_>) -> RgbaImage {
     let BlendFrame {
         from,
         to,
         px_w,
         px_h,
+        cell_pixels,
         style,
         progress_permille,
         advance,
         zoom_scale_permille,
     } = frame;
-    let old = resize_exact(from, px_w, px_h).into_rgb8();
-    let new = resize_exact(to, px_w, px_h).into_rgb8();
+    let cells = (
+        u16::try_from(px_w).unwrap_or(u16::MAX),
+        u16::try_from(px_h / 2).unwrap_or(u16::MAX),
+    );
+    let old = sample_pixels(from, cells, cell_pixels);
+    let new = sample_pixels(to, cells, cell_pixels);
     let p = u64::from(progress_permille.min(1000));
     match style {
-        BlendStyle::Slide => RgbImage::from_fn(px_w, px_h, |x, y| {
+        BlendStyle::Slide => RgbaImage::from_fn(px_w, px_h, |x, y| {
             let shift = u32::try_from(u64::from(px_w).saturating_mul(p) / 1000).unwrap_or(0);
             match advance {
                 Some(AdvanceKind::Prev) => {
@@ -396,24 +418,16 @@ fn compose_transition(frame: BlendFrame<'_>) -> RgbImage {
             // 旧图从静止尺寸出发、新图落定回静止尺寸,透明度随进度交叉。
             let (old_scale, new_scale) =
                 zoom_scales(advance, progress_permille, zoom_scale_permille);
-            RgbImage::from_fn(px_w, px_h, |x, y| {
-                let Rgb([old_r, old_g, old_b]) = sample_zoomed(&old, x, y, old_scale);
-                let Rgb([new_r, new_g, new_b]) = sample_zoomed(&new, x, y, new_scale);
-                Rgb([
-                    lerp_byte(old_r, new_r, p, 1000),
-                    lerp_byte(old_g, new_g, p, 1000),
-                    lerp_byte(old_b, new_b, p, 1000),
-                ])
+            RgbaImage::from_fn(px_w, px_h, |x, y| {
+                blend_pixel(
+                    sample_zoomed(&old, x, y, old_scale),
+                    sample_zoomed(&new, x, y, new_scale),
+                    p,
+                )
             })
         }
-        BlendStyle::Fade => RgbImage::from_fn(px_w, px_h, |x, y| {
-            let Rgb([old_r, old_g, old_b]) = pixel_at(&old, x, y);
-            let Rgb([new_r, new_g, new_b]) = pixel_at(&new, x, y);
-            Rgb([
-                lerp_byte(old_r, new_r, p, 1000),
-                lerp_byte(old_g, new_g, p, 1000),
-                lerp_byte(old_b, new_b, p, 1000),
-            ])
+        BlendStyle::Fade => RgbaImage::from_fn(px_w, px_h, |x, y| {
+            blend_pixel(pixel_at(&old, x, y), pixel_at(&new, x, y), p)
         }),
     }
 }
@@ -455,25 +469,46 @@ fn zoom_scales(
     }
 }
 
-/// 越界安全取像素(合成坐标域与图同构,黑色 fallback 仅兜类型穷尽)。
-fn pixel_at(img: &RgbImage, x: u32, y: u32) -> Rgb<u8> {
-    img.get_pixel_checked(x, y)
-        .copied()
-        .unwrap_or(Rgb([0, 0, 0]))
+/// 先按 alpha 加权再交叉渐变，避免图片与透明留白之间出现黑边。
+fn blend_pixel(old: Rgba<u8>, new: Rgba<u8>, progress: u64) -> Rgba<u8> {
+    let Rgba([old_r, old_g, old_b, old_a]) = old;
+    let Rgba([new_r, new_g, new_b, new_a]) = new;
+    let old_weight = u64::from(old_a) * (1000 - progress);
+    let new_weight = u64::from(new_a) * progress;
+    let weight = old_weight + new_weight;
+    if weight == 0 {
+        return Rgba([0, 0, 0, 0]);
+    }
+    let channel = |a: u8, b: u8| lerp_byte(a, b, new_weight, weight);
+    Rgba([
+        channel(old_r, new_r),
+        channel(old_g, new_g),
+        channel(old_b, new_b),
+        lerp_byte(old_a, new_a, progress, 1000),
+    ])
 }
 
-/// 以图心为原点按千分比缩放采样:输出坐标映射回源坐标 `c + (v - c)·1000 / scale`。
-/// `scale ≥ 1000` 时采样窗内收不出界;`scale < 1000`(上一首的 zoom 向远处退去)采样窗
-/// 越过图缘,出界处 clamp 到边缘像素。
-fn sample_zoomed(img: &RgbImage, x: u32, y: u32, scale_permille: u32) -> Rgb<u8> {
+/// 画布以外是透明背景，不复制边缘像素来填满空隙。
+fn pixel_at(img: &RgbaImage, x: u32, y: u32) -> Rgba<u8> {
+    img.get_pixel_checked(x, y)
+        .copied()
+        .unwrap_or(Rgba([0, 0, 0, 0]))
+}
+
+/// 以图心等比缩放；缩小后的画布外保留透明背景。
+fn sample_zoomed(img: &RgbaImage, x: u32, y: u32, scale_permille: u32) -> Rgba<u8> {
     let scale = i64::from(scale_permille.max(1));
-    let map = |v: u32, dim: u32| -> u32 {
-        let center = i64::from(dim).saturating_mul(500);
-        let v_permille = i64::from(v).saturating_mul(1000).saturating_add(500);
-        let src = center + (v_permille - center) * 1000 / scale;
-        u32::try_from((src / 1000).clamp(0, i64::from(dim.saturating_sub(1)))).unwrap_or(0)
+    let map = |v: u32, dim: u32| -> Option<u32> {
+        let center = i64::from(dim) * 500;
+        let src = center + (i64::from(v) * 1000 + 500 - center) * 1000 / scale;
+        (src >= 0 && src < i64::from(dim) * 1000)
+            .then(|| u32::try_from(src / 1000).ok())
+            .flatten()
     };
-    pixel_at(img, map(x, img.width()), map(y, img.height()))
+    match (map(x, img.width()), map(y, img.height())) {
+        (Some(x), Some(y)) => pixel_at(img, x, y),
+        _ => Rgba([0, 0, 0, 0]),
+    }
 }
 
 /// 缩放倍数 → 千分比定点(clamp 进转场缩放的合理域再转)。
@@ -482,41 +517,18 @@ fn permille_of_scale(scale: f32) -> u32 {
     (scale.clamp(1.0, 4.0) * 1000.0).round() as u32
 }
 
-/// 把已解码图片按 halfblock(`▀`)逐 cell 画进 `area`。
-///
-/// 正方区由调用方算好再传入)。每 cell:上半像素 → fg、下半像素 → bg;源图先采样
-/// 到 `area.width × area.height*2` 像素再逐 cell 采样。
-///
-/// 纯写终端 cell、不持有终端 image id 或协议缓冲，区域逐帧变化时可以安全重画。
-/// 降采样在渲染线程同步完成，优先使用 SIMD Triangle 核处理已解码图片。
-///
-/// # Params:
-///   - `buf`: 目标缓冲(屏上 / 离屏皆可)
-///   - `area`: 铺图区域(宽高任一为 0 直接返回)
-///   - `image`: 已解码封面原图
-pub(crate) fn render_halfblock_to(buf: &mut Buffer, area: Rect, image: &DynamicImage) {
-    if area.width == 0 || area.height == 0 {
+/// 按真实终端像素比例完整显示封面；透明留白与本帧背景合成。
+fn render_halfblock_to(
+    buf: &mut Buffer,
+    area: Rect,
+    image: &DynamicImage,
+    cell_pixels: (u16, u16),
+) {
+    if area.is_empty() {
         return;
     }
-    let px_w = u32::from(area.width);
-    let px_h = u32::from(area.height).saturating_mul(2);
-    let small = resize_exact(image, px_w, px_h).into_rgb8();
-    let sample = |x: u32, y: u32| -> Color {
-        small.get_pixel_checked(x, y).map_or(Color::Reset, |p| {
-            let Rgb([r, g, b]) = *p;
-            Color::Rgb(r, g, b)
-        })
-    };
-    for cy in 0..area.height {
-        let py = u32::from(cy).saturating_mul(2);
-        for cx in 0..area.width {
-            let px = u32::from(cx);
-            let style = Style::new()
-                .fg(sample(px, py))
-                .bg(sample(px, py.saturating_add(1)));
-            buf.set_string(area.x + cx, area.y + cy, "▀", style);
-        }
-    }
+    let pixels = sample_pixels(image, (area.width, area.height), cell_pixels);
+    render_pixels(&pixels, area, buf);
 }
 
 #[cfg(test)]
@@ -528,6 +540,229 @@ mod tests {
     use ratatui::style::Color;
 
     use super::render_halfblock_to;
+
+    /// 同一封面在 preview、动态 halfblock、缓存成品和全屏 fade 端点使用相同几何。
+    #[test]
+    fn cover_phases_keep_rectangular_images_and_background() -> color_eyre::Result<()> {
+        use crate::image::graphics::TerminalGraphics;
+        use crate::image::key::ImageIdentity;
+        use crate::image::terminal::TerminalImage;
+        use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
+        use mineral_model::MediaUrl;
+        use ratatui::style::Style;
+        use std::sync::Arc;
+        let url = MediaUrl::remote("https://example.com/wide-cover.png")?;
+        let other = MediaUrl::remote("https://example.com/other-cover.png")?;
+        for size in [(160, 80), (80, 160), (301, 199)] {
+            let mut engine = ImageEngine::disabled(Arc::new(mineral_config::Config::defaults()?));
+            let image = Arc::new(DynamicImage::ImageRgb8(RgbImage::from_pixel(
+                size.0,
+                size.1,
+                Rgb([220, 40, 60]),
+            )));
+            let area = Rect::new(2, 2, 32, 16);
+            let square = engine.square_area(area);
+            let target = super::fitted_area(square, &image, engine.cell_pixels());
+            let key = engine.terminal_key(ImageIdentity::Url(url.clone()), target);
+            let (preview, bytes) = TerminalImage::halfblock_preview(
+                (*image).clone(),
+                super::PixelSize::from_cells((square.width, square.height), engine.cell_pixels()),
+                (square.width, square.height),
+            );
+            engine
+                .preview_images
+                .insert(&engine.preview_key(&url, square), preview, bytes);
+            let base = || {
+                let mut b = Buffer::empty(Rect::new(0, 0, 40, 22));
+                b.set_style(b.area, Style::new().bg(Color::Rgb(10, 20, 100)));
+                b
+            };
+            let mut expected = base();
+            engine.render(
+                ImageContent::Display { url: Some(&url) },
+                area,
+                &mut expected,
+                ImageRenderPhase::Stable,
+            );
+            engine.cache.insert_test(&url, Arc::clone(&image));
+            engine.cache.insert_test(&other, Arc::clone(&image));
+            for phase in [
+                ImageRenderPhase::Stable,
+                ImageRenderPhase::Resizing,
+                ImageRenderPhase::Offscreen,
+            ] {
+                let mut actual = base();
+                engine.render(
+                    ImageContent::Display { url: Some(&url) },
+                    area,
+                    &mut actual,
+                    phase,
+                );
+                assert_eq!(
+                    actual, expected,
+                    "{size:?} {phase:?} cannot stretch or shift the image"
+                );
+            }
+            let encoded = TerminalImage::encode(
+                &image,
+                key.pixels(),
+                (target.width, target.height),
+                &TerminalGraphics::fixed(engine.cell_pixels()),
+            )?;
+            let bytes = encoded.resident_bytes();
+            engine.terminal_images.insert(&key, encoded, bytes);
+            let mut actual = base();
+            engine.render(
+                ImageContent::Display { url: Some(&url) },
+                area,
+                &mut actual,
+                ImageRenderPhase::Stable,
+            );
+            assert_eq!(
+                actual, expected,
+                "encoded halfblocks must preserve the same picture"
+            );
+            for progress in [0, 500, 1000] {
+                let mut actual = base();
+                engine.render(
+                    ImageContent::Blend {
+                        from: &url,
+                        to: &other,
+                        progress,
+                        style: super::BlendStyle::Fade,
+                        advance: None,
+                    },
+                    square,
+                    &mut actual,
+                    ImageRenderPhase::Resizing,
+                );
+                assert_eq!(
+                    actual, expected,
+                    "{size:?} fade {progress} cannot stretch the image"
+                );
+            }
+            let corner = expected
+                .cell((square.x, square.y))
+                .ok_or_else(|| eyre!("missing corner"))?;
+            assert_eq!(
+                corner.bg,
+                Color::Rgb(10, 20, 100),
+                "letterbox must show the current background"
+            );
+            assert_eq!(corner.symbol(), " ");
+        }
+        Ok(())
+    }
+
+    /// Kitty 图片已经就绪时，留白背景仍逐格更新，而且不再次传输或创建 placement。
+    #[test]
+    fn kitty_cover_background_updates_without_retransmission() -> color_eyre::Result<()> {
+        use crate::image::graphics::TerminalGraphics;
+        use crate::image::key::ImageIdentity;
+        use crate::image::terminal::TerminalImage;
+        use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
+        use mineral_model::MediaUrl;
+        use std::sync::Arc;
+        let mut engine = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
+        let url = MediaUrl::remote("https://example.com/kitty-wide.png")?;
+        let image = Arc::new(DynamicImage::ImageRgb8(RgbImage::from_pixel(
+            301,
+            199,
+            Rgb([220, 40, 60]),
+        )));
+        engine.cache.insert_test(&url, Arc::clone(&image));
+        let area = Rect::new(2, 2, 32, 16);
+        let target = super::fitted_area(area, &image, engine.cell_pixels());
+        let encoded = TerminalImage::encode(
+            &image,
+            None,
+            (target.width, target.height),
+            &TerminalGraphics::fixed_kitty(engine.cell_pixels()),
+        )?;
+        let bytes = encoded.resident_bytes();
+        engine.terminal_images.insert(
+            &engine.terminal_key(ImageIdentity::Url(url.clone()), target),
+            encoded,
+            bytes,
+        );
+        assert_eq!(
+            engine.ready_area(&url, area),
+            None,
+            "Kitty cannot exclude the cover frame from ambient rendering"
+        );
+        let mut previous = Buffer::empty(area);
+        for step in [0_u8, 1] {
+            let mut buffer = Buffer::empty(area);
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buffer
+                        .cell_mut((x, y))
+                        .ok_or_else(|| eyre!("missing cell"))?
+                        .set_bg(Color::Rgb(u8::try_from(x)?, u8::try_from(y)?, step * 100));
+                }
+            }
+            engine.render(
+                ImageContent::Display { url: Some(&url) },
+                area,
+                &mut buffer,
+                ImageRenderPhase::Stable,
+            );
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    let cell = buffer.cell((x, y)).ok_or_else(|| eyre!("missing cell"))?;
+                    assert!(!cell.skip);
+                    assert!(!cell.symbol().contains('\x1b'));
+                    assert_eq!(
+                        cell.bg,
+                        Color::Rgb(u8::try_from(x)?, u8::try_from(y)?, step * 100)
+                    );
+                }
+            }
+            if step == 0 {
+                let commands = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
+                assert!(commands.contains("a=t"));
+                assert!(commands.contains("a=p"));
+            } else {
+                assert!(engine.graphics_commands.borrow().is_empty());
+                assert_eq!(
+                    previous.diff(&buffer).len(),
+                    usize::from(area.width) * usize::from(area.height)
+                );
+            }
+            previous = buffer;
+        }
+        Ok(())
+    }
+
+    /// 横图和竖图交叉渐变时，只有一张图覆盖的位置仍保持原色并逐渐变透明。
+    #[test]
+    fn rectangular_crossfade_does_not_mix_transparent_padding_with_black() -> color_eyre::Result<()>
+    {
+        let wide = DynamicImage::ImageRgb8(RgbImage::from_pixel(160, 80, Rgb([200, 0, 0])));
+        let tall = DynamicImage::ImageRgb8(RgbImage::from_pixel(80, 160, Rgb([0, 0, 200])));
+        let output = compose_transition(BlendFrame {
+            px_w: 32,
+            px_h: 32,
+            ..frame(&wide, &tall)
+        });
+        assert_eq!(
+            output.get_pixel_checked(0, 0),
+            Some(&image::Rgba([0, 0, 0, 0]))
+        );
+        assert_eq!(
+            output.get_pixel_checked(2, 16),
+            Some(&image::Rgba([200, 0, 0, 127]))
+        );
+        assert_eq!(
+            output.get_pixel_checked(16, 2),
+            Some(&image::Rgba([0, 0, 200, 127]))
+        );
+        assert_eq!(
+            output.get_pixel_checked(16, 16),
+            Some(&image::Rgba([100, 0, 100, 255]))
+        );
+        Ok(())
+    }
 
     /// 纯色图降采样:每个 cell 都是 `▀`,fg/bg 同为该色 —— 均匀图无边缘,Triangle 重采样不改色,
     /// 故期望色可精确断言。
@@ -541,7 +776,7 @@ mod tests {
         let area = Rect::new(0, 0, 4, 2);
         let mut buf = Buffer::empty(area);
 
-        render_halfblock_to(&mut buf, area, &image);
+        render_halfblock_to(&mut buf, area, &image, (8, 16));
 
         for y in 0..2u16 {
             for x in 0..4u16 {
@@ -565,7 +800,7 @@ mod tests {
     }
 
     use super::{BlendFrame, BlendStyle, compose_transition};
-    use image::Rgb as PxRgb;
+    use image::{Rgb as PxRgb, Rgba as PxRgba, RgbaImage};
     use mineral_protocol::AdvanceKind;
 
     /// 造一张纯色图。
@@ -603,6 +838,7 @@ mod tests {
             to,
             px_w: 8,
             px_h: 8,
+            cell_pixels: (8, 16),
             style: BlendStyle::Fade,
             progress_permille: 500,
             advance: None,
@@ -615,7 +851,7 @@ mod tests {
     fn compose_fade_midpoint_is_average() -> color_eyre::Result<()> {
         let out = compose_transition(frame(&solid(200, 0, 0), &solid(0, 0, 200)));
         for p in out.pixels() {
-            assert_eq!(*p, PxRgb([100, 0, 100]), "中点应为两图均值");
+            assert_eq!(*p, PxRgba([100, 0, 100, 255]), "中点应为两图均值");
         }
         Ok(())
     }
@@ -626,16 +862,17 @@ mod tests {
         let out = compose_transition(BlendFrame {
             style: BlendStyle::Slide,
             px_h: 4,
+            cell_pixels: (8, 32),
             ..frame(&solid(200, 0, 0), &solid(0, 0, 200))
         });
         assert_eq!(
             out.get_pixel_checked(0, 0).copied(),
-            Some(PxRgb([200, 0, 0])),
+            Some(PxRgba([200, 0, 0, 255])),
             "左缘应仍是旧图"
         );
         assert_eq!(
             out.get_pixel_checked(7, 0).copied(),
-            Some(PxRgb([0, 0, 200])),
+            Some(PxRgba([0, 0, 200, 255])),
             "右缘应是推入的新图"
         );
         Ok(())
@@ -652,11 +889,12 @@ mod tests {
             compose_transition(BlendFrame {
                 style: BlendStyle::Slide,
                 px_h: 4,
+                cell_pixels: (8, 32),
                 advance,
                 ..frame(&from, &to)
             })
         };
-        let pixel = |out: &RgbImage, x: u32| out.get_pixel_checked(x, 0).copied();
+        let pixel = |out: &RgbaImage, x: u32| out.get_pixel_checked(x, 0).copied();
 
         for forward in [
             Some(AdvanceKind::Next),
@@ -666,12 +904,12 @@ mod tests {
             let out = compose(forward);
             assert_eq!(
                 pixel(&out, 1),
-                Some(PxRgb([0, 200, 0])),
+                Some(PxRgba([0, 200, 0, 255])),
                 "正向({forward:?}):左半应是旧图的右半(它正向左退场)"
             );
             assert_eq!(
                 pixel(&out, 5),
-                Some(PxRgb([0, 0, 200])),
+                Some(PxRgba([0, 0, 200, 255])),
                 "正向({forward:?}):右半应是新图的左半(它从右缘推入)"
             );
         }
@@ -679,12 +917,12 @@ mod tests {
         let backward = compose(Some(AdvanceKind::Prev));
         assert_eq!(
             pixel(&backward, 1),
-            Some(PxRgb([200, 200, 0])),
+            Some(PxRgba([200, 200, 0, 255])),
             "上一首:左半应是新图的右半(它从左缘推入)"
         );
         assert_eq!(
             pixel(&backward, 5),
-            Some(PxRgb([200, 0, 0])),
+            Some(PxRgba([200, 0, 0, 255])),
             "上一首:右半应是旧图的左半(它正向右退场,内容不翻)"
         );
 
@@ -693,6 +931,7 @@ mod tests {
         let out = compose_transition(BlendFrame {
             style: BlendStyle::Slide,
             px_h: 4,
+            cell_pixels: (8, 32),
             advance: Some(AdvanceKind::Prev),
             ..frame(&ramp, &solid_to)
         });
@@ -714,7 +953,10 @@ mod tests {
     /// 落定零漂移)。
     #[test]
     fn compose_zoom_endpoints_are_exact() -> color_eyre::Result<()> {
-        let endpoints = [(0_u16, PxRgb([200, 0, 0])), (1000_u16, PxRgb([0, 0, 200]))];
+        let endpoints = [
+            (0_u16, PxRgba([200, 0, 0, 255])),
+            (1000_u16, PxRgba([0, 0, 200, 255])),
+        ];
         for advance in [
             None,
             Some(AdvanceKind::Next),
@@ -802,7 +1044,7 @@ mod tests {
         let area = Rect::new(0, 0, 4, 4);
         let mut buf = Buffer::empty(area);
 
-        render_halfblock_to(&mut buf, area, &image);
+        render_halfblock_to(&mut buf, area, &image, (4, 16));
 
         let top = buf.cell((0, 0)).ok_or_else(|| eyre!("顶 cell 越界"))?;
         assert_eq!(top.fg, Color::Rgb(220, 0, 0), "顶 cell 上半 = 红");

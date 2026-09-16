@@ -6,5 +6,6 @@ mod sampling;
 mod tests;
 
 pub(super) use sampling::{
-    resize_exact, resize_to_fill, scale_to_pixels, thumbnail, thumbnail_exact,
+    fitted_pixels, resize_exact, resize_to_fill, resize_transparent, scale_to_pixels, thumbnail,
+    thumbnail_exact,
 };

@@ -59,7 +59,7 @@ fn sampling_preserves_high_bit_depth_and_straight_alpha() {
     }
 }
 
-/// 缩略图保持比例和四舍五入规则；终端画布仍左上对齐，空白处透明。
+/// 缩略图保持比例和四舍五入规则；终端画布居中对齐，空白处透明。
 #[test]
 fn fitting_preserves_aspect_ratio_and_transparent_padding() {
     for (source_size, bounds, fitted) in [
@@ -75,11 +75,14 @@ fn fitting_preserves_aspect_ratio_and_transparent_padding() {
         let canvas = scale_to_pixels(&source, PixelSize::new(bounds.0, bounds.1));
         assert_eq!(canvas.dimensions(), bounds);
         for (x, y, value) in canvas.enumerate_pixels() {
-            let expected = if x < fitted.0 && y < fitted.1 {
-                pixel
-            } else {
-                Rgba([0, 0, 0, 0])
-            };
+            let left = (bounds.0 - fitted.0) / 2;
+            let top = (bounds.1 - fitted.1) / 2;
+            let expected =
+                if (left..left + fitted.0).contains(&x) && (top..top + fitted.1).contains(&y) {
+                    pixel
+                } else {
+                    Rgba([0, 0, 0, 0])
+                };
             assert_eq!(*value, expected);
         }
     }
