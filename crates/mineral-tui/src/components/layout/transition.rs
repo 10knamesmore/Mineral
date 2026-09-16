@@ -222,7 +222,10 @@ fn paint_window(
                 foreground => foreground,
             };
             let mut cell = source.clone();
-            cell.set_fg(lerp_color(background, foreground, u64::from(opacity), 1000));
+            // Kitty 占位字符的前景色编码 image id，淡化会指向另一张图；图片随内容移动和切换。
+            if !cell.symbol().starts_with('\u{10EEEE}') {
+                cell.set_fg(lerp_color(background, foreground, u64::from(opacity), 1000));
+            }
             cell.set_bg(match source.bg {
                 Color::Reset => destination.bg,
                 color => lerp_color(background, color, u64::from(opacity), 1000),
@@ -243,6 +246,76 @@ mod tests {
     use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
     use super::{capture, panel};
+
+    /// 形变搬运和裁切缩略图时保留图片与列标识，文字淡化不能改写 image id。
+    #[test]
+    fn thumbnail_identity_survives_motion_clipping_and_text_fade() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::MediaUrl;
+
+        use crate::image::{ImageEngine, ImageRenderPhase};
+
+        let theme = crate::test_support::default_theme()?;
+        let images = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
+        let url = MediaUrl::remote("https://example.com/morph-cover.png")?;
+        images.insert_test_thumbnail(&url)?;
+        let area = Rect::new(0, 0, 4, 1);
+        let mut source = Buffer::empty(area);
+        source.set_string(2, 0, "AB", Style::new().fg(theme.text));
+        images.render_thumbnail(
+            Some(&url),
+            Rect::new(0, 0, 2, 1),
+            &mut source,
+            ImageRenderPhase::Offscreen,
+        );
+        let mut destination = Buffer::empty(Rect::new(0, 0, 12, 4));
+        super::paint_window(
+            &mut destination,
+            &source,
+            area,
+            Rect::new(4, 2, 4, 1),
+            500,
+            &theme,
+            None,
+        );
+        for x in 0..2 {
+            let original = source.cell((x, 0)).ok_or_else(|| eyre!("缺少原始封面格"))?;
+            let moved = destination
+                .cell((x + 4, 2))
+                .ok_or_else(|| eyre!("缺少移动封面格"))?;
+            assert!(moved.symbol().starts_with('\u{10EEEE}'));
+            assert_eq!(
+                (moved.symbol(), moved.fg, moved.underline_color),
+                (original.symbol(), original.fg, original.underline_color)
+            );
+        }
+        assert_ne!(
+            destination.cell((6, 2)).map(|cell| cell.fg),
+            Some(theme.text),
+            "文本仍正常淡化"
+        );
+        super::paint_window(
+            &mut destination,
+            &source,
+            Rect::new(1, 0, 3, 1),
+            Rect::new(1, 3, 1, 1),
+            500,
+            &theme,
+            None,
+        );
+        assert_eq!(
+            destination.cell((1, 3)),
+            source.cell((1, 0)),
+            "裁切后保留缩略图第二列，不重新拉伸"
+        );
+        assert_eq!(
+            destination.cell((2, 3)).map(ratatui::buffer::Cell::symbol),
+            Some(" "),
+            "不能溢出裁切窗口"
+        );
+        Ok(())
+    }
 
     /// 文字先在固定宽度排版，再裁剪到当前内区；边框持续存在，CJK 不越过边界。
     #[test]

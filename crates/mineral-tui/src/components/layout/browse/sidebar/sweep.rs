@@ -110,6 +110,96 @@ mod tests {
     use crate::runtime::state::View;
     use mineral_config::SweepStyle;
 
+    /// Push / Cover 每一列进度都保留正确的封面片段，裁掉半张缩略图时不伸入相邻区域。
+    #[test]
+    fn thumbnails_move_and_clip_with_sweep() -> color_eyre::Result<()> {
+        use std::sync::Arc;
+
+        use mineral_model::{MediaUrl, PlaylistId, SourceKind};
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        use crate::image::ImageEngine;
+
+        let theme = crate::test_support::default_theme()?;
+        let mut state = crate::test_support::state_with_tracks()?;
+        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        let playlist_cover = MediaUrl::remote("https://example.com/sweep-playlist.png")?;
+        let track_cover = MediaUrl::remote("https://example.com/sweep-track.png")?;
+        state
+            .library
+            .playlists
+            .first_mut()
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少歌单"))?
+            .data
+            .cover_url = Some(playlist_cover.clone());
+        state
+            .library
+            .tracks
+            .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
+            .and_then(|tracks| tracks.entries.first_mut())
+            .ok_or_else(|| color_eyre::eyre::eyre!("缺少曲目"))?
+            .data
+            .song
+            .cover_url = Some(track_cover.clone());
+        state.images.insert_test_thumbnail(&playlist_cover)?;
+        state.images.insert_test_thumbnail(&track_cover)?;
+        let area = Rect::new(4, 3, 50, 8);
+        let mut playlists = Buffer::empty(area);
+        let mut tracks = Buffer::empty(area);
+        super::playlists::render_to(&mut playlists, area, &state, &theme);
+        super::library::render_to(&mut tracks, area, &state, &theme);
+        let image_cells = |buffer: &Buffer| {
+            buffer
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(_, cell)| cell.symbol().starts_with('\u{10EEEE}'))
+                .map(|(index, cell)| (buffer.pos_of(index), cell.clone()))
+                .collect::<Vec<_>>()
+        };
+        let old_images = image_cells(&playlists);
+        let new_images = image_cells(&tracks);
+        assert_eq!(old_images.len(), 2);
+        assert_eq!(new_images.len(), 2);
+        for style in [SweepStyle::Push, SweepStyle::Cover] {
+            for advance in 0..=area.width {
+                let mut frame = Buffer::empty(area);
+                super::draw(&mut frame, area, &state, &theme, advance * 20, style);
+                let split = area.right() - advance;
+                let mut expected = Vec::new();
+                for ((x, y), cell) in &old_images {
+                    let shifted = if style == SweepStyle::Cover {
+                        Some(*x)
+                    } else {
+                        x.checked_sub(advance)
+                    };
+                    if let Some(x) = shifted.filter(|&x| x >= area.left() && x < split) {
+                        expected.push(((x, *y), cell.clone()));
+                    }
+                }
+                for ((x, y), cell) in &new_images {
+                    let x = x + area.width - advance;
+                    if x < area.right() {
+                        expected.push(((x, *y), cell.clone()));
+                    }
+                }
+                assert_eq!(
+                    image_cells(&frame),
+                    expected,
+                    "封面必须随列移动和裁切，style={style:?}, advance={advance}"
+                );
+                assert!(
+                    frame
+                        .content
+                        .iter()
+                        .all(|cell| !cell.skip && !cell.symbol().contains('\x1b'))
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// 把一帧 sweep 合成画到 `TestBackend` 并返回其快照串。
     fn render_sweep(eased: u16, style: SweepStyle) -> color_eyre::Result<String> {
         let theme = crate::test_support::default_theme()?;

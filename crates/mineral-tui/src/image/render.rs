@@ -101,10 +101,10 @@ pub(crate) enum ImageRenderPhase {
     /// 列表仍在滚动，可以显示已有成品但不提交新的昂贵编码任务。
     Scrolling,
 
-    /// 图片区域逐帧变化，只使用不持有终端 image id 的 halfblock。
+    /// 图片区域逐帧变化；大图使用 halfblock，行内缩略图复用可逐格搬运的 Kitty 成品。
     Resizing,
 
-    /// 渲染到离屏 cell buffer，只使用 halfblock。
+    /// 渲染到离屏 cell buffer；大图使用 halfblock，行内缩略图复用纯 Unicode 占位字符。
     Offscreen,
 }
 

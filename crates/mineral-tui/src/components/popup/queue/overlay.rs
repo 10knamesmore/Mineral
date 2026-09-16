@@ -460,7 +460,7 @@ mod tests {
         Ok(())
     }
 
-    /// 封面跟随过滤后的行与滚动视口,不覆盖标题、间隔和在播标记;抽屉动画中留空。
+    /// 封面在稳态与抽屉动画中跟随过滤后的行和滚动视口，不覆盖标题、间隔和在播标记。
     #[test]
     fn queue_thumbnails_follow_filtered_rows_and_keep_text() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -529,6 +529,14 @@ mod tests {
                 })
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少 queue title 表头"))?;
             for frame in 0..12 {
+                ctx.overlay_reveal.set(OverlayReveal {
+                    own: if frame % 2 == 0 {
+                        500
+                    } else {
+                        OverlayReveal::FULL
+                    },
+                    above: 0,
+                });
                 if frame == 1 {
                     overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
                 }
@@ -574,15 +582,6 @@ mod tests {
                     );
                 }
             }
-            ctx.overlay_reveal.set(OverlayReveal { own: 500, above: 0 });
-            let mut animating = Buffer::empty(area);
-            overlay.render_content(&mut animating, area, &ctx, &theme);
-            assert!(
-                animating
-                    .content
-                    .iter()
-                    .all(|cell| !cell.symbol().contains('\u{10EEEE}'))
-            );
         }
         Ok(())
     }

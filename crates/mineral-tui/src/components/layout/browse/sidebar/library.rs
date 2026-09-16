@@ -495,9 +495,9 @@ mod tests {
         Ok(())
     }
 
-    /// 缓动大跳逐帧保持封面与文本同一视口，缺图行不压缩后续封面，离屏阶段只留空列。
+    /// 缓动大跳逐帧保持封面与文本同一视口，sweep 与形变冻结视口但保留封面。
     #[test]
-    fn thumbnails_follow_one_scroll_step_and_freeze_for_sweep() -> color_eyre::Result<()> {
+    fn thumbnails_follow_scroll_and_remain_visible_during_transitions() -> color_eyre::Result<()> {
         use std::sync::Arc;
 
         use mineral_model::{MediaUrl, PlaylistId, SourceKind};
@@ -604,22 +604,45 @@ mod tests {
         state.browse.view.retempo(8);
         state.browse.view.switch_to(View::Playlists);
         state.browse.view.tick();
+        let offset = state
+            .browse
+            .nav
+            .track
+            .offset(previews.len(), viewport, ScrollMotion::Frozen);
         let mut offscreen = Buffer::empty(area);
         super::render_to(&mut offscreen, area, state, &theme);
         assert!(
             offscreen
                 .content
                 .iter()
-                .all(|c| !c.symbol().contains('\u{10EEEE}') && !c.symbol().contains('\x1b')),
+                .all(|c| !c.symbol().contains('\x1b')),
             "sweep 离屏帧不得含图形控制序列"
         );
         let x = thumbnail_x.ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
         assert_eq!(
-            offscreen
-                .cell((x, area.y + 2))
-                .map(ratatui::buffer::Cell::symbol),
-            Some(" ")
+            state
+                .browse
+                .nav
+                .track
+                .offset(previews.len(), viewport, ScrollMotion::Frozen),
+            offset
         );
+        for row in 0..viewport {
+            let cell = offscreen
+                .cell((x, area.y + 2 + u16::try_from(row)?))
+                .ok_or_else(|| color_eyre::eyre::eyre!("缺少离屏图片格"))?;
+            if let Some((symbol, foreground, underline)) =
+                previews.get(offset + row).and_then(Option::as_ref)
+            {
+                assert_eq!(
+                    (cell.symbol(), cell.fg, cell.underline_color),
+                    (symbol.as_str(), *foreground, *underline),
+                    "sweep 冻结视口后仍保留对应封面"
+                );
+            } else {
+                assert_eq!(cell.symbol(), " ");
+            }
+        }
         state.browse.view.retempo(1);
         state.browse.view.switch_to(View::Library);
         state.browse.view.tick();
@@ -629,12 +652,19 @@ mod tests {
         let mut morph = Buffer::empty(area);
         super::render_to(&mut morph, area, state, &theme);
         assert!(
-            morph
-                .content
-                .iter()
-                .all(|c| !c.symbol().contains('\x1b') && !c.symbol().contains('\u{10EEEE}')),
+            morph.content.iter().all(|c| !c.symbol().contains('\x1b')),
             "fullscreen morph 不得输出图形控制序列"
         );
+        for row in 0..viewport {
+            let y = area.y + 2 + u16::try_from(row)?;
+            for column in x..x + super::THUMBNAIL_COLUMNS {
+                assert_eq!(
+                    morph.cell((column, y)),
+                    offscreen.cell((column, y)),
+                    "形变与 sweep 复用同一封面格"
+                );
+            }
+        }
         Ok(())
     }
 
