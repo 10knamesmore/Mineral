@@ -471,9 +471,9 @@ mod tests {
     use crate::runtime::state::AppState;
     use crate::test_support::{song, with_name};
 
-    /// 曲目和艺人专辑都在名称前显示封面，缺图保留行位置，Frozen 只保留空图片列。
+    /// 曲目和艺人专辑都在名称前显示封面，缺图保留行位置，离屏合成保留封面身份。
     #[test]
-    fn detail_thumbnail_columns_keep_names_and_freeze_offscreen() -> color_eyre::Result<()> {
+    fn detail_thumbnail_columns_keep_names_and_images_offscreen() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut state = AppState::test_default()?;
         state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
@@ -568,18 +568,18 @@ mod tests {
             let mut frozen = Buffer::empty(area);
             render(&mut frozen, ScrollMotion::Frozen);
             assert!(
-                frozen
-                    .content
-                    .iter()
-                    .all(|c| !c.symbol().contains('\x1b') && !c.symbol().contains('\u{10EEEE}')),
+                frozen.content.iter().all(|c| !c.symbol().contains('\x1b')),
                 "Frozen 不能输出图形控制序列"
             );
-            assert_eq!(
-                frozen
-                    .cell((cover_x, area.y + 1))
-                    .map(ratatui::buffer::Cell::symbol),
-                Some(" ")
-            );
+            for row in 1..=3 {
+                for x in cover_x..cover_x + super::THUMBNAIL_COLUMNS {
+                    assert_eq!(
+                        frozen.cell((x, area.y + row)),
+                        stable.cell((x, area.y + row)),
+                        "离屏帧保留封面列下标、图片身份与行背景"
+                    );
+                }
+            }
             assert_eq!(
                 frozen
                     .cell((name_x, area.y + 1))

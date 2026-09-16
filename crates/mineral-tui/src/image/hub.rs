@@ -962,6 +962,29 @@ mod tests {
             assert!(kitty.decode_demand.borrow().is_empty());
             assert!(kitty.graphics_commands.borrow().is_empty());
         }
+        kitty.insert_test_thumbnail(&url)?;
+        let mut first = Buffer::empty(area);
+        kitty.render_thumbnail(Some(&url), area, &mut first, ImageRenderPhase::Offscreen);
+        let commands = std::mem::take(&mut *kitty.graphics_commands.borrow_mut());
+        assert!(commands.contains("a=t,"), "首次离屏绘制也须排入图片传输");
+        assert!(commands.contains("a=p,U=1,c=1,r=1"));
+        for phase in [
+            ImageRenderPhase::Offscreen,
+            ImageRenderPhase::Resizing,
+            ImageRenderPhase::Scrolling,
+            ImageRenderPhase::Stable,
+        ] {
+            let moved_area = Rect::new(3, 2, area.width, area.height);
+            let mut moved = Buffer::empty(moved_area);
+            kitty.render_thumbnail(Some(&url), moved_area, &mut moved, phase);
+            assert_eq!(moved.cell((3, 2)), first.cell((0, 0)), "移动只改变屏幕位置");
+            assert!(
+                kitty.graphics_commands.borrow().is_empty(),
+                "移动不得重复传输图片或重建 placement"
+            );
+            assert!(kitty.encode_pending.borrow().is_empty());
+            assert!(kitty.decode_demand.borrow().is_empty());
+        }
         let other = engine()?;
         other.render_thumbnail(
             Some(&url),

@@ -19,8 +19,8 @@ impl ImageEngine {
 
     /// 在表格高亮完成后绘制一行封面，未缓存时保留背景。
     ///
-    /// 只登记低清采样尺寸，不登记 URL 下载或完整解码需求。滚动时仅显示已编码成品，
-    /// 离屏合成与区域缩放时留空，避免把图形状态带入文字过渡。
+    /// 只登记低清采样尺寸，不登记 URL 下载或完整解码需求。滚动、离屏合成与区域缩放
+    /// 均复用已编码成品，只在稳定阶段提交新编码；逐格占位字符随文本一起平移和裁切。
     ///
     /// # Params:
     ///   - `url`: 该行封面；缺失时仍由表格保留图片列
@@ -34,14 +34,7 @@ impl ImageEngine {
         buf: &mut Buffer,
         phase: ImageRenderPhase,
     ) {
-        if !self.supports_thumbnails()
-            || area.width == 0
-            || area.height != 1
-            || matches!(
-                phase,
-                ImageRenderPhase::Offscreen | ImageRenderPhase::Resizing
-            )
-        {
+        if !self.supports_thumbnails() || area.width == 0 || area.height != 1 {
             return;
         }
         self.observe_thumbnail_target();
@@ -53,7 +46,7 @@ impl ImageEngine {
             if let Some(command) = image.render_inline(area, buf) {
                 self.graphics_commands.borrow_mut().push_str(&command);
             }
-        }) || phase == ImageRenderPhase::Scrolling
+        }) || phase != ImageRenderPhase::Stable
             || self.encode_pending.borrow().contains(&key)
         {
             return;

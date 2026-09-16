@@ -20,7 +20,7 @@ pub(crate) const THUMBNAIL_COLUMNS: u16 = 2;
 ///   - `images`: 图片引擎；缩略图入口只消费已有预取与解码缓存，不由可见行发起下载
 ///   - `column`: 列求解器返回的图片列矩形，含单行表头，不含 block 边框
 ///   - `covers`: 与本帧可见范围顺序一致的封面；缺图项仍须传 `None`，避免后续行错位
-///   - `phase`: 离屏或形变阶段保留空列，稳定或滚动阶段由引擎复用 Kitty 成品
+///   - `phase`: 各阶段均复用 Kitty 成品，只有稳定阶段允许提交新编码
 pub(crate) fn render_table_thumbnails<'a>(
     buf: &mut Buffer,
     images: &ImageEngine,
