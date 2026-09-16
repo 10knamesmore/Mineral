@@ -833,6 +833,7 @@ mod tests {
                 &plan,
                 app.state.browse.fullscreen.eased_in_out(),
                 &app.state,
+                &app.theme,
             );
         })?;
         let expected_cover = cover_only.backend().buffer();
@@ -845,6 +846,35 @@ mod tests {
                 assert_eq!(actual.fg, expected.fg);
                 assert_eq!(actual.bg, expected.bg);
             }
+        }
+        Ok(())
+    }
+
+    /// 无在播曲时，浏览封面与待机唱片交叉渐变；中途反向保留当前混合进度。
+    #[test]
+    fn fullscreen_idle_morph_crossfades_cover_and_vinyl() -> color_eyre::Result<()> {
+        let mut app = app_in_fullscreen_morph(true, false)?;
+        app.state.playback.track = None;
+        let mixed = crate::render::color::lerp_color(
+            Color::Rgb(255, 0, 255),
+            app.theme.accent,
+            u64::from(app.state.browse.fullscreen.eased_in_out()),
+            1000,
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
+        for entering in [true, false] {
+            app.state.browse.fullscreen.set(entering);
+            terminal.draw(|frame| super::draw(frame, &app))?;
+            let buffer = terminal.backend().buffer();
+            assert!(
+                count_fg_cells(buffer, |color| color == mixed) > 0,
+                "封面应与唱片中心徽记交叉混色，进入方向 {entering}"
+            );
+            assert_eq!(
+                count_fg_cells(buffer, |color| color == Color::Rgb(255, 0, 255)),
+                0,
+                "面板原封面应交给飞行层，不能另外绘制完整亮度的封面"
+            );
         }
         Ok(())
     }

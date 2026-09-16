@@ -152,6 +152,7 @@ impl App {
             target: "tui",
             fullscreen = self.state.browse.fullscreen.on(),
             progress = self.state.browse.fullscreen.raw(),
+            idle_vinyl = self.state.playback.track.is_none(),
             "fullscreen layout transition"
         );
         self.report_terminal_state();
