@@ -1,13 +1,8 @@
 //! 把 Kitty unicode placeholder placement 写入 ratatui cell buffer。
 
-use std::fmt::Write as _;
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-
-use super::command::create_virtual_placement;
-use crate::image::graphics::TerminalRelay;
 
 /// Kitty unicode placeholder codepoint。
 const PLACEHOLDER: char = '\u{10EEEE}';
@@ -23,99 +18,33 @@ pub(super) fn clamp_cells(cells: (u16, u16)) -> (u16, u16) {
     )
 }
 
-/// 把一个 virtual placement 写入 cell buffer。
+/// 逐格写入图片占位字符并保留背景；控制指令由调用方在出帧前发送。
 ///
-/// 每行的完整 placeholder 串写进首个 cell，其余 cell 标记 skip，避免 ratatui diff
-/// 在同一行插入额外输出。
-///
-/// # Params:
-///   - `area`: 当前目标区域
-///   - `buffer`: ratatui cell buffer
-///   - `image_id`: Kitty image id
-///   - `transmission`: 尚未发出的 shared memory transmit；仅拼进第一行一次
-///   - `relay`: 终端 relay 形态
-pub(super) fn render(
-    area: Rect,
-    buffer: &mut Buffer,
-    image_id: u32,
-    transmission: &mut Option<String>,
-    relay: TerminalRelay,
-) {
-    let (width, height) = clamp_cells((area.width, area.height));
-    if width == 0 || height == 0 {
-        return;
-    }
-    let [id_high, id_red, id_green, id_blue] = image_id.to_be_bytes();
-    let placement_id = placement_id(width, height);
-    let [_, placement_red, placement_green, placement_blue] = placement_id.to_be_bytes();
-    let id_color = format!("\x1b[38;2;{id_red};{id_green};{id_blue}m");
-    let placement_color = format!("\x1b[58;2;{placement_red};{placement_green};{placement_blue}m");
-    let mut pending = transmission.take().unwrap_or_default();
-    pending.push_str(&create_virtual_placement(
-        image_id,
-        placement_id,
-        (width, height),
-        relay,
-    ));
-    for row in 0..height {
-        let mut symbol = if row == 0 {
-            std::mem::take(&mut pending)
-        } else {
-            String::new()
-        };
-        let width_usize = usize::from(width);
-        symbol.reserve(
-            id_color
-                .len()
-                .saturating_add(width_usize.saturating_mul(4))
-                .saturating_add(32),
-        );
-        let _ = write!(
-            symbol,
-            "\x1b[s{id_color}{placement_color}{PLACEHOLDER}{}{}{}",
-            diacritic(row),
-            diacritic(0),
-            diacritic(u16::from(id_high))
-        );
-        symbol.extend(std::iter::repeat_n(
-            PLACEHOLDER,
-            width_usize.saturating_sub(1),
-        ));
-        for column in 1..width {
-            if let Some(cell) = buffer.cell_mut((area.left() + column, area.top() + row)) {
-                cell.set_skip(true);
-            }
-        }
-        let right = area.width.saturating_sub(1);
-        let down = area.height.saturating_sub(1);
-        let _ = write!(symbol, "\x1b[u\x1b[{right}C\x1b[{down}B");
-        if let Some(cell) = buffer.cell_mut((area.left(), area.top() + row)) {
-            cell.set_symbol(&symbol);
-        }
-    }
-}
-
-/// 逐格写入一行 Unicode 图片字符,保留表格背景;指令由调用方在出帧前发送。
-///
-/// 控制序列不能放进 symbol，否则 ratatui 会把参数算进字符宽度并跳过后面的名称。
-/// 每格带独立的图片列下标,返回当前列宽对应的 placement id。
+/// 每格都有独立行列坐标，留白背景的 diff 不会重发图片，也不会被整行 skip 吞掉。
 pub(super) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u32 {
     let [high, red, green, blue] = image_id.to_be_bytes();
-    let placement = placement_id(area.width, 1);
+    let (width, height) = clamp_cells((area.width, area.height));
+    let placement = placement_id(width, height);
     let [_, placement_red, placement_green, placement_blue] = placement.to_be_bytes();
-    for column in 0..area.width {
-        if let Some(cell) = buffer.cell_mut((area.x + column, area.y)) {
-            cell.set_symbol(&format!(
-                "{PLACEHOLDER}{}{}{}",
-                diacritic(0),
-                diacritic(column),
-                diacritic(u16::from(high)),
-            ));
-            cell.set_style(
-                Style::new()
-                    .fg(Color::Rgb(red, green, blue))
-                    .underline_color(Color::Rgb(placement_red, placement_green, placement_blue)),
-            );
+    for row in 0..height {
+        for column in 0..width {
+            if let Some(cell) = buffer.cell_mut((area.x + column, area.y + row)) {
+                cell.set_symbol(&format!(
+                    "{PLACEHOLDER}{}{}{}",
+                    diacritic(row),
+                    diacritic(column),
+                    diacritic(u16::from(high)),
+                ));
+                cell.set_style(
+                    Style::new()
+                        .fg(Color::Rgb(red, green, blue))
+                        .underline_color(Color::Rgb(
+                            placement_red,
+                            placement_green,
+                            placement_blue,
+                        )),
+                );
+            }
         }
     }
     placement
@@ -441,51 +370,38 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
-    use super::render;
-    use crate::image::graphics::TerminalRelay;
-
-    /// placement 首 cell 编码 image id、行列，同行其余 cell 标记 skip。
+    /// 大封面的每格都保留自己的背景，行列坐标不能被背景更新打断。
     #[test]
-    fn placement_encodes_id_rows_and_columns() -> color_eyre::Result<()> {
-        let area = Rect::new(0, 0, 3, 2);
-        let mut buffer = Buffer::empty(area);
-        let mut transmission = None;
-        render(
-            area,
-            &mut buffer,
-            /*image_id*/ 0x0A0B_0C0D,
-            &mut transmission,
-            TerminalRelay::Direct,
-        );
-
-        let first = buffer
-            .cell((0, 0))
-            .ok_or_else(|| eyre!("缺少首个 placement cell"))?;
-        assert!(
-            first
-                .symbol()
-                .contains("i=168496141,p=1538,a=p,U=1,c=3,r=2"),
-            "首行应创建当前尺寸的 virtual placement"
-        );
-        assert!(
-            first
-                .symbol()
-                .contains("\x1b[38;2;11;12;13m\x1b[58;2;0;6;2m"),
-            "placeholder 应编码 image id 与 placement id"
-        );
-        assert!(
-            buffer.cell((1, 0)).is_some_and(|cell| cell.skip),
-            "同一 placement 行的后续 cell 须跳过 diff 输出"
-        );
-        let second = buffer
-            .cell((0, 1))
-            .ok_or_else(|| eyre!("缺少第二行 placement cell"))?;
-        assert!(
-            second
-                .symbol()
-                .contains("\u{10EEEE}\u{030D}\u{0305}\u{034B}"),
-            "第二行须使用下一项 row diacritic"
-        );
+    fn placement_preserves_per_cell_background_and_coordinates() -> color_eyre::Result<()> {
+        use ratatui::style::Color;
+        let area = Rect::new(1, 1, 3, 2);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 5, 4));
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buffer
+                    .cell_mut((x, y))
+                    .ok_or_else(|| eyre!("missing cell"))?
+                    .set_bg(Color::Rgb(u8::try_from(x)?, u8::try_from(y)?, 50));
+            }
+        }
+        super::render_inline(area, &mut buffer, 0x0A0B_0C0D);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = buffer.cell((x, y)).ok_or_else(|| eyre!("missing cell"))?;
+                assert!(!cell.skip);
+                assert!(!cell.symbol().contains('\x1b'));
+                assert_eq!(cell.bg, Color::Rgb(u8::try_from(x)?, u8::try_from(y)?, 50));
+                assert_eq!(
+                    cell.symbol(),
+                    format!(
+                        "\u{10EEEE}{}{}{}",
+                        super::diacritic(y - area.y),
+                        super::diacritic(x - area.x),
+                        super::diacritic(10)
+                    )
+                );
+            }
+        }
         Ok(())
     }
 
@@ -532,35 +448,6 @@ mod tests {
             changes
                 .iter()
                 .any(|(x, y, cell)| *x == 4 && *y == 1 && cell.symbol() == "n")
-        );
-        Ok(())
-    }
-
-    /// 尚未写出的 transmit 只拼入第一行一次。
-    #[test]
-    fn placement_consumes_transmission_once() -> color_eyre::Result<()> {
-        let area = Rect::new(0, 0, 1, 2);
-        let mut buffer = Buffer::empty(area);
-        let mut transmission = Some("firstsecond".to_owned());
-        render(
-            area,
-            &mut buffer,
-            /*image_id*/ 1,
-            &mut transmission,
-            TerminalRelay::Direct,
-        );
-        assert!(transmission.is_none(), "render 后 transmit 应被消费");
-        assert!(
-            buffer
-                .cell((0, 0))
-                .is_some_and(|cell| cell.symbol().starts_with("firstsecond")),
-            "首行应携带完整 transmit"
-        );
-        assert!(
-            buffer
-                .cell((0, 1))
-                .is_some_and(|cell| !cell.symbol().contains("first")),
-            "后续行不应重复 transmit"
         );
         Ok(())
     }

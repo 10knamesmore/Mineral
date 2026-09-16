@@ -1,6 +1,36 @@
-//! 计算图片在终端 cell 网格中的视觉正方区域。
+//! 按真实终端像素比例计算封面容器和原图的最小 cell 外框。
 
 use ratatui::layout::Rect;
+
+use super::key::PixelSize;
+use super::resize::fitted_pixels;
+
+/// 将原图等比放入区域，返回居中的最小 cell 外框；取整余量不改变图片比例。
+pub(super) fn fitted_area(
+    area: Rect,
+    image: &image::DynamicImage,
+    cell_pixels: (u16, u16),
+) -> Rect {
+    if area.is_empty() {
+        return area;
+    }
+    let pixels = fitted_pixels(
+        image,
+        PixelSize::from_cells((area.width, area.height), cell_pixels),
+    );
+    let width = u16::try_from(pixels.width().div_ceil(u32::from(cell_pixels.0).max(1)))
+        .unwrap_or(area.width)
+        .min(area.width);
+    let height = u16::try_from(pixels.height().div_ceil(u32::from(cell_pixels.1).max(1)))
+        .unwrap_or(area.height)
+        .min(area.height);
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
+}
 
 /// 按真实 cell 像素比例在可用区域内计算视觉正方形。
 ///

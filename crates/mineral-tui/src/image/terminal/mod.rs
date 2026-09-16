@@ -7,3 +7,5 @@ mod iterm2;
 mod sixel;
 
 pub(crate) use image::TerminalImage;
+
+pub(super) use halfblocks::{render_pixels, sample_pixels};

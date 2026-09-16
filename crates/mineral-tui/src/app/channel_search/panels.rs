@@ -1217,7 +1217,11 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let (mut app, url) = app_with_covered_album()?;
-        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([180, 80, 40]),
+        ));
         app.state.images.cache.insert_test(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
