@@ -8,7 +8,7 @@ use mineral_task::{Priority, TaskKind};
 use serde::{Deserialize, Serialize};
 use strum_macros::IntoStaticStr;
 
-use crate::{DownloadId, DownloadTarget, QueueEditOutcome, QueueOp};
+use crate::{DownloadId, DownloadTarget, PlayMode, QueueEditOutcome, QueueOp};
 
 /// Atomic PlayQueue request 的 validation error。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +210,10 @@ pub enum Request {
 
     /// `m` 键循环 PlayMode。返回 [`Response::Ok`]。
     CyclePlayMode,
+
+    /// 直接设置播放模式(系统媒体控件、脚本与 CLI 的同入口)。设成当前同档为 no-op:
+    /// 不重洗队列、不记 `mode_changes`。返回 [`Response::Ok`]。
+    SetPlayMode(PlayMode),
 
     /// `p` 键:进度 > 阈值时回开头,否则跳上一首。返回 [`Response::Ok`]。
     PrevOrRestart,

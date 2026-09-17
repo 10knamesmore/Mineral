@@ -29,6 +29,7 @@ mineral-server          = { workspace = true }
 mineral-stats           = { workspace = true }
 nix                     = { workspace = true }
 rustc-hash              = { workspace = true }
+serde                   = { workspace = true }
 serde_json              = { workspace = true }
 time                    = { workspace = true }
 tokio                   = { workspace = true }

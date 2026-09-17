@@ -111,6 +111,7 @@ mineral channel netease login    # 终端二维码,App 扫码登录
 | `mineral stats report [--top N]`    | 播放盘点报告(默认当年:次数 / 时长 / 常听来源 / 各类 top 榜)         |
 | `mineral stats top <category>`      | 单榜查询(某类别的 top 列表)                                         |
 | `mineral action <name>`             | 触发 `config.lua` 里 `mineral.action` 注册的具名动作(连 daemon 执行) |
+| `mineral ctl <command>`             | 控制 daemon |
 
 </details>
 

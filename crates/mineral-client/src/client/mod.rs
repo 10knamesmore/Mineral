@@ -5,6 +5,7 @@ mod connection;
 mod daemon;
 mod downloads;
 mod library;
+mod playback;
 mod queue;
 mod scripts;
 mod state;

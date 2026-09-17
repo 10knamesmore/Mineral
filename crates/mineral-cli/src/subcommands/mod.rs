@@ -4,6 +4,7 @@ pub mod action;
 pub mod cache;
 pub mod channel;
 pub mod config;
+pub mod ctl;
 pub mod serve;
 pub mod stats;
 pub mod status;

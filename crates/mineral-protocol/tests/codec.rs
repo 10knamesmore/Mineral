@@ -176,6 +176,7 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     req_round_trips(Request::Seek(12_345)).await?;
     req_round_trips(Request::SetVolume(50)).await?;
     req_round_trips(Request::CyclePlayMode).await?;
+    req_round_trips(Request::SetPlayMode(PlayMode::RepeatOne)).await?;
     req_round_trips(Request::PrevOrRestart).await?;
     req_round_trips(Request::NextSong).await?;
     req_round_trips(Request::Shutdown).await?;

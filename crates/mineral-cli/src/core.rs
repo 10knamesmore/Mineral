@@ -1,5 +1,7 @@
 //! 顶层 CLI 类型与运行入口。
 
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
@@ -8,6 +10,7 @@ use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
+use crate::subcommands::ctl::{self, CtlArgs};
 use crate::subcommands::stats::{self, StatsCommand};
 use crate::subcommands::{status, stop};
 
@@ -55,6 +58,9 @@ pub enum Command {
         cmd: ConfigCommand,
     },
 
+    /// control the running daemon (transport, play mode, queue)
+    Ctl(CtlArgs),
+
     /// start the background playback daemon
     Serve,
 
@@ -79,15 +85,28 @@ pub enum Command {
 ///   - `command`: 已经从命令行解析出的顶层命令。
 ///
 /// # Return:
-///   命令执行结果。
-pub fn run(command: Command) -> color_eyre::Result<()> {
+///   进程退出码;子命令本身失败(如配置解析)冒泡为 `Err`。
+pub fn run(command: Command) -> color_eyre::Result<ExitCode> {
     let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
-    runtime.block_on(async move { run_async(command).await })?;
-    Ok(())
+    runtime.block_on(async move { run_async(command).await })
 }
 
-/// 在 tokio 上下文里按 [`Command`] 分发到具体子命令;`Serve` 由 caller(binary)拦截不该到这里。
-async fn run_async(command: Command) -> color_eyre::Result<()> {
+/// 在 tokio 上下文里按 [`Command`] 分发;`Serve` 由 caller(binary)拦截不该到这里。
+///
+/// 只有 `ctl` 有自己的退出码契约(成功 0 / 被拒 1 / 没执行 3),其余子命令沿用
+/// 「成功即 0」。
+async fn run_async(command: Command) -> color_eyre::Result<ExitCode> {
+    match command {
+        Command::Ctl(args) => ctl::run(args).await,
+        other => {
+            run_plain(other).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// 分发没有自定义退出码契约的子命令。
+async fn run_plain(command: Command) -> color_eyre::Result<()> {
     match command {
         Command::Action { name, args } => action::run(&name, &args).await,
         Command::Cache { cmd } => cache::run(cmd).await,
@@ -96,6 +115,8 @@ async fn run_async(command: Command) -> color_eyre::Result<()> {
         Command::Stats { cmd } => stats::run(cmd).await,
         Command::Status => status::run().await,
         Command::Stop => stop::run().await,
-        Command::Serve => bail!("internal error: Command::Serve must be intercepted by caller"),
+        Command::Ctl(_) | Command::Serve => {
+            bail!("internal error: command must be handled before run_plain")
+        }
     }
 }

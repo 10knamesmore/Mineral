@@ -1,0 +1,11 @@
+---
+source: crates/mineral-cli/src/subcommands/ctl/render.rs
+description: "ctl --json 信封:核心字段 + 命令专属字段 + 四种结论态"
+expression: lines
+---
+{"command":"pause","outcome":"applied"}
+{"command":"volume","outcome":"applied","volume_pct":45}
+{"command":"seek","outcome":"applied","position_ms":90000}
+{"command":"play-pause","outcome":"skipped","reason":"no-current-track"}
+{"command":"queue transform","outcome":"failed","kind":"ambiguous-transform","detail":"同名 label `x` 出现在下标 0, 1"}
+{"command":"pause","outcome":"unknown","detail":"连不上 daemon"}

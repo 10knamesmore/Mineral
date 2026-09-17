@@ -3103,6 +3103,7 @@ dependencies = [
  "mineral-test",
  "nix",
  "rustc-hash 2.1.2",
+ "serde",
  "serde_json",
  "tempfile",
  "time",

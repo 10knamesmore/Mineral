@@ -48,6 +48,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::QueueEdit { .. } => Recorded("queue_ops"),
         Request::ChannelCaps => NotAnEvent("读:channel 能力查询"),
         Request::CyclePlayMode => Recorded("mode_changes"),
+        Request::SetPlayMode(..) => Recorded("mode_changes"),
         // 切上首=skip 记 plays;回曲首(超阈值)分支另记 seeks,主归属取 plays。
         Request::PrevOrRestart => Recorded("plays"),
         Request::NextSong => Recorded("plays"),

@@ -1,5 +1,6 @@
 //! `mineral` 二进制入口。
 
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -20,21 +21,36 @@ mod os;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-fn main() -> color_eyre::Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(report) => {
+            // main 返回 ExitCode 后 color-eyre 不再代打报告:自己走它已安装的 handler。
+            eprintln!("{report:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// 主流程:初始化错误处理与日志,按顶层命令分发并给出进程退出码。
+///
+/// # Return:
+///   进程退出码;初始化或子命令失败(`ctl` 的结论态除外)返回 `Err`,由 [`main`] 打印。
+fn run() -> color_eyre::Result<ExitCode> {
     color_eyre::install()?;
-    // _log_guard 必须持到 main 返回:drop 它会停后台 flush 线程,后续日志丢失。
+    // _log_guard 必须持到 run 返回:drop 它会停后台 flush 线程,后续日志丢失。
     let _log_guard = mineral_log::init().wrap_err("init log")?;
 
     let args = Args::parse();
     match args.command {
-        Some(Command::Serve) => os::run_daemon(),
+        Some(Command::Serve) => os::run_daemon().map(|()| ExitCode::SUCCESS),
         Some(command) => mineral_cli::run(command),
         None => {
             // dhat guard 必须持到 TUI 退出:Drop 时才落 dhat-heap.json。
             #[cfg(feature = "dhat-heap")]
             let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
-            runtime.block_on(run_tui())
+            runtime.block_on(run_tui()).map(|()| ExitCode::SUCCESS)
         }
     }
 }
