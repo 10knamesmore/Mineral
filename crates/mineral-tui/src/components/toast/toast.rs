@@ -7,9 +7,10 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::render::anim::{Transition, lerp_u16};
+use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 
 /// 一段可放进 [`Toast`] 的内容:自报宽度、自渲染。实现方决定怎么画。

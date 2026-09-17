@@ -9,12 +9,13 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
 use crate::components::popup::placement::{Placement, place};
 use crate::render::blit::{self, EdgeColors, HAnchor};
 use crate::render::cells::left_eighth;
 use crate::render::cells::lower_eighth;
+use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
 use crate::runtime::state::AppState;
@@ -428,7 +429,8 @@ fn draw_anchored_reveal(
         (frac > 0 && y < full.y.saturating_add(full.height)).then_some(y)
     };
 
-    frame.render_widget(Clear, win);
+    let clear_area = edge_y.map_or(win, |y| win.union(Rect::new(full.x, y, full.width, 1)));
+    frame.render_widget(Clear, clear_area);
     let buf = frame.buffer_mut();
     blit::copy_window(buf, off, win, win.x, win.y);
     if let Some(y) = edge_y {

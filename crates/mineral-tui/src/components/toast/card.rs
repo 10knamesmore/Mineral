@@ -14,12 +14,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::components::toast::notifications::TextTint;
 use crate::render::anim::Transition;
 use crate::render::blit::{self, EdgeColors, HAnchor};
+use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 
 /// 把一段纯文本升成无样式单 span 行(标题等单行语境的便捷构造)。
