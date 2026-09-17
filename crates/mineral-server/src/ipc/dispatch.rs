@@ -146,6 +146,10 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
             client.cycle_play_mode();
             OperationResult::Applied
         }
+        Request::SetPlayMode(mode) => {
+            client.set_play_mode(mode);
+            OperationResult::Applied
+        }
         Request::PrevOrRestart => {
             client.prev_or_restart();
             OperationResult::Applied

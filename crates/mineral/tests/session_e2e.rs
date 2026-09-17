@@ -446,6 +446,57 @@ async fn play_mode_cycle_pushes_every_step() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 直设播放模式经 IPC 生效;设成当前同档是 no-op(队列版本不动,不重洗)。
+#[tokio::test]
+async fn set_play_mode_applies_directly() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn("set-play-mode", None)?;
+    daemon.wait_ready()?;
+    let client = daemon.connect("set-play-mode").await?;
+    client.subscribe(SubscriptionTopic::Player);
+
+    let outcome = client
+        .play_queue(songs(3), /*target*/ 0, QueueContextWire::Manual)?
+        .outcome()
+        .await;
+    assert!(outcome.is_success(), "建立队列应成功: {outcome:?}");
+    wait_until("队列同步", || {
+        client.mirror().read_player(|player| player.queue().len()) == 3
+    })
+    .await?;
+
+    let outcome = client.set_play_mode(PlayMode::Shuffle).await;
+    assert!(outcome.is_success(), "直设 Shuffle 应成功: {outcome:?}");
+    wait_until("模式推送到位", || {
+        client.mirror().read_player(PlayerMirror::play_mode) == PlayMode::Shuffle
+    })
+    .await?;
+
+    // 同档再设一次:不重洗队列,队列版本保持不动。用一条随后到达的查询定序,
+    // 不靠 sleep 断言「没有发生」。
+    let queue_version = client
+        .mirror()
+        .read_player(|player| player.versions().queue);
+    let outcome = client.set_play_mode(PlayMode::Shuffle).await;
+    assert!(outcome.is_success(), "重复设置应成功: {outcome:?}");
+    let _ = client.daemon_info().await;
+    assert_eq!(
+        client
+            .mirror()
+            .read_player(|player| player.versions().queue),
+        queue_version,
+        "同档直设不应重洗队列"
+    );
+
+    // 换到非 Shuffle 档(退出洗牌恢复原序)同样推送。
+    let outcome = client.set_play_mode(PlayMode::RepeatAll).await;
+    assert!(outcome.is_success(), "直设 RepeatAll 应成功: {outcome:?}");
+    wait_until("换档推送到位", || {
+        client.mirror().read_player(PlayerMirror::play_mode) == PlayMode::RepeatAll
+    })
+    .await?;
+    Ok(())
+}
+
 /// 任务摘要订阅:订阅即得当前快照(变更推送由 daemon 的 change-only watch 承担)。
 #[tokio::test]
 async fn tasks_subscription_delivers_snapshot() -> color_eyre::Result<()> {

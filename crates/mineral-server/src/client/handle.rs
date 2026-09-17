@@ -3,7 +3,7 @@
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    DownloadId, DownloadTarget, Event, PlayQueueError, PlayerSync, PlayerVersions,
+    DownloadId, DownloadTarget, Event, PlayMode, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
 use mineral_task::{Priority, TaskEvent, TaskKind};
@@ -532,6 +532,15 @@ impl ClientHandle {
     pub(crate) fn cycle_play_mode(&self) {
         // mode_changes 埋点在 PlayerCore 单点(cycle / 直设 / 脚本共用)。
         self.player.cycle_play_mode(mineral_stats::Actor::User);
+    }
+
+    /// 直接设置播放模式。
+    ///
+    /// # Params:
+    ///   - `mode`: 目标模式
+    pub(crate) fn set_play_mode(&self, mode: PlayMode) {
+        // 埋点同 `cycle_play_mode`:PlayerCore 单点、同档不记。
+        self.player.set_play_mode(mode, mineral_stats::Actor::User);
     }
 
     /// `p` 键:进度 > 阈值时回开头,否则跳上一首。
