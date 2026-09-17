@@ -837,6 +837,72 @@ mod tests {
         Ok(())
     }
 
+    /// 底层歌词横跨抽屉左沿时，直绘、滑入和退出帧都必须把边缘送到终端。
+    #[test]
+    fn queue_left_edge_overwrites_underlying_wide_lyrics() -> color_eyre::Result<()> {
+        use ratatui::buffer::Cell;
+        use ratatui::style::{Color, Style};
+
+        let theme = crate::test_support::default_theme()?;
+        let mut ctx = ctx_with_queue(3, Some(1))?;
+        ctx.browse.fullscreen.set(true);
+        let overlay = QueueOverlay::new(0);
+        let mut reference = Terminal::new(TestBackend::new(100, 24))?;
+        let background = Style::new().fg(Color::Yellow).bg(Color::Blue);
+        let y = 12;
+
+        for scale in [500, 505, 1000, 505, 500] {
+            reference.draw(|frame| {
+                render_overlay(frame, frame.area(), &overlay, scale, true, &ctx, &theme);
+            })?;
+            let expected = reference.backend().buffer();
+            let x = (0..100)
+                .find(|&x| {
+                    expected
+                        .cell((x, y))
+                        .is_some_and(|cell| cell.symbol() != " ")
+                })
+                .ok_or_else(|| color_eyre::eyre::eyre!("抽屉应有可见左沿"))?;
+            let text_x = x
+                .checked_sub(3)
+                .ok_or_else(|| color_eyre::eyre::eyre!("抽屉左侧应能放下歌词"))?;
+            let mut terminal = Terminal::new(TestBackend::new(100, 24))?;
+            terminal.draw(|frame| {
+                frame.buffer_mut().set_string(text_x, y, "看着", background);
+            })?;
+            terminal.draw(|frame| {
+                frame.buffer_mut().set_string(text_x, y, "看着", background);
+                render_overlay(frame, frame.area(), &overlay, scale, true, &ctx, &theme);
+            })?;
+            let actual = terminal.backend().buffer();
+            assert_eq!(actual.cell((text_x, y)).map(Cell::symbol), Some("看"));
+            assert_eq!(actual.cell((x - 1, y)).map(Cell::symbol), Some(" "));
+            assert_eq!(
+                actual.cell((x - 1, y)).map(|cell| cell.bg),
+                Some(Color::Blue)
+            );
+            for col in x..100 {
+                assert_eq!(
+                    actual.cell((col, y)),
+                    expected.cell((col, y)),
+                    "scale={scale}, x={col}"
+                );
+            }
+            terminal.draw(|frame| {
+                frame.buffer_mut().set_string(text_x, y, "看着", background);
+            })?;
+            assert_eq!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x - 1, y))
+                    .map(Cell::symbol),
+                Some("着")
+            );
+        }
+        Ok(())
+    }
+
     /// `<C-d>` 族滚动动作:翻页档移 `page_scroll_rows`、单行档移 `line_scroll_rows`
     /// (步长随默认配置算,调默认值不该改这条测试),越界钳首末行,均被 `Consumed`。
     #[test]

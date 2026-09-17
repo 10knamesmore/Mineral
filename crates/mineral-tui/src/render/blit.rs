@@ -8,10 +8,11 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Clear, Widget};
+use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::cells::{left_eighth, lower_eighth};
+use crate::render::clear::Clear;
 
 /// 水平滑入的贴边侧(= 完全展开时窗口锚定、动画期间保持不动的那条边)。
 #[derive(Clone, Copy)]

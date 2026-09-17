@@ -5,10 +5,11 @@
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear};
+use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::components::layout::shared::compute::Areas;
 use crate::render::anim::lerp_u16;
+use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 
 /// 收缩进度满值(千分比),对齐 [`crate::render::anim::Transition::eased`] 的满值。

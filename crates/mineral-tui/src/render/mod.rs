@@ -5,6 +5,7 @@ pub mod ambient;
 pub mod anim;
 pub mod blit;
 pub mod cells;
+pub(crate) mod clear;
 pub mod color;
 pub mod cursor;
 pub mod palette;
