@@ -22,21 +22,12 @@
 
 ## 特性
 
-- **多源融合** — `MusicChannel` 统一抽象搜索 / 详情 / 歌词 / 用户数据,`PlaybackProvider` 独立负责播放资源;平铺数据模型跨源直接合并展示,新增音乐源不污染模型
-- **真实播放栈** — rodio + symphonia + stream-download:mp3 / aac / m4a / flac,流式起播、seek、**gapless 无缝衔接(跨源的也一样!)**
-- **daemon 后台播放** — 播放核心独立进程,退出 TUI 音乐不停;重开无缝接回进度;多 client 可同时连接,共享同一份播放状态
-- **全屏沉浸态** — `z` 一键进出:封面 / 逐字歌词 / 频谱的沉浸布局,行间平移与逐字歌词高亮
-- **氛围背景** — 封面取色驱动:全屏调色板渐变背景 + 全局 accent 动态主题;背景随响度实时跳动(浓度 / 色斑 / 亮端 / 暗角),切歌封面转场
-- **频谱可视化** — realfft 真值 + ADSR 包络 + peak 弹簧物理;四风格可切(柱 / 示波器 / 瀑布 / 地形)
-- **波形进度条** — seekbar 化身全曲振幅包络波形,已播段随封面取色(未缓存回落普通进度条)
-- **封面** — kitty / iTerm2 / sixel / halfblock 自适配,异步解码编码不卡渲染
-- **流畅动画** — 启动 / 退出整屏形变(以光标为缩放锚点)、视图扫入、浮层弹出、歌词缓动平移、频谱弹簧;时长全配置化且与帧率解耦
-- **Lua 配置** — 单文件 `config.lua`,深合并默认值,LSP 补全 / 类型检查开箱即用;主题、键位、手感全量可调,保存即热重载
-- **Lua 脚本系统** — 配置文件就是脚本:事件订阅、属性观察、自定义键位动作、播放拦截改写、子进程、定时器、per-song 持久 KV…(见 [脚本指南](./docs/scripting.md))
-- **键位重映射** — nvim 键表示法(`<C-g>` / `<S-Left>`),动作 → 键全量可改
-- **缓存与下载** — 边播边缓存(LRU 容量上限)+ 永久下载导出;本地命中跳过网络
-- **搜索过滤** — fuzzy 匹配 + 拼音(全拼 / 首字母);Playlists 视图可穿透歌单内歌曲(歌名 / 艺人 / 专辑)
-- **love 与统计** — 喜欢标记双向同步;全量行为埋点(播放 provenance / 时长 / 跳过…),`mineral stats report` 出年度盘点
+- **流畅的终端动画** — 页面切换、全屏展开、列表滚动、菜单开合与歌词滚动都有过渡动画。
+- **随音乐变化的配色** — 从专辑封面提取主题色，用于频谱和全屏背景；背景随音乐响度变化。
+- **Seek 与 Gapless** — 支持流式播放中的进度跳转，以及跨音乐源的无缝切歌。
+- **逐字歌词与音频可视化** — 逐字歌词高亮，提供频谱柱、示波器、瀑布和地形四种可视化样式。
+- **多源整合** — 在同一个界面浏览各音乐源的歌单，将不同来源的歌曲加入同一个播放队列；收藏统一汇总到 Favorites 歌单。
+- **Client / Daemon 分离** — 播放由独立后台进程负责，可配置关闭界面后继续播放；多个客户端共享播放队列和状态。
 
 ## 安装
 
@@ -59,7 +50,7 @@ cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
 需要 Rust ≥ 1.96 与下列系统依赖。
 
 <details>
-<summary><b>源码构建依赖(点开)</b></summary>
+<summary><b>源码构建依赖</b></summary>
 
 | 平台            | 依赖                                               |
 | --------------- | -------------------------------------------------- |
@@ -67,12 +58,9 @@ cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
 | Debian / Ubuntu | `apt install libasound2-dev libssl-dev pkg-config` |
 | macOS           | 无额外依赖(音频走 CoreAudio)                       |
 
-> [!NOTE]
-> ALSA 头文件是**编译期**依赖;运行期无声卡(headless)会自动降级为静默模式,不会报错退出。
-
 ```bash
 git clone https://github.com/10knamesmore/Mineral && cd Mineral
-cargo build --release            # 产物在 target/release/mineral
+cargo build --release
 ```
 
 </details>
@@ -81,104 +69,40 @@ cargo build --release            # 产物在 target/release/mineral
 
 ```bash
 mineral                          # 启动 TUI(没有 daemon 会自动拉起)
-mineral channel netease login    # 终端二维码,App 扫码登录
+mineral channel netease login    # 扫码登录
 ```
 
-首次启动 sidebar 若提示未登录,跑上面第二条即可;凭证落盘后以后自动读取。
-
 <details>
-<summary><b>daemon 模式详解(点开)</b></summary>
+<summary><b>daemon 模式</b></summary>
 
 播放核心跑在独立 daemon 进程,TUI 只是它的一个 client:
 
-| 用法                | 行为                                                                                            |
-| ------------------- | ----------------------------------------------------------------------------------------------- |
-| `mineral`(默认)     | 没有 daemon 就自动拉起一个;**退出 TUI 时带走自己拉起的 daemon**                                 |
-| 后台续命            | 配置 `tui.behavior.kill_spawned_daemon_on_exit = false` 后,退出 TUI 音乐继续播,下次启动自动接回 |
-| `mineral serve`     | 手动起常驻 daemon                                                                               |
-| `mineral status`    | 命令行查看当前播放状态                                                                          |
-| `mineral stop`      | 让 daemon 优雅退出;没在跑时也算成功(幂等)                                                      |
-
-</details>
-
-<details>
-<summary><b>其他 CLI 子命令</b></summary>
-
-| 命令                                | 行为                                                                  |
-| ----------------------------------- | --------------------------------------------------------------------- |
-| `mineral cache status [--detail]`   | 查看音频 / 封面 / 歌单缓存占用;`--detail` 出逐条清单 + 按音质分布     |
-| `mineral cache clean`               | 清理三类缓存(保留播放统计 / 喜欢 / 历史),并展示清理效果             |
-| `mineral stats report [--top N]`    | 播放盘点报告(默认当年:次数 / 时长 / 常听来源 / 各类 top 榜)         |
-| `mineral stats top <category>`      | 单榜查询(某类别的 top 列表)                                         |
-| `mineral action <name>`             | 触发 `config.lua` 里 `mineral.action` 注册的具名动作(连 daemon 执行) |
-| `mineral ctl <command>`             | 控制 daemon |
+| 用法             | 行为                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `mineral`(默认)  | 没有 daemon 就自动拉起一个;**退出 TUI 时带走自己拉起的 daemon**                            |
+| 后台常住进程     | 配置 `tui.behavior.kill_spawned_daemon_on_exit = false` 后,退出 TUI 不会停止daemon继续模仿 |
+| `mineral serve`  | 手动起常驻 daemon                                                                          |
+| `mineral status` | 命令行查看当前播放状态                                                                     |
+| `mineral stop`   | 让 daemon 优雅退出;没在跑时也算成功(幂等)                                                  |
 
 </details>
 
 ## 配置
 
 > [!WARNING]
-> Mineral 仍在积极开发中,每次版本迭代都可能新增 / 调整 / 移除配置项,字段名与默认值也可能变。**每次升级后**建议重跑一遍:
+> Mineral 仍在积极开发中,每次版本迭代都可能新增 / 调整 / 移除配置项,字段名与默认值也可能变。
+> mineral 默认配置足够开箱即用， 建议暂不要依赖过多配置项
 >
 > ```bash
-> mineral config init    # 刷新编辑器类型注解(LSP stub + .luarc.json),补上新字段
+> mineral config init    # init lua lsp things
 > mineral config check   # 离线校验现有 config.lua 在新版本下是否还合法
 > ```
 >
-> `config init` 不会覆盖你已有的 `config.lua`,只更新类型注解与 `default.lua` 参考;`config check` 只读校验、不碰网络。
+> `config init` 不会覆盖你已有的 `config.lua`,只更新类型注解与 `default.lua` 参考
 
-```bash
-mineral config init    # 生成 config.lua 模板 + default.lua 参考 + 编辑器类型注解
-mineral config check   # 离线校验配置
-```
-
-- 配置就一个文件:`~/.config/mineral/config.lua`,**只写想改的字段**,其余深合并默认值
-- 全部字段与默认值见同目录生成的 `default.lua`(纯参考,程序不读它)
-- `mineral config init` 后即可获得 lsp 支持
-- 填错不会崩:整份回落默认 + 启动告警
-- **热重载**:主题 / 键位 / 脚本保存即生效;音频引擎、daemon 节拍等底层段重启生效
-
-每个旋钮的人话说明(主题 token 表 / 键语法 / 频谱 ADSR 调参 / 全部默认值)见 **[配置指南](./docs/configuration.md)**。
-
-## Lua 脚本
-
-`config.lua` 不只是配置——它跑在 daemon 内嵌的 Lua VM 里,顶层的 `mineral.*` 调用即是脚本。事件订阅、播放拦截、per-song 持久 KV、子进程、定时器组合起来,能做内置功能做不到的事:
-
-```lua
--- 睡眠定时器:按 S 设 30 分钟后停播,再按取消
-local sleep
-mineral.bind("S", function()
-    if sleep then
-        sleep:kill(); sleep = nil
-        mineral.ui.toast("睡眠定时器已取消", { id = "sleep" })
-    else
-        sleep = mineral.timer.after(30 * 60 * 1000, function()
-            mineral.player.stop(); sleep = nil
-        end)
-        mineral.ui.toast("30 分钟后停止播放", { id = "sleep" })
-    end
-end)
-
--- 烂歌自动跳:手动跳过 3 次的歌,以后起播直接跳
-local skips = {}
-mineral.on("track_finished", function(args)
-    if args.reason ~= "skip" then return end
-    mineral.store.inc(args.song.id, "plugin.skips", 1, function(n)
-        skips[args.song.id] = n
-    end)
-end)
-mineral.hook("before_stream", function(ctx)
-    if (skips[ctx.song.id] or 0) >= 3 then
-        return { skip = "跳过 3 次,自动拉黑" }
-    end
-end)
-```
-
-完整 API、运行时契约与更多 recipe(scrobble 上报、切歌桌面通知、下载自动同步 NAS、宽屏自适应行距…)见 **[lua参考](./docs/scripting.md)**。脚本错误被隔离,不会拖垮播放。
+参考 [文档](/docs/configuration.md)
 
 ## 快捷键
-
-以下是默认键位,除两个硬编码逃生口(`Ctrl-c` / `Q`)外**全部**可在 `config.lua` 的 `tui.keys` 重映射(nvim 键表示法);`mineral.bind` 可绑自定义脚本动作。app 内按 `?` 看完整键表。
 
 <details open>
 <summary><b>全局</b></summary>
@@ -188,7 +112,7 @@ end)
 | `Space`   | 播放 / 暂停                                     |
 | `n` / `p` | 下一首 / 上一首(`p` 在播放 > 3s 时回到本曲开头) |
 | `←` / `→` | 后退 / 前进 5s(`Shift` 加持 30s)                |
-| `+` / `-` | 音量 ±5(别名 `=` / `_`)                          |
+| `+` / `-` | 音量 ±5(别名 `=` / `_`)                         |
 | `m`       | 循环模式:顺序 → 随机 → 列表循环 → 单曲循环      |
 | `z`       | 进 / 退全屏沉浸态                               |
 | `Tab`     | 播放队列浮层                                    |
@@ -198,39 +122,39 @@ end)
 | `q`       | 退出(带确认)                                    |
 | `?`       | 打开快捷键帮助(app 内完整键表)                  |
 
-> 两个**硬编码逃生口**不可重映射:`Ctrl-c` 立即退出 TUI(不动 daemon);`Q`(Shift+q)退出 TUI **并停止 daemon**(无视 `kill_spawned_daemon_on_exit`;搜索输入态下 `Q` 当字符)。
+`ctrl-c`(退出tui, 不动daemon) 与 `shift + q`(退出tui与daemon) 无法重映射
 
 </details>
 
 <details>
 <summary><b>列表(playlists / library)</b></summary>
 
-| 键                        | 动作                                  |
-| ------------------------- | ------------------------------------- |
-| `j` / `k`(或 `↓` / `↑`)   | 上下移动 1 行                         |
-| `J` / `K`                 | 上下移动 7 行                         |
-| `g` / `G`                 | 跳到首 / 末                           |
-| `Ctrl-d` / `Ctrl-u`       | 视口下滚 / 上滚(浏览滚列表,全屏滚歌词) |
-| `Ctrl-f` / `Ctrl-b`       | 翻页下滚 / 上滚                        |
-| `l` / `Enter`             | 进入歌单 / 播放选中曲(整张歌单进队列) |
-| `h` / `Esc` / `Backspace` | 返回上级 / 清搜索词                   |
-| `/`                       | 搜索过滤(fuzzy + 拼音)                |
-| `f`                       | 切换选中曲 ♥                          |
-| `d`                       | 下载选中曲 / 歌单                     |
-| `Ctrl-l`                  | 下探:进专辑 / 艺人详情页             |
-| `[` / `]`                 | 详情页分区切换                        |
-| `o`                       | 操作菜单(选中曲 / 歌单)              |
-| `y`                       | 复制菜单(标题 / 艺人 / 链接…)        |
+| 键                        | 动作                  |
+| ------------------------- | --------------------- |
+| `j` / `k`(或 `↓` / `↑`)   | 上下移动 1 行         |
+| `J` / `K`                 | 上下移动 7 行         |
+| `g` / `G`                 | 跳到行首 / 末         |
+| `Ctrl-d` / `Ctrl-u`       | 下 / 上滚             |
+| `Ctrl-f` / `Ctrl-b`       | 翻页                  |
+| `l` / `Enter`             | 进入歌单 / 播放选中曲 |
+| `h` / `Esc` / `Backspace` | 返回                  |
+| `/`                       | 搜索(fuzzy + 拼音)    |
+| `f`                       | 切换 favorate         |
+| `d`                       | 下载                  |
+| `Ctrl-l`                  | 进入详情页            |
+| `[` / `]`                 | 详情页分区切换        |
+| `o`                       | 操作菜单              |
+| `y`                       | 复制菜单              |
 
 </details>
 
 <details>
 <summary><b>播放队列浮层(<code>Tab</code> 打开)</b></summary>
 
-| 键                  | 动作                      |
-| ------------------- | ------------------------- |
-| `c`                 | 光标跳回在播条目          |
-| `Ctrl-j` / `Ctrl-k` | 选中条目下移 / 上移一格   |
+| 键                  | 动作                    |
+| ------------------- | ----------------------- |
+| `c`                 | 光标跳回在播条目        |
+| `Ctrl-j` / `Ctrl-k` | 选中条目下移 / 上移一格 |
 
 </details>
 
@@ -239,11 +163,11 @@ end)
 
 | 键                 | 动作                  |
 | ------------------ | --------------------- |
-| 字符 / `Backspace` | 增 / 删过滤词          |
-| `←` / `→`          | 移动光标(可在词中插入) |
-| `Home` / `End`     | 光标跳首 / 尾          |
-| `Enter`            | 退出输入态,过滤词保留  |
-| `Esc`              | 清过滤词 + 退出输入态  |
+| 字符 / `Backspace` | 增 / 删过滤词         |
+| `←` / `→`          | 移动光标)             |
+| `Home` / `End`     | 光标跳首 / 尾         |
+| `Enter`            | 退出输入态,过滤词保留 |
+| `Esc`              | 清过滤词 + 退出输入态 |
 
 </details>
 
@@ -251,23 +175,22 @@ end)
 
 遵循 XDG Base Directory:
 
-| 用途                          | 路径                                   |
-| ----------------------------- | -------------------------------------- |
-| 配置                          | `~/.config/mineral/config.lua`         |
-| 数据(凭证、统计、per-song KV) | `~/.local/share/mineral`               |
-| 缓存(封面、音频流缓存)        | `~/.cache/mineral`                     |
-| 下载导出                      | `~/Music/mineral`(`download.dir` 可改) |
+| 用途                          | 路径                                                |
+| ----------------------------- | --------------------------------------------------- |
+| 配置                          | `~/.config/mineral/config.lua`                      |
+| 数据(凭证、统计、per-song KV) | `~/.local/share/mineral`                            |
+| 缓存(封面、音频流缓存)        | `~/.cache/mineral`                                  |
+| 下载导出                      | `~/Music/mineral`                                   |
 | 日志                          | `~/.cache/mineral/mineral.log.YYYY-MM-DD`(按天轮转) |
 
 ## 开发
 
 ```bash
-cargo snap                                # 跑测试 + review insta snap
-cargo td                                  # doctest(nextest 不跑,单独兜)
+cargo snap                                # test + review insta snap
 cargo clippy
 cargo fmt
-cargo dylint --all -- --locked --workspace --all-targets  # 自定义 lint
-cargo run -p mineral                      # 运行 TUI
+cargo dylint --all -- --locked --workspace --all-targets  # custom lint
+cargo run --release                      # run TUI
 ```
 
 ## 致谢
