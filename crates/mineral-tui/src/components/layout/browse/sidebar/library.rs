@@ -25,7 +25,7 @@ use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, ListRowIdentity, View};
 use crate::runtime::view_model::PlaylistEntryView;
 
 /// Table 选中符；列矩形求解使用同一显示宽度。
@@ -112,6 +112,7 @@ impl TrackLayout {
 
 /// 渲染 Library 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
+    let surface = super::expansion::begin_list(buf, area, state, View::Library);
     let title = state.opened_playlist().map_or_else(
         || "tracks".to_owned(),
         |p| format!("tracks / {}", p.data.name),
@@ -238,7 +239,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             buf,
             &state.images,
             *column,
-            visible.map(|index| {
+            visible.clone().map(|index| {
                 tracks
                     .get(index)
                     .and_then(|entry| entry.data.song.cover_url.as_ref())
@@ -279,6 +280,16 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         cursor,
         entries,
         theme,
+    );
+    super::expansion::finish_list(
+        buf,
+        state,
+        theme,
+        surface,
+        visible.clone(),
+        visible
+            .filter_map(|index| tracks.get(index))
+            .map(|track| ListRowIdentity::Track(track.data.index)),
     );
 }
 

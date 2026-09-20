@@ -16,7 +16,7 @@ use crate::runtime::action::{Action, ScrollStep, SelectionMove};
 use crate::runtime::keymap::{Keymap, chord_from_event};
 use crate::runtime::line_input::InputRequest;
 use crate::runtime::scroll;
-use crate::runtime::state::{BrowseModel, BrowsePage, View};
+use crate::runtime::state::{BrowseModel, BrowsePage, ListExpansionScope, ListRowIdentity, View};
 use crate::runtime::track_pos::{PendingRestore, TrackPos};
 
 use crate::app::App;
@@ -372,6 +372,34 @@ impl BrowsePage {
             screen_row,
             "clear list filter preserving selected item"
         );
+        if let Some(selected) = index {
+            let anim = model.cfg.tui().animation();
+            let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
+            match self.view.current() {
+                View::Playlists => self.list_expansion.borrow_mut().start(
+                    ListExpansionScope::Browse(View::Playlists),
+                    model
+                        .library
+                        .playlists
+                        .iter()
+                        .enumerate()
+                        .map(|(index, playlist)| {
+                            (ListRowIdentity::Playlist(playlist.data.id.clone()), index)
+                        }),
+                    selected,
+                    ticks,
+                ),
+                View::Library => self.list_expansion.borrow_mut().start(
+                    ListExpansionScope::Browse(View::Library),
+                    self.current_tracks(model)
+                        .iter()
+                        .enumerate()
+                        .map(|(index, track)| (ListRowIdentity::Track(track.data.index), index)),
+                    selected,
+                    ticks,
+                ),
+            }
+        }
     }
 
     /// 返回时恢复父列表中的已打开歌单；异步刷新改变排序时按身份重新定位。

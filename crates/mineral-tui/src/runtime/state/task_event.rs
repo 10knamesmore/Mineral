@@ -14,6 +14,7 @@ impl AppState {
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
+                self.browse.list_expansion.get_mut().invalidate();
                 let position = self.playlist_list_position();
                 // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
                 // 变换后),client 不自行按源拼接。
@@ -48,6 +49,11 @@ impl AppState {
                     {
                         return;
                     }
+                }
+                if self.browse.view == super::View::Library
+                    && self.browse.nav.opened_playlist.as_ref() == Some(id)
+                {
+                    self.browse.list_expansion.get_mut().invalidate();
                 }
                 let parent_position = self.playlist_list_position();
                 let playlist = &detail.playlist;

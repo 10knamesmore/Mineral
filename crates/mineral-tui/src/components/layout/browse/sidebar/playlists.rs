@@ -18,7 +18,7 @@ use crate::components::layout::shared::thumbnails::{
 use crate::render::theme::Theme;
 use crate::runtime::deep_search::HitField;
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, ListRowIdentity, View};
 use crate::runtime::view_model::PlaylistView;
 
 /// Table 选中符；列矩形求解使用同一显示宽度。
@@ -26,6 +26,7 @@ const HIGHLIGHT_SYMBOL: &str = "▌ ";
 
 /// 渲染 Playlists 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
+    let surface = super::expansion::begin_list(buf, area, state, View::Playlists);
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
     let pos = position_label(state.browse.nav.playlist.sel(), total);
@@ -142,6 +143,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     );
     if show_cover && let Some(column) = columns.first() {
         let covers = visible
+            .clone()
             .map(|index| {
                 rows_data.get(index).and_then(|playlist| {
                     crate::image::collage::effective_cover_url(state, &playlist.data)
@@ -157,6 +159,16 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         );
     }
     paint_minimap(buf, area, state, theme, total, motion);
+    super::expansion::finish_list(
+        buf,
+        state,
+        theme,
+        surface,
+        visible.clone(),
+        visible
+            .filter_map(|index| rows_data.get(index))
+            .map(|playlist| ListRowIdentity::Playlist(playlist.data.id.clone())),
+    );
 }
 
 /// 在面板右边框画全列表位置：歌单只有光标，没有喜欢 / 在播标记。

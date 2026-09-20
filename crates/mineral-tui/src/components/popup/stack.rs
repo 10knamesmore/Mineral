@@ -220,6 +220,15 @@ impl OverlayStack {
         }
     }
 
+    /// 配置热更时重设队列搜索展开的拍数，保留正在播放的相位。
+    pub(crate) fn retempo_queue_search(&mut self, ticks: u16) {
+        for mounted in &mut self.stack {
+            if let OverlayKind::Queue(queue) = &mut mounted.kind {
+                queue.retempo_search_expansion(ticks);
+            }
+        }
+    }
+
     /// 关闭栈顶浮层:触发收起动画,延迟到归零后由 [`Self::tick`] 真正移除。
     pub(crate) fn close_top(&mut self) {
         if let Some(m) = self.stack.last_mut() {
@@ -231,6 +240,9 @@ impl OverlayStack {
     pub(crate) fn tick(&mut self) {
         for m in &mut self.stack {
             m.anim.tick();
+            if let OverlayKind::Queue(queue) = &mut m.kind {
+                queue.tick_search_expansion();
+            }
         }
         self.stack.retain(|m| m.anim.active());
     }

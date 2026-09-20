@@ -12,13 +12,13 @@ use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
 use crate::runtime::deep_search::{self, DeepHit};
 use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
-use super::View;
 use super::library::LibraryData;
 use super::lyric::view::LyricView;
 use super::nav::NavState;
 use super::search::SearchState;
 use super::track_filter::{FilteredTracks, TrackFilterCache};
 use super::view_switch::ViewSwitch;
+use super::{ListExpansionState, View};
 
 /// 歌单列表与歌单内曲目各自的搜索；切换视图不清除另一层的查询。
 pub struct BrowseSearch {
@@ -73,6 +73,9 @@ pub struct BrowsePage {
     /// 两层列表各自的查询；过渡绘制按面板取值，按键使用当前视图的查询。
     pub search: BrowseSearch,
 
+    /// 清除搜索的逐行展开；渲染时只缓存当前可见结果。
+    pub(crate) list_expansion: RefCell<ListExpansionState>,
+
     /// 当前歌单过滤后的下标与时长；数据或查询变化时重建。
     filtered_tracks: RefCell<TrackFilterCache>,
 }
@@ -98,6 +101,7 @@ impl BrowsePage {
                 playlists: SearchState::new(),
                 tracks: SearchState::new(),
             },
+            list_expansion: RefCell::new(ListExpansionState::default()),
             filtered_tracks: RefCell::new(TrackFilterCache::default()),
         }
     }
@@ -132,6 +136,9 @@ impl BrowsePage {
     pub fn retempo(&mut self, anim: &AnimationConfig) {
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
+        self.list_expansion
+            .get_mut()
+            .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.view
             .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));
         self.fullscreen

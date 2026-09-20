@@ -2,7 +2,7 @@
 //!
 //! 过滤只动**显示**([`QueueOverlay::visible`] 给出按匹配分降序的队列真实下标),
 //! 底层播放队列不发任何编辑。输入态键处理与浏览页 `/` 同构:Enter 保留词退输入、
-//! Esc 清词退出、逐字改词把光标复位到最相关行。
+//! Esc 清词退出、改词定位最相关行，清空时保留选中位置并展开完整队列。
 
 use std::time::Instant;
 
@@ -18,7 +18,7 @@ use crate::components::popup::component::OverlayResponse;
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
 use crate::runtime::line_input::InputRequest;
-use crate::runtime::state::{AppState, SearchState};
+use crate::runtime::state::{AppState, ListExpansionScope, ListRowIdentity, SearchState};
 
 impl QueueOverlay {
     /// 当前过滤词是否非空(过滤生效中)。
@@ -57,48 +57,63 @@ impl QueueOverlay {
         self.visible(ctx).get(self.list.sel()).copied()
     }
 
-    /// 进入 `/` 输入态并清词,光标归首。
-    pub(super) fn begin_search(&mut self) {
+    /// 进入 `/` 输入态；已有过滤先展开回完整队列，第一处改词再定位到首个命中。
+    pub(super) fn begin_search(&mut self, ctx: &AppState) {
+        self.clear_filter(ctx);
         self.search.typing = true;
-        self.search.clear();
-        self.list.set_sel(0);
         self.last_sel_change = Instant::now();
     }
 
-    /// 清掉过滤词、退出过滤:光标落回原选中歌的队列真实下标(词清后视图恒等,
-    /// 过滤视图位即真实位)。
+    /// 清除过滤时保留具体队列位置与屏幕行，并展开回完整队列。
     pub(super) fn clear_filter(&mut self, ctx: &AppState) {
-        let raw = self.raw_cursor(ctx).unwrap_or(0);
         self.search.typing = false;
+        if !self.is_filtering() {
+            return;
+        }
+        let selected = self.raw_cursor(ctx);
+        let screen_row = self.list.sel().saturating_sub(self.list.scroll_target());
         self.search.clear();
-        self.list.set_sel(raw);
         self.last_sel_change = Instant::now();
+        if let Some(raw) = selected {
+            self.list.place(raw, screen_row);
+            self.expansion.get_mut().start(
+                ListExpansionScope::Queue,
+                (0..ctx.player.queue.len()).map(|index| (ListRowIdentity::Queue(index), index)),
+                raw,
+                ctx.list_glide_ticks(),
+            );
+        } else {
+            self.list.place(0, 0);
+            self.expansion.get_mut().invalidate();
+        }
+        mineral_log::debug!(target: "tui", ?selected, screen_row, "clear queue filter preserving occurrence");
     }
 
-    /// `/` 输入态按键:与浏览页 `/` 同构。改词后光标复位到最相关行(过滤视图首行)。
+    /// `/` 输入态按键：改词定位首个命中，清空时保留选中位置。
     /// 输入态吞掉一切键(含空格),不半穿透给全局播放控制。
     ///
     /// 带 CONTROL 的字符键一律吞掉——否则 `<C-d>` 族滚动键会把裸字符塞进 query。
-    pub(super) fn on_search_key(&mut self, key: &KeyEvent) -> OverlayResponse {
+    pub(super) fn on_search_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
         let previous_query = self.search.query().to_owned();
         match key.code {
-            KeyCode::Esc => {
-                self.search.typing = false;
-                self.search.clear();
-                self.list.set_sel(0);
-            }
+            KeyCode::Esc => self.clear_filter(ctx),
             KeyCode::Enter => self.search.typing = false,
             KeyCode::Backspace => {
                 if self.search.query().is_empty() {
                     self.search.typing = false;
+                } else if self.search.query().chars().count() == 1
+                    && !self.search.query_split().0.is_empty()
+                {
+                    self.clear_filter(ctx);
+                    self.search.typing = true;
                 } else if self.search.edit(InputRequest::DeletePrev) {
-                    self.list.set_sel(0);
+                    self.list.place(0, 0);
                 }
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {}
             KeyCode::Char(c) => {
                 self.search.edit(InputRequest::Insert(c));
-                self.list.set_sel(0);
+                self.list.place(0, 0);
             }
             KeyCode::Left => {
                 self.search.edit(InputRequest::Left);

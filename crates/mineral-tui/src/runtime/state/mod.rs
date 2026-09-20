@@ -8,6 +8,7 @@ mod detail;
 mod library;
 mod library_projection;
 mod lifecycle;
+mod list_expansion;
 mod lyric;
 mod nav;
 mod overlay_reveal;
@@ -33,6 +34,9 @@ pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
+pub(crate) use list_expansion::{
+    FilteredListFrame, ListExpansion, ListExpansionScope, ListExpansionState, ListRowIdentity,
+};
 pub use lyric::LyricExtra;
 pub use overlay_reveal::OverlayReveal;
 pub use player::PlayerMirror;

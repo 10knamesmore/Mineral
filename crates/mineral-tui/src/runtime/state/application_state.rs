@@ -163,6 +163,7 @@ impl AppState {
     /// 氛围背景滞后跟随、搜索布局、marquee 相位、失焦渐变、歌词滚动。
     pub fn tick_frame(&mut self) {
         self.browse.view.tick();
+        self.browse.list_expansion.get_mut().tick();
         self.browse.fullscreen.tick();
         self.browse.tick_ambient_reveal();
         self.channel_search.tick();

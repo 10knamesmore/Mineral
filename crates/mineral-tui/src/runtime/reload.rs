@@ -88,6 +88,11 @@ impl crate::app::App {
             *anim.popup_anim_ms(),
             tick_ms,
         ));
+        self.overlays
+            .retempo_queue_search(crate::render::anim::ticks16_from_ms(
+                *anim.list_scroll_ms(),
+                tick_ms,
+            ));
         self.notifications.retempo(
             *tui_cfg.toast().flash_ttl_secs(),
             crate::render::anim::ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),

@@ -17,6 +17,7 @@ impl App {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
             Event::Resize(..) => {
+                self.state.browse.list_expansion.get_mut().invalidate();
                 self.state.images.refresh_cell_pixels();
                 self.report_terminal_state();
             }
@@ -34,6 +35,7 @@ impl App {
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
     fn handle_key(&mut self, key: &KeyEvent) {
+        self.state.browse.list_expansion.get_mut().interrupt();
         // Ctrl-C 强制退出(skip 一切)。
         if matches!(
             (key.modifiers, key.code),

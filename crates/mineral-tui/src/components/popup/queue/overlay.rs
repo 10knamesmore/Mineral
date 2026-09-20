@@ -1,5 +1,6 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
+use std::cell::RefCell;
 use std::time::Instant;
 
 use crossterm::event::KeyEvent;
@@ -12,6 +13,7 @@ use ratatui::widgets::{Block, Paragraph, Row, Table, Widget};
 use super::columns::QueueColumns;
 use super::footer::remaining_label;
 use super::row::{RowDecor, build_row};
+use crate::components::layout::shared::list_expansion;
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rects, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::thumbnails::{render_table_thumbnails, thumbnail_phase};
@@ -25,7 +27,9 @@ use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::marquee::Slot;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::state::{AppState, OverlayReveal};
+use crate::runtime::state::{
+    AppState, ListExpansionScope, ListExpansionState, ListRowIdentity, OverlayReveal,
+};
 
 /// 浮动 queue 浮层。
 ///
@@ -43,6 +47,9 @@ pub(crate) struct QueueOverlay {
     /// 内含 nucleo matcher + 多份缓存体量大,直接嵌入会让 `OverlayKind` 各变体尺寸悬殊。
     pub(super) search: Box<crate::runtime::state::SearchState>,
 
+    /// 清除过滤的可见帧与展开进度；装箱避免增大整个浮层枚举。
+    pub(super) expansion: Box<RefCell<ListExpansionState>>,
+
     /// 最近的光标或过滤变化,用于缩略图编码防抖;时长从当前配置读取。
     pub(super) last_sel_change: Instant,
 }
@@ -53,17 +60,29 @@ impl QueueOverlay {
         Self {
             list: ScrollList::at(sel),
             search: Box::new(crate::runtime::state::SearchState::new()),
+            expansion: Box::default(),
             last_sel_change: Instant::now(),
         }
     }
 
-    /// 把光标钳到 `[0, len-1]`(队列变短后防越界);空队列归 0。
+    /// 队列快照替换后钳制光标，并丢弃不再对应当前队列的画面坐标。
     pub(crate) fn clamp(&mut self, len: usize) {
+        self.expansion.get_mut().invalidate();
         let selected = self.list.sel();
         self.list.clamp(len);
         if self.list.sel() != selected {
             self.last_sel_change = Instant::now();
         }
+    }
+
+    /// 与浮层栈同拍推进搜索展开，结束后释放可见帧。
+    pub(crate) fn tick_search_expansion(&mut self) {
+        self.expansion.get_mut().tick();
+    }
+
+    /// 配置热更时保留搜索展开相位，只重设其速度。
+    pub(crate) fn retempo_search_expansion(&mut self, ticks: u16) {
+        self.expansion.get_mut().retempo(ticks);
     }
 
     /// 当前光标行(过滤视图位;集成测试断言用)。脚本 ctx 采集要队列真实下标走
@@ -158,6 +177,31 @@ impl Overlay for QueueOverlay {
     }
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+        let reveal = ctx.overlay_reveal.get();
+        let surface = if reveal.own == OverlayReveal::FULL && reveal.yielded() == 0 {
+            let area = Rect::new(
+                inner.x.saturating_sub(1),
+                inner.y.saturating_sub(1),
+                inner.width.saturating_add(2),
+                inner.height.saturating_add(2),
+            );
+            let body = Rect::new(
+                inner.x,
+                inner.y.saturating_add(1),
+                inner.width,
+                inner.height.saturating_sub(1),
+            );
+            Some(list_expansion::begin_list(
+                buf,
+                area,
+                body,
+                &self.expansion.borrow(),
+                ListExpansionScope::Queue,
+            ))
+        } else {
+            self.expansion.borrow_mut().invalidate();
+            None
+        };
         // 在播样式按 server 的队列位置锚点定位;按歌曲身份匹配会点亮重复曲的所有副本。
         let current_idx = ctx.queue_current_index();
         let cols =
@@ -247,13 +291,26 @@ impl Overlay for QueueOverlay {
                 buf,
                 &ctx.images,
                 *column,
-                window.map(|view_index| {
+                window.clone().map(|view_index| {
                     visible
                         .get(view_index)
                         .and_then(|&raw_index| ctx.player.queue.get(raw_index))
                         .and_then(|song| song.cover_url.as_ref())
                 }),
                 phase,
+            );
+        }
+        if let Some(surface) = surface {
+            list_expansion::finish_list(
+                buf,
+                &mut self.expansion.borrow_mut(),
+                theme,
+                surface,
+                window.clone(),
+                window
+                    .filter_map(|index| visible.get(index).copied())
+                    .map(ListRowIdentity::Queue),
+                self.is_filtering(),
             );
         }
     }
@@ -269,10 +326,11 @@ impl Overlay for QueueOverlay {
         self.render_minimap(buf, area, inner, ctx, theme);
     }
 
-    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
+        self.expansion.get_mut().interrupt();
         // `/` 输入态:吞键进过滤词(文本编辑),优先于一切动作与半穿透。
         if self.is_typing() {
-            return self.on_search_key(key);
+            return self.on_search_key(key, ctx);
         }
         // 非输入态:导航 / 激活 / 关闭全走 on_action(跟随键位重映射与 behavior 步长);
         // 未映射裸键半穿透给全局(播放控制族,白名单在 App::passes_overlay)。
@@ -280,6 +338,7 @@ impl Overlay for QueueOverlay {
     }
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+        self.expansion.get_mut().interrupt();
         // `/` 输入态:所有键让给 on_key 做文本编辑(裸 KeyCode 分派),动作层一律不认。
         if self.is_typing() {
             return None;
@@ -304,7 +363,7 @@ impl Overlay for QueueOverlay {
             }
             // `/`:进入模糊过滤输入态。
             Action::EnterSearch => {
-                self.begin_search();
+                self.begin_search(ctx);
                 Some(OverlayResponse::Consumed)
             }
             // back:过滤生效时先清词退出过滤(留在浮层),否则关闭本浮层。
