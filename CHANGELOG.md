@@ -1,4 +1,33 @@
 # Changelog
+## [0.5.8] — 2026-09-20
+
+### Features
+
+- Load NetEase tracks on demand ([`c570e23`](https://github.com/10knamesmore/Mineral/commit/c570e23bcd8d36c143a962bca786f11cd24c026d))
+
+- Size minimap halos by per-item partitions ([`30ac057`](https://github.com/10knamesmore/Mineral/commit/30ac057b1b0474d8035f3aba2d80dd0e5e5f12e8))
+
+- Move thumbnails with view transitions ([`4be289d`](https://github.com/10knamesmore/Mineral/commit/4be289d7f9500aff4d3f2836fda45332c22bb29e))
+
+- Crossfade covers into the idle fullscreen vinyl ([`bf76996`](https://github.com/10knamesmore/Mineral/commit/bf769967436a5158d7e3293696bebec34539daa2))
+
+- Add the mineral ctl control surface ([`309a11f`](https://github.com/10knamesmore/Mineral/commit/309a11f614d943f7511f0a14a9c812b75bed6d88))
+
+- Preserve playlist search context across navigation ([`46cddfa`](https://github.com/10knamesmore/Mineral/commit/46cddfa3a20559aa14eb191846d4a3f60b94c8a0))
+
+- Animate clearing browse and queue filters ([`73930bd`](https://github.com/10knamesmore/Mineral/commit/73930bdaba543d7b4137b0c73d682606f3d135f1))
+
+### Bug Fixes
+
+- Retry task submissions when IPC capacity is exhausted ([`2fb53cc`](https://github.com/10knamesmore/Mineral/commit/2fb53cc62fa2758dddac03f5205a260817284520))
+
+- Preserve cover proportions and animated backgrounds ([`0974a53`](https://github.com/10knamesmore/Mineral/commit/0974a53e6f61e4299e257dc09bf2211f27a0555b))
+
+- Keep wide characters from obscuring overlay borders ([`9d5b16b`](https://github.com/10knamesmore/Mineral/commit/9d5b16b0976893c7a3773ade1a161f7789a49a18))
+
+### Performance
+
+- Accelerate cover decoding and sampling ([`8cbfc2d`](https://github.com/10knamesmore/Mineral/commit/8cbfc2d51615135c07283d69eb948b39e95009fb))
 ## [0.5.7] — 2026-09-13
 
 ### Features
