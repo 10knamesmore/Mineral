@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn filtered_o_menu_play_defaults_to_full_collection() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.browse.search.set_query("Gjs");
+        app.state.browse.search.tracks.set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()
@@ -960,7 +960,7 @@ mod tests {
     fn filtered_o_menu_play_can_play_matches_only() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
         set_filter_play_scope(&mut app, "matches")?;
-        app.state.browse.search.set_query("Gjs");
+        app.state.browse.search.tracks.set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()

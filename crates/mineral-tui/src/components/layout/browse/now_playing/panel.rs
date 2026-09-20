@@ -53,7 +53,7 @@ fn draw_view(
     cover_in_flight: bool,
 ) {
     match view {
-        View::Playlists => match state.selected_playlist() {
+        View::Playlists => match state.selected_playlist_in_list() {
             Some(p) => playlist::draw(frame, area, p, state, theme, cover_in_flight),
             None => paint_empty(frame, area, theme),
         },

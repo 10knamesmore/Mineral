@@ -14,6 +14,7 @@ impl AppState {
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
+                let position = self.playlist_list_position();
                 // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
                 // 变换后),client 不自行按源拼接。
                 self.library.playlists = playlists
@@ -21,9 +22,7 @@ impl AppState {
                     .cloned()
                     .map(|data| PlaylistView { data })
                     .collect();
-                if self.browse.nav.playlist.sel() >= self.library.playlists.len() {
-                    self.browse.nav.playlist.set_sel(0);
-                }
+                self.restore_playlist_list_position(position);
             }
             // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
             TaskEvent::PlaylistsFetched { .. } => {}
@@ -50,6 +49,7 @@ impl AppState {
                         return;
                     }
                 }
+                let parent_position = self.playlist_list_position();
                 let playlist = &detail.playlist;
                 let selected_index = (self.browse.view == super::View::Library)
                     .then(|| {
@@ -77,6 +77,7 @@ impl AppState {
                     },
                 );
                 self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
+                self.restore_playlist_list_position(parent_position);
                 let position = selected_index.and_then(|index| {
                     self.filtered_tracks()
                         .iter()

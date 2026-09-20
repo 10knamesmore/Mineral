@@ -96,6 +96,7 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
         SourceKind::MINERAL,
         3,
     )];
+    s.browse.nav.opened_playlist = Some(pid.clone());
     s.browse.view.switch_to(View::Library);
     let views = entry_views(mixed_source_songs())
         .into_iter()
@@ -131,6 +132,7 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
 /// 当前在播标记),view = Library,选中第 1 首。
 pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     let mut s = state_with_playlists()?;
+    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
     s.browse.view.switch_to(View::Library);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
@@ -204,6 +206,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
         SourceKind::NETEASE,
         10,
     )];
+    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "cf"));
     s.browse.view.switch_to(View::Library);
     let tracks = chinese_football(4);
     let views = entry_views(tracks.clone());
@@ -225,6 +228,7 @@ pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
 pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     s.library.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
+    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
     s.browse.view.switch_to(View::Library);
 
     let make = |name: &str, artist: &str, album: &str| {
@@ -635,6 +639,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
 pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    app.state.browse.nav.opened_playlist = Some(pid.clone());
     app.state.library.playlists = vec![PlaylistView {
         data: Playlist::builder()
             .id(pid.clone())
@@ -754,6 +759,7 @@ pub(crate) fn app_with_library_probed(
     };
     let mut app = test_app_with(Arc::new(client))?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
+    app.state.browse.nav.opened_playlist = Some(pid.clone());
     app.state.library.playlists = vec![playlist_view(
         "p1",
         "EndSerenading",

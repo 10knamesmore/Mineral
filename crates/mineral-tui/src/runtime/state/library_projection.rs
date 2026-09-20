@@ -6,7 +6,50 @@ use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 use super::{AppState, LibraryQueueProjection, View, browse, track_filter};
 
+/// 数据更新前外层歌单列表的选中身份与屏幕行，用于在新结果排序中恢复位置。
+pub(super) struct PlaylistListPosition {
+    /// 更新前选中的歌单。
+    playlist: PlaylistId,
+
+    /// 选中行相对视口顶部的位置。
+    screen_row: usize,
+}
+
 impl AppState {
+    /// 在替换歌单或更新深度搜索数据前，记录父列表选择。
+    pub(super) fn playlist_list_position(&self) -> Option<PlaylistListPosition> {
+        Some(PlaylistListPosition {
+            playlist: self.selected_playlist_in_list()?.data.id.clone(),
+            screen_row: self
+                .browse
+                .nav
+                .playlist
+                .sel()
+                .saturating_sub(self.browse.nav.playlist.scroll_target()),
+        })
+    }
+
+    /// 让数据更新后的父列表仍指向同一歌单；目标消失时回到列表开头。
+    pub(super) fn restore_playlist_list_position(
+        &mut self,
+        position: Option<PlaylistListPosition>,
+    ) {
+        let resolved = position.and_then(|position| {
+            self.filtered_playlists()
+                .iter()
+                .position(|p| p.data.id == position.playlist)
+                .map(|index| (index, position.screen_row))
+        });
+        if let Some((index, screen_row)) = resolved {
+            if index != self.browse.nav.playlist.sel() {
+                mineral_log::debug!(target: "tui", previous_selection = self.browse.nav.playlist.sel(), selection = index, screen_row, "retain playlist selection after library update");
+                self.browse.nav.playlist.place(index, screen_row);
+            }
+        } else {
+            self.browse.nav.playlist.place(0, 0);
+        }
+    }
+
     /// 曲目到达时兑现挂起的位置恢复(进歌单时曲目还没拉到的延迟落位)。
     ///
     /// 仅当用户仍停在该歌单的 Library 视图、且光标未被动过(还在进入时的第 0 行)
@@ -155,18 +198,22 @@ impl AppState {
         }
     }
 
-    /// 返回当前选中歌单的引用。
-    ///
-    /// `nav.sel_playlist` 的语义随 [`super::BrowsePage::view`] 切换:
-    /// - Playlists 视图:filtered 列表的索引,过滤词作用于 playlist 名,渲染、导航、
-    ///   selected_playlist 都对齐 filtered。
-    /// - Library 视图:raw 列表的索引(进 Library 时已 remap 锁定为「用户进的那条」),
-    ///   此时 search.query 作用于 tracks,跟 playlists 过滤无关。
+    /// 当前选中歌单：外层按过滤列表光标，歌单内按打开时保存的身份。
     pub fn selected_playlist(&self) -> Option<&PlaylistView> {
         self.browse.selected_playlist(self.browse_model())
     }
 
-    /// 当前选中歌单的曲目槽位(`None` = 还没拉到)。
+    /// 外层过滤列表选中的歌单；离屏绘制也始终读取这一层的光标。
+    pub fn selected_playlist_in_list(&self) -> Option<&PlaylistView> {
+        self.browse.selected_playlist_in_list(self.browse_model())
+    }
+
+    /// 已打开歌单；供曲目面板在进入与返回的整个动画期间读取。
+    pub fn opened_playlist(&self) -> Option<&PlaylistView> {
+        self.browse.opened_playlist(self.browse_model())
+    }
+
+    /// 已打开歌单的曲目槽位(`None` = 尚未进入歌单或还没拉到)。
     pub fn current_tracks_slot(&self) -> Option<&Vec<PlaylistEntryView>> {
         self.browse.current_tracks_slot(self.browse_model())
     }
@@ -271,7 +318,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.set_query("cry");
+        s.browse.search.playlists.set_query("cry");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -289,7 +336,7 @@ mod tests {
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.set_query("chunying");
+        s.browse.search.playlists.set_query("chunying");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -307,7 +354,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.set_query("my");
+        s.browse.search.playlists.set_query("my");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -321,10 +368,11 @@ mod tests {
     #[test]
     fn match_for_returns_original_indices() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.browse.search.set_query("cry");
+        s.browse.search.playlists.set_query("cry");
         let m = s
             .browse
             .search
+            .playlists
             .match_for("春日影")
             .ok_or_else(|| color_eyre::eyre::eyre!("cry 应命中春日影"))?;
         assert_eq!(m.hits.as_slice(), &[0u32, 1, 2]);
@@ -335,7 +383,7 @@ mod tests {
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
-        assert!(s.browse.search.match_for("春日影").is_none());
+        assert!(s.browse.search.playlists.match_for("春日影").is_none());
         Ok(())
     }
 
@@ -355,6 +403,7 @@ mod tests {
         s.browse.nav.playlist.set_sel(0); // p1
         s.browse.nav.track.set_sel(0);
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
+        s.browse.nav.opened_playlist = Some(pid.clone());
         let tracks = endserenading(5);
         let anchor = tracks
             .get(2)
@@ -404,6 +453,7 @@ mod tests {
         s.browse.nav.playlist.set_sel(0);
         s.browse.nav.track.set_sel(1); // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
+        s.browse.nav.opened_playlist = Some(pid.clone());
         let tracks = endserenading(5);
         let anchor = tracks
             .get(3)
@@ -454,6 +504,7 @@ mod tests {
         s.browse.nav.track.set_sel(0);
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
+        s.browse.nav.opened_playlist = Some(target.clone());
         let tracks = endserenading(5);
         let anchor = tracks
             .first()

@@ -1,9 +1,9 @@
 //! 模糊搜索过滤器:fzf 风格子序列 + 中文拼音 / 首字母联合匹配。
 //!
-//! 给 `state.browse.search.query` 做本地过滤用。每条候选文本(歌名 / 艺人 / 专辑 / 歌单名)
-//! 预处理成 [`MatchableText`]:把原文、全拼、首字母三段拼成一个 char 数组喂给
-//! nucleo,既覆盖了「输入 `cry` 命中『春日影』」「输入 `chunying` 命中『春日影』」
-//! 这种中文场景,也保留了纯 ASCII 文本的 fzf 模糊匹配能力。
+//! 给 `state.browse.active_search().query()` 做本地过滤用。每条候选文本
+//! (歌名 / 艺人 / 专辑 / 歌单名)预处理成 [`MatchableText`]:把原文、全拼、首字母三段
+//! 拼成一个 char 数组喂给 nucleo,既覆盖了「输入 `cry` 命中『春日影』」「输入
+//! `chunying` 命中『春日影』」这种中文场景,也保留了纯 ASCII 文本的 fzf 模糊匹配能力。
 //!
 //! 命中下标(nucleo 给的是 haystack 内的 char 下标)会再被反向映射回 `original`
 //! 的 char 下标,渲染端按这些下标做汉字级高亮。

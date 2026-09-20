@@ -218,6 +218,7 @@ mod tests {
                 .name("歌单".to_owned())
                 .build(),
         }];
+        state.browse.nav.opened_playlist = Some(id.clone());
         state.browse.view.switch_to(View::Library);
         let matching = mineral_test::with_duration(
             mineral_test::with_name(mineral_test::song("same"), "春日影"),
@@ -245,7 +246,7 @@ mod tests {
                     .build(),
             ],
         );
-        state.browse.search.set_query("cry");
+        state.browse.search.tracks.set_query("cry");
         let indexes = || {
             state
                 .filtered_tracks()
@@ -281,7 +282,7 @@ mod tests {
             vec!["other"]
         );
         assert_eq!(state.filtered_tracks().total_duration_ms(), 120_000);
-        state.browse.search.set_query("冬天");
+        state.browse.search.tracks.set_query("冬天");
         assert_eq!(
             state
                 .filtered_tracks()
@@ -290,7 +291,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["same"]
         );
-        state.browse.search.clear();
+        state.browse.search.tracks.clear();
         assert_eq!(state.filtered_tracks().len(), 2);
         assert_eq!(state.filtered_tracks().total_duration_ms(), 180_000);
         Ok(())

@@ -60,7 +60,7 @@ impl SearchState {
         self.input.apply(req)
     }
 
-    /// 清空搜索词 + 光标归 0(退出 / 进歌单时清词)。
+    /// 清空查询与文本光标；输入态由调用方控制。
     pub fn clear(&mut self) {
         self.input.clear();
     }

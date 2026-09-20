@@ -69,7 +69,7 @@ impl AppState {
     /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。
     /// 全局逃生口 / 单键快捷在此让位字符输入——输入态的按键是文本,不是命令。
     pub(crate) fn in_text_input(&self) -> bool {
-        self.browse.search.typing
+        self.browse.active_search().typing
             || (self.channel_search.active.on() && self.channel_search.focus == SearchFocus::Prompt)
     }
 
@@ -87,7 +87,7 @@ impl AppState {
     pub(crate) fn active_layer(&self) -> ActiveLayer {
         if self.channel_search.active.on() {
             ActiveLayer::SearchSession
-        } else if self.browse.search.typing {
+        } else if self.browse.active_search().typing {
             ActiveLayer::DeepSearch
         } else if self.browse.fullscreen.on() {
             ActiveLayer::Fullscreen

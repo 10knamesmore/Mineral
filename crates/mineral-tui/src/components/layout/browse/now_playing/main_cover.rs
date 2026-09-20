@@ -43,7 +43,7 @@ pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
 pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
     match view {
         View::Playlists => {
-            let playlist = state.selected_playlist()?;
+            let playlist = state.selected_playlist_in_list()?;
             crate::image::collage::effective_cover_url(state, &playlist.data)
         }
         View::Library => {

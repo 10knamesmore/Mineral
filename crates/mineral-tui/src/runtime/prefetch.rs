@@ -480,6 +480,7 @@ mod tests {
         state.browse.nav.last_sel_change = Instant::now() - std::time::Duration::from_secs(1);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "停留不请求完整歌单");
+        state.browse.nav.opened_playlist = Some(id.clone());
         state.browse.view.switch_to(View::Library);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "进入歌单不升级为全量，也不重复首批");
@@ -539,6 +540,7 @@ mod tests {
         let mut state = crate::test_support::state_with_playlists()?;
         let client = TestClient::default();
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
+        state.browse.nav.opened_playlist = Some(id.clone());
         state.browse.view.switch_to(View::Library);
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 20, Some(20));
         state.browse.nav.track.set_sel(19);

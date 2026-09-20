@@ -580,13 +580,17 @@ mod tests {
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
-        assert!(app.state.browse.search.typing, "前置:已进搜索态");
+        assert!(app.state.browse.active_search().typing, "前置:已进搜索态");
 
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
-        assert_eq!(app.state.browse.search.query(), "Q", "大写 Q 应进搜索词");
+        assert_eq!(
+            app.state.browse.active_search().query(),
+            "Q",
+            "大写 Q 应进搜索词"
+        );
         assert!(app.transition.is_none(), "搜索态不该触发退出转场");
         assert!(!app.should_quit);
         assert_eq!(
@@ -1490,7 +1494,7 @@ mod tests {
             let browse = app_with_long_library(64, 22)?;
             app.state.browse = browse.state.browse;
             app.state.library = browse.state.library;
-            app.state.browse.search.set_query("Track");
+            app.state.browse.active_search_mut().set_query("Track");
             app.state.browse.nav.track.place(22, 4);
             let client = Arc::new(TestClient::default());
             app.client = client.clone();
@@ -1518,8 +1522,8 @@ mod tests {
         /// 后台 Browse 保留视图、过滤输入、两个列表的位置和所有歌曲的喜欢态。
         fn assert_browse_unchanged(app: &App) {
             assert_eq!(app.state.browse.view.current(), View::Library);
-            assert_eq!(app.state.browse.search.query(), "Track");
-            assert!(!app.state.browse.search.typing);
+            assert_eq!(app.state.browse.active_search().query(), "Track");
+            assert!(!app.state.browse.active_search().typing);
             assert_eq!(app.state.browse.nav.playlist.sel(), 0);
             assert_eq!(app.state.browse.nav.playlist.scroll_target(), 0);
             assert_eq!(app.state.browse.nav.track.sel(), 22);

@@ -1,41 +1,45 @@
-//! 搜索 badge:把当前搜索态画进左栏面板标题。
+//! 搜索 badge:把指定面板的搜索态画进左栏标题。
 
 use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, View};
+use crate::runtime::state::{AppState, SearchState};
 
-/// 把搜索态渲染成可拼进面板标题的 [`Span`] 序列。
+/// 把指定面板的搜索态渲染成可拼进标题的 [`Span`] 序列。
 ///
 /// # Params:
-///   - `state`: 读 `search.typing`(是否正在输入)与 `search.query`(当前词)
+///   - `search`: 正在绘制的面板搜索态，过渡期间不跟随逻辑当前视图
+///   - `indexing`: 该面板需要显示的深度索引数量；Library 传 `None`
 ///   - `theme`: 取色
 ///
 /// # Return:
-///   - 输入态(`search.typing`):`/q`+反色光标罩在文本光标处字符上,表示正在输入
-///   - 非输入态但有词:`/q`(已提交、仍在过滤的词)
-///   - 任一搜索态下深度索引在飞:再缀 ` ⟳n`(见 [`indexing_count`])
-///   - 无词且非输入态:空序列(标题不挂 badge)
-pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
-    if !state.browse.search.typing && state.browse.search.query().is_empty() {
+///   - 输入态:`/q`+反色光标罩在文本光标处字符上
+///   - 非输入态但有词:`/q`
+///   - 传入索引数量时再缀 ` ⟳n`
+///   - 无词且非输入态:空序列
+pub fn search_badge(
+    search: &SearchState,
+    indexing: Option<usize>,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    if !search.typing && search.query().is_empty() {
         return Vec::new();
     }
     let mut spans = Vec::<Span<'static>>::new();
-    if state.browse.search.typing {
+    if search.typing {
         // 输入态:光标反色罩在 `before|after` 分隔处的字符上。
-        let (before, after) = state.browse.search.query_split();
+        let (before, after) = search.query_split();
         let base = Style::new().fg(theme.peach);
         spans.extend(cursor_spans(format!("/{before}"), after, base));
     } else {
-        // 非输入态:已提交、仍在过滤的词,无光标。
         spans.push(Span::styled(
-            format!("/{}", state.browse.search.query()),
+            format!("/{}", search.query()),
             Style::new().fg(theme.peach),
         ));
     }
-    if let Some(n) = indexing_count(state) {
+    if let Some(n) = indexing {
         spans.push(Span::styled(
             format!(" ⟳{n}"),
             Style::new().fg(theme.overlay),
@@ -45,9 +49,9 @@ pub fn search_badge(state: &AppState, theme: &Theme) -> Vec<Span<'static>> {
 }
 
 /// 深度索引中正在补齐的歌单数；首批预览不重复计数。
-/// 不在此状态返回 `None`(badge 不缀)。搜不到时用户据此区分「真没有」和「还没拉完」。
+/// 深度搜索关闭或没有待补齐歌单时返回 `None`。
 pub fn indexing_count(state: &AppState) -> Option<usize> {
-    if state.browse.view != View::Playlists || !*state.cfg.tui().search().deep().enabled() {
+    if !*state.cfg.tui().search().deep().enabled() {
         return None;
     }
     let n = state.library.completing_playlists();

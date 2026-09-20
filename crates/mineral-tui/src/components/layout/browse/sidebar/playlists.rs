@@ -31,7 +31,11 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     let pos = position_label(state.browse.nav.playlist.sel(), total);
 
     let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
-    title_spans.extend(search_badge(state, theme));
+    title_spans.extend(search_badge(
+        &state.browse.search.playlists,
+        super::badge::indexing_count(state),
+        theme,
+    ));
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -56,7 +60,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
     // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
     // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
-    if state.library.playlists.is_empty() && state.browse.search.query().is_empty() {
+    if state.library.playlists.is_empty() && state.browse.search.playlists.query().is_empty() {
         paint_empty_state(buf, area, state, theme, block);
         paint_minimap(buf, area, state, theme, total, motion);
         return;
@@ -64,7 +68,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
 
     // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
     // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
-    if total == 0 && !state.browse.search.query().is_empty() {
+    if total == 0 && !state.browse.search.playlists.query().is_empty() {
         paint_no_match(buf, area, state, theme, block);
         paint_minimap(buf, area, state, theme, total, motion);
         return;
@@ -214,7 +218,12 @@ fn build_row<'a>(
     let count_label = format!("{}", p.data.track_count);
     let src = p.data.source();
 
-    let name_hits = state.browse.search.match_for(&p.data.name).map(|m| m.hits);
+    let name_hits = state
+        .browse
+        .search
+        .playlists
+        .match_for(&p.data.name)
+        .map(|m| m.hits);
     let mut cells = Vec::<Cell<'_>>::new();
     if show_cover {
         cells.push(Cell::from(""));
@@ -527,8 +536,8 @@ mod tests {
         let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.browse.search.typing = true;
-        state.browse.search.set_query("春日影");
+        state.browse.search.playlists.typing = true;
+        state.browse.search.playlists.set_query("春日影");
         t.draw(|f| {
             let area = f.area();
             super::render_to(f.buffer_mut(), area, &state, &theme);
@@ -548,7 +557,7 @@ mod tests {
             crate::test_support::playlist_view("a", "MyGO!!!!!", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("b", "春日影", SourceKind::NETEASE, 1),
         ];
-        state.browse.search.set_query("cry");
+        state.browse.search.playlists.set_query("cry");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -574,7 +583,7 @@ mod tests {
             SourceKind::NETEASE,
             1,
         )];
-        state.browse.search.set_query("chunying");
+        state.browse.search.playlists.set_query("chunying");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -607,7 +616,7 @@ mod tests {
             },
         );
         state.library.tracks_generation = 1;
-        state.browse.search.set_query("春日");
+        state.browse.search.playlists.set_query("春日");
 
         let mut t = Terminal::new(TestBackend::new(64, 12))?;
         t.draw(|f| {
@@ -644,7 +653,7 @@ mod tests {
             },
         );
         state.library.tracks_generation = 1;
-        state.browse.search.set_query("mayo");
+        state.browse.search.playlists.set_query("mayo");
 
         let mut t = Terminal::new(TestBackend::new(100, 12))?;
         t.draw(|f| {
@@ -663,7 +672,7 @@ mod tests {
     fn playlists_search_no_match_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.browse.search.set_query("zzz");
+        state.browse.search.playlists.set_query("zzz");
         let mut t = Terminal::new(TestBackend::new(40, 12))?;
         t.draw(|f| {
             let area = f.area();
@@ -679,7 +688,7 @@ mod tests {
     fn playlists_search_indexing_snapshot() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut state = crate::test_support::state_with_playlists()?;
-        state.browse.search.set_query("zzz");
+        state.browse.search.playlists.set_query("zzz");
         let ids = state
             .library
             .playlists

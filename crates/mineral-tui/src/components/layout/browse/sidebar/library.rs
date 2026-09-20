@@ -1,4 +1,4 @@
-//! Library 视图渲染:展示当前选中歌单内的曲目。
+//! Library 视图渲染:展示已打开歌单内的曲目。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
@@ -112,7 +112,7 @@ impl TrackLayout {
 
 /// 渲染 Library 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
-    let title = state.selected_playlist().map_or_else(
+    let title = state.opened_playlist().map_or_else(
         || "tracks".to_owned(),
         |p| format!("tracks / {}", p.data.name),
     );
@@ -121,7 +121,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 未知时长的曲目不计入合计(只反映已知部分)。
     let total_min = tracks.total_duration_ms() / 60_000;
     let playlist_tracks = state
-        .selected_playlist()
+        .opened_playlist()
         .and_then(|p| state.library.tracks.get(&p.data.id));
     let has_more = playlist_tracks.is_some_and(|tracks| !tracks.complete);
     let duration_status = if playlist_tracks.is_some_and(|tracks| tracks.complete) {
@@ -134,7 +134,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // 左上角 source 徽标:标出当前歌单挂靠的来源(聚合面挂靠 mineral,单源面挂靠其真实
     // 来源),与 sidebar playlists 面的 source 列同色,离开 sidebar(全屏)时仍能辨源。
     let mut title_spans = Vec::new();
-    if let Some(p) = state.selected_playlist() {
+    if let Some(p) = state.opened_playlist() {
         let src = p.data.source();
         title_spans.push(Span::styled(
             format!(" {}", src.label()),
@@ -149,7 +149,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         format!(" {title} "),
         Style::new().fg(theme.subtext),
     ));
-    title_spans.extend(search_badge(state, theme));
+    title_spans.extend(search_badge(&state.browse.search.tracks, None, theme));
 
     let block = Block::new()
         .borders(Borders::ALL)
@@ -167,7 +167,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // (♥ title len);聚合面(source = mineral 的跨源歌单)宽档额外带 per-song source
     // 表示。跨源的只有 mineral 源歌单,故看歌单 source 而非遍历曲目。
     let aggregate = state
-        .selected_playlist()
+        .opened_playlist()
         .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
     let layout = TrackLayout::new(area.width, aggregate, state.images.supports_thumbnails());
     let placeholder = slot_placeholder(state, theme, layout);
@@ -310,7 +310,12 @@ fn build_row<'a>(
         Cell::from("")
     };
 
-    let name_hits = state.browse.search.match_for(&song.name).map(|m| m.hits);
+    let name_hits = state
+        .browse
+        .search
+        .tracks
+        .match_for(&song.name)
+        .map(|m| m.hits);
     let mut title_spans = highlight_indices(
         &song.name,
         name_hits.as_deref().unwrap_or(&[]),
@@ -320,7 +325,7 @@ fn build_row<'a>(
     // alias(译名 / 副标题)是歌名的暗色括注后缀;命中字符与主字段同款 search_hit
     // 高亮。hits 是相对 alias 文本的 char 下标。
     if let Some(alias) = song.alias.as_deref() {
-        let alias_hits = state.browse.search.match_for(alias).map(|m| m.hits);
+        let alias_hits = state.browse.search.tracks.match_for(alias).map(|m| m.hits);
         title_spans.extend(alias_suffix(
             alias,
             alias_hits.as_deref().unwrap_or(&[]),
@@ -353,8 +358,13 @@ fn build_row<'a>(
             .as_ref()
             .map(|a| a.name.clone())
             .unwrap_or_default();
-        let artist_hits = state.browse.search.match_for(&artist).map(|m| m.hits);
-        let album_hits = state.browse.search.match_for(&album).map(|m| m.hits);
+        let artist_hits = state
+            .browse
+            .search
+            .tracks
+            .match_for(&artist)
+            .map(|m| m.hits);
+        let album_hits = state.browse.search.tracks.match_for(&album).map(|m| m.hits);
         cells.push(Cell::from(Line::from(highlight_indices(
             &artist,
             artist_hits.as_deref().unwrap_or(&[]),
@@ -403,7 +413,7 @@ fn position_label(sel: usize, total: usize, has_more: bool) -> String {
     format!(" {position} / {total}{more} ")
 }
 
-/// 选中歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
+/// 已打开歌单尚未拿到 tracks 时返回 loading 行;tracks 已到但搜索零命中时返回
 /// 「无匹配」行;正常情况返回 `None`(走 tracks 渲染)。占位文本按 `layout` 落在 title 列。
 fn slot_placeholder<'a>(state: &AppState, theme: &Theme, layout: TrackLayout) -> Option<Row<'a>> {
     let placeholder_row = |text: &'static str| {
@@ -415,11 +425,9 @@ fn slot_placeholder<'a>(state: &AppState, theme: &Theme, layout: TrackLayout) ->
         Row::new(cells)
     };
     if state.current_tracks_slot().is_none() {
-        return state
-            .selected_playlist()
-            .map(|_| placeholder_row("loading…"));
+        return state.opened_playlist().map(|_| placeholder_row("loading…"));
     }
-    if !state.browse.search.query().is_empty() && state.filtered_tracks().is_empty() {
+    if !state.browse.search.tracks.query().is_empty() && state.filtered_tracks().is_empty() {
         return Some(placeholder_row("无匹配"));
     }
     None
@@ -457,7 +465,7 @@ mod tests {
         let mut app = crate::test_support::app_with_long_library(500, 0)?;
         let id = app
             .state
-            .selected_playlist()
+            .opened_playlist()
             .ok_or_else(|| color_eyre::eyre::eyre!("playlist"))?
             .data
             .id
@@ -820,7 +828,7 @@ mod tests {
                 next_offset: None,
             },
         );
-        state.browse.search.set_query("keep");
+        state.browse.search.tracks.set_query("keep");
         state.browse.nav.track.place(0, 0);
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
         draw_lib(&mut terminal, &state)?;
@@ -838,7 +846,7 @@ mod tests {
             buffer.cell((59, 11)).map(ratatui::buffer::Cell::symbol),
             Some("╯")
         );
-        state.browse.search.set_query("absent");
+        state.browse.search.tracks.set_query("absent");
         draw_lib(&mut terminal, &state)?;
         assert!((1..11).all(|y| {
             terminal
@@ -890,7 +898,7 @@ mod tests {
             },
         );
         state.browse.nav.track.set_sel(0);
-        state.browse.search.set_query("ab");
+        state.browse.search.tracks.set_query("ab");
 
         let indexes = state
             .filtered_tracks()
@@ -991,7 +999,7 @@ mod tests {
         {
             v.data.song = mineral_test::aliased_song();
         }
-        state.browse.search.set_query("Mayoiuta");
+        state.browse.search.tracks.set_query("Mayoiuta");
         let filtered = state.filtered_tracks();
         assert!(
             filtered
@@ -1035,7 +1043,7 @@ mod tests {
             }
         }
         state.browse.nav.track.set_sel(1);
-        state.browse.search.set_query("mayo");
+        state.browse.search.tracks.set_query("mayo");
 
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         draw_lib(&mut t, &state)?;
@@ -1157,6 +1165,10 @@ mod tests {
         let theme = crate::test_support::default_theme()?;
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_playlists()?;
+        state.browse.nav.opened_playlist = Some(mineral_model::PlaylistId::new(
+            mineral_model::SourceKind::NETEASE,
+            "p1",
+        ));
         state.browse.view.switch_to(View::Library);
         t.draw(|f| {
             let area = f.area();
@@ -1171,7 +1183,7 @@ mod tests {
     fn library_search_no_match_snapshot() -> color_eyre::Result<()> {
         let mut t = Terminal::new(TestBackend::new(80, 12))?;
         let mut state = crate::test_support::state_with_tracks()?;
-        state.browse.search.set_query("zzz");
+        state.browse.search.tracks.set_query("zzz");
         draw_lib(&mut t, &state)?;
         crate::test_support::assert_snap!("曲目列表:搜索零命中(表内「无匹配」占位行)", t.backend());
         Ok(())

@@ -100,10 +100,10 @@ impl App {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
         });
-        let search_query = if self.state.browse.search.query().is_empty() {
+        let search_query = if self.state.browse.active_search().query().is_empty() {
             None
         } else {
-            Some(self.state.browse.search.query().to_owned())
+            Some(self.state.browse.active_search().query().to_owned())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(PlaylistEntryView 已装饰)。
@@ -394,8 +394,8 @@ impl App {
                     .behavior()
                     .filter_play_scope()
                     .matches_only()
-                    && !self.state.browse.search.query().is_empty())
-                .then(|| self.state.browse.search.query().to_owned());
+                    && !self.state.browse.active_search().query().is_empty())
+                .then(|| self.state.browse.active_search().query().to_owned());
                 self.pending_playlist_play = Some(PendingPlaylistPlay {
                     playlist: id.clone(),
                     target: entry.data.clone(),

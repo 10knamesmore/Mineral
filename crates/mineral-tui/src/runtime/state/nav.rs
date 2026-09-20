@@ -5,6 +5,8 @@
 
 use std::time::Instant;
 
+use mineral_model::PlaylistId;
+
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 
@@ -15,6 +17,9 @@ pub struct NavState {
 
     /// Library 列表的光标 + 视口滚动。
     pub track: ScrollList,
+
+    /// 已打开歌单的身份；进入时设置，返回期间保留供离场曲目面板绘制。
+    pub opened_playlist: Option<PlaylistId>,
 
     /// 各歌单的光标位置记忆(`behavior.remember_track_pos` 非 off 时退出 Library
     /// 记录、再进恢复;persist 档启动时灌入落盘值)。
@@ -35,6 +40,7 @@ impl NavState {
         Self {
             playlist: ScrollList::new(),
             track: ScrollList::new(),
+            opened_playlist: None,
             track_pos: TrackPosMap::default(),
             pending_track_restore: None,
             last_sel_change: Instant::now(),
