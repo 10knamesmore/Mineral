@@ -1,5 +1,6 @@
 ---
 source: crates/mineral-config/src/lua_stub.rs
+assertion_line: 359
 description: meta/config.lua 生成全文(preamble + aliases + 宏生成 class/alias)
 expression: "super::meta_config_lua()"
 ---
@@ -156,10 +157,10 @@ expression: "super::meta_config_lua()"
 ---@field prefetch? mineral.PrefetchConfig 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
 ---@field search? mineral.SearchConfig 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
 ---@field lyrics? mineral.LyricsConfig 歌词段(行距 + 滚动手感)。
----@field animation? mineral.AnimationConfig 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
+---@field animation? mineral.AnimationConfig 动画段(帧率 + 转场、播放栏反馈与扫入时长 + 视图扫入风格)。
 ---@field minimap? mineral.MinimapConfig 列表 minimap 段(最小光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
 ---@field toast? mineral.ToastConfig toast 段(顶栏通知停留时长)。
----@field layout? mineral.LayoutConfig 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。
+---@field layout? mineral.LayoutConfig 布局段(完整布局门槛 + 播放栏高度 + 全屏分区尺寸 + 浮层 dock 宽)。
 ---@field copy? mineral.CopyConfig copy 段(复制菜单的自定义模板)。
 ---@field window_title? mineral.WindowTitleConfig 窗口标题段(终端任务栏 / tab 标题)。
 
@@ -502,6 +503,7 @@ expression: "super::meta_config_lua()"
 ---@field list_scroll_ms? integer 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
 ---@field minimap_cursor_ms? integer 列表 minimap 光标的位置缓动时长(毫秒)，独立于视口滚动；0 为一帧到位。
 ---@field fullscreen_ms? integer 全屏播放态进退场形变动画时长(毫秒)。
+---@field transport? mineral.TransportFeedbackConfig 播放栏音量、模式和控制键的反馈停留与过渡时长。
 ---@field ambient_trail? mineral.AmbientTrailConfig 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位, 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
 ---@field popup_anim_ms? integer 浮层(队列 / 确认框)进出动画时长(毫秒)。
 ---@field toast_anim_ms? integer toast(顶栏通知)横向展开收起动画时长(毫秒)。
@@ -513,6 +515,17 @@ expression: "super::meta_config_lua()"
 ---@field search_focus_transition? mineral.SearchFocusTransition Search 布局态焦点高亮边框切换的过渡风格(直切 / 边框滑动)。
 ---@field spinner_frames? string[] loading 占位的旋转 spinner 帧(逐帧循环画;search「searching」/ detail 数据未到共用)。 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
 ---@field marquee? mineral.MarqueeConfig 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
+
+---播放栏操作反馈的停留和动画时长，单位均为毫秒。
+---@class mineral.TransportFeedbackConfig
+---@field volume_hold_ms? integer 从最近一次调节音量动作起保留百分比的时长；后端同步不续期。
+---@field mode_hold_ms? integer 从最近一次切换模式动作起保留短标签的时长；后端同步不续期。
+---@field controls_hold_ms? integer 从最近一次播放控制动作起保留整组按钮的时长。
+---@field volume_fade_out_ms? integer 音量标题切换时旧文本淡出的时长。
+---@field volume_fade_in_ms? integer 音量标题切换时新文本淡入的时长。
+---@field mode_reveal_ms? integer 模式文字从左到右全部显现的时长；图标直接更新。
+---@field mode_resize_ms? integer 模式区域调整宽度的时长。
+---@field controls_fade_ms? integer 控制键反馈淡入淡出的时长。
 
 ---全屏氛围背景的滞后跟随参数(挂在 `AnimationConfig` 下):进 / 退各一套时长,故进场可
 ---优雅慢入、退场可迅速收干净。
@@ -560,7 +573,7 @@ expression: "super::meta_config_lua()"
 ---@field min_full_height? integer 启用完整布局的最小终端高(行);不足走紧凑布局。
 ---@field fs_left_pct? integer 全屏态左栏(封面 + transport)占宽百分比(0-100),余下归歌词。
 ---@field fs_spectrum? mineral.FsSpectrumConfig 全屏态底部频谱通栏高:响应式(占终端高百分比,再钳到行数上下限)。
----@field fs_transport_height? integer 全屏态 transport 区高(行);内容 6 行 + 边框 2。
+---@field transport_height? integer 播放栏高度(行，含边框)，浏览、紧凑、搜索与全屏布局共用。
 ---@field dock_w_pct? integer 停靠浮层(播放队列)dock 宽占屏宽百分比(0-100)。
 ---@field menu_align? mineral.MenuAlign 锚定弹出菜单(PopMenu)相对锚点行的横向对齐。
 

@@ -186,6 +186,7 @@ fn persistent_transport(frame: &mut Frame<'_>, area: Rect, app: &App) {
         frame,
         area,
         &app.state.playback,
+        &app.state.transport,
         &MarqueeCtx::new(&app.state, theme, fade_to),
         &WaveformCtx::new(&app.state, theme),
         theme,

@@ -290,6 +290,9 @@ pub(crate) struct TestClient {
     /// `set_volume` 收到的目标音量序列(音量键路径断言用)。
     pub(crate) volumes: Arc<Mutex<Vec<u8>>>,
 
+    /// 播放控制调用序列，用于确认唤出提示的首次按键仍会发送命令。
+    pub(crate) playback_controls: Arc<Mutex<Vec<&'static str>>>,
+
     /// 完成事件队列(测试可注入结论)。
     pub(crate) completions: Arc<CompletionQueue>,
 
@@ -390,9 +393,17 @@ impl Backend for TestClient {
         self.pcm_discontinuity.swap(false, Ordering::SeqCst)
     }
 
-    fn pause(&self) {}
+    fn pause(&self) {
+        if let Ok(mut calls) = self.playback_controls.lock() {
+            calls.push("pause");
+        }
+    }
 
-    fn resume(&self) {}
+    fn resume(&self) {
+        if let Ok(mut calls) = self.playback_controls.lock() {
+            calls.push("resume");
+        }
+    }
 
     fn seek(&self, position_ms: u64) {
         if let Ok(mut v) = self.seeks.lock() {
@@ -406,11 +417,23 @@ impl Backend for TestClient {
         }
     }
 
-    fn cycle_play_mode(&self) {}
+    fn cycle_play_mode(&self) {
+        if let Ok(mut calls) = self.playback_controls.lock() {
+            calls.push("cycle_play_mode");
+        }
+    }
 
-    fn prev_or_restart(&self) {}
+    fn prev_or_restart(&self) {
+        if let Ok(mut calls) = self.playback_controls.lock() {
+            calls.push("prev_or_restart");
+        }
+    }
 
-    fn next_song(&self) {}
+    fn next_song(&self) {
+        if let Ok(mut calls) = self.playback_controls.lock() {
+            calls.push("next_song");
+        }
+    }
 
     fn play_song(&self, song: Song) {
         if let Ok(mut v) = self.queue_ops.lock() {

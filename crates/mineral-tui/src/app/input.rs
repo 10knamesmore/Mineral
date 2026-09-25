@@ -127,6 +127,12 @@ impl App {
             }
             Action::JumpToCurrent => {}
         }
+        self.state.transport.on_action(
+            action,
+            self.state.playback.mode,
+            self.state.cfg.tui().animation(),
+            std::time::Instant::now(),
+        );
     }
 
     /// 关最早一张驻留通知卡片(连按逐条关;无卡空操作)。

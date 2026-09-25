@@ -15,8 +15,8 @@ use crate::schema::{
     SearchFocusTransition, SearchHitConfig, SearchQueryMode, ShelfConfig, SourcesConfig,
     SpectrumConfig, SpectrumStyle, StatsConfig, StatsLevel, SweepStyle, TerrainConfig,
     TextAlphaConfig, TextStyle, ThemeConfig, TitleField, TitleIcons, ToastConfig, TrackPosMemory,
-    TrailTimingConfig, TuiConfig, VignetteConfig, WaterfallConfig, WaveformConfig,
-    WindowTitleConfig, ZoomConfig,
+    TrailTimingConfig, TransportFeedbackConfig, TuiConfig, VignetteConfig, WaterfallConfig,
+    WaveformConfig, WindowTitleConfig, ZoomConfig,
 };
 
 /// 文件头:`---@meta` 声明 + 使用说明(手写 prose,不随 schema 变)。
@@ -89,6 +89,7 @@ pub(crate) fn meta_config_lua() -> String {
         ChannelSearchConfig::LUA_STUB,
         LyricsConfig::LUA_STUB,
         AnimationConfig::LUA_STUB,
+        TransportFeedbackConfig::LUA_STUB,
         AmbientTrailConfig::LUA_STUB,
         TrailTimingConfig::LUA_STUB,
         MarqueeConfig::LUA_STUB,

@@ -1,6 +1,5 @@
 ---
 source: crates/mineral-tui/src/view/frame.rs
-assertion_line: 1224
 description: "退出收缩朝左下锚点:收缩框偏左下、非居中"
 expression: t.backend()
 ---
@@ -20,11 +19,11 @@ expression: t.backend()
 " │                                                   ⢸││                        "
 " │0 / 0 ─────────────────────────────────────────────╯╰│                        "
 " │lyrics ──────────────────────────────╮╭ spectrum ────│                        "
-" │                                     │╭ transport ───│                        "
-" │                                     ││         LoveL│                        "
 " │                                     ││              │                        "
-" │             ♪ no lyrics             ││ 0:00 ●───────│                        "
-" │                                     ││         [⏮]  │                        "
+" │                                     ││              │                        "
+" │                                     │╰──────────────│                        "
+" │             ♪ no lyrics             │╭ transport ───│                        "
+" │                                     ││         LoveL│                        "
 " ╰─────────────────────────────────────────────────────╯                        "
 "                                                                                "
 "                                                                                "

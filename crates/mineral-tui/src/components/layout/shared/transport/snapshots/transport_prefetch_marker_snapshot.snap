@@ -1,0 +1,11 @@
+---
+source: crates/mineral-tui/src/components/layout/shared/transport/paint.rs
+assertion_line: 1292
+description: "播放栏:已播放时间后的下一首预取状态"
+expression: t.backend()
+---
+"╭ transport ───────────────────────────────fmt — ╮"
+"│              LoveLetterTypewriter              │"
+"│                        ·                       │"
+"│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●─│"
+"╰ 3:40 ─⇣ ─────── [⏮]  [⏸]  [⏭]  [→] ────── 3:45 ╯"

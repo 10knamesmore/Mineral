@@ -1,4 +1,4 @@
-//! 布局段(挂在 `TuiConfig` 下):完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽。
+//! 布局段(挂在 `TuiConfig` 下):完整布局门槛、共用播放栏高度、全屏分区与浮层宽度。
 
 use mineral_config_macros::config_section;
 use std::fmt;
@@ -22,8 +22,8 @@ pub struct LayoutConfig {
     /// 全屏态底部频谱通栏高:响应式(占终端高百分比,再钳到行数上下限)。
     fs_spectrum: FsSpectrumConfig,
 
-    /// 全屏态 transport 区高(行);内容 6 行 + 边框 2。
-    fs_transport_height: u16,
+    /// 播放栏高度(行，含边框)，浏览、紧凑、搜索与全屏布局共用。
+    transport_height: u16,
 
     /// 停靠浮层(播放队列)dock 宽占屏宽百分比(0-100)。
     dock_w_pct: u16,

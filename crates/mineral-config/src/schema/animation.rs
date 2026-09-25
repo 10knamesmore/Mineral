@@ -1,4 +1,4 @@
-//! 动画段(挂在 `TuiConfig` 下):帧率基准 + 各转场/浮层/扫入时长 + 视图扫入/菜单进场风格。
+//! 动画段(挂在 `TuiConfig` 下):帧率、转场、播放栏反馈与视图扫入时长。
 //!
 //! [`SweepStyle`] / [`MenuReveal`] 与渲染层过渡风格语义对齐,但保持解耦——接线处做映射。
 
@@ -26,6 +26,9 @@ pub struct AnimationConfig {
 
     /// 全屏播放态进退场形变动画时长(毫秒)。
     fullscreen_ms: u32,
+
+    /// 播放栏音量、模式和控制键的反馈停留与过渡时长。
+    transport: TransportFeedbackConfig,
 
     /// 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位,
     /// 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
@@ -61,6 +64,34 @@ pub struct AnimationConfig {
 
     /// 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
     marquee: MarqueeConfig,
+}
+
+/// 播放栏操作反馈的停留和动画时长，单位均为毫秒。
+#[config_section]
+pub struct TransportFeedbackConfig {
+    /// 从最近一次调节音量动作起保留百分比的时长；后端同步不续期。
+    volume_hold_ms: u32,
+
+    /// 从最近一次切换模式动作起保留短标签的时长；后端同步不续期。
+    mode_hold_ms: u32,
+
+    /// 从最近一次播放控制动作起保留整组按钮的时长。
+    controls_hold_ms: u32,
+
+    /// 音量标题切换时旧文本淡出的时长。
+    volume_fade_out_ms: u32,
+
+    /// 音量标题切换时新文本淡入的时长。
+    volume_fade_in_ms: u32,
+
+    /// 模式文字从左到右全部显现的时长；图标直接更新。
+    mode_reveal_ms: u32,
+
+    /// 模式区域调整宽度的时长。
+    mode_resize_ms: u32,
+
+    /// 控制键反馈淡入淡出的时长。
+    controls_fade_ms: u32,
 }
 
 /// 全屏氛围背景的滞后跟随参数(挂在 `AnimationConfig` 下):进 / 退各一套时长,故进场可

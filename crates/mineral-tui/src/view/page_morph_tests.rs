@@ -39,6 +39,69 @@ fn text_positions(buffer: &Buffer, area: Rect, text: &str) -> Vec<Position> {
     positions
 }
 
+/// 反馈只由 tick 推进，重复绘制、临时尺寸及页面离屏端点不重播或清空它。
+#[test]
+fn transport_feedback_survives_repeated_paint_resize_and_morph() -> color_eyre::Result<()> {
+    use crate::runtime::action::{Action, VolumeDelta};
+    let area = Rect::new(0, 0, 120, 40);
+    let mut app = app_with_queue(3, 0)?;
+    let now = std::time::Instant::now();
+    let anim = app.state.cfg.tui().animation();
+    app.state
+        .transport
+        .on_action(Action::CyclePlayMode, app.state.playback.mode, anim, now);
+    app.state.transport.on_action(
+        Action::NudgeVolume(VolumeDelta(5)),
+        app.state.playback.mode,
+        anim,
+        now,
+    );
+    for _ in 0..5 {
+        app.state.tick_frame();
+    }
+    let before_phase = app.state.transport.controls_opacity();
+    assert!(before_phase > 0 && before_phase < 1000);
+    let panel = compute(area, app.state.cfg.tui().layout()).transport;
+    let before = render(&app, area)?;
+    for size in [area, Rect::new(0, 0, 40, 12), Rect::new(0, 0, 100, 30)] {
+        render(&app, size)?;
+        for fullscreen in [true, false] {
+            let active = if fullscreen {
+                &mut app.state.browse.fullscreen
+            } else {
+                &mut app.state.channel_search.active
+            };
+            *active = Toggle::new(8);
+            active.set(true);
+            for _ in 0..8 {
+                if fullscreen {
+                    app.state.browse.fullscreen.tick();
+                } else {
+                    app.state.channel_search.active.tick();
+                }
+                render(&app, size)?;
+                assert_eq!(app.state.transport.controls_opacity(), before_phase);
+            }
+            if fullscreen {
+                app.state.browse.fullscreen = Toggle::new(8);
+            } else {
+                app.state.channel_search.active = Toggle::new(8);
+            }
+        }
+    }
+    let after = render(&app, area)?;
+    for y in panel.top()..panel.bottom() {
+        for x in panel.left()..panel.right() {
+            assert_eq!(
+                before.cell((x, y)),
+                after.cell((x, y)),
+                "播放栏仅绘制不应改变反馈，({x},{y})"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// 中途反向只改变目标；前后两段的整帧字形、前景、背景和修饰都不能跳变。
 #[test]
 fn reversing_page_morph_preserves_the_rendered_frame() -> color_eyre::Result<()> {

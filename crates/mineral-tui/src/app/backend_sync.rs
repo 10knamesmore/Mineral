@@ -57,6 +57,9 @@ impl App {
         if let Some(sync) = sync {
             self.apply_player_sync(sync);
         }
+        self.state
+            .transport
+            .sync_mode(self.state.playback.mode, self.state.cfg.tui().animation());
 
         if let Some(tasks) = self.client.tasks() {
             self.state.tasks_snapshot = tasks;

@@ -99,7 +99,7 @@ pub struct TuiConfig {
     /// 歌词段(行距 + 滚动手感)。
     lyrics: LyricsConfig,
 
-    /// 动画段(帧率 + 各转场/扫入时长 + 视图扫入风格)。
+    /// 动画段(帧率 + 转场、播放栏反馈与扫入时长 + 视图扫入风格)。
     animation: AnimationConfig,
 
     /// 列表 minimap 段(最小光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
@@ -108,7 +108,7 @@ pub struct TuiConfig {
     /// toast 段(顶栏通知停留时长)。
     toast: ToastConfig,
 
-    /// 布局段(完整布局门槛 + 全屏分区尺寸 + 浮层 dock 宽)。
+    /// 布局段(完整布局门槛 + 播放栏高度 + 全屏分区尺寸 + 浮层 dock 宽)。
     layout: LayoutConfig,
 
     /// copy 段(复制菜单的自定义模板)。

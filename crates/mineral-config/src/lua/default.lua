@@ -291,6 +291,16 @@ return {
       list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
       minimap_cursor_ms = 240, -- 右边框 minimap 光标位置缓动；0 = 一帧到位
       fullscreen_ms = 288, -- 全屏进退场形变
+      transport = { -- 播放栏操作反馈:停留与过渡时长(毫秒)
+        volume_hold_ms = 2000, -- 调节音量
+        volume_fade_out_ms = 110, -- 音量标题fade out
+        volume_fade_in_ms = 150, -- 音量标题fade in
+        mode_hold_ms = 1200, -- 切换模
+        controls_hold_ms = 4000, -- 播放控制
+        mode_reveal_ms = 220, -- 模式文字
+        mode_resize_ms = 180, -- 模式区域
+        controls_fade_ms = 220, -- 控制键fade in/out
+      },
       ambient_trail = { -- 全屏氛围背景滞后跟随几何形变(follow-through);进/退各一套时长
         enter = { delay_ms = 80, ease_ms = 740 }, -- 进全屏:优雅慢入(先僵 delay 再 ease-out 缓入;都 0 = 同步无滞后)
         exit = { delay_ms = 0, ease_ms = 240 }, -- 退全屏:迅速收(短缓动几乎不在列表上残留)
@@ -364,7 +374,7 @@ return {
       min_full_height = 24, -- 高不足此行数退紧凑布局
       fs_left_pct = 44, -- 全屏左栏(封面+transport)占宽 %,余下归歌词
       fs_spectrum = { pct = 28, min = 10, max = 22 }, -- 全屏底部频谱通栏高:占屏高 %,钳到 [min,max] 行(响应式)
-      fs_transport_height = 8, -- 全屏 transport 条高,行;内容 6 + 边框 2
+      transport_height = 5, -- 播放栏总高,行(含边框);浏览/紧凑/搜索/全屏共用
       dock_w_pct = 36, -- 停靠浮层(播放队列)占屏宽 %
       menu_align = "right", -- 弹出菜单相对锚点行的横向对齐:"left"|"center"|"right",或 0.0~1.0 数字精确指定比例(0 贴左 / 0.5 居中 / 1 贴右)
     },

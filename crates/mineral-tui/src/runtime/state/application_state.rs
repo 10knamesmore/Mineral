@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use rustc_hash::FxHashMap;
 
 use crate::components::layout::browse::spectrum::SpectrumState;
+use crate::components::layout::shared::transport::TransportFeedback;
 use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::marquee::Marquees;
 use crate::runtime::playback::Playback;
@@ -45,6 +46,9 @@ pub struct AppState {
 
     /// 播放状态机。
     pub playback: Playback,
+
+    /// 播放栏本地反馈；动作唤起，显式 tick 推进，绘制只读。
+    pub(crate) transport: TransportFeedback,
 
     /// 频谱状态(条高 + 平滑)。
     pub spectrum: SpectrumState,
@@ -109,6 +113,8 @@ impl AppState {
     pub fn new(cfg: Arc<mineral_config::Config>, images: ImageEngine) -> Self {
         let anim = cfg.tui().animation();
         let tick_ms = *anim.frame_tick_ms();
+        let playback = Playback::new();
+        let transport = TransportFeedback::new(playback.mode, anim);
         Self {
             browse: BrowsePage::new(anim),
             channel_search: SearchPage::new(
@@ -122,7 +128,8 @@ impl AppState {
             library: LibraryData::new(),
             window_title_override: None,
             player: PlayerMirror::new(),
-            playback: Playback::new(),
+            playback,
+            transport,
             spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
             fft: SpectrumComputer::new(spectrum_params(cfg.tui().spectrum())),
             images,
@@ -171,6 +178,11 @@ impl AppState {
         self.vinyl.tick();
         self.dim.tick();
         self.playback.tick_envelope_reveal();
+        self.transport.tick(
+            self.playback.mode,
+            self.cfg.tui().animation(),
+            std::time::Instant::now(),
+        );
         self.tick_lyric_scroll();
     }
 

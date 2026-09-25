@@ -35,6 +35,7 @@ pub use ambient::{
 pub use animation::{
     AmbientTrailConfig, AnimationConfig, MarqueeBounceConfig, MarqueeConfig, MarqueeLoopConfig,
     MarqueeMode, MenuReveal, SearchFocusTransition, SweepStyle, TrailTimingConfig,
+    TransportFeedbackConfig,
 };
 pub use audio::{AudioConfig, BackendKind};
 pub use behavior::{BehaviorConfig, FilterPlayScope, TrackPosMemory};

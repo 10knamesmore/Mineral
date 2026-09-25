@@ -13,6 +13,9 @@ impl App {
         self.state.player.versions = sync.versions;
         self.state.playback.play_origin = sync.play_origin;
         self.state.playback.mode = sync.play_mode;
+        self.state
+            .transport
+            .sync_mode(sync.play_mode, self.state.cfg.tui().animation());
         // 在播位置锚点是轻段,每 tick 灌(prev/next 可在 queue 列表不变时单独前进)。
         // 它决定 queue 浮层的在播行样式，独立于客户端的 UI 光标(后者只钳防越界)。
         self.state.player.cursor = sync.cursor;

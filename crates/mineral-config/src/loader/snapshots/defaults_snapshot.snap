@@ -851,6 +851,16 @@ Config {
             list_scroll_ms: 280,
             minimap_cursor_ms: 240,
             fullscreen_ms: 288,
+            transport: TransportFeedbackConfig {
+                volume_hold_ms: 2000,
+                mode_hold_ms: 1200,
+                controls_hold_ms: 4000,
+                volume_fade_out_ms: 110,
+                volume_fade_in_ms: 150,
+                mode_reveal_ms: 220,
+                mode_resize_ms: 180,
+                controls_fade_ms: 220,
+            },
             ambient_trail: AmbientTrailConfig {
                 enter: TrailTimingConfig {
                     delay_ms: 80,
@@ -911,7 +921,7 @@ Config {
                 min: 10,
                 max: 22,
             },
-            fs_transport_height: 8,
+            transport_height: 5,
             dock_w_pct: 36,
             menu_align: Right,
         },

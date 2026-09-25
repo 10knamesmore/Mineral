@@ -49,17 +49,17 @@ pub struct Areas {
 ///
 /// # Params:
 ///   - `area`: 可用区域
-///   - `cfg`: 布局段(完整布局门槛,配置 `tui.layout`)
+///   - `cfg`: 布局段(完整布局门槛与播放栏高度，配置 `tui.layout`)
 pub fn compute(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
     if area.width < *cfg.min_full_width() || area.height < *cfg.min_full_height() {
-        compute_compact(area)
+        compute_compact(area, cfg)
     } else {
-        compute_full(area)
+        compute_full(area, cfg)
     }
 }
 
 /// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport)。
-fn compute_full(area: Rect) -> Areas {
+fn compute_full(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
     let [top_status, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
@@ -74,9 +74,12 @@ fn compute_full(area: Rect) -> Areas {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(bottom_area);
 
-    // 右半上下:spectrum 上、transport 下(transport 内容固定 6 行 + 边框 2 = 8,余给 spectrum)。
-    let [spectrum, transport] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(right_col);
+    // 右半上下:播放栏从配置现读高度，其余留给频谱。
+    let [spectrum, transport] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(*cfg.transport_height()),
+    ])
+    .areas(right_col);
 
     Areas {
         mode: LayoutMode::Full,
@@ -93,13 +96,16 @@ fn compute_full(area: Rect) -> Areas {
     }
 }
 
-/// Compact 布局(窄/矮终端):顶部 1 行,中间 70/30 主-transport,无右侧歌词与频谱。
-fn compute_compact(area: Rect) -> Areas {
+/// Compact 布局(窄/矮终端):顶部 1 行，播放栏从底部占配置高度，其余归左栏。
+fn compute_compact(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
     let [top_status, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
-    let [left, transport] =
-        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(body);
+    let [left, transport] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(*cfg.transport_height()),
+    ])
+    .areas(body);
 
     Areas {
         mode: LayoutMode::Compact,
@@ -139,7 +145,7 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 
     let [cover, transport] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(*cfg.fs_transport_height()),
+        Constraint::Length(*cfg.transport_height()),
     ])
     .areas(left_col);
 
@@ -164,15 +170,17 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 ///
 /// # Params:
 ///   - `area`: 可用区域
-///   - `_cfg`: 布局段；此端点与其他布局计算函数保持同一调用接口
-pub fn compute_search(area: Rect, _cfg: &mineral_config::LayoutConfig) -> Areas {
+///   - `cfg`: 布局段，播放栏高度与其他布局计算函数共用
+pub fn compute_search(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
     // search 态顶行被 prompt 接管:不留 status bar,prompt 紧贴 area 顶。
     let [search_prompt, body] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
 
-    // transport 高度沿用 normal(compute_full):内容固定 6 行 + 边框 2 = 8。
-    let [results_body, transport] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(body);
+    let [results_body, transport] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(*cfg.transport_height()),
+    ])
+    .areas(body);
 
     let [results, detail] =
         Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
@@ -203,9 +211,83 @@ mod tests {
         Rect::new(0, 0, w, h)
     }
 
-    /// defaults 配置的布局段(= 接线前硬编码阈值/尺寸)。
+    /// default.lua 的布局段。
     fn layout_cfg() -> color_eyre::Result<mineral_config::LayoutConfig> {
         Ok(mineral_config::Config::defaults()?.tui().layout().clone())
+    }
+
+    /// 从默认树覆盖播放栏高度，模拟配置热重载后的新树。
+    fn layout_cfg_with_transport_height(
+        height: u16,
+    ) -> color_eyre::Result<mineral_config::LayoutConfig> {
+        let tree = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            mineral_config::nest_path("tui.layout.transport_height", serde_json::json!(height)),
+        );
+        let cfg = mineral_config::from_tree(&tree)
+            .map_err(|warning| color_eyre::eyre::eyre!("配置落型失败:{warning}"))?;
+        Ok(cfg.tui().layout().clone())
+    }
+
+    /// 默认五行；更换配置后，浏览、紧凑、搜索和全屏端点立即同步新高度。
+    #[test]
+    fn transport_height_updates_all_layouts() -> color_eyre::Result<()> {
+        assert_eq!(*layout_cfg()?.transport_height(), 5);
+        let configs = [
+            layout_cfg()?,
+            layout_cfg_with_transport_height(3)?,
+            layout_cfg_with_transport_height(7)?,
+        ];
+        for cfg in configs {
+            let height = *cfg.transport_height();
+            for actual in [
+                compute(area(100, 40), &cfg).transport,
+                compute(area(79, 40), &cfg).transport,
+                compute_fullscreen(area(100, 40), &cfg).transport,
+                compute_search(area(100, 40), &cfg).transport,
+            ] {
+                assert_eq!(actual.height, height, "各端点应现读播放栏高度");
+            }
+        }
+        Ok(())
+    }
+
+    /// 可用面积不足时播放栏收缩，各端点的矩形不越界也不 panic。
+    #[test]
+    fn tiny_areas_keep_all_panels_inside_parent() -> color_eyre::Result<()> {
+        let cfg = layout_cfg()?;
+        for (width, height) in [(0, 0), (0, 10), (10, 0), (1, 1), (5, 4), (79, 4), (100, 1)] {
+            let parent = Rect::new(3, 2, width, height);
+            for panels in [
+                compute(parent, &cfg),
+                compute_fullscreen(parent, &cfg),
+                compute_search(parent, &cfg),
+            ] {
+                for rect in [
+                    Some(panels.top_status),
+                    Some(panels.left),
+                    panels.right,
+                    panels.search_prompt,
+                    panels.cover,
+                    panels.lyrics,
+                    panels.spectrum,
+                    Some(panels.transport),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(
+                        rect.x >= parent.x
+                            && rect.y >= parent.y
+                            && rect.right() <= parent.right()
+                            && rect.bottom() <= parent.bottom(),
+                        "子区域 {rect:?} 越出父 {parent:?}"
+                    );
+                }
+                assert!(panels.transport.height <= height.min(*cfg.transport_height()));
+            }
+        }
+        Ok(())
     }
 
     /// 宽高都达标 → Full,right/lyrics/spectrum 都有,顶/底各 1 行。

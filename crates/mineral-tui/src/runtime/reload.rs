@@ -98,6 +98,7 @@ impl crate::app::App {
             crate::render::anim::ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
         self.state.browse.retempo(anim);
+        self.state.transport.retempo(anim);
         self.state.channel_search.reconfigure(
             crate::render::anim::ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
             crate::render::anim::ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
