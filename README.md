@@ -186,6 +186,7 @@ mineral channel netease login    # 扫码登录
 ## 开发
 
 ```bash
+scripts/check.sh                          # release workspace tests + custom lint
 cargo snap                                # test + review insta snap
 cargo clippy
 cargo fmt

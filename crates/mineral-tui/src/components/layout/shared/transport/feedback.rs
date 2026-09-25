@@ -26,10 +26,13 @@ pub(super) enum Heading {
 pub(super) enum ControlButton {
     /// 上一首或从头播放。
     Previous,
+
     /// 播放 / 暂停。
     PlayPause,
+
     /// 下一首。
     Next,
+
     /// 切换播放模式。
     Mode,
 }
@@ -235,8 +238,10 @@ impl ModeCaption {
 struct ModeFeedback {
     /// 最新确认模式和当前文字提示期限决定的展开状态。
     caption: ModeCaption,
+
     /// 整段文字的线性显现进度，绘制时按列错开淡入。
     reveal: Transition,
+
     /// 括号宽度与文字显现独立推进，连按时从当前列宽接续。
     width: CaptionWidth,
 }

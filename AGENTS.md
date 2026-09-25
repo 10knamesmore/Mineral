@@ -1,12 +1,14 @@
 ## 仓库总览
 
-Mineral 是一个多源音乐播放器(tui as a client)
+Mineral 是一个多源, C-S 架构音乐播放器(tui as a client)
 
 目前只有我一个人开发, 只要这句话还存在, mineral就属于pre release 迭代期间, **禁止考虑任何持久化兼容**, 允许破坏更新, 一切设计不应该被`向后兼容`捆住手脚
 
 埋点sql走 migration(我个人使用使用希望), 其他的不管是sql/json文件/路径契约都是可以重建的, 如果有充足的理由证明破坏更新后是更好的设计, 直接做, 本地文件可以rm
 
 测试运行器是 **cargo-nextest**(需 `cargo install cargo-nextest cargo-insta`);`cargo t` / `td` / `snap` 是 `.cargo/config.toml` 里的 alias。
+
+项目有自定义dylint, 调用`scripts/check.sh` 跑代码编写完成后的验证
 
 所有测试**禁止**debug run, debug 运行花的时间比 release 编译多得多, 大头时间都在编译, **禁止**先跑部分测试再跑全量，浪费大头编译时间， 直接跑全量
 
@@ -18,9 +20,9 @@ Mineral 是一个多源音乐播放器(tui as a client)
 
 ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成
 
-`mineral-channel-core::MusicChannel`(`async_trait`)定义 catalog、library 与 user-data 操作:搜索、详情、歌词、用户歌单和喜欢状态等能力。`mineral-playback::PlaybackProvider` 独立负责把 song identity 解析为可打开的播放资源，并封装来源鉴权与媒体 preparation。server 面向这两个 trait 组合能力；TUI 通过 `mineral_server::Client` 发请求，不直接调用来源适配器。
+`mineral-channel-core::MusicChannel`定义 catalog、library 与 user-data 操作:搜索、详情、歌词、用户歌单和喜欢状态等能力。`mineral-playback::PlaybackProvider` 独立负责把 song identity 解析为可打开的播放资源，并封装来源鉴权与媒体 preparation。server 面向这两个 trait 组合能力；TUI 通过 `mineral_server::Client` 发请求，不直接调用来源适配器。
 
-**术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是 catalog / library / user-data 的**连接器 / 适配器**(回答"用哪个后端取数"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索、详情、歌词或用户数据后端时用 **channel**;讲播放资源解析与打开时用 **playback provider**。同名异义的 `rodio` 声道 / `tokio` channel 与本词表无关,别牵连。
+**术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是 catalog / library / user-data 的**连接器 / 适配器**(回答"用哪个后端取数"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索、详情、歌词或用户数据后端时用 **channel**;讲播放资源解析与打开时用 **playback provider**。
 
 配置(file + session 覆盖)是 daemon 上的一份**运行时状态**:daemon mtime 轮询config.lua、合成 `merge(default, user, overlay)`、落型校验后经 `Event::ConfigChanged` 推整树给订阅 client(握手先重放一帧);**client 不看文件**(TUI 启动本地 load 一次只是自举,连上即被推送顶替)。
 
