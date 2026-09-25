@@ -4,7 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use mineral_protocol::{BusValue, PlayMode, PlayerSync};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    style::{Color, Style},
+    widgets::Block,
+};
 
 use super::App;
 use crate::test_support::{TestClient, app_with_queue};
@@ -19,11 +24,20 @@ fn press(app: &mut App, key: char) {
 
 /// 从实际 transport renderer 获取五行文本，不经过其他组件的准备或绘制。
 fn transport_text(app: &App) -> color_eyre::Result<String> {
+    Ok(transport_frame(app, Color::Reset)?.backend().to_string())
+}
+
+/// 在指定背景上绘制播放栏，保留单元格样式供反馈验证。
+fn transport_frame(app: &App, background: Color) -> color_eyre::Result<Terminal<TestBackend>> {
     use crate::components::layout::shared::{
         marquee::MarqueeCtx, transport, waveform::WaveformCtx,
     };
     let mut terminal = Terminal::new(TestBackend::new(60, 5))?;
     terminal.draw(|frame| {
+        frame.render_widget(
+            Block::new().style(Style::new().bg(background)),
+            frame.area(),
+        );
         transport::draw(
             frame,
             frame.area(),
@@ -34,17 +48,75 @@ fn transport_text(app: &App) -> color_eyre::Result<String> {
             &app.theme,
         )
     })?;
-    Ok(terminal.backend().to_string())
+    Ok(terminal)
+}
+
+/// Seek 即刻反馈但不预测时间；连按重启底色，其他单元格与控件显隐不受影响。
+#[test]
+fn seek_flashes_only_elapsed_time_until_confirmation() -> color_eyre::Result<()> {
+    for bg in [Color::Reset, Color::Rgb(20, 40, 80)] {
+        for (key, modifiers, target) in [
+            (KeyCode::Left, KeyModifiers::NONE, 55_000),
+            (KeyCode::Right, KeyModifiers::NONE, 65_000),
+            (KeyCode::Left, KeyModifiers::SHIFT, 30_000),
+            (KeyCode::Right, KeyModifiers::SHIFT, 90_000),
+        ] {
+            let (mut app, seeks) = crate::test_support::app_in_fullscreen_seek_probe()?;
+            app.state.playback.position_ms = 60_000;
+            app.state.playback.prefetch.ready = true;
+            app.state.playback.prefetch.buffered_bps = mineral_audio::Bps::FULL;
+            let idle = transport_frame(&app, bg)?.backend().buffer().clone();
+            let event = Event::Key(KeyEvent::new(key, modifiers));
+            app.handle_event(&event);
+            assert_eq!(
+                seeks.lock().ok().as_deref().map(Vec::as_slice),
+                Some([target].as_slice())
+            );
+            assert_eq!(app.state.playback.position_ms, 60_000);
+            assert_eq!(app.state.transport.controls_opacity(), 0);
+            let frame = transport_frame(&app, bg)?;
+            for y in 0..5 {
+                for x in 0..60 {
+                    let mut expected = idle[(x, y)].clone();
+                    if y == 4 && (1..7).contains(&x) {
+                        expected.bg = app.theme.surface1;
+                    }
+                    assert_eq!(frame.backend().buffer()[(x, y)], expected);
+                }
+            }
+            for _ in 0..6 {
+                app.state.tick_frame();
+            }
+            let fading = transport_frame(&app, bg)?.backend().buffer()[(2, 4)].bg;
+            assert_ne!(fading, bg);
+            assert_ne!(fading, app.theme.surface1);
+            app.handle_event(&event);
+            assert_eq!(
+                transport_frame(&app, bg)?.backend().buffer()[(2, 4)].bg,
+                app.theme.surface1
+            );
+            assert_eq!(
+                seeks.lock().ok().as_deref().map(Vec::as_slice),
+                Some([target, target].as_slice())
+            );
+            for _ in 0..40 {
+                app.state.tick_frame();
+            }
+            assert_eq!(transport_frame(&app, bg)?.backend().buffer(), &idle);
+            assert_eq!(app.state.playback.position_ms, 60_000);
+        }
+    }
+    Ok(())
 }
 
 /// 按键唤出反馈的同时只发送一次原命令；等待确认时播放图标与模式不提前变化。
 #[test]
 fn first_control_key_executes_once_and_waits_for_confirmation() -> color_eyre::Result<()> {
-    for (key, expected) in [
-        ('p', "prev_or_restart"),
-        (' ', "resume"),
-        ('n', "next_song"),
-        ('m', "cycle_play_mode"),
+    for (key, expected, glyph) in [
+        ('p', "prev_or_restart", "⏮"),
+        (' ', "resume", "▶"),
+        ('n', "next_song", "⏭"),
+        ('m', "cycle_play_mode", "→"),
     ] {
         let mut app = app_with_queue(3, 0)?;
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -58,6 +130,9 @@ fn first_control_key_executes_once_and_waits_for_confirmation() -> color_eyre::R
             calls.lock().ok().as_deref().map(Vec::as_slice),
             Some([expected].as_slice())
         );
+        assert!(transport_text(&app)?.contains(glyph), "首次按键立即可见");
+        assert!(!app.state.playback.playing);
+        assert_eq!(app.state.playback.mode, PlayMode::Sequential);
         for _ in 0..30 {
             app.state.tick_frame();
         }

@@ -310,6 +310,51 @@ mod tests {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
     }
 
+    /// 副歌词反馈跟随实际动作与重映射；输入框消费字符时不触发，也不唤起播放控件。
+    #[test]
+    fn lyric_press_follows_mapped_action_and_input_consumption() -> color_eyre::Result<()> {
+        use crate::runtime::state::LyricExtra;
+
+        let mut app = app_with_queue(1, 0)?;
+        app.state = crate::test_support::state_with_lyrics(LyricExtra::None, true)?;
+        let config = mineral_config::merge_tree(
+            mineral_config::default_tree()?,
+            serde_json::json!({ "tui": { "keys": { "cycle_lyric": "w" } } }),
+        );
+        app.apply_pushed_config(mineral_protocol::BusValue::from_json(config));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
+
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 1000);
+        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Translation);
+        assert_eq!(app.state.transport.controls_opacity(), 0);
+        for _ in 0..6 {
+            app.state.tick_frame();
+        }
+        let strength = app.state.browse.lyric_view.extra_press.strength();
+        assert!(strength > 0 && strength < 1000);
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 1000);
+        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
+        for _ in 0..40 {
+            app.state.tick_frame();
+        }
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
+
+        app.state = crate::test_support::state_with_lrc_only()?;
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
+        Ok(())
+    }
+
     /// 集成:queue 光标记忆——翻到别处关掉再开,落回原处而非被拽回在播行。
     #[test]
     fn queue_reopens_at_remembered_cursor() -> color_eyre::Result<()> {

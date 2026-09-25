@@ -184,7 +184,15 @@ impl App {
             .saturating_add(delta_s.saturating_mul(1000))
             .clamp(0, max);
         let new_u = u64::try_from(new_ms).unwrap_or(0);
-        self.client.seek(new_u);
+        self.seek_to(new_u);
+    }
+
+    /// 发出 seek 请求并反馈操作，进度与歌词位置仍等待后端确认。
+    pub(crate) fn seek_to(&mut self, position_ms: u64) {
+        self.client.seek(position_ms);
+        self.state
+            .transport
+            .on_seek(self.state.cfg.tui().animation());
     }
 
     /// 持久化并乐观切换当前页面选中歌曲的喜欢态。Search 取结果或详情曲目，Browse 取

@@ -291,6 +291,7 @@ return {
       list_scroll_ms = 280, -- 列表视口滚动平移(<C-d> 族与 scrolloff 触发的滚动)
       minimap_cursor_ms = 240, -- 右边框 minimap 光标位置缓动；0 = 一帧到位
       fullscreen_ms = 288, -- 全屏进退场形变
+      controls_press_ms = 220, -- 控制键按压反馈
       transport = { -- 播放栏操作反馈:停留与过渡时长(毫秒)
         volume_hold_ms = 2000, -- 调节音量
         volume_fade_out_ms = 110, -- 音量标题fade out

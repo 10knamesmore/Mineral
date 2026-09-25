@@ -18,6 +18,7 @@ use mineral_model::{LyricLine, Word};
 use crate::components::layout::shared::text::center_bg;
 use crate::render::anim::ease_in_out;
 use crate::render::color::{lerp_color, lerp_permille};
+use crate::render::control_press;
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::playback::SyncTrust;
 use crate::runtime::state::{AppState, LyricExtra};
@@ -48,6 +49,11 @@ pub(super) fn paint_panel(
     // 面板 chrome(边框 / 标题弱化色)按实际背景现算:氛围场上贴场色;无人铺 bg 采到
     // Reset 按 base 混合,ANSI 主题回落静态 token(回落链见 Theme::text_over)。
     let ink = theme.ink_over(center_bg(frame, area));
+    let press_strength = state.browse.lyric_view.extra_press.strength();
+    let press_bg = (press_strength > 0).then(|| {
+        let key_area = Rect::new(area.right().saturating_sub(4).max(area.x), area.y, 1, 1);
+        control_press::background(center_bg(frame, key_area), press_strength, theme)
+    });
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -65,6 +71,7 @@ pub(super) fn paint_panel(
                 extra,
                 theme,
                 ink,
+                press_bg,
             ))
             .right_aligned(),
         );
@@ -144,6 +151,7 @@ fn title_left_spans(
 ///   - `extra`: 当前生效(且非空)的副歌词档;`None` 只显示按键
 ///   - `theme`: 取色
 ///   - `ink`: 对实际背景现算的弱化色阶(按键提示 / 分隔点用 muted 档)
+///   - `press_bg`: 按压期间的按键底色；空闲时保留原背景
 ///
 /// # Return:
 ///   组成 ` tr · [t] ` / ` [t] ` 的分色 Span 序列;无副歌词时为空。
@@ -152,6 +160,7 @@ fn title_right_spans(
     extra: Option<LyricExtra>,
     theme: &Theme,
     ink: Ink,
+    press_bg: Option<Color>,
 ) -> Vec<Span<'static>> {
     if !has_extra {
         return Vec::new();
@@ -175,7 +184,7 @@ fn title_right_spans(
         }
         Some(LyricExtra::None) | None => {}
     }
-    spans.push(Span::styled("[t]", key));
+    spans.push(Span::styled("[t]", press_bg.map_or(key, |bg| key.bg(bg))));
     spans.push(Span::styled(" ", key));
     spans
 }
@@ -795,6 +804,68 @@ mod tests {
         spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    /// 普通与全屏面板只给 [t] 铺按压底色，结束后恢复原背景。
+    #[test]
+    fn lyric_press_highlights_only_the_key_and_restores_background() -> color_eyre::Result<()> {
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::Block;
+
+        let theme = crate::test_support::default_theme()?;
+        for motion in [super::LyricMode::Compact, super::LyricMode::Immersive] {
+            for bg in [Color::Reset, Color::Rgb(20, 40, 80)] {
+                let mut state =
+                    crate::test_support::state_with_lyrics(LyricExtra::Translation, true)?;
+                let mut terminal = Terminal::new(TestBackend::new(64, 14))?;
+                let draw = |terminal: &mut Terminal<TestBackend>, state: &AppState| {
+                    terminal
+                        .draw(|frame| {
+                            frame.render_widget(
+                                Block::new().style(Style::new().bg(bg)),
+                                frame.area(),
+                            );
+                            super::draw(frame, frame.area(), state, &theme, motion);
+                        })
+                        .map(|_| ())
+                };
+                draw(&mut terminal, &state)?;
+                let idle = terminal.backend().buffer().clone();
+                state
+                    .browse
+                    .lyric_view
+                    .extra_press
+                    .trigger(state.cfg.tui().animation());
+                draw(&mut terminal, &state)?;
+                let pressed = terminal.backend().buffer();
+                let key_x = (0..64)
+                    .find(|&x| pressed[(x, 0)].symbol() == "[")
+                    .map(|x| x + 1)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("歌词按键提示应可见"))?;
+                for y in 0..14 {
+                    for x in 0..64 {
+                        let mut expected = idle[(x, y)].clone();
+                        if y == 0 && (key_x - 1..=key_x + 1).contains(&x) {
+                            expected.bg = theme.surface1;
+                        }
+                        assert_eq!(pressed[(x, y)], expected);
+                    }
+                }
+                for _ in 0..6 {
+                    state.tick_frame();
+                }
+                draw(&mut terminal, &state)?;
+                let fading = terminal.backend().buffer()[(key_x, 0)].bg;
+                assert_ne!(fading, bg);
+                assert_ne!(fading, theme.surface1);
+                for _ in 0..40 {
+                    state.tick_frame();
+                }
+                draw(&mut terminal, &state)?;
+                assert_eq!(terminal.backend().buffer(), &idle);
+            }
+        }
+        Ok(())
+    }
+
     use super::{manual_cell_anchor, scroll_anchor, scroll_progress};
 
     /// `scroll_progress`:elapsed/window 定点千分比,`elapsed >= window` 饱和到 1000。
@@ -1127,19 +1198,29 @@ mod tests {
     fn title_right_hint() -> color_eyre::Result<()> {
         let th = crate::test_support::default_theme()?;
         let ink = th.ink_over(ratatui::style::Color::Reset);
-        assert_eq!(text_of(&title_right_spans(false, None, &th, ink)), "");
+        assert_eq!(text_of(&title_right_spans(false, None, &th, ink, None)), "");
         assert_eq!(
             text_of(&title_right_spans(
                 false,
                 Some(LyricExtra::Translation),
                 &th,
-                ink
+                ink,
+                None
             )),
             ""
         );
-        assert_eq!(text_of(&title_right_spans(true, None, &th, ink)), " [t] ");
         assert_eq!(
-            text_of(&title_right_spans(true, Some(LyricExtra::None), &th, ink)),
+            text_of(&title_right_spans(true, None, &th, ink, None)),
+            " [t] "
+        );
+        assert_eq!(
+            text_of(&title_right_spans(
+                true,
+                Some(LyricExtra::None),
+                &th,
+                ink,
+                None
+            )),
             " [t] "
         );
         assert_eq!(
@@ -1147,7 +1228,8 @@ mod tests {
                 true,
                 Some(LyricExtra::Translation),
                 &th,
-                ink
+                ink,
+                None
             )),
             " tr · [t] "
         );
@@ -1156,7 +1238,8 @@ mod tests {
                 true,
                 Some(LyricExtra::Romanization),
                 &th,
-                ink
+                ink,
+                None
             )),
             " ro · [t] "
         );

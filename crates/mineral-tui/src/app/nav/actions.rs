@@ -527,7 +527,7 @@ impl App {
                     self.state.lyric_focus_seek_target(),
                     self.state.manual_lyric_focus_line(),
                 ) {
-                    self.client.seek(ms);
+                    self.seek_to(ms);
                     self.state.hold_lyric_anchor_for_seek(line);
                 }
             }

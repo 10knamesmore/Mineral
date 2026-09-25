@@ -172,6 +172,7 @@ impl AppState {
         self.browse.view.tick();
         self.browse.list_expansion.get_mut().tick();
         self.browse.fullscreen.tick();
+        self.browse.lyric_view.extra_press.tick();
         self.browse.tick_ambient_reveal();
         self.channel_search.tick();
         self.marquees.tick();

@@ -851,6 +851,7 @@ Config {
             list_scroll_ms: 280,
             minimap_cursor_ms: 240,
             fullscreen_ms: 288,
+            controls_press_ms: 220,
             transport: TransportFeedbackConfig {
                 volume_hold_ms: 2000,
                 mode_hold_ms: 1200,

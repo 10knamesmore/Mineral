@@ -235,6 +235,35 @@ mod tests {
         )))
     }
 
+    /// 顶层按压时长热更覆盖歌词按钮，保留在途亮度并调整后续淡出速度。
+    #[test]
+    fn pushed_config_retempos_lyric_press_in_place() -> color_eyre::Result<()> {
+        let mut app = app_with_queue(1, 0)?;
+        app.state =
+            crate::test_support::state_with_lyrics(crate::runtime::state::LyricExtra::None, true)?;
+        app.state.cycle_lyric_extra();
+        for _ in 0..6 {
+            app.state.tick_frame();
+        }
+        let before = app.state.browse.lyric_view.extra_press.strength();
+        assert!(before > 0 && before < 1000);
+        let mut old_speed = app.state.browse.lyric_view.extra_press.clone();
+        old_speed.tick();
+        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
+            "controls_press_ms": 4400, "frame_tick_ms": 32
+        } } }))?);
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), before);
+        app.state.tick_frame();
+        let after = app.state.browse.lyric_view.extra_press.strength();
+        assert!(after < before);
+        assert!(after > old_speed.strength());
+        for _ in 0..160 {
+            app.state.tick_frame();
+        }
+        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+        Ok(())
+    }
+
     /// minimap 时长热更保留显示位置，下一帧按新速度推进；0ms 能直接收敛到目标。
     #[test]
     fn pushed_config_changes_minimap_speed_without_jumping() -> color_eyre::Result<()> {

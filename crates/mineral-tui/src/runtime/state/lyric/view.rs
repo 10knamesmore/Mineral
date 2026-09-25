@@ -3,6 +3,7 @@
 //! 只持状态;操作它的方法(切档、滚动、回锚)因要跨读 playback/fullscreen/配置,
 //! 留在组合根([`AppState`](crate::runtime::state::AppState))。
 
+use crate::render::control_press::ControlPress;
 use mineral_model::SongId;
 
 use super::super::LyricExtra;
@@ -12,6 +13,9 @@ use super::glide::LyricGlide;
 pub struct LyricView {
     /// 副歌词(翻译 / 罗马音)显示档,由 `t` 键循环。
     pub extra: LyricExtra,
+
+    /// 切换副歌词时，面板按键提示的底色反馈。
+    pub(crate) extra_press: ControlPress,
 
     /// 全屏歌词手动滚动的「脱离播放」态;`None` = 附着态(渲染跟随播放,逐行时间驱动平滑)。
     pub(crate) scroll: Option<LyricGlide>,
@@ -25,6 +29,7 @@ impl LyricView {
     pub(crate) fn new() -> Self {
         Self {
             extra: LyricExtra::None,
+            extra_press: ControlPress::default(),
             scroll: None,
             scroll_song: None,
         }

@@ -503,6 +503,7 @@ expression: "super::meta_config_lua()"
 ---@field list_scroll_ms? integer 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
 ---@field minimap_cursor_ms? integer 列表 minimap 光标的位置缓动时长(毫秒)，独立于视口滚动；0 为一帧到位。
 ---@field fullscreen_ms? integer 全屏播放态进退场形变动画时长(毫秒)。
+---@field controls_press_ms? integer 控制键按压反馈时长
 ---@field transport? mineral.TransportFeedbackConfig 播放栏音量、模式和控制键的反馈停留与过渡时长。
 ---@field ambient_trail? mineral.AmbientTrailConfig 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位, 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
 ---@field popup_anim_ms? integer 浮层(队列 / 确认框)进出动画时长(毫秒)。

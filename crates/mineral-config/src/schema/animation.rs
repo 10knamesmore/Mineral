@@ -27,6 +27,9 @@ pub struct AnimationConfig {
     /// 全屏播放态进退场形变动画时长(毫秒)。
     fullscreen_ms: u32,
 
+    /// 控制键按压反馈时长
+    controls_press_ms: u32,
+
     /// 播放栏音量、模式和控制键的反馈停留与过渡时长。
     transport: TransportFeedbackConfig,
 

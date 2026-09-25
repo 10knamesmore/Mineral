@@ -1,6 +1,6 @@
 //! 五行 Transport 面板:上边框状态 / 曲名 / 元数据 / 进度 / 下边框时间与控件。
 
-use super::feedback::{Heading, TransportFeedback};
+use super::feedback::{ButtonAppearance, ControlButton, Heading, TransportFeedback};
 
 use mineral_audio::Bps;
 use mineral_model::AudioFormat;
@@ -14,6 +14,7 @@ use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::text::{alias_span, center_bg, char_width, display_width};
 use crate::components::layout::shared::waveform::{PlayState, WaveformCtx, waveform_spans};
 use crate::render::color::lerp_color;
+use crate::render::control_press::background as button_background;
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
@@ -44,7 +45,7 @@ pub(crate) fn draw(
 
     paint_heading(frame, area, pb, feedback, theme, ink);
     if area.height >= 2 {
-        let control_bounds = paint_footer(frame, area, pb, theme, ink);
+        let control_bounds = paint_footer(frame, area, pb, feedback, theme, ink);
         paint_controls(frame, area, pb, feedback, control_bounds, theme, ink);
     }
 
@@ -261,6 +262,7 @@ fn paint_footer(
     frame: &mut Frame<'_>,
     area: Rect,
     pb: &Playback,
+    feedback: &TransportFeedback,
     theme: &Theme,
     ink: Ink,
 ) -> Option<(u16, u16)> {
@@ -274,10 +276,17 @@ fn paint_footer(
     }
     let bottom = area.bottom() - 1;
     let right_start = area.width - 1 - right_width;
-    frame.render_widget(
-        Paragraph::new(elapsed).style(Style::new().fg(theme.accent)),
-        Rect::new(area.x + 1, bottom, left_width, 1),
-    );
+    let elapsed_area = Rect::new(area.x + 1, bottom, left_width, 1);
+    let mut elapsed_style = Style::new().fg(theme.accent);
+    let press_strength = feedback.elapsed_press_strength();
+    if press_strength > 0 {
+        elapsed_style = elapsed_style.bg(button_background(
+            center_bg(frame, elapsed_area),
+            press_strength,
+            theme,
+        ));
+    }
+    frame.render_widget(Paragraph::new(elapsed).style(elapsed_style), elapsed_area);
     frame.render_widget(
         Paragraph::new(total).style(Style::new().fg(ink.strong)),
         Rect::new(area.x + right_start, bottom, right_width, 1),
@@ -332,7 +341,7 @@ fn paint_controls(
     ink: Ink,
 ) {
     let opacity = feedback.controls_opacity();
-    if opacity == 0 || area.width < 3 {
+    if !feedback.has_visible_buttons() || area.width < 3 {
         return;
     }
     let center = (area.width - 1) / 2;
@@ -356,7 +365,7 @@ fn paint_controls(
             frame,
             Rect::new(area.x + center, bottom, 1, 1),
             Line::from(play_glyph),
-            opacity,
+            feedback.button(ControlButton::PlayPause),
             ink,
             theme,
         );
@@ -385,7 +394,7 @@ fn paint_controls(
         frame,
         Rect::new(area.x + play_start, bottom, 3, 1),
         Line::from(format!("[{play_glyph}]")),
-        opacity,
+        feedback.button(ControlButton::PlayPause),
         ink,
         theme,
     );
@@ -427,12 +436,15 @@ fn paint_controls(
         ink,
         theme,
     );
-    for (start, label) in [(prev_start, "[⏮]"), (next_start, "[⏭]")] {
+    for (start, label, button) in [
+        (prev_start, "[⏮]", ControlButton::Previous),
+        (next_start, "[⏭]", ControlButton::Next),
+    ] {
         paint_button(
             frame,
             Rect::new(area.x + start, bottom, 3, 1),
             Line::from(Span::styled(label, Style::new().fg(ink.strong))),
-            opacity,
+            feedback.button(button),
             ink,
             theme,
         );
@@ -474,7 +486,12 @@ fn paint_controls(
             theme,
         );
     }
-    let bg = fade_background(center_bg(frame, mode_area), theme);
+    let appearance = feedback.button(ControlButton::Mode);
+    let bg = button_background(
+        center_bg(frame, mode_area),
+        appearance.press_strength,
+        theme,
+    );
     let mut spans = vec![Span::raw("["), Span::raw(glyph)];
     let mut used = glyph_columns;
     if caption.expanded && used < columns {
@@ -495,7 +512,7 @@ fn paint_controls(
     }
     spans.push(Span::raw(" ".repeat(usize::from(columns - used))));
     spans.push(Span::raw("]"));
-    paint_button(frame, mode_area, Line::from(spans), opacity, ink, theme);
+    paint_button(frame, mode_area, Line::from(spans), appearance, ink, theme);
 }
 
 /// 空白间隔与按钮共享显隐相位，覆盖底线但不改变整体宽度。
@@ -508,22 +525,27 @@ fn paint_gap(frame: &mut Frame<'_>, area: Rect, opacity: u16, ink: Ink, theme: &
             " ".repeat(usize::from(area.width)),
             Style::new().fg(bg),
         )),
-        opacity,
+        ButtonAppearance {
+            opacity,
+            press_strength: 0,
+        },
         ink,
         theme,
     );
 }
 
-/// 只覆盖按钮自己的列，未占用的底边框保留完整线条与角。
+/// 只覆盖按钮自己的列；按压底色随本键脉冲变化，静止时不覆盖原背景。
 fn paint_button(
     frame: &mut Frame<'_>,
     area: Rect,
     line: Line<'_>,
-    opacity: u16,
+    appearance: ButtonAppearance,
     ink: Ink,
     theme: &Theme,
 ) {
-    let bg = fade_background(center_bg(frame, area), theme);
+    let sampled_bg = center_bg(frame, area);
+    let bg = fade_background(sampled_bg, theme);
+    let opacity = appearance.opacity;
     let line = if opacity <= 500 {
         Line::from(Span::styled(
             "─".repeat(usize::from(area.width)),
@@ -544,7 +566,17 @@ fn paint_button(
                 .collect::<Vec<_>>(),
         )
     };
-    frame.render_widget(Paragraph::new(line), area);
+    let mut paragraph = Paragraph::new(line);
+    if appearance.press_strength > 0 && opacity > 500 {
+        let pressed_bg = button_background(sampled_bg, appearance.press_strength, theme);
+        paragraph = paragraph.style(Style::new().bg(lerp_color(
+            bg,
+            pressed_bg,
+            u64::from(opacity - 500) * 2,
+            1000,
+        )));
+    }
+    frame.render_widget(paragraph, area);
 }
 
 /// gapless prefetch 标记:字形 + 颜色;未预排 → `None`(不画)。
@@ -1900,7 +1932,119 @@ mod tests {
         Ok(())
     }
 
-    /// 上述相位两端以背景作桥梁：淡走旧边框后才绘新按钮，不发生字符跳色。
+    /// 首次按下只铺本键底色，脉冲结束后恢复实际背景；播放图标仍是确认态。
+    #[test]
+    fn button_press_is_local_and_restores_the_background() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
+        let cfg = mineral_config::Config::defaults()?;
+        let anim = cfg.tui().animation();
+        let now = Instant::now();
+        let pb = Playback::new();
+        let mq = still_marquees();
+        for bg in [Color::Reset, Color::Rgb(20, 40, 80)] {
+            for (action, glyph) in [
+                (Action::PrevOrRestart, "⏮"),
+                (Action::TogglePlayPause, "▶"),
+                (Action::NextSong, "⏭"),
+                (Action::CyclePlayMode, "→"),
+            ] {
+                let mut feedback = TransportFeedback::new(pb.mode, anim);
+                let mut terminal = Terminal::new(TestBackend::new(64, 5))?;
+                let draw = |terminal: &mut Terminal<TestBackend>, feedback: &TransportFeedback| {
+                    terminal
+                        .draw(|frame| {
+                            frame.render_widget(
+                                ratatui::widgets::Block::new()
+                                    .style(ratatui::style::Style::new().bg(bg)),
+                                frame.area(),
+                            );
+                            super::draw(
+                                frame,
+                                frame.area(),
+                                &pb,
+                                feedback,
+                                &ctx(&mq),
+                                &WaveformCtx::off(),
+                                &theme,
+                            );
+                        })
+                        .map(|_| ())
+                };
+                draw(&mut terminal, &feedback)?;
+                let idle = terminal.backend().buffer().clone();
+                feedback.on_action(action, pb.mode, anim, now);
+                draw(&mut terminal, &feedback)?;
+                let buffer = terminal.backend().buffer();
+                let pressed_x = (0..64)
+                    .find(|&x| buffer[(x, 4)].symbol() == glyph)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("按中的按钮应立即显示"))?;
+                for y in 0..5 {
+                    for x in 0..64 {
+                        if y == 4 && (pressed_x - 1..=pressed_x + 1).contains(&x) {
+                            assert_eq!(buffer[(x, y)].bg, theme.surface1);
+                        } else {
+                            assert_eq!(buffer[(x, y)], idle[(x, y)]);
+                        }
+                    }
+                }
+                for _ in 0..6 {
+                    feedback.tick(pb.mode, anim, now);
+                }
+                draw(&mut terminal, &feedback)?;
+                let fading_bg = terminal.backend().buffer()[(pressed_x, 4)].bg;
+                assert_ne!(fading_bg, theme.surface1);
+                assert_ne!(fading_bg, bg);
+                for _ in 0..40 {
+                    feedback.tick(pb.mode, anim, now);
+                }
+                draw(&mut terminal, &feedback)?;
+                assert_eq!(terminal.backend().buffer()[(pressed_x, 4)].bg, bg);
+                assert_eq!(terminal.backend().buffer()[(31, 4)].symbol(), "▶");
+            }
+        }
+        Ok(())
+    }
+
+    /// 模式文字的零亮度要融入按压底色，不能留下旧背景色的暗字。
+    #[test]
+    fn mode_reveal_blends_into_pressed_background() -> color_eyre::Result<()> {
+        let theme = crate::test_support::default_theme()?;
+        let cfg = mineral_config::Config::defaults()?;
+        let anim = cfg.tui().animation();
+        let now = Instant::now();
+        let mut pb = Playback::new();
+        let mut feedback = TransportFeedback::new(pb.mode, anim);
+        feedback.on_action(Action::CyclePlayMode, pb.mode, anim, now);
+        for _ in 0..80 {
+            feedback.tick(pb.mode, anim, now);
+        }
+        feedback.on_action(Action::CyclePlayMode, pb.mode, anim, now);
+        pb.mode = PlayMode::RepeatOne;
+        feedback.sync_mode(pb.mode, anim);
+        let mq = still_marquees();
+        let mut terminal = Terminal::new(TestBackend::new(64, 5))?;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                frame.area(),
+                &pb,
+                &feedback,
+                &ctx(&mq),
+                &WaveformCtx::off(),
+                &theme,
+            );
+        })?;
+        let buffer = terminal.backend().buffer();
+        let glyph_x = (0..64)
+            .find(|&x| buffer[(x, 4)].symbol() == "↻")
+            .ok_or_else(|| color_eyre::eyre::eyre!("确认模式图标应可见"))?;
+        let first_letter = &buffer[(glyph_x + 3, 4)];
+        assert_eq!(first_letter.bg, theme.surface1);
+        assert_eq!(first_letter.fg, first_letter.bg);
+        Ok(())
+    }
+
+    /// 未按中的按钮仍以背景作桥梁：淡走旧边框后才绘新按钮，不发生字符跳色。
     #[test]
     fn controls_midframe_colors_cross_at_background() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;

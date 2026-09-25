@@ -104,5 +104,13 @@ impl AppState {
             LyricExtra::Translation => LyricExtra::None,
             LyricExtra::Romanization => LyricExtra::None,
         };
+        if has_trans || has_roma {
+            self.browse
+                .lyric_view
+                .extra_press
+                .trigger(self.cfg.tui().animation());
+            mineral_log::debug!(target: "tui::lyrics", extra = ?self.browse.lyric_view.extra,
+                "lyric extra switched");
+        }
     }
 }

@@ -134,6 +134,7 @@ impl BrowsePage {
     /// # Params:
     ///   - `anim`: 新动画配置
     pub fn retempo(&mut self, anim: &AnimationConfig) {
+        self.lyric_view.extra_press.retempo(anim);
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
         self.list_expansion

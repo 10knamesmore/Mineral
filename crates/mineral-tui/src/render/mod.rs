@@ -7,6 +7,7 @@ pub mod blit;
 pub mod cells;
 pub(crate) mod clear;
 pub mod color;
+pub(crate) mod control_press;
 pub mod cursor;
 pub mod palette;
 pub mod theme;

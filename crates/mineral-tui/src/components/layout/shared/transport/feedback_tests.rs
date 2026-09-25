@@ -1,6 +1,6 @@
 //! 本地反馈的计时、确认态与中断接续回归。
 
-use super::{Heading, TransportFeedback};
+use super::{ControlButton, Heading, TransportFeedback};
 use crate::runtime::action::{Action, VolumeDelta};
 use mineral_config::AnimationConfig;
 use mineral_protocol::PlayMode;
@@ -11,6 +11,73 @@ fn settle(feedback: &mut TransportFeedback, mode: PlayMode, anim: &AnimationConf
     for _ in 0..80 {
         feedback.tick(mode, anim, now);
     }
+}
+
+/// 首次按键即时显现，连按只续当前按钮的脉冲，其他按钮独立退场。
+#[test]
+fn button_presses_are_immediate_and_independent() -> color_eyre::Result<()> {
+    let cfg = mineral_config::Config::defaults()?;
+    let anim = cfg.tui().animation();
+    let now = Instant::now();
+    let mut feedback = TransportFeedback::new(PlayMode::Sequential, anim);
+    feedback.on_action(Action::NextSong, PlayMode::Sequential, anim, now);
+    assert_eq!(feedback.controls_opacity(), 0);
+    assert_eq!(feedback.button(ControlButton::Next).opacity, 1000);
+    assert_eq!(feedback.button(ControlButton::Next).press_strength, 1000);
+    assert_eq!(feedback.button(ControlButton::Previous).opacity, 0);
+    for _ in 0..6 {
+        feedback.tick(PlayMode::Sequential, anim, now);
+    }
+    let next = feedback.button(ControlButton::Next);
+    assert!(next.press_strength > 0 && next.press_strength < 1000);
+    feedback.on_action(Action::PrevOrRestart, PlayMode::Sequential, anim, now);
+    assert_eq!(feedback.button(ControlButton::Next), next);
+    let previous = feedback.button(ControlButton::Previous);
+    assert_eq!(previous.press_strength, 1000);
+    feedback.on_action(Action::NextSong, PlayMode::Sequential, anim, now);
+    assert_eq!(feedback.button(ControlButton::Next).press_strength, 1000);
+    assert_eq!(feedback.button(ControlButton::Previous), previous);
+    settle(&mut feedback, PlayMode::Sequential, anim, now);
+    assert_eq!(feedback.button(ControlButton::Next).press_strength, 0);
+    assert_eq!(feedback.button(ControlButton::Next).opacity, 1000);
+    let expired = now + Duration::from_millis(u64::from(*anim.transport().controls_hold_ms()));
+    settle(&mut feedback, PlayMode::Sequential, anim, expired);
+    assert!(!feedback.has_visible_buttons());
+    Ok(())
+}
+
+/// 按压结束不把先出现的按钮藏回慢速入场过程。
+#[test]
+fn short_press_remains_visible_during_slow_group_entry() -> color_eyre::Result<()> {
+    let mut app = crate::test_support::app_with_queue(1, 0)?;
+    let tree = mineral_config::merge_tree(
+        mineral_config::default_tree()?,
+        serde_json::json!({ "tui": { "animation": {
+            "controls_press_ms": 64, "transport": { "controls_fade_ms": 2000 }
+        } } }),
+    );
+    app.apply_pushed_config(mineral_protocol::BusValue::from_json(tree));
+    let anim = app.state.cfg.tui().animation();
+    let now = Instant::now();
+    app.state
+        .transport
+        .on_action(Action::NextSong, PlayMode::Sequential, anim, now);
+    for _ in 0..20 {
+        app.state.transport.tick(PlayMode::Sequential, anim, now);
+    }
+    assert!(app.state.transport.controls_opacity() < 1000);
+    assert_eq!(
+        app.state
+            .transport
+            .button(ControlButton::Next)
+            .press_strength,
+        0
+    );
+    assert_eq!(
+        app.state.transport.button(ControlButton::Next).opacity,
+        1000
+    );
+    Ok(())
 }
 
 /// 音量不唤起底部按钮；模式标签先收，按钮停留更久；同步不延长期限。
@@ -140,14 +207,15 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     app.state
         .transport
         .on_action(Action::CyclePlayMode, PlayMode::Sequential, anim, now);
-    for _ in 0..3 {
+    app.state.transport.on_seek(anim);
+    for _ in 0..6 {
         app.state.transport.tick(PlayMode::RepeatAll, anim, now);
     }
     let before = app.state.transport.clone();
     let tree = mineral_config::merge_tree(
         mineral_config::default_tree()?,
         serde_json::json!({
-            "tui": { "animation": { "frame_tick_ms": 32, "transport": {
+            "tui": { "animation": { "frame_tick_ms": 32, "controls_press_ms": 4400, "transport": {
                 "volume_fade_out_ms": 2200, "volume_fade_in_ms": 3000,
                 "mode_reveal_ms": 4400, "mode_resize_ms": 4000, "controls_fade_ms": 4400,
                 "volume_hold_ms": 6000, "mode_hold_ms": 6000, "controls_hold_ms": 9000
@@ -162,10 +230,24 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     assert_eq!(after.volume_until, before.volume_until);
     assert_eq!(after.mode_until, before.mode_until);
     assert_eq!(after.controls_until, before.controls_until);
+    assert_eq!(
+        after.elapsed_press_strength(),
+        before.elapsed_press_strength()
+    );
+    for button in [
+        ControlButton::Previous,
+        ControlButton::PlayPause,
+        ControlButton::Next,
+        ControlButton::Mode,
+    ] {
+        assert_eq!(after.button(button), before.button(button));
+    }
     let old_cfg = mineral_config::Config::defaults()?;
     let before_opacity = before.controls_opacity();
     let before_reveal = before.mode_caption().1;
     let before_width = before.mode.width.current();
+    let before_press = before.button(ControlButton::Mode).press_strength;
+    let before_elapsed_press = before.elapsed_press_strength();
     let mut old_speed = before;
     old_speed.tick(PlayMode::RepeatAll, old_cfg.tui().animation(), now);
     app.state
@@ -177,6 +259,16 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     assert!(app.state.transport.mode_caption().1 < old_speed.mode_caption().1);
     assert!(app.state.transport.mode.width.current() > before_width);
     assert!(app.state.transport.mode.width.current() < old_speed.mode.width.current());
+    let after_press = app
+        .state
+        .transport
+        .button(ControlButton::Mode)
+        .press_strength;
+    assert!(after_press < before_press);
+    assert!(after_press > old_speed.button(ControlButton::Mode).press_strength);
+    let after_elapsed_press = app.state.transport.elapsed_press_strength();
+    assert!(after_elapsed_press < before_elapsed_press);
+    assert!(after_elapsed_press > old_speed.elapsed_press_strength());
     Ok(())
 }
 

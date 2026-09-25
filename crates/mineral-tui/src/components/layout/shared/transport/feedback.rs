@@ -8,6 +8,7 @@ use mineral_protocol::PlayMode;
 
 use crate::components::layout::shared::text::display_width;
 use crate::render::anim::{Transition, ease_in_out, lerp_u16, ticks16_from_ms};
+use crate::render::control_press::ControlPress;
 use crate::runtime::action::Action;
 
 /// 左上标题的可见内容；音量数字在绘制时读取已确认值。
@@ -18,6 +19,177 @@ pub(super) enum Heading {
 
     /// 最近调节过音量。
     Volume,
+}
+
+/// 接收本地按压反馈的控制键，与用户实际映射的 Action 对应。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ControlButton {
+    /// 上一首或从头播放。
+    Previous,
+    /// 播放 / 暂停。
+    PlayPause,
+    /// 下一首。
+    Next,
+    /// 切换播放模式。
+    Mode,
+}
+
+impl ControlButton {
+    /// 非控制键动作不触发按钮反馈。
+    fn from_action(action: Action) -> Option<Self> {
+        match action {
+            Action::PrevOrRestart => Some(Self::Previous),
+            Action::TogglePlayPause => Some(Self::PlayPause),
+            Action::NextSong => Some(Self::Next),
+            Action::CyclePlayMode => Some(Self::Mode),
+            _ => None,
+        }
+    }
+}
+
+/// 绘制读取的单键显现程度和按压底色强度，范围均为 0..=1000。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ButtonAppearance {
+    /// 相对边框的显现程度，按中的按钮可以先于整组出现。
+    pub(super) opacity: u16,
+
+    /// 短暂底色强度；不决定播放图标或模式内容。
+    pub(super) press_strength: u16,
+}
+
+/// 一个按钮的可见性与短暂按压反馈；按压结束后仍跟随整组停留期限。
+#[derive(Clone, Debug)]
+struct ButtonFeedback {
+    /// 入场可被按键直接置为可见，退场与整组同时开始。
+    visibility: Transition,
+
+    /// 最近一次按压的底色反馈。
+    press: ControlPress,
+}
+
+impl ButtonFeedback {
+    /// 初始随控制组隐藏，没有按压反馈。
+    fn new(anim: &AnimationConfig) -> Self {
+        Self {
+            visibility: Transition::new(ticks16_from_ms(
+                *anim.transport().controls_fade_ms(),
+                *anim.frame_tick_ms(),
+            )),
+            press: ControlPress::default(),
+        }
+    }
+
+    /// 立即显示本键并重启短脉冲，避免反馈被整组入场遮住。
+    fn press(&mut self, anim: &AnimationConfig) {
+        self.visibility = Transition::collapsing(ticks16_from_ms(
+            *anim.transport().controls_fade_ms(),
+            *anim.frame_tick_ms(),
+        ));
+        self.visibility.enter();
+        self.press.trigger(anim);
+    }
+
+    /// 逐帧更新，在脉冲结束时恢复没有按压的状态。
+    fn tick(&mut self) {
+        self.visibility.tick();
+        self.press.tick();
+    }
+
+    /// 保留显隐与按压相位，只调整后续步长。
+    fn retempo(&mut self, anim: &AnimationConfig) {
+        self.visibility.retempo(ticks16_from_ms(
+            *anim.transport().controls_fade_ms(),
+            *anim.frame_tick_ms(),
+        ));
+        self.press.retempo(anim);
+    }
+
+    /// 脉冲前四分之一保持满强度，其余时间平滑淡出。
+    fn appearance(&self) -> ButtonAppearance {
+        ButtonAppearance {
+            opacity: self.visibility.eased_in_out(),
+            press_strength: self.press.strength(),
+        }
+    }
+}
+
+/// 控制组的间隔显隐与四个按钮的独立反馈，按上一首、播放、下一首、模式排列。
+#[derive(Clone, Debug)]
+struct ControlsFeedback {
+    /// 按钮之间的空白与原边框共用的入退场进度。
+    visibility: Transition,
+
+    /// 每颗按钮可以即时响应自身按压，不中断其他按钮。
+    buttons: [ButtonFeedback; 4],
+}
+
+impl ControlsFeedback {
+    /// 整组与每颗按钮都从隐藏状态开始。
+    fn new(anim: &AnimationConfig) -> Self {
+        Self {
+            visibility: Transition::new(ticks16_from_ms(
+                *anim.transport().controls_fade_ms(),
+                *anim.frame_tick_ms(),
+            )),
+            buttons: std::array::from_fn(|_| ButtonFeedback::new(anim)),
+        }
+    }
+
+    /// 唤出整组，仅被按中的按钮立即出现并显示底色。
+    fn press(&mut self, button: ControlButton, anim: &AnimationConfig) {
+        self.visibility.enter();
+        for feedback in &mut self.buttons {
+            feedback.visibility.enter();
+        }
+        let [previous, play_pause, next, mode] = &mut self.buttons;
+        match button {
+            ControlButton::Previous => previous,
+            ControlButton::PlayPause => play_pause,
+            ControlButton::Next => next,
+            ControlButton::Mode => mode,
+        }
+        .press(anim);
+        mineral_log::debug!(target: "tui::transport", ?button, "transport button pressed");
+    }
+
+    /// 停留期限到期后，各按钮从自己的当前可见程度退场。
+    fn leave(&mut self) {
+        self.visibility.leave();
+        for button in &mut self.buttons {
+            button.visibility.leave();
+        }
+    }
+
+    /// 每拍推进整组与各按钮，绘制只读取这些相位。
+    fn tick(&mut self) {
+        self.visibility.tick();
+        for button in &mut self.buttons {
+            button.tick();
+        }
+    }
+
+    /// 热更同时覆盖整组显隐和各按钮的独立相位。
+    fn retempo(&mut self, anim: &AnimationConfig) {
+        self.visibility.retempo(ticks16_from_ms(
+            *anim.transport().controls_fade_ms(),
+            *anim.frame_tick_ms(),
+        ));
+        for button in &mut self.buttons {
+            button.retempo(anim);
+        }
+    }
+
+    /// 按钮身份直接映射到固定槽位，不依赖可变索引。
+    fn button(&self, button: ControlButton) -> ButtonAppearance {
+        let [previous, play_pause, next, mode] = &self.buttons;
+        match button {
+            ControlButton::Previous => previous,
+            ControlButton::PlayPause => play_pause,
+            ControlButton::Next => next,
+            ControlButton::Mode => mode,
+        }
+        .appearance()
+    }
 }
 
 /// 模式按钮的文字目标，短标签的期限与整组按钮分开。
@@ -263,8 +435,11 @@ pub(crate) struct TransportFeedback {
     /// 模式文字的逐列显现与括号伸缩。
     mode: ModeFeedback,
 
-    /// 整组底部按钮相对边框的显隐。
-    controls: Transition,
+    /// 整组底部按钮的显隐与单键按压反馈。
+    controls: ControlsFeedback,
+
+    /// Seek 操作触发的已播放时间底色。
+    elapsed_press: ControlPress,
 }
 
 impl TransportFeedback {
@@ -276,11 +451,15 @@ impl TransportFeedback {
             controls_until: None,
             heading: TextFade::new(Heading::Transport, anim),
             mode: ModeFeedback::new(mode, anim),
-            controls: Transition::new(ticks16_from_ms(
-                *anim.transport().controls_fade_ms(),
-                *anim.frame_tick_ms(),
-            )),
+            controls: ControlsFeedback::new(anim),
+            elapsed_press: ControlPress::default(),
         }
+    }
+
+    /// Seek 请求发出时亮起左侧时间，不唤出播放控件或修改时间数值。
+    pub(crate) fn on_seek(&mut self, anim: &AnimationConfig) {
+        self.elapsed_press.trigger(anim);
+        mineral_log::debug!(target: "tui::transport", "seek time feedback triggered");
     }
 
     /// 只在动作实际进入执行器后调用；不修改音量、播放模式或播放状态。
@@ -298,22 +477,21 @@ impl TransportFeedback {
                     Some(now + Duration::from_millis(u64::from(*cfg.volume_hold_ms())));
                 self.heading.target(Heading::Volume, anim);
             }
-            Action::PrevOrRestart
-            | Action::TogglePlayPause
-            | Action::NextSong
-            | Action::CyclePlayMode => {
+            _ => {
+                let Some(button) = ControlButton::from_action(action) else {
+                    return;
+                };
                 self.controls_until =
                     Some(now + Duration::from_millis(u64::from(*cfg.controls_hold_ms())));
-                self.controls.enter();
-                if action == Action::CyclePlayMode {
+                self.controls.press(button, anim);
+                if button == ControlButton::Mode {
                     self.mode_until =
                         Some(now + Duration::from_millis(u64::from(*cfg.mode_hold_ms())));
                 }
                 self.sync_mode(mode, anim);
             }
-            _ => return,
         }
-        mineral_log::debug!(target: "tui::transport", ?action, controls = self.controls.raw(),
+        mineral_log::debug!(target: "tui::transport", ?action, controls = self.controls.visibility.raw(),
             "transport feedback triggered");
     }
 
@@ -338,10 +516,11 @@ impl TransportFeedback {
         self.sync_mode(mode, anim);
         self.heading.tick(anim);
         self.mode.tick();
-        let moving = !self.controls.settled();
+        self.elapsed_press.tick();
+        let moving = !self.controls.visibility.settled();
         self.controls.tick();
-        if moving && self.controls.settled() {
-            mineral_log::debug!(target: "tui::transport", visible = self.controls.at_max(),
+        if moving && self.controls.visibility.settled() {
+            mineral_log::debug!(target: "tui::transport", visible = self.controls.visibility.at_max(),
                 "transport controls transition finished");
         }
     }
@@ -350,15 +529,31 @@ impl TransportFeedback {
     pub(crate) fn retempo(&mut self, anim: &AnimationConfig) {
         self.heading.retempo(anim);
         self.mode.retempo(anim);
-        self.controls.retempo(ticks16_from_ms(
-            *anim.transport().controls_fade_ms(),
-            *anim.frame_tick_ms(),
-        ));
+        self.controls.retempo(anim);
+        self.elapsed_press.retempo(anim);
+    }
+
+    /// 左侧时间的按压底色强度。
+    pub(super) fn elapsed_press_strength(&self) -> u16 {
+        self.elapsed_press.strength()
     }
 
     /// 整组按钮的显现程度，千分比，绘制可重复读取。
     pub(crate) fn controls_opacity(&self) -> u16 {
-        self.controls.eased_in_out()
+        self.controls.visibility.eased_in_out()
+    }
+
+    /// 被按中的按钮可先于整组间隔显示。
+    pub(super) fn has_visible_buttons(&self) -> bool {
+        self.controls
+            .buttons
+            .iter()
+            .any(|button| !button.visibility.at_min())
+    }
+
+    /// 返回一颗按钮的当前外观，不消费反馈状态。
+    pub(super) fn button(&self, button: ControlButton) -> ButtonAppearance {
+        self.controls.button(button)
     }
 
     /// 当前标题与文字亮度。
