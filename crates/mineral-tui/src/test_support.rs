@@ -267,6 +267,23 @@ pub(crate) type QueueContextLog =
 pub(crate) type QueueEditLog = Arc<Mutex<Vec<mineral_protocol::QueueOp>>>;
 
 impl Backend for TestClient {
+    fn audio_outputs(&self) {
+        self.completions()
+            .push(crate::runtime::backend::Completion::AudioOutputs(
+                mineral_client::operation::Outcome::Applied(Vec::new()),
+            ));
+    }
+
+    fn set_audio_output(&self, _target: mineral_audio::OutputTarget) {
+        self.completions()
+            .push(crate::runtime::backend::Completion::AudioOutputSelected(
+                mineral_client::operation::Outcome::Failed {
+                    kind: mineral_protocol::FailureKind::Unavailable,
+                    detail: "test backend has no audio stream".to_owned(),
+                },
+            ));
+    }
+
     fn bootstrap(&self) -> BackendBootstrap {
         BackendBootstrap::default()
     }

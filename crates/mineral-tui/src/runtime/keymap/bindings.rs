@@ -110,6 +110,7 @@ impl Keymap {
                 open_search => OpenSearchView, "Search view";
                 open_queue => OpenQueue, "Queue";
                 open_downloads => OpenDownloads, "Downloads";
+                open_audio_settings => OpenAudioSettings, "Audio settings";
                 enter_search => EnterSearch, "Search input";
                 cycle_lyric => CycleLyricExtra, "Lyric language";
                 quit => OpenQuitConfirm, "Quit";

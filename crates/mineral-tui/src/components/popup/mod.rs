@@ -6,6 +6,7 @@
 //! [`Overlay`]: component::Overlay
 //! [`OverlayStack`]: stack::OverlayStack
 
+mod audio_settings;
 mod component;
 mod confirm;
 mod disconnect;

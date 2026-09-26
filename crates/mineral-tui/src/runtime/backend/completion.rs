@@ -10,6 +10,12 @@ use mineral_protocol::{QueueEditOutcome, ScriptBind};
 /// 操作完成事件(daemon 结论回流到 UI)。
 #[derive(Debug)]
 pub(crate) enum Completion {
+    /// CPAL device list or structured failure.
+    AudioOutputs(Outcome<Vec<mineral_audio::OutputDevice>>),
+
+    /// The daemon's stream switch result.
+    AudioOutputSelected(Outcome<()>),
+
     /// 队列原子替换的结果(失败时提示)。
     PlayQueue(Outcome<()>),
 

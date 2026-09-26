@@ -153,9 +153,12 @@ async fn seek_relative(client: &Client, path: &'static str, delta_ms: i64) -> Re
     if let Err(detail) = await_topic(client, SubscriptionTopic::Playback).await {
         return Report::not_executed(path, detail);
     }
-    let (anchor, position_ms) = client
-        .mirror()
-        .read_playback(|playback| (*playback.anchor(), playback.position_ms(Instant::now())));
+    let (anchor, position_ms) = client.mirror().read_playback(|playback| {
+        (
+            playback.anchor().clone(),
+            playback.position_ms(Instant::now()),
+        )
+    });
     let Some(duration_ms) = anchor.duration_ms else {
         return Report::new(
             path,

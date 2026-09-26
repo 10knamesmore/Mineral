@@ -66,25 +66,16 @@ fn engine_main(
 ) -> color_eyre::Result<()> {
     let output = match mode {
         AudioMode::ForceNull => None,
-        AudioMode::Auto => match Output::open(pct_to_gain(*params.initial_volume())) {
-            Ok(output) => Some(output),
-            Err(error) => {
-                mineral_log::warn!(
-                    target: "audio",
-                    error = mineral_log::chain(&error),
-                    "no audio device; running in null mode"
-                );
-                None
-            }
-        },
+        AudioMode::Auto => Some(Output::open(pct_to_gain(*params.initial_volume()))),
     };
     let Some(output) = output else {
         io.snapshot.lock().backend = AudioBackend::Null;
         let _ = io.ready_tx.send(Ok(()));
         return run_null_mode(commands);
     };
-    let _ = io.ready_tx.send(Ok(()));
     let mut engine = Engine::new(output, &io.tap_producer, &io.sr_atomic, &io.tap_pushed);
+    engine.update_snapshot(&io.snapshot);
+    let _ = io.ready_tx.send(Ok(()));
     let tick = Duration::from_millis(*params.tick_ms());
     loop {
         match commands.recv_timeout(tick) {
@@ -101,6 +92,18 @@ fn engine_main(
 
 /// Drains commands without touching an audio device.
 fn run_null_mode(commands: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()> {
-    while commands.recv().is_ok() {}
+    while let Ok(command) = commands.recv() {
+        match command {
+            AudioCommand::ListOutputs(reply) => {
+                let _ = reply.send(Ok(Vec::new()));
+            }
+            AudioCommand::SelectOutput { reply, .. } => {
+                let _ = reply.send(Err(color_eyre::eyre::eyre!(
+                    "audio device output is disabled"
+                )));
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }

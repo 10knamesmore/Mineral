@@ -36,6 +36,9 @@ pub struct Playback {
     /// 音频后端形态。`Null` 时顶栏显「无音频设备」徽标提示降级。
     pub audio_backend: AudioBackend,
 
+    /// Device and format confirmed by the daemon's active CPAL stream.
+    pub output: Option<std::sync::Arc<mineral_audio::AudioOutput>>,
+
     /// 当前曲目已缓冲比例。本地 / 已缓存恒满;远端流式播放时随下载推进。
     /// transport 进度条据此在播放头之后画一段更亮的「已缓冲」轨道。
     pub buffered_bps: Bps,
@@ -193,6 +196,7 @@ impl Playback {
             media_info: None,
             play_origin: None,
             audio_backend: AudioBackend::Device,
+            output: None,
             buffered_bps: Bps::ZERO,
             sample_rate_hz: 0,
             engine_duration_ms: None,
@@ -302,6 +306,7 @@ impl Playback {
         self.playing = snap.playing;
         self.volume_pct = snap.volume_pct;
         self.audio_backend = snap.backend;
+        self.output = snap.output;
         self.buffered_bps = snap.buffered_bps;
         self.sample_rate_hz = snap.sample_rate_hz;
         self.engine_duration_ms = snap.duration_ms;

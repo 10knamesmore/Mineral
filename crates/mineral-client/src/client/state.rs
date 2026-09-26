@@ -31,7 +31,8 @@ impl Client {
     /// 当前播放锚点(本地镜像;未收到为默认值)。
     #[must_use]
     pub fn playback_snapshot(&self) -> AudioSnapshot {
-        self.mirror().read_playback(|playback| *playback.anchor())
+        self.mirror()
+            .read_playback(|playback| playback.anchor().clone())
     }
 
     /// 展示用播放位置(本地单调钟推进)。

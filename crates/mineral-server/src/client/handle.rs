@@ -24,6 +24,21 @@ pub struct ClientHandle {
 }
 
 impl ClientHandle {
+    /// Queries devices on the dedicated audio thread.
+    pub(crate) async fn audio_outputs(
+        &self,
+    ) -> color_eyre::Result<Vec<mineral_audio::OutputDevice>> {
+        self.player.audio().output_devices().await
+    }
+
+    /// Applies the requested route and awaits successful stream creation.
+    pub(crate) async fn set_audio_output(
+        &self,
+        target: mineral_audio::OutputTarget,
+    ) -> color_eyre::Result<()> {
+        self.player.audio().select_output(target).await
+    }
+
     /// 同进程构造,Server 启动后用持有的 `player` 直接拼成 handle。
     pub(crate) fn new(player: PlayerCore) -> Self {
         Self { player, conn: 0 }

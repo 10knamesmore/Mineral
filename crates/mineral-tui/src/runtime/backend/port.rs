@@ -27,6 +27,12 @@ pub(crate) struct BackendBootstrap {
 
 /// TUI 后端端口。
 pub(crate) trait Backend: Send + Sync {
+    /// Queries output devices and delivers the result through the completion queue.
+    fn audio_outputs(&self);
+
+    /// Selects a route and delivers the result through the completion queue.
+    fn set_audio_output(&self, target: mineral_audio::OutputTarget);
+
     /// 启动自举数据(能力表 / 脚本绑定)。
     fn bootstrap(&self) -> BackendBootstrap;
 

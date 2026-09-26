@@ -12,7 +12,7 @@ use super::decoding::{InstanceSource, build_decoder};
 use super::output::Output;
 use crate::command::AudioCommand;
 use crate::queue_slots::{Boundary, PlayHead, Slot};
-use crate::snapshot::AudioSnapshot;
+use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
 
 /// Maps a UI volume percentage onto perceptual cubic gain.
@@ -58,6 +58,7 @@ impl Engine {
 
     /// Applies one command and contains command-local failures.
     pub(super) fn handle_command(&mut self, command: AudioCommand) {
+        self.output.refresh_device();
         match command {
             AudioCommand::Play(media) => {
                 if let Err(error) = self.play(media) {
@@ -68,6 +69,16 @@ impl Engine {
                 if let Err(error) = self.append_next(media) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "prefetch decode error");
                 }
+            }
+            AudioCommand::ListOutputs(reply) => {
+                let _ = reply.send(Output::devices());
+            }
+            AudioCommand::SelectOutput { target, reply } => {
+                let result = self.output.select(target);
+                if let Err(error) = &result {
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(error), "audio output selection failed");
+                }
+                let _ = reply.send(result);
             }
             AudioCommand::ClearNext => self.clear_next(),
             AudioCommand::Pause => self.output.player().pause(),
@@ -81,6 +92,11 @@ impl Engine {
 
     /// Replaces the output queue with one already-opened current media item.
     fn play(&mut self, media: OpenedMedia) -> color_eyre::Result<()> {
+        // rodio append after stop waits for the callback to drain the previous queue.
+        if self.output.info().is_none() {
+            media.cancellation().cancel();
+            return Err(color_eyre::eyre::eyre!("audio output is unavailable"));
+        }
         let song_id = media.info().song_id.qualified();
         self.output.player().stop();
         self.head.stop();
@@ -160,6 +176,11 @@ impl Engine {
         let Some(target) = mailbox.lock().take() else {
             return;
         };
+        // A disconnected stream cannot acknowledge rodio's synchronous seek mailbox.
+        if self.output.info().is_none() {
+            mineral_log::warn!(target: "audio", seek_to = ?target, "seek skipped because audio output is unavailable");
+            return;
+        }
         if let Err(error) = self.output.player().try_seek(target) {
             mineral_log::warn!(
                 target: "audio",
@@ -172,6 +193,7 @@ impl Engine {
 
     /// Updates shared playback state and observes natural decoder boundaries.
     pub(super) fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
+        self.output.refresh_device();
         let position_ms = duration_to_ms(self.output.player().get_pos());
         let paused = self.output.player().is_paused();
         let boundary = self.head.observe(self.output.player().len());
@@ -179,10 +201,16 @@ impl Engine {
             self.sample_rate
                 .store(self.head.cur.sample_rate, Ordering::Relaxed);
         }
-        let playing = !paused && self.head.cur.occupied;
+        let playing = !paused && self.head.cur.occupied && self.output.info().is_some();
         self.output.recover_if_stalled(playing, position_ms);
         let fields = self.head.snapshot_fields();
         let mut current = snapshot.lock();
+        current.output = self.output.info().cloned();
+        current.backend = if current.output.is_some() {
+            AudioBackend::Device
+        } else {
+            AudioBackend::Null
+        };
         current.playing = playing;
         current.position_ms = position_ms;
         current.duration_ms = fields.duration_ms;

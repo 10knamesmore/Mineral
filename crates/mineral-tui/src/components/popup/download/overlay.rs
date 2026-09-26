@@ -318,6 +318,7 @@ impl Overlay for DownloadOverlay {
             | Action::PrevOrRestart
             | Action::NextSong
             | Action::DismissNotice
+            | Action::OpenAudioSettings
             | Action::OpenHelp
             | Action::InvokeScript(_) => None,
         }

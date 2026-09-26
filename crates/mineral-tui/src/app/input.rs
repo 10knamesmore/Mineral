@@ -97,6 +97,10 @@ impl App {
             Action::OpenSearchView => self.open_search_view(),
             Action::OpenQueue => self.open_queue(),
             Action::OpenDownloads => self.open_downloads(),
+            Action::OpenAudioSettings => {
+                self.overlays.push(OverlayKind::audio_settings());
+                self.client.audio_outputs();
+            }
             Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
             Action::Scroll(step) => self.scroll(step),
@@ -202,6 +206,7 @@ impl App {
                 self.remember_track_pos();
                 self.transition = Some(Transition::collapsing(self.transition_ticks()));
             }
+            OverlayAction::SelectAudioOutput(target) => self.client.set_audio_output(target),
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::StopDownload(id) => {
                 self.client.stop_download(id);
@@ -253,6 +258,7 @@ impl App {
                 | Action::DismissNotice
                 | Action::OpenHelp
                 | Action::OpenDownloads
+                | Action::OpenAudioSettings
         )
     }
 

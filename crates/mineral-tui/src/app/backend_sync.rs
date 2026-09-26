@@ -21,7 +21,7 @@ impl App {
         let mut anchor = mineral_audio::AudioSnapshot::default();
         let mut position = 0_u64;
         self.client.with_playback(&mut |playback| {
-            anchor = *playback.anchor();
+            anchor = playback.anchor().clone();
             position = playback.position_ms(Instant::now());
         });
         anchor.position_ms = position;
@@ -106,6 +106,21 @@ impl App {
     /// 应用一条完成事件。
     fn apply_completion(&mut self, completion: Completion) {
         match completion {
+            Completion::AudioOutputs(outcome) => {
+                if let Some(popup) = self.overlays.audio_settings_mut() {
+                    popup.apply_devices(outcome, &self.state);
+                }
+            }
+            Completion::AudioOutputSelected(outcome) => {
+                if let Some(popup) = self.overlays.audio_settings_mut() {
+                    popup.apply_selection(&outcome);
+                } else if !outcome.is_success() {
+                    self.notifications.flash(tinted_text_item(
+                        "Audio output switch was not confirmed".to_owned(),
+                        TextTint::Error,
+                    ));
+                }
+            }
             Completion::PlayQueue(outcome) => match outcome {
                 // Applied 只承载成功;业务失败在 client 侧已归一 `Failed`(见
                 // `Client::play_queue` 的载荷译码)。

@@ -10,6 +10,9 @@ use crate::client::ClientHandle;
 
 /// 需要并发执行的慢请求(自带业务语义)。
 pub(crate) enum AsyncRequest {
+    /// Output enumeration may call the system audio service.
+    AudioOutputs,
+
     /// 脚本具名动作。
     InvokeAction {
         /// 动作名。
@@ -68,6 +71,7 @@ pub(crate) enum AsyncRequest {
 ///   - `request`: 业务请求
 pub(crate) fn async_request(request: &Request) -> Option<AsyncRequest> {
     match request {
+        Request::AudioOutputs => Some(AsyncRequest::AudioOutputs),
         Request::InvokeAction { name, ctx, args } => Some(AsyncRequest::InvokeAction {
             name: name.clone(),
             ctx: ctx.clone(),
@@ -201,6 +205,10 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
 ///   - `request`: 慢请求
 pub(crate) async fn execute_async(client: &ClientHandle, request: AsyncRequest) -> OperationResult {
     match request {
+        AsyncRequest::AudioOutputs => match client.audio_outputs().await {
+            Ok(devices) => query(Response::AudioOutputs(devices)),
+            Err(error) => failure(&error),
+        },
         AsyncRequest::InvokeAction { name, ctx, args } => {
             match client.invoke_action_async(&name, ctx, args).await {
                 Ok(()) => OperationResult::Applied,

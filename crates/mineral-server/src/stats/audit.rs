@@ -37,6 +37,10 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::Resume => Recorded("pauses"),
         Request::Stop => Recorded("plays"),
         Request::Seek(..) => Recorded("seeks"),
+        Request::AudioOutputs => NotAnEvent("read: audio output devices"),
+        Request::SetAudioOutput(..) => {
+            NotAnEvent("session control: recorded in audio structured logs")
+        }
         Request::SetVolume(..) => Recorded("volume_changes"),
         Request::SubmitTask(..) => {
             NotAnEvent("任务提交;取数事件在 task 终态记,见 audit_fetch_kind")

@@ -18,7 +18,7 @@ derive-getters  = { workspace = true }
 parking_lot     = { workspace = true }
 ringbuf         = { workspace = true }
 rodio           = { workspace = true }
-serde           = { workspace = true }
+serde           = { workspace = true, features = ["rc"] }
 tokio           = { workspace = true }
 tokio-util      = { workspace = true }
 typed-builder   = { workspace = true }

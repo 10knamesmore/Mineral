@@ -82,6 +82,17 @@ impl ClientBackend {
 }
 
 impl Backend for ClientBackend {
+    fn audio_outputs(&self) {
+        self.spawn_pending(self.client.audio_outputs(), Completion::AudioOutputs);
+    }
+
+    fn set_audio_output(&self, target: mineral_audio::OutputTarget) {
+        self.spawn_pending(
+            self.client.set_audio_output(target),
+            Completion::AudioOutputSelected,
+        );
+    }
+
     fn bootstrap(&self) -> BackendBootstrap {
         self.bootstrap.clone()
     }

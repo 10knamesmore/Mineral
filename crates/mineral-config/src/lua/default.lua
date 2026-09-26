@@ -52,6 +52,7 @@ return {
       open_search = "s",
       open_queue = "<Tab>",
       open_downloads = "D",
+      open_audio_settings = "A",
       quit = "q",
       open_help = "?",
       cycle_lyric = "t",

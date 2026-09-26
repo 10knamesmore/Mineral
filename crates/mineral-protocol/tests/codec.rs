@@ -107,6 +107,7 @@ async fn round_trip_request_submit_task() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn round_trip_response_playback_payload() -> color_eyre::Result<()> {
     let snap = AudioSnapshot {
+        output: None,
         playing: true,
         position_ms: 12_345,
         duration_ms: Some(200_000),

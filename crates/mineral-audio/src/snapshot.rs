@@ -7,17 +7,20 @@ use crate::bps::Bps;
 /// 音频输出后端的当前形态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AudioBackend {
-    /// 正常:拿到默认输出设备,真出声。
+    /// 正常:已打开系统输出流。
     #[default]
     Device,
 
-    /// 降级:无可用音频设备,引擎空跑——命令被接受但不发声。
+    /// 没有可用输出流，或启动时强制禁用设备输出。
     Null,
 }
 
 /// 当前引擎状态的只读视图。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioSnapshot {
+    /// 当前已打开的设备与实际流配置；没有可用输出流时为 `None`。
+    pub output: Option<std::sync::Arc<crate::AudioOutput>>,
+
     /// 是否正在出声(暂停 / 已结束 / 没有曲目时为 false)。
     pub playing: bool,
 
@@ -36,7 +39,7 @@ pub struct AudioSnapshot {
     /// 而非 transient bool 是为了让 UI 在 tick 间隙也能可靠捕获边界,不会漏。
     pub track_finished_seq: u64,
 
-    /// 音频输出后端形态。`Null` 表示无设备降级(命令被接受但不发声),
+    /// 音频输出后端形态。`Null` 表示当前没有可用输出流,
     /// client(CLI status / TUI 顶栏)据此提示用户。
     pub backend: AudioBackend,
 

@@ -155,6 +155,9 @@ fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnap
 /// 播放状态签名:位置之外的一切(位置由 client 本地推进,不进签名)。
 #[derive(PartialEq, Eq)]
 struct PlaybackSignature {
+    /// Successfully opened output device and stream configuration.
+    output: Option<Arc<mineral_audio::AudioOutput>>,
+
     /// 是否在出声。
     playing: bool,
 
@@ -190,6 +193,7 @@ impl PlaybackSignature {
     ///   - `snapshot`: 音频快照
     fn of(snapshot: &AudioSnapshot) -> Self {
         Self {
+            output: snapshot.output.clone(),
             playing: snapshot.playing,
             duration_ms: snapshot.duration_ms,
             volume_pct: snapshot.volume_pct,

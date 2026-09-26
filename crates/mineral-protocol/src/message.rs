@@ -147,6 +147,12 @@ pub enum Request {
     /// 设置音量百分比(0..=100)。
     SetVolume(u8),
 
+    /// Enumerates CPAL output devices on the daemon host.
+    AudioOutputs,
+
+    /// Selects the output route for this daemon session.
+    SetAudioOutput(mineral_audio::OutputTarget),
+
     // ---- 任务调度 ----
     /// 提交一个任务。返回 [`Response::Ok`]，不等待任务完成。
     SubmitTask(TaskKind, Priority),
@@ -331,6 +337,9 @@ pub enum Request {
 /// Server → Client 应答。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    /// CPAL output devices returned by [`Request::AudioOutputs`].
+    AudioOutputs(Vec<mineral_audio::OutputDevice>),
+
     /// 无返回值的命令成功。
     Ok,
 

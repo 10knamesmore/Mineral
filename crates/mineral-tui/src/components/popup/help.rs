@@ -245,6 +245,7 @@ impl Overlay for HelpOverlay {
             | Action::OpenSearchView
             | Action::OpenQueue
             | Action::OpenDownloads
+            | Action::OpenAudioSettings
             | Action::EnterSearch
             | Action::ActivateSelection
             | Action::DrillIntoSelection

@@ -2,6 +2,7 @@
 //! 活跃栈顶。浮层的 [`Transition`] 由这里持有 —— 实现方只声明 `animated`,推进 /
 //! 进退场 / 延迟移除全在本模块,使用方碰都不碰动画。
 
+use super::audio_settings::AudioSettingsOverlay;
 use crossterm::event::KeyEvent;
 use mineral_model::{MediaUrl, SourceKind};
 use ratatui::Frame;
@@ -26,6 +27,9 @@ const INSTANT_TICKS: u16 = 1;
 
 /// 一种具体浮层。闭集 enum + 手动转发 trait 方法(强类型、无 `dyn`、契合内部结构化)。
 pub(crate) enum OverlayKind {
+    /// Runtime output device selection and active stream format.
+    AudioSettings(AudioSettingsOverlay),
+
     /// 浮动播放队列。
     Queue(QueueOverlay),
 
@@ -46,6 +50,11 @@ pub(crate) enum OverlayKind {
 }
 
 impl OverlayKind {
+    /// Creates an Audio settings popup waiting for the output device list.
+    pub(crate) fn audio_settings() -> Self {
+        Self::AudioSettings(AudioSettingsOverlay::new())
+    }
+
     /// 浮动队列,光标定位到 `sel`(通常是在播歌下标)。
     pub(crate) fn queue(sel: usize) -> Self {
         Self::Queue(QueueOverlay::new(sel))
@@ -83,6 +92,7 @@ impl OverlayKind {
 impl Overlay for OverlayKind {
     fn chrome(&self) -> Chrome {
         match self {
+            Self::AudioSettings(o) => o.chrome(),
             Self::Queue(o) => o.chrome(),
             Self::Downloads(o) => o.chrome(),
             Self::Confirm(o) => o.chrome(),
@@ -94,6 +104,7 @@ impl Overlay for OverlayKind {
 
     fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
         match self {
+            Self::AudioSettings(o) => o.block(ctx, theme, focused),
             Self::Queue(o) => o.block(ctx, theme, focused),
             Self::Downloads(o) => o.block(ctx, theme, focused),
             Self::Confirm(o) => o.block(ctx, theme, focused),
@@ -105,6 +116,7 @@ impl Overlay for OverlayKind {
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         match self {
+            Self::AudioSettings(o) => o.render_content(buf, inner, ctx, theme),
             Self::Queue(o) => o.render_content(buf, inner, ctx, theme),
             Self::Downloads(o) => o.render_content(buf, inner, ctx, theme),
             Self::Confirm(o) => o.render_content(buf, inner, ctx, theme),
@@ -123,6 +135,7 @@ impl Overlay for OverlayKind {
         theme: &Theme,
     ) {
         match self {
+            Self::AudioSettings(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::Queue(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::Downloads(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::Confirm(o) => o.render_border(buf, area, inner, ctx, theme),
@@ -134,6 +147,7 @@ impl Overlay for OverlayKind {
 
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
         match self {
+            Self::AudioSettings(o) => o.on_key(key, ctx),
             Self::Queue(o) => o.on_key(key, ctx),
             Self::Downloads(o) => o.on_key(key, ctx),
             Self::Confirm(o) => o.on_key(key, ctx),
@@ -145,6 +159,7 @@ impl Overlay for OverlayKind {
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
         match self {
+            Self::AudioSettings(o) => o.on_action(action, ctx),
             Self::Queue(o) => o.on_action(action, ctx),
             Self::Downloads(o) => o.on_action(action, ctx),
             Self::Confirm(o) => o.on_action(action, ctx),
@@ -192,6 +207,17 @@ pub(crate) struct OverlayStack {
 }
 
 impl OverlayStack {
+    /// Returns the open Audio settings popup to receive device query and switch results.
+    pub(crate) fn audio_settings_mut(&mut self) -> Option<&mut AudioSettingsOverlay> {
+        self.stack
+            .iter_mut()
+            .filter(|mounted| !mounted.anim.leaving())
+            .find_map(|mounted| match &mut mounted.kind {
+                OverlayKind::AudioSettings(popup) => Some(popup),
+                _ => None,
+            })
+    }
+
     /// 新建空栈。
     ///
     /// # Params:

@@ -38,6 +38,9 @@ pub struct KeysConfig {
     /// 打开 Downloads 停靠浮层(已开时再按 = 关闭)。
     open_downloads: KeyBinding,
 
+    /// 打开 Audio settings 浮层(已开时再按 = 关闭)。
+    open_audio_settings: KeyBinding,
+
     /// 打开退出确认浮层。
     quit: KeyBinding,
 

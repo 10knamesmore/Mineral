@@ -93,6 +93,9 @@ pub(crate) enum OverlayResponse {
 /// 与主 keymap 统一的是 dispatch 入口与动作概念,非枚举合一。
 #[derive(Clone)]
 pub(crate) enum OverlayAction {
+    /// Selects a CPAL device or system default routing.
+    SelectAudioOutput(mineral_audio::OutputTarget),
+
     /// 退出程序。
     Quit,
 

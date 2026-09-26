@@ -39,7 +39,7 @@ pub struct EngineParams {
 /// 引擎启动时的音频后端选择。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AudioMode {
-    /// 自动:尝试打开默认输出设备,失败则降级到 null(无声但引擎仍活)。
+    /// 自动:打开默认输出设备；暂时无设备时保留引擎以接收后续设备选择。
     #[default]
     Auto,
 
@@ -217,9 +217,36 @@ impl AudioHandle {
         self.send(AudioCommand::SetVolume(clamped));
     }
 
+    /// Enumerates output devices on the audio engine's host.
+    pub async fn output_devices(&self) -> color_eyre::Result<Vec<crate::OutputDevice>> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.inner
+            .cmd_tx
+            .send(AudioCommand::ListOutputs(reply))
+            .map_err(|error| eyre!("audio engine stopped: {error}"))?;
+        result
+            .await
+            .map_err(|error| eyre!("audio device query interrupted: {error}"))?
+    }
+
+    /// Switches streams without replacing the current decoder or queued next track.
+    ///
+    /// # Params:
+    ///   - `target`: System default routing or a stable CPAL device identifier.
+    pub async fn select_output(&self, target: crate::OutputTarget) -> color_eyre::Result<()> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.inner
+            .cmd_tx
+            .send(AudioCommand::SelectOutput { target, reply })
+            .map_err(|error| eyre!("audio engine stopped: {error}"))?;
+        result
+            .await
+            .map_err(|error| eyre!("audio output selection interrupted: {error}"))?
+    }
+
     /// UI tick 拉一次:engine 已经更新过的最新状态。
     pub fn snapshot(&self) -> AudioSnapshot {
-        *self.inner.snapshot.lock()
+        self.inner.snapshot.lock().clone()
     }
 
     /// 快照写入信号:wait 它即可在快照变化后立即重读,不必定频轮询。

@@ -132,6 +132,16 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
             Style::new().fg(theme.peach),
         ));
     }
+    // Reserve the playback suffix before fitting the CPAL device name.
+    let used = spans.iter().map(Span::width).sum::<usize>();
+    let available = usize::from(area.width).saturating_sub(used + label.len() + 6);
+    if let Some(output) = &pb.output {
+        let name = fit_device_name(&output.device_name, available);
+        if !name.is_empty() {
+            spans.push(Span::styled(name, Style::new().fg(theme.subtext)));
+            spans.push(Span::styled("  ", Style::new().fg(theme.overlay)));
+        }
+    }
     spans.push(Span::styled(format!("{glyph} "), Style::new().fg(color)));
     spans.push(Span::styled(label, Style::new().fg(theme.subtext)));
     spans.push(Span::raw(" "));
@@ -139,4 +149,30 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
         area,
     );
+}
+
+/// Fits the CPAL name into terminal cells without splitting UTF-8 characters.
+fn fit_device_name(name: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if name.width() <= width {
+        return name.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut remaining = width.saturating_sub(1);
+    let mut text = name
+        .chars()
+        .take_while(|character| {
+            let cells = character.width().unwrap_or(0);
+            if cells > remaining {
+                false
+            } else {
+                remaining -= cells;
+                true
+            }
+        })
+        .collect::<String>();
+    text.push('…');
+    text
 }

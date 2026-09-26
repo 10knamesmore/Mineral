@@ -234,6 +234,10 @@ async fn handle_request(
         return;
     }
     let result = match request.request {
+        Request::SetAudioOutput(target) => match client.set_audio_output(target).await {
+            Ok(()) => mineral_protocol::OperationResult::Applied,
+            Err(error) => dispatch::failure(&error),
+        },
         Request::QueueEdit { op } => dispatch::execute_queue_edit(client, op).await,
         other => {
             let is_shutdown = matches!(other, Request::Shutdown);

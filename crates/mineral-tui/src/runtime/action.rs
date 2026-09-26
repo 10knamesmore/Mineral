@@ -29,6 +29,9 @@ pub enum Action {
     /// 打开 Downloads 停靠浮层。
     OpenDownloads,
 
+    /// Opens runtime audio output settings.
+    OpenAudioSettings,
+
     /// 打开退出确认浮层。
     OpenQuitConfirm,
 

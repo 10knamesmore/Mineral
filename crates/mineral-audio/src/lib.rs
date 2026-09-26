@@ -9,6 +9,7 @@ mod command;
 mod engine;
 mod envelope;
 mod handle;
+mod output;
 mod queue_slots;
 mod snapshot;
 mod tap;
@@ -19,4 +20,5 @@ pub use envelope::{
     envelope_from_samples,
 };
 pub use handle::{AudioHandle, AudioMode, EngineParams, SpectrumTap};
+pub use output::{AudioOutput, OutputDevice, OutputTarget};
 pub use snapshot::{AudioBackend, AudioSnapshot};

@@ -84,7 +84,7 @@ pub(super) async fn pump_playback(
     out: mpsc::Sender<SessionMessage>,
 ) {
     pump_watch(rx, id, out, |snapshot| {
-        UpdatePayload::Playback(Box::new(*snapshot.as_ref()))
+        UpdatePayload::Playback(Box::new(snapshot.as_ref().clone()))
     })
     .await;
 }
