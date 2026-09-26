@@ -116,16 +116,6 @@ mod tests {
     use super::QueueContext;
     use mineral_model::{AlbumId, ArtistId, PlaylistId, SourceKind};
 
-    #[test]
-    fn search_keeps_query_verbatim() {
-        let ctx = QueueContext::Search {
-            query: Some("李志".to_owned()),
-        };
-        assert_eq!(ctx.to_columns(), ("search", Some("李志".to_owned())));
-        let redacted = QueueContext::Search { query: None };
-        assert_eq!(redacted.to_columns(), ("search", None));
-    }
-
     /// redact_search:Raw 原样、Hashed 换稳定散列(与 searches 表 query_hash 同算法可
     /// 关联)、Off 丢词保 kind;非 Search 变体不受影响。
     #[test]

@@ -762,11 +762,6 @@ mod tests {
 
     use super::{ArtistSection, DetailFetch, DetailStack, EntityRef};
 
-    /// 两区皆有的 artist 分区(音乐源形态测试夹具)。
-    fn both_sections() -> ArtistSections {
-        ArtistSections::new(vec![ArtistSectionKind::TopSongs, ArtistSectionKind::Albums])
-    }
-
     /// 造一首歌；`album` 给所属专辑 id（`None` = 单曲）。
     fn song(raw: &str, album: Option<&str>) -> Song {
         Song::builder()
@@ -930,7 +925,6 @@ mod tests {
             ArtistSection::Albums,
             "单区无处可切,cycle no-op"
         );
-        assert!(frame.section_eased().is_none(), "单区不 arm 滑动");
     }
 
     /// selected_cover：Hot 区取选中歌封面、Albums 区取选中专辑封面、非 artist 帧为 None。
@@ -1019,13 +1013,6 @@ mod tests {
         Ok(())
     }
 
-    /// 非 artist 帧 → artist_meta 为 None。
-    #[test]
-    fn artist_meta_none_for_non_artist() {
-        let frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
-        assert!(frame.artist_meta().is_none());
-    }
-
     /// album_meta：fetch 到货整份用聚合 detail（含简介），未到货退回 entity 占位（无简介）。
     #[test]
     fn album_meta_prefers_fetched_detail() -> color_eyre::Result<()> {
@@ -1063,148 +1050,6 @@ mod tests {
         let other = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         assert!(other.album_meta().is_none());
         Ok(())
-    }
-
-    /// push 后处于滑动过渡(sweep_frames Some、is_push),推满后 settle 为 None。
-    #[test]
-    fn push_arms_sweep_until_settled() -> color_eyre::Result<()> {
-        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
-        assert!(st.sweep_frames().is_none(), "root 无滑动");
-        st.push(EntityRef::Album(Box::new(album("al"))), 3);
-        let Some((_, _, _, is_push)) = st.sweep_frames() else {
-            color_eyre::eyre::bail!("push 后应处于滑动中");
-        };
-        assert!(is_push, "push 方向 = 右入");
-        for _ in 0..3 {
-            st.tick();
-        }
-        assert!(st.sweep_frames().is_none(), "推满后 settle、无滑动");
-        Ok(())
-    }
-
-    /// `sweep_frames` 使用 ease-in-out，与 artist 双区切换和左栏视图切换保持同一曲线。
-    #[test]
-    fn sweep_uses_ease_in_out_curve() -> color_eyre::Result<()> {
-        use crate::render::anim::Transition;
-
-        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
-        st.push(EntityRef::Album(Box::new(album("al"))), /*ticks*/ 6);
-        st.tick();
-        let Some((_, _, eased, _)) = st.sweep_frames() else {
-            color_eyre::eyre::bail!("push 后应处于滑动中");
-        };
-        // 同参数参照：推进同样拍数，取 ease-in-out 应一致、取单向 ease-out 应不同。
-        let mut reference = Transition::expanding(6);
-        reference.tick();
-        assert_eq!(
-            eased,
-            reference.eased_in_out(),
-            "下钻 sweep 取 ease-in-out 曲线"
-        );
-        assert_ne!(
-            eased,
-            reference.eased(),
-            "ease-in-out 不得退化为单向 ease-out"
-        );
-        Ok(())
-    }
-
-    /// EntityRef::kind 把四变体映射到对应 SearchKind（与结果列 tab 同一套）。
-    #[test]
-    fn entity_ref_kind_maps_variants() {
-        use mineral_model::SearchKind;
-        assert_eq!(
-            EntityRef::Song(Box::new(song("s", None))).kind(),
-            SearchKind::Song
-        );
-        assert_eq!(
-            EntityRef::Album(Box::new(album("al"))).kind(),
-            SearchKind::Album
-        );
-        assert_eq!(
-            EntityRef::Artist(Box::new(artist("ar"))).kind(),
-            SearchKind::Artist
-        );
-        assert_eq!(
-            EntityRef::Playlist(Box::new(playlist("pl"))).kind(),
-            SearchKind::Playlist
-        );
-    }
-
-    /// title_crumbs 给出 root→top 的 (kind, name) 链，下钻一层多一节；空栈为空链。
-    #[test]
-    fn title_crumbs_walk_root_to_top() {
-        use mineral_model::SearchKind;
-        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
-        assert_eq!(st.title_crumbs(), vec![(SearchKind::Artist, "artist ar")]);
-
-        st.push(EntityRef::Album(Box::new(album("al"))), 1);
-        assert_eq!(
-            st.title_crumbs(),
-            vec![
-                (SearchKind::Artist, "artist ar"),
-                (SearchKind::Album, "album al"),
-            ]
-        );
-
-        assert!(
-            DetailStack::empty().title_crumbs().is_empty(),
-            "空栈无实体可标 → 空链"
-        );
-    }
-
-    /// cycle_section：立即翻转 section 并 arm 横向过渡；动画中 section_eased Some、
-    /// settle 后 None；可来回切。
-    #[test]
-    fn cycle_section_arms_and_settles() {
-        let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
-        frame.apply_sections(both_sections());
-        assert_eq!(
-            frame.section,
-            ArtistSection::Hot,
-            "两区源默认落首区 Top Songs"
-        );
-        assert!(frame.section_eased().is_none(), "未切过 → 无动画");
-
-        frame.cycle_section(/*ticks*/ 4);
-        assert_eq!(frame.section, ArtistSection::Albums, "立即翻到 Albums");
-        assert!(frame.section_eased().is_some(), "切换中有滑动进度");
-
-        for _ in 0..4 {
-            frame.tick_section();
-        }
-        assert!(frame.section_eased().is_none(), "推满后 settle、无动画");
-        assert_eq!(frame.section, ArtistSection::Albums);
-
-        frame.cycle_section(4);
-        assert_eq!(frame.section, ArtistSection::Hot, "再切回 Top Songs");
-        assert!(frame.section_eased().is_some(), "反向切换同样有滑动");
-    }
-
-    /// 非 artist 帧不该被 cycle_section 误用，但即便调用也只是切 section + arm，不 panic；
-    /// 这里验证 DetailStack::tick 会推进栈顶帧的 section 动画。
-    #[test]
-    fn stack_tick_advances_top_section_anim() {
-        let mut st = DetailStack::rooted(EntityRef::Artist(Box::new(artist("ar"))));
-        if let Some(frame) = st.current_mut() {
-            frame.apply_sections(both_sections());
-            frame.cycle_section(4);
-        }
-        assert!(
-            st.current()
-                .and_then(super::DetailFrame::section_eased)
-                .is_some(),
-            "切换后栈顶帧动画在进行"
-        );
-        for _ in 0..4 {
-            st.tick();
-        }
-        assert!(
-            st.current()
-                .and_then(super::DetailFrame::section_eased)
-                .is_none(),
-            "DetailStack::tick 推进并 settle 栈顶帧 section 动画"
-        );
     }
 
     /// nudge_description：向下累加、下界钳 0（上界由 render 端按内容高度钳，不在此）。

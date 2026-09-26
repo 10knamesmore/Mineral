@@ -75,37 +75,3 @@ impl SearchKind {
         Self::User,
     ];
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SearchKind;
-
-    /// 五个变体(穷举用,取自类型自身声明)。
-    const ALL: [SearchKind; 5] = SearchKind::ALL;
-
-    /// icon / singular 与 label 同源:label 必以 icon 起头、且含 singular 词干(复数仅多个尾字符)。
-    /// 守卫三处词表(label/icon/singular)别各改一处漂移。
-    #[test]
-    fn label_composes_from_icon_and_singular() {
-        for kind in ALL {
-            assert!(
-                kind.label().starts_with(kind.icon()),
-                "{kind:?}: label 应以 icon 起头"
-            );
-            assert!(
-                kind.label().contains(kind.singular()),
-                "{kind:?}: label 应含 singular 词干"
-            );
-        }
-    }
-
-    /// singular 是复数 label 去掉图标与尾 `s`(纯文案锚点,改词表时一并对齐)。
-    #[test]
-    fn singular_forms_are_expected() {
-        assert_eq!(SearchKind::Song.singular(), "song");
-        assert_eq!(SearchKind::Album.singular(), "album");
-        assert_eq!(SearchKind::Artist.singular(), "artist");
-        assert_eq!(SearchKind::Playlist.singular(), "playlist");
-        assert_eq!(SearchKind::User.singular(), "user");
-    }
-}

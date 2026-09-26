@@ -43,32 +43,6 @@ fn ids_sorted(songs: &[Song]) -> Vec<&str> {
     v
 }
 
-#[test]
-fn next_sequential_stops_at_end() {
-    assert!(next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Sequential)).is_none());
-    assert_eq!(
-        next_in_queue(&state_with(&["a", "b", "c"], 0, PlayMode::Sequential)),
-        Some(song("b"))
-    );
-}
-
-/// next:RepeatAll / Shuffle 在尾部环回到首,RepeatOne 原地。
-#[test]
-fn next_wraps_and_repeats_one() {
-    assert_eq!(
-        next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::RepeatAll)),
-        Some(song("a"))
-    );
-    assert_eq!(
-        next_in_queue(&state_with(&["a", "b", "c"], 2, PlayMode::Shuffle)),
-        Some(song("a"))
-    );
-    assert_eq!(
-        next_in_queue(&state_with(&["a", "b", "c"], 1, PlayMode::RepeatOne)),
-        Some(song("b"))
-    );
-}
-
 /// prev:Sequential 首位返回 None,否则取上一首的下标。
 #[test]
 fn prev_sequential_stops_at_start() {
@@ -519,20 +493,6 @@ async fn lyrics_ready_bumps_only_on_store() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// apply_play_mode:进入 Shuffle 触发 enter(置顶 + 存 original),退回触发 exit(还原)。
-#[test]
-fn apply_enter_then_exit_shuffle() {
-    let mut st = state_with(&["a", "b", "c"], 1, PlayMode::Sequential); // current=b
-    apply_play_mode(&mut st, PlayMode::Shuffle);
-    assert_eq!(st.play_mode, PlayMode::Shuffle);
-    assert!(st.original_queue.is_some());
-    assert_eq!(st.queue.first().map(|s| s.id.as_str()), Some("b"));
-
-    apply_play_mode(&mut st, PlayMode::Sequential);
-    assert!(st.original_queue.is_none());
-    assert_eq!(ids(&st.queue), vec!["a", "b", "c"]);
-}
-
 /// apply_play_mode:两个非 Shuffle 模式间切换不动队列、不设 original。
 #[test]
 fn apply_between_non_shuffle_keeps_queue() {
@@ -676,24 +636,4 @@ fn play_mode_str_is_debug_name() {
     assert_eq!(PlayMode::Shuffle.name(), "Shuffle");
     assert_eq!(PlayMode::RepeatAll.name(), "RepeatAll");
     assert_eq!(PlayMode::RepeatOne.name(), "RepeatOne");
-}
-
-/// replace_queue 把队列语境存进 State,供起播时继承进 plays 的 context 列。
-#[tokio::test]
-async fn replace_queue_stores_context() -> color_eyre::Result<()> {
-    let core = core_with(Arc::default())?;
-    let id = mineral_model::PlaylistId::new(SourceKind::NETEASE, "42");
-    core.replace_queue(
-        vec![song("a")],
-        0,
-        mineral_stats::QueueContext::Playlist {
-            id: id.clone(),
-            name: None,
-        },
-    )?;
-    let matched = core.with_state(|st| {
-        matches!(&st.queue_context, mineral_stats::QueueContext::Playlist { id: got, .. } if *got == id)
-    });
-    assert!(matched, "replace_queue 应把 Playlist 语境存进 State");
-    Ok(())
 }

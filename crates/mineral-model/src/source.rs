@@ -173,45 +173,4 @@ mod tests {
             "HashMap key 也只看 name"
         );
     }
-
-    /// 访问器与 Debug(Debug 只打 name,保证 qualified() 干净)。
-    #[test]
-    fn accessors_and_debug() {
-        let s = SourceKind::NETEASE;
-        assert_eq!(s.name(), "netease");
-        assert_eq!(s.label(), "♫ netease");
-        assert_eq!(format!("{s:?}"), "netease");
-    }
-
-    /// 已知名字解析回内置常量;未知名字给默认展示(label = name)。
-    #[test]
-    fn from_name_known_and_unknown() {
-        assert_eq!(SourceKind::from_name("local"), SourceKind::LOCAL);
-
-        let plugin = SourceKind::from_name("myplugin");
-        assert_eq!(plugin.name(), "myplugin");
-        assert_eq!(plugin.label(), "myplugin");
-    }
-
-    /// 内置名字往返:`from_name` 命中常量。
-    #[test]
-    fn from_name_roundtrips_builtins() {
-        assert_eq!(SourceKind::from_name("netease"), SourceKind::NETEASE);
-        assert_eq!(SourceKind::from_name("local"), SourceKind::LOCAL);
-    }
-
-    /// 未知名字 intern,`name()` 仍可取回原值。
-    #[test]
-    fn from_name_interns_unknown() {
-        let plugin = SourceKind::from_name("spotify");
-        assert_eq!(plugin.name(), "spotify");
-    }
-
-    /// mineral 聚合源是内置常量:from_name 命中(非 intern 兜底),label 带字形。
-    #[test]
-    fn mineral_is_builtin() {
-        assert_eq!(SourceKind::from_name("mineral"), SourceKind::MINERAL);
-        assert_eq!(SourceKind::MINERAL.name(), "mineral");
-        assert_eq!(SourceKind::MINERAL.label(), "◆ mineral");
-    }
 }

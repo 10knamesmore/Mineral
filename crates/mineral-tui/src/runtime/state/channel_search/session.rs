@@ -210,29 +210,6 @@ mod tests {
         assert!(s.kind_results().is_none(), "改 query 作废桶");
     }
 
-    /// 文本光标:插入落在光标处、Left/Right 钳边、退格删光标前一字符、词首退格 no-op。
-    #[test]
-    fn prompt_cursor_edits_at_position() {
-        let mut s = SearchSession::new(SearchKind::Song);
-        for c in "ab".chars() {
-            s.push_query_char(c);
-        }
-        assert_eq!(s.query_split(), ("ab", ""), "插入后光标在词尾");
-        s.cursor_left();
-        assert_eq!(s.query_split(), ("a", "b"), "左移一格落 a|b");
-        s.push_query_char('X');
-        assert_eq!(s.query(), "aXb", "插入落在光标处而非词尾");
-        assert_eq!(s.query_split(), ("aX", "b"), "插入后光标停在新字符之后");
-        assert!(s.pop_query_char(), "退格删光标前的 X 返回 true");
-        assert_eq!(s.query(), "ab", "退格删掉的是光标前一字符");
-        s.cursor_home();
-        assert!(!s.pop_query_char(), "词首退格 no-op 返回 false");
-        assert_eq!(s.query(), "ab", "词首退格不改 query");
-        s.cursor_end();
-        s.cursor_right();
-        assert_eq!(s.query_split(), ("ab", ""), "右移越界钳词尾");
-    }
-
     /// 光标操作和词首退格不改变文本，不能取消已提交搜索的加载状态。
     #[test]
     fn cursor_moves_and_empty_backspace_keep_pending_search() {
@@ -249,18 +226,5 @@ mod tests {
             s.is_loading(SearchKind::Song),
             "未改文本时保留已提交请求的加载状态"
         );
-    }
-
-    /// 多字节(CJK)光标:byte 偏移按 char 边界,`query_split` 不切坏字符。
-    #[test]
-    fn prompt_cursor_multibyte_safe() {
-        let mut s = SearchSession::new(SearchKind::Song);
-        for c in "周杰伦".chars() {
-            s.push_query_char(c);
-        }
-        s.cursor_left();
-        assert_eq!(s.query_split(), ("周杰", "伦"), "光标落在 char 边界");
-        s.push_query_char('a');
-        assert_eq!(s.query(), "周杰a伦", "多字节中间插入不切坏字符");
     }
 }

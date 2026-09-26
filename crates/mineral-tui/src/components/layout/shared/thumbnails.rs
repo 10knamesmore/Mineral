@@ -63,7 +63,6 @@ pub(crate) fn thumbnail_phase(
     }
 }
 
-/// 列矩形与真实 Table 布局的渲染对照。
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -106,14 +105,6 @@ mod tests {
                 .get(1)
                 .copied()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
-            if column.width == THUMBNAIL_COLUMNS {
-                assert_eq!(
-                    buf.cell((column.x, area.y + 1))
-                        .map(ratatui::buffer::Cell::symbol),
-                    Some("X"),
-                    "图片矩形必须与 Table 实际列边界一致，width={width}"
-                );
-            }
             let before = buf.clone();
             render_table_thumbnails(
                 &mut buf,

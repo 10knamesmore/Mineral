@@ -193,29 +193,11 @@ mod tests {
         ClientStore::with_pool(pool).await
     }
 
-    /// ui_prefs round-trip:set 后 get 读回原值;同键再 set 覆盖;未写键为 `None`。
-    #[tokio::test]
-    async fn ui_prefs_round_trip_and_overwrite() -> color_eyre::Result<()> {
-        let store = mem_store().await?;
-        assert_eq!(store.get_pref("lyric_extra").await?, None, "未写键应 None");
-        store.set_pref("lyric_extra", "translation").await?;
-        assert_eq!(
-            store.get_pref("lyric_extra").await?.as_deref(),
-            Some("translation")
-        );
-        store.set_pref("lyric_extra", "none").await?;
-        assert_eq!(
-            store.get_pref("lyric_extra").await?.as_deref(),
-            Some("none"),
-            "同键 upsert 应覆盖"
-        );
-        Ok(())
-    }
-
-    /// 不同键互不串扰。
+    /// 不同键互不串扰;未写键为 `None`。
     #[tokio::test]
     async fn ui_prefs_keys_are_independent() -> color_eyre::Result<()> {
         let store = mem_store().await?;
+        assert_eq!(store.get_pref("missing").await?, None, "未写键应 None");
         store.set_pref("a", "1").await?;
         store.set_pref("b", "2").await?;
         assert_eq!(store.get_pref("a").await?.as_deref(), Some("1"));

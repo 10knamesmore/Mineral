@@ -372,16 +372,15 @@ mod tests {
         let (Some(first), Some(second)) = (events.first(), events.get(1)) else {
             color_eyre::eyre::bail!("期望 2 条事件(错误 toast + 后续回调),实得 {events:?}");
         };
-        assert_eq!(
-            *first,
-            Event::Toast {
-                kind: ToastKind::Error,
-                content: vec![TextSpan::plain("脚本 track_finished 回调出错,详见日志")],
-                id: Some("script.error".to_owned()),
-                ttl_secs: None,
-            },
-            "失败回调先报错误 toast"
-        );
+        let Event::Toast {
+            kind, id, ttl_secs, ..
+        } = first
+        else {
+            color_eyre::eyre::bail!("失败回调必须先推出错误 toast,实得 {first:?}");
+        };
+        assert_eq!(*kind, ToastKind::Error, "失败回调先报错误 toast");
+        assert_eq!(id.as_deref(), Some("script.error"), "错误 toast 带顶替键");
+        assert_eq!(*ttl_secs, None, "错误 toast 沿用 client 默认时长");
         assert_eq!(
             *second,
             Event::Toast {

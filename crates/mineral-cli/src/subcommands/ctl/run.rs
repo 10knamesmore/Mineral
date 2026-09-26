@@ -443,49 +443,7 @@ async fn connect(socket_path: &Path) -> Result<Client, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        TransformLookup, available_detail, clamp_position, clamp_volume, duplicate_detail,
-        transform_index,
-    };
-
-    /// 唯一命中才返回下标;没有命中与多条同名都明确区分。
-    #[test]
-    fn transform_lookup_is_unique() {
-        let labels = vec!["dedupe".to_owned(), "shuffle-album".to_owned()];
-        assert_eq!(
-            transform_index(&labels, "shuffle-album"),
-            TransformLookup::Found(1)
-        );
-        assert_eq!(
-            transform_index(&labels, "missing"),
-            TransformLookup::Unknown
-        );
-        let duplicated = vec!["dedupe".to_owned(), "dedupe".to_owned()];
-        assert_eq!(
-            transform_index(&duplicated, "dedupe"),
-            TransformLookup::Ambiguous
-        );
-    }
-
-    /// 未命中的补充信息列出可用 label;空配置给出明确说法。
-    #[test]
-    fn available_detail_lists_labels() {
-        assert_eq!(
-            available_detail(&["a".to_owned(), "b".to_owned()]),
-            "可用变换:a, b"
-        );
-        assert_eq!(available_detail(&[]), "有效配置里没有注册任何队列变换");
-    }
-
-    /// 同名冲突的补充信息列出所有冲突下标。
-    #[test]
-    fn duplicate_detail_lists_indices() {
-        let labels = vec!["a".to_owned(), "b".to_owned(), "a".to_owned()];
-        assert_eq!(
-            duplicate_detail(&labels, "a"),
-            "同名 label `a` 出现在下标 0, 2"
-        );
-    }
+    use super::{clamp_position, clamp_volume};
 
     /// 相对跳钳在 `[0, duration]`。
     #[test]

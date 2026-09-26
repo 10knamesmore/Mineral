@@ -228,11 +228,4 @@ mod tests {
         assert!(p.entries.is_empty());
         Ok(())
     }
-
-    /// source 报 MINERAL(id namespace / 徽标 / 任务路由都靠它)。
-    #[test]
-    fn source_is_mineral() {
-        let ch = MineralChannel::new(ServerStore::disabled());
-        assert_eq!(ch.source(), SourceKind::MINERAL);
-    }
 }

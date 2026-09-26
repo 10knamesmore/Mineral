@@ -329,17 +329,6 @@ impl ImageEngine {
             .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
     }
 
-    /// 插入一条测试用真实低清 preview。
-    #[cfg(test)]
-    pub(crate) fn insert_test_preview(&self, url: &MediaUrl, cells: (u16, u16)) {
-        let key = TerminalImageKey::rasterized(
-            ImageIdentity::Url(url.clone()),
-            PixelSize::from_cells(cells, self.cell_pixels()),
-        );
-        self.preview_images
-            .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
-    }
-
     /// 将配置的协议模式应用到当前终端能力。
     fn apply_graphics_mode(&mut self) {
         let mode = *self.cfg.tui().cover().protocol();

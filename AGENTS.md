@@ -8,6 +8,10 @@ Mineral 是一个多源, C-S 架构音乐播放器(tui as a client)
 
 测试运行器是 **cargo-nextest**(需 `cargo install cargo-nextest cargo-insta`);`cargo t` / `td` / `snap` 是 `.cargo/config.toml` 里的 alias。
 
+测试优先使用真实进程 E2E 或 App 输入入口，验证操作结果、后端请求和状态变化；同一行为已有上层证明时，不重复维护底层单测。协议、存储、解析和资源生命周期等独立边界可保留单测。
+
+不为配色、视觉布局、动画帧或展示文案编写断言与快照。配置重载的应用行为、终端与 UTF-8 边界、机器消费的字段和协议字节仍需验证。
+
 项目有自定义dylint, 调用`scripts/check.sh` 跑代码编写完成后的验证
 
 所有测试**禁止**debug run, debug 运行花的时间比 release 编译多得多, 大头时间都在编译, **禁止**先跑部分测试再跑全量，浪费大头编译时间， 直接跑全量

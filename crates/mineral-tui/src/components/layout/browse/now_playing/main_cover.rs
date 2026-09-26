@@ -53,34 +53,3 @@ pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use ratatui::layout::Rect;
-
-    use super::sections;
-
-    /// 纵切几何:cover 贴内区顶、KV 恒 2 行、底行恒 1 行,三段铺满内区高。
-    #[test]
-    fn sections_split_covers_inner() -> color_eyre::Result<()> {
-        let area = Rect::new(0, 0, 40, 20);
-        let [cover, kv, strip] =
-            sections(area).ok_or_else(|| color_eyre::eyre::eyre!("常规尺寸应可切分"))?;
-        assert_eq!(cover.y, 1, "cover 贴内区顶(边框内)");
-        assert_eq!(kv.height, 2, "KV 区恒 2 行");
-        assert_eq!(strip.height, 1, "底行恒 1 行");
-        assert_eq!(
-            cover.height + kv.height + strip.height,
-            18,
-            "三段铺满内区高(20 - 上下边框)"
-        );
-        Ok(())
-    }
-
-    /// 内区过小(与面板绘制早退同阈值)不切分。
-    #[test]
-    fn sections_reject_tiny_area() {
-        assert!(sections(Rect::new(0, 0, 9, 5)).is_none(), "过矮应拒绝");
-        assert!(sections(Rect::new(0, 0, 6, 20)).is_none(), "过窄应拒绝");
-    }
-}

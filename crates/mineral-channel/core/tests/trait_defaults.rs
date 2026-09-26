@@ -8,7 +8,7 @@ use mineral_channel_core::{
     ChannelCaps, Error, MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad,
 };
 use mineral_model::{
-    Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
+    Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
 
 /// 只实现必需方法的最小桩 channel,所有可选能力全部走 trait 默认实现。
@@ -119,16 +119,5 @@ async fn artist_albums_defaults_to_not_supported() -> color_eyre::Result<()> {
         chan.artist_albums(&artist, Page::default()).await,
         Err(Error::NotSupported)
     ));
-    Ok(())
-}
-
-#[tokio::test]
-async fn caps_reports_declared_abilities() -> color_eyre::Result<()> {
-    let chan = BareChannel;
-    let caps = chan.caps();
-    assert!(caps.searchable().is_empty());
-    assert!(!*caps.playlist_edit());
-    // SearchKind 仍是 caps 词汇表的一部分(编译期使用以防止意外脱钩)
-    let _kinds = [SearchKind::Song];
     Ok(())
 }

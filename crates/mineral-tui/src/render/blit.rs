@@ -198,9 +198,9 @@ mod tests {
     use color_eyre::eyre::eyre;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::Style;
 
-    use super::{EdgeColors, HAnchor, copy_window, reveal_v_top, slide_h};
+    use super::copy_window;
 
     /// 取 `(x, y)` 的符号,缺格报错(不用索引/unwrap)。
     fn sym(buf: &Buffer, x: u16, y: u16) -> color_eyre::Result<String> {
@@ -259,99 +259,6 @@ mod tests {
         copy_window(&mut dst, &src, Rect::new(0, 0, 4, 1), 2, 0);
         assert_eq!(sym(&dst, 2, 0)?, "a");
         assert_eq!(sym(&dst, 3, 0)?, "b");
-        Ok(())
-    }
-
-    /// 前沿分数格的测试配色。
-    const EDGE: EdgeColors = EdgeColors {
-        fill: Color::Blue,
-        bg: Color::Black,
-    };
-
-    /// 贴右滑入(卡片自右进场):离屏左侧列贴右缘,左前沿是反色八分块。
-    /// cur_w_e=20 → 整 2 格 + 4/8 前沿。
-    #[test]
-    fn slide_h_right_anchor_shows_left_columns_and_edge() -> color_eyre::Result<()> {
-        let full = Rect::new(0, 0, 6, 1);
-        let mut off = Buffer::empty(full);
-        off.set_string(0, 0, "ABCDEF", Style::new());
-        let mut dst = Buffer::empty(full);
-
-        slide_h(
-            &mut dst,
-            &off,
-            full,
-            /*cur_w_e*/ 20,
-            HAnchor::Right,
-            EDGE,
-        );
-        // whole=2:离屏左 2 列("AB")贴右缘 x=4..6,前沿格在 x=3。
-        assert_eq!(sym(&dst, 4, 0)?, "A");
-        assert_eq!(sym(&dst, 5, 0)?, "B");
-        assert_eq!(sym(&dst, 3, 0)?, "▌", "4/8 前沿应是反色半块(8-4)");
-        assert_eq!(sym(&dst, 0, 0)?, " ", "前沿左侧不该有内容");
-        Ok(())
-    }
-
-    /// 贴左滑入(抽屉从左推入):离屏右侧列贴左缘(前沿侧边框最先进场),右前沿正色八分块。
-    #[test]
-    fn slide_h_left_anchor_shows_right_columns_and_edge() -> color_eyre::Result<()> {
-        let full = Rect::new(0, 0, 6, 1);
-        let mut off = Buffer::empty(full);
-        off.set_string(0, 0, "ABCDEF", Style::new());
-        let mut dst = Buffer::empty(full);
-
-        slide_h(
-            &mut dst,
-            &off,
-            full,
-            /*cur_w_e*/ 20,
-            HAnchor::Left,
-            EDGE,
-        );
-        // whole=2:离屏右 2 列("EF")贴左缘 x=0..2,前沿格在 x=2。
-        assert_eq!(sym(&dst, 0, 0)?, "E");
-        assert_eq!(sym(&dst, 1, 0)?, "F");
-        assert_eq!(sym(&dst, 2, 0)?, "▌", "4/8 前沿应是正色半块");
-        Ok(())
-    }
-
-    /// 不足一格(cur_w_e < 8)不画任何东西。
-    #[test]
-    fn slide_h_below_one_cell_draws_nothing() -> color_eyre::Result<()> {
-        let full = Rect::new(0, 0, 4, 1);
-        let mut off = Buffer::empty(full);
-        off.set_string(0, 0, "ABCD", Style::new());
-        let mut dst = Buffer::empty(full);
-        slide_h(
-            &mut dst,
-            &off,
-            full,
-            /*cur_w_e*/ 7,
-            HAnchor::Right,
-            EDGE,
-        );
-        for x in 0..4 {
-            assert_eq!(sym(&dst, x, 0)?, " ", "x={x} 不该被画");
-        }
-        Ok(())
-    }
-
-    /// 顶锚垂直揭开:内容定格原位、自顶露出整行,底缘是反色下八分块。
-    /// cur_h_e=12 → 整 1 行 + 4/8 底缘。
-    #[test]
-    fn reveal_v_top_shows_top_rows_and_bottom_edge() -> color_eyre::Result<()> {
-        let full = Rect::new(0, 0, 2, 3);
-        let mut off = Buffer::empty(full);
-        off.set_string(0, 0, "AB", Style::new());
-        off.set_string(0, 1, "CD", Style::new());
-        let mut dst = Buffer::empty(full);
-
-        reveal_v_top(&mut dst, &off, full, /*cur_h_e*/ 12, EDGE);
-        assert_eq!(sym(&dst, 0, 0)?, "A", "首行内容原位露出");
-        assert_eq!(sym(&dst, 1, 0)?, "B");
-        assert_eq!(sym(&dst, 0, 1)?, "▄", "4/8 底缘应是反色下半块(8-4)");
-        assert_eq!(sym(&dst, 0, 2)?, " ", "底缘之下不该有内容");
         Ok(())
     }
 }

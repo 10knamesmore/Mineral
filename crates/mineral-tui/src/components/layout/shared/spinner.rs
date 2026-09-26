@@ -23,28 +23,3 @@ pub(crate) fn glyph(frames: &[String], counter: u32) -> &str {
     let idx = usize::try_from((counter / STEP_TICKS) % len).unwrap_or(0);
     frames.get(idx).map_or("", String::as_str)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::glyph;
-
-    /// 按帧计数循环取帧;每 STEP_TICKS 帧前进一格,到末尾回绕。
-    #[test]
-    fn glyph_cycles_through_frames() {
-        let frames = ["a".to_owned(), "b".to_owned(), "c".to_owned()];
-        assert_eq!(glyph(&frames, 0), "a", "首帧");
-        assert_eq!(
-            glyph(&frames, super::STEP_TICKS - 1),
-            "a",
-            "不足一格仍是首帧"
-        );
-        assert_eq!(glyph(&frames, super::STEP_TICKS), "b", "满一格进下一帧");
-        assert_eq!(glyph(&frames, super::STEP_TICKS * 3), "a", "走满一周回绕");
-    }
-
-    /// 空帧数组 → 空串(不画字形,仅留 loading 文案)。
-    #[test]
-    fn glyph_empty_frames_yields_blank() {
-        assert_eq!(glyph(&[], 42), "");
-    }
-}

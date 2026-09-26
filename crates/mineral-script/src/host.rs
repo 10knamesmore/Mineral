@@ -249,30 +249,3 @@ pub fn seed_web_url_templates(
     }
     lua.set_named_registry_value(WEB_URL_TEMPLATES, table)
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::api::test_support::vm_with_host;
-    use crate::message::{PropKey, PropValue};
-
-    /// 热重载播种:seed 后 observe 注册立即回放、顶层 get 同源可读 ——
-    /// 新 VM 不必等 daemon 下一次属性真变更(diff 下发可能永不再来)。
-    #[test]
-    fn seeded_props_replay_to_observe_and_get() -> color_eyre::Result<()> {
-        let (lua, host) = vm_with_host()?;
-        host.seed_props(vec![
-            (PropKey::PlayerVolume, PropValue::Int(42)),
-            (PropKey::PlayerState, PropValue::Str("stopped".to_owned())),
-        ]);
-        lua.load(
-            r#"
-            assert(mineral.get("player.volume") == 42, "get 必须读到播种值")
-            seen = nil
-            mineral.observe("player.state", function(v) seen = v end)
-            assert(seen == "stopped", "observe 注册必须回放播种值")
-            "#,
-        )
-        .exec()?;
-        Ok(())
-    }
-}

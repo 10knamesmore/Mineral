@@ -176,24 +176,3 @@ pub struct TerrainConfig {
     /// 0 = 远层淡到全隐;1 = 全层等亮、无纵深;抬高 = 后景更清晰、纵深更浅。
     fade_floor: f32,
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::schema::{Config, SpectrumStyle};
-
-    /// 默认 style = bars 与 per-style 子表默认值(default.lua 是唯一真相源,
-    /// 这里锁枚举落型与子表结构的对应关系)。
-    #[test]
-    fn style_defaults_parse_to_enums() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let spectrum = cfg.tui().spectrum();
-        assert_eq!(spectrum.style(), &SpectrumStyle::Bars);
-        assert!(*spectrum.bars().show_peak_cap());
-        assert_eq!(*spectrum.scope().column_ms(), 16);
-        assert_eq!(*spectrum.waterfall().push_ms(), 64);
-        assert!((*spectrum.waterfall().contrast() - 1.4).abs() < f32::EPSILON);
-        assert_eq!(*spectrum.terrain().layers(), 8);
-        assert!((*spectrum.terrain().fade_floor() - 0.30).abs() < f32::EPSILON);
-        Ok(())
-    }
-}

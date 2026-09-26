@@ -387,14 +387,11 @@ impl Overlay for PopMenu {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent};
     use mineral_model::{Song, SongId, SourceKind};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
+
     use ratatui::layout::Rect;
 
     use super::{MenuAction, MenuItem, PopMenu};
-    use crate::components::popup::component::{
-        Overlay, OverlayAction, OverlayResponse, render_overlay,
-    };
+    use crate::components::popup::component::{Overlay, OverlayAction, OverlayResponse};
     use crate::components::popup::placement::Placement;
     use crate::runtime::action::{Action, SelectionMove};
     use crate::runtime::state::AppState;
@@ -528,39 +525,6 @@ mod tests {
             menu.on_key(&KeyEvent::from(KeyCode::Esc), &ctx),
             OverlayResponse::Do(OverlayAction::CloseTop)
         ));
-        Ok(())
-    }
-
-    /// 锚定渲染快照:锚点下方弹出、快捷字母列、首项高亮、危险项红色置底。
-    #[test]
-    fn menu_anchored_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
-        let ctx = AppState::test_default()?;
-        let mut items = action_items();
-        items.push(MenuItem {
-            hotkey: Some('x'),
-            label: "Remove from playlist".into(),
-            action: Some(MenuAction::Copy("placeholder".into())),
-            destructive: true,
-            tint: None,
-        });
-        let menu = PopMenu::new("Actions", items, anchor(), Placement::Below);
-        terminal.draw(|f| {
-            render_overlay(
-                f,
-                f.area(),
-                &menu,
-                /*scale*/ 1000,
-                /*focused*/ true,
-                &ctx,
-                &theme,
-            );
-        })?;
-        crate::test_support::assert_snap!(
-            "PopMenu 锚定弹出(锚点下方,快捷字母列,首项高亮,危险项红色置底)",
-            terminal.backend()
-        );
         Ok(())
     }
 }

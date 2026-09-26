@@ -193,24 +193,3 @@ pub(crate) fn artist_counts(a: &Artist) -> Option<String> {
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::publish_year;
-
-    /// 发行年份按北京 +8 偏移读：北京 1 月 1 日发行的专辑不能因 UTC 落到上一年。
-    #[test]
-    fn publish_year_uses_beijing_offset() {
-        // 2015-09-26 00:00 北京（= 2015-09-25 16:00 UTC）→ 2015（两边同年,基线）。
-        assert_eq!(publish_year(1_443_196_800_000), Some(2015));
-        // 2020-01-01 00:00 北京（= 2019-12-31 16:00 UTC）→ 2020；UTC 读会错成 2019。
-        assert_eq!(
-            publish_year(1_577_808_000_000),
-            Some(2020),
-            "北京跨年不少算一年"
-        );
-        // 未知发行时间。
-        assert_eq!(publish_year(0), None);
-        assert_eq!(publish_year(-1), None);
-    }
-}

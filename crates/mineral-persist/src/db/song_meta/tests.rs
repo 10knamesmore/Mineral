@@ -80,31 +80,6 @@ async fn failed_metadata_batch_rolls_back_earlier_rows() -> color_eyre::Result<(
     Ok(())
 }
 
-#[tokio::test]
-async fn upsert_meta_then_get_roundtrips() -> color_eyre::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-    let s = p.scope(SourceKind::NETEASE);
-    let song = Song::builder()
-        .id(SongId::new(SourceKind::NETEASE, "123"))
-        .name("迷跡波".to_owned())
-        .artists(vec![ArtistRef {
-            id: ArtistId::new(SourceKind::NETEASE, "a1"),
-            name: "演者".to_owned(),
-        }])
-        .duration_ms(Some(200_000))
-        .build();
-    s.upsert_meta(&song).await?;
-    let got = s.get_meta(&song.id).await?;
-    assert!(got.is_some());
-    if let Some(g) = got {
-        assert_eq!(g.name, "迷跡波");
-        assert_eq!(g.artists.len(), song.artists.len());
-        assert_eq!(g.duration_ms, Some(200_000));
-    }
-    Ok(())
-}
-
 /// list_meta:枚举全量并按 song_artists 保序重建艺人;不同 namespace 互不漏;降级为空。
 #[tokio::test]
 async fn list_meta_returns_all_with_ordered_artists() -> color_eyre::Result<()> {

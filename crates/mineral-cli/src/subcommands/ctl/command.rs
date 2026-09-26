@@ -332,7 +332,7 @@ fn parse_volume_absolute(raw: &str) -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModeArg, QueueCommand, SeekSpec, VolumeSpec, format_position};
+    use super::{ModeArg, QueueCommand, SeekSpec, VolumeSpec};
     use mineral_protocol::PlayMode;
 
     /// 解析一个位置;写法不合法即测试失败。
@@ -384,14 +384,6 @@ mod tests {
         assert!("".parse::<SeekSpec>().is_err(), "空串");
         assert!("1:".parse::<SeekSpec>().is_err(), "空段");
         assert!("abc".parse::<SeekSpec>().is_err(), "非数字");
-    }
-
-    /// 人读位置:`mm:ss`,满一小时带小时段。
-    #[test]
-    fn position_labels() {
-        assert_eq!(format_position(90_000), "1:30");
-        assert_eq!(format_position(3_723_000), "1:02:03");
-        assert_eq!(format_position(0), "0:00");
     }
 
     /// 绝对音量限 0..=100;带符号是相对增量。

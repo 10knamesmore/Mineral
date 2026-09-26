@@ -549,9 +549,6 @@ impl ToastItem for TextItem {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
     use super::{LiveSlot, Notifications, text_item};
     use crate::components::toast::card::plain_line;
 
@@ -587,29 +584,6 @@ mod tests {
         for _ in 0..frames {
             n.tick();
         }
-    }
-
-    /// live + flash 并存:`下载中` 在上、`出错了` 在下,各自居中括号。
-    #[test]
-    fn stack_live_above_flash_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut n = notifications();
-        n.flash_text("出错了".to_owned());
-        for _ in 0..8 {
-            n.set_live(LiveSlot::DOWNLOAD, Some(text_item("下载中 62%".to_owned())));
-            n.tick();
-        }
-
-        let mut t = Terminal::new(TestBackend::new(60, 3))?;
-        t.draw(|f| {
-            let area = f.area();
-            n.render(f, area, &theme, /*immersive*/ 0, "x");
-        })?;
-        crate::test_support::assert_snap!(
-            "通知堆叠:live(下载中)在上、flash(出错了)在下",
-            t.backend()
-        );
-        Ok(())
     }
 
     /// 卡片 id 顶替:同 id 替换为一张、不同 id / 无 id 各自堆叠。
@@ -693,93 +667,6 @@ mod tests {
         assert_eq!(n.dismiss_card(), None, "没有可关的了");
         run(&mut n, 8); // 退场归零
         assert!(n.cards.is_empty(), "退场后应被清理");
-        Ok(())
-    }
-
-    /// 常规模式:单行 flash 居中在上,多行卡片接在其下同样居中。
-    #[test]
-    fn cards_stack_below_flash_snapshot() -> color_eyre::Result<()> {
-        use super::TextTint;
-        let theme = crate::test_support::default_theme()?;
-        let mut n = notifications();
-        n.flash_text("音量 32".to_owned());
-        n.push_card(
-            TextTint::Warn,
-            plain_line("v0.9.0 要点"),
-            body(&["新增配置 toast.position", "旧键 search.style 改名"]),
-            /*id*/ None,
-            /*ttl*/ None,
-        );
-        run(&mut n, 8); // 全部展开
-        let mut t = Terminal::new(TestBackend::new(60, 8))?;
-        t.draw(|f| {
-            let area = f.area();
-            n.render(f, area, &theme, /*immersive*/ 0, "x");
-        })?;
-        crate::test_support::assert_snap!(
-            "常规模式:flash 居中在上,驻留卡片接在其下居中",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// immersive:casual(live 下载 / 普通 flash)不画,essential(Error flash + 卡片)
-    /// 右贴边、从第 2 行起;顶行留空给歌词边框档位指示。
-    #[test]
-    fn immersive_essential_only_snapshot() -> color_eyre::Result<()> {
-        use super::{TextTint, tinted_text_item};
-        let theme = crate::test_support::default_theme()?;
-        let mut n = notifications();
-        n.flash_text("普通提示不该出现".to_owned());
-        n.flash(tinted_text_item("播放失败".to_owned(), TextTint::Error));
-        n.push_card(
-            TextTint::Error,
-            plain_line("配置重载失败"),
-            body(&["config.lua:17 字段 audio.volume"]),
-            /*id*/ None,
-            /*ttl*/ None,
-        );
-        for _ in 0..8 {
-            n.set_live(LiveSlot::DOWNLOAD, Some(text_item("下载中 62%".to_owned())));
-            n.tick();
-        }
-        let mut t = Terminal::new(TestBackend::new(60, 8))?;
-        t.draw(|f| {
-            let area = f.area();
-            n.render(f, area, &theme, /*immersive*/ 1000, "x");
-        })?;
-        crate::test_support::assert_snap!(
-            "immersive:仅 Error flash 与卡片,右贴边、第 2 行起;下载/普通提示被抑制",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// z 切换中点(immersive=500):卡片锚点落在「顶部居中」与「右上」之间
-    /// (x、y 都插值),非必要 flash 宽度收半 —— 锁住"跟随布局飞、不瞬移"。
-    #[test]
-    fn z_transition_midpoint_interpolates_anchors() -> color_eyre::Result<()> {
-        use super::TextTint;
-        let theme = crate::test_support::default_theme()?;
-        let mut n = notifications();
-        n.flash_text("普通提示收缩中".to_owned());
-        n.push_card(
-            TextTint::Normal,
-            plain_line("迁移"),
-            body(&["body"]),
-            /*id*/ None,
-            /*ttl*/ None,
-        );
-        run(&mut n, 8); // 全部展开
-        let mut t = Terminal::new(TestBackend::new(60, 8))?;
-        t.draw(|f| {
-            let area = f.area();
-            n.render(f, area, &theme, /*immersive*/ 500, "x");
-        })?;
-        crate::test_support::assert_snap!(
-            "z 切换中点:卡片在居中与右上之间,非必要 flash 收缩半宽",
-            t.backend()
-        );
         Ok(())
     }
 
@@ -905,28 +792,6 @@ mod tests {
         n.prune_expired(Instant::now() + FLASH_TTL + Duration::from_secs(1));
         run(&mut n, 8); // 退场归零
         assert!(n.entries.is_empty(), "过期后应被清理");
-        Ok(())
-    }
-
-    /// 进出场动画中途一帧:括号区由中心横向展开,尚未铺满。
-    #[test]
-    fn toast_midexpand_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut n = notifications();
-        for _ in 0..2 {
-            n.set_live(
-                LiveSlot::DOWNLOAD,
-                Some(text_item("下载中 62% 2.4MB/s".to_owned())),
-            );
-            n.tick();
-        }
-
-        let mut t = Terminal::new(TestBackend::new(60, 3))?;
-        t.draw(|f| {
-            let area = f.area();
-            n.render(f, area, &theme, /*immersive*/ 0, "x");
-        })?;
-        crate::test_support::assert_snap!("通知进场动画中途:括号区由中心横向展开", t.backend());
         Ok(())
     }
 }

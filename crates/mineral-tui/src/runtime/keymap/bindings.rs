@@ -324,14 +324,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn unbound_key_returns_none() -> color_eyre::Result<()> {
-        let km = default_keymap()?;
-        assert_eq!(km.lookup(KeyChord::parse("!")?), None);
-        assert_eq!(km.lookup(KeyChord::parse("e")?), None);
-        Ok(())
-    }
-
     /// 键反查:默认表 DismissNotice → "x";多键动作(activate = l/<CR>)取字典序
     /// 最小的显示串,提示稳定;未绑定动作反查无果。
     #[test]
@@ -348,22 +340,6 @@ mod tests {
         );
         let empty = Keymap::from_entries(std::iter::empty());
         assert_eq!(empty.hint_chord(Action::DismissNotice), None);
-        Ok(())
-    }
-
-    #[test]
-    fn builtin_table_snapshot() -> color_eyre::Result<()> {
-        let km = default_keymap()?;
-        let mut lines = km
-            .table
-            .iter()
-            .map(|(chord, action)| format!("{chord} → {action:?}"))
-            .collect::<Vec<String>>();
-        lines.sort();
-        crate::test_support::assert_snap!(
-            "默认键位绑定表(和弦 → 动作,字典序;default.lua keys/behavior 落地产物)",
-            lines.join("\n")
-        );
         Ok(())
     }
 
@@ -445,88 +421,6 @@ mod tests {
         Ok(())
     }
 
-    /// help 目录:默认表分组有序连续、合并对(音量 ±/上下移动)按「各动作首键优先」
-    /// 排键、label 嵌 behavior 实值;script 空时无 Scripts 组。
-    #[test]
-    fn help_catalog_reflects_defaults() -> color_eyre::Result<()> {
-        use crate::runtime::keymap::help::HelpGroup;
-        let km = default_keymap()?;
-        let catalog = km.help();
-        // 分组顺序 = 声明顺序,组内条目连续不穿插(dedup 后无重复组名)。
-        let mut groups = catalog.iter().map(|e| *e.group()).collect::<Vec<_>>();
-        groups.dedup();
-        assert_eq!(
-            groups,
-            vec![
-                HelpGroup::Playback,
-                HelpGroup::Navigate,
-                HelpGroup::Actions,
-                HelpGroup::View,
-                HelpGroup::Scroll,
-            ],
-            "默认无脚本绑定,不出 Scripts 组"
-        );
-        let chords_of = |label: &str| -> color_eyre::Result<Vec<String>> {
-            let entry = catalog
-                .iter()
-                .find(|e| e.label() == label)
-                .ok_or_else(|| color_eyre::eyre::eyre!("目录缺条目 `{label}`"))?;
-            Ok(entry.chords().iter().map(ToString::to_string).collect())
-        };
-        // 不变量:查表每个和弦都能在目录里找到 —— 新增绑定漏挂目录元数据在此爆红。
-        for chord in km.table.keys() {
-            assert!(
-                catalog.iter().any(|e| e.chords().contains(chord)),
-                "和弦 {chord} 不在 help 目录"
-            );
-        }
-        // 合并对:显示优先序 = 各动作首键在前(+/- 先于同义的 =/_)。
-        assert_eq!(chords_of("Volume ±5")?, ["+", "-", "=", "_"]);
-        assert_eq!(chords_of("Move down / up")?, ["j", "k", "<Down>", "<Up>"]);
-        // 单动作多键:保持配置声明序。
-        assert_eq!(chords_of("Back")?, ["h", "<Esc>", "<BS>", "<C-h>"]);
-        // label 嵌 behavior 实值。
-        assert_eq!(chords_of("Jump 7 rows")?, ["J", "K"]);
-        assert_eq!(chords_of("This help")?, ["?"]);
-        Ok(())
-    }
-
-    /// help 目录跟随重映射与 behavior:play_pause 改绑 w、volume_step 改 10 后,
-    /// 条目键与 label 实值同步变化。
-    #[test]
-    fn help_catalog_follows_remap_and_behavior() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
-        std::fs::write(
-            &user,
-            "return { tui = { keys = { play_pause = \"w\" }, behavior = { volume_step = 10 } } }",
-        )?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
-        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
-        let labels = km
-            .help()
-            .iter()
-            .map(|e| e.label().to_owned())
-            .collect::<Vec<String>>();
-        assert!(
-            labels.contains(&"Volume ±10".to_owned()),
-            "步长实值进 label"
-        );
-        let play = km
-            .help()
-            .iter()
-            .find(|e| e.label() == "Play / Pause")
-            .ok_or_else(|| color_eyre::eyre::eyre!("目录缺 Play / Pause"))?;
-        let chords = play
-            .chords()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<String>>();
-        assert_eq!(chords, ["w"], "重映射后目录键跟随");
-        Ok(())
-    }
-
     /// help 目录的 Scripts 组:配置 keys.script 与 daemon bind 追加都进目录,
     /// label = 注册名、排在内建组之后。
     #[test]
@@ -570,50 +464,6 @@ mod tests {
         // Scripts 组恒在目录尾部。
         let last_group = km.help().last().map(|e| *e.group());
         assert_eq!(last_group, Some(HelpGroup::Scripts));
-        Ok(())
-    }
-
-    /// help 目录全量快照:分组 · label · 键序一次可审(default.lua 落地产物)。
-    #[test]
-    fn help_catalog_snapshot() -> color_eyre::Result<()> {
-        let km = default_keymap()?;
-        let lines = km
-            .help()
-            .iter()
-            .map(|e| {
-                let chords = e
-                    .chords()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>();
-                format!("{:?} · {} · {}", e.group(), e.label(), chords.join(" "))
-            })
-            .collect::<Vec<String>>();
-        crate::test_support::assert_snap!(
-            "help 目录(组 · label · 显示优先序键;default.lua keys/behavior 落地产物)",
-            lines.join("\n")
-        );
-        Ok(())
-    }
-
-    /// keys 重映射生效:play_pause 改绑 "w" 后,space 不再命中、w 命中(数组整体替换)。
-    #[test]
-    fn key_remap_takes_effect() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
-        std::fs::write(&user, "return { tui = { keys = { play_pause = \"w\" } } }")?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
-        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
-        assert_eq!(
-            km.lookup(KeyChord::parse("w")?),
-            Some(Action::TogglePlayPause)
-        );
-        assert_eq!(
-            km.lookup(KeyChord::parse("<Space>")?),
-            None,
-            "旧键被整体替换"
-        );
         Ok(())
     }
 }

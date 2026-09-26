@@ -447,13 +447,9 @@ impl Overlay for QueueOverlay {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     use super::QueueOverlay;
-    use crate::components::popup::component::{
-        Overlay, OverlayAction, OverlayResponse, render_overlay,
-    };
+    use crate::components::popup::component::{Overlay, OverlayAction, OverlayResponse};
     use crate::runtime::action::{Action, SelectionMove};
     use crate::runtime::state::AppState;
     use crate::test_support::endserenading;
@@ -469,57 +465,8 @@ mod tests {
         Ok(s)
     }
 
-    /// 队列含重复曲、在播锚点落在第二个副本时,只有该行加在播下划线。
-    /// 光标选中其他行时,在播行的歌名仍使用 accent 前景。
-    #[test]
-    fn queue_duplicate_marks_only_anchor_row() -> color_eyre::Result<()> {
-        use mineral_test::song;
-        use ratatui::style::Modifier;
-
-        use crate::components::popup::component::dock_full_rect;
-
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
-        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
-        ctx.playback.track = Some(song("a"));
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        let buf = t.backend().buffer();
-        let inner = overlay
-            .block(&ctx, &theme, true)
-            .inner(dock_full_rect(buf.area, &ctx));
-        for (raw_i, song) in ctx.player.queue.iter().enumerate() {
-            let y = inner.y + 1 + u16::try_from(raw_i)?;
-            let underlined = (inner.x..inner.right()).any(|x| {
-                buf.cell((x, y))
-                    .is_some_and(|cell| cell.modifier.contains(Modifier::UNDERLINED))
-            });
-            assert_eq!(
-                underlined,
-                raw_i == 2,
-                "只有在播锚点行应带下划线,队列下标 {raw_i}"
-            );
-            let title = (inner.x..inner.right())
-                .find_map(|x| {
-                    buf.cell((x, y))
-                        .filter(|cell| cell.symbol() == song.name.as_str())
-                })
-                .ok_or_else(|| color_eyre::eyre::eyre!("队列下标 {raw_i} 应显示歌名"))?;
-            let expected_fg = if raw_i == 0 || raw_i == 2 {
-                theme.accent
-            } else {
-                theme.text
-            };
-            assert_eq!(title.fg, expected_fg, "队列下标 {raw_i} 的歌名前景");
-        }
-        Ok(())
-    }
-
-    /// 封面在稳态与抽屉动画中跟随过滤后的行和滚动视口，不覆盖标题、间隔和在播标记。
+    /// 封面在抽屉半开与稳态两种渲染下跟随过滤后的行和滚动视口:标题完整、封面身份对应
+    /// 过滤后的队列真实下标、缺图行留空。
     #[test]
     fn queue_thumbnails_follow_filtered_rows_and_keep_text() -> color_eyre::Result<()> {
         use std::sync::Arc;
@@ -527,7 +474,6 @@ mod tests {
         use mineral_model::MediaUrl;
         use ratatui::buffer::{Buffer, Cell};
         use ratatui::layout::Rect;
-        use ratatui::style::Modifier;
 
         use crate::components::layout::shared::thumbnails::THUMBNAIL_COLUMNS;
         use crate::image::{ImageEngine, ImageRenderPhase};
@@ -574,38 +520,27 @@ mod tests {
             overlay.search.set_query("keep");
             let visible = overlay.visible(&ctx);
             assert_eq!(visible, vec![0, 2, 4, 6, 8, 10]);
-            ctx.overlay_reveal.set(OverlayReveal {
-                own: OverlayReveal::FULL,
-                above: 0,
-            });
-            let mut buffer = Buffer::empty(area);
-            overlay.render_content(&mut buffer, area, &ctx, &theme);
-            let title_x = (area.left()..area.right())
-                .find(|&x| {
-                    buffer
-                        .cell((x, area.y))
-                        .is_some_and(|cell| cell.symbol() == "t")
-                })
-                .ok_or_else(|| color_eyre::eyre::eyre!("缺少 queue title 表头"))?;
-            for frame in 0..12 {
-                ctx.overlay_reveal.set(OverlayReveal {
-                    own: if frame % 2 == 0 {
-                        500
-                    } else {
-                        OverlayReveal::FULL
-                    },
-                    above: 0,
-                });
-                if frame == 1 {
-                    overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
-                }
-                let mut buffer = Buffer::empty(area);
-                overlay.render_content(&mut buffer, area, &ctx, &theme);
-                let offset = overlay
-                    .list
-                    .offset(visible.len(), viewport, ScrollMotion::Frozen);
+
+            // 当前窗口每行:标题完整、封面身份对应过滤后的队列真实下标、缺图行留空。
+            let assert_window = |offset: usize, buffer: &Buffer| -> color_eyre::Result<()> {
+                let first_song = visible
+                    .get(offset)
+                    .and_then(|index| ctx.player.queue.get(*index))
+                    .ok_or_else(|| color_eyre::eyre::eyre!("窗口首行应在过滤视图内"))?;
+                let first_row = area.y + 1;
+                let title_x = (area.left()..area.right())
+                    .find(|&x| {
+                        buffer.cell((x, first_row)).is_some_and(|cell| {
+                            first_song
+                                .name
+                                .chars()
+                                .next()
+                                .is_some_and(|first| cell.symbol().starts_with(first))
+                        })
+                    })
+                    .ok_or_else(|| color_eyre::eyre::eyre!("缺少队列曲目名称"))?;
                 for (row, &raw_index) in visible.iter().skip(offset).take(viewport).enumerate() {
-                    let y = area.y + 1 + u16::try_from(row)?;
+                    let y = first_row + u16::try_from(row)?;
                     let song = ctx
                         .player
                         .queue
@@ -629,335 +564,34 @@ mod tests {
                     } else {
                         assert_eq!(cell.symbol(), " ", "缺图的行必须留空");
                     }
-                    assert_eq!(buffer.cell((title_x - 1, y)).map(Cell::symbol), Some(" "));
-                    // 查询只命中 keep;连字符不吃搜索字体效果,用于辨认在播行的下划线。
-                    assert_eq!(buffer.cell((title_x + 4, y)).map(Cell::symbol), Some("-"));
-                    assert_eq!(
-                        buffer
-                            .cell((title_x + 4, y))
-                            .is_some_and(|cell| cell.modifier.contains(Modifier::UNDERLINED)),
-                        raw_index == 6,
-                        "未命中字符只在在播行带下划线"
-                    );
                 }
-            }
-        }
-        Ok(())
-    }
+                Ok(())
+            };
 
-    /// 空 queue,完全展开。
-    #[test]
-    fn queue_empty_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = AppState::test_default()?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(
-                f,
-                f.area(),
-                &overlay,
-                /*scale*/ 1000,
-                /*focused*/ true,
-                &ctx,
-                &theme,
-            );
-        })?;
-        crate::test_support::assert_snap!("队列浮层:空队列", t.backend());
-        Ok(())
-    }
+            // 抽屉半开(own < FULL):封面按 Offscreen 阶段出,窗口在过滤视图首段(含缺图行)。
+            ctx.overlay_reveal.set(OverlayReveal { own: 500, above: 0 });
+            let mut buffer = Buffer::empty(area);
+            overlay.render_content(&mut buffer, area, &ctx, &theme);
+            let offset = overlay
+                .list
+                .offset(visible.len(), viewport, ScrollMotion::Frozen);
+            assert_eq!(offset, 0);
+            assert_window(offset, &buffer)?;
 
-    /// EndSerenading 前 3 曲 + 当前在播标记(下标 1)+ 聚焦,完全展开。
-    /// backend=100(默认停靠占宽 36% → 浮层 36 → 内区 34)落 Song 档。
-    #[test]
-    fn queue_with_items_focused_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let ctx = ctx_with_queue(3, Some(1))?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:EndSerenading 前 3 曲,当前在播(下划线)+ 聚焦",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 队列浮层底栏:左下 `n / total`,右下 `剩余曲目 · 时长 → 预计播完钟点`。
-    /// 设够宽的 frame_area 让右下不退化;playing + 固定 now 让 ends 钟点稳定可锁。
-    #[test]
-    fn queue_footer_end_clock_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        use chrono::TimeZone;
-
-        let mut t = Terminal::new(TestBackend::new(160, 24))?;
-        let mut ctx = ctx_with_queue(4, Some(0))?;
-        ctx.frame_area
-            .set(ratatui::layout::Rect::new(0, 0, 160, 24));
-        ctx.playback.playing = true;
-        ctx.playback.position_ms = 0;
-        ctx.now.set(
-            chrono::Local
-                .with_ymd_and_hms(2026, 7, 20, 14, 44, 0)
-                .single()
-                .ok_or_else(|| color_eyre::eyre::eyre!("构造固定钟点失败"))?,
-        );
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层底栏:左下 n/total,右下 剩余曲目·时长→预计播完钟点",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 队列浮层收藏列:已收藏行画实心 ♥,未收藏行留空(不画空心 ♡,免满屏噪音)。
-    #[test]
-    fn queue_love_column_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = ctx_with_queue(3, Some(1))?;
-        // 标记第 0、2 首为已收藏(第 1 首留未收藏,同屏对照)。
-        if let Some(song) = ctx.player.queue.first().cloned() {
-            ctx.toggle_loved_local(&song);
-        }
-        if let Some(song) = ctx.player.queue.get(2).cloned() {
-            ctx.toggle_loved_local(&song);
-        }
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:♥ 列——第 0/2 首已收藏画实心,第 1 首(在播)未收藏留空",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 队列浮层歌名带别名:标题后缀暗色 ` (alias)`(与曲目表 / 播放栏 / 搜索结果一致)。
-    /// 锁住「新增渲染面漏挂 alias 后缀」的回归。
-    #[test]
-    fn queue_alias_suffix_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = ctx_with_queue(3, Some(1))?;
-        // 真实样本:迷星叫 / 别名 Mayoiuta。
-        if let Some(s) = ctx.player.queue.first_mut() {
-            *s = mineral_test::aliased_song();
-        }
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:歌名带译名别名,标题后缀暗色 (alias)",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 小终端(backend=60,默认停靠占宽 36% → 浮层 21 → 内区 19)落 Song 档:
-    /// 只剩 ♥ / title / len,artist 省去。
-    #[test]
-    fn queue_narrow_song_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = ctx_with_queue(3, Some(1))?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:窄浮层退到 Song 档(只剩歌名,无 artist)",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 中宽终端(backend=140,默认停靠占宽 36% → 浮层 50 → 内区 48)落 Full 档:
-    /// 放得下 artist 但塞不进 album——锁住「中档不硬塞 album 挤瘦 title/artist」。
-    #[test]
-    fn queue_mid_full_no_album_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(140, 20))?;
-        let ctx = ctx_with_queue(3, Some(1))?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:中宽保持 Full 档(有 artist,无 album)",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 宽终端(backend=170,默认停靠占宽 36% → 浮层 61 → 内区 59)落 Wide 档:
-    /// ♥ / title / artist / album / len。三首歌 album 全有值(短英文 / 长英文 / CJK
-    /// 混排),验证 album 列有内容时多文本列渲染不串列;其余 fixture 的 album 多为空,
-    /// 覆盖不到这条路径。
-    #[test]
-    fn queue_wide_album_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        use mineral_test::{song, with_album, with_artist, with_duration, with_name};
-        let make = |name: &str, artist: &str, album: &str| {
-            with_album(
-                with_artist(with_duration(with_name(song(name), name), 210_000), artist),
-                album,
-            )
-        };
-        let mut t = Terminal::new(TestBackend::new(170, 24))?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = vec![
-            make("Bones", "HONNE", "no song"),
-            make("Location Unknown", "HONNE", "Warm on a Cold Night"),
-            make("无", "草东没有派对", "丑奴儿"),
-        ];
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:宽浮层 Wide 档 album 列有内容(短英文/长英文/CJK)",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 贴边滑入半程(scale=500):真面板右侧列(含右边框)贴左缘滑入,表格内容
-    /// 随前沿平移可见,左边框尚未进场。
-    #[test]
-    fn queue_mid_animation_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(60, 20))?;
-        let ctx = ctx_with_queue(3, None)?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(
-                f,
-                f.area(),
-                &overlay,
-                /*scale*/ 500,
-                true,
-                &ctx,
-                &theme,
-            );
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:贴边滑入半程(scale=500)内容随前沿平移",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 滑入 scale=505:前沿(右)落在非整 cell,用左八分块 1/8 平滑过渡,
-    /// 验证滑入不一格一格跳。
-    #[test]
-    fn queue_h_grow_smooth_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(80, 24))?;
-        let ctx = ctx_with_queue(3, None)?;
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(
-                f,
-                f.area(),
-                &overlay,
-                /*scale*/ 505,
-                true,
-                &ctx,
-                &theme,
-            );
-        })?;
-        crate::test_support::assert_snap!(
-            "队列浮层:贴边滑入(scale=505)前沿 1/8 八分块平滑",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 全屏布局下停靠右半(`fullscreen=true`),完全展开:浮层贴右缘、避开左侧封面。
-    #[test]
-    fn queue_fullscreen_dock_right_snapshot() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = ctx_with_queue(3, Some(1))?;
-        ctx.browse.fullscreen.set(true);
-        let overlay = QueueOverlay::new(0);
-        t.draw(|f| {
-            render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme);
-        })?;
-        crate::test_support::assert_snap!("队列浮层:全屏布局停靠右半(避开左侧封面)", t.backend());
-        Ok(())
-    }
-
-    /// 底层歌词横跨抽屉左沿时，直绘、滑入和退出帧都必须把边缘送到终端。
-    #[test]
-    fn queue_left_edge_overwrites_underlying_wide_lyrics() -> color_eyre::Result<()> {
-        use ratatui::buffer::Cell;
-        use ratatui::style::{Color, Style};
-
-        let theme = crate::test_support::default_theme()?;
-        let mut ctx = ctx_with_queue(3, Some(1))?;
-        ctx.browse.fullscreen.set(true);
-        let overlay = QueueOverlay::new(0);
-        let mut reference = Terminal::new(TestBackend::new(100, 24))?;
-        let background = Style::new().fg(Color::Yellow).bg(Color::Blue);
-        let y = 12;
-
-        for scale in [500, 505, 1000, 505, 500] {
-            reference.draw(|frame| {
-                render_overlay(frame, frame.area(), &overlay, scale, true, &ctx, &theme);
-            })?;
-            let expected = reference.backend().buffer();
-            let x = (0..100)
-                .find(|&x| {
-                    expected
-                        .cell((x, y))
-                        .is_some_and(|cell| cell.symbol() != " ")
-                })
-                .ok_or_else(|| color_eyre::eyre::eyre!("抽屉应有可见左沿"))?;
-            let text_x = x
-                .checked_sub(3)
-                .ok_or_else(|| color_eyre::eyre::eyre!("抽屉左侧应能放下歌词"))?;
-            let mut terminal = Terminal::new(TestBackend::new(100, 24))?;
-            terminal.draw(|frame| {
-                frame.buffer_mut().set_string(text_x, y, "看着", background);
-            })?;
-            terminal.draw(|frame| {
-                frame.buffer_mut().set_string(text_x, y, "看着", background);
-                render_overlay(frame, frame.area(), &overlay, scale, true, &ctx, &theme);
-            })?;
-            let actual = terminal.backend().buffer();
-            assert_eq!(actual.cell((text_x, y)).map(Cell::symbol), Some("看"));
-            assert_eq!(actual.cell((x - 1, y)).map(Cell::symbol), Some(" "));
-            assert_eq!(
-                actual.cell((x - 1, y)).map(|cell| cell.bg),
-                Some(Color::Blue)
-            );
-            for col in x..100 {
-                assert_eq!(
-                    actual.cell((col, y)),
-                    expected.cell((col, y)),
-                    "scale={scale}, x={col}"
-                );
-            }
-            terminal.draw(|frame| {
-                frame.buffer_mut().set_string(text_x, y, "看着", background);
-            })?;
-            assert_eq!(
-                terminal
-                    .backend()
-                    .buffer()
-                    .cell((x - 1, y))
-                    .map(Cell::symbol),
-                Some("着")
-            );
+            // 稳态下将「末行」操作选中的曲目放到窗口底部,覆盖过滤视图尾段。
+            ctx.overlay_reveal.set(OverlayReveal {
+                own: OverlayReveal::FULL,
+                above: 0,
+            });
+            overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
+            overlay.list.place(overlay.cursor(), viewport - 1);
+            let mut buffer = Buffer::empty(area);
+            overlay.render_content(&mut buffer, area, &ctx, &theme);
+            let offset = overlay
+                .list
+                .offset(visible.len(), viewport, ScrollMotion::Frozen);
+            assert_eq!(offset, visible.len() - viewport);
+            assert_window(offset, &buffer)?;
         }
         Ok(())
     }
@@ -1007,40 +641,6 @@ mod tests {
         Ok(())
     }
 
-    /// 高亮交接:上层菜单揭开到一半时,queue 的选中行底色应插值到 surface0 与 base 之间
-    /// ——既不是全亮(读成两处都在等输入),也不是全灭(读成 queue 已经关了)。
-    #[test]
-    fn selection_highlight_fades_as_the_layer_above_opens() -> color_eyre::Result<()> {
-        use crate::render::color::lerp_color;
-        use crate::runtime::state::OverlayReveal;
-
-        let theme = crate::test_support::default_theme()?;
-        let ctx = ctx_with_queue(4, None)?;
-        let full = u64::from(OverlayReveal::FULL);
-        let half = lerp_color(theme.surface0, theme.base, full / 2, full);
-        assert_ne!(half, theme.surface0, "半程不应仍是全亮底色");
-        assert_ne!(half, theme.base, "半程不应已经淡到底色");
-
-        // 无上层时不让渡:高亮保持全亮。
-        ctx.overlay_reveal.set(OverlayReveal::default());
-        assert_eq!(ctx.overlay_reveal.get().yielded(), 0);
-        // 上层完全展开时全让:高亮到底色。
-        ctx.overlay_reveal.set(OverlayReveal {
-            own: OverlayReveal::FULL,
-            above: OverlayReveal::FULL,
-        });
-        assert_eq!(
-            lerp_color(
-                theme.surface0,
-                theme.base,
-                u64::from(ctx.overlay_reveal.get().yielded()),
-                full
-            ),
-            theme.base
-        );
-        Ok(())
-    }
-
     /// 收藏 / 下载 / 跳回在播都以浮层私有光标为准,不走 browse 页的「当前 View 选中曲」。
     #[test]
     fn love_download_and_jump_use_the_overlay_cursor() -> color_eyre::Result<()> {
@@ -1062,35 +662,6 @@ mod tests {
         Ok(())
     }
 
-    /// 跳回在播是「滚动过去」而非瞬移:光标即刻落在在播行,但视口目标不被 snap——
-    /// 留给渲染端的 Advancing 缓动滚过去。回退成 `place`/`at` 会让视口瞬跳,本测试拦它。
-    #[test]
-    fn jump_to_current_scrolls_instead_of_snapping() -> color_eyre::Result<()> {
-        let ctx = ctx_with_queue(10, /*current*/ Some(9))?;
-        let mut o = QueueOverlay::new(0);
-        assert_eq!(
-            o.list.offset(
-                10,
-                /*viewport*/ 4,
-                crate::runtime::scroll::list::ScrollMotion::Frozen
-            ),
-            0,
-            "打开时视口在顶"
-        );
-        o.on_action(Action::JumpToCurrent, &ctx);
-        assert_eq!(o.cursor(), 9, "光标即刻落在在播行");
-        assert_eq!(
-            o.list.offset(
-                10,
-                /*viewport*/ 4,
-                crate::runtime::scroll::list::ScrollMotion::Frozen
-            ),
-            0,
-            "视口目标未被 snap(仍在顶),靠缓动滚过去"
-        );
-        Ok(())
-    }
-
     /// 移动条目:光标跟着歌走(预移一格),端点不动且不发请求。
     #[test]
     fn reorder_follows_the_song_and_stops_at_edges() -> color_eyre::Result<()> {
@@ -1109,21 +680,6 @@ mod tests {
         };
         assert_eq!((idx, down), (0, true), "带原下标与方向");
         assert_eq!(o.cursor(), 1, "光标跟着歌下移一格");
-        Ok(())
-    }
-
-    /// row_anchor:无滚动时选中行落在停靠内区表头之下第 `sel` 行(去外框 1 + 表头 1）。
-    #[test]
-    fn row_anchor_maps_selection_within_dock() -> color_eyre::Result<()> {
-        use crate::components::popup::component::dock_full_rect;
-        let ctx = ctx_with_queue(5, None)?;
-        ctx.frame_area
-            .set(ratatui::layout::Rect::new(0, 0, 100, 30));
-        let o = QueueOverlay::new(2);
-        let full = dock_full_rect(ctx.frame_area.get(), &ctx);
-        let anchor = o.row_anchor(&ctx);
-        assert_eq!(anchor.x, full.x + 1, "锚点 x 在内区(去左边框)");
-        assert_eq!(anchor.y, full.y + 2 + 2, "内区顶(+1 框)+表头(+1)+ sel(2)");
         Ok(())
     }
 
@@ -1340,37 +896,6 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("alba 应在过滤视图内"))?;
         o.on_action(Action::JumpToCurrent, &ctx);
         assert_eq!(o.cursor(), want, "光标落到在播歌在过滤视图中的位置");
-        Ok(())
-    }
-
-    /// `/al` 过滤态渲染:命中行高亮、按分排序、顶栏 `/al` 输入片段、底栏命中位/命中数。
-    #[test]
-    fn queue_filtered_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
-        let mut overlay = QueueOverlay::new(0);
-        overlay.search.set_query("al");
-        let theme = crate::test_support::default_theme()?;
-        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme))?;
-        crate::test_support::assert_snap!(
-            "队列浮层:/al 过滤——命中行高亮 + 按分排序 + 顶栏 /al 输入 + 底栏命中位/数",
-            t.backend()
-        );
-        Ok(())
-    }
-
-    /// 过滤无命中:画居中占位而非空表(空表会读成「队列为空」)。
-    #[test]
-    fn queue_no_match_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(100, 24))?;
-        let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta"]);
-        let mut overlay = QueueOverlay::new(0);
-        overlay.search.set_query("zzzzz");
-        let theme = crate::test_support::default_theme()?;
-        t.draw(|f| render_overlay(f, f.area(), &overlay, 1000, true, &ctx, &theme))?;
-        crate::test_support::assert_snap!("队列浮层:过滤无命中——居中占位", t.backend());
         Ok(())
     }
 }

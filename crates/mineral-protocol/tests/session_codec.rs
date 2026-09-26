@@ -165,6 +165,52 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 任务回包随会话更新传输，保留来源、实体身份和载荷。
+#[tokio::test]
+async fn task_events_round_trip() -> color_eyre::Result<()> {
+    use mineral_model::{PlaylistId, SourceKind};
+    use mineral_task::TaskEvent;
+
+    let cases = [
+        TaskEvent::PlaylistsFetched {
+            source: SourceKind::NETEASE,
+            playlists: vec![],
+        },
+        TaskEvent::LikedSongIdsFetched {
+            source: SourceKind::NETEASE,
+            ids: [SongId::new(SourceKind::NETEASE, "liked")]
+                .into_iter()
+                .collect(),
+        },
+        TaskEvent::LocalPlayCountFetched {
+            song_id: SongId::new(SourceKind::NETEASE, "s"),
+            count: Some(7),
+        },
+        TaskEvent::PlaylistDetailFetched {
+            id: PlaylistId::new(SourceKind::NETEASE, "p"),
+            load: mineral_channel_core::PlaylistLoad::Complete,
+            detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
+                mineral_model::Playlist::builder()
+                    .id(PlaylistId::new(SourceKind::NETEASE, "p"))
+                    .name("fixture".to_owned())
+                    .build(),
+            )),
+        },
+    ];
+    for event in cases {
+        let message = SessionMessage::Update(UpdateEnvelope {
+            subscription: SubscriptionId::new(7),
+            version: 1,
+            parts: 1,
+            index: 0,
+            payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::Task(Box::new(event)))),
+        });
+        json_round_trips(&message)?;
+        framed_round_trips(message).await?;
+    }
+    Ok(())
+}
+
 /// 失败结论与查询载荷在两种编码下都不丢字段。
 #[tokio::test]
 async fn operation_results_round_trip() -> color_eyre::Result<()> {
@@ -193,15 +239,4 @@ async fn operation_results_round_trip() -> color_eyre::Result<()> {
         framed_round_trips(result).await?;
     }
     Ok(())
-}
-
-/// 请求 id / 订阅 id 的裸值语义(会话内单调分配,不做跨会话保证)。
-#[test]
-fn identifiers_expose_bare_values() {
-    assert_eq!(RequestId::new(5).value(), 5);
-    assert_eq!(SubscriptionId::new(9).value(), 9);
-    assert_eq!(
-        SongId::new(mineral_model::SourceKind::NETEASE, "1").as_str(),
-        "1"
-    );
 }

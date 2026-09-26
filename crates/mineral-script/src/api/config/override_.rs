@@ -182,18 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn table_form_single_leaf() -> color_eyre::Result<()> {
-        let (lua, mut cmd_rx) = vm_with_commands()?;
-        lua.load(r#"mineral.config.override({ tui = { waveform = { enabled = true } } })"#)
-            .exec()?;
-        assert_eq!(
-            sole_override_ops(&mut cmd_rx)?,
-            vec![op("tui.waveform.enabled", BusValue::Bool(true))]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn table_form_flattens_nested_patch_to_scalar_leaves() -> color_eyre::Result<()> {
         let (lua, mut cmd_rx) = vm_with_commands()?;
         lua.load(

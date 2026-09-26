@@ -304,13 +304,6 @@ async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Response variant 的 round-trip:Ok。
-#[tokio::test]
-async fn round_trip_responses() -> color_eyre::Result<()> {
-    resp_round_trips(Response::Ok).await?;
-    Ok(())
-}
-
 /// 双重段齐发(Shuffle + original_queue + current)的 PlayerSync 完整往返。
 #[tokio::test]
 async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {

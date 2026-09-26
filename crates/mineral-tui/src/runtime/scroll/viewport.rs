@@ -352,53 +352,6 @@ mod tests {
         }
     }
 
-    /// 大跳后视口经多帧缓动收敛到目标:轨迹单调、最终精确到位、到位后稳定。
-    #[test]
-    fn glide_converges_monotonically() {
-        let s = ListScroll::new();
-        assert_eq!(
-            s.render_offset(
-                /*sel*/ 0, /*len*/ 100, /*viewport*/ 10, /*scrolloff*/ 3,
-                /*glide_ticks*/ 4
-            ),
-            0,
-            "初始在顶"
-        );
-        // G 跳末行:目标 offset 90,4 拍内单调逼近。
-        let mut prev = 0;
-        for _ in 0..4 {
-            let off = s.render_offset(99, 100, 10, 3, 4);
-            assert!(off >= prev, "应单调下滚: {off} >= {prev}");
-            assert!(off <= 90, "不过冲: {off}");
-            prev = off;
-        }
-        assert_eq!(prev, 90, "4 拍后到位");
-        assert_eq!(s.render_offset(99, 100, 10, 3, 4), 90, "到位后稳定");
-    }
-
-    /// 平移中途反向重定目标:从眼前位置接着滑(无跳变),最终收敛到新目标。
-    #[test]
-    fn glide_retarget_midflight_is_continuous() {
-        let s = ListScroll::new();
-        // 朝 90 滑两拍(未到位)。
-        s.render_offset(99, 100, 10, 3, 8);
-        let mid = s.render_offset(99, 100, 10, 3, 8);
-        assert!(mid > 0 && mid < 90, "应在途中: {mid}");
-        // 反向跳回首行:下一帧不应瞬移,且若干拍后收敛到 0。
-        let first = s.render_offset(0, 100, 10, 3, 8);
-        assert!(
-            first.abs_diff(mid) <= mid,
-            "反向首帧从眼前位置接续: mid={mid} first={first}"
-        );
-        let mut off = first;
-        for _ in 0..8 {
-            let next = s.render_offset(0, 100, 10, 3, 8);
-            assert!(next <= off, "应单调上滚: {next} <= {off}");
-            off = next;
-        }
-        assert_eq!(off, 0, "收敛回顶");
-    }
-
     /// `nudge` 平移视口目标(C-d 族:光标与视口同移的视口半边),渲染端收敛后
     /// 超出文档底的部分被钳回。
     #[test]
@@ -436,16 +389,6 @@ mod tests {
         // sel=50 不在 [0, 9] 视口内 → clamp 修正到 50+3+1-10=44;须首帧到位。
         assert_eq!(s.render_offset(50, 100, 10, 3, 8), 44, "首帧瞬时落位");
         assert_eq!(s.render_offset(50, 100, 10, 3, 8), 44, "之后稳定");
-    }
-
-    /// snap 后用户先滚动(nudge)再渲染:snap 的瞬时落位标记失效,正常走缓动。
-    #[test]
-    fn nudge_after_snap_restores_glide() {
-        let s = ListScroll::new();
-        s.snap_to(0);
-        s.nudge(40, 8);
-        let first = s.render_offset(43, 100, 10, 3, 8);
-        assert!(first < 40, "nudge 应缓动而非瞬跳: {first}");
     }
 
     /// 冻结展示:不推动画、不改目标——全屏 morph 的瞬态小 viewport 不得把

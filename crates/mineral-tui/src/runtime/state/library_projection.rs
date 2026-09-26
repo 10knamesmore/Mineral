@@ -364,21 +364,6 @@ mod tests {
         Ok(())
     }
 
-    /// `match_for` 命中拼音/首字母时,hits 反向映射回原文 Han 字符下标。
-    #[test]
-    fn match_for_returns_original_indices() -> color_eyre::Result<()> {
-        let mut s = AppState::test_default()?;
-        s.browse.search.playlists.set_query("cry");
-        let m = s
-            .browse
-            .search
-            .playlists
-            .match_for("春日影")
-            .ok_or_else(|| color_eyre::eyre::eyre!("cry 应命中春日影"))?;
-        assert_eq!(m.hits.as_slice(), &[0u32, 1, 2]);
-        Ok(())
-    }
-
     /// 空 query 时 `match_for` 直接返回 `None`,fast path。
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {

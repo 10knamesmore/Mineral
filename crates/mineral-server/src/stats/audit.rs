@@ -7,12 +7,12 @@
 //! - **事件层**:[`BehaviorEvent`] / [`SystemEvent`]——加变体(= 建新事件类型)不补发射
 //!   点账本 → 编译错误 → 逼开发者声明**谁发它**,防「有表有变体但无发出站点」的恒零列。
 //!
-//! 本模块运行期从不被调用——价值全在编译期穷尽性 + 下方对账测试。即便无人调用,rustc
+//! 本模块运行期从不被调用——价值全在编译期穷尽性。即便无人调用,rustc
 //! 仍完整类型检查函数体,故防线不因 `dead_code` 抑制而失效。防线只强制**决策存在**;
 //! 「标了 [`TrackingDecision::Recorded`] 但挂接点忘调 recorder」与「不加任何变体的全新
 //! 代码路径忘发既有事件」编译期兜不住,由触发链集成测试兜底。
 
-// 编译期防线 + 测试对账,非运行期调用;穷尽性即价值,不因未调用而失效。
+// 编译期防线,非运行期调用;穷尽性即价值,不因未调用而失效。
 #![allow(dead_code)]
 
 use mineral_protocol::Request;
@@ -22,7 +22,7 @@ use mineral_task::{ChannelFetchKind, PlaylistWriteOp};
 
 /// 一个行为入口变体的埋点归属决策。
 enum TrackingDecision {
-    /// 已埋,落到哪张事件表(表名供对账测试核对真实存在)。
+    /// 已埋,落到哪张事件表。
     Recorded(&'static str),
 
     /// 明确不是事件(轮询读 / 渲染流 / 纯控制流),附不记的理由。
@@ -183,77 +183,5 @@ fn audit_system_emitters(event: &SystemEvent) -> &'static str {
         SystemEvent::CacheEviction { .. } => "media_cache 淘汰点",
         SystemEvent::ScriptLifecycle { .. } => "script_reload + script_bridge 生命周期回调",
         SystemEvent::ConfigReload => "config_host 重载成功处",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// 真实事件表 + plays 事实表(与 `mineral-stats` migrations 建的事件表 + `plays`
-    /// 同源;mineral-stats 侧有测试把这些表与 migrations 对账,此处复制其名做本 crate 侧
-    /// 的表名核对)。
-    const REAL_TABLES: &[&str] = &[
-        "plays",
-        "searches",
-        "seeks",
-        "pauses",
-        "volume_changes",
-        "mode_changes",
-        "love_changes",
-        "queue_ops",
-        "playlist_ops",
-        "fetches",
-        "downloads",
-        "copy_renders",
-        "action_invocations",
-        "config_overrides",
-        "store_writes",
-        "spawns",
-        "bus_messages",
-        "fullscreen_changes",
-        "connection_rejects",
-        "app_lifecycle",
-        "stream_resolutions",
-        "hook_fires",
-        "gapless_boundaries",
-        "prefetches",
-        "cache_harvests",
-        "cache_evictions",
-        "script_lifecycle",
-        "config_reloads",
-    ];
-
-    /// audit_* 四函数里出现过的每个 `Recorded` 表名。**新增 `Recorded` 归属须同步补进来**,
-    /// 由下方测试兜住「Recorded 了张不存在的表」(拼错 / 漂移)。
-    const AUDIT_TABLES: &[&str] = &[
-        "plays",
-        "pauses",
-        "seeks",
-        "volume_changes",
-        "mode_changes",
-        "love_changes",
-        "queue_ops",
-        "downloads",
-        "store_writes",
-        "config_overrides",
-        "fullscreen_changes",
-        "app_lifecycle",
-        "action_invocations",
-        "copy_renders",
-        "spawns",
-        "searches",
-        "stream_resolutions",
-        "fetches",
-        "playlist_ops",
-    ];
-
-    /// audit 声称记入的每张表都必须存在于 migrations,防止表名拼错或迁移漂移。
-    #[test]
-    fn audit_recorded_tables_exist_in_migrations() {
-        for table in AUDIT_TABLES {
-            assert!(
-                REAL_TABLES.contains(table),
-                "audit Recorded 表 {table} 不在真实事件表集合(拼错或迁移漂移?)"
-            );
-        }
     }
 }

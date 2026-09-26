@@ -393,14 +393,6 @@ mod tests {
     use sea_orm::sea_query::{Expr, ExprTrait};
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
-    #[tokio::test]
-    async fn open_creates_db_and_schema() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = ServerStore::open(&dir.path().join("t.db")).await?;
-        assert!(p.pool().is_some());
-        Ok(())
-    }
-
     #[test]
     fn disabled_has_no_pool() {
         assert!(ServerStore::disabled().pool().is_none());

@@ -42,7 +42,7 @@ pub(crate) fn cursor_spans(before: String, after: &str, base: Style) -> Vec<Span
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::{Modifier, Style};
+    use ratatui::style::Style;
     use ratatui::text::Span;
 
     use super::cursor_spans;
@@ -52,38 +52,22 @@ mod tests {
         spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
-    /// 光标落词中:after 首字符单独成段被反色罩住,前后两段保持 base 样式。
+    /// 光标落词中:after 首字符单独成段,前后两段保持原文。
     #[test]
-    fn cursor_covers_first_after_char() -> color_eyre::Result<()> {
+    fn cursor_covers_first_after_char() {
         let spans = cursor_spans("ab".to_owned(), "cd", Style::new());
         assert_eq!(
             contents(&spans),
             ["ab", "c", "d"],
             "切成 before|光标字符|余下"
         );
-        let cursor = spans
-            .get(1)
-            .ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
-        assert!(
-            cursor.style.add_modifier.contains(Modifier::REVERSED),
-            "光标段反色"
-        );
-        Ok(())
     }
 
-    /// 光标落词尾:无字可罩,反色一个空格占位。
+    /// 光标落词尾:无字可罩,补一个空格占位。
     #[test]
-    fn cursor_at_end_covers_space() -> color_eyre::Result<()> {
+    fn cursor_at_end_covers_space() {
         let spans = cursor_spans("abc".to_owned(), "", Style::new());
         assert_eq!(contents(&spans), ["abc", " "], "词尾光标罩空格");
-        let cursor = spans
-            .get(1)
-            .ok_or_else(|| color_eyre::eyre::eyre!("缺光标段"))?;
-        assert!(
-            cursor.style.add_modifier.contains(Modifier::REVERSED),
-            "空格光标段反色"
-        );
-        Ok(())
     }
 
     /// 光标落词首:before 为空不占段,首字符直接成光标段。

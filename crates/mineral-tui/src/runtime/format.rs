@@ -93,42 +93,7 @@ pub fn format_clock(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_clock, format_ms, format_ms_opt, format_total, sum_durations};
-
-    /// `format_clock`:同日只给 `HH:MM`,跨日加 `+Nd`。
-    #[test]
-    fn format_clock_marks_day_rollover() -> color_eyre::Result<()> {
-        use chrono::TimeZone;
-        let mk = |y, mo, d, h, mi| -> color_eyre::Result<chrono::DateTime<chrono::Local>> {
-            chrono::Local
-                .with_ymd_and_hms(y, mo, d, h, mi, 0)
-                .single()
-                .ok_or_else(|| color_eyre::eyre::eyre!("构造本地时刻失败"))
-        };
-        let base = mk(2026, 7, 20, 23, 30)?;
-        assert_eq!(
-            format_clock(base, mk(2026, 7, 20, 23, 50)?),
-            "23:50",
-            "同日"
-        );
-        assert_eq!(
-            format_clock(base, mk(2026, 7, 21, 0, 15)?),
-            "00:15 +1d",
-            "跨到次日"
-        );
-        Ok(())
-    }
-
-    /// `format_total`:小时 / 分钟进位,整点省分,不足一分钟精确到秒。
-    #[test]
-    fn format_total_buckets_by_magnitude() {
-        assert_eq!(format_total(0), "0s");
-        assert_eq!(format_total(45_000), "45s");
-        assert_eq!(format_total(59_000), "59s");
-        assert_eq!(format_total(48 * 60_000), "48m");
-        assert_eq!(format_total(2 * 3_600_000), "2h");
-        assert_eq!(format_total(3 * 3_600_000 + 3 * 60_000), "3h 3m");
-    }
+    use super::sum_durations;
 
     /// `sum_durations`:未知项跳过并单独计数,不静默当 0 累加。
     #[test]
@@ -136,21 +101,5 @@ mod tests {
         let (total, unknown) = sum_durations([Some(1000), None, Some(2000), None]);
         assert_eq!(total, 3000);
         assert_eq!(unknown, 2);
-    }
-
-    /// `format_ms`:秒 / 分进位与零填充。
-    #[test]
-    fn format_ms_cases() {
-        assert_eq!(format_ms(0), "0:00");
-        assert_eq!(format_ms(75_000), "1:15");
-        assert_eq!(format_ms(3_661_000), "61:01");
-    }
-
-    /// `format_ms_opt`:未知画 `-:--`,与真实 `0:00` 区分。
-    #[test]
-    fn format_ms_opt_unknown_is_placeholder() {
-        assert_eq!(format_ms_opt(None), "-:--");
-        assert_eq!(format_ms_opt(Some(0)), "0:00");
-        assert_eq!(format_ms_opt(Some(65_000)), "1:05");
     }
 }

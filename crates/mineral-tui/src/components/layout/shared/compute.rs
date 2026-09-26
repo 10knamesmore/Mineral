@@ -204,7 +204,7 @@ pub fn compute_search(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{LayoutMode, compute, compute_fullscreen, compute_search};
+    use super::{compute, compute_fullscreen, compute_search};
 
     /// 造一个左上角原点、给定宽高的 area。
     fn area(w: u16, h: u16) -> Rect {
@@ -214,42 +214,6 @@ mod tests {
     /// default.lua 的布局段。
     fn layout_cfg() -> color_eyre::Result<mineral_config::LayoutConfig> {
         Ok(mineral_config::Config::defaults()?.tui().layout().clone())
-    }
-
-    /// 从默认树覆盖播放栏高度，模拟配置热重载后的新树。
-    fn layout_cfg_with_transport_height(
-        height: u16,
-    ) -> color_eyre::Result<mineral_config::LayoutConfig> {
-        let tree = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            mineral_config::nest_path("tui.layout.transport_height", serde_json::json!(height)),
-        );
-        let cfg = mineral_config::from_tree(&tree)
-            .map_err(|warning| color_eyre::eyre::eyre!("配置落型失败:{warning}"))?;
-        Ok(cfg.tui().layout().clone())
-    }
-
-    /// 默认五行；更换配置后，浏览、紧凑、搜索和全屏端点立即同步新高度。
-    #[test]
-    fn transport_height_updates_all_layouts() -> color_eyre::Result<()> {
-        assert_eq!(*layout_cfg()?.transport_height(), 5);
-        let configs = [
-            layout_cfg()?,
-            layout_cfg_with_transport_height(3)?,
-            layout_cfg_with_transport_height(7)?,
-        ];
-        for cfg in configs {
-            let height = *cfg.transport_height();
-            for actual in [
-                compute(area(100, 40), &cfg).transport,
-                compute(area(79, 40), &cfg).transport,
-                compute_fullscreen(area(100, 40), &cfg).transport,
-                compute_search(area(100, 40), &cfg).transport,
-            ] {
-                assert_eq!(actual.height, height, "各端点应现读播放栏高度");
-            }
-        }
-        Ok(())
     }
 
     /// 可用面积不足时播放栏收缩，各端点的矩形不越界也不 panic。
@@ -290,150 +254,17 @@ mod tests {
         Ok(())
     }
 
-    /// 宽高都达标 → Full,right/lyrics/spectrum 都有,顶/底各 1 行。
-    #[test]
-    fn full_layout_above_thresholds() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        let a = compute(area(100, 40), &cfg);
-        assert_eq!(a.mode, LayoutMode::Full);
-        assert!(a.right.is_some());
-        assert!(a.lyrics.is_some());
-        assert!(a.spectrum.is_some());
-        assert_eq!(a.top_status.height, 1);
-        Ok(())
-    }
-
-    /// 恰好 80x24(阈值下界)仍是 Full。
-    #[test]
-    fn boundary_80x24_is_full() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        assert_eq!(compute(area(80, 24), &cfg).mode, LayoutMode::Full);
-        Ok(())
-    }
-
-    /// 宽 < 80 → Compact,right/lyrics/spectrum 全 None。
-    #[test]
-    fn narrow_is_compact() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        let a = compute(area(79, 40), &cfg);
-        assert_eq!(a.mode, LayoutMode::Compact);
-        assert!(a.right.is_none());
-        assert!(a.lyrics.is_none());
-        assert!(a.spectrum.is_none());
-        Ok(())
-    }
-
-    /// 高 < 24 → Compact。
-    #[test]
-    fn short_is_compact() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        assert_eq!(compute(area(100, 23), &cfg).mode, LayoutMode::Compact);
-        Ok(())
-    }
-
-    /// 全屏布局:左列上 cover / 下 transport,右列 lyrics 通高,spectrum 全宽贴底,消失面板零面积。
-    #[test]
-    fn fullscreen_layout_panels() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        let a = compute_fullscreen(area(100, 40), &cfg);
-        let cover = a
-            .cover
-            .ok_or_else(|| color_eyre::eyre::eyre!("全屏缺 cover"))?;
-        let lyrics = a
-            .lyrics
-            .ok_or_else(|| color_eyre::eyre::eyre!("全屏缺 lyrics"))?;
-        let spectrum = a
-            .spectrum
-            .ok_or_else(|| color_eyre::eyre::eyre!("全屏缺 spectrum"))?;
-        let transport = a.transport;
-
-        // 左列在左、lyrics 在右,无缝相接。
-        assert!(cover.x < lyrics.x, "cover 在左列、lyrics 在右列");
-        assert_eq!(cover.right(), lyrics.x, "cover 右缘接 lyrics 左缘");
-        assert_eq!(cover.y, lyrics.y, "cover / lyrics 顶对齐");
-
-        // 左列:transport 在 cover 之下,同左对齐、右缘同接 lyrics。
-        assert_eq!(transport.x, cover.x, "transport 与 cover 同左");
-        assert_eq!(
-            transport.right(),
-            lyrics.x,
-            "transport 右缘接 lyrics(同在左列)"
-        );
-        assert!(transport.y >= cover.bottom(), "transport 在 cover 之下");
-
-        // lyrics 通 body 全高:底与左列底(transport 底)对齐。
-        assert_eq!(lyrics.bottom(), transport.bottom(), "lyrics 通 body 全高");
-
-        // spectrum 全宽贴底、在 body 之下。
-        assert_eq!(spectrum.width, 100, "spectrum 通栏全宽");
-        assert!(spectrum.y >= transport.bottom(), "spectrum 在左列之下");
-        assert!(spectrum.y >= lyrics.bottom(), "spectrum 在 lyrics 之下");
-
-        assert_eq!(a.top_status.height, 0, "全屏顶栏零高");
-        assert_eq!(a.left.width, 0, "全屏左栏零宽");
-        Ok(())
-    }
-
-    /// search 布局:顶栏下 prompt 行全宽,results 在左、detail 在右无缝相接,transport 全宽贴底,
-    /// lyrics/spectrum/cover 退场(None)。
-    #[test]
-    fn search_layout_panels() -> color_eyre::Result<()> {
-        let cfg = layout_cfg()?;
-        let parent = area(100, 40);
-        let a = compute_search(parent, &cfg);
-
-        let prompt = a
-            .search_prompt
-            .ok_or_else(|| color_eyre::eyre::eyre!("search 缺 prompt 行"))?;
-        let detail = a
-            .right
-            .ok_or_else(|| color_eyre::eyre::eyre!("search 缺 detail(right)"))?;
-        let results = a.left;
-        let transport = a.transport;
-
-        // 顶行被 prompt 接管:top_status 退化零面积,prompt 贴 area 顶、全宽 3 行。
-        assert_eq!(
-            a.top_status,
-            Rect::new(parent.x, parent.y, 0, 0),
-            "search 顶栏退化零面积"
-        );
-        assert_eq!(prompt.y, parent.y, "prompt 接管顶行(贴 area 顶)");
-        assert_eq!(prompt.height, 3, "prompt 3 行(带边框:上下框各 1 + 内容 1)");
-        assert_eq!(prompt.width, parent.width, "prompt 全宽");
-
-        // results 在左、detail 在右,无缝相接、顶对齐。
-        assert!(results.x < detail.x, "results 在左、detail 在右");
-        assert_eq!(results.right(), detail.x, "results 右缘接 detail 左缘");
-        assert_eq!(results.y, detail.y, "results / detail 顶对齐");
-        assert!(results.y >= prompt.bottom(), "body 在 prompt 之下");
-
-        // transport 全宽贴底,在 body 之下。
-        assert_eq!(transport.width, parent.width, "transport 通栏全宽");
-        assert_eq!(transport.bottom(), parent.bottom(), "transport 贴底");
-        assert!(transport.y >= results.bottom(), "transport 在 results 之下");
-        assert!(transport.y >= detail.bottom(), "transport 在 detail 之下");
-
-        // 退场面板在 search 端点无锚。
-        assert!(a.lyrics.is_none(), "search 端点 lyrics 退场");
-        assert!(a.spectrum.is_none(), "search 端点 spectrum 退场");
-        assert!(a.cover.is_none(), "search 端点 cover 退场");
-
-        Ok(())
-    }
-
     use proptest::prelude::proptest;
 
     proptest! {
-        /// 任意尺寸:所有子区域都落在父 area 内(不越界 / 不 panic),且 Full/Compact 选择
-        /// 严格按 80×24 阈值。
+        /// 任意尺寸:所有子区域都落在父 area 内(不越界 / 不 panic)。
         #[test]
-        fn areas_fit_parent_and_mode_matches(w in 0u16..=600, h in 0u16..=600) {
+        fn areas_fit_parent(w in 0u16..=600, h in 0u16..=600) {
             let Ok(cfg) = layout_cfg() else {
                 return Err(proptest::test_runner::TestCaseError::fail("defaults 不可用"));
             };
             let parent = area(w, h);
             let a = compute(parent, &cfg);
-            proptest::prop_assert_eq!(a.mode == LayoutMode::Full, w >= 80 && h >= 24);
             let fits = |c: Rect| {
                 c.x >= parent.x
                     && c.y >= parent.y

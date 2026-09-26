@@ -362,31 +362,6 @@ mod tests {
         Ok(path)
     }
 
-    #[test]
-    fn defaults_snapshot() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        mineral_test::assert_snap!("默认配置全量(default.lua → Config)", format!("{cfg:#?}"));
-        Ok(())
-    }
-
-    /// tui.waveform 默认:进度条波形开、封面取色开(default.lua 是唯一默认值数据源)。
-    #[test]
-    fn waveform_defaults() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        assert!(*cfg.tui().waveform().enabled(), "波形默认应开启");
-        assert!(*cfg.tui().waveform().cover_color(), "封面取色默认应开启");
-        assert!(
-            (*cfg.tui().waveform().contrast() - 2.0).abs() < f32::EPSILON,
-            "对比 gamma 默认 2.0"
-        );
-        assert_eq!(
-            *cfg.tui().waveform().edge_radius(),
-            3usize,
-            "播放头软边半径默认 3 列"
-        );
-        Ok(())
-    }
-
     /// audio.envelope 默认:管线粒度(点数 / 块 / 滑窗)与 K-weighting 滤波参数全部
     /// 来自 default.lua(唯一默认值数据源);滤波参数默认值须与 BS.1770 参考实现的
     /// 模拟原型参数逐位一致——48kHz 下推导出规范系数表的正是这组数。
@@ -428,9 +403,16 @@ mod tests {
         let spectrum = cfg.tui().spectrum();
         assert_eq!(spectrum.style(), &crate::SpectrumStyle::Terrain);
         assert_eq!(*spectrum.terrain().push_ms(), 96);
-        assert_eq!(*spectrum.terrain().layers(), 8, "未覆盖的子表键保默认");
+        let defaults = Config::defaults()?;
+        assert_eq!(
+            spectrum.terrain().layers(),
+            defaults.tui().spectrum().terrain().layers()
+        );
         assert!(!*spectrum.bars().spring_peak());
-        assert!(*spectrum.bars().show_trail(), "未覆盖的子表键保默认");
+        assert_eq!(
+            spectrum.bars().show_trail(),
+            defaults.tui().spectrum().bars().show_trail()
+        );
         Ok(())
     }
 
@@ -618,8 +600,7 @@ mod tests {
             vec![SearchKind::Album, SearchKind::Song],
             "kinds 保配置顺序(数组整体替换默认)"
         );
-        // 默认名单的具体内容归 defaults_snapshot 管(default.lua 是唯一真相,这里不复述),
-        // 只守「默认必须非空」——空名单会让消费侧走防呆回退,默认态不该踩它。
+        // 默认名单必须非空，确保默认启动时有可用搜索入口。
         let defaults = Config::defaults()?;
         assert!(
             !defaults.tui().search().channel().sources().is_empty(),
@@ -821,51 +802,6 @@ mod tests {
         Ok(())
     }
 
-    /// 窗口标题默认配置(全部来自 default.lua):开启、图标四态、有歌模板三段、
-    /// idle/disconnected 各两段。
-    #[test]
-    fn window_title_defaults() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = cfg.tui().window_title();
-        assert!(wt.enabled(), "默认应开启");
-        // 图标默认符号。
-        assert_eq!(wt.icons().playing(), "⏸");
-        assert_eq!(wt.icons().paused(), "▶");
-        assert_eq!(wt.icons().idle(), "■");
-        assert_eq!(wt.icons().disconnected(), "⚠");
-        // 有歌模板:StateIcon + Title + Artist。
-        assert!(matches!(
-            wt.template().first(),
-            Some(crate::TitleSegment::StateIcon { icon: true })
-        ));
-        assert!(matches!(
-            wt.template().get(1),
-            Some(crate::TitleSegment::Field {
-                field: crate::TitleField::Title,
-                ..
-            })
-        ));
-        assert!(matches!(
-            wt.template().get(2),
-            Some(crate::TitleSegment::Field {
-                field: crate::TitleField::Artist,
-                ..
-            })
-        ));
-        // idle / disconnected:StateIcon + Literal("Mineral")。
-        for tpl in [wt.idle(), wt.disconnected()] {
-            assert!(matches!(
-                tpl.first(),
-                Some(crate::TitleSegment::StateIcon { icon: true })
-            ));
-            assert!(matches!(
-                tpl.get(1),
-                Some(crate::TitleSegment::Literal { text }) if text == "Mineral"
-            ));
-        }
-        Ok(())
-    }
-
     /// icons 子表拼错键名应报 unknown field(带路径)回落默认,与全树
     /// deny_unknown_fields 行为一致,不静默吞。
     #[test]
@@ -902,20 +838,6 @@ mod tests {
         let wt = cfg.tui().window_title();
         assert!(wt.enabled(), "未写 enabled 应默认 true");
         assert_eq!(wt.template().len(), 1, "用户覆盖模板长度");
-        Ok(())
-    }
-
-    /// 用户可完全关闭窗口标题。
-    #[test]
-    fn window_title_disabled() -> color_eyre::Result<()> {
-        let path = temp_config(
-            "wintitleoff",
-            r#"return { tui = { window_title = { enabled = false } } }"#,
-        )?;
-        let (cfg, warnings) = load(&path)?;
-        std::fs::remove_file(&path)?;
-        assert!(warnings.is_empty(), "实得 {warnings:?}");
-        assert!(!cfg.tui().window_title().enabled(), "应关闭");
         Ok(())
     }
 

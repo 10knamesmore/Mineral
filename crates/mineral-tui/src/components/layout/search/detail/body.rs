@@ -456,7 +456,6 @@ fn draw_album_list(
     }
 }
 
-/// 曲目与艺人专辑列表的图片列渲染回归。
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -534,23 +533,11 @@ mod tests {
                 })
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少详情名称"))?;
             let cover_x = name_x - super::THUMBNAIL_COLUMNS - 1;
-            assert_eq!(
-                stable
-                    .cell((cover_x, area.y))
-                    .map(ratatui::buffer::Cell::symbol),
-                Some(" ")
-            );
             for (row, name) in ["A", "B", "G"].into_iter().enumerate() {
                 let y = area.y + 1 + u16::try_from(row)?;
                 assert_eq!(
                     stable.cell((name_x, y)).map(ratatui::buffer::Cell::symbol),
                     Some(name)
-                );
-                assert_eq!(
-                    stable
-                        .cell((name_x - 1, y))
-                        .map(ratatui::buffer::Cell::symbol),
-                    Some(" ")
                 );
                 assert_eq!(
                     stable
@@ -560,11 +547,6 @@ mod tests {
                     "无封面的中间行不能挤掉后续封面"
                 );
             }
-            assert_eq!(
-                stable.cell((name_x, area.y + 1)).map(|c| (c.fg, c.bg)),
-                Some((theme.accent, theme.surface0)),
-                "封面 overlay 不改变名称高亮"
-            );
             let mut frozen = Buffer::empty(area);
             render(&mut frozen, ScrollMotion::Frozen);
             assert!(

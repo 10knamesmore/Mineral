@@ -239,8 +239,6 @@ mod tests {
 
     use crate::test_support::endserenading;
 
-    use crate::runtime::state::detail::EntityRef;
-
     use super::super::SearchSession;
 
     /// 5 条歌曲一页（配 limit=5 即满页；endserenading 上限 10 条）。
@@ -380,29 +378,6 @@ mod tests {
             "offset 页对齐推到 2 × limit"
         );
         assert!(kr.exhausted(), "短二页榨干");
-        Ok(())
-    }
-
-    /// set_sel 真的移动才复位 detail 栈（下钻后移光标 → 回 root）；钳制不动则保留。
-    #[test]
-    fn set_sel_resets_detail_only_on_real_move() -> color_eyre::Result<()> {
-        let mut s = SearchSession::new(SearchKind::Album);
-        s.apply_page(
-            SearchKind::Album,
-            SearchPayload::Albums(vec![album("a1"), album("a2")]),
-            Page::default(),
-            /*has_more*/ None,
-        );
-        let kr = s
-            .kind_results_mut()
-            .ok_or_else(|| color_eyre::eyre::eyre!("桶应在"))?;
-        kr.detail
-            .push(EntityRef::Album(Box::new(album("drill"))), 1);
-        assert_eq!(kr.detail.depth(), 1, "已下钻一层");
-        kr.set_sel(1);
-        assert_eq!(kr.detail.depth(), 0, "移光标 → detail 复位到新 root");
-        kr.set_sel(9); // 越界钳到末行(idx1)==当前，不动
-        assert_eq!(kr.sel(), 1, "钳制在末行");
         Ok(())
     }
 

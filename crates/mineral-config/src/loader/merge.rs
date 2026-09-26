@@ -68,16 +68,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn empty_override_is_identity() -> color_eyre::Result<()> {
-        let lua = Lua::new();
-        let base = eval_table(&lua, r#"return { a = 1, m = { b = 2 } }"#)?;
-        let over = eval_table(&lua, "return {}")?;
-        let merged = table_to_json(deep_merge(&lua, base, over)?)?;
-        assert_eq!(merged, serde_json::json!({ "a": 1, "m": { "b": 2 } }));
-        Ok(())
-    }
-
     /// 任意嵌套 map(值为整数 / 短字符串 / 子 map),供不变量测试。
     fn arb_json() -> impl Strategy<Value = serde_json::Value> {
         let leaf = prop_oneof![

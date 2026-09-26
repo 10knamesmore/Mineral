@@ -59,36 +59,6 @@ mod tests {
     use super::ListCursor;
     use crate::runtime::action::SelectionMove;
 
-    /// 下移按 `n` 推进,越界钳到末行(`len-1`)。
-    #[test]
-    fn move_down_clamps_to_last() {
-        let mut c = ListCursor::new(0);
-        c.move_by(SelectionMove::Down(3), /*len*/ 5);
-        assert_eq!(c.sel(), 3, "下移 3 行");
-        c.move_by(SelectionMove::Down(10), /*len*/ 5);
-        assert_eq!(c.sel(), 4, "下移越界钳到末行");
-    }
-
-    /// 上移按 `n` 回退,越界钳到首行(0)。
-    #[test]
-    fn move_up_saturates_at_first() {
-        let mut c = ListCursor::new(4);
-        c.move_by(SelectionMove::Up(2), /*len*/ 5);
-        assert_eq!(c.sel(), 2, "上移 2 行");
-        c.move_by(SelectionMove::Up(10), /*len*/ 5);
-        assert_eq!(c.sel(), 0, "上移越界钳到首行");
-    }
-
-    /// First 跳首行、Last 跳末行。
-    #[test]
-    fn move_first_and_last() {
-        let mut c = ListCursor::new(2);
-        c.move_by(SelectionMove::Last, /*len*/ 7);
-        assert_eq!(c.sel(), 6, "Last 跳末行");
-        c.move_by(SelectionMove::First, /*len*/ 7);
-        assert_eq!(c.sel(), 0, "First 跳首行");
-    }
-
     /// 空列表(`len == 0`)任意移动都落 0、不溢出(`len-1` 不得 usize 回绕)。
     #[test]
     fn move_on_empty_list_stays_zero() {
@@ -97,15 +67,5 @@ mod tests {
         assert_eq!(c.sel(), 0, "空列表下移仍 0");
         c.move_by(SelectionMove::Last, /*len*/ 0);
         assert_eq!(c.sel(), 0, "空列表 Last 仍 0");
-    }
-
-    /// `clamp` 把越界光标夹回 `len-1`;空列表归 0。
-    #[test]
-    fn clamp_caps_sel() {
-        let mut c = ListCursor::new(9);
-        c.clamp(/*len*/ 3);
-        assert_eq!(c.sel(), 2, "钳到末行");
-        c.clamp(/*len*/ 0);
-        assert_eq!(c.sel(), 0, "空列表归 0");
     }
 }

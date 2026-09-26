@@ -279,17 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_credits_without_tr_as_plain() {
-        // 纯 credits 行(只有 tx,无 tr)保留为 Plain;逐字行照常。
-        let s = r#"{"t":0,"c":[{"tx":"作词:"},{"tx":"某某"}]}
-{"t":12000,"c":[{"tx":"first ","tr":[0,300]},{"tx":"line","tr":[300,200]}]}"#;
-        let v = parse_yrc(s);
-        assert_eq!(v.len(), 2);
-        assert_eq!(v.first(), Some(&LyricLine::timed(0, "作词:某某")));
-        assert_eq!(first_word_line(&v).and_then(|l| l.time_ms), Some(12000));
-    }
-
-    #[test]
     fn handles_chinese_chars() {
         let s = "[0,3000](0,500,0)床(500,500,0)前(1000,500,0)明(1500,500,0)月(2000,1000,0)光";
         let v = parse_yrc(s);

@@ -51,9 +51,7 @@ pub struct Song {
 
     /// 来源侧标记「无可播资源」(下架 / 无版权 / 失效)。列表元数据口径,可能滞后于
     /// 取流实况;展示层据此降权提示,**不禁播**——播放时取流失败自有拦截脚本补救。
-    /// serde 容缺:旧缓存快照没有本字段,反序列化落 `false`。
     #[builder(default)]
-    #[serde(default)]
     pub unavailable: bool,
 }
 
@@ -62,27 +60,5 @@ impl Song {
     #[inline]
     pub fn source(&self) -> SourceKind {
         self.id.namespace()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Song;
-
-    /// 旧缓存快照(无 `unavailable` 字段)反序列化落 `false`,不炸缓存。
-    #[test]
-    fn old_snapshot_without_unavailable_defaults_false() -> color_eyre::Result<()> {
-        let song = serde_json::from_value::<Song>(serde_json::json!({
-            "id": { "namespace": "netease", "value": "186016" },
-            "name": "晴天",
-            "alias": null,
-            "artists": [],
-            "album": null,
-            "duration_ms": 269_000,
-            "cover_url": null,
-            "source_url": null
-        }))?;
-        assert!(!song.unavailable, "字段缺失应落 false");
-        Ok(())
     }
 }

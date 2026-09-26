@@ -1,6 +1,0 @@
----
-source: crates/mineral-tui/src/components/layout/shared/top_status.rs
-description: "顶栏:终端失焦徽标"
-expression: t.backend()
----
-"▌ mineral vX.Y.Z  │                                     ◌ not focused  ‖ paused "

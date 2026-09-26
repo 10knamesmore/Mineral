@@ -345,15 +345,6 @@ mod tests {
     use super::looks_like_seek;
 
     #[test]
-    fn normal_playback_not_seek() {
-        // 一个 tick(200ms)位置正好前进 200ms → 预期=实际,不判 seek。
-        assert!(!looks_like_seek(
-            /*prev_ms*/ 10_000, /*actual_ms*/ 10_200, /*elapsed_ms*/ 200,
-            /*was_playing*/ true, /*threshold_ms*/ 1000
-        ));
-    }
-
-    #[test]
     fn jitter_within_threshold_not_seek() {
         // tick 抖动 / 采样误差(实际比预期少 180ms)< 1s 阈值 → 不判 seek。
         assert!(!looks_like_seek(

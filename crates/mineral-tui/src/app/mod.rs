@@ -3,7 +3,6 @@
 mod application;
 mod backend_sync;
 mod channel_search;
-mod cover_transition;
 mod event_loop;
 mod input;
 mod menus;

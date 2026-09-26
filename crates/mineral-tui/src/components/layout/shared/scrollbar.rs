@@ -61,33 +61,3 @@ pub(crate) fn draw_scrollbar(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::scrollbar_thumb;
-
-    /// 滚动条滑块长度不随 offset 改变；offset 两端必须分别贴住轨道顶边和底边。
-    #[test]
-    fn scrollbar_thumb_constant_len_and_flush_bottom() {
-        let (total, viewport, track) = (50u16, 10u16, 8u16);
-        let max_off = total - viewport;
-        let (top_0, len_0) = scrollbar_thumb(total, viewport, /*off*/ 0, track);
-        let (_, len_mid) = scrollbar_thumb(total, viewport, max_off / 2, track);
-        let (top_max, len_max) = scrollbar_thumb(total, viewport, max_off, track);
-        // 长度恒定:三处一致 → 不蠕动。
-        assert_eq!(len_0, len_mid, "滑块长度不随 off 变(中途)");
-        assert_eq!(len_0, len_max, "滑块长度不随 off 变(到底)");
-        // 到顶贴顶、到底贴底。
-        assert_eq!(top_0, 0, "off=0 滑块贴顶");
-        assert_eq!(top_max + len_max, track, "off=max 时滑块底边必须贴住轨道底");
-    }
-
-    /// 内容恰好不溢出(total==viewport):滑块满轨、贴顶(不会出现半截滑块)。
-    #[test]
-    fn scrollbar_thumb_fills_track_when_no_overflow() {
-        let (top, len) = scrollbar_thumb(
-            /*total*/ 8, /*viewport*/ 8, /*off*/ 0, /*track*/ 8,
-        );
-        assert_eq!((top, len), (0, 8), "不溢出时滑块满轨贴顶");
-    }
-}

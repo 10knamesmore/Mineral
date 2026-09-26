@@ -182,21 +182,6 @@ mod tests {
         }
     }
 
-    /// 默认配置含 mineral 聚合源段(唯一旋钮 color),`source_colors` 出其条目
-    /// (TUI 徽标据此着色,缺了就退中立兜底色)。
-    #[test]
-    fn mineral_section_in_defaults() -> color_eyre::Result<()> {
-        let cfg = crate::Config::defaults()?;
-        assert!(
-            cfg.sources()
-                .source_colors()
-                .iter()
-                .any(|(name, _)| *name == "mineral"),
-            "source_colors 应含 mineral 条目"
-        );
-        Ok(())
-    }
-
     #[test]
     fn proxy_false_is_none() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({

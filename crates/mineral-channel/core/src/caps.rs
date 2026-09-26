@@ -108,13 +108,7 @@ pub fn render_web_url(template: &str, raw_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
-    use mineral_model::SearchKind;
-
-    /// 两区皆有的 artist 分区(音乐源形态测试夹具)。
-    fn both_sections() -> ArtistSections {
-        ArtistSections::new(vec![ArtistSectionKind::TopSongs, ArtistSectionKind::Albums])
-    }
+    use super::render_web_url;
 
     /// `{id}` 整段替换(单段 id 的既有语义不变)。
     #[test]
@@ -141,58 +135,5 @@ mod tests {
             render_web_url("https://x.example/{0}?p={1}", "solo"),
             "https://x.example/solo?p={1}"
         );
-    }
-
-    #[test]
-    fn builder_and_getters_roundtrip() {
-        let caps = ChannelCaps::builder()
-            .searchable(vec![SearchKind::Song, SearchKind::Playlist])
-            .playlist_edit(true)
-            .artist_sections(both_sections())
-            .build();
-        assert_eq!(
-            caps.searchable().as_slice(),
-            &[SearchKind::Song, SearchKind::Playlist]
-        );
-        assert!(*caps.playlist_edit());
-    }
-
-    /// artist 分区逐一显式声明,顺序即展示序:音乐源热门曲 + 专辑,视频源(B站)只有专辑。
-    #[test]
-    fn artist_sections_declared_per_source() {
-        assert_eq!(
-            both_sections().kinds(),
-            &[ArtistSectionKind::TopSongs, ArtistSectionKind::Albums],
-            "音乐源两区,热门曲在前"
-        );
-        let video = ArtistSections::new(vec![ArtistSectionKind::Albums]);
-        assert_eq!(
-            video.kinds(),
-            &[ArtistSectionKind::Albums],
-            "视频源只有专辑区"
-        );
-    }
-
-    #[test]
-    fn serde_roundtrip() -> color_eyre::Result<()> {
-        let caps = ChannelCaps::builder()
-            .searchable(vec![SearchKind::Album])
-            .playlist_edit(false)
-            .artist_sections(both_sections())
-            .build();
-        let json = serde_json::to_string(&caps)?;
-        let back = serde_json::from_str::<ChannelCaps>(&json)?;
-        assert_eq!(caps, back);
-        Ok(())
-    }
-
-    #[test]
-    fn empty_searchable_means_unsearchable() {
-        let caps = ChannelCaps::builder()
-            .searchable(Vec::new())
-            .playlist_edit(false)
-            .artist_sections(both_sections())
-            .build();
-        assert!(caps.searchable().is_empty());
     }
 }

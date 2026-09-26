@@ -846,21 +846,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn records_play_start_to_end() -> color_eyre::Result<()> {
-        let (_dir, store) = temp_store().await?;
-        let (recorder, handle) = StatsRecorder::spawn(store.clone(), full_params());
-        recorder.play_started(pending(1000));
-        recorder.play_ended(FinishReason::Eof, /*listen_ms*/ 3000);
-        drop(recorder); // 关通道 → actor 排空退出
-        handle.await?;
-        let totals = store.totals(0..i64::MAX).await?;
-        assert_eq!(totals.plays, 1);
-        assert_eq!(totals.listen_ms, 3000);
-        assert_eq!(totals.completed, 1, "eof");
-        Ok(())
-    }
-
     /// 起播即写维表:play_started 携带的完整 Song 落 songs 行,top_songs 由此出名——
     /// 报表不依赖 stats.db 之外的任何数据库。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1007,28 +992,6 @@ mod tests {
             "by_format 应含 flac:{:?}",
             dist.by_format
         );
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn records_event_through_actor() -> color_eyre::Result<()> {
-        let (_dir, store) = temp_store().await?;
-        let (recorder, handle) = StatsRecorder::spawn(store.clone(), full_params());
-        recorder.event(mineral_stats::StatsEvent::Behavior {
-            actor: mineral_stats::Actor::User,
-            event: mineral_stats::BehaviorEvent::Search {
-                query: Some("q".to_owned()),
-                query_hash: "h".to_owned(),
-                kind: mineral_stats::SearchTargetKind::Song,
-                source: SourceKind::NETEASE,
-                page: 0,
-                result_count: Some(5),
-                outcome: mineral_stats::SearchOutcome::Ok,
-            },
-        });
-        drop(recorder);
-        handle.await?;
-        assert_eq!(store.status().await?.events, 1, "事件经 actor 落库");
         Ok(())
     }
 

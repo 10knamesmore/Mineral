@@ -291,43 +291,6 @@ impl Default for FuzzyMatcher {
 mod tests {
     use super::{FuzzyMatcher, MatchableText};
 
-    /// 纯 ASCII:无 Han 时拼音 / 首字母段都为空,只原文段参与匹配。
-    #[test]
-    fn matchable_ascii_only() -> color_eyre::Result<()> {
-        let mt = MatchableText::new("MyGO!!!!!");
-        assert!(mt.syllable_ranges.is_empty());
-        assert!(mt.han_to_orig.is_empty());
-        // haystack = "MyGO!!!!!\0\0":原文 9 char + 2 个 \0。
-        assert_eq!(mt.haystack.len(), 11);
-        Ok(())
-    }
-
-    /// 纯 Han:三个字 → 三个音节 / 三个首字母 / 三段映射。
-    #[test]
-    fn matchable_pure_han() -> color_eyre::Result<()> {
-        let mt = MatchableText::new("春日影");
-        assert_eq!(&*mt.han_to_orig, &[0u32, 1, 2]);
-        // 春=chun(4) 日=ri(2) 影=ying(4),共 10 char 的拼音段。
-        // bounds:orig 3 char + \0 + pinyin 10 char + \0 + initials 3 char。
-        assert_eq!(mt.bounds.orig_end, 3);
-        assert_eq!(mt.bounds.pinyin_start, 4);
-        assert_eq!(mt.bounds.pinyin_end, 14);
-        assert_eq!(mt.bounds.initials_start, 15);
-        assert_eq!(mt.bounds.initials_end, 18);
-        // 音节区间(haystack 绝对下标):chun=[4,8) ri=[8,10) ying=[10,14)。
-        assert_eq!(&*mt.syllable_ranges, &[(4u32, 8), (8, 10), (10, 14)]);
-        Ok(())
-    }
-
-    /// 混排:Han 与非 Han 交替,han_to_orig 只记录 Han 字符的 char 下标。
-    #[test]
-    fn matchable_mixed() -> color_eyre::Result<()> {
-        let mt = MatchableText::new("a春日");
-        // 原文 char 下标:a=0, 春=1, 日=2。
-        assert_eq!(&*mt.han_to_orig, &[1u32, 2]);
-        Ok(())
-    }
-
     /// 空串:三段均空,bounds 退化但仍合法(全 0 / 仅两个 \0)。
     #[test]
     fn matchable_empty() -> color_eyre::Result<()> {
@@ -424,18 +387,6 @@ mod tests {
             .score(&mt)
             .ok_or_else(|| color_eyre::eyre::eyre!("应命中"))?;
         assert_eq!(r.hits.as_slice(), &[0u32, 1, 2, 3]);
-        Ok(())
-    }
-
-    /// query 变化会同步更新缓存 Pattern；重复设置同一 query 保持幂等。
-    #[test]
-    fn fuzzy_set_query_idempotent() -> color_eyre::Result<()> {
-        let mut m = FuzzyMatcher::new();
-        m.set_query("a");
-        m.set_query("a");
-        assert!(m.is_active());
-        m.set_query("");
-        assert!(!m.is_active());
         Ok(())
     }
 

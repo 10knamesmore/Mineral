@@ -49,11 +49,10 @@ pub(super) fn shuffle_to_bool(shuffle: MPShuffleType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{playback_rate, repeat_to_loop, secs, shuffle_to_bool, to_now_playing_state};
+    use super::{playback_rate, repeat_to_loop, shuffle_to_bool, to_now_playing_state};
     use crate::command::LoopMode;
     use crate::state::PlaybackState;
     use objc2_media_player::{MPNowPlayingPlaybackState, MPRepeatType, MPShuffleType};
-    use std::time::Duration;
 
     #[test]
     fn playback_state_maps_to_now_playing_state() {
@@ -76,12 +75,6 @@ mod tests {
         assert_eq!(playback_rate(PlaybackState::Playing), 1.0);
         assert_eq!(playback_rate(PlaybackState::Paused), 0.0);
         assert_eq!(playback_rate(PlaybackState::Stopped), 0.0);
-    }
-
-    #[test]
-    fn duration_to_secs() {
-        assert_eq!(secs(Duration::from_millis(1500)), 1.5);
-        assert_eq!(secs(Duration::ZERO), 0.0);
     }
 
     #[test]

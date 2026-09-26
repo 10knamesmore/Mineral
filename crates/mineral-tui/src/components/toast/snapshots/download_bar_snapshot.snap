@@ -1,8 +1,0 @@
----
-source: crates/mineral-tui/src/components/toast/download_toast.rs
-description: "下载 summary toast:2 active,5 queued,aggregate speed,D details"
-expression: t.backend()
----
-"        [↓ 2 songs · 5 queued · 2.3MB/s · D details]        "
-"                                                            "
-"                                                            "

@@ -291,26 +291,6 @@ impl AppState {
             idle: 0,
         });
     }
-
-    /// 测试辅助:把手动滚动直接置于「已 settle」状态,锚定在当前播放行 + `delta` 行。
-    #[cfg(test)]
-    pub(crate) fn debug_scroll_lyrics_to_settled(&mut self, delta: i64) {
-        let line = self.current_line_anchor().saturating_add(delta).max(0);
-        self.debug_scroll_lyrics_to_milli(line * 1000);
-    }
-
-    /// 测试辅助:把手动滚动直接置于「已 settle」的任意 milli-line 锚点(允许越出内容界,
-    /// 模拟过冲中帧供渲染快照)。
-    #[cfg(test)]
-    pub(crate) fn debug_scroll_lyrics_to_milli(&mut self, milli: i64) {
-        self.browse.lyric_view.scroll = Some(LyricGlide {
-            from_milli: milli,
-            to_milli: milli,
-            glide: Transition::expanding(1),
-            phase: GlidePhase::Manual,
-            idle: 0,
-        });
-    }
 }
 
 #[cfg(test)]
@@ -363,11 +343,6 @@ mod tests {
             .map(LyricGlide::target_line)
     }
 
-    /// 平移目标(milli-line,过冲时越出内容界);附着态返回 `None`。
-    fn to_milli(s: &AppState) -> Option<i64> {
-        s.browse.lyric_view.scroll.as_ref().map(|g| g.to_milli)
-    }
-
     /// 步长随默认配置算(`behavior.page_scroll_rows` / `line_scroll_rows` 是手感旋钮,
     /// 调默认值不该改这条测试);前提:一页步长不超过 20 行 fixture 的末行。
     #[test]
@@ -395,90 +370,6 @@ mod tests {
             s.scroll_lyrics(ScrollStep::PageDown);
         }
         assert_eq!(target(&s), Some(19), "累加钳到末行(20 行 → 行号 19)");
-        Ok(())
-    }
-
-    /// 期望值随默认配置算(damping / 上限 / 翻页步长是手感旋钮,调默认值不该改这条测试)。
-    #[test]
-    fn boundary_press_overshoots_with_damping() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(timed_lines())?;
-        let damping = i64::from(*s.cfg.tui().lyrics().overshoot_damping()).max(1);
-        let cap = i64::from(*s.cfg.tui().lyrics().overshoot_max_permille());
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
-        assert!(page <= 19 && page * 2 > 19, "前提:一页在界内、两页撞底");
-        s.scroll_lyrics(ScrollStep::PageDown); // 0 → page,界内无过冲
-        assert_eq!(to_milli(&s), Some(page * 1000), "界内滚动无过冲");
-        s.scroll_lyrics(ScrollStep::PageDown); // raw 2*page → clamp 19
-        assert_eq!(target(&s), Some(19), "锚定行仍钳在末行");
-        let over_first = page * 2 - 19;
-        assert_eq!(
-            to_milli(&s),
-            Some(19_000 + (over_first * 1000 / damping).min(cap)),
-            "超出 {over_first} 行 → 过冲 = 超出量/damping(不超上限)"
-        );
-        s.scroll_lyrics(ScrollStep::PageDown); // 已在末行,整页全是超出量
-        assert_eq!(
-            to_milli(&s),
-            Some(19_000 + (page * 1000 / damping).min(cap)),
-            "超出整页 → 过冲更大(不超上限),比逐行撞墙弹得远"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn top_press_overshoots_negative() -> color_eyre::Result<()> {
-        let mut s = fullscreen_with(timed_lines())?;
-        let damping = i64::from(*s.cfg.tui().lyrics().overshoot_damping()).max(1);
-        let cap = i64::from(*s.cfg.tui().lyrics().overshoot_max_permille());
-        s.scroll_lyrics(ScrollStep::LineUp); // 行 0 再上滚:超出 -1 行
-        assert_eq!(target(&s), Some(0), "锚定行钳在首行");
-        assert_eq!(
-            to_milli(&s),
-            Some(-(1000 / damping).min(cap)),
-            "顶部过冲为负(滚出内容上界)"
-        );
-        Ok(())
-    }
-
-    /// 用户配置把过冲上限压到 0.1 行:确认上限真实参与夹取——默认上限远大于单次按键
-    /// 能产生的超出量,常规路径永远命中不了 clamp 分支。
-    #[test]
-    fn overshoot_clamped_by_config_cap() -> color_eyre::Result<()> {
-        let path =
-            std::env::temp_dir().join(format!("mineral-glide-cap-{}.lua", std::process::id()));
-        std::fs::write(
-            &path,
-            "return { tui = { lyrics = { overshoot_max_permille = 100 } } }",
-        )?;
-        let loaded = mineral_config::load(&path);
-        std::fs::remove_file(&path).ok();
-        let (cfg, warnings) = loaded?;
-        assert!(warnings.is_empty(), "覆盖配置应干净落型: {warnings:?}");
-        let mut s = fullscreen_with_cfg(
-            AppState::test_with_config(std::sync::Arc::new(cfg)),
-            timed_lines(),
-        )?;
-        s.scroll_lyrics(ScrollStep::LineUp); // 行 0 再上滚:阻尼后 333 → 夹到 100
-        assert_eq!(to_milli(&s), Some(-100), "过冲被配置上限夹住");
-        Ok(())
-    }
-
-    #[test]
-    fn overshoot_bounces_back_to_boundary() -> color_eyre::Result<()> {
-        // 无时间戳歌隔离回锚路径:settle 后若仍停在过冲点说明没弹回。
-        let mut s = fullscreen_with(untimed_lines())?;
-        s.tick_lyric_scroll();
-        s.scroll_lyrics(ScrollStep::PageDown);
-        s.scroll_lyrics(ScrollStep::PageDown); // 撞底过冲
-        for _ in 0..200 {
-            s.tick_lyric_scroll();
-        }
-        assert_eq!(target(&s), Some(19), "无时间戳歌弹回后停在末行不回锚");
-        assert_eq!(
-            s.manual_lyric_anchor_milli(),
-            Some(19_000),
-            "过冲 settle 后自动弹回 clamp 边界"
-        );
         Ok(())
     }
 

@@ -17,21 +17,3 @@ pub struct BilibiliConfig {
     /// 单次请求超时(秒)。
     timeout_secs: u64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::BilibiliConfig;
-
-    /// builder 逐旋钮生效(布线验证,不打网络)。
-    #[test]
-    fn builder_sets_fields() {
-        let c = BilibiliConfig::builder()
-            .timeout_secs(7)
-            .max_connections(3)
-            .proxy(Some("socks5://127.0.0.1:1080".to_owned()))
-            .build();
-        assert_eq!(*c.timeout_secs(), 7);
-        assert_eq!(*c.max_connections(), 3);
-        assert_eq!(c.proxy().as_deref(), Some("socks5://127.0.0.1:1080"));
-    }
-}

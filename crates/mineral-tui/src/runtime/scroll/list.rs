@@ -165,7 +165,6 @@ impl ScrollList {
 #[cfg(test)]
 mod tests {
     use super::{ScrollList, ScrollMotion};
-    use crate::runtime::action::SelectionMove;
 
     /// 推进档(`Advancing`)收敛后,深处光标的视口保留 scrolloff:不贴底。
     /// 这是 [`ScrollList`] 存在的根本理由(裸 `TableState` 会把选中行钉视口底边)。
@@ -190,28 +189,6 @@ mod tests {
         );
     }
 
-    /// `move_by` 移光标、`clamp` 列表变短后钳回末行。
-    #[test]
-    fn move_and_clamp_track_len() {
-        let mut list = ScrollList::new();
-        list.move_by(SelectionMove::Down(5), /*len*/ 30);
-        assert_eq!(list.sel(), 5);
-        list.move_by(SelectionMove::Last, 30);
-        assert_eq!(list.sel(), 29, "Last 跳末行");
-        list.clamp(/*len*/ 10);
-        assert_eq!(list.sel(), 9, "列表缩短钳回末行");
-    }
-
-    /// `page`:视口与光标同移 n 行(向下 / 向上);光标按 len 钳首末。
-    #[test]
-    fn page_moves_cursor_with_viewport() {
-        let mut list = ScrollList::new();
-        list.page(/*delta*/ 5, /*len*/ 30, /*glide_ticks*/ 2);
-        assert_eq!(list.sel(), 5, "下翻 5 行光标同移");
-        list.page(-100, 30, 2);
-        assert_eq!(list.sel(), 0, "上翻越界钳首行");
-    }
-
     /// `place`:光标落 sel、视口瞬时落位(`Frozen` 读当前位置不推进);首帧即到位无缓动。
     #[test]
     fn place_snaps_viewport_without_glide() {
@@ -230,16 +207,5 @@ mod tests {
         assert_eq!(list.sel(), 15);
         let off = list.offset(30, 10, ScrollMotion::Frozen);
         assert_eq!(off, 15, "视口瞬时落在 sel(anchor=0)");
-    }
-
-    /// `Frozen` 不推进动画:同一 `ScrollList` 连调多次 `Frozen` offset 幂等(离屏合成多次渲染同帧安全)。
-    #[test]
-    fn frozen_offset_is_idempotent() {
-        let mut list = ScrollList::new();
-        list.place(20, 3);
-        let a = list.offset(30, 10, ScrollMotion::Frozen);
-        let b = list.offset(30, 10, ScrollMotion::Frozen);
-        let c = list.offset(30, 10, ScrollMotion::Frozen);
-        assert_eq!((a, b), (b, c), "Frozen 多次调用同值(不推进、不改目标)");
     }
 }

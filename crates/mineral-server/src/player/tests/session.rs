@@ -24,17 +24,6 @@ async fn snapshot_session_converts_volume() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// load_session 空库返回 Ok(None)。
-#[tokio::test]
-async fn load_session_empty_returns_none() -> color_eyre::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let persist = ServerStore::open(&dir.path().join("t.db")).await?;
-    let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
-    let core = core_with_persist(calls, persist)?;
-    assert!(core.load_session().await?.is_none(), "空库应读不到会话");
-    Ok(())
-}
-
 /// 设入队列 + 当前歌 + 模式后,组装的 [`SessionSnapshot`] 落盘再 load 读回内容一致。
 ///
 /// 注:直接 `snapshot_session()` + `session().save()` 落盘(而非依赖 background

@@ -312,19 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn with_ctrl_equals_ctrl_constructor() {
-        assert_eq!(
-            KeyChord::plain(Key::Char('c')).with_ctrl(),
-            KeyChord::ctrl(Key::Char('c'))
-        );
-        // SHIFT 与 CONTROL 可组合(非字符键)。
-        assert_ne!(
-            KeyChord::shifted(Key::Left).with_ctrl(),
-            KeyChord::ctrl(Key::Left)
-        );
-    }
-
-    #[test]
     fn display_round_trips_through_parse() -> color_eyre::Result<()> {
         for chord in [
             KeyChord::plain(Key::Char('j')),

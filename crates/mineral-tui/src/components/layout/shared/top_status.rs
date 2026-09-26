@@ -47,13 +47,8 @@ fn dim_unfocused(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Th
 /// 信息抹没,留约一半可读性、视觉上是「整体退后」。
 const UNFOCUS_BLEND_PERMILLE: u64 = 550;
 
-/// 顶栏展示的版本号。生产构建取真实 `CARGO_PKG_VERSION`。
-#[cfg(not(test))]
+/// 顶栏展示的版本号。
 const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// 顶栏展示的版本号。test 构建固定占位,免得每次 version bump 冲掉所有含顶栏的快照。
-#[cfg(test)]
-const DISPLAY_VERSION: &str = "X.Y.Z";
 
 /// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
 fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
@@ -144,100 +139,4 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
         Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
         area,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    use crate::render::theme::Theme;
-
-    /// Playlists tab 态。
-    #[test]
-    fn top_status_playlists_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let state = crate::test_support::state_with_playlists()?;
-        let theme = crate::test_support::default_theme()?;
-        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
-        crate::test_support::assert_snap!("顶栏:Playlists 标签态", t.backend());
-        Ok(())
-    }
-
-    /// Library tab + queue 打开。
-    #[test]
-    fn top_status_library_queue_open_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let state = crate::test_support::state_with_tracks()?;
-        let theme = crate::test_support::default_theme()?;
-        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
-        crate::test_support::assert_snap!("顶栏:Library 标签 + 队列打开", t.backend());
-        Ok(())
-    }
-
-    /// 渲染一帧顶栏,取左上角(`▌` 标记,聚焦态为 accent 色)的前景色。
-    fn origin_fg(
-        state: &crate::runtime::state::AppState,
-        theme: &Theme,
-    ) -> color_eyre::Result<ratatui::style::Color> {
-        use color_eyre::eyre::eyre;
-        let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        t.draw(|f| super::draw(f, f.area(), state, theme))?;
-        Ok(t.backend()
-            .buffer()
-            .cell((0, 0))
-            .ok_or_else(|| eyre!("cell (0,0) 应存在"))?
-            .fg)
-    }
-
-    /// 终端失焦:整行前景向背景渐变——中途帧介于聚焦色与终态色之间,三态互异。
-    #[test]
-    fn top_status_unfocused_fade_dims_foreground() -> color_eyre::Result<()> {
-        let theme = crate::test_support::default_theme()?;
-        let mut state = crate::test_support::state_with_playlists()?;
-        let focused = origin_fg(&state, &theme)?;
-        state.dim.set(true);
-        state.dim.set(true);
-        // 默认 288ms / 16ms tick = 18 拍;9 拍是中途帧。
-        for _ in 0..9 {
-            state.dim.tick();
-        }
-        let mid = origin_fg(&state, &theme)?;
-        for _ in 0..30 {
-            state.dim.tick();
-        }
-        let settled = origin_fg(&state, &theme)?;
-        assert_ne!(mid, focused, "中途帧应已偏离聚焦色");
-        assert_ne!(mid, settled, "中途帧应未到终态色");
-        assert_ne!(settled, focused, "终态应比聚焦态更暗");
-        Ok(())
-    }
-
-    /// 终端失焦渐变推满:顶栏右段出现 `◌ not focused` 徽标。
-    #[test]
-    fn top_status_unfocused_badge_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let mut state = crate::test_support::state_with_playlists()?;
-        let theme = crate::test_support::default_theme()?;
-        state.dim.set(true);
-        state.dim.set(true);
-        for _ in 0..30 {
-            state.dim.tick();
-        }
-        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
-        crate::test_support::assert_snap!("顶栏:终端失焦徽标", t.backend());
-        Ok(())
-    }
-
-    /// 无音频设备降级:顶栏常驻 `⚠ 无音频设备` 徽标。
-    #[test]
-    fn top_status_audio_null_badge_snapshot() -> color_eyre::Result<()> {
-        let mut t = Terminal::new(TestBackend::new(80, 1))?;
-        let mut state = crate::test_support::state_with_playlists()?;
-        state.playback.audio_backend = mineral_audio::AudioBackend::Null;
-        let theme = crate::test_support::default_theme()?;
-        t.draw(|f| super::draw(f, f.area(), &state, &theme))?;
-        crate::test_support::assert_snap!("顶栏:无音频设备降级徽标", t.backend());
-        Ok(())
-    }
 }

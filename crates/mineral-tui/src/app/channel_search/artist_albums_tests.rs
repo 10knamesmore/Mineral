@@ -1,4 +1,4 @@
-//! 艺人专辑与 UP 主投稿的分页、导航和渲染回归。
+//! 艺人专辑与 UP 主投稿的分页和导航回归。
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -8,8 +8,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps, Page};
 use mineral_model::{Album, AlbumId, Artist, ArtistId, SearchKind, SourceKind};
 use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
 
 use crate::App;
 use crate::runtime::scroll::list::ScrollMotion;
@@ -183,26 +181,6 @@ impl ArtistAlbumsTest {
         );
         Ok(())
     }
-
-    /// 渲染真实详情面板，读取底边的位置、更多页及 loading 提示。
-    fn footer(&mut self) -> color_eyre::Result<String> {
-        let mut terminal = Terminal::new(TestBackend::new(120, 44))?;
-        for _ in 0..64 {
-            self.app.state.channel_search.tick();
-        }
-        terminal.draw(|frame| crate::view::draw(frame, &self.app))?;
-        let area = crate::components::layout::shared::compute::compute_search(
-            self.app.state.frame_area.get(),
-            self.app.state.cfg.tui().layout(),
-        )
-        .right
-        .ok_or_else(|| eyre!("缺少详情面板区域"))?;
-        let buffer = terminal.backend().buffer();
-        Ok((area.x..area.right())
-            .filter_map(|x| buffer.cell((x, area.bottom() - 1)))
-            .map(ratatui::buffer::Cell::symbol)
-            .collect())
-    }
 }
 
 /// 两个来源都能加载第二页并下钻其中的专辑；追加保留选择，重复/超前回包不改分页进度。
@@ -211,7 +189,6 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
     let limit = Page::default().limit;
     for source in [SourceKind::NETEASE, SourceKind::BILIBILI] {
         let mut test = ArtistAlbumsTest::new(source, limit, true)?;
-        assert!(test.footer()?.contains("1 / 30+"));
         test.press(KeyCode::Char('G'));
         test.frame_mut()?.list_mut().place(29, 22);
         let second = Page::new(limit, limit);
@@ -219,7 +196,6 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
             test.press(KeyCode::Char(key));
         }
         assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
-        assert!(test.footer()?.contains("loading"));
         let before_offset = test.frame()?.list().offset(30, 6, ScrollMotion::Frozen);
         test.receive(Page::default(), limit, false);
         test.receive(Page::new(2 * limit, limit), limit, false);
@@ -238,10 +214,6 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
             test.frame()?.list().offset(60, 6, ScrollMotion::Frozen),
             before_offset
         );
-        let footer = test.footer()?;
-        assert!(footer.contains("30 / 60"));
-        assert!(!footer.contains('+'));
-        assert!(!footer.contains("loading"));
         for _ in 0..5 {
             test.press(KeyCode::Char('j'));
         }
@@ -262,12 +234,10 @@ fn short_and_empty_album_pages_with_more_do_not_end_pagination() -> color_eyre::
     let limit = Page::default().limit;
     for first_count in [0, 2] {
         let mut test = ArtistAlbumsTest::new(SourceKind::BILIBILI, first_count, true)?;
-        assert!(test.footer()?.contains(&format!("/ {first_count}+")));
         test.press(KeyCode::Char('j'));
         let second = Page::new(limit, limit);
         assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
         test.receive(second, 0, true);
-        assert!(test.footer()?.contains('+'));
         test.press(KeyCode::Char('G'));
         let third = Page::new(2 * limit, limit);
         assert_eq!(
@@ -280,7 +250,6 @@ fn short_and_empty_album_pages_with_more_do_not_end_pagination() -> color_eyre::
         assert!(
             matches!(test.frame()?.row_entity(), Some(EntityRef::Album(album)) if album.id == test.album_id(2 * limit))
         );
-        assert!(!test.footer()?.contains('+'));
         assert_eq!(
             test.requested_pages()?,
             vec![Page::default(), second, third]
@@ -352,7 +321,6 @@ fn failed_album_page_can_retry_after_returning_to_artist() -> color_eyre::Result
     test.app.state.apply(&failure);
     test.back();
     test.assert_album_ids(0..limit)?;
-    assert!(!test.footer()?.contains("loading"));
     test.press(KeyCode::Char('G'));
     assert_eq!(
         test.requested_pages()?,

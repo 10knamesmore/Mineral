@@ -5,6 +5,3 @@ mod panel;
 
 pub(crate) use morph::LyricTransition;
 pub use panel::{LyricMode, draw};
-
-#[cfg(test)]
-mod morph_tests;

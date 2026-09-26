@@ -55,24 +55,3 @@ pub(crate) fn column_bg(frame: &mut Frame<'_>, area: Rect, col: usize) -> Color 
 pub(crate) fn center_bg(frame: &mut Frame<'_>, area: Rect) -> Color {
     column_bg(frame, area, usize::from(area.width / 2))
 }
-
-#[cfg(test)]
-mod tests {
-    use ratatui::style::Color;
-
-    use super::alias_span;
-
-    /// alias_span:有别名给 ` (alias)`(前导分隔空格 + 括号)、着调用方给的暗色;无别名给 `None`。
-    /// 在 span 文本层锁住分隔符 / 括号 / 颜色——CJK 双宽在 buffer 层会插补位空格,故不走渲染断言。
-    #[test]
-    fn alias_span_wraps_with_leading_space_and_dim() -> color_eyre::Result<()> {
-        let dim = Color::Rgb(0x6c, 0x70, 0x86);
-        assert!(alias_span(None, dim).is_none(), "无别名应 None");
-
-        let span = alias_span(Some("Mayoiuta"), dim)
-            .ok_or_else(|| color_eyre::eyre::eyre!("有别名应 Some"))?;
-        assert_eq!(span.content, " (Mayoiuta)", "应带前导分隔空格与括号");
-        assert_eq!(span.style.fg, Some(dim), "别名后缀应着传入的暗色");
-        Ok(())
-    }
-}

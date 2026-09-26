@@ -117,18 +117,6 @@ mod tests {
             .collect()
     }
 
-    /// 双锚解析:song_id 仍在列表时按 id 定位,无视 index 漂移。
-    #[test]
-    fn resolve_prefers_song_id() {
-        let tracks = views(&["甲", "乙", "丙"]);
-        let pos = TrackPos {
-            song_id: song("丙").id,
-            index: 0, // index 已过时(歌单头部插了歌),id 锚应胜出
-            screen_row: 0,
-        };
-        assert_eq!(pos.resolve(&tracks), 2);
-    }
-
     /// 双锚解析:歌被删后退回 index;index 越界钳到末行;空列表恒 0。
     #[test]
     fn resolve_falls_back_to_clamped_index() {

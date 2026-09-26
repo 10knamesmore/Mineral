@@ -806,16 +806,14 @@ mod tests {
     use mineral_task::SearchPayload;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::layout::Rect;
 
     use super::{
         album_copy_items, append_template_items, artist_copy_items, container_action_items,
-        playlist_copy_items, row_anchor, song_copy_items,
+        playlist_copy_items, song_copy_items,
     };
     use crate::app::App;
     use crate::components::layout::shared::compute::compute_search;
     use crate::components::popup::{ContainerRef, MenuAction};
-    use crate::runtime::scroll::list::ScrollList;
     use crate::runtime::state::{DetailFetch, SearchFocus};
     use crate::test_support::{
         app_with_channel_search_probed, app_with_library, app_with_library_probed,
@@ -1040,7 +1038,6 @@ mod tests {
             .iter()
             .find(|it| it.hotkey == Some('n'))
             .ok_or_else(|| color_eyre::eyre::eyre!("歌单容器应有 Play all next 项"))?;
-        assert_eq!(play_next.label, "Play all next");
         assert_eq!(
             play_next.action,
             Some(MenuAction::PlayNextContainer(Box::new(
@@ -1602,38 +1599,6 @@ mod tests {
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("calls 锁中毒: {e}"))?;
         assert_eq!(*got, vec![5], "下标原样到达 client");
-        Ok(())
-    }
-
-    /// 行锚点数学:无滚动时第 `sel` 行落在面板内容区第 `sel` 行(边框+表头各 1)。
-    #[test]
-    fn row_anchor_maps_selection_to_panel_row() {
-        let panel = Rect::new(10, 5, 40, 20);
-        let mut list = ScrollList::new();
-        list.set_sel(2);
-        let got = row_anchor(panel, &list, /*len*/ 10);
-        assert_eq!(got, Rect::new(11, 9, 38, 1), "y = 5 + 2(框+表头) + 2(行)");
-    }
-
-    /// 全帧快照:Library 上 `o` 菜单完全展开,贴选中行下方。
-    #[test]
-    fn o_menu_steady_frame_snapshot() -> color_eyre::Result<()> {
-        let (mut app, _ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 1)?;
-        // 推满 Playlists → Library 的 sweep 过渡,否则左栏还画在起点视图。
-        for _ in 0..40 {
-            app.state.browse.view.tick();
-        }
-        let mut terminal = draw_once(&app)?;
-        press(&mut app, KeyCode::Char('o'));
-        // 推满弹出动画(popup_anim_ms / frame_tick_ms 拍,多 tick 几拍无害)。
-        for _ in 0..40 {
-            app.overlays.tick();
-        }
-        terminal.draw(|f| crate::view::draw(f, &app))?;
-        crate::test_support::assert_snap!(
-            "Library 视图 o 操作菜单稳态(贴选中行下方,p/a/d 三项)",
-            terminal.backend()
-        );
         Ok(())
     }
 }

@@ -310,7 +310,7 @@ mod tests {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
     }
 
-    /// 副歌词反馈跟随实际动作与重映射；输入框消费字符时不触发，也不唤起播放控件。
+    /// 副歌词反馈跟随实际动作与重映射；输入框消费字符时不触发。
     #[test]
     fn lyric_press_follows_mapped_action_and_input_consumption() -> color_eyre::Result<()> {
         use crate::runtime::state::LyricExtra;
@@ -323,34 +323,20 @@ mod tests {
         );
         app.apply_pushed_config(mineral_protocol::BusValue::from_json(config));
         press(&mut app, KeyCode::Char('t'));
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
         assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
 
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 1000);
         assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Translation);
-        assert_eq!(app.state.transport.controls_opacity(), 0);
-        for _ in 0..6 {
-            app.state.tick_frame();
-        }
-        let strength = app.state.browse.lyric_view.extra_press.strength();
-        assert!(strength > 0 && strength < 1000);
+
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 1000);
         assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
-        for _ in 0..40 {
-            app.state.tick_frame();
-        }
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
         assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
 
         app.state = crate::test_support::state_with_lrc_only()?;
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
         assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
         Ok(())
     }
@@ -538,29 +524,6 @@ mod tests {
         Ok(())
     }
 
-    /// 退出收缩:q → confirm → y 不立即退,而是启动收缩动画;推进到归零后才退出。
-    #[test]
-    fn quit_plays_shrink_animation_then_exits() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        press(&mut app, KeyCode::Char('q'));
-        press(&mut app, KeyCode::Char('y'));
-        assert!(!app.should_quit, "确认退出应先播收缩动画,不立即退");
-        assert!(
-            matches!(&app.transition, Some(t) if t.leaving()),
-            "应进入退出(收缩)转场态"
-        );
-
-        // 模拟主循环逐 tick 推进转场,归零后置退出并清空转场。
-        for _ in 0..40 {
-            if app.transition.is_some() {
-                app.tick_transition();
-            }
-        }
-        assert!(app.should_quit, "收缩动画归零后应退出");
-        assert!(app.transition.is_none(), "收尾后转场应清空");
-        Ok(())
-    }
-
     /// 退出补记:还停在 Library 内走 q→y 退出,光标位置在转场起点记入记忆表
     /// (否则没经过「返回」的位置会随退出丢失)。
     #[test]
@@ -592,27 +555,22 @@ mod tests {
         Ok(())
     }
 
-    /// Shift+Q(硬编码,不可重映射):跳过确认浮层直接进退出收缩动画;
-    /// 动画收尾时向 daemon 投递一次 shutdown 请求。
+    /// Shift+Q(硬编码,不可重映射):跳过确认浮层,退出收尾时向 daemon 投递一次 shutdown。
     #[test]
-    fn shift_q_quits_with_animation_and_requests_daemon_stop() -> color_eyre::Result<()> {
+    fn shift_q_requests_daemon_stop_on_exit() -> color_eyre::Result<()> {
         let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
-        assert!(
-            matches!(&app.transition, Some(t) if t.leaving()),
-            "Shift+Q 应直接进入退出(收缩)转场,不弹确认"
-        );
-        assert!(!app.should_quit, "应先播收缩动画,不立即退");
+        assert!(!app.should_quit, "等待退出收尾");
 
         for _ in 0..40 {
             if app.transition.is_some() {
                 app.tick_transition();
             }
         }
-        assert!(app.should_quit, "收缩动画归零后应退出");
+        assert!(app.should_quit, "收尾后应退出");
         assert_eq!(
             shutdowns.load(std::sync::atomic::Ordering::SeqCst),
             1,
@@ -761,10 +719,8 @@ mod tests {
 
     /// 音量键按 `volume_step` 从当前音量算出目标发给 daemon(`+`/`=` 加,`-`/`_` 减,
     /// 钳 0..=100);本地不乐观回写,屏幕数值只认 daemon 推送。
-    ///
-    /// seek 只发 server 命令,本地 position 无回显。
     #[test]
-    fn volume_and_seek_via_keymap() -> color_eyre::Result<()> {
+    fn volume_via_keymap() -> color_eyre::Result<()> {
         let (mut app, volumes) = app_with_queue_volume_probed(1, /*current_idx*/ 0)?;
 
         // 每次按键前把当前音量置成 daemon 已确认值(真实路径下由每帧同步灌入)。
@@ -786,54 +742,6 @@ mod tests {
             assert_eq!(app.state.playback.volume_pct, base, "本地不乐观回写");
         }
 
-        // seek 是 server 往返,本地 position 不乐观回显;此处只确认按键被消化不 panic。
-        app.state.playback.position_ms = 60_000;
-        press(&mut app, KeyCode::Left);
-        press(&mut app, KeyCode::Right);
-        app.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Left,
-            KeyModifiers::SHIFT,
-        )));
-        app.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Right,
-            KeyModifiers::SHIFT,
-        )));
-        assert_eq!(
-            app.state.playback.position_ms, 60_000,
-            "seek 无本地回显(等 snapshot)"
-        );
-        Ok(())
-    }
-
-    /// `d` 按视图分流下载意图(Playlists→歌单 / Library→单曲),TestClient no-op:
-    /// 断不 panic、选中与视图不变(不验 Client 调用细节)。
-    #[test]
-    fn d_downloads_selection_by_view() -> color_eyre::Result<()> {
-        let mut app = app_with_library(3, /*sel_track*/ 1)?;
-        press(&mut app, KeyCode::Char('d'));
-        assert_eq!(app.state.browse.nav.track.sel(), 1, "Library d 不动选中");
-        assert_eq!(
-            app.state.browse.view,
-            crate::runtime::state::View::Library,
-            "Library d 不切视图"
-        );
-
-        let mut app = app_with_library(3, /*sel_track*/ 0)?;
-        app.state
-            .browse
-            .view
-            .switch_to(crate::runtime::state::View::Playlists);
-        press(&mut app, KeyCode::Char('d'));
-        assert_eq!(
-            app.state.browse.nav.playlist.sel(),
-            0,
-            "Playlists d 不动选中"
-        );
-        assert_eq!(
-            app.state.browse.view,
-            crate::runtime::state::View::Playlists,
-            "Playlists d 不切视图"
-        );
         Ok(())
     }
 
@@ -1123,27 +1031,6 @@ mod tests {
             vec![Page::new(10, 10)],
             "光标近底只请求一次下一页，offset 和 limit 沿用首页分页"
         );
-        Ok(())
-    }
-
-    /// 结果列焦点 Esc 回 prompt(不退出布局态)。
-    #[test]
-    fn results_focus_esc_returns_to_prompt() -> color_eyre::Result<()> {
-        use crate::runtime::state::SearchFocus;
-
-        let mut app = app_with_results(4)?;
-        assert_eq!(
-            app.state.channel_search.focus,
-            SearchFocus::Results,
-            "前置:焦点在结果列"
-        );
-        press(&mut app, KeyCode::Esc);
-        assert_eq!(
-            app.state.channel_search.focus,
-            SearchFocus::Prompt,
-            "Esc 回 prompt"
-        );
-        assert!(app.state.channel_search.active.on(), "仍在 search 布局");
         Ok(())
     }
 

@@ -1,8 +1,6 @@
-//! 测试专用构造 helper(快照 / 渲染测试共用)。仅 `#[cfg(test)]` 编译。
+//! TUI 状态与真实操作入口测试共用的构造 helper，仅 `#[cfg(test)]` 编译。
 //!
-//! 跨 crate 复用的零件(`song` / `with_*` / `endserenading` / `chinese_football` /
-//! `assert_snap!`)来自 [`mineral_test`];本模块只保留依赖 TUI 私有类型
-//! (`AppState` / `PlaylistEntryView` / `PlaylistView`)的 fixture。
+//! 通用模型 fixture 来自 [`mineral_test`]；本模块构造 TUI 私有状态与测试后端。
 
 #![cfg(test)]
 
@@ -31,8 +29,8 @@ use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
-    assert_snap, chinese_football, endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics,
-    qianzai_song, song, with_album, with_alias, with_artist, with_duration, with_name,
+    endserenading, feiyu_lyrics, feiyu_song, qianzai_lyrics, qianzai_song, song, with_album,
+    with_alias, with_artist, with_name,
 };
 
 /// 从内置默认配置构造测试主题。
@@ -193,66 +191,6 @@ pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
     s.library.lyrics.insert(track.id.clone(), feiyu_lyrics());
     s.playback.track = Some(track);
     s.playback.position_ms = 165_000;
-    Ok(s)
-}
-
-/// 进入「Chinese Football」歌单、填前 4 首(含最长的「不是人人都能穿十号球衣」),
-/// 专用于 CJK 宽字符在多列表格里的对齐 / 截断快照。
-pub(crate) fn state_with_cjk_tracks() -> color_eyre::Result<AppState> {
-    let mut s = AppState::test_default()?;
-    s.library.playlists = vec![playlist_view(
-        "cf",
-        "Chinese Football",
-        SourceKind::NETEASE,
-        10,
-    )];
-    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "cf"));
-    s.browse.view.switch_to(View::Library);
-    let tracks = chinese_football(4);
-    let views = entry_views(tracks.clone());
-    s.player.current = tracks.first().cloned();
-    s.library.tracks.insert(
-        PlaylistId::new(SourceKind::NETEASE, "cf"),
-        crate::runtime::state::PlaylistTracks {
-            entries: views,
-            complete: true,
-            next_offset: None,
-        },
-    );
-    Ok(s)
-}
-
-/// 填 3 首**带 artist + album** 的曲目(短英文 / 长英文 / CJK 混排),专用于验证
-/// Full 档 album 列「有内容」时的多列渲染 —— 其余 fixture 的 album 多为空,覆盖不到。
-/// 每曲 3:30,选中第 0 首(当前在播)。
-pub(crate) fn state_with_album() -> color_eyre::Result<AppState> {
-    let mut s = AppState::test_default()?;
-    s.library.playlists = vec![playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 3)];
-    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
-    s.browse.view.switch_to(View::Library);
-
-    let make = |name: &str, artist: &str, album: &str| {
-        with_album(
-            with_artist(with_duration(with_name(song(name), name), 210_000), artist),
-            album,
-        )
-    };
-    let tracks = [
-        make("Bones", "HONNE", "no song"),
-        make("Location Unknown", "HONNE", "Warm on a Cold Night"),
-        make("无", "草东没有派对", "丑奴儿"),
-    ];
-
-    let views = entry_views(tracks.to_vec());
-    s.player.current = tracks.first().cloned();
-    s.library.tracks.insert(
-        PlaylistId::new(SourceKind::NETEASE, "p1"),
-        crate::runtime::state::PlaylistTracks {
-            entries: views,
-            complete: true,
-            next_offset: None,
-        },
-    );
     Ok(s)
 }
 
@@ -866,18 +804,6 @@ fn seed_fullscreen(mut app: App) -> App {
     fs.tick();
     app.state.browse.fullscreen = fs;
     app
-}
-
-/// 造一个接 [`TestClient`]、**已稳态进入 Search 布局态**的 [`App`]:queue 填 3 首、在播首曲。
-/// 供 search 布局渲染快照用(M1 面板为占位骨架)。
-pub(crate) fn app_with_search() -> color_eyre::Result<App> {
-    let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-    // 稳态 search 布局:一步推到满值(step=1000)。
-    let mut s = Toggle::new(1);
-    s.set(true);
-    s.tick();
-    app.state.channel_search.active = s;
-    Ok(app)
 }
 
 /// 造一个**已稳态进入 Search 布局态**、注入单源(NETEASE)caps 的 probed [`App`]。

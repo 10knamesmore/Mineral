@@ -128,18 +128,7 @@ pub(crate) fn meta_config_lua() -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::schema::{
-        AudioConfig, Config, CopyTemplate, NeteaseSection, SourcesConfig, SpectrumStyle, TitleIcons,
-    };
-
-    /// 封闭 serde 枚举经 lua_enum 宏产出 alias 常量,变体值与落型一致。
-    #[test]
-    fn enum_aliases_generated() {
-        assert_eq!(
-            SpectrumStyle::LUA_ALIAS.lines().last().unwrap_or_default(),
-            r#"---@alias mineral.SpectrumStyle "bars"|"scope"|"waterfall"|"terrain""#
-        );
-    }
+    use crate::schema::{CopyTemplate, NeteaseSection, SourcesConfig};
 
     /// 落型前被摘走的函数字段经 lua_extra_field 声明进 stub:
     /// template 必填、curate_playlists 可选。
@@ -177,16 +166,6 @@ mod tests {
             CopyTemplate::LUA_STUB.contains("---@field key? string"),
             "key 应可选:\n{}",
             CopyTemplate::LUA_STUB
-        );
-    }
-
-    /// TitleIcons 转正为 config_section 后应有 stub 常量。
-    #[test]
-    fn title_icons_is_config_section() {
-        assert!(
-            TitleIcons::LUA_STUB.contains("---@class mineral.TitleIcons"),
-            "TitleIcons 应经 config_section 生成 stub:\n{}",
-            TitleIcons::LUA_STUB
         );
     }
 
@@ -309,8 +288,11 @@ mod tests {
     fn handwritten_alias_literals_deserialize() -> color_eyre::Result<()> {
         use crate::schema::{AnsiSlot, MenuAlign, RetentionDays};
         // AnsiSlot:16 个槽名 + 数字槽号(0-15 合法,16 越界拒绝)。
-        for slot_name in alias_literals("mineral.AnsiSlot").into_iter().flatten() {
-            serde_json::from_value::<AnsiSlot>(serde_json::json!(slot_name))?;
+        let slots = alias_members("mineral.AnsiSlot")?;
+        assert!(slots.len() > 1, "AnsiSlot 应同时声明槽名与数字槽号");
+        assert_eq!(slots.last().map(String::as_str), Some("integer"));
+        for token in slots.iter().filter(|token| token.as_str() != "integer") {
+            serde_json::from_str::<AnsiSlot>(token)?;
         }
         serde_json::from_value::<AnsiSlot>(serde_json::json!(15))?;
         assert!(
@@ -318,8 +300,11 @@ mod tests {
             "槽号 16 越界应拒"
         );
         // MenuAlign:三个关键字 + 数字比例。
-        for keyword in alias_literals("mineral.MenuAlign").into_iter().flatten() {
-            serde_json::from_value::<MenuAlign>(serde_json::json!(keyword))?;
+        let alignments = alias_members("mineral.MenuAlign")?;
+        assert!(alignments.len() > 1, "MenuAlign 应同时声明关键字与数字比例");
+        assert_eq!(alignments.last().map(String::as_str), Some("number"));
+        for token in alignments.iter().filter(|token| token.as_str() != "number") {
+            serde_json::from_str::<MenuAlign>(token)?;
         }
         serde_json::from_value::<MenuAlign>(serde_json::json!(0.5))?;
         // RetentionDays:false = 永久,正整数 = 天数;true 无意义应拒。
@@ -359,26 +344,6 @@ mod tests {
         mineral_test::assert_snap!(
             "meta/config.lua 生成全文(preamble + aliases + 宏生成 class/alias)",
             super::meta_config_lua()
-        );
-    }
-
-    /// config_section 宏应为每个段生成 LUA_STUB 关联常量,含 class 头与字段行。
-    #[test]
-    fn config_section_emits_lua_stub_const() {
-        assert!(
-            AudioConfig::LUA_STUB.contains("---@class mineral.AudioConfig"),
-            "缺 class 头:\n{}",
-            AudioConfig::LUA_STUB
-        );
-        assert!(
-            AudioConfig::LUA_STUB.contains("---@field volume? integer"),
-            "缺字段行:\n{}",
-            AudioConfig::LUA_STUB
-        );
-        assert!(
-            Config::LUA_STUB.contains("---@field stats? mineral.StatsConfig"),
-            "根 Config 应含 stats 段(现手写 stub 缺失的正是它):\n{}",
-            Config::LUA_STUB
         );
     }
 

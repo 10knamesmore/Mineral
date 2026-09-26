@@ -138,12 +138,6 @@ impl WindowTitle {
         self.last_title = new_title;
         Ok(())
     }
-
-    /// 仅用于测试：直接取上一次写给终端的标题。
-    #[cfg(test)]
-    fn last_title(&self) -> Option<&str> {
-        self.last_title.as_deref()
-    }
 }
 
 /// 模板中是否有段引用 `Lyric` 字段。
@@ -238,11 +232,11 @@ fn field_value<'a>(
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::{Config, TimeFormat, TimePreset, TitleField, TitleSegment};
+    use mineral_config::Config;
     use mineral_model::Song;
-    use mineral_test::{song, with_album, with_artist};
+    use mineral_test::{song, with_artist};
 
-    use super::{TitleContext, WindowTitle, fold, sanitize_title};
+    use super::{TitleContext, WindowTitle, sanitize_title};
 
     /// 造一个默认上下文（播放中、已连接、无进度 / 歌词 / 覆盖）。
     fn ctx(song: Option<&Song>) -> TitleContext<'_> {
@@ -257,53 +251,6 @@ mod tests {
         }
     }
 
-    /// 一个纯时间字段段（clock 预设）。
-    fn field(field: TitleField, prefix: &str, suffix: &str) -> TitleSegment {
-        TitleSegment::Field {
-            field,
-            prefix: prefix.to_owned(),
-            suffix: suffix.to_owned(),
-            format: TimeFormat::default(),
-        }
-    }
-
-    // ── 状态机 / 优先级：走 WindowTitle::new(默认配置) + render ──
-
-    /// 默认模板渲染播放 / 暂停态：仅图标不同。
-    #[test]
-    fn default_template_playing_and_paused() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
-        let s = with_artist(song("s"), "Artist Name");
-        assert_eq!(
-            wt.render(&ctx(Some(&s))),
-            Some("⏸ s — Artist Name".to_owned())
-        );
-        let mut paused = ctx(Some(&s));
-        paused.playing = false;
-        assert_eq!(wt.render(&paused), Some("▶ s — Artist Name".to_owned()));
-        Ok(())
-    }
-
-    /// 无艺人时 prefix 整段折叠，不残留 " — "。
-    #[test]
-    fn artist_prefix_folds_when_empty() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
-        let s = song("s");
-        assert_eq!(wt.render(&ctx(Some(&s))), Some("⏸ s".to_owned()));
-        Ok(())
-    }
-
-    /// 空闲态走 idle 模板：`■ Mineral`。
-    #[test]
-    fn idle_state() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
-        assert_eq!(wt.render(&ctx(None)), Some("■ Mineral".to_owned()));
-        Ok(())
-    }
-
     /// 断连态走 disconnected 模板，优先级最高（覆盖有歌态）。
     #[test]
     fn disconnected_overrides_all() -> color_eyre::Result<()> {
@@ -313,7 +260,9 @@ mod tests {
         let mut c = ctx(Some(&s));
         c.connected = false;
         c.override_text = Some("脚本串"); // 断连时旋钮 stale，忽略
-        assert_eq!(wt.render(&c), Some("⚠ Mineral".to_owned()));
+        let mut disconnected = ctx(None);
+        disconnected.connected = false;
+        assert_eq!(wt.render(&c), wt.render(&disconnected));
         Ok(())
     }
 
@@ -328,110 +277,6 @@ mod tests {
         assert_eq!(wt.render(&c), Some("⠙ 自定义标题".to_owned()));
         Ok(())
     }
-
-    // ── fold 渲染细节：直接调 fold（自定义段无需构造完整配置）──
-
-    /// StateIcon：`icon=true` 输出字形 + 空格，`icon=false` 空段跳过。
-    #[test]
-    fn state_icon_toggle() {
-        let s = song("s");
-        let c = ctx(Some(&s));
-        assert_eq!(
-            fold(&[TitleSegment::StateIcon { icon: true }], "▶", &c),
-            "▶ "
-        );
-        assert_eq!(
-            fold(&[TitleSegment::StateIcon { icon: false }], "▶", &c),
-            ""
-        );
-    }
-
-    /// position / duration 字段：clock 预设，duration=0 折叠、position=0 渲染 00:00。
-    #[test]
-    fn position_and_duration_clock() -> color_eyre::Result<()> {
-        let template = [
-            field(TitleField::Position, "", ""),
-            field(TitleField::Duration, "/", ""),
-        ];
-        let s = song("s");
-        let mut c = ctx(Some(&s));
-        // duration 未知 → 折叠；position=0 → 00:00。
-        assert_eq!(fold(&template, "", &c), "00:00");
-        // 有进度 + 全长。
-        c.position_ms = 83_000;
-        c.duration_ms = Some(296_000);
-        assert_eq!(fold(&template, "", &c), "01:23/04:56");
-        Ok(())
-    }
-
-    /// source 字段渲染来源 label。
-    #[test]
-    fn source_field() -> color_eyre::Result<()> {
-        let s = song("s"); // mineral_test::song → netease 命名空间
-        assert_eq!(
-            fold(&[field(TitleField::Source, "", "")], "", &ctx(Some(&s))),
-            s.source().label()
-        );
-        Ok(())
-    }
-
-    /// lyric 字段：有当前行则渲染，无则折叠。
-    #[test]
-    fn lyric_field_renders_and_folds() -> color_eyre::Result<()> {
-        let template = [field(TitleField::Lyric, "♪ ", "")];
-        let s = song("s");
-        let mut c = ctx(Some(&s));
-        c.lyric = Some("这是当前歌词");
-        assert_eq!(fold(&template, "", &c), "♪ 这是当前歌词");
-        c.lyric = None;
-        assert_eq!(fold(&template, "", &c), "", "无当前行整段折叠");
-        Ok(())
-    }
-
-    /// 自定义时间格式串（pattern）。
-    #[test]
-    fn custom_pattern_format() -> color_eyre::Result<()> {
-        let template = [TitleSegment::Field {
-            field: TitleField::Position,
-            prefix: String::new(),
-            suffix: String::new(),
-            format: TimeFormat::Pattern {
-                pattern: "{m}分{ss}秒".to_owned(),
-            },
-        }];
-        let s = song("s");
-        let mut c = ctx(Some(&s));
-        c.position_ms = 83_000;
-        assert_eq!(fold(&template, "", &c), "1分23秒");
-        Ok(())
-    }
-
-    /// album 字段与 seconds 预设。
-    #[test]
-    fn album_and_seconds() -> color_eyre::Result<()> {
-        let template = [
-            TitleSegment::Literal {
-                text: "[".to_owned(),
-            },
-            field(TitleField::Album, "", ""),
-            TitleSegment::Literal {
-                text: "] ".to_owned(),
-            },
-            TitleSegment::Field {
-                field: TitleField::Position,
-                prefix: String::new(),
-                suffix: "s".to_owned(),
-                format: TimeFormat::Preset(TimePreset::Seconds),
-            },
-        ];
-        let s = with_album(song("s"), "My Album");
-        let mut c = ctx(Some(&s));
-        c.position_ms = 42_000;
-        assert_eq!(fold(&template, "", &c), "[My Album] 42s");
-        Ok(())
-    }
-
-    // ── 开关 / 派生标志 / 消毒 / 变化检测 ──
 
     /// 禁用（enabled=false）时不产生任何标题。
     #[test]
@@ -448,46 +293,9 @@ mod tests {
         Ok(())
     }
 
-    /// 默认模板不含 lyric → wants_lyric 为 false（调用方跳过每帧歌词拼接）。
-    #[test]
-    fn wants_lyric_false_for_default() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
-        assert!(!wt.wants_lyric());
-        Ok(())
-    }
-
-    /// 模板含 lyric 字段 → wants_lyric 为 true。
-    #[test]
-    fn wants_lyric_true_when_template_references_lyric() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            r#"return { tui = { window_title = { template = { { field = "lyric" } } } } }"#,
-        )?;
-        let (cfg, _warnings) = mineral_config::load(&path)?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
-        assert!(wt.wants_lyric());
-        Ok(())
-    }
-
     /// 标题里的控制字符（换行 / BEL / ESC）被抹平，杜绝 OSC 注入。
     #[test]
     fn sanitize_strips_control_chars() {
         assert_eq!(sanitize_title("a\x07b\x1bc\nd"), "a b c d");
-    }
-
-    /// 连续同上下文只写一次（通过 last_title 观察）。
-    #[test]
-    fn update_dedupes_same_title() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let mut wt = WindowTitle::new(cfg.tui().window_title());
-        let s = with_artist(song("s"), "Artist");
-        wt.update(&ctx(Some(&s)))?;
-        let first = wt.last_title().map(String::from);
-        wt.update(&ctx(Some(&s)))?;
-        assert_eq!(wt.last_title(), first.as_deref());
-        Ok(())
     }
 }

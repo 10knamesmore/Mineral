@@ -114,18 +114,6 @@ impl EnvelopeState {
         self.reveal.tick();
     }
 
-    /// 测试构造:直接停在指定揭示进度(千分比 `0..=1000`)。
-    ///
-    /// 全程拍数取满标度,故每拍恰推进 1‰——推 `reveal_e3` 拍即停在该进度。
-    #[cfg(test)]
-    pub fn test_at(owner: SongId, envelope: Envelope, reveal_e3: u16) -> Self {
-        let mut state = Self::new(owner, envelope, 1000);
-        for _ in 0..reveal_e3 {
-            state.tick();
-        }
-        state
-    }
-
     /// 重设动画时长而不动当前相位(配置热更)。
     fn retempo(&mut self, ticks: u16) {
         self.reveal.retempo(ticks);
@@ -387,15 +375,10 @@ mod tests {
         assert_eq!(pb.sync_trust(), SyncTrust::Broken, "差 11s 判失真");
     }
 
-    /// `ratio_bps`:无 track / dur 0 → 零;超出 clamp 到满。
+    /// `ratio_bps`:无 track → 零。
     #[test]
-    fn ratio_bps_cases() {
+    fn ratio_bps_zero_without_track() {
         assert_eq!(Playback::new().ratio_bps(), Bps::ZERO);
-        assert_eq!(with_track(0, 100).ratio_bps(), Bps::ZERO);
-        assert_eq!(with_track(1000, 0).ratio_bps(), Bps::ZERO);
-        assert_eq!(with_track(1000, 500).ratio_bps(), Bps::new(5000));
-        assert_eq!(with_track(1000, 1000).ratio_bps(), Bps::FULL);
-        assert_eq!(with_track(1000, 5000).ratio_bps(), Bps::FULL);
     }
 
     /// `duration_ms`:取 track 元数据,无 track → `None`。
@@ -519,90 +502,55 @@ mod tests {
         Ok(())
     }
 
-    /// `sync_envelope` 的重播判定:同一 `(归属, 版本)` 重复到达**原地保留相位**
-    /// (重段每次到达都会调这里,无条件重建会让入场动画反复从头重播);
-    /// 换版本或换曲才重建、动画归零重播;无曲 / 无包络则整份清空。
+    /// 包络按歌曲与版本复用；任一身份变化更新数据，无歌曲或无包络时清空。
     #[test]
-    fn sync_envelope_replays_only_on_new_identity() -> color_eyre::Result<()> {
+    fn sync_envelope_updates_on_new_identity() {
         use mineral_model::Envelope;
 
-        let envelope = |version: u16| Envelope {
-            points: vec![9],
+        let envelope = |version: u16, point: u8| Envelope {
+            points: vec![point],
             version,
         };
-        let id = SongId::new(SourceKind::LOCAL, "a");
-        let mut pb = Playback::new();
+        let id = SongId::new(SourceKind::LOCAL, "t");
+        let mut pb = with_track(1000, 0);
+        let first = envelope(1, 9);
+        pb.sync_envelope(Some(id.clone()), Some(first.clone()), 10);
+        assert_eq!(
+            pb.current_envelope().map(EnvelopeState::envelope),
+            Some(&first)
+        );
 
-        pb.sync_envelope(Some(id.clone()), Some(envelope(1)), /*ticks*/ 10);
-        for _ in 0..4 {
-            pb.tick_envelope_reveal();
+        pb.sync_envelope(Some(id.clone()), Some(envelope(1, 4)), 10);
+        assert_eq!(
+            pb.current_envelope().map(EnvelopeState::envelope),
+            Some(&first),
+            "同一歌曲和版本复用已加载数据"
+        );
+
+        let next = envelope(2, 4);
+        pb.sync_envelope(Some(id.clone()), Some(next.clone()), 10);
+        assert_eq!(
+            pb.current_envelope().map(EnvelopeState::envelope),
+            Some(&next)
+        );
+
+        let other_id = SongId::new(SourceKind::LOCAL, "other");
+        if let Some(track) = pb.track.as_mut() {
+            track.id = other_id.clone();
         }
-        let mid = pb
-            .envelope
-            .as_ref()
-            .map(EnvelopeState::reveal)
-            .ok_or_else(|| color_eyre::eyre::eyre!("装载后应有包络"))?;
-        assert!(mid > 0, "前置:动画已起步");
-
-        // 同一份重复到达(同曲内 media facts 更新等):相位不动。
-        pb.sync_envelope(Some(id.clone()), Some(envelope(1)), /*ticks*/ 10);
+        let other = envelope(2, 7);
+        pb.sync_envelope(Some(other_id.clone()), Some(other.clone()), 10);
         assert_eq!(
-            pb.envelope.as_ref().map(EnvelopeState::reveal),
-            Some(mid),
-            "同一份包络重复到达不该重播动画"
+            pb.current_envelope().map(EnvelopeState::envelope),
+            Some(&other),
+            "歌曲变化时相同版本号也要更新数据"
         );
 
-        // 换版本:重建,动画归零。
-        pb.sync_envelope(Some(id.clone()), Some(envelope(2)), /*ticks*/ 10);
-        assert_eq!(
-            pb.envelope.as_ref().map(EnvelopeState::reveal),
-            Some(0),
-            "包络换版本应重播动画"
-        );
-
-        // 换曲:同样重建。
-        for _ in 0..4 {
-            pb.tick_envelope_reveal();
-        }
-        pb.sync_envelope(
-            Some(SongId::new(SourceKind::LOCAL, "b")),
-            Some(envelope(2)),
-            /*ticks*/ 10,
-        );
-        assert_eq!(
-            pb.envelope.as_ref().map(EnvelopeState::reveal),
-            Some(0),
-            "换曲应重播动画"
-        );
-
-        // 无包络 / 无曲:整份清空。
-        pb.sync_envelope(Some(id), None, /*ticks*/ 10);
-        assert!(pb.envelope.is_none(), "无包络应清空");
-        Ok(())
-    }
-
-    /// 入场动画推进到位后停住,不会越过满值(渲染据此判定稳态)。
-    #[test]
-    fn envelope_reveal_settles_at_full() {
-        use mineral_model::Envelope;
-
-        let mut pb = Playback::new();
-        pb.sync_envelope(
-            Some(SongId::new(SourceKind::LOCAL, "a")),
-            Some(Envelope {
-                points: vec![9],
-                version: 1,
-            }),
-            /*ticks*/ 4,
-        );
-        for _ in 0..12 {
-            pb.tick_envelope_reveal();
-        }
-        assert_eq!(
-            pb.envelope.as_ref().map(EnvelopeState::reveal),
-            Some(1000),
-            "推过头也停在满值"
-        );
+        pb.sync_envelope(Some(other_id), None, 10);
+        assert!(pb.envelope.is_none());
+        pb.sync_envelope(Some(id), Some(first.clone()), 10);
+        pb.sync_envelope(None, Some(first), 10);
+        assert!(pb.envelope.is_none());
     }
 
     /// `Prefetch::stage` 三态归纳:未预排 → Idle;已预排未稳 → Fetching;

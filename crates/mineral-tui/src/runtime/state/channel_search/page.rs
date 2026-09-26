@@ -472,7 +472,7 @@ mod tests {
     use mineral_task::SearchPayload;
     use rustc_hash::FxHashMap;
 
-    use super::{PromptSegment, SearchFocus, SearchPage, SearchWhitelist};
+    use super::{SearchFocus, SearchPage, SearchWhitelist};
 
     /// 造一个落在 NETEASE、给定 searchable 的 caps 表。
     fn caps_with(kinds: Vec<SearchKind>) -> FxHashMap<SourceKind, ChannelCaps> {
@@ -530,16 +530,6 @@ mod tests {
         }
         assert!(!rs.current_loading(), "换词 clear_results 清 loading");
         Ok(())
-    }
-
-    /// spinner 帧计数随 tick 单调 +1(渲染层据此取旋转帧,故 loading 占位会持续旋转)。
-    #[test]
-    fn spinner_counter_advances_with_tick() {
-        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 1);
-        let c0 = rs.spinner_counter();
-        rs.tick();
-        rs.tick();
-        assert_eq!(rs.spinner_counter(), c0 + 2, "每 tick spinner 计数 +1");
     }
 
     /// 进入时挑首个 searchable source、kind 落到该 source searchable 首项、焦点回 prompt。
@@ -726,100 +716,5 @@ mod tests {
             "首次切入 bilibili:kind 落到白名单过滤后的首项,而非 searchable 首项 song"
         );
         Ok(())
-    }
-
-    /// `set_focus`：切到面板记住 `last_panel`、armed 焦点环；回 prompt 不改 `last_panel`；
-    /// 同焦点为 no-op（不重置已 settle 的环）。
-    #[test]
-    fn set_focus_tracks_last_panel_and_arms_ring() {
-        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
-        assert_eq!(
-            rs.last_panel,
-            SearchFocus::Results,
-            "默认 last_panel 为 results"
-        );
-        assert!(rs.focus_ring.settled(), "初始无滑动");
-
-        rs.set_focus(SearchFocus::Detail);
-        assert_eq!(rs.focus, SearchFocus::Detail);
-        assert_eq!(
-            rs.prev_focus,
-            SearchFocus::Prompt,
-            "环从 prompt 滑向 detail"
-        );
-        assert_eq!(
-            rs.last_panel,
-            SearchFocus::Detail,
-            "停在面板 → 记住为 last_panel"
-        );
-        assert!(!rs.focus_ring.settled(), "切焦点 armed 滑动");
-
-        rs.set_focus(SearchFocus::Prompt);
-        assert_eq!(
-            rs.last_panel,
-            SearchFocus::Detail,
-            "回 prompt 不改 last_panel"
-        );
-
-        for _ in 0..4 {
-            rs.tick();
-        }
-        assert!(rs.focus_ring.settled(), "推满后环 settle");
-        rs.set_focus(SearchFocus::Prompt);
-        assert!(rs.focus_ring.settled(), "同焦点不重新 arm");
-    }
-
-    /// chip 下拉收起播 collapse 动画:close_seg 后 `seg_open` 已假,但 `dropdown_active` 仍真
-    /// （视觉收尾期继续画着往回收），tick 到 settle 才归零停画。
-    #[test]
-    fn dropdown_collapse_animates_after_close() {
-        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
-        rs.set_prompt_seg(PromptSegment::Kind, 0);
-        for _ in 0..8 {
-            rs.tick();
-        }
-        assert!(rs.dropdown_active(), "展开 settle 后仍需渲染");
-        rs.close_seg();
-        assert!(!rs.seg_open(), "逻辑上已收起");
-        assert!(rs.dropdown_active(), "但收起动画进行中,仍画着往回收");
-        for _ in 0..8 {
-            rs.tick();
-        }
-        assert!(!rs.dropdown_active(), "收起动画播完归零,停止渲染");
-    }
-
-    /// chip↔chip 切换重播展开动画;切到 query 收起动画仍画(reveal 归属保留上一个 chip)。
-    #[test]
-    fn dropdown_reanimates_on_chip_switch_then_query_collapse() {
-        let mut rs = SearchPage::new(/*layout_ticks*/ 1, /*ring_ticks*/ 4);
-        rs.set_prompt_seg(PromptSegment::Kind, 0);
-        for _ in 0..8 {
-            rs.tick();
-        }
-        assert_eq!(rs.reveal_seg(), Some(PromptSegment::Kind), "归属在 kind");
-        assert_eq!(rs.seg_reveal(), 1000, "kind 下拉已满展开");
-        // chip→chip:归属切到 source、展开动画从零重播(不是「已开就不动」)。
-        rs.set_prompt_seg(PromptSegment::Source, 0);
-        assert_eq!(
-            rs.reveal_seg(),
-            Some(PromptSegment::Source),
-            "归属切到 source"
-        );
-        assert!(rs.seg_reveal() < 1000, "切 chip 重播展开,非保持满值");
-        for _ in 0..8 {
-            rs.tick();
-        }
-        // chip→query:收起,归属仍保留 source(把收起动画画完)。
-        rs.set_prompt_seg(PromptSegment::Query, 0);
-        assert_eq!(
-            rs.reveal_seg(),
-            Some(PromptSegment::Source),
-            "切 query 后归属保留,收起动画照画"
-        );
-        assert!(rs.dropdown_active(), "收起动画进行中仍渲染");
-        for _ in 0..8 {
-            rs.tick();
-        }
-        assert!(!rs.dropdown_active(), "收起播完停画");
     }
 }

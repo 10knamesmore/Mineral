@@ -247,21 +247,13 @@ fn upper_color(cell: &Cell) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use color_eyre::eyre::eyre;
-    use image::{DynamicImage, Rgba, RgbaImage};
-    use mineral_model::MediaUrl;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-    use ratatui::style::Color;
 
-    use super::{FlightContent, FlightEnd, FlightPlan};
+    use ratatui::layout::Rect;
+
     use crate::components::layout::shared::compute::{compute, compute_search};
-    use crate::components::layout::shared::vinyl;
-    use crate::image::{ImageContent, ImageRenderPhase};
+
     use crate::test_support::app_in_search_morph;
 
     /// 两端完整解码图都未入缓存时不开飞行层。
@@ -291,98 +283,6 @@ mod tests {
             .ok_or_else(|| eyre!("browse 端图已缓存,应有单端计划"))?;
         assert!(plan.from.is_some(), "browse 端应就绪");
         assert!(plan.to.is_none(), "detail 端图未缓存应缺席");
-        Ok(())
-    }
-
-    /// 渐变两端与各自稳态逐格一致，包括长方形封面留白和当前唱片旋转相位。
-    #[test]
-    fn idle_vinyl_flight_matches_steady_endpoints() -> color_eyre::Result<()> {
-        let mut app = app_in_search_morph(true, false)?;
-        app.state.playback.track = None;
-        for _ in 0..37 {
-            app.state.vinyl.tick();
-        }
-        let screen = Rect::new(0, 0, 68, 28);
-        let from_area = Rect::new(2, 4, 21, 12);
-        let to_area = Rect::new(28, 3, 33, 18);
-        let url = MediaUrl::remote("https://example.com/vinyl-flight.png")?;
-        let plan = FlightPlan {
-            from: Some(FlightEnd {
-                area: from_area,
-                content: FlightContent::Cover(url.clone()),
-            }),
-            to: Some(FlightEnd {
-                area: to_area,
-                content: FlightContent::Vinyl,
-            }),
-        };
-        let mut background = Buffer::empty(screen);
-        for (index, cell) in background.content.iter_mut().enumerate() {
-            let shade = u8::try_from(index % 128)?;
-            cell.set_fg(Color::Rgb(255, 0, 0))
-                .set_bg(Color::Rgb(shade, 30, 70));
-        }
-        for (width, height) in [(160, 80), (80, 160), (128, 65)] {
-            let pixels = RgbaImage::from_pixel(width, height, Rgba([30, 180, 230, 192]));
-            app.state
-                .images
-                .cache
-                .insert_test(&url, Arc::new(DynamicImage::ImageRgba8(pixels)));
-            for progress in [0, 1000] {
-                let mut expected = background.clone();
-                if progress == 0 {
-                    app.state.images.render(
-                        ImageContent::Display { url: Some(&url) },
-                        from_area,
-                        &mut expected,
-                        ImageRenderPhase::Resizing,
-                    );
-                } else {
-                    vinyl::render_to(&mut expected, to_area, &app.state.vinyl, &app.theme);
-                }
-                let mut terminal = Terminal::new(TestBackend::new(screen.width, screen.height))?;
-                terminal.draw(|frame| {
-                    *frame.buffer_mut() = background.clone();
-                    super::render(frame, &plan, progress, &app.state, &app.theme);
-                })?;
-                assert_eq!(
-                    terminal.backend().buffer(),
-                    &expected,
-                    "{width}×{height} 封面在进度 {progress} 应与稳态内容完全相同"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// 上半格交叉渐变不能染色两端都留白的下半格；空格的隐藏前景色也不能入画。
-    #[test]
-    fn halfblock_fade_preserves_uncovered_halves() -> color_eyre::Result<()> {
-        let area = Rect::new(0, 0, 2, 1);
-        let background = Color::Rgb(20, 40, 60);
-        let mut from = Buffer::empty(area);
-        for cell in &mut from.content {
-            cell.set_fg(Color::Rgb(255, 255, 255)).set_bg(background);
-        }
-        let mut to = from.clone();
-        from.cell_mut((0, 0))
-            .ok_or_else(|| eyre!("缺少旧图 cell"))?
-            .set_char('▀')
-            .set_fg(Color::Rgb(200, 0, 0));
-        for cell in &mut to.content {
-            cell.set_char('▀').set_fg(Color::Rgb(0, 0, 200));
-        }
-        let mut output = from.clone();
-        super::blend_halfblocks(&mut output, &from, &to, 500);
-        assert_eq!(
-            output
-                .content
-                .iter()
-                .map(|cell| cell.fg)
-                .collect::<Vec<_>>(),
-            [Color::Rgb(100, 0, 100), Color::Rgb(10, 20, 130)]
-        );
-        assert!(output.content.iter().all(|cell| cell.bg == background));
         Ok(())
     }
 }

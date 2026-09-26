@@ -1,8 +1,0 @@
----
-source: crates/mineral-tui/src/components/toast/download_toast.rs
-description: "下载完成提示:全成功 → 只 ✓5"
-expression: t.backend()
----
-"                 [ Downloads finished ✓5 ]                  "
-"                                                            "
-"                                                            "

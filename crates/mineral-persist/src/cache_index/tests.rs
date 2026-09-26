@@ -91,25 +91,6 @@ async fn evicts_lru_over_capacity() -> color_eyre::Result<()> {
     let root = d.path().join("root");
     // 容量 10 字节。
     let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(10)).await?;
-    idx.record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
-        .await?; // 5
-    idx.record_file("b", &make_src(d.path(), "b", b"12345")?, "s", "b.bin")
-        .await?; // 共 10
-    let _ = idx.get("a"); // 触碰 a → b 变最旧
-    idx.record_file("c", &make_src(d.path(), "c", b"123")?, "s", "c.bin")
-        .await?; // +3 超 → 驱逐最旧 b
-    assert!(idx.get("a").is_some());
-    assert!(idx.get("b").is_none(), "最旧 b 应被驱逐");
-    assert!(idx.get("c").is_some());
-    Ok(())
-}
-
-/// record_file 返回本次 LRU 驱逐掉的记录(供 cache_evictions 埋点):驱逐 b(5 字节)。
-#[tokio::test]
-async fn record_file_returns_evicted_entries() -> color_eyre::Result<()> {
-    let d = tempfile::tempdir()?;
-    let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(10)).await?;
     let first = idx
         .record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
         .await?;
@@ -125,9 +106,11 @@ async fn record_file_returns_evicted_entries() -> color_eyre::Result<()> {
         vec![Evicted {
             key: "b".to_owned(),
             bytes: 5
-        }],
-        "应返回被驱逐的 b(5 字节)"
+        }]
     );
+    assert!(idx.get("a").is_some());
+    assert!(idx.get("b").is_none(), "最旧 b 应被驱逐");
+    assert!(idx.get("c").is_some());
     Ok(())
 }
 

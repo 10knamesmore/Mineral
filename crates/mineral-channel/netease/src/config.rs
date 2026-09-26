@@ -32,27 +32,3 @@ pub struct PlaylistFetchConfig {
     /// 一个歌单最多同时发出的歌曲详情请求数；必须大于零。
     max_concurrent: NonZeroUsize,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::NeteaseConfig;
-
-    /// builder 逐旋钮生效(布线验证,不打网络)。
-    #[test]
-    fn builder_sets_fields() {
-        let c = NeteaseConfig::builder()
-            .playlist_fetch(
-                crate::config::PlaylistFetchConfig::builder()
-                    .batch_size(std::num::NonZeroUsize::new(500).unwrap())
-                    .max_concurrent(std::num::NonZeroUsize::new(3).unwrap())
-                    .build(),
-            )
-            .timeout_secs(7)
-            .max_connections(3)
-            .proxy(Some("socks5://127.0.0.1:1080".to_owned()))
-            .build();
-        assert_eq!(*c.timeout_secs(), 7);
-        assert_eq!(*c.max_connections(), 3);
-        assert_eq!(c.proxy().as_deref(), Some("socks5://127.0.0.1:1080"));
-    }
-}

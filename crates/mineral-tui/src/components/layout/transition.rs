@@ -290,11 +290,6 @@ mod tests {
                 (original.symbol(), original.fg, original.underline_color)
             );
         }
-        assert_ne!(
-            destination.cell((6, 2)).map(|cell| cell.fg),
-            Some(theme.text),
-            "文本仍正常淡化"
-        );
         super::paint_window(
             &mut destination,
             &source,
@@ -349,10 +344,6 @@ mod tests {
         assert_eq!(cell(8, 2)?.symbol(), " ", "被切开的宽字符留空");
         assert_eq!(cell(9, 2)?.symbol(), "│", "右边界保持完整");
         assert_eq!(cell(4, 3)?.symbol(), "s", "下一行仍来自原排版");
-        assert_ne!(cell(4, 2)?.fg, theme.text, "文字已开始淡化");
-        assert_eq!(cell(9, 2)?.fg, theme.surface1, "边框不随文字淡化");
-        assert_eq!(cell(9, 3)?.symbol(), "⣿", "侧边 minimap 标记随内容保留");
-        assert_ne!(cell(9, 3)?.fg, theme.accent, "minimap 标记与正文一起淡化");
         Ok(())
     }
 

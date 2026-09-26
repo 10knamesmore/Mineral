@@ -446,29 +446,6 @@ mod tests {
         Ok(())
     }
 
-    /// 出参 SongId 使用 entry 自己的 namespace,不从 Playlist store namespace 推断。
-    #[tokio::test]
-    async fn playlist_cache_returns_namespaced_song_ids() -> color_eyre::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let p = crate::ServerStore::open(&dir.path().join("t.db")).await?;
-        let s = p.scope(SourceKind::LOCAL);
-        let pid = mineral_model::PlaylistId::new(SourceKind::LOCAL, "p1");
-        let entries = vec![
-            cached(2, SourceKind::NETEASE, "s1"),
-            cached(8, SourceKind::BILIBILI, "s2"),
-        ];
-        s.put_playlist_cache(&pid, Some("本地歌单"), Some(1), &entries)
-            .await?;
-        let Some(g) = s.get_playlist_cache(&pid).await? else {
-            return Err(color_eyre::eyre::eyre!("应命中缓存"));
-        };
-        assert_eq!(
-            g.entries, entries,
-            "mixed-source relation 应完整 round-trip"
-        );
-        Ok(())
-    }
-
     #[tokio::test]
     async fn playlist_cache_overwrite_clears_old_tracks() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;

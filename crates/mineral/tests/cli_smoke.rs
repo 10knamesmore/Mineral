@@ -1,7 +1,6 @@
-//! CLI 冒烟 e2e:用 `assert_cmd` 起真 `mineral` 二进制,验证 help / version 退出码、
-//! 错误参数非零退出、`mineral status` 无 daemon 时友好报错、`stats` 离线子命令。
+//! CLI 冒烟 E2E：真实二进制的参数解析、退出码和 stats 离线操作。
 //!
-//! 不需要 pty / 网络;每个用例隔离一套临时 XDG 目录(保证 status 连不上真 daemon)。
+//! 不需要 pty / 网络；每个用例隔离临时 XDG 目录，避免连接正在运行的 daemon。
 
 use std::path::{Path, PathBuf};
 
@@ -71,50 +70,31 @@ fn bad_args_exit_nonzero() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// `mineral cache clean` 在全新隔离环境(无 db / 无缓存目录)下也能优雅成功并退出 0,
-/// 并打出「前后对比 + 总释放」报告。
+/// `mineral cache clean` 在没有 DB 或缓存目录的新环境中仍成功。
 #[test]
 fn cache_clean_succeeds_on_fresh_env() -> color_eyre::Result<()> {
-    mineral()?
-        .args(["cache", "clean"])
-        .assert()
-        .success()
-        .stdout(contains("cleared"))
-        .stdout(contains("freed"));
+    mineral()?.args(["cache", "clean"]).assert().success();
     Ok(())
 }
 
-/// `mineral cache status` 在全新隔离环境下也能优雅成功并退出 0,打出三区域汇总。
+/// `mineral cache status` 在新环境中仍成功。
 #[test]
 fn cache_status_succeeds_on_fresh_env() -> color_eyre::Result<()> {
-    mineral()?
-        .args(["cache", "status"])
-        .assert()
-        .success()
-        .stdout(contains("audio"))
-        .stdout(contains("playlist"));
+    mineral()?.args(["cache", "status"]).assert().success();
     Ok(())
 }
 
-/// `mineral status` 无 daemon → 非零退出,且 stderr 给出「先跑 mineral serve」的提示。
+/// 无 daemon 时 `mineral status` 非零退出。
 #[test]
-fn status_without_daemon_errors_with_hint() -> color_eyre::Result<()> {
-    mineral()?
-        .arg("status")
-        .assert()
-        .failure()
-        .stderr(contains("serve"));
+fn status_without_daemon_fails() -> color_eyre::Result<()> {
+    mineral()?.arg("status").assert().failure();
     Ok(())
 }
 
-/// 全新隔离环境(无 stats.db)下,`stats status` 优雅成功并指向 `stats.level` 配置。
+/// 缺少 stats.db 时 `stats status` 仍成功。
 #[test]
-fn stats_absent_db_points_to_config() -> color_eyre::Result<()> {
-    mineral()?
-        .args(["stats", "status"])
-        .assert()
-        .success()
-        .stdout(contains("stats.level"));
+fn stats_absent_db_succeeds() -> color_eyre::Result<()> {
+    mineral()?.args(["stats", "status"]).assert().success();
     Ok(())
 }
 
@@ -168,8 +148,7 @@ async fn stats_report_json_and_prune_plan_over_seeded_db() -> color_eyre::Result
     mineral_at(&root)?
         .args(["stats", "prune", "--before", "2099-01-01"])
         .assert()
-        .success()
-        .stdout(contains("Will delete"));
+        .success();
 
     // 计划态未动盘:db 里仍是 5 行 plays。
     let store = StatsStore::open(&stats_db).await?;

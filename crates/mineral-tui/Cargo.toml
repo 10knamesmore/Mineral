@@ -52,7 +52,6 @@ tokio                = { workspace = true }
 url                  = { workspace = true }
 
 [dev-dependencies]
-insta              = { workspace = true }
 tempfile           = "3"
 mineral-test       = { workspace = true }
 mineral-playback   = { workspace = true }

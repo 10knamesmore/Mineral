@@ -133,37 +133,3 @@ fn paint(text: &str, code: &str, color: bool) -> String {
         text.to_owned()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::render_check;
-    use crate::loader::ConfigWarning;
-    use crate::schema::Config;
-
-    /// 测试用固定默认下载目录(避免快照随机器 / 环境变化)。
-    fn fixed_default_dir() -> &'static Path {
-        Path::new("/home/user/Music/mineral")
-    }
-
-    #[test]
-    fn renders_valid_config() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let out = render_check(&cfg, &[], fixed_default_dir(), /*color*/ false);
-        mineral_test::assert_snap!("config check:默认有效配置(无警告,无色)", out);
-        Ok(())
-    }
-
-    #[test]
-    fn renders_with_warnings() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let warnings = vec![ConfigWarning::Deserialize {
-            path: "audio.volume".to_owned(),
-            detail: "invalid type: string \"loud\", expected u8".to_owned(),
-        }];
-        let out = render_check(&cfg, &warnings, fixed_default_dir(), /*color*/ false);
-        mineral_test::assert_snap!("config check:含一条字段路径警告(已回落默认,无色)", out);
-        Ok(())
-    }
-}

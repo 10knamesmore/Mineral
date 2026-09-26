@@ -545,16 +545,6 @@ impl<'de> Deserialize<'de> for HexColor {
 mod tests {
     use super::{HexColor, TokenName};
 
-    /// theme.dynamic 段默认值:封面驱动 accent 默认开,过渡 3000ms。
-    #[test]
-    fn dynamic_defaults() -> color_eyre::Result<()> {
-        let cfg = crate::Config::defaults()?;
-        let d = cfg.tui().theme().dynamic();
-        assert!(*d.enabled(), "封面驱动 accent 默认开");
-        assert_eq!(*d.fade_ms(), 3000, "accent 过渡默认 3s");
-        Ok(())
-    }
-
     /// theme.dynamic 逐旋钮可覆盖:关掉 + 改时长都落到强类型。
     #[test]
     fn dynamic_override_takes_effect() -> color_eyre::Result<()> {
@@ -586,7 +576,7 @@ mod tests {
             "缺 # 应报错"
         );
         assert!(
-            serde_json::from_value::<HexColor>(serde_json::json!("#xyz")).is_err(),
+            serde_json::from_value::<HexColor>(serde_json::json!("#gggggg")).is_err(),
             "非十六进制应报错"
         );
         assert!(

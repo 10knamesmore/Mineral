@@ -133,59 +133,6 @@ mod tests {
         Ok(s)
     }
 
-    /// 读当前会话的结果条数(无结果 / 非 Songs 载荷计 0)。
-    fn session_song_count(s: &AppState) -> usize {
-        use mineral_task::SearchPayload;
-        match s.channel_search.active_results().map(|kr| &kr.results) {
-            Some(SearchPayload::Songs(songs)) => songs.len(),
-            _ => 0,
-        }
-    }
-
-    /// query 配对的 SearchResults 落进当前会话。
-    #[test]
-    fn search_results_populate_matching_session() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
-        use mineral_model::{SearchKind, SourceKind};
-        use mineral_task::{SearchPayload, TaskEvent};
-
-        use crate::test_support::endserenading;
-
-        let mut s = state_in_search("hello")?;
-        s.apply(&TaskEvent::SearchResults {
-            source: SourceKind::NETEASE,
-            kind: SearchKind::Song,
-            query: "hello".to_owned(),
-            page: Page::default(),
-            payload: SearchPayload::Songs(endserenading(2)),
-            has_more: None,
-        });
-        assert_eq!(session_song_count(&s), 2, "配对结果入会");
-        Ok(())
-    }
-
-    /// query 已变的过期 SearchResults 直接丢弃,不污染当前会话。
-    #[test]
-    fn stale_search_results_dropped() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
-        use mineral_model::{SearchKind, SourceKind};
-        use mineral_task::{SearchPayload, TaskEvent};
-
-        use crate::test_support::endserenading;
-
-        let mut s = state_in_search("hello")?;
-        s.apply(&TaskEvent::SearchResults {
-            source: SourceKind::NETEASE,
-            kind: SearchKind::Song,
-            query: "stale".to_owned(),
-            page: Page::default(),
-            payload: SearchPayload::Songs(endserenading(5)),
-            has_more: None,
-        });
-        assert_eq!(session_song_count(&s), 0, "过期响应不入会");
-        Ok(())
-    }
-
     /// 造一个入会(源 NETEASE、给定 kind、query)的 AppState。
     fn state_searching(query: &str, kind: SearchKind) -> color_eyre::Result<AppState> {
         use mineral_channel_core::ChannelCaps;
@@ -253,7 +200,7 @@ mod tests {
         Ok(())
     }
 
-    /// 搜索续页追加艺人时保留已选 Albums 的导航和切区动画，离屏回包也不重置。
+    /// 搜索续页追加艺人时保留已选分区、光标和滚动位置，离屏回包也不重置。
     #[test]
     fn artist_search_page_preserves_detail_navigation() -> color_eyre::Result<()> {
         use mineral_channel_core::Page;
@@ -297,8 +244,6 @@ mod tests {
             frame.nudge_description(3);
             state.channel_search.tick();
             state.channel_search.tick();
-            let section_motion = current_frame(&state)?.section_eased();
-            assert!(section_motion.is_some(), "回包发生在切区动画期间");
             assert_eq!(
                 current_frame(&state)?
                     .list()
@@ -331,7 +276,6 @@ mod tests {
             assert_eq!(frame.list().sel(), 6);
             assert_eq!(frame.list().offset(8, 3, ScrollMotion::Frozen), 4);
             assert_eq!(frame.description_scroll().get(), 3);
-            assert_eq!(frame.section_eased(), section_motion);
             assert!(matches!(frame.row_entity(), Some(EntityRef::Album(album))
                 if album.id == album_fixture("album-6").id));
 
@@ -349,7 +293,6 @@ mod tests {
                 "真正选择新艺人时初始化默认分区"
             );
             assert_eq!(frame.list().sel(), 0);
-            assert!(frame.section_eased().is_none());
         }
         Ok(())
     }
@@ -820,52 +763,6 @@ mod tests {
         Ok(())
     }
 
-    /// AlbumSongs 回包落到「选中专辑」的 detail 栈顶帧(配对成功)。
-    #[test]
-    fn album_songs_fill_selected_detail_frame() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
-        use mineral_model::AlbumId;
-        use mineral_task::{SearchPayload, TaskEvent};
-
-        use crate::runtime::state::DetailData;
-
-        let mut s = state_searching("q", SearchKind::Album)?;
-        s.apply(&TaskEvent::SearchResults {
-            source: SourceKind::NETEASE,
-            kind: SearchKind::Album,
-            query: "q".to_owned(),
-            page: Page::default(),
-            payload: SearchPayload::Albums(vec![album_fixture("al1")]),
-            has_more: None,
-        });
-        // detail root = al1，fetch = AlbumDetail(al1)。喂该专辑完整详情(含曲目)。
-        s.apply(&TaskEvent::AlbumDetailFetched {
-            id: AlbumId::new(SourceKind::NETEASE, "al1"),
-            album: Box::new(
-                mineral_model::Album::builder()
-                    .id(AlbumId::new(SourceKind::NETEASE, "al1"))
-                    .name("al1".to_owned())
-                    .tracks(mineral_model::AlbumTrack::enumerate(
-                        crate::test_support::endserenading(3),
-                    ))
-                    .build(),
-            ),
-        });
-        let kr = s
-            .channel_search
-            .active_results()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
-        let frame = kr
-            .detail
-            .current()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail root"))?;
-        match &frame.data {
-            Some(DetailData::Album(a)) => assert_eq!(a.tracks.len(), 3, "专辑详情落帧"),
-            _ => color_eyre::eyre::bail!("detail 帧应填 Album"),
-        }
-        Ok(())
-    }
-
     /// 不匹配的 AlbumSongs(别的专辑 id)不污染当前帧。
     #[test]
     fn mismatched_album_songs_dropped() -> color_eyre::Result<()> {
@@ -903,57 +800,6 @@ mod tests {
             .current()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail root"))?;
         assert!(frame.data.is_none(), "别的专辑回包不落当前帧");
-        Ok(())
-    }
-
-    /// artist 详情两路(热门曲 + 专辑列表)分别到货、合并进同一帧。
-    #[test]
-    fn artist_detail_and_albums_merge() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
-        use mineral_model::ArtistId;
-        use mineral_task::{SearchPayload, TaskEvent};
-
-        use crate::runtime::state::DetailData;
-
-        let mut s = state_searching("q", SearchKind::Artist)?;
-        s.apply(&TaskEvent::SearchResults {
-            source: SourceKind::NETEASE,
-            kind: SearchKind::Artist,
-            query: "q".to_owned(),
-            page: Page::default(),
-            payload: SearchPayload::Artists(vec![artist_fixture("ar1")]),
-            has_more: None,
-        });
-        let id = ArtistId::new(SourceKind::NETEASE, "ar1");
-        s.apply(&TaskEvent::ArtistDetailFetched {
-            id: id.clone(),
-            artist: Box::new(artist_fixture("ar1")),
-        });
-        s.apply(&TaskEvent::ArtistAlbumsFetched {
-            id,
-            page: Page::default(),
-            albums: vec![album_fixture("al1"), album_fixture("al2")],
-            has_more: None,
-        });
-        let kr = s
-            .channel_search
-            .active_results()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
-        let frame = kr
-            .detail
-            .current()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail root"))?;
-        match &frame.data {
-            Some(DetailData::Artist { detail, albums }) => {
-                assert!(detail.is_some(), "热门曲那一路到货");
-                assert_eq!(
-                    albums.as_ref().map(|albums| albums.items().len()),
-                    Some(2),
-                    "专辑那一路到货"
-                );
-            }
-            _ => color_eyre::eyre::bail!("detail 帧应是 Artist"),
-        }
         Ok(())
     }
 }
