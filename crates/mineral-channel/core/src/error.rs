@@ -25,6 +25,10 @@ pub enum Error {
     #[error("rate limited")]
     RateLimited,
 
+    /// 请求的实体不存在。
+    #[error("entity not found")]
+    NotFound,
+
     /// 该 channel 不支持此能力。
     #[error("not supported by this channel")]
     NotSupported,

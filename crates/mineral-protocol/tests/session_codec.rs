@@ -165,6 +165,62 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// Player subscriptions preserve local paths containing non-UTF-8 bytes.
+#[cfg(unix)]
+#[tokio::test]
+async fn player_update_preserves_non_unicode_media_path() -> color_eyre::Result<()> {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+
+    use mineral_model::{AudioFormat, DirectMedia, PlaybackMediaInfo, SourceKind};
+    use mineral_protocol::CurrentSync;
+
+    let path = PathBuf::from(OsString::from_vec(b"/music/track-\xff.wav".to_vec()));
+    let song_id = SongId::new(SourceKind::LOCAL, "native-path");
+    let media = DirectMedia::local(
+        PlaybackMediaInfo {
+            song_id,
+            bitrate_bps: None,
+            size: None,
+            format: Some(AudioFormat::Wav),
+            bit_depth: Some(16),
+            substituted: false,
+        },
+        path.clone(),
+    );
+    let message = SessionMessage::Update(UpdateEnvelope {
+        subscription: SubscriptionId::new(1),
+        version: 1,
+        parts: 1,
+        index: 0,
+        payload: UpdatePayload::Player {
+            sync: Box::new(PlayerSync {
+                current: Some(CurrentSync {
+                    direct_media: Some(media),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            queue_parts: 1,
+        },
+    });
+    json_round_trips(&message)?;
+    framed_round_trips(message.clone()).await?;
+    let back = decode::<SessionMessage>(&encode(&message)?)?;
+    let SessionMessage::Update(UpdateEnvelope {
+        payload: UpdatePayload::Player { sync, .. },
+        ..
+    }) = back
+    else {
+        return Err(eyre!("missing player update"));
+    };
+    let media = sync
+        .current
+        .and_then(|current| current.direct_media)
+        .ok_or_else(|| eyre!("missing current media"))?;
+    assert_eq!(media.locator().local_path(), Some(path.as_path()));
+    Ok(())
+}
+
 /// 任务回包随会话更新传输，保留来源、实体身份和载荷。
 #[tokio::test]
 async fn task_events_round_trip() -> color_eyre::Result<()> {

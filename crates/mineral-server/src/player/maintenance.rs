@@ -27,7 +27,7 @@ impl PlayerCore {
     /// 编排(需 persist,不进 task lane),把 canonical favorited 集推给 client。
     pub fn refresh_initial_loads(&self) {
         self.push_cached_library_snapshot();
-        // 重连的 client 播放中途接入:补推当前曲的 db 包络(缺失静默,不触发计算)。
+        // Reconnect sync includes the slot envelope; replay only fills missing normal-song data.
         self.replay_current_envelope();
         for ch in &self.inner.channels {
             let source = ch.source();

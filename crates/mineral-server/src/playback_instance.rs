@@ -1,6 +1,6 @@
 //! Process-local identity and cancellation for current and prefetched playback attempts.
 
-use mineral_model::SongId;
+use mineral_model::{Envelope, SongId};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -30,8 +30,11 @@ pub(crate) struct PlaybackSlot {
     /// Defensive domain identity paired with the attempt.
     pub(crate) song_id: SongId,
 
-    /// Root cancellation token for resolve, hook, open, and reader work.
+    /// Root cancellation token for resolve, hook, open, reader, and instance-only envelope work.
     pub(crate) cancellation: CancellationToken,
+
+    /// Envelope retained only for this attempt and moved with gapless promotion.
+    pub(crate) envelope: Option<Envelope>,
 }
 
 impl PlaybackSlot {
@@ -44,6 +47,7 @@ impl PlaybackSlot {
             instance_id: PlaybackInstanceId::new(),
             song_id,
             cancellation: CancellationToken::new(),
+            envelope: None,
         }
     }
 

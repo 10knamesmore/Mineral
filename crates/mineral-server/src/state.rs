@@ -13,7 +13,7 @@ use mineral_protocol::{
 use tokio::sync::watch;
 
 use crate::gapless::PrefetchState;
-use crate::playback_instance::PlaybackSlot;
+use crate::playback_instance::{PlaybackInstanceId, PlaybackSlot};
 
 /// 播放状态变更发布器:queue / current 版本每次推进都唤醒订阅者。
 ///
@@ -112,10 +112,6 @@ pub(crate) struct State {
     /// 当前 lyrics 配对的歌 id(对不上 current_song 时不返回)。
     pub(crate) current_lyrics_song_id: Option<SongId>,
 
-    /// 当前歌的振幅包络(id + 数据),离线算出 / db 命中后由 `adopt_envelope` 落此并 bump
-    /// `current` 版本;`sync` 组段时按当前曲过滤,故串曲的迟到包络天然不外发。
-    pub(crate) current_envelope: Option<(SongId, Envelope)>,
-
     /// Exclusive lifecycle of the next-song preparation attempt.
     pub(crate) prefetch: PrefetchState,
 
@@ -156,7 +152,6 @@ impl State {
             play_mode: PlayMode::default(),
             current_lyrics: None,
             current_lyrics_song_id: None,
-            current_envelope: None,
             prefetch: PrefetchState::default(),
             prefetch_vetoed: Vec::new(),
             queue_version: SegmentVersion::FIRST,
@@ -220,13 +215,15 @@ impl State {
             media_info: self.media_info.clone(),
             current_lyrics: self.current_lyrics.clone(),
             current_lyrics_song_id: self.current_lyrics_song_id.clone(),
-            // 只带归属当前曲的包络:预排下一曲 / 迟到旧曲的包络虽存在 slot 里,
-            // 也在这里被过滤掉,不会串到别的曲上。
             current_envelope: self
-                .current_envelope
+                .current_slot
                 .as_ref()
-                .filter(|(id, _)| self.current_song.as_ref().is_some_and(|s| s.id == *id))
-                .map(|(_, envelope)| envelope.clone()),
+                .filter(|slot| {
+                    self.current_song
+                        .as_ref()
+                        .is_some_and(|song| song.id == slot.song_id)
+                })
+                .and_then(|slot| slot.envelope.clone()),
             advance: self.advance.as_ref().map(|(_, kind)| *kind),
         });
         PlayerSync {
@@ -261,14 +258,30 @@ impl State {
         }
     }
 
-    /// 收下一份算好 / db 命中的包络:仅当它归属**当前曲**才落 slot 并 bump `current`
-    /// 版本(下次 `sync` 即随 `CurrentSync` 携带它重发)。非当前曲(如预排下一曲)的
-    /// 包络此处忽略——它已落 db,待其成为当前曲时经 replay 载入,避免覆盖当前曲的 slot。
-    pub(crate) fn adopt_envelope(&mut self, song_id: SongId, envelope: Envelope) {
-        if self.current_song.as_ref().is_some_and(|s| s.id == song_id) {
-            self.current_envelope = Some((song_id, envelope));
+    /// Stores an envelope on its live playback instance, including armed prefetch media.
+    /// Only a current-slot update publishes a new current version; promotion carries prefetch data.
+    pub(crate) fn adopt_envelope(
+        &mut self,
+        instance_id: PlaybackInstanceId,
+        song_id: &SongId,
+        envelope: Envelope,
+    ) -> bool {
+        if let Some(slot) = self.current_slot.as_mut()
+            && slot.matches(instance_id, song_id)
+            && !slot.cancellation.is_cancelled()
+        {
+            slot.envelope = Some(envelope);
             self.bump_current();
+            return true;
         }
+        if let Some(slot) = self.prefetch.slot_mut()
+            && slot.matches(instance_id, song_id)
+            && !slot.cancellation.is_cancelled()
+        {
+            slot.envelope = Some(envelope);
+            return true;
+        }
+        false
     }
 }
 

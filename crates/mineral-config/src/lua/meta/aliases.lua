@@ -27,7 +27,7 @@
 ---@alias mineral.KeyBinding string|string[]
 
 ---来源名:内置源有补全,插件源写任意 string 也合法(没加载的名字运行时静默跳过)。
----@alias mineral.SourceName "netease"|"bilibili"|string
+---@alias mineral.SourceName "netease"|"bilibili"|"local"|"mineral"|string
 
 ---channel 搜索的目标类型(封闭集合,typo 加载期报错)。
 ---@alias mineral.SearchKind "song"|"album"|"artist"|"playlist"|"user"

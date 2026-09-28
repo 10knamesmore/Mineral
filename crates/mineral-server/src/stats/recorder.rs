@@ -102,7 +102,7 @@ enum StatsCommand {
 
     /// 富化在播行的音频快照(resolved 就绪后整组补;脚本改写后再补一次、`substituted`
     /// 随快照带 true)。pending 缺席(起播被 gate / 已结算)则丢弃。
-    EnrichAudio(PlayAudioSnapshot),
+    EnrichAudio(PlayAudioSnapshot, WirePlaybackOrigin),
 
     /// 排空栅栏:FIFO 保证之前的命令均已落库,回 ack。停机前 flush 用。
     Flush {
@@ -186,12 +186,17 @@ pub fn pending_from_start(
         play_mode,
         duration_ms_snapshot,
         audio: PlayAudioSnapshot::default(),
-        playback_origin: match playback_origin {
-            WirePlaybackOrigin::Download => PlaybackOrigin::Download,
-            WirePlaybackOrigin::Cache => PlaybackOrigin::Cache,
-            WirePlaybackOrigin::Remote => PlaybackOrigin::Remote,
-        },
+        playback_origin: stats_playback_origin(playback_origin),
     })
+}
+
+/// Map confirmed resource location into the persisted statistics vocabulary.
+fn stats_playback_origin(origin: WirePlaybackOrigin) -> PlaybackOrigin {
+    match origin {
+        WirePlaybackOrigin::Download => PlaybackOrigin::Download,
+        WirePlaybackOrigin::Cache => PlaybackOrigin::Cache,
+        WirePlaybackOrigin::Remote => PlaybackOrigin::Remote,
+    }
 }
 
 /// 打点入口句柄(Clone 廉价,分发给各挂接点)。
@@ -438,12 +443,13 @@ impl StatsRecorder {
     }
 
     /// resolved 就绪后富化在播行的音频快照(整组覆盖);pending 缺席则 actor 侧丢弃。
-    /// 起播已带的 playback_origin 不在此改。
+    /// 同时采纳打开后的实际媒体来源，包含脚本改写。
     ///
     /// # Params:
-    ///   - `audio`: 已生效播放 URL 的音频快照
-    pub fn enrich_play_audio(&self, audio: PlayAudioSnapshot) {
-        self.send(StatsCommand::EnrichAudio(audio));
+    ///   - `audio`: 已打开媒体的音频事实。
+    ///   - `origin`: 打开后确认的资源位置，覆盖起播时的预判。
+    pub fn enrich_play_audio(&self, audio: PlayAudioSnapshot, origin: WirePlaybackOrigin) {
+        self.send(StatsCommand::EnrichAudio(audio, origin));
     }
 
     /// 送命令;降级则静默丢弃,通道满 / 已关则丢弃 + 累计计数 + warn(埋点故障绝不回灌
@@ -572,10 +578,11 @@ async fn process_command(
                 mineral_log::warn!(target: "stats", error = chain(&e), "record_event 失败");
             }
         }
-        StatsCommand::EnrichAudio(audio) => {
+        StatsCommand::EnrichAudio(audio, origin) => {
             // 富化在播行的音频快照(pending 缺席则丢弃);结算时随快照落库。
             if let Some((snapshot, _)) = pending.as_mut() {
                 snapshot.audio = audio;
+                snapshot.playback_origin = stats_playback_origin(origin);
             }
         }
         // FIFO:走到这条时上面的命令都已 await 完成落库,应答即代表「已排空」。
@@ -974,13 +981,16 @@ mod tests {
         let (_dir, store) = temp_store().await?;
         let (recorder, handle) = StatsRecorder::spawn(store.clone(), full_params());
         recorder.play_started(pending(1000));
-        recorder.enrich_play_audio(mineral_stats::PlayAudioSnapshot {
-            audio_format: Some(mineral_model::AudioFormat::Flac),
-            bitrate_bps: Some(900_000),
-            quality: Some(mineral_model::BitRate::Lossless),
-            bit_depth: Some(16),
-            substituted: false,
-        });
+        recorder.enrich_play_audio(
+            mineral_stats::PlayAudioSnapshot {
+                audio_format: Some(mineral_model::AudioFormat::Flac),
+                bitrate_bps: Some(900_000),
+                quality: Some(mineral_model::BitRate::Lossless),
+                bit_depth: Some(16),
+                substituted: false,
+            },
+            mineral_protocol::PlaybackOrigin::Remote,
+        );
         recorder.play_ended(FinishReason::Eof, /*listen_ms*/ 3000);
         drop(recorder);
         handle.await?;

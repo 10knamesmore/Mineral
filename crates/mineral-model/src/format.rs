@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// 音频容器格式。
+/// 音频文件或容器格式。
 ///
 /// 「边缘序列化、内部结构化」:channel wire 层以字符串接收(各家命名不一、且可能
 /// 「尽力提供」返回意料外的值),进 model 时归一化到本枚举。未识别的值**保留原文**
@@ -20,8 +20,11 @@ pub enum AudioFormat {
     /// FLAC(无损)。
     Flac,
 
-    /// AAC / M4A(有损)。
+    /// AAC 音频流(有损)。
     Aac,
+
+    /// MP4 容器；可承载 AAC 或 ALAC，不能仅凭容器判断是否无损。
+    Mp4,
 
     /// Ogg Vorbis(有损)。
     Ogg,
@@ -47,6 +50,7 @@ impl AudioFormat {
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Aac => "aac",
+            Self::Mp4 => "mp4",
             Self::Ogg => "ogg",
             Self::Wav => "wav",
             Self::Ape => "ape",
@@ -55,7 +59,7 @@ impl AudioFormat {
         }
     }
 
-    /// 是否无损格式——供显示层做音质分级配色(不依赖请求侧的 quality)。
+    /// 格式能确定为无损时返回 true；MP4 的实际编码未知。
     pub fn is_lossless(&self) -> bool {
         matches!(self, Self::Flac | Self::Wav | Self::Ape | Self::Alac)
     }
@@ -66,7 +70,8 @@ impl From<String> for AudioFormat {
         match s.to_ascii_lowercase().as_str() {
             "mp3" => Self::Mp3,
             "flac" => Self::Flac,
-            "aac" | "m4a" => Self::Aac,
+            "aac" => Self::Aac,
+            "mp4" | "m4a" => Self::Mp4,
             "ogg" | "vorbis" => Self::Ogg,
             "wav" => Self::Wav,
             "ape" => Self::Ape,
@@ -146,16 +151,17 @@ mod tests {
     fn is_known_token(s: &str) -> bool {
         matches!(
             s.to_ascii_lowercase().as_str(),
-            "mp3" | "flac" | "aac" | "m4a" | "ogg" | "vorbis" | "wav" | "ape" | "alac"
+            "mp3" | "flac" | "aac" | "mp4" | "m4a" | "ogg" | "vorbis" | "wav" | "ape" | "alac"
         )
     }
 
-    /// 7 个固定变体(规范名均为小写 ascii)。
+    /// 8 个固定变体(规范名均为小写 ascii)。
     fn arb_known_format() -> impl Strategy<Value = AudioFormat> {
         select(vec![
             AudioFormat::Mp3,
             AudioFormat::Flac,
             AudioFormat::Aac,
+            AudioFormat::Mp4,
             AudioFormat::Ogg,
             AudioFormat::Wav,
             AudioFormat::Ape,
@@ -203,11 +209,12 @@ mod tests {
             prop_assert_eq!(AudioFormat::from(f.as_str().to_ascii_uppercase()), f);
         }
 
-        /// 别名收敛:`m4a`→Aac、`vorbis`→Ogg(大小写无关),与规范名同归一。
+        /// 别名收敛:`m4a`→Mp4、`vorbis`→Ogg(大小写无关),与规范名同归一。
         #[test]
         fn prop_aliases_map((input, expected) in select(vec![
-            ("m4a", AudioFormat::Aac),
-            ("M4A", AudioFormat::Aac),
+            ("m4a", AudioFormat::Mp4),
+            ("M4A", AudioFormat::Mp4),
+            ("mp4", AudioFormat::Mp4),
             ("aac", AudioFormat::Aac),
             ("vorbis", AudioFormat::Ogg),
             ("VORBIS", AudioFormat::Ogg),

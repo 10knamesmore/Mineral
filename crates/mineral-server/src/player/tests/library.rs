@@ -316,7 +316,7 @@ async fn library_failure_concludes_with_empty_snapshot() -> color_eyre::Result<(
 /// (config.lua 顶层调用是常态场景;快照与 client 同为出口变换结果)。
 #[tokio::test(flavor = "multi_thread")]
 async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()> {
-    use mineral_script::{ScriptHost, ScriptSender, install_api};
+    use mineral_script::{ScriptHost, install_api};
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
     let host = ScriptHost::new(cmd_tx.clone(), push_tx.clone());
@@ -333,7 +333,7 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
     .exec()?;
     let parts =
         crate::script_bridge::ScriptParts::new(Some(lua), host, cmd_tx, cmd_rx, push_tx, push_rx);
-    let sender = ScriptSender::detached();
+    let sender = parts.sender().clone();
     let watchdog = mineral_script::WatchdogConfig::builder()
         .instruction_interval(10_000)
         .soft_wall(Duration::from_millis(200))
@@ -344,7 +344,7 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
         liked_ids: None,
         playlists: Some(vec![named_playlist("p1", "日常")]),
     })];
-    let (runtime, pumps) = parts.spawn_runtime(watchdog, &sender, &channels);
+    let (runtime, pumps) = parts.spawn_runtime(watchdog, &channels);
     let _runtime = runtime.ok_or_else(|| color_eyre::eyre::eyre!("应有脚本线程"))?;
     let (hub_tx, mut hub_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
     let core = core_with_events(

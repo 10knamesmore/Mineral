@@ -408,10 +408,7 @@ impl PlaybackProvider for NeteaseChannel {
             if convert::all_explicitly_unavailable(&dtos) {
                 return Err(eyre!("netease song has no playable media"));
             }
-            if let Some(media) = convert::to_direct_media(dtos, request.quality())
-                .into_iter()
-                .next()
-            {
+            if let Some(media) = convert::to_direct_media(dtos).into_iter().next() {
                 return Ok(DirectPreparedPlayback::boxed(media));
             }
         }
@@ -419,7 +416,7 @@ impl PlaybackProvider for NeteaseChannel {
             return Err(eyre!("playback resolve cancelled"));
         }
         let dtos = api::song::song_url_legacy(&self.transport, &ids, request.quality()).await?;
-        let media = convert::to_direct_media(dtos, request.quality())
+        let media = convert::to_direct_media(dtos)
             .into_iter()
             .next()
             .ok_or_else(|| eyre!("netease song has no playable media"))?;

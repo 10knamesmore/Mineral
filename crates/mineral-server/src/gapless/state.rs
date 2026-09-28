@@ -54,6 +54,14 @@ impl PrefetchState {
         }
     }
 
+    /// Returns mutable ownership for storing a completed instance envelope.
+    pub(crate) fn slot_mut(&mut self) -> Option<&mut PlaybackSlot> {
+        match self {
+            Self::Idle => None,
+            Self::Opening(slot) | Self::Armed { slot, .. } => Some(slot),
+        }
+    }
+
     /// Returns the song targeted by the active attempt.
     pub(crate) fn song_id(&self) -> Option<&SongId> {
         self.slot().map(|slot| &slot.song_id)

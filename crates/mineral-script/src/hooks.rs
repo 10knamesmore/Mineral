@@ -81,6 +81,9 @@ pub struct BeforeStreamCtx {
     /// 触发拦截的歌。
     song: Box<Song>,
 
+    /// Quality requested from the playback provider.
+    requested_quality: BitRate,
+
     /// Optional direct access to a playable prepared resource.
     original: Option<Box<DirectMedia>>,
 
@@ -96,12 +99,19 @@ impl BeforeStreamCtx {
     ///
     /// # Params:
     ///   - `song`: 触发歌
+    ///   - `requested_quality`: Quality requested from the provider.
     ///   - `mode`: 提交点口味
     ///   - `original`: Optional direct media; absence does not make the resource unplayable.
     #[must_use]
-    pub fn playable(song: Song, mode: HookMode, original: Option<DirectMedia>) -> Self {
+    pub fn playable(
+        song: Song,
+        requested_quality: BitRate,
+        mode: HookMode,
+        original: Option<DirectMedia>,
+    ) -> Self {
         Self {
             song: Box::new(song),
+            requested_quality,
             original: original.map(Box::new),
             playable: true,
             mode,
@@ -112,11 +122,13 @@ impl BeforeStreamCtx {
     ///
     /// # Params:
     ///   - `song`: Triggering song.
+    ///   - `requested_quality`: Quality requested from the provider.
     ///   - `mode`: Immediate or prefetch commit point.
     #[must_use]
-    pub fn unavailable(song: Song, mode: HookMode) -> Self {
+    pub fn unavailable(song: Song, requested_quality: BitRate, mode: HookMode) -> Self {
         Self {
             song: Box::new(song),
+            requested_quality,
             original: None,
             playable: false,
             mode,
@@ -127,6 +139,12 @@ impl BeforeStreamCtx {
     #[must_use]
     pub fn song(&self) -> &Song {
         &self.song
+    }
+
+    /// Quality requested from the provider, even when no direct URL was resolved.
+    #[must_use]
+    pub fn requested_quality(&self) -> BitRate {
+        self.requested_quality
     }
 
     /// Returns optional direct media; `None` may still represent a playable plan.
@@ -155,6 +173,9 @@ pub struct BeforeDownloadCtx {
     /// 待下载的歌。
     song: Box<Song>,
 
+    /// Quality requested from the download provider.
+    requested_quality: BitRate,
+
     /// Optional direct access exposed by the prepared download.
     original: Option<Box<DirectMedia>>,
 
@@ -167,11 +188,13 @@ impl BeforeDownloadCtx {
     ///
     /// # Params:
     ///   - `song`: 待下载歌
+    ///   - `requested_quality`: Quality requested from the provider.
     ///   - `original`: Optional direct media; absence does not make the resource unplayable.
     #[must_use]
-    pub fn playable(song: Song, original: Option<DirectMedia>) -> Self {
+    pub fn playable(song: Song, requested_quality: BitRate, original: Option<DirectMedia>) -> Self {
         Self {
             song: Box::new(song),
+            requested_quality,
             original: original.map(Box::new),
             playable: true,
         }
@@ -181,10 +204,12 @@ impl BeforeDownloadCtx {
     ///
     /// # Params:
     ///   - `song`: Download target.
+    ///   - `requested_quality`: Quality requested from the provider.
     #[must_use]
-    pub fn unavailable(song: Song) -> Self {
+    pub fn unavailable(song: Song, requested_quality: BitRate) -> Self {
         Self {
             song: Box::new(song),
+            requested_quality,
             original: None,
             playable: false,
         }
@@ -194,6 +219,12 @@ impl BeforeDownloadCtx {
     #[must_use]
     pub fn song(&self) -> &Song {
         &self.song
+    }
+
+    /// Quality requested from the provider, even when no direct URL was resolved.
+    #[must_use]
+    pub fn requested_quality(&self) -> BitRate {
+        self.requested_quality
     }
 
     /// Returns optional direct media; `None` may still represent an exportable plan.
@@ -238,7 +269,7 @@ pub struct RewriteSpec {
     /// 改写后的播放地址;`None` = 不改 URL。
     pub(crate) new_url: Option<MediaUrl>,
 
-    /// 改写后的目标音质;`None` = 不改音质。
+    /// 脚本为替代资源声明的档位；`None` = 沿用原请求档位。
     pub(crate) new_quality: Option<BitRate>,
 
     /// 改写后的取流请求头(顶换的流若需鉴权/防盗链头,随之带上);`None` = 不改头。

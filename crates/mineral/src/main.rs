@@ -107,8 +107,10 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
         let persist = open_persist().await;
         let sources = build_sources(persist.clone(), config.sources())?;
         mineral_cli::serve_run(
-            sources.channels,
-            sources.playback,
+            mineral_server::SourceBackends::builder()
+                .channels(sources.channels)
+                .playback(sources.playback)
+                .build(),
             persist,
             config,
             script,
@@ -191,7 +193,7 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
-///   - `sources`: 音乐源段配置(netease 的 timeout / proxy / 并发)。
+///   - `sources`: 音乐源段配置。
 fn build_sources(
     persist: mineral_persist::ServerStore,
     sources: &mineral_config::SourcesConfig,
@@ -203,6 +205,13 @@ fn build_sources(
     channels.push(Arc::new(mineral_channel_mineral::MineralChannel::new(
         persist.clone(),
     )));
+    let library = Arc::new(mineral_channel_local::LocalLibrary::new(
+        persist.clone(),
+        mineral_paths::data_dir()?.join("local-covers"),
+        sources.local().roots().clone(),
+    ));
+    channels.push(library.clone());
+    providers.push(library);
     match build_netease(persist, sources.netease()) {
         Ok(Some(pair)) => {
             channels.push(pair.channel);

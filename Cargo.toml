@@ -20,6 +20,7 @@ members = [
     "crates/mineral-channel/netease",
     "crates/mineral-channel/bilibili",
     "crates/mineral-channel/mineral",
+    "crates/mineral-channel/local",
     "crates/mineral-client",
     "crates/mineral-persist",
     "crates/mineral-config",
@@ -55,6 +56,7 @@ derive_setters     = "0.1"
 fast_image_resize  = { version = "6.1", default-features = false, features = ["image"] }
 futures-util       = "0.3"
 hex                = "0.4"
+sha2               = "0.10"
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 jpeg-decoder       = { version = "0.3.2", default-features = false, features = ["nightly_aarch64_neon"] }
 icy_sixel          = "0.1.3"
@@ -62,6 +64,7 @@ isahc              = { version = "1.7", features    = ["cookies"] }
 libc               = "0.2"
 nix                = { version = "0.29", features = ["fs", "mman", "poll", "signal"] }
 lofty              = "0.22"
+symphonia          = { version = "0.5", default-features = false, features = ["isomp4"] }
 mlua               = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 mineral-audio           = { path = "crates/mineral-audio" }
 mineral-cli             = { path = "crates/mineral-cli" }
@@ -82,6 +85,7 @@ mineral-channel-core    = { path = "crates/mineral-channel/core" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease" }
 mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili" }
 mineral-channel-mineral = { path = "crates/mineral-channel/mineral" }
+mineral-channel-local = { path = "crates/mineral-channel/local" }
 mineral-client          = { path = "crates/mineral-client" }
 mineral-persist         = { path = "crates/mineral-persist" }
 mineral-config          = { path = "crates/mineral-config" }
@@ -108,10 +112,11 @@ rand               = "0.9"
 realfft            = "3"
 ringbuf            = "0.4"
 rustc-hash         = "2"
+walkdir            = "2"
 unicode-width      = "0.2"
 comfy-table        = "7"
 ratatui            = "0.29"
-rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac", "wav"] }
+rodio              = { version = "0.22", default-features = false, features = ["playback", "symphonia-mpa", "symphonia-aac", "symphonia-isomp4", "symphonia-alac", "symphonia-aiff", "symphonia-adpcm", "symphonia-flac", "vorbis", "wav"] }
 stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 clap               = { version = "4.5", features = ["derive"] }

@@ -81,7 +81,7 @@ pub(crate) fn adopt_queued(st: &mut State) -> Option<SongId> {
 
 #[cfg(test)]
 mod tests {
-    use mineral_model::{BitRate, PlaybackMediaInfo};
+    use mineral_model::PlaybackMediaInfo;
     use mineral_protocol::{AdvanceKind, PlayCursor, PlaybackOrigin};
     use mineral_test::song;
 
@@ -139,7 +139,6 @@ mod tests {
                 media_info: PlaybackMediaInfo {
                     song_id: song("b").id,
                     bitrate_bps: None,
-                    quality: BitRate::Higher,
                     size: None,
                     format: None,
                     bit_depth: None,

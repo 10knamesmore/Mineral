@@ -1,6 +1,6 @@
 //! daemon 内嵌 Lua 脚本运行时。
 //!
-//! `mlua::Lua` 是 `Send + !Sync`,VM 归一条专用 OS 线程独占;daemon 经
+//! 事件 VM 由一条专用 OS 线程持有;daemon 经
 //! channel 投递事件、脚本经 channel 发回命令,两侧消息都是结构化 Rust
 //! 类型,Lua 值只活在 VM 边界。
 //!

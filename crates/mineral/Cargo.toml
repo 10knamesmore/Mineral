@@ -12,6 +12,7 @@ rust-version.workspace = true
 dhat-heap = ["dep:dhat"]
 
 [dependencies]
+mineral-channel-local = { workspace = true }
 dhat                    = { version = "0.3", optional = true }
 clap                    = { workspace = true }
 color-eyre              = { workspace = true }
@@ -36,6 +37,7 @@ tokio                   = { workspace = true }
 mineral-media = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 nix              = { workspace = true }
 assert_cmd       = { workspace = true }
 predicates       = { workspace = true }

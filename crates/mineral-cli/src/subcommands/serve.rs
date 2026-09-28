@@ -5,12 +5,8 @@
 //! 2. stale socket 检测(已活 daemon → bail;残留 socket 文件 → 删)
 //! 3. bind + Server::spawn + serve
 
-use std::sync::Arc;
-
 use color_eyre::eyre::{WrapErr, bail};
-use mineral_channel_core::MusicChannel;
 use mineral_persist::ServerStore;
-use mineral_playback::PlaybackRegistry;
 use mineral_server::{Server, ServerConfig, SourceBackends, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
@@ -25,16 +21,14 @@ const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 /// flush 埋点、显式调用 [`Server::shutdown`]、等待埋点 actor，并 unlink socket 文件。
 ///
 /// # Params:
-///   - `channels`: 已构造好的全部音乐源 handle。空 vec 也合法。
-///   - `playback`: 按 source 注册的播放资源 provider。
+///   - `sources`: 已构造的 channel 和 playback provider。
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
 ///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
 ///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
 ///   - `config_tree`: 有效配置底树(与 `config` 同一次加载的合成树,交配置宿主)。
 ///   - `config_path`: 用户 config.lua 路径(热重载 mtime 轮询的目标)。
 pub async fn run(
-    channels: Vec<Arc<dyn MusicChannel>>,
-    playback: PlaybackRegistry,
+    sources: SourceBackends,
     persist: ServerStore,
     config: mineral_config::Config,
     script: mineral_server::ScriptParts,
@@ -74,16 +68,13 @@ pub async fn run(
         ))
         .build();
     // 投递句柄是热重载间接层:daemon 恒持有(初始无脚本也可经重载升级为有)。
-    let script_sender = mineral_script::ScriptSender::detached();
-    let (script_runtime, pumps) = script.spawn_runtime(watchdog, &script_sender, &channels);
+    let script_sender = script.sender().clone();
+    let (script_runtime, pumps) = script.spawn_runtime(watchdog, sources.channels());
     let (stats, stats_actor) = spawn_recorder(&config).await;
     // 留一份句柄给停机路径记 app_lifecycle stop + 发 Shutdown(server 会 move 走原句柄)。
     let stats_stop = stats.clone();
     let server = Server::spawn(
-        SourceBackends::builder()
-            .channels(channels)
-            .playback(playback)
-            .build(),
+        sources,
         audio_mode,
         persist,
         ServerConfig::from_config(&config),

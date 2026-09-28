@@ -25,7 +25,7 @@ impl ScriptRuntime {
     /// 并把消息入口挂进 `sender`(daemon 各处持有的间接句柄从此指向本线程)。
     ///
     /// # Params:
-    ///   - `lua`: 目标 VM(`mlua::Lua` 是 `Send + !Sync`,随线程独占)
+    ///   - `lua`: 已加载配置的 VM，移交脚本线程执行回调
     ///   - `host`: 宿主句柄(与 daemon 侧共享注册表 / 通道)
     ///   - `watchdog`: 回调看门狗参数
     ///   - `sender`: daemon 侧投递句柄(spawn 成功即 attach;热重载复用同一个)
@@ -724,7 +724,6 @@ mod tests {
             mineral_model::PlaybackMediaInfo {
                 song_id: song,
                 bitrate_bps: Some(192_000),
-                quality: mineral_model::BitRate::Exhigh,
                 size: None,
                 format: Some(mineral_model::AudioFormat::Aac),
                 bit_depth: None,
@@ -734,7 +733,13 @@ mod tests {
             vec![("Referer".to_owned(), "https://www.bilibili.com/".to_owned())],
             mineral_model::StreamLayout::Chunked,
         );
-        sender.resolve(query, ResolveValue::DirectMedia(Box::new(direct)));
+        sender.resolve(
+            query,
+            ResolveValue::DirectMedia {
+                media: Box::new(direct),
+                requested_quality: mineral_model::BitRate::Exhigh,
+            },
+        );
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
@@ -1141,7 +1146,6 @@ mod tests {
             mineral_model::PlaybackMediaInfo {
                 song_id: target.id.clone(),
                 bitrate_bps: None,
-                quality: mineral_model::BitRate::Exhigh,
                 size: None,
                 format: Some(mineral_model::AudioFormat::Flac),
                 bit_depth: None,
@@ -1157,6 +1161,7 @@ mod tests {
     fn hook_ctx() -> color_eyre::Result<crate::hooks::BeforeStreamCtx> {
         Ok(crate::hooks::BeforeStreamCtx::playable(
             song("1"),
+            mineral_model::BitRate::Exhigh,
             crate::hooks::HookMode::Immediate,
             Some(hook_direct_media()?),
         ))
@@ -1166,6 +1171,7 @@ mod tests {
     fn download_ctx() -> color_eyre::Result<crate::hooks::BeforeDownloadCtx> {
         Ok(crate::hooks::BeforeDownloadCtx::playable(
             song("1"),
+            mineral_model::BitRate::Exhigh,
             Some(hook_direct_media()?),
         ))
     }
@@ -1266,8 +1272,8 @@ mod tests {
             color_eyre::eyre::bail!("期望 Rewrite,实得 {decision:?}");
         };
         assert_eq!(spec.bitrate_bps(), Some(132_000));
-        // "m4a" 是别名,边界归一化到 Aac
-        assert_eq!(spec.format(), Some(&mineral_model::AudioFormat::Aac));
+        // "m4a" 标识 MP4 容器,不确定其中的音频编码。
+        assert_eq!(spec.format(), Some(&mineral_model::AudioFormat::Mp4));
         drop(runtime);
         Ok(())
     }
@@ -1390,7 +1396,11 @@ mod tests {
             end)
             "#,
         )?;
-        let ctx = BeforeStreamCtx::unavailable(song("1"), HookMode::Prefetch);
+        let ctx = BeforeStreamCtx::unavailable(
+            song("1"),
+            mineral_model::BitRate::Exhigh,
+            HookMode::Prefetch,
+        );
         let decision = sender
             .intercept_stream(ctx, std::time::Duration::from_secs(5))
             .await;

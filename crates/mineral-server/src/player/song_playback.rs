@@ -161,17 +161,23 @@ impl PlayerCore {
     /// Current 与 gapless promotion 都必须调用本入口，使 hook 顶换标记进入同一 stats snapshot。
     ///
     /// # Params:
-    ///   - `info`: 已生效契约的展示元信息
-    pub(crate) fn enrich_from_media_info(&self, info: &mineral_model::PlaybackMediaInfo) {
-        self.inner
-            .stats
-            .enrich_play_audio(mineral_stats::PlayAudioSnapshot {
+    ///   - `info`: 已打开媒体的展示元信息。
+    ///   - `origin`: 实际资源位置，可能已被脚本改写。
+    pub(crate) fn enrich_from_media_info(
+        &self,
+        info: &mineral_model::PlaybackMediaInfo,
+        origin: PlaybackOrigin,
+    ) {
+        self.inner.stats.enrich_play_audio(
+            mineral_stats::PlayAudioSnapshot {
                 audio_format: info.format.clone(),
                 bitrate_bps: info.bitrate_bps.map(i64::from),
-                quality: Some(info.quality),
+                quality: Some(self.inner.playback_quality),
                 bit_depth: info.bit_depth.map(i64::from),
                 substituted: info.substituted,
-            });
+            },
+            origin,
+        );
     }
 
     /// 异步上报一次播放打点(fire-and-forget,不阻塞播放)。

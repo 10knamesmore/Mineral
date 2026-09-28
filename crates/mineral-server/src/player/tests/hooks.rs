@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use mineral_model::{BitRate, Song};
+use mineral_model::Song;
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 
@@ -77,7 +77,7 @@ async fn rewrite_replaces_direct_media_before_open() -> color_eyre::Result<()> {
             state
                 .media_info
                 .as_ref()
-                .is_some_and(|info| info.quality == BitRate::Standard && info.substituted)
+                .is_some_and(|info| info.substituted)
                 && state.direct_media.as_ref().is_some_and(|media| {
                     media.locator().local_path() == Some(replacement.as_path())
                 })

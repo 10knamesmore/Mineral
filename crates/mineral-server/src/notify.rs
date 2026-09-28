@@ -73,7 +73,7 @@ impl Notifier {
     /// # Params:
     ///   - `song`: 下载完成的歌
     ///   - `path`: 落盘路径
-    ///   - `quality`: 实际下载音质(hook 改写后的有效值)
+    ///   - `quality`: 下载请求档位；hook 改写时为脚本声明的目录档位。
     ///   - `format`: 容器格式(channel 实际提供;拿不到为 `None`)
     pub(crate) fn download_completed(
         &self,

@@ -1,5 +1,7 @@
 //! 预排窗口、下一曲媒体装填与预取裁决记录。
 
+use std::path::Path;
+
 use mineral_model::{Song, SongId};
 use mineral_playback::{DirectMedia, OpenedMedia};
 use mineral_protocol::PlaybackOrigin;
@@ -30,17 +32,18 @@ pub(crate) fn record_prefetch(
     ));
 }
 
-/// 预取来源按落库口径归并:本地副本(缓存 / 下载库)→ `Local`,远端流 → `Remote`。
+/// 预取来源按实际读取位置归并：本地文件为 `Local`，网络资源为 `Remote`。
 ///
 /// # Params:
-///   - `origin`: 播放来源事实
+///   - `local_path`: 已解析出的本地文件路径；网络资源为 `None`。
 ///
 /// # Return:
 ///   对应的预取来源。
-pub(crate) fn prefetch_source(origin: PlaybackOrigin) -> mineral_stats::PrefetchSource {
-    match origin {
-        PlaybackOrigin::Cache | PlaybackOrigin::Download => mineral_stats::PrefetchSource::Local,
-        PlaybackOrigin::Remote => mineral_stats::PrefetchSource::Remote,
+pub(crate) fn prefetch_source(local_path: Option<&Path>) -> mineral_stats::PrefetchSource {
+    if local_path.is_some() {
+        mineral_stats::PrefetchSource::Local
+    } else {
+        mineral_stats::PrefetchSource::Remote
     }
 }
 
@@ -118,6 +121,9 @@ pub(crate) fn check_prefetch(player: &PlayerCore) {
 ///   - `opened`: Already-opened decoder input.
 ///   - `direct`: Optional direct capability.
 ///   - `origin`: Cache, download-library, or provider provenance.
+///
+/// # Return:
+///   Whether the slot committed opened media to audio.
 pub(crate) fn arm_opened(
     player: &PlayerCore,
     song: Song,
@@ -125,8 +131,13 @@ pub(crate) fn arm_opened(
     opened: OpenedMedia,
     direct: Option<DirectMedia>,
     origin: PlaybackOrigin,
-) {
+) -> bool {
     let info = opened.info().clone();
+    let source = prefetch_source(
+        direct
+            .as_ref()
+            .and_then(|media| media.locator().local_path()),
+    );
     let armed = player.with_state(|st| {
         let Some(active) = st.prefetch.take_opening(slot.instance_id, &song.id) else {
             return false;
@@ -144,15 +155,15 @@ pub(crate) fn arm_opened(
         true
     });
     if !armed {
-        return;
+        return false;
     }
-    let source = prefetch_source(origin);
     record_prefetch(
         player,
         song.id,
         source,
         mineral_stats::PrefetchResolution::Armed,
     );
+    true
 }
 
 #[cfg(test)]

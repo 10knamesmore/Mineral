@@ -565,3 +565,153 @@ fn config_changes(client: &mineral_client::Client) -> usize {
     }
     count
 }
+
+/// A real daemon reads and plays local media through ordinary channel requests; reconnects reuse it.
+#[tokio::test]
+async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
+    /// Read the local playlist identity from the public library snapshot.
+    async fn local_playlist_id(client: &Client) -> color_eyre::Result<mineral_model::PlaylistId> {
+        client.fire(Request::SubmitTask(
+            TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
+                source: SourceKind::LOCAL,
+            }),
+            Priority::User,
+        ));
+        let mut found = None;
+        wait_until("local library snapshot", || {
+            for event in client.mirror().drain_events() {
+                if let mineral_protocol::Event::Task(event) = event
+                    && let mineral_task::TaskEvent::LibrarySnapshot { playlists } = *event
+                {
+                    found = playlists
+                        .into_iter()
+                        .find(|playlist| playlist.source() == SourceKind::LOCAL)
+                        .map(|playlist| playlist.id);
+                }
+            }
+            found.is_some()
+        })
+        .await?;
+        found.ok_or_else(|| eyre!("missing local playlist in library snapshot"))
+    }
+    let music = tempfile::tempdir()?;
+    mineral_test::write_wav(
+        &music.path().join("first.wav"),
+        &vec![100; 480_000],
+        1,
+        48_000,
+    )?;
+    let root = music.path().canonicalize()?;
+    let root_lua = serde_json::to_string(&root)?;
+    let config =
+        format!("return {{ sources = {{ [\"local\"] = {{ roots = {{ {root_lua} }} }} }} }}");
+    let daemon = Daemon::spawn("local-library", Some(&config))?;
+    daemon.wait_ready()?;
+    let client = daemon.connect("local-library").await?;
+    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
+    client.subscribe(SubscriptionTopic::Events(Subscription::Lifecycle));
+    let playlist_id = local_playlist_id(&client).await?;
+    client.fire(Request::SubmitTask(
+        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
+            id: playlist_id.clone(),
+            load: mineral_channel_core::PlaylistLoad::Complete,
+        }),
+        Priority::User,
+    ));
+    let mut selected = None;
+    wait_until("local playlist detail", || {
+        for event in client.mirror().drain_events() {
+            if let mineral_protocol::Event::Task(event) = event
+                && let mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. } = *event
+                && id == playlist_id
+            {
+                selected = detail
+                    .playlist
+                    .entries
+                    .first()
+                    .map(|entry| entry.song.clone());
+            }
+        }
+        selected.is_some()
+    })
+    .await?;
+    let song = selected.ok_or_else(|| eyre!("missing local song"))?;
+    assert!(
+        client
+            .toggle_love(song.clone())?
+            .outcome()
+            .await
+            .into_success()
+            .is_some_and(|loved| loved)
+    );
+    assert!(
+        client
+            .play_queue(vec![song.clone()], 0, QueueContextWire::Manual)?
+            .outcome()
+            .await
+            .is_success()
+    );
+    wait_until("direct local playback and facts", || {
+        client.mirror().read_player(|player| {
+            player.play_origin() == Some(mineral_protocol::PlaybackOrigin::Remote)
+                && player.current().is_some_and(|current| {
+                    current
+                        .media_info
+                        .as_ref()
+                        .is_some_and(|info| info.format == Some(mineral_model::AudioFormat::Wav))
+                })
+        })
+    })
+    .await?;
+    // Files added after the first load do not appear merely because a client reconnects.
+    mineral_test::write_wav(&root.join("later.wav"), &[100; 4_800], 1, 48_000)?;
+    let other = daemon.connect("local-library-reconnect").await?;
+    other.subscribe(SubscriptionTopic::Player);
+    wait_until("reconnect retains local identity", || {
+        other.mirror().read_player(|player| {
+            player
+                .queue()
+                .first()
+                .is_some_and(|queued| queued.id == song.id)
+        })
+    })
+    .await?;
+    other.subscribe(SubscriptionTopic::Events(
+        mineral_protocol::Subscription::Task,
+    ));
+    // 重连后公开库列表仍解析到同一本地歌单 identity。
+    let reconnected_id = local_playlist_id(&other).await?;
+    assert_eq!(
+        reconnected_id, playlist_id,
+        "重连后库列表应给出同一本地歌单 id"
+    );
+    other.fire(Request::SubmitTask(
+        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
+            id: reconnected_id,
+            load: mineral_channel_core::PlaylistLoad::Complete,
+        }),
+        Priority::User,
+    ));
+    let mut reconnected_songs = None;
+    wait_until("reconnect reads the same local catalog", || {
+        for event in other.mirror().drain_events() {
+            if let mineral_protocol::Event::Task(event) = event
+                && let mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. } = *event
+                && id == playlist_id
+            {
+                reconnected_songs = Some(detail.playlist.entries);
+            }
+        }
+        reconnected_songs.is_some()
+    })
+    .await?;
+    let reconnected_songs = reconnected_songs.ok_or_else(|| eyre!("missing local playlist"))?;
+    assert_eq!(reconnected_songs.len(), 1);
+    assert_eq!(
+        reconnected_songs.first().map(|entry| &entry.song.id),
+        Some(&song.id)
+    );
+    assert!(client.stop().await.is_success());
+    Ok(())
+}

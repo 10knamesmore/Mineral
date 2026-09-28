@@ -255,6 +255,7 @@ mod tests {
             ("s", Action::OpenSearchView),
             ("<Tab>", Action::OpenQueue),
             ("D", Action::OpenDownloads),
+            ("A", Action::OpenAudioSettings),
             ("q", Action::OpenQuitConfirm),
             ("t", Action::CycleLyricExtra),
             ("/", Action::EnterSearch),

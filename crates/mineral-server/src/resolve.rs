@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use lofty::file::AudioFile;
 use lofty::probe::Probe;
-use mineral_model::{AudioFormat, BitRate, PlaybackMediaInfo, Song};
+use mineral_model::{AudioFormat, BitRate, PlaybackMediaInfo, Song, SourceKind};
 use mineral_playback::DirectMedia;
 use mineral_protocol::PlaybackOrigin;
 
@@ -25,31 +25,37 @@ pub(crate) struct LocalMediaHit {
     /// Absolute candidate path passed to the local-media opener.
     pub(crate) path: PathBuf,
 
-    /// Quality represented by the local file.
-    pub(crate) quality: BitRate,
-
     /// Cache or download-library provenance.
     pub(crate) origin: PlaybackOrigin,
 }
 
-/// 把 `song` 解析到本地音频文件(音质 `>= want` 的最高可用副本)。
+/// 把 `song` 解析到本地音频文件(目录档位 `>= want` 的最高可用副本)。
 ///
 /// # Params:
 ///   - `media_cache`: 音频本体缓存(LRU,id 索引)
 ///   - `download_root`: 下载导出根目录(如 `~/Music/mineral`);`None` = 下载不可用
 ///   - `song`: 待播歌曲
-///   - `want`: 期望的最低音质
+///   - `want`: 这次请求的最低档位
 ///
 /// # Return:
-///   命中返回 `(本地文件绝对路径, 实际命中音质, 来源)`,来源只会是
+///   命中返回文件路径与缓存/下载来源；目录档位不作为实测媒体信息返回。来源只会是
 ///   [`PlaybackOrigin::Cache`] 或 [`PlaybackOrigin::Download`];本地无 `>= want` 副本返回
-///   `None`(走远端)。
+///   `None`(交由歌曲所属的 playback provider 解析)。本地来源始终跳过副本查找。
 pub(crate) fn resolve_local(
     media_cache: &MediaCache,
     download_root: Option<&Path>,
     song: &Song,
     want: BitRate,
 ) -> Option<LocalMediaHit> {
+    // 本地身份始终交给 provider；收藏等持久化投影可能不带原文件位置。
+    if song.source() == SourceKind::LOCAL
+        || song
+            .source_url
+            .as_ref()
+            .is_some_and(mineral_model::MediaUrl::is_local)
+    {
+        return None;
+    }
     // ALL 升序 → rev() 高到低;低于 want 即可停(后续只会更低)。
     for &q in BitRate::ALL.iter().rev() {
         if q < want {
@@ -58,7 +64,6 @@ pub(crate) fn resolve_local(
         if let Some(path) = media_cache.get(&song.id, q) {
             return Some(LocalMediaHit {
                 path,
-                quality: q,
                 origin: PlaybackOrigin::Cache,
             });
         }
@@ -67,7 +72,6 @@ pub(crate) fn resolve_local(
         {
             return Some(LocalMediaHit {
                 path,
-                quality: q,
                 origin: PlaybackOrigin::Download,
             });
         }
@@ -84,7 +88,7 @@ pub(crate) fn resolve_local(
 /// # Params:
 ///   - `root`: 下载导出根目录
 ///   - `song`: 歌曲
-///   - `quality`: 音质
+///   - `quality`: 下载目录档位
 ///
 /// # Return:
 ///   命中的绝对路径,否则 `None`。
@@ -115,11 +119,10 @@ pub(crate) fn probe_export(root: &Path, song: &Song, quality: BitRate) -> Option
 /// # Params:
 ///   - `song`: 命中的歌曲(取 id 与时长)
 ///   - `path`: 本地文件绝对路径
-///   - `quality`: 命中的音质档
 ///
 /// # Return:
 ///   Direct local media with probed source-neutral facts.
-pub(crate) fn local_media(song: &Song, path: &Path, quality: BitRate) -> DirectMedia {
+pub(crate) fn local_media(song: &Song, path: &Path) -> DirectMedia {
     let size = std::fs::metadata(path).map(|m| m.len()).ok();
     let (format, probed_kbps, bit_depth) = probe_format_props(path);
     let bitrate_bps = probed_kbps
@@ -128,7 +131,6 @@ pub(crate) fn local_media(song: &Song, path: &Path, quality: BitRate) -> DirectM
     let info = PlaybackMediaInfo {
         song_id: song.id.clone(),
         bitrate_bps,
-        quality,
         size,
         format,
         bit_depth,
@@ -231,7 +233,7 @@ fn file_type_to_format(ft: lofty::file::FileType) -> Option<AudioFormat> {
     match ft {
         FileType::Mpeg => Some(AudioFormat::Mp3),
         FileType::Flac => Some(AudioFormat::Flac),
-        FileType::Mp4 => Some(AudioFormat::Aac),
+        FileType::Mp4 => Some(AudioFormat::Mp4),
         FileType::Vorbis => Some(AudioFormat::Ogg),
         FileType::Wav => Some(AudioFormat::Wav),
         FileType::Ape => Some(AudioFormat::Ape),
@@ -251,7 +253,7 @@ fn file_type_to_format(ft: lofty::file::FileType) -> Option<AudioFormat> {
 fn is_audio_ext(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "mp3" | "flac" | "aac" | "m4a" | "ogg" | "opus" | "wav" | "ape" | "alac"
+        "mp3" | "flac" | "aac" | "mp4" | "m4a" | "ogg" | "opus" | "wav" | "ape" | "alac"
     )
 }
 
@@ -281,6 +283,46 @@ mod tests {
     /// 开一个启用态 MediaCache(缓存文件落 `dir`,索引落 `persist`)。
     async fn open_cache(persist: &ServerStore, dir: PathBuf) -> color_eyre::Result<MediaCache> {
         MediaCache::open(persist, dir, 1_000_000).await
+    }
+
+    /// Local identities and explicit original files bypass copies, including stored favorites.
+    #[tokio::test]
+    async fn original_local_resource_skips_download_lookup() -> color_eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let store = ServerStore::open(&temp.path().join("mineral.db")).await?;
+        let cache = open_cache(&store, temp.path().join("cache")).await?;
+        let downloads = temp.path().join("downloads");
+        let original = temp.path().join("original.wav");
+        mineral_test::write_wav(&original, &[100; 4_800], 1, 48_000)?;
+        for source in [SourceKind::NETEASE, SourceKind::LOCAL] {
+            let mut song = song("original", "Original", None);
+            song.id = SongId::new(source, "original");
+            song.source_url = Some(mineral_model::MediaUrl::local(&original));
+            put_download(
+                &downloads,
+                &song,
+                BitRate::Lossless,
+                &AudioFormat::Wav,
+                b"copy",
+            )?;
+            assert!(resolve_local(&cache, Some(&downloads), &song, BitRate::Standard).is_none());
+            if source == SourceKind::LOCAL {
+                let scope = store.scope(source);
+                scope.upsert_meta(&song).await?;
+                scope.set_loved(&song.id, true).await?;
+                let favorite = store
+                    .loved_songs()
+                    .await?
+                    .into_iter()
+                    .find(|favorite| favorite.id == song.id)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("missing local favorite"))?;
+                assert!(favorite.source_url.is_none());
+                assert!(
+                    resolve_local(&cache, Some(&downloads), &favorite, BitRate::Standard).is_none()
+                );
+            }
+        }
+        Ok(())
     }
 
     /// 把一首歌按指定音质「下载」到 `root` 下(写真实文件;文件系统即索引,无需登记)。返回绝对路径。
@@ -317,7 +359,7 @@ mod tests {
             .map(drop)
     }
 
-    /// 只有 cache 命中(无下载导出)→ 返回 cache 路径与该音质。
+    /// 只有 cache 命中(无下载导出)→ 返回缓存文件路径。
     #[tokio::test]
     async fn cache_only_hit() -> color_eyre::Result<()> {
         let d = tempfile::tempdir()?;
@@ -338,7 +380,6 @@ mod tests {
         let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中 cache"));
         };
-        assert_eq!(hit.quality, BitRate::Exhigh);
         assert_eq!(hit.origin, PlaybackOrigin::Cache);
         assert_eq!(tokio::fs::read(&hit.path).await?, b"AUDIO");
         Ok(())
@@ -356,11 +397,6 @@ mod tests {
         let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中下载导出文件"));
         };
-        assert_eq!(
-            hit.quality,
-            BitRate::Lossless,
-            "下载是 Lossless,>= Exhigh 应命中"
-        );
         assert_eq!(hit.origin, PlaybackOrigin::Download);
         assert!(hit.path.ends_with("netease/lossless/叶惠美/晴天.flac"));
         assert_eq!(tokio::fs::read(&hit.path).await?, b"FLAC");
@@ -420,7 +456,6 @@ mod tests {
         let Some(hit) = resolve_local(&cache, Some(&root), &s, BitRate::Exhigh) else {
             return Err(color_eyre::eyre::eyre!("应命中"));
         };
-        assert_eq!(hit.quality, BitRate::Lossless);
         assert_eq!(hit.origin, PlaybackOrigin::Download, "更高音质应取下载导出");
         assert_eq!(
             tokio::fs::read(&hit.path).await?,
@@ -547,7 +582,7 @@ mod tests {
         );
 
         let abs = put_download(&root, &s, BitRate::Exhigh, &AudioFormat::Mp3, &bytes)?;
-        let media = local_media(&s, &abs, BitRate::Exhigh);
+        let media = local_media(&s, &abs);
         assert_eq!(
             media.info().format,
             Some(AudioFormat::Mp3),
@@ -578,7 +613,7 @@ mod tests {
             "盘上是 .flac 名"
         );
 
-        let media = local_media(&s, &abs, BitRate::Lossless);
+        let media = local_media(&s, &abs);
         assert_eq!(
             media.info().format,
             Some(AudioFormat::Wav),
@@ -590,7 +625,6 @@ mod tests {
             Some(64_000),
             "lofty 解析 64kbps(非 size/时长 估算)"
         );
-        assert_eq!(media.info().quality, BitRate::Lossless);
         assert!(matches!(media.locator(), DirectLocator::Local(_)));
         Ok(())
     }
@@ -611,7 +645,7 @@ mod tests {
             &[0u8; 16000],
         )?;
 
-        let media = local_media(&s, &abs, BitRate::Lossless);
+        let media = local_media(&s, &abs);
         assert!(media.info().format.is_none(), "乱字节识别不出格式 → None");
         assert_eq!(
             media.info().bitrate_bps,
@@ -635,7 +669,7 @@ mod tests {
             &[0u8; 8000],
         )?;
 
-        let media = local_media(&s, &abs, BitRate::Lossless);
+        let media = local_media(&s, &abs);
         assert!(media.info().format.is_none());
         assert_eq!(media.info().bitrate_bps, None, "时长未知且无解析 → None");
         Ok(())
@@ -663,8 +697,41 @@ mod tests {
         );
         assert_eq!(
             super::file_type_to_format(FileType::Mp4),
-            Some(AudioFormat::Aac)
+            Some(AudioFormat::Mp4)
         );
+    }
+
+    /// MP4 导出可被下载预检查和播放副本查找共同发现。
+    #[tokio::test]
+    async fn mp4_export_is_available_for_download_and_playback() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let song = song("mp4", "Audio", None);
+        let format = AudioFormat::from("m4a".to_owned());
+        let exported = put_download(
+            dir.path(),
+            &song,
+            BitRate::Lossless,
+            &format,
+            b"encoded audio",
+        )?;
+        assert_eq!(
+            exported.extension().and_then(|ext| ext.to_str()),
+            Some("mp4")
+        );
+        assert_eq!(
+            probe_export(dir.path(), &song, BitRate::Lossless),
+            Some(exported.clone())
+        );
+        let hit = resolve_local(
+            &MediaCache::disabled(),
+            Some(dir.path()),
+            &song,
+            BitRate::Exhigh,
+        )
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing MP4 download"))?;
+        assert_eq!(hit.path, exported);
+        assert_eq!(hit.origin, PlaybackOrigin::Download);
+        Ok(())
     }
 
     /// probe_export 直接命中可读库路径(与下载侧幂等共用)。

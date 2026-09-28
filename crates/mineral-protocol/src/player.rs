@@ -186,7 +186,7 @@ pub enum PlaybackOrigin {
     /// 音频本体缓存(LRU,可被淘汰)。
     Cache,
 
-    /// 远端流(可能边播边 capture 入缓存)。
+    /// 直接读取来源资源，不论其 URL 是网络地址还是本地文件路径。
     Remote,
 }
 
@@ -358,9 +358,9 @@ pub struct CurrentSync {
     /// 当前歌对应的 song_id,用于 client 端校验 lyrics 是否跟得上 current_song。
     pub current_lyrics_song_id: Option<SongId>,
 
-    /// 当前歌的振幅包络(db 有则随本段与 `current_song` 原子送达;计算未就绪时 `None`,
-    /// 算完经一次 `current` 版本 bump 补发)。归属恒等于 `current_song`——server 端
-    /// 组段时按当前曲过滤,client 直接采用无需再猜归属。
+    /// 当前播放实例的振幅包络，与 `current_song` 一起下发；未就绪时为 `None`。
+    /// 正常资源可从歌曲缓存加载；hook 替代资源只在本次实例内保存。
+    /// 计算完成后推进 `current` 版本，client 直接采用当前实例的数据。
     pub current_envelope: Option<Envelope>,
 
     /// 当前曲的进入档位;`None` = 没有在播曲(从未播过 / 已 stop)。

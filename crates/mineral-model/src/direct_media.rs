@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::{AudioFormat, BitRate, MediaUrl, SongId};
+use crate::{AudioFormat, MediaUrl, SongId};
 
 /// Container layout governing the cost of random access while opening a decoder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -60,8 +60,28 @@ pub enum DirectLocator {
     /// A remote URL and its request headers.
     Remote(RemoteLocator),
 
-    /// A local filesystem path.
-    Local(PathBuf),
+    /// A local filesystem path, serialized without losing platform-native characters.
+    Local(#[serde(with = "local_path")] PathBuf),
+}
+
+/// Preserve native path bytes or code units through Serde's OS-string representation.
+mod local_path {
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// Encode the path as native OS-string bytes or code units.
+    pub(super) fn serialize<S: Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+        path.as_os_str().serialize(serializer)
+    }
+
+    /// Restore the platform-native path without UTF-8 conversion.
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<PathBuf, D::Error> {
+        OsString::deserialize(deserializer).map(PathBuf::from)
+    }
 }
 
 impl DirectLocator {
@@ -101,9 +121,6 @@ pub struct PlaybackMediaInfo {
 
     /// Actual bitrate in bits per second, or `None` when unknown.
     pub bitrate_bps: Option<u32>,
-
-    /// Normalized quality delivered for the request.
-    pub quality: BitRate,
 
     /// Encoded resource size in bytes, or `None` when unknown.
     pub size: Option<u64>,
@@ -193,9 +210,7 @@ impl DirectMedia {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        AudioFormat, BitRate, DirectMedia, PlaybackMediaInfo, SongId, SourceKind, StreamLayout,
-    };
+    use crate::{AudioFormat, DirectMedia, PlaybackMediaInfo, SongId, SourceKind, StreamLayout};
 
     /// Required remote headers survive serialization with the direct locator.
     #[test]
@@ -204,7 +219,6 @@ mod tests {
             PlaybackMediaInfo {
                 song_id: SongId::new(SourceKind::NETEASE, "1"),
                 bitrate_bps: Some(320_000),
-                quality: BitRate::Exhigh,
                 size: None,
                 format: Some(AudioFormat::Mp3),
                 bit_depth: None,
@@ -237,7 +251,6 @@ mod tests {
             PlaybackMediaInfo {
                 song_id: SongId::new(SourceKind::BILIBILI, "BV1x:1"),
                 bitrate_bps: Some(192_000),
-                quality: BitRate::Exhigh,
                 size: None,
                 format: Some(AudioFormat::Aac),
                 bit_depth: None,

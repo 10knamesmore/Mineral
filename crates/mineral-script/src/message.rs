@@ -4,7 +4,7 @@
 //! [`ScriptCmd`] 是脚本 → daemon(Lua API 发出的播放器命令)。两侧都是
 //! **结构化** Rust 类型,Lua 字符串只出现在 VM 边界的适配层(`api` 模块)。
 
-use mineral_model::{PlaylistEntry, Song, SongId};
+use mineral_model::{BitRate, PlaylistEntry, Song, SongId};
 use mineral_protocol::PlayMode;
 
 /// daemon 投递给脚本线程的事件。携带 daemon 侧已有的完整模型
@@ -35,7 +35,7 @@ pub enum ScriptEvent {
         /// 落盘路径。
         path: std::path::PathBuf,
 
-        /// 实际下载音质(hook 改写后的有效值)。
+        /// 下载请求档位；hook 改写时为脚本声明的目录档位。
         quality: mineral_model::BitRate,
 
         /// 容器格式(channel 实际提供;拿不到为 `None`,Lua 侧投影成 nil)。
@@ -387,9 +387,14 @@ pub enum ResolveValue {
     /// 歌单列表(`library.playlists`)。
     Playlists(Vec<PlaylistBrief>),
 
-    /// Direct media exposed through `library.song_url`, including headers and layout,
-    /// 可直接回填 hook 的改写返回值。
-    DirectMedia(Box<mineral_model::DirectMedia>),
+    /// Direct media and the tier requested by `library.song_url`.
+    DirectMedia {
+        /// Provider's direct resource and media facts.
+        media: Box<mineral_model::DirectMedia>,
+
+        /// Quality requested from the provider, not a measured quality receipt.
+        requested_quality: BitRate,
+    },
 
     /// 子进程结束(`mineral.spawn` 回调)。
     Spawn(crate::proc::SpawnResult),

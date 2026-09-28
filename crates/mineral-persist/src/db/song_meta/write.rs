@@ -13,6 +13,30 @@ use crate::entity::{song_artists, song_meta};
 const BATCH_ROWS: usize = 100;
 
 impl NamespaceStore {
+    /// Replace one source's complete song projection, including absent fields and artists.
+    pub async fn replace_meta_batch(&self, songs: &[&Song]) -> color_eyre::Result<()> {
+        let Some(pool) = self.pool() else {
+            return Ok(());
+        };
+        let namespace = self.namespace();
+        let transaction = pool.begin().await?;
+        song_artists::Entity::delete_many()
+            .filter(song_artists::Column::Namespace.eq(namespace))
+            .exec(&transaction)
+            .await?;
+        song_meta::Entity::delete_many()
+            .filter(song_meta::Column::Namespace.eq(namespace))
+            .exec(&transaction)
+            .await?;
+        for batch in songs.chunks(BATCH_ROWS) {
+            write_metadata(&transaction, namespace, batch).await?;
+            replace_artists(&transaction, namespace, batch).await?;
+        }
+        transaction.commit().await?;
+        mineral_log::debug!(target: "persist", source = namespace, songs = songs.len(), "replaced source song metadata");
+        Ok(())
+    }
+
     /// upsert 一首歌的元数据(song_meta + 按需重写 song_artists 保序)。
     ///
     /// 降级 ServerStore 下静默 no-op。

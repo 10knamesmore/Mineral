@@ -667,6 +667,19 @@ daemon 解码整曲，计算 `tui.waveform` 使用的响度包络。参数变更
 | `backfill.chunk_size`     | 40          | 后台补全歌曲信息时，每批请求的歌曲数 |
 | `backfill.max_concurrent` | 3           | 同时执行的歌曲信息请求数             |
 
+`sources["local"]`：将 `roots` 设为 `{ "~/Music/Collection" }` 即可扫描本地音乐，默认为 `{}`。路径须为绝对路径或以 `~/` 开头；每个直接含音频的目录生成一张歌单，不跟随符号链接。
+
+本地歌词优先读取音频同目录、同名的 `.lrc`，支持 UTF-8 和带 BOM 的 UTF-16。LRC 支持多时间戳、全局 `offset` 和 Enhanced LRC 的逐字时间标签；正 `offset` 使歌词提前，负值使歌词延后。旁挂文件在每次歌词请求时重读；没有旁挂文件时，使用扫描时提取的内嵌歌词：
+
+| 标签                          | 歌词字段 |
+| ----------------------------- | -------- |
+| ID3v2                         | `USLT`   |
+| Vorbis Comment（FLAC/Ogg 等） | `LYRICS` |
+| MP4                           | `©lyr`   |
+| APEv2                         | `Lyrics` |
+
+这些字段存放文本，内容可为普通歌词、普通 LRC 或 Enhanced LRC；多个语言版本不会自动合并为翻译轨。
+
 各来源的 `curate_playlists` 函数可过滤、改名或重排该来源的歌单。设在 `sources` 表上的同名函数则处理合并后的所有来源歌单。
 
 ## queue — 队列变换

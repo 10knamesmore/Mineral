@@ -83,7 +83,6 @@ impl PlaybackProvider for TestPlaybackProvider {
         let info = PlaybackMediaInfo {
             song_id: request.song_id().clone(),
             bitrate_bps: Some(320_000),
-            quality: request.quality(),
             size: Some(4),
             format: Some(mineral_model::AudioFormat::Mp3),
             bit_depth: None,

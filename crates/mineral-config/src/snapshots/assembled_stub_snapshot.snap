@@ -51,7 +51,7 @@ expression: "super::meta_config_lua()"
 ---@alias mineral.KeyBinding string|string[]
 
 ---来源名:内置源有补全,插件源写任意 string 也合法(没加载的名字运行时静默跳过)。
----@alias mineral.SourceName "netease"|"bilibili"|string
+---@alias mineral.SourceName "netease"|"bilibili"|"local"|"mineral"|string
 
 ---channel 搜索的目标类型(封闭集合,typo 加载期报错)。
 ---@alias mineral.SearchKind "song"|"album"|"artist"|"playlist"|"user"
@@ -662,7 +662,14 @@ expression: "super::meta_config_lua()"
 ---@field netease? mineral.NeteaseSection 网易云源段。
 ---@field bilibili? mineral.BilibiliSection 哔哩哔哩源段。
 ---@field mineral? mineral.MineralSection Mineral 聚合源段(全源收藏投影)。
+---@field local? mineral.LocalSection daemon 本机扫描目录。
 ---@field curate_playlists? mineral.CuratePlaylistsFn 跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错
+
+---本地来源：daemon 扫描目录，按直接含歌的目录建歌单。
+---@class mineral.LocalSection
+---@field roots? string[] 扫描根目录，接受绝对路径和 ~/，在 daemon 所在机器展开。
+---@field color? mineral.ColorRef 来源徽标色。
+---@field curate_playlists? mineral.CuratePlaylistsFn 本地歌单列表的呈现策展
 
 ---queue 配置。
 ---@class mineral.QueueConfig

@@ -65,7 +65,7 @@ pub(in crate::migration) enum Plays {
     /// 实际码率，单位 bit/s。
     BitrateBps,
 
-    /// 音质标识。
+    /// 发起资源请求时的音质档位。
     Quality,
 
     /// 采样位深。

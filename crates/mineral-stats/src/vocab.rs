@@ -42,7 +42,7 @@ pub enum PlaybackOrigin {
     /// 音频本体缓存(LRU,可被淘汰)。
     Cache,
 
-    /// 远端流(可能边播边收割入缓存)。
+    /// 直接读取来源资源，不经 Mineral 的缓存或下载副本。
     Remote,
 }
 

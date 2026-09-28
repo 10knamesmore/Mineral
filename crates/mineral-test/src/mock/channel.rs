@@ -100,7 +100,6 @@ impl PlaybackProvider for UrlChannel {
         let info = PlaybackMediaInfo {
             song_id: request.song_id().clone(),
             bitrate_bps: None,
-            quality: request.quality(),
             size: None,
             format: Some(AudioFormat::Flac),
             bit_depth: Some(24),

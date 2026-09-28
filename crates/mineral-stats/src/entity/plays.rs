@@ -64,7 +64,7 @@ pub struct Model {
     /// 实际码率，单位 bit/s。
     pub bitrate_bps: Option<i64>,
 
-    /// 音质标识。
+    /// 发起资源请求时的音质档位。
     pub quality: Option<String>,
 
     /// 采样位深。

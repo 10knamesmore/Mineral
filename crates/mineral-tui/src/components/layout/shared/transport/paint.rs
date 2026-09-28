@@ -685,7 +685,7 @@ fn fmt_sample_rate(hz: u32) -> Option<String> {
     }
 }
 
-/// 来源徽标:字形 + 颜色。download=绿(永久在库)/ cache=蓝(LRU 临时)/ remote=灰(网络流)。
+/// 来源徽标:下载副本为绿色，临时缓存为蓝色；直接从本地或远端来源播放共用灰色圆圈。
 ///
 /// # Params:
 ///   - `origin`: 当前在播音频的来源
@@ -696,16 +696,15 @@ fn fmt_sample_rate(hz: u32) -> Option<String> {
 ///   `(字形, 颜色)`。
 fn origin_badge(origin: PlaybackOrigin, theme: &Theme, ink: Ink) -> (&'static str, Color) {
     match origin {
+        PlaybackOrigin::Remote => ("○", ink.muted),
         PlaybackOrigin::Download => ("↓", theme.green),
         PlaybackOrigin::Cache => ("◆", theme.accent_2),
-        PlaybackOrigin::Remote => ("○", ink.muted),
     }
 }
 
 /// 按 channel **实测**的格式(无损与否)+ 实际码率分 5 档配色。
 ///
-/// 刻意不读 `PlaybackMediaInfo::quality`——那是请求侧的归一化等级,channel 可「尽力提供」
-/// 返回完全不同的实际音质(如 local channel 无视请求)。显示音质必须以实测为准。
+/// 请求档位不表示实际媒体规格；展示只依据已知的格式与码率。
 fn fmt_tier_color(lossless: bool, bitrate_bps: Option<u32>, theme: &Theme, ink: Ink) -> Color {
     match (lossless, bitrate_bps) {
         (true, Some(b)) if b >= 1_800_000 => theme.yellow, // Hi-Res 级无损(≈24bit/96k 起)

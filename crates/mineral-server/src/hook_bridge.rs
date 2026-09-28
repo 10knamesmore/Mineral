@@ -67,10 +67,12 @@ impl HookGate {
     ///
     /// # Params:
     ///   - `song`: Download target.
+    ///   - `quality`: Requested download tier exposed to the hook.
     ///   - `direct`: Optional direct capability of the prepared playback.
     pub(crate) async fn before_download(
         &self,
         song: &Song,
+        quality: BitRate,
         direct: Option<&DirectMedia>,
     ) -> HookDecision {
         let Some(sender) = self.active() else {
@@ -78,7 +80,7 @@ impl HookGate {
         };
         sender
             .intercept_download(
-                BeforeDownloadCtx::playable(song.clone(), direct.cloned()),
+                BeforeDownloadCtx::playable(song.clone(), quality, direct.cloned()),
                 self.timeout,
             )
             .await
@@ -110,10 +112,15 @@ pub(crate) async fn decide_stream(
         return HookDecision::Continue;
     };
     let context = match availability {
-        StreamAvailability::Playable(direct) => {
-            BeforeStreamCtx::playable(song.clone(), mode, direct.cloned())
+        StreamAvailability::Playable(direct) => BeforeStreamCtx::playable(
+            song.clone(),
+            player.playback_quality(),
+            mode,
+            direct.cloned(),
+        ),
+        StreamAvailability::Unplayable => {
+            BeforeStreamCtx::unavailable(song.clone(), player.playback_quality(), mode)
         }
-        StreamAvailability::Unplayable => BeforeStreamCtx::unavailable(song.clone(), mode),
     };
     let timeout = match mode {
         HookMode::Immediate => gate.timeout,
@@ -143,16 +150,11 @@ pub(crate) fn rewrite_prepared(
         .new_url()
         .cloned()
         .or_else(|| original.map(|value| value.locator().media_url()))?;
-    let quality = rewrite
-        .new_quality()
-        .or_else(|| original_info.map(|value| value.quality))
-        .unwrap_or(BitRate::Standard);
     let info = PlaybackMediaInfo {
         song_id: song_id.clone(),
         bitrate_bps: rewrite
             .bitrate_bps()
             .or_else(|| original_info.and_then(|value| value.bitrate_bps)),
-        quality,
         size: original_info.and_then(|value| value.size),
         format: rewrite
             .format()

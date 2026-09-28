@@ -492,7 +492,6 @@ async fn play_song_clears_stale_queued() -> color_eyre::Result<()> {
                 media_info: PlaybackMediaInfo {
                     song_id: song("b").id,
                     bitrate_bps: None,
-                    quality: BitRate::Higher,
                     size: None,
                     format: None,
                     bit_depth: None,
@@ -609,7 +608,7 @@ fn song_with_album(id: &str, name: &str, album: &str) -> Song {
 }
 
 /// 端到端:**真下载**一首(走进程内 HTTP server)→ **再播放** → 应解析到刚下载的文件
-/// (`origin=Download` / `quality=Lossless`,零网络、不进缓存)。
+/// (`origin=Download` / `lossless` 目录命中,零网络、不进缓存)。
 ///
 /// 这是「下载的歌就该从下载库播」这条业务规则的端到端守卫:跨 download → resolve →
 /// State → snapshot 全链路。若下载又顺手填了缓存,play_song 会命中缓存副本(`origin=Cache`)
@@ -630,7 +629,10 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
     let playback = PlaybackRegistry::new(vec![provider])?;
     let download_id = mineral_protocol::DownloadId::new("playback-download".to_owned());
     let cancellation = tokio_util::sync::CancellationToken::new();
-    download_song(
+    let crate::download::DownloadOutcome::Downloaded {
+        path: downloaded_path,
+        ..
+    } = download_song(
         &playback,
         &crate::download::DownloadEnv {
             music_dir: &music_dir,
@@ -645,7 +647,11 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         Arc::new(|_update| {}),
         /*speed_tick*/ Duration::from_millis(150),
     )
-    .await?;
+    .await?
+    else {
+        color_eyre::eyre::bail!("fixture download was skipped");
+    };
+    assert!(downloaded_path.starts_with(music_dir.join("netease/lossless")));
 
     // 2. 用同一 music_dir + media_cache 起 core,播放。
     let calls = Arc::new(Mutex::new(Vec::<(SongId, bool, u64)>::new()));
@@ -679,11 +685,9 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
     let opened = wait_until(|| {
         let sync = core.sync(PlayerVersions::default());
         sync.play_origin == Some(PlaybackOrigin::Download)
-            && sync.current.is_some_and(|current| {
-                current
-                    .media_info
-                    .is_some_and(|info| info.quality == BitRate::Lossless)
-            })
+            && sync
+                .current
+                .is_some_and(|current| current.media_info.is_some())
     })
     .await;
     assert!(
@@ -703,9 +707,8 @@ async fn downloads_then_plays_from_download() -> color_eyre::Result<()> {
         .direct_media
         .ok_or_else(|| color_eyre::eyre::eyre!("本地命中应提供 direct media"))?;
     assert_eq!(
-        direct.info().quality,
-        BitRate::Lossless,
-        "命中音质应为 lossless"
+        direct.locator().local_path(),
+        Some(downloaded_path.as_path())
     );
     Ok(())
 }

@@ -39,7 +39,7 @@ impl SourceKind {
     /// 本地文件系统(用户的 music 目录)。
     pub const LOCAL: Self = Self {
         name: "local",
-        label: "□ local",
+        label: " local",
     };
 
     /// 哔哩哔哩。

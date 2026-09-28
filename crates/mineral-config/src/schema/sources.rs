@@ -4,7 +4,7 @@
 //! 不用 `#[serde(untagged)]`(避免其错误路径含糊)。
 
 use mineral_config_macros::{config_section, source_section};
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 use crate::schema::theme::ColorRef;
 
@@ -32,6 +32,9 @@ pub struct SourcesConfig {
 
     /// Mineral 聚合源段(全源收藏投影)。
     mineral: MineralSection,
+
+    /// daemon 本机扫描目录。
+    local: LocalSection,
 }
 
 impl SourcesConfig {
@@ -45,6 +48,7 @@ impl SourcesConfig {
             ("netease", self.netease.color()),
             ("bilibili", self.bilibili.color()),
             ("mineral", self.mineral.color()),
+            ("local", self.local.color()),
         ]
     }
 }
@@ -213,4 +217,19 @@ mod tests {
             "proxy = true 应报错"
         );
     }
+}
+
+/// 本地来源：daemon 扫描目录，按直接含歌的目录建歌单。
+#[config_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "本地歌单列表的呈现策展"
+)]
+pub struct LocalSection {
+    /// 扫描根目录，接受绝对路径和 ~/，在 daemon 所在机器展开。
+    roots: Vec<PathBuf>,
+
+    /// 来源徽标色。
+    color: ColorRef,
 }

@@ -110,7 +110,7 @@ fn load_on(
     };
 
     let merged = deep_merge(lua, default_table.clone(), user)?;
-    extract_lua_fns(lua, &merged)?;
+    prepare_lua_table(lua, &merged)?;
     match from_lua_table(merged) {
         Ok((config, tree)) => Ok((config, warnings, true, tree)),
         Err(warning) => {
@@ -121,14 +121,18 @@ fn load_on(
     }
 }
 
-/// 把配置表里所有 Lua function 字段摘进 VM named registry(serde 落不了型)。
-/// **所有 `from_lua_table` 调用点之前都必须过这里**——铁律只锚在此一处,
-/// 新增函数字段的提取器挂进来,不要在调用点单独加。
+/// 落型前标记数组，并把 Lua 函数字段摘进 VM registry。
+/// 所有 `from_lua_table` 调用都经过这里。
 ///
 /// 各提取器共同语义:非 function 的值不摘——留在表里让落型报 unknown field
 /// (带路径),比静默吞掉好定位。配置整体落型失败回落默认时 registry 里可能
 /// 残留已摘函数,但默认配置不声明这些字段,无键触达,无害。
-fn extract_lua_fns(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+fn prepare_lua_table(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+    if let Some(local) = table_at!(merged, sources.local)
+        && let Ok(roots) = local.get::<Table>("roots")
+    {
+        roots.set_metatable(Some(lua.array_metatable()));
+    }
     extract_copy_templates(lua, merged)?;
     extract_playlist_transforms(lua, merged)?;
     extract_queue_transforms(lua, merged)?;
@@ -229,7 +233,7 @@ impl Config {
     pub fn defaults() -> color_eyre::Result<Self> {
         let lua = new_vm()?;
         let table = eval_default(&lua)?;
-        extract_lua_fns(&lua, &table)?;
+        prepare_lua_table(&lua, &table)?;
         let (config, _tree) =
             from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
         Ok(config)
@@ -245,7 +249,7 @@ impl Config {
 pub fn default_tree() -> color_eyre::Result<serde_json::Value> {
     let lua = new_vm()?;
     let table = eval_default(&lua)?;
-    extract_lua_fns(&lua, &table)?;
+    prepare_lua_table(&lua, &table)?;
     let (_config, tree) =
         from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
     Ok(tree)
@@ -265,7 +269,7 @@ fn finalize_default(
     default_table: Table,
     warnings: Vec<ConfigWarning>,
 ) -> color_eyre::Result<(Config, serde_json::Value, Vec<ConfigWarning>)> {
-    extract_lua_fns(lua, &default_table)?;
+    prepare_lua_table(lua, &default_table)?;
     let (config, tree) = from_lua_table(default_table)
         .map_err(|w| eyre!("default.lua 无法落成 Config(应被守卫测试拦截):{w}"))?;
     Ok((config, tree, warnings))

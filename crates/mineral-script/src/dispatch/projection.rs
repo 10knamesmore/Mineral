@@ -158,18 +158,19 @@ fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> 
 /// Projects direct media into the Lua `library.song_url` callback shape.
 ///
 /// 字段名与 hook 改写返回值([`RewriteSpec`](crate::hooks::RewriteSpec) 的 Lua 形态)
-/// 对齐——`url` / `quality` / `headers`(`{{name, value}}` 数组)/ `layout`,回调里可
+/// 对齐——`url` / 请求 `quality` / `headers`(`{{name, value}}` 数组)/ `layout`,回调里可
 /// 原样喂给 `ctx.resolve(...)` 完成顶入;另带 `song_id` / `bitrate_bps` / `size` /
 /// `format` 供匹配逻辑参考。
 pub(super) fn direct_media_table(
     lua: &Lua,
     direct: &mineral_model::DirectMedia,
+    requested_quality: mineral_model::BitRate,
 ) -> mlua::Result<mlua::Table> {
     let entry = lua.create_table()?;
     let info = direct.info();
     entry.set("song_id", info.song_id.qualified())?;
     entry.set("url", direct.locator().media_url().to_string())?;
-    entry.set("quality", info.quality.as_str())?;
+    entry.set("quality", requested_quality.as_str())?;
     // bitrate_bps / size / format 未知时为 nil(脚本侧参考前需判空)。
     entry.set("bitrate_bps", info.bitrate_bps)?;
     entry.set("size", info.size)?;

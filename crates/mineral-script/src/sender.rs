@@ -47,7 +47,7 @@ impl ScriptSender {
 
     /// 向当前线程投一条消息;未挂 / 线程已退出时把消息原样还给调用方
     /// (Box 压扁 Err 体积,消息只在失败路径装箱)。
-    fn try_send(&self, msg: ScriptMsg) -> Result<(), Box<ScriptMsg>> {
+    pub(crate) fn try_send(&self, msg: ScriptMsg) -> Result<(), Box<ScriptMsg>> {
         let guard = self.inner.read();
         match guard.as_ref() {
             Some(tx) => tx.send(msg).map_err(|failed| Box::new(failed.0)),

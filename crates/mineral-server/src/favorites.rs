@@ -252,7 +252,7 @@ impl PlayerCore {
     /// refresh 依次读当时 persist 态、按获锁序推 detail,最后获锁者读到最终态并最后推,detail
     /// 收敛。(持锁只做本地 SQL,无网络。)列表 count 经出口管线异步落地,与其它源同款最终一致。
     /// 未注册聚合 channel(裁剪构建 / 纯 mock 测试核)时静默跳过。
-    async fn refresh_aggregate_favorites(&self) {
+    pub(crate) async fn refresh_aggregate_favorites(&self) {
         let Some(channel) = self.channel_for(SourceKind::MINERAL) else {
             return;
         };

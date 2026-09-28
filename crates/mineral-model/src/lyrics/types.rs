@@ -25,7 +25,7 @@ pub enum LineKind {
     /// 整行文本(行级有时间戳或无时间戳),无字级轴。
     Plain(String),
 
-    /// 逐字时间轴(yrc):行时长 + 字单元序列。
+    /// 逐字时间轴:行时长 + 字单元序列。
     Words {
         /// 行时长(毫秒)。
         dur_ms: u64,
@@ -74,7 +74,7 @@ impl LineKind {
 ///
 /// 三种时间态由两字段正交表达:`time_ms` 区分有无行级时间戳(`None` = 纯文本 / 前奏白 /
 /// 尾注 / 无 `t` 的 credits);`kind` 区分仅整行文本([`Plain`](LineKind::Plain))还是有
-/// 字级时间轴([`Words`](LineKind::Words),yrc)。
+/// 字级时间轴([`Words`](LineKind::Words))。
 ///
 /// 翻译 / 罗马音在 [`Lyrics::assemble`] 装配时按时间配对进行内,副轨缺行(credits /
 /// 未翻句)即 `None`——消费方直接读字段,不再自行对齐。

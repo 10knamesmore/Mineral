@@ -38,7 +38,6 @@ impl PlaybackProvider for LengthChangingProvider {
             info: PlaybackMediaInfo {
                 song_id: request.song_id().clone(),
                 bitrate_bps: None,
-                quality: request.quality(),
                 size: None,
                 format: None,
                 bit_depth: None,
@@ -117,7 +116,6 @@ fn direct_locator_does_not_change_source_identity() {
     let info = PlaybackMediaInfo {
         song_id: SongId::new(SourceKind::NETEASE, "42"),
         bitrate_bps: None,
-        quality: BitRate::Exhigh,
         size: None,
         format: None,
         bit_depth: None,

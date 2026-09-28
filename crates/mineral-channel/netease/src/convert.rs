@@ -2,7 +2,7 @@
 
 use mineral_channel_core::PageResult;
 use mineral_model::{
-    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
+    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat,
     CollectionIndex, MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song,
     SongId, SourceKind,
 };
@@ -227,11 +227,9 @@ pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
 
 /// 播放 URL 端点 DTO 列表 → [`DirectMedia`] 列表,丢弃不可播的项。
 ///
-/// `quality` 是请求时的目标音质,原样回填 [`PlaybackMediaInfo`](响应不含等级回执)。
-pub(crate) fn to_direct_media(dtos: Vec<SongUrl>, quality: BitRate) -> Vec<DirectMedia> {
-    dtos.into_iter()
-        .filter_map(|dto| song_url_to_direct(dto, quality))
-        .collect()
+/// The requested tier stays with playback orchestration; media carries only source facts.
+pub(crate) fn to_direct_media(dtos: Vec<SongUrl>) -> Vec<DirectMedia> {
+    dtos.into_iter().filter_map(song_url_to_direct).collect()
 }
 
 /// 整批条目是否都**显式**报了「本源无资源」(单曲级 `code` 非 200)。
@@ -248,7 +246,7 @@ pub(crate) fn all_explicitly_unavailable(dtos: &[SongUrl]) -> bool {
 /// 不可播三口:单曲级 `code` 非 200(实测无版权曲为 404,url 同时为 null)、
 /// `freeTrialInfo` 非空(url 只是试听片段——接受它会把片段当整曲播放并入缓存)、
 /// url 缺失。
-fn song_url_to_direct(d: SongUrl, quality: BitRate) -> Option<DirectMedia> {
+fn song_url_to_direct(d: SongUrl) -> Option<DirectMedia> {
     if d.code.is_some_and(|c| c != 200) || d.free_trial_info.is_some() {
         return None;
     }
@@ -257,7 +255,6 @@ fn song_url_to_direct(d: SongUrl, quality: BitRate) -> Option<DirectMedia> {
         song_id: SongId::new(SourceKind::NETEASE, d.id.to_string()),
         // wire 层 br / size 缺字段经 serde default 落 0,在此边界转 None,哨兵不进模型。
         bitrate_bps: (d.br > 0).then_some(d.br),
-        quality,
         size: (d.size > 0).then_some(d.size),
         format: d.format.filter(|s| !s.is_empty()).map(AudioFormat::from),
         // 网易云播放接口的响应不含位深字段(实测 /song/url/v1 无 bitDepth),恒 None。
@@ -285,8 +282,6 @@ mod tests {
     /// `all_explicitly_unavailable` 为 true(channel 据此不降级 legacy)。
     #[test]
     fn grey_entry_is_rejected_and_detected() -> color_eyre::Result<()> {
-        use mineral_model::BitRate;
-
         use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
@@ -300,7 +295,7 @@ mod tests {
             "整批显式非 200 应判定为本源无资源"
         );
         assert!(
-            to_direct_media(vec![grey], BitRate::Exhigh).is_empty(),
+            to_direct_media(vec![grey]).is_empty(),
             "灰歌条目不得产出 Direct media"
         );
         assert!(
@@ -314,8 +309,6 @@ mod tests {
     /// (legacy 可能给完整流,降级仍要走)。
     #[test]
     fn trial_fragment_is_not_playable() -> color_eyre::Result<()> {
-        use mineral_model::BitRate;
-
         use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
@@ -329,7 +322,7 @@ mod tests {
             "试听不算显式无资源,legacy 降级仍要走"
         );
         assert!(
-            to_direct_media(vec![trial], BitRate::Exhigh).is_empty(),
+            to_direct_media(vec![trial]).is_empty(),
             "试听片段不得当完整可播流放行"
         );
         Ok(())
@@ -338,8 +331,6 @@ mod tests {
     /// 正常条目(code=200 + 完整 url)照常产出;混批(灰 + 正常)不触发全灰判定。
     #[test]
     fn playable_entry_survives_mixed_batch() -> color_eyre::Result<()> {
-        use mineral_model::BitRate;
-
         use super::{all_explicitly_unavailable, to_direct_media};
         use crate::wire::song::SongUrl;
 
@@ -354,7 +345,7 @@ mod tests {
             }))?,
         ];
         assert!(!all_explicitly_unavailable(&batch), "混批不算全灰");
-        let streams = to_direct_media(batch, BitRate::Exhigh);
+        let streams = to_direct_media(batch);
         assert_eq!(streams.len(), 1, "只有可播条目产出");
         assert_eq!(
             streams.first().map(|s| s.info().song_id.as_str()),

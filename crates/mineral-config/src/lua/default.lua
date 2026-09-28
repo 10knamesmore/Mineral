@@ -420,6 +420,10 @@ return {
     tagging_workers = 4, -- 打标并发 worker 数(1 = 串行;也是对源站请求并发的放大系数)
   },
   sources = {
+    ["local"] = {
+      roots = {},
+      color = "green",
+    },
     mineral = {
       color = "#2a6511", -- EndSerenading 封面绿(聚合收藏歌单的源徽标)
       -- 后台补 meta 节流:sync 导入的红心先只有 id,后台逐源(按各歌来源走各自 channel)拉 songs_detail 补全,聚合面渐进填满

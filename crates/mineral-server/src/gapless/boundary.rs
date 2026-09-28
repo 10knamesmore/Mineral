@@ -92,14 +92,17 @@ pub(crate) fn check_advance(player: &PlayerCore) {
                     player.inner.stats.play_started(pending);
                 }
                 if let Some(info) = media_info {
-                    player.enrich_from_media_info(&info);
+                    player.enrich_from_media_info(
+                        &info,
+                        playback_origin.unwrap_or(PlaybackOrigin::Remote),
+                    );
                 }
                 player.submit_task(
                     TaskKind::ChannelFetch(ChannelFetchKind::Lyrics { song_id: s.id }),
                     Priority::User,
                 );
             }
-            // 无缝翻曲后补推新当前曲的 db 包络(预排时已算好;client 换曲后才认它)。
+            // Promotion carries the instance envelope; only missing normal-song data reads db.
             player.replay_current_envelope();
             player.spawn_save_session();
         }

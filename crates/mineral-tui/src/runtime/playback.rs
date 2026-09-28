@@ -65,7 +65,7 @@ pub struct Playback {
 
 /// 当前曲的振幅包络 + 它的入场揭示动画。
 ///
-/// 归属与动画相位同生共死:换曲(或包络换版本)才重建、重播动画,其余情况原地保留相位。
+/// 归属与动画相位同生共死:换曲或包络数据变化才重建,其余情况原地保留相位。
 #[derive(Clone, Debug)]
 pub struct EnvelopeState {
     /// 包络归属的歌曲 id;与当前 track 不符时整份不可见(见 [`Playback::current_envelope`])。
@@ -105,11 +105,6 @@ impl EnvelopeState {
     /// [`crate::render::anim::Transition::raw`])。
     pub fn reveal(&self) -> u16 {
         self.reveal.raw()
-    }
-
-    /// 是否与给定的 `(归属, 包络版本)` 同一份——同一份就该保留动画相位而非重播。
-    fn is(&self, owner: &SongId, version: u16) -> bool {
-        self.owner == *owner && self.envelope.version == version
     }
 
     /// 推进入场动画一拍。
@@ -217,8 +212,8 @@ impl Playback {
         (self.track.as_ref()?.id == state.owner).then_some(state)
     }
 
-    /// 消费重段送来的包络:**同一份((归属, 版本)未变)原地保留**,只有换曲 / 换版本
-    /// 才重建并重播入场动画。
+    /// 消费重段送来的包络:歌曲与完整包络数据相同时保留当前状态,
+    /// 否则采用新数据并重播入场动画。
     ///
     /// 重段每次到达都会调这里(同一首歌内 media facts 更新也会来一次),无条件重建会让
     /// 入场动画反复从头重播。
@@ -235,7 +230,7 @@ impl Playback {
         if self
             .envelope
             .as_ref()
-            .is_some_and(|e| e.is(&owner, envelope.version))
+            .is_some_and(|state| state.owner == owner && state.envelope == envelope)
         {
             return;
         }
@@ -360,7 +355,6 @@ mod tests {
         let media_info = |substituted: bool| mineral_model::PlaybackMediaInfo {
             song_id: SongId::new(SourceKind::NETEASE, "1"),
             bitrate_bps: None,
-            quality: mineral_model::BitRate::Standard,
             size: None,
             format: Some(mineral_model::AudioFormat::Mp3),
             bit_depth: None,
@@ -401,7 +395,6 @@ mod tests {
         pb.media_info = Some(mineral_model::PlaybackMediaInfo {
             song_id: SongId::new(SourceKind::NETEASE, "185868"),
             bitrate_bps: None,
-            quality: mineral_model::BitRate::Standard,
             size: None,
             format: Some(mineral_model::AudioFormat::Aac),
             bit_depth: None,
@@ -507,9 +500,9 @@ mod tests {
         Ok(())
     }
 
-    /// 包络按歌曲与版本复用；任一身份变化更新数据，无歌曲或无包络时清空。
+    /// 同一歌曲也必须采用变更后的包络数据；无歌曲或无包络时清空。
     #[test]
-    fn sync_envelope_updates_on_new_identity() {
+    fn sync_envelope_updates_when_song_or_data_changes() {
         use mineral_model::Envelope;
 
         let envelope = |version: u16, point: u8| Envelope {
@@ -525,11 +518,11 @@ mod tests {
             Some(&first)
         );
 
-        pb.sync_envelope(Some(id.clone()), Some(envelope(1, 4)), 10);
+        let replacement = envelope(1, 4);
+        pb.sync_envelope(Some(id.clone()), Some(replacement.clone()), 10);
         assert_eq!(
             pb.current_envelope().map(EnvelopeState::envelope),
-            Some(&first),
-            "同一歌曲和版本复用已加载数据"
+            Some(&replacement)
         );
 
         let next = envelope(2, 4);

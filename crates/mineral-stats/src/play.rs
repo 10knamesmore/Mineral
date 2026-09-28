@@ -16,7 +16,7 @@ pub struct PlayAudioSnapshot {
     /// 实际码率 bps;`None` = 未知。
     pub bitrate_bps: Option<i64>,
 
-    /// 归一化音质档;`None` = 未知。
+    /// 发起播放资源请求时的音质档；未发起请求时为 `None`。
     pub quality: Option<BitRate>,
 
     /// 位深(仅本地无损可得);`None` = 未知。

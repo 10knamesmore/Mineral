@@ -5,9 +5,8 @@
 
 use mineral_channel_core::{Page, PageResult};
 use mineral_model::{
-    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, BitRate,
-    MediaUrl, PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
-    StreamLayout,
+    Album, AlbumId, AlbumRef, AlbumTrack, Artist, ArtistId, ArtistRef, AudioFormat, MediaUrl,
+    PlaybackMediaInfo, Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind, StreamLayout,
 };
 use mineral_playback::DirectMedia;
 
@@ -218,12 +217,11 @@ pub(crate) fn playurl_to_media(song_id: SongId, result: PlayUrlResult) -> Option
     let dash = result.dash?;
     let flac_audio = dash.flac.and_then(|f| f.audio);
     let best = best_audio(flac_audio, dash.audio.unwrap_or_default())?;
-    let (quality, format) = classify_audio(best.id, best.codecs.as_deref());
+    let format = audio_format(best.codecs.as_deref());
     let url = url::Url::parse(&best.base_url).ok()?;
     let info = PlaybackMediaInfo {
         song_id,
         bitrate_bps: best.bandwidth.and_then(|b| u32::try_from(b).ok()),
-        quality,
         // playurl 接口不给文件大小。
         size: None,
         format: Some(format),
@@ -248,20 +246,12 @@ fn best_audio(flac: Option<DashAudio>, mut normal: Vec<DashAudio>) -> Option<Das
     normal.pop()
 }
 
-/// 音质码 + codecs → 归一化的 (音质, 格式)。
-///
-/// codecs 含 `flac` 判无损;否则按 `id` 映射三档(`30216`/`30232` → Standard/Higher,其余高档
-/// 归 Exhigh),格式恒 AAC(B站 dash 普通音频轨是 m4a/aac)。
-fn classify_audio(id: i64, codecs: Option<&str>) -> (BitRate, AudioFormat) {
+/// Recognize FLAC from the selected track's codec; ordinary DASH audio is AAC.
+fn audio_format(codecs: Option<&str>) -> AudioFormat {
     if codecs.is_some_and(|c| c.to_ascii_lowercase().contains("flac")) {
-        return (BitRate::Lossless, AudioFormat::Flac);
+        return AudioFormat::Flac;
     }
-    let quality = match id {
-        30216 => BitRate::Standard,
-        30232 => BitRate::Higher,
-        _ => BitRate::Exhigh,
-    };
-    (quality, AudioFormat::Aac)
+    AudioFormat::Aac
 }
 
 /// 收藏夹 folder → [`Playlist`](元信息;曲目按需走 `playlist_detail`)。
@@ -475,7 +465,6 @@ mod tests {
             MediaUrl::remote("https://cdn/192k.m4s")?,
             "取 id 最大轨"
         );
-        assert_eq!(media.info().quality, mineral_model::BitRate::Exhigh);
         assert_eq!(media.info().bitrate_bps, Some(320_000));
         assert_eq!(
             media
@@ -518,7 +507,6 @@ mod tests {
             media.locator().media_url(),
             MediaUrl::remote("https://cdn/flac.m4s")?
         );
-        assert_eq!(media.info().quality, mineral_model::BitRate::Lossless);
         assert_eq!(media.info().format, Some(mineral_model::AudioFormat::Flac));
         Ok(())
     }

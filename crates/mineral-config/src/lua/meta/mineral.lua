@@ -69,7 +69,7 @@ mineral = {}
 ---@class mineral.DownloadCompletedArgs
 ---@field song mineral.Song  下载完成的歌
 ---@field path string  落盘路径
----@field quality "standard"|"higher"|"exhigh"|"lossless"|"hires"  实际下载音质(hook 改写后的有效值)
+---@field quality "standard"|"higher"|"exhigh"|"lossless"|"hires"  下载请求档位；hook 可声明替代资源的目录档位
 ---@field format string|nil  容器格式(如 "flac" / "mp3";拿不到为 nil)
 
 --- `mineral.on` 的合法事件名(字符串枚举;与 Rust 事件墙由守卫测试钉死同步)。
@@ -108,7 +108,7 @@ local HookCtx = {}
 ---@class mineral.BeforeStreamCtx: mineral.HookCtx
 ---@field mode "immediate"|"prefetch"  取流管线的提交点口味,两处各 fire 一次:即时起播前(预算 = `script.hook_timeout_ms`)/ gapless 预取武装前(预算 = 曲尾预取窗口,适合异步跨源搜);简单脚本可无视
 ---@field url string|nil  原始播放 URL;nil = 宿主没解析出可播 URL(取链失败 / 灰歌)
----@field quality string|nil  原始音质名(standard/higher/exhigh/lossless/hires);无 URL 时 nil
+---@field quality string  向播放来源请求的档位(standard/higher/exhigh/lossless/hires)，无 URL 时仍有值
 ---@field unplayable boolean  是否无可播 URL(`url == nil` 的便利投影);true 时改写 = 顶入可播流
 local BeforeStreamCtx = {}
 
@@ -116,7 +116,7 @@ local BeforeStreamCtx = {}
 --- 取流管线的概念,下载链路没有这个维度。
 ---@class mineral.BeforeDownloadCtx: mineral.HookCtx
 ---@field url string|nil  下载直链;nil = 宿主没解析出直链
----@field quality string|nil  原始音质名;无直链时 nil
+---@field quality string  向下载来源请求的档位，无直链时仍有值
 ---@field unplayable boolean  是否无直链(`url == nil` 的便利投影)
 local BeforeDownloadCtx = {}
 
@@ -387,7 +387,7 @@ function mineral.library.search(query, opts, on_songs) end
 ---@class mineral.PlayUrl
 ---@field song_id string  全限定歌曲 id
 ---@field url string  可播地址
----@field quality string  音质名
+---@field quality string  本次查询向 playback provider 请求的档位，并非来源返回的实际音质
 ---@field bitrate_bps integer  实际比特率(bps),拿不到为 0
 ---@field size integer  文件字节数,拿不到为 0
 ---@field format string  容器格式(如 "mp3"/"flac"),拿不到为空串

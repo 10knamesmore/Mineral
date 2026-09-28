@@ -269,7 +269,7 @@ mod tests {
     use std::io::Cursor;
     use std::time::Duration;
 
-    use mineral_model::{BitRate, PlaybackMediaInfo, SongId, SourceKind};
+    use mineral_model::{PlaybackMediaInfo, SongId, SourceKind};
     use mineral_playback::{OpenedMedia, SeekSupport};
     use tokio_util::sync::CancellationToken;
 
@@ -287,7 +287,6 @@ mod tests {
             PlaybackMediaInfo {
                 song_id: SongId::new(SourceKind::NETEASE, "t"),
                 bitrate_bps: None,
-                quality: BitRate::Exhigh,
                 size: None,
                 format: None,
                 bit_depth: None,

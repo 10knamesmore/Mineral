@@ -80,8 +80,7 @@ pub(crate) struct Inner {
     /// 已转发给 client 的最新 finished seq;auto-next 监听它。
     pub(super) last_seen_finished_seq: AtomicU64,
 
-    /// 包络离线计算的 in-flight 守卫(qualified id):开播 / 预排 / 收割多路
-    /// 触发同曲时只解码一次。
+    /// 包络离线计算的 in-flight 守卫:播放请求按实例、无播放归属的收割按歌曲去重。
     pub(crate) envelope_inflight: Mutex<rustc_hash::FxHashSet<String>>,
 
     /// 用户歌单库聚合态(原始数据唯一事实源 + curate 出口变换,见 [`crate::library`])。

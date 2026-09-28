@@ -95,8 +95,11 @@ pub(super) fn resolve_query(
                 mlua::Value::Table(briefs_table(lua, playlists)?),
                 mlua::Value::Nil,
             ),
-            ResolveValue::DirectMedia(direct) => (
-                mlua::Value::Table(direct_media_table(lua, direct)?),
+            ResolveValue::DirectMedia {
+                media,
+                requested_quality,
+            } => (
+                mlua::Value::Table(direct_media_table(lua, media, *requested_quality)?),
                 mlua::Value::Nil,
             ),
             ResolveValue::Spawn(result) => {

@@ -52,7 +52,7 @@ struct ResolvedPlan {
     /// Whether prepared bytes may enter the song-id/quality cache.
     cacheable: bool,
 
-    /// Local path requiring envelope availability before playback.
+    /// Complete local media file available for envelope calculation after audio handoff.
     local_path: Option<std::path::PathBuf>,
 }
 
@@ -189,7 +189,7 @@ async fn run(
                         error = mineral_log::chain(&error),
                         "prepared playback open failed"
                     );
-                    finish_unplayable(player, &song, role, Some(origin));
+                    finish_unplayable(player, &song, role, local_path.as_deref());
                 }
                 return;
             }
@@ -219,13 +219,18 @@ async fn run(
         drop(opened);
         return;
     }
-    if let Some(path) = &local_path {
-        player.ensure_envelope(song.id.clone(), path.clone());
-    }
-    match role {
+    let substituted = opened.info().substituted;
+    let committed = match role {
         PlaybackRole::Current => start_opened_current(player, &slot, opened, direct, origin),
         PlaybackRole::Prefetch => {
             crate::gapless::arm_opened(player, song, &slot, opened, direct, origin)
+        }
+    };
+    if committed {
+        if let Some(path) = local_path {
+            player.ensure_playback_envelope(&slot, path, substituted);
+        } else if matches!(role, PlaybackRole::Current) {
+            player.replay_current_envelope();
         }
     }
 }
@@ -311,21 +316,25 @@ fn select_plan(
                 finish_unplayable(player, song, role, None);
                 return None;
             };
-            // 埋点:预取被插件改写记 Rewritten(产物按 Remote,与下方 origin 一致);
-            // 之后装填成功还会再记一条 Armed,同一预取在 prefetches 表留下裁决序列。
+            // Keep file location separate from cache/download provenance.
+            let local_path = prepared
+                .direct_media()
+                .and_then(|media| media.locator().local_path())
+                .map(std::path::Path::to_owned);
+            let origin = PlaybackOrigin::Remote;
             if role.is_prefetch() {
                 crate::gapless::record_prefetch(
                     player,
                     song.id.clone(),
-                    mineral_stats::PrefetchSource::Remote,
+                    crate::gapless::prefetch_source(local_path.as_deref()),
                     mineral_stats::PrefetchResolution::Rewritten,
                 );
             }
             Some(ResolvedPlan {
                 prepared,
-                origin: PlaybackOrigin::Remote,
+                origin,
                 cacheable: false,
-                local_path: None,
+                local_path,
             })
         }
         HookDecision::Skip { reason } => {
@@ -351,7 +360,7 @@ async fn resolve(
         )
     });
     if let Some(hit) = local_hit {
-        let media = crate::resolve::local_media(song, &hit.path, hit.quality);
+        let media = crate::resolve::local_media(song, &hit.path);
         return Ok(ResolvedPlan {
             prepared: DirectPreparedPlayback::boxed(media),
             origin: hit.origin,
@@ -371,11 +380,16 @@ async fn resolve(
         }
         result = provider.resolve(request, slot.cancellation.child_token()) => result?,
     };
+    let local_path = prepared
+        .direct_media()
+        .and_then(|media| media.locator().local_path())
+        .map(std::path::Path::to_owned);
+    let local = local_path.is_some();
     Ok(ResolvedPlan {
         prepared,
         origin: PlaybackOrigin::Remote,
-        cacheable: true,
-        local_path: None,
+        cacheable: !local,
+        local_path,
     })
 }
 
@@ -386,7 +400,7 @@ fn start_opened_current(
     opened: OpenedMedia,
     direct: Option<DirectMedia>,
     origin: PlaybackOrigin,
-) {
+) -> bool {
     let info = opened.info().clone();
     let started = player.with_state(|state| {
         if !state
@@ -404,8 +418,9 @@ fn start_opened_current(
         true
     });
     if started {
-        player.enrich_from_media_info(&info);
+        player.enrich_from_media_info(&info, origin);
     }
+    started
 }
 
 /// Returns whether the active role slot still owns an async completion.
@@ -425,13 +440,12 @@ fn matches_slot(player: &PlayerCore, slot: &PlaybackSlot, role: PlaybackRole) ->
 ///   - `player`: Playback owner.
 ///   - `song`: Failed song.
 ///   - `role`: Current or prefetch failure behavior.
-///   - `origin`: 已解析出的来源(open 失败时);resolve 失败尚无来源,传 `None` 按远端记——
-///     `resolve` 只有 provider 路径会失败(本地命中必返 `Ok`),归类不失真。
+///   - `local_path`: 已解析出的文件路径(open 失败时)；resolve 失败时为 `None`。
 fn finish_unplayable(
     player: &PlayerCore,
     song: &Song,
     role: PlaybackRole,
-    origin: Option<PlaybackOrigin>,
+    local_path: Option<&std::path::Path>,
 ) {
     match role {
         PlaybackRole::Current => crate::hook_bridge::finish_failed(player, song),
@@ -439,10 +453,7 @@ fn finish_unplayable(
         PlaybackRole::Prefetch => crate::gapless::record_prefetch(
             player,
             song.id.clone(),
-            origin.map_or(
-                mineral_stats::PrefetchSource::Remote,
-                crate::gapless::prefetch_source,
-            ),
+            crate::gapless::prefetch_source(local_path),
             mineral_stats::PrefetchResolution::Failed,
         ),
     }

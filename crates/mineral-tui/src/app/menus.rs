@@ -1125,7 +1125,6 @@ mod tests {
             mineral_model::PlaybackMediaInfo {
                 song_id: playing.id.clone(),
                 bitrate_bps: None,
-                quality: mineral_model::BitRate::Standard,
                 size: None,
                 format: Some(mineral_model::AudioFormat::Aac),
                 bit_depth: None,

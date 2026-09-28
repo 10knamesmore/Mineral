@@ -27,6 +27,9 @@ use crate::player::PlayerCore;
 /// `vm` 为 `None` 表示无用户脚本(文件缺失 / eval 失败已降级),此时只有
 /// 泵在跑;热重载发现 config.lua 后仍可升级为有脚本。
 pub struct ScriptParts {
+    /// Stable message sender shared during assembly, before the VM thread starts.
+    sender: ScriptSender,
+
     /// eval 过用户脚本的 VM(无脚本为 `None`)。
     vm: Option<Lua>,
 
@@ -66,6 +69,7 @@ impl ScriptParts {
         push_rx: UnboundedReceiver<Event>,
     ) -> Self {
         Self {
+            sender: ScriptSender::detached(),
             vm,
             host,
             cmd_tx,
@@ -75,12 +79,16 @@ impl ScriptParts {
         }
     }
 
+    /// Share the script endpoint with components constructed before the runtime starts.
+    pub fn sender(&self) -> &ScriptSender {
+        &self.sender
+    }
+
     /// 起脚本线程(若有 VM),消息入口挂进 `sender`。须在
     /// [`Server::spawn`](crate::Server::spawn) **之前**调用;spawn 失败降级无脚本(warn)。
     ///
     /// # Params:
     ///   - `watchdog`: 回调看门狗参数(配置 `script` 段派生)
-    ///   - `sender`: daemon 侧投递句柄(装配期 `ScriptSender::detached()` 先建)
     ///   - `channels`: 已注册音乐源(收集各源网页链接模板,seed 进 VM 供
     ///     Song/Playlist 投影拼 `url`;热重载的新 VM 复用同一份)
     ///
@@ -90,7 +98,6 @@ impl ScriptParts {
     pub fn spawn_runtime(
         self,
         watchdog: WatchdogConfig,
-        sender: &ScriptSender,
         channels: &[Arc<dyn mineral_channel_core::MusicChannel>],
     ) -> (Option<ScriptRuntime>, ScriptPumps) {
         let web_urls = channels
@@ -108,7 +115,7 @@ impl ScriptParts {
             .collect::<Vec<SourceWebUrls>>();
         let runtime = self.vm.and_then(|lua| {
             seed_web_urls(&lua, &web_urls);
-            match ScriptRuntime::spawn(lua, self.host.clone(), watchdog, sender) {
+            match ScriptRuntime::spawn(lua, self.host.clone(), watchdog, &self.sender) {
                 Ok(runtime) => Some(runtime),
                 Err(e) => {
                     mineral_log::warn!(
@@ -342,13 +349,17 @@ fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
     };
     let player = player.clone();
     tokio::spawn(async move {
-        let request = PlaybackRequest::new(song.clone(), player.playback_quality());
+        let requested_quality = player.playback_quality();
+        let request = PlaybackRequest::new(song.clone(), requested_quality);
         match provider.resolve(request, CancellationToken::new()).await {
             Ok(prepared) => match prepared.direct_media() {
                 Some(media) => resolve_ok(
                     &player,
                     query,
-                    ResolveValue::DirectMedia(Box::new(media.clone())),
+                    ResolveValue::DirectMedia {
+                        media: Box::new(media.clone()),
+                        requested_quality,
+                    },
                 ),
                 None => {
                     let e = color_eyre::eyre::eyre!(

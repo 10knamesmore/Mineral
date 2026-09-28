@@ -147,6 +147,33 @@ pub(super) fn core_with_script_playback(
     fail: bool,
     direct: bool,
 ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+    core_with_script_playback_persist(script, stats, delay, fail, direct, ServerStore::disabled())
+}
+
+/// Builds a script-enabled core with a real envelope/session store.
+pub(super) fn core_with_script_persist(
+    script: &str,
+    persist: ServerStore,
+) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
+    core_with_script_playback_persist(
+        script,
+        crate::StatsRecorder::disabled(),
+        Duration::ZERO,
+        /*fail*/ false,
+        /*direct*/ true,
+        persist,
+    )
+}
+
+/// Injects persistent storage while retaining the standard script and playback fixtures.
+fn core_with_script_playback_persist(
+    script: &str,
+    stats: crate::StatsRecorder,
+    delay: Duration,
+    fail: bool,
+    direct: bool,
+    persist: ServerStore,
+) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
     use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -170,7 +197,7 @@ pub(super) fn core_with_script_playback(
     let core = core_with_events_stats_playback(
         channels,
         playback,
-        ServerStore::disabled(),
+        persist,
         /*music_dir*/ None,
         MediaCache::disabled(),
         tokio::sync::broadcast::channel(/*capacity*/ 8).0,

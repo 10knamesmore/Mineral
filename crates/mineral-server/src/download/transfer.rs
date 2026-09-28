@@ -35,7 +35,7 @@ pub(crate) struct DownloadAttempt<'a> {
 pub(crate) enum TransferUpdate {
     /// Opened media is being drained.
     Downloading {
-        /// Effective quality after hook/provider resolution.
+        /// Requested download tier, or the tier explicitly declared by a rewrite hook.
         quality: BitRate,
 
         /// Bytes written to the partial.
@@ -61,7 +61,7 @@ pub(crate) enum DownloadOutcome {
         /// 落盘路径。
         path: PathBuf,
 
-        /// 实际下载音质(hook 改写后的有效值)。
+        /// 请求档位；脚本改写时为脚本声明的档位。
         quality: mineral_model::BitRate,
 
         /// Provider 最终交付的容器格式;拿不到为 `None`。
@@ -139,10 +139,15 @@ pub(crate) async fn download_song(
     ensure_not_cancelled(attempt.cancellation)?;
 
     let mut hooked = mineral_stats::DownloadHook::None;
-    match hooks.before_download(song, prepared.direct_media()).await {
+    let mut export_quality = quality;
+    match hooks
+        .before_download(song, quality, prepared.direct_media())
+        .await
+    {
         mineral_script::HookDecision::Continue => {}
         mineral_script::HookDecision::Rewrite(spec) => {
             hooked = mineral_stats::DownloadHook::Rewrite;
+            export_quality = spec.new_quality().unwrap_or(quality);
             let original_direct = prepared.direct_media().cloned();
             prepared =
                 crate::hook_bridge::rewrite_prepared(&song.id, original_direct.as_ref(), &spec)
@@ -168,10 +173,9 @@ pub(crate) async fn download_song(
         ))
         .await?;
     ensure_not_cancelled(attempt.cancellation)?;
-    let quality = opened.info().quality;
     let format = opened.info().format.clone();
     let byte_len = opened.byte_len();
-    let (subdir, file_name) = library_relpath(song, quality, format.as_ref());
+    let (subdir, file_name) = library_relpath(song, export_quality, format.as_ref());
     let export = music_dir.join(&subdir).join(&file_name);
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
@@ -181,7 +185,7 @@ pub(crate) async fn download_song(
     let part = owned_partial_path(&export, attempt.id);
     let reader = opened.into_reader();
     reporter(TransferUpdate::Downloading {
-        quality,
+        quality: export_quality,
         bytes_done: 0,
         bytes_total: byte_len,
         speed_bps: 0,
@@ -193,7 +197,7 @@ pub(crate) async fn download_song(
         drain_opened(
             reader,
             &part_for_write,
-            quality,
+            export_quality,
             byte_len,
             &cancellation,
             &progress_reporter,
@@ -221,7 +225,7 @@ pub(crate) async fn download_song(
             mineral_log::info!(target: "download", song_id = song.id.as_str(), path = %export.display(), "下载完成");
             Ok(DownloadOutcome::Downloaded {
                 path: export,
-                quality,
+                quality: export_quality,
                 format,
                 hooked,
             })
@@ -230,7 +234,7 @@ pub(crate) async fn download_song(
             remove_owned_partial(&part).await;
             Ok(DownloadOutcome::Skipped {
                 cause: SkipCause::AlreadyExists,
-                quality,
+                quality: export_quality,
             })
         }
         Err(error) => {

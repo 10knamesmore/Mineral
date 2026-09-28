@@ -31,6 +31,8 @@
 
 ## 安装
 
+运行 TUI 需安装 [Nerd Font](https://www.nerdfonts.com/)
+
 ### Arch Linux(AUR)
 
 ```bash

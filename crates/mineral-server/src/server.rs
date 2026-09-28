@@ -31,6 +31,13 @@ pub struct SourceBackends {
     pub(crate) playback: PlaybackRegistry,
 }
 
+impl SourceBackends {
+    /// Registered catalog channels, used to seed script capabilities before server startup.
+    pub fn channels(&self) -> &[Arc<dyn MusicChannel>] {
+        &self.channels
+    }
+}
+
 /// 后台 server。`spawn` 启动 audio engine + scheduler + PlayerCore + PCM puller,
 /// 投递初始任务,对外发 [`ClientHandle`]。
 pub struct Server {

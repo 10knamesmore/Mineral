@@ -21,7 +21,7 @@ type PendingReply = Arc<parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<H
 
 /// 跑一次 `before_stream` 拦截并送出裁决。
 ///
-/// ctx table:`song` / `url` / `quality`(URL 缺席时为 nil)/ `kind` / `mode`
+/// ctx table:`song` / `url` / requested `quality` / `kind` / `mode`
 /// (提交点口味)/ `unplayable` / `resolve`。
 pub(crate) fn run_stream(
     lua: &Lua,
@@ -39,9 +39,9 @@ pub(crate) fn run_stream(
         |lua, pending| {
             let table = lua.create_table()?;
             table.set("song", song_table(lua, ctx.song())?)?;
+            table.set("quality", ctx.requested_quality().as_str())?;
             if let Some(original) = ctx.original() {
                 table.set("url", original.locator().media_url().to_string())?;
-                table.set("quality", original.info().quality.as_str())?;
             }
             table.set("kind", HookKind::BeforeStream.as_str())?;
             table.set("mode", ctx.mode().as_str())?;
@@ -54,7 +54,7 @@ pub(crate) fn run_stream(
 
 /// 跑一次 `before_download` 拦截并送出裁决。
 ///
-/// ctx table:`song` / `url` / `quality`(直链缺席时为 nil)/ `kind` /
+/// ctx table:`song` / `url` / requested `quality` / `kind` /
 /// `unplayable` / `resolve`。
 pub(crate) fn run_download(
     lua: &Lua,
@@ -72,9 +72,9 @@ pub(crate) fn run_download(
         |lua, pending| {
             let table = lua.create_table()?;
             table.set("song", song_table(lua, ctx.song())?)?;
+            table.set("quality", ctx.requested_quality().as_str())?;
             if let Some(original) = ctx.original() {
                 table.set("url", original.locator().media_url().to_string())?;
-                table.set("quality", original.info().quality.as_str())?;
             }
             table.set("kind", HookKind::BeforeDownload.as_str())?;
             table.set("unplayable", ctx.unplayable())?;
