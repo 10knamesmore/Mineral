@@ -113,7 +113,7 @@ fn search_columns(
     }
 }
 
-/// 浏览与全屏：列表固定排版退场，歌词按两端行距交接，当前歌词独立移动。
+/// 浏览与全屏：列表固定排版退场，完整歌词面板按两端行距淡化交接。
 pub(super) fn fullscreen(frame: &mut Frame<'_>, normal: &Areas, full: &Areas, app: &App) {
     let active = &app.state.browse.fullscreen;
     let raw = active.raw();
@@ -124,11 +124,8 @@ pub(super) fn fullscreen(frame: &mut Frame<'_>, normal: &Areas, full: &Areas, ap
     if let Some(area) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, area, &app.state.spectrum, &app.theme);
     }
-    let lyrics = full
-        .lyrics
-        .map(|to| lyrics::LyricTransition::new(normal.lyrics, to, &app.state, raw));
-    if let Some(lyrics) = &lyrics {
-        lyrics.draw_panel(frame, &app.theme);
+    if let Some(to) = full.lyrics {
+        lyrics::draw_transition(frame, normal.lyrics, to, &app.state, &app.theme, raw);
     }
     match cover {
         Some(cover) => flight::render(frame, &cover, eased, &app.state, &app.theme),
@@ -139,9 +136,6 @@ pub(super) fn fullscreen(frame: &mut Frame<'_>, normal: &Areas, full: &Areas, ap
         }
     }
     persistent_transport(frame, areas.transport, app);
-    if let Some(lyrics) = &lyrics {
-        lyrics.draw_current(frame, &app.theme);
-    }
 }
 
 /// 全屏退场面板只改变可见窗口，不让临时宽高重新排版正文。

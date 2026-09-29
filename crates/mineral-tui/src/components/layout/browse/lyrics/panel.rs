@@ -30,18 +30,6 @@ use crate::runtime::state::{AppState, LyricExtra};
 ///     [`LyricMode::Immersive`] 给全屏(行间距 + 缓动平移 + 高亮交叉淡入)。
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
     let window = WindowLayout::for_panel(area, state, motion);
-    paint_panel(frame, area, state, theme, window.as_ref(), None);
-}
-
-/// 绘制边框与已排好的歌词窗口；共享原文行只跳过绘制，仍保留占位和副歌词。
-pub(super) fn paint_panel(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    state: &AppState,
-    theme: &Theme,
-    window: Option<&WindowLayout<'_>>,
-    omit_primary: Option<usize>,
-) {
     let lines = state.current_lines().filter(|v| !v.is_empty());
     let extra = state.active_lyric_extra();
     let trust = state.playback.sync_trust();
@@ -82,11 +70,11 @@ pub(super) fn paint_panel(
         return;
     }
 
-    let Some(window) = window else {
+    let Some(window) = window.as_ref() else {
         draw_fallback(frame, inner, ink);
         return;
     };
-    paint_window(frame, window, omit_primary, theme);
+    paint_window(frame, window, theme);
 }
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
@@ -236,7 +224,7 @@ pub enum LyricMode {
 }
 
 /// 进度满值(千分比),与 [`crate::render::anim`] 同范式定点。
-pub(super) const SCROLL_FULL: u16 = 1000;
+const SCROLL_FULL: u16 = 1000;
 
 /// 当前行已激活时长 `elapsed_ms` 占过渡窗口 `window_ms` 的千分比,`elapsed >= window` 饱和到
 /// 满值。`window_ms == 0` 视作已满(不除零)。
@@ -352,8 +340,8 @@ struct WindowInput<'a> {
     manual_focus: Option<usize>,
 }
 
-/// 一个稳态尺寸下的歌词窗口，供面板绘制与共享当前行读取同一份位置和高亮。
-pub(super) struct WindowLayout<'a> {
+/// 按面板尺寸排好的可见歌词与高亮上下文。
+struct WindowLayout<'a> {
     /// 当前曲目的原文行。
     lines: &'a [LyricLine],
 
@@ -379,22 +367,9 @@ struct WindowRow {
     dist: u64,
 }
 
-/// 窗口中真实可见的当前原文行，借用其布局和歌词渲染上下文。
-#[derive(Clone, Copy)]
-pub(super) struct CurrentLine<'a> {
-    /// 在原文序列中的身份，不按文本内容判断。
-    line_idx: usize,
-
-    /// 所属端点窗口。
-    window: &'a WindowLayout<'a>,
-
-    /// 当前行实际位置。
-    row: &'a WindowRow,
-}
-
 impl<'a> WindowLayout<'a> {
     /// 按端点模式现读配置和歌词状态；无内容或内区为空时没有窗口。
-    pub(super) fn for_panel(area: Rect, state: &'a AppState, motion: LyricMode) -> Option<Self> {
+    fn for_panel(area: Rect, state: &'a AppState, motion: LyricMode) -> Option<Self> {
         let inner = Block::new().borders(Borders::ALL).inner(area);
         if inner.width == 0 || inner.height == 0 {
             return None;
@@ -430,50 +405,6 @@ impl<'a> WindowLayout<'a> {
                 },
             },
         ))
-    }
-
-    /// 当前原文行必须实际落在窗口中；前奏、失真和手动滚出均为 `None`。
-    pub(super) fn current_line(&self) -> Option<CurrentLine<'_>> {
-        let line_idx = self.ctx.cur?;
-        let row = self
-            .rows
-            .iter()
-            .find(|row| matches!(&row.cell, Cell::Primary { line_idx: idx } if *idx == line_idx))?;
-        Some(CurrentLine {
-            line_idx,
-            window: self,
-            row,
-        })
-    }
-}
-
-impl CurrentLine<'_> {
-    /// 原文行索引，用于在端点面板中保留占位、跳过重复绘制。
-    pub(super) fn line_index(&self) -> usize {
-        self.line_idx
-    }
-
-    /// 当前原文行在此端点的实际窗口位置。
-    pub(super) fn area(&self) -> Rect {
-        self.row.area
-    }
-
-    /// 歌词自身行级高亮的千分比，不包含页面透明度。
-    pub(super) fn emphasis(&self) -> u16 {
-        self.window.ctx.eased
-    }
-
-    /// 沿用整行高亮或逐字 wipe，对实际落点背景取色。
-    pub(super) fn render(&self, theme: &Theme, background: Color) -> Line<'_> {
-        render_cell(
-            &self.row.cell,
-            self.window.lines,
-            self.window.ctx,
-            self.row.dist,
-            self.window.denom,
-            theme,
-            background,
-        )
     }
 }
 
@@ -590,17 +521,9 @@ fn layout_window(inner: Rect, input: WindowInput<'_>) -> WindowLayout<'_> {
     }
 }
 
-/// 只抑制共享原文行的绘制，不改变其占位、副歌词或邻行定位。
-fn paint_window(
-    frame: &mut Frame<'_>,
-    window: &WindowLayout<'_>,
-    omit_primary: Option<usize>,
-    theme: &Theme,
-) {
+/// 绘制可见歌词。
+fn paint_window(frame: &mut Frame<'_>, window: &WindowLayout<'_>, theme: &Theme) {
     for row in &window.rows {
-        if matches!(&row.cell, Cell::Primary { line_idx } if Some(*line_idx) == omit_primary) {
-            continue;
-        }
         let row_bg = center_bg(frame, row.area);
         let line = render_cell(
             &row.cell,
